@@ -1,0 +1,3616 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GoodJob CRM 外贸客户管理原型</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --surface: #ffffff;
+      --surface-2: #f9fbff;
+      --ink: #121826;
+      --text: #263247;
+      --muted: #6f7b8f;
+      --line: #dfe5ef;
+      --line-soft: #edf1f7;
+      --nav: #151821;
+      --nav-soft: #202532;
+      --brand: #3157d5;
+      --brand-2: #6f4bd8;
+      --aqua: #1aa7a1;
+      --green: #16a36a;
+      --amber: #d99518;
+      --rose: #de5a5a;
+      --violet: #7b61d1;
+      --shadow: 0 14px 40px rgba(27, 39, 68, .09);
+      --shadow-soft: 0 8px 24px rgba(27, 39, 68, .07);
+      --radius: 8px;
+      --radius-sm: 6px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      min-width: 320px;
+      background: var(--bg);
+    }
+
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        linear-gradient(90deg, rgba(223, 229, 239, .44) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(223, 229, 239, .38) 1px, transparent 1px),
+        linear-gradient(180deg, #f9fbff 0%, #f3f6fb 100%);
+      background-size: 56px 56px, 56px 56px, auto;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 14px 12px;
+      color: #e8edf7;
+      background: linear-gradient(180deg, #151821 0%, #1b202c 54%, #10131a 100%);
+      border-right: 1px solid rgba(255, 255, 255, .08);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 6px 8px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, .1);
+    }
+
+    .brand-mark {
+      width: 38px;
+      height: 38px;
+      border-radius: var(--radius);
+      display: grid;
+      place-items: center;
+      color: white;
+      font-weight: 800;
+      background:
+        linear-gradient(135deg, var(--brand), var(--brand-2));
+      box-shadow: 0 10px 24px rgba(91, 83, 213, .34);
+    }
+
+    .brand strong {
+      display: block;
+      font-size: 15px;
+      color: #fff;
+    }
+
+    .brand span {
+      display: block;
+      margin-top: 2px;
+      font-size: 12px;
+      color: #9ea9bc;
+    }
+
+    .nav {
+      display: grid;
+      gap: 2px;
+    }
+
+    .nav button {
+      appearance: none;
+      border: 0;
+      width: 100%;
+      height: 36px;
+      border-radius: var(--radius);
+      display: grid;
+      grid-template-columns: 28px 1fr auto;
+      align-items: center;
+      gap: 9px;
+      padding: 0 10px;
+      color: #b9c3d5;
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+      transition: background .16s ease, color .16s ease, transform .16s ease;
+    }
+
+    .nav button:hover,
+    .nav button.active {
+      color: #fff;
+      background: rgba(255, 255, 255, .09);
+    }
+
+    .nav button.active {
+      box-shadow: inset 3px 0 0 #7dd3fc;
+    }
+
+    .nav svg,
+    .icon svg {
+      width: 17px;
+      height: 17px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .nav span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 14px;
+    }
+
+    .nav em {
+      display: inline-grid;
+      place-items: center;
+      min-width: 22px;
+      height: 20px;
+      padding: 0 6px;
+      border-radius: 999px;
+      color: #b7f5e8;
+      background: rgba(26, 167, 161, .14);
+      font-size: 11px;
+      font-style: normal;
+    }
+
+    .nav-footer {
+      margin-top: auto;
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, .07);
+      border: 1px solid rgba(255, 255, 255, .1);
+    }
+
+    .nav-footer .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: #aeb9ca;
+    }
+
+    .dot-ok {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #35d399;
+      box-shadow: 0 0 0 4px rgba(53, 211, 153, .12);
+    }
+
+    .main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      height: 62px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 0 28px;
+      background: rgba(255, 255, 255, .82);
+      border-bottom: 1px solid rgba(223, 229, 239, .82);
+      backdrop-filter: blur(18px);
+    }
+
+    .command {
+      width: min(560px, 52vw);
+      height: 40px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 13px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: #f9fbff;
+      color: var(--muted);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.9);
+    }
+
+    .command input {
+      width: 100%;
+      border: 0;
+      outline: 0;
+      color: var(--ink);
+      background: transparent;
+      font-size: 14px;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn {
+      appearance: none;
+      min-width: 32px;
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 0 9px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line);
+      color: var(--text);
+      background: #fff;
+      cursor: pointer;
+      font-size: 12px;
+      box-shadow: 0 1px 1px rgba(27, 39, 68, .04);
+    }
+
+    .btn.icon-only {
+      width: 30px;
+      padding: 0;
+    }
+
+    .btn.primary {
+      color: #fff;
+      border-color: #2e53ca;
+      background: linear-gradient(135deg, #3157d5, #6f4bd8);
+      box-shadow: 0 10px 22px rgba(66, 84, 200, .24);
+    }
+
+    .btn.ghost {
+      background: var(--surface-2);
+    }
+
+    .btn .icon {
+      width: 22px;
+      height: 22px;
+      border-radius: var(--radius-sm);
+    }
+
+    .btn .icon svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    .avatar {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #1aa7a1, #3157d5);
+    }
+
+    .workspace {
+      padding: 18px 22px 28px;
+      max-width: 1580px;
+      width: 100%;
+    }
+
+    .view {
+      display: none;
+      animation: fade .18s ease;
+    }
+
+    .view.active { display: block; }
+
+    @keyframes fade {
+      from { opacity: .4; transform: translateY(3px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .page-head {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 12px;
+    }
+
+    .eyebrow {
+      margin: 0 0 5px;
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 24px;
+      line-height: 1.18;
+    }
+
+    .sub {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .head-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .command-center {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(340px, .75fr);
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .focus-panel {
+      position: relative;
+      min-height: 254px;
+      padding: 18px;
+      overflow: hidden;
+      color: #fff;
+      background:
+        linear-gradient(135deg, rgba(17, 24, 39, .96), rgba(31, 45, 70, .96)),
+        linear-gradient(135deg, #3157d5, #1aa7a1);
+      border: 1px solid rgba(255,255,255,.1);
+      box-shadow: 0 18px 48px rgba(18, 24, 38, .22);
+    }
+
+    .focus-panel::after {
+      content: "";
+      position: absolute;
+      right: 22px;
+      bottom: 22px;
+      width: 310px;
+      height: 116px;
+      opacity: .34;
+      background:
+        linear-gradient(180deg, transparent 0 19px, rgba(255,255,255,.16) 20px 21px, transparent 22px),
+        linear-gradient(90deg, transparent 0 29px, rgba(255,255,255,.1) 30px 31px, transparent 32px);
+      background-size: 100% 29px, 42px 100%;
+      mask-image: linear-gradient(90deg, transparent, #000 32%, #000);
+    }
+
+    .focus-panel > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .focus-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+
+    .focus-top span {
+      color: #aebbe0;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .focus-title {
+      max-width: 680px;
+    }
+
+    .focus-title h2 {
+      margin: 0;
+      color: #fff;
+      font-size: 25px;
+      line-height: 1.22;
+    }
+
+    .focus-title p {
+      margin: 10px 0 0;
+      color: #b8c4d9;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .focus-metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 22px;
+    }
+
+    .focus-metric {
+      min-height: 82px;
+      padding: 12px;
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.11);
+    }
+
+    .focus-metric span {
+      display: block;
+      color: #aebbe0;
+      font-size: 11px;
+      margin-bottom: 8px;
+    }
+
+    .focus-metric b {
+      display: block;
+      color: #fff;
+      font-size: 18px;
+    }
+
+    .focus-metric small {
+      display: block;
+      margin-top: 5px;
+      color: #9eeadf;
+      font-size: 11px;
+    }
+
+    .schedule-panel {
+      padding: 16px;
+    }
+
+    .schedule-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .schedule-item {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      min-height: 58px;
+      padding: 10px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line-soft);
+      background: #fbfcff;
+    }
+
+    .timebox {
+      display: grid;
+      place-items: center;
+      height: 38px;
+      border-radius: var(--radius);
+      color: var(--brand);
+      background: #edf2ff;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .schedule-item b {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .schedule-item span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .quality-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .quality {
+      padding: 11px;
+      border-radius: var(--radius);
+      background: #f8faff;
+      border: 1px solid var(--line-soft);
+    }
+
+    .quality span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 7px;
+    }
+
+    .quality b {
+      color: var(--ink);
+      font-size: 16px;
+    }
+
+    .segmented {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+
+    .segmented button {
+      border: 0;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 6px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .segmented button.active {
+      color: var(--ink);
+      background: #edf2ff;
+      font-weight: 700;
+    }
+
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, .94);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .kpi {
+      position: relative;
+      min-height: 128px;
+      padding: 16px;
+      overflow: hidden;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.98), rgba(249,251,255,.96));
+    }
+
+    .kpi::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 3px;
+      background: var(--accent, var(--brand));
+    }
+
+    .kpi::after {
+      content: "";
+      position: absolute;
+      right: -34px;
+      bottom: -42px;
+      width: 118px;
+      height: 118px;
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--accent, var(--brand)) 12%, transparent);
+    }
+
+    .kpi > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .kpi-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .kpi label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .kpi strong {
+      display: block;
+      margin: 12px 0 8px;
+      color: var(--ink);
+      font-size: 29px;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .kpi p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .spark {
+      width: 72px;
+      height: 30px;
+      border-radius: 7px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.72), transparent),
+        linear-gradient(90deg, rgba(49,87,213,.12), rgba(26,167,161,.2));
+      clip-path: polygon(0 70%, 16% 48%, 32% 58%, 48% 24%, 64% 39%, 80% 18%, 100% 32%, 100% 100%, 0 100%);
+    }
+
+    .microline {
+      display: flex;
+      align-items: flex-end;
+      gap: 3px;
+      width: 72px;
+      height: 30px;
+    }
+
+    .microline i {
+      flex: 1;
+      min-width: 4px;
+      height: var(--h);
+      border-radius: 999px 999px 2px 2px;
+      background: color-mix(in srgb, var(--accent, var(--brand)) 76%, white);
+      opacity: .9;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 24px;
+      padding: 0 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      white-space: nowrap;
+      color: #254585;
+      background: #e9efff;
+      border: 1px solid rgba(49,87,213,.1);
+    }
+
+    .badge.red { color: #a33737; background: #fff0f0; border-color: #f4d4d4; }
+    .badge.green { color: #0f754b; background: #e9f9f2; border-color: #cdeee0; }
+    .badge.amber { color: #8a5b09; background: #fff6df; border-color: #f5dfac; }
+    .badge.aqua { color: #08706d; background: #e8f8f7; border-color: #c6eeee; }
+    .badge.gray { color: var(--muted); background: #f1f4f8; border-color: var(--line); }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(360px, .9fr);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .section {
+      padding: 16px;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+    }
+
+    .section-title h2 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 16px;
+    }
+
+    .section-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .icon {
+      width: 30px;
+      height: 30px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: var(--radius);
+      color: var(--brand);
+      background: #edf2ff;
+      flex: 0 0 auto;
+    }
+
+    .task-list {
+      display: grid;
+      gap: 9px;
+    }
+
+    .task {
+      display: grid;
+      grid-template-columns: 5px minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      min-height: 72px;
+      padding: 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line-soft);
+      background: #fbfcff;
+    }
+
+    .task-line {
+      width: 5px;
+      height: 44px;
+      border-radius: 99px;
+      background: var(--accent, var(--brand));
+    }
+
+    .task h3 {
+      margin: 0 0 5px;
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.3;
+    }
+
+    .task p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .pipeline-strip {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .stage {
+      min-height: 260px;
+      padding: 10px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line-soft);
+      background: #f8faff;
+    }
+
+    .stage-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .deal {
+      margin-bottom: 8px;
+      padding: 10px;
+      border-radius: var(--radius);
+      background: #fff;
+      border: 1px solid var(--line);
+      box-shadow: 0 3px 10px rgba(27, 39, 68, .05);
+    }
+
+    .deal b {
+      display: block;
+      color: var(--ink);
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    .deal span {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .deal-foot {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 8px;
+      color: var(--brand);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .content-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .filter {
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: #fff;
+      font-size: 12px;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+
+    table {
+      width: 100%;
+      min-width: 900px;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 13px;
+    }
+
+    th,
+    td {
+      padding: 12px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      color: var(--muted);
+      background: #f8faff;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    tbody tr:hover td {
+      background: #fbfcff;
+    }
+
+    tbody tr.selected td {
+      background: #f6f9ff;
+      box-shadow: inset 3px 0 0 var(--brand);
+    }
+
+    .amount {
+      color: var(--ink);
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .health {
+      display: inline-grid;
+      grid-template-columns: repeat(5, 14px);
+      gap: 3px;
+      vertical-align: middle;
+    }
+
+    .health i {
+      height: 5px;
+      border-radius: 99px;
+      background: #dfe5ef;
+    }
+
+    .health i.on { background: var(--green); }
+    .health.warn i.on { background: var(--amber); }
+    .health.bad i.on { background: var(--rose); }
+
+    .company {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .flag {
+      width: 34px;
+      height: 34px;
+      border-radius: var(--radius);
+      display: grid;
+      place-items: center;
+      font-size: 18px;
+      background: #f2f5fb;
+      border: 1px solid var(--line);
+      flex: 0 0 auto;
+    }
+
+    .company b {
+      display: block;
+      color: var(--ink);
+      margin-bottom: 3px;
+    }
+
+    .company span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .drawer {
+      position: sticky;
+      top: 94px;
+      padding: 16px;
+    }
+
+    .drawer-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .drawer h2 {
+      margin: 0 0 6px;
+      color: var(--ink);
+      font-size: 18px;
+      line-height: 1.25;
+    }
+
+    .drawer p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .info-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin: 12px 0;
+    }
+
+    .score-card {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line-soft);
+      background: #f8faff;
+      margin-bottom: 12px;
+    }
+
+    .score-ring {
+      width: 82px;
+      height: 82px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: var(--ink);
+      font-size: 20px;
+      font-weight: 800;
+      background: conic-gradient(var(--green) 0 68%, #e7edf6 68% 100%);
+      position: relative;
+    }
+
+    .score-ring::after {
+      content: "";
+      position: absolute;
+      inset: 9px;
+      border-radius: 50%;
+      background: #fff;
+    }
+
+    .score-ring span {
+      position: relative;
+      z-index: 1;
+    }
+
+    .score-card b {
+      display: block;
+      color: var(--ink);
+      margin-bottom: 7px;
+    }
+
+    .score-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .info {
+      padding: 11px;
+      border-radius: var(--radius);
+      background: #f8faff;
+      border: 1px solid var(--line-soft);
+    }
+
+    .info span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 6px;
+    }
+
+    .info b {
+      color: var(--ink);
+      font-size: 13px;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .timeline-item {
+      position: relative;
+      padding: 11px 11px 11px 34px;
+      border-radius: var(--radius);
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+
+    .timeline-item::before {
+      content: "";
+      position: absolute;
+      left: 13px;
+      top: 15px;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--aqua);
+      box-shadow: 0 0 0 4px rgba(26, 167, 161, .12);
+    }
+
+    .timeline-item b {
+      display: block;
+      color: var(--ink);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+
+    .timeline-item span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .report-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(340px, .95fr);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .analytics-strip {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .analytics-tile {
+      min-height: 124px;
+      padding: 15px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: #fff;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .analytics-tile span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 10px;
+    }
+
+    .analytics-tile b {
+      color: var(--ink);
+      font-size: 22px;
+    }
+
+    .mini-bars {
+      display: flex;
+      align-items: flex-end;
+      gap: 5px;
+      height: 42px;
+      margin-top: 13px;
+    }
+
+    .mini-bars i {
+      flex: 1;
+      height: var(--h);
+      border-radius: 5px 5px 2px 2px;
+      background: var(--color, var(--brand));
+      opacity: .82;
+    }
+
+    .report-deck {
+      display: grid;
+      gap: 12px;
+    }
+
+    .report-hero {
+      position: relative;
+      overflow: hidden;
+      min-height: 188px;
+      padding: 22px;
+      color: #fff;
+      background:
+        linear-gradient(135deg, rgba(18,24,38,.98), rgba(43,63,99,.95)),
+        linear-gradient(135deg, var(--brand), var(--aqua));
+      border: 1px solid rgba(255,255,255,.12);
+      box-shadow: 0 18px 48px rgba(18, 24, 38, .22);
+    }
+
+    .report-hero::after {
+      content: "";
+      position: absolute;
+      right: 0;
+      top: 0;
+      width: 46%;
+      height: 100%;
+      background:
+        linear-gradient(180deg, transparent 0 23px, rgba(255,255,255,.13) 24px 25px, transparent 26px),
+        linear-gradient(90deg, transparent 0 35px, rgba(255,255,255,.1) 36px 37px, transparent 38px);
+      background-size: 100% 34px, 48px 100%;
+      opacity: .55;
+      mask-image: linear-gradient(90deg, transparent, #000);
+    }
+
+    .report-hero > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .report-hero-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+      margin-bottom: 18px;
+    }
+
+    .report-hero small {
+      color: #aebbe0;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .report-hero h2 {
+      margin: 0;
+      max-width: 760px;
+      color: #fff;
+      font-size: 29px;
+      line-height: 1.18;
+    }
+
+    .report-hero p {
+      max-width: 780px;
+      margin: 10px 0 0;
+      color: #c6d1e6;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .report-hero-metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .report-hero-metric {
+      padding: 10px;
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.12);
+    }
+
+    .report-hero-metric span {
+      display: block;
+      color: #aebbe0;
+      font-size: 11px;
+      margin-bottom: 6px;
+    }
+
+    .report-hero-metric b {
+      display: block;
+      color: #fff;
+      font-size: 21px;
+    }
+
+    .report-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .summary-card {
+      padding: 13px;
+      border-radius: var(--radius);
+      background: #fff;
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .summary-card strong {
+      display: block;
+      color: var(--ink);
+      font-size: 14px;
+      margin-bottom: 7px;
+    }
+
+    .summary-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .ppt-grid {
+      display: grid;
+      grid-template-columns: 1.16fr .84fr;
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .ppt-panel {
+      padding: 15px;
+      border-radius: var(--radius);
+      background: #fff;
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .ppt-panel.dark {
+      color: #fff;
+      background: #161d2b;
+      border-color: rgba(255,255,255,.08);
+    }
+
+    .ppt-panel h2 {
+      margin: 0 0 3px;
+      color: inherit;
+      font-size: 16px;
+    }
+
+    .ppt-panel .subline {
+      display: block;
+      margin-bottom: 14px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .ppt-panel.dark .subline {
+      color: #9ba8bd;
+    }
+
+    .funnel-slide {
+      display: grid;
+      gap: 9px;
+    }
+
+    .funnel-step {
+      display: grid;
+      grid-template-columns: 88px 1fr 54px 56px;
+      gap: 10px;
+      align-items: center;
+      font-size: 12px;
+    }
+
+    .funnel-step b {
+      color: var(--ink);
+    }
+
+    .funnel-step .bar {
+      height: 24px;
+      border-radius: 5px;
+      background: linear-gradient(90deg, var(--brand), var(--aqua));
+      width: var(--w);
+      min-width: 32px;
+    }
+
+    .waterfall {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      height: 210px;
+      padding: 12px 4px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .waterfall div {
+      flex: 1;
+      display: grid;
+      align-content: end;
+      gap: 6px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .waterfall i {
+      display: block;
+      height: var(--h);
+      border-radius: 6px 6px 2px 2px;
+      background: var(--c, var(--brand));
+    }
+
+    .insight-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .insight-item {
+      display: grid;
+      grid-template-columns: 26px 1fr;
+      gap: 9px;
+      padding: 9px;
+      border-radius: var(--radius-sm);
+      background: #f8faff;
+      border: 1px solid var(--line-soft);
+    }
+
+    .insight-item i {
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--brand);
+      font-style: normal;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .insight-item b {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+      margin-bottom: 3px;
+    }
+
+    .insight-item span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .executive-table {
+      width: 100%;
+      min-width: 0;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .executive-table th,
+    .executive-table td {
+      padding: 8px;
+      border-bottom: 1px solid var(--line-soft);
+      white-space: nowrap;
+    }
+
+    .executive-table th {
+      position: static;
+      color: var(--muted);
+      background: #f8faff;
+      font-weight: 800;
+    }
+
+    .bars {
+      display: grid;
+      gap: 13px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 82px minmax(0, 1fr) 46px;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+    }
+
+    .bar-row span {
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .bar-row b {
+      color: var(--ink);
+      text-align: right;
+    }
+
+    .track {
+      position: relative;
+      height: 11px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #edf2f8;
+    }
+
+    .fill {
+      height: 100%;
+      border-radius: 999px;
+      background: var(--brand);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+    }
+
+    .fill.green { background: var(--green); }
+    .fill.amber { background: var(--amber); }
+    .fill.aqua { background: var(--aqua); }
+    .fill.violet { background: var(--violet); }
+
+    .donut-wrap {
+      display: grid;
+      grid-template-columns: 190px 1fr;
+      align-items: center;
+      gap: 18px;
+    }
+
+    .donut {
+      position: relative;
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      background: conic-gradient(var(--brand) 0 42%, var(--green) 42% 68%, var(--amber) 68% 84%, var(--violet) 84% 100%);
+      box-shadow: inset 0 0 0 1px rgba(27, 39, 68, .04), 0 12px 24px rgba(27, 39, 68, .08);
+    }
+
+    .donut::after {
+      content: "市场";
+      position: absolute;
+      inset: 43px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      color: var(--ink);
+      font-weight: 800;
+      background: #fff;
+    }
+
+    .legend {
+      display: grid;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .legend i {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      margin-right: 8px;
+      border-radius: 50%;
+      background: var(--color);
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .step {
+      min-height: 138px;
+      padding: 16px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: #fff;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .step-num {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 14px;
+      border-radius: var(--radius);
+      color: #fff;
+      font-weight: 800;
+      background: var(--brand);
+    }
+
+    .step b {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--ink);
+    }
+
+    .step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .wecom-card {
+      display: grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .phone {
+      min-height: 420px;
+      padding: 16px;
+      border-radius: 18px;
+      background: #111827;
+      border: 1px solid rgba(255,255,255,.1);
+      box-shadow: var(--shadow);
+    }
+
+    .phone-screen {
+      height: 100%;
+      border-radius: 13px;
+      padding: 14px;
+      background: #eef3f9;
+    }
+
+    .chat {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .bubble {
+      max-width: 86%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.55;
+      box-shadow: 0 2px 8px rgba(27,39,68,.06);
+    }
+
+    .bubble.me {
+      justify-self: end;
+      color: #fff;
+      background: var(--aqua);
+    }
+
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .setting-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      min-height: 48px;
+      border-bottom: 1px solid var(--line-soft);
+      font-size: 13px;
+    }
+
+    .setting-row:last-child { border-bottom: 0; }
+
+    .setting-row span {
+      color: var(--muted);
+    }
+
+    .setting-row b {
+      color: var(--ink);
+      text-align: right;
+    }
+
+    .dense-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .dense-card {
+      padding: 10px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: #fff;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .dense-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 5px;
+    }
+
+    .dense-card b {
+      color: var(--ink);
+      font-size: 17px;
+    }
+
+    .dense-card small {
+      float: right;
+      color: var(--green);
+      font-size: 11px;
+      margin-top: 3px;
+    }
+
+    .matrix-grid {
+      display: grid;
+      grid-template-columns: 1.1fr .9fr .9fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .mini-table {
+      width: 100%;
+      min-width: 0;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .mini-table th,
+    .mini-table td {
+      padding: 7px 8px;
+      border-bottom: 1px solid var(--line-soft);
+      white-space: nowrap;
+    }
+
+    .mini-table th {
+      position: static;
+      background: #f8faff;
+    }
+
+    .knowledge-grid,
+    .exam-grid {
+      display: grid;
+      grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr);
+      gap: 10px;
+      align-items: start;
+    }
+
+    .category-list {
+      display: grid;
+      gap: 7px;
+    }
+
+    .category-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #fbfcff;
+    }
+
+    .category-item b {
+      color: var(--ink);
+      font-size: 13px;
+    }
+
+    .category-item span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .file-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .file-card {
+      min-height: 116px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, #fff, #f9fbff);
+    }
+
+    .file-icon {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 9px;
+      border-radius: var(--radius-sm);
+      color: var(--brand);
+      background: #edf2ff;
+      font-weight: 800;
+      font-size: 12px;
+    }
+
+    .file-card b {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.35;
+      margin-bottom: 5px;
+    }
+
+    .file-card span {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .exam-paper,
+    .exam-sidebar {
+      display: grid;
+      gap: 8px;
+    }
+
+    .question-card {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+
+    .question-card h3 {
+      margin: 0 0 8px;
+      color: var(--ink);
+      font-size: 13px;
+    }
+
+    .option-row {
+      display: grid;
+      gap: 6px;
+    }
+
+    .option-row span {
+      display: block;
+      padding: 7px 9px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line-soft);
+      background: #f8faff;
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .option-row span.active {
+      border-color: rgba(22, 163, 106, .38);
+      color: #0f754b;
+      background: #e9f9f2;
+    }
+
+    .progress-ring {
+      width: 96px;
+      height: 96px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 8px;
+      border-radius: 50%;
+      background: conic-gradient(var(--brand) 0 72%, #e7edf6 72% 100%);
+      position: relative;
+    }
+
+    .progress-ring::after {
+      content: "";
+      position: absolute;
+      inset: 11px;
+      border-radius: 50%;
+      background: #fff;
+    }
+
+    .progress-ring b {
+      position: relative;
+      z-index: 1;
+      color: var(--ink);
+      font-size: 20px;
+    }
+
+    .tools-grid {
+      display: grid;
+      grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+    }
+
+    .tools-grid > *,
+    .ocr-workbench > * {
+      min-width: 0;
+    }
+
+    #tools .matrix-grid {
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)) !important;
+    }
+
+    .tool-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .tool-item {
+      display: grid;
+      grid-template-columns: 34px 1fr auto;
+      gap: 9px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .tool-item.active {
+      border-color: rgba(49,87,213,.32);
+      background: #f6f9ff;
+      box-shadow: inset 3px 0 0 var(--brand), var(--shadow-soft);
+    }
+
+    .tool-mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: var(--radius-sm);
+      color: #fff;
+      background: linear-gradient(135deg, var(--brand), var(--aqua));
+      font-weight: 800;
+      font-size: 12px;
+    }
+
+    .tool-item b {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+      margin-bottom: 3px;
+    }
+
+    .tool-item span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .ocr-workbench {
+      display: grid;
+      grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr);
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .upload-card {
+      min-height: 392px;
+      padding: 14px;
+      border: 1px dashed #b7c3d6;
+      border-radius: var(--radius);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.96), rgba(248,250,255,.96));
+    }
+
+    .business-card {
+      width: 100%;
+      max-width: 440px;
+      min-height: 238px;
+      margin: 12px auto;
+      padding: 22px;
+      border-radius: 14px;
+      color: #f8fbff;
+      background:
+        linear-gradient(135deg, #111827, #263b63),
+        linear-gradient(135deg, var(--brand), var(--aqua));
+      box-shadow: 0 22px 42px rgba(18,24,38,.22);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .business-card::after {
+      content: "";
+      position: absolute;
+      right: -38px;
+      top: -52px;
+      width: 150px;
+      height: 150px;
+      border-radius: 50%;
+      background: rgba(255,255,255,.1);
+    }
+
+    .business-card h2 {
+      margin: 0 0 8px;
+      color: #fff;
+      font-size: 24px;
+    }
+
+    .business-card p,
+    .business-card span {
+      display: block;
+      margin: 5px 0;
+      color: #c9d5ea;
+      font-size: 13px;
+    }
+
+    .business-card strong {
+      display: block;
+      margin: 28px 0 10px;
+      color: #fff;
+      font-size: 18px;
+    }
+
+    .ocr-fields {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 8px;
+    }
+
+    .field-card {
+      display: grid;
+      grid-template-columns: 18px 1fr;
+      min-width: 0;
+      gap: 8px;
+      align-items: start;
+      padding: 9px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .field-card input[type="checkbox"] {
+      width: 15px;
+      height: 15px;
+      margin: 3px 0 0;
+      accent-color: var(--brand);
+    }
+
+    .field-card label {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+
+    .field-card input[type="text"] {
+      width: 100%;
+      min-width: 0;
+      height: 28px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      padding: 0 8px;
+      color: var(--ink);
+      background: #f8faff;
+      font-size: 12px;
+    }
+
+    .sync-preview {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .sync-row {
+      display: grid;
+      grid-template-columns: 110px 1fr auto;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #fbfcff;
+      font-size: 12px;
+    }
+
+    .sync-row span {
+      color: var(--muted);
+    }
+
+    .todo-board {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(310px, .75fr);
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .todo-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+
+    .quick-add {
+      flex: 1 1 360px;
+      height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: #f8faff;
+      color: var(--muted);
+    }
+
+    .quick-add input {
+      width: 100%;
+      border: 0;
+      outline: 0;
+      color: var(--ink);
+      background: transparent;
+      font-size: 13px;
+    }
+
+    .todo-filters {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .todo-chip {
+      height: 26px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .todo-chip.active {
+      color: var(--brand);
+      border-color: rgba(49,87,213,.22);
+      background: #edf2ff;
+      font-weight: 800;
+    }
+
+    .todo-list {
+      display: grid;
+      gap: 7px;
+    }
+
+    .todo-row {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+      padding: 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: #fff;
+      box-shadow: 0 3px 12px rgba(27,39,68,.04);
+    }
+
+    .todo-row.urgent {
+      border-color: rgba(222,90,90,.24);
+      background: linear-gradient(90deg, rgba(255,240,240,.75), #fff 34%);
+    }
+
+    .todo-check {
+      width: 18px;
+      height: 18px;
+      margin-top: 2px;
+      border-radius: 50%;
+      border: 2px solid var(--line);
+      background: #fff;
+      position: relative;
+    }
+
+    .todo-row.done {
+      opacity: .68;
+    }
+
+    .todo-row.done .todo-check {
+      border-color: var(--green);
+      background: var(--green);
+    }
+
+    .todo-row.done .todo-check::after {
+      content: "";
+      position: absolute;
+      left: 4px;
+      top: 1px;
+      width: 5px;
+      height: 9px;
+      border: solid #fff;
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+
+    .todo-main h3 {
+      margin: 0 0 5px;
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .todo-row.done h3 {
+      text-decoration: line-through;
+      color: var(--muted);
+    }
+
+    .todo-meta {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .priority-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--color, var(--brand));
+      display: inline-block;
+    }
+
+    .todo-side {
+      display: grid;
+      justify-items: end;
+      gap: 7px;
+      min-width: 116px;
+    }
+
+    .assignee-stack {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .mini-avatar {
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+      margin-left: -5px;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      color: #fff;
+      background: linear-gradient(135deg, var(--brand), var(--aqua));
+      font-size: 9px;
+      font-weight: 800;
+    }
+
+    .subtask-bar {
+      width: 94px;
+      height: 6px;
+      border-radius: 999px;
+      background: #edf2f8;
+      overflow: hidden;
+    }
+
+    .subtask-bar i {
+      display: block;
+      width: var(--p);
+      height: 100%;
+      border-radius: 999px;
+      background: var(--green);
+    }
+
+    .todo-insights {
+      display: grid;
+      gap: 8px;
+    }
+
+    .todo-score {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .todo-score-card {
+      padding: 10px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line-soft);
+      background: #f8faff;
+    }
+
+    .todo-score-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 6px;
+    }
+
+    .todo-score-card b {
+      color: var(--ink);
+      font-size: 18px;
+    }
+
+    .todo-calendar {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+      margin-top: 8px;
+    }
+
+    .todo-day {
+      min-height: 32px;
+      padding: 5px 2px;
+      border-radius: var(--radius-sm);
+      background: #f8faff;
+      color: var(--muted);
+      text-align: center;
+      font-size: 11px;
+    }
+
+    .todo-day.hot {
+      color: #a33737;
+      background: #fff0f0;
+      font-weight: 800;
+    }
+
+    .todo-day.ok {
+      color: #0f754b;
+      background: #e9f9f2;
+      font-weight: 800;
+    }
+
+    .login-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 420px;
+      background:
+        linear-gradient(135deg, rgba(18,24,38,.94), rgba(36,56,92,.92)),
+        linear-gradient(135deg, var(--brand), var(--aqua));
+      color: #fff;
+    }
+
+    body.is-authenticated .login-screen {
+      display: none;
+    }
+
+    .login-visual {
+      display: grid;
+      align-content: center;
+      padding: 64px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .login-visual::after {
+      content: "";
+      position: absolute;
+      right: 8%;
+      bottom: 12%;
+      width: 420px;
+      height: 180px;
+      opacity: .25;
+      background:
+        linear-gradient(180deg, transparent 0 24px, rgba(255,255,255,.2) 25px 26px, transparent 27px),
+        linear-gradient(90deg, transparent 0 40px, rgba(255,255,255,.12) 41px 42px, transparent 43px);
+      background-size: 100% 36px, 54px 100%;
+    }
+
+    .login-visual h1 {
+      max-width: 680px;
+      color: #fff;
+      font-size: 42px;
+      line-height: 1.12;
+      margin-bottom: 16px;
+    }
+
+    .login-visual p {
+      max-width: 620px;
+      color: #c8d3e8;
+      line-height: 1.7;
+      font-size: 15px;
+    }
+
+    .login-proof {
+      display: grid;
+      grid-template-columns: repeat(3, 150px);
+      gap: 10px;
+      margin-top: 32px;
+    }
+
+    .login-proof div {
+      padding: 12px;
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.12);
+    }
+
+    .login-proof b {
+      display: block;
+      color: #fff;
+      font-size: 20px;
+      margin-bottom: 5px;
+    }
+
+    .login-proof span {
+      color: #aebbe0;
+      font-size: 12px;
+    }
+
+    .login-panel {
+      margin: 28px;
+      padding: 24px;
+      align-self: center;
+      border-radius: 14px;
+      color: var(--text);
+      background: rgba(255,255,255,.96);
+      box-shadow: 0 24px 60px rgba(0,0,0,.25);
+    }
+
+    .login-panel h2 {
+      margin: 0 0 8px;
+      color: var(--ink);
+      font-size: 22px;
+    }
+
+    .login-panel p {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .login-field {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .login-field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .login-field input,
+    .login-field select {
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 0 10px;
+      color: var(--ink);
+      background: #f8faff;
+      font-size: 13px;
+    }
+
+    .login-users {
+      display: grid;
+      gap: 8px;
+      margin: 12px 0 16px;
+    }
+
+    .login-user {
+      display: grid;
+      grid-template-columns: 34px 1fr auto;
+      gap: 9px;
+      align-items: center;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      cursor: pointer;
+    }
+
+    .login-user.active {
+      border-color: rgba(49,87,213,.32);
+      background: #f6f9ff;
+      box-shadow: inset 3px 0 0 var(--brand);
+    }
+
+    .login-user b {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+    }
+
+    .login-user span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .user-menu {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-left: 8px;
+      border-left: 1px solid var(--line);
+    }
+
+    .user-menu select {
+      height: 30px;
+      max-width: 168px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      color: var(--ink);
+      background: #fff;
+      font-size: 12px;
+    }
+
+    .scope-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      border: 1px solid rgba(49,87,213,.14);
+      background: #edf2ff;
+      color: #254585;
+      font-size: 12px;
+    }
+
+    .scope-banner b {
+      color: var(--ink);
+    }
+
+    body[data-role="sales"] [data-scope="manager"],
+    body[data-role="sales"] .manager-only {
+      display: none !important;
+    }
+
+    body[data-role="manager"] .sales-only {
+      display: none !important;
+    }
+
+    .toast-stack {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 140;
+      display: grid;
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .toast {
+      min-width: 220px;
+      max-width: 360px;
+      padding: 10px 12px;
+      border: 1px solid rgba(49,87,213,.18);
+      border-radius: var(--radius);
+      color: var(--ink);
+      background: rgba(255,255,255,.96);
+      box-shadow: var(--shadow);
+      font-size: 13px;
+    }
+
+    .toast.error {
+      border-color: rgba(222,90,90,.3);
+      color: #9c3030;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 130;
+      display: none;
+      place-items: center;
+      padding: 20px;
+      background: rgba(18,24,38,.38);
+      backdrop-filter: blur(8px);
+    }
+
+    .modal-backdrop.active {
+      display: grid;
+    }
+
+    .modal {
+      width: min(520px, 100%);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      box-shadow: 0 28px 80px rgba(18,24,38,.22);
+      overflow: hidden;
+    }
+
+    .modal-head,
+    .modal-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .modal-foot {
+      justify-content: flex-end;
+      border-top: 1px solid var(--line-soft);
+      border-bottom: 0;
+    }
+
+    .modal-head h2 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 16px;
+    }
+
+    .modal-body {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .form-field {
+      display: grid;
+      gap: 5px;
+    }
+
+    .form-field.full {
+      grid-column: 1 / -1;
+    }
+
+    .form-field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .form-field input,
+    .form-field select {
+      width: 100%;
+      height: 32px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 0 9px;
+      color: var(--ink);
+      background: #fff;
+      outline: 0;
+    }
+
+    .form-field input:focus,
+    .form-field select:focus {
+      border-color: rgba(49,87,213,.48);
+      box-shadow: 0 0 0 3px rgba(49,87,213,.1);
+    }
+
+    .todo-row,
+    #customers tbody tr {
+      cursor: pointer;
+    }
+
+    .account-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .permission-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .permission-card {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+
+    .permission-card b {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+      margin-bottom: 5px;
+    }
+
+    .permission-card span {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 1180px) {
+      .shell { grid-template-columns: 78px minmax(0, 1fr); }
+      .brand { justify-content: center; padding: 6px 0 14px; }
+      .brand div:last-child,
+      .nav span,
+      .nav em,
+      .nav-footer { display: none; }
+      .nav button { grid-template-columns: 1fr; justify-items: center; padding: 0; }
+      .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .dashboard-grid,
+      .command-center,
+      .content-grid,
+      .report-grid,
+      .analytics-strip,
+      .report-summary,
+      .report-hero-metrics,
+      .ppt-grid,
+      .matrix-grid,
+      .knowledge-grid,
+      .exam-grid,
+      .tools-grid,
+      .ocr-workbench,
+      .todo-board,
+      .account-grid,
+      .wecom-card,
+      .settings-grid { grid-template-columns: 1fr; }
+      .dense-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .file-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .focus-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .drawer { position: static; }
+      .pipeline-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 760px) {
+      .shell { display: block; }
+      .sidebar {
+        position: sticky;
+        z-index: 30;
+        height: auto;
+        padding: 8px;
+        overflow-x: auto;
+      }
+      .brand { display: none; }
+      .nav { display: flex; width: max-content; }
+      .nav button {
+        width: 42px;
+        height: 38px;
+        flex: 0 0 auto;
+      }
+      .topbar {
+        height: auto;
+        flex-direction: column;
+        align-items: stretch;
+        padding: 12px;
+      }
+      .command { width: 100%; }
+      .top-actions { justify-content: space-between; }
+      .top-actions .btn:not(.primary):not(.icon-only) { display: none; }
+      .workspace { padding: 16px 12px 28px; }
+      .page-head { display: block; }
+      .page-head .segmented { margin-top: 12px; }
+      .kpis,
+      .focus-metrics,
+      .quality-grid,
+      .dense-grid,
+      .file-grid,
+      .ocr-fields,
+      .todo-score,
+      .permission-grid,
+      .analytics-strip,
+      .report-summary,
+      .report-hero-metrics,
+      .ppt-grid,
+      .steps { grid-template-columns: 1fr; }
+      .pipeline-strip { grid-template-columns: 1fr; }
+      .donut-wrap { grid-template-columns: 1fr; justify-items: center; }
+      .report-hero { padding: 16px; }
+      .report-hero h2 { font-size: 22px; }
+      .funnel-step { grid-template-columns: 64px minmax(0, 1fr) 42px; }
+      .funnel-step strong { display: none; }
+      .executive-table { min-width: 620px; }
+      .ppt-panel { overflow-x: auto; }
+      .waterfall { min-width: 360px; }
+      .tools-grid,
+      .ocr-workbench,
+      #tools .matrix-grid,
+      .sync-row { grid-template-columns: 1fr !important; }
+      .login-screen { grid-template-columns: 1fr; overflow: auto; }
+      .login-visual { padding: 28px 18px; }
+      .login-visual h1 { font-size: 28px; }
+      .login-proof { grid-template-columns: 1fr; }
+      .login-panel { margin: 12px; }
+      .user-menu { width: 100%; padding-left: 0; border-left: 0; }
+      .user-menu select { flex: 1; max-width: none; }
+      .business-card { max-width: 100%; }
+      .tool-item { grid-template-columns: 34px minmax(0, 1fr); }
+      .tool-item .badge { justify-self: start; grid-column: 2; }
+    }
+  </style>
+</head>
+<body>
+  <section class="login-screen" aria-label="登录">
+    <div class="login-visual">
+      <div class="brand" style="border:0; padding:0; margin-bottom:34px">
+        <div class="brand-mark">GJ</div>
+        <div>
+          <strong>GoodJob CRM</strong>
+          <span>外贸客户增长中台</span>
+        </div>
+      </div>
+      <h1>登录后按账号角色加载对应数据范围。</h1>
+      <p>业务员只能看到本人客户、待办、线索和考试；主管可以查看团队全部数据、分配任务、审批导出和管理账号。</p>
+      <div class="login-proof">
+        <div><b>RBAC</b><span>角色权限</span></div>
+        <div><b>Data Scope</b><span>数据范围隔离</span></div>
+        <div><b>Audit</b><span>操作审计</span></div>
+      </div>
+    </div>
+    <div class="login-panel">
+      <h2>账号登录</h2>
+      <p>原型模拟三类账号：业务员、主管、管理员。可切换查看不同数据权限。</p>
+      <div class="login-field"><label>账号</label><input value="shirley@goodjob.com"></div>
+      <div class="login-field"><label>密码</label><input type="password" value="goodjob123"></div>
+      <div class="login-field"><label>快速选择身份</label><select id="loginRole"><option value="sales">Shirley / 业务员 / 仅本人数据</option><option value="manager">Alex / 销售主管 / 全团队数据</option><option value="admin">Admin / 管理员 / 全量权限</option></select></div>
+      <div class="login-users">
+        <div class="login-user active" data-login-role="sales"><span class="avatar">SH</span><div><b>Shirley 业务员</b><span>仅本人客户、待办、线索、考试</span></div><span class="badge">本人</span></div>
+        <div class="login-user" data-login-role="manager"><span class="avatar">AL</span><div><b>Alex 销售主管</b><span>查看欧洲组全部客户和任务</span></div><span class="badge green">主管</span></div>
+        <div class="login-user" data-login-role="admin"><span class="avatar">AD</span><div><b>Admin 管理员</b><span>账号、权限、系统配置与审计</span></div><span class="badge amber">管理</span></div>
+      </div>
+      <button class="btn primary" id="loginButton" style="width:100%; height:36px">登录系统</button>
+    </div>
+  </section>
+
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">GJ</div>
+        <div>
+          <strong>GoodJob CRM</strong>
+          <span>外贸客户增长中台</span>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="主导航">
+        <button class="active" data-view="dashboard" title="工作台">
+          <svg viewBox="0 0 24 24"><path d="M4 13h6V4H4zM14 20h6V4h-6zM4 20h6v-3H4z"/></svg><span>工作台</span><em>28</em>
+        </button>
+        <button data-view="customers" title="客户">
+          <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>客户</span>
+        </button>
+        <button data-view="pipeline" title="商机">
+          <svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 6v12"/><path d="M17 6v12"/><path d="M3 18h18"/></svg><span>商机</span>
+        </button>
+        <button data-view="reminders" title="跟进提醒">
+          <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span>跟进提醒</span><em>7</em>
+        </button>
+        <button data-view="imports" title="导入导出">
+          <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span>导入导出</span>
+        </button>
+        <button data-view="reports" title="报表">
+          <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-7"/></svg><span>报表</span>
+        </button>
+        <button data-view="wecom" title="企业微信">
+          <svg viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg><span>企业微信</span>
+        </button>
+        <button data-view="knowledge" title="资料维护">
+          <svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/><path d="M8 7h8"/><path d="M8 11h6"/></svg><span>资料维护</span>
+        </button>
+        <button data-view="exam" title="在线考试">
+          <svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4"/><path d="M7 3h10l2 4v14H5V7z"/><path d="M7 3v4h12"/></svg><span>在线考试</span><em>新</em>
+        </button>
+        <button data-view="tools" title="小工具">
+          <svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.1-3.1a5 5 0 0 1-6.6 6.6L7.1 20a2 2 0 0 1-2.8-2.8l7.1-7.1a5 5 0 0 1 6.6-6.6z"/></svg><span>小工具</span><em>OCR</em>
+        </button>
+        <button data-view="settings" title="系统设置">
+          <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-.4-1 1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1-.4H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1-.4 1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06A2 2 0 1 1 7.13 3.4l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 .4 1 1.7 1.7 0 0 0 1 .6 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.17.37.38.7.6 1 .27.26.62.4 1 .4h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1 .4 1.7 1.7 0 0 0-.6 1z"/></svg><span>系统设置</span>
+        </button>
+      </nav>
+
+      <div class="nav-footer">
+        <div class="row"><span>MySQL 主库</span><i class="dot-ok"></i></div>
+        <div class="row"><span>今日备份</span><b>03:00 成功</b></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <label class="command">
+          <svg width="17" height="17" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m21 21-4.35-4.35M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z"/></svg>
+          <input placeholder="搜索客户、联系人、国家、产品或商机" />
+        </label>
+        <div class="top-actions">
+          <button class="btn ghost" title="导入"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></span>导入</button>
+          <button class="btn ghost" title="导出"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg></span>导出</button>
+          <button class="btn icon-only" title="提醒"><svg width="17" height="17" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"/></svg></button>
+          <button class="btn primary"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>新增客户</button>
+          <div class="user-menu">
+            <div class="avatar" id="currentAvatar">SH</div>
+            <select id="roleSwitcher" title="切换演示账号">
+              <option value="sales">Shirley · 业务员</option>
+              <option value="manager">Alex · 主管</option>
+              <option value="admin">Admin · 管理员</option>
+            </select>
+            <button class="btn" id="logoutButton">退出</button>
+          </div>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <div class="view active" id="dashboard">
+          <div class="page-head">
+            <div>
+              <p class="eyebrow">Sales Command Center</p>
+              <h1>外贸客户工作台</h1>
+              <p class="sub">把逾期跟进、报价风险、样品反馈和企微提醒放在同一个第一屏。</p>
+            </div>
+            <div class="head-actions">
+              <div class="segmented"><button class="active">今日</button><button>本周</button><button>本月</button></div>
+              <button class="btn">晨会视图</button>
+            </div>
+          </div>
+
+          <div class="scope-banner">
+            <span>当前账号：<b id="scopeUser">Shirley / 业务员</b> · 数据范围：<b id="scopeText">仅本人客户、本人待办、本人线索</b></span>
+            <span class="badge manager-only">主管视图：可查看团队全部数据</span>
+            <span class="badge sales-only">业务员视图：仅显示本人内容</span>
+          </div>
+
+          <div class="command-center">
+            <section class="panel focus-panel">
+              <div class="focus-top">
+                <span>Priority Briefing</span>
+                <span>09:30 已更新</span>
+              </div>
+              <div class="focus-title">
+                <h2>今天最该抢救的是 7 个报价逾期客户，其中 3 个仍处于高成交概率。</h2>
+                <p>系统综合金额、客户等级、阶段停留时间和最近沟通，建议优先处理 Nordic Tools、Al Noor Trading 与 Kanto Retail。</p>
+              </div>
+              <div class="focus-metrics">
+                <div class="focus-metric"><span>高风险金额</span><b data-sales-text="$36k" data-manager-text="$92k">$36k</b><small data-sales-text="本人名下报价" data-manager-text="集中在欧洲市场">本人名下报价</small></div>
+                <div class="focus-metric manager-only"><span>待主管协同</span><b>4 单</b><small>账期/价格谈判</small></div>
+                <div class="focus-metric"><span>今日可成交</span><b>2 单</b><small>预计 $71k</small></div>
+                <div class="focus-metric"><span>企微未读提醒</span><b>6 条</b><small>已二次推送</small></div>
+              </div>
+            </section>
+
+            <section class="panel schedule-panel">
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 2v4"/><path d="M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/></svg></span><div><h2>今日节奏</h2><span>按成交影响排序</span></div></div>
+              </div>
+              <div class="schedule-list">
+                <div class="schedule-item"><div class="timebox">09:45</div><div><b>补发 CE 证书</b><span>Nordic Tools AB · 瑞典</span></div><span class="badge red">逾期</span></div>
+                <div class="schedule-item"><div class="timebox">11:20</div><div><b>确认样品测试反馈</b><span>Atlas Home Inc · 美国</span></div><span class="badge amber">样品</span></div>
+                <div class="schedule-item"><div class="timebox">15:30</div><div><b>主管参与账期谈判</b><span>Kanto Retail · 日本</span></div><span class="badge green">高意向</span></div>
+              </div>
+              <div class="quality-grid">
+                <div class="quality"><span>跟进健康度</span><b>82%</b></div>
+                <div class="quality"><span>逾期率</span><b>11%</b></div>
+                <div class="quality"><span>平均响应</span><b>3.2h</b></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="kpis">
+            <div class="panel kpi" style="--accent: var(--rose)"><div class="kpi-top"><label>今日待跟进</label><div class="microline"><i style="--h:34%"></i><i style="--h:56%"></i><i style="--h:42%"></i><i style="--h:82%"></i><i style="--h:66%"></i><i style="--h:92%"></i></div></div><strong>28</strong><p><span class="badge red">7 个已逾期</span></p></div>
+            <div class="panel kpi" style="--accent: var(--green)"><div class="kpi-top"><label>本月新增客户</label><div class="microline"><i style="--h:28%"></i><i style="--h:44%"></i><i style="--h:54%"></i><i style="--h:58%"></i><i style="--h:78%"></i><i style="--h:86%"></i></div></div><strong>186</strong><p>较上月增长 18%，展会来源占 42%</p></div>
+            <div class="panel kpi" style="--accent: var(--brand)"><div class="kpi-top"><label>预测成交额</label><div class="microline"><i style="--h:46%"></i><i style="--h:64%"></i><i style="--h:52%"></i><i style="--h:74%"></i><i style="--h:86%"></i><i style="--h:69%"></i></div></div><strong>$428k</strong><p>谈判与样品阶段贡献 61%</p></div>
+            <div class="panel kpi" style="--accent: var(--aqua)"><div class="kpi-top"><label>企微绑定率</label><div class="microline"><i style="--h:40%"></i><i style="--h:46%"></i><i style="--h:55%"></i><i style="--h:58%"></i><i style="--h:61%"></i><i style="--h:64%"></i></div></div><strong>64%</strong><p>32 个高价值客户待绑定</p></div>
+          </div>
+
+          <div class="dense-grid">
+            <div class="dense-card"><span>资料待更新</span><b>18</b><small>+6</small></div>
+            <div class="dense-card"><span>产品知识考试通过率</span><b>76%</b><small>+9%</small></div>
+            <div class="dense-card"><span>未完成培训销售</span><b>12</b><small style="color:var(--amber)">待催办</small></div>
+            <div class="dense-card"><span>客户资料完整度</span><b>83%</b><small>+4%</small></div>
+          </div>
+
+          <div class="todo-board">
+            <section class="panel section">
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4"/><path d="M21 12a9 9 0 1 1-9-9"/></svg></span><div><h2>待办清单</h2><span>统一管理客户跟进、资料维护、考试复训和团队协作</span></div></div>
+                <div class="head-actions"><button class="btn">批量完成</button><button class="btn primary">新增待办</button></div>
+              </div>
+              <div class="todo-toolbar">
+                <label class="quick-add">
+                  <svg width="14" height="14" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>
+                  <input placeholder="快速新增：例如 明天 10 点跟进 Nordic Tools 报价" />
+                </label>
+                <div class="todo-filters">
+                  <span class="todo-chip active" data-sales-text="今天 5" data-manager-text="今天 12">今天 5</span><span class="todo-chip" data-sales-text="逾期 2" data-manager-text="逾期 5">逾期 2</span><span class="todo-chip">我负责 18</span><span class="todo-chip">客户跟进</span><span class="todo-chip">资料/考试</span>
+                </div>
+              </div>
+              <div class="todo-list">
+                <article class="todo-row urgent">
+                  <i class="todo-check"></i>
+                  <div class="todo-main"><h3>补发 Nordic Tools AB 的 CE 证书与新版交期说明</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--rose)"></i><span>高优先级</span><span>今天 09:45</span><span>关联客户：Nordic Tools AB</span><span class="badge red">逾期</span></div></div>
+                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">SH</span><span class="mini-avatar">AL</span></div><div class="subtask-bar"><i style="--p:66%"></i></div></div>
+                </article>
+                <article class="todo-row">
+                  <i class="todo-check"></i>
+                  <div class="todo-main"><h3>审核“欧洲报价模板”并同步到资料库</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--amber)"></i><span>中优先级</span><span>今天 11:30</span><span>资料维护</span><span class="badge amber">待审核</span></div></div>
+                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">MI</span></div><div class="subtask-bar"><i style="--p:40%"></i></div></div>
+                </article>
+                <article class="todo-row manager-only">
+                  <i class="todo-check"></i>
+                  <div class="todo-main"><h3>分配欧洲组 5 个逾期报价客户给对应业务员</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--rose)"></i><span>主管任务</span><span>今天 17:00</span><span>团队管理</span><span class="badge red">团队视图</span></div></div>
+                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">AL</span></div><div class="subtask-bar"><i style="--p:20%"></i></div></div>
+                </article>
+                <article class="todo-row">
+                  <i class="todo-check"></i>
+                  <div class="todo-main"><h3>给中东组推送“认证资料专项”补考提醒</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--brand)"></i><span>普通</span><span>今天 15:00</span><span>在线考试</span><span class="badge">企微提醒</span></div></div>
+                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">AD</span><span class="mini-avatar">ER</span></div><div class="subtask-bar"><i style="--p:25%"></i></div></div>
+                </article>
+                <article class="todo-row">
+                  <i class="todo-check"></i>
+                  <div class="todo-main"><h3>复核 OCR 名片识别结果并同步 8 条展会线索</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--aqua)"></i><span>普通</span><span>今天 16:20</span><span>小工具 / OCR</span><span class="badge green">可同步</span></div></div>
+                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">LU</span></div><div class="subtask-bar"><i style="--p:80%"></i></div></div>
+                </article>
+                <article class="todo-row done">
+                  <i class="todo-check"></i>
+                  <div class="todo-main"><h3>确认 Atlas Home Inc 样品签收状态</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--green)"></i><span>已完成</span><span>09:12</span><span>关联商机：样品阶段</span></div></div>
+                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">AL</span></div><div class="subtask-bar"><i style="--p:100%"></i></div></div>
+                </article>
+              </div>
+            </section>
+
+            <aside class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M8 17V9"/><path d="M13 17V5"/><path d="M18 17v-6"/></svg></span><div><h2>待办洞察</h2><span>按优先级和业务影响汇总</span></div></div></div>
+              <div class="todo-insights">
+                <div class="todo-score">
+                  <div class="todo-score-card"><span>今日待办</span><b data-sales-text="5" data-manager-text="12">5</b></div>
+                  <div class="todo-score-card"><span>已逾期</span><b style="color:var(--rose)" data-sales-text="2" data-manager-text="5">2</b></div>
+                  <div class="todo-score-card"><span>完成率</span><b data-sales-text="76%" data-manager-text="68%">76%</b></div>
+                  <div class="todo-score-card"><span>高影响</span><b data-sales-text="$36k" data-manager-text="$92k">$36k</b></div>
+                </div>
+                <table class="mini-table">
+                  <thead><tr><th>类型</th><th>数量</th><th>风险</th></tr></thead>
+                  <tbody>
+                    <tr><td>客户跟进</td><td>7</td><td><span class="badge red">高</span></td></tr>
+                    <tr><td>资料维护</td><td>3</td><td><span class="badge amber">中</span></td></tr>
+                    <tr><td>考试复训</td><td>2</td><td><span class="badge">普通</span></td></tr>
+                    <tr><td>OCR 线索</td><td>8</td><td><span class="badge green">可处理</span></td></tr>
+                  </tbody>
+                </table>
+                <div class="todo-calendar">
+                  <div class="todo-day">一<br>8</div><div class="todo-day hot">二<br>12</div><div class="todo-day ok">三<br>6</div><div class="todo-day">四<br>9</div><div class="todo-day hot">五<br>14</div><div class="todo-day ok">六<br>3</div><div class="todo-day">日<br>2</div>
+                </div>
+              </div>
+            </aside>
+          </div>
+
+          <div class="dashboard-grid">
+            <div class="panel section">
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 8v5l3 3"/><circle cx="12" cy="12" r="10"/></svg></span><div><h2>跟进优先级</h2><span>系统按金额、阶段、逾期天数自动排序</span></div></div>
+                <button class="btn">批量处理</button>
+              </div>
+              <div class="task-list">
+                <article class="task" style="--accent: var(--rose)"><i class="task-line"></i><div><h3>Nordic Tools AB 报价后 5 天未回复</h3><p>瑞典 · 采购电动工具 · 预计 $36,000 · 建议发送二次确认</p></div><span class="badge red">逾期</span></article>
+                <article class="task" style="--accent: var(--amber)"><i class="task-line"></i><div><h3>Atlas Home Inc 样品签收后待确认</h3><p>美国 · 家居用品 · 下一步：确认测试反馈和复购时间</p></div><span class="badge amber">今日</span></article>
+                <article class="task" style="--accent: var(--brand)"><i class="task-line"></i><div><h3>Al Noor Trading 需发送汇率更新报价</h3><p>阿联酋 · LED 灯具 · 客户关注 MOQ 与交期</p></div><span class="badge">10:30</span></article>
+                <article class="task" style="--accent: var(--green)"><i class="task-line"></i><div><h3>Kanto Retail 进入付款条款谈判</h3><p>日本 · 连锁零售 · 建议主管协同确认账期</p></div><span class="badge green">高意向</span></article>
+              </div>
+            </div>
+
+            <div class="panel section">
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 6v12"/><path d="M17 6v12"/><path d="M3 18h18"/></svg></span><div><h2>管道健康度</h2><span>拖拽阶段后记录变更原因</span></div></div>
+              </div>
+              <div class="bars">
+                <div class="bar-row"><span>询盘</span><div class="track"><div class="fill" style="width:92%"></div></div><b>42</b></div>
+                <div class="bar-row"><span>已联系</span><div class="track"><div class="fill aqua" style="width:74%"></div></div><b>31</b></div>
+                <div class="bar-row"><span>已报价</span><div class="track"><div class="fill amber" style="width:62%"></div></div><b>26</b></div>
+                <div class="bar-row"><span>样品</span><div class="track"><div class="fill green" style="width:33%"></div></div><b>14</b></div>
+                <div class="bar-row"><span>谈判</span><div class="track"><div class="fill violet" style="width:22%"></div></div><b>9</b></div>
+                <div class="bar-row"><span>成交</span><div class="track"><div class="fill green" style="width:16%"></div></div><b>6</b></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="matrix-grid">
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg></span><div><h2>资料维护动态</h2><span>产品知识与销售资料</span></div></div></div>
+              <table class="mini-table">
+                <thead><tr><th>资料</th><th>类目</th><th>状态</th><th>负责人</th></tr></thead>
+                <tbody>
+                  <tr><td>新版报价话术</td><td>销售SOP</td><td><span class="badge amber">待审</span></td><td>Mia</td></tr>
+                  <tr><td>CE 证书说明</td><td>认证资料</td><td><span class="badge green">已发布</span></td><td>Alex</td></tr>
+                  <tr><td>产品参数表 V3</td><td>产品知识</td><td><span class="badge">修订中</span></td><td>Shirley</td></tr>
+                </tbody>
+              </table>
+            </section>
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4"/><path d="M7 3h10l2 4v14H5V7z"/></svg></span><div><h2>考试任务</h2><span>按产品类目分配</span></div></div></div>
+              <table class="mini-table">
+                <thead><tr><th>考试</th><th>应考</th><th>通过</th></tr></thead>
+                <tbody>
+                  <tr><td>LED 灯具基础</td><td>18</td><td>72%</td></tr>
+                  <tr><td>付款条款</td><td>24</td><td>88%</td></tr>
+                  <tr><td>认证资料</td><td>16</td><td>64%</td></tr>
+                </tbody>
+              </table>
+            </section>
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-7"/></svg></span><div><h2>团队短板</h2><span>知识弱项提示</span></div></div></div>
+              <table class="mini-table">
+                <thead><tr><th>类目</th><th>正确率</th><th>动作</th></tr></thead>
+                <tbody>
+                  <tr><td>产品认证</td><td>61%</td><td><span class="badge red">补考</span></td></tr>
+                  <tr><td>包装规范</td><td>69%</td><td><span class="badge amber">复训</span></td></tr>
+                  <tr><td>报价规则</td><td>83%</td><td><span class="badge green">达标</span></td></tr>
+                </tbody>
+              </table>
+            </section>
+          </div>
+        </div>
+
+        <div class="view" id="customers">
+          <div class="page-head">
+            <div><p class="eyebrow">Customer Intelligence</p><h1>客户管理</h1><p class="sub">客户、联系人、商机、跟进和企微摘要在一个详情面板内完成。</p></div>
+            <button class="btn primary">新增客户</button>
+          </div>
+          <div class="content-grid">
+            <div class="panel section">
+              <div class="toolbar">
+                <span class="filter">国家：全部</span><span class="filter">阶段：已报价</span><span class="filter">等级：A/B</span><span class="filter">最近跟进：30 天</span>
+                <button class="btn">批量分配</button><button class="btn">批量导出</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>客户</th><th>国家</th><th>阶段</th><th>金额</th><th>健康度</th><th>最近跟进</th><th>下一提醒</th><th>企微</th><th>归属人</th></tr></thead>
+                  <tbody>
+                    <tr class="selected"><td><div class="company"><span class="flag">🇸🇪</span><div><b>Nordic Tools AB</b><span>采购经理 Emma</span></div></div></td><td>瑞典</td><td><span class="badge amber">已报价</span></td><td class="amount">$36,000</td><td><span class="health warn"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></td><td>5 天前</td><td><span class="badge red">已逾期</span></td><td><span class="badge green">已绑定</span></td><td>Shirley</td></tr>
+                    <tr><td><div class="company"><span class="flag">🇺🇸</span><div><b>Atlas Home Inc</b><span>Buyer Daniel</span></div></div></td><td>美国</td><td><span class="badge">样品</span></td><td class="amount">$22,000</td><td><span class="health"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></td><td>昨天</td><td>今天 16:00</td><td><span class="badge green">已绑定</span></td><td>Alex</td></tr>
+                    <tr><td><div class="company"><span class="flag">🇯🇵</span><div><b>Kanto Retail</b><span>Director Sato</span></div></div></td><td>日本</td><td><span class="badge green">谈判</span></td><td class="amount">$48,000</td><td><span class="health"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></td><td>今天</td><td>明天 09:30</td><td><span class="badge gray">未绑定</span></td><td>Shirley</td></tr>
+                    <tr><td><div class="company"><span class="flag">🇦🇪</span><div><b>Al Noor Trading</b><span>Owner Hassan</span></div></div></td><td>阿联酋</td><td><span class="badge amber">已报价</span></td><td class="amount">$18,000</td><td><span class="health bad"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></td><td>2 天前</td><td>今天 10:30</td><td><span class="badge green">已绑定</span></td><td>Mia</td></tr>
+                    <tr><td><div class="company"><span class="flag">🇩🇪</span><div><b>Evergreen GmbH</b><span>Buyer Anna</span></div></div></td><td>德国</td><td><span class="badge green">成交</span></td><td class="amount">$57,000</td><td><span class="health"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></td><td>今天</td><td>7 天后复购</td><td><span class="badge green">已绑定</span></td><td>Alex</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <aside class="panel drawer">
+              <div class="drawer-head">
+                <div><h2>Nordic Tools AB</h2><p>瑞典 · 工业工具进口商 · A 级客户</p></div>
+                <span class="badge red">报价未回复</span>
+              </div>
+              <div class="score-card">
+                <div class="score-ring"><span>68</span></div>
+                <div>
+                  <b>成交评分：中高</b>
+                  <p>金额高、客户等级高，但报价停留时间过长，需要今日二次确认。</p>
+                </div>
+              </div>
+              <div class="info-grid">
+                <div class="info"><span>预计金额</span><b>$36,000</b></div>
+                <div class="info"><span>赢率</span><b>42%</b></div>
+                <div class="info"><span>当前阶段</span><b>已报价</b></div>
+                <div class="info"><span>下一动作</span><b>二次确认</b></div>
+              </div>
+              <button class="btn primary" style="width:100%">新增跟进记录</button>
+              <div class="timeline">
+                <div class="timeline-item"><b>企微摘要</b><span>客户关注 CE 证书与交期，已承诺今日补发新版参数。</span></div>
+                <div class="timeline-item"><b>邮件记录</b><span>已发送 PI 与产品参数表，等待确认付款方式。</span></div>
+                <div class="timeline-item"><b>系统提醒</b><span>报价后 5 天未回复，已推送给归属业务员。</span></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+
+        <div class="view" id="pipeline">
+          <div class="page-head">
+            <div><p class="eyebrow">Deal Pipeline</p><h1>商机管道</h1><p class="sub">以外贸销售阶段为核心，金额、国家、下一步动作全部卡片化。</p></div>
+            <button class="btn primary">新增商机</button>
+          </div>
+          <div class="panel section">
+            <div class="pipeline-strip">
+              <div class="stage"><div class="stage-head"><span>询盘</span><b>42</b></div><div class="deal"><b>Marco Import</b><span>意大利 · 厨房五金</span><div class="deal-foot"><span>$8k</span><span>分配报价</span></div></div><div class="deal"><b>Nova Market</b><span>法国 · 家居用品</span><div class="deal-foot"><span>$11k</span><span>新询盘</span></div></div></div>
+              <div class="stage"><div class="stage-head"><span>已联系</span><b>31</b></div><div class="deal"><b>Blue Ocean</b><span>智利 · LED 灯具</span><div class="deal-foot"><span>$14k</span><span>待确认规格</span></div></div></div>
+              <div class="stage"><div class="stage-head"><span>已报价</span><b>26</b></div><div class="deal"><b>Nordic Tools</b><span>瑞典 · 电动工具</span><div class="deal-foot"><span>$36k</span><span class="badge red">逾期</span></div></div><div class="deal"><b>Al Noor</b><span>阿联酋 · LED 灯具</span><div class="deal-foot"><span>$18k</span><span>汇率更新</span></div></div></div>
+              <div class="stage"><div class="stage-head"><span>样品</span><b>14</b></div><div class="deal"><b>Atlas Home</b><span>美国 · 家居用品</span><div class="deal-foot"><span>$22k</span><span>待反馈</span></div></div></div>
+              <div class="stage"><div class="stage-head"><span>谈判</span><b>9</b></div><div class="deal"><b>Kanto Retail</b><span>日本 · 连锁零售</span><div class="deal-foot"><span>$48k</span><span>账期谈判</span></div></div></div>
+              <div class="stage"><div class="stage-head"><span>成交/丢单</span><b>6</b></div><div class="deal"><b>Evergreen GmbH</b><span>德国 · 工业客户</span><div class="deal-foot"><span>$57k</span><span class="badge green">成交</span></div></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="view" id="reminders">
+          <div class="page-head">
+            <div><p class="eyebrow">Follow-up Rules</p><h1>跟进提醒</h1><p class="sub">提醒只保留真正影响成交的节点，避免业务员被低价值通知打扰。</p></div>
+            <button class="btn primary">设置提醒规则</button>
+          </div>
+          <div class="panel section">
+            <div class="task-list">
+              <article class="task" style="--accent: var(--rose)"><i class="task-line"></i><div><h3>报价后 N 天未回复</h3><p>A 级客户默认 3 天提醒，普通客户 5 天提醒，可按业务员覆盖。</p></div><span class="badge red">高优先级</span></article>
+              <article class="task" style="--accent: var(--amber)"><i class="task-line"></i><div><h3>样品签收后待反馈</h3><p>根据物流签收时间触发，提醒销售确认测试进度和复购意向。</p></div><span class="badge amber">今日</span></article>
+              <article class="task" style="--accent: var(--brand)"><i class="task-line"></i><div><h3>A 级客户长时间未联系</h3><p>超过 14 天未触达进入主管视图，支持一键分配复盘任务。</p></div><span class="badge">本周</span></article>
+            </div>
+          </div>
+        </div>
+
+        <div class="view" id="imports">
+          <div class="page-head">
+            <div><p class="eyebrow">Data Operations</p><h1>导入导出</h1><p class="sub">导入降低迁移门槛，导出必须有权限、审批、水印和审计。</p></div>
+            <button class="btn primary">上传 Excel</button>
+          </div>
+          <div class="steps">
+            <div class="step"><div class="step-num">1</div><b>上传文件</b><p>支持 CSV、XLSX，自动识别邮箱、电话、国家与公司域名。</p></div>
+            <div class="step"><div class="step-num">2</div><b>字段映射</b><p>将 Excel 字段映射到客户、联系人、商机和标签。</p></div>
+            <div class="step"><div class="step-num">3</div><b>去重预览</b><p>按公司名、邮箱域名、电话组合去重，冲突行单独处理。</p></div>
+            <div class="step"><div class="step-num">4</div><b>执行与审计</b><p>错误行可下载修正，成功后写入操作审计。</p></div>
+          </div>
+          <div class="panel section">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>任务</th><th>类型</th><th>范围</th><th>状态</th><th>执行人</th><th>时间</th></tr></thead>
+                <tbody>
+                  <tr><td>2026 春季展会客户</td><td>导入</td><td>1,286 行</td><td><span class="badge green">完成</span></td><td>Admin</td><td>09:12</td></tr>
+                  <tr><td>欧洲 A 级客户</td><td>导出</td><td>客户 + 联系人</td><td><span class="badge amber">待审批</span></td><td>Shirley</td><td>08:40</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="view" id="reports">
+          <div class="page-head">
+            <div><p class="eyebrow">Executive Report Deck</p><h1>经营汇报</h1><p class="sub">面向老板与管理层，可直接导出 PDF/PPT 汇报：结论先行、指标支撑、风险闭环。</p></div>
+            <div class="head-actions"><button class="btn">切换月份</button><button class="btn">汇报备注</button><button class="btn primary">导出 PDF</button></div>
+          </div>
+
+          <div class="report-deck">
+            <section class="panel report-hero">
+              <div class="report-hero-top">
+                <small>2026 年 6 月外贸销售经营汇报</small>
+                <small>GoodJob CRM · 自动生成</small>
+              </div>
+              <h2>本月预测成交额 $428k，漏斗转化率提升，但报价后未回复客户正在拖累欧洲市场成交。</h2>
+              <p>建议本周将管理动作聚焦在：欧洲报价逾期客户抢救、认证资料复训、样品阶段反馈催办、Kanto Retail 账期谈判主管协同。</p>
+              <div class="report-hero-metrics">
+                <div class="report-hero-metric"><span>预测成交额</span><b>$428k</b></div>
+                <div class="report-hero-metric"><span>漏斗转化率</span><b>18.6%</b></div>
+                <div class="report-hero-metric"><span>高风险金额</span><b>$92k</b></div>
+                <div class="report-hero-metric"><span>平均响应</span><b>3.2h</b></div>
+              </div>
+            </section>
+
+            <div class="report-summary">
+              <div class="summary-card"><strong>结论 1：成交预测可达成</strong><p>谈判与样品阶段金额占 61%，本月目标差额约 $72k。</p></div>
+              <div class="summary-card"><strong>结论 2：报价跟进是短板</strong><p>26 个报价未回复，其中 7 个已逾期，需主管每日跟踪。</p></div>
+              <div class="summary-card"><strong>结论 3：欧洲市场质量最高</strong><p>欧洲询盘占 42%，但认证资料问题导致响应链路变长。</p></div>
+              <div class="summary-card"><strong>结论 4：培训影响转化</strong><p>认证资料考试通过率 64%，建议与资料维护联动复训。</p></div>
+            </div>
+
+            <div class="ppt-grid">
+              <section class="ppt-panel">
+                <h2>销售漏斗：报价阶段堆积，需要提高二次触达</h2>
+                <span class="subline">阶段数量、金额加权与关键瓶颈</span>
+                <div class="funnel-slide">
+                  <div class="funnel-step"><b>询盘</b><div class="bar" style="--w:96%"></div><span>42 单</span><strong>$612k</strong></div>
+                  <div class="funnel-step"><b>已联系</b><div class="bar" style="--w:78%"></div><span>31 单</span><strong>$506k</strong></div>
+                  <div class="funnel-step"><b>已报价</b><div class="bar" style="--w:64%"></div><span>26 单</span><strong>$382k</strong></div>
+                  <div class="funnel-step"><b>样品</b><div class="bar" style="--w:42%"></div><span>14 单</span><strong>$214k</strong></div>
+                  <div class="funnel-step"><b>谈判</b><div class="bar" style="--w:28%"></div><span>9 单</span><strong>$166k</strong></div>
+                  <div class="funnel-step"><b>成交</b><div class="bar" style="--w:18%"></div><span>6 单</span><strong>$97k</strong></div>
+                </div>
+              </section>
+
+              <section class="ppt-panel dark">
+                <h2>管理层关注事项</h2>
+                <span class="subline">本周建议动作</span>
+                <div class="insight-list">
+                  <div class="insight-item"><i>1</i><div><b>欧洲报价逾期抢救</b><span>Nordic Tools 等 3 个 A 级客户，需今日二次确认。</span></div></div>
+                  <div class="insight-item"><i>2</i><div><b>认证资料复训</b><span>考试通过率偏低，影响 CE/RoHS 沟通效率。</span></div></div>
+                  <div class="insight-item"><i>3</i><div><b>样品反馈提速</b><span>14 个样品阶段客户中 5 个超过标准反馈周期。</span></div></div>
+                </div>
+              </section>
+            </div>
+
+            <div class="ppt-grid">
+              <section class="ppt-panel">
+                <h2>市场结构：欧洲贡献最大，中东需提升报价响应</h2>
+                <span class="subline">询盘占比、成交质量与风险金额</span>
+                <div class="donut-wrap">
+                  <div class="donut"></div>
+                  <div class="legend">
+                    <span><i style="--color: var(--brand)"></i>欧洲 42% · 质量指数 88</span>
+                    <span><i style="--color: var(--green)"></i>北美 26% · 样品反馈快</span>
+                    <span><i style="--color: var(--amber)"></i>中东 16% · 报价周期长</span>
+                    <span><i style="--color: var(--violet)"></i>其他 16% · 分散跟进</span>
+                  </div>
+                </div>
+              </section>
+
+              <section class="ppt-panel">
+                <h2>成交预测拆解</h2>
+                <span class="subline">按阶段贡献预测金额</span>
+                <div class="waterfall">
+                  <div><i style="--h:44%; --c: var(--brand)"></i><span>已报价<br>$126k</span></div>
+                  <div><i style="--h:58%; --c: var(--aqua)"></i><span>样品<br>$158k</span></div>
+                  <div><i style="--h:72%; --c: var(--green)"></i><span>谈判<br>$214k</span></div>
+                  <div><i style="--h:32%; --c: var(--amber)"></i><span>复购<br>$72k</span></div>
+                  <div><i style="--h:22%; --c: var(--rose)"></i><span>风险<br>-$92k</span></div>
+                </div>
+              </section>
+            </div>
+
+            <div class="ppt-grid">
+              <section class="ppt-panel">
+                <h2>团队效率排行</h2>
+                <span class="subline">跟进质量、成交预测、考试通过率联动评估</span>
+                <table class="executive-table">
+                  <thead><tr><th>团队</th><th>新增客户</th><th>有效跟进</th><th>预测金额</th><th>考试通过</th><th>风险</th></tr></thead>
+                  <tbody>
+                    <tr><td>欧洲组</td><td>64</td><td>218</td><td>$186k</td><td>82%</td><td><span class="badge amber">报价逾期</span></td></tr>
+                    <tr><td>北美组</td><td>42</td><td>166</td><td>$124k</td><td>88%</td><td><span class="badge green">健康</span></td></tr>
+                    <tr><td>中东组</td><td>31</td><td>109</td><td>$76k</td><td>69%</td><td><span class="badge red">需复训</span></td></tr>
+                    <tr><td>其他</td><td>49</td><td>142</td><td>$42k</td><td>74%</td><td><span class="badge">分散</span></td></tr>
+                  </tbody>
+                </table>
+              </section>
+
+              <section class="ppt-panel">
+                <h2>下周行动计划</h2>
+                <span class="subline">可直接进入周会任务分配</span>
+                <div class="insight-list">
+                  <div class="insight-item"><i>A</i><div><b>报价逾期日清</b><span>每日 17:00 输出逾期名单，主管确认原因与下一步。</span></div></div>
+                  <div class="insight-item"><i>B</i><div><b>资料维护联动考试</b><span>CE/RoHS 资料更新后，自动触发认证专项考试。</span></div></div>
+                  <div class="insight-item"><i>C</i><div><b>样品反馈标准化</b><span>签收后 3 天必须记录反馈，超期推送企微提醒。</span></div></div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+
+        <div class="view" id="wecom">
+          <div class="page-head">
+            <div><p class="eyebrow">WeCom Collaboration</p><h1>企业微信</h1><p class="sub">企微用于团队提醒、会话摘要归档和内部协同，不替代海外邮件主流程。</p></div>
+            <button class="btn primary">立即同步</button>
+          </div>
+          <div class="wecom-card">
+            <div class="panel section">
+              <div class="kpis" style="grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom:0">
+                <div class="kpi" style="--accent: var(--aqua)"><label>已绑定客户</label><strong>412</strong><p>绑定率 64%</p></div>
+                <div class="kpi" style="--accent: var(--brand)"><label>今日提醒</label><strong>37</strong><p>已读 81%</p></div>
+                <div class="kpi" style="--accent: var(--green)"><label>会话摘要</label><strong>96</strong><p>自动归档</p></div>
+                <div class="kpi" style="--accent: var(--amber)"><label>异常授权</label><strong>0</strong><p>权限正常</p></div>
+              </div>
+            </div>
+            <div class="phone">
+              <div class="phone-screen">
+                <span class="badge green">企微提醒预览</span>
+                <div class="chat">
+                  <div class="bubble">Nordic Tools AB 报价已逾期 5 天，建议今日二次确认。</div>
+                  <div class="bubble me">已发送新版 CE 证书和交期说明。</div>
+                  <div class="bubble">摘要已归档到客户时间线，并生成明日 10:00 提醒。</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="view" id="knowledge">
+          <div class="page-head">
+            <div><p class="eyebrow">Knowledge Maintenance</p><h1>资料维护</h1><p class="sub">维护产品知识、认证资料、报价话术、销售 SOP，并沉淀版本与审核记录。</p></div>
+            <div class="head-actions"><button class="btn">新建类目</button><button class="btn primary">上传资料</button></div>
+          </div>
+
+          <div class="dense-grid">
+            <div class="dense-card"><span>资料总数</span><b>428</b><small>+18</small></div>
+            <div class="dense-card"><span>待审核</span><b>12</b><small style="color:var(--amber)">今日处理</small></div>
+            <div class="dense-card"><span>本月下载</span><b>2,846</b><small>+23%</small></div>
+            <div class="dense-card"><span>资料覆盖率</span><b>91%</b><small>+5%</small></div>
+          </div>
+
+          <div class="knowledge-grid">
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 5h18"/><path d="M3 12h18"/><path d="M3 19h18"/></svg></span><div><h2>资料类目维护</h2><span>用于资料归档与考试题库关联</span></div></div><button class="btn">调整排序</button></div>
+              <div class="category-list">
+                <div class="category-item"><div><b>产品知识 / LED 灯具</b><span>68 份资料 · 126 道题 · 负责人 Alex</span></div><span class="badge green">启用</span></div>
+                <div class="category-item"><div><b>认证资料 / CE RoHS</b><span>42 份资料 · 74 道题 · 负责人 Mia</span></div><span class="badge amber">待更新</span></div>
+                <div class="category-item"><div><b>报价规则 / 汇率与 MOQ</b><span>35 份资料 · 52 道题 · 负责人 Shirley</span></div><span class="badge green">启用</span></div>
+                <div class="category-item"><div><b>销售 SOP / 跟进话术</b><span>96 份资料 · 88 道题 · 负责人 Admin</span></div><span class="badge">修订中</span></div>
+                <div class="category-item"><div><b>包装物流 / 唛头与装柜</b><span>51 份资料 · 60 道题 · 负责人 Eric</span></div><span class="badge green">启用</span></div>
+              </div>
+            </section>
+
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></span><div><h2>资料库</h2><span>支持文档、图片、视频、链接与版本审核</span></div></div><button class="btn">批量发布</button></div>
+              <div class="file-grid">
+                <div class="file-card"><div class="file-icon">PDF</div><b>LED 灯具参数手册 V3</b><span>产品知识 · 已发布 · 2026-06-25</span></div>
+                <div class="file-card"><div class="file-icon">XLS</div><b>欧洲报价模板</b><span>报价规则 · 待审核 · 汇率已更新</span></div>
+                <div class="file-card"><div class="file-icon">VID</div><b>样品测试讲解视频</b><span>销售 SOP · 12 分钟 · 关联考试</span></div>
+                <div class="file-card"><div class="file-icon">DOC</div><b>CE 证书客户解释话术</b><span>认证资料 · 已发布 · 下载 184</span></div>
+                <div class="file-card"><div class="file-icon">IMG</div><b>包装唛头示例图库</b><span>包装物流 · 修订中 · 24 张图</span></div>
+                <div class="file-card"><div class="file-icon">URL</div><b>竞品参数对照链接</b><span>产品知识 · 内部可见 · 负责人 Mia</span></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="matrix-grid">
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2>审核流</h2><span>资料上线前必须留痕</span></div></div></div>
+              <table class="mini-table"><thead><tr><th>资料</th><th>审核人</th><th>状态</th></tr></thead><tbody><tr><td>欧洲报价模板</td><td>主管</td><td><span class="badge amber">待审</span></td></tr><tr><td>产品参数 V3</td><td>产品经理</td><td><span class="badge green">通过</span></td></tr><tr><td>竞品对照</td><td>管理员</td><td><span class="badge">修订</span></td></tr></tbody></table>
+            </section>
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M3 12h18"/></svg></span><div><h2>字段维护</h2><span>资料标签与适用范围</span></div></div></div>
+              <table class="mini-table"><thead><tr><th>字段</th><th>值</th><th>状态</th></tr></thead><tbody><tr><td>适用市场</td><td>欧洲/北美/中东</td><td>启用</td></tr><tr><td>产品线</td><td>灯具/五金/家居</td><td>启用</td></tr><tr><td>权限</td><td>全员/主管/管理员</td><td>启用</td></tr></tbody></table>
+            </section>
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4"/><path d="M20 6 9 17l-5-5"/></svg></span><div><h2>考试关联</h2><span>资料更新后自动触发复训</span></div></div></div>
+              <table class="mini-table"><thead><tr><th>类目</th><th>题库</th><th>动作</th></tr></thead><tbody><tr><td>认证资料</td><td>74 题</td><td><span class="badge amber">复训</span></td></tr><tr><td>报价规则</td><td>52 题</td><td><span class="badge green">同步</span></td></tr><tr><td>产品知识</td><td>126 题</td><td><span class="badge">抽考</span></td></tr></tbody></table>
+            </section>
+          </div>
+        </div>
+
+        <div class="view" id="exam">
+          <div class="page-head">
+            <div><p class="eyebrow">Sales Online Exam</p><h1>销售在线考试系统</h1><p class="sub">基于产品知识资料生成在线考试，支持按产品类目、市场、岗位分配考试与补考。</p></div>
+            <div class="head-actions"><button class="btn">题库维护</button><button class="btn">分类目考试维护</button><button class="btn primary">发布考试</button></div>
+          </div>
+
+          <div class="dense-grid">
+            <div class="dense-card"><span>进行中考试</span><b>8</b><small>3 场今日截止</small></div>
+            <div class="dense-card"><span>题库总量</span><b>1,246</b><small>+86</small></div>
+            <div class="dense-card"><span>平均通过率</span><b>78%</b><small style="color:var(--amber)">认证类偏低</small></div>
+            <div class="dense-card"><span>需补考人数</span><b>19</b><small style="color:var(--rose)">自动提醒</small></div>
+          </div>
+
+          <div class="exam-grid">
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4"/><path d="M7 3h10l2 4v14H5V7z"/></svg></span><div><h2>在线考试预览</h2><span>业务员答题界面，可限时、自动判分</span></div></div><span class="badge red">剩余 18:42</span></div>
+              <div class="exam-paper">
+                <div class="question-card"><h3>1. 客户要求 CE 证书时，销售应优先提供哪类资料？</h3><div class="option-row"><span>A. 工厂营业执照</span><span class="active">B. 对应产品型号的 CE 证书与测试报告</span><span>C. 产品宣传图</span><span>D. 海运提单</span></div></div>
+                <div class="question-card"><h3>2. 报价单中 MOQ 变化需要同步更新哪些内容？</h3><div class="option-row"><span>A. 单价、包装数、交期</span><span>B. 客户国家</span><span class="active">C. 单价、装箱、交期、付款条款影响</span><span>D. 仅备注即可</span></div></div>
+                <div class="question-card"><h3>3. 样品寄出后系统默认几天触发反馈提醒？</h3><div class="option-row"><span>A. 1 天</span><span class="active">B. 签收后 3 天</span><span>C. 30 天</span><span>D. 不提醒</span></div></div>
+              </div>
+            </section>
+
+            <aside class="exam-sidebar">
+              <section class="panel section">
+                <div class="progress-ring"><b>72%</b></div>
+                <div class="section-head"><div class="section-title"><div><h2>考试进度</h2><span>LED 灯具基础知识</span></div></div><span class="badge">25 题</span></div>
+                <table class="mini-table"><tbody><tr><td>已答</td><td>18/25</td></tr><tr><td>正确</td><td>14</td></tr><tr><td>及格线</td><td>80 分</td></tr><tr><td>允许补考</td><td>2 次</td></tr></tbody></table>
+              </section>
+              <section class="panel section">
+                <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 5h18"/><path d="M3 12h18"/><path d="M3 19h18"/></svg></span><div><h2>分类目考试维护</h2><span>按产品线维护考试</span></div></div></div>
+                <div class="category-list">
+                  <div class="category-item"><div><b>LED 灯具基础</b><span>25 题 · 80 分及格 · 全员必考</span></div><span class="badge green">发布</span></div>
+                  <div class="category-item"><div><b>认证资料专项</b><span>30 题 · 85 分及格 · 新人必考</span></div><span class="badge amber">草稿</span></div>
+                  <div class="category-item"><div><b>报价规则进阶</b><span>20 题 · 80 分及格 · 销售必考</span></div><span class="badge">排期</span></div>
+                  <div class="category-item"><div><b>包装物流知识</b><span>18 题 · 75 分及格 · 选考</span></div><span class="badge green">发布</span></div>
+                </div>
+              </section>
+            </aside>
+          </div>
+
+          <div class="matrix-grid">
+            <section class="panel section"><div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-7"/></svg></span><div><h2>成绩统计</h2><span>按团队与类目分析</span></div></div></div><table class="mini-table"><thead><tr><th>团队</th><th>参考</th><th>通过率</th><th>均分</th></tr></thead><tbody><tr><td>欧洲组</td><td>12</td><td>83%</td><td>86</td></tr><tr><td>北美组</td><td>10</td><td>78%</td><td>81</td></tr><tr><td>中东组</td><td>8</td><td>62%</td><td>73</td></tr></tbody></table></section>
+            <section class="panel section"><div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/></svg></span><div><h2>补考提醒</h2><span>企微自动推送</span></div></div></div><table class="mini-table"><thead><tr><th>人员</th><th>类目</th><th>状态</th></tr></thead><tbody><tr><td>Eric</td><td>认证资料</td><td><span class="badge red">未通过</span></td></tr><tr><td>Luna</td><td>报价规则</td><td><span class="badge amber">待补考</span></td></tr><tr><td>Owen</td><td>包装物流</td><td><span class="badge">未参加</span></td></tr></tbody></table></section>
+            <section class="panel section"><div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2>题型维护</h2><span>单选/多选/判断/问答</span></div></div></div><table class="mini-table"><thead><tr><th>题型</th><th>数量</th><th>占比</th></tr></thead><tbody><tr><td>单选</td><td>680</td><td>55%</td></tr><tr><td>多选</td><td>316</td><td>25%</td></tr><tr><td>判断</td><td>250</td><td>20%</td></tr></tbody></table></section>
+          </div>
+        </div>
+
+        <div class="view" id="tools">
+          <div class="page-head">
+            <div><p class="eyebrow">Smart Utilities</p><h1>小工具</h1><p class="sub">把碎片化销售动作做成轻工具：OCR 名片识别、资料速查、汇率换算、客户去重等。</p></div>
+            <div class="head-actions"><button class="btn">工具配置</button><button class="btn primary">同步到线索</button></div>
+          </div>
+
+          <div class="dense-grid">
+            <div class="dense-card"><span>今日识别名片</span><b>37</b><small>+12</small></div>
+            <div class="dense-card"><span>成功同步线索</span><b>29</b><small>78%</small></div>
+            <div class="dense-card"><span>字段平均置信度</span><b>94%</b><small>高</small></div>
+            <div class="dense-card"><span>待人工确认</span><b>8</b><small style="color:var(--amber)">需复核</small></div>
+          </div>
+
+          <div class="tools-grid">
+            <aside class="tool-list">
+              <div class="tool-item active"><div class="tool-mark">OCR</div><div><b>名片 OCR 识别</b><span>解析公司、联系人、邮箱、WhatsApp 等</span></div><span class="badge green">启用</span></div>
+              <div class="tool-item"><div class="tool-mark">FX</div><div><b>汇率换算</b><span>报价时快速换算 USD/EUR/CNY</span></div><span class="badge">待接入</span></div>
+              <div class="tool-item"><div class="tool-mark">DUP</div><div><b>客户去重</b><span>按邮箱域名、电话、公司名合并</span></div><span class="badge">规则</span></div>
+              <div class="tool-item"><div class="tool-mark">TXT</div><div><b>跟进话术生成</b><span>按阶段生成邮件/企微话术</span></div><span class="badge amber">内测</span></div>
+              <div class="tool-item"><div class="tool-mark">HS</div><div><b>HS 编码速查</b><span>按产品关键词查询归类建议</span></div><span class="badge">规划</span></div>
+            </aside>
+
+            <section class="panel section">
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 7V5a2 2 0 0 1 2-2h2"/><path d="M16 3h2a2 2 0 0 1 2 2v2"/><path d="M20 17v2a2 2 0 0 1-2 2h-2"/><path d="M8 21H6a2 2 0 0 1-2-2v-2"/><rect x="7" y="8" width="10" height="8" rx="1"/></svg></span><div><h2>名片 OCR 识别</h2><span>上传名片后解析字段，人工确认后同步为线索</span></div></div>
+                <div class="head-actions"><button class="btn">加载名片</button><button class="btn">重新识别</button><button class="btn primary">确认同步</button></div>
+              </div>
+
+              <div class="ocr-workbench">
+                <div class="upload-card">
+                  <span class="badge">已加载：business-card-james.png</span>
+                  <div class="business-card">
+                    <h2>NorthStar Lighting GmbH</h2>
+                    <p>Import & Distribution</p>
+                    <strong>James Müller</strong>
+                    <span>Purchasing Manager</span>
+                    <span>james.mueller@northstar-light.de</span>
+                    <span>WhatsApp +49 151 2388 9012</span>
+                    <span>WeChat james_light_de</span>
+                    <span>Berlin, Germany</span>
+                  </div>
+                  <div class="sync-preview">
+                    <div class="sync-row"><span>识别状态</span><b>完成</b><span class="badge green">94% 置信度</span></div>
+                    <div class="sync-row"><span>重复检查</span><b>未发现重复客户</b><span class="badge green">可同步</span></div>
+                    <div class="sync-row"><span>目标模块</span><b>线索池 / 欧洲组</b><span class="badge">待确认</span></div>
+                  </div>
+                </div>
+
+                <div>
+                  <div class="ocr-fields">
+                    <div class="field-card"><input type="checkbox" checked><div><label>公司名</label><input type="text" value="NorthStar Lighting GmbH"></div></div>
+                    <div class="field-card"><input type="checkbox" checked><div><label>联系人</label><input type="text" value="James Müller"></div></div>
+                    <div class="field-card"><input type="checkbox" checked><div><label>职位</label><input type="text" value="Purchasing Manager"></div></div>
+                    <div class="field-card"><input type="checkbox" checked><div><label>邮箱</label><input type="text" value="james.mueller@northstar-light.de"></div></div>
+                    <div class="field-card"><input type="checkbox" checked><div><label>WhatsApp</label><input type="text" value="+49 151 2388 9012"></div></div>
+                    <div class="field-card"><input type="checkbox" checked><div><label>微信</label><input type="text" value="james_light_de"></div></div>
+                    <div class="field-card"><input type="checkbox" checked><div><label>电话</label><input type="text" value="+49 30 8842 1290"></div></div>
+                    <div class="field-card"><input type="checkbox" checked><div><label>国家</label><input type="text" value="德国"></div></div>
+                    <div class="field-card"><input type="checkbox" checked><div><label>城市</label><input type="text" value="Berlin"></div></div>
+                    <div class="field-card"><input type="checkbox"><div><label>标签</label><input type="text" value="LED灯具 / 欧洲进口商"></div></div>
+                  </div>
+
+                  <div class="matrix-grid" style="grid-template-columns: 1fr 1fr; margin-top:10px">
+                    <section class="panel section" style="box-shadow:none">
+                      <div class="section-head"><div class="section-title"><div><h2>同步字段</h2><span>勾选后写入线索</span></div></div></div>
+                      <table class="mini-table"><tbody><tr><td>客户名称</td><td>公司名</td><td><span class="badge green">已选</span></td></tr><tr><td>主联系人</td><td>联系人+职位</td><td><span class="badge green">已选</span></td></tr><tr><td>联系方式</td><td>邮箱/电话/WhatsApp/微信</td><td><span class="badge green">已选</span></td></tr><tr><td>国家地区</td><td>德国 / Berlin</td><td><span class="badge green">已选</span></td></tr></tbody></table>
+                    </section>
+                    <section class="panel section" style="box-shadow:none">
+                      <div class="section-head"><div class="section-title"><div><h2>同步结果预览</h2><span>生成线索前复核</span></div></div></div>
+                      <table class="mini-table"><tbody><tr><td>线索来源</td><td>名片 OCR</td></tr><tr><td>分配团队</td><td>欧洲组</td></tr><tr><td>初始阶段</td><td>新线索</td></tr><tr><td>下次动作</td><td>发送产品目录</td></tr></tbody></table>
+                    </section>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div class="view" id="settings">
+          <div class="page-head">
+            <div><p class="eyebrow">Account & Access Control</p><h1>账号管理</h1><p class="sub">账号、角色、数据范围、登录状态、MySQL、备份、审计和导出审批统一管理。</p></div>
+            <div class="head-actions"><button class="btn">新增账号</button><button class="btn">权限模板</button><button class="btn primary">保存设置</button></div>
+          </div>
+
+          <div class="dense-grid">
+            <div class="dense-card"><span>启用账号</span><b>36</b><small>+3</small></div>
+            <div class="dense-card"><span>主管账号</span><b>5</b><small>全团队</small></div>
+            <div class="dense-card"><span>业务员账号</span><b>28</b><small>本人数据</small></div>
+            <div class="dense-card"><span>异常登录</span><b>0</b><small>安全</small></div>
+          </div>
+
+          <div class="account-grid">
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg></span><div><h2>账号列表</h2><span>不同账号加载不同数据范围</span></div></div><button class="btn">批量停用</button></div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>账号</th><th>角色</th><th>数据范围</th><th>可见客户</th><th>状态</th><th>最近登录</th></tr></thead>
+                  <tbody>
+                    <tr><td><div class="company"><span class="avatar">SH</span><div><b>Shirley</b><span>shirley@goodjob.com</span></div></div></td><td><span class="badge">业务员</span></td><td>仅本人数据</td><td>128</td><td><span class="badge green">启用</span></td><td>今天 09:12</td></tr>
+                    <tr><td><div class="company"><span class="avatar">AL</span><div><b>Alex</b><span>alex@goodjob.com</span></div></div></td><td><span class="badge green">主管</span></td><td>欧洲组全部</td><td>642</td><td><span class="badge green">启用</span></td><td>今天 08:36</td></tr>
+                    <tr><td><div class="company"><span class="avatar">MI</span><div><b>Mia</b><span>mia@goodjob.com</span></div></div></td><td><span class="badge">业务员</span></td><td>仅本人数据</td><td>96</td><td><span class="badge green">启用</span></td><td>昨天 18:20</td></tr>
+                    <tr><td><div class="company"><span class="avatar">AD</span><div><b>Admin</b><span>admin@goodjob.com</span></div></div></td><td><span class="badge amber">管理员</span></td><td>全量权限</td><td>全部</td><td><span class="badge green">启用</span></td><td>今天 07:52</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <aside class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><div><h2>数据权限规则</h2><span>RBAC + 数据范围</span></div></div></div>
+              <div class="category-list">
+                <div class="category-item"><div><b>业务员</b><span>客户、线索、待办、考试仅本人可见；不可查看团队排行明细。</span></div><span class="badge">本人</span></div>
+                <div class="category-item"><div><b>销售主管</b><span>查看本团队全部客户、商机、待办、考试成绩；可分配任务。</span></div><span class="badge green">团队</span></div>
+                <div class="category-item"><div><b>管理员</b><span>账号、角色、字段、导出审批、审计日志和系统配置。</span></div><span class="badge amber">全量</span></div>
+              </div>
+            </aside>
+          </div>
+
+          <div class="permission-grid">
+            <div class="permission-card"><b>客户数据</b><span>业务员仅本人；主管本团队；管理员全量。</span></div>
+            <div class="permission-card"><b>待办清单</b><span>业务员仅本人待办；主管可查看和分配团队待办。</span></div>
+            <div class="permission-card"><b>报表导出</b><span>业务员不可导出全量；主管需审批；管理员审计。</span></div>
+          </div>
+
+          <div class="settings-grid">
+            <div class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></svg></span><div><h2>MySQL 状态</h2><span>本地化部署</span></div></div></div>
+              <div class="setting-row"><span>主库</span><b>192.168.10.21:3306</b></div>
+              <div class="setting-row"><span>备份策略</span><b>每日 03:00</b></div>
+              <div class="setting-row"><span>最近备份</span><b><span class="badge green">成功</span></b></div>
+              <div class="setting-row"><span>审计日志</span><b>保留 180 天</b></div>
+            </div>
+            <div class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span><div><h2>角色权限</h2><span>RBAC + 数据范围</span></div></div></div>
+              <div class="setting-row"><span>业务员</span><b>仅本人客户</b></div>
+              <div class="setting-row"><span>主管</span><b>本团队客户</b></div>
+              <div class="setting-row"><span>管理员</span><b>全量配置</b></div>
+              <div class="setting-row"><span>导出审批</span><b><span class="badge amber">开启</span></b></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const navButtons = [...document.querySelectorAll(".nav button")];
+    const views = [...document.querySelectorAll(".view")];
+    const profiles = {
+      sales: {
+        name: "Shirley / 业务员",
+        scope: "仅本人客户、本人待办、本人线索",
+        avatar: "SH",
+        bodyRole: "sales"
+      },
+      manager: {
+        name: "Alex / 销售主管",
+        scope: "欧洲组全部客户、全部待办、团队考试成绩",
+        avatar: "AL",
+        bodyRole: "manager"
+      },
+      admin: {
+        name: "Admin / 管理员",
+        scope: "全量客户、账号、权限、审计与系统配置",
+        avatar: "AD",
+        bodyRole: "manager"
+      }
+    };
+
+    function activateView(id) {
+      navButtons.forEach((button) => button.classList.toggle("active", button.dataset.view === id));
+      views.forEach((view) => view.classList.toggle("active", view.id === id));
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function applyRole(role) {
+      const profile = profiles[role] || profiles.sales;
+      document.body.dataset.role = profile.bodyRole;
+      document.getElementById("scopeUser").textContent = profile.name;
+      document.getElementById("scopeText").textContent = profile.scope;
+      document.getElementById("currentAvatar").textContent = profile.avatar;
+      document.getElementById("roleSwitcher").value = role;
+      document.getElementById("loginRole").value = role;
+      document.querySelectorAll("[data-sales-text]").forEach((node) => {
+        node.textContent = profile.bodyRole === "manager" ? node.dataset.managerText : node.dataset.salesText;
+      });
+      document.querySelectorAll(".login-user").forEach((node) => {
+        node.classList.toggle("active", node.dataset.loginRole === role);
+      });
+    }
+
+    function login(role) {
+      applyRole(role);
+      document.body.classList.add("is-authenticated");
+    }
+
+    function logout() {
+      document.body.classList.remove("is-authenticated");
+    }
+
+    navButtons.forEach((button) => {
+      button.addEventListener("click", () => activateView(button.dataset.view));
+    });
+
+    document.getElementById("loginButton").addEventListener("click", () => login(document.getElementById("loginRole").value));
+    document.getElementById("logoutButton").addEventListener("click", logout);
+    document.getElementById("roleSwitcher").addEventListener("change", (event) => applyRole(event.target.value));
+    document.getElementById("loginRole").addEventListener("change", (event) => applyRole(event.target.value));
+    document.querySelectorAll(".login-user").forEach((node) => {
+      node.addEventListener("click", () => applyRole(node.dataset.loginRole));
+    });
+
+    applyRole("sales");
+  </script>
+</body>
+</html>

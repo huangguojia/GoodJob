@@ -1,0 +1,121 @@
+CREATE TABLE users (
+  id VARCHAR(64) PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  email VARCHAR(180) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  role ENUM('sales','manager','admin') NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  avatar VARCHAR(8),
+  status ENUM('active','disabled') NOT NULL DEFAULT 'active',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE customers (
+  id VARCHAR(64) PRIMARY KEY,
+  company VARCHAR(200) NOT NULL,
+  country VARCHAR(80),
+  contact VARCHAR(100),
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  stage VARCHAR(40),
+  amount DECIMAL(14,2) DEFAULT 0,
+  health INT DEFAULT 0,
+  next_reminder VARCHAR(100),
+  wecom_bound BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_customers_owner(owner_id),
+  INDEX idx_customers_team(team_id)
+);
+
+CREATE TABLE deals (
+  id VARCHAR(64) PRIMARY KEY,
+  customer_id VARCHAR(64) NOT NULL,
+  title VARCHAR(200) NOT NULL,
+  stage VARCHAR(40) NOT NULL,
+  amount DECIMAL(14,2) DEFAULT 0,
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  next_action VARCHAR(200),
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE todos (
+  id VARCHAR(64) PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  type VARCHAR(40) NOT NULL,
+  priority VARCHAR(20) NOT NULL,
+  due_at VARCHAR(100),
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  related VARCHAR(200),
+  done BOOLEAN DEFAULT FALSE,
+  impact_amount DECIMAL(14,2)
+);
+
+CREATE TABLE reminders (
+  id VARCHAR(64) PRIMARY KEY,
+  title VARCHAR(200) NOT NULL,
+  rule_text VARCHAR(255),
+  due_at VARCHAR(100),
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  channel VARCHAR(40),
+  status VARCHAR(40)
+);
+
+CREATE TABLE knowledge_assets (
+  id VARCHAR(64) PRIMARY KEY,
+  title VARCHAR(200) NOT NULL,
+  category VARCHAR(100),
+  status VARCHAR(40),
+  owner_id VARCHAR(64),
+  version VARCHAR(40),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE exams (
+  id VARCHAR(64) PRIMARY KEY,
+  title VARCHAR(200) NOT NULL,
+  category VARCHAR(100),
+  status VARCHAR(40),
+  pass_rate DECIMAL(5,2),
+  question_count INT DEFAULT 0
+);
+
+CREATE TABLE exam_attempts (
+  id VARCHAR(64) PRIMARY KEY,
+  exam_id VARCHAR(64) NOT NULL,
+  user_id VARCHAR(64) NOT NULL,
+  score DECIMAL(5,2),
+  passed BOOLEAN,
+  submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE ocr_jobs (
+  id VARCHAR(64) PRIMARY KEY,
+  status VARCHAR(40),
+  confidence DECIMAL(5,2),
+  fields_json JSON,
+  created_by VARCHAR(64),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE import_export_jobs (
+  id VARCHAR(64) PRIMARY KEY,
+  name VARCHAR(200) NOT NULL,
+  type VARCHAR(20) NOT NULL,
+  rows_count INT DEFAULT 0,
+  status VARCHAR(40),
+  operator_id VARCHAR(64),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE wecom_messages (
+  id VARCHAR(64) PRIMARY KEY,
+  customer_id VARCHAR(64),
+  summary TEXT,
+  owner_id VARCHAR(64),
+  team_id VARCHAR(64),
+  status VARCHAR(40),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
