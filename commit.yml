@@ -2,13 +2,112 @@
 branches: {
   }
 fileChange:
-  /README.en.md:
-    newFile: !uuid '2e9ea220101509c2d23bf622668fcbfb4c9eff80'
+  /DEVELOPMENT_DECISIONS.md:
+    newFile: !uuid 'b015dbbbe5bb20663612ca91eb0320c0a4756662'
+    oldFile: null
+  /DEVELOPMENT_STATUS.md:
+    newFile: !uuid '869b51041474fe5e498ca99b27e5c600b23b2e4a'
     oldFile: null
   /README.md:
-    newFile: !uuid 'a38ba47c31d16cb100477d68eb0c861a9fcd3d7b'
+    newFile: !uuid '824b514f8efd81cd179e7c5306edb2f696ce86d0'
+    oldFile: !uuid 'a38ba47c31d16cb100477d68eb0c861a9fcd3d7b'
+  /backend:
+    newFile: !uuid '8179d908376c0d603859d7ea1f492ca8d3017713'
     oldFile: null
-gitCommitId: !uuid 'a8dd5043a6732b2c0789b4afb23fb17266f1c269'
+  /backend/package.json:
+    newFile: !uuid 'a8b44eec253ab23acd6e9a3adac26e7d5391ad4e'
+    oldFile: null
+  /backend/schema.mysql.sql:
+    newFile: !uuid 'fdd465fc5a4352d5f2ad827d394392f0a89697f4'
+    oldFile: null
+  /backend/src:
+    newFile: !uuid 'b68497a2afe2bbd4baebf84698fb148604f1c067'
+    oldFile: null
+  /backend/src/auth.ts:
+    newFile: !uuid '4eba706c8acd3ff03b8d429461c327bb9d1635cb'
+    oldFile: null
+  /backend/src/data.ts:
+    newFile: !uuid 'eadafe7457af324d5af0b3e1ad98aa235dfdd308'
+    oldFile: null
+  /backend/src/mysql-store.ts:
+    newFile: !uuid 'bfa605331ac3e4da23bb4edd4f190e542bca4a5d'
+    oldFile: null
+  /backend/src/self-test.ts:
+    newFile: !uuid '3551488707bd57523b20d9082cb357284309a0d7'
+    oldFile: null
+  /backend/src/server.ts:
+    newFile: !uuid '535b81852f303589b893d703d397de3e9b8be53c'
+    oldFile: null
+  /backend/src/store.ts:
+    newFile: !uuid '990f019c76837b7aa954a932e8de8639720b46d7'
+    oldFile: null
+  /backend/src/types.ts:
+    newFile: !uuid '87ed04ef3960d45ecc010edc56098eda38f33be6'
+    oldFile: null
+  /backend/tsconfig.json:
+    newFile: !uuid 'a5492c6a23fb5cfce56c8affd6365802a1fb40cc'
+    oldFile: null
+  /figma-use-script.js:
+    newFile: !uuid '5499b1a4fe568a016b9f8449b266a977f096e399'
+    oldFile: null
+  /frontend:
+    newFile: !uuid 'de9c92a379f38dfcfd70525b56eef3432cf79e60'
+    oldFile: null
+  /frontend/index.html:
+    newFile: !uuid '2702b03dde9f570ea8bd8fd53741e3292a0035c5'
+    oldFile: null
+  /frontend/package.json:
+    newFile: !uuid '4447c9961145ff283c56222143077f91bf24d299'
+    oldFile: null
+  /frontend/playwright.config.ts:
+    newFile: !uuid 'bbdaca5651220984350ea83c45cf56fe33563dfe'
+    oldFile: null
+  /frontend/src:
+    newFile: !uuid '17e4d6609eff55f205de17d28d8d945647c2989c'
+    oldFile: null
+  /frontend/src/api.ts:
+    newFile: !uuid '830487323f221641116824c7ae7716bc882b79d9'
+    oldFile: null
+  /frontend/src/main.tsx:
+    newFile: !uuid '4498f273eae9edb96cdea07300fb298a50813099'
+    oldFile: null
+  /frontend/src/prototype-api.ts:
+    newFile: !uuid 'b73924229a53c31dce0619a4272489dfa0092ef9'
+    oldFile: null
+  /frontend/src/self-test.ts:
+    newFile: !uuid '57089079ebe6e83096efb575bab3a7c050d4b1d4'
+    oldFile: null
+  /frontend/src/styles.css:
+    newFile: !uuid '56c2ffe041b5e17ba4a717d6459764070a3f5945'
+    oldFile: null
+  /frontend/src/vite-env.d.ts:
+    newFile: !uuid '11f02fe2a0061d6e6e1f271b21da95423b448b32'
+    oldFile: null
+  /frontend/tests:
+    newFile: !uuid '9a3ce9f8a6a1aae94f3eb26b12009ed6ae5fd86d'
+    oldFile: null
+  /frontend/tests/crm.spec.ts:
+    newFile: !uuid '7a096a287254b26b3b0e2b225be1114ed91b31b1'
+    oldFile: null
+  /frontend/tsconfig.json:
+    newFile: !uuid '1683078f6a03af79817bafba13199566b6fe90fa'
+    oldFile: null
+  /frontend/tsconfig.node.json:
+    newFile: !uuid '9d31e2aed93c876bc048cf2f863cb2a847c901e8'
+    oldFile: null
+  /frontend/vite.config.ts:
+    newFile: !uuid '77434a2482d78ed64dce5c22f4202d601fa1f374'
+    oldFile: null
+  /index.html:
+    newFile: !uuid '6520e2cdbd026dbbe4a7879763a9f43a42341508'
+    oldFile: null
+  /package-lock.json:
+    newFile: !uuid '4a0d4f3a6199cba2482fd13da79231a57fe4b9d6'
+    oldFile: null
+  /package.json:
+    newFile: !uuid '2602ed5c3e6091417ea634ee4a7ed41f56c70ed9'
+    oldFile: null
+gitCommitId: !uuid '4260e4e4003607be86298cba6f78b1a805cafd76'
 renames: {
   }
-revisionId: 1
+revisionId: 2
