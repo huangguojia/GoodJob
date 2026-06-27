@@ -51,6 +51,10 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#dashboard .todo-row", { hasText: title }).first().locator(".todo-check").click();
     await expect(page.locator("#dashboard .todo-row.done", { hasText: title })).toHaveCount(0);
     await expect(page.locator(".toast").last()).toContainText("已撤回未完成");
+    await page.locator("#dashboard .todo-row", { hasText: title }).first().locator(".todo-delete").click();
+    await expect(page.locator(".toast").last()).toContainText("待办已删除");
+    await expect(page.locator("#dashboard .todo-row", { hasText: title })).toHaveCount(0);
+    await expect(todoKpi).toHaveText(String(beforeTodoCount));
   });
 
   test("todo list sorts unfinished first and newest first", async ({ page }) => {

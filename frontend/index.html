@@ -2548,6 +2548,45 @@
       min-width: 116px;
     }
 
+    .todo-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      opacity: .62;
+      transition: opacity .18s ease;
+    }
+
+    .todo-row:hover .todo-actions,
+    .todo-history-row:hover .todo-actions {
+      opacity: 1;
+    }
+
+    .todo-delete {
+      width: 24px;
+      height: 24px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid #efd0d0;
+      border-radius: 7px;
+      color: #a33737;
+      background: #fff8f8;
+      cursor: pointer;
+      transition: transform .16s ease, border-color .16s ease, background .16s ease, box-shadow .16s ease;
+    }
+
+    .todo-delete:hover {
+      transform: translateY(-1px);
+      border-color: #e4a6a6;
+      background: #fff1f1;
+      box-shadow: 0 8px 18px rgba(163,55,55,.12);
+    }
+
+    .todo-delete svg {
+      width: 13px;
+      height: 13px;
+    }
+
     .assignee-stack {
       display: flex;
       justify-content: flex-end;

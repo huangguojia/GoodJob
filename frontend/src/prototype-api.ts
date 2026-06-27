@@ -647,9 +647,16 @@ function renderTodos(todos: Todo[]) {
     return `<article class="todo-row ${todo.priority === "high" ? "urgent" : ""} ${todo.done ? "done" : ""}" data-todo-id="${escapeHtml(todo.id)}">
       <i class="todo-check" title="${todo.done ? "撤回未完成" : "完成待办"}"></i>
       <div class="todo-main"><h3>${escapeHtml(todo.title)}</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--${tone === "red" ? "rose" : tone})"></i><span>${escapeHtml(priorityText(todo.priority))}</span>${optionalMeta}${badge(todo.done ? "已完成" : isHistoryView ? "历史归档" : todoTypeText(todo.type), todo.done ? "green" : tone)}</div></div>
-      <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">我</span></div><div class="subtask-bar"><i style="--p:${todo.done ? "100%" : "55%"}"></i></div></div>
+      <div class="todo-side"><div class="todo-actions"><div class="assignee-stack"><span class="mini-avatar">我</span></div><button class="todo-delete" title="删除待办" aria-label="删除待办"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg></button></div><div class="subtask-bar"><i style="--p:${todo.done ? "100%" : "55%"}"></i></div></div>
     </article>`;
   }).join("");
+  qsa<HTMLElement>(".todo-row .todo-delete", list).forEach((node) => {
+    node.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const row = node.closest<HTMLElement>(".todo-row");
+      if (row?.dataset.todoId) await deleteTodo(row.dataset.todoId);
+    });
+  });
   qsa<HTMLElement>(".todo-row .todo-check", list).forEach((node) => {
     node.addEventListener("click", async (event) => {
       event.stopPropagation();
@@ -700,15 +707,36 @@ function renderTodoHistory(todos: Todo[]) {
     return `<article class="todo-history-row ${todo.done ? "done" : ""}" data-todo-id="${escapeHtml(todo.id)}">
       <span class="history-dot ${tone}"></span>
       <div><b>${escapeHtml(todo.title)}</b><span>${escapeHtml(meta)}</span></div>
-      ${badge(todo.done ? "历史完成" : "历史归档", todo.done ? "green" : tone)}
+      <div class="todo-actions">${badge(todo.done ? "历史完成" : "历史归档", todo.done ? "green" : tone)}<button class="todo-delete" title="删除待办" aria-label="删除待办"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg></button></div>
     </article>`;
   }).join("") : `<div class="todo-history-empty">暂无隔天历史待办</div>`;
+  qsa<HTMLElement>(".todo-history-row .todo-delete", list).forEach((node) => {
+    node.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const row = node.closest<HTMLElement>(".todo-history-row");
+      if (row?.dataset.todoId) await deleteTodo(row.dataset.todoId);
+    });
+  });
   qsa<HTMLElement>(".todo-history-row", list).forEach((row) => {
     row.addEventListener("click", () => {
       const todo = state.todos.find((item) => item.id === row.dataset.todoId);
       if (todo) toast(["历史清单", todo.related, todo.dueAt].filter(Boolean).join(" · "));
     });
   });
+}
+
+async function deleteTodo(id: string) {
+  const todo = state.todos.find((item) => item.id === id);
+  if (!todo) {
+    toast("待办不存在", "error");
+    return;
+  }
+  await api<{ ok: boolean; id: string }>(`/api/todos/${id}`, { method: "DELETE" });
+  state.todos = state.todos.filter((item) => item.id !== id);
+  renderTodos(state.todos);
+  updateTodoChips(state.todos);
+  void refreshDashboardOnly();
+  toast("待办已删除");
 }
 
 function filterTodos(todos: Todo[]) {

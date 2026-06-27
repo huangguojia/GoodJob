@@ -93,6 +93,12 @@ try {
   });
 	  if (!todoUndone.response.ok || todoUndone.json.todo.done !== false) throw new Error("todo undo failed");
 
+  const todoDeleted = await request(`/api/todos/${todo.json.todo.id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!todoDeleted.response.ok || todoDeleted.json.ok !== true) throw new Error("todo delete failed");
+
   const problem = await request("/api/problems", {
     method: "POST",
     headers: { authorization: `Bearer ${managerToken}` },

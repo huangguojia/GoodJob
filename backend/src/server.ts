@@ -238,6 +238,19 @@ app.patch("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
   res.json({ todo });
 }));
 
+app.delete("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const index = store.todos.findIndex((item) => item.id === req.params.id);
+  const todo = index >= 0 ? store.todos[index] : null;
+  if (!todo || !canSeeOwner(req.user!, todo.ownerId, todo.teamId)) {
+    res.status(404).json({ message: "待办不存在" });
+    return;
+  }
+  store.todos.splice(index, 1);
+  await store.persist();
+  res.json({ ok: true, id: req.params.id });
+}));
+
 app.get("/api/problems", requireAuth, (req, res) => {
   const { problems } = getStore();
   const scoped = problems.filter((problem) => canSeeOwner(req.user!, problem.ownerId, problem.teamId));
