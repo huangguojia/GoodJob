@@ -27,6 +27,9 @@ test.describe("GoodJob CRM prototype pages", () => {
   test("dashboard todo workflow is interactive", async ({ page }) => {
     const title = `自动化待办-${runId}`;
     await expect(page.locator("#dashboard .todo-list .todo-row").first()).toBeVisible();
+    await expect(page.locator(".focus-title h2")).toContainText("待办");
+    const todoKpi = page.locator("#dashboard .kpi").filter({ hasText: "今日待跟进" }).locator("strong");
+    const beforeTodoCount = Number(await todoKpi.textContent());
 
     await page.getByRole("button", { name: "新增待办" }).click();
     await expect(page.locator("#appModal")).toHaveClass(/active/);
@@ -39,6 +42,9 @@ test.describe("GoodJob CRM prototype pages", () => {
 
     await expect(page.locator("#dashboard .todo-list")).toContainText(title);
     await expect(page.locator(".toast").last()).toContainText("待办已新增");
+    await expect(todoKpi).toHaveText(String(beforeTodoCount + 1));
+    const cacheSize = await page.evaluate(() => localStorage.getItem("gj_dashboard_cache")?.length || 0);
+    expect(cacheSize).toBeGreaterThan(20);
 
     await page.locator("#dashboard .todo-row", { hasText: title }).first().locator(".todo-check").click();
     await expect(page.locator("#dashboard .todo-row.done", { hasText: title }).first()).toBeVisible();

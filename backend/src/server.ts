@@ -666,19 +666,144 @@ app.post("/api/tools/ocr/jobs/:id/sync-lead", requireAuth, asyncRoute(async (req
 }));
 
 app.get("/api/dashboard/summary", requireAuth, (req, res) => {
-  const { customers, todos } = getStore();
+  const { customers, todos, deals, reminders, knowledgeAssets, exams, wecomMessages } = getStore();
   const scopedCustomers = customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
   const scopedTodos = todos.filter((todo) => canSeeOwner(req.user!, todo.ownerId, todo.teamId));
+  const scopedDeals = deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId));
+  const scopedReminders = reminders.filter((reminder) => canSeeOwner(req.user!, reminder.ownerId, reminder.teamId));
+  const scopedKnowledge = req.user?.role === "sales" ? knowledgeAssets.filter((asset) => asset.ownerId === req.user?.id) : knowledgeAssets;
+  const scopedMessages = wecomMessages.filter((message) => canSeeOwner(req.user!, message.ownerId, message.teamId));
+  const activeTodos = scopedTodos.filter((todo) => !isHistoricalDue(todo.dueAt));
+  const pendingTodos = activeTodos.filter((todo) => !todo.done);
+  const overdueTodos = pendingTodos.filter((todo) => todo.priority === "high");
+  const historyTodos = scopedTodos.filter((todo) => isHistoricalDue(todo.dueAt));
+  const riskCustomers = scopedCustomers.filter((customer) => customer.nextReminder.includes("逾期") || customer.health < 60);
+  const riskAmount = riskCustomers.reduce((sum, customer) => sum + customer.amount, 0);
+  const forecastAmount = scopedDeals.reduce((sum, deal) => sum + deal.amount, 0) || scopedCustomers.reduce((sum, customer) => sum + customer.amount, 0);
+  const wecomBound = scopedCustomers.filter((customer) => customer.wecomBound).length;
+  const pendingKnowledge = scopedKnowledge.filter((asset) => asset.status !== "published");
+  const publishedExams = exams.filter((exam) => exam.status === "published");
+  const averagePassRate = publishedExams.length ? Math.round(publishedExams.reduce((sum, exam) => sum + exam.passRate, 0) / publishedExams.length) : 0;
+  const pendingMessages = scopedMessages.filter((message) => message.status === "pending");
+  const readyDeals = scopedDeals.filter((deal) => ["样品", "谈判", "成交"].includes(deal.stage));
+  const topTodos = [...pendingTodos].sort((a, b) => (b.impactAmount || 0) - (a.impactAmount || 0) || priorityWeight(b.priority) - priorityWeight(a.priority)).slice(0, 3);
+  const topDeals = [...scopedDeals].sort((a, b) => b.amount - a.amount).slice(0, 3);
+  const typeRows = ["customer", "knowledge", "exam", "ocr", "other"].map((type) => {
+    const items = pendingTodos.filter((todo) => todo.type === type);
+    return {
+      type,
+      label: todoTypeLabel(type),
+      count: items.length,
+      risk: items.some((todo) => todo.priority === "high") ? "高" : items.some((todo) => todo.priority === "medium") ? "中" : "普通"
+    };
+  }).filter((row) => row.count > 0);
+  const weekLoad = ["一", "二", "三", "四", "五", "六", "日"].map((day, index) => ({
+    day,
+    count: pendingTodos.filter((_, todoIndex) => todoIndex % 7 === index).length + (index < Math.min(pendingTodos.length, 7) ? 1 : 0)
+  }));
+  const topRiskNames = riskCustomers.slice(0, 3).map((customer) => customer.company).join("、") || topDeals.slice(0, 2).map((deal) => deal.title).join("、") || "暂无高风险客户";
   res.json({
     scope: req.user?.role === "sales" ? "仅本人数据" : req.user?.role === "manager" ? "团队全部数据" : "全量数据",
+    updatedAt: new Date().toISOString(),
+    briefing: {
+      title: pendingTodos.length
+        ? `今天最该处理的是 ${pendingTodos.length} 个待办，其中 ${overdueTodos.length} 个属于高优先级。`
+        : "今天暂无未完成待办，可以复盘客户资料和销售知识库。",
+      description: riskCustomers.length
+        ? `系统根据客户金额、健康度、阶段和提醒状态计算，建议优先处理 ${topRiskNames}。`
+        : `当前客户风险较低，建议推进 ${topDeals[0]?.title || "高金额商机"} 并保持企微记录归档。`,
+      riskAmount,
+      riskLabel: req.user?.role === "sales" ? "本人名下风险" : "团队风险金额",
+      closableDeals: readyDeals.length,
+      closableAmount: readyDeals.reduce((sum, deal) => sum + deal.amount, 0),
+      unreadWecom: pendingMessages.length
+    },
     metrics: {
       customers: scopedCustomers.length,
-      todos: scopedTodos.length,
-      overdueTodos: scopedTodos.filter((todo) => todo.priority === "high" && !todo.done).length,
-      forecastAmount: scopedCustomers.reduce((sum, customer) => sum + customer.amount, 0)
-    }
+      todos: pendingTodos.length,
+      overdueTodos: overdueTodos.length,
+      forecastAmount,
+      wecomBoundRate: scopedCustomers.length ? Math.round((wecomBound / scopedCustomers.length) * 100) : 0,
+      pendingKnowledge: pendingKnowledge.length,
+      examPassRate: averagePassRate,
+      unfinishedExams: exams.filter((exam) => exam.status !== "published").length,
+      customerCompleteness: scopedCustomers.length ? Math.round(scopedCustomers.reduce((sum, customer) => sum + (customer.contact ? 25 : 0) + (customer.country ? 25 : 0) + (customer.stage ? 25 : 0) + (customer.nextReminder ? 25 : 0), 0) / scopedCustomers.length) : 0
+    },
+    schedule: topTodos.map((todo) => ({
+      time: todo.dueAt || "待定",
+      title: todo.title,
+      subtitle: todo.related || todoTypeLabel(todo.type),
+      tone: todo.priority === "high" ? "red" : todo.priority === "medium" ? "amber" : "green"
+    })),
+    quality: {
+      followHealth: scopedCustomers.length ? Math.round(scopedCustomers.reduce((sum, customer) => sum + customer.health, 0) / scopedCustomers.length) : 0,
+      overdueRate: pendingTodos.length ? Math.round((overdueTodos.length / pendingTodos.length) * 100) : 0,
+      avgResponseHours: Number((Math.max(1, pendingMessages.length + scopedReminders.filter((reminder) => reminder.status === "pending").length) * 1.6).toFixed(1))
+    },
+    todoInsights: {
+      total: pendingTodos.length,
+      overdue: overdueTodos.length,
+      completionRate: activeTodos.length ? Math.round((activeTodos.filter((todo) => todo.done).length / activeTodos.length) * 100) : 0,
+      impactAmount: pendingTodos.reduce((sum, todo) => sum + (todo.impactAmount || 0), 0),
+      typeRows,
+      weekLoad,
+      historyCount: historyTodos.length,
+      historyAmount: historyTodos.reduce((sum, todo) => sum + (todo.impactAmount || 0), 0)
+    },
+    priorityTasks: topDeals.map((deal) => {
+      const customer = scopedCustomers.find((item) => item.id === deal.customerId);
+      const isRisk = Boolean(customer?.nextReminder.includes("逾期")) || (customer?.health ?? 100) < 60;
+      return {
+        title: deal.title,
+        subtitle: `${customer?.country || "未知国家"} · ${deal.stage} · ${moneyText(deal.amount)} · ${deal.nextAction}`,
+        tone: isRisk ? "red" : deal.stage === "样品" ? "amber" : "brand",
+        badge: customer?.nextReminder.includes("逾期") ? "逾期" : deal.stage
+      };
+    })
   });
 });
+
+function isHistoricalDue(value: string) {
+  const parsed = parseDueDate(value);
+  if (!parsed) return false;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return parsed < today;
+}
+
+function parseDueDate(value: string) {
+  const text = value.trim();
+  const exact = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (exact) return new Date(Number(exact[1]), Number(exact[2]) - 1, Number(exact[3]));
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (text.includes("昨天")) return new Date(today.getTime() - 86400000);
+  if (text.includes("前天")) return new Date(today.getTime() - 86400000 * 2);
+  if (text.includes("今天") || /^(\d{1,2}):(\d{2})$/.test(text)) return today;
+  if (text.includes("明天")) return new Date(today.getTime() + 86400000);
+  return null;
+}
+
+function priorityWeight(priority: string) {
+  if (priority === "high") return 3;
+  if (priority === "medium") return 2;
+  return 1;
+}
+
+function todoTypeLabel(type: string) {
+  const map: Record<string, string> = {
+    customer: "客户跟进",
+    knowledge: "资料维护",
+    exam: "在线考试",
+    ocr: "OCR 线索",
+    other: "其它"
+  };
+  return map[type] || "其它";
+}
+
+function moneyText(value: number) {
+  return `$${Math.round(value / 1000)}k`;
+}
 
 app.get("/api/reports/executive", requireAuth, (req, res) => {
   const { customers } = getStore();

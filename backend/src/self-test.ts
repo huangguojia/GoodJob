@@ -58,6 +58,10 @@ try {
   });
   if (!stage.response.ok || stage.json.deal.stage !== "谈判") throw new Error("deal stage update failed");
 
+  const dashboard = await request("/api/dashboard/summary", { headers: { authorization: `Bearer ${salesToken}` } });
+  if (!dashboard.response.ok || !dashboard.json.briefing?.title || !Array.isArray(dashboard.json.schedule)) throw new Error("dashboard summary aggregation failed");
+  if (typeof dashboard.json.metrics?.wecomBoundRate !== "number" || typeof dashboard.json.todoInsights?.completionRate !== "number") throw new Error("dashboard metrics aggregation failed");
+
   const reminders = await request("/api/reminders", { headers: { authorization: `Bearer ${salesToken}` } });
   if (reminders.json.reminders.length < 2) throw new Error("reminders scope failed");
 

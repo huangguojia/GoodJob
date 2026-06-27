@@ -144,12 +144,44 @@ interface CaseStudy {
 
 interface DashboardSummary {
   scope: string;
+  updatedAt: string;
+  briefing: {
+    title: string;
+    description: string;
+    riskAmount: number;
+    riskLabel: string;
+    closableDeals: number;
+    closableAmount: number;
+    unreadWecom: number;
+  };
   metrics: {
     customers: number;
     todos: number;
     overdueTodos: number;
     forecastAmount: number;
+    wecomBoundRate: number;
+    pendingKnowledge: number;
+    examPassRate: number;
+    unfinishedExams: number;
+    customerCompleteness: number;
   };
+  schedule: Array<{ time: string; title: string; subtitle: string; tone: string }>;
+  quality: {
+    followHealth: number;
+    overdueRate: number;
+    avgResponseHours: number;
+  };
+  todoInsights: {
+    total: number;
+    overdue: number;
+    completionRate: number;
+    impactAmount: number;
+    typeRows: Array<{ type: string; label: string; count: number; risk: string }>;
+    weekLoad: Array<{ day: string; count: number }>;
+    historyCount: number;
+    historyAmount: number;
+  };
+  priorityTasks: Array<{ title: string; subtitle: string; tone: string; badge: string }>;
 }
 
 interface AppState {
@@ -222,7 +254,8 @@ const roleLabel: Record<Role, string> = {
 
 const storage = {
   token: "gj_token",
-  user: "gj_user"
+  user: "gj_user",
+  dashboardCache: "gj_dashboard_cache"
 };
 
 function qs<T extends Element>(selector: string, root: ParentNode = document): T | null {
@@ -413,6 +446,7 @@ function applyAuthedUser(user: User) {
 }
 
 async function refreshAll(user: User) {
+  renderDashboardCache(user);
   const [summary, customers, todos, deals, reminders, jobs, wecom, knowledge, exams, ocr, problems, memos, competitors, caseStudies] = await Promise.all([
     api<DashboardSummary>("/api/dashboard/summary"),
     api<{ customers: Customer[] }>("/api/customers"),
@@ -449,6 +483,7 @@ async function refreshAll(user: User) {
   state.selectedMemoId = state.selectedMemoId || memos.memos[0]?.id || null;
   state.selectedCompetitorId = state.selectedCompetitorId || competitors.competitors[0]?.id || null;
   state.selectedCaseId = state.selectedCaseId || caseStudies.caseStudies[0]?.id || null;
+  writeDashboardCache(user, summary, todos.todos, customers.customers);
   renderDashboard(summary, todos.todos, customers.customers);
   renderCustomers(customers.customers);
   renderPipeline(deals.deals);
@@ -465,16 +500,138 @@ async function refreshAll(user: User) {
   renderOcr(ocr.job);
 }
 
-function renderDashboard(summary: DashboardSummary, todos: Todo[], customers: Customer[]) {
+function dashboardCacheKey(user: User) {
+  return `${user.id}:${user.role}:${user.teamId}`;
+}
+
+function readDashboardCache(user: User) {
+  try {
+    const raw = localStorage.getItem(storage.dashboardCache);
+    if (!raw) return null;
+    const cache = JSON.parse(raw) as Record<string, { summary: DashboardSummary; todos: Todo[]; customers: Customer[]; cachedAt: string }>;
+    const item = cache[dashboardCacheKey(user)];
+    if (!item) return null;
+    const age = Date.now() - new Date(item.cachedAt).getTime();
+    return age < 5 * 60 * 1000 ? item : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDashboardCache(user: User, summary: DashboardSummary, todos: Todo[], customers: Customer[]) {
+  try {
+    const raw = localStorage.getItem(storage.dashboardCache);
+    const cache = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+    cache[dashboardCacheKey(user)] = { summary, todos, customers, cachedAt: new Date().toISOString() };
+    localStorage.setItem(storage.dashboardCache, JSON.stringify(cache));
+  } catch {
+    // Cache is an optimization; rendering must not depend on it.
+  }
+}
+
+function renderDashboardCache(user: User) {
+  const cached = readDashboardCache(user);
+  if (!cached) return;
+  state.summary = cached.summary;
+  state.todos = cached.todos;
+  state.customers = cached.customers;
+  renderDashboard(cached.summary, cached.todos, cached.customers, true);
+}
+
+async function refreshDashboardOnly() {
+  if (!state.user) return;
+  const [summary, todos, customers] = await Promise.all([
+    api<DashboardSummary>("/api/dashboard/summary"),
+    api<{ todos: Todo[] }>("/api/todos"),
+    api<{ customers: Customer[] }>("/api/customers")
+  ]);
+  state.summary = summary;
+  state.todos = todos.todos;
+  state.customers = customers.customers;
+  writeDashboardCache(state.user, summary, todos.todos, customers.customers);
+  renderDashboard(summary, todos.todos, customers.customers);
+}
+
+function renderDashboard(summary: DashboardSummary, todos: Todo[], customers: Customer[], fromCache = false) {
   qs("#scopeText")!.textContent = summary.scope;
+  qs<HTMLElement>(".focus-top span:last-child")!.textContent = fromCache ? "缓存数据 · 后台刷新中" : `${formatTime(summary.updatedAt)} 已更新`;
+  qs<HTMLElement>(".focus-title h2")!.textContent = summary.briefing.title;
+  qs<HTMLElement>(".focus-title p")!.textContent = summary.briefing.description;
+  const focusMetrics = qsa<HTMLElement>(".focus-metric");
+  if (focusMetrics[0]) focusMetrics[0].innerHTML = `<span>高风险金额</span><b>${money(summary.briefing.riskAmount)}</b><small>${escapeHtml(summary.briefing.riskLabel)}</small>`;
+  if (focusMetrics[1]) focusMetrics[1].innerHTML = `<span>待主管协同</span><b>${summary.metrics.overdueTodos} 项</b><small>高优先级待办</small>`;
+  if (focusMetrics[2]) focusMetrics[2].innerHTML = `<span>今日可成交</span><b>${summary.briefing.closableDeals} 单</b><small>预计 ${money(summary.briefing.closableAmount)}</small>`;
+  if (focusMetrics[3]) focusMetrics[3].innerHTML = `<span>企微未读提醒</span><b>${summary.briefing.unreadWecom} 条</b><small>来自客户会话</small>`;
   const kpis = qsa<HTMLElement>("#dashboard .kpi strong");
-  if (kpis[0]) kpis[0].textContent = String(activeTodos(todos).length);
+  if (kpis[0]) kpis[0].textContent = String(summary.metrics.todos);
   if (kpis[1]) kpis[1].textContent = String(summary.metrics.customers);
   if (kpis[2]) kpis[2].textContent = money(summary.metrics.forecastAmount);
-  const focus = qs<HTMLElement>(".focus-metric b");
-  if (focus) focus.textContent = money(customers.filter((item) => item.nextReminder.includes("逾期")).reduce((sum, item) => sum + item.amount, 0));
+  if (kpis[3]) kpis[3].textContent = `${summary.metrics.wecomBoundRate}%`;
+  const kpiNotes = qsa<HTMLElement>("#dashboard .kpi p");
+  if (kpiNotes[0]) kpiNotes[0].innerHTML = badge(`${summary.metrics.overdueTodos} 个高优先级`, summary.metrics.overdueTodos ? "red" : "green");
+  if (kpiNotes[1]) kpiNotes[1].textContent = `当前账号可见客户 ${summary.metrics.customers} 个`;
+  if (kpiNotes[2]) kpiNotes[2].textContent = `按可见商机金额汇总`;
+  if (kpiNotes[3]) kpiNotes[3].textContent = `${customers.filter((customer) => !customer.wecomBound).length} 个客户待绑定`;
+  renderSchedule(summary);
+  renderDashboardDense(summary);
+  renderTodoInsights(summary);
+  renderPriorityTasks(summary);
   renderTodos(todos);
   updateTodoChips(todos);
+}
+
+function formatTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "刚刚";
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function renderSchedule(summary: DashboardSummary) {
+  const list = qs<HTMLElement>(".schedule-list");
+  if (list) {
+    list.innerHTML = summary.schedule.length ? summary.schedule.map((item) => `<div class="schedule-item"><div class="timebox">${escapeHtml(item.time)}</div><div><b>${escapeHtml(item.title)}</b><span>${escapeHtml(item.subtitle)}</span></div>${badge(item.tone === "red" ? "高优先级" : item.tone === "amber" ? "中优先级" : "待处理", item.tone)}</div>`).join("") : `<div class="todo-history-empty">暂无今日节奏</div>`;
+  }
+  const quality = qsa<HTMLElement>(".quality b");
+  if (quality[0]) quality[0].textContent = `${summary.quality.followHealth}%`;
+  if (quality[1]) quality[1].textContent = `${summary.quality.overdueRate}%`;
+  if (quality[2]) quality[2].textContent = `${summary.quality.avgResponseHours}h`;
+}
+
+function renderDashboardDense(summary: DashboardSummary) {
+  const cards = qsa<HTMLElement>("#dashboard > .dense-grid .dense-card");
+  const values = [
+    { label: "资料待更新", value: String(summary.metrics.pendingKnowledge), note: "来自资料库" },
+    { label: "产品知识考试通过率", value: `${summary.metrics.examPassRate}%`, note: "已发布考试均值" },
+    { label: "未发布考试", value: String(summary.metrics.unfinishedExams), note: "待维护" },
+    { label: "客户资料完整度", value: `${summary.metrics.customerCompleteness}%`, note: "按关键字段计算" }
+  ];
+  cards.forEach((card, index) => {
+    const item = values[index];
+    if (!item) return;
+    card.innerHTML = `<span>${item.label}</span><b>${item.value}</b><small>${item.note}</small>`;
+  });
+}
+
+function renderTodoInsights(summary: DashboardSummary) {
+  const scoreCards = qsa<HTMLElement>(".todo-score-card b");
+  if (scoreCards[0]) scoreCards[0].textContent = String(summary.todoInsights.total);
+  if (scoreCards[1]) scoreCards[1].textContent = String(summary.todoInsights.overdue);
+  if (scoreCards[2]) scoreCards[2].textContent = `${summary.todoInsights.completionRate}%`;
+  if (scoreCards[3]) scoreCards[3].textContent = money(summary.todoInsights.impactAmount);
+  const table = qs<HTMLElement>("#dashboard .todo-insights .mini-table tbody");
+  if (table) {
+    table.innerHTML = summary.todoInsights.typeRows.length ? summary.todoInsights.typeRows.map((row) => `<tr><td>${escapeHtml(row.label)}</td><td>${row.count}</td><td>${badge(row.risk, row.risk === "高" ? "red" : row.risk === "中" ? "amber" : "")}</td></tr>`).join("") : `<tr><td>暂无待办</td><td>0</td><td>${badge("安全", "green")}</td></tr>`;
+  }
+  const calendar = qs<HTMLElement>("#dashboard .todo-calendar");
+  if (calendar) {
+    calendar.innerHTML = summary.todoInsights.weekLoad.map((item) => `<div class="todo-day ${item.count >= 4 ? "hot" : item.count <= 1 ? "ok" : ""}">${escapeHtml(item.day)}<br>${item.count}</div>`).join("");
+  }
+}
+
+function renderPriorityTasks(summary: DashboardSummary) {
+  const list = qs<HTMLElement>("#dashboard .task-list");
+  if (!list) return;
+  list.innerHTML = summary.priorityTasks.length ? summary.priorityTasks.map((task) => `<article class="task" style="--accent: var(--${task.tone === "red" ? "rose" : task.tone})"><i class="task-line"></i><div><h3>${escapeHtml(task.title)}</h3><p>${escapeHtml(task.subtitle)}</p></div>${badge(task.badge, task.tone === "red" ? "red" : task.tone === "amber" ? "amber" : "")}</article>`).join("") : `<div class="todo-history-empty">暂无高优先级跟进任务</div>`;
 }
 
 function renderTodos(todos: Todo[]) {
@@ -508,6 +665,7 @@ function renderTodos(todos: Todo[]) {
       Object.assign(todo, result.todo);
       renderTodos(state.todos);
       updateTodoChips(state.todos);
+      void refreshDashboardOnly();
       toast(todo.done ? "待办已完成" : "已撤回未完成");
     });
   });
@@ -706,6 +864,7 @@ async function moveDeal(id: string) {
   });
   Object.assign(deal, result.deal);
   renderPipeline(state.deals);
+  void refreshDashboardOnly();
   toast(`商机已推进到：${nextStage}`);
 }
 
@@ -740,6 +899,7 @@ async function saveDeal() {
   });
   state.deals.unshift(result.deal);
   renderPipeline(state.deals);
+  void refreshDashboardOnly();
   closeModal();
   toast("商机已新增");
 }
@@ -1601,6 +1761,7 @@ async function saveTodo() {
   state.todos.unshift(result.todo);
   renderTodos(state.todos);
   updateTodoChips(state.todos);
+  void refreshDashboardOnly();
   closeModal();
   toast("待办已新增");
 }
@@ -1639,6 +1800,7 @@ async function saveCustomer() {
   state.customers.unshift(result.customer);
   state.selectedCustomerId = result.customer.id;
   renderCustomers(state.customers);
+  void refreshDashboardOnly();
   closeModal();
   toast("客户已新增");
 }
@@ -1738,6 +1900,7 @@ function installEvents() {
       pending.forEach((todo) => { todo.done = true; });
       renderTodos(state.todos);
       updateTodoChips(state.todos);
+      void refreshDashboardOnly();
       toast(`已完成 ${pending.length} 条待办`);
     });
   });
