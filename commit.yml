@@ -2,64 +2,34 @@
 branches: {
   }
 fileChange:
-  /.env.example:
-    newFile: !uuid '9f147f494bf2ecfbe60d259311fd5bd6e995cf68'
-    oldFile: null
   /backend:
-    newFile: !uuid '9cddba4d2839e52523d55dd0ac1a0ecf6c0878f8'
-    oldFile: !uuid '8179d908376c0d603859d7ea1f492ca8d3017713'
-  /backend/goodjob_crm.full.sql:
-    newFile: !uuid '4bed64e97f550493d3b09e5f5769720f25431ade'
-    oldFile: null
-  /backend/package.json:
-    newFile: !uuid '9cae439d58389fd31fde7d4eab68a5ffcb682ba8'
-    oldFile: !uuid 'a8b44eec253ab23acd6e9a3adac26e7d5391ad4e'
-  /backend/schema.mysql.sql:
-    newFile: !uuid '2d7b3dc8713cf703e270911739913b74537eb874'
-    oldFile: !uuid 'fdd465fc5a4352d5f2ad827d394392f0a89697f4'
+    newFile: !uuid 'a7651d9b9234b5ed89ec18bde362e4b2a3db7682'
+    oldFile: !uuid '9cddba4d2839e52523d55dd0ac1a0ecf6c0878f8'
   /backend/src:
-    newFile: !uuid 'b723122f1a19ac9dee5ab4b155fe42ef9c61d9ee'
-    oldFile: !uuid 'b68497a2afe2bbd4baebf84698fb148604f1c067'
-  /backend/src/data.ts:
-    newFile: !uuid '485a5934373a42c5f1b2bc141399790eb1f7efcf'
-    oldFile: !uuid 'eadafe7457af324d5af0b3e1ad98aa235dfdd308'
-  /backend/src/mysql-store.ts:
-    newFile: !uuid '10ffa2a70dc2fb573e36f7a1d92018b3277d9872'
-    oldFile: !uuid 'bfa605331ac3e4da23bb4edd4f190e542bca4a5d'
+    newFile: !uuid 'd11fdb8813a7299cb20d96684e8ec0e3268c82a7'
+    oldFile: !uuid 'b723122f1a19ac9dee5ab4b155fe42ef9c61d9ee'
   /backend/src/self-test.ts:
-    newFile: !uuid '6e218422631c496b91b354a3ba629e054fbb611f'
-    oldFile: !uuid '3551488707bd57523b20d9082cb357284309a0d7'
+    newFile: !uuid '886b00494af4910184caed76062ebe5e2f46519b'
+    oldFile: !uuid '6e218422631c496b91b354a3ba629e054fbb611f'
   /backend/src/server.ts:
-    newFile: !uuid '156630121f7f075f276772810f9be28dbad72ba7'
-    oldFile: !uuid '535b81852f303589b893d703d397de3e9b8be53c'
-  /backend/src/store.ts:
-    newFile: !uuid '629086e127cf2f588eb6baad83e84a146bd98fda'
-    oldFile: !uuid '990f019c76837b7aa954a932e8de8639720b46d7'
-  /backend/src/types.ts:
-    newFile: !uuid '3735f474b4417b2fd6e2136bc8c6715d922ebea1'
-    oldFile: !uuid '87ed04ef3960d45ecc010edc56098eda38f33be6'
+    newFile: !uuid '9ea8b3c047be6a10f7ed8577a07236d4d8fe9266'
+    oldFile: !uuid '156630121f7f075f276772810f9be28dbad72ba7'
   /frontend:
-    newFile: !uuid 'eb29fa718114638edb04dfb4ea74bbefe57b7080'
-    oldFile: !uuid 'de9c92a379f38dfcfd70525b56eef3432cf79e60'
-  /frontend/index.html:
-    newFile: !uuid 'a3d9553c11afe6fdafc8e3f25eb69ae442e455d9'
-    oldFile: !uuid '2702b03dde9f570ea8bd8fd53741e3292a0035c5'
+    newFile: !uuid '278b5dbb3f78898d7222f226fb94fe30007d04a4'
+    oldFile: !uuid 'eb29fa718114638edb04dfb4ea74bbefe57b7080'
   /frontend/src:
-    newFile: !uuid '7b5f20b11cd8cd6c005d08edb8658be59f829e0d'
-    oldFile: !uuid '17e4d6609eff55f205de17d28d8d945647c2989c'
+    newFile: !uuid '318e3da8d45190ce7cf5ee01662ae527bf17da40'
+    oldFile: !uuid '7b5f20b11cd8cd6c005d08edb8658be59f829e0d'
   /frontend/src/prototype-api.ts:
-    newFile: !uuid '33cf1214ac64dd9d1f286b8db64e0628894a61fa'
-    oldFile: !uuid 'b73924229a53c31dce0619a4272489dfa0092ef9'
+    newFile: !uuid '18424c500f6217963cbad6b03a4aa591be7a70c5'
+    oldFile: !uuid '33cf1214ac64dd9d1f286b8db64e0628894a61fa'
   /frontend/tests:
-    newFile: !uuid 'd8e0e17d7c26da29604433b6a5b3815f0d2ad1d0'
-    oldFile: !uuid '9a3ce9f8a6a1aae94f3eb26b12009ed6ae5fd86d'
+    newFile: !uuid '7ae8943f125223e06efeab416fd987171ce4426b'
+    oldFile: !uuid 'd8e0e17d7c26da29604433b6a5b3815f0d2ad1d0'
   /frontend/tests/crm.spec.ts:
-    newFile: !uuid '50f6552d0d14792ab4465682432b39b95212839b'
-    oldFile: !uuid '7a096a287254b26b3b0e2b225be1114ed91b31b1'
-  /package.json:
-    newFile: !uuid 'fdb42d2f2039a0534271d4d6a24725bb4ffafe43'
-    oldFile: !uuid '2602ed5c3e6091417ea634ee4a7ed41f56c70ed9'
-gitCommitId: !uuid 'c4af53fa3c7384cecb5393f636b867265f73c177'
+    newFile: !uuid 'ca42d9e971bdda7f63905fba7cf77aefc966f4a0'
+    oldFile: !uuid '50f6552d0d14792ab4465682432b39b95212839b'
+gitCommitId: !uuid '6c93692bcfea1748742c3f6a233ddfbaab69d661'
 renames: {
   }
-revisionId: 3
+revisionId: 4
