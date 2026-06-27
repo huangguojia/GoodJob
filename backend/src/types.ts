@@ -37,7 +37,7 @@ export interface Customer {
 export interface Todo {
   id: string;
   title: string;
-  type: "customer" | "knowledge" | "exam" | "ocr";
+  type: "customer" | "knowledge" | "exam" | "ocr" | "other";
   priority: "high" | "medium" | "normal";
   dueAt: string;
   ownerId: string;
@@ -45,6 +45,7 @@ export interface Todo {
   related: string;
   done: boolean;
   impactAmount?: number;
+  createdAt?: string;
 }
 
 export interface KnowledgeAsset {
@@ -111,4 +112,65 @@ export interface WecomMessage {
   ownerId: string;
   teamId: string;
   status: "archived" | "pending";
+}
+
+export interface ProblemItem {
+  id: string;
+  title: string;
+  category: string;
+  severity: "high" | "medium" | "low";
+  status: "open" | "solving" | "resolved";
+  ownerId: string;
+  teamId: string;
+  relatedCustomer: string;
+  rootCause: string;
+  solution: string;
+  nextAction: string;
+  dueAt: string;
+  createdAt: string;
+}
+
+export interface Memo {
+  id: string;
+  title: string;
+  content: string;
+  category: string;
+  tags: string;
+  ownerId: string;
+  teamId: string;
+  pinned: boolean;
+  archived: boolean;
+  updatedAt: string;
+}
+
+export interface Competitor {
+  id: string;
+  company: string;
+  country: string;
+  segment: string;
+  threatLevel: "high" | "medium" | "low";
+  website: string;
+  strengths: string;
+  weaknesses: string;
+  competingProducts: string;
+  ourStrategy: string;
+  ownerId: string;
+  teamId: string;
+  updatedAt: string;
+}
+
+export interface CaseStudy {
+  id: string;
+  title: string;
+  customer: string;
+  country: string;
+  product: string;
+  industry: string;
+  result: string;
+  story: string;
+  reusablePoints: string;
+  status: "draft" | "published";
+  ownerId: string;
+  teamId: string;
+  updatedAt: string;
 }

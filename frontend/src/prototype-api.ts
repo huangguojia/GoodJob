@@ -30,6 +30,7 @@ interface Todo {
   related: string;
   done: boolean;
   impactAmount?: number;
+  createdAt?: string;
 }
 
 interface Deal {
@@ -88,6 +89,59 @@ interface OcrJob {
   fields: Record<string, string>;
 }
 
+interface ProblemItem {
+  id: string;
+  title: string;
+  category: string;
+  severity: string;
+  status: string;
+  relatedCustomer: string;
+  rootCause: string;
+  solution: string;
+  nextAction: string;
+  dueAt: string;
+  createdAt: string;
+}
+
+interface Memo {
+  id: string;
+  title: string;
+  content: string;
+  category: string;
+  tags: string;
+  pinned: boolean;
+  archived: boolean;
+  updatedAt: string;
+}
+
+interface Competitor {
+  id: string;
+  company: string;
+  country: string;
+  segment: string;
+  threatLevel: string;
+  website: string;
+  strengths: string;
+  weaknesses: string;
+  competingProducts: string;
+  ourStrategy: string;
+  updatedAt: string;
+}
+
+interface CaseStudy {
+  id: string;
+  title: string;
+  customer: string;
+  country: string;
+  product: string;
+  industry: string;
+  result: string;
+  story: string;
+  reusablePoints: string;
+  status: string;
+  updatedAt: string;
+}
+
 interface DashboardSummary {
   scope: string;
   metrics: {
@@ -106,11 +160,22 @@ interface AppState {
   deals: Deal[];
   reminders: Reminder[];
   jobs: ImportExportJob[];
+  wecomMessages: WecomMessage[];
   knowledgeAssets: KnowledgeAsset[];
   exams: Exam[];
   ocrJob: OcrJob | null;
-  todoFilter: "all" | "today" | "overdue" | "mine" | "customer" | "knowledge";
+  problems: ProblemItem[];
+  memos: Memo[];
+  competitors: Competitor[];
+  caseStudies: CaseStudy[];
+  accounts: User[];
+  reportNote: string;
+  todoFilter: "all" | "today" | "overdue" | "mine" | "customer" | "history";
   selectedCustomerId: string | null;
+  selectedProblemId: string | null;
+  selectedMemoId: string | null;
+  selectedCompetitorId: string | null;
+  selectedCaseId: string | null;
 }
 
 const state: AppState = {
@@ -121,12 +186,27 @@ const state: AppState = {
   deals: [],
   reminders: [],
   jobs: [],
+  wecomMessages: [],
   knowledgeAssets: [],
   exams: [],
   ocrJob: null,
+  problems: [],
+  memos: [],
+  competitors: [],
+  caseStudies: [],
+  accounts: [],
+  reportNote: "",
   todoFilter: "all",
-  selectedCustomerId: null
+  selectedCustomerId: null,
+  selectedProblemId: null,
+  selectedMemoId: null,
+  selectedCompetitorId: null,
+  selectedCaseId: null
 };
+
+let memoDirty = false;
+let memoSaving = false;
+let memoSavePromise: Promise<void> | null = null;
 
 const roleEmail: Record<Role, string> = {
   sales: "shirley@goodjob.com",
@@ -161,8 +241,81 @@ function amount(value: number) {
   return `$${value.toLocaleString("en-US")}`;
 }
 
+function currentDateTimeText() {
+  const date = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function todayStart() {
+  const date = new Date();
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function parseTodoDate(value: string) {
+  const text = value.trim();
+  const exact = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{1,2}))?/);
+  if (exact) {
+    const [, year, month, day, hour = "0", minute = "0"] = exact;
+    return new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
+  }
+  const base = todayStart();
+  if (/^(\d{1,2}):(\d{2})$/.test(text) || text.includes("今天")) return base;
+  if (text.includes("昨天")) return new Date(base.getTime() - 86400000);
+  if (text.includes("前天")) return new Date(base.getTime() - 86400000 * 2);
+  if (text.includes("明天")) return new Date(base.getTime() + 86400000);
+  return null;
+}
+
+function isHistoricalTodo(todo: Todo) {
+  const date = parseTodoDate(todo.dueAt);
+  if (!date) return false;
+  return date < todayStart();
+}
+
+function todoCreatedTime(todo: Todo, fallbackIndex = 0) {
+  if (todo.createdAt) {
+    const parsed = new Date(todo.createdAt).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  const idTime = todo.id.match(/^t_(\d{10,})$/);
+  if (idTime) return Number(idTime[1]);
+  const due = parseTodoDate(todo.dueAt)?.getTime();
+  if (due && Number.isFinite(due)) return due;
+  return -fallbackIndex;
+}
+
+function sortTodos(todos: Todo[]) {
+  return todos
+    .map((todo, index) => ({ todo, index }))
+    .sort((left, right) => {
+      if (left.todo.done !== right.todo.done) return left.todo.done ? 1 : -1;
+      return todoCreatedTime(right.todo, right.index) - todoCreatedTime(left.todo, left.index);
+    })
+    .map((item) => item.todo);
+}
+
+function activeTodos(todos: Todo[]) {
+  return sortTodos(todos.filter((todo) => !isHistoricalTodo(todo)));
+}
+
+function historyTodos(todos: Todo[]) {
+  return sortTodos(todos.filter(isHistoricalTodo));
+}
+
 function badge(text: string, tone = "") {
   return `<span class="badge ${tone}">${text}</span>`;
+}
+
+function todoTypeText(type: string) {
+  const map: Record<string, string> = {
+    customer: "客户跟进",
+    knowledge: "资料维护",
+    exam: "在线考试",
+    ocr: "OCR 线索",
+    other: "其它"
+  };
+  return map[type] || "其它";
 }
 
 function escapeHtml(value: string | number | undefined) {
@@ -260,7 +413,7 @@ function applyAuthedUser(user: User) {
 }
 
 async function refreshAll(user: User) {
-  const [summary, customers, todos, deals, reminders, jobs, wecom, knowledge, exams, ocr] = await Promise.all([
+  const [summary, customers, todos, deals, reminders, jobs, wecom, knowledge, exams, ocr, problems, memos, competitors, caseStudies] = await Promise.all([
     api<DashboardSummary>("/api/dashboard/summary"),
     api<{ customers: Customer[] }>("/api/customers"),
     api<{ todos: Todo[] }>("/api/todos"),
@@ -270,7 +423,11 @@ async function refreshAll(user: User) {
     api<{ messages: WecomMessage[] }>("/api/wecom/messages"),
     api<{ assets: KnowledgeAsset[] }>("/api/knowledge/assets"),
     api<{ exams: Exam[] }>("/api/exams"),
-    api<{ job: OcrJob }>("/api/tools/ocr/jobs/ocr1")
+    api<{ job: OcrJob }>("/api/tools/ocr/jobs/ocr1"),
+    api<{ problems: ProblemItem[] }>("/api/problems"),
+    api<{ memos: Memo[] }>("/api/memos"),
+    api<{ competitors: Competitor[] }>("/api/competitors"),
+    api<{ caseStudies: CaseStudy[] }>("/api/case-studies")
   ]);
   state.user = user;
   state.summary = summary;
@@ -279,10 +436,19 @@ async function refreshAll(user: User) {
   state.deals = deals.deals;
   state.reminders = reminders.reminders;
   state.jobs = jobs.jobs;
+  state.wecomMessages = wecom.messages;
   state.knowledgeAssets = knowledge.assets;
   state.exams = exams.exams;
   state.ocrJob = ocr.job;
+  state.problems = problems.problems;
+  state.memos = memos.memos;
+  state.competitors = competitors.competitors;
+  state.caseStudies = caseStudies.caseStudies;
   state.selectedCustomerId = state.selectedCustomerId || customers.customers[0]?.id || null;
+  state.selectedProblemId = state.selectedProblemId || problems.problems[0]?.id || null;
+  state.selectedMemoId = state.selectedMemoId || memos.memos[0]?.id || null;
+  state.selectedCompetitorId = state.selectedCompetitorId || competitors.competitors[0]?.id || null;
+  state.selectedCaseId = state.selectedCaseId || caseStudies.caseStudies[0]?.id || null;
   renderDashboard(summary, todos.todos, customers.customers);
   renderCustomers(customers.customers);
   renderPipeline(deals.deals);
@@ -291,14 +457,18 @@ async function refreshAll(user: User) {
   renderWecom(wecom.messages);
   renderKnowledge(knowledge.assets);
   renderExams(exams.exams);
-  renderAccounts(user);
+  renderProblems(problems.problems);
+  renderMemos(memos.memos);
+  renderCompetitors(competitors.competitors);
+  renderCaseStudies(caseStudies.caseStudies);
+  await renderAccounts(user);
   renderOcr(ocr.job);
 }
 
 function renderDashboard(summary: DashboardSummary, todos: Todo[], customers: Customer[]) {
   qs("#scopeText")!.textContent = summary.scope;
   const kpis = qsa<HTMLElement>("#dashboard .kpi strong");
-  if (kpis[0]) kpis[0].textContent = String(summary.metrics.todos);
+  if (kpis[0]) kpis[0].textContent = String(activeTodos(todos).length);
   if (kpis[1]) kpis[1].textContent = String(summary.metrics.customers);
   if (kpis[2]) kpis[2].textContent = money(summary.metrics.forecastAmount);
   const focus = qs<HTMLElement>(".focus-metric b");
@@ -310,12 +480,16 @@ function renderDashboard(summary: DashboardSummary, todos: Todo[], customers: Cu
 function renderTodos(todos: Todo[]) {
   const list = qs<HTMLElement>("#dashboard .todo-list");
   if (!list) return;
-  const visibleTodos = filterTodos(todos);
+  const currentTodos = activeTodos(todos);
+  const archivedTodos = historyTodos(todos);
+  const isHistoryView = state.todoFilter === "history";
+  const visibleTodos = isHistoryView ? archivedTodos : filterTodos(currentTodos);
   list.innerHTML = visibleTodos.map((todo) => {
     const tone = todo.priority === "high" ? "red" : todo.priority === "medium" ? "amber" : "green";
+    const optionalMeta = [todo.dueAt, todo.related].filter(Boolean).map((item) => `<span>${escapeHtml(item)}</span>`).join("");
     return `<article class="todo-row ${todo.priority === "high" ? "urgent" : ""} ${todo.done ? "done" : ""}" data-todo-id="${escapeHtml(todo.id)}">
-      <i class="todo-check" title="完成待办"></i>
-      <div class="todo-main"><h3>${escapeHtml(todo.title)}</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--${tone === "red" ? "rose" : tone})"></i><span>${escapeHtml(priorityText(todo.priority))}</span><span>${escapeHtml(todo.dueAt)}</span><span>${escapeHtml(todo.related)}</span>${badge(todo.done ? "已完成" : todo.type, todo.done ? "green" : tone)}</div></div>
+      <i class="todo-check" title="${todo.done ? "撤回未完成" : "完成待办"}"></i>
+      <div class="todo-main"><h3>${escapeHtml(todo.title)}</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--${tone === "red" ? "rose" : tone})"></i><span>${escapeHtml(priorityText(todo.priority))}</span>${optionalMeta}${badge(todo.done ? "已完成" : isHistoryView ? "历史归档" : todoTypeText(todo.type), todo.done ? "green" : tone)}</div></div>
       <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">我</span></div><div class="subtask-bar"><i style="--p:${todo.done ? "100%" : "55%"}"></i></div></div>
     </article>`;
   }).join("");
@@ -324,19 +498,23 @@ function renderTodos(todos: Todo[]) {
       event.stopPropagation();
       const row = node.closest<HTMLElement>(".todo-row");
       if (!row?.dataset.todoId) return;
-      await api(`/api/todos/${row.dataset.todoId}/complete`, { method: "POST" });
       const todo = state.todos.find((item) => item.id === row.dataset.todoId);
-      if (todo) todo.done = true;
-      row.classList.add("done");
-      node.setAttribute("title", "已完成");
+      if (!todo) return;
+      const nextDone = !todo.done;
+      const result = await api<{ todo: Todo }>(`/api/todos/${todo.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ done: nextDone })
+      });
+      Object.assign(todo, result.todo);
+      renderTodos(state.todos);
       updateTodoChips(state.todos);
-      toast("待办已完成");
+      toast(todo.done ? "待办已完成" : "已撤回未完成");
     });
   });
   qsa<HTMLElement>(".todo-row", list).forEach((row) => {
     row.addEventListener("click", () => {
       const todo = state.todos.find((item) => item.id === row.dataset.todoId);
-      if (todo) toast(`${todo.related} · ${todo.dueAt}`);
+      if (todo) toast([todo.related, todo.dueAt].filter(Boolean).join(" · ") || "未设置关联对象和目标完成时间");
     });
   });
   const total = visibleTodos.length;
@@ -347,27 +525,53 @@ function renderTodos(todos: Todo[]) {
   if (scoreCards[1]) scoreCards[1].textContent = String(overdue);
   if (scoreCards[2]) scoreCards[2].textContent = `${Math.round((done / Math.max(total, 1)) * 100)}%`;
   if (scoreCards[3]) scoreCards[3].textContent = money(visibleTodos.reduce((sum, todo) => sum + (todo.impactAmount || 0), 0));
+  renderTodoHistory(archivedTodos);
+}
+
+function renderTodoHistory(todos: Todo[]) {
+  const list = qs<HTMLElement>("#dashboard .todo-history-list");
+  const count = qs<HTMLElement>("#dashboard #todo-history-count");
+  const amountNode = qs<HTMLElement>("#dashboard #todo-history-amount");
+  if (count) count.textContent = `${todos.length} 条`;
+  if (amountNode) amountNode.textContent = money(todos.reduce((sum, todo) => sum + (todo.impactAmount || 0), 0));
+  if (!list) return;
+  const recent = todos.slice(0, 6);
+  list.innerHTML = recent.length ? recent.map((todo) => {
+    const tone = todo.priority === "high" ? "red" : todo.priority === "medium" ? "amber" : "green";
+    const meta = [todo.dueAt, todo.related].filter(Boolean).join(" · ") || "未设置上下文";
+    return `<article class="todo-history-row ${todo.done ? "done" : ""}" data-todo-id="${escapeHtml(todo.id)}">
+      <span class="history-dot ${tone}"></span>
+      <div><b>${escapeHtml(todo.title)}</b><span>${escapeHtml(meta)}</span></div>
+      ${badge(todo.done ? "历史完成" : "历史归档", todo.done ? "green" : tone)}
+    </article>`;
+  }).join("") : `<div class="todo-history-empty">暂无隔天历史待办</div>`;
+  qsa<HTMLElement>(".todo-history-row", list).forEach((row) => {
+    row.addEventListener("click", () => {
+      const todo = state.todos.find((item) => item.id === row.dataset.todoId);
+      if (todo) toast(["历史清单", todo.related, todo.dueAt].filter(Boolean).join(" · "));
+    });
+  });
 }
 
 function filterTodos(todos: Todo[]) {
   if (state.todoFilter === "overdue") return todos.filter((todo) => todo.priority === "high" && !todo.done);
   if (state.todoFilter === "customer") return todos.filter((todo) => todo.type === "customer");
-  if (state.todoFilter === "knowledge") return todos.filter((todo) => todo.type === "knowledge" || todo.type === "exam");
   return todos;
 }
 
 function updateTodoChips(todos: Todo[]) {
   const chips = qsa<HTMLElement>("#dashboard .todo-chip");
+  const currentTodos = activeTodos(todos);
   const values = [
-    `今天 ${todos.filter((todo) => !todo.done).length}`,
-    `逾期 ${todos.filter((todo) => todo.priority === "high" && !todo.done).length}`,
-    `我负责 ${todos.length}`,
+    `今天 ${currentTodos.filter((todo) => !todo.done).length}`,
+    `逾期 ${currentTodos.filter((todo) => todo.priority === "high" && !todo.done).length}`,
+    `我负责 ${currentTodos.length}`,
     "客户跟进",
-    "资料/考试"
+    `历史清单 ${historyTodos(todos).length}`
   ];
   chips.forEach((chip, index) => {
     chip.textContent = values[index] || chip.textContent || "";
-    const filters: AppState["todoFilter"][] = ["today", "overdue", "mine", "customer", "knowledge"];
+    const filters: AppState["todoFilter"][] = ["today", "overdue", "mine", "customer", "history"];
     chip.dataset.todoFilter = filters[index] || "all";
     chip.classList.toggle("active", state.todoFilter === chip.dataset.todoFilter || (state.todoFilter === "all" && index === 0));
   });
@@ -377,6 +581,40 @@ function priorityText(priority: string) {
   if (priority === "high") return "高优先级";
   if (priority === "medium") return "中优先级";
   return "普通";
+}
+
+function severityText(severity: string) {
+  if (severity === "high") return "高";
+  if (severity === "medium") return "中";
+  return "低";
+}
+
+function severityTone(severity: string) {
+  if (severity === "high") return "red";
+  if (severity === "medium") return "amber";
+  return "green";
+}
+
+function problemStatusText(status: string) {
+  if (status === "resolved") return "已解决";
+  if (status === "solving") return "解决中";
+  return "未解决";
+}
+
+function problemStatusTone(status: string) {
+  if (status === "resolved") return "green";
+  if (status === "solving") return "amber";
+  return "red";
+}
+
+function threatText(level: string) {
+  if (level === "high") return "高威胁";
+  if (level === "medium") return "中威胁";
+  return "低威胁";
+}
+
+function caseStatusText(status: string) {
+  return status === "published" ? "已发布" : "草稿";
 }
 
 function renderCustomers(customers: Customer[]) {
@@ -431,7 +669,7 @@ function renderCustomerDrawer(customer?: Customer) {
       <div class="timeline-item"><b>客户阶段</b><span>${escapeHtml(customer.stage)} · ${amount(customer.amount)}</span></div>
     </div>
   `;
-  qs<HTMLButtonElement>("[data-add-follow]", drawer)?.addEventListener("click", () => toast(`已记录 ${customer.company} 的跟进动作`));
+  qs<HTMLButtonElement>("[data-add-follow]", drawer)?.addEventListener("click", () => addFollowRecord(customer));
 }
 
 function countryFlag(country: string) {
@@ -471,6 +709,41 @@ async function moveDeal(id: string) {
   toast(`商机已推进到：${nextStage}`);
 }
 
+function openDealModal() {
+  openModal("新增商机", `
+    <div class="form-grid">
+      <div class="form-field full"><label>商机名称</label><input id="dealTitleInput" value="${escapeHtml(state.customers[0]?.company || "新客户")} 采购机会"></div>
+      <div class="form-field"><label>关联客户</label><select id="dealCustomerInput">${state.customers.map((customer) => `<option value="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</option>`).join("")}</select></div>
+      <div class="form-field"><label>阶段</label><select id="dealStageInput"><option>询盘</option><option>已联系</option><option>已报价</option><option>样品</option><option>谈判</option></select></div>
+      <div class="form-field"><label>金额</label><input id="dealAmountInput" type="number" value="18000"></div>
+      <div class="form-field full"><label>下一步动作</label><input id="dealNextActionInput" value="确认采购清单并安排报价"></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDealButton">保存商机</button>`);
+  qs("#saveDealButton")?.addEventListener("click", () => void saveDeal());
+}
+
+async function saveDeal() {
+  const title = qs<HTMLInputElement>("#dealTitleInput")?.value.trim() || "";
+  if (!title) {
+    toast("请填写商机名称", "error");
+    return;
+  }
+  const result = await api<{ deal: Deal }>("/api/deals", {
+    method: "POST",
+    body: JSON.stringify({
+      title,
+      customerId: qs<HTMLSelectElement>("#dealCustomerInput")?.value || state.customers[0]?.id,
+      stage: qs<HTMLSelectElement>("#dealStageInput")?.value || "询盘",
+      amount: Number(qs<HTMLInputElement>("#dealAmountInput")?.value || 0),
+      nextAction: qs<HTMLInputElement>("#dealNextActionInput")?.value || "首次跟进"
+    })
+  });
+  state.deals.unshift(result.deal);
+  renderPipeline(state.deals);
+  closeModal();
+  toast("商机已新增");
+}
+
 function renderReminders(reminders: Reminder[]) {
   const list = qs<HTMLElement>("#reminders .task-list");
   if (!list) return;
@@ -480,9 +753,517 @@ function renderReminders(reminders: Reminder[]) {
       const row = button.closest<HTMLElement>(".task");
       if (!row?.dataset.reminderId) return;
       await api(`/api/reminders/${row.dataset.reminderId}/done`, { method: "POST" });
+      const reminder = state.reminders.find((item) => item.id === row.dataset.reminderId);
+      if (reminder) reminder.status = "done";
       button.textContent = "已完成";
+      toast("提醒已完成");
     });
   });
+}
+
+function renderProblems(problems: ProblemItem[]) {
+  const sorted = [...problems].sort((a, b) => {
+    const statusWeight = (item: ProblemItem) => item.status === "resolved" ? 2 : item.status === "solving" ? 1 : 0;
+    const severityWeight = (item: ProblemItem) => item.severity === "high" ? 0 : item.severity === "medium" ? 1 : 2;
+    return statusWeight(a) - statusWeight(b) || severityWeight(a) - severityWeight(b) || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+  const list = qs<HTMLElement>("#problems .problem-list");
+  if (list) {
+    list.innerHTML = sorted.length ? sorted.map((problem) => `<article class="problem-card ${state.selectedProblemId === problem.id ? "selected" : ""}" data-problem-id="${escapeHtml(problem.id)}">
+      <div class="problem-top"><h3>${escapeHtml(problem.title)}</h3>${badge(severityText(problem.severity), severityTone(problem.severity))}</div>
+      <div class="problem-meta"><span>${escapeHtml(problem.category)}</span><span>${escapeHtml(problemStatusText(problem.status))}</span><span>${escapeHtml(problem.dueAt || "未设截止")}</span><span>${escapeHtml(problem.relatedCustomer || "未关联客户")}</span></div>
+      <p>${escapeHtml(problem.rootCause || "暂未填写原因")}</p>
+    </article>`).join("") : `<div class="todo-history-empty">暂无问题，点击“新增问题”建立解决闭环</div>`;
+    qsa<HTMLElement>(".problem-card", list).forEach((card) => {
+      card.addEventListener("click", () => {
+        state.selectedProblemId = card.dataset.problemId || null;
+        renderProblems(state.problems);
+      });
+    });
+  }
+  const open = problems.filter((item) => item.status === "open").length;
+  const solving = problems.filter((item) => item.status === "solving").length;
+  const resolved = problems.filter((item) => item.status === "resolved").length;
+  const high = problems.filter((item) => item.severity === "high" && item.status !== "resolved").length;
+  qs("#problem-open-count")!.textContent = String(open);
+  qs("#problem-solving-count")!.textContent = String(solving);
+  qs("#problem-resolved-count")!.textContent = String(resolved);
+  qs("#problem-high-count")!.textContent = String(high);
+  renderProblemDetail(sorted.find((item) => item.id === state.selectedProblemId) || sorted[0]);
+}
+
+function renderProblemDetail(problem?: ProblemItem) {
+  if (!problem) {
+    qs("#problem-detail-title")!.textContent = "问题解决方案";
+    qs("#problem-detail-meta")!.textContent = "选择左侧问题查看闭环";
+    qs("#problem-root-cause")!.textContent = "暂无问题";
+    qs("#problem-solution")!.textContent = "暂无解决方案";
+    qs("#problem-next-action")!.textContent = "暂无下一动作";
+    return;
+  }
+  state.selectedProblemId = problem.id;
+  qs("#problem-detail-title")!.textContent = problem.title;
+  qs("#problem-detail-meta")!.textContent = `${problem.category} · ${problemStatusText(problem.status)} · ${problem.relatedCustomer || "未关联客户"}`;
+  qs("#problem-root-cause")!.textContent = problem.rootCause || "暂未填写原因";
+  qs("#problem-solution")!.textContent = problem.solution || "暂未填写解决方案";
+  qs("#problem-next-action")!.textContent = problem.nextAction || "暂未填写下一动作";
+  const button = qs<HTMLButtonElement>("#problemStatusButton");
+  if (button) button.textContent = problem.status === "resolved" ? "重新打开" : problem.status === "open" ? "开始解决" : "标记解决";
+  const groups = state.problems.reduce<Record<string, { count: number; high: boolean }>>((acc, item) => {
+    acc[item.category] = acc[item.category] || { count: 0, high: false };
+    acc[item.category].count += 1;
+    acc[item.category].high = acc[item.category].high || item.severity === "high";
+    return acc;
+  }, {});
+  const tbody = qs<HTMLElement>("#problem-category-table");
+  if (tbody) tbody.innerHTML = Object.entries(groups).map(([category, item]) => `<tr><td>${escapeHtml(category)}</td><td>${item.count}</td><td>${badge(item.high ? "高" : "可控", item.high ? "red" : "green")}</td></tr>`).join("");
+}
+
+function renderMemos(memos: Memo[]) {
+  const sorted = [...memos].sort((a, b) => Number(b.pinned) - Number(a.pinned) || Number(a.archived) - Number(b.archived) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  const list = qs<HTMLElement>("#memos .memo-list");
+  if (list) {
+    list.innerHTML = sorted.length ? sorted.map((memo) => `<article class="memo-card ${state.selectedMemoId === memo.id ? "selected" : ""} ${memo.archived ? "archived" : ""}" data-memo-id="${escapeHtml(memo.id)}">
+      <div class="memo-top"><h3>${escapeHtml(memo.title)}</h3>${badge(memo.archived ? "归档" : memo.pinned ? "置顶" : memo.category, memo.archived ? "" : memo.pinned ? "green" : "amber")}</div>
+      <div class="memo-meta"><span>${escapeHtml(memo.category)}</span><span>${escapeHtml(memo.tags || "无标签")}</span></div>
+      <p>${escapeHtml(memo.content.slice(0, 82) || "空白备忘")}</p>
+    </article>`).join("") : `<div class="todo-history-empty">暂无备忘，点击“新增备忘”开始记录</div>`;
+	    qsa<HTMLElement>(".memo-card", list).forEach((card) => {
+	      card.addEventListener("click", async () => {
+	        await saveCurrentMemoDraft();
+	        state.selectedMemoId = card.dataset.memoId || null;
+	        renderMemos(state.memos);
+	      });
+	    });
+  }
+  const totalCount = qs("#memo-total-count");
+  const pinnedCount = qs("#memo-pinned-count");
+  const customerCount = qs("#memo-customer-count");
+  const archivedCount = qs("#memo-archived-count");
+  if (totalCount) totalCount.textContent = String(memos.length);
+  if (pinnedCount) pinnedCount.textContent = String(memos.filter((memo) => memo.pinned && !memo.archived).length);
+  if (customerCount) customerCount.textContent = String(memos.filter((memo) => memo.category.includes("客户")).length);
+  if (archivedCount) archivedCount.textContent = String(memos.filter((memo) => memo.archived).length);
+  renderMemoDetail(sorted.find((item) => item.id === state.selectedMemoId) || sorted[0]);
+}
+
+function renderMemoDetail(memo?: Memo) {
+  if (!memo) {
+    qs("#memo-detail-title")!.textContent = "备忘详情";
+    qs("#memo-detail-meta")!.textContent = "选择左侧备忘查看内容";
+    const titleEditor = qs<HTMLInputElement>("#memoTitleEditor");
+    const tagsEditor = qs<HTMLInputElement>("#memoTagsEditor");
+    const contentEditor = qs<HTMLTextAreaElement>("#memoContentEditor");
+    if (titleEditor) titleEditor.value = "暂无备忘";
+    if (tagsEditor) tagsEditor.value = "";
+    if (contentEditor) contentEditor.value = "点击“新增备忘”记录客户偏好、报价复盘或临时事项。";
+    qs<HTMLButtonElement>("#memoPinButton")?.setAttribute("disabled", "true");
+    qs<HTMLButtonElement>("#memoArchiveButton")?.setAttribute("disabled", "true");
+    qs<HTMLButtonElement>("#memoDeleteButton")?.setAttribute("disabled", "true");
+    return;
+  }
+  state.selectedMemoId = memo.id;
+  qs("#memo-detail-title")!.textContent = "备忘编辑";
+  qs("#memo-detail-meta")!.textContent = `${memo.category} · ${memo.archived ? "已归档" : "自动保存"}`;
+  const titleEditor = qs<HTMLInputElement>("#memoTitleEditor");
+  const tagsEditor = qs<HTMLInputElement>("#memoTagsEditor");
+  const contentEditor = qs<HTMLTextAreaElement>("#memoContentEditor");
+  if (titleEditor) titleEditor.value = memo.title;
+  if (tagsEditor) tagsEditor.value = memo.tags;
+  if (contentEditor) contentEditor.value = memo.content || "";
+  memoDirty = false;
+  setMemoSaveState("已保存");
+  const pinButton = qs<HTMLButtonElement>("#memoPinButton");
+  const archiveButton = qs<HTMLButtonElement>("#memoArchiveButton");
+  const deleteButton = qs<HTMLButtonElement>("#memoDeleteButton");
+  if (pinButton) pinButton.textContent = memo.pinned ? "取消置顶" : "置顶";
+  if (archiveButton) archiveButton.textContent = memo.archived ? "恢复" : "归档";
+  if (pinButton) pinButton.disabled = false;
+  if (archiveButton) archiveButton.disabled = false;
+  if (deleteButton) deleteButton.disabled = false;
+  bindMemoEditorEvents();
+}
+
+function renderCompetitors(competitors: Competitor[]) {
+  const sorted = [...competitors].sort((a, b) => {
+    const weight = (item: Competitor) => item.threatLevel === "high" ? 0 : item.threatLevel === "medium" ? 1 : 2;
+    return weight(a) - weight(b) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+  const list = qs<HTMLElement>("#competitors .intel-list");
+  if (list) {
+    list.innerHTML = sorted.length ? sorted.map((item) => `<article class="intel-card ${state.selectedCompetitorId === item.id ? "selected" : ""}" data-competitor-id="${escapeHtml(item.id)}">
+      <div class="intel-top"><h3>${escapeHtml(item.company)}</h3>${badge(threatText(item.threatLevel), severityTone(item.threatLevel))}</div>
+      <div class="intel-meta"><span>${escapeHtml(item.country || "未知国家")}</span><span>${escapeHtml(item.segment || "未分类")}</span><span>${escapeHtml(item.competingProducts || "未维护产品")}</span></div>
+      <p>${escapeHtml(item.strengths || "暂未维护竞争优势")}</p>
+    </article>`).join("") : `<div class="todo-history-empty">暂无竞争公司，点击“新增竞争公司”建立情报库</div>`;
+    qsa<HTMLElement>(".intel-card", list).forEach((card) => {
+      card.addEventListener("click", () => {
+        state.selectedCompetitorId = card.dataset.competitorId || null;
+        renderCompetitors(state.competitors);
+      });
+    });
+  }
+  qs("#competitor-total-count")!.textContent = String(competitors.length);
+  qs("#competitor-high-count")!.textContent = String(competitors.filter((item) => item.threatLevel === "high").length);
+  qs("#competitor-segment-count")!.textContent = String(new Set(competitors.map((item) => item.segment).filter(Boolean)).size);
+  qs("#competitor-strategy-count")!.textContent = String(competitors.filter((item) => item.ourStrategy).length);
+  renderCompetitorDetail(sorted.find((item) => item.id === state.selectedCompetitorId) || sorted[0]);
+}
+
+function renderCompetitorDetail(competitor?: Competitor) {
+  if (!competitor) return;
+  state.selectedCompetitorId = competitor.id;
+  qs("#competitor-detail-title")!.textContent = competitor.company;
+  qs("#competitor-detail-meta")!.textContent = `${competitor.country || "未知国家"} · ${competitor.segment || "未分类"} · ${threatText(competitor.threatLevel)}`;
+  qs("#competitor-products")!.textContent = competitor.competingProducts || "暂未维护";
+  qs("#competitor-strengths")!.textContent = competitor.strengths || "暂未维护";
+  qs("#competitor-weaknesses")!.textContent = competitor.weaknesses || "暂未维护";
+  qs("#competitor-strategy")!.textContent = competitor.ourStrategy || "暂未维护";
+  const button = qs<HTMLButtonElement>("#competitorThreatButton");
+  if (button) button.textContent = competitor.threatLevel === "high" ? "降为中威胁" : "设为高威胁";
+}
+
+function renderCaseStudies(caseStudies: CaseStudy[]) {
+  const sorted = [...caseStudies].sort((a, b) => Number(b.status === "published") - Number(a.status === "published") || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  const list = qs<HTMLElement>("#cases .case-list");
+  if (list) {
+    list.innerHTML = sorted.length ? sorted.map((item) => `<article class="case-card ${state.selectedCaseId === item.id ? "selected" : ""}" data-case-id="${escapeHtml(item.id)}">
+      <div class="case-top"><h3>${escapeHtml(item.title)}</h3>${badge(caseStatusText(item.status), item.status === "published" ? "green" : "amber")}</div>
+      <div class="case-meta"><span>${escapeHtml(item.customer || "未关联客户")}</span><span>${escapeHtml(item.product || "未维护产品")}</span><span>${escapeHtml(item.country || "未知国家")}</span></div>
+      <p>${escapeHtml(item.result || "暂未填写成果")}</p>
+    </article>`).join("") : `<div class="todo-history-empty">暂无成功案例，点击“新增成功案例”沉淀销售素材</div>`;
+    qsa<HTMLElement>(".case-card", list).forEach((card) => {
+      card.addEventListener("click", () => {
+        state.selectedCaseId = card.dataset.caseId || null;
+        renderCaseStudies(state.caseStudies);
+      });
+    });
+  }
+  qs("#case-total-count")!.textContent = String(caseStudies.length);
+  qs("#case-published-count")!.textContent = String(caseStudies.filter((item) => item.status === "published").length);
+  qs("#case-product-count")!.textContent = String(new Set(caseStudies.map((item) => item.product).filter(Boolean)).size);
+  qs("#case-draft-count")!.textContent = String(caseStudies.filter((item) => item.status !== "published").length);
+  renderCaseDetail(sorted.find((item) => item.id === state.selectedCaseId) || sorted[0]);
+}
+
+function renderCaseDetail(caseStudy?: CaseStudy) {
+  if (!caseStudy) return;
+  state.selectedCaseId = caseStudy.id;
+  qs("#case-detail-title")!.textContent = caseStudy.title;
+  qs("#case-detail-meta")!.textContent = `${caseStudy.customer || "未关联客户"} · ${caseStudy.country || "未知国家"} · ${caseStatusText(caseStudy.status)}`;
+  qs("#case-product")!.textContent = caseStudy.product || "暂未维护";
+  qs("#case-result")!.textContent = caseStudy.result || "暂未维护";
+  qs("#case-industry")!.textContent = caseStudy.industry || "暂未维护";
+  qs("#case-story")!.textContent = caseStudy.story || "暂未维护";
+  qs("#case-reusable")!.textContent = caseStudy.reusablePoints || "暂未维护";
+  const button = qs<HTMLButtonElement>("#casePublishButton");
+  if (button) button.textContent = caseStudy.status === "published" ? "已发布" : "发布案例";
+}
+
+function bindMemoEditorEvents() {
+  qsa<HTMLInputElement | HTMLTextAreaElement>("#memoTitleEditor, #memoTagsEditor, #memoContentEditor").forEach((input) => {
+    if (input.dataset.memoBound === "true") return;
+    input.dataset.memoBound = "true";
+    input.addEventListener("input", () => {
+      memoDirty = true;
+      setMemoSaveState("未保存");
+    });
+    input.addEventListener("blur", () => void saveCurrentMemoDraft());
+  });
+}
+
+function setMemoSaveState(text: string) {
+  const node = qs<HTMLElement>("#memoSaveState");
+  if (node) node.textContent = text;
+}
+
+function openReminderModal() {
+  openModal("设置提醒规则", `
+    <div class="form-grid">
+      <div class="form-field full"><label>提醒名称</label><input id="reminderTitleInput" value="自动化报价跟进提醒"></div>
+      <div class="form-field full"><label>触发规则</label><input id="reminderRuleInput" value="报价后 2 天未回复自动提醒"></div>
+      <div class="form-field"><label>提醒时间</label><input id="reminderDueInput" value="今天 18:00"></div>
+      <div class="form-field"><label>渠道</label><select id="reminderChannelInput"><option>企业微信</option><option>站内</option><option>邮件</option></select></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveReminderButton">保存规则</button>`);
+  qs("#saveReminderButton")?.addEventListener("click", () => void saveReminder());
+}
+
+async function saveReminder() {
+  const title = qs<HTMLInputElement>("#reminderTitleInput")?.value.trim() || "";
+  if (!title) {
+    toast("请填写提醒名称", "error");
+    return;
+  }
+  const result = await api<{ reminder: Reminder }>("/api/reminders", {
+    method: "POST",
+    body: JSON.stringify({
+      title,
+      rule: qs<HTMLInputElement>("#reminderRuleInput")?.value || "报价后未回复",
+      dueAt: qs<HTMLInputElement>("#reminderDueInput")?.value || "今天",
+      channel: qs<HTMLSelectElement>("#reminderChannelInput")?.value || "企业微信"
+    })
+  });
+  state.reminders.unshift(result.reminder);
+  renderReminders(state.reminders);
+  closeModal();
+  toast("提醒规则已保存");
+}
+
+function openProblemModal() {
+  openModal("新增问题", `
+    <div class="form-grid">
+      <div class="form-field full"><label>问题标题</label><input id="problemTitleInput" placeholder="例如：客户报价后超过 5 天未回复"></div>
+      <div class="form-field"><label>类别</label><select id="problemCategoryInput"><option>报价跟进</option><option>资料维护</option><option>工具/OCR</option><option>客户服务</option><option>团队执行</option></select></div>
+      <div class="form-field"><label>严重程度</label><select id="problemSeverityInput"><option value="medium">中</option><option value="high">高</option><option value="low">低</option></select></div>
+      <div class="form-field"><label>关联客户</label><input id="problemCustomerInput" placeholder="可选：客户或线索名称"></div>
+      <div class="form-field"><label>截止时间</label><input id="problemDueInput" placeholder="例如：今天 18:00"></div>
+      <div class="form-field full"><label>问题原因</label><textarea id="problemRootInput" placeholder="描述问题产生原因"></textarea></div>
+      <div class="form-field full"><label>解决方案</label><textarea id="problemSolutionInput" placeholder="写清楚解决路径、标准和注意事项"></textarea></div>
+      <div class="form-field full"><label>下一动作</label><input id="problemNextInput" placeholder="例如：今天发送补充资料，明天企微确认"></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveProblemButton">保存问题</button>`);
+  qs("#saveProblemButton")?.addEventListener("click", () => void saveProblem());
+  qs<HTMLInputElement>("#problemTitleInput")?.focus();
+}
+
+async function saveProblem() {
+  const title = qs<HTMLInputElement>("#problemTitleInput")?.value.trim() || "";
+  if (!title) {
+    toast("请填写问题标题", "error");
+    return;
+  }
+  const result = await api<{ problem: ProblemItem }>("/api/problems", {
+    method: "POST",
+    body: JSON.stringify({
+      title,
+      category: qs<HTMLSelectElement>("#problemCategoryInput")?.value || "客户问题",
+      severity: qs<HTMLSelectElement>("#problemSeverityInput")?.value || "medium",
+      relatedCustomer: qs<HTMLInputElement>("#problemCustomerInput")?.value.trim() || "",
+      rootCause: qs<HTMLTextAreaElement>("#problemRootInput")?.value.trim() || "",
+      solution: qs<HTMLTextAreaElement>("#problemSolutionInput")?.value.trim() || "",
+      nextAction: qs<HTMLInputElement>("#problemNextInput")?.value.trim() || "",
+      dueAt: qs<HTMLInputElement>("#problemDueInput")?.value.trim() || ""
+    })
+  });
+  state.problems.unshift(result.problem);
+  state.selectedProblemId = result.problem.id;
+  renderProblems(state.problems);
+  closeModal();
+  toast("问题已新增");
+}
+
+async function advanceProblemStatus() {
+  const problem = state.problems.find((item) => item.id === state.selectedProblemId);
+  if (!problem) return;
+  const nextStatus = problem.status === "open" ? "solving" : problem.status === "solving" ? "resolved" : "open";
+  const result = await api<{ problem: ProblemItem }>(`/api/problems/${problem.id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: nextStatus })
+  });
+  Object.assign(problem, result.problem);
+  renderProblems(state.problems);
+  toast(`问题状态已更新：${problemStatusText(problem.status)}`);
+}
+
+function openMemoModal() {
+  openModal("新增备忘", `
+    <div class="form-grid">
+      <div class="form-field full"><label>标题</label><input id="memoTitleInput" placeholder="例如：某客户报价偏好"></div>
+      <div class="form-field"><label>分类</label><select id="memoCategoryInput"><option>客户备忘</option><option>销售话术</option><option>产品知识</option><option>报价复盘</option><option>个人记录</option></select></div>
+      <div class="form-field"><label>标签</label><input id="memoTagsInput" placeholder="多个标签用逗号分隔"></div>
+      <div class="form-field full"><label>内容</label><textarea id="memoContentInput" placeholder="记录关键信息、背景、下一步或复盘结论"></textarea></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveMemoButton">保存备忘</button>`);
+  qs("#saveMemoButton")?.addEventListener("click", () => void saveMemo());
+  qs<HTMLInputElement>("#memoTitleInput")?.focus();
+}
+
+async function saveMemo() {
+  const title = qs<HTMLInputElement>("#memoTitleInput")?.value.trim() || "";
+  if (!title) {
+    toast("请填写备忘标题", "error");
+    return;
+  }
+  const result = await api<{ memo: Memo }>("/api/memos", {
+    method: "POST",
+    body: JSON.stringify({
+      title,
+      category: qs<HTMLSelectElement>("#memoCategoryInput")?.value || "客户备忘",
+      tags: qs<HTMLInputElement>("#memoTagsInput")?.value.trim() || "",
+      content: qs<HTMLTextAreaElement>("#memoContentInput")?.value.trim() || ""
+    })
+  });
+  state.memos.unshift(result.memo);
+  state.selectedMemoId = result.memo.id;
+  renderMemos(state.memos);
+  closeModal();
+  toast("备忘已保存");
+}
+
+async function saveCurrentMemoDraft() {
+  if (memoSavePromise) return memoSavePromise;
+  if (!memoDirty) return;
+  const memo = state.memos.find((item) => item.id === state.selectedMemoId);
+  if (!memo) return;
+  const title = qs<HTMLInputElement>("#memoTitleEditor")?.value.trim() || memo.title;
+  const tags = qs<HTMLInputElement>("#memoTagsEditor")?.value.trim() || "";
+  const content = qs<HTMLTextAreaElement>("#memoContentEditor")?.value || "";
+  memoSaving = true;
+  setMemoSaveState("保存中");
+  memoSavePromise = (async () => {
+    const result = await api<{ memo: Memo }>(`/api/memos/${memo.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title, tags, content })
+    });
+    Object.assign(memo, result.memo);
+    memoDirty = false;
+    setMemoSaveState("已自动保存");
+    renderMemos(state.memos);
+  })();
+  try {
+    await memoSavePromise;
+  } finally {
+    memoSaving = false;
+    memoSavePromise = null;
+  }
+}
+
+async function patchSelectedMemo(payload: Partial<Pick<Memo, "title" | "content" | "category" | "tags" | "pinned" | "archived">>) {
+  await saveCurrentMemoDraft();
+  const memo = state.memos.find((item) => item.id === state.selectedMemoId);
+  if (!memo) return;
+  const result = await api<{ memo: Memo }>(`/api/memos/${memo.id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+  Object.assign(memo, result.memo);
+  renderMemos(state.memos);
+  toast(memo.archived ? "备忘已归档" : memo.pinned ? "备忘已置顶" : "备忘已更新");
+}
+
+async function deleteSelectedMemo() {
+  const memo = state.memos.find((item) => item.id === state.selectedMemoId);
+  if (!memo) {
+    toast("请选择要删除的备忘", "error");
+    return;
+  }
+  await api<{ ok: boolean; id: string }>(`/api/memos/${memo.id}`, { method: "DELETE" });
+  state.memos = state.memos.filter((item) => item.id !== memo.id);
+  state.selectedMemoId = state.memos[0]?.id || null;
+  memoDirty = false;
+  renderMemos(state.memos);
+  toast("备忘已删除");
+}
+
+function openCompetitorModal() {
+  openModal("新增竞争公司", `
+    <div class="form-grid">
+      <div class="form-field full"><label>公司名称</label><input id="competitorCompanyInput" placeholder="例如：EuroLift Tools GmbH"></div>
+      <div class="form-field"><label>国家</label><input id="competitorCountryInput" value="德国"></div>
+      <div class="form-field"><label>品类/赛道</label><input id="competitorSegmentInput" value="电动工具"></div>
+      <div class="form-field"><label>威胁等级</label><select id="competitorThreatInput"><option value="medium">中威胁</option><option value="high">高威胁</option><option value="low">低威胁</option></select></div>
+      <div class="form-field"><label>官网</label><input id="competitorWebsiteInput" placeholder="可选"></div>
+      <div class="form-field full"><label>竞争产品</label><input id="competitorProductsInput" placeholder="例如：18V 无刷电钻、角磨机"></div>
+      <div class="form-field full"><label>优势</label><textarea id="competitorStrengthsInput" placeholder="对方强在哪里"></textarea></div>
+      <div class="form-field full"><label>弱点</label><textarea id="competitorWeaknessesInput" placeholder="我们可以突破的地方"></textarea></div>
+      <div class="form-field full"><label>应对策略</label><textarea id="competitorStrategyInput" placeholder="报价、资料、谈判、交付策略"></textarea></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCompetitorButton">保存竞争公司</button>`);
+  qs("#saveCompetitorButton")?.addEventListener("click", () => void saveCompetitor());
+  qs<HTMLInputElement>("#competitorCompanyInput")?.focus();
+}
+
+async function saveCompetitor() {
+  const company = qs<HTMLInputElement>("#competitorCompanyInput")?.value.trim() || "";
+  if (!company) {
+    toast("请填写竞争公司名称", "error");
+    return;
+  }
+  const result = await api<{ competitor: Competitor }>("/api/competitors", {
+    method: "POST",
+    body: JSON.stringify({
+      company,
+      country: qs<HTMLInputElement>("#competitorCountryInput")?.value.trim() || "",
+      segment: qs<HTMLInputElement>("#competitorSegmentInput")?.value.trim() || "",
+      threatLevel: qs<HTMLSelectElement>("#competitorThreatInput")?.value || "medium",
+      website: qs<HTMLInputElement>("#competitorWebsiteInput")?.value.trim() || "",
+      competingProducts: qs<HTMLInputElement>("#competitorProductsInput")?.value.trim() || "",
+      strengths: qs<HTMLTextAreaElement>("#competitorStrengthsInput")?.value.trim() || "",
+      weaknesses: qs<HTMLTextAreaElement>("#competitorWeaknessesInput")?.value.trim() || "",
+      ourStrategy: qs<HTMLTextAreaElement>("#competitorStrategyInput")?.value.trim() || ""
+    })
+  });
+  state.competitors.unshift(result.competitor);
+  state.selectedCompetitorId = result.competitor.id;
+  renderCompetitors(state.competitors);
+  closeModal();
+  toast("竞争公司已新增");
+}
+
+async function toggleCompetitorThreat() {
+  const competitor = state.competitors.find((item) => item.id === state.selectedCompetitorId);
+  if (!competitor) return;
+  const nextThreat = competitor.threatLevel === "high" ? "medium" : "high";
+  const result = await api<{ competitor: Competitor }>(`/api/competitors/${competitor.id}/threat`, {
+    method: "PATCH",
+    body: JSON.stringify({ threatLevel: nextThreat })
+  });
+  Object.assign(competitor, result.competitor);
+  renderCompetitors(state.competitors);
+  toast(`威胁等级已更新：${threatText(competitor.threatLevel)}`);
+}
+
+function openCaseModal() {
+  openModal("新增成功案例", `
+    <div class="form-grid">
+      <div class="form-field full"><label>案例标题</label><input id="caseTitleInput" placeholder="例如：Nordic Tools 年度工具套装复购"></div>
+      <div class="form-field"><label>客户</label><input id="caseCustomerInput" value="${escapeHtml(state.customers[0]?.company || "")}"></div>
+      <div class="form-field"><label>国家</label><input id="caseCountryInput" value="${escapeHtml(state.customers[0]?.country || "")}"></div>
+      <div class="form-field"><label>产品</label><input id="caseProductInput" placeholder="例如：18V 无刷电钻套装"></div>
+      <div class="form-field"><label>行业</label><input id="caseIndustryInput" placeholder="例如：工具批发"></div>
+      <div class="form-field full"><label>成果</label><input id="caseResultInput" placeholder="例如：拿下 $36,000 首单"></div>
+      <div class="form-field full"><label>成交故事</label><textarea id="caseStoryInput" placeholder="客户背景、阻力、关键动作和成交过程"></textarea></div>
+      <div class="form-field full"><label>可复用打法</label><textarea id="caseReusableInput" placeholder="可复制到其他客户的步骤和话术"></textarea></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCaseButton">保存案例</button>`);
+  qs("#saveCaseButton")?.addEventListener("click", () => void saveCaseStudy());
+  qs<HTMLInputElement>("#caseTitleInput")?.focus();
+}
+
+async function saveCaseStudy() {
+  const title = qs<HTMLInputElement>("#caseTitleInput")?.value.trim() || "";
+  if (!title) {
+    toast("请填写案例标题", "error");
+    return;
+  }
+  const result = await api<{ caseStudy: CaseStudy }>("/api/case-studies", {
+    method: "POST",
+    body: JSON.stringify({
+      title,
+      customer: qs<HTMLInputElement>("#caseCustomerInput")?.value.trim() || "",
+      country: qs<HTMLInputElement>("#caseCountryInput")?.value.trim() || "",
+      product: qs<HTMLInputElement>("#caseProductInput")?.value.trim() || "",
+      industry: qs<HTMLInputElement>("#caseIndustryInput")?.value.trim() || "",
+      result: qs<HTMLInputElement>("#caseResultInput")?.value.trim() || "",
+      story: qs<HTMLTextAreaElement>("#caseStoryInput")?.value.trim() || "",
+      reusablePoints: qs<HTMLTextAreaElement>("#caseReusableInput")?.value.trim() || ""
+    })
+  });
+  state.caseStudies.unshift(result.caseStudy);
+  state.selectedCaseId = result.caseStudy.id;
+  renderCaseStudies(state.caseStudies);
+  closeModal();
+  toast("成功案例已新增");
+}
+
+async function publishSelectedCase() {
+  const caseStudy = state.caseStudies.find((item) => item.id === state.selectedCaseId);
+  if (!caseStudy || caseStudy.status === "published") return;
+  const result = await api<{ caseStudy: CaseStudy }>(`/api/case-studies/${caseStudy.id}/publish`, { method: "PATCH" });
+  Object.assign(caseStudy, result.caseStudy);
+  renderCaseStudies(state.caseStudies);
+  toast("成功案例已发布");
 }
 
 function renderJobs(jobs: ImportExportJob[]) {
@@ -509,6 +1290,16 @@ function renderWecom(messages: WecomMessage[]) {
   const chat = qs<HTMLElement>("#wecom .chat");
   if (!chat) return;
   chat.innerHTML = messages.map((message, index) => `<div class="bubble ${index % 2 ? "me" : ""}">${escapeHtml(message.summary)} ${message.status === "archived" ? "已归档" : "待归档"}</div>`).join("");
+}
+
+async function syncWecomMessages() {
+  const pending = state.wecomMessages.filter((message) => message.status !== "archived");
+  for (const message of pending) {
+    const result = await api<{ message: WecomMessage }>(`/api/wecom/messages/${message.id}/archive`, { method: "POST" });
+    Object.assign(message, result.message);
+  }
+  renderWecom(state.wecomMessages);
+  toast(pending.length ? `已同步 ${pending.length} 条企微摘要` : "企微摘要已是最新");
 }
 
 function renderKnowledge(assets: KnowledgeAsset[]) {
@@ -679,7 +1470,53 @@ async function renderAccounts(user: User) {
   if (user.role !== "sales") {
     accounts = (await api<{ accounts: User[] }>("/api/accounts")).accounts;
   }
-  tbody.innerHTML = accounts.map((account) => `<tr><td><div class="company"><span class="avatar">${escapeHtml(account.avatar)}</span><div><b>${escapeHtml(account.name)}</b><span>${escapeHtml(account.email)}</span></div></div></td><td>${badge(roleLabel[account.role], account.role === "admin" ? "amber" : account.role === "manager" ? "green" : "")}</td><td>${account.role === "sales" ? "仅本人数据" : account.role === "manager" ? "欧洲组全部" : "全量权限"}</td><td>${account.role === "admin" ? "全部" : account.role === "manager" ? "团队全部" : "本人客户"}</td><td>${badge("启用", "green")}</td><td>今天</td></tr>`).join("");
+  state.accounts = accounts;
+  tbody.innerHTML = accounts.map((account) => `<tr data-account-id="${escapeHtml(account.id)}"><td><div class="company"><span class="avatar">${escapeHtml(account.avatar)}</span><div><b>${escapeHtml(account.name)}</b><span>${escapeHtml(account.email)}</span></div></div></td><td>${badge(roleLabel[account.role], account.role === "admin" ? "amber" : account.role === "manager" ? "green" : "")}</td><td>${account.role === "sales" ? "仅本人数据" : account.role === "manager" ? "欧洲组全部" : "全量权限"}</td><td>${account.role === "admin" ? "全部" : account.role === "manager" ? "团队全部" : "本人客户"}</td><td>${badge((account as User & { status?: string }).status === "disabled" ? "停用" : "启用", (account as User & { status?: string }).status === "disabled" ? "gray" : "green")}</td><td><button class="btn" data-disable-account>${account.id === user.id ? "当前账号" : "停用"}</button></td></tr>`).join("");
+  qsa<HTMLButtonElement>("[data-disable-account]", tbody).forEach((button) => {
+    button.addEventListener("click", () => void disableAccount(button.closest<HTMLElement>("tr")?.dataset.accountId || ""));
+  });
+}
+
+function openAccountModal() {
+  openModal("新增账号", `
+    <div class="form-grid">
+      <div class="form-field"><label>姓名</label><input id="accountNameInput" value="New Sales"></div>
+      <div class="form-field"><label>角色</label><select id="accountRoleInput"><option value="sales">业务员</option><option value="manager">主管</option></select></div>
+      <div class="form-field full"><label>邮箱</label><input id="accountEmailInput" value="new.sales.${Date.now()}@goodjob.com"></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveAccountButton">保存账号</button>`);
+  qs("#saveAccountButton")?.addEventListener("click", () => void saveAccount());
+}
+
+async function saveAccount() {
+  const name = qs<HTMLInputElement>("#accountNameInput")?.value.trim() || "";
+  const email = qs<HTMLInputElement>("#accountEmailInput")?.value.trim() || "";
+  if (!name || !email) {
+    toast("请填写账号姓名和邮箱", "error");
+    return;
+  }
+  const result = await api<{ account: User }>("/api/accounts", {
+    method: "POST",
+    body: JSON.stringify({
+      name,
+      email,
+      role: qs<HTMLSelectElement>("#accountRoleInput")?.value || "sales"
+    })
+  });
+  state.accounts.unshift(result.account);
+  await renderAccounts(state.user!);
+  closeModal();
+  toast("账号已新增");
+}
+
+async function disableAccount(id: string) {
+  if (!id || id === state.user?.id) {
+    toast("当前登录账号不能停用", "error");
+    return;
+  }
+  await api(`/api/accounts/${id}/disable`, { method: "PATCH" });
+  await renderAccounts(state.user!);
+  toast("账号已停用");
 }
 
 function renderOcr(job: OcrJob) {
@@ -734,10 +1571,10 @@ function openTodoModal(prefill = "") {
   openModal("新增待办", `
     <div class="form-grid">
       <div class="form-field full"><label>待办内容</label><input id="todoTitleInput" value="${escapeHtml(prefill)}" placeholder="例如：明天 10 点跟进 Nordic Tools 报价"></div>
-      <div class="form-field"><label>类型</label><select id="todoTypeInput"><option value="customer">客户跟进</option><option value="knowledge">资料维护</option><option value="exam">在线考试</option><option value="ocr">OCR 线索</option></select></div>
+      <div class="form-field"><label>类型</label><select id="todoTypeInput"><option value="other" selected>其它</option><option value="customer">客户跟进</option><option value="knowledge">资料维护</option><option value="exam">在线考试</option><option value="ocr">OCR 线索</option></select></div>
       <div class="form-field"><label>优先级</label><select id="todoPriorityInput"><option value="normal">普通</option><option value="medium">中优先级</option><option value="high">高优先级</option></select></div>
-      <div class="form-field"><label>时间</label><input id="todoDueInput" value="今天 17:00"></div>
-      <div class="form-field"><label>关联对象</label><input id="todoRelatedInput" value="${escapeHtml(state.customers[0]?.company || "未关联")}"></div>
+      <div class="form-field"><label>目标完成时间</label><input id="todoDueInput" value="" placeholder="例如：2026-06-27 18:00"></div>
+      <div class="form-field"><label>关联对象</label><input id="todoRelatedInput" value="" placeholder="可选：客户、商机、资料或考试名称"></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveTodoButton">保存待办</button>`);
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
@@ -755,10 +1592,10 @@ async function saveTodo() {
     method: "POST",
     body: JSON.stringify({
       title,
-      type: qs<HTMLSelectElement>("#todoTypeInput")?.value || "customer",
+      type: qs<HTMLSelectElement>("#todoTypeInput")?.value || "other",
       priority: qs<HTMLSelectElement>("#todoPriorityInput")?.value || "normal",
-      dueAt: qs<HTMLInputElement>("#todoDueInput")?.value || "今天",
-      related: qs<HTMLInputElement>("#todoRelatedInput")?.value || "未关联"
+      dueAt: qs<HTMLInputElement>("#todoDueInput")?.value.trim() || "",
+      related: qs<HTMLInputElement>("#todoRelatedInput")?.value.trim() || ""
     })
   });
   state.todos.unshift(result.todo);
@@ -806,6 +1643,13 @@ async function saveCustomer() {
   toast("客户已新增");
 }
 
+function addFollowRecord(customer: Customer) {
+  const timeline = qs<HTMLElement>("#customers .drawer .timeline");
+  if (!timeline) return;
+  timeline.insertAdjacentHTML("afterbegin", `<div class="timeline-item"><b>手动跟进</b><span>已新增 ${escapeHtml(customer.company)} 的电话/邮件跟进记录。</span></div>`);
+  toast(`已记录 ${customer.company} 的跟进动作`);
+}
+
 async function syncOcrLead(button: HTMLButtonElement) {
   button.disabled = true;
   button.textContent = "同步中";
@@ -843,6 +1687,19 @@ async function exportReport() {
   toast("汇报已生成下载");
 }
 
+function openReportNoteModal() {
+  openModal("汇报备注", `<div class="form-field full"><label>备注</label><input id="reportNoteInput" value="${escapeHtml(state.reportNote || "本周重点抢救欧洲报价逾期客户")}"></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveReportNoteButton">保存备注</button>`);
+  qs("#saveReportNoteButton")?.addEventListener("click", saveReportNote);
+}
+
+function saveReportNote() {
+  state.reportNote = qs<HTMLInputElement>("#reportNoteInput")?.value.trim() || "";
+  const hero = qs<HTMLElement>("#reports .report-hero p");
+  if (hero && state.reportNote) hero.textContent = state.reportNote;
+  closeModal();
+  toast("汇报备注已保存");
+}
+
 function installEvents() {
   ensureUiLayer();
   qs<HTMLButtonElement>("#loginButton")?.addEventListener("click", (event) => {
@@ -876,7 +1733,7 @@ function installEvents() {
   qsa<HTMLButtonElement>("#dashboard .section-head .btn").forEach((button) => {
     if (button.textContent?.includes("新增待办")) button.addEventListener("click", () => openTodoModal());
     if (button.textContent?.includes("批量完成")) button.addEventListener("click", async () => {
-      const pending = filterTodos(state.todos).filter((todo) => !todo.done).slice(0, 5);
+      const pending = filterTodos(activeTodos(state.todos)).filter((todo) => !todo.done).slice(0, 5);
       await Promise.all(pending.map((todo) => api(`/api/todos/${todo.id}/complete`, { method: "POST" })));
       pending.forEach((todo) => { todo.done = true; });
       renderTodos(state.todos);
@@ -887,13 +1744,13 @@ function installEvents() {
   qsa<HTMLButtonElement>("#customers .page-head .btn.primary, .top-actions .btn.primary").forEach((button) => {
     if (button.textContent?.includes("新增客户")) button.addEventListener("click", openCustomerModal);
   });
-  qs<HTMLButtonElement>("#pipeline .page-head .btn.primary")?.addEventListener("click", () => toast("新增商机入口已就绪，下一步接客户选择与金额表单"));
-  qs<HTMLButtonElement>("#reminders .page-head .btn.primary")?.addEventListener("click", () => toast("提醒规则入口已就绪，可继续配置 N 天未回复规则"));
+  qs<HTMLButtonElement>("#pipeline .page-head .btn.primary")?.addEventListener("click", openDealModal);
+  qs<HTMLButtonElement>("#reminders .page-head .btn.primary")?.addEventListener("click", openReminderModal);
   qs<HTMLButtonElement>("#imports .page-head .btn.primary")?.addEventListener("click", () => void createJob("import"));
   qsa<HTMLButtonElement>("#reports .page-head .btn").forEach((button) => {
     if (button.textContent?.includes("导出")) button.addEventListener("click", () => void exportReport());
     if (button.textContent?.includes("切换月份")) button.addEventListener("click", () => toast("已切换到 2026 年 6 月经营汇报"));
-    if (button.textContent?.includes("汇报备注")) button.addEventListener("click", () => openModal("汇报备注", `<div class="form-field full"><label>备注</label><input value="本周重点抢救欧洲报价逾期客户"></div>`, `<button class="btn primary" data-modal-close>保存备注</button>`));
+    if (button.textContent?.includes("汇报备注")) button.addEventListener("click", openReportNoteModal);
   });
   qsa<HTMLButtonElement>("#knowledge .page-head .btn, #knowledge .section-head .btn").forEach((button) => {
     if (button.textContent?.includes("上传资料")) button.addEventListener("click", openKnowledgeModal);
@@ -910,6 +1767,7 @@ function installEvents() {
     if (button.textContent?.includes("题库维护")) button.addEventListener("click", () => toast("题库已新增 1 道产品知识题"));
     if (button.textContent?.includes("分类目考试维护")) button.addEventListener("click", () => toast("分类目考试规则已保存"));
   });
+  qs<HTMLButtonElement>("#wecom .page-head .btn.primary")?.addEventListener("click", () => void syncWecomMessages());
   qsa<HTMLButtonElement>(".top-actions .btn.ghost").forEach((button) => {
     if (button.textContent?.includes("导入")) button.addEventListener("click", () => activateNavView("imports", () => void createJob("import")));
     if (button.textContent?.includes("导出")) button.addEventListener("click", () => activateNavView("imports", () => void createJob("export")));
@@ -922,8 +1780,40 @@ function installEvents() {
   qsa<HTMLButtonElement>("#tools .btn.primary").forEach((button) => {
     if (button.textContent?.includes("同步")) button.addEventListener("click", () => void syncOcrLead(button));
   });
+  qsa<HTMLButtonElement>("#competitors .page-head .btn").forEach((button) => {
+    if (button.textContent?.includes("新增竞争公司")) button.addEventListener("click", openCompetitorModal);
+    if (button.textContent?.includes("导出情报")) button.addEventListener("click", () => toast("竞争情报已加入导出任务"));
+  });
+  qs<HTMLButtonElement>("#competitorThreatButton")?.addEventListener("click", () => void toggleCompetitorThreat());
+  qsa<HTMLButtonElement>("#cases .page-head .btn").forEach((button) => {
+    if (button.textContent?.includes("新增成功案例")) button.addEventListener("click", openCaseModal);
+    if (button.textContent?.includes("导出案例集")) button.addEventListener("click", () => toast("成功案例集已加入导出任务"));
+  });
+  qs<HTMLButtonElement>("#casePublishButton")?.addEventListener("click", () => void publishSelectedCase());
+  qsa<HTMLButtonElement>("#problems .page-head .btn").forEach((button) => {
+    if (button.textContent?.includes("新增问题")) button.addEventListener("click", openProblemModal);
+    if (button.textContent?.includes("导出复盘")) button.addEventListener("click", () => toast("问题复盘已生成导出任务"));
+  });
+  qs<HTMLButtonElement>("#problemStatusButton")?.addEventListener("click", () => void advanceProblemStatus());
+  qsa<HTMLButtonElement>("#memos .page-head .btn").forEach((button) => {
+    if (button.textContent?.includes("新增备忘")) button.addEventListener("click", openMemoModal);
+    if (button.textContent?.includes("只看置顶")) button.addEventListener("click", () => {
+      const pinned = state.memos.filter((memo) => memo.pinned && !memo.archived);
+      renderMemos(pinned.length ? pinned : state.memos);
+      toast(pinned.length ? `已筛出 ${pinned.length} 条置顶备忘` : "暂无置顶备忘");
+    });
+  });
+  qs<HTMLButtonElement>("#memoPinButton")?.addEventListener("click", () => {
+    const memo = state.memos.find((item) => item.id === state.selectedMemoId);
+    if (memo) void patchSelectedMemo({ pinned: !memo.pinned });
+  });
+  qs<HTMLButtonElement>("#memoArchiveButton")?.addEventListener("click", () => {
+    const memo = state.memos.find((item) => item.id === state.selectedMemoId);
+    if (memo) void patchSelectedMemo({ archived: !memo.archived });
+  });
+  qs<HTMLButtonElement>("#memoDeleteButton")?.addEventListener("click", () => void deleteSelectedMemo());
   qsa<HTMLButtonElement>("#settings .page-head .btn").forEach((button) => {
-    if (button.textContent?.includes("新增账号")) button.addEventListener("click", () => openModal("新增账号", `<div class="form-grid"><div class="form-field"><label>姓名</label><input value="New Sales"></div><div class="form-field"><label>角色</label><select><option>业务员</option><option>主管</option></select></div><div class="form-field full"><label>邮箱</label><input value="new.sales@goodjob.com"></div></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" data-modal-close>保存账号</button>`));
+    if (button.textContent?.includes("新增账号")) button.addEventListener("click", openAccountModal);
     if (button.textContent?.includes("权限模板")) button.addEventListener("click", () => toast("权限模板已应用"));
     if (button.textContent?.includes("保存设置")) button.addEventListener("click", () => toast("账号与权限设置已保存"));
   });

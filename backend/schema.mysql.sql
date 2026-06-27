@@ -49,7 +49,8 @@ CREATE TABLE todos (
   team_id VARCHAR(64) NOT NULL,
   related VARCHAR(200),
   done BOOLEAN DEFAULT FALSE,
-  impact_amount DECIMAL(14,2)
+  impact_amount DECIMAL(14,2),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE reminders (
@@ -107,7 +108,7 @@ CREATE TABLE import_export_jobs (
   rows_count INT DEFAULT 0,
   status VARCHAR(40),
   operator_id VARCHAR(64),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at VARCHAR(100)
 );
 
 CREATE TABLE wecom_messages (
@@ -118,4 +119,73 @@ CREATE TABLE wecom_messages (
   team_id VARCHAR(64),
   status VARCHAR(40),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE problems (
+  id VARCHAR(64) PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  category VARCHAR(80),
+  severity VARCHAR(20),
+  status VARCHAR(30),
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  related_customer VARCHAR(200),
+  root_cause TEXT,
+  solution TEXT,
+  next_action VARCHAR(255),
+  due_at VARCHAR(100),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_problems_owner(owner_id),
+  INDEX idx_problems_team(team_id)
+);
+
+CREATE TABLE memos (
+  id VARCHAR(64) PRIMARY KEY,
+  title VARCHAR(200) NOT NULL,
+  content TEXT,
+  category VARCHAR(80),
+  tags VARCHAR(255),
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  pinned BOOLEAN DEFAULT FALSE,
+  archived BOOLEAN DEFAULT FALSE,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_memos_owner(owner_id),
+  INDEX idx_memos_team(team_id)
+);
+
+CREATE TABLE competitors (
+  id VARCHAR(64) PRIMARY KEY,
+  company VARCHAR(200) NOT NULL,
+  country VARCHAR(80),
+  segment VARCHAR(100),
+  threat_level VARCHAR(20),
+  website VARCHAR(255),
+  strengths TEXT,
+  weaknesses TEXT,
+  competing_products TEXT,
+  our_strategy TEXT,
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_competitors_owner(owner_id),
+  INDEX idx_competitors_team(team_id)
+);
+
+CREATE TABLE case_studies (
+  id VARCHAR(64) PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  customer VARCHAR(200),
+  country VARCHAR(80),
+  product VARCHAR(160),
+  industry VARCHAR(120),
+  result_text VARCHAR(255),
+  story TEXT,
+  reusable_points TEXT,
+  status VARCHAR(30),
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_case_studies_owner(owner_id),
+  INDEX idx_case_studies_team(team_id)
 );

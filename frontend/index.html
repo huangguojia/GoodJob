@@ -755,6 +755,14 @@
       border-radius: var(--radius);
       border: 1px solid var(--line-soft);
       background: #fbfcff;
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease;
+    }
+
+    .task:hover {
+      transform: translateY(-2px);
+      border-color: rgba(49,87,213,.24);
+      background: #fff;
+      box-shadow: 0 12px 26px rgba(27,39,68,.09);
     }
 
     .task-line {
@@ -764,11 +772,319 @@
       background: var(--accent, var(--brand));
     }
 
-    .task h3 {
-      margin: 0 0 5px;
+	    .task h3 {
+	      margin: 0 0 5px;
+	      color: var(--ink);
+	      font-size: 14px;
+	      line-height: 1.3;
+	    }
+
+    .problem-grid,
+    .intel-grid,
+    .case-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(360px, .9fr);
+      gap: 10px;
+      align-items: start;
+    }
+
+    .problem-list,
+    .memo-list,
+    .intel-list,
+    .case-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .problem-card,
+    .memo-card,
+    .intel-card,
+    .case-card {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: #fff;
+      box-shadow: 0 4px 14px rgba(27,39,68,.045);
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+
+    .problem-card:hover,
+    .memo-card:hover,
+    .intel-card:hover,
+    .case-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(49,87,213,.22);
+      box-shadow: 0 14px 28px rgba(27,39,68,.09);
+    }
+
+    .problem-card.selected,
+    .memo-card.selected,
+    .intel-card.selected,
+    .case-card.selected {
+      border-color: rgba(49,87,213,.38);
+      box-shadow: 0 0 0 3px rgba(49,87,213,.08), 0 12px 24px rgba(27,39,68,.08);
+    }
+
+    .problem-top,
+    .memo-top,
+    .intel-top,
+    .case-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .problem-top h3,
+    .memo-top h3,
+    .intel-top h3,
+    .case-top h3 {
+      margin: 0;
       color: var(--ink);
       font-size: 14px;
-      line-height: 1.3;
+      line-height: 1.35;
+    }
+
+    .problem-meta,
+    .memo-meta,
+    .intel-meta,
+    .case-meta {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .problem-card p,
+    .memo-card p,
+    .intel-card p,
+    .case-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .problem-detail,
+    .memo-detail,
+    .intel-detail,
+    .case-detail {
+      display: grid;
+      gap: 10px;
+    }
+
+    .detail-block {
+      padding: 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #fbfcff;
+    }
+
+    .detail-block span {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .detail-block p {
+      margin: 0;
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .problem-flow {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .flow-step {
+      min-height: 74px;
+      padding: 9px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line-soft);
+      background: #fff;
+    }
+
+    .flow-step b {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--ink);
+      font-size: 12px;
+    }
+
+    .flow-step span {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .memo-grid {
+      display: grid;
+      grid-template-columns: minmax(276px, .6fr) minmax(0, 1.1fr);
+      gap: 12px;
+      align-items: stretch;
+      max-width: 1120px;
+    }
+
+    .memo-sidebar {
+      padding: 12px;
+    }
+
+    .memo-sidebar .section-head {
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .memo-sidebar .section-title h2 {
+      font-size: 14px;
+    }
+
+    .memo-sidebar .section-title span:last-child {
+      font-size: 11px;
+    }
+
+    .memo-sidebar .btn {
+      height: 28px;
+      padding: 0 8px;
+      font-size: 11px;
+    }
+
+    .memo-card.archived {
+      opacity: .62;
+    }
+
+    .memo-detail {
+      min-height: calc(100vh - 214px);
+    }
+
+    .memo-detail .section-head {
+      align-items: center;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .memo-detail .head-actions {
+      gap: 6px;
+    }
+
+    .memo-detail .btn {
+      min-height: 28px;
+      padding: 0 9px;
+      font-size: 11px;
+    }
+
+    .memo-content-box {
+      position: relative;
+      min-height: clamp(560px, calc(100vh - 250px), 760px);
+      display: grid;
+      grid-template-rows: auto auto minmax(460px, 1fr);
+      gap: 10px;
+      padding: 18px 22px 20px;
+      border: 1px solid rgba(27,39,68,.09);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(90deg, rgba(49,87,213,.08) 0, rgba(49,87,213,.08) 1px, transparent 1px, transparent 100%),
+        linear-gradient(180deg, rgba(255,255,255,.99), rgba(249,251,255,.96)),
+        repeating-linear-gradient(180deg, transparent 0, transparent 37px, rgba(27,39,68,.04) 38px);
+      background-size: 100% 100%, 100% 100%, 100% 38px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 18px 36px rgba(27,39,68,.075);
+    }
+
+    .memo-content-box::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 18px;
+      bottom: 18px;
+      width: 3px;
+      border-radius: 0 999px 999px 0;
+      background: linear-gradient(180deg, var(--brand), var(--green));
+    }
+
+    .memo-title-input,
+    .memo-meta-input,
+    .memo-editor {
+      width: 100%;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      outline: 0;
+      color: var(--ink);
+      background: transparent;
+      transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
+    }
+
+    .memo-title-input {
+      min-height: 40px;
+      padding: 2px 4px 7px;
+      border-bottom-color: rgba(27,39,68,.1);
+      border-radius: 0;
+      color: var(--ink);
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1.28;
+    }
+
+    .memo-meta-input {
+      height: 30px;
+      padding: 0 9px;
+      border-color: rgba(27,39,68,.08);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 11px;
+      background: rgba(244,247,252,.78);
+    }
+
+    .memo-editor {
+      min-height: 460px;
+      padding: 12px 4px 18px;
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.82;
+      resize: vertical;
+    }
+
+    .memo-title-input:focus,
+    .memo-meta-input:focus,
+    .memo-editor:focus {
+      border-color: rgba(49,87,213,.28);
+      background: rgba(255,255,255,.92);
+      box-shadow: 0 0 0 3px rgba(49,87,213,.08);
+    }
+
+    .memo-title-input:focus {
+      border-bottom-color: rgba(49,87,213,.34);
+      border-radius: var(--radius-sm);
+      padding-left: 8px;
+      padding-right: 8px;
+    }
+
+    .memo-editor:focus {
+      padding-left: 12px;
+      padding-right: 12px;
+    }
+
+    .memo-save-state {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .memo-delete {
+      color: #a33737;
+      border-color: #f1caca;
+      background: #fff7f7;
+    }
+
+    .memo-delete:hover {
+      border-color: #e7a9a9;
+      background: #fff1f1;
     }
 
     .task p {
@@ -809,6 +1125,13 @@
       background: #fff;
       border: 1px solid var(--line);
       box-shadow: 0 3px 10px rgba(27, 39, 68, .05);
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+
+    .deal:hover {
+      transform: translateY(-3px);
+      border-color: rgba(49,87,213,.28);
+      box-shadow: 0 14px 28px rgba(27,39,68,.12);
     }
 
     .deal b {
@@ -1711,6 +2034,14 @@
       border: 1px solid var(--line-soft);
       border-radius: var(--radius-sm);
       background: #fbfcff;
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease;
+    }
+
+    .category-item:hover {
+      transform: translateY(-2px);
+      border-color: rgba(49,87,213,.24);
+      background: #fff;
+      box-shadow: 0 10px 22px rgba(27,39,68,.08);
     }
 
     .category-item b {
@@ -1737,6 +2068,13 @@
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: linear-gradient(180deg, #fff, #f9fbff);
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+
+    .file-card:hover {
+      transform: translateY(-3px);
+      border-color: rgba(49,87,213,.24);
+      box-shadow: 0 14px 28px rgba(27,39,68,.1);
     }
 
     .file-icon {
@@ -2105,6 +2443,36 @@
       border-radius: var(--radius);
       background: #fff;
       box-shadow: 0 3px 12px rgba(27,39,68,.04);
+      position: relative;
+      overflow: hidden;
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease, opacity .18s ease;
+    }
+
+    .todo-row::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 3px;
+      background: var(--brand);
+      opacity: 0;
+      transition: opacity .18s ease;
+    }
+
+    .todo-row:hover {
+      transform: translateY(-2px);
+      border-color: rgba(49,87,213,.26);
+      background: #fcfdff;
+      box-shadow: 0 14px 30px rgba(27,39,68,.1);
+    }
+
+    .todo-row:hover::before {
+      opacity: 1;
+    }
+
+    .todo-row:hover .todo-check {
+      transform: scale(1.08);
+      border-color: var(--brand);
+      box-shadow: 0 0 0 4px rgba(49,87,213,.08);
     }
 
     .todo-row.urgent {
@@ -2120,6 +2488,7 @@
       border: 2px solid var(--line);
       background: #fff;
       position: relative;
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease;
     }
 
     .todo-row.done {
@@ -2212,6 +2581,131 @@
       height: 100%;
       border-radius: 999px;
       background: var(--green);
+      transition: width .22s ease;
+    }
+
+    .todo-row:hover .subtask-bar i {
+      filter: saturate(1.15);
+    }
+
+    .todo-history {
+      margin-top: 10px;
+      padding: 10px;
+      border: 1px solid rgba(126,143,171,.16);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, #fbfcff, #f7f9fd);
+    }
+
+    .todo-history-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .todo-history-head h3 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 13px;
+    }
+
+    .todo-history-head span {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .history-stats {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      white-space: nowrap;
+    }
+
+    .history-stats b {
+      min-width: 48px;
+      height: 24px;
+      display: inline-grid;
+      place-items: center;
+      padding: 0 8px;
+      border-radius: 999px;
+      color: var(--brand);
+      background: #edf2ff;
+      font-size: 11px;
+    }
+
+    .todo-history-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    .todo-history-row {
+      display: grid;
+      grid-template-columns: 8px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      min-height: 44px;
+      padding: 7px 8px;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      background: #fff;
+      box-shadow: 0 2px 8px rgba(27,39,68,.035);
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+
+    .todo-history-row:hover {
+      transform: translateY(-1px);
+      border-color: rgba(49,87,213,.2);
+      box-shadow: 0 10px 22px rgba(27,39,68,.08);
+    }
+
+    .todo-history-row.done {
+      opacity: .72;
+    }
+
+    .todo-history-row b {
+      display: block;
+      overflow: hidden;
+      color: var(--ink);
+      font-size: 12px;
+      line-height: 1.25;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .todo-history-row span:not(.badge):not(.history-dot) {
+      display: block;
+      overflow: hidden;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .history-dot {
+      width: 7px;
+      height: 28px;
+      border-radius: 999px;
+      background: var(--brand);
+    }
+
+    .history-dot.red { background: var(--rose); }
+    .history-dot.amber { background: var(--amber); }
+    .history-dot.green { background: var(--green); }
+
+    .todo-history-empty {
+      grid-column: 1 / -1;
+      padding: 12px;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius-sm);
+      color: var(--muted);
+      background: #fff;
+      text-align: center;
+      font-size: 12px;
     }
 
     .todo-insights {
@@ -2578,23 +3072,36 @@
       font-weight: 700;
     }
 
+	    .form-field input,
+	    .form-field select,
+    .form-field textarea {
+	      width: 100%;
+	      border: 1px solid var(--line);
+	      border-radius: var(--radius-sm);
+	      color: var(--ink);
+	      background: #fff;
+	      outline: 0;
+	    }
+
     .form-field input,
     .form-field select {
-      width: 100%;
       height: 32px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius-sm);
       padding: 0 9px;
-      color: var(--ink);
-      background: #fff;
-      outline: 0;
     }
 
-    .form-field input:focus,
-    .form-field select:focus {
-      border-color: rgba(49,87,213,.48);
-      box-shadow: 0 0 0 3px rgba(49,87,213,.1);
+    .form-field textarea {
+      min-height: 82px;
+      padding: 8px 9px;
+      resize: vertical;
+      line-height: 1.5;
     }
+
+	    .form-field input:focus,
+	    .form-field select:focus,
+    .form-field textarea:focus {
+	      border-color: rgba(49,87,213,.48);
+	      box-shadow: 0 0 0 3px rgba(49,87,213,.1);
+	    }
 
     .todo-row,
     #customers tbody tr {
@@ -2656,11 +3163,15 @@
       .knowledge-grid,
       .exam-grid,
       .tools-grid,
-      .ocr-workbench,
-      .todo-board,
-      .account-grid,
-      .wecom-card,
-      .settings-grid { grid-template-columns: 1fr; }
+	      .ocr-workbench,
+	      .todo-board,
+	      .account-grid,
+      .problem-grid,
+      .intel-grid,
+      .case-grid,
+      .memo-grid,
+	      .wecom-card,
+	      .settings-grid { grid-template-columns: 1fr; }
       .dense-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .file-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .focus-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -2707,8 +3218,9 @@
       .analytics-strip,
       .report-summary,
       .report-hero-metrics,
-      .ppt-grid,
-      .steps { grid-template-columns: 1fr; }
+	      .ppt-grid,
+	      .steps,
+      .problem-flow { grid-template-columns: 1fr; }
       .pipeline-strip { grid-template-columns: 1fr; }
       .donut-wrap { grid-template-columns: 1fr; justify-items: center; }
       .report-hero { padding: 16px; }
@@ -2718,9 +3230,13 @@
       .executive-table { min-width: 620px; }
       .ppt-panel { overflow-x: auto; }
       .waterfall { min-width: 360px; }
-      .tools-grid,
-      .ocr-workbench,
-      #tools .matrix-grid,
+	      .tools-grid,
+	      .ocr-workbench,
+      .problem-grid,
+      .intel-grid,
+      .case-grid,
+      .memo-grid,
+	      #tools .matrix-grid,
       .sync-row { grid-template-columns: 1fr !important; }
       .login-screen { grid-template-columns: 1fr; overflow: auto; }
       .login-visual { padding: 28px 18px; }
@@ -2806,10 +3322,22 @@
         <button data-view="exam" title="在线考试">
           <svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4"/><path d="M7 3h10l2 4v14H5V7z"/><path d="M7 3v4h12"/></svg><span>在线考试</span><em>新</em>
         </button>
-        <button data-view="tools" title="小工具">
-          <svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.1-3.1a5 5 0 0 1-6.6 6.6L7.1 20a2 2 0 0 1-2.8-2.8l7.1-7.1a5 5 0 0 1 6.6-6.6z"/></svg><span>小工具</span><em>OCR</em>
+	        <button data-view="tools" title="小工具">
+	          <svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.1-3.1a5 5 0 0 1-6.6 6.6L7.1 20a2 2 0 0 1-2.8-2.8l7.1-7.1a5 5 0 0 1 6.6-6.6z"/></svg><span>小工具</span><em>OCR</em>
+	        </button>
+        <button data-view="competitors" title="竞争公司">
+          <svg viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-3"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M16 15h1"/></svg><span>竞争公司</span>
         </button>
-        <button data-view="settings" title="系统设置">
+        <button data-view="cases" title="成功案例">
+          <svg viewBox="0 0 24 24"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v6a5 5 0 0 1-10 0z"/><path d="M5 7H3a3 3 0 0 0 3 3h1"/><path d="M19 7h2a3 3 0 0 1-3 3h-1"/></svg><span>成功案例</span><em>素材</em>
+        </button>
+        <button data-view="problems" title="问题清单">
+          <svg viewBox="0 0 24 24"><path d="M10.3 3.3 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.3a2 2 0 0 0-3.4 0z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span>问题清单</span><em>3</em>
+        </button>
+        <button data-view="memos" title="备忘录">
+          <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg><span>备忘录</span>
+        </button>
+	        <button data-view="settings" title="系统设置">
           <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-.4-1 1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1-.4H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1-.4 1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06A2 2 0 1 1 7.13 3.4l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 .4 1 1.7 1.7 0 0 0 1 .6 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.17.37.38.7.6 1 .27.26.62.4 1 .4h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1 .4 1.7 1.7 0 0 0-.6 1z"/></svg><span>系统设置</span>
         </button>
       </nav>
@@ -2924,7 +3452,7 @@
                   <input placeholder="快速新增：例如 明天 10 点跟进 Nordic Tools 报价" />
                 </label>
                 <div class="todo-filters">
-                  <span class="todo-chip active" data-sales-text="今天 5" data-manager-text="今天 12">今天 5</span><span class="todo-chip" data-sales-text="逾期 2" data-manager-text="逾期 5">逾期 2</span><span class="todo-chip">我负责 18</span><span class="todo-chip">客户跟进</span><span class="todo-chip">资料/考试</span>
+	                  <span class="todo-chip active" data-sales-text="今天 5" data-manager-text="今天 12">今天 5</span><span class="todo-chip" data-sales-text="逾期 2" data-manager-text="逾期 5">逾期 2</span><span class="todo-chip">我负责 18</span><span class="todo-chip">客户跟进</span><span class="todo-chip">历史清单 0</span>
                 </div>
               </div>
               <div class="todo-list">
@@ -2953,13 +3481,22 @@
                   <div class="todo-main"><h3>复核 OCR 名片识别结果并同步 8 条展会线索</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--aqua)"></i><span>普通</span><span>今天 16:20</span><span>小工具 / OCR</span><span class="badge green">可同步</span></div></div>
                   <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">LU</span></div><div class="subtask-bar"><i style="--p:80%"></i></div></div>
                 </article>
-                <article class="todo-row done">
-                  <i class="todo-check"></i>
-                  <div class="todo-main"><h3>确认 Atlas Home Inc 样品签收状态</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--green)"></i><span>已完成</span><span>09:12</span><span>关联商机：样品阶段</span></div></div>
-                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">AL</span></div><div class="subtask-bar"><i style="--p:100%"></i></div></div>
-                </article>
-              </div>
-            </section>
+	                <article class="todo-row done">
+	                  <i class="todo-check"></i>
+	                  <div class="todo-main"><h3>确认 Atlas Home Inc 样品签收状态</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--green)"></i><span>已完成</span><span>09:12</span><span>关联商机：样品阶段</span></div></div>
+	                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">AL</span></div><div class="subtask-bar"><i style="--p:100%"></i></div></div>
+	                </article>
+	              </div>
+	              <div class="todo-history">
+	                <div class="todo-history-head">
+	                  <div><h3>历史清单</h3><span>隔天自动归档，当前清单只保留今天及未来待办</span></div>
+	                  <div class="history-stats"><b id="todo-history-count">0 条</b><b id="todo-history-amount">$0k</b></div>
+	                </div>
+	                <div class="todo-history-list">
+	                  <div class="todo-history-empty">暂无隔天历史待办</div>
+	                </div>
+	              </div>
+	            </section>
 
             <aside class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M8 17V9"/><path d="M13 17V5"/><path d="M18 17v-6"/></svg></span><div><h2>待办洞察</h2><span>按优先级和业务影响汇总</span></div></div></div>
@@ -3016,7 +3553,7 @@
           </div>
 
           <div class="matrix-grid">
-            <section class="panel section">
+            <section class="panel section memo-sidebar">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg></span><div><h2>资料维护动态</h2><span>产品知识与销售资料</span></div></div></div>
               <table class="mini-table">
                 <thead><tr><th>资料</th><th>类目</th><th>状态</th><th>负责人</th></tr></thead>
@@ -3399,7 +3936,7 @@
           </div>
         </div>
 
-        <div class="view" id="tools">
+	        <div class="view" id="tools">
           <div class="page-head">
             <div><p class="eyebrow">Smart Utilities</p><h1>小工具</h1><p class="sub">把碎片化销售动作做成轻工具：OCR 名片识别、资料速查、汇率换算、客户去重等。</p></div>
             <div class="head-actions"><button class="btn">工具配置</button><button class="btn primary">同步到线索</button></div>
@@ -3474,10 +4011,149 @@
                 </div>
               </div>
             </section>
+	          </div>
+	        </div>
+
+        <div class="view" id="competitors">
+          <div class="page-head">
+            <div><p class="eyebrow">Competitive Intelligence</p><h1>竞争公司清单</h1><p class="sub">沉淀竞争对手、竞争产品、优劣势和应对策略，帮助销售在报价和谈判中快速调用打法。</p></div>
+            <div class="head-actions"><button class="btn">导出情报</button><button class="btn primary">新增竞争公司</button></div>
+          </div>
+
+          <div class="dense-grid">
+            <div class="dense-card"><span>竞争公司</span><b id="competitor-total-count">0</b><small>情报库</small></div>
+            <div class="dense-card"><span>高威胁</span><b id="competitor-high-count">0</b><small style="color:var(--rose)">重点盯防</small></div>
+            <div class="dense-card"><span>覆盖品类</span><b id="competitor-segment-count">0</b><small>产品线</small></div>
+            <div class="dense-card"><span>策略已维护</span><b id="competitor-strategy-count">0</b><small style="color:var(--green)">可复用</small></div>
+          </div>
+
+          <div class="intel-grid">
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-3"/></svg></span><div><h2>竞争公司</h2><span>按威胁等级和更新时间排序</span></div></div><button class="btn">只看高威胁</button></div>
+              <div class="intel-list">
+                <article class="intel-card selected"><div class="intel-top"><h3>EuroLift Tools GmbH</h3><span class="badge red">高威胁</span></div><div class="intel-meta"><span>德国</span><span>电动工具</span><span>18V 无刷电钻</span></div><p>欧洲本地仓、交期短、CE 资料齐全。</p></article>
+              </div>
+            </section>
+
+            <aside class="intel-detail">
+              <section class="panel section">
+                <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2 id="competitor-detail-title">竞争详情</h2><span id="competitor-detail-meta">选择左侧竞争公司查看策略</span></div></div><button class="btn primary" id="competitorThreatButton">调整威胁</button></div>
+                <div class="problem-flow">
+                  <div class="flow-step"><b>竞争产品</b><span id="competitor-products">等待选择</span></div>
+                  <div class="flow-step"><b>优势</b><span id="competitor-strengths">等待选择</span></div>
+                  <div class="flow-step"><b>弱点</b><span id="competitor-weaknesses">等待选择</span></div>
+                </div>
+              </section>
+              <section class="panel section">
+                <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4"/><path d="M21 12a9 9 0 1 1-9-9"/></svg></span><div><h2>应对策略</h2><span>报价和谈判时直接参考</span></div></div></div>
+                <div class="detail-block"><span>我们的打法</span><p id="competitor-strategy">等待选择竞争公司</p></div>
+              </section>
+            </aside>
           </div>
         </div>
 
-        <div class="view" id="settings">
+        <div class="view" id="cases">
+          <div class="page-head">
+            <div><p class="eyebrow">Winning Case Library</p><h1>成功案例清单</h1><p class="sub">把成交故事、产品组合、客户行业、结果和可复用打法沉淀为销售素材，支持新人学习和客户背书。</p></div>
+            <div class="head-actions"><button class="btn">导出案例集</button><button class="btn primary">新增成功案例</button></div>
+          </div>
+
+          <div class="dense-grid">
+            <div class="dense-card"><span>案例总数</span><b id="case-total-count">0</b><small>素材库</small></div>
+            <div class="dense-card"><span>已发布</span><b id="case-published-count">0</b><small style="color:var(--green)">可引用</small></div>
+            <div class="dense-card"><span>产品覆盖</span><b id="case-product-count">0</b><small>SKU/方案</small></div>
+            <div class="dense-card"><span>草稿</span><b id="case-draft-count">0</b><small style="color:var(--amber)">待完善</small></div>
+          </div>
+
+          <div class="case-grid">
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v6a5 5 0 0 1-10 0z"/></svg></span><div><h2>案例列表</h2><span>按发布状态和更新时间排序</span></div></div><button class="btn">只看已发布</button></div>
+              <div class="case-list">
+                <article class="case-card selected"><div class="case-top"><h3>Nordic Tools 年度工具套装复购</h3><span class="badge green">已发布</span></div><div class="case-meta"><span>Nordic Tools AB</span><span>18V 无刷电钻套装</span></div><p>$36,000 首单，预计 Q3 复购 2 个柜。</p></article>
+              </div>
+            </section>
+
+            <aside class="case-detail">
+              <section class="panel section">
+                <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg></span><div><h2 id="case-detail-title">案例详情</h2><span id="case-detail-meta">选择左侧案例查看产品和打法</span></div></div><button class="btn primary" id="casePublishButton">发布案例</button></div>
+                <div class="problem-flow">
+                  <div class="flow-step"><b>产品</b><span id="case-product">等待选择</span></div>
+                  <div class="flow-step"><b>结果</b><span id="case-result">等待选择</span></div>
+                  <div class="flow-step"><b>行业</b><span id="case-industry">等待选择</span></div>
+                </div>
+              </section>
+              <section class="panel section">
+                <div class="detail-block"><span>成交故事</span><p id="case-story">等待选择成功案例</p></div>
+                <div class="detail-block" style="margin-top:8px"><span>可复用打法</span><p id="case-reusable">等待选择成功案例</p></div>
+              </section>
+            </aside>
+          </div>
+        </div>
+
+	        <div class="view" id="problems">
+          <div class="page-head">
+            <div><p class="eyebrow">Issue & Solution Board</p><h1>问题清单</h1><p class="sub">把客户阻塞、资料缺口、工具异常和团队执行问题统一沉淀为“原因、方案、动作、复盘”的闭环。</p></div>
+            <div class="head-actions"><button class="btn">导出复盘</button><button class="btn primary">新增问题</button></div>
+          </div>
+
+          <div class="dense-grid">
+            <div class="dense-card"><span>未解决问题</span><b id="problem-open-count">0</b><small style="color:var(--rose)">待推进</small></div>
+            <div class="dense-card"><span>解决中</span><b id="problem-solving-count">0</b><small>有动作</small></div>
+            <div class="dense-card"><span>已解决</span><b id="problem-resolved-count">0</b><small>可复盘</small></div>
+            <div class="dense-card"><span>高优先级</span><b id="problem-high-count">0</b><small style="color:var(--amber)">需盯办</small></div>
+          </div>
+
+          <div class="problem-grid">
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M10.3 3.3 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.3a2 2 0 0 0-3.4 0z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg></span><div><h2>问题队列</h2><span>按状态、严重程度和创建时间排序</span></div></div><button class="btn">只看未解决</button></div>
+              <div class="problem-list">
+                <article class="problem-card selected"><div class="problem-top"><h3>Nordic Tools 报价后 5 天未回复</h3><span class="badge red">高</span></div><div class="problem-meta"><span>报价跟进</span><span>解决中</span><span>今天 16:00</span></div><p>CE 证书和交期说明不完整，客户采购内部审批被卡住。</p></article>
+              </div>
+            </section>
+
+            <aside class="problem-detail">
+              <section class="panel section">
+                <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2 id="problem-detail-title">问题解决方案</h2><span id="problem-detail-meta">选择左侧问题查看闭环</span></div></div><button class="btn primary" id="problemStatusButton">标记解决</button></div>
+                <div class="problem-flow">
+                  <div class="flow-step"><b>问题原因</b><span id="problem-root-cause">等待选择问题</span></div>
+                  <div class="flow-step"><b>解决方案</b><span id="problem-solution">等待选择问题</span></div>
+                  <div class="flow-step"><b>下一动作</b><span id="problem-next-action">等待选择问题</span></div>
+                </div>
+              </section>
+              <section class="panel section">
+                <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M8 17V9"/><path d="M13 17V5"/><path d="M18 17v-6"/></svg></span><div><h2>问题分布</h2><span>用于晨会复盘和周会汇报</span></div></div></div>
+                <table class="mini-table"><thead><tr><th>类别</th><th>数量</th><th>风险</th></tr></thead><tbody id="problem-category-table"><tr><td>报价跟进</td><td>1</td><td><span class="badge red">高</span></td></tr></tbody></table>
+              </section>
+            </aside>
+          </div>
+        </div>
+
+        <div class="view" id="memos">
+          <div class="page-head">
+            <div><p class="eyebrow">Sales Memo Notebook</p><h1>备忘录</h1><p class="sub">记录客户偏好、产品话术、报价复盘和临时事项，支持置顶、归档和按标签快速扫描。</p></div>
+            <div class="head-actions"><button class="btn">只看置顶</button><button class="btn primary">新增备忘</button></div>
+          </div>
+
+          <div class="memo-grid">
+            <section class="panel section memo-sidebar">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg></span><div><h2>备忘列表</h2><span>置顶优先，按更新时间倒序</span></div></div><button class="btn">归档所选</button></div>
+              <div class="memo-list">
+                <article class="memo-card selected"><div class="memo-top"><h3>欧洲客户常问认证资料</h3><span class="badge green">置顶</span></div><div class="memo-meta"><span>销售话术</span><span>CE,认证,欧洲</span></div><p>客户问 CE/ROHS 时，优先发对应型号证书、测试报告摘要、产品参数页。</p></article>
+              </div>
+            </section>
+
+            <aside class="panel section memo-detail">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2 id="memo-detail-title">备忘编辑</h2><span id="memo-detail-meta">切换左侧备忘时自动保存</span></div></div><div class="head-actions"><span class="memo-save-state" id="memoSaveState">已保存</span><button class="btn" id="memoPinButton">置顶</button><button class="btn" id="memoArchiveButton">归档</button><button class="btn memo-delete" id="memoDeleteButton">删除</button></div></div>
+              <div class="memo-content-box">
+                <input class="memo-title-input" id="memoTitleEditor" value="欧洲客户常问认证资料">
+                <input class="memo-meta-input" id="memoTagsEditor" value="销售话术 · CE,认证,欧洲">
+                <textarea class="memo-editor" id="memoContentEditor">客户问 CE/ROHS 时，优先发对应型号证书、测试报告摘要、产品参数页。不要只发整包资料，容易增加客户筛选成本。</textarea>
+              </div>
+            </aside>
+          </div>
+        </div>
+
+	        <div class="view" id="settings">
           <div class="page-head">
             <div><p class="eyebrow">Account & Access Control</p><h1>账号管理</h1><p class="sub">账号、角色、数据范围、登录状态、MySQL、备份、审计和导出审批统一管理。</p></div>
             <div class="head-actions"><button class="btn">新增账号</button><button class="btn">权限模板</button><button class="btn primary">保存设置</button></div>
