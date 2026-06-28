@@ -39,7 +39,6 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#dashboard .task-list .task").first()).toContainText("金额权重");
     await page.locator("#batchPriorityButton").click();
     await expect(page.locator(".toast").last()).toContainText(/已生成|无需重复生成/);
-    await expect(page.locator("#dashboard .todo-list")).toContainText("跟进优先级");
     const todoKpi = page.locator("#dashboard .kpi").filter({ hasText: "今日待跟进" }).locator("strong");
     const beforeTodoCount = Number(await todoKpi.textContent());
 
@@ -50,7 +49,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#todoDueInput")).toHaveValue("");
     await expect(page.locator("#todoRelatedInput")).toHaveValue("");
     await page.locator("#todoTitleInput").fill(title);
-    await page.locator("#saveTodoButton").click();
+    await page.locator("#todoTitleInput").press("Enter");
 
     await expect(page.locator("#dashboard .todo-list")).toContainText(title);
     await expect(page.locator(".toast").last()).toContainText("待办已新增");
@@ -58,9 +57,24 @@ test.describe("GoodJob CRM prototype pages", () => {
     const cacheSize = await page.evaluate(() => localStorage.getItem("gj_dashboard_cache")?.length || 0);
     expect(cacheSize).toBeGreaterThan(20);
 
-    await page.locator("#dashboard .todo-row", { hasText: title }).first().locator(".todo-check").click();
-    await expect(page.locator("#dashboard .todo-row.done", { hasText: title }).first()).toBeVisible();
-    await page.locator("#dashboard .todo-row", { hasText: title }).first().locator(".todo-check").click();
+    const todoRow = page.locator("#dashboard .todo-row", { hasText: title }).first();
+    await todoRow.locator(".todo-run").click();
+    await expect(page.locator("#dashboard .todo-row.in-progress", { hasText: title }).first()).toBeVisible();
+    await expect(todoRow).toContainText("进行中");
+    await expect(todoRow.locator(".subtask-bar.running")).toBeVisible();
+    await expect(todoRow.locator(".todo-run")).toHaveAttribute("aria-label", "停止执行");
+    await todoRow.locator(".todo-run").click();
+    await expect(page.locator("#dashboard .todo-row.in-progress", { hasText: title })).toHaveCount(0);
+    await expect(page.locator(".toast").last()).toContainText("已停止执行");
+    await todoRow.locator(".todo-run").click();
+    await expect(page.locator("#dashboard .todo-row.in-progress", { hasText: title }).first()).toBeVisible();
+
+    await todoRow.locator(".todo-check").click();
+    const doneRow = page.locator("#dashboard .todo-row.done", { hasText: title }).first();
+    await expect(doneRow).toBeVisible();
+    await expect(doneRow).not.toContainText("进行中");
+    await expect(page.locator("#dashboard .todo-row.in-progress", { hasText: title })).toHaveCount(0);
+    await doneRow.locator(".todo-check").click();
     await expect(page.locator("#dashboard .todo-row.done", { hasText: title })).toHaveCount(0);
     await expect(page.locator(".toast").last()).toContainText("已撤回未完成");
     await page.locator("#dashboard .todo-row", { hasText: title }).first().locator(".todo-delete").click();

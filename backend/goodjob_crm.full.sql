@@ -278,6 +278,7 @@ CREATE TABLE `todos` (
   `team_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
   `related` varchar(200) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `done` tinyint(1) DEFAULT '0',
+  `status` varchar(24) COLLATE utf8mb4_unicode_ci DEFAULT 'pending',
   `impact_amount` decimal(14,2) DEFAULT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

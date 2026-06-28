@@ -155,6 +155,7 @@ app.post("/api/todos", requireAuth, asyncRoute(async (req, res) => {
     ownerId: req.user!.id,
     teamId: req.user!.teamId,
     done: false,
+    status: "pending" as const,
     createdAt: new Date().toISOString(),
     ...body
   };
@@ -221,12 +222,16 @@ app.post("/api/todos/:id/complete", requireAuth, asyncRoute(async (req, res) => 
     return;
   }
   todo.done = true;
+  todo.status = "pending";
   await store.persist();
   res.json({ todo });
 }));
 
 app.patch("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
-  const schema = z.object({ done: z.boolean() });
+  const schema = z.object({
+    done: z.boolean().optional(),
+    status: z.enum(["pending", "in_progress"]).optional()
+  });
   const body = schema.parse(req.body);
   const store = getStore();
   const todo = store.todos.find((item) => item.id === req.params.id);
@@ -234,7 +239,13 @@ app.patch("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
     res.status(404).json({ message: "待办不存在" });
     return;
   }
-  todo.done = body.done;
+  if (typeof body.done === "boolean") {
+    todo.done = body.done;
+    if (body.done) todo.status = "pending";
+  }
+  if (body.status) {
+    todo.status = todo.done ? "pending" : body.status;
+  }
   await store.persist();
   res.json({ todo });
 }));

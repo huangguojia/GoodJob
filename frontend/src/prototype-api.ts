@@ -26,6 +26,7 @@ interface Todo {
   title: string;
   type: string;
   priority: string;
+  status?: string;
   dueAt: string;
   related: string;
   done: boolean;
@@ -692,12 +693,22 @@ function renderTodos(todos: Todo[]) {
   list.innerHTML = visibleTodos.map((todo) => {
     const tone = todo.priority === "high" ? "red" : todo.priority === "medium" ? "amber" : "green";
     const optionalMeta = [todo.dueAt, todo.related].filter(Boolean).map((item) => `<span>${escapeHtml(item)}</span>`).join("");
-    return `<article class="todo-row ${todo.priority === "high" ? "urgent" : ""} ${todo.done ? "done" : ""}" data-todo-id="${escapeHtml(todo.id)}">
+    const isRunning = todo.status === "in_progress" && !todo.done;
+    const statusBadge = todo.done ? badge("已完成", "green") : isRunning ? badge("进行中", "aqua") : badge(isHistoryView ? "历史归档" : todoTypeText(todo.type), tone);
+    const runIcon = isRunning ? `<svg viewBox="0 0 24 24"><path d="M7 7h10v10H7z"/></svg>` : `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
+    return `<article class="todo-row ${todo.priority === "high" ? "urgent" : ""} ${isRunning ? "in-progress" : ""} ${todo.done ? "done" : ""}" data-todo-id="${escapeHtml(todo.id)}">
       <i class="todo-check" title="${todo.done ? "撤回未完成" : "完成待办"}"></i>
-      <div class="todo-main"><h3>${escapeHtml(todo.title)}</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--${tone === "red" ? "rose" : tone})"></i><span>${escapeHtml(priorityText(todo.priority))}</span>${optionalMeta}${badge(todo.done ? "已完成" : isHistoryView ? "历史归档" : todoTypeText(todo.type), todo.done ? "green" : tone)}</div></div>
-      <div class="todo-side"><div class="todo-actions"><div class="assignee-stack"><span class="mini-avatar">我</span></div><button class="todo-delete" title="删除待办" aria-label="删除待办"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg></button></div><div class="subtask-bar"><i style="--p:${todo.done ? "100%" : "55%"}"></i></div></div>
+      <div class="todo-main"><h3>${escapeHtml(todo.title)}</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--${tone === "red" ? "rose" : tone})"></i><span>${escapeHtml(priorityText(todo.priority))}</span>${optionalMeta}${statusBadge}</div></div>
+      <div class="todo-side"><div class="todo-actions"><div class="assignee-stack"><span class="mini-avatar">我</span></div>${todo.done ? "" : `<button class="todo-run ${isRunning ? "active" : ""}" title="${isRunning ? "停止执行" : "开始执行"}" aria-label="${isRunning ? "停止执行" : "开始执行"}">${runIcon}</button>`}<button class="todo-delete" title="删除待办" aria-label="删除待办"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg></button></div><div class="subtask-bar ${isRunning ? "running" : ""}"><i style="--p:${todo.done ? "100%" : isRunning ? "74%" : "55%"}"></i></div></div>
     </article>`;
   }).join("");
+  qsa<HTMLElement>(".todo-row .todo-run", list).forEach((node) => {
+    node.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const row = node.closest<HTMLElement>(".todo-row");
+      if (row?.dataset.todoId) await toggleTodoExecution(row.dataset.todoId);
+    });
+  });
   qsa<HTMLElement>(".todo-row .todo-delete", list).forEach((node) => {
     node.addEventListener("click", async (event) => {
       event.stopPropagation();
@@ -739,6 +750,21 @@ function renderTodos(todos: Todo[]) {
   if (scoreCards[2]) scoreCards[2].textContent = `${Math.round((done / Math.max(total, 1)) * 100)}%`;
   if (scoreCards[3]) scoreCards[3].textContent = money(visibleTodos.reduce((sum, todo) => sum + (todo.impactAmount || 0), 0));
   renderTodoHistory(archivedTodos);
+}
+
+async function toggleTodoExecution(id: string) {
+  const todo = state.todos.find((item) => item.id === id);
+  if (!todo || todo.done) return;
+  const nextStatus = todo.status === "in_progress" ? "pending" : "in_progress";
+  const result = await api<{ todo: Todo }>(`/api/todos/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: nextStatus })
+  });
+  Object.assign(todo, result.todo);
+  renderTodos(state.todos);
+  updateTodoChips(state.todos);
+  void refreshDashboardOnly();
+  toast(nextStatus === "in_progress" ? "已开始执行" : "已停止执行");
 }
 
 function renderTodoHistory(todos: Todo[]) {
@@ -1815,6 +1841,14 @@ function openTodoModal(prefill = "") {
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveTodoButton">保存待办</button>`);
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
   qs("#saveTodoButton")?.addEventListener("click", () => void saveTodo());
+  qsa<HTMLInputElement | HTMLSelectElement>("#todoTitleInput, #todoTypeInput, #todoPriorityInput, #todoDueInput, #todoRelatedInput").forEach((node) => {
+    node.addEventListener("keydown", (event) => {
+      const keyboardEvent = event as KeyboardEvent;
+      if (keyboardEvent.key !== "Enter" || keyboardEvent.isComposing) return;
+      event.preventDefault();
+      void saveTodo();
+    });
+  });
   qs<HTMLInputElement>("#todoTitleInput")?.focus();
 }
 

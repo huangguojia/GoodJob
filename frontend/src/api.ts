@@ -26,6 +26,7 @@ export interface Todo {
   title: string;
   type: string;
   priority: string;
+  status?: string;
   dueAt: string;
   related: string;
   done: boolean;

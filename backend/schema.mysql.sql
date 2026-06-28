@@ -49,6 +49,7 @@ CREATE TABLE todos (
   team_id VARCHAR(64) NOT NULL,
   related VARCHAR(200),
   done BOOLEAN DEFAULT FALSE,
+  status VARCHAR(24) DEFAULT 'pending',
   impact_amount DECIMAL(14,2),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

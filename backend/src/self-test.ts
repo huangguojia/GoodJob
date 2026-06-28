@@ -102,6 +102,13 @@ try {
   });
 	  if (!todoUndone.response.ok || todoUndone.json.todo.done !== false) throw new Error("todo undo failed");
 
+  const todoStarted = await request(`/api/todos/${todo.json.todo.id}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ status: "in_progress" })
+  });
+  if (!todoStarted.response.ok || todoStarted.json.todo.status !== "in_progress") throw new Error("todo in-progress status failed");
+
   const todoDeleted = await request(`/api/todos/${todo.json.todo.id}`, {
     method: "DELETE",
     headers: { authorization: `Bearer ${salesToken}` }

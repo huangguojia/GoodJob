@@ -39,6 +39,7 @@ export interface Todo {
   title: string;
   type: "customer" | "knowledge" | "exam" | "ocr" | "other";
   priority: "high" | "medium" | "normal";
+  status?: "pending" | "in_progress";
   dueAt: string;
   ownerId: string;
   teamId: string;
