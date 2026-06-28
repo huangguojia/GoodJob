@@ -148,6 +148,9 @@ interface DashboardSummary {
   briefing: {
     title: string;
     description: string;
+    basis: string;
+    action: string;
+    impact: string;
     riskAmount: number;
     riskLabel: string;
     closableDeals: number;
@@ -171,6 +174,7 @@ interface DashboardSummary {
     overdueRate: number;
     avgResponseHours: number;
   };
+  pipelineHealth: Array<{ stage: string; count: number; amount: number; riskCount: number; width: number; tone: string }>;
   todoInsights: {
     total: number;
     overdue: number;
@@ -181,7 +185,7 @@ interface DashboardSummary {
     historyCount: number;
     historyAmount: number;
   };
-  priorityTasks: Array<{ title: string; subtitle: string; tone: string; badge: string }>;
+  priorityTasks: Array<{ id: string; customerId: string; title: string; subtitle: string; score: number; reason: string; action: string; tone: string; badge: string }>;
 }
 
 interface AppState {
@@ -557,6 +561,12 @@ function renderDashboard(summary: DashboardSummary, todos: Todo[], customers: Cu
   qs<HTMLElement>(".focus-top span:last-child")!.textContent = fromCache ? "缓存数据 · 后台刷新中" : `${formatTime(summary.updatedAt)} 已更新`;
   qs<HTMLElement>(".focus-title h2")!.textContent = summary.briefing.title;
   qs<HTMLElement>(".focus-title p")!.textContent = summary.briefing.description;
+  const basis = qs<HTMLElement>("#briefingBasis");
+  const action = qs<HTMLElement>("#briefingAction");
+  const impact = qs<HTMLElement>("#briefingImpact");
+  if (basis) basis.textContent = summary.briefing.basis;
+  if (action) action.textContent = summary.briefing.action;
+  if (impact) impact.textContent = summary.briefing.impact;
   const focusMetrics = qsa<HTMLElement>(".focus-metric");
   if (focusMetrics[0]) focusMetrics[0].innerHTML = `<span>高风险金额</span><b>${money(summary.briefing.riskAmount)}</b><small>${escapeHtml(summary.briefing.riskLabel)}</small>`;
   if (focusMetrics[1]) focusMetrics[1].innerHTML = `<span>待主管协同</span><b>${summary.metrics.overdueTodos} 项</b><small>高优先级待办</small>`;
@@ -573,6 +583,7 @@ function renderDashboard(summary: DashboardSummary, todos: Todo[], customers: Cu
   if (kpiNotes[2]) kpiNotes[2].textContent = `按可见商机金额汇总`;
   if (kpiNotes[3]) kpiNotes[3].textContent = `${customers.filter((customer) => !customer.wecomBound).length} 个客户待绑定`;
   renderSchedule(summary);
+  renderPipelineHealth(summary);
   renderDashboardDense(summary);
   renderTodoInsights(summary);
   renderPriorityTasks(summary);
@@ -595,6 +606,16 @@ function renderSchedule(summary: DashboardSummary) {
   if (quality[0]) quality[0].textContent = `${summary.quality.followHealth}%`;
   if (quality[1]) quality[1].textContent = `${summary.quality.overdueRate}%`;
   if (quality[2]) quality[2].textContent = `${summary.quality.avgResponseHours}h`;
+}
+
+function renderPipelineHealth(summary: DashboardSummary) {
+  const box = qs<HTMLElement>("#dashboard .bars");
+  if (!box) return;
+  box.innerHTML = summary.pipelineHealth.length ? summary.pipelineHealth.map((item) => {
+    const toneClass = item.tone === "green" ? "green" : item.tone === "amber" ? "amber" : item.tone === "red" ? "red" : "aqua";
+    const risk = item.riskCount ? ` · ${item.riskCount} 风险` : "";
+    return `<div class="bar-row"><span>${escapeHtml(item.stage)}</span><div class="track"><div class="fill ${toneClass}" style="width:${item.width}%"></div></div><b>${item.count} 单 · ${money(item.amount)}${risk}</b></div>`;
+  }).join("") : `<div class="todo-history-empty">暂无商机管道数据</div>`;
 }
 
 function renderDashboardDense(summary: DashboardSummary) {
@@ -631,7 +652,34 @@ function renderTodoInsights(summary: DashboardSummary) {
 function renderPriorityTasks(summary: DashboardSummary) {
   const list = qs<HTMLElement>("#dashboard .task-list");
   if (!list) return;
-  list.innerHTML = summary.priorityTasks.length ? summary.priorityTasks.map((task) => `<article class="task" style="--accent: var(--${task.tone === "red" ? "rose" : task.tone})"><i class="task-line"></i><div><h3>${escapeHtml(task.title)}</h3><p>${escapeHtml(task.subtitle)}</p></div>${badge(task.badge, task.tone === "red" ? "red" : task.tone === "amber" ? "amber" : "")}</article>`).join("") : `<div class="todo-history-empty">暂无高优先级跟进任务</div>`;
+  list.innerHTML = summary.priorityTasks.length ? summary.priorityTasks.map((task) => `<article class="task" data-priority-task-id="${escapeHtml(task.id)}" style="--accent: var(--${task.tone === "red" ? "rose" : task.tone})">
+    <i class="task-line"></i>
+    <div><h3>${escapeHtml(task.action)}</h3><p>${escapeHtml(task.subtitle)}</p><div class="priority-task-meta"><span>${escapeHtml(task.reason)}</span></div></div>
+    <div class="priority-score">${task.score}<br>分</div>
+    ${badge(task.badge, task.tone === "red" ? "red" : task.tone === "amber" ? "amber" : "")}
+  </article>`).join("") : `<div class="todo-history-empty">暂无高优先级跟进任务</div>`;
+}
+
+async function batchProcessPriorityTasks(button?: HTMLButtonElement) {
+  if (button) {
+    button.disabled = true;
+    button.textContent = "生成中";
+  }
+  try {
+    const result = await api<{ created: Todo[]; processed: number; skipped: number }>("/api/dashboard/priority-tasks/batch-process", { method: "POST" });
+    if (result.created.length) {
+      state.todos.unshift(...result.created);
+      renderTodos(state.todos);
+      updateTodoChips(state.todos);
+    }
+    await refreshDashboardOnly();
+    toast(result.created.length ? `已生成 ${result.created.length} 条跟进待办` : "推荐项已有待办，无需重复生成");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "批量生成跟进待办";
+    }
+  }
 }
 
 function renderTodos(todos: Todo[]) {
@@ -1932,6 +1980,7 @@ function installEvents() {
       toast(`已完成 ${pending.length} 条待办`);
     });
   });
+  qs<HTMLButtonElement>("#batchPriorityButton")?.addEventListener("click", (event) => void batchProcessPriorityTasks(event.currentTarget as HTMLButtonElement));
   qsa<HTMLButtonElement>("#customers .page-head .btn.primary, .top-actions .btn.primary").forEach((button) => {
     if (button.textContent?.includes("新增客户")) button.addEventListener("click", openCustomerModal);
   });

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { canSeeOwner, publicUser, requireAuth, signToken } from "./auth.js";
 import { createMysqlStore } from "./mysql-store.js";
 import { getStore, setStore } from "./store.js";
+import type { Customer, Deal, SessionUser, Todo } from "./types.js";
 
 export const app = express();
 app.use(cors());
@@ -700,7 +701,9 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
   const pendingMessages = scopedMessages.filter((message) => message.status === "pending");
   const readyDeals = scopedDeals.filter((deal) => ["样品", "谈判", "成交"].includes(deal.stage));
   const topTodos = [...pendingTodos].sort((a, b) => (b.impactAmount || 0) - (a.impactAmount || 0) || priorityWeight(b.priority) - priorityWeight(a.priority)).slice(0, 3);
-  const topDeals = [...scopedDeals].sort((a, b) => b.amount - a.amount).slice(0, 3);
+  const priorityTasks = buildPriorityTasks(scopedDeals, scopedCustomers, pendingTodos);
+  const topDeals = priorityTasks.map((task) => task.deal);
+  const pipelineHealth = buildPipelineHealth(scopedDeals, scopedCustomers);
   const typeRows = ["customer", "knowledge", "exam", "ocr", "other"].map((type) => {
     const items = pendingTodos.filter((todo) => todo.type === type);
     return {
@@ -725,6 +728,13 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
       description: riskCustomers.length
         ? `系统根据客户金额、健康度、阶段和提醒状态计算，建议优先处理 ${topRiskNames}。`
         : `当前客户风险较低，建议推进 ${topDeals[0]?.title || "高金额商机"} 并保持企微记录归档。`,
+      basis: `依据：${pendingTodos.length} 个未完成待办、${riskCustomers.length} 个风险客户、${readyDeals.length} 个可推进商机、${pendingMessages.length} 条企微待归档。`,
+      action: overdueTodos.length
+        ? `建议动作：先处理 ${overdueTodos.length} 个高优先级待办，再跟进金额最高的商机。`
+        : `建议动作：按今日节奏完成待办，并把可成交商机推进到下一阶段。`,
+      impact: riskAmount
+        ? `影响范围：${moneyText(riskAmount)} 风险金额，处理后可降低逾期和报价流失。`
+        : `影响范围：${moneyText(readyDeals.reduce((sum, deal) => sum + deal.amount, 0))} 可推进金额，适合用于晨会安排。`,
       riskAmount,
       riskLabel: req.user?.role === "sales" ? "本人名下风险" : "团队风险金额",
       closableDeals: readyDeals.length,
@@ -753,6 +763,7 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
       overdueRate: pendingTodos.length ? Math.round((overdueTodos.length / pendingTodos.length) * 100) : 0,
       avgResponseHours: Number((Math.max(1, pendingMessages.length + scopedReminders.filter((reminder) => reminder.status === "pending").length) * 1.6).toFixed(1))
     },
+    pipelineHealth,
     todoInsights: {
       total: pendingTodos.length,
       overdue: overdueTodos.length,
@@ -763,18 +774,50 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
       historyCount: historyTodos.length,
       historyAmount: historyTodos.reduce((sum, todo) => sum + (todo.impactAmount || 0), 0)
     },
-    priorityTasks: topDeals.map((deal) => {
-      const customer = scopedCustomers.find((item) => item.id === deal.customerId);
-      const isRisk = Boolean(customer?.nextReminder.includes("逾期")) || (customer?.health ?? 100) < 60;
-      return {
-        title: deal.title,
-        subtitle: `${customer?.country || "未知国家"} · ${deal.stage} · ${moneyText(deal.amount)} · ${deal.nextAction}`,
-        tone: isRisk ? "red" : deal.stage === "样品" ? "amber" : "brand",
-        badge: customer?.nextReminder.includes("逾期") ? "逾期" : deal.stage
-      };
-    })
+    priorityTasks: priorityTasks.map(({ deal, customer, score, reason, action, tone }) => ({
+      id: deal.id,
+      customerId: customer?.id || deal.customerId,
+      title: deal.title,
+      subtitle: `${customer?.country || "未知国家"} · ${deal.stage} · ${moneyText(deal.amount)} · ${deal.nextAction}`,
+      score,
+      reason,
+      action,
+      tone,
+      badge: customer?.nextReminder.includes("逾期") ? "逾期" : deal.stage
+    }))
   });
 });
+
+app.post("/api/dashboard/priority-tasks/batch-process", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const scopedCustomers = store.customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
+  const scopedDeals = store.deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId));
+  const scopedTodos = store.todos.filter((todo) => canSeeOwner(req.user!, todo.ownerId, todo.teamId));
+  const pendingTodos = scopedTodos.filter((todo) => !todo.done && !isHistoricalDue(todo.dueAt));
+  const priorityTasks = buildPriorityTasks(scopedDeals, scopedCustomers, pendingTodos).slice(0, 3);
+  const created: Todo[] = [];
+  for (const task of priorityTasks) {
+    const exists = store.todos.some((todo) => !todo.done && todo.related === task.deal.title && todo.title.includes("跟进优先级"));
+    if (exists) continue;
+    const todo: Todo = {
+      id: `t_priority_${task.deal.id}_${Date.now()}_${created.length}`,
+      title: `跟进优先级：${task.action}`,
+      type: "customer",
+      priority: task.score >= 80 ? "high" : task.score >= 60 ? "medium" : "normal",
+      dueAt: currentMinuteText(),
+      ownerId: task.deal.ownerId,
+      teamId: task.deal.teamId,
+      related: task.deal.title,
+      done: false,
+      impactAmount: task.deal.amount,
+      createdAt: new Date().toISOString()
+    };
+    store.todos.unshift(todo);
+    created.push(todo);
+  }
+  await store.persist();
+  res.json({ created, processed: priorityTasks.length, skipped: priorityTasks.length - created.length });
+}));
 
 function isHistoricalDue(value: string) {
   const parsed = parseDueDate(value);
@@ -803,6 +846,72 @@ function priorityWeight(priority: string) {
   return 1;
 }
 
+function buildPriorityTasks(deals: Deal[], customers: Customer[], todos: Todo[]) {
+  const maxAmount = Math.max(...deals.map((deal) => deal.amount), 1);
+  return deals
+    .filter((deal) => deal.stage !== "成交" && deal.stage !== "丢单")
+    .map((deal) => {
+      const customer = customers.find((item) => item.id === deal.customerId);
+      const amountScore = Math.round((deal.amount / maxAmount) * 35);
+      const stageScore = stagePriorityScore(deal.stage);
+      const riskScore = customer?.nextReminder.includes("逾期") ? 25 : (customer?.health ?? 100) < 60 ? 18 : 0;
+      const todoScore = todos.some((todo) => todo.related.includes(customer?.company || deal.title) || todo.related.includes(deal.title)) ? 10 : 0;
+      const score = Math.min(100, amountScore + stageScore + riskScore + todoScore);
+      const reasons = [
+        `金额权重 ${amountScore}`,
+        `阶段权重 ${stageScore}`,
+        riskScore ? `风险权重 ${riskScore}` : "风险权重 0",
+        todoScore ? "已有待办推动" : "暂无关联待办"
+      ];
+      const action = nextPriorityAction(deal, customer);
+      const tone = score >= 80 ? "red" : score >= 60 ? "amber" : "brand";
+      return { deal, customer, score, reason: reasons.join(" · "), action, tone };
+    })
+    .sort((left, right) => right.score - left.score || right.deal.amount - left.deal.amount)
+    .slice(0, 3);
+}
+
+function buildPipelineHealth(deals: Deal[], customers: Customer[]) {
+  const stages = ["询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"];
+  const maxCount = Math.max(...stages.map((stage) => deals.filter((deal) => deal.stage === stage).length), 1);
+  return stages.map((stage) => {
+    const stageDeals = deals.filter((deal) => deal.stage === stage);
+    const amount = stageDeals.reduce((sum, deal) => sum + deal.amount, 0);
+    const riskCount = stageDeals.filter((deal) => {
+      const customer = customers.find((item) => item.id === deal.customerId);
+      return Boolean(customer?.nextReminder.includes("逾期")) || (customer?.health ?? 100) < 60;
+    }).length;
+    return {
+      stage: stage === "成交" ? "成交" : stage,
+      count: stageDeals.length,
+      amount,
+      riskCount,
+      width: Math.max(8, Math.round((stageDeals.length / maxCount) * 100)),
+      tone: riskCount ? "amber" : stage === "成交" ? "green" : stage === "丢单" ? "red" : "aqua"
+    };
+  }).filter((item) => item.stage !== "丢单" || item.count > 0);
+}
+
+function stagePriorityScore(stage: string) {
+  const map: Record<string, number> = {
+    谈判: 30,
+    样品: 24,
+    已报价: 20,
+    已联系: 12,
+    询盘: 8
+  };
+  return map[stage] || 6;
+}
+
+function nextPriorityAction(deal: Deal, customer?: Customer) {
+  if (customer?.nextReminder.includes("逾期")) return `二次跟进 ${customer.company} 并确认 ${deal.nextAction}`;
+  if ((customer?.health ?? 100) < 60) return `补齐 ${customer?.company || deal.title} 的风险资料并同步主管`;
+  if (deal.stage === "谈判") return `确认 ${deal.title} 的价格、账期和成交条件`;
+  if (deal.stage === "样品") return `确认 ${deal.title} 的样品反馈和复购时间`;
+  if (deal.stage === "已报价") return `发送 ${deal.title} 的报价二次确认`;
+  return `推进 ${deal.title} 的下一步：${deal.nextAction}`;
+}
+
 function todoTypeLabel(type: string) {
   const map: Record<string, string> = {
     customer: "客户跟进",
@@ -816,6 +925,12 @@ function todoTypeLabel(type: string) {
 
 function moneyText(value: number) {
   return `$${Math.round(value / 1000)}k`;
+}
+
+function currentMinuteText() {
+  const date = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 app.get("/api/reports/executive", requireAuth, (req, res) => {

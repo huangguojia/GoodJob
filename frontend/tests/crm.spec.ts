@@ -27,7 +27,19 @@ test.describe("GoodJob CRM prototype pages", () => {
   test("dashboard todo workflow is interactive", async ({ page }) => {
     const title = `自动化待办-${runId}`;
     await expect(page.locator("#dashboard .todo-list .todo-row").first()).toBeVisible();
+    await expect(page.locator(".focus-top")).toContainText("今日优先处理建议");
     await expect(page.locator(".focus-title h2")).toContainText("待办");
+    await expect(page.locator("#briefingBasis")).toContainText("依据");
+    await expect(page.locator("#briefingAction")).toContainText("建议动作");
+    await expect(page.locator("#briefingImpact")).toContainText("影响范围");
+    await expect(page.locator("#dashboard .section-title", { hasText: "管道健康度" })).toContainText("真实商机阶段");
+    await expect(page.locator("#dashboard .bars")).toContainText("单");
+    await expect(page.locator("#dashboard .bars")).toContainText("$");
+    await expect(page.locator("#dashboard .task-list .task").first()).toContainText("分");
+    await expect(page.locator("#dashboard .task-list .task").first()).toContainText("金额权重");
+    await page.locator("#batchPriorityButton").click();
+    await expect(page.locator(".toast").last()).toContainText(/已生成|无需重复生成/);
+    await expect(page.locator("#dashboard .todo-list")).toContainText("跟进优先级");
     const todoKpi = page.locator("#dashboard .kpi").filter({ hasText: "今日待跟进" }).locator("strong");
     const beforeTodoCount = Number(await todoKpi.textContent());
 

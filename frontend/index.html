@@ -406,14 +406,13 @@
       align-items: center;
       justify-content: space-between;
       gap: 16px;
-      margin-bottom: 22px;
+      margin-bottom: 16px;
     }
 
     .focus-top span {
       color: #aebbe0;
       font-size: 12px;
       font-weight: 800;
-      text-transform: uppercase;
     }
 
     .focus-title {
@@ -434,11 +433,40 @@
       line-height: 1.55;
     }
 
+    .briefing-why {
+      display: grid;
+      gap: 7px;
+      margin-top: 14px;
+      max-width: 760px;
+    }
+
+    .briefing-why div {
+      display: grid;
+      grid-template-columns: 64px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      padding: 7px 9px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,.1);
+      background: rgba(255,255,255,.065);
+    }
+
+    .briefing-why b {
+      color: #dce6ff;
+      font-size: 11px;
+    }
+
+    .briefing-why span {
+      color: #b8c4d9;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
     .focus-metrics {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 10px;
-      margin-top: 22px;
+      margin-top: 16px;
     }
 
     .focus-metric {
@@ -1092,6 +1120,28 @@
       color: var(--muted);
       font-size: 12px;
       line-height: 1.45;
+    }
+
+    .priority-task-meta {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .priority-score {
+      min-width: 46px;
+      padding: 6px 8px;
+      border-radius: var(--radius-sm);
+      color: #254585;
+      background: #edf2ff;
+      border: 1px solid rgba(49,87,213,.12);
+      font-size: 11px;
+      font-weight: 800;
+      text-align: center;
     }
 
     .pipeline-strip {
@@ -3433,12 +3483,17 @@
           <div class="command-center">
             <section class="panel focus-panel">
               <div class="focus-top">
-                <span>Priority Briefing</span>
+                <span>今日优先处理建议</span>
                 <span>09:30 已更新</span>
               </div>
               <div class="focus-title">
                 <h2>今天最该抢救的是 7 个报价逾期客户，其中 3 个仍处于高成交概率。</h2>
                 <p>系统综合金额、客户等级、阶段停留时间和最近沟通，建议优先处理 Nordic Tools、Al Noor Trading 与 Kanto Retail。</p>
+              </div>
+              <div class="briefing-why">
+                <div><b>判断依据</b><span id="briefingBasis">依据待办、客户风险、商机阶段和企微状态生成。</span></div>
+                <div><b>建议动作</b><span id="briefingAction">先处理高优先级待办，再推进金额最高的商机。</span></div>
+                <div><b>业务影响</b><span id="briefingImpact">用于晨会安排、个人今日任务排序和主管协同判断。</span></div>
               </div>
               <div class="focus-metrics">
                 <div class="focus-metric"><span>高风险金额</span><b data-sales-text="$36k" data-manager-text="$92k">$36k</b><small data-sales-text="本人名下报价" data-manager-text="集中在欧洲市场">本人名下报价</small></div>
@@ -3565,8 +3620,8 @@
           <div class="dashboard-grid">
             <div class="panel section">
               <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 8v5l3 3"/><circle cx="12" cy="12" r="10"/></svg></span><div><h2>跟进优先级</h2><span>系统按金额、阶段、逾期天数自动排序</span></div></div>
-                <button class="btn">批量处理</button>
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 8v5l3 3"/><circle cx="12" cy="12" r="10"/></svg></span><div><h2>跟进优先级队列</h2><span>按金额影响、商机阶段、客户风险、关联待办综合评分</span></div></div>
+                <button class="btn" id="batchPriorityButton">批量生成跟进待办</button>
               </div>
               <div class="task-list">
                 <article class="task" style="--accent: var(--rose)"><i class="task-line"></i><div><h3>Nordic Tools AB 报价后 5 天未回复</h3><p>瑞典 · 采购电动工具 · 预计 $36,000 · 建议发送二次确认</p></div><span class="badge red">逾期</span></article>
@@ -3578,7 +3633,7 @@
 
             <div class="panel section">
               <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 6v12"/><path d="M17 6v12"/><path d="M3 18h18"/></svg></span><div><h2>管道健康度</h2><span>拖拽阶段后记录变更原因</span></div></div>
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 6v12"/><path d="M17 6v12"/><path d="M3 18h18"/></svg></span><div><h2>管道健康度</h2><span>按真实商机阶段统计数量、金额和风险</span></div></div>
               </div>
               <div class="bars">
                 <div class="bar-row"><span>询盘</span><div class="track"><div class="fill" style="width:92%"></div></div><b>42</b></div>
