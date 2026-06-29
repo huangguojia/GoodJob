@@ -251,13 +251,6 @@ let memoDirty = false;
 let memoSaving = false;
 let memoSavePromise: Promise<void> | null = null;
 
-const roleEmail: Record<Role, string> = {
-  sales: "shirley@goodjob.com",
-  manager: "alex@goodjob.com",
-  admin: "admin@goodjob.com",
-  super_admin: "super@goodjob.com"
-};
-
 const roleLabel: Record<Role, string> = {
   sales: "业务员",
   manager: "销售主管",
@@ -435,10 +428,10 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-async function loginByRole(role: Role) {
+async function loginWithPassword(email: string, password: string) {
   const result = await api<{ token: string; user: User }>("/api/auth/login", {
     method: "POST",
-    body: JSON.stringify({ email: roleEmail[role], password: "goodjob123" })
+    body: JSON.stringify({ email, password })
   });
   localStorage.setItem(storage.token, result.token);
   localStorage.setItem(storage.user, JSON.stringify(result.user));
@@ -455,10 +448,10 @@ function applyAuthedUser(user: User) {
   qs("#scopeUser")!.textContent = profileName;
   qs("#scopeText")!.textContent = user.role === "sales" ? "仅本人业务与本人待办" : user.role === "manager" ? "团队业务数据，本人待办私有" : user.role === "admin" ? "全局业务数据、账号管理，本人待办私有" : "全局业务数据、最高账号权限，本人待办私有";
   qs("#currentAvatar")!.textContent = user.avatar;
-  const roleSwitcher = qs<HTMLSelectElement>("#roleSwitcher");
-  const loginRole = qs<HTMLSelectElement>("#loginRole");
-  if (roleSwitcher) roleSwitcher.value = user.role;
-  if (loginRole) loginRole.value = user.role;
+  const topUserName = qs<HTMLElement>("#topUserName");
+  const topUserRole = qs<HTMLElement>("#topUserRole");
+  if (topUserName) topUserName.textContent = user.name;
+  if (topUserRole) topUserRole.textContent = roleLabel[user.role];
 }
 
 async function refreshAll(user: User) {
@@ -1927,11 +1920,21 @@ async function renderAccounts(user: User) {
   tbody.innerHTML = accounts.map((account) => {
     const status = (account as User & { status?: string }).status === "disabled" ? "停用" : "启用";
     const disableAllowed = account.id !== user.id && (user.role === "super_admin" || account.role !== "super_admin");
-    return `<tr data-account-id="${escapeHtml(account.id)}"><td><div class="company"><span class="avatar">${escapeHtml(account.avatar)}</span><div><b>${escapeHtml(account.name)}</b><span>${escapeHtml(account.email)}</span></div></div></td><td>${badge(roleLabel[account.role], account.role === "super_admin" ? "red" : account.role === "admin" ? "amber" : account.role === "manager" ? "green" : "")}</td><td>${accountBusinessScope(account.role)}</td><td>${accountPersonalScope(account.role)}</td><td>${badge(status, status === "停用" ? "gray" : "green")}</td><td><button class="btn" data-disable-account ${disableAllowed ? "" : "disabled"}>${account.id === user.id ? "当前账号" : disableAllowed ? "停用" : "受保护"}</button></td></tr>`;
+    return `<tr data-account-id="${escapeHtml(account.id)}"><td><div class="company"><span class="avatar">${escapeHtml(account.avatar)}</span><div><b>${escapeHtml(account.name)}</b><span>${escapeHtml(account.email)}</span></div></div></td><td>${badge(roleLabel[account.role], account.role === "super_admin" ? "red" : account.role === "admin" ? "amber" : account.role === "manager" ? "green" : "")}</td><td>${accountBusinessScope(account.role)}</td><td>${accountPersonalScope(account.role)}</td><td>${badge(status, status === "停用" ? "gray" : "green")}</td><td><div class="inline-actions"><button class="btn" data-password-account ${canManageRoleInUi(account) ? "" : "disabled"}>设密码</button><button class="btn" data-disable-account ${disableAllowed ? "" : "disabled"}>${account.id === user.id ? "当前账号" : disableAllowed ? "停用" : "受保护"}</button><button class="btn danger" data-delete-account ${disableAllowed ? "" : "disabled"}>删除</button></div></td></tr>`;
   }).join("");
+  qsa<HTMLButtonElement>("[data-password-account]", tbody).forEach((button) => {
+    button.addEventListener("click", () => openPasswordModal(button.closest<HTMLElement>("tr")?.dataset.accountId || ""));
+  });
   qsa<HTMLButtonElement>("[data-disable-account]", tbody).forEach((button) => {
     button.addEventListener("click", () => void disableAccount(button.closest<HTMLElement>("tr")?.dataset.accountId || ""));
   });
+  qsa<HTMLButtonElement>("[data-delete-account]", tbody).forEach((button) => {
+    button.addEventListener("click", () => void deleteAccount(button.closest<HTMLElement>("tr")?.dataset.accountId || ""));
+  });
+}
+
+function canManageRoleInUi(account: User) {
+  return state.user?.role === "super_admin" || account.role !== "super_admin";
 }
 
 function accountBusinessScope(role: Role) {
@@ -1961,6 +1964,7 @@ function openAccountModal() {
       <div class="form-field"><label>姓名</label><input id="accountNameInput" value="New Sales"></div>
       <div class="form-field"><label>角色</label><select id="accountRoleInput">${roleOptions}</select></div>
       <div class="form-field full"><label>邮箱</label><input id="accountEmailInput" value="new.sales.${Date.now()}@goodjob.com"></div>
+      <div class="form-field full"><label>初始密码</label><input id="accountPasswordInput" type="password" value="goodjob123" autocomplete="new-password"></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveAccountButton">保存账号</button>`);
   qs("#saveAccountButton")?.addEventListener("click", () => void saveAccount());
@@ -1973,8 +1977,9 @@ async function saveAccount() {
   }
   const name = qs<HTMLInputElement>("#accountNameInput")?.value.trim() || "";
   const email = qs<HTMLInputElement>("#accountEmailInput")?.value.trim() || "";
-  if (!name || !email) {
-    toast("请填写账号姓名和邮箱", "error");
+  const password = qs<HTMLInputElement>("#accountPasswordInput")?.value || "";
+  if (!name || !email || password.length < 6) {
+    toast("请填写账号姓名、邮箱和至少 6 位密码", "error");
     return;
   }
   const result = await api<{ account: User }>("/api/accounts", {
@@ -1982,6 +1987,7 @@ async function saveAccount() {
     body: JSON.stringify({
       name,
       email,
+      password,
       role: qs<HTMLSelectElement>("#accountRoleInput")?.value || "sales"
     })
   });
@@ -1989,6 +1995,39 @@ async function saveAccount() {
   await renderAccounts(state.user!);
   closeModal();
   toast("账号已新增");
+}
+
+function openPasswordModal(id: string) {
+  const account = state.accounts.find((item) => item.id === id);
+  if (!account) {
+    toast("账号不存在", "error");
+    return;
+  }
+  if (!canManageRoleInUi(account)) {
+    toast("无权设置该账号密码", "error");
+    return;
+  }
+  openModal("设置账号密码", `
+    <div class="form-grid">
+      <div class="form-field full"><label>账号</label><input value="${escapeHtml(account.email)}" disabled></div>
+      <div class="form-field full"><label>新密码</label><input id="accountNewPasswordInput" type="password" value="" autocomplete="new-password" placeholder="至少 6 位"></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="savePasswordButton">保存密码</button>`);
+  qs("#savePasswordButton")?.addEventListener("click", () => void saveAccountPassword(id));
+}
+
+async function saveAccountPassword(id: string) {
+  const password = qs<HTMLInputElement>("#accountNewPasswordInput")?.value || "";
+  if (password.length < 6) {
+    toast("密码至少 6 位", "error");
+    return;
+  }
+  await api(`/api/accounts/${id}/password`, {
+    method: "PATCH",
+    body: JSON.stringify({ password })
+  });
+  closeModal();
+  toast("密码已更新");
 }
 
 async function disableAccount(id: string) {
@@ -2004,6 +2043,22 @@ async function disableAccount(id: string) {
   await api(`/api/accounts/${id}/disable`, { method: "PATCH" });
   await renderAccounts(state.user!);
   toast("账号已停用");
+}
+
+async function deleteAccount(id: string) {
+  if (!id || id === state.user?.id) {
+    toast("当前登录账号不能删除", "error");
+    return;
+  }
+  const account = state.accounts.find((item) => item.id === id);
+  if (!account || !canManageRoleInUi(account)) {
+    toast("无权删除该账号", "error");
+    return;
+  }
+  await api(`/api/accounts/${id}`, { method: "DELETE" });
+  state.accounts = state.accounts.filter((item) => item.id !== id);
+  await renderAccounts(state.user!);
+  toast("账号已删除");
 }
 
 function renderOcr(job: OcrJob) {
@@ -2217,12 +2272,9 @@ function installEvents() {
   }, true);
   qs<HTMLButtonElement>("#loginButton")?.addEventListener("click", (event) => {
     event.stopImmediatePropagation();
-    const role = (qs<HTMLSelectElement>("#loginRole")?.value || "sales") as Role;
-    void loginByRole(role);
-  }, true);
-  qs<HTMLSelectElement>("#roleSwitcher")?.addEventListener("change", (event) => {
-    event.stopImmediatePropagation();
-    void loginByRole((event.currentTarget as HTMLSelectElement).value as Role);
+    const email = qs<HTMLInputElement>("#loginEmail")?.value.trim() || "";
+    const password = qs<HTMLInputElement>("#loginPassword")?.value || "";
+    void loginWithPassword(email, password).catch((error) => toast(error instanceof Error ? error.message : "登录失败", "error"));
   }, true);
   qs<HTMLButtonElement>("#logoutButton")?.addEventListener("click", () => {
     localStorage.removeItem(storage.token);

@@ -1,17 +1,16 @@
 import { expect, test } from "@playwright/test";
 
-async function loginAsManager(page: import("@playwright/test").Page) {
+async function loginWithCredentials(page: import("@playwright/test").Page, email: string, password: string, expectedName: string) {
   await page.goto("/");
-  await page.locator("#loginRole").selectOption("manager");
+  await page.locator("#loginEmail").fill(email);
+  await page.locator("#loginPassword").fill(password);
   await page.locator("#loginButton").click();
   await expect(page.locator("body")).toHaveClass(/is-authenticated/);
-  await expect(page.locator("#scopeUser")).toContainText("Alex");
+  await expect(page.locator("#scopeUser")).toContainText(expectedName);
 }
 
-async function switchRole(page: import("@playwright/test").Page, role: "sales" | "manager" | "admin" | "super_admin", expectedName: string) {
-  await page.locator("#roleSwitcher").selectOption(role);
-  await expect(page.locator("body")).toHaveClass(/is-authenticated/);
-  await expect(page.locator("#scopeUser")).toContainText(expectedName);
+async function loginAsManager(page: import("@playwright/test").Page) {
+  await loginWithCredentials(page, "alex@goodjob.com", "goodjob123", "Alex");
 }
 
 async function openView(page: import("@playwright/test").Page, view: string) {
@@ -28,6 +27,7 @@ test.describe("GoodJob CRM prototype pages", () => {
       localStorage.clear();
     });
     await loginAsManager(page);
+    await expect(page.locator("#roleSwitcher")).toHaveCount(0);
   });
 
   test("dashboard todo workflow is interactive", async ({ page }) => {
@@ -272,19 +272,34 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#settings tbody")).toContainText("账号管理仅管理员可用");
     await expect(page.locator("#settings .page-head .btn", { hasText: "新增账号" })).toBeDisabled();
 
-    await switchRole(page, "admin", "Admin");
+    await page.locator("#logoutButton").click();
+    await loginWithCredentials(page, "admin@goodjob.com", "goodjob123", "Admin");
     await openView(page, "settings");
     await expect(page.locator("#settings tbody")).toContainText("Super Admin");
     await expect(page.locator("#settings tbody tr", { hasText: "Super Admin" }).first().getByRole("button", { name: "受保护" })).toBeDisabled();
     await page.locator("#settings .page-head .btn", { hasText: "新增账号" }).click();
     await page.locator("#accountNameInput").fill(accountName);
     await page.locator("#accountEmailInput").fill(`auto.account.${runId}@goodjob.com`);
+    await page.locator("#accountPasswordInput").fill(`pw${runId}`);
     await page.locator("#accountRoleInput").selectOption("sales");
     await page.locator("#saveAccountButton").click();
     await expect(page.locator("#settings tbody")).toContainText(accountName);
 
+    await page.locator("#settings tbody tr", { hasText: accountName }).first().getByRole("button", { name: "设密码" }).click();
+    await page.locator("#accountNewPasswordInput").fill(`newpw${runId}`);
+    await page.locator("#savePasswordButton").click();
+    await expect(page.locator(".toast").last()).toContainText("密码已更新");
+    await page.locator("#logoutButton").click();
+    await loginWithCredentials(page, `auto.account.${runId}@goodjob.com`, `newpw${runId}`, accountName);
+    await expect(page.locator("#settings tbody")).not.toContainText("Super Admin");
+    await page.locator("#logoutButton").click();
+    await loginWithCredentials(page, "admin@goodjob.com", "goodjob123", "Admin");
+    await openView(page, "settings");
     await page.locator("#settings tbody tr", { hasText: accountName }).first().getByRole("button", { name: "停用" }).click();
     await expect(page.locator("#settings tbody tr", { hasText: accountName }).first()).toContainText("停用");
+    await page.locator("#settings tbody tr", { hasText: accountName }).first().getByRole("button", { name: "删除" }).click();
+    await expect(page.locator(".toast").last()).toContainText("账号已删除");
+    await expect(page.locator("#settings tbody")).not.toContainText(accountName);
   });
 
   test("tools OCR recognizes a card and syncs selected fields", async ({ page }) => {

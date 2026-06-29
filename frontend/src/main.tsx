@@ -43,12 +43,7 @@ function Login({ onLogin }: { onLogin: (token: string, user: User) => void }) {
       </section>
       <section className="loginCard">
         <h2>账号登录</h2>
-        <select value={email} onChange={(event) => setEmail(event.target.value)}>
-          <option value="shirley@goodjob.com">Shirley / 业务员 / 仅本人业务与待办</option>
-          <option value="alex@goodjob.com">Alex / 销售主管 / 团队业务，本人待办</option>
-          <option value="admin@goodjob.com">Admin / 管理员 / 全局业务与账号</option>
-          <option value="super@goodjob.com">Super Admin / 超级管理员 / 最高账号权限</option>
-        </select>
+        <input value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" />
         <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" />
         {error ? <p className="error">{error}</p> : null}
         <button className="primary" onClick={submit}>登录系统</button>

@@ -3186,41 +3186,6 @@
       font-size: 13px;
     }
 
-    .login-users {
-      display: grid;
-      gap: 8px;
-      margin: 12px 0 16px;
-    }
-
-    .login-user {
-      display: grid;
-      grid-template-columns: 34px 1fr auto;
-      gap: 9px;
-      align-items: center;
-      padding: 9px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: #fff;
-      cursor: pointer;
-    }
-
-    .login-user.active {
-      border-color: rgba(49,87,213,.32);
-      background: #f6f9ff;
-      box-shadow: inset 3px 0 0 var(--brand);
-    }
-
-    .login-user b {
-      display: block;
-      color: var(--ink);
-      font-size: 13px;
-    }
-
-    .login-user span {
-      color: var(--muted);
-      font-size: 11px;
-    }
-
     .user-menu {
       display: flex;
       align-items: center;
@@ -3229,14 +3194,32 @@
       border-left: 1px solid var(--line);
     }
 
-    .user-menu select {
-      height: 30px;
-      max-width: 168px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius-sm);
+    .user-identity {
+      display: grid;
+      min-width: 92px;
+      line-height: 1.15;
+    }
+
+    .user-identity b {
       color: var(--ink);
-      background: #fff;
       font-size: 12px;
+    }
+
+    .user-identity span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .inline-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .btn.danger {
+      color: var(--rose);
+      border-color: #f4d4d4;
+      background: #fff7f7;
     }
 
     .scope-banner {
@@ -3540,7 +3523,7 @@
       .login-proof { grid-template-columns: 1fr; }
       .login-panel { margin: 12px; }
       .user-menu { width: 100%; padding-left: 0; border-left: 0; }
-      .user-menu select { flex: 1; max-width: none; }
+      .user-identity { flex: 1; }
       .business-card { max-width: 100%; }
       .tool-item { grid-template-columns: 34px minmax(0, 1fr); }
       .tool-item .badge { justify-self: start; grid-column: 2; }
@@ -3558,7 +3541,7 @@
         </div>
       </div>
       <h1>登录后按账号角色加载对应数据范围。</h1>
-      <p>业务员只能看到本人客户、待办、线索和考试；主管可以查看团队全部数据、分配任务、审批导出和管理账号。</p>
+      <p>使用真实账号和密码登录；业务员看本人数据，主管看团队业务，管理员和超级管理员负责账号权限。</p>
       <div class="login-proof">
         <div><b>RBAC</b><span>角色权限</span></div>
         <div><b>Data Scope</b><span>数据范围隔离</span></div>
@@ -3567,16 +3550,9 @@
     </div>
     <div class="login-panel">
       <h2>账号登录</h2>
-      <p>原型模拟四类账号：业务员、主管、管理员、超级管理员。可切换查看不同数据权限。</p>
-      <div class="login-field"><label>账号</label><input value="shirley@goodjob.com"></div>
-      <div class="login-field"><label>密码</label><input type="password" value="goodjob123"></div>
-      <div class="login-field"><label>快速选择身份</label><select id="loginRole"><option value="sales">Shirley / 业务员 / 仅本人业务与待办</option><option value="manager">Alex / 销售主管 / 团队业务，本人待办</option><option value="admin">Admin / 管理员 / 全局业务与账号</option><option value="super_admin">Super Admin / 超级管理员 / 最高账号权限</option></select></div>
-      <div class="login-users">
-        <div class="login-user active" data-login-role="sales"><span class="avatar">SH</span><div><b>Shirley 业务员</b><span>仅本人客户、待办、线索、考试</span></div><span class="badge">本人</span></div>
-        <div class="login-user" data-login-role="manager"><span class="avatar">AL</span><div><b>Alex 销售主管</b><span>查看欧洲组业务数据，待办仍只看本人</span></div><span class="badge green">主管</span></div>
-        <div class="login-user" data-login-role="admin"><span class="avatar">AD</span><div><b>Admin 管理员</b><span>账号、权限、全局业务与审计</span></div><span class="badge amber">管理</span></div>
-        <div class="login-user" data-login-role="super_admin"><span class="avatar">SA</span><div><b>Super Admin 超级管理员</b><span>最高账号权限，个人待办不越权</span></div><span class="badge red">超管</span></div>
-      </div>
+      <p>请输入已分配的账号和密码。系统内不提供账号切换，切换身份需退出后重新登录。</p>
+      <div class="login-field"><label>账号</label><input id="loginEmail" value="shirley@goodjob.com" autocomplete="username"></div>
+      <div class="login-field"><label>密码</label><input id="loginPassword" type="password" value="goodjob123" autocomplete="current-password"></div>
       <button class="btn primary" id="loginButton" style="width:100%; height:36px">登录系统</button>
     </div>
   </section>
@@ -3658,12 +3634,7 @@
           <button class="btn primary"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>新增客户</button>
           <div class="user-menu">
             <div class="avatar" id="currentAvatar">SH</div>
-            <select id="roleSwitcher" title="切换演示账号">
-              <option value="sales">Shirley · 业务员</option>
-              <option value="manager">Alex · 主管</option>
-              <option value="admin">Admin · 管理员</option>
-              <option value="super_admin">Super Admin · 超管</option>
-            </select>
+            <div class="user-identity"><b id="topUserName">Shirley</b><span id="topUserRole">业务员</span></div>
             <button class="btn" id="logoutButton">退出</button>
           </div>
         </div>
@@ -4566,18 +4537,12 @@
       document.getElementById("scopeUser").textContent = profile.name;
       document.getElementById("scopeText").textContent = profile.scope;
       document.getElementById("currentAvatar").textContent = profile.avatar;
-      document.getElementById("roleSwitcher").value = role;
-      document.getElementById("loginRole").value = role;
       document.querySelectorAll("[data-sales-text]").forEach((node) => {
         node.textContent = profile.bodyRole !== "sales" ? node.dataset.managerText : node.dataset.salesText;
       });
-      document.querySelectorAll(".login-user").forEach((node) => {
-        node.classList.toggle("active", node.dataset.loginRole === role);
-      });
     }
 
-    function login(role) {
-      applyRole(role);
+    function login() {
       document.body.classList.add("is-authenticated");
     }
 
@@ -4589,13 +4554,8 @@
       button.addEventListener("click", () => activateView(button.dataset.view));
     });
 
-    document.getElementById("loginButton").addEventListener("click", () => login(document.getElementById("loginRole").value));
+    document.getElementById("loginButton").addEventListener("click", login);
     document.getElementById("logoutButton").addEventListener("click", logout);
-    document.getElementById("roleSwitcher").addEventListener("change", (event) => applyRole(event.target.value));
-    document.getElementById("loginRole").addEventListener("change", (event) => applyRole(event.target.value));
-    document.querySelectorAll(".login-user").forEach((node) => {
-      node.addEventListener("click", () => applyRole(node.dataset.loginRole));
-    });
 
     applyRole("sales");
   </script>

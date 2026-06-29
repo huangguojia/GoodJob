@@ -62,6 +62,7 @@ app.post("/api/accounts", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
     name: z.string().min(1),
     email: z.string().email(),
+    password: z.string().min(6),
     role: z.enum(["sales", "manager", "admin", "super_admin"]).default("sales"),
     teamId: z.string().min(1).optional()
   });
@@ -80,13 +81,35 @@ app.post("/api/accounts", requireAuth, asyncRoute(async (req, res) => {
     id: `u_${Date.now()}`,
     name: body.name,
     email: body.email,
-    password: "goodjob123",
+    password: body.password,
     role: body.role,
     teamId,
     avatar: body.name.slice(0, 2).toUpperCase(),
     status: "active" as const
   };
   store.users.unshift(user);
+  await store.persist();
+  res.json({ account: accountUser(user) });
+}));
+
+app.patch("/api/accounts/:id/password", requireAuth, asyncRoute(async (req, res) => {
+  if (!canManageAccounts(req.user)) {
+    res.status(403).json({ message: "无账号管理权限" });
+    return;
+  }
+  const schema = z.object({ password: z.string().min(6) });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.params.id);
+  if (!user) {
+    res.status(404).json({ message: "账号不存在" });
+    return;
+  }
+  if (!canManageRole(req.user!, user.role)) {
+    res.status(403).json({ message: "无权设置该账号密码" });
+    return;
+  }
+  user.password = body.password;
   await store.persist();
   res.json({ account: accountUser(user) });
 }));
@@ -113,6 +136,31 @@ app.patch("/api/accounts/:id/disable", requireAuth, asyncRoute(async (req, res) 
   user.status = "disabled";
   await store.persist();
   res.json({ account: accountUser(user) });
+}));
+
+app.delete("/api/accounts/:id", requireAuth, asyncRoute(async (req, res) => {
+  if (!canManageAccounts(req.user)) {
+    res.status(403).json({ message: "无账号管理权限" });
+    return;
+  }
+  const store = getStore();
+  const index = store.users.findIndex((item) => item.id === req.params.id);
+  const user = index >= 0 ? store.users[index] : null;
+  if (!user) {
+    res.status(404).json({ message: "账号不存在" });
+    return;
+  }
+  if (user.id === req.user!.id) {
+    res.status(400).json({ message: "不能删除当前登录账号" });
+    return;
+  }
+  if (!canManageRole(req.user!, user.role)) {
+    res.status(403).json({ message: "无权删除该角色账号" });
+    return;
+  }
+  store.users.splice(index, 1);
+  await store.persist();
+  res.json({ ok: true, id: req.params.id });
 }));
 
 app.get("/api/customers", requireAuth, (req, res) => {

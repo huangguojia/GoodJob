@@ -235,22 +235,45 @@ try {
   const forbiddenSuper = await request("/api/accounts", {
     method: "POST",
     headers: { authorization: `Bearer ${adminToken}` },
-    body: JSON.stringify({ name: "Forbidden Super", email: `forbidden.super.${Date.now()}@goodjob.com`, role: "super_admin" })
+    body: JSON.stringify({ name: "Forbidden Super", email: `forbidden.super.${Date.now()}@goodjob.com`, password: "forbid123", role: "super_admin" })
   });
   if (forbiddenSuper.response.status !== 403) throw new Error("admin must not create super admin");
 
   const account = await request("/api/accounts", {
     method: "POST",
     headers: { authorization: `Bearer ${superAdminToken}` },
-    body: JSON.stringify({ name: "Auto Sales", email: `auto.${Date.now()}@goodjob.com`, role: "sales" })
+    body: JSON.stringify({ name: "Auto Sales", email: `auto.${Date.now()}@goodjob.com`, password: "start123", role: "sales" })
   });
   if (!account.response.ok || account.json.account.name !== "Auto Sales") throw new Error("account create failed");
+
+  const passwordChanged = await request(`/api/accounts/${account.json.account.id}/password`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${superAdminToken}` },
+    body: JSON.stringify({ password: "changed123" })
+  });
+  if (!passwordChanged.response.ok) throw new Error("account password update failed");
+  const loginCreated = await request("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email: account.json.account.email, password: "changed123" })
+  });
+  if (!loginCreated.response.ok) throw new Error("created account password login failed");
 
   const disabled = await request(`/api/accounts/${account.json.account.id}/disable`, {
     method: "PATCH",
     headers: { authorization: `Bearer ${superAdminToken}` }
   });
   if (!disabled.response.ok) throw new Error("account disable failed");
+
+  const deleted = await request(`/api/accounts/${account.json.account.id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${superAdminToken}` }
+  });
+  if (!deleted.response.ok || deleted.json.ok !== true) throw new Error("account delete failed");
+  const loginDeleted = await request("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email: account.json.account.email, password: "changed123" })
+  });
+  if (loginDeleted.response.status !== 401) throw new Error("deleted account must not login");
 
   console.log(JSON.stringify({
     ok: true,
@@ -268,6 +291,8 @@ try {
 		    importJob: job.json.job.name,
     examPassed: exam.json.attempt.passed,
     accountCreated: account.json.account.name,
+    accountPasswordLogin: loginCreated.response.ok,
+    accountDeleted: deleted.json.ok,
     managerAccountForbidden: managerAccounts.response.status,
     adminSuperForbidden: forbiddenSuper.response.status
   }, null, 2));
