@@ -721,7 +721,7 @@ function renderTodos(todos: Todo[]) {
     return `<article class="todo-row ${todo.priority === "high" ? "urgent" : ""} ${isRunning ? "in-progress" : ""} ${todo.done ? "done" : ""} ${state.draggingTodoId === todo.id ? "dragging" : ""}" data-todo-id="${escapeHtml(todo.id)}">
       <i class="todo-check" title="${todo.done ? "撤回未完成" : "完成待办"}"></i>
       <div class="todo-main"><h3>${escapeHtml(todo.title)}</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--${tone === "red" ? "rose" : tone})"></i><span>${escapeHtml(priorityText(todo.priority))}</span>${optionalMeta}${pinBadge}${statusBadge}</div></div>
-      <div class="todo-side"><div class="todo-actions"><div class="assignee-stack"><span class="mini-avatar">我</span></div>${todo.done ? "" : `<button class="todo-run ${isRunning ? "active" : ""}" title="${isRunning ? "停止执行" : "开始执行"}" aria-label="${isRunning ? "停止执行" : "开始执行"}">${runIcon}</button>`}<button class="todo-more ${menuOpen ? "active" : ""}" title="更多操作" aria-label="更多操作"><span></span><span></span><span></span></button>${menuOpen ? `<div class="todo-menu"><button data-todo-action="top">置顶</button><button data-todo-action="bottom">沉底</button><button class="danger" data-todo-action="delete">删除</button></div>` : ""}</div><div class="subtask-bar ${isRunning ? "running" : ""}"><i style="--p:${todo.done ? "100%" : isRunning ? "74%" : "55%"}"></i></div></div>
+      <div class="todo-side"><div class="todo-actions"><div class="assignee-stack"><span class="mini-avatar">我</span></div>${todo.done ? "" : `<button class="todo-run ${isRunning ? "active" : ""}" title="${isRunning ? "停止执行" : "开始执行"}" aria-label="${isRunning ? "停止执行" : "开始执行"}">${runIcon}</button>`}<button class="todo-more ${menuOpen ? "active" : ""}" title="更多操作" aria-label="更多操作"><span></span><span></span><span></span></button>${menuOpen ? `<div class="todo-menu"><button data-todo-action="edit">编辑</button><button data-todo-action="top">置顶</button><button data-todo-action="bottom">沉底</button><button class="danger" data-todo-action="delete">删除</button></div>` : ""}</div><div class="subtask-bar ${isRunning ? "running" : ""}"><i style="--p:${todo.done ? "100%" : isRunning ? "74%" : "55%"}"></i></div></div>
     </article>`;
   }).join("");
   qsa<HTMLElement>(".todo-row .todo-run", list).forEach((node) => {
@@ -746,6 +746,11 @@ function renderTodos(todos: Todo[]) {
       const action = node.dataset.todoAction;
       if (!row?.dataset.todoId || !action) return;
       state.openTodoMenuId = null;
+      if (action === "edit") {
+        const todo = state.todos.find((item) => item.id === row.dataset.todoId);
+        if (todo) openTodoModal("", todo);
+        return;
+      }
       if (action === "delete") {
         await deleteTodo(row.dataset.todoId);
         return;
@@ -770,18 +775,6 @@ function renderTodos(todos: Todo[]) {
       updateTodoChips(state.todos);
       void refreshDashboardOnly();
       toast(todo.done ? "待办已完成" : "已撤回未完成");
-    });
-  });
-  qsa<HTMLElement>(".todo-row", list).forEach((row) => {
-    row.addEventListener("click", () => {
-      if (state.draggingTodoId) return;
-      const todo = state.todos.find((item) => item.id === row.dataset.todoId);
-      if (todo) toast([todo.related, formatTodoTime(todo.dueAt)].filter(Boolean).join(" · ") || "未设置关联对象和目标完成时间");
-    });
-    row.addEventListener("dblclick", (event) => {
-      event.stopPropagation();
-      const todo = state.todos.find((item) => item.id === row.dataset.todoId);
-      if (todo) openTodoModal("", todo);
     });
   });
   bindTodoDrag(list, visibleTodos, isHistoryView);
@@ -2165,6 +2158,26 @@ async function saveTodo(id?: string) {
   toast(id ? "待办已更新" : "待办已新增");
 }
 
+async function createQuickTodo(title: string) {
+  const trimmed = title.trim();
+  if (!trimmed) return;
+  const result = await api<{ todo: Todo }>("/api/todos", {
+    method: "POST",
+    body: JSON.stringify({
+      title: trimmed,
+      type: "other",
+      priority: "normal",
+      dueAt: "",
+      related: ""
+    })
+  });
+  state.todos.unshift(result.todo);
+  renderTodos(state.todos);
+  updateTodoChips(state.todos);
+  void refreshDashboardOnly();
+  toast("待办已新增");
+}
+
 function openCustomerModal() {
   openModal("新增客户", `
     <div class="form-grid">
@@ -2292,8 +2305,10 @@ function installEvents() {
   qs<HTMLInputElement>(".quick-add input")?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     const input = event.currentTarget as HTMLInputElement;
-    openTodoModal(input.value.trim());
+    const title = input.value.trim();
+    if (!title) return;
     input.value = "";
+    void createQuickTodo(title);
   });
   qsa<HTMLButtonElement>("#dashboard .section-head .btn").forEach((button) => {
     if (button.textContent?.includes("新增待办")) button.addEventListener("click", () => openTodoModal());

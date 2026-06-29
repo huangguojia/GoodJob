@@ -47,6 +47,23 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator(".toast").last()).toContainText(/已生成|无需重复生成/);
     const todoKpi = page.locator("#dashboard .kpi").filter({ hasText: "今日待跟进" }).locator("strong");
     const beforeTodoCount = Number(await todoKpi.textContent());
+    const quickTitle = `快速新增待办-${runId}`;
+
+    await page.locator(".quick-add input").fill(quickTitle);
+    await page.locator(".quick-add input").press("Enter");
+    await expect(page.locator("#appModal")).not.toHaveClass(/active/);
+    await expect(page.locator(".quick-add input")).toHaveValue("");
+    await expect(page.locator("#dashboard .todo-list")).toContainText(quickTitle);
+    const quickRow = page.locator("#dashboard .todo-row", { hasText: quickTitle }).first();
+    await quickRow.click();
+    await expect(page.locator(".toast").last()).not.toContainText("未设置关联对象和目标完成时间");
+    await quickRow.dblclick();
+    await expect(page.locator("#appModal")).not.toHaveClass(/active/);
+    await quickRow.locator(".todo-more").click();
+    await quickRow.locator("[data-todo-action='edit']").click();
+    await expect(page.locator("#appModal")).toHaveClass(/active/);
+    await expect(page.locator("#modalTitle")).toContainText("编辑待办");
+    await page.locator("[data-modal-close]").first().click();
 
     await page.getByRole("button", { name: "新增待办" }).click();
     await expect(page.locator("#appModal")).toHaveClass(/active/);
@@ -59,7 +76,7 @@ test.describe("GoodJob CRM prototype pages", () => {
 
     await expect(page.locator("#dashboard .todo-list")).toContainText(title);
     await expect(page.locator(".toast").last()).toContainText("待办已新增");
-    await expect(todoKpi).toHaveText(String(beforeTodoCount + 1));
+    await expect(todoKpi).toHaveText(String(beforeTodoCount + 2));
     const cacheSize = await page.evaluate(() => localStorage.getItem("gj_dashboard_cache")?.length || 0);
     expect(cacheSize).toBeGreaterThan(20);
 
@@ -84,11 +101,12 @@ test.describe("GoodJob CRM prototype pages", () => {
     await doneRow.locator(".todo-check").click();
     await expect(page.locator("#dashboard .todo-row.done", { hasText: title })).toHaveCount(0);
     await expect(page.locator(".toast").last()).toContainText("已撤回未完成");
-    await todoRow.dblclick();
+    await todoRow.locator(".todo-more").click();
+    await todoRow.locator("[data-todo-action='edit']").click();
     await expect(page.locator("#appModal")).toHaveClass(/active/);
     await expect(page.locator("#modalTitle")).toContainText("编辑待办");
     await page.locator("#todoDueInput").fill("2026-06-29 18:30");
-    await page.locator("#todoRelatedInput").fill("双击编辑验证");
+    await page.locator("#todoRelatedInput").fill("菜单编辑验证");
     await page.locator("#saveTodoButton").click();
     await expect(page.locator(".toast").last()).toContainText("待办已更新");
     await expect(page.locator("#dashboard .todo-row", { hasText: title }).first()).toContainText("2026-06-29 18:30");
@@ -97,6 +115,9 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#dashboard .todo-row", { hasText: title }).first().locator("[data-todo-action='delete']").click();
     await expect(page.locator(".toast").last()).toContainText("待办已删除");
     await expect(page.locator("#dashboard .todo-row", { hasText: title })).toHaveCount(0);
+    await quickRow.locator(".todo-more").click();
+    await quickRow.locator("[data-todo-action='delete']").click();
+    await expect(page.locator("#dashboard .todo-row", { hasText: quickTitle })).toHaveCount(0);
     await expect(todoKpi).toHaveText(String(beforeTodoCount));
   });
 
@@ -115,6 +136,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(pinnedRow.locator(".todo-more span")).toHaveCount(3);
     await pinnedRow.locator(".todo-more").click();
     await expect(pinnedRow.locator(".todo-menu")).toBeVisible();
+    await expect(pinnedRow.locator("[data-todo-action='edit']")).toBeVisible();
     await page.locator("#dashboard .todo-toolbar").click();
     await expect(pinnedRow.locator(".todo-menu")).toHaveCount(0);
     await pinnedRow.locator(".todo-more").click();
