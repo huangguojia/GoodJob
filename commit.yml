@@ -2,40 +2,22 @@
 branches: {
   }
 fileChange:
-  /backend:
-    newFile: !uuid 'ae85088fd2e38f255425215268351d7bdfe31fb5'
-    oldFile: !uuid '2c081d223e7661bb1ba606a926932e9df25b6af8'
-  /backend/src:
-    newFile: !uuid '6bfcbfa0738f42d6254df2e51382c0379cd12d56'
-    oldFile: !uuid '7e55eab6e81f96473995d361bfbb2eb7344ef8de'
-  /backend/src/self-test.ts:
-    newFile: !uuid '472c6894afaafda397d9802afaeb83f3f6ec9e43'
-    oldFile: !uuid '6b703bb8c3c7d723638987336418565d54a09e68'
-  /backend/src/server.ts:
-    newFile: !uuid '120e778665949ad833de5972f04842f661f95272'
-    oldFile: !uuid '2a22d5b0a8783798a6958eb759d5c989ed3ab15e'
   /frontend:
-    newFile: !uuid '8baa06c561a798470effdd4cf6b122d2f84dfa31'
-    oldFile: !uuid '55d05878a3b5878153fc7d5c7f299dffb560575b'
-  /frontend/index.html:
-    newFile: !uuid 'a84563827f2b08cd20db5c24173c585bd97f64b7'
-    oldFile: !uuid '22d40492c2c4002d237394cb5bc020048f841026'
+    newFile: !uuid 'd6abbd256a36507987802a33c5254640042f5a48'
+    oldFile: !uuid '8baa06c561a798470effdd4cf6b122d2f84dfa31'
   /frontend/src:
-    newFile: !uuid '28c831cedaffb56b043b2bfc9c91c5efa3186545'
-    oldFile: !uuid 'bbe6dc55f7815098ca9ba1b37aff0763123e1e72'
-  /frontend/src/main.tsx:
-    newFile: !uuid '1370eb64ba04c123c6fa3cebdefe97f43b1b9e4a'
-    oldFile: !uuid '2bdde075148995b70497a819b70e1d02fa788665'
+    newFile: !uuid '88d0a3bc12047c977d70c18bde2cc7ee7aad187d'
+    oldFile: !uuid '28c831cedaffb56b043b2bfc9c91c5efa3186545'
   /frontend/src/prototype-api.ts:
-    newFile: !uuid 'b1880cd764a885f595caabed66374a57a1c1546c'
-    oldFile: !uuid '5b0430bd8bbbb8702bce00b0c26c1670f448abe7'
+    newFile: !uuid '1ac0fd7b9f05118c595903e20123dc48b9100aa0'
+    oldFile: !uuid 'b1880cd764a885f595caabed66374a57a1c1546c'
   /frontend/tests:
-    newFile: !uuid '003d0bdeb97ec6a0ff15c6ab4b585d7630b1ab5a'
-    oldFile: !uuid '69fa13b7a7df8fa3cd710cab814421632651bccf'
+    newFile: !uuid '991ba5ed6f509d9f3f08e67ef10c37d05ff6f747'
+    oldFile: !uuid '003d0bdeb97ec6a0ff15c6ab4b585d7630b1ab5a'
   /frontend/tests/crm.spec.ts:
-    newFile: !uuid '42313d56d4d07cb0d4ebc770b3acb6013c0de4c6'
-    oldFile: !uuid '5ce4f730fca2d3d3676ad40cf89e389f278bf832'
-gitCommitId: !uuid 'e5d828d775a59e42d5714871e4c3c12ffa2943f0'
+    newFile: !uuid 'a5a15c8675bd4b61403b3b477bdffd8412539b6a'
+    oldFile: !uuid '42313d56d4d07cb0d4ebc770b3acb6013c0de4c6'
+gitCommitId: !uuid '4c16d6f0a5c93f6dc58e646d645581c5b391576e'
 renames: {
   }
-revisionId: 10
+revisionId: 11
