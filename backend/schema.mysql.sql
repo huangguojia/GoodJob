@@ -50,6 +50,8 @@ CREATE TABLE todos (
   related VARCHAR(200),
   done BOOLEAN DEFAULT FALSE,
   status VARCHAR(24) DEFAULT 'pending',
+  pin_state VARCHAR(20) DEFAULT '',
+  sort_order INT DEFAULT 0,
   impact_amount DECIMAL(14,2),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

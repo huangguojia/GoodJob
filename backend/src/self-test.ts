@@ -109,6 +109,13 @@ try {
   });
   if (!todoStarted.response.ok || todoStarted.json.todo.status !== "in_progress") throw new Error("todo in-progress status failed");
 
+  const todoOrdered = await request("/api/todos/reorder", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ ids: [todo.json.todo.id], mode: "top", targetId: todo.json.todo.id })
+  });
+  if (!todoOrdered.response.ok || todoOrdered.json.todos[0].pinState !== "top" || todoOrdered.json.todos[0].sortOrder !== 1) throw new Error("todo reorder failed");
+
   const todoDeleted = await request(`/api/todos/${todo.json.todo.id}`, {
     method: "DELETE",
     headers: { authorization: `Bearer ${salesToken}` }

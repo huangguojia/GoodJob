@@ -58,6 +58,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     expect(cacheSize).toBeGreaterThan(20);
 
     const todoRow = page.locator("#dashboard .todo-row", { hasText: title }).first();
+    await expect(todoRow.locator(".todo-more")).toBeVisible();
     await todoRow.locator(".todo-run").click();
     await expect(page.locator("#dashboard .todo-row.in-progress", { hasText: title }).first()).toBeVisible();
     await expect(todoRow).toContainText("进行中");
@@ -77,10 +78,64 @@ test.describe("GoodJob CRM prototype pages", () => {
     await doneRow.locator(".todo-check").click();
     await expect(page.locator("#dashboard .todo-row.done", { hasText: title })).toHaveCount(0);
     await expect(page.locator(".toast").last()).toContainText("已撤回未完成");
-    await page.locator("#dashboard .todo-row", { hasText: title }).first().locator(".todo-delete").click();
+    await todoRow.dblclick();
+    await expect(page.locator("#appModal")).toHaveClass(/active/);
+    await expect(page.locator("#modalTitle")).toContainText("编辑待办");
+    await page.locator("#todoDueInput").fill("2026-06-29 18:30");
+    await page.locator("#todoRelatedInput").fill("双击编辑验证");
+    await page.locator("#saveTodoButton").click();
+    await expect(page.locator(".toast").last()).toContainText("待办已更新");
+    await expect(page.locator("#dashboard .todo-row", { hasText: title }).first()).toContainText("2026-06-29 18:30");
+    await expect(page.locator("#dashboard .todo-row", { hasText: title }).first()).not.toContainText(/t_\\d{10,}/);
+    await page.locator("#dashboard .todo-row", { hasText: title }).first().locator(".todo-more").click();
+    await page.locator("#dashboard .todo-row", { hasText: title }).first().locator("[data-todo-action='delete']").click();
     await expect(page.locator(".toast").last()).toContainText("待办已删除");
     await expect(page.locator("#dashboard .todo-row", { hasText: title })).toHaveCount(0);
     await expect(todoKpi).toHaveText(String(beforeTodoCount));
+  });
+
+  test("todo menu pins and long-press drag clears pin labels", async ({ page }) => {
+    const pinned = `拖拽排序待办-${runId}`;
+    const anchor = `拖拽目标待办-${runId}`;
+
+    for (const title of [anchor, pinned]) {
+      await page.getByRole("button", { name: "新增待办" }).click();
+      await page.locator("#todoTitleInput").fill(title);
+      await page.locator("#todoTitleInput").press("Enter");
+      await expect(page.locator("#dashboard .todo-row", { hasText: title })).toBeVisible();
+    }
+
+    const pinnedRow = page.locator("#dashboard .todo-row", { hasText: pinned }).first();
+    await expect(pinnedRow.locator(".todo-more span")).toHaveCount(3);
+    await pinnedRow.locator(".todo-more").click();
+    await expect(pinnedRow.locator(".todo-menu")).toBeVisible();
+    await page.locator("#dashboard .todo-toolbar").click();
+    await expect(pinnedRow.locator(".todo-menu")).toHaveCount(0);
+    await pinnedRow.locator(".todo-more").click();
+    await pinnedRow.locator("[data-todo-action='top']").click();
+    await expect(page.locator("#dashboard .todo-list .todo-row").first()).toContainText(pinned);
+    await expect(pinnedRow).toContainText("置顶");
+
+    const anchorRow = page.locator("#dashboard .todo-row", { hasText: anchor }).first();
+    const fromBox = await pinnedRow.boundingBox();
+    const toBox = await anchorRow.boundingBox();
+    if (!fromBox || !toBox) throw new Error("todo drag boxes missing");
+    await page.mouse.move(fromBox.x + fromBox.width / 2, fromBox.y + fromBox.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(360);
+    await page.mouse.move(toBox.x + toBox.width / 2, toBox.y + toBox.height / 2, { steps: 8 });
+    await page.mouse.up();
+
+    await expect(page.locator(".toast").last()).toContainText("已按拖拽顺序保存");
+    await expect(page.locator("#dashboard .todo-row", { hasText: pinned }).first()).not.toContainText("置顶");
+    await expect(page.locator("#dashboard .todo-row", { hasText: pinned }).first()).not.toContainText("沉底");
+
+    for (const title of [pinned, anchor]) {
+      const row = page.locator("#dashboard .todo-row", { hasText: title }).first();
+      await row.locator(".todo-more").click();
+      await row.locator("[data-todo-action='delete']").click();
+      await expect(page.locator("#dashboard .todo-row", { hasText: title })).toHaveCount(0);
+    }
   });
 
   test("todo list sorts unfinished first and newest first", async ({ page }) => {

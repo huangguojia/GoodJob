@@ -16,11 +16,11 @@ export const customers: Customer[] = [
 ];
 
 export const todos: Todo[] = [
-  { id: "t1", title: "补发 Nordic Tools AB 的 CE 证书与新版交期说明", type: "customer", priority: "high", status: "pending", dueAt: "今天 09:45", ownerId: "u_sales_shirley", teamId: "europe", related: "Nordic Tools AB", done: false, impactAmount: 36000 },
-  { id: "t2", title: "审核欧洲报价模板并同步到资料库", type: "knowledge", priority: "medium", status: "pending", dueAt: "今天 11:30", ownerId: "u_sales_mia", teamId: "europe", related: "报价规则", done: false },
-  { id: "t3", title: "给中东组推送认证资料专项补考提醒", type: "exam", priority: "normal", status: "pending", dueAt: "今天 15:00", ownerId: "u_manager_alex", teamId: "europe", related: "在线考试", done: false },
-  { id: "t4", title: "复核 OCR 名片识别结果并同步 8 条展会线索", type: "ocr", priority: "normal", status: "pending", dueAt: "今天 16:20", ownerId: "u_sales_shirley", teamId: "europe", related: "OCR 线索", done: false },
-  { id: "t5", title: "确认 Atlas Home Inc 样品签收状态", type: "customer", priority: "normal", status: "pending", dueAt: "09:12", ownerId: "u_sales_shirley", teamId: "europe", related: "Atlas Home Inc", done: true }
+  { id: "t1", title: "补发 Nordic Tools AB 的 CE 证书与新版交期说明", type: "customer", priority: "high", status: "pending", pinState: "", sortOrder: 10, dueAt: "今天 09:45", ownerId: "u_sales_shirley", teamId: "europe", related: "Nordic Tools AB", done: false, impactAmount: 36000 },
+  { id: "t2", title: "审核欧洲报价模板并同步到资料库", type: "knowledge", priority: "medium", status: "pending", pinState: "", sortOrder: 20, dueAt: "今天 11:30", ownerId: "u_sales_mia", teamId: "europe", related: "报价规则", done: false },
+  { id: "t3", title: "给中东组推送认证资料专项补考提醒", type: "exam", priority: "normal", status: "pending", pinState: "", sortOrder: 30, dueAt: "今天 15:00", ownerId: "u_manager_alex", teamId: "europe", related: "在线考试", done: false },
+  { id: "t4", title: "复核 OCR 名片识别结果并同步 8 条展会线索", type: "ocr", priority: "normal", status: "pending", pinState: "", sortOrder: 40, dueAt: "今天 16:20", ownerId: "u_sales_shirley", teamId: "europe", related: "OCR 线索", done: false },
+  { id: "t5", title: "确认 Atlas Home Inc 样品签收状态", type: "customer", priority: "normal", status: "pending", pinState: "", sortOrder: 50, dueAt: "09:12", ownerId: "u_sales_shirley", teamId: "europe", related: "Atlas Home Inc", done: true }
 ];
 
 export const knowledgeAssets: KnowledgeAsset[] = [

@@ -279,6 +279,8 @@ CREATE TABLE `todos` (
   `related` varchar(200) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `done` tinyint(1) DEFAULT '0',
   `status` varchar(24) COLLATE utf8mb4_unicode_ci DEFAULT 'pending',
+  `pin_state` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT '',
+  `sort_order` int DEFAULT '0',
   `impact_amount` decimal(14,2) DEFAULT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

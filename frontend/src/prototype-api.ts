@@ -27,6 +27,8 @@ interface Todo {
   type: string;
   priority: string;
   status?: string;
+  pinState?: string;
+  sortOrder?: number;
   dueAt: string;
   related: string;
   done: boolean;
@@ -208,6 +210,8 @@ interface AppState {
   accounts: User[];
   reportNote: string;
   todoFilter: "all" | "today" | "overdue" | "mine" | "customer" | "history";
+  openTodoMenuId: string | null;
+  draggingTodoId: string | null;
   selectedCustomerId: string | null;
   selectedProblemId: string | null;
   selectedMemoId: string | null;
@@ -234,6 +238,8 @@ const state: AppState = {
   accounts: [],
   reportNote: "",
   todoFilter: "all",
+  openTodoMenuId: null,
+  draggingTodoId: null,
   selectedCustomerId: null,
   selectedProblemId: null,
   selectedMemoId: null,
@@ -328,6 +334,9 @@ function sortTodos(todos: Todo[]) {
     .map((todo, index) => ({ todo, index }))
     .sort((left, right) => {
       if (left.todo.done !== right.todo.done) return left.todo.done ? 1 : -1;
+      const leftOrder = typeof left.todo.sortOrder === "number" ? left.todo.sortOrder : 0;
+      const rightOrder = typeof right.todo.sortOrder === "number" ? right.todo.sortOrder : 0;
+      if (leftOrder || rightOrder) return leftOrder - rightOrder || todoCreatedTime(right.todo, right.index) - todoCreatedTime(left.todo, left.index);
       return todoCreatedTime(right.todo, right.index) - todoCreatedTime(left.todo, left.index);
     })
     .map((item) => item.todo);
@@ -598,6 +607,22 @@ function formatTime(value: string) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+function formatTodoTime(value = ""): string {
+  const text = value.trim();
+  if (!text) return "";
+  const date = new Date(text);
+  if (Number.isFinite(date.getTime())) {
+    const pad = (item: number) => String(item).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+  const idTime = text.match(/^t_(\d{10,}).*/);
+  if (idTime) {
+    const stampDate = new Date(Number(idTime[1]));
+    if (Number.isFinite(stampDate.getTime())) return formatTodoTime(stampDate.toISOString());
+  }
+  return text;
+}
+
 function renderSchedule(summary: DashboardSummary) {
   const list = qs<HTMLElement>(".schedule-list");
   if (list) {
@@ -692,14 +717,16 @@ function renderTodos(todos: Todo[]) {
   const visibleTodos = isHistoryView ? archivedTodos : filterTodos(currentTodos);
   list.innerHTML = visibleTodos.map((todo) => {
     const tone = todo.priority === "high" ? "red" : todo.priority === "medium" ? "amber" : "green";
-    const optionalMeta = [todo.dueAt, todo.related].filter(Boolean).map((item) => `<span>${escapeHtml(item)}</span>`).join("");
+    const optionalMeta = [formatTodoTime(todo.dueAt), todo.related].filter(Boolean).map((item) => `<span>${escapeHtml(item)}</span>`).join("");
     const isRunning = todo.status === "in_progress" && !todo.done;
+    const pinBadge = todo.pinState === "top" ? badge("置顶", "aqua") : todo.pinState === "bottom" ? badge("沉底", "gray") : "";
     const statusBadge = todo.done ? badge("已完成", "green") : isRunning ? badge("进行中", "aqua") : badge(isHistoryView ? "历史归档" : todoTypeText(todo.type), tone);
     const runIcon = isRunning ? `<svg viewBox="0 0 24 24"><path d="M7 7h10v10H7z"/></svg>` : `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
-    return `<article class="todo-row ${todo.priority === "high" ? "urgent" : ""} ${isRunning ? "in-progress" : ""} ${todo.done ? "done" : ""}" data-todo-id="${escapeHtml(todo.id)}">
+    const menuOpen = state.openTodoMenuId === todo.id;
+    return `<article class="todo-row ${todo.priority === "high" ? "urgent" : ""} ${isRunning ? "in-progress" : ""} ${todo.done ? "done" : ""} ${state.draggingTodoId === todo.id ? "dragging" : ""}" data-todo-id="${escapeHtml(todo.id)}">
       <i class="todo-check" title="${todo.done ? "撤回未完成" : "完成待办"}"></i>
-      <div class="todo-main"><h3>${escapeHtml(todo.title)}</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--${tone === "red" ? "rose" : tone})"></i><span>${escapeHtml(priorityText(todo.priority))}</span>${optionalMeta}${statusBadge}</div></div>
-      <div class="todo-side"><div class="todo-actions"><div class="assignee-stack"><span class="mini-avatar">我</span></div>${todo.done ? "" : `<button class="todo-run ${isRunning ? "active" : ""}" title="${isRunning ? "停止执行" : "开始执行"}" aria-label="${isRunning ? "停止执行" : "开始执行"}">${runIcon}</button>`}<button class="todo-delete" title="删除待办" aria-label="删除待办"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg></button></div><div class="subtask-bar ${isRunning ? "running" : ""}"><i style="--p:${todo.done ? "100%" : isRunning ? "74%" : "55%"}"></i></div></div>
+      <div class="todo-main"><h3>${escapeHtml(todo.title)}</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--${tone === "red" ? "rose" : tone})"></i><span>${escapeHtml(priorityText(todo.priority))}</span>${optionalMeta}${pinBadge}${statusBadge}</div></div>
+      <div class="todo-side"><div class="todo-actions"><div class="assignee-stack"><span class="mini-avatar">我</span></div>${todo.done ? "" : `<button class="todo-run ${isRunning ? "active" : ""}" title="${isRunning ? "停止执行" : "开始执行"}" aria-label="${isRunning ? "停止执行" : "开始执行"}">${runIcon}</button>`}<button class="todo-more ${menuOpen ? "active" : ""}" title="更多操作" aria-label="更多操作"><span></span><span></span><span></span></button>${menuOpen ? `<div class="todo-menu"><button data-todo-action="top">置顶</button><button data-todo-action="bottom">沉底</button><button class="danger" data-todo-action="delete">删除</button></div>` : ""}</div><div class="subtask-bar ${isRunning ? "running" : ""}"><i style="--p:${todo.done ? "100%" : isRunning ? "74%" : "55%"}"></i></div></div>
     </article>`;
   }).join("");
   qsa<HTMLElement>(".todo-row .todo-run", list).forEach((node) => {
@@ -709,11 +736,26 @@ function renderTodos(todos: Todo[]) {
       if (row?.dataset.todoId) await toggleTodoExecution(row.dataset.todoId);
     });
   });
-  qsa<HTMLElement>(".todo-row .todo-delete", list).forEach((node) => {
+  qsa<HTMLElement>(".todo-row .todo-more", list).forEach((node) => {
     node.addEventListener("click", async (event) => {
       event.stopPropagation();
       const row = node.closest<HTMLElement>(".todo-row");
-      if (row?.dataset.todoId) await deleteTodo(row.dataset.todoId);
+      state.openTodoMenuId = state.openTodoMenuId === row?.dataset.todoId ? null : row?.dataset.todoId || null;
+      renderTodos(state.todos);
+    });
+  });
+  qsa<HTMLElement>(".todo-row .todo-menu button", list).forEach((node) => {
+    node.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const row = node.closest<HTMLElement>(".todo-row");
+      const action = node.dataset.todoAction;
+      if (!row?.dataset.todoId || !action) return;
+      state.openTodoMenuId = null;
+      if (action === "delete") {
+        await deleteTodo(row.dataset.todoId);
+        return;
+      }
+      await pinTodo(row.dataset.todoId, action as "top" | "bottom");
     });
   });
   qsa<HTMLElement>(".todo-row .todo-check", list).forEach((node) => {
@@ -737,10 +779,17 @@ function renderTodos(todos: Todo[]) {
   });
   qsa<HTMLElement>(".todo-row", list).forEach((row) => {
     row.addEventListener("click", () => {
+      if (state.draggingTodoId) return;
       const todo = state.todos.find((item) => item.id === row.dataset.todoId);
-      if (todo) toast([todo.related, todo.dueAt].filter(Boolean).join(" · ") || "未设置关联对象和目标完成时间");
+      if (todo) toast([todo.related, formatTodoTime(todo.dueAt)].filter(Boolean).join(" · ") || "未设置关联对象和目标完成时间");
+    });
+    row.addEventListener("dblclick", (event) => {
+      event.stopPropagation();
+      const todo = state.todos.find((item) => item.id === row.dataset.todoId);
+      if (todo) openTodoModal("", todo);
     });
   });
+  bindTodoDrag(list, visibleTodos, isHistoryView);
   const total = visibleTodos.length;
   const overdue = visibleTodos.filter((todo) => todo.priority === "high" && !todo.done).length;
   const done = visibleTodos.filter((todo) => todo.done).length;
@@ -750,6 +799,128 @@ function renderTodos(todos: Todo[]) {
   if (scoreCards[2]) scoreCards[2].textContent = `${Math.round((done / Math.max(total, 1)) * 100)}%`;
   if (scoreCards[3]) scoreCards[3].textContent = money(visibleTodos.reduce((sum, todo) => sum + (todo.impactAmount || 0), 0));
   renderTodoHistory(archivedTodos);
+}
+
+function visibleTodoIds(todos: Todo[]) {
+  return todos.map((todo) => todo.id);
+}
+
+async function persistTodoOrder(ids: string[], mode: "manual" | "top" | "bottom", targetId?: string) {
+  const result = await api<{ todos: Todo[] }>("/api/todos/reorder", {
+    method: "POST",
+    body: JSON.stringify({ ids, mode, targetId })
+  });
+  result.todos.forEach((updated) => {
+    const todo = state.todos.find((item) => item.id === updated.id);
+    if (todo) Object.assign(todo, updated);
+  });
+  renderTodos(state.todos);
+  updateTodoChips(state.todos);
+  void refreshDashboardOnly();
+}
+
+async function pinTodo(id: string, mode: "top" | "bottom") {
+  const current = filterTodos(activeTodos(state.todos));
+  const sameGroup = current.filter((todo) => todo.done === state.todos.find((item) => item.id === id)?.done);
+  const rest = sameGroup.filter((todo) => todo.id !== id).map((todo) => todo.id);
+  const ids = mode === "top" ? [id, ...rest] : [...rest, id];
+  await persistTodoOrder(ids, mode, id);
+  toast(mode === "top" ? "已置顶" : "已沉底");
+}
+
+function bindTodoDrag(list: HTMLElement, visibleTodos: Todo[], isHistoryView: boolean) {
+  if (isHistoryView) return;
+  let holdTimer = 0;
+  let dragId = "";
+  let pointerId = 0;
+  let lastDropId = "";
+  const clearHold = () => {
+    if (holdTimer) window.clearTimeout(holdTimer);
+    holdTimer = 0;
+  };
+  const markDropTarget = (clientX: number, clientY: number) => {
+    const targetRow = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>(".todo-row");
+    if (!targetRow || targetRow.dataset.todoId === dragId || targetRow.closest("#dashboard .todo-list") !== list) return;
+    lastDropId = targetRow.dataset.todoId || "";
+    qsa<HTMLElement>(".todo-row.drop-target", list).forEach((item) => item.classList.remove("drop-target"));
+    targetRow.classList.add("drop-target");
+  };
+  const documentMove = (event: PointerEvent) => {
+    if (!dragId) return;
+    markDropTarget(event.clientX, event.clientY);
+  };
+  const documentUp = (event: PointerEvent) => {
+    void finishDrag(event.clientX, event.clientY);
+  };
+  const removeDocumentDragEvents = () => {
+    document.removeEventListener("pointermove", documentMove);
+    document.removeEventListener("pointerup", documentUp);
+    document.removeEventListener("pointercancel", cancelDrag);
+  };
+  const finishDrag = async (clientX: number, clientY: number) => {
+    clearHold();
+    if (!dragId) return;
+    removeDocumentDragEvents();
+    const dropRow = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>(".todo-row");
+    const dragged = visibleTodos.find((todo) => todo.id === dragId);
+    const targetId = dropRow?.dataset.todoId && dropRow.closest("#dashboard .todo-list") === list ? dropRow.dataset.todoId : lastDropId;
+    const target = visibleTodos.find((todo) => todo.id === targetId);
+    const draggedId = dragId;
+    dragId = "";
+    lastDropId = "";
+    state.draggingTodoId = null;
+    qsa<HTMLElement>(".todo-row.dragging, .todo-row.drop-target", list).forEach((item) => item.classList.remove("dragging", "drop-target"));
+    if (!dragged || !target || dragged.id === target.id || dragged.done !== target.done) {
+      renderTodos(state.todos);
+      return;
+    }
+    const group = visibleTodos.filter((todo) => todo.done === dragged.done);
+    const ids = visibleTodoIds(group).filter((id) => id !== draggedId);
+    ids.splice(ids.indexOf(target.id), 0, draggedId);
+    await persistTodoOrder(ids, "manual", draggedId);
+    toast("已按拖拽顺序保存");
+  };
+  const cancelDrag = () => {
+    clearHold();
+    removeDocumentDragEvents();
+    dragId = "";
+    lastDropId = "";
+    state.draggingTodoId = null;
+    renderTodos(state.todos);
+  };
+  qsa<HTMLElement>(".todo-row", list).forEach((row) => {
+    row.addEventListener("pointerdown", (event) => {
+      const target = event.target as HTMLElement;
+      if (target.closest("button") || target.closest(".todo-check") || target.closest(".todo-menu")) return;
+      const id = row.dataset.todoId;
+      if (!id) return;
+      pointerId = event.pointerId;
+      holdTimer = window.setTimeout(() => {
+        dragId = id;
+        state.draggingTodoId = id;
+        state.openTodoMenuId = null;
+        row.classList.add("dragging");
+        row.setPointerCapture(pointerId);
+        document.addEventListener("pointermove", documentMove);
+        document.addEventListener("pointerup", documentUp);
+        document.addEventListener("pointercancel", cancelDrag);
+        toast("拖动到目标位置后松手排序");
+      }, 280);
+    });
+    row.addEventListener("pointermove", (event) => {
+      if (!dragId || state.draggingTodoId !== dragId) return;
+      markDropTarget(event.clientX, event.clientY);
+    });
+    row.addEventListener("pointerup", (event) => void finishDrag(event.clientX, event.clientY));
+    row.addEventListener("pointercancel", cancelDrag);
+    row.addEventListener("pointerleave", clearHold);
+  });
+  list.addEventListener("pointermove", (event) => {
+    if (!dragId) return;
+    markDropTarget(event.clientX, event.clientY);
+  });
+  list.addEventListener("pointerup", (event) => void finishDrag(event.clientX, event.clientY));
+  list.addEventListener("pointercancel", cancelDrag);
 }
 
 async function toggleTodoExecution(id: string) {
@@ -777,17 +948,27 @@ function renderTodoHistory(todos: Todo[]) {
   const recent = todos.slice(0, 6);
   list.innerHTML = recent.length ? recent.map((todo) => {
     const tone = todo.priority === "high" ? "red" : todo.priority === "medium" ? "amber" : "green";
-    const meta = [todo.dueAt, todo.related].filter(Boolean).join(" · ") || "未设置上下文";
+    const meta = [formatTodoTime(todo.dueAt), todo.related].filter(Boolean).join(" · ") || "未设置上下文";
+    const menuOpen = state.openTodoMenuId === todo.id;
     return `<article class="todo-history-row ${todo.done ? "done" : ""}" data-todo-id="${escapeHtml(todo.id)}">
       <span class="history-dot ${tone}"></span>
       <div><b>${escapeHtml(todo.title)}</b><span>${escapeHtml(meta)}</span></div>
-      <div class="todo-actions">${badge(todo.done ? "历史完成" : "历史归档", todo.done ? "green" : tone)}<button class="todo-delete" title="删除待办" aria-label="删除待办"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg></button></div>
+      <div class="todo-actions">${badge(todo.done ? "历史完成" : "历史归档", todo.done ? "green" : tone)}<button class="todo-more ${menuOpen ? "active" : ""}" title="更多操作" aria-label="更多操作"><span></span><span></span><span></span></button>${menuOpen ? `<div class="todo-menu"><button class="danger" data-todo-action="delete">删除</button></div>` : ""}</div>
     </article>`;
   }).join("") : `<div class="todo-history-empty">暂无隔天历史待办</div>`;
-  qsa<HTMLElement>(".todo-history-row .todo-delete", list).forEach((node) => {
+  qsa<HTMLElement>(".todo-history-row .todo-more", list).forEach((node) => {
+    node.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const row = node.closest<HTMLElement>(".todo-history-row");
+      state.openTodoMenuId = state.openTodoMenuId === row?.dataset.todoId ? null : row?.dataset.todoId || null;
+      renderTodoHistory(todos);
+    });
+  });
+  qsa<HTMLElement>(".todo-history-row .todo-menu button", list).forEach((node) => {
     node.addEventListener("click", async (event) => {
       event.stopPropagation();
       const row = node.closest<HTMLElement>(".todo-history-row");
+      state.openTodoMenuId = null;
       if (row?.dataset.todoId) await deleteTodo(row.dataset.todoId);
     });
   });
@@ -1829,51 +2010,60 @@ function collectOcrFields() {
   return fields;
 }
 
-function openTodoModal(prefill = "") {
-  openModal("新增待办", `
+function openTodoModal(prefill = "", editing?: Todo) {
+  const titleValue = editing?.title || prefill;
+  openModal(editing ? "编辑待办" : "新增待办", `
     <div class="form-grid">
-      <div class="form-field full"><label>待办内容</label><input id="todoTitleInput" value="${escapeHtml(prefill)}" placeholder="例如：明天 10 点跟进 Nordic Tools 报价"></div>
-      <div class="form-field"><label>类型</label><select id="todoTypeInput"><option value="other" selected>其它</option><option value="customer">客户跟进</option><option value="knowledge">资料维护</option><option value="exam">在线考试</option><option value="ocr">OCR 线索</option></select></div>
+      <div class="form-field full"><label>待办内容</label><input id="todoTitleInput" value="${escapeHtml(titleValue)}" placeholder="例如：明天 10 点跟进 Nordic Tools 报价"></div>
+      <div class="form-field"><label>类型</label><select id="todoTypeInput"><option value="other">其它</option><option value="customer">客户跟进</option><option value="knowledge">资料维护</option><option value="exam">在线考试</option><option value="ocr">OCR 线索</option></select></div>
       <div class="form-field"><label>优先级</label><select id="todoPriorityInput"><option value="normal">普通</option><option value="medium">中优先级</option><option value="high">高优先级</option></select></div>
-      <div class="form-field"><label>目标完成时间</label><input id="todoDueInput" value="" placeholder="例如：2026-06-27 18:00"></div>
-      <div class="form-field"><label>关联对象</label><input id="todoRelatedInput" value="" placeholder="可选：客户、商机、资料或考试名称"></div>
+      <div class="form-field"><label>目标完成时间</label><input id="todoDueInput" value="${escapeHtml(editing?.dueAt || "")}" placeholder="例如：2026-06-27 18:00"></div>
+      <div class="form-field"><label>关联对象</label><input id="todoRelatedInput" value="${escapeHtml(editing?.related || "")}" placeholder="可选：客户、商机、资料或考试名称"></div>
     </div>
-  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveTodoButton">保存待办</button>`);
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveTodoButton">${editing ? "保存修改" : "保存待办"}</button>`);
+  qs<HTMLSelectElement>("#todoTypeInput")!.value = editing?.type || "other";
+  qs<HTMLSelectElement>("#todoPriorityInput")!.value = editing?.priority || "normal";
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
-  qs("#saveTodoButton")?.addEventListener("click", () => void saveTodo());
+  qs("#saveTodoButton")?.addEventListener("click", () => void saveTodo(editing?.id));
   qsa<HTMLInputElement | HTMLSelectElement>("#todoTitleInput, #todoTypeInput, #todoPriorityInput, #todoDueInput, #todoRelatedInput").forEach((node) => {
     node.addEventListener("keydown", (event) => {
       const keyboardEvent = event as KeyboardEvent;
       if (keyboardEvent.key !== "Enter" || keyboardEvent.isComposing) return;
       event.preventDefault();
-      void saveTodo();
+      void saveTodo(editing?.id);
     });
   });
   qs<HTMLInputElement>("#todoTitleInput")?.focus();
 }
 
-async function saveTodo() {
+async function saveTodo(id?: string) {
   const title = qs<HTMLInputElement>("#todoTitleInput")?.value.trim() || "";
   if (!title) {
     toast("请填写待办内容", "error");
     return;
   }
-  const result = await api<{ todo: Todo }>("/api/todos", {
-    method: "POST",
-    body: JSON.stringify({
-      title,
-      type: qs<HTMLSelectElement>("#todoTypeInput")?.value || "other",
-      priority: qs<HTMLSelectElement>("#todoPriorityInput")?.value || "normal",
-      dueAt: qs<HTMLInputElement>("#todoDueInput")?.value.trim() || "",
-      related: qs<HTMLInputElement>("#todoRelatedInput")?.value.trim() || ""
-    })
+  const payload = {
+    title,
+    type: qs<HTMLSelectElement>("#todoTypeInput")?.value || "other",
+    priority: qs<HTMLSelectElement>("#todoPriorityInput")?.value || "normal",
+    dueAt: qs<HTMLInputElement>("#todoDueInput")?.value.trim() || "",
+    related: qs<HTMLInputElement>("#todoRelatedInput")?.value.trim() || ""
+  };
+  const result = await api<{ todo: Todo }>(id ? `/api/todos/${id}` : "/api/todos", {
+    method: id ? "PATCH" : "POST",
+    body: JSON.stringify(payload)
   });
-  state.todos.unshift(result.todo);
+  if (id) {
+    const todo = state.todos.find((item) => item.id === id);
+    if (todo) Object.assign(todo, result.todo);
+  } else {
+    state.todos.unshift(result.todo);
+  }
   renderTodos(state.todos);
   updateTodoChips(state.todos);
   void refreshDashboardOnly();
   closeModal();
-  toast("待办已新增");
+  toast(id ? "待办已更新" : "待办已新增");
 }
 
 function openCustomerModal() {
@@ -1974,6 +2164,13 @@ function saveReportNote() {
 
 function installEvents() {
   ensureUiLayer();
+  document.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest(".todo-actions")) return;
+    if (!state.openTodoMenuId) return;
+    state.openTodoMenuId = null;
+    renderTodos(state.todos);
+  }, true);
   qs<HTMLButtonElement>("#loginButton")?.addEventListener("click", (event) => {
     event.stopImmediatePropagation();
     const role = (qs<HTMLSelectElement>("#loginRole")?.value || "sales") as Role;

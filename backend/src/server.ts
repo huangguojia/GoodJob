@@ -156,6 +156,8 @@ app.post("/api/todos", requireAuth, asyncRoute(async (req, res) => {
     teamId: req.user!.teamId,
     done: false,
     status: "pending" as const,
+    pinState: "" as const,
+    sortOrder: nextTodoSortOrder(store.todos, req.user!.id, req.user!.teamId),
     createdAt: new Date().toISOString(),
     ...body
   };
@@ -229,8 +231,15 @@ app.post("/api/todos/:id/complete", requireAuth, asyncRoute(async (req, res) => 
 
 app.patch("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
+    title: z.string().min(1).optional(),
+    type: z.enum(["customer", "knowledge", "exam", "ocr", "other"]).optional(),
+    priority: z.enum(["high", "medium", "normal"]).optional(),
+    dueAt: z.string().optional(),
+    related: z.string().optional(),
     done: z.boolean().optional(),
-    status: z.enum(["pending", "in_progress"]).optional()
+    status: z.enum(["pending", "in_progress"]).optional(),
+    pinState: z.enum(["top", "bottom", ""]).optional(),
+    sortOrder: z.number().optional()
   });
   const body = schema.parse(req.body);
   const store = getStore();
@@ -246,8 +255,46 @@ app.patch("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
   if (body.status) {
     todo.status = todo.done ? "pending" : body.status;
   }
+  if (body.title) todo.title = body.title;
+  if (body.type) todo.type = body.type;
+  if (body.priority) todo.priority = body.priority;
+  if (body.dueAt !== undefined) todo.dueAt = body.dueAt;
+  if (body.related !== undefined) todo.related = body.related;
+  if (body.pinState !== undefined) {
+    todo.pinState = body.pinState;
+  }
+  if (typeof body.sortOrder === "number") {
+    todo.sortOrder = body.sortOrder;
+  }
   await store.persist();
   res.json({ todo });
+}));
+
+app.post("/api/todos/reorder", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    ids: z.array(z.string()).min(1),
+    mode: z.enum(["manual", "top", "bottom"]).default("manual"),
+    targetId: z.string().optional()
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const visibleTodos = store.todos.filter((todo) => canSeeOwner(req.user!, todo.ownerId, todo.teamId));
+  const selected = body.ids.map((id) => visibleTodos.find((todo) => todo.id === id));
+  if (selected.some((todo) => !todo)) {
+    res.status(404).json({ message: "待办不存在" });
+    return;
+  }
+  selected.forEach((todo, index) => {
+    if (!todo) return;
+    todo.sortOrder = index + 1;
+    if (body.mode === "manual") {
+      todo.pinState = "";
+    } else if (todo.id === body.targetId) {
+      todo.pinState = body.mode;
+    }
+  });
+  await store.persist();
+  res.json({ todos: selected.filter(Boolean) });
 }));
 
 app.delete("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
@@ -855,6 +902,11 @@ function priorityWeight(priority: string) {
   if (priority === "high") return 3;
   if (priority === "medium") return 2;
   return 1;
+}
+
+function nextTodoSortOrder(todos: Todo[], ownerId: string, teamId: string) {
+  const scoped = todos.filter((todo) => todo.ownerId === ownerId || todo.teamId === teamId);
+  return Math.min(0, ...scoped.map((todo) => typeof todo.sortOrder === "number" ? todo.sortOrder : 0)) - 1;
 }
 
 function buildPriorityTasks(deals: Deal[], customers: Customer[], todos: Todo[]) {

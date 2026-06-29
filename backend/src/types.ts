@@ -40,6 +40,8 @@ export interface Todo {
   type: "customer" | "knowledge" | "exam" | "ocr" | "other";
   priority: "high" | "medium" | "normal";
   status?: "pending" | "in_progress";
+  pinState?: "top" | "bottom" | "";
+  sortOrder?: number;
   dueAt: string;
   ownerId: string;
   teamId: string;
