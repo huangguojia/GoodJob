@@ -4,7 +4,8 @@ export const users: User[] = [
   { id: "u_sales_shirley", name: "Shirley", email: "shirley@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "SH", status: "active" },
   { id: "u_sales_mia", name: "Mia", email: "mia@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "MI", status: "active" },
   { id: "u_manager_alex", name: "Alex", email: "alex@goodjob.com", password: "goodjob123", role: "manager", teamId: "europe", avatar: "AL", status: "active" },
-  { id: "u_admin", name: "Admin", email: "admin@goodjob.com", password: "goodjob123", role: "admin", teamId: "all", avatar: "AD", status: "active" }
+  { id: "u_admin", name: "Admin", email: "admin@goodjob.com", password: "goodjob123", role: "admin", teamId: "all", avatar: "AD", status: "active" },
+  { id: "u_super_admin", name: "Super Admin", email: "super@goodjob.com", password: "goodjob123", role: "super_admin", teamId: "all", avatar: "SA", status: "active" }
 ];
 
 export const customers: Customer[] = [

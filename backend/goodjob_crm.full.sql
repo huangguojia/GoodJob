@@ -308,7 +308,7 @@ CREATE TABLE `users` (
   `name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
   `email` varchar(180) COLLATE utf8mb4_unicode_ci NOT NULL,
   `password_hash` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
-  `role` enum('sales','manager','admin') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `role` enum('sales','manager','admin','super_admin') COLLATE utf8mb4_unicode_ci NOT NULL,
   `team_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
   `avatar` varchar(8) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `status` enum('active','disabled') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
@@ -324,7 +324,7 @@ CREATE TABLE `users` (
 
 LOCK TABLES `users` WRITE;
 /*!40000 ALTER TABLE `users` DISABLE KEYS */;
-INSERT INTO `users` VALUES ('u_admin','Admin','admin@goodjob.com','goodjob123','admin','all','AD','active','2026-06-26 16:08:07'),('u_manager_alex','Alex','alex@goodjob.com','goodjob123','manager','europe','AL','active','2026-06-26 16:08:07'),('u_sales_mia','Mia','mia@goodjob.com','goodjob123','sales','europe','MI','active','2026-06-26 16:08:07'),('u_sales_shirley','Shirley','shirley@goodjob.com','goodjob123','sales','europe','SH','active','2026-06-26 16:08:07');
+INSERT INTO `users` VALUES ('u_super_admin','Super Admin','super@goodjob.com','goodjob123','super_admin','all','SA','active','2026-06-26 16:08:07'),('u_admin','Admin','admin@goodjob.com','goodjob123','admin','all','AD','active','2026-06-26 16:08:07'),('u_manager_alex','Alex','alex@goodjob.com','goodjob123','manager','europe','AL','active','2026-06-26 16:08:07'),('u_sales_mia','Mia','mia@goodjob.com','goodjob123','sales','europe','MI','active','2026-06-26 16:08:07'),('u_sales_shirley','Shirley','shirley@goodjob.com','goodjob123','sales','europe','SH','active','2026-06-26 16:08:07');
 /*!40000 ALTER TABLE `users` ENABLE KEYS */;
 UNLOCK TABLES;
 

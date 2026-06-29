@@ -1,4 +1,4 @@
-type Role = "sales" | "manager" | "admin";
+type Role = "sales" | "manager" | "admin" | "super_admin";
 
 interface User {
   id: string;
@@ -254,13 +254,15 @@ let memoSavePromise: Promise<void> | null = null;
 const roleEmail: Record<Role, string> = {
   sales: "shirley@goodjob.com",
   manager: "alex@goodjob.com",
-  admin: "admin@goodjob.com"
+  admin: "admin@goodjob.com",
+  super_admin: "super@goodjob.com"
 };
 
 const roleLabel: Record<Role, string> = {
   sales: "业务员",
   manager: "销售主管",
-  admin: "管理员"
+  admin: "管理员",
+  super_admin: "超级管理员"
 };
 
 const storage = {
@@ -449,9 +451,9 @@ async function loginByRole(role: Role) {
 
 function applyAuthedUser(user: User) {
   const profileName = `${user.name} / ${roleLabel[user.role]}`;
-  document.body.dataset.role = user.role === "sales" ? "sales" : "manager";
+  document.body.dataset.role = user.role;
   qs("#scopeUser")!.textContent = profileName;
-  qs("#scopeText")!.textContent = user.role === "sales" ? "仅本人客户、本人待办、本人线索" : user.role === "manager" ? "欧洲组全部客户、全部待办、团队考试成绩" : "全量客户、账号、权限、审计与系统配置";
+  qs("#scopeText")!.textContent = user.role === "sales" ? "仅本人业务与本人待办" : user.role === "manager" ? "团队业务数据，本人待办私有" : user.role === "admin" ? "全局业务数据、账号管理，本人待办私有" : "全局业务数据、最高账号权限，本人待办私有";
   qs("#currentAvatar")!.textContent = user.avatar;
   const roleSwitcher = qs<HTMLSelectElement>("#roleSwitcher");
   const loginRole = qs<HTMLSelectElement>("#loginRole");
@@ -1909,22 +1911,55 @@ async function saveExam() {
 async function renderAccounts(user: User) {
   const tbody = qs<HTMLElement>("#settings tbody");
   if (!tbody) return;
-  let accounts: User[] = [user];
-  if (user.role !== "sales") {
-    accounts = (await api<{ accounts: User[] }>("/api/accounts")).accounts;
+  const canManage = user.role === "admin" || user.role === "super_admin";
+  const addButton = qsa<HTMLButtonElement>("#settings .page-head .btn").find((button) => button.textContent?.includes("新增账号"));
+  if (addButton) {
+    addButton.disabled = !canManage;
+    addButton.title = canManage ? "新增系统账号" : "只有管理员和超级管理员可以管理账号";
   }
+  if (!canManage) {
+    state.accounts = [user];
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><b>账号管理仅管理员可用</b><span>当前账号可查看授权范围说明；账号新增、停用和角色调整由管理员或超级管理员处理。</span></div></td></tr>`;
+    return;
+  }
+  const accounts = (await api<{ accounts: User[] }>("/api/accounts")).accounts;
   state.accounts = accounts;
-  tbody.innerHTML = accounts.map((account) => `<tr data-account-id="${escapeHtml(account.id)}"><td><div class="company"><span class="avatar">${escapeHtml(account.avatar)}</span><div><b>${escapeHtml(account.name)}</b><span>${escapeHtml(account.email)}</span></div></div></td><td>${badge(roleLabel[account.role], account.role === "admin" ? "amber" : account.role === "manager" ? "green" : "")}</td><td>${account.role === "sales" ? "仅本人数据" : account.role === "manager" ? "欧洲组全部" : "全量权限"}</td><td>${account.role === "admin" ? "全部" : account.role === "manager" ? "团队全部" : "本人客户"}</td><td>${badge((account as User & { status?: string }).status === "disabled" ? "停用" : "启用", (account as User & { status?: string }).status === "disabled" ? "gray" : "green")}</td><td><button class="btn" data-disable-account>${account.id === user.id ? "当前账号" : "停用"}</button></td></tr>`).join("");
+  tbody.innerHTML = accounts.map((account) => {
+    const status = (account as User & { status?: string }).status === "disabled" ? "停用" : "启用";
+    const disableAllowed = account.id !== user.id && (user.role === "super_admin" || account.role !== "super_admin");
+    return `<tr data-account-id="${escapeHtml(account.id)}"><td><div class="company"><span class="avatar">${escapeHtml(account.avatar)}</span><div><b>${escapeHtml(account.name)}</b><span>${escapeHtml(account.email)}</span></div></div></td><td>${badge(roleLabel[account.role], account.role === "super_admin" ? "red" : account.role === "admin" ? "amber" : account.role === "manager" ? "green" : "")}</td><td>${accountBusinessScope(account.role)}</td><td>${accountPersonalScope(account.role)}</td><td>${badge(status, status === "停用" ? "gray" : "green")}</td><td><button class="btn" data-disable-account ${disableAllowed ? "" : "disabled"}>${account.id === user.id ? "当前账号" : disableAllowed ? "停用" : "受保护"}</button></td></tr>`;
+  }).join("");
   qsa<HTMLButtonElement>("[data-disable-account]", tbody).forEach((button) => {
     button.addEventListener("click", () => void disableAccount(button.closest<HTMLElement>("tr")?.dataset.accountId || ""));
   });
 }
 
+function accountBusinessScope(role: Role) {
+  if (role === "sales") return "本人业务数据";
+  if (role === "manager") return "本团队业务数据";
+  if (role === "admin") return "全局业务数据";
+  return "全局业务数据 + 最高权限";
+}
+
+function accountPersonalScope(_role: Role) {
+  return "待办/备忘仅本人";
+}
+
 function openAccountModal() {
+  if (!state.user || (state.user.role !== "admin" && state.user.role !== "super_admin")) {
+    toast("只有管理员和超级管理员可以新增账号", "error");
+    return;
+  }
+  const roleOptions = [
+    `<option value="sales">业务员</option>`,
+    `<option value="manager">销售主管</option>`,
+    `<option value="admin">管理员</option>`,
+    state.user.role === "super_admin" ? `<option value="super_admin">超级管理员</option>` : ""
+  ].join("");
   openModal("新增账号", `
     <div class="form-grid">
       <div class="form-field"><label>姓名</label><input id="accountNameInput" value="New Sales"></div>
-      <div class="form-field"><label>角色</label><select id="accountRoleInput"><option value="sales">业务员</option><option value="manager">主管</option></select></div>
+      <div class="form-field"><label>角色</label><select id="accountRoleInput">${roleOptions}</select></div>
       <div class="form-field full"><label>邮箱</label><input id="accountEmailInput" value="new.sales.${Date.now()}@goodjob.com"></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveAccountButton">保存账号</button>`);
@@ -1932,6 +1967,10 @@ function openAccountModal() {
 }
 
 async function saveAccount() {
+  if (!state.user || (state.user.role !== "admin" && state.user.role !== "super_admin")) {
+    toast("无账号管理权限", "error");
+    return;
+  }
   const name = qs<HTMLInputElement>("#accountNameInput")?.value.trim() || "";
   const email = qs<HTMLInputElement>("#accountEmailInput")?.value.trim() || "";
   if (!name || !email) {
@@ -1955,6 +1994,11 @@ async function saveAccount() {
 async function disableAccount(id: string) {
   if (!id || id === state.user?.id) {
     toast("当前登录账号不能停用", "error");
+    return;
+  }
+  const account = state.accounts.find((item) => item.id === id);
+  if (state.user?.role === "admin" && account?.role === "super_admin") {
+    toast("管理员不能停用超级管理员", "error");
     return;
   }
   await api(`/api/accounts/${id}/disable`, { method: "PATCH" });

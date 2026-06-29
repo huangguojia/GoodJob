@@ -26,6 +26,8 @@ async function login(email: string) {
 try {
   const salesToken = await login("shirley@goodjob.com");
   const managerToken = await login("alex@goodjob.com");
+  const adminToken = await login("admin@goodjob.com");
+  const superAdminToken = await login("super@goodjob.com");
 
   const salesCustomers = await request("/api/customers", { headers: { authorization: `Bearer ${salesToken}` } });
   const managerCustomers = await request("/api/customers", { headers: { authorization: `Bearer ${managerToken}` } });
@@ -65,11 +67,22 @@ try {
   if (!Array.isArray(dashboard.json.pipelineHealth) || typeof dashboard.json.pipelineHealth[0]?.count !== "number") throw new Error("pipeline health aggregation failed");
   if (!dashboard.json.priorityTasks?.[0]?.reason || typeof dashboard.json.priorityTasks?.[0]?.score !== "number") throw new Error("priority task scoring failed");
 
+  const managerDashboard = await request("/api/dashboard/summary", { headers: { authorization: `Bearer ${managerToken}` } });
+  if (!managerDashboard.response.ok || managerDashboard.json.scope !== "团队业务数据，本人待办") throw new Error("manager dashboard scope failed");
+  const adminDashboard = await request("/api/dashboard/summary", { headers: { authorization: `Bearer ${adminToken}` } });
+  if (!adminDashboard.response.ok || adminDashboard.json.scope !== "全局业务数据，本人待办") throw new Error("admin dashboard personal todo scope failed");
+
   const priorityBatch = await request("/api/dashboard/priority-tasks/batch-process", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` }
   });
   if (!priorityBatch.response.ok || !Array.isArray(priorityBatch.json.created)) throw new Error("priority batch process failed");
+  if (priorityBatch.json.created.some((item: { ownerId: string }) => item.ownerId !== "u_sales_shirley")) throw new Error("priority batch should create personal todos only");
+
+  const managerTodos = await request("/api/todos", { headers: { authorization: `Bearer ${managerToken}` } });
+  if (!managerTodos.response.ok || managerTodos.json.todos.some((item: { ownerId: string }) => item.ownerId !== "u_manager_alex")) throw new Error("manager should only see own todos");
+  const adminTodos = await request("/api/todos", { headers: { authorization: `Bearer ${adminToken}` } });
+  if (!adminTodos.response.ok || adminTodos.json.todos.some((item: { ownerId: string }) => item.ownerId !== "u_admin")) throw new Error("admin should only see own todos");
 
   const reminders = await request("/api/reminders", { headers: { authorization: `Bearer ${salesToken}` } });
   if (reminders.json.reminders.length < 2) throw new Error("reminders scope failed");
@@ -163,6 +176,11 @@ try {
   });
   if (!deletedMemo.response.ok || deletedMemo.json.ok !== true) throw new Error("memo delete failed");
 
+  const managerMemos = await request("/api/memos", { headers: { authorization: `Bearer ${managerToken}` } });
+  if (!managerMemos.response.ok || managerMemos.json.memos.some((item: { ownerId: string }) => item.ownerId !== "u_manager_alex")) throw new Error("manager should only see own memos");
+  const adminMemos = await request("/api/memos", { headers: { authorization: `Bearer ${adminToken}` } });
+  if (!adminMemos.response.ok || adminMemos.json.memos.some((item: { ownerId: string }) => item.ownerId !== "u_admin")) throw new Error("admin should only see own memos");
+
   const competitor = await request("/api/competitors", {
     method: "POST",
     headers: { authorization: `Bearer ${managerToken}` },
@@ -204,16 +222,33 @@ try {
   });
   if (!exam.response.ok || exam.json.attempt.passed !== true) throw new Error("exam submit failed");
 
+  const managerAccounts = await request("/api/accounts", {
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (managerAccounts.response.status !== 403) throw new Error("manager must not access account management");
+
+  const accountList = await request("/api/accounts", {
+    headers: { authorization: `Bearer ${adminToken}` }
+  });
+  if (!accountList.response.ok || !accountList.json.accounts.some((item: { role: string }) => item.role === "super_admin")) throw new Error("admin account list failed");
+
+  const forbiddenSuper = await request("/api/accounts", {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ name: "Forbidden Super", email: `forbidden.super.${Date.now()}@goodjob.com`, role: "super_admin" })
+  });
+  if (forbiddenSuper.response.status !== 403) throw new Error("admin must not create super admin");
+
   const account = await request("/api/accounts", {
     method: "POST",
-    headers: { authorization: `Bearer ${managerToken}` },
+    headers: { authorization: `Bearer ${superAdminToken}` },
     body: JSON.stringify({ name: "Auto Sales", email: `auto.${Date.now()}@goodjob.com`, role: "sales" })
   });
   if (!account.response.ok || account.json.account.name !== "Auto Sales") throw new Error("account create failed");
 
   const disabled = await request(`/api/accounts/${account.json.account.id}/disable`, {
     method: "PATCH",
-    headers: { authorization: `Bearer ${managerToken}` }
+    headers: { authorization: `Bearer ${superAdminToken}` }
   });
   if (!disabled.response.ok) throw new Error("account disable failed");
 
@@ -232,7 +267,9 @@ try {
     casePublished: publishedCase.json.caseStudy.status,
 		    importJob: job.json.job.name,
     examPassed: exam.json.attempt.passed,
-    accountCreated: account.json.account.name
+    accountCreated: account.json.account.name,
+    managerAccountForbidden: managerAccounts.response.status,
+    adminSuperForbidden: forbiddenSuper.response.status
   }, null, 2));
 } finally {
   server.close();

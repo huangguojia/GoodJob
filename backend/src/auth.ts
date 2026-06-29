@@ -44,7 +44,21 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 }
 
 export function canSeeOwner(user: SessionUser, ownerId: string, teamId: string) {
-  if (user.role === "admin") return true;
+  if (user.role === "admin" || user.role === "super_admin") return true;
   if (user.role === "manager") return user.teamId === teamId;
   return user.id === ownerId;
+}
+
+export function canSeePersonalData(user: SessionUser, ownerId: string) {
+  return user.id === ownerId;
+}
+
+export function canManageAccounts(user?: SessionUser) {
+  return user?.role === "admin" || user?.role === "super_admin";
+}
+
+export function canManageRole(operator: SessionUser, targetRole: string) {
+  if (operator.role === "super_admin") return true;
+  if (operator.role !== "admin") return false;
+  return targetRole !== "super_admin";
 }

@@ -1,7 +1,7 @@
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
-import { canSeeOwner, publicUser, requireAuth, signToken } from "./auth.js";
+import { canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, publicUser, requireAuth, signToken } from "./auth.js";
 import { createMysqlStore } from "./mysql-store.js";
 import { getStore, setStore } from "./store.js";
 import type { Customer, Deal, SessionUser, Todo } from "./types.js";
@@ -14,6 +14,10 @@ function asyncRoute(handler: (req: Request, res: Response, next: NextFunction) =
   return (req: Request, res: Response, next: NextFunction) => {
     handler(req, res, next).catch(next);
   };
+}
+
+function accountUser(user: ReturnType<typeof getStore>["users"][number]) {
+  return { ...publicUser(user), status: user.status };
 }
 
 app.get("/api/health", (_req, res) => {
@@ -42,33 +46,36 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
 });
 
 app.get("/api/accounts", requireAuth, (req, res) => {
-  if (req.user?.role !== "admin" && req.user?.role !== "manager") {
+  if (!canManageAccounts(req.user)) {
     res.status(403).json({ message: "无账号管理权限" });
     return;
   }
   const { users } = getStore();
-  const scoped = req.user.role === "admin" ? users : users.filter((user) => user.teamId === req.user?.teamId);
-  res.json({ accounts: scoped.map(publicUser) });
+  res.json({ accounts: users.map(accountUser) });
 });
 
 app.post("/api/accounts", requireAuth, asyncRoute(async (req, res) => {
-  if (req.user?.role !== "admin" && req.user?.role !== "manager") {
+  if (!canManageAccounts(req.user)) {
     res.status(403).json({ message: "无账号管理权限" });
     return;
   }
   const schema = z.object({
     name: z.string().min(1),
     email: z.string().email(),
-    role: z.enum(["sales", "manager", "admin"]).default("sales"),
+    role: z.enum(["sales", "manager", "admin", "super_admin"]).default("sales"),
     teamId: z.string().min(1).optional()
   });
   const body = schema.parse(req.body);
+  if (!canManageRole(req.user!, body.role)) {
+    res.status(403).json({ message: "无权创建该角色账号" });
+    return;
+  }
   const store = getStore();
   if (store.users.some((user) => user.email === body.email)) {
     res.status(409).json({ message: "账号邮箱已存在" });
     return;
   }
-  const teamId = req.user.role === "manager" ? req.user.teamId : body.teamId || req.user.teamId;
+  const teamId = body.role === "super_admin" || body.role === "admin" ? "all" : body.teamId || req.user!.teamId;
   const user = {
     id: `u_${Date.now()}`,
     name: body.name,
@@ -81,27 +88,31 @@ app.post("/api/accounts", requireAuth, asyncRoute(async (req, res) => {
   };
   store.users.unshift(user);
   await store.persist();
-  res.json({ account: publicUser(user) });
+  res.json({ account: accountUser(user) });
 }));
 
 app.patch("/api/accounts/:id/disable", requireAuth, asyncRoute(async (req, res) => {
-  if (req.user?.role !== "admin" && req.user?.role !== "manager") {
+  if (!canManageAccounts(req.user)) {
     res.status(403).json({ message: "无账号管理权限" });
     return;
   }
   const store = getStore();
   const user = store.users.find((item) => item.id === req.params.id);
-  if (!user || (req.user.role === "manager" && user.teamId !== req.user.teamId)) {
+  if (!user) {
     res.status(404).json({ message: "账号不存在" });
     return;
   }
-  if (user.id === req.user.id) {
+  if (user.id === req.user!.id) {
     res.status(400).json({ message: "不能停用当前登录账号" });
+    return;
+  }
+  if (!canManageRole(req.user!, user.role)) {
+    res.status(403).json({ message: "无权停用该角色账号" });
     return;
   }
   user.status = "disabled";
   await store.persist();
-  res.json({ account: publicUser(user) });
+  res.json({ account: accountUser(user) });
 }));
 
 app.get("/api/customers", requireAuth, (req, res) => {
@@ -136,7 +147,7 @@ app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
 
 app.get("/api/todos", requireAuth, (req, res) => {
   const { todos } = getStore();
-  const scoped = todos.filter((todo) => canSeeOwner(req.user!, todo.ownerId, todo.teamId));
+  const scoped = todos.filter((todo) => canSeePersonalData(req.user!, todo.ownerId));
   res.json({ todos: scoped });
 });
 
@@ -157,7 +168,7 @@ app.post("/api/todos", requireAuth, asyncRoute(async (req, res) => {
     done: false,
     status: "pending" as const,
     pinState: "" as const,
-    sortOrder: nextTodoSortOrder(store.todos, req.user!.id, req.user!.teamId),
+    sortOrder: nextTodoSortOrder(store.todos, req.user!.id),
     createdAt: new Date().toISOString(),
     ...body
   };
@@ -219,7 +230,7 @@ app.patch("/api/deals/:id/stage", requireAuth, asyncRoute(async (req, res) => {
 app.post("/api/todos/:id/complete", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
   const todo = store.todos.find((item) => item.id === req.params.id);
-  if (!todo || !canSeeOwner(req.user!, todo.ownerId, todo.teamId)) {
+  if (!todo || !canSeePersonalData(req.user!, todo.ownerId)) {
     res.status(404).json({ message: "待办不存在" });
     return;
   }
@@ -244,7 +255,7 @@ app.patch("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
   const body = schema.parse(req.body);
   const store = getStore();
   const todo = store.todos.find((item) => item.id === req.params.id);
-  if (!todo || !canSeeOwner(req.user!, todo.ownerId, todo.teamId)) {
+  if (!todo || !canSeePersonalData(req.user!, todo.ownerId)) {
     res.status(404).json({ message: "待办不存在" });
     return;
   }
@@ -278,7 +289,7 @@ app.post("/api/todos/reorder", requireAuth, asyncRoute(async (req, res) => {
   });
   const body = schema.parse(req.body);
   const store = getStore();
-  const visibleTodos = store.todos.filter((todo) => canSeeOwner(req.user!, todo.ownerId, todo.teamId));
+  const visibleTodos = store.todos.filter((todo) => canSeePersonalData(req.user!, todo.ownerId));
   const selected = body.ids.map((id) => visibleTodos.find((todo) => todo.id === id));
   if (selected.some((todo) => !todo)) {
     res.status(404).json({ message: "待办不存在" });
@@ -301,7 +312,7 @@ app.delete("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
   const index = store.todos.findIndex((item) => item.id === req.params.id);
   const todo = index >= 0 ? store.todos[index] : null;
-  if (!todo || !canSeeOwner(req.user!, todo.ownerId, todo.teamId)) {
+  if (!todo || !canSeePersonalData(req.user!, todo.ownerId)) {
     res.status(404).json({ message: "待办不存在" });
     return;
   }
@@ -358,7 +369,7 @@ app.patch("/api/problems/:id/status", requireAuth, asyncRoute(async (req, res) =
 
 app.get("/api/memos", requireAuth, (req, res) => {
   const { memos } = getStore();
-  const scoped = memos.filter((memo) => canSeeOwner(req.user!, memo.ownerId, memo.teamId));
+  const scoped = memos.filter((memo) => canSeePersonalData(req.user!, memo.ownerId));
   res.json({ memos: scoped });
 });
 
@@ -397,7 +408,7 @@ app.patch("/api/memos/:id", requireAuth, asyncRoute(async (req, res) => {
   const body = schema.parse(req.body);
   const store = getStore();
   const memo = store.memos.find((item) => item.id === req.params.id);
-  if (!memo || !canSeeOwner(req.user!, memo.ownerId, memo.teamId)) {
+  if (!memo || !canSeePersonalData(req.user!, memo.ownerId)) {
     res.status(404).json({ message: "备忘录不存在" });
     return;
   }
@@ -416,7 +427,7 @@ app.delete("/api/memos/:id", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
   const index = store.memos.findIndex((item) => item.id === req.params.id);
   const memo = index >= 0 ? store.memos[index] : null;
-  if (!memo || !canSeeOwner(req.user!, memo.ownerId, memo.teamId)) {
+  if (!memo || !canSeePersonalData(req.user!, memo.ownerId)) {
     res.status(404).json({ message: "备忘录不存在" });
     return;
   }
@@ -740,7 +751,7 @@ app.post("/api/tools/ocr/jobs/:id/sync-lead", requireAuth, asyncRoute(async (req
 app.get("/api/dashboard/summary", requireAuth, (req, res) => {
   const { customers, todos, deals, reminders, knowledgeAssets, exams, wecomMessages } = getStore();
   const scopedCustomers = customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
-  const scopedTodos = todos.filter((todo) => canSeeOwner(req.user!, todo.ownerId, todo.teamId));
+  const scopedTodos = todos.filter((todo) => canSeePersonalData(req.user!, todo.ownerId));
   const scopedDeals = deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId));
   const scopedReminders = reminders.filter((reminder) => canSeeOwner(req.user!, reminder.ownerId, reminder.teamId));
   const scopedKnowledge = req.user?.role === "sales" ? knowledgeAssets.filter((asset) => asset.ownerId === req.user?.id) : knowledgeAssets;
@@ -777,7 +788,7 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
   }));
   const topRiskNames = riskCustomers.slice(0, 3).map((customer) => customer.company).join("、") || topDeals.slice(0, 2).map((deal) => deal.title).join("、") || "暂无高风险客户";
   res.json({
-    scope: req.user?.role === "sales" ? "仅本人数据" : req.user?.role === "manager" ? "团队全部数据" : "全量数据",
+    scope: req.user?.role === "sales" ? "仅本人业务与本人待办" : req.user?.role === "manager" ? "团队业务数据，本人待办" : "全局业务数据，本人待办",
     updatedAt: new Date().toISOString(),
     briefing: {
       title: pendingTodos.length
@@ -794,7 +805,7 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
         ? `影响范围：${moneyText(riskAmount)} 风险金额，处理后可降低逾期和报价流失。`
         : `影响范围：${moneyText(readyDeals.reduce((sum, deal) => sum + deal.amount, 0))} 可推进金额，适合用于晨会安排。`,
       riskAmount,
-      riskLabel: req.user?.role === "sales" ? "本人名下风险" : "团队风险金额",
+      riskLabel: req.user?.role === "sales" ? "本人名下风险" : req.user?.role === "manager" ? "团队风险金额" : "全局风险金额",
       closableDeals: readyDeals.length,
       closableAmount: readyDeals.reduce((sum, deal) => sum + deal.amount, 0),
       unreadWecom: pendingMessages.length
@@ -850,12 +861,12 @@ app.post("/api/dashboard/priority-tasks/batch-process", requireAuth, asyncRoute(
   const store = getStore();
   const scopedCustomers = store.customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
   const scopedDeals = store.deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId));
-  const scopedTodos = store.todos.filter((todo) => canSeeOwner(req.user!, todo.ownerId, todo.teamId));
+  const scopedTodos = store.todos.filter((todo) => canSeePersonalData(req.user!, todo.ownerId));
   const pendingTodos = scopedTodos.filter((todo) => !todo.done && !isHistoricalDue(todo.dueAt));
   const priorityTasks = buildPriorityTasks(scopedDeals, scopedCustomers, pendingTodos).slice(0, 3);
   const created: Todo[] = [];
   for (const task of priorityTasks) {
-    const exists = store.todos.some((todo) => !todo.done && todo.related === task.deal.title && todo.title.includes("跟进优先级"));
+    const exists = store.todos.some((todo) => todo.ownerId === req.user!.id && !todo.done && todo.related === task.deal.title && todo.title.includes("跟进优先级"));
     if (exists) continue;
     const todo: Todo = {
       id: `t_priority_${task.deal.id}_${Date.now()}_${created.length}`,
@@ -863,8 +874,8 @@ app.post("/api/dashboard/priority-tasks/batch-process", requireAuth, asyncRoute(
       type: "customer",
       priority: task.score >= 80 ? "high" : task.score >= 60 ? "medium" : "normal",
       dueAt: currentMinuteText(),
-      ownerId: task.deal.ownerId,
-      teamId: task.deal.teamId,
+      ownerId: req.user!.id,
+      teamId: req.user!.teamId,
       related: task.deal.title,
       done: false,
       impactAmount: task.deal.amount,
@@ -904,8 +915,8 @@ function priorityWeight(priority: string) {
   return 1;
 }
 
-function nextTodoSortOrder(todos: Todo[], ownerId: string, teamId: string) {
-  const scoped = todos.filter((todo) => todo.ownerId === ownerId || todo.teamId === teamId);
+function nextTodoSortOrder(todos: Todo[], ownerId: string) {
+  const scoped = todos.filter((todo) => todo.ownerId === ownerId);
   return Math.min(0, ...scoped.map((todo) => typeof todo.sortOrder === "number" ? todo.sortOrder : 0)) - 1;
 }
 

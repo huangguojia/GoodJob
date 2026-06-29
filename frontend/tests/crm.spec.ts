@@ -8,6 +8,12 @@ async function loginAsManager(page: import("@playwright/test").Page) {
   await expect(page.locator("#scopeUser")).toContainText("Alex");
 }
 
+async function switchRole(page: import("@playwright/test").Page, role: "sales" | "manager" | "admin" | "super_admin", expectedName: string) {
+  await page.locator("#roleSwitcher").selectOption(role);
+  await expect(page.locator("body")).toHaveClass(/is-authenticated/);
+  await expect(page.locator("#scopeUser")).toContainText(expectedName);
+}
+
 async function openView(page: import("@playwright/test").Page, view: string) {
   await page.locator(`.nav button[data-view="${view}"]`).click();
   await expect(page.locator(`#${view}`)).toHaveClass(/active/);
@@ -263,9 +269,17 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#wecom .chat")).toContainText("已归档");
 
     await openView(page, "settings");
+    await expect(page.locator("#settings tbody")).toContainText("账号管理仅管理员可用");
+    await expect(page.locator("#settings .page-head .btn", { hasText: "新增账号" })).toBeDisabled();
+
+    await switchRole(page, "admin", "Admin");
+    await openView(page, "settings");
+    await expect(page.locator("#settings tbody")).toContainText("Super Admin");
+    await expect(page.locator("#settings tbody tr", { hasText: "Super Admin" }).first().getByRole("button", { name: "受保护" })).toBeDisabled();
     await page.locator("#settings .page-head .btn", { hasText: "新增账号" }).click();
     await page.locator("#accountNameInput").fill(accountName);
     await page.locator("#accountEmailInput").fill(`auto.account.${runId}@goodjob.com`);
+    await page.locator("#accountRoleInput").selectOption("sales");
     await page.locator("#saveAccountButton").click();
     await expect(page.locator("#settings tbody")).toContainText(accountName);
 
@@ -371,7 +385,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#memoTitleEditor")).toHaveValue(memoTitle);
     await page.locator("#memoContentEditor").fill("自动保存验证：切换左侧备忘前保存当前正文。");
     await expect(page.locator("#memoSaveState")).toContainText("未保存");
-    await page.locator("#memos .memo-card", { hasText: "欧洲客户常问认证资料" }).first().click();
+    await page.locator("#memos .memo-card", { hasText: "天津马赫客户信息补充" }).first().click();
     await expect(page.locator("#memoSaveState")).toContainText(/已自动保存|已保存/);
     await page.locator("#memos .memo-card", { hasText: memoTitle }).first().click();
     await expect(page.locator("#memoContentEditor")).toHaveValue("自动保存验证：切换左侧备忘前保存当前正文。");

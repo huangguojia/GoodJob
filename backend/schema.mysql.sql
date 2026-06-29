@@ -3,7 +3,7 @@ CREATE TABLE users (
   name VARCHAR(100) NOT NULL,
   email VARCHAR(180) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
-  role ENUM('sales','manager','admin') NOT NULL,
+  role ENUM('sales','manager','admin','super_admin') NOT NULL,
   team_id VARCHAR(64) NOT NULL,
   avatar VARCHAR(8),
   status ENUM('active','disabled') NOT NULL DEFAULT 'active',

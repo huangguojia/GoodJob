@@ -38,15 +38,16 @@ function Login({ onLogin }: { onLogin: (token: string, user: User) => void }) {
       <section className="loginHero">
         <div className="brandMark">GJ</div>
         <h1>GoodJob CRM</h1>
-        <p>登录后按账号角色加载不同数据范围：业务员看本人，主管看团队，管理员看全量。</p>
+        <p>登录后按账号角色加载不同数据范围：业务员看本人，主管看团队业务，管理员看全局业务；待办和备忘只看本人。</p>
         <div className="proof"><b>RBAC</b><b>Data Scope</b><b>Audit</b></div>
       </section>
       <section className="loginCard">
         <h2>账号登录</h2>
         <select value={email} onChange={(event) => setEmail(event.target.value)}>
-          <option value="shirley@goodjob.com">Shirley / 业务员 / 仅本人数据</option>
-          <option value="alex@goodjob.com">Alex / 销售主管 / 团队全部数据</option>
-          <option value="admin@goodjob.com">Admin / 管理员 / 全量权限</option>
+          <option value="shirley@goodjob.com">Shirley / 业务员 / 仅本人业务与待办</option>
+          <option value="alex@goodjob.com">Alex / 销售主管 / 团队业务，本人待办</option>
+          <option value="admin@goodjob.com">Admin / 管理员 / 全局业务与账号</option>
+          <option value="super@goodjob.com">Super Admin / 超级管理员 / 最高账号权限</option>
         </select>
         <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" />
         {error ? <p className="error">{error}</p> : null}
@@ -77,7 +78,7 @@ function Layout({ user, onLogout }: { user: User; onLogout: () => void }) {
       api<{ reminders: Reminder[] }>("/api/reminders", token).then((data) => setReminders(data.reminders)),
       api<{ jobs: ImportExportJob[] }>("/api/import-export/jobs", token).then((data) => setJobs(data.jobs)),
       api<{ messages: WecomMessage[] }>("/api/wecom/messages", token).then((data) => setWecomMessages(data.messages)),
-      user.role !== "sales" ? api<{ accounts: User[] }>("/api/accounts", token).then((data) => setAccounts(data.accounts)) : Promise.resolve()
+      user.role === "admin" || user.role === "super_admin" ? api<{ accounts: User[] }>("/api/accounts", token).then((data) => setAccounts(data.accounts)) : Promise.resolve()
     ]);
   }, [token, user.role]);
 
@@ -206,8 +207,10 @@ function Tools({ token }: { token: string }) {
 }
 
 function Settings({ user, accounts }: { user: User; accounts: User[] }) {
-  const visibleAccounts = user.role === "sales" ? [user] : accounts;
-  return <section className="panel"><div className="panelHead"><h2>账号管理</h2><button>新增账号</button></div><table><thead><tr><th>账号</th><th>角色</th><th>数据范围</th></tr></thead><tbody>{visibleAccounts.map((account) => <tr key={account.id}><td><b>{account.name}</b><small>{account.email}</small></td><td>{account.role}</td><td>{account.role === "sales" ? "仅本人数据" : account.role === "manager" ? "团队全部数据" : "全量权限"}</td></tr>)}</tbody></table></section>;
+  const canManage = user.role === "admin" || user.role === "super_admin";
+  const visibleAccounts = canManage ? accounts : [user];
+  const scopeText = (role: User["role"]) => role === "sales" ? "本人业务，本人待办/备忘" : role === "manager" ? "团队业务，本人待办/备忘" : role === "admin" ? "全局业务，账号管理" : "全局业务，最高账号权限";
+  return <section className="panel"><div className="panelHead"><h2>账号管理</h2><button disabled={!canManage}>新增账号</button></div>{!canManage ? <p>只有管理员和超级管理员可以管理账号。</p> : null}<table><thead><tr><th>账号</th><th>角色</th><th>数据范围</th></tr></thead><tbody>{visibleAccounts.map((account) => <tr key={account.id}><td><b>{account.name}</b><small>{account.email}</small></td><td>{account.role}</td><td>{scopeText(account.role)}</td></tr>)}</tbody></table></section>;
 }
 
 function App() {

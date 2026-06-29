@@ -3262,7 +3262,9 @@
       display: none !important;
     }
 
-    body[data-role="manager"] .sales-only {
+    body[data-role="manager"] .sales-only,
+    body[data-role="admin"] .sales-only,
+    body[data-role="super_admin"] .sales-only {
       display: none !important;
     }
 
@@ -3565,14 +3567,15 @@
     </div>
     <div class="login-panel">
       <h2>账号登录</h2>
-      <p>原型模拟三类账号：业务员、主管、管理员。可切换查看不同数据权限。</p>
+      <p>原型模拟四类账号：业务员、主管、管理员、超级管理员。可切换查看不同数据权限。</p>
       <div class="login-field"><label>账号</label><input value="shirley@goodjob.com"></div>
       <div class="login-field"><label>密码</label><input type="password" value="goodjob123"></div>
-      <div class="login-field"><label>快速选择身份</label><select id="loginRole"><option value="sales">Shirley / 业务员 / 仅本人数据</option><option value="manager">Alex / 销售主管 / 全团队数据</option><option value="admin">Admin / 管理员 / 全量权限</option></select></div>
+      <div class="login-field"><label>快速选择身份</label><select id="loginRole"><option value="sales">Shirley / 业务员 / 仅本人业务与待办</option><option value="manager">Alex / 销售主管 / 团队业务，本人待办</option><option value="admin">Admin / 管理员 / 全局业务与账号</option><option value="super_admin">Super Admin / 超级管理员 / 最高账号权限</option></select></div>
       <div class="login-users">
         <div class="login-user active" data-login-role="sales"><span class="avatar">SH</span><div><b>Shirley 业务员</b><span>仅本人客户、待办、线索、考试</span></div><span class="badge">本人</span></div>
-        <div class="login-user" data-login-role="manager"><span class="avatar">AL</span><div><b>Alex 销售主管</b><span>查看欧洲组全部客户和任务</span></div><span class="badge green">主管</span></div>
-        <div class="login-user" data-login-role="admin"><span class="avatar">AD</span><div><b>Admin 管理员</b><span>账号、权限、系统配置与审计</span></div><span class="badge amber">管理</span></div>
+        <div class="login-user" data-login-role="manager"><span class="avatar">AL</span><div><b>Alex 销售主管</b><span>查看欧洲组业务数据，待办仍只看本人</span></div><span class="badge green">主管</span></div>
+        <div class="login-user" data-login-role="admin"><span class="avatar">AD</span><div><b>Admin 管理员</b><span>账号、权限、全局业务与审计</span></div><span class="badge amber">管理</span></div>
+        <div class="login-user" data-login-role="super_admin"><span class="avatar">SA</span><div><b>Super Admin 超级管理员</b><span>最高账号权限，个人待办不越权</span></div><span class="badge red">超管</span></div>
       </div>
       <button class="btn primary" id="loginButton" style="width:100%; height:36px">登录系统</button>
     </div>
@@ -3659,6 +3662,7 @@
               <option value="sales">Shirley · 业务员</option>
               <option value="manager">Alex · 主管</option>
               <option value="admin">Admin · 管理员</option>
+              <option value="super_admin">Super Admin · 超管</option>
             </select>
             <button class="btn" id="logoutButton">退出</button>
           </div>
@@ -4470,7 +4474,7 @@
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg></span><div><h2>账号列表</h2><span>不同账号加载不同数据范围</span></div></div><button class="btn">批量停用</button></div>
               <div class="table-wrap">
                 <table>
-                  <thead><tr><th>账号</th><th>角色</th><th>数据范围</th><th>可见客户</th><th>状态</th><th>最近登录</th></tr></thead>
+                  <thead><tr><th>账号</th><th>角色</th><th>业务数据范围</th><th>个人数据规则</th><th>状态</th><th>操作</th></tr></thead>
                   <tbody>
                     <tr><td><div class="company"><span class="avatar">SH</span><div><b>Shirley</b><span>shirley@goodjob.com</span></div></div></td><td><span class="badge">业务员</span></td><td>仅本人数据</td><td>128</td><td><span class="badge green">启用</span></td><td>今天 09:12</td></tr>
                     <tr><td><div class="company"><span class="avatar">AL</span><div><b>Alex</b><span>alex@goodjob.com</span></div></div></td><td><span class="badge green">主管</span></td><td>欧洲组全部</td><td>642</td><td><span class="badge green">启用</span></td><td>今天 08:36</td></tr>
@@ -4484,17 +4488,18 @@
             <aside class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><div><h2>数据权限规则</h2><span>RBAC + 数据范围</span></div></div></div>
               <div class="category-list">
-                <div class="category-item"><div><b>业务员</b><span>客户、线索、待办、考试仅本人可见；不可查看团队排行明细。</span></div><span class="badge">本人</span></div>
-                <div class="category-item"><div><b>销售主管</b><span>查看本团队全部客户、商机、待办、考试成绩；可分配任务。</span></div><span class="badge green">团队</span></div>
-                <div class="category-item"><div><b>管理员</b><span>账号、角色、字段、导出审批、审计日志和系统配置。</span></div><span class="badge amber">全量</span></div>
+                <div class="category-item"><div><b>业务员</b><span>客户、线索、商机、待办、备忘均仅本人可见；不能管理账号。</span></div><span class="badge">本人</span></div>
+                <div class="category-item"><div><b>销售主管</b><span>查看本团队客户、商机、问题、案例等业务协作数据；不查看员工待办和备忘。</span></div><span class="badge green">团队</span></div>
+                <div class="category-item"><div><b>管理员</b><span>查看全局业务数据并管理账号；不能查看他人待办和备忘。</span></div><span class="badge amber">全局</span></div>
+                <div class="category-item"><div><b>超级管理员</b><span>可管理管理员和超级管理员；个人数据仍坚持本人私有。</span></div><span class="badge red">最高</span></div>
               </div>
             </aside>
           </div>
 
           <div class="permission-grid">
-            <div class="permission-card"><b>客户数据</b><span>业务员仅本人；主管本团队；管理员全量。</span></div>
-            <div class="permission-card"><b>待办清单</b><span>业务员仅本人待办；主管可查看和分配团队待办。</span></div>
-            <div class="permission-card"><b>报表导出</b><span>业务员不可导出全量；主管需审批；管理员审计。</span></div>
+            <div class="permission-card"><b>业务数据</b><span>业务员仅本人；主管本团队；管理员和超级管理员全局。</span></div>
+            <div class="permission-card"><b>个人数据</b><span>待办清单、备忘录始终仅本人可见，管理员也不越权。</span></div>
+            <div class="permission-card"><b>账号管理</b><span>仅管理员和超级管理员可用；管理员不能管理超级管理员。</span></div>
           </div>
 
           <div class="settings-grid">
@@ -4507,9 +4512,10 @@
             </div>
             <div class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span><div><h2>角色权限</h2><span>RBAC + 数据范围</span></div></div></div>
-              <div class="setting-row"><span>业务员</span><b>仅本人客户</b></div>
-              <div class="setting-row"><span>主管</span><b>本团队客户</b></div>
-              <div class="setting-row"><span>管理员</span><b>全量配置</b></div>
+              <div class="setting-row"><span>业务员</span><b>本人业务 + 本人个人数据</b></div>
+              <div class="setting-row"><span>主管</span><b>团队业务 + 本人个人数据</b></div>
+              <div class="setting-row"><span>管理员</span><b>全局业务 + 账号管理</b></div>
+              <div class="setting-row"><span>超级管理员</span><b>最高账号权限</b></div>
               <div class="setting-row"><span>导出审批</span><b><span class="badge amber">开启</span></b></div>
             </div>
           </div>
@@ -4530,15 +4536,21 @@
       },
       manager: {
         name: "Alex / 销售主管",
-        scope: "欧洲组全部客户、全部待办、团队考试成绩",
+        scope: "团队业务数据，本人待办私有",
         avatar: "AL",
         bodyRole: "manager"
       },
       admin: {
         name: "Admin / 管理员",
-        scope: "全量客户、账号、权限、审计与系统配置",
+        scope: "全局业务数据、账号管理，本人待办私有",
         avatar: "AD",
-        bodyRole: "manager"
+        bodyRole: "admin"
+      },
+      super_admin: {
+        name: "Super Admin / 超级管理员",
+        scope: "全局业务数据、最高账号权限，本人待办私有",
+        avatar: "SA",
+        bodyRole: "super_admin"
       }
     };
 
@@ -4557,7 +4569,7 @@
       document.getElementById("roleSwitcher").value = role;
       document.getElementById("loginRole").value = role;
       document.querySelectorAll("[data-sales-text]").forEach((node) => {
-        node.textContent = profile.bodyRole === "manager" ? node.dataset.managerText : node.dataset.salesText;
+        node.textContent = profile.bodyRole !== "sales" ? node.dataset.managerText : node.dataset.salesText;
       });
       document.querySelectorAll(".login-user").forEach((node) => {
         node.classList.toggle("active", node.dataset.loginRole === role);

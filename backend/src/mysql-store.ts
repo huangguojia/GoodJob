@@ -64,6 +64,11 @@ export async function createMysqlStore(): Promise<CrmStore> {
     store.caseStudies.push(...caseStudies);
     await store.persist();
   }
+  const missingSeedUsers = users.filter((seedUser) => !store.users.some((user) => user.id === seedUser.id || user.email === seedUser.email));
+  if (missingSeedUsers.length) {
+    store.users.push(...missingSeedUsers);
+    await store.persist();
+  }
 
   return store;
 }
