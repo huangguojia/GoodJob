@@ -3,21 +3,24 @@ branches: {
   }
 fileChange:
   /frontend:
-    newFile: !uuid 'd6abbd256a36507987802a33c5254640042f5a48'
-    oldFile: !uuid '8baa06c561a798470effdd4cf6b122d2f84dfa31'
+    newFile: !uuid 'f3f13897e66487c96962f1179e1c8ce407273caf'
+    oldFile: !uuid 'd6abbd256a36507987802a33c5254640042f5a48'
+  /frontend/index.html:
+    newFile: !uuid '346c26be686f3c751707cd0bfe109cc4759e4f72'
+    oldFile: !uuid 'a84563827f2b08cd20db5c24173c585bd97f64b7'
   /frontend/src:
-    newFile: !uuid '88d0a3bc12047c977d70c18bde2cc7ee7aad187d'
-    oldFile: !uuid '28c831cedaffb56b043b2bfc9c91c5efa3186545'
+    newFile: !uuid 'd713838790bc4411d4a504fcb0b5f02e0010ff29'
+    oldFile: !uuid '88d0a3bc12047c977d70c18bde2cc7ee7aad187d'
   /frontend/src/prototype-api.ts:
-    newFile: !uuid '1ac0fd7b9f05118c595903e20123dc48b9100aa0'
-    oldFile: !uuid 'b1880cd764a885f595caabed66374a57a1c1546c'
+    newFile: !uuid 'b02a39d190f6f3014681d90bbd8479b2b837c52b'
+    oldFile: !uuid '1ac0fd7b9f05118c595903e20123dc48b9100aa0'
   /frontend/tests:
-    newFile: !uuid '991ba5ed6f509d9f3f08e67ef10c37d05ff6f747'
-    oldFile: !uuid '003d0bdeb97ec6a0ff15c6ab4b585d7630b1ab5a'
+    newFile: !uuid '0f98fea1526fc04067c5138c901cd8650173d60f'
+    oldFile: !uuid '991ba5ed6f509d9f3f08e67ef10c37d05ff6f747'
   /frontend/tests/crm.spec.ts:
-    newFile: !uuid 'a5a15c8675bd4b61403b3b477bdffd8412539b6a'
-    oldFile: !uuid '42313d56d4d07cb0d4ebc770b3acb6013c0de4c6'
-gitCommitId: !uuid '4c16d6f0a5c93f6dc58e646d645581c5b391576e'
+    newFile: !uuid '98993946a0672b26773d4005eb8ece91fd406e37'
+    oldFile: !uuid 'a5a15c8675bd4b61403b3b477bdffd8412539b6a'
+gitCommitId: !uuid '9966ab35f5290ad16b015f9890a09f99878681ef'
 renames: {
   }
-revisionId: 11
+revisionId: 12
