@@ -67,6 +67,7 @@ interface KnowledgeAsset {
   title: string;
   category: string;
   status: string;
+  ownerId: string;
   version: string;
 }
 
@@ -501,6 +502,7 @@ async function refreshAll(user: User) {
   renderWecom(wecom.messages);
   renderKnowledge(knowledge.assets);
   renderExams(exams.exams);
+  renderDashboardKnowledgePanels(knowledge.assets, exams.exams);
   renderProblems(problems.problems);
   renderMemos(memos.memos);
   renderCompetitors(competitors.competitors);
@@ -652,6 +654,50 @@ function renderDashboardDense(summary: DashboardSummary) {
     if (!item) return;
     card.innerHTML = `<span>${item.label}</span><b>${item.value}</b><small>${item.note}</small>`;
   });
+}
+
+function renderDashboardKnowledgePanels(assets = state.knowledgeAssets, exams = state.exams) {
+  const assetBody = qs<HTMLElement>("#dashboard-knowledge-panel tbody");
+  if (assetBody) {
+    assetBody.innerHTML = assets.length ? assets.slice(0, 4).map((asset) => {
+      const statusText = asset.status === "published" ? "已发布" : asset.status === "review" ? "待审" : "草稿";
+      const tone = asset.status === "published" ? "green" : asset.status === "review" ? "amber" : "";
+      return `<tr><td>${escapeHtml(asset.title)}</td><td>${escapeHtml(asset.category)}</td><td>${badge(statusText, tone)}</td><td>${escapeHtml(ownerName(asset.ownerId))}</td></tr>`;
+    }).join("") : `<tr><td colspan="4">暂无资料数据</td></tr>`;
+  }
+
+  const examBody = qs<HTMLElement>("#dashboard-exam-panel tbody");
+  if (examBody) {
+    examBody.innerHTML = exams.length ? exams.slice(0, 4).map((exam) => `<tr><td>${escapeHtml(exam.title)}</td><td>${exam.questionCount}</td><td>${exam.passRate}%</td></tr>`).join("") : `<tr><td colspan="3">暂无考试数据</td></tr>`;
+  }
+
+  const gapBody = qs<HTMLElement>("#dashboard-gap-panel tbody");
+  if (!gapBody) return;
+  const grouped = exams.reduce<Record<string, { total: number; count: number }>>((acc, exam) => {
+    acc[exam.category] ||= { total: 0, count: 0 };
+    acc[exam.category].total += exam.passRate;
+    acc[exam.category].count += 1;
+    return acc;
+  }, {});
+  const rows = Object.entries(grouped)
+    .map(([category, item]) => ({ category, passRate: Math.round(item.total / Math.max(item.count, 1)) }))
+    .sort((left, right) => left.passRate - right.passRate);
+  gapBody.innerHTML = rows.length ? rows.slice(0, 4).map((row) => {
+    const action = row.passRate < 70 ? "补考" : row.passRate < 85 ? "复训" : "达标";
+    const tone = row.passRate < 70 ? "red" : row.passRate < 85 ? "amber" : "green";
+    return `<tr><td>${escapeHtml(row.category)}</td><td>${row.passRate}%</td><td>${badge(action, tone)}</td></tr>`;
+  }).join("") : `<tr><td colspan="3">暂无考试类目数据</td></tr>`;
+}
+
+function ownerName(ownerId: string) {
+  const map: Record<string, string> = {
+    u_sales_shirley: "Shirley",
+    u_sales_mia: "Mia",
+    u_manager_alex: "Alex",
+    u_admin: "Admin",
+    u_super_admin: "Super Admin"
+  };
+  return map[ownerId] || "当前账号";
 }
 
 function renderTodoInsights(summary: DashboardSummary) {
@@ -1758,6 +1804,7 @@ async function publishAsset(id: string) {
     const result = await api<{ asset: KnowledgeAsset }>(`/api/knowledge/assets/${id}/publish`, { method: "PATCH" });
     Object.assign(asset, result.asset);
     renderKnowledge(state.knowledgeAssets);
+    renderDashboardKnowledgePanels();
     toast("资料已发布");
   } catch (error) {
     toast(error instanceof Error ? error.message : "发布失败", "error");
@@ -1792,6 +1839,7 @@ async function saveAsset() {
   });
   state.knowledgeAssets.unshift(result.asset);
   renderKnowledge(state.knowledgeAssets);
+  renderDashboardKnowledgePanels();
   closeModal();
   toast("资料已上传");
 }
@@ -1856,6 +1904,7 @@ async function publishExam(id: string) {
     const result = await api<{ exam: Exam }>(`/api/exams/${id}/publish`, { method: "PATCH" });
     Object.assign(exam, result.exam);
     renderExams(state.exams);
+    renderDashboardKnowledgePanels();
     toast("考试已发布");
   } catch (error) {
     toast(error instanceof Error ? error.message : "发布失败", "error");
@@ -1890,6 +1939,7 @@ async function saveExam() {
   });
   state.exams.unshift(result.exam);
   renderExams(state.exams);
+  renderDashboardKnowledgePanels();
   closeModal();
   toast("考试已创建");
 }

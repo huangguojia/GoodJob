@@ -105,11 +105,14 @@ test.describe("GoodJob CRM prototype pages", () => {
     await todoRow.locator("[data-todo-action='edit']").click();
     await expect(page.locator("#appModal")).toHaveClass(/active/);
     await expect(page.locator("#modalTitle")).toContainText("编辑待办");
-    await page.locator("#todoDueInput").fill("2026-06-29 18:30");
+    const today = new Date();
+    const pad = (value: number) => String(value).padStart(2, "0");
+    const todayText = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())} 18:30`;
+    await page.locator("#todoDueInput").fill(todayText);
     await page.locator("#todoRelatedInput").fill("菜单编辑验证");
     await page.locator("#saveTodoButton").click();
     await expect(page.locator(".toast").last()).toContainText("待办已更新");
-    await expect(page.locator("#dashboard .todo-row", { hasText: title }).first()).toContainText("2026-06-29 18:30");
+    await expect(page.locator("#dashboard .todo-row", { hasText: title }).first()).toContainText(todayText);
     await expect(page.locator("#dashboard .todo-row", { hasText: title }).first()).not.toContainText(/t_\\d{10,}/);
     await page.locator("#dashboard .todo-row", { hasText: title }).first().locator(".todo-more").click();
     await page.locator("#dashboard .todo-row", { hasText: title }).first().locator("[data-todo-action='delete']").click();
@@ -267,6 +270,8 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#assetTitleInput").fill(assetTitle);
     await page.locator("#saveAssetButton").click();
     await expect(page.locator("#knowledge .file-grid")).toContainText(assetTitle);
+    await openView(page, "dashboard");
+    await expect(page.locator("#dashboard-knowledge-panel tbody")).toContainText(assetTitle);
 
     await openView(page, "exam");
     await expect(page.locator("#exam .exam-grid")).toBeVisible();
@@ -274,7 +279,11 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#examTitleInput").fill(examTitle);
     await page.locator("#saveExamButton").click();
     await expect(page.locator("#exam .exam-sidebar .category-list")).toContainText(examTitle);
+    await openView(page, "dashboard");
+    await expect(page.locator("#dashboard-exam-panel tbody")).toContainText(examTitle);
+    await expect(page.locator("#dashboard-gap-panel tbody")).toContainText("产品知识");
 
+    await openView(page, "exam");
     await page.locator("#exam .category-item", { hasText: examTitle }).first().getByRole("button", { name: "考试" }).click();
     await page.locator("#appModal [data-question]").nth(0).locator("[data-correct='true']").click();
     await page.locator("#appModal [data-question]").nth(1).locator("[data-correct='true']").click();
