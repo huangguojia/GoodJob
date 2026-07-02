@@ -169,6 +169,33 @@ test.describe("GoodJob CRM prototype pages", () => {
     }
   });
 
+  test("instrument growth page creates execution assets", async ({ page }) => {
+    await openView(page, "instrument-growth");
+    await expect(page.locator("#instrument-growth")).toContainText("仪表外贸新客户开拓作战台");
+    await expect(page.locator("#instrument-growth")).toContainText("前置知识清单");
+    await expect(page.locator("#instrument-growth")).toContainText("客户画像与搜索入口");
+    await expect(page.locator("#instrument-growth")).toContainText("首周执行拆解");
+    await expect(page.locator("#instrument-growth")).toContainText("英文话术与参数确认");
+    await expect(page.locator("#instrument-growth")).toContainText("KPI周报");
+
+    const downloadPromise = page.waitForEvent("download");
+    await page.locator("#instrumentExportButton").click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toContain("仪表外贸新客户开拓90天执行表");
+    await expect(page.locator(".toast").last()).toContainText("仪表开拓执行表已导出");
+
+    await page.locator("#instrumentTodoButton").click();
+    await expect(page.locator(".toast").last()).toContainText(/已生成|已存在/);
+    await openView(page, "dashboard");
+    await expect(page.locator("#dashboard .todo-list")).toContainText("第1天：整理仪表产品分类与参数卡");
+
+    await openView(page, "instrument-growth");
+    await page.locator("#instrumentMemoButton").click();
+    await expect(page.locator(".toast").last()).toContainText(/已写入备忘|备忘已更新/);
+    await openView(page, "memos");
+    await expect(page.locator("#memos .memo-list")).toContainText("仪表外贸新客户开拓90天执行方案");
+  });
+
   test("todo list sorts unfinished first and newest first", async ({ page }) => {
     const older = `排序较早待办-${runId}`;
     const newer = `排序较新待办-${runId}`;

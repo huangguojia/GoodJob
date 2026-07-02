@@ -350,6 +350,37 @@ function badge(text: string, tone = "") {
   return `<span class="badge ${tone}">${text}</span>`;
 }
 
+const instrumentWeekTodos = [
+  "第1天：整理仪表产品分类与参数卡",
+  "第1天：建立仪表客户搜索关键词库10组",
+  "第2天：整理公司证书与报价资料清单",
+  "第2天：新增30家仪表目标客户到客户池",
+  "第3天：完成客户角色-痛点-话术表",
+  "第3天：首触达20家高匹配客户",
+  "第4天：整理竞品替代切入点5条",
+  "第4天：跟进昨日未回复客户10家",
+  "第5天：制作参数确认表模板",
+  "第5天：深挖3家A类客户并写入CRM",
+  "第6天：完成第一周开发周报",
+  "第7天：复盘并优化ICP规则"
+];
+
+const instrumentMemoTitle = "仪表外贸新客户开拓90天执行方案";
+
+function instrumentPlanMemoContent() {
+  return [
+    "90天总目标：600+目标客户池，900+有效触达，60个有效回复，20个深度沟通，8个RFQ/样品/会议机会。",
+    "",
+    "每日最低动作：新增客户30家，首触达20家，二次跟进10家，深挖3家A类客户，CRM更新30条，15分钟复盘。",
+    "",
+    "前置知识：压力/温度/流量/液位/分析仪表/记录仪；量程、精度、介质、温压、连接方式、输出信号、供电、防护等级、材质；CE、RoHS、EMC、ATEX/IECEx、防爆、SIL、校准证书、ISO、材质报告。",
+    "",
+    "客户画像：工业自动化经销商、系统集成商、OEM设备厂、EPC/工程承包商、MRO维修服务商、终端工厂采购/工程师。",
+    "",
+    "周报结构：新增客户池、有效触达、有效回复、深度沟通、RFQ/样品/会议机会、问题与改进、下周计划。"
+  ].join("\n");
+}
+
 function todoTypeText(type: string) {
   const map: Record<string, string> = {
     customer: "客户跟进",
@@ -2228,6 +2259,110 @@ async function createQuickTodo(title: string) {
   toast("待办已新增");
 }
 
+async function createInstrumentWeekTodos(button?: HTMLButtonElement) {
+  const existingTitles = new Set(state.todos.map((todo) => todo.title));
+  const missingTitles = instrumentWeekTodos.filter((title) => !existingTitles.has(title));
+  if (!missingTitles.length) {
+    toast("首周仪表开拓待办已存在，无需重复生成");
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "生成中";
+  }
+  try {
+    const created: Todo[] = [];
+    for (const [index, title] of missingTitles.entries()) {
+      const result = await api<{ todo: Todo }>("/api/todos", {
+        method: "POST",
+        body: JSON.stringify({
+          title,
+          type: "customer",
+          priority: index < 4 ? "high" : index < 8 ? "medium" : "normal",
+          dueAt: "",
+          related: "仪表开拓90天方案"
+        })
+      });
+      created.push(result.todo);
+    }
+    state.todos.unshift(...created);
+    renderTodos(state.todos);
+    updateTodoChips(state.todos);
+    void refreshDashboardOnly();
+    toast(`已生成 ${created.length} 条首周仪表开拓待办`);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "生成首周待办";
+    }
+  }
+}
+
+async function saveInstrumentPlanMemo(button?: HTMLButtonElement) {
+  if (button) {
+    button.disabled = true;
+    button.textContent = "写入中";
+  }
+  try {
+    const existing = state.memos.find((memo) => memo.title === instrumentMemoTitle);
+    const payload = {
+      title: instrumentMemoTitle,
+      category: "销售方案",
+      tags: "仪表,外贸开拓,90天计划",
+      content: instrumentPlanMemoContent(),
+      pinned: true
+    };
+    if (existing) {
+      const result = await api<{ memo: Memo }>(`/api/memos/${existing.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      Object.assign(existing, result.memo);
+      state.selectedMemoId = existing.id;
+      toast("仪表开拓方案备忘已更新");
+    } else {
+      const result = await api<{ memo: Memo }>("/api/memos", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      state.memos.unshift(result.memo);
+      state.selectedMemoId = result.memo.id;
+      toast("仪表开拓方案已写入备忘");
+    }
+    renderMemos(state.memos);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "写入备忘";
+    }
+  }
+}
+
+function exportInstrumentPlanCsv() {
+  const rows = [
+    ["模块", "事项", "目标/标准", "执行说明"],
+    ["90天目标", "目标客户池", "600+", "按国家、客户类型、产品线维护到CRM"],
+    ["90天目标", "有效触达", "900+", "邮件、LinkedIn、WhatsApp、企业微信等渠道记录"],
+    ["90天目标", "有效回复", "60", "有需求、参数、采购计划或后续沟通意愿"],
+    ["90天目标", "RFQ/样品/会议机会", "8", "进入报价、样品、线上会议或项目清单阶段"],
+    ["每日动作", "新增客户", "30家/天", "经销商、系统集成商、OEM、EPC、MRO、终端工程师"],
+    ["每日动作", "首触达", "20家/天", "按角色发送对应英文话术"],
+    ["每日动作", "二次跟进", "10家/天", "补资料、问参数、推进到有效回复"],
+    ["每日动作", "深挖A类客户", "3家/天", "查官网、联系人、产品线、项目线索和竞品"],
+    ["前置知识", "关键参数", "必须掌握", "量程、精度、介质、温压、连接、输出、供电、防护、材质"],
+    ["前置知识", "认证资料", "资料化", "CE、RoHS、EMC、ATEX/IECEx、防爆、SIL、校准证书、ISO、材质报告"],
+    ...instrumentWeekTodos.map((title, index) => ["首周执行", title, `第${index + 1}项`, "完成后在CRM更新结果与下一动作"])
+  ];
+  const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "仪表外贸新客户开拓90天执行表.csv";
+  link.click();
+  URL.revokeObjectURL(link.href);
+  toast("仪表开拓执行表已导出");
+}
+
 function openCustomerModal() {
   openModal("新增客户", `
     <div class="form-grid">
@@ -2372,6 +2507,11 @@ function installEvents() {
       toast(`已完成 ${pending.length} 条待办`);
     });
   });
+  qsa<HTMLButtonElement>("#instrumentTodoButton, #instrumentTodoButtonInline").forEach((button) => {
+    button.addEventListener("click", (event) => void createInstrumentWeekTodos(event.currentTarget as HTMLButtonElement));
+  });
+  qs<HTMLButtonElement>("#instrumentMemoButton")?.addEventListener("click", (event) => void saveInstrumentPlanMemo(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#instrumentExportButton")?.addEventListener("click", exportInstrumentPlanCsv);
   qs<HTMLButtonElement>("#batchPriorityButton")?.addEventListener("click", (event) => void batchProcessPriorityTasks(event.currentTarget as HTMLButtonElement));
   qsa<HTMLButtonElement>("#customers .page-head .btn.primary, .top-actions .btn.primary").forEach((button) => {
     if (button.textContent?.includes("新增客户")) button.addEventListener("click", openCustomerModal);
