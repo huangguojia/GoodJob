@@ -129,6 +129,22 @@ try {
   });
   if (!todoOrdered.response.ok || todoOrdered.json.todos[0].pinState !== "top" || todoOrdered.json.todos[0].sortOrder !== 1) throw new Error("todo reorder failed");
 
+  const archivedTodo = await request("/api/todos", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ title: "自动归档待办", type: "other", priority: "normal", dueAt: "昨天 23:00", related: "归档自测" })
+  });
+  if (!archivedTodo.response.ok || !archivedTodo.json.todo.historyAt) throw new Error("todo should archive when due date is past");
+  const restoredTodo = await request(`/api/todos/${archivedTodo.json.todo.id}/restore`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!restoredTodo.response.ok || restoredTodo.json.todo.historyAt) throw new Error("todo restore from history failed");
+  await request(`/api/todos/${archivedTodo.json.todo.id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+
   const todoDeleted = await request(`/api/todos/${todo.json.todo.id}`, {
     method: "DELETE",
     headers: { authorization: `Bearer ${salesToken}` }
@@ -284,6 +300,7 @@ try {
     createdDeal: newDeal.json.deal.title,
 	    createdReminder: reminder.json.reminder.title,
 	    todoUndo: todoUndone.json.todo.done === false,
+	    todoRestored: !restoredTodo.json.todo.historyAt,
 	    problemResolved: resolvedProblem.json.problem.status,
 	    memoPinned: pinnedMemo.json.memo.pinned,
     competitorThreat: competitorThreat.json.competitor.threatLevel,

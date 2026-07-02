@@ -184,6 +184,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     expect(download.suggestedFilename()).toContain("仪表外贸新客户开拓90天执行表");
     await expect(page.locator(".toast").last()).toContainText("仪表开拓执行表已导出");
 
+    await expect(page.locator("#instrumentTodoButton")).toContainText("一键推到待办清单");
     await page.locator("#instrumentTodoButton").click();
     await expect(page.locator(".toast").last()).toContainText(/已生成|已存在/);
     await openView(page, "dashboard");
@@ -230,12 +231,19 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#dashboard .todo-list .todo-row", { hasText: title })).toHaveCount(0);
     await expect(page.locator("#dashboard .todo-history-list")).toContainText(title);
     await expect(page.locator("#dashboard .todo-history-row", { hasText: title })).toContainText("历史归档");
+    await expect(page.locator("#dashboard .todo-history-row", { hasText: title }).locator("[data-todo-restore]")).toBeVisible();
     await expect(page.locator("#dashboard .todo-history-row", { hasText: title })).not.toContainText("资料/考试");
     await expect(page.locator("#dashboard .todo-chip").last()).toContainText("历史清单");
     await expect(page.locator("#dashboard .todo-chip").last()).not.toContainText("资料/考试");
     await page.locator("#dashboard .todo-chip").last().click();
     await expect(page.locator("#dashboard .todo-list .todo-row", { hasText: title })).toContainText("历史归档");
     await expect(page.locator("#todo-history-count")).toHaveText(/[1-9]\d* 条/);
+    await page.locator("#dashboard .todo-list .todo-row", { hasText: title }).first().locator("[data-todo-restore]").click();
+    await expect(page.locator(".toast").last()).toContainText("已恢复到今日清单");
+    await page.locator("#dashboard .todo-chip").first().click();
+    const restoredRow = page.locator("#dashboard .todo-list .todo-row", { hasText: title }).first();
+    await expect(restoredRow.locator(".badge")).toContainText("其它");
+    await expect(restoredRow.locator(".badge")).not.toContainText("历史归档");
   });
 
   test("customer page can create and inspect a customer", async ({ page }) => {

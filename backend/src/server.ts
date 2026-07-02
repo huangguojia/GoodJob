@@ -194,7 +194,10 @@ app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 app.get("/api/todos", requireAuth, (req, res) => {
-  const { todos } = getStore();
+  const store = getStore();
+  const archived = archiveExpiredTodos(store.todos, new Date());
+  if (archived.length) void store.persist();
+  const { todos } = store;
   const scoped = todos.filter((todo) => canSeePersonalData(req.user!, todo.ownerId));
   res.json({ todos: scoped });
 });
@@ -218,8 +221,13 @@ app.post("/api/todos", requireAuth, asyncRoute(async (req, res) => {
     pinState: "" as const,
     sortOrder: nextTodoSortOrder(store.todos, req.user!.id),
     createdAt: new Date().toISOString(),
+    historyAt: "",
     ...body
   };
+  if (shouldArchiveTodo(todo)) {
+    todo.historyAt = new Date().toISOString();
+    todo.status = "pending" as const;
+  }
   store.todos.unshift(todo);
   await store.persist();
   res.json({ todo });
@@ -288,6 +296,30 @@ app.post("/api/todos/:id/complete", requireAuth, asyncRoute(async (req, res) => 
   res.json({ todo });
 }));
 
+app.post("/api/todos/archive-due", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const scoped = store.todos.filter((todo) => canSeePersonalData(req.user!, todo.ownerId));
+  const archived = archiveExpiredTodos(scoped, new Date());
+  if (archived.length) await store.persist();
+  res.json({ archived });
+}));
+
+app.post("/api/todos/:id/restore", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const todo = store.todos.find((item) => item.id === req.params.id);
+  if (!todo || !canSeePersonalData(req.user!, todo.ownerId)) {
+    res.status(404).json({ message: "待办不存在" });
+    return;
+  }
+  todo.historyAt = "";
+  todo.dueAt = currentMinuteText();
+  todo.sortOrder = nextTodoSortOrder(store.todos, todo.ownerId);
+  todo.pinState = "";
+  if (todo.status === "in_progress" && todo.done) todo.status = "pending";
+  await store.persist();
+  res.json({ todo });
+}));
+
 app.patch("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
     title: z.string().min(1).optional(),
@@ -298,7 +330,8 @@ app.patch("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
     done: z.boolean().optional(),
     status: z.enum(["pending", "in_progress"]).optional(),
     pinState: z.enum(["top", "bottom", ""]).optional(),
-    sortOrder: z.number().optional()
+    sortOrder: z.number().optional(),
+    historyAt: z.string().optional()
   });
   const body = schema.parse(req.body);
   const store = getStore();
@@ -324,6 +357,14 @@ app.patch("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
   }
   if (typeof body.sortOrder === "number") {
     todo.sortOrder = body.sortOrder;
+  }
+  if (body.historyAt !== undefined) {
+    todo.historyAt = body.historyAt;
+  }
+  if (body.historyAt === undefined && shouldArchiveTodo(todo)) {
+    todo.historyAt = new Date().toISOString();
+    todo.status = "pending";
+    todo.pinState = "";
   }
   await store.persist();
   res.json({ todo });
@@ -797,17 +838,20 @@ app.post("/api/tools/ocr/jobs/:id/sync-lead", requireAuth, asyncRoute(async (req
 }));
 
 app.get("/api/dashboard/summary", requireAuth, (req, res) => {
-  const { customers, todos, deals, reminders, knowledgeAssets, exams, wecomMessages } = getStore();
+  const store = getStore();
+  const archived = archiveExpiredTodos(store.todos, new Date());
+  if (archived.length) void store.persist();
+  const { customers, todos, deals, reminders, knowledgeAssets, exams, wecomMessages } = store;
   const scopedCustomers = customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
   const scopedTodos = todos.filter((todo) => canSeePersonalData(req.user!, todo.ownerId));
   const scopedDeals = deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId));
   const scopedReminders = reminders.filter((reminder) => canSeeOwner(req.user!, reminder.ownerId, reminder.teamId));
   const scopedKnowledge = req.user?.role === "sales" ? knowledgeAssets.filter((asset) => asset.ownerId === req.user?.id) : knowledgeAssets;
   const scopedMessages = wecomMessages.filter((message) => canSeeOwner(req.user!, message.ownerId, message.teamId));
-  const activeTodos = scopedTodos.filter((todo) => !isHistoricalDue(todo.dueAt));
+  const activeTodos = scopedTodos.filter((todo) => !isHistoricalTodo(todo));
   const pendingTodos = activeTodos.filter((todo) => !todo.done);
   const overdueTodos = pendingTodos.filter((todo) => todo.priority === "high");
-  const historyTodos = scopedTodos.filter((todo) => isHistoricalDue(todo.dueAt));
+  const historyTodos = scopedTodos.filter(isHistoricalTodo);
   const riskCustomers = scopedCustomers.filter((customer) => customer.nextReminder.includes("逾期") || customer.health < 60);
   const riskAmount = riskCustomers.reduce((sum, customer) => sum + customer.amount, 0);
   const forecastAmount = scopedDeals.reduce((sum, deal) => sum + deal.amount, 0) || scopedCustomers.reduce((sum, customer) => sum + customer.amount, 0);
@@ -910,7 +954,7 @@ app.post("/api/dashboard/priority-tasks/batch-process", requireAuth, asyncRoute(
   const scopedCustomers = store.customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
   const scopedDeals = store.deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId));
   const scopedTodos = store.todos.filter((todo) => canSeePersonalData(req.user!, todo.ownerId));
-  const pendingTodos = scopedTodos.filter((todo) => !todo.done && !isHistoricalDue(todo.dueAt));
+  const pendingTodos = scopedTodos.filter((todo) => !todo.done && !isHistoricalTodo(todo));
   const priorityTasks = buildPriorityTasks(scopedDeals, scopedCustomers, pendingTodos).slice(0, 3);
   const created: Todo[] = [];
   for (const task of priorityTasks) {
@@ -936,25 +980,64 @@ app.post("/api/dashboard/priority-tasks/batch-process", requireAuth, asyncRoute(
   res.json({ created, processed: priorityTasks.length, skipped: priorityTasks.length - created.length });
 }));
 
-function isHistoricalDue(value: string) {
-  const parsed = parseDueDate(value);
+function isHistoricalTodo(todo: Todo) {
+  return Boolean(todo.historyAt);
+}
+
+function shouldArchiveTodo(todo: Todo, now = new Date()) {
+  if (todo.historyAt) return false;
+  const parsed = parseDueDate(todo.dueAt, todo.createdAt);
   if (!parsed) return false;
-  const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   return parsed < today;
 }
 
-function parseDueDate(value: string) {
+function archiveExpiredTodos(todos: Todo[], now = new Date()) {
+  const archiveTime = now.toISOString();
+  const archived = todos.filter((todo) => shouldArchiveTodo(todo, now));
+  archived.forEach((todo) => {
+    todo.historyAt = archiveTime;
+    todo.status = "pending";
+    todo.pinState = "";
+  });
+  return archived;
+}
+
+function parseDueDate(value: string, fallbackCreatedAt?: string) {
   const text = value.trim();
   const exact = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (exact) return new Date(Number(exact[1]), Number(exact[2]) - 1, Number(exact[3]));
-  const now = new Date();
+  const now = fallbackCreatedAt ? new Date(fallbackCreatedAt) : new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   if (text.includes("昨天")) return new Date(today.getTime() - 86400000);
   if (text.includes("前天")) return new Date(today.getTime() - 86400000 * 2);
+  if (!text) return today;
   if (text.includes("今天") || /^(\d{1,2}):(\d{2})$/.test(text)) return today;
   if (text.includes("明天")) return new Date(today.getTime() + 86400000);
-  return null;
+  return fallbackCreatedAt ? today : null;
+}
+
+function scheduleMidnightTodoArchive() {
+  const run = async () => {
+    const store = getStore();
+    const archived = archiveExpiredTodos(store.todos, new Date());
+    if (archived.length) {
+      await store.persist();
+      console.log(`GoodJob CRM archived ${archived.length} todos into history`);
+    }
+    schedule();
+  };
+  const schedule = () => {
+    const now = new Date();
+    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 3);
+    const delay = Math.max(1000, next.getTime() - now.getTime());
+    windowlessSetTimeout(() => void run(), delay);
+  };
+  schedule();
+}
+
+function windowlessSetTimeout(callback: () => void, delay: number) {
+  setTimeout(callback, delay);
 }
 
 function priorityWeight(priority: string) {
@@ -1095,6 +1178,7 @@ async function startServer() {
   app.listen(port, () => {
     console.log(`GoodJob CRM API listening on http://127.0.0.1:${port}`);
   });
+  scheduleMidnightTodoArchive();
 }
 
 if (process.env.NODE_ENV !== "test") {

@@ -49,6 +49,7 @@ export interface Todo {
   done: boolean;
   impactAmount?: number;
   createdAt?: string;
+  historyAt?: string;
 }
 
 export interface KnowledgeAsset {

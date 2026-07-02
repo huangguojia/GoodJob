@@ -34,6 +34,7 @@ interface Todo {
   done: boolean;
   impactAmount?: number;
   createdAt?: string;
+  historyAt?: string;
 }
 
 interface Deal {
@@ -308,9 +309,7 @@ function parseTodoDate(value: string) {
 }
 
 function isHistoricalTodo(todo: Todo) {
-  const date = parseTodoDate(todo.dueAt);
-  if (!date) return false;
-  return date < todayStart();
+  return Boolean(todo.historyAt);
 }
 
 function todoCreatedTime(todo: Todo, fallbackIndex = 0) {
@@ -792,15 +791,22 @@ function renderTodos(todos: Todo[]) {
     const optionalMeta = [formatTodoTime(todo.dueAt), todo.related].filter(Boolean).map((item) => `<span>${escapeHtml(item)}</span>`).join("");
     const isRunning = todo.status === "in_progress" && !todo.done;
     const pinBadge = todo.pinState === "top" ? badge("置顶", "aqua") : todo.pinState === "bottom" ? badge("沉底", "gray") : "";
-    const statusBadge = todo.done ? badge("已完成", "green") : isRunning ? badge("进行中", "aqua") : badge(isHistoryView ? "历史归档" : todoTypeText(todo.type), tone);
+    const statusBadge = isHistoryView ? badge(todo.done ? "历史完成" : "历史归档", todo.done ? "green" : tone) : todo.done ? badge("已完成", "green") : isRunning ? badge("进行中", "aqua") : badge(todoTypeText(todo.type), tone);
     const runIcon = isRunning ? `<svg viewBox="0 0 24 24"><path d="M7 7h10v10H7z"/></svg>` : `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
     const menuOpen = state.openTodoMenuId === todo.id;
     return `<article class="todo-row ${todo.priority === "high" ? "urgent" : ""} ${isRunning ? "in-progress" : ""} ${todo.done ? "done" : ""} ${state.draggingTodoId === todo.id ? "dragging" : ""}" data-todo-id="${escapeHtml(todo.id)}">
       <i class="todo-check" title="${todo.done ? "撤回未完成" : "完成待办"}"></i>
       <div class="todo-main"><h3>${escapeHtml(todo.title)}</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--${tone === "red" ? "rose" : tone})"></i><span>${escapeHtml(priorityText(todo.priority))}</span>${optionalMeta}${pinBadge}${statusBadge}</div></div>
-      <div class="todo-side"><div class="todo-actions"><div class="assignee-stack"><span class="mini-avatar">我</span></div>${todo.done ? "" : `<button class="todo-run ${isRunning ? "active" : ""}" title="${isRunning ? "停止执行" : "开始执行"}" aria-label="${isRunning ? "停止执行" : "开始执行"}">${runIcon}</button>`}<button class="todo-more ${menuOpen ? "active" : ""}" title="更多操作" aria-label="更多操作"><span></span><span></span><span></span></button>${menuOpen ? `<div class="todo-menu"><button data-todo-action="edit">编辑</button><button data-todo-action="top">置顶</button><button data-todo-action="bottom">沉底</button><button class="danger" data-todo-action="delete">删除</button></div>` : ""}</div><div class="subtask-bar ${isRunning ? "running" : ""}"><i style="--p:${todo.done ? "100%" : isRunning ? "74%" : "55%"}"></i></div></div>
+      <div class="todo-side"><div class="todo-actions"><div class="assignee-stack"><span class="mini-avatar">我</span></div>${isHistoryView ? `<button class="btn" data-todo-restore>回到今日</button>` : todo.done ? "" : `<button class="todo-run ${isRunning ? "active" : ""}" title="${isRunning ? "停止执行" : "开始执行"}" aria-label="${isRunning ? "停止执行" : "开始执行"}">${runIcon}</button>`}<button class="todo-more ${menuOpen ? "active" : ""}" title="更多操作" aria-label="更多操作"><span></span><span></span><span></span></button>${menuOpen ? `<div class="todo-menu">${isHistoryView ? "" : `<button data-todo-action="edit">编辑</button><button data-todo-action="top">置顶</button><button data-todo-action="bottom">沉底</button>`}<button class="danger" data-todo-action="delete">删除</button></div>` : ""}</div><div class="subtask-bar ${isRunning ? "running" : ""}"><i style="--p:${todo.done ? "100%" : isRunning ? "74%" : "55%"}"></i></div></div>
     </article>`;
   }).join("");
+  qsa<HTMLElement>(".todo-row [data-todo-restore]", list).forEach((node) => {
+    node.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const row = node.closest<HTMLElement>(".todo-row");
+      if (row?.dataset.todoId) await restoreTodoFromHistory(row.dataset.todoId);
+    });
+  });
   qsa<HTMLElement>(".todo-row .todo-run", list).forEach((node) => {
     node.addEventListener("click", async (event) => {
       event.stopPropagation();
@@ -832,6 +838,7 @@ function renderTodos(todos: Todo[]) {
         await deleteTodo(row.dataset.todoId);
         return;
       }
+      if (isHistoryView) return;
       await pinTodo(row.dataset.todoId, action as "top" | "bottom");
     });
   });
@@ -1013,14 +1020,21 @@ function renderTodoHistory(todos: Todo[]) {
   const recent = todos.slice(0, 6);
   list.innerHTML = recent.length ? recent.map((todo) => {
     const tone = todo.priority === "high" ? "red" : todo.priority === "medium" ? "amber" : "green";
-    const meta = [formatTodoTime(todo.dueAt), todo.related].filter(Boolean).join(" · ") || "未设置上下文";
+    const meta = [formatTodoTime(todo.dueAt), todo.related, todo.historyAt ? `归档 ${formatTodoTime(todo.historyAt)}` : ""].filter(Boolean).join(" · ") || "未设置上下文";
     const menuOpen = state.openTodoMenuId === todo.id;
     return `<article class="todo-history-row ${todo.done ? "done" : ""}" data-todo-id="${escapeHtml(todo.id)}">
       <span class="history-dot ${tone}"></span>
       <div><b>${escapeHtml(todo.title)}</b><span>${escapeHtml(meta)}</span></div>
-      <div class="todo-actions">${badge(todo.done ? "历史完成" : "历史归档", todo.done ? "green" : tone)}<button class="todo-more ${menuOpen ? "active" : ""}" title="更多操作" aria-label="更多操作"><span></span><span></span><span></span></button>${menuOpen ? `<div class="todo-menu"><button class="danger" data-todo-action="delete">删除</button></div>` : ""}</div>
+      <div class="todo-actions">${badge(todo.done ? "历史完成" : "历史归档", todo.done ? "green" : tone)}<button class="btn" data-todo-restore>回到今日</button><button class="todo-more ${menuOpen ? "active" : ""}" title="更多操作" aria-label="更多操作"><span></span><span></span><span></span></button>${menuOpen ? `<div class="todo-menu"><button class="danger" data-todo-action="delete">删除</button></div>` : ""}</div>
     </article>`;
   }).join("") : `<div class="todo-history-empty">暂无隔天历史待办</div>`;
+  qsa<HTMLElement>(".todo-history-row [data-todo-restore]", list).forEach((node) => {
+    node.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const row = node.closest<HTMLElement>(".todo-history-row");
+      if (row?.dataset.todoId) await restoreTodoFromHistory(row.dataset.todoId);
+    });
+  });
   qsa<HTMLElement>(".todo-history-row .todo-more", list).forEach((node) => {
     node.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -1057,6 +1071,20 @@ async function deleteTodo(id: string) {
   updateTodoChips(state.todos);
   void refreshDashboardOnly();
   toast("待办已删除");
+}
+
+async function restoreTodoFromHistory(id: string) {
+  const todo = state.todos.find((item) => item.id === id);
+  if (!todo) {
+    toast("待办不存在", "error");
+    return;
+  }
+  const result = await api<{ todo: Todo }>(`/api/todos/${id}/restore`, { method: "POST" });
+  Object.assign(todo, result.todo);
+  renderTodos(state.todos);
+  updateTodoChips(state.todos);
+  void refreshDashboardOnly();
+  toast("已恢复到今日清单");
 }
 
 function filterTodos(todos: Todo[]) {
@@ -2293,7 +2321,7 @@ async function createInstrumentWeekTodos(button?: HTMLButtonElement) {
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "生成首周待办";
+      button.textContent = "一键推到待办清单";
     }
   }
 }

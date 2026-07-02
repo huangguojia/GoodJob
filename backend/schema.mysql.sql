@@ -53,7 +53,9 @@ CREATE TABLE todos (
   pin_state VARCHAR(20) DEFAULT '',
   sort_order INT DEFAULT 0,
   impact_amount DECIMAL(14,2),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  history_at TIMESTAMP NULL,
+  INDEX idx_todos_owner_history(owner_id, history_at)
 );
 
 CREATE TABLE reminders (
