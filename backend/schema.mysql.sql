@@ -85,16 +85,42 @@ CREATE TABLE exams (
   category VARCHAR(100),
   status VARCHAR(40),
   pass_rate DECIMAL(5,2),
-  question_count INT DEFAULT 0
+  question_count INT DEFAULT 0,
+  duration_minutes INT DEFAULT 20,
+  pass_score INT DEFAULT 80,
+  target_role VARCHAR(40) DEFAULT 'sales',
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE exam_questions (
+  id VARCHAR(64) PRIMARY KEY,
+  exam_id VARCHAR(64) NOT NULL,
+  stem TEXT NOT NULL,
+  options_json JSON,
+  answer_index INT DEFAULT 0,
+  answer_indexes_json JSON,
+  question_type VARCHAR(20) DEFAULT 'single',
+  explanation TEXT,
+  category VARCHAR(100),
+  difficulty VARCHAR(20),
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_exam_questions_exam_id (exam_id)
 );
 
 CREATE TABLE exam_attempts (
   id VARCHAR(64) PRIMARY KEY,
   exam_id VARCHAR(64) NOT NULL,
   user_id VARCHAR(64) NOT NULL,
+  user_name VARCHAR(120),
+  category VARCHAR(100),
   score DECIMAL(5,2),
   passed BOOLEAN,
-  submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  answers_json JSON,
+  correct_count INT DEFAULT 0,
+  total_questions INT DEFAULT 0,
+  submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_exam_attempts_exam_id (exam_id),
+  INDEX idx_exam_attempts_user_id (user_id)
 );
 
 CREATE TABLE ocr_jobs (
@@ -104,6 +130,40 @@ CREATE TABLE ocr_jobs (
   fields_json JSON,
   created_by VARCHAR(64),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE website_opportunities (
+  id VARCHAR(64) PRIMARY KEY,
+  company VARCHAR(200) NOT NULL,
+  business VARCHAR(255),
+  country VARCHAR(80),
+  website VARCHAR(255),
+  contact VARCHAR(120),
+  contact_info VARCHAR(255),
+  description TEXT,
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  status VARCHAR(30),
+  customer_id VARCHAR(64),
+  deal_id VARCHAR(64),
+  parse_mode VARCHAR(20) DEFAULT 'rule',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_website_opps_owner(owner_id),
+  INDEX idx_website_opps_team(team_id)
+);
+
+CREATE TABLE ai_model_configs (
+  id VARCHAR(64) PRIMARY KEY,
+  provider VARCHAR(40) NOT NULL DEFAULT 'openai-compatible',
+  name VARCHAR(120) NOT NULL,
+  base_url VARCHAR(255) NOT NULL,
+  model VARCHAR(120) NOT NULL,
+  api_key TEXT,
+  enabled BOOLEAN DEFAULT FALSE,
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_ai_model_owner(owner_id)
 );
 
 CREATE TABLE import_export_jobs (

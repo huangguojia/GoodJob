@@ -1,7 +1,7 @@
 import mysql from "mysql2/promise";
-import { caseStudies, competitors, customers, deals, exams, importExportJobs, knowledgeAssets, memos, ocrJobs, problems, reminders, todos, users, wecomMessages } from "./data.js";
+import { aiModelConfigs, caseStudies, competitors, customers, deals, examAttempts, examQuestions, exams, importExportJobs, knowledgeAssets, memos, ocrJobs, problems, reminders, todos, users, wecomMessages, websiteOpportunities } from "./data.js";
 import type { CrmStore } from "./store.js";
-import type { CaseStudy, Competitor, Customer, Deal, Exam, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, User, WecomMessage } from "./types.js";
+import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 const defaultUrl = "mysql://root:password@127.0.0.1:3306/goodjob_crm";
 
@@ -19,9 +19,13 @@ export async function createMysqlStore(): Promise<CrmStore> {
     reminders: await loadReminders(pool),
     knowledgeAssets: await loadKnowledgeAssets(pool),
     exams: await loadExams(pool),
+    examQuestions: await loadExamQuestions(pool),
+    examAttempts: await loadExamAttempts(pool),
 	    importExportJobs: await loadImportExportJobs(pool),
 	    wecomMessages: await loadWecomMessages(pool),
 		    ocrJobs: await loadOcrJobs(pool),
+		    websiteOpportunities: await loadWebsiteOpportunities(pool),
+		    aiModelConfigs: await loadAiModelConfigs(pool),
 		    problems: await loadProblems(pool),
 		    memos: await loadMemos(pool),
 	    competitors: await loadCompetitors(pool),
@@ -39,9 +43,13 @@ export async function createMysqlStore(): Promise<CrmStore> {
     store.reminders.push(...reminders);
     store.knowledgeAssets.push(...knowledgeAssets);
     store.exams.push(...exams);
+    store.examQuestions.push(...examQuestions);
+    store.examAttempts.push(...examAttempts);
 	    store.importExportJobs.push(...importExportJobs);
 	    store.wecomMessages.push(...wecomMessages);
 	    store.ocrJobs.push(...ocrJobs);
+	    store.websiteOpportunities.push(...websiteOpportunities);
+	    store.aiModelConfigs.push(...aiModelConfigs);
 		    store.problems.push(...problems);
     store.memos.push(...memos);
     store.competitors.push(...competitors);
@@ -62,6 +70,14 @@ export async function createMysqlStore(): Promise<CrmStore> {
   }
   if (!store.caseStudies.length) {
     store.caseStudies.push(...caseStudies);
+    await store.persist();
+  }
+  if (!store.examQuestions.length) {
+    store.examQuestions.push(...examQuestions);
+    await store.persist();
+  }
+  if (!store.examAttempts.length) {
+    store.examAttempts.push(...examAttempts);
     await store.persist();
   }
   const missingSeedUsers = users.filter((seedUser) => !store.users.some((user) => user.id === seedUser.id || user.email === seedUser.email));
@@ -85,6 +101,8 @@ async function ensureSchema(pool: mysql.Pool) {
     status VARCHAR(20) NOT NULL DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`);
+  await pool.query("ALTER TABLE users MODIFY role VARCHAR(20) NOT NULL");
+  await pool.query("ALTER TABLE users MODIFY status VARCHAR(20) NOT NULL DEFAULT 'active'");
   await pool.query(`CREATE TABLE IF NOT EXISTS customers (
     id VARCHAR(64) PRIMARY KEY,
     company VARCHAR(200) NOT NULL,
@@ -158,16 +176,48 @@ async function ensureSchema(pool: mysql.Pool) {
     category VARCHAR(100),
     status VARCHAR(40),
     pass_rate DECIMAL(5,2),
-    question_count INT DEFAULT 0
+    question_count INT DEFAULT 0,
+    duration_minutes INT DEFAULT 20,
+    pass_score INT DEFAULT 80,
+    target_role VARCHAR(40) DEFAULT 'sales',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`);
+  await ensureColumn(pool, "exams", "duration_minutes", "INT DEFAULT 20");
+  await ensureColumn(pool, "exams", "pass_score", "INT DEFAULT 80");
+  await ensureColumn(pool, "exams", "target_role", "VARCHAR(40) DEFAULT 'sales'");
+  await ensureColumn(pool, "exams", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+  await pool.query(`CREATE TABLE IF NOT EXISTS exam_questions (
+    id VARCHAR(64) PRIMARY KEY,
+    exam_id VARCHAR(64) NOT NULL,
+    category VARCHAR(100),
+    stem TEXT NOT NULL,
+    options_json JSON NOT NULL,
+    answer_index INT NOT NULL,
+    answer_indexes_json JSON,
+    question_type VARCHAR(20) DEFAULT 'single',
+    explanation TEXT,
+    difficulty VARCHAR(20),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_exam_questions_exam(exam_id)
+  )`);
+  await ensureColumn(pool, "exam_questions", "answer_indexes_json", "JSON");
+  await ensureColumn(pool, "exam_questions", "question_type", "VARCHAR(20) DEFAULT 'single'");
   await pool.query(`CREATE TABLE IF NOT EXISTS exam_attempts (
     id VARCHAR(64) PRIMARY KEY,
     exam_id VARCHAR(64) NOT NULL,
     user_id VARCHAR(64) NOT NULL,
     score DECIMAL(5,2),
     passed BOOLEAN,
-    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    answers_json JSON,
+    correct_count INT DEFAULT 0,
+    total_questions INT DEFAULT 0,
+    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_exam_attempts_user(user_id),
+    INDEX idx_exam_attempts_exam(exam_id)
   )`);
+  await ensureColumn(pool, "exam_attempts", "answers_json", "JSON");
+  await ensureColumn(pool, "exam_attempts", "correct_count", "INT DEFAULT 0");
+  await ensureColumn(pool, "exam_attempts", "total_questions", "INT DEFAULT 0");
   await pool.query(`CREATE TABLE IF NOT EXISTS ocr_jobs (
     id VARCHAR(64) PRIMARY KEY,
     status VARCHAR(40),
@@ -175,6 +225,39 @@ async function ensureSchema(pool: mysql.Pool) {
     fields_json JSON,
     created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS website_opportunities (
+    id VARCHAR(64) PRIMARY KEY,
+    company VARCHAR(200) NOT NULL,
+    business VARCHAR(255),
+    country VARCHAR(80),
+    website VARCHAR(255),
+    contact VARCHAR(120),
+    contact_info VARCHAR(255),
+    description TEXT,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    status VARCHAR(30),
+    customer_id VARCHAR(64),
+    deal_id VARCHAR(64),
+    parse_mode VARCHAR(20) DEFAULT 'rule',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_website_opps_owner(owner_id),
+    INDEX idx_website_opps_team(team_id)
+  )`);
+  await ensureColumn(pool, "website_opportunities", "parse_mode", "VARCHAR(20) DEFAULT 'rule'");
+  await pool.query(`CREATE TABLE IF NOT EXISTS ai_model_configs (
+    id VARCHAR(64) PRIMARY KEY,
+    provider VARCHAR(40) NOT NULL DEFAULT 'openai-compatible',
+    name VARCHAR(120) NOT NULL,
+    base_url VARCHAR(255) NOT NULL,
+    model VARCHAR(120) NOT NULL,
+    api_key TEXT,
+    enabled BOOLEAN DEFAULT FALSE,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_ai_model_owner(owner_id)
   )`);
   await pool.query(`CREATE TABLE IF NOT EXISTS import_export_jobs (
     id VARCHAR(64) PRIMARY KEY,
@@ -312,8 +395,47 @@ async function loadKnowledgeAssets(pool: mysql.Pool): Promise<KnowledgeAsset[]> 
 }
 
 async function loadExams(pool: mysql.Pool): Promise<Exam[]> {
-  return (await rows<Record<string, any>>(pool, "SELECT * FROM exams")).map((row) => ({
-    id: row.id, title: row.title, category: row.category, status: row.status, passRate: Number(row.pass_rate), questionCount: Number(row.question_count)
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM exams ORDER BY updated_at DESC, id DESC")).map((row) => ({
+    id: row.id,
+    title: row.title,
+    category: row.category,
+    status: row.status,
+    passRate: Number(row.pass_rate),
+    questionCount: Number(row.question_count),
+    durationMinutes: Number(row.duration_minutes || 20),
+    passScore: Number(row.pass_score || 80),
+    targetRole: row.target_role || "sales",
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at
+  }));
+}
+
+async function loadExamQuestions(pool: mysql.Pool): Promise<ExamQuestion[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM exam_questions ORDER BY updated_at DESC, id DESC")).map((row) => ({
+    id: row.id,
+    examId: row.exam_id,
+    category: row.category,
+    stem: row.stem,
+    options: typeof row.options_json === "string" ? JSON.parse(row.options_json) : row.options_json,
+    answerIndex: Number(row.answer_index),
+    answerIndexes: row.answer_indexes_json ? (typeof row.answer_indexes_json === "string" ? JSON.parse(row.answer_indexes_json) : row.answer_indexes_json) : [Number(row.answer_index)],
+    questionType: row.question_type || "single",
+    explanation: row.explanation || "",
+    difficulty: row.difficulty || "medium",
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at
+  }));
+}
+
+async function loadExamAttempts(pool: mysql.Pool): Promise<ExamAttempt[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM exam_attempts ORDER BY submitted_at DESC")).map((row) => ({
+    id: row.id,
+    examId: row.exam_id,
+    userId: row.user_id,
+    score: Number(row.score),
+    passed: Boolean(row.passed),
+    answers: row.answers_json ? (typeof row.answers_json === "string" ? JSON.parse(row.answers_json) : row.answers_json) : {},
+    correctCount: Number(row.correct_count || 0),
+    totalQuestions: Number(row.total_questions || 0),
+    submittedAt: row.submitted_at instanceof Date ? row.submitted_at.toISOString() : row.submitted_at
   }));
 }
 
@@ -332,6 +454,41 @@ async function loadWecomMessages(pool: mysql.Pool): Promise<WecomMessage[]> {
 async function loadOcrJobs(pool: mysql.Pool): Promise<OcrJob[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM ocr_jobs")).map((row) => ({
     id: row.id, status: row.status, confidence: Number(row.confidence), fields: typeof row.fields_json === "string" ? JSON.parse(row.fields_json) : row.fields_json
+  }));
+}
+
+async function loadWebsiteOpportunities(pool: mysql.Pool): Promise<WebsiteOpportunity[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM website_opportunities ORDER BY created_at DESC")).map((row) => ({
+    id: row.id,
+    company: row.company,
+    business: row.business,
+    country: row.country,
+    website: row.website,
+    contact: row.contact,
+    contactInfo: row.contact_info,
+    description: row.description,
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    status: row.status,
+    customerId: row.customer_id || undefined,
+    dealId: row.deal_id || undefined,
+    parseMode: row.parse_mode || "rule",
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at
+  }));
+}
+
+async function loadAiModelConfigs(pool: mysql.Pool): Promise<AiModelConfig[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM ai_model_configs ORDER BY updated_at DESC")).map((row) => ({
+    id: row.id,
+    provider: row.provider || "openai-compatible",
+    name: row.name,
+    baseUrl: row.base_url,
+    model: row.model,
+    apiKey: row.api_key || "",
+    enabled: Boolean(row.enabled),
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at
   }));
 }
 
@@ -414,10 +571,14 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
     await replaceRows(connection, "todos", (store.todos as Todo[]), (item) => [item.id, item.title, item.type, item.priority, item.dueAt, item.ownerId, item.teamId, item.related, item.done, item.status || "pending", item.pinState || "", item.sortOrder || 0, item.impactAmount ?? null, mysqlDate(item.createdAt), item.historyAt ? mysqlDate(item.historyAt) : null], "(id,title,type,priority,due_at,owner_id,team_id,related,done,status,pin_state,sort_order,impact_amount,created_at,history_at)");
     await replaceRows(connection, "reminders", store.reminders, (item) => [item.id, item.title, item.rule, item.dueAt, item.ownerId, item.teamId, item.channel, item.status], "(id,title,rule_text,due_at,owner_id,team_id,channel,status)");
     await replaceRows(connection, "knowledge_assets", store.knowledgeAssets, (item) => [item.id, item.title, item.category, item.status, item.ownerId, item.version], "(id,title,category,status,owner_id,version)");
-    await replaceRows(connection, "exams", store.exams, (item) => [item.id, item.title, item.category, item.status, item.passRate, item.questionCount], "(id,title,category,status,pass_rate,question_count)");
+    await replaceRows(connection, "exams", store.exams, (item) => [item.id, item.title, item.category, item.status, item.passRate, item.questionCount, item.durationMinutes || 20, item.passScore || 80, item.targetRole || "sales", mysqlDate(item.updatedAt)], "(id,title,category,status,pass_rate,question_count,duration_minutes,pass_score,target_role,updated_at)");
+    await replaceRows(connection, "exam_questions", store.examQuestions, (item) => [item.id, item.examId, item.category, item.stem, JSON.stringify(item.options), item.answerIndex, JSON.stringify(item.answerIndexes?.length ? item.answerIndexes : [item.answerIndex]), item.questionType || ((item.answerIndexes?.length || 0) > 1 ? "multiple" : "single"), item.explanation, item.difficulty, mysqlDate(item.updatedAt)], "(id,exam_id,category,stem,options_json,answer_index,answer_indexes_json,question_type,explanation,difficulty,updated_at)");
+    await replaceRows(connection, "exam_attempts", store.examAttempts, (item) => [item.id, item.examId, item.userId, item.score, item.passed, JSON.stringify(item.answers), item.correctCount, item.totalQuestions, mysqlDate(item.submittedAt)], "(id,exam_id,user_id,score,passed,answers_json,correct_count,total_questions,submitted_at)");
     await replaceRows(connection, "import_export_jobs", store.importExportJobs, (item) => [item.id, item.name, item.type, item.rows, item.status, item.operatorId, item.createdAt], "(id,name,type,rows_count,status,operator_id,created_at)");
 	    await replaceRows(connection, "wecom_messages", store.wecomMessages, (item) => [item.id, item.customerId, item.summary, item.ownerId, item.teamId, item.status], "(id,customer_id,summary,owner_id,team_id,status)");
 	    await replaceRows(connection, "ocr_jobs", store.ocrJobs, (item) => [item.id, item.status, item.confidence, JSON.stringify(item.fields), null], "(id,status,confidence,fields_json,created_by)");
+	    await replaceRows(connection, "website_opportunities", store.websiteOpportunities, (item) => [item.id, item.company, item.business, item.country, item.website, item.contact, item.contactInfo, item.description, item.ownerId, item.teamId, item.status, item.customerId || null, item.dealId || null, item.parseMode || "rule", mysqlDate(item.createdAt)], "(id,company,business,country,website,contact,contact_info,description,owner_id,team_id,status,customer_id,deal_id,parse_mode,created_at)");
+	    await replaceRows(connection, "ai_model_configs", store.aiModelConfigs, (item) => [item.id, item.provider, item.name, item.baseUrl, item.model, item.apiKey, item.enabled, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,provider,name,base_url,model,api_key,enabled,owner_id,team_id,updated_at)");
 	    await replaceRows(connection, "problems", store.problems, (item) => [item.id, item.title, item.category, item.severity, item.status, item.ownerId, item.teamId, item.relatedCustomer, item.rootCause, item.solution, item.nextAction, item.dueAt, mysqlDate(item.createdAt)], "(id,title,category,severity,status,owner_id,team_id,related_customer,root_cause,solution,next_action,due_at,created_at)");
 	    await replaceRows(connection, "memos", store.memos, (item) => [item.id, item.title, item.content, item.category, item.tags, item.ownerId, item.teamId, item.pinned, item.archived, mysqlDate(item.updatedAt)], "(id,title,content,category,tags,owner_id,team_id,pinned,archived,updated_at)");
 	    await replaceRows(connection, "competitors", store.competitors, (item) => [item.id, item.company, item.country, item.segment, item.threatLevel, item.website, item.strengths, item.weaknesses, item.competingProducts, item.ourStrategy, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,company,country,segment,threat_level,website,strengths,weaknesses,competing_products,our_strategy,owner_id,team_id,updated_at)");

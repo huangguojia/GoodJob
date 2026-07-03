@@ -4,7 +4,7 @@ import { z } from "zod";
 import { canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, publicUser, requireAuth, signToken } from "./auth.js";
 import { createMysqlStore } from "./mysql-store.js";
 import { getStore, setStore } from "./store.js";
-import type { Customer, Deal, SessionUser, Todo } from "./types.js";
+import type { AiModelConfig, Customer, Deal, Exam, ExamAttempt, ExamQuestion, SessionUser, Todo, WebsiteOpportunity } from "./types.js";
 
 export const app = express();
 app.use(cors());
@@ -18,6 +18,119 @@ function asyncRoute(handler: (req: Request, res: Response, next: NextFunction) =
 
 function accountUser(user: ReturnType<typeof getStore>["users"][number]) {
   return { ...publicUser(user), status: user.status };
+}
+
+function examWithRuntimeStats(exam: Exam) {
+  const store = getStore();
+  const questions = store.examQuestions.filter((question) => question.examId === exam.id);
+  const attempts = store.examAttempts.filter((attempt) => attempt.examId === exam.id);
+  const passRate = attempts.length
+    ? Math.round((attempts.filter((attempt) => attempt.passed).length / attempts.length) * 100)
+    : exam.passRate;
+  return {
+    ...exam,
+    questionCount: questions.length || exam.questionCount,
+    passRate
+  };
+}
+
+function examReport() {
+  const store = getStore();
+  const attempts = store.examAttempts;
+  const totalAttempts = attempts.length;
+  const passedAttempts = attempts.filter((attempt) => attempt.passed).length;
+  const averageScore = totalAttempts ? Math.round(attempts.reduce((sum, attempt) => sum + attempt.score, 0) / totalAttempts) : 0;
+  const retakeAttempts = attempts.filter((attempt) => !attempt.passed).length;
+  const questionCount = store.examQuestions.length;
+  const difficultyRows = ["easy", "medium", "hard"].map((difficulty) => {
+    const count = store.examQuestions.filter((question) => question.difficulty === difficulty).length;
+    return {
+      difficulty,
+      label: difficulty === "easy" ? "基础题" : difficulty === "hard" ? "高阶题" : "应用题",
+      count,
+      ratio: questionCount ? Math.round((count / questionCount) * 100) : 0
+    };
+  });
+  const categoryRows = store.exams.map((exam) => {
+    const examAttempts = attempts.filter((attempt) => attempt.examId === exam.id);
+    const participants = new Set(examAttempts.map((attempt) => attempt.userId)).size;
+    const passRate = examAttempts.length ? Math.round((examAttempts.filter((attempt) => attempt.passed).length / examAttempts.length) * 100) : exam.passRate;
+    const avgScore = examAttempts.length ? Math.round(examAttempts.reduce((sum, attempt) => sum + attempt.score, 0) / examAttempts.length) : 0;
+    return { examId: exam.id, title: exam.title, category: exam.category, participants, passRate, avgScore };
+  });
+  const latestAttempts = attempts.slice(0, 6).map((attempt) => {
+    const exam = store.exams.find((item) => item.id === attempt.examId);
+    const user = store.users.find((item) => item.id === attempt.userId);
+    return {
+      ...attempt,
+      examTitle: exam?.title || "未知考试",
+      category: exam?.category || "未分类",
+      userName: user?.name || "未知用户"
+    };
+  });
+  return {
+    totalAttempts,
+    passedAttempts,
+    retakeAttempts,
+    averageScore,
+    questionCount,
+    categoryRows,
+    difficultyRows,
+    latestAttempts
+  };
+}
+
+function refreshExamStats(exam: Exam) {
+  const store = getStore();
+  const attempts = store.examAttempts.filter((attempt) => attempt.examId === exam.id);
+  const questionCount = store.examQuestions.filter((question) => question.examId === exam.id).length;
+  exam.questionCount = questionCount || exam.questionCount;
+  exam.passRate = attempts.length ? Math.round((attempts.filter((attempt) => attempt.passed).length / attempts.length) * 100) : exam.passRate;
+  exam.updatedAt = new Date().toISOString();
+}
+
+const examQuestionSchema = z.object({
+  stem: z.string().min(1),
+  options: z.array(z.string().min(1)).min(2).max(6),
+  answerIndex: z.number().int().nonnegative().optional(),
+  answerIndexes: z.array(z.number().int().nonnegative()).optional(),
+  questionType: z.enum(["single", "multiple"]).optional(),
+  explanation: z.string().min(1).default("请在题库维护中补充解析。"),
+  difficulty: z.enum(["easy", "medium", "hard"]).default("medium")
+});
+
+function uniqueSortedIndexes(values: number[]) {
+  return [...new Set(values)].sort((left, right) => left - right);
+}
+
+function correctIndexesFor(question: ExamQuestion) {
+  return uniqueSortedIndexes(question.answerIndexes?.length ? question.answerIndexes : [question.answerIndex]);
+}
+
+function indexesEqual(left: number[], right: number[]) {
+  const a = uniqueSortedIndexes(left);
+  const b = uniqueSortedIndexes(right);
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function buildExamQuestion(exam: Exam, body: z.infer<typeof examQuestionSchema>, index = 0): ExamQuestion {
+  const answerIndexes = uniqueSortedIndexes(body.answerIndexes?.length ? body.answerIndexes : [body.answerIndex ?? 0]);
+  if (answerIndexes.some((answerIndex) => answerIndex >= body.options.length)) {
+    throw new Error("正确答案序号超出选项数量");
+  }
+  return {
+    id: `q_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
+    examId: exam.id,
+    category: exam.category,
+    stem: body.stem,
+    options: body.options,
+    answerIndex: answerIndexes[0],
+    answerIndexes,
+    questionType: body.questionType || (answerIndexes.length > 1 ? "multiple" : "single"),
+    explanation: body.explanation,
+    difficulty: body.difficulty,
+    updatedAt: new Date().toISOString()
+  };
 }
 
 app.get("/api/health", (_req, res) => {
@@ -659,57 +772,168 @@ app.patch("/api/knowledge/assets/:id/publish", requireAuth, asyncRoute(async (re
 
 app.get("/api/exams", requireAuth, (_req, res) => {
   const { exams } = getStore();
-  res.json({ exams });
+  res.json({ exams: exams.map(examWithRuntimeStats), report: examReport() });
 });
 
-app.post("/api/exams", requireAuth, asyncRoute(async (req, res) => {
-  if (req.user?.role === "sales") {
-    res.status(403).json({ message: "无发布考试权限" });
-    return;
-  }
-  const store = getStore();
-  const schema = z.object({
-    title: z.string().min(1),
-    category: z.string().min(1),
-    questionCount: z.number().int().positive().default(20)
-  });
-  const body = schema.parse(req.body);
-  const exam = {
-    id: `e_${Date.now()}`,
-    status: "scheduled" as const,
-    passRate: 0,
-    ...body
-  };
-  store.exams.unshift(exam);
-  await store.persist();
-  res.json({ exam });
-}));
-
-app.patch("/api/exams/:id/publish", requireAuth, asyncRoute(async (req, res) => {
-  if (req.user?.role === "sales") {
-    res.status(403).json({ message: "无发布考试权限" });
-    return;
-  }
+app.get("/api/exams/:id/detail", requireAuth, (req, res) => {
   const store = getStore();
   const exam = store.exams.find((item) => item.id === req.params.id);
   if (!exam) {
     res.status(404).json({ message: "考试不存在" });
     return;
   }
-  exam.status = "published";
+  const questions = store.examQuestions.filter((item) => item.examId === exam.id);
+  const attempts = store.examAttempts.filter((item) => item.examId === exam.id);
+  const latestAttempt = attempts.find((item) => item.userId === req.user!.id) || null;
+  res.json({ exam: examWithRuntimeStats(exam), questions, latestAttempt, report: examReport() });
+});
+
+app.post("/api/exams", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const schema = z.object({
+    title: z.string().min(1),
+    category: z.string().min(1),
+    questionCount: z.number().int().positive().default(3),
+    durationMinutes: z.number().int().positive().default(20),
+    passScore: z.number().int().min(1).max(100).default(80),
+    targetRole: z.enum(["all", "sales", "manager"]).default("sales")
+  });
+  const body = schema.parse(req.body);
+  const now = new Date().toISOString();
+  const exam: Exam = {
+    id: `e_${Date.now()}`,
+    title: body.title,
+    category: body.category,
+    status: "scheduled",
+    passRate: 0,
+    questionCount: body.questionCount,
+    durationMinutes: body.durationMinutes,
+    passScore: body.passScore,
+    targetRole: body.targetRole,
+    updatedAt: now
+  };
+  const seedQuestions: ExamQuestion[] = Array.from({ length: Math.min(body.questionCount, 3) }).map((_, index) => ({
+    id: `q_${Date.now()}_${index}`,
+    examId: exam.id,
+    category: body.category,
+    stem: index === 0 ? `${body.category}考试：客户提出关键问题时，销售第一步应确认什么？` : index === 1 ? `${body.category}考试：资料或报价变化后需要同步维护到哪里？` : `${body.category}考试：客户要求特殊方案时，哪种处理方式最稳妥？`,
+    options: index === 0 ? ["客户真实用途、参数和决策节点", "直接发送最低价", "只问客户预算", "等待主管处理"] : index === 1 ? ["个人聊天记录", "资料库、报价模板和客户跟进口径", "不用同步", "只发给老客户"] : ["先承诺再核实", "拆解需求并让技术/供应链确认", "忽略特殊要求", "只发送产品图片"],
+    answerIndex: index === 0 ? 0 : 1,
+    explanation: "系统默认题用于快速创建考试，后续可在题库维护中替换为正式产品知识题。",
+    difficulty: index === 2 ? "hard" : "medium",
+    updatedAt: now
+  }));
+  store.exams.unshift(exam);
+  store.examQuestions.unshift(...seedQuestions);
+  refreshExamStats(exam);
   await store.persist();
-  res.json({ exam });
+  res.json({ exam: examWithRuntimeStats(exam), questions: seedQuestions });
 }));
 
-app.post("/api/exams/:id/submit", requireAuth, (req, res) => {
-  const exam = getStore().exams.find((item) => item.id === req.params.id);
+app.post("/api/exams/:id/questions", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const exam = store.exams.find((item) => item.id === req.params.id);
   if (!exam) {
     res.status(404).json({ message: "考试不存在" });
     return;
   }
-  const score = Number(req.body?.score ?? 86);
-  res.json({ attempt: { id: `attempt_${exam.id}_${req.user!.id}`, examId: exam.id, userId: req.user!.id, score, passed: score >= 80 } });
-});
+  const body = examQuestionSchema.parse(req.body);
+  let question: ExamQuestion;
+  try {
+    question = buildExamQuestion(exam, body);
+  } catch (error) {
+    res.status(400).json({ message: "正确答案序号超出选项数量" });
+    return;
+  }
+  store.examQuestions.unshift(question);
+  refreshExamStats(exam);
+  await store.persist();
+  res.json({ question, exam: examWithRuntimeStats(exam), report: examReport() });
+}));
+
+app.post("/api/exams/:id/questions/import", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const exam = store.exams.find((item) => item.id === req.params.id);
+  if (!exam) {
+    res.status(404).json({ message: "考试不存在" });
+    return;
+  }
+  const schema = z.object({
+    questions: z.array(examQuestionSchema).min(1).max(300)
+  });
+  const body = schema.parse(req.body);
+  const imported: ExamQuestion[] = [];
+  for (const [index, item] of body.questions.entries()) {
+    try {
+      imported.push(buildExamQuestion(exam, item, index));
+    } catch (error) {
+      res.status(400).json({ message: `第 ${index + 1} 行正确答案序号超出选项数量` });
+      return;
+    }
+  }
+  store.examQuestions.unshift(...imported);
+  refreshExamStats(exam);
+  await store.persist();
+  res.json({ importedCount: imported.length, questions: imported, exam: examWithRuntimeStats(exam), report: examReport() });
+}));
+
+app.patch("/api/exams/:id/publish", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const exam = store.exams.find((item) => item.id === req.params.id);
+  if (!exam) {
+    res.status(404).json({ message: "考试不存在" });
+    return;
+  }
+  if (!store.examQuestions.some((question) => question.examId === exam.id)) {
+    res.status(400).json({ message: "请先维护至少 1 道题目" });
+    return;
+  }
+  exam.status = "published";
+  refreshExamStats(exam);
+  await store.persist();
+  res.json({ exam: examWithRuntimeStats(exam), report: examReport() });
+}));
+
+app.post("/api/exams/:id/submit", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const exam = store.exams.find((item) => item.id === req.params.id);
+  if (!exam) {
+    res.status(404).json({ message: "考试不存在" });
+    return;
+  }
+  const schema = z.object({
+    answers: z.record(z.string(), z.union([z.number().int().nonnegative(), z.array(z.number().int().nonnegative())])).optional(),
+    score: z.number().min(0).max(100).optional()
+  });
+  const body = schema.parse(req.body);
+  const questions = store.examQuestions.filter((question) => question.examId === exam.id);
+  if (!questions.length) {
+    res.status(400).json({ message: "当前考试暂无题目" });
+    return;
+  }
+  const answers = body.answers || {};
+  const correctCount = questions.filter((question) => {
+    const rawAnswer = answers[question.id];
+    const selectedIndexes = Array.isArray(rawAnswer) ? rawAnswer : rawAnswer == null ? [] : [rawAnswer];
+    return indexesEqual(selectedIndexes, correctIndexesFor(question));
+  }).length;
+  const score = body.score == null ? Math.round((correctCount / questions.length) * 100) : Math.round(body.score);
+  const attempt: ExamAttempt = {
+    id: `attempt_${exam.id}_${req.user!.id}_${Date.now()}`,
+    examId: exam.id,
+    userId: req.user!.id,
+    score,
+    passed: score >= (exam.passScore || 80),
+    answers,
+    correctCount: body.score == null ? correctCount : Math.round((score / 100) * questions.length),
+    totalQuestions: questions.length,
+    submittedAt: new Date().toISOString()
+  };
+  store.examAttempts.unshift(attempt);
+  refreshExamStats(exam);
+  await store.persist();
+  res.json({ attempt, exam: examWithRuntimeStats(exam), questions, report: examReport() });
+}));
 
 app.get("/api/reminders", requireAuth, (req, res) => {
   const { reminders } = getStore();
@@ -835,6 +1059,148 @@ app.post("/api/tools/ocr/jobs/:id/sync-lead", requireAuth, asyncRoute(async (req
   };
   await store.persist();
   res.json({ lead });
+}));
+
+app.get("/api/tools/website-opportunities", requireAuth, (req, res) => {
+  const { websiteOpportunities } = getStore();
+  const scoped = websiteOpportunities.filter((item) => canSeeOwner(req.user!, item.ownerId, item.teamId));
+  res.json({ opportunities: scoped });
+});
+
+app.get("/api/tools/ai-config", requireAuth, (req, res) => {
+  const config = getAiConfig(req.user!);
+  res.json({ config: config ? publicAiConfig(config) : null });
+});
+
+app.post("/api/tools/ai-config", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    name: z.string().min(1).default("官网商机解析模型"),
+    baseUrl: z.string().url(),
+    model: z.string().min(1),
+    apiKey: z.string().optional().default(""),
+    enabled: z.boolean().default(false)
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const existing = getAiConfig(req.user!);
+  const apiKey = body.apiKey && !body.apiKey.includes("****") ? body.apiKey : existing?.apiKey || "";
+  const config: AiModelConfig = {
+    id: existing?.id || `ai_${req.user!.id}`,
+    provider: "openai-compatible",
+    name: body.name,
+    baseUrl: body.baseUrl.replace(/\/+$/, ""),
+    model: body.model,
+    apiKey,
+    enabled: body.enabled,
+    ownerId: req.user!.id,
+    teamId: req.user!.teamId,
+    updatedAt: new Date().toISOString()
+  };
+  if (existing) Object.assign(existing, config);
+  else store.aiModelConfigs.unshift(config);
+  await store.persist();
+  res.json({ config: publicAiConfig(config) });
+}));
+
+app.post("/api/tools/ai-config/test", requireAuth, asyncRoute(async (_req, res) => {
+  const config = getAiConfig(_req.user!);
+  if (!config || !config.baseUrl || !config.model) {
+    res.status(400).json({ message: "请先保存模型地址和模型名称" });
+    return;
+  }
+  if (!config.apiKey) {
+    res.status(400).json({ message: "请先填写 API Key；系统不会在页面明文回显密钥" });
+    return;
+  }
+  const ok = await testAiConfig(config);
+  res.json({ ok, message: ok ? "AI 连接测试通过" : "AI 连接失败，请检查 Base URL / Key / Model" });
+}));
+
+app.post("/api/tools/website-scrape/preview", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({ urls: z.array(z.string().min(3)).min(1).max(12), useAi: z.boolean().default(false) });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const aiConfig = body.useAi ? getAiConfig(req.user!) : null;
+  const parsed = await Promise.all(body.urls.map((url, index) => parseWebsiteOpportunity(url, index, req.user!, aiConfig)));
+  for (const item of parsed) {
+    const existing = store.websiteOpportunities.find((row) => row.ownerId === req.user!.id && row.website === item.website);
+    if (existing) Object.assign(existing, item, { id: existing.id, status: existing.status, customerId: existing.customerId, dealId: existing.dealId });
+    else store.websiteOpportunities.unshift(item);
+  }
+  await store.persist();
+  res.json({ opportunities: parsed });
+}));
+
+app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    opportunities: z.array(z.object({
+      id: z.string().optional(),
+      company: z.string().min(1),
+      business: z.string().default("待维护"),
+      country: z.string().default("未知"),
+      website: z.string().min(3),
+      contact: z.string().default("待维护"),
+      contactInfo: z.string().default(""),
+      description: z.string().default("")
+    })).min(1)
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const created: Array<{ customer: Customer; deal: Deal; opportunity: WebsiteOpportunity }> = [];
+  for (const source of body.opportunities) {
+    const contact = source.contact || source.contactInfo || "待维护";
+    let customer = store.customers.find((item) => canSeeOwner(req.user!, item.ownerId, item.teamId) && item.company.toLowerCase() === source.company.toLowerCase());
+    if (!customer) {
+      customer = {
+        id: `c_web_${Date.now()}_${created.length}`,
+        company: source.company,
+        country: source.country || "未知",
+        contact,
+        ownerId: req.user!.id,
+        teamId: req.user!.teamId,
+        stage: "询盘",
+        amount: 0,
+        health: 68,
+        nextReminder: "官网商机待核实",
+        wecomBound: false
+      };
+      store.customers.unshift(customer);
+    }
+    const deal: Deal = {
+      id: `d_web_${Date.now()}_${created.length}`,
+      customerId: customer.id,
+      title: `${source.company} 官网产品机会`,
+      stage: "询盘",
+      amount: 0,
+      ownerId: customer.ownerId,
+      teamId: customer.teamId,
+      nextAction: source.description || `核实官网产品：${source.business || "待维护"}，补充联系人并发起首次触达`
+    };
+    store.deals.unshift(deal);
+    const opportunity: WebsiteOpportunity = {
+      id: source.id || `web_${Date.now()}_${created.length}`,
+      company: source.company,
+      business: source.business || "待维护",
+      country: source.country || "未知",
+      website: normalizeWebsite(source.website),
+      contact,
+      contactInfo: source.contactInfo || "",
+      description: source.description || "已同步为客户与商机，下一步核实采购负责人和产品需求。",
+      ownerId: req.user!.id,
+      teamId: req.user!.teamId,
+      status: "synced",
+      createdAt: new Date().toISOString(),
+      customerId: customer.id,
+      dealId: deal.id,
+      parseMode: "rule"
+    };
+    const existing = store.websiteOpportunities.find((item) => item.id === opportunity.id || (item.ownerId === req.user!.id && item.website === opportunity.website));
+    if (existing) Object.assign(existing, opportunity, { id: existing.id });
+    else store.websiteOpportunities.unshift(opportunity);
+    created.push({ customer, deal, opportunity: existing || opportunity });
+  }
+  await store.persist();
+  res.json({ created });
 }));
 
 app.get("/api/dashboard/summary", requireAuth, (req, res) => {
@@ -1136,6 +1502,245 @@ function currentMinuteText() {
   const date = new Date();
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function getAiConfig(user: SessionUser) {
+  return getStore().aiModelConfigs.find((item) => item.ownerId === user.id) || null;
+}
+
+function publicAiConfig(config: AiModelConfig) {
+  return {
+    id: config.id,
+    provider: config.provider,
+    name: config.name,
+    baseUrl: config.baseUrl,
+    model: config.model,
+    apiKey: config.apiKey ? `****${config.apiKey.slice(-4)}` : "",
+    hasApiKey: Boolean(config.apiKey),
+    enabled: config.enabled,
+    ownerId: config.ownerId,
+    teamId: config.teamId,
+    updatedAt: config.updatedAt
+  };
+}
+
+async function testAiConfig(config: AiModelConfig) {
+  try {
+    const content = await callAiModel(config, "只返回 JSON：{\"ok\":true}", 1200);
+    return /ok/i.test(content);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeWebsite(raw: string) {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
+async function parseWebsiteOpportunity(rawUrl: string, index: number, user: SessionUser, aiConfig?: AiModelConfig | null): Promise<WebsiteOpportunity> {
+  const website = normalizeWebsite(rawUrl);
+  let html = "";
+  let finalUrl = website;
+  let fetchNote = "";
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6500);
+    const response = await fetch(website, {
+      signal: controller.signal,
+      headers: { "user-agent": "GoodJobCRM/1.0 opportunity research" }
+    });
+    clearTimeout(timeout);
+    finalUrl = response.url || website;
+    html = response.ok ? await response.text() : "";
+    if (!response.ok) fetchNote = `官网返回 ${response.status}，已使用域名与可公开信息生成待核实商机。`;
+  } catch {
+    fetchNote = "官网暂时无法直接读取，已使用域名生成待核实商机。";
+  }
+  const text = cleanHtml(html).slice(0, 8000);
+  const title = firstMatch(html, /<title[^>]*>([\s\S]*?)<\/title>/i) || "";
+  const description = firstMatch(html, /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) || firstMatch(html, /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i) || "";
+  const headings = [...html.matchAll(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi)].slice(0, 4).map((item) => cleanHtml(item[1])).filter(Boolean);
+  const emails = [...new Set((html + " " + text).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [])].slice(0, 3);
+  const phones = [...new Set((text.match(/(?:\+|00)?\d[\d\s().-]{7,}\d/g) || []).map((item) => item.trim()))].slice(0, 2);
+  const wechat = firstMatch(text, /(?:WeChat|微信)[:：\s]*([A-Za-z0-9_-]{5,})/i);
+  const whatsapp = firstMatch(text, /(?:WhatsApp|Whatsapp|WA)[:：\s]*([+\d\s().-]{7,})/i);
+  const contactInfo = [emails[0], whatsapp ? `WhatsApp ${whatsapp}` : "", wechat ? `微信 ${wechat}` : "", phones[0]].filter(Boolean).join(" / ");
+  const url = new URL(finalUrl);
+  const company = companyFromTitle(title, url.hostname);
+  const business = inferBusiness([title, description, ...headings, text].join(" "));
+  const country = inferCountry(finalUrl, text);
+  const contact = inferContact(text);
+  const detail = [description || headings.join("；") || `${company} 官网产品信息待复核`, fetchNote].filter(Boolean).join(" ");
+  const ruleResult: WebsiteOpportunity = {
+    id: `web_${Date.now()}_${index}`,
+    company,
+    business,
+    country,
+    website: finalUrl,
+    contact,
+    contactInfo: contactInfo || "待维护",
+    description: detail.slice(0, 260),
+    ownerId: user.id,
+    teamId: user.teamId,
+    status: "preview",
+    createdAt: new Date().toISOString(),
+    parseMode: "rule"
+  };
+  if (!aiConfig?.enabled || !aiConfig.apiKey) return ruleResult;
+  try {
+    const ai = await parseWebsiteWithAi(aiConfig, {
+      website: finalUrl,
+      title,
+      description,
+      headings,
+      text,
+      ruleResult
+    });
+    return {
+      ...ruleResult,
+      company: ai.company || ruleResult.company,
+      business: ai.business || ruleResult.business,
+      country: ai.country || ruleResult.country,
+      contact: ai.contact || ruleResult.contact,
+      contactInfo: ai.contactInfo || ruleResult.contactInfo,
+      description: `${ai.description || ruleResult.description}（AI解析）`.slice(0, 320),
+      parseMode: "ai"
+    };
+  } catch {
+    return {
+      ...ruleResult,
+      description: `${ruleResult.description} AI解析失败，已自动回退规则解析。`.slice(0, 320),
+      parseMode: "fallback"
+    };
+  }
+}
+
+async function parseWebsiteWithAi(config: AiModelConfig, context: {
+  website: string;
+  title: string;
+  description: string;
+  headings: string[];
+  text: string;
+  ruleResult: WebsiteOpportunity;
+}) {
+  const prompt = [
+    "你是外贸CRM商机研究助手。请从官网文本中提取真实商机字段。",
+    "只返回严格 JSON，不要 Markdown，不要解释。",
+    "JSON字段：company,business,country,website,contact,contactInfo,description。",
+    "业务字段要聚焦产品/服务；联系人和联系方式没有就写“待维护”；不要编造不存在的邮箱电话。",
+    `官网：${context.website}`,
+    `标题：${context.title}`,
+    `Meta：${context.description}`,
+    `标题组：${context.headings.join("；")}`,
+    `规则初稿：${JSON.stringify(context.ruleResult)}`,
+    `正文：${context.text.slice(0, 10000)}`
+  ].join("\n");
+  const content = await callAiModel(config, prompt, 12000);
+  const parsed = extractJsonObject(content);
+  return {
+    company: String(parsed.company || "").trim(),
+    business: String(parsed.business || "").trim(),
+    country: String(parsed.country || "").trim(),
+    website: String(parsed.website || context.website).trim(),
+    contact: String(parsed.contact || "").trim(),
+    contactInfo: String(parsed.contactInfo || parsed.contact_info || "").trim(),
+    description: String(parsed.description || "").trim()
+  };
+}
+
+async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars = 12000) {
+  const endpoint = `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${config.apiKey}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: config.model,
+        temperature: 0.1,
+        messages: [
+          { role: "system", content: "你擅长把官网公开信息整理成外贸CRM商机。输出必须可被 JSON.parse 解析。" },
+          { role: "user", content: prompt.slice(0, maxInputChars) }
+        ],
+        response_format: { type: "json_object" }
+      })
+    });
+    if (!response.ok) throw new Error(`AI request failed ${response.status}`);
+    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const content = data.choices?.[0]?.message?.content || "";
+    if (!content.trim()) throw new Error("AI empty response");
+    return content;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function extractJsonObject(content: string) {
+  const source = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
+  const start = source.indexOf("{");
+  const end = source.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error("AI JSON missing");
+  return JSON.parse(source.slice(start, end + 1)) as Record<string, unknown>;
+}
+
+function cleanHtml(value: string) {
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function firstMatch(value: string, pattern: RegExp) {
+  return cleanHtml(value.match(pattern)?.[1] || "");
+}
+
+function companyFromTitle(title: string, hostname: string) {
+  const host = hostname.replace(/^www\./, "").split(".")[0];
+  const fromTitle = title.split(/[-|–—]/)[0]?.trim();
+  const raw = fromTitle && fromTitle.length >= 3 ? fromTitle : host;
+  return raw.replace(/\b(home|official|website|products?)\b/gi, "").replace(/\s+/g, " ").trim() || host;
+}
+
+function inferBusiness(text: string) {
+  const lower = text.toLowerCase();
+  const dictionary = [
+    ["pressure", "压力仪表 / Pressure transmitter"],
+    ["flow", "流量仪表 / Flow meter"],
+    ["temperature", "温度仪表 / Temperature sensor"],
+    ["level", "液位仪表 / Level meter"],
+    ["sensor", "工业传感器 / Industrial sensor"],
+    ["instrument", "工业仪表 / Instrumentation"],
+    ["meter", "仪表计量 / Metering products"],
+    ["valve", "阀门与过程控制 / Valve control"]
+  ];
+  const matched = dictionary.filter(([keyword]) => lower.includes(keyword)).map(([, label]) => label);
+  return [...new Set(matched)].slice(0, 3).join("；") || "官网产品待核实";
+}
+
+function inferCountry(url: string, text: string) {
+  const lower = `${url} ${text}`.toLowerCase();
+  const rules: Array<[string, string]> = [
+    [".de", "德国"], [".co.uk", "英国"], [".uk", "英国"], [".fr", "法国"], [".it", "意大利"], [".es", "西班牙"],
+    [".us", "美国"], [".com.au", "澳大利亚"], [".ca", "加拿大"], [".jp", "日本"], [".kr", "韩国"], [".in", "印度"],
+    ["germany", "德国"], ["united kingdom", "英国"], ["usa", "美国"], ["japan", "日本"], ["india", "印度"], ["china", "中国"]
+  ];
+  return rules.find(([key]) => lower.includes(key))?.[1] || "未知";
+}
+
+function inferContact(text: string) {
+  const match = text.match(/(?:Contact|Sales|Manager|Director)[:：\s]+([A-Z][A-Za-z\s.-]{2,40})/);
+  return cleanHtml(match?.[1] || "") || "待维护";
 }
 
 app.get("/api/reports/executive", requireAuth, (req, res) => {

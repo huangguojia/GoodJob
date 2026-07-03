@@ -220,17 +220,21 @@
     }
 
     .command {
-      width: min(560px, 52vw);
-      height: 40px;
+      width: min(420px, 38vw);
+      height: 36px;
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 0 13px;
+      padding: 0 12px;
       border-radius: var(--radius);
       border: 1px solid var(--line);
-      background: #f9fbff;
+      background: linear-gradient(180deg, #fff 0%, #f8fbff 100%);
       color: var(--muted);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.9);
+      box-shadow: 0 10px 28px rgba(22, 34, 58, .06), inset 0 1px 0 rgba(255,255,255,.9);
+    }
+
+    .top-action-context.is-hidden {
+      display: none;
     }
 
     .command input {
@@ -239,13 +243,85 @@
       outline: 0;
       color: var(--ink);
       background: transparent;
-      font-size: 14px;
+      font-size: 13px;
     }
 
     .top-actions {
       display: flex;
       align-items: center;
       gap: 6px;
+    }
+
+    .top-action-context {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .top-core {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex: 1;
+    }
+
+    .top-quick {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px;
+      border: 1px solid rgba(223, 229, 239, .9);
+      border-radius: var(--radius);
+      background: rgba(248, 251, 255, .72);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.85);
+    }
+
+    .top-quick button {
+      height: 28px;
+      padding: 0 9px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: #5c667a;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .top-quick button:hover,
+    .top-quick button.active {
+      color: var(--ink);
+      background: #fff;
+      box-shadow: 0 6px 16px rgba(31, 45, 74, .08);
+    }
+
+    .top-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .top-pill {
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 9px;
+      border: 1px solid rgba(223, 229, 239, .92);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .76);
+      color: #5c667a;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+      box-shadow: 0 8px 20px rgba(31, 45, 74, .05);
+    }
+
+    .top-pill b {
+      color: var(--ink);
+      font-size: 12px;
     }
 
     .btn {
@@ -592,6 +668,46 @@
       color: var(--ink);
       background: #edf2ff;
       font-weight: 700;
+    }
+
+    .morning-panel {
+      display: none;
+      margin-bottom: 14px;
+      padding: 14px;
+      border: 1px solid rgba(49,87,213,.16);
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, rgba(49,87,213,.08), rgba(11,178,169,.08));
+      box-shadow: var(--shadow);
+    }
+
+    .morning-panel.active {
+      display: block;
+    }
+
+    .morning-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .morning-card {
+      padding: 12px;
+      border: 1px solid rgba(223,229,239,.86);
+      border-radius: var(--radius-sm);
+      background: rgba(255,255,255,.82);
+    }
+
+    .morning-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 7px;
+    }
+
+    .morning-card b {
+      color: var(--ink);
+      font-size: 18px;
     }
 
     .kpis {
@@ -2327,6 +2443,12 @@
       box-shadow: 0 10px 22px rgba(27,39,68,.08);
     }
 
+    .category-item.selected {
+      border-color: rgba(49,87,213,.38);
+      background: linear-gradient(135deg, #f7f9ff, #fff);
+      box-shadow: inset 3px 0 0 var(--brand), 0 12px 26px rgba(27,39,68,.08);
+    }
+
     .category-item b {
       color: var(--ink);
       font-size: 13px;
@@ -2337,6 +2459,21 @@
       margin-top: 3px;
       color: var(--muted);
       font-size: 11px;
+    }
+
+    .exam-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 5px;
+    }
+
+    .exam-actions .btn {
+      min-height: 26px;
+      padding: 5px 8px;
+      border-radius: 8px;
+      font-size: 11px;
+      line-height: 1;
     }
 
     .file-grid {
@@ -2398,6 +2535,17 @@
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: #fff;
+      box-shadow: 0 10px 24px rgba(27,39,68,.045);
+    }
+
+    .question-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 7px;
+      color: var(--muted);
+      font-size: 11px;
     }
 
     .question-card h3 {
@@ -2424,7 +2572,43 @@
     .option-row span.active {
       border-color: rgba(22, 163, 106, .38);
       color: #0f754b;
-      background: #e9f9f2;
+      background: linear-gradient(135deg, rgba(22,163,106,.12), #fff);
+      box-shadow: inset 0 0 0 1px rgba(22,163,106,.08);
+    }
+
+    .question-explain {
+      display: block;
+      margin-top: 8px;
+      padding: 7px 8px;
+      border-radius: 8px;
+      border: 1px dashed var(--line-soft);
+      background: #f7f9fd;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .exam-modal-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 7px;
+      margin-bottom: 10px;
+    }
+
+    .exam-modal-summary span {
+      padding: 8px 9px;
+      border-radius: 10px;
+      border: 1px solid var(--line-soft);
+      background: #f8faff;
+      color: var(--text);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    .exam-paper-live {
+      max-height: min(62vh, 620px);
+      overflow: auto;
+      padding-right: 4px;
     }
 
     .progress-ring {
@@ -2644,6 +2828,165 @@
 
     .sync-row span {
       color: var(--muted);
+    }
+
+    .website-scrape {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .ai-config-panel {
+      display: grid;
+      grid-template-columns: minmax(220px, .72fr) minmax(0, 1.28fr);
+      gap: 10px;
+      padding: 10px;
+      border: 1px solid rgba(37, 99, 235, .16);
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, #f8fbff 0%, #ffffff 52%, #f7fffb 100%);
+    }
+
+    .ai-status-card {
+      display: grid;
+      gap: 8px;
+      align-content: start;
+      padding: 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: rgba(255,255,255,.82);
+    }
+
+    .ai-status-card h3 {
+      margin: 0;
+      font-size: 13px;
+    }
+
+    .ai-status-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .ai-config-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      align-items: end;
+    }
+
+    .ai-config-grid .form-field {
+      gap: 4px;
+    }
+
+    .ai-config-grid input {
+      height: 30px;
+      font-size: 11px;
+    }
+
+    .ai-toggle-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 30px;
+      color: var(--ink);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .ai-toggle-line input {
+      width: 14px;
+      height: 14px;
+    }
+
+    .ai-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+      grid-column: 1 / -1;
+    }
+
+    .website-input-grid {
+      display: grid;
+      grid-template-columns: minmax(260px, .8fr) minmax(0, 1.2fr);
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .website-url-box textarea,
+    .website-table textarea,
+    .website-table input {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #f8faff;
+      color: var(--ink);
+      font-size: 11px;
+    }
+
+    .website-url-box textarea {
+      height: 120px;
+      padding: 10px;
+      resize: vertical;
+      line-height: 1.5;
+    }
+
+    .website-table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+
+    .website-table {
+      min-width: 1120px;
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+
+    .website-table th,
+    .website-table td {
+      padding: 7px;
+      border-bottom: 1px solid var(--line-soft);
+      vertical-align: top;
+      text-align: left;
+    }
+
+    .website-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #f3f6fb;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .website-table input {
+      height: 26px;
+      padding: 0 7px;
+    }
+
+    .website-table textarea {
+      min-height: 44px;
+      padding: 6px 7px;
+      resize: vertical;
+    }
+
+    .website-table input[type="checkbox"] {
+      width: 14px;
+      height: 14px;
+      accent-color: var(--brand);
+    }
+
+    .empty-cell {
+      color: var(--muted);
+      text-align: center !important;
+      padding: 24px !important;
     }
 
     .todo-board {
@@ -3717,8 +4060,10 @@
         padding: 12px;
       }
       .command { width: 100%; }
+      .top-core { flex-direction: column; align-items: stretch; }
+      .top-quick, .top-status { overflow-x: auto; }
       .top-actions { justify-content: space-between; }
-      .top-actions .btn:not(.primary):not(.icon-only) { display: none; }
+      .top-action-context { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
       .workspace { padding: 16px 12px 28px; }
       .page-head { display: block; }
       .page-head .segmented { margin-top: 12px; }
@@ -3864,15 +4209,40 @@
 
     <main class="main">
       <header class="topbar">
-        <label class="command">
-          <svg width="17" height="17" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m21 21-4.35-4.35M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z"/></svg>
-          <input placeholder="搜索客户、联系人、国家、产品或商机" />
-        </label>
+        <div class="top-core">
+          <label class="command" id="topSearchWrap">
+            <svg width="17" height="17" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m21 21-4.35-4.35M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z"/></svg>
+            <input id="topSearchInput" placeholder="全局搜索 / 输入模块名后回车跳转" list="topSearchHints" />
+            <datalist id="topSearchHints">
+              <option value="客户"></option>
+              <option value="商机"></option>
+              <option value="待办"></option>
+              <option value="考试"></option>
+              <option value="资料"></option>
+              <option value="报表"></option>
+              <option value="备忘录"></option>
+            </datalist>
+          </label>
+          <div class="top-quick" id="topQuickNav" aria-label="全局快捷导航">
+            <button type="button" data-top-view="dashboard">工作台</button>
+            <button type="button" data-top-view="customers">客户</button>
+            <button type="button" data-top-view="pipeline">商机</button>
+            <button type="button" data-top-view="exam">考试</button>
+            <button type="button" data-top-view="reports">报表</button>
+          </div>
+          <div class="top-status" aria-label="今日状态">
+            <span class="top-pill">待办 <b id="topTodoCount">--</b></span>
+            <span class="top-pill">提醒 <b id="topReminderCount">--</b></span>
+            <span class="top-pill">主库 <b>MySQL</b></span>
+          </div>
+        </div>
         <div class="top-actions">
-          <button class="btn ghost" title="导入"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></span>导入</button>
-          <button class="btn ghost" title="导出"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg></span>导出</button>
+          <div class="top-action-context is-hidden" id="topActionContext">
+            <button class="btn ghost" id="topImportButton" title="导入"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></span>导入</button>
+            <button class="btn ghost" id="topExportButton" title="导出"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg></span>导出</button>
+            <button class="btn primary" id="topPrimaryAction" type="button"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/></svg><span>新增客户</span></button>
+          </div>
           <button class="btn icon-only" title="提醒"><svg width="17" height="17" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"/></svg></button>
-          <button class="btn primary"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>新增客户</button>
           <div class="user-menu">
             <div class="avatar" id="currentAvatar">SH</div>
             <div class="user-identity"><b id="topUserName">Shirley</b><span id="topUserRole">业务员</span></div>
@@ -3890,8 +4260,8 @@
               <p class="sub">把逾期跟进、报价风险、样品反馈和企微提醒放在同一个第一屏。</p>
             </div>
             <div class="head-actions">
-              <div class="segmented"><button class="active">今日</button><button>本周</button><button>本月</button></div>
-              <button class="btn">晨会视图</button>
+              <div class="segmented" id="dashboardPeriodTabs"><button class="active" data-dashboard-period="today">今日</button><button data-dashboard-period="week">本周</button><button data-dashboard-period="month">本月</button></div>
+              <button class="btn" id="morningViewButton" type="button">晨会视图</button>
             </div>
           </div>
 
@@ -3900,6 +4270,16 @@
             <span class="badge manager-only">主管视图：可查看团队全部数据</span>
             <span class="badge sales-only">业务员视图：仅显示本人内容</span>
           </div>
+
+          <section class="morning-panel" id="morningPanel">
+            <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 3v3"/><path d="M12 18v3"/><path d="M4.2 4.2l2.1 2.1"/><path d="M17.7 17.7l2.1 2.1"/><path d="M3 12h3"/><path d="M18 12h3"/><circle cx="12" cy="12" r="4"/></svg></span><div><h2>晨会视图</h2><span id="morningSubtitle">用于 5 分钟晨会同步：风险、成交、协同和今日动作。</span></div></div>
+            <div class="morning-grid">
+              <div class="morning-card"><span>优先级结论</span><b id="morningConclusion">加载中</b></div>
+              <div class="morning-card"><span>高风险金额</span><b id="morningRisk">--</b></div>
+              <div class="morning-card"><span>待协同</span><b id="morningCollab">--</b></div>
+              <div class="morning-card"><span>今日动作</span><b id="morningAction">--</b></div>
+            </div>
+          </section>
 
           <div class="command-center">
             <section class="panel focus-panel">
@@ -4575,6 +4955,7 @@
           <div class="tools-grid">
             <aside class="tool-list">
               <div class="tool-item active"><div class="tool-mark">OCR</div><div><b>名片 OCR 识别</b><span>解析公司、联系人、邮箱、WhatsApp 等</span></div><span class="badge green">启用</span></div>
+              <div class="tool-item active"><div class="tool-mark">WEB</div><div><b>官网产品扒取</b><span>输入官网，生成公司/业务/国家/联系方式商机表</span></div><span class="badge green">新功能</span></div>
               <div class="tool-item"><div class="tool-mark">FX</div><div><b>汇率换算</b><span>报价时快速换算 USD/EUR/CNY</span></div><span class="badge">待接入</span></div>
               <div class="tool-item"><div class="tool-mark">DUP</div><div><b>客户去重</b><span>按邮箱域名、电话、公司名合并</span></div><span class="badge">规则</span></div>
               <div class="tool-item"><div class="tool-mark">TXT</div><div><b>跟进话术生成</b><span>按阶段生成邮件/企微话术</span></div><span class="badge amber">内测</span></div>
@@ -4631,6 +5012,50 @@
                       <table class="mini-table"><tbody><tr><td>线索来源</td><td>名片 OCR</td></tr><tr><td>分配团队</td><td>欧洲组</td></tr><tr><td>初始阶段</td><td>新线索</td></tr><tr><td>下次动作</td><td>发送产品目录</td></tr></tbody></table>
                     </section>
                   </div>
+                </div>
+              </div>
+
+              <div class="website-scrape">
+                <div class="section-head">
+                  <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span><div><h2>官网产品扒取 → 商机整理</h2><span>粘贴多个官网，自动提取产品业务、国家、联系人和联系方式，可人工修正后同步到客户与商机。</span></div></div>
+                  <div class="head-actions"><button class="btn">解析官网</button><button class="btn primary">同步为商机</button></div>
+                </div>
+                <div class="ai-config-panel">
+                  <div class="ai-status-card">
+                    <span class="badge" id="aiConfigBadge">规则解析</span>
+                    <h3>AI 增强解析</h3>
+                    <p>可配置 OpenAI 兼容接口，系统先抓取官网公开文本，再交给你的模型提取产品业务、国家、联系人和联系方式；未配置或调用失败时自动回退规则解析。</p>
+                  </div>
+                  <div class="ai-config-grid">
+                    <div class="form-field"><label>配置名称</label><input id="aiConfigName" value="官网商机解析模型"></div>
+                    <div class="form-field"><label>Base URL</label><input id="aiBaseUrlInput" value="https://api.openai.com/v1"></div>
+                    <div class="form-field"><label>模型</label><input id="aiModelInput" value="gpt-4o-mini"></div>
+                    <div class="form-field"><label>API Key</label><input id="aiApiKeyInput" type="password" placeholder="保存后仅后端持久化"></div>
+                    <label class="ai-toggle-line"><input id="aiEnabledInput" type="checkbox">启用 AI 解析</label>
+                    <label class="ai-toggle-line"><input id="websiteUseAiInput" type="checkbox">本次解析使用 AI</label>
+                    <div class="ai-actions"><button class="btn" id="aiTestButton">测试连接</button><button class="btn primary" id="aiSaveButton">保存AI配置</button></div>
+                  </div>
+                </div>
+                <div class="website-input-grid">
+                  <div class="upload-card website-url-box" style="min-height:auto">
+                    <span class="badge">每行一个官网</span>
+                    <textarea id="websiteUrlInput" placeholder="例如：
+https://www.omega.co.uk
+https://www.ifm.com"></textarea>
+                    <div class="sync-preview">
+                      <div class="sync-row" id="websiteScrapeStatus"><span>解析状态</span><b>待开始</b><span class="badge">可批量</span></div>
+                      <div class="sync-row"><span>输出字段</span><b>公司名 / 业务 / 国家 / 官网 / 联系人 / 联系方式 / 说明</b><span class="badge green">可编辑</span></div>
+                    </div>
+                  </div>
+                  <div class="website-table-wrap">
+                    <table class="website-table">
+                      <thead><tr><th>选</th><th>公司名</th><th>业务</th><th>国家</th><th>官网</th><th>联系人</th><th>联系方式</th><th>说明</th><th>状态</th></tr></thead>
+                      <tbody id="websiteOpportunityRows"><tr><td colspan="9" class="empty-cell">粘贴官网后点击解析，系统会抓取产品、联系方式和国家线索。</td></tr></tbody>
+                    </table>
+                  </div>
+                </div>
+                <div class="sync-preview">
+                  <div class="sync-row"><span>当前商机池</span><b id="websiteOpportunityCount">0 条</b><span class="badge">本账号可见</span></div>
                 </div>
               </div>
             </section>
@@ -4877,7 +5302,32 @@
     function activateView(id) {
       navButtons.forEach((button) => button.classList.toggle("active", button.dataset.view === id));
       views.forEach((view) => view.classList.toggle("active", view.id === id));
+      renderTopbarForView(id);
       window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function renderTopbarForView(id) {
+      const searchWrap = document.getElementById("topSearchWrap");
+      const searchInput = document.getElementById("topSearchInput");
+      const context = document.getElementById("topActionContext");
+      const importButton = document.getElementById("topImportButton");
+      const exportButton = document.getElementById("topExportButton");
+      const primaryButton = document.getElementById("topPrimaryAction");
+      const primaryText = primaryButton && primaryButton.querySelector("span");
+      const isCustomerView = id === "customers";
+
+      searchWrap && searchWrap.classList.remove("is-hidden");
+      context && context.classList.toggle("is-hidden", !isCustomerView);
+      if (searchInput) {
+        searchInput.placeholder = isCustomerView ? "搜索客户、联系人、国家或产品" : "全局搜索 / 输入模块名后回车跳转";
+      }
+      if (importButton) importButton.hidden = !isCustomerView;
+      if (exportButton) exportButton.hidden = !isCustomerView;
+      if (primaryButton) primaryButton.hidden = !isCustomerView;
+      if (primaryText && isCustomerView) primaryText.textContent = "新增客户";
+      document.querySelectorAll("[data-top-view]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.topView === id);
+      });
     }
 
     function applyRole(role) {
@@ -4903,10 +5353,34 @@
       button.addEventListener("click", () => activateView(button.dataset.view));
     });
 
+    document.querySelectorAll("[data-top-view]").forEach((button) => {
+      button.addEventListener("click", () => activateView(button.dataset.topView));
+    });
+
+    document.getElementById("topSearchInput").addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      const value = event.currentTarget.value.trim().toLowerCase();
+      const viewMap = [
+        ["客户", "customers"], ["customer", "customers"],
+        ["商机", "pipeline"], ["pipeline", "pipeline"],
+        ["待办", "dashboard"], ["todo", "dashboard"], ["工作台", "dashboard"],
+        ["考试", "exam"], ["exam", "exam"],
+        ["资料", "knowledge"], ["knowledge", "knowledge"],
+        ["报表", "reports"], ["report", "reports"],
+        ["备忘", "memos"], ["memo", "memos"]
+      ];
+      const matched = viewMap.find(([keyword]) => value.includes(keyword));
+      if (matched) {
+        activateView(matched[1]);
+        event.currentTarget.value = "";
+      }
+    });
+
     document.getElementById("loginButton").addEventListener("click", login);
     document.getElementById("logoutButton").addEventListener("click", logout);
 
     applyRole("sales");
+    renderTopbarForView("dashboard");
   </script>
   <script type="module" src="/src/prototype-api.ts"></script>
 </body>

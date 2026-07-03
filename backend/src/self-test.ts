@@ -43,6 +43,40 @@ try {
     throw new Error("ocr sync failed");
   }
 
+  const aiConfig = await request("/api/tools/ai-config", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      name: "自动化AI解析配置",
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-4o-mini",
+      apiKey: "test-secret-1234",
+      enabled: false
+    })
+  });
+  if (!aiConfig.response.ok || aiConfig.json.config?.apiKey !== "****1234" || !aiConfig.json.config?.hasApiKey) throw new Error("ai config save failed");
+
+  const aiConfigRead = await request("/api/tools/ai-config", {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!aiConfigRead.response.ok || aiConfigRead.json.config?.apiKey !== "****1234") throw new Error("ai config read failed");
+
+  const websitePreview = await request("/api/tools/website-scrape/preview", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ urls: ["https://example-instrument.test"] })
+  });
+  if (!websitePreview.response.ok || !websitePreview.json.opportunities?.[0]?.company) throw new Error("website scrape preview failed");
+
+  const websiteSync = await request("/api/tools/website-scrape/sync-opportunities", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ opportunities: [{ ...websitePreview.json.opportunities[0], company: "自动化官网商机", business: "压力仪表" }] })
+  });
+  if (!websiteSync.response.ok || websiteSync.json.created?.[0]?.deal?.title !== "自动化官网商机 官网产品机会") {
+    throw new Error("website opportunity sync failed");
+  }
+
   const deals = await request("/api/deals", { headers: { authorization: `Bearer ${managerToken}` } });
   if (deals.json.deals.length < 5) throw new Error("manager deals scope failed");
 
@@ -231,12 +265,121 @@ try {
   });
   if (!job.response.ok || job.json.job.name !== "测试导入") throw new Error("import job create failed");
 
+  const examDetail = await request("/api/exams/e1/detail", {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!examDetail.response.ok || !Array.isArray(examDetail.json.questions) || examDetail.json.questions.length < 1) {
+    throw new Error("exam detail failed");
+  }
+  const examAnswers = Object.fromEntries(
+    examDetail.json.questions.map((question: { id: string; answerIndex: number }) => [question.id, question.answerIndex])
+  );
   const exam = await request("/api/exams/e1/submit", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ score: 88 })
+    body: JSON.stringify({ answers: examAnswers })
   });
-  if (!exam.response.ok || exam.json.attempt.passed !== true) throw new Error("exam submit failed");
+  if (!exam.response.ok || exam.json.attempt.passed !== true || exam.json.attempt.score !== 100) throw new Error("exam submit failed");
+
+  const createdExam = await request("/api/exams", {
+    method: "POST",
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({
+      title: "自动化仪表专项考试",
+      category: "仪表产品",
+      questionCount: 2,
+      durationMinutes: 15,
+      passScore: 80,
+      targetRole: "sales"
+    })
+  });
+  if (!createdExam.response.ok || createdExam.json.exam.category !== "仪表产品") throw new Error("exam create failed");
+
+  const addedQuestion = await request(`/api/exams/${createdExam.json.exam.id}/questions`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({
+      stem: "压力仪表报价前必须优先确认哪组参数？",
+      options: ["量程、精度、接口、介质和工况", "客户公司人数", "包装颜色"],
+      answerIndex: 0,
+      explanation: "仪表选型先确认量程、精度、接口、介质和工况，避免型号错误。",
+      difficulty: "medium"
+    })
+  });
+  if (!addedQuestion.response.ok || addedQuestion.json.exam.questionCount < 3) throw new Error("exam question create failed");
+
+  const publishedExam = await request(`/api/exams/${createdExam.json.exam.id}/publish`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (!publishedExam.response.ok || publishedExam.json.exam.status !== "published") throw new Error("exam publish failed");
+
+  const createdExamDetail = await request(`/api/exams/${createdExam.json.exam.id}/detail`, {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!createdExamDetail.response.ok || createdExamDetail.json.questions.length < 3) throw new Error("created exam detail failed");
+
+  const salesCreatedExam = await request("/api/exams", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      title: "销售自建仪表考试",
+      category: "仪表产品",
+      questionCount: 1,
+      durationMinutes: 10,
+      passScore: 70,
+      targetRole: "sales"
+    })
+  });
+  if (!salesCreatedExam.response.ok || salesCreatedExam.json.exam.title !== "销售自建仪表考试") throw new Error("sales exam create failed");
+
+  const importedExamQuestions = await request(`/api/exams/${salesCreatedExam.json.exam.id}/questions/import`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      questions: [
+        {
+          stem: "Excel导入：压力表选型优先确认什么？",
+          options: ["量程和介质", "客户邮箱", "包装颜色"],
+          answerIndex: 0,
+          explanation: "压力表必须先确认量程、介质、精度和接口。",
+          difficulty: "easy"
+        },
+        {
+          stem: "Excel导入：防爆场景需要确认什么？",
+          options: ["防爆等级和认证", "名片颜色", "聊天工具", "使用区域"],
+          answerIndex: 0,
+          answerIndexes: [0, 3],
+          questionType: "multiple",
+          explanation: "防爆场景需要确认认证体系和等级。",
+          difficulty: "hard"
+        }
+      ]
+    })
+  });
+  if (!importedExamQuestions.response.ok || importedExamQuestions.json.importedCount !== 2) throw new Error("exam question import failed");
+
+  const salesPublishedExam = await request(`/api/exams/${salesCreatedExam.json.exam.id}/publish`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!salesPublishedExam.response.ok || salesPublishedExam.json.exam.status !== "published") throw new Error("sales exam publish failed");
+
+  const salesExamDetail = await request(`/api/exams/${salesCreatedExam.json.exam.id}/detail`, {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  const salesExamAnswers = Object.fromEntries(
+    salesExamDetail.json.questions.map((question: { id: string; answerIndex: number; answerIndexes?: number[] }) => [
+      question.id,
+      question.answerIndexes?.length ? question.answerIndexes : question.answerIndex
+    ])
+  );
+  const salesExamAttempt = await request(`/api/exams/${salesCreatedExam.json.exam.id}/submit`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ answers: salesExamAnswers })
+  });
+  if (!salesExamAttempt.response.ok || salesExamAttempt.json.attempt.score !== 100) throw new Error("multi-select exam scoring failed");
 
   const managerAccounts = await request("/api/accounts", {
     headers: { authorization: `Bearer ${managerToken}` }
@@ -301,12 +444,18 @@ try {
 	    createdReminder: reminder.json.reminder.title,
 	    todoUndo: todoUndone.json.todo.done === false,
 	    todoRestored: !restoredTodo.json.todo.historyAt,
-	    problemResolved: resolvedProblem.json.problem.status,
-	    memoPinned: pinnedMemo.json.memo.pinned,
+    problemResolved: resolvedProblem.json.problem.status,
+    memoPinned: pinnedMemo.json.memo.pinned,
     competitorThreat: competitorThreat.json.competitor.threatLevel,
     casePublished: publishedCase.json.caseStudy.status,
+    aiConfigMasked: aiConfigRead.json.config.apiKey,
 		    importJob: job.json.job.name,
     examPassed: exam.json.attempt.passed,
+    examCreated: createdExam.json.exam.title,
+    examPublished: publishedExam.json.exam.status,
+    examImported: importedExamQuestions.json.importedCount,
+    salesExamPublished: salesPublishedExam.json.exam.status,
+    multiExamScore: salesExamAttempt.json.attempt.score,
     accountCreated: account.json.account.name,
     accountPasswordLogin: loginCreated.response.ok,
     accountDeleted: deleted.json.ok,

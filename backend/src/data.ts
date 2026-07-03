@@ -1,4 +1,4 @@
-import type { CaseStudy, Competitor, Customer, Deal, Exam, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, User, WecomMessage } from "./types.js";
+import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 export const users: User[] = [
   { id: "u_sales_shirley", name: "Shirley", email: "shirley@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "SH", status: "active" },
@@ -31,9 +31,28 @@ export const knowledgeAssets: KnowledgeAsset[] = [
 ];
 
 export const exams: Exam[] = [
-  { id: "e1", title: "LED 灯具基础", category: "产品知识", status: "published", passRate: 72, questionCount: 25 },
-  { id: "e2", title: "认证资料专项", category: "认证资料", status: "draft", passRate: 64, questionCount: 30 },
-  { id: "e3", title: "报价规则进阶", category: "报价规则", status: "scheduled", passRate: 83, questionCount: 20 }
+  { id: "e1", title: "LED 灯具基础", category: "产品知识", status: "published", passRate: 72, questionCount: 4, durationMinutes: 25, passScore: 80, targetRole: "sales", updatedAt: "2026-06-27T09:00:00.000Z" },
+  { id: "e2", title: "认证资料专项", category: "认证资料", status: "draft", passRate: 64, questionCount: 3, durationMinutes: 20, passScore: 85, targetRole: "sales", updatedAt: "2026-06-27T09:10:00.000Z" },
+  { id: "e3", title: "报价规则进阶", category: "报价规则", status: "scheduled", passRate: 83, questionCount: 3, durationMinutes: 20, passScore: 80, targetRole: "manager", updatedAt: "2026-06-27T09:20:00.000Z" }
+];
+
+export const examQuestions: ExamQuestion[] = [
+  { id: "q1", examId: "e1", category: "产品知识", stem: "客户要求 CE 证书时，销售应优先提供哪类资料？", options: ["工厂营业执照", "对应产品型号的 CE 证书与测试报告", "产品宣传图", "海运提单"], answerIndex: 1, explanation: "认证类资料必须匹配客户询问的具体产品型号，避免发错证书造成信任损失。", difficulty: "easy", updatedAt: "2026-06-27T09:00:00.000Z" },
+  { id: "q2", examId: "e1", category: "产品知识", stem: "样品寄出后系统默认几天触发反馈提醒？", options: ["1 天", "签收后 3 天", "30 天", "不提醒"], answerIndex: 1, explanation: "样品签收后 3 天是比较合适的反馈窗口，既不显得催促，也能防止项目变冷。", difficulty: "easy", updatedAt: "2026-06-27T09:00:00.000Z" },
+  { id: "q3", examId: "e1", category: "产品知识", stem: "客户比较多个型号时，销售应先确认什么？", options: ["客户预算、用途场景和关键参数", "客户生日", "物流公司名称", "采购是否会立刻付款"], answerIndex: 0, explanation: "型号推荐前先确认应用场景与核心参数，才能减少无效报价。", difficulty: "medium", updatedAt: "2026-06-27T09:00:00.000Z" },
+  { id: "q4", examId: "e1", category: "产品知识", stem: "仪表类产品报价前最需要确认哪项技术信息？", options: ["颜色偏好", "量程、精度、接口和工况", "客户公司人数", "包装箱颜色"], answerIndex: 1, explanation: "仪表产品适配高度依赖量程、精度、接口和工况，缺少这些信息容易报价失真。", difficulty: "hard", updatedAt: "2026-06-27T09:00:00.000Z" },
+  { id: "q5", examId: "e2", category: "认证资料", stem: "客户索要 RoHS 资料时，最稳妥的回复方式是什么？", options: ["只回复已通过", "提供对应型号 RoHS 报告并说明适用范围", "发一张产品图", "让客户自己查询"], answerIndex: 1, explanation: "认证资料要有文件、型号和适用范围，减少客户二次确认成本。", difficulty: "easy", updatedAt: "2026-06-27T09:10:00.000Z" },
+  { id: "q6", examId: "e2", category: "认证资料", stem: "资料版本更新后，应同步维护到哪里？", options: ["只放个人电脑", "资料库、报价模板和客户常用话术", "不用同步", "只通知主管"], answerIndex: 1, explanation: "资料版本会影响报价和对外口径，需要同步到团队共用资产。", difficulty: "medium", updatedAt: "2026-06-27T09:10:00.000Z" },
+  { id: "q7", examId: "e2", category: "认证资料", stem: "客户问证书是否覆盖定制型号时，正确做法是？", options: ["直接说覆盖", "核对型号差异并让技术确认适用性", "忽略问题", "只发价格"], answerIndex: 1, explanation: "定制型号可能涉及结构或材料变化，需要技术确认后再承诺。", difficulty: "hard", updatedAt: "2026-06-27T09:10:00.000Z" },
+  { id: "q8", examId: "e3", category: "报价规则", stem: "报价单中 MOQ 变化需要同步更新哪些内容？", options: ["单价、包装数、交期", "客户国家", "单价、装箱、交期、付款条款影响", "仅备注即可"], answerIndex: 2, explanation: "MOQ 会影响单价、装箱、交期和付款条款，不能只改备注。", difficulty: "medium", updatedAt: "2026-06-27T09:20:00.000Z" },
+  { id: "q9", examId: "e3", category: "报价规则", stem: "汇率波动明显时，报价应增加哪类说明？", options: ["有效期和汇率口径", "客户国家人口", "公司成立时间", "无须说明"], answerIndex: 0, explanation: "报价有效期和汇率口径能保护利润，并让客户预期更清晰。", difficulty: "medium", updatedAt: "2026-06-27T09:20:00.000Z" },
+  { id: "q10", examId: "e3", category: "报价规则", stem: "客户要求大幅降价时，优先采用什么策略？", options: ["直接同意", "拆分配置、数量阶梯和付款条件后再谈", "不回复", "只强调我们很便宜"], answerIndex: 1, explanation: "价格谈判需要把配置、数量和付款条件拆开谈，避免单纯压缩利润。", difficulty: "hard", updatedAt: "2026-06-27T09:20:00.000Z" }
+];
+
+export const examAttempts: ExamAttempt[] = [
+  { id: "ea_seed_1", examId: "e1", userId: "u_sales_shirley", score: 75, passed: false, answers: { q1: 1, q2: 1, q3: 2, q4: 1 }, correctCount: 3, totalQuestions: 4, submittedAt: "2026-06-26T15:20:00.000Z" },
+  { id: "ea_seed_2", examId: "e1", userId: "u_sales_mia", score: 100, passed: true, answers: { q1: 1, q2: 1, q3: 0, q4: 1 }, correctCount: 4, totalQuestions: 4, submittedAt: "2026-06-26T16:10:00.000Z" },
+  { id: "ea_seed_3", examId: "e3", userId: "u_manager_alex", score: 67, passed: false, answers: { q8: 2, q9: 2, q10: 1 }, correctCount: 2, totalQuestions: 3, submittedAt: "2026-06-25T11:15:00.000Z" }
 ];
 
 export const ocrJobs: OcrJob[] = [
@@ -52,6 +71,38 @@ export const ocrJobs: OcrJob[] = [
       country: "德国",
       city: "Berlin"
     }
+  }
+];
+
+export const websiteOpportunities: WebsiteOpportunity[] = [
+  {
+    id: "web_seed_1",
+    company: "Omega Instrumentation Ltd",
+    business: "Pressure transmitter, flow meter, industrial sensor",
+    country: "英国",
+    website: "https://www.omega.co.uk",
+    contact: "待维护",
+    contactInfo: "sales@omega.co.uk",
+    description: "系统示例：官网产品页显示压力、流量和温度仪表，适合作为仪表类潜在采购/合作商机。",
+    ownerId: "u_sales_shirley",
+    teamId: "europe",
+    status: "preview",
+    createdAt: "2026-06-27T09:00:00.000Z"
+  }
+];
+
+export const aiModelConfigs: AiModelConfig[] = [
+  {
+    id: "ai_default_shirley",
+    provider: "openai-compatible",
+    name: "官网商机解析模型",
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-4o-mini",
+    apiKey: "",
+    enabled: false,
+    ownerId: "u_sales_shirley",
+    teamId: "europe",
+    updatedAt: "2026-06-27T09:00:00.000Z"
   }
 ];
 

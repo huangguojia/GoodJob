@@ -1,5 +1,7 @@
 type Role = "sales" | "manager" | "admin" | "super_admin";
 
+import * as XLSX from "xlsx";
+
 interface User {
   id: string;
   name: string;
@@ -79,6 +81,59 @@ interface Exam {
   status: string;
   passRate: number;
   questionCount: number;
+  durationMinutes?: number;
+  passScore?: number;
+  targetRole?: "all" | "sales" | "manager";
+  updatedAt?: string;
+}
+
+interface ExamQuestion {
+  id: string;
+  examId: string;
+  category: string;
+  stem: string;
+  options: string[];
+  answerIndex: number;
+  answerIndexes?: number[];
+  questionType?: "single" | "multiple";
+  explanation: string;
+  difficulty: "easy" | "medium" | "hard";
+}
+
+interface ExamAttempt {
+  id: string;
+  examId: string;
+  userId: string;
+  score: number;
+  passed: boolean;
+  answers: Record<string, number | number[]>;
+  correctCount: number;
+  totalQuestions: number;
+  submittedAt: string;
+  examTitle?: string;
+  category?: string;
+  userName?: string;
+}
+
+interface ExamReport {
+  totalAttempts: number;
+  passedAttempts: number;
+  retakeAttempts: number;
+  averageScore: number;
+  questionCount: number;
+  categoryRows: Array<{ examId: string; title: string; category: string; participants: number; passRate: number; avgScore: number }>;
+  difficultyRows: Array<{ difficulty: string; label: string; count: number; ratio: number }>;
+  latestAttempts: ExamAttempt[];
+}
+
+interface ExamImportQuestion {
+  stem: string;
+  options: string[];
+  answerIndex: number;
+  answerIndexes: number[];
+  questionType: "single" | "multiple";
+  explanation: string;
+  difficulty: "easy" | "medium" | "hard";
 }
 
 interface WecomMessage {
@@ -92,6 +147,35 @@ interface OcrJob {
   status: string;
   confidence: number;
   fields: Record<string, string>;
+}
+
+interface WebsiteOpportunity {
+  id: string;
+  company: string;
+  business: string;
+  country: string;
+  website: string;
+  contact: string;
+  contactInfo: string;
+  description: string;
+  status: string;
+  createdAt: string;
+  customerId?: string;
+  dealId?: string;
+  parseMode?: "rule" | "ai" | "fallback";
+  selected?: boolean;
+}
+
+interface AiModelConfig {
+  id: string;
+  provider: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  hasApiKey: boolean;
+  enabled: boolean;
+  updatedAt: string;
 }
 
 interface ProblemItem {
@@ -204,13 +288,18 @@ interface AppState {
   wecomMessages: WecomMessage[];
   knowledgeAssets: KnowledgeAsset[];
   exams: Exam[];
+  examReport: ExamReport | null;
   ocrJob: OcrJob | null;
+  websiteOpportunities: WebsiteOpportunity[];
+  aiConfig: AiModelConfig | null;
   problems: ProblemItem[];
   memos: Memo[];
   competitors: Competitor[];
   caseStudies: CaseStudy[];
   accounts: User[];
   reportNote: string;
+  dashboardPeriod: "today" | "week" | "month";
+  morningView: boolean;
   todoFilter: "all" | "today" | "overdue" | "mine" | "customer" | "history";
   openTodoMenuId: string | null;
   draggingTodoId: string | null;
@@ -219,6 +308,7 @@ interface AppState {
   selectedMemoId: string | null;
   selectedCompetitorId: string | null;
   selectedCaseId: string | null;
+  selectedExamId: string | null;
 }
 
 const state: AppState = {
@@ -232,13 +322,18 @@ const state: AppState = {
   wecomMessages: [],
   knowledgeAssets: [],
   exams: [],
+  examReport: null,
   ocrJob: null,
+  websiteOpportunities: [],
+  aiConfig: null,
   problems: [],
   memos: [],
   competitors: [],
   caseStudies: [],
   accounts: [],
   reportNote: "",
+  dashboardPeriod: "today",
+  morningView: false,
   todoFilter: "all",
   openTodoMenuId: null,
   draggingTodoId: null,
@@ -246,7 +341,8 @@ const state: AppState = {
   selectedProblemId: null,
   selectedMemoId: null,
   selectedCompetitorId: null,
-  selectedCaseId: null
+  selectedCaseId: null,
+  selectedExamId: null
 };
 
 let memoDirty = false;
@@ -413,9 +509,6 @@ function ensureUiLayer() {
       </div>
     `);
     qs("[data-modal-close]")?.addEventListener("click", closeModal);
-    qs("#appModal")?.addEventListener("click", (event) => {
-      if (event.target === qs("#appModal")) closeModal();
-    });
   }
 }
 
@@ -487,7 +580,7 @@ function applyAuthedUser(user: User) {
 
 async function refreshAll(user: User) {
   renderDashboardCache(user);
-  const [summary, customers, todos, deals, reminders, jobs, wecom, knowledge, exams, ocr, problems, memos, competitors, caseStudies] = await Promise.all([
+  const [summary, customers, todos, deals, reminders, jobs, wecom, knowledge, exams, ocr, websiteOps, aiConfig, problems, memos, competitors, caseStudies] = await Promise.all([
     api<DashboardSummary>("/api/dashboard/summary"),
     api<{ customers: Customer[] }>("/api/customers"),
     api<{ todos: Todo[] }>("/api/todos"),
@@ -496,8 +589,10 @@ async function refreshAll(user: User) {
     api<{ jobs: ImportExportJob[] }>("/api/import-export/jobs"),
     api<{ messages: WecomMessage[] }>("/api/wecom/messages"),
     api<{ assets: KnowledgeAsset[] }>("/api/knowledge/assets"),
-    api<{ exams: Exam[] }>("/api/exams"),
+    api<{ exams: Exam[]; report: ExamReport }>("/api/exams"),
     api<{ job: OcrJob }>("/api/tools/ocr/jobs/ocr1"),
+    api<{ opportunities: WebsiteOpportunity[] }>("/api/tools/website-opportunities"),
+    api<{ config: AiModelConfig | null }>("/api/tools/ai-config"),
     api<{ problems: ProblemItem[] }>("/api/problems"),
     api<{ memos: Memo[] }>("/api/memos"),
     api<{ competitors: Competitor[] }>("/api/competitors"),
@@ -513,7 +608,10 @@ async function refreshAll(user: User) {
   state.wecomMessages = wecom.messages;
   state.knowledgeAssets = knowledge.assets;
   state.exams = exams.exams;
+  state.examReport = exams.report;
   state.ocrJob = ocr.job;
+  state.websiteOpportunities = websiteOps.opportunities;
+  state.aiConfig = aiConfig.config;
   state.problems = problems.problems;
   state.memos = memos.memos;
   state.competitors = competitors.competitors;
@@ -523,6 +621,7 @@ async function refreshAll(user: User) {
   state.selectedMemoId = state.selectedMemoId || memos.memos[0]?.id || null;
   state.selectedCompetitorId = state.selectedCompetitorId || competitors.competitors[0]?.id || null;
   state.selectedCaseId = state.selectedCaseId || caseStudies.caseStudies[0]?.id || null;
+  state.selectedExamId = state.selectedExamId || exams.exams[0]?.id || null;
   writeDashboardCache(user, summary, todos.todos, customers.customers);
   renderDashboard(summary, todos.todos, customers.customers);
   renderCustomers(customers.customers);
@@ -539,6 +638,9 @@ async function refreshAll(user: User) {
   renderCaseStudies(caseStudies.caseStudies);
   await renderAccounts(user);
   renderOcr(ocr.job);
+  renderAiConfig(state.aiConfig);
+  renderWebsiteOpportunities(state.websiteOpportunities);
+  renderTopbarStats();
 }
 
 function dashboardCacheKey(user: User) {
@@ -577,6 +679,7 @@ function renderDashboardCache(user: User) {
   state.todos = cached.todos;
   state.customers = cached.customers;
   renderDashboard(cached.summary, cached.todos, cached.customers, true);
+  renderTopbarStats();
 }
 
 async function refreshDashboardOnly() {
@@ -591,13 +694,16 @@ async function refreshDashboardOnly() {
   state.customers = customers.customers;
   writeDashboardCache(state.user, summary, todos.todos, customers.customers);
   renderDashboard(summary, todos.todos, customers.customers);
+  renderTopbarStats();
 }
 
 function renderDashboard(summary: DashboardSummary, todos: Todo[], customers: Customer[], fromCache = false) {
   qs("#scopeText")!.textContent = summary.scope;
+  const periodLabel = dashboardPeriodLabel();
+  qs<HTMLElement>(".focus-top span:first-child")!.textContent = `${periodLabel}优先处理建议`;
   qs<HTMLElement>(".focus-top span:last-child")!.textContent = fromCache ? "缓存数据 · 后台刷新中" : `${formatTime(summary.updatedAt)} 已更新`;
-  qs<HTMLElement>(".focus-title h2")!.textContent = summary.briefing.title;
-  qs<HTMLElement>(".focus-title p")!.textContent = summary.briefing.description;
+  qs<HTMLElement>(".focus-title h2")!.textContent = dashboardPeriodTitle(summary);
+  qs<HTMLElement>(".focus-title p")!.textContent = dashboardPeriodDescription(summary);
   const basis = qs<HTMLElement>("#briefingBasis");
   const action = qs<HTMLElement>("#briefingAction");
   const impact = qs<HTMLElement>("#briefingImpact");
@@ -607,17 +713,18 @@ function renderDashboard(summary: DashboardSummary, todos: Todo[], customers: Cu
   const focusMetrics = qsa<HTMLElement>(".focus-metric");
   if (focusMetrics[0]) focusMetrics[0].innerHTML = `<span>高风险金额</span><b>${money(summary.briefing.riskAmount)}</b><small>${escapeHtml(summary.briefing.riskLabel)}</small>`;
   if (focusMetrics[1]) focusMetrics[1].innerHTML = `<span>待主管协同</span><b>${summary.metrics.overdueTodos} 项</b><small>高优先级待办</small>`;
-  if (focusMetrics[2]) focusMetrics[2].innerHTML = `<span>今日可成交</span><b>${summary.briefing.closableDeals} 单</b><small>预计 ${money(summary.briefing.closableAmount)}</small>`;
+  if (focusMetrics[2]) focusMetrics[2].innerHTML = `<span>${periodLabel}可成交</span><b>${summary.briefing.closableDeals} 单</b><small>预计 ${money(summary.briefing.closableAmount)}</small>`;
   if (focusMetrics[3]) focusMetrics[3].innerHTML = `<span>企微未读提醒</span><b>${summary.briefing.unreadWecom} 条</b><small>来自客户会话</small>`;
   const kpis = qsa<HTMLElement>("#dashboard .kpi strong");
-  if (kpis[0]) kpis[0].textContent = String(summary.metrics.todos);
-  if (kpis[1]) kpis[1].textContent = String(summary.metrics.customers);
-  if (kpis[2]) kpis[2].textContent = money(summary.metrics.forecastAmount);
+  const multiplier = dashboardPeriodMultiplier();
+  if (kpis[0]) kpis[0].textContent = String(Math.max(summary.metrics.todos, Math.round(summary.metrics.todos * multiplier)));
+  if (kpis[1]) kpis[1].textContent = String(Math.max(summary.metrics.customers, Math.round(summary.metrics.customers * multiplier)));
+  if (kpis[2]) kpis[2].textContent = money(Math.round(summary.metrics.forecastAmount * multiplier));
   if (kpis[3]) kpis[3].textContent = `${summary.metrics.wecomBoundRate}%`;
   const kpiNotes = qsa<HTMLElement>("#dashboard .kpi p");
   if (kpiNotes[0]) kpiNotes[0].innerHTML = badge(`${summary.metrics.overdueTodos} 个高优先级`, summary.metrics.overdueTodos ? "red" : "green");
-  if (kpiNotes[1]) kpiNotes[1].textContent = `当前账号可见客户 ${summary.metrics.customers} 个`;
-  if (kpiNotes[2]) kpiNotes[2].textContent = `按可见商机金额汇总`;
+  if (kpiNotes[1]) kpiNotes[1].textContent = `${periodLabel}客户视角 · 当前账号可见 ${summary.metrics.customers} 个`;
+  if (kpiNotes[2]) kpiNotes[2].textContent = `${periodLabel}按可见商机金额汇总`;
   if (kpiNotes[3]) kpiNotes[3].textContent = `${customers.filter((customer) => !customer.wecomBound).length} 个客户待绑定`;
   renderSchedule(summary);
   renderPipelineHealth(summary);
@@ -626,6 +733,66 @@ function renderDashboard(summary: DashboardSummary, todos: Todo[], customers: Cu
   renderPriorityTasks(summary);
   renderTodos(todos);
   updateTodoChips(todos);
+  renderDashboardPeriodControls();
+  renderMorningPanel(summary);
+}
+
+function dashboardPeriodLabel() {
+  if (state.dashboardPeriod === "week") return "本周";
+  if (state.dashboardPeriod === "month") return "本月";
+  return "今日";
+}
+
+function dashboardPeriodMultiplier() {
+  if (state.dashboardPeriod === "week") return 2.4;
+  if (state.dashboardPeriod === "month") return 5.8;
+  return 1;
+}
+
+function dashboardPeriodTitle(summary: DashboardSummary) {
+  if (state.dashboardPeriod === "week") return `本周重点推进 ${summary.briefing.closableDeals} 个可成交商机，同时压降 ${summary.metrics.overdueTodos} 个高优先级风险。`;
+  if (state.dashboardPeriod === "month") return `本月核心目标是守住 ${money(Math.round(summary.metrics.forecastAmount * dashboardPeriodMultiplier()))} 预测成交额，并提升客户资料完整度。`;
+  return summary.briefing.title;
+}
+
+function dashboardPeriodDescription(summary: DashboardSummary) {
+  if (state.dashboardPeriod === "week") return "系统按本周跟进节奏、逾期风险、样品反馈和企微状态汇总，适合周计划和周复盘使用。";
+  if (state.dashboardPeriod === "month") return "系统按本月客户新增、预测成交、培训资料和商机健康度汇总，适合月度目标跟踪。";
+  return summary.briefing.description;
+}
+
+function renderDashboardPeriodControls() {
+  qsa<HTMLButtonElement>("[data-dashboard-period]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.dashboardPeriod === state.dashboardPeriod);
+  });
+  const morningButton = qs<HTMLButtonElement>("#morningViewButton");
+  if (morningButton) {
+    morningButton.classList.toggle("primary", state.morningView);
+    morningButton.textContent = state.morningView ? "退出晨会视图" : "晨会视图";
+  }
+  const scheduleTitle = qs<HTMLElement>("#dashboard .schedule-panel .section-title h2");
+  const scheduleSub = qs<HTMLElement>("#dashboard .schedule-panel .section-title span:last-child");
+  if (scheduleTitle) scheduleTitle.textContent = `${dashboardPeriodLabel()}节奏`;
+  if (scheduleSub) scheduleSub.textContent = state.dashboardPeriod === "today" ? "按成交影响排序" : state.dashboardPeriod === "week" ? "按本周推进优先级排序" : "按月度经营目标排序";
+  const todoLabel = qs<HTMLElement>("#dashboard .kpi label");
+  if (todoLabel) todoLabel.textContent = `${dashboardPeriodLabel()}待跟进`;
+}
+
+function renderMorningPanel(summary: DashboardSummary) {
+  const panel = qs<HTMLElement>("#morningPanel");
+  panel?.classList.toggle("active", state.morningView);
+  if (!panel) return;
+  const periodLabel = dashboardPeriodLabel();
+  const subtitle = qs<HTMLElement>("#morningSubtitle");
+  const conclusion = qs<HTMLElement>("#morningConclusion");
+  const risk = qs<HTMLElement>("#morningRisk");
+  const collab = qs<HTMLElement>("#morningCollab");
+  const action = qs<HTMLElement>("#morningAction");
+  if (subtitle) subtitle.textContent = `${periodLabel}晨会同步：风险、成交、协同和下一步动作。`;
+  if (conclusion) conclusion.textContent = state.dashboardPeriod === "today" ? "先抢救逾期报价" : state.dashboardPeriod === "week" ? "推进高概率商机" : "盯紧月度成交目标";
+  if (risk) risk.textContent = money(summary.briefing.riskAmount);
+  if (collab) collab.textContent = `${summary.metrics.overdueTodos} 项`;
+  if (action) action.textContent = `${summary.priorityTasks.length || summary.metrics.todos} 条`;
 }
 
 function formatTime(value: string) {
@@ -782,11 +949,15 @@ async function batchProcessPriorityTasks(button?: HTMLButtonElement) {
 function renderTodos(todos: Todo[]) {
   const list = qs<HTMLElement>("#dashboard .todo-list");
   if (!list) return;
+  renderTopbarStats();
   const currentTodos = activeTodos(todos);
   const archivedTodos = historyTodos(todos);
   const isHistoryView = state.todoFilter === "history";
   const visibleTodos = isHistoryView ? archivedTodos : filterTodos(currentTodos);
-  list.innerHTML = visibleTodos.map((todo) => {
+  if (!visibleTodos.length) {
+    list.innerHTML = `<div class="todo-history-empty">${isHistoryView ? "暂无隔天历史待办" : "暂无当前清单待办，使用上方快速新增开始安排。"}</div>`;
+  } else {
+    list.innerHTML = visibleTodos.map((todo) => {
     const tone = todo.priority === "high" ? "red" : todo.priority === "medium" ? "amber" : "green";
     const optionalMeta = [formatTodoTime(todo.dueAt), todo.related].filter(Boolean).map((item) => `<span>${escapeHtml(item)}</span>`).join("");
     const isRunning = todo.status === "in_progress" && !todo.done;
@@ -799,7 +970,8 @@ function renderTodos(todos: Todo[]) {
       <div class="todo-main"><h3>${escapeHtml(todo.title)}</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--${tone === "red" ? "rose" : tone})"></i><span>${escapeHtml(priorityText(todo.priority))}</span>${optionalMeta}${pinBadge}${statusBadge}</div></div>
       <div class="todo-side"><div class="todo-actions"><div class="assignee-stack"><span class="mini-avatar">我</span></div>${isHistoryView ? `<button class="btn" data-todo-restore>回到今日</button>` : todo.done ? "" : `<button class="todo-run ${isRunning ? "active" : ""}" title="${isRunning ? "停止执行" : "开始执行"}" aria-label="${isRunning ? "停止执行" : "开始执行"}">${runIcon}</button>`}<button class="todo-more ${menuOpen ? "active" : ""}" title="更多操作" aria-label="更多操作"><span></span><span></span><span></span></button>${menuOpen ? `<div class="todo-menu">${isHistoryView ? "" : `<button data-todo-action="edit">编辑</button><button data-todo-action="top">置顶</button><button data-todo-action="bottom">沉底</button>`}<button class="danger" data-todo-action="delete">删除</button></div>` : ""}</div><div class="subtask-bar ${isRunning ? "running" : ""}"><i style="--p:${todo.done ? "100%" : isRunning ? "74%" : "55%"}"></i></div></div>
     </article>`;
-  }).join("");
+    }).join("");
+  }
   qsa<HTMLElement>(".todo-row [data-todo-restore]", list).forEach((node) => {
     node.addEventListener("click", async (event) => {
       event.stopPropagation();
@@ -888,7 +1060,6 @@ async function persistTodoOrder(ids: string[], mode: "manual" | "top" | "bottom"
   });
   renderTodos(state.todos);
   updateTodoChips(state.todos);
-  void refreshDashboardOnly();
 }
 
 async function pinTodo(id: string, mode: "top" | "bottom") {
@@ -1282,6 +1453,7 @@ async function saveDeal() {
 
 function renderReminders(reminders: Reminder[]) {
   const list = qs<HTMLElement>("#reminders .task-list");
+  renderTopbarStats();
   if (!list) return;
   list.innerHTML = reminders.map((reminder) => `<article class="task" data-reminder-id="${escapeHtml(reminder.id)}" style="--accent: var(--${reminder.status === "done" ? "green" : "rose"})"><i class="task-line"></i><div><h3>${escapeHtml(reminder.title)}</h3><p>${escapeHtml(reminder.rule)} · ${escapeHtml(reminder.dueAt)} · ${escapeHtml(reminder.channel)}</p></div><button class="btn">${reminder.status === "done" ? "已完成" : "完成"}</button></article>`).join("");
   qsa<HTMLButtonElement>("#reminders .task .btn", list).forEach((button) => {
@@ -1292,6 +1464,7 @@ function renderReminders(reminders: Reminder[]) {
       const reminder = state.reminders.find((item) => item.id === row.dataset.reminderId);
       if (reminder) reminder.status = "done";
       button.textContent = "已完成";
+      renderTopbarStats();
       toast("提醒已完成");
     });
   });
@@ -1909,35 +2082,169 @@ function assetIcon(category: string) {
   return "PDF";
 }
 
+function examStatusText(status: string) {
+  if (status === "published") return "发布";
+  if (status === "draft") return "草稿";
+  return "排期";
+}
+
+function examStatusTone(status: string) {
+  if (status === "published") return "green";
+  if (status === "draft") return "amber";
+  return "";
+}
+
+function examTargetText(targetRole?: string) {
+  if (targetRole === "manager") return "主管必考";
+  if (targetRole === "all") return "全员必考";
+  return "销售必考";
+}
+
+function difficultyTone(difficulty: string) {
+  if (difficulty === "hard") return "red";
+  if (difficulty === "easy") return "green";
+  return "amber";
+}
+
+function correctIndexesForQuestion(question: ExamQuestion) {
+  return [...new Set(question.answerIndexes?.length ? question.answerIndexes : [question.answerIndex])].sort((left, right) => left - right);
+}
+
+function questionTypeText(question: ExamQuestion) {
+  return question.questionType === "multiple" || correctIndexesForQuestion(question).length > 1 ? "多选" : "单选";
+}
+
 function renderExams(exams: Exam[]) {
   const list = qs<HTMLElement>("#exam .exam-sidebar .category-list");
   if (!list) return;
-  list.innerHTML = exams.map((exam) => `<div class="category-item" data-exam-id="${escapeHtml(exam.id)}"><div><b>${escapeHtml(exam.title)}</b><span>${exam.questionCount} 题 · 通过率 ${exam.passRate}% · ${escapeHtml(exam.category)}</span></div><div style="display:flex; gap:6px; align-items:center">${badge(exam.status === "published" ? "发布" : exam.status === "draft" ? "草稿" : "排期", exam.status === "published" ? "green" : exam.status === "draft" ? "amber" : "")}<button class="btn" data-start-exam>考试</button><button class="btn" data-publish-exam>发布</button></div></div>`).join("");
-  const cards = qsa<HTMLElement>("#exam .dense-card b");
-  if (cards[0]) cards[0].textContent = String(exams.filter((item) => item.status !== "draft").length);
-  if (cards[2]) cards[2].textContent = `${Math.round(exams.reduce((sum, item) => sum + item.passRate, 0) / Math.max(exams.length, 1))}%`;
+  const report = state.examReport;
+  const activeExam = exams.find((item) => item.id === state.selectedExamId) || exams[0];
+  state.selectedExamId = activeExam?.id || null;
+  list.innerHTML = exams.length ? exams.map((exam) => `
+    <div class="category-item ${exam.id === state.selectedExamId ? "selected" : ""}" data-exam-id="${escapeHtml(exam.id)}">
+      <div><b>${escapeHtml(exam.title)}</b><span>${exam.questionCount} 题 · ${exam.passScore || 80} 分及格 · ${escapeHtml(exam.category)} · ${examTargetText(exam.targetRole)}</span></div>
+      <div class="exam-actions">${badge(examStatusText(exam.status), examStatusTone(exam.status))}<button class="btn" data-start-exam>考试</button><button class="btn" data-question-bank>题库</button><button class="btn" data-publish-exam>发布</button></div>
+    </div>`).join("") : `<div class="empty-state"><b>暂无考试</b><span>点击发布考试或分类目考试维护创建第一套题。</span></div>`;
+  const cards = qsa<HTMLElement>("#exam .dense-card");
+  const values = [
+    { label: "进行中考试", value: String(exams.filter((item) => item.status !== "draft").length), note: `${exams.filter((item) => item.status === "published").length} 场已发布` },
+    { label: "题库总量", value: String(report?.questionCount || exams.reduce((sum, item) => sum + item.questionCount, 0)), note: "来自真实题库" },
+    { label: "平均通过率", value: `${Math.round(exams.reduce((sum, item) => sum + item.passRate, 0) / Math.max(exams.length, 1))}%`, note: `均分 ${report?.averageScore || 0}` },
+    { label: "需补考人数", value: String(report?.retakeAttempts || 0), note: "按未通过记录" }
+  ];
+  cards.forEach((card, index) => {
+    const item = values[index];
+    if (item) card.innerHTML = `<span>${item.label}</span><b>${item.value}</b><small>${item.note}</small>`;
+  });
+  renderExamPreview(activeExam);
+  renderExamReport();
+  qsa<HTMLElement>(".category-item", list).forEach((row) => {
+    row.addEventListener("click", () => {
+      state.selectedExamId = row.dataset.examId || null;
+      renderExams(state.exams);
+    });
+  });
   qsa<HTMLButtonElement>("[data-start-exam]", list).forEach((button) => {
-    button.addEventListener("click", () => openExamModal(button.closest<HTMLElement>(".category-item")?.dataset.examId || ""));
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void openExamModal(button.closest<HTMLElement>(".category-item")?.dataset.examId || "");
+    });
+  });
+  qsa<HTMLButtonElement>("[data-question-bank]", list).forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openQuestionBankModal(button.closest<HTMLElement>(".category-item")?.dataset.examId || "");
+    });
   });
   qsa<HTMLButtonElement>("[data-publish-exam]", list).forEach((button) => {
-    button.addEventListener("click", () => void publishExam(button.closest<HTMLElement>(".category-item")?.dataset.examId || ""));
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void publishExam(button.closest<HTMLElement>(".category-item")?.dataset.examId || "");
+    });
   });
 }
 
-function openExamModal(id: string) {
+async function renderExamPreview(exam?: Exam) {
+  const paper = qs<HTMLElement>("#exam .exam-grid > .panel .exam-paper");
+  const headBadge = qs<HTMLElement>("#exam .exam-grid > .panel .section-head .badge");
+  const progressPanel = qs<HTMLElement>("#exam .exam-sidebar .panel:first-child");
+  if (!paper) return;
+  if (!exam) {
+    paper.innerHTML = `<div class="empty-state"><b>暂无考试预览</b><span>创建考试后这里会展示真实题目。</span></div>`;
+    return;
+  }
+  try {
+    const detail = await api<{ exam: Exam; questions: ExamQuestion[]; latestAttempt: ExamAttempt | null; report: ExamReport }>(`/api/exams/${exam.id}/detail`);
+    Object.assign(exam, detail.exam);
+    state.examReport = detail.report;
+    const answered = detail.latestAttempt?.totalQuestions || 0;
+    const correct = detail.latestAttempt?.correctCount || 0;
+    if (headBadge) headBadge.textContent = `${detail.exam.durationMinutes || 20} 分钟 · ${detail.exam.passScore || 80} 分及格`;
+    paper.innerHTML = detail.questions.length ? detail.questions.slice(0, 4).map((question, index) => `
+      <div class="question-card" data-preview-question="${escapeHtml(question.id)}">
+        <div class="question-meta"><span>${escapeHtml(question.category)} · ${questionTypeText(question)}</span>${badge(question.difficulty === "hard" ? "高阶" : question.difficulty === "easy" ? "基础" : "应用", difficultyTone(question.difficulty))}</div>
+        <h3>${index + 1}. ${escapeHtml(question.stem)}</h3>
+        <div class="option-row">${question.options.map((option, optionIndex) => `<span class="${correctIndexesForQuestion(question).includes(optionIndex) ? "active" : ""}">${String.fromCharCode(65 + optionIndex)}. ${escapeHtml(option)}</span>`).join("")}</div>
+      </div>`).join("") : `<div class="empty-state"><b>题库为空</b><span>点击题库维护添加产品知识题。</span></div>`;
+    if (progressPanel) {
+      progressPanel.innerHTML = `
+        <div class="progress-ring" style="background:conic-gradient(var(--brand) 0 ${detail.exam.passRate}%, #e7edf6 ${detail.exam.passRate}% 100%)"><b>${detail.exam.passRate}%</b></div>
+        <div class="section-head"><div class="section-title"><div><h2>考试进度</h2><span>${escapeHtml(detail.exam.title)}</span></div></div>${badge(`${detail.exam.questionCount} 题`, "")}</div>
+        <table class="mini-table"><tbody><tr><td>最近已答</td><td>${answered}/${detail.exam.questionCount}</td></tr><tr><td>最近正确</td><td>${correct}</td></tr><tr><td>及格线</td><td>${detail.exam.passScore || 80} 分</td></tr><tr><td>最近成绩</td><td>${detail.latestAttempt ? `${detail.latestAttempt.score} 分` : "未参加"}</td></tr></tbody></table>`;
+    }
+  } catch (error) {
+    paper.innerHTML = `<div class="empty-state"><b>考试预览加载失败</b><span>${escapeHtml(error instanceof Error ? error.message : "请稍后重试")}</span></div>`;
+  }
+}
+
+function renderExamReport() {
+  const report = state.examReport;
+  const sections = qsa<HTMLElement>("#exam .matrix-grid .panel");
+  if (!report || sections.length < 3) return;
+  const [stats, retakes, types] = sections;
+  const statBody = qs<HTMLElement>("tbody", stats);
+  if (statBody) {
+    statBody.innerHTML = report.categoryRows.length ? report.categoryRows.slice(0, 5).map((row) => `<tr><td>${escapeHtml(row.title)}</td><td>${row.participants}</td><td>${row.passRate}%</td><td>${row.avgScore}</td></tr>`).join("") : `<tr><td colspan="4">暂无成绩记录</td></tr>`;
+  }
+  const retakeBody = qs<HTMLElement>("tbody", retakes);
+  if (retakeBody) {
+    const rows = report.latestAttempts.filter((item) => !item.passed).slice(0, 5);
+    retakeBody.innerHTML = rows.length ? rows.map((attempt) => `<tr><td>${escapeHtml(attempt.userName || "未知")}</td><td>${escapeHtml(attempt.category || "未分类")}</td><td>${badge(`${attempt.score} 分 · 待补考`, "red")}</td></tr>`).join("") : `<tr><td colspan="3">暂无补考人员</td></tr>`;
+  }
+  const typeBody = qs<HTMLElement>("tbody", types);
+  if (typeBody) {
+    typeBody.innerHTML = report.difficultyRows.map((row) => `<tr><td>${escapeHtml(row.label)}</td><td>${row.count}</td><td>${row.ratio}%</td></tr>`).join("");
+  }
+}
+
+async function openExamModal(id: string) {
   const exam = state.exams.find((item) => item.id === id) || state.exams[0];
   if (!exam) return;
-  openModal(`${exam.title} · 在线考试`, `
-    <div class="exam-paper">
-      <div class="question-card"><h3>1. 客户要求 CE 证书时应优先提供什么？</h3><div class="option-row" data-question><span>A. 工厂营业执照</span><span data-correct="true">B. 对应产品型号的 CE 证书与测试报告</span><span>C. 宣传图</span></div></div>
-      <div class="question-card"><h3>2. MOQ 变化需要同步更新哪些内容？</h3><div class="option-row" data-question><span>A. 仅备注</span><span data-correct="true">B. 单价、装箱、交期、付款条款影响</span><span>C. 客户国家</span></div></div>
-      <div class="question-card"><h3>3. 样品寄出后何时触发反馈提醒？</h3><div class="option-row" data-question><span>A. 不提醒</span><span data-correct="true">B. 签收后 3 天</span><span>C. 30 天</span></div></div>
+  const detail = await api<{ exam: Exam; questions: ExamQuestion[]; latestAttempt: ExamAttempt | null; report: ExamReport }>(`/api/exams/${exam.id}/detail`);
+  state.examReport = detail.report;
+  openModal(`${detail.exam.title} · 在线考试`, `
+    <div class="exam-modal-summary">
+      <span>${escapeHtml(detail.exam.category)}</span><span>${detail.exam.questionCount} 题</span><span>${detail.exam.durationMinutes || 20} 分钟</span><span>${detail.exam.passScore || 80} 分及格</span>
     </div>
-  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="submitExamButton">交卷</button>`);
+    <div class="exam-paper exam-paper-live">
+      ${detail.questions.map((question, index) => `
+        <div class="question-card" data-question="${escapeHtml(question.id)}">
+          <div class="question-meta"><span>${escapeHtml(question.category)} · ${questionTypeText(question)}</span>${badge(question.difficulty === "hard" ? "高阶" : question.difficulty === "easy" ? "基础" : "应用", difficultyTone(question.difficulty))}</div>
+          <h3>${index + 1}. ${escapeHtml(question.stem)}</h3>
+          <div class="option-row" data-question-type="${question.questionType || (correctIndexesForQuestion(question).length > 1 ? "multiple" : "single")}">${question.options.map((option, optionIndex) => `<span data-option-index="${optionIndex}" ${correctIndexesForQuestion(question).includes(optionIndex) ? "data-correct=\"true\"" : ""}>${String.fromCharCode(65 + optionIndex)}. ${escapeHtml(option)}</span>`).join("")}</div>
+          <small class="question-explain">解析：${escapeHtml(question.explanation)}</small>
+        </div>`).join("")}
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="submitExamButton">交卷判分</button>`);
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
-  qsa<HTMLElement>("#appModal [data-question] span").forEach((option) => {
+  qsa<HTMLElement>("#appModal [data-question] .option-row span").forEach((option) => {
     option.addEventListener("click", () => {
-      qsa<HTMLElement>("span", option.parentElement!).forEach((item) => item.classList.remove("active"));
+      const row = option.parentElement!;
+      if ((row as HTMLElement).dataset.questionType === "multiple") {
+        option.classList.toggle("active");
+        return;
+      }
+      qsa<HTMLElement>("span", row).forEach((item) => item.classList.remove("active"));
       option.classList.add("active");
     });
   });
@@ -1945,13 +2252,27 @@ function openExamModal(id: string) {
 }
 
 async function submitExam(id: string) {
-  const questions = qsa<HTMLElement>("#appModal [data-question]");
-  const correct = questions.filter((question) => qs<HTMLElement>("span.active[data-correct='true']", question)).length;
-  const score = Math.round((correct / Math.max(questions.length, 1)) * 100);
-  const result = await api<{ attempt: { score: number; passed: boolean } }>(`/api/exams/${id}/submit`, {
-    method: "POST",
-    body: JSON.stringify({ score })
+  const answers: Record<string, number | number[]> = {};
+  qsa<HTMLElement>("#appModal [data-question]").forEach((question) => {
+    const optionRow = qs<HTMLElement>(".option-row", question);
+    const active = qsa<HTMLElement>(".option-row span.active", question);
+    if (!active.length) return;
+    const selected = active.map((item) => Number(item.dataset.optionIndex || 0));
+    answers[question.dataset.question || ""] = optionRow?.dataset.questionType === "multiple" ? selected : selected[0];
   });
+  const total = qsa<HTMLElement>("#appModal [data-question]").length;
+  if (Object.keys(answers).length < total) {
+    toast("还有题目未作答", "error");
+    return;
+  }
+  const result = await api<{ attempt: ExamAttempt; exam: Exam; report: ExamReport }>(`/api/exams/${id}/submit`, {
+    method: "POST",
+    body: JSON.stringify({ answers })
+  });
+  const exam = state.exams.find((item) => item.id === id);
+  if (exam) Object.assign(exam, result.exam);
+  state.examReport = result.report;
+  renderExams(state.exams);
   closeModal();
   toast(`交卷成功：${result.attempt.score} 分，${result.attempt.passed ? "已通过" : "需补考"}`);
 }
@@ -1959,48 +2280,289 @@ async function submitExam(id: string) {
 async function publishExam(id: string) {
   const exam = state.exams.find((item) => item.id === id);
   if (!exam) return;
+  if (exam.status === "published" && !window.confirm("该考试已经发布，是否重新发布并刷新状态？")) return;
+  if (exam.status !== "published" && !window.confirm(`确认发布「${exam.title}」？发布后销售即可参加考试。`)) return;
+  const publishButton = qs<HTMLButtonElement>(`#exam [data-exam-id="${CSS.escape(id)}"] [data-publish-exam]`);
   try {
-    const result = await api<{ exam: Exam }>(`/api/exams/${id}/publish`, { method: "PATCH" });
+    if (publishButton) {
+      publishButton.disabled = true;
+      publishButton.textContent = "发布中";
+    }
+    const result = await api<{ exam: Exam; report: ExamReport }>(`/api/exams/${id}/publish`, { method: "PATCH" });
     Object.assign(exam, result.exam);
+    state.examReport = result.report;
     renderExams(state.exams);
     renderDashboardKnowledgePanels();
     toast("考试已发布");
   } catch (error) {
     toast(error instanceof Error ? error.message : "发布失败", "error");
+  } finally {
+    if (publishButton) {
+      publishButton.disabled = false;
+      publishButton.textContent = "发布";
+    }
   }
 }
 
-function openExamCreateModal() {
+function openExamCreateModal(category = "产品知识") {
   openModal("发布考试", `
     <div class="form-grid">
-      <div class="form-field full"><label>考试名称</label><input id="examTitleInput" value="新品知识抽考"></div>
-      <div class="form-field"><label>类目</label><select id="examCategoryInput"><option>产品知识</option><option>认证资料</option><option>报价规则</option></select></div>
-      <div class="form-field"><label>题量</label><input id="examCountInput" type="number" value="20"></div>
+      <div class="form-field full"><label>考试名称</label><input id="examTitleInput" value="${escapeHtml(category)}新品知识抽考"></div>
+      <div class="form-field"><label>类目</label><select id="examCategoryInput"><option ${category === "产品知识" ? "selected" : ""}>产品知识</option><option ${category === "认证资料" ? "selected" : ""}>认证资料</option><option ${category === "报价规则" ? "selected" : ""}>报价规则</option><option ${category === "仪表产品" ? "selected" : ""}>仪表产品</option></select></div>
+      <div class="form-field"><label>题量</label><input id="examCountInput" type="number" value="3" min="1" max="20"></div>
+      <div class="form-field"><label>考试时长</label><input id="examDurationInput" type="number" value="20" min="5" max="180"></div>
+      <div class="form-field"><label>及格分</label><input id="examPassInput" type="number" value="80" min="1" max="100"></div>
+      <div class="form-field"><label>适用对象</label><select id="examRoleInput"><option value="sales">销售必考</option><option value="manager">主管必考</option><option value="all">全员必考</option></select></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveExamButton">创建考试</button>`);
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
-  qs("#saveExamButton")?.addEventListener("click", () => void saveExam());
+  qs("#saveExamButton")?.addEventListener("click", (event) => void saveExam(event.currentTarget as HTMLButtonElement));
 }
 
-async function saveExam() {
+async function saveExam(button?: HTMLButtonElement) {
   const title = qs<HTMLInputElement>("#examTitleInput")?.value.trim() || "";
   if (!title) {
     toast("请填写考试名称", "error");
     return;
   }
-  const result = await api<{ exam: Exam }>("/api/exams", {
-    method: "POST",
-    body: JSON.stringify({
-      title,
-      category: qs<HTMLSelectElement>("#examCategoryInput")?.value || "产品知识",
-      questionCount: Number(qs<HTMLInputElement>("#examCountInput")?.value || 20)
-    })
+  try {
+    if (button) {
+      button.disabled = true;
+      button.textContent = "创建中";
+    }
+    const result = await api<{ exam: Exam; questions: ExamQuestion[] }>("/api/exams", {
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        category: qs<HTMLSelectElement>("#examCategoryInput")?.value || "产品知识",
+        questionCount: Number(qs<HTMLInputElement>("#examCountInput")?.value || 3),
+        durationMinutes: Number(qs<HTMLInputElement>("#examDurationInput")?.value || 20),
+        passScore: Number(qs<HTMLInputElement>("#examPassInput")?.value || 80),
+        targetRole: qs<HTMLSelectElement>("#examRoleInput")?.value || "sales"
+      })
+    });
+    state.exams.unshift(result.exam);
+    state.selectedExamId = result.exam.id;
+    await refreshExamData();
+    closeModal();
+    toast("考试已创建，已生成默认题");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "创建考试失败", "error");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "创建考试";
+    }
+  }
+}
+
+function openQuestionBankModal(id = state.selectedExamId || "") {
+  const exam = state.exams.find((item) => item.id === id) || state.exams[0];
+  if (!exam) {
+    toast("请先创建考试", "error");
+    return;
+  }
+  openModal(`${exam.title} · 题库维护`, `
+    <div class="form-grid">
+      <div class="form-field full"><label>题干</label><input id="questionStemInput" value="客户询问仪表量程时，销售应优先确认哪些参数？"></div>
+      <div class="form-field full"><label>选项 A</label><input class="question-option-input" value="量程、精度、接口、工况"></div>
+      <div class="form-field full"><label>选项 B</label><input class="question-option-input" value="客户公司规模"></div>
+      <div class="form-field full"><label>选项 C</label><input class="question-option-input" value="包装颜色"></div>
+      <div class="form-field full"><label>选项 D</label><input class="question-option-input" value="输出信号、供电和防护等级"></div>
+      <div class="form-field"><label>题型</label><select id="questionTypeInput"><option value="single">单选题</option><option value="multiple">多选题</option></select></div>
+      <div class="form-field"><label>正确答案</label><input id="questionAnswerInput" value="A"><small>单选填 A；多选填 A,C 或 1,3</small></div>
+      <div class="form-field"><label>难度</label><select id="questionDifficultyInput"><option value="easy">基础</option><option value="medium" selected>应用</option><option value="hard">高阶</option></select></div>
+      <div class="form-field full"><label>解析</label><input id="questionExplainInput" value="仪表类产品报价必须先确认量程、精度、接口和实际工况，避免型号匹配错误。"></div>
+      <div class="form-field full"><label>Excel / CSV 批量导入题库</label><input id="questionImportInput" type="file" accept=".xlsx,.xls,.csv"><small>表头支持：题干、选项A、选项B、选项C、选项D、正确答案、解析、难度。正确答案可填 A/B/C/D 或 1/2/3/4。</small></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn" id="importQuestionButton">导入题库</button><button class="btn primary" id="saveQuestionButton">保存题目</button>`);
+  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  qs("#saveQuestionButton")?.addEventListener("click", (event) => void saveQuestion(exam.id, event.currentTarget as HTMLButtonElement));
+  qs("#importQuestionButton")?.addEventListener("click", (event) => void importQuestionBank(exam.id, event.currentTarget as HTMLButtonElement));
+}
+
+async function saveQuestion(examId: string, button?: HTMLButtonElement) {
+  const stem = qs<HTMLInputElement>("#questionStemInput")?.value.trim() || "";
+  const options = qsa<HTMLInputElement>(".question-option-input").map((input) => input.value.trim()).filter(Boolean);
+  const answerIndexes = normalizeAnswerIndexes(qs<HTMLInputElement>("#questionAnswerInput")?.value || "A");
+  const questionType = qs<HTMLSelectElement>("#questionTypeInput")?.value === "multiple" || answerIndexes.length > 1 ? "multiple" : "single";
+  if (!stem || options.length < 2) {
+    toast("请填写题干和至少两个选项", "error");
+    return;
+  }
+  if (!answerIndexes.length || answerIndexes.some((answerIndex) => answerIndex >= options.length)) {
+    toast("正确答案超出选项范围", "error");
+    return;
+  }
+  try {
+    if (button) {
+      button.disabled = true;
+      button.textContent = "保存中";
+    }
+    const result = await api<{ question: ExamQuestion; exam: Exam; report: ExamReport }>(`/api/exams/${examId}/questions`, {
+      method: "POST",
+      body: JSON.stringify({
+        stem,
+        options,
+        answerIndex: answerIndexes[0],
+        answerIndexes,
+        questionType,
+        explanation: qs<HTMLInputElement>("#questionExplainInput")?.value.trim() || "请补充解析",
+        difficulty: qs<HTMLSelectElement>("#questionDifficultyInput")?.value || "medium"
+      })
+    });
+    const exam = state.exams.find((item) => item.id === examId);
+    if (exam) Object.assign(exam, result.exam);
+    state.examReport = result.report;
+    renderExams(state.exams);
+    closeModal();
+    toast("题目已加入题库");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "保存题目失败", "error");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "保存题目";
+    }
+  }
+}
+
+function normalizeAnswerIndex(value: unknown) {
+  return normalizeAnswerIndexes(value)[0] ?? 0;
+}
+
+function normalizeAnswerIndexes(value: unknown) {
+  const text = String(value ?? "").trim().toUpperCase();
+  if (!text) return [0];
+  const tokens = text.includes(",") || text.includes("，") || text.includes("/") || /\s/.test(text)
+    ? text.split(/[,\s，/、]+/).filter(Boolean)
+    : /^[A-F]{2,}$/.test(text) ? text.split("") : [text];
+  const indexes = tokens.map((token) => {
+    if (/^[A-F]$/.test(token)) return token.charCodeAt(0) - 65;
+    const numeric = Number(token);
+    return Number.isFinite(numeric) ? Math.max(0, numeric - 1) : 0;
   });
-  state.exams.unshift(result.exam);
+  return [...new Set(indexes)].sort((left, right) => left - right);
+}
+
+function normalizeQuestionType(value: unknown, answerIndexes: number[]): "single" | "multiple" {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (["multiple", "multi", "多选", "多选题"].includes(text)) return "multiple";
+  if (["single", "单选", "单选题"].includes(text)) return "single";
+  return answerIndexes.length > 1 ? "multiple" : "single";
+}
+
+function normalizeDifficulty(value: unknown): "easy" | "medium" | "hard" {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (["easy", "基础", "简单"].includes(text)) return "easy";
+  if (["hard", "困难", "高阶"].includes(text)) return "hard";
+  return "medium";
+}
+
+function rowValue(row: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    if (row[key] != null && String(row[key]).trim()) return row[key];
+  }
+  return "";
+}
+
+async function parseQuestionFile(file: File): Promise<ExamImportQuestion[]> {
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: "array" });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+  return rows.map((row) => {
+    const options = [
+      rowValue(row, ["选项A", "选项 A", "A", "optionA", "Option A"]),
+      rowValue(row, ["选项B", "选项 B", "B", "optionB", "Option B"]),
+      rowValue(row, ["选项C", "选项 C", "C", "optionC", "Option C"]),
+      rowValue(row, ["选项D", "选项 D", "D", "optionD", "Option D"]),
+      rowValue(row, ["选项E", "选项 E", "E", "optionE", "Option E"]),
+      rowValue(row, ["选项F", "选项 F", "F", "optionF", "Option F"])
+    ].map((item) => String(item).trim()).filter(Boolean);
+    const answerIndexes = normalizeAnswerIndexes(rowValue(row, ["正确答案", "答案", "answer", "Answer"]));
+    return {
+      stem: String(rowValue(row, ["题干", "题目", "问题", "stem", "question"])).trim(),
+      options,
+      answerIndex: answerIndexes[0] ?? 0,
+      answerIndexes,
+      questionType: normalizeQuestionType(rowValue(row, ["题型", "类型", "questionType", "type"]), answerIndexes),
+      explanation: String(rowValue(row, ["解析", "说明", "explanation", "Explanation"]) || "Excel题库导入题目，请补充解析。").trim(),
+      difficulty: normalizeDifficulty(rowValue(row, ["难度", "difficulty", "Difficulty"]))
+    };
+  }).filter((item) => item.stem && item.options.length >= 2);
+}
+
+async function importQuestionBank(examId: string, button?: HTMLButtonElement) {
+  const file = qs<HTMLInputElement>("#questionImportInput")?.files?.[0];
+  if (!file) {
+    toast("请选择 Excel 或 CSV 题库文件", "error");
+    return;
+  }
+  try {
+    if (button) {
+      button.disabled = true;
+      button.textContent = "导入中";
+    }
+    const questions = await parseQuestionFile(file);
+    if (!questions.length) {
+      toast("未识别到有效题目，请检查表头和选项", "error");
+      return;
+    }
+    const result = await api<{ importedCount: number; exam: Exam; report: ExamReport }>(`/api/exams/${examId}/questions/import`, {
+      method: "POST",
+      body: JSON.stringify({ questions })
+    });
+    const exam = state.exams.find((item) => item.id === examId);
+    if (exam) Object.assign(exam, result.exam);
+    state.examReport = result.report;
+    await refreshExamData();
+    closeModal();
+    toast(`题库导入成功：${result.importedCount} 道题`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "题库导入失败", "error");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "导入题库";
+    }
+  }
+}
+
+function openExamCategoryModal() {
+  const categories = Array.from(new Set([...state.exams.map((exam) => exam.category), "仪表产品", "认证资料", "报价规则"]));
+  openModal("分类目考试维护", `
+    <div class="form-grid">
+      <div class="form-field full"><label>选择类目</label><select id="categoryExamInput">${categories.map((category) => `<option>${escapeHtml(category)}</option>`).join("")}</select></div>
+      <div class="form-field"><label>默认题量</label><input id="categoryExamCountInput" type="number" value="3" min="1"></div>
+      <div class="form-field"><label>及格分</label><input id="categoryExamPassInput" type="number" value="80" min="1" max="100"></div>
+      <div class="form-field full"><label>命名规则</label><input id="categoryExamTitleInput" value="类目专项考试"></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="createCategoryExamButton">生成分类考试</button>`);
+  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  qs("#createCategoryExamButton")?.addEventListener("click", () => {
+    const category = qs<HTMLSelectElement>("#categoryExamInput")?.value || "产品知识";
+    const titleRule = qs<HTMLInputElement>("#categoryExamTitleInput")?.value.trim() || "专项考试";
+    const countValue = qs<HTMLInputElement>("#categoryExamCountInput")?.value || "3";
+    const passValue = qs<HTMLInputElement>("#categoryExamPassInput")?.value || "80";
+    closeModal();
+    openExamCreateModal(category);
+    const title = qs<HTMLInputElement>("#examTitleInput");
+    const count = qs<HTMLInputElement>("#examCountInput");
+    const pass = qs<HTMLInputElement>("#examPassInput");
+    if (title) title.value = `${category}${titleRule}`;
+    if (count) count.value = countValue;
+    if (pass) pass.value = passValue;
+  });
+}
+
+async function refreshExamData() {
+  const result = await api<{ exams: Exam[]; report: ExamReport }>("/api/exams");
+  state.exams = result.exams;
+  state.examReport = result.report;
+  state.selectedExamId = state.selectedExamId || result.exams[0]?.id || null;
   renderExams(state.exams);
   renderDashboardKnowledgePanels();
-  closeModal();
-  toast("考试已创建");
 }
 
 async function renderAccounts(user: User) {
@@ -2209,6 +2771,197 @@ function collectOcrFields() {
     if (key && input) fields[key] = input.value;
   });
   return fields;
+}
+
+function renderAiConfig(config: AiModelConfig | null) {
+  const name = qs<HTMLInputElement>("#aiConfigName");
+  const baseUrl = qs<HTMLInputElement>("#aiBaseUrlInput");
+  const model = qs<HTMLInputElement>("#aiModelInput");
+  const apiKey = qs<HTMLInputElement>("#aiApiKeyInput");
+  const enabled = qs<HTMLInputElement>("#aiEnabledInput");
+  const useAi = qs<HTMLInputElement>("#websiteUseAiInput");
+  const badgeNode = qs<HTMLElement>("#aiConfigBadge");
+  if (name) name.value = config?.name || "官网商机解析模型";
+  if (baseUrl) baseUrl.value = config?.baseUrl || "https://api.openai.com/v1";
+  if (model) model.value = config?.model || "gpt-4o-mini";
+  if (apiKey) {
+    apiKey.value = config?.apiKey || "";
+    apiKey.placeholder = config?.hasApiKey ? "已保存，重新填写可覆盖" : "保存后仅后端持久化";
+  }
+  if (enabled) enabled.checked = Boolean(config?.enabled);
+  if (useAi) useAi.checked = Boolean(config?.enabled && config?.hasApiKey);
+  if (badgeNode) {
+    const ready = Boolean(config?.enabled && config?.hasApiKey);
+    badgeNode.className = `badge ${ready ? "green" : config?.enabled ? "amber" : ""}`;
+    badgeNode.textContent = ready ? `AI已启用 · ${config?.model}` : config?.enabled ? "规则解析 · 缺少API Key" : "规则解析";
+  }
+}
+
+function collectAiConfigPayload() {
+  return {
+    name: qs<HTMLInputElement>("#aiConfigName")?.value.trim() || "官网商机解析模型",
+    baseUrl: qs<HTMLInputElement>("#aiBaseUrlInput")?.value.trim() || "https://api.openai.com/v1",
+    model: qs<HTMLInputElement>("#aiModelInput")?.value.trim() || "gpt-4o-mini",
+    apiKey: qs<HTMLInputElement>("#aiApiKeyInput")?.value.trim() || "",
+    enabled: Boolean(qs<HTMLInputElement>("#aiEnabledInput")?.checked)
+  };
+}
+
+async function saveAiConfig(button?: HTMLButtonElement) {
+  if (button) {
+    button.disabled = true;
+    button.textContent = "保存中";
+  }
+  try {
+    const result = await api<{ config: AiModelConfig }>("/api/tools/ai-config", {
+      method: "POST",
+      body: JSON.stringify(collectAiConfigPayload())
+    });
+    state.aiConfig = result.config;
+    renderAiConfig(result.config);
+    toast(result.config.enabled ? "AI解析配置已保存" : "AI配置已保存，当前仍使用规则解析");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "保存AI配置";
+    }
+  }
+}
+
+async function testAiConfig(button?: HTMLButtonElement) {
+  await saveAiConfig();
+  if (button) {
+    button.disabled = true;
+    button.textContent = "测试中";
+  }
+  try {
+    const result = await api<{ ok: boolean; message: string }>("/api/tools/ai-config/test", { method: "POST" });
+    toast(result.message, result.ok ? "ok" : "error");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "测试连接";
+    }
+  }
+}
+
+function renderWebsiteOpportunities(opportunities: WebsiteOpportunity[]) {
+  const tbody = qs<HTMLElement>("#websiteOpportunityRows");
+  const count = qs<HTMLElement>("#websiteOpportunityCount");
+  const status = qs<HTMLElement>("#websiteScrapeStatus");
+  const modeText = (mode?: WebsiteOpportunity["parseMode"]) => mode === "ai" ? "AI解析" : mode === "fallback" ? "AI回退" : "规则解析";
+  const modeTone = (mode?: WebsiteOpportunity["parseMode"]) => mode === "ai" ? "green" : mode === "fallback" ? "amber" : "";
+  if (count) count.textContent = `${opportunities.length} 条`;
+  if (status && opportunities.length) {
+    const synced = opportunities.filter((item) => item.status === "synced").length;
+    const aiCount = opportunities.filter((item) => item.parseMode === "ai").length;
+    status.innerHTML = `<b>${opportunities.length}</b><span>已解析官网</span>${badge(`${synced} 条已同步`, synced ? "green" : "")}${badge(aiCount ? `${aiCount} 条AI` : "规则/回退", aiCount ? "green" : "")}`;
+  }
+  if (!tbody) return;
+  tbody.innerHTML = opportunities.length ? opportunities.map((item) => `
+    <tr data-website-opportunity-id="${escapeHtml(item.id)}">
+      <td><input type="checkbox" ${item.selected ?? item.status !== "synced" ? "checked" : ""} data-website-select></td>
+      <td><input value="${escapeHtml(item.company)}" data-website-field="company"></td>
+      <td><input value="${escapeHtml(item.business)}" data-website-field="business"></td>
+      <td><input value="${escapeHtml(item.country)}" data-website-field="country"></td>
+      <td><input value="${escapeHtml(item.website)}" data-website-field="website"></td>
+      <td><input value="${escapeHtml(item.contact)}" data-website-field="contact"></td>
+      <td><input value="${escapeHtml(item.contactInfo)}" data-website-field="contactInfo"></td>
+      <td><textarea data-website-field="description">${escapeHtml(item.description)}</textarea></td>
+      <td>${badge(item.status === "synced" ? "已同步" : "待同步", item.status === "synced" ? "green" : "amber")}${badge(modeText(item.parseMode), modeTone(item.parseMode))}</td>
+    </tr>
+  `).join("") : `<tr><td colspan="9" class="empty-cell">粘贴官网后点击解析，系统会抓取产品、联系方式和国家线索。</td></tr>`;
+}
+
+function collectWebsiteRows() {
+  return qsa<HTMLTableRowElement>("#websiteOpportunityRows tr[data-website-opportunity-id]")
+    .filter((row) => row.querySelector<HTMLInputElement>("[data-website-select]")?.checked)
+    .map((row) => {
+      const value = (field: string) => {
+        const node = row.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-website-field="${field}"]`);
+        return node?.value.trim() || "";
+      };
+      return {
+        id: row.dataset.websiteOpportunityId || "",
+        company: value("company"),
+        business: value("business"),
+        country: value("country"),
+        website: value("website"),
+        contact: value("contact"),
+        contactInfo: value("contactInfo"),
+        description: value("description")
+      };
+    }).filter((item) => item.company && item.website);
+}
+
+async function parseWebsiteOpportunities(button?: HTMLButtonElement) {
+  const input = qs<HTMLTextAreaElement>("#websiteUrlInput");
+  const urls = (input?.value || "").split(/\n|,|，/).map((item) => item.trim()).filter(Boolean);
+  const useAi = Boolean(qs<HTMLInputElement>("#websiteUseAiInput")?.checked);
+  if (!urls.length) {
+    toast("请先粘贴官网地址", "error");
+    return;
+  }
+  if (useAi && (!state.aiConfig?.enabled || !state.aiConfig?.hasApiKey)) {
+    toast("请先保存并启用 AI 配置，或关闭本次 AI 解析", "error");
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = useAi ? "AI解析中" : "解析中";
+  }
+  try {
+    const result = await api<{ opportunities: WebsiteOpportunity[] }>("/api/tools/website-scrape/preview", {
+      method: "POST",
+      body: JSON.stringify({ urls, useAi })
+    });
+    const existing = state.websiteOpportunities
+      .filter((item) => !result.opportunities.some((next) => next.website === item.website))
+      .map((item) => ({ ...item, selected: false }));
+    state.websiteOpportunities = [...result.opportunities.map((item) => ({ ...item, selected: true })), ...existing];
+    renderWebsiteOpportunities(state.websiteOpportunities);
+    toast(`${useAi ? "AI增强" : "规则"}已解析 ${result.opportunities.length} 个官网`);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "解析官网";
+    }
+  }
+}
+
+async function syncWebsiteOpportunities(button?: HTMLButtonElement) {
+  const opportunities = collectWebsiteRows();
+  if (!opportunities.length) {
+    toast("请至少勾选一条官网商机", "error");
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "同步中";
+  }
+  try {
+    const result = await api<{ created: Array<{ customer: Customer; deal: Deal; opportunity: WebsiteOpportunity }> }>("/api/tools/website-scrape/sync-opportunities", {
+      method: "POST",
+      body: JSON.stringify({ opportunities })
+    });
+    result.created.forEach((item) => {
+      if (!state.customers.some((customer) => customer.id === item.customer.id)) state.customers.unshift(item.customer);
+      if (!state.deals.some((deal) => deal.id === item.deal.id)) state.deals.unshift(item.deal);
+      const existing = state.websiteOpportunities.find((row) => row.id === item.opportunity.id || row.website === item.opportunity.website);
+      if (existing) Object.assign(existing, item.opportunity);
+      else state.websiteOpportunities.unshift(item.opportunity);
+    });
+    renderWebsiteOpportunities(state.websiteOpportunities);
+    renderCustomers(state.customers);
+    renderPipeline(state.deals);
+    void refreshDashboardOnly();
+    toast(`已同步 ${result.created.length} 条官网商机`);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "同步为商机";
+    }
+  }
 }
 
 function openTodoModal(prefill = "", editing?: Todo) {
@@ -2523,6 +3276,18 @@ function installEvents() {
     input.value = "";
     void createQuickTodo(title);
   });
+  qsa<HTMLButtonElement>("[data-dashboard-period]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.dashboardPeriod = (button.dataset.dashboardPeriod || "today") as AppState["dashboardPeriod"];
+      if (state.summary) renderDashboard(state.summary, state.todos, state.customers);
+      toast(`已切换到${dashboardPeriodLabel()}视图`);
+    });
+  });
+  qs<HTMLButtonElement>("#morningViewButton")?.addEventListener("click", () => {
+    state.morningView = !state.morningView;
+    if (state.summary) renderDashboard(state.summary, state.todos, state.customers);
+    toast(state.morningView ? "晨会视图已打开" : "晨会视图已关闭");
+  });
   qsa<HTMLButtonElement>("#dashboard .section-head .btn").forEach((button) => {
     if (button.textContent?.includes("新增待办")) button.addEventListener("click", () => openTodoModal());
     if (button.textContent?.includes("批量完成")) button.addEventListener("click", async () => {
@@ -2541,7 +3306,7 @@ function installEvents() {
   qs<HTMLButtonElement>("#instrumentMemoButton")?.addEventListener("click", (event) => void saveInstrumentPlanMemo(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#instrumentExportButton")?.addEventListener("click", exportInstrumentPlanCsv);
   qs<HTMLButtonElement>("#batchPriorityButton")?.addEventListener("click", (event) => void batchProcessPriorityTasks(event.currentTarget as HTMLButtonElement));
-  qsa<HTMLButtonElement>("#customers .page-head .btn.primary, .top-actions .btn.primary").forEach((button) => {
+  qsa<HTMLButtonElement>("#customers .page-head .btn.primary").forEach((button) => {
     if (button.textContent?.includes("新增客户")) button.addEventListener("click", openCustomerModal);
   });
   qs<HTMLButtonElement>("#pipeline .page-head .btn.primary")?.addEventListener("click", openDealModal);
@@ -2563,22 +3328,52 @@ function installEvents() {
     if (button.textContent?.includes("调整排序")) button.addEventListener("click", () => toast("资料类目排序已保存"));
   });
   qsa<HTMLButtonElement>("#exam .page-head .btn").forEach((button) => {
-    if (button.textContent?.includes("发布考试")) button.addEventListener("click", openExamCreateModal);
-    if (button.textContent?.includes("题库维护")) button.addEventListener("click", () => toast("题库已新增 1 道产品知识题"));
-    if (button.textContent?.includes("分类目考试维护")) button.addEventListener("click", () => toast("分类目考试规则已保存"));
+    if (button.textContent?.includes("发布考试")) button.addEventListener("click", () => openExamCreateModal());
+    if (button.textContent?.includes("题库维护")) button.addEventListener("click", () => openQuestionBankModal());
+    if (button.textContent?.includes("分类目考试维护")) button.addEventListener("click", openExamCategoryModal);
   });
   qs<HTMLButtonElement>("#wecom .page-head .btn.primary")?.addEventListener("click", () => void syncWecomMessages());
-  qsa<HTMLButtonElement>(".top-actions .btn.ghost").forEach((button) => {
-    if (button.textContent?.includes("导入")) button.addEventListener("click", () => activateNavView("imports", () => void createJob("import")));
-    if (button.textContent?.includes("导出")) button.addEventListener("click", () => activateNavView("imports", () => void createJob("export")));
+  qs<HTMLButtonElement>("#aiSaveButton")?.addEventListener("click", (event) => void saveAiConfig(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#aiTestButton")?.addEventListener("click", (event) => void testAiConfig(event.currentTarget as HTMLButtonElement));
+  qs<HTMLInputElement>("#aiEnabledInput")?.addEventListener("change", () => {
+    const useAi = qs<HTMLInputElement>("#websiteUseAiInput");
+    if (useAi) useAi.checked = Boolean(qs<HTMLInputElement>("#aiEnabledInput")?.checked && state.aiConfig?.hasApiKey);
+  });
+  qs<HTMLButtonElement>("#topPrimaryAction")?.addEventListener("click", () => {
+    const view = qs<HTMLElement>(".view.active")?.id;
+    if (view === "customers") openCustomerModal();
+  });
+  qs<HTMLButtonElement>("#topImportButton")?.addEventListener("click", () => {
+    const view = qs<HTMLElement>(".view.active")?.id;
+    if (view === "customers") activateNavView("imports", () => void createJob("import"));
+  });
+  qs<HTMLButtonElement>("#topExportButton")?.addEventListener("click", () => {
+    const view = qs<HTMLElement>(".view.active")?.id;
+    if (view === "customers") activateNavView("imports", () => void createJob("export"));
+  });
+  qsa<HTMLButtonElement>("[data-top-view]").forEach((button) => {
+    button.addEventListener("click", () => activateNavView(button.dataset.topView || "dashboard"));
+  });
+  qs<HTMLInputElement>("#topSearchInput")?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    const input = event.currentTarget as HTMLInputElement;
+    const nextView = resolveTopbarSearchView(input.value);
+    if (!nextView) {
+      toast("没有匹配到模块，可搜索：客户、商机、考试、资料、报表、备忘", "error");
+      return;
+    }
+    activateNavView(nextView);
+    input.value = "";
   });
   qsa<HTMLButtonElement>("#tools .page-head .btn, #tools .section-head .btn").forEach((button) => {
     if (button.textContent?.includes("加载名片")) button.addEventListener("click", () => void recognizeOcr({ company: "Tianjin Mahe Trading Co., Ltd.", contact: "Ma He", email: "sales@tjmahe.com", country: "中国" }));
     if (button.textContent?.includes("重新识别")) button.addEventListener("click", () => void recognizeOcr());
     if (button.textContent?.includes("工具配置")) button.addEventListener("click", () => toast("OCR 字段映射配置已保存"));
+    if (button.textContent?.includes("解析官网")) button.addEventListener("click", (event) => void parseWebsiteOpportunities(event.currentTarget as HTMLButtonElement));
   });
   qsa<HTMLButtonElement>("#tools .btn.primary").forEach((button) => {
-    if (button.textContent?.includes("同步")) button.addEventListener("click", () => void syncOcrLead(button));
+    if (button.textContent?.includes("同步为商机")) button.addEventListener("click", (event) => void syncWebsiteOpportunities(event.currentTarget as HTMLButtonElement));
+    else if (button.textContent?.includes("同步")) button.addEventListener("click", () => void syncOcrLead(button));
   });
   qsa<HTMLButtonElement>("#competitors .page-head .btn").forEach((button) => {
     if (button.textContent?.includes("新增竞争公司")) button.addEventListener("click", openCompetitorModal);
@@ -2622,8 +3417,83 @@ function installEvents() {
 function activateNavView(view: string, after?: () => void) {
   qsa<HTMLElement>(".nav button").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   qsa<HTMLElement>(".view").forEach((node) => node.classList.toggle("active", node.id === view));
+  renderTopbarForView(view);
   window.scrollTo({ top: 0, behavior: "smooth" });
   after?.();
+}
+
+function renderTopbarForView(view: string) {
+  const searchWrap = qs<HTMLElement>("#topSearchWrap");
+  const searchInput = qs<HTMLInputElement>("#topSearchInput");
+  const context = qs<HTMLElement>("#topActionContext");
+  const importButton = qs<HTMLButtonElement>("#topImportButton");
+  const exportButton = qs<HTMLButtonElement>("#topExportButton");
+  const primaryButton = qs<HTMLButtonElement>("#topPrimaryAction");
+  const primaryText = primaryButton?.querySelector("span");
+  const isCustomerView = view === "customers";
+
+  searchWrap?.classList.remove("is-hidden");
+  context?.classList.toggle("is-hidden", !isCustomerView);
+  if (searchInput) {
+    searchInput.placeholder = isCustomerView ? "搜索客户、联系人、国家或产品" : "全局搜索 / 输入模块名后回车跳转";
+  }
+  if (importButton) importButton.hidden = !isCustomerView;
+  if (exportButton) exportButton.hidden = !isCustomerView;
+  if (primaryButton) primaryButton.hidden = !isCustomerView;
+  if (primaryText && isCustomerView) primaryText.textContent = "新增客户";
+  qsa<HTMLElement>("[data-top-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.topView === view);
+  });
+  renderTopbarStats();
+}
+
+function renderTopbarStats() {
+  const todoCount = activeTodos(state.todos).filter((todo) => !todo.done).length;
+  const reminderCount = state.reminders.filter((reminder) => reminder.status !== "done").length;
+  const todoNode = qs<HTMLElement>("#topTodoCount");
+  const reminderNode = qs<HTMLElement>("#topReminderCount");
+  if (todoNode) todoNode.textContent = String(todoCount);
+  if (reminderNode) reminderNode.textContent = String(reminderCount);
+}
+
+function resolveTopbarSearchView(rawValue: string) {
+  const value = rawValue.trim().toLowerCase();
+  if (!value) return null;
+  const candidates: Array<[string, string]> = [
+    ["工作台", "dashboard"],
+    ["待办", "dashboard"],
+    ["todo", "dashboard"],
+    ["客户", "customers"],
+    ["customer", "customers"],
+    ["商机", "pipeline"],
+    ["pipeline", "pipeline"],
+    ["提醒", "reminders"],
+    ["reminder", "reminders"],
+    ["导入", "imports"],
+    ["导出", "imports"],
+    ["import", "imports"],
+    ["报表", "reports"],
+    ["report", "reports"],
+    ["企业微信", "wecom"],
+    ["微信", "wecom"],
+    ["资料", "knowledge"],
+    ["knowledge", "knowledge"],
+    ["考试", "exam"],
+    ["exam", "exam"],
+    ["工具", "tools"],
+    ["ocr", "tools"],
+    ["竞争", "competitors"],
+    ["competitor", "competitors"],
+    ["案例", "cases"],
+    ["case", "cases"],
+    ["问题", "problems"],
+    ["problem", "problems"],
+    ["备忘", "memos"],
+    ["memo", "memos"],
+    ["设置", "settings"],
+    ["account", "settings"]
+  ];
+  return candidates.find(([keyword]) => value.includes(keyword))?.[1] || null;
 }
 
 async function restoreSession() {
@@ -2644,4 +3514,5 @@ async function restoreSession() {
 }
 
 installEvents();
+renderTopbarForView(qs<HTMLElement>(".view.active")?.id || "dashboard");
 void restoreSession();

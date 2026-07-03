@@ -68,6 +68,36 @@ export interface Exam {
   status: "published" | "draft" | "scheduled";
   passRate: number;
   questionCount: number;
+  durationMinutes?: number;
+  passScore?: number;
+  targetRole?: "all" | "sales" | "manager";
+  updatedAt?: string;
+}
+
+export interface ExamQuestion {
+  id: string;
+  examId: string;
+  category: string;
+  stem: string;
+  options: string[];
+  answerIndex: number;
+  answerIndexes?: number[];
+  questionType?: "single" | "multiple";
+  explanation: string;
+  difficulty: "easy" | "medium" | "hard";
+  updatedAt?: string;
+}
+
+export interface ExamAttempt {
+  id: string;
+  examId: string;
+  userId: string;
+  score: number;
+  passed: boolean;
+  answers: Record<string, number | number[]>;
+  correctCount: number;
+  totalQuestions: number;
+  submittedAt: string;
 }
 
 export interface OcrJob {
@@ -75,6 +105,37 @@ export interface OcrJob {
   status: "recognized" | "synced";
   confidence: number;
   fields: Record<string, string>;
+}
+
+export interface WebsiteOpportunity {
+  id: string;
+  company: string;
+  business: string;
+  country: string;
+  website: string;
+  contact: string;
+  contactInfo: string;
+  description: string;
+  ownerId: string;
+  teamId: string;
+  status: "preview" | "synced";
+  createdAt: string;
+  customerId?: string;
+  dealId?: string;
+  parseMode?: "rule" | "ai" | "fallback";
+}
+
+export interface AiModelConfig {
+  id: string;
+  provider: "openai-compatible";
+  name: string;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  enabled: boolean;
+  ownerId: string;
+  teamId: string;
+  updatedAt: string;
 }
 
 export interface Deal {
