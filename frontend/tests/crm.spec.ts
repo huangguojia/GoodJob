@@ -413,7 +413,15 @@ test.describe("GoodJob CRM prototype pages", () => {
     await openView(page, "exam");
     await expect(page.locator("#exam .exam-grid")).toBeVisible();
     await page.locator("#exam .page-head .btn", { hasText: "题库维护" }).click();
-    await expect(page.locator("#modalTitle")).toContainText("基础题库维护");
+    await expect(page.locator("#question-bank")).toHaveClass(/active/);
+    await expect(page.locator("#question-bank h1")).toContainText("基础题库维护");
+    await expect(page.locator("#question-bank .question-bank-import-row")).toBeVisible();
+    await expect(page.locator("#question-bank .question-bank-list-panel #questionImportInput")).toHaveCount(1);
+    await expect(page.locator("#question-bank .question-bank-editor-panel #questionImportInput")).toHaveCount(0);
+    await expect(page.locator("#question-bank .question-option-input")).toHaveCount(4);
+    await expect(page.locator("#question-bank .question-bank-editor-panel")).not.toContainText("选项 E");
+    await expect(page.locator("#question-bank .question-bank-editor-panel")).not.toContainText("选项 F");
+    await page.locator("#newQuestionButton").click();
     await page.locator("#questionStemInput").fill(manualQuestion);
     await page.locator("#questionCategoryInput").selectOption("仪表产品");
     await page.locator(".question-option-input").nth(3).fill("D选项：输出信号、供电和防护等级");
@@ -432,12 +440,14 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#importQuestionButton").click();
     await expect(page.locator(".toast").last()).toContainText("题库导入成功：2 道题");
     await expect(page.locator("#questionBankList")).toContainText("Excel导入压力仪表");
+    await page.locator("#questionBankList .question-bank-row", { hasText: "Excel导入压力仪表" }).first().click();
     await page.once("dialog", (dialog) => dialog.accept());
-    await page.locator("#questionBankList .exam-bank-card", { hasText: "Excel导入压力仪表" }).first().locator("[data-delete-bank-question]").click();
+    await page.locator("#deleteQuestionButton").click();
     await expect(page.locator(".toast").last()).toContainText("题目已删除");
     await page.locator("#exportQuestionButton").click();
     await expect(page.locator(".toast").last()).toContainText("题库已导出");
-    await page.locator("#appModal [data-modal-close]").first().click();
+    await page.locator("#backToExamButton").click();
+    await expect(page.locator("#exam")).toHaveClass(/active/);
 
     await page.locator("#exam .page-head .btn.primary").click();
     await page.locator("#examTitleInput").fill(examTitle);
@@ -460,9 +470,34 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#selectCategoryQuestionsButton").click();
     await page.locator("#saveExamButton").click();
     await expect(page.locator("#exam .exam-sidebar .category-list")).toContainText(`仪表产品专项-${runId}`);
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#exam .category-item", { hasText: `仪表产品专项-${runId}` }).first().getByRole("button", { name: "删除" }).click();
+    await expect(page.locator(".toast").last()).toContainText("考试已删除");
+    await expect(page.locator("#exam .exam-sidebar .category-list")).not.toContainText(`仪表产品专项-${runId}`);
+
+    const bulkExamTitles = [`批量删除A-${runId}`, `批量删除B-${runId}`];
+    for (const title of bulkExamTitles) {
+      await page.locator("#exam .page-head .btn.primary").click();
+      await page.locator("#examTitleInput").fill(title);
+      await page.locator("#examCategoryInput").selectOption("仪表产品");
+      await page.locator("#selectCategoryQuestionsButton").click();
+      await page.locator("#saveExamButton").click();
+      await expect(page.locator("#exam .exam-sidebar .category-list")).toContainText(title);
+    }
+    for (const title of bulkExamTitles) {
+      await page.locator("#exam .category-item", { hasText: title }).first().locator("[data-select-exam]").check();
+    }
+    await expect(page.locator("#exam .exam-bulk-bar")).toContainText("已选 2 场");
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#exam [data-bulk-delete-exams]").click();
+    await expect(page.locator(".toast").last()).toContainText("已批量删除 2 场考试");
+    for (const title of bulkExamTitles) {
+      await expect(page.locator("#exam .exam-sidebar .category-list")).not.toContainText(title);
+    }
+
     await openView(page, "dashboard");
     await expect(page.locator("#dashboard-exam-panel tbody")).toContainText(examTitle);
-    await expect(page.locator("#dashboard-gap-panel tbody")).toContainText("产品知识");
+    await expect(page.locator("#dashboard-gap-panel tbody")).toContainText("仪表产品");
 
     await openView(page, "exam");
     await page.locator("#exam .category-item", { hasText: examTitle }).first().getByRole("button", { name: "考试" }).click();

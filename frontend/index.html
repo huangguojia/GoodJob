@@ -2449,6 +2449,46 @@
       box-shadow: inset 3px 0 0 var(--brand), 0 12px 26px rgba(27,39,68,.08);
     }
 
+    .category-item.exam-row {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      padding-left: 8px;
+    }
+
+    .category-item.exam-row.checked {
+      border-color: rgba(222,90,90,.32);
+      background: linear-gradient(135deg, #fff8f8, #fff);
+      box-shadow: inset 3px 0 0 var(--rose), 0 10px 22px rgba(27,39,68,.07);
+    }
+
+    .exam-row-main {
+      min-width: 0;
+    }
+
+    .exam-row-check {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      background: #fff;
+      border: 1px solid var(--line-soft);
+      cursor: pointer;
+    }
+
+    .exam-row-check:hover {
+      border-color: rgba(49,87,213,.34);
+      box-shadow: 0 6px 14px rgba(27,39,68,.08);
+    }
+
+    .exam-row-check input,
+    .exam-select-all input {
+      width: 14px;
+      height: 14px;
+      margin: 0;
+      accent-color: var(--brand);
+      cursor: pointer;
+    }
+
     .category-item b {
       color: var(--ink);
       font-size: 13px;
@@ -2474,6 +2514,45 @@
       border-radius: 8px;
       font-size: 11px;
       line-height: 1;
+    }
+
+    .exam-bulk-bar {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px;
+      border: 1px solid rgba(49,87,213,.14);
+      border-radius: var(--radius-sm);
+      background: rgba(255,255,255,.94);
+      box-shadow: 0 8px 22px rgba(27,39,68,.08);
+      backdrop-filter: blur(10px);
+    }
+
+    .exam-bulk-bar span,
+    .exam-select-all {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .exam-bulk-bar .btn {
+      min-height: 26px;
+      padding: 5px 9px;
+      border-radius: 8px;
+      font-size: 11px;
+    }
+
+    .exam-bulk-bar .btn:disabled {
+      opacity: .48;
+      cursor: not-allowed;
     }
 
     .file-grid {
@@ -2714,6 +2793,247 @@
       align-items: center;
       gap: 8px;
       margin-top: 8px;
+    }
+
+    .question-bank-page {
+      display: grid;
+      grid-template-columns: minmax(360px, .92fr) minmax(520px, 1.08fr);
+      gap: 12px;
+      align-items: start;
+    }
+
+    .question-bank-list-panel,
+    .question-bank-editor-panel {
+      min-height: 640px;
+    }
+
+    .question-bank-list-panel {
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .question-bank-toolbar {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .question-bank-filter-row,
+    .question-bank-import-row {
+      display: grid;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .question-bank-filter-row {
+      grid-template-columns: 1fr 118px 108px;
+    }
+
+    .question-bank-import-row {
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      padding: 7px;
+      border: 1px solid rgba(49,87,213,.12);
+      border-radius: 8px;
+      background: linear-gradient(135deg, #f8faff, #fff);
+    }
+
+    .question-bank-toolbar input,
+    .question-bank-toolbar select {
+      min-height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 6px 9px;
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .question-bank-file {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .question-file-picker {
+      min-width: 0;
+      min-height: 30px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 8px;
+      border: 1px dashed rgba(49,87,213,.28);
+      border-radius: 8px;
+      background: #fff;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .question-file-picker b {
+      flex: none;
+      color: var(--brand);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .question-file-picker span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .question-bank-list {
+      display: grid;
+      gap: 7px;
+      max-height: 610px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .question-bank-row {
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+      cursor: pointer;
+      transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease;
+    }
+
+    .question-bank-row:hover,
+    .question-bank-row.active {
+      transform: translateY(-1px);
+      border-color: rgba(49, 87, 213, .28);
+      background: linear-gradient(180deg, #fff 0%, #f7f9ff 100%);
+      box-shadow: 0 10px 22px rgba(27, 39, 68, .08);
+    }
+
+    .question-bank-row.active {
+      box-shadow: inset 3px 0 0 var(--brand), 0 10px 22px rgba(27, 39, 68, .08);
+    }
+
+    .question-bank-row h3 {
+      margin: 6px 0 7px;
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.42;
+    }
+
+    .question-bank-row-meta,
+    .question-bank-row-foot {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .question-bank-editor-panel {
+      position: sticky;
+      top: 76px;
+    }
+
+    .question-bank-editor-panel .form-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .question-bank-editor-panel .form-field {
+      gap: 5px;
+    }
+
+    .question-bank-editor-panel .form-field label {
+      color: #59667a;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .question-bank-editor-panel .form-field small {
+      margin-top: 2px;
+      color: #8a95a7;
+      font-size: 11px;
+      line-height: 1.42;
+    }
+
+    .question-bank-editor-panel .form-field input,
+    .question-bank-editor-panel .form-field select,
+    .question-bank-editor-panel .form-field textarea {
+      width: 100%;
+      border: 1px solid #dfe6f1;
+      border-radius: 8px;
+      background: linear-gradient(180deg, #fff 0%, #fbfcff 100%);
+      color: #1f2937;
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.48;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.92), 0 1px 2px rgba(27,39,68,.03);
+      transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
+    }
+
+    .question-bank-editor-panel .form-field input,
+    .question-bank-editor-panel .form-field select {
+      height: 34px;
+      padding: 7px 10px;
+    }
+
+    .question-bank-editor-panel textarea {
+      min-height: 88px;
+      padding: 9px 10px;
+      resize: vertical;
+      letter-spacing: 0;
+    }
+
+    #questionStemInput,
+    #questionExplainInput {
+      font-size: 12.5px;
+      line-height: 1.55;
+    }
+
+    .question-bank-editor-panel .form-field input::placeholder,
+    .question-bank-editor-panel .form-field textarea::placeholder {
+      color: #a7b0bf;
+      font-weight: 400;
+    }
+
+    .question-bank-editor-panel .form-field input:focus,
+    .question-bank-editor-panel .form-field select:focus,
+    .question-bank-editor-panel .form-field textarea:focus {
+      outline: 0;
+      border-color: rgba(49, 87, 213, .55);
+      background: #fff;
+      box-shadow: 0 0 0 3px rgba(49, 87, 213, .10), inset 0 1px 0 rgba(255,255,255,.95);
+    }
+
+    .question-option-input {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .question-bank-editor-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .question-bank-editor-actions .left-actions,
+    .question-bank-editor-actions .right-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .question-editor-note {
+      color: #7f8ba0;
+      font-size: 11px;
+      line-height: 1.45;
     }
 
     .progress-ring {
@@ -5046,6 +5366,70 @@
             <section class="panel section"><div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-7"/></svg></span><div><h2>成绩统计</h2><span>按团队与类目分析</span></div></div></div><table class="mini-table"><thead><tr><th>团队</th><th>参考</th><th>通过率</th><th>均分</th></tr></thead><tbody><tr><td>欧洲组</td><td>12</td><td>83%</td><td>86</td></tr><tr><td>北美组</td><td>10</td><td>78%</td><td>81</td></tr><tr><td>中东组</td><td>8</td><td>62%</td><td>73</td></tr></tbody></table></section>
             <section class="panel section"><div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/></svg></span><div><h2>补考提醒</h2><span>企微自动推送</span></div></div></div><table class="mini-table"><thead><tr><th>人员</th><th>类目</th><th>状态</th></tr></thead><tbody><tr><td>Eric</td><td>认证资料</td><td><span class="badge red">未通过</span></td></tr><tr><td>Luna</td><td>报价规则</td><td><span class="badge amber">待补考</span></td></tr><tr><td>Owen</td><td>包装物流</td><td><span class="badge">未参加</span></td></tr></tbody></table></section>
             <section class="panel section"><div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2>题型维护</h2><span>单选/多选/判断/问答</span></div></div></div><table class="mini-table"><thead><tr><th>题型</th><th>数量</th><th>占比</th></tr></thead><tbody><tr><td>单选</td><td>680</td><td>55%</td></tr><tr><td>多选</td><td>316</td><td>25%</td></tr><tr><td>判断</td><td>250</td><td>20%</td></tr></tbody></table></section>
+          </div>
+        </div>
+
+        <div class="view" id="question-bank">
+          <div class="page-head">
+            <div><p class="eyebrow">Question Bank</p><h1>基础题库维护</h1><p class="sub">题目作为长期资产独立维护，左侧列表检索与选择，右侧编辑题干、选项、答案、标签和解析。</p></div>
+            <div class="head-actions"><button class="btn" id="backToExamButton">返回考试</button><button class="btn" id="newQuestionButton">新增题目</button><button class="btn primary" id="saveQuestionButton">保存题目</button></div>
+          </div>
+
+          <div class="dense-grid">
+            <div class="dense-card" id="questionBankTotalCard"><span>题库总量</span><b>0</b><small>真实基础题库</small></div>
+            <div class="dense-card" id="questionBankMultiCard"><span>多选题</span><b>0</b><small>组卷可选</small></div>
+            <div class="dense-card" id="questionBankCategoryCard"><span>类目数</span><b>0</b><small>产品知识分类</small></div>
+            <div class="dense-card" id="questionBankSelectedCard"><span>当前题目</span><b>未选择</b><small>点击列表编辑</small></div>
+          </div>
+
+          <div class="question-bank-page">
+            <section class="panel section question-bank-list-panel">
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg></span><div><h2>题目列表</h2><span>按类目、题型和关键词快速定位</span></div></div>
+              </div>
+              <div>
+                <div class="question-bank-toolbar">
+                  <div class="question-bank-filter-row">
+                    <input id="questionBankSearchInput" placeholder="搜索题干 / 标签 / 类目">
+                    <select id="questionBankCategoryFilter"><option value="">全部类目</option></select>
+                    <select id="questionBankTypeFilter"><option value="">全部题型</option><option value="single">单选</option><option value="multiple">多选</option></select>
+                  </div>
+                  <div class="question-bank-import-row">
+                    <label class="question-file-picker" for="questionImportInput"><b>选择文件</b><span id="questionImportFileName">支持 .xlsx / .xls / .csv 题库</span></label>
+                    <input class="question-bank-file" id="questionImportInput" type="file" accept=".xlsx,.xls,.csv">
+                    <button class="btn" id="importQuestionButton">导入</button>
+                    <button class="btn" id="exportQuestionButton">导出</button>
+                  </div>
+                </div>
+                <div class="question-bank-list" id="questionBankList"></div>
+              </div>
+            </section>
+
+            <section class="panel section question-bank-editor-panel">
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2>题目编辑</h2><span id="questionEditorHint">新增或点击左侧题目后编辑</span></div></div>
+              </div>
+              <div class="form-grid">
+                <div class="form-field full"><label>题干</label><textarea id="questionStemInput" rows="4"></textarea></div>
+                <div class="form-field"><label>类目</label><select id="questionCategoryInput"></select></div>
+                <div class="form-field"><label>题型</label><select id="questionTypeInput"><option value="single">单选题</option><option value="multiple">多选题</option></select></div>
+                <div class="form-field full"><label>选项 A</label><input class="question-option-input" data-option-index="0"></div>
+                <div class="form-field full"><label>选项 B</label><input class="question-option-input" data-option-index="1"></div>
+                <div class="form-field full"><label>选项 C</label><input class="question-option-input" data-option-index="2"></div>
+                <div class="form-field full"><label>选项 D</label><input class="question-option-input" data-option-index="3"></div>
+                <div class="form-field"><label>正确答案</label><input id="questionAnswerInput" placeholder="单选 A，多选 A,D"><small>支持 A,D 或 1,4</small></div>
+                <div class="form-field"><label>难度</label><select id="questionDifficultyInput"><option value="easy">基础</option><option value="medium">应用</option><option value="hard">高阶</option></select></div>
+                <div class="form-field full"><label>标签</label><input id="questionTagsInput" placeholder="仪表,报价,认证"><small>用逗号分隔，发布考试时可用于筛选。</small></div>
+                <div class="form-field full"><label>解析</label><textarea id="questionExplainInput" rows="4"></textarea></div>
+              </div>
+              <div class="question-bank-editor-actions">
+                <div class="left-actions"><span class="question-editor-note">仅维护 A-D 四个选项；导入导出在左侧题目列表工具栏操作。</span></div>
+                <div class="right-actions">
+                  <button class="btn danger" id="deleteQuestionButton">删除题目</button>
+                  <button class="btn primary" id="saveQuestionButtonBottom">保存题目</button>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
 

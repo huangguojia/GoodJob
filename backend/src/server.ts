@@ -841,6 +841,27 @@ app.post("/api/exam-questions/import", requireAuth, asyncRoute(async (req, res) 
   res.json({ importedCount: imported.length, questions: imported, report: examReport() });
 }));
 
+app.patch("/api/exam-questions/:id", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const index = store.examQuestions.findIndex((question) => question.id === req.params.id);
+  if (index < 0) {
+    res.status(404).json({ message: "题目不存在" });
+    return;
+  }
+  const body = examQuestionSchema.parse(req.body);
+  let question: ExamQuestion;
+  try {
+    question = { ...buildExamQuestion(body), id: store.examQuestions[index].id, examId: store.examQuestions[index].examId || "bank" };
+  } catch (error) {
+    res.status(400).json({ message: "正确答案序号超出选项数量" });
+    return;
+  }
+  store.examQuestions[index] = question;
+  store.exams.forEach(refreshExamStats);
+  await store.persist();
+  res.json({ question, report: examReport() });
+}));
+
 app.delete("/api/exam-questions/:id", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
   const index = store.examQuestions.findIndex((question) => question.id === req.params.id);
@@ -972,6 +993,40 @@ app.patch("/api/exams/:id/publish", requireAuth, asyncRoute(async (req, res) => 
   refreshExamStats(exam);
   await store.persist();
   res.json({ exam: examWithRuntimeStats(exam), report: examReport() });
+}));
+
+app.post("/api/exams/bulk-delete", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const schema = z.object({ ids: z.array(z.string()).min(1).max(100) });
+  const body = schema.parse(req.body);
+  const ids = [...new Set(body.ids)];
+  const deleted = store.exams.filter((exam) => ids.includes(exam.id));
+  if (!deleted.length) {
+    res.status(404).json({ message: "未找到可删除的考试" });
+    return;
+  }
+  const deletedIds = new Set(deleted.map((exam) => exam.id));
+  store.exams = store.exams.filter((exam) => !deletedIds.has(exam.id));
+  store.examQuestionLinks = store.examQuestionLinks.filter((link) => !deletedIds.has(link.examId));
+  store.examAttempts = store.examAttempts.filter((attempt) => !deletedIds.has(attempt.examId));
+  store.exams.forEach(refreshExamStats);
+  await store.persist();
+  res.json({ deleted, exams: store.exams.map(examWithRuntimeStats), report: examReport() });
+}));
+
+app.delete("/api/exams/:id", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const index = store.exams.findIndex((item) => item.id === req.params.id);
+  if (index < 0) {
+    res.status(404).json({ message: "考试不存在" });
+    return;
+  }
+  const [exam] = store.exams.splice(index, 1);
+  store.examQuestionLinks = store.examQuestionLinks.filter((link) => link.examId !== exam.id);
+  store.examAttempts = store.examAttempts.filter((attempt) => attempt.examId !== exam.id);
+  store.exams.forEach(refreshExamStats);
+  await store.persist();
+  res.json({ exam, exams: store.exams.map(examWithRuntimeStats), report: examReport() });
 }));
 
 app.post("/api/exams/:id/submit", requireAuth, asyncRoute(async (req, res) => {
