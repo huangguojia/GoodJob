@@ -1,7 +1,7 @@
 import mysql from "mysql2/promise";
-import { aiModelConfigs, caseStudies, competitors, customers, deals, examAttempts, examQuestions, exams, importExportJobs, knowledgeAssets, memos, ocrJobs, problems, reminders, todos, users, wecomMessages, websiteOpportunities } from "./data.js";
+import { aiModelConfigs, caseStudies, competitors, customers, deals, examAttempts, examQuestionLinks, examQuestions, exams, importExportJobs, knowledgeAssets, memos, ocrJobs, problems, reminders, todos, users, wecomMessages, websiteOpportunities } from "./data.js";
 import type { CrmStore } from "./store.js";
-import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 const defaultUrl = "mysql://root:password@127.0.0.1:3306/goodjob_crm";
 
@@ -20,6 +20,7 @@ export async function createMysqlStore(): Promise<CrmStore> {
     knowledgeAssets: await loadKnowledgeAssets(pool),
     exams: await loadExams(pool),
     examQuestions: await loadExamQuestions(pool),
+    examQuestionLinks: await loadExamQuestionLinks(pool),
     examAttempts: await loadExamAttempts(pool),
 	    importExportJobs: await loadImportExportJobs(pool),
 	    wecomMessages: await loadWecomMessages(pool),
@@ -44,6 +45,7 @@ export async function createMysqlStore(): Promise<CrmStore> {
     store.knowledgeAssets.push(...knowledgeAssets);
     store.exams.push(...exams);
     store.examQuestions.push(...examQuestions);
+    store.examQuestionLinks.push(...examQuestionLinks);
     store.examAttempts.push(...examAttempts);
 	    store.importExportJobs.push(...importExportJobs);
 	    store.wecomMessages.push(...wecomMessages);
@@ -74,6 +76,10 @@ export async function createMysqlStore(): Promise<CrmStore> {
   }
   if (!store.examQuestions.length) {
     store.examQuestions.push(...examQuestions);
+    await store.persist();
+  }
+  if (!store.examQuestionLinks.length) {
+    store.examQuestionLinks.push(...examQuestionLinks);
     await store.persist();
   }
   if (!store.examAttempts.length) {
@@ -188,13 +194,14 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "exams", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
   await pool.query(`CREATE TABLE IF NOT EXISTS exam_questions (
     id VARCHAR(64) PRIMARY KEY,
-    exam_id VARCHAR(64) NOT NULL,
+    exam_id VARCHAR(64) DEFAULT 'bank',
     category VARCHAR(100),
     stem TEXT NOT NULL,
     options_json JSON NOT NULL,
     answer_index INT NOT NULL,
     answer_indexes_json JSON,
     question_type VARCHAR(20) DEFAULT 'single',
+    tags_json JSON,
     explanation TEXT,
     difficulty VARCHAR(20),
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -202,6 +209,15 @@ async function ensureSchema(pool: mysql.Pool) {
   )`);
   await ensureColumn(pool, "exam_questions", "answer_indexes_json", "JSON");
   await ensureColumn(pool, "exam_questions", "question_type", "VARCHAR(20) DEFAULT 'single'");
+  await ensureColumn(pool, "exam_questions", "tags_json", "JSON");
+  await pool.query(`CREATE TABLE IF NOT EXISTS exam_question_links (
+    exam_id VARCHAR(64) NOT NULL,
+    question_id VARCHAR(64) NOT NULL,
+    sort_order INT DEFAULT 0,
+    PRIMARY KEY (exam_id, question_id),
+    INDEX idx_exam_question_links_exam(exam_id),
+    INDEX idx_exam_question_links_question(question_id)
+  )`);
   await pool.query(`CREATE TABLE IF NOT EXISTS exam_attempts (
     id VARCHAR(64) PRIMARY KEY,
     exam_id VARCHAR(64) NOT NULL,
@@ -419,9 +435,18 @@ async function loadExamQuestions(pool: mysql.Pool): Promise<ExamQuestion[]> {
     answerIndex: Number(row.answer_index),
     answerIndexes: row.answer_indexes_json ? (typeof row.answer_indexes_json === "string" ? JSON.parse(row.answer_indexes_json) : row.answer_indexes_json) : [Number(row.answer_index)],
     questionType: row.question_type || "single",
+    tags: row.tags_json ? (typeof row.tags_json === "string" ? JSON.parse(row.tags_json) : row.tags_json) : [],
     explanation: row.explanation || "",
     difficulty: row.difficulty || "medium",
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at
+  }));
+}
+
+async function loadExamQuestionLinks(pool: mysql.Pool): Promise<ExamQuestionLink[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM exam_question_links ORDER BY exam_id ASC, sort_order ASC")).map((row) => ({
+    examId: row.exam_id,
+    questionId: row.question_id,
+    sortOrder: Number(row.sort_order || 0)
   }));
 }
 
@@ -572,7 +597,8 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
     await replaceRows(connection, "reminders", store.reminders, (item) => [item.id, item.title, item.rule, item.dueAt, item.ownerId, item.teamId, item.channel, item.status], "(id,title,rule_text,due_at,owner_id,team_id,channel,status)");
     await replaceRows(connection, "knowledge_assets", store.knowledgeAssets, (item) => [item.id, item.title, item.category, item.status, item.ownerId, item.version], "(id,title,category,status,owner_id,version)");
     await replaceRows(connection, "exams", store.exams, (item) => [item.id, item.title, item.category, item.status, item.passRate, item.questionCount, item.durationMinutes || 20, item.passScore || 80, item.targetRole || "sales", mysqlDate(item.updatedAt)], "(id,title,category,status,pass_rate,question_count,duration_minutes,pass_score,target_role,updated_at)");
-    await replaceRows(connection, "exam_questions", store.examQuestions, (item) => [item.id, item.examId, item.category, item.stem, JSON.stringify(item.options), item.answerIndex, JSON.stringify(item.answerIndexes?.length ? item.answerIndexes : [item.answerIndex]), item.questionType || ((item.answerIndexes?.length || 0) > 1 ? "multiple" : "single"), item.explanation, item.difficulty, mysqlDate(item.updatedAt)], "(id,exam_id,category,stem,options_json,answer_index,answer_indexes_json,question_type,explanation,difficulty,updated_at)");
+    await replaceRows(connection, "exam_questions", store.examQuestions, (item) => [item.id, item.examId || "bank", item.category, item.stem, JSON.stringify(item.options), item.answerIndex, JSON.stringify(item.answerIndexes?.length ? item.answerIndexes : [item.answerIndex]), item.questionType || ((item.answerIndexes?.length || 0) > 1 ? "multiple" : "single"), JSON.stringify(item.tags || []), item.explanation, item.difficulty, mysqlDate(item.updatedAt)], "(id,exam_id,category,stem,options_json,answer_index,answer_indexes_json,question_type,tags_json,explanation,difficulty,updated_at)");
+    await replaceRows(connection, "exam_question_links", store.examQuestionLinks, (item) => [item.examId, item.questionId, item.sortOrder], "(exam_id,question_id,sort_order)");
     await replaceRows(connection, "exam_attempts", store.examAttempts, (item) => [item.id, item.examId, item.userId, item.score, item.passed, JSON.stringify(item.answers), item.correctCount, item.totalQuestions, mysqlDate(item.submittedAt)], "(id,exam_id,user_id,score,passed,answers_json,correct_count,total_questions,submitted_at)");
     await replaceRows(connection, "import_export_jobs", store.importExportJobs, (item) => [item.id, item.name, item.type, item.rows, item.status, item.operatorId, item.createdAt], "(id,name,type,rows_count,status,operator_id,created_at)");
 	    await replaceRows(connection, "wecom_messages", store.wecomMessages, (item) => [item.id, item.customerId, item.summary, item.ownerId, item.teamId, item.status], "(id,customer_id,summary,owner_id,team_id,status)");

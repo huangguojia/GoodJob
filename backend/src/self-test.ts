@@ -281,32 +281,79 @@ try {
   });
   if (!exam.response.ok || exam.json.attempt.passed !== true || exam.json.attempt.score !== 100) throw new Error("exam submit failed");
 
+  const bankQuestion = await request("/api/exam-questions", {
+    method: "POST",
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({
+      stem: "压力仪表报价前必须优先确认哪组参数？",
+      category: "仪表产品",
+      options: ["量程、精度、接口、介质和工况", "客户公司人数", "包装颜色", "输出信号与供电"],
+      answerIndex: 0,
+      answerIndexes: [0, 3],
+      questionType: "multiple",
+      tags: ["仪表", "报价", "多选"],
+      explanation: "仪表选型先确认量程、精度、接口、介质和工况，同时关注输出信号与供电。",
+      difficulty: "medium"
+    })
+  });
+  if (!bankQuestion.response.ok || bankQuestion.json.question.tags[0] !== "仪表") throw new Error("bank question create failed");
+
+  const importedBankQuestions = await request("/api/exam-questions/import", {
+    method: "POST",
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({
+      questions: [
+        {
+          stem: "Excel导入：压力表选型优先确认什么？",
+          category: "仪表产品",
+          options: ["量程和介质", "客户邮箱", "包装颜色"],
+          answerIndex: 0,
+          tags: ["导入", "压力表"],
+          explanation: "压力表必须先确认量程、介质、精度和接口。",
+          difficulty: "easy"
+        },
+        {
+          stem: "Excel导入：防爆场景需要确认什么？",
+          category: "仪表产品",
+          options: ["防爆等级和认证", "名片颜色", "聊天工具", "使用区域"],
+          answerIndex: 0,
+          answerIndexes: [0, 3],
+          questionType: "multiple",
+          tags: ["导入", "防爆"],
+          explanation: "防爆场景需要确认认证体系和等级。",
+          difficulty: "hard"
+        }
+      ]
+    })
+  });
+  if (!importedBankQuestions.response.ok || importedBankQuestions.json.importedCount !== 2) throw new Error("bank question import failed");
+
+  const exportedBank = await request("/api/exam-questions/export", {
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (!exportedBank.response.ok || exportedBank.json.questions.length < 3) throw new Error("bank question export failed");
+
+  const deleteCandidate = importedBankQuestions.json.questions[0];
+  const deletedBankQuestion = await request(`/api/exam-questions/${deleteCandidate.id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (!deletedBankQuestion.response.ok || deletedBankQuestion.json.question.id !== deleteCandidate.id) throw new Error("bank question delete failed");
+
+  const questionIds = [bankQuestion.json.question.id, importedBankQuestions.json.questions[1].id];
   const createdExam = await request("/api/exams", {
     method: "POST",
     headers: { authorization: `Bearer ${managerToken}` },
     body: JSON.stringify({
       title: "自动化仪表专项考试",
       category: "仪表产品",
-      questionCount: 2,
+      questionIds,
       durationMinutes: 15,
       passScore: 80,
       targetRole: "sales"
     })
   });
-  if (!createdExam.response.ok || createdExam.json.exam.category !== "仪表产品") throw new Error("exam create failed");
-
-  const addedQuestion = await request(`/api/exams/${createdExam.json.exam.id}/questions`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${managerToken}` },
-    body: JSON.stringify({
-      stem: "压力仪表报价前必须优先确认哪组参数？",
-      options: ["量程、精度、接口、介质和工况", "客户公司人数", "包装颜色"],
-      answerIndex: 0,
-      explanation: "仪表选型先确认量程、精度、接口、介质和工况，避免型号错误。",
-      difficulty: "medium"
-    })
-  });
-  if (!addedQuestion.response.ok || addedQuestion.json.exam.questionCount < 3) throw new Error("exam question create failed");
+  if (!createdExam.response.ok || createdExam.json.exam.questionCount !== questionIds.length) throw new Error("exam create from bank failed");
 
   const publishedExam = await request(`/api/exams/${createdExam.json.exam.id}/publish`, {
     method: "PATCH",
@@ -317,64 +364,15 @@ try {
   const createdExamDetail = await request(`/api/exams/${createdExam.json.exam.id}/detail`, {
     headers: { authorization: `Bearer ${salesToken}` }
   });
-  if (!createdExamDetail.response.ok || createdExamDetail.json.questions.length < 3) throw new Error("created exam detail failed");
+  if (!createdExamDetail.response.ok || createdExamDetail.json.questions.length !== questionIds.length) throw new Error("created exam detail failed");
 
-  const salesCreatedExam = await request("/api/exams", {
-    method: "POST",
-    headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({
-      title: "销售自建仪表考试",
-      category: "仪表产品",
-      questionCount: 1,
-      durationMinutes: 10,
-      passScore: 70,
-      targetRole: "sales"
-    })
-  });
-  if (!salesCreatedExam.response.ok || salesCreatedExam.json.exam.title !== "销售自建仪表考试") throw new Error("sales exam create failed");
-
-  const importedExamQuestions = await request(`/api/exams/${salesCreatedExam.json.exam.id}/questions/import`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({
-      questions: [
-        {
-          stem: "Excel导入：压力表选型优先确认什么？",
-          options: ["量程和介质", "客户邮箱", "包装颜色"],
-          answerIndex: 0,
-          explanation: "压力表必须先确认量程、介质、精度和接口。",
-          difficulty: "easy"
-        },
-        {
-          stem: "Excel导入：防爆场景需要确认什么？",
-          options: ["防爆等级和认证", "名片颜色", "聊天工具", "使用区域"],
-          answerIndex: 0,
-          answerIndexes: [0, 3],
-          questionType: "multiple",
-          explanation: "防爆场景需要确认认证体系和等级。",
-          difficulty: "hard"
-        }
-      ]
-    })
-  });
-  if (!importedExamQuestions.response.ok || importedExamQuestions.json.importedCount !== 2) throw new Error("exam question import failed");
-
-  const salesPublishedExam = await request(`/api/exams/${salesCreatedExam.json.exam.id}/publish`, {
-    method: "PATCH",
-    headers: { authorization: `Bearer ${salesToken}` }
-  });
-  if (!salesPublishedExam.response.ok || salesPublishedExam.json.exam.status !== "published") throw new Error("sales exam publish failed");
-
-  const salesExamDetail = await request(`/api/exams/${salesCreatedExam.json.exam.id}/detail`, {
-    headers: { authorization: `Bearer ${salesToken}` }
-  });
   const salesExamAnswers = Object.fromEntries(
-    salesExamDetail.json.questions.map((question: { id: string; answerIndex: number; answerIndexes?: number[] }) => [
+    createdExamDetail.json.questions.map((question: { id: string; answerIndex: number; answerIndexes?: number[] }) => [
       question.id,
       question.answerIndexes?.length ? question.answerIndexes : question.answerIndex
     ])
   );
-  const salesExamAttempt = await request(`/api/exams/${salesCreatedExam.json.exam.id}/submit`, {
+  const salesExamAttempt = await request(`/api/exams/${createdExam.json.exam.id}/submit`, {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({ answers: salesExamAnswers })
@@ -453,8 +451,8 @@ try {
     examPassed: exam.json.attempt.passed,
     examCreated: createdExam.json.exam.title,
     examPublished: publishedExam.json.exam.status,
-    examImported: importedExamQuestions.json.importedCount,
-    salesExamPublished: salesPublishedExam.json.exam.status,
+    examImported: importedBankQuestions.json.importedCount,
+    salesExamPublished: publishedExam.json.exam.status,
     multiExamScore: salesExamAttempt.json.attempt.score,
     accountCreated: account.json.account.name,
     accountPasswordLogin: loginCreated.response.ok,

@@ -89,13 +89,14 @@ interface Exam {
 
 interface ExamQuestion {
   id: string;
-  examId: string;
+  examId?: string;
   category: string;
   stem: string;
   options: string[];
   answerIndex: number;
   answerIndexes?: number[];
   questionType?: "single" | "multiple";
+  tags?: string[];
   explanation: string;
   difficulty: "easy" | "medium" | "hard";
 }
@@ -128,10 +129,12 @@ interface ExamReport {
 
 interface ExamImportQuestion {
   stem: string;
+  category: string;
   options: string[];
   answerIndex: number;
   answerIndexes: number[];
   questionType: "single" | "multiple";
+  tags: string[];
   explanation: string;
   difficulty: "easy" | "medium" | "hard";
 }
@@ -288,6 +291,7 @@ interface AppState {
   wecomMessages: WecomMessage[];
   knowledgeAssets: KnowledgeAsset[];
   exams: Exam[];
+  examQuestions: ExamQuestion[];
   examReport: ExamReport | null;
   ocrJob: OcrJob | null;
   websiteOpportunities: WebsiteOpportunity[];
@@ -322,6 +326,7 @@ const state: AppState = {
   wecomMessages: [],
   knowledgeAssets: [],
   exams: [],
+  examQuestions: [],
   examReport: null,
   ocrJob: null,
   websiteOpportunities: [],
@@ -2304,25 +2309,77 @@ async function publishExam(id: string) {
   }
 }
 
-function openExamCreateModal(category = "产品知识") {
-  openModal("发布考试", `
-    <div class="form-grid">
+function questionTagsText(question: ExamQuestion) {
+  return (question.tags || []).join("、") || "未打标签";
+}
+
+function selectedQuestionIdsFromModal() {
+  return qsa<HTMLInputElement>("#examQuestionPicker input[data-question-id]:checked").map((input) => input.dataset.questionId || "").filter(Boolean);
+}
+
+function updateExamCreateSelectionSummary() {
+  const summary = qs<HTMLElement>("#examCreateSelectionSummary");
+  if (!summary) return;
+  const ids = selectedQuestionIdsFromModal();
+  const selected = state.examQuestions.filter((question) => ids.includes(question.id));
+  const multiple = selected.filter((question) => questionTypeText(question) === "多选").length;
+  const hard = selected.filter((question) => question.difficulty === "hard").length;
+  summary.innerHTML = `已选 <b>${selected.length}</b> 题 · 多选 ${multiple} 题 · 高阶 ${hard} 题`;
+}
+
+function renderExamQuestionPicker(filterCategory = "") {
+  const picker = qs<HTMLElement>("#examQuestionPicker");
+  if (!picker) return;
+  const questions = filterCategory ? state.examQuestions.filter((question) => question.category === filterCategory) : state.examQuestions;
+  picker.innerHTML = questions.length ? questions.map((question) => `
+    <label class="exam-bank-row">
+      <input type="checkbox" data-question-id="${escapeHtml(question.id)}">
+      <span><b>${escapeHtml(question.stem)}</b><small>${escapeHtml(question.category)} · ${questionTypeText(question)} · ${escapeHtml(questionTagsText(question))}</small></span>
+      ${badge(question.difficulty === "hard" ? "高阶" : question.difficulty === "easy" ? "基础" : "应用", difficultyTone(question.difficulty))}
+    </label>`).join("") : `<div class="empty-state"><b>当前筛选下没有题目</b><span>请先在基础题库维护中新增或导入题目。</span></div>`;
+  qsa<HTMLInputElement>("input[data-question-id]", picker).forEach((input) => input.addEventListener("change", updateExamCreateSelectionSummary));
+  updateExamCreateSelectionSummary();
+}
+
+async function ensureExamQuestionsLoaded() {
+  const result = await api<{ questions: ExamQuestion[]; report: ExamReport }>("/api/exam-questions");
+  state.examQuestions = result.questions;
+  state.examReport = result.report;
+  return result.questions;
+}
+
+async function openExamCreateModal(category = "产品知识") {
+  await ensureExamQuestionsLoaded();
+  const categories = Array.from(new Set([...state.examQuestions.map((question) => question.category), category, "产品知识", "认证资料", "报价规则", "仪表产品"]));
+  openModal("发布考试 · 勾选题目组卷", `
+    <div class="form-grid exam-create-grid">
       <div class="form-field full"><label>考试名称</label><input id="examTitleInput" value="${escapeHtml(category)}新品知识抽考"></div>
-      <div class="form-field"><label>类目</label><select id="examCategoryInput"><option ${category === "产品知识" ? "selected" : ""}>产品知识</option><option ${category === "认证资料" ? "selected" : ""}>认证资料</option><option ${category === "报价规则" ? "selected" : ""}>报价规则</option><option ${category === "仪表产品" ? "selected" : ""}>仪表产品</option></select></div>
-      <div class="form-field"><label>题量</label><input id="examCountInput" type="number" value="3" min="1" max="20"></div>
+      <div class="form-field"><label>类目</label><select id="examCategoryInput">${categories.map((item) => `<option ${item === category ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></div>
       <div class="form-field"><label>考试时长</label><input id="examDurationInput" type="number" value="20" min="5" max="180"></div>
       <div class="form-field"><label>及格分</label><input id="examPassInput" type="number" value="80" min="1" max="100"></div>
       <div class="form-field"><label>适用对象</label><select id="examRoleInput"><option value="sales">销售必考</option><option value="manager">主管必考</option><option value="all">全员必考</option></select></div>
+      <div class="form-field full"><label>从基础题库勾选试题</label><div class="exam-bank-toolbar"><span id="examCreateSelectionSummary">已选 0 题</span><button class="btn" type="button" id="selectCategoryQuestionsButton">选中当前类目</button></div><div class="exam-bank-list" id="examQuestionPicker"></div></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveExamButton">创建考试</button>`);
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  renderExamQuestionPicker(category);
+  qs<HTMLSelectElement>("#examCategoryInput")?.addEventListener("change", (event) => renderExamQuestionPicker((event.currentTarget as HTMLSelectElement).value));
+  qs<HTMLButtonElement>("#selectCategoryQuestionsButton")?.addEventListener("click", () => {
+    qsa<HTMLInputElement>("#examQuestionPicker input[data-question-id]").forEach((input) => { input.checked = true; });
+    updateExamCreateSelectionSummary();
+  });
   qs("#saveExamButton")?.addEventListener("click", (event) => void saveExam(event.currentTarget as HTMLButtonElement));
 }
 
 async function saveExam(button?: HTMLButtonElement) {
   const title = qs<HTMLInputElement>("#examTitleInput")?.value.trim() || "";
+  const questionIds = selectedQuestionIdsFromModal();
   if (!title) {
     toast("请填写考试名称", "error");
+    return;
+  }
+  if (!questionIds.length) {
+    toast("请至少勾选 1 道题目", "error");
     return;
   }
   try {
@@ -2330,12 +2387,12 @@ async function saveExam(button?: HTMLButtonElement) {
       button.disabled = true;
       button.textContent = "创建中";
     }
-    const result = await api<{ exam: Exam; questions: ExamQuestion[] }>("/api/exams", {
+    const result = await api<{ exam: Exam; questions: ExamQuestion[]; report: ExamReport }>("/api/exams", {
       method: "POST",
       body: JSON.stringify({
         title,
         category: qs<HTMLSelectElement>("#examCategoryInput")?.value || "产品知识",
-        questionCount: Number(qs<HTMLInputElement>("#examCountInput")?.value || 3),
+        questionIds,
         durationMinutes: Number(qs<HTMLInputElement>("#examDurationInput")?.value || 20),
         passScore: Number(qs<HTMLInputElement>("#examPassInput")?.value || 80),
         targetRole: qs<HTMLSelectElement>("#examRoleInput")?.value || "sales"
@@ -2343,9 +2400,10 @@ async function saveExam(button?: HTMLButtonElement) {
     });
     state.exams.unshift(result.exam);
     state.selectedExamId = result.exam.id;
+    state.examReport = result.report;
     await refreshExamData();
     closeModal();
-    toast("考试已创建，已生成默认题");
+    toast(`考试已创建，已组卷 ${result.questions.length} 道题`);
   } catch (error) {
     toast(error instanceof Error ? error.message : "创建考试失败", "error");
   } finally {
@@ -2356,33 +2414,81 @@ async function saveExam(button?: HTMLButtonElement) {
   }
 }
 
-function openQuestionBankModal(id = state.selectedExamId || "") {
-  const exam = state.exams.find((item) => item.id === id) || state.exams[0];
-  if (!exam) {
-    toast("请先创建考试", "error");
-    return;
-  }
-  openModal(`${exam.title} · 题库维护`, `
-    <div class="form-grid">
-      <div class="form-field full"><label>题干</label><input id="questionStemInput" value="客户询问仪表量程时，销售应优先确认哪些参数？"></div>
-      <div class="form-field full"><label>选项 A</label><input class="question-option-input" value="量程、精度、接口、工况"></div>
-      <div class="form-field full"><label>选项 B</label><input class="question-option-input" value="客户公司规模"></div>
-      <div class="form-field full"><label>选项 C</label><input class="question-option-input" value="包装颜色"></div>
-      <div class="form-field full"><label>选项 D</label><input class="question-option-input" value="输出信号、供电和防护等级"></div>
-      <div class="form-field"><label>题型</label><select id="questionTypeInput"><option value="single">单选题</option><option value="multiple">多选题</option></select></div>
-      <div class="form-field"><label>正确答案</label><input id="questionAnswerInput" value="A"><small>单选填 A；多选填 A,C 或 1,3</small></div>
-      <div class="form-field"><label>难度</label><select id="questionDifficultyInput"><option value="easy">基础</option><option value="medium" selected>应用</option><option value="hard">高阶</option></select></div>
-      <div class="form-field full"><label>解析</label><input id="questionExplainInput" value="仪表类产品报价必须先确认量程、精度、接口和实际工况，避免型号匹配错误。"></div>
-      <div class="form-field full"><label>Excel / CSV 批量导入题库</label><input id="questionImportInput" type="file" accept=".xlsx,.xls,.csv"><small>表头支持：题干、选项A、选项B、选项C、选项D、正确答案、解析、难度。正确答案可填 A/B/C/D 或 1/2/3/4。</small></div>
-    </div>
-  `, `<button class="btn" data-modal-close>取消</button><button class="btn" id="importQuestionButton">导入题库</button><button class="btn primary" id="saveQuestionButton">保存题目</button>`);
-  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
-  qs("#saveQuestionButton")?.addEventListener("click", (event) => void saveQuestion(exam.id, event.currentTarget as HTMLButtonElement));
-  qs("#importQuestionButton")?.addEventListener("click", (event) => void importQuestionBank(exam.id, event.currentTarget as HTMLButtonElement));
+function renderQuestionBankRows(questions: ExamQuestion[]) {
+  const list = qs<HTMLElement>("#questionBankList");
+  if (!list) return;
+  const category = qs<HTMLSelectElement>("#questionBankCategoryFilter")?.value || "";
+  const type = qs<HTMLSelectElement>("#questionBankTypeFilter")?.value || "";
+  const keyword = qs<HTMLInputElement>("#questionBankSearchInput")?.value.trim() || "";
+  const filtered = questions.filter((question) => {
+    const matchesCategory = !category || question.category === category;
+    const matchesType = !type || (question.questionType || (correctIndexesForQuestion(question).length > 1 ? "multiple" : "single")) === type;
+    const haystack = `${question.stem} ${question.category} ${questionTagsText(question)}`;
+    return matchesCategory && matchesType && (!keyword || haystack.includes(keyword));
+  });
+  list.innerHTML = filtered.length ? filtered.map((question, index) => `
+    <article class="question-card exam-bank-card" data-bank-question="${escapeHtml(question.id)}">
+      <div class="question-meta"><span>#${index + 1} · ${escapeHtml(question.category)} · ${questionTypeText(question)}</span><span>${escapeHtml(questionTagsText(question))}</span></div>
+      <h3>${escapeHtml(question.stem)}</h3>
+      <div class="option-row">${question.options.map((option, optionIndex) => `<span class="${correctIndexesForQuestion(question).includes(optionIndex) ? "active" : ""}">${String.fromCharCode(65 + optionIndex)}. ${escapeHtml(option)}</span>`).join("")}</div>
+      <small class="question-explain">解析：${escapeHtml(question.explanation)}</small>
+      <div class="exam-bank-card-actions">${badge(question.difficulty === "hard" ? "高阶" : question.difficulty === "easy" ? "基础" : "应用", difficultyTone(question.difficulty))}<button class="btn danger" data-delete-bank-question>删除</button></div>
+    </article>`).join("") : `<div class="empty-state"><b>暂无匹配题目</b><span>可以调整筛选条件，或新增/导入题目。</span></div>`;
+  qsa<HTMLButtonElement>("[data-delete-bank-question]", list).forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const id = button.closest<HTMLElement>("[data-bank-question]")?.dataset.bankQuestion || "";
+      void deleteBankQuestion(id);
+    });
+  });
 }
 
-async function saveQuestion(examId: string, button?: HTMLButtonElement) {
-  const stem = qs<HTMLInputElement>("#questionStemInput")?.value.trim() || "";
+async function openQuestionBankModal(id = "") {
+  await ensureExamQuestionsLoaded();
+  const exam = state.exams.find((item) => item.id === id);
+  const categories = Array.from(new Set([...state.examQuestions.map((question) => question.category), "产品知识", "认证资料", "报价规则", "仪表产品"]));
+  openModal("基础题库维护", `
+    <div class="exam-bank-layout">
+      <aside class="exam-bank-editor">
+        <div class="form-grid">
+          <div class="form-field full"><label>题干</label><textarea id="questionStemInput" rows="3">客户询问仪表量程时，销售应优先确认哪些参数？</textarea></div>
+          <div class="form-field"><label>类目</label><select id="questionCategoryInput">${categories.map((category) => `<option ${category === (exam?.category || "产品知识") ? "selected" : ""}>${escapeHtml(category)}</option>`).join("")}</select></div>
+          <div class="form-field"><label>题型</label><select id="questionTypeInput"><option value="single">单选题</option><option value="multiple">多选题</option></select></div>
+          <div class="form-field full"><label>选项 A</label><input class="question-option-input" value="量程、精度、接口、工况"></div>
+          <div class="form-field full"><label>选项 B</label><input class="question-option-input" value="客户公司规模"></div>
+          <div class="form-field full"><label>选项 C</label><input class="question-option-input" value="包装颜色"></div>
+          <div class="form-field full"><label>选项 D</label><input class="question-option-input" value="输出信号、供电和防护等级"></div>
+          <div class="form-field"><label>正确答案</label><input id="questionAnswerInput" value="A"><small>多选填 A,D 或 1,4</small></div>
+          <div class="form-field"><label>难度</label><select id="questionDifficultyInput"><option value="easy">基础</option><option value="medium" selected>应用</option><option value="hard">高阶</option></select></div>
+          <div class="form-field full"><label>标签</label><input id="questionTagsInput" value="仪表,技术参数"><small>用逗号分隔，如：仪表,报价,认证</small></div>
+          <div class="form-field full"><label>解析</label><textarea id="questionExplainInput" rows="3">仪表类产品报价必须先确认量程、精度、接口和实际工况，避免型号匹配错误。</textarea></div>
+          <div class="form-field full"><label>Excel / CSV 批量导入题库</label><input id="questionImportInput" type="file" accept=".xlsx,.xls,.csv"><small>表头支持：题干、类目、选项A-F、正确答案、题型、标签、解析、难度。</small></div>
+        </div>
+      </aside>
+      <section class="exam-bank-browser">
+        <div class="exam-bank-toolbar">
+          <select id="questionBankCategoryFilter"><option value="">全部类目</option>${categories.map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`).join("")}</select>
+          <select id="questionBankTypeFilter"><option value="">全部题型</option><option value="single">单选</option><option value="multiple">多选</option></select>
+          <input id="questionBankSearchInput" placeholder="搜索题干 / 标签">
+        </div>
+        <div class="exam-bank-list" id="questionBankList"></div>
+      </section>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn" id="exportQuestionButton">导出题库</button><button class="btn" id="importQuestionButton">导入题库</button><button class="btn primary" id="saveQuestionButton">保存题目</button>`);
+  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  renderQuestionBankRows(state.examQuestions);
+  ["#questionBankCategoryFilter", "#questionBankTypeFilter", "#questionBankSearchInput"].forEach((selector) => qs<HTMLElement>(selector)?.addEventListener("input", () => renderQuestionBankRows(state.examQuestions)));
+  qs("#saveQuestionButton")?.addEventListener("click", (event) => void saveQuestion(event.currentTarget as HTMLButtonElement));
+  qs("#importQuestionButton")?.addEventListener("click", (event) => void importQuestionBank(event.currentTarget as HTMLButtonElement));
+  qs("#exportQuestionButton")?.addEventListener("click", () => void exportQuestionBank());
+}
+
+function parseTags(value: string) {
+  return value.split(/[，,、\s]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+async function saveQuestion(button?: HTMLButtonElement) {
+  const stem = qs<HTMLTextAreaElement>("#questionStemInput")?.value.trim() || qs<HTMLInputElement>("#questionStemInput")?.value.trim() || "";
   const options = qsa<HTMLInputElement>(".question-option-input").map((input) => input.value.trim()).filter(Boolean);
   const answerIndexes = normalizeAnswerIndexes(qs<HTMLInputElement>("#questionAnswerInput")?.value || "A");
   const questionType = qs<HTMLSelectElement>("#questionTypeInput")?.value === "multiple" || answerIndexes.length > 1 ? "multiple" : "single";
@@ -2399,24 +2505,25 @@ async function saveQuestion(examId: string, button?: HTMLButtonElement) {
       button.disabled = true;
       button.textContent = "保存中";
     }
-    const result = await api<{ question: ExamQuestion; exam: Exam; report: ExamReport }>(`/api/exams/${examId}/questions`, {
+    const result = await api<{ question: ExamQuestion; report: ExamReport }>("/api/exam-questions", {
       method: "POST",
       body: JSON.stringify({
         stem,
+        category: qs<HTMLSelectElement>("#questionCategoryInput")?.value || "产品知识",
         options,
         answerIndex: answerIndexes[0],
         answerIndexes,
         questionType,
-        explanation: qs<HTMLInputElement>("#questionExplainInput")?.value.trim() || "请补充解析",
+        tags: parseTags(qs<HTMLInputElement>("#questionTagsInput")?.value || ""),
+        explanation: qs<HTMLTextAreaElement>("#questionExplainInput")?.value.trim() || qs<HTMLInputElement>("#questionExplainInput")?.value.trim() || "请补充解析",
         difficulty: qs<HTMLSelectElement>("#questionDifficultyInput")?.value || "medium"
       })
     });
-    const exam = state.exams.find((item) => item.id === examId);
-    if (exam) Object.assign(exam, result.exam);
+    state.examQuestions.unshift(result.question);
     state.examReport = result.report;
+    renderQuestionBankRows(state.examQuestions);
     renderExams(state.exams);
-    closeModal();
-    toast("题目已加入题库");
+    toast("题目已加入基础题库");
   } catch (error) {
     toast(error instanceof Error ? error.message : "保存题目失败", "error");
   } finally {
@@ -2425,10 +2532,6 @@ async function saveQuestion(examId: string, button?: HTMLButtonElement) {
       button.textContent = "保存题目";
     }
   }
-}
-
-function normalizeAnswerIndex(value: unknown) {
-  return normalizeAnswerIndexes(value)[0] ?? 0;
 }
 
 function normalizeAnswerIndexes(value: unknown) {
@@ -2483,17 +2586,19 @@ async function parseQuestionFile(file: File): Promise<ExamImportQuestion[]> {
     const answerIndexes = normalizeAnswerIndexes(rowValue(row, ["正确答案", "答案", "answer", "Answer"]));
     return {
       stem: String(rowValue(row, ["题干", "题目", "问题", "stem", "question"])).trim(),
+      category: String(rowValue(row, ["类目", "分类", "category", "Category"]) || "产品知识").trim(),
       options,
       answerIndex: answerIndexes[0] ?? 0,
       answerIndexes,
       questionType: normalizeQuestionType(rowValue(row, ["题型", "类型", "questionType", "type"]), answerIndexes),
+      tags: parseTags(String(rowValue(row, ["标签", "tags", "Tags"]) || "")),
       explanation: String(rowValue(row, ["解析", "说明", "explanation", "Explanation"]) || "Excel题库导入题目，请补充解析。").trim(),
       difficulty: normalizeDifficulty(rowValue(row, ["难度", "difficulty", "Difficulty"]))
     };
   }).filter((item) => item.stem && item.options.length >= 2);
 }
 
-async function importQuestionBank(examId: string, button?: HTMLButtonElement) {
+async function importQuestionBank(button?: HTMLButtonElement) {
   const file = qs<HTMLInputElement>("#questionImportInput")?.files?.[0];
   if (!file) {
     toast("请选择 Excel 或 CSV 题库文件", "error");
@@ -2509,15 +2614,14 @@ async function importQuestionBank(examId: string, button?: HTMLButtonElement) {
       toast("未识别到有效题目，请检查表头和选项", "error");
       return;
     }
-    const result = await api<{ importedCount: number; exam: Exam; report: ExamReport }>(`/api/exams/${examId}/questions/import`, {
+    const result = await api<{ importedCount: number; questions: ExamQuestion[]; report: ExamReport }>("/api/exam-questions/import", {
       method: "POST",
       body: JSON.stringify({ questions })
     });
-    const exam = state.exams.find((item) => item.id === examId);
-    if (exam) Object.assign(exam, result.exam);
+    state.examQuestions.unshift(...result.questions);
     state.examReport = result.report;
-    await refreshExamData();
-    closeModal();
+    renderQuestionBankRows(state.examQuestions);
+    renderExams(state.exams);
     toast(`题库导入成功：${result.importedCount} 道题`);
   } catch (error) {
     toast(error instanceof Error ? error.message : "题库导入失败", "error");
@@ -2526,6 +2630,49 @@ async function importQuestionBank(examId: string, button?: HTMLButtonElement) {
       button.disabled = false;
       button.textContent = "导入题库";
     }
+  }
+}
+
+async function exportQuestionBank() {
+  try {
+    const result = await api<{ questions: ExamQuestion[] }>("/api/exam-questions/export");
+    const rows = result.questions.map((question) => ({
+      题干: question.stem,
+      类目: question.category,
+      题型: questionTypeText(question),
+      标签: questionTagsText(question),
+      选项A: question.options[0] || "",
+      选项B: question.options[1] || "",
+      选项C: question.options[2] || "",
+      选项D: question.options[3] || "",
+      选项E: question.options[4] || "",
+      选项F: question.options[5] || "",
+      正确答案: correctIndexesForQuestion(question).map((index) => String.fromCharCode(65 + index)).join(","),
+      难度: question.difficulty === "hard" ? "高阶" : question.difficulty === "easy" ? "基础" : "应用",
+      解析: question.explanation
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "基础题库");
+    XLSX.writeFile(workbook, `GoodJob基础题库-${Date.now()}.xlsx`);
+    toast(`题库已导出：${rows.length} 道题`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "题库导出失败", "error");
+  }
+}
+
+async function deleteBankQuestion(id: string) {
+  if (!id) return;
+  if (!window.confirm("确认删除这道题？相关考试中的引用也会同步移除。")) return;
+  try {
+    const result = await api<{ question: ExamQuestion; report: ExamReport }>(`/api/exam-questions/${id}`, { method: "DELETE" });
+    state.examQuestions = state.examQuestions.filter((question) => question.id !== result.question.id);
+    state.examReport = result.report;
+    renderQuestionBankRows(state.examQuestions);
+    await refreshExamData();
+    toast("题目已删除");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "删除题目失败", "error");
   }
 }
 
@@ -2540,19 +2687,18 @@ function openExamCategoryModal() {
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="createCategoryExamButton">生成分类考试</button>`);
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
-  qs("#createCategoryExamButton")?.addEventListener("click", () => {
+  qs("#createCategoryExamButton")?.addEventListener("click", async () => {
     const category = qs<HTMLSelectElement>("#categoryExamInput")?.value || "产品知识";
     const titleRule = qs<HTMLInputElement>("#categoryExamTitleInput")?.value.trim() || "专项考试";
-    const countValue = qs<HTMLInputElement>("#categoryExamCountInput")?.value || "3";
     const passValue = qs<HTMLInputElement>("#categoryExamPassInput")?.value || "80";
     closeModal();
-    openExamCreateModal(category);
+    await openExamCreateModal(category);
     const title = qs<HTMLInputElement>("#examTitleInput");
-    const count = qs<HTMLInputElement>("#examCountInput");
     const pass = qs<HTMLInputElement>("#examPassInput");
     if (title) title.value = `${category}${titleRule}`;
-    if (count) count.value = countValue;
     if (pass) pass.value = passValue;
+    qsa<HTMLInputElement>("#examQuestionPicker input[data-question-id]").forEach((input) => { input.checked = true; });
+    updateExamCreateSelectionSummary();
   });
 }
 

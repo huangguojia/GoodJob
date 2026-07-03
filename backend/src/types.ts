@@ -76,16 +76,23 @@ export interface Exam {
 
 export interface ExamQuestion {
   id: string;
-  examId: string;
+  examId?: string;
   category: string;
   stem: string;
   options: string[];
   answerIndex: number;
   answerIndexes?: number[];
   questionType?: "single" | "multiple";
+  tags?: string[];
   explanation: string;
   difficulty: "easy" | "medium" | "hard";
   updatedAt?: string;
+}
+
+export interface ExamQuestionLink {
+  examId: string;
+  questionId: string;
+  sortOrder: number;
 }
 
 export interface ExamAttempt {

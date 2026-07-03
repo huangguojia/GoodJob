@@ -1,4 +1,4 @@
-import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 export const users: User[] = [
   { id: "u_sales_shirley", name: "Shirley", email: "shirley@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "SH", status: "active" },
@@ -37,16 +37,29 @@ export const exams: Exam[] = [
 ];
 
 export const examQuestions: ExamQuestion[] = [
-  { id: "q1", examId: "e1", category: "产品知识", stem: "客户要求 CE 证书时，销售应优先提供哪类资料？", options: ["工厂营业执照", "对应产品型号的 CE 证书与测试报告", "产品宣传图", "海运提单"], answerIndex: 1, explanation: "认证类资料必须匹配客户询问的具体产品型号，避免发错证书造成信任损失。", difficulty: "easy", updatedAt: "2026-06-27T09:00:00.000Z" },
-  { id: "q2", examId: "e1", category: "产品知识", stem: "样品寄出后系统默认几天触发反馈提醒？", options: ["1 天", "签收后 3 天", "30 天", "不提醒"], answerIndex: 1, explanation: "样品签收后 3 天是比较合适的反馈窗口，既不显得催促，也能防止项目变冷。", difficulty: "easy", updatedAt: "2026-06-27T09:00:00.000Z" },
-  { id: "q3", examId: "e1", category: "产品知识", stem: "客户比较多个型号时，销售应先确认什么？", options: ["客户预算、用途场景和关键参数", "客户生日", "物流公司名称", "采购是否会立刻付款"], answerIndex: 0, explanation: "型号推荐前先确认应用场景与核心参数，才能减少无效报价。", difficulty: "medium", updatedAt: "2026-06-27T09:00:00.000Z" },
-  { id: "q4", examId: "e1", category: "产品知识", stem: "仪表类产品报价前最需要确认哪项技术信息？", options: ["颜色偏好", "量程、精度、接口和工况", "客户公司人数", "包装箱颜色"], answerIndex: 1, explanation: "仪表产品适配高度依赖量程、精度、接口和工况，缺少这些信息容易报价失真。", difficulty: "hard", updatedAt: "2026-06-27T09:00:00.000Z" },
-  { id: "q5", examId: "e2", category: "认证资料", stem: "客户索要 RoHS 资料时，最稳妥的回复方式是什么？", options: ["只回复已通过", "提供对应型号 RoHS 报告并说明适用范围", "发一张产品图", "让客户自己查询"], answerIndex: 1, explanation: "认证资料要有文件、型号和适用范围，减少客户二次确认成本。", difficulty: "easy", updatedAt: "2026-06-27T09:10:00.000Z" },
-  { id: "q6", examId: "e2", category: "认证资料", stem: "资料版本更新后，应同步维护到哪里？", options: ["只放个人电脑", "资料库、报价模板和客户常用话术", "不用同步", "只通知主管"], answerIndex: 1, explanation: "资料版本会影响报价和对外口径，需要同步到团队共用资产。", difficulty: "medium", updatedAt: "2026-06-27T09:10:00.000Z" },
-  { id: "q7", examId: "e2", category: "认证资料", stem: "客户问证书是否覆盖定制型号时，正确做法是？", options: ["直接说覆盖", "核对型号差异并让技术确认适用性", "忽略问题", "只发价格"], answerIndex: 1, explanation: "定制型号可能涉及结构或材料变化，需要技术确认后再承诺。", difficulty: "hard", updatedAt: "2026-06-27T09:10:00.000Z" },
-  { id: "q8", examId: "e3", category: "报价规则", stem: "报价单中 MOQ 变化需要同步更新哪些内容？", options: ["单价、包装数、交期", "客户国家", "单价、装箱、交期、付款条款影响", "仅备注即可"], answerIndex: 2, explanation: "MOQ 会影响单价、装箱、交期和付款条款，不能只改备注。", difficulty: "medium", updatedAt: "2026-06-27T09:20:00.000Z" },
-  { id: "q9", examId: "e3", category: "报价规则", stem: "汇率波动明显时，报价应增加哪类说明？", options: ["有效期和汇率口径", "客户国家人口", "公司成立时间", "无须说明"], answerIndex: 0, explanation: "报价有效期和汇率口径能保护利润，并让客户预期更清晰。", difficulty: "medium", updatedAt: "2026-06-27T09:20:00.000Z" },
-  { id: "q10", examId: "e3", category: "报价规则", stem: "客户要求大幅降价时，优先采用什么策略？", options: ["直接同意", "拆分配置、数量阶梯和付款条件后再谈", "不回复", "只强调我们很便宜"], answerIndex: 1, explanation: "价格谈判需要把配置、数量和付款条件拆开谈，避免单纯压缩利润。", difficulty: "hard", updatedAt: "2026-06-27T09:20:00.000Z" }
+  { id: "q1", examId: "bank", category: "产品知识", stem: "客户要求 CE 证书时，销售应优先提供哪类资料？", options: ["工厂营业执照", "对应产品型号的 CE 证书与测试报告", "产品宣传图", "海运提单"], answerIndex: 1, tags: ["认证", "CE", "资料"], explanation: "认证类资料必须匹配客户询问的具体产品型号，避免发错证书造成信任损失。", difficulty: "easy", updatedAt: "2026-06-27T09:00:00.000Z" },
+  { id: "q2", examId: "bank", category: "产品知识", stem: "样品寄出后系统默认几天触发反馈提醒？", options: ["1 天", "签收后 3 天", "30 天", "不提醒"], answerIndex: 1, tags: ["样品", "跟进"], explanation: "样品签收后 3 天是比较合适的反馈窗口，既不显得催促，也能防止项目变冷。", difficulty: "easy", updatedAt: "2026-06-27T09:00:00.000Z" },
+  { id: "q3", examId: "bank", category: "产品知识", stem: "客户比较多个型号时，销售应先确认什么？", options: ["客户预算、用途场景和关键参数", "客户生日", "物流公司名称", "采购是否会立刻付款"], answerIndex: 0, tags: ["需求确认", "型号"], explanation: "型号推荐前先确认应用场景与核心参数，才能减少无效报价。", difficulty: "medium", updatedAt: "2026-06-27T09:00:00.000Z" },
+  { id: "q4", examId: "bank", category: "产品知识", stem: "仪表类产品报价前最需要确认哪项技术信息？", options: ["颜色偏好", "量程、精度、接口和工况", "客户公司人数", "包装箱颜色"], answerIndex: 1, tags: ["仪表", "技术参数"], explanation: "仪表产品适配高度依赖量程、精度、接口和工况，缺少这些信息容易报价失真。", difficulty: "hard", updatedAt: "2026-06-27T09:00:00.000Z" },
+  { id: "q5", examId: "bank", category: "认证资料", stem: "客户索要 RoHS 资料时，最稳妥的回复方式是什么？", options: ["只回复已通过", "提供对应型号 RoHS 报告并说明适用范围", "发一张产品图", "让客户自己查询"], answerIndex: 1, tags: ["RoHS", "认证"], explanation: "认证资料要有文件、型号和适用范围，减少客户二次确认成本。", difficulty: "easy", updatedAt: "2026-06-27T09:10:00.000Z" },
+  { id: "q6", examId: "bank", category: "认证资料", stem: "资料版本更新后，应同步维护到哪里？", options: ["只放个人电脑", "资料库、报价模板和客户常用话术", "不用同步", "只通知主管"], answerIndex: 1, tags: ["资料维护", "版本"], explanation: "资料版本会影响报价和对外口径，需要同步到团队共用资产。", difficulty: "medium", updatedAt: "2026-06-27T09:10:00.000Z" },
+  { id: "q7", examId: "bank", category: "认证资料", stem: "客户问证书是否覆盖定制型号时，正确做法是？", options: ["直接说覆盖", "核对型号差异并让技术确认适用性", "忽略问题", "只发价格"], answerIndex: 1, tags: ["定制", "技术确认"], explanation: "定制型号可能涉及结构或材料变化，需要技术确认后再承诺。", difficulty: "hard", updatedAt: "2026-06-27T09:10:00.000Z" },
+  { id: "q8", examId: "bank", category: "报价规则", stem: "报价单中 MOQ 变化需要同步更新哪些内容？", options: ["单价、包装数、交期", "客户国家", "单价、装箱、交期、付款条款影响", "仅备注即可"], answerIndex: 2, tags: ["MOQ", "报价"], explanation: "MOQ 会影响单价、装箱、交期和付款条款，不能只改备注。", difficulty: "medium", updatedAt: "2026-06-27T09:20:00.000Z" },
+  { id: "q9", examId: "bank", category: "报价规则", stem: "汇率波动明显时，报价应增加哪类说明？", options: ["有效期和汇率口径", "客户国家人口", "公司成立时间", "无须说明"], answerIndex: 0, tags: ["汇率", "报价有效期"], explanation: "报价有效期和汇率口径能保护利润，并让客户预期更清晰。", difficulty: "medium", updatedAt: "2026-06-27T09:20:00.000Z" },
+  { id: "q10", examId: "bank", category: "报价规则", stem: "客户要求大幅降价时，优先采用什么策略？", options: ["直接同意", "拆分配置、数量阶梯和付款条件后再谈", "不回复", "只强调我们很便宜"], answerIndex: 1, tags: ["谈判", "价格"], explanation: "价格谈判需要把配置、数量和付款条件拆开谈，避免单纯压缩利润。", difficulty: "hard", updatedAt: "2026-06-27T09:20:00.000Z" }
+];
+
+export const examQuestionLinks: ExamQuestionLink[] = [
+  { examId: "e1", questionId: "q1", sortOrder: 1 },
+  { examId: "e1", questionId: "q2", sortOrder: 2 },
+  { examId: "e1", questionId: "q3", sortOrder: 3 },
+  { examId: "e1", questionId: "q4", sortOrder: 4 },
+  { examId: "e2", questionId: "q5", sortOrder: 1 },
+  { examId: "e2", questionId: "q6", sortOrder: 2 },
+  { examId: "e2", questionId: "q7", sortOrder: 3 },
+  { examId: "e3", questionId: "q8", sortOrder: 1 },
+  { examId: "e3", questionId: "q9", sortOrder: 2 },
+  { examId: "e3", questionId: "q10", sortOrder: 3 }
 ];
 
 export const examAttempts: ExamAttempt[] = [

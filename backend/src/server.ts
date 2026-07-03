@@ -20,9 +20,29 @@ function accountUser(user: ReturnType<typeof getStore>["users"][number]) {
   return { ...publicUser(user), status: user.status };
 }
 
+function examQuestionsFor(examId: string) {
+  const store = getStore();
+  const linkedIds = store.examQuestionLinks
+    .filter((link) => link.examId === examId)
+    .sort((left, right) => left.sortOrder - right.sortOrder)
+    .map((link) => link.questionId);
+  const linked = linkedIds
+    .map((questionId) => store.examQuestions.find((question) => question.id === questionId))
+    .filter(Boolean) as ExamQuestion[];
+  if (linked.length) return linked;
+  return store.examQuestions.filter((question) => question.examId === examId);
+}
+
+function bankQuestions() {
+  const store = getStore();
+  return store.examQuestions
+    .filter((question) => question.examId === "bank" || !question.examId || !store.exams.some((exam) => exam.id === question.examId))
+    .sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
+}
+
 function examWithRuntimeStats(exam: Exam) {
   const store = getStore();
-  const questions = store.examQuestions.filter((question) => question.examId === exam.id);
+  const questions = examQuestionsFor(exam.id);
   const attempts = store.examAttempts.filter((attempt) => attempt.examId === exam.id);
   const passRate = attempts.length
     ? Math.round((attempts.filter((attempt) => attempt.passed).length / attempts.length) * 100)
@@ -41,9 +61,9 @@ function examReport() {
   const passedAttempts = attempts.filter((attempt) => attempt.passed).length;
   const averageScore = totalAttempts ? Math.round(attempts.reduce((sum, attempt) => sum + attempt.score, 0) / totalAttempts) : 0;
   const retakeAttempts = attempts.filter((attempt) => !attempt.passed).length;
-  const questionCount = store.examQuestions.length;
+  const questionCount = bankQuestions().length;
   const difficultyRows = ["easy", "medium", "hard"].map((difficulty) => {
-    const count = store.examQuestions.filter((question) => question.difficulty === difficulty).length;
+    const count = bankQuestions().filter((question) => question.difficulty === difficulty).length;
     return {
       difficulty,
       label: difficulty === "easy" ? "基础题" : difficulty === "hard" ? "高阶题" : "应用题",
@@ -83,7 +103,7 @@ function examReport() {
 function refreshExamStats(exam: Exam) {
   const store = getStore();
   const attempts = store.examAttempts.filter((attempt) => attempt.examId === exam.id);
-  const questionCount = store.examQuestions.filter((question) => question.examId === exam.id).length;
+  const questionCount = examQuestionsFor(exam.id).length;
   exam.questionCount = questionCount || exam.questionCount;
   exam.passRate = attempts.length ? Math.round((attempts.filter((attempt) => attempt.passed).length / attempts.length) * 100) : exam.passRate;
   exam.updatedAt = new Date().toISOString();
@@ -91,10 +111,12 @@ function refreshExamStats(exam: Exam) {
 
 const examQuestionSchema = z.object({
   stem: z.string().min(1),
+  category: z.string().min(1).default("产品知识"),
   options: z.array(z.string().min(1)).min(2).max(6),
   answerIndex: z.number().int().nonnegative().optional(),
   answerIndexes: z.array(z.number().int().nonnegative()).optional(),
   questionType: z.enum(["single", "multiple"]).optional(),
+  tags: z.array(z.string()).optional().default([]),
   explanation: z.string().min(1).default("请在题库维护中补充解析。"),
   difficulty: z.enum(["easy", "medium", "hard"]).default("medium")
 });
@@ -113,20 +135,21 @@ function indexesEqual(left: number[], right: number[]) {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
-function buildExamQuestion(exam: Exam, body: z.infer<typeof examQuestionSchema>, index = 0): ExamQuestion {
+function buildExamQuestion(body: z.infer<typeof examQuestionSchema>, index = 0): ExamQuestion {
   const answerIndexes = uniqueSortedIndexes(body.answerIndexes?.length ? body.answerIndexes : [body.answerIndex ?? 0]);
   if (answerIndexes.some((answerIndex) => answerIndex >= body.options.length)) {
     throw new Error("正确答案序号超出选项数量");
   }
   return {
     id: `q_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
-    examId: exam.id,
-    category: exam.category,
+    examId: "bank",
+    category: body.category,
     stem: body.stem,
     options: body.options,
     answerIndex: answerIndexes[0],
     answerIndexes,
     questionType: body.questionType || (answerIndexes.length > 1 ? "multiple" : "single"),
+    tags: body.tags || [],
     explanation: body.explanation,
     difficulty: body.difficulty,
     updatedAt: new Date().toISOString()
@@ -770,6 +793,68 @@ app.patch("/api/knowledge/assets/:id/publish", requireAuth, asyncRoute(async (re
   res.json({ asset });
 }));
 
+app.get("/api/exam-questions", requireAuth, (req, res) => {
+  const category = String(req.query.category || "").trim();
+  const tag = String(req.query.tag || "").trim();
+  const type = String(req.query.type || "").trim();
+  let questions = bankQuestions();
+  if (category) questions = questions.filter((question) => question.category === category);
+  if (tag) questions = questions.filter((question) => (question.tags || []).includes(tag));
+  if (type) questions = questions.filter((question) => (question.questionType || (correctIndexesFor(question).length > 1 ? "multiple" : "single")) === type);
+  res.json({ questions, report: examReport() });
+});
+
+app.get("/api/exam-questions/export", requireAuth, (_req, res) => {
+  res.json({ questions: bankQuestions() });
+});
+
+app.post("/api/exam-questions", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const body = examQuestionSchema.parse(req.body);
+  let question: ExamQuestion;
+  try {
+    question = buildExamQuestion(body);
+  } catch (error) {
+    res.status(400).json({ message: "正确答案序号超出选项数量" });
+    return;
+  }
+  store.examQuestions.unshift(question);
+  await store.persist();
+  res.json({ question, report: examReport() });
+}));
+
+app.post("/api/exam-questions/import", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const schema = z.object({ questions: z.array(examQuestionSchema).min(1).max(500) });
+  const body = schema.parse(req.body);
+  const imported: ExamQuestion[] = [];
+  for (const [index, item] of body.questions.entries()) {
+    try {
+      imported.push(buildExamQuestion(item, index));
+    } catch (error) {
+      res.status(400).json({ message: `第 ${index + 1} 行正确答案序号超出选项数量` });
+      return;
+    }
+  }
+  store.examQuestions.unshift(...imported);
+  await store.persist();
+  res.json({ importedCount: imported.length, questions: imported, report: examReport() });
+}));
+
+app.delete("/api/exam-questions/:id", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const index = store.examQuestions.findIndex((question) => question.id === req.params.id);
+  if (index < 0) {
+    res.status(404).json({ message: "题目不存在" });
+    return;
+  }
+  const [question] = store.examQuestions.splice(index, 1);
+  store.examQuestionLinks = store.examQuestionLinks.filter((link) => link.questionId !== question.id);
+  store.exams.forEach(refreshExamStats);
+  await store.persist();
+  res.json({ question, report: examReport() });
+}));
+
 app.get("/api/exams", requireAuth, (_req, res) => {
   const { exams } = getStore();
   res.json({ exams: exams.map(examWithRuntimeStats), report: examReport() });
@@ -782,7 +867,7 @@ app.get("/api/exams/:id/detail", requireAuth, (req, res) => {
     res.status(404).json({ message: "考试不存在" });
     return;
   }
-  const questions = store.examQuestions.filter((item) => item.examId === exam.id);
+  const questions = examQuestionsFor(exam.id);
   const attempts = store.examAttempts.filter((item) => item.examId === exam.id);
   const latestAttempt = attempts.find((item) => item.userId === req.user!.id) || null;
   res.json({ exam: examWithRuntimeStats(exam), questions, latestAttempt, report: examReport() });
@@ -793,12 +878,18 @@ app.post("/api/exams", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
     title: z.string().min(1),
     category: z.string().min(1),
-    questionCount: z.number().int().positive().default(3),
+    questionIds: z.array(z.string()).min(1, "请至少选择 1 道题目"),
     durationMinutes: z.number().int().positive().default(20),
     passScore: z.number().int().min(1).max(100).default(80),
     targetRole: z.enum(["all", "sales", "manager"]).default("sales")
   });
   const body = schema.parse(req.body);
+  const uniqueQuestionIds = [...new Set(body.questionIds)];
+  const selectedQuestions = uniqueQuestionIds.map((id) => store.examQuestions.find((question) => question.id === id));
+  if (selectedQuestions.some((question) => !question)) {
+    res.status(400).json({ message: "包含不存在的题目，请刷新题库后重试" });
+    return;
+  }
   const now = new Date().toISOString();
   const exam: Exam = {
     id: `e_${Date.now()}`,
@@ -806,28 +897,17 @@ app.post("/api/exams", requireAuth, asyncRoute(async (req, res) => {
     category: body.category,
     status: "scheduled",
     passRate: 0,
-    questionCount: body.questionCount,
+    questionCount: uniqueQuestionIds.length,
     durationMinutes: body.durationMinutes,
     passScore: body.passScore,
     targetRole: body.targetRole,
     updatedAt: now
   };
-  const seedQuestions: ExamQuestion[] = Array.from({ length: Math.min(body.questionCount, 3) }).map((_, index) => ({
-    id: `q_${Date.now()}_${index}`,
-    examId: exam.id,
-    category: body.category,
-    stem: index === 0 ? `${body.category}考试：客户提出关键问题时，销售第一步应确认什么？` : index === 1 ? `${body.category}考试：资料或报价变化后需要同步维护到哪里？` : `${body.category}考试：客户要求特殊方案时，哪种处理方式最稳妥？`,
-    options: index === 0 ? ["客户真实用途、参数和决策节点", "直接发送最低价", "只问客户预算", "等待主管处理"] : index === 1 ? ["个人聊天记录", "资料库、报价模板和客户跟进口径", "不用同步", "只发给老客户"] : ["先承诺再核实", "拆解需求并让技术/供应链确认", "忽略特殊要求", "只发送产品图片"],
-    answerIndex: index === 0 ? 0 : 1,
-    explanation: "系统默认题用于快速创建考试，后续可在题库维护中替换为正式产品知识题。",
-    difficulty: index === 2 ? "hard" : "medium",
-    updatedAt: now
-  }));
   store.exams.unshift(exam);
-  store.examQuestions.unshift(...seedQuestions);
+  store.examQuestionLinks.unshift(...uniqueQuestionIds.map((questionId, index) => ({ examId: exam.id, questionId, sortOrder: index + 1 })));
   refreshExamStats(exam);
   await store.persist();
-  res.json({ exam: examWithRuntimeStats(exam), questions: seedQuestions });
+  res.json({ exam: examWithRuntimeStats(exam), questions: examQuestionsFor(exam.id), report: examReport() });
 }));
 
 app.post("/api/exams/:id/questions", requireAuth, asyncRoute(async (req, res) => {
@@ -837,15 +917,16 @@ app.post("/api/exams/:id/questions", requireAuth, asyncRoute(async (req, res) =>
     res.status(404).json({ message: "考试不存在" });
     return;
   }
-  const body = examQuestionSchema.parse(req.body);
+  const body = examQuestionSchema.parse({ ...req.body, category: req.body?.category || exam.category });
   let question: ExamQuestion;
   try {
-    question = buildExamQuestion(exam, body);
+    question = buildExamQuestion(body);
   } catch (error) {
     res.status(400).json({ message: "正确答案序号超出选项数量" });
     return;
   }
   store.examQuestions.unshift(question);
+  store.examQuestionLinks.push({ examId: exam.id, questionId: question.id, sortOrder: examQuestionsFor(exam.id).length + 1 });
   refreshExamStats(exam);
   await store.persist();
   res.json({ question, exam: examWithRuntimeStats(exam), report: examReport() });
@@ -858,20 +939,19 @@ app.post("/api/exams/:id/questions/import", requireAuth, asyncRoute(async (req, 
     res.status(404).json({ message: "考试不存在" });
     return;
   }
-  const schema = z.object({
-    questions: z.array(examQuestionSchema).min(1).max(300)
-  });
+  const schema = z.object({ questions: z.array(examQuestionSchema).min(1).max(300) });
   const body = schema.parse(req.body);
   const imported: ExamQuestion[] = [];
   for (const [index, item] of body.questions.entries()) {
     try {
-      imported.push(buildExamQuestion(exam, item, index));
+      imported.push(buildExamQuestion({ ...item, category: item.category || exam.category }, index));
     } catch (error) {
       res.status(400).json({ message: `第 ${index + 1} 行正确答案序号超出选项数量` });
       return;
     }
   }
   store.examQuestions.unshift(...imported);
+  store.examQuestionLinks.push(...imported.map((question, index) => ({ examId: exam.id, questionId: question.id, sortOrder: examQuestionsFor(exam.id).length + index + 1 })));
   refreshExamStats(exam);
   await store.persist();
   res.json({ importedCount: imported.length, questions: imported, exam: examWithRuntimeStats(exam), report: examReport() });
@@ -884,8 +964,8 @@ app.patch("/api/exams/:id/publish", requireAuth, asyncRoute(async (req, res) => 
     res.status(404).json({ message: "考试不存在" });
     return;
   }
-  if (!store.examQuestions.some((question) => question.examId === exam.id)) {
-    res.status(400).json({ message: "请先维护至少 1 道题目" });
+  if (!examQuestionsFor(exam.id).length) {
+    res.status(400).json({ message: "请先勾选至少 1 道题目组卷" });
     return;
   }
   exam.status = "published";
@@ -906,7 +986,7 @@ app.post("/api/exams/:id/submit", requireAuth, asyncRoute(async (req, res) => {
     score: z.number().min(0).max(100).optional()
   });
   const body = schema.parse(req.body);
-  const questions = store.examQuestions.filter((question) => question.examId === exam.id);
+  const questions = examQuestionsFor(exam.id);
   if (!questions.length) {
     res.status(400).json({ message: "当前考试暂无题目" });
     return;

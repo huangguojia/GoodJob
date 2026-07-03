@@ -94,17 +94,27 @@ CREATE TABLE exams (
 
 CREATE TABLE exam_questions (
   id VARCHAR(64) PRIMARY KEY,
-  exam_id VARCHAR(64) NOT NULL,
+  exam_id VARCHAR(64) DEFAULT 'bank',
   stem TEXT NOT NULL,
   options_json JSON,
   answer_index INT DEFAULT 0,
   answer_indexes_json JSON,
   question_type VARCHAR(20) DEFAULT 'single',
+  tags_json JSON,
   explanation TEXT,
   category VARCHAR(100),
   difficulty VARCHAR(20),
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_exam_questions_exam_id (exam_id)
+);
+
+CREATE TABLE exam_question_links (
+  exam_id VARCHAR(64) NOT NULL,
+  question_id VARCHAR(64) NOT NULL,
+  sort_order INT DEFAULT 0,
+  PRIMARY KEY (exam_id, question_id),
+  INDEX idx_exam_question_links_exam(exam_id),
+  INDEX idx_exam_question_links_question(question_id)
 );
 
 CREATE TABLE exam_attempts (

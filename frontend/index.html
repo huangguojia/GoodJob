@@ -2611,6 +2611,111 @@
       padding-right: 4px;
     }
 
+    .exam-create-grid,
+    .exam-bank-layout {
+      width: min(980px, calc(100vw - 72px));
+    }
+
+    .modal:has(.exam-bank-layout),
+    .modal:has(.exam-create-grid) {
+      width: min(1040px, calc(100vw - 40px));
+    }
+
+    .exam-bank-layout {
+      display: grid;
+      grid-template-columns: minmax(280px, .82fr) minmax(360px, 1.18fr);
+      gap: 12px;
+      align-items: start;
+    }
+
+    .exam-bank-editor,
+    .exam-bank-browser {
+      min-height: 0;
+    }
+
+    .exam-bank-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 9px;
+    }
+
+    .exam-bank-toolbar span {
+      margin-right: auto;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .exam-bank-toolbar b {
+      color: var(--brand);
+      font-size: 14px;
+    }
+
+    .exam-bank-toolbar select,
+    .exam-bank-toolbar input {
+      min-height: 30px;
+      border-radius: 9px;
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 6px 9px;
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .exam-bank-list {
+      display: grid;
+      gap: 8px;
+      max-height: min(52vh, 520px);
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .exam-bank-row {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 9px;
+      padding: 9px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #fbfcff;
+      cursor: pointer;
+      transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+    }
+
+    .exam-bank-row:hover {
+      transform: translateY(-1px);
+      border-color: rgba(49,87,213,.24);
+      box-shadow: 0 8px 18px rgba(27,39,68,.07);
+    }
+
+    .exam-bank-row b {
+      display: block;
+      color: var(--ink);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .exam-bank-row small {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .exam-bank-card {
+      box-shadow: none;
+    }
+
+    .exam-bank-card-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
     .progress-ring {
       width: 96px;
       height: 96px;
@@ -3871,6 +3976,9 @@
 
     .modal {
       width: min(520px, 100%);
+      max-height: calc(100vh - 40px);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: #fff;
@@ -3904,6 +4012,8 @@
       display: grid;
       gap: 10px;
       padding: 14px;
+      min-height: 0;
+      overflow: auto;
     }
 
     .form-grid {

@@ -23,6 +23,7 @@ function buildQuestionWorkbookBuffer() {
   const worksheet = XLSX.utils.json_to_sheet([
     {
       "题干": "Excel导入压力仪表：客户询价时第一步确认什么？",
+      "类目": "仪表产品",
       "选项A": "量程、精度、接口、介质和工况",
       "选项B": "客户名片颜色",
       "选项C": "包装偏好",
@@ -32,6 +33,7 @@ function buildQuestionWorkbookBuffer() {
     },
     {
       "题干": "Excel导入防爆仪表：需要优先确认什么？",
+      "类目": "仪表产品",
       "选项A": "防爆等级、认证体系和使用区域",
       "选项B": "是否需要彩盒",
       "选项C": "客户头像",
@@ -396,6 +398,7 @@ test.describe("GoodJob CRM prototype pages", () => {
   test("knowledge and exam pages keep their dense content and key actions", async ({ page }) => {
     const assetTitle = `自动化资料-${runId}`;
     const examTitle = `自动化考试-${runId}`;
+    const manualQuestion = `${examTitle} 中客户询价仪表时第一步确认什么？`;
     await openView(page, "knowledge");
     await expect(page.locator("#knowledge .knowledge-grid")).toBeVisible();
     await expect(page.locator("#knowledge .file-grid .file-card").first()).toBeVisible();
@@ -409,19 +412,18 @@ test.describe("GoodJob CRM prototype pages", () => {
 
     await openView(page, "exam");
     await expect(page.locator("#exam .exam-grid")).toBeVisible();
-    await page.locator("#exam .page-head .btn.primary").click();
-    await page.locator("#examTitleInput").fill(examTitle);
-    await page.locator("#saveExamButton").click();
-    await expect(page.locator("#exam .exam-sidebar .category-list")).toContainText(examTitle);
-    await page.locator("#exam .category-item", { hasText: examTitle }).first().getByRole("button", { name: "题库" }).click();
-    await page.locator("#questionStemInput").fill(`${examTitle} 中客户询价仪表时第一步确认什么？`);
-    await expect(page.locator(".question-option-input")).toHaveCount(4);
+    await page.locator("#exam .page-head .btn", { hasText: "题库维护" }).click();
+    await expect(page.locator("#modalTitle")).toContainText("基础题库维护");
+    await page.locator("#questionStemInput").fill(manualQuestion);
+    await page.locator("#questionCategoryInput").selectOption("仪表产品");
     await page.locator(".question-option-input").nth(3).fill("D选项：输出信号、供电和防护等级");
     await page.locator("#questionTypeInput").selectOption("multiple");
     await page.locator("#questionAnswerInput").fill("A,D");
+    await page.locator("#questionTagsInput").fill(`仪表,自动化,${runId}`);
     await page.locator("#saveQuestionButton").click();
-    await expect(page.locator(".toast").last()).toContainText("题目已加入题库");
-    await page.locator("#exam .category-item", { hasText: examTitle }).first().getByRole("button", { name: "题库" }).click();
+    await expect(page.locator(".toast").last()).toContainText("题目已加入基础题库");
+    await expect(page.locator("#questionBankList")).toContainText(manualQuestion);
+
     await page.locator("#questionImportInput").setInputFiles({
       name: `exam-bank-${runId}.xlsx`,
       mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -429,8 +431,25 @@ test.describe("GoodJob CRM prototype pages", () => {
     });
     await page.locator("#importQuestionButton").click();
     await expect(page.locator(".toast").last()).toContainText("题库导入成功：2 道题");
-    await expect(page.locator("#exam .exam-paper")).toContainText("Excel导入压力仪表");
+    await expect(page.locator("#questionBankList")).toContainText("Excel导入压力仪表");
+    await page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#questionBankList .exam-bank-card", { hasText: "Excel导入压力仪表" }).first().locator("[data-delete-bank-question]").click();
+    await expect(page.locator(".toast").last()).toContainText("题目已删除");
+    await page.locator("#exportQuestionButton").click();
+    await expect(page.locator(".toast").last()).toContainText("题库已导出");
+    await page.locator("#appModal [data-modal-close]").first().click();
+
+    await page.locator("#exam .page-head .btn.primary").click();
+    await page.locator("#examTitleInput").fill(examTitle);
+    await page.locator("#examCategoryInput").selectOption("仪表产品");
+    await page.locator("#selectCategoryQuestionsButton").click();
+    await expect(page.locator("#examCreateSelectionSummary")).toContainText(/已选 [1-9]/);
+    await page.locator("#saveExamButton").click();
+    await expect(page.locator(".toast").last()).toContainText("考试已创建，已组卷");
+    await expect(page.locator("#exam .exam-sidebar .category-list")).toContainText(examTitle);
+    await expect(page.locator("#exam .exam-paper")).toContainText(/Excel导入防爆仪表|客户询价仪表/);
     await expect(page.locator("#exam .exam-paper")).toContainText("多选");
+
     page.once("dialog", (dialog) => dialog.accept());
     await page.locator("#exam .category-item", { hasText: examTitle }).first().getByRole("button", { name: "发布" }).click();
     await expect(page.locator(".toast").last()).toContainText("考试已发布");
@@ -438,6 +457,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#categoryExamInput").selectOption("仪表产品");
     await page.locator("#categoryExamTitleInput").fill(`专项-${runId}`);
     await page.locator("#createCategoryExamButton").click();
+    await page.locator("#selectCategoryQuestionsButton").click();
     await page.locator("#saveExamButton").click();
     await expect(page.locator("#exam .exam-sidebar .category-list")).toContainText(`仪表产品专项-${runId}`);
     await openView(page, "dashboard");
@@ -447,7 +467,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await openView(page, "exam");
     await page.locator("#exam .category-item", { hasText: examTitle }).first().getByRole("button", { name: "考试" }).click();
     const questionCount = await page.locator("#appModal [data-question]").count();
-    expect(questionCount).toBeGreaterThanOrEqual(3);
+    expect(questionCount).toBeGreaterThanOrEqual(1);
     for (let index = 0; index < questionCount; index += 1) {
       const correctOptions = page.locator("#appModal [data-question]").nth(index).locator("[data-correct='true']");
       const correctCount = await correctOptions.count();
