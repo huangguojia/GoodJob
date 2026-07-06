@@ -5330,13 +5330,21 @@
         <div class="view" id="imports">
           <div class="page-head">
             <div><p class="eyebrow">Data Operations</p><h1>导入导出</h1><p class="sub">导入降低迁移门槛，导出必须有权限、审批、水印和审计。</p></div>
-            <button class="btn primary">上传 Excel</button>
+            <div class="head-actions"><button class="btn" id="downloadCustomerTemplateButton">下载模板</button><button class="btn" id="exportCustomersButton">导出客户</button><button class="btn primary" id="chooseCustomerImportButton">选择文件</button></div>
           </div>
+          <input id="customerImportInput" type="file" accept=".xlsx,.xls,.csv" hidden>
           <div class="steps">
             <div class="step"><div class="step-num">1</div><b>上传文件</b><p>支持 CSV、XLSX，自动识别邮箱、电话、国家与公司域名。</p></div>
             <div class="step"><div class="step-num">2</div><b>字段映射</b><p>将 Excel 字段映射到客户、联系人、商机和标签。</p></div>
             <div class="step"><div class="step-num">3</div><b>去重预览</b><p>按公司名、邮箱域名、电话组合去重，冲突行单独处理。</p></div>
             <div class="step"><div class="step-num">4</div><b>执行与审计</b><p>错误行可下载修正，成功后写入操作审计。</p></div>
+          </div>
+          <div class="panel section">
+            <div class="section-head">
+              <div><h2>客户导入导出</h2><span class="subline">导入按公司名去重更新，导出当前账号可见客户。</span></div>
+              <button class="btn primary" id="runCustomerImportButton">导入客户</button>
+            </div>
+            <div class="sync-row"><span>当前文件</span><b id="customerImportFileName">未选择文件</b><small>支持表头：公司名、国家、联系人、阶段、预计金额、健康度、下一提醒、企微绑定</small></div>
           </div>
           <div class="panel section">
             <div class="table-wrap">

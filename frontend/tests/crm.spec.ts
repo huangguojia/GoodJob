@@ -49,6 +49,24 @@ function buildQuestionWorkbookBuffer() {
   return Buffer.from(XLSX.write(workbook, { bookType: "xlsx", type: "buffer" }));
 }
 
+function buildCustomerWorkbookBuffer(company: string) {
+  const worksheet = XLSX.utils.json_to_sheet([
+    {
+      "公司名": company,
+      "国家": "德国",
+      "联系人": "Import Buyer",
+      "阶段": "询盘",
+      "预计金额": 23000,
+      "健康度": 74,
+      "下一提醒": "明天 11:00",
+      "企微绑定": "已绑定"
+    }
+  ]);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "客户导入");
+  return Buffer.from(XLSX.write(workbook, { bookType: "xlsx", type: "buffer" }));
+}
+
 test.describe("GoodJob CRM prototype pages", () => {
   let runId: string;
 
@@ -449,6 +467,7 @@ test.describe("GoodJob CRM prototype pages", () => {
 
   test("reminders and import export modules perform real actions", async ({ page }) => {
     const reminderTitle = `自动化提醒-${runId}`;
+    const importedCustomer = `Excel导入客户-${runId}`;
     await openView(page, "reminders");
     await page.locator("#reminders .page-head .btn.primary").click();
     await page.locator("#reminderTitleInput").fill(reminderTitle);
@@ -459,8 +478,23 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator(".toast").last()).toContainText("提醒已完成");
 
     await openView(page, "imports");
-    await page.locator("#imports .page-head .btn.primary").click();
-    await expect(page.locator("#imports tbody")).toContainText("手工导入客户");
+    await page.locator("#customerImportInput").setInputFiles({
+      name: `customers-${runId}.xlsx`,
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      buffer: buildCustomerWorkbookBuffer(importedCustomer)
+    });
+    await expect(page.locator("#customerImportFileName")).toContainText(`customers-${runId}.xlsx`);
+    await page.locator("#runCustomerImportButton").click();
+    await expect(page.locator(".toast").last()).toContainText("导入完成");
+    await expect(page.locator("#imports tbody")).toContainText("客户导入");
+    await openView(page, "customers");
+    await expect(page.locator("#customers tbody")).toContainText(importedCustomer);
+    await openView(page, "imports");
+    const downloadPromise = page.waitForEvent("download");
+    await page.locator("#exportCustomersButton").click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toContain("GoodJob客户清单");
+    await expect(page.locator("#imports tbody")).toContainText("客户清单导出");
   });
 
   test("knowledge and exam pages keep their dense content and key actions", async ({ page }) => {

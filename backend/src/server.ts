@@ -1218,6 +1218,90 @@ app.post("/api/import-export/jobs", requireAuth, asyncRoute(async (req, res) => 
   res.json({ job });
 }));
 
+app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (req, res) => {
+  const rowSchema = z.object({
+    company: z.string().trim().min(1),
+    country: z.string().trim().optional().default("未知"),
+    contact: z.string().trim().optional().default("待维护"),
+    stage: z.string().trim().optional().default("询盘"),
+    amount: z.number().nonnegative().optional().default(0),
+    health: z.number().int().min(0).max(100).optional().default(70),
+    nextReminder: z.string().trim().optional().default("待跟进"),
+    wecomBound: z.boolean().optional().default(false)
+  });
+  const schema = z.object({ rows: z.array(rowSchema).min(1).max(2000), fileName: z.string().optional().default("客户导入") });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const scopedCustomers = store.customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
+  let created = 0;
+  let updated = 0;
+  const imported: Customer[] = [];
+  for (const row of body.rows) {
+    const existing = scopedCustomers.find((customer) => customer.company.trim().toLowerCase() === row.company.trim().toLowerCase());
+    if (existing) {
+      Object.assign(existing, {
+        country: row.country || existing.country,
+        contact: row.contact || existing.contact,
+        stage: row.stage || existing.stage,
+        amount: row.amount,
+        health: row.health,
+        nextReminder: row.nextReminder || existing.nextReminder,
+        wecomBound: row.wecomBound
+      });
+      imported.push(existing);
+      updated += 1;
+    } else {
+      const customer: Customer = {
+        id: `c_import_${Date.now()}_${created}_${Math.random().toString(16).slice(2, 8)}`,
+        company: row.company,
+        country: row.country || "未知",
+        contact: row.contact || "待维护",
+        ownerId: req.user!.id,
+        teamId: req.user!.teamId,
+        stage: row.stage || "询盘",
+        amount: row.amount,
+        health: row.health,
+        nextReminder: row.nextReminder || "待跟进",
+        wecomBound: row.wecomBound
+      };
+      store.customers.unshift(customer);
+      scopedCustomers.push(customer);
+      imported.push(customer);
+      created += 1;
+    }
+  }
+  const job = {
+    id: `io_customer_import_${Date.now()}`,
+    name: `客户导入：${body.fileName}`,
+    type: "import" as const,
+    rows: body.rows.length,
+    status: "done" as const,
+    operatorId: req.user!.id,
+    createdAt: currentMinuteText()
+  };
+  store.importExportJobs.unshift(job);
+  await store.persist();
+  const customers = store.customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
+  res.json({ result: { created, updated, skipped: 0, total: body.rows.length }, job, customers, imported });
+}));
+
+app.post("/api/import-export/customers/export", requireAuth, asyncRoute(async (_req, res) => {
+  const store = getStore();
+  const customers = store.customers.filter((customer) => canSeeOwner(_req.user!, customer.ownerId, customer.teamId));
+  const job = {
+    id: `io_customer_export_${Date.now()}`,
+    name: "客户清单导出",
+    type: "export" as const,
+    rows: customers.length,
+    status: "done" as const,
+    operatorId: _req.user!.id,
+    createdAt: currentMinuteText()
+  };
+  store.importExportJobs.unshift(job);
+  await store.persist();
+  res.json({ customers, job });
+}));
+
 app.get("/api/wecom/messages", requireAuth, (req, res) => {
   const { wecomMessages } = getStore();
   const scoped = wecomMessages.filter((message) => canSeeOwner(req.user!, message.ownerId, message.teamId));

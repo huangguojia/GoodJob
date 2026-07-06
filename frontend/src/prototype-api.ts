@@ -67,6 +67,17 @@ interface ImportExportJob {
   createdAt: string;
 }
 
+interface CustomerImportRow {
+  company: string;
+  country: string;
+  contact: string;
+  stage: string;
+  amount: number;
+  health: number;
+  nextReminder: string;
+  wecomBound: boolean;
+}
+
 interface KnowledgeAsset {
   id: string;
   title: string;
@@ -2222,21 +2233,112 @@ async function publishSelectedCase() {
 function renderJobs(jobs: ImportExportJob[]) {
   const tbody = qs<HTMLElement>("#imports tbody");
   if (!tbody) return;
-  tbody.innerHTML = jobs.map((job) => `<tr><td>${escapeHtml(job.name)}</td><td>${job.type === "import" ? "导入" : "导出"}</td><td>${job.rows.toLocaleString("en-US")} 行</td><td>${badge(job.status === "done" ? "完成" : "待审批", job.status === "done" ? "green" : "amber")}</td><td>当前账号</td><td>${escapeHtml(job.createdAt)}</td></tr>`).join("");
+  tbody.innerHTML = jobs.length ? jobs.map((job) => `<tr><td>${escapeHtml(job.name)}</td><td>${job.type === "import" ? "导入" : "导出"}</td><td>${job.rows.toLocaleString("en-US")} 行</td><td>${badge(job.status === "done" ? "完成" : job.status === "failed" ? "失败" : "待审批", job.status === "done" ? "green" : job.status === "failed" ? "red" : "amber")}</td><td>当前账号</td><td>${escapeHtml(job.createdAt)}</td></tr>`).join("") : `<tr><td colspan="6" class="empty-cell">暂无导入导出任务</td></tr>`;
 }
 
-async function createJob(type: "import" | "export") {
-  const result = await api<{ job: ImportExportJob }>("/api/import-export/jobs", {
-    method: "POST",
-    body: JSON.stringify({
-      name: type === "import" ? "手工导入客户" : "客户清单导出",
-      type,
-      rows: type === "import" ? 25 : state.customers.length
-    })
-  });
-  state.jobs.unshift(result.job);
-  renderJobs(state.jobs);
-  toast(type === "import" ? "导入任务已创建" : "导出任务已提交审批");
+function parseNumberCell(value: unknown, fallback = 0) {
+  const text = String(value ?? "").replace(/[,$￥¥\s]/g, "");
+  const number = Number(text);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function parseBooleanCell(value: unknown) {
+  const text = String(value ?? "").trim().toLowerCase();
+  return ["true", "1", "yes", "y", "是", "已绑定", "绑定"].includes(text);
+}
+
+async function parseCustomerImportFile(file: File): Promise<CustomerImportRow[]> {
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: "array" });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+  return rows.map((row) => {
+    const company = String(rowValue(row, ["公司名", "客户", "客户名称", "公司", "客户公司", "company", "Company"])).trim();
+    return {
+      company,
+      country: String(rowValue(row, ["国家", "市场", "country", "Country"]) || "未知").trim(),
+      contact: String(rowValue(row, ["联系人", "联系人姓名", "contact", "Contact"]) || "待维护").trim(),
+      stage: String(rowValue(row, ["阶段", "客户阶段", "stage", "Stage"]) || "询盘").trim(),
+      amount: parseNumberCell(rowValue(row, ["预计金额", "金额", "商机金额", "amount", "Amount"])),
+      health: Math.max(0, Math.min(100, Math.round(parseNumberCell(rowValue(row, ["健康度", "评分", "health", "Health"]), 70)))),
+      nextReminder: String(rowValue(row, ["下一提醒", "提醒", "下次跟进", "nextReminder", "Next Reminder"]) || "待跟进").trim(),
+      wecomBound: parseBooleanCell(rowValue(row, ["企微绑定", "企业微信", "企微", "wecomBound", "WeCom"]))
+    };
+  }).filter((row) => row.company);
+}
+
+async function importCustomersFromFile(button?: HTMLButtonElement) {
+  const input = qs<HTMLInputElement>("#customerImportInput");
+  const file = input?.files?.[0];
+  if (!file) {
+    toast("请先选择 Excel 或 CSV 客户文件", "error");
+    return;
+  }
+  try {
+    if (button) {
+      button.disabled = true;
+      button.textContent = "导入中";
+    }
+    const rows = await parseCustomerImportFile(file);
+    if (!rows.length) {
+      toast("未识别到有效客户，请检查公司名表头", "error");
+      return;
+    }
+    const result = await api<{ result: { created: number; updated: number; skipped: number; total: number }; job: ImportExportJob; customers: Customer[] }>("/api/import-export/customers/import", {
+      method: "POST",
+      body: JSON.stringify({ fileName: file.name, rows })
+    });
+    state.customers = result.customers;
+    state.jobs.unshift(result.job);
+    state.selectedCustomerId = result.customers[0]?.id || state.selectedCustomerId;
+    renderCustomers(state.customers);
+    renderJobs(state.jobs);
+    renderTopbarStats();
+    void refreshDashboardOnly();
+    toast(`导入完成：新增 ${result.result.created}，更新 ${result.result.updated}，共 ${result.result.total} 行`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "客户导入失败", "error");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "导入客户";
+    }
+  }
+}
+
+async function exportCustomers() {
+  try {
+    const result = await api<{ customers: Customer[]; job: ImportExportJob }>("/api/import-export/customers/export", { method: "POST" });
+    const rows = result.customers.map((customer) => ({
+      公司名: customer.company,
+      国家: customer.country,
+      联系人: customer.contact,
+      阶段: customer.stage,
+      预计金额: customer.amount,
+      健康度: customer.health,
+      下一提醒: customer.nextReminder,
+      企微绑定: customer.wecomBound ? "已绑定" : "未绑定"
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "客户清单");
+    XLSX.writeFile(workbook, `GoodJob客户清单-${Date.now()}.xlsx`);
+    state.jobs.unshift(result.job);
+    renderJobs(state.jobs);
+    toast(`客户已导出：${rows.length} 行`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "客户导出失败", "error");
+  }
+}
+
+function downloadCustomerTemplate() {
+  const worksheet = XLSX.utils.json_to_sheet([
+    { 公司名: "Demo Instrument Trading Co., Ltd.", 国家: "德国", 联系人: "Demo Contact", 阶段: "询盘", 预计金额: 12000, 健康度: 70, 下一提醒: "明天 10:00", 企微绑定: "未绑定" }
+  ]);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "客户导入模板");
+  XLSX.writeFile(workbook, "GoodJob客户导入模板.xlsx");
+  toast("客户导入模板已下载");
 }
 
 function renderWecom(messages: WecomMessage[]) {
@@ -3907,7 +4009,15 @@ function installEvents() {
   });
   qs<HTMLButtonElement>("#pipeline .page-head .btn.primary")?.addEventListener("click", openDealModal);
   qs<HTMLButtonElement>("#reminders .page-head .btn.primary")?.addEventListener("click", openReminderModal);
-  qs<HTMLButtonElement>("#imports .page-head .btn.primary")?.addEventListener("click", () => void createJob("import"));
+  qs<HTMLButtonElement>("#chooseCustomerImportButton")?.addEventListener("click", () => qs<HTMLInputElement>("#customerImportInput")?.click());
+  qs<HTMLInputElement>("#customerImportInput")?.addEventListener("change", (event) => {
+    const fileName = (event.currentTarget as HTMLInputElement).files?.[0]?.name || "未选择文件";
+    const label = qs<HTMLElement>("#customerImportFileName");
+    if (label) label.textContent = fileName;
+  });
+  qs<HTMLButtonElement>("#runCustomerImportButton")?.addEventListener("click", (event) => void importCustomersFromFile(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#downloadCustomerTemplateButton")?.addEventListener("click", downloadCustomerTemplate);
+  qs<HTMLButtonElement>("#exportCustomersButton")?.addEventListener("click", () => void exportCustomers());
   qsa<HTMLButtonElement>("#reports .page-head .btn").forEach((button) => {
     if (button.textContent?.includes("导出")) button.addEventListener("click", () => void exportReport());
     if (button.textContent?.includes("切换月份")) button.addEventListener("click", () => toast("已切换到 2026 年 6 月经营汇报"));
@@ -3958,11 +4068,11 @@ function installEvents() {
   });
   qs<HTMLButtonElement>("#topImportButton")?.addEventListener("click", () => {
     const view = qs<HTMLElement>(".view.active")?.id;
-    if (view === "customers") activateNavView("imports", () => void createJob("import"));
+    if (view === "customers") activateNavView("imports", () => qs<HTMLInputElement>("#customerImportInput")?.click());
   });
   qs<HTMLButtonElement>("#topExportButton")?.addEventListener("click", () => {
     const view = qs<HTMLElement>(".view.active")?.id;
-    if (view === "customers") activateNavView("imports", () => void createJob("export"));
+    if (view === "customers") activateNavView("imports", () => void exportCustomers());
   });
   qsa<HTMLButtonElement>("[data-top-view]").forEach((button) => {
     button.addEventListener("click", () => activateNavView(button.dataset.topView || "dashboard"));

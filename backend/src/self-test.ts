@@ -287,12 +287,23 @@ try {
   });
   if (!publishedCase.response.ok || publishedCase.json.caseStudy.status !== "published") throw new Error("case study publish failed");
 
-		  const job = await request("/api/import-export/jobs", {
+  const customerImport = await request("/api/import-export/customers/import", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ name: "测试导入", type: "import", rows: 3 })
+    body: JSON.stringify({
+      fileName: "self-test-customers.xlsx",
+      rows: [
+        { company: `自动化导入客户-${Date.now()}`, country: "德国", contact: "Import Buyer", stage: "询盘", amount: 19000, health: 76, nextReminder: "明天 10:00", wecomBound: true },
+        { company: "Nordic Tools AB", country: "瑞典", contact: "Emma Import", stage: "已报价", amount: 36000, health: 68, nextReminder: "今天 18:00", wecomBound: true }
+      ]
+    })
   });
-  if (!job.response.ok || job.json.job.name !== "测试导入") throw new Error("import job create failed");
+  if (!customerImport.response.ok || customerImport.json.result.created !== 1 || customerImport.json.result.updated !== 1) throw new Error("customer import failed");
+  const customerExport = await request("/api/import-export/customers/export", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!customerExport.response.ok || !Array.isArray(customerExport.json.customers) || customerExport.json.customers.length < 1) throw new Error("customer export failed");
 
   const examDetail = await request("/api/exams/e1/detail", {
     headers: { authorization: `Bearer ${salesToken}` }
@@ -478,7 +489,8 @@ try {
     competitorThreat: competitorThreat.json.competitor.threatLevel,
     casePublished: publishedCase.json.caseStudy.status,
     aiConfigMasked: aiConfigRead.json.config.apiKey,
-		    importJob: job.json.job.name,
+    importJob: customerImport.json.job.name,
+    exportRows: customerExport.json.customers.length,
     examPassed: exam.json.attempt.passed,
     examCreated: createdExam.json.exam.title,
     examPublished: publishedExam.json.exam.status,
