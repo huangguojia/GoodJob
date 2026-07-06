@@ -1690,7 +1690,7 @@ async function printDealDocument(id: string) {
   renderTradeDocuments(state.tradeDocuments);
   renderJobs(state.jobs);
   toast(`已按客户资料生成并打印：${exported.fileName}`);
-  window.print();
+  printDocumentPreview();
 }
 
 async function moveDeal(id: string) {
@@ -2860,7 +2860,27 @@ async function exportTradeDocumentPdf() {
   renderTradeDocuments(state.tradeDocuments);
   renderJobs(state.jobs);
   toast(`已生成 PDF 导出任务：${result.fileName}`);
+  printDocumentPreview();
+}
+
+function printDocumentPreview() {
+  const preview = qs<HTMLElement>("#documentPreview");
+  if (!preview) {
+    window.print();
+    return;
+  }
+  qs<HTMLElement>(".print-only-document")?.remove();
+  const clone = preview.cloneNode(true) as HTMLElement;
+  clone.removeAttribute("id");
+  clone.className = `${preview.className} print-only-document`;
+  document.body.appendChild(clone);
+  const cleanup = () => {
+    clone.remove();
+    window.removeEventListener("afterprint", cleanup);
+  };
+  window.addEventListener("afterprint", cleanup);
   window.print();
+  window.setTimeout(cleanup, 30000);
 }
 
 function parseNumberCell(value: unknown, fallback = 0) {

@@ -1758,18 +1758,160 @@
       font-weight: 900;
     }
 
+    .print-only-document {
+      display: none;
+    }
+
     @media print {
-      body * { visibility: hidden; }
-      #documentPreview, #documentPreview * { visibility: visible; }
-      #documentPreview {
-        position: absolute;
-        left: 0;
-        top: 0;
-        width: 210mm;
-        min-height: 297mm;
-        border: 0;
-        box-shadow: none;
-        border-radius: 0;
+      @page { size: A4; margin: 0; }
+
+      html,
+      body {
+        width: 210mm !important;
+        height: 297mm !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+        background: #fff !important;
+      }
+
+      body > :not(.print-only-document) {
+        display: none !important;
+      }
+
+      .print-only-document.doc-paper {
+        display: block !important;
+        width: 210mm !important;
+        height: 297mm !important;
+        min-height: 0 !important;
+        max-height: 297mm !important;
+        margin: 0 !important;
+        padding: 9mm 10mm !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        overflow: hidden !important;
+        color: #111827 !important;
+        background: #fff !important;
+        font-size: 9px !important;
+        line-height: 1.25 !important;
+      }
+
+      .print-only-document .doc-print-head {
+        gap: 9mm !important;
+        padding-bottom: 5mm !important;
+        border-bottom-width: 1.5px !important;
+      }
+
+      .print-only-document .doc-logo-mark {
+        width: 9mm !important;
+        height: 9mm !important;
+        border-radius: 2mm !important;
+        font-size: 10px !important;
+      }
+
+      .print-only-document .doc-letterhead {
+        grid-template-columns: 9mm minmax(0, 1fr) !important;
+        gap: 3mm !important;
+      }
+
+      .print-only-document .doc-letterhead b {
+        font-size: 13px !important;
+      }
+
+      .print-only-document .doc-letterhead small,
+      .print-only-document .doc-title-band p {
+        font-size: 8px !important;
+        line-height: 1.35 !important;
+      }
+
+      .print-only-document .doc-number-box {
+        width: 48mm !important;
+        padding: 3mm !important;
+        border-radius: 2mm !important;
+      }
+
+      .print-only-document .doc-title-band {
+        margin-top: 5mm !important;
+        padding-top: 0 !important;
+      }
+
+      .print-only-document .doc-title-band h2 {
+        margin-bottom: 1.5mm !important;
+        font-size: 20px !important;
+        line-height: 1 !important;
+      }
+
+      .print-only-document .doc-print-grid {
+        gap: 3mm !important;
+        margin: 4mm 0 !important;
+      }
+
+      .print-only-document .doc-block {
+        padding: 2.5mm !important;
+        border-radius: 2mm !important;
+      }
+
+      .print-only-document .doc-block h3 {
+        margin-bottom: 1.5mm !important;
+        font-size: 9px !important;
+      }
+
+      .print-only-document .doc-print-head p,
+      .print-only-document .doc-block p,
+      .print-only-document .doc-sign p {
+        margin: .8mm 0 !important;
+        line-height: 1.25 !important;
+      }
+
+      .print-only-document .doc-terms {
+        gap: 2mm !important;
+        margin-bottom: 3mm !important;
+      }
+
+      .print-only-document .doc-term {
+        padding: 2mm !important;
+        border-radius: 2mm !important;
+      }
+
+      .print-only-document .doc-term span {
+        margin-bottom: 1mm !important;
+        font-size: 7px !important;
+      }
+
+      .print-only-document .doc-term b {
+        font-size: 8px !important;
+      }
+
+      .print-only-document table {
+        margin: 3mm 0 !important;
+      }
+
+      .print-only-document th,
+      .print-only-document td {
+        padding: 1.4mm 1mm !important;
+        font-size: 8px !important;
+        line-height: 1.18 !important;
+      }
+
+      .print-only-document th {
+        font-size: 7.5px !important;
+      }
+
+      .print-only-document .doc-total {
+        gap: 5mm !important;
+        margin-top: 2.5mm !important;
+        font-size: 10px !important;
+      }
+
+      .print-only-document .doc-sign {
+        gap: 4mm !important;
+        margin-top: 4mm !important;
+      }
+
+      .print-only-document .doc-stamp {
+        min-height: 18mm !important;
+        font-size: 10px !important;
       }
     }
 
