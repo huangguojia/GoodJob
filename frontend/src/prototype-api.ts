@@ -1597,7 +1597,7 @@ function renderPipeline(deals: Deal[]) {
       const product = deal.product?.trim() || "产品待维护";
       const quantity = Number(deal.quantity || 0);
       const unitPrice = Number(deal.unitPrice || 0);
-      return `<div class="deal" data-deal-id="${escapeHtml(deal.id)}"><b>${escapeHtml(deal.title)}</b><span class="deal-product">${escapeHtml(product)} · ${quantity || "-"} 件 × ${money(unitPrice)}</span><span>${escapeHtml(deal.nextAction)}</span><div class="deal-foot"><span>${money(deal.amount)}</span>${badge(deal.stage, isWon ? "green" : deal.stage === "已报价" ? "red" : "")}</div><div class="deal-actions"><button class="btn" data-edit-deal>编辑</button><button class="btn primary" data-print-deal-pi>打印PI</button>${isWon ? `<button class="btn" data-archive-deal>归档</button>` : `<button class="btn danger" data-lost-deal>丢单</button><button class="btn" data-move-deal>推进阶段</button>`}</div></div>`;
+      return `<div class="deal" data-deal-id="${escapeHtml(deal.id)}"><b>${escapeHtml(deal.title)}</b><span class="deal-product">${escapeHtml(product)} · ${quantity || "-"} 件 × ${money(unitPrice)}</span><span>${escapeHtml(deal.nextAction)}</span><div class="deal-foot"><span>${money(deal.amount)}</span>${badge(deal.stage, isWon ? "green" : deal.stage === "已报价" ? "red" : "")}</div><div class="deal-actions"><button class="btn" data-edit-deal>编辑</button><button class="btn primary" data-print-deal-document>${isWon ? "打印CI" : "打印PI"}</button>${isWon ? `<button class="btn" data-archive-deal>归档</button>` : `<button class="btn danger" data-lost-deal>丢单</button><button class="btn" data-move-deal>推进阶段</button>`}</div></div>`;
     }).join("") || `<div class="deal"><b>暂无商机</b><span>等待新线索进入</span><div class="deal-foot"><span>$0k</span><span>空</span></div></div>`}</div>`;
   }).join("");
   qsa<HTMLButtonElement>("[data-edit-deal]", strip).forEach((button) => {
@@ -1607,8 +1607,8 @@ function renderPipeline(deals: Deal[]) {
       if (deal) openDealModal(deal);
     });
   });
-  qsa<HTMLButtonElement>("[data-print-deal-pi]", strip).forEach((button) => {
-    button.addEventListener("click", () => void printDealPi(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
+  qsa<HTMLButtonElement>("[data-print-deal-document]", strip).forEach((button) => {
+    button.addEventListener("click", () => void printDealDocument(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
   });
   qsa<HTMLButtonElement>("[data-move-deal]", strip).forEach((button) => {
     button.addEventListener("click", () => void moveDeal(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
@@ -1623,7 +1623,7 @@ function renderPipeline(deals: Deal[]) {
 }
 
 function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
-  const type = "PI" as const;
+  const type: "PI" | "CI" = deal.stage === "成交" ? "CI" : "PI";
   const date = todayDateInput();
   const quantity = Math.max(1, Math.round(Number(deal.quantity || 0)));
   const unitPrice = Number(deal.unitPrice || 0) || Number(deal.amount || 0) / quantity;
@@ -1631,7 +1631,7 @@ function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
   return {
     id: "__new__",
     type,
-    title: `${customer.company} ${product} PI`,
+    title: `${customer.company} ${product} ${type}`,
     number: `${type}-${date.replace(/-/g, "")}-${Math.floor(Date.now() / 1000).toString().slice(-4)}`,
     issueDate: date,
     buyer: customer.billingName?.trim() || customer.company,
@@ -1666,7 +1666,7 @@ function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
   };
 }
 
-async function printDealPi(id: string) {
+async function printDealDocument(id: string) {
   const deal = state.deals.find((item) => item.id === id);
   if (!deal) return;
   const customer = state.customers.find((item) => item.id === deal.customerId);

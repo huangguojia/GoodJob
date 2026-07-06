@@ -476,6 +476,12 @@ test.describe("GoodJob CRM prototype pages", () => {
       await page.locator("#pipeline .deal", { hasText: dealTitle }).first().getByRole("button", { name: "推进阶段" }).click();
     }
     await expect(page.locator("#pipeline .deal", { hasText: dealTitle }).first()).toContainText("成交");
+    await expect(page.locator("#pipeline .deal", { hasText: dealTitle }).first().getByRole("button", { name: "打印CI" })).toBeVisible();
+    await page.locator("#pipeline .deal", { hasText: dealTitle }).first().getByRole("button", { name: "打印CI" }).click();
+    await expect(page.locator("#documents")).toHaveClass(/active/);
+    await expect(page.locator("#documentPreview")).toContainText("COMMERCIAL INVOICE");
+    await expect(page.locator("#documentPreview")).toContainText(`Nordic Print Buyer ${runId}`);
+    await openView(page, "pipeline");
     await page.locator("#pipeline .deal", { hasText: dealTitle }).first().getByRole("button", { name: "归档" }).click();
     await expect(page.locator(".toast").last()).toContainText("商机已归档");
     await expect(page.locator("#pipeline .pipeline-strip")).not.toContainText(dealTitle);
