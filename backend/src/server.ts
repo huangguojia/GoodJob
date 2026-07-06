@@ -419,7 +419,7 @@ app.get("/api/deals", requireAuth, (req, res) => {
 
 app.post("/api/deals", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
-    customerId: z.string().min(1),
+    customerId: z.string().optional().default(""),
     title: z.string().min(1),
     stage: z.enum(["询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"]).default("询盘"),
     amount: z.number().int().nonnegative().default(0),
@@ -427,19 +427,20 @@ app.post("/api/deals", requireAuth, asyncRoute(async (req, res) => {
   });
   const body = schema.parse(req.body);
   const store = getStore();
-  const customer = store.customers.find((item) => item.id === body.customerId);
-  if (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId)) {
+  const customerId = body.customerId.trim();
+  const customer = customerId ? store.customers.find((item) => item.id === customerId) : undefined;
+  if (customerId && (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId))) {
     res.status(404).json({ message: "客户不存在" });
     return;
   }
   const deal = {
     id: `d_${Date.now()}`,
-    customerId: customer.id,
+    customerId: customer?.id || "",
     title: body.title,
     stage: body.stage,
     amount: body.amount,
-    ownerId: customer.ownerId,
-    teamId: customer.teamId,
+    ownerId: customer?.ownerId || req.user!.id,
+    teamId: customer?.teamId || req.user!.teamId,
     nextAction: body.nextAction
   };
   store.deals.unshift(deal);

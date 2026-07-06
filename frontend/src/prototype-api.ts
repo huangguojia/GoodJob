@@ -41,6 +41,7 @@ interface Todo {
 
 interface Deal {
   id: string;
+  customerId?: string;
   title: string;
   stage: string;
   amount: number;
@@ -1473,29 +1474,114 @@ async function moveDeal(id: string) {
 }
 
 function openDealModal() {
+  const defaultCustomer = state.customers[0];
   openModal("新增商机", `
     <div class="form-grid">
-      <div class="form-field full"><label>商机名称</label><input id="dealTitleInput" value="${escapeHtml(state.customers[0]?.company || "新客户")} 采购机会"></div>
-      <div class="form-field"><label>关联客户</label><select id="dealCustomerInput">${state.customers.map((customer) => `<option value="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</option>`).join("")}</select></div>
+      <div class="form-field full"><label>商机名称</label><input id="dealTitleInput" value="${escapeHtml(defaultCustomer?.company || "新客户")} 采购机会"></div>
+      <div class="form-field deal-customer-field">
+        <label>关联客户</label>
+        <input id="dealCustomerInput" value="${escapeHtml(defaultCustomer?.company || "")}" placeholder="输入客户名称过滤，留空则不关联" autocomplete="off">
+        <input id="dealCustomerIdInput" type="hidden" value="${escapeHtml(defaultCustomer?.id || "")}">
+        <button class="deal-customer-clear" id="clearDealCustomerButton" type="button" title="清空关联客户">×</button>
+        <div class="deal-customer-options" id="dealCustomerOptions"></div>
+      </div>
       <div class="form-field"><label>阶段</label><select id="dealStageInput"><option>询盘</option><option>已联系</option><option>已报价</option><option>样品</option><option>谈判</option></select></div>
       <div class="form-field"><label>金额</label><input id="dealAmountInput" type="number" value="18000"></div>
       <div class="form-field full"><label>下一步动作</label><input id="dealNextActionInput" value="确认采购清单并安排报价"></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDealButton">保存商机</button>`);
+  bindDealCustomerPicker();
   qs("#saveDealButton")?.addEventListener("click", () => void saveDeal());
+}
+
+function filteredDealCustomers(keyword: string) {
+  const normalized = keyword.trim().toLowerCase();
+  if (!normalized) return state.customers.slice(0, 8);
+  return state.customers
+    .filter((customer) => `${customer.company} ${customer.contact} ${customer.country}`.toLowerCase().includes(normalized))
+    .slice(0, 8);
+}
+
+function renderDealCustomerOptions(keyword = "") {
+  const box = qs<HTMLElement>("#dealCustomerOptions");
+  if (!box) return;
+  const customers = filteredDealCustomers(keyword);
+  box.innerHTML = customers.length ? customers.map((customer) => `
+    <button type="button" data-deal-customer-id="${escapeHtml(customer.id)}">
+      <b>${escapeHtml(customer.company)}</b>
+      <span>${escapeHtml(customer.contact || "待维护")} · ${escapeHtml(customer.country || "未知国家")}</span>
+    </button>
+  `).join("") : `<div class="deal-customer-empty">没有匹配客户，可清空后保存为无关联商机</div>`;
+  qsa<HTMLButtonElement>("[data-deal-customer-id]", box).forEach((button) => {
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => {
+      const customer = state.customers.find((item) => item.id === button.dataset.dealCustomerId);
+      if (!customer) return;
+      const input = qs<HTMLInputElement>("#dealCustomerInput");
+      const idInput = qs<HTMLInputElement>("#dealCustomerIdInput");
+      if (input) input.value = customer.company;
+      if (idInput) idInput.value = customer.id;
+      box.classList.remove("active");
+    });
+  });
+}
+
+function bindDealCustomerPicker() {
+  const input = qs<HTMLInputElement>("#dealCustomerInput");
+  const idInput = qs<HTMLInputElement>("#dealCustomerIdInput");
+  const box = qs<HTMLElement>("#dealCustomerOptions");
+  const clear = qs<HTMLButtonElement>("#clearDealCustomerButton");
+  if (!input || !idInput || !box) return;
+  renderDealCustomerOptions(input.value);
+  input.addEventListener("focus", () => {
+    renderDealCustomerOptions(input.value);
+    box.classList.add("active");
+  });
+  input.addEventListener("input", () => {
+    const exact = state.customers.find((customer) => customer.company.toLowerCase() === input.value.trim().toLowerCase());
+    idInput.value = exact?.id || "";
+    renderDealCustomerOptions(input.value);
+    box.classList.add("active");
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      const first = qs<HTMLButtonElement>("[data-deal-customer-id]", box);
+      if (first && box.classList.contains("active")) {
+        event.preventDefault();
+        first.click();
+      }
+    }
+    if (event.key === "Escape") box.classList.remove("active");
+  });
+  input.addEventListener("blur", () => {
+    window.setTimeout(() => box.classList.remove("active"), 120);
+  });
+  clear?.addEventListener("click", () => {
+    input.value = "";
+    idInput.value = "";
+    renderDealCustomerOptions("");
+    box.classList.remove("active");
+    input.focus();
+  });
 }
 
 async function saveDeal() {
   const title = qs<HTMLInputElement>("#dealTitleInput")?.value.trim() || "";
+  const customerText = qs<HTMLInputElement>("#dealCustomerInput")?.value.trim() || "";
+  const customerId = qs<HTMLInputElement>("#dealCustomerIdInput")?.value.trim() || "";
   if (!title) {
     toast("请填写商机名称", "error");
+    return;
+  }
+  if (customerText && !customerId) {
+    toast("请从下拉列表选择现有客户，或清空关联客户", "error");
     return;
   }
   const result = await api<{ deal: Deal }>("/api/deals", {
     method: "POST",
     body: JSON.stringify({
       title,
-      customerId: qs<HTMLSelectElement>("#dealCustomerInput")?.value || state.customers[0]?.id,
+      customerId,
       stage: qs<HTMLSelectElement>("#dealStageInput")?.value || "询盘",
       amount: Number(qs<HTMLInputElement>("#dealAmountInput")?.value || 0),
       nextAction: qs<HTMLInputElement>("#dealNextActionInput")?.value || "首次跟进"

@@ -4351,6 +4351,90 @@
       grid-column: 1 / -1;
     }
 
+    .deal-customer-field {
+      position: relative;
+    }
+
+    .deal-customer-field input[type="text"],
+    #dealCustomerInput {
+      padding-right: 32px;
+    }
+
+    .deal-customer-clear {
+      position: absolute;
+      right: 7px;
+      top: 28px;
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 7px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    .deal-customer-clear:hover {
+      color: var(--ink);
+      background: var(--soft);
+    }
+
+    .deal-customer-options {
+      position: absolute;
+      z-index: 20;
+      top: calc(100% + 6px);
+      left: 0;
+      right: 0;
+      display: none;
+      max-height: 220px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255,255,255,.98);
+      box-shadow: 0 18px 45px rgba(18,24,38,.14);
+      overflow: auto;
+    }
+
+    .deal-customer-options.active {
+      display: grid;
+      gap: 4px;
+    }
+
+    .deal-customer-options button {
+      display: grid;
+      gap: 2px;
+      width: 100%;
+      padding: 7px 8px;
+      border: 0;
+      border-radius: 8px;
+      color: var(--ink);
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .deal-customer-options button:hover {
+      background: var(--soft);
+    }
+
+    .deal-customer-options b {
+      font-size: 12px;
+    }
+
+    .deal-customer-options span,
+    .deal-customer-empty {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .deal-customer-empty {
+      padding: 9px;
+      line-height: 1.5;
+    }
+
     .form-field label {
       color: var(--muted);
       font-size: 12px;
