@@ -21,6 +21,12 @@ interface Customer {
   health: number;
   nextReminder: string;
   wecomBound: boolean;
+  billingName?: string;
+  billingAddress?: string;
+  documentContact?: string;
+  defaultPortDischarge?: string;
+  defaultIncoterm?: string;
+  defaultPaymentTerm?: string;
 }
 
 interface Todo {
@@ -44,6 +50,9 @@ interface Deal {
   customerId?: string;
   title: string;
   stage: string;
+  product?: string;
+  quantity?: number;
+  unitPrice?: number;
   amount: number;
   nextAction: string;
   archivedAt?: string;
@@ -1519,6 +1528,12 @@ function renderCustomerDealProgress(customer: Customer) {
 function renderCustomerDrawer(customer?: Customer) {
   const drawer = qs<HTMLElement>("#customers .drawer");
   if (!drawer || !customer) return;
+  const billingName = customer.billingName || customer.company;
+  const billingAddress = customer.billingAddress || `${customer.country} / 地址待维护`;
+  const documentContact = customer.documentContact || customer.contact;
+  const portDischarge = customer.defaultPortDischarge || "待确认";
+  const incoterm = customer.defaultIncoterm || "FOB Tianjin";
+  const paymentTerm = customer.defaultPaymentTerm || "30% T/T deposit, 70% before shipment";
   drawer.innerHTML = `
     <div class="drawer-head">
       <div><h2>${escapeHtml(customer.company)}</h2><p>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.stage)}</p></div>
@@ -1535,6 +1550,17 @@ function renderCustomerDrawer(customer?: Customer) {
       <div class="info"><span>下一提醒</span><b>${escapeHtml(customer.nextReminder)}</b></div>
     </div>
     <div class="inline-actions"><button class="btn primary" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button></div>
+    <section class="customer-doc-info">
+      <div class="customer-deals-head"><h3>单据基础信息</h3><button class="btn" data-edit-customer-drawer>维护信息</button></div>
+      <div class="info-grid">
+        <div class="info"><span>单据抬头</span><b>${escapeHtml(billingName)}</b></div>
+        <div class="info"><span>单据联系人</span><b>${escapeHtml(documentContact)}</b></div>
+        <div class="info"><span>目的港</span><b>${escapeHtml(portDischarge)}</b></div>
+        <div class="info"><span>贸易条款</span><b>${escapeHtml(incoterm)}</b></div>
+      </div>
+      <div class="timeline-item"><b>账单地址</b><span>${escapeHtml(billingAddress)}</span></div>
+      <div class="timeline-item"><b>付款条款</b><span>${escapeHtml(paymentTerm)}</span></div>
+    </section>
     <div class="timeline">
       <div class="timeline-item"><b>企微摘要</b><span>${customer.wecomBound ? "客户已绑定企微，可归档会话摘要。" : "客户暂未绑定企微，建议补充联系方式。"}</span></div>
       <div class="timeline-item"><b>系统提醒</b><span>${escapeHtml(customer.nextReminder)}</span></div>
@@ -1543,7 +1569,9 @@ function renderCustomerDrawer(customer?: Customer) {
     ${renderCustomerDealProgress(customer)}
   `;
   qs<HTMLButtonElement>("[data-add-follow]", drawer)?.addEventListener("click", () => addFollowRecord(customer));
-  qs<HTMLButtonElement>("[data-edit-customer-drawer]", drawer)?.addEventListener("click", () => openCustomerModal(customer));
+  qsa<HTMLButtonElement>("[data-edit-customer-drawer]", drawer).forEach((button) => {
+    button.addEventListener("click", () => openCustomerModal(customer));
+  });
   qs<HTMLButtonElement>("[data-view-related-deals]", drawer)?.addEventListener("click", () => activateNavView("pipeline"));
 }
 
@@ -1566,9 +1594,22 @@ function renderPipeline(deals: Deal[]) {
     const stageDeals = activeDeals.filter((deal) => deal.stage === stage);
     return `<div class="stage"><div class="stage-head"><span>${stage}</span><b>${stageDeals.length}</b></div>${stageDeals.map((deal) => {
       const isWon = deal.stage === "成交";
-      return `<div class="deal" data-deal-id="${escapeHtml(deal.id)}"><b>${escapeHtml(deal.title)}</b><span>${escapeHtml(deal.nextAction)}</span><div class="deal-foot"><span>${money(deal.amount)}</span>${badge(deal.stage, isWon ? "green" : deal.stage === "已报价" ? "red" : "")}</div><div class="deal-actions"><button class="btn ${isWon ? "primary" : ""}" data-${isWon ? "archive-deal" : "move-deal"}>${isWon ? "归档" : "推进阶段"}</button>${isWon ? "" : `<button class="btn danger" data-lost-deal>丢单</button>`}</div></div>`;
+      const product = deal.product?.trim() || "产品待维护";
+      const quantity = Number(deal.quantity || 0);
+      const unitPrice = Number(deal.unitPrice || 0);
+      return `<div class="deal" data-deal-id="${escapeHtml(deal.id)}"><b>${escapeHtml(deal.title)}</b><span class="deal-product">${escapeHtml(product)} · ${quantity || "-"} 件 × ${money(unitPrice)}</span><span>${escapeHtml(deal.nextAction)}</span><div class="deal-foot"><span>${money(deal.amount)}</span>${badge(deal.stage, isWon ? "green" : deal.stage === "已报价" ? "red" : "")}</div><div class="deal-actions"><button class="btn" data-edit-deal>编辑</button><button class="btn primary" data-print-deal-pi>打印PI</button>${isWon ? `<button class="btn" data-archive-deal>归档</button>` : `<button class="btn danger" data-lost-deal>丢单</button><button class="btn" data-move-deal>推进阶段</button>`}</div></div>`;
     }).join("") || `<div class="deal"><b>暂无商机</b><span>等待新线索进入</span><div class="deal-foot"><span>$0k</span><span>空</span></div></div>`}</div>`;
   }).join("");
+  qsa<HTMLButtonElement>("[data-edit-deal]", strip).forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.closest<HTMLElement>(".deal")?.dataset.dealId || "";
+      const deal = state.deals.find((item) => item.id === id);
+      if (deal) openDealModal(deal);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-print-deal-pi]", strip).forEach((button) => {
+    button.addEventListener("click", () => void printDealPi(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
+  });
   qsa<HTMLButtonElement>("[data-move-deal]", strip).forEach((button) => {
     button.addEventListener("click", () => void moveDeal(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
   });
@@ -1579,6 +1620,77 @@ function renderPipeline(deals: Deal[]) {
     button.addEventListener("click", () => void markDealLost(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
   });
   renderArchivedDeals(deals);
+}
+
+function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
+  const type = "PI" as const;
+  const date = todayDateInput();
+  const quantity = Math.max(1, Math.round(Number(deal.quantity || 0)));
+  const unitPrice = Number(deal.unitPrice || 0) || Number(deal.amount || 0) / quantity;
+  const product = deal.product?.trim() || deal.title;
+  return {
+    id: "__new__",
+    type,
+    title: `${customer.company} ${product} PI`,
+    number: `${type}-${date.replace(/-/g, "")}-${Math.floor(Date.now() / 1000).toString().slice(-4)}`,
+    issueDate: date,
+    buyer: customer.billingName?.trim() || customer.company,
+    buyerAddress: customer.billingAddress?.trim() || `${customer.country} / address to be confirmed`,
+    buyerContact: customer.documentContact?.trim() || customer.contact,
+    seller: "GoodJob Instrument Co., Ltd.",
+    sellerAddress: "Tianjin, China",
+    currency: "USD",
+    incoterm: customer.defaultIncoterm?.trim() || "FOB Tianjin",
+    paymentTerm: customer.defaultPaymentTerm?.trim() || "30% T/T deposit, 70% before shipment",
+    shippingMethod: "Sea freight",
+    portLoading: "Tianjin, China",
+    portDischarge: customer.defaultPortDischarge?.trim() || "",
+    validityDate: "",
+    bankInfo: "Beneficiary: GoodJob Instrument Co., Ltd. / Bank: Bank of China Tianjin Branch / SWIFT: BKCHCNBJ",
+    notes: `Generated from deal: ${deal.title}. ${deal.nextAction}`,
+    templateStyle: "executive",
+    status: "ready",
+    updatedAt: new Date().toISOString(),
+    items: [{
+      id: `deal_item_${deal.id}`,
+      product,
+      model: "",
+      hsCode: "",
+      quantity,
+      unit: "PCS",
+      unitPrice: Math.round(unitPrice * 100) / 100,
+      originCountry: "China",
+      weightKg: 0,
+      packageCount: 0
+    }]
+  };
+}
+
+async function printDealPi(id: string) {
+  const deal = state.deals.find((item) => item.id === id);
+  if (!deal) return;
+  const customer = state.customers.find((item) => item.id === deal.customerId);
+  if (!customer) {
+    toast("请先给商机关联客户，再一键打印", "error");
+    return;
+  }
+  const draft = tradeDocumentFromDeal(deal, customer);
+  const created = await api<{ document: TradeDocument }>("/api/trade-documents", {
+    method: "POST",
+    body: JSON.stringify(draft)
+  });
+  state.tradeDocuments = [created.document, ...state.tradeDocuments.filter((document) => document.id !== created.document.id)];
+  state.selectedDocumentId = created.document.id;
+  activateNavView("documents");
+  renderTradeDocuments(state.tradeDocuments);
+  const exported = await api<{ document: TradeDocument; job: ImportExportJob; fileName: string }>(`/api/trade-documents/${created.document.id}/export`, { method: "POST" });
+  state.tradeDocuments = state.tradeDocuments.map((document) => document.id === exported.document.id ? exported.document : document);
+  state.jobs.unshift(exported.job);
+  state.selectedDocumentId = exported.document.id;
+  renderTradeDocuments(state.tradeDocuments);
+  renderJobs(state.jobs);
+  toast(`已按客户资料生成并打印：${exported.fileName}`);
+  window.print();
 }
 
 async function moveDeal(id: string) {
@@ -1634,15 +1746,23 @@ function renderArchivedDeals(deals: Deal[]) {
   const archived = deals.filter((deal) => deal.archivedAt).sort((a, b) => new Date(b.archivedAt || 0).getTime() - new Date(a.archivedAt || 0).getTime());
   box.innerHTML = archived.length ? archived.map((deal) => {
     const customer = state.customers.find((item) => item.id === deal.customerId);
-    return `<tr><td><b>${escapeHtml(deal.title)}</b><span>${escapeHtml(customer?.company || "无关联客户")}</span></td><td>${money(deal.amount)}</td><td>${badge(deal.stage, deal.stage === "丢单" ? "red" : "green")}</td><td>${escapeHtml(formatDateTime(deal.archivedAt))}</td><td>${escapeHtml(deal.nextAction)}</td></tr>`;
+    const product = `${deal.product?.trim() || "产品待维护"} · ${Number(deal.quantity || 0) || "-"} 件 × ${money(Number(deal.unitPrice || 0))}`;
+    return `<tr><td><b>${escapeHtml(deal.title)}</b><span>${escapeHtml(customer?.company || "无关联客户")} · ${escapeHtml(product)}</span></td><td>${money(deal.amount)}</td><td>${badge(deal.stage, deal.stage === "丢单" ? "red" : "green")}</td><td>${escapeHtml(formatDateTime(deal.archivedAt))}</td><td>${escapeHtml(deal.nextAction)}</td></tr>`;
   }).join("") : `<tr><td colspan="5" class="empty-cell">暂无归档/丢单商机。成交后点“归档”，未成交失败点“丢单”，都会沉淀到这里查询。</td></tr>`;
 }
 
-function openDealModal() {
-  const defaultCustomer = state.customers[0];
-  openModal("新增商机", `
+function openDealModal(editing?: Deal) {
+  const defaultCustomer = editing?.customerId ? state.customers.find((item) => item.id === editing.customerId) : state.customers[0];
+  const title = editing?.title || `${defaultCustomer?.company || "新客户"} 采购机会`;
+  const storedQuantity = Number(editing?.quantity || 0);
+  const storedUnitPrice = Number(editing?.unitPrice || 0);
+  const quantity = editing && !storedQuantity && !storedUnitPrice && editing.amount ? 1 : storedQuantity;
+  const unitPrice = editing && !storedQuantity && !storedUnitPrice && editing.amount ? Number(editing.amount) : storedUnitPrice;
+  const computedAmount = editing ? Number(editing.amount || quantity * unitPrice) : 18000;
+  openModal(editing ? "编辑商机" : "新增商机", `
     <div class="form-grid">
-      <div class="form-field full"><label>商机名称</label><input id="dealTitleInput" value="${escapeHtml(defaultCustomer?.company || "新客户")} 采购机会"></div>
+      <input id="dealIdInput" type="hidden" value="${escapeHtml(editing?.id || "")}">
+      <div class="form-field full"><label>商机名称</label><input id="dealTitleInput" value="${escapeHtml(title)}"></div>
       <div class="form-field deal-customer-field">
         <label>关联客户</label>
         <input id="dealCustomerInput" value="${escapeHtml(defaultCustomer?.company || "")}" placeholder="输入客户名称过滤，留空则不关联" autocomplete="off">
@@ -1650,13 +1770,31 @@ function openDealModal() {
         <button class="deal-customer-clear" id="clearDealCustomerButton" type="button" title="清空关联客户">×</button>
         <div class="deal-customer-options" id="dealCustomerOptions"></div>
       </div>
-      <div class="form-field"><label>阶段</label><select id="dealStageInput"><option>询盘</option><option>已联系</option><option>已报价</option><option>样品</option><option>谈判</option></select></div>
-      <div class="form-field"><label>金额</label><input id="dealAmountInput" type="number" value="18000"></div>
-      <div class="form-field full"><label>下一步动作</label><input id="dealNextActionInput" value="确认采购清单并安排报价"></div>
+      <div class="form-field"><label>阶段</label><select id="dealStageInput">${["询盘", "已联系", "已报价", "样品", "谈判", "成交"].map((stage) => `<option ${stage === editing?.stage ? "selected" : ""}>${stage}</option>`).join("")}</select></div>
+      <div class="form-field full"><label>产品</label><input id="dealProductInput" value="${escapeHtml(editing?.product || "")}" placeholder="例如：压力变送器 PT-2088"></div>
+      <div class="form-field"><label>数量</label><input id="dealQuantityInput" type="number" min="0" step="1" value="${quantity || 30}"></div>
+      <div class="form-field"><label>单价</label><input id="dealUnitPriceInput" type="number" min="0" step="0.01" value="${unitPrice || 600}"></div>
+      <div class="form-field"><label>金额</label><input id="dealAmountInput" type="number" value="${computedAmount}" readonly></div>
+      <div class="form-field full"><label>下一步动作</label><input id="dealNextActionInput" value="${escapeHtml(editing?.nextAction || "确认采购清单并安排报价")}"></div>
     </div>
-  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDealButton">保存商机</button>`);
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDealButton">${editing ? "保存修改" : "保存商机"}</button>`);
   bindDealCustomerPicker();
+  bindDealAmountCalculator();
   qs("#saveDealButton")?.addEventListener("click", () => void saveDeal());
+}
+
+function bindDealAmountCalculator() {
+  const quantity = qs<HTMLInputElement>("#dealQuantityInput");
+  const unitPrice = qs<HTMLInputElement>("#dealUnitPriceInput");
+  const amount = qs<HTMLInputElement>("#dealAmountInput");
+  const update = () => {
+    if (!amount) return;
+    const next = Number(quantity?.value || 0) * Number(unitPrice?.value || 0);
+    amount.value = String(Math.round(next * 100) / 100);
+  };
+  quantity?.addEventListener("input", update);
+  unitPrice?.addEventListener("input", update);
+  update();
 }
 
 function filteredDealCustomers(keyword: string) {
@@ -1731,6 +1869,7 @@ function bindDealCustomerPicker() {
 }
 
 async function saveDeal() {
+  const dealId = qs<HTMLInputElement>("#dealIdInput")?.value.trim() || "";
   const title = qs<HTMLInputElement>("#dealTitleInput")?.value.trim() || "";
   const customerText = qs<HTMLInputElement>("#dealCustomerInput")?.value.trim() || "";
   const customerId = qs<HTMLInputElement>("#dealCustomerIdInput")?.value.trim() || "";
@@ -1742,21 +1881,28 @@ async function saveDeal() {
     toast("请从下拉列表选择现有客户，或清空关联客户", "error");
     return;
   }
-  const result = await api<{ deal: Deal }>("/api/deals", {
-    method: "POST",
+  const quantity = Number(qs<HTMLInputElement>("#dealQuantityInput")?.value || 0);
+  const unitPrice = Number(qs<HTMLInputElement>("#dealUnitPriceInput")?.value || 0);
+  const result = await api<{ deal: Deal }>(dealId ? `/api/deals/${dealId}` : "/api/deals", {
+    method: dealId ? "PATCH" : "POST",
     body: JSON.stringify({
       title,
       customerId,
       stage: qs<HTMLSelectElement>("#dealStageInput")?.value || "询盘",
-      amount: Number(qs<HTMLInputElement>("#dealAmountInput")?.value || 0),
+      product: qs<HTMLInputElement>("#dealProductInput")?.value.trim() || "",
+      quantity,
+      unitPrice,
+      amount: Math.round(quantity * unitPrice * 100) / 100,
       nextAction: qs<HTMLInputElement>("#dealNextActionInput")?.value || "首次跟进"
     })
   });
-  state.deals.unshift(result.deal);
+  const existing = state.deals.find((item) => item.id === result.deal.id);
+  if (existing) Object.assign(existing, result.deal);
+  else state.deals.unshift(result.deal);
   renderPipeline(state.deals);
   void refreshDashboardOnly();
   closeModal();
-  toast("商机已新增");
+  toast(dealId ? "商机已更新" : "商机已新增");
 }
 
 function renderReminders(reminders: Reminder[]) {
@@ -4298,6 +4444,12 @@ function openCustomerModal(customer?: Customer) {
       <div class="form-field"><label>预计金额</label><input id="customerAmountInput" type="number" value="${customer?.amount ?? 12000}"></div>
       <div class="form-field"><label>下一提醒</label><input id="customerReminderInput" value="${escapeHtml(customer?.nextReminder || "明天 10:00")}"></div>
       <label class="form-field"><span>企微绑定</span><select id="customerWecomInput"><option value="false" ${customer?.wecomBound ? "" : "selected"}>未绑定</option><option value="true" ${customer?.wecomBound ? "selected" : ""}>已绑定</option></select></label>
+      <div class="form-field full"><label>单据抬头</label><input id="customerBillingNameInput" value="${escapeHtml(customer?.billingName || customer?.company || "")}" placeholder="用于对外单据的英文/正式公司名"></div>
+      <div class="form-field full"><label>账单地址</label><input id="customerBillingAddressInput" value="${escapeHtml(customer?.billingAddress || "")}" placeholder="公司地址、城市、国家"></div>
+      <div class="form-field full"><label>单据联系人</label><input id="customerDocumentContactInput" value="${escapeHtml(customer?.documentContact || customer?.contact || "")}" placeholder="联系人 / 邮箱 / 电话"></div>
+      <div class="form-field"><label>默认目的港</label><input id="customerPortDischargeInput" value="${escapeHtml(customer?.defaultPortDischarge || "")}" placeholder="例如 Hamburg"></div>
+      <div class="form-field"><label>默认贸易条款</label><input id="customerIncotermInput" value="${escapeHtml(customer?.defaultIncoterm || "FOB Tianjin")}"></div>
+      <div class="form-field full"><label>默认付款条款</label><input id="customerPaymentTermInput" value="${escapeHtml(customer?.defaultPaymentTerm || "30% T/T deposit, 70% before shipment")}"></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCustomerButton" data-editing-id="${escapeHtml(customer?.id || "")}">${editing ? "保存修改" : "保存客户"}</button>`);
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
@@ -4320,7 +4472,13 @@ async function saveCustomer() {
     stage: qs<HTMLSelectElement>("#customerStageInput")?.value || "询盘",
     amount: Number(qs<HTMLInputElement>("#customerAmountInput")?.value || 0),
     nextReminder: qs<HTMLInputElement>("#customerReminderInput")?.value || "明天 10:00",
-    wecomBound: qs<HTMLSelectElement>("#customerWecomInput")?.value === "true"
+    wecomBound: qs<HTMLSelectElement>("#customerWecomInput")?.value === "true",
+    billingName: qs<HTMLInputElement>("#customerBillingNameInput")?.value.trim() || company,
+    billingAddress: qs<HTMLInputElement>("#customerBillingAddressInput")?.value.trim() || "",
+    documentContact: qs<HTMLInputElement>("#customerDocumentContactInput")?.value.trim() || qs<HTMLInputElement>("#customerContactInput")?.value || "待维护",
+    defaultPortDischarge: qs<HTMLInputElement>("#customerPortDischargeInput")?.value.trim() || "",
+    defaultIncoterm: qs<HTMLInputElement>("#customerIncotermInput")?.value.trim() || "FOB Tianjin",
+    defaultPaymentTerm: qs<HTMLInputElement>("#customerPaymentTermInput")?.value.trim() || "30% T/T deposit, 70% before shipment"
   };
   const result = await api<{ customer: Customer }>(editingId ? `/api/customers/${editingId}` : "/api/customers", {
     method: editingId ? "PATCH" : "POST",
@@ -4498,7 +4656,7 @@ function installEvents() {
   qsa<HTMLButtonElement>("#customers .page-head .btn.primary").forEach((button) => {
     if (button.textContent?.includes("新增客户")) button.addEventListener("click", () => openCustomerModal());
   });
-  qs<HTMLButtonElement>("#pipeline .page-head .btn.primary")?.addEventListener("click", openDealModal);
+  qs<HTMLButtonElement>("#pipeline .page-head .btn.primary")?.addEventListener("click", () => openDealModal());
   qs<HTMLButtonElement>("#reminders .page-head .btn.primary")?.addEventListener("click", openReminderModal);
   qs<HTMLButtonElement>("#chooseCustomerImportButton")?.addEventListener("click", () => qs<HTMLInputElement>("#customerImportInput")?.click());
   qs<HTMLInputElement>("#customerImportInput")?.addEventListener("change", (event) => {

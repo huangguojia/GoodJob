@@ -127,13 +127,28 @@ async function ensureSchema(pool: mysql.Pool) {
     health INT DEFAULT 0,
     next_reminder VARCHAR(100),
     wecom_bound BOOLEAN DEFAULT FALSE,
+    billing_name VARCHAR(200) DEFAULT '',
+    billing_address TEXT,
+    document_contact VARCHAR(200) DEFAULT '',
+    default_port_discharge VARCHAR(120) DEFAULT '',
+    default_incoterm VARCHAR(80) DEFAULT '',
+    default_payment_term VARCHAR(255) DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`);
+  await ensureColumn(pool, "customers", "billing_name", "VARCHAR(200) DEFAULT ''");
+  await ensureColumn(pool, "customers", "billing_address", "TEXT");
+  await ensureColumn(pool, "customers", "document_contact", "VARCHAR(200) DEFAULT ''");
+  await ensureColumn(pool, "customers", "default_port_discharge", "VARCHAR(120) DEFAULT ''");
+  await ensureColumn(pool, "customers", "default_incoterm", "VARCHAR(80) DEFAULT ''");
+  await ensureColumn(pool, "customers", "default_payment_term", "VARCHAR(255) DEFAULT ''");
   await pool.query(`CREATE TABLE IF NOT EXISTS deals (
     id VARCHAR(64) PRIMARY KEY,
     customer_id VARCHAR(64) NOT NULL,
     title VARCHAR(200) NOT NULL,
     stage VARCHAR(40) NOT NULL,
+    product VARCHAR(200) DEFAULT '',
+    quantity INT DEFAULT 0,
+    unit_price DECIMAL(14,2) DEFAULT 0,
     amount DECIMAL(14,2) DEFAULT 0,
     owner_id VARCHAR(64) NOT NULL,
     team_id VARCHAR(64) NOT NULL,
@@ -141,6 +156,9 @@ async function ensureSchema(pool: mysql.Pool) {
     archived_at TIMESTAMP NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
   )`);
+  await ensureColumn(pool, "deals", "product", "VARCHAR(200) DEFAULT ''");
+  await ensureColumn(pool, "deals", "quantity", "INT DEFAULT 0");
+  await ensureColumn(pool, "deals", "unit_price", "DECIMAL(14,2) DEFAULT 0");
   await ensureColumn(pool, "deals", "archived_at", "TIMESTAMP NULL");
   await pool.query(`CREATE TABLE IF NOT EXISTS todos (
     id VARCHAR(64) PRIMARY KEY,
@@ -431,7 +449,7 @@ async function loadUsers(pool: mysql.Pool): Promise<User[]> {
 
 async function loadCustomers(pool: mysql.Pool): Promise<Customer[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM customers ORDER BY created_at DESC")).map((row) => ({
-    id: row.id, company: row.company, country: row.country, contact: row.contact, ownerId: row.owner_id, teamId: row.team_id, stage: row.stage, amount: Number(row.amount), health: Number(row.health), nextReminder: row.next_reminder, wecomBound: Boolean(row.wecom_bound)
+    id: row.id, company: row.company, country: row.country, contact: row.contact, ownerId: row.owner_id, teamId: row.team_id, stage: row.stage, amount: Number(row.amount), health: Number(row.health), nextReminder: row.next_reminder, wecomBound: Boolean(row.wecom_bound), billingName: row.billing_name || "", billingAddress: row.billing_address || "", documentContact: row.document_contact || "", defaultPortDischarge: row.default_port_discharge || "", defaultIncoterm: row.default_incoterm || "", defaultPaymentTerm: row.default_payment_term || ""
   }));
 }
 
@@ -443,7 +461,7 @@ async function loadTodos(pool: mysql.Pool): Promise<Todo[]> {
 
 async function loadDeals(pool: mysql.Pool): Promise<Deal[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM deals")).map((row) => ({
-    id: row.id, customerId: row.customer_id, title: row.title, stage: row.stage, amount: Number(row.amount), ownerId: row.owner_id, teamId: row.team_id, nextAction: row.next_action, archivedAt: row.archived_at instanceof Date ? row.archived_at.toISOString() : row.archived_at || undefined
+    id: row.id, customerId: row.customer_id, title: row.title, stage: row.stage, product: row.product || "", quantity: Number(row.quantity || 0), unitPrice: Number(row.unit_price || 0), amount: Number(row.amount), ownerId: row.owner_id, teamId: row.team_id, nextAction: row.next_action, archivedAt: row.archived_at instanceof Date ? row.archived_at.toISOString() : row.archived_at || undefined
   }));
 }
 
@@ -670,8 +688,8 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
   try {
     await connection.beginTransaction();
     await replaceRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status], "(id,name,email,password_hash,role,team_id,avatar,status)");
-    await replaceRows(connection, "customers", store.customers, (item) => [item.id, item.company, item.country, item.contact, item.ownerId, item.teamId, item.stage, item.amount, item.health, item.nextReminder, item.wecomBound], "(id,company,country,contact,owner_id,team_id,stage,amount,health,next_reminder,wecom_bound)");
-    await replaceRows(connection, "deals", store.deals, (item) => [item.id, item.customerId, item.title, item.stage, item.amount, item.ownerId, item.teamId, item.nextAction, item.archivedAt ? mysqlDate(item.archivedAt) : null], "(id,customer_id,title,stage,amount,owner_id,team_id,next_action,archived_at)");
+    await replaceRows(connection, "customers", store.customers, (item) => [item.id, item.company, item.country, item.contact, item.ownerId, item.teamId, item.stage, item.amount, item.health, item.nextReminder, item.wecomBound, item.billingName || "", item.billingAddress || "", item.documentContact || "", item.defaultPortDischarge || "", item.defaultIncoterm || "", item.defaultPaymentTerm || ""], "(id,company,country,contact,owner_id,team_id,stage,amount,health,next_reminder,wecom_bound,billing_name,billing_address,document_contact,default_port_discharge,default_incoterm,default_payment_term)");
+    await replaceRows(connection, "deals", store.deals, (item) => [item.id, item.customerId, item.title, item.stage, item.product || "", item.quantity || 0, item.unitPrice || 0, item.amount, item.ownerId, item.teamId, item.nextAction, item.archivedAt ? mysqlDate(item.archivedAt) : null], "(id,customer_id,title,stage,product,quantity,unit_price,amount,owner_id,team_id,next_action,archived_at)");
     await replaceRows(connection, "todos", (store.todos as Todo[]), (item) => [item.id, item.title, item.type, item.priority, item.dueAt, item.ownerId, item.teamId, item.related, item.done, item.status || "pending", item.pinState || "", item.sortOrder || 0, item.impactAmount ?? null, mysqlDate(item.createdAt), item.historyAt ? mysqlDate(item.historyAt) : null], "(id,title,type,priority,due_at,owner_id,team_id,related,done,status,pin_state,sort_order,impact_amount,created_at,history_at)");
     await replaceRows(connection, "reminders", store.reminders, (item) => [item.id, item.title, item.rule, item.dueAt, item.ownerId, item.teamId, item.channel, item.status, item.ruleType || null, item.targetStage || null, item.days ?? 3, item.priority || "normal", item.enabled ?? true, item.generatedCount || 0], "(id,title,rule_text,due_at,owner_id,team_id,channel,status,rule_type,target_stage,days_count,priority,enabled,generated_count)");
     await replaceRows(connection, "knowledge_assets", store.knowledgeAssets, (item) => [item.id, item.title, item.category, item.status, item.ownerId, item.version], "(id,title,category,status,owner_id,version)");

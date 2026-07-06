@@ -311,7 +311,13 @@ app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
     country: z.string().min(1).default("未知"),
     contact: z.string().min(1).default("待维护"),
     stage: z.string().min(1).default("询盘"),
-    amount: z.number().int().nonnegative().default(0)
+    amount: z.number().int().nonnegative().default(0),
+    billingName: z.string().optional().default(""),
+    billingAddress: z.string().optional().default(""),
+    documentContact: z.string().optional().default(""),
+    defaultPortDischarge: z.string().optional().default(""),
+    defaultIncoterm: z.string().optional().default("FOB Tianjin"),
+    defaultPaymentTerm: z.string().optional().default("30% T/T deposit, 70% before shipment")
   });
   const body = schema.parse(req.body);
   const store = getStore();
@@ -337,7 +343,13 @@ app.patch("/api/customers/:id", requireAuth, asyncRoute(async (req, res) => {
     stage: z.string().min(1).optional(),
     amount: z.number().int().nonnegative().optional(),
     nextReminder: z.string().min(1).optional(),
-    wecomBound: z.boolean().optional()
+    wecomBound: z.boolean().optional(),
+    billingName: z.string().optional(),
+    billingAddress: z.string().optional(),
+    documentContact: z.string().optional(),
+    defaultPortDischarge: z.string().optional(),
+    defaultIncoterm: z.string().optional(),
+    defaultPaymentTerm: z.string().optional()
   });
   const body = schema.parse(req.body);
   const store = getStore();
@@ -417,15 +429,25 @@ app.get("/api/deals", requireAuth, (req, res) => {
   res.json({ deals: scoped });
 });
 
+const dealStages = ["询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"] as const;
+const dealBodySchema = z.object({
+  customerId: z.string().optional().default(""),
+  title: z.string().min(1),
+  stage: z.enum(dealStages).default("询盘"),
+  product: z.string().max(200).optional().default(""),
+  quantity: z.coerce.number().int().nonnegative().default(0),
+  unitPrice: z.coerce.number().nonnegative().default(0),
+  amount: z.coerce.number().nonnegative().optional(),
+  nextAction: z.string().min(1).default("首次跟进")
+});
+
+function calculatedDealAmount(body: { amount?: number; quantity: number; unitPrice: number }) {
+  if (typeof body.amount === "number") return Math.round(body.amount * 100) / 100;
+  return Math.round(body.quantity * body.unitPrice * 100) / 100;
+}
+
 app.post("/api/deals", requireAuth, asyncRoute(async (req, res) => {
-  const schema = z.object({
-    customerId: z.string().optional().default(""),
-    title: z.string().min(1),
-    stage: z.enum(["询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"]).default("询盘"),
-    amount: z.number().int().nonnegative().default(0),
-    nextAction: z.string().min(1).default("首次跟进")
-  });
-  const body = schema.parse(req.body);
+  const body = dealBodySchema.parse(req.body);
   const store = getStore();
   const customerId = body.customerId.trim();
   const customer = customerId ? store.customers.find((item) => item.id === customerId) : undefined;
@@ -438,7 +460,10 @@ app.post("/api/deals", requireAuth, asyncRoute(async (req, res) => {
     customerId: customer?.id || "",
     title: body.title,
     stage: body.stage,
-    amount: body.amount,
+    product: body.product.trim(),
+    quantity: body.quantity,
+    unitPrice: body.unitPrice,
+    amount: calculatedDealAmount(body),
     ownerId: customer?.ownerId || req.user!.id,
     teamId: customer?.teamId || req.user!.teamId,
     nextAction: body.nextAction,
@@ -449,8 +474,44 @@ app.post("/api/deals", requireAuth, asyncRoute(async (req, res) => {
   res.json({ deal });
 }));
 
+app.patch("/api/deals/:id", requireAuth, asyncRoute(async (req, res) => {
+  const body = dealBodySchema.parse(req.body);
+  const store = getStore();
+  const deal = store.deals.find((item) => item.id === req.params.id);
+  if (!deal || !canSeeOwner(req.user!, deal.ownerId, deal.teamId)) {
+    res.status(404).json({ message: "商机不存在" });
+    return;
+  }
+  if (deal.archivedAt) {
+    res.status(400).json({ message: "已归档商机不能编辑" });
+    return;
+  }
+  const customerId = body.customerId.trim();
+  const customer = customerId ? store.customers.find((item) => item.id === customerId) : undefined;
+  if (customerId && (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId))) {
+    res.status(404).json({ message: "客户不存在" });
+    return;
+  }
+  if (deal.stage === "成交" && body.stage === "丢单") {
+    res.status(400).json({ message: "成交商机请归档，不能编辑为丢单" });
+    return;
+  }
+  deal.customerId = customer?.id || "";
+  deal.title = body.title;
+  deal.stage = body.stage;
+  deal.product = body.product.trim();
+  deal.quantity = body.quantity;
+  deal.unitPrice = body.unitPrice;
+  deal.amount = calculatedDealAmount(body);
+  deal.ownerId = customer?.ownerId || deal.ownerId;
+  deal.teamId = customer?.teamId || deal.teamId;
+  deal.nextAction = body.nextAction;
+  await store.persist();
+  res.json({ deal });
+}));
+
 app.patch("/api/deals/:id/stage", requireAuth, asyncRoute(async (req, res) => {
-  const schema = z.object({ stage: z.enum(["询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"]) });
+  const schema = z.object({ stage: z.enum(dealStages) });
   const store = getStore();
   const body = schema.parse(req.body);
   const deal = store.deals.find((item) => item.id === req.params.id);
@@ -1282,7 +1343,13 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
     amount: z.number().nonnegative().optional().default(0),
     health: z.number().int().min(0).max(100).optional().default(70),
     nextReminder: z.string().trim().optional().default("待跟进"),
-    wecomBound: z.boolean().optional().default(false)
+    wecomBound: z.boolean().optional().default(false),
+    billingName: z.string().trim().optional().default(""),
+    billingAddress: z.string().trim().optional().default(""),
+    documentContact: z.string().trim().optional().default(""),
+    defaultPortDischarge: z.string().trim().optional().default(""),
+    defaultIncoterm: z.string().trim().optional().default("FOB Tianjin"),
+    defaultPaymentTerm: z.string().trim().optional().default("30% T/T deposit, 70% before shipment")
   });
   const schema = z.object({ rows: z.array(rowSchema).min(1).max(2000), fileName: z.string().optional().default("客户导入") });
   const body = schema.parse(req.body);
@@ -1301,7 +1368,13 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
         amount: row.amount,
         health: row.health,
         nextReminder: row.nextReminder || existing.nextReminder,
-        wecomBound: row.wecomBound
+        wecomBound: row.wecomBound,
+        billingName: row.billingName || existing.billingName || row.company,
+        billingAddress: row.billingAddress || existing.billingAddress || "",
+        documentContact: row.documentContact || existing.documentContact || row.contact,
+        defaultPortDischarge: row.defaultPortDischarge || existing.defaultPortDischarge || "",
+        defaultIncoterm: row.defaultIncoterm || existing.defaultIncoterm || "FOB Tianjin",
+        defaultPaymentTerm: row.defaultPaymentTerm || existing.defaultPaymentTerm || "30% T/T deposit, 70% before shipment"
       });
       imported.push(existing);
       updated += 1;
@@ -1317,7 +1390,13 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
         amount: row.amount,
         health: row.health,
         nextReminder: row.nextReminder || "待跟进",
-        wecomBound: row.wecomBound
+        wecomBound: row.wecomBound,
+        billingName: row.billingName || row.company,
+        billingAddress: row.billingAddress || "",
+        documentContact: row.documentContact || row.contact || "待维护",
+        defaultPortDischarge: row.defaultPortDischarge || "",
+        defaultIncoterm: row.defaultIncoterm || "FOB Tianjin",
+        defaultPaymentTerm: row.defaultPaymentTerm || "30% T/T deposit, 70% before shipment"
       };
       store.customers.unshift(customer);
       scopedCustomers.push(customer);
@@ -1628,17 +1707,26 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
         amount: 0,
         health: 68,
         nextReminder: "官网商机待核实",
-        wecomBound: false
+        wecomBound: false,
+        billingName: source.company,
+        billingAddress: source.country || "",
+        documentContact: contact,
+        defaultPortDischarge: "",
+        defaultIncoterm: "FOB Tianjin",
+        defaultPaymentTerm: "30% T/T deposit, 70% before shipment"
       };
       store.customers.unshift(customer);
     }
     const deal: Deal = {
       id: `d_web_${Date.now()}_${created.length}`,
-      customerId: customer.id,
-      title: `${source.company} 官网产品机会`,
-      stage: "询盘",
-      amount: 0,
-      ownerId: customer.ownerId,
+    customerId: customer.id,
+    title: `${source.company} 官网产品机会`,
+    stage: "询盘",
+    product: source.business || "待维护",
+    quantity: 0,
+    unitPrice: 0,
+    amount: 0,
+    ownerId: customer.ownerId,
       teamId: customer.teamId,
       nextAction: source.description || `核实官网产品：${source.business || "待维护"}，补充联系人并发起首次触达`
     };

@@ -83,9 +83,16 @@ try {
   const newDeal = await request("/api/deals", {
     method: "POST",
     headers: { authorization: `Bearer ${managerToken}` },
-    body: JSON.stringify({ customerId: "c1", title: "自动化新增商机", amount: 12000, nextAction: "确认采购清单" })
+    body: JSON.stringify({ customerId: "c1", title: "自动化新增商机", product: "自动化压力仪表", quantity: 10, unitPrice: 1200, nextAction: "确认采购清单" })
   });
-  if (!newDeal.response.ok || newDeal.json.deal.title !== "自动化新增商机") throw new Error("deal create failed");
+  if (!newDeal.response.ok || newDeal.json.deal.title !== "自动化新增商机" || newDeal.json.deal.amount !== 12000) throw new Error("deal create failed");
+
+  const editedDeal = await request(`/api/deals/${newDeal.json.deal.id}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({ customerId: "c1", title: "自动化编辑商机", stage: "已联系", product: "自动化温度仪表", quantity: 12, unitPrice: 900, nextAction: "发送修订报价" })
+  });
+  if (!editedDeal.response.ok || editedDeal.json.deal.product !== "自动化温度仪表" || editedDeal.json.deal.amount !== 10800) throw new Error("deal edit failed");
 
   const wonDeal = await request(`/api/deals/${newDeal.json.deal.id}/stage`, {
     method: "PATCH",
@@ -108,7 +115,7 @@ try {
   const lostDeal = await request("/api/deals", {
     method: "POST",
     headers: { authorization: `Bearer ${managerToken}` },
-    body: JSON.stringify({ customerId: "c2", title: "自动化丢单商机", amount: 8000, nextAction: "客户选择竞品" })
+    body: JSON.stringify({ customerId: "c2", title: "自动化丢单商机", product: "测试样品", quantity: 8, unitPrice: 1000, nextAction: "客户选择竞品" })
   });
   const markedLost = await request(`/api/deals/${lostDeal.json.deal.id}/lost`, {
     method: "POST",

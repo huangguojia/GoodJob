@@ -9,11 +9,11 @@ export const users: User[] = [
 ];
 
 export const customers: Customer[] = [
-  { id: "c1", company: "Nordic Tools AB", country: "瑞典", contact: "Emma", ownerId: "u_sales_shirley", teamId: "europe", stage: "已报价", amount: 36000, health: 58, nextReminder: "已逾期", wecomBound: true },
-  { id: "c2", company: "Atlas Home Inc", country: "美国", contact: "Daniel", ownerId: "u_sales_shirley", teamId: "europe", stage: "样品", amount: 22000, health: 82, nextReminder: "今天 16:00", wecomBound: true },
-  { id: "c3", company: "Kanto Retail", country: "日本", contact: "Sato", ownerId: "u_sales_mia", teamId: "europe", stage: "谈判", amount: 48000, health: 90, nextReminder: "明天 09:30", wecomBound: false },
-  { id: "c4", company: "Al Noor Trading", country: "阿联酋", contact: "Hassan", ownerId: "u_sales_mia", teamId: "europe", stage: "已报价", amount: 18000, health: 45, nextReminder: "今天 10:30", wecomBound: true },
-  { id: "c5", company: "Evergreen GmbH", country: "德国", contact: "Anna", ownerId: "u_sales_shirley", teamId: "europe", stage: "成交", amount: 57000, health: 95, nextReminder: "7 天后复购", wecomBound: true }
+  { id: "c1", company: "Nordic Tools AB", country: "瑞典", contact: "Emma", ownerId: "u_sales_shirley", teamId: "europe", stage: "已报价", amount: 36000, health: 58, nextReminder: "已逾期", wecomBound: true, billingName: "Nordic Tools AB", billingAddress: "Sveavagen 45, Stockholm, Sweden", documentContact: "Emma / purchasing@nordic-tools.example", defaultPortDischarge: "Stockholm", defaultIncoterm: "FOB Tianjin", defaultPaymentTerm: "30% T/T deposit, 70% before shipment" },
+  { id: "c2", company: "Atlas Home Inc", country: "美国", contact: "Daniel", ownerId: "u_sales_shirley", teamId: "europe", stage: "样品", amount: 22000, health: 82, nextReminder: "今天 16:00", wecomBound: true, billingName: "Atlas Home Inc", billingAddress: "Seattle, WA, United States", documentContact: "Daniel / sourcing@atlas-home.example", defaultPortDischarge: "Seattle", defaultIncoterm: "CIF Destination Port", defaultPaymentTerm: "50% T/T deposit, 50% before shipment" },
+  { id: "c3", company: "Kanto Retail", country: "日本", contact: "Sato", ownerId: "u_sales_mia", teamId: "europe", stage: "谈判", amount: 48000, health: 90, nextReminder: "明天 09:30", wecomBound: false, billingName: "Kanto Retail Co., Ltd.", billingAddress: "Tokyo, Japan", documentContact: "Sato / purchasing@kanto-retail.example", defaultPortDischarge: "Yokohama", defaultIncoterm: "FOB Tianjin", defaultPaymentTerm: "T/T before shipment" },
+  { id: "c4", company: "Al Noor Trading", country: "阿联酋", contact: "Hassan", ownerId: "u_sales_mia", teamId: "europe", stage: "已报价", amount: 18000, health: 45, nextReminder: "今天 10:30", wecomBound: true, billingName: "Al Noor Trading LLC", billingAddress: "Dubai, United Arab Emirates", documentContact: "Hassan / import@alnoor.example", defaultPortDischarge: "Jebel Ali", defaultIncoterm: "CIF Destination Port", defaultPaymentTerm: "30% deposit, balance before shipment" },
+  { id: "c5", company: "Evergreen GmbH", country: "德国", contact: "Anna", ownerId: "u_sales_shirley", teamId: "europe", stage: "成交", amount: 57000, health: 95, nextReminder: "7 天后复购", wecomBound: true, billingName: "Evergreen GmbH", billingAddress: "Hamburg, Germany", documentContact: "Anna / orders@evergreen.example", defaultPortDischarge: "Hamburg", defaultIncoterm: "FOB Tianjin", defaultPaymentTerm: "30% T/T deposit, 70% before shipment" }
 ];
 
 export const todos: Todo[] = [
@@ -120,11 +120,11 @@ export const aiModelConfigs: AiModelConfig[] = [
 ];
 
 export const deals: Deal[] = [
-  { id: "d1", customerId: "c1", title: "Nordic Tools 电动工具年度采购", stage: "已报价", amount: 36000, ownerId: "u_sales_shirley", teamId: "europe", nextAction: "二次确认报价" },
-  { id: "d2", customerId: "c2", title: "Atlas Home 家居样品测试", stage: "样品", amount: 22000, ownerId: "u_sales_shirley", teamId: "europe", nextAction: "确认样品反馈" },
-  { id: "d3", customerId: "c3", title: "Kanto Retail 付款条款谈判", stage: "谈判", amount: 48000, ownerId: "u_sales_mia", teamId: "europe", nextAction: "主管参与账期谈判" },
-  { id: "d4", customerId: "c4", title: "Al Noor LED 灯具报价", stage: "已报价", amount: 18000, ownerId: "u_sales_mia", teamId: "europe", nextAction: "更新汇率报价" },
-  { id: "d5", customerId: "c5", title: "Evergreen GmbH 复购订单", stage: "成交", amount: 57000, ownerId: "u_sales_shirley", teamId: "europe", nextAction: "7 天后复购回访" }
+  { id: "d1", customerId: "c1", title: "Nordic Tools 电动工具年度采购", stage: "已报价", product: "压力变送器 PT-2088", quantity: 60, unitPrice: 600, amount: 36000, ownerId: "u_sales_shirley", teamId: "europe", nextAction: "二次确认报价" },
+  { id: "d2", customerId: "c2", title: "Atlas Home 家居样品测试", stage: "样品", product: "智能温湿度仪表", quantity: 40, unitPrice: 550, amount: 22000, ownerId: "u_sales_shirley", teamId: "europe", nextAction: "确认样品反馈" },
+  { id: "d3", customerId: "c3", title: "Kanto Retail 付款条款谈判", stage: "谈判", product: "流量计 FM-300", quantity: 80, unitPrice: 600, amount: 48000, ownerId: "u_sales_mia", teamId: "europe", nextAction: "主管参与账期谈判" },
+  { id: "d4", customerId: "c4", title: "Al Noor LED 灯具报价", stage: "已报价", product: "温度控制器 TC-90", quantity: 30, unitPrice: 600, amount: 18000, ownerId: "u_sales_mia", teamId: "europe", nextAction: "更新汇率报价" },
+  { id: "d5", customerId: "c5", title: "Evergreen GmbH 复购订单", stage: "成交", product: "工业压力表 PG-100", quantity: 95, unitPrice: 600, amount: 57000, ownerId: "u_sales_shirley", teamId: "europe", nextAction: "7 天后复购回访" }
 ];
 
 export const reminders: Reminder[] = [

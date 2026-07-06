@@ -148,7 +148,7 @@ function Card({ label, value, danger = false }: { label: string; value: string |
 }
 
 function Customers({ customers }: { customers: Customer[] }) {
-  return <section className="panel"><div className="panelHead"><h2>客户管理</h2><button>新增客户</button></div><table><thead><tr><th>客户</th><th>国家</th><th>阶段</th><th>金额</th><th>健康度</th><th>提醒</th></tr></thead><tbody>{customers.map((item) => <tr key={item.id}><td><b>{item.company}</b><small>{item.contact}</small></td><td>{item.country}</td><td>{item.stage}</td><td>{money(item.amount)}</td><td>{item.health}%</td><td>{item.nextReminder}</td></tr>)}</tbody></table></section>;
+  return <section className="panel"><div className="panelHead"><h2>客户管理</h2><button>新增客户</button></div><table><thead><tr><th>客户</th><th>国家</th><th>阶段</th><th>金额</th><th>单据抬头</th><th>提醒</th></tr></thead><tbody>{customers.map((item) => <tr key={item.id}><td><b>{item.company}</b><small>{item.contact}</small></td><td>{item.country}</td><td>{item.stage}</td><td>{money(item.amount)}</td><td>{item.billingName || item.company}</td><td>{item.nextReminder}</td></tr>)}</tbody></table></section>;
 }
 
 function Pipeline({ deals, token, onChanged }: { deals: Deal[]; token: string; onChanged: () => void }) {
@@ -157,7 +157,7 @@ function Pipeline({ deals, token, onChanged }: { deals: Deal[]; token: string; o
     await api(`/api/deals/${id}/stage`, token, { method: "PATCH", body: JSON.stringify({ stage }) });
     onChanged();
   }
-  return <section className="panel"><div className="panelHead"><h2>商机管道</h2><button>新增商机</button></div><div className="pipeline">{stages.map((stage) => <div className="stage" key={stage}><h3>{stage}</h3>{deals.filter((deal) => deal.stage === stage).map((deal) => <article className="deal" key={deal.id}><b>{deal.title}</b><span>{money(deal.amount)} · {deal.nextAction}</span><select value={deal.stage} onChange={(event) => void moveDeal(deal.id, event.target.value)}>{stages.map((item) => <option key={item}>{item}</option>)}</select></article>)}</div>)}</div></section>;
+  return <section className="panel"><div className="panelHead"><h2>商机管道</h2><button>新增商机</button></div><div className="pipeline">{stages.map((stage) => <div className="stage" key={stage}><h3>{stage}</h3>{deals.filter((deal) => deal.stage === stage).map((deal) => <article className="deal" key={deal.id}><b>{deal.title}</b><span>{deal.product || "产品待维护"} · {deal.quantity || 0} 件 × {money(deal.unitPrice || 0)}</span><span>{money(deal.amount)} · {deal.nextAction}</span><select value={deal.stage} onChange={(event) => void moveDeal(deal.id, event.target.value)}>{stages.map((item) => <option key={item}>{item}</option>)}</select></article>)}</div>)}</div></section>;
 }
 
 function Reminders({ reminders, token, onChanged }: { reminders: Reminder[]; token: string; onChanged: () => void }) {

@@ -422,6 +422,19 @@ test.describe("GoodJob CRM prototype pages", () => {
     const dealTitle = `自动化商机-${runId}`;
     const emptyCustomerDeal = `无关联商机-${runId}`;
     const lostDeal = `丢单商机-${runId}`;
+    await page.evaluate(() => {
+      window.print = () => document.body.setAttribute("data-print-called", "true");
+    });
+    await openView(page, "customers");
+    await page.locator("#customers tbody tr", { hasText: "Nordic Tools AB" }).first().getByRole("button", { name: "编辑" }).click();
+    await page.locator("#customerBillingNameInput").fill(`Nordic Print Buyer ${runId}`);
+    await page.locator("#customerBillingAddressInput").fill("Automation Street 18, Stockholm, Sweden");
+    await page.locator("#customerDocumentContactInput").fill("Emma / pi-print@example.com");
+    await page.locator("#customerPortDischargeInput").fill("Stockholm");
+    await page.locator("#customerIncotermInput").fill("FOB Tianjin");
+    await page.locator("#customerPaymentTermInput").fill("40% deposit, 60% before shipment");
+    await page.locator("#saveCustomerButton").click();
+    await expect(page.locator("#customers .drawer")).toContainText(`Nordic Print Buyer ${runId}`);
     await openView(page, "pipeline");
 
     await page.locator("#pipeline .page-head .btn.primary").click();
@@ -430,10 +443,33 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#dealCustomerOptions")).toContainText("Nordic Tools AB");
     await page.locator("#dealCustomerOptions [data-deal-customer-id]").first().click();
     await expect(page.locator("#dealCustomerInput")).toHaveValue("Nordic Tools AB");
-    await page.locator("#dealAmountInput").fill("28000");
+    await page.locator("#dealProductInput").fill("自动化压力变送器");
+    await page.locator("#dealQuantityInput").fill("14");
+    await page.locator("#dealUnitPriceInput").fill("2000");
+    await expect(page.locator("#dealAmountInput")).toHaveValue("28000");
     await page.locator("#saveDealButton").click();
 
     await expect(page.locator("#pipeline .pipeline-strip")).toContainText(dealTitle);
+    await expect(page.locator("#pipeline .deal", { hasText: dealTitle }).first()).toContainText("自动化压力变送器");
+    await page.locator("#pipeline .deal", { hasText: dealTitle }).first().getByRole("button", { name: "编辑" }).click();
+    await page.locator("#dealProductInput").fill("自动化差压仪表");
+    await page.locator("#dealQuantityInput").fill("16");
+    await page.locator("#dealUnitPriceInput").fill("1800");
+    await page.locator("#dealNextActionInput").fill("确认修订报价");
+    await expect(page.locator("#dealAmountInput")).toHaveValue("28800");
+    await page.locator("#saveDealButton").click();
+    await expect(page.locator(".toast").last()).toContainText("商机已更新");
+    await expect(page.locator("#pipeline .deal", { hasText: dealTitle }).first()).toContainText("自动化差压仪表");
+    await expect(page.locator("#pipeline .deal", { hasText: dealTitle }).first()).toContainText("确认修订报价");
+    const dealActions = page.locator("#pipeline .deal", { hasText: dealTitle }).first().locator(".deal-actions button");
+    await expect(dealActions.last()).toHaveText("推进阶段");
+    await page.locator("#pipeline .deal", { hasText: dealTitle }).first().getByRole("button", { name: "打印PI" }).click();
+    await expect(page.locator("#documents")).toHaveClass(/active/);
+    await expect(page.locator("#documentPreview")).toContainText("PROFORMA INVOICE");
+    await expect(page.locator("#documentPreview")).toContainText(`Nordic Print Buyer ${runId}`);
+    await expect(page.locator("#documentPreview")).toContainText("自动化差压仪表");
+    await expect(page.locator("body")).toHaveAttribute("data-print-called", "true");
+    await openView(page, "pipeline");
     await page.locator("#pipeline .deal", { hasText: dealTitle }).first().getByRole("button", { name: "推进阶段" }).click();
     await expect(page.locator(".toast").last()).toContainText("商机已推进到");
     for (let index = 0; index < 4; index += 1) {
@@ -454,7 +490,9 @@ test.describe("GoodJob CRM prototype pages", () => {
 
     await page.locator("#pipeline .page-head .btn.primary").click();
     await page.locator("#dealTitleInput").fill(lostDeal);
-    await page.locator("#dealAmountInput").fill("9000");
+    await page.locator("#dealProductInput").fill("丢单测试仪表");
+    await page.locator("#dealQuantityInput").fill("9");
+    await page.locator("#dealUnitPriceInput").fill("1000");
     await page.locator("#saveDealButton").click();
     await expect(page.locator("#pipeline .pipeline-strip")).toContainText(lostDeal);
     page.once("dialog", (dialog) => dialog.accept());

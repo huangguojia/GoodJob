@@ -1850,6 +1850,12 @@
       line-height: 1.35;
     }
 
+    .deal .deal-product {
+      color: #364156;
+      font-weight: 700;
+      word-break: break-word;
+    }
+
     .deal-foot {
       display: flex;
       justify-content: space-between;
@@ -1862,7 +1868,7 @@
 
     .deal-actions {
       display: grid;
-      grid-template-columns: 1fr auto;
+      grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
       gap: 6px;
       margin-top: 8px;
     }
@@ -2144,6 +2150,21 @@
       margin-top: 14px;
       padding-top: 12px;
       border-top: 1px solid var(--line-soft);
+    }
+
+    .customer-doc-info {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid rgba(49,87,213,.14);
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(255,255,255,.94), rgba(246,248,255,.9));
+    }
+
+    .customer-doc-info .timeline-item {
+      margin-top: 8px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(255,255,255,.72);
     }
 
     .customer-deals-head {

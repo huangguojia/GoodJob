@@ -19,6 +19,12 @@ export interface Customer {
   health: number;
   nextReminder: string;
   wecomBound: boolean;
+  billingName?: string;
+  billingAddress?: string;
+  documentContact?: string;
+  defaultPortDischarge?: string;
+  defaultIncoterm?: string;
+  defaultPaymentTerm?: string;
 }
 
 export interface Todo {
@@ -37,6 +43,9 @@ export interface Deal {
   id: string;
   title: string;
   stage: string;
+  product?: string;
+  quantity?: number;
+  unitPrice?: number;
   amount: number;
   nextAction: string;
 }

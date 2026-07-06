@@ -32,6 +32,12 @@ export interface Customer {
   health: number;
   nextReminder: string;
   wecomBound: boolean;
+  billingName: string;
+  billingAddress: string;
+  documentContact: string;
+  defaultPortDischarge: string;
+  defaultIncoterm: string;
+  defaultPaymentTerm: string;
 }
 
 export interface Todo {
@@ -150,6 +156,9 @@ export interface Deal {
   customerId: string;
   title: string;
   stage: "询盘" | "已联系" | "已报价" | "样品" | "谈判" | "成交" | "丢单";
+  product: string;
+  quantity: number;
+  unitPrice: number;
   amount: number;
   ownerId: string;
   teamId: string;
