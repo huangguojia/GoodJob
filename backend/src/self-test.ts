@@ -87,6 +87,35 @@ try {
   });
   if (!newDeal.response.ok || newDeal.json.deal.title !== "自动化新增商机") throw new Error("deal create failed");
 
+  const wonDeal = await request(`/api/deals/${newDeal.json.deal.id}/stage`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({ stage: "成交" })
+  });
+  if (!wonDeal.response.ok || wonDeal.json.deal.stage !== "成交") throw new Error("deal won stage failed");
+  const lostAfterWon = await request(`/api/deals/${newDeal.json.deal.id}/stage`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({ stage: "丢单" })
+  });
+  if (lostAfterWon.response.status !== 400) throw new Error("won deal should not move to lost");
+  const archivedDeal = await request(`/api/deals/${newDeal.json.deal.id}/archive`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (!archivedDeal.response.ok || !archivedDeal.json.deal.archivedAt) throw new Error("deal archive failed");
+
+  const lostDeal = await request("/api/deals", {
+    method: "POST",
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({ customerId: "c2", title: "自动化丢单商机", amount: 8000, nextAction: "客户选择竞品" })
+  });
+  const markedLost = await request(`/api/deals/${lostDeal.json.deal.id}/lost`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (!markedLost.response.ok || markedLost.json.deal.stage !== "丢单" || !markedLost.json.deal.archivedAt) throw new Error("deal lost failed");
+
   const stage = await request("/api/deals/d1/stage", {
     method: "PATCH",
     headers: { authorization: `Bearer ${salesToken}` },
@@ -439,7 +468,9 @@ try {
     syncedLead: ocr.json.lead.company,
     managerDeals: deals.json.deals.length,
     createdDeal: newDeal.json.deal.title,
-	    createdReminder: reminder.json.reminder.title,
+    archivedDeal: Boolean(archivedDeal.json.deal.archivedAt),
+    lostDeal: markedLost.json.deal.stage,
+    createdReminder: reminder.json.reminder.title,
 	    todoUndo: todoUndone.json.todo.done === false,
 	    todoRestored: !restoredTodo.json.todo.historyAt,
     problemResolved: resolvedProblem.json.problem.status,

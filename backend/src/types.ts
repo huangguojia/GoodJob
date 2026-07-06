@@ -154,6 +154,7 @@ export interface Deal {
   ownerId: string;
   teamId: string;
   nextAction: string;
+  archivedAt?: string;
 }
 
 export interface Reminder {

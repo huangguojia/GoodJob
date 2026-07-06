@@ -441,7 +441,8 @@ app.post("/api/deals", requireAuth, asyncRoute(async (req, res) => {
     amount: body.amount,
     ownerId: customer?.ownerId || req.user!.id,
     teamId: customer?.teamId || req.user!.teamId,
-    nextAction: body.nextAction
+    nextAction: body.nextAction,
+    archivedAt: undefined
   };
   store.deals.unshift(deal);
   await store.persist();
@@ -457,7 +458,54 @@ app.patch("/api/deals/:id/stage", requireAuth, asyncRoute(async (req, res) => {
     res.status(404).json({ message: "商机不存在" });
     return;
   }
+  if (deal.archivedAt) {
+    res.status(400).json({ message: "已归档商机不能推进阶段" });
+    return;
+  }
+  if (deal.stage === "成交" && body.stage === "丢单") {
+    res.status(400).json({ message: "成交商机请归档，不再推进为丢单" });
+    return;
+  }
   deal.stage = body.stage;
+  await store.persist();
+  res.json({ deal });
+}));
+
+app.post("/api/deals/:id/archive", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const deal = store.deals.find((item) => item.id === req.params.id);
+  if (!deal || !canSeeOwner(req.user!, deal.ownerId, deal.teamId)) {
+    res.status(404).json({ message: "商机不存在" });
+    return;
+  }
+  if (deal.stage !== "成交") {
+    res.status(400).json({ message: "只有成交商机可以归档" });
+    return;
+  }
+  deal.archivedAt = new Date().toISOString();
+  deal.nextAction = "已成交归档，可在商机归档区查询";
+  await store.persist();
+  res.json({ deal });
+}));
+
+app.post("/api/deals/:id/lost", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const deal = store.deals.find((item) => item.id === req.params.id);
+  if (!deal || !canSeeOwner(req.user!, deal.ownerId, deal.teamId)) {
+    res.status(404).json({ message: "商机不存在" });
+    return;
+  }
+  if (deal.archivedAt) {
+    res.status(400).json({ message: "已归档商机不能重复丢单" });
+    return;
+  }
+  if (deal.stage === "成交") {
+    res.status(400).json({ message: "成交商机请归档，不能标记丢单" });
+    return;
+  }
+  deal.stage = "丢单";
+  deal.archivedAt = new Date().toISOString();
+  deal.nextAction = "已标记丢单，可在归档/丢单商机中复盘";
   await store.persist();
   res.json({ deal });
 }));
@@ -1388,7 +1436,7 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
   const { customers, todos, deals, reminders, knowledgeAssets, exams, wecomMessages } = store;
   const scopedCustomers = customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
   const scopedTodos = todos.filter((todo) => canSeePersonalData(req.user!, todo.ownerId));
-  const scopedDeals = deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId));
+  const scopedDeals = deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId) && !deal.archivedAt);
   const scopedReminders = reminders.filter((reminder) => canSeeOwner(req.user!, reminder.ownerId, reminder.teamId));
   const scopedKnowledge = req.user?.role === "sales" ? knowledgeAssets.filter((asset) => asset.ownerId === req.user?.id) : knowledgeAssets;
   const scopedMessages = wecomMessages.filter((message) => canSeeOwner(req.user!, message.ownerId, message.teamId));
@@ -1496,7 +1544,7 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
 app.post("/api/dashboard/priority-tasks/batch-process", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
   const scopedCustomers = store.customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
-  const scopedDeals = store.deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId));
+  const scopedDeals = store.deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId) && !deal.archivedAt);
   const scopedTodos = store.todos.filter((todo) => canSeePersonalData(req.user!, todo.ownerId));
   const pendingTodos = scopedTodos.filter((todo) => !todo.done && !isHistoricalTodo(todo));
   const priorityTasks = buildPriorityTasks(scopedDeals, scopedCustomers, pendingTodos).slice(0, 3);
@@ -1598,7 +1646,7 @@ function nextTodoSortOrder(todos: Todo[], ownerId: string) {
 function buildPriorityTasks(deals: Deal[], customers: Customer[], todos: Todo[]) {
   const maxAmount = Math.max(...deals.map((deal) => deal.amount), 1);
   return deals
-    .filter((deal) => deal.stage !== "成交" && deal.stage !== "丢单")
+    .filter((deal) => !deal.archivedAt && deal.stage !== "成交" && deal.stage !== "丢单")
     .map((deal) => {
       const customer = customers.find((item) => item.id === deal.customerId);
       const amountScore = Math.round((deal.amount / maxAmount) * 35);
@@ -1622,9 +1670,10 @@ function buildPriorityTasks(deals: Deal[], customers: Customer[], todos: Todo[])
 
 function buildPipelineHealth(deals: Deal[], customers: Customer[]) {
   const stages = ["询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"];
-  const maxCount = Math.max(...stages.map((stage) => deals.filter((deal) => deal.stage === stage).length), 1);
+  const activeDeals = deals.filter((deal) => !deal.archivedAt);
+  const maxCount = Math.max(...stages.map((stage) => activeDeals.filter((deal) => deal.stage === stage).length), 1);
   return stages.map((stage) => {
-    const stageDeals = deals.filter((deal) => deal.stage === stage);
+    const stageDeals = activeDeals.filter((deal) => deal.stage === stage);
     const amount = stageDeals.reduce((sum, deal) => sum + deal.amount, 0);
     const riskCount = stageDeals.filter((deal) => {
       const customer = customers.find((item) => item.id === deal.customerId);

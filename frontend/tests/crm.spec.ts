@@ -353,6 +353,9 @@ test.describe("GoodJob CRM prototype pages", () => {
     const deleteCompanyA = `批量客户A-${runId}`;
     const deleteCompanyB = `批量客户B-${runId}`;
     await openView(page, "customers");
+    await page.locator("#customers tbody tr", { hasText: "Nordic Tools AB" }).first().click();
+    await expect(page.locator("#customers .drawer")).toContainText("相关商机进展");
+    await expect(page.locator("#customers .drawer")).toContainText("Nordic Tools 电动工具年度采购");
 
     await page.locator("#customers .page-head .btn.primary").click();
     await page.locator("#customerCompanyInput").fill(company);
@@ -362,6 +365,7 @@ test.describe("GoodJob CRM prototype pages", () => {
 
     await expect(page.locator("#customers tbody")).toContainText(company);
     await expect(page.locator("#customers .drawer")).toContainText(company);
+    await expect(page.locator("#customers .drawer")).toContainText("暂无关联商机");
     await expect(page.locator(".toast").last()).toContainText("客户已新增");
 
     await page.locator("#customers .drawer [data-edit-customer-drawer]").click();
@@ -399,6 +403,7 @@ test.describe("GoodJob CRM prototype pages", () => {
   test("pipeline can create and move a deal", async ({ page }) => {
     const dealTitle = `自动化商机-${runId}`;
     const emptyCustomerDeal = `无关联商机-${runId}`;
+    const lostDeal = `丢单商机-${runId}`;
     await openView(page, "pipeline");
 
     await page.locator("#pipeline .page-head .btn.primary").click();
@@ -413,6 +418,14 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#pipeline .pipeline-strip")).toContainText(dealTitle);
     await page.locator("#pipeline .deal", { hasText: dealTitle }).first().getByRole("button", { name: "推进阶段" }).click();
     await expect(page.locator(".toast").last()).toContainText("商机已推进到");
+    for (let index = 0; index < 4; index += 1) {
+      await page.locator("#pipeline .deal", { hasText: dealTitle }).first().getByRole("button", { name: "推进阶段" }).click();
+    }
+    await expect(page.locator("#pipeline .deal", { hasText: dealTitle }).first()).toContainText("成交");
+    await page.locator("#pipeline .deal", { hasText: dealTitle }).first().getByRole("button", { name: "归档" }).click();
+    await expect(page.locator(".toast").last()).toContainText("商机已归档");
+    await expect(page.locator("#pipeline .pipeline-strip")).not.toContainText(dealTitle);
+    await expect(page.locator("#pipeline-archived-deals")).toContainText(dealTitle);
 
     await page.locator("#pipeline .page-head .btn.primary").click();
     await page.locator("#dealTitleInput").fill(emptyCustomerDeal);
@@ -420,6 +433,18 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#dealCustomerInput")).toHaveValue("");
     await page.locator("#saveDealButton").click();
     await expect(page.locator("#pipeline .pipeline-strip")).toContainText(emptyCustomerDeal);
+
+    await page.locator("#pipeline .page-head .btn.primary").click();
+    await page.locator("#dealTitleInput").fill(lostDeal);
+    await page.locator("#dealAmountInput").fill("9000");
+    await page.locator("#saveDealButton").click();
+    await expect(page.locator("#pipeline .pipeline-strip")).toContainText(lostDeal);
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#pipeline .deal", { hasText: lostDeal }).first().getByRole("button", { name: "丢单" }).click();
+    await expect(page.locator(".toast").last()).toContainText("商机已标记丢单");
+    await expect(page.locator("#pipeline .pipeline-strip")).not.toContainText(lostDeal);
+    await expect(page.locator("#pipeline-archived-deals")).toContainText(lostDeal);
+    await expect(page.locator("#pipeline-archived-deals")).toContainText("丢单");
   });
 
   test("reminders and import export modules perform real actions", async ({ page }) => {

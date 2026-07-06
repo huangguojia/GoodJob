@@ -1325,6 +1325,20 @@
       font-weight: 800;
     }
 
+    .deal-actions {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .deal-actions .btn {
+      min-height: 26px;
+      padding: 4px 8px;
+      border-radius: 8px;
+      font-size: 11px;
+    }
+
     .content-grid {
       display: grid;
       grid-template-columns: minmax(0, 1fr) 360px;
@@ -1587,6 +1601,88 @@
 
     .timeline-item span {
       color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .customer-deals {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .customer-deals-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 9px;
+    }
+
+    .customer-deals-head h3 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.2;
+    }
+
+    .customer-deals-head .btn {
+      min-height: 26px;
+      padding: 4px 8px;
+      border-radius: 8px;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .customer-deal-list {
+      display: grid;
+      gap: 7px;
+    }
+
+    .customer-deal-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: linear-gradient(180deg, #fff, #f8faff);
+    }
+
+    .customer-deal-row b {
+      display: block;
+      color: var(--ink);
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    .customer-deal-row span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .customer-deal-meta {
+      display: grid;
+      justify-items: end;
+      gap: 5px;
+      min-width: 74px;
+    }
+
+    .customer-deal-meta strong {
+      color: var(--brand);
+      font-size: 12px;
+    }
+
+    .customer-deal-empty {
+      padding: 10px;
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      color: var(--muted);
+      background: #f8faff;
       font-size: 12px;
       line-height: 1.5;
     }
@@ -5201,7 +5297,18 @@
               <div class="stage"><div class="stage-head"><span>已报价</span><b>26</b></div><div class="deal"><b>Nordic Tools</b><span>瑞典 · 电动工具</span><div class="deal-foot"><span>$36k</span><span class="badge red">逾期</span></div></div><div class="deal"><b>Al Noor</b><span>阿联酋 · LED 灯具</span><div class="deal-foot"><span>$18k</span><span>汇率更新</span></div></div></div>
               <div class="stage"><div class="stage-head"><span>样品</span><b>14</b></div><div class="deal"><b>Atlas Home</b><span>美国 · 家居用品</span><div class="deal-foot"><span>$22k</span><span>待反馈</span></div></div></div>
               <div class="stage"><div class="stage-head"><span>谈判</span><b>9</b></div><div class="deal"><b>Kanto Retail</b><span>日本 · 连锁零售</span><div class="deal-foot"><span>$48k</span><span>账期谈判</span></div></div></div>
-              <div class="stage"><div class="stage-head"><span>成交/丢单</span><b>6</b></div><div class="deal"><b>Evergreen GmbH</b><span>德国 · 工业客户</span><div class="deal-foot"><span>$57k</span><span class="badge green">成交</span></div></div></div>
+              <div class="stage"><div class="stage-head"><span>成交</span><b>6</b></div><div class="deal"><b>Evergreen GmbH</b><span>德国 · 工业客户</span><div class="deal-foot"><span>$57k</span><span class="badge green">成交</span></div></div></div>
+            </div>
+          </div>
+          <div class="panel section pipeline-archive-panel">
+            <div class="section-head">
+              <div><h2>归档/丢单商机</h2><span class="subline">成交归档和主动丢单后的商机在这里查询，不再进入当前推进管道。</span></div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>商机</th><th>金额</th><th>状态</th><th>归档时间</th><th>备注</th></tr></thead>
+                <tbody id="pipeline-archived-deals"><tr><td colspan="5" class="empty-cell">暂无归档/丢单商机。</td></tr></tbody>
+              </table>
             </div>
           </div>
         </div>

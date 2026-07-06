@@ -132,8 +132,10 @@ async function ensureSchema(pool: mysql.Pool) {
     owner_id VARCHAR(64) NOT NULL,
     team_id VARCHAR(64) NOT NULL,
     next_action VARCHAR(200),
+    archived_at TIMESTAMP NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
   )`);
+  await ensureColumn(pool, "deals", "archived_at", "TIMESTAMP NULL");
   await pool.query(`CREATE TABLE IF NOT EXISTS todos (
     id VARCHAR(64) PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
@@ -394,7 +396,7 @@ async function loadTodos(pool: mysql.Pool): Promise<Todo[]> {
 
 async function loadDeals(pool: mysql.Pool): Promise<Deal[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM deals")).map((row) => ({
-    id: row.id, customerId: row.customer_id, title: row.title, stage: row.stage, amount: Number(row.amount), ownerId: row.owner_id, teamId: row.team_id, nextAction: row.next_action
+    id: row.id, customerId: row.customer_id, title: row.title, stage: row.stage, amount: Number(row.amount), ownerId: row.owner_id, teamId: row.team_id, nextAction: row.next_action, archivedAt: row.archived_at instanceof Date ? row.archived_at.toISOString() : row.archived_at || undefined
   }));
 }
 
@@ -592,7 +594,7 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
     await connection.beginTransaction();
     await replaceRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status], "(id,name,email,password_hash,role,team_id,avatar,status)");
     await replaceRows(connection, "customers", store.customers, (item) => [item.id, item.company, item.country, item.contact, item.ownerId, item.teamId, item.stage, item.amount, item.health, item.nextReminder, item.wecomBound], "(id,company,country,contact,owner_id,team_id,stage,amount,health,next_reminder,wecom_bound)");
-    await replaceRows(connection, "deals", store.deals, (item) => [item.id, item.customerId, item.title, item.stage, item.amount, item.ownerId, item.teamId, item.nextAction], "(id,customer_id,title,stage,amount,owner_id,team_id,next_action)");
+    await replaceRows(connection, "deals", store.deals, (item) => [item.id, item.customerId, item.title, item.stage, item.amount, item.ownerId, item.teamId, item.nextAction, item.archivedAt ? mysqlDate(item.archivedAt) : null], "(id,customer_id,title,stage,amount,owner_id,team_id,next_action,archived_at)");
     await replaceRows(connection, "todos", (store.todos as Todo[]), (item) => [item.id, item.title, item.type, item.priority, item.dueAt, item.ownerId, item.teamId, item.related, item.done, item.status || "pending", item.pinState || "", item.sortOrder || 0, item.impactAmount ?? null, mysqlDate(item.createdAt), item.historyAt ? mysqlDate(item.historyAt) : null], "(id,title,type,priority,due_at,owner_id,team_id,related,done,status,pin_state,sort_order,impact_amount,created_at,history_at)");
     await replaceRows(connection, "reminders", store.reminders, (item) => [item.id, item.title, item.rule, item.dueAt, item.ownerId, item.teamId, item.channel, item.status], "(id,title,rule_text,due_at,owner_id,team_id,channel,status)");
     await replaceRows(connection, "knowledge_assets", store.knowledgeAssets, (item) => [item.id, item.title, item.category, item.status, item.ownerId, item.version], "(id,title,category,status,owner_id,version)");

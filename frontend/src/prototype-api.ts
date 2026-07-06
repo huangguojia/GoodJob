@@ -46,6 +46,7 @@ interface Deal {
   stage: string;
   amount: number;
   nextAction: string;
+  archivedAt?: string;
 }
 
 interface Reminder {
@@ -1406,6 +1407,51 @@ function renderCustomerBulkBar(customers: Customer[]) {
   qs<HTMLButtonElement>("[data-bulk-delete-customers]", toolbar)?.addEventListener("click", () => void bulkDeleteCustomers());
 }
 
+function customerRelatedDeals(customer: Customer) {
+  return state.deals
+    .filter((deal) => deal.customerId === customer.id)
+    .sort((left, right) => Number(Boolean(left.archivedAt)) - Number(Boolean(right.archivedAt)) || right.amount - left.amount);
+}
+
+function dealTone(deal: Deal) {
+  if (deal.stage === "丢单") return "red";
+  if (deal.stage === "成交") return "green";
+  if (deal.archivedAt) return "gray";
+  if (deal.stage === "已报价") return "amber";
+  return "";
+}
+
+function renderCustomerDealProgress(customer: Customer) {
+  const deals = customerRelatedDeals(customer);
+  if (!deals.length) {
+    return `
+      <section class="customer-deals">
+        <div class="customer-deals-head"><h3>相关商机进展</h3><button class="btn" data-view-related-deals>查看商机管道</button></div>
+        <div class="customer-deal-empty">暂无关联商机。新增商机时选择该客户后，会自动显示在这里。</div>
+      </section>
+    `;
+  }
+  return `
+    <section class="customer-deals">
+      <div class="customer-deals-head"><h3>相关商机进展</h3><button class="btn" data-view-related-deals>查看商机管道</button></div>
+      <div class="customer-deal-list">
+        ${deals.map((deal) => `
+          <article class="customer-deal-row">
+            <div>
+              <b>${escapeHtml(deal.title)}</b>
+              <span>${escapeHtml(deal.nextAction)}${deal.archivedAt ? ` · ${escapeHtml(formatDateTime(deal.archivedAt))}` : ""}</span>
+            </div>
+            <div class="customer-deal-meta">
+              ${badge(deal.archivedAt && deal.stage !== "丢单" ? "已归档" : deal.stage, dealTone(deal))}
+              <strong>${money(deal.amount)}</strong>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderCustomerDrawer(customer?: Customer) {
   const drawer = qs<HTMLElement>("#customers .drawer");
   if (!drawer || !customer) return;
@@ -1430,9 +1476,11 @@ function renderCustomerDrawer(customer?: Customer) {
       <div class="timeline-item"><b>系统提醒</b><span>${escapeHtml(customer.nextReminder)}</span></div>
       <div class="timeline-item"><b>客户阶段</b><span>${escapeHtml(customer.stage)} · ${amount(customer.amount)}</span></div>
     </div>
+    ${renderCustomerDealProgress(customer)}
   `;
   qs<HTMLButtonElement>("[data-add-follow]", drawer)?.addEventListener("click", () => addFollowRecord(customer));
   qs<HTMLButtonElement>("[data-edit-customer-drawer]", drawer)?.addEventListener("click", () => openCustomerModal(customer));
+  qs<HTMLButtonElement>("[data-view-related-deals]", drawer)?.addEventListener("click", () => activateNavView("pipeline"));
 }
 
 function countryFlag(country: string) {
@@ -1448,21 +1496,36 @@ function health(value: number) {
 function renderPipeline(deals: Deal[]) {
   const strip = qs<HTMLElement>("#pipeline .pipeline-strip");
   if (!strip) return;
-  const stages = ["询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"];
+  const activeDeals = deals.filter((deal) => !deal.archivedAt);
+  const stages = ["询盘", "已联系", "已报价", "样品", "谈判", "成交"];
   strip.innerHTML = stages.map((stage) => {
-    const stageDeals = deals.filter((deal) => deal.stage === stage || (stage === "成交" && deal.stage === "成交"));
-    return `<div class="stage"><div class="stage-head"><span>${stage === "成交" ? "成交/丢单" : stage}</span><b>${stageDeals.length}</b></div>${stageDeals.map((deal) => `<div class="deal" data-deal-id="${escapeHtml(deal.id)}"><b>${escapeHtml(deal.title)}</b><span>${escapeHtml(deal.nextAction)}</span><div class="deal-foot"><span>${money(deal.amount)}</span>${badge(deal.stage, deal.stage === "成交" ? "green" : deal.stage === "已报价" ? "red" : "")}</div><button class="btn" data-move-deal>推进阶段</button></div>`).join("") || `<div class="deal"><b>暂无商机</b><span>等待新线索进入</span><div class="deal-foot"><span>$0k</span><span>空</span></div></div>`}</div>`;
+    const stageDeals = activeDeals.filter((deal) => deal.stage === stage);
+    return `<div class="stage"><div class="stage-head"><span>${stage}</span><b>${stageDeals.length}</b></div>${stageDeals.map((deal) => {
+      const isWon = deal.stage === "成交";
+      return `<div class="deal" data-deal-id="${escapeHtml(deal.id)}"><b>${escapeHtml(deal.title)}</b><span>${escapeHtml(deal.nextAction)}</span><div class="deal-foot"><span>${money(deal.amount)}</span>${badge(deal.stage, isWon ? "green" : deal.stage === "已报价" ? "red" : "")}</div><div class="deal-actions"><button class="btn ${isWon ? "primary" : ""}" data-${isWon ? "archive-deal" : "move-deal"}>${isWon ? "归档" : "推进阶段"}</button>${isWon ? "" : `<button class="btn danger" data-lost-deal>丢单</button>`}</div></div>`;
+    }).join("") || `<div class="deal"><b>暂无商机</b><span>等待新线索进入</span><div class="deal-foot"><span>$0k</span><span>空</span></div></div>`}</div>`;
   }).join("");
   qsa<HTMLButtonElement>("[data-move-deal]", strip).forEach((button) => {
     button.addEventListener("click", () => void moveDeal(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
   });
+  qsa<HTMLButtonElement>("[data-archive-deal]", strip).forEach((button) => {
+    button.addEventListener("click", () => void archiveDeal(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
+  });
+  qsa<HTMLButtonElement>("[data-lost-deal]", strip).forEach((button) => {
+    button.addEventListener("click", () => void markDealLost(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
+  });
+  renderArchivedDeals(deals);
 }
 
 async function moveDeal(id: string) {
   const deal = state.deals.find((item) => item.id === id);
   if (!deal) return;
-  const stages = ["询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"] as const;
+  const stages = ["询盘", "已联系", "已报价", "样品", "谈判", "成交"] as const;
   const nextStage = stages[Math.min(stages.indexOf(deal.stage as typeof stages[number]) + 1, stages.length - 1)];
+  if (deal.stage === "成交") {
+    await archiveDeal(id);
+    return;
+  }
   const result = await api<{ deal: Deal }>(`/api/deals/${id}/stage`, {
     method: "PATCH",
     body: JSON.stringify({ stage: nextStage })
@@ -1471,6 +1534,44 @@ async function moveDeal(id: string) {
   renderPipeline(state.deals);
   void refreshDashboardOnly();
   toast(`商机已推进到：${nextStage}`);
+}
+
+async function archiveDeal(id: string) {
+  const deal = state.deals.find((item) => item.id === id);
+  if (!deal) return;
+  const result = await api<{ deal: Deal }>(`/api/deals/${id}/archive`, { method: "POST" });
+  Object.assign(deal, result.deal);
+  renderPipeline(state.deals);
+  void refreshDashboardOnly();
+  toast("商机已归档，可在已归档商机中查询");
+}
+
+async function markDealLost(id: string) {
+  const deal = state.deals.find((item) => item.id === id);
+  if (!deal) return;
+  if (!window.confirm(`确认将「${deal.title}」标记为丢单？`)) return;
+  const result = await api<{ deal: Deal }>(`/api/deals/${id}/lost`, { method: "POST" });
+  Object.assign(deal, result.deal);
+  renderPipeline(state.deals);
+  void refreshDashboardOnly();
+  toast("商机已标记丢单，可在归档/丢单商机中查询");
+}
+
+function formatDateTime(value?: string) {
+  if (!value) return "未记录";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function renderArchivedDeals(deals: Deal[]) {
+  const box = qs<HTMLElement>("#pipeline-archived-deals");
+  if (!box) return;
+  const archived = deals.filter((deal) => deal.archivedAt).sort((a, b) => new Date(b.archivedAt || 0).getTime() - new Date(a.archivedAt || 0).getTime());
+  box.innerHTML = archived.length ? archived.map((deal) => {
+    const customer = state.customers.find((item) => item.id === deal.customerId);
+    return `<tr><td><b>${escapeHtml(deal.title)}</b><span>${escapeHtml(customer?.company || "无关联客户")}</span></td><td>${money(deal.amount)}</td><td>${badge(deal.stage, deal.stage === "丢单" ? "red" : "green")}</td><td>${escapeHtml(formatDateTime(deal.archivedAt))}</td><td>${escapeHtml(deal.nextAction)}</td></tr>`;
+  }).join("") : `<tr><td colspan="5" class="empty-cell">暂无归档/丢单商机。成交后点“归档”，未成交失败点“丢单”，都会沉淀到这里查询。</td></tr>`;
 }
 
 function openDealModal() {
