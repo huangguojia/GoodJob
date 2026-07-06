@@ -2,58 +2,10 @@
 branches: {
   }
 fileChange:
-  /.env.example:
-    newFile: !uuid '3c533bba523aded057b0015916deaff6de2a3103'
-    oldFile: !uuid '9f147f494bf2ecfbe60d259311fd5bd6e995cf68'
-  /DEVELOPMENT_STATUS.md:
-    newFile: !uuid '43dbbe8126e65ecc98c27132cb42a020dc793086'
-    oldFile: !uuid '869b51041474fe5e498ca99b27e5c600b23b2e4a'
-  /README.md:
-    newFile: !uuid '166f7dd4c823327838dba01790527341d95b2a02'
-    oldFile: !uuid '824b514f8efd81cd179e7c5306edb2f696ce86d0'
-  /backend:
-    newFile: !uuid '9ef56732879fb9669a4a2787ec5ee4ad925e3396'
-    oldFile: !uuid 'ad4e9ad637f31fb7804b7e07f9db964a77f0cdb0'
-  /backend/goodjob_crm.full.sql:
-    newFile: !uuid 'db2c15d2e50f682680f5e46f8c43561111d766e7'
-    oldFile: !uuid '8acf948d351fd331ac79a8310c1e405044e48d1e'
-  /backend/package.json:
-    newFile: !uuid '8ac5de76e7be10f2489cb2a6a12c8838f2803059'
-    oldFile: !uuid '9cae439d58389fd31fde7d4eab68a5ffcb682ba8'
-  /backend/schema.mysql.sql:
-    newFile: !uuid '4ca094d042cc9cfdefce997cfc6d16cc071f8c76'
-    oldFile: !uuid '64c0eeaf02fe0ccf697310ba957fa9392385c233'
-  /backend/src:
-    newFile: !uuid '75675a93f74cc2fd4e7fe7a40d0845427b5f81da'
-    oldFile: !uuid 'e7e2fa95a7ea0b0b29a22dec7c993d71d3bb3a87'
-  /backend/src/data.ts:
-    newFile: !uuid '6509b516ad88a807ddf1101011c96ad044deb1ac'
-    oldFile: !uuid 'fefd2bf125507f12ed87e3f6915f7c192a07aad8'
-  /backend/src/mysql-store.ts:
-    newFile: !uuid 'c3a812489b23b006576e6dc7e08b4dc5dc8bd21b'
-    oldFile: !uuid '713dff426699cafa8f6ee8bd47de8bbf629b730d'
-  /backend/src/server.ts:
-    newFile: !uuid 'cdc984d458bb2ad09af8bb9558af6de140c44ad8'
-    oldFile: !uuid '6db37240a507ccbcb59ceb395befa34aba0d694c'
-  /frontend:
-    newFile: !uuid 'b8d5b629b2032352fdf6d347e19717ecc60741ae'
-    oldFile: !uuid 'c74fccbfbf53e0a8f19e99a0127f04f3b43dd76d'
-  /frontend/index.html:
-    newFile: !uuid '9bbe490c6030e22e8a70888f5a555c3dfdbf6d21'
-    oldFile: !uuid '3a507c50ccb7b39d8f1ad8bcab1ddc371a25090e'
-  /frontend/src:
-    newFile: !uuid 'a91ca759c2e6e0e0374babdeb37e1cd1ac112dee'
-    oldFile: !uuid '73e5df2e77914bab494c60558cf129f87c1b494b'
-  /frontend/src/prototype-api.ts:
-    newFile: !uuid '11d795ce475aee53793a52e8183209732555a8c2'
-    oldFile: !uuid '82ed4398c2b4a40fb57fe6439cbf9c20b6fa858a'
-  /frontend/tests:
-    newFile: !uuid '109e230664ab70df52fc54b61cbc546e81d87d11'
-    oldFile: !uuid '1420233c1c5cd5ed0c1bca5b3b3e57f0d03c5240'
-  /frontend/tests/crm.spec.ts:
-    newFile: !uuid 'bb955b11d293189cdf016edabcaa5fb2c5cfbe8d'
-    oldFile: !uuid '6fb562bfe073bb67265eeadcff8e9f82b51b47e8'
-gitCommitId: !uuid 'dd716271a4ebb076ce270c8b0d3fa11b995c3a63'
+  /LICENSE:
+    newFile: !uuid 'f6c26977bbb993b180afd759658dcf5ea6619cd0'
+    oldFile: null
+gitCommitId: !uuid '18ac3cbea4d0c1003666316e00e144e3723b68a2'
 renames: {
   }
-revisionId: 18
+revisionId: 19
