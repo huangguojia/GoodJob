@@ -3,10 +3,10 @@ CREATE TABLE users (
   name VARCHAR(100) NOT NULL,
   email VARCHAR(180) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
-  role ENUM('sales','manager','admin','super_admin') NOT NULL,
+  role VARCHAR(20) NOT NULL,
   team_id VARCHAR(64) NOT NULL,
   avatar VARCHAR(8),
-  status ENUM('active','disabled') NOT NULL DEFAULT 'active',
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -96,8 +96,8 @@ CREATE TABLE exam_questions (
   id VARCHAR(64) PRIMARY KEY,
   exam_id VARCHAR(64) DEFAULT 'bank',
   stem TEXT NOT NULL,
-  options_json JSON,
-  answer_index INT DEFAULT 0,
+  options_json JSON NOT NULL,
+  answer_index INT NOT NULL,
   answer_indexes_json JSON,
   question_type VARCHAR(20) DEFAULT 'single',
   tags_json JSON,

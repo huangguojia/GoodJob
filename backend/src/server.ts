@@ -329,6 +329,48 @@ app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
   res.json({ customer });
 }));
 
+app.patch("/api/customers/:id", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    company: z.string().min(1).optional(),
+    country: z.string().min(1).optional(),
+    contact: z.string().min(1).optional(),
+    stage: z.string().min(1).optional(),
+    amount: z.number().int().nonnegative().optional(),
+    nextReminder: z.string().min(1).optional(),
+    wecomBound: z.boolean().optional()
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const customer = store.customers.find((item) => item.id === req.params.id);
+  if (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId)) {
+    res.status(404).json({ message: "客户不存在" });
+    return;
+  }
+  Object.assign(customer, body);
+  await store.persist();
+  res.json({ customer });
+}));
+
+app.post("/api/customers/bulk-delete", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({ ids: z.array(z.string()).min(1).max(200) });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const ids = [...new Set(body.ids)];
+  const deleted = store.customers.filter((customer) => ids.includes(customer.id) && canSeeOwner(req.user!, customer.ownerId, customer.teamId));
+  if (!deleted.length) {
+    res.status(404).json({ message: "未找到可删除的客户" });
+    return;
+  }
+  const deletedIds = new Set(deleted.map((customer) => customer.id));
+  const deletedNames = deleted.map((customer) => customer.company);
+  store.customers = store.customers.filter((customer) => !deletedIds.has(customer.id));
+  store.deals = store.deals.filter((deal) => !deletedIds.has(deal.customerId));
+  store.todos = store.todos.filter((todo) => !deletedNames.some((name) => todo.related.includes(name) || todo.title.includes(name)));
+  await store.persist();
+  const customers = store.customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
+  res.json({ deleted, customers });
+}));
+
 app.get("/api/todos", requireAuth, (req, res) => {
   const store = getStore();
   const archived = archiveExpiredTodos(store.todos, new Date());

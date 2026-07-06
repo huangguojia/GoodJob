@@ -308,6 +308,7 @@ interface AppState {
   openTodoMenuId: string | null;
   draggingTodoId: string | null;
   selectedCustomerId: string | null;
+  selectedCustomerIds: string[];
   selectedProblemId: string | null;
   selectedMemoId: string | null;
   selectedCompetitorId: string | null;
@@ -345,6 +346,7 @@ const state: AppState = {
   openTodoMenuId: null,
   draggingTodoId: null,
   selectedCustomerId: null,
+  selectedCustomerIds: [],
   selectedProblemId: null,
   selectedMemoId: null,
   selectedCompetitorId: null,
@@ -1334,7 +1336,12 @@ function caseStatusText(status: string) {
 function renderCustomers(customers: Customer[]) {
   const tbody = qs<HTMLElement>("#customers tbody");
   if (!tbody) return;
-  tbody.innerHTML = customers.map((customer, index) => `<tr class="${index === 0 ? "selected" : ""}">
+  state.selectedCustomerIds = state.selectedCustomerIds.filter((id) => customers.some((customer) => customer.id === id));
+  renderCustomerBulkBar(customers);
+  tbody.innerHTML = customers.map((customer, index) => {
+    const checked = state.selectedCustomerIds.includes(customer.id);
+    return `<tr class="${index === 0 ? "selected" : ""} ${checked ? "checked" : ""}">
+    <td><input type="checkbox" data-select-customer ${checked ? "checked" : ""}></td>
     <td><div class="company"><span class="flag">${countryFlag(customer.country)}</span><div><b>${escapeHtml(customer.company)}</b><span>${escapeHtml(customer.contact)}</span></div></div></td>
     <td>${escapeHtml(customer.country)}</td>
     <td>${badge(customer.stage, customer.stage === "成交" || customer.stage === "谈判" ? "green" : customer.stage === "已报价" ? "amber" : "")}</td>
@@ -1344,18 +1351,58 @@ function renderCustomers(customers: Customer[]) {
     <td>${customer.nextReminder.includes("逾期") ? badge(customer.nextReminder, "red") : escapeHtml(customer.nextReminder)}</td>
     <td>${badge(customer.wecomBound ? "已绑定" : "未绑定", customer.wecomBound ? "green" : "gray")}</td>
     <td>${customer.id === "c3" || customer.id === "c4" ? "Mia" : "Shirley"}</td>
-  </tr>`).join("");
+    <td><button class="btn" data-edit-customer>编辑</button></td>
+  </tr>`;
+  }).join("");
   qsa<HTMLElement>("tr", tbody).forEach((row, index) => {
     const customer = customers[index];
     row.dataset.customerId = customer.id;
     row.classList.toggle("selected", customer.id === (state.selectedCustomerId || customers[0]?.id));
-    row.addEventListener("click", () => {
+    row.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement).closest("button,input,label")) return;
       state.selectedCustomerId = customer.id;
       renderCustomerDrawer(customer);
       qsa<HTMLElement>("tr", tbody).forEach((item) => item.classList.toggle("selected", item.dataset.customerId === customer.id));
     });
   });
+  qsa<HTMLInputElement>("[data-select-customer]", tbody).forEach((checkbox) => {
+    checkbox.addEventListener("change", (event) => {
+      event.stopPropagation();
+      const id = checkbox.closest<HTMLElement>("tr")?.dataset.customerId || "";
+      if (!id) return;
+      state.selectedCustomerIds = checkbox.checked
+        ? Array.from(new Set([...state.selectedCustomerIds, id]))
+        : state.selectedCustomerIds.filter((selectedId) => selectedId !== id);
+      renderCustomers(state.customers);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-edit-customer]", tbody).forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const customer = state.customers.find((item) => item.id === button.closest<HTMLElement>("tr")?.dataset.customerId);
+      if (customer) openCustomerModal(customer);
+    });
+  });
   renderCustomerDrawer(customers.find((item) => item.id === state.selectedCustomerId) || customers[0]);
+}
+
+function renderCustomerBulkBar(customers: Customer[]) {
+  const toolbar = qs<HTMLElement>("#customers .toolbar");
+  if (!toolbar) return;
+  const selectedCount = state.selectedCustomerIds.length;
+  const allSelected = customers.length > 0 && selectedCount === customers.length;
+  toolbar.innerHTML = `
+    <label class="customer-select-all"><input type="checkbox" data-select-all-customers ${allSelected ? "checked" : ""}>全选</label>
+    <span class="filter">已选 ${selectedCount} 个客户</span>
+    <span class="filter">国家：全部</span><span class="filter">阶段：全部</span><span class="filter">最近跟进：30 天</span>
+    <button class="btn danger" data-bulk-delete-customers ${selectedCount ? "" : "disabled"}>批量删除</button>
+    <button class="btn">批量导出</button>
+  `;
+  qs<HTMLInputElement>("[data-select-all-customers]", toolbar)?.addEventListener("change", (event) => {
+    state.selectedCustomerIds = (event.currentTarget as HTMLInputElement).checked ? customers.map((customer) => customer.id) : [];
+    renderCustomers(state.customers);
+  });
+  qs<HTMLButtonElement>("[data-bulk-delete-customers]", toolbar)?.addEventListener("click", () => void bulkDeleteCustomers());
 }
 
 function renderCustomerDrawer(customer?: Customer) {
@@ -1376,7 +1423,7 @@ function renderCustomerDrawer(customer?: Customer) {
       <div class="info"><span>当前阶段</span><b>${escapeHtml(customer.stage)}</b></div>
       <div class="info"><span>下一提醒</span><b>${escapeHtml(customer.nextReminder)}</b></div>
     </div>
-    <button class="btn primary" data-add-follow style="width:100%">新增跟进记录</button>
+    <div class="inline-actions"><button class="btn primary" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button></div>
     <div class="timeline">
       <div class="timeline-item"><b>企微摘要</b><span>${customer.wecomBound ? "客户已绑定企微，可归档会话摘要。" : "客户暂未绑定企微，建议补充联系方式。"}</span></div>
       <div class="timeline-item"><b>系统提醒</b><span>${escapeHtml(customer.nextReminder)}</span></div>
@@ -1384,6 +1431,7 @@ function renderCustomerDrawer(customer?: Customer) {
     </div>
   `;
   qs<HTMLButtonElement>("[data-add-follow]", drawer)?.addEventListener("click", () => addFollowRecord(customer));
+  qs<HTMLButtonElement>("[data-edit-customer-drawer]", drawer)?.addEventListener("click", () => openCustomerModal(customer));
 }
 
 function countryFlag(country: string) {
@@ -3458,16 +3506,20 @@ function exportInstrumentPlanCsv() {
   toast("仪表开拓执行表已导出");
 }
 
-function openCustomerModal() {
-  openModal("新增客户", `
+function openCustomerModal(customer?: Customer) {
+  const editing = Boolean(customer);
+  const stageOptions = ["询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"];
+  openModal(editing ? "编辑客户" : "新增客户", `
     <div class="form-grid">
-      <div class="form-field full"><label>公司名</label><input id="customerCompanyInput" placeholder="例如：天津马赫进出口有限公司"></div>
-      <div class="form-field"><label>联系人</label><input id="customerContactInput" value="待维护"></div>
-      <div class="form-field"><label>国家</label><input id="customerCountryInput" value="中国"></div>
-      <div class="form-field"><label>阶段</label><select id="customerStageInput"><option>询盘</option><option>已联系</option><option>已报价</option><option>样品</option><option>谈判</option></select></div>
-      <div class="form-field"><label>预计金额</label><input id="customerAmountInput" type="number" value="12000"></div>
+      <div class="form-field full"><label>公司名</label><input id="customerCompanyInput" placeholder="例如：示例仪表进出口有限公司" value="${escapeHtml(customer?.company || "")}"></div>
+      <div class="form-field"><label>联系人</label><input id="customerContactInput" value="${escapeHtml(customer?.contact || "待维护")}"></div>
+      <div class="form-field"><label>国家</label><input id="customerCountryInput" value="${escapeHtml(customer?.country || "中国")}"></div>
+      <div class="form-field"><label>阶段</label><select id="customerStageInput">${stageOptions.map((stage) => `<option ${stage === customer?.stage ? "selected" : ""}>${stage}</option>`).join("")}</select></div>
+      <div class="form-field"><label>预计金额</label><input id="customerAmountInput" type="number" value="${customer?.amount ?? 12000}"></div>
+      <div class="form-field"><label>下一提醒</label><input id="customerReminderInput" value="${escapeHtml(customer?.nextReminder || "明天 10:00")}"></div>
+      <label class="form-field"><span>企微绑定</span><select id="customerWecomInput"><option value="false" ${customer?.wecomBound ? "" : "selected"}>未绑定</option><option value="true" ${customer?.wecomBound ? "selected" : ""}>已绑定</option></select></label>
     </div>
-  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCustomerButton">保存客户</button>`);
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCustomerButton" data-editing-id="${escapeHtml(customer?.id || "")}">${editing ? "保存修改" : "保存客户"}</button>`);
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
   qs("#saveCustomerButton")?.addEventListener("click", () => void saveCustomer());
   qs<HTMLInputElement>("#customerCompanyInput")?.focus();
@@ -3479,22 +3531,65 @@ async function saveCustomer() {
     toast("请填写公司名", "error");
     return;
   }
-  const result = await api<{ customer: Customer }>("/api/customers", {
-    method: "POST",
-    body: JSON.stringify({
-      company,
-      contact: qs<HTMLInputElement>("#customerContactInput")?.value || "待维护",
-      country: qs<HTMLInputElement>("#customerCountryInput")?.value || "未知",
-      stage: qs<HTMLSelectElement>("#customerStageInput")?.value || "询盘",
-      amount: Number(qs<HTMLInputElement>("#customerAmountInput")?.value || 0)
-    })
+  const saveButton = qs<HTMLButtonElement>("#saveCustomerButton");
+  const editingId = saveButton?.dataset.editingId || "";
+  const payload = {
+    company,
+    contact: qs<HTMLInputElement>("#customerContactInput")?.value || "待维护",
+    country: qs<HTMLInputElement>("#customerCountryInput")?.value || "未知",
+    stage: qs<HTMLSelectElement>("#customerStageInput")?.value || "询盘",
+    amount: Number(qs<HTMLInputElement>("#customerAmountInput")?.value || 0),
+    nextReminder: qs<HTMLInputElement>("#customerReminderInput")?.value || "明天 10:00",
+    wecomBound: qs<HTMLSelectElement>("#customerWecomInput")?.value === "true"
+  };
+  const result = await api<{ customer: Customer }>(editingId ? `/api/customers/${editingId}` : "/api/customers", {
+    method: editingId ? "PATCH" : "POST",
+    body: JSON.stringify(payload)
   });
-  state.customers.unshift(result.customer);
+  if (editingId) {
+    state.customers = state.customers.map((customer) => customer.id === result.customer.id ? result.customer : customer);
+  } else {
+    state.customers.unshift(result.customer);
+  }
   state.selectedCustomerId = result.customer.id;
   renderCustomers(state.customers);
   void refreshDashboardOnly();
   closeModal();
-  toast("客户已新增");
+  toast(editingId ? "客户已保存" : "客户已新增");
+}
+
+async function bulkDeleteCustomers() {
+  const ids = state.selectedCustomerIds.filter((id) => state.customers.some((customer) => customer.id === id));
+  if (!ids.length) {
+    toast("请先勾选要删除的客户", "error");
+    return;
+  }
+  const names = state.customers.filter((customer) => ids.includes(customer.id)).map((customer) => customer.company);
+  if (!window.confirm(`确认批量删除 ${ids.length} 个客户？\n${names.slice(0, 6).join("、")}${names.length > 6 ? "等" : ""}\n关联商机和待办会同步清理。`)) return;
+  const button = qs<HTMLButtonElement>("#customers [data-bulk-delete-customers]");
+  try {
+    if (button) {
+      button.disabled = true;
+      button.textContent = "删除中";
+    }
+    const result = await api<{ deleted: Customer[]; customers: Customer[] }>("/api/customers/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ ids })
+    });
+    state.customers = result.customers;
+    state.selectedCustomerIds = [];
+    state.selectedCustomerId = state.customers.find((customer) => customer.id === state.selectedCustomerId)?.id || state.customers[0]?.id || null;
+    renderCustomers(state.customers);
+    void refreshDashboardOnly();
+    toast(`已批量删除 ${result.deleted.length} 个客户`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "批量删除客户失败", "error");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "批量删除";
+    }
+  }
 }
 
 function addFollowRecord(customer: Customer) {
@@ -3621,7 +3716,7 @@ function installEvents() {
   qs<HTMLButtonElement>("#instrumentExportButton")?.addEventListener("click", exportInstrumentPlanCsv);
   qs<HTMLButtonElement>("#batchPriorityButton")?.addEventListener("click", (event) => void batchProcessPriorityTasks(event.currentTarget as HTMLButtonElement));
   qsa<HTMLButtonElement>("#customers .page-head .btn.primary").forEach((button) => {
-    if (button.textContent?.includes("新增客户")) button.addEventListener("click", openCustomerModal);
+    if (button.textContent?.includes("新增客户")) button.addEventListener("click", () => openCustomerModal());
   });
   qs<HTMLButtonElement>("#pipeline .page-head .btn.primary")?.addEventListener("click", openDealModal);
   qs<HTMLButtonElement>("#reminders .page-head .btn.primary")?.addEventListener("click", openReminderModal);
@@ -3697,7 +3792,7 @@ function installEvents() {
     input.value = "";
   });
   qsa<HTMLButtonElement>("#tools .page-head .btn, #tools .section-head .btn").forEach((button) => {
-    if (button.textContent?.includes("加载名片")) button.addEventListener("click", () => void recognizeOcr({ company: "Tianjin Mahe Trading Co., Ltd.", contact: "Ma He", email: "sales@tjmahe.com", country: "中国" }));
+    if (button.textContent?.includes("加载名片")) button.addEventListener("click", () => void recognizeOcr({ company: "Demo Instrument Trading Co., Ltd.", contact: "Demo Contact", email: "sales@example.com", country: "中国" }));
     if (button.textContent?.includes("重新识别")) button.addEventListener("click", () => void recognizeOcr());
     if (button.textContent?.includes("工具配置")) button.addEventListener("click", () => toast("OCR 字段映射配置已保存"));
     if (button.textContent?.includes("解析官网")) button.addEventListener("click", (event) => void parseWebsiteOpportunities(event.currentTarget as HTMLButtonElement));

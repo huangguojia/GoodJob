@@ -4393,6 +4393,36 @@
       cursor: pointer;
     }
 
+    #customers tbody tr.checked {
+      background: linear-gradient(135deg, #fff8f8, #fff);
+      box-shadow: inset 3px 0 0 var(--rose);
+    }
+
+    #customers tbody input[type="checkbox"],
+    .customer-select-all input {
+      width: 14px;
+      height: 14px;
+      margin: 0;
+      accent-color: var(--brand);
+      cursor: pointer;
+    }
+
+    .customer-select-all {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    #customers tbody [data-edit-customer] {
+      min-height: 26px;
+      padding: 4px 8px;
+      border-radius: 8px;
+      font-size: 11px;
+    }
+
     .account-grid {
       display: grid;
       grid-template-columns: minmax(0, 1fr) 360px;
@@ -5035,7 +5065,7 @@
               </div>
               <div class="table-wrap">
                 <table>
-                  <thead><tr><th>客户</th><th>国家</th><th>阶段</th><th>金额</th><th>健康度</th><th>最近跟进</th><th>下一提醒</th><th>企微</th><th>归属人</th></tr></thead>
+                  <thead><tr><th style="width:34px">选</th><th>客户</th><th>国家</th><th>阶段</th><th>金额</th><th>健康度</th><th>最近跟进</th><th>下一提醒</th><th>企微</th><th>归属人</th><th>操作</th></tr></thead>
                   <tbody>
                     <tr class="selected"><td><div class="company"><span class="flag">🇸🇪</span><div><b>Nordic Tools AB</b><span>采购经理 Emma</span></div></div></td><td>瑞典</td><td><span class="badge amber">已报价</span></td><td class="amount">$36,000</td><td><span class="health warn"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></td><td>5 天前</td><td><span class="badge red">已逾期</span></td><td><span class="badge green">已绑定</span></td><td>Shirley</td></tr>
                     <tr><td><div class="company"><span class="flag">🇺🇸</span><div><b>Atlas Home Inc</b><span>Buyer Daniel</span></div></div></td><td>美国</td><td><span class="badge">样品</span></td><td class="amount">$22,000</td><td><span class="health"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></td><td>昨天</td><td>今天 16:00</td><td><span class="badge green">已绑定</span></td><td>Alex</td></tr>

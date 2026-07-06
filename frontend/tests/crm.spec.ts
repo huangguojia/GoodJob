@@ -348,12 +348,15 @@ test.describe("GoodJob CRM prototype pages", () => {
   });
 
   test("customer page can create and inspect a customer", async ({ page }) => {
-    const company = `天津马赫自动化-${runId}`;
+    const company = `示例仪表自动化-${runId}`;
+    const companyEdited = `${company}-已编辑`;
+    const deleteCompanyA = `批量客户A-${runId}`;
+    const deleteCompanyB = `批量客户B-${runId}`;
     await openView(page, "customers");
 
     await page.locator("#customers .page-head .btn.primary").click();
     await page.locator("#customerCompanyInput").fill(company);
-    await page.locator("#customerContactInput").fill("Ma He");
+    await page.locator("#customerContactInput").fill("Demo Contact");
     await page.locator("#customerAmountInput").fill("36000");
     await page.locator("#saveCustomerButton").click();
 
@@ -361,8 +364,36 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#customers .drawer")).toContainText(company);
     await expect(page.locator(".toast").last()).toContainText("客户已新增");
 
+    await page.locator("#customers .drawer [data-edit-customer-drawer]").click();
+    await page.locator("#customerCompanyInput").fill(companyEdited);
+    await page.locator("#customerStageInput").selectOption("谈判");
+    await page.locator("#customerReminderInput").fill("明天 18:00");
+    await page.locator("#customerWecomInput").selectOption("true");
+    await page.locator("#saveCustomerButton").click();
+    await expect(page.locator(".toast").last()).toContainText("客户已保存");
+    await expect(page.locator("#customers tbody")).toContainText(companyEdited);
+    await expect(page.locator("#customers .drawer")).toContainText("明天 18:00");
+
     await page.locator("#customers .drawer [data-add-follow]").click();
     await expect(page.locator("#customers .drawer .timeline")).toContainText("手动跟进");
+
+    for (const name of [deleteCompanyA, deleteCompanyB]) {
+      await page.locator("#customers .page-head .btn.primary").click();
+      await page.locator("#customerCompanyInput").fill(name);
+      await page.locator("#customerContactInput").fill("Delete User");
+      await page.locator("#customerAmountInput").fill("12000");
+      await page.locator("#saveCustomerButton").click();
+      await expect(page.locator("#customers tbody")).toContainText(name);
+    }
+    for (const name of [deleteCompanyA, deleteCompanyB]) {
+      await page.locator("#customers tbody tr", { hasText: name }).first().locator("[data-select-customer]").check();
+    }
+    await expect(page.locator("#customers .toolbar")).toContainText("已选 2 个客户");
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#customers [data-bulk-delete-customers]").click();
+    await expect(page.locator(".toast").last()).toContainText("已批量删除 2 个客户");
+    await expect(page.locator("#customers tbody")).not.toContainText(deleteCompanyA);
+    await expect(page.locator("#customers tbody")).not.toContainText(deleteCompanyB);
   });
 
   test("pipeline can create and move a deal", async ({ page }) => {
@@ -501,6 +532,7 @@ test.describe("GoodJob CRM prototype pages", () => {
 
     await openView(page, "exam");
     await page.locator("#exam .category-item", { hasText: examTitle }).first().getByRole("button", { name: "考试" }).click();
+    await expect(page.locator("#appModal [data-question]").first()).toBeVisible();
     const questionCount = await page.locator("#appModal [data-question]").count();
     expect(questionCount).toBeGreaterThanOrEqual(1);
     for (let index = 0; index < questionCount; index += 1) {
@@ -562,8 +594,8 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#tools .tools-grid")).toBeVisible();
 
     await page.locator("#tools .section-head .btn", { hasText: "加载名片" }).click();
-    await expect(page.locator("#tools .business-card")).toContainText("Tianjin Mahe Trading Co., Ltd.");
-    await page.locator("#tools .field-card", { hasText: "公司名" }).locator("input[type='text']").fill("天津马赫");
+    await expect(page.locator("#tools .business-card")).toContainText("Demo Instrument Trading Co., Ltd.");
+    await page.locator("#tools .field-card", { hasText: "公司名" }).locator("input[type='text']").fill("示例仪表");
     await page.locator("#tools .btn.primary", { hasText: /同步|确认同步/ }).first().click();
 
     await expect(page.locator("#tools .sync-row").nth(2)).toContainText("已同步");
@@ -649,7 +681,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#problems .page-head .btn.primary").click();
     await page.locator("#problemTitleInput").fill(problemTitle);
     await page.locator("#problemSeverityInput").selectOption("high");
-    await page.locator("#problemCustomerInput").fill("天津马赫");
+    await page.locator("#problemCustomerInput").fill("示例仪表客户");
     await page.locator("#problemRootInput").fill("客户审批缺少认证资料");
     await page.locator("#problemSolutionInput").fill("补发 CE 证书并同步报价模板");
     await page.locator("#problemNextInput").fill("今天 18:00 前完成二次确认");
@@ -680,7 +712,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#memoTitleEditor")).toHaveValue(memoTitle);
     await page.locator("#memoContentEditor").fill("自动保存验证：切换左侧备忘前保存当前正文。");
     await expect(page.locator("#memoSaveState")).toContainText("未保存");
-    await page.locator("#memos .memo-card", { hasText: "天津马赫客户信息补充" }).first().click();
+    await page.locator("#memos .memo-card", { hasText: "展会线索信息补充" }).first().click();
     await expect(page.locator("#memoSaveState")).toContainText(/已自动保存|已保存/);
     await page.locator("#memos .memo-card", { hasText: memoTitle }).first().click();
     await expect(page.locator("#memoContentEditor")).toHaveValue("自动保存验证：切换左侧备忘前保存当前正文。");

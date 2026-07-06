@@ -104,7 +104,7 @@
 ## 本地启动
 
 ```bash
-cd /Users/sendohakria/Desktop/GoodJob/CRM
+cd GoodJob/CRM
 npm run dev
 ```
 
@@ -118,7 +118,7 @@ npm run dev
 默认不设置环境变量时使用内存模式。启用 MySQL：
 
 ```bash
-cd /Users/sendohakria/Desktop/GoodJob/CRM
+cd GoodJob/CRM
 CRM_STORE=mysql DATABASE_URL="mysql://user:password@127.0.0.1:3306/goodjob_crm" npm run dev
 ```
 

@@ -206,10 +206,10 @@ export const memos: Memo[] = [
   },
   {
     id: "m2",
-    title: "天津马赫客户信息补充",
+    title: "展会线索信息补充",
     content: "新线索需要补齐 WhatsApp、微信和主营产品。下一次沟通重点确认进口品类、年采购量和是否接受样品费。",
     category: "客户备忘",
-    tags: "天津马赫,线索,补充资料",
+    tags: "展会线索,补充资料,待跟进",
     ownerId: "u_manager_alex",
     teamId: "europe",
     pinned: false,

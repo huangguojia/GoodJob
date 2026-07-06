@@ -3,7 +3,7 @@ import { aiModelConfigs, caseStudies, competitors, customers, deals, examAttempt
 import type { CrmStore } from "./store.js";
 import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
-const defaultUrl = "mysql://root:password@127.0.0.1:3306/goodjob_crm";
+const defaultUrl = "mysql://goodjob:change_me@127.0.0.1:3306/goodjob_crm";
 
 export async function createMysqlStore(): Promise<CrmStore> {
   const databaseUrl = process.env.DATABASE_URL || process.env.MYSQL_URL || defaultUrl;
