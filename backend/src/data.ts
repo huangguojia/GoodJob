@@ -1,4 +1,4 @@
-import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 export const users: User[] = [
   { id: "u_sales_shirley", name: "Shirley", email: "shirley@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "SH", status: "active" },
@@ -136,6 +136,39 @@ export const reminders: Reminder[] = [
 export const importExportJobs: ImportExportJob[] = [
   { id: "io1", name: "2026 春季展会客户", type: "import", rows: 1286, status: "done", operatorId: "u_admin", createdAt: "今天 09:12" },
   { id: "io2", name: "欧洲 A 级客户", type: "export", rows: 184, status: "review", operatorId: "u_sales_shirley", createdAt: "今天 08:40" }
+];
+
+export const tradeDocuments: TradeDocument[] = [
+  {
+    id: "td_seed_pi",
+    type: "PI",
+    title: "Nordic Tools AB 压力仪表 PI",
+    number: "PI-2026-0706-001",
+    issueDate: "2026-07-06",
+    buyer: "Nordic Tools AB",
+    buyerAddress: "Sveavagen 45, Stockholm, Sweden",
+    buyerContact: "Emma / purchasing@nordic-tools.example",
+    seller: "GoodJob Instrument Co., Ltd.",
+    sellerAddress: "Tianjin, China",
+    currency: "USD",
+    incoterm: "FOB Tianjin",
+    paymentTerm: "30% T/T deposit, 70% before shipment",
+    shippingMethod: "Sea freight",
+    portLoading: "Tianjin, China",
+    portDischarge: "Stockholm, Sweden",
+    validityDate: "2026-07-20",
+    bankInfo: "Beneficiary: GoodJob Instrument Co., Ltd. / Bank: Bank of China Tianjin Branch / SWIFT: BKCHCNBJ",
+    notes: "Price includes standard export packing. Lead time: 20 working days after deposit.",
+    templateStyle: "executive",
+    status: "ready",
+    ownerId: "u_sales_shirley",
+    teamId: "europe",
+    updatedAt: "2026-07-06T09:00:00.000Z",
+    items: [
+      { id: "tdi_seed_1", product: "Smart Pressure Transmitter", model: "GJ-PT3051", hsCode: "902620", quantity: 20, unit: "PCS", unitPrice: 185, originCountry: "China", weightKg: 32, packageCount: 2 },
+      { id: "tdi_seed_2", product: "Digital Temperature Gauge", model: "GJ-TG100", hsCode: "902519", quantity: 30, unit: "PCS", unitPrice: 46, originCountry: "China", weightKg: 18, packageCount: 1 }
+    ]
+  }
 ];
 
 export const wecomMessages: WecomMessage[] = [

@@ -471,8 +471,18 @@ test.describe("GoodJob CRM prototype pages", () => {
     await openView(page, "reminders");
     await page.locator("#reminders .page-head .btn.primary").click();
     await page.locator("#reminderTitleInput").fill(reminderTitle);
+    await page.locator("#reminderRuleTypeInput").selectOption("quote_no_reply");
+    await page.locator("#reminderStageInput").selectOption("已报价");
+    await page.locator("#reminderDaysInput").fill("2");
+    await page.locator("#reminderPriorityInput").selectOption("high");
     await page.locator("#saveReminderButton").click();
     await expect(page.locator("#reminders .task-list")).toContainText(reminderTitle);
+    await expect(page.locator("#reminders .task", { hasText: reminderTitle }).first()).toContainText("命中");
+    await page.locator("#reminders .task", { hasText: reminderTitle }).first().getByRole("button", { name: "执行规则" }).click();
+    await expect(page.locator(".toast").last()).toContainText("规则已执行");
+    await openView(page, "dashboard");
+    await expect(page.locator("#dashboard .todo-list")).toContainText(reminderTitle);
+    await openView(page, "reminders");
 
     await page.locator("#reminders .task", { hasText: reminderTitle }).first().getByRole("button", { name: "完成", exact: true }).click();
     await expect(page.locator(".toast").last()).toContainText("提醒已完成");
@@ -495,6 +505,51 @@ test.describe("GoodJob CRM prototype pages", () => {
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toContain("GoodJob客户清单");
     await expect(page.locator("#imports tbody")).toContainText("客户清单导出");
+  });
+
+  test("document studio creates PI/CI documents and exports PDF task", async ({ page }) => {
+    const docTitle = `自动化商业发票-${runId}`;
+    await page.evaluate(() => {
+      window.print = () => document.body.setAttribute("data-print-called", "true");
+    });
+    await openView(page, "documents");
+    await expect(page.locator("#documents .doc-studio")).toBeVisible();
+    await expect(page.locator("#documentPreview")).toContainText(/PROFORMA INVOICE|COMMERCIAL INVOICE/);
+
+    await page.locator("#newDocumentButton").click();
+    await page.locator("#documentTypeTabs button[data-doc-type='CI']").click();
+    await page.locator("#docTitleInput").fill(docTitle);
+    await page.locator("#docBuyerInput").fill(`发票客户-${runId}`);
+    await page.locator("#docPortDischargeInput").fill("Hamburg");
+    await page.locator("#docTemplateInput").selectOption("classic");
+    await page.locator("#documentItemsEditor .doc-item-grid").first().locator("[data-doc-field='product']").fill("智能压力变送器 Smart Pressure Transmitter With Very Long Product Name For Wrapping Test");
+    await page.locator("#documentItemsEditor .doc-item-grid").first().locator("[data-doc-field='hsCode']").fill("902620");
+    await page.locator("#documentItemsEditor .doc-item-grid").first().locator("[data-doc-field='quantity']").fill("5");
+    await page.locator("#documentItemsEditor .doc-item-grid").first().locator("[data-doc-field='unitPrice']").fill("210");
+    await page.locator("#addDocumentItemButton").click();
+    await page.locator("#documentItemsEditor .doc-item-grid").nth(1).locator("[data-doc-field='product']").fill("数字温度表");
+    await page.locator("#documentItemsEditor .doc-item-grid").nth(1).locator("[data-doc-field='quantity']").fill("8");
+    await page.locator("#documentItemsEditor .doc-item-grid").nth(1).locator("[data-doc-field='unitPrice']").fill("48");
+
+    await expect(page.locator("#documentPreview")).toContainText("COMMERCIAL INVOICE");
+    await expect(page.locator("#documentPreview")).toContainText("Export Documentation Center");
+    await expect(page.locator("#documentPreview")).toContainText("智能压力变送器");
+    await expect(page.locator("#documentPreview")).toContainText("HS Code");
+    const tableFitsPaper = await page.locator("#documentPreview").evaluate((paper) => {
+      const table = paper.querySelector("table");
+      if (!table) return false;
+      return table.getBoundingClientRect().right <= paper.getBoundingClientRect().right + 1;
+    });
+    expect(tableFitsPaper).toBe(true);
+    await page.locator("#saveDocumentButton").click();
+    await expect(page.locator(".toast").last()).toContainText("单据配置已保存到数据库");
+    await expect(page.locator("#documentList")).toContainText(docTitle);
+
+    await page.locator("#exportDocumentPdfButton").click();
+    await expect(page.locator(".toast").last()).toContainText("已生成 PDF 导出任务");
+    await expect(page.locator("body")).toHaveAttribute("data-print-called", "true");
+    await openView(page, "imports");
+    await expect(page.locator("#imports tbody")).toContainText("单据 PDF 导出");
   });
 
   test("knowledge and exam pages keep their dense content and key actions", async ({ page }) => {
@@ -768,6 +823,7 @@ test.describe("GoodJob CRM prototype pages", () => {
 
   test("memo page can create pin and archive notes", async ({ page }) => {
     const memoTitle = `自动化备忘-${runId}`;
+    const switchMemoTitle = `切换目标备忘-${runId}`;
     await openView(page, "memos");
     await expect(page.locator("#memos .memo-grid")).toBeVisible();
     await expect(page.locator("#memos .memo-list .memo-card").first()).toBeVisible();
@@ -781,9 +837,16 @@ test.describe("GoodJob CRM prototype pages", () => {
 
     await expect(page.locator("#memos .memo-list")).toContainText(memoTitle);
     await expect(page.locator("#memoTitleEditor")).toHaveValue(memoTitle);
+    await page.locator("#memos .page-head .btn.primary").click();
+    await page.locator("#memoTitleInput").fill(switchMemoTitle);
+    await page.locator("#memoCategoryInput").selectOption("客户备忘");
+    await page.locator("#memoContentInput").fill("用于验证切换时自动保存。");
+    await page.locator("#saveMemoButton").click();
+    await expect(page.locator("#memos .memo-list")).toContainText(switchMemoTitle);
+    await page.locator("#memos .memo-card", { hasText: memoTitle }).first().click();
     await page.locator("#memoContentEditor").fill("自动保存验证：切换左侧备忘前保存当前正文。");
     await expect(page.locator("#memoSaveState")).toContainText("未保存");
-    await page.locator("#memos .memo-card", { hasText: "展会线索信息补充" }).first().click();
+    await page.locator("#memos .memo-card", { hasText: switchMemoTitle }).first().click();
     await expect(page.locator("#memoSaveState")).toContainText(/已自动保存|已保存/);
     await page.locator("#memos .memo-card", { hasText: memoTitle }).first().click();
     await expect(page.locator("#memoContentEditor")).toHaveValue("自动保存验证：切换左侧备忘前保存当前正文。");

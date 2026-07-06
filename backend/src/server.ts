@@ -4,7 +4,7 @@ import { z } from "zod";
 import { canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, publicUser, requireAuth, signToken } from "./auth.js";
 import { createMysqlStore } from "./mysql-store.js";
 import { getStore, setStore } from "./store.js";
-import type { AiModelConfig, Customer, Deal, Exam, ExamAttempt, ExamQuestion, SessionUser, Todo, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, Customer, Deal, Exam, ExamAttempt, ExamQuestion, SessionUser, Todo, TradeDocument, WebsiteOpportunity } from "./types.js";
 
 export const app = express();
 app.use(cors());
@@ -1169,23 +1169,78 @@ app.get("/api/reminders", requireAuth, (req, res) => {
 
 app.post("/api/reminders", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
-    title: z.string().min(1),
-    rule: z.string().min(1),
+    title: z.string().min(1).optional(),
+    rule: z.string().min(1).optional(),
     dueAt: z.string().min(1).default("今天 17:00"),
-    channel: z.enum(["站内", "邮件", "企业微信"]).default("企业微信")
+    channel: z.enum(["站内", "邮件", "企业微信"]).default("企业微信"),
+    ruleType: z.enum(["quote_no_reply", "sample_feedback", "inactive_customer", "high_value_revisit", "custom_due"]).default("quote_no_reply"),
+    targetStage: z.string().default("已报价"),
+    days: z.number().int().min(0).max(90).default(3),
+    priority: z.enum(["high", "medium", "normal"]).default("medium"),
+    enabled: z.boolean().default(true)
   });
   const body = schema.parse(req.body);
   const store = getStore();
+  const generatedCount = matchReminderRule(req.user!, body).length;
   const reminder = {
     id: `r_${Date.now()}`,
+    title: body.title || reminderRuleTitle(body.ruleType),
+    rule: body.rule || reminderRuleText(body),
+    dueAt: body.dueAt,
+    channel: body.channel,
+    ruleType: body.ruleType,
+    targetStage: body.targetStage,
+    days: body.days,
+    priority: body.priority,
+    enabled: body.enabled,
+    generatedCount,
     ownerId: req.user!.id,
     teamId: req.user!.teamId,
-    status: "pending" as const,
-    ...body
+    status: "pending" as const
   };
   store.reminders.unshift(reminder);
   await store.persist();
   res.json({ reminder });
+}));
+
+app.post("/api/reminders/:id/run", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const reminder = store.reminders.find((item) => item.id === req.params.id);
+  if (!reminder || !canSeeOwner(req.user!, reminder.ownerId, reminder.teamId)) {
+    res.status(404).json({ message: "提醒规则不存在" });
+    return;
+  }
+  if (reminder.enabled === false) {
+    res.status(400).json({ message: "提醒规则已停用" });
+    return;
+  }
+  const matched = matchReminderRule(req.user!, reminder);
+  const created: Todo[] = [];
+  for (const customer of matched) {
+    const exists = store.todos.some((todo) => todo.ownerId === req.user!.id && !todo.done && todo.related === customer.company && todo.title.includes(reminder.title));
+    if (exists) continue;
+    created.push({
+      id: `t_reminder_${reminder.id}_${customer.id}_${Date.now()}`,
+      title: `${reminder.title}：${customer.company}`,
+      type: "customer",
+      priority: reminder.priority || "medium",
+      status: "pending",
+      pinState: "",
+      sortOrder: nextTodoSortOrder(store.todos, req.user!.id),
+      dueAt: reminder.dueAt || currentMinuteText(),
+      ownerId: req.user!.id,
+      teamId: req.user!.teamId,
+      related: customer.company,
+      done: false,
+      impactAmount: customer.amount,
+      createdAt: new Date().toISOString()
+    });
+  }
+  store.todos.unshift(...created);
+  reminder.generatedCount = matched.length;
+  if (created.length) reminder.status = "sent";
+  await store.persist();
+  res.json({ reminder, createdCount: created.length, matchedCount: matched.length, todos: created });
 }));
 
 app.post("/api/reminders/:id/done", requireAuth, asyncRoute(async (req, res) => {
@@ -1300,6 +1355,107 @@ app.post("/api/import-export/customers/export", requireAuth, asyncRoute(async (_
   store.importExportJobs.unshift(job);
   await store.persist();
   res.json({ customers, job });
+}));
+
+const documentItemSchema = z.object({
+  id: z.string().optional().default(""),
+  product: z.string().min(1),
+  model: z.string().optional().default(""),
+  hsCode: z.string().optional().default(""),
+  quantity: z.number().nonnegative().default(1),
+  unit: z.string().optional().default("PCS"),
+  unitPrice: z.number().nonnegative().default(0),
+  originCountry: z.string().optional().default("China"),
+  weightKg: z.number().nonnegative().default(0),
+  packageCount: z.number().int().nonnegative().default(0)
+});
+
+const documentBodySchema = z.object({
+  type: z.enum(["PI", "CI"]).default("PI"),
+  title: z.string().min(1),
+  number: z.string().min(1),
+  issueDate: z.string().min(1),
+  buyer: z.string().min(1),
+  buyerAddress: z.string().optional().default(""),
+  buyerContact: z.string().optional().default(""),
+  seller: z.string().min(1),
+  sellerAddress: z.string().optional().default(""),
+  currency: z.string().min(1).default("USD"),
+  incoterm: z.string().min(1).default("FOB"),
+  paymentTerm: z.string().optional().default("30% T/T deposit, 70% before shipment"),
+  shippingMethod: z.string().optional().default("Sea freight"),
+  portLoading: z.string().optional().default("Tianjin, China"),
+  portDischarge: z.string().optional().default(""),
+  validityDate: z.string().optional().default(""),
+  bankInfo: z.string().optional().default(""),
+  notes: z.string().optional().default(""),
+  templateStyle: z.enum(["executive", "classic", "compact"]).default("executive"),
+  status: z.enum(["draft", "ready", "exported"]).optional().default("draft"),
+  items: z.array(documentItemSchema).min(1).max(80)
+});
+
+function normalizeDocument(body: z.infer<typeof documentBodySchema>, user: SessionUser, existing?: TradeDocument): TradeDocument {
+  return {
+    id: existing?.id || `td_${Date.now()}`,
+    ownerId: existing?.ownerId || user.id,
+    teamId: existing?.teamId || user.teamId,
+    updatedAt: new Date().toISOString(),
+    ...body,
+    items: body.items.map((item, index) => ({ ...item, id: item.id || `tdi_${Date.now()}_${index}` }))
+  };
+}
+
+app.get("/api/trade-documents", requireAuth, (req, res) => {
+  const { tradeDocuments } = getStore();
+  const documents = tradeDocuments.filter((document) => canSeeOwner(req.user!, document.ownerId, document.teamId));
+  res.json({ documents });
+});
+
+app.post("/api/trade-documents", requireAuth, asyncRoute(async (req, res) => {
+  const body = documentBodySchema.parse(req.body);
+  const store = getStore();
+  const document = normalizeDocument(body, req.user!);
+  store.tradeDocuments.unshift(document);
+  await store.persist();
+  res.json({ document });
+}));
+
+app.patch("/api/trade-documents/:id", requireAuth, asyncRoute(async (req, res) => {
+  const body = documentBodySchema.parse(req.body);
+  const store = getStore();
+  const index = store.tradeDocuments.findIndex((document) => document.id === req.params.id);
+  const existing = index >= 0 ? store.tradeDocuments[index] : undefined;
+  if (!existing || !canSeeOwner(req.user!, existing.ownerId, existing.teamId)) {
+    res.status(404).json({ message: "单据不存在" });
+    return;
+  }
+  const document = normalizeDocument(body, req.user!, existing);
+  store.tradeDocuments[index] = document;
+  await store.persist();
+  res.json({ document });
+}));
+
+app.post("/api/trade-documents/:id/export", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const document = store.tradeDocuments.find((item) => item.id === req.params.id);
+  if (!document || !canSeeOwner(req.user!, document.ownerId, document.teamId)) {
+    res.status(404).json({ message: "单据不存在" });
+    return;
+  }
+  document.status = "exported";
+  document.updatedAt = new Date().toISOString();
+  const job = {
+    id: `io_document_export_${Date.now()}`,
+    name: `${document.type} 单据 PDF 导出：${document.number}`,
+    type: "export" as const,
+    rows: document.items.length,
+    status: "done" as const,
+    operatorId: req.user!.id,
+    createdAt: currentMinuteText()
+  };
+  store.importExportJobs.unshift(job);
+  await store.persist();
+  res.json({ document, job, fileName: `${document.number}-${document.type}.pdf` });
 }));
 
 app.get("/api/wecom/messages", requireAuth, (req, res) => {
@@ -1792,6 +1948,40 @@ function nextPriorityAction(deal: Deal, customer?: Customer) {
   if (deal.stage === "样品") return `确认 ${deal.title} 的样品反馈和复购时间`;
   if (deal.stage === "已报价") return `发送 ${deal.title} 的报价二次确认`;
   return `推进 ${deal.title} 的下一步：${deal.nextAction}`;
+}
+
+function reminderRuleTitle(ruleType = "quote_no_reply") {
+  const map: Record<string, string> = {
+    quote_no_reply: "报价后未回复提醒",
+    sample_feedback: "样品反馈提醒",
+    inactive_customer: "长期未联系提醒",
+    high_value_revisit: "高价值客户复访",
+    custom_due: "自定义跟进提醒"
+  };
+  return map[ruleType] || "自定义跟进提醒";
+}
+
+function reminderRuleText(rule: { ruleType?: string; targetStage?: string; days?: number; channel?: string; priority?: string }) {
+  const days = rule.days ?? 3;
+  const stage = rule.targetStage || "已报价";
+  const channel = rule.channel || "企业微信";
+  if (rule.ruleType === "sample_feedback") return `客户阶段为样品，${days} 天内需要反馈，通过${channel}提醒`;
+  if (rule.ruleType === "inactive_customer") return `${days} 天未推进且客户仍在${stage}阶段，通过${channel}提醒`;
+  if (rule.ruleType === "high_value_revisit") return `金额较高或健康度偏低客户 ${days} 天复访，通过${channel}提醒`;
+  if (rule.ruleType === "custom_due") return `${stage}阶段客户按指定时间提醒，通过${channel}提醒`;
+  return `${stage}阶段客户报价后 ${days} 天未回复，通过${channel}提醒`;
+}
+
+function matchReminderRule(user: SessionUser, rule: { ruleType?: string; targetStage?: string; days?: number; priority?: string }) {
+  const store = getStore();
+  const scopedCustomers = store.customers.filter((customer) => canSeeOwner(user, customer.ownerId, customer.teamId));
+  const stage = rule.targetStage || "已报价";
+  const ruleType = rule.ruleType || "quote_no_reply";
+  if (ruleType === "sample_feedback") return scopedCustomers.filter((customer) => customer.stage === "样品");
+  if (ruleType === "inactive_customer") return scopedCustomers.filter((customer) => customer.stage === stage || customer.nextReminder.includes("逾期"));
+  if (ruleType === "high_value_revisit") return scopedCustomers.filter((customer) => customer.amount >= 30000 || customer.health < 65);
+  if (ruleType === "custom_due") return scopedCustomers.filter((customer) => customer.stage === stage);
+  return scopedCustomers.filter((customer) => customer.stage === stage || customer.nextReminder.includes("逾期"));
 }
 
 function todoTypeLabel(type: string) {

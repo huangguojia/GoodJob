@@ -153,9 +153,14 @@ try {
   const reminder = await request("/api/reminders", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ title: "自动化提醒规则", rule: "报价后 2 天未回复", dueAt: "今天 18:00", channel: "企业微信" })
+    body: JSON.stringify({ title: "自动化提醒规则", ruleType: "quote_no_reply", targetStage: "已报价", days: 2, dueAt: "今天 18:00", channel: "企业微信", priority: "high" })
   });
-  if (!reminder.response.ok || reminder.json.reminder.title !== "自动化提醒规则") throw new Error("reminder create failed");
+  if (!reminder.response.ok || reminder.json.reminder.title !== "自动化提醒规则" || typeof reminder.json.reminder.generatedCount !== "number") throw new Error("reminder create failed");
+  const reminderRun = await request(`/api/reminders/${reminder.json.reminder.id}/run`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!reminderRun.response.ok || typeof reminderRun.json.createdCount !== "number") throw new Error("reminder rule run failed");
 
   const todo = await request("/api/todos", {
     method: "POST",
@@ -304,6 +309,48 @@ try {
     headers: { authorization: `Bearer ${salesToken}` }
   });
   if (!customerExport.response.ok || !Array.isArray(customerExport.json.customers) || customerExport.json.customers.length < 1) throw new Error("customer export failed");
+
+  const tradeDocument = await request("/api/trade-documents", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      type: "CI",
+      title: "自动化商业发票",
+      number: `CI-${Date.now()}`,
+      issueDate: "2026-07-06",
+      buyer: "Automation Buyer Ltd.",
+      buyerAddress: "Berlin, Germany",
+      buyerContact: "Auto Buyer",
+      seller: "GoodJob Instrument Co., Ltd.",
+      sellerAddress: "Tianjin, China",
+      currency: "USD",
+      incoterm: "FOB Tianjin",
+      paymentTerm: "30% T/T deposit, 70% before shipment",
+      shippingMethod: "Sea freight",
+      portLoading: "Tianjin",
+      portDischarge: "Hamburg",
+      validityDate: "2026-07-20",
+      bankInfo: "Bank of China",
+      notes: "Automation document test",
+      templateStyle: "executive",
+      status: "ready",
+      items: [
+        { product: "Pressure Transmitter", model: "GJ-PT", hsCode: "902620", quantity: 3, unit: "PCS", unitPrice: 180, originCountry: "China", weightKg: 5, packageCount: 1 }
+      ]
+    })
+  });
+  if (!tradeDocument.response.ok || tradeDocument.json.document.type !== "CI") throw new Error("trade document create failed");
+
+  const tradeDocuments = await request("/api/trade-documents", {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!tradeDocuments.response.ok || !tradeDocuments.json.documents.some((item: { id: string }) => item.id === tradeDocument.json.document.id)) throw new Error("trade document list failed");
+
+  const tradeDocumentExport = await request(`/api/trade-documents/${tradeDocument.json.document.id}/export`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!tradeDocumentExport.response.ok || tradeDocumentExport.json.document.status !== "exported") throw new Error("trade document export failed");
 
   const examDetail = await request("/api/exams/e1/detail", {
     headers: { authorization: `Bearer ${salesToken}` }
@@ -491,6 +538,8 @@ try {
     aiConfigMasked: aiConfigRead.json.config.apiKey,
     importJob: customerImport.json.job.name,
     exportRows: customerExport.json.customers.length,
+    tradeDocument: tradeDocument.json.document.number,
+    tradeDocumentExported: tradeDocumentExport.json.document.status,
     examPassed: exam.json.attempt.passed,
     examCreated: createdExam.json.exam.title,
     examPublished: publishedExam.json.exam.status,

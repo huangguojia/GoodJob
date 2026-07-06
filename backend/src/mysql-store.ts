@@ -1,7 +1,7 @@
 import mysql from "mysql2/promise";
-import { aiModelConfigs, caseStudies, competitors, customers, deals, examAttempts, examQuestionLinks, examQuestions, exams, importExportJobs, knowledgeAssets, memos, ocrJobs, problems, reminders, todos, users, wecomMessages, websiteOpportunities } from "./data.js";
+import { aiModelConfigs, caseStudies, competitors, customers, deals, examAttempts, examQuestionLinks, examQuestions, exams, importExportJobs, knowledgeAssets, memos, ocrJobs, problems, reminders, todos, tradeDocuments, users, wecomMessages, websiteOpportunities } from "./data.js";
 import type { CrmStore } from "./store.js";
-import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 const defaultUrl = "mysql://goodjob:change_me@127.0.0.1:3306/goodjob_crm";
 
@@ -23,6 +23,7 @@ export async function createMysqlStore(): Promise<CrmStore> {
     examQuestionLinks: await loadExamQuestionLinks(pool),
     examAttempts: await loadExamAttempts(pool),
 	    importExportJobs: await loadImportExportJobs(pool),
+      tradeDocuments: await loadTradeDocuments(pool),
 	    wecomMessages: await loadWecomMessages(pool),
 		    ocrJobs: await loadOcrJobs(pool),
 		    websiteOpportunities: await loadWebsiteOpportunities(pool),
@@ -48,6 +49,7 @@ export async function createMysqlStore(): Promise<CrmStore> {
     store.examQuestionLinks.push(...examQuestionLinks);
     store.examAttempts.push(...examAttempts);
 	    store.importExportJobs.push(...importExportJobs);
+      store.tradeDocuments.push(...tradeDocuments);
 	    store.wecomMessages.push(...wecomMessages);
 	    store.ocrJobs.push(...ocrJobs);
 	    store.websiteOpportunities.push(...websiteOpportunities);
@@ -72,6 +74,10 @@ export async function createMysqlStore(): Promise<CrmStore> {
   }
   if (!store.caseStudies.length) {
     store.caseStudies.push(...caseStudies);
+    await store.persist();
+  }
+  if (!store.tradeDocuments.length) {
+    store.tradeDocuments.push(...tradeDocuments);
     await store.persist();
   }
   if (!store.examQuestions.length) {
@@ -167,8 +173,20 @@ async function ensureSchema(pool: mysql.Pool) {
     owner_id VARCHAR(64) NOT NULL,
     team_id VARCHAR(64) NOT NULL,
     channel VARCHAR(40),
-    status VARCHAR(40)
+    status VARCHAR(40),
+    rule_type VARCHAR(40),
+    target_stage VARCHAR(40),
+    days_count INT DEFAULT 3,
+    priority VARCHAR(20) DEFAULT 'normal',
+    enabled BOOLEAN DEFAULT TRUE,
+    generated_count INT DEFAULT 0
   )`);
+  await ensureColumn(pool, "reminders", "rule_type", "VARCHAR(40)");
+  await ensureColumn(pool, "reminders", "target_stage", "VARCHAR(40)");
+  await ensureColumn(pool, "reminders", "days_count", "INT DEFAULT 3");
+  await ensureColumn(pool, "reminders", "priority", "VARCHAR(20) DEFAULT 'normal'");
+  await ensureColumn(pool, "reminders", "enabled", "BOOLEAN DEFAULT TRUE");
+  await ensureColumn(pool, "reminders", "generated_count", "INT DEFAULT 0");
   await pool.query(`CREATE TABLE IF NOT EXISTS knowledge_assets (
     id VARCHAR(64) PRIMARY KEY,
     title VARCHAR(200) NOT NULL,
@@ -286,6 +304,35 @@ async function ensureSchema(pool: mysql.Pool) {
     operator_id VARCHAR(64),
     created_at VARCHAR(100)
   )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS trade_documents (
+    id VARCHAR(64) PRIMARY KEY,
+    doc_type VARCHAR(10) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    doc_number VARCHAR(80) NOT NULL,
+    issue_date VARCHAR(40),
+    buyer VARCHAR(200),
+    buyer_address TEXT,
+    buyer_contact VARCHAR(200),
+    seller VARCHAR(200),
+    seller_address TEXT,
+    currency VARCHAR(12),
+    incoterm VARCHAR(80),
+    payment_term VARCHAR(255),
+    shipping_method VARCHAR(120),
+    port_loading VARCHAR(120),
+    port_discharge VARCHAR(120),
+    validity_date VARCHAR(40),
+    bank_info TEXT,
+    notes TEXT,
+    template_style VARCHAR(40),
+    status VARCHAR(40),
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    items_json JSON,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_trade_documents_owner(owner_id),
+    INDEX idx_trade_documents_team(team_id)
+  )`);
 	  await pool.query(`CREATE TABLE IF NOT EXISTS wecom_messages (
     id VARCHAR(64) PRIMARY KEY,
     customer_id VARCHAR(64),
@@ -402,7 +449,7 @@ async function loadDeals(pool: mysql.Pool): Promise<Deal[]> {
 
 async function loadReminders(pool: mysql.Pool): Promise<Reminder[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM reminders")).map((row) => ({
-    id: row.id, title: row.title, rule: row.rule_text, dueAt: row.due_at, ownerId: row.owner_id, teamId: row.team_id, channel: row.channel, status: row.status
+    id: row.id, title: row.title, rule: row.rule_text, dueAt: row.due_at, ownerId: row.owner_id, teamId: row.team_id, channel: row.channel, status: row.status, ruleType: row.rule_type || undefined, targetStage: row.target_stage || undefined, days: row.days_count == null ? undefined : Number(row.days_count), priority: row.priority || "normal", enabled: row.enabled == null ? true : Boolean(row.enabled), generatedCount: Number(row.generated_count || 0)
   }));
 }
 
@@ -469,6 +516,36 @@ async function loadExamAttempts(pool: mysql.Pool): Promise<ExamAttempt[]> {
 async function loadImportExportJobs(pool: mysql.Pool): Promise<ImportExportJob[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM import_export_jobs")).map((row) => ({
     id: row.id, name: row.name, type: row.type, rows: Number(row.rows_count), status: row.status, operatorId: row.operator_id, createdAt: row.created_at
+  }));
+}
+
+async function loadTradeDocuments(pool: mysql.Pool): Promise<TradeDocument[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM trade_documents ORDER BY updated_at DESC")).map((row) => ({
+    id: row.id,
+    type: row.doc_type,
+    title: row.title,
+    number: row.doc_number,
+    issueDate: row.issue_date,
+    buyer: row.buyer,
+    buyerAddress: row.buyer_address,
+    buyerContact: row.buyer_contact,
+    seller: row.seller,
+    sellerAddress: row.seller_address,
+    currency: row.currency,
+    incoterm: row.incoterm,
+    paymentTerm: row.payment_term,
+    shippingMethod: row.shipping_method,
+    portLoading: row.port_loading,
+    portDischarge: row.port_discharge,
+    validityDate: row.validity_date,
+    bankInfo: row.bank_info,
+    notes: row.notes,
+    templateStyle: row.template_style || "executive",
+    status: row.status || "draft",
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+    items: row.items_json ? (typeof row.items_json === "string" ? JSON.parse(row.items_json) : row.items_json) : []
   }));
 }
 
@@ -596,13 +673,14 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
     await replaceRows(connection, "customers", store.customers, (item) => [item.id, item.company, item.country, item.contact, item.ownerId, item.teamId, item.stage, item.amount, item.health, item.nextReminder, item.wecomBound], "(id,company,country,contact,owner_id,team_id,stage,amount,health,next_reminder,wecom_bound)");
     await replaceRows(connection, "deals", store.deals, (item) => [item.id, item.customerId, item.title, item.stage, item.amount, item.ownerId, item.teamId, item.nextAction, item.archivedAt ? mysqlDate(item.archivedAt) : null], "(id,customer_id,title,stage,amount,owner_id,team_id,next_action,archived_at)");
     await replaceRows(connection, "todos", (store.todos as Todo[]), (item) => [item.id, item.title, item.type, item.priority, item.dueAt, item.ownerId, item.teamId, item.related, item.done, item.status || "pending", item.pinState || "", item.sortOrder || 0, item.impactAmount ?? null, mysqlDate(item.createdAt), item.historyAt ? mysqlDate(item.historyAt) : null], "(id,title,type,priority,due_at,owner_id,team_id,related,done,status,pin_state,sort_order,impact_amount,created_at,history_at)");
-    await replaceRows(connection, "reminders", store.reminders, (item) => [item.id, item.title, item.rule, item.dueAt, item.ownerId, item.teamId, item.channel, item.status], "(id,title,rule_text,due_at,owner_id,team_id,channel,status)");
+    await replaceRows(connection, "reminders", store.reminders, (item) => [item.id, item.title, item.rule, item.dueAt, item.ownerId, item.teamId, item.channel, item.status, item.ruleType || null, item.targetStage || null, item.days ?? 3, item.priority || "normal", item.enabled ?? true, item.generatedCount || 0], "(id,title,rule_text,due_at,owner_id,team_id,channel,status,rule_type,target_stage,days_count,priority,enabled,generated_count)");
     await replaceRows(connection, "knowledge_assets", store.knowledgeAssets, (item) => [item.id, item.title, item.category, item.status, item.ownerId, item.version], "(id,title,category,status,owner_id,version)");
     await replaceRows(connection, "exams", store.exams, (item) => [item.id, item.title, item.category, item.status, item.passRate, item.questionCount, item.durationMinutes || 20, item.passScore || 80, item.targetRole || "sales", mysqlDate(item.updatedAt)], "(id,title,category,status,pass_rate,question_count,duration_minutes,pass_score,target_role,updated_at)");
     await replaceRows(connection, "exam_questions", store.examQuestions, (item) => [item.id, item.examId || "bank", item.category, item.stem, JSON.stringify(item.options), item.answerIndex, JSON.stringify(item.answerIndexes?.length ? item.answerIndexes : [item.answerIndex]), item.questionType || ((item.answerIndexes?.length || 0) > 1 ? "multiple" : "single"), JSON.stringify(item.tags || []), item.explanation, item.difficulty, mysqlDate(item.updatedAt)], "(id,exam_id,category,stem,options_json,answer_index,answer_indexes_json,question_type,tags_json,explanation,difficulty,updated_at)");
     await replaceRows(connection, "exam_question_links", store.examQuestionLinks, (item) => [item.examId, item.questionId, item.sortOrder], "(exam_id,question_id,sort_order)");
     await replaceRows(connection, "exam_attempts", store.examAttempts, (item) => [item.id, item.examId, item.userId, item.score, item.passed, JSON.stringify(item.answers), item.correctCount, item.totalQuestions, mysqlDate(item.submittedAt)], "(id,exam_id,user_id,score,passed,answers_json,correct_count,total_questions,submitted_at)");
     await replaceRows(connection, "import_export_jobs", store.importExportJobs, (item) => [item.id, item.name, item.type, item.rows, item.status, item.operatorId, item.createdAt], "(id,name,type,rows_count,status,operator_id,created_at)");
+    await replaceRows(connection, "trade_documents", store.tradeDocuments, (item) => [item.id, item.type, item.title, item.number, item.issueDate, item.buyer, item.buyerAddress, item.buyerContact, item.seller, item.sellerAddress, item.currency, item.incoterm, item.paymentTerm, item.shippingMethod, item.portLoading, item.portDischarge, item.validityDate, item.bankInfo, item.notes, item.templateStyle, item.status, item.ownerId, item.teamId, JSON.stringify(item.items), mysqlDate(item.updatedAt)], "(id,doc_type,title,doc_number,issue_date,buyer,buyer_address,buyer_contact,seller,seller_address,currency,incoterm,payment_term,shipping_method,port_loading,port_discharge,validity_date,bank_info,notes,template_style,status,owner_id,team_id,items_json,updated_at)");
 	    await replaceRows(connection, "wecom_messages", store.wecomMessages, (item) => [item.id, item.customerId, item.summary, item.ownerId, item.teamId, item.status], "(id,customer_id,summary,owner_id,team_id,status)");
 	    await replaceRows(connection, "ocr_jobs", store.ocrJobs, (item) => [item.id, item.status, item.confidence, JSON.stringify(item.fields), null], "(id,status,confidence,fields_json,created_by)");
 	    await replaceRows(connection, "website_opportunities", store.websiteOpportunities, (item) => [item.id, item.company, item.business, item.country, item.website, item.contact, item.contactInfo, item.description, item.ownerId, item.teamId, item.status, item.customerId || null, item.dealId || null, item.parseMode || "rule", mysqlDate(item.createdAt)], "(id,company,business,country,website,contact,contact_info,description,owner_id,team_id,status,customer_id,deal_id,parse_mode,created_at)");

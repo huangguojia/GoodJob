@@ -67,7 +67,13 @@ CREATE TABLE reminders (
   owner_id VARCHAR(64) NOT NULL,
   team_id VARCHAR(64) NOT NULL,
   channel VARCHAR(40),
-  status VARCHAR(40)
+  status VARCHAR(40),
+  rule_type VARCHAR(40),
+  target_stage VARCHAR(40),
+  days_count INT DEFAULT 3,
+  priority VARCHAR(20) DEFAULT 'normal',
+  enabled BOOLEAN DEFAULT TRUE,
+  generated_count INT DEFAULT 0
 );
 
 CREATE TABLE knowledge_assets (
@@ -185,6 +191,36 @@ CREATE TABLE import_export_jobs (
   status VARCHAR(40),
   operator_id VARCHAR(64),
   created_at VARCHAR(100)
+);
+
+CREATE TABLE trade_documents (
+  id VARCHAR(64) PRIMARY KEY,
+  doc_type VARCHAR(10) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  doc_number VARCHAR(80) NOT NULL,
+  issue_date VARCHAR(40),
+  buyer VARCHAR(200),
+  buyer_address TEXT,
+  buyer_contact VARCHAR(200),
+  seller VARCHAR(200),
+  seller_address TEXT,
+  currency VARCHAR(12),
+  incoterm VARCHAR(80),
+  payment_term VARCHAR(255),
+  shipping_method VARCHAR(120),
+  port_loading VARCHAR(120),
+  port_discharge VARCHAR(120),
+  validity_date VARCHAR(40),
+  bank_info TEXT,
+  notes TEXT,
+  template_style VARCHAR(40),
+  status VARCHAR(40),
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  items_json JSON,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_trade_documents_owner(owner_id),
+  INDEX idx_trade_documents_team(team_id)
 );
 
 CREATE TABLE wecom_messages (

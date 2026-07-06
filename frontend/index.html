@@ -847,6 +847,26 @@
       padding: 16px;
     }
 
+    .inline-alert {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border: 1px solid rgba(49,87,213,.12);
+      border-radius: 8px;
+      background: linear-gradient(180deg, rgba(248,250,255,.96), rgba(255,255,255,.96));
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .inline-alert b {
+      color: var(--brand);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
     .section-head {
       display: flex;
       align-items: center;
@@ -1236,6 +1256,521 @@
       color: var(--muted);
       font-size: 12px;
       line-height: 1.45;
+    }
+
+    .reminder-rule-card {
+      grid-template-columns: 10px minmax(0, 1fr) auto;
+      align-items: center;
+    }
+
+    .reminder-rule-top {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+    }
+
+    .reminder-rule-top h3 {
+      margin: 0;
+    }
+
+    .reminder-rule-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 8px;
+    }
+
+    .reminder-rule-actions {
+      display: grid;
+      gap: 6px;
+      min-width: 74px;
+    }
+
+    .reminder-rule-actions .btn {
+      min-height: 28px;
+      padding: 4px 8px;
+      border-radius: 8px;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .doc-studio {
+      display: grid;
+      grid-template-columns: minmax(350px, .55fr) minmax(690px, 1.45fr);
+      gap: 12px;
+      align-items: start;
+    }
+
+    .doc-list {
+      padding: 10px;
+      display: grid;
+      grid-column: 1 / -1;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 8px;
+    }
+
+    .doc-list .section-title {
+      grid-column: 1 / -1;
+      padding: 2px 2px 4px;
+    }
+
+    .doc-list-card {
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfcff;
+      cursor: pointer;
+      transition: transform .16s ease, border-color .16s ease, background .16s ease;
+    }
+
+    .doc-list-card:hover,
+    .doc-list-card.active {
+      transform: translateY(-1px);
+      border-color: rgba(49,87,213,.28);
+      background: #fff;
+    }
+
+    .doc-list-card b {
+      display: block;
+      color: var(--ink);
+      font-size: 12px;
+      line-height: 1.35;
+      margin-bottom: 5px;
+    }
+
+    .doc-list-card span,
+    .doc-list-card small {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .doc-editor {
+      padding: 12px;
+    }
+
+    .doc-editor-head,
+    .doc-items-head,
+    .doc-preview-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .doc-editor-head h2,
+    .doc-items-head h3 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 16px;
+    }
+
+    .doc-editor-head span,
+    .doc-items-head span,
+    .doc-preview-toolbar span {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .segmented {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #f5f7fb;
+      flex: 0 0 auto;
+    }
+
+    .segmented button {
+      min-width: 42px;
+      height: 28px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .segmented button.active {
+      color: var(--brand);
+      background: #fff;
+      box-shadow: 0 4px 12px rgba(27,39,68,.08);
+    }
+
+    .doc-form-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+
+    .doc-form-grid label,
+    .doc-item-grid label {
+      display: grid;
+      gap: 5px;
+      min-width: 0;
+    }
+
+    .doc-form-grid label.wide {
+      grid-column: 1 / -1;
+    }
+
+    .doc-form-grid span,
+    .doc-item-grid span {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .doc-form-grid input,
+    .doc-form-grid select,
+    .doc-form-grid textarea,
+    .doc-item-grid input {
+      width: 100%;
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 7px 9px;
+      color: var(--ink);
+      background: #fff;
+      font-size: 12px;
+      outline: none;
+    }
+
+    .doc-form-grid textarea {
+      min-height: 58px;
+      resize: vertical;
+      line-height: 1.45;
+    }
+
+    .doc-form-grid input:focus,
+    .doc-form-grid select:focus,
+    .doc-form-grid textarea:focus,
+    .doc-item-grid input:focus {
+      border-color: rgba(49,87,213,.48);
+      box-shadow: 0 0 0 3px rgba(49,87,213,.08);
+    }
+
+    .doc-items {
+      display: grid;
+      gap: 8px;
+    }
+
+    .doc-item-grid {
+      display: grid;
+      grid-template-columns: 1.4fr .75fr .62fr .42fr .42fr;
+      gap: 7px;
+      align-items: end;
+      padding: 9px;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: #fbfcff;
+    }
+
+    .doc-item-grid label[data-doc-size="name"] {
+      grid-column: span 2;
+    }
+
+    .doc-item-grid label[data-doc-size="price"] {
+      grid-column: span 1;
+    }
+
+    .doc-item-grid label[data-doc-size="short"] input {
+      text-align: center;
+      padding-left: 6px;
+      padding-right: 6px;
+    }
+
+    .doc-item-remove {
+      grid-column: 1 / -1;
+      width: 100%;
+      height: 32px;
+      border-radius: 8px;
+      border: 1px solid #f0d2d2;
+      color: #a33737;
+      background: #fff7f7;
+      cursor: pointer;
+    }
+
+    .doc-preview-shell {
+      padding: 12px;
+      overflow: auto;
+      min-height: 720px;
+      max-height: calc(100vh - 112px);
+      background:
+        linear-gradient(180deg, rgba(247,249,253,.96), rgba(235,239,247,.86));
+    }
+
+    .doc-paper {
+      width: 794px;
+      max-width: 100%;
+      min-height: 1123px;
+      margin: 0 auto;
+      padding: 34px 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: #202636;
+      box-shadow: 0 18px 42px rgba(27,39,68,.14);
+      font-size: 12px;
+      box-sizing: border-box;
+    }
+
+    .doc-paper.classic { border-top: 5px solid #3157d5; }
+    .doc-paper.compact { padding: 24px 28px; font-size: 11px; min-height: 980px; }
+
+    .doc-print-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: stretch;
+      gap: 18px;
+      padding-bottom: 16px;
+      border-bottom: 2px solid #1f2a44;
+    }
+
+    .doc-print-head h2 {
+      margin: 0 0 6px;
+      font-size: 26px;
+      letter-spacing: 0;
+    }
+
+    .doc-letterhead {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .doc-logo-mark {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      color: #fff;
+      background: linear-gradient(135deg, #3157d5, #1aa7a1);
+      font-weight: 900;
+      font-size: 15px;
+    }
+
+    .doc-letterhead b {
+      display: block;
+      color: #111827;
+      font-size: 17px;
+      line-height: 1.25;
+    }
+
+    .doc-letterhead small {
+      display: block;
+      color: #6b7280;
+      font-size: 10px;
+      line-height: 1.5;
+      margin-top: 3px;
+    }
+
+    .doc-title-band {
+      margin-top: 18px;
+      padding: 14px 0 0;
+    }
+
+    .doc-title-band h2 {
+      margin: 0 0 6px;
+      color: #111827;
+      font-size: 27px;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+
+    .doc-title-band p {
+      margin: 0;
+      color: #5f6b7d;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .doc-print-head p,
+    .doc-block p,
+    .doc-sign p {
+      margin: 3px 0;
+      line-height: 1.45;
+    }
+
+    .doc-number-box {
+      width: 210px;
+      padding: 12px;
+      border: 1px solid #d9deeb;
+      border-radius: 8px;
+      background: #f7f9ff;
+      text-align: right;
+      flex: 0 0 auto;
+    }
+
+    .doc-print-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 14px 0;
+    }
+
+    .doc-block {
+      padding: 10px;
+      border: 1px solid #e3e8f2;
+      border-radius: 8px;
+      background: #fbfcff;
+    }
+
+    .doc-block h3 {
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: #3157d5;
+    }
+
+    .doc-terms {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .doc-term {
+      padding: 8px;
+      border-radius: 8px;
+      background: #f5f7fb;
+    }
+
+    .doc-term span {
+      display: block;
+      color: #6b7280;
+      font-size: 9px;
+      margin-bottom: 3px;
+    }
+
+    .doc-term b {
+      font-size: 11px;
+    }
+
+    .doc-paper table {
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      border-collapse: collapse;
+      margin: 12px 0;
+      font-size: inherit;
+      box-sizing: border-box;
+    }
+
+    .doc-items-table,
+    .doc-items-table thead,
+    .doc-items-table tbody {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+    }
+
+    .doc-items-table tr {
+      display: grid;
+      width: 100%;
+      max-width: 100%;
+    }
+
+    .doc-items-table.pi tr {
+      grid-template-columns: minmax(0, .45fr) minmax(0, 3.4fr) minmax(0, 1.3fr) minmax(0, 1.1fr) minmax(0, .8fr) minmax(0, 1.2fr) minmax(0, 1.25fr);
+    }
+
+    .doc-items-table.ci tr {
+      grid-template-columns: minmax(0, .45fr) minmax(0, 2.7fr) minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, .8fr) minmax(0, 1.1fr) minmax(0, 1.25fr) minmax(0, .8fr) minmax(0, .7fr) minmax(0, .55fr);
+    }
+
+    .doc-paper th,
+    .doc-paper td {
+      min-width: 0;
+      border: 1px solid #dfe5f1;
+      border-left: 0;
+      border-top: 0;
+      padding: 5px 4px;
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      white-space: normal;
+      hyphens: auto;
+    }
+
+    .doc-items-table tr > :first-child {
+      border-left: 1px solid #dfe5f1;
+    }
+
+    .doc-items-table thead tr:first-child > * {
+      border-top: 1px solid #dfe5f1;
+    }
+
+    .doc-paper th {
+      color: #27324a;
+      background: #f1f4fa;
+      font-size: 10px;
+      line-height: 1.25;
+    }
+
+    .doc-paper .doc-num,
+    .doc-paper .doc-qty,
+    .doc-paper .doc-money,
+    .doc-paper .doc-origin,
+    .doc-paper .doc-weight,
+    .doc-paper .doc-pkgs {
+      text-align: center;
+      white-space: normal;
+    }
+
+    .doc-paper .doc-money {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .doc-total {
+      display: flex;
+      justify-content: flex-end;
+      gap: 16px;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+
+    .doc-sign {
+      display: grid;
+      grid-template-columns: 1.4fr .8fr;
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .doc-stamp {
+      display: grid;
+      place-items: center;
+      min-height: 86px;
+      border: 1px dashed #cfd6e6;
+      border-radius: 50%;
+      color: #3157d5;
+      font-weight: 900;
+    }
+
+    @media print {
+      body * { visibility: hidden; }
+      #documentPreview, #documentPreview * { visibility: visible; }
+      #documentPreview {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 210mm;
+        min-height: 297mm;
+        border: 0;
+        box-shadow: none;
+        border-radius: 0;
+      }
     }
 
     .priority-task-meta {
@@ -4668,8 +5203,14 @@
       .intel-grid,
       .case-grid,
       .memo-grid,
+      .doc-studio,
 	      .wecom-card,
 	      .settings-grid { grid-template-columns: 1fr; }
+      .doc-preview-shell { max-height: none; }
+      .doc-item-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .doc-item-grid label[data-doc-size="name"],
+      .doc-item-grid label[data-doc-size="price"] { grid-column: span 1; }
+      .doc-item-remove { width: 100%; }
       .dense-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .file-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .focus-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -4808,6 +5349,9 @@
         </button>
         <button data-view="imports" title="导入导出">
           <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span>导入导出</span>
+        </button>
+        <button data-view="documents" title="单据平台">
+          <svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/><path d="M10 13h6"/><path d="M10 17h6"/><path d="M10 9h2"/></svg><span>单据平台</span><em>PI/CI</em>
         </button>
         <button data-view="reports" title="报表">
           <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-7"/></svg><span>报表</span>
@@ -5315,10 +5859,14 @@
 
         <div class="view" id="reminders">
           <div class="page-head">
-            <div><p class="eyebrow">Follow-up Rules</p><h1>跟进提醒</h1><p class="sub">提醒只保留真正影响成交的节点，避免业务员被低价值通知打扰。</p></div>
+            <div><p class="eyebrow">Follow-up Rules</p><h1>跟进提醒</h1><p class="sub">这里管理的是提醒规则；点击“执行规则”后，命中的客户会生成真实待办，可在工作台和待办清单查看。</p></div>
             <button class="btn primary">设置提醒规则</button>
           </div>
           <div class="panel section">
+            <div class="inline-alert">
+              <b>查看路径</b>
+              <span>规则配置保存在本页；执行后生成的提醒任务进入「工作台」今日待办和「待办清单」，命中为 0 时不会生成任务。</span>
+            </div>
             <div class="task-list">
               <article class="task" style="--accent: var(--rose)"><i class="task-line"></i><div><h3>报价后 N 天未回复</h3><p>A 级客户默认 3 天提醒，普通客户 5 天提醒，可按业务员覆盖。</p></div><span class="badge red">高优先级</span></article>
               <article class="task" style="--accent: var(--amber)"><i class="task-line"></i><div><h3>样品签收后待反馈</h3><p>根据物流签收时间触发，提醒销售确认测试进度和复购意向。</p></div><span class="badge amber">今日</span></article>
@@ -5356,6 +5904,51 @@
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+
+        <div class="view" id="documents">
+          <div class="page-head">
+            <div><p class="eyebrow">Document Studio</p><h1>单据生成平台</h1><p class="sub">按外贸常用 PI/CI 结构生成单据，可配置条款、商品明细、实时预览，并通过打印导出 PDF。</p></div>
+            <div class="head-actions"><button class="btn" id="newDocumentButton">新建单据</button><button class="btn" id="saveDocumentButton">保存配置</button><button class="btn primary" id="exportDocumentPdfButton">导出 PDF</button></div>
+          </div>
+          <div class="doc-studio">
+            <aside class="panel doc-list" id="documentList"></aside>
+            <section class="panel doc-editor">
+              <div class="doc-editor-head">
+                <div><h2>单据配置</h2><span>PI 用于报价确认，CI 用于成交/清关资料。切换类型会影响预览标题和关键字段。</span></div>
+                <div class="segmented" id="documentTypeTabs"><button data-doc-type="PI" class="active">PI</button><button data-doc-type="CI">CI</button></div>
+              </div>
+              <div class="doc-form-grid">
+                <label><span>单据标题</span><input id="docTitleInput"></label>
+                <label><span>单据编号</span><input id="docNumberInput"></label>
+                <label><span>签发日期</span><input id="docIssueDateInput" type="date"></label>
+                <label><span>模板风格</span><select id="docTemplateInput"><option value="executive">高级汇报风</option><option value="classic">经典贸易风</option><option value="compact">紧凑清关风</option></select></label>
+                <label><span>买方公司</span><input id="docBuyerInput"></label>
+                <label><span>买方联系人</span><input id="docBuyerContactInput"></label>
+                <label class="wide"><span>买方地址</span><input id="docBuyerAddressInput"></label>
+                <label><span>卖方公司</span><input id="docSellerInput"></label>
+                <label><span>币种</span><select id="docCurrencyInput"><option>USD</option><option>EUR</option><option>CNY</option><option>GBP</option></select></label>
+                <label class="wide"><span>卖方地址</span><input id="docSellerAddressInput"></label>
+                <label><span>贸易条款</span><select id="docIncotermInput"><option>FOB Tianjin</option><option>EXW Factory</option><option>CIF Destination Port</option><option>DAP Buyer Address</option><option>FCA Shanghai</option></select></label>
+                <label><span>运输方式</span><select id="docShippingInput"><option>Sea freight</option><option>Air freight</option><option>Express</option><option>Rail freight</option></select></label>
+                <label><span>装运港</span><input id="docPortLoadingInput"></label>
+                <label><span>目的港</span><input id="docPortDischargeInput"></label>
+                <label><span>有效期</span><input id="docValidityInput" type="date"></label>
+                <label class="wide"><span>付款条款</span><input id="docPaymentInput"></label>
+                <label class="wide"><span>银行信息</span><textarea id="docBankInput"></textarea></label>
+                <label class="wide"><span>备注</span><textarea id="docNotesInput"></textarea></label>
+              </div>
+              <div class="doc-items-head">
+                <div><h3>商品明细</h3><span>CI 建议维护 HS Code、原产国、重量和包装数。</span></div>
+                <button class="btn" id="addDocumentItemButton">增加明细</button>
+              </div>
+              <div class="doc-items" id="documentItemsEditor"></div>
+            </section>
+            <section class="panel doc-preview-shell">
+              <div class="doc-preview-toolbar"><span id="docPreviewMeta">实时预览</span><button class="btn" id="refreshDocumentPreviewButton">刷新预览</button></div>
+              <div class="doc-paper" id="documentPreview"></div>
+            </section>
           </div>
         </div>
 
@@ -6090,6 +6683,7 @@ https://www.ifm.com"></textarea>
         ["考试", "exam"], ["exam", "exam"],
         ["资料", "knowledge"], ["knowledge", "knowledge"],
         ["报表", "reports"], ["report", "reports"],
+        ["单据", "documents"], ["发票", "documents"], ["pi", "documents"], ["ci", "documents"], ["invoice", "documents"], ["document", "documents"],
         ["备忘", "memos"], ["memo", "memos"]
       ];
       const matched = viewMap.find(([keyword]) => value.includes(keyword));

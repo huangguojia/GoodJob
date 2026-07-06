@@ -56,6 +56,12 @@ interface Reminder {
   dueAt: string;
   channel: string;
   status: string;
+  ruleType?: string;
+  targetStage?: string;
+  days?: number;
+  priority?: "high" | "medium" | "normal";
+  enabled?: boolean;
+  generatedCount?: number;
 }
 
 interface ImportExportJob {
@@ -65,6 +71,45 @@ interface ImportExportJob {
   rows: number;
   status: string;
   createdAt: string;
+}
+
+interface TradeDocumentItem {
+  id: string;
+  product: string;
+  model: string;
+  hsCode: string;
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+  originCountry: string;
+  weightKg: number;
+  packageCount: number;
+}
+
+interface TradeDocument {
+  id: string;
+  type: "PI" | "CI";
+  title: string;
+  number: string;
+  issueDate: string;
+  buyer: string;
+  buyerAddress: string;
+  buyerContact: string;
+  seller: string;
+  sellerAddress: string;
+  currency: string;
+  incoterm: string;
+  paymentTerm: string;
+  shippingMethod: string;
+  portLoading: string;
+  portDischarge: string;
+  validityDate: string;
+  bankInfo: string;
+  notes: string;
+  templateStyle: "executive" | "classic" | "compact";
+  status: "draft" | "ready" | "exported";
+  updatedAt: string;
+  items: TradeDocumentItem[];
 }
 
 interface CustomerImportRow {
@@ -301,6 +346,7 @@ interface AppState {
   deals: Deal[];
   reminders: Reminder[];
   jobs: ImportExportJob[];
+  tradeDocuments: TradeDocument[];
   wecomMessages: WecomMessage[];
   knowledgeAssets: KnowledgeAsset[];
   exams: Exam[];
@@ -329,6 +375,7 @@ interface AppState {
   selectedExamId: string | null;
   selectedExamIds: string[];
   selectedQuestionId: string | null;
+  selectedDocumentId: string | null;
 }
 
 const state: AppState = {
@@ -339,6 +386,7 @@ const state: AppState = {
   deals: [],
   reminders: [],
   jobs: [],
+  tradeDocuments: [],
   wecomMessages: [],
   knowledgeAssets: [],
   exams: [],
@@ -366,7 +414,8 @@ const state: AppState = {
   selectedCaseId: null,
   selectedExamId: null,
   selectedExamIds: [],
-  selectedQuestionId: null
+  selectedQuestionId: null,
+  selectedDocumentId: null
 };
 
 let memoDirty = false;
@@ -604,13 +653,14 @@ function applyAuthedUser(user: User) {
 
 async function refreshAll(user: User) {
   renderDashboardCache(user);
-  const [summary, customers, todos, deals, reminders, jobs, wecom, knowledge, exams, ocr, websiteOps, aiConfig, problems, memos, competitors, caseStudies] = await Promise.all([
+  const [summary, customers, todos, deals, reminders, jobs, tradeDocs, wecom, knowledge, exams, ocr, websiteOps, aiConfig, problems, memos, competitors, caseStudies] = await Promise.all([
     api<DashboardSummary>("/api/dashboard/summary"),
     api<{ customers: Customer[] }>("/api/customers"),
     api<{ todos: Todo[] }>("/api/todos"),
     api<{ deals: Deal[] }>("/api/deals"),
     api<{ reminders: Reminder[] }>("/api/reminders"),
     api<{ jobs: ImportExportJob[] }>("/api/import-export/jobs"),
+    api<{ documents: TradeDocument[] }>("/api/trade-documents"),
     api<{ messages: WecomMessage[] }>("/api/wecom/messages"),
     api<{ assets: KnowledgeAsset[] }>("/api/knowledge/assets"),
     api<{ exams: Exam[]; report: ExamReport }>("/api/exams"),
@@ -629,6 +679,7 @@ async function refreshAll(user: User) {
   state.deals = deals.deals;
   state.reminders = reminders.reminders;
   state.jobs = jobs.jobs;
+  state.tradeDocuments = tradeDocs.documents;
   state.wecomMessages = wecom.messages;
   state.knowledgeAssets = knowledge.assets;
   state.exams = exams.exams;
@@ -646,12 +697,14 @@ async function refreshAll(user: User) {
   state.selectedCompetitorId = state.selectedCompetitorId || competitors.competitors[0]?.id || null;
   state.selectedCaseId = state.selectedCaseId || caseStudies.caseStudies[0]?.id || null;
   state.selectedExamId = state.selectedExamId || exams.exams[0]?.id || null;
+  state.selectedDocumentId = state.selectedDocumentId || tradeDocs.documents[0]?.id || null;
   writeDashboardCache(user, summary, todos.todos, customers.customers);
   renderDashboard(summary, todos.todos, customers.customers);
   renderCustomers(customers.customers);
   renderPipeline(deals.deals);
   renderReminders(reminders.reminders);
   renderJobs(jobs.jobs);
+  renderTradeDocuments(tradeDocs.documents);
   renderWecom(wecom.messages);
   renderKnowledge(knowledge.assets);
   renderExams(exams.exams);
@@ -1710,8 +1763,30 @@ function renderReminders(reminders: Reminder[]) {
   const list = qs<HTMLElement>("#reminders .task-list");
   renderTopbarStats();
   if (!list) return;
-  list.innerHTML = reminders.map((reminder) => `<article class="task" data-reminder-id="${escapeHtml(reminder.id)}" style="--accent: var(--${reminder.status === "done" ? "green" : "rose"})"><i class="task-line"></i><div><h3>${escapeHtml(reminder.title)}</h3><p>${escapeHtml(reminder.rule)} · ${escapeHtml(reminder.dueAt)} · ${escapeHtml(reminder.channel)}</p></div><button class="btn">${reminder.status === "done" ? "已完成" : "完成"}</button></article>`).join("");
-  qsa<HTMLButtonElement>("#reminders .task .btn", list).forEach((button) => {
+  const statusText: Record<string, string> = { pending: "待执行", sent: "已执行", done: "已完成" };
+  list.innerHTML = reminders.map((reminder) => {
+    const priorityTone = reminder.priority === "high" ? "red" : reminder.priority === "medium" ? "amber" : "";
+    const accent = reminder.status === "done" ? "green" : reminder.priority === "high" ? "rose" : reminder.status === "sent" ? "brand" : "amber";
+    return `<article class="task reminder-rule-card" data-reminder-id="${escapeHtml(reminder.id)}" style="--accent: var(--${accent})">
+      <i class="task-line"></i>
+      <div>
+        <div class="reminder-rule-top"><h3>${escapeHtml(reminder.title)}</h3>${badge(statusText[reminder.status] || reminder.status, reminder.status === "done" ? "green" : reminder.status === "sent" ? "amber" : "")}</div>
+        <p>${escapeHtml(reminder.rule)} · ${escapeHtml(reminder.dueAt)} · ${escapeHtml(reminder.channel)}</p>
+        <div class="reminder-rule-meta">
+          ${badge(reminderRuleTypeText(reminder.ruleType), "")}
+          ${badge(reminder.targetStage || "不限阶段", "")}
+          ${badge(`${reminder.days ?? 3} 天`, "")}
+          ${badge(reminder.priority === "high" ? "高优先级" : reminder.priority === "medium" ? "中优先级" : "普通", priorityTone)}
+          ${badge(`命中 ${reminder.generatedCount || 0}`, reminder.generatedCount ? "green" : "gray")}
+        </div>
+      </div>
+      <div class="reminder-rule-actions">
+        <button class="btn primary" data-run-reminder ${reminder.status === "done" ? "disabled" : ""}>执行规则</button>
+        <button class="btn" data-done-reminder>${reminder.status === "done" ? "已完成" : "完成"}</button>
+      </div>
+    </article>`;
+  }).join("");
+  qsa<HTMLButtonElement>("[data-done-reminder]", list).forEach((button) => {
     button.addEventListener("click", async () => {
       const row = button.closest<HTMLElement>(".task");
       if (!row?.dataset.reminderId) return;
@@ -1723,6 +1798,20 @@ function renderReminders(reminders: Reminder[]) {
       toast("提醒已完成");
     });
   });
+  qsa<HTMLButtonElement>("[data-run-reminder]", list).forEach((button) => {
+    button.addEventListener("click", () => void runReminderRule(button.closest<HTMLElement>(".task")?.dataset.reminderId || "", button));
+  });
+}
+
+function reminderRuleTypeText(ruleType = "quote_no_reply") {
+  const map: Record<string, string> = {
+    quote_no_reply: "报价未回复",
+    sample_feedback: "样品反馈",
+    inactive_customer: "长期未联系",
+    high_value_revisit: "高价值复访",
+    custom_due: "自定义日期"
+  };
+  return map[ruleType] || "自定义规则";
 }
 
 function renderProblems(problems: ProblemItem[]) {
@@ -1944,13 +2033,68 @@ function setMemoSaveState(text: string) {
 function openReminderModal() {
   openModal("设置提醒规则", `
     <div class="form-grid">
-      <div class="form-field full"><label>提醒名称</label><input id="reminderTitleInput" value="自动化报价跟进提醒"></div>
-      <div class="form-field full"><label>触发规则</label><input id="reminderRuleInput" value="报价后 2 天未回复自动提醒"></div>
+      <div class="form-field full"><label>规则模板</label><select id="reminderRuleTypeInput"><option value="quote_no_reply">报价后未回复</option><option value="sample_feedback">样品签收后待反馈</option><option value="inactive_customer">长期未联系客户</option><option value="high_value_revisit">高价值客户复访</option><option value="custom_due">自定义阶段提醒</option></select></div>
+      <div class="form-field full"><label>提醒名称</label><input id="reminderTitleInput" data-auto-title="true" value="报价后未回复提醒"></div>
+      <div class="form-field"><label>适用阶段</label><select id="reminderStageInput"><option>已报价</option><option>样品</option><option>谈判</option><option>询盘</option><option>已联系</option><option>成交</option></select></div>
+      <div class="form-field"><label>触发天数</label><input id="reminderDaysInput" type="number" min="0" max="90" value="3"></div>
       <div class="form-field"><label>提醒时间</label><input id="reminderDueInput" value="今天 18:00"></div>
       <div class="form-field"><label>渠道</label><select id="reminderChannelInput"><option>企业微信</option><option>站内</option><option>邮件</option></select></div>
+      <div class="form-field"><label>优先级</label><select id="reminderPriorityInput"><option value="high">高优先级</option><option value="medium" selected>中优先级</option><option value="normal">普通</option></select></div>
+      <label class="form-field"><span>规则状态</span><select id="reminderEnabledInput"><option value="true">启用</option><option value="false">停用</option></select></label>
+      <div class="form-field full"><label>规则说明</label><input id="reminderRuleInput" value="已报价阶段客户报价后 3 天未回复，通过企业微信提醒"></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveReminderButton">保存规则</button>`);
+  bindReminderRulePreset();
   qs("#saveReminderButton")?.addEventListener("click", () => void saveReminder());
+}
+
+function reminderRulePreset(type: string) {
+  if (type === "sample_feedback") {
+    return { title: "样品反馈提醒", stage: "样品", days: "3" };
+  }
+  if (type === "inactive_customer") {
+    return { title: "长期未联系提醒", days: "14" };
+  }
+  if (type === "high_value_revisit") {
+    return { title: "高价值客户复访", days: "7" };
+  }
+  if (type === "custom_due") {
+    return { title: "自定义阶段提醒" };
+  }
+  return { title: "报价后未回复提醒", stage: "已报价", days: "3" };
+}
+
+function reminderRuleDraft(applyPreset = false) {
+  const type = qs<HTMLSelectElement>("#reminderRuleTypeInput")?.value || "quote_no_reply";
+  const stageInput = qs<HTMLSelectElement>("#reminderStageInput");
+  const daysInput = qs<HTMLInputElement>("#reminderDaysInput");
+  const titleInput = qs<HTMLInputElement>("#reminderTitleInput");
+  const preset = reminderRulePreset(type);
+  if (applyPreset) {
+    if (stageInput && preset.stage) stageInput.value = preset.stage;
+    if (daysInput && preset.days) daysInput.value = preset.days;
+    if (titleInput && titleInput.dataset.autoTitle !== "false") {
+      titleInput.value = preset.title;
+      titleInput.dataset.autoTitle = "true";
+    }
+  }
+  const ruleInput = qs<HTMLInputElement>("#reminderRuleInput");
+  const channel = qs<HTMLSelectElement>("#reminderChannelInput")?.value || "企业微信";
+  const stage = qs<HTMLSelectElement>("#reminderStageInput")?.value || "已报价";
+  const days = qs<HTMLInputElement>("#reminderDaysInput")?.value || "3";
+  if (ruleInput) ruleInput.value = `${stage}阶段客户 ${days} 天未推进，通过${channel}提醒`;
+}
+
+function bindReminderRulePreset() {
+  qs<HTMLInputElement>("#reminderTitleInput")?.addEventListener("input", (event) => {
+    (event.currentTarget as HTMLInputElement).dataset.autoTitle = "false";
+  });
+  qs<HTMLElement>("#reminderRuleTypeInput")?.addEventListener("change", () => reminderRuleDraft(true));
+  ["#reminderStageInput", "#reminderDaysInput", "#reminderChannelInput"].forEach((selector) => {
+    qs<HTMLElement>(selector)?.addEventListener("change", () => reminderRuleDraft());
+    qs<HTMLElement>(selector)?.addEventListener("input", () => reminderRuleDraft());
+  });
+  reminderRuleDraft(true);
 }
 
 async function saveReminder() {
@@ -1965,13 +2109,44 @@ async function saveReminder() {
       title,
       rule: qs<HTMLInputElement>("#reminderRuleInput")?.value || "报价后未回复",
       dueAt: qs<HTMLInputElement>("#reminderDueInput")?.value || "今天",
-      channel: qs<HTMLSelectElement>("#reminderChannelInput")?.value || "企业微信"
+      channel: qs<HTMLSelectElement>("#reminderChannelInput")?.value || "企业微信",
+      ruleType: qs<HTMLSelectElement>("#reminderRuleTypeInput")?.value || "quote_no_reply",
+      targetStage: qs<HTMLSelectElement>("#reminderStageInput")?.value || "已报价",
+      days: Number(qs<HTMLInputElement>("#reminderDaysInput")?.value || 3),
+      priority: qs<HTMLSelectElement>("#reminderPriorityInput")?.value || "medium",
+      enabled: qs<HTMLSelectElement>("#reminderEnabledInput")?.value !== "false"
     })
   });
   state.reminders.unshift(result.reminder);
   renderReminders(state.reminders);
   closeModal();
-  toast("提醒规则已保存");
+  toast("提醒规则已保存：在本页执行规则后，会生成到工作台/待办清单");
+}
+
+async function runReminderRule(id: string, button?: HTMLButtonElement) {
+  if (!id) return;
+  try {
+    if (button) {
+      button.disabled = true;
+      button.textContent = "执行中";
+    }
+    const result = await api<{ reminder: Reminder; createdCount: number; matchedCount: number }>(`/api/reminders/${id}/run`, { method: "POST" });
+    state.reminders = state.reminders.map((reminder) => reminder.id === result.reminder.id ? result.reminder : reminder);
+    const todos = await api<{ todos: Todo[] }>("/api/todos");
+    state.todos = todos.todos;
+    renderReminders(state.reminders);
+    renderTodos(state.todos);
+    updateTodoChips(state.todos);
+    renderTopbarStats();
+    toast(`规则已执行：命中 ${result.matchedCount}，生成 ${result.createdCount} 条待办，可到工作台/待办清单查看`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "执行提醒规则失败", "error");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "执行规则";
+    }
+  }
 }
 
 function openProblemModal() {
@@ -2234,6 +2409,312 @@ function renderJobs(jobs: ImportExportJob[]) {
   const tbody = qs<HTMLElement>("#imports tbody");
   if (!tbody) return;
   tbody.innerHTML = jobs.length ? jobs.map((job) => `<tr><td>${escapeHtml(job.name)}</td><td>${job.type === "import" ? "导入" : "导出"}</td><td>${job.rows.toLocaleString("en-US")} 行</td><td>${badge(job.status === "done" ? "完成" : job.status === "failed" ? "失败" : "待审批", job.status === "done" ? "green" : job.status === "failed" ? "red" : "amber")}</td><td>当前账号</td><td>${escapeHtml(job.createdAt)}</td></tr>`).join("") : `<tr><td colspan="6" class="empty-cell">暂无导入导出任务</td></tr>`;
+}
+
+function documentStatusText(status: string) {
+  const map: Record<string, string> = { draft: "草稿", ready: "已配置", exported: "已导出" };
+  return map[status] || "草稿";
+}
+
+function documentTotal(document: TradeDocument) {
+  return document.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
+}
+
+function formatDocumentMoney(value: number, currency = "USD") {
+  return `${currency} ${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatDocumentTableMoney(value: number) {
+  return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function todayDateInput() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function defaultTradeDocument(type: "PI" | "CI" = "PI"): TradeDocument {
+  const date = todayDateInput();
+  return {
+    id: "__new__",
+    type,
+    title: type === "PI" ? "新建形式发票 PI" : "新建商业发票 CI",
+    number: `${type}-${date.replace(/-/g, "")}-${Math.floor(Date.now() / 1000).toString().slice(-4)}`,
+    issueDate: date,
+    buyer: state.customers[0]?.company || "Buyer Company",
+    buyerAddress: state.customers[0] ? `${state.customers[0].country} / address to be confirmed` : "",
+    buyerContact: state.customers[0]?.contact || "",
+    seller: "GoodJob Instrument Co., Ltd.",
+    sellerAddress: "Tianjin, China",
+    currency: "USD",
+    incoterm: "FOB Tianjin",
+    paymentTerm: "30% T/T deposit, 70% before shipment",
+    shippingMethod: "Sea freight",
+    portLoading: "Tianjin, China",
+    portDischarge: "",
+    validityDate: "",
+    bankInfo: "Beneficiary: GoodJob Instrument Co., Ltd. / Bank: Bank of China Tianjin Branch / SWIFT: BKCHCNBJ",
+    notes: type === "PI" ? "Lead time starts after deposit and technical confirmation." : "The goods are of China origin and packed for export shipment.",
+    templateStyle: "executive",
+    status: "draft",
+    updatedAt: new Date().toISOString(),
+    items: [
+      { id: "new_item_1", product: "Smart Pressure Transmitter", model: "GJ-PT3051", hsCode: "902620", quantity: 10, unit: "PCS", unitPrice: 185, originCountry: "China", weightKg: 16, packageCount: 1 }
+    ]
+  };
+}
+
+function activeTradeDocument() {
+  return state.tradeDocuments.find((document) => document.id === state.selectedDocumentId) || state.tradeDocuments[0] || defaultTradeDocument();
+}
+
+function renderTradeDocuments(documents: TradeDocument[]) {
+  const list = qs<HTMLElement>("#documentList");
+  if (!list) return;
+  const active = documents.find((document) => document.id === state.selectedDocumentId) || documents[0] || defaultTradeDocument();
+  state.selectedDocumentId = active.id;
+  list.innerHTML = `
+    <div class="section-title"><h2>单据列表</h2><span>${documents.length} 份</span></div>
+    ${documents.length ? documents.map((document) => `
+      <article class="doc-list-card ${document.id === active.id ? "active" : ""}" data-document-id="${escapeHtml(document.id)}">
+        <b>${escapeHtml(document.title)}</b>
+        <span>${escapeHtml(document.number)} · ${document.type}</span>
+        <small>${documentStatusText(document.status)} · ${formatDocumentMoney(documentTotal(document), document.currency)}</small>
+      </article>
+    `).join("") : `<div class="empty-cell">暂无单据，点击新建单据开始。</div>`}
+  `;
+  qsa<HTMLElement>("[data-document-id]", list).forEach((card) => {
+    card.addEventListener("click", () => {
+      state.selectedDocumentId = card.dataset.documentId || null;
+      renderTradeDocuments(state.tradeDocuments);
+    });
+  });
+  fillDocumentEditor(active);
+}
+
+function fillDocumentEditor(document: TradeDocument) {
+  setDocumentType(document.type);
+  const values: Record<string, string> = {
+    docTitleInput: document.title,
+    docNumberInput: document.number,
+    docIssueDateInput: document.issueDate,
+    docTemplateInput: document.templateStyle,
+    docBuyerInput: document.buyer,
+    docBuyerContactInput: document.buyerContact,
+    docBuyerAddressInput: document.buyerAddress,
+    docSellerInput: document.seller,
+    docCurrencyInput: document.currency,
+    docSellerAddressInput: document.sellerAddress,
+    docIncotermInput: document.incoterm,
+    docShippingInput: document.shippingMethod,
+    docPortLoadingInput: document.portLoading,
+    docPortDischargeInput: document.portDischarge,
+    docValidityInput: document.validityDate,
+    docPaymentInput: document.paymentTerm,
+    docBankInput: document.bankInfo,
+    docNotesInput: document.notes
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const input = qs<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`#${id}`);
+    if (input) input.value = value || "";
+  });
+  renderDocumentItems(document.items);
+  renderDocumentPreview(collectDocumentDraft());
+}
+
+function setDocumentType(type: "PI" | "CI") {
+  qsa<HTMLButtonElement>("#documentTypeTabs button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.docType === type);
+  });
+}
+
+function currentDocumentType(): "PI" | "CI" {
+  return qs<HTMLButtonElement>("#documentTypeTabs button.active")?.dataset.docType === "CI" ? "CI" : "PI";
+}
+
+function renderDocumentItems(items: TradeDocumentItem[]) {
+  const box = qs<HTMLElement>("#documentItemsEditor");
+  if (!box) return;
+  box.innerHTML = items.map((item, index) => `
+    <div class="doc-item-grid" data-doc-item="${escapeHtml(item.id || `item_${index}`)}">
+      <label data-doc-size="name"><span>品名</span><input data-doc-field="product" value="${escapeHtml(item.product)}"></label>
+      <label><span>型号</span><input data-doc-field="model" value="${escapeHtml(item.model)}"></label>
+      <label><span>HS Code</span><input data-doc-field="hsCode" value="${escapeHtml(item.hsCode)}"></label>
+      <label data-doc-size="short"><span>数量</span><input data-doc-field="quantity" type="number" min="0" value="${item.quantity}"></label>
+      <label data-doc-size="short"><span>单位</span><input data-doc-field="unit" value="${escapeHtml(item.unit)}"></label>
+      <label data-doc-size="price"><span>单价</span><input data-doc-field="unitPrice" type="number" min="0" step="0.01" value="${item.unitPrice}"></label>
+      <label><span>原产国</span><input data-doc-field="originCountry" value="${escapeHtml(item.originCountry)}"></label>
+      <label data-doc-size="short"><span>重量kg</span><input data-doc-field="weightKg" type="number" min="0" step="0.01" value="${item.weightKg}"></label>
+      <label data-doc-size="short"><span>包装</span><input data-doc-field="packageCount" type="number" min="0" value="${item.packageCount}"></label>
+      <button class="doc-item-remove" type="button" title="删除明细">×</button>
+    </div>
+  `).join("");
+  qsa<HTMLInputElement>("[data-doc-field]", box).forEach((input) => input.addEventListener("input", () => renderDocumentPreview(collectDocumentDraft())));
+  qsa<HTMLButtonElement>(".doc-item-remove", box).forEach((button) => {
+    button.addEventListener("click", () => {
+      button.closest(".doc-item-grid")?.remove();
+      if (!qsa(".doc-item-grid", box).length) addDocumentItem();
+      renderDocumentPreview(collectDocumentDraft());
+    });
+  });
+}
+
+function collectDocumentItems(): TradeDocumentItem[] {
+  return qsa<HTMLElement>("#documentItemsEditor .doc-item-grid").map((row, index) => {
+    const field = (name: string) => row.querySelector<HTMLInputElement>(`[data-doc-field="${name}"]`)?.value.trim() || "";
+    const numberField = (name: string) => Number(row.querySelector<HTMLInputElement>(`[data-doc-field="${name}"]`)?.value || 0);
+    return {
+      id: row.dataset.docItem || `item_${index}`,
+      product: field("product") || "Product",
+      model: field("model"),
+      hsCode: field("hsCode"),
+      quantity: numberField("quantity"),
+      unit: field("unit") || "PCS",
+      unitPrice: numberField("unitPrice"),
+      originCountry: field("originCountry") || "China",
+      weightKg: numberField("weightKg"),
+      packageCount: Math.round(numberField("packageCount"))
+    };
+  });
+}
+
+function collectDocumentDraft(): TradeDocument {
+  const existing = state.tradeDocuments.find((document) => document.id === state.selectedDocumentId);
+  return {
+    id: existing?.id || state.selectedDocumentId || "__new__",
+    type: currentDocumentType(),
+    title: qs<HTMLInputElement>("#docTitleInput")?.value.trim() || "未命名单据",
+    number: qs<HTMLInputElement>("#docNumberInput")?.value.trim() || `DOC-${Date.now()}`,
+    issueDate: qs<HTMLInputElement>("#docIssueDateInput")?.value || todayDateInput(),
+    buyer: qs<HTMLInputElement>("#docBuyerInput")?.value.trim() || "Buyer Company",
+    buyerAddress: qs<HTMLInputElement>("#docBuyerAddressInput")?.value.trim() || "",
+    buyerContact: qs<HTMLInputElement>("#docBuyerContactInput")?.value.trim() || "",
+    seller: qs<HTMLInputElement>("#docSellerInput")?.value.trim() || "GoodJob Instrument Co., Ltd.",
+    sellerAddress: qs<HTMLInputElement>("#docSellerAddressInput")?.value.trim() || "",
+    currency: qs<HTMLSelectElement>("#docCurrencyInput")?.value || "USD",
+    incoterm: qs<HTMLSelectElement>("#docIncotermInput")?.value || "FOB Tianjin",
+    paymentTerm: qs<HTMLInputElement>("#docPaymentInput")?.value.trim() || "",
+    shippingMethod: qs<HTMLSelectElement>("#docShippingInput")?.value || "Sea freight",
+    portLoading: qs<HTMLInputElement>("#docPortLoadingInput")?.value.trim() || "",
+    portDischarge: qs<HTMLInputElement>("#docPortDischargeInput")?.value.trim() || "",
+    validityDate: qs<HTMLInputElement>("#docValidityInput")?.value || "",
+    bankInfo: qs<HTMLTextAreaElement>("#docBankInput")?.value.trim() || "",
+    notes: qs<HTMLTextAreaElement>("#docNotesInput")?.value.trim() || "",
+    templateStyle: (qs<HTMLSelectElement>("#docTemplateInput")?.value as TradeDocument["templateStyle"]) || "executive",
+    status: existing?.status || "draft",
+    updatedAt: new Date().toISOString(),
+    items: collectDocumentItems()
+  };
+}
+
+function renderDocumentPreview(document: TradeDocument) {
+  const preview = qs<HTMLElement>("#documentPreview");
+  if (!preview) return;
+  const total = documentTotal(document);
+  const title = document.type === "PI" ? "PROFORMA INVOICE" : "COMMERCIAL INVOICE";
+  const status = document.type === "PI" ? "Quotation confirmation" : "Customs / shipment document";
+  preview.className = `doc-paper ${document.templateStyle}`;
+  preview.innerHTML = `
+    <div class="doc-print-head">
+      <div class="doc-letterhead">
+        <div class="doc-logo-mark">GJ</div>
+        <div>
+          <b>${escapeHtml(document.seller)}</b>
+          <small>${escapeHtml(document.sellerAddress || "Tianjin, China")}<br>Export Documentation Center</small>
+        </div>
+      </div>
+      <div class="doc-number-box">
+        <p><b>No.</b> ${escapeHtml(document.number)}</p>
+        <p><b>Date</b> ${escapeHtml(document.issueDate)}</p>
+        <p><b>Currency</b> ${escapeHtml(document.currency)}</p>
+      </div>
+    </div>
+    <div class="doc-title-band">
+      <h2>${title}</h2>
+      <p>${escapeHtml(status)} · ${escapeHtml(document.title)}</p>
+    </div>
+    <div class="doc-print-grid">
+      <div class="doc-block"><h3>Seller</h3><p><b>${escapeHtml(document.seller)}</b></p><p>${escapeHtml(document.sellerAddress)}</p></div>
+      <div class="doc-block"><h3>Buyer</h3><p><b>${escapeHtml(document.buyer)}</b></p><p>${escapeHtml(document.buyerAddress)}</p><p>${escapeHtml(document.buyerContact)}</p></div>
+    </div>
+    <div class="doc-terms">
+      <div class="doc-term"><span>Incoterm</span><b>${escapeHtml(document.incoterm)}</b></div>
+      <div class="doc-term"><span>Payment</span><b>${escapeHtml(document.paymentTerm)}</b></div>
+      <div class="doc-term"><span>Shipment</span><b>${escapeHtml(document.shippingMethod)}</b></div>
+      <div class="doc-term"><span>Validity</span><b>${escapeHtml(document.validityDate || "To be confirmed")}</b></div>
+      <div class="doc-term"><span>Port of Loading</span><b>${escapeHtml(document.portLoading)}</b></div>
+      <div class="doc-term"><span>Port of Discharge</span><b>${escapeHtml(document.portDischarge || "To be confirmed")}</b></div>
+      <div class="doc-term"><span>Document Type</span><b>${document.type}</b></div>
+      <div class="doc-term"><span>Status</span><b>${documentStatusText(document.status)}</b></div>
+    </div>
+    <table class="doc-items-table ${document.type === "CI" ? "ci" : "pi"}">
+      <thead><tr><th>#</th><th>Description</th><th>Model</th><th>HS Code</th><th>Qty</th><th>Unit Price</th><th>Amount</th>${document.type === "CI" ? "<th>Origin</th><th>Weight</th><th>Pkgs</th>" : ""}</tr></thead>
+      <tbody>${document.items.map((item, index) => `
+        <tr>
+          <td class="doc-num">${index + 1}</td>
+          <td class="doc-desc">${escapeHtml(item.product)}</td>
+          <td>${escapeHtml(item.model)}</td>
+          <td>${escapeHtml(item.hsCode)}</td>
+          <td class="doc-qty">${item.quantity} ${escapeHtml(item.unit)}</td>
+          <td class="doc-money">${formatDocumentTableMoney(item.unitPrice)}</td>
+          <td class="doc-money">${formatDocumentTableMoney(item.quantity * item.unitPrice)}</td>
+          ${document.type === "CI" ? `<td class="doc-origin">${escapeHtml(item.originCountry)}</td><td class="doc-weight">${item.weightKg} kg</td><td class="doc-pkgs">${item.packageCount}</td>` : ""}
+        </tr>
+      `).join("")}</tbody>
+    </table>
+    <div class="doc-total"><span>Total Amount</span><b>${formatDocumentMoney(total, document.currency)}</b></div>
+    <div class="doc-sign">
+      <div class="doc-block"><h3>Bank / Notes</h3><p>${escapeHtml(document.bankInfo)}</p><p>${escapeHtml(document.notes)}</p></div>
+      <div class="doc-stamp">AUTHORIZED</div>
+    </div>
+  `;
+  const meta = qs<HTMLElement>("#docPreviewMeta");
+  if (meta) meta.textContent = `${document.type} · ${document.number} · ${formatDocumentMoney(total, document.currency)}`;
+}
+
+function addDocumentItem() {
+  const draft = collectDocumentDraft();
+  draft.items.push({ id: `item_${Date.now()}`, product: "", model: "", hsCode: "", quantity: 1, unit: "PCS", unitPrice: 0, originCountry: "China", weightKg: 0, packageCount: 0 });
+  renderDocumentItems(draft.items);
+  renderDocumentPreview(draft);
+}
+
+function openNewDocument() {
+  state.selectedDocumentId = "__new__";
+  fillDocumentEditor(defaultTradeDocument());
+  qsa<HTMLElement>(".doc-list-card").forEach((card) => card.classList.remove("active"));
+  toast("已创建单据草稿，保存后写入数据库");
+}
+
+async function saveTradeDocument() {
+  const draft = collectDocumentDraft();
+  if (!draft.items.length) {
+    toast("请至少保留一条商品明细", "error");
+    return null;
+  }
+  const existing = state.tradeDocuments.find((document) => document.id === state.selectedDocumentId);
+  const result = await api<{ document: TradeDocument }>(existing ? `/api/trade-documents/${existing.id}` : "/api/trade-documents", {
+    method: existing ? "PATCH" : "POST",
+    body: JSON.stringify({ ...draft, status: draft.status === "exported" ? "ready" : "ready" })
+  });
+  state.tradeDocuments = existing
+    ? state.tradeDocuments.map((document) => document.id === result.document.id ? result.document : document)
+    : [result.document, ...state.tradeDocuments];
+  state.selectedDocumentId = result.document.id;
+  renderTradeDocuments(state.tradeDocuments);
+  toast("单据配置已保存到数据库");
+  return result.document;
+}
+
+async function exportTradeDocumentPdf() {
+  const saved = await saveTradeDocument();
+  if (!saved) return;
+  const result = await api<{ document: TradeDocument; job: ImportExportJob; fileName: string }>(`/api/trade-documents/${saved.id}/export`, { method: "POST" });
+  state.tradeDocuments = state.tradeDocuments.map((document) => document.id === result.document.id ? result.document : document);
+  state.jobs.unshift(result.job);
+  renderTradeDocuments(state.tradeDocuments);
+  renderJobs(state.jobs);
+  toast(`已生成 PDF 导出任务：${result.fileName}`);
+  window.print();
 }
 
 function parseNumberCell(value: unknown, fallback = 0) {
@@ -3695,7 +4176,17 @@ async function createInstrumentWeekTodos(button?: HTMLButtonElement) {
   const existingTitles = new Set(state.todos.map((todo) => todo.title));
   const missingTitles = instrumentWeekTodos.filter((title) => !existingTitles.has(title));
   if (!missingTitles.length) {
-    toast("首周仪表开拓待办已存在，无需重复生成");
+    const firstDay = state.todos.find((todo) => todo.title === instrumentWeekTodos[0]);
+    if (firstDay) {
+      const result = await api<{ todo: Todo }>(`/api/todos/${firstDay.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ done: false, status: "pending", historyAt: "", pinState: "top", sortOrder: 1, dueAt: "" })
+      });
+      state.todos = state.todos.map((todo) => todo.id === result.todo.id ? result.todo : todo);
+      renderTodos(state.todos);
+      updateTodoChips(state.todos);
+    }
+    toast("首周仪表开拓待办已存在，已恢复并置顶第1天任务");
     return;
   }
   if (button) {
@@ -4094,6 +4585,23 @@ function installEvents() {
     if (button.textContent?.includes("工具配置")) button.addEventListener("click", () => toast("OCR 字段映射配置已保存"));
     if (button.textContent?.includes("解析官网")) button.addEventListener("click", (event) => void parseWebsiteOpportunities(event.currentTarget as HTMLButtonElement));
   });
+  qs<HTMLButtonElement>("#newDocumentButton")?.addEventListener("click", openNewDocument);
+  qs<HTMLButtonElement>("#saveDocumentButton")?.addEventListener("click", () => void saveTradeDocument());
+  qs<HTMLButtonElement>("#exportDocumentPdfButton")?.addEventListener("click", () => void exportTradeDocumentPdf());
+  qs<HTMLButtonElement>("#addDocumentItemButton")?.addEventListener("click", addDocumentItem);
+  qs<HTMLButtonElement>("#refreshDocumentPreviewButton")?.addEventListener("click", () => renderDocumentPreview(collectDocumentDraft()));
+  qsa<HTMLButtonElement>("#documentTypeTabs button").forEach((button) => {
+    button.addEventListener("click", () => {
+      setDocumentType(button.dataset.docType === "CI" ? "CI" : "PI");
+      const title = qs<HTMLInputElement>("#docTitleInput");
+      if (title && (!title.value || title.value.includes("形式发票") || title.value.includes("商业发票"))) title.value = currentDocumentType() === "PI" ? "新建形式发票 PI" : "新建商业发票 CI";
+      renderDocumentPreview(collectDocumentDraft());
+    });
+  });
+  qsa<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("#documents input, #documents select, #documents textarea").forEach((input) => {
+    input.addEventListener("input", () => renderDocumentPreview(collectDocumentDraft()));
+    input.addEventListener("change", () => renderDocumentPreview(collectDocumentDraft()));
+  });
   qsa<HTMLButtonElement>("#tools .btn.primary").forEach((button) => {
     if (button.textContent?.includes("同步为商机")) button.addEventListener("click", (event) => void syncWebsiteOpportunities(event.currentTarget as HTMLButtonElement));
     else if (button.textContent?.includes("同步")) button.addEventListener("click", () => void syncOcrLead(button));
@@ -4195,6 +4703,12 @@ function resolveTopbarSearchView(rawValue: string) {
     ["导入", "imports"],
     ["导出", "imports"],
     ["import", "imports"],
+    ["单据", "documents"],
+    ["发票", "documents"],
+    ["pi", "documents"],
+    ["ci", "documents"],
+    ["invoice", "documents"],
+    ["document", "documents"],
     ["报表", "reports"],
     ["report", "reports"],
     ["企业微信", "wecom"],

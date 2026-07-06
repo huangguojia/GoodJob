@@ -166,6 +166,12 @@ export interface Reminder {
   teamId: string;
   channel: "站内" | "邮件" | "企业微信";
   status: "pending" | "sent" | "done";
+  ruleType?: "quote_no_reply" | "sample_feedback" | "inactive_customer" | "high_value_revisit" | "custom_due";
+  targetStage?: string;
+  days?: number;
+  priority?: "high" | "medium" | "normal";
+  enabled?: boolean;
+  generatedCount?: number;
 }
 
 export interface ImportExportJob {
@@ -176,6 +182,47 @@ export interface ImportExportJob {
   status: "done" | "review" | "failed";
   operatorId: string;
   createdAt: string;
+}
+
+export interface TradeDocumentItem {
+  id: string;
+  product: string;
+  model: string;
+  hsCode: string;
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+  originCountry: string;
+  weightKg: number;
+  packageCount: number;
+}
+
+export interface TradeDocument {
+  id: string;
+  type: "PI" | "CI";
+  title: string;
+  number: string;
+  issueDate: string;
+  buyer: string;
+  buyerAddress: string;
+  buyerContact: string;
+  seller: string;
+  sellerAddress: string;
+  currency: string;
+  incoterm: string;
+  paymentTerm: string;
+  shippingMethod: string;
+  portLoading: string;
+  portDischarge: string;
+  validityDate: string;
+  bankInfo: string;
+  notes: string;
+  templateStyle: "executive" | "classic" | "compact";
+  status: "draft" | "ready" | "exported";
+  ownerId: string;
+  teamId: string;
+  updatedAt: string;
+  items: TradeDocumentItem[];
 }
 
 export interface WecomMessage {
