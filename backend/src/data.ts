@@ -1,4 +1,4 @@
-import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 export const users: User[] = [
   { id: "u_sales_shirley", name: "Shirley", email: "shirley@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "SH", status: "active" },
@@ -23,6 +23,71 @@ export const todos: Todo[] = [
   { id: "t4", title: "复核 OCR 名片识别结果并同步 8 条展会线索", type: "ocr", priority: "normal", status: "pending", pinState: "", sortOrder: 40, dueAt: "今天 16:20", ownerId: "u_sales_shirley", teamId: "europe", related: "OCR 线索", done: false },
   { id: "t5", title: "确认 Atlas Home Inc 样品签收状态", type: "customer", priority: "normal", status: "pending", pinState: "", sortOrder: 50, dueAt: "09:12", ownerId: "u_sales_shirley", teamId: "europe", related: "Atlas Home Inc", done: true }
 ];
+
+export const planTasks: PlanTask[] = [
+  {
+    id: "pt_seed_1",
+    title: "整理仪表产品分类与参数卡",
+    phase: "前置准备",
+    category: "产品知识",
+    priority: "high",
+    status: "planned",
+    dueAt: "",
+    target: "形成压力、温度、流量、液位、分析仪表的参数卡",
+    description: "把量程、精度、介质、温压、连接方式、输出信号、供电、防护等级、材质做成销售可复制版本。",
+    ownerId: "u_sales_shirley",
+    teamId: "europe",
+    createdAt: "2026-06-27T09:00:00.000Z",
+    updatedAt: "2026-06-27T09:00:00.000Z"
+  },
+  {
+    id: "pt_seed_2",
+    title: "建立仪表客户搜索关键词库 10 组",
+    phase: "获客准备",
+    category: "客户开发",
+    priority: "high",
+    status: "planned",
+    dueAt: "",
+    target: "覆盖经销商、系统集成商、OEM、EPC、MRO 五类客户",
+    description: "按国家、客户角色和产品线组合 Google、LinkedIn、B2B 平台关键词，并沉淀到资料区。",
+    ownerId: "u_sales_shirley",
+    teamId: "europe",
+    createdAt: "2026-06-27T09:10:00.000Z",
+    updatedAt: "2026-06-27T09:10:00.000Z"
+  },
+  {
+    id: "pt_seed_3",
+    title: "新增 30 家仪表目标客户到客户池",
+    phase: "首周执行",
+    category: "客户开发",
+    priority: "medium",
+    status: "planned",
+    dueAt: "",
+    target: "客户字段完整率不低于 80%",
+    description: "录入公司名、国家、官网、联系人线索、产品匹配点和下一步触达动作。",
+    ownerId: "u_sales_shirley",
+    teamId: "europe",
+    createdAt: "2026-06-27T09:20:00.000Z",
+    updatedAt: "2026-06-27T09:20:00.000Z"
+  },
+  {
+    id: "pt_seed_4",
+    title: "完成客户角色-痛点-话术表",
+    phase: "触达准备",
+    category: "话术资料",
+    priority: "medium",
+    status: "planned",
+    dueAt: "",
+    target: "每类客户至少 1 套首触达话术和 1 套跟进话术",
+    description: "把经销商、OEM、EPC、MRO、终端工程师的关注点拆成邮件标题、开场、参数确认和案例补充。",
+    ownerId: "u_sales_shirley",
+    teamId: "europe",
+    createdAt: "2026-06-27T09:30:00.000Z",
+    updatedAt: "2026-06-27T09:30:00.000Z"
+  }
+];
+
+export const planTemplates: PlanTemplate[] = [];
 
 export const knowledgeAssets: KnowledgeAsset[] = [
   { id: "k1", title: "LED 灯具参数手册 V3", category: "产品知识", status: "published", ownerId: "u_sales_mia", version: "v3" },

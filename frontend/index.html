@@ -3226,6 +3226,133 @@
       grid-template-columns: minmax(0, 1fr) auto;
     }
 
+    .knowledge-matrix {
+      display: grid;
+      gap: 7px;
+    }
+
+    .knowledge-row {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1.35fr) minmax(112px, .55fr) auto;
+      gap: 9px;
+      align-items: center;
+      padding: 9px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #fbfcff;
+      transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease;
+    }
+
+    .knowledge-row:hover,
+    .persona-card:hover {
+      border-color: rgba(49, 87, 213, .24);
+      background: #fff;
+      box-shadow: 0 8px 22px rgba(15, 23, 42, .06);
+      transform: translateY(-1px);
+    }
+
+    .knowledge-row strong {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      color: #254585;
+      background: #edf2ff;
+      font-size: 11px;
+    }
+
+    .knowledge-row b {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+      margin-bottom: 3px;
+    }
+
+    .knowledge-row span {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .knowledge-row em {
+      color: #50617a;
+      font-size: 11px;
+      font-style: normal;
+      line-height: 1.35;
+    }
+
+    .template-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      justify-content: flex-end;
+      align-items: center;
+    }
+
+    .persona-board {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .persona-card {
+      display: grid;
+      gap: 7px;
+      min-height: 172px;
+      padding: 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #fbfcff;
+      transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease;
+    }
+
+    .persona-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .persona-head b {
+      color: var(--ink);
+      font-size: 13px;
+    }
+
+    .persona-card p {
+      margin: 0;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .persona-card dl {
+      display: grid;
+      gap: 4px;
+      margin: 0;
+    }
+
+    .persona-card dt {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .persona-card dd {
+      margin: 0;
+      color: #50617a;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .persona-card .btn {
+      justify-self: start;
+    }
+
+    .persona-card .template-actions {
+      justify-content: flex-start;
+    }
+
     .execution-board {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3243,6 +3370,18 @@
       margin: 0 0 8px;
       color: var(--ink);
       font-size: 13px;
+    }
+
+    .execution-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .execution-title-row h3 {
+      margin: 0;
     }
 
     .execution-day ul,
@@ -3275,6 +3414,11 @@
       background: var(--aqua);
     }
 
+    .execution-day .template-actions {
+      justify-content: flex-start;
+      margin-top: 10px;
+    }
+
     .instrument-actionbar {
       display: flex;
       justify-content: space-between;
@@ -3291,6 +3435,104 @@
       color: var(--muted);
       font-size: 12px;
       line-height: 1.5;
+    }
+
+    .plan-task-stats div {
+      padding: 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line-soft);
+      background: #fff;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .plan-task-stats span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+
+    .plan-task-stats b {
+      color: var(--ink);
+      font-size: 18px;
+    }
+
+    .plan-task-panel {
+      margin-bottom: 12px;
+    }
+
+    .plan-task-list {
+      overflow-x: auto;
+    }
+
+    .plan-task-table {
+      width: 100%;
+      min-width: 980px;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .plan-task-table th {
+      padding: 8px 8px;
+      color: var(--muted);
+      text-align: left;
+      font-size: 11px;
+      font-weight: 800;
+      border-bottom: 1px solid var(--line);
+      background: #f8faff;
+    }
+
+    .plan-task-table td {
+      padding: 9px 8px;
+      border-bottom: 1px solid var(--line-soft);
+      color: var(--text);
+      vertical-align: top;
+    }
+
+    .plan-task-table tr:hover td {
+      background: #fbfdff;
+    }
+
+    .plan-title-cell b,
+    .plan-task-table td b {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+      margin-bottom: 3px;
+    }
+
+    .plan-title-cell small,
+    .plan-task-table td small {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .row-actions {
+      white-space: nowrap;
+    }
+
+    .btn.compact {
+      min-height: 26px;
+      padding: 4px 8px;
+      border-radius: 7px;
+      font-size: 11px;
+    }
+
+    .empty-state {
+      display: grid;
+      gap: 4px;
+      padding: 18px;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      background: #fbfcff;
+      color: var(--muted);
+    }
+
+    .empty-state b {
+      color: var(--ink);
+      font-size: 14px;
     }
 
     .matrix-grid {
@@ -5489,6 +5731,7 @@
       .doc-item-grid label[data-doc-size="price"] { grid-column: span 1; }
       .doc-item-remove { width: 100%; }
       .dense-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .persona-board { grid-template-columns: 1fr; }
       .file-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .focus-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .drawer { position: static; }
@@ -5541,6 +5784,9 @@
 	      .ppt-grid,
 	      .steps,
       .problem-flow { grid-template-columns: 1fr; }
+      .knowledge-row { grid-template-columns: 34px minmax(0, 1fr); }
+      .knowledge-row em,
+      .knowledge-row .template-actions { grid-column: 2; justify-self: start; }
       .pipeline-strip { grid-template-columns: 1fr; }
       .donut-wrap { grid-template-columns: 1fr; justify-items: center; }
       .report-hero { padding: 16px; }
@@ -5612,8 +5858,8 @@
         <button class="active" data-view="dashboard" title="工作台">
           <svg viewBox="0 0 24 24"><path d="M4 13h6V4H4zM14 20h6V4h-6zM4 20h6v-3H4z"/></svg><span>工作台</span><em>28</em>
         </button>
-        <button data-view="instrument-growth" title="仪表开拓">
-          <svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M3 12h18"/><path d="M7 7l10 10"/><path d="M17 7 7 17"/><circle cx="12" cy="12" r="3"/></svg><span>仪表开拓</span><em>90天</em>
+        <button data-view="instrument-growth" title="计划任务">
+          <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><span>计划任务</span><em>执行</em>
         </button>
         <button data-view="customers" title="客户">
           <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>客户</span>
@@ -5947,88 +6193,61 @@
 
         <div class="view" id="instrument-growth">
           <div class="page-head">
-            <div><p class="eyebrow">Instrumentation Growth Plan</p><h1>仪表外贸新客户开拓作战台</h1><p class="sub">把 90 天目标、前置知识、客户画像、每日动作、英文话术和周报指标做成一个可执行界面。</p></div>
-            <div class="head-actions"><button class="btn" id="instrumentExportButton">导出执行表</button><button class="btn" id="instrumentMemoButton">写入备忘</button><button class="btn primary" id="instrumentTodoButton">一键推到待办清单</button></div>
+            <div><p class="eyebrow">Personal Execution Planner</p><h1>计划任务</h1><p class="sub">把新客户开拓、资料准备、触达话术和周报复盘拆成可编辑、可落库、可推待办的个人执行计划。</p></div>
+            <div class="head-actions"><button class="btn" id="instrumentExportButton">导出计划</button><button class="btn" id="instrumentMemoButton">写入备忘</button><button class="btn" id="planTaskPushSelectedButton">推送选中</button><button class="btn primary" id="planTaskNewButton">新增任务</button></div>
           </div>
 
           <div class="instrument-hero">
             <section class="panel instrument-brief">
-              <span class="badge aqua">90 天专项 · 仪表产品线</span>
-              <h2>目标不是“多找客户”，而是建立可复盘的仪表客户池、触达节奏和机会转化链路。</h2>
-              <p>每天固定完成客户新增、首触达、二次跟进、深挖和 CRM 更新；每周用数据向领导汇报新增客户池、有效回复、深度沟通、RFQ/样品/会议机会与下周优化。</p>
+              <span class="badge aqua">个人计划 · 数据隔离 · 可推待办</span>
+              <h2>先把计划拆到可执行，再把真正要做的任务推到今日待办。</h2>
+              <p>计划任务只属于当前账号；主管和管理员不会在个人待办压力之外看到员工的个人计划。适合承载仪表外贸新客户开拓、资料整理、客户画像、英文话术、复盘周报等长期动作。</p>
               <div class="instrument-targets">
                 <div><span>目标客户池</span><b>600+</b></div>
-                <div><span>有效触达</span><b>900+</b></div>
-                <div><span>有效回复</span><b>60</b></div>
-                <div><span>RFQ/样品/会议</span><b>8</b></div>
+                <div><span>每日新增</span><b>30</b></div>
+                <div><span>每日首触达</span><b>20</b></div>
+                <div><span>周报复盘</span><b>1</b></div>
               </div>
             </section>
 
             <aside class="instrument-rhythm">
-              <div class="section-head" style="margin-bottom:2px"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 8v5l3 3"/><circle cx="12" cy="12" r="10"/></svg></span><div><h2>今日执行节奏</h2><span>按外贸销售可落地动作拆分</span></div></div></div>
-              <div class="rhythm-item"><time>09:10</time><div><b>新增客户 30 家</b><span>Google/LinkedIn/B2B/展会名录，按国家与角色打标签。</span></div><span class="badge">获客</span></div>
-              <div class="rhythm-item"><time>11:00</time><div><b>首触达 20 家</b><span>按经销商、OEM、EPC 分三套英文话术发送。</span></div><span class="badge green">触达</span></div>
-              <div class="rhythm-item"><time>15:30</time><div><b>二次跟进 10 家</b><span>补参数表、认证、应用案例，推进到有效回复。</span></div><span class="badge amber">跟进</span></div>
-              <div class="rhythm-item"><time>17:40</time><div><b>CRM 更新与复盘</b><span>补全国家、联系人、需求、下一动作，写 15 分钟复盘。</span></div><span class="badge aqua">复盘</span></div>
+              <div class="section-head" style="margin-bottom:2px"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 8v5l3 3"/><circle cx="12" cy="12" r="10"/></svg></span><div><h2>执行节奏建议</h2><span>可改成你自己的任务并推到待办</span></div></div></div>
+              <div class="rhythm-item"><time>09:10</time><div><b>找客户</b><span>按国家、行业、客户类型建立目标客户池。</span></div><span class="badge">获客</span></div>
+              <div class="rhythm-item"><time>11:00</time><div><b>首触达</b><span>邮件、LinkedIn、WhatsApp 分角色触达。</span></div><span class="badge green">触达</span></div>
+              <div class="rhythm-item"><time>15:30</time><div><b>资料补强</b><span>补参数卡、证书、应用案例和报价口径。</span></div><span class="badge amber">资料</span></div>
+              <div class="rhythm-item"><time>17:40</time><div><b>复盘入库</b><span>把结果、问题、下一步写回 CRM 和备忘。</span></div><span class="badge aqua">复盘</span></div>
             </aside>
           </div>
 
-          <div class="dense-grid">
-            <div class="dense-card"><span>每日新增客户</span><b>30</b><small>最低线</small></div>
-            <div class="dense-card"><span>每日首触达</span><b>20</b><small>邮件/WhatsApp</small></div>
-            <div class="dense-card"><span>每周重点复盘</span><b>10</b><small>高价值客户</small></div>
-            <div class="dense-card"><span>周报输出</span><b>1</b><small>汇报可用</small></div>
-          </div>
-
-          <div class="instrument-tabs">
-            <div class="instrument-tab"><b>总目标</b><span>600 客户池 / 8 个机会</span></div>
-            <div class="instrument-tab"><b>前置知识</b><span>参数、认证、行业、竞品</span></div>
-            <div class="instrument-tab"><b>客户画像</b><span>经销商/OEM/EPC/MRO</span></div>
-            <div class="instrument-tab"><b>90天执行</b><span>首周细化到每日动作</span></div>
-            <div class="instrument-tab"><b>英文话术</b><span>首触达与参数确认</span></div>
-            <div class="instrument-tab"><b>KPI周报</b><span>给领导看进展</span></div>
+          <div class="dense-grid plan-task-stats" id="planTaskStats">
+            <div><span>任务总数</span><b>0</b></div>
+            <div><span>进行中</span><b>0</b></div>
+            <div><span>已完成</span><b>0</b></div>
+            <div><span>可推待办</span><b>0</b></div>
           </div>
 
           <div class="instrument-grid">
             <section class="panel section">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg></span><div><h2>前置知识清单</h2><span>先补齐产品理解，否则触达质量会低</span></div></div></div>
-              <div class="knowledge-checklist">
-                <div class="category-item"><div><b>仪表分类</b><span>压力、温度、流量、液位、分析仪表、记录仪。</span></div><span class="badge green">必会</span></div>
-                <div class="category-item"><div><b>关键参数</b><span>量程、精度、介质、温压、连接方式、输出信号、供电、防护、材质。</span></div><span class="badge green">必会</span></div>
-                <div class="category-item"><div><b>认证资料</b><span>CE、RoHS、EMC、ATEX/IECEx、防爆、SIL、校准证书、ISO、材质报告。</span></div><span class="badge amber">资料化</span></div>
-                <div class="category-item"><div><b>应用行业</b><span>水处理、油气、化工、食品制药、HVAC、电力、船舶、环保设备、OEM机械。</span></div><span class="badge">场景</span></div>
-                <div class="category-item"><div><b>竞品对照</b><span>WIKA、Endress+Hauser、Yokogawa、Emerson、KROHNE、Ashcroft、Dwyer。</span></div><span class="badge red">谈判</span></div>
-              </div>
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg></span><div><h2>前置知识训练清单</h2><span>按能否对外解释、报价、追问参数来验收</span></div></div></div>
+              <div class="knowledge-matrix" id="knowledgeTemplateList"></div>
             </section>
 
             <section class="panel section">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg></span><div><h2>客户画像与搜索入口</h2><span>按角色而不是按公司名盲搜</span></div></div></div>
-              <table class="mini-table">
-                <thead><tr><th>客户类型</th><th>典型需求</th><th>搜索关键词</th><th>首要动作</th></tr></thead>
-                <tbody>
-                  <tr><td>工业自动化经销商</td><td>稳定供货、利润、资料齐全</td><td>instrument distributor + country</td><td>发目录与代理优势</td></tr>
-                  <tr><td>系统集成商</td><td>项目参数匹配、交期</td><td>process automation integrator</td><td>问项目应用场景</td></tr>
-                  <tr><td>OEM 设备厂</td><td>批量一致性、定制接口</td><td>machine manufacturer sensor</td><td>发参数确认表</td></tr>
-                  <tr><td>EPC/工程承包商</td><td>认证、项目清单、交付风险</td><td>EPC water treatment instruments</td><td>要项目清单/RFQ</td></tr>
-                  <tr><td>MRO/维修服务商</td><td>替换型号、快速交货</td><td>instrument maintenance service</td><td>提供替代型号</td></tr>
-                  <tr><td>终端工程师/采购</td><td>质量、证书、售后</td><td>plant engineer pressure transmitter</td><td>确认技术规格</td></tr>
-                </tbody>
-              </table>
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg></span><div><h2>客户画像与搜索入口</h2><span>先定角色、痛点和关键词，再开始找公司</span></div></div></div>
+              <div class="persona-board" id="personaTemplateList"></div>
             </section>
+          </div>
+
+          <div class="panel section plan-task-panel">
+            <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><h2>任务列表</h2><span>勾选后可批量推到当前账号待办；编辑后会持久化保存。</span></div></div></div>
+            <div id="planTaskList" class="plan-task-list"></div>
           </div>
 
           <div class="instrument-grid">
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 2v4"/><path d="M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/></svg></span><div><h2>首周执行拆解</h2><span>先把能力、资料、客户池和触达节奏跑通</span></div></div></div>
-              <div class="execution-board">
-                <div class="execution-day"><h3>第 1 天</h3><ul><li>整理仪表产品分类与参数卡。</li><li>建立客户搜索关键词库 10 组。</li></ul></div>
-                <div class="execution-day"><h3>第 2 天</h3><ul><li>整理证书、报价资料和应用案例。</li><li>新增 30 家目标客户到 CRM。</li></ul></div>
-                <div class="execution-day"><h3>第 3 天</h3><ul><li>完成角色-痛点-话术表。</li><li>首触达 20 家高匹配客户。</li></ul></div>
-                <div class="execution-day"><h3>第 4 天</h3><ul><li>整理竞品替代切入点 5 条。</li><li>跟进昨日未回复客户 10 家。</li></ul></div>
-                <div class="execution-day"><h3>第 5 天</h3><ul><li>制作参数确认表模板。</li><li>深挖 3 家 A 类客户并写入 CRM。</li></ul></div>
-                <div class="execution-day"><h3>第 6-7 天</h3><ul><li>完成第一周开发周报。</li><li>复盘并优化 ICP 与话术。</li></ul></div>
-              </div>
-              <div class="instrument-actionbar"><span>一键推送后会写入你当前账号的待办，不共享给其他员工；主管也不会看到你的个人待办。</span><button class="btn primary" id="instrumentTodoButtonInline">一键推到待办清单</button></div>
+              <div class="execution-board" id="executionTemplateList"></div>
+              <div class="instrument-actionbar"><span>建议把这一块拆成自己的计划任务，成熟后再推到待办清单执行。</span><button class="btn primary" id="planTaskNewButtonInline">新增计划任务</button></div>
             </section>
 
             <section class="panel section">

@@ -298,32 +298,86 @@ test.describe("GoodJob CRM prototype pages", () => {
     }
   });
 
-  test("instrument growth page creates execution assets", async ({ page }) => {
+  test("plan task page edits and pushes tasks to todos", async ({ page }) => {
     await openView(page, "instrument-growth");
-    await expect(page.locator("#instrument-growth")).toContainText("仪表外贸新客户开拓作战台");
-    await expect(page.locator("#instrument-growth")).toContainText("前置知识清单");
+    await expect(page.locator("#instrument-growth")).toContainText("计划任务");
+    await expect(page.locator("#instrument-growth")).toContainText("前置知识训练清单");
     await expect(page.locator("#instrument-growth")).toContainText("客户画像与搜索入口");
-    await expect(page.locator("#instrument-growth")).toContainText("首周执行拆解");
-    await expect(page.locator("#instrument-growth")).toContainText("英文话术与参数确认");
-    await expect(page.locator("#instrument-growth")).toContainText("KPI周报");
+    await expect(page.locator("#instrument-growth")).toContainText("任务列表");
+    await expect(page.locator("#instrument-growth")).toContainText("产品分类地图");
+    await expect(page.locator("#executionTemplateList")).toContainText("第 1 天");
+
+    await page.locator("[data-plan-template-id]", { hasText: "产品分类地图" }).locator("[data-plan-template-edit]").click();
+    await page.locator("#planTemplateTitleInput").fill(`产品分类地图-${runId}`);
+    await page.locator("#savePlanTemplateButton").click();
+    await expect(page.locator(".toast").last()).toContainText("模板已保存");
+    await expect(page.locator("#knowledgeTemplateList")).toContainText(`产品分类地图-${runId}`);
+
+    const personaDeleteButtons = page.locator("#personaTemplateList [data-plan-template-delete]");
+    if (await personaDeleteButtons.count()) {
+      page.once("dialog", (dialog) => dialog.accept());
+      await personaDeleteButtons.first().click();
+      await expect(page.locator(".toast").last()).toContainText("模板已删除");
+    }
+
+    await page.locator("[data-plan-template-id]", { hasText: `产品分类地图-${runId}` }).locator("[data-plan-template-add]").click();
+    await expect(page.locator(".toast").last()).toContainText(/已加入计划任务|已在计划中/);
+    await expect(page.locator("#planTaskList")).toContainText(`训练：产品分类地图-${runId}`);
+    await page.locator("#planTaskList tr", { hasText: `训练：产品分类地图-${runId}` }).locator("[data-plan-task-check]").uncheck();
+
+    await page.locator("#executionTemplateList [data-plan-template-id]", { hasText: "第 1 天" }).locator("[data-plan-template-edit]").click();
+    await page.locator("#planTemplateTitleInput").fill(`第 1 天-${runId}`);
+    await page.locator("#planTemplateOutputInput").fill("整理仪表产品分类与参数卡。\n建立客户搜索关键词库 10 组。\n新增一个可验证动作。");
+    await page.locator("#savePlanTemplateButton").click();
+    await expect(page.locator(".toast").last()).toContainText("模板已保存");
+    await expect(page.locator("#executionTemplateList")).toContainText(`第 1 天-${runId}`);
+    await page.locator("#executionTemplateList [data-plan-template-id]", { hasText: `第 1 天-${runId}` }).locator("[data-plan-template-add]").click();
+    await expect(page.locator("#planTaskList")).toContainText(`首周执行：第 1 天-${runId}`);
+    await page.locator("#planTaskList tr", { hasText: `首周执行：第 1 天-${runId}` }).locator("[data-plan-task-check]").uncheck();
+
+    const taskTitle = `计划任务自测-${runId}`;
+    await page.locator("#planTaskNewButton").click();
+    await page.locator("#planTaskTitleInput").fill(taskTitle);
+    await page.locator("#planTaskPhaseInput").fill("首周执行");
+    await page.locator("#planTaskCategoryInput").fill("客户开发");
+    await page.locator("#planTaskPriorityInput").selectOption("high");
+    await page.locator("#planTaskStatusInput").selectOption("active");
+    await page.locator("#planTaskTargetInput").fill("完成客户池新增并写入CRM");
+    await page.locator("#planTaskDescriptionInput").fill("页面级自测计划任务说明");
+    await page.locator("#savePlanTaskButton").click();
+    await expect(page.locator(".toast").last()).toContainText("计划任务已新增");
+    await expect(page.locator("#planTaskList")).toContainText(taskTitle);
+
+    await page.locator("#planTaskList tr", { hasText: taskTitle }).locator("[data-plan-edit]").click();
+    await page.locator("#planTaskStatusInput").selectOption("done");
+    await page.locator("#savePlanTaskButton").click();
+    await expect(page.locator("#planTaskList tr", { hasText: taskTitle })).toContainText("已完成");
+
+    await page.locator("#planTaskList tr", { hasText: taskTitle }).locator("[data-plan-edit]").click();
+    await page.locator("#planTaskStatusInput").selectOption("planned");
+    await page.locator("#savePlanTaskButton").click();
+    await page.locator("#planTaskList tr", { hasText: taskTitle }).locator("[data-plan-task-check]").check();
+    await page.locator("#planTaskPushSelectedButton").click();
+    await expect(page.locator(".toast").last()).toContainText("已推送 1 条计划任务到待办");
+    await openView(page, "dashboard");
+    await expect(page.locator("#dashboard .todo-list")).toContainText(taskTitle);
 
     const downloadPromise = page.waitForEvent("download");
+    await openView(page, "instrument-growth");
     await page.locator("#instrumentExportButton").click();
     const download = await downloadPromise;
-    expect(download.suggestedFilename()).toContain("仪表外贸新客户开拓90天执行表");
-    await expect(page.locator(".toast").last()).toContainText("仪表开拓执行表已导出");
+    expect(download.suggestedFilename()).toContain("计划任务执行表");
+    await expect(page.locator(".toast").last()).toContainText("计划任务执行表已导出");
 
-    await expect(page.locator("#instrumentTodoButton")).toContainText("一键推到待办清单");
-    await page.locator("#instrumentTodoButton").click();
-    await expect(page.locator(".toast").last()).toContainText(/已生成|已存在/);
-    await openView(page, "dashboard");
-    await expect(page.locator("#dashboard .todo-list")).toContainText("第1天：整理仪表产品分类与参数卡");
-
-    await openView(page, "instrument-growth");
     await page.locator("#instrumentMemoButton").click();
     await expect(page.locator(".toast").last()).toContainText(/已写入备忘|备忘已更新/);
     await openView(page, "memos");
-    await expect(page.locator("#memos .memo-list")).toContainText("仪表外贸新客户开拓90天执行方案");
+    await expect(page.locator("#memos .memo-list")).toContainText("计划任务执行方案");
+
+    await openView(page, "instrument-growth");
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#planTaskList tr", { hasText: taskTitle }).locator("[data-plan-delete]").click();
+    await expect(page.locator("#planTaskList")).not.toContainText(taskTitle);
   });
 
   test("todo list sorts unfinished first and newest first", async ({ page }) => {

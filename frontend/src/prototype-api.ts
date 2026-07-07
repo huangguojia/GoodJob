@@ -273,6 +273,37 @@ interface Memo {
   updatedAt: string;
 }
 
+interface PlanTask {
+  id: string;
+  title: string;
+  phase: string;
+  category: string;
+  priority: "high" | "medium" | "normal";
+  status: "planned" | "active" | "done";
+  dueAt: string;
+  target: string;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface PlanTemplate {
+  id: string;
+  section: "knowledge" | "persona" | "execution";
+  title: string;
+  summary: string;
+  output: string;
+  badge: string;
+  badgeTone: string;
+  phase: string;
+  category: string;
+  priority: "high" | "medium" | "normal";
+  target: string;
+  description: string;
+  sortOrder: number;
+  updatedAt: string;
+}
+
 interface Competitor {
   id: string;
   company: string;
@@ -366,6 +397,8 @@ interface AppState {
   aiConfig: AiModelConfig | null;
   problems: ProblemItem[];
   memos: Memo[];
+  planTasks: PlanTask[];
+  planTemplates: PlanTemplate[];
   competitors: Competitor[];
   caseStudies: CaseStudy[];
   accounts: User[];
@@ -379,6 +412,8 @@ interface AppState {
   selectedCustomerIds: string[];
   selectedProblemId: string | null;
   selectedMemoId: string | null;
+  selectedPlanTaskIds: string[];
+  selectedPlanTemplateId: string | null;
   selectedCompetitorId: string | null;
   selectedCaseId: string | null;
   selectedExamId: string | null;
@@ -406,6 +441,8 @@ const state: AppState = {
   aiConfig: null,
   problems: [],
   memos: [],
+  planTasks: [],
+  planTemplates: [],
   competitors: [],
   caseStudies: [],
   accounts: [],
@@ -419,6 +456,8 @@ const state: AppState = {
   selectedCustomerIds: [],
   selectedProblemId: null,
   selectedMemoId: null,
+  selectedPlanTaskIds: [],
+  selectedPlanTemplateId: null,
   selectedCompetitorId: null,
   selectedCaseId: null,
   selectedExamId: null,
@@ -542,7 +581,7 @@ const instrumentWeekTodos = [
   "第7天：复盘并优化ICP规则"
 ];
 
-const instrumentMemoTitle = "仪表外贸新客户开拓90天执行方案";
+const instrumentMemoTitle = "计划任务执行方案";
 
 function instrumentPlanMemoContent() {
   return [
@@ -662,7 +701,7 @@ function applyAuthedUser(user: User) {
 
 async function refreshAll(user: User) {
   renderDashboardCache(user);
-  const [summary, customers, todos, deals, reminders, jobs, tradeDocs, wecom, knowledge, exams, ocr, websiteOps, aiConfig, problems, memos, competitors, caseStudies] = await Promise.all([
+  const [summary, customers, todos, deals, reminders, jobs, tradeDocs, wecom, knowledge, exams, ocr, websiteOps, aiConfig, problems, memos, planTasks, planTemplates, competitors, caseStudies] = await Promise.all([
     api<DashboardSummary>("/api/dashboard/summary"),
     api<{ customers: Customer[] }>("/api/customers"),
     api<{ todos: Todo[] }>("/api/todos"),
@@ -678,6 +717,8 @@ async function refreshAll(user: User) {
     api<{ config: AiModelConfig | null }>("/api/tools/ai-config"),
     api<{ problems: ProblemItem[] }>("/api/problems"),
     api<{ memos: Memo[] }>("/api/memos"),
+    api<{ tasks: PlanTask[] }>("/api/plan-tasks"),
+    api<{ templates: PlanTemplate[] }>("/api/plan-templates"),
     api<{ competitors: Competitor[] }>("/api/competitors"),
     api<{ caseStudies: CaseStudy[] }>("/api/case-studies")
   ]);
@@ -698,6 +739,8 @@ async function refreshAll(user: User) {
   state.aiConfig = aiConfig.config;
   state.problems = problems.problems;
   state.memos = memos.memos;
+  state.planTasks = planTasks.tasks;
+  state.planTemplates = planTemplates.templates;
   state.competitors = competitors.competitors;
   state.caseStudies = caseStudies.caseStudies;
   state.selectedCustomerId = state.selectedCustomerId || customers.customers[0]?.id || null;
@@ -720,6 +763,8 @@ async function refreshAll(user: User) {
   renderDashboardKnowledgePanels(knowledge.assets, exams.exams);
   renderProblems(problems.problems);
   renderMemos(memos.memos);
+  renderPlanTasks(planTasks.tasks);
+  renderPlanTemplates(planTemplates.templates);
   renderCompetitors(competitors.competitors);
   renderCaseStudies(caseStudies.caseStudies);
   await renderAccounts(user);
@@ -4338,38 +4383,293 @@ async function createQuickTodo(title: string) {
   toast("待办已新增");
 }
 
-async function createInstrumentWeekTodos(button?: HTMLButtonElement) {
-  const existingTitles = new Set(state.todos.map((todo) => todo.title));
-  const missingTitles = instrumentWeekTodos.filter((title) => !existingTitles.has(title));
-  if (!missingTitles.length) {
-    const firstDay = state.todos.find((todo) => todo.title === instrumentWeekTodos[0]);
-    if (firstDay) {
-      const result = await api<{ todo: Todo }>(`/api/todos/${firstDay.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ done: false, status: "pending", historyAt: "", pinState: "top", sortOrder: 1, dueAt: "" })
-      });
-      state.todos = state.todos.map((todo) => todo.id === result.todo.id ? result.todo : todo);
-      renderTodos(state.todos);
-      updateTodoChips(state.todos);
-    }
-    toast("首周仪表开拓待办已存在，已恢复并置顶第1天任务");
+function planTaskPriorityText(priority: PlanTask["priority"]) {
+  return priority === "high" ? "高优先级" : priority === "medium" ? "中优先级" : "普通";
+}
+
+function planTaskStatusText(status: PlanTask["status"]) {
+  return status === "active" ? "进行中" : status === "done" ? "已完成" : "计划中";
+}
+
+function planTemplatePlanTitle(template: PlanTemplate) {
+  return `${template.section === "knowledge" ? "训练" : template.section === "execution" ? "首周执行" : "客户画像"}：${template.title}`;
+}
+
+function renderPlanTemplates(templates = state.planTemplates) {
+  const knowledge = qs<HTMLElement>("#knowledgeTemplateList");
+  const persona = qs<HTMLElement>("#personaTemplateList");
+  const execution = qs<HTMLElement>("#executionTemplateList");
+  if (!knowledge || !persona || !execution) return;
+  const sorted = [...templates].sort((left, right) => left.sortOrder - right.sortOrder);
+  const knowledgeItems = sorted.filter((item) => item.section === "knowledge");
+  const personaItems = sorted.filter((item) => item.section === "persona");
+  const executionItems = sorted.filter((item) => item.section === "execution");
+  knowledge.innerHTML = knowledgeItems.length ? knowledgeItems.map((item, index) => `
+    <div class="knowledge-row" data-plan-template-id="${escapeHtml(item.id)}">
+      <strong>${String(index + 1).padStart(2, "0")}</strong>
+      <div><b>${escapeHtml(item.title)}</b><span>${escapeHtml(item.summary)}</span></div>
+      <em>${escapeHtml(item.output || "输出物：待维护")}</em>
+      <div class="template-actions">
+        <button class="btn compact" data-plan-template-add="${escapeHtml(item.id)}">加入计划</button>
+        <button class="btn compact" data-plan-template-edit="${escapeHtml(item.id)}">编辑</button>
+        <button class="btn compact danger" data-plan-template-delete="${escapeHtml(item.id)}">删除</button>
+      </div>
+    </div>
+  `).join("") : `<div class="empty-state"><b>暂无前置知识训练项</b><span>可在后续版本中新增模板，当前先使用计划任务手动维护。</span></div>`;
+  persona.innerHTML = personaItems.length ? personaItems.map((item) => {
+    const [keyword = "", action = ""] = item.output.split("\n");
+    return `
+      <article class="persona-card" data-plan-template-id="${escapeHtml(item.id)}">
+        <div class="persona-head"><b>${escapeHtml(item.title)}</b><span class="badge ${escapeHtml(item.badgeTone)}">${escapeHtml(item.badge || "画像")}</span></div>
+        <p>${escapeHtml(item.summary)}</p>
+        <dl><dt>关键词</dt><dd>${escapeHtml(keyword.replace(/^关键词[:：]\s*/, "") || "待维护")}</dd><dt>首触达</dt><dd>${escapeHtml(action.replace(/^首触达[:：]\s*/, "") || "待维护")}</dd></dl>
+        <div class="template-actions"><button class="btn compact" data-plan-template-add="${escapeHtml(item.id)}">加入计划</button><button class="btn compact" data-plan-template-edit="${escapeHtml(item.id)}">编辑</button><button class="btn compact danger" data-plan-template-delete="${escapeHtml(item.id)}">删除</button></div>
+      </article>
+    `;
+  }).join("") : `<div class="empty-state"><b>暂无客户画像</b><span>可在后续版本中新增模板，当前先使用计划任务手动维护。</span></div>`;
+  execution.innerHTML = executionItems.length ? executionItems.map((item) => `
+    <div class="execution-day" data-plan-template-id="${escapeHtml(item.id)}">
+      <div class="execution-title-row"><h3>${escapeHtml(item.title)}</h3><span class="badge ${escapeHtml(item.badgeTone)}">${escapeHtml(item.badge || "执行")}</span></div>
+      <ul>${(item.output || item.summary).split("\n").filter(Boolean).map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>
+      <div class="template-actions"><button class="btn compact" data-plan-template-add="${escapeHtml(item.id)}">加入计划</button><button class="btn compact" data-plan-template-edit="${escapeHtml(item.id)}">编辑</button></div>
+    </div>
+  `).join("") : `<div class="empty-state"><b>暂无首周执行拆解</b><span>可编辑模板恢复首周节奏。</span></div>`;
+  qsa<HTMLButtonElement>("[data-plan-template-add]").forEach((button) => button.addEventListener("click", () => void createPlanTaskFromTemplate(button.dataset.planTemplateAdd || "", button)));
+  qsa<HTMLButtonElement>("[data-plan-template-edit]").forEach((button) => button.addEventListener("click", () => openPlanTemplateModal(state.planTemplates.find((item) => item.id === button.dataset.planTemplateEdit))));
+  qsa<HTMLButtonElement>("[data-plan-template-delete]").forEach((button) => button.addEventListener("click", () => void deletePlanTemplate(button.dataset.planTemplateDelete || "")));
+}
+
+function renderPlanTasks(tasks = state.planTasks) {
+  const container = qs<HTMLElement>("#planTaskList");
+  if (!container) return;
+  const sorted = [...tasks].sort((left, right) => {
+    const statusWeight = { active: 0, planned: 1, done: 2 } as Record<PlanTask["status"], number>;
+    const priorityWeight = { high: 0, medium: 1, normal: 2 } as Record<PlanTask["priority"], number>;
+    return statusWeight[left.status] - statusWeight[right.status]
+      || priorityWeight[left.priority] - priorityWeight[right.priority]
+      || String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
+  });
+  const stats = qs<HTMLElement>("#planTaskStats");
+  if (stats) {
+    const active = tasks.filter((task) => task.status === "active").length;
+    const done = tasks.filter((task) => task.status === "done").length;
+    stats.innerHTML = `
+      <div><span>任务总数</span><b>${tasks.length}</b></div>
+      <div><span>进行中</span><b>${active}</b></div>
+      <div><span>已完成</span><b>${done}</b></div>
+      <div><span>可推待办</span><b>${tasks.filter((task) => task.status !== "done").length}</b></div>
+    `;
+  }
+  container.innerHTML = sorted.length ? `
+    <table class="plan-task-table">
+      <thead><tr><th><input id="planTaskSelectAll" type="checkbox"></th><th>任务</th><th>阶段/分类</th><th>目标</th><th>状态</th><th>时间</th><th>操作</th></tr></thead>
+      <tbody>
+        ${sorted.map((task) => `
+          <tr data-plan-task-id="${escapeHtml(task.id)}">
+            <td><input type="checkbox" data-plan-task-check="${escapeHtml(task.id)}" ${state.selectedPlanTaskIds.includes(task.id) ? "checked" : ""}></td>
+            <td class="plan-title-cell"><b>${escapeHtml(task.title)}</b><small>${escapeHtml(task.description || "暂无说明")}</small></td>
+            <td><span class="badge aqua">${escapeHtml(task.phase)}</span><small>${escapeHtml(task.category)}</small></td>
+            <td>${escapeHtml(task.target || "未填写")}</td>
+            <td><span class="badge ${task.status === "done" ? "green" : task.status === "active" ? "amber" : ""}">${planTaskStatusText(task.status)}</span><small>${planTaskPriorityText(task.priority)}</small></td>
+            <td>${escapeHtml(task.dueAt || "未设置")}</td>
+            <td class="row-actions"><button class="btn compact" data-plan-push="${escapeHtml(task.id)}">推待办</button><button class="btn compact" data-plan-edit="${escapeHtml(task.id)}">编辑</button><button class="btn compact danger" data-plan-delete="${escapeHtml(task.id)}">删除</button></td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  ` : `<div class="empty-state"><b>还没有计划任务</b><span>先新增一条开拓任务，再推送到待办执行。</span></div>`;
+  qs<HTMLInputElement>("#planTaskSelectAll")?.addEventListener("change", (event) => {
+    const checked = (event.currentTarget as HTMLInputElement).checked;
+    state.selectedPlanTaskIds = checked ? sorted.map((task) => task.id) : [];
+    renderPlanTasks(state.planTasks);
+  });
+  qsa<HTMLInputElement>("[data-plan-task-check]", container).forEach((input) => {
+    input.addEventListener("change", () => {
+      const id = input.dataset.planTaskCheck || "";
+      state.selectedPlanTaskIds = input.checked
+        ? Array.from(new Set([...state.selectedPlanTaskIds, id]))
+        : state.selectedPlanTaskIds.filter((item) => item !== id);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-plan-edit]", container).forEach((button) => button.addEventListener("click", () => openPlanTaskModal(state.planTasks.find((task) => task.id === button.dataset.planEdit))));
+  qsa<HTMLButtonElement>("[data-plan-delete]", container).forEach((button) => button.addEventListener("click", () => void deletePlanTask(button.dataset.planDelete || "")));
+  qsa<HTMLButtonElement>("[data-plan-push]", container).forEach((button) => button.addEventListener("click", () => void pushPlanTasksToTodos([button.dataset.planPush || ""], button)));
+}
+
+function openPlanTaskModal(task?: PlanTask) {
+  const editing = Boolean(task);
+  openModal(editing ? "编辑计划任务" : "新增计划任务", `
+    <div class="form-grid">
+      <div class="form-field full"><label>任务标题</label><input id="planTaskTitleInput" value="${escapeHtml(task?.title || "")}" placeholder="例如：新增30家目标客户到客户池"></div>
+      <div class="form-field"><label>阶段</label><input id="planTaskPhaseInput" value="${escapeHtml(task?.phase || "首周执行")}" placeholder="前置准备 / 触达准备"></div>
+      <div class="form-field"><label>分类</label><input id="planTaskCategoryInput" value="${escapeHtml(task?.category || "客户开发")}" placeholder="客户开发 / 产品知识"></div>
+      <div class="form-field"><label>优先级</label><select id="planTaskPriorityInput"><option value="high" ${task?.priority === "high" ? "selected" : ""}>高</option><option value="medium" ${task?.priority === "medium" ? "selected" : ""}>中</option><option value="normal" ${!task || task.priority === "normal" ? "selected" : ""}>普通</option></select></div>
+      <div class="form-field"><label>状态</label><select id="planTaskStatusInput"><option value="planned" ${!task || task.status === "planned" ? "selected" : ""}>计划中</option><option value="active" ${task?.status === "active" ? "selected" : ""}>进行中</option><option value="done" ${task?.status === "done" ? "selected" : ""}>已完成</option></select></div>
+      <div class="form-field full"><label>目标完成时间</label><input id="planTaskDueInput" value="${escapeHtml(task?.dueAt || "")}" placeholder="可留空，例如：2026-07-08 18:00"></div>
+      <div class="form-field full"><label>验收目标</label><input id="planTaskTargetInput" value="${escapeHtml(task?.target || "")}" placeholder="做到什么程度才算完成"></div>
+      <div class="form-field full"><label>执行说明</label><textarea id="planTaskDescriptionInput" rows="5" placeholder="写清动作、口径、资料和复盘标准">${escapeHtml(task?.description || "")}</textarea></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="savePlanTaskButton" data-editing-id="${escapeHtml(task?.id || "")}">${editing ? "保存修改" : "保存任务"}</button>`);
+  qs("#savePlanTaskButton")?.addEventListener("click", () => void savePlanTask());
+  qs<HTMLInputElement>("#planTaskTitleInput")?.focus();
+}
+
+async function savePlanTask() {
+  const title = qs<HTMLInputElement>("#planTaskTitleInput")?.value.trim() || "";
+  if (!title) {
+    toast("请填写任务标题", "error");
     return;
   }
-  if (button) {
-    button.disabled = true;
-    button.textContent = "生成中";
+  const saveButton = qs<HTMLButtonElement>("#savePlanTaskButton");
+  const editingId = saveButton?.dataset.editingId || "";
+  const payload = {
+    title,
+    phase: qs<HTMLInputElement>("#planTaskPhaseInput")?.value.trim() || "计划任务",
+    category: qs<HTMLInputElement>("#planTaskCategoryInput")?.value.trim() || "客户开发",
+    priority: (qs<HTMLSelectElement>("#planTaskPriorityInput")?.value || "normal") as PlanTask["priority"],
+    status: (qs<HTMLSelectElement>("#planTaskStatusInput")?.value || "planned") as PlanTask["status"],
+    dueAt: qs<HTMLInputElement>("#planTaskDueInput")?.value.trim() || "",
+    target: qs<HTMLInputElement>("#planTaskTargetInput")?.value.trim() || "",
+    description: qs<HTMLTextAreaElement>("#planTaskDescriptionInput")?.value.trim() || ""
+  };
+  const result = await api<{ task: PlanTask }>(editingId ? `/api/plan-tasks/${editingId}` : "/api/plan-tasks", {
+    method: editingId ? "PATCH" : "POST",
+    body: JSON.stringify(payload)
+  });
+  state.planTasks = editingId ? state.planTasks.map((task) => task.id === result.task.id ? result.task : task) : [result.task, ...state.planTasks];
+  renderPlanTasks(state.planTasks);
+  closeModal();
+  toast(editingId ? "计划任务已保存" : "计划任务已新增");
+}
+
+function openPlanTemplateModal(template?: PlanTemplate) {
+  if (!template) return;
+  openModal("编辑模板", `
+    <div class="form-grid">
+      <div class="form-field"><label>模块</label><select id="planTemplateSectionInput"><option value="knowledge" ${template.section === "knowledge" ? "selected" : ""}>前置知识</option><option value="persona" ${template.section === "persona" ? "selected" : ""}>客户画像</option><option value="execution" ${template.section === "execution" ? "selected" : ""}>首周执行</option></select></div>
+      <div class="form-field"><label>排序</label><input id="planTemplateSortInput" type="number" value="${template.sortOrder}"></div>
+      <div class="form-field full"><label>标题</label><input id="planTemplateTitleInput" value="${escapeHtml(template.title)}"></div>
+      <div class="form-field full"><label>说明</label><textarea id="planTemplateSummaryInput" rows="4">${escapeHtml(template.summary)}</textarea></div>
+      <div class="form-field full"><label>输出物 / 关键词与首触达</label><textarea id="planTemplateOutputInput" rows="3" placeholder="客户画像可写两行：关键词：... / 首触达：...">${escapeHtml(template.output)}</textarea></div>
+      <div class="form-field"><label>标签</label><input id="planTemplateBadgeInput" value="${escapeHtml(template.badge)}"></div>
+      <div class="form-field"><label>标签颜色</label><select id="planTemplateToneInput"><option value="" ${!template.badgeTone ? "selected" : ""}>默认</option><option value="green" ${template.badgeTone === "green" ? "selected" : ""}>绿色</option><option value="aqua" ${template.badgeTone === "aqua" ? "selected" : ""}>蓝绿</option><option value="amber" ${template.badgeTone === "amber" ? "selected" : ""}>橙色</option><option value="red" ${template.badgeTone === "red" ? "selected" : ""}>红色</option></select></div>
+      <div class="form-field"><label>计划阶段</label><input id="planTemplatePhaseInput" value="${escapeHtml(template.phase)}"></div>
+      <div class="form-field"><label>计划分类</label><input id="planTemplateCategoryInput" value="${escapeHtml(template.category)}"></div>
+      <div class="form-field"><label>优先级</label><select id="planTemplatePriorityInput"><option value="high" ${template.priority === "high" ? "selected" : ""}>高</option><option value="medium" ${template.priority === "medium" ? "selected" : ""}>中</option><option value="normal" ${template.priority === "normal" ? "selected" : ""}>普通</option></select></div>
+      <div class="form-field full"><label>加入计划后的验收目标</label><input id="planTemplateTargetInput" value="${escapeHtml(template.target)}"></div>
+      <div class="form-field full"><label>加入计划后的执行说明</label><textarea id="planTemplateDescriptionInput" rows="4">${escapeHtml(template.description)}</textarea></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="savePlanTemplateButton" data-template-id="${escapeHtml(template.id)}">保存模板</button>`);
+  qs("#savePlanTemplateButton")?.addEventListener("click", () => void savePlanTemplate());
+  qs<HTMLInputElement>("#planTemplateTitleInput")?.focus();
+}
+
+async function savePlanTemplate() {
+  const saveButton = qs<HTMLButtonElement>("#savePlanTemplateButton");
+  const id = saveButton?.dataset.templateId || "";
+  const title = qs<HTMLInputElement>("#planTemplateTitleInput")?.value.trim() || "";
+  if (!id || !title) {
+    toast("请填写模板标题", "error");
+    return;
   }
+  const payload = {
+    section: (qs<HTMLSelectElement>("#planTemplateSectionInput")?.value || "knowledge") as PlanTemplate["section"],
+    title,
+    summary: qs<HTMLTextAreaElement>("#planTemplateSummaryInput")?.value.trim() || "",
+    output: qs<HTMLTextAreaElement>("#planTemplateOutputInput")?.value.trim() || "",
+    badge: qs<HTMLInputElement>("#planTemplateBadgeInput")?.value.trim() || "",
+    badgeTone: qs<HTMLSelectElement>("#planTemplateToneInput")?.value || "",
+    phase: qs<HTMLInputElement>("#planTemplatePhaseInput")?.value.trim() || "计划任务",
+    category: qs<HTMLInputElement>("#planTemplateCategoryInput")?.value.trim() || "客户开发",
+    priority: (qs<HTMLSelectElement>("#planTemplatePriorityInput")?.value || "normal") as PlanTemplate["priority"],
+    target: qs<HTMLInputElement>("#planTemplateTargetInput")?.value.trim() || "",
+    description: qs<HTMLTextAreaElement>("#planTemplateDescriptionInput")?.value.trim() || "",
+    sortOrder: Number(qs<HTMLInputElement>("#planTemplateSortInput")?.value || 0)
+  };
+  const result = await api<{ template: PlanTemplate }>(`/api/plan-templates/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+  state.planTemplates = state.planTemplates.map((item) => item.id === result.template.id ? result.template : item);
+  renderPlanTemplates(state.planTemplates);
+  closeModal();
+  toast("模板已保存");
+}
+
+async function deletePlanTemplate(id: string) {
+  if (!id || !window.confirm("确认删除这条模板？已生成的计划任务不会被删除。")) return;
+  await api(`/api/plan-templates/${id}`, { method: "DELETE" });
+  state.planTemplates = state.planTemplates.filter((item) => item.id !== id);
+  renderPlanTemplates(state.planTemplates);
+  toast("模板已删除");
+}
+
+async function createPlanTaskFromTemplate(id: string, button?: HTMLButtonElement) {
+  const template = state.planTemplates.find((item) => item.id === id);
+  if (!template) return;
+  const title = planTemplatePlanTitle(template);
+  if (state.planTasks.some((task) => task.title === title)) {
+    toast("这条训练任务已在计划中");
+    return;
+  }
+  if (button) button.disabled = true;
+  try {
+    const result = await api<{ task: PlanTask }>("/api/plan-tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        phase: template.phase || "计划任务",
+        category: template.category || "客户开发",
+        priority: template.priority || "normal",
+        status: "planned",
+        dueAt: "",
+        target: template.target || "",
+        description: template.description || template.summary || ""
+      })
+    });
+    state.planTasks = [result.task, ...state.planTasks];
+    state.selectedPlanTaskIds = Array.from(new Set([...state.selectedPlanTaskIds, result.task.id]));
+    renderPlanTasks(state.planTasks);
+    toast("已加入计划任务");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function deletePlanTask(id: string) {
+  if (!id || !window.confirm("确认删除这条计划任务？")) return;
+  await api(`/api/plan-tasks/${id}`, { method: "DELETE" });
+  state.planTasks = state.planTasks.filter((task) => task.id !== id);
+  state.selectedPlanTaskIds = state.selectedPlanTaskIds.filter((item) => item !== id);
+  renderPlanTasks(state.planTasks);
+  toast("计划任务已删除");
+}
+
+async function pushPlanTasksToTodos(ids: string[], button?: HTMLButtonElement) {
+  const tasks = ids.map((id) => state.planTasks.find((task) => task.id === id)).filter(Boolean) as PlanTask[];
+  const pending = tasks.filter((task) => task.status !== "done");
+  if (!pending.length) {
+    toast("请选择未完成的计划任务", "error");
+    return;
+  }
+  const existingTitles = new Set(state.todos.filter((todo) => !todo.done).map((todo) => todo.title));
+  const missing = pending.filter((task) => !existingTitles.has(task.title));
+  if (!missing.length) {
+    toast("所选计划任务已在待办中");
+    return;
+  }
+  if (button) button.disabled = true;
   try {
     const created: Todo[] = [];
-    for (const [index, title] of missingTitles.entries()) {
+    for (const task of missing) {
       const result = await api<{ todo: Todo }>("/api/todos", {
         method: "POST",
         body: JSON.stringify({
-          title,
-          type: "customer",
-          priority: index < 4 ? "high" : index < 8 ? "medium" : "normal",
-          dueAt: "",
-          related: "仪表开拓90天方案"
+          title: task.title,
+          type: "other",
+          priority: task.priority,
+          dueAt: task.dueAt,
+          related: `计划任务 / ${task.phase}`
         })
       });
       created.push(result.todo);
@@ -4378,12 +4678,9 @@ async function createInstrumentWeekTodos(button?: HTMLButtonElement) {
     renderTodos(state.todos);
     updateTodoChips(state.todos);
     void refreshDashboardOnly();
-    toast(`已生成 ${created.length} 条首周仪表开拓待办`);
+    toast(`已推送 ${created.length} 条计划任务到待办`);
   } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = "一键推到待办清单";
-    }
+    if (button) button.disabled = false;
   }
 }
 
@@ -4394,11 +4691,14 @@ async function saveInstrumentPlanMemo(button?: HTMLButtonElement) {
   }
   try {
     const existing = state.memos.find((memo) => memo.title === instrumentMemoTitle);
+    const taskLines = state.planTasks.length
+      ? state.planTasks.map((task, index) => `${index + 1}. [${planTaskStatusText(task.status)}][${planTaskPriorityText(task.priority)}] ${task.title} - ${task.target || task.description || "待补充目标"}`).join("\n")
+      : instrumentWeekTodos.map((title, index) => `${index + 1}. ${title}`).join("\n");
     const payload = {
       title: instrumentMemoTitle,
-      category: "销售方案",
-      tags: "仪表,外贸开拓,90天计划",
-      content: instrumentPlanMemoContent(),
+      category: "计划任务",
+      tags: "计划任务,外贸开拓,执行计划",
+      content: `${instrumentPlanMemoContent()}\n\n当前计划任务：\n${taskLines}`,
       pinned: true
     };
     if (existing) {
@@ -4408,7 +4708,7 @@ async function saveInstrumentPlanMemo(button?: HTMLButtonElement) {
       });
       Object.assign(existing, result.memo);
       state.selectedMemoId = existing.id;
-      toast("仪表开拓方案备忘已更新");
+      toast("计划任务备忘已更新");
     } else {
       const result = await api<{ memo: Memo }>("/api/memos", {
         method: "POST",
@@ -4416,7 +4716,7 @@ async function saveInstrumentPlanMemo(button?: HTMLButtonElement) {
       });
       state.memos.unshift(result.memo);
       state.selectedMemoId = result.memo.id;
-      toast("仪表开拓方案已写入备忘");
+      toast("计划任务已写入备忘");
     }
     renderMemos(state.memos);
   } finally {
@@ -4428,28 +4728,31 @@ async function saveInstrumentPlanMemo(button?: HTMLButtonElement) {
 }
 
 function exportInstrumentPlanCsv() {
+  const taskRows = state.planTasks.length
+    ? state.planTasks.map((task) => [task.phase, task.title, planTaskPriorityText(task.priority), planTaskStatusText(task.status), task.dueAt || "", task.target || "", task.description || ""])
+    : instrumentWeekTodos.map((title, index) => ["首周执行", title, index < 4 ? "高优先级" : index < 8 ? "中优先级" : "普通", "计划中", "", "完成后在CRM更新结果与下一动作", ""]);
   const rows = [
-    ["模块", "事项", "目标/标准", "执行说明"],
-    ["90天目标", "目标客户池", "600+", "按国家、客户类型、产品线维护到CRM"],
-    ["90天目标", "有效触达", "900+", "邮件、LinkedIn、WhatsApp、企业微信等渠道记录"],
-    ["90天目标", "有效回复", "60", "有需求、参数、采购计划或后续沟通意愿"],
-    ["90天目标", "RFQ/样品/会议机会", "8", "进入报价、样品、线上会议或项目清单阶段"],
-    ["每日动作", "新增客户", "30家/天", "经销商、系统集成商、OEM、EPC、MRO、终端工程师"],
-    ["每日动作", "首触达", "20家/天", "按角色发送对应英文话术"],
-    ["每日动作", "二次跟进", "10家/天", "补资料、问参数、推进到有效回复"],
-    ["每日动作", "深挖A类客户", "3家/天", "查官网、联系人、产品线、项目线索和竞品"],
-    ["前置知识", "关键参数", "必须掌握", "量程、精度、介质、温压、连接、输出、供电、防护、材质"],
-    ["前置知识", "认证资料", "资料化", "CE、RoHS、EMC、ATEX/IECEx、防爆、SIL、校准证书、ISO、材质报告"],
-    ...instrumentWeekTodos.map((title, index) => ["首周执行", title, `第${index + 1}项`, "完成后在CRM更新结果与下一动作"])
+    ["阶段", "任务", "优先级", "状态", "目标完成时间", "验收目标", "执行说明"],
+    ["90天目标", "目标客户池", "高优先级", "计划中", "", "600+", "按国家、客户类型、产品线维护到CRM"],
+    ["90天目标", "有效触达", "高优先级", "计划中", "", "900+", "邮件、LinkedIn、WhatsApp、企业微信等渠道记录"],
+    ["90天目标", "有效回复", "中优先级", "计划中", "", "60", "有需求、参数、采购计划或后续沟通意愿"],
+    ["90天目标", "RFQ/样品/会议机会", "中优先级", "计划中", "", "8", "进入报价、样品、线上会议或项目清单阶段"],
+    ["每日动作", "新增客户", "高优先级", "计划中", "", "30家/天", "经销商、系统集成商、OEM、EPC、MRO、终端工程师"],
+    ["每日动作", "首触达", "高优先级", "计划中", "", "20家/天", "按角色发送对应英文话术"],
+    ["每日动作", "二次跟进", "中优先级", "计划中", "", "10家/天", "补资料、问参数、推进到有效回复"],
+    ["每日动作", "深挖A类客户", "中优先级", "计划中", "", "3家/天", "查官网、联系人、产品线、项目线索和竞品"],
+    ["前置知识", "关键参数", "高优先级", "计划中", "", "必须掌握", "量程、精度、介质、温压、连接、输出、供电、防护、材质"],
+    ["前置知识", "认证资料", "中优先级", "计划中", "", "资料化", "CE、RoHS、EMC、ATEX/IECEx、防爆、SIL、校准证书、ISO、材质报告"],
+    ...taskRows
   ];
   const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
   const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  link.download = "仪表外贸新客户开拓90天执行表.csv";
+  link.download = "计划任务执行表.csv";
   link.click();
   URL.revokeObjectURL(link.href);
-  toast("仪表开拓执行表已导出");
+  toast("计划任务执行表已导出");
 }
 
 function openCustomerModal(customer?: Customer) {
@@ -4667,9 +4970,9 @@ function installEvents() {
       toast(`已完成 ${pending.length} 条待办`);
     });
   });
-  qsa<HTMLButtonElement>("#instrumentTodoButton, #instrumentTodoButtonInline").forEach((button) => {
-    button.addEventListener("click", (event) => void createInstrumentWeekTodos(event.currentTarget as HTMLButtonElement));
-  });
+  qs<HTMLButtonElement>("#planTaskNewButton")?.addEventListener("click", () => openPlanTaskModal());
+  qs<HTMLButtonElement>("#planTaskNewButtonInline")?.addEventListener("click", () => openPlanTaskModal());
+  qs<HTMLButtonElement>("#planTaskPushSelectedButton")?.addEventListener("click", (event) => void pushPlanTasksToTodos(state.selectedPlanTaskIds, event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#instrumentMemoButton")?.addEventListener("click", (event) => void saveInstrumentPlanMemo(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#instrumentExportButton")?.addEventListener("click", exportInstrumentPlanCsv);
   qs<HTMLButtonElement>("#batchPriorityButton")?.addEventListener("click", (event) => void batchProcessPriorityTasks(event.currentTarget as HTMLButtonElement));

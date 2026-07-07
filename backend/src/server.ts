@@ -4,7 +4,7 @@ import { z } from "zod";
 import { canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, publicUser, requireAuth, signToken } from "./auth.js";
 import { createMysqlStore } from "./mysql-store.js";
 import { getStore, setStore } from "./store.js";
-import type { AiModelConfig, Customer, Deal, Exam, ExamAttempt, ExamQuestion, SessionUser, Todo, TradeDocument, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, Customer, Deal, Exam, ExamAttempt, ExamQuestion, PlanTask, PlanTemplate, SessionUser, Todo, TradeDocument, WebsiteOpportunity } from "./types.js";
 
 export const app = express();
 app.use(cors());
@@ -421,6 +421,177 @@ app.post("/api/todos", requireAuth, asyncRoute(async (req, res) => {
   store.todos.unshift(todo);
   await store.persist();
   res.json({ todo });
+}));
+
+const planTaskSchema = z.object({
+  title: z.string().min(1),
+  phase: z.string().min(1).default("计划任务"),
+  category: z.string().min(1).default("客户开发"),
+  priority: z.enum(["high", "medium", "normal"]).default("normal"),
+  status: z.enum(["planned", "active", "done"]).default("planned"),
+  dueAt: z.string().default(""),
+  target: z.string().default(""),
+  description: z.string().default("")
+});
+
+function sortPlanTasks(tasks: PlanTask[]) {
+  const statusWeight: Record<PlanTask["status"], number> = { active: 0, planned: 1, done: 2 };
+  const priorityWeight: Record<PlanTask["priority"], number> = { high: 0, medium: 1, normal: 2 };
+  return [...tasks].sort((left, right) => {
+    return statusWeight[left.status] - statusWeight[right.status]
+      || priorityWeight[left.priority] - priorityWeight[right.priority]
+      || String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
+  });
+}
+
+const defaultPlanTemplateDrafts: Array<Omit<PlanTemplate, "id" | "ownerId" | "teamId" | "updatedAt">> = [
+  { section: "knowledge", title: "产品分类地图", summary: "压力、温度、流量、液位、分析仪表、记录仪；每类写 3 个典型型号和应用场景。", output: "输出物：1页分类卡", badge: "必会", badgeTone: "green", phase: "前置知识", category: "产品知识", priority: "high", target: "完成6类仪表的分类卡和典型应用说明", description: "整理压力、温度、流量、液位、分析仪表、记录仪的型号、应用行业、常见客户问题。", sortOrder: 10 },
+  { section: "knowledge", title: "关键参数追问表", summary: "量程、精度、介质、温压、连接、输出信号、供电、防护、材质；必须能向客户追问。", output: "输出物：参数确认模板", badge: "必会", badgeTone: "green", phase: "前置知识", category: "参数训练", priority: "high", target: "形成可复制的英文参数确认表", description: "把量程、精度、介质、温度压力、接口、输出信号、供电和材质整理成询盘追问模板。", sortOrder: 20 },
+  { section: "knowledge", title: "证书与资料包", summary: "CE、RoHS、EMC、ATEX/IECEx、防爆、SIL、校准证书、ISO、材质报告，按产品归档。", output: "输出物：资料索引", badge: "资料化", badgeTone: "amber", phase: "前置知识", category: "资料维护", priority: "medium", target: "完成认证资料索引并标注适用产品", description: "按产品类型整理证书、测试报告、校准文件和对外解释口径，避免客户索要资料时临时翻找。", sortOrder: 30 },
+  { section: "knowledge", title: "行业应用场景", summary: "水处理、油气、化工、食品制药、HVAC、电力、船舶、环保设备、OEM 机械。", output: "输出物：行业话术", badge: "场景", badgeTone: "", phase: "前置知识", category: "场景训练", priority: "medium", target: "每个行业写出1条切入话术和1个典型应用", description: "围绕水处理、油气、化工、食品制药、HVAC、电力、船舶和OEM机械整理客户痛点。", sortOrder: 40 },
+  { section: "knowledge", title: "竞品替代口径", summary: "WIKA、Endress+Hauser、Yokogawa、Emerson、KROHNE、Ashcroft、Dwyer 的替代切入点。", output: "输出物：竞品对照表", badge: "谈判", badgeTone: "red", phase: "前置知识", category: "竞品研究", priority: "medium", target: "完成至少5个竞品品牌的替代切入点", description: "整理竞品主打产品、客户关注点、我方可替代卖点和风险边界。", sortOrder: 50 },
+  { section: "persona", title: "工业自动化经销商", summary: "要稳定供货、利润空间、资料齐全和快速响应。", output: "关键词：instrument distributor / automation supplier / country\n首触达：目录、代理优势、证书包、热销型号", badge: "高匹配", badgeTone: "green", phase: "客户画像", category: "客户开发", priority: "high", target: "筛选30家高匹配经销商并完成首触达", description: "使用instrument distributor、automation supplier等关键词，按国家筛选官网、联系人、产品线和代理品牌。", sortOrder: 110 },
+  { section: "persona", title: "系统集成商", summary: "关注项目参数匹配、交期、现场适配和技术支持。", output: "关键词：process automation integrator / control system integrator\n首触达：问应用场景、项目清单、参数范围", badge: "项目型", badgeTone: "aqua", phase: "客户画像", category: "客户开发", priority: "high", target: "筛选20家系统集成商并确认项目应用场景", description: "围绕process automation integrator等关键词查找项目型客户，首封邮件重点询问介质、量程、接口和证书需求。", sortOrder: 120 },
+  { section: "persona", title: "OEM 设备厂", summary: "关注批量一致性、定制接口、长期价格和替代型号。", output: "关键词：machine manufacturer sensor / OEM instrument supplier\n首触达：发参数确认表、询问年用量和安装空间", badge: "批量型", badgeTone: "amber", phase: "客户画像", category: "客户开发", priority: "medium", target: "建立20家OEM设备厂名单并完成参数确认", description: "按设备类型筛选OEM客户，重点记录年用量、现用型号、接口、输出信号和目标价。", sortOrder: 130 },
+  { section: "persona", title: "EPC / 工程承包商", summary: "关注认证、项目清单、交付风险、技术文件和投标资料。", output: "关键词：EPC water treatment instruments / project procurement\n首触达：索要 RFQ、项目清单、证书要求", badge: "高价值", badgeTone: "red", phase: "客户画像", category: "客户开发", priority: "medium", target: "筛选15家EPC客户并记录项目机会", description: "优先查水处理、化工、环保、电力工程客户，邮件重点强调证书、交付和项目配合能力。", sortOrder: 140 },
+  { section: "execution", title: "第 1 天", summary: "整理仪表产品分类与参数卡；建立客户搜索关键词库 10 组。", output: "整理仪表产品分类与参数卡。\n建立客户搜索关键词库 10 组。", badge: "启动", badgeTone: "green", phase: "首周执行", category: "产品知识", priority: "high", target: "完成分类卡和10组关键词库", description: "先把产品分类、参数卡和客户搜索关键词准备好，避免盲目找客户。", sortOrder: 210 },
+  { section: "execution", title: "第 2 天", summary: "整理证书、报价资料和应用案例；新增 30 家目标客户到 CRM。", output: "整理证书、报价资料和应用案例。\n新增 30 家目标客户到 CRM。", badge: "资料", badgeTone: "aqua", phase: "首周执行", category: "资料维护", priority: "high", target: "完成资料包并新增30家客户", description: "把资料准备和客户池新增绑定，新增客户必须带国家、官网、产品匹配点和下一步动作。", sortOrder: 220 },
+  { section: "execution", title: "第 3 天", summary: "完成角色-痛点-话术表；首触达 20 家高匹配客户。", output: "完成角色-痛点-话术表。\n首触达 20 家高匹配客户。", badge: "触达", badgeTone: "amber", phase: "首周执行", category: "客户开发", priority: "high", target: "完成20家首触达并记录结果", description: "按客户角色使用不同邮件标题、开场和参数追问，不要所有客户发同一套内容。", sortOrder: 230 },
+  { section: "execution", title: "第 4 天", summary: "整理竞品替代切入点 5 条；跟进昨日未回复客户 10 家。", output: "整理竞品替代切入点 5 条。\n跟进昨日未回复客户 10 家。", badge: "跟进", badgeTone: "amber", phase: "首周执行", category: "竞品研究", priority: "medium", target: "完成10家二次跟进和5条竞品切入点", description: "二次跟进要补充资料或新问题，不能只是重复问客户是否收到邮件。", sortOrder: 240 },
+  { section: "execution", title: "第 5 天", summary: "制作参数确认表模板；深挖 3 家 A 类客户并写入 CRM。", output: "制作参数确认表模板。\n深挖 3 家 A 类客户并写入 CRM。", badge: "深挖", badgeTone: "red", phase: "首周执行", category: "客户开发", priority: "medium", target: "完成3家A类客户深挖", description: "深挖官网、联系人、产品线、可能项目、竞品品牌和下一步触达理由。", sortOrder: 250 },
+  { section: "execution", title: "第 6-7 天", summary: "完成第一周开发周报；复盘并优化 ICP 与话术。", output: "完成第一周开发周报。\n复盘并优化 ICP 与话术。", badge: "复盘", badgeTone: "green", phase: "首周执行", category: "周报复盘", priority: "normal", target: "输出可汇报的首周复盘", description: "复盘新增客户、有效触达、有效回复、问题、资料缺口和下周优化动作。", sortOrder: 260 }
+];
+
+function sortPlanTemplates(templates: PlanTemplate[]) {
+  return [...templates].sort((left, right) => left.sortOrder - right.sortOrder || String(left.updatedAt || "").localeCompare(String(right.updatedAt || "")));
+}
+
+async function ensurePlanTemplatesForUser(user: SessionUser) {
+  const store = getStore();
+  const existing = store.planTemplates.filter((template) => canSeePersonalData(user, template.ownerId));
+  if (existing.length && existing.some((template) => template.section === "execution")) return sortPlanTemplates(existing);
+  const now = new Date().toISOString();
+  const drafts = existing.length ? defaultPlanTemplateDrafts.filter((template) => template.section === "execution") : defaultPlanTemplateDrafts;
+  const created = drafts.map((template, index) => ({
+    id: `ptpl_${user.id}_${Date.now()}_${index}`,
+    ownerId: user.id,
+    teamId: user.teamId,
+    updatedAt: now,
+    ...template
+  }));
+  store.planTemplates.push(...created);
+  await store.persist();
+  return sortPlanTemplates([...existing, ...created]);
+}
+
+app.get("/api/plan-tasks", requireAuth, (req, res) => {
+  const { planTasks } = getStore();
+  const scoped = planTasks.filter((task) => canSeePersonalData(req.user!, task.ownerId));
+  res.json({ tasks: sortPlanTasks(scoped) });
+});
+
+app.post("/api/plan-tasks", requireAuth, asyncRoute(async (req, res) => {
+  const body = planTaskSchema.parse(req.body);
+  const now = new Date().toISOString();
+  const store = getStore();
+  const task: PlanTask = {
+    id: `pt_${Date.now()}`,
+    ownerId: req.user!.id,
+    teamId: req.user!.teamId,
+    createdAt: now,
+    updatedAt: now,
+    ...body
+  };
+  store.planTasks.unshift(task);
+  await store.persist();
+  res.json({ task });
+}));
+
+app.patch("/api/plan-tasks/:id", requireAuth, asyncRoute(async (req, res) => {
+  const body = planTaskSchema.partial().parse(req.body);
+  const store = getStore();
+  const task = store.planTasks.find((item) => item.id === req.params.id);
+  if (!task || !canSeePersonalData(req.user!, task.ownerId)) {
+    res.status(404).json({ message: "计划任务不存在" });
+    return;
+  }
+  Object.assign(task, body, { updatedAt: new Date().toISOString() });
+  await store.persist();
+  res.json({ task });
+}));
+
+app.delete("/api/plan-tasks/:id", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const index = store.planTasks.findIndex((item) => item.id === req.params.id);
+  const task = index >= 0 ? store.planTasks[index] : null;
+  if (!task || !canSeePersonalData(req.user!, task.ownerId)) {
+    res.status(404).json({ message: "计划任务不存在" });
+    return;
+  }
+  store.planTasks.splice(index, 1);
+  await store.persist();
+  res.json({ ok: true, id: req.params.id });
+}));
+
+const planTemplateSchema = z.object({
+  section: z.enum(["knowledge", "persona", "execution"]).default("knowledge"),
+  title: z.string().min(1),
+  summary: z.string().default(""),
+  output: z.string().default(""),
+  badge: z.string().default(""),
+  badgeTone: z.string().default(""),
+  phase: z.string().min(1).default("计划任务"),
+  category: z.string().min(1).default("客户开发"),
+  priority: z.enum(["high", "medium", "normal"]).default("normal"),
+  target: z.string().default(""),
+  description: z.string().default(""),
+  sortOrder: z.coerce.number().int().default(0)
+});
+
+app.get("/api/plan-templates", requireAuth, asyncRoute(async (req, res) => {
+  const templates = await ensurePlanTemplatesForUser(req.user!);
+  res.json({ templates });
+}));
+
+app.post("/api/plan-templates", requireAuth, asyncRoute(async (req, res) => {
+  const body = planTemplateSchema.parse(req.body);
+  const store = getStore();
+  const template: PlanTemplate = {
+    id: `ptpl_${Date.now()}`,
+    ownerId: req.user!.id,
+    teamId: req.user!.teamId,
+    updatedAt: new Date().toISOString(),
+    ...body
+  };
+  store.planTemplates.push(template);
+  await store.persist();
+  res.json({ template });
+}));
+
+app.patch("/api/plan-templates/:id", requireAuth, asyncRoute(async (req, res) => {
+  const body = planTemplateSchema.partial().parse(req.body);
+  const store = getStore();
+  const template = store.planTemplates.find((item) => item.id === req.params.id);
+  if (!template || !canSeePersonalData(req.user!, template.ownerId)) {
+    res.status(404).json({ message: "模板不存在" });
+    return;
+  }
+  Object.assign(template, body, { updatedAt: new Date().toISOString() });
+  await store.persist();
+  res.json({ template });
+}));
+
+app.delete("/api/plan-templates/:id", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const index = store.planTemplates.findIndex((item) => item.id === req.params.id);
+  const template = index >= 0 ? store.planTemplates[index] : null;
+  if (!template || !canSeePersonalData(req.user!, template.ownerId)) {
+    res.status(404).json({ message: "模板不存在" });
+    return;
+  }
+  store.planTemplates.splice(index, 1);
+  await store.persist();
+  res.json({ ok: true, id: req.params.id });
 }));
 
 app.get("/api/deals", requireAuth, (req, res) => {

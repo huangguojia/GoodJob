@@ -1,7 +1,7 @@
 import mysql from "mysql2/promise";
-import { aiModelConfigs, caseStudies, competitors, customers, deals, examAttempts, examQuestionLinks, examQuestions, exams, importExportJobs, knowledgeAssets, memos, ocrJobs, problems, reminders, todos, tradeDocuments, users, wecomMessages, websiteOpportunities } from "./data.js";
+import { aiModelConfigs, caseStudies, competitors, customers, deals, examAttempts, examQuestionLinks, examQuestions, exams, importExportJobs, knowledgeAssets, memos, ocrJobs, planTasks, planTemplates, problems, reminders, todos, tradeDocuments, users, wecomMessages, websiteOpportunities } from "./data.js";
 import type { CrmStore } from "./store.js";
-import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 const defaultUrl = "mysql://goodjob:change_me@127.0.0.1:3306/goodjob_crm";
 
@@ -28,6 +28,8 @@ export async function createMysqlStore(): Promise<CrmStore> {
 		    ocrJobs: await loadOcrJobs(pool),
 		    websiteOpportunities: await loadWebsiteOpportunities(pool),
 		    aiModelConfigs: await loadAiModelConfigs(pool),
+		    planTasks: await loadPlanTasks(pool),
+		    planTemplates: await loadPlanTemplates(pool),
 		    problems: await loadProblems(pool),
 		    memos: await loadMemos(pool),
 	    competitors: await loadCompetitors(pool),
@@ -54,6 +56,8 @@ export async function createMysqlStore(): Promise<CrmStore> {
 	    store.ocrJobs.push(...ocrJobs);
 	    store.websiteOpportunities.push(...websiteOpportunities);
 	    store.aiModelConfigs.push(...aiModelConfigs);
+	    store.planTasks.push(...planTasks);
+	    store.planTemplates.push(...planTemplates);
 		    store.problems.push(...problems);
     store.memos.push(...memos);
     store.competitors.push(...competitors);
@@ -74,6 +78,14 @@ export async function createMysqlStore(): Promise<CrmStore> {
   }
   if (!store.caseStudies.length) {
     store.caseStudies.push(...caseStudies);
+    await store.persist();
+  }
+  if (!store.planTasks.length) {
+    store.planTasks.push(...planTasks);
+    await store.persist();
+  }
+  if (!store.planTemplates.length && planTemplates.length) {
+    store.planTemplates.push(...planTemplates);
     await store.persist();
   }
   if (!store.tradeDocuments.length) {
@@ -183,6 +195,43 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "todos", "sort_order", "INT DEFAULT 0");
   await ensureColumn(pool, "todos", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
   await ensureColumn(pool, "todos", "history_at", "TIMESTAMP NULL");
+  await pool.query(`CREATE TABLE IF NOT EXISTS plan_tasks (
+    id VARCHAR(64) PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    phase VARCHAR(80),
+    category VARCHAR(80),
+    priority VARCHAR(20) NOT NULL DEFAULT 'normal',
+    status VARCHAR(30) NOT NULL DEFAULT 'planned',
+    due_at VARCHAR(100),
+    target VARCHAR(255),
+    description TEXT,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_plan_tasks_owner(owner_id),
+    INDEX idx_plan_tasks_team(team_id)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS plan_templates (
+    id VARCHAR(64) PRIMARY KEY,
+    section_name VARCHAR(40) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    summary TEXT,
+    output_text VARCHAR(255),
+    badge VARCHAR(80),
+    badge_tone VARCHAR(40),
+    phase VARCHAR(80),
+    category VARCHAR(80),
+    priority VARCHAR(20) NOT NULL DEFAULT 'normal',
+    target VARCHAR(255),
+    description TEXT,
+    sort_order INT DEFAULT 0,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_plan_templates_owner(owner_id),
+    INDEX idx_plan_templates_section(section_name)
+  )`);
   await pool.query(`CREATE TABLE IF NOT EXISTS reminders (
     id VARCHAR(64) PRIMARY KEY,
     title VARCHAR(200) NOT NULL,
@@ -459,6 +508,45 @@ async function loadTodos(pool: mysql.Pool): Promise<Todo[]> {
   }));
 }
 
+async function loadPlanTasks(pool: mysql.Pool): Promise<PlanTask[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM plan_tasks ORDER BY status = 'done' ASC, updated_at DESC, created_at DESC")).map((row) => ({
+    id: row.id,
+    title: row.title,
+    phase: row.phase || "计划任务",
+    category: row.category || "客户开发",
+    priority: row.priority || "normal",
+    status: row.status || "planned",
+    dueAt: row.due_at || "",
+    target: row.target || "",
+    description: row.description || "",
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at
+  }));
+}
+
+async function loadPlanTemplates(pool: mysql.Pool): Promise<PlanTemplate[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM plan_templates ORDER BY sort_order ASC, updated_at DESC")).map((row) => ({
+    id: row.id,
+    section: row.section_name || "knowledge",
+    title: row.title,
+    summary: row.summary || "",
+    output: row.output_text || "",
+    badge: row.badge || "",
+    badgeTone: row.badge_tone || "",
+    phase: row.phase || "计划任务",
+    category: row.category || "客户开发",
+    priority: row.priority || "normal",
+    target: row.target || "",
+    description: row.description || "",
+    sortOrder: Number(row.sort_order || 0),
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at
+  }));
+}
+
 async function loadDeals(pool: mysql.Pool): Promise<Deal[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM deals")).map((row) => ({
     id: row.id, customerId: row.customer_id, title: row.title, stage: row.stage, product: row.product || "", quantity: Number(row.quantity || 0), unitPrice: Number(row.unit_price || 0), amount: Number(row.amount), ownerId: row.owner_id, teamId: row.team_id, nextAction: row.next_action, archivedAt: row.archived_at instanceof Date ? row.archived_at.toISOString() : row.archived_at || undefined
@@ -691,6 +779,8 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
     await replaceRows(connection, "customers", store.customers, (item) => [item.id, item.company, item.country, item.contact, item.ownerId, item.teamId, item.stage, item.amount, item.health, item.nextReminder, item.wecomBound, item.billingName || "", item.billingAddress || "", item.documentContact || "", item.defaultPortDischarge || "", item.defaultIncoterm || "", item.defaultPaymentTerm || ""], "(id,company,country,contact,owner_id,team_id,stage,amount,health,next_reminder,wecom_bound,billing_name,billing_address,document_contact,default_port_discharge,default_incoterm,default_payment_term)");
     await replaceRows(connection, "deals", store.deals, (item) => [item.id, item.customerId, item.title, item.stage, item.product || "", item.quantity || 0, item.unitPrice || 0, item.amount, item.ownerId, item.teamId, item.nextAction, item.archivedAt ? mysqlDate(item.archivedAt) : null], "(id,customer_id,title,stage,product,quantity,unit_price,amount,owner_id,team_id,next_action,archived_at)");
     await replaceRows(connection, "todos", (store.todos as Todo[]), (item) => [item.id, item.title, item.type, item.priority, item.dueAt, item.ownerId, item.teamId, item.related, item.done, item.status || "pending", item.pinState || "", item.sortOrder || 0, item.impactAmount ?? null, mysqlDate(item.createdAt), item.historyAt ? mysqlDate(item.historyAt) : null], "(id,title,type,priority,due_at,owner_id,team_id,related,done,status,pin_state,sort_order,impact_amount,created_at,history_at)");
+    await replaceRows(connection, "plan_tasks", store.planTasks, (item) => [item.id, item.title, item.phase, item.category, item.priority, item.status, item.dueAt, item.target, item.description, item.ownerId, item.teamId, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,title,phase,category,priority,status,due_at,target,description,owner_id,team_id,created_at,updated_at)");
+    await replaceRows(connection, "plan_templates", store.planTemplates, (item) => [item.id, item.section, item.title, item.summary, item.output, item.badge, item.badgeTone, item.phase, item.category, item.priority, item.target, item.description, item.sortOrder, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,section_name,title,summary,output_text,badge,badge_tone,phase,category,priority,target,description,sort_order,owner_id,team_id,updated_at)");
     await replaceRows(connection, "reminders", store.reminders, (item) => [item.id, item.title, item.rule, item.dueAt, item.ownerId, item.teamId, item.channel, item.status, item.ruleType || null, item.targetStage || null, item.days ?? 3, item.priority || "normal", item.enabled ?? true, item.generatedCount || 0], "(id,title,rule_text,due_at,owner_id,team_id,channel,status,rule_type,target_stage,days_count,priority,enabled,generated_count)");
     await replaceRows(connection, "knowledge_assets", store.knowledgeAssets, (item) => [item.id, item.title, item.category, item.status, item.ownerId, item.version], "(id,title,category,status,owner_id,version)");
     await replaceRows(connection, "exams", store.exams, (item) => [item.id, item.title, item.category, item.status, item.passRate, item.questionCount, item.durationMinutes || 20, item.passScore || 80, item.targetRole || "sales", mysqlDate(item.updatedAt)], "(id,title,category,status,pass_rate,question_count,duration_minutes,pass_score,target_role,updated_at)");

@@ -25,6 +25,7 @@ async function login(email: string) {
 
 try {
   const salesToken = await login("shirley@goodjob.com");
+  const miaToken = await login("mia@goodjob.com");
   const managerToken = await login("alex@goodjob.com");
   const adminToken = await login("admin@goodjob.com");
   const superAdminToken = await login("super@goodjob.com");
@@ -155,6 +156,53 @@ try {
   if (!managerTodos.response.ok || managerTodos.json.todos.some((item: { ownerId: string }) => item.ownerId !== "u_manager_alex")) throw new Error("manager should only see own todos");
   const adminTodos = await request("/api/todos", { headers: { authorization: `Bearer ${adminToken}` } });
   if (!adminTodos.response.ok || adminTodos.json.todos.some((item: { ownerId: string }) => item.ownerId !== "u_admin")) throw new Error("admin should only see own todos");
+
+  const planTask = await request("/api/plan-tasks", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      title: "自动化计划任务",
+      phase: "客户开发",
+      category: "仪表开拓",
+      priority: "high",
+      status: "planned",
+      dueAt: "明天 18:00",
+      target: "完成自动化计划任务自测",
+      description: "验证计划任务可新增、编辑、持久化和权限隔离"
+    })
+  });
+  if (!planTask.response.ok || planTask.json.task.ownerId !== "u_sales_shirley") throw new Error("plan task create failed");
+  const editedPlanTask = await request(`/api/plan-tasks/${planTask.json.task.id}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ status: "active", target: "已更新验收目标" })
+  });
+  if (!editedPlanTask.response.ok || editedPlanTask.json.task.status !== "active" || editedPlanTask.json.task.target !== "已更新验收目标") throw new Error("plan task edit failed");
+  const miaPlanTasks = await request("/api/plan-tasks", { headers: { authorization: `Bearer ${miaToken}` } });
+  if (!miaPlanTasks.response.ok || miaPlanTasks.json.tasks.some((item: { id: string }) => item.id === planTask.json.task.id)) throw new Error("other sales should not see personal plan tasks");
+  const managerPlanTasks = await request("/api/plan-tasks", { headers: { authorization: `Bearer ${managerToken}` } });
+  if (!managerPlanTasks.response.ok || managerPlanTasks.json.tasks.some((item: { id: string }) => item.id === planTask.json.task.id)) throw new Error("manager should not see personal plan tasks");
+  const deletedPlanTask = await request(`/api/plan-tasks/${planTask.json.task.id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!deletedPlanTask.response.ok || deletedPlanTask.json.ok !== true) throw new Error("plan task delete failed");
+
+  const planTemplates = await request("/api/plan-templates", { headers: { authorization: `Bearer ${salesToken}` } });
+  if (!planTemplates.response.ok || planTemplates.json.templates.length < 15) throw new Error("plan templates seed failed");
+  if (!planTemplates.json.templates.some((item: { section: string }) => item.section === "execution")) throw new Error("execution templates seed failed");
+  const templateId = planTemplates.json.templates[0].id;
+  const editedTemplate = await request(`/api/plan-templates/${templateId}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ title: "自动化模板编辑", summary: "模板编辑自测", sortOrder: 1 })
+  });
+  if (!editedTemplate.response.ok || editedTemplate.json.template.title !== "自动化模板编辑") throw new Error("plan template edit failed");
+  const deletedTemplate = await request(`/api/plan-templates/${templateId}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!deletedTemplate.response.ok || deletedTemplate.json.ok !== true) throw new Error("plan template delete failed");
 
   const reminders = await request("/api/reminders", { headers: { authorization: `Bearer ${salesToken}` } });
   if (reminders.json.reminders.length < 2) throw new Error("reminders scope failed");

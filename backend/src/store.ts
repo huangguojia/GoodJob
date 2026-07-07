@@ -12,6 +12,8 @@ import {
   knowledgeAssets,
   memos,
   ocrJobs,
+  planTemplates,
+  planTasks,
   problems,
   reminders,
   todos,
@@ -20,7 +22,7 @@ import {
   wecomMessages,
   websiteOpportunities
 } from "./data.js";
-import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 export interface CrmStore {
   mode: "memory" | "mysql";
@@ -40,6 +42,8 @@ export interface CrmStore {
   ocrJobs: OcrJob[];
   websiteOpportunities: WebsiteOpportunity[];
   aiModelConfigs: AiModelConfig[];
+  planTasks: PlanTask[];
+  planTemplates: PlanTemplate[];
   problems: ProblemItem[];
   memos: Memo[];
   competitors: Competitor[];
@@ -65,6 +69,8 @@ export const memoryStore: CrmStore = {
   ocrJobs,
   websiteOpportunities,
   aiModelConfigs,
+  planTasks,
+  planTemplates,
   problems,
   memos,
   competitors,

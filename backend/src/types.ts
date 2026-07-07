@@ -58,6 +58,41 @@ export interface Todo {
   historyAt?: string;
 }
 
+export interface PlanTask {
+  id: string;
+  title: string;
+  phase: string;
+  category: string;
+  priority: "high" | "medium" | "normal";
+  status: "planned" | "active" | "done";
+  dueAt: string;
+  target: string;
+  description: string;
+  ownerId: string;
+  teamId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlanTemplate {
+  id: string;
+  section: "knowledge" | "persona" | "execution";
+  title: string;
+  summary: string;
+  output: string;
+  badge: string;
+  badgeTone: string;
+  phase: string;
+  category: string;
+  priority: "high" | "medium" | "normal";
+  target: string;
+  description: string;
+  sortOrder: number;
+  ownerId: string;
+  teamId: string;
+  updatedAt: string;
+}
+
 export interface KnowledgeAsset {
   id: string;
   title: string;
