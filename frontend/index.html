@@ -444,32 +444,42 @@
       margin-bottom: 14px;
     }
 
-    .focus-panel {
+    .panel.focus-panel {
       position: relative;
       min-height: 254px;
-      padding: 18px;
+      padding: 22px 22px 18px;
       overflow: hidden;
-      color: #fff;
+      color: var(--text);
       background:
-        linear-gradient(135deg, rgba(17, 24, 39, .96), rgba(31, 45, 70, .96)),
-        linear-gradient(135deg, #3157d5, #1aa7a1);
-      border: 1px solid rgba(255,255,255,.1);
-      box-shadow: 0 18px 48px rgba(18, 24, 38, .22);
+        linear-gradient(135deg, rgba(255,255,255,.98), rgba(247,251,255,.98)),
+        linear-gradient(90deg, rgba(255,101,101,.08), rgba(49,87,213,.08), rgba(26,167,161,.08));
+      border: 1px solid rgba(49,87,213,.2);
+      box-shadow: 0 20px 50px rgba(27,39,68,.12);
     }
 
-    .focus-panel::after {
+    .panel.focus-panel::before {
       content: "";
       position: absolute;
-      right: 22px;
-      bottom: 22px;
-      width: 310px;
-      height: 116px;
-      opacity: .34;
+      inset: 0 auto 0 0;
+      height: auto;
+      width: 4px;
+      background: #3157d5;
+      box-shadow: 0 0 18px rgba(49,87,213,.18);
+    }
+
+    .panel.focus-panel::after {
+      content: "";
+      position: absolute;
+      right: 16px;
+      top: 28px;
+      width: 210px;
+      height: 118px;
+      opacity: .5;
       background:
-        linear-gradient(180deg, transparent 0 19px, rgba(255,255,255,.16) 20px 21px, transparent 22px),
-        linear-gradient(90deg, transparent 0 29px, rgba(255,255,255,.1) 30px 31px, transparent 32px);
-      background-size: 100% 29px, 42px 100%;
-      mask-image: linear-gradient(90deg, transparent, #000 32%, #000);
+        linear-gradient(180deg, transparent 0 17px, rgba(49,87,213,.12) 18px 19px, transparent 20px),
+        linear-gradient(90deg, transparent 0 25px, rgba(26,167,161,.1) 26px 27px, transparent 28px);
+      background-size: 100% 26px, 36px 100%;
+      mask-image: linear-gradient(90deg, transparent, #000 28%, #000 74%, transparent);
     }
 
     .focus-panel > * {
@@ -482,13 +492,29 @@
       align-items: center;
       justify-content: space-between;
       gap: 16px;
-      margin-bottom: 16px;
+      margin-bottom: 14px;
     }
 
     .focus-top span {
-      color: #aebbe0;
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 0 10px;
+      border-radius: 999px;
+      color: #fff;
+      background: linear-gradient(135deg, #3157d5, #1aa7a1);
+      border: 1px solid rgba(49,87,213,.2);
+      box-shadow: 0 8px 18px rgba(49,87,213,.22);
       font-size: 12px;
       font-weight: 800;
+    }
+
+    .focus-top span:last-child {
+      color: #566174;
+      background: #fff;
+      border-color: #dfe7f5;
+      font-weight: 700;
+      box-shadow: none;
     }
 
     .focus-title {
@@ -497,43 +523,69 @@
 
     .focus-title h2 {
       margin: 0;
-      color: #fff;
-      font-size: 25px;
-      line-height: 1.22;
+      max-width: 720px;
+      color: #111827;
+      font-size: 28px;
+      line-height: 1.16;
+      letter-spacing: 0;
+      text-shadow: none;
     }
 
     .focus-title p {
-      margin: 10px 0 0;
-      color: #b8c4d9;
+      margin: 11px 0 0;
+      max-width: 740px;
+      color: #4d5a6e;
       font-size: 13px;
       line-height: 1.55;
     }
 
     .briefing-why {
       display: grid;
-      gap: 7px;
-      margin-top: 14px;
-      max-width: 760px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
     }
 
     .briefing-why div {
       display: grid;
-      grid-template-columns: 64px minmax(0, 1fr);
-      gap: 8px;
+      position: relative;
+      gap: 6px;
       align-items: start;
-      padding: 7px 9px;
+      min-height: 80px;
+      padding: 11px 12px 11px 14px;
       border-radius: 8px;
-      border: 1px solid rgba(255,255,255,.1);
-      background: rgba(255,255,255,.065);
+      border: 1px solid #dfe7f5;
+      background: #fff;
+      box-shadow: 0 8px 22px rgba(49,87,213,.07);
+    }
+
+    .briefing-why div::before {
+      content: "";
+      position: absolute;
+      inset: 10px auto 10px 0;
+      width: 3px;
+      border-radius: 999px;
+      background: #3157d5;
+    }
+
+    .briefing-why div:nth-child(2)::before {
+      background: #d99518;
+    }
+
+    .briefing-why div:nth-child(3)::before {
+      background: #16a36a;
     }
 
     .briefing-why b {
-      color: #dce6ff;
+      display: inline-flex;
+      align-items: center;
+      color: #1f3fae;
       font-size: 11px;
+      font-weight: 900;
     }
 
     .briefing-why span {
-      color: #b8c4d9;
+      color: #3f4b5f;
       font-size: 12px;
       line-height: 1.45;
     }
@@ -541,36 +593,97 @@
     .focus-metrics {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
-      margin-top: 16px;
+      gap: 12px;
+      margin-top: 18px;
     }
 
     .focus-metric {
-      min-height: 82px;
-      padding: 12px;
+      min-height: 86px;
+      position: relative;
+      padding: 14px 12px 12px;
       border-radius: var(--radius);
-      background: rgba(255,255,255,.08);
-      border: 1px solid rgba(255,255,255,.11);
+      background: #fff;
+      border: 1px solid #dfe7f5;
+      box-shadow: 0 10px 24px rgba(27,39,68,.075);
+      overflow: hidden;
+    }
+
+    .focus-metric::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto;
+      height: 3px;
+      background: #3157d5;
     }
 
     .focus-metric span {
       display: block;
-      color: #aebbe0;
+      color: #596579;
       font-size: 11px;
       margin-bottom: 8px;
+      font-weight: 700;
     }
 
     .focus-metric b {
       display: block;
-      color: #fff;
-      font-size: 18px;
+      color: #101827;
+      font-size: 21px;
+      line-height: 1.05;
     }
 
     .focus-metric small {
       display: block;
       margin-top: 5px;
-      color: #9eeadf;
+      color: #596579;
       font-size: 11px;
+    }
+
+    .focus-metric:nth-child(1) {
+      border-color: rgba(222,90,90,.45);
+      background:
+        linear-gradient(90deg, rgba(255,101,101,.12), transparent 44%),
+        linear-gradient(180deg, #fff, #fff5f5);
+      box-shadow: 0 14px 30px rgba(222,90,90,.18);
+    }
+
+    .focus-metric:nth-child(1)::before {
+      background: linear-gradient(90deg, #ff6565, #ff9a76);
+    }
+
+    .focus-metric:nth-child(1) b {
+      color: #c42121;
+      font-size: 25px;
+    }
+
+    .focus-metric:nth-child(2) {
+      border-color: rgba(217,149,24,.34);
+      background: linear-gradient(180deg, #fff, #fff8e8);
+    }
+
+    .focus-metric:nth-child(2)::before {
+      background: linear-gradient(90deg, #ffc043, #f59e0b);
+    }
+
+    .focus-metric:nth-child(3) {
+      border-color: rgba(22,163,106,.3);
+      background: linear-gradient(180deg, #fff, #f2fff8);
+    }
+
+    .focus-metric:nth-child(3)::before {
+      background: linear-gradient(90deg, #35d399, #10b981);
+    }
+
+    .focus-metric:nth-child(3) b {
+      color: #12845b;
+    }
+
+    .focus-metric:nth-child(4) {
+      border-color: rgba(26,167,161,.3);
+      background: linear-gradient(180deg, #fff, #effffe);
+    }
+
+    .focus-metric:nth-child(4)::before {
+      background: linear-gradient(90deg, #22d3ee, #1aa7a1);
     }
 
     .schedule-panel {
