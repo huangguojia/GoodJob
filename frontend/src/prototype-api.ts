@@ -920,7 +920,7 @@ function renderPipelineHealth(summary: DashboardSummary) {
   box.innerHTML = summary.pipelineHealth.length ? summary.pipelineHealth.map((item) => {
     const toneClass = item.tone === "green" ? "green" : item.tone === "amber" ? "amber" : item.tone === "red" ? "red" : "aqua";
     const risk = item.riskCount ? ` · ${item.riskCount} 风险` : "";
-    return `<div class="bar-row"><span>${escapeHtml(item.stage)}</span><div class="track"><div class="fill ${toneClass}" style="width:${item.width}%"></div></div><b>${item.count} 单 · ${money(item.amount)}${risk}</b></div>`;
+    return `<div class="bar-row" data-stage="${escapeHtml(item.stage)}" data-count="${item.count}"><span>${escapeHtml(item.stage)}</span><div class="track" aria-label="${escapeHtml(item.stage)} ${item.count} 单"><div class="fill ${toneClass}" style="width:${item.width}%"></div></div><b>${item.count} 单 · ${money(item.amount)}${risk}</b></div>`;
   }).join("") : `<div class="todo-history-empty">暂无商机管道数据</div>`;
 }
 

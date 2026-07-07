@@ -2831,7 +2831,7 @@
 
     .bar-row {
       display: grid;
-      grid-template-columns: 82px minmax(0, 1fr) 46px;
+      grid-template-columns: 82px minmax(0, 1fr) minmax(118px, auto);
       align-items: center;
       gap: 10px;
       font-size: 12px;
@@ -2845,6 +2845,7 @@
     .bar-row b {
       color: var(--ink);
       text-align: right;
+      white-space: nowrap;
     }
 
     .track {
@@ -5717,7 +5718,7 @@
             <div>
               <p class="eyebrow">Sales Command Center</p>
               <h1>外贸客户工作台</h1>
-              <p class="sub">把逾期跟进、报价风险、样品反馈和企微提醒放在同一个第一屏。</p>
+              <p class="sub">无限进步</p>
             </div>
             <div class="head-actions">
               <div class="segmented" id="dashboardPeriodTabs"><button class="active" data-dashboard-period="today">今日</button><button data-dashboard-period="week">本周</button><button data-dashboard-period="month">本月</button></div>

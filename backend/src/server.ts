@@ -1780,7 +1780,7 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
   const publishedExams = exams.filter((exam) => exam.status === "published");
   const averagePassRate = publishedExams.length ? Math.round(publishedExams.reduce((sum, exam) => sum + exam.passRate, 0) / publishedExams.length) : 0;
   const pendingMessages = scopedMessages.filter((message) => message.status === "pending");
-  const readyDeals = scopedDeals.filter((deal) => ["样品", "谈判", "成交"].includes(deal.stage));
+  const readyDeals = scopedDeals.filter((deal) => ["已报价", "样品", "谈判"].includes(deal.stage));
   const topTodos = [...pendingTodos].sort((a, b) => (b.impactAmount || 0) - (a.impactAmount || 0) || priorityWeight(b.priority) - priorityWeight(a.priority)).slice(0, 3);
   const priorityTasks = buildPriorityTasks(scopedDeals, scopedCustomers, pendingTodos);
   const topDeals = priorityTasks.map((task) => task.deal);
@@ -1997,8 +1997,8 @@ function buildPriorityTasks(deals: Deal[], customers: Customer[], todos: Todo[])
 }
 
 function buildPipelineHealth(deals: Deal[], customers: Customer[]) {
-  const stages = ["询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"];
-  const activeDeals = deals.filter((deal) => !deal.archivedAt);
+  const stages = ["询盘", "已联系", "已报价", "样品", "谈判", "成交"];
+  const activeDeals = deals.filter((deal) => !deal.archivedAt && deal.stage !== "丢单");
   const maxCount = Math.max(...stages.map((stage) => activeDeals.filter((deal) => deal.stage === stage).length), 1);
   return stages.map((stage) => {
     const stageDeals = activeDeals.filter((deal) => deal.stage === stage);
@@ -2008,14 +2008,14 @@ function buildPipelineHealth(deals: Deal[], customers: Customer[]) {
       return Boolean(customer?.nextReminder.includes("逾期")) || (customer?.health ?? 100) < 60;
     }).length;
     return {
-      stage: stage === "成交" ? "成交" : stage,
+      stage,
       count: stageDeals.length,
       amount,
       riskCount,
-      width: Math.max(8, Math.round((stageDeals.length / maxCount) * 100)),
-      tone: riskCount ? "amber" : stage === "成交" ? "green" : stage === "丢单" ? "red" : "aqua"
+      width: stageDeals.length ? Math.max(8, Math.round((stageDeals.length / maxCount) * 100)) : 0,
+      tone: riskCount ? "amber" : stage === "成交" ? "green" : "aqua"
     };
-  }).filter((item) => item.stage !== "丢单" || item.count > 0);
+  });
 }
 
 function stagePriorityScore(stage: string) {

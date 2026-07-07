@@ -136,6 +136,16 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#dashboard .section-title", { hasText: "管道健康度" })).toContainText("真实商机阶段");
     await expect(page.locator("#dashboard .bars")).toContainText("单");
     await expect(page.locator("#dashboard .bars")).toContainText("$");
+    const pipelineHealthRows = await page.locator("#dashboard .bars .bar-row").evaluateAll((rows) => rows.map((row) => {
+      const fill = row.querySelector<HTMLElement>(".fill");
+      return {
+        stage: row.querySelector("span")?.textContent || "",
+        count: Number(row.getAttribute("data-count") || 0),
+        fillWidth: fill ? Number.parseFloat(fill.style.width || "0") : 0
+      };
+    }));
+    expect(pipelineHealthRows.some((row) => row.stage === "丢单")).toBe(false);
+    expect(pipelineHealthRows.filter((row) => row.count === 0).every((row) => row.fillWidth === 0)).toBe(true);
     await expect(page.locator("#dashboard .task-list .task").first()).toContainText("分");
     await expect(page.locator("#dashboard .task-list .task").first()).toContainText("金额权重");
     await expect(page.locator("#dashboardPeriodTabs [data-dashboard-period='today']")).toHaveClass(/active/);
