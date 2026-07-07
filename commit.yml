@@ -3,18 +3,12 @@ branches: {
   }
 fileChange:
   /frontend:
-    newFile: !uuid '339fa65036e366d0079c7913c4e988626614b03c'
-    oldFile: !uuid 'f42147972d4a78e7b29967c5215bf6878d3a79ac'
+    newFile: !uuid 'a72c23bb489b42bf721a3eb44da5a57b8b680799'
+    oldFile: !uuid '339fa65036e366d0079c7913c4e988626614b03c'
   /frontend/index.html:
-    newFile: !uuid '702ddf8784a15b2f41760fb0a83d641bb7e2161b'
-    oldFile: !uuid 'f9043f427e74ad6d2e0f859d69be6bef4d4e03a8'
-  /frontend/src:
-    newFile: !uuid '001b16f7ee8f6addb8e25d4588996934e1652b87'
-    oldFile: !uuid 'a97261fea9118ade66e67754875c3a3b14e04a4c'
-  /frontend/src/prototype-api.ts:
-    newFile: !uuid '911e8f0a1a481b0674bf6093028e20c1e3640091'
-    oldFile: !uuid 'c29650d7bf4c49fdcffa71faccb9ec8629582666'
-gitCommitId: !uuid 'ffa9527ded7d2b152a79a08a6991c04f354bf978'
+    newFile: !uuid '74439b3716d9a4b0cf4115bbee4e5cfa76d8ea20'
+    oldFile: !uuid '702ddf8784a15b2f41760fb0a83d641bb7e2161b'
+gitCommitId: !uuid '937559746766c1d034bea4083deb27fe3ad5aa3c'
 renames: {
   }
-revisionId: 26
+revisionId: 27
