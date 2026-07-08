@@ -916,9 +916,10 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#gptApiKeyInput").fill(`sk-test-${runId}`);
     await page.locator("#gptEnabledSelect").selectOption("true");
     await page.locator("#gptSaveButton").click();
-    await expect(page.locator(".toast").last()).toContainText("AI解析配置已保存");
+    await expect(page.locator(".toast").last()).toContainText("已保存并启用");
     await expect(page.locator("#gptApiKeyInput")).toHaveValue(/\\*\\*\\*\\*/);
     await expect(page.locator("#gptConfigState")).toContainText("已启用");
+    await expect(page.locator("#aiConfigList")).toContainText(`自动化GPT配置-${runId}`);
 
     await page.locator("#gptTestButton").click();
     await expect(page.locator("#gptConnectionBadge")).toContainText("连接失败");
@@ -927,6 +928,34 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#topSearchInput").fill("gpt");
     await page.locator("#topSearchInput").press("Enter");
     await expect(page.locator("#ai-config")).toHaveClass(/active/);
+  });
+
+  test("profile page binds outbound email and sends development email", async ({ page }) => {
+    await page.locator("#profileEntryButton").click();
+    await expect(page.locator("#profile")).toHaveClass(/active/);
+    await expect(page.locator("#profileNameTitle")).toContainText("Alex");
+
+    const outboundEmail = `alex.sender.${runId}@example.com`;
+    await page.locator("#profileOutboundEmail").fill(outboundEmail);
+    await page.locator("#profileSenderName").fill("Alex Export");
+    await page.locator("#profileEmailSignature").fill("Best regards\\nAlex Export\\nGoodJob CRM");
+    await page.locator("#profileSaveButton").click();
+    await expect(page.locator(".toast").last()).toContainText("发件邮箱已绑定");
+    await expect(page.locator("#profileEmailStatus")).toContainText(outboundEmail);
+
+    await page.locator("#devEmailTo").fill(`buyer.${runId}@example.com`);
+    await page.locator("#devEmailCompany").fill("Demo Instrument Buyer");
+    await page.locator("#devEmailSubject").fill("Instrumentation supplier for your local market");
+    await page.locator("#profileGenerateEmailButton").click();
+    await expect(page.locator("#devEmailPreview")).toContainText(outboundEmail);
+    await expect(page.locator("#devEmailPreview")).toContainText("Demo Instrument Buyer");
+    await page.locator("#profileSendEmailButton").click();
+    await expect(page.locator(".toast").last()).toContainText("开发信已发送");
+    await expect(page.locator("#profileLastEmail")).toContainText(`buyer.${runId}@example.com`);
+
+    await page.locator("#topSearchInput").fill("个人设置");
+    await page.locator("#topSearchInput").press("Enter");
+    await expect(page.locator("#profile")).toHaveClass(/active/);
   });
 
   test("competitor intelligence can create and update threat level", async ({ page }) => {

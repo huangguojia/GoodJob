@@ -2970,11 +2970,22 @@
     }
 
     .ai-provider-card {
+      width: 100%;
+      appearance: none;
+      text-align: left;
       padding: 12px;
       border: 1px solid #dce4f2;
       border-radius: 8px;
       background: #fff;
       box-shadow: 0 8px 20px rgba(27,39,68,.05);
+      cursor: pointer;
+      transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+    }
+
+    .ai-provider-card:hover {
+      transform: translateY(-1px);
+      border-color: rgba(49,87,213,.32);
+      box-shadow: 0 12px 26px rgba(27,39,68,.08);
     }
 
     .ai-provider-card.active {
@@ -3031,6 +3042,141 @@
 
     .ai-form-grid .form-field.full {
       grid-column: 1 / -1;
+    }
+
+    .ai-instance-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin: 0 0 10px;
+      padding: 8px;
+      border: 1px solid #dce4f2;
+      border-radius: 8px;
+      background: #f8faff;
+    }
+
+    .ai-instance-toolbar span {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .ai-instance-list {
+      display: grid;
+      gap: 7px;
+      margin-bottom: 12px;
+      max-height: 170px;
+      overflow: auto;
+    }
+
+    .ai-instance-row {
+      width: 100%;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid #dce4f2;
+      border-radius: 8px;
+      background: #fff;
+      text-align: left;
+      cursor: pointer;
+      transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+    }
+
+    .ai-instance-row:hover,
+    .ai-instance-row.active {
+      border-color: rgba(49,87,213,.38);
+      box-shadow: 0 10px 24px rgba(27,39,68,.07);
+      transform: translateY(-1px);
+    }
+
+    .ai-instance-row b {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+    }
+
+    .ai-instance-row small {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .ai-instance-row em {
+      display: flex;
+      gap: 5px;
+      justify-content: flex-end;
+      align-items: center;
+      font-style: normal;
+      white-space: nowrap;
+    }
+
+    .ai-subsection {
+      padding: 12px;
+      border: 1px solid #dce4f2;
+      border-radius: 8px;
+      background: #fbfcff;
+    }
+
+    .ai-subsection + .ai-subsection {
+      margin-top: 18px;
+      padding-top: 14px;
+      background: #fff;
+      box-shadow: inset 0 3px 0 rgba(49,87,213,.08);
+    }
+
+    .ai-subsection-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .ai-subsection-title b {
+      color: var(--ink);
+      font-size: 13px;
+    }
+
+    .ai-subsection-title span {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .ai-apply-box {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+      padding: 10px;
+      border: 1px solid #dce4f2;
+      border-radius: 8px;
+      background: #f8faff;
+    }
+
+    .ai-apply-box label {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 30px;
+      padding: 6px 8px;
+      border: 1px solid #e4ebf6;
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .ai-apply-box input {
+      width: 14px;
+      height: 14px;
+      accent-color: var(--brand);
     }
 
     .ai-secret-input {
@@ -3106,6 +3252,11 @@
     .ai-use-row span {
       color: var(--muted);
       font-size: 12px;
+    }
+
+    .ai-use-row .badge {
+      font-size: 10px;
+      white-space: nowrap;
     }
 
     #ai-config .panel {
@@ -8203,67 +8354,77 @@
 
         <div class="view" id="ai-config">
           <div class="page-head">
-            <div><p class="eyebrow">AI Model Settings</p><h1>AI模型配置</h1><p class="sub">先配置 GPT API Key，再让搜客、官网解析、线索评分等功能调用同一套模型能力。</p></div>
+            <div><p class="eyebrow">AI Service Center</p><h1>AI模型配置</h1><p class="sub">统一维护主流 AI 供应商、连接测试和业务应用范围；每个账号独立保存，密钥仅后端持久化。</p></div>
             <div class="head-actions"><button class="btn" id="gptTestButtonTop">测试连接</button><button class="btn primary" id="gptSaveButtonTop">保存配置</button></div>
           </div>
 
           <div class="dense-grid">
-            <div class="dense-card"><span>当前供应商</span><b>GPT</b><small>OpenAI 兼容接口</small></div>
+            <div class="dense-card"><span>当前供应商</span><b id="gptProviderState">OpenAI</b><small id="gptProtocolState">OpenAI兼容协议</small></div>
             <div class="dense-card"><span>配置状态</span><b id="gptConfigState">未启用</b><small id="gptConfigSub">等待 API Key</small></div>
-            <div class="dense-card"><span>默认模型</span><b id="gptModelState">gpt-4o-mini</b><small>可按账号保存</small></div>
-            <div class="dense-card"><span>安全策略</span><b>后端保存</b><small>页面不明文回显 Key</small></div>
+            <div class="dense-card"><span>默认模型</span><b id="gptModelState">gpt-4o-mini</b><small>按账号隔离保存</small></div>
+            <div class="dense-card"><span>应用范围</span><b id="gptUseState">0 个模块</b><small>可按业务开关调用</small></div>
           </div>
 
           <div class="ai-studio-grid">
             <section class="panel section">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><circle cx="12" cy="12" r="4"/></svg></span><div><h2>模型供应商</h2><span>首期先接入 GPT，后续预留更多供应商</span></div></div></div>
-              <div class="ai-provider-list">
-                <article class="ai-provider-card active">
-                  <div class="ai-provider-top"><div class="ai-provider-mark">GPT</div><span class="badge green" id="gptConfigBadge">当前</span></div>
-                  <h3>OpenAI GPT</h3>
-                  <p>用于智能搜客、官网信息抽取、ICP评分、线索说明生成和后续邮件话术扩展。</p>
-                </article>
-                <article class="ai-provider-card">
-                  <div class="ai-provider-top"><div class="ai-provider-mark">兼容</div><span class="badge gray">预留</span></div>
-                  <h3>OpenAI 兼容接口</h3>
-                  <p>如果你的服务商使用 `/v1/chat/completions` 协议，也可以通过 Base URL 接入。</p>
-                </article>
-                <article class="ai-provider-card">
-                  <div class="ai-provider-top"><div class="ai-provider-mark">本地</div><span class="badge gray">规划</span></div>
-                  <h3>本地模型</h3>
-                  <p>后续可接本地部署模型，用于不出网的数据解析与内网知识问答。</p>
-                </article>
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><circle cx="12" cy="12" r="4"/></svg></span><div><h2>供应商预设</h2><span>点击后自动填充协议、地址和推荐模型</span></div></div></div>
+              <div class="ai-provider-list" id="aiProviderList">
+                <button type="button" class="ai-provider-card active" data-ai-provider="openai"><div class="ai-provider-top"><div class="ai-provider-mark">AI</div><span class="badge green" id="gptConfigBadge">当前</span></div><h3>OpenAI GPT</h3><p>通用能力强，适合搜客解析、评分、开发信草稿和考试内容辅助。</p></button>
+                <button type="button" class="ai-provider-card" data-ai-provider="deepseek"><div class="ai-provider-top"><div class="ai-provider-mark">DS</div><span class="badge gray">兼容</span></div><h3>DeepSeek</h3><p>国内常用 OpenAI 兼容接口，成本友好，适合批量解析。</p></button>
+                <button type="button" class="ai-provider-card" data-ai-provider="qwen"><div class="ai-provider-top"><div class="ai-provider-mark">QW</div><span class="badge gray">兼容</span></div><h3>通义千问</h3><p>阿里 DashScope 兼容模式，适合中文资料和知识库场景。</p></button>
+                <button type="button" class="ai-provider-card" data-ai-provider="anthropic"><div class="ai-provider-top"><div class="ai-provider-mark">CL</div><span class="badge gray">原生</span></div><h3>Claude</h3><p>长文本理解稳定，适合官网、资料和复杂客户背景整理。</p></button>
+                <button type="button" class="ai-provider-card" data-ai-provider="gemini"><div class="ai-provider-top"><div class="ai-provider-mark">GM</div><span class="badge gray">原生</span></div><h3>Google Gemini</h3><p>Google 原生 generateContent 协议，适合国际化数据处理。</p></button>
+                <button type="button" class="ai-provider-card" data-ai-provider="custom"><div class="ai-provider-top"><div class="ai-provider-mark">API</div><span class="badge gray">自定义</span></div><h3>自定义/本地模型</h3><p>支持 OpenRouter、Groq、Kimi、智谱、豆包、Ollama 等兼容服务。</p></button>
               </div>
             </section>
 
             <section class="ai-form-card">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2>GPT API Key 配置</h2><span>保存后立即可用于搜客和官网解析</span></div></div></div>
-              <div class="ai-form-grid">
-                <div class="form-field"><label>配置名称</label><input id="gptConfigName" value="GPT 搜客解析模型"></div>
-                <div class="form-field"><label>模型名称</label><input id="gptModelInput" value="gpt-4o-mini" placeholder="例如 gpt-4o-mini"></div>
-                <div class="form-field full"><label>Base URL</label><input id="gptBaseUrlInput" value="https://api.openai.com/v1" placeholder="https://api.openai.com/v1"></div>
-                <div class="form-field full"><label>API Key</label><div class="ai-secret-input"><input id="gptApiKeyInput" type="password" placeholder="以 sk- 开头，保存后不在页面明文显示"><button class="btn" id="gptRevealKeyButton" type="button">显示</button></div><small>密钥只提交到后端持久化；如果已保存，留空不会覆盖原 Key。</small></div>
-                <div class="form-field"><label>启用状态</label><select id="gptEnabledSelect"><option value="true">启用 GPT 能力</option><option value="false">暂不启用</option></select></div>
-                <div class="form-field"><label>调用用途</label><input value="搜客 / 官网解析 / ICP评分" readonly></div>
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2>模型连接参数</h2><span>保存后可立即测试；测试失败不会覆盖已保存密钥</span></div></div></div>
+              <div class="ai-subsection">
+                <div class="ai-subsection-title"><b>配置实例</b><span>先选中或新增一套 Key</span></div>
+                <div class="ai-instance-toolbar"><span id="aiConfigCountText">0 个配置实例</span><div class="head-actions"><button class="btn" id="aiNewConfigButton" type="button">新增配置</button><button class="btn" id="aiToggleEnabledButton" type="button">启用当前</button><button class="btn" id="aiDeleteConfigButton" type="button">删除当前</button></div></div>
+                <div class="ai-instance-list" id="aiConfigList"><div class="empty-cell">暂无配置，点击“新增配置”。</div></div>
               </div>
-              <div class="inline-alert" style="margin-top:12px"><b>测试方式</b><span>点击“测试连接”后，系统会用当前保存的 Base URL、Model、API Key 调用一次模型，返回成功或失败原因。</span></div>
-              <div class="head-actions" style="margin-top:12px"><button class="btn" id="gptTestButton">测试连接</button><button class="btn primary" id="gptSaveButton">保存配置</button></div>
+              <div class="ai-subsection">
+                <div class="ai-subsection-title"><b>参数编辑</b><span>保存后写入数据库</span></div>
+                <div class="inline-alert" id="aiConfigModeAlert" style="margin-bottom:12px"><b>编辑已有配置</b><span>选择上方实例后修改参数，保存后立即持久化。</span></div>
+                <div class="ai-form-grid">
+                  <div class="form-field"><label>配置名称</label><input id="gptConfigName" value="" placeholder="例如：搜客专用 Key"></div>
+                  <div class="form-field"><label>供应商</label><select id="gptProviderSelect"><option value="openai">OpenAI</option><option value="anthropic">Anthropic Claude</option><option value="gemini">Google Gemini</option><option value="deepseek">DeepSeek</option><option value="qwen">通义千问 DashScope</option><option value="moonshot">Moonshot Kimi</option><option value="zhipu">智谱 GLM</option><option value="baidu">百度千帆</option><option value="volcengine">火山豆包</option><option value="mistral">Mistral</option><option value="groq">Groq</option><option value="openrouter">OpenRouter</option><option value="ollama">Ollama / 本地</option><option value="custom">自定义兼容接口</option></select></div>
+                  <div class="form-field"><label>协议</label><select id="gptProtocolSelect"><option value="openai-compatible">OpenAI兼容</option><option value="anthropic">Claude Messages</option><option value="gemini">Gemini生成</option></select></div>
+                  <div class="form-field"><label>模型名称</label><input id="gptModelInput" value="" placeholder="例如 gpt-4o-mini / deepseek-chat"></div>
+                  <div class="form-field full"><label>Base URL</label><input id="gptBaseUrlInput" value="" placeholder="例如 https://api.openai.com/v1"></div>
+                  <div class="form-field full"><label>API Key</label><div class="ai-secret-input"><input id="gptApiKeyInput" type="password" placeholder="保存后仅显示末四位"><button class="btn" id="gptRevealKeyButton" type="button">显示</button></div><small>留空不会覆盖原 Key；页面不会明文回显已保存密钥。</small></div>
+                  <div class="form-field"><label>启用状态</label><select id="gptEnabledSelect"><option value="false">暂不启用</option><option value="true">启用 AI 能力</option></select></div>
+                  <div class="form-field"><label>温度</label><input id="gptTemperatureInput" type="number" min="0" max="2" step="0.1" value="0.1"></div>
+                </div>
+                <div class="ai-apply-box">
+                  <label><input id="aiUseLeadFinder" type="checkbox"> 自动获客</label>
+                  <label><input id="aiUseWebsiteParse" type="checkbox"> 官网解析</label>
+                  <label><input id="aiUseScoring" type="checkbox"> 线索评分</label>
+                  <label><input id="aiUseEmailDraft" type="checkbox"> 开发信草稿</label>
+                  <label><input id="aiUseExam" type="checkbox"> 资料/考试</label>
+                </div>
+                <div class="inline-alert" style="margin-top:12px"><b>测试规则</b><span>系统会按所选协议真实调用模型：兼容接口走 chat/completions，Claude 走 Messages，Gemini 走 generateContent。</span></div>
+                <div class="head-actions" style="margin-top:12px"><button class="btn" id="gptTestButton">测试连接</button><button class="btn primary" id="gptSaveButton">保存配置</button></div>
+              </div>
             </section>
 
             <aside class="ai-status-panel">
               <section class="ai-status-hero">
                 <span class="badge" id="gptConnectionBadge">未测试</span>
                 <h3 id="gptConnectionTitle">等待配置 API Key</h3>
-                <p id="gptConnectionText">配置完成后，智能搜客可以使用 GPT 提取公司业务、国家、联系方式、ICP匹配原因和下一步建议。</p>
+                <p id="gptConnectionText">保存供应商、模型和密钥后，系统会把同一份配置应用到已勾选的业务模块。</p>
               </section>
 
               <section class="panel section">
-                <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5"/></svg></span><div><h2>启用后影响</h2><span>这些模块会读取同一配置</span></div></div></div>
+                <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5"/></svg></span><div><h2>已覆盖模块</h2><span>开关会持久化到数据库</span></div></div></div>
                 <div class="ai-use-list">
-                  <div class="ai-use-row"><i>搜</i><div><b>智能搜客</b><span>线索解析、ICP评分、下一步建议</span></div><span class="badge green">已接</span></div>
-                  <div class="ai-use-row"><i>网</i><div><b>官网扒取</b><span>从官网公开文本提取商机字段</span></div><span class="badge green">已接</span></div>
-                  <div class="ai-use-row"><i>话</i><div><b>跟进话术</b><span>后续生成开发信、WhatsApp话术</span></div><span class="badge gray">预留</span></div>
-                  <div class="ai-use-row"><i>题</i><div><b>资料/考试</b><span>后续辅助生成题目和解析</span></div><span class="badge gray">预留</span></div>
+                  <div class="ai-use-row" data-ai-use-row="leadFinder"><i>搜</i><div><b>自动获客</b><span>按产品、国家、行业筛选并辅助归纳客户</span></div><span class="badge">待启用</span></div>
+                  <div class="ai-use-row" data-ai-use-row="websiteParse"><i>网</i><div><b>官网解析</b><span>从官网公开文本提取商机字段</span></div><span class="badge">待启用</span></div>
+                  <div class="ai-use-row" data-ai-use-row="scoring"><i>评</i><div><b>线索评分</b><span>辅助判断匹配度、重复和优先级</span></div><span class="badge">待启用</span></div>
+                  <div class="ai-use-row" data-ai-use-row="emailDraft"><i>信</i><div><b>开发信草稿</b><span>为搜客清单生成邮件内容</span></div><span class="badge">待启用</span></div>
+                  <div class="ai-use-row" data-ai-use-row="exam"><i>题</i><div><b>资料/考试</b><span>辅助出题、解析和知识点整理</span></div><span class="badge">待启用</span></div>
                 </div>
               </section>
             </aside>

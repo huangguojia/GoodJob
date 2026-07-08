@@ -57,10 +57,36 @@ try {
   });
   if (!aiConfig.response.ok || aiConfig.json.config?.apiKey !== "****1234" || !aiConfig.json.config?.hasApiKey) throw new Error("ai config save failed");
 
+  const aiConfigSecond = await request("/api/tools/ai-config", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      provider: "deepseek",
+      protocol: "openai-compatible",
+      name: "自动化AI解析配置-第二套Key",
+      baseUrl: "https://api.deepseek.com/v1",
+      model: "deepseek-chat",
+      apiKey: "test-secret-5678",
+      enabled: true,
+      useLeadFinder: true,
+      useWebsiteParse: false,
+      useScoring: false,
+      useEmailDraft: true,
+      useExam: false
+    })
+  });
+  if (!aiConfigSecond.response.ok || (aiConfigSecond.json.configs || []).length < 2 || aiConfigSecond.json.config?.apiKey !== "****5678") throw new Error("ai multi config save failed");
+
   const aiConfigRead = await request("/api/tools/ai-config", {
     headers: { authorization: `Bearer ${salesToken}` }
   });
-  if (!aiConfigRead.response.ok || aiConfigRead.json.config?.apiKey !== "****1234") throw new Error("ai config read failed");
+  if (!aiConfigRead.response.ok || (aiConfigRead.json.configs || []).length < 2 || aiConfigRead.json.config?.apiKey !== "****5678") throw new Error("ai config read failed");
+
+  const aiConfigDelete = await request(`/api/tools/ai-config/${aiConfig.json.config.id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!aiConfigDelete.response.ok || (aiConfigDelete.json.configs || []).some((item: { id: string }) => item.id === aiConfig.json.config.id) || aiConfigDelete.json.config?.apiKey !== "****5678") throw new Error("ai config delete failed");
 
   const profileBind = await request("/api/profile/email-binding", {
     method: "PATCH",
@@ -646,6 +672,7 @@ try {
     competitorThreat: competitorThreat.json.competitor.threatLevel,
     casePublished: publishedCase.json.caseStudy.status,
     aiConfigMasked: aiConfigRead.json.config.apiKey,
+    aiConfigDeleteRemaining: aiConfigDelete.json.configs.length,
     profileOutboundEmail: profileBind.json.user.outboundEmail,
     profileSmtpTest: profileTestMail.json.ok,
     developmentEmailTo: profileMail.json.user.lastDevelopmentEmailTo,

@@ -379,17 +379,37 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "website_opportunities", "last_development_email_to", "VARCHAR(180) DEFAULT ''");
   await pool.query(`CREATE TABLE IF NOT EXISTS ai_model_configs (
     id VARCHAR(64) PRIMARY KEY,
-    provider VARCHAR(40) NOT NULL DEFAULT 'openai-compatible',
+    provider VARCHAR(40) NOT NULL DEFAULT 'openai',
+    protocol VARCHAR(40) NOT NULL DEFAULT 'openai-compatible',
     name VARCHAR(120) NOT NULL,
     base_url VARCHAR(255) NOT NULL,
     model VARCHAR(120) NOT NULL,
     api_key TEXT,
     enabled BOOLEAN DEFAULT FALSE,
+    temperature DECIMAL(4,2) DEFAULT 0.10,
+    use_lead_finder BOOLEAN DEFAULT TRUE,
+    use_website_parse BOOLEAN DEFAULT TRUE,
+    use_scoring BOOLEAN DEFAULT TRUE,
+    use_email_draft BOOLEAN DEFAULT TRUE,
+    use_exam BOOLEAN DEFAULT FALSE,
+    last_test_at DATETIME NULL,
+    last_test_status VARCHAR(20) DEFAULT 'untested',
+    last_test_message VARCHAR(255) DEFAULT '',
     owner_id VARCHAR(64) NOT NULL,
     team_id VARCHAR(64) NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_ai_model_owner(owner_id)
   )`);
+  await ensureColumn(pool, "ai_model_configs", "protocol", "VARCHAR(40) NOT NULL DEFAULT 'openai-compatible'");
+  await ensureColumn(pool, "ai_model_configs", "temperature", "DECIMAL(4,2) DEFAULT 0.10");
+  await ensureColumn(pool, "ai_model_configs", "use_lead_finder", "BOOLEAN DEFAULT TRUE");
+  await ensureColumn(pool, "ai_model_configs", "use_website_parse", "BOOLEAN DEFAULT TRUE");
+  await ensureColumn(pool, "ai_model_configs", "use_scoring", "BOOLEAN DEFAULT TRUE");
+  await ensureColumn(pool, "ai_model_configs", "use_email_draft", "BOOLEAN DEFAULT TRUE");
+  await ensureColumn(pool, "ai_model_configs", "use_exam", "BOOLEAN DEFAULT FALSE");
+  await ensureColumn(pool, "ai_model_configs", "last_test_at", "DATETIME NULL");
+  await ensureColumn(pool, "ai_model_configs", "last_test_status", "VARCHAR(20) DEFAULT 'untested'");
+  await ensureColumn(pool, "ai_model_configs", "last_test_message", "VARCHAR(255) DEFAULT ''");
   await pool.query(`CREATE TABLE IF NOT EXISTS import_export_jobs (
     id VARCHAR(64) PRIMARY KEY,
     name VARCHAR(200) NOT NULL,
@@ -740,12 +760,22 @@ async function loadWebsiteOpportunities(pool: mysql.Pool): Promise<WebsiteOpport
 async function loadAiModelConfigs(pool: mysql.Pool): Promise<AiModelConfig[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM ai_model_configs ORDER BY updated_at DESC")).map((row) => ({
     id: row.id,
-    provider: row.provider || "openai-compatible",
+    provider: row.provider || "openai",
+    protocol: row.protocol || (row.provider === "anthropic" ? "anthropic" : row.provider === "gemini" ? "gemini" : "openai-compatible"),
     name: row.name,
     baseUrl: row.base_url,
     model: row.model,
     apiKey: row.api_key || "",
     enabled: Boolean(row.enabled),
+    temperature: Number(row.temperature ?? 0.1),
+    useLeadFinder: row.use_lead_finder === undefined || row.use_lead_finder === null ? true : Boolean(row.use_lead_finder),
+    useWebsiteParse: row.use_website_parse === undefined || row.use_website_parse === null ? true : Boolean(row.use_website_parse),
+    useScoring: row.use_scoring === undefined || row.use_scoring === null ? true : Boolean(row.use_scoring),
+    useEmailDraft: row.use_email_draft === undefined || row.use_email_draft === null ? true : Boolean(row.use_email_draft),
+    useExam: Boolean(row.use_exam),
+    lastTestAt: row.last_test_at instanceof Date ? row.last_test_at.toISOString() : row.last_test_at || undefined,
+    lastTestStatus: row.last_test_status || "untested",
+    lastTestMessage: row.last_test_message || "",
     ownerId: row.owner_id,
     teamId: row.team_id,
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at
@@ -842,7 +872,7 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
 	    await replaceRows(connection, "wecom_messages", store.wecomMessages, (item) => [item.id, item.customerId, item.summary, item.ownerId, item.teamId, item.status], "(id,customer_id,summary,owner_id,team_id,status)");
 	    await replaceRows(connection, "ocr_jobs", store.ocrJobs, (item) => [item.id, item.status, item.confidence, JSON.stringify(item.fields), null], "(id,status,confidence,fields_json,created_by)");
 	    await replaceRows(connection, "website_opportunities", store.websiteOpportunities, (item) => [item.id, item.company, item.business, item.country, item.website, item.contact, item.contactInfo, item.description, item.ownerId, item.teamId, item.status, item.customerId || null, item.dealId || null, item.parseMode || "rule", item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailSubject || "", item.lastDevelopmentEmailTo || "", mysqlDate(item.createdAt)], "(id,company,business,country,website,contact,contact_info,description,owner_id,team_id,status,customer_id,deal_id,parse_mode,last_development_email_at,last_development_email_subject,last_development_email_to,created_at)");
-	    await replaceRows(connection, "ai_model_configs", store.aiModelConfigs, (item) => [item.id, item.provider, item.name, item.baseUrl, item.model, item.apiKey, item.enabled, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,provider,name,base_url,model,api_key,enabled,owner_id,team_id,updated_at)");
+	    await replaceRows(connection, "ai_model_configs", store.aiModelConfigs, (item) => [item.id, item.provider, item.protocol || "openai-compatible", item.name, item.baseUrl, item.model, item.apiKey, item.enabled, item.temperature ?? 0.1, item.useLeadFinder ?? true, item.useWebsiteParse ?? true, item.useScoring ?? true, item.useEmailDraft ?? true, item.useExam ?? false, item.lastTestAt ? mysqlDate(item.lastTestAt) : null, item.lastTestStatus || "untested", item.lastTestMessage || "", item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,provider,protocol,name,base_url,model,api_key,enabled,temperature,use_lead_finder,use_website_parse,use_scoring,use_email_draft,use_exam,last_test_at,last_test_status,last_test_message,owner_id,team_id,updated_at)");
 	    await replaceRows(connection, "problems", store.problems, (item) => [item.id, item.title, item.category, item.severity, item.status, item.ownerId, item.teamId, item.relatedCustomer, item.rootCause, item.solution, item.nextAction, item.dueAt, mysqlDate(item.createdAt)], "(id,title,category,severity,status,owner_id,team_id,related_customer,root_cause,solution,next_action,due_at,created_at)");
 	    await replaceRows(connection, "memos", store.memos, (item) => [item.id, item.title, item.content, item.category, item.tags, item.ownerId, item.teamId, item.pinned, item.archived, mysqlDate(item.updatedAt)], "(id,title,content,category,tags,owner_id,team_id,pinned,archived,updated_at)");
 	    await replaceRows(connection, "competitors", store.competitors, (item) => [item.id, item.company, item.country, item.segment, item.threatLevel, item.website, item.strengths, item.weaknesses, item.competingProducts, item.ourStrategy, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,company,country,segment,threat_level,website,strengths,weaknesses,competing_products,our_strategy,owner_id,team_id,updated_at)");

@@ -1967,30 +1967,54 @@ app.get("/api/tools/website-opportunities", requireAuth, (req, res) => {
 });
 
 app.get("/api/tools/ai-config", requireAuth, (req, res) => {
+  const configs = getAiConfigs(req.user!);
   const config = getAiConfig(req.user!);
-  res.json({ config: config ? publicAiConfig(config) : null });
+  res.json({ config: config ? publicAiConfig(config) : null, configs: configs.map(publicAiConfig) });
 });
 
 app.post("/api/tools/ai-config", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
-    name: z.string().min(1).default("官网商机解析模型"),
+    id: z.string().min(1).max(64).optional(),
+    provider: z.string().min(1).max(40).default("openai"),
+    protocol: z.enum(["openai-compatible", "anthropic", "gemini"]).default("openai-compatible"),
+    name: z.string().min(1).default("AI业务模型配置"),
     baseUrl: z.string().url(),
     model: z.string().min(1),
     apiKey: z.string().optional().default(""),
-    enabled: z.boolean().default(false)
+    enabled: z.boolean().default(false),
+    temperature: z.number().min(0).max(2).default(0.1),
+    useLeadFinder: z.boolean().default(true),
+    useWebsiteParse: z.boolean().default(true),
+    useScoring: z.boolean().default(true),
+    useEmailDraft: z.boolean().default(true),
+    useExam: z.boolean().default(false)
   });
   const body = schema.parse(req.body);
   const store = getStore();
-  const existing = getAiConfig(req.user!);
+  const existing = body.id ? store.aiModelConfigs.find((item) => item.id === body.id && item.ownerId === req.user!.id) : undefined;
   const apiKey = body.apiKey && !body.apiKey.includes("****") ? body.apiKey : existing?.apiKey || "";
+  if (body.enabled && !apiKey) {
+    res.status(400).json({ message: "启用配置前必须填写 API Key" });
+    return;
+  }
   const config: AiModelConfig = {
-    id: existing?.id || `ai_${req.user!.id}`,
-    provider: "openai-compatible",
+    id: existing?.id || body.id || `ai_${req.user!.id}_${Date.now()}`,
+    provider: body.provider,
+    protocol: body.protocol,
     name: body.name,
     baseUrl: body.baseUrl.replace(/\/+$/, ""),
     model: body.model,
     apiKey,
     enabled: body.enabled,
+    temperature: body.temperature,
+    useLeadFinder: body.useLeadFinder,
+    useWebsiteParse: body.useWebsiteParse,
+    useScoring: body.useScoring,
+    useEmailDraft: body.useEmailDraft,
+    useExam: body.useExam,
+    lastTestAt: existing?.lastTestAt,
+    lastTestStatus: existing?.lastTestStatus || "untested",
+    lastTestMessage: existing?.lastTestMessage || "",
     ownerId: req.user!.id,
     teamId: req.user!.teamId,
     updatedAt: new Date().toISOString()
@@ -1998,11 +2022,28 @@ app.post("/api/tools/ai-config", requireAuth, asyncRoute(async (req, res) => {
   if (existing) Object.assign(existing, config);
   else store.aiModelConfigs.unshift(config);
   await store.persist();
-  res.json({ config: publicAiConfig(config) });
+  res.json({ config: publicAiConfig(config), configs: getAiConfigs(req.user!).map(publicAiConfig) });
 }));
 
-app.post("/api/tools/ai-config/test", requireAuth, asyncRoute(async (_req, res) => {
-  const config = getAiConfig(_req.user!);
+app.delete("/api/tools/ai-config/:id", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const index = store.aiModelConfigs.findIndex((item) => item.id === req.params.id && item.ownerId === req.user!.id);
+  if (index < 0) {
+    res.status(404).json({ message: "配置不存在或无权删除" });
+    return;
+  }
+  store.aiModelConfigs.splice(index, 1);
+  await store.persist();
+  const config = getAiConfig(req.user!);
+  res.json({ config: config ? publicAiConfig(config) : null, configs: getAiConfigs(req.user!).map(publicAiConfig) });
+}));
+
+app.post("/api/tools/ai-config/test", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({ id: z.string().min(1).max(64).optional() });
+  const body = schema.parse(req.body || {});
+  const config = body.id
+    ? getStore().aiModelConfigs.find((item) => item.id === body.id && item.ownerId === req.user!.id) || null
+    : getAiConfig(req.user!);
   if (!config || !config.baseUrl || !config.model) {
     res.status(400).json({ message: "请先保存模型地址和模型名称" });
     return;
@@ -2011,8 +2052,13 @@ app.post("/api/tools/ai-config/test", requireAuth, asyncRoute(async (_req, res) 
     res.status(400).json({ message: "请先填写 API Key；系统不会在页面明文回显密钥" });
     return;
   }
-  const ok = await testAiConfig(config);
-  res.json({ ok, message: ok ? "AI 连接测试通过" : "AI 连接失败，请检查 Base URL / Key / Model" });
+  const result = await testAiConfig(config);
+  config.lastTestAt = new Date().toISOString();
+  config.lastTestStatus = result.ok ? "passed" : "failed";
+  config.lastTestMessage = result.message;
+  config.updatedAt = new Date().toISOString();
+  await getStore().persist();
+  res.json({ ok: result.ok, message: result.message, config: publicAiConfig(config), configs: getAiConfigs(req.user!).map(publicAiConfig) });
 }));
 
 const leadFinderSearchSchema = z.object({
@@ -2050,7 +2096,7 @@ app.post("/api/tools/website-scrape/preview", requireAuth, asyncRoute(async (req
   const schema = z.object({ urls: z.array(z.string().min(3)).min(1).max(12), useAi: z.boolean().default(false) });
   const body = schema.parse(req.body);
   const store = getStore();
-  const aiConfig = body.useAi ? getAiConfig(req.user!) : null;
+  const aiConfig = body.useAi ? getAiConfig(req.user!, "websiteParse") : null;
   const parsed = await Promise.all(body.urls.map((url, index) => parseWebsiteOpportunity(url, index, req.user!, aiConfig)));
   for (const item of parsed) {
     const existing = store.websiteOpportunities.find((row) => row.ownerId === req.user!.id && row.website === item.website);
@@ -2478,20 +2524,54 @@ function currentMinuteText() {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function getAiConfig(user: SessionUser) {
-  return getStore().aiModelConfigs.find((item) => item.ownerId === user.id) || null;
+type AiUseCase = "leadFinder" | "websiteParse" | "scoring" | "emailDraft" | "exam";
+
+function getAiConfigs(user: SessionUser) {
+  return getStore().aiModelConfigs
+    .filter((item) => item.ownerId === user.id)
+    .sort((left, right) => Number(right.enabled) - Number(left.enabled) || new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+}
+
+function configSupportsUseCase(config: AiModelConfig, useCase?: AiUseCase) {
+  if (!useCase) return true;
+  const map: Record<AiUseCase, keyof AiModelConfig> = {
+    leadFinder: "useLeadFinder",
+    websiteParse: "useWebsiteParse",
+    scoring: "useScoring",
+    emailDraft: "useEmailDraft",
+    exam: "useExam"
+  };
+  return Boolean(config[map[useCase]]);
+}
+
+function getAiConfig(user: SessionUser, useCase?: AiUseCase) {
+  const configs = getAiConfigs(user);
+  return configs.find((item) => item.enabled && item.apiKey && configSupportsUseCase(item, useCase))
+    || configs.find((item) => configSupportsUseCase(item, useCase))
+    || configs[0]
+    || null;
 }
 
 function publicAiConfig(config: AiModelConfig) {
   return {
     id: config.id,
     provider: config.provider,
+    protocol: config.protocol || "openai-compatible",
     name: config.name,
     baseUrl: config.baseUrl,
     model: config.model,
     apiKey: config.apiKey ? `****${config.apiKey.slice(-4)}` : "",
     hasApiKey: Boolean(config.apiKey),
     enabled: config.enabled,
+    temperature: config.temperature ?? 0.1,
+    useLeadFinder: config.useLeadFinder ?? true,
+    useWebsiteParse: config.useWebsiteParse ?? true,
+    useScoring: config.useScoring ?? true,
+    useEmailDraft: config.useEmailDraft ?? true,
+    useExam: config.useExam ?? false,
+    lastTestAt: config.lastTestAt || "",
+    lastTestStatus: config.lastTestStatus || "untested",
+    lastTestMessage: config.lastTestMessage || "",
     ownerId: config.ownerId,
     teamId: config.teamId,
     updatedAt: config.updatedAt
@@ -2501,10 +2581,37 @@ function publicAiConfig(config: AiModelConfig) {
 async function testAiConfig(config: AiModelConfig) {
   try {
     const content = await callAiModel(config, "只返回 JSON：{\"ok\":true}", 1200);
-    return /ok/i.test(content);
-  } catch {
-    return false;
+    const ok = /ok|true/i.test(content);
+    return {
+      ok,
+      message: ok ? `${providerLabel(config.provider)} 连接测试通过` : "模型已响应，但返回内容不符合测试格式"
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? `AI 连接失败：${error.message}` : "AI 连接失败，请检查 Base URL / Key / Model"
+    };
   }
+}
+
+function providerLabel(provider: string) {
+  const labels: Record<string, string> = {
+    openai: "OpenAI",
+    anthropic: "Claude",
+    gemini: "Gemini",
+    deepseek: "DeepSeek",
+    qwen: "通义千问",
+    moonshot: "Kimi",
+    zhipu: "智谱GLM",
+    baidu: "百度千帆",
+    volcengine: "豆包",
+    mistral: "Mistral",
+    groq: "Groq",
+    openrouter: "OpenRouter",
+    ollama: "Ollama",
+    custom: "自定义模型"
+  };
+  return labels[provider] || provider || "AI模型";
 }
 
 function normalizeWebsite(raw: string) {
@@ -2671,7 +2778,7 @@ async function parseWebsiteOpportunity(rawUrl: string, index: number, user: Sess
     createdAt: new Date().toISOString(),
     parseMode: "rule"
   };
-  if (!aiConfig?.enabled || !aiConfig.apiKey) return ruleResult;
+  if (!aiConfig?.enabled || !aiConfig.apiKey || !aiConfig.useWebsiteParse) return ruleResult;
   try {
     const ai = await parseWebsiteWithAi(aiConfig, {
       website: finalUrl,
@@ -2734,10 +2841,54 @@ async function parseWebsiteWithAi(config: AiModelConfig, context: {
 }
 
 async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars = 12000) {
-  const endpoint = `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+  const protocol = config.protocol || "openai-compatible";
+  const endpointBase = config.baseUrl.replace(/\/+$/, "");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
   try {
+    if (protocol === "anthropic") {
+      const response = await fetch(`${endpointBase}/messages`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "x-api-key": config.apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          model: config.model,
+          max_tokens: 800,
+          temperature: config.temperature ?? 0.1,
+          system: "你擅长把官网公开信息整理成外贸CRM商机。输出必须可被 JSON.parse 解析。",
+          messages: [{ role: "user", content: prompt.slice(0, maxInputChars) }]
+        })
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json() as { content?: Array<{ type?: string; text?: string }> };
+      const content = data.content?.map((item) => item.text || "").join("\n").trim() || "";
+      if (!content) throw new Error("模型返回为空");
+      return content;
+    }
+    if (protocol === "gemini") {
+      const response = await fetch(`${endpointBase}/models/${encodeURIComponent(config.model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          generationConfig: { temperature: config.temperature ?? 0.1 },
+          contents: [{
+            role: "user",
+            parts: [{ text: `你擅长把官网公开信息整理成外贸CRM商机。输出必须可被 JSON.parse 解析。\n${prompt.slice(0, maxInputChars)}` }]
+          }]
+        })
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+      const content = data.candidates?.[0]?.content?.parts?.map((item) => item.text || "").join("\n").trim() || "";
+      if (!content) throw new Error("模型返回为空");
+      return content;
+    }
+    const endpoint = `${endpointBase}/chat/completions`;
     const response = await fetch(endpoint, {
       method: "POST",
       signal: controller.signal,
@@ -2747,7 +2898,7 @@ async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars 
       },
       body: JSON.stringify({
         model: config.model,
-        temperature: 0.1,
+        temperature: config.temperature ?? 0.1,
         messages: [
           { role: "system", content: "你擅长把官网公开信息整理成外贸CRM商机。输出必须可被 JSON.parse 解析。" },
           { role: "user", content: prompt.slice(0, maxInputChars) }
@@ -2755,10 +2906,10 @@ async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars 
         response_format: { type: "json_object" }
       })
     });
-    if (!response.ok) throw new Error(`AI request failed ${response.status}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
     const content = data.choices?.[0]?.message?.content || "";
-    if (!content.trim()) throw new Error("AI empty response");
+    if (!content.trim()) throw new Error("模型返回为空");
     return content;
   } finally {
     clearTimeout(timeout);

@@ -201,12 +201,22 @@ export interface WebsiteOpportunity {
 
 export interface AiModelConfig {
   id: string;
-  provider: "openai-compatible";
+  provider: string;
+  protocol: "openai-compatible" | "anthropic" | "gemini";
   name: string;
   baseUrl: string;
   model: string;
   apiKey: string;
   enabled: boolean;
+  temperature: number;
+  useLeadFinder: boolean;
+  useWebsiteParse: boolean;
+  useScoring: boolean;
+  useEmailDraft: boolean;
+  useExam: boolean;
+  lastTestAt?: string;
+  lastTestStatus?: "untested" | "passed" | "failed";
+  lastTestMessage?: string;
   ownerId: string;
   teamId: string;
   updatedAt: string;
