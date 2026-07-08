@@ -2,31 +2,25 @@
 branches: {
   }
 fileChange:
-  /LEAD_FINDER_DESIGN.md:
-    newFile: !uuid '79b2754023cd84265743b82ce3c7d1542f18f272'
-    oldFile: null
-  /figma-lead-finder-redesign.js:
-    newFile: !uuid 'f830513f0bc9b63842e67d7f0d58351c310b4f6c'
-    oldFile: null
   /frontend:
-    newFile: !uuid 'e88386071002f0f8ec7f9186e25cc88f93e663e7'
-    oldFile: !uuid '615357aa234547f4adffa90f7758b862ce178302'
+    newFile: !uuid 'd2d963266181a0f8a48a57c960678650a1ccbb44'
+    oldFile: !uuid 'e88386071002f0f8ec7f9186e25cc88f93e663e7'
   /frontend/index.html:
-    newFile: !uuid 'c15f1670879008a659dfa02e6610ac5311693f09'
-    oldFile: !uuid 'e8fe674caae46cd6f520130cd54f92f0df420d94'
+    newFile: !uuid '86ce5bbf78938da7a99efa27f1cf1a9d1aec3fc6'
+    oldFile: !uuid 'c15f1670879008a659dfa02e6610ac5311693f09'
   /frontend/src:
-    newFile: !uuid '5163f67aa7ebb26c018bc9f672613e8ac1e71935'
-    oldFile: !uuid '2cc5285d2819c4f8fd4194f5261fb17bdb56a2ec'
+    newFile: !uuid '52ec339521f8017d6cdec879efa3114ffe95b2a2'
+    oldFile: !uuid '5163f67aa7ebb26c018bc9f672613e8ac1e71935'
   /frontend/src/prototype-api.ts:
-    newFile: !uuid '89c662ea21ac2c5af5306ed7361c3b8f9564e898'
-    oldFile: !uuid '39047c37c9e019e688af1a5b3d4ce3acbcf6840c'
+    newFile: !uuid 'dc2cc9e901c8e3febeb7b4782d2e8ce196fc12f7'
+    oldFile: !uuid '89c662ea21ac2c5af5306ed7361c3b8f9564e898'
   /frontend/tests:
-    newFile: !uuid '135b5802d32dbffa78af9ad0fb0f238d9818dce2'
-    oldFile: !uuid '9ebdd11d80b566df3b17e6f3de8b0c4c8593e7c7'
+    newFile: !uuid 'a58baaa875c7d824b36c270cc02d56322d70e541'
+    oldFile: !uuid '135b5802d32dbffa78af9ad0fb0f238d9818dce2'
   /frontend/tests/crm.spec.ts:
-    newFile: !uuid 'e7d89ad6a060e4e5b5a35b822572e6c96e849546'
-    oldFile: !uuid '50ea2e38ec4457df10a006e958308e17da769f7b'
-gitCommitId: !uuid '8f6eab56d37a1b31b0ea1afa2a816d761e481af0'
+    newFile: !uuid 'f9dc17aabbbabfe47a3ea804496a612f4d54f774'
+    oldFile: !uuid 'e7d89ad6a060e4e5b5a35b822572e6c96e849546'
+gitCommitId: !uuid '9ea33a09274627cff8df249934085146136fc0e9'
 renames: {
   }
-revisionId: 30
+revisionId: 31
