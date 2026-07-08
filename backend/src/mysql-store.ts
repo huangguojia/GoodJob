@@ -126,6 +126,11 @@ async function ensureSchema(pool: mysql.Pool) {
     outbound_email VARCHAR(180) DEFAULT '',
     email_sender_name VARCHAR(120) DEFAULT '',
     email_signature TEXT,
+    smtp_host VARCHAR(180) DEFAULT '',
+    smtp_port INT DEFAULT 465,
+    smtp_secure BOOLEAN DEFAULT TRUE,
+    smtp_user VARCHAR(180) DEFAULT '',
+    smtp_password TEXT,
     last_development_email_at DATETIME NULL,
     last_development_email_to VARCHAR(180) DEFAULT '',
     last_development_email_subject VARCHAR(255) DEFAULT '',
@@ -136,6 +141,11 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "users", "outbound_email", "VARCHAR(180) DEFAULT ''");
   await ensureColumn(pool, "users", "email_sender_name", "VARCHAR(120) DEFAULT ''");
   await ensureColumn(pool, "users", "email_signature", "TEXT");
+  await ensureColumn(pool, "users", "smtp_host", "VARCHAR(180) DEFAULT ''");
+  await ensureColumn(pool, "users", "smtp_port", "INT DEFAULT 465");
+  await ensureColumn(pool, "users", "smtp_secure", "BOOLEAN DEFAULT TRUE");
+  await ensureColumn(pool, "users", "smtp_user", "VARCHAR(180) DEFAULT ''");
+  await ensureColumn(pool, "users", "smtp_password", "TEXT");
   await ensureColumn(pool, "users", "last_development_email_at", "DATETIME NULL");
   await ensureColumn(pool, "users", "last_development_email_to", "VARCHAR(180) DEFAULT ''");
   await ensureColumn(pool, "users", "last_development_email_subject", "VARCHAR(255) DEFAULT ''");
@@ -521,6 +531,12 @@ async function loadUsers(pool: mysql.Pool): Promise<User[]> {
     outboundEmail: row.outbound_email || "",
     emailSenderName: row.email_sender_name || row.name,
     emailSignature: row.email_signature || "",
+    smtpHost: row.smtp_host || "",
+    smtpPort: Number(row.smtp_port || 465),
+    smtpSecure: row.smtp_secure === undefined || row.smtp_secure === null ? true : Boolean(row.smtp_secure),
+    smtpUser: row.smtp_user || "",
+    smtpPassword: row.smtp_password || "",
+    hasSmtpPassword: Boolean(row.smtp_password),
     lastDevelopmentEmailAt: row.last_development_email_at instanceof Date ? row.last_development_email_at.toISOString() : row.last_development_email_at || "",
     lastDevelopmentEmailTo: row.last_development_email_to || "",
     lastDevelopmentEmailSubject: row.last_development_email_subject || ""
@@ -809,7 +825,7 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    await replaceRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status, item.outboundEmail || "", item.emailSenderName || item.name, item.emailSignature || "", item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailTo || "", item.lastDevelopmentEmailSubject || ""], "(id,name,email,password_hash,role,team_id,avatar,status,outbound_email,email_sender_name,email_signature,last_development_email_at,last_development_email_to,last_development_email_subject)");
+    await replaceRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status, item.outboundEmail || "", item.emailSenderName || item.name, item.emailSignature || "", item.smtpHost || "", item.smtpPort || 465, item.smtpSecure ?? true, item.smtpUser || "", item.smtpPassword || "", item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailTo || "", item.lastDevelopmentEmailSubject || ""], "(id,name,email,password_hash,role,team_id,avatar,status,outbound_email,email_sender_name,email_signature,smtp_host,smtp_port,smtp_secure,smtp_user,smtp_password,last_development_email_at,last_development_email_to,last_development_email_subject)");
     await replaceRows(connection, "customers", store.customers, (item) => [item.id, item.company, item.country, item.contact, item.ownerId, item.teamId, item.stage, item.amount, item.health, item.nextReminder, item.wecomBound, item.billingName || "", item.billingAddress || "", item.documentContact || "", item.defaultPortDischarge || "", item.defaultIncoterm || "", item.defaultPaymentTerm || ""], "(id,company,country,contact,owner_id,team_id,stage,amount,health,next_reminder,wecom_bound,billing_name,billing_address,document_contact,default_port_discharge,default_incoterm,default_payment_term)");
     await replaceRows(connection, "deals", store.deals, (item) => [item.id, item.customerId, item.title, item.stage, item.product || "", item.quantity || 0, item.unitPrice || 0, item.amount, item.ownerId, item.teamId, item.nextAction, item.archivedAt ? mysqlDate(item.archivedAt) : null], "(id,customer_id,title,stage,product,quantity,unit_price,amount,owner_id,team_id,next_action,archived_at)");
     await replaceRows(connection, "todos", (store.todos as Todo[]), (item) => [item.id, item.title, item.type, item.priority, item.dueAt, item.ownerId, item.teamId, item.related, item.done, item.status || "pending", item.pinState || "", item.sortOrder || 0, item.impactAmount ?? null, mysqlDate(item.createdAt), item.historyAt ? mysqlDate(item.historyAt) : null], "(id,title,type,priority,due_at,owner_id,team_id,related,done,status,pin_state,sort_order,impact_amount,created_at,history_at)");

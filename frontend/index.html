@@ -7186,9 +7186,32 @@
 
     .profile-grid {
       display: grid;
-      grid-template-columns: 380px minmax(0, 1fr);
+      grid-template-columns: minmax(0, 980px);
       gap: 12px;
       align-items: start;
+      max-width: 1040px;
+    }
+
+    .profile-hero-panel {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: center;
+      padding: 18px;
+      border: 1px solid #dce4f2;
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, rgba(49,87,213,.1), rgba(26,167,161,.08)),
+        #fff;
+      box-shadow: 0 14px 34px rgba(27,39,68,.075);
+    }
+
+    .profile-identity {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
     }
 
     .profile-card-hero {
@@ -7204,22 +7227,26 @@
     }
 
     .profile-avatar-xl {
-      width: 54px;
-      height: 54px;
+      width: 72px;
+      height: 72px;
       display: grid;
       place-items: center;
-      border-radius: 14px;
+      border-radius: 18px;
       color: #fff;
       background: linear-gradient(135deg, var(--brand), var(--aqua));
+      font-size: 22px;
       font-weight: 900;
+      box-shadow: 0 14px 28px rgba(49,87,213,.18);
     }
 
+    .profile-identity h2,
     .profile-card-hero h2 {
       margin: 0 0 4px;
       color: var(--ink);
-      font-size: 18px;
+      font-size: 22px;
     }
 
+    .profile-identity p,
     .profile-card-hero p {
       margin: 0;
       color: var(--muted);
@@ -7227,14 +7254,122 @@
       line-height: 1.45;
     }
 
+    .profile-hero-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .profile-hero-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(96px, 1fr));
+      gap: 8px;
+      min-width: 350px;
+    }
+
+    .profile-hero-metrics div {
+      padding: 10px;
+      border: 1px solid rgba(49,87,213,.12);
+      border-radius: 8px;
+      background: rgba(255,255,255,.78);
+    }
+
+    .profile-hero-metrics span,
+    .profile-info-row span,
+    .profile-setting-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .profile-hero-metrics b {
+      display: block;
+      margin-top: 4px;
+      color: var(--ink);
+      font-size: 17px;
+      line-height: 1.15;
+    }
+
+    .profile-info-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .profile-info-row {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      min-height: 34px;
+      padding: 8px 10px;
+      border: 1px solid #e0e7f2;
+      border-radius: 8px;
+      background: #fbfcff;
+    }
+
+    .profile-info-row b {
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+
+    .profile-form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .profile-form-grid .form-field.full {
+      grid-column: 1 / -1;
+    }
+
     .email-status-box {
       display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
       padding: 10px;
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: #f8faff;
       margin-top: 10px;
+    }
+
+    .profile-setting-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .profile-setting-card {
+      min-height: 96px;
+      padding: 12px;
+      border: 1px solid #dfe7f2;
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 8px 20px rgba(27,39,68,.045);
+    }
+
+    .profile-setting-card b {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--ink);
+      font-size: 14px;
+    }
+
+    .profile-setting-card.wide {
+      grid-column: 1 / -1;
+    }
+
+    .profile-quick-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 12px;
     }
 
     .email-status-box span {
@@ -7337,6 +7472,8 @@
       .doc-item-grid label[data-doc-size="price"] { grid-column: span 1; }
       .doc-item-remove { width: 100%; }
       .dense-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .profile-hero-panel { grid-template-columns: 1fr; }
+      .profile-hero-metrics { min-width: 0; }
       .persona-board { grid-template-columns: 1fr; }
       .file-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .focus-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -7376,6 +7513,9 @@
       .page-head .segmented { margin-top: 12px; }
       .kpis,
       .focus-metrics,
+      .profile-hero-metrics,
+      .profile-form-grid,
+      .profile-setting-grid,
       .quality-grid,
       .dense-grid,
       .file-grid,
@@ -8874,35 +9014,54 @@ https://www.ifm.com"></textarea>
         <div class="view" id="profile">
           <div class="page-head">
             <div><p class="eyebrow">Personal Workspace</p><h1>个人主页</h1><p class="sub">维护个人基础信息、发件邮箱和邮件签名；开发信触达请到搜客清单中执行。</p></div>
-            <div class="head-actions"><button class="btn" id="profileRefreshButton">刷新资料</button><button class="btn primary" id="profileSaveButton">保存邮箱绑定</button></div>
+            <div class="head-actions"><button class="btn" id="profileRefreshButton">刷新资料</button><button class="btn" id="profileTestSmtpButton">发送测试邮件</button><button class="btn primary" id="profileSaveButton">保存个人资料</button></div>
           </div>
 
           <div class="profile-grid">
-            <section class="panel section">
-              <div class="profile-card-hero">
+            <section class="profile-hero-panel">
+              <div class="profile-identity">
                 <div class="profile-avatar-xl" id="profileAvatarLarge">SH</div>
-                <div><h2 id="profileNameTitle">Shirley</h2><p id="profileRoleText">业务员 · 仅本人数据</p></div>
+                <div>
+                  <h2 id="profileNameTitle">Shirley</h2>
+                  <p id="profileRoleText">业务员 · 仅本人数据</p>
+                  <div class="profile-hero-badges">
+                    <span class="badge green" id="profileStatusBadge">账号正常</span>
+                    <span class="badge" id="profileTeamBadge">Europe Team</span>
+                    <span class="badge amber" id="profileEmailBadge">邮箱待绑定</span>
+                  </div>
+                </div>
               </div>
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="m22 6-10 7L2 6"/></svg></span><div><h2>邮箱绑定</h2><span>作为开发信发件邮箱，不改变登录账号。</span></div></div></div>
-              <div class="form-field"><label>登录账号</label><input id="profileLoginEmail" readonly></div>
-              <div class="form-field"><label>发件邮箱</label><input id="profileOutboundEmail" placeholder="例如 shirley@your-company.com"></div>
-              <div class="form-field"><label>发件人名称</label><input id="profileSenderName" placeholder="例如 Shirley"></div>
-              <div class="form-field"><label>邮件签名</label><textarea id="profileEmailSignature" placeholder="Best regards,&#10;Shirley&#10;GoodJob Instrument Sales"></textarea></div>
-              <div class="email-status-box">
-                <span>绑定状态</span><b id="profileEmailStatus">未绑定</b>
-                <span>签名状态</span><b id="profileSignatureStatus">待完善</b>
+              <div class="profile-hero-metrics">
+                <div><span>数据范围</span><b id="profileScopeMetric">本人业务</b></div>
+                <div><span>账号角色</span><b id="profileRoleMetric">业务员</b></div>
+                <div><span>发件身份</span><b id="profileMailMetric">未绑定</b></div>
               </div>
             </section>
 
             <section class="panel section">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5"/></svg></span><div><h2>基础资料用途</h2><span>这里负责账号配置，不承载具体开发信工作流。</span></div></div></div>
-              <div class="permission-grid">
-                <div class="permission-card"><b>发件邮箱</b><span>用于搜客清单中的开发信发件身份，保存后不改变登录账号。</span></div>
-                <div class="permission-card"><b>发件人名称</b><span>显示在开发信 From 区域，建议使用真实英文名或公司销售身份。</span></div>
-                <div class="permission-card"><b>邮件签名</b><span>作为开发信正文末尾默认签名，具体正文请在搜客清单里按线索生成。</span></div>
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg></span><div><h2>账号资料</h2><span>登录身份、发件身份和个人签名集中维护</span></div></div></div>
+              <div class="profile-info-list">
+                <div class="profile-info-row"><span>登录账号</span><b id="profileLoginEmailText">shirley@goodjob.com</b></div>
+                <div class="profile-info-row"><span>账号 ID</span><b id="profileIdText">u_sales_shirley</b></div>
+                <div class="profile-info-row"><span>权限范围</span><b id="profileScopeText">仅本人业务与本人待办</b></div>
               </div>
-              <div class="inline-alert" style="margin-top:12px"><b>开发信入口已迁移</b><span>请进入左侧“搜客清单”，选择具体线索后生成、预览并发送开发信。</span></div>
-              <div class="head-actions" style="margin-top:12px"><button class="btn" id="profileOpenProspectsButton">打开搜客清单</button></div>
+              <div class="profile-form-grid" style="margin-top:12px">
+                <div class="form-field"><label>登录账号</label><input id="profileLoginEmail" readonly></div>
+                <div class="form-field"><label>发件邮箱</label><input id="profileOutboundEmail" placeholder="例如 shirley@your-company.com"></div>
+                <div class="form-field"><label>发件人名称</label><input id="profileSenderName" placeholder="例如 Shirley"></div>
+                <div class="form-field"><label>SMTP服务器</label><input id="profileSmtpHost" placeholder="例如 smtp.exmail.qq.com"></div>
+                <div class="form-field"><label>SMTP端口</label><input id="profileSmtpPort" type="number" min="1" max="65535" placeholder="465 或 587"></div>
+                <div class="form-field"><label>SMTP账号</label><input id="profileSmtpUser" placeholder="通常与发件邮箱一致"></div>
+                <div class="form-field"><label>SMTP授权码/密码</label><input id="profileSmtpPassword" type="password" placeholder="留空则保留已保存密码"></div>
+                <div class="form-field"><label>加密方式</label><select id="profileSmtpSecure"><option value="true">SSL/TLS（465）</option><option value="false">STARTTLS/普通（587）</option></select></div>
+                <div class="form-field"><label>邮箱用途</label><input value="搜客清单真实发信身份" readonly></div>
+                <div class="form-field full"><label>邮件签名</label><textarea id="profileEmailSignature" placeholder="Best regards,&#10;Shirley&#10;GoodJob Instrument Sales"></textarea></div>
+              </div>
+              <div class="email-status-box">
+                <div><span>绑定状态</span><b id="profileEmailStatus">未绑定</b></div>
+                <div><span>签名状态</span><b id="profileSignatureStatus">待完善</b></div>
+                <div><span>SMTP状态</span><b id="profileSmtpStatus">未配置</b></div>
+              </div>
             </section>
           </div>
         </div>

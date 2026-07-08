@@ -1,5 +1,6 @@
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
+import nodemailer from "nodemailer";
 import { z } from "zod";
 import { canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, publicUser, requireAuth, signToken } from "./auth.js";
 import { createMysqlStore } from "./mysql-store.js";
@@ -18,6 +19,29 @@ function asyncRoute(handler: (req: Request, res: Response, next: NextFunction) =
 
 function accountUser(user: ReturnType<typeof getStore>["users"][number]) {
   return { ...publicUser(user), status: user.status };
+}
+
+async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][number], payload: { to: string; subject: string; body: string }) {
+  if (!user.outboundEmail || !user.smtpHost || !user.smtpUser || !user.smtpPassword) {
+    throw new Error("请先在个人信息页完整配置发件邮箱、SMTP服务器、账号和授权码");
+  }
+  const transport = process.env.NODE_ENV === "test"
+    ? nodemailer.createTransport({ streamTransport: true, newline: "unix", buffer: true })
+    : nodemailer.createTransport({
+      host: user.smtpHost,
+      port: user.smtpPort || 465,
+      secure: user.smtpSecure ?? true,
+      auth: {
+        user: user.smtpUser,
+        pass: user.smtpPassword
+      }
+    });
+  return transport.sendMail({
+    from: `"${user.emailSenderName || user.name}" <${user.outboundEmail}>`,
+    to: payload.to,
+    subject: payload.subject,
+    text: payload.body
+  });
 }
 
 function examQuestionsFor(examId: string) {
@@ -194,7 +218,12 @@ app.patch("/api/profile/email-binding", requireAuth, asyncRoute(async (req, res)
   const schema = z.object({
     outboundEmail: z.string().email(),
     emailSenderName: z.string().min(1).max(80),
-    emailSignature: z.string().max(800).default("")
+    emailSignature: z.string().max(800).default(""),
+    smtpHost: z.string().max(180).default(""),
+    smtpPort: z.number().int().min(1).max(65535).default(465),
+    smtpSecure: z.boolean().default(true),
+    smtpUser: z.string().max(180).default(""),
+    smtpPassword: z.string().max(300).optional().default("")
   });
   const body = schema.parse(req.body);
   const store = getStore();
@@ -206,9 +235,37 @@ app.patch("/api/profile/email-binding", requireAuth, asyncRoute(async (req, res)
   user.outboundEmail = body.outboundEmail;
   user.emailSenderName = body.emailSenderName;
   user.emailSignature = body.emailSignature;
+  user.smtpHost = body.smtpHost;
+  user.smtpPort = body.smtpPort;
+  user.smtpSecure = body.smtpSecure;
+  user.smtpUser = body.smtpUser;
+  if (body.smtpPassword) user.smtpPassword = body.smtpPassword;
   await store.persist();
   const sessionUser = publicUser(user);
   res.json({ user: accountUser(user), token: signToken(sessionUser) });
+}));
+
+app.post("/api/profile/test-email", requireAuth, asyncRoute(async (_req, res) => {
+  const store = getStore();
+  const user = store.users.find((item) => item.id === _req.user!.id);
+  if (!user) {
+    res.status(404).json({ message: "账号不存在" });
+    return;
+  }
+  if (!user.outboundEmail) {
+    res.status(400).json({ message: "请先保存发件邮箱" });
+    return;
+  }
+  try {
+    const info = await sendOutboundEmail(user, {
+      to: user.outboundEmail,
+      subject: "GoodJob CRM SMTP 测试邮件",
+      body: `这是一封来自 GoodJob CRM 的 SMTP 测试邮件。\n\n账号：${user.email}\n时间：${new Date().toISOString()}`
+    });
+    res.json({ ok: true, messageId: info.messageId, simulated: process.env.NODE_ENV === "test" });
+  } catch (error) {
+    res.status(400).json({ message: error instanceof Error ? error.message : "测试邮件发送失败" });
+  }
 }));
 
 app.post("/api/profile/send-development-email", requireAuth, asyncRoute(async (req, res) => {
@@ -225,8 +282,11 @@ app.post("/api/profile/send-development-email", requireAuth, asyncRoute(async (r
     res.status(404).json({ message: "账号不存在" });
     return;
   }
-  if (!user.outboundEmail) {
-    res.status(400).json({ message: "请先绑定发件邮箱" });
+  let mailInfo: Awaited<ReturnType<typeof sendOutboundEmail>>;
+  try {
+    mailInfo = await sendOutboundEmail(user, { to: body.to, subject: body.subject, body: body.body });
+  } catch (error) {
+    res.status(400).json({ message: error instanceof Error ? error.message : "邮件发送失败" });
     return;
   }
   const sentAt = new Date().toISOString();
@@ -238,7 +298,8 @@ app.post("/api/profile/send-development-email", requireAuth, asyncRoute(async (r
     sent: {
       id: `mail_${Date.now()}`,
       status: "sent",
-      simulated: true,
+      simulated: process.env.NODE_ENV === "test",
+      messageId: mailInfo.messageId,
       from: user.outboundEmail,
       senderName: user.emailSenderName || user.name,
       to: body.to,
@@ -264,13 +325,16 @@ app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRout
     res.status(404).json({ message: "账号不存在" });
     return;
   }
-  if (!user.outboundEmail) {
-    res.status(400).json({ message: "请先到个人信息绑定发件邮箱" });
-    return;
-  }
   const opportunity = store.websiteOpportunities.find((item) => item.id === req.params.id && canSeeOwner(req.user!, item.ownerId, item.teamId));
   if (!opportunity) {
     res.status(404).json({ message: "搜客线索不存在或无权访问" });
+    return;
+  }
+  let mailInfo: Awaited<ReturnType<typeof sendOutboundEmail>>;
+  try {
+    mailInfo = await sendOutboundEmail(user, { to: body.to, subject: body.subject, body: body.body });
+  } catch (error) {
+    res.status(400).json({ message: error instanceof Error ? error.message : "邮件发送失败" });
     return;
   }
   const sentAt = new Date().toISOString();
@@ -285,7 +349,8 @@ app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRout
     sent: {
       id: `mail_${Date.now()}`,
       status: "sent",
-      simulated: true,
+      simulated: process.env.NODE_ENV === "test",
+      messageId: mailInfo.messageId,
       from: user.outboundEmail,
       senderName: user.emailSenderName || user.name,
       to: body.to,

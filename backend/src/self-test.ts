@@ -68,11 +68,24 @@ try {
     body: JSON.stringify({
       outboundEmail: "shirley.sender@example.com",
       emailSenderName: "Shirley Sender",
-      emailSignature: "Best regards,\\nShirley Sender"
+      emailSignature: "Best regards,\\nShirley Sender",
+      smtpHost: "smtp.test.local",
+      smtpPort: 465,
+      smtpSecure: true,
+      smtpUser: "shirley.sender@example.com",
+      smtpPassword: "test-smtp-password"
     })
   });
-  if (!profileBind.response.ok || profileBind.json.user?.outboundEmail !== "shirley.sender@example.com" || !profileBind.json.token) {
+  if (!profileBind.response.ok || profileBind.json.user?.outboundEmail !== "shirley.sender@example.com" || !profileBind.json.user?.hasSmtpPassword || !profileBind.json.token) {
     throw new Error("profile email binding failed");
+  }
+
+  const profileTestMail = await request("/api/profile/test-email", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!profileTestMail.response.ok || !profileTestMail.json.ok) {
+    throw new Error("profile smtp test failed");
   }
 
   const profileMail = await request("/api/profile/send-development-email", {
@@ -634,6 +647,7 @@ try {
     casePublished: publishedCase.json.caseStudy.status,
     aiConfigMasked: aiConfigRead.json.config.apiKey,
     profileOutboundEmail: profileBind.json.user.outboundEmail,
+    profileSmtpTest: profileTestMail.json.ok,
     developmentEmailTo: profileMail.json.user.lastDevelopmentEmailTo,
     prospectEmailTo: prospectMail.json.opportunity.lastDevelopmentEmailTo,
     importJob: customerImport.json.job.name,

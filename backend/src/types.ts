@@ -12,6 +12,12 @@ export interface User {
   outboundEmail?: string;
   emailSenderName?: string;
   emailSignature?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: boolean;
+  smtpUser?: string;
+  smtpPassword?: string;
+  hasSmtpPassword?: boolean;
   lastDevelopmentEmailAt?: string;
   lastDevelopmentEmailTo?: string;
   lastDevelopmentEmailSubject?: string;
@@ -27,6 +33,11 @@ export interface SessionUser {
   outboundEmail?: string;
   emailSenderName?: string;
   emailSignature?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: boolean;
+  smtpUser?: string;
+  hasSmtpPassword?: boolean;
   lastDevelopmentEmailAt?: string;
   lastDevelopmentEmailTo?: string;
   lastDevelopmentEmailSubject?: string;

@@ -20,7 +20,18 @@ export function publicUser(user: ReturnType<typeof getStore>["users"][number]): 
     email: user.email,
     role: user.role,
     teamId: user.teamId,
-    avatar: user.avatar
+    avatar: user.avatar,
+    outboundEmail: user.outboundEmail || "",
+    emailSenderName: user.emailSenderName || user.name,
+    emailSignature: user.emailSignature || "",
+    smtpHost: user.smtpHost || "",
+    smtpPort: user.smtpPort || 465,
+    smtpSecure: user.smtpSecure ?? true,
+    smtpUser: user.smtpUser || "",
+    hasSmtpPassword: Boolean(user.smtpPassword),
+    lastDevelopmentEmailAt: user.lastDevelopmentEmailAt || "",
+    lastDevelopmentEmailTo: user.lastDevelopmentEmailTo || "",
+    lastDevelopmentEmailSubject: user.lastDevelopmentEmailSubject || ""
   };
 }
 

@@ -12,6 +12,11 @@ interface User {
   outboundEmail?: string;
   emailSenderName?: string;
   emailSignature?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: boolean;
+  smtpUser?: string;
+  hasSmtpPassword?: boolean;
   lastDevelopmentEmailAt?: string;
   lastDevelopmentEmailTo?: string;
   lastDevelopmentEmailSubject?: string;
@@ -752,15 +757,38 @@ function renderProfile(user = state.user) {
   const role = qs<HTMLElement>("#profileRoleText");
   const status = qs<HTMLElement>("#profileEmailStatus");
   const signatureStatus = qs<HTMLElement>("#profileSignatureStatus");
+  const teamText = user.teamId === "all" ? "全局团队" : `${user.teamId} 组`;
+  const mailReady = Boolean(user.outboundEmail);
   if (avatar) avatar.textContent = user.avatar;
   if (name) name.textContent = user.name;
   if (role) role.textContent = `${roleLabel[user.role]} · ${roleScopeText(user)}`;
+  qs<HTMLElement>("#profileStatusBadge")!.textContent = "账号正常";
+  qs<HTMLElement>("#profileTeamBadge")!.textContent = teamText;
+  const emailBadge = qs<HTMLElement>("#profileEmailBadge");
+  if (emailBadge) {
+    emailBadge.className = `badge ${mailReady ? "green" : "amber"}`;
+    emailBadge.textContent = mailReady ? "发件邮箱已绑定" : "发件邮箱待绑定";
+  }
+  qs<HTMLElement>("#profileScopeMetric")!.textContent = user.role === "sales" ? "本人业务" : user.role === "manager" ? "团队业务" : "全局业务";
+  qs<HTMLElement>("#profileRoleMetric")!.textContent = roleLabel[user.role];
+  qs<HTMLElement>("#profileMailMetric")!.textContent = mailReady && user.smtpHost && user.hasSmtpPassword ? "可真实发信" : mailReady ? "待配SMTP" : "未绑定";
+  qs<HTMLElement>("#profileLoginEmailText")!.textContent = user.email;
+  qs<HTMLElement>("#profileIdText")!.textContent = user.id;
+  qs<HTMLElement>("#profileScopeText")!.textContent = roleScopeText(user);
   setValue("#profileLoginEmail", user.email);
   setValue("#profileOutboundEmail", user.outboundEmail || "");
   setValue("#profileSenderName", user.emailSenderName || user.name);
   setValue("#profileEmailSignature", user.emailSignature || `Best regards,\n${user.name}\nGoodJob Instrument Sales`);
+  setValue("#profileSmtpHost", user.smtpHost || "");
+  setValue("#profileSmtpPort", String(user.smtpPort || 465));
+  setValue("#profileSmtpUser", user.smtpUser || user.outboundEmail || "");
+  setValue("#profileSmtpPassword", "");
+  const smtpSecure = qs<HTMLSelectElement>("#profileSmtpSecure");
+  if (smtpSecure) smtpSecure.value = String(user.smtpSecure ?? true);
   if (status) status.innerHTML = user.outboundEmail ? `${badge("已绑定", "green")} ${escapeHtml(user.outboundEmail)}` : `${badge("未绑定", "amber")} 请先绑定发件邮箱`;
   if (signatureStatus) signatureStatus.innerHTML = user.emailSignature?.trim() ? `${badge("已设置", "green")} ${escapeHtml((user.emailSignature.split("\n")[0] || "签名已维护").slice(0, 36))}` : `${badge("待完善", "amber")} 建议补充英文签名`;
+  const smtpStatus = qs<HTMLElement>("#profileSmtpStatus");
+  if (smtpStatus) smtpStatus.innerHTML = user.smtpHost && user.smtpUser && user.hasSmtpPassword ? `${badge("已配置", "green")} ${escapeHtml(user.smtpHost)}` : `${badge("未完整", "amber")} 填写SMTP后才能真实发信`;
 }
 
 function collectDevelopmentEmailDraft() {
@@ -821,6 +849,11 @@ async function saveProfileEmailBinding(button?: HTMLButtonElement) {
   const outboundEmail = qs<HTMLInputElement>("#profileOutboundEmail")?.value.trim() || "";
   const emailSenderName = qs<HTMLInputElement>("#profileSenderName")?.value.trim() || "";
   const emailSignature = qs<HTMLTextAreaElement>("#profileEmailSignature")?.value.trim() || "";
+  const smtpHost = qs<HTMLInputElement>("#profileSmtpHost")?.value.trim() || "";
+  const smtpPort = Number(qs<HTMLInputElement>("#profileSmtpPort")?.value || 465);
+  const smtpSecure = qs<HTMLSelectElement>("#profileSmtpSecure")?.value !== "false";
+  const smtpUser = qs<HTMLInputElement>("#profileSmtpUser")?.value.trim() || "";
+  const smtpPassword = qs<HTMLInputElement>("#profileSmtpPassword")?.value || "";
   if (!outboundEmail || !emailSenderName) {
     toast("请填写发件邮箱和发件人名称", "error");
     return;
@@ -832,14 +865,30 @@ async function saveProfileEmailBinding(button?: HTMLButtonElement) {
   try {
     const result = await api<{ user: User; token: string }>("/api/profile/email-binding", {
       method: "PATCH",
-      body: JSON.stringify({ outboundEmail, emailSenderName, emailSignature })
+      body: JSON.stringify({ outboundEmail, emailSenderName, emailSignature, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPassword })
     });
     updateStoredUser(result.user, result.token);
     toast("发件邮箱已绑定");
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "保存邮箱绑定";
+      button.textContent = "保存个人资料";
+    }
+  }
+}
+
+async function sendProfileTestEmail(button?: HTMLButtonElement) {
+  if (button) {
+    button.disabled = true;
+    button.textContent = "发送中";
+  }
+  try {
+    const result = await api<{ ok: boolean; simulated: boolean; messageId?: string }>("/api/profile/test-email", { method: "POST" });
+    toast(result.simulated ? "测试邮件已生成（测试环境未外发）" : "测试邮件已发送，请检查发件邮箱收件箱");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "发送测试邮件";
     }
   }
 }
@@ -5960,12 +6009,17 @@ function installEvents() {
   });
   qs<HTMLButtonElement>("#profileEntryButton")?.addEventListener("click", () => activateNavView("profile", () => renderProfile()));
   qs<HTMLButtonElement>("#profileSaveButton")?.addEventListener("click", (event) => void saveProfileEmailBinding(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#profileTestSmtpButton")?.addEventListener("click", (event) => void sendProfileTestEmail(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#profileRefreshButton")?.addEventListener("click", async () => {
     const result = await api<{ user: User }>("/api/profile");
     updateStoredUser(result.user);
     toast("个人资料已刷新");
   });
   qs<HTMLButtonElement>("#profileOpenProspectsButton")?.addEventListener("click", () => activateNavView("prospect-list", renderProspectList));
+  qs<HTMLButtonElement>("#profileOpenSettingsButton")?.addEventListener("click", () => {
+    if (state.user && ["admin", "super_admin"].includes(state.user.role)) activateNavView("settings");
+    else toast("账号管理仅管理员和超级管理员可进入", "error");
+  });
   qsa<HTMLElement>(".todo-chip").forEach((chip) => {
     chip.addEventListener("click", () => {
       state.todoFilter = (chip.dataset.todoFilter || "today") as AppState["todoFilter"];
