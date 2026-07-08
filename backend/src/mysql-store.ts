@@ -123,10 +123,22 @@ async function ensureSchema(pool: mysql.Pool) {
     team_id VARCHAR(64) NOT NULL,
     avatar VARCHAR(8),
     status VARCHAR(20) NOT NULL DEFAULT 'active',
+    outbound_email VARCHAR(180) DEFAULT '',
+    email_sender_name VARCHAR(120) DEFAULT '',
+    email_signature TEXT,
+    last_development_email_at DATETIME NULL,
+    last_development_email_to VARCHAR(180) DEFAULT '',
+    last_development_email_subject VARCHAR(255) DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`);
   await pool.query("ALTER TABLE users MODIFY role VARCHAR(20) NOT NULL");
   await pool.query("ALTER TABLE users MODIFY status VARCHAR(20) NOT NULL DEFAULT 'active'");
+  await ensureColumn(pool, "users", "outbound_email", "VARCHAR(180) DEFAULT ''");
+  await ensureColumn(pool, "users", "email_sender_name", "VARCHAR(120) DEFAULT ''");
+  await ensureColumn(pool, "users", "email_signature", "TEXT");
+  await ensureColumn(pool, "users", "last_development_email_at", "DATETIME NULL");
+  await ensureColumn(pool, "users", "last_development_email_to", "VARCHAR(180) DEFAULT ''");
+  await ensureColumn(pool, "users", "last_development_email_subject", "VARCHAR(255) DEFAULT ''");
   await pool.query(`CREATE TABLE IF NOT EXISTS customers (
     id VARCHAR(64) PRIMARY KEY,
     company VARCHAR(200) NOT NULL,
@@ -344,11 +356,17 @@ async function ensureSchema(pool: mysql.Pool) {
     customer_id VARCHAR(64),
     deal_id VARCHAR(64),
     parse_mode VARCHAR(20) DEFAULT 'rule',
+    last_development_email_at DATETIME NULL,
+    last_development_email_subject VARCHAR(255) DEFAULT '',
+    last_development_email_to VARCHAR(180) DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_website_opps_owner(owner_id),
     INDEX idx_website_opps_team(team_id)
   )`);
   await ensureColumn(pool, "website_opportunities", "parse_mode", "VARCHAR(20) DEFAULT 'rule'");
+  await ensureColumn(pool, "website_opportunities", "last_development_email_at", "DATETIME NULL");
+  await ensureColumn(pool, "website_opportunities", "last_development_email_subject", "VARCHAR(255) DEFAULT ''");
+  await ensureColumn(pool, "website_opportunities", "last_development_email_to", "VARCHAR(180) DEFAULT ''");
   await pool.query(`CREATE TABLE IF NOT EXISTS ai_model_configs (
     id VARCHAR(64) PRIMARY KEY,
     provider VARCHAR(40) NOT NULL DEFAULT 'openai-compatible',
@@ -492,7 +510,20 @@ async function ensureColumn(pool: mysql.Pool, table: string, column: string, def
 
 async function loadUsers(pool: mysql.Pool): Promise<User[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM users")).map((row) => ({
-    id: row.id, name: row.name, email: row.email, password: row.password_hash, role: row.role, teamId: row.team_id, avatar: row.avatar, status: row.status
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    password: row.password_hash,
+    role: row.role,
+    teamId: row.team_id,
+    avatar: row.avatar,
+    status: row.status,
+    outboundEmail: row.outbound_email || "",
+    emailSenderName: row.email_sender_name || row.name,
+    emailSignature: row.email_signature || "",
+    lastDevelopmentEmailAt: row.last_development_email_at instanceof Date ? row.last_development_email_at.toISOString() : row.last_development_email_at || "",
+    lastDevelopmentEmailTo: row.last_development_email_to || "",
+    lastDevelopmentEmailSubject: row.last_development_email_subject || ""
   }));
 }
 
@@ -683,6 +714,9 @@ async function loadWebsiteOpportunities(pool: mysql.Pool): Promise<WebsiteOpport
     customerId: row.customer_id || undefined,
     dealId: row.deal_id || undefined,
     parseMode: row.parse_mode || "rule",
+    lastDevelopmentEmailAt: row.last_development_email_at instanceof Date ? row.last_development_email_at.toISOString() : row.last_development_email_at || "",
+    lastDevelopmentEmailSubject: row.last_development_email_subject || "",
+    lastDevelopmentEmailTo: row.last_development_email_to || "",
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at
   }));
 }
@@ -775,7 +809,7 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    await replaceRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status], "(id,name,email,password_hash,role,team_id,avatar,status)");
+    await replaceRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status, item.outboundEmail || "", item.emailSenderName || item.name, item.emailSignature || "", item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailTo || "", item.lastDevelopmentEmailSubject || ""], "(id,name,email,password_hash,role,team_id,avatar,status,outbound_email,email_sender_name,email_signature,last_development_email_at,last_development_email_to,last_development_email_subject)");
     await replaceRows(connection, "customers", store.customers, (item) => [item.id, item.company, item.country, item.contact, item.ownerId, item.teamId, item.stage, item.amount, item.health, item.nextReminder, item.wecomBound, item.billingName || "", item.billingAddress || "", item.documentContact || "", item.defaultPortDischarge || "", item.defaultIncoterm || "", item.defaultPaymentTerm || ""], "(id,company,country,contact,owner_id,team_id,stage,amount,health,next_reminder,wecom_bound,billing_name,billing_address,document_contact,default_port_discharge,default_incoterm,default_payment_term)");
     await replaceRows(connection, "deals", store.deals, (item) => [item.id, item.customerId, item.title, item.stage, item.product || "", item.quantity || 0, item.unitPrice || 0, item.amount, item.ownerId, item.teamId, item.nextAction, item.archivedAt ? mysqlDate(item.archivedAt) : null], "(id,customer_id,title,stage,product,quantity,unit_price,amount,owner_id,team_id,next_action,archived_at)");
     await replaceRows(connection, "todos", (store.todos as Todo[]), (item) => [item.id, item.title, item.type, item.priority, item.dueAt, item.ownerId, item.teamId, item.related, item.done, item.status || "pending", item.pinState || "", item.sortOrder || 0, item.impactAmount ?? null, mysqlDate(item.createdAt), item.historyAt ? mysqlDate(item.historyAt) : null], "(id,title,type,priority,due_at,owner_id,team_id,related,done,status,pin_state,sort_order,impact_amount,created_at,history_at)");
@@ -791,7 +825,7 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
     await replaceRows(connection, "trade_documents", store.tradeDocuments, (item) => [item.id, item.type, item.title, item.number, item.issueDate, item.buyer, item.buyerAddress, item.buyerContact, item.seller, item.sellerAddress, item.currency, item.incoterm, item.paymentTerm, item.shippingMethod, item.portLoading, item.portDischarge, item.validityDate, item.bankInfo, item.notes, item.templateStyle, item.status, item.ownerId, item.teamId, JSON.stringify(item.items), mysqlDate(item.updatedAt)], "(id,doc_type,title,doc_number,issue_date,buyer,buyer_address,buyer_contact,seller,seller_address,currency,incoterm,payment_term,shipping_method,port_loading,port_discharge,validity_date,bank_info,notes,template_style,status,owner_id,team_id,items_json,updated_at)");
 	    await replaceRows(connection, "wecom_messages", store.wecomMessages, (item) => [item.id, item.customerId, item.summary, item.ownerId, item.teamId, item.status], "(id,customer_id,summary,owner_id,team_id,status)");
 	    await replaceRows(connection, "ocr_jobs", store.ocrJobs, (item) => [item.id, item.status, item.confidence, JSON.stringify(item.fields), null], "(id,status,confidence,fields_json,created_by)");
-	    await replaceRows(connection, "website_opportunities", store.websiteOpportunities, (item) => [item.id, item.company, item.business, item.country, item.website, item.contact, item.contactInfo, item.description, item.ownerId, item.teamId, item.status, item.customerId || null, item.dealId || null, item.parseMode || "rule", mysqlDate(item.createdAt)], "(id,company,business,country,website,contact,contact_info,description,owner_id,team_id,status,customer_id,deal_id,parse_mode,created_at)");
+	    await replaceRows(connection, "website_opportunities", store.websiteOpportunities, (item) => [item.id, item.company, item.business, item.country, item.website, item.contact, item.contactInfo, item.description, item.ownerId, item.teamId, item.status, item.customerId || null, item.dealId || null, item.parseMode || "rule", item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailSubject || "", item.lastDevelopmentEmailTo || "", mysqlDate(item.createdAt)], "(id,company,business,country,website,contact,contact_info,description,owner_id,team_id,status,customer_id,deal_id,parse_mode,last_development_email_at,last_development_email_subject,last_development_email_to,created_at)");
 	    await replaceRows(connection, "ai_model_configs", store.aiModelConfigs, (item) => [item.id, item.provider, item.name, item.baseUrl, item.model, item.apiKey, item.enabled, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,provider,name,base_url,model,api_key,enabled,owner_id,team_id,updated_at)");
 	    await replaceRows(connection, "problems", store.problems, (item) => [item.id, item.title, item.category, item.severity, item.status, item.ownerId, item.teamId, item.relatedCustomer, item.rootCause, item.solution, item.nextAction, item.dueAt, mysqlDate(item.createdAt)], "(id,title,category,severity,status,owner_id,team_id,related_customer,root_cause,solution,next_action,due_at,created_at)");
 	    await replaceRows(connection, "memos", store.memos, (item) => [item.id, item.title, item.content, item.category, item.tags, item.ownerId, item.teamId, item.pinned, item.archived, mysqlDate(item.updatedAt)], "(id,title,content,category,tags,owner_id,team_id,pinned,archived,updated_at)");

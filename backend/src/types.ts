@@ -9,6 +9,12 @@ export interface User {
   teamId: string;
   avatar: string;
   status: "active" | "disabled";
+  outboundEmail?: string;
+  emailSenderName?: string;
+  emailSignature?: string;
+  lastDevelopmentEmailAt?: string;
+  lastDevelopmentEmailTo?: string;
+  lastDevelopmentEmailSubject?: string;
 }
 
 export interface SessionUser {
@@ -18,6 +24,12 @@ export interface SessionUser {
   role: Role;
   teamId: string;
   avatar: string;
+  outboundEmail?: string;
+  emailSenderName?: string;
+  emailSignature?: string;
+  lastDevelopmentEmailAt?: string;
+  lastDevelopmentEmailTo?: string;
+  lastDevelopmentEmailSubject?: string;
 }
 
 export interface Customer {
@@ -171,6 +183,9 @@ export interface WebsiteOpportunity {
   customerId?: string;
   dealId?: string;
   parseMode?: "rule" | "ai" | "fallback";
+  lastDevelopmentEmailAt?: string;
+  lastDevelopmentEmailSubject?: string;
+  lastDevelopmentEmailTo?: string;
 }
 
 export interface AiModelConfig {

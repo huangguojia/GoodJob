@@ -14,6 +14,12 @@ CREATE TABLE users (
   team_id VARCHAR(64) NOT NULL,
   avatar VARCHAR(8),
   status VARCHAR(20) NOT NULL DEFAULT 'active',
+  outbound_email VARCHAR(180) DEFAULT '',
+  email_sender_name VARCHAR(120) DEFAULT '',
+  email_signature TEXT,
+  last_development_email_at DATETIME NULL,
+  last_development_email_to VARCHAR(180) DEFAULT '',
+  last_development_email_subject VARCHAR(255) DEFAULT '',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -180,6 +186,9 @@ CREATE TABLE website_opportunities (
   customer_id VARCHAR(64),
   deal_id VARCHAR(64),
   parse_mode VARCHAR(20) DEFAULT 'rule',
+  last_development_email_at DATETIME NULL,
+  last_development_email_subject VARCHAR(255) DEFAULT '',
+  last_development_email_to VARCHAR(180) DEFAULT '',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_website_opps_owner(owner_id),
   INDEX idx_website_opps_team(team_id)

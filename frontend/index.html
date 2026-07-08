@@ -3147,6 +3147,206 @@
       font-variant-numeric: tabular-nums;
     }
 
+    .prospect-list-layout {
+      display: grid;
+      grid-template-columns: minmax(310px, .78fr) minmax(0, 1.12fr) minmax(360px, .86fr);
+      gap: 12px;
+      align-items: start;
+    }
+
+    .prospect-list-panel,
+    .prospect-detail-panel,
+    .prospect-mail-panel {
+      min-height: 640px;
+    }
+
+    .prospect-toolbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .prospect-toolbar input {
+      height: 32px;
+      border: 1px solid #d8e0ec;
+      border-radius: 7px;
+      padding: 0 10px;
+      color: #1f2937;
+      font-size: 12px;
+      outline: 0;
+    }
+
+    .prospect-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+
+    .prospect-tabs button {
+      height: 27px;
+      padding: 0 9px;
+      border: 1px solid #d8e0ec;
+      border-radius: 999px;
+      background: #fff;
+      color: #66758b;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .prospect-tabs button.active {
+      border-color: var(--brand);
+      color: #fff;
+      background: var(--brand);
+    }
+
+    .prospect-list {
+      display: grid;
+      gap: 8px;
+      max-height: 540px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .prospect-item {
+      width: 100%;
+      display: grid;
+      gap: 7px;
+      text-align: left;
+      padding: 10px;
+      border: 1px solid #dfe7f2;
+      border-radius: 8px;
+      background: #fff;
+      cursor: pointer;
+      transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+    }
+
+    .prospect-item:hover,
+    .prospect-item.active {
+      border-color: rgba(49,87,213,.35);
+      box-shadow: 0 10px 24px rgba(27,39,68,.07);
+      transform: translateY(-1px);
+    }
+
+    .prospect-item-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .prospect-item h3 {
+      margin: 0;
+      color: #111827;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .prospect-item p,
+    .prospect-item small {
+      margin: 0;
+      color: #66758b;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .prospect-score {
+      min-width: 42px;
+      text-align: right;
+      color: var(--brand);
+      font-size: 16px;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .prospect-meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    .prospect-detail-hero {
+      padding: 14px;
+      border: 1px solid rgba(49,87,213,.18);
+      border-radius: 8px;
+      background: linear-gradient(135deg, rgba(49,87,213,.1), rgba(26,167,161,.06)), #fff;
+      margin-bottom: 10px;
+    }
+
+    .prospect-detail-hero h2 {
+      margin: 8px 0 5px;
+      color: #111827;
+      font-size: 20px;
+      line-height: 1.24;
+    }
+
+    .prospect-detail-hero p {
+      margin: 0;
+      color: #526178;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .prospect-field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .prospect-field {
+      padding: 10px;
+      border: 1px solid #dfe7f2;
+      border-radius: 8px;
+      background: #fbfcff;
+    }
+
+    .prospect-field span {
+      display: block;
+      margin-bottom: 4px;
+      color: #66758b;
+      font-size: 11px;
+    }
+
+    .prospect-field b {
+      color: #111827;
+      font-size: 13px;
+      line-height: 1.42;
+      word-break: break-word;
+    }
+
+    .prospect-mail-form {
+      display: grid;
+      gap: 9px;
+    }
+
+    .prospect-mail-form .form-field textarea {
+      min-height: 176px;
+      line-height: 1.55;
+      font-size: 12px;
+    }
+
+    .prospect-mail-preview {
+      min-height: 170px;
+      white-space: pre-wrap;
+      padding: 11px;
+      border: 1px solid #dfe7f2;
+      border-radius: 8px;
+      color: #263244;
+      background: #fbfcff;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .prospect-action-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 10px;
+    }
+
     .lead-workbench {
       display: grid;
       grid-template-columns: minmax(460px, .95fr) minmax(0, 1.05fr);
@@ -7268,6 +7468,9 @@
         <button data-view="lead-finder" title="自动获客">
           <svg viewBox="0 0 24 24"><path d="M21 21l-4.3-4.3"/><circle cx="11" cy="11" r="7"/><path d="M11 7v4l3 2"/></svg><span>自动获客</span><em>搜客</em>
         </button>
+        <button data-view="prospect-list" title="搜客清单">
+          <svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg><span>搜客清单</span><em>开发信</em>
+        </button>
         <button data-view="ai-config" title="AI配置">
           <svg viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><circle cx="12" cy="12" r="4"/></svg><span>AI配置</span><em>GPT</em>
         </button>
@@ -7348,6 +7551,7 @@
           <div class="top-quick" id="topQuickNav" aria-label="全局快捷导航">
             <button type="button" data-top-view="dashboard">工作台</button>
             <button type="button" data-top-view="lead-finder">搜客</button>
+            <button type="button" data-top-view="prospect-list">清单</button>
             <button type="button" data-top-view="ai-config">AI</button>
             <button type="button" data-top-view="customers">客户</button>
             <button type="button" data-top-view="pipeline">商机</button>
@@ -7791,6 +7995,69 @@
                 </div>
               </section>
             </aside>
+          </div>
+        </div>
+
+        <div class="view" id="prospect-list">
+          <div class="page-head">
+            <div><p class="eyebrow">Prospect Follow-up List</p><h1>搜客清单</h1><p class="sub">承接自动获客结果，集中完成筛选、开发信触达、转客户商机和待办跟进。</p></div>
+            <div class="head-actions"><button class="btn" id="prospectRefreshButton">刷新清单</button><button class="btn" id="prospectTodoButton">生成待办</button><button class="btn primary" id="prospectSyncButton">转客户/商机</button></div>
+          </div>
+
+          <div class="lead-command-strip">
+            <div class="lead-command-item"><span>全部线索</span><b id="prospectTotalCount">0</b><small>来自自动获客和官网解析</small></div>
+            <div class="lead-command-item"><span>待触达</span><b id="prospectPendingCount">0</b><small>还未转化或未发送开发信</small></div>
+            <div class="lead-command-item"><span>已发开发信</span><b id="prospectMailedCount">0</b><small>模拟发送记录已落库</small></div>
+            <div class="lead-command-item"><span>已转化</span><b id="prospectSyncedCount">0</b><small>进入客户/商机闭环</small></div>
+          </div>
+
+          <div class="prospect-list-layout">
+            <section class="panel section prospect-list-panel">
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg></span><div><h2>线索列表</h2><span>先筛选，再触达，不在这里重复搜客</span></div></div>
+              </div>
+              <div class="prospect-toolbar">
+                <input id="prospectSearchInput" placeholder="搜索公司、国家、业务、邮箱">
+                <button class="btn" id="prospectOpenFinderButton">去搜客</button>
+              </div>
+              <div class="prospect-tabs">
+                <button class="active" data-prospect-filter="all">全部</button>
+                <button data-prospect-filter="pending">待触达</button>
+                <button data-prospect-filter="mailed">已发信</button>
+                <button data-prospect-filter="high">高匹配</button>
+                <button data-prospect-filter="synced">已转化</button>
+              </div>
+              <div class="prospect-list" id="prospectListRows">
+                <div class="empty-cell">暂无搜客清单。请先在“自动获客”中运行任务。</div>
+              </div>
+            </section>
+
+            <section class="panel section prospect-detail-panel">
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg></span><div><h2>线索详情</h2><span>用于判断是否值得首轮触达</span></div></div>
+              </div>
+              <div id="prospectDetail">
+                <div class="empty-cell">点击左侧线索查看详情。</div>
+              </div>
+            </section>
+
+            <section class="panel section prospect-mail-panel">
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg></span><div><h2>开发信</h2><span>使用个人信息里绑定的邮箱和签名</span></div></div>
+                <button class="btn" id="prospectGenerateMailButton">生成正文</button>
+              </div>
+              <div class="inline-alert"><b>发件配置</b><span id="prospectSenderStatus">请先在个人信息绑定发件邮箱。</span></div>
+              <div class="prospect-mail-form" style="margin-top:10px">
+                <div class="form-field"><label>收件邮箱</label><input id="prospectMailTo" placeholder="自动读取线索联系方式，可手动修改"></div>
+                <div class="form-field"><label>主题</label><input id="prospectMailSubject" placeholder="开发信主题"></div>
+                <div class="form-field"><label>正文</label><textarea id="prospectMailBody" placeholder="选择线索后可自动生成开发信正文"></textarea></div>
+              </div>
+              <div class="prospect-mail-preview" id="prospectMailPreview">选择一条线索后，可生成并预览开发信。</div>
+              <div class="prospect-action-row">
+                <button class="btn" id="prospectPreviewMailButton">刷新预览</button>
+                <button class="btn primary" id="prospectSendMailButton">发送开发信</button>
+              </div>
+            </section>
           </div>
         </div>
 
@@ -8606,7 +8873,7 @@ https://www.ifm.com"></textarea>
 
         <div class="view" id="profile">
           <div class="page-head">
-            <div><p class="eyebrow">Personal Workspace</p><h1>个人主页</h1><p class="sub">维护个人发件邮箱、签名和开发信发送配置；普通账号只能管理自己的资料。</p></div>
+            <div><p class="eyebrow">Personal Workspace</p><h1>个人主页</h1><p class="sub">维护个人基础信息、发件邮箱和邮件签名；开发信触达请到搜客清单中执行。</p></div>
             <div class="head-actions"><button class="btn" id="profileRefreshButton">刷新资料</button><button class="btn primary" id="profileSaveButton">保存邮箱绑定</button></div>
           </div>
 
@@ -8623,20 +8890,19 @@ https://www.ifm.com"></textarea>
               <div class="form-field"><label>邮件签名</label><textarea id="profileEmailSignature" placeholder="Best regards,&#10;Shirley&#10;GoodJob Instrument Sales"></textarea></div>
               <div class="email-status-box">
                 <span>绑定状态</span><b id="profileEmailStatus">未绑定</b>
-                <span>最近开发信</span><b id="profileLastEmail">暂无记录</b>
+                <span>签名状态</span><b id="profileSignatureStatus">待完善</b>
               </div>
             </section>
 
             <section class="panel section">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg></span><div><h2>自动发送开发信</h2><span>先使用系统内模拟发送，后续可接 SMTP 或企业邮箱 API。</span></div></div><button class="btn" id="profileGenerateEmailButton">生成正文</button></div>
-              <div class="mail-compose-grid">
-                <div class="form-field"><label>收件邮箱</label><input id="devEmailTo" value="buyer@example.com"></div>
-                <div class="form-field"><label>目标公司</label><input id="devEmailCompany" value="Target Instrument Distributor"></div>
-                <div class="form-field full"><label>主题</label><input id="devEmailSubject" value="Instrumentation supplier for your local market"></div>
-                <div class="form-field full"><label>正文</label><textarea id="devEmailBody"></textarea></div>
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5"/></svg></span><div><h2>基础资料用途</h2><span>这里负责账号配置，不承载具体开发信工作流。</span></div></div></div>
+              <div class="permission-grid">
+                <div class="permission-card"><b>发件邮箱</b><span>用于搜客清单中的开发信发件身份，保存后不改变登录账号。</span></div>
+                <div class="permission-card"><b>发件人名称</b><span>显示在开发信 From 区域，建议使用真实英文名或公司销售身份。</span></div>
+                <div class="permission-card"><b>邮件签名</b><span>作为开发信正文末尾默认签名，具体正文请在搜客清单里按线索生成。</span></div>
               </div>
-              <div class="mail-preview" id="devEmailPreview">填写内容后可预览开发信。</div>
-              <div class="head-actions" style="margin-top:12px"><button class="btn" id="profilePreviewEmailButton">刷新预览</button><button class="btn primary" id="profileSendEmailButton">发送开发信</button></div>
+              <div class="inline-alert" style="margin-top:12px"><b>开发信入口已迁移</b><span>请进入左侧“搜客清单”，选择具体线索后生成、预览并发送开发信。</span></div>
+              <div class="head-actions" style="margin-top:12px"><button class="btn" id="profileOpenProspectsButton">打开搜客清单</button></div>
             </section>
           </div>
         </div>

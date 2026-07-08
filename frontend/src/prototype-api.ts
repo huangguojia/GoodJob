@@ -9,6 +9,12 @@ interface User {
   role: Role;
   teamId: string;
   avatar: string;
+  outboundEmail?: string;
+  emailSenderName?: string;
+  emailSignature?: string;
+  lastDevelopmentEmailAt?: string;
+  lastDevelopmentEmailTo?: string;
+  lastDevelopmentEmailSubject?: string;
 }
 
 interface Customer {
@@ -233,6 +239,9 @@ interface WebsiteOpportunity {
   customerId?: string;
   dealId?: string;
   parseMode?: "rule" | "ai" | "fallback";
+  lastDevelopmentEmailAt?: string;
+  lastDevelopmentEmailSubject?: string;
+  lastDevelopmentEmailTo?: string;
   selected?: boolean;
 }
 
@@ -438,6 +447,8 @@ interface AppState {
   selectedDocumentId: string | null;
   selectedLeadFinderId: string | null;
   leadFinderFilter: "all" | "pending" | "high" | "duplicate" | "synced";
+  selectedProspectId: string | null;
+  prospectFilter: "all" | "pending" | "mailed" | "high" | "synced";
 }
 
 const state: AppState = {
@@ -483,7 +494,9 @@ const state: AppState = {
   selectedQuestionId: null,
   selectedDocumentId: null,
   selectedLeadFinderId: null,
-  leadFinderFilter: "all"
+  leadFinderFilter: "all",
+  selectedProspectId: null,
+  prospectFilter: "all"
 };
 
 let memoDirty = false;
@@ -718,6 +731,146 @@ function applyAuthedUser(user: User) {
   const topUserRole = qs<HTMLElement>("#topUserRole");
   if (topUserName) topUserName.textContent = user.name;
   if (topUserRole) topUserRole.textContent = roleLabel[user.role];
+  renderProfile(user);
+}
+
+function roleScopeText(user: User) {
+  if (user.role === "sales") return "仅本人业务与本人待办";
+  if (user.role === "manager") return "团队业务数据，本人待办私有";
+  if (user.role === "admin") return "全局业务数据、账号管理，本人待办私有";
+  return "全局业务数据、最高账号权限，本人待办私有";
+}
+
+function renderProfile(user = state.user) {
+  if (!user) return;
+  const setValue = (selector: string, value: string) => {
+    const input = qs<HTMLInputElement | HTMLTextAreaElement>(selector);
+    if (input) input.value = value;
+  };
+  const avatar = qs<HTMLElement>("#profileAvatarLarge");
+  const name = qs<HTMLElement>("#profileNameTitle");
+  const role = qs<HTMLElement>("#profileRoleText");
+  const status = qs<HTMLElement>("#profileEmailStatus");
+  const signatureStatus = qs<HTMLElement>("#profileSignatureStatus");
+  if (avatar) avatar.textContent = user.avatar;
+  if (name) name.textContent = user.name;
+  if (role) role.textContent = `${roleLabel[user.role]} · ${roleScopeText(user)}`;
+  setValue("#profileLoginEmail", user.email);
+  setValue("#profileOutboundEmail", user.outboundEmail || "");
+  setValue("#profileSenderName", user.emailSenderName || user.name);
+  setValue("#profileEmailSignature", user.emailSignature || `Best regards,\n${user.name}\nGoodJob Instrument Sales`);
+  if (status) status.innerHTML = user.outboundEmail ? `${badge("已绑定", "green")} ${escapeHtml(user.outboundEmail)}` : `${badge("未绑定", "amber")} 请先绑定发件邮箱`;
+  if (signatureStatus) signatureStatus.innerHTML = user.emailSignature?.trim() ? `${badge("已设置", "green")} ${escapeHtml((user.emailSignature.split("\n")[0] || "签名已维护").slice(0, 36))}` : `${badge("待完善", "amber")} 建议补充英文签名`;
+}
+
+function collectDevelopmentEmailDraft() {
+  const sender = qs<HTMLInputElement>("#profileSenderName")?.value.trim() || state.user?.name || "GoodJob Sales";
+  const from = qs<HTMLInputElement>("#profileOutboundEmail")?.value.trim() || state.user?.outboundEmail || "";
+  const signature = qs<HTMLTextAreaElement>("#profileEmailSignature")?.value.trim() || "";
+  return {
+    to: qs<HTMLInputElement>("#devEmailTo")?.value.trim() || "",
+    company: qs<HTMLInputElement>("#devEmailCompany")?.value.trim() || "",
+    subject: qs<HTMLInputElement>("#devEmailSubject")?.value.trim() || "",
+    body: qs<HTMLTextAreaElement>("#devEmailBody")?.value.trim() || "",
+    sender,
+    from,
+    signature
+  };
+}
+
+function generateDevelopmentEmailDraft() {
+  const company = qs<HTMLInputElement>("#devEmailCompany")?.value.trim() || "your company";
+  const sender = qs<HTMLInputElement>("#profileSenderName")?.value.trim() || state.user?.name || "GoodJob Sales";
+  const signature = qs<HTMLTextAreaElement>("#profileEmailSignature")?.value.trim() || `Best regards,\n${sender}\nGoodJob Instrument Sales`;
+  const body = [
+    `Dear ${company} team,`,
+    "",
+    "We supply pressure, temperature, flow and level instruments for distributors, system integrators and industrial projects.",
+    "If you are evaluating instrumentation suppliers for your local market, we can support product selection, certificates, technical datasheets and quotation for your project requirements.",
+    "",
+    "Could you share the main product categories you are currently sourcing and the applications you are focused on?",
+    "",
+    signature
+  ].join("\n");
+  const input = qs<HTMLTextAreaElement>("#devEmailBody");
+  if (input) input.value = body;
+  renderDevelopmentEmailPreview();
+}
+
+function renderDevelopmentEmailPreview() {
+  const draft = collectDevelopmentEmailDraft();
+  const preview = qs<HTMLElement>("#devEmailPreview");
+  if (!preview) return;
+  preview.textContent = [
+    `From: ${draft.sender}${draft.from ? ` <${draft.from}>` : " <未绑定>"}`,
+    `To: ${draft.to || "未填写"}`,
+    `Subject: ${draft.subject || "未填写"}`,
+    "",
+    draft.body || "填写内容后可预览开发信。"
+  ].join("\n");
+}
+
+function updateStoredUser(user: User, token?: string) {
+  state.user = user;
+  localStorage.setItem(storage.user, JSON.stringify(user));
+  if (token) localStorage.setItem(storage.token, token);
+  applyAuthedUser(user);
+}
+
+async function saveProfileEmailBinding(button?: HTMLButtonElement) {
+  const outboundEmail = qs<HTMLInputElement>("#profileOutboundEmail")?.value.trim() || "";
+  const emailSenderName = qs<HTMLInputElement>("#profileSenderName")?.value.trim() || "";
+  const emailSignature = qs<HTMLTextAreaElement>("#profileEmailSignature")?.value.trim() || "";
+  if (!outboundEmail || !emailSenderName) {
+    toast("请填写发件邮箱和发件人名称", "error");
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "保存中";
+  }
+  try {
+    const result = await api<{ user: User; token: string }>("/api/profile/email-binding", {
+      method: "PATCH",
+      body: JSON.stringify({ outboundEmail, emailSenderName, emailSignature })
+    });
+    updateStoredUser(result.user, result.token);
+    toast("发件邮箱已绑定");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "保存邮箱绑定";
+    }
+  }
+}
+
+async function sendDevelopmentEmail(button?: HTMLButtonElement) {
+  const draft = collectDevelopmentEmailDraft();
+  if (!draft.from) {
+    toast("请先绑定发件邮箱", "error");
+    return;
+  }
+  if (!draft.to || !draft.company || !draft.subject || draft.body.length < 10) {
+    toast("请补齐收件邮箱、目标公司、主题和正文", "error");
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "发送中";
+  }
+  try {
+    const result = await api<{ sent: { simulated: boolean }; user: User }>("/api/profile/send-development-email", {
+      method: "POST",
+      body: JSON.stringify({ to: draft.to, company: draft.company, subject: draft.subject, body: draft.body })
+    });
+    updateStoredUser(result.user);
+    toast(result.sent.simulated ? "开发信已发送（系统模拟记录）" : "开发信已发送");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "发送开发信";
+    }
+  }
 }
 
 async function refreshAll(user: User) {
@@ -793,6 +946,7 @@ async function refreshAll(user: User) {
   renderAiConfig(state.aiConfig);
   renderWebsiteOpportunities(state.websiteOpportunities);
   renderLeadFinder(state.websiteOpportunities);
+  renderProspectList();
   renderTopbarStats();
 }
 
@@ -4366,6 +4520,280 @@ function leadFinderFilteredRows(opportunities: WebsiteOpportunity[]) {
   });
 }
 
+function contactEmail(value: string) {
+  return value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
+}
+
+function prospectFilteredRows() {
+  const keyword = qs<HTMLInputElement>("#prospectSearchInput")?.value.trim().toLowerCase() || "";
+  return [...state.websiteOpportunities]
+    .filter((item) => {
+      const haystack = `${item.company} ${item.business} ${item.country} ${item.website} ${item.contact} ${item.contactInfo} ${item.description}`.toLowerCase();
+      if (keyword && !haystack.includes(keyword)) return false;
+      if (state.prospectFilter === "pending") return item.status !== "synced" || !item.lastDevelopmentEmailAt;
+      if (state.prospectFilter === "mailed") return Boolean(item.lastDevelopmentEmailAt);
+      if (state.prospectFilter === "high") return leadFinderScore(item) >= 76;
+      if (state.prospectFilter === "synced") return item.status === "synced";
+      return true;
+    })
+    .sort((left, right) => {
+      const leftMail = left.lastDevelopmentEmailAt ? 1 : 0;
+      const rightMail = right.lastDevelopmentEmailAt ? 1 : 0;
+      if (left.status !== right.status) return left.status === "synced" ? 1 : -1;
+      if (leftMail !== rightMail) return leftMail - rightMail;
+      return leadFinderScore(right) - leadFinderScore(left);
+    });
+}
+
+function selectedProspect() {
+  return state.websiteOpportunities.find((item) => item.id === state.selectedProspectId) || null;
+}
+
+function renderProspectMailPreview() {
+  const preview = qs<HTMLElement>("#prospectMailPreview");
+  const item = selectedProspect();
+  if (!preview) return;
+  const sender = state.user?.emailSenderName || state.user?.name || "GoodJob Sales";
+  const from = state.user?.outboundEmail || "";
+  preview.textContent = [
+    `From: ${sender}${from ? ` <${from}>` : " <未绑定发件邮箱>"}`,
+    `To: ${qs<HTMLInputElement>("#prospectMailTo")?.value.trim() || "未填写"}`,
+    `Subject: ${qs<HTMLInputElement>("#prospectMailSubject")?.value.trim() || "未填写"}`,
+    "",
+    qs<HTMLTextAreaElement>("#prospectMailBody")?.value.trim() || (item ? "点击“生成正文”创建开发信。" : "选择一条线索后，可生成并预览开发信。")
+  ].join("\n");
+}
+
+function generateProspectMailDraft() {
+  const item = selectedProspect();
+  if (!item) {
+    toast("请先选择一条搜客线索", "error");
+    return;
+  }
+  const sender = state.user?.emailSenderName || state.user?.name || "GoodJob Sales";
+  const signature = state.user?.emailSignature?.trim() || `Best regards,\n${sender}\nGoodJob Instrument Sales`;
+  const mailTo = qs<HTMLInputElement>("#prospectMailTo");
+  const subject = qs<HTMLInputElement>("#prospectMailSubject");
+  const body = qs<HTMLTextAreaElement>("#prospectMailBody");
+  if (mailTo && !mailTo.value.trim()) mailTo.value = contactEmail(item.contactInfo) || contactEmail(item.contact) || "";
+  if (subject && !subject.value.trim()) subject.value = `${item.business || "Instrumentation"} supplier support for ${item.company}`;
+  if (body) {
+    body.value = [
+      `Dear ${item.company} team,`,
+      "",
+      `I noticed your company is active in ${item.business || "industrial instrumentation related business"}${item.country ? ` in ${item.country}` : ""}.`,
+      "GoodJob supplies pressure, temperature, flow and level instruments for distributors, system integrators and industrial projects.",
+      "We can support product selection, datasheets, certificates, quotation and sample coordination for your local projects.",
+      "",
+      "May I know which instrumentation categories you are currently sourcing, and whether you have any upcoming project requirements?",
+      "",
+      signature
+    ].join("\n");
+  }
+  renderProspectMailPreview();
+}
+
+function renderProspectDetail(item?: WebsiteOpportunity | null) {
+  const box = qs<HTMLElement>("#prospectDetail");
+  const sender = qs<HTMLElement>("#prospectSenderStatus");
+  if (sender) {
+    sender.innerHTML = state.user?.outboundEmail
+      ? `当前发件人：${escapeHtml(state.user.emailSenderName || state.user.name)} &lt;${escapeHtml(state.user.outboundEmail)}&gt;`
+      : `请先到个人主页绑定发件邮箱，再发送开发信。`;
+  }
+  if (!box) return;
+  if (!item) {
+    box.innerHTML = `<div class="empty-cell">点击左侧线索查看详情。</div>`;
+    renderProspectMailPreview();
+    return;
+  }
+  const score = leadFinderScore(item);
+  const duplicate = leadFinderDuplicateState(item);
+  box.innerHTML = `
+    <div class="prospect-detail-hero">
+      ${badge(item.status === "synced" ? "已转化" : "待跟进", item.status === "synced" ? "green" : "amber")} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} ${badge(duplicate.text, duplicate.tone)}
+      <h2>${escapeHtml(item.company)}</h2>
+      <p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(item.business || "业务待维护")} · ${escapeHtml(websiteDomain(item.website || ""))}</p>
+    </div>
+    <div class="prospect-field-grid">
+      <div class="prospect-field"><span>官网</span><b>${escapeHtml(item.website || "待补齐")}</b></div>
+      <div class="prospect-field"><span>联系人</span><b>${escapeHtml(item.contact || "待维护")}</b></div>
+      <div class="prospect-field"><span>联系方式</span><b>${escapeHtml(item.contactInfo || "待补齐")}</b></div>
+      <div class="prospect-field"><span>最近开发信</span><b>${item.lastDevelopmentEmailAt ? `${formatTime(item.lastDevelopmentEmailAt)} · ${escapeHtml(item.lastDevelopmentEmailSubject || "开发信")}` : "尚未发送"}</b></div>
+      <div class="prospect-field" style="grid-column:1/-1"><span>说明</span><b>${escapeHtml(item.description || "暂无说明")}</b></div>
+    </div>
+    <div class="inline-alert"><b>建议动作</b><span>${score >= 76 ? "优先发开发信并同步客户/商机，随后创建电话或WhatsApp跟进待办。" : "先补齐联系人和业务证据，再决定是否首轮触达。"}</span></div>
+  `;
+  if (!qs<HTMLInputElement>("#prospectMailTo")?.value.trim()) generateProspectMailDraft();
+  else renderProspectMailPreview();
+}
+
+function renderProspectList() {
+  const rows = qs<HTMLElement>("#prospectListRows");
+  const total = qs<HTMLElement>("#prospectTotalCount");
+  const pending = qs<HTMLElement>("#prospectPendingCount");
+  const mailed = qs<HTMLElement>("#prospectMailedCount");
+  const synced = qs<HTMLElement>("#prospectSyncedCount");
+  const all = state.websiteOpportunities;
+  const filtered = prospectFilteredRows();
+  if (!state.selectedProspectId || !all.some((item) => item.id === state.selectedProspectId)) state.selectedProspectId = filtered[0]?.id || all[0]?.id || null;
+  if (total) total.textContent = String(all.length);
+  if (pending) pending.textContent = String(all.filter((item) => item.status !== "synced" || !item.lastDevelopmentEmailAt).length);
+  if (mailed) mailed.textContent = String(all.filter((item) => item.lastDevelopmentEmailAt).length);
+  if (synced) synced.textContent = String(all.filter((item) => item.status === "synced").length);
+  qsa<HTMLButtonElement>("[data-prospect-filter]").forEach((button) => button.classList.toggle("active", button.dataset.prospectFilter === state.prospectFilter));
+  if (rows) {
+    rows.innerHTML = filtered.length ? filtered.map((item) => {
+      const score = leadFinderScore(item);
+      return `
+        <button class="prospect-item ${item.id === state.selectedProspectId ? "active" : ""}" type="button" data-prospect-id="${escapeHtml(item.id)}">
+          <div class="prospect-item-top"><h3>${escapeHtml(item.company)}</h3><span class="prospect-score">${score}</span></div>
+          <p>${escapeHtml(item.business || "业务待维护")}</p>
+          <small>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website || ""))}</small>
+          <div class="prospect-meta-row">${badge(item.status === "synced" ? "已转化" : "待跟进", item.status === "synced" ? "green" : "amber")}${item.lastDevelopmentEmailAt ? badge("已发开发信", "green") : badge("未触达", "")}</div>
+        </button>
+      `;
+    }).join("") : `<div class="empty-cell">暂无匹配线索。请调整筛选，或去自动获客生成新结果。</div>`;
+    qsa<HTMLButtonElement>("[data-prospect-id]", rows).forEach((button) => {
+      button.addEventListener("click", () => {
+        state.selectedProspectId = button.dataset.prospectId || null;
+        qs<HTMLInputElement>("#prospectMailTo")!.value = "";
+        qs<HTMLInputElement>("#prospectMailSubject")!.value = "";
+        qs<HTMLTextAreaElement>("#prospectMailBody")!.value = "";
+        renderProspectList();
+      });
+    });
+  }
+  renderProspectDetail(selectedProspect());
+}
+
+function selectedProspectAsSyncRow() {
+  const item = selectedProspect();
+  if (!item) return [];
+  return [{
+    id: item.id,
+    company: item.company,
+    business: item.business,
+    country: item.country,
+    website: item.website,
+    contact: item.contact,
+    contactInfo: item.contactInfo,
+    description: item.description
+  }];
+}
+
+async function syncSelectedProspect(button?: HTMLButtonElement) {
+  const opportunities = selectedProspectAsSyncRow();
+  if (!opportunities.length) {
+    toast("请先选择一条搜客线索", "error");
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "转化中";
+  }
+  try {
+    const result = await api<{ created: Array<{ customer: Customer; deal: Deal; opportunity: WebsiteOpportunity }> }>("/api/tools/website-scrape/sync-opportunities", {
+      method: "POST",
+      body: JSON.stringify({ opportunities })
+    });
+    result.created.forEach((item) => {
+      if (!state.customers.some((customer) => customer.id === item.customer.id)) state.customers.unshift(item.customer);
+      if (!state.deals.some((deal) => deal.id === item.deal.id)) state.deals.unshift(item.deal);
+      const existing = state.websiteOpportunities.find((row) => row.id === item.opportunity.id || row.website === item.opportunity.website);
+      if (existing) Object.assign(existing, item.opportunity);
+      else state.websiteOpportunities.unshift(item.opportunity);
+      state.selectedProspectId = item.opportunity.id;
+    });
+    renderWebsiteOpportunities(state.websiteOpportunities);
+    renderLeadFinder(state.websiteOpportunities);
+    renderProspectList();
+    renderCustomers(state.customers);
+    renderPipeline(state.deals);
+    void refreshDashboardOnly();
+    toast("已转为客户和商机");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "转客户/商机";
+    }
+  }
+}
+
+async function createSelectedProspectTodo(button?: HTMLButtonElement) {
+  const item = selectedProspect();
+  if (!item) {
+    toast("请先选择一条搜客线索", "error");
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "生成中";
+  }
+  try {
+    const result = await api<{ todo: Todo }>("/api/todos", {
+      method: "POST",
+      body: JSON.stringify({
+        title: `跟进搜客线索：${item.company}`,
+        type: "customer",
+        priority: leadFinderScore(item) >= 76 ? "high" : "medium",
+        dueAt: currentDateTimeText(),
+        related: item.company
+      })
+    });
+    state.todos.unshift(result.todo);
+    renderTodos(state.todos);
+    updateTodoChips(state.todos);
+    renderTopbarStats();
+    toast("已生成搜客跟进待办");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "生成待办";
+    }
+  }
+}
+
+async function sendProspectDevelopmentEmail(button?: HTMLButtonElement) {
+  const item = selectedProspect();
+  if (!item) {
+    toast("请先选择一条搜客线索", "error");
+    return;
+  }
+  if (!state.user?.outboundEmail) {
+    toast("请先在个人主页绑定发件邮箱", "error");
+    return;
+  }
+  const to = qs<HTMLInputElement>("#prospectMailTo")?.value.trim() || "";
+  const subject = qs<HTMLInputElement>("#prospectMailSubject")?.value.trim() || "";
+  const body = qs<HTMLTextAreaElement>("#prospectMailBody")?.value.trim() || "";
+  if (!to || !subject || body.length < 10) {
+    toast("请补齐收件邮箱、主题和正文", "error");
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "发送中";
+  }
+  try {
+    const result = await api<{ sent: { simulated: boolean }; opportunity: WebsiteOpportunity; user: User }>(`/api/prospect-list/${encodeURIComponent(item.id)}/send-development-email`, {
+      method: "POST",
+      body: JSON.stringify({ to, subject, body })
+    });
+    updateStoredUser(result.user);
+    const existing = state.websiteOpportunities.find((row) => row.id === result.opportunity.id);
+    if (existing) Object.assign(existing, result.opportunity);
+    renderProspectList();
+    renderLeadFinder(state.websiteOpportunities);
+    toast(result.sent.simulated ? "开发信已发送（测试模拟记录）" : "开发信已发送");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "发送开发信";
+    }
+  }
+}
+
 function currentLeadFinderTitle() {
   const product = qs<HTMLInputElement>("#leadProductKeywords")?.value.trim().split(/,|，/)[0]?.trim() || "产品";
   const country = qs<HTMLInputElement>("#leadCountries")?.value.trim().split(/,|，/)[0]?.trim() || "目标市场";
@@ -4704,6 +5132,7 @@ async function runLeadFinder(button?: HTMLButtonElement) {
       state.selectedLeadFinderId = result.opportunities[0]?.id || state.selectedLeadFinderId;
       updateLeadFinderJob(job.id, result.opportunities.map((item) => item.id), result.opportunities.length ? "done" : "needs_input");
       renderLeadFinder(state.websiteOpportunities);
+      renderProspectList();
       toast(result.opportunities.length ? `免费公开API已找到 ${result.opportunities.length} 条候选，GLEIF ${result.sources.gleif} / Wikidata ${result.sources.wikidata}` : "免费公开API暂无结果；右侧已生成平台搜索入口，可继续导入官网/询盘链接");
       return;
     }
@@ -4719,6 +5148,7 @@ async function runLeadFinder(button?: HTMLButtonElement) {
     updateLeadFinderJob(job.id, result.opportunities.map((item) => item.id), "done");
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
+    renderProspectList();
     toast(`已生成 ${result.opportunities.length} 条候选客户`);
   } catch (error) {
     updateLeadFinderJob(job.id, [], "needs_input");
@@ -4755,6 +5185,7 @@ async function syncLeadFinderRows(button?: HTMLButtonElement) {
     });
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
+    renderProspectList();
     renderCustomers(state.customers);
     renderPipeline(state.deals);
     void refreshDashboardOnly();
@@ -4856,6 +5287,7 @@ async function parseWebsiteOpportunities(button?: HTMLButtonElement) {
     state.websiteOpportunities = [...result.opportunities.map((item) => ({ ...item, selected: true })), ...existing];
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
+    renderProspectList();
     toast(`${useAi ? "AI增强" : "规则"}已解析 ${result.opportunities.length} 个官网`);
   } finally {
     if (button) {
@@ -4889,6 +5321,7 @@ async function syncWebsiteOpportunities(button?: HTMLButtonElement) {
     });
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
+    renderProspectList();
     renderCustomers(state.customers);
     renderPipeline(state.deals);
     void refreshDashboardOnly();
@@ -5525,6 +5958,14 @@ function installEvents() {
     state.user = null;
     toast("已退出登录");
   });
+  qs<HTMLButtonElement>("#profileEntryButton")?.addEventListener("click", () => activateNavView("profile", () => renderProfile()));
+  qs<HTMLButtonElement>("#profileSaveButton")?.addEventListener("click", (event) => void saveProfileEmailBinding(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#profileRefreshButton")?.addEventListener("click", async () => {
+    const result = await api<{ user: User }>("/api/profile");
+    updateStoredUser(result.user);
+    toast("个人资料已刷新");
+  });
+  qs<HTMLButtonElement>("#profileOpenProspectsButton")?.addEventListener("click", () => activateNavView("prospect-list", renderProspectList));
   qsa<HTMLElement>(".todo-chip").forEach((chip) => {
     chip.addEventListener("click", () => {
       state.todoFilter = (chip.dataset.todoFilter || "today") as AppState["todoFilter"];
@@ -5643,6 +6084,9 @@ function installEvents() {
   qsa<HTMLButtonElement>("[data-top-view]").forEach((button) => {
     button.addEventListener("click", () => activateNavView(button.dataset.topView || "dashboard"));
   });
+  qsa<HTMLButtonElement>(".nav button[data-view]").forEach((button) => {
+    button.addEventListener("click", () => activateNavView(button.dataset.view || "dashboard"));
+  });
   ["#leadFinderGoalInput", "#leadSearchModeInput", "#leadSearchDepthInput", "#leadSearchLanguageInput", "#leadValidationInput", "#leadProductKeywords", "#leadCountries", "#leadIndustryInput", "#leadCustomerTypes", "#leadExcludeKeywords"].forEach((selector) => {
     qs<HTMLElement>(selector)?.addEventListener("input", renderLeadFinderSearchLinks);
     qs<HTMLElement>(selector)?.addEventListener("change", renderLeadFinderSearchLinks);
@@ -5673,6 +6117,29 @@ function installEvents() {
     qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
     toast("已打开 AI 模型配置，保存后回到智能搜客即可启用 AI 解析");
   }));
+  qs<HTMLInputElement>("#prospectSearchInput")?.addEventListener("input", renderProspectList);
+  qs<HTMLButtonElement>("#prospectOpenFinderButton")?.addEventListener("click", () => activateNavView("lead-finder", () => renderLeadFinder(state.websiteOpportunities)));
+  qs<HTMLButtonElement>("#prospectRefreshButton")?.addEventListener("click", async () => {
+    const result = await api<{ opportunities: WebsiteOpportunity[] }>("/api/tools/website-opportunities");
+    state.websiteOpportunities = result.opportunities;
+    renderProspectList();
+    renderLeadFinder(state.websiteOpportunities);
+    toast("搜客清单已刷新");
+  });
+  qs<HTMLButtonElement>("#prospectGenerateMailButton")?.addEventListener("click", generateProspectMailDraft);
+  qs<HTMLButtonElement>("#prospectPreviewMailButton")?.addEventListener("click", renderProspectMailPreview);
+  qs<HTMLButtonElement>("#prospectSendMailButton")?.addEventListener("click", (event) => void sendProspectDevelopmentEmail(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectTodoButton")?.addEventListener("click", (event) => void createSelectedProspectTodo(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectSyncButton")?.addEventListener("click", (event) => void syncSelectedProspect(event.currentTarget as HTMLButtonElement));
+  ["#prospectMailTo", "#prospectMailSubject", "#prospectMailBody"].forEach((selector) => {
+    qs<HTMLInputElement | HTMLTextAreaElement>(selector)?.addEventListener("input", renderProspectMailPreview);
+  });
+  qsa<HTMLButtonElement>("[data-prospect-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.prospectFilter = (button.dataset.prospectFilter || "all") as AppState["prospectFilter"];
+      renderProspectList();
+    });
+  });
   qsa<HTMLButtonElement>("#gptSaveButton, #gptSaveButtonTop").forEach((button) => {
     button.addEventListener("click", (event) => void saveAiConfig(event.currentTarget as HTMLButtonElement));
   });
@@ -5811,17 +6278,25 @@ function resolveTopbarSearchView(rawValue: string) {
     ["工作台", "dashboard"],
     ["待办", "dashboard"],
     ["todo", "dashboard"],
+    ["搜客清单", "prospect-list"],
+    ["开发信", "prospect-list"],
+    ["清单", "prospect-list"],
     ["搜客", "lead-finder"],
     ["获客", "lead-finder"],
     ["线索搜索", "lead-finder"],
     ["lead", "lead-finder"],
-    ["prospect", "lead-finder"],
+    ["prospect", "prospect-list"],
     ["ai", "ai-config"],
     ["gpt", "ai-config"],
     ["模型", "ai-config"],
     ["apikey", "ai-config"],
     ["api key", "ai-config"],
     ["AI配置", "ai-config"],
+    ["个人", "profile"],
+    ["个人主页", "profile"],
+    ["个人设置", "profile"],
+    ["邮箱", "profile"],
+    ["profile", "profile"],
     ["客户", "customers"],
     ["customer", "customers"],
     ["商机", "pipeline"],

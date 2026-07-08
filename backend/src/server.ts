@@ -181,6 +181,124 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
   res.json({ user: req.user });
 });
 
+app.get("/api/profile", requireAuth, (req, res) => {
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) {
+    res.status(404).json({ message: "账号不存在" });
+    return;
+  }
+  res.json({ user: accountUser(user) });
+});
+
+app.patch("/api/profile/email-binding", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    outboundEmail: z.string().email(),
+    emailSenderName: z.string().min(1).max(80),
+    emailSignature: z.string().max(800).default("")
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.user!.id);
+  if (!user) {
+    res.status(404).json({ message: "账号不存在" });
+    return;
+  }
+  user.outboundEmail = body.outboundEmail;
+  user.emailSenderName = body.emailSenderName;
+  user.emailSignature = body.emailSignature;
+  await store.persist();
+  const sessionUser = publicUser(user);
+  res.json({ user: accountUser(user), token: signToken(sessionUser) });
+}));
+
+app.post("/api/profile/send-development-email", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    to: z.string().email(),
+    company: z.string().min(1).max(120),
+    subject: z.string().min(1).max(160),
+    body: z.string().min(10).max(3000)
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.user!.id);
+  if (!user) {
+    res.status(404).json({ message: "账号不存在" });
+    return;
+  }
+  if (!user.outboundEmail) {
+    res.status(400).json({ message: "请先绑定发件邮箱" });
+    return;
+  }
+  const sentAt = new Date().toISOString();
+  user.lastDevelopmentEmailAt = sentAt;
+  user.lastDevelopmentEmailTo = body.to;
+  user.lastDevelopmentEmailSubject = body.subject;
+  await store.persist();
+  res.json({
+    sent: {
+      id: `mail_${Date.now()}`,
+      status: "sent",
+      simulated: true,
+      from: user.outboundEmail,
+      senderName: user.emailSenderName || user.name,
+      to: body.to,
+      company: body.company,
+      subject: body.subject,
+      body: body.body,
+      sentAt
+    },
+    user: accountUser(user)
+  });
+}));
+
+app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    to: z.string().email(),
+    subject: z.string().min(1).max(160),
+    body: z.string().min(10).max(3000)
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.user!.id);
+  if (!user) {
+    res.status(404).json({ message: "账号不存在" });
+    return;
+  }
+  if (!user.outboundEmail) {
+    res.status(400).json({ message: "请先到个人信息绑定发件邮箱" });
+    return;
+  }
+  const opportunity = store.websiteOpportunities.find((item) => item.id === req.params.id && canSeeOwner(req.user!, item.ownerId, item.teamId));
+  if (!opportunity) {
+    res.status(404).json({ message: "搜客线索不存在或无权访问" });
+    return;
+  }
+  const sentAt = new Date().toISOString();
+  user.lastDevelopmentEmailAt = sentAt;
+  user.lastDevelopmentEmailTo = body.to;
+  user.lastDevelopmentEmailSubject = body.subject;
+  opportunity.lastDevelopmentEmailAt = sentAt;
+  opportunity.lastDevelopmentEmailTo = body.to;
+  opportunity.lastDevelopmentEmailSubject = body.subject;
+  await store.persist();
+  res.json({
+    sent: {
+      id: `mail_${Date.now()}`,
+      status: "sent",
+      simulated: true,
+      from: user.outboundEmail,
+      senderName: user.emailSenderName || user.name,
+      to: body.to,
+      company: opportunity.company,
+      subject: body.subject,
+      body: body.body,
+      sentAt
+    },
+    opportunity,
+    user: accountUser(user)
+  });
+}));
+
 app.get("/api/accounts", requireAuth, (req, res) => {
   if (!canManageAccounts(req.user)) {
     res.status(403).json({ message: "无账号管理权限" });

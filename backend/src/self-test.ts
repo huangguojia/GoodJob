@@ -62,6 +62,33 @@ try {
   });
   if (!aiConfigRead.response.ok || aiConfigRead.json.config?.apiKey !== "****1234") throw new Error("ai config read failed");
 
+  const profileBind = await request("/api/profile/email-binding", {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      outboundEmail: "shirley.sender@example.com",
+      emailSenderName: "Shirley Sender",
+      emailSignature: "Best regards,\\nShirley Sender"
+    })
+  });
+  if (!profileBind.response.ok || profileBind.json.user?.outboundEmail !== "shirley.sender@example.com" || !profileBind.json.token) {
+    throw new Error("profile email binding failed");
+  }
+
+  const profileMail = await request("/api/profile/send-development-email", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      to: "buyer@example.com",
+      company: "Buyer Test GmbH",
+      subject: "Instrumentation supplier for your local market",
+      body: "Dear Buyer Test GmbH team, we supply pressure and flow instruments for local distributors."
+    })
+  });
+  if (!profileMail.response.ok || profileMail.json.sent?.status !== "sent" || profileMail.json.user?.lastDevelopmentEmailTo !== "buyer@example.com") {
+    throw new Error("development email send failed");
+  }
+
   const websitePreview = await request("/api/tools/website-scrape/preview", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
@@ -76,6 +103,19 @@ try {
   });
   if (!websiteSync.response.ok || websiteSync.json.created?.[0]?.deal?.title !== "自动化官网商机 官网产品机会") {
     throw new Error("website opportunity sync failed");
+  }
+
+  const prospectMail = await request(`/api/prospect-list/${websiteSync.json.created[0].opportunity.id}/send-development-email`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      to: "prospect@example.com",
+      subject: "Instrumentation supplier support",
+      body: "Dear team, we can support your pressure and flow instrumentation sourcing."
+    })
+  });
+  if (!prospectMail.response.ok || prospectMail.json.opportunity?.lastDevelopmentEmailTo !== "prospect@example.com") {
+    throw new Error("prospect list development email failed");
   }
 
   const deals = await request("/api/deals", { headers: { authorization: `Bearer ${managerToken}` } });
@@ -593,6 +633,9 @@ try {
     competitorThreat: competitorThreat.json.competitor.threatLevel,
     casePublished: publishedCase.json.caseStudy.status,
     aiConfigMasked: aiConfigRead.json.config.apiKey,
+    profileOutboundEmail: profileBind.json.user.outboundEmail,
+    developmentEmailTo: profileMail.json.user.lastDevelopmentEmailTo,
+    prospectEmailTo: prospectMail.json.opportunity.lastDevelopmentEmailTo,
     importJob: customerImport.json.job.name,
     exportRows: customerExport.json.customers.length,
     tradeDocument: tradeDocument.json.document.number,
