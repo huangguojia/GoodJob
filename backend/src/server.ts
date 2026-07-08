@@ -1832,6 +1832,37 @@ app.post("/api/tools/ai-config/test", requireAuth, asyncRoute(async (_req, res) 
   res.json({ ok, message: ok ? "AI 连接测试通过" : "AI 连接失败，请检查 Base URL / Key / Model" });
 }));
 
+const leadFinderSearchSchema = z.object({
+  productKeywords: z.string().default(""),
+  countries: z.string().default(""),
+  industry: z.string().default(""),
+  customerType: z.string().default(""),
+  goal: z.string().default(""),
+  limit: z.number().min(1).max(30).default(10)
+});
+
+app.post("/api/lead-finder/free-search", requireAuth, asyncRoute(async (req, res) => {
+  const body = leadFinderSearchSchema.parse(req.body);
+  const store = getStore();
+  const limit = Math.min(body.limit, 12);
+  const [gleif, wikidata] = await Promise.all([
+    searchGleifLeads(body, req.user!, Math.ceil(limit / 2)),
+    searchWikidataLeads(body, req.user!, Math.ceil(limit / 2))
+  ]);
+  const merged: WebsiteOpportunity[] = [];
+  for (const item of [...gleif, ...wikidata]) {
+    if (merged.some((row) => row.company.toLowerCase() === item.company.toLowerCase() || row.website === item.website)) continue;
+    merged.push(item);
+  }
+  for (const item of merged) {
+    const existing = store.websiteOpportunities.find((row) => row.ownerId === req.user!.id && (row.website === item.website || row.company.toLowerCase() === item.company.toLowerCase()));
+    if (existing) Object.assign(existing, item, { id: existing.id, status: existing.status, customerId: existing.customerId, dealId: existing.dealId });
+    else store.websiteOpportunities.unshift(item);
+  }
+  await store.persist();
+  res.json({ opportunities: merged, sources: { gleif: gleif.length, wikidata: wikidata.length } });
+}));
+
 app.post("/api/tools/website-scrape/preview", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({ urls: z.array(z.string().min(3)).min(1).max(12), useAi: z.boolean().default(false) });
   const body = schema.parse(req.body);
@@ -2297,6 +2328,115 @@ function normalizeWebsite(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) return "";
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
+function leadFinderQueryText(body: z.infer<typeof leadFinderSearchSchema>) {
+  return [body.goal, body.productKeywords, body.industry, body.customerType, body.countries]
+    .join(" ")
+    .replace(/[,，/]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function searchGleifLeads(body: z.infer<typeof leadFinderSearchSchema>, user: SessionUser, limit: number): Promise<WebsiteOpportunity[]> {
+  const firstCountry = body.countries.split(/,|，/)[0]?.trim();
+  const firstIndustry = body.industry.split(/,|，/)[0]?.trim();
+  const firstProduct = body.productKeywords.split(/,|，/)[0]?.trim();
+  const queryCandidates = [
+    leadFinderQueryText(body),
+    [firstIndustry, firstCountry].filter(Boolean).join(" "),
+    [firstProduct, firstCountry].filter(Boolean).join(" "),
+    [body.customerType, firstCountry].filter(Boolean).join(" "),
+    firstIndustry || firstProduct || firstCountry || "automation"
+  ].filter(Boolean);
+  try {
+    let records: Array<{
+      id?: string;
+      attributes?: {
+        lei?: string;
+        entity?: {
+          legalName?: { name?: string };
+          legalAddress?: { country?: string; city?: string };
+          headquartersAddress?: { country?: string; city?: string };
+        };
+      };
+    }> = [];
+    for (const query of queryCandidates) {
+      const url = `https://api.gleif.org/api/v1/lei-records?filter[fulltext]=${encodeURIComponent(query)}&page[size]=${limit}`;
+      const response = await fetch(url, { headers: { accept: "application/vnd.api+json" } });
+      if (!response.ok) continue;
+      const data = await response.json() as { data?: typeof records };
+      records = data.data || [];
+      if (records.length) break;
+    }
+    return records.slice(0, limit).map((item, index) => {
+      const entity = item.attributes?.entity;
+      const company = entity?.legalName?.name || `GLEIF Entity ${index + 1}`;
+      const country = entity?.legalAddress?.country || entity?.headquartersAddress?.country || body.countries.split(/,|，/)[0]?.trim() || "未知";
+      const city = entity?.legalAddress?.city || entity?.headquartersAddress?.city || "";
+      const lei = item.attributes?.lei || item.id || "";
+      return {
+        id: `lf_gleif_${Date.now()}_${index}`,
+        company,
+        business: body.productKeywords || body.industry || "法人实体 / 待核实业务",
+        country,
+        website: lei ? `https://search.gleif.org/#/record/${lei}` : "https://search.gleif.org/",
+        contact: "待维护",
+        contactInfo: "",
+        description: `GLEIF公开法人实体。${city ? `城市：${city}。` : ""}需继续核实官网、采购角色和产品匹配。`,
+        ownerId: user.id,
+        teamId: user.teamId,
+        status: "preview" as const,
+        createdAt: new Date().toISOString(),
+        parseMode: "rule" as const
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function searchWikidataLeads(body: z.infer<typeof leadFinderSearchSchema>, user: SessionUser, limit: number): Promise<WebsiteOpportunity[]> {
+  const firstCountry = body.countries.split(/,|，/)[0]?.trim();
+  const firstIndustry = body.industry.split(/,|，/)[0]?.trim();
+  const firstProduct = body.productKeywords.split(/,|，/)[0]?.trim();
+  const queryCandidates = [
+    leadFinderQueryText(body),
+    [firstProduct, firstIndustry, firstCountry].filter(Boolean).join(" "),
+    [firstIndustry, "company"].filter(Boolean).join(" "),
+    firstProduct || firstIndustry || "instrumentation company"
+  ].filter(Boolean);
+  try {
+    let records: Array<{ id?: string; label?: string; description?: string; concepturi?: string }> = [];
+    for (const query of queryCandidates) {
+      const url = `https://www.wikidata.org/w/api.php?action=wbsearchentities&language=en&format=json&type=item&limit=${limit}&search=${encodeURIComponent(query)}`;
+      const response = await fetch(url, { headers: { accept: "application/json" } });
+      if (!response.ok) continue;
+      const data = await response.json() as { search?: typeof records };
+      records = data.search || [];
+      if (records.length) break;
+    }
+    return records
+      .filter((item) => item.label)
+      .slice(0, limit)
+      .map((item, index) => ({
+        id: `lf_wikidata_${Date.now()}_${index}`,
+        company: item.label || `Wikidata Entity ${index + 1}`,
+        business: body.productKeywords || body.industry || item.description || "公开实体 / 待核实业务",
+        country: body.countries.split(/,|，/)[0]?.trim() || "未知",
+        website: item.concepturi || (item.id ? `https://www.wikidata.org/wiki/${item.id}` : "https://www.wikidata.org/"),
+        contact: "待维护",
+        contactInfo: "",
+        description: `Wikidata公开实体：${item.description || "描述待补充"}。需继续核实官网、联系人和真实采购意向。`,
+        ownerId: user.id,
+        teamId: user.teamId,
+        status: "preview" as const,
+        createdAt: new Date().toISOString(),
+        parseMode: "rule" as const
+      }));
+  } catch {
+    return [];
+  }
 }
 
 async function parseWebsiteOpportunity(rawUrl: string, index: number, user: SessionUser, aiConfig?: AiModelConfig | null): Promise<WebsiteOpportunity> {
