@@ -247,6 +247,9 @@ interface LeadFinderJob {
   progress: number;
   steps: string[];
   createdAt: string;
+  expanded?: boolean;
+  resultIds?: string[];
+  detailLines?: string[];
 }
 
 interface AiModelConfig {
@@ -4377,6 +4380,67 @@ function currentLeadFinderSubtitle() {
   return `${mode} · ${depth} · ${validation}`;
 }
 
+function currentLeadFinderSources() {
+  return qsa<HTMLInputElement>("[data-lead-source]")
+    .filter((item) => item.checked)
+    .map((item) => item.closest("label")?.querySelector("b")?.textContent?.trim() || item.dataset.leadSource || "搜索源")
+    .filter(Boolean);
+}
+
+function buildLeadFinderJobDetails(resultIds: string[] = []) {
+  const product = qs<HTMLInputElement>("#leadProductKeywords")?.value.trim() || "未填写产品";
+  const countries = qs<HTMLInputElement>("#leadCountries")?.value.trim() || "未填写市场";
+  const industry = qs<HTMLInputElement>("#leadIndustryInput")?.value.trim() || "未填写行业";
+  const customerType = qs<HTMLSelectElement>("#leadCustomerTypes")?.value || "未选择客户类型";
+  const sourceText = currentLeadFinderSources().join("、") || "默认公开源";
+  const lines = [
+    `产品：${product}`,
+    `市场：${countries}`,
+    `行业：${industry}`,
+    `客户类型：${customerType}`,
+    `渠道：${sourceText}`
+  ];
+  if (resultIds.length) lines.unshift(`本次已搜到 ${resultIds.length} 条候选，展开可查看公司、国家和官网。`);
+  return lines;
+}
+
+function leadFinderJobStatusText(job: LeadFinderJob) {
+  if (job.status === "done") return "已完成";
+  if (job.status === "needs_input") return "待导入";
+  if (job.status === "ready") return "待运行";
+  return "进行中";
+}
+
+function leadFinderJobStatusTone(job: LeadFinderJob) {
+  if (job.status === "done") return "green";
+  if (job.status === "needs_input") return "amber";
+  if (job.status === "running") return "blue";
+  return "";
+}
+
+function renderLeadFinderJobDetails(job: LeadFinderJob) {
+  const found = (job.resultIds || [])
+    .map((id) => state.websiteOpportunities.find((item) => item.id === id))
+    .filter(Boolean) as WebsiteOpportunity[];
+  const foundHtml = found.length ? `
+    <div class="lead-job-found-list">
+      ${found.slice(0, 8).map((item) => `
+        <button type="button" data-lead-job-pick="${escapeHtml(item.id)}">
+          <b>${escapeHtml(item.company || "公司待确认")}</b>
+          <span>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website || ""))}</span>
+          <em>${leadFinderScore(item)}分</em>
+        </button>
+      `).join("")}
+    </div>
+  ` : `<div class="lead-job-loading">${job.status === "running" ? "正在检索公开API、生成平台搜索入口并等待候选结果..." : "本次任务暂无候选结果，可导入官网/平台链接继续解析。"}</div>`;
+  return `
+    <div class="lead-job-detail" ${job.expanded ? "" : "hidden"}>
+      <div class="lead-job-detail-lines">${(job.detailLines || buildLeadFinderJobDetails(job.resultIds)).map((line) => `<span>${escapeHtml(line)}</span>`).join("")}</div>
+      ${foundHtml}
+    </div>
+  `;
+}
+
 function renderLeadFinderJobs() {
   const box = qs<HTMLElement>("#leadFinderJobList");
   if (!box) return;
@@ -4387,8 +4451,9 @@ function renderLeadFinderJobs() {
   box.innerHTML = leadFinderJobs.map((job) => `
     <article class="lead-job-card" data-lead-job-id="${escapeHtml(job.id)}">
       <div class="lead-job-top">
+        <button class="lead-job-toggle" type="button" data-lead-job-toggle aria-label="${job.expanded ? "收起任务详情" : "展开任务详情"}">${job.expanded ? "▾" : "▸"}</button>
         <div><h3>${escapeHtml(job.title)}</h3><p>${escapeHtml(job.subtitle)}</p></div>
-        ${badge(job.status === "done" ? "已完成" : job.status === "needs_input" ? "待导入" : "运行中", job.status === "done" ? "green" : job.status === "needs_input" ? "amber" : "")}
+        ${badge(leadFinderJobStatusText(job), leadFinderJobStatusTone(job))}
       </div>
       <div class="lead-job-metrics">
         <div><span>线索进度</span><b>${job.resultCount}/目标</b></div>
@@ -4398,32 +4463,68 @@ function renderLeadFinderJobs() {
       </div>
       <div class="lead-job-progress"><i style="--p:${job.progress}%"></i></div>
       <div class="lead-job-steps">${job.steps.map((step, index) => `<span>${index + 1} ${escapeHtml(step)}</span>`).join("")}</div>
+      ${renderLeadFinderJobDetails(job)}
       <div class="lead-job-actions"><button class="btn" data-lead-job-import>导入结果链接</button><button class="btn primary" data-lead-job-sync>同步选中结果</button></div>
     </article>
   `).join("");
+  qsa<HTMLButtonElement>("[data-lead-job-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.closest<HTMLElement>("[data-lead-job-id]")?.dataset.leadJobId;
+      const job = leadFinderJobs.find((item) => item.id === id);
+      if (!job) return;
+      job.expanded = !job.expanded;
+      renderLeadFinderJobs();
+    });
+  });
+  qsa<HTMLButtonElement>("[data-lead-job-pick]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedLeadFinderId = button.dataset.leadJobPick || null;
+      renderLeadFinder(state.websiteOpportunities);
+    });
+  });
   qsa<HTMLButtonElement>("[data-lead-job-import]").forEach((button) => {
-    button.addEventListener("click", () => qs<HTMLTextAreaElement>("#leadFinderUrlInput")?.focus());
+    button.addEventListener("click", () => {
+      qs<HTMLDetailsElement>(".lead-import-drawer")?.setAttribute("open", "true");
+      qs<HTMLTextAreaElement>("#leadFinderUrlInput")?.focus();
+    });
   });
   qsa<HTMLButtonElement>("[data-lead-job-sync]").forEach((button) => {
     button.addEventListener("click", (event) => void syncLeadFinderRows(event.currentTarget as HTMLButtonElement));
   });
 }
 
-function upsertLeadFinderJob(resultCount: number, status: LeadFinderJob["status"]) {
-  const enabledSources = qsa<HTMLInputElement>("[data-lead-source]").filter((item) => item.checked).length || 1;
+function createLeadFinderJob(status: LeadFinderJob["status"] = "running") {
+  const enabledSources = currentLeadFinderSources().length || 1;
   const job: LeadFinderJob = {
     id: `lf_${Date.now()}`,
     title: currentLeadFinderTitle(),
     subtitle: currentLeadFinderSubtitle(),
     status,
-    resultCount,
+    resultCount: 0,
     channelCount: enabledSources,
-    elapsedText: status === "done" ? "已完成" : "待导入",
-    progress: status === "done" ? 100 : 35,
-    steps: status === "done" ? ["生成搜索语法", "检索公开API", "提取公司资料", "等待同步"] : ["生成搜索语法", "打开平台入口", "导入官网/询盘链接"],
-    createdAt: new Date().toISOString()
+    elapsedText: status === "running" ? "刚刚开始" : "待导入",
+    progress: status === "running" ? 18 : 35,
+    steps: status === "running" ? ["生成搜索语法", "检索公开API", "等待返回结果"] : ["生成搜索语法", "打开平台入口", "导入官网/询盘链接"],
+    createdAt: new Date().toISOString(),
+    expanded: false,
+    resultIds: [],
+    detailLines: buildLeadFinderJobDetails()
   };
   leadFinderJobs = [job, ...leadFinderJobs].slice(0, 6);
+  renderLeadFinderJobs();
+  return job;
+}
+
+function updateLeadFinderJob(jobId: string, resultIds: string[], status: LeadFinderJob["status"]) {
+  const job = leadFinderJobs.find((item) => item.id === jobId);
+  if (!job) return;
+  job.status = status;
+  job.resultCount = resultIds.length;
+  job.elapsedText = status === "done" ? "已完成" : "待导入";
+  job.progress = status === "done" ? 100 : 52;
+  job.steps = status === "done" ? ["生成搜索语法", "检索公开API", "提取公司资料", "等待同步"] : ["生成搜索语法", "打开平台入口", "导入官网/询盘链接"];
+  job.resultIds = resultIds;
+  job.detailLines = buildLeadFinderJobDetails(resultIds);
   renderLeadFinderJobs();
 }
 
@@ -4578,6 +4679,7 @@ async function runLeadFinder(button?: HTMLButtonElement) {
     toast("请先配置并启用 AI 模型，或关闭 AI 解析", "error");
     return;
   }
+  const job = createLeadFinderJob("running");
   if (button) {
     button.disabled = true;
     button.textContent = useAi ? "AI搜客中" : "搜客任务运行中";
@@ -4600,7 +4702,7 @@ async function runLeadFinder(button?: HTMLButtonElement) {
         .map((item) => ({ ...item, selected: false }));
       state.websiteOpportunities = [...result.opportunities.map((item) => ({ ...item, selected: true })), ...existing];
       state.selectedLeadFinderId = result.opportunities[0]?.id || state.selectedLeadFinderId;
-      upsertLeadFinderJob(result.opportunities.length, result.opportunities.length ? "done" : "needs_input");
+      updateLeadFinderJob(job.id, result.opportunities.map((item) => item.id), result.opportunities.length ? "done" : "needs_input");
       renderLeadFinder(state.websiteOpportunities);
       toast(result.opportunities.length ? `免费公开API已找到 ${result.opportunities.length} 条候选，GLEIF ${result.sources.gleif} / Wikidata ${result.sources.wikidata}` : "免费公开API暂无结果；右侧已生成平台搜索入口，可继续导入官网/询盘链接");
       return;
@@ -4614,10 +4716,13 @@ async function runLeadFinder(button?: HTMLButtonElement) {
       .map((item) => ({ ...item, selected: false }));
     state.websiteOpportunities = [...result.opportunities.map((item) => ({ ...item, selected: true })), ...existing];
     state.selectedLeadFinderId = result.opportunities[0]?.id || state.selectedLeadFinderId;
-    upsertLeadFinderJob(result.opportunities.length, "done");
+    updateLeadFinderJob(job.id, result.opportunities.map((item) => item.id), "done");
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
     toast(`已生成 ${result.opportunities.length} 条候选客户`);
+  } catch (error) {
+    updateLeadFinderJob(job.id, [], "needs_input");
+    throw error;
   } finally {
     if (button) {
       button.disabled = false;

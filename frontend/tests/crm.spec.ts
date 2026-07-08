@@ -872,9 +872,18 @@ test.describe("GoodJob CRM prototype pages", () => {
 
     await page.locator(".lead-import-drawer summary").click();
     await page.locator("#leadFinderUrlInput").fill(`https://${company}.com`);
+    await page.route("**/api/tools/website-scrape/preview", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await route.continue();
+    });
     await page.locator("#leadFinderStartButton").click();
+    const jobCard = page.locator("#leadFinderJobList .lead-job-card").first();
+    await expect(jobCard).toContainText("进行中");
+    await jobCard.locator("[data-lead-job-toggle]").click();
+    await expect(jobCard).toContainText("正在检索公开API");
     await expect(page.locator("#leadFinderResultRows")).toContainText(company);
     await expect(page.locator("#leadFinderJobList")).toContainText("已完成");
+    await expect(jobCard).toContainText(company);
     await expect(page.locator("#leadFinderPendingCount")).not.toHaveText("0");
 
     const firstRow = page.locator("#leadFinderResultRows tr[data-lead-id]").first();
