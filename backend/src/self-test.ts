@@ -144,6 +144,39 @@ try {
     throw new Error("website opportunity sync failed");
   }
 
+  // 自动获客数据源中心：注册表 / 保存 Key（掩码）/ 删除
+  const leadProviders = await request("/api/lead-finder/providers", {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  const providerList = leadProviders.json.providers || [];
+  if (!leadProviders.response.ok || providerList.length < 8) throw new Error("lead providers list failed");
+  const freeReady = providerList.filter((item: any) => !item.requiresKey && item.ready).length;
+  const hunterMeta = providerList.find((item: any) => item.id === "hunter");
+  if (freeReady < 2 || !hunterMeta || hunterMeta.tier !== "paid") throw new Error("lead providers metadata failed");
+
+  const leadSourceSave = await request("/api/lead-finder/source-config", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ provider: "serper", apiKey: "serper-secret-9911", enabled: true })
+  });
+  const serperStatus = (leadSourceSave.json.providers || []).find((item: any) => item.id === "serper");
+  if (!leadSourceSave.response.ok || leadSourceSave.json.config?.apiKey !== "****9911" || !serperStatus?.ready || !serperStatus?.enabled) {
+    throw new Error("lead source config save failed");
+  }
+
+  const leadSourceReadBack = await request("/api/lead-finder/providers", {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  const serperReadBack = (leadSourceReadBack.json.providers || []).find((item: any) => item.id === "serper");
+  if (!serperReadBack?.hasApiKey || !serperReadBack?.ready) throw new Error("lead source config persist failed");
+
+  const leadSourceDelete = await request("/api/lead-finder/source-config/serper", {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  const serperAfterDelete = (leadSourceDelete.json.providers || []).find((item: any) => item.id === "serper");
+  if (!leadSourceDelete.response.ok || serperAfterDelete?.hasApiKey) throw new Error("lead source config delete failed");
+
   const prospectMail = await request(`/api/prospect-list/${websiteSync.json.created[0].opportunity.id}/send-development-email`, {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
@@ -677,6 +710,9 @@ try {
     profileSmtpTest: profileTestMail.json.ok,
     developmentEmailTo: profileMail.json.user.lastDevelopmentEmailTo,
     prospectEmailTo: prospectMail.json.opportunity.lastDevelopmentEmailTo,
+    leadProviderCount: providerList.length,
+    leadSourceMaskedKey: leadSourceSave.json.config.apiKey,
+    leadSourceDeleted: !serperAfterDelete?.hasApiKey,
     importJob: customerImport.json.job.name,
     exportRows: customerExport.json.customers.length,
     tradeDocument: tradeDocument.json.document.number,

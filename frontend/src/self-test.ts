@@ -16,7 +16,13 @@ const required = [
   "/api/dashboard/summary",
   "/api/knowledge/assets",
   "/api/exams",
-  "/api/tools/ocr/jobs/ocr1/sync-lead"
+  "/api/tools/ocr/jobs/ocr1/sync-lead",
+  "/api/lead-finder/providers",
+  "/api/lead-finder/search",
+  "/api/lead-finder/source-config",
+  "leadSourceCenterButton",
+  "leadSourceChips",
+  "openLeadSourceCenter"
 ];
 
 for (const token of required) {

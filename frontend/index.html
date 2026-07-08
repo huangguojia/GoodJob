@@ -2613,50 +2613,103 @@
     }
 
     .lead-table {
-      min-width: 1180px;
+      min-width: 820px;
+      width: 100%;
       font-size: 12px;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    .lead-table col.col-pick { width: 34px; }
+    .lead-table col.col-company { width: 20%; }
+    .lead-table col.col-source { width: 62px; }
+    .lead-table col.col-country { width: 9%; }
+    .lead-table col.col-score { width: 58px; }
+    .lead-table col.col-status { width: 118px; }
+
+    .lead-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #f4f7fc;
+      color: #5a6a82;
+      font-size: 11px;
+      font-weight: 800;
+      text-align: left;
+      border-bottom: 1px solid var(--line);
     }
 
     .lead-table th,
     .lead-table td {
-      padding: 9px 9px;
+      padding: 8px 10px;
+      vertical-align: middle;
     }
 
-    .lead-table input {
-      height: 28px;
+    .lead-table tbody tr {
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .lead-table tbody tr:hover { background: #f8fbff; }
+    .lead-table tbody tr.selected { background: #eef3ff; box-shadow: inset 3px 0 0 var(--brand); }
+
+    /* 单元格默认呈现为纯文本，点击才进入编辑态，避免整表像表单 */
+    #lead-finder .lead-table input {
+      height: 30px;
       padding: 0 7px;
+      border: 1px solid transparent;
+      background: transparent;
+      border-radius: 6px;
+      color: var(--text);
+      transition: border-color .12s ease, background .12s ease, box-shadow .12s ease;
     }
 
-    .lead-table textarea {
-      min-height: 42px;
-      padding: 6px 7px;
-      line-height: 1.4;
-      resize: vertical;
+    #lead-finder .lead-table input:hover { background: #eef2f9; }
+    #lead-finder .lead-table input:focus {
+      border-color: rgba(49, 87, 213, .5);
+      background: #fff;
+      box-shadow: 0 0 0 2px rgba(49, 87, 213, .12);
     }
 
-    .lead-company-cell b {
-      display: block;
-      max-width: 180px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    #lead-finder .lead-table input[type="hidden"] { display: none; }
+    #lead-finder .lead-table input[type="checkbox"] { height: auto; padding: 0; }
+
+    .lead-cell-title { display: flex; flex-direction: column; gap: 1px; }
+    .lead-cell-title input[data-lead-field="company"] {
+      font-weight: 700;
       color: var(--ink);
       font-size: 13px;
     }
 
-    .lead-company-cell span {
-      color: var(--muted);
+    .lead-cell-domain {
+      padding: 0 7px;
+      color: var(--brand);
       font-size: 11px;
+      text-decoration: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .lead-cell-domain:hover { text-decoration: underline; }
+
+    .lead-company-cell { min-width: 190px; }
+
+    .lead-status-cell {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      align-content: center;
+      min-width: 132px;
     }
 
     .lead-score {
       display: grid;
       gap: 5px;
-      min-width: 72px;
+      min-width: 60px;
     }
 
     .lead-score b {
       color: var(--ink);
+      font-size: 13px;
       font-variant-numeric: tabular-nums;
     }
 
@@ -2704,6 +2757,8 @@
     .lead-search-links {
       display: grid;
       gap: 8px;
+      max-height: 300px;
+      overflow: auto;
     }
 
     .lead-search-links a {
@@ -3661,8 +3716,13 @@
       display: grid;
       grid-template-columns: minmax(460px, .95fr) minmax(0, 1.05fr);
       gap: 12px;
-      align-items: start;
+      align-items: stretch;
       margin-bottom: 12px;
+    }
+
+    .lead-queue-panel {
+      display: flex;
+      flex-direction: column;
     }
 
     .lead-build-panel,
@@ -3758,6 +3818,190 @@
       font-size: 10px;
       white-space: nowrap;
     }
+
+    .lead-source-head .btn.tiny {
+      align-self: flex-start;
+      padding: 4px 9px;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .lead-source-chips {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    .lead-source-chips .empty-inline {
+      grid-column: 1 / -1;
+      color: #8a96a8;
+      font-size: 11px;
+    }
+
+    .lead-source-chip {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      width: 100%;
+      padding: 7px 9px;
+      border: 1px solid #dce4f2;
+      border-radius: 7px;
+      background: #fff;
+      color: #33415a;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      text-align: left;
+      transition: border-color .15s ease, background .15s ease;
+    }
+
+    .lead-source-chip .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #c3ccdb;
+      flex: none;
+    }
+
+    .lead-source-chip .ls-chip-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .lead-source-chip small {
+      color: #8592a6;
+      font-size: 10px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .lead-source-chip.ready .dot { background: #16a36a; }
+    .lead-source-chip.needkey .dot { background: #d99518; }
+    .lead-source-chip.active {
+      border-color: rgba(49, 87, 213, .5);
+      background: #eef3ff;
+      color: #22357a;
+    }
+    .lead-source-chip.needkey {
+      border-style: dashed;
+      color: #8a6a2c;
+    }
+    .lead-source-chip:hover { border-color: rgba(49, 87, 213, .4); background: #f6f9ff; }
+
+    .lead-entry-head {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin: 12px 0 7px;
+      color: #6a778c;
+      font-size: 11px;
+    }
+    .lead-entry-head b { color: #111827; font-size: 12px; }
+
+    .lead-entry-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .lead-entry-chip {
+      padding: 5px 11px;
+      border: 1px solid #dce4f2;
+      border-radius: 999px;
+      background: #fff;
+      color: #55637c;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: border-color .15s ease, background .15s ease, color .15s ease;
+    }
+    .lead-entry-chip:hover { border-color: rgba(49, 87, 213, .4); }
+    .lead-entry-chip.active {
+      border-color: rgba(22, 163, 106, .45);
+      background: #edfaf3;
+      color: #12885a;
+    }
+
+    .ls-center-intro {
+      color: #566178;
+      font-size: 12px;
+      line-height: 1.5;
+      margin: 0 0 12px;
+    }
+
+    .ls-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .ls-card {
+      border: 1px solid #e1e8f3;
+      border-radius: 10px;
+      background: #fff;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .ls-card.is-ready { border-color: rgba(22, 163, 106, .38); background: #f6fdf9; }
+    .ls-card.is-open { box-shadow: 0 12px 30px rgba(27, 39, 68, .12); }
+
+    .ls-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+    .ls-card-top h4 { margin: 0; font-size: 14px; color: #111827; }
+    .ls-card-top p { margin: 2px 0 0; font-size: 11px; color: #7a8598; line-height: 1.4; }
+
+    .ls-tier {
+      font-size: 10px;
+      font-weight: 800;
+      padding: 3px 8px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    .ls-tier.free { background: #e7f7ee; color: #12885a; }
+    .ls-tier.byok_free { background: #eaf1ff; color: #2a4bb5; }
+    .ls-tier.paid { background: #fdf0e2; color: #b5771c; }
+
+    .ls-caps { display: flex; flex-wrap: wrap; gap: 5px; }
+    .ls-cap { font-size: 10px; padding: 2px 7px; border-radius: 5px; background: #f0f4fb; color: #55627a; font-weight: 700; }
+
+    .ls-status { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #55627a; }
+    .ls-status .dot { width: 7px; height: 7px; border-radius: 50%; background: #c3ccdb; }
+    .ls-status.ok .dot { background: #16a36a; }
+    .ls-status.warn .dot { background: #d99518; }
+    .ls-status.fail .dot { background: #de5a5a; }
+
+    .ls-form { display: flex; flex-direction: column; gap: 7px; border-top: 1px dashed #e2e8f4; padding-top: 8px; }
+    .ls-form input {
+      width: 100%;
+      padding: 7px 9px;
+      border: 1px solid #d7deec;
+      border-radius: 6px;
+      font-size: 12px;
+      box-sizing: border-box;
+    }
+    .ls-form-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    .ls-form-actions .btn { padding: 5px 10px; font-size: 11px; }
+    .ls-usage { font-size: 10px; color: #7a8598; }
+    .ls-docs { font-size: 10px; color: #3157d5; text-decoration: none; }
+    .ls-docs:hover { text-decoration: underline; }
+
+    .lead-src-tag {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 5px;
+      background: #f0f4fb;
+      color: #55627a;
+      white-space: nowrap;
+    }
+    .lead-src-tag.free { background: #e7f7ee; color: #12885a; }
+    .lead-src-tag.byok_free { background: #eaf1ff; color: #2a4bb5; }
+    .lead-src-tag.paid { background: #fdf0e2; color: #b5771c; }
 
     .lead-import-drawer {
       margin-top: 10px;
@@ -8416,7 +8660,7 @@
         <div class="view" id="lead-finder">
           <div class="page-head">
             <div><p class="eyebrow">Auto Prospecting</p><h1>自动获客</h1><p class="sub">先定义目标客户画像，再用公开 API、平台入口和官网解析生成可跟进的候选客户。</p></div>
-            <div class="head-actions"><button class="btn" id="leadFinderAiConfigButton">AI配置</button><button class="btn" id="leadFinderExportButton">导出结果</button><button class="btn primary" id="leadFinderStartButton">生成并运行任务</button></div>
+            <div class="head-actions"><button class="btn" id="leadSourceCenterButton">数据源中心</button><button class="btn" id="leadFinderAiConfigButton">AI配置</button><button class="btn" id="leadFinderExportButton">导出结果</button><button class="btn primary" id="leadFinderStartButton">生成并运行任务</button></div>
           </div>
 
           <div class="lead-command-strip">
@@ -8448,8 +8692,16 @@
                 <div class="lead-field"><label>目标数量</label><select id="leadLimit"><option>10</option><option selected>20</option><option>50</option></select></div>
               </div>
               <div class="lead-source-box">
-                <div class="lead-source-head"><b>获客来源</b><span>已接入的源直接产出候选，平台入口用于继续核实并导入结果。</span></div>
-                <div class="lead-source-options"><label><input type="checkbox" data-lead-source="gleif" checked><b>GLEIF</b><span>公开API</span></label><label><input type="checkbox" data-lead-source="wikidata" checked><b>Wikidata</b><span>公开API</span></label><label><input type="checkbox" data-lead-source="google" checked><b>Google/Web</b><span>搜索入口</span></label><label><input type="checkbox" data-lead-source="alibaba" checked><b>Alibaba RFQ</b><span>询盘入口</span></label><label><input type="checkbox" data-lead-source="madein" checked><b>Made-in-China</b><span>询盘入口</span></label><label><input type="checkbox" data-lead-source="globalsources"><b>Global Sources</b><span>平台入口</span></label><label><input type="checkbox" data-lead-source="europages" checked><b>Europages</b><span>目录入口</span></label><label class="disabled"><input type="checkbox" disabled><b>OpenCorporates</b><span>需Key</span></label></div>
+                <div class="lead-source-head"><b>获客数据源</b><span>免费源默认开，付费/自带 Key 源配置后点亮</span><button class="btn tiny" id="leadSourceManageInline" type="button">数据源中心</button></div>
+                <div class="lead-source-chips" id="leadSourceChips"><span class="empty-inline">数据源加载中…</span></div>
+                <div class="lead-entry-head"><b>免费搜索入口</b><span>生成 Google / B2B 平台检索链接，人工核实后导入</span></div>
+                <div class="lead-entry-chips">
+                  <button type="button" class="lead-entry-chip active" data-lead-entry="google">Google/Web</button>
+                  <button type="button" class="lead-entry-chip active" data-lead-entry="alibaba">Alibaba RFQ</button>
+                  <button type="button" class="lead-entry-chip active" data-lead-entry="madein">Made-in-China</button>
+                  <button type="button" class="lead-entry-chip" data-lead-entry="globalsources">Global Sources</button>
+                  <button type="button" class="lead-entry-chip active" data-lead-entry="europages">Europages</button>
+                </div>
               </div>
               <details class="lead-import-drawer">
                 <summary>已有官网/平台结果链接，展开导入解析</summary>
@@ -8491,8 +8743,9 @@
               </div>
               <div class="lead-table-wrap">
                 <table class="lead-table">
-                  <thead><tr><th>选</th><th>公司</th><th>业务</th><th>国家</th><th>官网</th><th>联系人</th><th>联系方式</th><th>说明</th><th>评分</th><th>状态</th></tr></thead>
-                  <tbody id="leadFinderResultRows"><tr><td colspan="10" class="empty-cell">暂无候选客户。输入官网后点击“开始搜客”。</td></tr></tbody>
+                  <colgroup><col class="col-pick"><col class="col-company"><col class="col-source"><col><col class="col-country"><col><col><col class="col-score"><col class="col-status"></colgroup>
+                  <thead><tr><th>选</th><th>公司 / 官网</th><th>来源</th><th>业务</th><th>国家</th><th>联系人</th><th>联系方式</th><th>评分</th><th>状态</th></tr></thead>
+                  <tbody id="leadFinderResultRows"><tr><td colspan="9" class="empty-cell">暂无候选客户。填写画像、选好数据源后点击“生成并运行任务”。</td></tr></tbody>
                 </table>
               </div>
             </section>

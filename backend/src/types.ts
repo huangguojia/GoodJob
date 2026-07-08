@@ -194,9 +194,30 @@ export interface WebsiteOpportunity {
   customerId?: string;
   dealId?: string;
   parseMode?: "rule" | "ai" | "fallback";
+  source?: string;
+  sourceLabel?: string;
+  confidence?: number;
   lastDevelopmentEmailAt?: string;
   lastDevelopmentEmailSubject?: string;
   lastDevelopmentEmailTo?: string;
+}
+
+export type LeadSourceTier = "free" | "byok_free" | "paid";
+
+export interface LeadSourceConfig {
+  id: string;
+  provider: string;
+  scope: "personal" | "team";
+  apiKey: string;
+  baseUrl?: string;
+  enabled: boolean;
+  lastTestAt?: string;
+  lastTestStatus?: "untested" | "passed" | "failed";
+  lastTestMessage?: string;
+  usageJson?: string;
+  ownerId: string;
+  teamId: string;
+  updatedAt: string;
 }
 
 export interface AiModelConfig {

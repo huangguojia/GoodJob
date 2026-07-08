@@ -1,4 +1,4 @@
-import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, LeadSourceConfig, Memo, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 export const users: User[] = [
   { id: "u_sales_shirley", name: "Shirley", email: "shirley@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "SH", status: "active", outboundEmail: "", emailSenderName: "Shirley", emailSignature: "Best regards,\\nShirley\\nGoodJob Instrument Sales" },
@@ -192,6 +192,8 @@ export const aiModelConfigs: AiModelConfig[] = [
     updatedAt: "2026-06-27T09:00:00.000Z"
   }
 ];
+
+export const leadSourceConfigs: LeadSourceConfig[] = [];
 
 export const deals: Deal[] = [
   { id: "d1", customerId: "c1", title: "Nordic Tools 电动工具年度采购", stage: "已报价", product: "压力变送器 PT-2088", quantity: 60, unitPrice: 600, amount: 36000, ownerId: "u_sales_shirley", teamId: "europe", nextAction: "二次确认报价" },

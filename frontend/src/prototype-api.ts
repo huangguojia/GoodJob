@@ -244,10 +244,33 @@ interface WebsiteOpportunity {
   customerId?: string;
   dealId?: string;
   parseMode?: "rule" | "ai" | "fallback";
+  source?: string;
+  sourceLabel?: string;
+  confidence?: number;
   lastDevelopmentEmailAt?: string;
   lastDevelopmentEmailSubject?: string;
   lastDevelopmentEmailTo?: string;
   selected?: boolean;
+}
+
+interface LeadProviderStatus {
+  id: string;
+  name: string;
+  tier: "free" | "byok_free" | "paid";
+  category: "web" | "company" | "email";
+  requiresKey: boolean;
+  capabilities: string[];
+  docsUrl: string;
+  keyHint: string;
+  defaultBaseUrl: string;
+  costNote: string;
+  hasApiKey: boolean;
+  ready: boolean;
+  enabled: boolean;
+  lastTestStatus: "untested" | "passed" | "failed";
+  lastTestMessage: string;
+  lastTestAt: string;
+  usage: string;
 }
 
 interface LeadFinderJob {
@@ -468,6 +491,9 @@ interface AppState {
   leadFinderFilter: "all" | "pending" | "high" | "duplicate" | "synced";
   selectedProspectId: string | null;
   prospectFilter: "all" | "pending" | "mailed" | "high" | "synced";
+  leadProviders: LeadProviderStatus[];
+  selectedLeadSources: string[];
+  leadSourceSelectionTouched: boolean;
 }
 
 const state: AppState = {
@@ -519,7 +545,10 @@ const state: AppState = {
   selectedLeadFinderId: null,
   leadFinderFilter: "all",
   selectedProspectId: null,
-  prospectFilter: "all"
+  prospectFilter: "all",
+  leadProviders: [],
+  selectedLeadSources: [],
+  leadSourceSelectionTouched: false
 };
 
 let memoDirty = false;
@@ -1043,6 +1072,21 @@ async function refreshAll(user: User) {
   renderLeadFinder(state.websiteOpportunities);
   renderProspectList();
   renderTopbarStats();
+  void loadLeadProviders();
+}
+
+async function loadLeadProviders() {
+  try {
+    const result = await api<{ providers: LeadProviderStatus[] }>("/api/lead-finder/providers");
+    state.leadProviders = result.providers || [];
+    if (!state.leadSourceSelectionTouched) {
+      // 默认选中：所有免费源 + 已配置启用的源
+      state.selectedLeadSources = state.leadProviders.filter((item) => item.ready && item.enabled).map((item) => item.id);
+    }
+    renderLeadSourceChips();
+  } catch {
+    // 数据源加载失败时保留兜底提示，不影响主流程
+  }
 }
 
 function dashboardCacheKey(user: User) {
@@ -4921,6 +4965,12 @@ function websiteDomain(value: string) {
   }
 }
 
+function normalizeWebsiteLink(value: string) {
+  const trimmed = (value || "").trim();
+  if (!trimmed) return "#";
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
 function leadFinderScore(item: WebsiteOpportunity) {
   let score = 42;
   if (item.company && !/unknown|待维护/i.test(item.company)) score += 12;
@@ -5403,10 +5453,9 @@ function renderLeadFinderSearchLinks() {
   const industries = (qs<HTMLInputElement>("#leadIndustryInput")?.value.trim() || "").split(/,|，/).map((item) => item.trim()).filter(Boolean).slice(0, 2);
   const customerType = qs<HTMLSelectElement>("#leadCustomerTypes")?.value.split("/")[1]?.trim() || qs<HTMLSelectElement>("#leadCustomerTypes")?.value || "distributor";
   const exclude = (qs<HTMLInputElement>("#leadExcludeKeywords")?.value.trim() || "").split(/,|，/).map((item) => item.trim()).filter(Boolean).map((item) => `-${item}`).join(" ");
-  const enabledSources = qsa<HTMLInputElement>("[data-lead-source]")
-    .filter((item) => item.checked)
-    .map((item) => item.dataset.leadSource || "google")
-    .filter((source) => !["gleif", "wikidata"].includes(source));
+  // 免费搜索入口：读取用户勾选的平台开关
+  const enabledSources = qsa<HTMLButtonElement>(".lead-entry-chip.active").map((item) => item.dataset.leadEntry || "google");
+  const activeSources = enabledSources.length ? enabledSources : ["google"];
   const countryList = countries.length ? countries : ["Germany", "UK", "Turkey"];
   const industryText = industries.length ? industries.join(" ") : "";
   const sourceTemplates: Record<string, { label: string; query: (country: string) => string }> = {
@@ -5416,13 +5465,13 @@ function renderLeadFinderSearchLinks() {
     globalsources: { label: "Global Sources", query: (country) => `site:globalsources.com ${goal} ${keywords} ${industryText} ${country} buyer request ${exclude}` },
     europages: { label: "Europages", query: (country) => `site:europages.com ${goal} ${keywords} ${industryText} ${customerType} ${country} ${exclude}` }
   };
-  const rows = countryList.flatMap((country) => enabledSources.slice(0, 5).map((source) => {
+  const rows = countryList.flatMap((country) => activeSources.map((source) => {
     const template = sourceTemplates[source] || sourceTemplates.google;
     const query = template.query(country).replace(/\s+/g, " ").trim();
     const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
     return `<a href="${url}" target="_blank" rel="noreferrer"><b>${escapeHtml(template.label)}</b><span>${escapeHtml(query)}</span></a>`;
-  })).slice(0, 12);
-  box.innerHTML = rows.join("");
+  })).slice(0, 6);
+  box.innerHTML = rows.length ? rows.join("") : `<span class="empty-inline">勾选上方“免费搜索入口”后生成检索链接。</span>`;
 }
 
 function collectLeadFinderRows() {
@@ -5470,6 +5519,202 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
   `;
 }
 
+// ---------------------------------------------------------------------------
+// 数据源中心 / 获客来源选择
+// ---------------------------------------------------------------------------
+
+function leadTierText(tier: string) {
+  return tier === "free" ? "免费" : tier === "byok_free" ? "自带Key·免费额度" : "付费·自带Key";
+}
+
+function leadCategoryText(category: string) {
+  return category === "web" ? "Web搜索" : category === "company" ? "公司库" : "邮箱发现";
+}
+
+function renderLeadSourceChips() {
+  const box = qs<HTMLElement>("#leadSourceChips");
+  if (!box) return;
+  if (!state.leadProviders.length) {
+    box.innerHTML = `<span class="empty-inline">暂无数据源，点击“数据源中心”配置。</span>`;
+    return;
+  }
+  box.innerHTML = state.leadProviders.map((provider) => {
+    const selected = state.selectedLeadSources.includes(provider.id);
+    const cls = provider.ready ? (selected ? "ready active" : "ready") : "needkey";
+    const stateText = provider.ready ? (provider.requiresKey ? "已连接" : "内置") : "未配置";
+    return `<button type="button" class="lead-source-chip ${cls}" data-lead-provider="${escapeHtml(provider.id)}"><span class="dot"></span><span class="ls-chip-name">${escapeHtml(provider.name)}</span><small>${stateText}</small></button>`;
+  }).join("");
+  qsa<HTMLButtonElement>("[data-lead-provider]", box).forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const id = chip.dataset.leadProvider || "";
+      const provider = state.leadProviders.find((item) => item.id === id);
+      if (!provider) return;
+      if (!provider.ready) {
+        openLeadSourceCenter(id);
+        return;
+      }
+      state.leadSourceSelectionTouched = true;
+      if (state.selectedLeadSources.includes(id)) state.selectedLeadSources = state.selectedLeadSources.filter((item) => item !== id);
+      else state.selectedLeadSources = [...state.selectedLeadSources, id];
+      renderLeadSourceChips();
+    });
+  });
+}
+
+function leadSourceCardsHtml(focusId?: string) {
+  const cards = state.leadProviders.map((provider) => {
+    const statusCls = !provider.ready ? "warn" : provider.lastTestStatus === "failed" ? "fail" : provider.lastTestStatus === "passed" ? "ok" : "ok";
+    const statusText = !provider.requiresKey
+      ? "内置免费源，无需配置"
+      : provider.ready
+        ? (provider.lastTestStatus === "passed" ? "已连接并通过测试" : provider.lastTestStatus === "failed" ? `测试失败：${provider.lastTestMessage || "请检查 Key"}` : "已保存 Key，建议点测试连接")
+        : "未配置 API Key";
+    const caps = provider.capabilities.map((cap) => `<span class="ls-cap">${escapeHtml(cap)}</span>`).join("");
+    const form = provider.requiresKey ? `
+      <div class="ls-form">
+        <input type="password" data-ls-key="${escapeHtml(provider.id)}" placeholder="${provider.hasApiKey ? "已保存（留空不修改）" : "粘贴 API Key"}" autocomplete="off">
+        <div class="ls-form-actions">
+          <button class="btn primary" type="button" data-ls-save="${escapeHtml(provider.id)}">保存并启用</button>
+          <button class="btn" type="button" data-ls-test="${escapeHtml(provider.id)}">测试连接</button>
+          ${provider.hasApiKey ? `<button class="btn" type="button" data-ls-delete="${escapeHtml(provider.id)}">清除</button>` : ""}
+        </div>
+        ${provider.usage ? `<div class="ls-usage">${escapeHtml(provider.usage)}</div>` : ""}
+        <div class="ls-usage">${escapeHtml(provider.keyHint)}</div>
+      </div>` : `<div class="ls-usage">${escapeHtml(provider.costNote)}</div>`;
+    return `
+      <div class="ls-card ${provider.ready && provider.requiresKey ? "is-ready" : ""} ${focusId === provider.id ? "is-open" : ""}">
+        <div class="ls-card-top">
+          <div><h4>${escapeHtml(provider.name)}</h4><p>${leadCategoryText(provider.category)} · ${escapeHtml(provider.costNote)}</p></div>
+          <span class="ls-tier ${provider.tier}">${leadTierText(provider.tier)}</span>
+        </div>
+        <div class="ls-caps">${caps}</div>
+        <div class="ls-status ${statusCls}"><span class="dot"></span>${escapeHtml(statusText)}</div>
+        ${form}
+        <a class="ls-docs" href="${escapeHtml(provider.docsUrl)}" target="_blank" rel="noreferrer">查看官方文档 ↗</a>
+      </div>`;
+  }).join("");
+  return `<p class="ls-center-intro">免费源无需配置即可使用；付费/自带 Key 源在此粘贴 API Key、测试连接后即可在搜客中启用。Key 仅本人可见，页面不回显明文。</p><div class="ls-grid">${cards}</div>`;
+}
+
+function bindLeadSourceCards() {
+  const modal = qs<HTMLElement>("#appModal");
+  if (!modal) return;
+  qsa<HTMLButtonElement>("[data-ls-save]", modal).forEach((button) => button.addEventListener("click", () => void saveLeadSourceConfig(button.dataset.lsSave || "", button)));
+  qsa<HTMLButtonElement>("[data-ls-test]", modal).forEach((button) => button.addEventListener("click", () => void testLeadSourceConfig(button.dataset.lsTest || "", button)));
+  qsa<HTMLButtonElement>("[data-ls-delete]", modal).forEach((button) => button.addEventListener("click", () => void deleteLeadSourceConfig(button.dataset.lsDelete || "", button)));
+}
+
+function openLeadSourceCenter(focusId?: string) {
+  openModal("数据源中心", leadSourceCardsHtml(focusId), `<button class="btn" data-modal-close>关闭</button>`);
+  bindLeadSourceCards();
+}
+
+function refreshLeadSourceCenter(providers?: LeadProviderStatus[]) {
+  if (providers) state.leadProviders = providers;
+  if (!state.leadSourceSelectionTouched) {
+    state.selectedLeadSources = state.leadProviders.filter((item) => item.ready && item.enabled).map((item) => item.id);
+  }
+  renderLeadSourceChips();
+  const modal = qs<HTMLElement>("#appModal");
+  if (modal?.classList.contains("active")) {
+    const body = qs<HTMLElement>("#modalBody");
+    if (body) {
+      body.innerHTML = leadSourceCardsHtml();
+      bindLeadSourceCards();
+    }
+  }
+}
+
+async function saveLeadSourceConfig(providerId: string, button?: HTMLButtonElement) {
+  if (!providerId) return;
+  const input = qs<HTMLInputElement>(`[data-ls-key="${providerId}"]`);
+  const key = input?.value.trim() || "";
+  const provider = state.leadProviders.find((item) => item.id === providerId);
+  if (provider?.requiresKey && !key && !provider.hasApiKey) {
+    toast("请先粘贴该数据源的 API Key", "error");
+    return;
+  }
+  const original = button?.textContent || "";
+  if (button) { button.disabled = true; button.textContent = "保存中"; }
+  try {
+    const result = await api<{ providers: LeadProviderStatus[] }>("/api/lead-finder/source-config", {
+      method: "POST",
+      body: JSON.stringify({ provider: providerId, apiKey: key, enabled: true })
+    });
+    state.leadSourceSelectionTouched = true;
+    if (!state.selectedLeadSources.includes(providerId)) state.selectedLeadSources = [...state.selectedLeadSources, providerId];
+    refreshLeadSourceCenter(result.providers);
+    toast(`已保存并启用：${provider?.name || providerId}`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "保存失败", "error");
+  } finally {
+    if (button) { button.disabled = false; button.textContent = original || "保存并启用"; }
+  }
+}
+
+async function testLeadSourceConfig(providerId: string, button?: HTMLButtonElement) {
+  if (!providerId) return;
+  const input = qs<HTMLInputElement>(`[data-ls-key="${providerId}"]`);
+  const key = input?.value.trim() || "";
+  const provider = state.leadProviders.find((item) => item.id === providerId);
+  const original = button?.textContent || "";
+  if (button) { button.disabled = true; button.textContent = "测试中"; }
+  try {
+    // 若填了新 key，先静默保存再测试，保证“填上 key 就能测通”
+    if (provider?.requiresKey && key) {
+      await api("/api/lead-finder/source-config", { method: "POST", body: JSON.stringify({ provider: providerId, apiKey: key, enabled: true }) });
+    }
+    const result = await api<{ ok: boolean; message: string; usage: string; providers: LeadProviderStatus[] }>("/api/lead-finder/source-config/test", {
+      method: "POST",
+      body: JSON.stringify({ provider: providerId })
+    });
+    refreshLeadSourceCenter(result.providers);
+    toast(result.message + (result.usage ? ` · ${result.usage}` : ""), result.ok ? "ok" : "error");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "测试失败", "error");
+  } finally {
+    if (button) { button.disabled = false; button.textContent = original || "测试连接"; }
+  }
+}
+
+async function deleteLeadSourceConfig(providerId: string, button?: HTMLButtonElement) {
+  if (!providerId) return;
+  if (button) { button.disabled = true; button.textContent = "清除中"; }
+  try {
+    const result = await api<{ providers: LeadProviderStatus[] }>(`/api/lead-finder/source-config/${encodeURIComponent(providerId)}`, { method: "DELETE" });
+    state.selectedLeadSources = state.selectedLeadSources.filter((item) => item !== providerId);
+    refreshLeadSourceCenter(result.providers);
+    toast("已清除该数据源的 API Key");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "清除失败", "error");
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "清除"; }
+  }
+}
+
+function syncLeadRowFields(row: HTMLElement) {
+  const id = row.dataset.leadId;
+  const item = state.websiteOpportunities.find((o) => o.id === id);
+  if (!item) return;
+  const read = (field: string) => row.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-lead-field="${field}"]`)?.value.trim();
+  const company = read("company");
+  if (company) item.company = company;
+  const business = read("business"); if (business !== undefined) item.business = business;
+  const country = read("country"); if (country !== undefined) item.country = country;
+  const website = read("website"); if (website) item.website = website;
+  const contact = read("contact"); if (contact !== undefined) item.contact = contact;
+  const contactInfo = read("contactInfo"); if (contactInfo !== undefined) item.contactInfo = contactInfo;
+  const description = read("description"); if (description !== undefined) item.description = description;
+}
+
+function leadSourceTag(item: WebsiteOpportunity) {
+  if (!item.source && !item.sourceLabel) return `<span class="lead-src-tag">导入</span>`;
+  const provider = state.leadProviders.find((p) => p.id === item.source);
+  const tier = provider?.tier || "byok_free";
+  const label = item.sourceLabel || provider?.name || item.source || "来源";
+  return `<span class="lead-src-tag ${tier}">${escapeHtml(label)}</span>`;
+}
+
 function renderLeadFinder(opportunities = state.websiteOpportunities) {
   const rows = qs<HTMLElement>("#leadFinderResultRows");
   const total = qs<HTMLElement>("#leadFinderTotalCount");
@@ -5481,6 +5726,10 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
   const sourceAiBadge = qs<HTMLElement>("#leadFinderSourceAiBadge");
   const ready = Boolean(state.aiConfig?.enabled && state.aiConfig?.hasApiKey && state.aiConfig?.useLeadFinder);
   const sortedAll = [...opportunities].sort((a, b) => {
+    // 本轮搜客/勾选的新结果置顶，避免被历史高分种子埋没
+    const aSel = a.selected ? 1 : 0;
+    const bSel = b.selected ? 1 : 0;
+    if (aSel !== bSel) return bSel - aSel;
     if (a.status !== b.status) return a.status === "synced" ? 1 : -1;
     return leadFinderScore(b) - leadFinderScore(a);
   });
@@ -5511,21 +5760,25 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
     return `
       <tr data-lead-id="${escapeHtml(item.id)}" class="${selected ? "selected" : ""}">
         <td><input type="checkbox" data-lead-select ${(item.selected ?? item.status !== "synced") ? "checked" : ""}></td>
-        <td class="lead-company-cell" data-lead-pick><div class="lead-cell-title"><input data-lead-field="company" value="${escapeHtml(item.company)}"><span>${escapeHtml(websiteDomain(item.website))}</span><div class="lead-cell-tags"><span class="lead-mini-badge">${escapeHtml(item.country || "未知")}</span><span class="lead-mini-badge">${score >= 76 ? "高匹配" : "待补全"}</span></div></div></td>
+        <td class="lead-company-cell" data-lead-pick><div class="lead-cell-title"><input data-lead-field="company" value="${escapeHtml(item.company)}"><a href="${escapeHtml(normalizeWebsiteLink(item.website))}" target="_blank" rel="noreferrer" class="lead-cell-domain">${escapeHtml(websiteDomain(item.website) || "官网待补")}</a></div><input type="hidden" data-lead-field="website" value="${escapeHtml(item.website)}"><input type="hidden" data-lead-field="description" value="${escapeHtml(item.description)}"></td>
+        <td>${leadSourceTag(item)}</td>
         <td><input data-lead-field="business" value="${escapeHtml(item.business)}"></td>
         <td><input data-lead-field="country" value="${escapeHtml(item.country)}"></td>
-        <td><input data-lead-field="website" value="${escapeHtml(item.website)}"></td>
         <td><input data-lead-field="contact" value="${escapeHtml(item.contact)}"></td>
         <td><input data-lead-field="contactInfo" value="${escapeHtml(item.contactInfo)}"></td>
-        <td><textarea data-lead-field="description">${escapeHtml(item.description)}</textarea></td>
-        <td><div class="lead-score"><b>${score}分</b><i style="--p:${score}%"></i></div></td>
-        <td>${badge(item.status === "synced" ? "已同步" : "待确认", item.status === "synced" ? "green" : "amber")}${badge(duplicate.text, duplicate.tone)}${badge(item.parseMode === "ai" ? "AI" : "规则", item.parseMode === "ai" ? "green" : "")}</td>
+        <td><div class="lead-score"><b>${score}</b><i style="--p:${score}%"></i></div></td>
+        <td class="lead-status-cell">${badge(item.status === "synced" ? "已同步" : "待确认", item.status === "synced" ? "green" : "amber")}${badge(duplicate.text, duplicate.tone)}${badge(item.parseMode === "ai" ? "AI" : "规则", item.parseMode === "ai" ? "green" : "")}</td>
       </tr>
     `;
-  }).join("") : `<tr><td colspan="10" class="empty-cell">暂无候选客户。输入官网后点击“开始搜客”。</td></tr>`;
+  }).join("") : `<tr><td colspan="9" class="empty-cell">暂无候选客户。填写画像、选好数据源后点击“生成并运行任务”。</td></tr>`;
   qsa<HTMLElement>("#leadFinderResultRows tr[data-lead-id]").forEach((row) => {
+    // 行内编辑即时同步到 state，保证重渲染与详情面板反映最新编辑
+    qsa<HTMLInputElement | HTMLTextAreaElement>("[data-lead-field]", row).forEach((field) => {
+      field.addEventListener("input", () => syncLeadRowFields(row));
+    });
     row.addEventListener("click", (event) => {
       if ((event.target as HTMLElement).matches("input, textarea")) return;
+      syncLeadRowFields(row);
       state.selectedLeadFinderId = row.dataset.leadId || null;
       renderLeadFinder(state.websiteOpportunities);
     });
@@ -5545,6 +5798,20 @@ async function runLeadFinder(button?: HTMLButtonElement) {
     toast("请先配置并启用 AI 模型，或关闭 AI 解析", "error");
     return;
   }
+  // 选中且已就绪的数据源；未选时用免费源兜底
+  const readySelected = state.selectedLeadSources.filter((id) => state.leadProviders.find((p) => p.id === id)?.ready);
+  const sources = readySelected.length ? readySelected : state.leadProviders.filter((p) => p.ready && !p.requiresKey).map((p) => p.id);
+  const limit = Number(qs<HTMLSelectElement>("#leadLimit")?.value || 12);
+
+  // 付费源成本护栏：搜索前确认（Round 4 定稿）
+  if (!urls.length) {
+    const paid = sources.map((id) => state.leadProviders.find((p) => p.id === id)).filter((p): p is LeadProviderStatus => Boolean(p && p.tier === "paid"));
+    if (paid.length) {
+      const lines = paid.map((p) => `· ${p.name}：约 ${Math.min(limit, 15)} 次调用${p.usage ? `（${p.usage}）` : ""}`).join("\n");
+      if (!window.confirm(`本次将调用付费/计费数据源：\n${lines}\n\n确认开始搜客吗？`)) return;
+    }
+  }
+
   const job = createLeadFinderJob("running");
   if (button) {
     button.disabled = true;
@@ -5552,7 +5819,7 @@ async function runLeadFinder(button?: HTMLButtonElement) {
   }
   try {
     if (!urls.length) {
-      const result = await api<{ opportunities: WebsiteOpportunity[]; sources: { gleif: number; wikidata: number } }>("/api/lead-finder/free-search", {
+      const result = await api<{ opportunities: WebsiteOpportunity[]; sourceStats: Array<{ id: string; name: string; count: number; error?: string; usage?: string }>; skipped: string[] }>("/api/lead-finder/search", {
         method: "POST",
         body: JSON.stringify({
           goal: qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim() || "",
@@ -5560,7 +5827,10 @@ async function runLeadFinder(button?: HTMLButtonElement) {
           countries: qs<HTMLInputElement>("#leadCountries")?.value.trim() || "",
           industry: qs<HTMLInputElement>("#leadIndustryInput")?.value.trim() || "",
           customerType: qs<HTMLSelectElement>("#leadCustomerTypes")?.value || "",
-          limit: Number(qs<HTMLSelectElement>("#leadLimit")?.value || 10)
+          excludeKeywords: qs<HTMLInputElement>("#leadExcludeKeywords")?.value.trim() || "",
+          sources,
+          useAi,
+          limit
         })
       });
       const existing = state.websiteOpportunities
@@ -5571,7 +5841,8 @@ async function runLeadFinder(button?: HTMLButtonElement) {
       updateLeadFinderJob(job.id, result.opportunities.map((item) => item.id), result.opportunities.length ? "done" : "needs_input");
       renderLeadFinder(state.websiteOpportunities);
       renderProspectList();
-      toast(result.opportunities.length ? `免费公开API已找到 ${result.opportunities.length} 条候选，GLEIF ${result.sources.gleif} / Wikidata ${result.sources.wikidata}` : "免费公开API暂无结果；右侧已生成平台搜索入口，可继续导入官网/询盘链接");
+      const statLine = result.sourceStats.filter((item) => item.count || item.error).map((item) => `${item.name} ${item.error ? "✕" : item.count}`).join(" · ");
+      toast(result.opportunities.length ? `已找到 ${result.opportunities.length} 条候选（${statLine || "多源合并"}）` : `本次未命中${result.skipped.length ? `；未配置：${result.skipped.join("、")}` : "，可放宽条件或增加数据源"}`, result.opportunities.length ? "ok" : "error");
       return;
     }
     const result = await api<{ opportunities: WebsiteOpportunity[] }>("/api/tools/website-scrape/preview", {
@@ -6534,9 +6805,14 @@ function installEvents() {
     qs<HTMLElement>(selector)?.addEventListener("input", renderLeadFinderSearchLinks);
     qs<HTMLElement>(selector)?.addEventListener("change", renderLeadFinderSearchLinks);
   });
-  qsa<HTMLInputElement>("[data-lead-source]").forEach((input) => {
-    input.addEventListener("change", renderLeadFinderSearchLinks);
+  qsa<HTMLButtonElement>(".lead-entry-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      chip.classList.toggle("active");
+      renderLeadFinderSearchLinks();
+    });
   });
+  qs<HTMLButtonElement>("#leadSourceCenterButton")?.addEventListener("click", () => openLeadSourceCenter());
+  qs<HTMLButtonElement>("#leadSourceManageInline")?.addEventListener("click", () => openLeadSourceCenter());
   qs<HTMLButtonElement>("#leadFinderStartButton")?.addEventListener("click", (event) => void runLeadFinder(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderStartButtonInline")?.addEventListener("click", (event) => void runLeadFinder(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderSyncButton")?.addEventListener("click", (event) => void syncLeadFinderRows(event.currentTarget as HTMLButtonElement));

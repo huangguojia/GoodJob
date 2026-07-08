@@ -1,7 +1,7 @@
 import mysql from "mysql2/promise";
-import { aiModelConfigs, caseStudies, competitors, customers, deals, examAttempts, examQuestionLinks, examQuestions, exams, importExportJobs, knowledgeAssets, memos, ocrJobs, planTasks, planTemplates, problems, reminders, todos, tradeDocuments, users, wecomMessages, websiteOpportunities } from "./data.js";
+import { aiModelConfigs, caseStudies, competitors, customers, deals, examAttempts, examQuestionLinks, examQuestions, exams, importExportJobs, knowledgeAssets, leadSourceConfigs, memos, ocrJobs, planTasks, planTemplates, problems, reminders, todos, tradeDocuments, users, wecomMessages, websiteOpportunities } from "./data.js";
 import type { CrmStore } from "./store.js";
-import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Memo, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, LeadSourceConfig, Memo, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 const defaultUrl = "mysql://goodjob:change_me@127.0.0.1:3306/goodjob_crm";
 
@@ -28,6 +28,7 @@ export async function createMysqlStore(): Promise<CrmStore> {
 		    ocrJobs: await loadOcrJobs(pool),
 		    websiteOpportunities: await loadWebsiteOpportunities(pool),
 		    aiModelConfigs: await loadAiModelConfigs(pool),
+		    leadSourceConfigs: await loadLeadSourceConfigs(pool),
 		    planTasks: await loadPlanTasks(pool),
 		    planTemplates: await loadPlanTemplates(pool),
 		    problems: await loadProblems(pool),
@@ -56,6 +57,7 @@ export async function createMysqlStore(): Promise<CrmStore> {
 	    store.ocrJobs.push(...ocrJobs);
 	    store.websiteOpportunities.push(...websiteOpportunities);
 	    store.aiModelConfigs.push(...aiModelConfigs);
+	    store.leadSourceConfigs.push(...leadSourceConfigs);
 	    store.planTasks.push(...planTasks);
 	    store.planTemplates.push(...planTemplates);
 		    store.problems.push(...problems);
@@ -374,6 +376,9 @@ async function ensureSchema(pool: mysql.Pool) {
     INDEX idx_website_opps_team(team_id)
   )`);
   await ensureColumn(pool, "website_opportunities", "parse_mode", "VARCHAR(20) DEFAULT 'rule'");
+  await ensureColumn(pool, "website_opportunities", "source", "VARCHAR(40) DEFAULT ''");
+  await ensureColumn(pool, "website_opportunities", "source_label", "VARCHAR(80) DEFAULT ''");
+  await ensureColumn(pool, "website_opportunities", "confidence", "INT NULL");
   await ensureColumn(pool, "website_opportunities", "last_development_email_at", "DATETIME NULL");
   await ensureColumn(pool, "website_opportunities", "last_development_email_subject", "VARCHAR(255) DEFAULT ''");
   await ensureColumn(pool, "website_opportunities", "last_development_email_to", "VARCHAR(180) DEFAULT ''");
@@ -410,6 +415,22 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "ai_model_configs", "last_test_at", "DATETIME NULL");
   await ensureColumn(pool, "ai_model_configs", "last_test_status", "VARCHAR(20) DEFAULT 'untested'");
   await ensureColumn(pool, "ai_model_configs", "last_test_message", "VARCHAR(255) DEFAULT ''");
+  await pool.query(`CREATE TABLE IF NOT EXISTS lead_source_configs (
+    id VARCHAR(64) PRIMARY KEY,
+    provider VARCHAR(40) NOT NULL,
+    scope VARCHAR(20) NOT NULL DEFAULT 'personal',
+    api_key TEXT,
+    base_url VARCHAR(255) DEFAULT '',
+    enabled BOOLEAN DEFAULT FALSE,
+    last_test_at DATETIME NULL,
+    last_test_status VARCHAR(20) DEFAULT 'untested',
+    last_test_message VARCHAR(255) DEFAULT '',
+    usage_json TEXT,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_lead_source_owner(owner_id)
+  )`);
   await pool.query(`CREATE TABLE IF NOT EXISTS import_export_jobs (
     id VARCHAR(64) PRIMARY KEY,
     name VARCHAR(200) NOT NULL,
@@ -750,6 +771,9 @@ async function loadWebsiteOpportunities(pool: mysql.Pool): Promise<WebsiteOpport
     customerId: row.customer_id || undefined,
     dealId: row.deal_id || undefined,
     parseMode: row.parse_mode || "rule",
+    source: row.source || undefined,
+    sourceLabel: row.source_label || undefined,
+    confidence: row.confidence === undefined || row.confidence === null ? undefined : Number(row.confidence),
     lastDevelopmentEmailAt: row.last_development_email_at instanceof Date ? row.last_development_email_at.toISOString() : row.last_development_email_at || "",
     lastDevelopmentEmailSubject: row.last_development_email_subject || "",
     lastDevelopmentEmailTo: row.last_development_email_to || "",
@@ -776,6 +800,24 @@ async function loadAiModelConfigs(pool: mysql.Pool): Promise<AiModelConfig[]> {
     lastTestAt: row.last_test_at instanceof Date ? row.last_test_at.toISOString() : row.last_test_at || undefined,
     lastTestStatus: row.last_test_status || "untested",
     lastTestMessage: row.last_test_message || "",
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at
+  }));
+}
+
+async function loadLeadSourceConfigs(pool: mysql.Pool): Promise<LeadSourceConfig[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM lead_source_configs ORDER BY updated_at DESC")).map((row) => ({
+    id: row.id,
+    provider: row.provider,
+    scope: row.scope === "team" ? "team" : "personal",
+    apiKey: row.api_key || "",
+    baseUrl: row.base_url || "",
+    enabled: Boolean(row.enabled),
+    lastTestAt: row.last_test_at instanceof Date ? row.last_test_at.toISOString() : row.last_test_at || undefined,
+    lastTestStatus: row.last_test_status || "untested",
+    lastTestMessage: row.last_test_message || "",
+    usageJson: row.usage_json || undefined,
     ownerId: row.owner_id,
     teamId: row.team_id,
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at
@@ -871,8 +913,9 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
     await replaceRows(connection, "trade_documents", store.tradeDocuments, (item) => [item.id, item.type, item.title, item.number, item.issueDate, item.buyer, item.buyerAddress, item.buyerContact, item.seller, item.sellerAddress, item.currency, item.incoterm, item.paymentTerm, item.shippingMethod, item.portLoading, item.portDischarge, item.validityDate, item.bankInfo, item.notes, item.templateStyle, item.status, item.ownerId, item.teamId, JSON.stringify(item.items), mysqlDate(item.updatedAt)], "(id,doc_type,title,doc_number,issue_date,buyer,buyer_address,buyer_contact,seller,seller_address,currency,incoterm,payment_term,shipping_method,port_loading,port_discharge,validity_date,bank_info,notes,template_style,status,owner_id,team_id,items_json,updated_at)");
 	    await replaceRows(connection, "wecom_messages", store.wecomMessages, (item) => [item.id, item.customerId, item.summary, item.ownerId, item.teamId, item.status], "(id,customer_id,summary,owner_id,team_id,status)");
 	    await replaceRows(connection, "ocr_jobs", store.ocrJobs, (item) => [item.id, item.status, item.confidence, JSON.stringify(item.fields), null], "(id,status,confidence,fields_json,created_by)");
-	    await replaceRows(connection, "website_opportunities", store.websiteOpportunities, (item) => [item.id, item.company, item.business, item.country, item.website, item.contact, item.contactInfo, item.description, item.ownerId, item.teamId, item.status, item.customerId || null, item.dealId || null, item.parseMode || "rule", item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailSubject || "", item.lastDevelopmentEmailTo || "", mysqlDate(item.createdAt)], "(id,company,business,country,website,contact,contact_info,description,owner_id,team_id,status,customer_id,deal_id,parse_mode,last_development_email_at,last_development_email_subject,last_development_email_to,created_at)");
+	    await replaceRows(connection, "website_opportunities", store.websiteOpportunities, (item) => [item.id, item.company, item.business, item.country, item.website, item.contact, item.contactInfo, item.description, item.ownerId, item.teamId, item.status, item.customerId || null, item.dealId || null, item.parseMode || "rule", item.source || "", item.sourceLabel || "", item.confidence ?? null, item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailSubject || "", item.lastDevelopmentEmailTo || "", mysqlDate(item.createdAt)], "(id,company,business,country,website,contact,contact_info,description,owner_id,team_id,status,customer_id,deal_id,parse_mode,source,source_label,confidence,last_development_email_at,last_development_email_subject,last_development_email_to,created_at)");
 	    await replaceRows(connection, "ai_model_configs", store.aiModelConfigs, (item) => [item.id, item.provider, item.protocol || "openai-compatible", item.name, item.baseUrl, item.model, item.apiKey, item.enabled, item.temperature ?? 0.1, item.useLeadFinder ?? true, item.useWebsiteParse ?? true, item.useScoring ?? true, item.useEmailDraft ?? true, item.useExam ?? false, item.lastTestAt ? mysqlDate(item.lastTestAt) : null, item.lastTestStatus || "untested", item.lastTestMessage || "", item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,provider,protocol,name,base_url,model,api_key,enabled,temperature,use_lead_finder,use_website_parse,use_scoring,use_email_draft,use_exam,last_test_at,last_test_status,last_test_message,owner_id,team_id,updated_at)");
+	    await replaceRows(connection, "lead_source_configs", store.leadSourceConfigs, (item) => [item.id, item.provider, item.scope || "personal", item.apiKey, item.baseUrl || "", item.enabled, item.lastTestAt ? mysqlDate(item.lastTestAt) : null, item.lastTestStatus || "untested", item.lastTestMessage || "", item.usageJson || "", item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,provider,scope,api_key,base_url,enabled,last_test_at,last_test_status,last_test_message,usage_json,owner_id,team_id,updated_at)");
 	    await replaceRows(connection, "problems", store.problems, (item) => [item.id, item.title, item.category, item.severity, item.status, item.ownerId, item.teamId, item.relatedCustomer, item.rootCause, item.solution, item.nextAction, item.dueAt, mysqlDate(item.createdAt)], "(id,title,category,severity,status,owner_id,team_id,related_customer,root_cause,solution,next_action,due_at,created_at)");
 	    await replaceRows(connection, "memos", store.memos, (item) => [item.id, item.title, item.content, item.category, item.tags, item.ownerId, item.teamId, item.pinned, item.archived, mysqlDate(item.updatedAt)], "(id,title,content,category,tags,owner_id,team_id,pinned,archived,updated_at)");
 	    await replaceRows(connection, "competitors", store.competitors, (item) => [item.id, item.company, item.country, item.segment, item.threatLevel, item.website, item.strengths, item.weaknesses, item.competingProducts, item.ourStrategy, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,company,country,segment,threat_level,website,strengths,weaknesses,competing_products,our_strategy,owner_id,team_id,updated_at)");

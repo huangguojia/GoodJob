@@ -184,6 +184,9 @@ CREATE TABLE website_opportunities (
   customer_id VARCHAR(64),
   deal_id VARCHAR(64),
   parse_mode VARCHAR(20) DEFAULT 'rule',
+  source VARCHAR(40) DEFAULT '',
+  source_label VARCHAR(80) DEFAULT '',
+  confidence INT NULL,
   last_development_email_at DATETIME NULL,
   last_development_email_subject VARCHAR(255) DEFAULT '',
   last_development_email_to VARCHAR(180) DEFAULT '',
@@ -214,6 +217,23 @@ CREATE TABLE ai_model_configs (
   team_id VARCHAR(64) NOT NULL,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_ai_model_owner(owner_id)
+);
+
+CREATE TABLE lead_source_configs (
+  id VARCHAR(64) PRIMARY KEY,
+  provider VARCHAR(40) NOT NULL,
+  scope VARCHAR(20) NOT NULL DEFAULT 'personal',
+  api_key TEXT,
+  base_url VARCHAR(255) DEFAULT '',
+  enabled BOOLEAN DEFAULT FALSE,
+  last_test_at DATETIME NULL,
+  last_test_status VARCHAR(20) DEFAULT 'untested',
+  last_test_message VARCHAR(255) DEFAULT '',
+  usage_json TEXT,
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_lead_source_owner(owner_id)
 );
 
 CREATE TABLE import_export_jobs (

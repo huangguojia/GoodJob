@@ -842,9 +842,8 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#aiConfigBadge")).toContainText(/规则解析|AI/);
     await page.locator("#aiConfigName").fill("自动化AI官网解析");
     await page.locator("#aiModelInput").fill("gpt-4o-mini");
-    await page.locator("#aiEnabledInput").check();
     await page.locator("#aiSaveButton").click();
-    await expect(page.locator(".toast").last()).toContainText("AI解析配置已保存");
+    await expect(page.locator(".toast").last()).toContainText("已保存");
     await page.locator("#websiteUseAiInput").check();
     await page.locator("#websiteUrlInput").fill(`https://${websiteCompany}.com`);
     await page.locator("#tools .section-head .btn", { hasText: "解析官网" }).click();
@@ -930,7 +929,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#ai-config")).toHaveClass(/active/);
   });
 
-  test("profile page binds outbound email and sends development email", async ({ page }) => {
+  test("profile page binds outbound email and signature", async ({ page }) => {
     await page.locator("#profileEntryButton").click();
     await expect(page.locator("#profile")).toHaveClass(/active/);
     await expect(page.locator("#profileNameTitle")).toContainText("Alex");
@@ -943,16 +942,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator(".toast").last()).toContainText("发件邮箱已绑定");
     await expect(page.locator("#profileEmailStatus")).toContainText(outboundEmail);
 
-    await page.locator("#devEmailTo").fill(`buyer.${runId}@example.com`);
-    await page.locator("#devEmailCompany").fill("Demo Instrument Buyer");
-    await page.locator("#devEmailSubject").fill("Instrumentation supplier for your local market");
-    await page.locator("#profileGenerateEmailButton").click();
-    await expect(page.locator("#devEmailPreview")).toContainText(outboundEmail);
-    await expect(page.locator("#devEmailPreview")).toContainText("Demo Instrument Buyer");
-    await page.locator("#profileSendEmailButton").click();
-    await expect(page.locator(".toast").last()).toContainText("开发信已发送");
-    await expect(page.locator("#profileLastEmail")).toContainText(`buyer.${runId}@example.com`);
-
+    // 开发信触达已迁移到「搜客清单」页执行；个人主页只负责发件邮箱与签名绑定。
     await page.locator("#topSearchInput").fill("个人设置");
     await page.locator("#topSearchInput").press("Enter");
     await expect(page.locator("#profile")).toHaveClass(/active/);

@@ -5,7 +5,8 @@ import { z } from "zod";
 import { canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, publicUser, requireAuth, signToken } from "./auth.js";
 import { createMysqlStore } from "./mysql-store.js";
 import { getStore, setStore } from "./store.js";
-import type { AiModelConfig, Customer, Deal, Exam, ExamAttempt, ExamQuestion, PlanTask, PlanTemplate, SessionUser, Todo, TradeDocument, WebsiteOpportunity } from "./types.js";
+import { LEAD_PROVIDERS, getProvider, providerMeta, type LeadProvider, type LeadQuery, type RawLead } from "./lead-providers.js";
+import type { AiModelConfig, Customer, Deal, Exam, ExamAttempt, ExamQuestion, LeadSourceConfig, PlanTask, PlanTemplate, SessionUser, Todo, TradeDocument, WebsiteOpportunity } from "./types.js";
 
 export const app = express();
 app.use(cors());
@@ -2092,6 +2093,326 @@ app.post("/api/lead-finder/free-search", requireAuth, asyncRoute(async (req, res
   res.json({ opportunities: merged, sources: { gleif: gleif.length, wikidata: wikidata.length } });
 }));
 
+// ---------------------------------------------------------------------------
+// 自动获客 · 数据源中心（Provider 注册表 + 用户 Key 配置 + 统一搜索）
+// ---------------------------------------------------------------------------
+
+function getLeadSourceConfig(user: SessionUser, provider: string): LeadSourceConfig | undefined {
+  return getStore().leadSourceConfigs.find((item) => item.provider === provider && item.ownerId === user.id);
+}
+
+function publicLeadSourceConfig(config: LeadSourceConfig) {
+  return {
+    id: config.id,
+    provider: config.provider,
+    scope: config.scope,
+    apiKey: config.apiKey ? `****${config.apiKey.slice(-4)}` : "",
+    hasApiKey: Boolean(config.apiKey),
+    baseUrl: config.baseUrl || "",
+    enabled: config.enabled,
+    lastTestAt: config.lastTestAt || "",
+    lastTestStatus: config.lastTestStatus || "untested",
+    lastTestMessage: config.lastTestMessage || "",
+    usage: config.usageJson || "",
+    updatedAt: config.updatedAt
+  };
+}
+
+function providerStatusFor(user: SessionUser, provider: LeadProvider) {
+  const config = getLeadSourceConfig(user, provider.id);
+  const hasKey = !provider.requiresKey || Boolean(config?.apiKey);
+  const enabled = provider.requiresKey ? Boolean(config?.enabled && config?.apiKey) : config ? config.enabled : true;
+  return {
+    ...providerMeta(provider),
+    hasApiKey: Boolean(config?.apiKey),
+    ready: hasKey,
+    enabled,
+    lastTestStatus: config?.lastTestStatus || (provider.requiresKey ? "untested" : "passed"),
+    lastTestMessage: config?.lastTestMessage || "",
+    lastTestAt: config?.lastTestAt || "",
+    usage: config?.usageJson || ""
+  };
+}
+
+// AI 搜索作为一种数据源：不需要独立 API Key，直接复用「AI 模型配置」里已启用且勾选自动获客的模型
+function aiSearchStatus(user: SessionUser) {
+  const config = getAiConfig(user, "leadFinder");
+  const ready = Boolean(config?.enabled && config?.apiKey && config?.useLeadFinder);
+  return {
+    id: "ai_search",
+    name: "AI 搜索",
+    tier: "ai" as const,
+    category: "ai" as const,
+    requiresKey: false,
+    capabilities: ["ai", "company"],
+    docsUrl: "",
+    keyHint: "使用「AI 模型配置」中已启用并勾选自动获客的模型，无需在此另填 Key。",
+    defaultBaseUrl: "",
+    costNote: "调用你配置的 AI 模型直接生成候选公司，结果需人工核实。",
+    hasApiKey: ready,
+    ready,
+    enabled: ready,
+    lastTestStatus: ready ? "passed" : "untested",
+    lastTestMessage: ready ? `当前模型：${config?.model || "已配置"}` : "请先在「AI 模型配置」启用模型并勾选“自动获客”",
+    lastTestAt: config?.lastTestAt || "",
+    usage: ""
+  };
+}
+
+function allProviderStatuses(user: SessionUser) {
+  return [aiSearchStatus(user), ...LEAD_PROVIDERS.map((provider) => providerStatusFor(user, provider))];
+}
+
+app.get("/api/lead-finder/providers", requireAuth, (req, res) => {
+  res.json({ providers: allProviderStatuses(req.user!) });
+});
+
+app.post("/api/lead-finder/source-config", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    provider: z.string().min(1).max(40),
+    apiKey: z.string().max(400).optional().default(""),
+    baseUrl: z.string().max(255).optional().default(""),
+    enabled: z.boolean().optional().default(false)
+  });
+  const body = schema.parse(req.body);
+  const provider = getProvider(body.provider);
+  if (!provider) {
+    res.status(404).json({ message: "未知数据源" });
+    return;
+  }
+  const store = getStore();
+  const existing = getLeadSourceConfig(req.user!, body.provider);
+  const apiKey = body.apiKey && !body.apiKey.includes("****") ? body.apiKey : existing?.apiKey || "";
+  if (provider.requiresKey && body.enabled && !apiKey) {
+    res.status(400).json({ message: "启用前请先填写该数据源的 API Key" });
+    return;
+  }
+  const config: LeadSourceConfig = {
+    id: existing?.id || `ls_${provider.id}_${req.user!.id}_${Date.now()}`,
+    provider: provider.id,
+    scope: "personal",
+    apiKey,
+    baseUrl: body.baseUrl || existing?.baseUrl || "",
+    enabled: body.enabled,
+    lastTestAt: existing?.lastTestAt,
+    lastTestStatus: existing?.lastTestStatus || "untested",
+    lastTestMessage: existing?.lastTestMessage || "",
+    usageJson: existing?.usageJson,
+    ownerId: req.user!.id,
+    teamId: req.user!.teamId,
+    updatedAt: new Date().toISOString()
+  };
+  if (existing) Object.assign(existing, config);
+  else store.leadSourceConfigs.unshift(config);
+  await store.persist();
+  res.json({ config: publicLeadSourceConfig(config), providers: allProviderStatuses(req.user!) });
+}));
+
+app.post("/api/lead-finder/source-config/test", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({ provider: z.string().min(1).max(40) });
+  const body = schema.parse(req.body);
+  const provider = getProvider(body.provider);
+  if (!provider) {
+    res.status(404).json({ message: "未知数据源" });
+    return;
+  }
+  const store = getStore();
+  const config = getLeadSourceConfig(req.user!, provider.id);
+  if (provider.requiresKey && !config?.apiKey) {
+    res.status(400).json({ message: "请先保存该数据源的 API Key，再测试连接" });
+    return;
+  }
+  let result;
+  try {
+    result = await provider.test({ apiKey: config?.apiKey || "", baseUrl: config?.baseUrl });
+  } catch (error) {
+    result = { ok: false, message: `连接异常：${error instanceof Error ? error.message : "未知错误"}` };
+  }
+  if (config) {
+    config.lastTestAt = new Date().toISOString();
+    config.lastTestStatus = result.ok ? "passed" : "failed";
+    config.lastTestMessage = result.message;
+    if (result.usage) config.usageJson = result.usage;
+    config.updatedAt = new Date().toISOString();
+    await store.persist();
+  }
+  res.json({ ok: result.ok, message: result.message, usage: result.usage || "", providers: allProviderStatuses(req.user!) });
+}));
+
+app.delete("/api/lead-finder/source-config/:provider", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const index = store.leadSourceConfigs.findIndex((item) => item.provider === req.params.provider && item.ownerId === req.user!.id);
+  if (index < 0) {
+    res.status(404).json({ message: "配置不存在或无权删除" });
+    return;
+  }
+  store.leadSourceConfigs.splice(index, 1);
+  await store.persist();
+  res.json({ providers: allProviderStatuses(req.user!) });
+}));
+
+const leadSearchSchema = z.object({
+  goal: z.string().default(""),
+  productKeywords: z.string().default(""),
+  countries: z.string().default(""),
+  industry: z.string().default(""),
+  customerType: z.string().default(""),
+  excludeKeywords: z.string().default(""),
+  sources: z.array(z.string()).default([]),
+  useAi: z.boolean().default(false),
+  limit: z.number().min(1).max(30).default(12)
+});
+
+app.post("/api/lead-finder/search", requireAuth, asyncRoute(async (req, res) => {
+  const body = leadSearchSchema.parse(req.body);
+  const store = getStore();
+  const user = req.user!;
+  const query: LeadQuery = {
+    goal: body.goal,
+    productKeywords: body.productKeywords,
+    countries: body.countries,
+    industry: body.industry,
+    customerType: body.customerType,
+    excludeKeywords: body.excludeKeywords,
+    limit: Math.min(body.limit, 15)
+  };
+
+  // 选中源 ∩ 已启用 ∩ (有 key)。免费源无 key 也可用；未选中时默认用免费源兜底。
+  const chosen = body.sources.length
+    ? LEAD_PROVIDERS.filter((provider) => body.sources.includes(provider.id))
+    : LEAD_PROVIDERS.filter((provider) => !provider.requiresKey);
+  const runnable = chosen.filter((provider) => {
+    if (!provider.requiresKey) return true;
+    const config = getLeadSourceConfig(user, provider.id);
+    return Boolean(config?.apiKey && config.enabled);
+  });
+  const skipped = chosen.filter((provider) => !runnable.includes(provider)).map((provider) => provider.name);
+  // 用户明确选了源（哪怕只选 AI 搜索）就不再兜底跑免费源；完全没选时才用免费源兜底
+  const activeProviders = runnable.length ? runnable : (body.sources.length ? [] : LEAD_PROVIDERS.filter((provider) => !provider.requiresKey));
+  const wantsAiSearch = body.sources.includes("ai_search");
+
+  const searchProviders = activeProviders.filter((provider) => provider.category !== "email");
+  const emailProviders = activeProviders.filter((provider) => provider.category === "email" && provider.enrich);
+
+  const sourceStats: Array<{ id: string; name: string; count: number; error?: string; usage?: string }> = [];
+  const collected: Array<RawLead & { source: string; sourceLabel: string }> = [];
+
+  await Promise.all(searchProviders.map(async (provider) => {
+    const config = getLeadSourceConfig(user, provider.id);
+    try {
+      const result = await provider.search(query, { apiKey: config?.apiKey || "", baseUrl: config?.baseUrl });
+      for (const lead of result.leads) {
+        if (!lead.company) continue;
+        collected.push({ ...lead, source: provider.id, sourceLabel: provider.name });
+      }
+      sourceStats.push({ id: provider.id, name: provider.name, count: result.leads.length, usage: result.usage });
+    } catch (error) {
+      sourceStats.push({ id: provider.id, name: provider.name, count: 0, error: error instanceof Error ? error.message : "调用失败" });
+    }
+  }));
+
+  // AI 搜索：用「AI 模型配置」里已启用并勾选自动获客的模型直接生成候选公司
+  if (wantsAiSearch) {
+    const aiSearchConfig = getAiConfig(user, "leadFinder");
+    if (aiSearchConfig?.enabled && aiSearchConfig.apiKey && aiSearchConfig.useLeadFinder) {
+      try {
+        const aiLeads = await aiGenerateLeads(query, aiSearchConfig);
+        for (const lead of aiLeads) {
+          if (!lead.company) continue;
+          collected.push({ ...lead, source: "ai_search", sourceLabel: "AI 搜索" });
+        }
+        sourceStats.push({ id: "ai_search", name: "AI 搜索", count: aiLeads.length });
+      } catch (error) {
+        sourceStats.push({ id: "ai_search", name: "AI 搜索", count: 0, error: error instanceof Error ? error.message : "AI 调用失败" });
+      }
+    } else {
+      skipped.push("AI 搜索（未启用模型）");
+    }
+  }
+
+  // 去重（域名 + 公司名）
+  const deduped: Array<RawLead & { source: string; sourceLabel: string }> = [];
+  for (const lead of collected) {
+    const domain = websiteDomainKey(lead.website || "");
+    const key = domain || lead.company.toLowerCase();
+    if (deduped.some((row) => (domain && websiteDomainKey(row.website || "") === domain) || row.company.toLowerCase() === lead.company.toLowerCase())) continue;
+    deduped.push(lead);
+  }
+
+  // Web 源结果做官网解析补全（best-effort，限量控制耗时）
+  const aiConfig = body.useAi ? getAiConfig(user, "websiteParse") : null;
+  const parseTargets = deduped.filter((lead) => ["serper", "brave", "serpapi", "ai_search"].includes(lead.source) && lead.website).slice(0, 6);
+  await Promise.all(parseTargets.map(async (lead) => {
+    try {
+      const parsed = await parseWebsiteOpportunity(lead.website!, 0, user, aiConfig);
+      if (parsed.company && !/unknown/i.test(parsed.company)) lead.company = parsed.company;
+      if (parsed.business && parsed.business !== "待维护") lead.business = parsed.business;
+      if (parsed.country && parsed.country !== "未知") lead.country = parsed.country;
+      if (parsed.contact && parsed.contact !== "待维护") lead.contact = parsed.contact;
+      if (parsed.contactInfo && parsed.contactInfo !== "待维护") lead.contactInfo = parsed.contactInfo;
+      if (parsed.description) lead.description = parsed.description;
+      if (parsed.parseMode === "ai") lead.confidence = Math.max(lead.confidence || 60, 74);
+    } catch {
+      // 解析失败保留搜索摘要
+    }
+  }));
+
+  // 邮箱源补全（Hunter 等）：对缺联系方式且有域名的候选补邮箱
+  for (const provider of emailProviders) {
+    const config = getLeadSourceConfig(user, provider.id);
+    const targets = deduped.filter((lead) => !lead.contactInfo && websiteDomainKey(lead.website || "")).slice(0, 8);
+    let filled = 0;
+    for (const lead of targets) {
+      const enriched = await provider.enrich!(websiteDomainKey(lead.website || ""), { apiKey: config?.apiKey || "", baseUrl: config?.baseUrl });
+      if (enriched?.contactInfo) {
+        lead.contactInfo = enriched.contactInfo;
+        if (enriched.contact) lead.contact = enriched.contact;
+        lead.confidence = Math.max(lead.confidence || 60, 74);
+        filled += 1;
+      }
+    }
+    sourceStats.push({ id: provider.id, name: provider.name, count: filled });
+  }
+
+  // 落库为 WebsiteOpportunity
+  const now = Date.now();
+  const opportunities: WebsiteOpportunity[] = deduped.slice(0, query.limit * 2).map((lead, index) => ({
+    id: `lf_${lead.source}_${now}_${index}`,
+    company: lead.company,
+    business: lead.business || "待维护",
+    country: lead.country || "未知",
+    website: normalizeWebsite(lead.website || ""),
+    contact: lead.contact || "待维护",
+    contactInfo: lead.contactInfo || "",
+    description: lead.description || "自动获客候选，待核实。",
+    ownerId: user.id,
+    teamId: user.teamId,
+    status: "preview",
+    createdAt: new Date().toISOString(),
+    parseMode: aiConfig ? "ai" : "rule",
+    source: lead.source,
+    sourceLabel: lead.sourceLabel,
+    confidence: lead.confidence
+  }));
+
+  for (const item of opportunities) {
+    const existing = store.websiteOpportunities.find((row) => row.ownerId === user.id && (row.website === item.website || row.company.toLowerCase() === item.company.toLowerCase()));
+    if (existing) Object.assign(existing, item, { id: existing.id, status: existing.status, customerId: existing.customerId, dealId: existing.dealId });
+    else store.websiteOpportunities.unshift(item);
+  }
+  await store.persist();
+  res.json({ opportunities, sourceStats, skipped, providersUsed: activeProviders.map((provider) => provider.id) });
+}));
+
+function websiteDomainKey(raw: string) {
+  if (!raw) return "";
+  try {
+    return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return raw.replace(/^https?:\/\//i, "").replace(/^www\./i, "").split("/")[0].toLowerCase();
+  }
+}
+
 app.post("/api/tools/website-scrape/preview", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({ urls: z.array(z.string().min(3)).min(1).max(12), useAi: z.boolean().default(false) });
   const body = schema.parse(req.body);
@@ -2805,6 +3126,47 @@ async function parseWebsiteOpportunity(rawUrl: string, index: number, user: Sess
       parseMode: "fallback"
     };
   }
+}
+
+async function aiGenerateLeads(query: LeadQuery, config: AiModelConfig): Promise<RawLead[]> {
+  const n = Math.min(query.limit, 12);
+  const prompt = [
+    "你是资深外贸获客研究助手。根据下面的客户画像，列出真实、可能存在的目标公司（分销商/系统集成商/OEM/EPC/MRO/终端工厂/贸易商等）。",
+    "严格只返回 JSON，不要解释、不要 Markdown。",
+    "JSON 结构：{\"companies\":[{\"company\":\"\",\"website\":\"\",\"country\":\"\",\"business\":\"\",\"description\":\"\"}]}",
+    "要求：",
+    "1. 只给你有把握真实存在的公司；website 用你所知的官网域名，不确定就留空字符串，绝不编造域名。",
+    "2. 绝不编造邮箱、电话或联系人。",
+    "3. business 聚焦公司产品/业务方向；description 用一句话说明为何匹配画像。",
+    `目标公司数量：${n}`,
+    `产品/关键词：${query.productKeywords || "未指定"}`,
+    `国家/地区：${query.countries || "未指定"}`,
+    `行业/场景：${query.industry || "未指定"}`,
+    `客户类型：${query.customerType || "未指定"}`,
+    `获客目标：${query.goal || "未指定"}`,
+    `排除：${query.excludeKeywords || "无"}`
+  ].join("\n");
+  const content = await callAiModel(config, prompt, 4000);
+  const parsed = extractJsonObject(content) as { companies?: unknown };
+  const companies = Array.isArray(parsed.companies) ? parsed.companies : [];
+  return companies
+    .slice(0, n)
+    .map((raw): RawLead => {
+      const item = (raw || {}) as Record<string, unknown>;
+      const firstCountry = query.countries.split(/,|，/)[0]?.trim() || "未知";
+      const detail = String(item.description || "").trim();
+      return {
+        company: String(item.company || "").trim(),
+        website: String(item.website || "").trim(),
+        country: String(item.country || firstCountry).trim(),
+        business: String(item.business || query.productKeywords || "待核实业务").trim(),
+        contact: "待维护",
+        contactInfo: "",
+        description: `${detail}${detail ? "（AI 生成，待核实）" : "AI 生成候选，待核实。"}`,
+        confidence: 58
+      };
+    })
+    .filter((lead) => lead.company);
 }
 
 async function parseWebsiteWithAi(config: AiModelConfig, context: {
