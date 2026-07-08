@@ -2,25 +2,19 @@
 branches: {
   }
 fileChange:
-  /frontend:
-    newFile: !uuid 'd2d963266181a0f8a48a57c960678650a1ccbb44'
-    oldFile: !uuid 'e88386071002f0f8ec7f9186e25cc88f93e663e7'
-  /frontend/index.html:
-    newFile: !uuid '86ce5bbf78938da7a99efa27f1cf1a9d1aec3fc6'
-    oldFile: !uuid 'c15f1670879008a659dfa02e6610ac5311693f09'
-  /frontend/src:
-    newFile: !uuid '52ec339521f8017d6cdec879efa3114ffe95b2a2'
-    oldFile: !uuid '5163f67aa7ebb26c018bc9f672613e8ac1e71935'
-  /frontend/src/prototype-api.ts:
-    newFile: !uuid 'dc2cc9e901c8e3febeb7b4782d2e8ce196fc12f7'
-    oldFile: !uuid '89c662ea21ac2c5af5306ed7361c3b8f9564e898'
-  /frontend/tests:
-    newFile: !uuid 'a58baaa875c7d824b36c270cc02d56322d70e541'
-    oldFile: !uuid '135b5802d32dbffa78af9ad0fb0f238d9818dce2'
-  /frontend/tests/crm.spec.ts:
-    newFile: !uuid 'f9dc17aabbbabfe47a3ea804496a612f4d54f774'
-    oldFile: !uuid 'e7d89ad6a060e4e5b5a35b822572e6c96e849546'
-gitCommitId: !uuid '9ea33a09274627cff8df249934085146136fc0e9'
+  /backend:
+    newFile: !uuid 'af192a56e25659d188cce2f8983f95a2df83331f'
+    oldFile: !uuid '87b87ec5239b1b8f9ebd79dc3e348936459966c0'
+  /backend/src:
+    newFile: !uuid 'eb211cdd9bd7bbdc704e0e4f33eb655ae00fc042'
+    oldFile: !uuid 'be8305ca76d5e3863e0caa2f897f6dc6926f0156'
+  /backend/src/server.ts:
+    newFile: !uuid '74184c0abd36413cf210e931f0c1f618644f0fd7'
+    oldFile: !uuid 'ade8c5d5fd798abde1b6ec348834e41d881e9c71'
+  /仪表外贸新客户开拓90天执行方案.xlsx:
+    newFile: !uuid 'a6fb9a513da627ec45eea5177f70fa918f79a6b3'
+    oldFile: null
+gitCommitId: !uuid '68db4487d097883bd2b4b36601344df2cf96fb8e'
 renames: {
   }
-revisionId: 31
+revisionId: 32
