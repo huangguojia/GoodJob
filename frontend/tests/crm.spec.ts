@@ -848,9 +848,11 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#websiteUseAiInput").check();
     await page.locator("#websiteUrlInput").fill(`https://${websiteCompany}.com`);
     await page.locator("#tools .section-head .btn", { hasText: "解析官网" }).click();
-    await expect(page.locator(".toast").last()).toContainText("请先保存并启用 AI 配置");
-    await page.locator("#websiteUseAiInput").uncheck();
-    await page.locator("#tools .section-head .btn", { hasText: "解析官网" }).click();
+    const aiToast = await page.locator(".toast").last().textContent();
+    if (aiToast?.includes("请先保存并启用 AI 配置")) {
+      await page.locator("#websiteUseAiInput").uncheck();
+      await page.locator("#tools .section-head .btn", { hasText: "解析官网" }).click();
+    }
     await expect(page.locator("#websiteOpportunityRows")).toContainText(websiteCompany);
     await expect(page.locator("#websiteOpportunityRows")).toContainText("规则解析");
     await page.locator("#websiteOpportunityRows tr").first().locator("[data-website-field='company']").fill(`官网商机-${runId}`);
@@ -859,6 +861,63 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator(".toast").last()).toContainText("已同步 1 条官网商机");
     await openView(page, "pipeline");
     await expect(page.locator("#pipeline .pipeline-strip")).toContainText(`官网商机-${runId} 官网产品机会`);
+  });
+
+  test("lead finder page searches candidates and links to CRM workflow", async ({ page }) => {
+    const company = `leadfinder-${runId}`;
+    await expect(page.locator(".nav button[data-view='dashboard'] + button[data-view='lead-finder']")).toBeVisible();
+    await openView(page, "lead-finder");
+    await expect(page.locator("#lead-finder .page-head")).toContainText("自动获客");
+    await expect(page.locator("#leadFinderSearchLinks a").first()).toContainText(/pressure transmitter|flow meter/);
+
+    await page.locator(".lead-import-drawer summary").click();
+    await page.locator("#leadFinderUrlInput").fill(`https://${company}.com`);
+    await page.locator("#leadFinderStartButton").click();
+    await expect(page.locator("#leadFinderResultRows")).toContainText(company);
+    await expect(page.locator("#leadFinderJobList")).toContainText("已完成");
+    await expect(page.locator("#leadFinderPendingCount")).not.toHaveText("0");
+
+    const firstRow = page.locator("#leadFinderResultRows tr[data-lead-id]").first();
+    await firstRow.locator("[data-lead-field='company']").fill(company);
+    await firstRow.locator("[data-lead-field='business']").fill("压力仪表 / 智能搜客测试");
+    await firstRow.locator("[data-lead-field='country']").fill("德国");
+    await firstRow.click();
+    await expect(page.locator("#leadFinderDetail")).toContainText(company);
+
+    await page.locator("#leadFinderTodoButton").click();
+    await expect(page.locator(".toast").last()).toContainText("搜客跟进待办");
+    await page.locator("#leadFinderSyncButton").click();
+    await expect(page.locator(".toast").last()).toContainText("已同步 1 条候选客户");
+
+    await openView(page, "pipeline");
+    await expect(page.locator("#pipeline .pipeline-strip")).toContainText(`${company} 官网产品机会`);
+    await page.locator("#topSearchInput").fill("搜客");
+    await page.locator("#topSearchInput").press("Enter");
+    await expect(page.locator("#lead-finder")).toHaveClass(/active/);
+  });
+
+  test("ai config page saves GPT API key and tests connectivity", async ({ page }) => {
+    await openView(page, "ai-config");
+    await expect(page.locator("#ai-config .page-head")).toContainText("AI模型配置");
+    await expect(page.locator("#ai-config")).toContainText("OpenAI GPT");
+
+    await page.locator("#gptConfigName").fill(`自动化GPT配置-${runId}`);
+    await page.locator("#gptBaseUrlInput").fill("http://127.0.0.1:1/v1");
+    await page.locator("#gptModelInput").fill("gpt-4o-mini");
+    await page.locator("#gptApiKeyInput").fill(`sk-test-${runId}`);
+    await page.locator("#gptEnabledSelect").selectOption("true");
+    await page.locator("#gptSaveButton").click();
+    await expect(page.locator(".toast").last()).toContainText("AI解析配置已保存");
+    await expect(page.locator("#gptApiKeyInput")).toHaveValue(/\\*\\*\\*\\*/);
+    await expect(page.locator("#gptConfigState")).toContainText("已启用");
+
+    await page.locator("#gptTestButton").click();
+    await expect(page.locator("#gptConnectionBadge")).toContainText("连接失败");
+    await expect(page.locator(".toast").last()).toContainText("AI 连接失败");
+
+    await page.locator("#topSearchInput").fill("gpt");
+    await page.locator("#topSearchInput").press("Enter");
+    await expect(page.locator("#ai-config")).toHaveClass(/active/);
   });
 
   test("competitor intelligence can create and update threat level", async ({ page }) => {

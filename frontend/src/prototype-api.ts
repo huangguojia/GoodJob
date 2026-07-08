@@ -236,6 +236,19 @@ interface WebsiteOpportunity {
   selected?: boolean;
 }
 
+interface LeadFinderJob {
+  id: string;
+  title: string;
+  subtitle: string;
+  status: "ready" | "running" | "done" | "needs_input";
+  resultCount: number;
+  channelCount: number;
+  elapsedText: string;
+  progress: number;
+  steps: string[];
+  createdAt: string;
+}
+
 interface AiModelConfig {
   id: string;
   provider: string;
@@ -420,6 +433,8 @@ interface AppState {
   selectedExamIds: string[];
   selectedQuestionId: string | null;
   selectedDocumentId: string | null;
+  selectedLeadFinderId: string | null;
+  leadFinderFilter: "all" | "pending" | "high" | "duplicate" | "synced";
 }
 
 const state: AppState = {
@@ -463,12 +478,15 @@ const state: AppState = {
   selectedExamId: null,
   selectedExamIds: [],
   selectedQuestionId: null,
-  selectedDocumentId: null
+  selectedDocumentId: null,
+  selectedLeadFinderId: null,
+  leadFinderFilter: "all"
 };
 
 let memoDirty = false;
 let memoSaving = false;
 let memoSavePromise: Promise<void> | null = null;
+let leadFinderJobs: LeadFinderJob[] = [];
 
 const roleLabel: Record<Role, string> = {
   sales: "业务员",
@@ -771,6 +789,7 @@ async function refreshAll(user: User) {
   renderOcr(ocr.job);
   renderAiConfig(state.aiConfig);
   renderWebsiteOpportunities(state.websiteOpportunities);
+  renderLeadFinder(state.websiteOpportunities);
   renderTopbarStats();
 }
 
@@ -1596,7 +1615,7 @@ function renderCustomerDrawer(customer?: Customer) {
     </div>
     <div class="inline-actions"><button class="btn primary" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button></div>
     <section class="customer-doc-info">
-      <div class="customer-deals-head"><h3>单据基础信息</h3><button class="btn" data-edit-customer-drawer>维护信息</button></div>
+      <div class="customer-deals-head"><h3>单据基础信息</h3><button class="btn" data-edit-customer-document-info>维护信息</button></div>
       <div class="info-grid">
         <div class="info"><span>单据抬头</span><b>${escapeHtml(billingName)}</b></div>
         <div class="info"><span>单据联系人</span><b>${escapeHtml(documentContact)}</b></div>
@@ -1615,6 +1634,9 @@ function renderCustomerDrawer(customer?: Customer) {
   `;
   qs<HTMLButtonElement>("[data-add-follow]", drawer)?.addEventListener("click", () => addFollowRecord(customer));
   qsa<HTMLButtonElement>("[data-edit-customer-drawer]", drawer).forEach((button) => {
+    button.addEventListener("click", () => openCustomerModal(customer));
+  });
+  qsa<HTMLButtonElement>("[data-edit-customer-document-info]", drawer).forEach((button) => {
     button.addEventListener("click", () => openCustomerModal(customer));
   });
   qs<HTMLButtonElement>("[data-view-related-deals]", drawer)?.addEventListener("click", () => activateNavView("pipeline"));
@@ -4124,9 +4146,25 @@ function renderAiConfig(config: AiModelConfig | null) {
   const enabled = qs<HTMLInputElement>("#aiEnabledInput");
   const useAi = qs<HTMLInputElement>("#websiteUseAiInput");
   const badgeNode = qs<HTMLElement>("#aiConfigBadge");
+  const gptName = qs<HTMLInputElement>("#gptConfigName");
+  const gptBaseUrl = qs<HTMLInputElement>("#gptBaseUrlInput");
+  const gptModel = qs<HTMLInputElement>("#gptModelInput");
+  const gptApiKey = qs<HTMLInputElement>("#gptApiKeyInput");
+  const gptEnabled = qs<HTMLSelectElement>("#gptEnabledSelect");
+  const gptBadge = qs<HTMLElement>("#gptConfigBadge");
+  const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
+  const gptConnectionTitle = qs<HTMLElement>("#gptConnectionTitle");
+  const gptConnectionText = qs<HTMLElement>("#gptConnectionText");
+  const gptState = qs<HTMLElement>("#gptConfigState");
+  const gptSub = qs<HTMLElement>("#gptConfigSub");
+  const gptModelState = qs<HTMLElement>("#gptModelState");
+  const defaultName = "GPT 搜客解析模型";
+  const defaultBaseUrl = "https://api.openai.com/v1";
+  const defaultModel = "gpt-4o-mini";
+  const ready = Boolean(config?.enabled && config?.hasApiKey);
   if (name) name.value = config?.name || "官网商机解析模型";
-  if (baseUrl) baseUrl.value = config?.baseUrl || "https://api.openai.com/v1";
-  if (model) model.value = config?.model || "gpt-4o-mini";
+  if (baseUrl) baseUrl.value = config?.baseUrl || defaultBaseUrl;
+  if (model) model.value = config?.model || defaultModel;
   if (apiKey) {
     apiKey.value = config?.apiKey || "";
     apiKey.placeholder = config?.hasApiKey ? "已保存，重新填写可覆盖" : "保存后仅后端持久化";
@@ -4134,13 +4172,44 @@ function renderAiConfig(config: AiModelConfig | null) {
   if (enabled) enabled.checked = Boolean(config?.enabled);
   if (useAi) useAi.checked = Boolean(config?.enabled && config?.hasApiKey);
   if (badgeNode) {
-    const ready = Boolean(config?.enabled && config?.hasApiKey);
     badgeNode.className = `badge ${ready ? "green" : config?.enabled ? "amber" : ""}`;
     badgeNode.textContent = ready ? `AI已启用 · ${config?.model}` : config?.enabled ? "规则解析 · 缺少API Key" : "规则解析";
   }
+  if (gptName) gptName.value = config?.name || defaultName;
+  if (gptBaseUrl) gptBaseUrl.value = config?.baseUrl || defaultBaseUrl;
+  if (gptModel) gptModel.value = config?.model || defaultModel;
+  if (gptApiKey) {
+    gptApiKey.value = config?.apiKey || "";
+    gptApiKey.placeholder = config?.hasApiKey ? "已保存，重新填写可覆盖" : "以 sk- 开头，保存后不在页面明文显示";
+  }
+  if (gptEnabled) gptEnabled.value = config?.enabled === false ? "false" : "true";
+  if (gptBadge) {
+    gptBadge.className = `badge ${ready ? "green" : config?.enabled ? "amber" : ""}`;
+    gptBadge.textContent = ready ? "已启用" : config?.enabled ? "缺少Key" : "未启用";
+  }
+  if (gptConnectionBadge) {
+    gptConnectionBadge.className = `badge ${ready ? "green" : config?.enabled ? "amber" : ""}`;
+    gptConnectionBadge.textContent = ready ? "已保存Key" : config?.enabled ? "待补Key" : "未启用";
+  }
+  if (gptConnectionTitle) gptConnectionTitle.textContent = ready ? "GPT 配置已可用于业务模块" : config?.enabled ? "还需要填写 API Key" : "等待启用 GPT";
+  if (gptConnectionText) gptConnectionText.textContent = ready ? `当前模型：${config?.model}。搜客和官网解析可选择使用 AI 增强。` : "配置完成后，智能搜客可以使用 GPT 提取公司业务、国家、联系方式、ICP匹配原因和下一步建议。";
+  if (gptState) gptState.textContent = ready ? "已启用" : config?.enabled ? "待补Key" : "未启用";
+  if (gptSub) gptSub.textContent = ready ? "可测试连接和调用" : "等待 API Key";
+  if (gptModelState) gptModelState.textContent = config?.model || defaultModel;
 }
 
 function collectAiConfigPayload() {
+  const activeView = qs<HTMLElement>(".view.active")?.id;
+  const useGptPage = activeView === "ai-config" || Boolean(qs<HTMLInputElement>("#gptConfigName")?.matches(":focus"));
+  if (useGptPage) {
+    return {
+      name: qs<HTMLInputElement>("#gptConfigName")?.value.trim() || "GPT 搜客解析模型",
+      baseUrl: qs<HTMLInputElement>("#gptBaseUrlInput")?.value.trim() || "https://api.openai.com/v1",
+      model: qs<HTMLInputElement>("#gptModelInput")?.value.trim() || "gpt-4o-mini",
+      apiKey: qs<HTMLInputElement>("#gptApiKeyInput")?.value.trim() || "",
+      enabled: qs<HTMLSelectElement>("#gptEnabledSelect")?.value !== "false"
+    };
+  }
   return {
     name: qs<HTMLInputElement>("#aiConfigName")?.value.trim() || "官网商机解析模型",
     baseUrl: qs<HTMLInputElement>("#aiBaseUrlInput")?.value.trim() || "https://api.openai.com/v1",
@@ -4151,6 +4220,7 @@ function collectAiConfigPayload() {
 }
 
 async function saveAiConfig(button?: HTMLButtonElement) {
+  const originalText = button?.textContent || "";
   if (button) {
     button.disabled = true;
     button.textContent = "保存中";
@@ -4162,28 +4232,39 @@ async function saveAiConfig(button?: HTMLButtonElement) {
     });
     state.aiConfig = result.config;
     renderAiConfig(result.config);
+    renderLeadFinder(state.websiteOpportunities);
     toast(result.config.enabled ? "AI解析配置已保存" : "AI配置已保存，当前仍使用规则解析");
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "保存AI配置";
+      button.textContent = originalText || "保存AI配置";
     }
   }
 }
 
 async function testAiConfig(button?: HTMLButtonElement) {
   await saveAiConfig();
+  const originalText = button?.textContent || "";
   if (button) {
     button.disabled = true;
     button.textContent = "测试中";
   }
   try {
     const result = await api<{ ok: boolean; message: string }>("/api/tools/ai-config/test", { method: "POST" });
+    const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
+    const gptConnectionTitle = qs<HTMLElement>("#gptConnectionTitle");
+    const gptConnectionText = qs<HTMLElement>("#gptConnectionText");
+    if (gptConnectionBadge) {
+      gptConnectionBadge.className = `badge ${result.ok ? "green" : "red"}`;
+      gptConnectionBadge.textContent = result.ok ? "连接通过" : "连接失败";
+    }
+    if (gptConnectionTitle) gptConnectionTitle.textContent = result.ok ? "GPT 连接测试通过" : "GPT 连接测试失败";
+    if (gptConnectionText) gptConnectionText.textContent = result.message;
     toast(result.message, result.ok ? "ok" : "error");
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "测试连接";
+      button.textContent = originalText || "测试连接";
     }
   }
 }
@@ -4237,6 +4318,412 @@ function collectWebsiteRows() {
     }).filter((item) => item.company && item.website);
 }
 
+function websiteDomain(value: string) {
+  try {
+    return new URL(value.startsWith("http") ? value : `https://${value}`).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return value.replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0].toLowerCase();
+  }
+}
+
+function leadFinderScore(item: WebsiteOpportunity) {
+  let score = 42;
+  if (item.company && !/unknown|待维护/i.test(item.company)) score += 12;
+  if (item.business && !item.business.includes("待维护")) score += 12;
+  if (item.country && item.country !== "未知") score += 8;
+  if (item.contact && !item.contact.includes("待维护")) score += 8;
+  if (item.contactInfo) score += 10;
+  if (item.description && item.description.length > 30) score += 8;
+  if (item.parseMode === "ai") score += 6;
+  if (item.status === "synced") score += 4;
+  return Math.max(35, Math.min(score, 96));
+}
+
+function leadFinderDuplicateState(item: WebsiteOpportunity) {
+  const domain = websiteDomain(item.website);
+  const duplicatedCustomer = state.customers.find((customer) => {
+    const sameCompany = customer.company.trim().toLowerCase() === item.company.trim().toLowerCase();
+    const docText = `${customer.billingName || ""} ${customer.documentContact || ""}`.toLowerCase();
+    return sameCompany || (domain && docText.includes(domain));
+  });
+  if (item.customerId || duplicatedCustomer) return { text: "已有客户", tone: "amber" };
+  if (item.status === "synced") return { text: "已同步", tone: "green" };
+  return { text: "新候选", tone: "green" };
+}
+
+function leadFinderFilteredRows(opportunities: WebsiteOpportunity[]) {
+  return opportunities.filter((item) => {
+    const duplicate = leadFinderDuplicateState(item);
+    const score = leadFinderScore(item);
+    if (state.leadFinderFilter === "pending") return item.status !== "synced";
+    if (state.leadFinderFilter === "high") return score >= 76;
+    if (state.leadFinderFilter === "duplicate") return duplicate.text === "已有客户";
+    if (state.leadFinderFilter === "synced") return item.status === "synced";
+    return true;
+  });
+}
+
+function currentLeadFinderTitle() {
+  const product = qs<HTMLInputElement>("#leadProductKeywords")?.value.trim().split(/,|，/)[0]?.trim() || "产品";
+  const country = qs<HTMLInputElement>("#leadCountries")?.value.trim().split(/,|，/)[0]?.trim() || "目标市场";
+  const type = qs<HTMLSelectElement>("#leadCustomerTypes")?.value.split("/")[0]?.trim() || "客户";
+  return `${country} · ${product} · ${type}`;
+}
+
+function currentLeadFinderSubtitle() {
+  const mode = qs<HTMLSelectElement>("#leadSearchModeInput")?.value || "公开公司获客";
+  const depth = qs<HTMLSelectElement>("#leadSearchDepthInput")?.value || "标准";
+  const validation = qs<HTMLSelectElement>("#leadValidationInput")?.value || "标准验证";
+  return `${mode} · ${depth} · ${validation}`;
+}
+
+function renderLeadFinderJobs() {
+  const box = qs<HTMLElement>("#leadFinderJobList");
+  if (!box) return;
+  if (!leadFinderJobs.length) {
+    box.innerHTML = `<div class="empty-cell">还没有搜客任务。填写条件后点击“生成并运行任务”。</div>`;
+    return;
+  }
+  box.innerHTML = leadFinderJobs.map((job) => `
+    <article class="lead-job-card" data-lead-job-id="${escapeHtml(job.id)}">
+      <div class="lead-job-top">
+        <div><h3>${escapeHtml(job.title)}</h3><p>${escapeHtml(job.subtitle)}</p></div>
+        ${badge(job.status === "done" ? "已完成" : job.status === "needs_input" ? "待导入" : "运行中", job.status === "done" ? "green" : job.status === "needs_input" ? "amber" : "")}
+      </div>
+      <div class="lead-job-metrics">
+        <div><span>线索进度</span><b>${job.resultCount}/目标</b></div>
+        <div><span>已耗时</span><b>${escapeHtml(job.elapsedText)}</b></div>
+        <div><span>启用渠道</span><b>${job.channelCount} 个</b></div>
+        <div><span>预计进度</span><b>${job.progress}%</b></div>
+      </div>
+      <div class="lead-job-progress"><i style="--p:${job.progress}%"></i></div>
+      <div class="lead-job-steps">${job.steps.map((step, index) => `<span>${index + 1} ${escapeHtml(step)}</span>`).join("")}</div>
+      <div class="lead-job-actions"><button class="btn" data-lead-job-import>导入结果链接</button><button class="btn primary" data-lead-job-sync>同步选中结果</button></div>
+    </article>
+  `).join("");
+  qsa<HTMLButtonElement>("[data-lead-job-import]").forEach((button) => {
+    button.addEventListener("click", () => qs<HTMLTextAreaElement>("#leadFinderUrlInput")?.focus());
+  });
+  qsa<HTMLButtonElement>("[data-lead-job-sync]").forEach((button) => {
+    button.addEventListener("click", (event) => void syncLeadFinderRows(event.currentTarget as HTMLButtonElement));
+  });
+}
+
+function upsertLeadFinderJob(resultCount: number, status: LeadFinderJob["status"]) {
+  const enabledSources = qsa<HTMLInputElement>("[data-lead-source]").filter((item) => item.checked).length || 1;
+  const job: LeadFinderJob = {
+    id: `lf_${Date.now()}`,
+    title: currentLeadFinderTitle(),
+    subtitle: currentLeadFinderSubtitle(),
+    status,
+    resultCount,
+    channelCount: enabledSources,
+    elapsedText: status === "done" ? "已完成" : "待导入",
+    progress: status === "done" ? 100 : 35,
+    steps: status === "done" ? ["生成搜索语法", "检索公开API", "提取公司资料", "等待同步"] : ["生成搜索语法", "打开平台入口", "导入官网/询盘链接"],
+    createdAt: new Date().toISOString()
+  };
+  leadFinderJobs = [job, ...leadFinderJobs].slice(0, 6);
+  renderLeadFinderJobs();
+}
+
+function renderLeadFinderSearchLinks() {
+  const box = qs<HTMLElement>("#leadFinderSearchLinks");
+  if (!box) return;
+  const goal = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim() || "";
+  const keywords = qs<HTMLInputElement>("#leadProductKeywords")?.value.trim() || "pressure transmitter";
+  const countries = (qs<HTMLInputElement>("#leadCountries")?.value.trim() || "Germany").split(/,|，/).map((item) => item.trim()).filter(Boolean).slice(0, 3);
+  const industries = (qs<HTMLInputElement>("#leadIndustryInput")?.value.trim() || "").split(/,|，/).map((item) => item.trim()).filter(Boolean).slice(0, 2);
+  const customerType = qs<HTMLSelectElement>("#leadCustomerTypes")?.value.split("/")[1]?.trim() || qs<HTMLSelectElement>("#leadCustomerTypes")?.value || "distributor";
+  const exclude = (qs<HTMLInputElement>("#leadExcludeKeywords")?.value.trim() || "").split(/,|，/).map((item) => item.trim()).filter(Boolean).map((item) => `-${item}`).join(" ");
+  const enabledSources = qsa<HTMLInputElement>("[data-lead-source]")
+    .filter((item) => item.checked)
+    .map((item) => item.dataset.leadSource || "google")
+    .filter((source) => !["gleif", "wikidata"].includes(source));
+  const countryList = countries.length ? countries : ["Germany", "UK", "Turkey"];
+  const industryText = industries.length ? industries.join(" ") : "";
+  const sourceTemplates: Record<string, { label: string; query: (country: string) => string }> = {
+    google: { label: "Google/Web", query: (country) => `${goal} ${keywords} ${industryText} ${customerType} ${country} company website ${exclude}` },
+    alibaba: { label: "Alibaba询盘", query: (country) => `site:alibaba.com/rfq ${goal} ${keywords} ${industryText} ${country} buyer inquiry ${exclude}` },
+    madein: { label: "Made-in-China询盘", query: (country) => `site:made-in-china.com ${goal} ${keywords} ${industryText} ${country} sourcing request buyer ${exclude}` },
+    globalsources: { label: "Global Sources", query: (country) => `site:globalsources.com ${goal} ${keywords} ${industryText} ${country} buyer request ${exclude}` },
+    europages: { label: "Europages", query: (country) => `site:europages.com ${goal} ${keywords} ${industryText} ${customerType} ${country} ${exclude}` }
+  };
+  const rows = countryList.flatMap((country) => enabledSources.slice(0, 5).map((source) => {
+    const template = sourceTemplates[source] || sourceTemplates.google;
+    const query = template.query(country).replace(/\s+/g, " ").trim();
+    const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+    return `<a href="${url}" target="_blank" rel="noreferrer"><b>${escapeHtml(template.label)}</b><span>${escapeHtml(query)}</span></a>`;
+  })).slice(0, 12);
+  box.innerHTML = rows.join("");
+}
+
+function collectLeadFinderRows() {
+  return qsa<HTMLTableRowElement>("#leadFinderResultRows tr[data-lead-id]")
+    .filter((row) => row.querySelector<HTMLInputElement>("[data-lead-select]")?.checked)
+    .map((row) => {
+      const value = (field: string) => {
+        const node = row.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-lead-field="${field}"]`);
+        return node?.value.trim() || "";
+      };
+      return {
+        id: row.dataset.leadId || "",
+        company: value("company"),
+        business: value("business"),
+        country: value("country"),
+        website: value("website"),
+        contact: value("contact"),
+        contactInfo: value("contactInfo"),
+        description: value("description")
+      };
+    }).filter((item) => item.company && item.website);
+}
+
+function renderLeadFinderDetail(item?: WebsiteOpportunity) {
+  const box = qs<HTMLElement>("#leadFinderDetail");
+  if (!box) return;
+  if (!item) {
+    box.innerHTML = `<span>未选择</span><b>点击候选列表中的公司行查看详情。</b>`;
+    return;
+  }
+  const score = leadFinderScore(item);
+  const duplicate = leadFinderDuplicateState(item);
+  const domain = websiteDomain(item.website);
+  box.innerHTML = `
+    <div class="lead-profile-head">
+      <div><h3>${escapeHtml(item.company)}</h3><p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(domain)} · ${escapeHtml(item.business || "业务待维护")}</p></div>
+      <div class="lead-profile-score">${score}</div>
+    </div>
+    <div class="lead-detail-stack">
+      <div class="lead-detail-card"><span>ICP 判断</span><b>${score >= 76 ? "高匹配，建议优先核实采购/工程联系人。" : score >= 60 ? "中匹配，需要补齐联系人和产品证据。" : "信息不足，先确认官网和业务范围。"}</b></div>
+      <div class="lead-detail-card"><span>联系方式</span><b>${escapeHtml(item.contactInfo || item.contact || "待补齐")}</b></div>
+      <div class="lead-detail-card"><span>来源状态</span><b>${badge(item.parseMode === "ai" ? "AI解析" : "规则解析", item.parseMode === "ai" ? "green" : "")} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} ${badge(duplicate.text, duplicate.tone)}</b></div>
+      <div class="lead-detail-card"><span>下一步建议</span><b>${escapeHtml(item.status === "synced" ? "已进入客户/商机，可在商机页继续推进报价、样品或跟进提醒。" : "先核实联系人与采购角色，再同步为客户和询盘商机，并生成首次触达待办。")}</b></div>
+    </div>
+  `;
+}
+
+function renderLeadFinder(opportunities = state.websiteOpportunities) {
+  const rows = qs<HTMLElement>("#leadFinderResultRows");
+  const total = qs<HTMLElement>("#leadFinderTotalCount");
+  const pending = qs<HTMLElement>("#leadFinderPendingCount");
+  const synced = qs<HTMLElement>("#leadFinderSyncedCount");
+  const aiState = qs<HTMLElement>("#leadFinderAiState");
+  const aiSub = qs<HTMLElement>("#leadFinderAiSub");
+  const aiBadge = qs<HTMLElement>("#leadFinderAiBadge");
+  const sourceAiBadge = qs<HTMLElement>("#leadFinderSourceAiBadge");
+  const ready = Boolean(state.aiConfig?.enabled && state.aiConfig?.hasApiKey);
+  const sortedAll = [...opportunities].sort((a, b) => {
+    if (a.status !== b.status) return a.status === "synced" ? 1 : -1;
+    return leadFinderScore(b) - leadFinderScore(a);
+  });
+  const sorted = leadFinderFilteredRows(sortedAll);
+  if (!state.selectedLeadFinderId || !sortedAll.some((item) => item.id === state.selectedLeadFinderId)) {
+    state.selectedLeadFinderId = sortedAll[0]?.id || null;
+  }
+  if (total) total.textContent = String(sortedAll.length);
+  if (pending) pending.textContent = String(sortedAll.filter((item) => item.status !== "synced").length);
+  if (synced) synced.textContent = String(sortedAll.filter((item) => item.status === "synced").length);
+  if (aiState) aiState.textContent = ready ? "AI" : "规则";
+  if (aiSub) aiSub.textContent = ready ? `${state.aiConfig?.model || "已配置"} 可用于解析` : "未启用时使用规则解析";
+  [aiBadge, sourceAiBadge].forEach((node) => {
+    if (!node) return;
+    node.className = `badge ${ready ? "green" : ""}`;
+    node.textContent = ready ? "AI已配置" : "规则解析";
+  });
+  const useAi = qs<HTMLInputElement>("#leadFinderUseAiInput");
+  if (useAi) useAi.disabled = !ready;
+  if (!rows) return;
+  qsa<HTMLButtonElement>("[data-lead-filter]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.leadFilter === state.leadFinderFilter);
+  });
+  rows.innerHTML = sorted.length ? sorted.map((item) => {
+    const score = leadFinderScore(item);
+    const duplicate = leadFinderDuplicateState(item);
+    const selected = state.selectedLeadFinderId === item.id;
+    return `
+      <tr data-lead-id="${escapeHtml(item.id)}" class="${selected ? "selected" : ""}">
+        <td><input type="checkbox" data-lead-select ${(item.selected ?? item.status !== "synced") ? "checked" : ""}></td>
+        <td class="lead-company-cell" data-lead-pick><div class="lead-cell-title"><input data-lead-field="company" value="${escapeHtml(item.company)}"><span>${escapeHtml(websiteDomain(item.website))}</span><div class="lead-cell-tags"><span class="lead-mini-badge">${escapeHtml(item.country || "未知")}</span><span class="lead-mini-badge">${score >= 76 ? "高匹配" : "待补全"}</span></div></div></td>
+        <td><input data-lead-field="business" value="${escapeHtml(item.business)}"></td>
+        <td><input data-lead-field="country" value="${escapeHtml(item.country)}"></td>
+        <td><input data-lead-field="website" value="${escapeHtml(item.website)}"></td>
+        <td><input data-lead-field="contact" value="${escapeHtml(item.contact)}"></td>
+        <td><input data-lead-field="contactInfo" value="${escapeHtml(item.contactInfo)}"></td>
+        <td><textarea data-lead-field="description">${escapeHtml(item.description)}</textarea></td>
+        <td><div class="lead-score"><b>${score}分</b><i style="--p:${score}%"></i></div></td>
+        <td>${badge(item.status === "synced" ? "已同步" : "待确认", item.status === "synced" ? "green" : "amber")}${badge(duplicate.text, duplicate.tone)}${badge(item.parseMode === "ai" ? "AI" : "规则", item.parseMode === "ai" ? "green" : "")}</td>
+      </tr>
+    `;
+  }).join("") : `<tr><td colspan="10" class="empty-cell">暂无候选客户。输入官网后点击“开始搜客”。</td></tr>`;
+  qsa<HTMLElement>("#leadFinderResultRows tr[data-lead-id]").forEach((row) => {
+    row.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement).matches("input, textarea")) return;
+      state.selectedLeadFinderId = row.dataset.leadId || null;
+      renderLeadFinder(state.websiteOpportunities);
+    });
+  });
+  renderLeadFinderDetail(sortedAll.find((item) => item.id === state.selectedLeadFinderId));
+  renderLeadFinderSearchLinks();
+  renderLeadFinderJobs();
+}
+
+async function runLeadFinder(button?: HTMLButtonElement) {
+  const originalText = button?.textContent || "生成并运行任务";
+  const input = qs<HTMLTextAreaElement>("#leadFinderUrlInput");
+  const urls = (input?.value || "").split(/\n|,|，/).map((item) => item.trim()).filter(Boolean).slice(0, Number(qs<HTMLSelectElement>("#leadLimit")?.value || 20));
+  const useAi = Boolean(qs<HTMLInputElement>("#leadFinderUseAiInput")?.checked);
+  renderLeadFinderSearchLinks();
+  if (useAi && (!state.aiConfig?.enabled || !state.aiConfig?.hasApiKey)) {
+    toast("请先配置并启用 AI 模型，或关闭 AI 解析", "error");
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = useAi ? "AI搜客中" : "搜客任务运行中";
+  }
+  try {
+    if (!urls.length) {
+      const result = await api<{ opportunities: WebsiteOpportunity[]; sources: { gleif: number; wikidata: number } }>("/api/lead-finder/free-search", {
+        method: "POST",
+        body: JSON.stringify({
+          goal: qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim() || "",
+          productKeywords: qs<HTMLInputElement>("#leadProductKeywords")?.value.trim() || "",
+          countries: qs<HTMLInputElement>("#leadCountries")?.value.trim() || "",
+          industry: qs<HTMLInputElement>("#leadIndustryInput")?.value.trim() || "",
+          customerType: qs<HTMLSelectElement>("#leadCustomerTypes")?.value || "",
+          limit: Number(qs<HTMLSelectElement>("#leadLimit")?.value || 10)
+        })
+      });
+      const existing = state.websiteOpportunities
+        .filter((item) => !result.opportunities.some((next) => next.website === item.website || next.company === item.company))
+        .map((item) => ({ ...item, selected: false }));
+      state.websiteOpportunities = [...result.opportunities.map((item) => ({ ...item, selected: true })), ...existing];
+      state.selectedLeadFinderId = result.opportunities[0]?.id || state.selectedLeadFinderId;
+      upsertLeadFinderJob(result.opportunities.length, result.opportunities.length ? "done" : "needs_input");
+      renderLeadFinder(state.websiteOpportunities);
+      toast(result.opportunities.length ? `免费公开API已找到 ${result.opportunities.length} 条候选，GLEIF ${result.sources.gleif} / Wikidata ${result.sources.wikidata}` : "免费公开API暂无结果；右侧已生成平台搜索入口，可继续导入官网/询盘链接");
+      return;
+    }
+    const result = await api<{ opportunities: WebsiteOpportunity[] }>("/api/tools/website-scrape/preview", {
+      method: "POST",
+      body: JSON.stringify({ urls, useAi })
+    });
+    const existing = state.websiteOpportunities
+      .filter((item) => !result.opportunities.some((next) => next.website === item.website))
+      .map((item) => ({ ...item, selected: false }));
+    state.websiteOpportunities = [...result.opportunities.map((item) => ({ ...item, selected: true })), ...existing];
+    state.selectedLeadFinderId = result.opportunities[0]?.id || state.selectedLeadFinderId;
+    upsertLeadFinderJob(result.opportunities.length, "done");
+    renderWebsiteOpportunities(state.websiteOpportunities);
+    renderLeadFinder(state.websiteOpportunities);
+    toast(`已生成 ${result.opportunities.length} 条候选客户`);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
+}
+
+async function syncLeadFinderRows(button?: HTMLButtonElement) {
+  const opportunities = collectLeadFinderRows();
+  if (!opportunities.length) {
+    toast("请至少勾选一条候选客户", "error");
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "同步中";
+  }
+  try {
+    const result = await api<{ created: Array<{ customer: Customer; deal: Deal; opportunity: WebsiteOpportunity }> }>("/api/tools/website-scrape/sync-opportunities", {
+      method: "POST",
+      body: JSON.stringify({ opportunities })
+    });
+    result.created.forEach((item) => {
+      if (!state.customers.some((customer) => customer.id === item.customer.id)) state.customers.unshift(item.customer);
+      if (!state.deals.some((deal) => deal.id === item.deal.id)) state.deals.unshift(item.deal);
+      const existing = state.websiteOpportunities.find((row) => row.id === item.opportunity.id || row.website === item.opportunity.website);
+      if (existing) Object.assign(existing, item.opportunity);
+      else state.websiteOpportunities.unshift(item.opportunity);
+    });
+    renderWebsiteOpportunities(state.websiteOpportunities);
+    renderLeadFinder(state.websiteOpportunities);
+    renderCustomers(state.customers);
+    renderPipeline(state.deals);
+    void refreshDashboardOnly();
+    toast(`已同步 ${result.created.length} 条候选客户`);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "同步客户/商机";
+    }
+  }
+}
+
+async function createLeadFinderTodos(button?: HTMLButtonElement) {
+  const opportunities = collectLeadFinderRows();
+  if (!opportunities.length) {
+    toast("请先勾选需要跟进的候选客户", "error");
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "生成中";
+  }
+  try {
+    const created: Todo[] = [];
+    for (const item of opportunities) {
+      const result = await api<{ todo: Todo }>("/api/todos", {
+        method: "POST",
+        body: JSON.stringify({
+          title: `核实搜客线索：${item.company}`,
+          type: "customer",
+          priority: "medium",
+          dueAt: currentDateTimeText(),
+          related: item.company
+        })
+      });
+      created.push(result.todo);
+    }
+    state.todos.unshift(...created);
+    renderTodos(state.todos);
+    updateTodoChips(state.todos);
+    renderTopbarStats();
+    toast(`已生成 ${created.length} 条搜客跟进待办`);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "生成待办";
+    }
+  }
+}
+
+function exportLeadFinderRows() {
+  const rows = collectLeadFinderRows();
+  const source = rows.length ? rows : state.websiteOpportunities;
+  if (!source.length) {
+    toast("暂无搜客结果可导出", "error");
+    return;
+  }
+  const worksheet = XLSX.utils.json_to_sheet(source.map((item) => ({
+    "公司名": item.company,
+    "业务": item.business,
+    "国家": item.country,
+    "官网": item.website,
+    "联系人": item.contact,
+    "联系方式": item.contactInfo,
+    "说明": item.description,
+    "评分": "status" in item ? leadFinderScore(item as WebsiteOpportunity) : "",
+    "状态": "status" in item ? ((item as WebsiteOpportunity).status === "synced" ? "已同步" : "待确认") : "待确认"
+  })));
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "智能搜客结果");
+  XLSX.writeFile(workbook, `GoodJob智能搜客结果-${Date.now()}.xlsx`);
+  toast("搜客结果已导出");
+}
+
 async function parseWebsiteOpportunities(button?: HTMLButtonElement) {
   const input = qs<HTMLTextAreaElement>("#websiteUrlInput");
   const urls = (input?.value || "").split(/\n|,|，/).map((item) => item.trim()).filter(Boolean);
@@ -4263,6 +4750,7 @@ async function parseWebsiteOpportunities(button?: HTMLButtonElement) {
       .map((item) => ({ ...item, selected: false }));
     state.websiteOpportunities = [...result.opportunities.map((item) => ({ ...item, selected: true })), ...existing];
     renderWebsiteOpportunities(state.websiteOpportunities);
+    renderLeadFinder(state.websiteOpportunities);
     toast(`${useAi ? "AI增强" : "规则"}已解析 ${result.opportunities.length} 个官网`);
   } finally {
     if (button) {
@@ -4295,6 +4783,7 @@ async function syncWebsiteOpportunities(button?: HTMLButtonElement) {
       else state.websiteOpportunities.unshift(item.opportunity);
     });
     renderWebsiteOpportunities(state.websiteOpportunities);
+    renderLeadFinder(state.websiteOpportunities);
     renderCustomers(state.customers);
     renderPipeline(state.deals);
     void refreshDashboardOnly();
@@ -5049,6 +5538,48 @@ function installEvents() {
   qsa<HTMLButtonElement>("[data-top-view]").forEach((button) => {
     button.addEventListener("click", () => activateNavView(button.dataset.topView || "dashboard"));
   });
+  ["#leadFinderGoalInput", "#leadSearchModeInput", "#leadSearchDepthInput", "#leadSearchLanguageInput", "#leadValidationInput", "#leadProductKeywords", "#leadCountries", "#leadIndustryInput", "#leadCustomerTypes", "#leadExcludeKeywords"].forEach((selector) => {
+    qs<HTMLElement>(selector)?.addEventListener("input", renderLeadFinderSearchLinks);
+    qs<HTMLElement>(selector)?.addEventListener("change", renderLeadFinderSearchLinks);
+  });
+  qsa<HTMLInputElement>("[data-lead-source]").forEach((input) => {
+    input.addEventListener("change", renderLeadFinderSearchLinks);
+  });
+  qs<HTMLButtonElement>("#leadFinderStartButton")?.addEventListener("click", (event) => void runLeadFinder(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#leadFinderStartButtonInline")?.addEventListener("click", (event) => void runLeadFinder(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#leadFinderSyncButton")?.addEventListener("click", (event) => void syncLeadFinderRows(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#leadFinderTodoButton")?.addEventListener("click", (event) => void createLeadFinderTodos(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#leadFinderExportButton")?.addEventListener("click", exportLeadFinderRows);
+  qs<HTMLButtonElement>("#leadFinderExportButtonQueue")?.addEventListener("click", exportLeadFinderRows);
+  qs<HTMLButtonElement>("#leadFinderSyncButtonSide")?.addEventListener("click", (event) => void syncLeadFinderRows(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#leadFinderTodoButtonSide")?.addEventListener("click", (event) => void createLeadFinderTodos(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#leadFinderExportButtonSide")?.addEventListener("click", exportLeadFinderRows);
+  qs<HTMLButtonElement>("#leadFinderAiConfigButtonSide")?.addEventListener("click", () => activateNavView("ai-config", () => {
+    qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
+    toast("已打开 AI 模型配置");
+  }));
+  qsa<HTMLButtonElement>("[data-lead-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.leadFinderFilter = (button.dataset.leadFilter || "all") as AppState["leadFinderFilter"];
+      renderLeadFinder(state.websiteOpportunities);
+    });
+  });
+  qs<HTMLButtonElement>("#leadFinderAiConfigButton")?.addEventListener("click", () => activateNavView("ai-config", () => {
+    qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
+    toast("已打开 AI 模型配置，保存后回到智能搜客即可启用 AI 解析");
+  }));
+  qsa<HTMLButtonElement>("#gptSaveButton, #gptSaveButtonTop").forEach((button) => {
+    button.addEventListener("click", (event) => void saveAiConfig(event.currentTarget as HTMLButtonElement));
+  });
+  qsa<HTMLButtonElement>("#gptTestButton, #gptTestButtonTop").forEach((button) => {
+    button.addEventListener("click", (event) => void testAiConfig(event.currentTarget as HTMLButtonElement));
+  });
+  qs<HTMLButtonElement>("#gptRevealKeyButton")?.addEventListener("click", (event) => {
+    const input = qs<HTMLInputElement>("#gptApiKeyInput");
+    if (!input) return;
+    input.type = input.type === "password" ? "text" : "password";
+    (event.currentTarget as HTMLButtonElement).textContent = input.type === "password" ? "显示" : "隐藏";
+  });
   qs<HTMLInputElement>("#topSearchInput")?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     const input = event.currentTarget as HTMLInputElement;
@@ -5175,6 +5706,17 @@ function resolveTopbarSearchView(rawValue: string) {
     ["工作台", "dashboard"],
     ["待办", "dashboard"],
     ["todo", "dashboard"],
+    ["搜客", "lead-finder"],
+    ["获客", "lead-finder"],
+    ["线索搜索", "lead-finder"],
+    ["lead", "lead-finder"],
+    ["prospect", "lead-finder"],
+    ["ai", "ai-config"],
+    ["gpt", "ai-config"],
+    ["模型", "ai-config"],
+    ["apikey", "ai-config"],
+    ["api key", "ai-config"],
+    ["AI配置", "ai-config"],
     ["客户", "customers"],
     ["customer", "customers"],
     ["商机", "pipeline"],
