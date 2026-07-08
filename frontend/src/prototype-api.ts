@@ -526,6 +526,7 @@ let memoDirty = false;
 let memoSaving = false;
 let memoSavePromise: Promise<void> | null = null;
 let leadFinderJobs: LeadFinderJob[] = [];
+let customerClockTimer = 0;
 
 const aiProviderPresets: Record<string, {
   label: string;
@@ -1730,17 +1731,15 @@ function renderCustomers(customers: Customer[]) {
   renderCustomerBulkBar(customers);
   tbody.innerHTML = customers.map((customer, index) => {
     const checked = state.selectedCustomerIds.includes(customer.id);
+    const owner = customer.id === "c3" || customer.id === "c4" ? "Mia" : "Shirley";
+    const reminder = customer.nextReminder.includes("逾期") ? badge(customer.nextReminder, "red") : escapeHtml(customer.nextReminder);
     return `<tr class="${index === 0 ? "selected" : ""} ${checked ? "checked" : ""}">
     <td><input type="checkbox" data-select-customer ${checked ? "checked" : ""}></td>
-    <td><div class="company"><span class="flag">${countryFlag(customer.country)}</span><div><b>${escapeHtml(customer.company)}</b><span>${escapeHtml(customer.contact)}</span></div></div></td>
-    <td>${escapeHtml(customer.country)}</td>
+    <td><div class="company"><span class="flag">${countryFlag(customer.country)}</span><div><b>${escapeHtml(customer.company)}</b><span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${owner}</span></div></div></td>
     <td>${badge(customer.stage, customer.stage === "成交" || customer.stage === "谈判" ? "green" : customer.stage === "已报价" ? "amber" : "")}</td>
-    <td class="amount">${amount(customer.amount)}</td>
-    <td>${health(customer.health)}</td>
-    <td>今天</td>
-    <td>${customer.nextReminder.includes("逾期") ? badge(customer.nextReminder, "red") : escapeHtml(customer.nextReminder)}</td>
+    <td><div class="customer-health-cell">${health(customer.health)}<span>${customer.health}%</span></div></td>
+    <td><div class="customer-follow-cell"><span>最近 今天</span><b>${reminder}</b></div></td>
     <td>${badge(customer.wecomBound ? "已绑定" : "未绑定", customer.wecomBound ? "green" : "gray")}</td>
-    <td>${customer.id === "c3" || customer.id === "c4" ? "Mia" : "Shirley"}</td>
     <td><button class="btn" data-edit-customer>编辑</button></td>
   </tr>`;
   }).join("");
@@ -1840,6 +1839,84 @@ function renderCustomerDealProgress(customer: Customer) {
   `;
 }
 
+function customerTimeZone(country = "") {
+  const normalized = country.trim().toLowerCase();
+  const zones: Record<string, string> = {
+    中国: "Asia/Shanghai",
+    china: "Asia/Shanghai",
+    瑞典: "Europe/Stockholm",
+    sweden: "Europe/Stockholm",
+    美国: "America/New_York",
+    usa: "America/New_York",
+    "united states": "America/New_York",
+    日本: "Asia/Tokyo",
+    japan: "Asia/Tokyo",
+    阿联酋: "Asia/Dubai",
+    uae: "Asia/Dubai",
+    德国: "Europe/Berlin",
+    germany: "Europe/Berlin",
+    法国: "Europe/Paris",
+    france: "Europe/Paris",
+    意大利: "Europe/Rome",
+    italy: "Europe/Rome",
+    西班牙: "Europe/Madrid",
+    spain: "Europe/Madrid",
+    荷兰: "Europe/Amsterdam",
+    netherlands: "Europe/Amsterdam",
+    英国: "Europe/London",
+    uk: "Europe/London",
+    印度: "Asia/Kolkata",
+    india: "Asia/Kolkata",
+    澳大利亚: "Australia/Sydney",
+    australia: "Australia/Sydney",
+    土耳其: "Europe/Istanbul",
+    turkey: "Europe/Istanbul",
+    智利: "America/Santiago",
+    chile: "America/Santiago"
+  };
+  return zones[normalized] || zones[country.trim()] || "UTC";
+}
+
+function customerWorldTimeParts(country: string) {
+  const timeZone = customerTimeZone(country);
+  const now = new Date();
+  try {
+    const time = new Intl.DateTimeFormat("zh-CN", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false
+    }).format(now);
+    const date = new Intl.DateTimeFormat("zh-CN", {
+      timeZone,
+      weekday: "short",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(now);
+    const hourText = new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", hour12: false }).format(now);
+    const hour = Number(hourText);
+    const dayPart = hour >= 6 && hour < 12 ? "上午" : hour >= 12 && hour < 18 ? "下午" : hour >= 18 && hour < 22 ? "晚上" : "深夜";
+    const contactHint = hour >= 8 && hour < 18 ? "适合联系" : hour >= 18 && hour < 22 ? "谨慎联系" : "建议预约";
+    return { time, date, timeZone, dayPart, contactHint };
+  } catch {
+    return { time: now.toLocaleTimeString("zh-CN"), date: now.toLocaleDateString("zh-CN"), timeZone: "UTC", dayPart: "未知", contactHint: "待确认" };
+  }
+}
+
+function renderCustomerWorldClock(customer: Customer) {
+  const clock = qs<HTMLElement>("#customerWorldClock");
+  const date = qs<HTMLElement>("#customerWorldDate");
+  const zone = qs<HTMLElement>("#customerWorldZone");
+  const status = qs<HTMLElement>("#customerWorldStatus");
+  if (!clock || !date || !zone || !status) return;
+  const parts = customerWorldTimeParts(customer.country);
+  clock.textContent = parts.time;
+  date.textContent = `${customer.country}当地 · ${parts.date}`;
+  zone.textContent = parts.timeZone;
+  status.textContent = `${parts.dayPart} · ${parts.contactHint}`;
+}
+
 function renderCustomerDrawer(customer?: Customer) {
   const drawer = qs<HTMLElement>("#customers .drawer");
   if (!drawer || !customer) return;
@@ -1854,15 +1931,26 @@ function renderCustomerDrawer(customer?: Customer) {
       <div><h2>${escapeHtml(customer.company)}</h2><p>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.stage)}</p></div>
       ${customer.nextReminder.includes("逾期") ? badge("报价未回复", "red") : badge("跟进中", "green")}
     </div>
+    <section class="customer-time-card" aria-label="客户世界时间">
+      <div>
+        <span>客户世界时间</span>
+        <strong id="customerWorldClock">--:--:--</strong>
+        <small id="customerWorldDate">当地日期加载中</small>
+      </div>
+      <div class="customer-time-side">
+        <b id="customerWorldStatus">待确认</b>
+        <em id="customerWorldZone">UTC</em>
+      </div>
+    </section>
     <div class="score-card">
       <div class="score-ring"><span>${customer.health}</span></div>
-      <div><b>成交评分：${customer.health >= 80 ? "高" : customer.health >= 60 ? "中" : "需抢救"}</b><p>系统按金额、阶段、健康度和下一提醒生成优先级。</p></div>
+      <div><b>跟进评分：${customer.health >= 80 ? "健康" : customer.health >= 60 ? "需保持" : "需抢救"}</b><p>系统按阶段、健康度、企微状态和下一提醒生成跟进优先级。</p></div>
     </div>
     <div class="info-grid">
-      <div class="info"><span>预计金额</span><b>${amount(customer.amount)}</b></div>
       <div class="info"><span>健康度</span><b>${customer.health}%</b></div>
       <div class="info"><span>当前阶段</span><b>${escapeHtml(customer.stage)}</b></div>
       <div class="info"><span>下一提醒</span><b>${escapeHtml(customer.nextReminder)}</b></div>
+      <div class="info"><span>企微状态</span><b>${customer.wecomBound ? "已绑定" : "未绑定"}</b></div>
     </div>
     <div class="inline-actions"><button class="btn primary" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button></div>
     <section class="customer-doc-info">
@@ -1879,10 +1967,13 @@ function renderCustomerDrawer(customer?: Customer) {
     <div class="timeline">
       <div class="timeline-item"><b>企微摘要</b><span>${customer.wecomBound ? "客户已绑定企微，可归档会话摘要。" : "客户暂未绑定企微，建议补充联系方式。"}</span></div>
       <div class="timeline-item"><b>系统提醒</b><span>${escapeHtml(customer.nextReminder)}</span></div>
-      <div class="timeline-item"><b>客户阶段</b><span>${escapeHtml(customer.stage)} · ${amount(customer.amount)}</span></div>
+      <div class="timeline-item"><b>客户阶段</b><span>${escapeHtml(customer.stage)} · ${customer.health}% 健康度</span></div>
     </div>
     ${renderCustomerDealProgress(customer)}
   `;
+  if (customerClockTimer) window.clearInterval(customerClockTimer);
+  renderCustomerWorldClock(customer);
+  customerClockTimer = window.setInterval(() => renderCustomerWorldClock(customer), 1000);
   qs<HTMLButtonElement>("[data-add-follow]", drawer)?.addEventListener("click", () => addFollowRecord(customer));
   qsa<HTMLButtonElement>("[data-edit-customer-drawer]", drawer).forEach((button) => {
     button.addEventListener("click", () => openCustomerModal(customer));

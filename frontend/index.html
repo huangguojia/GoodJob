@@ -2178,6 +2178,159 @@
       align-items: start;
     }
 
+    #customers .content-grid {
+      grid-template-columns: minmax(680px, 1fr) 410px;
+      gap: 18px;
+    }
+
+    #customers .panel.section {
+      padding: 18px;
+    }
+
+    #customers .table-wrap {
+      border-radius: 14px;
+      box-shadow: 0 14px 30px rgba(22, 35, 64, .055);
+    }
+
+    #customers table {
+      min-width: 0;
+      table-layout: fixed;
+    }
+
+    #customers th,
+    #customers td {
+      padding: 14px 10px;
+      white-space: nowrap;
+    }
+
+    #customers th:nth-child(1),
+    #customers td:nth-child(1) { width: 42px; }
+
+    #customers th:nth-child(2),
+    #customers td:nth-child(2) { width: 36%; }
+
+    #customers th:nth-child(3),
+    #customers td:nth-child(3) { width: 82px; }
+
+    #customers th:nth-child(4),
+    #customers td:nth-child(4) { width: 124px; }
+
+    #customers th:nth-child(5),
+    #customers td:nth-child(5) { width: 126px; }
+
+    #customers th:nth-child(6),
+    #customers td:nth-child(6) { width: 74px; }
+
+    #customers th:nth-child(7),
+    #customers td:nth-child(7) { width: 60px; }
+    }
+
+    #customers th {
+      background: #fbfcff;
+      color: #667085;
+      font-size: 11px;
+      letter-spacing: 0;
+    }
+
+    #customers tbody tr {
+      transition: background .18s ease, transform .18s ease, box-shadow .18s ease;
+    }
+
+    #customers tbody tr:hover td {
+      background: #f7faff;
+    }
+
+    #customers tbody tr.selected td {
+      background: #f4f8ff;
+      box-shadow: none;
+    }
+
+    #customers tbody tr.selected td:first-child {
+      box-shadow: inset 3px 0 0 #3157d5;
+    }
+
+    #customers .toolbar {
+      gap: 7px;
+      margin-bottom: 14px;
+    }
+
+    #customers .filter {
+      height: 29px;
+      border-radius: 9px;
+      background: #f9fbff;
+      font-size: 11px;
+    }
+
+    #customers .company {
+      gap: 11px;
+      min-width: 210px;
+    }
+
+    #customers .company div {
+      min-width: 0;
+    }
+
+    #customers .company b {
+      font-size: 13px;
+      line-height: 1.35;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #customers .company span:not(.flag) {
+      color: #7a8497;
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #customers .flag {
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
+      background: linear-gradient(180deg, #fff, #eef3ff);
+    }
+
+    .customer-health-cell {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .customer-health-cell span {
+      color: #667085;
+      font-size: 11px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .customer-health-cell .health {
+      grid-template-columns: repeat(5, 11px);
+      gap: 2px;
+    }
+
+    .customer-follow-cell {
+      display: grid;
+      gap: 4px;
+      min-width: 96px;
+    }
+
+    .customer-follow-cell span {
+      color: #7a8497;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .customer-follow-cell b {
+      color: #17233d;
+      font-size: 12px;
+      font-weight: 900;
+      line-height: 1.2;
+    }
+
     .toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -2297,6 +2450,12 @@
       position: sticky;
       top: 94px;
       padding: 16px;
+    }
+
+    #customers .drawer {
+      padding: 18px;
+      border-radius: 16px;
+      box-shadow: 0 18px 42px rgba(22, 35, 64, .07);
     }
 
     .drawer-head {
@@ -3932,6 +4091,73 @@
       border: 1px solid var(--line-soft);
       background: #f8faff;
       margin-bottom: 12px;
+    }
+
+    .customer-time-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      margin-bottom: 12px;
+      padding: 16px;
+      border: 1px solid rgba(49, 87, 213, .16);
+      border-radius: 14px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.96), rgba(245,248,255,.98)),
+        radial-gradient(circle at 88% 18%, rgba(26,167,161,.16), transparent 28%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 12px 28px rgba(49,87,213,.08);
+    }
+
+    .customer-time-card span {
+      display: block;
+      margin-bottom: 6px;
+      color: #667085;
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    .customer-time-card strong {
+      display: block;
+      color: #13233f;
+      font-size: 30px;
+      line-height: 1;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .customer-time-card small {
+      display: block;
+      margin-top: 8px;
+      color: #667085;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .customer-time-side {
+      display: grid;
+      justify-items: end;
+      gap: 7px;
+    }
+
+    .customer-time-side b {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: #eafaf7;
+      color: #08766f;
+      font-size: 11px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .customer-time-side em {
+      color: #7a8497;
+      font-size: 11px;
+      font-style: normal;
+      font-weight: 800;
+      white-space: nowrap;
     }
 
     .score-ring {
@@ -7628,9 +7854,10 @@
       .persona-board { grid-template-columns: 1fr; }
       .file-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .focus-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .drawer { position: static; }
-      .pipeline-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    }
+	      .drawer { position: static; }
+	      #customers .content-grid { grid-template-columns: 1fr; }
+	      .pipeline-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+	    }
 
     @media (max-width: 760px) {
       .shell { display: block; }
@@ -8444,13 +8671,13 @@
               </div>
               <div class="table-wrap">
                 <table>
-                  <thead><tr><th style="width:34px">选</th><th>客户</th><th>国家</th><th>阶段</th><th>金额</th><th>健康度</th><th>最近跟进</th><th>下一提醒</th><th>企微</th><th>归属人</th><th>操作</th></tr></thead>
+                  <thead><tr><th style="width:34px">选</th><th>客户</th><th>阶段</th><th>健康度</th><th>跟进节奏</th><th>企微</th><th>操作</th></tr></thead>
                   <tbody>
-                    <tr class="selected"><td><div class="company"><span class="flag">🇸🇪</span><div><b>Nordic Tools AB</b><span>采购经理 Emma</span></div></div></td><td>瑞典</td><td><span class="badge amber">已报价</span></td><td class="amount">$36,000</td><td><span class="health warn"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></td><td>5 天前</td><td><span class="badge red">已逾期</span></td><td><span class="badge green">已绑定</span></td><td>Shirley</td></tr>
-                    <tr><td><div class="company"><span class="flag">🇺🇸</span><div><b>Atlas Home Inc</b><span>Buyer Daniel</span></div></div></td><td>美国</td><td><span class="badge">样品</span></td><td class="amount">$22,000</td><td><span class="health"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></td><td>昨天</td><td>今天 16:00</td><td><span class="badge green">已绑定</span></td><td>Alex</td></tr>
-                    <tr><td><div class="company"><span class="flag">🇯🇵</span><div><b>Kanto Retail</b><span>Director Sato</span></div></div></td><td>日本</td><td><span class="badge green">谈判</span></td><td class="amount">$48,000</td><td><span class="health"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></td><td>今天</td><td>明天 09:30</td><td><span class="badge gray">未绑定</span></td><td>Shirley</td></tr>
-                    <tr><td><div class="company"><span class="flag">🇦🇪</span><div><b>Al Noor Trading</b><span>Owner Hassan</span></div></div></td><td>阿联酋</td><td><span class="badge amber">已报价</span></td><td class="amount">$18,000</td><td><span class="health bad"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></td><td>2 天前</td><td>今天 10:30</td><td><span class="badge green">已绑定</span></td><td>Mia</td></tr>
-                    <tr><td><div class="company"><span class="flag">🇩🇪</span><div><b>Evergreen GmbH</b><span>Buyer Anna</span></div></div></td><td>德国</td><td><span class="badge green">成交</span></td><td class="amount">$57,000</td><td><span class="health"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></td><td>今天</td><td>7 天后复购</td><td><span class="badge green">已绑定</span></td><td>Alex</td></tr>
+                    <tr class="selected"><td><input type="checkbox"></td><td><div class="company"><span class="flag">🇸🇪</span><div><b>Nordic Tools AB</b><span>瑞典 · 采购经理 Emma · Shirley</span></div></div></td><td><span class="badge amber">已报价</span></td><td><div class="customer-health-cell"><span class="health warn"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span><span>68%</span></div></td><td><div class="customer-follow-cell"><span>最近 今天</span><b><span class="badge red">已逾期</span></b></div></td><td><span class="badge green">已绑定</span></td><td><button class="btn">编辑</button></td></tr>
+                    <tr><td><input type="checkbox"></td><td><div class="company"><span class="flag">🇺🇸</span><div><b>Atlas Home Inc</b><span>美国 · Buyer Daniel · Alex</span></div></div></td><td><span class="badge">样品</span></td><td><div class="customer-health-cell"><span class="health"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><span>78%</span></div></td><td><div class="customer-follow-cell"><span>最近 昨天</span><b>今天 16:00</b></div></td><td><span class="badge green">已绑定</span></td><td><button class="btn">编辑</button></td></tr>
+                    <tr><td><input type="checkbox"></td><td><div class="company"><span class="flag">🇯🇵</span><div><b>Kanto Retail</b><span>日本 · Director Sato · Shirley</span></div></div></td><td><span class="badge green">谈判</span></td><td><div class="customer-health-cell"><span class="health"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span><span>86%</span></div></td><td><div class="customer-follow-cell"><span>最近 今天</span><b>明天 09:30</b></div></td><td><span class="badge gray">未绑定</span></td><td><button class="btn">编辑</button></td></tr>
+                    <tr><td><input type="checkbox"></td><td><div class="company"><span class="flag">🇦🇪</span><div><b>Al Noor Trading</b><span>阿联酋 · Owner Hassan · Mia</span></div></div></td><td><span class="badge amber">已报价</span></td><td><div class="customer-health-cell"><span class="health bad"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span><span>42%</span></div></td><td><div class="customer-follow-cell"><span>最近 今天</span><b>今天 10:30</b></div></td><td><span class="badge green">已绑定</span></td><td><button class="btn">编辑</button></td></tr>
+                    <tr><td><input type="checkbox"></td><td><div class="company"><span class="flag">🇩🇪</span><div><b>Evergreen GmbH</b><span>德国 · Buyer Anna · Alex</span></div></div></td><td><span class="badge green">成交</span></td><td><div class="customer-health-cell"><span class="health"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span><span>91%</span></div></td><td><div class="customer-follow-cell"><span>最近 今天</span><b>7 天后复购</b></div></td><td><span class="badge green">已绑定</span></td><td><button class="btn">编辑</button></td></tr>
                   </tbody>
                 </table>
               </div>
@@ -8461,18 +8688,29 @@
                 <div><h2>Nordic Tools AB</h2><p>瑞典 · 工业工具进口商 · A 级客户</p></div>
                 <span class="badge red">报价未回复</span>
               </div>
+              <section class="customer-time-card" aria-label="客户世界时间">
+                <div>
+                  <span>客户世界时间</span>
+                  <strong>14:28:36</strong>
+                  <small>瑞典当地 · 周三 07/08</small>
+                </div>
+                <div class="customer-time-side">
+                  <b>下午 · 适合联系</b>
+                  <em>Europe/Stockholm</em>
+                </div>
+              </section>
               <div class="score-card">
                 <div class="score-ring"><span>68</span></div>
                 <div>
-                  <b>成交评分：中高</b>
-                  <p>金额高、客户等级高，但报价停留时间过长，需要今日二次确认。</p>
+                  <b>跟进评分：需保持</b>
+                  <p>客户等级高，但报价停留时间过长，需要今日二次确认。</p>
                 </div>
               </div>
               <div class="info-grid">
-                <div class="info"><span>预计金额</span><b>$36,000</b></div>
-                <div class="info"><span>赢率</span><b>42%</b></div>
+                <div class="info"><span>健康度</span><b>68%</b></div>
                 <div class="info"><span>当前阶段</span><b>已报价</b></div>
-                <div class="info"><span>下一动作</span><b>二次确认</b></div>
+                <div class="info"><span>下一提醒</span><b>已逾期</b></div>
+                <div class="info"><span>企微状态</span><b>已绑定</b></div>
               </div>
               <button class="btn primary" style="width:100%">新增跟进记录</button>
               <div class="timeline">
