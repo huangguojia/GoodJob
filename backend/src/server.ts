@@ -3610,6 +3610,7 @@ function currentMinuteText() {
 }
 
 type AiUseCase = "leadFinder" | "websiteParse" | "scoring" | "emailDraft" | "exam";
+const AI_MODEL_TIMEOUT_MS = 120000;
 
 function getAiConfigs(user: SessionUser) {
   return getStore().aiModelConfigs
@@ -3970,10 +3971,11 @@ async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars 
   const protocol = config.protocol || "openai-compatible";
   const endpointBase = config.baseUrl.replace(/\/+$/, "");
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
+  const timeout = setTimeout(() => controller.abort(), AI_MODEL_TIMEOUT_MS);
   try {
     if (protocol === "anthropic") {
-      const response = await fetch(`${endpointBase}/messages`, {
+      const endpoint = `${endpointBase}/messages`;
+      const response = await fetch(endpoint, {
         method: "POST",
         signal: controller.signal,
         headers: {
@@ -3989,14 +3991,14 @@ async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars 
           messages: [{ role: "user", content: prompt.slice(0, maxInputChars) }]
         })
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json() as { content?: Array<{ type?: string; text?: string }> };
+      const data = await readAiJson<{ content?: Array<{ type?: string; text?: string }> }>(response, endpoint);
       const content = data.content?.map((item) => item.text || "").join("\n").trim() || "";
       if (!content) throw new Error("模型返回为空");
       return content;
     }
     if (protocol === "gemini") {
-      const response = await fetch(`${endpointBase}/models/${encodeURIComponent(config.model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`, {
+      const endpoint = `${endpointBase}/models/${encodeURIComponent(config.model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
+      const response = await fetch(endpoint, {
         method: "POST",
         signal: controller.signal,
         headers: { "content-type": "application/json" },
@@ -4008,8 +4010,7 @@ async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars 
           }]
         })
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+      const data = await readAiJson<{ candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }>(response, endpoint);
       const content = data.candidates?.[0]?.content?.parts?.map((item) => item.text || "").join("\n").trim() || "";
       if (!content) throw new Error("模型返回为空");
       return content;
@@ -4032,14 +4033,35 @@ async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars 
         response_format: { type: "json_object" }
       })
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const data = await readAiJson<{ choices?: Array<{ message?: { content?: string } }> }>(response, endpoint);
     const content = data.choices?.[0]?.message?.content || "";
     if (!content.trim()) throw new Error("模型返回为空");
     return content;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function readAiJson<T>(response: globalThis.Response, endpoint: string): Promise<T> {
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    const preview = text.slice(0, 120).replace(/\s+/g, " ").trim();
+    if (contentType.includes("text/html") || text.trim().startsWith("<")) {
+      throw new Error(`接口返回 HTML 页面而不是 JSON。请检查 Base URL 是否填到了 API 地址，例如 OpenAI 兼容接口通常需要以 /v1 结尾；当前请求：${endpoint}`);
+    }
+    throw new Error(`接口返回内容不是 JSON：${preview || "空响应"}`);
+  }
+  if (!response.ok) {
+    const providerMessage = data?.error?.message || data?.message || "";
+    const providerType = data?.error?.type || data?.error?.code || "";
+    const suffix = providerMessage ? `：${providerMessage}${providerType ? `（${providerType}）` : ""}` : "";
+    throw new Error(`HTTP ${response.status}${suffix}`);
+  }
+  return data as T;
 }
 
 function extractJsonObject(content: string) {

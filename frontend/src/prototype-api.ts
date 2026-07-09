@@ -6085,8 +6085,9 @@ function renderLeadFinderJobDetails(job: LeadFinderJob) {
     .map((id) => state.websiteOpportunities.find((item) => item.id === id))
     .filter(Boolean) as WebsiteOpportunity[];
   const foundHtml = found.length ? `
+    <div class="lead-job-found-head"><b>本次候选公司</b><span>${found.length} 条，可滚动查看</span></div>
     <div class="lead-job-found-list">
-      ${found.slice(0, 8).map((item) => `
+      ${found.map((item) => `
         <button type="button" data-lead-job-pick="${escapeHtml(item.id)}">
           <b>${escapeHtml(item.company || "公司待确认")}</b>
           <span>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website || ""))}</span>
@@ -6586,6 +6587,7 @@ async function runLeadFinder(button?: HTMLButtonElement) {
   const job = createLeadFinderJob("running");
   if (button) {
     button.disabled = true;
+    button.classList.add("is-running");
     button.textContent = useAi ? "AI搜客中" : "搜客任务运行中";
   }
   try {
@@ -6636,6 +6638,7 @@ async function runLeadFinder(button?: HTMLButtonElement) {
   } finally {
     if (button) {
       button.disabled = false;
+      button.classList.remove("is-running");
       button.textContent = originalText;
     }
   }

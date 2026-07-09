@@ -336,6 +336,7 @@
       appearance: none;
       min-width: 32px;
       height: 30px;
+      position: relative;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -348,6 +349,43 @@
       cursor: pointer;
       font-size: 12px;
       box-shadow: 0 1px 1px rgba(27, 39, 68, .04);
+      overflow: hidden;
+    }
+
+    .btn.is-running {
+      border-color: rgba(73, 92, 210, .45);
+      box-shadow: 0 0 0 1px rgba(73, 92, 210, .08), 0 10px 24px rgba(73, 92, 210, .18);
+    }
+
+    .btn.is-running::after {
+      content: "";
+      position: absolute;
+      inset: -45%;
+      background:
+        radial-gradient(circle, rgba(255,255,255,.58) 0 10%, transparent 11% 30%),
+        linear-gradient(105deg, transparent 34%, rgba(255,255,255,.42) 48%, transparent 62%);
+      opacity: .72;
+      transform: translateX(-38%) rotate(8deg);
+      animation: btn-running-ripple 1.8s ease-in-out infinite;
+      pointer-events: none;
+    }
+
+    .btn.is-running > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    @keyframes btn-running-ripple {
+      0% { transform: translateX(-42%) rotate(8deg) scale(.96); opacity: .22; }
+      45% { opacity: .7; }
+      100% { transform: translateX(42%) rotate(8deg) scale(1.04); opacity: .18; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .btn.is-running::after {
+        animation: none;
+        opacity: .28;
+      }
     }
 
     .btn.icon-only {
@@ -4231,9 +4269,50 @@
       line-height: 1.45;
     }
 
+    .lead-job-found-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 1px 2px 0;
+      color: #40506a;
+      font-size: 11px;
+    }
+
+    .lead-job-found-head b {
+      color: #172033;
+      font-size: 12px;
+    }
+
+    .lead-job-found-head span {
+      color: #708097;
+      font-size: 10px;
+    }
+
     .lead-job-found-list {
       display: grid;
       gap: 6px;
+      min-height: 166px;
+      max-height: 230px;
+      padding: 6px;
+      border: 1px solid #dce4f2;
+      border-radius: 8px;
+      background: rgba(255,255,255,.72);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+
+    .lead-job-found-list::-webkit-scrollbar {
+      width: 7px;
+    }
+
+    .lead-job-found-list::-webkit-scrollbar-thumb {
+      border-radius: 999px;
+      background: #c9d4e5;
+    }
+
+    .lead-job-found-list::-webkit-scrollbar-track {
+      background: transparent;
     }
 
     .lead-job-found-list button {
@@ -4241,6 +4320,7 @@
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 3px 8px;
       align-items: center;
+      min-height: 48px;
       padding: 8px 9px;
       border: 1px solid #dce4f2;
       border-radius: 7px;
