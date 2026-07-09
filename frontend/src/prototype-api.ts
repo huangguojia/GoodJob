@@ -132,6 +132,110 @@ interface TradeDocument {
   items: TradeDocumentItem[];
 }
 
+type CommissionRuleType = "rate" | "fixed" | "tier" | "gross_profit" | "none";
+
+interface CommissionProduct {
+  id: string;
+  name: string;
+  category: string;
+  model: string;
+  currency: string;
+  defaultPrice: number;
+  costPrice: number;
+  status: "active" | "disabled";
+  remark: string;
+  updatedAt: string;
+}
+
+interface CommissionRule {
+  id: string;
+  productId: string;
+  ruleType: CommissionRuleType;
+  rate: number;
+  fixedAmount: number;
+  tierJson: string;
+  grossProfitRate: number;
+  effectiveFrom: string;
+  effectiveTo: string;
+  enabled: boolean;
+  remark: string;
+  createdAt: string;
+}
+
+interface MonthlySalesRecord {
+  id: string;
+  month: string;
+  ownerId: string;
+  teamId: string;
+  customerId: string;
+  customerName: string;
+  dealId: string;
+  productId: string;
+  productName: string;
+  quantity: number;
+  unitPrice: number;
+  salesAmount: number;
+  currency: string;
+  exchangeRate: number;
+  settlementAmount: number;
+  dealArchivedAt: string;
+  sourceType: "deal" | "manual" | "adjusted";
+  status: "draft" | "confirmed" | "reviewed" | "locked";
+  edited: boolean;
+  editNote: string;
+  lastEditedBy: string;
+  lastEditedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface SalesRecordAudit {
+  id: string;
+  recordId: string;
+  fieldName: string;
+  oldValue: string;
+  newValue: string;
+  reason: string;
+  operatorName: string;
+  createdAt: string;
+}
+
+interface CommissionCalculation {
+  id: string;
+  month: string;
+  ownerId: string;
+  teamId: string;
+  salesAmount: number;
+  autoCommission: number;
+  manualAdjustment: number;
+  finalCommission: number;
+  status: "pending" | "calculated" | "reviewed" | "locked";
+  calculatedAt: string;
+}
+
+interface CommissionItem {
+  id: string;
+  calculationId: string;
+  recordId: string;
+  productId: string;
+  itemType: "auto" | "bonus" | "deduction" | "subsidy" | "refund" | "special" | "other";
+  sourceType: "auto" | "manual";
+  salesAmount: number;
+  autoAmount: number;
+  manualAmount: number;
+  finalAmount: number;
+  remark: string;
+  createdAt: string;
+}
+
+interface CommissionOwner {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+  teamId: string;
+}
+
 interface CustomerImportRow {
   company: string;
   country: string;
@@ -470,6 +574,20 @@ interface AppState {
   planTemplates: PlanTemplate[];
   competitors: Competitor[];
   caseStudies: CaseStudy[];
+  commissionProducts: CommissionProduct[];
+  commissionRules: CommissionRule[];
+  commissionRecords: MonthlySalesRecord[];
+  commissionCalculations: CommissionCalculation[];
+  commissionItems: CommissionItem[];
+  commissionCanManage: boolean;
+  commissionCanReview: boolean;
+  commissionCanSelectOwner: boolean;
+  commissionOwners: CommissionOwner[];
+  selectedCommissionOwnerId: string;
+  commissionMonth: string;
+  commissionFilter: "all" | "draft" | "confirmed";
+  selectedCommissionRecordId: string | null;
+  selectedCommissionCalculationId: string | null;
   accounts: User[];
   reportNote: string;
   dashboardPeriod: "today" | "week" | "month";
@@ -525,6 +643,20 @@ const state: AppState = {
   planTemplates: [],
   competitors: [],
   caseStudies: [],
+  commissionProducts: [],
+  commissionRules: [],
+  commissionRecords: [],
+  commissionCalculations: [],
+  commissionItems: [],
+  commissionCanManage: false,
+  commissionCanReview: false,
+  commissionCanSelectOwner: false,
+  commissionOwners: [],
+  selectedCommissionOwnerId: "",
+  commissionMonth: new Date().toISOString().slice(0, 7),
+  commissionFilter: "all",
+  selectedCommissionRecordId: null,
+  selectedCommissionCalculationId: null,
   accounts: [],
   reportNote: "",
   dashboardPeriod: "today",
@@ -601,6 +733,11 @@ function qs<T extends Element>(selector: string, root: ParentNode = document): T
 
 function qsa<T extends Element>(selector: string, root: ParentNode = document): T[] {
   return [...root.querySelectorAll(selector)] as T[];
+}
+
+function setFieldValue(selector: string, value: string) {
+  const input = qs<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(selector);
+  if (input) input.value = value;
 }
 
 function money(value: number) {
@@ -833,12 +970,35 @@ function roleScopeText(user: User) {
   return "全局业务数据、最高账号权限，本人待办私有";
 }
 
+function updateProfileSmtpHints(user = state.user) {
+  const passwordInput = qs<HTMLInputElement>("#profileSmtpPassword");
+  const passwordHint = qs<HTMLElement>("#profileSmtpPasswordHint");
+  const configHint = qs<HTMLElement>("#profileSmtpConfigHint");
+  const port = Number(qs<HTMLInputElement>("#profileSmtpPort")?.value || user?.smtpPort || 465);
+  const secure = qs<HTMLSelectElement>("#profileSmtpSecure")?.value !== "false";
+  if (passwordInput) {
+    passwordInput.placeholder = user?.hasSmtpPassword ? "已保存授权码；输入新授权码可覆盖" : "输入授权码后保存";
+  }
+  if (passwordHint) {
+    passwordHint.className = user?.hasSmtpPassword ? "ok" : "";
+    passwordHint.textContent = user?.hasSmtpPassword ? "授权码已保存到数据库，出于安全不会明文回显；留空保存会保留原授权码。" : "授权码保存后不会明文回显；QQ/企业邮箱通常需要专用授权码，不是网页登录密码。";
+  }
+  if (configHint) {
+    if (port === 587 && secure) {
+      configHint.className = "warn";
+      configHint.textContent = "当前是 587 + SSL/TLS，通常会连接失败；请改为 STARTTLS/普通，或把端口改成 465。";
+    } else if (port === 465 && !secure) {
+      configHint.className = "warn";
+      configHint.textContent = "当前是 465 + STARTTLS/普通，通常会连接失败；请改为 SSL/TLS，或把端口改成 587。";
+    } else {
+      configHint.className = "ok";
+      configHint.textContent = port === 587 ? "587 建议使用 STARTTLS/普通；配置组合看起来正常。" : port === 465 ? "465 建议使用 SSL/TLS；配置组合看起来正常。" : "非标准端口，请确认服务商要求的加密方式。";
+    }
+  }
+}
+
 function renderProfile(user = state.user) {
   if (!user) return;
-  const setValue = (selector: string, value: string) => {
-    const input = qs<HTMLInputElement | HTMLTextAreaElement>(selector);
-    if (input) input.value = value;
-  };
   const avatar = qs<HTMLElement>("#profileAvatarLarge");
   const name = qs<HTMLElement>("#profileNameTitle");
   const role = qs<HTMLElement>("#profileRoleText");
@@ -862,20 +1022,22 @@ function renderProfile(user = state.user) {
   qs<HTMLElement>("#profileLoginEmailText")!.textContent = user.email;
   qs<HTMLElement>("#profileIdText")!.textContent = user.id;
   qs<HTMLElement>("#profileScopeText")!.textContent = roleScopeText(user);
-  setValue("#profileLoginEmail", user.email);
-  setValue("#profileOutboundEmail", user.outboundEmail || "");
-  setValue("#profileSenderName", user.emailSenderName || user.name);
-  setValue("#profileEmailSignature", user.emailSignature || `Best regards,\n${user.name}\nGoodJob Instrument Sales`);
-  setValue("#profileSmtpHost", user.smtpHost || "");
-  setValue("#profileSmtpPort", String(user.smtpPort || 465));
-  setValue("#profileSmtpUser", user.smtpUser || user.outboundEmail || "");
-  setValue("#profileSmtpPassword", "");
+  setFieldValue("#profileLoginEmail", user.email);
+  setFieldValue("#profileOutboundEmail", user.outboundEmail || "");
+  setFieldValue("#profileSenderName", user.emailSenderName || "");
+  setFieldValue("#profileEmailSignature", user.emailSignature || "");
+  setFieldValue("#profileSmtpHost", user.smtpHost || "");
+  setFieldValue("#profileSmtpPort", String(user.smtpPort || 465));
+  setFieldValue("#profileSmtpUser", user.smtpUser || "");
+  setFieldValue("#profileSmtpPassword", "");
+  setFieldValue("#profileTestEmailTo", "");
   const smtpSecure = qs<HTMLSelectElement>("#profileSmtpSecure");
   if (smtpSecure) smtpSecure.value = String(user.smtpSecure ?? true);
   if (status) status.innerHTML = user.outboundEmail ? `${badge("已绑定", "green")} ${escapeHtml(user.outboundEmail)}` : `${badge("未绑定", "amber")} 请先绑定发件邮箱`;
   if (signatureStatus) signatureStatus.innerHTML = user.emailSignature?.trim() ? `${badge("已设置", "green")} ${escapeHtml((user.emailSignature.split("\n")[0] || "签名已维护").slice(0, 36))}` : `${badge("待完善", "amber")} 建议补充英文签名`;
   const smtpStatus = qs<HTMLElement>("#profileSmtpStatus");
   if (smtpStatus) smtpStatus.innerHTML = user.smtpHost && user.smtpUser && user.hasSmtpPassword ? `${badge("已配置", "green")} ${escapeHtml(user.smtpHost)}` : `${badge("未完整", "amber")} 填写SMTP后才能真实发信`;
+  updateProfileSmtpHints(user);
 }
 
 function collectDevelopmentEmailDraft() {
@@ -896,7 +1058,7 @@ function collectDevelopmentEmailDraft() {
 function generateDevelopmentEmailDraft() {
   const company = qs<HTMLInputElement>("#devEmailCompany")?.value.trim() || "your company";
   const sender = qs<HTMLInputElement>("#profileSenderName")?.value.trim() || state.user?.name || "GoodJob Sales";
-  const signature = qs<HTMLTextAreaElement>("#profileEmailSignature")?.value.trim() || `Best regards,\n${sender}\nGoodJob Instrument Sales`;
+  const signature = qs<HTMLTextAreaElement>("#profileEmailSignature")?.value.trim() || `Best regards,\n${sender}`;
   const body = [
     `Dear ${company} team,`,
     "",
@@ -932,7 +1094,7 @@ function updateStoredUser(user: User, token?: string) {
   applyAuthedUser(user);
 }
 
-async function saveProfileEmailBinding(button?: HTMLButtonElement) {
+async function saveProfileEmailBinding(button?: HTMLButtonElement, clearSmtpPassword = false) {
   const outboundEmail = qs<HTMLInputElement>("#profileOutboundEmail")?.value.trim() || "";
   const emailSenderName = qs<HTMLInputElement>("#profileSenderName")?.value.trim() || "";
   const emailSignature = qs<HTMLTextAreaElement>("#profileEmailSignature")?.value.trim() || "";
@@ -941,37 +1103,55 @@ async function saveProfileEmailBinding(button?: HTMLButtonElement) {
   const smtpSecure = qs<HTMLSelectElement>("#profileSmtpSecure")?.value !== "false";
   const smtpUser = qs<HTMLInputElement>("#profileSmtpUser")?.value.trim() || "";
   const smtpPassword = qs<HTMLInputElement>("#profileSmtpPassword")?.value || "";
-  if (!outboundEmail || !emailSenderName) {
-    toast("请填写发件邮箱和发件人名称", "error");
-    return;
-  }
+  const idleText = clearSmtpPassword ? "清空邮箱绑定" : "保存个人资料";
   if (button) {
     button.disabled = true;
-    button.textContent = "保存中";
+    button.textContent = clearSmtpPassword ? "清空中" : "保存中";
   }
   try {
     const result = await api<{ user: User; token: string }>("/api/profile/email-binding", {
       method: "PATCH",
-      body: JSON.stringify({ outboundEmail, emailSenderName, emailSignature, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPassword })
+      body: JSON.stringify({ outboundEmail, emailSenderName, emailSignature, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPassword, clearSmtpPassword })
     });
     updateStoredUser(result.user, result.token);
-    toast("发件邮箱已绑定");
+    toast(outboundEmail ? "个人邮箱配置已保存" : "个人邮箱配置已清空");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "个人邮箱配置保存失败", "error");
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "保存个人资料";
+      button.textContent = idleText;
     }
   }
 }
 
+async function clearProfileEmailBinding(button?: HTMLButtonElement) {
+  if (!window.confirm("确认清空发件邮箱、SMTP配置、授权码和邮件签名？")) return;
+  setFieldValue("#profileOutboundEmail", "");
+  setFieldValue("#profileSenderName", "");
+  setFieldValue("#profileEmailSignature", "");
+  setFieldValue("#profileSmtpHost", "");
+  setFieldValue("#profileSmtpPort", "465");
+  setFieldValue("#profileSmtpUser", "");
+  setFieldValue("#profileSmtpPassword", "");
+  setFieldValue("#profileTestEmailTo", "");
+  await saveProfileEmailBinding(button, true);
+}
+
 async function sendProfileTestEmail(button?: HTMLButtonElement) {
+  const to = qs<HTMLInputElement>("#profileTestEmailTo")?.value.trim() || "";
   if (button) {
     button.disabled = true;
     button.textContent = "发送中";
   }
   try {
-    const result = await api<{ ok: boolean; simulated: boolean; messageId?: string }>("/api/profile/test-email", { method: "POST" });
+    const result = await api<{ ok: boolean; simulated: boolean; messageId?: string; to?: string }>("/api/profile/test-email", {
+      method: "POST",
+      body: JSON.stringify({ to })
+    });
     toast(result.simulated ? "测试邮件已生成（测试环境未外发）" : "测试邮件已发送，请检查发件邮箱收件箱");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "测试邮件发送失败", "error");
   } finally {
     if (button) {
       button.disabled = false;
@@ -1001,6 +1181,8 @@ async function sendDevelopmentEmail(button?: HTMLButtonElement) {
     });
     updateStoredUser(result.user);
     toast(result.sent.simulated ? "开发信已发送（系统模拟记录）" : "开发信已发送");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "开发信发送失败", "error");
   } finally {
     if (button) {
       button.disabled = false;
@@ -1011,7 +1193,7 @@ async function sendDevelopmentEmail(button?: HTMLButtonElement) {
 
 async function refreshAll(user: User) {
   renderDashboardCache(user);
-  const [summary, customers, todos, deals, reminders, jobs, tradeDocs, wecom, knowledge, exams, ocr, websiteOps, aiConfig, problems, memos, planTasks, planTemplates, competitors, caseStudies] = await Promise.all([
+  const [summary, customers, todos, deals, reminders, jobs, tradeDocs, wecom, knowledge, exams, ocr, websiteOps, aiConfig, problems, memos, planTasks, planTemplates, competitors, caseStudies, commissionProducts, commissionRecords, commissionCalculations] = await Promise.all([
     api<DashboardSummary>("/api/dashboard/summary"),
     api<{ customers: Customer[] }>("/api/customers"),
     api<{ todos: Todo[] }>("/api/todos"),
@@ -1030,7 +1212,10 @@ async function refreshAll(user: User) {
     api<{ tasks: PlanTask[] }>("/api/plan-tasks"),
     api<{ templates: PlanTemplate[] }>("/api/plan-templates"),
     api<{ competitors: Competitor[] }>("/api/competitors"),
-    api<{ caseStudies: CaseStudy[] }>("/api/case-studies")
+    api<{ caseStudies: CaseStudy[] }>("/api/case-studies"),
+    api<{ products: CommissionProduct[]; rules: CommissionRule[]; canManage: boolean; canSelectOwner: boolean; owners: CommissionOwner[] }>("/api/commission/products"),
+    api<{ records: MonthlySalesRecord[]; owners?: CommissionOwner[]; canSelectOwner?: boolean; selectedOwnerId?: string }>(`/api/commission/sales-records?month=${encodeURIComponent(state.commissionMonth)}&ownerId=${encodeURIComponent(state.selectedCommissionOwnerId || "")}`),
+    api<{ calculations: CommissionCalculation[]; items: CommissionItem[]; canReview: boolean; canSelectOwner?: boolean; owners?: CommissionOwner[]; selectedOwnerId?: string }>(`/api/commission/calculations?month=${encodeURIComponent(state.commissionMonth)}&ownerId=${encodeURIComponent(state.selectedCommissionOwnerId || "")}`)
   ]);
   state.user = user;
   state.summary = summary;
@@ -1057,6 +1242,18 @@ async function refreshAll(user: User) {
   state.planTemplates = planTemplates.templates;
   state.competitors = competitors.competitors;
   state.caseStudies = caseStudies.caseStudies;
+  state.commissionProducts = commissionProducts.products;
+  state.commissionRules = commissionProducts.rules;
+  state.commissionCanManage = commissionProducts.canManage;
+  state.commissionCanSelectOwner = commissionProducts.canSelectOwner;
+  state.commissionOwners = commissionProducts.owners || commissionRecords.owners || commissionCalculations.owners || [];
+  state.selectedCommissionOwnerId = state.commissionCanSelectOwner
+    ? (commissionRecords.selectedOwnerId || commissionCalculations.selectedOwnerId || state.selectedCommissionOwnerId || "all")
+    : (state.user?.id || "");
+  state.commissionRecords = commissionRecords.records;
+  state.commissionCalculations = commissionCalculations.calculations;
+  state.commissionItems = commissionCalculations.items;
+  state.commissionCanReview = commissionCalculations.canReview;
   state.selectedCustomerId = state.selectedCustomerId || customers.customers[0]?.id || null;
   state.selectedProblemId = state.selectedProblemId || problems.problems[0]?.id || null;
   state.selectedMemoId = state.selectedMemoId || memos.memos[0]?.id || null;
@@ -1081,6 +1278,7 @@ async function refreshAll(user: User) {
   renderPlanTemplates(planTemplates.templates);
   renderCompetitors(competitors.competitors);
   renderCaseStudies(caseStudies.caseStudies);
+  renderCommission();
   await renderAccounts(user);
   renderOcr(ocr.job);
   renderAiConfig(state.aiConfig);
@@ -2241,7 +2439,7 @@ function openDealModal(editing?: Deal) {
         <div class="deal-customer-options" id="dealCustomerOptions"></div>
       </div>
       <div class="form-field"><label>阶段</label><select id="dealStageInput">${["询盘", "已联系", "已报价", "样品", "谈判", "成交"].map((stage) => `<option ${stage === editing?.stage ? "selected" : ""}>${stage}</option>`).join("")}</select></div>
-      <div class="form-field full"><label>产品</label><input id="dealProductInput" value="${escapeHtml(editing?.product || "")}" placeholder="例如：压力变送器 PT-2088"></div>
+      <div class="form-field full"><label>产品</label><input id="dealProductInput" value="${escapeHtml(editing?.product || "")}" placeholder="例如：核心产品 / 型号 X100"></div>
       <div class="form-field"><label>数量</label><input id="dealQuantityInput" type="number" min="0" step="1" value="${quantity || 30}"></div>
       <div class="form-field"><label>单价</label><input id="dealUnitPriceInput" type="number" min="0" step="0.01" value="${unitPrice || 600}"></div>
       <div class="form-field"><label>金额</label><input id="dealAmountInput" type="number" value="${computedAmount}" readonly></div>
@@ -2373,6 +2571,531 @@ async function saveDeal() {
   void refreshDashboardOnly();
   closeModal();
   toast(dealId ? "商机已更新" : "商机已新增");
+}
+
+function commissionStatusLabel(status: string) {
+  const map: Record<string, string> = { draft: "待确认", confirmed: "已确认", reviewed: "已复核", locked: "已锁定", pending: "待计算", calculated: "已计算" };
+  return map[status] || status;
+}
+
+function commissionStatusTone(status: string) {
+  if (status === "locked" || status === "reviewed" || status === "confirmed" || status === "calculated") return "green";
+  if (status === "draft" || status === "pending") return "amber";
+  return "gray";
+}
+
+function commissionRuleLabel(rule?: CommissionRule) {
+  if (!rule) return "未配置";
+  if (rule.ruleType === "rate") return `销售额 ${(rule.rate * 100).toFixed(2)}%`;
+  if (rule.ruleType === "fixed") return `固定 ${amount(rule.fixedAmount)} / 件`;
+  if (rule.ruleType === "gross_profit") return `毛利 ${(rule.grossProfitRate * 100).toFixed(2)}%`;
+  if (rule.ruleType === "tier") return "阶梯计提";
+  return "不计提";
+}
+
+function findCommissionProductForRecord(record: MonthlySalesRecord) {
+  const normalized = record.productName.trim().toLowerCase();
+  return state.commissionProducts.find((product) => product.id === record.productId)
+    || state.commissionProducts.find((product) => product.status === "active" && (
+      product.name.toLowerCase() === normalized ||
+      product.model.toLowerCase() === normalized ||
+      normalized.includes(product.name.toLowerCase()) ||
+      (product.model && normalized.includes(product.model.toLowerCase()))
+    ));
+}
+
+function activeRuleForProduct(productId = "") {
+  return state.commissionRules
+    .filter((rule) => rule.productId === productId && rule.enabled)
+    .filter((rule) => (!rule.effectiveFrom || rule.effectiveFrom <= state.commissionMonth) && (!rule.effectiveTo || rule.effectiveTo >= state.commissionMonth))
+    .sort((left, right) => (right.effectiveFrom || "").localeCompare(left.effectiveFrom || "") || right.createdAt.localeCompare(left.createdAt))[0];
+}
+
+function estimateCommissionForRecord(record: MonthlySalesRecord) {
+  const product = findCommissionProductForRecord(record);
+  const rule = activeRuleForProduct(product?.id || record.productId);
+  const sales = Number(record.settlementAmount || record.salesAmount || 0);
+  if (!rule || rule.ruleType === "none") return 0;
+  if (rule.ruleType === "rate") return sales * Number(rule.rate || 0);
+  if (rule.ruleType === "fixed") return Number(record.quantity || 1) * Number(rule.fixedAmount || 0);
+  if (rule.ruleType === "gross_profit") {
+    const cost = Number(product?.costPrice || 0) * Number(record.quantity || 0);
+    return Math.max(0, sales - cost) * Number(rule.grossProfitRate || 0);
+  }
+  if (rule.ruleType === "tier") {
+    try {
+      const tiers = JSON.parse(rule.tierJson || "[]") as Array<{ from?: number; to?: number; rate?: number }>;
+      const matched = tiers.find((tier) => sales >= Number(tier.from || 0) && sales < Number(tier.to || Number.MAX_SAFE_INTEGER));
+      return sales * Number(matched?.rate || 0);
+    } catch {
+      return 0;
+    }
+  }
+  return 0;
+}
+
+async function refreshCommissionData() {
+  const [products, records, calculations] = await Promise.all([
+    api<{ products: CommissionProduct[]; rules: CommissionRule[]; canManage: boolean; canSelectOwner: boolean; owners: CommissionOwner[] }>("/api/commission/products"),
+    api<{ records: MonthlySalesRecord[]; owners?: CommissionOwner[]; canSelectOwner?: boolean; selectedOwnerId?: string }>(`/api/commission/sales-records?month=${encodeURIComponent(state.commissionMonth)}&ownerId=${encodeURIComponent(state.selectedCommissionOwnerId || "")}`),
+    api<{ calculations: CommissionCalculation[]; items: CommissionItem[]; canReview: boolean; canSelectOwner?: boolean; owners?: CommissionOwner[]; selectedOwnerId?: string }>(`/api/commission/calculations?month=${encodeURIComponent(state.commissionMonth)}&ownerId=${encodeURIComponent(state.selectedCommissionOwnerId || "")}`)
+  ]);
+  state.commissionProducts = products.products;
+  state.commissionRules = products.rules;
+  state.commissionCanManage = products.canManage;
+  state.commissionCanSelectOwner = products.canSelectOwner;
+  state.commissionOwners = products.owners || records.owners || calculations.owners || [];
+  state.selectedCommissionOwnerId = state.commissionCanSelectOwner
+    ? (records.selectedOwnerId || calculations.selectedOwnerId || state.selectedCommissionOwnerId || "all")
+    : (state.user?.id || "");
+  state.commissionRecords = records.records;
+  state.commissionCalculations = calculations.calculations;
+  state.commissionItems = calculations.items;
+  state.commissionCanReview = calculations.canReview;
+  renderCommission();
+}
+
+function renderCommission() {
+  const root = qs<HTMLElement>("#commission");
+  if (!root) return;
+  const monthInput = qs<HTMLInputElement>("#commissionMonthInput");
+  if (monthInput) {
+    monthInput.value = state.commissionMonth;
+    monthInput.onchange = () => {
+      state.commissionMonth = monthInput.value || new Date().toISOString().slice(0, 7);
+      void refreshCommissionData();
+    };
+  }
+  renderCommissionOwnerSelector();
+  const syncButton = qs<HTMLButtonElement>("#commissionSyncDealsButton");
+  const addRecordButton = qs<HTMLButtonElement>("#commissionAddRecordButton");
+  const productButton = qs<HTMLButtonElement>("#commissionProductButton");
+  const recalculateButton = qs<HTMLButtonElement>("#commissionRecalculateButton");
+  const exportButton = qs<HTMLButtonElement>("#commissionExportButton");
+  const manualButton = qs<HTMLButtonElement>("#commissionAddManualItemButton");
+  if (syncButton) syncButton.onclick = () => void syncCommissionDeals();
+  if (addRecordButton) addRecordButton.onclick = () => openCommissionRecordModal();
+  if (productButton) productButton.onclick = () => openCommissionProductModal();
+  if (recalculateButton) recalculateButton.onclick = () => void recalculateCommission();
+  if (exportButton) exportButton.onclick = () => void exportCommission();
+  if (manualButton) manualButton.onclick = () => openCommissionManualItemModal();
+  if (manualButton) {
+    manualButton.disabled = !state.commissionCanReview;
+    manualButton.title = state.commissionCanReview ? "新增奖金、扣减、补贴等调整项" : "只有管理员和超级管理员可以调整提成金额";
+  }
+  qsa<HTMLButtonElement>("[data-commission-filter]", root).forEach((button) => {
+    button.classList.toggle("active", button.dataset.commissionFilter === state.commissionFilter);
+    button.onclick = () => {
+      state.commissionFilter = (button.dataset.commissionFilter as AppState["commissionFilter"]) || "all";
+      renderCommission();
+    };
+  });
+  renderCommissionKpis();
+  renderCommissionRecords();
+  renderCommissionCalculations();
+  renderCommissionRules();
+}
+
+function renderCommissionOwnerSelector() {
+  const select = qs<HTMLSelectElement>("#commissionOwnerInput");
+  if (!select) return;
+  if (!state.commissionCanSelectOwner) {
+    select.innerHTML = `<option value="${escapeHtml(state.user?.id || "")}">${escapeHtml(state.user?.name || "本人")} · 仅本人</option>`;
+    select.disabled = true;
+    return;
+  }
+  const owners = state.commissionOwners.length ? state.commissionOwners : [];
+  select.disabled = false;
+  select.innerHTML = `<option value="all">全部人员</option>${owners.map((owner) => `<option value="${escapeHtml(owner.id)}">${escapeHtml(owner.name)} · ${escapeHtml(roleLabel[owner.role] || owner.role)}</option>`).join("")}`;
+  select.value = state.selectedCommissionOwnerId || "all";
+  select.onchange = () => {
+    state.selectedCommissionOwnerId = select.value || "all";
+    state.selectedCommissionCalculationId = null;
+    void refreshCommissionData();
+  };
+}
+
+function renderCommissionKpis() {
+  const box = qs<HTMLElement>("#commissionKpis");
+  if (!box) return;
+  const totalSales = state.commissionRecords.reduce((sum, item) => sum + Number(item.settlementAmount || item.salesAmount || 0), 0);
+  const calculatedCommission = state.commissionCalculations.reduce((sum, item) => sum + Number(item.finalCommission || 0), 0);
+  const estimatedCommission = state.commissionRecords.reduce((sum, item) => sum + estimateCommissionForRecord(item), 0);
+  const finalCommission = calculatedCommission || estimatedCommission;
+  const confirmed = state.commissionRecords.filter((item) => item.status !== "draft").length;
+  const edited = state.commissionRecords.filter((item) => item.edited).length;
+  box.innerHTML = [
+    ["月度销售额", amount(totalSales)],
+    [calculatedCommission ? "已算提成" : "预计提成", amount(finalCommission)],
+    ["已确认记录", `${confirmed}/${state.commissionRecords.length}`],
+    ["人工修正", `${edited} 条`]
+  ].map(([label, value]) => `<div class="commission-kpi"><span>${label}</span><b>${value}</b></div>`).join("");
+}
+
+function renderCommissionRecords() {
+  const tbody = qs<HTMLElement>("#commissionRecordRows");
+  if (!tbody) return;
+  const rows = state.commissionRecords
+    .filter((record) => state.commissionFilter === "all" || record.status === state.commissionFilter)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  tbody.innerHTML = rows.length ? rows.map((record) => `
+    <tr data-commission-record-id="${escapeHtml(record.id)}">
+      <td><div class="commission-title-cell"><b>${escapeHtml(record.customerName)}</b><span>${escapeHtml(record.productName)}${record.edited ? " · 已编辑" : ""}</span></div></td>
+      <td>${Number(record.quantity || 0).toLocaleString("en-US")}</td>
+      <td>${amount(Number(record.unitPrice || 0))}</td>
+      <td>${amount(Number(record.settlementAmount || record.salesAmount || 0))}</td>
+      <td>${badge(commissionStatusLabel(record.status), commissionStatusTone(record.status))}</td>
+      <td>${badge(record.sourceType === "deal" ? "归档商机" : record.sourceType === "manual" ? "手工录入" : "人工修正", record.sourceType === "adjusted" ? "amber" : "gray")}</td>
+      <td><div class="commission-row-actions"><button class="btn" data-edit-commission-record>编辑</button><button class="btn" data-confirm-commission-record ${record.status === "draft" ? "" : "disabled"}>确认</button><button class="btn" data-view-commission-audits ${record.edited ? "" : "disabled"}>留痕</button></div></td>
+    </tr>
+  `).join("") : `<tr><td colspan="7" class="empty-cell">暂无销售记录。可以先同步本月已归档成交商机，或手工新增一条售卖记录。</td></tr>`;
+  qsa<HTMLButtonElement>("[data-edit-commission-record]", tbody).forEach((button) => {
+    button.addEventListener("click", () => {
+      const record = state.commissionRecords.find((item) => item.id === button.closest<HTMLElement>("tr")?.dataset.commissionRecordId);
+      if (record) openCommissionRecordModal(record);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-confirm-commission-record]", tbody).forEach((button) => {
+    button.addEventListener("click", () => void confirmCommissionRecord(button.closest<HTMLElement>("tr")?.dataset.commissionRecordId || ""));
+  });
+  qsa<HTMLButtonElement>("[data-view-commission-audits]", tbody).forEach((button) => {
+    button.addEventListener("click", () => void openCommissionAuditModal(button.closest<HTMLElement>("tr")?.dataset.commissionRecordId || ""));
+  });
+}
+
+function renderCommissionCalculations() {
+  const box = qs<HTMLElement>("#commissionCalculationRows");
+  if (!box) return;
+  box.innerHTML = state.commissionCalculations.length ? state.commissionCalculations.map((calculation) => {
+    const owner = state.commissionOwners.find((item) => item.id === calculation.ownerId)?.name || (calculation.ownerId === state.user?.id ? state.user.name : calculation.ownerId);
+    return `<article class="commission-calc-row" data-commission-calculation-id="${escapeHtml(calculation.id)}">
+      <div class="commission-calc-top"><b>${escapeHtml(owner)} · ${escapeHtml(calculation.month)}</b>${badge(commissionStatusLabel(calculation.status), commissionStatusTone(calculation.status))}</div>
+      <div class="commission-calc-metrics"><span>销售额<strong>${amount(calculation.salesAmount)}</strong></span><span>自动提成<strong>${amount(calculation.autoCommission)}</strong></span><span>最终提成<strong>${amount(calculation.finalCommission)}</strong></span></div>
+      <div class="commission-row-actions"><button class="btn" data-select-commission-calc>选择调整</button></div>
+    </article>`;
+  }).join("") : `<div class="commission-empty">暂无计算结果。先确认销售记录，再点击“重新计算”。</div>`;
+  qsa<HTMLButtonElement>("[data-select-commission-calc]", box).forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedCommissionCalculationId = button.closest<HTMLElement>(".commission-calc-row")?.dataset.commissionCalculationId || null;
+      openCommissionManualItemModal();
+    });
+  });
+}
+
+function renderCommissionRules() {
+  const box = qs<HTMLElement>("#commissionRuleRows");
+  if (!box) return;
+  box.innerHTML = state.commissionProducts.length ? state.commissionProducts.map((product) => {
+    const productRules = state.commissionRules
+      .filter((item) => item.productId === product.id)
+      .sort((left, right) => Number(right.enabled) - Number(left.enabled) || right.createdAt.localeCompare(left.createdAt));
+    const rule = productRules.find((item) => item.enabled) || productRules[0];
+    return `<article class="commission-rule-row">
+      <div class="commission-rule-top"><b>${escapeHtml(product.name)}</b>${badge(product.status === "active" ? "产品启用" : "产品停用", product.status === "active" ? "green" : "gray")}</div>
+      <p>${escapeHtml(product.category || "未分类")} · ${escapeHtml(product.model || "无型号")} · 成本 ${amount(product.costPrice)} · ${rule ? commissionRuleLabel(rule) : "未配置规则"}${rule && !rule.enabled ? " · 规则停用" : ""}</p>
+      ${state.commissionCanManage ? `<div class="commission-row-actions">
+        <button class="btn" data-edit-commission-product="${escapeHtml(product.id)}">编辑产品</button>
+        <button class="btn" data-edit-commission-rule="${escapeHtml(product.id)}">${rule ? "编辑规则" : "新增规则"}</button>
+        ${rule ? `<button class="btn" data-toggle-commission-rule="${escapeHtml(rule.id)}">${rule.enabled ? "停用规则" : "启用规则"}</button>` : ""}
+      </div>` : ""}
+    </article>`;
+  }).join("") : `<div class="commission-empty">暂无产品规则。管理员可点击“产品维护”新增。</div>`;
+  qsa<HTMLButtonElement>("[data-edit-commission-product]", box).forEach((button) => {
+    button.addEventListener("click", () => {
+      const product = state.commissionProducts.find((item) => item.id === button.dataset.editCommissionProduct);
+      if (product) openCommissionProductModal(product);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-edit-commission-rule]", box).forEach((button) => {
+    button.addEventListener("click", () => {
+      const product = state.commissionProducts.find((item) => item.id === button.dataset.editCommissionRule);
+      if (!product) return;
+      const rule = state.commissionRules
+        .filter((item) => item.productId === product.id)
+        .sort((left, right) => Number(right.enabled) - Number(left.enabled) || right.createdAt.localeCompare(left.createdAt))[0];
+      openCommissionRuleModal(product, rule);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-toggle-commission-rule]", box).forEach((button) => {
+    button.addEventListener("click", () => void toggleCommissionRule(button.dataset.toggleCommissionRule || ""));
+  });
+}
+
+async function syncCommissionDeals() {
+  const button = qs<HTMLButtonElement>("#commissionSyncDealsButton");
+  if (button) button.disabled = true;
+  try {
+    const result = await api<{ created: MonthlySalesRecord[]; records: MonthlySalesRecord[] }>("/api/commission/sales-records/sync-from-deals", {
+      method: "POST",
+      body: JSON.stringify({ month: state.commissionMonth, ownerId: state.selectedCommissionOwnerId })
+    });
+    state.commissionRecords = result.records;
+    renderCommission();
+    toast(result.created.length ? `已同步 ${result.created.length} 条归档成交` : "本月暂无可同步的新归档成交");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function openCommissionRecordModal(record?: MonthlySalesRecord) {
+  if (!record && state.commissionCanSelectOwner && (!state.selectedCommissionOwnerId || state.selectedCommissionOwnerId === "all")) {
+    toast("请先在查看人员中选择具体业务员，再新增销售记录", "error");
+    return;
+  }
+  const products = state.commissionProducts.filter((item) => item.status === "active");
+  openModal(record ? "编辑售卖记录" : "新增售卖记录", `
+    <div class="form-grid">
+      <div class="form-field"><label>月份</label><input id="commissionRecordMonthInput" type="month" value="${escapeHtml(record?.month || state.commissionMonth)}"></div>
+      <div class="form-field"><label>客户</label><input id="commissionRecordCustomerInput" value="${escapeHtml(record?.customerName || "")}" placeholder="客户公司"></div>
+      <div class="form-field full"><label>产品</label><select id="commissionRecordProductInput"><option value="">手工填写产品</option>${products.map((product) => `<option value="${escapeHtml(product.id)}" ${product.id === record?.productId ? "selected" : ""}>${escapeHtml(product.name)}</option>`).join("")}</select></div>
+      <div class="form-field full"><label>产品名称</label><input id="commissionRecordProductNameInput" value="${escapeHtml(record?.productName || products[0]?.name || "")}"></div>
+      <div class="form-field"><label>数量</label><input id="commissionRecordQuantityInput" type="number" step="1" min="0" value="${record?.quantity ?? 1}"></div>
+      <div class="form-field"><label>单价</label><input id="commissionRecordUnitPriceInput" type="number" step="0.01" min="0" value="${record?.unitPrice ?? products[0]?.defaultPrice ?? 0}"></div>
+      <div class="form-field"><label>汇率</label><input id="commissionRecordExchangeInput" type="number" step="0.0001" min="0" value="${record?.exchangeRate ?? 1}"></div>
+      <div class="form-field"><label>状态</label><select id="commissionRecordStatusInput"><option value="draft" ${record?.status === "draft" ? "selected" : ""}>待确认</option><option value="confirmed" ${record?.status === "confirmed" ? "selected" : ""}>已确认</option></select></div>
+      ${record ? `<div class="form-field full"><label>修改原因</label><input id="commissionRecordEditNoteInput" placeholder="必须填写，例如：实际结算数量调整" value="${escapeHtml(record.editNote || "")}"></div>` : ""}
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCommissionRecordButton">保存</button>`);
+  qs<HTMLSelectElement>("#commissionRecordProductInput")?.addEventListener("change", (event) => {
+    const product = state.commissionProducts.find((item) => item.id === (event.currentTarget as HTMLSelectElement).value);
+    if (!product) return;
+    const name = qs<HTMLInputElement>("#commissionRecordProductNameInput");
+    const price = qs<HTMLInputElement>("#commissionRecordUnitPriceInput");
+    if (name) name.value = product.name;
+    if (price && !Number(price.value)) price.value = String(product.defaultPrice || 0);
+  });
+  qs("#saveCommissionRecordButton")?.addEventListener("click", () => void saveCommissionRecord(record?.id || ""));
+}
+
+async function saveCommissionRecord(id = "") {
+  const productId = qs<HTMLSelectElement>("#commissionRecordProductInput")?.value || "";
+  const quantity = Number(qs<HTMLInputElement>("#commissionRecordQuantityInput")?.value || 0);
+  const unitPrice = Number(qs<HTMLInputElement>("#commissionRecordUnitPriceInput")?.value || 0);
+  const payload = {
+    ownerId: id ? "" : state.selectedCommissionOwnerId,
+    month: qs<HTMLInputElement>("#commissionRecordMonthInput")?.value || state.commissionMonth,
+    customerName: qs<HTMLInputElement>("#commissionRecordCustomerInput")?.value.trim() || "未填写客户",
+    productId,
+    productName: qs<HTMLInputElement>("#commissionRecordProductNameInput")?.value.trim() || state.commissionProducts.find((item) => item.id === productId)?.name || "未填写产品",
+    quantity,
+    unitPrice,
+    salesAmount: Math.round(quantity * unitPrice * 100) / 100,
+    exchangeRate: Number(qs<HTMLInputElement>("#commissionRecordExchangeInput")?.value || 1),
+    status: qs<HTMLSelectElement>("#commissionRecordStatusInput")?.value || "draft",
+    editNote: qs<HTMLInputElement>("#commissionRecordEditNoteInput")?.value.trim() || ""
+  };
+  if (id && !payload.editNote) {
+    toast("编辑销售记录必须填写修改原因", "error");
+    return;
+  }
+  const result = await api<{ record: MonthlySalesRecord }>(id ? `/api/commission/sales-records/${id}` : "/api/commission/sales-records", {
+    method: id ? "PATCH" : "POST",
+    body: JSON.stringify(payload)
+  });
+  if (id) state.commissionRecords = state.commissionRecords.map((item) => item.id === id ? result.record : item);
+  else state.commissionRecords.unshift(result.record);
+  state.commissionMonth = result.record.month;
+  closeModal();
+  renderCommission();
+  toast(id ? "售卖记录已更新并留痕" : "售卖记录已新增");
+}
+
+async function confirmCommissionRecord(id: string) {
+  if (!id) return;
+  const result = await api<{ record: MonthlySalesRecord }>(`/api/commission/sales-records/${id}/confirm`, { method: "POST" });
+  state.commissionRecords = state.commissionRecords.map((item) => item.id === id ? result.record : item);
+  renderCommission();
+  toast("销售记录已确认，可参与提成计算");
+}
+
+async function openCommissionAuditModal(id: string) {
+  const result = await api<{ audits: SalesRecordAudit[] }>(`/api/commission/sales-records/${id}/audits`);
+  openModal("销售记录编辑留痕", `
+    <div class="table-wrap"><table><thead><tr><th>字段</th><th>原值</th><th>新值</th><th>原因</th><th>操作人</th></tr></thead><tbody>
+      ${result.audits.map((audit) => `<tr><td>${escapeHtml(audit.fieldName)}</td><td>${escapeHtml(audit.oldValue)}</td><td>${escapeHtml(audit.newValue)}</td><td>${escapeHtml(audit.reason)}</td><td>${escapeHtml(audit.operatorName)} · ${escapeHtml(formatDateTime(audit.createdAt))}</td></tr>`).join("") || `<tr><td colspan="5" class="empty-cell">暂无留痕</td></tr>`}
+    </tbody></table></div>
+  `, `<button class="btn primary" data-modal-close>知道了</button>`);
+}
+
+async function recalculateCommission() {
+  const result = await api<{ calculations: CommissionCalculation[]; items: CommissionItem[] }>("/api/commission/calculations/recalculate", {
+    method: "POST",
+    body: JSON.stringify({ month: state.commissionMonth, ownerId: state.selectedCommissionOwnerId })
+  });
+  state.commissionCalculations = result.calculations;
+  state.commissionItems = result.items;
+  renderCommission();
+  toast("提成已按当前确认记录重新计算");
+}
+
+function openCommissionManualItemModal() {
+  if (!state.commissionCanReview) {
+    toast("只有管理员和超级管理员可以调整提成金额", "error");
+    return;
+  }
+  if (!state.commissionCalculations.length) {
+    toast("请先重新计算生成提成单", "error");
+    return;
+  }
+  const selected = state.selectedCommissionCalculationId || state.commissionCalculations[0].id;
+  openModal("新增提成调整项", `
+    <div class="form-grid">
+      <div class="form-field full"><label>提成单</label><select id="commissionManualCalcInput">${state.commissionCalculations.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.month)} · ${escapeHtml(item.ownerId)} · ${amount(item.finalCommission)}</option>`).join("")}</select></div>
+      <div class="form-field"><label>类型</label><select id="commissionManualTypeInput"><option value="bonus">奖金</option><option value="deduction">扣减</option><option value="subsidy">补贴</option><option value="refund">退款扣回</option><option value="special">特殊项</option><option value="other">其它</option></select></div>
+      <div class="form-field"><label>金额</label><input id="commissionManualAmountInput" type="number" step="0.01" value="0"></div>
+      <div class="form-field full"><label>说明</label><input id="commissionManualRemarkInput" placeholder="例如：大客户首单专项奖励"></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCommissionManualButton">保存调整</button>`);
+  qs("#saveCommissionManualButton")?.addEventListener("click", () => void saveCommissionManualItem());
+}
+
+async function saveCommissionManualItem() {
+  const calculationId = qs<HTMLSelectElement>("#commissionManualCalcInput")?.value || "";
+  const result = await api<{ calculation: CommissionCalculation; item: CommissionItem }>(`/api/commission/calculations/${calculationId}/manual-item`, {
+    method: "POST",
+    body: JSON.stringify({
+      itemType: qs<HTMLSelectElement>("#commissionManualTypeInput")?.value || "other",
+      manualAmount: Number(qs<HTMLInputElement>("#commissionManualAmountInput")?.value || 0),
+      remark: qs<HTMLInputElement>("#commissionManualRemarkInput")?.value.trim() || "人工调整"
+    })
+  });
+  state.commissionCalculations = state.commissionCalculations.map((item) => item.id === result.calculation.id ? result.calculation : item);
+  state.commissionItems.unshift(result.item);
+  closeModal();
+  renderCommission();
+  toast("提成调整项已保存");
+}
+
+function openCommissionProductModal(editing?: CommissionProduct) {
+  if (!state.commissionCanManage) {
+    toast("当前账号只能查看产品规则，维护需管理员权限", "error");
+    return;
+  }
+  openModal(editing ? "编辑提成产品" : "新增提成产品", `
+    <div class="form-grid">
+      <div class="form-field full"><label>产品名称</label><input id="commissionProductNameInput" value="${escapeHtml(editing?.name || "")}" placeholder="例如：核心产品 / 型号 X100"></div>
+      <div class="form-field"><label>分类</label><input id="commissionProductCategoryInput" value="${escapeHtml(editing?.category || "")}" placeholder="产品分类"></div>
+      <div class="form-field"><label>型号</label><input id="commissionProductModelInput" value="${escapeHtml(editing?.model || "")}" placeholder="X100"></div>
+      <div class="form-field"><label>币种</label><select id="commissionProductCurrencyInput">${["USD", "EUR", "CNY", "GBP"].map((currency) => `<option ${currency === (editing?.currency || "USD") ? "selected" : ""}>${currency}</option>`).join("")}</select></div>
+      <div class="form-field"><label>状态</label><select id="commissionProductStatusInput"><option value="active" ${editing?.status !== "disabled" ? "selected" : ""}>启用</option><option value="disabled" ${editing?.status === "disabled" ? "selected" : ""}>停用</option></select></div>
+      <div class="form-field"><label>默认单价</label><input id="commissionProductPriceInput" type="number" step="0.01" value="${editing?.defaultPrice ?? 0}"></div>
+      <div class="form-field"><label>成本价</label><input id="commissionProductCostInput" type="number" step="0.01" value="${editing?.costPrice ?? 0}"></div>
+      <div class="form-field full"><label>备注</label><input id="commissionProductRemarkInput" value="${escapeHtml(editing?.remark || "")}" placeholder="产品适用说明"></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCommissionProductButton">${editing ? "保存产品" : "新增产品"}</button>`);
+  qs("#saveCommissionProductButton")?.addEventListener("click", () => void saveCommissionProduct(editing?.id || ""));
+}
+
+async function saveCommissionProduct(id = "") {
+  const result = await api<{ product: CommissionProduct }>(id ? `/api/commission/products/${id}` : "/api/commission/products", {
+    method: id ? "PATCH" : "POST",
+    body: JSON.stringify({
+      name: qs<HTMLInputElement>("#commissionProductNameInput")?.value.trim() || "",
+      category: qs<HTMLInputElement>("#commissionProductCategoryInput")?.value.trim() || "",
+      model: qs<HTMLInputElement>("#commissionProductModelInput")?.value.trim() || "",
+      currency: qs<HTMLSelectElement>("#commissionProductCurrencyInput")?.value || "USD",
+      status: qs<HTMLSelectElement>("#commissionProductStatusInput")?.value || "active",
+      defaultPrice: Number(qs<HTMLInputElement>("#commissionProductPriceInput")?.value || 0),
+      costPrice: Number(qs<HTMLInputElement>("#commissionProductCostInput")?.value || 0),
+      remark: qs<HTMLInputElement>("#commissionProductRemarkInput")?.value.trim() || ""
+    })
+  });
+  state.commissionProducts = id
+    ? state.commissionProducts.map((product) => product.id === result.product.id ? result.product : product)
+    : [result.product, ...state.commissionProducts];
+  closeModal();
+  renderCommission();
+  toast(id ? "提成产品已保存" : "提成产品已新增");
+}
+
+function ruleValueFor(rule?: CommissionRule) {
+  if (!rule) return "";
+  if (rule.ruleType === "rate") return String(rule.rate || 0);
+  if (rule.ruleType === "fixed") return String(rule.fixedAmount || 0);
+  if (rule.ruleType === "gross_profit") return String(rule.grossProfitRate || 0);
+  return "";
+}
+
+function openCommissionRuleModal(product: CommissionProduct, rule?: CommissionRule) {
+  if (!state.commissionCanManage) {
+    toast("当前账号只能查看产品规则，维护需管理员权限", "error");
+    return;
+  }
+  openModal(rule ? "编辑提成规则" : "新增提成规则", `
+    <div class="form-grid">
+      <div class="form-field full"><label>适用产品</label><input value="${escapeHtml(product.name)}" readonly></div>
+      <div class="form-field"><label>规则类型</label><select id="commissionRuleTypeInput">
+        <option value="rate" ${rule?.ruleType === "rate" ? "selected" : ""}>销售额比例</option>
+        <option value="gross_profit" ${rule?.ruleType === "gross_profit" ? "selected" : ""}>毛利比例</option>
+        <option value="tier" ${rule?.ruleType === "tier" ? "selected" : ""}>阶梯比例</option>
+        <option value="fixed" ${rule?.ruleType === "fixed" ? "selected" : ""}>固定金额</option>
+        <option value="none" ${rule?.ruleType === "none" ? "selected" : ""}>不计提</option>
+      </select></div>
+      <div class="form-field"><label>比例 / 金额</label><input id="commissionRuleValueInput" type="number" step="0.0001" value="${escapeHtml(ruleValueFor(rule))}" placeholder="比例填 0.03，固定填金额"></div>
+      <div class="form-field"><label>生效月份</label><input id="commissionRuleFromInput" type="month" value="${escapeHtml(rule?.effectiveFrom || state.commissionMonth)}"></div>
+      <div class="form-field"><label>失效月份</label><input id="commissionRuleToInput" type="month" value="${escapeHtml(rule?.effectiveTo || "")}"></div>
+      <div class="form-field"><label>状态</label><select id="commissionRuleEnabledInput"><option value="true" ${rule?.enabled !== false ? "selected" : ""}>启用</option><option value="false" ${rule?.enabled === false ? "selected" : ""}>停用</option></select></div>
+      <div class="form-field full"><label>阶梯JSON</label><input id="commissionRuleTierInput" value="${escapeHtml(rule?.tierJson || "")}" placeholder='[{"from":0,"to":30000,"rate":0.02}]'></div>
+      <div class="form-field full"><label>规则说明</label><input id="commissionRuleRemarkInput" value="${escapeHtml(rule?.remark || "")}" placeholder="例如：标准销售额 3%"></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCommissionRuleButton">${rule ? "保存规则" : "新增规则"}</button>`);
+  qs("#saveCommissionRuleButton")?.addEventListener("click", () => void saveCommissionRule(product.id, rule?.id || ""));
+}
+
+async function saveCommissionRule(productId: string, ruleId = "") {
+  const ruleType = (qs<HTMLSelectElement>("#commissionRuleTypeInput")?.value || "rate") as CommissionRuleType;
+  const value = Number(qs<HTMLInputElement>("#commissionRuleValueInput")?.value || 0);
+  const tierJson = qs<HTMLInputElement>("#commissionRuleTierInput")?.value.trim() || "";
+  const remark = qs<HTMLInputElement>("#commissionRuleRemarkInput")?.value.trim() || "";
+  const result = await api<{ rule: CommissionRule }>(ruleId ? `/api/commission/rules/${ruleId}` : `/api/commission/products/${productId}/rules`, {
+    method: ruleId ? "PATCH" : "POST",
+    body: JSON.stringify({
+      ruleType,
+      rate: ruleType === "rate" ? value : 0,
+      fixedAmount: ruleType === "fixed" ? value : 0,
+      grossProfitRate: ruleType === "gross_profit" ? value : 0,
+      tierJson: ruleType === "tier" ? tierJson : "",
+      effectiveFrom: qs<HTMLInputElement>("#commissionRuleFromInput")?.value || state.commissionMonth,
+      effectiveTo: qs<HTMLInputElement>("#commissionRuleToInput")?.value || "",
+      enabled: qs<HTMLSelectElement>("#commissionRuleEnabledInput")?.value !== "false",
+      remark: remark || (ruleType === "tier" ? "阶梯提成" : "")
+    })
+  });
+  state.commissionRules = ruleId
+    ? state.commissionRules.map((rule) => rule.id === result.rule.id ? result.rule : rule)
+    : [result.rule, ...state.commissionRules];
+  closeModal();
+  renderCommission();
+  toast(ruleId ? "提成规则已保存" : "提成规则已新增");
+}
+
+async function toggleCommissionRule(id: string) {
+  const rule = state.commissionRules.find((item) => item.id === id);
+  if (!rule) return;
+  const result = await api<{ rule: CommissionRule }>(`/api/commission/rules/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled: !rule.enabled })
+  });
+  state.commissionRules = state.commissionRules.map((item) => item.id === id ? result.rule : item);
+  renderCommission();
+  toast(result.rule.enabled ? "提成规则已启用" : "提成规则已停用");
+}
+
+async function exportCommission() {
+  const result = await api<{ exportJob: { id: string; rows: number }; rows: Record<string, unknown>[] }>("/api/commission/export", {
+    method: "POST",
+    body: JSON.stringify({
+      month: state.commissionMonth,
+      ownerId: state.selectedCommissionOwnerId,
+      scopeType: state.commissionCanReview && state.selectedCommissionOwnerId === "all" ? "all" : "self",
+      fileType: "xlsx"
+    })
+  });
+  const sheet = XLSX.utils.json_to_sheet(result.rows);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "提成对账");
+  XLSX.writeFile(workbook, `GoodJob-提成对账-${state.commissionMonth}.xlsx`);
+  toast(`已导出 ${result.exportJob.rows} 行提成对账数据`);
 }
 
 function renderReminders(reminders: Reminder[]) {
@@ -2972,7 +3695,7 @@ async function toggleCompetitorThreat() {
 function openCaseModal() {
   openModal("新增成功案例", `
     <div class="form-grid">
-      <div class="form-field full"><label>案例标题</label><input id="caseTitleInput" placeholder="例如：Nordic Tools 年度工具套装复购"></div>
+      <div class="form-field full"><label>案例标题</label><input id="caseTitleInput" placeholder="例如：重点客户年度订单复购"></div>
       <div class="form-field"><label>客户</label><input id="caseCustomerInput" value="${escapeHtml(state.customers[0]?.company || "")}"></div>
       <div class="form-field"><label>国家</label><input id="caseCountryInput" value="${escapeHtml(state.customers[0]?.country || "")}"></div>
       <div class="form-field"><label>产品</label><input id="caseProductInput" placeholder="例如：18V 无刷电钻套装"></div>
@@ -5295,6 +6018,8 @@ async function sendProspectDevelopmentEmail(button?: HTMLButtonElement) {
     renderProspectList();
     renderLeadFinder(state.websiteOpportunities);
     toast(result.sent.simulated ? "开发信已发送（测试模拟记录）" : "开发信已发送");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "开发信发送失败", "error");
   } finally {
     if (button) {
       button.disabled = false;
@@ -6093,7 +6818,7 @@ function openTodoModal(prefill = "", editing?: Todo) {
   const titleValue = editing?.title || prefill;
   openModal(editing ? "编辑待办" : "新增待办", `
     <div class="form-grid">
-      <div class="form-field full"><label>待办内容</label><input id="todoTitleInput" value="${escapeHtml(titleValue)}" placeholder="例如：明天 10 点跟进 Nordic Tools 报价"></div>
+      <div class="form-field full"><label>待办内容</label><input id="todoTitleInput" value="${escapeHtml(titleValue)}" placeholder="例如：明天 10 点跟进重点客户报价"></div>
       <div class="form-field"><label>类型</label><select id="todoTypeInput"><option value="other">其它</option><option value="customer">客户跟进</option><option value="knowledge">资料维护</option><option value="exam">在线考试</option><option value="ocr">OCR 线索</option></select></div>
       <div class="form-field"><label>优先级</label><select id="todoPriorityInput"><option value="normal">普通</option><option value="medium">中优先级</option><option value="high">高优先级</option></select></div>
       <div class="form-field"><label>目标完成时间</label><input id="todoDueInput" value="${escapeHtml(editing?.dueAt || "")}" placeholder="例如：2026-06-27 18:00"></div>
@@ -6542,7 +7267,7 @@ function openCustomerModal(customer?: Customer) {
   const stageOptions = ["询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"];
   openModal(editing ? "编辑客户" : "新增客户", `
     <div class="form-grid">
-      <div class="form-field full"><label>公司名</label><input id="customerCompanyInput" placeholder="例如：示例仪表进出口有限公司" value="${escapeHtml(customer?.company || "")}"></div>
+      <div class="form-field full"><label>公司名</label><input id="customerCompanyInput" placeholder="例如：示例进出口有限公司" value="${escapeHtml(customer?.company || "")}"></div>
       <div class="form-field"><label>联系人</label><input id="customerContactInput" value="${escapeHtml(customer?.contact || "待维护")}"></div>
       <div class="form-field"><label>国家</label><input id="customerCountryInput" value="${escapeHtml(customer?.country || "中国")}"></div>
       <div class="form-field"><label>阶段</label><select id="customerStageInput">${stageOptions.map((stage) => `<option ${stage === customer?.stage ? "selected" : ""}>${stage}</option>`).join("")}</select></div>
@@ -6716,6 +7441,9 @@ function installEvents() {
   qs<HTMLButtonElement>("#profileEntryButton")?.addEventListener("click", () => activateNavView("profile", () => renderProfile()));
   qs<HTMLButtonElement>("#profileSaveButton")?.addEventListener("click", (event) => void saveProfileEmailBinding(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#profileTestSmtpButton")?.addEventListener("click", (event) => void sendProfileTestEmail(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#profileClearEmailButton")?.addEventListener("click", (event) => void clearProfileEmailBinding(event.currentTarget as HTMLButtonElement));
+  qs<HTMLInputElement>("#profileSmtpPort")?.addEventListener("input", () => updateProfileSmtpHints());
+  qs<HTMLSelectElement>("#profileSmtpSecure")?.addEventListener("change", () => updateProfileSmtpHints());
   qs<HTMLButtonElement>("#profileRefreshButton")?.addEventListener("click", async () => {
     const result = await api<{ user: User }>("/api/profile");
     updateStoredUser(result.user);
@@ -7086,6 +7814,9 @@ function resolveTopbarSearchView(rawValue: string) {
     ["ci", "documents"],
     ["invoice", "documents"],
     ["document", "documents"],
+    ["提成", "commission"],
+    ["对账", "commission"],
+    ["commission", "commission"],
     ["报表", "reports"],
     ["report", "reports"],
     ["企业微信", "wecom"],

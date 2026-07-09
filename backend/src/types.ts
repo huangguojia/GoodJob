@@ -397,3 +397,123 @@ export interface CaseStudy {
   teamId: string;
   updatedAt: string;
 }
+
+export type CommissionRuleType = "rate" | "fixed" | "tier" | "gross_profit" | "none";
+export type CommissionRecordStatus = "draft" | "confirmed" | "reviewed" | "locked";
+export type CommissionCalculationStatus = "pending" | "calculated" | "reviewed" | "locked";
+
+export interface CommissionProduct {
+  id: string;
+  name: string;
+  category: string;
+  model: string;
+  currency: string;
+  defaultPrice: number;
+  costPrice: number;
+  status: "active" | "disabled";
+  remark: string;
+  ownerId: string;
+  teamId: string;
+  updatedAt: string;
+}
+
+export interface CommissionRule {
+  id: string;
+  productId: string;
+  ruleType: CommissionRuleType;
+  rate: number;
+  fixedAmount: number;
+  tierJson: string;
+  grossProfitRate: number;
+  effectiveFrom: string;
+  effectiveTo: string;
+  enabled: boolean;
+  remark: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface MonthlySalesRecord {
+  id: string;
+  month: string;
+  ownerId: string;
+  teamId: string;
+  customerId: string;
+  customerName: string;
+  dealId: string;
+  productId: string;
+  productName: string;
+  quantity: number;
+  unitPrice: number;
+  salesAmount: number;
+  currency: string;
+  exchangeRate: number;
+  settlementAmount: number;
+  dealArchivedAt: string;
+  sourceType: "deal" | "manual" | "adjusted";
+  status: CommissionRecordStatus;
+  edited: boolean;
+  editNote: string;
+  lastEditedBy: string;
+  lastEditedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SalesRecordAudit {
+  id: string;
+  recordId: string;
+  fieldName: string;
+  oldValue: string;
+  newValue: string;
+  reason: string;
+  operatorId: string;
+  operatorName: string;
+  createdAt: string;
+}
+
+export interface CommissionCalculation {
+  id: string;
+  month: string;
+  ownerId: string;
+  teamId: string;
+  salesAmount: number;
+  autoCommission: number;
+  manualAdjustment: number;
+  finalCommission: number;
+  status: CommissionCalculationStatus;
+  calculatedAt: string;
+  reviewedBy: string;
+  reviewedAt: string;
+  lockedBy: string;
+  lockedAt: string;
+  unlockReason: string;
+}
+
+export interface CommissionItem {
+  id: string;
+  calculationId: string;
+  recordId: string;
+  productId: string;
+  itemType: "auto" | "bonus" | "deduction" | "subsidy" | "refund" | "special" | "other";
+  sourceType: "auto" | "manual";
+  ruleSnapshotJson: string;
+  salesAmount: number;
+  autoAmount: number;
+  manualAmount: number;
+  finalAmount: number;
+  remark: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface CommissionExport {
+  id: string;
+  month: string;
+  scopeType: "self" | "team" | "all";
+  scopeOwnerId: string;
+  fileType: "xlsx" | "csv";
+  rows: number;
+  exportedBy: string;
+  createdAt: string;
+}

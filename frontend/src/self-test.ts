@@ -22,7 +22,16 @@ const required = [
   "/api/lead-finder/source-config",
   "leadSourceCenterButton",
   "leadSourceChips",
-  "openLeadSourceCenter"
+  "openLeadSourceCenter",
+  "ai_search",
+  "data-view=\"commission\"",
+  "id=\"commission\"",
+  "commissionSyncDealsButton",
+  "commissionRecalculateButton",
+  "/api/commission/products",
+  "/api/commission/sales-records",
+  "/api/commission/calculations/recalculate",
+  "renderCommission"
 ];
 
 for (const token of required) {

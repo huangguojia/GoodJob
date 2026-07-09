@@ -1,12 +1,37 @@
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import nodemailer from "nodemailer";
 import { z } from "zod";
 import { canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, publicUser, requireAuth, signToken } from "./auth.js";
 import { createMysqlStore } from "./mysql-store.js";
 import { getStore, setStore } from "./store.js";
 import { LEAD_PROVIDERS, getProvider, providerMeta, type LeadProvider, type LeadQuery, type RawLead } from "./lead-providers.js";
-import type { AiModelConfig, Customer, Deal, Exam, ExamAttempt, ExamQuestion, LeadSourceConfig, OcrJob, PlanTask, PlanTemplate, SessionUser, Todo, TradeDocument, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, Deal, Exam, ExamAttempt, ExamQuestion, LeadSourceConfig, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, SalesRecordAudit, SessionUser, Todo, TradeDocument, WebsiteOpportunity } from "./types.js";
+
+function loadLocalEnv() {
+  const currentDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(currentDir, "../../.env"),
+    resolve(process.cwd(), ".env")
+  ];
+  const envPath = candidates.find((path) => existsSync(path));
+  if (!envPath) return;
+  const content = readFileSync(envPath, "utf8");
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+    const index = trimmed.indexOf("=");
+    const key = trimmed.slice(0, index).trim();
+    const rawValue = trimmed.slice(index + 1).trim();
+    if (!key || process.env[key] !== undefined) continue;
+    process.env[key] = rawValue.replace(/^["']|["']$/g, "");
+  }
+}
+
+loadLocalEnv();
 
 export const app = express();
 app.use(cors());
@@ -82,12 +107,20 @@ async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][numb
   if (!user.outboundEmail || !user.smtpHost || !user.smtpUser || !user.smtpPassword) {
     throw new Error("请先在个人信息页完整配置发件邮箱、SMTP服务器、账号和授权码");
   }
+  const smtpPort = Number(user.smtpPort || 465);
+  const smtpSecure = user.smtpSecure ?? true;
+  if (smtpPort === 587 && smtpSecure) {
+    throw new Error("SMTP配置不匹配：端口 587 通常应选择 STARTTLS/普通；如果要使用 SSL/TLS，请把端口改为 465。");
+  }
+  if (smtpPort === 465 && !smtpSecure) {
+    throw new Error("SMTP配置不匹配：端口 465 通常应选择 SSL/TLS；如果要使用 STARTTLS/普通，请把端口改为 587。");
+  }
   const transport = process.env.NODE_ENV === "test"
     ? nodemailer.createTransport({ streamTransport: true, newline: "unix", buffer: true })
     : nodemailer.createTransport({
       host: user.smtpHost,
-      port: user.smtpPort || 465,
-      secure: user.smtpSecure ?? true,
+      port: smtpPort,
+      secure: smtpSecure,
       auth: {
         user: user.smtpUser,
         pass: user.smtpPassword
@@ -99,6 +132,25 @@ async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][numb
     subject: payload.subject,
     text: payload.body
   });
+}
+
+function outboundEmailError(error: unknown, user: ReturnType<typeof getStore>["users"][number]) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (message.startsWith("请先") || message.startsWith("SMTP配置不匹配")) return message;
+  const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code || "") : "";
+  const response = typeof error === "object" && error && "response" in error ? String((error as { response?: unknown }).response || "") : "";
+  const raw = `${message} ${response}`.trim();
+  const lower = raw.toLowerCase();
+  if (code === "EAUTH" || raw.includes("535") || lower.includes("invalid login") || lower.includes("authentication")) {
+    return "SMTP认证失败：请确认 SMTP账号 是完整邮箱，授权码不是网页登录密码，并且邮箱后台已开启 SMTP 服务。QQ邮箱请使用“授权码/客户端专用密码”。";
+  }
+  if (code === "ESOCKET" || code === "ECONNECTION" || code === "ETIMEDOUT" || lower.includes("wrong version number") || lower.includes("ssl")) {
+    return `SMTP连接失败：请检查服务器、端口和加密方式。当前配置为 ${user.smtpHost}:${user.smtpPort || 465}，${user.smtpSecure ?? true ? "SSL/TLS" : "STARTTLS/普通"}。`;
+  }
+  if (raw.includes("550") || lower.includes("sender")) {
+    return "SMTP发件人被拒绝：请确认发件邮箱、SMTP账号属于同一个邮箱账号，且服务商允许该账号外发。";
+  }
+  return `邮件发送失败：${message || "SMTP服务未返回明确原因"}`;
 }
 
 function examQuestionsFor(examId: string) {
@@ -276,14 +328,15 @@ app.get("/api/profile", requireAuth, (req, res) => {
 
 app.patch("/api/profile/email-binding", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
-    outboundEmail: z.string().email(),
-    emailSenderName: z.string().min(1).max(80),
+    outboundEmail: z.string().max(180).default(""),
+    emailSenderName: z.string().max(80).default(""),
     emailSignature: z.string().max(800).default(""),
     smtpHost: z.string().max(180).default(""),
     smtpPort: z.number().int().min(1).max(65535).default(465),
     smtpSecure: z.boolean().default(true),
     smtpUser: z.string().max(180).default(""),
-    smtpPassword: z.string().max(300).optional().default("")
+    smtpPassword: z.string().max(300).optional().default(""),
+    clearSmtpPassword: z.boolean().optional().default(false)
   });
   const body = schema.parse(req.body);
   const store = getStore();
@@ -299,13 +352,21 @@ app.patch("/api/profile/email-binding", requireAuth, asyncRoute(async (req, res)
   user.smtpPort = body.smtpPort;
   user.smtpSecure = body.smtpSecure;
   user.smtpUser = body.smtpUser;
-  if (body.smtpPassword) user.smtpPassword = body.smtpPassword;
+  if (body.clearSmtpPassword) {
+    user.smtpPassword = "";
+  } else if (body.smtpPassword) {
+    user.smtpPassword = body.smtpPassword;
+  }
   await store.persist();
   const sessionUser = publicUser(user);
   res.json({ user: accountUser(user), token: signToken(sessionUser) });
 }));
 
 app.post("/api/profile/test-email", requireAuth, asyncRoute(async (_req, res) => {
+  const schema = z.object({
+    to: z.string().email().optional().or(z.literal(""))
+  });
+  const body = schema.parse(_req.body || {});
   const store = getStore();
   const user = store.users.find((item) => item.id === _req.user!.id);
   if (!user) {
@@ -316,15 +377,16 @@ app.post("/api/profile/test-email", requireAuth, asyncRoute(async (_req, res) =>
     res.status(400).json({ message: "请先保存发件邮箱" });
     return;
   }
+  const testTo = body.to?.trim() || user.outboundEmail;
   try {
     const info = await sendOutboundEmail(user, {
-      to: user.outboundEmail,
+      to: testTo,
       subject: "GoodJob CRM SMTP 测试邮件",
       body: `这是一封来自 GoodJob CRM 的 SMTP 测试邮件。\n\n账号：${user.email}\n时间：${new Date().toISOString()}`
     });
-    res.json({ ok: true, messageId: info.messageId, simulated: process.env.NODE_ENV === "test" });
+    res.json({ ok: true, to: testTo, messageId: info.messageId, simulated: process.env.NODE_ENV === "test" });
   } catch (error) {
-    res.status(400).json({ message: error instanceof Error ? error.message : "测试邮件发送失败" });
+    res.status(400).json({ message: outboundEmailError(error, user) });
   }
 }));
 
@@ -346,7 +408,7 @@ app.post("/api/profile/send-development-email", requireAuth, asyncRoute(async (r
   try {
     mailInfo = await sendOutboundEmail(user, { to: body.to, subject: body.subject, body: body.body });
   } catch (error) {
-    res.status(400).json({ message: error instanceof Error ? error.message : "邮件发送失败" });
+    res.status(400).json({ message: outboundEmailError(error, user) });
     return;
   }
   const sentAt = new Date().toISOString();
@@ -394,7 +456,7 @@ app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRout
   try {
     mailInfo = await sendOutboundEmail(user, { to: body.to, subject: body.subject, body: body.body });
   } catch (error) {
-    res.status(400).json({ message: error instanceof Error ? error.message : "邮件发送失败" });
+    res.status(400).json({ message: outboundEmailError(error, user) });
     return;
   }
   const sentAt = new Date().toISOString();
@@ -987,6 +1049,628 @@ app.post("/api/deals/:id/lost", requireAuth, asyncRoute(async (req, res) => {
   deal.nextAction = "已标记丢单，可在归档/丢单商机中复盘";
   await store.persist();
   res.json({ deal });
+}));
+
+function canManageCommissionRules(user?: SessionUser) {
+  return user?.role === "admin" || user?.role === "super_admin";
+}
+
+function canReviewCommission(user?: SessionUser) {
+  return user?.role === "admin" || user?.role === "super_admin";
+}
+
+function currentMonthValue(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function roundMoneyValue(value: number) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function commissionOwnersFor(user: SessionUser) {
+  const store = getStore();
+  if (canReviewCommission(user)) {
+    return store.users
+      .filter((item) => item.status === "active" && (item.role === "sales" || item.role === "manager"))
+      .map((item) => ({ id: item.id, name: item.name, email: item.email, role: item.role, teamId: item.teamId }));
+  }
+  return [{ id: user.id, name: user.name, email: user.email, role: user.role, teamId: user.teamId }];
+}
+
+function resolveCommissionOwnerId(user: SessionUser, requestedOwnerId?: string) {
+  const requested = requestedOwnerId?.trim();
+  if (canReviewCommission(user)) {
+    if (!requested || requested === "all") return "";
+    return commissionOwnersFor(user).some((item) => item.id === requested) ? requested : null;
+  }
+  if (!requested || requested === user.id) return user.id;
+  return null;
+}
+
+function canAccessCommissionOwner(user: SessionUser, ownerId: string) {
+  if (canReviewCommission(user)) return true;
+  return ownerId === user.id;
+}
+
+function visibleSalesRecords(user: SessionUser, month?: string, ownerId?: string) {
+  const scopedOwnerId = resolveCommissionOwnerId(user, ownerId);
+  if (scopedOwnerId === null) return null;
+  const allowedOwners = new Set(commissionOwnersFor(user).map((item) => item.id));
+  return getStore().monthlySalesRecords.filter((record) => {
+    if (month && record.month !== month) return false;
+    if (scopedOwnerId && record.ownerId !== scopedOwnerId) return false;
+    if (!scopedOwnerId && canReviewCommission(user) && !allowedOwners.has(record.ownerId)) return false;
+    return canAccessCommissionOwner(user, record.ownerId);
+  });
+}
+
+function findCommissionProduct(productName = "") {
+  const normalized = productName.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return getStore().commissionProducts.find((product) => product.status === "active" && (
+    product.name.toLowerCase() === normalized ||
+    product.model.toLowerCase() === normalized ||
+    normalized.includes(product.name.toLowerCase()) ||
+    (product.model && normalized.includes(product.model.toLowerCase()))
+  ));
+}
+
+function activeCommissionRule(productId: string, month: string) {
+  return getStore().commissionRules
+    .filter((rule) => rule.productId === productId && rule.enabled)
+    .filter((rule) => (!rule.effectiveFrom || rule.effectiveFrom <= month) && (!rule.effectiveTo || rule.effectiveTo >= month))
+    .sort((left, right) => (right.effectiveFrom || "").localeCompare(left.effectiveFrom || "") || right.createdAt.localeCompare(left.createdAt))[0];
+}
+
+function calculateCommissionAmount(record: MonthlySalesRecord, product?: CommissionProduct, rule?: CommissionRule) {
+  const sales = Number(record.settlementAmount || record.salesAmount || 0);
+  if (!rule || rule.ruleType === "none") return { amount: 0, snapshot: { reason: "无启用规则" } };
+  if (rule.ruleType === "rate") return { amount: roundMoneyValue(sales * Number(rule.rate || 0)), snapshot: rule };
+  if (rule.ruleType === "fixed") return { amount: roundMoneyValue(Number(rule.fixedAmount || 0) * Number(record.quantity || 1)), snapshot: rule };
+  if (rule.ruleType === "gross_profit") {
+    const cost = Number(product?.costPrice || 0) * Number(record.quantity || 0);
+    return { amount: roundMoneyValue(Math.max(0, sales - cost) * Number(rule.grossProfitRate || 0)), snapshot: { ...rule, cost } };
+  }
+  if (rule.ruleType === "tier") {
+    let rate = 0;
+    try {
+      const tiers = JSON.parse(rule.tierJson || "[]") as Array<{ from?: number; to?: number; rate?: number }>;
+      const matched = tiers.find((tier) => sales >= Number(tier.from || 0) && sales < Number(tier.to || Number.MAX_SAFE_INTEGER));
+      rate = Number(matched?.rate || 0);
+    } catch {
+      rate = 0;
+    }
+    return { amount: roundMoneyValue(sales * rate), snapshot: { ...rule, appliedRate: rate } };
+  }
+  return { amount: 0, snapshot: rule };
+}
+
+function rebuildCalculationTotals(calculation: CommissionCalculation) {
+  const store = getStore();
+  const items = store.commissionItems.filter((item) => item.calculationId === calculation.id);
+  calculation.salesAmount = roundMoneyValue(items.reduce((sum, item) => sum + Number(item.salesAmount || 0), 0));
+  calculation.autoCommission = roundMoneyValue(items.reduce((sum, item) => sum + Number(item.autoAmount || 0), 0));
+  calculation.manualAdjustment = roundMoneyValue(items.reduce((sum, item) => sum + Number(item.manualAmount || 0), 0));
+  calculation.finalCommission = roundMoneyValue(items.reduce((sum, item) => sum + Number(item.finalAmount || 0), 0));
+  calculation.calculatedAt = new Date().toISOString();
+  calculation.status = calculation.status === "locked" || calculation.status === "reviewed" ? calculation.status : "calculated";
+}
+
+function ensureCalculation(month: string, ownerId: string, teamId: string) {
+  const store = getStore();
+  let calculation = store.commissionCalculations.find((item) => item.month === month && item.ownerId === ownerId);
+  if (!calculation) {
+    calculation = {
+      id: `cc_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`,
+      month,
+      ownerId,
+      teamId,
+      salesAmount: 0,
+      autoCommission: 0,
+      manualAdjustment: 0,
+      finalCommission: 0,
+      status: "pending",
+      calculatedAt: "",
+      reviewedBy: "",
+      reviewedAt: "",
+      lockedBy: "",
+      lockedAt: "",
+      unlockReason: ""
+    };
+    store.commissionCalculations.unshift(calculation);
+  }
+  return calculation;
+}
+
+const commissionProductSchema = z.object({
+  name: z.string().min(1),
+  category: z.string().optional().default(""),
+  model: z.string().optional().default(""),
+  currency: z.string().optional().default("USD"),
+  defaultPrice: z.coerce.number().nonnegative().default(0),
+  costPrice: z.coerce.number().nonnegative().default(0),
+  status: z.enum(["active", "disabled"]).default("active"),
+  remark: z.string().optional().default("")
+});
+
+const commissionRuleSchema = z.object({
+  ruleType: z.enum(["rate", "fixed", "tier", "gross_profit", "none"]),
+  rate: z.coerce.number().nonnegative().default(0),
+  fixedAmount: z.coerce.number().nonnegative().default(0),
+  tierJson: z.string().optional().default(""),
+  grossProfitRate: z.coerce.number().nonnegative().default(0),
+  effectiveFrom: z.string().optional().default(currentMonthValue()),
+  effectiveTo: z.string().optional().default(""),
+  enabled: z.coerce.boolean().default(true),
+  remark: z.string().optional().default("")
+});
+
+const salesRecordSchema = z.object({
+  ownerId: z.string().optional().default(""),
+  month: z.string().regex(/^\d{4}-\d{2}$/).default(currentMonthValue()),
+  customerId: z.string().optional().default(""),
+  customerName: z.string().min(1),
+  productId: z.string().optional().default(""),
+  productName: z.string().min(1),
+  quantity: z.coerce.number().nonnegative().default(1),
+  unitPrice: z.coerce.number().nonnegative().default(0),
+  salesAmount: z.coerce.number().nonnegative().optional(),
+  currency: z.string().optional().default("USD"),
+  exchangeRate: z.coerce.number().positive().default(1),
+  status: z.enum(["draft", "confirmed", "reviewed", "locked"]).default("draft"),
+  editNote: z.string().optional().default("")
+});
+
+app.get("/api/commission/products", requireAuth, (req, res) => {
+  const store = getStore();
+  res.json({
+    products: store.commissionProducts,
+    rules: store.commissionRules,
+    canManage: canManageCommissionRules(req.user),
+    canSelectOwner: canReviewCommission(req.user),
+    owners: commissionOwnersFor(req.user!)
+  });
+});
+
+app.post("/api/commission/products", requireAuth, asyncRoute(async (req, res) => {
+  if (!canManageCommissionRules(req.user)) {
+    res.status(403).json({ message: "只有管理员和超级管理员可以维护提成产品" });
+    return;
+  }
+  const body = commissionProductSchema.parse(req.body);
+  const store = getStore();
+  const product: CommissionProduct = {
+    id: `cp_${Date.now()}`,
+    ...body,
+    ownerId: req.user!.id,
+    teamId: req.user!.teamId,
+    updatedAt: new Date().toISOString()
+  };
+  store.commissionProducts.unshift(product);
+  await store.persist();
+  res.json({ product });
+}));
+
+app.patch("/api/commission/products/:id", requireAuth, asyncRoute(async (req, res) => {
+  if (!canManageCommissionRules(req.user)) {
+    res.status(403).json({ message: "只有管理员和超级管理员可以维护提成产品" });
+    return;
+  }
+  const body = commissionProductSchema.partial().parse(req.body);
+  const store = getStore();
+  const product = store.commissionProducts.find((item) => item.id === req.params.id);
+  if (!product) {
+    res.status(404).json({ message: "产品不存在" });
+    return;
+  }
+  Object.assign(product, body, { updatedAt: new Date().toISOString() });
+  await store.persist();
+  res.json({ product });
+}));
+
+app.post("/api/commission/products/:id/rules", requireAuth, asyncRoute(async (req, res) => {
+  if (!canManageCommissionRules(req.user)) {
+    res.status(403).json({ message: "只有管理员和超级管理员可以维护提成规则" });
+    return;
+  }
+  const store = getStore();
+  const product = store.commissionProducts.find((item) => item.id === req.params.id);
+  if (!product) {
+    res.status(404).json({ message: "产品不存在" });
+    return;
+  }
+  const body = commissionRuleSchema.parse(req.body);
+  const rule: CommissionRule = {
+    id: `cr_${Date.now()}`,
+    productId: product.id,
+    ...body,
+    createdBy: req.user!.id,
+    createdAt: new Date().toISOString()
+  };
+  store.commissionRules.unshift(rule);
+  await store.persist();
+  res.json({ rule });
+}));
+
+app.patch("/api/commission/rules/:id", requireAuth, asyncRoute(async (req, res) => {
+  if (!canManageCommissionRules(req.user)) {
+    res.status(403).json({ message: "只有管理员和超级管理员可以维护提成规则" });
+    return;
+  }
+  const body = commissionRuleSchema.partial().parse(req.body);
+  const store = getStore();
+  const rule = store.commissionRules.find((item) => item.id === req.params.id);
+  if (!rule) {
+    res.status(404).json({ message: "提成规则不存在" });
+    return;
+  }
+  Object.assign(rule, body);
+  await store.persist();
+  res.json({ rule });
+}));
+
+app.get("/api/commission/sales-records", requireAuth, (req, res) => {
+  const month = typeof req.query.month === "string" ? req.query.month : currentMonthValue();
+  const ownerId = typeof req.query.ownerId === "string" ? req.query.ownerId : undefined;
+  const records = visibleSalesRecords(req.user!, month, ownerId);
+  if (!records) {
+    res.status(403).json({ message: "无权查看该人员的提成数据" });
+    return;
+  }
+  res.json({ records, owners: commissionOwnersFor(req.user!), canSelectOwner: canReviewCommission(req.user), selectedOwnerId: resolveCommissionOwnerId(req.user!, ownerId) || "all" });
+});
+
+app.post("/api/commission/sales-records/sync-from-deals", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ month: z.string().regex(/^\d{4}-\d{2}$/).default(currentMonthValue()), ownerId: z.string().optional().default("") }).parse(req.body);
+  const ownerId = resolveCommissionOwnerId(req.user!, body.ownerId);
+  if (ownerId === null) {
+    res.status(403).json({ message: "无权同步该人员的提成数据" });
+    return;
+  }
+  const month = body.month;
+  const store = getStore();
+  const archivedWonDeals = store.deals.filter((deal) => {
+    if (deal.stage !== "成交" || !deal.archivedAt) return false;
+    if (ownerId && deal.ownerId !== ownerId) return false;
+    if (!canAccessCommissionOwner(req.user!, deal.ownerId)) return false;
+    return deal.archivedAt.slice(0, 7) === month;
+  });
+  const created: MonthlySalesRecord[] = [];
+  for (const deal of archivedWonDeals) {
+    if (store.monthlySalesRecords.some((record) => record.dealId === deal.id)) continue;
+    const customer = store.customers.find((item) => item.id === deal.customerId);
+    const product = findCommissionProduct(deal.product);
+    const salesAmount = roundMoneyValue(Number(deal.amount || deal.quantity * deal.unitPrice || 0));
+    const record: MonthlySalesRecord = {
+      id: `msr_${Date.now()}_${created.length}`,
+      month,
+      ownerId: deal.ownerId,
+      teamId: deal.teamId,
+      customerId: customer?.id || "",
+      customerName: customer?.company || "未关联客户",
+      dealId: deal.id,
+      productId: product?.id || "",
+      productName: product?.name || deal.product || deal.title,
+      quantity: Number(deal.quantity || 0),
+      unitPrice: Number(deal.unitPrice || 0),
+      salesAmount,
+      currency: product?.currency || "USD",
+      exchangeRate: 1,
+      settlementAmount: salesAmount,
+      dealArchivedAt: deal.archivedAt || "",
+      sourceType: "deal",
+      status: "draft",
+      edited: false,
+      editNote: "",
+      lastEditedBy: "",
+      lastEditedAt: "",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    store.monthlySalesRecords.unshift(record);
+    created.push(record);
+  }
+  await store.persist();
+  res.json({ created, records: visibleSalesRecords(req.user!, month, body.ownerId) || [] });
+}));
+
+app.post("/api/commission/sales-records", requireAuth, asyncRoute(async (req, res) => {
+  const body = salesRecordSchema.parse(req.body);
+  const targetOwnerId = resolveCommissionOwnerId(req.user!, body.ownerId);
+  if (targetOwnerId === null || targetOwnerId === "") {
+    res.status(403).json({ message: "请先选择一个具体人员，再新增销售记录" });
+    return;
+  }
+  const targetUser = getStore().users.find((user) => user.id === targetOwnerId);
+  if (!targetUser) {
+    res.status(404).json({ message: "人员不存在" });
+    return;
+  }
+  const salesAmount = roundMoneyValue(body.salesAmount ?? body.quantity * body.unitPrice);
+  const record: MonthlySalesRecord = {
+    id: `msr_${Date.now()}`,
+    month: body.month,
+    ownerId: targetUser.id,
+    teamId: targetUser.teamId,
+    customerId: body.customerId,
+    customerName: body.customerName,
+    dealId: "",
+    productId: body.productId,
+    productName: body.productName,
+    quantity: body.quantity,
+    unitPrice: body.unitPrice,
+    salesAmount,
+    currency: body.currency,
+    exchangeRate: body.exchangeRate,
+    settlementAmount: roundMoneyValue(salesAmount * body.exchangeRate),
+    dealArchivedAt: "",
+    sourceType: "manual",
+    status: body.status,
+    edited: false,
+    editNote: body.editNote,
+    lastEditedBy: "",
+    lastEditedAt: "",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const store = getStore();
+  store.monthlySalesRecords.unshift(record);
+  await store.persist();
+  res.json({ record });
+}));
+
+app.patch("/api/commission/sales-records/:id", requireAuth, asyncRoute(async (req, res) => {
+  const body = salesRecordSchema.partial().extend({ editNote: z.string().min(2) }).parse(req.body);
+  const store = getStore();
+  const record = store.monthlySalesRecords.find((item) => item.id === req.params.id);
+  if (!record || !canAccessCommissionOwner(req.user!, record.ownerId)) {
+    res.status(404).json({ message: "销售记录不存在" });
+    return;
+  }
+  if (record.status === "locked" || store.commissionCalculations.some((item) => item.month === record.month && item.ownerId === record.ownerId && item.status === "locked")) {
+    res.status(400).json({ message: "已锁定记录不能编辑" });
+    return;
+  }
+  const updates: Partial<MonthlySalesRecord> = {};
+  const auditFields: Array<keyof MonthlySalesRecord> = ["customerName", "productName", "quantity", "unitPrice", "salesAmount", "currency", "exchangeRate", "status", "productId", "customerId"];
+  for (const field of auditFields) {
+    if (body[field as keyof typeof body] !== undefined) {
+      const nextValue = body[field as keyof typeof body] as never;
+      if (String(record[field] ?? "") !== String(nextValue ?? "")) {
+        (updates as Record<string, unknown>)[field] = nextValue;
+        const audit: SalesRecordAudit = {
+          id: `sra_${Date.now()}_${field}`,
+          recordId: record.id,
+          fieldName: String(field),
+          oldValue: String(record[field] ?? ""),
+          newValue: String(nextValue ?? ""),
+          reason: body.editNote,
+          operatorId: req.user!.id,
+          operatorName: req.user!.name,
+          createdAt: new Date().toISOString()
+        };
+        store.salesRecordAudits.unshift(audit);
+      }
+    }
+  }
+  Object.assign(record, updates);
+  if (body.quantity !== undefined || body.unitPrice !== undefined || body.salesAmount !== undefined || body.exchangeRate !== undefined) {
+    record.salesAmount = roundMoneyValue(record.salesAmount || record.quantity * record.unitPrice);
+    record.settlementAmount = roundMoneyValue(record.salesAmount * record.exchangeRate);
+  }
+  record.edited = true;
+  record.sourceType = record.sourceType === "manual" ? "manual" : "adjusted";
+  record.editNote = body.editNote;
+  record.lastEditedBy = req.user!.id;
+  record.lastEditedAt = new Date().toISOString();
+  record.updatedAt = new Date().toISOString();
+  await store.persist();
+  res.json({ record, audits: store.salesRecordAudits.filter((audit) => audit.recordId === record.id) });
+}));
+
+app.post("/api/commission/sales-records/:id/confirm", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const record = store.monthlySalesRecords.find((item) => item.id === req.params.id);
+  if (!record || !canAccessCommissionOwner(req.user!, record.ownerId)) {
+    res.status(404).json({ message: "销售记录不存在" });
+    return;
+  }
+  if (record.status === "locked") {
+    res.status(400).json({ message: "已锁定记录不能重复确认" });
+    return;
+  }
+  record.status = "confirmed";
+  record.updatedAt = new Date().toISOString();
+  await store.persist();
+  res.json({ record });
+}));
+
+app.get("/api/commission/sales-records/:id/audits", requireAuth, (req, res) => {
+  const store = getStore();
+  const record = store.monthlySalesRecords.find((item) => item.id === req.params.id);
+  if (!record || !canAccessCommissionOwner(req.user!, record.ownerId)) {
+    res.status(404).json({ message: "销售记录不存在" });
+    return;
+  }
+  res.json({ audits: store.salesRecordAudits.filter((audit) => audit.recordId === record.id) });
+});
+
+app.get("/api/commission/calculations", requireAuth, (req, res) => {
+  const month = typeof req.query.month === "string" ? req.query.month : currentMonthValue();
+  const ownerId = typeof req.query.ownerId === "string" ? req.query.ownerId : undefined;
+  const scopedOwnerId = resolveCommissionOwnerId(req.user!, ownerId);
+  if (scopedOwnerId === null) {
+    res.status(403).json({ message: "无权查看该人员的提成计算单" });
+    return;
+  }
+  const allowedOwners = new Set(commissionOwnersFor(req.user!).map((item) => item.id));
+  const calculations = getStore().commissionCalculations.filter((calculation) => {
+    if (calculation.month !== month) return false;
+    if (scopedOwnerId && calculation.ownerId !== scopedOwnerId) return false;
+    if (!scopedOwnerId && canReviewCommission(req.user) && !allowedOwners.has(calculation.ownerId)) return false;
+    return canAccessCommissionOwner(req.user!, calculation.ownerId);
+  });
+  const ids = new Set(calculations.map((item) => item.id));
+  res.json({
+    calculations,
+    items: getStore().commissionItems.filter((item) => ids.has(item.calculationId)),
+    canReview: canReviewCommission(req.user),
+    canSelectOwner: canReviewCommission(req.user),
+    owners: commissionOwnersFor(req.user!),
+    selectedOwnerId: scopedOwnerId || "all"
+  });
+});
+
+app.post("/api/commission/calculations/recalculate", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ month: z.string().regex(/^\d{4}-\d{2}$/).default(currentMonthValue()), ownerId: z.string().optional().default("") }).parse(req.body);
+  const ownerId = resolveCommissionOwnerId(req.user!, body.ownerId);
+  if (ownerId === null) {
+    res.status(403).json({ message: "无权计算该人员的提成数据" });
+    return;
+  }
+  const month = body.month;
+  const store = getStore();
+  const visibleRecords = visibleSalesRecords(req.user!, month, body.ownerId);
+  if (!visibleRecords) {
+    res.status(403).json({ message: "无权计算该人员的提成数据" });
+    return;
+  }
+  const records = visibleRecords.filter((record) => record.status === "confirmed" || record.status === "reviewed" || record.status === "locked");
+  const byOwner = new Map<string, MonthlySalesRecord[]>();
+  records.forEach((record) => byOwner.set(record.ownerId, [...(byOwner.get(record.ownerId) || []), record]));
+  const changedCalculations: CommissionCalculation[] = [];
+  for (const [ownerId, ownerRecords] of byOwner.entries()) {
+    const calculation = ensureCalculation(month, ownerId, ownerRecords[0].teamId);
+    if (calculation.status === "locked") continue;
+    store.commissionItems = store.commissionItems.filter((item) => item.calculationId !== calculation.id || item.sourceType !== "auto");
+    ownerRecords.forEach((record, index) => {
+      const product = store.commissionProducts.find((item) => item.id === record.productId) || findCommissionProduct(record.productName);
+      const rule = product ? activeCommissionRule(product.id, month) : undefined;
+      const computed = calculateCommissionAmount(record, product, rule);
+      const item: CommissionItem = {
+        id: `ci_${Date.now()}_${index}_${Math.random().toString(16).slice(2, 6)}`,
+        calculationId: calculation.id,
+        recordId: record.id,
+        productId: product?.id || record.productId || "",
+        itemType: "auto",
+        sourceType: "auto",
+        ruleSnapshotJson: JSON.stringify(computed.snapshot),
+        salesAmount: record.settlementAmount,
+        autoAmount: computed.amount,
+        manualAmount: 0,
+        finalAmount: computed.amount,
+        remark: rule ? rule.remark || "自动按规则计算" : "未匹配启用规则，金额为0",
+        createdBy: req.user!.id,
+        createdAt: new Date().toISOString()
+      };
+      store.commissionItems.unshift(item);
+    });
+    rebuildCalculationTotals(calculation);
+    changedCalculations.push(calculation);
+  }
+  await store.persist();
+  const allowedOwners = new Set(commissionOwnersFor(req.user!).map((item) => item.id));
+  const calculations = store.commissionCalculations.filter((calculation) => {
+    if (calculation.month !== month) return false;
+    if (ownerId && calculation.ownerId !== ownerId) return false;
+    if (!ownerId && canReviewCommission(req.user) && !allowedOwners.has(calculation.ownerId)) return false;
+    return canAccessCommissionOwner(req.user!, calculation.ownerId);
+  });
+  const ids = new Set(calculations.map((item) => item.id));
+  res.json({ calculations, items: store.commissionItems.filter((item) => ids.has(item.calculationId)), changedCalculations });
+}));
+
+app.post("/api/commission/calculations/:id/manual-item", requireAuth, asyncRoute(async (req, res) => {
+  if (!canReviewCommission(req.user)) {
+    res.status(403).json({ message: "只有管理员和超级管理员可以调整提成金额" });
+    return;
+  }
+  const body = z.object({
+    itemType: z.enum(["bonus", "deduction", "subsidy", "refund", "special", "other"]).default("other"),
+    manualAmount: z.coerce.number().default(0),
+    remark: z.string().min(1)
+  }).parse(req.body);
+  const store = getStore();
+  const calculation = store.commissionCalculations.find((item) => item.id === req.params.id);
+  if (!calculation || !canAccessCommissionOwner(req.user!, calculation.ownerId)) {
+    res.status(404).json({ message: "提成计算单不存在" });
+    return;
+  }
+  if (calculation.status === "locked") {
+    res.status(400).json({ message: "已锁定计算单不能调整" });
+    return;
+  }
+  if (body.itemType === "deduction" || body.itemType === "refund") {
+    body.manualAmount = -Math.abs(body.manualAmount);
+  }
+  const item: CommissionItem = {
+    id: `ci_manual_${Date.now()}`,
+    calculationId: calculation.id,
+    recordId: "",
+    productId: "",
+    itemType: body.itemType,
+    sourceType: "manual",
+    ruleSnapshotJson: "",
+    salesAmount: 0,
+    autoAmount: 0,
+    manualAmount: roundMoneyValue(body.manualAmount),
+    finalAmount: roundMoneyValue(body.manualAmount),
+    remark: body.remark,
+    createdBy: req.user!.id,
+    createdAt: new Date().toISOString()
+  };
+  store.commissionItems.unshift(item);
+  rebuildCalculationTotals(calculation);
+  await store.persist();
+  res.json({ calculation, item });
+}));
+
+app.post("/api/commission/export", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    month: z.string().regex(/^\d{4}-\d{2}$/).default(currentMonthValue()),
+    scopeType: z.enum(["self", "team", "all"]).default("self"),
+    ownerId: z.string().optional().default(""),
+    fileType: z.enum(["xlsx", "csv"]).default("xlsx")
+  }).parse(req.body);
+  const store = getStore();
+  const ownerId = body.scopeType === "all" && canReviewCommission(req.user) ? "" : body.ownerId;
+  const records = visibleSalesRecords(req.user!, body.month, ownerId);
+  if (!records) {
+    res.status(403).json({ message: "无权导出该人员的提成数据" });
+    return;
+  }
+  const calculationByOwner = new Map(store.commissionCalculations.filter((item) => item.month === body.month).map((item) => [item.ownerId, item]));
+  const rows = records.map((record) => {
+    const calculation = calculationByOwner.get(record.ownerId);
+    const owner = store.users.find((item) => item.id === record.ownerId);
+    return {
+      month: record.month,
+      ownerName: owner?.name || record.ownerId,
+      customerName: record.customerName,
+      productName: record.productName,
+      quantity: record.quantity,
+      unitPrice: record.unitPrice,
+      salesAmount: record.salesAmount,
+      settlementAmount: record.settlementAmount,
+      status: record.status,
+      edited: record.edited,
+      finalCommission: calculation?.finalCommission || 0,
+      editNote: record.editNote
+    };
+  });
+  const exportJob = {
+    id: `ce_${Date.now()}`,
+    month: body.month,
+    scopeType: canReviewCommission(req.user) ? body.scopeType : "self",
+    scopeOwnerId: ownerId || (canReviewCommission(req.user) ? "all" : req.user!.id),
+    fileType: body.fileType,
+    rows: rows.length,
+    exportedBy: req.user!.id,
+    createdAt: new Date().toISOString()
+  };
+  store.commissionExports.unshift(exportJob);
+  await store.persist();
+  res.json({ exportJob, rows });
 }));
 
 app.post("/api/todos/:id/complete", requireAuth, asyncRoute(async (req, res) => {
@@ -3447,13 +4131,15 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 async function startServer() {
   const port = Number(process.env.PORT || 4188);
-  if (process.env.CRM_STORE === "mysql" || process.env.DATABASE_URL || process.env.MYSQL_URL) {
+  const mysqlRequested = process.env.CRM_STORE === "mysql" || Boolean(process.env.DATABASE_URL || process.env.MYSQL_URL);
+  if (mysqlRequested) {
     try {
       const store = await createMysqlStore();
       setStore(store);
       console.log("GoodJob CRM using MySQL persistence");
     } catch (error) {
-      console.warn(`GoodJob CRM MySQL unavailable, using memory store: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`GoodJob CRM MySQL unavailable, startup aborted: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
     }
   }
   app.listen(port, () => {

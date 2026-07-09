@@ -1,7 +1,7 @@
 import mysql from "mysql2/promise";
-import { aiModelConfigs, caseStudies, competitors, customers, deals, examAttempts, examQuestionLinks, examQuestions, exams, importExportJobs, knowledgeAssets, leadSourceConfigs, memos, ocrJobs, planTasks, planTemplates, problems, reminders, todos, tradeDocuments, users, wecomMessages, websiteOpportunities } from "./data.js";
+import { aiModelConfigs, caseStudies, commissionCalculations, commissionExports, commissionItems, commissionProducts, commissionRules, competitors, customers, deals, examAttempts, examQuestionLinks, examQuestions, exams, importExportJobs, knowledgeAssets, leadSourceConfigs, memos, monthlySalesRecords, ocrJobs, planTasks, planTemplates, problems, reminders, salesRecordAudits, todos, tradeDocuments, users, wecomMessages, websiteOpportunities } from "./data.js";
 import type { CrmStore } from "./store.js";
-import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, LeadSourceConfig, Memo, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, LeadSourceConfig, Memo, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, SalesRecordAudit, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 const defaultUrl = "mysql://goodjob:change_me@127.0.0.1:3306/goodjob_crm";
 
@@ -32,10 +32,17 @@ export async function createMysqlStore(): Promise<CrmStore> {
 		    planTasks: await loadPlanTasks(pool),
 		    planTemplates: await loadPlanTemplates(pool),
 		    problems: await loadProblems(pool),
-		    memos: await loadMemos(pool),
-	    competitors: await loadCompetitors(pool),
-	    caseStudies: await loadCaseStudies(pool),
-		    async persist() {
+			    memos: await loadMemos(pool),
+		    competitors: await loadCompetitors(pool),
+		    caseStudies: await loadCaseStudies(pool),
+		    commissionProducts: await loadCommissionProducts(pool),
+		    commissionRules: await loadCommissionRules(pool),
+		    monthlySalesRecords: await loadMonthlySalesRecords(pool),
+		    salesRecordAudits: await loadSalesRecordAudits(pool),
+		    commissionCalculations: await loadCommissionCalculations(pool),
+		    commissionItems: await loadCommissionItems(pool),
+		    commissionExports: await loadCommissionExports(pool),
+			    async persist() {
       await persistAll(pool, store);
     }
   };
@@ -62,9 +69,16 @@ export async function createMysqlStore(): Promise<CrmStore> {
 	    store.planTemplates.push(...planTemplates);
 		    store.problems.push(...problems);
     store.memos.push(...memos);
-    store.competitors.push(...competitors);
-    store.caseStudies.push(...caseStudies);
-    await store.persist();
+	    store.competitors.push(...competitors);
+	    store.caseStudies.push(...caseStudies);
+	    store.commissionProducts.push(...commissionProducts);
+	    store.commissionRules.push(...commissionRules);
+	    store.monthlySalesRecords.push(...monthlySalesRecords);
+	    store.salesRecordAudits.push(...salesRecordAudits);
+	    store.commissionCalculations.push(...commissionCalculations);
+	    store.commissionItems.push(...commissionItems);
+	    store.commissionExports.push(...commissionExports);
+	    await store.persist();
   }
   if (!store.problems.length) {
     store.problems.push(...problems);
@@ -78,10 +92,15 @@ export async function createMysqlStore(): Promise<CrmStore> {
     store.competitors.push(...competitors);
     await store.persist();
   }
-  if (!store.caseStudies.length) {
-    store.caseStudies.push(...caseStudies);
-    await store.persist();
-  }
+	  if (!store.caseStudies.length) {
+	    store.caseStudies.push(...caseStudies);
+	    await store.persist();
+	  }
+	  if (!store.commissionProducts.length) {
+	    store.commissionProducts.push(...commissionProducts);
+	    store.commissionRules.push(...commissionRules);
+	    await store.persist();
+	  }
   if (!store.planTasks.length) {
     store.planTasks.push(...planTasks);
     await store.persist();
@@ -547,6 +566,125 @@ async function ensureSchema(pool: mysql.Pool) {
     INDEX idx_case_studies_owner(owner_id),
     INDEX idx_case_studies_team(team_id)
   )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS commission_products (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    category VARCHAR(100) DEFAULT '',
+    model VARCHAR(120) DEFAULT '',
+    currency VARCHAR(12) DEFAULT 'USD',
+    default_price DECIMAL(14,2) DEFAULT 0,
+    cost_price DECIMAL(14,2) DEFAULT 0,
+    status VARCHAR(20) DEFAULT 'active',
+    remark TEXT,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    updated_at DATETIME NULL,
+    INDEX idx_commission_products_status(status)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS commission_rules (
+    id VARCHAR(64) PRIMARY KEY,
+    product_id VARCHAR(64) NOT NULL,
+    rule_type VARCHAR(30) NOT NULL,
+    rate DECIMAL(8,4) DEFAULT 0,
+    fixed_amount DECIMAL(14,2) DEFAULT 0,
+    tier_json TEXT,
+    gross_profit_rate DECIMAL(8,4) DEFAULT 0,
+    effective_from VARCHAR(20) DEFAULT '',
+    effective_to VARCHAR(20) DEFAULT '',
+    enabled BOOLEAN DEFAULT TRUE,
+    remark TEXT,
+    created_by VARCHAR(64) NOT NULL,
+    created_at DATETIME NULL,
+    INDEX idx_commission_rules_product(product_id)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS monthly_sales_records (
+    id VARCHAR(64) PRIMARY KEY,
+    month_value VARCHAR(20) NOT NULL,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    customer_id VARCHAR(64) DEFAULT '',
+    customer_name VARCHAR(200) DEFAULT '',
+    deal_id VARCHAR(64) DEFAULT '',
+    product_id VARCHAR(64) DEFAULT '',
+    product_name VARCHAR(200) DEFAULT '',
+    quantity DECIMAL(14,2) DEFAULT 0,
+    unit_price DECIMAL(14,2) DEFAULT 0,
+    sales_amount DECIMAL(14,2) DEFAULT 0,
+    currency VARCHAR(12) DEFAULT 'USD',
+    exchange_rate DECIMAL(14,4) DEFAULT 1,
+    settlement_amount DECIMAL(14,2) DEFAULT 0,
+    deal_archived_at VARCHAR(80) DEFAULT '',
+    source_type VARCHAR(20) DEFAULT 'manual',
+    status VARCHAR(30) DEFAULT 'draft',
+    edited BOOLEAN DEFAULT FALSE,
+    edit_note TEXT,
+    last_edited_by VARCHAR(64) DEFAULT '',
+    last_edited_at DATETIME NULL,
+    created_at DATETIME NULL,
+    updated_at DATETIME NULL,
+    INDEX idx_monthly_sales_scope(month_value, owner_id),
+    INDEX idx_monthly_sales_team(month_value, team_id),
+    INDEX idx_monthly_sales_deal(deal_id)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS sales_record_audits (
+    id VARCHAR(64) PRIMARY KEY,
+    record_id VARCHAR(64) NOT NULL,
+    field_name VARCHAR(80) NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    reason TEXT,
+    operator_id VARCHAR(64) NOT NULL,
+    operator_name VARCHAR(120) DEFAULT '',
+    created_at DATETIME NULL,
+    INDEX idx_sales_record_audits_record(record_id)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS commission_calculations (
+    id VARCHAR(64) PRIMARY KEY,
+    month_value VARCHAR(20) NOT NULL,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    sales_amount DECIMAL(14,2) DEFAULT 0,
+    auto_commission DECIMAL(14,2) DEFAULT 0,
+    manual_adjustment DECIMAL(14,2) DEFAULT 0,
+    final_commission DECIMAL(14,2) DEFAULT 0,
+    status VARCHAR(30) DEFAULT 'pending',
+    calculated_at DATETIME NULL,
+    reviewed_by VARCHAR(64) DEFAULT '',
+    reviewed_at DATETIME NULL,
+    locked_by VARCHAR(64) DEFAULT '',
+    locked_at DATETIME NULL,
+    unlock_reason TEXT,
+    INDEX idx_commission_calculations_scope(month_value, owner_id),
+    INDEX idx_commission_calculations_team(month_value, team_id)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS commission_items (
+    id VARCHAR(64) PRIMARY KEY,
+    calculation_id VARCHAR(64) NOT NULL,
+    record_id VARCHAR(64) DEFAULT '',
+    product_id VARCHAR(64) DEFAULT '',
+    item_type VARCHAR(30) DEFAULT 'auto',
+    source_type VARCHAR(20) DEFAULT 'auto',
+    rule_snapshot_json TEXT,
+    sales_amount DECIMAL(14,2) DEFAULT 0,
+    auto_amount DECIMAL(14,2) DEFAULT 0,
+    manual_amount DECIMAL(14,2) DEFAULT 0,
+    final_amount DECIMAL(14,2) DEFAULT 0,
+    remark TEXT,
+    created_by VARCHAR(64) DEFAULT '',
+    created_at DATETIME NULL,
+    INDEX idx_commission_items_calc(calculation_id)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS commission_exports (
+    id VARCHAR(64) PRIMARY KEY,
+    month_value VARCHAR(20) NOT NULL,
+    scope_type VARCHAR(20) DEFAULT 'self',
+    scope_owner_id VARCHAR(64) DEFAULT '',
+    file_type VARCHAR(20) DEFAULT 'xlsx',
+    rows_count INT DEFAULT 0,
+    exported_by VARCHAR(64) NOT NULL,
+    created_at DATETIME NULL,
+    INDEX idx_commission_exports_month(month_value)
+  )`);
 }
 
 async function rows<T>(pool: mysql.Pool, sql: string): Promise<T[]> {
@@ -574,7 +712,7 @@ async function loadUsers(pool: mysql.Pool): Promise<User[]> {
     avatar: row.avatar,
     status: row.status,
     outboundEmail: row.outbound_email || "",
-    emailSenderName: row.email_sender_name || row.name,
+    emailSenderName: row.email_sender_name ?? "",
     emailSignature: row.email_signature || "",
     smtpHost: row.smtp_host || "",
     smtpPort: Number(row.smtp_port || 465),
@@ -897,11 +1035,141 @@ async function loadCaseStudies(pool: mysql.Pool): Promise<CaseStudy[]> {
   }));
 }
 
+async function loadCommissionProducts(pool: mysql.Pool): Promise<CommissionProduct[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM commission_products ORDER BY status = 'active' DESC, updated_at DESC")).map((row) => ({
+    id: row.id,
+    name: row.name,
+    category: row.category || "",
+    model: row.model || "",
+    currency: row.currency || "USD",
+    defaultPrice: Number(row.default_price || 0),
+    costPrice: Number(row.cost_price || 0),
+    status: row.status || "active",
+    remark: row.remark || "",
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at || new Date().toISOString()
+  }));
+}
+
+async function loadCommissionRules(pool: mysql.Pool): Promise<CommissionRule[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM commission_rules ORDER BY enabled DESC, created_at DESC")).map((row) => ({
+    id: row.id,
+    productId: row.product_id,
+    ruleType: row.rule_type || "none",
+    rate: Number(row.rate || 0),
+    fixedAmount: Number(row.fixed_amount || 0),
+    tierJson: row.tier_json || "",
+    grossProfitRate: Number(row.gross_profit_rate || 0),
+    effectiveFrom: row.effective_from || "",
+    effectiveTo: row.effective_to || "",
+    enabled: row.enabled === undefined || row.enabled === null ? true : Boolean(row.enabled),
+    remark: row.remark || "",
+    createdBy: row.created_by,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at || new Date().toISOString()
+  }));
+}
+
+async function loadMonthlySalesRecords(pool: mysql.Pool): Promise<MonthlySalesRecord[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM monthly_sales_records ORDER BY month_value DESC, updated_at DESC")).map((row) => ({
+    id: row.id,
+    month: row.month_value,
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    customerId: row.customer_id || "",
+    customerName: row.customer_name || "",
+    dealId: row.deal_id || "",
+    productId: row.product_id || "",
+    productName: row.product_name || "",
+    quantity: Number(row.quantity || 0),
+    unitPrice: Number(row.unit_price || 0),
+    salesAmount: Number(row.sales_amount || 0),
+    currency: row.currency || "USD",
+    exchangeRate: Number(row.exchange_rate || 1),
+    settlementAmount: Number(row.settlement_amount || 0),
+    dealArchivedAt: row.deal_archived_at || "",
+    sourceType: row.source_type || "manual",
+    status: row.status || "draft",
+    edited: Boolean(row.edited),
+    editNote: row.edit_note || "",
+    lastEditedBy: row.last_edited_by || "",
+    lastEditedAt: row.last_edited_at instanceof Date ? row.last_edited_at.toISOString() : row.last_edited_at || "",
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at || new Date().toISOString(),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at || new Date().toISOString()
+  }));
+}
+
+async function loadSalesRecordAudits(pool: mysql.Pool): Promise<SalesRecordAudit[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM sales_record_audits ORDER BY created_at DESC")).map((row) => ({
+    id: row.id,
+    recordId: row.record_id,
+    fieldName: row.field_name,
+    oldValue: row.old_value || "",
+    newValue: row.new_value || "",
+    reason: row.reason || "",
+    operatorId: row.operator_id,
+    operatorName: row.operator_name || "",
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at || new Date().toISOString()
+  }));
+}
+
+async function loadCommissionCalculations(pool: mysql.Pool): Promise<CommissionCalculation[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM commission_calculations ORDER BY month_value DESC, calculated_at DESC")).map((row) => ({
+    id: row.id,
+    month: row.month_value,
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    salesAmount: Number(row.sales_amount || 0),
+    autoCommission: Number(row.auto_commission || 0),
+    manualAdjustment: Number(row.manual_adjustment || 0),
+    finalCommission: Number(row.final_commission || 0),
+    status: row.status || "pending",
+    calculatedAt: row.calculated_at instanceof Date ? row.calculated_at.toISOString() : row.calculated_at || "",
+    reviewedBy: row.reviewed_by || "",
+    reviewedAt: row.reviewed_at instanceof Date ? row.reviewed_at.toISOString() : row.reviewed_at || "",
+    lockedBy: row.locked_by || "",
+    lockedAt: row.locked_at instanceof Date ? row.locked_at.toISOString() : row.locked_at || "",
+    unlockReason: row.unlock_reason || ""
+  }));
+}
+
+async function loadCommissionItems(pool: mysql.Pool): Promise<CommissionItem[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM commission_items ORDER BY created_at DESC")).map((row) => ({
+    id: row.id,
+    calculationId: row.calculation_id,
+    recordId: row.record_id || "",
+    productId: row.product_id || "",
+    itemType: row.item_type || "auto",
+    sourceType: row.source_type || "auto",
+    ruleSnapshotJson: row.rule_snapshot_json || "",
+    salesAmount: Number(row.sales_amount || 0),
+    autoAmount: Number(row.auto_amount || 0),
+    manualAmount: Number(row.manual_amount || 0),
+    finalAmount: Number(row.final_amount || 0),
+    remark: row.remark || "",
+    createdBy: row.created_by || "",
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at || new Date().toISOString()
+  }));
+}
+
+async function loadCommissionExports(pool: mysql.Pool): Promise<CommissionExport[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM commission_exports ORDER BY created_at DESC")).map((row) => ({
+    id: row.id,
+    month: row.month_value,
+    scopeType: row.scope_type || "self",
+    scopeOwnerId: row.scope_owner_id || "",
+    fileType: row.file_type || "xlsx",
+    rows: Number(row.rows_count || 0),
+    exportedBy: row.exported_by,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at || new Date().toISOString()
+  }));
+}
+
 async function persistAll(pool: mysql.Pool, store: CrmStore) {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    await replaceRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status, item.outboundEmail || "", item.emailSenderName || item.name, item.emailSignature || "", item.smtpHost || "", item.smtpPort || 465, item.smtpSecure ?? true, item.smtpUser || "", item.smtpPassword || "", item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailTo || "", item.lastDevelopmentEmailSubject || ""], "(id,name,email,password_hash,role,team_id,avatar,status,outbound_email,email_sender_name,email_signature,smtp_host,smtp_port,smtp_secure,smtp_user,smtp_password,last_development_email_at,last_development_email_to,last_development_email_subject)");
+    await replaceRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status, item.outboundEmail || "", item.emailSenderName ?? "", item.emailSignature || "", item.smtpHost || "", item.smtpPort || 465, item.smtpSecure ?? true, item.smtpUser || "", item.smtpPassword || "", item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailTo || "", item.lastDevelopmentEmailSubject || ""], "(id,name,email,password_hash,role,team_id,avatar,status,outbound_email,email_sender_name,email_signature,smtp_host,smtp_port,smtp_secure,smtp_user,smtp_password,last_development_email_at,last_development_email_to,last_development_email_subject)");
     await replaceRows(connection, "customers", store.customers, (item) => [item.id, item.company, item.country, item.contact, item.ownerId, item.teamId, item.stage, item.amount, item.health, item.nextReminder, item.wecomBound, item.billingName || "", item.billingAddress || "", item.documentContact || "", item.defaultPortDischarge || "", item.defaultIncoterm || "", item.defaultPaymentTerm || ""], "(id,company,country,contact,owner_id,team_id,stage,amount,health,next_reminder,wecom_bound,billing_name,billing_address,document_contact,default_port_discharge,default_incoterm,default_payment_term)");
     await replaceRows(connection, "deals", store.deals, (item) => [item.id, item.customerId, item.title, item.stage, item.product || "", item.quantity || 0, item.unitPrice || 0, item.amount, item.ownerId, item.teamId, item.nextAction, item.archivedAt ? mysqlDate(item.archivedAt) : null], "(id,customer_id,title,stage,product,quantity,unit_price,amount,owner_id,team_id,next_action,archived_at)");
     await replaceRows(connection, "todos", (store.todos as Todo[]), (item) => [item.id, item.title, item.type, item.priority, item.dueAt, item.ownerId, item.teamId, item.related, item.done, item.status || "pending", item.pinState || "", item.sortOrder || 0, item.impactAmount ?? null, mysqlDate(item.createdAt), item.historyAt ? mysqlDate(item.historyAt) : null], "(id,title,type,priority,due_at,owner_id,team_id,related,done,status,pin_state,sort_order,impact_amount,created_at,history_at)");
@@ -924,6 +1192,13 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
 	    await replaceRows(connection, "memos", store.memos, (item) => [item.id, item.title, item.content, item.category, item.tags, item.ownerId, item.teamId, item.pinned, item.archived, mysqlDate(item.updatedAt)], "(id,title,content,category,tags,owner_id,team_id,pinned,archived,updated_at)");
 	    await replaceRows(connection, "competitors", store.competitors, (item) => [item.id, item.company, item.country, item.segment, item.threatLevel, item.website, item.strengths, item.weaknesses, item.competingProducts, item.ourStrategy, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,company,country,segment,threat_level,website,strengths,weaknesses,competing_products,our_strategy,owner_id,team_id,updated_at)");
 	    await replaceRows(connection, "case_studies", store.caseStudies, (item) => [item.id, item.title, item.customer, item.country, item.product, item.industry, item.result, item.story, item.reusablePoints, item.status, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,title,customer,country,product,industry,result_text,story,reusable_points,status,owner_id,team_id,updated_at)");
+	    await replaceRows(connection, "commission_products", store.commissionProducts, (item) => [item.id, item.name, item.category, item.model, item.currency, item.defaultPrice, item.costPrice, item.status, item.remark, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,name,category,model,currency,default_price,cost_price,status,remark,owner_id,team_id,updated_at)");
+	    await replaceRows(connection, "commission_rules", store.commissionRules, (item) => [item.id, item.productId, item.ruleType, item.rate, item.fixedAmount, item.tierJson, item.grossProfitRate, item.effectiveFrom, item.effectiveTo, item.enabled, item.remark, item.createdBy, mysqlDate(item.createdAt)], "(id,product_id,rule_type,rate,fixed_amount,tier_json,gross_profit_rate,effective_from,effective_to,enabled,remark,created_by,created_at)");
+	    await replaceRows(connection, "monthly_sales_records", store.monthlySalesRecords, (item) => [item.id, item.month, item.ownerId, item.teamId, item.customerId, item.customerName, item.dealId, item.productId, item.productName, item.quantity, item.unitPrice, item.salesAmount, item.currency, item.exchangeRate, item.settlementAmount, item.dealArchivedAt, item.sourceType, item.status, item.edited, item.editNote, item.lastEditedBy, item.lastEditedAt ? mysqlDate(item.lastEditedAt) : null, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,month_value,owner_id,team_id,customer_id,customer_name,deal_id,product_id,product_name,quantity,unit_price,sales_amount,currency,exchange_rate,settlement_amount,deal_archived_at,source_type,status,edited,edit_note,last_edited_by,last_edited_at,created_at,updated_at)");
+	    await replaceRows(connection, "sales_record_audits", store.salesRecordAudits, (item) => [item.id, item.recordId, item.fieldName, item.oldValue, item.newValue, item.reason, item.operatorId, item.operatorName, mysqlDate(item.createdAt)], "(id,record_id,field_name,old_value,new_value,reason,operator_id,operator_name,created_at)");
+	    await replaceRows(connection, "commission_calculations", store.commissionCalculations, (item) => [item.id, item.month, item.ownerId, item.teamId, item.salesAmount, item.autoCommission, item.manualAdjustment, item.finalCommission, item.status, item.calculatedAt ? mysqlDate(item.calculatedAt) : null, item.reviewedBy, item.reviewedAt ? mysqlDate(item.reviewedAt) : null, item.lockedBy, item.lockedAt ? mysqlDate(item.lockedAt) : null, item.unlockReason], "(id,month_value,owner_id,team_id,sales_amount,auto_commission,manual_adjustment,final_commission,status,calculated_at,reviewed_by,reviewed_at,locked_by,locked_at,unlock_reason)");
+	    await replaceRows(connection, "commission_items", store.commissionItems, (item) => [item.id, item.calculationId, item.recordId, item.productId, item.itemType, item.sourceType, item.ruleSnapshotJson, item.salesAmount, item.autoAmount, item.manualAmount, item.finalAmount, item.remark, item.createdBy, mysqlDate(item.createdAt)], "(id,calculation_id,record_id,product_id,item_type,source_type,rule_snapshot_json,sales_amount,auto_amount,manual_amount,final_amount,remark,created_by,created_at)");
+	    await replaceRows(connection, "commission_exports", store.commissionExports, (item) => [item.id, item.month, item.scopeType, item.scopeOwnerId, item.fileType, item.rows, item.exportedBy, mysqlDate(item.createdAt)], "(id,month_value,scope_type,scope_owner_id,file_type,rows_count,exported_by,created_at)");
 	    await connection.commit();
   } catch (error) {
     await connection.rollback();

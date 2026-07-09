@@ -1,4 +1,4 @@
-import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, LeadSourceConfig, Memo, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, LeadSourceConfig, Memo, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, SalesRecordAudit, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 export const users: User[] = [
   { id: "u_sales_shirley", name: "Shirley", email: "shirley@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "SH", status: "active", outboundEmail: "", emailSenderName: "Shirley", emailSignature: "Best regards,\\nShirley\\nGoodJob Instrument Sales" },
@@ -196,6 +196,26 @@ export const aiModelConfigs: AiModelConfig[] = [
 ];
 
 export const leadSourceConfigs: LeadSourceConfig[] = [];
+
+export const commissionProducts: CommissionProduct[] = [
+  { id: "cpd_pressure", name: "压力变送器 PT-2088", category: "压力仪表", model: "PT-2088", currency: "USD", defaultPrice: 600, costPrice: 390, status: "active", remark: "标准压力仪表，按销售额比例计提。", ownerId: "u_admin", teamId: "all", updatedAt: "2026-07-01T09:00:00.000Z" },
+  { id: "cpd_temp", name: "智能温湿度仪表", category: "温度仪表", model: "TH-100", currency: "USD", defaultPrice: 550, costPrice: 350, status: "active", remark: "样品和批量订单通用规则。", ownerId: "u_admin", teamId: "all", updatedAt: "2026-07-01T09:10:00.000Z" },
+  { id: "cpd_flow", name: "流量计 FM-300", category: "流量仪表", model: "FM-300", currency: "USD", defaultPrice: 600, costPrice: 420, status: "active", remark: "高价值产品按阶梯计提。", ownerId: "u_admin", teamId: "all", updatedAt: "2026-07-01T09:20:00.000Z" },
+  { id: "cpd_gauge", name: "工业压力表 PG-100", category: "压力仪表", model: "PG-100", currency: "USD", defaultPrice: 600, costPrice: 410, status: "active", remark: "复购订单稳定产品。", ownerId: "u_admin", teamId: "all", updatedAt: "2026-07-01T09:30:00.000Z" }
+];
+
+export const commissionRules: CommissionRule[] = [
+  { id: "cr_pressure", productId: "cpd_pressure", ruleType: "rate", rate: 0.03, fixedAmount: 0, tierJson: "", grossProfitRate: 0, effectiveFrom: "2026-01", effectiveTo: "", enabled: true, remark: "销售额 3%", createdBy: "u_admin", createdAt: "2026-07-01T09:00:00.000Z" },
+  { id: "cr_temp", productId: "cpd_temp", ruleType: "rate", rate: 0.025, fixedAmount: 0, tierJson: "", grossProfitRate: 0, effectiveFrom: "2026-01", effectiveTo: "", enabled: true, remark: "销售额 2.5%", createdBy: "u_admin", createdAt: "2026-07-01T09:10:00.000Z" },
+  { id: "cr_flow", productId: "cpd_flow", ruleType: "tier", rate: 0, fixedAmount: 0, tierJson: "[{\"from\":0,\"to\":30000,\"rate\":0.02},{\"from\":30000,\"to\":999999999,\"rate\":0.035}]", grossProfitRate: 0, effectiveFrom: "2026-01", effectiveTo: "", enabled: true, remark: "阶梯提成", createdBy: "u_admin", createdAt: "2026-07-01T09:20:00.000Z" },
+  { id: "cr_gauge", productId: "cpd_gauge", ruleType: "gross_profit", rate: 0, fixedAmount: 0, tierJson: "", grossProfitRate: 0.12, effectiveFrom: "2026-01", effectiveTo: "", enabled: true, remark: "毛利 12%", createdBy: "u_admin", createdAt: "2026-07-01T09:30:00.000Z" }
+];
+
+export const monthlySalesRecords: MonthlySalesRecord[] = [];
+export const salesRecordAudits: SalesRecordAudit[] = [];
+export const commissionCalculations: CommissionCalculation[] = [];
+export const commissionItems: CommissionItem[] = [];
+export const commissionExports: CommissionExport[] = [];
 
 export const deals: Deal[] = [
   { id: "d1", customerId: "c1", title: "Nordic Tools 电动工具年度采购", stage: "已报价", product: "压力变送器 PT-2088", quantity: 60, unitPrice: 600, amount: 36000, ownerId: "u_sales_shirley", teamId: "europe", nextAction: "二次确认报价" },

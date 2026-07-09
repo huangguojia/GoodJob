@@ -22,7 +22,7 @@ export function publicUser(user: ReturnType<typeof getStore>["users"][number]): 
     teamId: user.teamId,
     avatar: user.avatar,
     outboundEmail: user.outboundEmail || "",
-    emailSenderName: user.emailSenderName || user.name,
+    emailSenderName: user.emailSenderName ?? "",
     emailSignature: user.emailSignature || "",
     smtpHost: user.smtpHost || "",
     smtpPort: user.smtpPort || 465,

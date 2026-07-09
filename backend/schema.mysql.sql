@@ -358,3 +358,129 @@ CREATE TABLE case_studies (
   INDEX idx_case_studies_owner(owner_id),
   INDEX idx_case_studies_team(team_id)
 );
+
+CREATE TABLE commission_products (
+  id VARCHAR(64) PRIMARY KEY,
+  name VARCHAR(200) NOT NULL,
+  category VARCHAR(100) DEFAULT '',
+  model VARCHAR(120) DEFAULT '',
+  currency VARCHAR(12) DEFAULT 'USD',
+  default_price DECIMAL(14,2) DEFAULT 0,
+  cost_price DECIMAL(14,2) DEFAULT 0,
+  status VARCHAR(20) DEFAULT 'active',
+  remark TEXT,
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  updated_at DATETIME NULL,
+  INDEX idx_commission_products_status(status)
+);
+
+CREATE TABLE commission_rules (
+  id VARCHAR(64) PRIMARY KEY,
+  product_id VARCHAR(64) NOT NULL,
+  rule_type VARCHAR(30) NOT NULL,
+  rate DECIMAL(8,4) DEFAULT 0,
+  fixed_amount DECIMAL(14,2) DEFAULT 0,
+  tier_json TEXT,
+  gross_profit_rate DECIMAL(8,4) DEFAULT 0,
+  effective_from VARCHAR(20) DEFAULT '',
+  effective_to VARCHAR(20) DEFAULT '',
+  enabled BOOLEAN DEFAULT TRUE,
+  remark TEXT,
+  created_by VARCHAR(64) NOT NULL,
+  created_at DATETIME NULL,
+  INDEX idx_commission_rules_product(product_id)
+);
+
+CREATE TABLE monthly_sales_records (
+  id VARCHAR(64) PRIMARY KEY,
+  month_value VARCHAR(20) NOT NULL,
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  customer_id VARCHAR(64) DEFAULT '',
+  customer_name VARCHAR(200) DEFAULT '',
+  deal_id VARCHAR(64) DEFAULT '',
+  product_id VARCHAR(64) DEFAULT '',
+  product_name VARCHAR(200) DEFAULT '',
+  quantity DECIMAL(14,2) DEFAULT 0,
+  unit_price DECIMAL(14,2) DEFAULT 0,
+  sales_amount DECIMAL(14,2) DEFAULT 0,
+  currency VARCHAR(12) DEFAULT 'USD',
+  exchange_rate DECIMAL(14,4) DEFAULT 1,
+  settlement_amount DECIMAL(14,2) DEFAULT 0,
+  deal_archived_at VARCHAR(80) DEFAULT '',
+  source_type VARCHAR(20) DEFAULT 'manual',
+  status VARCHAR(30) DEFAULT 'draft',
+  edited BOOLEAN DEFAULT FALSE,
+  edit_note TEXT,
+  last_edited_by VARCHAR(64) DEFAULT '',
+  last_edited_at DATETIME NULL,
+  created_at DATETIME NULL,
+  updated_at DATETIME NULL,
+  INDEX idx_monthly_sales_scope(month_value, owner_id),
+  INDEX idx_monthly_sales_team(month_value, team_id),
+  INDEX idx_monthly_sales_deal(deal_id)
+);
+
+CREATE TABLE sales_record_audits (
+  id VARCHAR(64) PRIMARY KEY,
+  record_id VARCHAR(64) NOT NULL,
+  field_name VARCHAR(80) NOT NULL,
+  old_value TEXT,
+  new_value TEXT,
+  reason TEXT,
+  operator_id VARCHAR(64) NOT NULL,
+  operator_name VARCHAR(120) DEFAULT '',
+  created_at DATETIME NULL,
+  INDEX idx_sales_record_audits_record(record_id)
+);
+
+CREATE TABLE commission_calculations (
+  id VARCHAR(64) PRIMARY KEY,
+  month_value VARCHAR(20) NOT NULL,
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  sales_amount DECIMAL(14,2) DEFAULT 0,
+  auto_commission DECIMAL(14,2) DEFAULT 0,
+  manual_adjustment DECIMAL(14,2) DEFAULT 0,
+  final_commission DECIMAL(14,2) DEFAULT 0,
+  status VARCHAR(30) DEFAULT 'pending',
+  calculated_at DATETIME NULL,
+  reviewed_by VARCHAR(64) DEFAULT '',
+  reviewed_at DATETIME NULL,
+  locked_by VARCHAR(64) DEFAULT '',
+  locked_at DATETIME NULL,
+  unlock_reason TEXT,
+  INDEX idx_commission_calculations_scope(month_value, owner_id),
+  INDEX idx_commission_calculations_team(month_value, team_id)
+);
+
+CREATE TABLE commission_items (
+  id VARCHAR(64) PRIMARY KEY,
+  calculation_id VARCHAR(64) NOT NULL,
+  record_id VARCHAR(64) DEFAULT '',
+  product_id VARCHAR(64) DEFAULT '',
+  item_type VARCHAR(30) DEFAULT 'auto',
+  source_type VARCHAR(20) DEFAULT 'auto',
+  rule_snapshot_json TEXT,
+  sales_amount DECIMAL(14,2) DEFAULT 0,
+  auto_amount DECIMAL(14,2) DEFAULT 0,
+  manual_amount DECIMAL(14,2) DEFAULT 0,
+  final_amount DECIMAL(14,2) DEFAULT 0,
+  remark TEXT,
+  created_by VARCHAR(64) DEFAULT '',
+  created_at DATETIME NULL,
+  INDEX idx_commission_items_calc(calculation_id)
+);
+
+CREATE TABLE commission_exports (
+  id VARCHAR(64) PRIMARY KEY,
+  month_value VARCHAR(20) NOT NULL,
+  scope_type VARCHAR(20) DEFAULT 'self',
+  scope_owner_id VARCHAR(64) DEFAULT '',
+  file_type VARCHAR(20) DEFAULT 'xlsx',
+  rows_count INT DEFAULT 0,
+  exported_by VARCHAR(64) NOT NULL,
+  created_at DATETIME NULL,
+  INDEX idx_commission_exports_month(month_value)
+);

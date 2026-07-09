@@ -145,9 +145,10 @@ try {
 
   const profileTestMail = await request("/api/profile/test-email", {
     method: "POST",
-    headers: { authorization: `Bearer ${salesToken}` }
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ to: "qa.receiver@example.com" })
   });
-  if (!profileTestMail.response.ok || !profileTestMail.json.ok) {
+  if (!profileTestMail.response.ok || !profileTestMail.json.ok || profileTestMail.json.to !== "qa.receiver@example.com") {
     throw new Error("profile smtp test failed");
   }
 
@@ -229,6 +230,25 @@ try {
     throw new Error("prospect list development email failed");
   }
 
+  const profileClear = await request("/api/profile/email-binding", {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      outboundEmail: "",
+      emailSenderName: "",
+      emailSignature: "",
+      smtpHost: "",
+      smtpPort: 465,
+      smtpSecure: true,
+      smtpUser: "",
+      smtpPassword: "",
+      clearSmtpPassword: true
+    })
+  });
+  if (!profileClear.response.ok || profileClear.json.user?.outboundEmail !== "" || profileClear.json.user?.emailSenderName !== "" || profileClear.json.user?.hasSmtpPassword) {
+    throw new Error("profile email clear failed");
+  }
+
   const deals = await request("/api/deals", { headers: { authorization: `Bearer ${managerToken}` } });
   if (deals.json.deals.length < 5) throw new Error("manager deals scope failed");
 
@@ -263,6 +283,89 @@ try {
     headers: { authorization: `Bearer ${managerToken}` }
   });
   if (!archivedDeal.response.ok || !archivedDeal.json.deal.archivedAt) throw new Error("deal archive failed");
+
+  const commissionProduct = await request("/api/commission/products", {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ name: "自动化温度仪表", category: "测试仪表", model: "AUTO-T", defaultPrice: 900, costPrice: 600, remark: "自动化测试产品" })
+  });
+  if (!commissionProduct.response.ok || commissionProduct.json.product.name !== "自动化温度仪表") throw new Error("commission product create failed");
+  const commissionRule = await request(`/api/commission/products/${commissionProduct.json.product.id}/rules`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ ruleType: "rate", rate: 0.04, effectiveFrom: "2026-01", remark: "自动化测试 4%" })
+  });
+  if (!commissionRule.response.ok || commissionRule.json.rule.rate !== 0.04) throw new Error("commission rule create failed");
+  const editedCommissionProduct = await request(`/api/commission/products/${commissionProduct.json.product.id}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ model: "AUTO-T-EDIT", remark: "自动化测试产品已编辑" })
+  });
+  if (!editedCommissionProduct.response.ok || editedCommissionProduct.json.product.model !== "AUTO-T-EDIT") throw new Error("commission product edit failed");
+  const editedCommissionRule = await request(`/api/commission/rules/${commissionRule.json.rule.id}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ rate: 0.04, enabled: true, remark: "自动化测试规则已编辑" })
+  });
+  if (!editedCommissionRule.response.ok || editedCommissionRule.json.rule.remark !== "自动化测试规则已编辑") throw new Error("commission rule edit failed");
+  const commissionMonth = archivedDeal.json.deal.archivedAt.slice(0, 7);
+  const commissionSync = await request("/api/commission/sales-records/sync-from-deals", {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ month: commissionMonth, ownerId: "u_sales_shirley" })
+  });
+  const commissionRecord = commissionSync.json.records?.find((item: { dealId: string }) => item.dealId === newDeal.json.deal.id);
+  if (!commissionSync.response.ok || !commissionRecord) throw new Error("commission sync from archived deal failed");
+  const crossCommissionRead = await request(`/api/commission/sales-records?month=${commissionMonth}&ownerId=u_sales_shirley`, {
+    headers: { authorization: `Bearer ${miaToken}` }
+  });
+  if (crossCommissionRead.response.status !== 403) throw new Error("sales must not read another salesperson commission records");
+  const adminCommissionRead = await request(`/api/commission/sales-records?month=${commissionMonth}&ownerId=u_sales_shirley`, {
+    headers: { authorization: `Bearer ${adminToken}` }
+  });
+  if (!adminCommissionRead.response.ok || !adminCommissionRead.json.records.some((item: { id: string }) => item.id === commissionRecord.id) || !adminCommissionRead.json.canSelectOwner) {
+    throw new Error("admin should select salesperson commission records");
+  }
+  const editedCommissionRecord = await request(`/api/commission/sales-records/${commissionRecord.id}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ unitPrice: 950, salesAmount: 11400, editNote: "自测：按实际结算单价调整" })
+  });
+  if (!editedCommissionRecord.response.ok || !editedCommissionRecord.json.record.edited) throw new Error("commission record edit audit failed");
+  const confirmedCommissionRecord = await request(`/api/commission/sales-records/${commissionRecord.id}/confirm`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` }
+  });
+  if (!confirmedCommissionRecord.response.ok || confirmedCommissionRecord.json.record.status !== "confirmed") throw new Error("commission record confirm failed");
+  const commissionAudits = await request(`/api/commission/sales-records/${commissionRecord.id}/audits`, {
+    headers: { authorization: `Bearer ${adminToken}` }
+  });
+  if (!commissionAudits.response.ok || !commissionAudits.json.audits.length) throw new Error("commission audits read failed");
+  const commissionRecalc = await request("/api/commission/calculations/recalculate", {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ month: commissionMonth, ownerId: "u_sales_shirley" })
+  });
+  const commissionCalculation = commissionRecalc.json.calculations?.find((item: { ownerId: string }) => item.ownerId === archivedDeal.json.deal.ownerId);
+  if (!commissionRecalc.response.ok || !commissionCalculation || commissionCalculation.autoCommission <= 0) throw new Error("commission recalculate failed");
+  const salesManualCommission = await request(`/api/commission/calculations/${commissionCalculation.id}/manual-item`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ itemType: "bonus", manualAmount: 50, remark: "越权奖金项" })
+  });
+  if (salesManualCommission.response.status !== 403) throw new Error("sales must not adjust commission manually");
+  const commissionManual = await request(`/api/commission/calculations/${commissionCalculation.id}/manual-item`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ itemType: "bonus", manualAmount: 50, remark: "自测奖金项" })
+  });
+  if (!commissionManual.response.ok || commissionManual.json.calculation.finalCommission <= commissionCalculation.finalCommission) throw new Error("commission manual item failed");
+  const commissionExport = await request("/api/commission/export", {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ month: commissionMonth, ownerId: "u_sales_shirley", scopeType: "self", fileType: "xlsx" })
+  });
+  if (!commissionExport.response.ok || !commissionExport.json.rows?.length) throw new Error("commission export failed");
 
   const lostDeal = await request("/api/deals", {
     method: "POST",
@@ -756,6 +859,9 @@ try {
     managerDeals: deals.json.deals.length,
     createdDeal: newDeal.json.deal.title,
     archivedDeal: Boolean(archivedDeal.json.deal.archivedAt),
+    commissionRecord: confirmedCommissionRecord.json.record.status,
+    commissionFinal: commissionManual.json.calculation.finalCommission,
+    commissionExportRows: commissionExport.json.rows.length,
     lostDeal: markedLost.json.deal.stage,
     createdReminder: reminder.json.reminder.title,
 	    todoUndo: todoUndone.json.todo.done === false,
@@ -768,6 +874,8 @@ try {
     aiConfigDeleteRemaining: aiConfigDelete.json.configs.length,
     profileOutboundEmail: profileBind.json.user.outboundEmail,
     profileSmtpTest: profileTestMail.json.ok,
+    profileSmtpTestTo: profileTestMail.json.to,
+    profileCleared: !profileClear.json.user.hasSmtpPassword,
     developmentEmailTo: profileMail.json.user.lastDevelopmentEmailTo,
     prospectEmailTo: prospectMail.json.opportunity.lastDevelopmentEmailTo,
     leadProviderCount: providerList.length,

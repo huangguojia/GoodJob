@@ -1,6 +1,11 @@
 import {
   aiModelConfigs,
   caseStudies,
+  commissionCalculations,
+  commissionExports,
+  commissionItems,
+  commissionProducts,
+  commissionRules,
   competitors,
   customers,
   deals,
@@ -12,18 +17,20 @@ import {
   knowledgeAssets,
   leadSourceConfigs,
   memos,
+  monthlySalesRecords,
   ocrJobs,
   planTemplates,
   planTasks,
   problems,
   reminders,
+  salesRecordAudits,
   todos,
   tradeDocuments,
   users,
   wecomMessages,
   websiteOpportunities
 } from "./data.js";
-import type { AiModelConfig, CaseStudy, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, LeadSourceConfig, Memo, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, LeadSourceConfig, Memo, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, SalesRecordAudit, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 export interface CrmStore {
   mode: "memory" | "mysql";
@@ -50,6 +57,13 @@ export interface CrmStore {
   memos: Memo[];
   competitors: Competitor[];
   caseStudies: CaseStudy[];
+  commissionProducts: CommissionProduct[];
+  commissionRules: CommissionRule[];
+  monthlySalesRecords: MonthlySalesRecord[];
+  salesRecordAudits: SalesRecordAudit[];
+  commissionCalculations: CommissionCalculation[];
+  commissionItems: CommissionItem[];
+  commissionExports: CommissionExport[];
   persist(): Promise<void>;
 }
 
@@ -78,6 +92,13 @@ export const memoryStore: CrmStore = {
   memos,
   competitors,
   caseStudies,
+  commissionProducts,
+  commissionRules,
+  monthlySalesRecords,
+  salesRecordAudits,
+  commissionCalculations,
+  commissionItems,
+  commissionExports,
   async persist() {
     // Memory mode intentionally keeps current in-process state only.
   }
