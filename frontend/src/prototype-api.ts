@@ -228,6 +228,8 @@ interface OcrJob {
   status: string;
   confidence: number;
   fields: Record<string, string>;
+  ownerId: string;
+  teamId: string;
 }
 
 interface WebsiteOpportunity {
@@ -256,8 +258,8 @@ interface WebsiteOpportunity {
 interface LeadProviderStatus {
   id: string;
   name: string;
-  tier: "free" | "byok_free" | "paid";
-  category: "web" | "company" | "email";
+  tier: "free" | "byok_free" | "paid" | "ai";
+  category: "web" | "company" | "email" | "ai";
   requiresKey: boolean;
   capabilities: string[];
   docsUrl: string;
@@ -807,7 +809,21 @@ function applyAuthedUser(user: User) {
   const topUserRole = qs<HTMLElement>("#topUserRole");
   if (topUserName) topUserName.textContent = user.name;
   if (topUserRole) topUserRole.textContent = roleLabel[user.role];
+  syncTrainingManagementUi(user);
   renderProfile(user);
+}
+
+function canManageTrainingUi(user = state.user) {
+  return user?.role === "manager" || user?.role === "admin" || user?.role === "super_admin";
+}
+
+function syncTrainingManagementUi(user = state.user) {
+  const canManage = canManageTrainingUi(user);
+  qsa<HTMLElement>("#exam .page-head .btn").forEach((button) => {
+    if (button.textContent?.includes("发布考试") || button.textContent?.includes("题库维护") || button.textContent?.includes("分类目考试维护")) {
+      button.classList.toggle("is-hidden", !canManage);
+    }
+  });
 }
 
 function roleScopeText(user: User) {
@@ -1081,7 +1097,8 @@ async function loadLeadProviders() {
     state.leadProviders = result.providers || [];
     if (!state.leadSourceSelectionTouched) {
       // 默认选中：所有免费源 + 已配置启用的源
-      state.selectedLeadSources = state.leadProviders.filter((item) => item.ready && item.enabled).map((item) => item.id);
+      // AI 搜索按 token 计费，默认不自动勾选，由用户按需开启
+    state.selectedLeadSources = state.leadProviders.filter((item) => item.ready && item.enabled && item.id !== "ai_search").map((item) => item.id);
     }
     renderLeadSourceChips();
   } catch {
@@ -3563,6 +3580,8 @@ function questionTypeText(question: ExamQuestion) {
 function renderExams(exams: Exam[]) {
   const list = qs<HTMLElement>("#exam .exam-sidebar .category-list");
   if (!list) return;
+  syncTrainingManagementUi();
+  const canManage = canManageTrainingUi();
   const report = state.examReport;
   const activeExam = exams.find((item) => item.id === state.selectedExamId) || exams[0];
   state.selectedExamId = activeExam?.id || null;
@@ -3570,18 +3589,18 @@ function renderExams(exams: Exam[]) {
   const selectedCount = state.selectedExamIds.length;
   const allSelected = exams.length > 0 && selectedCount === exams.length;
   list.innerHTML = exams.length ? `
-    <div class="exam-bulk-bar">
+    ${canManage ? `<div class="exam-bulk-bar">
       <label class="exam-select-all"><input type="checkbox" data-select-all-exams ${allSelected ? "checked" : ""}>全选</label>
       <span>已选 ${selectedCount} 场</span>
       <button class="btn danger" data-bulk-delete-exams ${selectedCount ? "" : "disabled"}>批量删除</button>
-    </div>
+    </div>` : ""}
     ${exams.map((exam) => {
       const checked = state.selectedExamIds.includes(exam.id);
       return `
         <div class="category-item exam-row ${exam.id === state.selectedExamId ? "selected" : ""} ${checked ? "checked" : ""}" data-exam-id="${escapeHtml(exam.id)}">
-          <label class="exam-row-check" title="选择考试"><input type="checkbox" data-select-exam ${checked ? "checked" : ""}></label>
+          ${canManage ? `<label class="exam-row-check" title="选择考试"><input type="checkbox" data-select-exam ${checked ? "checked" : ""}></label>` : ""}
           <div class="exam-row-main"><b>${escapeHtml(exam.title)}</b><span>${exam.questionCount} 题 · ${exam.passScore || 80} 分及格 · ${escapeHtml(exam.category)} · ${examTargetText(exam.targetRole)}</span></div>
-          <div class="exam-actions">${badge(examStatusText(exam.status), examStatusTone(exam.status))}<button class="btn" data-start-exam>考试</button><button class="btn" data-question-bank>题库</button><button class="btn" data-publish-exam>发布</button><button class="btn danger" data-delete-exam>删除</button></div>
+          <div class="exam-actions">${badge(examStatusText(exam.status), examStatusTone(exam.status))}<button class="btn" data-start-exam>考试</button>${canManage ? `<button class="btn" data-question-bank>题库</button><button class="btn" data-publish-exam>发布</button><button class="btn danger" data-delete-exam>删除</button>` : ""}</div>
         </div>`;
     }).join("")}` : `<div class="empty-state"><b>暂无考试</b><span>点击发布考试或分类目考试维护创建第一套题。</span></div>`;
   const cards = qsa<HTMLElement>("#exam .dense-card");
@@ -3604,26 +3623,28 @@ function renderExams(exams: Exam[]) {
       renderExams(state.exams);
     });
   });
-  qs<HTMLInputElement>("[data-select-all-exams]", list)?.addEventListener("change", (event) => {
-    const checked = (event.currentTarget as HTMLInputElement).checked;
-    state.selectedExamIds = checked ? state.exams.map((exam) => exam.id) : [];
-    renderExams(state.exams);
-  });
-  qsa<HTMLInputElement>("[data-select-exam]", list).forEach((checkbox) => {
-    checkbox.addEventListener("change", (event) => {
-      event.stopPropagation();
-      const id = checkbox.closest<HTMLElement>(".category-item")?.dataset.examId || "";
-      if (!id) return;
-      state.selectedExamIds = checkbox.checked
-        ? Array.from(new Set([...state.selectedExamIds, id]))
-        : state.selectedExamIds.filter((selectedId) => selectedId !== id);
+  if (canManage) {
+    qs<HTMLInputElement>("[data-select-all-exams]", list)?.addEventListener("change", (event) => {
+      const checked = (event.currentTarget as HTMLInputElement).checked;
+      state.selectedExamIds = checked ? state.exams.map((exam) => exam.id) : [];
       renderExams(state.exams);
     });
-  });
-  qs<HTMLButtonElement>("[data-bulk-delete-exams]", list)?.addEventListener("click", (event) => {
-    event.stopPropagation();
-    void bulkDeleteExams();
-  });
+    qsa<HTMLInputElement>("[data-select-exam]", list).forEach((checkbox) => {
+      checkbox.addEventListener("change", (event) => {
+        event.stopPropagation();
+        const id = checkbox.closest<HTMLElement>(".category-item")?.dataset.examId || "";
+        if (!id) return;
+        state.selectedExamIds = checkbox.checked
+          ? Array.from(new Set([...state.selectedExamIds, id]))
+          : state.selectedExamIds.filter((selectedId) => selectedId !== id);
+        renderExams(state.exams);
+      });
+    });
+    qs<HTMLButtonElement>("[data-bulk-delete-exams]", list)?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void bulkDeleteExams();
+    });
+  }
   qsa<HTMLButtonElement>("[data-start-exam]", list).forEach((button) => {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -5524,11 +5545,11 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
 // ---------------------------------------------------------------------------
 
 function leadTierText(tier: string) {
-  return tier === "free" ? "免费" : tier === "byok_free" ? "自带Key·免费额度" : "付费·自带Key";
+  return tier === "free" ? "免费" : tier === "byok_free" ? "自带Key·免费额度" : tier === "ai" ? "AI 模型" : "付费·自带Key";
 }
 
 function leadCategoryText(category: string) {
-  return category === "web" ? "Web搜索" : category === "company" ? "公司库" : "邮箱发现";
+  return category === "web" ? "Web搜索" : category === "company" ? "公司库" : category === "ai" ? "AI 生成" : "邮箱发现";
 }
 
 function renderLeadSourceChips() {
@@ -5540,8 +5561,11 @@ function renderLeadSourceChips() {
   }
   box.innerHTML = state.leadProviders.map((provider) => {
     const selected = state.selectedLeadSources.includes(provider.id);
-    const cls = provider.ready ? (selected ? "ready active" : "ready") : "needkey";
-    const stateText = provider.ready ? (provider.requiresKey ? "已连接" : "内置") : "未配置";
+    const isAi = provider.tier === "ai";
+    const cls = `${provider.ready ? (selected ? "ready active" : "ready") : "needkey"}${isAi ? " ai" : ""}`;
+    const stateText = isAi
+      ? (provider.ready ? "已启用" : "未启用")
+      : provider.ready ? (provider.requiresKey ? "已连接" : "内置") : "未配置";
     return `<button type="button" class="lead-source-chip ${cls}" data-lead-provider="${escapeHtml(provider.id)}"><span class="dot"></span><span class="ls-chip-name">${escapeHtml(provider.name)}</span><small>${stateText}</small></button>`;
   }).join("");
   qsa<HTMLButtonElement>("[data-lead-provider]", box).forEach((chip) => {
@@ -5550,7 +5574,14 @@ function renderLeadSourceChips() {
       const provider = state.leadProviders.find((item) => item.id === id);
       if (!provider) return;
       if (!provider.ready) {
-        openLeadSourceCenter(id);
+        if (id === "ai_search") {
+          activateNavView("ai-config", () => {
+            qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
+            toast("在此启用模型并勾选“自动获客”，即可把 AI 搜索作为获客来源");
+          });
+        } else {
+          openLeadSourceCenter(id);
+        }
         return;
       }
       state.leadSourceSelectionTouched = true;
@@ -5564,13 +5595,18 @@ function renderLeadSourceChips() {
 function leadSourceCardsHtml(focusId?: string) {
   const cards = state.leadProviders.map((provider) => {
     const statusCls = !provider.ready ? "warn" : provider.lastTestStatus === "failed" ? "fail" : provider.lastTestStatus === "passed" ? "ok" : "ok";
-    const statusText = !provider.requiresKey
-      ? "内置免费源，无需配置"
-      : provider.ready
-        ? (provider.lastTestStatus === "passed" ? "已连接并通过测试" : provider.lastTestStatus === "failed" ? `测试失败：${provider.lastTestMessage || "请检查 Key"}` : "已保存 Key，建议点测试连接")
-        : "未配置 API Key";
+    const isAi = provider.id === "ai_search";
+    const statusText = isAi
+      ? (provider.ready ? (provider.lastTestMessage || "已启用，可作为获客来源") : "未启用，去「AI 模型配置」开启")
+      : !provider.requiresKey
+        ? "内置免费源，无需配置"
+        : provider.ready
+          ? (provider.lastTestStatus === "passed" ? "已连接并通过测试" : provider.lastTestStatus === "failed" ? `测试失败：${provider.lastTestMessage || "请检查 Key"}` : "已保存 Key，建议点测试连接")
+          : "未配置 API Key";
     const caps = provider.capabilities.map((cap) => `<span class="ls-cap">${escapeHtml(cap)}</span>`).join("");
-    const form = provider.requiresKey ? `
+    const form = isAi ? `
+      <div class="ls-usage">${escapeHtml(provider.costNote)}</div>
+      <div class="ls-form-actions"><button class="btn" type="button" data-ls-ai-config>去 AI 模型配置</button></div>` : provider.requiresKey ? `
       <div class="ls-form">
         <input type="password" data-ls-key="${escapeHtml(provider.id)}" placeholder="${provider.hasApiKey ? "已保存（留空不修改）" : "粘贴 API Key"}" autocomplete="off">
         <div class="ls-form-actions">
@@ -5590,7 +5626,7 @@ function leadSourceCardsHtml(focusId?: string) {
         <div class="ls-caps">${caps}</div>
         <div class="ls-status ${statusCls}"><span class="dot"></span>${escapeHtml(statusText)}</div>
         ${form}
-        <a class="ls-docs" href="${escapeHtml(provider.docsUrl)}" target="_blank" rel="noreferrer">查看官方文档 ↗</a>
+        ${provider.docsUrl ? `<a class="ls-docs" href="${escapeHtml(provider.docsUrl)}" target="_blank" rel="noreferrer">查看官方文档 ↗</a>` : ""}
       </div>`;
   }).join("");
   return `<p class="ls-center-intro">免费源无需配置即可使用；付费/自带 Key 源在此粘贴 API Key、测试连接后即可在搜客中启用。Key 仅本人可见，页面不回显明文。</p><div class="ls-grid">${cards}</div>`;
@@ -5602,6 +5638,13 @@ function bindLeadSourceCards() {
   qsa<HTMLButtonElement>("[data-ls-save]", modal).forEach((button) => button.addEventListener("click", () => void saveLeadSourceConfig(button.dataset.lsSave || "", button)));
   qsa<HTMLButtonElement>("[data-ls-test]", modal).forEach((button) => button.addEventListener("click", () => void testLeadSourceConfig(button.dataset.lsTest || "", button)));
   qsa<HTMLButtonElement>("[data-ls-delete]", modal).forEach((button) => button.addEventListener("click", () => void deleteLeadSourceConfig(button.dataset.lsDelete || "", button)));
+  qs<HTMLButtonElement>("[data-ls-ai-config]", modal)?.addEventListener("click", () => {
+    closeModal();
+    activateNavView("ai-config", () => {
+      qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
+      toast("启用模型并勾选“自动获客”后，AI 搜索即可用");
+    });
+  });
 }
 
 function openLeadSourceCenter(focusId?: string) {
@@ -5612,7 +5655,8 @@ function openLeadSourceCenter(focusId?: string) {
 function refreshLeadSourceCenter(providers?: LeadProviderStatus[]) {
   if (providers) state.leadProviders = providers;
   if (!state.leadSourceSelectionTouched) {
-    state.selectedLeadSources = state.leadProviders.filter((item) => item.ready && item.enabled).map((item) => item.id);
+    // AI 搜索按 token 计费，默认不自动勾选，由用户按需开启
+    state.selectedLeadSources = state.leadProviders.filter((item) => item.ready && item.enabled && item.id !== "ai_search").map((item) => item.id);
   }
   renderLeadSourceChips();
   const modal = qs<HTMLElement>("#appModal");
@@ -5803,12 +5847,14 @@ async function runLeadFinder(button?: HTMLButtonElement) {
   const sources = readySelected.length ? readySelected : state.leadProviders.filter((p) => p.ready && !p.requiresKey).map((p) => p.id);
   const limit = Number(qs<HTMLSelectElement>("#leadLimit")?.value || 12);
 
-  // 付费源成本护栏：搜索前确认（Round 4 定稿）
+  // 计费源成本护栏：付费 API 与 AI 搜索都会产生费用，搜索前确认
   if (!urls.length) {
-    const paid = sources.map((id) => state.leadProviders.find((p) => p.id === id)).filter((p): p is LeadProviderStatus => Boolean(p && p.tier === "paid"));
-    if (paid.length) {
-      const lines = paid.map((p) => `· ${p.name}：约 ${Math.min(limit, 15)} 次调用${p.usage ? `（${p.usage}）` : ""}`).join("\n");
-      if (!window.confirm(`本次将调用付费/计费数据源：\n${lines}\n\n确认开始搜客吗？`)) return;
+    const billed = sources.map((id) => state.leadProviders.find((p) => p.id === id)).filter((p): p is LeadProviderStatus => Boolean(p && (p.tier === "paid" || p.tier === "ai")));
+    if (billed.length) {
+      const lines = billed.map((p) => p.tier === "ai"
+        ? `· ${p.name}：消耗你配置的 AI 模型 token`
+        : `· ${p.name}：约 ${Math.min(limit, 15)} 次调用${p.usage ? `（${p.usage}）` : ""}`).join("\n");
+      if (!window.confirm(`本次将使用计费数据源：\n${lines}\n\n确认开始搜客吗？`)) return;
     }
   }
 

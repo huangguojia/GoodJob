@@ -166,7 +166,11 @@ CREATE TABLE ocr_jobs (
   confidence DECIMAL(5,2),
   fields_json JSON,
   created_by VARCHAR(64),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  owner_id VARCHAR(64) NOT NULL DEFAULT 'u_sales_shirley',
+  team_id VARCHAR(64) NOT NULL DEFAULT 'europe',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_ocr_jobs_owner(owner_id),
+  INDEX idx_ocr_jobs_team(team_id)
 );
 
 CREATE TABLE website_opportunities (

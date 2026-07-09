@@ -36,6 +36,35 @@ try {
     throw new Error("manager should see more customers than sales");
   }
 
+  const boundaryCompany = `隔离删除客户-${Date.now()}`;
+  const boundaryCustomer = await request("/api/customers", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ company: boundaryCompany, country: "德国", contact: "Boundary Buyer", stage: "询盘", amount: 1000 })
+  });
+  if (!boundaryCustomer.response.ok) throw new Error("boundary customer create failed");
+  const managerBoundaryTodo = await request("/api/todos", {
+    method: "POST",
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({ title: `主管跟进 ${boundaryCompany}`, type: "customer", related: boundaryCompany })
+  });
+  const salesBoundaryTodo = await request("/api/todos", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ title: `销售跟进 ${boundaryCompany}`, type: "customer", related: boundaryCompany })
+  });
+  if (!managerBoundaryTodo.response.ok || !salesBoundaryTodo.response.ok) throw new Error("boundary todo create failed");
+  const boundaryDelete = await request("/api/customers/bulk-delete", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ ids: [boundaryCustomer.json.customer.id] })
+  });
+  if (!boundaryDelete.response.ok) throw new Error("boundary customer delete failed");
+  const managerTodosAfterBoundaryDelete = await request("/api/todos", { headers: { authorization: `Bearer ${managerToken}` } });
+  const salesTodosAfterBoundaryDelete = await request("/api/todos", { headers: { authorization: `Bearer ${salesToken}` } });
+  if (!managerTodosAfterBoundaryDelete.json.todos.some((todo: { id: string }) => todo.id === managerBoundaryTodo.json.todo.id)) throw new Error("customer delete must not remove manager personal todo");
+  if (salesTodosAfterBoundaryDelete.json.todos.some((todo: { id: string }) => todo.id === salesBoundaryTodo.json.todo.id)) throw new Error("customer delete should remove current user's related todo");
+
   const ocr = await request("/api/tools/ocr/jobs/ocr1/sync-lead", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` }
@@ -43,6 +72,14 @@ try {
   if (!ocr.response.ok || ocr.json.lead.company !== "NorthStar Lighting GmbH") {
     throw new Error("ocr sync failed");
   }
+  const managerOcr = await request("/api/tools/ocr/jobs/ocr1", {
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (!managerOcr.response.ok || managerOcr.json.job.ownerId !== "u_manager_alex") throw new Error("manager personal ocr job failed");
+  const crossOcr = await request(`/api/tools/ocr/jobs/${managerOcr.json.job.id}`, {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (crossOcr.response.status !== 404) throw new Error("ocr job must be personal isolated");
 
   const aiConfig = await request("/api/tools/ai-config", {
     method: "POST",
@@ -153,6 +190,8 @@ try {
   const freeReady = providerList.filter((item: any) => !item.requiresKey && item.ready).length;
   const hunterMeta = providerList.find((item: any) => item.id === "hunter");
   if (freeReady < 2 || !hunterMeta || hunterMeta.tier !== "paid") throw new Error("lead providers metadata failed");
+  const aiSearchMeta = providerList.find((item: any) => item.id === "ai_search");
+  if (!aiSearchMeta || aiSearchMeta.tier !== "ai" || aiSearchMeta.requiresKey !== false) throw new Error("ai search source metadata failed");
 
   const leadSourceSave = await request("/api/lead-finder/source-config", {
     method: "POST",
@@ -536,6 +575,27 @@ try {
     body: JSON.stringify({ answers: examAnswers })
   });
   if (!exam.response.ok || exam.json.attempt.passed !== true || exam.json.attempt.score !== 100) throw new Error("exam submit failed");
+
+  const salesQuestionForbidden = await request("/api/exam-questions", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      stem: "销售不能维护题库？",
+      category: "权限测试",
+      options: ["能", "不能"],
+      answerIndex: 1,
+      explanation: "销售只能参加考试，不能维护题库。",
+      difficulty: "easy"
+    })
+  });
+  if (salesQuestionForbidden.response.status !== 403) throw new Error("sales must not maintain question bank");
+
+  const salesExamForbidden = await request("/api/exams", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ title: "销售不能发布考试", category: "权限测试", questionIds: ["q1"] })
+  });
+  if (salesExamForbidden.response.status !== 403) throw new Error("sales must not create exams");
 
   const bankQuestion = await request("/api/exam-questions", {
     method: "POST",

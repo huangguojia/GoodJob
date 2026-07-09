@@ -6,7 +6,7 @@ import { canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, publ
 import { createMysqlStore } from "./mysql-store.js";
 import { getStore, setStore } from "./store.js";
 import { LEAD_PROVIDERS, getProvider, providerMeta, type LeadProvider, type LeadQuery, type RawLead } from "./lead-providers.js";
-import type { AiModelConfig, Customer, Deal, Exam, ExamAttempt, ExamQuestion, LeadSourceConfig, PlanTask, PlanTemplate, SessionUser, Todo, TradeDocument, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, Customer, Deal, Exam, ExamAttempt, ExamQuestion, LeadSourceConfig, OcrJob, PlanTask, PlanTemplate, SessionUser, Todo, TradeDocument, WebsiteOpportunity } from "./types.js";
 
 export const app = express();
 app.use(cors());
@@ -20,6 +20,62 @@ function asyncRoute(handler: (req: Request, res: Response, next: NextFunction) =
 
 function accountUser(user: ReturnType<typeof getStore>["users"][number]) {
   return { ...publicUser(user), status: user.status };
+}
+
+function canManageTraining(user?: SessionUser) {
+  return user?.role === "manager" || user?.role === "admin" || user?.role === "super_admin";
+}
+
+function canAccessExam(user: SessionUser, exam: Exam) {
+  if (canManageTraining(user)) return true;
+  if (exam.status !== "published") return false;
+  return exam.targetRole === "all" || exam.targetRole === user.role;
+}
+
+function requireTrainingManager(req: Request, res: Response) {
+  if (canManageTraining(req.user)) return true;
+  res.status(403).json({ message: "只有主管、管理员和超级管理员可以维护题库和考试" });
+  return false;
+}
+
+function userCurrentOcrId(user: SessionUser) {
+  return `ocr_${user.id}`;
+}
+
+function defaultOcrFields() {
+  return {
+    company: "NorthStar Lighting GmbH",
+    contact: "James Müller",
+    title: "Purchasing Manager",
+    email: "james.mueller@northstar-light.de",
+    whatsapp: "+49 151 2388 9012",
+    wechat: "james_light_de",
+    phone: "+49 30 8842 1290",
+    country: "德国",
+    city: "Berlin"
+  };
+}
+
+function resolveOcrJob(user: SessionUser, requestedId: string, createIfMissing = false): OcrJob | null {
+  const store = getStore();
+  const personalId = userCurrentOcrId(user);
+  const direct = store.ocrJobs.find((job) => job.id === requestedId && canSeePersonalData(user, job.ownerId));
+  if (direct) return direct;
+  if (!["ocr1", "current", personalId].includes(requestedId)) return null;
+  const existingPersonal = store.ocrJobs.find((job) => job.id === personalId && canSeePersonalData(user, job.ownerId));
+  if (existingPersonal) return existingPersonal;
+  if (!createIfMissing) return null;
+  const template = store.ocrJobs.find((job) => job.id === "ocr1");
+  const job: OcrJob = {
+    id: personalId,
+    status: template?.status || "recognized",
+    confidence: template?.confidence || 94,
+    fields: { ...defaultOcrFields(), ...(template?.fields || {}) },
+    ownerId: user.id,
+    teamId: user.teamId
+  };
+  store.ocrJobs.unshift(job);
+  return job;
 }
 
 async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][number], payload: { to: string; subject: string; body: string }) {
@@ -65,13 +121,13 @@ function bankQuestions() {
     .sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
 }
 
-function examWithRuntimeStats(exam: Exam) {
+function examWithRuntimeStats(exam: Exam, user?: SessionUser) {
   const store = getStore();
   const questions = examQuestionsFor(exam.id);
-  const attempts = store.examAttempts.filter((attempt) => attempt.examId === exam.id);
+  const attempts = store.examAttempts.filter((attempt) => attempt.examId === exam.id && (!user || canManageTraining(user) || attempt.userId === user.id));
   const passRate = attempts.length
     ? Math.round((attempts.filter((attempt) => attempt.passed).length / attempts.length) * 100)
-    : exam.passRate;
+    : canManageTraining(user) || !user ? exam.passRate : 0;
   return {
     ...exam,
     questionCount: questions.length || exam.questionCount,
@@ -79,16 +135,19 @@ function examWithRuntimeStats(exam: Exam) {
   };
 }
 
-function examReport() {
+function examReport(user?: SessionUser) {
   const store = getStore();
-  const attempts = store.examAttempts;
+  const visibleExams = user ? store.exams.filter((exam) => canAccessExam(user, exam)) : store.exams;
+  const visibleExamIds = new Set(visibleExams.map((exam) => exam.id));
+  const attempts = store.examAttempts.filter((attempt) => visibleExamIds.has(attempt.examId) && (!user || canManageTraining(user) || attempt.userId === user.id));
   const totalAttempts = attempts.length;
   const passedAttempts = attempts.filter((attempt) => attempt.passed).length;
   const averageScore = totalAttempts ? Math.round(attempts.reduce((sum, attempt) => sum + attempt.score, 0) / totalAttempts) : 0;
   const retakeAttempts = attempts.filter((attempt) => !attempt.passed).length;
-  const questionCount = bankQuestions().length;
+  const questionCount = canManageTraining(user) || !user ? bankQuestions().length : visibleExams.reduce((sum, exam) => sum + examQuestionsFor(exam.id).length, 0);
   const difficultyRows = ["easy", "medium", "hard"].map((difficulty) => {
-    const count = bankQuestions().filter((question) => question.difficulty === difficulty).length;
+    const questions = canManageTraining(user) || !user ? bankQuestions() : visibleExams.flatMap((exam) => examQuestionsFor(exam.id));
+    const count = questions.filter((question) => question.difficulty === difficulty).length;
     return {
       difficulty,
       label: difficulty === "easy" ? "基础题" : difficulty === "hard" ? "高阶题" : "应用题",
@@ -96,10 +155,10 @@ function examReport() {
       ratio: questionCount ? Math.round((count / questionCount) * 100) : 0
     };
   });
-  const categoryRows = store.exams.map((exam) => {
+  const categoryRows = visibleExams.map((exam) => {
     const examAttempts = attempts.filter((attempt) => attempt.examId === exam.id);
     const participants = new Set(examAttempts.map((attempt) => attempt.userId)).size;
-    const passRate = examAttempts.length ? Math.round((examAttempts.filter((attempt) => attempt.passed).length / examAttempts.length) * 100) : exam.passRate;
+    const passRate = examAttempts.length ? Math.round((examAttempts.filter((attempt) => attempt.passed).length / examAttempts.length) * 100) : canManageTraining(user) || !user ? exam.passRate : 0;
     const avgScore = examAttempts.length ? Math.round(examAttempts.reduce((sum, attempt) => sum + attempt.score, 0) / examAttempts.length) : 0;
     return { examId: exam.id, title: exam.title, category: exam.category, participants, passRate, avgScore };
   });
@@ -561,7 +620,11 @@ app.post("/api/customers/bulk-delete", requireAuth, asyncRoute(async (req, res) 
   const deletedNames = deleted.map((customer) => customer.company);
   store.customers = store.customers.filter((customer) => !deletedIds.has(customer.id));
   store.deals = store.deals.filter((deal) => !deletedIds.has(deal.customerId));
-  store.todos = store.todos.filter((todo) => !deletedNames.some((name) => todo.related.includes(name) || todo.title.includes(name)));
+  store.todos = store.todos.filter((todo) => {
+    const currentUserTodo = canSeePersonalData(req.user!, todo.ownerId);
+    const relatedToDeletedCustomer = deletedNames.some((name) => todo.related.includes(name) || todo.title.includes(name));
+    return !currentUserTodo || !relatedToDeletedCustomer;
+  });
   await store.persist();
   const customers = store.customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
   res.json({ deleted, customers });
@@ -1301,6 +1364,7 @@ app.patch("/api/knowledge/assets/:id/publish", requireAuth, asyncRoute(async (re
 }));
 
 app.get("/api/exam-questions", requireAuth, (req, res) => {
+  if (!requireTrainingManager(req, res)) return;
   const category = String(req.query.category || "").trim();
   const tag = String(req.query.tag || "").trim();
   const type = String(req.query.type || "").trim();
@@ -1308,14 +1372,16 @@ app.get("/api/exam-questions", requireAuth, (req, res) => {
   if (category) questions = questions.filter((question) => question.category === category);
   if (tag) questions = questions.filter((question) => (question.tags || []).includes(tag));
   if (type) questions = questions.filter((question) => (question.questionType || (correctIndexesFor(question).length > 1 ? "multiple" : "single")) === type);
-  res.json({ questions, report: examReport() });
+  res.json({ questions, report: examReport(req.user!) });
 });
 
 app.get("/api/exam-questions/export", requireAuth, (_req, res) => {
+  if (!requireTrainingManager(_req, res)) return;
   res.json({ questions: bankQuestions() });
 });
 
 app.post("/api/exam-questions", requireAuth, asyncRoute(async (req, res) => {
+  if (!requireTrainingManager(req, res)) return;
   const store = getStore();
   const body = examQuestionSchema.parse(req.body);
   let question: ExamQuestion;
@@ -1327,10 +1393,11 @@ app.post("/api/exam-questions", requireAuth, asyncRoute(async (req, res) => {
   }
   store.examQuestions.unshift(question);
   await store.persist();
-  res.json({ question, report: examReport() });
+  res.json({ question, report: examReport(req.user!) });
 }));
 
 app.post("/api/exam-questions/import", requireAuth, asyncRoute(async (req, res) => {
+  if (!requireTrainingManager(req, res)) return;
   const store = getStore();
   const schema = z.object({ questions: z.array(examQuestionSchema).min(1).max(500) });
   const body = schema.parse(req.body);
@@ -1345,10 +1412,11 @@ app.post("/api/exam-questions/import", requireAuth, asyncRoute(async (req, res) 
   }
   store.examQuestions.unshift(...imported);
   await store.persist();
-  res.json({ importedCount: imported.length, questions: imported, report: examReport() });
+  res.json({ importedCount: imported.length, questions: imported, report: examReport(req.user!) });
 }));
 
 app.patch("/api/exam-questions/:id", requireAuth, asyncRoute(async (req, res) => {
+  if (!requireTrainingManager(req, res)) return;
   const store = getStore();
   const index = store.examQuestions.findIndex((question) => question.id === req.params.id);
   if (index < 0) {
@@ -1366,10 +1434,11 @@ app.patch("/api/exam-questions/:id", requireAuth, asyncRoute(async (req, res) =>
   store.examQuestions[index] = question;
   store.exams.forEach(refreshExamStats);
   await store.persist();
-  res.json({ question, report: examReport() });
+  res.json({ question, report: examReport(req.user!) });
 }));
 
 app.delete("/api/exam-questions/:id", requireAuth, asyncRoute(async (req, res) => {
+  if (!requireTrainingManager(req, res)) return;
   const store = getStore();
   const index = store.examQuestions.findIndex((question) => question.id === req.params.id);
   if (index < 0) {
@@ -1380,28 +1449,30 @@ app.delete("/api/exam-questions/:id", requireAuth, asyncRoute(async (req, res) =
   store.examQuestionLinks = store.examQuestionLinks.filter((link) => link.questionId !== question.id);
   store.exams.forEach(refreshExamStats);
   await store.persist();
-  res.json({ question, report: examReport() });
+  res.json({ question, report: examReport(req.user!) });
 }));
 
 app.get("/api/exams", requireAuth, (_req, res) => {
   const { exams } = getStore();
-  res.json({ exams: exams.map(examWithRuntimeStats), report: examReport() });
+  const scoped = exams.filter((exam) => canAccessExam(_req.user!, exam));
+  res.json({ exams: scoped.map((exam) => examWithRuntimeStats(exam, _req.user!)), report: examReport(_req.user!) });
 });
 
 app.get("/api/exams/:id/detail", requireAuth, (req, res) => {
   const store = getStore();
   const exam = store.exams.find((item) => item.id === req.params.id);
-  if (!exam) {
+  if (!exam || !canAccessExam(req.user!, exam)) {
     res.status(404).json({ message: "考试不存在" });
     return;
   }
   const questions = examQuestionsFor(exam.id);
   const attempts = store.examAttempts.filter((item) => item.examId === exam.id);
   const latestAttempt = attempts.find((item) => item.userId === req.user!.id) || null;
-  res.json({ exam: examWithRuntimeStats(exam), questions, latestAttempt, report: examReport() });
+  res.json({ exam: examWithRuntimeStats(exam, req.user!), questions, latestAttempt, report: examReport(req.user!) });
 });
 
 app.post("/api/exams", requireAuth, asyncRoute(async (req, res) => {
+  if (!requireTrainingManager(req, res)) return;
   const store = getStore();
   const schema = z.object({
     title: z.string().min(1),
@@ -1435,10 +1506,11 @@ app.post("/api/exams", requireAuth, asyncRoute(async (req, res) => {
   store.examQuestionLinks.unshift(...uniqueQuestionIds.map((questionId, index) => ({ examId: exam.id, questionId, sortOrder: index + 1 })));
   refreshExamStats(exam);
   await store.persist();
-  res.json({ exam: examWithRuntimeStats(exam), questions: examQuestionsFor(exam.id), report: examReport() });
+  res.json({ exam: examWithRuntimeStats(exam, req.user!), questions: examQuestionsFor(exam.id), report: examReport(req.user!) });
 }));
 
 app.post("/api/exams/:id/questions", requireAuth, asyncRoute(async (req, res) => {
+  if (!requireTrainingManager(req, res)) return;
   const store = getStore();
   const exam = store.exams.find((item) => item.id === req.params.id);
   if (!exam) {
@@ -1457,10 +1529,11 @@ app.post("/api/exams/:id/questions", requireAuth, asyncRoute(async (req, res) =>
   store.examQuestionLinks.push({ examId: exam.id, questionId: question.id, sortOrder: examQuestionsFor(exam.id).length + 1 });
   refreshExamStats(exam);
   await store.persist();
-  res.json({ question, exam: examWithRuntimeStats(exam), report: examReport() });
+  res.json({ question, exam: examWithRuntimeStats(exam, req.user!), report: examReport(req.user!) });
 }));
 
 app.post("/api/exams/:id/questions/import", requireAuth, asyncRoute(async (req, res) => {
+  if (!requireTrainingManager(req, res)) return;
   const store = getStore();
   const exam = store.exams.find((item) => item.id === req.params.id);
   if (!exam) {
@@ -1482,10 +1555,11 @@ app.post("/api/exams/:id/questions/import", requireAuth, asyncRoute(async (req, 
   store.examQuestionLinks.push(...imported.map((question, index) => ({ examId: exam.id, questionId: question.id, sortOrder: examQuestionsFor(exam.id).length + index + 1 })));
   refreshExamStats(exam);
   await store.persist();
-  res.json({ importedCount: imported.length, questions: imported, exam: examWithRuntimeStats(exam), report: examReport() });
+  res.json({ importedCount: imported.length, questions: imported, exam: examWithRuntimeStats(exam, req.user!), report: examReport(req.user!) });
 }));
 
 app.patch("/api/exams/:id/publish", requireAuth, asyncRoute(async (req, res) => {
+  if (!requireTrainingManager(req, res)) return;
   const store = getStore();
   const exam = store.exams.find((item) => item.id === req.params.id);
   if (!exam) {
@@ -1499,10 +1573,11 @@ app.patch("/api/exams/:id/publish", requireAuth, asyncRoute(async (req, res) => 
   exam.status = "published";
   refreshExamStats(exam);
   await store.persist();
-  res.json({ exam: examWithRuntimeStats(exam), report: examReport() });
+  res.json({ exam: examWithRuntimeStats(exam, req.user!), report: examReport(req.user!) });
 }));
 
 app.post("/api/exams/bulk-delete", requireAuth, asyncRoute(async (req, res) => {
+  if (!requireTrainingManager(req, res)) return;
   const store = getStore();
   const schema = z.object({ ids: z.array(z.string()).min(1).max(100) });
   const body = schema.parse(req.body);
@@ -1518,10 +1593,12 @@ app.post("/api/exams/bulk-delete", requireAuth, asyncRoute(async (req, res) => {
   store.examAttempts = store.examAttempts.filter((attempt) => !deletedIds.has(attempt.examId));
   store.exams.forEach(refreshExamStats);
   await store.persist();
-  res.json({ deleted, exams: store.exams.map(examWithRuntimeStats), report: examReport() });
+  const scoped = store.exams.filter((exam) => canAccessExam(req.user!, exam));
+  res.json({ deleted, exams: scoped.map((exam) => examWithRuntimeStats(exam, req.user!)), report: examReport(req.user!) });
 }));
 
 app.delete("/api/exams/:id", requireAuth, asyncRoute(async (req, res) => {
+  if (!requireTrainingManager(req, res)) return;
   const store = getStore();
   const index = store.exams.findIndex((item) => item.id === req.params.id);
   if (index < 0) {
@@ -1533,13 +1610,14 @@ app.delete("/api/exams/:id", requireAuth, asyncRoute(async (req, res) => {
   store.examAttempts = store.examAttempts.filter((attempt) => attempt.examId !== exam.id);
   store.exams.forEach(refreshExamStats);
   await store.persist();
-  res.json({ exam, exams: store.exams.map(examWithRuntimeStats), report: examReport() });
+  const scoped = store.exams.filter((item) => canAccessExam(req.user!, item));
+  res.json({ exam, exams: scoped.map((item) => examWithRuntimeStats(item, req.user!)), report: examReport(req.user!) });
 }));
 
 app.post("/api/exams/:id/submit", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
   const exam = store.exams.find((item) => item.id === req.params.id);
-  if (!exam) {
+  if (!exam || !canAccessExam(req.user!, exam)) {
     res.status(404).json({ message: "考试不存在" });
     return;
   }
@@ -1574,7 +1652,7 @@ app.post("/api/exams/:id/submit", requireAuth, asyncRoute(async (req, res) => {
   store.examAttempts.unshift(attempt);
   refreshExamStats(exam);
   await store.persist();
-  res.json({ attempt, exam: examWithRuntimeStats(exam), questions, report: examReport() });
+  res.json({ attempt, exam: examWithRuntimeStats(exam, req.user!), questions, report: examReport(req.user!) });
 }));
 
 app.get("/api/reminders", requireAuth, (req, res) => {
@@ -1911,7 +1989,7 @@ app.post("/api/wecom/messages/:id/archive", requireAuth, asyncRoute(async (req, 
 }));
 
 app.get("/api/tools/ocr/jobs/:id", requireAuth, (req, res) => {
-  const job = getStore().ocrJobs.find((item) => item.id === req.params.id);
+  const job = resolveOcrJob(req.user!, req.params.id, true);
   if (!job) {
     res.status(404).json({ message: "OCR 任务不存在" });
     return;
@@ -1921,7 +1999,7 @@ app.get("/api/tools/ocr/jobs/:id", requireAuth, (req, res) => {
 
 app.post("/api/tools/ocr/jobs/:id/recognize", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
-  const job = store.ocrJobs.find((item) => item.id === req.params.id);
+  const job = resolveOcrJob(req.user!, req.params.id, true);
   if (!job) {
     res.status(404).json({ message: "OCR 任务不存在" });
     return;
@@ -1944,7 +2022,7 @@ app.post("/api/tools/ocr/jobs/:id/recognize", requireAuth, asyncRoute(async (req
 
 app.post("/api/tools/ocr/jobs/:id/sync-lead", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
-  const job = store.ocrJobs.find((item) => item.id === req.params.id);
+  const job = resolveOcrJob(req.user!, req.params.id, false);
   if (!job) {
     res.status(404).json({ message: "OCR 任务不存在" });
     return;
@@ -2520,6 +2598,8 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
   const scopedReminders = reminders.filter((reminder) => canSeeOwner(req.user!, reminder.ownerId, reminder.teamId));
   const scopedKnowledge = req.user?.role === "sales" ? knowledgeAssets.filter((asset) => asset.ownerId === req.user?.id) : knowledgeAssets;
   const scopedMessages = wecomMessages.filter((message) => canSeeOwner(req.user!, message.ownerId, message.teamId));
+  const scopedExams = exams.filter((exam) => canAccessExam(req.user!, exam));
+  const scopedExamReport = examReport(req.user!);
   const activeTodos = scopedTodos.filter((todo) => !isHistoricalTodo(todo));
   const pendingTodos = activeTodos.filter((todo) => !todo.done);
   const overdueTodos = pendingTodos.filter((todo) => todo.priority === "high");
@@ -2529,8 +2609,8 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
   const forecastAmount = scopedDeals.reduce((sum, deal) => sum + deal.amount, 0) || scopedCustomers.reduce((sum, customer) => sum + customer.amount, 0);
   const wecomBound = scopedCustomers.filter((customer) => customer.wecomBound).length;
   const pendingKnowledge = scopedKnowledge.filter((asset) => asset.status !== "published");
-  const publishedExams = exams.filter((exam) => exam.status === "published");
-  const averagePassRate = publishedExams.length ? Math.round(publishedExams.reduce((sum, exam) => sum + exam.passRate, 0) / publishedExams.length) : 0;
+  const publishedExams = scopedExams.filter((exam) => exam.status === "published");
+  const averagePassRate = scopedExamReport.totalAttempts ? Math.round((scopedExamReport.passedAttempts / scopedExamReport.totalAttempts) * 100) : 0;
   const pendingMessages = scopedMessages.filter((message) => message.status === "pending");
   const readyDeals = scopedDeals.filter((deal) => ["已报价", "样品", "谈判"].includes(deal.stage));
   const topTodos = [...pendingTodos].sort((a, b) => (b.impactAmount || 0) - (a.impactAmount || 0) || priorityWeight(b.priority) - priorityWeight(a.priority)).slice(0, 3);
@@ -2582,7 +2662,7 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
       wecomBoundRate: scopedCustomers.length ? Math.round((wecomBound / scopedCustomers.length) * 100) : 0,
       pendingKnowledge: pendingKnowledge.length,
       examPassRate: averagePassRate,
-      unfinishedExams: exams.filter((exam) => exam.status !== "published").length,
+      unfinishedExams: canManageTraining(req.user) ? scopedExams.filter((exam) => exam.status !== "published").length : scopedExams.filter((exam) => exam.status === "published" && !store.examAttempts.some((attempt) => attempt.examId === exam.id && attempt.userId === req.user!.id && attempt.passed)).length,
       customerCompleteness: scopedCustomers.length ? Math.round(scopedCustomers.reduce((sum, customer) => sum + (customer.contact ? 25 : 0) + (customer.country ? 25 : 0) + (customer.stage ? 25 : 0) + (customer.nextReminder ? 25 : 0), 0) / scopedCustomers.length) : 0
     },
     schedule: topTodos.map((todo) => ({

@@ -134,11 +134,13 @@ export const examAttempts: ExamAttempt[] = [
 ];
 
 export const ocrJobs: OcrJob[] = [
-  {
-    id: "ocr1",
-    status: "recognized",
-    confidence: 94,
-    fields: {
+	  {
+	    id: "ocr1",
+	    status: "recognized",
+	    confidence: 94,
+	    ownerId: "u_sales_shirley",
+	    teamId: "europe",
+	    fields: {
       company: "NorthStar Lighting GmbH",
       contact: "James Müller",
       title: "Purchasing Manager",

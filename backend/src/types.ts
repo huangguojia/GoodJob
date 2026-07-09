@@ -176,6 +176,8 @@ export interface OcrJob {
   status: "recognized" | "synced";
   confidence: number;
   fields: Record<string, string>;
+  ownerId: string;
+  teamId: string;
 }
 
 export interface WebsiteOpportunity {
