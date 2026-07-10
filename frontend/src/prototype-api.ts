@@ -690,6 +690,34 @@ let memoSaving = false;
 let memoSavePromise: Promise<void> | null = null;
 let leadFinderJobs: LeadFinderJob[] = [];
 let customerClockTimer = 0;
+let openWorkspaceTabs = ["dashboard"];
+let workspaceTabHistory = ["dashboard"];
+
+const viewLabels: Record<string, string> = {
+  dashboard: "工作台",
+  "lead-finder": "自动获客",
+  "prospect-list": "搜客清单",
+  customers: "客户",
+  pipeline: "商机",
+  reminders: "跟进提醒",
+  "instrument-growth": "计划任务",
+  documents: "单据平台",
+  commission: "提成对账",
+  reports: "报表",
+  knowledge: "资料维护",
+  exam: "在线考试",
+  "question-bank": "题库维护",
+  wecom: "企业微信",
+  tools: "小工具",
+  competitors: "竞争公司",
+  cases: "成功案例",
+  problems: "问题清单",
+  memos: "备忘录",
+  imports: "导入导出",
+  "ai-config": "AI配置",
+  settings: "系统设置",
+  profile: "个人设置"
+};
 
 const aiProviderPresets: Record<string, {
   label: string;
@@ -7575,7 +7603,7 @@ function installEvents() {
   qsa<HTMLButtonElement>("[data-top-view]").forEach((button) => {
     button.addEventListener("click", () => activateNavView(button.dataset.topView || "dashboard"));
   });
-  qsa<HTMLButtonElement>(".nav button[data-view]").forEach((button) => {
+  qsa<HTMLButtonElement>(".sidebar button[data-view]").forEach((button) => {
     button.addEventListener("click", () => activateNavView(button.dataset.view || "dashboard"));
   });
   ["#leadFinderGoalInput", "#leadSearchModeInput", "#leadSearchDepthInput", "#leadSearchLanguageInput", "#leadValidationInput", "#leadProductKeywords", "#leadCountries", "#leadIndustryInput", "#leadCustomerTypes", "#leadExcludeKeywords"].forEach((selector) => {
@@ -7734,8 +7762,54 @@ function installEvents() {
   });
 }
 
+function rememberWorkspaceTab(view: string) {
+  if (!qs<HTMLElement>(`#${CSS.escape(view)}`)) view = "dashboard";
+  if (!openWorkspaceTabs.includes(view)) openWorkspaceTabs.push(view);
+  workspaceTabHistory = [view, ...workspaceTabHistory.filter((item) => item !== view && openWorkspaceTabs.includes(item))];
+}
+
+function closeWorkspaceTab(view: string) {
+  if (view === "dashboard") return;
+  openWorkspaceTabs = openWorkspaceTabs.filter((item) => item !== view);
+  workspaceTabHistory = workspaceTabHistory.filter((item) => item !== view && openWorkspaceTabs.includes(item));
+  const activeView = qs<HTMLElement>(".view.active")?.id || "dashboard";
+  if (activeView === view) activateNavView(workspaceTabHistory[0] || "dashboard");
+  else renderOpenWorkspaceTabs(activeView);
+}
+
+function renderOpenWorkspaceTabs(activeView: string) {
+  const wrap = qs<HTMLElement>("#topOpenTabs");
+  if (!wrap) return;
+  if (!openWorkspaceTabs.includes("dashboard")) openWorkspaceTabs.unshift("dashboard");
+  wrap.innerHTML = openWorkspaceTabs.map((view) => {
+    const label = viewLabels[view] || view;
+    const active = view === activeView ? " active" : "";
+    const close = view === "dashboard" ? "" : `<span class="top-tab-close" data-close-tab="${view}" aria-label="关闭${label}">×</span>`;
+    return `<button type="button" class="top-tab${active}" data-tab-view="${view}" title="${label}"><span class="top-tab-label">${label}</span>${close}</button>`;
+  }).join("");
+  qsa<HTMLButtonElement>("[data-tab-view]", wrap).forEach((button) => {
+    button.addEventListener("click", () => activateNavView(button.dataset.tabView || "dashboard"));
+  });
+  qsa<HTMLElement>("[data-close-tab]", wrap).forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeWorkspaceTab(button.dataset.closeTab || "dashboard");
+    });
+  });
+  qs<HTMLElement>(".top-tab.active", wrap)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function openSecondaryDropdownForView(view: string) {
+  const activeButton = qs<HTMLButtonElement>(`.sidebar button[data-view="${CSS.escape(view)}"]`);
+  const section = activeButton?.closest<HTMLDetailsElement>(".nav-section");
+  if (section) section.open = true;
+}
+
 function activateNavView(view: string, after?: () => void) {
-  qsa<HTMLElement>(".nav button").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
+  if (!qs<HTMLElement>(`#${CSS.escape(view)}`)) view = "dashboard";
+  rememberWorkspaceTab(view);
+  qsa<HTMLElement>(".sidebar button[data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
+  openSecondaryDropdownForView(view);
   qsa<HTMLElement>(".view").forEach((node) => node.classList.toggle("active", node.id === view));
   renderTopbarForView(view);
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -7761,9 +7835,7 @@ function renderTopbarForView(view: string) {
   if (exportButton) exportButton.hidden = !isCustomerView;
   if (primaryButton) primaryButton.hidden = !isCustomerView;
   if (primaryText && isCustomerView) primaryText.textContent = "新增客户";
-  qsa<HTMLElement>("[data-top-view]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.topView === view);
-  });
+  renderOpenWorkspaceTabs(view);
   renderTopbarStats();
 }
 

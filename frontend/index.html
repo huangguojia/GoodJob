@@ -108,9 +108,10 @@
 
     .nav {
       display: grid;
-      gap: 2px;
+      gap: 3px;
       min-height: 0;
       overflow-y: auto;
+      overscroll-behavior: contain;
       padding-right: 2px;
       scrollbar-width: none;
     }
@@ -123,24 +124,77 @@
       appearance: none;
       border: 0;
       width: 100%;
-      height: 36px;
+      height: 34px;
       border-radius: var(--radius);
       display: grid;
       grid-template-columns: 28px 1fr auto;
       align-items: center;
-      gap: 9px;
+      gap: 8px;
       padding: 0 10px;
       color: #b9c3d5;
       background: transparent;
       cursor: pointer;
       text-align: left;
-      transition: background .16s ease, color .16s ease, transform .16s ease;
+      transition: background .18s ease, color .18s ease, transform .18s ease, box-shadow .18s ease;
+    }
+
+    .nav-primary {
+      display: grid;
+      gap: 3px;
+    }
+
+    .nav button.nav-secondary-button {
+      height: 28px;
+      grid-template-columns: 1fr;
+      gap: 0;
+      padding: 0 10px 0 13px;
+      border-radius: 7px;
+      color: #98a4b8;
+      background: transparent;
+      font-size: 12px;
+      position: relative;
+    }
+
+    .nav button.nav-secondary-button::before {
+      content: "";
+      position: absolute;
+      left: 4px;
+      top: 9px;
+      bottom: 9px;
+      width: 2px;
+      border-radius: 999px;
+      background: transparent;
+      transition: background .18s ease, top .18s ease, bottom .18s ease;
+    }
+
+    .nav button.nav-secondary-button:hover,
+    .nav button.nav-secondary-button.active {
+      color: #eef5ff;
+      background: rgba(255, 255, 255, .07);
+      transform: translateX(1px);
+      box-shadow: none;
+    }
+
+    .nav button.nav-secondary-button.active {
+      background: rgba(125, 211, 252, .11);
+    }
+
+    .nav button.nav-secondary-button:hover::before,
+    .nav button.nav-secondary-button.active::before {
+      top: 7px;
+      bottom: 7px;
+      background: #7dd3fc;
     }
 
     .nav button:hover,
     .nav button.active {
       color: #fff;
       background: rgba(255, 255, 255, .09);
+    }
+
+    .nav-primary button:hover {
+      transform: translateX(2px);
+      background: linear-gradient(135deg, rgba(255, 255, 255, .11), rgba(125, 211, 252, .08));
     }
 
     .nav button.active {
@@ -177,6 +231,108 @@
       background: rgba(26, 167, 161, .14);
       font-size: 11px;
       font-style: normal;
+    }
+
+    .nav-section {
+      margin-top: 5px;
+    }
+
+    .nav-section-title {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      padding: 0 10px;
+      border-radius: var(--radius);
+      color: #b9c3d5;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0;
+      cursor: pointer;
+      user-select: none;
+      transition: background .18s ease, color .18s ease, transform .18s ease, box-shadow .18s ease;
+    }
+
+    .nav-section-title::-webkit-details-marker {
+      display: none;
+    }
+
+    .nav-section-title::before {
+      content: none;
+    }
+
+    .nav-section-title svg {
+      width: 17px;
+      height: 17px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .nav-section-title:hover,
+    .nav-section[open] .nav-section-title {
+      color: #fff;
+      background: rgba(255, 255, 255, .09);
+      transform: translateX(2px);
+      box-shadow: inset 3px 0 0 rgba(125, 211, 252, .75);
+    }
+
+    .nav-section-title span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 14px;
+    }
+
+    .nav-chevron {
+      width: 20px;
+      height: 20px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 999px;
+      color: #7dd3fc;
+      background: rgba(125, 211, 252, .08);
+      transition: transform .18s ease, background .18s ease, color .18s ease;
+    }
+
+    .nav-chevron::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-right: 1.5px solid currentColor;
+      border-bottom: 1.5px solid currentColor;
+      transform: rotate(45deg) translate(-1px, -1px);
+    }
+
+    .nav-section[open] .nav-chevron {
+      color: #fff;
+      background: rgba(125, 211, 252, .16);
+      transform: rotate(180deg);
+    }
+
+    .nav-secondary-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 2px;
+      padding: 2px 0 4px 12px;
+      margin-left: 10px;
+      border-left: 1px solid rgba(255, 255, 255, .07);
+      animation: navDropdown .18s ease both;
+    }
+
+    @keyframes navDropdown {
+      from {
+        opacity: 0;
+        transform: translateY(-4px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
 
     .nav-footer {
@@ -228,7 +384,7 @@
     }
 
     .command {
-      width: min(420px, 38vw);
+      width: min(360px, 32vw);
       height: 36px;
       display: flex;
       align-items: center;
@@ -274,20 +430,33 @@
       flex: 1;
     }
 
-    .top-quick {
+    .top-tabs {
+      min-width: 240px;
+      max-width: min(620px, 45vw);
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
       padding: 4px;
       border: 1px solid rgba(223, 229, 239, .9);
       border-radius: var(--radius);
       background: rgba(248, 251, 255, .72);
       box-shadow: inset 0 1px 0 rgba(255,255,255,.85);
+      overflow-x: auto;
+      scrollbar-width: none;
     }
 
-    .top-quick button {
+    .top-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .top-tab {
       height: 28px;
-      padding: 0 9px;
+      max-width: 132px;
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 7px 0 9px;
       border: 0;
       border-radius: 8px;
       background: transparent;
@@ -298,11 +467,33 @@
       white-space: nowrap;
     }
 
-    .top-quick button:hover,
-    .top-quick button.active {
+    .top-tab:hover,
+    .top-tab.active {
       color: var(--ink);
       background: #fff;
       box-shadow: 0 6px 16px rgba(31, 45, 74, .08);
+    }
+
+    .top-tab-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .top-tab-close {
+      width: 16px;
+      height: 16px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 999px;
+      color: #8a94a6;
+      font-size: 14px;
+      line-height: 1;
+    }
+
+    .top-tab-close:hover {
+      color: #1f2937;
+      background: #eef3fa;
     }
 
     .top-status {
@@ -8426,6 +8617,7 @@
       .brand div:last-child,
       .nav span,
       .nav em,
+      .nav-section,
       .nav-footer { display: none; }
       .nav button { grid-template-columns: 1fr; justify-items: center; padding: 0; }
       .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -8497,7 +8689,7 @@
       }
       .command { width: 100%; }
       .top-core { flex-direction: column; align-items: stretch; }
-      .top-quick, .top-status { overflow-x: auto; }
+      .top-tabs, .top-status { overflow-x: auto; max-width: none; }
       .top-actions { justify-content: space-between; }
       .top-action-context { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
       .workspace { padding: 16px 12px 28px; }
@@ -8594,69 +8786,68 @@
       </div>
 
       <nav class="nav" aria-label="主导航">
-        <button class="active" data-view="dashboard" title="工作台">
-          <svg viewBox="0 0 24 24"><path d="M4 13h6V4H4zM14 20h6V4h-6zM4 20h6v-3H4z"/></svg><span>工作台</span><em>28</em>
-        </button>
-        <button data-view="lead-finder" title="自动获客">
-          <svg viewBox="0 0 24 24"><path d="M21 21l-4.3-4.3"/><circle cx="11" cy="11" r="7"/><path d="M11 7v4l3 2"/></svg><span>自动获客</span><em>搜客</em>
-        </button>
-        <button data-view="prospect-list" title="搜客清单">
-          <svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg><span>搜客清单</span><em>开发信</em>
-        </button>
-        <button data-view="ai-config" title="AI配置">
-          <svg viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><circle cx="12" cy="12" r="4"/></svg><span>AI配置</span><em>GPT</em>
-        </button>
-        <button data-view="instrument-growth" title="计划任务">
-          <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><span>计划任务</span><em>执行</em>
-        </button>
-        <button data-view="customers" title="客户">
-          <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>客户</span>
-        </button>
-        <button data-view="pipeline" title="商机">
-          <svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 6v12"/><path d="M17 6v12"/><path d="M3 18h18"/></svg><span>商机</span>
-        </button>
-        <button data-view="reminders" title="跟进提醒">
-          <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span>跟进提醒</span><em>7</em>
-        </button>
-        <button data-view="imports" title="导入导出">
-          <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span>导入导出</span>
-        </button>
-        <button data-view="documents" title="单据平台">
-          <svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/><path d="M10 13h6"/><path d="M10 17h6"/><path d="M10 9h2"/></svg><span>单据平台</span><em>PI/CI</em>
-        </button>
-        <button data-view="commission" title="提成对账">
-          <svg viewBox="0 0 24 24"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 16V9"/><path d="M12 16V7"/><path d="M16 16v-5"/><path d="M19 7l-3-3-4 4-2-2-4 4"/></svg><span>提成对账</span><em>财务</em>
-        </button>
-        <button data-view="reports" title="报表">
-          <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-7"/></svg><span>报表</span>
-        </button>
-        <button data-view="wecom" title="企业微信">
-          <svg viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg><span>企业微信</span>
-        </button>
-        <button data-view="knowledge" title="资料维护">
-          <svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/><path d="M8 7h8"/><path d="M8 11h6"/></svg><span>资料维护</span>
-        </button>
-        <button data-view="exam" title="在线考试">
-          <svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4"/><path d="M7 3h10l2 4v14H5V7z"/><path d="M7 3v4h12"/></svg><span>在线考试</span><em>新</em>
-        </button>
-	        <button data-view="tools" title="小工具">
-	          <svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.1-3.1a5 5 0 0 1-6.6 6.6L7.1 20a2 2 0 0 1-2.8-2.8l7.1-7.1a5 5 0 0 1 6.6-6.6z"/></svg><span>小工具</span><em>OCR</em>
-	        </button>
-        <button data-view="competitors" title="竞争公司">
-          <svg viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-3"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M16 15h1"/></svg><span>竞争公司</span>
-        </button>
-        <button data-view="cases" title="成功案例">
-          <svg viewBox="0 0 24 24"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v6a5 5 0 0 1-10 0z"/><path d="M5 7H3a3 3 0 0 0 3 3h1"/><path d="M19 7h2a3 3 0 0 1-3 3h-1"/></svg><span>成功案例</span><em>素材</em>
-        </button>
-        <button data-view="problems" title="问题清单">
-          <svg viewBox="0 0 24 24"><path d="M10.3 3.3 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.3a2 2 0 0 0-3.4 0z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span>问题清单</span><em>3</em>
-        </button>
-        <button data-view="memos" title="备忘录">
-          <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg><span>备忘录</span>
-        </button>
-	        <button data-view="settings" title="系统设置">
-          <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-.4-1 1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1-.4H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1-.4 1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06A2 2 0 1 1 7.13 3.4l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 .4 1 1.7 1.7 0 0 0 1 .6 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.17.37.38.7.6 1 .27.26.62.4 1 .4h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1 .4 1.7 1.7 0 0 0-.6 1z"/></svg><span>系统设置</span>
-        </button>
+        <div class="nav-primary" aria-label="核心业务">
+          <button class="active" data-view="dashboard" title="工作台">
+            <svg viewBox="0 0 24 24"><path d="M4 13h6V4H4zM14 20h6V4h-6zM4 20h6v-3H4z"/></svg><span>工作台</span><em>今日</em>
+          </button>
+          <button data-view="lead-finder" title="自动获客">
+            <svg viewBox="0 0 24 24"><path d="M21 21l-4.3-4.3"/><circle cx="11" cy="11" r="7"/><path d="M11 7v4l3 2"/></svg><span>自动获客</span><em>搜索</em>
+          </button>
+          <button data-view="prospect-list" title="搜客清单">
+            <svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg><span>搜客清单</span><em>跟进</em>
+          </button>
+          <button data-view="customers" title="客户">
+            <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>客户</span>
+          </button>
+          <button data-view="pipeline" title="商机">
+            <svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 6v12"/><path d="M17 6v12"/><path d="M3 18h18"/></svg><span>商机</span>
+          </button>
+          <button data-view="reminders" title="跟进提醒">
+            <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span>跟进提醒</span><em>规则</em>
+          </button>
+          <button data-view="memos" title="备忘录">
+            <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg><span>备忘录</span>
+          </button>
+        </div>
+
+        <details class="nav-section" aria-label="业务工具">
+          <summary class="nav-section-title"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.1-3.1a5 5 0 0 1-6.6 6.6L7.1 20a2 2 0 0 1-2.8-2.8l7.1-7.1a5 5 0 0 1 6.6-6.6z"/></svg><span>业务工具</span><i class="nav-chevron"></i></summary>
+          <div class="nav-secondary-grid">
+            <button class="nav-secondary-button" data-view="instrument-growth" title="计划任务"><span>计划任务</span></button>
+            <button class="nav-secondary-button" data-view="documents" title="单据平台"><span>单据平台</span></button>
+            <button class="nav-secondary-button" data-view="commission" title="提成对账"><span>提成对账</span></button>
+            <button class="nav-secondary-button" data-view="reports" title="报表"><span>报表</span></button>
+            <button class="nav-secondary-button" data-view="tools" title="小工具"><span>小工具</span></button>
+          </div>
+        </details>
+
+        <details class="nav-section" aria-label="知识协作">
+          <summary class="nav-section-title"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/><path d="M8 7h8"/><path d="M8 11h6"/></svg><span>知识协作</span><i class="nav-chevron"></i></summary>
+          <div class="nav-secondary-grid">
+            <button class="nav-secondary-button" data-view="knowledge" title="资料维护"><span>资料维护</span></button>
+            <button class="nav-secondary-button" data-view="exam" title="在线考试"><span>在线考试</span></button>
+            <button class="nav-secondary-button" data-view="wecom" title="企业微信"><span>企业微信</span></button>
+          </div>
+        </details>
+
+        <details class="nav-section" aria-label="经营资料库">
+          <summary class="nav-section-title"><svg viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-3"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M16 15h1"/></svg><span>经营资料库</span><i class="nav-chevron"></i></summary>
+          <div class="nav-secondary-grid">
+            <button class="nav-secondary-button" data-view="competitors" title="竞争公司"><span>竞争公司</span></button>
+            <button class="nav-secondary-button" data-view="cases" title="成功案例"><span>成功案例</span></button>
+            <button class="nav-secondary-button" data-view="problems" title="问题清单"><span>问题清单</span></button>
+          </div>
+        </details>
+
+        <details class="nav-section" aria-label="系统配置">
+          <summary class="nav-section-title"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-.4-1 1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1-.4H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1-.4 1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06A2 2 0 1 1 7.13 3.4l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 .4 1 1.7 1.7 0 0 0 1 .6 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.17.37.38.7.6 1 .27.26.62.4 1 .4h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1 .4 1.7 1.7 0 0 0-.6 1z"/></svg><span>系统配置</span><i class="nav-chevron"></i></summary>
+          <div class="nav-secondary-grid">
+            <button class="nav-secondary-button" data-view="imports" title="导入导出"><span>导入导出</span></button>
+            <button class="nav-secondary-button" data-view="ai-config" title="AI配置"><span>AI配置</span></button>
+            <button class="nav-secondary-button" data-view="settings" title="系统设置"><span>系统设置</span></button>
+            <button class="nav-secondary-button" data-view="profile" title="个人设置"><span>个人设置</span></button>
+          </div>
+        </details>
       </nav>
 
       <div class="nav-footer">
@@ -8684,16 +8875,7 @@
               <option value="备忘录"></option>
             </datalist>
           </label>
-          <div class="top-quick" id="topQuickNav" aria-label="全局快捷导航">
-            <button type="button" data-top-view="dashboard">工作台</button>
-            <button type="button" data-top-view="lead-finder">搜客</button>
-            <button type="button" data-top-view="prospect-list">清单</button>
-            <button type="button" data-top-view="ai-config">AI</button>
-            <button type="button" data-top-view="customers">客户</button>
-            <button type="button" data-top-view="pipeline">商机</button>
-            <button type="button" data-top-view="exam">考试</button>
-            <button type="button" data-top-view="reports">报表</button>
-          </div>
+          <div class="top-tabs" id="topOpenTabs" aria-label="已打开页面"></div>
           <div class="top-status" aria-label="今日状态">
             <span class="top-pill">待办 <b id="topTodoCount">--</b></span>
             <span class="top-pill">提醒 <b id="topReminderCount">--</b></span>
@@ -10213,6 +10395,33 @@ https://www.ifm.com"></textarea>
   <script>
     const navButtons = [...document.querySelectorAll(".nav button")];
     const views = [...document.querySelectorAll(".view")];
+    const viewLabels = {
+      dashboard: "工作台",
+      "lead-finder": "自动获客",
+      "prospect-list": "搜客清单",
+      customers: "客户",
+      pipeline: "商机",
+      reminders: "跟进提醒",
+      "instrument-growth": "计划任务",
+      documents: "单据平台",
+      commission: "提成对账",
+      reports: "报表",
+      knowledge: "资料维护",
+      exam: "在线考试",
+      "question-bank": "题库维护",
+      wecom: "企业微信",
+      tools: "小工具",
+      competitors: "竞争公司",
+      cases: "成功案例",
+      problems: "问题清单",
+      memos: "备忘录",
+      imports: "导入导出",
+      "ai-config": "AI配置",
+      settings: "系统设置",
+      profile: "个人设置"
+    };
+    let openTabs = ["dashboard"];
+    let tabHistory = ["dashboard"];
     const profiles = {
       sales: {
         name: "Shirley / 业务员",
@@ -10241,10 +10450,50 @@ https://www.ifm.com"></textarea>
     };
 
     function activateView(id) {
+      if (!document.getElementById(id)) id = "dashboard";
+      if (!openTabs.includes(id)) openTabs.push(id);
+      tabHistory = [id, ...tabHistory.filter((item) => item !== id && openTabs.includes(item))];
       navButtons.forEach((button) => button.classList.toggle("active", button.dataset.view === id));
       views.forEach((view) => view.classList.toggle("active", view.id === id));
       renderTopbarForView(id);
       window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function closeTab(id) {
+      if (id === "dashboard") return;
+      openTabs = openTabs.filter((item) => item !== id);
+      tabHistory = tabHistory.filter((item) => item !== id && openTabs.includes(item));
+      const activeId = document.querySelector(".view.active")?.id || "dashboard";
+      if (activeId === id) activateView(tabHistory[0] || "dashboard");
+      else renderOpenTabs(activeId);
+    }
+
+    function renderOpenTabs(activeId) {
+      const wrap = document.getElementById("topOpenTabs");
+      if (!wrap) return;
+      if (!openTabs.includes("dashboard")) openTabs.unshift("dashboard");
+      wrap.innerHTML = openTabs.map((id) => {
+        const label = viewLabels[id] || id;
+        const active = id === activeId ? " active" : "";
+        const close = id === "dashboard" ? "" : `<span class="top-tab-close" data-close-tab="${id}" aria-label="关闭${label}">×</span>`;
+        return `<button type="button" class="top-tab${active}" data-tab-view="${id}" title="${label}"><span class="top-tab-label">${label}</span>${close}</button>`;
+      }).join("");
+      wrap.querySelectorAll("[data-tab-view]").forEach((button) => {
+        button.addEventListener("click", () => activateView(button.dataset.tabView || "dashboard"));
+      });
+      wrap.querySelectorAll("[data-close-tab]").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          closeTab(button.dataset.closeTab || "dashboard");
+        });
+      });
+      wrap.querySelector(".top-tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+
+    function openSecondaryDropdownForView(id) {
+      const activeButton = document.querySelector(`.sidebar button[data-view="${CSS.escape(id)}"]`);
+      const section = activeButton && activeButton.closest(".nav-section");
+      if (section) section.open = true;
     }
 
     function renderTopbarForView(id) {
@@ -10266,9 +10515,8 @@ https://www.ifm.com"></textarea>
       if (exportButton) exportButton.hidden = !isCustomerView;
       if (primaryButton) primaryButton.hidden = !isCustomerView;
       if (primaryText && isCustomerView) primaryText.textContent = "新增客户";
-      document.querySelectorAll("[data-top-view]").forEach((button) => {
-        button.classList.toggle("active", button.dataset.topView === id);
-      });
+      openSecondaryDropdownForView(id);
+      renderOpenTabs(id);
     }
 
     function applyRole(role) {
