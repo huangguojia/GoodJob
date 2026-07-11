@@ -9,7 +9,7 @@ import { canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, publ
 import { createMysqlStore } from "./mysql-store.js";
 import { getStore, setStore } from "./store.js";
 import { LEAD_PROVIDERS, getProvider, providerMeta, type LeadProvider, type LeadQuery, type RawLead } from "./lead-providers.js";
-import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, Deal, Exam, ExamAttempt, ExamQuestion, LeadSourceConfig, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, SalesRecordAudit, SessionUser, Todo, TradeDocument, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, Deal, Exam, ExamAttempt, ExamQuestion, Lead, LeadSourceConfig, LeadSourceEvent, LeadSourceType, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, SalesRecordAudit, SessionUser, Todo, TradeDocument, WebsiteOpportunity } from "./types.js";
 
 function loadLocalEnv() {
   const currentDir = dirname(fileURLToPath(import.meta.url));
@@ -607,7 +607,7 @@ app.delete("/api/accounts/:id", requireAuth, asyncRoute(async (req, res) => {
 app.get("/api/customers", requireAuth, (req, res) => {
   const { customers } = getStore();
   const scoped = customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
-  res.json({ customers: scoped });
+  res.json({ customers: scoped.map(customerWithPipeline) });
 });
 
 app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
@@ -637,7 +637,7 @@ app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
   };
   store.customers.unshift(customer);
   await store.persist();
-  res.json({ customer });
+  res.json({ customer: customerWithPipeline(customer) });
 }));
 
 app.patch("/api/customers/:id", requireAuth, asyncRoute(async (req, res) => {
@@ -665,7 +665,7 @@ app.patch("/api/customers/:id", requireAuth, asyncRoute(async (req, res) => {
   }
   Object.assign(customer, body);
   await store.persist();
-  res.json({ customer });
+  res.json({ customer: customerWithPipeline(customer) });
 }));
 
 app.post("/api/customers/bulk-delete", requireAuth, asyncRoute(async (req, res) => {
@@ -690,6 +690,518 @@ app.post("/api/customers/bulk-delete", requireAuth, asyncRoute(async (req, res) 
   await store.persist();
   const customers = store.customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
   res.json({ deleted, customers });
+}));
+
+// ---------------------------------------------------------------------------
+// Leads (线索管理) — unified intake, follow-up and qualified conversion
+// ---------------------------------------------------------------------------
+const leadSourceTypes = ["outbound", "inbound", "offline", "referral", "import"] as const;
+const leadWritableSchema = z.object({
+  company: z.string().min(1),
+  contact: z.string().optional().default(""),
+  country: z.string().optional().default(""),
+  email: z.string().optional().default(""),
+  phone: z.string().optional().default(""),
+  wechat: z.string().optional().default(""),
+  source: z.string().optional().default("手动录入"),
+  intent: z.enum(["高", "中", "低"]).optional().default("中"),
+  stage: z.string().optional().default("新线索"),
+  estimatedAmount: z.number().nonnegative().optional().default(0),
+  nextFollowAt: z.string().optional().default(""),
+  remark: z.string().optional().default(""),
+  sourceType: z.enum(leadSourceTypes).optional().default("outbound"),
+  sourceChannel: z.string().max(80).optional().default("manual"),
+  sourceCampaign: z.string().max(120).optional().default(""),
+  externalId: z.string().max(180).optional().default(""),
+  sourceUrl: z.string().max(500).optional().default("")
+});
+
+type LeadIntake = z.infer<typeof leadWritableSchema> & {
+  occurredAt?: string;
+  rawPayload?: unknown;
+};
+
+function createLeadFromSource(user: SessionUser, input: LeadIntake) {
+  const store = getStore();
+  const sourceChannel = input.sourceChannel.trim() || "manual";
+  const externalId = input.externalId.trim();
+  if (externalId) {
+    const priorEvent = store.leadSourceEvents.find((event) =>
+      event.teamId === user.teamId && event.channel === sourceChannel && event.externalId === externalId
+    );
+    const priorLead = priorEvent ? store.leads.find((lead) => lead.id === priorEvent.leadId) : undefined;
+    if (priorEvent && priorLead) return { lead: priorLead, sourceEvent: priorEvent, duplicate: true };
+  }
+
+  const receivedAt = new Date().toISOString();
+  const uniquePart = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const lead: Lead = {
+    id: `lead_${uniquePart}`,
+    company: input.company,
+    contact: input.contact,
+    country: input.country,
+    email: input.email,
+    phone: input.phone,
+    wechat: input.wechat,
+    source: input.source,
+    sourceType: input.sourceType,
+    sourceChannel,
+    sourceCampaign: input.sourceCampaign,
+    externalId,
+    sourceUrl: input.sourceUrl,
+    intent: input.intent,
+    stage: input.stage,
+    status: "new",
+    ownerId: user.id,
+    teamId: user.teamId,
+    estimatedAmount: input.estimatedAmount,
+    nextFollowAt: input.nextFollowAt,
+    lastActivityAt: "刚刚",
+    remark: input.remark,
+    convertedCustomerId: "",
+    convertedDealId: "",
+    createdAt: receivedAt
+  };
+  const sourceEvent: LeadSourceEvent = {
+    id: `lse_${uniquePart}`,
+    leadId: lead.id,
+    sourceType: input.sourceType,
+    channel: sourceChannel,
+    campaign: input.sourceCampaign,
+    externalId: externalId || lead.id,
+    sourceUrl: input.sourceUrl,
+    occurredAt: input.occurredAt || receivedAt,
+    receivedAt,
+    rawPayload: JSON.stringify(input.rawPayload ?? input),
+    ownerId: user.id,
+    teamId: user.teamId
+  };
+  store.leads.unshift(lead);
+  store.leadSourceEvents.unshift(sourceEvent);
+  store.leadActivities.unshift({
+    id: `la_${uniquePart}`,
+    leadId: lead.id,
+    type: "system",
+    content: `线索创建（来源：${lead.source} / ${sourceChannel}）`,
+    operatorId: user.id,
+    nextFollowAt: lead.nextFollowAt,
+    createdAt: receivedAt
+  });
+  return { lead, sourceEvent, duplicate: false };
+}
+
+function normalizedMatchText(value: string) {
+  return value.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+
+function emailDomain(value: string) {
+  return value.trim().toLowerCase().split("@")[1] || "";
+}
+
+function findCustomerMatches(user: SessionUser, lead: Lead) {
+  const store = getStore();
+  const leadCompany = normalizedMatchText(lead.company);
+  const leadEmail = lead.email.trim().toLowerCase();
+  const leadDomain = emailDomain(leadEmail);
+  return store.customers
+    .filter((customer) => canSeeOwner(user, customer.ownerId, customer.teamId))
+    .map((customer) => {
+      let score = 0;
+      const reasons: string[] = [];
+      const documentContact = customer.documentContact.toLowerCase();
+      if (leadCompany && normalizedMatchText(customer.company) === leadCompany) {
+        score += 80;
+        reasons.push("公司名称一致");
+      }
+      if (leadEmail && documentContact.includes(leadEmail)) {
+        score += 100;
+        reasons.push("联系邮箱一致");
+      } else if (leadDomain && documentContact.includes(`@${leadDomain}`)) {
+        score += 50;
+        reasons.push("邮箱域名一致");
+      }
+      const activeDeals = store.deals.filter((deal) => deal.customerId === customer.id && !deal.archivedAt && deal.stage !== "丢单");
+      return { customer, score, reasons, activeDealCount: activeDeals.length };
+    })
+    .filter((match) => match.score > 0)
+    .sort((left, right) => right.score - left.score);
+}
+
+const pipelineStageRank: Record<string, number> = { "询盘": 1, "已联系": 2, "已报价": 3, "样品": 4, "谈判": 5, "成交": 6 };
+
+function customerWithPipeline(customer: Customer) {
+  const activeDeals = getStore().deals.filter((deal) => deal.customerId === customer.id && !deal.archivedAt && deal.stage !== "丢单");
+  const pipelineStage = activeDeals.reduce((best, deal) =>
+    (pipelineStageRank[deal.stage] || 0) > (pipelineStageRank[best] || 0) ? deal.stage : best, ""
+  );
+  return {
+    ...customer,
+    pipelineStage: pipelineStage || "暂无活跃商机",
+    pipelineAmount: activeDeals.reduce((sum, deal) => sum + deal.amount, 0),
+    activeDealCount: activeDeals.length
+  };
+}
+
+app.get("/api/leads", requireAuth, (req, res) => {
+  const { leads } = getStore();
+  const trash = req.query.trash === "true";
+  const scoped = leads.filter((lead) => canSeeOwner(req.user!, lead.ownerId, lead.teamId) && (trash ? Boolean(lead.deletedAt) : !lead.deletedAt));
+  res.json({ leads: scoped });
+});
+
+app.get("/api/leads/:id", requireAuth, (req, res) => {
+  const store = getStore();
+  const lead = store.leads.find((item) => item.id === req.params.id);
+  if (!lead || !canSeeOwner(req.user!, lead.ownerId, lead.teamId)) {
+    res.status(404).json({ message: "线索不存在或无权访问" });
+    return;
+  }
+  const activities = store.leadActivities
+    .filter((activity) => activity.leadId === lead.id)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  res.json({ lead, activities });
+});
+
+app.post("/api/leads", requireAuth, asyncRoute(async (req, res) => {
+  const body = leadWritableSchema.parse(req.body);
+  const store = getStore();
+  const { lead, sourceEvent, duplicate } = createLeadFromSource(req.user!, body);
+  await store.persist();
+  res.json({ lead, sourceEvent, duplicate });
+}));
+
+app.post("/api/leads/ingest", requireAuth, asyncRoute(async (req, res) => {
+  const schema = leadWritableSchema.extend({
+    occurredAt: z.string().datetime().optional(),
+    rawPayload: z.unknown().optional()
+  });
+  const body = schema.parse(req.body);
+  const result = createLeadFromSource(req.user!, body);
+  await getStore().persist();
+  res.status(result.duplicate ? 200 : 201).json(result);
+}));
+
+app.patch("/api/leads/:id", requireAuth, asyncRoute(async (req, res) => {
+  const schema = leadWritableSchema.partial().extend({
+    status: z.enum(["new", "following", "converted", "invalid"]).optional()
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const lead = store.leads.find((item) => item.id === req.params.id);
+  if (!lead || !canSeeOwner(req.user!, lead.ownerId, lead.teamId)) {
+    res.status(404).json({ message: "线索不存在或无权访问" });
+    return;
+  }
+  const previousStage = lead.stage;
+  Object.assign(lead, body);
+  lead.lastActivityAt = "刚刚";
+  if (body.stage && body.stage !== previousStage) {
+    store.leadActivities.unshift({
+      id: `la_${Date.now()}`,
+      leadId: lead.id,
+      type: "stage",
+      content: `阶段变更：${previousStage} → ${body.stage}`,
+      operatorId: req.user!.id,
+      nextFollowAt: "",
+      createdAt: new Date().toISOString()
+    });
+  }
+  await store.persist();
+  res.json({ lead });
+}));
+
+app.delete("/api/leads/:id", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({ reason: z.string().optional().default("") });
+  const body = schema.parse(req.body || {});
+  const store = getStore();
+  const lead = store.leads.find((item) => item.id === req.params.id);
+  if (!lead || !canSeeOwner(req.user!, lead.ownerId, lead.teamId)) {
+    res.status(404).json({ message: "线索不存在或无权访问" });
+    return;
+  }
+  const now = new Date().toISOString();
+  lead.deletedAt = now;
+  lead.deletedReason = body.reason || "暂时无效或不适合继续跟进";
+  lead.status = "invalid";
+  lead.lastActivityAt = "刚刚";
+  store.leadActivities.unshift({
+    id: `la_${Date.now()}`,
+    leadId: lead.id,
+    type: "system",
+    content: `移入垃圾箱：${lead.deletedReason}`,
+    operatorId: req.user!.id,
+    nextFollowAt: "",
+    createdAt: now
+  });
+  await store.persist();
+  res.json({ lead });
+}));
+
+app.post("/api/leads/:id/restore", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const lead = store.leads.find((item) => item.id === req.params.id);
+  if (!lead || !canSeeOwner(req.user!, lead.ownerId, lead.teamId)) {
+    res.status(404).json({ message: "线索不存在或无权访问" });
+    return;
+  }
+  const now = new Date().toISOString();
+  lead.deletedAt = "";
+  lead.deletedReason = "";
+  lead.status = lead.convertedCustomerId ? "converted" : "following";
+  lead.lastActivityAt = "刚刚";
+  store.leadActivities.unshift({
+    id: `la_${Date.now()}`,
+    leadId: lead.id,
+    type: "system",
+    content: "从垃圾箱恢复线索",
+    operatorId: req.user!.id,
+    nextFollowAt: "",
+    createdAt: now
+  });
+  await store.persist();
+  res.json({ lead });
+}));
+
+app.delete("/api/leads/:id/permanent", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const lead = store.leads.find((item) => item.id === req.params.id);
+  if (!lead || !canSeeOwner(req.user!, lead.ownerId, lead.teamId)) {
+    res.status(404).json({ message: "线索不存在或无权访问" });
+    return;
+  }
+  store.leads = store.leads.filter((item) => item.id !== lead.id);
+  store.leadActivities = store.leadActivities.filter((item) => item.leadId !== lead.id);
+  await store.persist();
+  res.json({ ok: true, id: lead.id });
+}));
+
+app.post("/api/leads/:id/activities", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    type: z.enum(["call", "wechat", "whatsapp", "linkedin", "email", "meeting", "note"]).default("note"),
+    content: z.string().min(1),
+    nextFollowAt: z.string().optional().default("")
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const lead = store.leads.find((item) => item.id === req.params.id);
+  if (!lead || !canSeeOwner(req.user!, lead.ownerId, lead.teamId)) {
+    res.status(404).json({ message: "线索不存在或无权访问" });
+    return;
+  }
+  const now = new Date().toISOString();
+  const activity = {
+    id: `la_${Date.now()}`,
+    leadId: lead.id,
+    type: body.type,
+    content: body.content,
+    operatorId: req.user!.id,
+    nextFollowAt: body.nextFollowAt,
+    createdAt: now
+  };
+  store.leadActivities.unshift(activity);
+  lead.lastActivityAt = "刚刚";
+  if (body.nextFollowAt) lead.nextFollowAt = body.nextFollowAt;
+  if (lead.status === "new") lead.status = "following";
+  await store.persist();
+  res.json({ activity, lead });
+}));
+
+app.post("/api/leads/:id/social-touch", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    channel: z.enum(["call", "wechat", "whatsapp", "linkedin"]),
+    message: z.string().min(1).max(1200),
+    nextFollowAt: z.string().optional().default("")
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const lead = store.leads.find((item) => item.id === req.params.id);
+  if (!lead || !canSeeOwner(req.user!, lead.ownerId, lead.teamId) || lead.deletedAt) {
+    res.status(404).json({ message: "线索不存在、已删除或无权访问" });
+    return;
+  }
+  const channelText: Record<typeof body.channel, string> = { call: "电话", wechat: "微信", whatsapp: "WhatsApp", linkedin: "LinkedIn" };
+  const now = new Date().toISOString();
+  const activity = {
+    id: `la_${Date.now()}`,
+    leadId: lead.id,
+    type: body.channel,
+    content: `${channelText[body.channel]}触达：${body.message}`,
+    operatorId: req.user!.id,
+    nextFollowAt: body.nextFollowAt,
+    createdAt: now
+  };
+  store.leadActivities.unshift(activity);
+  lead.lastActivityAt = "刚刚";
+  if (body.nextFollowAt) lead.nextFollowAt = body.nextFollowAt;
+  if (lead.status === "new") lead.status = "following";
+  await store.persist();
+  res.json({ activity, lead });
+}));
+
+app.post("/api/leads/:id/send-email", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    to: z.string().email(),
+    subject: z.string().min(1).max(160),
+    body: z.string().min(10).max(3000),
+    nextFollowAt: z.string().optional().default("")
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.user!.id);
+  const lead = store.leads.find((item) => item.id === req.params.id);
+  if (!user) {
+    res.status(404).json({ message: "账号不存在" });
+    return;
+  }
+  if (!lead || !canSeeOwner(req.user!, lead.ownerId, lead.teamId) || lead.deletedAt) {
+    res.status(404).json({ message: "线索不存在、已删除或无权访问" });
+    return;
+  }
+  let mailInfo: Awaited<ReturnType<typeof sendOutboundEmail>>;
+  try {
+    mailInfo = await sendOutboundEmail(user, { to: body.to, subject: body.subject, body: body.body });
+  } catch (error) {
+    res.status(400).json({ message: outboundEmailError(error, user) });
+    return;
+  }
+  const sentAt = new Date().toISOString();
+  user.lastDevelopmentEmailAt = sentAt;
+  user.lastDevelopmentEmailTo = body.to;
+  user.lastDevelopmentEmailSubject = body.subject;
+  const activity = {
+    id: `la_${Date.now()}`,
+    leadId: lead.id,
+    type: "email" as const,
+    content: `邮件发送：${body.subject}`,
+    operatorId: req.user!.id,
+    nextFollowAt: body.nextFollowAt,
+    createdAt: sentAt
+  };
+  store.leadActivities.unshift(activity);
+  lead.lastActivityAt = "刚刚";
+  if (body.nextFollowAt) lead.nextFollowAt = body.nextFollowAt;
+  if (lead.status === "new") lead.status = "following";
+  await store.persist();
+  res.json({
+    sent: {
+      id: `mail_${Date.now()}`,
+      status: "sent",
+      simulated: process.env.NODE_ENV === "test",
+      messageId: mailInfo.messageId,
+      from: user.outboundEmail,
+      senderName: user.emailSenderName || user.name,
+      to: body.to,
+      company: lead.company,
+      subject: body.subject,
+      sentAt
+    },
+    activity,
+    lead,
+    user: accountUser(user)
+  });
+}));
+
+app.get("/api/leads/:id/conversion-preview", requireAuth, (req, res) => {
+  const store = getStore();
+  const lead = store.leads.find((item) => item.id === req.params.id);
+  if (!lead || !canSeeOwner(req.user!, lead.ownerId, lead.teamId) || lead.deletedAt) {
+    res.status(404).json({ message: "线索不存在、已删除或无权访问" });
+    return;
+  }
+  res.json({ lead, customerMatches: findCustomerMatches(req.user!, lead) });
+});
+
+app.post("/api/leads/:id/convert", requireAuth, asyncRoute(async (req, res) => {
+  const conversionSchema = z.object({
+    customerMode: z.enum(["create", "existing"]).optional().default("create"),
+    customerId: z.string().optional().default(""),
+    createDeal: z.boolean().optional().default(false),
+    deal: z.object({
+      title: z.string().max(200).optional().default(""),
+      product: z.string().max(200).optional().default(""),
+      amount: z.coerce.number().nonnegative().optional(),
+      quantity: z.coerce.number().int().nonnegative().optional().default(0),
+      unitPrice: z.coerce.number().nonnegative().optional().default(0),
+      nextAction: z.string().max(200).optional().default("")
+    }).optional().default({})
+  });
+  const body = conversionSchema.parse(req.body || {});
+  const store = getStore();
+  const lead = store.leads.find((item) => item.id === req.params.id);
+  if (!lead || !canSeeOwner(req.user!, lead.ownerId, lead.teamId) || lead.deletedAt) {
+    res.status(404).json({ message: "线索不存在、已删除或无权访问" });
+    return;
+  }
+  if (lead.convertedCustomerId) {
+    const customer = store.customers.find((item) => item.id === lead.convertedCustomerId);
+    const deal = lead.convertedDealId ? store.deals.find((item) => item.id === lead.convertedDealId) : undefined;
+    res.json({ lead, customer: customer ? customerWithPipeline(customer) : null, deal, duplicate: true });
+    return;
+  }
+  const now = new Date().toISOString();
+  let customer: Customer | undefined;
+  if (body.customerMode === "existing") {
+    customer = store.customers.find((item) => item.id === body.customerId);
+    if (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId)) {
+      res.status(404).json({ message: "要关联的客户不存在或无权访问" });
+      return;
+    }
+  } else {
+    customer = {
+      id: `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      company: lead.company,
+      country: lead.country || "未知",
+      contact: lead.contact || "待维护",
+      ownerId: lead.ownerId,
+      teamId: lead.teamId,
+      stage: "询盘",
+      amount: 0,
+      health: 72,
+      nextReminder: lead.nextFollowAt || "明天 10:00",
+      wecomBound: false,
+      billingName: lead.company,
+      billingAddress: "",
+      documentContact: lead.email ? `${lead.contact || "待维护"} / ${lead.email}` : lead.contact || "",
+      defaultPortDischarge: "",
+      defaultIncoterm: "FOB Tianjin",
+      defaultPaymentTerm: "30% T/T deposit, 70% before shipment"
+    };
+    store.customers.unshift(customer);
+  }
+
+  let deal: Deal | undefined;
+  if (body.createDeal) {
+    deal = {
+      id: `d_lead_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      customerId: customer.id,
+      title: body.deal.title.trim() || `${lead.company} 采购需求`,
+      stage: "询盘",
+      product: body.deal.product.trim(),
+      quantity: body.deal.quantity,
+      unitPrice: body.deal.unitPrice,
+      amount: typeof body.deal.amount === "number" ? body.deal.amount : (lead.estimatedAmount || body.deal.quantity * body.deal.unitPrice),
+      ownerId: customer.ownerId,
+      teamId: customer.teamId,
+      nextAction: body.deal.nextAction.trim() || lead.nextFollowAt || "确认产品、数量与报价要求"
+    };
+    store.deals.unshift(deal);
+  }
+  lead.status = "converted";
+  lead.stage = "已转化";
+  lead.convertedCustomerId = customer.id;
+  lead.convertedDealId = deal?.id || "";
+  lead.lastActivityAt = "刚刚";
+  store.leadActivities.unshift({
+    id: `la_${Date.now()}`,
+    leadId: lead.id,
+    type: "system",
+    content: deal ? `确认并入库：关联客户 ${customer.company}，创建商机 ${deal.title}` : `确认并入库：关联客户 ${customer.company}`,
+    operatorId: req.user!.id,
+    nextFollowAt: "",
+    createdAt: now
+  });
+  await store.persist();
+  res.json({ lead, customer: customerWithPipeline(customer), deal, duplicate: false });
 }));
 
 app.get("/api/todos", requireAuth, (req, res) => {
@@ -2711,16 +3223,29 @@ app.post("/api/tools/ocr/jobs/:id/sync-lead", requireAuth, asyncRoute(async (req
     res.status(404).json({ message: "OCR 任务不存在" });
     return;
   }
-  job.status = "synced";
-  const lead = {
-    id: `lead_${job.id}`,
+  const result = createLeadFromSource(req.user!, {
+    company: job.fields.company || "待维护公司",
+    contact: job.fields.contact || "",
+    country: job.fields.country || "",
+    email: job.fields.email || "",
+    phone: job.fields.phone || job.fields.whatsapp || "",
+    wechat: job.fields.wechat || "",
     source: "名片 OCR",
-    ownerId: req.user!.id,
-    teamId: req.user!.teamId,
-    ...job.fields
-  };
+    sourceType: "offline",
+    sourceChannel: "ocr",
+    sourceCampaign: "",
+    externalId: job.id,
+    sourceUrl: "",
+    intent: "中",
+    stage: "新线索",
+    estimatedAmount: 0,
+    nextFollowAt: "",
+    remark: job.fields.title ? `名片职位：${job.fields.title}` : "OCR 名片识别",
+    rawPayload: job.fields
+  });
+  job.status = "synced";
   await store.persist();
-  res.json({ lead });
+  res.json(result);
 }));
 
 app.get("/api/tools/website-opportunities", requireAuth, (req, res) => {
@@ -2848,7 +3373,7 @@ app.post("/api/lead-finder/free-search", requireAuth, asyncRoute(async (req, res
   }
   for (const item of merged) {
     const existing = store.websiteOpportunities.find((row) => row.ownerId === req.user!.id && (row.website === item.website || row.company.toLowerCase() === item.company.toLowerCase()));
-    if (existing) Object.assign(existing, item, { id: existing.id, status: existing.status, customerId: existing.customerId, dealId: existing.dealId });
+    if (existing) Object.assign(existing, item, { id: existing.id, status: existing.status, customerId: existing.customerId, dealId: existing.dealId, leadId: existing.leadId });
     else store.websiteOpportunities.unshift(item);
   }
   await store.persist();
@@ -3159,7 +3684,7 @@ app.post("/api/lead-finder/search", requireAuth, asyncRoute(async (req, res) => 
 
   for (const item of opportunities) {
     const existing = store.websiteOpportunities.find((row) => row.ownerId === user.id && (row.website === item.website || row.company.toLowerCase() === item.company.toLowerCase()));
-    if (existing) Object.assign(existing, item, { id: existing.id, status: existing.status, customerId: existing.customerId, dealId: existing.dealId });
+    if (existing) Object.assign(existing, item, { id: existing.id, status: existing.status, customerId: existing.customerId, dealId: existing.dealId, leadId: existing.leadId });
     else store.websiteOpportunities.unshift(item);
   }
   await store.persist();
@@ -3205,67 +3730,50 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
   });
   const body = schema.parse(req.body);
   const store = getStore();
-  const created: Array<{ customer: Customer; deal: Deal; opportunity: WebsiteOpportunity }> = [];
+  const created: Array<{ lead: Lead; sourceEvent: LeadSourceEvent; opportunity: WebsiteOpportunity; duplicate: boolean }> = [];
   for (const source of body.opportunities) {
     const contact = source.contact || source.contactInfo || "待维护";
-    let customer = store.customers.find((item) => canSeeOwner(req.user!, item.ownerId, item.teamId) && item.company.toLowerCase() === source.company.toLowerCase());
-    if (!customer) {
-      customer = {
-        id: `c_web_${Date.now()}_${created.length}`,
-        company: source.company,
-        country: source.country || "未知",
-        contact,
-        ownerId: req.user!.id,
-        teamId: req.user!.teamId,
-        stage: "询盘",
-        amount: 0,
-        health: 68,
-        nextReminder: "官网商机待核实",
-        wecomBound: false,
-        billingName: source.company,
-        billingAddress: source.country || "",
-        documentContact: contact,
-        defaultPortDischarge: "",
-        defaultIncoterm: "FOB Tianjin",
-        defaultPaymentTerm: "30% T/T deposit, 70% before shipment"
-      };
-      store.customers.unshift(customer);
-    }
-    const deal: Deal = {
-      id: `d_web_${Date.now()}_${created.length}`,
-    customerId: customer.id,
-    title: `${source.company} 官网产品机会`,
-    stage: "询盘",
-    product: source.business || "待维护",
-    quantity: 0,
-    unitPrice: 0,
-    amount: 0,
-    ownerId: customer.ownerId,
-      teamId: customer.teamId,
-      nextAction: source.description || `核实官网产品：${source.business || "待维护"}，补充联系人并发起首次触达`
-    };
-    store.deals.unshift(deal);
+    const sourceId = source.id || `website_${websiteDomainKey(source.website)}_${normalizedMatchText(source.company)}`;
+    const intake = createLeadFromSource(req.user!, {
+      company: source.company,
+      contact,
+      country: source.country || "未知",
+      email: source.contactInfo.includes("@") ? source.contactInfo.trim() : "",
+      phone: source.contactInfo.includes("@") ? "" : source.contactInfo.trim(),
+      wechat: "",
+      source: "官网解析",
+      sourceType: "outbound",
+      sourceChannel: "website-scrape",
+      sourceCampaign: "",
+      externalId: sourceId,
+      sourceUrl: normalizeWebsite(source.website),
+      intent: "中",
+      stage: "新线索",
+      estimatedAmount: 0,
+      nextFollowAt: "",
+      remark: [source.business, source.description].filter(Boolean).join("；"),
+      rawPayload: source
+    });
     const opportunity: WebsiteOpportunity = {
-      id: source.id || `web_${Date.now()}_${created.length}`,
+      id: sourceId,
       company: source.company,
       business: source.business || "待维护",
       country: source.country || "未知",
       website: normalizeWebsite(source.website),
       contact,
       contactInfo: source.contactInfo || "",
-      description: source.description || "已同步为客户与商机，下一步核实采购负责人和产品需求。",
+      description: source.description || "已加入线索中心，下一步核实采购负责人和真实采购需求。",
       ownerId: req.user!.id,
       teamId: req.user!.teamId,
       status: "synced",
       createdAt: new Date().toISOString(),
-      customerId: customer.id,
-      dealId: deal.id,
+      leadId: intake.lead.id,
       parseMode: "rule"
     };
     const existing = store.websiteOpportunities.find((item) => item.id === opportunity.id || (item.ownerId === req.user!.id && item.website === opportunity.website));
     if (existing) Object.assign(existing, opportunity, { id: existing.id });
     else store.websiteOpportunities.unshift(opportunity);
-    created.push({ customer, deal, opportunity: existing || opportunity });
+    created.push({ ...intake, opportunity: existing || opportunity });
   }
   await store.persist();
   res.json({ created });

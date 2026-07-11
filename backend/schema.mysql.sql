@@ -44,6 +44,65 @@ CREATE TABLE customers (
   INDEX idx_customers_team(team_id)
 );
 
+CREATE TABLE leads (
+  id VARCHAR(64) PRIMARY KEY,
+  company VARCHAR(200) NOT NULL,
+  contact VARCHAR(100) DEFAULT '',
+  country VARCHAR(80) DEFAULT '',
+  email VARCHAR(180) DEFAULT '',
+  phone VARCHAR(80) DEFAULT '',
+  wechat VARCHAR(80) DEFAULT '',
+  source VARCHAR(80) DEFAULT '',
+  source_type VARCHAR(30) DEFAULT 'outbound',
+  source_channel VARCHAR(80) DEFAULT 'manual',
+  source_campaign VARCHAR(120) DEFAULT '',
+  external_id VARCHAR(180) DEFAULT '',
+  source_url VARCHAR(500) DEFAULT '',
+  intent VARCHAR(20) DEFAULT '中',
+  stage VARCHAR(40) DEFAULT '新线索',
+  status VARCHAR(20) DEFAULT 'new',
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  estimated_amount DECIMAL(14,2) DEFAULT 0,
+  next_follow_at VARCHAR(100) DEFAULT '',
+  last_activity_at VARCHAR(100) DEFAULT '',
+  remark TEXT,
+  converted_customer_id VARCHAR(64) DEFAULT '',
+  converted_deal_id VARCHAR(64) DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_leads_owner(owner_id),
+  INDEX idx_leads_team(team_id),
+  INDEX idx_leads_stage(stage)
+);
+
+CREATE TABLE lead_activities (
+  id VARCHAR(64) PRIMARY KEY,
+  lead_id VARCHAR(64) NOT NULL,
+  type VARCHAR(30) DEFAULT 'note',
+  content TEXT,
+  operator_id VARCHAR(64) DEFAULT '',
+  next_follow_at VARCHAR(100) DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_lead_activities_lead(lead_id)
+);
+
+CREATE TABLE lead_source_events (
+  id VARCHAR(64) PRIMARY KEY,
+  lead_id VARCHAR(64) NOT NULL,
+  source_type VARCHAR(30) NOT NULL,
+  channel VARCHAR(80) NOT NULL,
+  campaign VARCHAR(120) DEFAULT '',
+  external_id VARCHAR(180) DEFAULT '',
+  source_url VARCHAR(500) DEFAULT '',
+  occurred_at DATETIME NOT NULL,
+  received_at DATETIME NOT NULL,
+  raw_payload JSON,
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  UNIQUE KEY uniq_lead_source_external (team_id, channel, external_id),
+  INDEX idx_lead_source_events_lead(lead_id)
+);
+
 CREATE TABLE deals (
   id VARCHAR(64) PRIMARY KEY,
   customer_id VARCHAR(64) NOT NULL,
@@ -187,6 +246,7 @@ CREATE TABLE website_opportunities (
   status VARCHAR(30),
   customer_id VARCHAR(64),
   deal_id VARCHAR(64),
+  lead_id VARCHAR(64),
   parse_mode VARCHAR(20) DEFAULT 'rule',
   source VARCHAR(40) DEFAULT '',
   source_label VARCHAR(80) DEFAULT '',

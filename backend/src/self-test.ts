@@ -72,6 +72,13 @@ try {
   if (!ocr.response.ok || ocr.json.lead.company !== "NorthStar Lighting GmbH") {
     throw new Error("ocr sync failed");
   }
+  const ocrRepeat = await request("/api/tools/ocr/jobs/ocr1/sync-lead", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  const leadsAfterOcr = await request("/api/leads", { headers: { authorization: `Bearer ${salesToken}` } });
+  if (!ocrRepeat.response.ok || !ocrRepeat.json.duplicate || ocrRepeat.json.lead.id !== ocr.json.lead.id) throw new Error("ocr sync must be idempotent");
+  if (!leadsAfterOcr.json.leads.some((lead: { id: string }) => lead.id === ocr.json.lead.id)) throw new Error("ocr lead must be persisted");
   const managerOcr = await request("/api/tools/ocr/jobs/ocr1", {
     headers: { authorization: `Bearer ${managerToken}` }
   });
@@ -166,6 +173,161 @@ try {
     throw new Error("development email send failed");
   }
 
+  const leadCreate = await request("/api/leads", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      company: "自动化线索工作区 GmbH",
+      contact: "Lead Buyer",
+      country: "德国",
+      email: "lead.buyer@example.com",
+      phone: "+49 30 1000 2000",
+      wechat: "lead_buyer",
+      source: "自测录入",
+      intent: "高",
+      estimatedAmount: 32000,
+      remark: "用于验证线索详情、触达、跟进记录和垃圾箱"
+    })
+  });
+  if (!leadCreate.response.ok || leadCreate.json.lead?.company !== "自动化线索工作区 GmbH") throw new Error("lead workspace create failed");
+  const testLeadId = leadCreate.json.lead.id;
+
+  const socialTouch = await request(`/api/leads/${testLeadId}/social-touch`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ channel: "whatsapp", message: "确认客户近期采购需求", nextFollowAt: "明天 11:00" })
+  });
+  if (!socialTouch.response.ok || socialTouch.json.activity?.type !== "whatsapp" || socialTouch.json.lead?.nextFollowAt !== "明天 11:00") {
+    throw new Error("lead social touch failed");
+  }
+
+  const leadEmail = await request(`/api/leads/${testLeadId}/send-email`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      to: "lead.buyer@example.com",
+      subject: "GoodJob 产品资料与报价沟通",
+      body: "Dear Lead Buyer, we would like to confirm your specification and prepare a quotation.",
+      nextFollowAt: "后天 10:00"
+    })
+  });
+  if (!leadEmail.response.ok || leadEmail.json.sent?.status !== "sent" || leadEmail.json.activity?.type !== "email") {
+    throw new Error("lead email send failed");
+  }
+
+  const leadDetail = await request(`/api/leads/${testLeadId}`, { headers: { authorization: `Bearer ${salesToken}` } });
+  const activityTypes = (leadDetail.json.activities || []).map((activity: { type: string }) => activity.type);
+  if (!leadDetail.response.ok || !activityTypes.includes("whatsapp") || !activityTypes.includes("email")) throw new Error("lead activity timeline failed");
+
+  const externalId = `external-rfq-${Date.now()}`;
+  const externalLeadBody = {
+    company: "自动化外部平台客户 GmbH",
+    contact: "External Buyer",
+    country: "德国",
+    email: "external.buyer@example.com",
+    source: "第三方平台",
+    sourceType: "inbound",
+    sourceChannel: "partner-api",
+    externalId,
+    sourceCampaign: "2026 Europe RFQ",
+    sourceUrl: "https://partner.example/rfq/123",
+    estimatedAmount: 88000,
+    rawPayload: { rfqId: 123, product: "流量计" }
+  };
+  const externalLeadFirst = await request("/api/leads/ingest", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify(externalLeadBody)
+  });
+  const externalLeadSecond = await request("/api/leads/ingest", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify(externalLeadBody)
+  });
+  if (externalLeadFirst.response.status !== 201 || !externalLeadSecond.json.duplicate || externalLeadFirst.json.lead.id !== externalLeadSecond.json.lead.id) {
+    throw new Error("external lead ingestion must be idempotent");
+  }
+
+  const matchingCustomer = await request("/api/customers", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      company: externalLeadBody.company,
+      country: "德国",
+      contact: "Existing Buyer",
+      documentContact: externalLeadBody.email
+    })
+  });
+  if (!matchingCustomer.response.ok) throw new Error("matching customer create failed");
+  const customersBeforeExistingConversion = await request("/api/customers", { headers: { authorization: `Bearer ${salesToken}` } });
+  const conversionPreview = await request(`/api/leads/${externalLeadFirst.json.lead.id}/conversion-preview`, {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!conversionPreview.response.ok || conversionPreview.json.customerMatches?.[0]?.customer?.id !== matchingCustomer.json.customer.id) {
+    throw new Error("conversion preview should find existing customer");
+  }
+  const existingConversion = await request(`/api/leads/${externalLeadFirst.json.lead.id}/convert`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      customerMode: "existing",
+      customerId: matchingCustomer.json.customer.id,
+      createDeal: true,
+      deal: { title: "外部平台流量计 RFQ", product: "流量计", amount: 88000, nextAction: "确认量程与接口" }
+    })
+  });
+  if (!existingConversion.response.ok || existingConversion.json.deal?.customerId !== matchingCustomer.json.customer.id) throw new Error("existing customer conversion failed");
+  const customersAfterExistingConversion = await request("/api/customers", { headers: { authorization: `Bearer ${salesToken}` } });
+  if (customersAfterExistingConversion.json.customers.length !== customersBeforeExistingConversion.json.customers.length) throw new Error("existing conversion must not duplicate customer");
+  const aggregatedCustomer = customersAfterExistingConversion.json.customers.find((customer: { id: string }) => customer.id === matchingCustomer.json.customer.id);
+  if (aggregatedCustomer?.pipelineAmount !== 88000 || aggregatedCustomer?.pipelineStage !== "询盘" || aggregatedCustomer?.activeDealCount !== 1) {
+    throw new Error("customer pipeline fields must be deal-derived");
+  }
+  const repeatedConversion = await request(`/api/leads/${externalLeadFirst.json.lead.id}/convert`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ customerMode: "existing", customerId: matchingCustomer.json.customer.id, createDeal: true })
+  });
+  if (!repeatedConversion.response.ok || !repeatedConversion.json.duplicate || repeatedConversion.json.deal?.id !== existingConversion.json.deal.id) {
+    throw new Error("lead conversion must be idempotent");
+  }
+
+  const customerOnlyLead = await request("/api/leads", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ company: `仅客户入库-${Date.now()}`, source: "手动录入" })
+  });
+  const customerOnlyConversion = await request(`/api/leads/${customerOnlyLead.json.lead.id}/convert`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ customerMode: "create", createDeal: false })
+  });
+  if (!customerOnlyConversion.response.ok || !customerOnlyConversion.json.customer || customerOnlyConversion.json.deal) {
+    throw new Error("customer-only conversion failed");
+  }
+
+  const leadTrash = await request(`/api/leads/${testLeadId}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ reason: "自测移入垃圾箱" })
+  });
+  if (!leadTrash.response.ok || !leadTrash.json.lead?.deletedAt) throw new Error("lead trash failed");
+  const leadTrashList = await request("/api/leads?trash=true", { headers: { authorization: `Bearer ${salesToken}` } });
+  if (!leadTrashList.json.leads.some((lead: { id: string }) => lead.id === testLeadId)) throw new Error("lead trash list failed");
+  const leadActiveList = await request("/api/leads", { headers: { authorization: `Bearer ${salesToken}` } });
+  if (leadActiveList.json.leads.some((lead: { id: string }) => lead.id === testLeadId)) throw new Error("trashed lead must leave active list");
+
+  const leadRestore = await request(`/api/leads/${testLeadId}/restore`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!leadRestore.response.ok || leadRestore.json.lead?.deletedAt) throw new Error("lead restore failed");
+  const leadPermanentDelete = await request(`/api/leads/${testLeadId}/permanent`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!leadPermanentDelete.response.ok || !leadPermanentDelete.json.ok) throw new Error("lead permanent delete failed");
+
   const websitePreview = await request("/api/tools/website-scrape/preview", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
@@ -178,8 +340,16 @@ try {
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({ opportunities: [{ ...websitePreview.json.opportunities[0], company: "自动化官网商机", business: "压力仪表" }] })
   });
-  if (!websiteSync.response.ok || websiteSync.json.created?.[0]?.deal?.title !== "自动化官网商机 官网产品机会") {
+  if (!websiteSync.response.ok || websiteSync.json.created?.[0]?.lead?.company !== "自动化官网商机" || websiteSync.json.created?.[0]?.opportunity?.leadId !== websiteSync.json.created?.[0]?.lead?.id) {
     throw new Error("website opportunity sync failed");
+  }
+  const websiteSyncRepeat = await request("/api/tools/website-scrape/sync-opportunities", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ opportunities: [{ ...websitePreview.json.opportunities[0], company: "自动化官网商机", business: "压力仪表" }] })
+  });
+  if (!websiteSyncRepeat.response.ok || !websiteSyncRepeat.json.created?.[0]?.duplicate || websiteSyncRepeat.json.created?.[0]?.lead?.id !== websiteSync.json.created?.[0]?.lead?.id) {
+    throw new Error("website opportunity sync must be idempotent");
   }
 
   // 自动获客数据源中心：注册表 / 保存 Key（掩码）/ 删除

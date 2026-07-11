@@ -27,6 +27,43 @@ export interface Customer {
   defaultPaymentTerm?: string;
 }
 
+export type LeadStatus = "new" | "following" | "converted" | "invalid";
+export type LeadActivityType = "call" | "wechat" | "whatsapp" | "linkedin" | "email" | "meeting" | "note" | "stage" | "system";
+
+export interface Lead {
+  id: string;
+  company: string;
+  contact: string;
+  country: string;
+  email: string;
+  phone: string;
+  wechat: string;
+  source: string;
+  intent: string;
+  stage: string;
+  status: LeadStatus;
+  ownerId: string;
+  teamId: string;
+  estimatedAmount: number;
+  nextFollowAt: string;
+  lastActivityAt: string;
+  remark: string;
+  convertedCustomerId: string;
+  createdAt: string;
+  deletedAt?: string;
+  deletedReason?: string;
+}
+
+export interface LeadActivity {
+  id: string;
+  leadId: string;
+  type: LeadActivityType;
+  content: string;
+  operatorId: string;
+  nextFollowAt: string;
+  createdAt: string;
+}
+
 export interface Todo {
   id: string;
   title: string;

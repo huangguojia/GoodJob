@@ -38,6 +38,9 @@ interface Customer {
   defaultPortDischarge?: string;
   defaultIncoterm?: string;
   defaultPaymentTerm?: string;
+  pipelineStage?: string;
+  pipelineAmount?: number;
+  activeDealCount?: number;
 }
 
 interface Todo {
@@ -349,6 +352,7 @@ interface WebsiteOpportunity {
   createdAt: string;
   customerId?: string;
   dealId?: string;
+  leadId?: string;
   parseMode?: "rule" | "ai" | "fallback";
   source?: string;
   sourceLabel?: string;
@@ -547,10 +551,67 @@ interface DashboardSummary {
   priorityTasks: Array<{ id: string; customerId: string; title: string; subtitle: string; score: number; reason: string; action: string; tone: string; badge: string }>;
 }
 
+interface Lead {
+  id: string;
+  company: string;
+  contact: string;
+  country: string;
+  email: string;
+  phone: string;
+  wechat: string;
+  source: string;
+  sourceType?: string;
+  sourceChannel?: string;
+  sourceCampaign?: string;
+  externalId?: string;
+  sourceUrl?: string;
+  intent: string;
+  stage: string;
+  status: "new" | "following" | "converted" | "invalid";
+  ownerId: string;
+  teamId: string;
+  estimatedAmount: number;
+  nextFollowAt: string;
+  lastActivityAt: string;
+  remark: string;
+  convertedCustomerId: string;
+  convertedDealId?: string;
+  createdAt: string;
+}
+
+interface LeadConversionMatch {
+  customer: Customer;
+  score: number;
+  reasons: string[];
+  activeDealCount: number;
+}
+
+interface LeadSyncResult {
+  lead: Lead;
+  sourceEvent: unknown;
+  opportunity: WebsiteOpportunity;
+  duplicate: boolean;
+}
+
+interface LeadActivity {
+  id: string;
+  leadId: string;
+  type: string;
+  content: string;
+  operatorId: string;
+  nextFollowAt: string;
+  createdAt: string;
+}
+
 interface AppState {
   user: User | null;
   summary: DashboardSummary | null;
   customers: Customer[];
+  leads: Lead[];
+  leadActivities: LeadActivity[];
+  selectedLeadId: string | null;
+  leadStageFilter: string;
+  leadSearch: string;
   todos: Todo[];
   deals: Deal[];
   reminders: Reminder[];
@@ -620,6 +681,11 @@ const state: AppState = {
   user: null,
   summary: null,
   customers: [],
+  leads: [],
+  leadActivities: [],
+  selectedLeadId: null,
+  leadStageFilter: "all",
+  leadSearch: "",
   todos: [],
   deals: [],
   reminders: [],
@@ -1221,9 +1287,10 @@ async function sendDevelopmentEmail(button?: HTMLButtonElement) {
 
 async function refreshAll(user: User) {
   renderDashboardCache(user);
-  const [summary, customers, todos, deals, reminders, jobs, tradeDocs, wecom, knowledge, exams, ocr, websiteOps, aiConfig, problems, memos, planTasks, planTemplates, competitors, caseStudies, commissionProducts, commissionRecords, commissionCalculations] = await Promise.all([
+  const [summary, customers, leadsResp, todos, deals, reminders, jobs, tradeDocs, wecom, knowledge, exams, ocr, websiteOps, aiConfig, problems, memos, planTasks, planTemplates, competitors, caseStudies, commissionProducts, commissionRecords, commissionCalculations] = await Promise.all([
     api<DashboardSummary>("/api/dashboard/summary"),
     api<{ customers: Customer[] }>("/api/customers"),
+    api<{ leads: Lead[] }>("/api/leads"),
     api<{ todos: Todo[] }>("/api/todos"),
     api<{ deals: Deal[] }>("/api/deals"),
     api<{ reminders: Reminder[] }>("/api/reminders"),
@@ -1248,6 +1315,7 @@ async function refreshAll(user: User) {
   state.user = user;
   state.summary = summary;
   state.customers = customers.customers;
+  state.leads = leadsResp.leads;
   state.todos = todos.todos;
   state.deals = deals.deals;
   state.reminders = reminders.reminders;
@@ -1292,6 +1360,7 @@ async function refreshAll(user: User) {
   writeDashboardCache(user, summary, todos.todos, customers.customers);
   renderDashboard(summary, todos.todos, customers.customers);
   renderCustomers(customers.customers);
+  renderLeads();
   renderPipeline(deals.deals);
   renderReminders(reminders.reminders);
   renderJobs(jobs.jobs);
@@ -2011,6 +2080,278 @@ function caseStatusText(status: string) {
   return status === "published" ? "已发布" : "草稿";
 }
 
+const LEAD_STAGES = ["新线索", "已联系", "已建联", "已报价", "已转化", "已放弃"];
+const LEAD_STATUS_LABEL: Record<string, string> = { new: "待跟进", following: "跟进中", converted: "已转化", invalid: "无效" };
+const LEAD_STATUS_TONE: Record<string, string> = { new: "gray", following: "amber", converted: "green", invalid: "red" };
+const LEAD_ACTIVITY_LABEL: Record<string, string> = { call: "电话", wechat: "微信", email: "邮件", meeting: "会面", note: "备注", stage: "阶段", system: "系统" };
+
+function leadStageTone(stage: string) {
+  if (stage === "已转化") return "green";
+  if (stage === "已报价" || stage === "已建联") return "amber";
+  if (stage === "已放弃") return "red";
+  return "";
+}
+
+function renderLeads() {
+  const tbody = qs<HTMLElement>("#leadsTableBody");
+  if (!tbody) return;
+  const chipsWrap = qs<HTMLElement>("#leadStageChips");
+  const q = state.leadSearch.trim().toLowerCase();
+  const filtered = state.leads.filter((lead) => {
+    const matchStage = state.leadStageFilter === "all" || lead.stage === state.leadStageFilter;
+    const matchSearch = !q || lead.company.toLowerCase().includes(q) || (lead.contact || "").toLowerCase().includes(q) || (lead.country || "").toLowerCase().includes(q);
+    return matchStage && matchSearch;
+  });
+
+  if (chipsWrap) {
+    const counts = LEAD_STAGES.map((stage) => [stage, state.leads.filter((lead) => lead.stage === stage).length] as const);
+    chipsWrap.innerHTML = `<span class="filter lead-chip ${state.leadStageFilter === "all" ? "active" : ""}" data-lead-stage="all">全部 ${state.leads.length}</span>` +
+      counts.map(([stage, count]) => `<span class="filter lead-chip ${state.leadStageFilter === stage ? "active" : ""}" data-lead-stage="${escapeHtml(stage)}">${escapeHtml(stage)} ${count}</span>`).join("");
+    qsa<HTMLElement>(".lead-chip", chipsWrap).forEach((chip) => {
+      chip.addEventListener("click", () => {
+        state.leadStageFilter = chip.dataset.leadStage || "all";
+        renderLeads();
+      });
+    });
+  }
+
+  tbody.innerHTML = filtered.length ? filtered.map((lead) => `<tr data-lead-id="${lead.id}" class="${lead.id === state.selectedLeadId ? "selected" : ""}">
+    <td><div class="company"><span class="flag">${countryFlag(lead.country)}</span><div><button class="lead-name" data-open-lead>${escapeHtml(lead.company)}</button><span>${escapeHtml(lead.contact || "—")} · ${escapeHtml(lead.country || "—")}</span></div></div></td>
+    <td>${escapeHtml(lead.source || "—")}</td>
+    <td>${badge("意向" + lead.intent, lead.intent === "高" ? "red" : lead.intent === "中" ? "amber" : "gray")}</td>
+    <td>${badge(lead.stage, leadStageTone(lead.stage))}</td>
+    <td>${money(lead.estimatedAmount || 0)}</td>
+    <td>${escapeHtml(lead.nextFollowAt || "—")}</td>
+    <td>${badge(LEAD_STATUS_LABEL[lead.status] || lead.status, LEAD_STATUS_TONE[lead.status] || "")}</td>
+  </tr>`).join("") : `<tr><td colspan="7" class="empty-cell">暂无线索，点击右上角「新增线索」录入</td></tr>`;
+
+  qsa<HTMLElement>("tr[data-lead-id]", tbody).forEach((row) => {
+    row.addEventListener("click", () => {
+      const id = row.dataset.leadId || "";
+      if (id) void openLead(id);
+    });
+  });
+
+  if (state.selectedLeadId && !filtered.some((lead) => lead.id === state.selectedLeadId)) {
+    state.selectedLeadId = null;
+    const drawer = qs<HTMLElement>("#leadDrawer");
+    if (drawer) drawer.innerHTML = `<div class="drawer-head"><div><h2>选择线索</h2><p>点击左侧客户名查看详情</p></div></div>`;
+  }
+}
+
+async function openLead(id: string) {
+  state.selectedLeadId = id;
+  qsa<HTMLElement>("#leadsTableBody tr[data-lead-id]").forEach((row) => row.classList.toggle("selected", row.dataset.leadId === id));
+  const drawer = qs<HTMLElement>("#leadDrawer");
+  if (!drawer) return;
+  drawer.innerHTML = `<div class="drawer-head"><div><h2>加载中…</h2></div></div>`;
+  try {
+    const data = await api<{ lead: Lead; activities: LeadActivity[] }>(`/api/leads/${id}`);
+    renderLeadDrawer(data.lead, data.activities);
+  } catch (error) {
+    drawer.innerHTML = `<div class="drawer-head"><div><h2>加载失败</h2><p>${escapeHtml(error instanceof Error ? error.message : "")}</p></div></div>`;
+  }
+}
+
+function renderLeadDrawer(lead: Lead, activities: LeadActivity[]) {
+  const drawer = qs<HTMLElement>("#leadDrawer");
+  if (!drawer) return;
+  const fields: Array<[string, string]> = [
+    ["联系人", lead.contact || "—"], ["国家/地区", lead.country || "—"], ["邮箱", lead.email || "—"],
+    ["电话", lead.phone || "—"], ["微信", lead.wechat || "—"], ["来源", lead.source || "—"],
+    ["来源渠道", lead.sourceChannel || "—"], ["来源活动", lead.sourceCampaign || "—"], ["外部编号", lead.externalId || "—"],
+    ["意向", lead.intent], ["预估金额", money(lead.estimatedAmount || 0)], ["下次跟进", lead.nextFollowAt || "—"]
+  ];
+  drawer.innerHTML = `
+    <div class="drawer-head">
+      <div><h2>${escapeHtml(lead.company)}</h2><p>${escapeHtml(lead.country || "—")} · ${escapeHtml(lead.contact || "—")}</p></div>
+      ${badge(LEAD_STATUS_LABEL[lead.status] || lead.status, LEAD_STATUS_TONE[lead.status] || "")}
+    </div>
+    ${lead.remark ? `<p class="lead-remark">${escapeHtml(lead.remark)}</p>` : ""}
+    <div class="lead-drawer-actions">
+      <label>阶段
+        <select id="leadStageSelect">${LEAD_STAGES.map((stage) => `<option ${stage === lead.stage ? "selected" : ""}>${stage}</option>`).join("")}</select>
+      </label>
+      ${lead.convertedCustomerId
+        ? `${badge("已入客户", "green")}${lead.convertedDealId ? badge("已建商机", "green") : ""}`
+        : `<button class="btn primary" id="leadConvertButton">确认并入库</button>`}
+    </div>
+    <div class="info-grid">
+      ${fields.map(([label, value]) => `<div class="info"><span>${label}</span><b>${escapeHtml(value)}</b></div>`).join("")}
+    </div>
+    <div class="lead-compose">
+      <select id="leadNoteType"><option value="call">电话</option><option value="wechat">微信</option><option value="email">邮件</option><option value="meeting">会面</option><option value="note">备注</option></select>
+      <input id="leadNoteInput" placeholder="填写本次跟进内容" />
+      <input id="leadNoteNext" placeholder="下次跟进时间(可选)" />
+      <button class="btn primary" id="leadNoteButton">添加跟进</button>
+    </div>
+    <div class="timeline">
+      ${activities.length ? activities.map((activity) => `<div class="timeline-item"><b>${LEAD_ACTIVITY_LABEL[activity.type] || activity.type}</b><span>${escapeHtml(activity.content)}</span><small>${new Date(activity.createdAt).toLocaleString("zh-CN")}${activity.nextFollowAt ? " · 下次：" + escapeHtml(activity.nextFollowAt) : ""}</small></div>`).join("") : `<div class="timeline-item"><span>暂无跟进记录</span></div>`}
+    </div>`;
+
+  qs<HTMLSelectElement>("#leadStageSelect", drawer)?.addEventListener("change", (event) => {
+    void changeLeadStage(lead.id, (event.target as HTMLSelectElement).value);
+  });
+  qs<HTMLButtonElement>("#leadConvertButton", drawer)?.addEventListener("click", () => void openLeadConversion(lead.id));
+  qs<HTMLButtonElement>("#leadNoteButton", drawer)?.addEventListener("click", () => void addLeadActivity(lead.id));
+}
+
+async function reloadLeads() {
+  const data = await api<{ leads: Lead[] }>("/api/leads");
+  state.leads = data.leads;
+  renderLeads();
+}
+
+async function changeLeadStage(id: string, stage: string) {
+  try {
+    await api(`/api/leads/${id}`, { method: "PATCH", body: JSON.stringify({ stage }) });
+    await reloadLeads();
+    await openLead(id);
+    toast("阶段已更新");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "更新失败", "error");
+  }
+}
+
+async function addLeadActivity(id: string) {
+  const type = qs<HTMLSelectElement>("#leadNoteType")?.value || "note";
+  const content = qs<HTMLInputElement>("#leadNoteInput")?.value.trim() || "";
+  const nextFollowAt = qs<HTMLInputElement>("#leadNoteNext")?.value.trim() || "";
+  if (!content) { toast("请填写跟进内容", "error"); return; }
+  try {
+    await api(`/api/leads/${id}/activities`, { method: "POST", body: JSON.stringify({ type, content, nextFollowAt }) });
+    await reloadLeads();
+    await openLead(id);
+    toast("跟进已记录");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "记录失败", "error");
+  }
+}
+
+function renderLeadConversionDealFields(visible: boolean) {
+  const fields = qs<HTMLElement>("#leadConversionDealFields");
+  if (fields) fields.classList.toggle("is-hidden", !visible);
+}
+
+async function openLeadConversion(id: string) {
+  try {
+    const preview = await api<{ lead: Lead; customerMatches: LeadConversionMatch[] }>(`/api/leads/${id}/conversion-preview`);
+    const { lead, customerMatches } = preview;
+    const matchRows = customerMatches.map((match, index) => `
+      <label class="conversion-customer-option">
+        <input type="radio" name="leadCustomerMode" value="existing:${escapeHtml(match.customer.id)}" ${index === 0 ? "checked" : ""}>
+        <span><b>${escapeHtml(match.customer.company)}</b><small>${escapeHtml(match.customer.country)} · ${escapeHtml(match.customer.contact)} · ${match.activeDealCount} 个活跃商机</small><em>${escapeHtml(match.reasons.join("、"))} · 匹配 ${match.score} 分</em></span>
+      </label>
+    `).join("");
+    openModal("确认并入库", `
+      <div class="conversion-lead-summary">
+        <b>${escapeHtml(lead.company)}</b>
+        <span>${escapeHtml(lead.contact || "联系人待补充")} · ${escapeHtml(lead.country || "国家待补充")} · ${escapeHtml(lead.sourceChannel || lead.source || "来源待确认")}</span>
+      </div>
+      <div class="form-field full">
+        <label>客户归属</label>
+        <div class="conversion-customer-list" id="leadConversionCustomerList">
+          ${matchRows || `<div class="conversion-no-match">未发现明显重复客户，可新建客户。</div>`}
+          <label class="conversion-customer-option">
+            <input type="radio" name="leadCustomerMode" value="create" ${customerMatches.length ? "" : "checked"}>
+            <span><b>新建客户</b><small>以当前线索资料建立一条客户档案</small></span>
+          </label>
+        </div>
+      </div>
+      <label class="conversion-deal-toggle"><input id="leadCreateDealInput" type="checkbox">同时创建商机</label>
+      <div class="form-grid is-hidden" id="leadConversionDealFields">
+        <div class="form-field full"><label>商机标题</label><input id="leadDealTitleInput" value="${escapeHtml(`${lead.company} 采购需求`)}"></div>
+        <div class="form-field"><label>产品/需求</label><input id="leadDealProductInput" placeholder="例如：压力变送器"></div>
+        <div class="form-field"><label>预计金额</label><input id="leadDealAmountInput" type="number" min="0" value="${lead.estimatedAmount || 0}"></div>
+        <div class="form-field full"><label>下一步动作</label><input id="leadDealNextActionInput" value="${escapeHtml(lead.nextFollowAt || "确认产品、数量与报价要求")}"></div>
+      </div>
+    `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="confirmLeadConversionButton" data-lead-id="${escapeHtml(id)}">确认入库</button>`);
+    qs<HTMLInputElement>("#leadCreateDealInput")?.addEventListener("change", (event) => {
+      renderLeadConversionDealFields((event.currentTarget as HTMLInputElement).checked);
+    });
+    qs<HTMLButtonElement>("#confirmLeadConversionButton")?.addEventListener("click", () => void confirmLeadConversion(id));
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "加载入库信息失败", "error");
+  }
+}
+
+async function confirmLeadConversion(id: string) {
+  const selected = qs<HTMLInputElement>('input[name="leadCustomerMode"]:checked')?.value || "create";
+  const createDeal = Boolean(qs<HTMLInputElement>("#leadCreateDealInput")?.checked);
+  const button = qs<HTMLButtonElement>("#confirmLeadConversionButton");
+  const customerMode = selected.startsWith("existing:") ? "existing" : "create";
+  const payload = {
+    customerMode,
+    customerId: customerMode === "existing" ? selected.slice("existing:".length) : "",
+    createDeal,
+    deal: createDeal ? {
+      title: qs<HTMLInputElement>("#leadDealTitleInput")?.value.trim() || "",
+      product: qs<HTMLInputElement>("#leadDealProductInput")?.value.trim() || "",
+      amount: Number(qs<HTMLInputElement>("#leadDealAmountInput")?.value || 0),
+      nextAction: qs<HTMLInputElement>("#leadDealNextActionInput")?.value.trim() || ""
+    } : undefined
+  };
+  try {
+    if (button) {
+      button.disabled = true;
+      button.textContent = "入库中";
+    }
+    const result = await api<{ customer: Customer; deal?: Deal }>(`/api/leads/${id}/convert`, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    const [leads, customers, deals] = await Promise.all([
+      api<{ leads: Lead[] }>("/api/leads"),
+      api<{ customers: Customer[] }>("/api/customers"),
+      api<{ deals: Deal[] }>("/api/deals")
+    ]);
+    state.leads = leads.leads;
+    state.customers = customers.customers;
+    state.deals = deals.deals;
+    renderLeads();
+    renderCustomers(state.customers);
+    renderPipeline(state.deals);
+    closeModal();
+    await openLead(id);
+    void refreshDashboardOnly();
+    toast(result.deal ? `已入客户并创建商机：${result.customer.company}` : `已入客户：${result.customer.company}`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "入库失败", "error");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "确认入库";
+    }
+  }
+}
+
+async function createLead(form: HTMLFormElement) {
+  const data = new FormData(form);
+  const company = String(data.get("company") || "").trim();
+  if (!company) { toast("请填写客户/公司名", "error"); return; }
+  const payload = {
+    company,
+    contact: String(data.get("contact") || ""),
+    country: String(data.get("country") || ""),
+    email: String(data.get("email") || ""),
+    phone: String(data.get("phone") || ""),
+    wechat: String(data.get("wechat") || ""),
+    source: String(data.get("source") || "手动录入"),
+    intent: String(data.get("intent") || "中"),
+    estimatedAmount: Number(data.get("estimatedAmount") || 0)
+  };
+  try {
+    const result = await api<{ lead: Lead }>("/api/leads", { method: "POST", body: JSON.stringify(payload) });
+    form.reset();
+    qs<HTMLElement>("#leadCreateForm")?.classList.add("is-hidden");
+    await reloadLeads();
+    await openLead(result.lead.id);
+    toast("线索已创建");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "创建失败", "error");
+  }
+}
+
 function renderCustomers(customers: Customer[]) {
   const tbody = qs<HTMLElement>("#customers tbody");
   if (!tbody) return;
@@ -2020,10 +2361,12 @@ function renderCustomers(customers: Customer[]) {
     const checked = state.selectedCustomerIds.includes(customer.id);
     const owner = customer.id === "c3" || customer.id === "c4" ? "Mia" : "Shirley";
     const reminder = customer.nextReminder.includes("逾期") ? badge(customer.nextReminder, "red") : escapeHtml(customer.nextReminder);
+    const pipelineStage = customer.pipelineStage || "暂无活跃商机";
+    const activeDealCount = customer.activeDealCount || 0;
     return `<tr class="${index === 0 ? "selected" : ""} ${checked ? "checked" : ""}">
     <td><input type="checkbox" data-select-customer ${checked ? "checked" : ""}></td>
     <td><div class="company"><span class="flag">${countryFlag(customer.country)}</span><div><b>${escapeHtml(customer.company)}</b><span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${owner}</span></div></div></td>
-    <td>${badge(customer.stage, customer.stage === "成交" || customer.stage === "谈判" ? "green" : customer.stage === "已报价" ? "amber" : "")}</td>
+    <td><div class="customer-follow-cell">${badge(pipelineStage, pipelineStage === "成交" || pipelineStage === "谈判" ? "green" : pipelineStage === "已报价" ? "amber" : "")}<span>${activeDealCount} 个活跃商机</span></div></td>
     <td><div class="customer-health-cell">${health(customer.health)}<span>${customer.health}%</span></div></td>
     <td><div class="customer-follow-cell"><span>最近 今天</span><b>${reminder}</b></div></td>
     <td>${badge(customer.wecomBound ? "已绑定" : "未绑定", customer.wecomBound ? "green" : "gray")}</td>
@@ -2070,7 +2413,7 @@ function renderCustomerBulkBar(customers: Customer[]) {
   toolbar.innerHTML = `
     <label class="customer-select-all"><input type="checkbox" data-select-all-customers ${allSelected ? "checked" : ""}>全选</label>
     <span class="filter">已选 ${selectedCount} 个客户</span>
-    <span class="filter">国家：全部</span><span class="filter">阶段：全部</span><span class="filter">最近跟进：30 天</span>
+    <span class="filter">国家：全部</span><span class="filter">商机阶段：全部</span><span class="filter">最近跟进：30 天</span>
     <button class="btn danger" data-bulk-delete-customers ${selectedCount ? "" : "disabled"}>批量删除</button>
     <button class="btn">批量导出</button>
   `;
@@ -2213,9 +2556,12 @@ function renderCustomerDrawer(customer?: Customer) {
   const portDischarge = customer.defaultPortDischarge || "待确认";
   const incoterm = customer.defaultIncoterm || "FOB Tianjin";
   const paymentTerm = customer.defaultPaymentTerm || "30% T/T deposit, 70% before shipment";
+  const pipelineStage = customer.pipelineStage || "暂无活跃商机";
+  const pipelineAmount = customer.pipelineAmount || 0;
+  const activeDealCount = customer.activeDealCount || 0;
   drawer.innerHTML = `
     <div class="drawer-head">
-      <div><h2>${escapeHtml(customer.company)}</h2><p>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.stage)}</p></div>
+      <div><h2>${escapeHtml(customer.company)}</h2><p>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(pipelineStage)}</p></div>
       ${customer.nextReminder.includes("逾期") ? badge("报价未回复", "red") : badge("跟进中", "green")}
     </div>
     <section class="customer-time-card" aria-label="客户世界时间">
@@ -2235,7 +2581,9 @@ function renderCustomerDrawer(customer?: Customer) {
     </div>
     <div class="info-grid">
       <div class="info"><span>健康度</span><b>${customer.health}%</b></div>
-      <div class="info"><span>当前阶段</span><b>${escapeHtml(customer.stage)}</b></div>
+      <div class="info"><span>最高活跃阶段</span><b>${escapeHtml(pipelineStage)}</b></div>
+      <div class="info"><span>活跃商机数</span><b>${activeDealCount}</b></div>
+      <div class="info"><span>在手商机额</span><b>${money(pipelineAmount)}</b></div>
       <div class="info"><span>下一提醒</span><b>${escapeHtml(customer.nextReminder)}</b></div>
       <div class="info"><span>企微状态</span><b>${customer.wecomBound ? "已绑定" : "未绑定"}</b></div>
     </div>
@@ -2254,7 +2602,7 @@ function renderCustomerDrawer(customer?: Customer) {
     <div class="timeline">
       <div class="timeline-item"><b>企微摘要</b><span>${customer.wecomBound ? "客户已绑定企微，可归档会话摘要。" : "客户暂未绑定企微，建议补充联系方式。"}</span></div>
       <div class="timeline-item"><b>系统提醒</b><span>${escapeHtml(customer.nextReminder)}</span></div>
-      <div class="timeline-item"><b>客户阶段</b><span>${escapeHtml(customer.stage)} · ${customer.health}% 健康度</span></div>
+      <div class="timeline-item"><b>商机汇总</b><span>${escapeHtml(pipelineStage)} · ${activeDealCount} 个活跃商机 · ${money(pipelineAmount)}</span></div>
     </div>
     ${renderCustomerDealProgress(customer)}
   `;
@@ -4181,8 +4529,9 @@ async function exportCustomers() {
       公司名: customer.company,
       国家: customer.country,
       联系人: customer.contact,
-      阶段: customer.stage,
-      预计金额: customer.amount,
+      最高活跃商机阶段: customer.pipelineStage || "暂无活跃商机",
+      活跃商机数: customer.activeDealCount || 0,
+      在手商机额: customer.pipelineAmount || 0,
       健康度: customer.health,
       下一提醒: customer.nextReminder,
       企微绑定: customer.wecomBound ? "已绑定" : "未绑定"
@@ -5491,7 +5840,7 @@ function collectAiConfigPayload() {
     id: state.selectedAiConfigId || state.aiConfig?.id || undefined,
     provider: state.aiConfig?.provider || "openai",
     protocol: state.aiConfig?.protocol || "openai-compatible",
-    name: qs<HTMLInputElement>("#aiConfigName")?.value.trim() || "官网商机解析模型",
+    name: qs<HTMLInputElement>("#aiConfigName")?.value.trim() || "官网线索解析模型",
     baseUrl: qs<HTMLInputElement>("#aiBaseUrlInput")?.value.trim() || "https://api.openai.com/v1",
     model: qs<HTMLInputElement>("#aiModelInput")?.value.trim() || "gpt-4o-mini",
     apiKey: qs<HTMLInputElement>("#aiApiKeyInput")?.value.trim() || "",
@@ -5764,7 +6113,7 @@ function leadFinderDuplicateState(item: WebsiteOpportunity) {
     return sameCompany || (domain && docText.includes(domain));
   });
   if (item.customerId || duplicatedCustomer) return { text: "已有客户", tone: "amber" };
-  if (item.status === "synced") return { text: "已同步", tone: "green" };
+  if (item.leadId || item.status === "synced") return { text: "已入线索", tone: "green" };
   return { text: "新候选", tone: "green" };
 }
 
@@ -5871,7 +6220,7 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
   const duplicate = leadFinderDuplicateState(item);
   box.innerHTML = `
     <div class="prospect-detail-hero">
-      ${badge(item.status === "synced" ? "已转化" : "待跟进", item.status === "synced" ? "green" : "amber")} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} ${badge(duplicate.text, duplicate.tone)}
+      ${badge(item.status === "synced" ? "已入线索" : "待跟进", item.status === "synced" ? "green" : "amber")} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} ${badge(duplicate.text, duplicate.tone)}
       <h2>${escapeHtml(item.company)}</h2>
       <p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(item.business || "业务待维护")} · ${escapeHtml(websiteDomain(item.website || ""))}</p>
     </div>
@@ -5882,7 +6231,7 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
       <div class="prospect-field"><span>最近开发信</span><b>${item.lastDevelopmentEmailAt ? `${formatTime(item.lastDevelopmentEmailAt)} · ${escapeHtml(item.lastDevelopmentEmailSubject || "开发信")}` : "尚未发送"}</b></div>
       <div class="prospect-field" style="grid-column:1/-1"><span>说明</span><b>${escapeHtml(item.description || "暂无说明")}</b></div>
     </div>
-    <div class="inline-alert"><b>建议动作</b><span>${score >= 76 ? "优先发开发信并同步客户/商机，随后创建电话或WhatsApp跟进待办。" : "先补齐联系人和业务证据，再决定是否首轮触达。"}</span></div>
+    <div class="inline-alert"><b>建议动作</b><span>${score >= 76 ? "优先发开发信并加入线索中心，随后创建电话或WhatsApp跟进待办。" : "先补齐联系人和业务证据，再决定是否首轮触达。"}</span></div>
   `;
   if (!qs<HTMLInputElement>("#prospectMailTo")?.value.trim()) generateProspectMailDraft();
   else renderProspectMailPreview();
@@ -5910,7 +6259,7 @@ function renderProspectList() {
           <div class="prospect-item-top"><h3>${escapeHtml(item.company)}</h3><span class="prospect-score">${score}</span></div>
           <p>${escapeHtml(item.business || "业务待维护")}</p>
           <small>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website || ""))}</small>
-          <div class="prospect-meta-row">${badge(item.status === "synced" ? "已转化" : "待跟进", item.status === "synced" ? "green" : "amber")}${item.lastDevelopmentEmailAt ? badge("已发开发信", "green") : badge("未触达", "")}</div>
+          <div class="prospect-meta-row">${badge(item.status === "synced" ? "已入线索" : "待跟进", item.status === "synced" ? "green" : "amber")}${item.lastDevelopmentEmailAt ? badge("已发开发信", "green") : badge("未触达", "")}</div>
         </button>
       `;
     }).join("") : `<div class="empty-cell">暂无匹配线索。请调整筛选，或去自动获客生成新结果。</div>`;
@@ -5950,16 +6299,15 @@ async function syncSelectedProspect(button?: HTMLButtonElement) {
   }
   if (button) {
     button.disabled = true;
-    button.textContent = "转化中";
+    button.textContent = "加入中";
   }
   try {
-    const result = await api<{ created: Array<{ customer: Customer; deal: Deal; opportunity: WebsiteOpportunity }> }>("/api/tools/website-scrape/sync-opportunities", {
+    const result = await api<{ created: LeadSyncResult[] }>("/api/tools/website-scrape/sync-opportunities", {
       method: "POST",
       body: JSON.stringify({ opportunities })
     });
     result.created.forEach((item) => {
-      if (!state.customers.some((customer) => customer.id === item.customer.id)) state.customers.unshift(item.customer);
-      if (!state.deals.some((deal) => deal.id === item.deal.id)) state.deals.unshift(item.deal);
+      if (!state.leads.some((lead) => lead.id === item.lead.id)) state.leads.unshift(item.lead);
       const existing = state.websiteOpportunities.find((row) => row.id === item.opportunity.id || row.website === item.opportunity.website);
       if (existing) Object.assign(existing, item.opportunity);
       else state.websiteOpportunities.unshift(item.opportunity);
@@ -5968,14 +6316,12 @@ async function syncSelectedProspect(button?: HTMLButtonElement) {
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
-    renderCustomers(state.customers);
-    renderPipeline(state.deals);
-    void refreshDashboardOnly();
-    toast("已转为客户和商机");
+    renderLeads();
+    toast(`已加入 ${result.created.length} 条线索`);
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "转客户/商机";
+      button.textContent = "加入线索中心";
     }
   }
 }
@@ -6680,16 +7026,15 @@ async function syncLeadFinderRows(button?: HTMLButtonElement) {
   }
   if (button) {
     button.disabled = true;
-    button.textContent = "同步中";
+    button.textContent = "加入中";
   }
   try {
-    const result = await api<{ created: Array<{ customer: Customer; deal: Deal; opportunity: WebsiteOpportunity }> }>("/api/tools/website-scrape/sync-opportunities", {
+    const result = await api<{ created: LeadSyncResult[] }>("/api/tools/website-scrape/sync-opportunities", {
       method: "POST",
       body: JSON.stringify({ opportunities })
     });
     result.created.forEach((item) => {
-      if (!state.customers.some((customer) => customer.id === item.customer.id)) state.customers.unshift(item.customer);
-      if (!state.deals.some((deal) => deal.id === item.deal.id)) state.deals.unshift(item.deal);
+      if (!state.leads.some((lead) => lead.id === item.lead.id)) state.leads.unshift(item.lead);
       const existing = state.websiteOpportunities.find((row) => row.id === item.opportunity.id || row.website === item.opportunity.website);
       if (existing) Object.assign(existing, item.opportunity);
       else state.websiteOpportunities.unshift(item.opportunity);
@@ -6697,14 +7042,12 @@ async function syncLeadFinderRows(button?: HTMLButtonElement) {
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
-    renderCustomers(state.customers);
-    renderPipeline(state.deals);
-    void refreshDashboardOnly();
-    toast(`已同步 ${result.created.length} 条候选客户`);
+    renderLeads();
+    toast(`已加入 ${result.created.length} 条线索`);
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "同步客户/商机";
+      button.textContent = "加入线索中心";
     }
   }
 }
@@ -6811,21 +7154,20 @@ async function parseWebsiteOpportunities(button?: HTMLButtonElement) {
 async function syncWebsiteOpportunities(button?: HTMLButtonElement) {
   const opportunities = collectWebsiteRows();
   if (!opportunities.length) {
-    toast("请至少勾选一条官网商机", "error");
+    toast("请至少勾选一条官网线索候选", "error");
     return;
   }
   if (button) {
     button.disabled = true;
-    button.textContent = "同步中";
+    button.textContent = "加入中";
   }
   try {
-    const result = await api<{ created: Array<{ customer: Customer; deal: Deal; opportunity: WebsiteOpportunity }> }>("/api/tools/website-scrape/sync-opportunities", {
+    const result = await api<{ created: LeadSyncResult[] }>("/api/tools/website-scrape/sync-opportunities", {
       method: "POST",
       body: JSON.stringify({ opportunities })
     });
     result.created.forEach((item) => {
-      if (!state.customers.some((customer) => customer.id === item.customer.id)) state.customers.unshift(item.customer);
-      if (!state.deals.some((deal) => deal.id === item.deal.id)) state.deals.unshift(item.deal);
+      if (!state.leads.some((lead) => lead.id === item.lead.id)) state.leads.unshift(item.lead);
       const existing = state.websiteOpportunities.find((row) => row.id === item.opportunity.id || row.website === item.opportunity.website);
       if (existing) Object.assign(existing, item.opportunity);
       else state.websiteOpportunities.unshift(item.opportunity);
@@ -6833,14 +7175,12 @@ async function syncWebsiteOpportunities(button?: HTMLButtonElement) {
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
-    renderCustomers(state.customers);
-    renderPipeline(state.deals);
-    void refreshDashboardOnly();
-    toast(`已同步 ${result.created.length} 条官网商机`);
+    renderLeads();
+    toast(`已加入 ${result.created.length} 条线索`);
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "同步为商机";
+      button.textContent = "加入线索中心";
     }
   }
 }
@@ -7295,14 +7635,11 @@ function exportInstrumentPlanCsv() {
 
 function openCustomerModal(customer?: Customer) {
   const editing = Boolean(customer);
-  const stageOptions = ["询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"];
   openModal(editing ? "编辑客户" : "新增客户", `
     <div class="form-grid">
       <div class="form-field full"><label>公司名</label><input id="customerCompanyInput" placeholder="例如：示例进出口有限公司" value="${escapeHtml(customer?.company || "")}"></div>
       <div class="form-field"><label>联系人</label><input id="customerContactInput" value="${escapeHtml(customer?.contact || "待维护")}"></div>
       <div class="form-field"><label>国家</label><input id="customerCountryInput" value="${escapeHtml(customer?.country || "中国")}"></div>
-      <div class="form-field"><label>阶段</label><select id="customerStageInput">${stageOptions.map((stage) => `<option ${stage === customer?.stage ? "selected" : ""}>${stage}</option>`).join("")}</select></div>
-      <div class="form-field"><label>预计金额</label><input id="customerAmountInput" type="number" value="${customer?.amount ?? 12000}"></div>
       <div class="form-field"><label>下一提醒</label><input id="customerReminderInput" value="${escapeHtml(customer?.nextReminder || "明天 10:00")}"></div>
       <label class="form-field"><span>企微绑定</span><select id="customerWecomInput"><option value="false" ${customer?.wecomBound ? "" : "selected"}>未绑定</option><option value="true" ${customer?.wecomBound ? "selected" : ""}>已绑定</option></select></label>
       <div class="form-field full"><label>单据抬头</label><input id="customerBillingNameInput" value="${escapeHtml(customer?.billingName || customer?.company || "")}" placeholder="用于对外单据的英文/正式公司名"></div>
@@ -7330,8 +7667,6 @@ async function saveCustomer() {
     company,
     contact: qs<HTMLInputElement>("#customerContactInput")?.value || "待维护",
     country: qs<HTMLInputElement>("#customerCountryInput")?.value || "未知",
-    stage: qs<HTMLSelectElement>("#customerStageInput")?.value || "询盘",
-    amount: Number(qs<HTMLInputElement>("#customerAmountInput")?.value || 0),
     nextReminder: qs<HTMLInputElement>("#customerReminderInput")?.value || "明天 10:00",
     wecomBound: qs<HTMLSelectElement>("#customerWecomInput")?.value === "true",
     billingName: qs<HTMLInputElement>("#customerBillingNameInput")?.value.trim() || company,
@@ -7606,6 +7941,20 @@ function installEvents() {
   qsa<HTMLButtonElement>(".sidebar button[data-view]").forEach((button) => {
     button.addEventListener("click", () => activateNavView(button.dataset.view || "dashboard"));
   });
+  qs<HTMLButtonElement>("#leadNewButton")?.addEventListener("click", () => {
+    qs<HTMLElement>("#leadCreateForm")?.classList.toggle("is-hidden");
+  });
+  qs<HTMLButtonElement>("#leadCreateCancel")?.addEventListener("click", () => {
+    qs<HTMLElement>("#leadCreateForm")?.classList.add("is-hidden");
+  });
+  qs<HTMLFormElement>("#leadCreateForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void createLead(event.currentTarget as HTMLFormElement);
+  });
+  qs<HTMLInputElement>("#leadSearchInput")?.addEventListener("input", (event) => {
+    state.leadSearch = (event.target as HTMLInputElement).value;
+    renderLeads();
+  });
   ["#leadFinderGoalInput", "#leadSearchModeInput", "#leadSearchDepthInput", "#leadSearchLanguageInput", "#leadValidationInput", "#leadProductKeywords", "#leadCountries", "#leadIndustryInput", "#leadCustomerTypes", "#leadExcludeKeywords"].forEach((selector) => {
     qs<HTMLElement>(selector)?.addEventListener("input", renderLeadFinderSearchLinks);
     qs<HTMLElement>(selector)?.addEventListener("change", renderLeadFinderSearchLinks);
@@ -7720,7 +8069,7 @@ function installEvents() {
     input.addEventListener("change", () => renderDocumentPreview(collectDocumentDraft()));
   });
   qsa<HTMLButtonElement>("#tools .btn.primary").forEach((button) => {
-    if (button.textContent?.includes("同步为商机")) button.addEventListener("click", (event) => void syncWebsiteOpportunities(event.currentTarget as HTMLButtonElement));
+    if (button.textContent?.includes("加入线索中心")) button.addEventListener("click", (event) => void syncWebsiteOpportunities(event.currentTarget as HTMLButtonElement));
     else if (button.textContent?.includes("同步")) button.addEventListener("click", () => void syncOcrLead(button));
   });
   qsa<HTMLButtonElement>("#competitors .page-head .btn").forEach((button) => {

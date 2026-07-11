@@ -15,7 +15,14 @@ async function loginAsManager(page: import("@playwright/test").Page) {
 }
 
 async function openView(page: import("@playwright/test").Page, view: string) {
-  await page.locator(`.nav button[data-view="${view}"]`).click();
+  const button = page.locator(`.nav button[data-view="${view}"]`);
+  if (!(await button.isVisible())) {
+    const section = button.locator("xpath=ancestor::details[1]");
+    if (await section.count()) {
+      await section.locator("summary").click();
+    }
+  }
+  await button.click();
   await expect(page.locator(`#${view}`)).toHaveClass(/active/);
 }
 
@@ -91,19 +98,19 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(topContext).toHaveClass(/is-hidden/);
     await expect(page.locator("#topTodoCount")).toHaveText(/\d+/);
     await expect(page.locator("#topReminderCount")).toHaveText(/\d+/);
-    await expect(page.locator("[data-top-view='dashboard']")).toHaveClass(/active/);
+    await expect(page.locator("#topOpenTabs [data-tab-view='dashboard']")).toHaveClass(/active/);
 
     await page.locator("#topSearchInput").fill("考试");
     await page.locator("#topSearchInput").press("Enter");
     await expect(page.locator("#exam")).toHaveClass(/active/);
-    await expect(page.locator("[data-top-view='exam']")).toHaveClass(/active/);
+    await expect(page.locator("#topOpenTabs [data-tab-view='exam']")).toHaveClass(/active/);
     await expect(topSearch).not.toHaveClass(/is-hidden/);
     await expect(topContext).toHaveClass(/is-hidden/);
     await expect(topPrimary).toBeHidden();
 
-    await page.locator("[data-top-view='reports']").click();
+    await openView(page, "reports");
     await expect(page.locator("#reports")).toHaveClass(/active/);
-    await expect(page.locator("[data-top-view='reports']")).toHaveClass(/active/);
+    await expect(page.locator("#topOpenTabs [data-tab-view='reports']")).toHaveClass(/active/);
     await expect(topSearch).not.toHaveClass(/is-hidden/);
     await expect(topContext).toHaveClass(/is-hidden/);
     await expect(page.locator("#reports .page-head")).toContainText("导出 PDF");
@@ -442,17 +449,17 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#customers .page-head .btn.primary").click();
     await page.locator("#customerCompanyInput").fill(company);
     await page.locator("#customerContactInput").fill("Demo Contact");
-    await page.locator("#customerAmountInput").fill("36000");
     await page.locator("#saveCustomerButton").click();
 
     await expect(page.locator("#customers tbody")).toContainText(company);
     await expect(page.locator("#customers .drawer")).toContainText(company);
     await expect(page.locator("#customers .drawer")).toContainText("暂无关联商机");
+    await expect(page.locator("#customers .drawer")).toContainText("暂无活跃商机");
+    await expect(page.locator("#customers .drawer")).toContainText("活跃商机数");
     await expect(page.locator(".toast").last()).toContainText("客户已新增");
 
     await page.locator("#customers .drawer [data-edit-customer-drawer]").click();
     await page.locator("#customerCompanyInput").fill(companyEdited);
-    await page.locator("#customerStageInput").selectOption("谈判");
     await page.locator("#customerReminderInput").fill("明天 18:00");
     await page.locator("#customerWecomInput").selectOption("true");
     await page.locator("#saveCustomerButton").click();
@@ -467,7 +474,6 @@ test.describe("GoodJob CRM prototype pages", () => {
       await page.locator("#customers .page-head .btn.primary").click();
       await page.locator("#customerCompanyInput").fill(name);
       await page.locator("#customerContactInput").fill("Delete User");
-      await page.locator("#customerAmountInput").fill("12000");
       await page.locator("#saveCustomerButton").click();
       await expect(page.locator("#customers tbody")).toContainText(name);
     }
@@ -842,6 +848,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#aiConfigBadge")).toContainText(/规则解析|AI/);
     await page.locator("#aiConfigName").fill("自动化AI官网解析");
     await page.locator("#aiModelInput").fill("gpt-4o-mini");
+    await page.locator("#aiEnabledInput").uncheck();
     await page.locator("#aiSaveButton").click();
     await expect(page.locator(".toast").last()).toContainText("已保存");
     await page.locator("#websiteUseAiInput").check();
@@ -856,10 +863,12 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#websiteOpportunityRows")).toContainText("规则解析");
     await page.locator("#websiteOpportunityRows tr").first().locator("[data-website-field='company']").fill(`官网商机-${runId}`);
     await page.locator("#websiteOpportunityRows tr").first().locator("[data-website-field='business']").fill("压力仪表 / 流量仪表");
-    await page.locator("#tools .btn.primary", { hasText: "同步为商机" }).click();
-    await expect(page.locator(".toast").last()).toContainText("已同步 1 条官网商机");
+    await page.locator("#tools .btn.primary", { hasText: "加入线索中心" }).click();
+    await expect(page.locator(".toast").last()).toContainText("已加入 1 条线索");
+    await openView(page, "leads");
+    await expect(page.locator("#leadsTableBody")).toContainText(`官网商机-${runId}`);
     await openView(page, "pipeline");
-    await expect(page.locator("#pipeline .pipeline-strip")).toContainText(`官网商机-${runId} 官网产品机会`);
+    await expect(page.locator("#pipeline .pipeline-strip")).not.toContainText(`官网商机-${runId} 官网产品机会`);
   });
 
   test("lead finder page searches candidates and links to CRM workflow", async ({ page }) => {
@@ -895,10 +904,27 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#leadFinderTodoButton").click();
     await expect(page.locator(".toast").last()).toContainText("搜客跟进待办");
     await page.locator("#leadFinderSyncButton").click();
-    await expect(page.locator(".toast").last()).toContainText("已同步 1 条候选客户");
+    await expect(page.locator(".toast").last()).toContainText("已加入 1 条线索");
 
+    await openView(page, "leads");
+    const leadRow = page.locator("#leadsTableBody tr", { hasText: company }).first();
+    await expect(leadRow).toBeVisible();
+    await leadRow.click();
+    await page.locator("#leadConvertButton").click();
+    await expect(page.locator("#modalTitle")).toHaveText("确认并入库");
+    await page.locator('input[name="leadCustomerMode"][value="create"]').check();
+    await page.locator("#leadCreateDealInput").check();
+    const dealTitle = `${company} 首轮采购机会`;
+    await page.locator("#leadDealTitleInput").fill(dealTitle);
+    await page.locator("#leadDealProductInput").fill("压力仪表 / 智能搜客测试");
+    await page.locator("#leadDealAmountInput").fill("28000");
+    await page.locator("#leadDealNextActionInput").fill("确认技术参数并报价");
+    await page.locator("#confirmLeadConversionButton").click();
+    await expect(page.locator(".toast").last()).toContainText("已入客户并创建商机");
+    await expect(page.locator("#leadDrawer")).toContainText("已入客户");
+    await expect(page.locator("#leadDrawer")).toContainText("已建商机");
     await openView(page, "pipeline");
-    await expect(page.locator("#pipeline .pipeline-strip")).toContainText(`${company} 官网产品机会`);
+    await expect(page.locator("#pipeline .pipeline-strip")).toContainText(dealTitle);
     await page.locator("#topSearchInput").fill("搜客");
     await page.locator("#topSearchInput").press("Enter");
     await expect(page.locator("#lead-finder")).toHaveClass(/active/);
@@ -939,7 +965,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#profileSenderName").fill("Alex Export");
     await page.locator("#profileEmailSignature").fill("Best regards\\nAlex Export\\nGoodJob CRM");
     await page.locator("#profileSaveButton").click();
-    await expect(page.locator(".toast").last()).toContainText("发件邮箱已绑定");
+    await expect(page.locator(".toast").last()).toContainText("个人邮箱配置已保存");
     await expect(page.locator("#profileEmailStatus")).toContainText(outboundEmail);
 
     // 开发信触达已迁移到「搜客清单」页执行；个人主页只负责发件邮箱与签名绑定。
