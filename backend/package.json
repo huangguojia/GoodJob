@@ -9,11 +9,14 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "start:mysql": "CRM_STORE=mysql node dist/server.js",
-    "test": "NODE_ENV=test tsx src/self-test.ts"
+    "test": "NODE_ENV=test tsx src/self-test.ts",
+    "test:security": "NODE_ENV=test JWT_SECRET=goodjob-security-test-secret-at-least-32-characters tsx src/security-test.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
     "mysql2": "^3.22.5",
     "nodemailer": "^9.0.3",

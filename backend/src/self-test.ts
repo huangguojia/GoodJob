@@ -104,6 +104,12 @@ try {
     headers: { authorization: `Bearer ${salesToken}` }
   });
   if (crossOcr.response.status !== 404) throw new Error("ocr job must be personal isolated");
+  const invalidOcr = await request("/api/tools/ocr/jobs/ocr1/recognize", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ confidence: 101, company: "x".repeat(201), unexpected: "must be rejected" })
+  });
+  if (invalidOcr.response.status !== 400) throw new Error("ocr recognition input must be bounded");
 
   const aiConfig = await request("/api/tools/ai-config", {
     method: "POST",
@@ -163,7 +169,7 @@ try {
       smtpPassword: "test-smtp-password"
     })
   });
-  if (!profileBind.response.ok || profileBind.json.user?.outboundEmail !== "shirley.sender@example.com" || !profileBind.json.user?.hasSmtpPassword || !profileBind.json.token) {
+  if (!profileBind.response.ok || profileBind.json.user?.outboundEmail !== "shirley.sender@example.com" || !profileBind.json.user?.hasSmtpPassword) {
     throw new Error("profile email binding failed");
   }
 
@@ -398,7 +404,7 @@ try {
   const websitePreview = await request("/api/tools/website-scrape/preview", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ urls: ["https://example-instrument.test"] })
+    body: JSON.stringify({ urls: ["https://example.com"] })
   });
   if (!websitePreview.response.ok || !websitePreview.json.opportunities?.[0]?.company) throw new Error("website scrape preview failed");
   const previewOpportunity = websitePreview.json.opportunities[0];
@@ -473,61 +479,30 @@ try {
   if (!websiteSyncRepeat.response.ok || !websiteSyncRepeat.json.created?.[0]?.duplicate || websiteSyncRepeat.json.created?.[0]?.lead?.id !== websiteSync.json.created?.[0]?.lead?.id) {
     throw new Error("website opportunity sync must be idempotent");
   }
-  const sourceOpportunityId = `website_partner_${Date.now()}`;
-  const sourceWebsite = `https://partner-${Date.now()}.example`;
-  const sourceSync = await request("/api/tools/website-scrape/sync-opportunities", {
+  const forgedSourceSync = await request("/api/tools/website-scrape/sync-opportunities", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({
       opportunities: [{
-        id: sourceOpportunityId,
+        id: `website_partner_${Date.now()}`,
         company: "自动化合作目录候选",
         business: "温度仪表",
         country: "德国",
-        website: sourceWebsite,
+        website: "https://partner.example",
         contact: "Purchasing Team",
         contactInfo: "buyer@partner-source.example",
-        description: "验证候选真实来源进入线索后保持不变",
+        description: "客户端伪造的未核验候选不得直接进入线索",
         source: "partner-directory",
         sourceLabel: "合作伙伴目录"
       }]
     })
   });
-  const sourceCreated = sourceSync.json.created?.[0];
-  if (!sourceSync.response.ok
-    || sourceCreated?.lead?.sourceChannel !== "partner-directory"
-    || sourceCreated?.lead?.source !== "合作伙伴目录"
-    || sourceCreated?.opportunity?.source !== "partner-directory"
-    || sourceCreated?.opportunity?.sourceLabel !== "合作伙伴目录"
-    || sourceCreated?.sourceEvent?.channel !== "partner-directory"
-    || !String(sourceCreated?.sourceEvent?.rawPayload || "").includes("\"source\":\"partner-directory\"")) {
-    throw new Error("website opportunity source must be preserved");
-  }
-  const sourceSyncRepeat = await request("/api/tools/website-scrape/sync-opportunities", {
-    method: "POST",
-    headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({
-      opportunities: [{
-        id: sourceOpportunityId,
-        company: "自动化合作目录候选",
-        website: sourceWebsite,
-        source: "partner-directory",
-        sourceLabel: "合作伙伴目录"
-      }]
-    })
-  });
-  const leadsAfterSourceRepeat = await request("/api/leads", { headers: { authorization: `Bearer ${salesToken}` } });
-  if (!sourceSyncRepeat.response.ok
-    || !sourceSyncRepeat.json.created?.[0]?.duplicate
-    || sourceSyncRepeat.json.created?.[0]?.lead?.id !== sourceCreated.lead.id
-    || leadsAfterSourceRepeat.json.leads.filter((lead: { externalId: string }) => lead.externalId === sourceOpportunityId).length !== 1) {
-    throw new Error("website source sync repeat must not create a second lead");
-  }
+  if (forgedSourceSync.response.status !== 404) throw new Error("unstored website opportunity must not bypass verification");
 
   const miaWebsitePreview = await request("/api/tools/website-scrape/preview", {
     method: "POST",
     headers: { authorization: `Bearer ${miaToken}` },
-    body: JSON.stringify({ urls: [`https://mia-isolated-${Date.now()}.example`] })
+    body: JSON.stringify({ urls: ["https://example.net"] })
   });
   const miaOpportunity = miaWebsitePreview.json.opportunities?.[0];
   if (!miaWebsitePreview.response.ok || !miaOpportunity?.id || miaOpportunity.ownerId !== "u_sales_mia") {
@@ -585,7 +560,7 @@ try {
   const excludedPreview = await request("/api/tools/website-scrape/preview", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ urls: [`https://exclude-restore-${Date.now()}.example`] })
+    body: JSON.stringify({ urls: ["https://example.org"] })
   });
   const excludedOpportunity = excludedPreview.json.opportunities?.[0];
   const excludePreview = await request("/api/prospect-list/batch", {
@@ -611,17 +586,17 @@ try {
     headers: { authorization: `Bearer ${miaToken}` },
     body: JSON.stringify({
       company: "Mia 同编号隔离线索",
-      source: "合作伙伴目录",
+      source: websiteSync.json.created[0].lead.source,
       sourceType: "outbound",
-      sourceChannel: "partner-directory",
-      externalId: sourceOpportunityId,
+      sourceChannel: websiteSync.json.created[0].lead.sourceChannel,
+      externalId: previewOpportunity.id,
       sourceUrl: `https://mia-source-${Date.now()}.example`
     })
   });
   if (!miaSourceCollision.response.ok
     || miaSourceCollision.json.duplicate
     || miaSourceCollision.json.lead?.ownerId !== "u_sales_mia"
-    || miaSourceCollision.json.lead?.id === sourceCreated.lead.id) {
+    || miaSourceCollision.json.lead?.id === websiteSync.json.created[0].lead.id) {
     throw new Error("source idempotency must remain isolated by salesperson");
   }
 
@@ -1157,9 +1132,14 @@ try {
     headers: { authorization: `Bearer ${salesToken}` }
   });
   if (!reminderRun.response.ok || reminderRun.json.reminder.lastRunBy !== "u_sales_shirley" || reminderRun.json.reminder.lastMatchedCount !== reminderRun.json.matchedCount) throw new Error("reminder rule run failed");
-  const reminderRunAgain = await request(`/api/reminders/${reminder.json.reminder.id}/run`, {
+  const managerReminderRun = await request(`/api/reminders/${reminder.json.reminder.id}/run`, {
     method: "POST",
     headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (managerReminderRun.response.status !== 403) throw new Error("manager must not execute salesperson personal reminder rule");
+  const reminderRunAgain = await request(`/api/reminders/${reminder.json.reminder.id}/run`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` }
   });
   if (!reminderRunAgain.response.ok || reminderRunAgain.json.createdCount !== 0 || reminderRunAgain.json.skippedCount !== reminderRunAgain.json.matchedCount) throw new Error("reminder stable dedupe failed");
   const salesReminderTodos = await request("/api/todos", { headers: { authorization: `Bearer ${salesToken}` } });
@@ -1424,6 +1404,20 @@ try {
   });
   if (!tradeDocuments.response.ok || !tradeDocuments.json.documents.some((item: { id: string }) => item.id === tradeDocument.json.document.id)) throw new Error("trade document list failed");
 
+  const tradeDocumentSubmit = await request(`/api/trade-documents/${tradeDocument.json.document.id}/submit-approval`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ note: "业务自测提交审批" })
+  });
+  if (!tradeDocumentSubmit.response.ok || tradeDocumentSubmit.json.document.status !== "pending_approval") throw new Error("trade document submit approval failed");
+
+  const tradeDocumentApprove = await request(`/api/trade-documents/${tradeDocument.json.document.id}/approve`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({ note: "业务自测审批通过" })
+  });
+  if (!tradeDocumentApprove.response.ok || tradeDocumentApprove.json.document.status !== "approved") throw new Error("trade document approval failed");
+
   const tradeDocumentExport = await request(`/api/trade-documents/${tradeDocument.json.document.id}/export`, {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` }
@@ -1436,8 +1430,22 @@ try {
   if (!examDetail.response.ok || !Array.isArray(examDetail.json.questions) || examDetail.json.questions.length < 1) {
     throw new Error("exam detail failed");
   }
+  if (examDetail.json.questions.some((question: { answerIndex: number; answerIndexes?: number[]; explanation?: string }) =>
+    question.answerIndex !== -1 || question.answerIndexes?.length || question.explanation
+  )) {
+    throw new Error("sales exam detail must redact answers");
+  }
+  const managerExamDetail = await request("/api/exams/e1/detail", {
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (!managerExamDetail.response.ok || managerExamDetail.json.questions.length !== examDetail.json.questions.length) {
+    throw new Error("manager exam detail failed");
+  }
   const examAnswers = Object.fromEntries(
-    examDetail.json.questions.map((question: { id: string; answerIndex: number }) => [question.id, question.answerIndex])
+    managerExamDetail.json.questions.map((question: { id: string; answerIndex: number; answerIndexes?: number[] }) => [
+      question.id,
+      question.answerIndexes?.length ? question.answerIndexes : question.answerIndex
+    ])
   );
   const exam = await request("/api/exams/e1/submit", {
     method: "POST",
@@ -1551,9 +1559,20 @@ try {
     headers: { authorization: `Bearer ${salesToken}` }
   });
   if (!createdExamDetail.response.ok || createdExamDetail.json.questions.length !== questionIds.length) throw new Error("created exam detail failed");
+  if (createdExamDetail.json.questions.some((question: { answerIndex: number; answerIndexes?: number[]; explanation?: string }) =>
+    question.answerIndex !== -1 || question.answerIndexes?.length || question.explanation
+  )) {
+    throw new Error("created sales exam detail must redact answers");
+  }
+  const managerCreatedExamDetail = await request(`/api/exams/${createdExam.json.exam.id}/detail`, {
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (!managerCreatedExamDetail.response.ok || managerCreatedExamDetail.json.questions.length !== questionIds.length) {
+    throw new Error("manager created exam detail failed");
+  }
 
   const salesExamAnswers = Object.fromEntries(
-    createdExamDetail.json.questions.map((question: { id: string; answerIndex: number; answerIndexes?: number[] }) => [
+    managerCreatedExamDetail.json.questions.map((question: { id: string; answerIndex: number; answerIndexes?: number[] }) => [
       question.id,
       question.answerIndexes?.length ? question.answerIndexes : question.answerIndex
     ])

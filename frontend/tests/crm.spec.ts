@@ -41,12 +41,20 @@ async function apiFromPage<T>(
   init: { method?: string; body?: unknown } = {}
 ) {
   return page.evaluate(async ({ requestPath, requestInit }) => {
-    const token = localStorage.getItem("gj_token");
+    const method = requestInit.method || "GET";
+    const csrfToken = document.cookie
+      .split("; ")
+      .find((part) => part.startsWith("gj_csrf="))
+      ?.split("=")
+      .slice(1)
+      .join("=");
     const response = await fetch(requestPath, {
-      method: requestInit.method || "GET",
+      method,
       headers: {
         "content-type": "application/json",
-        ...(token ? { authorization: `Bearer ${token}` } : {})
+        ...(!["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase()) && csrfToken
+          ? { "x-csrf-token": decodeURIComponent(csrfToken) }
+          : {})
       },
       body: requestInit.body === undefined ? undefined : JSON.stringify(requestInit.body)
     });
@@ -773,6 +781,8 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator(".toast").last()).toContainText("商机已更新");
     await expect(dealCard()).toContainText("自动化差压仪表");
     await expect(dealCard()).toContainText("确认修订报价");
+    await page.locator("#closeDealDrawerButton").click();
+    await expect(page.locator("#dealDrawerBackdrop")).not.toHaveClass(/open/);
 
     await dealCard().getByRole("button", { name: "记录进展" }).click();
     await page.locator("#dealEventContentInput").fill("客户确认技术参数，允许准备正式报价");
@@ -1064,12 +1074,17 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(row.getByRole("button", { name: "本月已锁定" })).toBeDisabled();
 
     const rejection = await page.evaluate(async ({ recordId }) => {
-      const token = localStorage.getItem("gj_token");
+      const csrfToken = document.cookie
+        .split("; ")
+        .find((part) => part.startsWith("gj_csrf="))
+        ?.split("=")
+        .slice(1)
+        .join("=");
       const response = await fetch(`/api/commission/sales-records/${recordId}/confirm`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          ...(token ? { authorization: `Bearer ${token}` } : {})
+          ...(csrfToken ? { "x-csrf-token": decodeURIComponent(csrfToken) } : {})
         }
       });
       return { status: response.status, body: await response.json() };
@@ -1211,10 +1226,8 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#documentList")).toContainText(`${docTitle} v2`);
 
     await page.locator("#exportDocumentPdfButton").click();
-    await expect(page.locator(".toast").last()).toContainText("已生成 PDF 导出任务");
+    await expect(page.locator(".toast").last()).toContainText("已打印单据草稿");
     await expect(page.locator("body")).toHaveAttribute("data-print-called", "true");
-    await openView(page, "imports");
-    await expect(page.locator("#imports tbody")).toContainText("单据 PDF 导出");
   });
 
   test("document workflow remains usable on mobile", async ({ page }) => {
@@ -1419,14 +1432,14 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#aiSaveButton").click();
     await expect(page.locator(".toast").last()).toContainText("已保存");
     await page.locator("#websiteUseAiInput").check();
-    await page.locator("#websiteUrlInput").fill(`https://${websiteCompany}.com`);
+    await page.locator("#websiteUrlInput").fill(`https://example.com/${websiteCompany}`);
     await page.locator("#tools .section-head .btn", { hasText: "解析官网" }).click();
     const aiToast = await page.locator(".toast").last().textContent();
     if (aiToast?.includes("请先保存并启用 AI 配置")) {
       await page.locator("#websiteUseAiInput").uncheck();
       await page.locator("#tools .section-head .btn", { hasText: "解析官网" }).click();
     }
-    await expect(page.locator("#websiteOpportunityRows")).toContainText(websiteCompany);
+    await expect(page.locator("#websiteOpportunityRows")).toContainText("example");
     await expect(page.locator("#websiteOpportunityRows")).toContainText("规则解析");
     const websiteRow = page.locator("#websiteOpportunityRows tr[data-website-opportunity-id]").first();
     const websiteCandidateId = await websiteRow.getAttribute("data-website-opportunity-id");
@@ -1603,7 +1616,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator(".lead-advanced-settings")).toHaveAttribute("open", "");
     await expect(page.locator(".lead-queue-panel")).toHaveAttribute("open", "");
 
-    await page.locator("#leadFinderUrlInput").fill(`https://${company}.com`);
+    await page.locator("#leadFinderUrlInput").fill(`https://example.org/${company}`);
     await page.route("**/api/tools/website-scrape/preview", async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 500));
       await route.continue();
@@ -1613,12 +1626,12 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(jobCard).toContainText("进行中");
     await jobCard.locator("[data-lead-job-toggle]").click();
     await expect(jobCard).toContainText("正在检索公开API");
-    await expect(page.locator("#leadFinderResultRows")).toContainText(company);
+    await expect(page.locator("#leadFinderResultRows")).toContainText("example.org");
     await expect(page.locator("#leadFinderJobList")).toContainText("已完成");
-    await expect(jobCard).toContainText(company);
+    await expect(jobCard).toContainText("example.org");
     await expect(page.locator("#leadFinderPendingCount")).not.toHaveText("0");
 
-    const firstRow = page.locator("#leadFinderResultRows tr[data-lead-id]").first();
+    let firstRow = page.locator("#leadFinderResultRows tr[data-lead-id]").first();
     await expect(firstRow.locator("[data-lead-select]")).not.toBeChecked();
     await firstRow.locator("[data-lead-field='company']").fill(company);
     await firstRow.locator("[data-lead-field='business']").fill("压力仪表 / 智能搜客测试");
@@ -1644,8 +1657,12 @@ test.describe("GoodJob CRM prototype pages", () => {
       method: "PATCH",
       body: { ids: [leadFinderCandidateId], action: "mark-contactable" }
     });
+    await page.reload();
+    await openView(page, "lead-finder");
+    firstRow = page.locator(`#leadFinderResultRows tr[data-lead-id="${leadFinderCandidateId}"]`);
+    await expect(firstRow.locator("[data-lead-select]")).toBeEnabled();
     await firstRow.locator("[data-lead-select]").check();
-    await firstRow.click();
+    await firstRow.locator("[data-lead-pick]").evaluate((cell: HTMLElement) => cell.click());
     await expect(page.locator("#leadFinderDetail")).toContainText(company);
     await expect(page.locator("#leadFinderDetail")).toContainText("来源与外部编号");
     await expect(page.locator("#leadFinderDetail")).toContainText("重复与归属");
@@ -1683,6 +1700,14 @@ test.describe("GoodJob CRM prototype pages", () => {
   });
 
   test("lead finder pagination and mobile layout remain usable", async ({ page }) => {
+    await apiFromPage(page, "/api/tools/website-scrape/preview", {
+      method: "POST",
+      body: {
+        urls: Array.from({ length: 12 }, (_, index) => `https://example.net/pagination-${runId}-${index + 1}`),
+        useAi: false
+      }
+    });
+    await page.reload();
     await openView(page, "lead-finder");
     await expect(page.locator("#leadFinderPageSummary")).toContainText(/共 \d+ 条/);
     await expect(page.locator("#leadFinderResultRows tr[data-lead-id]")).toHaveCount(10);
@@ -1704,7 +1729,7 @@ test.describe("GoodJob CRM prototype pages", () => {
       {
         method: "POST",
         body: {
-          urls: Array.from({ length: 12 }, (_, index) => `http://127.0.0.1:6199/prospect-${runId}-${index + 1}`),
+          urls: Array.from({ length: 12 }, (_, index) => `https://example.com/prospect-${runId}-${index + 1}`),
           useAi: false
         }
       }
@@ -1718,7 +1743,7 @@ test.describe("GoodJob CRM prototype pages", () => {
           company: `${prefix}-${String(index + 1).padStart(2, "0")}`,
           business: "工业仪表分销",
           country: index % 2 ? "德国" : "波兰",
-          website: `http://127.0.0.1:6199/prospect-${runId}-${index + 1}`,
+          website: `https://example.com/prospect-${runId}-${index + 1}`,
           contact: "待核验采购联系人",
           contactInfo: "待维护",
           description: "E2E 搜客清单核验流程"
@@ -1794,7 +1819,7 @@ test.describe("GoodJob CRM prototype pages", () => {
         company: secondCompany,
         business: "工业仪表分销",
         country: "德国",
-        website: `http://127.0.0.1:6199/prospect-${runId}-2`,
+        website: `https://example.com/prospect-${runId}-2`,
         contact: "Mark Buyer",
         contactInfo: `mark.${runId}@example.com`,
         description: "已核验第二联系人"
@@ -1847,7 +1872,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#ai-config")).toContainText("OpenAI GPT");
 
     await page.locator("#gptConfigName").fill(`自动化GPT配置-${runId}`);
-    await page.locator("#gptBaseUrlInput").fill("http://127.0.0.1:1/v1");
+    await page.locator("#gptBaseUrlInput").fill("https://example.com/v1");
     await page.locator("#gptModelInput").fill("gpt-4o-mini");
     await page.locator("#gptApiKeyInput").fill(`sk-test-${runId}`);
     await page.locator("#gptEnabledSelect").selectOption("true");

@@ -1215,10 +1215,13 @@ const roleLabel: Record<Role, string> = {
 };
 
 const storage = {
-  token: "gj_token",
   user: "gj_user",
   dashboardCache: "gj_dashboard_cache"
 };
+
+function cookieValue(name: string) {
+  return document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) || "";
+}
 
 function qs<T extends Element>(selector: string, root: ParentNode = document): T | null {
   return root.querySelector(selector) as T | null;
@@ -1372,28 +1375,34 @@ function closeModal() {
 }
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = localStorage.getItem(storage.token);
+  const method = (init.method || "GET").toUpperCase();
+  const csrfToken = cookieValue("gj_csrf");
   const response = await fetch(path, {
     ...init,
+    credentials: "same-origin",
     headers: {
       "content-type": "application/json",
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(!["GET", "HEAD", "OPTIONS"].includes(method) && csrfToken ? { "x-csrf-token": csrfToken } : {}),
       ...(init.headers || {})
     }
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({ message: "请求失败" }));
+    if (response.status === 401 && path !== "/api/auth/login") {
+      localStorage.removeItem(storage.user);
+      state.user = null;
+      document.body.classList.remove("is-authenticated");
+    }
     throw new Error(body.message || "请求失败");
   }
   return response.json() as Promise<T>;
 }
 
 async function loginWithPassword(email: string, password: string) {
-  const result = await api<{ token: string; user: User }>("/api/auth/login", {
+  const result = await api<{ user: User }>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password })
   });
-  localStorage.setItem(storage.token, result.token);
   localStorage.setItem(storage.user, JSON.stringify(result.user));
   state.user = result.user;
   applyAuthedUser(result.user);
@@ -1553,10 +1562,9 @@ function renderDevelopmentEmailPreview() {
   ].join("\n");
 }
 
-function updateStoredUser(user: User, token?: string) {
+function updateStoredUser(user: User) {
   state.user = user;
   localStorage.setItem(storage.user, JSON.stringify(user));
-  if (token) localStorage.setItem(storage.token, token);
   applyAuthedUser(user);
 }
 
@@ -1575,11 +1583,11 @@ async function saveProfileEmailBinding(button?: HTMLButtonElement, clearSmtpPass
     button.textContent = clearSmtpPassword ? "清空中" : "保存中";
   }
   try {
-    const result = await api<{ user: User; token: string }>("/api/profile/email-binding", {
+    const result = await api<{ user: User }>("/api/profile/email-binding", {
       method: "PATCH",
       body: JSON.stringify({ outboundEmail, emailSenderName, emailSignature, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPassword, clearSmtpPassword })
     });
-    updateStoredUser(result.user, result.token);
+    updateStoredUser(result.user);
     toast(outboundEmail ? "个人邮箱配置已保存" : "个人邮箱配置已清空");
   } catch (error) {
     toast(error instanceof Error ? error.message : "个人邮箱配置保存失败", "error");
@@ -3992,13 +4000,7 @@ async function printDealDocument(id: string) {
   state.selectedDocumentId = created.document.id;
   activateNavView("documents");
   renderTradeDocuments(state.tradeDocuments);
-  const exported = await api<{ document: TradeDocument; job: ImportExportJob; fileName: string }>(`/api/trade-documents/${created.document.id}/export`, { method: "POST" });
-  state.tradeDocuments = state.tradeDocuments.map((document) => document.id === exported.document.id ? exported.document : document);
-  state.jobs.unshift(exported.job);
-  state.selectedDocumentId = exported.document.id;
-  renderTradeDocuments(state.tradeDocuments);
-  renderJobs(state.jobs);
-  toast(`已按客户资料生成并打印：${exported.fileName}`);
+  toast("已按客户资料生成并打印 PI 草稿；审批通过后可正式导出");
   printDocumentPreview();
 }
 
@@ -6715,6 +6717,11 @@ async function exportTradeDocumentPdf() {
     ? current
     : await saveTradeDocument();
   if (!saved) return;
+  if (saved.status !== "approved" && saved.status !== "exported") {
+    toast("已打印单据草稿；审批通过后会生成正式导出记录");
+    printDocumentPreview();
+    return;
+  }
   const result = await api<{ document: TradeDocument; job: ImportExportJob; fileName: string }>(`/api/trade-documents/${saved.id}/export`, { method: "POST" });
   state.tradeDocuments = state.tradeDocuments.map((document) => document.id === result.document.id ? result.document : document);
   state.jobs.unshift(result.job);
@@ -6755,11 +6762,26 @@ function parseBooleanCell(value: unknown) {
   return ["true", "1", "yes", "y", "是", "已绑定", "绑定"].includes(text);
 }
 
+const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
+const ALLOWED_IMPORT_EXTENSIONS = new Set(["xlsx", "xls", "csv"]);
+
+function assertImportFile(file: File) {
+  const extension = file.name.split(".").pop()?.toLowerCase() || "";
+  if (!ALLOWED_IMPORT_EXTENSIONS.has(extension)) {
+    throw new Error("仅支持 XLSX、XLS 或 CSV 文件");
+  }
+  if (file.size > MAX_IMPORT_FILE_BYTES) {
+    throw new Error("导入文件不能超过 5 MB");
+  }
+}
+
 async function parseCustomerImportFile(file: File): Promise<CustomerImportRow[]> {
+  assertImportFile(file);
   const buffer = await file.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: "array" });
+  const workbook = XLSX.read(buffer, { type: "array", dense: true, sheetRows: 2002 });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+  if (rows.length > 2000) throw new Error("客户导入单次最多支持 2000 行");
   return rows.map((row) => {
     const company = String(rowValue(row, ["公司名", "客户", "客户名称", "公司", "客户公司", "company", "Company"])).trim();
     return {
@@ -7592,10 +7614,12 @@ function rowValue(row: Record<string, unknown>, keys: string[]) {
 }
 
 async function parseQuestionFile(file: File): Promise<ExamImportQuestion[]> {
+  assertImportFile(file);
   const buffer = await file.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: "array" });
+  const workbook = XLSX.read(buffer, { type: "array", dense: true, sheetRows: 502 });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+  if (rows.length > 500) throw new Error("题库导入单次最多支持 500 行");
   return rows.map((row) => {
     const options = [
       rowValue(row, ["选项A", "选项 A", "A", "optionA", "Option A"]),
@@ -10894,12 +10918,13 @@ function installEvents() {
     const password = qs<HTMLInputElement>("#loginPassword")?.value || "";
     void loginWithPassword(email, password).catch((error) => toast(error instanceof Error ? error.message : "登录失败", "error"));
   }, true);
-  qs<HTMLButtonElement>("#logoutButton")?.addEventListener("click", () => {
+  qs<HTMLButtonElement>("#logoutButton")?.addEventListener("click", async () => {
     if (memoDirty && !window.confirm("当前备忘仍仅保存在本机。退出将清除此账号的本机草稿，确认退出？")) return;
     clearCurrentUserMemoDrafts();
-    localStorage.removeItem(storage.token);
+    await api("/api/auth/logout", { method: "POST" }).catch(() => null);
     localStorage.removeItem(storage.user);
     state.user = null;
+    document.body.classList.remove("is-authenticated");
     toast("已退出登录");
   });
   qs<HTMLButtonElement>("#profileEntryButton")?.addEventListener("click", () => activateNavView("profile", () => renderProfile()));
@@ -11551,13 +11576,12 @@ function resolveTopbarSearchView(rawValue: string) {
 
 async function restoreSession() {
   const rawUser = localStorage.getItem(storage.user);
-  const token = localStorage.getItem(storage.token);
-  if (!rawUser || !token) return;
+  localStorage.removeItem("gj_token");
+  if (!rawUser) return;
   let user: User;
   try {
     ({ user } = await api<{ user: User }>("/api/auth/me"));
   } catch {
-    localStorage.removeItem(storage.token);
     localStorage.removeItem(storage.user);
     return;
   }

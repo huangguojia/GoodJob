@@ -9,6 +9,7 @@ export interface User {
   teamId: string;
   avatar: string;
   status: "active" | "disabled";
+  authVersion?: number;
   outboundEmail?: string;
   emailSenderName?: string;
   emailSignature?: string;
@@ -30,6 +31,7 @@ export interface SessionUser {
   role: Role;
   teamId: string;
   avatar: string;
+  authVersion: number;
   outboundEmail?: string;
   emailSenderName?: string;
   emailSignature?: string;

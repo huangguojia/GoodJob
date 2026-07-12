@@ -1,0 +1,41 @@
+GoodJob CRM 管理员登录账号说明
+
+一、本地开发和演示环境
+
+管理员账号：admin@goodjob.com
+管理员密码：goodjob123
+
+超级管理员账号：super@goodjob.com
+超级管理员密码：goodjob123
+
+以上账号来自本地演示数据，只能用于开发、自测和内部演示，不得用于公网生产环境。
+
+二、Ubuntu 生产环境首次部署
+
+生产管理员账号和密码由部署命令中的以下参数决定：
+
+INITIAL_ADMIN_EMAIL
+INITIAL_ADMIN_PASSWORD
+
+示例：
+
+sudo env NON_INTERACTIVE=true \
+  DOMAIN=crm.example.com \
+  ENABLE_HTTPS=true \
+  LETSENCRYPT_EMAIL=ops@example.com \
+  INITIAL_ADMIN_EMAIL=admin@example.com \
+  INITIAL_ADMIN_PASSWORD='请替换为独立的高强度密码' \
+  bash deploy-ubuntu.sh
+
+安全要求：
+
+1. 生产密码至少 12 位，建议使用 16 位以上随机密码。
+2. 不得将生产密码、数据库密码、JWT_SECRET 或邮箱授权码提交到 SVN。
+3. 首次登录后应立即在账号管理中修改初始密码。
+4. 管理员账号仅用于账号管理、审批和系统配置，日常跟进客户应使用独立业务员账号。
+5. 人员离职、调岗或账号疑似泄露时，应立即停用账号或重置密码，旧登录会话会随即失效。
+6. 公网部署必须启用 HTTPS，并确保 SESSION_COOKIE_SECURE=true。
+
+注意：
+
+生产数据库一旦已创建管理员，后续修改部署环境变量不会自动修改该账号密码，应由超级管理员在系统的账号管理中重置。

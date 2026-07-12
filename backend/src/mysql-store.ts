@@ -1,4 +1,5 @@
 import mysql from "mysql2/promise";
+import { hashPassword } from "./auth.js";
 import { aiModelConfigs, caseStudies, commissionCalculations, commissionExports, commissionItems, commissionProducts, commissionRules, competitors, customerActivities, customers, dealEvents, deals, examAttempts, examQuestionLinks, examQuestions, exams, importExportJobs, knowledgeAssets, leadActivities, leadSourceConfigs, leadSourceEvents, leads, memos, monthlySalesRecords, ocrJobs, planTasks, planTemplates, problems, reminders, salesRecordAudits, todos, tradeDocuments, users, wecomMessages, websiteOpportunities, whatsappBindings, whatsappMessages } from "./data.js";
 import type { CrmStore } from "./store.js";
 import type { WhatsAppBinding, WhatsAppMessage } from "./types.js";
@@ -56,7 +57,26 @@ export async function createMysqlStore(): Promise<CrmStore> {
   };
 
   if (!store.users.length) {
-    store.users.push(...users);
+    if (process.env.NODE_ENV === "production") {
+      const email = process.env.INITIAL_ADMIN_EMAIL?.trim().toLowerCase();
+      const password = process.env.INITIAL_ADMIN_PASSWORD || "";
+      if (!email || password.length < 12) {
+        throw new Error("首次生产部署必须配置 INITIAL_ADMIN_EMAIL 和至少 12 位的 INITIAL_ADMIN_PASSWORD");
+      }
+      store.users.push({
+        id: "u_initial_super_admin",
+        name: process.env.INITIAL_ADMIN_NAME?.trim() || "Super Admin",
+        email,
+        password: await hashPassword(password),
+        role: "super_admin",
+        teamId: "all",
+        avatar: "SA",
+        status: "active",
+        authVersion: 1
+      });
+    } else {
+      store.users.push(...users);
+    }
     store.customers.push(...customers);
     store.customerActivities.push(...customerActivities);
     store.leads.push(...leads);
@@ -140,7 +160,9 @@ export async function createMysqlStore(): Promise<CrmStore> {
     store.examAttempts.push(...examAttempts);
     await store.persist();
   }
-  const missingSeedUsers = users.filter((seedUser) => !store.users.some((user) => user.id === seedUser.id || user.email === seedUser.email));
+  const missingSeedUsers = process.env.NODE_ENV === "production"
+    ? []
+    : users.filter((seedUser) => !store.users.some((user) => user.id === seedUser.id || user.email === seedUser.email));
   if (missingSeedUsers.length) {
     store.users.push(...missingSeedUsers);
     await store.persist();
@@ -159,6 +181,7 @@ async function ensureSchema(pool: mysql.Pool) {
     team_id VARCHAR(64) NOT NULL,
     avatar VARCHAR(8),
     status VARCHAR(20) NOT NULL DEFAULT 'active',
+    auth_version INT NOT NULL DEFAULT 1,
     outbound_email VARCHAR(180) DEFAULT '',
     email_sender_name VARCHAR(120) DEFAULT '',
     email_signature TEXT,
@@ -185,6 +208,7 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "users", "last_development_email_at", "DATETIME NULL");
   await ensureColumn(pool, "users", "last_development_email_to", "VARCHAR(180) DEFAULT ''");
   await ensureColumn(pool, "users", "last_development_email_subject", "VARCHAR(255) DEFAULT ''");
+  await ensureColumn(pool, "users", "auth_version", "INT NOT NULL DEFAULT 1");
   await pool.query(`CREATE TABLE IF NOT EXISTS customers (
     id VARCHAR(64) PRIMARY KEY,
     company VARCHAR(200) NOT NULL,
@@ -968,6 +992,7 @@ async function loadUsers(pool: mysql.Pool): Promise<User[]> {
     teamId: row.team_id,
     avatar: row.avatar,
     status: row.status,
+    authVersion: Number(row.auth_version || 1),
     outboundEmail: row.outbound_email || "",
     emailSenderName: row.email_sender_name ?? "",
     emailSignature: row.email_signature || "",
@@ -1569,7 +1594,7 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    await replaceRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status, item.outboundEmail || "", item.emailSenderName ?? "", item.emailSignature || "", item.smtpHost || "", item.smtpPort || 465, item.smtpSecure ?? true, item.smtpUser || "", item.smtpPassword || "", item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailTo || "", item.lastDevelopmentEmailSubject || ""], "(id,name,email,password_hash,role,team_id,avatar,status,outbound_email,email_sender_name,email_signature,smtp_host,smtp_port,smtp_secure,smtp_user,smtp_password,last_development_email_at,last_development_email_to,last_development_email_subject)");
+    await replaceRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status, item.authVersion || 1, item.outboundEmail || "", item.emailSenderName ?? "", item.emailSignature || "", item.smtpHost || "", item.smtpPort || 465, item.smtpSecure ?? true, item.smtpUser || "", item.smtpPassword || "", item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailTo || "", item.lastDevelopmentEmailSubject || ""], "(id,name,email,password_hash,role,team_id,avatar,status,auth_version,outbound_email,email_sender_name,email_signature,smtp_host,smtp_port,smtp_secure,smtp_user,smtp_password,last_development_email_at,last_development_email_to,last_development_email_subject)");
     await replaceRows(connection, "customers", store.customers, (item) => [item.id, item.company, item.country, item.contact, item.ownerId, item.teamId, item.stage, item.amount, item.health, item.nextReminder, item.wecomBound, item.billingName || "", item.billingAddress || "", item.documentContact || "", item.defaultPortDischarge || "", item.defaultIncoterm || "", item.defaultPaymentTerm || ""], "(id,company,country,contact,owner_id,team_id,stage,amount,health,next_reminder,wecom_bound,billing_name,billing_address,document_contact,default_port_discharge,default_incoterm,default_payment_term)");
     await replaceRows(connection, "customer_activities", store.customerActivities, (item) => [item.id, item.customerId, item.type || "note", item.content || "", item.operatorId || "", item.nextReminder || "", mysqlDate(item.createdAt)], "(id,customer_id,type,content,operator_id,next_reminder,created_at)");
     await replaceRows(connection, "leads", store.leads, (item) => [item.id, item.company, item.contact || "", item.country || "", item.email || "", item.phone || "", item.wechat || "", item.source || "", item.sourceType || "outbound", item.sourceChannel || "manual", item.sourceCampaign || "", item.externalId || "", item.sourceUrl || "", item.intent || "中", item.stage || "新线索", item.status || "new", item.ownerId, item.teamId, item.estimatedAmount || 0, item.nextFollowAt || "", item.lastActivityAt || "", item.remark || "", item.convertedCustomerId || "", item.convertedDealId || "", item.deletedAt ? mysqlDate(item.deletedAt) : null, item.deletedReason || "", item.deletedBy || "", item.purgeAt ? mysqlDate(item.purgeAt) : null, item.statusBeforeDelete || "", mysqlDate(item.createdAt)], "(id,company,contact,country,email,phone,wechat,source,source_type,source_channel,source_campaign,external_id,source_url,intent,stage,status,owner_id,team_id,estimated_amount,next_follow_at,last_activity_at,remark,converted_customer_id,converted_deal_id,deleted_at,deleted_reason,deleted_by,purge_at,status_before_delete,created_at)");

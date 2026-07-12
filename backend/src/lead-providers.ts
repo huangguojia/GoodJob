@@ -1,4 +1,5 @@
 import type { LeadSourceTier } from "./types.js";
+import { fetchPublicUrl } from "./outbound-security.js";
 
 /**
  * 自动获客数据源适配层。
@@ -71,7 +72,7 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}, timeout = D
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await fetchPublicUrl(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }

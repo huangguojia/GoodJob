@@ -1,14 +1,17 @@
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
+import rateLimit from "express-rate-limit";
+import helmet from "helmet";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import nodemailer from "nodemailer";
 import { z } from "zod";
-import { canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, publicUser, requireAuth, signToken } from "./auth.js";
+import { AUTH_COOKIE_NAME, CSRF_COOKIE_NAME, canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, createCsrfToken, csrfCookieOptions, hashPassword, publicUser, requireAuth, sessionCookieOptions, signToken, verifyPassword } from "./auth.js";
 import { createMysqlStore } from "./mysql-store.js";
 import { getStore, setStore } from "./store.js";
 import { LEAD_PROVIDERS, getProvider, providerMeta, type LeadProvider, type LeadQuery, type RawLead } from "./lead-providers.js";
+import { assertPublicHttpUrl, fetchPublicUrl } from "./outbound-security.js";
 import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, Deal, DealEvent, Exam, ExamAttempt, ExamQuestion, Lead, LeadSourceConfig, LeadSourceEvent, LeadSourceType, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, SalesRecordAudit, SessionUser, Todo, TradeDocument, TradeDocumentAudit, TradeDocumentSendRecord, WebsiteOpportunity } from "./types.js";
 
 function loadLocalEnv() {
@@ -34,8 +37,53 @@ function loadLocalEnv() {
 loadLocalEnv();
 
 export const app = express();
-app.use(cors());
-app.use(express.json());
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
+const allowedOrigins = new Set((process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean));
+function originAllowed(origin?: string) {
+  return !origin || allowedOrigins.has(origin)
+    || (process.env.NODE_ENV !== "production" && /^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(origin));
+}
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false
+}));
+app.use((req, res, next) => {
+  if (!originAllowed(req.headers.origin)) {
+    res.status(403).json({ message: "不允许的请求来源" });
+    return;
+  }
+  next();
+});
+app.use(cors({
+  credentials: true,
+  origin(origin, callback) {
+    callback(null, originAllowed(origin));
+  }
+}));
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "2mb" }));
+app.use(express.urlencoded({ extended: false, limit: "256kb" }));
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: ["test", "e2e"].includes(process.env.NODE_ENV || "") ? 10_000 : 10,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { message: "登录尝试过于频繁，请稍后再试" }
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: ["test", "e2e"].includes(process.env.NODE_ENV || "") ? 100_000 : 600,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { message: "请求过于频繁，请稍后再试" }
+});
+app.use("/api", apiLimiter);
 
 function asyncRoute(handler: (req: Request, res: Response, next: NextFunction) => Promise<void>) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -49,6 +97,20 @@ function accountUser(user: ReturnType<typeof getStore>["users"][number]) {
 
 function canManageTraining(user?: SessionUser) {
   return user?.role === "manager" || user?.role === "admin" || user?.role === "super_admin";
+}
+
+function canApproveTradeDocuments(user?: SessionUser) {
+  return user?.role === "manager" || user?.role === "admin" || user?.role === "super_admin";
+}
+
+function canSeeKnowledgeAsset(user: SessionUser, asset: ReturnType<typeof getStore>["knowledgeAssets"][number]) {
+  if (asset.status === "published") return true;
+  if (user.role === "admin" || user.role === "super_admin") return true;
+  if (user.role === "manager") {
+    const owner = getStore().users.find((item) => item.id === asset.ownerId);
+    return owner?.teamId === user.teamId;
+  }
+  return asset.ownerId === user.id;
 }
 
 function canAccessExam(user: SessionUser, exam: Exam) {
@@ -316,23 +378,42 @@ app.get("/api/health", (_req, res) => {
 });
 
 const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1)
+  email: z.string().trim().email().max(180).transform((value) => value.toLowerCase()),
+  password: z.string().min(1).max(128)
 });
 
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", loginLimiter, asyncRoute(async (req, res) => {
   const body = loginSchema.parse(req.body);
-  const { users } = getStore();
-  const user = users.find((item) => item.email === body.email && item.password === body.password && item.status === "active");
-  if (!user) {
+  const store = getStore();
+  const user = store.users.find((item) => item.email.toLowerCase() === body.email && item.status === "active");
+  const passwordCheck = user ? await verifyPassword(user.password, body.password) : { valid: false, needsUpgrade: false };
+  if (!user || !passwordCheck.valid) {
     res.status(401).json({ message: "账号或密码错误" });
     return;
   }
+  if (passwordCheck.needsUpgrade) {
+    user.password = await hashPassword(body.password);
+    user.authVersion = user.authVersion || 1;
+    await store.persist();
+  }
   const sessionUser = publicUser(user);
-  res.json({ token: signToken(sessionUser), user: sessionUser });
+  const token = signToken(sessionUser);
+  const csrfToken = createCsrfToken();
+  res.cookie(AUTH_COOKIE_NAME, token, sessionCookieOptions());
+  res.cookie(CSRF_COOKIE_NAME, csrfToken, csrfCookieOptions());
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ token, csrfToken, user: sessionUser });
+}));
+
+app.post("/api/auth/logout", (req, res) => {
+  res.clearCookie(AUTH_COOKIE_NAME, { ...sessionCookieOptions(), maxAge: undefined });
+  res.clearCookie(CSRF_COOKIE_NAME, { ...csrfCookieOptions(), maxAge: undefined });
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true });
 });
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   res.json({ user: req.user });
 });
 
@@ -377,8 +458,7 @@ app.patch("/api/profile/email-binding", requireAuth, asyncRoute(async (req, res)
     user.smtpPassword = body.smtpPassword;
   }
   await store.persist();
-  const sessionUser = publicUser(user);
-  res.json({ user: accountUser(user), token: signToken(sessionUser) });
+  res.json({ user: accountUser(user) });
 }));
 
 app.post("/api/profile/test-email", requireAuth, asyncRoute(async (_req, res) => {
@@ -528,7 +608,7 @@ app.post("/api/accounts", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
     name: z.string().min(1),
     email: z.string().email(),
-    password: z.string().min(6),
+    password: z.string().min(8).max(128),
     role: z.enum(["sales", "manager", "admin", "super_admin"]).default("sales"),
     teamId: z.string().min(1).optional()
   });
@@ -547,7 +627,7 @@ app.post("/api/accounts", requireAuth, asyncRoute(async (req, res) => {
     id: `u_${Date.now()}`,
     name: body.name,
     email: body.email,
-    password: body.password,
+    password: await hashPassword(body.password),
     role: body.role,
     teamId,
     avatar: body.name.slice(0, 2).toUpperCase(),
@@ -563,7 +643,7 @@ app.patch("/api/accounts/:id/password", requireAuth, asyncRoute(async (req, res)
     res.status(403).json({ message: "无账号管理权限" });
     return;
   }
-  const schema = z.object({ password: z.string().min(6) });
+  const schema = z.object({ password: z.string().min(8).max(128) });
   const body = schema.parse(req.body);
   const store = getStore();
   const user = store.users.find((item) => item.id === req.params.id);
@@ -575,7 +655,8 @@ app.patch("/api/accounts/:id/password", requireAuth, asyncRoute(async (req, res)
     res.status(403).json({ message: "无权设置该账号密码" });
     return;
   }
-  user.password = body.password;
+  user.password = await hashPassword(body.password);
+  user.authVersion = (user.authVersion || 1) + 1;
   await store.persist();
   res.json({ account: accountUser(user) });
 }));
@@ -600,6 +681,7 @@ app.patch("/api/accounts/:id/disable", requireAuth, asyncRoute(async (req, res) 
     return;
   }
   user.status = "disabled";
+  user.authVersion = (user.authVersion || 1) + 1;
   await store.persist();
   res.json({ account: accountUser(user) });
 }));
@@ -1329,6 +1411,27 @@ function findWhatsAppCustomer(user: SessionUser, customerId: string) {
   return customer;
 }
 
+function canManageWhatsAppBinding(user: SessionUser, customer: Customer) {
+  return user.role === "admin" || user.role === "super_admin" || customer.ownerId === user.id;
+}
+
+function publicWhatsAppBinding(binding: ReturnType<typeof getStore>["whatsappBindings"][number] | null) {
+  if (!binding) return null;
+  return {
+    id: binding.id,
+    customerId: binding.customerId,
+    phoneNumber: binding.phoneNumber,
+    waProfileName: binding.waProfileName,
+    lastMessageAt: binding.lastMessageAt,
+    unreadCount: binding.unreadCount,
+    createdAt: binding.createdAt,
+    bindingMode: binding.bindingMode,
+    twilioPhoneNumber: binding.twilioPhoneNumber,
+    connectionStatus: binding.connectionStatus,
+    lastConnectedAt: binding.lastConnectedAt
+  };
+}
+
 /** 简易中文检测:含 CJK 字符即视为中文，无需翻译。 */
 function isChineseText(text: string) {
   return /[一-鿿]/.test(text);
@@ -1394,7 +1497,7 @@ app.get("/api/whatsapp/customers/:customerId/messages", requireAuth, (req, res) 
   const messages = store.whatsappMessages
     .filter((m) => m.customerId === customer.id)
     .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
-  res.json({ binding, messages, customer: { id: customer.id, company: customer.company, country: customer.country, contact: customer.contact } });
+  res.json({ binding: publicWhatsAppBinding(binding), messages, customer: { id: customer.id, company: customer.company, country: customer.country, contact: customer.contact } });
 });
 
 // 绑定/更新 WhatsApp 手机号
@@ -1402,6 +1505,10 @@ app.post("/api/whatsapp/customers/:customerId/binding", requireAuth, asyncRoute(
   const customer = findWhatsAppCustomer(req.user!, req.params.customerId);
   if (!customer) {
     res.status(404).json({ message: "客户不存在或无权访问" });
+    return;
+  }
+  if (!canManageWhatsAppBinding(req.user!, customer)) {
+    res.status(403).json({ message: "只有客户负责人或管理员可以修改 WhatsApp 绑定" });
     return;
   }
   const schema = z.object({
@@ -1428,7 +1535,7 @@ app.post("/api/whatsapp/customers/:customerId/binding", requireAuth, asyncRoute(
     store.whatsappBindings.push(binding);
   }
   await store.persist();
-  res.json({ binding });
+  res.json({ binding: publicWhatsAppBinding(binding) });
 }));
 
 // 手动录入一条对话(收/发),非中文自动翻译
@@ -1436,6 +1543,10 @@ app.post("/api/whatsapp/customers/:customerId/messages", requireAuth, asyncRoute
   const customer = findWhatsAppCustomer(req.user!, req.params.customerId);
   if (!customer) {
     res.status(404).json({ message: "客户不存在或无权访问" });
+    return;
+  }
+  if (!canManageWhatsAppBinding(req.user!, customer)) {
+    res.status(403).json({ message: "只有客户负责人或管理员可以发起 WhatsApp 绑定" });
     return;
   }
   const schema = z.object({
@@ -1590,22 +1701,31 @@ app.post("/api/whatsapp/binding/web-scan/start", requireAuth, asyncRoute(async (
 // 获取二维码（通过 SSE 推送）
 app.get("/api/whatsapp/binding/web-scan/qr/:clientId", requireAuth, (req, res) => {
   const { clientId } = req.params;
+  const binding = getStore().whatsappBindings.find((item) =>
+    item.sessionData === clientId && item.userId === req.user!.id
+  );
+  if (!binding) {
+    res.status(404).json({ message: "扫码会话不存在或无权访问" });
+    return;
+  }
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
 
-  whatsappWebManager.onQR(clientId, (qr) => {
+  const unsubscribe = whatsappWebManager.onQR(clientId, (qr) => {
     res.write(`data: ${JSON.stringify({ qr })}\n\n`);
   });
 
   // 30秒超时
-  setTimeout(() => {
+  const timer = setTimeout(() => {
     res.write(`data: ${JSON.stringify({ timeout: true })}\n\n`);
     res.end();
   }, 30000);
 
   req.on("close", () => {
+    clearTimeout(timer);
+    unsubscribe();
     res.end();
   });
 });
@@ -1613,6 +1733,13 @@ app.get("/api/whatsapp/binding/web-scan/qr/:clientId", requireAuth, (req, res) =
 // 检查 Web 扫码状态
 app.get("/api/whatsapp/binding/web-scan/status/:clientId", requireAuth, (req, res) => {
   const { clientId } = req.params;
+  const binding = getStore().whatsappBindings.find((item) =>
+    item.sessionData === clientId && item.userId === req.user!.id
+  );
+  if (!binding) {
+    res.status(404).json({ message: "扫码会话不存在或无权访问" });
+    return;
+  }
   const status = whatsappWebManager.getClientStatus(clientId);
   res.json({ status });
 });
@@ -1626,6 +1753,10 @@ app.post("/api/whatsapp/binding/web-scan/disconnect", requireAuth, asyncRoute(as
   const customer = findWhatsAppCustomer(req.user!, body.customerId);
   if (!customer) {
     res.status(404).json({ message: "客户不存在或无权访问" });
+    return;
+  }
+  if (!canManageWhatsAppBinding(req.user!, customer)) {
+    res.status(403).json({ message: "只有客户负责人或管理员可以断开 WhatsApp 绑定" });
     return;
   }
 
@@ -1658,6 +1789,10 @@ app.post("/api/whatsapp/binding/twilio/start", requireAuth, asyncRoute(async (re
     res.status(404).json({ message: "客户不存在或无权访问" });
     return;
   }
+  if (!canManageWhatsAppBinding(req.user!, customer)) {
+    res.status(403).json({ message: "只有客户负责人或管理员可以修改 WhatsApp 绑定" });
+    return;
+  }
 
   const store = getStore();
   let binding = store.whatsappBindings.find((b) => b.customerId === customer.id);
@@ -1673,6 +1808,7 @@ app.post("/api/whatsapp/binding/twilio/start", requireAuth, asyncRoute(async (re
       createdAt: new Date().toISOString(),
       bindingMode: "twilio-api",
       twilioPhoneNumber: body.twilioPhoneNumber,
+      userId: req.user!.id,
       connectionStatus: "connected",
       lastConnectedAt: new Date().toISOString()
     };
@@ -1680,36 +1816,48 @@ app.post("/api/whatsapp/binding/twilio/start", requireAuth, asyncRoute(async (re
   } else {
     binding.bindingMode = "twilio-api";
     binding.twilioPhoneNumber = body.twilioPhoneNumber;
+    binding.userId = req.user!.id;
     binding.connectionStatus = "connected";
     binding.lastConnectedAt = new Date().toISOString();
   }
 
   await store.persist();
-  res.json({ binding });
+  res.json({ binding: publicWhatsAppBinding(binding) });
 }));
 
 // Twilio Webhook 接收消息
 app.post("/api/whatsapp/webhook/twilio", asyncRoute(async (req, res) => {
-  // 验证 Twilio 签名
-  const signature = req.headers["x-twilio-signature"] as string;
-  const url = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+  const signature = String(req.headers["x-twilio-signature"] || "");
+  const url = twilioWebhookUrl || `${req.protocol}://${req.get("host")}${req.originalUrl}`;
 
-  if (!twilioManager.validateWebhook(signature, url, req.body)) {
+  if (!signature || !twilioManager.validateWebhook(signature, url, req.body)) {
     res.status(403).json({ message: "Invalid signature" });
     return;
   }
 
-  const { From, To, Body, MessageSid } = req.body;
+  const { From, To, Body, MessageSid } = z.object({
+    From: z.string().min(5).max(40),
+    To: z.string().min(5).max(40),
+    Body: z.string().max(4000).default(""),
+    MessageSid: z.string().min(8).max(80)
+  }).parse(req.body);
 
   // 去掉 whatsapp: 前缀
   const fromNumber = From.replace("whatsapp:", "");
   const toNumber = To.replace("whatsapp:", "");
 
   const store = getStore();
+  if (store.whatsappMessages.some((message) => message.waMessageId === MessageSid)) {
+    res.type("text/xml");
+    res.send("<Response></Response>");
+    return;
+  }
 
-  // 根据电话号码找到对应的绑定和客户
+  // 目标通道和客户号码必须同时匹配，避免共享通道时串客户。
   const binding = store.whatsappBindings.find((b) =>
-    b.twilioPhoneNumber === toNumber || b.phoneNumber === fromNumber
+    b.bindingMode === "twilio-api"
+    && b.twilioPhoneNumber === toNumber
+    && b.phoneNumber === fromNumber
   );
 
   if (binding) {
@@ -3734,7 +3882,7 @@ app.patch("/api/case-studies/:id/publish", requireAuth, asyncRoute(async (req, r
 
 app.get("/api/knowledge/assets", requireAuth, (_req, res) => {
   const { knowledgeAssets } = getStore();
-  res.json({ assets: knowledgeAssets });
+  res.json({ assets: knowledgeAssets.filter((asset) => canSeeKnowledgeAsset(_req.user!, asset)) });
 });
 
 app.post("/api/knowledge/assets", requireAuth, asyncRoute(async (req, res) => {
@@ -3763,7 +3911,7 @@ app.patch("/api/knowledge/assets/:id/publish", requireAuth, asyncRoute(async (re
   }
   const store = getStore();
   const asset = store.knowledgeAssets.find((item) => item.id === req.params.id);
-  if (!asset) {
+  if (!asset || !canSeeKnowledgeAsset(req.user!, asset)) {
     res.status(404).json({ message: "资料不存在" });
     return;
   }
@@ -3874,7 +4022,9 @@ app.get("/api/exams/:id/detail", requireAuth, (req, res) => {
     res.status(404).json({ message: "考试不存在" });
     return;
   }
-  const questions = examQuestionsFor(exam.id);
+  const questions = examQuestionsFor(exam.id).map((question) => canManageTraining(req.user)
+    ? question
+    : { ...question, answerIndex: -1, answerIndexes: [], explanation: "" });
   const attempts = store.examAttempts.filter((item) => item.examId === exam.id);
   const latestAttempt = attempts.find((item) => item.userId === req.user!.id) || null;
   res.json({ exam: examWithRuntimeStats(exam, req.user!), questions, latestAttempt, report: examReport(req.user!) });
@@ -4031,8 +4181,7 @@ app.post("/api/exams/:id/submit", requireAuth, asyncRoute(async (req, res) => {
     return;
   }
   const schema = z.object({
-    answers: z.record(z.string(), z.union([z.number().int().nonnegative(), z.array(z.number().int().nonnegative())])).optional(),
-    score: z.number().min(0).max(100).optional()
+    answers: z.record(z.string(), z.union([z.number().int().nonnegative(), z.array(z.number().int().nonnegative())])).default({})
   });
   const body = schema.parse(req.body);
   const questions = examQuestionsFor(exam.id);
@@ -4040,13 +4189,13 @@ app.post("/api/exams/:id/submit", requireAuth, asyncRoute(async (req, res) => {
     res.status(400).json({ message: "当前考试暂无题目" });
     return;
   }
-  const answers = body.answers || {};
+  const answers = body.answers;
   const correctCount = questions.filter((question) => {
     const rawAnswer = answers[question.id];
     const selectedIndexes = Array.isArray(rawAnswer) ? rawAnswer : rawAnswer == null ? [] : [rawAnswer];
     return indexesEqual(selectedIndexes, correctIndexesFor(question));
   }).length;
-  const score = body.score == null ? Math.round((correctCount / questions.length) * 100) : Math.round(body.score);
+  const score = Math.round((correctCount / questions.length) * 100);
   const attempt: ExamAttempt = {
     id: `attempt_${exam.id}_${req.user!.id}_${Date.now()}`,
     examId: exam.id,
@@ -4054,7 +4203,7 @@ app.post("/api/exams/:id/submit", requireAuth, asyncRoute(async (req, res) => {
     score,
     passed: score >= (exam.passScore || 80),
     answers,
-    correctCount: body.score == null ? correctCount : Math.round((score / 100) * questions.length),
+    correctCount,
     totalQuestions: questions.length,
     submittedAt: new Date().toISOString()
   };
@@ -4132,6 +4281,10 @@ app.patch("/api/reminders/:id", requireAuth, asyncRoute(async (req, res) => {
     res.status(404).json({ message: "提醒规则不存在" });
     return;
   }
+  if (reminder.ownerId !== req.user!.id && req.user!.role !== "admin" && req.user!.role !== "super_admin") {
+    res.status(403).json({ message: "只有规则创建人或管理员可以修改提醒规则" });
+    return;
+  }
   const targetOwnerId = body.targetOwnerId === undefined ? (reminder.targetOwnerId || reminder.ownerId) : resolveReminderTargetOwner(req.user!, body.targetOwnerId);
   if (!targetOwnerId) {
     res.status(400).json({ message: "提醒规则目标负责人无效" });
@@ -4150,6 +4303,10 @@ app.get("/api/reminders/:id/preview", requireAuth, (req, res) => {
     res.status(404).json({ message: "提醒规则不存在" });
     return;
   }
+  if (reminder.ownerId !== req.user!.id && req.user!.role !== "admin" && req.user!.role !== "super_admin") {
+    res.status(403).json({ message: "只有规则创建人或管理员可以预览提醒规则" });
+    return;
+  }
   const matched = matchReminderRule(reminder.targetOwnerId || reminder.ownerId, reminder);
   const existingKeys = new Set(store.todos.filter((todo) => todo.reminderRuleId === reminder.id).map((todo) => todo.triggerKey));
   const preview = matched.slice(0, 5).map((item) => ({ customerId: item.customer.id, customer: item.customer.company, dealId: item.deal?.id || "", deal: item.deal?.title || "", dueAt: item.dueAt }));
@@ -4162,6 +4319,10 @@ app.post("/api/reminders/:id/run", requireAuth, asyncRoute(async (req, res) => {
   const reminder = store.reminders.find((item) => item.id === req.params.id);
   if (!reminder || !canSeeOwner(req.user!, reminder.ownerId, reminder.teamId)) {
     res.status(404).json({ message: "提醒规则不存在" });
+    return;
+  }
+  if (reminder.ownerId !== req.user!.id && req.user!.role !== "admin" && req.user!.role !== "super_admin") {
+    res.status(403).json({ message: "只有规则创建人或管理员可以执行提醒规则" });
     return;
   }
   if (reminder.enabled === false) {
@@ -4228,6 +4389,10 @@ app.post("/api/reminders/:id/toggle", requireAuth, asyncRoute(async (req, res) =
     res.status(404).json({ message: "提醒不存在" });
     return;
   }
+  if (reminder.ownerId !== req.user!.id && req.user!.role !== "admin" && req.user!.role !== "super_admin") {
+    res.status(403).json({ message: "只有规则创建人或管理员可以启停提醒规则" });
+    return;
+  }
   reminder.enabled = reminder.enabled === false;
   reminder.status = reminder.enabled ? "enabled" : "disabled";
   await store.persist();
@@ -4236,9 +4401,10 @@ app.post("/api/reminders/:id/toggle", requireAuth, asyncRoute(async (req, res) =
 
 app.get("/api/import-export/jobs", requireAuth, (req, res) => {
   const { importExportJobs } = getStore();
-  const scoped = req.user?.role === "sales"
-    ? importExportJobs.filter((job) => job.operatorId === req.user?.id)
-    : importExportJobs;
+  const visibleOperatorIds = new Set(getStore().users
+    .filter((user) => canSeeOwner(req.user!, user.id, user.teamId))
+    .map((user) => user.id));
+  const scoped = importExportJobs.filter((job) => visibleOperatorIds.has(job.operatorId));
   res.json({ jobs: scoped });
 });
 
@@ -4272,7 +4438,7 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
   const schema = z.object({ rows: z.array(rowSchema).min(1).max(2000), fileName: z.string().optional().default("客户导入") });
   const body = schema.parse(req.body);
   const store = getStore();
-  const scopedCustomers = store.customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
+  const scopedCustomers = store.customers.filter((customer) => customer.ownerId === req.user!.id);
   let created = 0;
   let updated = 0;
   const imported: Customer[] = [];
@@ -4400,6 +4566,9 @@ const documentBodySchema = z.object({
 });
 
 function normalizeDocument(body: z.infer<typeof documentBodySchema>, user: SessionUser, existing?: TradeDocument): TradeDocument {
+  const status = existing
+    ? (["draft", "ready", "rejected"].includes(existing.status) && ["draft", "ready"].includes(body.status) ? body.status : existing.status)
+    : (body.status === "ready" ? "ready" : "draft");
   return {
     ...body,
     id: existing?.id || `td_${Date.now()}`,
@@ -4408,11 +4577,12 @@ function normalizeDocument(body: z.infer<typeof documentBodySchema>, user: Sessi
     revision: body.revision || existing?.revision || 1,
     ownerId: existing?.ownerId || user.id,
     teamId: existing?.teamId || user.teamId,
-    approvalNote: body.approvalNote || existing?.approvalNote || "",
-    approvedAt: body.approvedAt || existing?.approvedAt,
-    approvedBy: body.approvedBy || existing?.approvedBy,
-    audits: existing?.audits || (body.audits as TradeDocumentAudit[]),
-    sendRecords: existing?.sendRecords || (body.sendRecords as TradeDocumentSendRecord[]),
+    status,
+    approvalNote: existing?.approvalNote || "",
+    approvedAt: existing?.approvedAt,
+    approvedBy: existing?.approvedBy,
+    audits: existing?.audits || [],
+    sendRecords: existing?.sendRecords || [],
     updatedAt: new Date().toISOString(),
     items: body.items.map((item, index) => ({ ...item, id: item.id || `tdi_${Date.now()}_${index}` }))
   };
@@ -4509,6 +4679,10 @@ app.patch("/api/trade-documents/:id", requireAuth, asyncRoute(async (req, res) =
     res.status(404).json({ message: "单据不存在" });
     return;
   }
+  if (existing.ownerId !== req.user!.id && req.user!.role !== "admin" && req.user!.role !== "super_admin") {
+    res.status(403).json({ message: "只有单据创建人或管理员可以修改单据内容" });
+    return;
+  }
   if (existing.status === "approved" || existing.status === "exported") {
     res.status(409).json({ message: "已审批或已导出的单据不能直接覆盖，请先另存新版本" });
     return;
@@ -4572,6 +4746,14 @@ app.post("/api/trade-documents/:id/submit-approval", requireAuth, asyncRoute(asy
     res.status(404).json({ message: "单据不存在" });
     return;
   }
+  if (document.ownerId !== req.user!.id && req.user!.role !== "admin" && req.user!.role !== "super_admin") {
+    res.status(403).json({ message: "只有单据创建人或管理员可以提交审批" });
+    return;
+  }
+  if (!["draft", "ready", "rejected"].includes(document.status)) {
+    res.status(400).json({ message: "当前单据状态不能提交审批" });
+    return;
+  }
   const oldStatus = document.status;
   document.status = "pending_approval";
   document.approvalNote = String(req.body?.note || "");
@@ -4582,6 +4764,10 @@ app.post("/api/trade-documents/:id/submit-approval", requireAuth, asyncRoute(asy
 }));
 
 app.post("/api/trade-documents/:id/approve", requireAuth, asyncRoute(async (req, res) => {
+  if (!canApproveTradeDocuments(req.user)) {
+    res.status(403).json({ message: "只有主管和管理员可以审批单据" });
+    return;
+  }
   const store = getStore();
   const document = store.tradeDocuments.find((item) => item.id === req.params.id);
   if (!document || !canSeeOwner(req.user!, document.ownerId, document.teamId)) {
@@ -4604,6 +4790,10 @@ app.post("/api/trade-documents/:id/approve", requireAuth, asyncRoute(async (req,
 }));
 
 app.post("/api/trade-documents/:id/reject", requireAuth, asyncRoute(async (req, res) => {
+  if (!canApproveTradeDocuments(req.user)) {
+    res.status(403).json({ message: "只有主管和管理员可以驳回单据" });
+    return;
+  }
   const note = String(req.body?.note || "").trim();
   if (!note) {
     res.status(400).json({ message: "驳回必须填写原因" });
@@ -4642,6 +4832,14 @@ app.post("/api/trade-documents/:id/send", requireAuth, asyncRoute(async (req, re
     res.status(404).json({ message: "单据不存在" });
     return;
   }
+  if (!["approved", "exported"].includes(document.status)) {
+    res.status(409).json({ message: "单据审批通过后才能记录发送" });
+    return;
+  }
+  if (document.ownerId !== req.user!.id && req.user!.role !== "admin" && req.user!.role !== "super_admin") {
+    res.status(403).json({ message: "只有单据创建人或管理员可以发送单据" });
+    return;
+  }
   const record: TradeDocumentSendRecord = {
     id: `tds_${Date.now()}`,
     channel,
@@ -4663,6 +4861,14 @@ app.post("/api/trade-documents/:id/export", requireAuth, asyncRoute(async (req, 
   const document = store.tradeDocuments.find((item) => item.id === req.params.id);
   if (!document || !canSeeOwner(req.user!, document.ownerId, document.teamId)) {
     res.status(404).json({ message: "单据不存在" });
+    return;
+  }
+  if (!["approved", "exported"].includes(document.status)) {
+    res.status(409).json({ message: "单据审批通过后才能导出正式 PDF" });
+    return;
+  }
+  if (document.ownerId !== req.user!.id && req.user!.role !== "admin" && req.user!.role !== "super_admin") {
+    res.status(403).json({ message: "只有单据创建人或管理员可以导出单据" });
     return;
   }
   const oldStatus = document.status;
@@ -4711,6 +4917,18 @@ app.get("/api/tools/ocr/jobs/:id", requireAuth, (req, res) => {
 });
 
 app.post("/api/tools/ocr/jobs/:id/recognize", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    confidence: z.coerce.number().min(0).max(100).optional(),
+    company: z.string().trim().max(200).optional(),
+    contact: z.string().trim().max(120).optional(),
+    title: z.string().trim().max(120).optional(),
+    email: z.string().trim().max(254).optional(),
+    whatsapp: z.string().trim().max(60).optional(),
+    wechat: z.string().trim().max(80).optional(),
+    phone: z.string().trim().max(60).optional(),
+    country: z.string().trim().max(80).optional(),
+    city: z.string().trim().max(120).optional()
+  }).parse(req.body);
   const store = getStore();
   const job = resolveOcrJob(req.user!, req.params.id, true);
   if (!job) {
@@ -4718,16 +4936,18 @@ app.post("/api/tools/ocr/jobs/:id/recognize", requireAuth, asyncRoute(async (req
     return;
   }
   job.status = "recognized";
-  job.confidence = Number(req.body?.confidence ?? 96);
+  job.confidence = body.confidence ?? 96;
   job.fields = {
     ...job.fields,
-    company: req.body?.company || job.fields.company || "NorthStar Lighting GmbH",
-    contact: req.body?.contact || job.fields.contact || "James Müller",
-    email: req.body?.email || job.fields.email || "james.mueller@northstar-light.de",
-    whatsapp: req.body?.whatsapp || job.fields.whatsapp || "+49 151 2388 9012",
-    wechat: req.body?.wechat || job.fields.wechat || "james_light_de",
-    phone: req.body?.phone || job.fields.phone || "+49 30 8842 1290",
-    country: req.body?.country || job.fields.country || "德国"
+    company: body.company || job.fields.company || "NorthStar Lighting GmbH",
+    contact: body.contact || job.fields.contact || "James Müller",
+    title: body.title ?? job.fields.title,
+    email: body.email || job.fields.email || "james.mueller@northstar-light.de",
+    whatsapp: body.whatsapp || job.fields.whatsapp || "+49 151 2388 9012",
+    wechat: body.wechat || job.fields.wechat || "james_light_de",
+    phone: body.phone || job.fields.phone || "+49 30 8842 1290",
+    country: body.country || job.fields.country || "德国",
+    city: body.city ?? job.fields.city
   };
   await store.persist();
   res.json({ job });
@@ -4894,6 +5114,9 @@ app.post("/api/tools/ai-config", requireAuth, asyncRoute(async (req, res) => {
     useExam: z.boolean().default(false)
   });
   const body = schema.parse(req.body);
+  if (process.env.ALLOW_PRIVATE_AI_ENDPOINTS !== "true") {
+    await assertPublicHttpUrl(body.baseUrl);
+  }
   const store = getStore();
   const existing = body.id ? store.aiModelConfigs.find((item) => item.id === body.id && item.ownerId === req.user!.id) : undefined;
   const apiKey = body.apiKey && !body.apiKey.includes("****") ? body.apiKey : existing?.apiKey || "";
@@ -5083,6 +5306,7 @@ app.post("/api/lead-finder/source-config", requireAuth, asyncRoute(async (req, r
     res.status(404).json({ message: "未知数据源" });
     return;
   }
+  if (body.baseUrl) await assertPublicHttpUrl(body.baseUrl);
   const store = getStore();
   const existing = getLeadSourceConfig(req.user!, body.provider);
   const apiKey = body.apiKey && !body.apiKey.includes("****") ? body.apiKey : existing?.apiKey || "";
@@ -5334,7 +5558,7 @@ app.post("/api/tools/website-scrape/preview", requireAuth, asyncRoute(async (req
 app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
     opportunities: z.array(z.object({
-      id: z.string().optional(),
+      id: z.string().min(1),
       company: z.string().min(1),
       business: z.string().default("待维护"),
       country: z.string().default("未知"),
@@ -5350,62 +5574,72 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
   const store = getStore();
   const created: Array<{ lead: Lead; sourceEvent: LeadSourceEvent; opportunity: WebsiteOpportunity; duplicate: boolean }> = [];
   for (const source of body.opportunities) {
-    const stored = source.id ? store.websiteOpportunities.find((item) => item.id === source.id) : undefined;
-    if (stored && !canSeeOwner(req.user!, stored.ownerId, stored.teamId)) {
+    const stored = store.websiteOpportunities.find((item) => item.id === source.id);
+    if (!stored || !canSeeOwner(req.user!, stored.ownerId, stored.teamId)) {
       res.status(404).json({ message: "搜客线索不存在或无权访问" });
       return;
     }
-    if (stored && stored.ownerId !== req.user!.id) {
+    if (stored.ownerId !== req.user!.id) {
       res.status(403).json({ message: "候选归属其他业务员，请先分配后再加入线索" });
       return;
     }
-    if (stored && !["contactable", "contacted", "synced"].includes(stored.status)) {
+    if (!["contactable", "contacted", "synced"].includes(stored.status)) {
       res.status(400).json({ message: "请先核验并标记为可联系，再加入线索" });
       return;
     }
-    const contact = source.contact || source.contactInfo || "待维护";
-    const sourceId = source.id || `website_${websiteDomainKey(source.website)}_${normalizedMatchText(source.company)}`;
-    const sourceChannel = stored?.source || source.source || "website-scrape";
-    const sourceLabel = stored?.sourceLabel || source.sourceLabel || "官网导入";
+    const verifiedSource = {
+      ...source,
+      company: stored.company,
+      business: stored.business,
+      country: stored.country,
+      website: stored.website,
+      contact: stored.contact,
+      contactInfo: stored.contactInfo,
+      description: stored.description
+    };
+    const contact = verifiedSource.contact || verifiedSource.contactInfo || "待维护";
+    const sourceId = stored.id;
+    const sourceChannel = stored.source || "website-scrape";
+    const sourceLabel = stored.sourceLabel || "官网导入";
     const intake = createLeadFromSource(req.user!, {
-      company: source.company,
+      company: verifiedSource.company,
       contact,
-      country: source.country || "未知",
-      email: source.contactInfo.includes("@") ? source.contactInfo.trim() : "",
-      phone: source.contactInfo.includes("@") ? "" : source.contactInfo.trim(),
+      country: verifiedSource.country || "未知",
+      email: verifiedSource.contactInfo.includes("@") ? verifiedSource.contactInfo.trim() : "",
+      phone: verifiedSource.contactInfo.includes("@") ? "" : verifiedSource.contactInfo.trim(),
       wechat: "",
       source: sourceLabel,
       sourceType: "outbound",
       sourceChannel,
       sourceCampaign: "",
       externalId: sourceId,
-      sourceUrl: normalizeWebsite(source.website),
+      sourceUrl: normalizeWebsite(verifiedSource.website),
       intent: "中",
       stage: "新线索",
       estimatedAmount: 0,
       nextFollowAt: "",
-      remark: [source.business, source.description].filter(Boolean).join("；"),
-      rawPayload: { ...source, source: sourceChannel, sourceLabel }
+      remark: [verifiedSource.business, verifiedSource.description].filter(Boolean).join("；"),
+      rawPayload: { ...verifiedSource, source: sourceChannel, sourceLabel }
     });
     const opportunity: WebsiteOpportunity = {
       id: sourceId,
-      company: source.company,
-      business: source.business || "待维护",
-      country: source.country || "未知",
-      website: normalizeWebsite(source.website),
+      company: verifiedSource.company,
+      business: verifiedSource.business || "待维护",
+      country: verifiedSource.country || "未知",
+      website: normalizeWebsite(verifiedSource.website),
       contact,
-      contactInfo: source.contactInfo || "",
-      description: source.description || "已加入线索中心，下一步核实采购负责人和真实采购需求。",
+      contactInfo: verifiedSource.contactInfo || "",
+      description: verifiedSource.description || "已加入线索中心，下一步核实采购负责人和真实采购需求。",
       ownerId: req.user!.id,
       teamId: req.user!.teamId,
       status: "synced",
       createdAt: new Date().toISOString(),
       leadId: intake.lead.id,
-      parseMode: stored?.parseMode || "rule",
+      parseMode: stored.parseMode || "rule",
       source: sourceChannel,
       sourceLabel,
-      confidence: stored?.confidence,
-      verifiedAt: stored?.verifiedAt,
+      confidence: stored.confidence,
+      verifiedAt: stored.verifiedAt,
       statusChangedAt: new Date().toISOString(),
       excludedReason: ""
     };
@@ -6133,13 +6367,14 @@ async function searchWikidataLeads(body: z.infer<typeof leadFinderSearchSchema>,
 
 async function parseWebsiteOpportunity(rawUrl: string, index: number, user: SessionUser, aiConfig?: AiModelConfig | null): Promise<WebsiteOpportunity> {
   const website = normalizeWebsite(rawUrl);
+  await assertPublicHttpUrl(website);
   let html = "";
   let finalUrl = website;
   let fetchNote = "";
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6500);
-    const response = await fetch(website, {
+    const response = await fetchPublicUrl(website, {
       signal: controller.signal,
       headers: { "user-agent": "GoodJobCRM/1.0 opportunity research" }
     });
@@ -6286,12 +6521,15 @@ async function parseWebsiteWithAi(config: AiModelConfig, context: {
 async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars = 12000) {
   const protocol = config.protocol || "openai-compatible";
   const endpointBase = config.baseUrl.replace(/\/+$/, "");
+  if (process.env.ALLOW_PRIVATE_AI_ENDPOINTS !== "true") {
+    await assertPublicHttpUrl(endpointBase);
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AI_MODEL_TIMEOUT_MS);
   try {
     if (protocol === "anthropic") {
       const endpoint = `${endpointBase}/messages`;
-      const response = await fetch(endpoint, {
+      const response = await fetchPublicUrl(endpoint, {
         method: "POST",
         signal: controller.signal,
         headers: {
@@ -6314,7 +6552,7 @@ async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars 
     }
     if (protocol === "gemini") {
       const endpoint = `${endpointBase}/models/${encodeURIComponent(config.model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
-      const response = await fetch(endpoint, {
+      const response = await fetchPublicUrl(endpoint, {
         method: "POST",
         signal: controller.signal,
         headers: { "content-type": "application/json" },
@@ -6332,7 +6570,7 @@ async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars 
       return content;
     }
     const endpoint = `${endpointBase}/chat/completions`;
-    const response = await fetch(endpoint, {
+    const response = await fetchPublicUrl(endpoint, {
       method: "POST",
       signal: controller.signal,
       headers: {
@@ -6675,8 +6913,16 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     res.status(400).json({ message: "参数格式错误", issues: error.issues });
     return;
   }
-  const message = error instanceof Error ? error.message : "服务器错误";
-  res.status(500).json({ message });
+  if (typeof error === "object" && error && "type" in error && error.type === "entity.too.large") {
+    res.status(413).json({ message: "请求内容过大" });
+    return;
+  }
+  if (error instanceof SyntaxError && "body" in error) {
+    res.status(400).json({ message: "JSON 格式不正确" });
+    return;
+  }
+  if (process.env.NODE_ENV !== "test") console.error(error);
+  res.status(500).json({ message: "服务器处理请求失败" });
 });
 
 async function startServer() {

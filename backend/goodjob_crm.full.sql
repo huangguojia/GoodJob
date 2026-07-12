@@ -51,6 +51,81 @@ CREATE TABLE customers (
   INDEX idx_customers_team(team_id)
 );
 
+CREATE TABLE customer_activities (
+  id VARCHAR(64) PRIMARY KEY,
+  customer_id VARCHAR(64) NOT NULL,
+  type VARCHAR(30) DEFAULT 'note',
+  content TEXT,
+  operator_id VARCHAR(64) DEFAULT '',
+  next_reminder VARCHAR(100) DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_customer_activities_customer(customer_id)
+);
+
+CREATE TABLE leads (
+  id VARCHAR(64) PRIMARY KEY,
+  company VARCHAR(200) NOT NULL,
+  contact VARCHAR(100) DEFAULT '',
+  country VARCHAR(80) DEFAULT '',
+  email VARCHAR(180) DEFAULT '',
+  phone VARCHAR(80) DEFAULT '',
+  wechat VARCHAR(80) DEFAULT '',
+  source VARCHAR(80) DEFAULT '',
+  source_type VARCHAR(30) DEFAULT 'outbound',
+  source_channel VARCHAR(80) DEFAULT 'manual',
+  source_campaign VARCHAR(120) DEFAULT '',
+  external_id VARCHAR(180) DEFAULT '',
+  source_url VARCHAR(500) DEFAULT '',
+  intent VARCHAR(20) DEFAULT '中',
+  stage VARCHAR(40) DEFAULT '新线索',
+  status VARCHAR(20) DEFAULT 'new',
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  estimated_amount DECIMAL(14,2) DEFAULT 0,
+  next_follow_at VARCHAR(100) DEFAULT '',
+  last_activity_at VARCHAR(100) DEFAULT '',
+  remark TEXT,
+  converted_customer_id VARCHAR(64) DEFAULT '',
+  converted_deal_id VARCHAR(64) DEFAULT '',
+  deleted_at DATETIME NULL,
+  deleted_reason VARCHAR(255) DEFAULT '',
+  deleted_by VARCHAR(64) DEFAULT '',
+  purge_at DATETIME NULL,
+  status_before_delete VARCHAR(20) DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_leads_owner(owner_id),
+  INDEX idx_leads_team(team_id),
+  INDEX idx_leads_stage(stage)
+);
+
+CREATE TABLE lead_activities (
+  id VARCHAR(64) PRIMARY KEY,
+  lead_id VARCHAR(64) NOT NULL,
+  type VARCHAR(30) DEFAULT 'note',
+  content TEXT,
+  operator_id VARCHAR(64) DEFAULT '',
+  next_follow_at VARCHAR(100) DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_lead_activities_lead(lead_id)
+);
+
+CREATE TABLE lead_source_events (
+  id VARCHAR(64) PRIMARY KEY,
+  lead_id VARCHAR(64) NOT NULL,
+  source_type VARCHAR(30) NOT NULL,
+  channel VARCHAR(80) NOT NULL,
+  campaign VARCHAR(120) DEFAULT '',
+  external_id VARCHAR(180) DEFAULT '',
+  source_url VARCHAR(500) DEFAULT '',
+  occurred_at DATETIME NOT NULL,
+  received_at DATETIME NOT NULL,
+  raw_payload JSON,
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  UNIQUE KEY uniq_lead_source_external (owner_id, channel, external_id),
+  INDEX idx_lead_source_events_lead(lead_id)
+);
+
 CREATE TABLE deals (
   id VARCHAR(64) PRIMARY KEY,
   customer_id VARCHAR(64) NOT NULL,
@@ -190,10 +265,17 @@ CREATE TABLE website_opportunities (
   status VARCHAR(30),
   customer_id VARCHAR(64),
   deal_id VARCHAR(64),
+  lead_id VARCHAR(64),
   parse_mode VARCHAR(20) DEFAULT 'rule',
+  source VARCHAR(40) DEFAULT '',
+  source_label VARCHAR(80) DEFAULT '',
+  confidence INT NULL,
   last_development_email_at DATETIME NULL,
   last_development_email_subject VARCHAR(255) DEFAULT '',
   last_development_email_to VARCHAR(180) DEFAULT '',
+  verified_at DATETIME NULL,
+  status_changed_at DATETIME NULL,
+  excluded_reason VARCHAR(255) DEFAULT '',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_website_opps_owner(owner_id),
   INDEX idx_website_opps_team(team_id)

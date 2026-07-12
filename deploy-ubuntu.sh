@@ -10,6 +10,10 @@ SERVICE_NAME="${SERVICE_NAME:-goodjob-crm}"
 DB_NAME="${DB_NAME:-goodjob_crm}"
 DB_USER="${DB_USER:-goodjob}"
 DB_PASSWORD="${DB_PASSWORD:-}"
+JWT_SECRET="${JWT_SECRET:-}"
+INITIAL_ADMIN_EMAIL="${INITIAL_ADMIN_EMAIL:-admin@example.com}"
+INITIAL_ADMIN_PASSWORD="${INITIAL_ADMIN_PASSWORD:-}"
+INITIAL_ADMIN_NAME="${INITIAL_ADMIN_NAME:-Super Admin}"
 BACKEND_PORT="${BACKEND_PORT:-4188}"
 DOMAIN_EXPLICIT="${DOMAIN+x}"
 ENABLE_HTTPS_EXPLICIT="${ENABLE_HTTPS+x}"
@@ -65,6 +69,9 @@ GoodJob CRM Ubuntu 无 Docker 一键部署脚本
   DB_NAME              数据库名，默认 goodjob_crm
   DB_USER              数据库用户，默认 goodjob
   DB_PASSWORD          数据库密码；首次部署留空会自动生成
+  JWT_SECRET           会话签名密钥；留空自动生成并持久化
+  INITIAL_ADMIN_EMAIL  首次空库部署的超级管理员邮箱
+  INITIAL_ADMIN_PASSWORD 首次空库部署的超级管理员密码，至少 12 位
   BACKEND_PORT         后端监听端口，默认 4188
   NON_INTERACTIVE      true/false；true 时不询问，适合自动部署
 
@@ -231,6 +238,11 @@ PY
 )"
   fi
 fi
+if [[ -f "$ENV_FILE" ]]; then
+  [[ -n "$JWT_SECRET" ]] || JWT_SECRET="$(read_existing_env_value JWT_SECRET)"
+  [[ -n "$INITIAL_ADMIN_EMAIL" ]] || INITIAL_ADMIN_EMAIL="$(read_existing_env_value INITIAL_ADMIN_EMAIL)"
+  [[ -n "$INITIAL_ADMIN_PASSWORD" ]] || INITIAL_ADMIN_PASSWORD="$(read_existing_env_value INITIAL_ADMIN_PASSWORD)"
+fi
 
 prompt_value DOMAIN "请输入访问域名，没有域名可直接回车" ""
 if [[ -z "$DOMAIN" ]]; then
@@ -245,11 +257,15 @@ if is_true "$ENABLE_HTTPS"; then
   prompt_value LETSENCRYPT_EMAIL "请输入申请 HTTPS 证书的邮箱" ""
 fi
 prompt_value DB_PASSWORD "请输入 MySQL 业务账号密码" "" true
+prompt_value INITIAL_ADMIN_EMAIL "请输入首次部署超级管理员邮箱" "admin@example.com"
+prompt_value INITIAL_ADMIN_PASSWORD "请输入首次部署超级管理员密码" "" true
 
 if [[ -z "$DB_PASSWORD" ]]; then
   DB_PASSWORD="$(generate_password)"
   DB_PASSWORD_WAS_GENERATED=true
 fi
+[[ -n "$JWT_SECRET" ]] || JWT_SECRET="$(generate_password)"
+[[ -n "$INITIAL_ADMIN_PASSWORD" ]] || INITIAL_ADMIN_PASSWORD="$(generate_password)"
 
 validate_identifier "DB_NAME" "$DB_NAME"
 validate_identifier "DB_USER" "$DB_USER"
@@ -258,6 +274,9 @@ validate_system_name "SERVICE_NAME" "$SERVICE_NAME"
 validate_port
 validate_domain
 [[ "$DB_PASSWORD" != *$'\n'* && "$DB_PASSWORD" != *$'\r'* ]] || die "数据库密码不能包含换行符"
+[[ "$INITIAL_ADMIN_EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || die "首次管理员邮箱格式不正确"
+(( ${#INITIAL_ADMIN_PASSWORD} >= 12 )) || die "首次管理员密码至少需要 12 位"
+(( ${#JWT_SECRET} >= 32 )) || die "JWT_SECRET 至少需要 32 位"
 
 for required_file in package.json package-lock.json backend/package.json frontend/package.json backend/src/server.ts; do
   [[ -f "$SOURCE_DIR/$required_file" ]] || die "源码目录缺少 $required_file：$SOURCE_DIR"
@@ -377,6 +396,12 @@ NODE_ENV=production
 CRM_STORE=mysql
 DATABASE_URL=mysql://$DB_USER:$encoded_password@127.0.0.1:3306/$DB_NAME
 PORT=$BACKEND_PORT
+JWT_SECRET=$JWT_SECRET
+INITIAL_ADMIN_EMAIL=$INITIAL_ADMIN_EMAIL
+INITIAL_ADMIN_PASSWORD=$INITIAL_ADMIN_PASSWORD
+INITIAL_ADMIN_NAME=$INITIAL_ADMIN_NAME
+SESSION_COOKIE_SECURE=$([[ -n "$DOMAIN" ]] && is_true "$ENABLE_HTTPS" && printf true || printf false)
+CORS_ORIGINS=$([[ -n "$DOMAIN" ]] && printf 'https://%s,http://%s' "$DOMAIN" "$DOMAIN")
 EOF
 chown "$APP_USER:$APP_USER" "$ENV_FILE"
 chmod 0600 "$ENV_FILE"
@@ -424,6 +449,11 @@ server {
     root $CURRENT_LINK/frontend/dist;
     index index.html;
     client_max_body_size 20m;
+    server_tokens off;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header X-Frame-Options "DENY" always;
 
     location /api/ {
         proxy_pass http://127.0.0.1:$BACKEND_PORT;

@@ -7,6 +7,7 @@ CREATE TABLE users (
   team_id VARCHAR(64) NOT NULL,
   avatar VARCHAR(8),
   status VARCHAR(20) NOT NULL DEFAULT 'active',
+  auth_version INT NOT NULL DEFAULT 1,
   outbound_email VARCHAR(180) DEFAULT '',
   email_sender_name VARCHAR(120) DEFAULT '',
   email_signature TEXT,

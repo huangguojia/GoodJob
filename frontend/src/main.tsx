@@ -15,9 +15,9 @@ interface DashboardSummary {
   };
 }
 
-function Login({ onLogin }: { onLogin: (token: string, user: User) => void }) {
-  const [email, setEmail] = useState("shirley@goodjob.com");
-  const [password, setPassword] = useState("goodjob123");
+function Login({ onLogin }: { onLogin: (user: User) => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
   async function submit() {
@@ -27,7 +27,7 @@ function Login({ onLogin }: { onLogin: (token: string, user: User) => void }) {
         method: "POST",
         body: JSON.stringify({ email, password })
       });
-      onLogin(result.token, result.user);
+      onLogin(result.user);
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败");
     }
@@ -62,7 +62,7 @@ function Layout({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [jobs, setJobs] = useState<ImportExportJob[]>([]);
   const [wecomMessages, setWecomMessages] = useState<WecomMessage[]>([]);
-  const token = localStorage.getItem("gj_token") || "";
+  const token = "";
 
   useEffect(() => {
     void Promise.all([
@@ -505,25 +505,21 @@ function Settings({ user, accounts }: { user: User; accounts: User[] }) {
 }
 
 function App() {
-  const [token, setToken] = useState(localStorage.getItem("gj_token"));
   const [user, setUser] = useState<User | null>(() => {
     const raw = localStorage.getItem("gj_user");
     return raw ? JSON.parse(raw) as User : null;
   });
 
-  const authed = useMemo(() => token && user, [token, user]);
+  const authed = useMemo(() => Boolean(user), [user]);
 
-  function onLogin(nextToken: string, nextUser: User) {
-    localStorage.setItem("gj_token", nextToken);
+  function onLogin(nextUser: User) {
     localStorage.setItem("gj_user", JSON.stringify(nextUser));
-    setToken(nextToken);
     setUser(nextUser);
   }
 
-  function onLogout() {
-    localStorage.removeItem("gj_token");
+  async function onLogout() {
+    await api("/api/auth/logout", undefined, { method: "POST" }).catch(() => null);
     localStorage.removeItem("gj_user");
-    setToken(null);
     setUser(null);
   }
 

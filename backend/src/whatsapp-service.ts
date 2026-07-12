@@ -2,6 +2,7 @@ import whatsappWeb from "whatsapp-web.js";
 import type { Client as WhatsAppClient, Message } from "whatsapp-web.js";
 import qrcode from "qrcode-terminal";
 import twilio from "twilio";
+import { randomBytes } from "node:crypto";
 import type { WhatsAppBinding, WhatsAppMessage } from "./types.js";
 
 const { Client, LocalAuth } = whatsappWeb;
@@ -14,7 +15,7 @@ class WhatsAppWebManager {
 
   // 创建新的 WhatsApp Web 客户端
   async createClient(userId: string, sessionData?: string): Promise<string> {
-    const clientId = `wa_web_${userId}_${Date.now()}`;
+    const clientId = `wa_web_${randomBytes(24).toString("base64url")}`;
 
     const client = new Client({
       authStrategy: new LocalAuth({
@@ -85,6 +86,9 @@ class WhatsAppWebManager {
   // 注册 QR 码回调
   onQR(clientId: string, callback: (qr: string) => void) {
     this.qrCallbacks.set(clientId, callback);
+    return () => {
+      if (this.qrCallbacks.get(clientId) === callback) this.qrCallbacks.delete(clientId);
+    };
   }
 
   // 注册消息回调

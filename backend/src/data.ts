@@ -1,11 +1,11 @@
 import type { AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerActivity, Deal, DealEvent, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, Memo, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, SalesRecordAudit, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity, WhatsAppMessage, WhatsAppBinding } from "./types.js";
 
 export const users: User[] = [
-  { id: "u_sales_shirley", name: "Shirley", email: "shirley@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "SH", status: "active", outboundEmail: "", emailSenderName: "Shirley", emailSignature: "Best regards,\\nShirley\\nGoodJob Instrument Sales" },
-  { id: "u_sales_mia", name: "Mia", email: "mia@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "MI", status: "active", outboundEmail: "", emailSenderName: "Mia", emailSignature: "Best regards,\\nMia\\nGoodJob Sales Team" },
-  { id: "u_manager_alex", name: "Alex", email: "alex@goodjob.com", password: "goodjob123", role: "manager", teamId: "europe", avatar: "AL", status: "active", outboundEmail: "", emailSenderName: "Alex", emailSignature: "Best regards,\\nAlex\\nGoodJob Sales Team" },
-  { id: "u_admin", name: "Admin", email: "admin@goodjob.com", password: "goodjob123", role: "admin", teamId: "all", avatar: "AD", status: "active", outboundEmail: "", emailSenderName: "Admin", emailSignature: "GoodJob CRM Admin" },
-  { id: "u_super_admin", name: "Super Admin", email: "super@goodjob.com", password: "goodjob123", role: "super_admin", teamId: "all", avatar: "SA", status: "active", outboundEmail: "", emailSenderName: "Super Admin", emailSignature: "GoodJob CRM" }
+  { id: "u_sales_shirley", name: "Shirley", email: "shirley@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "SH", status: "active", authVersion: 1, outboundEmail: "", emailSenderName: "Shirley", emailSignature: "Best regards,\\nShirley\\nGoodJob Instrument Sales" },
+  { id: "u_sales_mia", name: "Mia", email: "mia@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "MI", status: "active", authVersion: 1, outboundEmail: "", emailSenderName: "Mia", emailSignature: "Best regards,\\nMia\\nGoodJob Sales Team" },
+  { id: "u_manager_alex", name: "Alex", email: "alex@goodjob.com", password: "goodjob123", role: "manager", teamId: "europe", avatar: "AL", status: "active", authVersion: 1, outboundEmail: "", emailSenderName: "Alex", emailSignature: "Best regards,\\nAlex\\nGoodJob Sales Team" },
+  { id: "u_admin", name: "Admin", email: "admin@goodjob.com", password: "goodjob123", role: "admin", teamId: "all", avatar: "AD", status: "active", authVersion: 1, outboundEmail: "", emailSenderName: "Admin", emailSignature: "GoodJob CRM Admin" },
+  { id: "u_super_admin", name: "Super Admin", email: "super@goodjob.com", password: "goodjob123", role: "super_admin", teamId: "all", avatar: "SA", status: "active", authVersion: 1, outboundEmail: "", emailSenderName: "Super Admin", emailSignature: "GoodJob CRM" }
 ];
 
 export const customers: Customer[] = [

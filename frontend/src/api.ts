@@ -120,11 +120,15 @@ export interface WecomMessage {
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 export async function api<T>(path: string, token?: string, init: RequestInit = {}): Promise<T> {
+  const method = (init.method || "GET").toUpperCase();
+  const csrfToken = document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith("gj_csrf="))?.slice(8) || "";
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
+    credentials: "same-origin",
     headers: {
       "content-type": "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(!token && !["GET", "HEAD", "OPTIONS"].includes(method) && csrfToken ? { "x-csrf-token": csrfToken } : {}),
       ...(init.headers || {})
     }
   });
