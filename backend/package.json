@@ -17,6 +17,9 @@
     "jsonwebtoken": "^9.0.2",
     "mysql2": "^3.22.5",
     "nodemailer": "^9.0.3",
+    "qrcode-terminal": "^0.12.0",
+    "twilio": "^6.0.2",
+    "whatsapp-web.js": "^1.34.7",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -25,6 +28,7 @@
     "@types/jsonwebtoken": "^9.0.6",
     "@types/node": "^22.10.2",
     "@types/nodemailer": "^8.0.1",
+    "@types/qrcode-terminal": "^0.12.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

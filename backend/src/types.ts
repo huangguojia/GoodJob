@@ -63,6 +63,18 @@ export interface Customer {
   defaultPaymentTerm: string;
 }
 
+export type CustomerActivityType = "call" | "email" | "whatsapp" | "wechat" | "meeting" | "note";
+
+export interface CustomerActivity {
+  id: string;
+  customerId: string;
+  type: CustomerActivityType;
+  content: string;
+  operatorId: string;
+  nextReminder: string;
+  createdAt: string;
+}
+
 export type LeadStatus = "new" | "following" | "converted" | "invalid";
 export type LeadActivityType = "call" | "wechat" | "whatsapp" | "linkedin" | "email" | "meeting" | "note" | "stage" | "system";
 export type LeadSourceType = "outbound" | "inbound" | "offline" | "referral" | "import";
@@ -95,6 +107,9 @@ export interface Lead {
   createdAt: string;
   deletedAt?: string;
   deletedReason?: string;
+  deletedBy?: string;
+  purgeAt?: string;
+  statusBeforeDelete?: LeadStatus;
 }
 
 export interface LeadSourceEvent {
@@ -122,6 +137,34 @@ export interface LeadActivity {
   createdAt: string;
 }
 
+export interface WhatsAppMessage {
+  id: string;
+  customerId: string;
+  direction: "inbound" | "outbound";
+  content: string;
+  contentTranslated: string;
+  mediaUrl: string;
+  status: string;
+  waMessageId: string;
+  createdAt: string;
+}
+
+export interface WhatsAppBinding {
+  id: string;
+  customerId: string;
+  phoneNumber: string;
+  waProfileName: string;
+  lastMessageAt: string;
+  unreadCount: number;
+  createdAt: string;
+  bindingMode?: "web-scan" | "twilio-api" | "manual";  // 绑定模式
+  userId?: string;  // 绑定此账号的用户ID（web-scan 模式用）
+  sessionData?: string;  // WhatsApp Web 会话数据（web-scan 模式用）
+  twilioPhoneNumber?: string;  // Twilio 分配的号码（twilio-api 模式用）
+  connectionStatus?: "connected" | "disconnected" | "qr-pending" | "error";  // 连接状态
+  lastConnectedAt?: string;  // 最后连接时间
+}
+
 export interface Todo {
   id: string;
   title: string;
@@ -138,6 +181,17 @@ export interface Todo {
   impactAmount?: number;
   createdAt?: string;
   historyAt?: string;
+  customerId?: string;
+  dealId?: string;
+  reminderRuleId?: string;
+  triggerKey?: string;
+  snoozedFrom?: string;
+  snoozeReason?: string;
+  snoozeCount?: number;
+  snoozedBy?: string;
+  completedAt?: string;
+  completedBy?: string;
+  completionResult?: string;
 }
 
 export interface PlanTask {
@@ -146,10 +200,20 @@ export interface PlanTask {
   phase: string;
   category: string;
   priority: "high" | "medium" | "normal";
-  status: "planned" | "active" | "done";
+  status: "planned" | "active" | "done" | "cancelled";
   dueAt: string;
   target: string;
   description: string;
+  customerId?: string;
+  leadId?: string;
+  dealId?: string;
+  completionResult?: string;
+  completedAt?: string;
+  cancellationReason?: string;
+  cancelledAt?: string;
+  rescheduledFrom?: string;
+  rescheduledAt?: string;
+  rescheduleReason?: string;
   ownerId: string;
   teamId: string;
   createdAt: string;
@@ -239,6 +303,8 @@ export interface OcrJob {
   teamId: string;
 }
 
+export type ProspectStatus = "preview" | "contactable" | "contacted" | "synced" | "excluded";
+
 export interface WebsiteOpportunity {
   id: string;
   company: string;
@@ -250,7 +316,7 @@ export interface WebsiteOpportunity {
   description: string;
   ownerId: string;
   teamId: string;
-  status: "preview" | "synced";
+  status: ProspectStatus;
   createdAt: string;
   customerId?: string;
   dealId?: string;
@@ -262,6 +328,9 @@ export interface WebsiteOpportunity {
   lastDevelopmentEmailAt?: string;
   lastDevelopmentEmailSubject?: string;
   lastDevelopmentEmailTo?: string;
+  verifiedAt?: string;
+  statusChangedAt?: string;
+  excludedReason?: string;
 }
 
 export type LeadSourceTier = "free" | "byok_free" | "paid";
@@ -314,10 +383,36 @@ export interface Deal {
   quantity: number;
   unitPrice: number;
   amount: number;
+  currency: string;
+  amountType: "estimate" | "quoted" | "won";
   ownerId: string;
   teamId: string;
   nextAction: string;
+  nextActionAt: string;
+  expectedCloseAt: string;
+  stageChangedAt: string;
+  closedAt?: string;
+  wonReason?: string;
+  lostReason?: string;
+  lostReasonCategory?: string;
+  revisitAt?: string;
   archivedAt?: string;
+}
+
+export type DealEventType = "created" | "updated" | "stage" | "follow_up" | "quote" | "sample" | "negotiation" | "payment" | "document" | "won" | "lost" | "archived";
+
+export interface DealEvent {
+  id: string;
+  dealId: string;
+  type: DealEventType;
+  content: string;
+  operatorId: string;
+  fromStage?: Deal["stage"];
+  toStage?: Deal["stage"];
+  nextAction?: string;
+  nextActionAt?: string;
+  relatedDocumentId?: string;
+  createdAt: string;
 }
 
 export interface Reminder {
@@ -328,13 +423,21 @@ export interface Reminder {
   ownerId: string;
   teamId: string;
   channel: "站内" | "邮件" | "企业微信";
-  status: "pending" | "sent" | "done";
+  status: "enabled" | "disabled";
   ruleType?: "quote_no_reply" | "sample_feedback" | "inactive_customer" | "high_value_revisit" | "custom_due";
   targetStage?: string;
   days?: number;
   priority?: "high" | "medium" | "normal";
   enabled?: boolean;
   generatedCount?: number;
+  targetOwnerId?: string;
+  lastRunBy?: string;
+  lastRunAt?: string;
+  lastMatchedCount?: number;
+  lastCreatedCount?: number;
+  lastSkippedCount?: number;
+  lastFailedCount?: number;
+  lastError?: string;
 }
 
 export interface ImportExportJob {
@@ -360,8 +463,31 @@ export interface TradeDocumentItem {
   packageCount: number;
 }
 
+export interface TradeDocumentAudit {
+  id: string;
+  field: string;
+  oldValue: string;
+  newValue: string;
+  operatorId: string;
+  operatorName: string;
+  createdAt: string;
+}
+
+export interface TradeDocumentSendRecord {
+  id: string;
+  channel: "email" | "whatsapp" | "wechat" | "manual";
+  recipient: string;
+  message: string;
+  operatorId: string;
+  operatorName: string;
+  createdAt: string;
+}
+
 export interface TradeDocument {
   id: string;
+  customerId: string;
+  dealId: string;
+  revision: number;
   type: "PI" | "CI";
   title: string;
   number: string;
@@ -381,7 +507,12 @@ export interface TradeDocument {
   bankInfo: string;
   notes: string;
   templateStyle: "executive" | "classic" | "compact";
-  status: "draft" | "ready" | "exported";
+  status: "draft" | "ready" | "pending_approval" | "approved" | "rejected" | "exported";
+  approvalNote?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+  audits: TradeDocumentAudit[];
+  sendRecords: TradeDocumentSendRecord[];
   ownerId: string;
   teamId: string;
   updatedAt: string;
@@ -419,10 +550,13 @@ export interface Memo {
   content: string;
   category: string;
   tags: string;
+  customerId: string;
+  dealId: string;
   ownerId: string;
   teamId: string;
   pinned: boolean;
   archived: boolean;
+  deletedAt: string;
   updatedAt: string;
 }
 
@@ -508,7 +642,12 @@ export interface MonthlySalesRecord {
   salesAmount: number;
   currency: string;
   exchangeRate: number;
+  exchangeRateDate: string;
+  exchangeRateSource: "pending" | "manual" | "finance";
+  settlementCurrency: string;
   settlementAmount: number;
+  basisType: "deal_amount" | "receipt";
+  basisDate: string;
   dealArchivedAt: string;
   sourceType: "deal" | "manual" | "adjusted";
   status: CommissionRecordStatus;
@@ -542,6 +681,8 @@ export interface CommissionCalculation {
   manualAdjustment: number;
   finalCommission: number;
   status: CommissionCalculationStatus;
+  version: number;
+  isCurrent: boolean;
   calculatedAt: string;
   reviewedBy: string;
   reviewedAt: string;

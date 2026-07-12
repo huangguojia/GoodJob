@@ -1,4 +1,4 @@
-import type { AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, Memo, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, SalesRecordAudit, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerActivity, Deal, DealEvent, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, Memo, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, SalesRecordAudit, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity, WhatsAppMessage, WhatsAppBinding } from "./types.js";
 
 export const users: User[] = [
   { id: "u_sales_shirley", name: "Shirley", email: "shirley@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "SH", status: "active", outboundEmail: "", emailSenderName: "Shirley", emailSignature: "Best regards,\\nShirley\\nGoodJob Instrument Sales" },
@@ -16,6 +16,12 @@ export const customers: Customer[] = [
   { id: "c5", company: "Evergreen GmbH", country: "德国", contact: "Anna", ownerId: "u_sales_shirley", teamId: "europe", stage: "成交", amount: 57000, health: 95, nextReminder: "7 天后复购", wecomBound: true, billingName: "Evergreen GmbH", billingAddress: "Hamburg, Germany", documentContact: "Anna / orders@evergreen.example", defaultPortDischarge: "Hamburg", defaultIncoterm: "FOB Tianjin", defaultPaymentTerm: "30% T/T deposit, 70% before shipment" }
 ];
 
+export const customerActivities: CustomerActivity[] = [
+  { id: "ca1", customerId: "c1", type: "email", content: "已发送 PI、CE 证书与新版交期说明，等待客户确认付款方式。", operatorId: "u_sales_shirley", nextReminder: "已逾期", createdAt: "2026-07-10T03:20:00.000Z" },
+  { id: "ca2", customerId: "c2", type: "whatsapp", content: "确认样品已签收，客户将在内部测试后反馈。", operatorId: "u_sales_shirley", nextReminder: "今天 16:00", createdAt: "2026-07-09T08:30:00.000Z" },
+  { id: "ca3", customerId: "c3", type: "meeting", content: "完成账期与采购数量沟通，等待客户最终审批。", operatorId: "u_sales_mia", nextReminder: "明天 09:30", createdAt: "2026-07-10T01:10:00.000Z" }
+];
+
 export const leads: Lead[] = [
   { id: "l1", company: "NorthStar Lighting GmbH", contact: "James Müller", country: "德国", email: "james.mueller@northstar-light.de", phone: "+49 151 2388 9012", wechat: "", source: "名片 OCR", sourceType: "offline", sourceChannel: "ocr", sourceCampaign: "", externalId: "", sourceUrl: "", intent: "高", stage: "已联系", status: "following", ownerId: "u_sales_shirley", teamId: "europe", estimatedAmount: 45000, nextFollowAt: "明天 10:00", lastActivityAt: "今天 09:20", remark: "展会名片，关注 LED 工程灯，需 CE 报告", convertedCustomerId: "", convertedDealId: "", createdAt: "2026-07-08T09:20:00.000Z" },
   { id: "l2", company: "Lumière Retail SARL", contact: "Camille Bernard", country: "法国", email: "camille@lumiere-retail.fr", phone: "+33 6 12 45 78 90", wechat: "", source: "官网询盘", sourceType: "inbound", sourceChannel: "website-inquiry", sourceCampaign: "", externalId: "", sourceUrl: "", intent: "中", stage: "新线索", status: "new", ownerId: "u_sales_shirley", teamId: "europe", estimatedAmount: 20000, nextFollowAt: "今天 15:00", lastActivityAt: "昨天 17:40", remark: "官网留资，询报价单模板", convertedCustomerId: "", convertedDealId: "", createdAt: "2026-07-09T09:40:00.000Z" },
@@ -29,6 +35,19 @@ export const leadActivities: LeadActivity[] = [
   { id: "la1", leadId: "l1", type: "system", content: "线索创建（来源：名片 OCR）", operatorId: "u_sales_shirley", nextFollowAt: "", createdAt: "2026-07-08T09:20:00.000Z" },
   { id: "la2", leadId: "l1", type: "call", content: "首次电话沟通，客户对 LED 工程灯有采购计划，需 CE 报告与工程案例", operatorId: "u_sales_shirley", nextFollowAt: "明天 10:00", createdAt: "2026-07-09T01:20:00.000Z" },
   { id: "la3", leadId: "l3", type: "wechat", content: "已通过微信，发送产品目录，客户要求寄样 2 款", operatorId: "u_sales_mia", nextFollowAt: "明天 09:30", createdAt: "2026-07-09T00:10:00.000Z" }
+];
+
+export const whatsappBindings: WhatsAppBinding[] = [
+  { id: "wab1", customerId: "c1", phoneNumber: "+46701234567", waProfileName: "Emma Svensson", lastMessageAt: "2026-07-09T08:42:00.000Z", unreadCount: 0, createdAt: "2026-07-01T10:00:00.000Z" },
+  { id: "wab2", customerId: "c3", phoneNumber: "+81901234567", waProfileName: "Sato-san", lastMessageAt: "2026-07-08T12:30:00.000Z", unreadCount: 2, createdAt: "2026-06-15T14:20:00.000Z" }
+];
+
+export const whatsappMessages: WhatsAppMessage[] = [
+  { id: "wam1", customerId: "c1", direction: "inbound", content: "Hello, do you have CE certification for the LED industrial lights?", contentTranslated: "你好，LED 工业灯有 CE 认证吗？", mediaUrl: "", status: "read", waMessageId: "wamsgid.1", createdAt: "2026-07-09T08:42:00.000Z" },
+  { id: "wam2", customerId: "c1", direction: "outbound", content: "Yes, we have CE and RoHS certifications. I'll send you the PDF documents.", contentTranslated: "", mediaUrl: "", status: "read", waMessageId: "wamsgid.2", createdAt: "2026-07-09T08:45:00.000Z" },
+  { id: "wam3", customerId: "c1", direction: "outbound", content: "[PDF] CE_Certificate_LED_Series.pdf", contentTranslated: "", mediaUrl: "https://example.com/docs/ce_cert.pdf", status: "delivered", waMessageId: "wamsgid.3", createdAt: "2026-07-09T08:46:00.000Z" },
+  { id: "wam4", customerId: "c3", direction: "inbound", content: "サンプルの発送状況を教えてください。", contentTranslated: "请告诉我样品的发货状态。", mediaUrl: "", status: "read", waMessageId: "wamsgid.4", createdAt: "2026-07-08T12:30:00.000Z" },
+  { id: "wam5", customerId: "c3", direction: "inbound", content: "いつ到着予定ですか？", contentTranslated: "预计什么时候到达？", mediaUrl: "", status: "delivered", waMessageId: "wamsgid.5", createdAt: "2026-07-08T12:31:00.000Z" }
 ];
 
 export const todos: Todo[] = [
@@ -233,17 +252,23 @@ export const commissionItems: CommissionItem[] = [];
 export const commissionExports: CommissionExport[] = [];
 
 export const deals: Deal[] = [
-  { id: "d1", customerId: "c1", title: "Nordic Tools 电动工具年度采购", stage: "已报价", product: "压力变送器 PT-2088", quantity: 60, unitPrice: 600, amount: 36000, ownerId: "u_sales_shirley", teamId: "europe", nextAction: "二次确认报价" },
-  { id: "d2", customerId: "c2", title: "Atlas Home 家居样品测试", stage: "样品", product: "智能温湿度仪表", quantity: 40, unitPrice: 550, amount: 22000, ownerId: "u_sales_shirley", teamId: "europe", nextAction: "确认样品反馈" },
-  { id: "d3", customerId: "c3", title: "Kanto Retail 付款条款谈判", stage: "谈判", product: "流量计 FM-300", quantity: 80, unitPrice: 600, amount: 48000, ownerId: "u_sales_mia", teamId: "europe", nextAction: "主管参与账期谈判" },
-  { id: "d4", customerId: "c4", title: "Al Noor LED 灯具报价", stage: "已报价", product: "温度控制器 TC-90", quantity: 30, unitPrice: 600, amount: 18000, ownerId: "u_sales_mia", teamId: "europe", nextAction: "更新汇率报价" },
-  { id: "d5", customerId: "c5", title: "Evergreen GmbH 复购订单", stage: "成交", product: "工业压力表 PG-100", quantity: 95, unitPrice: 600, amount: 57000, ownerId: "u_sales_shirley", teamId: "europe", nextAction: "7 天后复购回访" }
+  { id: "d1", customerId: "c1", title: "Nordic Tools 电动工具年度采购", stage: "已报价", product: "压力变送器 PT-2088", quantity: 60, unitPrice: 600, amount: 36000, currency: "USD", amountType: "quoted", ownerId: "u_sales_shirley", teamId: "europe", nextAction: "二次确认报价", nextActionAt: "2026-07-11", expectedCloseAt: "2026-07-25", stageChangedAt: "2026-07-06T09:00:00.000Z" },
+  { id: "d2", customerId: "c2", title: "Atlas Home 家居样品测试", stage: "样品", product: "智能温湿度仪表", quantity: 40, unitPrice: 550, amount: 22000, currency: "USD", amountType: "quoted", ownerId: "u_sales_shirley", teamId: "europe", nextAction: "确认样品反馈", nextActionAt: "2026-07-11", expectedCloseAt: "2026-08-02", stageChangedAt: "2026-07-09T08:30:00.000Z" },
+  { id: "d3", customerId: "c3", title: "Kanto Retail 付款条款谈判", stage: "谈判", product: "流量计 FM-300", quantity: 80, unitPrice: 600, amount: 48000, currency: "USD", amountType: "quoted", ownerId: "u_sales_mia", teamId: "europe", nextAction: "主管参与账期谈判", nextActionAt: "2026-07-12", expectedCloseAt: "2026-07-20", stageChangedAt: "2026-07-10T01:10:00.000Z" },
+  { id: "d4", customerId: "c4", title: "Al Noor LED 灯具报价", stage: "已报价", product: "温度控制器 TC-90", quantity: 30, unitPrice: 600, amount: 18000, currency: "USD", amountType: "quoted", ownerId: "u_sales_mia", teamId: "europe", nextAction: "更新汇率报价", nextActionAt: "2026-07-11", expectedCloseAt: "2026-07-28", stageChangedAt: "2026-07-08T06:20:00.000Z" },
+  { id: "d5", customerId: "c5", title: "Evergreen GmbH 复购订单", stage: "成交", product: "工业压力表 PG-100", quantity: 95, unitPrice: 600, amount: 57000, currency: "USD", amountType: "won", ownerId: "u_sales_shirley", teamId: "europe", nextAction: "确认定金与订单交付", nextActionAt: "2026-07-17", expectedCloseAt: "2026-07-10", stageChangedAt: "2026-07-10T05:30:00.000Z", closedAt: "2026-07-10T05:30:00.000Z", wonReason: "客户已确认 PI 与付款条件" }
+];
+
+export const dealEvents: DealEvent[] = [
+  { id: "de1", dealId: "d1", type: "quote", content: "已向客户发送 PI-2026-0706-001，等待确认付款方式。", operatorId: "u_sales_shirley", fromStage: "已联系", toStage: "已报价", nextAction: "二次确认报价", nextActionAt: "2026-07-11", relatedDocumentId: "td_seed_pi", createdAt: "2026-07-06T09:00:00.000Z" },
+  { id: "de2", dealId: "d2", type: "sample", content: "客户已签收样品，等待内部测试反馈。", operatorId: "u_sales_shirley", fromStage: "已报价", toStage: "样品", nextAction: "确认样品反馈", nextActionAt: "2026-07-11", createdAt: "2026-07-09T08:30:00.000Z" },
+  { id: "de3", dealId: "d5", type: "won", content: "客户已确认 PI 与付款条件，商机成交。", operatorId: "u_sales_shirley", fromStage: "谈判", toStage: "成交", nextAction: "确认定金与订单交付", nextActionAt: "2026-07-17", createdAt: "2026-07-10T05:30:00.000Z" }
 ];
 
 export const reminders: Reminder[] = [
-  { id: "r1", title: "报价后 3 天未回复", rule: "A 级客户报价后 3 天提醒", dueAt: "今天 09:45", ownerId: "u_sales_shirley", teamId: "europe", channel: "企业微信", status: "pending" },
-  { id: "r2", title: "样品签收后待反馈", rule: "签收后 3 天提醒", dueAt: "今天 16:00", ownerId: "u_sales_shirley", teamId: "europe", channel: "站内", status: "pending" },
-  { id: "r3", title: "A 级客户 14 天未联系", rule: "高价值客户长期未触达", dueAt: "本周五", ownerId: "u_manager_alex", teamId: "europe", channel: "邮件", status: "sent" }
+  { id: "r1", title: "报价阶段停滞提醒", rule: "进入已报价阶段 3 天未更新时生成站内任务", dueAt: "今天 09:45", ownerId: "u_sales_shirley", targetOwnerId: "u_sales_shirley", teamId: "europe", channel: "站内", status: "enabled", enabled: true, ruleType: "quote_no_reply", targetStage: "已报价", days: 3, priority: "high" },
+  { id: "r2", title: "样品阶段待确认", rule: "进入样品阶段 3 天未更新时生成站内任务", dueAt: "今天 16:00", ownerId: "u_sales_shirley", targetOwnerId: "u_sales_shirley", teamId: "europe", channel: "站内", status: "enabled", enabled: true, ruleType: "sample_feedback", targetStage: "样品", days: 3, priority: "medium" },
+  { id: "r3", title: "高价值客户复访", rule: "高价值客户 14 天未产生有效活动时生成站内任务", dueAt: "本周五", ownerId: "u_manager_alex", targetOwnerId: "u_manager_alex", teamId: "europe", channel: "站内", status: "disabled", enabled: false, ruleType: "high_value_revisit", days: 14, priority: "medium" }
 ];
 
 export const importExportJobs: ImportExportJob[] = [
@@ -254,6 +279,9 @@ export const importExportJobs: ImportExportJob[] = [
 export const tradeDocuments: TradeDocument[] = [
   {
     id: "td_seed_pi",
+    customerId: "c1",
+    dealId: "d1",
+    revision: 1,
     type: "PI",
     title: "Nordic Tools AB 压力仪表 PI",
     number: "PI-2026-0706-001",
@@ -274,6 +302,8 @@ export const tradeDocuments: TradeDocument[] = [
     notes: "Price includes standard export packing. Lead time: 20 working days after deposit.",
     templateStyle: "executive",
     status: "ready",
+    audits: [],
+    sendRecords: [],
     ownerId: "u_sales_shirley",
     teamId: "europe",
     updatedAt: "2026-07-06T09:00:00.000Z",
@@ -344,10 +374,13 @@ export const memos: Memo[] = [
     content: "客户问 CE/ROHS 时，优先发对应型号证书、测试报告摘要、产品参数页。不要只发整包资料，容易增加客户筛选成本。",
     category: "销售话术",
     tags: "CE,认证,欧洲",
+    customerId: "c1",
+    dealId: "d1",
     ownerId: "u_sales_shirley",
     teamId: "europe",
     pinned: true,
     archived: false,
+    deletedAt: "",
     updatedAt: "2026-06-27T09:10:00.000Z"
   },
   {
@@ -356,10 +389,13 @@ export const memos: Memo[] = [
     content: "新线索需要补齐 WhatsApp、微信和主营产品。下一次沟通重点确认进口品类、年采购量和是否接受样品费。",
     category: "客户备忘",
     tags: "展会线索,补充资料,待跟进",
+    customerId: "",
+    dealId: "",
     ownerId: "u_manager_alex",
     teamId: "europe",
     pinned: false,
     archived: false,
+    deletedAt: "",
     updatedAt: "2026-06-27T08:40:00.000Z"
   },
   {
@@ -368,10 +404,13 @@ export const memos: Memo[] = [
     content: "成交前复盘三个点：价格是否含汇率缓冲、交期是否写清工作日、付款条款是否与客户等级匹配。",
     category: "复盘",
     tags: "报价,复盘,SOP",
+    customerId: "",
+    dealId: "",
     ownerId: "u_sales_mia",
     teamId: "europe",
     pinned: false,
     archived: false,
+    deletedAt: "",
     updatedAt: "2026-06-26T17:30:00.000Z"
   }
 ];

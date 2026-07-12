@@ -94,6 +94,12 @@ export interface Reminder {
   dueAt: string;
   channel: string;
   status: string;
+  enabled?: boolean;
+  lastRunAt?: string;
+  lastMatchedCount?: number;
+  lastCreatedCount?: number;
+  lastSkippedCount?: number;
+  lastFailedCount?: number;
 }
 
 export interface ImportExportJob {

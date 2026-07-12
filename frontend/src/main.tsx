@@ -457,11 +457,11 @@ function Pipeline({ deals, token, onChanged }: { deals: Deal[]; token: string; o
 }
 
 function Reminders({ reminders, token, onChanged }: { reminders: Reminder[]; token: string; onChanged: () => void }) {
-  async function done(id: string) {
-    await api(`/api/reminders/${id}/done`, token, { method: "POST" });
+  async function toggle(id: string) {
+    await api(`/api/reminders/${id}/toggle`, token, { method: "POST" });
     onChanged();
   }
-  return <section className="panel"><div className="panelHead"><h2>跟进提醒</h2><button>设置规则</button></div><div className="todoList">{reminders.map((reminder) => <article className="todo" key={reminder.id}><i /><div><b>{reminder.title}</b><span>{reminder.rule} · {reminder.dueAt} · {reminder.channel}</span></div><button onClick={() => void done(reminder.id)}>{reminder.status === "done" ? "已完成" : "完成"}</button></article>)}</div></section>;
+  return <section className="panel"><div className="panelHead"><h2>提醒规则</h2><button>设置规则</button></div><div className="todoList">{reminders.map((reminder) => <article className="todo" key={reminder.id}><i /><div><b>{reminder.title}</b><span>{reminder.rule} · 站内任务 · {reminder.lastRunAt || "尚未手工运行"}</span></div><button onClick={() => void toggle(reminder.id)}>{reminder.enabled === false ? "启用" : "停用"}</button></article>)}</div></section>;
 }
 
 function ImportExport({ jobs, token, onCreated }: { jobs: ImportExportJob[]; token: string; onCreated: () => void }) {

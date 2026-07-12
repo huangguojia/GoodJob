@@ -732,7 +732,36 @@
       margin-bottom: 13px;
     }
 
-    .focus-top span {
+    .dashboard-period-tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 3px;
+      border: 1px solid rgba(49,87,213,.16);
+      border-radius: 8px;
+      background: rgba(255,255,255,.72);
+    }
+
+    .dashboard-period-tabs button {
+      min-width: 44px;
+      height: 26px;
+      padding: 0 9px;
+      border: 0;
+      border-radius: 6px;
+      color: #647084;
+      background: transparent;
+      font-size: 11px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .dashboard-period-tabs button.active {
+      color: #16326d;
+      background: rgba(49,87,213,.1);
+      box-shadow: 0 2px 8px rgba(49,87,213,.08);
+    }
+
+    .focus-top > span {
       display: inline-flex;
       align-items: center;
       min-height: 21px;
@@ -747,7 +776,7 @@
       letter-spacing: .02em;
     }
 
-    .focus-top span:last-child {
+    .focus-top > span:last-child {
       color: #647084;
       background: rgba(255,255,255,.74);
       border-color: rgba(120,137,166,.22);
@@ -952,6 +981,257 @@
 
     .schedule-panel {
       padding: 16px;
+    }
+
+    .lead-funnel-panel {
+      min-height: 254px;
+      padding: 16px;
+      overflow: hidden;
+    }
+
+    .lead-funnel-panel .section-head {
+      margin-bottom: 10px;
+    }
+
+    .lead-funnel-live {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #52617a;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .lead-funnel-live::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 0 4px rgba(16, 185, 129, .11);
+      content: "";
+    }
+
+    .lead-funnel {
+      display: grid;
+      gap: 8px;
+    }
+
+    .lead-funnel-chart-wrap {
+      position: relative;
+      width: 100%;
+      height: 124px;
+    }
+
+    .lead-funnel-chart {
+      width: 100%;
+      min-width: 0;
+      height: 100%;
+    }
+
+    .lead-funnel-travel-light {
+      position: absolute;
+      z-index: 6;
+      top: 0;
+      left: 0;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 42% 38%, rgba(255, 255, 255, .7) 0 26%, rgba(234, 220, 255, .7) 34%, rgba(180, 122, 236, .7) 56%, hsl(270 78% 50% / .7) 78%, hsl(270 70% 38% / .7) 100%);
+      pointer-events: none;
+      offset-anchor: center;
+      offset-distance: 0%;
+      offset-rotate: 0deg;
+      animation: lead-funnel-travel 3.4s linear infinite;
+    }
+
+    .lead-funnel-travel-light::before {
+      position: absolute;
+      inset: -8px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(184, 119, 239, .62) 0 18%, rgba(132, 58, 204, .36) 36%, rgba(105, 40, 166, .16) 54%, rgba(105, 40, 166, 0) 76%);
+      content: "";
+      animation: lead-funnel-light-breathe 1.15s ease-in-out infinite alternate;
+    }
+
+    .lead-funnel-travel-light::after {
+      position: absolute;
+      top: 1.5px;
+      left: 1.5px;
+      width: 3px;
+      height: 3px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, .7);
+      content: "";
+    }
+
+    @keyframes lead-funnel-travel {
+      0% {
+        opacity: 0;
+        offset-distance: 0%;
+        transform: scale(.78);
+      }
+      7% {
+        opacity: 1;
+        transform: scale(1);
+      }
+      92% {
+        opacity: 1;
+        transform: scale(1);
+      }
+      100% {
+        opacity: 0;
+        offset-distance: 100%;
+        transform: scale(.78);
+      }
+    }
+
+    @keyframes lead-funnel-light-breathe {
+      from {
+        opacity: .72;
+        transform: scale(.86);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1.18);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .lead-funnel-travel-light {
+        display: none;
+        animation: none;
+      }
+    }
+
+    .lead-funnel-stage-list {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .lead-funnel-stage-row {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      min-width: 0;
+      min-height: 48px;
+      padding: 7px 2px 5px;
+      border: 0;
+      border-radius: 5px;
+      color: var(--ink);
+      background: transparent;
+      cursor: pointer;
+      text-align: center;
+      transition: background .16s ease, transform .16s ease;
+    }
+
+    .lead-funnel-stage-row:hover,
+    .lead-funnel-stage-row:focus-visible {
+      background: #f4f7fb;
+      transform: translateY(-1px);
+    }
+
+    .lead-funnel-stage-dot {
+      width: 6px;
+      height: 6px;
+      border: 1px solid #fff;
+      border-radius: 50%;
+      background: var(--stage-color);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--stage-color), transparent 84%);
+    }
+
+    .lead-funnel-stage-row > span:not(.lead-funnel-stage-dot) {
+      width: 100%;
+      overflow: hidden;
+      font-size: 10px;
+      font-weight: 700;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .lead-funnel-stage-row small {
+      color: var(--muted);
+      font-size: 9px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .lead-funnel-filtered {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+      min-width: 0;
+      padding: 6px 8px;
+      border: 1px solid rgba(213, 138, 18, .18);
+      border-radius: 5px;
+      color: #75623d;
+      background: rgba(213, 138, 18, .06);
+      font-size: 10px;
+    }
+
+    .lead-funnel-filter-icon {
+      display: grid;
+      place-items: center;
+      flex: 0 0 22px;
+      width: 22px;
+      height: 22px;
+      border-radius: 5px;
+      color: #b16d09;
+      background: rgba(213, 138, 18, .12);
+    }
+
+    .lead-funnel-filter-icon svg {
+      width: 13px;
+      height: 13px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .lead-funnel-filtered b {
+      color: #8d5708;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .lead-funnel-summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .lead-funnel-summary div {
+      display: grid;
+      gap: 2px;
+      padding: 9px 8px 0;
+      text-align: center;
+    }
+
+    .lead-funnel-summary div + div {
+      border-left: 1px solid var(--line-soft);
+    }
+
+    .lead-funnel-summary span {
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .lead-funnel-summary b {
+      color: var(--ink);
+      font-size: 15px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    @media (max-width: 600px) {
+      .lead-funnel-stage-row {
+        padding-inline: 1px;
+      }
     }
 
     .schedule-list {
@@ -1499,6 +1779,70 @@
       font-size: 11px;
     }
 
+    .memo-list-tools {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .memo-list-tools > input {
+      width: 100%;
+      height: 36px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      background: #fff;
+      outline: 0;
+    }
+
+    .memo-list-tools > input:focus {
+      border-color: rgba(49,87,213,.35);
+      box-shadow: 0 0 0 3px rgba(49,87,213,.08);
+    }
+
+    .memo-status-tabs {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      padding: 3px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #f4f6fa;
+    }
+
+    .memo-status-tabs button {
+      min-width: 0;
+      height: 30px;
+      border: 0;
+      border-radius: 5px;
+      color: var(--muted);
+      background: transparent;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .memo-status-tabs button.active {
+      color: var(--brand);
+      background: #fff;
+      box-shadow: 0 1px 5px rgba(27,39,68,.1);
+    }
+
+    .memo-pin-filter {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .memo-relation {
+      color: #47628e;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
     .memo-card.archived {
       opacity: .62;
     }
@@ -1578,10 +1922,30 @@
       height: 30px;
       padding: 0 9px;
       border-color: rgba(27,39,68,.08);
-      border-radius: 999px;
+      border-radius: var(--radius-sm);
       color: var(--muted);
       font-size: 11px;
       background: rgba(244,247,252,.78);
+    }
+
+    .memo-fields {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px 10px;
+    }
+
+    .memo-fields label {
+      display: grid;
+      grid-template-columns: 66px minmax(0, 1fr);
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .memo-fields label > span {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
     }
 
     .memo-editor {
@@ -1614,8 +1978,41 @@
     }
 
     .memo-save-state {
+      min-height: 28px;
+      padding: 0 6px;
+      border: 0;
       color: var(--muted);
+      background: transparent;
       font-size: 11px;
+      cursor: default;
+    }
+
+    .memo-save-state.needs-retry {
+      color: #a33737;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .memo-back-button {
+      display: none;
+    }
+
+    .memo-create-options {
+      padding: 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #f8faff;
+    }
+
+    .memo-create-options summary {
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .memo-create-options[open] summary {
+      margin-bottom: 10px;
     }
 
     .memo-delete {
@@ -1672,6 +2069,79 @@
       border-radius: 8px;
       font-size: 11px;
       white-space: nowrap;
+    }
+
+    .reminder-workspace-tabs,
+    .reminder-filters {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .reminder-workspace-tabs {
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .reminder-workspace-tabs button,
+    .reminder-filters button {
+      min-height: 36px;
+      padding: 7px 12px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: var(--muted);
+      background: transparent;
+      font-weight: 750;
+      cursor: pointer;
+    }
+
+    .reminder-workspace-tabs button.active,
+    .reminder-filters button.active {
+      color: var(--brand);
+      border-color: #cbd6fb;
+      background: #edf2ff;
+    }
+
+    .reminder-task-card {
+      grid-template-columns: 5px minmax(0, 1fr) auto;
+    }
+
+    .reminder-task-heading,
+    .reminder-rule-heading {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .reminder-task-heading button {
+      padding: 0;
+      border: 0;
+      color: var(--brand);
+      background: transparent;
+      font: inherit;
+      font-weight: 800;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .reminder-task-actions {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .reminder-run-summary {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .reminder-empty {
+      padding: 28px 14px;
+      color: var(--muted);
+      text-align: center;
     }
 
     .doc-studio {
@@ -1754,6 +2224,95 @@
       font-size: 11px;
       line-height: 1.45;
     }
+
+    .doc-workflow-bar {
+      display: grid;
+      gap: 10px;
+      padding: 10px;
+      margin: 0 0 12px;
+      border: 1px solid #dfe5f0;
+      border-radius: 8px;
+      background: #f8faff;
+    }
+
+    .doc-workflow-links,
+    .doc-workflow-actions {
+      display: flex;
+      align-items: end;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .doc-workflow-links label {
+      display: grid;
+      gap: 4px;
+      min-width: 180px;
+      flex: 1 1 220px;
+    }
+
+    .doc-workflow-links label span {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .doc-workflow-links select {
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 7px 9px;
+      color: var(--ink);
+      background: #fff;
+      font-size: 12px;
+    }
+
+    .doc-status-badge {
+      display: inline-flex;
+      min-height: 28px;
+      align-items: center;
+      padding: 0 9px;
+      border-radius: 999px;
+      color: #1b4fb9;
+      background: #e7efff;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .doc-workflow-actions .btn {
+      min-height: 30px;
+      padding: 6px 9px;
+      font-size: 11px;
+    }
+
+    .doc-history-panel {
+      margin: 0 0 12px;
+      border-bottom: 1px solid #e7ebf3;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .doc-history-panel summary {
+      padding: 0 0 8px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .doc-history-list {
+      display: grid;
+      gap: 6px;
+      padding: 0 0 10px;
+    }
+
+    .doc-history-item {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 7px 8px;
+      border-radius: 6px;
+      background: #f5f7fb;
+    }
+
+    .doc-history-item b { color: var(--ink); }
 
     .segmented {
       display: inline-flex;
@@ -2317,12 +2876,13 @@
 
     .pipeline-strip {
       display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(210px, 1fr));
+      min-width: 1050px;
       gap: 8px;
     }
 
     .stage {
-      min-height: 260px;
+      min-height: 220px;
       padding: 10px;
       border-radius: var(--radius);
       border: 1px solid var(--line-soft);
@@ -2339,6 +2899,17 @@
       font-weight: 800;
     }
 
+    .stage-head-main {
+      display: grid;
+      gap: 2px;
+    }
+
+    .stage-head-main small {
+      color: #66758e;
+      font-size: 10px;
+      font-weight: 600;
+    }
+
     .deal {
       margin-bottom: 8px;
       padding: 10px;
@@ -2350,9 +2921,8 @@
     }
 
     .deal:hover {
-      transform: translateY(-3px);
       border-color: rgba(49,87,213,.28);
-      box-shadow: 0 14px 28px rgba(27,39,68,.12);
+      box-shadow: 0 8px 20px rgba(27,39,68,.1);
     }
 
     .deal b {
@@ -2388,17 +2958,244 @@
 
     .deal-actions {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
       gap: 6px;
       margin-top: 8px;
     }
 
     .deal-actions .btn {
-      min-height: 26px;
+      min-height: 32px;
       padding: 4px 8px;
       border-radius: 8px;
       font-size: 11px;
     }
+
+    .deal-actions .deal-primary-action {
+      width: 100%;
+    }
+
+    .deal-secondary-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 5px;
+    }
+
+    .deal-secondary-actions .btn {
+      min-width: 0;
+      padding-inline: 5px;
+      color: #4b5870;
+      background: #fff;
+      white-space: nowrap;
+    }
+
+    .deal-secondary-actions .btn:hover {
+      color: var(--brand);
+      border-color: rgba(49,87,213,.25);
+      background: #f7f9ff;
+    }
+
+    .deal-secondary-actions .btn.danger {
+      color: var(--red);
+    }
+
+    .deal-secondary-actions .btn:last-child:nth-child(odd) {
+      grid-column: 1 / -1;
+    }
+
+    #pipeline { overflow-x: clip; }
+
+    .pipeline-active-panel { overflow-x: auto; }
+
+    .pipeline-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .pipeline-summary-item {
+      padding: 10px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .pipeline-summary-item span,
+    .pipeline-summary-item small { display: block; color: var(--muted); font-size: 11px; }
+    .pipeline-summary-item b { display: block; margin: 4px 0; color: var(--ink); font-size: 18px; }
+
+    .pipeline-toolbar,
+    .pipeline-closed-filters {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) 180px auto;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .pipeline-toolbar input,
+    .pipeline-toolbar select,
+    .pipeline-closed-filters input,
+    .pipeline-closed-filters select {
+      width: 100%;
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 7px 10px;
+      color: var(--ink);
+      background: #fff;
+    }
+
+    .pipeline-stage-tabs {
+      display: none;
+      gap: 6px;
+      margin-bottom: 10px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+
+    .pipeline-stage-tabs button {
+      min-height: 38px;
+      flex: 0 0 auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 10px;
+      color: var(--muted);
+      background: #fff;
+      font-weight: 800;
+    }
+
+    .pipeline-stage-tabs button.active {
+      color: var(--brand);
+      border-color: rgba(49,87,213,.35);
+      background: #eef2ff;
+    }
+
+    .deal-customer,
+    .deal-date,
+    .deal-doc-status {
+      display: flex !important;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .deal-date.overdue { color: var(--red); font-weight: 800; }
+
+    .deal-empty {
+      padding: 18px 8px;
+      color: var(--muted);
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .pipeline-archive-panel {
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .pipeline-archive-panel > summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      cursor: pointer;
+      list-style: none;
+    }
+
+    .pipeline-archive-panel > summary::-webkit-details-marker { display: none; }
+    .pipeline-archive-panel > summary b { color: var(--ink); }
+    .pipeline-archive-panel > summary span { color: var(--muted); font-size: 12px; }
+    .pipeline-archive-content { padding: 0 16px 16px; border-top: 1px solid var(--line-soft); }
+    .pipeline-archive-content .table-wrap { max-height: 420px; }
+
+    .pipeline-pager {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .deal-drawer-backdrop {
+      position: fixed;
+      z-index: 74;
+      inset: 0;
+      display: none;
+      background: rgba(18, 28, 48, .25);
+    }
+
+    .deal-drawer-backdrop.open { display: block; }
+
+    #dealDrawer {
+      position: fixed;
+      z-index: 75;
+      top: 0;
+      right: 0;
+      width: min(520px, 92vw);
+      height: 100vh;
+      padding: 18px;
+      overflow-y: auto;
+      visibility: hidden;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .18s ease, visibility .18s ease;
+      border-radius: 0;
+    }
+
+    #dealDrawer.open {
+      visibility: visible;
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .deal-detail-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .deal-detail-head h2 { margin: 0 0 4px; font-size: 20px; }
+    .deal-detail-head p { margin: 0; color: var(--muted); font-size: 12px; }
+
+    .deal-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin: 14px 0;
+    }
+
+    .deal-detail-grid .info {
+      padding: 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: #f8faff;
+    }
+
+    .deal-detail-grid span,
+    .deal-detail-grid b { display: block; }
+    .deal-detail-grid span { color: var(--muted); font-size: 10px; }
+    .deal-detail-grid b { margin-top: 4px; color: var(--ink); font-size: 12px; overflow-wrap: anywhere; }
+
+    .deal-detail-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    .deal-timeline {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .deal-event {
+      padding: 10px 10px 10px 12px;
+      border-left: 3px solid #8aa0d8;
+      background: #f7f9fd;
+    }
+
+    .deal-event.manual { border-left-color: var(--green); }
+    .deal-event b { display: block; color: var(--ink); font-size: 12px; }
+    .deal-event p { margin: 4px 0; color: #4e5a70; font-size: 12px; line-height: 1.5; }
+    .deal-event span { color: var(--muted); font-size: 10px; }
 
     .content-grid {
       display: grid;
@@ -2408,8 +3205,7 @@
     }
 
     #customers .content-grid {
-      grid-template-columns: minmax(680px, 1fr) 410px;
-      gap: 18px;
+      display: block;
     }
 
     #customers .panel.section {
@@ -2452,8 +3248,6 @@
 
     #customers th:nth-child(7),
     #customers td:nth-child(7) { width: 60px; }
-    }
-
     #customers th {
       background: #fbfcff;
       color: #667085;
@@ -2499,12 +3293,30 @@
       min-width: 0;
     }
 
-    #customers .company b {
+    #customers .customer-name {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      padding: 0;
+      overflow: hidden;
+      border: 0;
+      background: none;
+      color: var(--brand);
       font-size: 13px;
+      font-weight: 700;
       line-height: 1.35;
+      text-align: left;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    #customers .customer-name:hover {
+      text-decoration: underline;
+    }
+
+    #customers .customer-name.has-active-deal {
+      color: var(--green);
     }
 
     #customers .company span:not(.flag) {
@@ -2682,10 +3494,31 @@
     }
 
     #customers .drawer {
-      padding: 18px;
-      border-radius: 16px;
-      box-shadow: 0 18px 42px rgba(22, 35, 64, .07);
+      position: fixed;
+      z-index: 90;
+      top: 0;
+      right: 0;
+      display: none;
+      width: min(640px, 48vw);
+      height: 100vh;
+      padding: 20px;
+      overflow-y: auto;
+      border: 0;
+      border-left: 1px solid var(--line);
+      border-radius: 0;
+      background: #fff;
+      box-shadow: -18px 0 42px rgba(22, 35, 64, .16);
     }
+
+    #customers .drawer.open { display: block; }
+    .customer-drawer-backdrop { position: fixed; inset: 0; z-index: 89; visibility: hidden; background: rgba(19,29,51,.28); opacity: 0; transition: opacity .18s ease, visibility .18s ease; }
+    .customer-drawer-backdrop.active { visibility: visible; opacity: 1; }
+    body.customer-drawer-open { overflow: hidden; }
+    body.customer-drawer-open .sidebar { z-index: 100; }
+    .customer-filter-row { display: grid; grid-template-columns: minmax(240px,1fr) 180px auto; gap: 8px; margin-bottom: 12px; }
+    .customer-filter-row input, .customer-filter-row select { width: 100%; height: 34px; min-width: 0; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    .customer-mobile-list { display: none; }
+    .customer-last-activity { color: var(--muted); font-size: 11px; }
 
     .drawer-head {
       display: flex;
@@ -3715,6 +4548,10 @@
       margin-bottom: 12px;
     }
 
+    #prospect-list .lead-command-strip {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+
     .lead-command-item {
       min-height: 62px;
       padding: 10px 12px;
@@ -3743,14 +4580,13 @@
 
     .prospect-list-layout {
       display: grid;
-      grid-template-columns: minmax(310px, .78fr) minmax(0, 1.12fr) minmax(360px, .86fr);
+      grid-template-columns: minmax(380px, .78fr) minmax(0, 1.22fr);
       gap: 12px;
       align-items: start;
     }
 
     .prospect-list-panel,
-    .prospect-detail-panel,
-    .prospect-mail-panel {
+    .prospect-detail-panel {
       min-height: 640px;
     }
 
@@ -3795,17 +4631,46 @@
       background: var(--brand);
     }
 
+    .prospect-bulkbar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 7px;
+      padding: 9px 0;
+      border-top: 1px solid #edf1f7;
+      border-bottom: 1px solid #edf1f7;
+      margin-bottom: 9px;
+    }
+
+    .prospect-bulkbar label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #526178;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .prospect-bulkbar select {
+      min-width: 112px;
+      height: 30px;
+      border: 1px solid #d8e0ec;
+      border-radius: 7px;
+      background: #fff;
+      color: #263244;
+      font-size: 11px;
+    }
+
     .prospect-list {
       display: grid;
       gap: 8px;
-      max-height: 540px;
-      overflow: auto;
       padding-right: 2px;
     }
 
     .prospect-item {
       width: 100%;
       display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
       gap: 7px;
       text-align: left;
       padding: 10px;
@@ -3814,6 +4679,17 @@
       background: #fff;
       cursor: pointer;
       transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+    }
+
+    .prospect-item > input {
+      margin-top: 2px;
+    }
+
+    .prospect-item-main {
+      min-width: 0;
+      display: grid;
+      gap: 7px;
+      cursor: pointer;
     }
 
     .prospect-item:hover,
@@ -3858,6 +4734,28 @@
       display: flex;
       flex-wrap: wrap;
       gap: 5px;
+    }
+
+    .prospect-next-action {
+      color: #34445c;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .prospect-pagination {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 10px;
+      color: #66758b;
+      font-size: 11px;
+    }
+
+    .prospect-pagination div {
+      display: flex;
+      align-items: center;
+      gap: 7px;
     }
 
     .prospect-detail-hero {
@@ -3915,6 +4813,23 @@
       gap: 9px;
     }
 
+    .prospect-mail-workspace {
+      margin-top: 12px;
+      border-top: 1px solid #e3e9f3;
+      padding-top: 10px;
+    }
+
+    .prospect-mail-workspace > summary {
+      cursor: pointer;
+      color: #263244;
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .prospect-mail-workspace[open] > summary {
+      margin-bottom: 10px;
+    }
+
     .prospect-mail-form .form-field textarea {
       min-height: 176px;
       line-height: 1.55;
@@ -3943,15 +4858,14 @@
 
     .lead-workbench {
       display: grid;
-      grid-template-columns: minmax(460px, .95fr) minmax(0, 1.05fr);
+      grid-template-columns: minmax(0, 1fr) minmax(280px, .42fr);
       gap: 12px;
-      align-items: stretch;
+      align-items: start;
       margin-bottom: 12px;
     }
 
     .lead-queue-panel {
-      display: flex;
-      flex-direction: column;
+      min-width: 0;
     }
 
     .lead-build-panel,
@@ -3966,8 +4880,66 @@
     .lead-mode-row,
     .lead-form-grid {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 9px;
+    }
+
+    .lead-advanced-settings,
+    .lead-queue-panel,
+    .lead-inline-detail {
+      border: 1px solid #dfe7f2;
+      border-radius: 8px;
+      background: #fbfcff;
+    }
+
+    .lead-advanced-settings {
+      margin-top: 10px;
+    }
+
+    .lead-advanced-settings > summary,
+    .lead-queue-summary,
+    .lead-inline-detail > summary {
+      padding: 10px 12px;
+      color: #25324a;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .lead-advanced-settings > summary span {
+      margin-left: 6px;
+      color: #728096;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .lead-advanced-settings[open] {
+      padding: 0 12px 12px;
+    }
+
+    .lead-advanced-settings[open] > summary {
+      margin: 0 -12px 10px;
+      border-bottom: 1px solid #e6ebf3;
+    }
+
+    .lead-advanced-actions {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .lead-advanced-actions .ai-toggle-line {
+      margin-right: auto;
+    }
+
+    .lead-url-field {
+      margin-top: 10px;
+    }
+
+    .lead-url-field textarea {
+      min-height: 72px;
     }
 
     .lead-goal-field {
@@ -4276,6 +5248,12 @@
       border-top: 1px solid #edf1f7;
     }
 
+    .lead-runbar > span {
+      color: #66758b;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
     .lead-runbar .btn {
       height: 32px;
       padding: 0 14px;
@@ -4578,26 +5556,62 @@
     }
 
     .lead-result-layout {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 330px;
-      gap: 12px;
-      align-items: start;
+      display: block;
     }
 
     .lead-results-panel .lead-table-wrap {
-      min-height: 470px;
-      max-height: calc(100vh - 380px);
+      min-height: 0;
+      max-height: none;
     }
 
-    .lead-service-panel {
-      display: grid;
-      gap: 12px;
-      position: sticky;
-      top: 78px;
+    .lead-mobile-list {
+      display: none;
     }
 
-    .lead-service-panel > .panel {
-      box-shadow: 0 10px 26px rgba(23, 35, 61, .055);
+    .lead-pagination {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 10px;
+      color: #66758b;
+      font-size: 11px;
+    }
+
+    .lead-pagination > div {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .lead-pagination .btn {
+      min-height: 30px;
+      padding: 0 10px;
+      font-size: 11px;
+    }
+
+    .lead-inline-detail {
+      margin-top: 10px;
+    }
+
+    .lead-inline-detail[open] {
+      padding: 0 12px 12px;
+    }
+
+    .lead-inline-detail[open] > summary {
+      margin: 0 -12px 10px;
+      border-bottom: 1px solid #e6ebf3;
+    }
+
+    .lead-bulkbar > span {
+      color: #66758b;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .lead-bulkbar.is-empty #leadFinderTodoButton,
+    .lead-bulkbar.is-empty #leadFinderSyncButton {
+      display: none;
     }
 
     .info-grid {
@@ -4782,6 +5796,8 @@
       font-size: 12px;
       line-height: 1.5;
     }
+
+    .timeline-item small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
 
     .customer-deals {
       margin-top: 14px;
@@ -5204,6 +6220,94 @@
       color: var(--muted);
       background: #f8faff;
       font-weight: 800;
+    }
+
+    .report-meta-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 10px 0 0;
+    }
+
+    .report-meta-line span {
+      padding: 4px 7px;
+      border-radius: 5px;
+      color: #52617a;
+      background: #eef3fa;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .report-money-list {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    .report-money-list b,
+    .report-money-list strong {
+      overflow-wrap: anywhere;
+    }
+
+    .report-empty {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .report-performance-cards {
+      display: none;
+    }
+
+    .report-performance-card {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .report-performance-card header {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: flex-start;
+    }
+
+    .report-performance-card dl {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+      margin: 0;
+    }
+
+    .report-performance-card dl div {
+      padding: 8px;
+      border-radius: 6px;
+      background: #f6f8fc;
+    }
+
+    .report-performance-card dt {
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .report-performance-card dd {
+      margin: 4px 0 0;
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .report-definition-list {
+      display: grid;
+      gap: 7px;
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
     }
 
     .bars {
@@ -5849,13 +6953,13 @@
 
     .plan-task-table {
       width: 100%;
-      min-width: 980px;
+      min-width: 1180px;
       border-collapse: collapse;
       font-size: 12px;
     }
 
     .plan-task-table th {
-      padding: 8px 8px;
+      padding: 8px;
       color: var(--muted);
       text-align: left;
       font-size: 11px;
@@ -7428,8 +8532,24 @@
       align-items: center;
       justify-content: space-between;
       gap: 10px;
-      margin-bottom: 8px;
+      cursor: pointer;
+      list-style: none;
     }
+
+    .todo-history-head::-webkit-details-marker { display: none; }
+
+    .todo-history-head::before {
+      content: "›";
+      flex: 0 0 auto;
+      color: var(--brand);
+      font-size: 20px;
+      line-height: 1;
+      transition: transform .18s ease;
+    }
+
+    .todo-history[open] .todo-history-head::before { transform: rotate(90deg); }
+
+    .todo-history[open] .todo-history-head { margin-bottom: 8px; }
 
     .todo-history-head h3 {
       margin: 0;
@@ -7814,6 +8934,35 @@
       color: var(--ink);
     }
 
+    .scope-tags {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .scope-tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      padding: 1px 7px;
+      border: 1px solid rgba(49,87,213,.18);
+      border-radius: 999px;
+      color: #254585;
+      background: #edf2ff;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1.2;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    .scope-tag.personal {
+      border-color: rgba(5,150,105,.18);
+      color: #047857;
+      background: #ecfdf5;
+    }
+
     body[data-role="sales"] [data-scope="manager"],
     body[data-role="sales"] .manager-only {
       display: none !important;
@@ -8094,8 +9243,7 @@
 	      box-shadow: 0 0 0 3px rgba(49,87,213,.1);
 	    }
 
-    .todo-row,
-    #customers tbody tr {
+    .todo-row {
       cursor: pointer;
     }
 
@@ -8549,6 +9697,108 @@
       font-size: 11px;
     }
 
+    .commission-money-cell {
+      display: grid;
+      gap: 3px;
+      white-space: nowrap;
+    }
+
+    .commission-money-cell b {
+      color: #15213a;
+      font-size: 12px;
+    }
+
+    .commission-money-cell span {
+      color: #748198;
+      font-size: 10px;
+    }
+
+    .commission-status-stack {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    .commission-record-cards {
+      display: none;
+    }
+
+    .commission-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .commission-detail-grid > div,
+    .commission-detail-summary span {
+      padding: 10px;
+      border: 1px solid #dce5f0;
+      border-radius: 8px;
+      background: #f7f9fc;
+    }
+
+    .commission-detail-grid .full {
+      grid-column: 1 / -1;
+    }
+
+    .commission-detail-grid span,
+    .commission-detail-summary span {
+      display: block;
+      color: #6c798e;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .commission-detail-grid b,
+    .commission-detail-summary strong {
+      display: block;
+      margin-top: 4px;
+      color: #16223a;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    .commission-detail-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .commission-detail-list {
+      display: grid;
+      gap: 7px;
+    }
+
+    .commission-detail-list article {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px;
+      border: 1px solid #dce5f0;
+      border-radius: 8px;
+    }
+
+    .commission-detail-list article div {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    .commission-detail-list article span,
+    .commission-detail-meta {
+      color: #6c798e;
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+
+    .commission-detail-list article strong {
+      flex: 0 0 auto;
+      color: #16223a;
+      font-size: 13px;
+    }
+
     .commission-row-actions {
       display: flex;
       flex-wrap: wrap;
@@ -8698,8 +9948,11 @@
       .file-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .focus-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 	      .drawer { position: static; }
-	      #customers .content-grid { grid-template-columns: 1fr; }
-	      .pipeline-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      #customers .content-grid { grid-template-columns: 1fr; }
+	      .pipeline-strip { grid-template-columns: repeat(5, minmax(210px, 1fr)); }
+	      .lead-workbench { grid-template-columns: 1fr; }
+	      .lead-queue-panel { width: 100%; }
+	      .prospect-list-layout { grid-template-columns: 1fr; }
 	    }
 
     @media (max-width: 760px) {
@@ -8713,11 +9966,24 @@
       }
       .brand { display: none; }
       .nav { display: flex; width: max-content; }
+      .nav-primary { display: flex; gap: 4px; }
       .nav button {
         width: 42px;
         height: 38px;
         flex: 0 0 auto;
       }
+      #customers .customer-desktop-table { display: none; }
+      #customers .customer-mobile-list { display: grid; gap: 8px; }
+      #customers .customer-filter-row { grid-template-columns: 1fr; }
+      #customers .customer-mobile-card { display: grid; width: 100%; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: #fff; text-align: left; }
+      #customers .customer-mobile-card .customer-name { overflow: visible; color: var(--brand); white-space: normal; overflow-wrap: anywhere; }
+      #customers .customer-mobile-card .customer-name.has-active-deal { color: var(--green); }
+      #customers .customer-mobile-top { display: flex; justify-content: space-between; gap: 8px; }
+      #customers .customer-mobile-meta { display: flex; flex-wrap: wrap; gap: 5px; }
+      #customers .customer-mobile-meta i { padding: 3px 6px; border-radius: 5px; color: #52617a; background: #f1f4f9; font-size: 10px; font-style: normal; }
+      #customers .drawer { top: 54px; width: 100vw; max-width: none; height: calc(100vh - 54px); padding: 16px 14px 24px; }
+      #customers .customer-time-card { grid-template-columns: 1fr; }
+      #customers .customer-time-side { justify-items: start; }
       .topbar {
         height: auto;
         flex-direction: column;
@@ -8730,8 +9996,60 @@
       .top-actions { justify-content: space-between; }
       .top-action-context { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
       .workspace { padding: 16px 12px 28px; }
+      #commission .page-head .head-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 12px; }
+      #commission .page-head .head-actions .btn,
+      #commission .commission-actions .btn,
+      #commission .commission-row-actions .btn { min-height: 44px; height: 44px; }
+      #commission .commission-hero { padding: 12px; }
+      #commission .commission-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #commission .commission-kpi b { font-size: 16px; overflow-wrap: anywhere; }
+      #commission .commission-actions { display: grid; grid-template-columns: 1fr; }
+      #commission .commission-section-head { align-items: stretch; flex-direction: column; }
+      #commission .commission-section-head .segmented { width: 100%; margin-top: 0; }
+      #commission .commission-section-head .segmented button { flex: 1; min-height: 40px; }
+      #commission .commission-table-wrap { display: none; }
+      #commission .commission-record-cards { display: grid; gap: 9px; }
+      #commission .commission-record-card { display: grid; gap: 9px; padding: 12px; border: 1px solid #dce5f0; border-radius: 8px; background: #fff; }
+      #commission .commission-record-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+      #commission .commission-record-card-head > div { display: grid; gap: 3px; min-width: 0; }
+      #commission .commission-record-card-head b { color: #16223a; font-size: 13px; overflow-wrap: anywhere; }
+      #commission .commission-record-card-head span,
+      #commission .commission-record-card p { margin: 0; color: #6c798e; font-size: 11px; overflow-wrap: anywhere; }
+      #commission .commission-record-card-money { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+      #commission .commission-record-card-money span { padding: 8px; border-radius: 7px; color: #6c798e; background: #f4f7fb; font-size: 10px; }
+      #commission .commission-record-card-money strong { display: block; margin-top: 3px; color: #16223a; font-size: 12px; overflow-wrap: anywhere; }
+      #commission .commission-record-card-money .commission-record-card-commission { grid-column: 1 / -1; background: #eef3ff; }
+      #commission .commission-calc-metrics,
+      #commission .commission-detail-summary,
+      #commission .commission-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #commission .commission-detail-grid .full { grid-column: 1 / -1; }
+      #commission .commission-detail-list article { align-items: flex-start; flex-direction: column; }
       .page-head { display: block; }
       .page-head .segmented { margin-top: 12px; }
+      #documents,
+      #documents .doc-studio,
+      #documents .doc-list,
+      #documents .doc-editor,
+      #documents .doc-preview-shell,
+      #documents .doc-workflow-bar,
+      #documents .doc-workflow-links,
+      #documents .doc-workflow-actions { min-width: 0; max-width: 100%; }
+      #documents .doc-editor-head { align-items: flex-start; flex-wrap: wrap; }
+      #documents .doc-workflow-links label { min-width: 0; flex-basis: 100%; }
+      #documents .doc-workflow-links select { width: 100%; min-width: 0; }
+      #documents .doc-workflow-actions .btn { min-height: 44px; }
+      #documents .doc-list-card b,
+      #documents .doc-list-card span,
+      #documents .doc-history-item span { overflow-wrap: anywhere; }
+      #documents .doc-history-item { align-items: flex-start; flex-direction: column; }
+      .scope-banner { align-items: flex-start; flex-direction: column; }
+      .focus-top { align-items: flex-start; flex-direction: column; gap: 8px; }
+      .dashboard-period-tabs { width: 100%; }
+      .dashboard-period-tabs button { flex: 1; min-height: 34px; }
+      .scope-tags { width: 100%; }
+      .todo-history-head { align-items: flex-start; }
+      .history-stats { margin-left: auto; }
+      .todo-history-list { grid-template-columns: 1fr; }
       .kpis,
       .focus-metrics,
       .profile-hero-metrics,
@@ -8751,18 +10069,83 @@
 	      .ppt-grid,
 	      .steps,
       .problem-flow { grid-template-columns: 1fr; }
+      #instrument-growth .head-actions { display: grid; grid-template-columns: 1fr 1fr; margin-top: 12px; }
+      #instrument-growth .head-actions .btn { min-height: 44px; }
+      #instrument-growth .instrument-grid { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+      #instrument-growth .instrument-grid > .panel { min-width: 0; overflow-x: auto; }
+      .plan-task-list { overflow-x: auto; }
+      .instrument-actionbar { align-items: stretch; flex-direction: column; }
+      .instrument-actionbar .btn { min-height: 44px; }
       .knowledge-row { grid-template-columns: 34px minmax(0, 1fr); }
       .knowledge-row em,
       .knowledge-row .template-actions { grid-column: 2; justify-self: start; }
-      .pipeline-strip { grid-template-columns: 1fr; }
+      .pipeline-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .pipeline-toolbar,
+      .pipeline-closed-filters { grid-template-columns: 1fr; }
+      .pipeline-stage-tabs { display: flex; }
+      .pipeline-active-panel { overflow: visible; }
+      .pipeline-strip { display: block; min-width: 0; }
+      .pipeline-strip .stage { display: none; min-height: 0; }
+      .pipeline-strip .stage.mobile-active { display: block; }
+      .deal-actions .btn { min-height: 44px; }
+      #dealDrawer { top: 54px; width: 100vw; max-width: none; height: calc(100vh - 54px); padding: 16px 14px 24px; }
+      .deal-detail-grid { grid-template-columns: 1fr; }
+      .pipeline-archive-content .table-wrap { overflow: visible; }
+      #reminders .page-head .btn.primary { width: 100%; min-height: 44px; margin-top: 12px; }
+      #reminders .reminder-workspace-tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+      #reminders .reminder-workspace-tabs button { flex: 0 0 auto; min-height: 44px; }
+      #reminders .reminder-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      #reminders .reminder-filters button { width: 100%; min-height: 44px; padding-inline: 6px; }
+      #reminders .reminder-task-card,
+      #reminders .reminder-rule-card { grid-template-columns: 5px minmax(0, 1fr); align-items: start; }
+      #reminders .reminder-task-actions,
+      #reminders .reminder-rule-actions { grid-column: 2; display: grid; grid-template-columns: minmax(0, 1fr) 44px; width: 100%; }
+      #reminders .reminder-task-actions .btn,
+      #reminders .reminder-rule-actions .btn { min-height: 44px; }
+      #reminders .reminder-rule-meta { gap: 4px; }
+      #memos .page-head .btn.primary { width: 100%; min-height: 44px; margin-top: 12px; }
+      #memos .memo-grid { display: block; }
+      #memos .memo-grid:not(.detail-open) .memo-detail { display: none; }
+      #memos .memo-grid.detail-open .memo-sidebar { display: none; }
+      #memos .memo-grid.detail-open .memo-detail { display: grid; }
+      #memos .memo-list-tools > input,
+      #memos .memo-status-tabs button { min-height: 44px; }
+      #memos .memo-pin-filter { min-height: 44px; }
+      #memos .memo-detail { min-height: calc(100vh - 130px); }
+      #memos .memo-detail .section-head { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 10px; }
+      #memos .memo-detail .section-title { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 10px; width: 100%; }
+      #memos .memo-detail .section-title > div { min-width: 0; }
+      #memos .memo-detail .section-title h2 { line-height: 1.35; }
+      #memos .memo-detail .section-title span { display: block; margin-top: 2px; line-height: 1.5; }
+      #memos .memo-detail .head-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 6px; width: 100%; }
+      #memos .memo-detail .btn { min-height: 44px; }
+      #memos .memo-save-state { min-height: 44px; justify-self: start; text-align: left; }
+      #memos .memo-back-button { display: inline-flex; min-width: 88px; }
+      #memos .memo-content-box { min-height: calc(100vh - 250px); padding: 14px 12px 18px; grid-template-rows: auto auto minmax(320px, 1fr); }
+      #memos .memo-fields { grid-template-columns: 1fr; }
+      #memos .memo-fields label { grid-template-columns: 64px minmax(0, 1fr); }
+      #memos .memo-meta-input { min-height: 44px; }
+      #memos .memo-editor { min-height: 320px; font-size: 16px; }
+      #pipeline-archived-table { min-width: 0; }
+      #pipeline-archived-table thead { display: none; }
+      #pipeline-archived-deals,
+      #pipeline-archived-deals tr,
+      #pipeline-archived-deals td { display: block; width: 100%; }
+      #pipeline-archived-deals tr { padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+      #pipeline-archived-deals td { padding: 3px 0; border: 0; }
       .donut-wrap { grid-template-columns: 1fr; justify-items: center; }
+      #reports .page-head .head-actions { display: grid; grid-template-columns: 1fr; margin-top: 12px; }
+      #reports .page-head .btn { min-height: 44px; width: 100%; }
       .report-hero { padding: 16px; }
       .report-hero h2 { font-size: 22px; }
+      .report-hero-top { flex-direction: column; gap: 6px; margin-bottom: 12px; }
       .funnel-step { grid-template-columns: 64px minmax(0, 1fr) 42px; }
       .funnel-step strong { display: none; }
-      .executive-table { min-width: 620px; }
-      .ppt-panel { overflow-x: auto; }
-      .waterfall { min-width: 360px; }
+      #reportPerformanceTable { display: none; }
+      .report-performance-cards { display: grid; gap: 8px; }
+      #reports .ppt-panel { min-width: 0; overflow: hidden; }
+      #reports .waterfall { min-width: 0; height: 190px; gap: 5px; }
+      #reports .waterfall span { overflow-wrap: anywhere; }
 	      .tools-grid,
 	      .ocr-workbench,
       .problem-grid,
@@ -8781,6 +10164,58 @@
       .business-card { max-width: 100%; }
       .tool-item { grid-template-columns: 34px minmax(0, 1fr); }
       .tool-item .badge { justify-self: start; grid-column: 2; }
+      #lead-finder .head-actions { margin-top: 12px; }
+      #lead-finder .head-actions .btn { width: 100%; min-height: 44px; }
+      #lead-finder .lead-command-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #lead-finder .lead-command-item { min-height: 72px; }
+      #lead-finder .lead-form-grid { grid-template-columns: 1fr; }
+      #lead-finder .lead-source-chips { grid-template-columns: 1fr; }
+      #lead-finder .lead-source-head { align-items: flex-start; flex-wrap: wrap; }
+      #lead-finder .lead-advanced-settings > summary span { display: block; margin: 3px 0 0; }
+      #lead-finder .lead-advanced-actions { align-items: stretch; }
+      #lead-finder .lead-advanced-actions .ai-toggle-line { width: 100%; }
+      #lead-finder .lead-advanced-actions .btn { min-height: 44px; flex: 1 1 120px; }
+      #lead-finder .lead-runbar { align-items: stretch; flex-direction: column; }
+      #lead-finder .lead-runbar .btn { width: 100%; min-height: 44px; }
+      #lead-finder .lead-queue-panel { padding: 0; }
+      #lead-finder .lead-queue-panel[open] { padding: 0 12px 12px; }
+      #lead-finder .lead-queue-panel[open] > summary { margin: 0 -12px 10px; border-bottom: 1px solid #e6ebf3; }
+      #lead-finder .lead-queue-panel .section-head { align-items: flex-start; }
+      #lead-finder .lead-job-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #lead-finder .lead-results-panel > .section-head { align-items: flex-start; }
+      #lead-finder .lead-bulkbar { width: 100%; justify-content: flex-start; }
+      #lead-finder .lead-bulkbar .btn { min-height: 44px; flex: 1 1 140px; }
+      #lead-finder .lead-table-wrap { display: none; }
+      #lead-finder .lead-mobile-list { display: grid; gap: 8px; }
+      #lead-finder .lead-mobile-card {
+        display: grid;
+        gap: 8px;
+        padding: 11px;
+        border: 1px solid #dce4f2;
+        border-radius: 8px;
+        background: #fff;
+      }
+      #lead-finder .lead-mobile-card.selected { border-color: rgba(49,87,213,.5); background: #f5f8ff; }
+      #lead-finder .lead-mobile-card-head { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 8px; align-items: start; }
+      #lead-finder .lead-mobile-card h3 { margin: 0; font-size: 14px; line-height: 1.35; }
+      #lead-finder .lead-mobile-card p { margin: 2px 0 0; font-size: 11px; line-height: 1.4; }
+      #prospect-list .head-actions { margin-top: 12px; }
+      #prospect-list .head-actions .btn { min-height: 42px; flex: 1 1 130px; }
+      #prospect-list .lead-command-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #prospect-list .lead-command-item:last-child { grid-column: 1 / -1; }
+      #prospect-list .prospect-toolbar { grid-template-columns: 1fr; }
+      #prospect-list .prospect-bulkbar .btn,
+      #prospect-list .prospect-bulkbar select { flex: 1 1 120px; min-height: 40px; }
+      #prospect-list .prospect-field-grid { grid-template-columns: 1fr; }
+      #prospect-list .prospect-field[style] { grid-column: auto !important; }
+      #prospect-list .prospect-pagination { align-items: flex-start; flex-direction: column; }
+      #lead-finder .lead-mobile-score { color: #0f766e; font-size: 14px; font-weight: 900; }
+      #lead-finder .lead-mobile-meta { display: flex; flex-wrap: wrap; gap: 5px; }
+      #lead-finder .lead-mobile-contact { color: #40506a; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+      #lead-finder .lead-mobile-open { min-height: 44px; width: 100%; }
+      #lead-finder .lead-pagination { align-items: stretch; flex-direction: column; }
+      #lead-finder .lead-pagination > div { width: 100%; justify-content: space-between; }
+      #lead-finder .lead-pagination .btn { min-height: 44px; }
     }
   </style>
 </head>
@@ -8948,15 +10383,14 @@
               <p class="sub">无限进步</p>
             </div>
             <div class="head-actions">
-              <div class="segmented" id="dashboardPeriodTabs"><button class="active" data-dashboard-period="today">今日</button><button data-dashboard-period="week">本周</button><button data-dashboard-period="month">本月</button></div>
-              <button class="btn" id="morningViewButton" type="button">晨会视图</button>
+              <span class="badge green">实时行动快照</span>
+              <button class="btn manager-only" id="morningViewButton" type="button">晨会视图</button>
             </div>
           </div>
 
           <div class="scope-banner">
             <span>当前账号：<b id="scopeUser">Shirley / 业务员</b> · 数据范围：<b id="scopeText">仅本人客户、本人待办、本人线索</b></span>
-            <span class="badge manager-only">主管视图：可查看团队全部数据</span>
-            <span class="badge sales-only">业务员视图：仅显示本人内容</span>
+            <span class="scope-tags"><span class="scope-tag" id="businessScopeTag">本人业务</span><span class="scope-tag personal" id="todoScopeTag">本人待办</span></span>
           </div>
 
           <section class="morning-panel" id="morningPanel">
@@ -8972,8 +10406,12 @@
           <div class="command-center">
             <section class="panel focus-panel">
               <div class="focus-top">
-                <span>今日优先处理建议</span>
-                <span>09:30 已更新</span>
+                <div class="dashboard-period-tabs" aria-label="工作台统计周期">
+                  <button type="button" class="active" data-dashboard-period="today" aria-pressed="true">今日</button>
+                  <button type="button" data-dashboard-period="week" aria-pressed="false">本周</button>
+                  <button type="button" data-dashboard-period="month" aria-pressed="false">本月</button>
+                </div>
+                <span id="dashboardUpdatedAt">09:30 已更新</span>
               </div>
               <div class="focus-title">
                 <h2>今天最该抢救的是 7 个报价逾期客户，其中 3 个仍处于高成交概率。</h2>
@@ -8986,47 +10424,25 @@
               </div>
               <div class="focus-metrics">
                 <div class="focus-metric"><span>高风险金额</span><b data-sales-text="$36k" data-manager-text="$92k">$36k</b><small data-sales-text="本人名下报价" data-manager-text="集中在欧洲市场">本人名下报价</small></div>
-                <div class="focus-metric manager-only"><span>待主管协同</span><b>4 单</b><small>账期/价格谈判</small></div>
-                <div class="focus-metric"><span>今日可成交</span><b>2 单</b><small>预计 $71k</small></div>
+                <div class="focus-metric"><span>高优先级待办</span><b>0 项</b><small>本人待办</small></div>
+                <div class="focus-metric"><span>今日预计成交金额</span><b>$0</b><small>0 个预计成交商机</small></div>
                 <div class="focus-metric"><span>企微未读提醒</span><b>6 条</b><small>已二次推送</small></div>
               </div>
             </section>
 
-            <section class="panel schedule-panel">
+            <section class="panel schedule-panel lead-funnel-panel">
               <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 2v4"/><path d="M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/></svg></span><div><h2>今日节奏</h2><span>按成交影响排序</span></div></div>
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 5h18"/><path d="M6 10h12"/><path d="M9 15h6"/><path d="M11 20h2"/></svg></span><div><h2>线索漏斗</h2><span>进入、清洗与转化</span></div></div>
+                <span class="lead-funnel-live">实时</span>
               </div>
-              <div class="schedule-list">
-                <div class="schedule-item"><div class="timebox">09:45</div><div><b>补发 CE 证书</b><span>Nordic Tools AB · 瑞典</span></div><span class="badge red">逾期</span></div>
-                <div class="schedule-item"><div class="timebox">11:20</div><div><b>确认样品测试反馈</b><span>Atlas Home Inc · 美国</span></div><span class="badge amber">样品</span></div>
-                <div class="schedule-item"><div class="timebox">15:30</div><div><b>主管参与账期谈判</b><span>Kanto Retail · 日本</span></div><span class="badge green">高意向</span></div>
-              </div>
-              <div class="quality-grid">
-                <div class="quality"><span>跟进健康度</span><b>82%</b></div>
-                <div class="quality"><span>逾期率</span><b>11%</b></div>
-                <div class="quality"><span>平均响应</span><b>3.2h</b></div>
-              </div>
+              <div class="lead-funnel" id="dashboardLeadFunnel" aria-live="polite"></div>
             </section>
-          </div>
-
-          <div class="kpis">
-            <div class="panel kpi" style="--accent: var(--rose)"><div class="kpi-top"><label>今日待跟进</label><div class="microline"><i style="--h:34%"></i><i style="--h:56%"></i><i style="--h:42%"></i><i style="--h:82%"></i><i style="--h:66%"></i><i style="--h:92%"></i></div></div><strong>28</strong><p><span class="badge red">7 个已逾期</span></p></div>
-            <div class="panel kpi" style="--accent: var(--green)"><div class="kpi-top"><label>本月新增客户</label><div class="microline"><i style="--h:28%"></i><i style="--h:44%"></i><i style="--h:54%"></i><i style="--h:58%"></i><i style="--h:78%"></i><i style="--h:86%"></i></div></div><strong>186</strong><p>较上月增长 18%，展会来源占 42%</p></div>
-            <div class="panel kpi" style="--accent: var(--brand)"><div class="kpi-top"><label>预测成交额</label><div class="microline"><i style="--h:46%"></i><i style="--h:64%"></i><i style="--h:52%"></i><i style="--h:74%"></i><i style="--h:86%"></i><i style="--h:69%"></i></div></div><strong>$428k</strong><p>谈判与样品阶段贡献 61%</p></div>
-            <div class="panel kpi" style="--accent: var(--aqua)"><div class="kpi-top"><label>企微绑定率</label><div class="microline"><i style="--h:40%"></i><i style="--h:46%"></i><i style="--h:55%"></i><i style="--h:58%"></i><i style="--h:61%"></i><i style="--h:64%"></i></div></div><strong>64%</strong><p>32 个高价值客户待绑定</p></div>
-          </div>
-
-          <div class="dense-grid">
-            <div class="dense-card"><span>资料待更新</span><b>18</b><small>+6</small></div>
-            <div class="dense-card"><span>产品知识考试通过率</span><b>76%</b><small>+9%</small></div>
-            <div class="dense-card"><span>未完成培训销售</span><b>12</b><small style="color:var(--amber)">待催办</small></div>
-            <div class="dense-card"><span>客户资料完整度</span><b>83%</b><small>+4%</small></div>
           </div>
 
           <div class="todo-board">
             <section class="panel section">
               <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4"/><path d="M21 12a9 9 0 1 1-9-9"/></svg></span><div><h2>待办清单</h2><span>统一管理客户跟进、资料维护、考试复训和团队协作</span></div></div>
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4"/><path d="M21 12a9 9 0 1 1-9-9"/></svg></span><div><h2>待办清单 <span class="scope-tag personal">本人待办</span></h2><span>集中处理客户跟进、报价追踪、样品反馈和商机推进</span></div></div>
                 <div class="head-actions"><button class="btn">批量完成</button><button class="btn primary">新增待办</button></div>
               </div>
               <div class="todo-toolbar">
@@ -9070,15 +10486,15 @@
 	                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">AL</span></div><div class="subtask-bar"><i style="--p:100%"></i></div></div>
 	                </article>
 	              </div>
-	              <div class="todo-history">
-	                <div class="todo-history-head">
+	              <details class="todo-history">
+	                <summary class="todo-history-head">
 	                  <div><h3>历史清单</h3><span>隔天自动归档，当前清单只保留今天及未来待办</span></div>
 	                  <div class="history-stats"><b id="todo-history-count">0 条</b><b id="todo-history-amount">$0k</b></div>
-	                </div>
+	                </summary>
 	                <div class="todo-history-list">
 	                  <div class="todo-history-empty">暂无隔天历史待办</div>
 	                </div>
-	              </div>
+	              </details>
 	            </section>
 
             <aside class="panel section">
@@ -9109,7 +10525,7 @@
           <div class="dashboard-grid">
             <div class="panel section">
               <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 8v5l3 3"/><circle cx="12" cy="12" r="10"/></svg></span><div><h2>跟进优先级队列</h2><span>按金额影响、商机阶段、客户风险、关联待办综合评分</span></div></div>
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 8v5l3 3"/><circle cx="12" cy="12" r="10"/></svg></span><div><h2>跟进优先级队列 <span class="scope-tag" data-business-scope>业务范围</span></h2><span>按金额影响、商机阶段、客户风险、关联待办综合评分</span></div></div>
                 <button class="btn" id="batchPriorityButton">批量生成跟进待办</button>
               </div>
               <div class="task-list">
@@ -9122,7 +10538,7 @@
 
             <div class="panel section">
               <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 6v12"/><path d="M17 6v12"/><path d="M3 18h18"/></svg></span><div><h2>管道健康度</h2><span>按真实商机阶段统计数量、金额和风险</span></div></div>
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 6v12"/><path d="M17 6v12"/><path d="M3 18h18"/></svg></span><div><h2>管道健康度 <span class="scope-tag" data-business-scope>业务范围</span></h2><span>按真实商机阶段统计数量、金额和风险</span></div></div>
               </div>
               <div class="bars">
                 <div class="bar-row"><span>询盘</span><div class="track"><div class="fill" style="width:92%"></div></div><b>42</b></div>
@@ -9135,41 +10551,6 @@
             </div>
           </div>
 
-          <div class="matrix-grid">
-            <section class="panel section memo-sidebar" id="dashboard-knowledge-panel">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg></span><div><h2>资料维护动态</h2><span>产品知识与销售资料</span></div></div></div>
-              <table class="mini-table">
-                <thead><tr><th>资料</th><th>类目</th><th>状态</th><th>负责人</th></tr></thead>
-                <tbody>
-                  <tr><td>新版报价话术</td><td>销售SOP</td><td><span class="badge amber">待审</span></td><td>Mia</td></tr>
-                  <tr><td>CE 证书说明</td><td>认证资料</td><td><span class="badge green">已发布</span></td><td>Alex</td></tr>
-                  <tr><td>产品参数表 V3</td><td>产品知识</td><td><span class="badge">修订中</span></td><td>Shirley</td></tr>
-                </tbody>
-              </table>
-            </section>
-            <section class="panel section" id="dashboard-exam-panel">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4"/><path d="M7 3h10l2 4v14H5V7z"/></svg></span><div><h2>考试任务</h2><span>按产品类目分配</span></div></div></div>
-              <table class="mini-table">
-                <thead><tr><th>考试</th><th>应考</th><th>通过</th></tr></thead>
-                <tbody>
-                  <tr><td>LED 灯具基础</td><td>18</td><td>72%</td></tr>
-                  <tr><td>付款条款</td><td>24</td><td>88%</td></tr>
-                  <tr><td>认证资料</td><td>16</td><td>64%</td></tr>
-                </tbody>
-              </table>
-            </section>
-            <section class="panel section" id="dashboard-gap-panel">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-7"/></svg></span><div><h2>团队短板</h2><span>知识弱项提示</span></div></div></div>
-              <table class="mini-table">
-                <thead><tr><th>类目</th><th>正确率</th><th>动作</th></tr></thead>
-                <tbody>
-                  <tr><td>产品认证</td><td>61%</td><td><span class="badge red">补考</span></td></tr>
-                  <tr><td>包装规范</td><td>69%</td><td><span class="badge amber">复训</span></td></tr>
-                  <tr><td>报价规则</td><td>83%</td><td><span class="badge green">达标</span></td></tr>
-                </tbody>
-              </table>
-            </section>
-          </div>
         </div>
 
         <div class="view" id="instrument-growth">
@@ -9220,7 +10601,7 @@
           </div>
 
           <div class="panel section plan-task-panel">
-            <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><h2>任务列表</h2><span>勾选后可批量推到当前账号待办；编辑后会持久化保存。</span></div></div></div>
+            <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><h2>任务列表</h2><span>勾选后可批量推到当前账号待办；完成、取消和改期会保留业务结果。</span></div></div></div>
             <div id="planTaskList" class="plan-task-list"></div>
           </div>
 
@@ -9255,15 +10636,15 @@
 
         <div class="view" id="lead-finder">
           <div class="page-head">
-            <div><p class="eyebrow">Auto Prospecting</p><h1>自动获客</h1><p class="sub">先定义目标客户画像，再用公开 API、平台入口和官网解析生成可跟进的候选客户。</p></div>
-            <div class="head-actions"><button class="btn" id="leadSourceCenterButton">数据源中心</button><button class="btn" id="leadFinderAiConfigButton">AI配置</button><button class="btn" id="leadFinderExportButton">导出结果</button><button class="btn primary" id="leadFinderStartButton">生成并运行任务</button></div>
+            <div><p class="eyebrow">Auto Prospecting</p><h1>自动获客</h1><p class="sub">功能持续优化中...</p></div>
+            <div class="head-actions"><button class="btn primary" id="leadFinderStartButton">开始搜客</button></div>
           </div>
 
           <div class="lead-command-strip">
             <div class="lead-command-item"><span>候选结果</span><b id="leadFinderTotalCount">0</b><small>来自公开源与导入链接</small></div>
             <div class="lead-command-item"><span>待确认</span><b id="leadFinderPendingCount">0</b><small>核实后进入线索中心</small></div>
             <div class="lead-command-item"><span>已入线索</span><b id="leadFinderSyncedCount">0</b><small>进入统一跟进流程</small></div>
-            <div class="lead-command-item"><span>解析模式</span><b id="leadFinderAiState">规则</b><small id="leadFinderAiSub">未启用时使用规则解析</small></div>
+            <div class="lead-command-item lead-parser-state"><span>当前解析</span><b id="leadFinderAiState">规则</b><small id="leadFinderAiSub">高级设置中可启用 AI</small></div>
           </div>
 
           <div class="lead-workbench">
@@ -9272,44 +10653,45 @@
                 <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 21l-4.3-4.3"/><circle cx="11" cy="11" r="7"/><path d="M11 7v4l3 2"/></svg></span><div><h2>创建搜客任务</h2><span>不用先有官网，先把客户画像说清楚</span></div></div>
                 <span class="badge" id="leadFinderAiBadge">规则解析</span>
               </div>
-              <div class="lead-mode-row">
-                <div class="lead-field"><label>搜客模式</label><select id="leadSearchModeInput"><option>公开公司获客</option><option>大平台询盘获客</option><option>深度联系人获客</option></select></div>
-                <div class="lead-field"><label>搜索深度</label><select id="leadSearchDepthInput"><option>标准：产品 + 市场 + 客户类型</option><option>深度：官网 + 地图 + 社媒 + 交叉验证</option><option>轻量：只生成搜索入口</option></select></div>
-              </div>
-              <div class="lead-field lead-goal-field"><label>获客目标</label><textarea id="leadFinderGoalInput" placeholder="例如：找德国、英国的分销商、系统集成商或工程服务商。"></textarea></div>
               <div class="lead-form-grid">
                 <div class="lead-field"><label>产品关键词</label><input id="leadProductKeywords" value="pressure transmitter, flow meter, level sensor"></div>
                 <div class="lead-field"><label>国家/地区</label><input id="leadCountries" value="Germany, UK, Turkey, UAE"></div>
                 <div class="lead-field"><label>行业/应用场景</label><input id="leadIndustryInput" value="water treatment, oil gas, automation, pump valve"></div>
                 <div class="lead-field"><label>客户类型</label><select id="leadCustomerTypes"><option>经销商 / Distributor</option><option>系统集成商 / System Integrator</option><option>OEM 设备厂</option><option>EPC 工程承包商</option><option>MRO 服务商</option><option>终端工厂</option></select></div>
-                <div class="lead-field"><label>搜索语言</label><select id="leadSearchLanguageInput"><option>目标市场当地语言</option><option>英语</option><option>中文 + 英文混合</option></select></div>
-                <div class="lead-field"><label>客户验证</label><select id="leadValidationInput"><option>标准验证：产品 + 市场 + 客户类型</option><option>严格验证：官网 + 联系方式 + 业务匹配</option><option>询盘验证：平台需求 + 采购意向</option></select></div>
                 <div class="lead-field"><label>排除词</label><input id="leadExcludeKeywords" value="job, used, repair, school, news"></div>
-                <div class="lead-field"><label>目标数量</label><select id="leadLimit"><option>10</option><option selected>20</option><option>50</option></select></div>
               </div>
-              <div class="lead-source-box">
-                <div class="lead-source-head"><b>获客数据源</b><span>免费源默认开，付费/自带 Key 源配置后点亮</span><button class="btn tiny" id="leadSourceManageInline" type="button">数据源中心</button></div>
-                <div class="lead-source-chips" id="leadSourceChips"><span class="empty-inline">数据源加载中…</span></div>
-                <div class="lead-entry-head"><b>免费搜索入口</b><span>生成 Google / B2B 平台检索链接，人工核实后导入</span></div>
-                <div class="lead-entry-chips">
-                  <button type="button" class="lead-entry-chip active" data-lead-entry="google">Google/Web</button>
-                  <button type="button" class="lead-entry-chip active" data-lead-entry="alibaba">Alibaba RFQ</button>
-                  <button type="button" class="lead-entry-chip active" data-lead-entry="madein">Made-in-China</button>
-                  <button type="button" class="lead-entry-chip" data-lead-entry="globalsources">Global Sources</button>
-                  <button type="button" class="lead-entry-chip active" data-lead-entry="europages">Europages</button>
+              <details class="lead-advanced-settings" open>
+                <summary>高级设置 <span>数据源、AI、目标数量与链接导入</span></summary>
+                <div class="lead-field lead-goal-field"><label>补充获客目标</label><textarea id="leadFinderGoalInput" placeholder="例如：优先寻找有水处理项目经验的德国分销商。"></textarea></div>
+                <div class="lead-field"><label>单次目标数量</label><select id="leadLimit"><option>10</option><option selected>20</option><option>30</option></select></div>
+                <div class="lead-source-box">
+                  <div class="lead-source-head"><b>获客数据源</b><span>免费源默认启用，计费源在运行前再次确认</span><button class="btn tiny" id="leadSourceManageInline" type="button">配置</button></div>
+                  <div class="lead-source-chips" id="leadSourceChips"><span class="empty-inline">数据源加载中…</span></div>
+                  <div class="lead-entry-head"><b>人工搜索入口</b><span>生成平台检索链接，核实后导入</span></div>
+                  <div class="lead-entry-chips">
+                    <button type="button" class="lead-entry-chip active" data-lead-entry="google">Google/Web</button>
+                    <button type="button" class="lead-entry-chip active" data-lead-entry="alibaba">Alibaba RFQ</button>
+                    <button type="button" class="lead-entry-chip active" data-lead-entry="madein">Made-in-China</button>
+                    <button type="button" class="lead-entry-chip" data-lead-entry="globalsources">Global Sources</button>
+                    <button type="button" class="lead-entry-chip active" data-lead-entry="europages">Europages</button>
+                  </div>
                 </div>
-              </div>
-              <details class="lead-import-drawer">
-                <summary>已有官网/平台结果链接，展开导入解析</summary>
-                <div class="lead-field"><label>辅助导入链接</label><textarea id="leadFinderUrlInput" placeholder="每行一个官网、平台结果或公司页面链接。留空时，系统会先跑免费公开 API 并生成平台搜索入口。"></textarea></div>
+                <div class="lead-field lead-url-field"><label>官网/平台结果链接</label><textarea id="leadFinderUrlInput" placeholder="每行一个链接，最多 12 条。留空时使用已启用数据源搜索。"></textarea></div>
+                <div class="lead-advanced-actions">
+                  <label class="ai-toggle-line"><input id="leadFinderUseAiInput" type="checkbox">使用 AI 解析与评分</label>
+                  <button class="btn" id="leadSourceCenterButton" type="button">数据源中心</button>
+                  <button class="btn" id="leadFinderAiConfigButton" type="button">AI配置</button>
+                  <button class="btn" id="leadFinderExportButton" type="button">导出结果</button>
+                </div>
               </details>
               <div class="lead-runbar">
-                <label class="ai-toggle-line"><input id="leadFinderUseAiInput" type="checkbox">使用 AI 解析与评分</label>
-                <button class="btn primary" id="leadFinderStartButtonInline">生成并运行任务</button>
+                <span>新候选默认不勾选，请核验后再加入线索。</span>
+                <button class="btn primary" id="leadFinderStartButtonInline">开始搜客</button>
               </div>
             </section>
 
-            <section class="panel section lead-queue-panel">
+            <details class="panel section lead-queue-panel" open>
+              <summary class="lead-queue-summary">任务记录与人工搜索入口</summary>
               <div class="section-head">
                 <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg></span><div><h2>任务队列</h2><span>记录搜索进度、启用渠道和后续导入动作</span></div></div>
                 <button class="btn" id="leadFinderExportButtonQueue">导出Excel</button>
@@ -9321,14 +10703,14 @@
                 <div class="section-title compact"><span class="icon"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg></span><div><h2>搜索入口</h2><span>复制/打开后把有效官网再导入</span></div></div>
                 <div class="lead-search-links" id="leadFinderSearchLinks"></div>
               </div>
-            </section>
+            </details>
           </div>
 
           <div class="lead-result-layout">
             <section class="panel section lead-results-panel">
               <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg></span><div><h2>候选客户结果库</h2><span>结果可编辑，确认后加入线索中心统一跟进</span></div></div>
-                <div class="lead-bulkbar"><button class="btn" id="leadFinderTodoButton">生成待办</button><button class="btn primary" id="leadFinderSyncButton">加入线索中心</button></div>
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg></span><div><h2>候选客户结果库</h2><span>先核验来源、重复和归属，再加入线索中心</span></div></div>
+                <div class="lead-bulkbar" id="leadFinderBulkbar"><span id="leadFinderSelectedCount">已选 0 条</span><button class="btn primary" id="leadFinderSyncButton">确认并加入线索</button><button class="btn" id="leadFinderTodoButton">创建首个待办</button></div>
               </div>
               <div class="lead-filter-tabs">
                 <button class="active" data-lead-filter="all">全部</button>
@@ -9344,38 +10726,31 @@
                   <tbody id="leadFinderResultRows"><tr><td colspan="9" class="empty-cell">暂无候选客户。填写画像、选好数据源后点击“生成并运行任务”。</td></tr></tbody>
                 </table>
               </div>
-            </section>
-
-            <aside class="lead-service-panel">
-              <section class="panel section">
-                <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2>线索画像</h2><span>当前选中候选客户</span></div></div></div>
+              <div class="lead-mobile-list" id="leadFinderMobileRows"></div>
+              <div class="lead-pagination" id="leadFinderPagination">
+                <span id="leadFinderPageSummary">0 条结果</span>
+                <div><button class="btn" id="leadFinderPrevPage" type="button">上一页</button><span id="leadFinderPageNumber">1 / 1</span><button class="btn" id="leadFinderNextPage" type="button">下一页</button></div>
+              </div>
+              <details class="lead-inline-detail">
+                <summary>查看当前候选的核验信息</summary>
                 <div id="leadFinderDetail" class="lead-detail-card"><span>未选择</span><b>点击候选列表中的公司行查看详情。</b></div>
-              </section>
-
-              <section class="panel section">
-                <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5"/></svg></span><div><h2>同步动作</h2><span>把候选线索变成销售动作</span></div></div></div>
-                <div class="lead-action-grid">
-                  <button class="btn" id="leadFinderTodoButtonSide">生成待办</button>
-                  <button class="btn primary" id="leadFinderSyncButtonSide">加入线索中心</button>
-                  <button class="btn" id="leadFinderExportButtonSide">导出Excel</button>
-                  <button class="btn" id="leadFinderAiConfigButtonSide">配置AI</button>
-                </div>
-              </section>
-            </aside>
+              </details>
+            </section>
           </div>
         </div>
 
         <div class="view" id="prospect-list">
           <div class="page-head">
-            <div><p class="eyebrow">Prospect Follow-up List</p><h1>搜客清单</h1><p class="sub">承接自动获客结果，集中完成筛选、开发信触达、加入线索和待办跟进。</p></div>
-            <div class="head-actions"><button class="btn" id="prospectRefreshButton">刷新清单</button><button class="btn" id="prospectTodoButton">生成待办</button><button class="btn primary" id="prospectSyncButton">加入线索中心</button></div>
+            <div><p class="eyebrow">Prospect Verification Queue</p><h1>搜客清单</h1><p class="sub">先核验联系方式，再触达和入线索；按下一步动作处理候选客户。</p></div>
+            <div class="head-actions"><button class="btn" id="prospectOpenFinderButton">去自动获客</button><button class="btn" id="prospectRefreshButton">刷新清单</button></div>
           </div>
 
           <div class="lead-command-strip">
-            <div class="lead-command-item"><span>全部线索</span><b id="prospectTotalCount">0</b><small>来自自动获客和官网解析</small></div>
-            <div class="lead-command-item"><span>待触达</span><b id="prospectPendingCount">0</b><small>还未转化或未发送开发信</small></div>
-            <div class="lead-command-item"><span>已发开发信</span><b id="prospectMailedCount">0</b><small>模拟发送记录已落库</small></div>
+            <div class="lead-command-item"><span>待核验</span><b id="prospectPreviewCount">0</b><small>需确认联系人和联系方式</small></div>
+            <div class="lead-command-item"><span>可联系</span><b id="prospectContactableCount">0</b><small>可安排首轮触达</small></div>
+            <div class="lead-command-item"><span>已联系</span><b id="prospectContactedCount">0</b><small>等待回复或继续跟进</small></div>
             <div class="lead-command-item"><span>已入线索</span><b id="prospectSyncedCount">0</b><small>进入统一跟进流程</small></div>
+            <div class="lead-command-item"><span>已排除</span><b id="prospectExcludedCount">0</b><small>无效或暂不开发</small></div>
           </div>
 
           <div class="prospect-list-layout">
@@ -9385,17 +10760,31 @@
               </div>
               <div class="prospect-toolbar">
                 <input id="prospectSearchInput" placeholder="搜索公司、国家、业务、邮箱">
-                <button class="btn" id="prospectOpenFinderButton">去搜客</button>
+                <span id="prospectTotalCount">0 条候选</span>
               </div>
               <div class="prospect-tabs">
                 <button class="active" data-prospect-filter="all">全部</button>
-                <button data-prospect-filter="pending">待触达</button>
-                <button data-prospect-filter="mailed">已发信</button>
-                <button data-prospect-filter="high">高匹配</button>
+                <button data-prospect-filter="preview">待核验</button>
+                <button data-prospect-filter="contactable">可联系</button>
+                <button data-prospect-filter="contacted">已联系</button>
                 <button data-prospect-filter="synced">已入线索</button>
+                <button data-prospect-filter="excluded">已排除</button>
+              </div>
+              <div class="prospect-bulkbar">
+                <label><input id="prospectSelectPage" type="checkbox">本页全选</label>
+                <span id="prospectSelectedCount">已选 0 条</span>
+                <button class="btn" id="prospectMarkContactableButton">标记可联系</button>
+                <button class="btn" id="prospectExcludeButton">排除</button>
+                <button class="btn primary" id="prospectSyncButton">批量入线索</button>
+                <select id="prospectAssigneeSelect" hidden aria-label="选择业务员"><option value="">选择业务员</option></select>
+                <button class="btn" id="prospectAssignButton" hidden>分配</button>
               </div>
               <div class="prospect-list" id="prospectListRows">
                 <div class="empty-cell">暂无搜客清单。请先在“自动获客”中运行任务。</div>
+              </div>
+              <div class="prospect-pagination">
+                <span id="prospectPageSummary">0 条结果</span>
+                <div><button class="btn" id="prospectPrevPage" type="button">上一页</button><span id="prospectPageNumber">1 / 1</span><button class="btn" id="prospectNextPage" type="button">下一页</button></div>
               </div>
             </section>
 
@@ -9406,24 +10795,21 @@
               <div id="prospectDetail">
                 <div class="empty-cell">点击左侧线索查看详情。</div>
               </div>
-            </section>
-
-            <section class="panel section prospect-mail-panel">
-              <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg></span><div><h2>开发信</h2><span>使用个人信息里绑定的邮箱和签名</span></div></div>
-                <button class="btn" id="prospectGenerateMailButton">生成正文</button>
-              </div>
-              <div class="inline-alert"><b>发件配置</b><span id="prospectSenderStatus">请先在个人信息绑定发件邮箱。</span></div>
-              <div class="prospect-mail-form" style="margin-top:10px">
-                <div class="form-field"><label>收件邮箱</label><input id="prospectMailTo" placeholder="自动读取线索联系方式，可手动修改"></div>
-                <div class="form-field"><label>主题</label><input id="prospectMailSubject" placeholder="开发信主题"></div>
-                <div class="form-field"><label>正文</label><textarea id="prospectMailBody" placeholder="选择线索后可自动生成开发信正文"></textarea></div>
-              </div>
-              <div class="prospect-mail-preview" id="prospectMailPreview">选择一条线索后，可生成并预览开发信。</div>
-              <div class="prospect-action-row">
-                <button class="btn" id="prospectPreviewMailButton">刷新预览</button>
-                <button class="btn primary" id="prospectSendMailButton">发送开发信</button>
-              </div>
+              <details class="prospect-mail-workspace" id="prospectMailWorkspace">
+                <summary>开发信工作区</summary>
+                <div class="inline-alert"><b>发件配置</b><span id="prospectSenderStatus">请先在个人信息绑定发件邮箱。</span></div>
+                <div class="prospect-mail-form" style="margin-top:10px">
+                  <div class="form-field"><label>收件邮箱</label><input id="prospectMailTo" placeholder="自动读取候选联系方式，可手动修改"></div>
+                  <div class="form-field"><label>主题</label><input id="prospectMailSubject" placeholder="开发信主题"></div>
+                  <div class="form-field"><label>正文</label><textarea id="prospectMailBody" placeholder="选择可联系候选后生成开发信正文"></textarea></div>
+                </div>
+                <div class="prospect-mail-preview" id="prospectMailPreview">选择一条候选后，可生成并预览开发信。</div>
+                <div class="prospect-action-row">
+                  <button class="btn" id="prospectGenerateMailButton">生成正文</button>
+                  <button class="btn" id="prospectPreviewMailButton">刷新预览</button>
+                  <button class="btn primary" id="prospectSendMailButton">发送开发信</button>
+                </div>
+              </details>
             </section>
           </div>
         </div>
@@ -9508,33 +10894,171 @@
         </div>
 
         <style>
-          #leads .lead-create-form { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 0 0 14px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2, #f9fbff); }
+          #leads .page-head { align-items: flex-start; }
+          #leads .lead-page-actions { display: flex; align-items: center; gap: 10px; }
+          #leads .lead-workspace-tabs { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: #f4f6fa; }
+          #leads .lead-workspace-tabs button { height: 30px; border: 0; border-radius: 6px; padding: 0 11px; color: var(--muted); background: transparent; cursor: pointer; font-weight: 800; }
+          #leads .lead-workspace-tabs button.active { color: var(--ink); background: #fff; box-shadow: 0 1px 4px rgba(22, 35, 64, .12); }
+          #leads .lead-workspace-tabs b { margin-left: 4px; font-variant-numeric: tabular-nums; }
+          #leads .lead-create-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0 0 14px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2, #f9fbff); }
           #leads .lead-create-form.is-hidden { display: none; }
-          #leads .lead-create-form input, #leads .lead-create-form select { height: 36px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; background: #fff; }
+          #leads .lead-create-form input, #leads .lead-create-form select, #leads .lead-create-form textarea { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; background: #fff; }
+          #leads .lead-create-form input, #leads .lead-create-form select { height: 36px; }
+          #leads .lead-create-form textarea { min-height: 72px; padding-top: 9px; resize: vertical; }
+          #leads .lead-create-advanced { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 8px; }
+          #leads .lead-create-advanced summary { color: var(--ink); cursor: pointer; font-size: 12px; font-weight: 800; }
+          #leads .lead-create-source-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+          #leads .lead-create-source-grid .full { grid-column: 1 / -1; }
           #leads .lead-create-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; }
-          #leads .lead-search { width: 100%; max-width: 320px; height: 34px; margin: 4px 0 12px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; }
+          #leads .lead-list-panel { min-width: 0; padding: 16px; }
+          #leads .lead-filter-row { display: grid; grid-template-columns: minmax(220px, 1fr) repeat(3, 132px) auto; gap: 8px; margin: 4px 0 12px; }
+          #leads .lead-search, #leads .lead-filter-row select { width: 100%; min-width: 0; height: 34px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; background: #fff; }
           #leads .lead-chip { cursor: pointer; user-select: none; }
           #leads .lead-chip.active { color: #fff; background: var(--brand, #3157d5); border-color: var(--brand, #3157d5); }
           #leads .lead-name { border: none; background: none; padding: 0; margin: 0; font: inherit; font-weight: 700; color: var(--brand, #3157d5); cursor: pointer; text-align: left; }
           #leads .lead-name:hover { text-decoration: underline; }
-          #leads tbody tr { cursor: pointer; }
+          #leads .table-wrap { overflow-x: auto; }
+          #leads table { min-width: 760px; table-layout: fixed; }
+          #leads th:nth-child(1) { width: 31%; }
+          #leads th:nth-child(2) { width: 18%; }
+          #leads th:nth-child(3) { width: 18%; }
+          #leads th:nth-child(4) { width: 23%; }
+          #leads th:nth-child(5) { width: 10%; }
           #leads tbody tr.selected { background: rgba(49, 87, 213, .06); }
+          #leads .lead-decision-cell { display: flex; flex-wrap: wrap; gap: 5px; }
+          #leads .lead-follow-cell, #leads .lead-source-cell { display: grid; min-width: 0; gap: 3px; }
+          #leads .lead-follow-cell b, #leads .lead-source-cell b { overflow: hidden; color: var(--ink); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+          #leads .lead-follow-cell span, #leads .lead-source-cell span { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+          #leads .lead-pagination { display: flex; align-items: center; justify-content: space-between; min-height: 36px; margin-top: 10px; color: var(--muted); font-size: 12px; }
+          #leads .lead-pagination div { display: flex; gap: 6px; }
+          #leads .lead-mobile-list { display: none; }
+          #leads .lead-drawer-backdrop { position: fixed; inset: 0; z-index: 89; visibility: hidden; background: rgba(19, 29, 51, .28); opacity: 0; transition: opacity .18s ease, visibility .18s ease; }
+          #leads .lead-drawer-backdrop.active { visibility: visible; opacity: 1; }
+          #leads #leadDrawer { position: fixed; display: none; z-index: 90; top: 0; right: 0; width: min(620px, 46vw); height: 100vh; padding: 20px; overflow-y: auto; border: 0; border-left: 1px solid var(--line); border-radius: 0; background: #fff; box-shadow: -18px 0 42px rgba(22, 35, 64, .16); }
+          #leads #leadDrawer.open { display: block; }
+          body.lead-drawer-open { overflow: hidden; }
+          body.lead-drawer-open .sidebar { z-index: 100; }
+          #leads .lead-drawer-head-actions, #leads .lead-drawer-actions > div { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
           #leads .lead-remark { margin: 0 0 12px; padding: 10px 12px; border-left: 3px solid var(--brand, #3157d5); background: #f5f8ff; border-radius: 0 8px 8px 0; color: var(--text); font-size: 13px; }
           #leads .lead-drawer-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 0; flex-wrap: wrap; }
           #leads .lead-drawer-actions label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
           #leads .lead-drawer-actions select { height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 8px; }
-          #leads .lead-compose { display: grid; grid-template-columns: 84px 1fr; gap: 8px; margin: 14px 0; }
+          #leads .lead-compose { display: grid; grid-template-columns: 110px 1fr; gap: 8px; margin: 14px 0; padding: 12px; border: 1px solid #dbe4f3; border-radius: 8px; background: #f8fbff; }
           #leads .lead-compose select { grid-row: span 1; height: 34px; border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; }
           #leads .lead-compose input, #leads .lead-compose button { height: 34px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; }
           #leads .lead-compose #leadNoteInput { grid-column: 2; }
           #leads .lead-compose #leadNoteNext { grid-column: 1 / -1; }
           #leads .lead-compose #leadNoteButton { grid-column: 1 / -1; }
+          #leads .lead-detail-section { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+          #leads .lead-detail-section h3 { margin: 0 0 10px; color: var(--ink); font-size: 13px; }
+          #leads .lead-delete-audit { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px; border: 1px solid #f1cccc; border-radius: 8px; background: #fff7f7; }
+          #leads .lead-delete-audit div, #leads .lead-dedupe { display: grid; gap: 3px; }
+          #leads .lead-delete-audit span, #leads .lead-dedupe span { color: var(--muted); font-size: 11px; }
+          #leads .lead-delete-audit b, #leads .lead-dedupe b { color: var(--ink); font-size: 12px; overflow-wrap: anywhere; }
+          #leads .lead-dedupe { margin-top: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcff; }
+          #leads .lead-dedupe small { color: var(--muted); line-height: 1.5; }
+          #leads .lead-raw-payload { margin-top: 8px; border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; }
+          #leads .lead-raw-payload summary { cursor: pointer; color: var(--ink); font-size: 12px; font-weight: 800; }
+          #leads .lead-raw-payload pre { max-height: 220px; margin: 10px 0 0; overflow: auto; color: #42506a; background: #f6f8fc; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
           #leads .timeline-item small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+          .modal-note { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+          .delete-warning { display: grid; gap: 5px; margin-bottom: 12px; padding: 12px; border: 1px solid #f1cccc; border-radius: 8px; background: #fff7f7; }
+          .delete-warning span { color: var(--muted); font-size: 12px; line-height: 1.5; }
+          @media (max-width: 900px) {
+            #leads .lead-filter-row { grid-template-columns: 1fr 1fr; }
+            #leads .lead-filter-row .lead-search { grid-column: 1 / -1; }
+            #leads .lead-create-form, #leads .lead-create-source-grid { grid-template-columns: 1fr 1fr; }
+            #leads #leadDrawer { width: min(680px, 88vw); }
+          }
+          @media (max-width: 600px) {
+            #leads .page-head { display: grid; gap: 12px; }
+            #leads .lead-page-actions { width: 100%; justify-content: space-between; }
+            #leads .lead-create-form, #leads .lead-create-source-grid, #leads .lead-filter-row { grid-template-columns: 1fr; }
+            #leads .lead-filter-row .lead-search { grid-column: auto; }
+            #leads .lead-create-source-grid .full { grid-column: auto; }
+            #leads .lead-stage-toolbar { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
+            #leads .lead-stage-toolbar .filter { flex: 0 0 auto; }
+            #leads .lead-desktop-table { display: none; }
+            #leads .lead-mobile-list { display: grid; gap: 8px; }
+            #leads .lead-mobile-card { display: grid; width: 100%; min-width: 0; gap: 7px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: #fff; text-align: left; }
+            #leads .lead-mobile-card.selected { border-color: var(--brand); background: #f5f8ff; }
+            #leads .lead-mobile-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; color: var(--ink); }
+            #leads .lead-mobile-top .lead-name { min-width: 0; height: auto; overflow-wrap: anywhere; }
+            #leads .lead-mobile-meta { display: flex; flex-wrap: wrap; gap: 5px; }
+            #leads .lead-mobile-meta i { max-width: 100%; padding: 3px 6px; border-radius: 5px; color: #52617a; background: #f1f4f9; font-size: 10px; font-style: normal; overflow-wrap: anywhere; }
+            #leads #leadDrawer { width: 100vw; max-width: none; padding: 16px 14px 24px; }
+            #leads .lead-compose { grid-template-columns: 1fr; }
+            #leads .lead-compose #leadNoteInput, #leads .lead-compose #leadNoteNext, #leads .lead-compose #leadNoteButton { grid-column: 1; }
+            #leads .info-grid, #leads .lead-delete-audit { grid-template-columns: 1fr; }
+          }
         </style>
+        <style>
+          #whatsapp .wa-layout { display: grid; grid-template-columns: 300px 1fr 300px; gap: 0; height: calc(100vh - 180px); min-height: 520px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: #fff; }
+          #whatsapp .wa-col { display: flex; flex-direction: column; min-width: 0; }
+          #whatsapp .wa-threads { border-right: 1px solid var(--line); background: #fbfcfe; }
+          #whatsapp .wa-threads-head { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+          #whatsapp .wa-threads-head input { width: 100%; height: 34px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; }
+          #whatsapp .wa-thread-list { flex: 1; overflow-y: auto; }
+          #whatsapp .wa-thread { display: flex; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); cursor: pointer; align-items: center; }
+          #whatsapp .wa-thread:hover { background: #f1f5fb; }
+          #whatsapp .wa-thread.active { background: #e7f0ff; }
+          #whatsapp .wa-thread .wa-avatar { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #25D366, #128C7E); color: #fff; display: grid; place-items: center; font-weight: 700; flex-shrink: 0; }
+          #whatsapp .wa-thread-main { flex: 1; min-width: 0; }
+          #whatsapp .wa-thread-main b { display: block; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          #whatsapp .wa-thread-main span { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          #whatsapp .wa-unread { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #25D366; color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; }
+          #whatsapp .wa-chat { background: #ECE5DD; }
+          #whatsapp .wa-chat-head { padding: 12px 16px; background: #f0f2f5; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
+          #whatsapp .wa-chat-head b { color: var(--ink); }
+          #whatsapp .wa-chat-head span { color: var(--muted); font-size: 12px; }
+          #whatsapp .wa-chat-head .wa-open-link { margin-left: auto; text-decoration: none; background: #25D366; color: #fff; border-color: #25D366; font-size: 12px; }
+          #whatsapp .wa-open-link { text-decoration: none; }
+          #whatsapp .wa-messages { flex: 1; overflow-y: auto; padding: 18px 16px; display: flex; flex-direction: column; gap: 8px; }
+          #whatsapp .wa-msg { max-width: 72%; padding: 8px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5; position: relative; box-shadow: 0 1px 1px rgba(0,0,0,.08); }
+          #whatsapp .wa-msg.in { align-self: flex-start; background: #fff; border-top-left-radius: 2px; }
+          #whatsapp .wa-msg.out { align-self: flex-end; background: linear-gradient(135deg, #D9FDD3, #C4F4BE); border-top-right-radius: 2px; }
+          #whatsapp .wa-msg .wa-translated { display: block; margin-top: 4px; padding-top: 4px; border-top: 1px dashed rgba(0,0,0,.12); color: #5a6b7b; font-size: 12px; font-style: italic; }
+          #whatsapp .wa-msg .wa-time { display: block; margin-top: 3px; font-size: 10px; color: #8a99a8; text-align: right; }
+          #whatsapp .wa-msg .wa-translate-btn { margin-top: 4px; font-size: 11px; color: var(--brand); cursor: pointer; background: none; border: none; padding: 0; }
+          #whatsapp .wa-compose { padding: 10px 14px; background: #f0f2f5; border-top: 1px solid var(--line); display: grid; grid-template-columns: 96px 1fr auto; gap: 8px; align-items: center; }
+          #whatsapp .wa-compose select, #whatsapp .wa-compose input { height: 38px; border: 1px solid var(--line); border-radius: 20px; padding: 0 14px; background: #fff; }
+          #whatsapp .wa-compose button { height: 38px; border-radius: 20px; padding: 0 18px; }
+          #whatsapp .wa-info { border-left: 1px solid var(--line); background: #fbfcfe; padding: 16px; overflow-y: auto; }
+          #whatsapp .wa-info h3 { margin: 0 0 4px; color: var(--ink); }
+          #whatsapp .wa-info .wa-info-sub { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
+          #whatsapp .wa-info .info { padding: 8px 0; border-bottom: 1px solid var(--line); }
+          #whatsapp .wa-info .info span { display: block; font-size: 11px; color: var(--muted); }
+          #whatsapp .wa-info .info b { font-size: 13px; color: var(--ink); }
+          #whatsapp .wa-empty { flex: 1; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 40px; }
+          #whatsapp .wa-bind-box { padding: 20px; }
+          #whatsapp .wa-bind-box input { width: 100%; height: 36px; margin: 8px 0; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; }
+          #whatsapp .wa-safety { margin-top: 14px; padding: 10px 12px; background: #fff7e6; border: 1px solid #ffe0a3; border-radius: 8px; font-size: 12px; color: #8a5a00; }
+          @media (max-width: 1100px) { #whatsapp .wa-layout { grid-template-columns: 260px 1fr; } #whatsapp .wa-info { display: none; } }
+          @media (max-width: 760px) { #whatsapp .wa-layout { grid-template-columns: 1fr; height: auto; } #whatsapp .wa-threads { max-height: 240px; } }
+        </style>
+        <div class="view" id="whatsapp">
+          <div class="page-head">
+            <div><p class="eyebrow">WhatsApp Chat Center</p><h1>WhatsApp 聊天</h1><p class="sub">开发中</p></div>
+          </div>
+          <div class="wa-layout">
+            <div class="wa-col wa-threads">
+              <div class="wa-threads-head"><input id="waThreadSearch" placeholder="搜索客户" /></div>
+              <div class="wa-thread-list" id="waThreadList"></div>
+            </div>
+            <div class="wa-col wa-chat" id="waChatCol">
+              <div class="wa-empty" id="waChatEmpty">← 从左侧选择一个客户开始查看对话</div>
+            </div>
+            <div class="wa-col wa-info" id="waInfoCol"></div>
+          </div>
+        </div>
+
         <div class="view" id="leads">
           <div class="page-head">
             <div><p class="eyebrow">Lead Management</p><h1>线索管理</h1><p class="sub">统一承接各平台线索，核实需求并持续跟进，成熟后确认入客户并按需创建商机。</p></div>
-            <button class="btn primary" id="leadNewButton">新增线索</button>
+            <div class="lead-page-actions">
+              <div class="lead-workspace-tabs"><button class="active" id="leadActiveTab">处理中 <b id="leadActiveCount">0</b></button><button id="leadTrashTab">垃圾箱 <b id="leadTrashCount">0</b></button></div>
+              <button class="btn primary" id="leadNewButton">新增线索</button>
+            </div>
           </div>
           <form class="lead-create-form is-hidden" id="leadCreateForm">
             <input name="company" placeholder="客户/公司名 *" required />
@@ -9546,23 +11070,40 @@
             <input name="source" placeholder="来源" value="手动录入" />
             <select name="intent"><option value="高">意向高</option><option value="中" selected>意向中</option><option value="低">意向低</option></select>
             <input name="estimatedAmount" type="number" placeholder="预估金额" />
+            <details class="lead-create-advanced">
+              <summary>来源与跟进信息</summary>
+              <div class="lead-create-source-grid">
+                <select name="sourceType"><option value="outbound">主动开发</option><option value="inbound">主动询盘</option><option value="offline">线下活动</option><option value="referral">转介绍</option><option value="import">批量导入</option></select>
+                <input name="sourceChannel" placeholder="平台渠道，例如 Alibaba" value="manual" />
+                <input name="sourceCampaign" placeholder="活动/广告系列" />
+                <input name="externalId" placeholder="平台外部编号" />
+                <input name="sourceUrl" placeholder="来源链接" />
+                <input name="nextFollowAt" placeholder="下次跟进，例如 2026-07-12 10:00" />
+                <textarea class="full" name="remark" placeholder="需求备注、产品、数量或采购背景"></textarea>
+              </div>
+            </details>
             <div class="lead-create-actions"><button type="button" class="btn" id="leadCreateCancel">取消</button><button type="submit" class="btn primary">保存线索</button></div>
           </form>
-          <div class="content-grid">
-            <div class="panel section">
-              <div class="toolbar" id="leadStageChips"></div>
-              <input class="lead-search" id="leadSearchInput" placeholder="搜索客户名 / 联系人 / 国家" />
-              <div class="table-wrap">
+          <div class="panel lead-list-panel">
+              <div class="toolbar lead-stage-toolbar" id="leadStageChips"></div>
+              <div class="lead-filter-row">
+                <input class="lead-search" id="leadSearchInput" placeholder="搜索公司、联系人、邮箱、电话、来源或外部编号" />
+                <select id="leadIntentFilter"><option value="all">全部意向</option><option value="高">高意向</option><option value="中">中意向</option><option value="低">低意向</option></select>
+                <select id="leadSourceFilter"><option value="all">全部来源</option></select>
+                <select id="leadFollowFilter"><option value="all">全部跟进</option><option value="overdue">已逾期</option><option value="planned">已计划</option><option value="unset">待安排</option></select>
+                <button class="btn" id="leadFilterReset">重置</button>
+              </div>
+              <div class="table-wrap lead-desktop-table">
                 <table>
-                  <thead><tr><th>客户</th><th>来源</th><th>意向</th><th>阶段</th><th>预估金额</th><th>下次跟进</th><th>状态</th></tr></thead>
+                  <thead><tr><th>公司 / 联系人</th><th>意向 / 阶段</th><th>下次跟进</th><th>来源</th><th>状态</th></tr></thead>
                   <tbody id="leadsTableBody"></tbody>
                 </table>
               </div>
-            </div>
-            <aside class="panel drawer" id="leadDrawer">
-              <div class="drawer-head"><div><h2>选择线索</h2><p>点击左侧客户名查看详情</p></div></div>
-            </aside>
+              <div class="lead-mobile-list" id="leadMobileList"></div>
+              <div class="lead-pagination" id="leadPagination"></div>
           </div>
+          <div class="lead-drawer-backdrop" id="leadDrawerBackdrop"></div>
+          <aside class="drawer" id="leadDrawer" aria-label="线索详情"></aside>
         </div>
 
         <div class="view" id="customers">
@@ -9572,61 +11113,23 @@
           </div>
           <div class="content-grid">
             <div class="panel section">
-              <div class="toolbar">
-                <span class="filter">国家：全部</span><span class="filter">商机阶段：已报价</span><span class="filter">等级：A/B</span><span class="filter">最近跟进：30 天</span>
-                <button class="btn">批量分配</button><button class="btn">批量导出</button>
+              <div class="customer-filter-row">
+                <input id="customerSearchInput" placeholder="搜索客户、联系人、国家或负责人" aria-label="搜索客户">
+                <select id="customerQueueFilter" aria-label="客户工作队列"><option value="all">全部客户</option><option value="overdue">提醒已逾期</option><option value="no-activity">暂无跟进记录</option><option value="no-deal">暂无活跃商机</option></select>
+                <button class="btn" id="customerFilterReset">重置</button>
               </div>
-              <div class="table-wrap">
+              <div class="toolbar" id="customerBulkToolbar"></div>
+              <div class="table-wrap customer-desktop-table">
                 <table>
                   <thead><tr><th style="width:34px">选</th><th>客户</th><th>活跃商机</th><th>健康度</th><th>跟进节奏</th><th>企微</th><th>操作</th></tr></thead>
-                  <tbody>
-                    <tr class="selected"><td><input type="checkbox"></td><td><div class="company"><span class="flag">🇸🇪</span><div><b>Nordic Tools AB</b><span>瑞典 · 采购经理 Emma · Shirley</span></div></div></td><td><span class="badge amber">已报价</span></td><td><div class="customer-health-cell"><span class="health warn"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span><span>68%</span></div></td><td><div class="customer-follow-cell"><span>最近 今天</span><b><span class="badge red">已逾期</span></b></div></td><td><span class="badge green">已绑定</span></td><td><button class="btn">编辑</button></td></tr>
-                    <tr><td><input type="checkbox"></td><td><div class="company"><span class="flag">🇺🇸</span><div><b>Atlas Home Inc</b><span>美国 · Buyer Daniel · Alex</span></div></div></td><td><span class="badge">样品</span></td><td><div class="customer-health-cell"><span class="health"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><span>78%</span></div></td><td><div class="customer-follow-cell"><span>最近 昨天</span><b>今天 16:00</b></div></td><td><span class="badge green">已绑定</span></td><td><button class="btn">编辑</button></td></tr>
-                    <tr><td><input type="checkbox"></td><td><div class="company"><span class="flag">🇯🇵</span><div><b>Kanto Retail</b><span>日本 · Director Sato · Shirley</span></div></div></td><td><span class="badge green">谈判</span></td><td><div class="customer-health-cell"><span class="health"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span><span>86%</span></div></td><td><div class="customer-follow-cell"><span>最近 今天</span><b>明天 09:30</b></div></td><td><span class="badge gray">未绑定</span></td><td><button class="btn">编辑</button></td></tr>
-                    <tr><td><input type="checkbox"></td><td><div class="company"><span class="flag">🇦🇪</span><div><b>Al Noor Trading</b><span>阿联酋 · Owner Hassan · Mia</span></div></div></td><td><span class="badge amber">已报价</span></td><td><div class="customer-health-cell"><span class="health bad"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span><span>42%</span></div></td><td><div class="customer-follow-cell"><span>最近 今天</span><b>今天 10:30</b></div></td><td><span class="badge green">已绑定</span></td><td><button class="btn">编辑</button></td></tr>
-                    <tr><td><input type="checkbox"></td><td><div class="company"><span class="flag">🇩🇪</span><div><b>Evergreen GmbH</b><span>德国 · Buyer Anna · Alex</span></div></div></td><td><span class="badge green">成交</span></td><td><div class="customer-health-cell"><span class="health"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span><span>91%</span></div></td><td><div class="customer-follow-cell"><span>最近 今天</span><b>7 天后复购</b></div></td><td><span class="badge green">已绑定</span></td><td><button class="btn">编辑</button></td></tr>
-                  </tbody>
+                  <tbody></tbody>
                 </table>
               </div>
+              <div class="customer-mobile-list" id="customerMobileList"></div>
             </div>
-
-            <aside class="panel drawer">
-              <div class="drawer-head">
-                <div><h2>Nordic Tools AB</h2><p>瑞典 · 工业工具进口商 · A 级客户</p></div>
-                <span class="badge red">报价未回复</span>
-              </div>
-              <section class="customer-time-card" aria-label="客户世界时间">
-                <div>
-                  <span>客户世界时间</span>
-                  <strong>14:28:36</strong>
-                  <small>瑞典当地 · 周三 07/08</small>
-                </div>
-                <div class="customer-time-side">
-                  <b>下午 · 适合联系</b>
-                  <em>Europe/Stockholm</em>
-                </div>
-              </section>
-              <div class="score-card">
-                <div class="score-ring"><span>68</span></div>
-                <div>
-                  <b>跟进评分：需保持</b>
-                  <p>客户等级高，但报价停留时间过长，需要今日二次确认。</p>
-                </div>
-              </div>
-              <div class="info-grid">
-                <div class="info"><span>健康度</span><b>68%</b></div>
-                <div class="info"><span>最高活跃阶段</span><b>已报价</b></div>
-                <div class="info"><span>下一提醒</span><b>已逾期</b></div>
-                <div class="info"><span>企微状态</span><b>已绑定</b></div>
-              </div>
-              <button class="btn primary" style="width:100%">新增跟进记录</button>
-              <div class="timeline">
-                <div class="timeline-item"><b>企微摘要</b><span>客户关注 CE 证书与交期，已承诺今日补发新版参数。</span></div>
-                <div class="timeline-item"><b>邮件记录</b><span>已发送 PI 与产品参数表，等待确认付款方式。</span></div>
-                <div class="timeline-item"><b>系统提醒</b><span>报价后 5 天未回复，已推送给归属业务员。</span></div>
-              </div>
-            </aside>
           </div>
+          <div class="customer-drawer-backdrop" id="customerDrawerBackdrop"></div>
+          <aside class="panel drawer" id="customerDrawer" aria-label="客户详情"></aside>
         </div>
 
         <div class="view" id="pipeline">
@@ -9634,38 +11137,58 @@
             <div><p class="eyebrow">Deal Pipeline</p><h1>商机管道</h1><p class="sub">以外贸销售阶段为核心，金额、国家、下一步动作全部卡片化。</p></div>
             <button class="btn primary">新增商机</button>
           </div>
-          <div class="panel section">
+          <div class="pipeline-summary" id="pipelineSummary"></div>
+          <div class="pipeline-toolbar">
+            <input id="pipelineSearchInput" placeholder="搜索商机、客户或产品">
+            <select id="pipelineDueFilter" aria-label="下一动作状态"><option value="all">全部动作</option><option value="overdue">已逾期</option><option value="today">今天到期</option><option value="future">未来动作</option></select>
+            <button class="btn" id="pipelineFilterReset">重置</button>
+          </div>
+          <div class="pipeline-stage-tabs" id="pipelineStageTabs" aria-label="商机阶段"></div>
+          <div class="panel section pipeline-active-panel">
             <div class="pipeline-strip">
-              <div class="stage"><div class="stage-head"><span>询盘</span><b>42</b></div><div class="deal"><b>Marco Import</b><span>意大利 · 厨房五金</span><div class="deal-foot"><span>$8k</span><span>分配报价</span></div></div><div class="deal"><b>Nova Market</b><span>法国 · 家居用品</span><div class="deal-foot"><span>$11k</span><span>新询盘</span></div></div></div>
-              <div class="stage"><div class="stage-head"><span>已联系</span><b>31</b></div><div class="deal"><b>Blue Ocean</b><span>智利 · LED 灯具</span><div class="deal-foot"><span>$14k</span><span>待确认规格</span></div></div></div>
-              <div class="stage"><div class="stage-head"><span>已报价</span><b>26</b></div><div class="deal"><b>Nordic Tools</b><span>瑞典 · 电动工具</span><div class="deal-foot"><span>$36k</span><span class="badge red">逾期</span></div></div><div class="deal"><b>Al Noor</b><span>阿联酋 · LED 灯具</span><div class="deal-foot"><span>$18k</span><span>汇率更新</span></div></div></div>
-              <div class="stage"><div class="stage-head"><span>样品</span><b>14</b></div><div class="deal"><b>Atlas Home</b><span>美国 · 家居用品</span><div class="deal-foot"><span>$22k</span><span>待反馈</span></div></div></div>
-              <div class="stage"><div class="stage-head"><span>谈判</span><b>9</b></div><div class="deal"><b>Kanto Retail</b><span>日本 · 连锁零售</span><div class="deal-foot"><span>$48k</span><span>账期谈判</span></div></div></div>
-              <div class="stage"><div class="stage-head"><span>成交</span><b>6</b></div><div class="deal"><b>Evergreen GmbH</b><span>德国 · 工业客户</span><div class="deal-foot"><span>$57k</span><span class="badge green">成交</span></div></div></div>
             </div>
           </div>
-          <div class="panel section pipeline-archive-panel">
-            <div class="section-head">
-              <div><h2>归档/丢单商机</h2><span class="subline">成交归档和主动丢单后的商机在这里查询，不再进入当前推进管道。</span></div>
+          <details class="panel section pipeline-archive-panel" id="pipelineClosedPanel">
+            <summary>
+              <b>关闭商机</b>
+              <span id="pipelineClosedSummary">已成交 0 · 已丢单 0 · 待复访 0</span>
+            </summary>
+            <div class="pipeline-archive-content">
+              <div class="pipeline-closed-filters">
+                <input id="pipelineClosedSearch" placeholder="搜索客户、产品、国家或丢单原因">
+                <select id="pipelineClosedStatus"><option value="all">全部关闭状态</option><option value="成交">已成交</option><option value="丢单">已丢单</option></select>
+                <input id="pipelineClosedMonth" type="month" aria-label="关闭月份">
+              </div>
+              <div class="table-wrap">
+                <table id="pipeline-archived-table">
+                  <thead><tr><th>商机</th><th>金额</th><th>状态</th><th>关闭时间</th><th>复盘/下一步</th></tr></thead>
+                  <tbody id="pipeline-archived-deals"><tr><td colspan="5" class="empty-cell">暂无关闭商机。</td></tr></tbody>
+                </table>
+              </div>
+              <div class="pipeline-pager"><button class="btn" id="pipelineClosedPrev">上一页</button><span id="pipelineClosedPage">第 1 页</span><button class="btn" id="pipelineClosedNext">下一页</button></div>
             </div>
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>商机</th><th>金额</th><th>状态</th><th>归档时间</th><th>备注</th></tr></thead>
-                <tbody id="pipeline-archived-deals"><tr><td colspan="5" class="empty-cell">暂无归档/丢单商机。</td></tr></tbody>
-              </table>
-            </div>
-          </div>
+          </details>
+          <div class="deal-drawer-backdrop" id="dealDrawerBackdrop"></div>
+          <aside class="panel" id="dealDrawer" aria-label="商机详情"></aside>
         </div>
 
         <div class="view" id="reminders">
           <div class="page-head">
-            <div><p class="eyebrow">Follow-up Rules</p><h1>跟进提醒</h1><p class="sub">这里管理的是提醒规则；点击“执行规则”后，命中的客户会生成真实待办，可在工作台和待办清单查看。</p></div>
+            <div><p class="eyebrow">Follow-up Actions</p><h1>跟进提醒</h1><p class="sub">先处理今天与逾期客户，再按需维护个人提醒规则。当前规则由业务员手工运行，只生成站内跟进任务。</p></div>
             <button class="btn primary">设置提醒规则</button>
           </div>
           <div class="panel section">
-            <div class="inline-alert">
-              <b>查看路径</b>
-              <span>规则配置保存在本页；执行后生成的提醒任务进入「工作台」今日待办和「待办清单」，命中为 0 时不会生成任务。</span>
+            <div class="reminder-workspace-tabs" role="tablist" aria-label="跟进提醒视图">
+              <button class="active" data-reminder-view="tasks" role="tab">待执行提醒</button>
+              <button data-reminder-view="rules" role="tab">提醒规则</button>
+            </div>
+            <div class="reminder-filters" id="reminderTaskFilters">
+              <button class="active" data-reminder-filter="pending">待处理</button>
+              <button data-reminder-filter="overdue">逾期</button>
+              <button data-reminder-filter="today">今天</button>
+              <button data-reminder-filter="future">未来</button>
+              <button data-reminder-filter="snoozed">已延期</button>
+              <button data-reminder-filter="done">已完成</button>
             </div>
             <div class="task-list">
               <article class="task" style="--accent: var(--rose)"><i class="task-line"></i><div><h3>报价后 N 天未回复</h3><p>A 级客户默认 3 天提醒，普通客户 5 天提醒，可按业务员覆盖。</p></div><span class="badge red">高优先级</span></article>
@@ -9719,6 +11242,24 @@
                 <div><h2>单据配置</h2><span>PI 用于报价确认，CI 用于成交/清关资料。切换类型会影响预览标题和关键字段。</span></div>
                 <div class="segmented" id="documentTypeTabs"><button data-doc-type="PI" class="active">PI</button><button data-doc-type="CI">CI</button></div>
               </div>
+              <div class="doc-workflow-bar">
+                <div class="doc-workflow-links">
+                  <label><span>关联客户</span><select id="docCustomerInput"></select></label>
+                  <label><span>关联商机</span><select id="docDealInput"></select></label>
+                  <span class="doc-status-badge" id="docStatusBadge">草稿</span>
+                </div>
+                <div class="doc-workflow-actions">
+                  <button class="btn" id="documentSubmitApprovalButton">提交审批</button>
+                  <button class="btn" id="documentApproveButton">审批通过</button>
+                  <button class="btn" id="documentRejectButton">驳回</button>
+                  <button class="btn" id="documentSendButton">发送记录</button>
+                  <button class="btn" id="documentNewRevisionButton">另存新版本</button>
+                </div>
+              </div>
+              <details class="doc-history-panel">
+                <summary>查看审批、发送与字段修改记录</summary>
+                <div id="documentHistory"></div>
+              </details>
               <div class="doc-form-grid">
                 <label><span>单据标题</span><input id="docTitleInput"></label>
                 <label><span>单据编号</span><input id="docNumberInput"></label>
@@ -9754,7 +11295,7 @@
 
         <div class="view" id="commission">
           <div class="page-head">
-            <div><p class="eyebrow">Commission Reconciliation</p><h1>提成计算对账</h1><p class="sub">从已归档成交商机同步月度销售记录，按产品规则自动计算提成，并保留人工调整与编辑留痕。</p></div>
+            <div><p class="eyebrow">Commission Reconciliation</p><h1>提成试算与对账</h1><p class="sub">归档成交只生成待核对记录；确认计提依据、原币、汇率与 CNY 结算额后，再复核并锁定结果。</p></div>
             <div class="head-actions"><button class="btn" id="commissionProductButton">产品维护</button><button class="btn" id="commissionExportButton">导出对账</button><button class="btn primary" id="commissionRecalculateButton">重新计算</button></div>
           </div>
           <div class="commission-shell">
@@ -9769,27 +11310,28 @@
               </div>
               <div class="commission-kpis" id="commissionKpis"></div>
               <div class="commission-actions">
-                <button class="btn" id="commissionSyncDealsButton">同步归档成交</button>
-                <button class="btn" id="commissionAddRecordButton">新增销售记录</button>
+                <button class="btn" id="commissionSyncDealsButton">同步待核成交</button>
+                <button class="btn" id="commissionAddRecordButton">新增计提记录</button>
                 <button class="btn" id="commissionAddManualItemButton">提成调整</button>
               </div>
             </section>
             <div class="commission-grid">
               <section class="panel commission-record-panel">
                 <div class="commission-section-head">
-                  <div><h2>月度售卖记录</h2><span>销售额可人工修正，系统会记录修改原因、修改人和字段差异。</span></div>
+                  <div><h2>月度计提记录</h2><span>先核对计提依据、原币和汇率；确认后才进入 CNY 提成计算。</span></div>
                   <div class="segmented" id="commissionRecordTabs"><button class="active" data-commission-filter="all">全部</button><button data-commission-filter="draft">待确认</button><button data-commission-filter="confirmed">已确认</button></div>
                 </div>
                 <div class="table-wrap commission-table-wrap">
                   <table class="commission-table">
-                    <thead><tr><th>客户 / 产品</th><th>数量</th><th>单价</th><th>销售额</th><th>状态</th><th>来源</th><th>操作</th></tr></thead>
+                    <thead><tr><th>客户 / 产品</th><th>原币金额</th><th>结算金额</th><th>提成额</th><th>状态 / 来源</th><th>操作</th></tr></thead>
                     <tbody id="commissionRecordRows"></tbody>
                   </table>
                 </div>
+                <div id="commissionRecordCards" class="commission-record-cards"></div>
               </section>
               <aside class="commission-side">
                 <section class="panel commission-card">
-                  <div class="commission-section-head"><div><h2>计算结果</h2><span>按人员汇总，可追加奖金、扣减、补贴等人工项。</span></div></div>
+                  <div class="commission-section-head"><div><h2>计算结果</h2><span>按人员汇总，管理员依次复核、锁定；每笔公式可追溯。</span></div></div>
                   <div id="commissionCalculationRows" class="commission-calc-list"></div>
                 </section>
                 <section class="panel commission-card">
@@ -9803,109 +11345,80 @@
 
         <div class="view" id="reports">
           <div class="page-head">
-            <div><p class="eyebrow">Executive Report Deck</p><h1>经营汇报</h1><p class="sub">面向老板与管理层，可直接导出 PDF/PPT 汇报：结论先行、指标支撑、风险闭环。</p></div>
-            <div class="head-actions"><button class="btn">切换月份</button><button class="btn">汇报备注</button><button class="btn primary">导出 PDF</button></div>
+            <div><p class="eyebrow">Live Business Snapshot</p><h1>经营汇报</h1><p class="sub">按当前账号权限生成实时经营快照，结论、指标、风险与导出使用同一份业务数据。</p></div>
+            <div class="head-actions"><button class="btn" id="reportRefreshButton">刷新数据</button><button class="btn" id="reportNoteButton">汇报备注</button><button class="btn primary" id="reportExportButton">导出文本报告</button></div>
           </div>
 
           <div class="report-deck">
             <section class="panel report-hero">
               <div class="report-hero-top">
-                <small>2026 年 6 月外贸销售经营汇报</small>
-                <small>GoodJob CRM · 自动生成</small>
+                <small id="reportPeriod">正在读取统计期间</small>
+                <small id="reportGeneratedAt">GoodJob CRM · 正在生成</small>
               </div>
-              <h2>本月预测成交额 $428k，漏斗转化率提升，但报价后未回复客户正在拖累欧洲市场成交。</h2>
-              <p>建议本周将管理动作聚焦在：欧洲报价逾期客户抢救、认证资料复训、样品阶段反馈催办、Kanto Retail 账期谈判主管协同。</p>
+              <h2 id="reportHeadline">正在加载实时经营快照...</h2>
+              <p id="reportHeroNote">指标将按当前账号可见范围和商机原币口径生成。</p>
+              <div class="report-meta-line">
+                <span id="reportScope">范围：读取中</span>
+                <span id="reportAmountBasis">金额口径：读取中</span>
+                <span id="reportDataStatus">数据状态：读取中</span>
+              </div>
               <div class="report-hero-metrics">
-                <div class="report-hero-metric"><span>预测成交额</span><b>$428k</b></div>
-                <div class="report-hero-metric"><span>漏斗转化率</span><b>18.6%</b></div>
-                <div class="report-hero-metric"><span>高风险金额</span><b>$92k</b></div>
-                <div class="report-hero-metric"><span>平均响应</span><b>3.2h</b></div>
+                <div class="report-hero-metric"><span>阶段加权预测</span><div class="report-money-list" id="reportWeightedForecast"><b>--</b></div></div>
+                <div class="report-hero-metric"><span>本月预计成交</span><div class="report-money-list" id="reportExpectedAmount"><b>--</b></div></div>
+                <div class="report-hero-metric"><span>风险商机金额</span><div class="report-money-list" id="reportRiskAmount"><b>--</b></div></div>
+                <div class="report-hero-metric"><span>本月赢单率</span><div class="report-money-list" id="reportWinRate"><b>--</b></div></div>
               </div>
             </section>
 
-            <div class="report-summary">
-              <div class="summary-card"><strong>结论 1：成交预测可达成</strong><p>谈判与样品阶段金额占 61%，本月目标差额约 $72k。</p></div>
-              <div class="summary-card"><strong>结论 2：报价跟进是短板</strong><p>26 个报价未回复，其中 7 个已逾期，需主管每日跟踪。</p></div>
-              <div class="summary-card"><strong>结论 3：欧洲市场质量最高</strong><p>欧洲询盘占 42%，但认证资料问题导致响应链路变长。</p></div>
-              <div class="summary-card"><strong>结论 4：培训影响转化</strong><p>认证资料考试通过率 64%，建议与资料维护联动复训。</p></div>
-            </div>
+            <div class="report-summary" id="reportConclusions"><div class="summary-card"><strong>正在生成经营结论</strong><p>请稍候。</p></div></div>
 
             <div class="ppt-grid">
               <section class="ppt-panel">
-                <h2>销售漏斗：报价阶段堆积，需要提高二次触达</h2>
-                <span class="subline">阶段数量、金额加权与关键瓶颈</span>
-                <div class="funnel-slide">
-                  <div class="funnel-step"><b>询盘</b><div class="bar" style="--w:96%"></div><span>42 单</span><strong>$612k</strong></div>
-                  <div class="funnel-step"><b>已联系</b><div class="bar" style="--w:78%"></div><span>31 单</span><strong>$506k</strong></div>
-                  <div class="funnel-step"><b>已报价</b><div class="bar" style="--w:64%"></div><span>26 单</span><strong>$382k</strong></div>
-                  <div class="funnel-step"><b>样品</b><div class="bar" style="--w:42%"></div><span>14 单</span><strong>$214k</strong></div>
-                  <div class="funnel-step"><b>谈判</b><div class="bar" style="--w:28%"></div><span>9 单</span><strong>$166k</strong></div>
-                  <div class="funnel-step"><b>成交</b><div class="bar" style="--w:18%"></div><span>6 单</span><strong>$97k</strong></div>
-                </div>
+                <h2>销售漏斗实时分布</h2>
+                <span class="subline">阶段数量、原币金额与风险商机</span>
+                <div class="funnel-slide" id="reportFunnel"></div>
               </section>
 
               <section class="ppt-panel dark">
                 <h2>管理层关注事项</h2>
-                <span class="subline">本周建议动作</span>
-                <div class="insight-list">
-                  <div class="insight-item"><i>1</i><div><b>欧洲报价逾期抢救</b><span>Nordic Tools 等 3 个 A 级客户，需今日二次确认。</span></div></div>
-                  <div class="insight-item"><i>2</i><div><b>认证资料复训</b><span>考试通过率偏低，影响 CE/RoHS 沟通效率。</span></div></div>
-                  <div class="insight-item"><i>3</i><div><b>样品反馈提速</b><span>14 个样品阶段客户中 5 个超过标准反馈周期。</span></div></div>
-                </div>
+                <span class="subline">从风险与预计成交商机生成</span>
+                <div class="insight-list" id="reportActions"></div>
+                <button class="btn" id="reportRiskDetailButton" type="button">查看风险明细</button>
               </section>
             </div>
 
             <div class="ppt-grid">
               <section class="ppt-panel">
-                <h2>市场结构：欧洲贡献最大，中东需提升报价响应</h2>
-                <span class="subline">询盘占比、成交质量与风险金额</span>
+                <h2>市场结构</h2>
+                <span class="subline">按活跃商机所在客户国家归类</span>
                 <div class="donut-wrap">
                   <div class="donut"></div>
-                  <div class="legend">
-                    <span><i style="--color: var(--brand)"></i>欧洲 42% · 质量指数 88</span>
-                    <span><i style="--color: var(--green)"></i>北美 26% · 样品反馈快</span>
-                    <span><i style="--color: var(--amber)"></i>中东 16% · 报价周期长</span>
-                    <span><i style="--color: var(--violet)"></i>其他 16% · 分散跟进</span>
-                  </div>
+                  <div class="legend" id="reportMarket"></div>
                 </div>
               </section>
 
               <section class="ppt-panel">
-                <h2>成交预测拆解</h2>
-                <span class="subline">按阶段贡献预测金额</span>
-                <div class="waterfall">
-                  <div><i style="--h:44%; --c: var(--brand)"></i><span>已报价<br>$126k</span></div>
-                  <div><i style="--h:58%; --c: var(--aqua)"></i><span>样品<br>$158k</span></div>
-                  <div><i style="--h:72%; --c: var(--green)"></i><span>谈判<br>$214k</span></div>
-                  <div><i style="--h:32%; --c: var(--amber)"></i><span>复购<br>$72k</span></div>
-                  <div><i style="--h:22%; --c: var(--rose)"></i><span>风险<br>-$92k</span></div>
-                </div>
+                <h2>阶段加权预测拆解</h2>
+                <span class="subline">按公开阶段概率计算，金额按原币分别展示</span>
+                <div class="waterfall" id="reportForecast"></div>
               </section>
             </div>
 
             <div class="ppt-grid">
               <section class="ppt-panel">
-                <h2>团队效率排行</h2>
-                <span class="subline">跟进质量、成交预测、考试通过率联动评估</span>
-                <table class="executive-table">
-                  <thead><tr><th>团队</th><th>新增客户</th><th>有效跟进</th><th>预测金额</th><th>考试通过</th><th>风险</th></tr></thead>
-                  <tbody>
-                    <tr><td>欧洲组</td><td>64</td><td>218</td><td>$186k</td><td>82%</td><td><span class="badge amber">报价逾期</span></td></tr>
-                    <tr><td>北美组</td><td>42</td><td>166</td><td>$124k</td><td>88%</td><td><span class="badge green">健康</span></td></tr>
-                    <tr><td>中东组</td><td>31</td><td>109</td><td>$76k</td><td>69%</td><td><span class="badge red">需复训</span></td></tr>
-                    <tr><td>其他</td><td>49</td><td>142</td><td>$42k</td><td>74%</td><td><span class="badge">分散</span></td></tr>
-                  </tbody>
+                <h2 id="reportPerformanceTitle">成员经营对比</h2>
+                <span class="subline">客户、跟进、活跃商机、加权预测与风险</span>
+                <table class="executive-table" id="reportPerformanceTable">
+                  <thead><tr><th>业务员</th><th>客户</th><th>本月跟进</th><th>活跃商机</th><th>加权预测</th><th>风险</th></tr></thead>
+                  <tbody id="reportPerformanceRows"></tbody>
                 </table>
+                <div class="report-performance-cards" id="reportPerformanceCards"></div>
               </section>
 
               <section class="ppt-panel">
                 <h2>下周行动计划</h2>
-                <span class="subline">可直接进入周会任务分配</span>
-                <div class="insight-list">
-                  <div class="insight-item"><i>A</i><div><b>报价逾期日清</b><span>每日 17:00 输出逾期名单，主管确认原因与下一步。</span></div></div>
-                  <div class="insight-item"><i>B</i><div><b>资料维护联动考试</b><span>CE/RoHS 资料更新后，自动触发认证专项考试。</span></div></div>
-                  <div class="insight-item"><i>C</i><div><b>样品反馈标准化</b><span>签收后 3 天必须记录反馈，超期推送企微提醒。</span></div></div>
-                </div>
+                <span class="subline">统计定义与使用边界</span>
+                <ol class="report-definition-list" id="reportDefinitions"></ol>
               </section>
             </div>
           </div>
@@ -10343,23 +11856,36 @@ https://www.ifm.com"></textarea>
 
         <div class="view" id="memos">
           <div class="page-head">
-            <div><p class="eyebrow">Sales Memo Notebook</p><h1>备忘录</h1><p class="sub">记录客户偏好、产品话术、报价复盘和临时事项，支持置顶、归档和按标签快速扫描。</p></div>
-            <div class="head-actions"><button class="btn">只看置顶</button><button class="btn primary">新增备忘</button></div>
+            <div><p class="eyebrow">Private Sales Notes</p><h1>备忘录</h1><p class="sub">个人私有的客户偏好、话术与报价复盘；关联客户或商机也不会进入团队时间线。</p></div>
+            <div class="head-actions"><button class="btn primary" id="memoNewButton">新增备忘</button></div>
           </div>
 
-          <div class="memo-grid">
+          <div class="memo-grid" id="memoGrid">
             <section class="panel section memo-sidebar">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg></span><div><h2>备忘列表</h2><span>置顶优先，按更新时间倒序</span></div></div><button class="btn">归档所选</button></div>
+              <div class="memo-list-tools">
+                <input id="memoSearchInput" type="search" placeholder="搜索标题、正文或标签" aria-label="搜索备忘录">
+                <div class="memo-status-tabs" role="tablist" aria-label="备忘录状态">
+                  <button class="active" data-memo-status="active">使用中</button>
+                  <button data-memo-status="archived">已归档</button>
+                  <button data-memo-status="deleted">已删除</button>
+                </div>
+                <label class="memo-pin-filter"><input type="checkbox" id="memoPinnedOnly"> 只看置顶</label>
+              </div>
               <div class="memo-list">
                 <article class="memo-card selected"><div class="memo-top"><h3>欧洲客户常问认证资料</h3><span class="badge green">置顶</span></div><div class="memo-meta"><span>销售话术</span><span>CE,认证,欧洲</span></div><p>客户问 CE/ROHS 时，优先发对应型号证书、测试报告摘要、产品参数页。</p></article>
               </div>
             </section>
 
             <aside class="panel section memo-detail">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2 id="memo-detail-title">备忘编辑</h2><span id="memo-detail-meta">切换左侧备忘时自动保存</span></div></div><div class="head-actions"><span class="memo-save-state" id="memoSaveState">已保存</span><button class="btn" id="memoPinButton">置顶</button><button class="btn" id="memoArchiveButton">归档</button><button class="btn memo-delete" id="memoDeleteButton">删除</button></div></div>
+              <div class="section-head"><div class="section-title"><button class="btn memo-back-button" id="memoBackButton">返回列表</button><div><h2 id="memo-detail-title">备忘编辑</h2><span id="memo-detail-meta">输入停止后自动保存</span></div></div><div class="head-actions"><button class="memo-save-state" id="memoSaveState" type="button">已保存</button><button class="btn" id="memoPinButton">置顶</button><button class="btn" id="memoArchiveButton">归档</button><button class="btn memo-delete" id="memoDeleteButton">删除</button></div></div>
               <div class="memo-content-box">
                 <input class="memo-title-input" id="memoTitleEditor" value="欧洲客户常问认证资料">
-                <input class="memo-meta-input" id="memoTagsEditor" value="销售话术 · CE,认证,欧洲">
+                <div class="memo-fields">
+                  <label><span>分类</span><select class="memo-meta-input" id="memoCategoryEditor"><option>客户备忘</option><option>销售话术</option><option>产品知识</option><option>报价复盘</option><option>个人记录</option></select></label>
+                  <label><span>标签</span><input class="memo-meta-input" id="memoTagsEditor" value="CE,认证,欧洲" placeholder="多个标签用逗号分隔"></label>
+                  <label><span>关联客户</span><select class="memo-meta-input" id="memoCustomerEditor"><option value="">不关联客户</option></select></label>
+                  <label><span>关联商机</span><select class="memo-meta-input" id="memoDealEditor"><option value="">不关联商机</option></select></label>
+                </div>
                 <textarea class="memo-editor" id="memoContentEditor">客户问 CE/ROHS 时，优先发对应型号证书、测试报告摘要、产品参数页。不要只发整包资料，容易增加客户筛选成本。</textarea>
               </div>
             </aside>
@@ -10417,6 +11943,17 @@ https://www.ifm.com"></textarea>
                 <div><span>绑定状态</span><b id="profileEmailStatus">未绑定</b></div>
                 <div><span>签名状态</span><b id="profileSignatureStatus">待完善</b></div>
                 <div><span>SMTP状态</span><b id="profileSmtpStatus">未配置</b></div>
+              </div>
+            </section>
+
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></span><div><h2>沟通渠道</h2><span>管理个人业务沟通工具</span></div></div></div>
+              <div class="profile-setting-grid">
+                <div class="profile-setting-card wide">
+                  <b>WhatsApp</b>
+                  <span>开发中</span>
+                  <div class="profile-quick-actions"><button class="btn primary" id="profileOpenWhatsAppButton" type="button">进入 WhatsApp</button></div>
+                </div>
               </div>
             </section>
           </div>

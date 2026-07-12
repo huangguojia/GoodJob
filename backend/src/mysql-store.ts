@@ -1,7 +1,8 @@
 import mysql from "mysql2/promise";
-import { aiModelConfigs, caseStudies, commissionCalculations, commissionExports, commissionItems, commissionProducts, commissionRules, competitors, customers, deals, examAttempts, examQuestionLinks, examQuestions, exams, importExportJobs, knowledgeAssets, leadActivities, leadSourceConfigs, leadSourceEvents, leads, memos, monthlySalesRecords, ocrJobs, planTasks, planTemplates, problems, reminders, salesRecordAudits, todos, tradeDocuments, users, wecomMessages, websiteOpportunities } from "./data.js";
+import { aiModelConfigs, caseStudies, commissionCalculations, commissionExports, commissionItems, commissionProducts, commissionRules, competitors, customerActivities, customers, dealEvents, deals, examAttempts, examQuestionLinks, examQuestions, exams, importExportJobs, knowledgeAssets, leadActivities, leadSourceConfigs, leadSourceEvents, leads, memos, monthlySalesRecords, ocrJobs, planTasks, planTemplates, problems, reminders, salesRecordAudits, todos, tradeDocuments, users, wecomMessages, websiteOpportunities, whatsappBindings, whatsappMessages } from "./data.js";
 import type { CrmStore } from "./store.js";
-import type { AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, Memo, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, SalesRecordAudit, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { WhatsAppBinding, WhatsAppMessage } from "./types.js";
+import type { AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerActivity, Deal, DealEvent, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, Memo, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, SalesRecordAudit, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 
 const defaultUrl = "mysql://goodjob:change_me@127.0.0.1:3306/goodjob_crm";
 
@@ -14,11 +15,13 @@ export async function createMysqlStore(): Promise<CrmStore> {
     mode: "mysql",
     users: await loadUsers(pool),
     customers: await loadCustomers(pool),
+    customerActivities: await loadCustomerActivities(pool),
     leads: await loadLeads(pool),
     leadActivities: await loadLeadActivities(pool),
     leadSourceEvents: await loadLeadSourceEvents(pool),
     todos: await loadTodos(pool),
     deals: await loadDeals(pool),
+    dealEvents: await loadDealEvents(pool),
     reminders: await loadReminders(pool),
     knowledgeAssets: await loadKnowledgeAssets(pool),
     exams: await loadExams(pool),
@@ -45,6 +48,8 @@ export async function createMysqlStore(): Promise<CrmStore> {
 		    commissionCalculations: await loadCommissionCalculations(pool),
 		    commissionItems: await loadCommissionItems(pool),
 		    commissionExports: await loadCommissionExports(pool),
+		    whatsappBindings: await loadWhatsAppBindings(pool),
+		    whatsappMessages: await loadWhatsAppMessages(pool),
 			    async persist() {
       await persistAll(pool, store);
     }
@@ -53,11 +58,13 @@ export async function createMysqlStore(): Promise<CrmStore> {
   if (!store.users.length) {
     store.users.push(...users);
     store.customers.push(...customers);
+    store.customerActivities.push(...customerActivities);
     store.leads.push(...leads);
     store.leadActivities.push(...leadActivities);
     store.leadSourceEvents.push(...leadSourceEvents);
     store.todos.push(...todos);
     store.deals.push(...deals);
+    store.dealEvents.push(...dealEvents);
     store.reminders.push(...reminders);
     store.knowledgeAssets.push(...knowledgeAssets);
     store.exams.push(...exams);
@@ -84,6 +91,8 @@ export async function createMysqlStore(): Promise<CrmStore> {
 	    store.commissionCalculations.push(...commissionCalculations);
 	    store.commissionItems.push(...commissionItems);
 	    store.commissionExports.push(...commissionExports);
+	    store.whatsappBindings.push(...whatsappBindings);
+	    store.whatsappMessages.push(...whatsappMessages);
 	    await store.persist();
   }
   if (!store.problems.length) {
@@ -202,6 +211,16 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "customers", "default_port_discharge", "VARCHAR(120) DEFAULT ''");
   await ensureColumn(pool, "customers", "default_incoterm", "VARCHAR(80) DEFAULT ''");
   await ensureColumn(pool, "customers", "default_payment_term", "VARCHAR(255) DEFAULT ''");
+  await pool.query(`CREATE TABLE IF NOT EXISTS customer_activities (
+    id VARCHAR(64) PRIMARY KEY,
+    customer_id VARCHAR(64) NOT NULL,
+    type VARCHAR(30) DEFAULT 'note',
+    content TEXT,
+    operator_id VARCHAR(64) DEFAULT '',
+    next_reminder VARCHAR(100) DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_customer_activities_customer(customer_id)
+  )`);
   await pool.query(`CREATE TABLE IF NOT EXISTS leads (
     id VARCHAR(64) PRIMARY KEY,
     company VARCHAR(200) NOT NULL,
@@ -227,6 +246,11 @@ async function ensureSchema(pool: mysql.Pool) {
     source_campaign VARCHAR(120) DEFAULT '',
     external_id VARCHAR(180) DEFAULT '',
     source_url VARCHAR(500) DEFAULT '',
+    deleted_at DATETIME NULL,
+    deleted_reason VARCHAR(255) DEFAULT '',
+    deleted_by VARCHAR(64) DEFAULT '',
+    purge_at DATETIME NULL,
+    status_before_delete VARCHAR(20) DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_leads_owner(owner_id),
     INDEX idx_leads_team(team_id),
@@ -238,6 +262,11 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "leads", "source_campaign", "VARCHAR(120) DEFAULT ''");
   await ensureColumn(pool, "leads", "external_id", "VARCHAR(180) DEFAULT ''");
   await ensureColumn(pool, "leads", "source_url", "VARCHAR(500) DEFAULT ''");
+  await ensureColumn(pool, "leads", "deleted_at", "DATETIME NULL");
+  await ensureColumn(pool, "leads", "deleted_reason", "VARCHAR(255) DEFAULT ''");
+  await ensureColumn(pool, "leads", "deleted_by", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "leads", "purge_at", "DATETIME NULL");
+  await ensureColumn(pool, "leads", "status_before_delete", "VARCHAR(20) DEFAULT ''");
   await pool.query(`CREATE TABLE IF NOT EXISTS lead_activities (
     id VARCHAR(64) PRIMARY KEY,
     lead_id VARCHAR(64) NOT NULL,
@@ -261,9 +290,10 @@ async function ensureSchema(pool: mysql.Pool) {
     raw_payload JSON,
     owner_id VARCHAR(64) NOT NULL,
     team_id VARCHAR(64) NOT NULL,
-    UNIQUE KEY uniq_lead_source_external (team_id, channel, external_id),
+    UNIQUE KEY uniq_lead_source_external (owner_id, channel, external_id),
     INDEX idx_lead_source_events_lead(lead_id)
   )`);
+  await ensureUniqueIndex(pool, "lead_source_events", "uniq_lead_source_external", ["owner_id", "channel", "external_id"]);
   await pool.query(`CREATE TABLE IF NOT EXISTS deals (
     id VARCHAR(64) PRIMARY KEY,
     customer_id VARCHAR(64) NOT NULL,
@@ -282,7 +312,32 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "deals", "product", "VARCHAR(200) DEFAULT ''");
   await ensureColumn(pool, "deals", "quantity", "INT DEFAULT 0");
   await ensureColumn(pool, "deals", "unit_price", "DECIMAL(14,2) DEFAULT 0");
+  await ensureColumn(pool, "deals", "currency", "VARCHAR(12) DEFAULT 'USD'");
+  await ensureColumn(pool, "deals", "amount_type", "VARCHAR(20) DEFAULT 'estimate'");
+  await ensureColumn(pool, "deals", "next_action_at", "VARCHAR(40) DEFAULT ''");
+  await ensureColumn(pool, "deals", "expected_close_at", "VARCHAR(40) DEFAULT ''");
+  await ensureColumn(pool, "deals", "stage_changed_at", "DATETIME NULL");
+  await ensureColumn(pool, "deals", "closed_at", "DATETIME NULL");
+  await ensureColumn(pool, "deals", "won_reason", "TEXT");
+  await ensureColumn(pool, "deals", "lost_reason", "TEXT");
+  await ensureColumn(pool, "deals", "lost_reason_category", "VARCHAR(80) DEFAULT ''");
+  await ensureColumn(pool, "deals", "revisit_at", "VARCHAR(40) DEFAULT ''");
   await ensureColumn(pool, "deals", "archived_at", "TIMESTAMP NULL");
+  await pool.query(`CREATE TABLE IF NOT EXISTS deal_events (
+    id VARCHAR(64) PRIMARY KEY,
+    deal_id VARCHAR(64) NOT NULL,
+    event_type VARCHAR(40) NOT NULL,
+    content TEXT,
+    operator_id VARCHAR(64) NOT NULL,
+    from_stage VARCHAR(40) DEFAULT '',
+    to_stage VARCHAR(40) DEFAULT '',
+    next_action VARCHAR(200) DEFAULT '',
+    next_action_at VARCHAR(40) DEFAULT '',
+    related_document_id VARCHAR(64) DEFAULT '',
+    created_at DATETIME NOT NULL,
+    INDEX idx_deal_events_deal(deal_id),
+    INDEX idx_deal_events_operator(operator_id)
+  )`);
   await pool.query(`CREATE TABLE IF NOT EXISTS todos (
     id VARCHAR(64) PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
@@ -299,6 +354,17 @@ async function ensureSchema(pool: mysql.Pool) {
 	    impact_amount DECIMAL(14,2),
 	    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 	    history_at TIMESTAMP NULL,
+	    customer_id VARCHAR(64) DEFAULT '',
+	    deal_id VARCHAR(64) DEFAULT '',
+	    reminder_rule_id VARCHAR(64) DEFAULT '',
+	    trigger_key VARCHAR(255) DEFAULT '',
+	    snoozed_from VARCHAR(100) DEFAULT '',
+	    snooze_reason VARCHAR(255) DEFAULT '',
+	    snooze_count INT DEFAULT 0,
+	    snoozed_by VARCHAR(64) DEFAULT '',
+	    completed_at TIMESTAMP NULL,
+	    completed_by VARCHAR(64) DEFAULT '',
+	    completion_result VARCHAR(255) DEFAULT '',
 	    INDEX idx_todos_owner_history(owner_id, history_at)
 	  )`);
   await ensureColumn(pool, "todos", "status", "VARCHAR(24) DEFAULT 'pending'");
@@ -306,6 +372,17 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "todos", "sort_order", "INT DEFAULT 0");
   await ensureColumn(pool, "todos", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
   await ensureColumn(pool, "todos", "history_at", "TIMESTAMP NULL");
+  await ensureColumn(pool, "todos", "customer_id", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "todos", "deal_id", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "todos", "reminder_rule_id", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "todos", "trigger_key", "VARCHAR(255) DEFAULT ''");
+  await ensureColumn(pool, "todos", "snoozed_from", "VARCHAR(100) DEFAULT ''");
+  await ensureColumn(pool, "todos", "snooze_reason", "VARCHAR(255) DEFAULT ''");
+  await ensureColumn(pool, "todos", "snooze_count", "INT DEFAULT 0");
+  await ensureColumn(pool, "todos", "snoozed_by", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "todos", "completed_at", "TIMESTAMP NULL");
+  await ensureColumn(pool, "todos", "completed_by", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "todos", "completion_result", "VARCHAR(255) DEFAULT ''");
   await pool.query(`CREATE TABLE IF NOT EXISTS plan_tasks (
     id VARCHAR(64) PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
@@ -316,6 +393,16 @@ async function ensureSchema(pool: mysql.Pool) {
     due_at VARCHAR(100),
     target VARCHAR(255),
     description TEXT,
+    customer_id VARCHAR(64) DEFAULT '',
+    lead_id VARCHAR(64) DEFAULT '',
+    deal_id VARCHAR(64) DEFAULT '',
+    completion_result TEXT,
+    completed_at DATETIME NULL,
+    cancellation_reason TEXT,
+    cancelled_at DATETIME NULL,
+    rescheduled_from VARCHAR(100) DEFAULT '',
+    rescheduled_at DATETIME NULL,
+    reschedule_reason VARCHAR(255) DEFAULT '',
     owner_id VARCHAR(64) NOT NULL,
     team_id VARCHAR(64) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -323,6 +410,16 @@ async function ensureSchema(pool: mysql.Pool) {
     INDEX idx_plan_tasks_owner(owner_id),
     INDEX idx_plan_tasks_team(team_id)
   )`);
+  await ensureColumn(pool, "plan_tasks", "customer_id", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "plan_tasks", "lead_id", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "plan_tasks", "deal_id", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "plan_tasks", "completion_result", "TEXT");
+  await ensureColumn(pool, "plan_tasks", "completed_at", "DATETIME NULL");
+  await ensureColumn(pool, "plan_tasks", "cancellation_reason", "TEXT");
+  await ensureColumn(pool, "plan_tasks", "cancelled_at", "DATETIME NULL");
+  await ensureColumn(pool, "plan_tasks", "rescheduled_from", "VARCHAR(100) DEFAULT ''");
+  await ensureColumn(pool, "plan_tasks", "rescheduled_at", "DATETIME NULL");
+  await ensureColumn(pool, "plan_tasks", "reschedule_reason", "VARCHAR(255) DEFAULT ''");
   await pool.query(`CREATE TABLE IF NOT EXISTS plan_templates (
     id VARCHAR(64) PRIMARY KEY,
     section_name VARCHAR(40) NOT NULL,
@@ -365,6 +462,14 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "reminders", "priority", "VARCHAR(20) DEFAULT 'normal'");
   await ensureColumn(pool, "reminders", "enabled", "BOOLEAN DEFAULT TRUE");
   await ensureColumn(pool, "reminders", "generated_count", "INT DEFAULT 0");
+  await ensureColumn(pool, "reminders", "target_owner_id", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "reminders", "last_run_by", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "reminders", "last_run_at", "TIMESTAMP NULL");
+  await ensureColumn(pool, "reminders", "last_matched_count", "INT DEFAULT 0");
+  await ensureColumn(pool, "reminders", "last_created_count", "INT DEFAULT 0");
+  await ensureColumn(pool, "reminders", "last_skipped_count", "INT DEFAULT 0");
+  await ensureColumn(pool, "reminders", "last_failed_count", "INT DEFAULT 0");
+  await ensureColumn(pool, "reminders", "last_error", "VARCHAR(255) DEFAULT ''");
   await pool.query(`CREATE TABLE IF NOT EXISTS knowledge_assets (
     id VARCHAR(64) PRIMARY KEY,
     title VARCHAR(200) NOT NULL,
@@ -475,6 +580,9 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "website_opportunities", "last_development_email_at", "DATETIME NULL");
   await ensureColumn(pool, "website_opportunities", "last_development_email_subject", "VARCHAR(255) DEFAULT ''");
   await ensureColumn(pool, "website_opportunities", "last_development_email_to", "VARCHAR(180) DEFAULT ''");
+  await ensureColumn(pool, "website_opportunities", "verified_at", "DATETIME NULL");
+  await ensureColumn(pool, "website_opportunities", "status_changed_at", "DATETIME NULL");
+  await ensureColumn(pool, "website_opportunities", "excluded_reason", "VARCHAR(255) DEFAULT ''");
   await pool.query(`CREATE TABLE IF NOT EXISTS ai_model_configs (
     id VARCHAR(64) PRIMARY KEY,
     provider VARCHAR(40) NOT NULL DEFAULT 'openai',
@@ -535,6 +643,9 @@ async function ensureSchema(pool: mysql.Pool) {
   )`);
   await pool.query(`CREATE TABLE IF NOT EXISTS trade_documents (
     id VARCHAR(64) PRIMARY KEY,
+    customer_id VARCHAR(64) DEFAULT '',
+    deal_id VARCHAR(64) DEFAULT '',
+    revision INT DEFAULT 1,
     doc_type VARCHAR(10) NOT NULL,
     title VARCHAR(255) NOT NULL,
     doc_number VARCHAR(80) NOT NULL,
@@ -555,6 +666,11 @@ async function ensureSchema(pool: mysql.Pool) {
     notes TEXT,
     template_style VARCHAR(40),
     status VARCHAR(40),
+    approval_note TEXT,
+    approved_at VARCHAR(100),
+    approved_by VARCHAR(64),
+    audits_json JSON,
+    send_records_json JSON,
     owner_id VARCHAR(64) NOT NULL,
     team_id VARCHAR(64) NOT NULL,
     items_json JSON,
@@ -562,6 +678,14 @@ async function ensureSchema(pool: mysql.Pool) {
     INDEX idx_trade_documents_owner(owner_id),
     INDEX idx_trade_documents_team(team_id)
   )`);
+  await ensureColumn(pool, "trade_documents", "customer_id", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "trade_documents", "deal_id", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "trade_documents", "revision", "INT DEFAULT 1");
+  await ensureColumn(pool, "trade_documents", "approval_note", "TEXT");
+  await ensureColumn(pool, "trade_documents", "approved_at", "VARCHAR(100)");
+  await ensureColumn(pool, "trade_documents", "approved_by", "VARCHAR(64)");
+  await ensureColumn(pool, "trade_documents", "audits_json", "JSON");
+  await ensureColumn(pool, "trade_documents", "send_records_json", "JSON");
 	  await pool.query(`CREATE TABLE IF NOT EXISTS wecom_messages (
     id VARCHAR(64) PRIMARY KEY,
     customer_id VARCHAR(64),
@@ -594,14 +718,20 @@ async function ensureSchema(pool: mysql.Pool) {
     content TEXT,
     category VARCHAR(80),
     tags VARCHAR(255),
+    customer_id VARCHAR(64) DEFAULT '',
+    deal_id VARCHAR(64) DEFAULT '',
     owner_id VARCHAR(64) NOT NULL,
     team_id VARCHAR(64) NOT NULL,
     pinned BOOLEAN DEFAULT FALSE,
     archived BOOLEAN DEFAULT FALSE,
+    deleted_at DATETIME NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_memos_owner(owner_id),
     INDEX idx_memos_team(team_id)
   )`);
+  await ensureColumn(pool, "memos", "customer_id", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "memos", "deal_id", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "memos", "deleted_at", "DATETIME NULL");
   await pool.query(`CREATE TABLE IF NOT EXISTS competitors (
     id VARCHAR(64) PRIMARY KEY,
     company VARCHAR(200) NOT NULL,
@@ -682,7 +812,12 @@ async function ensureSchema(pool: mysql.Pool) {
     sales_amount DECIMAL(14,2) DEFAULT 0,
     currency VARCHAR(12) DEFAULT 'USD',
     exchange_rate DECIMAL(14,4) DEFAULT 1,
+    exchange_rate_date VARCHAR(20) DEFAULT '',
+    exchange_rate_source VARCHAR(20) DEFAULT 'pending',
+    settlement_currency VARCHAR(12) DEFAULT 'CNY',
     settlement_amount DECIMAL(14,2) DEFAULT 0,
+    basis_type VARCHAR(30) DEFAULT 'deal_amount',
+    basis_date VARCHAR(20) DEFAULT '',
     deal_archived_at VARCHAR(80) DEFAULT '',
     source_type VARCHAR(20) DEFAULT 'manual',
     status VARCHAR(30) DEFAULT 'draft',
@@ -718,6 +853,8 @@ async function ensureSchema(pool: mysql.Pool) {
     manual_adjustment DECIMAL(14,2) DEFAULT 0,
     final_commission DECIMAL(14,2) DEFAULT 0,
     status VARCHAR(30) DEFAULT 'pending',
+    version_no INT DEFAULT 1,
+    is_current BOOLEAN DEFAULT TRUE,
     calculated_at DATETIME NULL,
     reviewed_by VARCHAR(64) DEFAULT '',
     reviewed_at DATETIME NULL,
@@ -755,6 +892,45 @@ async function ensureSchema(pool: mysql.Pool) {
     created_at DATETIME NULL,
     INDEX idx_commission_exports_month(month_value)
   )`);
+  await ensureColumn(pool, "monthly_sales_records", "exchange_rate_date", "VARCHAR(20) DEFAULT ''");
+  await ensureColumn(pool, "monthly_sales_records", "exchange_rate_source", "VARCHAR(20) DEFAULT 'pending'");
+  await ensureColumn(pool, "monthly_sales_records", "settlement_currency", "VARCHAR(12) DEFAULT 'CNY'");
+  await ensureColumn(pool, "monthly_sales_records", "basis_type", "VARCHAR(30) DEFAULT 'deal_amount'");
+  await ensureColumn(pool, "monthly_sales_records", "basis_date", "VARCHAR(20) DEFAULT ''");
+  await ensureColumn(pool, "commission_calculations", "version_no", "INT DEFAULT 1");
+  await ensureColumn(pool, "commission_calculations", "is_current", "BOOLEAN DEFAULT TRUE");
+
+  await pool.query(`CREATE TABLE IF NOT EXISTS whatsapp_bindings (
+    id VARCHAR(64) PRIMARY KEY,
+    customer_id VARCHAR(64) NOT NULL UNIQUE,
+    phone_number VARCHAR(20) NOT NULL,
+    wa_profile_name VARCHAR(100) DEFAULT '',
+    last_message_at DATETIME NULL,
+    unread_count INT DEFAULT 0,
+    created_at DATETIME NULL,
+    binding_mode VARCHAR(20) DEFAULT 'manual',
+    user_id VARCHAR(64) DEFAULT '',
+    session_data TEXT,
+    twilio_phone_number VARCHAR(20) DEFAULT '',
+    connection_status VARCHAR(20) DEFAULT 'disconnected',
+    last_connected_at DATETIME NULL,
+    INDEX idx_whatsapp_bindings_customer(customer_id),
+    INDEX idx_whatsapp_bindings_user(user_id)
+  )`);
+
+  await pool.query(`CREATE TABLE IF NOT EXISTS whatsapp_messages (
+    id VARCHAR(64) PRIMARY KEY,
+    customer_id VARCHAR(64) NOT NULL,
+    direction VARCHAR(20) NOT NULL,
+    content TEXT,
+    content_translated TEXT,
+    media_url VARCHAR(500) DEFAULT '',
+    status VARCHAR(20) DEFAULT '',
+    wa_message_id VARCHAR(128) DEFAULT '',
+    created_at DATETIME NULL,
+    INDEX idx_whatsapp_messages_customer(customer_id),
+    INDEX idx_whatsapp_messages_created(created_at)
+  )`);
 }
 
 async function rows<T>(pool: mysql.Pool, sql: string): Promise<T[]> {
@@ -769,6 +945,17 @@ async function ensureColumn(pool: mysql.Pool, table: string, column: string, def
   );
   const exists = Number((result as Array<{ count: number }>)[0]?.count || 0) > 0;
   if (!exists) await pool.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+async function ensureUniqueIndex(pool: mysql.Pool, table: string, index: string, columns: string[]) {
+  const [result] = await pool.query(
+    "SELECT column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ? ORDER BY seq_in_index",
+    [table, index]
+  );
+  const current = (result as Array<{ column_name: string }>).map((row) => row.column_name);
+  if (current.length === columns.length && current.every((column, position) => column === columns[position])) return;
+  if (current.length) await pool.query(`ALTER TABLE \`${table}\` DROP INDEX \`${index}\``);
+  await pool.query(`ALTER TABLE \`${table}\` ADD UNIQUE KEY \`${index}\` (${columns.map((column) => `\`${column}\``).join(", ")})`);
 }
 
 async function loadUsers(pool: mysql.Pool): Promise<User[]> {
@@ -798,7 +985,7 @@ async function loadUsers(pool: mysql.Pool): Promise<User[]> {
 
 async function loadLeads(pool: mysql.Pool): Promise<Lead[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM leads ORDER BY created_at DESC")).map((row) => ({
-    id: row.id, company: row.company, contact: row.contact || "", country: row.country || "", email: row.email || "", phone: row.phone || "", wechat: row.wechat || "", source: row.source || "", sourceType: row.source_type || "outbound", sourceChannel: row.source_channel || "manual", sourceCampaign: row.source_campaign || "", externalId: row.external_id || "", sourceUrl: row.source_url || "", intent: row.intent || "中", stage: row.stage || "新线索", status: (row.status || "new") as Lead["status"], ownerId: row.owner_id, teamId: row.team_id, estimatedAmount: Number(row.estimated_amount || 0), nextFollowAt: row.next_follow_at || "", lastActivityAt: row.last_activity_at || "", remark: row.remark || "", convertedCustomerId: row.converted_customer_id || "", convertedDealId: row.converted_deal_id || "", createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at || new Date().toISOString()
+    id: row.id, company: row.company, contact: row.contact || "", country: row.country || "", email: row.email || "", phone: row.phone || "", wechat: row.wechat || "", source: row.source || "", sourceType: row.source_type || "outbound", sourceChannel: row.source_channel || "manual", sourceCampaign: row.source_campaign || "", externalId: row.external_id || "", sourceUrl: row.source_url || "", intent: row.intent || "中", stage: row.stage || "新线索", status: (row.status || "new") as Lead["status"], ownerId: row.owner_id, teamId: row.team_id, estimatedAmount: Number(row.estimated_amount || 0), nextFollowAt: row.next_follow_at || "", lastActivityAt: row.last_activity_at || "", remark: row.remark || "", convertedCustomerId: row.converted_customer_id || "", convertedDealId: row.converted_deal_id || "", createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at || new Date().toISOString(), deletedAt: row.deleted_at instanceof Date ? row.deleted_at.toISOString() : row.deleted_at || "", deletedReason: row.deleted_reason || "", deletedBy: row.deleted_by || "", purgeAt: row.purge_at instanceof Date ? row.purge_at.toISOString() : row.purge_at || "", statusBeforeDelete: row.status_before_delete || undefined
   }));
 }
 
@@ -831,9 +1018,22 @@ async function loadCustomers(pool: mysql.Pool): Promise<Customer[]> {
   }));
 }
 
+async function loadCustomerActivities(pool: mysql.Pool): Promise<CustomerActivity[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM customer_activities ORDER BY created_at DESC")).map((row) => ({
+    id: row.id,
+    customerId: row.customer_id,
+    type: row.type || "note",
+    content: row.content || "",
+    operatorId: row.operator_id || "",
+    nextReminder: row.next_reminder || "",
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at || new Date().toISOString()
+  }));
+}
+
 async function loadTodos(pool: mysql.Pool): Promise<Todo[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM todos ORDER BY done ASC, created_at DESC")).map((row) => ({
-    id: row.id, title: row.title, type: row.type, priority: row.priority, status: row.status || "pending", pinState: row.pin_state || "", sortOrder: Number(row.sort_order || 0), dueAt: row.due_at, ownerId: row.owner_id, teamId: row.team_id, related: row.related, done: Boolean(row.done), impactAmount: row.impact_amount == null ? undefined : Number(row.impact_amount), createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at, historyAt: row.history_at instanceof Date ? row.history_at.toISOString() : row.history_at || undefined
+    id: row.id, title: row.title, type: row.type, priority: row.priority, status: row.status || "pending", pinState: row.pin_state || "", sortOrder: Number(row.sort_order || 0), dueAt: row.due_at, ownerId: row.owner_id, teamId: row.team_id, related: row.related, done: Boolean(row.done), impactAmount: row.impact_amount == null ? undefined : Number(row.impact_amount), createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at, historyAt: row.history_at instanceof Date ? row.history_at.toISOString() : row.history_at || undefined,
+    customerId: row.customer_id || undefined, dealId: row.deal_id || undefined, reminderRuleId: row.reminder_rule_id || undefined, triggerKey: row.trigger_key || undefined, snoozedFrom: row.snoozed_from || undefined, snoozeReason: row.snooze_reason || undefined, snoozeCount: Number(row.snooze_count || 0), snoozedBy: row.snoozed_by || undefined, completedAt: row.completed_at instanceof Date ? row.completed_at.toISOString() : row.completed_at || undefined, completedBy: row.completed_by || undefined, completionResult: row.completion_result || undefined
   }));
 }
 
@@ -848,6 +1048,16 @@ async function loadPlanTasks(pool: mysql.Pool): Promise<PlanTask[]> {
     dueAt: row.due_at || "",
     target: row.target || "",
     description: row.description || "",
+    customerId: row.customer_id || "",
+    leadId: row.lead_id || "",
+    dealId: row.deal_id || "",
+    completionResult: row.completion_result || "",
+    completedAt: row.completed_at instanceof Date ? row.completed_at.toISOString() : row.completed_at || "",
+    cancellationReason: row.cancellation_reason || "",
+    cancelledAt: row.cancelled_at instanceof Date ? row.cancelled_at.toISOString() : row.cancelled_at || "",
+    rescheduledFrom: row.rescheduled_from || "",
+    rescheduledAt: row.rescheduled_at instanceof Date ? row.rescheduled_at.toISOString() : row.rescheduled_at || "",
+    rescheduleReason: row.reschedule_reason || "",
     ownerId: row.owner_id,
     teamId: row.team_id,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
@@ -878,13 +1088,50 @@ async function loadPlanTemplates(pool: mysql.Pool): Promise<PlanTemplate[]> {
 
 async function loadDeals(pool: mysql.Pool): Promise<Deal[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM deals")).map((row) => ({
-    id: row.id, customerId: row.customer_id, title: row.title, stage: row.stage, product: row.product || "", quantity: Number(row.quantity || 0), unitPrice: Number(row.unit_price || 0), amount: Number(row.amount), ownerId: row.owner_id, teamId: row.team_id, nextAction: row.next_action, archivedAt: row.archived_at instanceof Date ? row.archived_at.toISOString() : row.archived_at || undefined
+    id: row.id,
+    customerId: row.customer_id,
+    title: row.title,
+    stage: row.stage,
+    product: row.product || "",
+    quantity: Number(row.quantity || 0),
+    unitPrice: Number(row.unit_price || 0),
+    amount: Number(row.amount),
+    currency: row.currency || "USD",
+    amountType: row.amount_type || (row.stage === "成交" ? "won" : row.stage === "已报价" || row.stage === "样品" || row.stage === "谈判" ? "quoted" : "estimate"),
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    nextAction: row.next_action || "安排下一步跟进",
+    nextActionAt: row.next_action_at || "",
+    expectedCloseAt: row.expected_close_at || "",
+    stageChangedAt: row.stage_changed_at instanceof Date ? row.stage_changed_at.toISOString() : row.stage_changed_at || new Date().toISOString(),
+    closedAt: row.closed_at instanceof Date ? row.closed_at.toISOString() : row.closed_at || undefined,
+    wonReason: row.won_reason || undefined,
+    lostReason: row.lost_reason || undefined,
+    lostReasonCategory: row.lost_reason_category || undefined,
+    revisitAt: row.revisit_at || undefined,
+    archivedAt: row.archived_at instanceof Date ? row.archived_at.toISOString() : row.archived_at || undefined
+  }));
+}
+
+async function loadDealEvents(pool: mysql.Pool): Promise<DealEvent[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM deal_events ORDER BY created_at DESC")).map((row) => ({
+    id: row.id,
+    dealId: row.deal_id,
+    type: row.event_type,
+    content: row.content || "",
+    operatorId: row.operator_id,
+    fromStage: row.from_stage || undefined,
+    toStage: row.to_stage || undefined,
+    nextAction: row.next_action || undefined,
+    nextActionAt: row.next_action_at || undefined,
+    relatedDocumentId: row.related_document_id || undefined,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at
   }));
 }
 
 async function loadReminders(pool: mysql.Pool): Promise<Reminder[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM reminders")).map((row) => ({
-    id: row.id, title: row.title, rule: row.rule_text, dueAt: row.due_at, ownerId: row.owner_id, teamId: row.team_id, channel: row.channel, status: row.status, ruleType: row.rule_type || undefined, targetStage: row.target_stage || undefined, days: row.days_count == null ? undefined : Number(row.days_count), priority: row.priority || "normal", enabled: row.enabled == null ? true : Boolean(row.enabled), generatedCount: Number(row.generated_count || 0)
+    id: row.id, title: row.title, rule: row.rule_text, dueAt: row.due_at, ownerId: row.owner_id, teamId: row.team_id, channel: "站内", status: row.enabled == null || Boolean(row.enabled) ? "enabled" : "disabled", ruleType: row.rule_type || undefined, targetStage: row.target_stage || undefined, days: row.days_count == null ? undefined : Number(row.days_count), priority: row.priority || "normal", enabled: row.enabled == null ? true : Boolean(row.enabled), generatedCount: Number(row.generated_count || 0), targetOwnerId: row.target_owner_id || row.owner_id, lastRunBy: row.last_run_by || undefined, lastRunAt: row.last_run_at instanceof Date ? row.last_run_at.toISOString() : row.last_run_at || undefined, lastMatchedCount: Number(row.last_matched_count || 0), lastCreatedCount: Number(row.last_created_count || 0), lastSkippedCount: Number(row.last_skipped_count || 0), lastFailedCount: Number(row.last_failed_count || 0), lastError: row.last_error || undefined
   }));
 }
 
@@ -957,6 +1204,9 @@ async function loadImportExportJobs(pool: mysql.Pool): Promise<ImportExportJob[]
 async function loadTradeDocuments(pool: mysql.Pool): Promise<TradeDocument[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM trade_documents ORDER BY updated_at DESC")).map((row) => ({
     id: row.id,
+    customerId: row.customer_id || "",
+    dealId: row.deal_id || "",
+    revision: Number(row.revision || 1),
     type: row.doc_type,
     title: row.title,
     number: row.doc_number,
@@ -977,6 +1227,11 @@ async function loadTradeDocuments(pool: mysql.Pool): Promise<TradeDocument[]> {
     notes: row.notes,
     templateStyle: row.template_style || "executive",
     status: row.status || "draft",
+    approvalNote: row.approval_note || "",
+    approvedAt: row.approved_at instanceof Date ? row.approved_at.toISOString() : row.approved_at || undefined,
+    approvedBy: row.approved_by || undefined,
+    audits: row.audits_json ? (typeof row.audits_json === "string" ? JSON.parse(row.audits_json) : row.audits_json) : [],
+    sendRecords: row.send_records_json ? (typeof row.send_records_json === "string" ? JSON.parse(row.send_records_json) : row.send_records_json) : [],
     ownerId: row.owner_id,
     teamId: row.team_id,
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
@@ -1019,6 +1274,9 @@ async function loadWebsiteOpportunities(pool: mysql.Pool): Promise<WebsiteOpport
     lastDevelopmentEmailAt: row.last_development_email_at instanceof Date ? row.last_development_email_at.toISOString() : row.last_development_email_at || "",
     lastDevelopmentEmailSubject: row.last_development_email_subject || "",
     lastDevelopmentEmailTo: row.last_development_email_to || "",
+    verifiedAt: row.verified_at instanceof Date ? row.verified_at.toISOString() : row.verified_at || "",
+    statusChangedAt: row.status_changed_at instanceof Date ? row.status_changed_at.toISOString() : row.status_changed_at || "",
+    excludedReason: row.excluded_reason || "",
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at
   }));
 }
@@ -1091,10 +1349,13 @@ async function loadMemos(pool: mysql.Pool): Promise<Memo[]> {
     content: row.content,
     category: row.category,
     tags: row.tags,
+    customerId: row.customer_id || "",
+    dealId: row.deal_id || "",
     ownerId: row.owner_id,
     teamId: row.team_id,
     pinned: Boolean(row.pinned),
     archived: Boolean(row.archived),
+    deletedAt: row.deleted_at instanceof Date ? row.deleted_at.toISOString() : row.deleted_at || "",
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at
   }));
 }
@@ -1186,7 +1447,12 @@ async function loadMonthlySalesRecords(pool: mysql.Pool): Promise<MonthlySalesRe
     salesAmount: Number(row.sales_amount || 0),
     currency: row.currency || "USD",
     exchangeRate: Number(row.exchange_rate || 1),
+    exchangeRateDate: row.exchange_rate_date || "",
+    exchangeRateSource: row.exchange_rate_source || "pending",
+    settlementCurrency: row.settlement_currency || "CNY",
     settlementAmount: Number(row.settlement_amount || 0),
+    basisType: row.basis_type || "deal_amount",
+    basisDate: row.basis_date || "",
     dealArchivedAt: row.deal_archived_at || "",
     sourceType: row.source_type || "manual",
     status: row.status || "draft",
@@ -1224,6 +1490,8 @@ async function loadCommissionCalculations(pool: mysql.Pool): Promise<CommissionC
     manualAdjustment: Number(row.manual_adjustment || 0),
     finalCommission: Number(row.final_commission || 0),
     status: row.status || "pending",
+    version: Number(row.version_no || 1),
+    isCurrent: row.is_current === undefined || row.is_current === null ? true : Boolean(row.is_current),
     calculatedAt: row.calculated_at instanceof Date ? row.calculated_at.toISOString() : row.calculated_at || "",
     reviewedBy: row.reviewed_by || "",
     reviewedAt: row.reviewed_at instanceof Date ? row.reviewed_at.toISOString() : row.reviewed_at || "",
@@ -1265,43 +1533,79 @@ async function loadCommissionExports(pool: mysql.Pool): Promise<CommissionExport
   }));
 }
 
+async function loadWhatsAppBindings(pool: mysql.Pool): Promise<WhatsAppBinding[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM whatsapp_bindings ORDER BY last_message_at DESC")).map((row) => ({
+    id: row.id,
+    customerId: row.customer_id,
+    phoneNumber: row.phone_number,
+    waProfileName: row.wa_profile_name || "",
+    lastMessageAt: row.last_message_at instanceof Date ? row.last_message_at.toISOString() : row.last_message_at || "",
+    unreadCount: Number(row.unread_count || 0),
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at || new Date().toISOString(),
+    bindingMode: row.binding_mode || "manual",
+    userId: row.user_id || "",
+    sessionData: row.session_data || "",
+    twilioPhoneNumber: row.twilio_phone_number || "",
+    connectionStatus: row.connection_status || "disconnected",
+    lastConnectedAt: row.last_connected_at instanceof Date ? row.last_connected_at.toISOString() : row.last_connected_at || ""
+  }));
+}
+
+async function loadWhatsAppMessages(pool: mysql.Pool): Promise<WhatsAppMessage[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM whatsapp_messages ORDER BY created_at ASC")).map((row) => ({
+    id: row.id,
+    customerId: row.customer_id,
+    direction: row.direction as "inbound" | "outbound",
+    content: row.content || "",
+    contentTranslated: row.content_translated || "",
+    mediaUrl: row.media_url || "",
+    status: row.status || "",
+    waMessageId: row.wa_message_id || "",
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at || new Date().toISOString()
+  }));
+}
+
 async function persistAll(pool: mysql.Pool, store: CrmStore) {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
     await replaceRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status, item.outboundEmail || "", item.emailSenderName ?? "", item.emailSignature || "", item.smtpHost || "", item.smtpPort || 465, item.smtpSecure ?? true, item.smtpUser || "", item.smtpPassword || "", item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailTo || "", item.lastDevelopmentEmailSubject || ""], "(id,name,email,password_hash,role,team_id,avatar,status,outbound_email,email_sender_name,email_signature,smtp_host,smtp_port,smtp_secure,smtp_user,smtp_password,last_development_email_at,last_development_email_to,last_development_email_subject)");
     await replaceRows(connection, "customers", store.customers, (item) => [item.id, item.company, item.country, item.contact, item.ownerId, item.teamId, item.stage, item.amount, item.health, item.nextReminder, item.wecomBound, item.billingName || "", item.billingAddress || "", item.documentContact || "", item.defaultPortDischarge || "", item.defaultIncoterm || "", item.defaultPaymentTerm || ""], "(id,company,country,contact,owner_id,team_id,stage,amount,health,next_reminder,wecom_bound,billing_name,billing_address,document_contact,default_port_discharge,default_incoterm,default_payment_term)");
-    await replaceRows(connection, "leads", store.leads, (item) => [item.id, item.company, item.contact || "", item.country || "", item.email || "", item.phone || "", item.wechat || "", item.source || "", item.sourceType || "outbound", item.sourceChannel || "manual", item.sourceCampaign || "", item.externalId || "", item.sourceUrl || "", item.intent || "中", item.stage || "新线索", item.status || "new", item.ownerId, item.teamId, item.estimatedAmount || 0, item.nextFollowAt || "", item.lastActivityAt || "", item.remark || "", item.convertedCustomerId || "", item.convertedDealId || "", mysqlDate(item.createdAt)], "(id,company,contact,country,email,phone,wechat,source,source_type,source_channel,source_campaign,external_id,source_url,intent,stage,status,owner_id,team_id,estimated_amount,next_follow_at,last_activity_at,remark,converted_customer_id,converted_deal_id,created_at)");
+    await replaceRows(connection, "customer_activities", store.customerActivities, (item) => [item.id, item.customerId, item.type || "note", item.content || "", item.operatorId || "", item.nextReminder || "", mysqlDate(item.createdAt)], "(id,customer_id,type,content,operator_id,next_reminder,created_at)");
+    await replaceRows(connection, "leads", store.leads, (item) => [item.id, item.company, item.contact || "", item.country || "", item.email || "", item.phone || "", item.wechat || "", item.source || "", item.sourceType || "outbound", item.sourceChannel || "manual", item.sourceCampaign || "", item.externalId || "", item.sourceUrl || "", item.intent || "中", item.stage || "新线索", item.status || "new", item.ownerId, item.teamId, item.estimatedAmount || 0, item.nextFollowAt || "", item.lastActivityAt || "", item.remark || "", item.convertedCustomerId || "", item.convertedDealId || "", item.deletedAt ? mysqlDate(item.deletedAt) : null, item.deletedReason || "", item.deletedBy || "", item.purgeAt ? mysqlDate(item.purgeAt) : null, item.statusBeforeDelete || "", mysqlDate(item.createdAt)], "(id,company,contact,country,email,phone,wechat,source,source_type,source_channel,source_campaign,external_id,source_url,intent,stage,status,owner_id,team_id,estimated_amount,next_follow_at,last_activity_at,remark,converted_customer_id,converted_deal_id,deleted_at,deleted_reason,deleted_by,purge_at,status_before_delete,created_at)");
     await replaceRows(connection, "lead_activities", store.leadActivities, (item) => [item.id, item.leadId, item.type || "note", item.content || "", item.operatorId || "", item.nextFollowAt || "", mysqlDate(item.createdAt)], "(id,lead_id,type,content,operator_id,next_follow_at,created_at)");
     await replaceRows(connection, "lead_source_events", store.leadSourceEvents, (item) => [item.id, item.leadId, item.sourceType, item.channel, item.campaign || "", item.externalId || "", item.sourceUrl || "", mysqlDate(item.occurredAt), mysqlDate(item.receivedAt), item.rawPayload || "{}", item.ownerId, item.teamId], "(id,lead_id,source_type,channel,campaign,external_id,source_url,occurred_at,received_at,raw_payload,owner_id,team_id)");
-    await replaceRows(connection, "deals", store.deals, (item) => [item.id, item.customerId, item.title, item.stage, item.product || "", item.quantity || 0, item.unitPrice || 0, item.amount, item.ownerId, item.teamId, item.nextAction, item.archivedAt ? mysqlDate(item.archivedAt) : null], "(id,customer_id,title,stage,product,quantity,unit_price,amount,owner_id,team_id,next_action,archived_at)");
-    await replaceRows(connection, "todos", (store.todos as Todo[]), (item) => [item.id, item.title, item.type, item.priority, item.dueAt, item.ownerId, item.teamId, item.related, item.done, item.status || "pending", item.pinState || "", item.sortOrder || 0, item.impactAmount ?? null, mysqlDate(item.createdAt), item.historyAt ? mysqlDate(item.historyAt) : null], "(id,title,type,priority,due_at,owner_id,team_id,related,done,status,pin_state,sort_order,impact_amount,created_at,history_at)");
-    await replaceRows(connection, "plan_tasks", store.planTasks, (item) => [item.id, item.title, item.phase, item.category, item.priority, item.status, item.dueAt, item.target, item.description, item.ownerId, item.teamId, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,title,phase,category,priority,status,due_at,target,description,owner_id,team_id,created_at,updated_at)");
+    await replaceRows(connection, "deals", store.deals, (item) => [item.id, item.customerId, item.title, item.stage, item.product || "", item.quantity || 0, item.unitPrice || 0, item.amount, item.currency || "USD", item.amountType || "estimate", item.ownerId, item.teamId, item.nextAction, item.nextActionAt || "", item.expectedCloseAt || "", mysqlDate(item.stageChangedAt), item.closedAt ? mysqlDate(item.closedAt) : null, item.wonReason || "", item.lostReason || "", item.lostReasonCategory || "", item.revisitAt || "", item.archivedAt ? mysqlDate(item.archivedAt) : null], "(id,customer_id,title,stage,product,quantity,unit_price,amount,currency,amount_type,owner_id,team_id,next_action,next_action_at,expected_close_at,stage_changed_at,closed_at,won_reason,lost_reason,lost_reason_category,revisit_at,archived_at)");
+    await replaceRows(connection, "deal_events", store.dealEvents, (item) => [item.id, item.dealId, item.type, item.content || "", item.operatorId, item.fromStage || "", item.toStage || "", item.nextAction || "", item.nextActionAt || "", item.relatedDocumentId || "", mysqlDate(item.createdAt)], "(id,deal_id,event_type,content,operator_id,from_stage,to_stage,next_action,next_action_at,related_document_id,created_at)");
+    await replaceRows(connection, "todos", (store.todos as Todo[]), (item) => [item.id, item.title, item.type, item.priority, item.dueAt, item.ownerId, item.teamId, item.related, item.done, item.status || "pending", item.pinState || "", item.sortOrder || 0, item.impactAmount ?? null, mysqlDate(item.createdAt), item.historyAt ? mysqlDate(item.historyAt) : null, item.customerId || "", item.dealId || "", item.reminderRuleId || "", item.triggerKey || "", item.snoozedFrom || "", item.snoozeReason || "", item.snoozeCount || 0, item.snoozedBy || "", item.completedAt ? mysqlDate(item.completedAt) : null, item.completedBy || "", item.completionResult || ""], "(id,title,type,priority,due_at,owner_id,team_id,related,done,status,pin_state,sort_order,impact_amount,created_at,history_at,customer_id,deal_id,reminder_rule_id,trigger_key,snoozed_from,snooze_reason,snooze_count,snoozed_by,completed_at,completed_by,completion_result)");
+    await replaceRows(connection, "plan_tasks", store.planTasks, (item) => [item.id, item.title, item.phase, item.category, item.priority, item.status, item.dueAt, item.target, item.description, item.customerId || "", item.leadId || "", item.dealId || "", item.completionResult || "", item.completedAt ? mysqlDate(item.completedAt) : null, item.cancellationReason || "", item.cancelledAt ? mysqlDate(item.cancelledAt) : null, item.rescheduledFrom || "", item.rescheduledAt ? mysqlDate(item.rescheduledAt) : null, item.rescheduleReason || "", item.ownerId, item.teamId, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,title,phase,category,priority,status,due_at,target,description,customer_id,lead_id,deal_id,completion_result,completed_at,cancellation_reason,cancelled_at,rescheduled_from,rescheduled_at,reschedule_reason,owner_id,team_id,created_at,updated_at)");
     await replaceRows(connection, "plan_templates", store.planTemplates, (item) => [item.id, item.section, item.title, item.summary, item.output, item.badge, item.badgeTone, item.phase, item.category, item.priority, item.target, item.description, item.sortOrder, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,section_name,title,summary,output_text,badge,badge_tone,phase,category,priority,target,description,sort_order,owner_id,team_id,updated_at)");
-    await replaceRows(connection, "reminders", store.reminders, (item) => [item.id, item.title, item.rule, item.dueAt, item.ownerId, item.teamId, item.channel, item.status, item.ruleType || null, item.targetStage || null, item.days ?? 3, item.priority || "normal", item.enabled ?? true, item.generatedCount || 0], "(id,title,rule_text,due_at,owner_id,team_id,channel,status,rule_type,target_stage,days_count,priority,enabled,generated_count)");
+    await replaceRows(connection, "reminders", store.reminders, (item) => [item.id, item.title, item.rule, item.dueAt, item.ownerId, item.teamId, "站内", item.enabled === false ? "disabled" : "enabled", item.ruleType || null, item.targetStage || null, item.days ?? 3, item.priority || "normal", item.enabled ?? true, item.generatedCount || 0, item.targetOwnerId || item.ownerId, item.lastRunBy || "", item.lastRunAt ? mysqlDate(item.lastRunAt) : null, item.lastMatchedCount || 0, item.lastCreatedCount || 0, item.lastSkippedCount || 0, item.lastFailedCount || 0, item.lastError || ""], "(id,title,rule_text,due_at,owner_id,team_id,channel,status,rule_type,target_stage,days_count,priority,enabled,generated_count,target_owner_id,last_run_by,last_run_at,last_matched_count,last_created_count,last_skipped_count,last_failed_count,last_error)");
     await replaceRows(connection, "knowledge_assets", store.knowledgeAssets, (item) => [item.id, item.title, item.category, item.status, item.ownerId, item.version], "(id,title,category,status,owner_id,version)");
     await replaceRows(connection, "exams", store.exams, (item) => [item.id, item.title, item.category, item.status, item.passRate, item.questionCount, item.durationMinutes || 20, item.passScore || 80, item.targetRole || "sales", mysqlDate(item.updatedAt)], "(id,title,category,status,pass_rate,question_count,duration_minutes,pass_score,target_role,updated_at)");
     await replaceRows(connection, "exam_questions", store.examQuestions, (item) => [item.id, item.examId || "bank", item.category, item.stem, JSON.stringify(item.options), item.answerIndex, JSON.stringify(item.answerIndexes?.length ? item.answerIndexes : [item.answerIndex]), item.questionType || ((item.answerIndexes?.length || 0) > 1 ? "multiple" : "single"), JSON.stringify(item.tags || []), item.explanation, item.difficulty, mysqlDate(item.updatedAt)], "(id,exam_id,category,stem,options_json,answer_index,answer_indexes_json,question_type,tags_json,explanation,difficulty,updated_at)");
     await replaceRows(connection, "exam_question_links", store.examQuestionLinks, (item) => [item.examId, item.questionId, item.sortOrder], "(exam_id,question_id,sort_order)");
     await replaceRows(connection, "exam_attempts", store.examAttempts, (item) => [item.id, item.examId, item.userId, item.score, item.passed, JSON.stringify(item.answers), item.correctCount, item.totalQuestions, mysqlDate(item.submittedAt)], "(id,exam_id,user_id,score,passed,answers_json,correct_count,total_questions,submitted_at)");
     await replaceRows(connection, "import_export_jobs", store.importExportJobs, (item) => [item.id, item.name, item.type, item.rows, item.status, item.operatorId, item.createdAt], "(id,name,type,rows_count,status,operator_id,created_at)");
-    await replaceRows(connection, "trade_documents", store.tradeDocuments, (item) => [item.id, item.type, item.title, item.number, item.issueDate, item.buyer, item.buyerAddress, item.buyerContact, item.seller, item.sellerAddress, item.currency, item.incoterm, item.paymentTerm, item.shippingMethod, item.portLoading, item.portDischarge, item.validityDate, item.bankInfo, item.notes, item.templateStyle, item.status, item.ownerId, item.teamId, JSON.stringify(item.items), mysqlDate(item.updatedAt)], "(id,doc_type,title,doc_number,issue_date,buyer,buyer_address,buyer_contact,seller,seller_address,currency,incoterm,payment_term,shipping_method,port_loading,port_discharge,validity_date,bank_info,notes,template_style,status,owner_id,team_id,items_json,updated_at)");
+    await replaceRows(connection, "trade_documents", store.tradeDocuments, (item) => [item.id, item.customerId || "", item.dealId || "", item.revision || 1, item.type, item.title, item.number, item.issueDate, item.buyer, item.buyerAddress, item.buyerContact, item.seller, item.sellerAddress, item.currency, item.incoterm, item.paymentTerm, item.shippingMethod, item.portLoading, item.portDischarge, item.validityDate, item.bankInfo, item.notes, item.templateStyle, item.status, item.approvalNote || "", item.approvedAt || null, item.approvedBy || "", JSON.stringify(item.audits || []), JSON.stringify(item.sendRecords || []), item.ownerId, item.teamId, JSON.stringify(item.items), mysqlDate(item.updatedAt)], "(id,customer_id,deal_id,revision,doc_type,title,doc_number,issue_date,buyer,buyer_address,buyer_contact,seller,seller_address,currency,incoterm,payment_term,shipping_method,port_loading,port_discharge,validity_date,bank_info,notes,template_style,status,approval_note,approved_at,approved_by,audits_json,send_records_json,owner_id,team_id,items_json,updated_at)");
 	    await replaceRows(connection, "wecom_messages", store.wecomMessages, (item) => [item.id, item.customerId, item.summary, item.ownerId, item.teamId, item.status], "(id,customer_id,summary,owner_id,team_id,status)");
 	    await replaceRows(connection, "ocr_jobs", store.ocrJobs, (item) => [item.id, item.status, item.confidence, JSON.stringify(item.fields), item.ownerId, item.ownerId, item.teamId], "(id,status,confidence,fields_json,created_by,owner_id,team_id)");
-	    await replaceRows(connection, "website_opportunities", store.websiteOpportunities, (item) => [item.id, item.company, item.business, item.country, item.website, item.contact, item.contactInfo, item.description, item.ownerId, item.teamId, item.status, item.customerId || null, item.dealId || null, item.leadId || null, item.parseMode || "rule", item.source || "", item.sourceLabel || "", item.confidence ?? null, item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailSubject || "", item.lastDevelopmentEmailTo || "", mysqlDate(item.createdAt)], "(id,company,business,country,website,contact,contact_info,description,owner_id,team_id,status,customer_id,deal_id,lead_id,parse_mode,source,source_label,confidence,last_development_email_at,last_development_email_subject,last_development_email_to,created_at)");
+	    await replaceRows(connection, "website_opportunities", store.websiteOpportunities, (item) => [item.id, item.company, item.business, item.country, item.website, item.contact, item.contactInfo, item.description, item.ownerId, item.teamId, item.status, item.customerId || null, item.dealId || null, item.leadId || null, item.parseMode || "rule", item.source || "", item.sourceLabel || "", item.confidence ?? null, item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailSubject || "", item.lastDevelopmentEmailTo || "", item.verifiedAt ? mysqlDate(item.verifiedAt) : null, item.statusChangedAt ? mysqlDate(item.statusChangedAt) : null, item.excludedReason || "", mysqlDate(item.createdAt)], "(id,company,business,country,website,contact,contact_info,description,owner_id,team_id,status,customer_id,deal_id,lead_id,parse_mode,source,source_label,confidence,last_development_email_at,last_development_email_subject,last_development_email_to,verified_at,status_changed_at,excluded_reason,created_at)");
 	    await replaceRows(connection, "ai_model_configs", store.aiModelConfigs, (item) => [item.id, item.provider, item.protocol || "openai-compatible", item.name, item.baseUrl, item.model, item.apiKey, item.enabled, item.temperature ?? 0.1, item.useLeadFinder ?? true, item.useWebsiteParse ?? true, item.useScoring ?? true, item.useEmailDraft ?? true, item.useExam ?? false, item.lastTestAt ? mysqlDate(item.lastTestAt) : null, item.lastTestStatus || "untested", item.lastTestMessage || "", item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,provider,protocol,name,base_url,model,api_key,enabled,temperature,use_lead_finder,use_website_parse,use_scoring,use_email_draft,use_exam,last_test_at,last_test_status,last_test_message,owner_id,team_id,updated_at)");
 	    await replaceRows(connection, "lead_source_configs", store.leadSourceConfigs, (item) => [item.id, item.provider, item.scope || "personal", item.apiKey, item.baseUrl || "", item.enabled, item.lastTestAt ? mysqlDate(item.lastTestAt) : null, item.lastTestStatus || "untested", item.lastTestMessage || "", item.usageJson || "", item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,provider,scope,api_key,base_url,enabled,last_test_at,last_test_status,last_test_message,usage_json,owner_id,team_id,updated_at)");
 	    await replaceRows(connection, "problems", store.problems, (item) => [item.id, item.title, item.category, item.severity, item.status, item.ownerId, item.teamId, item.relatedCustomer, item.rootCause, item.solution, item.nextAction, item.dueAt, mysqlDate(item.createdAt)], "(id,title,category,severity,status,owner_id,team_id,related_customer,root_cause,solution,next_action,due_at,created_at)");
-	    await replaceRows(connection, "memos", store.memos, (item) => [item.id, item.title, item.content, item.category, item.tags, item.ownerId, item.teamId, item.pinned, item.archived, mysqlDate(item.updatedAt)], "(id,title,content,category,tags,owner_id,team_id,pinned,archived,updated_at)");
+	    await replaceRows(connection, "memos", store.memos, (item) => [item.id, item.title, item.content, item.category, item.tags, item.customerId || "", item.dealId || "", item.ownerId, item.teamId, item.pinned, item.archived, item.deletedAt ? mysqlDate(item.deletedAt) : null, mysqlDate(item.updatedAt)], "(id,title,content,category,tags,customer_id,deal_id,owner_id,team_id,pinned,archived,deleted_at,updated_at)");
 	    await replaceRows(connection, "competitors", store.competitors, (item) => [item.id, item.company, item.country, item.segment, item.threatLevel, item.website, item.strengths, item.weaknesses, item.competingProducts, item.ourStrategy, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,company,country,segment,threat_level,website,strengths,weaknesses,competing_products,our_strategy,owner_id,team_id,updated_at)");
 	    await replaceRows(connection, "case_studies", store.caseStudies, (item) => [item.id, item.title, item.customer, item.country, item.product, item.industry, item.result, item.story, item.reusablePoints, item.status, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,title,customer,country,product,industry,result_text,story,reusable_points,status,owner_id,team_id,updated_at)");
 	    await replaceRows(connection, "commission_products", store.commissionProducts, (item) => [item.id, item.name, item.category, item.model, item.currency, item.defaultPrice, item.costPrice, item.status, item.remark, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,name,category,model,currency,default_price,cost_price,status,remark,owner_id,team_id,updated_at)");
 	    await replaceRows(connection, "commission_rules", store.commissionRules, (item) => [item.id, item.productId, item.ruleType, item.rate, item.fixedAmount, item.tierJson, item.grossProfitRate, item.effectiveFrom, item.effectiveTo, item.enabled, item.remark, item.createdBy, mysqlDate(item.createdAt)], "(id,product_id,rule_type,rate,fixed_amount,tier_json,gross_profit_rate,effective_from,effective_to,enabled,remark,created_by,created_at)");
-	    await replaceRows(connection, "monthly_sales_records", store.monthlySalesRecords, (item) => [item.id, item.month, item.ownerId, item.teamId, item.customerId, item.customerName, item.dealId, item.productId, item.productName, item.quantity, item.unitPrice, item.salesAmount, item.currency, item.exchangeRate, item.settlementAmount, item.dealArchivedAt, item.sourceType, item.status, item.edited, item.editNote, item.lastEditedBy, item.lastEditedAt ? mysqlDate(item.lastEditedAt) : null, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,month_value,owner_id,team_id,customer_id,customer_name,deal_id,product_id,product_name,quantity,unit_price,sales_amount,currency,exchange_rate,settlement_amount,deal_archived_at,source_type,status,edited,edit_note,last_edited_by,last_edited_at,created_at,updated_at)");
+	    await replaceRows(connection, "monthly_sales_records", store.monthlySalesRecords, (item) => [item.id, item.month, item.ownerId, item.teamId, item.customerId, item.customerName, item.dealId, item.productId, item.productName, item.quantity, item.unitPrice, item.salesAmount, item.currency, item.exchangeRate, item.exchangeRateDate, item.exchangeRateSource, item.settlementCurrency, item.settlementAmount, item.basisType, item.basisDate, item.dealArchivedAt, item.sourceType, item.status, item.edited, item.editNote, item.lastEditedBy, item.lastEditedAt ? mysqlDate(item.lastEditedAt) : null, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,month_value,owner_id,team_id,customer_id,customer_name,deal_id,product_id,product_name,quantity,unit_price,sales_amount,currency,exchange_rate,exchange_rate_date,exchange_rate_source,settlement_currency,settlement_amount,basis_type,basis_date,deal_archived_at,source_type,status,edited,edit_note,last_edited_by,last_edited_at,created_at,updated_at)");
 	    await replaceRows(connection, "sales_record_audits", store.salesRecordAudits, (item) => [item.id, item.recordId, item.fieldName, item.oldValue, item.newValue, item.reason, item.operatorId, item.operatorName, mysqlDate(item.createdAt)], "(id,record_id,field_name,old_value,new_value,reason,operator_id,operator_name,created_at)");
-	    await replaceRows(connection, "commission_calculations", store.commissionCalculations, (item) => [item.id, item.month, item.ownerId, item.teamId, item.salesAmount, item.autoCommission, item.manualAdjustment, item.finalCommission, item.status, item.calculatedAt ? mysqlDate(item.calculatedAt) : null, item.reviewedBy, item.reviewedAt ? mysqlDate(item.reviewedAt) : null, item.lockedBy, item.lockedAt ? mysqlDate(item.lockedAt) : null, item.unlockReason], "(id,month_value,owner_id,team_id,sales_amount,auto_commission,manual_adjustment,final_commission,status,calculated_at,reviewed_by,reviewed_at,locked_by,locked_at,unlock_reason)");
+	    await replaceRows(connection, "commission_calculations", store.commissionCalculations, (item) => [item.id, item.month, item.ownerId, item.teamId, item.salesAmount, item.autoCommission, item.manualAdjustment, item.finalCommission, item.status, item.version, item.isCurrent, item.calculatedAt ? mysqlDate(item.calculatedAt) : null, item.reviewedBy, item.reviewedAt ? mysqlDate(item.reviewedAt) : null, item.lockedBy, item.lockedAt ? mysqlDate(item.lockedAt) : null, item.unlockReason], "(id,month_value,owner_id,team_id,sales_amount,auto_commission,manual_adjustment,final_commission,status,version_no,is_current,calculated_at,reviewed_by,reviewed_at,locked_by,locked_at,unlock_reason)");
 	    await replaceRows(connection, "commission_items", store.commissionItems, (item) => [item.id, item.calculationId, item.recordId, item.productId, item.itemType, item.sourceType, item.ruleSnapshotJson, item.salesAmount, item.autoAmount, item.manualAmount, item.finalAmount, item.remark, item.createdBy, mysqlDate(item.createdAt)], "(id,calculation_id,record_id,product_id,item_type,source_type,rule_snapshot_json,sales_amount,auto_amount,manual_amount,final_amount,remark,created_by,created_at)");
 	    await replaceRows(connection, "commission_exports", store.commissionExports, (item) => [item.id, item.month, item.scopeType, item.scopeOwnerId, item.fileType, item.rows, item.exportedBy, mysqlDate(item.createdAt)], "(id,month_value,scope_type,scope_owner_id,file_type,rows_count,exported_by,created_at)");
+	    await replaceRows(connection, "whatsapp_bindings", store.whatsappBindings, (item) => [item.id, item.customerId, item.phoneNumber, item.waProfileName || "", item.lastMessageAt ? mysqlDate(item.lastMessageAt) : null, item.unreadCount || 0, mysqlDate(item.createdAt), item.bindingMode || "manual", item.userId || "", item.sessionData || "", item.twilioPhoneNumber || "", item.connectionStatus || "disconnected", item.lastConnectedAt ? mysqlDate(item.lastConnectedAt) : null], "(id,customer_id,phone_number,wa_profile_name,last_message_at,unread_count,created_at,binding_mode,user_id,session_data,twilio_phone_number,connection_status,last_connected_at)");
+	    await replaceRows(connection, "whatsapp_messages", store.whatsappMessages, (item) => [item.id, item.customerId, item.direction, item.content || "", item.contentTranslated || "", item.mediaUrl || "", item.status || "", item.waMessageId || "", mysqlDate(item.createdAt)], "(id,customer_id,direction,content,content_translated,media_url,status,wa_message_id,created_at)");
 	    await connection.commit();
   } catch (error) {
     await connection.rollback();

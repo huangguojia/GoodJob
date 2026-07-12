@@ -36,6 +36,23 @@ try {
     throw new Error("manager should see more customers than sales");
   }
 
+  const followContent = `客户持久化跟进-${Date.now()}`;
+  const customerFollow = await request("/api/customers/c1/activities", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ type: "email", content: followContent, nextReminder: "明天 14:00" })
+  });
+  if (!customerFollow.response.ok || customerFollow.json.customer.nextReminder !== "明天 14:00") throw new Error("customer activity create failed");
+  const customersAfterFollow = await request("/api/customers", { headers: { authorization: `Bearer ${salesToken}` } });
+  const followedCustomer = customersAfterFollow.json.customers.find((customer: { id: string }) => customer.id === "c1");
+  if (followedCustomer?.ownerName !== "Shirley" || followedCustomer?.activities?.[0]?.content !== followContent) throw new Error("customer activity must remain readable with real owner");
+  const crossCustomerFollow = await request("/api/customers/c1/activities", {
+    method: "POST",
+    headers: { authorization: `Bearer ${miaToken}` },
+    body: JSON.stringify({ type: "note", content: "越权跟进" })
+  });
+  if (crossCustomerFollow.response.status !== 404) throw new Error("sales customer activity must be owner isolated");
+
   const boundaryCompany = `隔离删除客户-${Date.now()}`;
   const boundaryCustomer = await request("/api/customers", {
     method: "POST",
@@ -184,8 +201,14 @@ try {
       phone: "+49 30 1000 2000",
       wechat: "lead_buyer",
       source: "自测录入",
+      sourceType: "inbound",
+      sourceChannel: "self-test-api",
+      sourceCampaign: "2026 欧洲仪表询盘",
+      externalId: `self-test-lead-${Date.now()}`,
+      sourceUrl: "https://partner.example/leads/self-test",
       intent: "高",
       estimatedAmount: 32000,
+      nextFollowAt: "2026-07-12 10:00",
       remark: "用于验证线索详情、触达、跟进记录和垃圾箱"
     })
   });
@@ -217,7 +240,18 @@ try {
 
   const leadDetail = await request(`/api/leads/${testLeadId}`, { headers: { authorization: `Bearer ${salesToken}` } });
   const activityTypes = (leadDetail.json.activities || []).map((activity: { type: string }) => activity.type);
-  if (!leadDetail.response.ok || !activityTypes.includes("whatsapp") || !activityTypes.includes("email")) throw new Error("lead activity timeline failed");
+  const sourceEvent = (leadDetail.json.sourceEvents || []).find((event: { leadId: string }) => event.leadId === testLeadId);
+  const testLeadOriginalStatus = leadDetail.json.lead?.status;
+  if (
+    !leadDetail.response.ok
+    || !activityTypes.includes("whatsapp")
+    || !activityTypes.includes("email")
+    || sourceEvent?.channel !== "self-test-api"
+    || sourceEvent?.externalId !== leadCreate.json.lead.externalId
+    || !String(sourceEvent?.rawPayload || "").includes("2026 欧洲仪表询盘")
+  ) {
+    throw new Error("lead activity and source event detail failed");
+  }
 
   const externalId = `external-rfq-${Date.now()}`;
   const externalLeadBody = {
@@ -291,6 +325,12 @@ try {
   if (!repeatedConversion.response.ok || !repeatedConversion.json.duplicate || repeatedConversion.json.deal?.id !== existingConversion.json.deal.id) {
     throw new Error("lead conversion must be idempotent");
   }
+  const convertedLeadDelete = await request(`/api/leads/${externalLeadFirst.json.lead.id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ reason: "已转客户线索不应允许删除" })
+  });
+  if (convertedLeadDelete.response.status !== 400) throw new Error("converted lead must not be deleted");
 
   const customerOnlyLead = await request("/api/leads", {
     method: "POST",
@@ -311,7 +351,16 @@ try {
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({ reason: "自测移入垃圾箱" })
   });
-  if (!leadTrash.response.ok || !leadTrash.json.lead?.deletedAt) throw new Error("lead trash failed");
+  if (
+    !leadTrash.response.ok
+    || !leadTrash.json.lead?.deletedAt
+    || leadTrash.json.lead.deletedReason !== "自测移入垃圾箱"
+    || leadTrash.json.lead.deletedBy !== "u_sales_shirley"
+    || !leadTrash.json.lead.purgeAt
+    || leadTrash.json.lead.statusBeforeDelete !== testLeadOriginalStatus
+  ) {
+    throw new Error("lead trash audit metadata failed");
+  }
   const leadTrashList = await request("/api/leads?trash=true", { headers: { authorization: `Bearer ${salesToken}` } });
   if (!leadTrashList.json.leads.some((lead: { id: string }) => lead.id === testLeadId)) throw new Error("lead trash list failed");
   const leadActiveList = await request("/api/leads", { headers: { authorization: `Bearer ${salesToken}` } });
@@ -321,12 +370,30 @@ try {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` }
   });
-  if (!leadRestore.response.ok || leadRestore.json.lead?.deletedAt) throw new Error("lead restore failed");
+  if (
+    !leadRestore.response.ok
+    || leadRestore.json.lead?.deletedAt
+    || leadRestore.json.lead?.deletedReason
+    || leadRestore.json.lead?.deletedBy
+    || leadRestore.json.lead?.purgeAt
+    || leadRestore.json.lead?.statusBeforeDelete
+    || leadRestore.json.lead?.status !== testLeadOriginalStatus
+  ) {
+    throw new Error("lead restore metadata and status failed");
+  }
+  const leadTrashAgain = await request(`/api/leads/${testLeadId}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ reason: "自测永久删除前再次移入垃圾箱" })
+  });
+  if (!leadTrashAgain.response.ok || !leadTrashAgain.json.lead?.deletedAt) throw new Error("lead second trash failed");
   const leadPermanentDelete = await request(`/api/leads/${testLeadId}/permanent`, {
     method: "DELETE",
     headers: { authorization: `Bearer ${salesToken}` }
   });
-  if (!leadPermanentDelete.response.ok || !leadPermanentDelete.json.ok) throw new Error("lead permanent delete failed");
+  if (!leadPermanentDelete.response.ok || !leadPermanentDelete.json.ok || leadPermanentDelete.json.sourceEventsDeleted < 1) {
+    throw new Error("lead permanent delete and source event cleanup failed");
+  }
 
   const websitePreview = await request("/api/tools/website-scrape/preview", {
     method: "POST",
@@ -334,6 +401,55 @@ try {
     body: JSON.stringify({ urls: ["https://example-instrument.test"] })
   });
   if (!websitePreview.response.ok || !websitePreview.json.opportunities?.[0]?.company) throw new Error("website scrape preview failed");
+  const previewOpportunity = websitePreview.json.opportunities[0];
+
+  const websiteSyncBeforeVerify = await request("/api/tools/website-scrape/sync-opportunities", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ opportunities: [{ ...previewOpportunity, company: "自动化官网商机", business: "压力仪表" }] })
+  });
+  if (websiteSyncBeforeVerify.response.status !== 400) throw new Error("unverified website opportunity must not sync");
+
+  const websiteVerificationEdit = await request(`/api/prospect-list/${previewOpportunity.id}/details`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      company: "自动化官网商机",
+      business: "压力仪表",
+      country: previewOpportunity.country,
+      website: previewOpportunity.website,
+      contact: "Purchasing Team",
+      contactInfo: "verified.prospect@example.com",
+      description: "人工核验官网与采购邮箱"
+    })
+  });
+  if (!websiteVerificationEdit.response.ok || websiteVerificationEdit.json.opportunity?.contactInfo !== "verified.prospect@example.com") {
+    throw new Error("website opportunity verification edit failed");
+  }
+
+  const markWebsiteContactable = await request("/api/prospect-list/batch", {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ ids: [previewOpportunity.id], action: "mark-contactable" })
+  });
+  if (!markWebsiteContactable.response.ok
+    || markWebsiteContactable.json.opportunities?.[0]?.status !== "contactable"
+    || !markWebsiteContactable.json.opportunities?.[0]?.verifiedAt) {
+    throw new Error("website opportunity verify failed");
+  }
+
+  const websiteContactMail = await request(`/api/prospect-list/${previewOpportunity.id}/send-development-email`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      to: "verified.prospect@example.com",
+      subject: "Verified prospect outreach",
+      body: "Dear team, we can support your verified pressure instrumentation sourcing requirements."
+    })
+  });
+  if (!websiteContactMail.response.ok || websiteContactMail.json.opportunity?.status !== "contacted") {
+    throw new Error("prospect email must move contactable opportunity to contacted");
+  }
 
   const websiteSync = await request("/api/tools/website-scrape/sync-opportunities", {
     method: "POST",
@@ -343,6 +459,12 @@ try {
   if (!websiteSync.response.ok || websiteSync.json.created?.[0]?.lead?.company !== "自动化官网商机" || websiteSync.json.created?.[0]?.opportunity?.leadId !== websiteSync.json.created?.[0]?.lead?.id) {
     throw new Error("website opportunity sync failed");
   }
+  const excludeSyncedWebsite = await request("/api/prospect-list/batch", {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ ids: [websiteSync.json.created[0].opportunity.id], action: "exclude" })
+  });
+  if (excludeSyncedWebsite.response.status !== 400) throw new Error("synced opportunity must not be excluded");
   const websiteSyncRepeat = await request("/api/tools/website-scrape/sync-opportunities", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
@@ -350,6 +472,157 @@ try {
   });
   if (!websiteSyncRepeat.response.ok || !websiteSyncRepeat.json.created?.[0]?.duplicate || websiteSyncRepeat.json.created?.[0]?.lead?.id !== websiteSync.json.created?.[0]?.lead?.id) {
     throw new Error("website opportunity sync must be idempotent");
+  }
+  const sourceOpportunityId = `website_partner_${Date.now()}`;
+  const sourceWebsite = `https://partner-${Date.now()}.example`;
+  const sourceSync = await request("/api/tools/website-scrape/sync-opportunities", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      opportunities: [{
+        id: sourceOpportunityId,
+        company: "自动化合作目录候选",
+        business: "温度仪表",
+        country: "德国",
+        website: sourceWebsite,
+        contact: "Purchasing Team",
+        contactInfo: "buyer@partner-source.example",
+        description: "验证候选真实来源进入线索后保持不变",
+        source: "partner-directory",
+        sourceLabel: "合作伙伴目录"
+      }]
+    })
+  });
+  const sourceCreated = sourceSync.json.created?.[0];
+  if (!sourceSync.response.ok
+    || sourceCreated?.lead?.sourceChannel !== "partner-directory"
+    || sourceCreated?.lead?.source !== "合作伙伴目录"
+    || sourceCreated?.opportunity?.source !== "partner-directory"
+    || sourceCreated?.opportunity?.sourceLabel !== "合作伙伴目录"
+    || sourceCreated?.sourceEvent?.channel !== "partner-directory"
+    || !String(sourceCreated?.sourceEvent?.rawPayload || "").includes("\"source\":\"partner-directory\"")) {
+    throw new Error("website opportunity source must be preserved");
+  }
+  const sourceSyncRepeat = await request("/api/tools/website-scrape/sync-opportunities", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      opportunities: [{
+        id: sourceOpportunityId,
+        company: "自动化合作目录候选",
+        website: sourceWebsite,
+        source: "partner-directory",
+        sourceLabel: "合作伙伴目录"
+      }]
+    })
+  });
+  const leadsAfterSourceRepeat = await request("/api/leads", { headers: { authorization: `Bearer ${salesToken}` } });
+  if (!sourceSyncRepeat.response.ok
+    || !sourceSyncRepeat.json.created?.[0]?.duplicate
+    || sourceSyncRepeat.json.created?.[0]?.lead?.id !== sourceCreated.lead.id
+    || leadsAfterSourceRepeat.json.leads.filter((lead: { externalId: string }) => lead.externalId === sourceOpportunityId).length !== 1) {
+    throw new Error("website source sync repeat must not create a second lead");
+  }
+
+  const miaWebsitePreview = await request("/api/tools/website-scrape/preview", {
+    method: "POST",
+    headers: { authorization: `Bearer ${miaToken}` },
+    body: JSON.stringify({ urls: [`https://mia-isolated-${Date.now()}.example`] })
+  });
+  const miaOpportunity = miaWebsitePreview.json.opportunities?.[0];
+  if (!miaWebsitePreview.response.ok || !miaOpportunity?.id || miaOpportunity.ownerId !== "u_sales_mia") {
+    throw new Error("other salesperson website preview failed");
+  }
+  const shirleyOpportunities = await request("/api/tools/website-opportunities", {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  const managerOpportunities = await request("/api/tools/website-opportunities", {
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (shirleyOpportunities.json.opportunities.some((item: { id: string }) => item.id === miaOpportunity.id)) {
+    throw new Error("sales must not read another salesperson website opportunities");
+  }
+  if (!managerOpportunities.json.opportunities.some((item: { id: string }) => item.id === miaOpportunity.id)) {
+    throw new Error("manager should read team website opportunities");
+  }
+  const crossWebsiteSync = await request("/api/tools/website-scrape/sync-opportunities", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ opportunities: [miaOpportunity] })
+  });
+  if (crossWebsiteSync.response.status !== 404) {
+    throw new Error("sales must not sync another salesperson website opportunity");
+  }
+  const salesAssignees = await request("/api/prospect-list/assignees", { headers: { authorization: `Bearer ${salesToken}` } });
+  const managerAssignees = await request("/api/prospect-list/assignees", { headers: { authorization: `Bearer ${managerToken}` } });
+  if (!salesAssignees.response.ok || salesAssignees.json.assignees.length !== 0) throw new Error("sales must not receive prospect assignees");
+  if (!managerAssignees.response.ok
+    || !managerAssignees.json.assignees.some((item: { id: string }) => item.id === "u_sales_shirley")
+    || !managerAssignees.json.assignees.some((item: { id: string }) => item.id === "u_sales_mia")) {
+    throw new Error("manager prospect assignees scope failed");
+  }
+  const salesAssign = await request("/api/prospect-list/batch", {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${miaToken}` },
+    body: JSON.stringify({ ids: [miaOpportunity.id], action: "assign", ownerId: "u_sales_shirley" })
+  });
+  if (salesAssign.response.status !== 403) throw new Error("sales must not assign prospect");
+  const managerUnknownAssign = await request("/api/prospect-list/batch", {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({ ids: [miaOpportunity.id], action: "assign", ownerId: "u_sales_outside_team" })
+  });
+  if (managerUnknownAssign.response.status !== 400) throw new Error("manager must not assign outside available team");
+  const managerAssign = await request("/api/prospect-list/batch", {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({ ids: [miaOpportunity.id], action: "assign", ownerId: "u_sales_shirley" })
+  });
+  if (!managerAssign.response.ok || managerAssign.json.opportunities?.[0]?.ownerId !== "u_sales_shirley") {
+    throw new Error("manager same-team prospect assignment failed");
+  }
+
+  const excludedPreview = await request("/api/tools/website-scrape/preview", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ urls: [`https://exclude-restore-${Date.now()}.example`] })
+  });
+  const excludedOpportunity = excludedPreview.json.opportunities?.[0];
+  const excludePreview = await request("/api/prospect-list/batch", {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ ids: [excludedOpportunity.id], action: "exclude", reason: "非目标行业" })
+  });
+  const restorePreview = await request("/api/prospect-list/batch", {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ ids: [excludedOpportunity.id], action: "restore" })
+  });
+  if (!excludePreview.response.ok
+    || excludePreview.json.opportunities?.[0]?.status !== "excluded"
+    || excludePreview.json.opportunities?.[0]?.excludedReason !== "非目标行业"
+    || !restorePreview.response.ok
+    || restorePreview.json.opportunities?.[0]?.status !== "preview"
+    || restorePreview.json.opportunities?.[0]?.excludedReason) {
+    throw new Error("prospect exclude and restore failed");
+  }
+  const miaSourceCollision = await request("/api/leads/ingest", {
+    method: "POST",
+    headers: { authorization: `Bearer ${miaToken}` },
+    body: JSON.stringify({
+      company: "Mia 同编号隔离线索",
+      source: "合作伙伴目录",
+      sourceType: "outbound",
+      sourceChannel: "partner-directory",
+      externalId: sourceOpportunityId,
+      sourceUrl: `https://mia-source-${Date.now()}.example`
+    })
+  });
+  if (!miaSourceCollision.response.ok
+    || miaSourceCollision.json.duplicate
+    || miaSourceCollision.json.lead?.ownerId !== "u_sales_mia"
+    || miaSourceCollision.json.lead?.id === sourceCreated.lead.id) {
+    throw new Error("source idempotency must remain isolated by salesperson");
   }
 
   // 自动获客数据源中心：注册表 / 保存 Key（掩码）/ 删除
@@ -425,27 +698,52 @@ try {
   const newDeal = await request("/api/deals", {
     method: "POST",
     headers: { authorization: `Bearer ${managerToken}` },
-    body: JSON.stringify({ customerId: "c1", title: "自动化新增商机", product: "自动化压力仪表", quantity: 10, unitPrice: 1200, nextAction: "确认采购清单" })
+    body: JSON.stringify({ customerId: "c1", title: "自动化新增商机", product: "自动化压力仪表", quantity: 10, unitPrice: 1200, currency: "USD", nextAction: "确认采购清单", nextActionAt: "2026-07-12", expectedCloseAt: "2026-08-15" })
   });
   if (!newDeal.response.ok || newDeal.json.deal.title !== "自动化新增商机" || newDeal.json.deal.amount !== 12000) throw new Error("deal create failed");
 
   const editedDeal = await request(`/api/deals/${newDeal.json.deal.id}`, {
     method: "PATCH",
     headers: { authorization: `Bearer ${managerToken}` },
-    body: JSON.stringify({ customerId: "c1", title: "自动化编辑商机", stage: "已联系", product: "自动化温度仪表", quantity: 12, unitPrice: 900, nextAction: "发送修订报价" })
+    body: JSON.stringify({ customerId: "c1", title: "自动化编辑商机", product: "自动化温度仪表", quantity: 12, unitPrice: 900, currency: "USD", nextAction: "发送修订报价", nextActionAt: "2026-07-13", expectedCloseAt: "2026-08-15" })
   });
   if (!editedDeal.response.ok || editedDeal.json.deal.product !== "自动化温度仪表" || editedDeal.json.deal.amount !== 10800) throw new Error("deal edit failed");
 
-  const wonDeal = await request(`/api/deals/${newDeal.json.deal.id}/stage`, {
+  const crossDealEdit = await request(`/api/deals/${newDeal.json.deal.id}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${miaToken}` },
+    body: JSON.stringify({ customerId: "c1", title: "越权编辑商机", product: "自动化温度仪表", quantity: 12, unitPrice: 900, currency: "USD", nextAction: "越权", nextActionAt: "2026-07-13", expectedCloseAt: "2026-08-15" })
+  });
+  if (crossDealEdit.response.status !== 404) throw new Error("sales deal must be owner isolated");
+
+  const invalidJump = await request(`/api/deals/${newDeal.json.deal.id}/stage`, {
     method: "PATCH",
     headers: { authorization: `Bearer ${managerToken}` },
-    body: JSON.stringify({ stage: "成交" })
+    body: JSON.stringify({ stage: "谈判", result: "尝试跳阶段", nextAction: "继续推进", nextActionAt: "2026-07-14", expectedCloseAt: "2026-08-15" })
   });
+  if (invalidJump.response.status !== 400) throw new Error("manager stage jump should require reason");
+
+  let wonDeal = newDeal;
+  for (const [index, targetStage] of ["已联系", "已报价", "样品", "谈判", "成交"].entries()) {
+    wonDeal = await request(`/api/deals/${newDeal.json.deal.id}/stage`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${managerToken}` },
+      body: JSON.stringify({
+        stage: targetStage,
+        result: `自动化阶段结果 ${targetStage}`,
+        nextAction: targetStage === "成交" ? "确认定金与订单交付" : `推进到 ${targetStage} 后续动作`,
+        nextActionAt: `2026-07-${String(14 + index).padStart(2, "0")}`,
+        expectedCloseAt: targetStage === "已联系" ? "" : "2026-08-15",
+        wonReason: targetStage === "成交" ? "客户已确认 PI 与付款条件" : ""
+      })
+    });
+    if (!wonDeal.response.ok) throw new Error(`deal stage failed: ${targetStage}`);
+  }
   if (!wonDeal.response.ok || wonDeal.json.deal.stage !== "成交") throw new Error("deal won stage failed");
   const lostAfterWon = await request(`/api/deals/${newDeal.json.deal.id}/stage`, {
     method: "PATCH",
     headers: { authorization: `Bearer ${managerToken}` },
-    body: JSON.stringify({ stage: "丢单" })
+    body: JSON.stringify({ stage: "丢单", result: "错误操作", nextAction: "无", nextActionAt: "2026-07-20" })
   });
   if (lostAfterWon.response.status !== 400) throw new Error("won deal should not move to lost");
   const archivedDeal = await request(`/api/deals/${newDeal.json.deal.id}/archive`, {
@@ -453,6 +751,50 @@ try {
     headers: { authorization: `Bearer ${managerToken}` }
   });
   if (!archivedDeal.response.ok || !archivedDeal.json.deal.archivedAt) throw new Error("deal archive failed");
+
+  const salesReport = await request("/api/reports/executive", { headers: { authorization: `Bearer ${salesToken}` } });
+  const managerReport = await request("/api/reports/executive", { headers: { authorization: `Bearer ${managerToken}` } });
+  const adminReport = await request("/api/reports/executive", { headers: { authorization: `Bearer ${adminToken}` } });
+  if (!salesReport.response.ok || !managerReport.response.ok || !adminReport.response.ok) throw new Error("executive report request failed");
+  if (salesReport.json.scope?.label !== "本人业务") throw new Error("sales report scope label failed");
+  if (managerReport.json.scope?.label !== "本团队业务") throw new Error("manager report scope label failed");
+  if (adminReport.json.scope?.label !== "全公司业务") throw new Error("admin report scope label failed");
+  if (!salesReport.json.period?.start || !salesReport.json.period?.asOf || !salesReport.json.definitions?.length) {
+    throw new Error("executive report metadata missing");
+  }
+  const salesPerformanceOwners = salesReport.json.performance.map((row: { owner: string }) => row.owner);
+  const managerPerformanceOwners = managerReport.json.performance.map((row: { owner: string }) => row.owner);
+  if (salesPerformanceOwners.some((owner: string) => owner !== "Shirley")) throw new Error("sales report leaks another salesperson");
+  if (!managerPerformanceOwners.includes("Shirley") || !managerPerformanceOwners.includes("Mia")) {
+    throw new Error("manager report should include team members");
+  }
+  const reportMoneyCollections = [
+    ...salesReport.json.metrics.activePipeline,
+    ...salesReport.json.metrics.weightedForecast,
+    ...salesReport.json.metrics.riskAmounts
+  ];
+  if (reportMoneyCollections.some((row: { currency: string; amount: number }) => !row.currency || typeof row.amount !== "number")) {
+    throw new Error("report money rows must retain original currency");
+  }
+  if ("forecastAmount" in salesReport.json.metrics || "riskAmount" in salesReport.json.metrics) {
+    throw new Error("report must not expose cross-currency aggregate amount");
+  }
+  const reportStages: Record<string, number> = { 询盘: 0.05, 已联系: 0.1, 已报价: 0.3, 样品: 0.5, 谈判: 0.7 };
+  const salesDeals = await request("/api/deals", { headers: { authorization: `Bearer ${salesToken}` } });
+  const expectedWeightedByCurrency = new Map<string, number>();
+  salesDeals.json.deals
+    .filter((deal: { stage: string; archivedAt?: string }) => !deal.archivedAt && deal.stage !== "成交" && deal.stage !== "丢单")
+    .forEach((deal: { stage: string; currency: string; amount: number }) => {
+      expectedWeightedByCurrency.set(deal.currency, (expectedWeightedByCurrency.get(deal.currency) || 0) + deal.amount * (reportStages[deal.stage] || 0));
+    });
+  for (const row of salesReport.json.metrics.weightedForecast as Array<{ currency: string; amount: number }>) {
+    if (Math.abs(row.amount - (expectedWeightedByCurrency.get(row.currency) || 0)) > 0.01) {
+      throw new Error("weighted forecast must be reproducible from scoped deals");
+    }
+  }
+  if (!Array.isArray(salesReport.json.riskRows) || salesReport.json.riskRows.some((row: { owner: string }) => row.owner !== "Shirley")) {
+    throw new Error("risk rows must follow report scope");
+  }
 
   const commissionProduct = await request("/api/commission/products", {
     method: "POST",
@@ -466,6 +808,12 @@ try {
     body: JSON.stringify({ ruleType: "rate", rate: 0.04, effectiveFrom: "2026-01", remark: "自动化测试 4%" })
   });
   if (!commissionRule.response.ok || commissionRule.json.rule.rate !== 0.04) throw new Error("commission rule create failed");
+  const invalidCommissionRule = await request(`/api/commission/products/${commissionProduct.json.product.id}/rules`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ ruleType: "rate", rate: 3, effectiveFrom: "2026-01", remark: "错误的 300% 费率" })
+  });
+  if (invalidCommissionRule.response.status !== 400) throw new Error("commission rate above 100% must be rejected");
   const editedCommissionProduct = await request(`/api/commission/products/${commissionProduct.json.product.id}`, {
     method: "PATCH",
     headers: { authorization: `Bearer ${adminToken}` },
@@ -499,9 +847,21 @@ try {
   const editedCommissionRecord = await request(`/api/commission/sales-records/${commissionRecord.id}`, {
     method: "PATCH",
     headers: { authorization: `Bearer ${adminToken}` },
-    body: JSON.stringify({ unitPrice: 950, salesAmount: 11400, editNote: "自测：按实际结算单价调整" })
+    body: JSON.stringify({
+      unitPrice: 950,
+      salesAmount: 11400,
+      currency: "USD",
+      exchangeRate: 7.2,
+      exchangeRateDate: "2026-07-10",
+      exchangeRateSource: "finance",
+      basisType: "receipt",
+      basisDate: "2026-07-10",
+      editNote: "自测：按实际回款和财务汇率调整"
+    })
   });
-  if (!editedCommissionRecord.response.ok || !editedCommissionRecord.json.record.edited) throw new Error("commission record edit audit failed");
+  if (!editedCommissionRecord.response.ok || !editedCommissionRecord.json.record.edited || editedCommissionRecord.json.record.settlementAmount !== 82080) {
+    throw new Error("commission record currency conversion or edit audit failed");
+  }
   const confirmedCommissionRecord = await request(`/api/commission/sales-records/${commissionRecord.id}/confirm`, {
     method: "POST",
     headers: { authorization: `Bearer ${adminToken}` }
@@ -517,7 +877,11 @@ try {
     body: JSON.stringify({ month: commissionMonth, ownerId: "u_sales_shirley" })
   });
   const commissionCalculation = commissionRecalc.json.calculations?.find((item: { ownerId: string }) => item.ownerId === archivedDeal.json.deal.ownerId);
-  if (!commissionRecalc.response.ok || !commissionCalculation || commissionCalculation.autoCommission <= 0) throw new Error("commission recalculate failed");
+  if (!commissionRecalc.response.ok || !commissionCalculation || commissionCalculation.autoCommission !== 3283.2 || commissionCalculation.salesAmount !== 82080) {
+    throw new Error("commission exact calculation failed");
+  }
+  const calculatedItem = commissionRecalc.json.items?.find((item: { recordId: string }) => item.recordId === commissionRecord.id);
+  if (!calculatedItem?.ruleSnapshotJson?.includes("82080 × 4% = 3283.2")) throw new Error("commission calculation snapshot must explain formula");
   const salesManualCommission = await request(`/api/commission/calculations/${commissionCalculation.id}/manual-item`, {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
@@ -527,47 +891,145 @@ try {
   const commissionManual = await request(`/api/commission/calculations/${commissionCalculation.id}/manual-item`, {
     method: "POST",
     headers: { authorization: `Bearer ${adminToken}` },
-    body: JSON.stringify({ itemType: "bonus", manualAmount: 50, remark: "自测奖金项" })
+    body: JSON.stringify({ itemType: "bonus", manualAmount: 50, recordId: commissionRecord.id, remark: "自测奖金项" })
   });
   if (!commissionManual.response.ok || commissionManual.json.calculation.finalCommission <= commissionCalculation.finalCommission) throw new Error("commission manual item failed");
+  const reviewedCommission = await request(`/api/commission/calculations/${commissionCalculation.id}/review`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` }
+  });
+  if (!reviewedCommission.response.ok || reviewedCommission.json.calculation.status !== "reviewed") throw new Error("commission review failed");
+  const lockedCommission = await request(`/api/commission/calculations/${commissionCalculation.id}/lock`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` }
+  });
+  if (!lockedCommission.response.ok || lockedCommission.json.calculation.status !== "locked") throw new Error("commission lock failed");
+  const editLockedCommissionRecord = await request(`/api/commission/sales-records/${commissionRecord.id}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ salesAmount: 12000, editNote: "锁定后越权修改" })
+  });
+  if (editLockedCommissionRecord.response.status !== 400) throw new Error("locked commission record must reject edit");
+  const recalcLockedCommission = await request("/api/commission/calculations/recalculate", {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ month: commissionMonth, ownerId: "u_sales_shirley" })
+  });
+  if (recalcLockedCommission.response.status !== 409) throw new Error("locked commission must reject recalculate");
+  const adjustLockedCommission = await request(`/api/commission/calculations/${commissionCalculation.id}/manual-item`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ itemType: "bonus", manualAmount: 1, remark: "锁定后调整" })
+  });
+  if (adjustLockedCommission.response.status !== 400) throw new Error("locked commission must reject manual adjustment");
   const commissionExport = await request("/api/commission/export", {
     method: "POST",
     headers: { authorization: `Bearer ${adminToken}` },
     body: JSON.stringify({ month: commissionMonth, ownerId: "u_sales_shirley", scopeType: "self", fileType: "xlsx" })
   });
-  if (!commissionExport.response.ok || !commissionExport.json.rows?.length) throw new Error("commission export failed");
+  if (!commissionExport.response.ok || !commissionExport.json.rows?.length || commissionExport.json.rows.some((row: Record<string, unknown>) => "finalCommission" in row)) {
+    throw new Error("commission detail export must not repeat monthly final commission");
+  }
+  if (commissionExport.json.summaryRows?.length !== 1 || commissionExport.json.summaryRows[0].finalCommission !== commissionManual.json.calculation.finalCommission) {
+    throw new Error("commission summary export failed");
+  }
+  const salesUnlockCommission = await request(`/api/commission/calculations/${commissionCalculation.id}/unlock`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ reason: "销售越权解锁测试" })
+  });
+  if (salesUnlockCommission.response.status !== 403) throw new Error("sales must not unlock commission calculation");
+  const unlockedCommission = await request(`/api/commission/calculations/${commissionCalculation.id}/unlock`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ reason: "自测需要修正财务汇率" })
+  });
+  if (!unlockedCommission.response.ok || unlockedCommission.json.calculation.version !== 2 || unlockedCommission.json.historyCalculation.isCurrent !== false) {
+    throw new Error("commission unlock must preserve history and create new version");
+  }
 
   const lostDeal = await request("/api/deals", {
     method: "POST",
     headers: { authorization: `Bearer ${managerToken}` },
-    body: JSON.stringify({ customerId: "c2", title: "自动化丢单商机", product: "测试样品", quantity: 8, unitPrice: 1000, nextAction: "客户选择竞品" })
+    body: JSON.stringify({ customerId: "c2", title: "自动化丢单商机", product: "测试样品", quantity: 8, unitPrice: 1000, currency: "USD", nextAction: "确认客户最终选择", nextActionAt: "2026-07-12", expectedCloseAt: "2026-08-20" })
   });
   const markedLost = await request(`/api/deals/${lostDeal.json.deal.id}/lost`, {
     method: "POST",
-    headers: { authorization: `Bearer ${managerToken}` }
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({ category: "价格原因", reason: "客户选择了更低价竞品", revisitAt: "2026-10-01" })
   });
-  if (!markedLost.response.ok || markedLost.json.deal.stage !== "丢单" || !markedLost.json.deal.archivedAt) throw new Error("deal lost failed");
+  if (!markedLost.response.ok || markedLost.json.deal.stage !== "丢单" || !markedLost.json.deal.closedAt || markedLost.json.deal.lostReasonCategory !== "价格原因") throw new Error("deal lost failed");
 
   const stage = await request("/api/deals/d1/stage", {
     method: "PATCH",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ stage: "谈判" })
+    body: JSON.stringify({ stage: "样品", result: "客户同意先做样品测试", nextAction: "确认样品寄出", nextActionAt: "2026-07-14", expectedCloseAt: "2026-07-25" })
   });
-  if (!stage.response.ok || stage.json.deal.stage !== "谈判") throw new Error("deal stage update failed");
+  if (!stage.response.ok || stage.json.deal.stage !== "样品") throw new Error("deal stage update failed");
 
+  const dealsAfterWorkflow = await request("/api/deals", { headers: { authorization: `Bearer ${managerToken}` } });
+  if (!dealsAfterWorkflow.json.events.some((event: { dealId: string; type: string }) => event.dealId === newDeal.json.deal.id && event.type === "won")) throw new Error("deal events should persist workflow history");
+  const closedDeals = await request("/api/deals/closed?page=1&pageSize=5&status=丢单&keyword=自动化丢单", { headers: { authorization: `Bearer ${managerToken}` } });
+  if (!closedDeals.response.ok || closedDeals.json.total < 1 || closedDeals.json.deals[0]?.lostReasonCategory !== "价格原因") throw new Error("closed deal query failed");
+
+  const salesLeadScope = await request("/api/leads", { headers: { authorization: `Bearer ${salesToken}` } });
+  const salesLeadTrashScope = await request("/api/leads?trash=true", { headers: { authorization: `Bearer ${salesToken}` } });
   const dashboard = await request("/api/dashboard/summary", { headers: { authorization: `Bearer ${salesToken}` } });
   if (!dashboard.response.ok || !dashboard.json.briefing?.title || !Array.isArray(dashboard.json.schedule)) throw new Error("dashboard summary aggregation failed");
+  if (!Array.isArray(dashboard.json.leadFunnel?.stages) || dashboard.json.leadFunnel.stages.length !== 5) throw new Error("lead funnel aggregation failed");
+  if (dashboard.json.leadFunnel.stages[0]?.count !== salesLeadScope.json.leads.length) throw new Error("sales lead funnel must show the current salesperson's active visible lead scope");
+  if (dashboard.json.leadFunnel.filteredOut !== salesLeadTrashScope.json.leads.length) throw new Error("sales lead funnel must report filtered leads separately");
+  if (dashboard.json.leadFunnel.stages.some((stage: { count: number; conversionRate: number }) => stage.count < 0 || stage.conversionRate < 0 || stage.conversionRate > 100)) throw new Error("lead funnel values must stay within valid ranges");
   if (!dashboard.json.briefing?.basis || !dashboard.json.briefing?.action || !dashboard.json.briefing?.impact) throw new Error("dashboard briefing guidance failed");
+  if (dashboard.json.scopeLabels?.business !== "本人业务" || dashboard.json.scopeLabels?.todos !== "本人待办") throw new Error("sales dashboard scope labels failed");
+  if (dashboard.json.briefing?.riskLabel !== "本人名下风险") throw new Error("sales dashboard risk label failed");
+  if (!dashboard.json.periods?.today || !dashboard.json.periods?.week || !dashboard.json.periods?.month) throw new Error("dashboard period summaries missing");
+  for (const period of Object.values(dashboard.json.periods) as Array<Record<string, unknown>>) {
+    if (typeof period.pendingTodos !== "number" || typeof period.highPriorityTodos !== "number" || typeof period.newLeads !== "number") {
+      throw new Error("dashboard period activity metrics missing");
+    }
+    const briefing = period.briefing as Record<string, unknown>;
+    if (!briefing?.title || !briefing?.description || !briefing?.basis || !briefing?.action || !briefing?.impact) {
+      throw new Error("dashboard period briefing missing");
+    }
+  }
+  const salesVisibleDealIds = new Set(salesDeals.json.deals.map((deal: { id: string }) => deal.id));
+  const expectedSalesMonthDeals = salesDeals.json.deals.filter((deal: { expectedCloseAt?: string; stage: string; archivedAt?: string }) =>
+    !deal.archivedAt &&
+    deal.stage !== "成交" &&
+    deal.stage !== "丢单" &&
+    Boolean(deal.expectedCloseAt) &&
+    deal.expectedCloseAt!.slice(0, 7) === dashboard.json.periods.month.start.slice(0, 7)
+  );
+  if (dashboard.json.periods.month.expectedDeals !== expectedSalesMonthDeals.length) throw new Error("sales dashboard month forecast count failed");
+  const expectedSalesMonthAmounts = new Map<string, number>();
+  expectedSalesMonthDeals.forEach((deal: { currency?: string; amount: number }) => {
+    const currency = deal.currency || "未设置";
+    expectedSalesMonthAmounts.set(currency, (expectedSalesMonthAmounts.get(currency) || 0) + deal.amount);
+  });
+  if (dashboard.json.periods.month.expectedAmounts.some((row: { currency: string; amount: number }) => !row.currency || typeof row.amount !== "number")) {
+    throw new Error("dashboard period forecast must retain currency");
+  }
+  if (dashboard.json.periods.month.expectedAmounts.length !== expectedSalesMonthAmounts.size) throw new Error("dashboard period forecast currency grouping failed");
+  for (const row of dashboard.json.periods.month.expectedAmounts as Array<{ currency: string; amount: number }>) {
+    if (row.amount !== expectedSalesMonthAmounts.get(row.currency)) throw new Error("dashboard period forecast amount must match scoped deals");
+  }
+  if (expectedSalesMonthDeals.some((deal: { id: string }) => !salesVisibleDealIds.has(deal.id))) throw new Error("dashboard period forecast leaks another salesperson");
+  if (typeof dashboard.json.metrics?.riskCustomers !== "number") throw new Error("dashboard risk customer metric failed");
   if (typeof dashboard.json.metrics?.wecomBoundRate !== "number" || typeof dashboard.json.todoInsights?.completionRate !== "number") throw new Error("dashboard metrics aggregation failed");
   if (!Array.isArray(dashboard.json.pipelineHealth) || typeof dashboard.json.pipelineHealth[0]?.count !== "number") throw new Error("pipeline health aggregation failed");
   if (dashboard.json.pipelineHealth.some((item: { stage: string }) => item.stage === "丢单")) throw new Error("pipeline health should exclude lost deals");
+  if (dashboard.json.pipelineHealth.some((item: { stage: string }) => item.stage === "成交")) throw new Error("pipeline health should exclude won deals");
   if (dashboard.json.pipelineHealth.some((item: { count: number; width: number }) => item.count === 0 && item.width !== 0)) throw new Error("empty pipeline stages should have zero width");
   if (!dashboard.json.priorityTasks?.[0]?.reason || typeof dashboard.json.priorityTasks?.[0]?.score !== "number") throw new Error("priority task scoring failed");
 
   const managerDashboard = await request("/api/dashboard/summary", { headers: { authorization: `Bearer ${managerToken}` } });
   if (!managerDashboard.response.ok || managerDashboard.json.scope !== "团队业务数据，本人待办") throw new Error("manager dashboard scope failed");
+  if (managerDashboard.json.scopeLabels?.business !== "团队业务" || managerDashboard.json.scopeLabels?.todos !== "本人待办" || managerDashboard.json.briefing?.riskLabel !== "团队风险金额") throw new Error("manager dashboard scope labels failed");
+  if (managerDashboard.json.periods.month.expectedDeals < dashboard.json.periods.month.expectedDeals) throw new Error("manager dashboard period scope should include the salesperson");
   const adminDashboard = await request("/api/dashboard/summary", { headers: { authorization: `Bearer ${adminToken}` } });
   if (!adminDashboard.response.ok || adminDashboard.json.scope !== "全局业务数据，本人待办") throw new Error("admin dashboard personal todo scope failed");
+  if (adminDashboard.json.scopeLabels?.business !== "全局业务" || adminDashboard.json.scopeLabels?.todos !== "本人待办" || adminDashboard.json.briefing?.riskLabel !== "全局风险金额") throw new Error("admin dashboard scope labels failed");
 
   const priorityBatch = await request("/api/dashboard/priority-tasks/batch-process", {
     method: "POST",
@@ -590,18 +1052,44 @@ try {
       category: "仪表开拓",
       priority: "high",
       status: "planned",
-      dueAt: "明天 18:00",
+      dueAt: "2026-07-13T18:00",
       target: "完成自动化计划任务自测",
-      description: "验证计划任务可新增、编辑、持久化和权限隔离"
+      description: "验证计划任务可新增、编辑、持久化和权限隔离",
+      customerId: "c1",
+      dealId: "d1"
     })
   });
-  if (!planTask.response.ok || planTask.json.task.ownerId !== "u_sales_shirley") throw new Error("plan task create failed");
+  if (!planTask.response.ok || planTask.json.task.ownerId !== "u_sales_shirley" || planTask.json.task.customerId !== "c1" || planTask.json.task.dealId !== "d1") throw new Error("plan task create failed");
   const editedPlanTask = await request(`/api/plan-tasks/${planTask.json.task.id}`, {
     method: "PATCH",
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({ status: "active", target: "已更新验收目标" })
   });
   if (!editedPlanTask.response.ok || editedPlanTask.json.task.status !== "active" || editedPlanTask.json.task.target !== "已更新验收目标") throw new Error("plan task edit failed");
+  const bypassPlanTaskCompletion = await request(`/api/plan-tasks/${planTask.json.task.id}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ status: "done" })
+  });
+  if (bypassPlanTaskCompletion.response.ok) throw new Error("plan task completion should require dedicated action");
+  const mismatchedPlanTask = await request("/api/plan-tasks", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ title: "错误客户商机关联", dueAt: "2026-07-13T19:00", customerId: "c3", dealId: "d1" })
+  });
+  if (mismatchedPlanTask.response.ok) throw new Error("plan task should reject mismatched customer and deal");
+  const mixedLeadPlanTask = await request("/api/plan-tasks", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ title: "错误线索客户关联", dueAt: "2026-07-13T19:00", leadId: "l1", customerId: "c1" })
+  });
+  if (mixedLeadPlanTask.response.ok) throw new Error("plan task should reject lead mixed with customer");
+  const completedPlanTask = await request(`/api/plan-tasks/${planTask.json.task.id}/complete`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ result: "报价已重发，客户确认收到" })
+  });
+  if (!completedPlanTask.response.ok || completedPlanTask.json.task.status !== "done" || !completedPlanTask.json.task.completedAt || completedPlanTask.json.task.completionResult !== "报价已重发，客户确认收到") throw new Error("plan task complete failed");
   const miaPlanTasks = await request("/api/plan-tasks", { headers: { authorization: `Bearer ${miaToken}` } });
   if (!miaPlanTasks.response.ok || miaPlanTasks.json.tasks.some((item: { id: string }) => item.id === planTask.json.task.id)) throw new Error("other sales should not see personal plan tasks");
   const managerPlanTasks = await request("/api/plan-tasks", { headers: { authorization: `Bearer ${managerToken}` } });
@@ -611,6 +1099,29 @@ try {
     headers: { authorization: `Bearer ${salesToken}` }
   });
   if (!deletedPlanTask.response.ok || deletedPlanTask.json.ok !== true) throw new Error("plan task delete failed");
+
+  const cancelledPlanTask = await request("/api/plan-tasks", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ title: "取消与改期自测", dueAt: "2026-07-13T08:00", leadId: "l1" })
+  });
+  if (!cancelledPlanTask.response.ok || cancelledPlanTask.json.task.leadId !== "l1") throw new Error("lead-linked plan task create failed");
+  const rescheduledPlanTask = await request(`/api/plan-tasks/${cancelledPlanTask.json.task.id}/reschedule`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ dueAt: "2026-07-14T09:30", reason: "客户要求次日沟通" })
+  });
+  if (!rescheduledPlanTask.response.ok || rescheduledPlanTask.json.task.dueAt !== "2026-07-14T09:30" || rescheduledPlanTask.json.task.rescheduledFrom !== "2026-07-13T08:00") throw new Error("plan task reschedule failed");
+  const cancelledResult = await request(`/api/plan-tasks/${cancelledPlanTask.json.task.id}/cancel`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ reason: "线索确认无效，不再跟进" })
+  });
+  if (!cancelledResult.response.ok || cancelledResult.json.task.status !== "cancelled" || !cancelledResult.json.task.cancelledAt || cancelledResult.json.task.cancellationReason !== "线索确认无效，不再跟进") throw new Error("plan task cancel failed");
+  await request(`/api/plan-tasks/${cancelledPlanTask.json.task.id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
 
   const planTemplates = await request("/api/plan-templates", { headers: { authorization: `Bearer ${salesToken}` } });
   if (!planTemplates.response.ok || planTemplates.json.templates.length < 15) throw new Error("plan templates seed failed");
@@ -634,14 +1145,50 @@ try {
   const reminder = await request("/api/reminders", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ title: "自动化提醒规则", ruleType: "quote_no_reply", targetStage: "已报价", days: 2, dueAt: "今天 18:00", channel: "企业微信", priority: "high" })
+    body: JSON.stringify({ title: "手工提醒规则", ruleType: "inactive_customer", targetStage: "已报价", days: 0, dueAt: "按触发日期生成", channel: "站内", priority: "high" })
   });
-  if (!reminder.response.ok || reminder.json.reminder.title !== "自动化提醒规则" || typeof reminder.json.reminder.generatedCount !== "number") throw new Error("reminder create failed");
+  if (!reminder.response.ok || reminder.json.reminder.title !== "手工提醒规则" || reminder.json.reminder.status !== "enabled" || reminder.json.reminder.targetOwnerId !== "u_sales_shirley") throw new Error("reminder create failed");
+  const reminderPreview = await request(`/api/reminders/${reminder.json.reminder.id}/preview`, {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!reminderPreview.response.ok || typeof reminderPreview.json.creatableCount !== "number") throw new Error("reminder preview failed");
   const reminderRun = await request(`/api/reminders/${reminder.json.reminder.id}/run`, {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` }
   });
-  if (!reminderRun.response.ok || typeof reminderRun.json.createdCount !== "number") throw new Error("reminder rule run failed");
+  if (!reminderRun.response.ok || reminderRun.json.reminder.lastRunBy !== "u_sales_shirley" || reminderRun.json.reminder.lastMatchedCount !== reminderRun.json.matchedCount) throw new Error("reminder rule run failed");
+  const reminderRunAgain = await request(`/api/reminders/${reminder.json.reminder.id}/run`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (!reminderRunAgain.response.ok || reminderRunAgain.json.createdCount !== 0 || reminderRunAgain.json.skippedCount !== reminderRunAgain.json.matchedCount) throw new Error("reminder stable dedupe failed");
+  const salesReminderTodos = await request("/api/todos", { headers: { authorization: `Bearer ${salesToken}` } });
+  const generatedReminderTodo = salesReminderTodos.json.todos.find((item: { reminderRuleId?: string }) => item.reminderRuleId === reminder.json.reminder.id);
+  if (!generatedReminderTodo || generatedReminderTodo.ownerId !== "u_sales_shirley" || !generatedReminderTodo.customerId || !generatedReminderTodo.triggerKey || generatedReminderTodo.historyAt) throw new Error(`reminder todo ownership or linkage failed: ${JSON.stringify({ run: reminderRun.json, todo: generatedReminderTodo })}`);
+  const managerReminderTodos = await request("/api/todos", { headers: { authorization: `Bearer ${managerToken}` } });
+  if (managerReminderTodos.json.todos.some((item: { reminderRuleId?: string }) => item.reminderRuleId === reminder.json.reminder.id)) throw new Error("manager should not receive sales reminder todo");
+  const reminderSnoozed = await request(`/api/todos/${generatedReminderTodo.id}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ dueAt: "2026-07-20 09:00", snoozeReason: "客户要求下周联系" })
+  });
+  if (!reminderSnoozed.response.ok || reminderSnoozed.json.todo.snoozeCount !== 1 || !reminderSnoozed.json.todo.snoozedFrom) throw new Error("reminder snooze audit failed");
+  const reminderCompleted = await request(`/api/todos/${generatedReminderTodo.id}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ done: true, completionResult: "客户已回复，等待确认数量" })
+  });
+  if (!reminderCompleted.response.ok || !reminderCompleted.json.todo.completedAt || reminderCompleted.json.todo.completionResult !== "客户已回复，等待确认数量") throw new Error("reminder completion audit failed");
+  const reminderDelete = await request(`/api/todos/${generatedReminderTodo.id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (reminderDelete.response.ok) throw new Error("reminder todo must not be physically deleted");
+  const reminderToggle = await request(`/api/reminders/${reminder.json.reminder.id}/toggle`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!reminderToggle.response.ok || reminderToggle.json.reminder.enabled !== false || reminderToggle.json.reminder.status !== "disabled") throw new Error("reminder toggle failed");
 
   const todo = await request("/api/todos", {
     method: "POST",
@@ -724,22 +1271,72 @@ try {
   const memo = await request("/api/memos", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ title: "自动化备忘录", content: "记录客户临时要求", category: "客户备忘", tags: "自动化,客户" })
+    body: JSON.stringify({ title: "自动化备忘录", content: "记录客户临时要求", category: "客户备忘", tags: "自动化,客户", dealId: "d1" })
   });
-  if (!memo.response.ok || memo.json.memo.title !== "自动化备忘录") throw new Error("memo create failed");
+  if (!memo.response.ok || memo.json.memo.title !== "自动化备忘录" || memo.json.memo.customerId !== "c1") throw new Error("memo create or relation failed");
 
-	  const pinnedMemo = await request(`/api/memos/${memo.json.memo.id}`, {
+  const pinnedMemo = await request(`/api/memos/${memo.json.memo.id}`, {
     method: "PATCH",
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({ pinned: true })
-	  });
-	  if (!pinnedMemo.response.ok || pinnedMemo.json.memo.pinned !== true) throw new Error("memo pin failed");
+  });
+  if (!pinnedMemo.response.ok || pinnedMemo.json.memo.pinned !== true) throw new Error("memo pin failed");
 
   const deletedMemo = await request(`/api/memos/${memo.json.memo.id}`, {
     method: "DELETE",
     headers: { authorization: `Bearer ${salesToken}` }
   });
-  if (!deletedMemo.response.ok || deletedMemo.json.ok !== true) throw new Error("memo delete failed");
+  if (!deletedMemo.response.ok || !deletedMemo.json.memo.deletedAt) throw new Error("memo soft delete failed");
+
+  const visibleMemos = await request("/api/memos", { headers: { authorization: `Bearer ${salesToken}` } });
+  if (visibleMemos.json.memos.some((item: { id: string }) => item.id === memo.json.memo.id)) throw new Error("deleted memo should not remain active");
+  const deletedMemos = await request("/api/memos?trash=true", { headers: { authorization: `Bearer ${salesToken}` } });
+  if (!deletedMemos.json.memos.some((item: { id: string }) => item.id === memo.json.memo.id)) throw new Error("deleted memo should be visible in personal trash");
+  const managerDeletedMemos = await request("/api/memos?trash=true", { headers: { authorization: `Bearer ${managerToken}` } });
+  if (!managerDeletedMemos.response.ok
+    || managerDeletedMemos.json.memos.some((item: { ownerId: string }) => item.ownerId !== "u_manager_alex")
+    || managerDeletedMemos.json.memos.some((item: { id: string }) => item.id === memo.json.memo.id)) {
+    throw new Error("manager should only see own memo trash");
+  }
+  const adminDeletedMemos = await request("/api/memos?trash=true", { headers: { authorization: `Bearer ${adminToken}` } });
+  if (!adminDeletedMemos.response.ok
+    || adminDeletedMemos.json.memos.some((item: { ownerId: string }) => item.ownerId !== "u_admin")
+    || adminDeletedMemos.json.memos.some((item: { id: string }) => item.id === memo.json.memo.id)) {
+    throw new Error("admin should only see own memo trash");
+  }
+  const managerDeleteSalesMemo = await request(`/api/memos/${memo.json.memo.id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (managerDeleteSalesMemo.response.status !== 404) throw new Error("manager must not delete salesperson memo");
+  const managerRestoreSalesMemo = await request(`/api/memos/${memo.json.memo.id}/restore`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (managerRestoreSalesMemo.response.status !== 404) throw new Error("manager must not restore salesperson memo");
+
+  const restoredMemo = await request(`/api/memos/${memo.json.memo.id}/restore`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!restoredMemo.response.ok || restoredMemo.json.memo.deletedAt) throw new Error("memo restore failed");
+
+  await request(`/api/memos/${memo.json.memo.id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  const permanentlyDeletedMemo = await request(`/api/memos/${memo.json.memo.id}/permanent`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!permanentlyDeletedMemo.response.ok || permanentlyDeletedMemo.json.ok !== true) throw new Error("memo permanent delete failed");
+
+  const invalidMemoRelation = await request("/api/memos", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ title: "错误关联备忘", customerId: "c2", dealId: "d1" })
+  });
+  if (invalidMemoRelation.response.status !== 400) throw new Error("memo relation mismatch should be rejected");
 
   const managerMemos = await request("/api/memos", { headers: { authorization: `Bearer ${managerToken}` } });
   if (!managerMemos.response.ok || managerMemos.json.memos.some((item: { ownerId: string }) => item.ownerId !== "u_manager_alex")) throw new Error("manager should only see own memos");

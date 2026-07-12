@@ -7,7 +7,9 @@ import {
   commissionProducts,
   commissionRules,
   competitors,
+  customerActivities,
   customers,
+  dealEvents,
   deals,
   examAttempts,
   examQuestionLinks,
@@ -31,19 +33,23 @@ import {
   tradeDocuments,
   users,
   wecomMessages,
-  websiteOpportunities
+  websiteOpportunities,
+  whatsappBindings,
+  whatsappMessages
 } from "./data.js";
-import type { AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, Deal, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, Memo, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, SalesRecordAudit, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerActivity, Deal, DealEvent, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, Memo, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, SalesRecordAudit, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity, WhatsAppMessage, WhatsAppBinding } from "./types.js";
 
 export interface CrmStore {
   mode: "memory" | "mysql";
   users: User[];
   customers: Customer[];
+  customerActivities: CustomerActivity[];
   leads: Lead[];
   leadActivities: LeadActivity[];
   leadSourceEvents: LeadSourceEvent[];
   todos: Todo[];
   deals: Deal[];
+  dealEvents: DealEvent[];
   reminders: Reminder[];
   knowledgeAssets: KnowledgeAsset[];
   exams: Exam[];
@@ -63,6 +69,8 @@ export interface CrmStore {
   memos: Memo[];
   competitors: Competitor[];
   caseStudies: CaseStudy[];
+  whatsappMessages: WhatsAppMessage[];
+  whatsappBindings: WhatsAppBinding[];
   commissionProducts: CommissionProduct[];
   commissionRules: CommissionRule[];
   monthlySalesRecords: MonthlySalesRecord[];
@@ -77,11 +85,13 @@ export const memoryStore: CrmStore = {
   mode: "memory",
   users,
   customers,
+  customerActivities,
   leads,
   leadActivities,
   leadSourceEvents,
   todos,
   deals,
+  dealEvents,
   reminders,
   knowledgeAssets,
   exams,
@@ -101,6 +111,8 @@ export const memoryStore: CrmStore = {
   memos,
   competitors,
   caseStudies,
+  whatsappMessages,
+  whatsappBindings,
   commissionProducts,
   commissionRules,
   monthlySalesRecords,

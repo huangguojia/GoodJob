@@ -9,7 +9,7 @@ import { canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, publ
 import { createMysqlStore } from "./mysql-store.js";
 import { getStore, setStore } from "./store.js";
 import { LEAD_PROVIDERS, getProvider, providerMeta, type LeadProvider, type LeadQuery, type RawLead } from "./lead-providers.js";
-import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, Deal, Exam, ExamAttempt, ExamQuestion, Lead, LeadSourceConfig, LeadSourceEvent, LeadSourceType, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, SalesRecordAudit, SessionUser, Todo, TradeDocument, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, Deal, DealEvent, Exam, ExamAttempt, ExamQuestion, Lead, LeadSourceConfig, LeadSourceEvent, LeadSourceType, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, SalesRecordAudit, SessionUser, Todo, TradeDocument, TradeDocumentAudit, TradeDocumentSendRecord, WebsiteOpportunity } from "./types.js";
 
 function loadLocalEnv() {
   const currentDir = dirname(fileURLToPath(import.meta.url));
@@ -151,6 +151,25 @@ function outboundEmailError(error: unknown, user: ReturnType<typeof getStore>["u
     return "SMTP发件人被拒绝：请确认发件邮箱、SMTP账号属于同一个邮箱账号，且服务商允许该账号外发。";
   }
   return `邮件发送失败：${message || "SMTP服务未返回明确原因"}`;
+}
+
+function hasProspectContactInfo(item: WebsiteOpportunity) {
+  const value = `${item.contactInfo || ""} ${item.contact || ""}`.trim();
+  if (!value || /^(待维护|待补齐|未知|暂无)$/i.test(value)) return false;
+  return /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(value)
+    || /\+?\d[\d\s().-]{6,}\d/.test(value)
+    || /(whatsapp|wechat|微信)/i.test(value);
+}
+
+function canManageProspectAssignments(user?: SessionUser) {
+  return user?.role === "manager" || user?.role === "admin" || user?.role === "super_admin";
+}
+
+function prospectAssigneesFor(user: SessionUser) {
+  return getStore().users
+    .filter((item) => item.status === "active" && item.role === "sales")
+    .filter((item) => user.role === "manager" ? item.teamId === user.teamId : canManageProspectAssignments(user))
+    .map((item) => ({ id: item.id, name: item.name, role: item.role, teamId: item.teamId }));
 }
 
 function examQuestionsFor(examId: string) {
@@ -452,6 +471,10 @@ app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRout
     res.status(404).json({ message: "搜客线索不存在或无权访问" });
     return;
   }
+  if (!["contactable", "contacted", "synced"].includes(opportunity.status)) {
+    res.status(400).json({ message: "请先核验联系方式并标记为可联系，再发送开发信" });
+    return;
+  }
   let mailInfo: Awaited<ReturnType<typeof sendOutboundEmail>>;
   try {
     mailInfo = await sendOutboundEmail(user, { to: body.to, subject: body.subject, body: body.body });
@@ -466,6 +489,8 @@ app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRout
   opportunity.lastDevelopmentEmailAt = sentAt;
   opportunity.lastDevelopmentEmailTo = body.to;
   opportunity.lastDevelopmentEmailSubject = body.subject;
+  if (opportunity.status !== "synced") opportunity.status = "contacted";
+  opportunity.statusChangedAt = sentAt;
   await store.persist();
   res.json({
     sent: {
@@ -681,7 +706,10 @@ app.post("/api/customers/bulk-delete", requireAuth, asyncRoute(async (req, res) 
   const deletedIds = new Set(deleted.map((customer) => customer.id));
   const deletedNames = deleted.map((customer) => customer.company);
   store.customers = store.customers.filter((customer) => !deletedIds.has(customer.id));
+  store.customerActivities = store.customerActivities.filter((activity) => !deletedIds.has(activity.customerId));
+  const deletedDealIds = new Set(store.deals.filter((deal) => deletedIds.has(deal.customerId)).map((deal) => deal.id));
   store.deals = store.deals.filter((deal) => !deletedIds.has(deal.customerId));
+  store.dealEvents = store.dealEvents.filter((event) => !deletedDealIds.has(event.dealId));
   store.todos = store.todos.filter((todo) => {
     const currentUserTodo = canSeePersonalData(req.user!, todo.ownerId);
     const relatedToDeletedCustomer = deletedNames.some((name) => todo.related.includes(name) || todo.title.includes(name));
@@ -727,7 +755,7 @@ function createLeadFromSource(user: SessionUser, input: LeadIntake) {
   const externalId = input.externalId.trim();
   if (externalId) {
     const priorEvent = store.leadSourceEvents.find((event) =>
-      event.teamId === user.teamId && event.channel === sourceChannel && event.externalId === externalId
+      event.ownerId === user.id && event.channel === sourceChannel && event.externalId === externalId
     );
     const priorLead = priorEvent ? store.leads.find((lead) => lead.id === priorEvent.leadId) : undefined;
     if (priorEvent && priorLead) return { lead: priorLead, sourceEvent: priorEvent, duplicate: true };
@@ -820,7 +848,7 @@ function findCustomerMatches(user: SessionUser, lead: Lead) {
         score += 50;
         reasons.push("邮箱域名一致");
       }
-      const activeDeals = store.deals.filter((deal) => deal.customerId === customer.id && !deal.archivedAt && deal.stage !== "丢单");
+      const activeDeals = store.deals.filter((deal) => deal.customerId === customer.id && !deal.archivedAt && deal.stage !== "丢单" && deal.stage !== "成交");
       return { customer, score, reasons, activeDealCount: activeDeals.length };
     })
     .filter((match) => match.score > 0)
@@ -830,17 +858,55 @@ function findCustomerMatches(user: SessionUser, lead: Lead) {
 const pipelineStageRank: Record<string, number> = { "询盘": 1, "已联系": 2, "已报价": 3, "样品": 4, "谈判": 5, "成交": 6 };
 
 function customerWithPipeline(customer: Customer) {
-  const activeDeals = getStore().deals.filter((deal) => deal.customerId === customer.id && !deal.archivedAt && deal.stage !== "丢单");
+  const store = getStore();
+  const activeDeals = store.deals.filter((deal) => deal.customerId === customer.id && !deal.archivedAt && deal.stage !== "丢单" && deal.stage !== "成交");
+  const activities = store.customerActivities
+    .filter((activity) => activity.customerId === customer.id)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   const pipelineStage = activeDeals.reduce((best, deal) =>
     (pipelineStageRank[deal.stage] || 0) > (pipelineStageRank[best] || 0) ? deal.stage : best, ""
   );
   return {
     ...customer,
+    ownerName: store.users.find((user) => user.id === customer.ownerId)?.name || "未分配",
+    activities: activities.map((activity) => ({
+      ...activity,
+      operatorName: store.users.find((user) => user.id === activity.operatorId)?.name || "未知操作人"
+    })),
+    lastActivityAt: activities[0]?.createdAt || "",
     pipelineStage: pipelineStage || "暂无活跃商机",
     pipelineAmount: activeDeals.reduce((sum, deal) => sum + deal.amount, 0),
     activeDealCount: activeDeals.length
   };
 }
+
+app.post("/api/customers/:id/activities", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    type: z.enum(["call", "email", "whatsapp", "wechat", "meeting", "note"]),
+    content: z.string().trim().min(1).max(2000),
+    nextReminder: z.string().trim().max(100).optional().default("")
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const customer = store.customers.find((item) => item.id === req.params.id);
+  if (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId)) {
+    res.status(404).json({ message: "客户不存在或无权访问" });
+    return;
+  }
+  const activity = {
+    id: `ca_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    customerId: customer.id,
+    type: body.type,
+    content: body.content,
+    operatorId: req.user!.id,
+    nextReminder: body.nextReminder,
+    createdAt: new Date().toISOString()
+  };
+  store.customerActivities.unshift(activity);
+  if (body.nextReminder) customer.nextReminder = body.nextReminder;
+  await store.persist();
+  res.json({ activity, customer: customerWithPipeline(customer) });
+}));
 
 app.get("/api/leads", requireAuth, (req, res) => {
   const { leads } = getStore();
@@ -859,7 +925,10 @@ app.get("/api/leads/:id", requireAuth, (req, res) => {
   const activities = store.leadActivities
     .filter((activity) => activity.leadId === lead.id)
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-  res.json({ lead, activities });
+  const sourceEvents = store.leadSourceEvents
+    .filter((event) => event.leadId === lead.id && canSeeOwner(req.user!, event.ownerId, event.teamId))
+    .sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1));
+  res.json({ lead, activities, sourceEvents });
 });
 
 app.post("/api/leads", requireAuth, asyncRoute(async (req, res) => {
@@ -919,9 +988,21 @@ app.delete("/api/leads/:id", requireAuth, asyncRoute(async (req, res) => {
     res.status(404).json({ message: "线索不存在或无权访问" });
     return;
   }
+  if (lead.convertedCustomerId) {
+    res.status(400).json({ message: "已转客户的线索必须保留来源追溯，不能移入垃圾箱" });
+    return;
+  }
+  if (lead.deletedAt) {
+    res.status(400).json({ message: "线索已在垃圾箱中" });
+    return;
+  }
   const now = new Date().toISOString();
+  const purgeAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  lead.statusBeforeDelete = lead.status;
   lead.deletedAt = now;
   lead.deletedReason = body.reason || "暂时无效或不适合继续跟进";
+  lead.deletedBy = req.user!.id;
+  lead.purgeAt = purgeAt;
   lead.status = "invalid";
   lead.lastActivityAt = "刚刚";
   store.leadActivities.unshift({
@@ -944,10 +1025,17 @@ app.post("/api/leads/:id/restore", requireAuth, asyncRoute(async (req, res) => {
     res.status(404).json({ message: "线索不存在或无权访问" });
     return;
   }
+  if (!lead.deletedAt) {
+    res.status(400).json({ message: "线索不在垃圾箱中" });
+    return;
+  }
   const now = new Date().toISOString();
   lead.deletedAt = "";
   lead.deletedReason = "";
-  lead.status = lead.convertedCustomerId ? "converted" : "following";
+  lead.deletedBy = "";
+  lead.purgeAt = "";
+  lead.status = lead.statusBeforeDelete || "following";
+  lead.statusBeforeDelete = undefined;
   lead.lastActivityAt = "刚刚";
   store.leadActivities.unshift({
     id: `la_${Date.now()}`,
@@ -969,10 +1057,20 @@ app.delete("/api/leads/:id/permanent", requireAuth, asyncRoute(async (req, res) 
     res.status(404).json({ message: "线索不存在或无权访问" });
     return;
   }
+  if (!lead.deletedAt) {
+    res.status(400).json({ message: "只有垃圾箱中的线索可以永久删除" });
+    return;
+  }
+  if (lead.convertedCustomerId) {
+    res.status(400).json({ message: "已转客户的线索必须保留来源追溯，不能永久删除" });
+    return;
+  }
+  const sourceEventsDeleted = store.leadSourceEvents.filter((item) => item.leadId === lead.id).length;
   store.leads = store.leads.filter((item) => item.id !== lead.id);
   store.leadActivities = store.leadActivities.filter((item) => item.leadId !== lead.id);
+  store.leadSourceEvents = store.leadSourceEvents.filter((item) => item.leadId !== lead.id);
   await store.persist();
-  res.json({ ok: true, id: lead.id });
+  res.json({ ok: true, id: lead.id, sourceEventsDeleted });
 }));
 
 app.post("/api/leads/:id/activities", requireAuth, asyncRoute(async (req, res) => {
@@ -1171,6 +1269,8 @@ app.post("/api/leads/:id/convert", requireAuth, asyncRoute(async (req, res) => {
 
   let deal: Deal | undefined;
   if (body.createDeal) {
+    const nowIso = new Date().toISOString();
+    const nextActionAt = /^\d{4}-\d{2}-\d{2}/.test(lead.nextFollowAt) ? lead.nextFollowAt.slice(0, 10) : new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     deal = {
       id: `d_lead_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       customerId: customer.id,
@@ -1180,11 +1280,26 @@ app.post("/api/leads/:id/convert", requireAuth, asyncRoute(async (req, res) => {
       quantity: body.deal.quantity,
       unitPrice: body.deal.unitPrice,
       amount: typeof body.deal.amount === "number" ? body.deal.amount : (lead.estimatedAmount || body.deal.quantity * body.deal.unitPrice),
+      currency: "USD",
+      amountType: "estimate",
       ownerId: customer.ownerId,
       teamId: customer.teamId,
-      nextAction: body.deal.nextAction.trim() || lead.nextFollowAt || "确认产品、数量与报价要求"
+      nextAction: body.deal.nextAction.trim() || "确认产品、数量与报价要求",
+      nextActionAt,
+      expectedCloseAt: "",
+      stageChangedAt: nowIso
     };
     store.deals.unshift(deal);
+    createDealEvent({
+      dealId: deal.id,
+      type: "created",
+      content: `由线索 ${lead.company} 确认入客户并创建商机`,
+      operatorId: req.user!.id,
+      toStage: "询盘",
+      nextAction: deal.nextAction,
+      nextActionAt: deal.nextActionAt,
+      createdAt: nowIso
+    });
   }
   lead.status = "converted";
   lead.stage = "已转化";
@@ -1202,6 +1317,424 @@ app.post("/api/leads/:id/convert", requireAuth, asyncRoute(async (req, res) => {
   });
   await store.persist();
   res.json({ lead, customer: customerWithPipeline(customer), deal, duplicate: false });
+}));
+
+// ---------------------------------------------------------------------------
+// WhatsApp (阶段0:手动录入对话 + 手动翻译)。仅官方合规路径,不接非官方库。
+// ---------------------------------------------------------------------------
+function findWhatsAppCustomer(user: SessionUser, customerId: string) {
+  const store = getStore();
+  const customer = store.customers.find((item) => item.id === customerId);
+  if (!customer || !canSeeOwner(user, customer.ownerId, customer.teamId)) return null;
+  return customer;
+}
+
+/** 简易中文检测:含 CJK 字符即视为中文，无需翻译。 */
+function isChineseText(text: string) {
+  return /[一-鿿]/.test(text);
+}
+
+async function translateToChinese(user: SessionUser, text: string): Promise<string> {
+  const trimmed = text.trim();
+  if (!trimmed || isChineseText(trimmed)) return "";
+  const config = getAiConfig(user);
+  if (!config?.enabled || !config.apiKey) {
+    // 无可用模型时返回空，前端会提示“未配置翻译模型”，不阻断录入。
+    return "";
+  }
+  const prompt = `你是专业外贸翻译。请把下面这段客户消息翻译成简体中文，只返回译文本身，不要解释、不要引号：\n\n${trimmed}`;
+  try {
+    const result = await callAiModel(config, prompt, 4000);
+    return result.trim().replace(/^["']|["']$/g, "");
+  } catch {
+    return "";
+  }
+}
+
+// 聊天中心:所有有绑定/消息的客户会话概览
+app.get("/api/whatsapp/threads", requireAuth, (req, res) => {
+  const store = getStore();
+  const scopedCustomerIds = new Set(
+    store.customers.filter((c) => canSeeOwner(req.user!, c.ownerId, c.teamId)).map((c) => c.id)
+  );
+  const threads = store.customers
+    .filter((c) => scopedCustomerIds.has(c.id))
+    .map((customer) => {
+      const binding = store.whatsappBindings.find((b) => b.customerId === customer.id);
+      const messages = store.whatsappMessages.filter((m) => m.customerId === customer.id);
+      const last = messages[messages.length - 1];
+      if (!binding && messages.length === 0) return null;
+      return {
+        customerId: customer.id,
+        company: customer.company,
+        country: customer.country,
+        contact: customer.contact,
+        phoneNumber: binding?.phoneNumber || "",
+        waProfileName: binding?.waProfileName || "",
+        unreadCount: binding?.unreadCount || 0,
+        lastMessage: last ? (last.content || "") : "",
+        lastMessageAt: last ? last.createdAt : (binding?.lastMessageAt || ""),
+        messageCount: messages.length
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (String((b as any).lastMessageAt) < String((a as any).lastMessageAt) ? -1 : 1));
+  res.json({ threads });
+});
+
+// 某客户的对话记录 + 绑定信息
+app.get("/api/whatsapp/customers/:customerId/messages", requireAuth, (req, res) => {
+  const customer = findWhatsAppCustomer(req.user!, req.params.customerId);
+  if (!customer) {
+    res.status(404).json({ message: "客户不存在或无权访问" });
+    return;
+  }
+  const store = getStore();
+  const binding = store.whatsappBindings.find((b) => b.customerId === customer.id) || null;
+  const messages = store.whatsappMessages
+    .filter((m) => m.customerId === customer.id)
+    .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+  res.json({ binding, messages, customer: { id: customer.id, company: customer.company, country: customer.country, contact: customer.contact } });
+});
+
+// 绑定/更新 WhatsApp 手机号
+app.post("/api/whatsapp/customers/:customerId/binding", requireAuth, asyncRoute(async (req, res) => {
+  const customer = findWhatsAppCustomer(req.user!, req.params.customerId);
+  if (!customer) {
+    res.status(404).json({ message: "客户不存在或无权访问" });
+    return;
+  }
+  const schema = z.object({
+    phoneNumber: z.string().min(5).max(20),
+    waProfileName: z.string().optional().default("")
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const now = new Date().toISOString();
+  let binding = store.whatsappBindings.find((b) => b.customerId === customer.id);
+  if (binding) {
+    binding.phoneNumber = body.phoneNumber;
+    binding.waProfileName = body.waProfileName || binding.waProfileName;
+  } else {
+    binding = {
+      id: `wab_${Date.now()}`,
+      customerId: customer.id,
+      phoneNumber: body.phoneNumber,
+      waProfileName: body.waProfileName || "",
+      lastMessageAt: "",
+      unreadCount: 0,
+      createdAt: now
+    };
+    store.whatsappBindings.push(binding);
+  }
+  await store.persist();
+  res.json({ binding });
+}));
+
+// 手动录入一条对话(收/发),非中文自动翻译
+app.post("/api/whatsapp/customers/:customerId/messages", requireAuth, asyncRoute(async (req, res) => {
+  const customer = findWhatsAppCustomer(req.user!, req.params.customerId);
+  if (!customer) {
+    res.status(404).json({ message: "客户不存在或无权访问" });
+    return;
+  }
+  const schema = z.object({
+    direction: z.enum(["inbound", "outbound"]),
+    content: z.string().min(1).max(4000),
+    mediaUrl: z.string().optional().default("")
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const now = new Date().toISOString();
+  const contentTranslated = await translateToChinese(req.user!, body.content);
+  const message = {
+    id: `wam_${Date.now()}`,
+    customerId: customer.id,
+    direction: body.direction,
+    content: body.content,
+    contentTranslated,
+    mediaUrl: body.mediaUrl || "",
+    status: body.direction === "outbound" ? "sent" : "read",
+    waMessageId: "",
+    createdAt: now
+  };
+  store.whatsappMessages.push(message);
+  // 同步绑定的最近时间
+  const binding = store.whatsappBindings.find((b) => b.customerId === customer.id);
+  if (binding) binding.lastMessageAt = now;
+  await store.persist();
+  res.json({ message });
+}));
+
+// 对已有消息重新翻译(用户点击“翻译”按钮)
+app.post("/api/whatsapp/messages/:id/translate", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const message = store.whatsappMessages.find((m) => m.id === req.params.id);
+  if (!message) {
+    res.status(404).json({ message: "消息不存在" });
+    return;
+  }
+  const customer = findWhatsAppCustomer(req.user!, message.customerId);
+  if (!customer) {
+    res.status(403).json({ message: "无权访问该消息" });
+    return;
+  }
+  if (isChineseText(message.content)) {
+    res.json({ message, skipped: true, reason: "中文无需翻译" });
+    return;
+  }
+  const translated = await translateToChinese(req.user!, message.content);
+  if (!translated) {
+    res.status(400).json({ message: "翻译失败，请检查是否已配置并启用 AI 模型" });
+    return;
+  }
+  message.contentTranslated = translated;
+  await store.persist();
+  res.json({ message });
+}));
+
+// 删除一条对话记录
+app.delete("/api/whatsapp/messages/:id", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const message = store.whatsappMessages.find((m) => m.id === req.params.id);
+  if (!message) {
+    res.status(404).json({ message: "消息不存在" });
+    return;
+  }
+  const customer = findWhatsAppCustomer(req.user!, message.customerId);
+  if (!customer) {
+    res.status(403).json({ message: "无权访问该消息" });
+    return;
+  }
+  store.whatsappMessages = store.whatsappMessages.filter((m) => m.id !== message.id);
+  await store.persist();
+  res.json({ ok: true, id: message.id });
+}));
+
+// ---------------------------------------------------------------------------
+// WhatsApp 绑定模式扩展 (Web扫码 + Twilio API)
+// ---------------------------------------------------------------------------
+import { whatsappWebManager, twilioManager } from "./whatsapp-service.js";
+
+// 初始化 Twilio (从环境变量读取配置)
+const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID || "";
+const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN || "";
+const twilioWebhookUrl = process.env.TWILIO_WEBHOOK_URL || "";
+
+if (twilioAccountSid && twilioAuthToken) {
+  twilioManager.initialize(twilioAccountSid, twilioAuthToken, twilioWebhookUrl);
+  console.log("✅ Twilio WhatsApp initialized");
+}
+
+// 获取可用的绑定模式
+app.get("/api/whatsapp/binding-modes", requireAuth, (req, res) => {
+  const modes = {
+    webScan: { available: true, name: "扫码登录 (WhatsApp Web)", risk: "有封号风险" },
+    twilioApi: { available: twilioManager.isInitialized(), name: "官方API (Twilio)", risk: "零封号风险" },
+    manual: { available: true, name: "手动录入", risk: "无风险" }
+  };
+  res.json({ modes });
+});
+
+// 开始 Web 扫码绑定流程
+app.post("/api/whatsapp/binding/web-scan/start", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    customerId: z.string()
+  });
+  const body = schema.parse(req.body);
+  const customer = findWhatsAppCustomer(req.user!, body.customerId);
+  if (!customer) {
+    res.status(404).json({ message: "客户不存在或无权访问" });
+    return;
+  }
+
+  try {
+    // 创建新的 WhatsApp Web 客户端
+    const clientId = await whatsappWebManager.createClient(req.user!.id);
+
+    // 存储绑定信息（状态为 qr-pending）
+    const store = getStore();
+    let binding = store.whatsappBindings.find((b) => b.customerId === customer.id);
+
+    if (!binding) {
+      binding = {
+        id: `wab_${Date.now()}`,
+        customerId: customer.id,
+        phoneNumber: "",
+        waProfileName: "",
+        lastMessageAt: "",
+        unreadCount: 0,
+        createdAt: new Date().toISOString(),
+        bindingMode: "web-scan",
+        userId: req.user!.id,
+        sessionData: clientId,
+        connectionStatus: "qr-pending",
+        lastConnectedAt: ""
+      };
+      store.whatsappBindings.push(binding);
+    } else {
+      binding.bindingMode = "web-scan";
+      binding.userId = req.user!.id;
+      binding.sessionData = clientId;
+      binding.connectionStatus = "qr-pending";
+    }
+
+    await store.persist();
+
+    res.json({ clientId, bindingId: binding.id, status: "qr-pending" });
+  } catch (error: any) {
+    res.status(500).json({ message: "启动扫码失败: " + error.message });
+  }
+}));
+
+// 获取二维码（通过 SSE 推送）
+app.get("/api/whatsapp/binding/web-scan/qr/:clientId", requireAuth, (req, res) => {
+  const { clientId } = req.params;
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  whatsappWebManager.onQR(clientId, (qr) => {
+    res.write(`data: ${JSON.stringify({ qr })}\n\n`);
+  });
+
+  // 30秒超时
+  setTimeout(() => {
+    res.write(`data: ${JSON.stringify({ timeout: true })}\n\n`);
+    res.end();
+  }, 30000);
+
+  req.on("close", () => {
+    res.end();
+  });
+});
+
+// 检查 Web 扫码状态
+app.get("/api/whatsapp/binding/web-scan/status/:clientId", requireAuth, (req, res) => {
+  const { clientId } = req.params;
+  const status = whatsappWebManager.getClientStatus(clientId);
+  res.json({ status });
+});
+
+// 断开 Web 扫码连接
+app.post("/api/whatsapp/binding/web-scan/disconnect", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    customerId: z.string()
+  });
+  const body = schema.parse(req.body);
+  const customer = findWhatsAppCustomer(req.user!, body.customerId);
+  if (!customer) {
+    res.status(404).json({ message: "客户不存在或无权访问" });
+    return;
+  }
+
+  const store = getStore();
+  const binding = store.whatsappBindings.find((b) => b.customerId === customer.id);
+
+  if (binding && binding.sessionData) {
+    await whatsappWebManager.disconnectClient(binding.sessionData);
+    binding.connectionStatus = "disconnected";
+    await store.persist();
+  }
+
+  res.json({ ok: true });
+}));
+
+// 开始 Twilio API 绑定
+app.post("/api/whatsapp/binding/twilio/start", requireAuth, asyncRoute(async (req, res) => {
+  if (!twilioManager.isInitialized()) {
+    res.status(400).json({ message: "Twilio 未配置，请联系管理员" });
+    return;
+  }
+
+  const schema = z.object({
+    customerId: z.string(),
+    twilioPhoneNumber: z.string()
+  });
+  const body = schema.parse(req.body);
+  const customer = findWhatsAppCustomer(req.user!, body.customerId);
+  if (!customer) {
+    res.status(404).json({ message: "客户不存在或无权访问" });
+    return;
+  }
+
+  const store = getStore();
+  let binding = store.whatsappBindings.find((b) => b.customerId === customer.id);
+
+  if (!binding) {
+    binding = {
+      id: `wab_${Date.now()}`,
+      customerId: customer.id,
+      phoneNumber: body.twilioPhoneNumber,
+      waProfileName: "",
+      lastMessageAt: "",
+      unreadCount: 0,
+      createdAt: new Date().toISOString(),
+      bindingMode: "twilio-api",
+      twilioPhoneNumber: body.twilioPhoneNumber,
+      connectionStatus: "connected",
+      lastConnectedAt: new Date().toISOString()
+    };
+    store.whatsappBindings.push(binding);
+  } else {
+    binding.bindingMode = "twilio-api";
+    binding.twilioPhoneNumber = body.twilioPhoneNumber;
+    binding.connectionStatus = "connected";
+    binding.lastConnectedAt = new Date().toISOString();
+  }
+
+  await store.persist();
+  res.json({ binding });
+}));
+
+// Twilio Webhook 接收消息
+app.post("/api/whatsapp/webhook/twilio", asyncRoute(async (req, res) => {
+  // 验证 Twilio 签名
+  const signature = req.headers["x-twilio-signature"] as string;
+  const url = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+
+  if (!twilioManager.validateWebhook(signature, url, req.body)) {
+    res.status(403).json({ message: "Invalid signature" });
+    return;
+  }
+
+  const { From, To, Body, MessageSid } = req.body;
+
+  // 去掉 whatsapp: 前缀
+  const fromNumber = From.replace("whatsapp:", "");
+  const toNumber = To.replace("whatsapp:", "");
+
+  const store = getStore();
+
+  // 根据电话号码找到对应的绑定和客户
+  const binding = store.whatsappBindings.find((b) =>
+    b.twilioPhoneNumber === toNumber || b.phoneNumber === fromNumber
+  );
+
+  if (binding) {
+    const message = {
+      id: `wam_${Date.now()}`,
+      customerId: binding.customerId,
+      direction: "inbound" as const,
+      content: Body,
+      contentTranslated: "",
+      mediaUrl: "",
+      status: "received",
+      waMessageId: MessageSid,
+      createdAt: new Date().toISOString()
+    };
+
+    store.whatsappMessages.push(message);
+    binding.lastMessageAt = message.createdAt;
+    binding.unreadCount = (binding.unreadCount || 0) + 1;
+
+    await store.persist();
+  }
+
+  // Twilio 需要 TwiML 响应
+  res.type("text/xml");
+  res.send("<Response></Response>");
 }));
 
 app.get("/api/todos", requireAuth, (req, res) => {
@@ -1244,25 +1777,63 @@ app.post("/api/todos", requireAuth, asyncRoute(async (req, res) => {
   res.json({ todo });
 }));
 
+const planTaskDueAtSchema = z.string().refine(
+  (value) => !value || /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value),
+  "计划时间格式无效"
+);
+
 const planTaskSchema = z.object({
   title: z.string().min(1),
   phase: z.string().min(1).default("计划任务"),
   category: z.string().min(1).default("客户开发"),
   priority: z.enum(["high", "medium", "normal"]).default("normal"),
-  status: z.enum(["planned", "active", "done"]).default("planned"),
-  dueAt: z.string().default(""),
+  status: z.enum(["planned", "active"]).default("planned"),
+  dueAt: planTaskDueAtSchema.default(""),
   target: z.string().default(""),
-  description: z.string().default("")
+  description: z.string().default(""),
+  customerId: z.string().default(""),
+  leadId: z.string().default(""),
+  dealId: z.string().default("")
 });
 
 function sortPlanTasks(tasks: PlanTask[]) {
-  const statusWeight: Record<PlanTask["status"], number> = { active: 0, planned: 1, done: 2 };
+  const statusWeight: Record<PlanTask["status"], number> = { active: 0, planned: 1, done: 2, cancelled: 3 };
   const priorityWeight: Record<PlanTask["priority"], number> = { high: 0, medium: 1, normal: 2 };
   return [...tasks].sort((left, right) => {
     return statusWeight[left.status] - statusWeight[right.status]
       || priorityWeight[left.priority] - priorityWeight[right.priority]
       || String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
   });
+}
+
+function validatePlanTaskBusinessRefs(user: SessionUser, refs: Pick<PlanTask, "customerId" | "leadId" | "dealId">) {
+  const store = getStore();
+  const customerId = refs.customerId || "";
+  const leadId = refs.leadId || "";
+  const dealId = refs.dealId || "";
+  if (leadId && (customerId || dealId)) return "线索不能与客户或商机同时关联";
+  if (leadId) {
+    const lead = store.leads.find((item) => item.id === leadId && !item.deletedAt && canSeeOwner(user, item.ownerId, item.teamId));
+    return lead ? "" : "关联线索不存在或无权访问";
+  }
+  if (dealId) {
+    const deal = store.deals.find((item) => item.id === dealId && canSeeOwner(user, item.ownerId, item.teamId));
+    if (!deal) return "关联商机不存在或无权访问";
+    if (customerId && customerId !== deal.customerId) return "商机与客户不匹配";
+    const customer = store.customers.find((item) => item.id === deal.customerId && canSeeOwner(user, item.ownerId, item.teamId));
+    return customer ? "" : "商机所属客户不存在或无权访问";
+  }
+  if (customerId) {
+    const customer = store.customers.find((item) => item.id === customerId && canSeeOwner(user, item.ownerId, item.teamId));
+    return customer ? "" : "关联客户不存在或无权访问";
+  }
+  return "";
+}
+
+function normalizedPlanTaskRefs(user: SessionUser, refs: Pick<PlanTask, "customerId" | "leadId" | "dealId">) {
+  if (!refs.dealId) return refs;
+  const deal = getStore().deals.find((item) => item.id === refs.dealId && canSeeOwner(user, item.ownerId, item.teamId));
+  return { ...refs, customerId: deal?.customerId || refs.customerId || "" };
 }
 
 const defaultPlanTemplateDrafts: Array<Omit<PlanTemplate, "id" | "ownerId" | "teamId" | "updatedAt">> = [
@@ -1312,7 +1883,19 @@ app.get("/api/plan-tasks", requireAuth, (req, res) => {
 });
 
 app.post("/api/plan-tasks", requireAuth, asyncRoute(async (req, res) => {
-  const body = planTaskSchema.parse(req.body);
+  const parsed = planTaskSchema.parse(req.body);
+  const explicitRefError = validatePlanTaskBusinessRefs(req.user!, parsed);
+  if (explicitRefError) {
+    res.status(400).json({ message: explicitRefError });
+    return;
+  }
+  const refs = normalizedPlanTaskRefs(req.user!, parsed);
+  const refError = validatePlanTaskBusinessRefs(req.user!, refs);
+  if (refError) {
+    res.status(400).json({ message: refError });
+    return;
+  }
+  const body = { ...parsed, ...refs };
   const now = new Date().toISOString();
   const store = getStore();
   const task: PlanTask = {
@@ -1336,7 +1919,100 @@ app.patch("/api/plan-tasks/:id", requireAuth, asyncRoute(async (req, res) => {
     res.status(404).json({ message: "计划任务不存在" });
     return;
   }
-  Object.assign(task, body, { updatedAt: new Date().toISOString() });
+  const requestedRefs = {
+    customerId: body.customerId ?? task.customerId,
+    leadId: body.leadId ?? task.leadId,
+    dealId: body.dealId ?? task.dealId
+  };
+  const explicitRefError = validatePlanTaskBusinessRefs(req.user!, requestedRefs);
+  if (explicitRefError) {
+    res.status(400).json({ message: explicitRefError });
+    return;
+  }
+  const refs = normalizedPlanTaskRefs(req.user!, requestedRefs);
+  const refError = validatePlanTaskBusinessRefs(req.user!, refs);
+  if (refError) {
+    res.status(400).json({ message: refError });
+    return;
+  }
+  Object.assign(task, body, refs, { updatedAt: new Date().toISOString() });
+  await store.persist();
+  res.json({ task });
+}));
+
+app.post("/api/plan-tasks/:id/complete", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ result: z.string().trim().min(1).max(2000) }).parse(req.body);
+  const store = getStore();
+  const task = store.planTasks.find((item) => item.id === req.params.id);
+  if (!task || !canSeePersonalData(req.user!, task.ownerId)) {
+    res.status(404).json({ message: "计划任务不存在" });
+    return;
+  }
+  if (task.status === "cancelled") {
+    res.status(409).json({ message: "已取消任务不能标记完成" });
+    return;
+  }
+  const now = new Date().toISOString();
+  Object.assign(task, {
+    status: "done" as const,
+    completionResult: body.result,
+    completedAt: now,
+    cancellationReason: "",
+    cancelledAt: "",
+    updatedAt: now
+  });
+  await store.persist();
+  res.json({ task });
+}));
+
+app.post("/api/plan-tasks/:id/cancel", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ reason: z.string().trim().min(1).max(1000) }).parse(req.body);
+  const store = getStore();
+  const task = store.planTasks.find((item) => item.id === req.params.id);
+  if (!task || !canSeePersonalData(req.user!, task.ownerId)) {
+    res.status(404).json({ message: "计划任务不存在" });
+    return;
+  }
+  if (task.status === "done") {
+    res.status(409).json({ message: "已完成任务不能取消" });
+    return;
+  }
+  const now = new Date().toISOString();
+  Object.assign(task, {
+    status: "cancelled" as const,
+    cancellationReason: body.reason,
+    cancelledAt: now,
+    completionResult: "",
+    completedAt: "",
+    updatedAt: now
+  });
+  await store.persist();
+  res.json({ task });
+}));
+
+app.post("/api/plan-tasks/:id/reschedule", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    dueAt: planTaskDueAtSchema.refine(Boolean, "请选择新的计划时间"),
+    reason: z.string().trim().max(500).default("")
+  }).parse(req.body);
+  const store = getStore();
+  const task = store.planTasks.find((item) => item.id === req.params.id);
+  if (!task || !canSeePersonalData(req.user!, task.ownerId)) {
+    res.status(404).json({ message: "计划任务不存在" });
+    return;
+  }
+  if (task.status === "done" || task.status === "cancelled") {
+    res.status(409).json({ message: "已结束任务不能改期" });
+    return;
+  }
+  const now = new Date().toISOString();
+  Object.assign(task, {
+    rescheduledFrom: task.dueAt || "",
+    dueAt: body.dueAt,
+    rescheduledAt: now,
+    rescheduleReason: body.reason,
+    updatedAt: now
+  });
   await store.persist();
   res.json({ task });
 }));
@@ -1416,21 +2092,28 @@ app.delete("/api/plan-templates/:id", requireAuth, asyncRoute(async (req, res) =
 }));
 
 app.get("/api/deals", requireAuth, (req, res) => {
-  const { deals } = getStore();
+  const { deals, dealEvents, users } = getStore();
   const scoped = deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId));
-  res.json({ deals: scoped });
+  const ids = new Set(scoped.map((deal) => deal.id));
+  const events = dealEvents
+    .filter((event) => ids.has(event.dealId))
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .map((event) => ({ ...event, operatorName: users.find((user) => user.id === event.operatorId)?.name || "未知操作人" }));
+  res.json({ deals: scoped, events });
 });
 
 const dealStages = ["询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"] as const;
 const dealBodySchema = z.object({
-  customerId: z.string().optional().default(""),
+  customerId: z.string().trim().min(1),
   title: z.string().min(1),
-  stage: z.enum(dealStages).default("询盘"),
-  product: z.string().max(200).optional().default(""),
+  product: z.string().trim().min(1).max(200),
   quantity: z.coerce.number().int().nonnegative().default(0),
   unitPrice: z.coerce.number().nonnegative().default(0),
   amount: z.coerce.number().nonnegative().optional(),
-  nextAction: z.string().min(1).default("首次跟进")
+  currency: z.string().trim().regex(/^[A-Z]{3}$/).default("USD"),
+  nextAction: z.string().trim().min(1),
+  nextActionAt: z.string().trim().min(1),
+  expectedCloseAt: z.string().trim().optional().default("")
 });
 
 function calculatedDealAmount(body: { amount?: number; quantity: number; unitPrice: number }) {
@@ -1438,30 +2121,64 @@ function calculatedDealAmount(body: { amount?: number; quantity: number; unitPri
   return Math.round(body.quantity * body.unitPrice * 100) / 100;
 }
 
+function createDealEvent(input: Omit<DealEvent, "id" | "createdAt"> & { createdAt?: string }) {
+  const store = getStore();
+  const event: DealEvent = {
+    ...input,
+    id: `de_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: input.createdAt || new Date().toISOString()
+  };
+  store.dealEvents.unshift(event);
+  return event;
+}
+
+function dealEventTypeForStage(stage: Deal["stage"]): DealEvent["type"] {
+  if (stage === "已报价") return "quote";
+  if (stage === "样品") return "sample";
+  if (stage === "谈判") return "negotiation";
+  if (stage === "成交") return "won";
+  return "stage";
+}
+
 app.post("/api/deals", requireAuth, asyncRoute(async (req, res) => {
   const body = dealBodySchema.parse(req.body);
   const store = getStore();
-  const customerId = body.customerId.trim();
-  const customer = customerId ? store.customers.find((item) => item.id === customerId) : undefined;
-  if (customerId && (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId))) {
+  const customer = store.customers.find((item) => item.id === body.customerId);
+  if (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId)) {
     res.status(404).json({ message: "客户不存在" });
     return;
   }
-  const deal = {
+  const now = new Date().toISOString();
+  const deal: Deal = {
     id: `d_${Date.now()}`,
-    customerId: customer?.id || "",
+    customerId: customer.id,
     title: body.title,
-    stage: body.stage,
-    product: body.product.trim(),
+    stage: "询盘",
+    product: body.product,
     quantity: body.quantity,
     unitPrice: body.unitPrice,
     amount: calculatedDealAmount(body),
-    ownerId: customer?.ownerId || req.user!.id,
-    teamId: customer?.teamId || req.user!.teamId,
+    currency: body.currency,
+    amountType: "estimate",
+    ownerId: customer.ownerId,
+    teamId: customer.teamId,
     nextAction: body.nextAction,
+    nextActionAt: body.nextActionAt,
+    expectedCloseAt: body.expectedCloseAt,
+    stageChangedAt: now,
     archivedAt: undefined
   };
   store.deals.unshift(deal);
+  createDealEvent({
+    dealId: deal.id,
+    type: "created",
+    content: `创建商机并关联客户 ${customer.company}`,
+    operatorId: req.user!.id,
+    toStage: "询盘",
+    nextAction: deal.nextAction,
+    nextActionAt: deal.nextActionAt,
+    createdAt: now
+  });
   await store.persist();
   res.json({ deal });
 }));
@@ -1478,32 +2195,59 @@ app.patch("/api/deals/:id", requireAuth, asyncRoute(async (req, res) => {
     res.status(400).json({ message: "已归档商机不能编辑" });
     return;
   }
-  const customerId = body.customerId.trim();
-  const customer = customerId ? store.customers.find((item) => item.id === customerId) : undefined;
-  if (customerId && (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId))) {
+  const customer = store.customers.find((item) => item.id === body.customerId);
+  if (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId)) {
     res.status(404).json({ message: "客户不存在" });
     return;
   }
-  if (deal.stage === "成交" && body.stage === "丢单") {
-    res.status(400).json({ message: "成交商机请归档，不能编辑为丢单" });
-    return;
-  }
-  deal.customerId = customer?.id || "";
+  const before = {
+    customerId: deal.customerId,
+    amount: deal.amount,
+    currency: deal.currency,
+    nextAction: deal.nextAction,
+    nextActionAt: deal.nextActionAt
+  };
+  deal.customerId = customer.id;
   deal.title = body.title;
-  deal.stage = body.stage;
-  deal.product = body.product.trim();
+  deal.product = body.product;
   deal.quantity = body.quantity;
   deal.unitPrice = body.unitPrice;
   deal.amount = calculatedDealAmount(body);
-  deal.ownerId = customer?.ownerId || deal.ownerId;
-  deal.teamId = customer?.teamId || deal.teamId;
+  deal.currency = body.currency;
+  deal.ownerId = customer.ownerId;
+  deal.teamId = customer.teamId;
   deal.nextAction = body.nextAction;
+  deal.nextActionAt = body.nextActionAt;
+  deal.expectedCloseAt = body.expectedCloseAt;
+  const changes = [
+    before.customerId !== deal.customerId ? `客户改为 ${customer.company}` : "",
+    before.amount !== deal.amount || before.currency !== deal.currency ? `金额更新为 ${deal.currency} ${deal.amount}` : "",
+    before.nextAction !== deal.nextAction || before.nextActionAt !== deal.nextActionAt ? `下一动作更新为“${deal.nextAction}”（${deal.nextActionAt}）` : ""
+  ].filter(Boolean);
+  if (changes.length) {
+    createDealEvent({
+      dealId: deal.id,
+      type: "updated",
+      content: changes.join("；"),
+      operatorId: req.user!.id,
+      nextAction: deal.nextAction,
+      nextActionAt: deal.nextActionAt
+    });
+  }
   await store.persist();
   res.json({ deal });
 }));
 
 app.patch("/api/deals/:id/stage", requireAuth, asyncRoute(async (req, res) => {
-  const schema = z.object({ stage: z.enum(dealStages) });
+  const schema = z.object({
+    stage: z.enum(dealStages),
+    result: z.string().trim().min(1).max(2000),
+    nextAction: z.string().trim().min(1).max(200),
+    nextActionAt: z.string().trim().min(1),
+    expectedCloseAt: z.string().trim().optional().default(""),
+    transitionReason: z.string().trim().optional().default(""),
+    wonReason: z.string().trim().optional().default("")
+  });
   const store = getStore();
   const body = schema.parse(req.body);
   const deal = store.deals.find((item) => item.id === req.params.id);
@@ -1515,13 +2259,96 @@ app.patch("/api/deals/:id/stage", requireAuth, asyncRoute(async (req, res) => {
     res.status(400).json({ message: "已归档商机不能推进阶段" });
     return;
   }
-  if (deal.stage === "成交" && body.stage === "丢单") {
-    res.status(400).json({ message: "成交商机请归档，不再推进为丢单" });
+  if (deal.stage === "成交" || deal.stage === "丢单" || body.stage === "丢单") {
+    res.status(400).json({ message: "关闭商机不能继续推进；丢单请使用丢单复盘" });
     return;
   }
+  const activeStages = dealStages.slice(0, 6);
+  const fromIndex = activeStages.indexOf(deal.stage);
+  const toIndex = activeStages.indexOf(body.stage);
+  const distance = toIndex - fromIndex;
+  const canOverride = req.user!.role === "manager" || req.user!.role === "admin" || req.user!.role === "super_admin";
+  if (distance === 0) {
+    res.status(400).json({ message: "请选择不同的目标阶段" });
+    return;
+  }
+  if (Math.abs(distance) > 1 && (!canOverride || !body.transitionReason)) {
+    res.status(400).json({ message: "默认只能相邻推进；主管跳阶段必须填写原因" });
+    return;
+  }
+  if (distance < 0 && !body.transitionReason) {
+    res.status(400).json({ message: "阶段回退必须填写原因" });
+    return;
+  }
+  if (toIndex >= 2 && !body.expectedCloseAt) {
+    res.status(400).json({ message: "进入已报价及后续阶段必须填写预计成交日期" });
+    return;
+  }
+  if (body.stage === "成交" && !body.wonReason) {
+    res.status(400).json({ message: "确认成交必须填写客户确认依据" });
+    return;
+  }
+  const fromStage = deal.stage;
+  const now = new Date().toISOString();
   deal.stage = body.stage;
+  deal.stageChangedAt = now;
+  deal.nextAction = body.nextAction;
+  deal.nextActionAt = body.nextActionAt;
+  if (body.expectedCloseAt) deal.expectedCloseAt = body.expectedCloseAt;
+  if (toIndex >= 2) deal.amountType = "quoted";
+  if (body.stage === "成交") {
+    deal.amountType = "won";
+    deal.closedAt = now;
+    deal.wonReason = body.wonReason;
+  }
+  createDealEvent({
+    dealId: deal.id,
+    type: dealEventTypeForStage(body.stage),
+    content: `${body.result}${body.transitionReason ? `；变更原因：${body.transitionReason}` : ""}${body.wonReason ? `；成交依据：${body.wonReason}` : ""}`,
+    operatorId: req.user!.id,
+    fromStage,
+    toStage: body.stage,
+    nextAction: body.nextAction,
+    nextActionAt: body.nextActionAt,
+    createdAt: now
+  });
   await store.persist();
   res.json({ deal });
+}));
+
+app.post("/api/deals/:id/events", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    type: z.enum(["follow_up", "quote", "sample", "negotiation", "payment"]),
+    content: z.string().trim().min(1).max(2000),
+    nextAction: z.string().trim().min(1).max(200),
+    nextActionAt: z.string().trim().min(1)
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const deal = store.deals.find((item) => item.id === req.params.id);
+  if (!deal || !canSeeOwner(req.user!, deal.ownerId, deal.teamId)) {
+    res.status(404).json({ message: "商机不存在" });
+    return;
+  }
+  if (deal.archivedAt) {
+    res.status(400).json({ message: "已归档商机不能记录新进展" });
+    return;
+  }
+  deal.nextAction = body.nextAction;
+  deal.nextActionAt = body.nextActionAt;
+  const content = body.type === "payment" ? `${body.content}（销售记录，未经财务核销）` : body.content;
+  const event = createDealEvent({
+    dealId: deal.id,
+    type: body.type,
+    content,
+    operatorId: req.user!.id,
+    fromStage: deal.stage,
+    toStage: deal.stage,
+    nextAction: body.nextAction,
+    nextActionAt: body.nextActionAt
+  });
+  await store.persist();
+  res.json({ deal, event });
 }));
 
 app.post("/api/deals/:id/archive", requireAuth, asyncRoute(async (req, res) => {
@@ -1536,12 +2363,28 @@ app.post("/api/deals/:id/archive", requireAuth, asyncRoute(async (req, res) => {
     return;
   }
   deal.archivedAt = new Date().toISOString();
-  deal.nextAction = "已成交归档，可在商机归档区查询";
+  createDealEvent({
+    dealId: deal.id,
+    type: "archived",
+    content: "成交商机已归档",
+    operatorId: req.user!.id,
+    fromStage: deal.stage,
+    toStage: deal.stage,
+    nextAction: deal.nextAction,
+    nextActionAt: deal.nextActionAt,
+    createdAt: deal.archivedAt
+  });
   await store.persist();
   res.json({ deal });
 }));
 
 app.post("/api/deals/:id/lost", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    category: z.string().trim().min(1).max(80),
+    reason: z.string().trim().min(1).max(2000),
+    revisitAt: z.string().trim().optional().default("")
+  });
+  const body = schema.parse(req.body);
   const store = getStore();
   const deal = store.deals.find((item) => item.id === req.params.id);
   if (!deal || !canSeeOwner(req.user!, deal.ownerId, deal.teamId)) {
@@ -1556,12 +2399,62 @@ app.post("/api/deals/:id/lost", requireAuth, asyncRoute(async (req, res) => {
     res.status(400).json({ message: "成交商机请归档，不能标记丢单" });
     return;
   }
+  const fromStage = deal.stage;
+  const now = new Date().toISOString();
   deal.stage = "丢单";
-  deal.archivedAt = new Date().toISOString();
-  deal.nextAction = "已标记丢单，可在归档/丢单商机中复盘";
+  deal.stageChangedAt = now;
+  deal.closedAt = now;
+  deal.lostReasonCategory = body.category;
+  deal.lostReason = body.reason;
+  deal.revisitAt = body.revisitAt || undefined;
+  deal.nextAction = body.revisitAt ? "按复访日期重新评估需求" : "完成丢单复盘";
+  deal.nextActionAt = body.revisitAt;
+  createDealEvent({
+    dealId: deal.id,
+    type: "lost",
+    content: `${body.category}：${body.reason}${body.revisitAt ? `；计划 ${body.revisitAt} 复访` : ""}`,
+    operatorId: req.user!.id,
+    fromStage,
+    toStage: "丢单",
+    nextAction: deal.nextAction,
+    nextActionAt: deal.nextActionAt,
+    createdAt: now
+  });
   await store.persist();
   res.json({ deal });
 }));
+
+app.get("/api/deals/closed", requireAuth, (req, res) => {
+  const store = getStore();
+  const page = Math.max(1, Number(req.query.page || 1));
+  const pageSize = Math.min(50, Math.max(5, Number(req.query.pageSize || 20)));
+  const keyword = String(req.query.keyword || "").trim().toLowerCase();
+  const status = String(req.query.status || "all");
+  const month = String(req.query.month || "");
+  const filtered = store.deals
+    .filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId) && (deal.stage === "成交" || deal.stage === "丢单"))
+    .filter((deal) => status === "all" || deal.stage === status)
+    .filter((deal) => {
+      const customer = store.customers.find((item) => item.id === deal.customerId);
+      const text = `${deal.title} ${deal.product} ${customer?.company || ""} ${customer?.country || ""} ${deal.lostReasonCategory || ""}`.toLowerCase();
+      return !keyword || text.includes(keyword);
+    })
+    .filter((deal) => !month || String(deal.closedAt || deal.archivedAt || "").slice(0, 7) === month)
+    .sort((left, right) => String(right.closedAt || right.archivedAt || "").localeCompare(String(left.closedAt || left.archivedAt || "")));
+  const start = (page - 1) * pageSize;
+  const deals = filtered.slice(start, start + pageSize);
+  res.json({
+    deals,
+    total: filtered.length,
+    page,
+    pageSize,
+    counts: {
+      won: filtered.filter((deal) => deal.stage === "成交").length,
+      lost: filtered.filter((deal) => deal.stage === "丢单").length,
+      revisit: filtered.filter((deal) => deal.stage === "丢单" && deal.revisitAt).length
+    }
+  });
+});
 
 function canManageCommissionRules(user?: SessionUser) {
   return user?.role === "admin" || user?.role === "super_admin";
@@ -1636,12 +2529,31 @@ function activeCommissionRule(productId: string, month: string) {
 
 function calculateCommissionAmount(record: MonthlySalesRecord, product?: CommissionProduct, rule?: CommissionRule) {
   const sales = Number(record.settlementAmount || record.salesAmount || 0);
-  if (!rule || rule.ruleType === "none") return { amount: 0, snapshot: { reason: "无启用规则" } };
-  if (rule.ruleType === "rate") return { amount: roundMoneyValue(sales * Number(rule.rate || 0)), snapshot: rule };
-  if (rule.ruleType === "fixed") return { amount: roundMoneyValue(Number(rule.fixedAmount || 0) * Number(record.quantity || 1)), snapshot: rule };
+  const inputSnapshot = {
+    recordId: record.id,
+    originalAmount: record.salesAmount,
+    originalCurrency: record.currency,
+    exchangeRate: record.exchangeRate,
+    exchangeRateDate: record.exchangeRateDate,
+    exchangeRateSource: record.exchangeRateSource,
+    settlementCurrency: record.settlementCurrency,
+    settlementAmount: sales,
+    basisType: record.basisType,
+    basisDate: record.basisDate
+  };
+  if (!rule || rule.ruleType === "none") return { amount: 0, snapshot: { input: inputSnapshot, rule: rule || null, formula: "未匹配启用规则", reason: "无启用规则" } };
+  if (rule.ruleType === "rate") {
+    const amount = roundMoneyValue(sales * Number(rule.rate || 0));
+    return { amount, snapshot: { input: inputSnapshot, rule, formula: `${sales} × ${Number(rule.rate || 0) * 100}% = ${amount}` } };
+  }
+  if (rule.ruleType === "fixed") {
+    const amount = roundMoneyValue(Number(rule.fixedAmount || 0) * Number(record.quantity || 1));
+    return { amount, snapshot: { input: inputSnapshot, rule, formula: `${record.quantity} × ${Number(rule.fixedAmount || 0)} = ${amount}` } };
+  }
   if (rule.ruleType === "gross_profit") {
     const cost = Number(product?.costPrice || 0) * Number(record.quantity || 0);
-    return { amount: roundMoneyValue(Math.max(0, sales - cost) * Number(rule.grossProfitRate || 0)), snapshot: { ...rule, cost } };
+    const amount = roundMoneyValue(Math.max(0, sales - cost) * Number(rule.grossProfitRate || 0));
+    return { amount, snapshot: { input: inputSnapshot, rule, cost, formula: `max(0, ${sales} - ${cost}) × ${Number(rule.grossProfitRate || 0) * 100}% = ${amount}` } };
   }
   if (rule.ruleType === "tier") {
     let rate = 0;
@@ -1652,9 +2564,10 @@ function calculateCommissionAmount(record: MonthlySalesRecord, product?: Commiss
     } catch {
       rate = 0;
     }
-    return { amount: roundMoneyValue(sales * rate), snapshot: { ...rule, appliedRate: rate } };
+    const amount = roundMoneyValue(sales * rate);
+    return { amount, snapshot: { input: inputSnapshot, rule, appliedRate: rate, formula: `${sales} × ${rate * 100}% = ${amount}` } };
   }
-  return { amount: 0, snapshot: rule };
+  return { amount: 0, snapshot: { input: inputSnapshot, rule, formula: "不计提" } };
 }
 
 function rebuildCalculationTotals(calculation: CommissionCalculation) {
@@ -1670,8 +2583,9 @@ function rebuildCalculationTotals(calculation: CommissionCalculation) {
 
 function ensureCalculation(month: string, ownerId: string, teamId: string) {
   const store = getStore();
-  let calculation = store.commissionCalculations.find((item) => item.month === month && item.ownerId === ownerId);
+  let calculation = store.commissionCalculations.find((item) => item.month === month && item.ownerId === ownerId && item.isCurrent !== false);
   if (!calculation) {
+    const version = Math.max(0, ...store.commissionCalculations.filter((item) => item.month === month && item.ownerId === ownerId).map((item) => item.version || 1)) + 1;
     calculation = {
       id: `cc_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`,
       month,
@@ -1682,6 +2596,8 @@ function ensureCalculation(month: string, ownerId: string, teamId: string) {
       manualAdjustment: 0,
       finalCommission: 0,
       status: "pending",
+      version,
+      isCurrent: true,
       calculatedAt: "",
       reviewedBy: "",
       reviewedAt: "",
@@ -1705,16 +2621,33 @@ const commissionProductSchema = z.object({
   remark: z.string().optional().default("")
 });
 
-const commissionRuleSchema = z.object({
+function validateCommissionTiers(tierJson: string, context: z.RefinementCtx) {
+  try {
+    const tiers = JSON.parse(tierJson || "[]") as Array<{ from?: number; to?: number; rate?: number }>;
+    if (!Array.isArray(tiers) || !tiers.length || tiers.some((tier) => Number(tier.rate) < 0 || Number(tier.rate) > 1)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["tierJson"], message: "阶梯费率必须在 0% 到 100% 之间" });
+    }
+  } catch {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["tierJson"], message: "阶梯规则格式不正确" });
+  }
+}
+
+const commissionRuleBaseSchema = z.object({
   ruleType: z.enum(["rate", "fixed", "tier", "gross_profit", "none"]),
-  rate: z.coerce.number().nonnegative().default(0),
+  rate: z.coerce.number().min(0).max(1).default(0),
   fixedAmount: z.coerce.number().nonnegative().default(0),
   tierJson: z.string().optional().default(""),
-  grossProfitRate: z.coerce.number().nonnegative().default(0),
+  grossProfitRate: z.coerce.number().min(0).max(1).default(0),
   effectiveFrom: z.string().optional().default(currentMonthValue()),
   effectiveTo: z.string().optional().default(""),
   enabled: z.coerce.boolean().default(true),
   remark: z.string().optional().default("")
+});
+const commissionRuleSchema = commissionRuleBaseSchema.superRefine((value, context) => {
+  if (value.ruleType === "tier") validateCommissionTiers(value.tierJson, context);
+});
+const commissionRulePatchSchema = commissionRuleBaseSchema.partial().superRefine((value, context) => {
+  if (value.ruleType === "tier") validateCommissionTiers(value.tierJson || "", context);
 });
 
 const salesRecordSchema = z.object({
@@ -1729,7 +2662,12 @@ const salesRecordSchema = z.object({
   salesAmount: z.coerce.number().nonnegative().optional(),
   currency: z.string().optional().default("USD"),
   exchangeRate: z.coerce.number().positive().default(1),
-  status: z.enum(["draft", "confirmed", "reviewed", "locked"]).default("draft"),
+  exchangeRateDate: z.string().optional().default(""),
+  exchangeRateSource: z.enum(["pending", "manual", "finance"]).default("manual"),
+  settlementCurrency: z.literal("CNY").default("CNY"),
+  basisType: z.enum(["deal_amount", "receipt"]).default("receipt"),
+  basisDate: z.string().optional().default(""),
+  status: z.enum(["draft", "confirmed"]).default("draft"),
   editNote: z.string().optional().default("")
 });
 
@@ -1799,6 +2737,9 @@ app.post("/api/commission/products/:id/rules", requireAuth, asyncRoute(async (re
     createdBy: req.user!.id,
     createdAt: new Date().toISOString()
   };
+  if (rule.enabled) {
+    store.commissionRules.filter((item) => item.productId === product.id && item.enabled).forEach((item) => { item.enabled = false; });
+  }
   store.commissionRules.unshift(rule);
   await store.persist();
   res.json({ rule });
@@ -1809,12 +2750,33 @@ app.patch("/api/commission/rules/:id", requireAuth, asyncRoute(async (req, res) 
     res.status(403).json({ message: "只有管理员和超级管理员可以维护提成规则" });
     return;
   }
-  const body = commissionRuleSchema.partial().parse(req.body);
+  const body = commissionRulePatchSchema.parse(req.body);
   const store = getStore();
   const rule = store.commissionRules.find((item) => item.id === req.params.id);
   if (!rule) {
     res.status(404).json({ message: "提成规则不存在" });
     return;
+  }
+  const alreadyUsed = store.commissionItems.some((item) => item.productId === rule.productId && item.ruleSnapshotJson.includes(`"id":"${rule.id}"`));
+  if (alreadyUsed && Object.keys(body).some((key) => key !== "enabled")) {
+    rule.enabled = false;
+    const nextRule: CommissionRule = {
+      ...rule,
+      ...body,
+      id: `cr_${Date.now()}`,
+      createdBy: req.user!.id,
+      createdAt: new Date().toISOString()
+    };
+    if (nextRule.enabled) {
+      store.commissionRules.filter((item) => item.productId === rule.productId && item.id !== rule.id).forEach((item) => { item.enabled = false; });
+    }
+    store.commissionRules.unshift(nextRule);
+    await store.persist();
+    res.json({ rule: nextRule, replacedRuleId: rule.id });
+    return;
+  }
+  if (body.enabled) {
+    store.commissionRules.filter((item) => item.productId === rule.productId && item.id !== rule.id).forEach((item) => { item.enabled = false; });
   }
   Object.assign(rule, body);
   await store.persist();
@@ -1866,9 +2828,14 @@ app.post("/api/commission/sales-records/sync-from-deals", requireAuth, asyncRout
       quantity: Number(deal.quantity || 0),
       unitPrice: Number(deal.unitPrice || 0),
       salesAmount,
-      currency: product?.currency || "USD",
-      exchangeRate: 1,
+      currency: deal.currency || product?.currency || "USD",
+      exchangeRate: deal.currency === "CNY" ? 1 : 1,
+      exchangeRateDate: "",
+      exchangeRateSource: deal.currency === "CNY" ? "finance" : "pending",
+      settlementCurrency: "CNY",
       settlementAmount: salesAmount,
+      basisType: "deal_amount",
+      basisDate: deal.archivedAt?.slice(0, 10) || "",
       dealArchivedAt: deal.archivedAt || "",
       sourceType: "deal",
       status: "draft",
@@ -1914,7 +2881,12 @@ app.post("/api/commission/sales-records", requireAuth, asyncRoute(async (req, re
     salesAmount,
     currency: body.currency,
     exchangeRate: body.exchangeRate,
+    exchangeRateDate: body.exchangeRateDate,
+    exchangeRateSource: body.exchangeRateSource,
+    settlementCurrency: body.settlementCurrency,
     settlementAmount: roundMoneyValue(salesAmount * body.exchangeRate),
+    basisType: body.basisType,
+    basisDate: body.basisDate,
     dealArchivedAt: "",
     sourceType: "manual",
     status: body.status,
@@ -1939,12 +2911,12 @@ app.patch("/api/commission/sales-records/:id", requireAuth, asyncRoute(async (re
     res.status(404).json({ message: "销售记录不存在" });
     return;
   }
-  if (record.status === "locked" || store.commissionCalculations.some((item) => item.month === record.month && item.ownerId === record.ownerId && item.status === "locked")) {
+  if (record.status === "locked" || store.commissionCalculations.some((item) => item.month === record.month && item.ownerId === record.ownerId && item.isCurrent !== false && item.status === "locked")) {
     res.status(400).json({ message: "已锁定记录不能编辑" });
     return;
   }
   const updates: Partial<MonthlySalesRecord> = {};
-  const auditFields: Array<keyof MonthlySalesRecord> = ["customerName", "productName", "quantity", "unitPrice", "salesAmount", "currency", "exchangeRate", "status", "productId", "customerId"];
+  const auditFields: Array<keyof MonthlySalesRecord> = ["customerName", "productName", "quantity", "unitPrice", "salesAmount", "currency", "exchangeRate", "exchangeRateDate", "exchangeRateSource", "basisType", "basisDate", "status", "productId", "customerId"];
   for (const field of auditFields) {
     if (body[field as keyof typeof body] !== undefined) {
       const nextValue = body[field as keyof typeof body] as never;
@@ -1967,7 +2939,9 @@ app.patch("/api/commission/sales-records/:id", requireAuth, asyncRoute(async (re
   }
   Object.assign(record, updates);
   if (body.quantity !== undefined || body.unitPrice !== undefined || body.salesAmount !== undefined || body.exchangeRate !== undefined) {
-    record.salesAmount = roundMoneyValue(record.salesAmount || record.quantity * record.unitPrice);
+    record.salesAmount = body.salesAmount !== undefined
+      ? roundMoneyValue(body.salesAmount)
+      : roundMoneyValue(record.quantity * record.unitPrice);
     record.settlementAmount = roundMoneyValue(record.salesAmount * record.exchangeRate);
   }
   record.edited = true;
@@ -1989,6 +2963,23 @@ app.post("/api/commission/sales-records/:id/confirm", requireAuth, asyncRoute(as
   }
   if (record.status === "locked") {
     res.status(400).json({ message: "已锁定记录不能重复确认" });
+    return;
+  }
+  if (store.commissionCalculations.some((item) =>
+    item.month === record.month
+    && item.ownerId === record.ownerId
+    && item.isCurrent !== false
+    && item.status === "locked"
+  )) {
+    res.status(400).json({ message: "本月提成单已锁定，请先解锁后再确认新记录" });
+    return;
+  }
+  if (record.currency !== "CNY" && (record.exchangeRateSource === "pending" || !record.exchangeRateDate)) {
+    res.status(400).json({ message: "外币记录确认前必须填写汇率日期，并将汇率来源标记为手工或财务" });
+    return;
+  }
+  if (!record.basisDate) {
+    res.status(400).json({ message: "确认前必须填写计提依据日期" });
     return;
   }
   record.status = "confirmed";
@@ -2016,15 +3007,17 @@ app.get("/api/commission/calculations", requireAuth, (req, res) => {
     return;
   }
   const allowedOwners = new Set(commissionOwnersFor(req.user!).map((item) => item.id));
-  const calculations = getStore().commissionCalculations.filter((calculation) => {
+  const allCalculations = getStore().commissionCalculations.filter((calculation) => {
     if (calculation.month !== month) return false;
     if (scopedOwnerId && calculation.ownerId !== scopedOwnerId) return false;
     if (!scopedOwnerId && canReviewCommission(req.user) && !allowedOwners.has(calculation.ownerId)) return false;
     return canAccessCommissionOwner(req.user!, calculation.ownerId);
   });
+  const calculations = allCalculations.filter((calculation) => calculation.isCurrent !== false);
   const ids = new Set(calculations.map((item) => item.id));
   res.json({
     calculations,
+    historyCalculations: allCalculations.filter((calculation) => calculation.isCurrent === false),
     items: getStore().commissionItems.filter((item) => ids.has(item.calculationId)),
     canReview: canReviewCommission(req.user),
     canSelectOwner: canReviewCommission(req.user),
@@ -2053,7 +3046,10 @@ app.post("/api/commission/calculations/recalculate", requireAuth, asyncRoute(asy
   const changedCalculations: CommissionCalculation[] = [];
   for (const [ownerId, ownerRecords] of byOwner.entries()) {
     const calculation = ensureCalculation(month, ownerId, ownerRecords[0].teamId);
-    if (calculation.status === "locked") continue;
+    if (calculation.status === "locked" || calculation.status === "reviewed") {
+      res.status(409).json({ message: "已复核或已锁定的提成单不能覆盖重算；如需修正，请先解锁生成新版本" });
+      return;
+    }
     store.commissionItems = store.commissionItems.filter((item) => item.calculationId !== calculation.id || item.sourceType !== "auto");
     ownerRecords.forEach((record, index) => {
       const product = store.commissionProducts.find((item) => item.id === record.productId) || findCommissionProduct(record.productName);
@@ -2100,7 +3096,8 @@ app.post("/api/commission/calculations/:id/manual-item", requireAuth, asyncRoute
   const body = z.object({
     itemType: z.enum(["bonus", "deduction", "subsidy", "refund", "special", "other"]).default("other"),
     manualAmount: z.coerce.number().default(0),
-    remark: z.string().min(1)
+    recordId: z.string().optional().default(""),
+    remark: z.string().trim().min(2)
   }).parse(req.body);
   const store = getStore();
   const calculation = store.commissionCalculations.find((item) => item.id === req.params.id);
@@ -2118,7 +3115,7 @@ app.post("/api/commission/calculations/:id/manual-item", requireAuth, asyncRoute
   const item: CommissionItem = {
     id: `ci_manual_${Date.now()}`,
     calculationId: calculation.id,
-    recordId: "",
+    recordId: body.recordId,
     productId: "",
     itemType: body.itemType,
     sourceType: "manual",
@@ -2137,6 +3134,82 @@ app.post("/api/commission/calculations/:id/manual-item", requireAuth, asyncRoute
   res.json({ calculation, item });
 }));
 
+app.post("/api/commission/calculations/:id/review", requireAuth, asyncRoute(async (req, res) => {
+  if (!canReviewCommission(req.user)) {
+    res.status(403).json({ message: "只有管理员和超级管理员可以复核提成单" });
+    return;
+  }
+  const store = getStore();
+  const calculation = store.commissionCalculations.find((item) => item.id === req.params.id && item.isCurrent !== false);
+  if (!calculation || !canAccessCommissionOwner(req.user!, calculation.ownerId)) {
+    res.status(404).json({ message: "提成计算单不存在" });
+    return;
+  }
+  if (calculation.status !== "calculated") {
+    res.status(400).json({ message: "只有已计算的提成单可以复核" });
+    return;
+  }
+  calculation.status = "reviewed";
+  calculation.reviewedBy = req.user!.id;
+  calculation.reviewedAt = new Date().toISOString();
+  store.monthlySalesRecords
+    .filter((record) => record.month === calculation.month && record.ownerId === calculation.ownerId && record.status === "confirmed")
+    .forEach((record) => { record.status = "reviewed"; record.updatedAt = new Date().toISOString(); });
+  await store.persist();
+  res.json({ calculation });
+}));
+
+app.post("/api/commission/calculations/:id/lock", requireAuth, asyncRoute(async (req, res) => {
+  if (!canReviewCommission(req.user)) {
+    res.status(403).json({ message: "只有管理员和超级管理员可以锁定提成单" });
+    return;
+  }
+  const store = getStore();
+  const calculation = store.commissionCalculations.find((item) => item.id === req.params.id && item.isCurrent !== false);
+  if (!calculation || !canAccessCommissionOwner(req.user!, calculation.ownerId)) {
+    res.status(404).json({ message: "提成计算单不存在" });
+    return;
+  }
+  if (calculation.status !== "reviewed") {
+    res.status(400).json({ message: "提成单必须先复核再锁定" });
+    return;
+  }
+  calculation.status = "locked";
+  calculation.lockedBy = req.user!.id;
+  calculation.lockedAt = new Date().toISOString();
+  store.monthlySalesRecords
+    .filter((record) => record.month === calculation.month && record.ownerId === calculation.ownerId && record.status === "reviewed")
+    .forEach((record) => { record.status = "locked"; record.updatedAt = new Date().toISOString(); });
+  await store.persist();
+  res.json({ calculation });
+}));
+
+app.post("/api/commission/calculations/:id/unlock", requireAuth, asyncRoute(async (req, res) => {
+  if (!canReviewCommission(req.user)) {
+    res.status(403).json({ message: "只有管理员和超级管理员可以解锁提成单" });
+    return;
+  }
+  const body = z.object({ reason: z.string().trim().min(4) }).parse(req.body);
+  const store = getStore();
+  const calculation = store.commissionCalculations.find((item) => item.id === req.params.id && item.isCurrent !== false);
+  if (!calculation || !canAccessCommissionOwner(req.user!, calculation.ownerId)) {
+    res.status(404).json({ message: "提成计算单不存在" });
+    return;
+  }
+  if (calculation.status !== "locked") {
+    res.status(400).json({ message: "只有已锁定提成单可以解锁" });
+    return;
+  }
+  calculation.isCurrent = false;
+  calculation.unlockReason = `${body.reason}；操作人：${req.user!.name}；时间：${new Date().toISOString()}`;
+  const nextCalculation = ensureCalculation(calculation.month, calculation.ownerId, calculation.teamId);
+  store.monthlySalesRecords
+    .filter((record) => record.month === calculation.month && record.ownerId === calculation.ownerId && record.status === "locked")
+    .forEach((record) => { record.status = "confirmed"; record.updatedAt = new Date().toISOString(); });
+  await store.persist();
+  res.json({ calculation: nextCalculation, historyCalculation: calculation });
+}));
+
 app.post("/api/commission/export", requireAuth, asyncRoute(async (req, res) => {
   const body = z.object({
     month: z.string().regex(/^\d{4}-\d{2}$/).default(currentMonthValue()),
@@ -2152,8 +3225,10 @@ app.post("/api/commission/export", requireAuth, asyncRoute(async (req, res) => {
     return;
   }
   const calculationByOwner = new Map(store.commissionCalculations.filter((item) => item.month === body.month).map((item) => [item.ownerId, item]));
+  const itemByRecord = new Map(store.commissionItems.filter((item) => item.recordId).map((item) => [item.recordId, item]));
   const rows = records.map((record) => {
     const calculation = calculationByOwner.get(record.ownerId);
+    const commissionItem = itemByRecord.get(record.id);
     const owner = store.users.find((item) => item.id === record.ownerId);
     return {
       month: record.month,
@@ -2162,12 +3237,35 @@ app.post("/api/commission/export", requireAuth, asyncRoute(async (req, res) => {
       productName: record.productName,
       quantity: record.quantity,
       unitPrice: record.unitPrice,
+      currency: record.currency,
       salesAmount: record.salesAmount,
+      exchangeRate: record.exchangeRate,
+      exchangeRateDate: record.exchangeRateDate,
+      exchangeRateSource: record.exchangeRateSource,
+      settlementCurrency: record.settlementCurrency,
       settlementAmount: record.settlementAmount,
+      basisType: record.basisType,
+      basisDate: record.basisDate,
       status: record.status,
       edited: record.edited,
-      finalCommission: calculation?.finalCommission || 0,
+      recordCommission: commissionItem?.finalAmount || 0,
+      calculationStatus: calculation?.status || "pending",
       editNote: record.editNote
+    };
+  });
+  const summaryRows = [...new Set(records.map((record) => record.ownerId))].map((recordOwnerId) => {
+    const calculation = calculationByOwner.get(recordOwnerId);
+    const owner = store.users.find((item) => item.id === recordOwnerId);
+    return {
+      month: body.month,
+      ownerName: owner?.name || recordOwnerId,
+      settlementCurrency: "CNY",
+      salesAmount: calculation?.salesAmount || 0,
+      autoCommission: calculation?.autoCommission || 0,
+      manualAdjustment: calculation?.manualAdjustment || 0,
+      finalCommission: calculation?.finalCommission || 0,
+      status: calculation?.status || "pending",
+      version: calculation?.version || 1
     };
   });
   const exportJob = {
@@ -2182,18 +3280,27 @@ app.post("/api/commission/export", requireAuth, asyncRoute(async (req, res) => {
   };
   store.commissionExports.unshift(exportJob);
   await store.persist();
-  res.json({ exportJob, rows });
+  res.json({ exportJob, rows, summaryRows });
 }));
 
 app.post("/api/todos/:id/complete", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({ completionResult: z.string().trim().max(255).optional() });
+  const body = schema.parse(req.body || {});
   const store = getStore();
   const todo = store.todos.find((item) => item.id === req.params.id);
   if (!todo || !canSeePersonalData(req.user!, todo.ownerId)) {
     res.status(404).json({ message: "待办不存在" });
     return;
   }
+  if (todo.reminderRuleId && !body.completionResult) {
+    res.status(400).json({ message: "请填写本次跟进处理结果" });
+    return;
+  }
   todo.done = true;
   todo.status = "pending";
+  todo.completedAt = new Date().toISOString();
+  todo.completedBy = req.user!.id;
+  todo.completionResult = body.completionResult || todo.completionResult;
   await store.persist();
   res.json({ todo });
 }));
@@ -2234,6 +3341,9 @@ app.patch("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
     pinState: z.enum(["top", "bottom", ""]).optional(),
     sortOrder: z.number().optional(),
     historyAt: z.string().optional()
+    ,
+    snoozeReason: z.string().trim().max(255).optional(),
+    completionResult: z.string().trim().max(255).optional()
   });
   const body = schema.parse(req.body);
   const store = getStore();
@@ -2243,8 +3353,21 @@ app.patch("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
     return;
   }
   if (typeof body.done === "boolean") {
+    if (body.done && todo.reminderRuleId && !body.completionResult) {
+      res.status(400).json({ message: "请填写本次跟进处理结果" });
+      return;
+    }
     todo.done = body.done;
-    if (body.done) todo.status = "pending";
+    if (body.done) {
+      todo.status = "pending";
+      todo.completedAt = new Date().toISOString();
+      todo.completedBy = req.user!.id;
+      todo.completionResult = body.completionResult || "";
+    } else {
+      todo.completedAt = "";
+      todo.completedBy = "";
+      todo.completionResult = "";
+    }
   }
   if (body.status) {
     todo.status = todo.done ? "pending" : body.status;
@@ -2252,7 +3375,19 @@ app.patch("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
   if (body.title) todo.title = body.title;
   if (body.type) todo.type = body.type;
   if (body.priority) todo.priority = body.priority;
-  if (body.dueAt !== undefined) todo.dueAt = body.dueAt;
+  if (body.dueAt !== undefined) {
+    if (todo.reminderRuleId && body.dueAt !== todo.dueAt) {
+      if (!body.snoozeReason) {
+        res.status(400).json({ message: "延期提醒请填写原因" });
+        return;
+      }
+      todo.snoozedFrom = todo.dueAt;
+      todo.snoozeReason = body.snoozeReason;
+      todo.snoozeCount = (todo.snoozeCount || 0) + 1;
+      todo.snoozedBy = req.user!.id;
+    }
+    todo.dueAt = body.dueAt;
+  }
   if (body.related !== undefined) todo.related = body.related;
   if (body.pinState !== undefined) {
     todo.pinState = body.pinState;
@@ -2305,6 +3440,10 @@ app.delete("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
   const todo = index >= 0 ? store.todos[index] : null;
   if (!todo || !canSeePersonalData(req.user!, todo.ownerId)) {
     res.status(404).json({ message: "待办不存在" });
+    return;
+  }
+  if (todo.reminderRuleId) {
+    res.status(400).json({ message: "跟进提醒需完成或标记无需处理，不能直接删除" });
     return;
   }
   store.todos.splice(index, 1);
@@ -2360,7 +3499,8 @@ app.patch("/api/problems/:id/status", requireAuth, asyncRoute(async (req, res) =
 
 app.get("/api/memos", requireAuth, (req, res) => {
   const { memos } = getStore();
-  const scoped = memos.filter((memo) => canSeePersonalData(req.user!, memo.ownerId));
+  const trash = req.query.trash === "true";
+  const scoped = memos.filter((memo) => canSeePersonalData(req.user!, memo.ownerId) && (trash ? Boolean(memo.deletedAt) : !memo.deletedAt));
   res.json({ memos: scoped });
 });
 
@@ -2370,17 +3510,38 @@ app.post("/api/memos", requireAuth, asyncRoute(async (req, res) => {
     content: z.string().default(""),
     category: z.string().min(1).default("客户备忘"),
     tags: z.string().default(""),
+    customerId: z.string().trim().default(""),
+    dealId: z.string().trim().default(""),
     pinned: z.boolean().default(false)
   });
   const body = schema.parse(req.body);
   const store = getStore();
+  let customerId = body.customerId;
+  if (body.dealId) {
+    const deal = store.deals.find((item) => item.id === body.dealId && canSeeOwner(req.user!, item.ownerId, item.teamId));
+    if (!deal) {
+      res.status(400).json({ message: "关联商机不存在或无权访问" });
+      return;
+    }
+    if (customerId && customerId !== deal.customerId) {
+      res.status(400).json({ message: "关联客户与商机不一致" });
+      return;
+    }
+    customerId = deal.customerId;
+  }
+  if (customerId && !store.customers.some((item) => item.id === customerId && canSeeOwner(req.user!, item.ownerId, item.teamId))) {
+    res.status(400).json({ message: "关联客户不存在或无权访问" });
+    return;
+  }
   const memo = {
     id: `m_${Date.now()}`,
     ownerId: req.user!.id,
     teamId: req.user!.teamId,
     archived: false,
+    deletedAt: "",
     updatedAt: new Date().toISOString(),
-    ...body
+    ...body,
+    customerId
   };
   store.memos.unshift(memo);
   await store.persist();
@@ -2393,20 +3554,44 @@ app.patch("/api/memos/:id", requireAuth, asyncRoute(async (req, res) => {
     content: z.string().optional(),
     category: z.string().min(1).optional(),
     tags: z.string().optional(),
+    customerId: z.string().trim().optional(),
+    dealId: z.string().trim().optional(),
     pinned: z.boolean().optional(),
     archived: z.boolean().optional()
   });
   const body = schema.parse(req.body);
   const store = getStore();
   const memo = store.memos.find((item) => item.id === req.params.id);
-  if (!memo || !canSeePersonalData(req.user!, memo.ownerId)) {
+  if (!memo || !canSeePersonalData(req.user!, memo.ownerId) || memo.deletedAt) {
     res.status(404).json({ message: "备忘录不存在" });
+    return;
+  }
+  const hasCustomerId = Object.prototype.hasOwnProperty.call(body, "customerId");
+  const hasDealId = Object.prototype.hasOwnProperty.call(body, "dealId");
+  let customerId = hasCustomerId ? body.customerId || "" : memo.customerId;
+  const dealId = hasDealId ? body.dealId || "" : memo.dealId;
+  if (dealId) {
+    const deal = store.deals.find((item) => item.id === dealId && canSeeOwner(req.user!, item.ownerId, item.teamId));
+    if (!deal) {
+      res.status(400).json({ message: "关联商机不存在或无权访问" });
+      return;
+    }
+    if (customerId && customerId !== deal.customerId) {
+      res.status(400).json({ message: "关联客户与商机不一致" });
+      return;
+    }
+    customerId = deal.customerId;
+  }
+  if (customerId && !store.customers.some((item) => item.id === customerId && canSeeOwner(req.user!, item.ownerId, item.teamId))) {
+    res.status(400).json({ message: "关联客户不存在或无权访问" });
     return;
   }
   if (typeof body.title === "string") memo.title = body.title;
   if (typeof body.content === "string") memo.content = body.content;
   if (typeof body.category === "string") memo.category = body.category;
   if (typeof body.tags === "string") memo.tags = body.tags;
+  if (hasCustomerId || hasDealId) memo.customerId = customerId;
+  if (hasDealId) memo.dealId = dealId;
   if (typeof body.pinned === "boolean") memo.pinned = body.pinned;
   if (typeof body.archived === "boolean") memo.archived = body.archived;
   memo.updatedAt = new Date().toISOString();
@@ -2416,10 +3601,38 @@ app.patch("/api/memos/:id", requireAuth, asyncRoute(async (req, res) => {
 
 app.delete("/api/memos/:id", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
-  const index = store.memos.findIndex((item) => item.id === req.params.id);
-  const memo = index >= 0 ? store.memos[index] : null;
+  const memo = store.memos.find((item) => item.id === req.params.id);
   if (!memo || !canSeePersonalData(req.user!, memo.ownerId)) {
     res.status(404).json({ message: "备忘录不存在" });
+    return;
+  }
+  if (!memo.deletedAt) {
+    memo.deletedAt = new Date().toISOString();
+    memo.updatedAt = memo.deletedAt;
+  }
+  await store.persist();
+  res.json({ ok: true, memo });
+}));
+
+app.post("/api/memos/:id/restore", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const memo = store.memos.find((item) => item.id === req.params.id);
+  if (!memo || !canSeePersonalData(req.user!, memo.ownerId) || !memo.deletedAt) {
+    res.status(404).json({ message: "已删除备忘录不存在" });
+    return;
+  }
+  memo.deletedAt = "";
+  memo.updatedAt = new Date().toISOString();
+  await store.persist();
+  res.json({ memo });
+}));
+
+app.delete("/api/memos/:id/permanent", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const index = store.memos.findIndex((item) => item.id === req.params.id);
+  const memo = index >= 0 ? store.memos[index] : null;
+  if (!memo || !canSeePersonalData(req.user!, memo.ownerId) || !memo.deletedAt) {
+    res.status(404).json({ message: "已删除备忘录不存在" });
     return;
   }
   store.memos.splice(index, 1);
@@ -2862,16 +4075,22 @@ app.post("/api/reminders", requireAuth, asyncRoute(async (req, res) => {
     title: z.string().min(1).optional(),
     rule: z.string().min(1).optional(),
     dueAt: z.string().min(1).default("今天 17:00"),
-    channel: z.enum(["站内", "邮件", "企业微信"]).default("企业微信"),
+    channel: z.literal("站内").default("站内"),
     ruleType: z.enum(["quote_no_reply", "sample_feedback", "inactive_customer", "high_value_revisit", "custom_due"]).default("quote_no_reply"),
     targetStage: z.string().default("已报价"),
     days: z.number().int().min(0).max(90).default(3),
     priority: z.enum(["high", "medium", "normal"]).default("medium"),
-    enabled: z.boolean().default(true)
+    enabled: z.boolean().default(true),
+    targetOwnerId: z.string().optional()
   });
   const body = schema.parse(req.body);
   const store = getStore();
-  const generatedCount = matchReminderRule(req.user!, body).length;
+  const targetOwnerId = resolveReminderTargetOwner(req.user!, body.targetOwnerId);
+  if (!targetOwnerId) {
+    res.status(400).json({ message: "提醒规则目标负责人无效" });
+    return;
+  }
+  const generatedCount = matchReminderRule(targetOwnerId, body).length;
   const reminder = {
     id: `r_${Date.now()}`,
     title: body.title || reminderRuleTitle(body.ruleType),
@@ -2886,12 +4105,57 @@ app.post("/api/reminders", requireAuth, asyncRoute(async (req, res) => {
     generatedCount,
     ownerId: req.user!.id,
     teamId: req.user!.teamId,
-    status: "pending" as const
+    targetOwnerId,
+    status: body.enabled ? "enabled" as const : "disabled" as const
   };
   store.reminders.unshift(reminder);
   await store.persist();
   res.json({ reminder });
 }));
+
+app.patch("/api/reminders/:id", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    title: z.string().min(1).optional(),
+    rule: z.string().min(1).optional(),
+    dueAt: z.string().min(1).optional(),
+    ruleType: z.enum(["quote_no_reply", "sample_feedback", "inactive_customer", "high_value_revisit", "custom_due"]).optional(),
+    targetStage: z.string().optional(),
+    days: z.number().int().min(0).max(90).optional(),
+    priority: z.enum(["high", "medium", "normal"]).optional(),
+    enabled: z.boolean().optional(),
+    targetOwnerId: z.string().optional()
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const reminder = store.reminders.find((item) => item.id === req.params.id);
+  if (!reminder || !canSeeOwner(req.user!, reminder.ownerId, reminder.teamId)) {
+    res.status(404).json({ message: "提醒规则不存在" });
+    return;
+  }
+  const targetOwnerId = body.targetOwnerId === undefined ? (reminder.targetOwnerId || reminder.ownerId) : resolveReminderTargetOwner(req.user!, body.targetOwnerId);
+  if (!targetOwnerId) {
+    res.status(400).json({ message: "提醒规则目标负责人无效" });
+    return;
+  }
+  Object.assign(reminder, body, { targetOwnerId, channel: "站内", status: body.enabled === false || (body.enabled === undefined && reminder.enabled === false) ? "disabled" : "enabled" });
+  reminder.generatedCount = matchReminderRule(targetOwnerId, reminder).length;
+  await store.persist();
+  res.json({ reminder });
+}));
+
+app.get("/api/reminders/:id/preview", requireAuth, (req, res) => {
+  const store = getStore();
+  const reminder = store.reminders.find((item) => item.id === req.params.id);
+  if (!reminder || !canSeeOwner(req.user!, reminder.ownerId, reminder.teamId)) {
+    res.status(404).json({ message: "提醒规则不存在" });
+    return;
+  }
+  const matched = matchReminderRule(reminder.targetOwnerId || reminder.ownerId, reminder);
+  const existingKeys = new Set(store.todos.filter((todo) => todo.reminderRuleId === reminder.id).map((todo) => todo.triggerKey));
+  const preview = matched.slice(0, 5).map((item) => ({ customerId: item.customer.id, customer: item.customer.company, dealId: item.deal?.id || "", deal: item.deal?.title || "", dueAt: item.dueAt }));
+  const skippedCount = matched.filter((item) => existingKeys.has(`${reminder.id}:${item.triggerKey}`)).length;
+  res.json({ matchedCount: matched.length, creatableCount: matched.length - skippedCount, skippedCount, preview });
+});
 
 app.post("/api/reminders/:id/run", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
@@ -2904,11 +4168,24 @@ app.post("/api/reminders/:id/run", requireAuth, asyncRoute(async (req, res) => {
     res.status(400).json({ message: "提醒规则已停用" });
     return;
   }
-  const matched = matchReminderRule(req.user!, reminder);
+  const matched = matchReminderRule(reminder.targetOwnerId || reminder.ownerId, reminder);
   const created: Todo[] = [];
-  for (const customer of matched) {
-    const exists = store.todos.some((todo) => todo.ownerId === req.user!.id && !todo.done && todo.related === customer.company && todo.title.includes(reminder.title));
-    if (exists) continue;
+  let skippedCount = 0;
+  let failedCount = 0;
+  let lastError = "";
+  for (const match of matched) {
+    const triggerKey = `${reminder.id}:${match.triggerKey}`;
+    const exists = store.todos.some((todo) => todo.triggerKey === triggerKey);
+    if (exists) {
+      skippedCount += 1;
+      continue;
+    }
+    const customer = match.customer;
+    if (!customer.ownerId) {
+      failedCount += 1;
+      lastError = `${customer.company} 未分配负责人`;
+      continue;
+    }
     created.push({
       id: `t_reminder_${reminder.id}_${customer.id}_${Date.now()}`,
       title: `${reminder.title}：${customer.company}`,
@@ -2917,30 +4194,42 @@ app.post("/api/reminders/:id/run", requireAuth, asyncRoute(async (req, res) => {
       status: "pending",
       pinState: "",
       sortOrder: nextTodoSortOrder(store.todos, req.user!.id),
-      dueAt: reminder.dueAt || currentMinuteText(),
-      ownerId: req.user!.id,
-      teamId: req.user!.teamId,
+      dueAt: match.dueAt,
+      ownerId: customer.ownerId,
+      teamId: customer.teamId,
       related: customer.company,
       done: false,
       impactAmount: customer.amount,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      customerId: customer.id,
+      dealId: match.deal?.id,
+      reminderRuleId: reminder.id,
+      triggerKey
     });
   }
   store.todos.unshift(...created);
   reminder.generatedCount = matched.length;
-  if (created.length) reminder.status = "sent";
+  reminder.lastRunBy = req.user!.id;
+  reminder.lastRunAt = new Date().toISOString();
+  reminder.lastMatchedCount = matched.length;
+  reminder.lastCreatedCount = created.length;
+  reminder.lastSkippedCount = skippedCount;
+  reminder.lastFailedCount = failedCount;
+  reminder.lastError = lastError;
+  reminder.status = "enabled";
   await store.persist();
-  res.json({ reminder, createdCount: created.length, matchedCount: matched.length, todos: created });
+  res.json({ reminder, createdCount: created.length, matchedCount: matched.length, skippedCount, failedCount, todos: created });
 }));
 
-app.post("/api/reminders/:id/done", requireAuth, asyncRoute(async (req, res) => {
+app.post("/api/reminders/:id/toggle", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
   const reminder = store.reminders.find((item) => item.id === req.params.id);
   if (!reminder || !canSeeOwner(req.user!, reminder.ownerId, reminder.teamId)) {
     res.status(404).json({ message: "提醒不存在" });
     return;
   }
-  reminder.status = "done";
+  reminder.enabled = reminder.enabled === false;
+  reminder.status = reminder.enabled ? "enabled" : "disabled";
   await store.persist();
   res.json({ reminder });
 }));
@@ -3079,11 +4368,14 @@ const documentItemSchema = z.object({
 });
 
 const documentBodySchema = z.object({
+  customerId: z.string().trim().optional().default(""),
+  dealId: z.string().trim().optional().default(""),
+  revision: z.coerce.number().int().positive().optional(),
   type: z.enum(["PI", "CI"]).default("PI"),
   title: z.string().min(1),
   number: z.string().min(1),
   issueDate: z.string().min(1),
-  buyer: z.string().min(1),
+  buyer: z.string().optional().default(""),
   buyerAddress: z.string().optional().default(""),
   buyerContact: z.string().optional().default(""),
   seller: z.string().min(1),
@@ -3098,18 +4390,56 @@ const documentBodySchema = z.object({
   bankInfo: z.string().optional().default(""),
   notes: z.string().optional().default(""),
   templateStyle: z.enum(["executive", "classic", "compact"]).default("executive"),
-  status: z.enum(["draft", "ready", "exported"]).optional().default("draft"),
+  status: z.enum(["draft", "ready", "pending_approval", "approved", "rejected", "exported"]).optional().default("draft"),
+  approvalNote: z.string().optional().default(""),
+  approvedAt: z.string().optional(),
+  approvedBy: z.string().optional(),
+  audits: z.array(z.any()).optional().default([]),
+  sendRecords: z.array(z.any()).optional().default([]),
   items: z.array(documentItemSchema).min(1).max(80)
 });
 
 function normalizeDocument(body: z.infer<typeof documentBodySchema>, user: SessionUser, existing?: TradeDocument): TradeDocument {
   return {
+    ...body,
     id: existing?.id || `td_${Date.now()}`,
+    customerId: body.customerId || existing?.customerId || "",
+    dealId: body.dealId || existing?.dealId || "",
+    revision: body.revision || existing?.revision || 1,
     ownerId: existing?.ownerId || user.id,
     teamId: existing?.teamId || user.teamId,
+    approvalNote: body.approvalNote || existing?.approvalNote || "",
+    approvedAt: body.approvedAt || existing?.approvedAt,
+    approvedBy: body.approvedBy || existing?.approvedBy,
+    audits: existing?.audits || (body.audits as TradeDocumentAudit[]),
+    sendRecords: existing?.sendRecords || (body.sendRecords as TradeDocumentSendRecord[]),
     updatedAt: new Date().toISOString(),
-    ...body,
     items: body.items.map((item, index) => ({ ...item, id: item.id || `tdi_${Date.now()}_${index}` }))
+  };
+}
+
+function appendDocumentAudit(document: TradeDocument, field: string, oldValue: unknown, newValue: unknown, user: SessionUser) {
+  if (String(oldValue ?? "") === String(newValue ?? "")) return;
+  document.audits = [...(document.audits || []), {
+    id: `tda_${Date.now()}_${document.audits?.length || 0}`,
+    field,
+    oldValue: String(oldValue ?? ""),
+    newValue: String(newValue ?? ""),
+    operatorId: user.id,
+    operatorName: user.name,
+    createdAt: new Date().toISOString()
+  }];
+}
+
+function documentBusinessDefaults(customer?: Customer) {
+  if (!customer) return {};
+  return {
+    buyer: customer.billingName || customer.company,
+    buyerAddress: customer.billingAddress || "",
+    buyerContact: customer.documentContact || customer.contact,
+    incoterm: customer.defaultIncoterm || "FOB Tianjin",
+    paymentTerm: customer.defaultPaymentTerm || "30% T/T deposit, 70% before shipment",
+    portDischarge: customer.defaultPortDischarge || ""
   };
 }
 
@@ -3122,8 +4452,50 @@ app.get("/api/trade-documents", requireAuth, (req, res) => {
 app.post("/api/trade-documents", requireAuth, asyncRoute(async (req, res) => {
   const body = documentBodySchema.parse(req.body);
   const store = getStore();
-  const document = normalizeDocument(body, req.user!);
+  const deal = body.dealId ? store.deals.find((item) => item.id === body.dealId && canSeeOwner(req.user!, item.ownerId, item.teamId)) : undefined;
+  if (body.dealId && !deal) {
+    res.status(404).json({ message: "关联商机不存在" });
+    return;
+  }
+  const customerId = body.customerId || deal?.customerId || "";
+  const customer = customerId ? store.customers.find((item) => item.id === customerId && canSeeOwner(req.user!, item.ownerId, item.teamId)) : undefined;
+  if (customerId && !customer) {
+    res.status(404).json({ message: "关联客户不存在" });
+    return;
+  }
+  if (deal && body.customerId && deal.customerId !== body.customerId) {
+    res.status(400).json({ message: "单据客户与商机关联客户不一致" });
+    return;
+  }
+  const defaults = documentBusinessDefaults(customer);
+  const completedBody = {
+    ...body,
+    customerId,
+    buyer: body.buyer || defaults.buyer || "Buyer Company",
+    buyerAddress: body.buyerAddress || defaults.buyerAddress || "",
+    buyerContact: body.buyerContact || defaults.buyerContact || "",
+    incoterm: body.incoterm || defaults.incoterm || "FOB Tianjin",
+    paymentTerm: body.paymentTerm || defaults.paymentTerm || "30% T/T deposit, 70% before shipment",
+    portDischarge: body.portDischarge || defaults.portDischarge || ""
+  };
+  const revision = body.revision || (body.dealId
+    ? Math.max(0, ...store.tradeDocuments.filter((item) => item.dealId === body.dealId && item.type === body.type).map((item) => item.revision || 1)) + 1
+    : 1);
+  const document = normalizeDocument({ ...completedBody, revision }, req.user!);
   store.tradeDocuments.unshift(document);
+  if (deal) {
+    createDealEvent({
+      dealId: deal.id,
+      type: "document",
+      content: `${document.type} ${document.number} v${document.revision} 已创建`,
+      operatorId: req.user!.id,
+      fromStage: deal.stage,
+      toStage: deal.stage,
+      nextAction: deal.nextAction,
+      nextActionAt: deal.nextActionAt,
+      relatedDocumentId: document.id
+    });
+  }
   await store.persist();
   res.json({ document });
 }));
@@ -3137,10 +4509,153 @@ app.patch("/api/trade-documents/:id", requireAuth, asyncRoute(async (req, res) =
     res.status(404).json({ message: "单据不存在" });
     return;
   }
-  const document = normalizeDocument(body, req.user!, existing);
+  if (existing.status === "approved" || existing.status === "exported") {
+    res.status(409).json({ message: "已审批或已导出的单据不能直接覆盖，请先另存新版本" });
+    return;
+  }
+  if (body.dealId && body.dealId !== existing.dealId) {
+    res.status(400).json({ message: "单据创建后不能更换关联商机" });
+    return;
+  }
+  const document = normalizeDocument({
+    ...body,
+    customerId: existing.customerId,
+    dealId: existing.dealId,
+    revision: existing.revision
+  }, req.user!, existing);
+  const auditFields = [
+    "title", "number", "issueDate", "buyer", "buyerAddress", "buyerContact", "seller",
+    "sellerAddress", "currency", "incoterm", "paymentTerm", "shippingMethod",
+    "portLoading", "portDischarge", "validityDate", "bankInfo", "notes", "templateStyle", "status"
+  ] as const;
+  auditFields.forEach((field) => appendDocumentAudit(document, field, existing[field], document[field], req.user!));
   store.tradeDocuments[index] = document;
   await store.persist();
   res.json({ document });
+}));
+
+app.post("/api/trade-documents/:id/revision", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const source = store.tradeDocuments.find((item) => item.id === req.params.id);
+  if (!source || !canSeeOwner(req.user!, source.ownerId, source.teamId)) {
+    res.status(404).json({ message: "单据不存在" });
+    return;
+  }
+  const revision = Math.max(0, ...store.tradeDocuments
+    .filter((item) => item.number.split("-R")[0] === source.number.split("-R")[0] && item.type === source.type)
+    .map((item) => item.revision || 1)) + 1;
+  const baseNumber = source.number.replace(/-R\d+$/, "");
+  const document: TradeDocument = {
+    ...source,
+    id: `td_${Date.now()}`,
+    number: `${baseNumber}-R${revision}`,
+    title: `${source.title.replace(/\s+v\d+$/, "")} v${revision}`,
+    revision,
+    status: "draft",
+    approvalNote: "",
+    approvedAt: undefined,
+    approvedBy: undefined,
+    audits: [],
+    sendRecords: [],
+    updatedAt: new Date().toISOString(),
+    items: source.items.map((item, index) => ({ ...item, id: `tdi_${Date.now()}_${index}` }))
+  };
+  store.tradeDocuments.unshift(document);
+  await store.persist();
+  res.json({ document });
+}));
+
+app.post("/api/trade-documents/:id/submit-approval", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const document = store.tradeDocuments.find((item) => item.id === req.params.id);
+  if (!document || !canSeeOwner(req.user!, document.ownerId, document.teamId)) {
+    res.status(404).json({ message: "单据不存在" });
+    return;
+  }
+  const oldStatus = document.status;
+  document.status = "pending_approval";
+  document.approvalNote = String(req.body?.note || "");
+  document.updatedAt = new Date().toISOString();
+  appendDocumentAudit(document, "status", oldStatus, document.status, req.user!);
+  await store.persist();
+  res.json({ document });
+}));
+
+app.post("/api/trade-documents/:id/approve", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const document = store.tradeDocuments.find((item) => item.id === req.params.id);
+  if (!document || !canSeeOwner(req.user!, document.ownerId, document.teamId)) {
+    res.status(404).json({ message: "单据不存在" });
+    return;
+  }
+  if (document.status !== "pending_approval") {
+    res.status(400).json({ message: "只有待审批单据可以审批通过" });
+    return;
+  }
+  const oldStatus = document.status;
+  document.status = "approved";
+  document.approvalNote = String(req.body?.note || document.approvalNote || "");
+  document.approvedAt = new Date().toISOString();
+  document.approvedBy = req.user!.name;
+  document.updatedAt = new Date().toISOString();
+  appendDocumentAudit(document, "status", oldStatus, document.status, req.user!);
+  await store.persist();
+  res.json({ document });
+}));
+
+app.post("/api/trade-documents/:id/reject", requireAuth, asyncRoute(async (req, res) => {
+  const note = String(req.body?.note || "").trim();
+  if (!note) {
+    res.status(400).json({ message: "驳回必须填写原因" });
+    return;
+  }
+  const store = getStore();
+  const document = store.tradeDocuments.find((item) => item.id === req.params.id);
+  if (!document || !canSeeOwner(req.user!, document.ownerId, document.teamId)) {
+    res.status(404).json({ message: "单据不存在" });
+    return;
+  }
+  if (document.status !== "pending_approval") {
+    res.status(400).json({ message: "只有待审批单据可以驳回" });
+    return;
+  }
+  const oldStatus = document.status;
+  document.status = "rejected";
+  document.approvalNote = note;
+  document.updatedAt = new Date().toISOString();
+  appendDocumentAudit(document, "status", oldStatus, document.status, req.user!);
+  appendDocumentAudit(document, "approvalNote", "", note, req.user!);
+  await store.persist();
+  res.json({ document });
+}));
+
+app.post("/api/trade-documents/:id/send", requireAuth, asyncRoute(async (req, res) => {
+  const channel = ["email", "whatsapp", "wechat", "manual"].includes(req.body?.channel) ? req.body.channel : "manual";
+  const recipient = String(req.body?.recipient || "").trim();
+  if (!recipient) {
+    res.status(400).json({ message: "请填写发送对象" });
+    return;
+  }
+  const store = getStore();
+  const document = store.tradeDocuments.find((item) => item.id === req.params.id);
+  if (!document || !canSeeOwner(req.user!, document.ownerId, document.teamId)) {
+    res.status(404).json({ message: "单据不存在" });
+    return;
+  }
+  const record: TradeDocumentSendRecord = {
+    id: `tds_${Date.now()}`,
+    channel,
+    recipient,
+    message: String(req.body?.message || ""),
+    operatorId: req.user!.id,
+    operatorName: req.user!.name,
+    createdAt: new Date().toISOString()
+  };
+  document.sendRecords = [...(document.sendRecords || []), record];
+  document.updatedAt = new Date().toISOString();
+  appendDocumentAudit(document, "send", "", `${channel}:${recipient}`, req.user!);
+  await store.persist();
+  res.json({ document, record });
 }));
 
 app.post("/api/trade-documents/:id/export", requireAuth, asyncRoute(async (req, res) => {
@@ -3150,8 +4665,10 @@ app.post("/api/trade-documents/:id/export", requireAuth, asyncRoute(async (req, 
     res.status(404).json({ message: "单据不存在" });
     return;
   }
+  const oldStatus = document.status;
   document.status = "exported";
   document.updatedAt = new Date().toISOString();
+  appendDocumentAudit(document, "status", oldStatus, document.status, req.user!);
   const job = {
     id: `io_document_export_${Date.now()}`,
     name: `${document.type} 单据 PDF 导出：${document.number}`,
@@ -3253,6 +4770,105 @@ app.get("/api/tools/website-opportunities", requireAuth, (req, res) => {
   const scoped = websiteOpportunities.filter((item) => canSeeOwner(req.user!, item.ownerId, item.teamId));
   res.json({ opportunities: scoped });
 });
+
+app.get("/api/prospect-list/assignees", requireAuth, (req, res) => {
+  if (!canManageProspectAssignments(req.user)) {
+    res.json({ assignees: [] });
+    return;
+  }
+  res.json({ assignees: prospectAssigneesFor(req.user!) });
+});
+
+app.patch("/api/prospect-list/:id/details", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    company: z.string().min(1).max(200),
+    business: z.string().max(255).default(""),
+    country: z.string().max(80).default(""),
+    website: z.string().min(3).max(255),
+    contact: z.string().max(120).default(""),
+    contactInfo: z.string().max(255).default(""),
+    description: z.string().max(1000).default("")
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const opportunity = store.websiteOpportunities.find((item) => item.id === req.params.id && canSeeOwner(req.user!, item.ownerId, item.teamId));
+  if (!opportunity) {
+    res.status(404).json({ message: "搜客线索不存在或无权访问" });
+    return;
+  }
+  if (opportunity.status === "synced") {
+    res.status(400).json({ message: "已入线索的数据请在线索中心维护" });
+    return;
+  }
+  Object.assign(opportunity, body, {
+    website: normalizeWebsite(body.website),
+    statusChangedAt: new Date().toISOString()
+  });
+  await store.persist();
+  res.json({ opportunity });
+}));
+
+app.patch("/api/prospect-list/batch", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    ids: z.array(z.string().min(1)).min(1).max(100),
+    action: z.enum(["mark-contactable", "exclude", "restore", "assign"]),
+    ownerId: z.string().min(1).optional(),
+    reason: z.string().max(255).optional().default("")
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const ids = [...new Set(body.ids)];
+  const opportunities = ids
+    .map((id) => store.websiteOpportunities.find((item) => item.id === id && canSeeOwner(req.user!, item.ownerId, item.teamId)))
+    .filter(Boolean) as WebsiteOpportunity[];
+  if (opportunities.length !== ids.length) {
+    res.status(404).json({ message: "部分搜客线索不存在或无权访问" });
+    return;
+  }
+  if (body.action === "assign" && !canManageProspectAssignments(req.user)) {
+    res.status(403).json({ message: "只有主管和管理员可以分配搜客线索" });
+    return;
+  }
+  const assignee = body.action === "assign"
+    ? prospectAssigneesFor(req.user!).find((item) => item.id === body.ownerId)
+    : undefined;
+  if (body.action === "assign" && !assignee) {
+    res.status(400).json({ message: "目标业务员不存在、不在当前团队或账号已停用" });
+    return;
+  }
+  if (opportunities.some((item) => item.status === "synced") && ["exclude", "assign"].includes(body.action)) {
+    res.status(400).json({ message: "已入线索的数据不能排除或重新分配，请在线索中心处理" });
+    return;
+  }
+  if (body.action === "mark-contactable" && opportunities.some((item) => !hasProspectContactInfo(item))) {
+    res.status(400).json({ message: "选中项存在无有效邮箱、电话或即时通讯方式的数据，请先补齐联系方式" });
+    return;
+  }
+  if (body.action === "restore" && opportunities.some((item) => item.status !== "excluded")) {
+    res.status(400).json({ message: "只有已排除的数据可以恢复为待核验" });
+    return;
+  }
+  const changedAt = new Date().toISOString();
+  for (const item of opportunities) {
+    if (body.action === "mark-contactable") {
+      item.status = "contactable";
+      item.verifiedAt = item.verifiedAt || changedAt;
+      item.excludedReason = "";
+    } else if (body.action === "exclude") {
+      item.status = "excluded";
+      item.excludedReason = body.reason.trim() || "人工核验后排除";
+    } else if (body.action === "restore") {
+      item.status = "preview";
+      item.excludedReason = "";
+    } else if (assignee) {
+      item.ownerId = assignee.id;
+      item.teamId = assignee.teamId;
+    }
+    item.statusChangedAt = changedAt;
+  }
+  await store.persist();
+  res.json({ opportunities });
+}));
 
 app.get("/api/tools/ai-config", requireAuth, (req, res) => {
   const configs = getAiConfigs(req.user!);
@@ -3725,15 +5341,32 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
       website: z.string().min(3),
       contact: z.string().default("待维护"),
       contactInfo: z.string().default(""),
-      description: z.string().default("")
+      description: z.string().default(""),
+      source: z.string().max(40).optional().default(""),
+      sourceLabel: z.string().max(80).optional().default("")
     })).min(1)
   });
   const body = schema.parse(req.body);
   const store = getStore();
   const created: Array<{ lead: Lead; sourceEvent: LeadSourceEvent; opportunity: WebsiteOpportunity; duplicate: boolean }> = [];
   for (const source of body.opportunities) {
+    const stored = source.id ? store.websiteOpportunities.find((item) => item.id === source.id) : undefined;
+    if (stored && !canSeeOwner(req.user!, stored.ownerId, stored.teamId)) {
+      res.status(404).json({ message: "搜客线索不存在或无权访问" });
+      return;
+    }
+    if (stored && stored.ownerId !== req.user!.id) {
+      res.status(403).json({ message: "候选归属其他业务员，请先分配后再加入线索" });
+      return;
+    }
+    if (stored && !["contactable", "contacted", "synced"].includes(stored.status)) {
+      res.status(400).json({ message: "请先核验并标记为可联系，再加入线索" });
+      return;
+    }
     const contact = source.contact || source.contactInfo || "待维护";
     const sourceId = source.id || `website_${websiteDomainKey(source.website)}_${normalizedMatchText(source.company)}`;
+    const sourceChannel = stored?.source || source.source || "website-scrape";
+    const sourceLabel = stored?.sourceLabel || source.sourceLabel || "官网导入";
     const intake = createLeadFromSource(req.user!, {
       company: source.company,
       contact,
@@ -3741,9 +5374,9 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
       email: source.contactInfo.includes("@") ? source.contactInfo.trim() : "",
       phone: source.contactInfo.includes("@") ? "" : source.contactInfo.trim(),
       wechat: "",
-      source: "官网解析",
+      source: sourceLabel,
       sourceType: "outbound",
-      sourceChannel: "website-scrape",
+      sourceChannel,
       sourceCampaign: "",
       externalId: sourceId,
       sourceUrl: normalizeWebsite(source.website),
@@ -3752,7 +5385,7 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
       estimatedAmount: 0,
       nextFollowAt: "",
       remark: [source.business, source.description].filter(Boolean).join("；"),
-      rawPayload: source
+      rawPayload: { ...source, source: sourceChannel, sourceLabel }
     });
     const opportunity: WebsiteOpportunity = {
       id: sourceId,
@@ -3768,7 +5401,13 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
       status: "synced",
       createdAt: new Date().toISOString(),
       leadId: intake.lead.id,
-      parseMode: "rule"
+      parseMode: stored?.parseMode || "rule",
+      source: sourceChannel,
+      sourceLabel,
+      confidence: stored?.confidence,
+      verifiedAt: stored?.verifiedAt,
+      statusChangedAt: new Date().toISOString(),
+      excludedReason: ""
     };
     const existing = store.websiteOpportunities.find((item) => item.id === opportunity.id || (item.ownerId === req.user!.id && item.website === opportunity.website));
     if (existing) Object.assign(existing, opportunity, { id: existing.id });
@@ -3783,22 +5422,50 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
   const store = getStore();
   const archived = archiveExpiredTodos(store.todos, new Date());
   if (archived.length) void store.persist();
-  const { customers, todos, deals, reminders, knowledgeAssets, exams, wecomMessages } = store;
+  const { customers, todos, deals, reminders, knowledgeAssets, exams, wecomMessages, leads } = store;
   const scopedCustomers = customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
+  const scopedLeads = leads.filter((lead) => canSeeOwner(req.user!, lead.ownerId, lead.teamId));
+  const activeLeads = scopedLeads.filter((lead) => !lead.deletedAt && lead.status !== "invalid");
+  const filteredLeads = scopedLeads.filter((lead) => Boolean(lead.deletedAt) || lead.status === "invalid");
+  const pendingCleanLeads = activeLeads.filter((lead) => lead.status === "new");
+  const validLeads = activeLeads.filter((lead) => lead.status === "following" || lead.status === "converted");
+  const customerLeads = activeLeads.filter((lead) => Boolean(lead.convertedCustomerId));
+  const dealLeads = activeLeads.filter((lead) => Boolean(lead.convertedDealId));
+  const chinaDateKey = (value: string | Date) => new Date(value).toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
+  const todayKey = chinaDateKey(new Date());
+  const todayLeadCount = activeLeads.filter((lead) => chinaDateKey(lead.createdAt) === todayKey).length;
+  const leadFunnelCounts = [
+    { key: "entered", label: "进入系统", count: activeLeads.length },
+    { key: "pending", label: "待清洗", count: pendingCleanLeads.length },
+    { key: "valid", label: "有效线索", count: validLeads.length },
+    { key: "customer", label: "已转客户", count: customerLeads.length },
+    { key: "deal", label: "已建商机", count: dealLeads.length }
+  ];
   const scopedTodos = todos.filter((todo) => canSeePersonalData(req.user!, todo.ownerId));
-  const scopedDeals = deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId) && !deal.archivedAt);
+  const scopedDeals = deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId) && !deal.archivedAt && deal.stage !== "成交" && deal.stage !== "丢单");
   const scopedReminders = reminders.filter((reminder) => canSeeOwner(req.user!, reminder.ownerId, reminder.teamId));
   const scopedKnowledge = req.user?.role === "sales" ? knowledgeAssets.filter((asset) => asset.ownerId === req.user?.id) : knowledgeAssets;
   const scopedMessages = wecomMessages.filter((message) => canSeeOwner(req.user!, message.ownerId, message.teamId));
   const scopedExams = exams.filter((exam) => canAccessExam(req.user!, exam));
   const scopedExamReport = examReport(req.user!);
+  const addDateKeyDays = (dateKey: string, days: number) => {
+    const [year, month, day] = dateKey.split("-").map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day + days));
+    return date.toISOString().slice(0, 10);
+  };
+  const [todayYear, todayMonth] = todayKey.split("-").map(Number);
+  const todayWeekday = new Date(`${todayKey}T12:00:00+08:00`).getUTCDay();
+  const weekStartKey = addDateKeyDays(todayKey, -(todayWeekday === 0 ? 6 : todayWeekday - 1));
+  const weekEndKey = addDateKeyDays(weekStartKey, 6);
+  const monthStartKey = `${todayKey.slice(0, 7)}-01`;
+  const monthEndKey = new Date(Date.UTC(todayYear, todayMonth, 0)).toISOString().slice(0, 10);
   const activeTodos = scopedTodos.filter((todo) => !isHistoricalTodo(todo));
   const pendingTodos = activeTodos.filter((todo) => !todo.done);
   const overdueTodos = pendingTodos.filter((todo) => todo.priority === "high");
   const historyTodos = scopedTodos.filter(isHistoricalTodo);
   const riskCustomers = scopedCustomers.filter((customer) => customer.nextReminder.includes("逾期") || customer.health < 60);
   const riskAmount = riskCustomers.reduce((sum, customer) => sum + customer.amount, 0);
-  const forecastAmount = scopedDeals.reduce((sum, deal) => sum + deal.amount, 0) || scopedCustomers.reduce((sum, customer) => sum + customer.amount, 0);
+  const forecastAmount = scopedDeals.reduce((sum, deal) => sum + deal.amount, 0);
   const wecomBound = scopedCustomers.filter((customer) => customer.wecomBound).length;
   const pendingKnowledge = scopedKnowledge.filter((asset) => asset.status !== "published");
   const publishedExams = scopedExams.filter((exam) => exam.status === "published");
@@ -3809,6 +5476,80 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
   const priorityTasks = buildPriorityTasks(scopedDeals, scopedCustomers, pendingTodos);
   const topDeals = priorityTasks.map((task) => task.deal);
   const pipelineHealth = buildPipelineHealth(scopedDeals, scopedCustomers);
+  const todoDueDateKey = (dueAt: string) => {
+    const value = dueAt.trim();
+    const explicitDate = value.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (explicitDate) return explicitDate[1];
+    if (value.includes("后天")) return addDateKeyDays(todayKey, 2);
+    if (value.includes("明天")) return addDateKeyDays(todayKey, 1);
+    if (value.includes("今天") || /^\d{1,2}:\d{2}$/.test(value)) return todayKey;
+    const weekDay = value.match(/本周([一二三四五六日天])/);
+    if (weekDay) {
+      const dayIndex = "一二三四五六日天".indexOf(weekDay[1]);
+      return addDateKeyDays(weekStartKey, Math.min(dayIndex, 6));
+    }
+    return "";
+  };
+  const periodMoneyText = (rows: Array<{ currency: string; amount: number }>) => rows.length
+    ? rows.map((row) => `${row.currency} ${Math.round(row.amount).toLocaleString("en-US")}`).join("、")
+    : "暂无预计成交金额";
+  const buildPeriodSummary = (label: string, start: string, end: string) => {
+    const expectedDeals = scopedDeals.filter((deal) => {
+      if (!deal.expectedCloseAt) return false;
+      const expectedDateKey = chinaDateKey(deal.expectedCloseAt);
+      return expectedDateKey >= start && expectedDateKey <= end;
+    });
+    const periodTodos = pendingTodos.filter((todo) => {
+      const dueDateKey = todoDueDateKey(todo.dueAt);
+      return dueDateKey >= start && dueDateKey <= end;
+    });
+    const highPriorityTodos = periodTodos.filter((todo) => todo.priority === "high");
+    const newLeads = activeLeads.filter((lead) => {
+      const createdDateKey = chinaDateKey(lead.createdAt);
+      return createdDateKey >= start && createdDateKey <= end;
+    });
+    const expectedAmounts = reportMoneyRows(expectedDeals);
+    const topExpectedDeal = [...expectedDeals].sort((left, right) => right.amount - left.amount)[0];
+    const title = highPriorityTodos.length
+      ? `${label}最该优先处理 ${highPriorityTodos.length} 个高优先级待办，并跟进 ${expectedDeals.length} 个预计成交商机。`
+      : expectedDeals.length
+        ? `${label}有 ${expectedDeals.length} 个预计成交商机，建议围绕成交节点集中推进。`
+        : `${label}暂无预计成交商机，建议优先补充线索、推进报价并校准成交日期。`;
+    const description = topExpectedDeal
+      ? `金额最高的是“${topExpectedDeal.title}”，预计成交金额为 ${topExpectedDeal.currency} ${Math.round(topExpectedDeal.amount).toLocaleString("en-US")}。`
+      : newLeads.length
+        ? `${label}新增 ${newLeads.length} 条线索，可优先完成清洗并转入客户或商机。`
+        : `${label}暂未形成新的成交节点，建议检查活跃商机是否缺少预计成交日期。`;
+    const action = highPriorityTodos.length
+      ? `建议动作：先完成 ${highPriorityTodos.length} 个高优先级待办，再逐一确认预计成交商机的决策人、付款条件和下一步。`
+      : expectedDeals.length
+        ? `建议动作：逐一核对 ${expectedDeals.length} 个预计成交商机的关键人、报价反馈和下一步时间。`
+        : `建议动作：清洗新增线索、推进有效报价，并为活跃商机补全预计成交日期。`;
+    return {
+      label,
+      start,
+      end,
+      expectedDeals: expectedDeals.length,
+      expectedAmounts,
+      pendingTodos: periodTodos.length,
+      highPriorityTodos: highPriorityTodos.length,
+      newLeads: newLeads.length,
+      briefing: {
+        title,
+        description,
+        basis: `依据：${periodTodos.length} 个周期待办、${highPriorityTodos.length} 个高优先级待办、${newLeads.length} 条新增线索、${expectedDeals.length} 个预计成交商机。`,
+        action,
+        impact: expectedDeals.length
+          ? `业务影响：${label}预计成交 ${periodMoneyText(expectedAmounts)}，应优先降低成交日期延误风险。`
+          : `业务影响：${label}暂无预计成交金额，补齐商机日期和推进动作后才能形成可靠预测。`
+      }
+    };
+  };
+  const periods = {
+    today: buildPeriodSummary("今日", todayKey, todayKey),
+    week: buildPeriodSummary("本周", weekStartKey, weekEndKey),
+    month: buildPeriodSummary("本月", monthStartKey, monthEndKey)
+  };
   const typeRows = ["customer", "knowledge", "exam", "ocr", "other"].map((type) => {
     const items = pendingTodos.filter((todo) => todo.type === type);
     return {
@@ -3823,9 +5564,15 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
     count: pendingTodos.filter((_, todoIndex) => todoIndex % 7 === index).length + (index < Math.min(pendingTodos.length, 7) ? 1 : 0)
   }));
   const topRiskNames = riskCustomers.slice(0, 3).map((customer) => customer.company).join("、") || topDeals.slice(0, 2).map((deal) => deal.title).join("、") || "暂无高风险客户";
+  const businessScopeLabel = req.user?.role === "sales" ? "本人业务" : req.user?.role === "manager" ? "团队业务" : "全局业务";
   res.json({
     scope: req.user?.role === "sales" ? "仅本人业务与本人待办" : req.user?.role === "manager" ? "团队业务数据，本人待办" : "全局业务数据，本人待办",
+    scopeLabels: {
+      business: businessScopeLabel,
+      todos: "本人待办"
+    },
     updatedAt: new Date().toISOString(),
+    periods,
     briefing: {
       title: pendingTodos.length
         ? `今天最该处理的是 ${pendingTodos.length} 个待办，其中 ${overdueTodos.length} 个属于高优先级。`
@@ -3848,6 +5595,7 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
     },
     metrics: {
       customers: scopedCustomers.length,
+      riskCustomers: riskCustomers.length,
       todos: pendingTodos.length,
       overdueTodos: overdueTodos.length,
       forecastAmount,
@@ -3866,7 +5614,20 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
     quality: {
       followHealth: scopedCustomers.length ? Math.round(scopedCustomers.reduce((sum, customer) => sum + customer.health, 0) / scopedCustomers.length) : 0,
       overdueRate: pendingTodos.length ? Math.round((overdueTodos.length / pendingTodos.length) * 100) : 0,
-      avgResponseHours: Number((Math.max(1, pendingMessages.length + scopedReminders.filter((reminder) => reminder.status === "pending").length) * 1.6).toFixed(1))
+      avgResponseHours: Number((Math.max(1, pendingMessages.length + scopedReminders.filter((reminder) => reminder.enabled !== false).length) * 1.6).toFixed(1))
+    },
+    leadFunnel: {
+      stages: leadFunnelCounts.map((stage, index) => ({
+        ...stage,
+        conversionRate: index === 0
+          ? 100
+          : leadFunnelCounts[0].count
+            ? Math.round((stage.count / leadFunnelCounts[0].count) * 100)
+            : 0
+      })),
+      todayAdded: todayLeadCount,
+      filteredOut: filteredLeads.length,
+      dealConversionRate: activeLeads.length ? Math.round((dealLeads.length / activeLeads.length) * 100) : 0
     },
     pipelineHealth,
     todoInsights: {
@@ -3896,7 +5657,7 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
 app.post("/api/dashboard/priority-tasks/batch-process", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
   const scopedCustomers = store.customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
-  const scopedDeals = store.deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId) && !deal.archivedAt);
+  const scopedDeals = store.deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId) && !deal.archivedAt && deal.stage !== "成交" && deal.stage !== "丢单");
   const scopedTodos = store.todos.filter((todo) => canSeePersonalData(req.user!, todo.ownerId));
   const pendingTodos = scopedTodos.filter((todo) => !todo.done && !isHistoricalTodo(todo));
   const priorityTasks = buildPriorityTasks(scopedDeals, scopedCustomers, pendingTodos).slice(0, 3);
@@ -3930,6 +5691,7 @@ function isHistoricalTodo(todo: Todo) {
 
 function shouldArchiveTodo(todo: Todo, now = new Date()) {
   if (todo.historyAt) return false;
+  if (todo.reminderRuleId && !todo.done) return false;
   const parsed = parseDueDate(todo.dueAt, todo.createdAt);
   if (!parsed) return false;
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -4021,8 +5783,8 @@ function buildPriorityTasks(deals: Deal[], customers: Customer[], todos: Todo[])
 }
 
 function buildPipelineHealth(deals: Deal[], customers: Customer[]) {
-  const stages = ["询盘", "已联系", "已报价", "样品", "谈判", "成交"];
-  const activeDeals = deals.filter((deal) => !deal.archivedAt && deal.stage !== "丢单");
+  const stages = ["询盘", "已联系", "已报价", "样品", "谈判"];
+  const activeDeals = deals.filter((deal) => !deal.archivedAt && deal.stage !== "丢单" && deal.stage !== "成交");
   const maxCount = Math.max(...stages.map((stage) => activeDeals.filter((deal) => deal.stage === stage).length), 1);
   return stages.map((stage) => {
     const stageDeals = activeDeals.filter((deal) => deal.stage === stage);
@@ -4037,7 +5799,7 @@ function buildPipelineHealth(deals: Deal[], customers: Customer[]) {
       amount,
       riskCount,
       width: stageDeals.length ? Math.max(8, Math.round((stageDeals.length / maxCount) * 100)) : 0,
-      tone: riskCount ? "amber" : stage === "成交" ? "green" : "aqua"
+      tone: riskCount ? "amber" : "aqua"
     };
   });
 }
@@ -4064,11 +5826,11 @@ function nextPriorityAction(deal: Deal, customer?: Customer) {
 
 function reminderRuleTitle(ruleType = "quote_no_reply") {
   const map: Record<string, string> = {
-    quote_no_reply: "报价后未回复提醒",
-    sample_feedback: "样品反馈提醒",
+    quote_no_reply: "报价阶段停滞提醒",
+    sample_feedback: "样品阶段待确认",
     inactive_customer: "长期未联系提醒",
     high_value_revisit: "高价值客户复访",
-    custom_due: "自定义跟进提醒"
+    custom_due: "商机下一动作到期提醒"
   };
   return map[ruleType] || "自定义跟进提醒";
 }
@@ -4076,24 +5838,67 @@ function reminderRuleTitle(ruleType = "quote_no_reply") {
 function reminderRuleText(rule: { ruleType?: string; targetStage?: string; days?: number; channel?: string; priority?: string }) {
   const days = rule.days ?? 3;
   const stage = rule.targetStage || "已报价";
-  const channel = rule.channel || "企业微信";
-  if (rule.ruleType === "sample_feedback") return `客户阶段为样品，${days} 天内需要反馈，通过${channel}提醒`;
-  if (rule.ruleType === "inactive_customer") return `${days} 天未推进且客户仍在${stage}阶段，通过${channel}提醒`;
-  if (rule.ruleType === "high_value_revisit") return `金额较高或健康度偏低客户 ${days} 天复访，通过${channel}提醒`;
-  if (rule.ruleType === "custom_due") return `${stage}阶段客户按指定时间提醒，通过${channel}提醒`;
-  return `${stage}阶段客户报价后 ${days} 天未回复，通过${channel}提醒`;
+  if (rule.ruleType === "sample_feedback") return `进入样品阶段 ${days} 天未更新时生成站内任务`;
+  if (rule.ruleType === "inactive_customer") return `距离最后一次客户活动超过 ${days} 天时生成站内任务`;
+  if (rule.ruleType === "high_value_revisit") return `高价值或低健康度客户超过 ${days} 天未活动时生成站内任务`;
+  if (rule.ruleType === "custom_due") return `${stage}阶段商机下一动作到期后生成站内任务`;
+  return `进入${stage}阶段 ${days} 天未更新时生成站内任务`;
 }
 
-function matchReminderRule(user: SessionUser, rule: { ruleType?: string; targetStage?: string; days?: number; priority?: string }) {
+function resolveReminderTargetOwner(user: SessionUser, requestedOwnerId?: string) {
   const store = getStore();
-  const scopedCustomers = store.customers.filter((customer) => canSeeOwner(user, customer.ownerId, customer.teamId));
+  const targetOwnerId = requestedOwnerId || user.id;
+  if (targetOwnerId !== user.id) return "";
+  const target = store.users.find((item) => item.id === targetOwnerId);
+  if (!target || !canSeeOwner(user, target.id, target.teamId)) return "";
+  return target.id;
+}
+
+function matchReminderRule(targetOwnerId: string, rule: { ruleType?: string; targetStage?: string; days?: number; priority?: string }) {
+  const store = getStore();
+  const scopedCustomers = store.customers.filter((customer) => customer.ownerId === targetOwnerId);
+  const customerMap = new Map(scopedCustomers.map((customer) => [customer.id, customer]));
+  const scopedDeals = store.deals.filter((deal) => deal.ownerId === targetOwnerId && customerMap.has(deal.customerId) && !deal.archivedAt);
   const stage = rule.targetStage || "已报价";
   const ruleType = rule.ruleType || "quote_no_reply";
-  if (ruleType === "sample_feedback") return scopedCustomers.filter((customer) => customer.stage === "样品");
-  if (ruleType === "inactive_customer") return scopedCustomers.filter((customer) => customer.stage === stage || customer.nextReminder.includes("逾期"));
-  if (ruleType === "high_value_revisit") return scopedCustomers.filter((customer) => customer.amount >= 30000 || customer.health < 65);
-  if (ruleType === "custom_due") return scopedCustomers.filter((customer) => customer.stage === stage);
-  return scopedCustomers.filter((customer) => customer.stage === stage || customer.nextReminder.includes("逾期"));
+  const days = rule.days ?? 3;
+  const now = new Date();
+  const result: Array<{ customer: Customer; deal?: Deal; dueAt: string; triggerKey: string }> = [];
+  const addDealMatches = (deals: Deal[], dateValue: (deal: Deal) => string) => {
+    deals.forEach((deal) => {
+      const customer = customerMap.get(deal.customerId);
+      const baseText = dateValue(deal);
+      const base = new Date(baseText);
+      if (!customer || !baseText || Number.isNaN(base.getTime())) return;
+      const due = new Date(base.getTime() + days * 86400000);
+      if (due > now) return;
+      result.push({ customer, deal, dueAt: localMinuteText(due), triggerKey: `${deal.id}:${baseText}:${days}` });
+    });
+  };
+  if (ruleType === "sample_feedback") {
+    addDealMatches(scopedDeals.filter((deal) => deal.stage === "样品"), (deal) => deal.stageChangedAt);
+    return result;
+  }
+  if (ruleType === "custom_due") {
+    addDealMatches(scopedDeals.filter((deal) => deal.stage === stage && Boolean(deal.nextActionAt)), (deal) => deal.nextActionAt);
+    return result;
+  }
+  if (ruleType === "quote_no_reply") {
+    addDealMatches(scopedDeals.filter((deal) => deal.stage === "已报价" || deal.stage === stage), (deal) => deal.stageChangedAt);
+    return result;
+  }
+  scopedCustomers.forEach((customer) => {
+    if (ruleType === "high_value_revisit" && customer.amount < 30000 && customer.health >= 65) return;
+    const activities = store.customerActivities
+      .filter((activity) => activity.customerId === customer.id)
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+    const baseText = activities[0]?.createdAt;
+    if (!baseText) return;
+    const due = new Date(new Date(baseText).getTime() + days * 86400000);
+    if (Number.isNaN(due.getTime()) || due > now) return;
+    result.push({ customer, dueAt: localMinuteText(due), triggerKey: `${customer.id}:${baseText}:${days}` });
+  });
+  return result;
 }
 
 function todoTypeLabel(type: string) {
@@ -4112,7 +5917,10 @@ function moneyText(value: number) {
 }
 
 function currentMinuteText() {
-  const date = new Date();
+  return localMinuteText(new Date());
+}
+
+function localMinuteText(date: Date) {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
@@ -4633,19 +6441,231 @@ function inferContact(text: string) {
   return cleanHtml(match?.[1] || "") || "待维护";
 }
 
+const reportStageWeights: Record<string, number> = {
+  询盘: 0.05,
+  已联系: 0.1,
+  已报价: 0.3,
+  样品: 0.5,
+  谈判: 0.7
+};
+
+function reportDate(value: Date) {
+  const pad = (item: number) => String(item).padStart(2, "0");
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+}
+
+function reportMoneyRows(deals: Deal[], amountFor: (deal: Deal) => number = (deal) => deal.amount) {
+  const totals = new Map<string, number>();
+  deals.forEach((deal) => {
+    const currency = deal.currency || "未设置";
+    totals.set(currency, roundMoneyValue((totals.get(currency) || 0) + amountFor(deal)));
+  });
+  return [...totals.entries()]
+    .map(([currency, amount]) => ({ currency, amount }))
+    .sort((left, right) => right.amount - left.amount || left.currency.localeCompare(right.currency));
+}
+
+function reportRegion(country: string) {
+  const value = country.toLowerCase();
+  if (["瑞典", "德国", "法国", "英国", "意大利", "西班牙", "荷兰", "波兰", "欧洲", "sweden", "germany", "france", "united kingdom", "italy", "spain", "netherlands", "poland"].some((item) => value.includes(item))) return "欧洲";
+  if (["美国", "加拿大", "墨西哥", "usa", "united states", "canada", "mexico"].some((item) => value.includes(item))) return "北美";
+  if (["阿联酋", "沙特", "卡塔尔", "科威特", "以色列", "土耳其", "中东", "uae", "saudi", "qatar", "kuwait", "israel", "turkey"].some((item) => value.includes(item))) return "中东";
+  if (["中国", "日本", "韩国", "新加坡", "印度", "泰国", "越南", "马来西亚", "亚洲", "china", "japan", "korea", "singapore", "india", "thailand", "vietnam", "malaysia"].some((item) => value.includes(item))) return "亚洲";
+  return "其他";
+}
+
 app.get("/api/reports/executive", requireAuth, (req, res) => {
-  const { customers } = getStore();
-  const scopedCustomers = customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
+  const store = getStore();
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const periodStart = reportDate(monthStart);
+  const periodEnd = reportDate(monthEnd);
+  const asOfDate = reportDate(now);
+  const scopedCustomers = store.customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
+  const scopedCustomerIds = new Set(scopedCustomers.map((customer) => customer.id));
+  const scopedDeals = store.deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId) && scopedCustomerIds.has(deal.customerId));
+  const activeDeals = scopedDeals.filter((deal) => !deal.archivedAt && deal.stage !== "成交" && deal.stage !== "丢单");
+  const periodClosedDeals = scopedDeals.filter((deal) => {
+    if (deal.stage !== "成交" && deal.stage !== "丢单") return false;
+    const closedDate = (deal.closedAt || deal.stageChangedAt || "").slice(0, 10);
+    return closedDate >= periodStart && closedDate <= asOfDate;
+  });
+  const wonDeals = periodClosedDeals.filter((deal) => deal.stage === "成交");
+  const lostDeals = periodClosedDeals.filter((deal) => deal.stage === "丢单");
+  const expectedThisMonth = activeDeals.filter((deal) => deal.expectedCloseAt >= periodStart && deal.expectedCloseAt <= periodEnd);
+  const customerMap = new Map(scopedCustomers.map((customer) => [customer.id, customer]));
+  const userMap = new Map(store.users.map((user) => [user.id, user]));
+  const riskRows = activeDeals.map((deal) => {
+    const customer = customerMap.get(deal.customerId);
+    const reasons = [
+      customer?.nextReminder.includes("逾期") ? "跟进已逾期" : "",
+      (customer?.health ?? 100) < 60 ? "客户健康度偏低" : "",
+      deal.expectedCloseAt && deal.expectedCloseAt < asOfDate ? "预计成交日已过" : "",
+      !deal.nextAction.trim() ? "缺少下一动作" : "",
+      !deal.nextActionAt.trim() ? "缺少动作日期" : ""
+    ].filter(Boolean);
+    return reasons.length ? {
+      id: deal.id,
+      customerId: deal.customerId,
+      title: deal.title,
+      customer: customer?.company || "客户待确认",
+      owner: userMap.get(deal.ownerId)?.name || deal.ownerId,
+      stage: deal.stage,
+      amount: deal.amount,
+      currency: deal.currency,
+      riskReasons: reasons,
+      nextAction: deal.nextAction,
+      expectedCloseAt: deal.expectedCloseAt
+    } : null;
+  }).filter((row): row is NonNullable<typeof row> => Boolean(row));
+  const riskDealIds = new Set(riskRows.map((row) => row.id));
+  const riskDeals = activeDeals.filter((deal) => riskDealIds.has(deal.id));
+  const stageRows = ["询盘", "已联系", "已报价", "样品", "谈判"].map((stage) => {
+    const deals = activeDeals.filter((deal) => deal.stage === stage);
+    return {
+      stage,
+      count: deals.length,
+      amounts: reportMoneyRows(deals),
+      riskCount: deals.filter((deal) => riskDealIds.has(deal.id)).length,
+      weight: reportStageWeights[stage] || 0
+    };
+  });
+  const maxStageCount = Math.max(...stageRows.map((row) => row.count), 1);
+  const funnel = [
+    ...stageRows.map((row) => ({ ...row, width: row.count ? Math.max(8, Math.round((row.count / maxStageCount) * 100)) : 0 })),
+    {
+      stage: "本月成交",
+      count: wonDeals.length,
+      amounts: reportMoneyRows(wonDeals),
+      riskCount: 0,
+      weight: 1,
+      width: wonDeals.length ? Math.max(8, Math.round((wonDeals.length / maxStageCount) * 100)) : 0
+    }
+  ];
+  const marketGroups = new Map<string, Deal[]>();
+  activeDeals.forEach((deal) => {
+    const region = reportRegion(customerMap.get(deal.customerId)?.country || "其他");
+    marketGroups.set(region, [...(marketGroups.get(region) || []), deal]);
+  });
+  const market = [...marketGroups.entries()]
+    .map(([region, deals]) => ({
+      region,
+      count: deals.length,
+      share: activeDeals.length ? Math.round((deals.length / activeDeals.length) * 100) : 0,
+      amounts: reportMoneyRows(deals),
+      riskCount: deals.filter((deal) => riskDealIds.has(deal.id)).length
+    }))
+    .sort((left, right) => right.count - left.count || left.region.localeCompare(right.region));
+  const visibleOwnerIds = new Set([...scopedCustomers.map((customer) => customer.ownerId), ...scopedDeals.map((deal) => deal.ownerId)]);
+  const performance = [...visibleOwnerIds].map((ownerId) => {
+    const ownerCustomers = scopedCustomers.filter((customer) => customer.ownerId === ownerId);
+    const ownerCustomerIds = new Set(ownerCustomers.map((customer) => customer.id));
+    const ownerActiveDeals = activeDeals.filter((deal) => deal.ownerId === ownerId);
+    const ownerRiskDeals = ownerActiveDeals.filter((deal) => riskDealIds.has(deal.id));
+    const followUps = store.customerActivities.filter((activity) => ownerCustomerIds.has(activity.customerId) && activity.createdAt.slice(0, 10) >= periodStart && activity.createdAt.slice(0, 10) <= asOfDate);
+    return {
+      ownerId,
+      owner: userMap.get(ownerId)?.name || ownerId,
+      customerCount: ownerCustomers.length,
+      followUpCount: followUps.length,
+      activeDealCount: ownerActiveDeals.length,
+      forecastAmounts: reportMoneyRows(ownerActiveDeals, (deal) => deal.amount * (reportStageWeights[deal.stage] || 0)),
+      riskCount: ownerRiskDeals.length,
+      riskLabel: ownerRiskDeals.length ? `${ownerRiskDeals.length} 个风险商机` : "当前健康"
+    };
+  }).sort((left, right) => right.activeDealCount - left.activeDealCount || right.followUpCount - left.followUpCount);
+  const busiestStage = [...stageRows].sort((left, right) => right.count - left.count)[0];
+  const topMarket = market[0];
+  const winRate = periodClosedDeals.length ? Math.round((wonDeals.length / periodClosedDeals.length) * 100) : null;
+  const scopeLabel = req.user!.role === "sales" ? "本人业务" : req.user!.role === "manager" ? "本团队业务" : "全公司业务";
+  const currencySet = new Set(activeDeals.map((deal) => deal.currency || "未设置"));
+  const dataStatus = activeDeals.length || periodClosedDeals.length ? "实时数据" : "数据不足";
+  const conclusions = [
+    {
+      title: expectedThisMonth.length ? `本月有 ${expectedThisMonth.length} 个商机预计成交` : "本月暂无明确预计成交商机",
+      detail: expectedThisMonth.length ? "预测基于商机预计成交日期，并按原币分别展示。" : "建议补齐商机预计成交日期，避免预测遗漏。"
+    },
+    {
+      title: riskRows.length ? `${riskRows.length} 个风险商机需要处理` : "当前未识别到风险商机",
+      detail: riskRows.length ? riskRows.slice(0, 2).map((row) => `${row.customer}：${row.riskReasons.join("、")}`).join("；") : "风险规则包含逾期、低健康度、预计成交日已过和动作缺失。"
+    },
+    {
+      title: busiestStage?.count ? `${busiestStage.stage}阶段商机最多` : "当前漏斗暂无活跃商机",
+      detail: busiestStage?.count ? `${busiestStage.count} 个商机处于该阶段，建议优先检查停留时间和下一动作。` : "新增或同步商机后，系统将自动生成漏斗快照。"
+    },
+    {
+      title: winRate === null ? "本月暂无可计算的赢单率" : `本月商机赢单率 ${winRate}%`,
+      detail: winRate === null ? "赢单率仅按本月已关闭的成交与丢单商机计算。" : `${wonDeals.length} 个成交，${lostDeals.length} 个丢单，分母为本月已关闭商机。`
+    }
+  ];
+  const actions = riskRows.length
+    ? riskRows.slice(0, 3).map((row) => ({
+        dealId: row.id,
+        customerId: row.customerId,
+        title: `${row.customer} · ${row.stage}`,
+        detail: `${row.riskReasons.join("、")}；下一动作：${row.nextAction || "待补充"}`
+      }))
+    : expectedThisMonth.slice(0, 3).map((deal) => ({
+        dealId: deal.id,
+        customerId: deal.customerId,
+        title: `${customerMap.get(deal.customerId)?.company || deal.title} · ${deal.stage}`,
+        detail: `预计 ${deal.expectedCloseAt} 成交；下一动作：${deal.nextAction || "待补充"}`
+      }));
   res.json({
-    title: "2026 年 6 月外贸销售经营汇报",
-    forecastAmount: scopedCustomers.reduce((sum, customer) => sum + customer.amount, 0),
-    conversionRate: 18.6,
-    riskAmount: scopedCustomers.filter((customer) => customer.nextReminder === "已逾期").reduce((sum, customer) => sum + customer.amount, 0),
-    conclusions: [
-      "成交预测可达成",
-      "报价跟进是短板",
-      "欧洲市场质量最高",
-      "培训影响转化"
+    title: "外贸销售实时经营快照",
+    scope: {
+      key: req.user!.role === "sales" ? "self" : req.user!.role === "manager" ? "team" : "global",
+      label: scopeLabel
+    },
+    period: {
+      label: `${now.getFullYear()} 年 ${now.getMonth() + 1} 月（截至 ${asOfDate}）`,
+      start: periodStart,
+      end: asOfDate,
+      forecastEnd: periodEnd,
+      asOf: now.toISOString(),
+      timezone: "服务器本地时区"
+    },
+    amountBasis: {
+      label: currencySet.size > 1 ? "多币种原币分列，不跨币种合计" : `${[...currencySet][0] || "无金额"} 原币口径`,
+      currencies: [...currencySet].sort(),
+      exchangeRateApplied: false
+    },
+    dataStatus,
+    headline: expectedThisMonth.length
+      ? `本月共有 ${expectedThisMonth.length} 个商机进入预计成交窗口，当前识别 ${riskRows.length} 个风险商机。`
+      : `当前有 ${activeDeals.length} 个活跃商机，本月尚无商机进入明确预计成交窗口。`,
+    note: "活跃漏斗为当前快照；本月成交、丢单和跟进按自然月统计；预计成交按预计成交日期判断。",
+    metrics: {
+      activeDealCount: activeDeals.length,
+      activePipeline: reportMoneyRows(activeDeals),
+      weightedForecast: reportMoneyRows(activeDeals, (deal) => deal.amount * (reportStageWeights[deal.stage] || 0)),
+      expectedThisMonth: reportMoneyRows(expectedThisMonth),
+      wonThisMonth: reportMoneyRows(wonDeals),
+      riskAmounts: reportMoneyRows(riskDeals),
+      riskDealCount: riskRows.length,
+      winRate,
+      closedCount: periodClosedDeals.length
+    },
+    conclusions,
+    funnel,
+    market,
+    forecastByStage: stageRows.map((row) => ({
+      stage: row.stage,
+      count: row.count,
+      weight: row.weight,
+      weightedAmounts: reportMoneyRows(activeDeals.filter((deal) => deal.stage === row.stage), (deal) => deal.amount * row.weight)
+    })),
+    performanceTitle: req.user!.role === "sales" ? "个人经营效率" : "成员经营对比",
+    performance,
+    riskRows,
+    actions,
+    definitions: [
+      "活跃管道：未成交、未丢单且未归档的当前商机。",
+      "阶段加权预测：询盘 5%、已联系 10%、已报价 30%、样品 50%、谈判 70%。",
+      "本月赢单率：本月成交数 ÷ 本月已关闭商机数。",
+      "风险商机：跟进逾期、客户健康度低于 60、预计成交日已过或下一动作信息缺失。",
+      "金额未应用汇率，所有金额按原币分别展示。"
     ]
   });
 });
@@ -4661,7 +6681,8 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 async function startServer() {
   const port = Number(process.env.PORT || 4188);
-  const mysqlRequested = process.env.CRM_STORE === "mysql" || Boolean(process.env.DATABASE_URL || process.env.MYSQL_URL);
+  const mysqlRequested = process.env.CRM_STORE === "mysql"
+    || (process.env.CRM_STORE !== "memory" && Boolean(process.env.DATABASE_URL || process.env.MYSQL_URL));
   if (mysqlRequested) {
     try {
       const store = await createMysqlStore();

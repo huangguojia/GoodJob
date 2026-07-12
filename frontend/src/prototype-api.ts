@@ -1,6 +1,16 @@
 type Role = "sales" | "manager" | "admin" | "super_admin";
+type DashboardPeriod = "today" | "week" | "month";
 
 import * as XLSX from "xlsx";
+import * as echarts from "echarts/core";
+import { LineChart } from "echarts/charts";
+import { GridComponent, TooltipComponent } from "echarts/components";
+import { SVGRenderer } from "echarts/renderers";
+
+echarts.use([LineChart, GridComponent, TooltipComponent, SVGRenderer]);
+
+let dashboardLeadFunnelChart: ReturnType<typeof echarts.init> | null = null;
+let dashboardLeadFunnelResizeObserver: ResizeObserver | null = null;
 
 interface User {
   id: string;
@@ -41,6 +51,21 @@ interface Customer {
   pipelineStage?: string;
   pipelineAmount?: number;
   activeDealCount?: number;
+  ownerId?: string;
+  ownerName?: string;
+  activities?: CustomerActivity[];
+  lastActivityAt?: string;
+}
+
+interface CustomerActivity {
+  id: string;
+  customerId: string;
+  type: string;
+  content: string;
+  operatorId: string;
+  operatorName?: string;
+  nextReminder: string;
+  createdAt: string;
 }
 
 interface Todo {
@@ -57,19 +82,55 @@ interface Todo {
   impactAmount?: number;
   createdAt?: string;
   historyAt?: string;
+  customerId?: string;
+  dealId?: string;
+  reminderRuleId?: string;
+  triggerKey?: string;
+  snoozedFrom?: string;
+  snoozeReason?: string;
+  snoozeCount?: number;
+  snoozedBy?: string;
+  completedAt?: string;
+  completedBy?: string;
+  completionResult?: string;
 }
 
 interface Deal {
   id: string;
-  customerId?: string;
+  customerId: string;
   title: string;
   stage: string;
   product?: string;
   quantity?: number;
   unitPrice?: number;
   amount: number;
+  currency: string;
+  amountType: "estimate" | "quoted" | "won";
   nextAction: string;
+  nextActionAt: string;
+  expectedCloseAt: string;
+  stageChangedAt: string;
+  closedAt?: string;
+  wonReason?: string;
+  lostReason?: string;
+  lostReasonCategory?: string;
+  revisitAt?: string;
   archivedAt?: string;
+}
+
+interface DealEvent {
+  id: string;
+  dealId: string;
+  type: string;
+  content: string;
+  operatorId: string;
+  operatorName?: string;
+  fromStage?: string;
+  toStage?: string;
+  nextAction?: string;
+  nextActionAt?: string;
+  relatedDocumentId?: string;
+  createdAt: string;
 }
 
 interface Reminder {
@@ -85,6 +146,14 @@ interface Reminder {
   priority?: "high" | "medium" | "normal";
   enabled?: boolean;
   generatedCount?: number;
+  targetOwnerId?: string;
+  lastRunBy?: string;
+  lastRunAt?: string;
+  lastMatchedCount?: number;
+  lastCreatedCount?: number;
+  lastSkippedCount?: number;
+  lastFailedCount?: number;
+  lastError?: string;
 }
 
 interface ImportExportJob {
@@ -109,8 +178,31 @@ interface TradeDocumentItem {
   packageCount: number;
 }
 
+interface TradeDocumentAudit {
+  id: string;
+  field: string;
+  oldValue: string;
+  newValue: string;
+  operatorId: string;
+  operatorName: string;
+  createdAt: string;
+}
+
+interface TradeDocumentSendRecord {
+  id: string;
+  channel: "email" | "whatsapp" | "wechat" | "manual";
+  recipient: string;
+  message: string;
+  operatorId: string;
+  operatorName: string;
+  createdAt: string;
+}
+
 interface TradeDocument {
   id: string;
+  customerId: string;
+  dealId: string;
+  revision: number;
   type: "PI" | "CI";
   title: string;
   number: string;
@@ -130,7 +222,12 @@ interface TradeDocument {
   bankInfo: string;
   notes: string;
   templateStyle: "executive" | "classic" | "compact";
-  status: "draft" | "ready" | "exported";
+  status: "draft" | "ready" | "pending_approval" | "approved" | "rejected" | "exported";
+  approvalNote?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+  audits: TradeDocumentAudit[];
+  sendRecords: TradeDocumentSendRecord[];
   updatedAt: string;
   items: TradeDocumentItem[];
 }
@@ -180,7 +277,12 @@ interface MonthlySalesRecord {
   salesAmount: number;
   currency: string;
   exchangeRate: number;
+  exchangeRateDate: string;
+  exchangeRateSource: "pending" | "manual" | "finance";
+  settlementCurrency: string;
   settlementAmount: number;
+  basisType: "deal_amount" | "receipt";
+  basisDate: string;
   dealArchivedAt: string;
   sourceType: "deal" | "manual" | "adjusted";
   status: "draft" | "confirmed" | "reviewed" | "locked";
@@ -213,7 +315,14 @@ interface CommissionCalculation {
   manualAdjustment: number;
   finalCommission: number;
   status: "pending" | "calculated" | "reviewed" | "locked";
+  version: number;
+  isCurrent: boolean;
   calculatedAt: string;
+  reviewedBy: string;
+  reviewedAt: string;
+  lockedBy: string;
+  lockedAt: string;
+  unlockReason: string;
 }
 
 interface CommissionItem {
@@ -223,6 +332,7 @@ interface CommissionItem {
   productId: string;
   itemType: "auto" | "bonus" | "deduction" | "subsidy" | "refund" | "special" | "other";
   sourceType: "auto" | "manual";
+  ruleSnapshotJson: string;
   salesAmount: number;
   autoAmount: number;
   manualAmount: number;
@@ -348,7 +458,7 @@ interface WebsiteOpportunity {
   contact: string;
   contactInfo: string;
   description: string;
-  status: string;
+  status: "preview" | "contactable" | "contacted" | "synced" | "excluded";
   createdAt: string;
   customerId?: string;
   dealId?: string;
@@ -360,7 +470,19 @@ interface WebsiteOpportunity {
   lastDevelopmentEmailAt?: string;
   lastDevelopmentEmailSubject?: string;
   lastDevelopmentEmailTo?: string;
+  verifiedAt?: string;
+  statusChangedAt?: string;
+  excludedReason?: string;
   selected?: boolean;
+  ownerId?: string;
+  teamId?: string;
+}
+
+interface ProspectAssignee {
+  id: string;
+  name: string;
+  role: string;
+  teamId: string;
 }
 
 interface LeadProviderStatus {
@@ -441,9 +563,23 @@ interface Memo {
   content: string;
   category: string;
   tags: string;
+  customerId: string;
+  dealId: string;
   pinned: boolean;
   archived: boolean;
+  deletedAt: string;
   updatedAt: string;
+}
+
+interface MemoDraft {
+  title: string;
+  content: string;
+  category: string;
+  tags: string;
+  customerId: string;
+  dealId: string;
+  serverUpdatedAt: string;
+  draftAt: string;
 }
 
 interface PlanTask {
@@ -452,10 +588,20 @@ interface PlanTask {
   phase: string;
   category: string;
   priority: "high" | "medium" | "normal";
-  status: "planned" | "active" | "done";
+  status: "planned" | "active" | "done" | "cancelled";
   dueAt: string;
   target: string;
   description: string;
+  customerId?: string;
+  leadId?: string;
+  dealId?: string;
+  completionResult?: string;
+  completedAt?: string;
+  cancellationReason?: string;
+  cancelledAt?: string;
+  rescheduledFrom?: string;
+  rescheduledAt?: string;
+  rescheduleReason?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -507,7 +653,28 @@ interface CaseStudy {
 
 interface DashboardSummary {
   scope: string;
+  scopeLabels: {
+    business: string;
+    todos: string;
+  };
   updatedAt: string;
+  periods: Record<DashboardPeriod, {
+    label: string;
+    start: string;
+    end: string;
+    expectedDeals: number;
+    expectedAmounts: Array<{ currency: string; amount: number }>;
+    pendingTodos: number;
+    highPriorityTodos: number;
+    newLeads: number;
+    briefing: {
+      title: string;
+      description: string;
+      basis: string;
+      action: string;
+      impact: string;
+    };
+  }>;
   briefing: {
     title: string;
     description: string;
@@ -522,6 +689,7 @@ interface DashboardSummary {
   };
   metrics: {
     customers: number;
+    riskCustomers: number;
     todos: number;
     overdueTodos: number;
     forecastAmount: number;
@@ -536,6 +704,12 @@ interface DashboardSummary {
     followHealth: number;
     overdueRate: number;
     avgResponseHours: number;
+  };
+  leadFunnel: {
+    stages: Array<{ key: string; label: string; count: number; conversionRate: number }>;
+    todayAdded: number;
+    filteredOut: number;
+    dealConversionRate: number;
   };
   pipelineHealth: Array<{ stage: string; count: number; amount: number; riskCount: number; width: number; tone: string }>;
   todoInsights: {
@@ -577,6 +751,24 @@ interface Lead {
   convertedCustomerId: string;
   convertedDealId?: string;
   createdAt: string;
+  deletedAt?: string;
+  deletedReason?: string;
+  deletedBy?: string;
+  purgeAt?: string;
+  statusBeforeDelete?: "new" | "following" | "converted" | "invalid";
+}
+
+interface LeadSourceEvent {
+  id: string;
+  leadId: string;
+  sourceType: string;
+  channel: string;
+  campaign: string;
+  externalId: string;
+  sourceUrl: string;
+  occurredAt: string;
+  receivedAt: string;
+  rawPayload: string;
 }
 
 interface LeadConversionMatch {
@@ -603,18 +795,169 @@ interface LeadActivity {
   createdAt: string;
 }
 
+interface WhatsAppMessage {
+  id: string;
+  customerId: string;
+  direction: "inbound" | "outbound";
+  content: string;
+  contentTranslated: string;
+  mediaUrl: string;
+  status: string;
+  waMessageId: string;
+  createdAt: string;
+}
+
+interface WhatsAppBinding {
+  id: string;
+  customerId: string;
+  phoneNumber: string;
+  waProfileName: string;
+  lastMessageAt: string;
+  unreadCount: number;
+  createdAt: string;
+  bindingMode?: "web-scan" | "twilio-api" | "manual";
+  userId?: string;
+  sessionData?: string;
+  twilioPhoneNumber?: string;
+  connectionStatus?: "connected" | "disconnected" | "qr-pending" | "error";
+  lastConnectedAt?: string;
+}
+
+interface WhatsAppThread {
+  customerId: string;
+  company: string;
+  country: string;
+  contact: string;
+  phoneNumber: string;
+  waProfileName: string;
+  unreadCount: number;
+  lastMessage: string;
+  lastMessageAt: string;
+  messageCount: number;
+}
+
+interface ReportMoneyRow {
+  currency: string;
+  amount: number;
+}
+
+interface ExecutiveReport {
+  title: string;
+  scope: { key: "self" | "team" | "global"; label: string };
+  period: {
+    label: string;
+    start: string;
+    end: string;
+    forecastEnd: string;
+    asOf: string;
+    timezone: string;
+  };
+  amountBasis: {
+    label: string;
+    currencies: string[];
+    exchangeRateApplied: boolean;
+  };
+  dataStatus: string;
+  headline: string;
+  note: string;
+  metrics: {
+    activeDealCount: number;
+    activePipeline: ReportMoneyRow[];
+    weightedForecast: ReportMoneyRow[];
+    expectedThisMonth: ReportMoneyRow[];
+    wonThisMonth: ReportMoneyRow[];
+    riskAmounts: ReportMoneyRow[];
+    riskDealCount: number;
+    winRate: number | null;
+    closedCount: number;
+  };
+  conclusions: Array<{ title: string; detail: string }>;
+  funnel: Array<{
+    stage: string;
+    count: number;
+    amounts: ReportMoneyRow[];
+    riskCount: number;
+    weight: number;
+    width: number;
+  }>;
+  market: Array<{
+    region: string;
+    count: number;
+    share: number;
+    amounts: ReportMoneyRow[];
+    riskCount: number;
+  }>;
+  forecastByStage: Array<{
+    stage: string;
+    count: number;
+    weight: number;
+    weightedAmounts: ReportMoneyRow[];
+  }>;
+  performanceTitle: string;
+  performance: Array<{
+    ownerId: string;
+    owner: string;
+    customerCount: number;
+    followUpCount: number;
+    activeDealCount: number;
+    forecastAmounts: ReportMoneyRow[];
+    riskCount: number;
+    riskLabel: string;
+  }>;
+  riskRows: Array<{
+    id: string;
+    customerId: string;
+    title: string;
+    customer: string;
+    owner: string;
+    stage: string;
+    amount: number;
+    currency: string;
+    riskReasons: string[];
+    nextAction: string;
+    expectedCloseAt: string;
+  }>;
+  actions: Array<{ dealId: string; customerId: string; title: string; detail: string }>;
+  definitions: string[];
+}
+
 interface AppState {
   user: User | null;
   summary: DashboardSummary | null;
   customers: Customer[];
   leads: Lead[];
+  leadTrash: Lead[];
   leadActivities: LeadActivity[];
   selectedLeadId: string | null;
+  leadView: "active" | "trash";
   leadStageFilter: string;
+  leadIntentFilter: string;
+  leadSourceFilter: string;
+  leadFollowFilter: string;
   leadSearch: string;
+  leadPage: number;
+  whatsappThreads: WhatsAppThread[];
+  whatsappMessages: WhatsAppMessage[];
+  whatsappBinding: WhatsAppBinding | null;
+  selectedWaCustomerId: string | null;
+  waThreadSearch: string;
   todos: Todo[];
   deals: Deal[];
+  dealEvents: DealEvent[];
+  closedDeals: Deal[];
+  closedDealTotal: number;
+  closedDealCounts: { won: number; lost: number; revisit: number };
+  closedDealPage: number;
+  closedDealKeyword: string;
+  closedDealStatus: string;
+  closedDealMonth: string;
+  selectedDealId: string | null;
+  pipelineStageFilter: string;
+  pipelineSearch: string;
+  pipelineDueFilter: string;
   reminders: Reminder[];
+  reminderView: "tasks" | "rules";
+  reminderFilter: "pending" | "overdue" | "today" | "future" | "snoozed" | "done";
   jobs: ImportExportJob[];
   tradeDocuments: TradeDocument[];
   wecomMessages: WecomMessage[];
@@ -631,8 +974,15 @@ interface AppState {
   pendingAiDeleteId: string | null;
   problems: ProblemItem[];
   memos: Memo[];
+  deletedMemos: Memo[];
+  memoStatus: "active" | "archived" | "deleted";
+  memoSearch: string;
+  memoPinnedOnly: boolean;
   planTasks: PlanTask[];
   planTemplates: PlanTemplate[];
+  selectedPlanTaskIds: string[];
+  planTaskView: "today" | "week" | "templates";
+  planTaskStatusFilter: "open" | "done" | "cancelled" | "all";
   competitors: Competitor[];
   caseStudies: CaseStudy[];
   commissionProducts: CommissionProduct[];
@@ -650,17 +1000,19 @@ interface AppState {
   selectedCommissionRecordId: string | null;
   selectedCommissionCalculationId: string | null;
   accounts: User[];
+  executiveReport: ExecutiveReport | null;
   reportNote: string;
-  dashboardPeriod: "today" | "week" | "month";
+  dashboardPeriod: DashboardPeriod;
   morningView: boolean;
   todoFilter: "all" | "today" | "overdue" | "mine" | "customer" | "history";
   openTodoMenuId: string | null;
   draggingTodoId: string | null;
   selectedCustomerId: string | null;
   selectedCustomerIds: string[];
+  customerSearch: string;
+  customerQueueFilter: "all" | "overdue" | "no-activity" | "no-deal";
   selectedProblemId: string | null;
   selectedMemoId: string | null;
-  selectedPlanTaskIds: string[];
   selectedPlanTemplateId: string | null;
   selectedCompetitorId: string | null;
   selectedCaseId: string | null;
@@ -670,8 +1022,12 @@ interface AppState {
   selectedDocumentId: string | null;
   selectedLeadFinderId: string | null;
   leadFinderFilter: "all" | "pending" | "high" | "duplicate" | "synced";
+  leadFinderPage: number;
   selectedProspectId: string | null;
-  prospectFilter: "all" | "pending" | "mailed" | "high" | "synced";
+  selectedProspectIds: string[];
+  prospectFilter: "all" | "preview" | "contactable" | "contacted" | "synced" | "excluded";
+  prospectPage: number;
+  prospectAssignees: ProspectAssignee[];
   leadProviders: LeadProviderStatus[];
   selectedLeadSources: string[];
   leadSourceSelectionTouched: boolean;
@@ -682,13 +1038,38 @@ const state: AppState = {
   summary: null,
   customers: [],
   leads: [],
+  leadTrash: [],
   leadActivities: [],
   selectedLeadId: null,
+  leadView: "active",
   leadStageFilter: "all",
+  leadIntentFilter: "all",
+  leadSourceFilter: "all",
+  leadFollowFilter: "all",
   leadSearch: "",
+  leadPage: 1,
+  whatsappThreads: [],
+  whatsappMessages: [],
+  whatsappBinding: null,
+  selectedWaCustomerId: null,
+  waThreadSearch: "",
   todos: [],
   deals: [],
+  dealEvents: [],
+  closedDeals: [],
+  closedDealTotal: 0,
+  closedDealCounts: { won: 0, lost: 0, revisit: 0 },
+  closedDealPage: 1,
+  closedDealKeyword: "",
+  closedDealStatus: "all",
+  closedDealMonth: "",
+  selectedDealId: null,
+  pipelineStageFilter: "询盘",
+  pipelineSearch: "",
+  pipelineDueFilter: "all",
   reminders: [],
+  reminderView: "tasks",
+  reminderFilter: "pending",
   jobs: [],
   tradeDocuments: [],
   wecomMessages: [],
@@ -705,8 +1086,15 @@ const state: AppState = {
   pendingAiDeleteId: null,
   problems: [],
   memos: [],
+  deletedMemos: [],
+  memoStatus: "active",
+  memoSearch: "",
+  memoPinnedOnly: false,
   planTasks: [],
   planTemplates: [],
+  selectedPlanTaskIds: [],
+  planTaskView: "today",
+  planTaskStatusFilter: "open",
   competitors: [],
   caseStudies: [],
   commissionProducts: [],
@@ -724,6 +1112,7 @@ const state: AppState = {
   selectedCommissionRecordId: null,
   selectedCommissionCalculationId: null,
   accounts: [],
+  executiveReport: null,
   reportNote: "",
   dashboardPeriod: "today",
   morningView: false,
@@ -732,9 +1121,10 @@ const state: AppState = {
   draggingTodoId: null,
   selectedCustomerId: null,
   selectedCustomerIds: [],
+  customerSearch: "",
+  customerQueueFilter: "all",
   selectedProblemId: null,
   selectedMemoId: null,
-  selectedPlanTaskIds: [],
   selectedPlanTemplateId: null,
   selectedCompetitorId: null,
   selectedCaseId: null,
@@ -744,8 +1134,12 @@ const state: AppState = {
   selectedDocumentId: null,
   selectedLeadFinderId: null,
   leadFinderFilter: "all",
+  leadFinderPage: 1,
   selectedProspectId: null,
+  selectedProspectIds: [],
   prospectFilter: "all",
+  prospectPage: 1,
+  prospectAssignees: [],
   leadProviders: [],
   selectedLeadSources: [],
   leadSourceSelectionTouched: false
@@ -754,6 +1148,11 @@ const state: AppState = {
 let memoDirty = false;
 let memoSaving = false;
 let memoSavePromise: Promise<void> | null = null;
+let memoSaveTimer = 0;
+let memoEditRevision = 0;
+let memoMobileDetailOpen = false;
+let memoDeleteBusy = false;
+const resolvedMemoDrafts = new Set<string>();
 let leadFinderJobs: LeadFinderJob[] = [];
 let customerClockTimer = 0;
 let openWorkspaceTabs = ["dashboard"];
@@ -842,6 +1241,10 @@ function amount(value: number) {
   return `$${value.toLocaleString("en-US")}`;
 }
 
+function currencyAmount(value: number, currency = "CNY") {
+  return `${escapeHtml(currency)} ${Number(value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 function currentDateTimeText() {
   const date = new Date();
   const pad = (value: number) => String(value).padStart(2, "0");
@@ -907,37 +1310,6 @@ function historyTodos(todos: Todo[]) {
 
 function badge(text: string, tone = "") {
   return `<span class="badge ${tone}">${text}</span>`;
-}
-
-const instrumentWeekTodos = [
-  "第1天：整理仪表产品分类与参数卡",
-  "第1天：建立仪表客户搜索关键词库10组",
-  "第2天：整理公司证书与报价资料清单",
-  "第2天：新增30家仪表目标客户到客户池",
-  "第3天：完成客户角色-痛点-话术表",
-  "第3天：首触达20家高匹配客户",
-  "第4天：整理竞品替代切入点5条",
-  "第4天：跟进昨日未回复客户10家",
-  "第5天：制作参数确认表模板",
-  "第5天：深挖3家A类客户并写入CRM",
-  "第6天：完成第一周开发周报",
-  "第7天：复盘并优化ICP规则"
-];
-
-const instrumentMemoTitle = "计划任务执行方案";
-
-function instrumentPlanMemoContent() {
-  return [
-    "90天总目标：600+目标客户池，900+有效触达，60个有效回复，20个深度沟通，8个RFQ/样品/会议机会。",
-    "",
-    "每日最低动作：新增客户30家，首触达20家，二次跟进10家，深挖3家A类客户，CRM更新30条，15分钟复盘。",
-    "",
-    "前置知识：压力/温度/流量/液位/分析仪表/记录仪；量程、精度、介质、温压、连接方式、输出信号、供电、防护等级、材质；CE、RoHS、EMC、ATEX/IECEx、防爆、SIL、校准证书、ISO、材质报告。",
-    "",
-    "客户画像：工业自动化经销商、系统集成商、OEM设备厂、EPC/工程承包商、MRO维修服务商、终端工厂采购/工程师。",
-    "",
-    "周报结构：新增客户池、有效触达、有效回复、深度沟通、RFQ/样品/会议机会、问题与改进、下周计划。"
-  ].join("\n");
 }
 
 function todoTypeText(type: string) {
@@ -1287,12 +1659,13 @@ async function sendDevelopmentEmail(button?: HTMLButtonElement) {
 
 async function refreshAll(user: User) {
   renderDashboardCache(user);
-  const [summary, customers, leadsResp, todos, deals, reminders, jobs, tradeDocs, wecom, knowledge, exams, ocr, websiteOps, aiConfig, problems, memos, planTasks, planTemplates, competitors, caseStudies, commissionProducts, commissionRecords, commissionCalculations] = await Promise.all([
+  const [summary, customers, leadsResp, leadTrashResp, todos, deals, reminders, jobs, tradeDocs, wecom, knowledge, exams, ocr, websiteOps, prospectAssignees, aiConfig, problems, memos, deletedMemos, planTasks, planTemplates, competitors, caseStudies, commissionProducts, commissionRecords, commissionCalculations] = await Promise.all([
     api<DashboardSummary>("/api/dashboard/summary"),
     api<{ customers: Customer[] }>("/api/customers"),
     api<{ leads: Lead[] }>("/api/leads"),
+    api<{ leads: Lead[] }>("/api/leads?trash=true"),
     api<{ todos: Todo[] }>("/api/todos"),
-    api<{ deals: Deal[] }>("/api/deals"),
+    api<{ deals: Deal[]; events: DealEvent[] }>("/api/deals"),
     api<{ reminders: Reminder[] }>("/api/reminders"),
     api<{ jobs: ImportExportJob[] }>("/api/import-export/jobs"),
     api<{ documents: TradeDocument[] }>("/api/trade-documents"),
@@ -1301,9 +1674,11 @@ async function refreshAll(user: User) {
     api<{ exams: Exam[]; report: ExamReport }>("/api/exams"),
     api<{ job: OcrJob }>("/api/tools/ocr/jobs/ocr1"),
     api<{ opportunities: WebsiteOpportunity[] }>("/api/tools/website-opportunities"),
+    api<{ assignees: ProspectAssignee[] }>("/api/prospect-list/assignees"),
     api<{ config: AiModelConfig | null; configs?: AiModelConfig[] }>("/api/tools/ai-config"),
     api<{ problems: ProblemItem[] }>("/api/problems"),
     api<{ memos: Memo[] }>("/api/memos"),
+    api<{ memos: Memo[] }>("/api/memos?trash=true"),
     api<{ tasks: PlanTask[] }>("/api/plan-tasks"),
     api<{ templates: PlanTemplate[] }>("/api/plan-templates"),
     api<{ competitors: Competitor[] }>("/api/competitors"),
@@ -1316,8 +1691,10 @@ async function refreshAll(user: User) {
   state.summary = summary;
   state.customers = customers.customers;
   state.leads = leadsResp.leads;
+  state.leadTrash = leadTrashResp.leads;
   state.todos = todos.todos;
   state.deals = deals.deals;
+  state.dealEvents = deals.events;
   state.reminders = reminders.reminders;
   state.jobs = jobs.jobs;
   state.tradeDocuments = tradeDocs.documents;
@@ -1327,6 +1704,7 @@ async function refreshAll(user: User) {
   state.examReport = exams.report;
   state.ocrJob = ocr.job;
   state.websiteOpportunities = websiteOps.opportunities;
+  state.prospectAssignees = prospectAssignees.assignees;
   state.aiConfig = aiConfig.config;
   state.aiConfigs = aiConfig.configs || (aiConfig.config ? [aiConfig.config] : []);
   state.selectedAiConfigId = state.selectedAiConfigId && state.aiConfigs.some((item) => item.id === state.selectedAiConfigId)
@@ -1334,6 +1712,7 @@ async function refreshAll(user: User) {
     : state.aiConfig?.id || state.aiConfigs[0]?.id || null;
   state.problems = problems.problems;
   state.memos = memos.memos;
+  state.deletedMemos = deletedMemos.memos;
   state.planTasks = planTasks.tasks;
   state.planTemplates = planTemplates.templates;
   state.competitors = competitors.competitors;
@@ -1362,6 +1741,7 @@ async function refreshAll(user: User) {
   renderCustomers(customers.customers);
   renderLeads();
   renderPipeline(deals.deals);
+  void refreshClosedDeals();
   renderReminders(reminders.reminders);
   renderJobs(jobs.jobs);
   renderTradeDocuments(tradeDocs.documents);
@@ -1370,7 +1750,7 @@ async function refreshAll(user: User) {
   renderExams(exams.exams);
   renderDashboardKnowledgePanels(knowledge.assets, exams.exams);
   renderProblems(problems.problems);
-  renderMemos(memos.memos);
+  renderMemos();
   renderPlanTasks(planTasks.tasks);
   renderPlanTemplates(planTemplates.templates);
   renderCompetitors(competitors.competitors);
@@ -1384,6 +1764,7 @@ async function refreshAll(user: User) {
   renderProspectList();
   renderTopbarStats();
   void loadLeadProviders();
+  void reloadWhatsAppThreads();
 }
 
 async function loadLeadProviders() {
@@ -1456,98 +1837,101 @@ async function refreshDashboardOnly() {
 }
 
 function renderDashboard(summary: DashboardSummary, todos: Todo[], customers: Customer[], fromCache = false) {
+  const roleBusinessScope = state.user?.role === "manager" ? "团队业务" : state.user && ["admin", "super_admin"].includes(state.user.role) ? "全局业务" : "本人业务";
+  const scopeLabels = summary.scopeLabels || {
+    business: roleBusinessScope,
+    todos: "本人待办"
+  };
   qs("#scopeText")!.textContent = summary.scope;
-  const periodLabel = dashboardPeriodLabel();
-  qs<HTMLElement>(".focus-top span:first-child")!.textContent = `${periodLabel}优先处理建议`;
-  qs<HTMLElement>(".focus-top span:last-child")!.textContent = fromCache ? "缓存数据 · 后台刷新中" : `${formatTime(summary.updatedAt)} 已更新`;
-  qs<HTMLElement>(".focus-title h2")!.textContent = dashboardPeriodTitle(summary);
-  qs<HTMLElement>(".focus-title p")!.textContent = dashboardPeriodDescription(summary);
+  qs<HTMLElement>("#businessScopeTag")!.textContent = scopeLabels.business;
+  qs<HTMLElement>("#todoScopeTag")!.textContent = scopeLabels.todos;
+  qsa<HTMLElement>("[data-business-scope]").forEach((node) => {
+    node.textContent = scopeLabels.business;
+  });
+  const period = summary.periods?.[state.dashboardPeriod] || {
+    label: "今日",
+    start: summary.updatedAt.slice(0, 10),
+    end: summary.updatedAt.slice(0, 10),
+    expectedDeals: summary.briefing.closableDeals,
+    expectedAmounts: [{ currency: "USD", amount: summary.briefing.closableAmount }],
+    pendingTodos: summary.metrics.todos,
+    highPriorityTodos: summary.metrics.overdueTodos,
+    newLeads: summary.leadFunnel.todayAdded,
+    briefing: {
+      title: summary.briefing.title,
+      description: summary.briefing.description,
+      basis: summary.briefing.basis,
+      action: summary.briefing.action,
+      impact: summary.briefing.impact
+    }
+  };
+  qsa<HTMLButtonElement>("[data-dashboard-period]").forEach((button) => {
+    const active = button.dataset.dashboardPeriod === state.dashboardPeriod;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  qs<HTMLElement>("#dashboardUpdatedAt")!.textContent = fromCache ? "缓存数据 · 后台刷新中" : `${formatTime(summary.updatedAt)} 已更新`;
+  qs<HTMLElement>(".focus-title h2")!.textContent = period.briefing.title;
+  qs<HTMLElement>(".focus-title p")!.textContent = period.briefing.description;
   const basis = qs<HTMLElement>("#briefingBasis");
   const action = qs<HTMLElement>("#briefingAction");
   const impact = qs<HTMLElement>("#briefingImpact");
-  if (basis) basis.textContent = summary.briefing.basis;
-  if (action) action.textContent = summary.briefing.action;
-  if (impact) impact.textContent = summary.briefing.impact;
+  if (basis) basis.textContent = period.briefing.basis;
+  if (action) action.textContent = period.briefing.action;
+  if (impact) impact.textContent = period.briefing.impact;
   const focusMetrics = qsa<HTMLElement>(".focus-metric");
-  if (focusMetrics[0]) focusMetrics[0].innerHTML = `<span>高风险金额</span><b>${money(summary.briefing.riskAmount)}</b><small>${escapeHtml(summary.briefing.riskLabel)}</small>`;
-  if (focusMetrics[1]) focusMetrics[1].innerHTML = `<span>待主管协同</span><b>${summary.metrics.overdueTodos} 项</b><small>高优先级待办</small>`;
-  if (focusMetrics[2]) focusMetrics[2].innerHTML = `<span>${periodLabel}可成交</span><b>${summary.briefing.closableDeals} 单</b><small>预计 ${money(summary.briefing.closableAmount)}</small>`;
-  if (focusMetrics[3]) focusMetrics[3].innerHTML = `<span>企微未读提醒</span><b>${summary.briefing.unreadWecom} 条</b><small>来自客户会话</small>`;
-  const kpis = qsa<HTMLElement>("#dashboard .kpi strong");
-  const multiplier = dashboardPeriodMultiplier();
-  if (kpis[0]) kpis[0].textContent = String(Math.max(summary.metrics.todos, Math.round(summary.metrics.todos * multiplier)));
-  if (kpis[1]) kpis[1].textContent = String(Math.max(summary.metrics.customers, Math.round(summary.metrics.customers * multiplier)));
-  if (kpis[2]) kpis[2].textContent = money(Math.round(summary.metrics.forecastAmount * multiplier));
-  if (kpis[3]) kpis[3].textContent = `${summary.metrics.wecomBoundRate}%`;
-  const kpiNotes = qsa<HTMLElement>("#dashboard .kpi p");
-  if (kpiNotes[0]) kpiNotes[0].innerHTML = badge(`${summary.metrics.overdueTodos} 个高优先级`, summary.metrics.overdueTodos ? "red" : "green");
-  if (kpiNotes[1]) kpiNotes[1].textContent = `${periodLabel}客户视角 · 当前账号可见 ${summary.metrics.customers} 个`;
-  if (kpiNotes[2]) kpiNotes[2].textContent = `${periodLabel}按可见商机金额汇总`;
-  if (kpiNotes[3]) kpiNotes[3].textContent = `${customers.filter((customer) => !customer.wecomBound).length} 个客户待绑定`;
-  renderSchedule(summary);
+  if (focusMetrics[0]) focusMetrics[0].innerHTML = `<span>当前高风险金额 · ${escapeHtml(scopeLabels.business)}</span><b>${money(summary.briefing.riskAmount)}</b><small>${escapeHtml(summary.briefing.riskLabel)} · 实时快照</small>`;
+  if (focusMetrics[1]) focusMetrics[1].innerHTML = `<span>${escapeHtml(period.label)}高优先级待办 · ${escapeHtml(scopeLabels.todos)}</span><b>${period.highPriorityTodos} 项</b><small>${period.pendingTodos} 个周期待办</small>`;
+  if (focusMetrics[2]) focusMetrics[2].innerHTML = `<span>${escapeHtml(period.label)}预计成交金额 · ${escapeHtml(scopeLabels.business)}</span><b>${escapeHtml(dashboardMoneyText(period.expectedAmounts))}</b><small>${period.expectedDeals} 个预计成交商机 · ${escapeHtml(periodDateText(period.start, period.end))}</small>`;
+  if (focusMetrics[3]) focusMetrics[3].innerHTML = `<span>${escapeHtml(period.label)}新增线索 · ${escapeHtml(scopeLabels.business)}</span><b>${period.newLeads} 条</b><small>当前另有 ${summary.briefing.unreadWecom} 条客户消息待处理</small>`;
+  renderLeadFunnel(summary);
   renderPipelineHealth(summary);
-  renderDashboardDense(summary);
   renderTodoInsights(summary);
   renderPriorityTasks(summary);
   renderTodos(todos);
   updateTodoChips(todos);
-  renderDashboardPeriodControls();
+  renderDashboardControls();
   renderMorningPanel(summary);
 }
 
-function dashboardPeriodLabel() {
-  if (state.dashboardPeriod === "week") return "本周";
-  if (state.dashboardPeriod === "month") return "本月";
-  return "今日";
+function dashboardMoneyText(rows: Array<{ currency: string; amount: number }>) {
+  if (!rows.length) return "$0";
+  return rows.map((row) => {
+    const symbol = row.currency === "USD" ? "$" : row.currency === "CNY" ? "¥" : row.currency === "EUR" ? "€" : `${row.currency} `;
+    const amount = Math.abs(row.amount) >= 1000
+      ? `${Number((row.amount / 1000).toFixed(row.amount % 1000 === 0 ? 0 : 1))}k`
+      : new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(row.amount);
+    return `${symbol}${amount}`;
+  }).join(" / ");
 }
 
-function dashboardPeriodMultiplier() {
-  if (state.dashboardPeriod === "week") return 2.4;
-  if (state.dashboardPeriod === "month") return 5.8;
-  return 1;
+function periodDateText(start: string, end: string) {
+  const shortDate = (value: string) => {
+    const [, month, day] = value.split("-");
+    return `${Number(month)}月${Number(day)}日`;
+  };
+  return start === end ? shortDate(start) : `${shortDate(start)}-${shortDate(end)}`;
 }
 
-function dashboardPeriodTitle(summary: DashboardSummary) {
-  if (state.dashboardPeriod === "week") return `本周重点推进 ${summary.briefing.closableDeals} 个可成交商机，同时压降 ${summary.metrics.overdueTodos} 个高优先级风险。`;
-  if (state.dashboardPeriod === "month") return `本月核心目标是守住 ${money(Math.round(summary.metrics.forecastAmount * dashboardPeriodMultiplier()))} 预测成交额，并提升客户资料完整度。`;
-  return summary.briefing.title;
-}
-
-function dashboardPeriodDescription(summary: DashboardSummary) {
-  if (state.dashboardPeriod === "week") return "系统按本周跟进节奏、逾期风险、样品反馈和企微状态汇总，适合周计划和周复盘使用。";
-  if (state.dashboardPeriod === "month") return "系统按本月客户新增、预测成交、培训资料和商机健康度汇总，适合月度目标跟踪。";
-  return summary.briefing.description;
-}
-
-function renderDashboardPeriodControls() {
-  qsa<HTMLButtonElement>("[data-dashboard-period]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.dashboardPeriod === state.dashboardPeriod);
-  });
+function renderDashboardControls() {
   const morningButton = qs<HTMLButtonElement>("#morningViewButton");
   if (morningButton) {
     morningButton.classList.toggle("primary", state.morningView);
     morningButton.textContent = state.morningView ? "退出晨会视图" : "晨会视图";
   }
-  const scheduleTitle = qs<HTMLElement>("#dashboard .schedule-panel .section-title h2");
-  const scheduleSub = qs<HTMLElement>("#dashboard .schedule-panel .section-title span:last-child");
-  if (scheduleTitle) scheduleTitle.textContent = `${dashboardPeriodLabel()}节奏`;
-  if (scheduleSub) scheduleSub.textContent = state.dashboardPeriod === "today" ? "按成交影响排序" : state.dashboardPeriod === "week" ? "按本周推进优先级排序" : "按月度经营目标排序";
-  const todoLabel = qs<HTMLElement>("#dashboard .kpi label");
-  if (todoLabel) todoLabel.textContent = `${dashboardPeriodLabel()}待跟进`;
 }
 
 function renderMorningPanel(summary: DashboardSummary) {
   const panel = qs<HTMLElement>("#morningPanel");
   panel?.classList.toggle("active", state.morningView);
   if (!panel) return;
-  const periodLabel = dashboardPeriodLabel();
   const subtitle = qs<HTMLElement>("#morningSubtitle");
   const conclusion = qs<HTMLElement>("#morningConclusion");
   const risk = qs<HTMLElement>("#morningRisk");
   const collab = qs<HTMLElement>("#morningCollab");
   const action = qs<HTMLElement>("#morningAction");
-  if (subtitle) subtitle.textContent = `${periodLabel}晨会同步：风险、成交、协同和下一步动作。`;
-  if (conclusion) conclusion.textContent = state.dashboardPeriod === "today" ? "先抢救逾期报价" : state.dashboardPeriod === "week" ? "推进高概率商机" : "盯紧月度成交目标";
+  if (subtitle) subtitle.textContent = "今日晨会同步：风险、成交、协同和下一步动作。";
+  if (conclusion) conclusion.textContent = "先抢救逾期报价";
   if (risk) risk.textContent = money(summary.briefing.riskAmount);
   if (collab) collab.textContent = `${summary.metrics.overdueTodos} 项`;
   if (action) action.textContent = `${summary.priorityTasks.length || summary.metrics.todos} 条`;
@@ -1575,15 +1959,209 @@ function formatTodoTime(value = ""): string {
   return text;
 }
 
-function renderSchedule(summary: DashboardSummary) {
-  const list = qs<HTMLElement>(".schedule-list");
-  if (list) {
-    list.innerHTML = summary.schedule.length ? summary.schedule.map((item) => `<div class="schedule-item"><div class="timebox">${escapeHtml(item.time)}</div><div><b>${escapeHtml(item.title)}</b><span>${escapeHtml(item.subtitle)}</span></div>${badge(item.tone === "red" ? "高优先级" : item.tone === "amber" ? "中优先级" : "待处理", item.tone)}</div>`).join("") : `<div class="todo-history-empty">暂无今日节奏</div>`;
+function renderLeadFunnel(summary: DashboardSummary) {
+  const funnel = qs<HTMLElement>("#dashboardLeadFunnel");
+  if (!funnel) return;
+  dashboardLeadFunnelResizeObserver?.disconnect();
+  dashboardLeadFunnelResizeObserver = null;
+  dashboardLeadFunnelChart?.dispose();
+  dashboardLeadFunnelChart = null;
+  const data = summary.leadFunnel;
+  if (!data?.stages?.length) {
+    funnel.innerHTML = `<div class="todo-history-empty">线索漏斗数据更新中</div>`;
+    return;
   }
-  const quality = qsa<HTMLElement>(".quality b");
-  if (quality[0]) quality[0].textContent = `${summary.quality.followHealth}%`;
-  if (quality[1]) quality[1].textContent = `${summary.quality.overdueRate}%`;
-  if (quality[2]) quality[2].textContent = `${summary.quality.avgResponseHours}h`;
+  const colors: Record<string, string> = {
+    entered: "#3157d5",
+    pending: "#d58a12",
+    valid: "#168f86",
+    customer: "#2f8f67",
+    deal: "#237451"
+  };
+  funnel.innerHTML = `
+    <div class="lead-funnel-chart-wrap">
+      <div class="lead-funnel-chart" data-lead-funnel-chart role="img" aria-label="线索从进入系统、清洗到转为客户和商机的真实转化曲线"></div>
+      <span class="lead-funnel-travel-light" data-lead-funnel-light aria-hidden="true"></span>
+    </div>
+    <div class="lead-funnel-stage-list" aria-label="线索漏斗阶段">
+      ${data.stages.map((stage, index) => `
+        <button type="button" class="lead-funnel-stage-row" data-lead-funnel-key="${escapeHtml(stage.key)}" aria-label="${escapeHtml(stage.label)} ${stage.count} 条，占进入系统 ${stage.conversionRate}%">
+          <span class="lead-funnel-stage-dot" style="--stage-color:${colors[stage.key] || "#3157d5"}" aria-hidden="true"></span>
+          <span>${escapeHtml(stage.label)}</span>
+          <small>${index === 0 ? "总量" : `${stage.conversionRate}%`}</small>
+        </button>
+      `).join("")}
+    </div>
+    <div class="lead-funnel-filtered" aria-label="已过滤 ${data.filteredOut} 条无效或重复线索">
+      <span class="lead-funnel-filter-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h16l-6.4 7.1v5.2l-3.2 1.7v-6.9L4 5Z"/></svg></span>
+      <span>清洗已过滤 <b>${data.filteredOut}</b> 条无效 / 重复线索</span>
+    </div>
+    <div class="lead-funnel-summary">
+      <div><span>今日新增</span><b>${data.todayAdded}</b></div>
+      <div><span>待清洗</span><b>${data.stages.find((stage) => stage.key === "pending")?.count || 0}</b></div>
+      <div><span>转商机率</span><b>${data.dealConversionRate}%</b></div>
+    </div>`;
+
+  const chartHost = qs<HTMLElement>("[data-lead-funnel-chart]", funnel);
+  if (chartHost) {
+    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const maxCount = Math.max(1, ...data.stages.map((stage) => stage.count));
+    const chart = echarts.init(chartHost, undefined, { renderer: "svg" });
+    dashboardLeadFunnelChart = chart;
+    chart.setOption({
+      animation: !prefersReducedMotion,
+      animationDuration: 720,
+      animationDurationUpdate: 350,
+      animationEasing: "cubicOut",
+      grid: {
+        left: 22,
+        right: 22,
+        top: 28,
+        bottom: 8,
+        containLabel: false
+      },
+      tooltip: {
+        trigger: "item",
+        confine: true,
+        backgroundColor: "#172033",
+        borderWidth: 0,
+        padding: [8, 10],
+        textStyle: { color: "#ffffff", fontSize: 12 },
+        formatter: (params: { data: { label: string; value: number; conversionRate: number } }) =>
+          `${escapeHtml(params.data.label)}<br/><b>${params.data.value} 条</b> · 占进入 ${params.data.conversionRate}%`
+      },
+      xAxis: {
+        type: "category",
+        boundaryGap: false,
+        data: data.stages.map((stage) => stage.label),
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { show: false },
+        splitLine: { show: false }
+      },
+      yAxis: {
+        type: "value",
+        min: 0,
+        max: Math.max(2, Math.ceil(maxCount * 1.28)),
+        show: false
+      },
+      series: [{
+        type: "line",
+        smooth: 0.34,
+        smoothMonotone: "x",
+        symbol: "circle",
+        symbolSize: 8,
+        showSymbol: true,
+        connectNulls: true,
+        lineStyle: {
+          width: 2,
+          color: "#8197c8",
+          cap: "round",
+          shadowBlur: 3,
+          shadowColor: "rgba(64, 88, 145, .11)"
+        },
+        areaStyle: {
+          opacity: 1,
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: "rgba(81, 106, 170, .075)" },
+            { offset: 0.72, color: "rgba(81, 106, 170, .018)" },
+            { offset: 1, color: "rgba(49, 87, 213, 0)" }
+          ])
+        },
+        label: {
+          show: true,
+          position: "top",
+          distance: 7,
+          color: "#172033",
+          fontSize: 13,
+          fontWeight: 700,
+          formatter: (params: { value: number }) => String(params.value)
+        },
+        emphasis: {
+          scale: 1.45,
+          focus: "self",
+          itemStyle: {
+            borderWidth: 3,
+            borderColor: "#ffffff",
+            shadowBlur: 12,
+            shadowColor: "rgba(23, 32, 51, .22)"
+          }
+        },
+        data: data.stages.map((stage) => ({
+          value: stage.count,
+          name: stage.label,
+          key: stage.key,
+          label: stage.label,
+          conversionRate: stage.conversionRate,
+          itemStyle: {
+            color: colors[stage.key] || "#3157d5",
+            borderWidth: 2,
+            borderColor: "#ffffff",
+            shadowBlur: stage.key === "pending" ? 8 : 4,
+            shadowColor: `${colors[stage.key] || "#3157d5"}55`
+          }
+        }))
+      }]
+    });
+    chart.on("click", (params) => {
+      const stage = params.data as { key?: string } | undefined;
+      openLeadFunnelStage(stage?.key || "entered");
+    });
+    const travelLight = qs<HTMLElement>("[data-lead-funnel-light]", funnel);
+    const positionTravelLight = () => {
+      chart.resize();
+      if (!travelLight || prefersReducedMotion) return;
+      travelLight.style.offsetPath = buildLeadFlowMotionPath(
+        chartHost.clientWidth,
+        chartHost.clientHeight,
+        data.stages.map((stage) => stage.count),
+        Math.max(2, Math.ceil(maxCount * 1.28))
+      );
+    };
+    positionTravelLight();
+    dashboardLeadFunnelResizeObserver = new ResizeObserver(positionTravelLight);
+    dashboardLeadFunnelResizeObserver.observe(chartHost);
+  }
+
+  qsa<HTMLButtonElement>("[data-lead-funnel-key]", funnel).forEach((button) => {
+    button.addEventListener("click", () => {
+      openLeadFunnelStage(button.dataset.leadFunnelKey || "entered");
+    });
+  });
+}
+
+function buildLeadFlowMotionPath(width: number, height: number, values: number[], maxValue: number) {
+  const left = 22;
+  const right = 22;
+  const top = 28;
+  const bottom = 8;
+  const plotWidth = Math.max(1, width - left - right);
+  const plotHeight = Math.max(1, height - top - bottom);
+  const points = values.map((value, index) => ({
+    x: left + (values.length === 1 ? plotWidth / 2 : (index * plotWidth) / (values.length - 1)),
+    y: top + (1 - value / maxValue) * plotHeight
+  }));
+  if (!points.length) return "none";
+  let path = `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const previous = points[index - 1] || points[index];
+    const current = points[index];
+    const next = points[index + 1];
+    const after = points[index + 2] || next;
+    const control1X = current.x + (next.x - previous.x) / 10;
+    const control1Y = current.y + (next.y - previous.y) / 10;
+    const control2X = next.x - (after.x - current.x) / 10;
+    const control2Y = next.y - (after.y - current.y) / 10;
+    path += ` C ${control1X.toFixed(2)} ${control1Y.toFixed(2)}, ${control2X.toFixed(2)} ${control2Y.toFixed(2)}, ${next.x.toFixed(2)} ${next.y.toFixed(2)}`;
+  }
+  return `path("${path}")`;
+}
+
+function openLeadFunnelStage(key: string) {
+  resetLeadFilters();
+  if (key === "pending") state.leadStageFilter = "新线索";
+  if (key === "customer" || key === "deal") state.leadStageFilter = "已转化";
+  activateNavView("leads", renderLeads);
 }
 
 function renderPipelineHealth(summary: DashboardSummary) {
@@ -1946,7 +2524,7 @@ function renderTodoHistory(todos: Todo[]) {
   if (count) count.textContent = `${todos.length} 条`;
   if (amountNode) amountNode.textContent = money(todos.reduce((sum, todo) => sum + (todo.impactAmount || 0), 0));
   if (!list) return;
-  const recent = todos.slice(0, 6);
+  const recent = todos.slice(0, 5);
   list.innerHTML = recent.length ? recent.map((todo) => {
     const tone = todo.priority === "high" ? "red" : todo.priority === "medium" ? "amber" : "green";
     const meta = [formatTodoTime(todo.dueAt), todo.related, todo.historyAt ? `归档 ${formatTodoTime(todo.historyAt)}` : ""].filter(Boolean).join(" · ") || "未设置上下文";
@@ -2083,7 +2661,8 @@ function caseStatusText(status: string) {
 const LEAD_STAGES = ["新线索", "已联系", "已建联", "已报价", "已转化", "已放弃"];
 const LEAD_STATUS_LABEL: Record<string, string> = { new: "待跟进", following: "跟进中", converted: "已转化", invalid: "无效" };
 const LEAD_STATUS_TONE: Record<string, string> = { new: "gray", following: "amber", converted: "green", invalid: "red" };
-const LEAD_ACTIVITY_LABEL: Record<string, string> = { call: "电话", wechat: "微信", email: "邮件", meeting: "会面", note: "备注", stage: "阶段", system: "系统" };
+const LEAD_ACTIVITY_LABEL: Record<string, string> = { call: "电话", wechat: "微信", whatsapp: "WhatsApp", linkedin: "LinkedIn", email: "邮件", meeting: "会面", note: "备注", stage: "阶段", system: "系统" };
+const LEAD_PAGE_SIZE = 10;
 
 function leadStageTone(stage: string) {
   if (stage === "已转化") return "green";
@@ -2092,51 +2671,484 @@ function leadStageTone(stage: string) {
   return "";
 }
 
+function leadFollowState(lead: Lead) {
+  if (!lead.nextFollowAt) return "unset";
+  const date = parseTodoDate(lead.nextFollowAt);
+  if (!date) return "planned";
+  return date.getTime() < Date.now() ? "overdue" : "planned";
+}
+
+function leadSourceLabel(lead: Lead) {
+  return lead.sourceChannel || lead.source || "未标注";
+}
+
+function resetLeadFilters() {
+  state.leadStageFilter = "all";
+  state.leadIntentFilter = "all";
+  state.leadSourceFilter = "all";
+  state.leadFollowFilter = "all";
+  state.leadSearch = "";
+  state.leadPage = 1;
+  setFieldValue("#leadSearchInput", "");
+  setFieldValue("#leadIntentFilter", "all");
+  setFieldValue("#leadSourceFilter", "all");
+  setFieldValue("#leadFollowFilter", "all");
+  renderLeads();
+}
+
+// ===================== WhatsApp 聊天中心 =====================
+function waInitials(name: string) {
+  const s = (name || "?").trim();
+  return s ? s.slice(0, 2).toUpperCase() : "?";
+}
+
+function waFormatTime(iso: string) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+/** 号码 → wa.me 深链(仅保留数字，去掉+/空格/横线)。空号码返回空串。 */
+function waMeLink(phone: string) {
+  const digits = (phone || "").replace(/[^0-9]/g, "");
+  return digits.length >= 6 ? `https://wa.me/${digits}` : "";
+}
+
+function renderWhatsAppThreads() {
+  const listEl = qs<HTMLElement>("#waThreadList");
+  if (!listEl) return;
+  const q = state.waThreadSearch.trim().toLowerCase();
+  const threads = state.whatsappThreads.filter((t) =>
+    !q || t.company.toLowerCase().includes(q) || (t.country || "").toLowerCase().includes(q) || (t.contact || "").toLowerCase().includes(q)
+  );
+  if (!threads.length) {
+    listEl.innerHTML = `<div class="wa-empty" style="height:auto;padding:24px">${state.whatsappThreads.length ? "无匹配客户" : "暂无 WhatsApp 会话，去客户/线索页发起对话"}</div>`;
+    return;
+  }
+  listEl.innerHTML = threads.map((t) => `
+    <div class="wa-thread ${t.customerId === state.selectedWaCustomerId ? "active" : ""}" data-wa-customer="${t.customerId}">
+      <span class="wa-avatar">${waInitials(t.company)}</span>
+      <div class="wa-thread-main">
+        <b>${escapeHtml(t.company)}</b>
+        <span>${escapeHtml(t.lastMessage || t.phoneNumber || "—")}</span>
+      </div>
+      ${t.unreadCount > 0 ? `<span class="wa-unread">${t.unreadCount}</span>` : ""}
+    </div>`).join("");
+  qsa<HTMLElement>(".wa-thread", listEl).forEach((el) => {
+    el.addEventListener("click", () => void openWhatsAppThread(el.dataset.waCustomer || ""));
+  });
+}
+
+async function openWhatsAppThread(customerId: string) {
+  if (!customerId) return;
+  state.selectedWaCustomerId = customerId;
+  renderWhatsAppThreads();
+  const chatCol = qs<HTMLElement>("#waChatCol");
+  if (chatCol) chatCol.innerHTML = `<div class="wa-empty">加载中…</div>`;
+  try {
+    const data = await api<{ binding: WhatsAppBinding | null; messages: WhatsAppMessage[]; customer: { id: string; company: string; country: string; contact: string } }>(`/api/whatsapp/customers/${customerId}/messages`);
+    state.whatsappMessages = data.messages;
+    state.whatsappBinding = data.binding;
+    renderWhatsAppChat(data.customer, data.binding, data.messages);
+    renderWhatsAppInfo(data.customer, data.binding);
+  } catch (error) {
+    if (chatCol) chatCol.innerHTML = `<div class="wa-empty">加载失败：${escapeHtml(error instanceof Error ? error.message : "")}</div>`;
+  }
+}
+
+function renderWhatsAppChat(customer: { id: string; company: string; country: string; contact: string }, binding: WhatsAppBinding | null, messages: WhatsAppMessage[]) {
+  const chatCol = qs<HTMLElement>("#waChatCol");
+  if (!chatCol) return;
+  const bubbles = messages.map((m) => {
+    const isCn = /[一-鿿]/.test(m.content);
+    const translated = m.contentTranslated
+      ? `<span class="wa-translated">${escapeHtml(m.contentTranslated)}</span>`
+      : (!isCn && m.direction === "inbound" ? `<button class="wa-translate-btn" data-wa-translate="${m.id}">翻译成中文</button>` : "");
+    return `<div class="wa-msg ${m.direction === "inbound" ? "in" : "out"}" data-wa-msg="${m.id}">
+      ${escapeHtml(m.content)}
+      ${translated}
+      <span class="wa-time">${waFormatTime(m.createdAt)}${m.direction === "outbound" ? " · " + (m.status === "read" ? "已读" : m.status === "delivered" ? "已送达" : "已发送") : ""}</span>
+    </div>`;
+  }).join("");
+
+  const waLink = waMeLink(binding?.phoneNumber || "");
+  chatCol.innerHTML = `
+    <div class="wa-chat-head">
+      <span class="wa-avatar" style="width:36px;height:36px">${waInitials(customer.company)}</span>
+      <div><b>${escapeHtml(customer.company)}</b> <span>${escapeHtml(binding?.phoneNumber || "未绑定号码")}</span></div>
+      ${waLink ? `<a class="btn wa-open-link" href="${waLink}" target="_blank" rel="noopener" title="在 WhatsApp 中打开对话">在 WhatsApp 打开</a>` : ""}
+    </div>
+    <div class="wa-messages" id="waMessages">${bubbles || `<div class="wa-empty">暂无对话记录，在下方录入第一条</div>`}</div>
+    <div class="wa-compose">
+      <select id="waDirection"><option value="inbound">客户发来</option><option value="outbound">我方发送</option></select>
+      <input id="waContentInput" placeholder="录入一条对话内容(非中文将自动翻译)" />
+      <button class="btn primary" id="waSendButton">录入</button>
+    </div>`;
+
+  const msgBox = qs<HTMLElement>("#waMessages");
+  if (msgBox) msgBox.scrollTop = msgBox.scrollHeight;
+
+  qsa<HTMLButtonElement>("[data-wa-translate]", chatCol).forEach((btn) => {
+    btn.addEventListener("click", () => void translateWhatsAppMessage(btn.dataset.waTranslate || "", customer.id));
+  });
+  qs<HTMLButtonElement>("#waSendButton", chatCol)?.addEventListener("click", () => void addWhatsAppMessage(customer.id));
+  qs<HTMLInputElement>("#waContentInput", chatCol)?.addEventListener("keydown", (event) => {
+    if ((event as KeyboardEvent).key === "Enter") void addWhatsAppMessage(customer.id);
+  });
+}
+
+function renderWhatsAppInfo(customer: { id: string; company: string; country: string; contact: string }, binding: WhatsAppBinding | null) {
+  const infoCol = qs<HTMLElement>("#waInfoCol");
+  if (!infoCol) return;
+
+  const bindingMode = binding?.bindingMode || "manual";
+  const connectionStatus = binding?.connectionStatus || "disconnected";
+
+  const modeLabels: Record<string, string> = {
+    "manual": "手动录入",
+    "web-scan": "扫码登录 (WhatsApp Web)",
+    "twilio-api": "官方API (Twilio)"
+  };
+
+  const statusLabels: Record<string, string> = {
+    "connected": "✅ 已连接",
+    "disconnected": "⚪ 未连接",
+    "qr-pending": "⏳ 等待扫码",
+    "error": "❌ 连接错误"
+  };
+
+  infoCol.innerHTML = `
+    <h3>${escapeHtml(customer.company)}</h3>
+    <p class="wa-info-sub">${escapeHtml(customer.country || "—")} · ${escapeHtml(customer.contact || "—")}</p>
+
+    <div class="wa-bind-box" style="padding:12px;background:#f9f9f9;border-radius:8px;margin-bottom:12px">
+      <div class="info"><span>绑定模式</span><b>${modeLabels[bindingMode]}</b></div>
+      ${bindingMode !== "manual" ? `<div class="info"><span>连接状态</span><b>${statusLabels[connectionStatus]}</b></div>` : ""}
+      <div class="info"><span>WhatsApp 号码</span><b>${escapeHtml(binding?.phoneNumber || "未绑定")}</b></div>
+      <div class="info"><span>WhatsApp 昵称</span><b>${escapeHtml(binding?.waProfileName || "—")}</b></div>
+    </div>
+
+    <div id="waBindingPanel">
+      ${renderBindingModeSelector(customer.id, binding)}
+    </div>
+
+    ${waMeLink(binding?.phoneNumber || "") ? `<a class="btn primary wa-open-link" href="${waMeLink(binding?.phoneNumber || "")}" target="_blank" rel="noopener" style="display:block;text-align:center;margin-top:10px">📲 在 WhatsApp 中打开对话</a>` : ""}
+  `;
+
+  setupBindingModeListeners(customer.id, binding);
+}
+
+function renderBindingModeSelector(customerId: string, binding: WhatsAppBinding | null): string {
+  const selectedMode = binding?.bindingMode || "manual";
+
+  return `
+    <div style="margin-bottom:12px">
+      <label style="display:block;margin-bottom:4px;font-weight:500">选择绑定方式：</label>
+      <select id="waBindingModeSelect" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px">
+        <option value="manual" ${selectedMode === "manual" ? "selected" : ""}>手动录入 (零风险)</option>
+        <option value="web-scan" ${selectedMode === "web-scan" ? "selected" : ""}>扫码登录 (有封号风险)</option>
+        <option value="twilio-api" ${selectedMode === "twilio-api" ? "selected" : ""}>官方API (需配置)</option>
+      </select>
+    </div>
+
+    <div id="waBindingModeContent">
+      ${renderBindingModeContent(selectedMode, binding)}
+    </div>
+  `;
+}
+
+function renderBindingModeContent(mode: string, binding: WhatsAppBinding | null): string {
+  switch (mode) {
+    case "manual":
+      return `
+        <div class="wa-bind-box" style="padding:0">
+          <input id="waBindPhone" placeholder="+8613800138000" value="${escapeHtml(binding?.phoneNumber || "")}" />
+          <input id="waBindName" placeholder="WhatsApp 昵称(选填)" value="${escapeHtml(binding?.waProfileName || "")}" />
+          <button class="btn" id="waBindButton" style="width:100%">${binding ? "更新绑定" : "绑定号码"}</button>
+        </div>
+        <div class="wa-safety">⚠️ 风控提示：手动录入模式，不接入任何非官方接口，零封号风险。</div>
+      `;
+
+    case "web-scan":
+      const isScanning = binding?.connectionStatus === "qr-pending";
+      const isConnected = binding?.connectionStatus === "connected";
+
+      return `
+        <div style="text-align:center;padding:16px;background:#fff;border:1px solid #ddd;border-radius:8px">
+          ${isConnected ? `
+            <p style="color:#22c55e;font-weight:500;margin-bottom:12px">✅ 已连接</p>
+            <button class="btn" id="waDisconnectButton" style="width:100%">断开连接</button>
+          ` : isScanning ? `
+            <p style="margin-bottom:12px">请使用 WhatsApp 扫描下方二维码</p>
+            <div id="waQrCodeContainer" style="min-height:200px;display:flex;align-items:center;justify-content:center">
+              <div>⏳ 正在生成二维码...</div>
+            </div>
+          ` : `
+            <p style="margin-bottom:12px">扫码绑定您的个人 WhatsApp 账号</p>
+            <button class="btn primary" id="waStartScanButton" style="width:100%">开始扫码绑定</button>
+          `}
+        </div>
+        <div class="wa-safety" style="background:#fef3c7;color:#92400e;padding:12px;border-radius:6px;margin-top:12px">
+          ⚠️ <strong>封号风险警告</strong>：此方式使用非官方协议，可能导致账号被封禁。建议仅用于测试，正式环境请使用官方API。
+        </div>
+      `;
+
+    case "twilio-api":
+      return `
+        <div class="wa-bind-box" style="padding:12px">
+          <input id="waTwilioPhone" placeholder="Twilio WhatsApp 号码" value="${escapeHtml(binding?.twilioPhoneNumber || "")}" />
+          <button class="btn primary" id="waTwilioBindButton" style="width:100%;margin-top:8px">配置 Twilio</button>
+        </div>
+        <div class="wa-safety" style="background:#e0f2fe;color:#0c4a6e">
+          ✅ 官方合规方案，零封号风险。需要先在 Twilio 申请 WhatsApp Business API。
+        </div>
+      `;
+
+    default:
+      return "";
+  }
+}
+
+function setupBindingModeListeners(customerId: string, binding: WhatsAppBinding | null) {
+  const modeSelect = qs<HTMLSelectElement>("#waBindingModeSelect");
+  const contentDiv = qs<HTMLElement>("#waBindingModeContent");
+
+  if (modeSelect && contentDiv) {
+    modeSelect.addEventListener("change", () => {
+      contentDiv.innerHTML = renderBindingModeContent(modeSelect.value, binding);
+      setupBindingActions(customerId, modeSelect.value, binding);
+    });
+  }
+
+  setupBindingActions(customerId, binding?.bindingMode || "manual", binding);
+}
+
+function setupBindingActions(customerId: string, mode: string, binding: WhatsAppBinding | null) {
+  if (mode === "manual") {
+    qs<HTMLButtonElement>("#waBindButton")?.addEventListener("click", () => void bindWhatsAppManual(customerId));
+  } else if (mode === "web-scan") {
+    qs<HTMLButtonElement>("#waStartScanButton")?.addEventListener("click", () => void startWebScanBinding(customerId));
+    qs<HTMLButtonElement>("#waDisconnectButton")?.addEventListener("click", () => void disconnectWebScan(customerId));
+
+    // 如果正在等待扫码，启动轮询获取二维码
+    if (binding?.connectionStatus === "qr-pending" && binding?.sessionData) {
+      void pollQrCode(binding.sessionData);
+    }
+  } else if (mode === "twilio-api") {
+    qs<HTMLButtonElement>("#waTwilioBindButton")?.addEventListener("click", () => void bindWhatsAppTwilio(customerId));
+  }
+}
+
+async function bindWhatsAppManual(customerId: string) {
+  const phoneNumber = qs<HTMLInputElement>("#waBindPhone")?.value.trim() || "";
+  const waProfileName = qs<HTMLInputElement>("#waBindName")?.value.trim() || "";
+  if (phoneNumber.length < 5) { toast("请输入有效号码", "error"); return; }
+  try {
+    await api(`/api/whatsapp/customers/${customerId}/binding`, { method: "POST", body: JSON.stringify({ phoneNumber, waProfileName }) });
+    await reloadWhatsAppThreads();
+    await openWhatsAppThread(customerId);
+    toast("绑定已保存");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "绑定失败", "error");
+  }
+}
+
+async function startWebScanBinding(customerId: string) {
+  try {
+    toast("正在启动扫码...");
+    const result = await api<{ clientId: string; bindingId: string; status: string }>(`/api/whatsapp/binding/web-scan/start`, {
+      method: "POST",
+      body: JSON.stringify({ customerId })
+    });
+
+    await openWhatsAppThread(customerId);
+    toast("请扫描二维码");
+
+    // 开始轮询获取二维码
+    void pollQrCode(result.clientId);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "启动失败", "error");
+  }
+}
+
+async function pollQrCode(clientId: string) {
+  const qrContainer = qs<HTMLElement>("#waQrCodeContainer");
+  if (!qrContainer) return;
+
+  try {
+    const eventSource = new EventSource(`/api/whatsapp/binding/web-scan/qr/${clientId}`);
+
+    eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+
+      if (data.qr) {
+        // 显示二维码（使用 canvas 或者外部库渲染）
+        qrContainer.innerHTML = `
+          <div style="padding:12px;background:#fff">
+            <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(data.qr)}" alt="QR Code" style="display:block;margin:0 auto" />
+            <p style="text-align:center;margin-top:8px;color:#666;font-size:12px">请在 1 分钟内扫码</p>
+          </div>
+        `;
+      }
+
+      if (data.timeout) {
+        eventSource.close();
+        qrContainer.innerHTML = `<p style="color:#ef4444">二维码已过期，请重新开始</p>`;
+      }
+    };
+
+    eventSource.onerror = () => {
+      eventSource.close();
+      qrContainer.innerHTML = `<p style="color:#ef4444">连接失败</p>`;
+    };
+  } catch (error) {
+    qrContainer.innerHTML = `<p style="color:#ef4444">加载二维码失败</p>`;
+  }
+}
+
+async function disconnectWebScan(customerId: string) {
+  try {
+    await api(`/api/whatsapp/binding/web-scan/disconnect`, {
+      method: "POST",
+      body: JSON.stringify({ customerId })
+    });
+    await openWhatsAppThread(customerId);
+    toast("已断开连接");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "断开失败", "error");
+  }
+}
+
+async function bindWhatsAppTwilio(customerId: string) {
+  const twilioPhoneNumber = qs<HTMLInputElement>("#waTwilioPhone")?.value.trim() || "";
+  if (!twilioPhoneNumber) { toast("请输入 Twilio 号码", "error"); return; }
+  try {
+    await api(`/api/whatsapp/binding/twilio/start`, {
+      method: "POST",
+      body: JSON.stringify({ customerId, twilioPhoneNumber })
+    });
+    await reloadWhatsAppThreads();
+    await openWhatsAppThread(customerId);
+    toast("Twilio 已配置");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "配置失败", "error");
+  }
+}
+
+async function reloadWhatsAppThreads() {
+  const data = await api<{ threads: WhatsAppThread[] }>("/api/whatsapp/threads");
+  state.whatsappThreads = data.threads;
+  renderWhatsAppThreads();
+}
+
+function renderWhatsApp() {
+  renderWhatsAppThreads();
+  if (state.selectedWaCustomerId && state.whatsappThreads.some((t) => t.customerId === state.selectedWaCustomerId)) {
+    void openWhatsAppThread(state.selectedWaCustomerId);
+  }
+}
+
+async function addWhatsAppMessage(customerId: string) {
+  const direction = (qs<HTMLSelectElement>("#waDirection")?.value || "inbound") as "inbound" | "outbound";
+  const content = qs<HTMLInputElement>("#waContentInput")?.value.trim() || "";
+  if (!content) { toast("请输入对话内容", "error"); return; }
+  try {
+    await api(`/api/whatsapp/customers/${customerId}/messages`, { method: "POST", body: JSON.stringify({ direction, content }) });
+    await reloadWhatsAppThreads();
+    await openWhatsAppThread(customerId);
+    toast("已录入");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "录入失败", "error");
+  }
+}
+
+async function translateWhatsAppMessage(messageId: string, customerId: string) {
+  if (!messageId) return;
+  try {
+    const result = await api<{ skipped?: boolean }>(`/api/whatsapp/messages/${messageId}/translate`, { method: "POST" });
+    if (result.skipped) { toast("中文无需翻译"); return; }
+    await openWhatsAppThread(customerId);
+    toast("翻译完成");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "翻译失败，请先配置 AI 模型", "error");
+  }
+}
+
 function renderLeads() {
   const tbody = qs<HTMLElement>("#leadsTableBody");
-  if (!tbody) return;
+  const cards = qs<HTMLElement>("#leadMobileList");
+  if (!tbody || !cards) return;
   const chipsWrap = qs<HTMLElement>("#leadStageChips");
+  const activeLeads = state.leadView === "trash" ? state.leadTrash : state.leads;
   const q = state.leadSearch.trim().toLowerCase();
-  const filtered = state.leads.filter((lead) => {
+  const sourceOptions = [...new Set(activeLeads.map(leadSourceLabel))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+  const sourceSelect = qs<HTMLSelectElement>("#leadSourceFilter");
+  if (sourceSelect) {
+    const selected = sourceOptions.includes(state.leadSourceFilter) ? state.leadSourceFilter : "all";
+    state.leadSourceFilter = selected;
+    sourceSelect.innerHTML = `<option value="all">全部来源</option>${sourceOptions.map((source) => `<option value="${escapeHtml(source)}">${escapeHtml(source)}</option>`).join("")}`;
+    sourceSelect.value = selected;
+  }
+  const filtered = activeLeads.filter((lead) => {
     const matchStage = state.leadStageFilter === "all" || lead.stage === state.leadStageFilter;
-    const matchSearch = !q || lead.company.toLowerCase().includes(q) || (lead.contact || "").toLowerCase().includes(q) || (lead.country || "").toLowerCase().includes(q);
-    return matchStage && matchSearch;
+    const matchIntent = state.leadIntentFilter === "all" || lead.intent === state.leadIntentFilter;
+    const matchSource = state.leadSourceFilter === "all" || leadSourceLabel(lead) === state.leadSourceFilter;
+    const matchFollow = state.leadFollowFilter === "all" || leadFollowState(lead) === state.leadFollowFilter;
+    const haystack = [lead.company, lead.contact, lead.country, lead.email, lead.phone, lead.source, lead.sourceChannel, lead.externalId]
+      .filter(Boolean).join(" ").toLowerCase();
+    return matchStage && matchIntent && matchSource && matchFollow && (!q || haystack.includes(q));
   });
+  const totalPages = Math.max(1, Math.ceil(filtered.length / LEAD_PAGE_SIZE));
+  state.leadPage = Math.min(state.leadPage, totalPages);
+  const pageRows = filtered.slice((state.leadPage - 1) * LEAD_PAGE_SIZE, state.leadPage * LEAD_PAGE_SIZE);
 
   if (chipsWrap) {
-    const counts = LEAD_STAGES.map((stage) => [stage, state.leads.filter((lead) => lead.stage === stage).length] as const);
-    chipsWrap.innerHTML = `<span class="filter lead-chip ${state.leadStageFilter === "all" ? "active" : ""}" data-lead-stage="all">全部 ${state.leads.length}</span>` +
-      counts.map(([stage, count]) => `<span class="filter lead-chip ${state.leadStageFilter === stage ? "active" : ""}" data-lead-stage="${escapeHtml(stage)}">${escapeHtml(stage)} ${count}</span>`).join("");
+    const counts = LEAD_STAGES.map((stage) => [stage, activeLeads.filter((lead) => lead.stage === stage).length] as const);
+    chipsWrap.innerHTML = `<button class="filter lead-chip ${state.leadStageFilter === "all" ? "active" : ""}" data-lead-stage="all">全部 ${activeLeads.length}</button>` +
+      counts.filter(([, count]) => count > 0).map(([stage, count]) => `<button class="filter lead-chip ${state.leadStageFilter === stage ? "active" : ""}" data-lead-stage="${escapeHtml(stage)}">${escapeHtml(stage)} ${count}</button>`).join("");
     qsa<HTMLElement>(".lead-chip", chipsWrap).forEach((chip) => {
       chip.addEventListener("click", () => {
         state.leadStageFilter = chip.dataset.leadStage || "all";
+        state.leadPage = 1;
         renderLeads();
       });
     });
   }
 
-  tbody.innerHTML = filtered.length ? filtered.map((lead) => `<tr data-lead-id="${lead.id}" class="${lead.id === state.selectedLeadId ? "selected" : ""}">
-    <td><div class="company"><span class="flag">${countryFlag(lead.country)}</span><div><button class="lead-name" data-open-lead>${escapeHtml(lead.company)}</button><span>${escapeHtml(lead.contact || "—")} · ${escapeHtml(lead.country || "—")}</span></div></div></td>
-    <td>${escapeHtml(lead.source || "—")}</td>
-    <td>${badge("意向" + lead.intent, lead.intent === "高" ? "red" : lead.intent === "中" ? "amber" : "gray")}</td>
-    <td>${badge(lead.stage, leadStageTone(lead.stage))}</td>
-    <td>${money(lead.estimatedAmount || 0)}</td>
-    <td>${escapeHtml(lead.nextFollowAt || "—")}</td>
-    <td>${badge(LEAD_STATUS_LABEL[lead.status] || lead.status, LEAD_STATUS_TONE[lead.status] || "")}</td>
-  </tr>`).join("") : `<tr><td colspan="7" class="empty-cell">暂无线索，点击右上角「新增线索」录入</td></tr>`;
+  tbody.innerHTML = pageRows.length ? pageRows.map((lead) => `<tr data-lead-id="${lead.id}" class="${lead.id === state.selectedLeadId ? "selected" : ""}">
+    <td><div class="company"><span class="flag">${countryFlag(lead.country)}</span><div><button class="lead-name" data-open-lead="${lead.id}">${escapeHtml(lead.company)}</button><span>${escapeHtml(lead.contact || "联系人待补充")} · ${escapeHtml(lead.country || "国家待补充")}</span></div></div></td>
+    <td><div class="lead-decision-cell">${badge("意向" + lead.intent, lead.intent === "高" ? "red" : lead.intent === "中" ? "amber" : "gray")}${badge(lead.stage, leadStageTone(lead.stage))}</div></td>
+    <td><div class="lead-follow-cell"><b>${escapeHtml(lead.nextFollowAt || "未安排")}</b><span>${leadFollowState(lead) === "overdue" ? "已逾期" : leadFollowState(lead) === "unset" ? "待安排" : "已计划"}</span></div></td>
+    <td><div class="lead-source-cell"><b>${escapeHtml(leadSourceLabel(lead))}</b><span>${escapeHtml(lead.sourceCampaign || lead.externalId || "无活动编号")}</span></div></td>
+    <td>${badge(state.leadView === "trash" ? "垃圾箱" : (LEAD_STATUS_LABEL[lead.status] || lead.status), state.leadView === "trash" ? "red" : (LEAD_STATUS_TONE[lead.status] || ""))}</td>
+  </tr>`).join("") : `<tr><td colspan="5" class="empty-cell">${state.leadView === "trash" ? "垃圾箱中没有符合条件的线索" : "暂无符合条件的线索"}</td></tr>`;
 
-  qsa<HTMLElement>("tr[data-lead-id]", tbody).forEach((row) => {
-    row.addEventListener("click", () => {
-      const id = row.dataset.leadId || "";
-      if (id) void openLead(id);
-    });
-  });
+  cards.innerHTML = pageRows.length ? pageRows.map((lead) => `
+    <article class="lead-mobile-card ${lead.id === state.selectedLeadId ? "selected" : ""}" data-lead-id="${lead.id}">
+      <span class="lead-mobile-top"><button class="lead-name" data-open-lead="${lead.id}">${escapeHtml(lead.company)}</button>${badge("意向" + lead.intent, lead.intent === "高" ? "red" : lead.intent === "中" ? "amber" : "gray")}</span>
+      <span>${escapeHtml(lead.contact || "联系人待补充")} · ${escapeHtml(lead.country || "国家待补充")}</span>
+      <span class="lead-mobile-meta"><i>${escapeHtml(lead.stage)}</i><i>${escapeHtml(leadSourceLabel(lead))}</i><i>${escapeHtml(lead.nextFollowAt || "待安排跟进")}</i></span>
+    </article>`).join("") : `<div class="empty-cell">${state.leadView === "trash" ? "垃圾箱中没有符合条件的线索" : "暂无符合条件的线索"}</div>`;
 
-  if (state.selectedLeadId && !filtered.some((lead) => lead.id === state.selectedLeadId)) {
-    state.selectedLeadId = null;
-    const drawer = qs<HTMLElement>("#leadDrawer");
-    if (drawer) drawer.innerHTML = `<div class="drawer-head"><div><h2>选择线索</h2><p>点击左侧客户名查看详情</p></div></div>`;
+  qsa<HTMLButtonElement>("[data-open-lead]", qs("#leads")!).forEach((button) => button.addEventListener("click", () => {
+    const id = button.dataset.openLead || "";
+    if (id) void openLead(id);
+  }));
+
+  const pagination = qs<HTMLElement>("#leadPagination");
+  if (pagination) {
+    pagination.innerHTML = `<span>共 ${filtered.length} 条 · 第 ${state.leadPage}/${totalPages} 页</span><div><button class="btn tiny" id="leadPrevPage" ${state.leadPage <= 1 ? "disabled" : ""}>上一页</button><button class="btn tiny" id="leadNextPage" ${state.leadPage >= totalPages ? "disabled" : ""}>下一页</button></div>`;
+    qs<HTMLButtonElement>("#leadPrevPage", pagination)?.addEventListener("click", () => { state.leadPage -= 1; renderLeads(); });
+    qs<HTMLButtonElement>("#leadNextPage", pagination)?.addEventListener("click", () => { state.leadPage += 1; renderLeads(); });
   }
+
+  qs("#leadActiveTab")?.classList.toggle("active", state.leadView === "active");
+  qs("#leadTrashTab")?.classList.toggle("active", state.leadView === "trash");
+  const activeCount = qs("#leadActiveCount");
+  const trashCount = qs("#leadTrashCount");
+  if (activeCount) activeCount.textContent = String(state.leads.length);
+  if (trashCount) trashCount.textContent = String(state.leadTrash.length);
 }
 
 async function openLead(id: string) {
@@ -2144,62 +3156,188 @@ async function openLead(id: string) {
   qsa<HTMLElement>("#leadsTableBody tr[data-lead-id]").forEach((row) => row.classList.toggle("selected", row.dataset.leadId === id));
   const drawer = qs<HTMLElement>("#leadDrawer");
   if (!drawer) return;
+  drawer.classList.add("open");
+  qs("#leadDrawerBackdrop")?.classList.add("active");
+  document.body.classList.add("lead-drawer-open");
   drawer.innerHTML = `<div class="drawer-head"><div><h2>加载中…</h2></div></div>`;
   try {
-    const data = await api<{ lead: Lead; activities: LeadActivity[] }>(`/api/leads/${id}`);
-    renderLeadDrawer(data.lead, data.activities);
+    const data = await api<{ lead: Lead; activities: LeadActivity[]; sourceEvents: LeadSourceEvent[] }>(`/api/leads/${id}`);
+    renderLeadDrawer(data.lead, data.activities, data.sourceEvents || []);
   } catch (error) {
-    drawer.innerHTML = `<div class="drawer-head"><div><h2>加载失败</h2><p>${escapeHtml(error instanceof Error ? error.message : "")}</p></div></div>`;
+    drawer.innerHTML = `<div class="drawer-head"><div><h2>加载失败</h2><p>${escapeHtml(error instanceof Error ? error.message : "")}</p></div><button class="btn icon-only" id="leadDrawerClose" title="关闭">×</button></div>`;
+    qs("#leadDrawerClose", drawer)?.addEventListener("click", closeLeadDrawer);
   }
 }
 
-function renderLeadDrawer(lead: Lead, activities: LeadActivity[]) {
+function closeLeadDrawer() {
+  qs("#leadDrawer")?.classList.remove("open");
+  qs("#leadDrawerBackdrop")?.classList.remove("active");
+  document.body.classList.remove("lead-drawer-open");
+}
+
+function formatLeadDate(value?: string) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function sourceTypeText(value?: string) {
+  const labels: Record<string, string> = { outbound: "主动开发", inbound: "主动询盘", offline: "线下活动", referral: "转介绍", import: "批量导入" };
+  return labels[value || ""] || value || "未标注";
+}
+
+function renderLeadDrawer(lead: Lead, activities: LeadActivity[], sourceEvents: LeadSourceEvent[]) {
   const drawer = qs<HTMLElement>("#leadDrawer");
   if (!drawer) return;
+  const sourceProspect = state.websiteOpportunities.find((item) => item.leadId === lead.id);
+  const inTrash = Boolean(lead.deletedAt);
+  const sourceEvent = sourceEvents[0];
   const fields: Array<[string, string]> = [
     ["联系人", lead.contact || "—"], ["国家/地区", lead.country || "—"], ["邮箱", lead.email || "—"],
-    ["电话", lead.phone || "—"], ["微信", lead.wechat || "—"], ["来源", lead.source || "—"],
-    ["来源渠道", lead.sourceChannel || "—"], ["来源活动", lead.sourceCampaign || "—"], ["外部编号", lead.externalId || "—"],
-    ["意向", lead.intent], ["预估金额", money(lead.estimatedAmount || 0)], ["下次跟进", lead.nextFollowAt || "—"]
+    ["电话", lead.phone || "—"], ["微信", lead.wechat || "—"], ["预估金额", amount(lead.estimatedAmount || 0)]
   ];
+  const sourceFields: Array<[string, string]> = [
+    ["来源类型", sourceTypeText(sourceEvent?.sourceType || lead.sourceType)],
+    ["来源渠道", sourceEvent?.channel || lead.sourceChannel || lead.source || "—"],
+    ["来源活动", sourceEvent?.campaign || lead.sourceCampaign || "—"],
+    ["外部编号", sourceEvent?.externalId || lead.externalId || "—"],
+    ["来源地址", sourceEvent?.sourceUrl || lead.sourceUrl || "—"],
+    ["平台发生时间", formatLeadDate(sourceEvent?.occurredAt)],
+    ["系统接收时间", formatLeadDate(sourceEvent?.receivedAt || lead.createdAt)]
+  ];
+  const dedupeBasis = sourceEvent?.externalId
+    ? `按业务员 + ${sourceEvent.channel} + ${sourceEvent.externalId} 去重`
+    : "未提供平台外部编号，本次以系统线索编号留档";
   drawer.innerHTML = `
     <div class="drawer-head">
       <div><h2>${escapeHtml(lead.company)}</h2><p>${escapeHtml(lead.country || "—")} · ${escapeHtml(lead.contact || "—")}</p></div>
-      ${badge(LEAD_STATUS_LABEL[lead.status] || lead.status, LEAD_STATUS_TONE[lead.status] || "")}
+      <div class="lead-drawer-head-actions">${badge(inTrash ? "垃圾箱" : (LEAD_STATUS_LABEL[lead.status] || lead.status), inTrash ? "red" : (LEAD_STATUS_TONE[lead.status] || ""))}<button class="btn icon-only" id="leadDrawerClose" title="关闭">×</button></div>
     </div>
     ${lead.remark ? `<p class="lead-remark">${escapeHtml(lead.remark)}</p>` : ""}
-    <div class="lead-drawer-actions">
-      <label>阶段
-        <select id="leadStageSelect">${LEAD_STAGES.map((stage) => `<option ${stage === lead.stage ? "selected" : ""}>${stage}</option>`).join("")}</select>
-      </label>
-      ${lead.convertedCustomerId
-        ? `${badge("已入客户", "green")}${lead.convertedDealId ? badge("已建商机", "green") : ""}`
-        : `<button class="btn primary" id="leadConvertButton">确认并入库</button>`}
-    </div>
-    <div class="info-grid">
-      ${fields.map(([label, value]) => `<div class="info"><span>${label}</span><b>${escapeHtml(value)}</b></div>`).join("")}
-    </div>
-    <div class="lead-compose">
-      <select id="leadNoteType"><option value="call">电话</option><option value="wechat">微信</option><option value="email">邮件</option><option value="meeting">会面</option><option value="note">备注</option></select>
-      <input id="leadNoteInput" placeholder="填写本次跟进内容" />
-      <input id="leadNoteNext" placeholder="下次跟进时间(可选)" />
-      <button class="btn primary" id="leadNoteButton">添加跟进</button>
-    </div>
+    ${inTrash ? `
+      <div class="lead-delete-audit">
+        <div><span>删除原因</span><b>${escapeHtml(lead.deletedReason || "未填写")}</b></div>
+        <div><span>删除时间</span><b>${escapeHtml(formatLeadDate(lead.deletedAt))}</b></div>
+        <div><span>操作账号</span><b>${escapeHtml(lead.deletedBy || "—")}</b></div>
+        <div><span>计划清理</span><b>${escapeHtml(formatLeadDate(lead.purgeAt))}</b></div>
+      </div>
+      <div class="lead-drawer-actions"><button class="btn primary" id="leadRestoreButton">恢复线索</button><button class="btn danger" id="leadPermanentButton">永久删除</button></div>
+    ` : `
+      <div class="lead-compose">
+        <select id="leadNoteType"><option value="call">电话</option><option value="wechat">微信</option><option value="whatsapp">WhatsApp</option><option value="linkedin">LinkedIn</option><option value="email">邮件</option><option value="meeting">会面</option><option value="note">备注</option></select>
+        <input id="leadNoteInput" placeholder="填写本次跟进内容" />
+        <input id="leadNoteNext" placeholder="下次跟进时间（可选）" />
+        <button class="btn primary" id="leadNoteButton">记录跟进</button>
+      </div>
+      <div class="lead-drawer-actions">
+        <label>阶段<select id="leadStageSelect">${LEAD_STAGES.map((stage) => `<option ${stage === lead.stage ? "selected" : ""}>${stage}</option>`).join("")}</select></label>
+        <div>
+          ${lead.convertedCustomerId
+            ? `${badge("已转客户", "green")}${lead.convertedDealId ? badge("已建商机", "green") : ""}`
+            : `<button class="btn primary" id="leadConvertButton">转为客户</button><button class="btn danger subtle" id="leadTrashButton">移入垃圾箱</button>`}
+          ${sourceProspect ? `<button class="btn" id="leadBackToProspectButton">返回来源候选</button>` : ""}
+        </div>
+      </div>
+    `}
+    <section class="lead-detail-section"><h3>联系与需求</h3><div class="info-grid">${fields.map(([label, value]) => `<div class="info"><span>${label}</span><b>${escapeHtml(value)}</b></div>`).join("")}</div></section>
+    <section class="lead-detail-section">
+      <h3>来源证据</h3>
+      <div class="info-grid">${sourceFields.map(([label, value]) => `<div class="info"><span>${label}</span><b>${escapeHtml(value)}</b></div>`).join("")}</div>
+      <div class="lead-dedupe"><span>去重依据</span><b>${escapeHtml(dedupeBasis)}</b><small>同一业务员、同一平台渠道和同一外部编号会复用原线索；不同业务员数据相互隔离。</small></div>
+      ${sourceEvent?.rawPayload ? `<details class="lead-raw-payload"><summary>查看平台原始载荷</summary><pre>${escapeHtml(sourceEvent.rawPayload)}</pre></details>` : ""}
+    </section>
+    <section class="lead-detail-section"><h3>跟进记录</h3>
     <div class="timeline">
       ${activities.length ? activities.map((activity) => `<div class="timeline-item"><b>${LEAD_ACTIVITY_LABEL[activity.type] || activity.type}</b><span>${escapeHtml(activity.content)}</span><small>${new Date(activity.createdAt).toLocaleString("zh-CN")}${activity.nextFollowAt ? " · 下次：" + escapeHtml(activity.nextFollowAt) : ""}</small></div>`).join("") : `<div class="timeline-item"><span>暂无跟进记录</span></div>`}
-    </div>`;
+    </div></section>`;
 
+  qs("#leadDrawerClose", drawer)?.addEventListener("click", closeLeadDrawer);
   qs<HTMLSelectElement>("#leadStageSelect", drawer)?.addEventListener("change", (event) => {
     void changeLeadStage(lead.id, (event.target as HTMLSelectElement).value);
   });
   qs<HTMLButtonElement>("#leadConvertButton", drawer)?.addEventListener("click", () => void openLeadConversion(lead.id));
   qs<HTMLButtonElement>("#leadNoteButton", drawer)?.addEventListener("click", () => void addLeadActivity(lead.id));
+  qs<HTMLButtonElement>("#leadTrashButton", drawer)?.addEventListener("click", () => openLeadTrashModal(lead));
+  qs<HTMLButtonElement>("#leadRestoreButton", drawer)?.addEventListener("click", () => void restoreLead(lead.id));
+  qs<HTMLButtonElement>("#leadPermanentButton", drawer)?.addEventListener("click", () => openLeadPermanentModal(lead));
+  qs<HTMLButtonElement>("#leadBackToProspectButton", drawer)?.addEventListener("click", () => {
+    if (!sourceProspect) return;
+    state.selectedProspectId = sourceProspect.id;
+    state.prospectFilter = "all";
+    const index = prospectFilteredRows().findIndex((item) => item.id === sourceProspect.id);
+    state.prospectPage = index >= 0 ? Math.floor(index / PROSPECT_PAGE_SIZE) + 1 : 1;
+    activateNavView("prospect-list", renderProspectList);
+  });
 }
 
 async function reloadLeads() {
-  const data = await api<{ leads: Lead[] }>("/api/leads");
-  state.leads = data.leads;
+  const [active, trash] = await Promise.all([
+    api<{ leads: Lead[] }>("/api/leads"),
+    api<{ leads: Lead[] }>("/api/leads?trash=true")
+  ]);
+  state.leads = active.leads;
+  state.leadTrash = trash.leads;
   renderLeads();
+}
+
+function openLeadTrashModal(lead: Lead) {
+  openModal("移入垃圾箱", `
+    <p class="modal-note">线索将退出日常跟进列表，并保留 30 天来源与删除审计。已转客户线索不能删除。</p>
+    <div class="form-field full"><label>删除原因</label><textarea id="leadDeleteReason" rows="3" placeholder="例如：联系方式无效、非目标市场、重复询盘"></textarea></div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn danger" id="confirmLeadTrashButton">确认移入</button>`);
+  qs<HTMLButtonElement>("#confirmLeadTrashButton")?.addEventListener("click", () => void trashLead(lead.id));
+}
+
+async function trashLead(id: string) {
+  const reason = qs<HTMLTextAreaElement>("#leadDeleteReason")?.value.trim() || "";
+  if (!reason) { toast("请填写删除原因", "error"); return; }
+  try {
+    await api(`/api/leads/${id}`, { method: "DELETE", body: JSON.stringify({ reason }) });
+    closeModal();
+    closeLeadDrawer();
+    state.selectedLeadId = null;
+    await reloadLeads();
+    toast("线索已移入垃圾箱");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "移入垃圾箱失败", "error");
+  }
+}
+
+async function restoreLead(id: string) {
+  try {
+    await api(`/api/leads/${id}/restore`, { method: "POST" });
+    closeLeadDrawer();
+    state.selectedLeadId = null;
+    await reloadLeads();
+    toast("线索已恢复到处理中");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "恢复失败", "error");
+  }
+}
+
+function openLeadPermanentModal(lead: Lead) {
+  openModal("永久删除线索", `
+    <div class="delete-warning"><b>${escapeHtml(lead.company)}</b><span>此操作会同时删除来源事件和全部跟进记录，且无法恢复。</span></div>
+    <div class="form-field full"><label>输入“永久删除”进行二次确认</label><input id="leadPermanentConfirmInput" autocomplete="off"></div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn danger" id="confirmLeadPermanentButton">永久删除</button>`);
+  qs<HTMLButtonElement>("#confirmLeadPermanentButton")?.addEventListener("click", () => void permanentlyDeleteLead(lead.id));
+}
+
+async function permanentlyDeleteLead(id: string) {
+  if (qs<HTMLInputElement>("#leadPermanentConfirmInput")?.value.trim() !== "永久删除") {
+    toast("请输入“永久删除”完成二次确认", "error");
+    return;
+  }
+  try {
+    await api(`/api/leads/${id}/permanent`, { method: "DELETE" });
+    closeModal();
+    closeLeadDrawer();
+    state.selectedLeadId = null;
+    await reloadLeads();
+    toast("线索及来源记录已永久删除");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "永久删除失败", "error");
+  }
 }
 
 async function changeLeadStage(id: string, stage: string) {
@@ -2243,7 +3381,7 @@ async function openLeadConversion(id: string) {
         <span><b>${escapeHtml(match.customer.company)}</b><small>${escapeHtml(match.customer.country)} · ${escapeHtml(match.customer.contact)} · ${match.activeDealCount} 个活跃商机</small><em>${escapeHtml(match.reasons.join("、"))} · 匹配 ${match.score} 分</em></span>
       </label>
     `).join("");
-    openModal("确认并入库", `
+    openModal("转为客户", `
       <div class="conversion-lead-summary">
         <b>${escapeHtml(lead.company)}</b>
         <span>${escapeHtml(lead.contact || "联系人待补充")} · ${escapeHtml(lead.country || "国家待补充")} · ${escapeHtml(lead.sourceChannel || lead.source || "来源待确认")}</span>
@@ -2265,7 +3403,7 @@ async function openLeadConversion(id: string) {
         <div class="form-field"><label>预计金额</label><input id="leadDealAmountInput" type="number" min="0" value="${lead.estimatedAmount || 0}"></div>
         <div class="form-field full"><label>下一步动作</label><input id="leadDealNextActionInput" value="${escapeHtml(lead.nextFollowAt || "确认产品、数量与报价要求")}"></div>
       </div>
-    `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="confirmLeadConversionButton" data-lead-id="${escapeHtml(id)}">确认入库</button>`);
+    `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="confirmLeadConversionButton" data-lead-id="${escapeHtml(id)}">确认转为客户</button>`);
     qs<HTMLInputElement>("#leadCreateDealInput")?.addEventListener("change", (event) => {
       renderLeadConversionDealFields((event.currentTarget as HTMLInputElement).checked);
     });
@@ -2320,7 +3458,7 @@ async function confirmLeadConversion(id: string) {
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "确认入库";
+      button.textContent = "确认转为客户";
     }
   }
 }
@@ -2337,15 +3475,23 @@ async function createLead(form: HTMLFormElement) {
     phone: String(data.get("phone") || ""),
     wechat: String(data.get("wechat") || ""),
     source: String(data.get("source") || "手动录入"),
+    sourceType: String(data.get("sourceType") || "outbound"),
+    sourceChannel: String(data.get("sourceChannel") || "manual"),
+    sourceCampaign: String(data.get("sourceCampaign") || ""),
+    externalId: String(data.get("externalId") || ""),
+    sourceUrl: String(data.get("sourceUrl") || ""),
     intent: String(data.get("intent") || "中"),
-    estimatedAmount: Number(data.get("estimatedAmount") || 0)
+    estimatedAmount: Number(data.get("estimatedAmount") || 0),
+    nextFollowAt: String(data.get("nextFollowAt") || ""),
+    remark: String(data.get("remark") || "")
   };
   try {
-    const result = await api<{ lead: Lead }>("/api/leads", { method: "POST", body: JSON.stringify(payload) });
+    await api<{ lead: Lead }>("/api/leads", { method: "POST", body: JSON.stringify(payload) });
     form.reset();
     qs<HTMLElement>("#leadCreateForm")?.classList.add("is-hidden");
+    state.selectedLeadId = null;
+    closeLeadDrawer();
     await reloadLeads();
-    await openLead(result.lead.id);
     toast("线索已创建");
   } catch (error) {
     toast(error instanceof Error ? error.message : "创建失败", "error");
@@ -2355,35 +3501,53 @@ async function createLead(form: HTMLFormElement) {
 function renderCustomers(customers: Customer[]) {
   const tbody = qs<HTMLElement>("#customers tbody");
   if (!tbody) return;
+  const query = state.customerSearch.trim().toLowerCase();
+  const visibleCustomers = customers.filter((customer) => {
+    const matchesQuery = !query || [customer.company, customer.contact, customer.country, customer.ownerName].some((value) => (value || "").toLowerCase().includes(query));
+    const matchesQueue = state.customerQueueFilter === "all"
+      || (state.customerQueueFilter === "overdue" && customer.nextReminder.includes("逾期"))
+      || (state.customerQueueFilter === "no-activity" && !customer.lastActivityAt)
+      || (state.customerQueueFilter === "no-deal" && !customer.activeDealCount);
+    return matchesQuery && matchesQueue;
+  });
   state.selectedCustomerIds = state.selectedCustomerIds.filter((id) => customers.some((customer) => customer.id === id));
-  renderCustomerBulkBar(customers);
-  tbody.innerHTML = customers.map((customer, index) => {
+  renderCustomerBulkBar(visibleCustomers);
+  tbody.innerHTML = visibleCustomers.length ? visibleCustomers.map((customer) => {
     const checked = state.selectedCustomerIds.includes(customer.id);
-    const owner = customer.id === "c3" || customer.id === "c4" ? "Mia" : "Shirley";
     const reminder = customer.nextReminder.includes("逾期") ? badge(customer.nextReminder, "red") : escapeHtml(customer.nextReminder);
     const pipelineStage = customer.pipelineStage || "暂无活跃商机";
     const activeDealCount = customer.activeDealCount || 0;
-    return `<tr class="${index === 0 ? "selected" : ""} ${checked ? "checked" : ""}">
+    return `<tr class="${customer.id === state.selectedCustomerId ? "selected" : ""} ${checked ? "checked" : ""}">
     <td><input type="checkbox" data-select-customer ${checked ? "checked" : ""}></td>
-    <td><div class="company"><span class="flag">${countryFlag(customer.country)}</span><div><b>${escapeHtml(customer.company)}</b><span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${owner}</span></div></div></td>
+    <td><div class="company"><span class="flag">${countryFlag(customer.country)}</span><div><button type="button" class="customer-name ${activeDealCount > 0 ? "has-active-deal" : ""}" data-open-customer="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</button><span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")}</span></div></div></td>
     <td><div class="customer-follow-cell">${badge(pipelineStage, pipelineStage === "成交" || pipelineStage === "谈判" ? "green" : pipelineStage === "已报价" ? "amber" : "")}<span>${activeDealCount} 个活跃商机</span></div></td>
     <td><div class="customer-health-cell">${health(customer.health)}<span>${customer.health}%</span></div></td>
-    <td><div class="customer-follow-cell"><span>最近 今天</span><b>${reminder}</b></div></td>
+    <td><div class="customer-follow-cell"><span>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</span><b>${reminder}</b></div></td>
     <td>${badge(customer.wecomBound ? "已绑定" : "未绑定", customer.wecomBound ? "green" : "gray")}</td>
     <td><button class="btn" data-edit-customer>编辑</button></td>
   </tr>`;
-  }).join("");
+  }).join("") : `<tr><td colspan="7" class="empty-cell">当前筛选下暂无客户。</td></tr>`;
+  const mobile = qs<HTMLElement>("#customerMobileList");
+  if (mobile) mobile.innerHTML = visibleCustomers.length ? visibleCustomers.map((customer) => `
+    <article class="customer-mobile-card" data-customer-mobile-id="${escapeHtml(customer.id)}">
+      <span class="customer-mobile-top"><button type="button" class="customer-name ${(customer.activeDealCount || 0) > 0 ? "has-active-deal" : ""}" data-open-customer="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</button>${badge(customer.pipelineStage || "暂无商机", customer.pipelineStage === "谈判" || customer.pipelineStage === "成交" ? "green" : customer.pipelineStage === "已报价" ? "amber" : "gray")}</span>
+      <span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")}</span>
+      <span class="customer-mobile-meta"><i>${customer.activeDealCount || 0} 个活跃商机</i><i>${escapeHtml(customer.nextReminder || "待安排")}</i><i>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</i></span>
+    </article>`).join("") : `<div class="empty-cell">当前筛选下暂无客户。</div>`;
   qsa<HTMLElement>("tr", tbody).forEach((row, index) => {
-    const customer = customers[index];
+    const customer = visibleCustomers[index];
+    if (!customer) return;
     row.dataset.customerId = customer.id;
     row.classList.toggle("selected", customer.id === (state.selectedCustomerId || customers[0]?.id));
-    row.addEventListener("click", (event) => {
-      if ((event.target as HTMLElement).closest("button,input,label")) return;
-      state.selectedCustomerId = customer.id;
-      renderCustomerDrawer(customer);
-      qsa<HTMLElement>("tr", tbody).forEach((item) => item.classList.toggle("selected", item.dataset.customerId === customer.id));
-    });
   });
+  qsa<HTMLButtonElement>("[data-open-customer]", qs("#customers")!).forEach((button) => button.addEventListener("click", () => {
+    const customer = customers.find((item) => item.id === button.dataset.openCustomer);
+    if (!customer) return;
+    state.selectedCustomerId = customer.id;
+    renderCustomerDrawer(customer);
+    openCustomerDrawer();
+    qsa<HTMLElement>("tr", tbody).forEach((item) => item.classList.toggle("selected", item.dataset.customerId === customer.id));
+  }));
   qsa<HTMLInputElement>("[data-select-customer]", tbody).forEach((checkbox) => {
     checkbox.addEventListener("change", (event) => {
       event.stopPropagation();
@@ -2402,11 +3566,12 @@ function renderCustomers(customers: Customer[]) {
       if (customer) openCustomerModal(customer);
     });
   });
-  renderCustomerDrawer(customers.find((item) => item.id === state.selectedCustomerId) || customers[0]);
+  const selected = customers.find((item) => item.id === state.selectedCustomerId);
+  if (selected && qs("#customerDrawer")?.classList.contains("open")) renderCustomerDrawer(selected);
 }
 
 function renderCustomerBulkBar(customers: Customer[]) {
-  const toolbar = qs<HTMLElement>("#customers .toolbar");
+  const toolbar = qs<HTMLElement>("#customerBulkToolbar");
   if (!toolbar) return;
   const selectedCount = state.selectedCustomerIds.length;
   const allSelected = customers.length > 0 && selectedCount === customers.length;
@@ -2548,7 +3713,7 @@ function renderCustomerWorldClock(customer: Customer) {
 }
 
 function renderCustomerDrawer(customer?: Customer) {
-  const drawer = qs<HTMLElement>("#customers .drawer");
+  const drawer = qs<HTMLElement>("#customerDrawer");
   if (!drawer || !customer) return;
   const billingName = customer.billingName || customer.company;
   const billingAddress = customer.billingAddress || `${customer.country} / 地址待维护`;
@@ -2561,8 +3726,8 @@ function renderCustomerDrawer(customer?: Customer) {
   const activeDealCount = customer.activeDealCount || 0;
   drawer.innerHTML = `
     <div class="drawer-head">
-      <div><h2>${escapeHtml(customer.company)}</h2><p>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(pipelineStage)}</p></div>
-      ${customer.nextReminder.includes("逾期") ? badge("报价未回复", "red") : badge("跟进中", "green")}
+      <div><h2>${escapeHtml(customer.company)}</h2><p>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")} · ${escapeHtml(pipelineStage)}</p></div>
+      <div class="inline-actions">${customer.nextReminder.includes("逾期") ? badge("报价未回复", "red") : badge("跟进中", "green")}<button class="btn icon-only" id="customerDrawerClose" title="关闭" aria-label="关闭客户详情">×</button></div>
     </div>
     <section class="customer-time-card" aria-label="客户世界时间">
       <div>
@@ -2600,15 +3765,14 @@ function renderCustomerDrawer(customer?: Customer) {
       <div class="timeline-item"><b>付款条款</b><span>${escapeHtml(paymentTerm)}</span></div>
     </section>
     <div class="timeline">
-      <div class="timeline-item"><b>企微摘要</b><span>${customer.wecomBound ? "客户已绑定企微，可归档会话摘要。" : "客户暂未绑定企微，建议补充联系方式。"}</span></div>
-      <div class="timeline-item"><b>系统提醒</b><span>${escapeHtml(customer.nextReminder)}</span></div>
-      <div class="timeline-item"><b>商机汇总</b><span>${escapeHtml(pipelineStage)} · ${activeDealCount} 个活跃商机 · ${money(pipelineAmount)}</span></div>
+      ${(customer.activities || []).length ? (customer.activities || []).map((activity) => `<div class="timeline-item"><b>${escapeHtml(customerActivityLabel(activity.type))}</b><span>${escapeHtml(activity.content)}</span><small>${escapeHtml(activity.operatorName || "未知操作人")} · ${escapeHtml(formatDateTime(activity.createdAt))}${activity.nextReminder ? ` · 下次：${escapeHtml(activity.nextReminder)}` : ""}</small></div>`).join("") : `<div class="timeline-item"><b>暂无跟进记录</b><span>新增首条电话、邮件或社媒跟进后，将在这里形成连续时间线。</span></div>`}
     </div>
     ${renderCustomerDealProgress(customer)}
   `;
   if (customerClockTimer) window.clearInterval(customerClockTimer);
   renderCustomerWorldClock(customer);
   customerClockTimer = window.setInterval(() => renderCustomerWorldClock(customer), 1000);
+  qs("#customerDrawerClose", drawer)?.addEventListener("click", closeCustomerDrawer);
   qs<HTMLButtonElement>("[data-add-follow]", drawer)?.addEventListener("click", () => addFollowRecord(customer));
   qsa<HTMLButtonElement>("[data-edit-customer-drawer]", drawer).forEach((button) => {
     button.addEventListener("click", () => openCustomerModal(customer));
@@ -2617,6 +3781,24 @@ function renderCustomerDrawer(customer?: Customer) {
     button.addEventListener("click", () => openCustomerModal(customer));
   });
   qs<HTMLButtonElement>("[data-view-related-deals]", drawer)?.addEventListener("click", () => activateNavView("pipeline"));
+}
+
+function customerActivityLabel(type: string) {
+  const labels: Record<string, string> = { call: "电话", email: "邮件", whatsapp: "WhatsApp", wechat: "微信", meeting: "会议", note: "备注" };
+  return labels[type] || "跟进";
+}
+
+function openCustomerDrawer() {
+  qs("#customerDrawer")?.classList.add("open");
+  qs("#customerDrawerBackdrop")?.classList.add("active");
+  document.body.classList.add("customer-drawer-open");
+}
+
+function closeCustomerDrawer() {
+  qs("#customerDrawer")?.classList.remove("open");
+  qs("#customerDrawerBackdrop")?.classList.remove("active");
+  document.body.classList.remove("customer-drawer-open");
+  if (customerClockTimer) window.clearInterval(customerClockTimer);
 }
 
 function countryFlag(country: string) {
@@ -2632,38 +3814,115 @@ function health(value: number) {
 function renderPipeline(deals: Deal[]) {
   const strip = qs<HTMLElement>("#pipeline .pipeline-strip");
   if (!strip) return;
-  const activeDeals = deals.filter((deal) => !deal.archivedAt);
-  const stages = ["询盘", "已联系", "已报价", "样品", "谈判", "成交"];
+  const activeDeals = deals.filter((deal) => !deal.archivedAt && deal.stage !== "成交" && deal.stage !== "丢单");
+  const stages = ["询盘", "已联系", "已报价", "样品", "谈判"];
+  if (!stages.includes(state.pipelineStageFilter)) state.pipelineStageFilter = stages[0];
+  const today = todayDateInput();
+  const filtered = activeDeals.filter((deal) => {
+    const customer = state.customers.find((item) => item.id === deal.customerId);
+    const haystack = `${deal.title} ${deal.product || ""} ${customer?.company || ""}`.toLowerCase();
+    if (state.pipelineSearch && !haystack.includes(state.pipelineSearch.toLowerCase())) return false;
+    if (state.pipelineDueFilter === "overdue") return Boolean(deal.nextActionAt && deal.nextActionAt < today);
+    if (state.pipelineDueFilter === "today") return deal.nextActionAt === today;
+    if (state.pipelineDueFilter === "future") return Boolean(deal.nextActionAt && deal.nextActionAt > today);
+    return true;
+  });
+  renderPipelineSummary(activeDeals);
+  renderPipelineStageTabs(stages, filtered);
   strip.innerHTML = stages.map((stage) => {
-    const stageDeals = activeDeals.filter((deal) => deal.stage === stage);
-    return `<div class="stage"><div class="stage-head"><span>${stage}</span><b>${stageDeals.length}</b></div>${stageDeals.map((deal) => {
-      const isWon = deal.stage === "成交";
+    const stageDeals = filtered.filter((deal) => deal.stage === stage);
+    const stageAmount = stageDeals.reduce((sum, deal) => sum + deal.amount, 0);
+    const overdue = stageDeals.filter((deal) => deal.nextActionAt && deal.nextActionAt < today).length;
+    return `<section class="stage ${stage === state.pipelineStageFilter ? "mobile-active" : ""}" data-pipeline-stage="${stage}" aria-label="${stage}阶段">
+      <div class="stage-head"><span class="stage-head-main"><b>${stage}</b><small>${stageDeals.length} 个 · ${dealMoney(stageAmount, stageDeals[0]?.currency || "USD")}${overdue ? ` · ${overdue} 个逾期` : ""}</small></span><b>${stageDeals.length}</b></div>
+      ${stageDeals.map((deal) => {
       const product = deal.product?.trim() || "产品待维护";
       const quantity = Number(deal.quantity || 0);
       const unitPrice = Number(deal.unitPrice || 0);
-      return `<div class="deal" data-deal-id="${escapeHtml(deal.id)}"><b>${escapeHtml(deal.title)}</b><span class="deal-product">${escapeHtml(product)} · ${quantity || "-"} 件 × ${money(unitPrice)}</span><span>${escapeHtml(deal.nextAction)}</span><div class="deal-foot"><span>${money(deal.amount)}</span>${badge(deal.stage, isWon ? "green" : deal.stage === "已报价" ? "red" : "")}</div><div class="deal-actions"><button class="btn" data-edit-deal>编辑</button><button class="btn primary" data-print-deal-document>${isWon ? "打印CI" : "打印PI"}</button>${isWon ? `<button class="btn" data-archive-deal>归档</button>` : `<button class="btn danger" data-lost-deal>丢单</button><button class="btn" data-move-deal>推进阶段</button>`}</div></div>`;
-    }).join("") || `<div class="deal"><b>暂无商机</b><span>等待新线索进入</span><div class="deal-foot"><span>$0k</span><span>空</span></div></div>`}</div>`;
+      const customer = state.customers.find((item) => item.id === deal.customerId);
+      const isOverdue = Boolean(deal.nextActionAt && deal.nextActionAt < today);
+      const hasDocument = state.tradeDocuments.some((document) => document.dealId === deal.id);
+      return `<article class="deal" data-deal-id="${escapeHtml(deal.id)}" tabindex="0">
+        <b>${escapeHtml(deal.title)}</b>
+        <span class="deal-customer">${escapeHtml(customer?.company || "客户待确认")} · ${escapeHtml(customer?.country || "未知国家")}</span>
+        <span class="deal-product">${escapeHtml(product)} · ${quantity || "-"} 件 × ${dealMoney(unitPrice, deal.currency)}</span>
+        <span>${escapeHtml(deal.nextAction)}</span>
+        <span class="deal-date ${isOverdue ? "overdue" : ""}">${isOverdue ? "已逾期" : "下一动作"} · ${escapeHtml(deal.nextActionAt || "待安排")}</span>
+        <span class="deal-doc-status">${hasDocument ? "已关联单据" : "未关联单据"} · 预计成交 ${escapeHtml(deal.expectedCloseAt || "待评估")}</span>
+        <div class="deal-foot"><span>${dealMoney(deal.amount, deal.currency)}</span>${badge(deal.stage, deal.stage === "已报价" ? "amber" : "")}</div>
+        <div class="deal-actions">
+          <button class="btn primary deal-primary-action" data-move-deal>${dealPrimaryAction(deal.stage)}</button>
+          <div class="deal-secondary-actions">
+            <button type="button" class="btn" data-record-deal>记录进展</button>
+            ${["已报价", "样品", "谈判"].includes(deal.stage) ? `<button type="button" class="btn" data-print-deal-document>生成 PI</button>` : ""}
+            <button type="button" class="btn danger" data-lost-deal>标记丢单</button>
+          </div>
+        </div>
+      </article>`;
+    }).join("") || `<div class="deal-empty">当前阶段暂无匹配商机</div>`}
+    </section>`;
   }).join("");
-  qsa<HTMLButtonElement>("[data-edit-deal]", strip).forEach((button) => {
-    button.addEventListener("click", () => {
-      const id = button.closest<HTMLElement>(".deal")?.dataset.dealId || "";
-      const deal = state.deals.find((item) => item.id === id);
-      if (deal) openDealModal(deal);
+  qsa<HTMLElement>(".deal[data-deal-id]", strip).forEach((card) => {
+    const open = () => openDealDrawer(card.dataset.dealId || "");
+    card.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement).closest("button, summary, details")) return;
+      open();
     });
+    card.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") open();
+    });
+  });
+  qsa<HTMLButtonElement>("[data-record-deal]", strip).forEach((button) => {
+    button.addEventListener("click", () => openDealEventModal(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
   });
   qsa<HTMLButtonElement>("[data-print-deal-document]", strip).forEach((button) => {
     button.addEventListener("click", () => void printDealDocument(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
   });
   qsa<HTMLButtonElement>("[data-move-deal]", strip).forEach((button) => {
-    button.addEventListener("click", () => void moveDeal(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
-  });
-  qsa<HTMLButtonElement>("[data-archive-deal]", strip).forEach((button) => {
-    button.addEventListener("click", () => void archiveDeal(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
+    button.addEventListener("click", () => openDealStageModal(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
   });
   qsa<HTMLButtonElement>("[data-lost-deal]", strip).forEach((button) => {
     button.addEventListener("click", () => void markDealLost(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
   });
-  renderArchivedDeals(deals);
+}
+
+function dealMoney(value: number, currency = "USD") {
+  return `${escapeHtml(currency || "USD")} ${Math.round(Number(value || 0)).toLocaleString("en-US")}`;
+}
+
+function dealPrimaryAction(stage: string) {
+  return stage === "谈判" ? "确认成交" : "推进阶段";
+}
+
+function renderPipelineSummary(activeDeals: Deal[]) {
+  const box = qs<HTMLElement>("#pipelineSummary");
+  if (!box) return;
+  const today = todayDateInput();
+  const overdue = activeDeals.filter((deal) => deal.nextActionAt && deal.nextActionAt < today).length;
+  const todayCount = activeDeals.filter((deal) => deal.nextActionAt === today).length;
+  const missing = activeDeals.filter((deal) => !deal.nextActionAt || !deal.expectedCloseAt).length;
+  const currencies = [...new Set(activeDeals.map((deal) => deal.currency || "USD"))];
+  const amountLabel = currencies.length === 1
+    ? dealMoney(activeDeals.reduce((sum, deal) => sum + deal.amount, 0), currencies[0])
+    : `${currencies.length} 种币种，分币种查看`;
+  box.innerHTML = [
+    ["活跃商机", `${activeDeals.length} 个`, "仅含待推进五阶段"],
+    ["动作逾期", `${overdue} 个`, overdue ? "优先处理已过期承诺" : "暂无逾期动作"],
+    ["今天到期", `${todayCount} 个`, "今天应完成的下一动作"],
+    ["在手金额", amountLabel, missing ? `${missing} 个日期待补齐` : "日期完整"]
+  ].map(([label, value, note]) => `<div class="pipeline-summary-item"><span>${label}</span><b>${value}</b><small>${note}</small></div>`).join("");
+}
+
+function renderPipelineStageTabs(stages: string[], deals: Deal[]) {
+  const box = qs<HTMLElement>("#pipelineStageTabs");
+  if (!box) return;
+  box.innerHTML = stages.map((stage) => `<button type="button" class="${stage === state.pipelineStageFilter ? "active" : ""}" data-pipeline-stage-tab="${stage}">${stage} ${deals.filter((deal) => deal.stage === stage).length}</button>`).join("");
+  qsa<HTMLButtonElement>("[data-pipeline-stage-tab]", box).forEach((button) => {
+    button.addEventListener("click", () => {
+      state.pipelineStageFilter = button.dataset.pipelineStageTab || stages[0];
+      renderPipeline(state.deals);
+    });
+  });
 }
 
 function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
@@ -2674,6 +3933,9 @@ function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
   const product = deal.product?.trim() || deal.title;
   return {
     id: "__new__",
+    customerId: customer.id,
+    dealId: deal.id,
+    revision: Math.max(0, ...state.tradeDocuments.filter((document) => document.dealId === deal.id && document.type === type).map((document) => document.revision || 1)) + 1,
     type,
     title: `${customer.company} ${product} ${type}`,
     number: `${type}-${date.replace(/-/g, "")}-${Math.floor(Date.now() / 1000).toString().slice(-4)}`,
@@ -2683,7 +3945,7 @@ function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
     buyerContact: customer.documentContact?.trim() || customer.contact,
     seller: "GoodJob Instrument Co., Ltd.",
     sellerAddress: "Tianjin, China",
-    currency: "USD",
+    currency: deal.currency || "USD",
     incoterm: customer.defaultIncoterm?.trim() || "FOB Tianjin",
     paymentTerm: customer.defaultPaymentTerm?.trim() || "30% T/T deposit, 70% before shipment",
     shippingMethod: "Sea freight",
@@ -2694,6 +3956,8 @@ function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
     notes: `Generated from deal: ${deal.title}. ${deal.nextAction}`,
     templateStyle: "executive",
     status: "ready",
+    audits: [],
+    sendRecords: [],
     updatedAt: new Date().toISOString(),
     items: [{
       id: `deal_item_${deal.id}`,
@@ -2724,6 +3988,7 @@ async function printDealDocument(id: string) {
     body: JSON.stringify(draft)
   });
   state.tradeDocuments = [created.document, ...state.tradeDocuments.filter((document) => document.id !== created.document.id)];
+  await refreshDealsData(false);
   state.selectedDocumentId = created.document.id;
   activateNavView("documents");
   renderTradeDocuments(state.tradeDocuments);
@@ -2737,21 +4002,71 @@ async function printDealDocument(id: string) {
   printDocumentPreview();
 }
 
-async function moveDeal(id: string) {
+function openDealStageModal(id: string) {
   const deal = state.deals.find((item) => item.id === id);
   if (!deal) return;
   const stages = ["询盘", "已联系", "已报价", "样品", "谈判", "成交"] as const;
   const nextStage = stages[Math.min(stages.indexOf(deal.stage as typeof stages[number]) + 1, stages.length - 1)];
-  if (deal.stage === "成交") {
-    await archiveDeal(id);
+  const resultLabel: Record<string, string> = {
+    "已联系": "本次联系结果",
+    "已报价": "报价依据或发送结果",
+    "样品": "样品安排与反馈计划",
+    "谈判": "客户异议与当前谈判条件",
+    "成交": "客户确认结果"
+  };
+  openModal(`${deal.stage} → ${nextStage}`, `
+    <div class="form-grid">
+      <div class="form-field full"><label>${resultLabel[nextStage] || "本次推进结果"}</label><textarea id="dealStageResultInput" rows="4" placeholder="记录本次推进的事实依据"></textarea></div>
+      <div class="form-field full"><label>下一步动作</label><input id="dealStageNextActionInput" value="${escapeHtml(nextDealAction(nextStage))}"></div>
+      <div class="form-field"><label>下一动作日期</label><input id="dealStageNextActionAtInput" type="date" value="${escapeHtml(defaultFutureDate(2))}"></div>
+      <div class="form-field"><label>预计成交日期${["已报价", "样品", "谈判", "成交"].includes(nextStage) ? "（必填）" : ""}</label><input id="dealStageExpectedCloseAtInput" type="date" value="${escapeHtml(deal.expectedCloseAt || defaultFutureDate(21))}"></div>
+      ${nextStage === "成交" ? `<div class="form-field full"><label>成交依据</label><textarea id="dealWonReasonInput" rows="3" placeholder="例如：客户已确认 PI、金额、付款条件与订单日期"></textarea></div>` : ""}
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="confirmDealStageButton">确认进入${nextStage}</button>`);
+  qs("#confirmDealStageButton")?.addEventListener("click", () => void moveDeal(id, nextStage));
+}
+
+function nextDealAction(stage: string) {
+  const map: Record<string, string> = {
+    "已联系": "确认产品、数量与报价要求",
+    "已报价": "跟进报价反馈并确认异议",
+    "样品": "确认样品寄出与反馈日期",
+    "谈判": "确认价格、账期、交期和贸易条款",
+    "成交": "确认定金与订单交付"
+  };
+  return map[stage] || "安排下一步跟进";
+}
+
+function defaultFutureDate(days: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+async function moveDeal(id: string, nextStage: string) {
+  const resultText = qs<HTMLTextAreaElement>("#dealStageResultInput")?.value.trim() || "";
+  const nextAction = qs<HTMLInputElement>("#dealStageNextActionInput")?.value.trim() || "";
+  const nextActionAt = qs<HTMLInputElement>("#dealStageNextActionAtInput")?.value || "";
+  const expectedCloseAt = qs<HTMLInputElement>("#dealStageExpectedCloseAtInput")?.value || "";
+  const wonReason = qs<HTMLTextAreaElement>("#dealWonReasonInput")?.value.trim() || "";
+  if (!resultText || !nextAction || !nextActionAt) {
+    toast("请填写推进结果、下一动作和日期", "error");
+    return;
+  }
+  if (["已报价", "样品", "谈判", "成交"].includes(nextStage) && !expectedCloseAt) {
+    toast("进入该阶段前请填写预计成交日期", "error");
+    return;
+  }
+  if (nextStage === "成交" && !wonReason) {
+    toast("请填写客户确认成交的依据", "error");
     return;
   }
   const result = await api<{ deal: Deal }>(`/api/deals/${id}/stage`, {
     method: "PATCH",
-    body: JSON.stringify({ stage: nextStage })
+    body: JSON.stringify({ stage: nextStage, result: resultText, nextAction, nextActionAt, expectedCloseAt, wonReason })
   });
-  Object.assign(deal, result.deal);
-  renderPipeline(state.deals);
+  closeModal();
+  await refreshDealsData();
   void refreshDashboardOnly();
   toast(`商机已推进到：${nextStage}`);
 }
@@ -2761,20 +4076,42 @@ async function archiveDeal(id: string) {
   if (!deal) return;
   const result = await api<{ deal: Deal }>(`/api/deals/${id}/archive`, { method: "POST" });
   Object.assign(deal, result.deal);
-  renderPipeline(state.deals);
+  if (state.selectedDealId === id) closeDealDrawer();
+  await refreshDealsData();
   void refreshDashboardOnly();
-  toast("商机已归档，可在已归档商机中查询");
+  toast("成交商机已归档");
 }
 
-async function markDealLost(id: string) {
+function markDealLost(id: string) {
   const deal = state.deals.find((item) => item.id === id);
   if (!deal) return;
-  if (!window.confirm(`确认将「${deal.title}」标记为丢单？`)) return;
-  const result = await api<{ deal: Deal }>(`/api/deals/${id}/lost`, { method: "POST" });
-  Object.assign(deal, result.deal);
-  renderPipeline(state.deals);
+  openModal("丢单复盘", `
+    <div class="form-grid">
+      <div class="form-field"><label>丢单原因分类</label><select id="dealLostCategoryInput"><option>价格原因</option><option>产品不匹配</option><option>交期原因</option><option>付款条件</option><option>客户项目取消</option><option>竞争对手</option><option>其他</option></select></div>
+      <div class="form-field"><label>复访日期（可选）</label><input id="dealRevisitAtInput" type="date"></div>
+      <div class="form-field full"><label>具体原因</label><textarea id="dealLostReasonInput" rows="4" placeholder="记录客户反馈、竞争情况和后续可能性"></textarea></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn danger" id="confirmDealLostButton">确认丢单</button>`);
+  qs("#confirmDealLostButton")?.addEventListener("click", () => void submitDealLost(id));
+}
+
+async function submitDealLost(id: string) {
+  const category = qs<HTMLSelectElement>("#dealLostCategoryInput")?.value || "";
+  const reason = qs<HTMLTextAreaElement>("#dealLostReasonInput")?.value.trim() || "";
+  const revisitAt = qs<HTMLInputElement>("#dealRevisitAtInput")?.value || "";
+  if (!reason) {
+    toast("请填写具体丢单原因", "error");
+    return;
+  }
+  const result = await api<{ deal: Deal }>(`/api/deals/${id}/lost`, {
+    method: "POST",
+    body: JSON.stringify({ category, reason, revisitAt })
+  });
+  Object.assign(state.deals.find((item) => item.id === id) || {}, result.deal);
+  closeModal();
+  await refreshDealsData();
   void refreshDashboardOnly();
-  toast("商机已标记丢单，可在归档/丢单商机中查询");
+  toast("商机已标记丢单，可在关闭区复盘");
 }
 
 function formatDateTime(value?: string) {
@@ -2784,20 +4121,173 @@ function formatDateTime(value?: string) {
   return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-function renderArchivedDeals(deals: Deal[]) {
+async function refreshClosedDeals() {
+  const params = new URLSearchParams({
+    page: String(state.closedDealPage),
+    pageSize: "10",
+    keyword: state.closedDealKeyword,
+    status: state.closedDealStatus,
+    month: state.closedDealMonth
+  });
+  const result = await api<{ deals: Deal[]; total: number; page: number; pageSize: number; counts: { won: number; lost: number; revisit: number } }>(`/api/deals/closed?${params.toString()}`);
+  state.closedDeals = result.deals;
+  state.closedDealTotal = result.total;
+  state.closedDealCounts = result.counts;
+  renderArchivedDeals(result.deals, result.total, result.page, result.pageSize);
+}
+
+function renderArchivedDeals(deals: Deal[], total: number, page: number, pageSize: number) {
   const box = qs<HTMLElement>("#pipeline-archived-deals");
   if (!box) return;
-  const archived = deals.filter((deal) => deal.archivedAt).sort((a, b) => new Date(b.archivedAt || 0).getTime() - new Date(a.archivedAt || 0).getTime());
-  box.innerHTML = archived.length ? archived.map((deal) => {
+  const summary = qs<HTMLElement>("#pipelineClosedSummary");
+  if (summary) summary.textContent = `已成交 ${state.closedDealCounts.won} · 已丢单 ${state.closedDealCounts.lost} · 待复访 ${state.closedDealCounts.revisit}`;
+  box.innerHTML = deals.length ? deals.map((deal) => {
     const customer = state.customers.find((item) => item.id === deal.customerId);
     const product = `${deal.product?.trim() || "产品待维护"} · ${Number(deal.quantity || 0) || "-"} 件 × ${money(Number(deal.unitPrice || 0))}`;
-    return `<tr><td><b>${escapeHtml(deal.title)}</b><span>${escapeHtml(customer?.company || "无关联客户")} · ${escapeHtml(product)}</span></td><td>${money(deal.amount)}</td><td>${badge(deal.stage, deal.stage === "丢单" ? "red" : "green")}</td><td>${escapeHtml(formatDateTime(deal.archivedAt))}</td><td>${escapeHtml(deal.nextAction)}</td></tr>`;
-  }).join("") : `<tr><td colspan="5" class="empty-cell">暂无归档/丢单商机。成交后点“归档”，未成交失败点“丢单”，都会沉淀到这里查询。</td></tr>`;
+    const review = deal.stage === "丢单"
+      ? `${deal.lostReasonCategory || "未分类"}：${deal.lostReason || "待补充复盘"}${deal.revisitAt ? ` · ${deal.revisitAt} 复访` : ""}`
+      : `${deal.wonReason || "已成交"}${deal.archivedAt ? " · 已归档" : " · 待归档"}`;
+    return `<tr data-closed-deal-id="${escapeHtml(deal.id)}"><td><b>${escapeHtml(deal.title)}</b><span>${escapeHtml(customer?.company || "客户待确认")} · ${escapeHtml(product)}</span></td><td>${dealMoney(deal.amount, deal.currency)}</td><td>${badge(deal.stage, deal.stage === "丢单" ? "red" : "green")}</td><td>${escapeHtml(formatDateTime(deal.closedAt || deal.archivedAt))}</td><td>${escapeHtml(review)}</td></tr>`;
+  }).join("") : `<tr><td colspan="5" class="empty-cell">当前筛选下暂无关闭商机。</td></tr>`;
+  qsa<HTMLElement>("[data-closed-deal-id]", box).forEach((row) => row.addEventListener("click", () => openDealDrawer(row.dataset.closedDealId || "")));
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const pageLabel = qs<HTMLElement>("#pipelineClosedPage");
+  if (pageLabel) pageLabel.textContent = `第 ${page} / ${totalPages} 页 · ${total} 条`;
+  const prev = qs<HTMLButtonElement>("#pipelineClosedPrev");
+  const next = qs<HTMLButtonElement>("#pipelineClosedNext");
+  if (prev) prev.disabled = page <= 1;
+  if (next) next.disabled = page >= totalPages;
+}
+
+async function refreshDealsData(render = true) {
+  const result = await api<{ deals: Deal[]; events: DealEvent[] }>("/api/deals");
+  state.deals = result.deals;
+  state.dealEvents = result.events;
+  if (render) renderPipeline(state.deals);
+  await refreshClosedDeals();
+  if (state.selectedDealId) renderDealDrawer(state.selectedDealId);
+}
+
+function dealEventLabel(type: string) {
+  const labels: Record<string, string> = {
+    created: "创建商机",
+    updated: "关键信息更新",
+    stage: "阶段变化",
+    follow_up: "跟进记录",
+    quote: "报价记录",
+    sample: "样品记录",
+    negotiation: "谈判记录",
+    payment: "回款记录",
+    document: "单据记录",
+    won: "确认成交",
+    lost: "丢单复盘",
+    archived: "归档"
+  };
+  return labels[type] || type;
+}
+
+function openDealDrawer(id: string) {
+  if (!id) return;
+  state.selectedDealId = id;
+  renderDealDrawer(id);
+  qs("#dealDrawer")?.classList.add("open");
+  qs("#dealDrawerBackdrop")?.classList.add("open");
+}
+
+function closeDealDrawer() {
+  state.selectedDealId = null;
+  qs("#dealDrawer")?.classList.remove("open");
+  qs("#dealDrawerBackdrop")?.classList.remove("open");
+}
+
+function renderDealDrawer(id: string) {
+  const drawer = qs<HTMLElement>("#dealDrawer");
+  if (!drawer) return;
+  const deal = state.deals.find((item) => item.id === id);
+  if (!deal) {
+    closeDealDrawer();
+    return;
+  }
+  const customer = state.customers.find((item) => item.id === deal.customerId);
+  const events = state.dealEvents.filter((event) => event.dealId === deal.id).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  const documents = state.tradeDocuments.filter((document) => document.dealId === deal.id).sort((left, right) => right.revision - left.revision);
+  const closed = deal.stage === "成交" || deal.stage === "丢单";
+  drawer.innerHTML = `
+    <div class="deal-detail-head">
+      <div><h2>${escapeHtml(deal.title)}</h2><p>${escapeHtml(customer?.company || "客户待确认")} · ${escapeHtml(deal.product || "产品待维护")}</p></div>
+      <button class="btn" id="closeDealDrawerButton">关闭</button>
+    </div>
+    <div class="deal-detail-grid">
+      <div class="info"><span>当前阶段</span><b>${escapeHtml(deal.stage)} · 进入于 ${escapeHtml(formatDateTime(deal.stageChangedAt))}</b></div>
+      <div class="info"><span>金额口径</span><b>${dealMoney(deal.amount, deal.currency)} · ${deal.amountType === "won" ? "成交额" : deal.amountType === "quoted" ? "报价额" : "估算额"}</b></div>
+      <div class="info"><span>下一动作</span><b>${escapeHtml(deal.nextAction)} · ${escapeHtml(deal.nextActionAt || "待安排")}</b></div>
+      <div class="info"><span>预计成交</span><b>${escapeHtml(deal.expectedCloseAt || "待评估")}</b></div>
+      <div class="info"><span>关联单据</span><b>${documents.length ? documents.map((document) => `${document.type} ${escapeHtml(document.number)} v${document.revision}`).join(" · ") : "暂未关联 PI/CI"}</b></div>
+      <div class="info"><span>${deal.stage === "丢单" ? "丢单复盘" : "关闭状态"}</span><b>${deal.stage === "丢单" ? `${escapeHtml(deal.lostReasonCategory || "未分类")}：${escapeHtml(deal.lostReason || "待补充")}` : deal.stage === "成交" ? escapeHtml(deal.wonReason || "已确认成交") : "活跃推进中"}</b></div>
+    </div>
+    <div class="deal-detail-actions">
+      ${closed ? "" : `<button class="btn primary" id="drawerAdvanceDealButton">${dealPrimaryAction(deal.stage)}</button><button class="btn" id="drawerRecordDealButton">记录进展</button><button class="btn" id="drawerEditDealButton">编辑</button>`}
+      ${["已报价", "样品", "谈判", "成交"].includes(deal.stage) ? `<button class="btn" id="drawerPrintDealButton">${deal.stage === "成交" ? "生成 CI" : "生成 PI"}</button>` : ""}
+      ${deal.stage === "成交" && !deal.archivedAt ? `<button class="btn" id="drawerArchiveDealButton">归档成交</button>` : ""}
+    </div>
+    <div class="section-head" style="margin-top:16px"><div><h3>商机时间线</h3><span class="subline">阶段、报价、样品、谈判、回款与关闭记录</span></div></div>
+    <div class="deal-timeline">${events.length ? events.map((event) => `
+      <div class="deal-event ${["follow_up", "quote", "sample", "negotiation", "payment"].includes(event.type) ? "manual" : ""}">
+        <b>${escapeHtml(dealEventLabel(event.type))}${event.fromStage && event.toStage && event.fromStage !== event.toStage ? ` · ${escapeHtml(event.fromStage)} → ${escapeHtml(event.toStage)}` : ""}</b>
+        <p>${escapeHtml(event.content)}</p>
+        <span>${escapeHtml(event.operatorName || "未知操作人")} · ${escapeHtml(formatDateTime(event.createdAt))}${event.nextAction ? ` · 下一步：${escapeHtml(event.nextAction)} ${escapeHtml(event.nextActionAt || "")}` : ""}</span>
+      </div>`).join("") : `<div class="deal-empty">暂无时间线记录</div>`}</div>
+  `;
+  qs("#closeDealDrawerButton", drawer)?.addEventListener("click", closeDealDrawer);
+  qs("#drawerAdvanceDealButton", drawer)?.addEventListener("click", () => openDealStageModal(deal.id));
+  qs("#drawerRecordDealButton", drawer)?.addEventListener("click", () => openDealEventModal(deal.id));
+  qs("#drawerEditDealButton", drawer)?.addEventListener("click", () => openDealModal(deal));
+  qs("#drawerPrintDealButton", drawer)?.addEventListener("click", () => void printDealDocument(deal.id));
+  qs("#drawerArchiveDealButton", drawer)?.addEventListener("click", () => void archiveDeal(deal.id));
+}
+
+function openDealEventModal(id: string) {
+  const deal = state.deals.find((item) => item.id === id);
+  if (!deal) return;
+  const defaultType = deal.stage === "已报价" ? "quote" : deal.stage === "样品" ? "sample" : deal.stage === "谈判" ? "negotiation" : "follow_up";
+  openModal("记录商机进展", `
+    <div class="form-grid">
+      <div class="form-field"><label>记录类型</label><select id="dealEventTypeInput">
+        <option value="follow_up" ${defaultType === "follow_up" ? "selected" : ""}>跟进</option>
+        <option value="quote" ${defaultType === "quote" ? "selected" : ""}>报价</option>
+        <option value="sample" ${defaultType === "sample" ? "selected" : ""}>样品</option>
+        <option value="negotiation" ${defaultType === "negotiation" ? "selected" : ""}>谈判</option>
+        <option value="payment">回款节点（销售记录）</option>
+      </select></div>
+      <div class="form-field"><label>下一动作日期</label><input id="dealEventNextActionAtInput" type="date" value="${escapeHtml(deal.nextActionAt || defaultFutureDate(2))}"></div>
+      <div class="form-field full"><label>本次进展</label><textarea id="dealEventContentInput" rows="4" placeholder="记录客户反馈、报价结果、样品状态或谈判结论"></textarea></div>
+      <div class="form-field full"><label>下一步动作</label><input id="dealEventNextActionInput" value="${escapeHtml(deal.nextAction)}"></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDealEventButton">保存进展</button>`);
+  qs("#saveDealEventButton")?.addEventListener("click", () => void saveDealEvent(id));
+}
+
+async function saveDealEvent(id: string) {
+  const type = qs<HTMLSelectElement>("#dealEventTypeInput")?.value || "follow_up";
+  const content = qs<HTMLTextAreaElement>("#dealEventContentInput")?.value.trim() || "";
+  const nextAction = qs<HTMLInputElement>("#dealEventNextActionInput")?.value.trim() || "";
+  const nextActionAt = qs<HTMLInputElement>("#dealEventNextActionAtInput")?.value || "";
+  if (!content || !nextAction || !nextActionAt) {
+    toast("请填写本次进展、下一动作和日期", "error");
+    return;
+  }
+  await api(`/api/deals/${id}/events`, {
+    method: "POST",
+    body: JSON.stringify({ type, content, nextAction, nextActionAt })
+  });
+  closeModal();
+  await refreshDealsData();
+  toast("商机进展已记录");
 }
 
 function openDealModal(editing?: Deal) {
-  const defaultCustomer = editing?.customerId ? state.customers.find((item) => item.id === editing.customerId) : state.customers[0];
-  const title = editing?.title || `${defaultCustomer?.company || "新客户"} 采购机会`;
+  const defaultCustomer = editing?.customerId ? state.customers.find((item) => item.id === editing.customerId) : undefined;
+  const title = editing?.title || "";
   const storedQuantity = Number(editing?.quantity || 0);
   const storedUnitPrice = Number(editing?.unitPrice || 0);
   const quantity = editing && !storedQuantity && !storedUnitPrice && editing.amount ? 1 : storedQuantity;
@@ -2806,19 +4296,21 @@ function openDealModal(editing?: Deal) {
   openModal(editing ? "编辑商机" : "新增商机", `
     <div class="form-grid">
       <input id="dealIdInput" type="hidden" value="${escapeHtml(editing?.id || "")}">
-      <div class="form-field full"><label>商机名称</label><input id="dealTitleInput" value="${escapeHtml(title)}"></div>
+      <div class="form-field full"><label>商机名称</label><input id="dealTitleInput" value="${escapeHtml(title)}" placeholder="例如：Nordic Tools 年度压力仪表采购"></div>
       <div class="form-field deal-customer-field">
-        <label>关联客户</label>
-        <input id="dealCustomerInput" value="${escapeHtml(defaultCustomer?.company || "")}" placeholder="输入客户名称过滤，留空则不关联" autocomplete="off">
+        <label>关联客户（必选）</label>
+        <input id="dealCustomerInput" value="${escapeHtml(defaultCustomer?.company || "")}" placeholder="输入客户名称并从列表选择" autocomplete="off">
         <input id="dealCustomerIdInput" type="hidden" value="${escapeHtml(defaultCustomer?.id || "")}">
         <button class="deal-customer-clear" id="clearDealCustomerButton" type="button" title="清空关联客户">×</button>
         <div class="deal-customer-options" id="dealCustomerOptions"></div>
       </div>
-      <div class="form-field"><label>阶段</label><select id="dealStageInput">${["询盘", "已联系", "已报价", "样品", "谈判", "成交"].map((stage) => `<option ${stage === editing?.stage ? "selected" : ""}>${stage}</option>`).join("")}</select></div>
-      <div class="form-field full"><label>产品</label><input id="dealProductInput" value="${escapeHtml(editing?.product || "")}" placeholder="例如：核心产品 / 型号 X100"></div>
+      <div class="form-field"><label>币种</label><select id="dealCurrencyInput">${["USD", "EUR", "GBP", "CNY", "JPY", "AED"].map((currency) => `<option ${currency === (editing?.currency || "USD") ? "selected" : ""}>${currency}</option>`).join("")}</select></div>
+      <div class="form-field full"><label>产品 / 采购需求（必填）</label><input id="dealProductInput" value="${escapeHtml(editing?.product || "")}" placeholder="例如：压力变送器 PT-2088 / 60 件"></div>
       <div class="form-field"><label>数量</label><input id="dealQuantityInput" type="number" min="0" step="1" value="${quantity || 30}"></div>
       <div class="form-field"><label>单价</label><input id="dealUnitPriceInput" type="number" min="0" step="0.01" value="${unitPrice || 600}"></div>
       <div class="form-field"><label>金额</label><input id="dealAmountInput" type="number" value="${computedAmount}" readonly></div>
+      <div class="form-field"><label>下一动作日期</label><input id="dealNextActionAtInput" type="date" value="${escapeHtml(editing?.nextActionAt || defaultFutureDate(2))}"></div>
+      <div class="form-field"><label>预计成交日期</label><input id="dealExpectedCloseAtInput" type="date" value="${escapeHtml(editing?.expectedCloseAt || defaultFutureDate(21))}"></div>
       <div class="form-field full"><label>下一步动作</label><input id="dealNextActionInput" value="${escapeHtml(editing?.nextAction || "确认采购清单并安排报价")}"></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDealButton">${editing ? "保存修改" : "保存商机"}</button>`);
@@ -2858,7 +4350,7 @@ function renderDealCustomerOptions(keyword = "") {
       <b>${escapeHtml(customer.company)}</b>
       <span>${escapeHtml(customer.contact || "待维护")} · ${escapeHtml(customer.country || "未知国家")}</span>
     </button>
-  `).join("") : `<div class="deal-customer-empty">没有匹配客户，可清空后保存为无关联商机</div>`;
+  `).join("") : `<div class="deal-customer-empty">没有匹配客户，请先到客户管理创建客户</div>`;
   qsa<HTMLButtonElement>("[data-deal-customer-id]", box).forEach((button) => {
     button.addEventListener("mousedown", (event) => event.preventDefault());
     button.addEventListener("click", () => {
@@ -2915,14 +4407,25 @@ function bindDealCustomerPicker() {
 async function saveDeal() {
   const dealId = qs<HTMLInputElement>("#dealIdInput")?.value.trim() || "";
   const title = qs<HTMLInputElement>("#dealTitleInput")?.value.trim() || "";
+  const product = qs<HTMLInputElement>("#dealProductInput")?.value.trim() || "";
   const customerText = qs<HTMLInputElement>("#dealCustomerInput")?.value.trim() || "";
   const customerId = qs<HTMLInputElement>("#dealCustomerIdInput")?.value.trim() || "";
   if (!title) {
     toast("请填写商机名称", "error");
     return;
   }
-  if (customerText && !customerId) {
-    toast("请从下拉列表选择现有客户，或清空关联客户", "error");
+  if (!product) {
+    toast("请填写产品或采购需求", "error");
+    return;
+  }
+  if (!customerText || !customerId) {
+    toast("请从下拉列表选择关联客户", "error");
+    return;
+  }
+  const nextAction = qs<HTMLInputElement>("#dealNextActionInput")?.value.trim() || "";
+  const nextActionAt = qs<HTMLInputElement>("#dealNextActionAtInput")?.value || "";
+  if (!nextAction || !nextActionAt) {
+    toast("请填写下一动作和日期", "error");
     return;
   }
   const quantity = Number(qs<HTMLInputElement>("#dealQuantityInput")?.value || 0);
@@ -2932,20 +4435,19 @@ async function saveDeal() {
     body: JSON.stringify({
       title,
       customerId,
-      stage: qs<HTMLSelectElement>("#dealStageInput")?.value || "询盘",
-      product: qs<HTMLInputElement>("#dealProductInput")?.value.trim() || "",
+      product,
       quantity,
       unitPrice,
       amount: Math.round(quantity * unitPrice * 100) / 100,
-      nextAction: qs<HTMLInputElement>("#dealNextActionInput")?.value || "首次跟进"
+      currency: qs<HTMLSelectElement>("#dealCurrencyInput")?.value || "USD",
+      nextAction,
+      nextActionAt,
+      expectedCloseAt: qs<HTMLInputElement>("#dealExpectedCloseAtInput")?.value || ""
     })
   });
-  const existing = state.deals.find((item) => item.id === result.deal.id);
-  if (existing) Object.assign(existing, result.deal);
-  else state.deals.unshift(result.deal);
-  renderPipeline(state.deals);
-  void refreshDashboardOnly();
   closeModal();
+  await refreshDealsData();
+  void refreshDashboardOnly();
   toast(dealId ? "商机已更新" : "商机已新增");
 }
 
@@ -2963,10 +4465,16 @@ function commissionStatusTone(status: string) {
 function commissionRuleLabel(rule?: CommissionRule) {
   if (!rule) return "未配置";
   if (rule.ruleType === "rate") return `销售额 ${(rule.rate * 100).toFixed(2)}%`;
-  if (rule.ruleType === "fixed") return `固定 ${amount(rule.fixedAmount)} / 件`;
+  if (rule.ruleType === "fixed") return `固定 ${currencyAmount(rule.fixedAmount)} / 件`;
   if (rule.ruleType === "gross_profit") return `毛利 ${(rule.grossProfitRate * 100).toFixed(2)}%`;
   if (rule.ruleType === "tier") return "阶梯计提";
   return "不计提";
+}
+
+function commissionExchangeSourceLabel(source?: string) {
+  if (source === "finance") return "财务汇率";
+  if (source === "manual") return "手工汇率";
+  return "待核汇率";
 }
 
 function findCommissionProductForRecord(record: MonthlySalesRecord) {
@@ -3094,48 +4602,128 @@ function renderCommissionOwnerSelector() {
 function renderCommissionKpis() {
   const box = qs<HTMLElement>("#commissionKpis");
   if (!box) return;
-  const totalSales = state.commissionRecords.reduce((sum, item) => sum + Number(item.settlementAmount || item.salesAmount || 0), 0);
+  const confirmedRecords = state.commissionRecords.filter((item) => item.status !== "draft");
+  const totalSales = confirmedRecords.reduce((sum, item) => sum + Number(item.settlementAmount || 0), 0);
   const calculatedCommission = state.commissionCalculations.reduce((sum, item) => sum + Number(item.finalCommission || 0), 0);
-  const estimatedCommission = state.commissionRecords.reduce((sum, item) => sum + estimateCommissionForRecord(item), 0);
+  const estimatedCommission = confirmedRecords.reduce((sum, item) => sum + estimateCommissionForRecord(item), 0);
   const finalCommission = calculatedCommission || estimatedCommission;
-  const confirmed = state.commissionRecords.filter((item) => item.status !== "draft").length;
-  const edited = state.commissionRecords.filter((item) => item.edited).length;
+  const pendingRate = state.commissionRecords.filter((item) => item.currency !== "CNY" && ((item.exchangeRateSource || "pending") === "pending" || !item.exchangeRateDate)).length;
+  const unmatched = confirmedRecords.filter((item) => !activeRuleForProduct(findCommissionProductForRecord(item)?.id || item.productId)).length;
   box.innerHTML = [
-    ["月度销售额", amount(totalSales)],
-    [calculatedCommission ? "已算提成" : "预计提成", amount(finalCommission)],
-    ["已确认记录", `${confirmed}/${state.commissionRecords.length}`],
-    ["人工修正", `${edited} 条`]
+    ["可计提基数 · CNY", currencyAmount(totalSales)],
+    [calculatedCommission ? "当前提成 · CNY" : "试算提成 · CNY", currencyAmount(finalCommission)],
+    ["待确认记录", `${state.commissionRecords.filter((item) => item.status === "draft").length} 条`],
+    ["数据异常", `${pendingRate + unmatched} 条`]
   ].map(([label, value]) => `<div class="commission-kpi"><span>${label}</span><b>${value}</b></div>`).join("");
+}
+
+function commissionRecordMissingFields(record: MonthlySalesRecord) {
+  const fields: string[] = [];
+  if (!record.basisDate) fields.push("计提日期");
+  if (record.currency !== "CNY" && !record.exchangeRateDate) fields.push("汇率日期");
+  if (record.currency !== "CNY" && record.exchangeRateSource === "pending") fields.push("汇率来源");
+  return fields;
+}
+
+function commissionRecordCalculationLocked(record: MonthlySalesRecord) {
+  return state.commissionCalculations.some((calculation) =>
+    calculation.isCurrent !== false
+    && calculation.month === record.month
+    && calculation.ownerId === record.ownerId
+    && calculation.status === "locked"
+  );
+}
+
+function commissionAmountForRecord(record: MonthlySalesRecord) {
+  const items = state.commissionItems.filter((item) => item.recordId === record.id);
+  if (items.length) {
+    return {
+      amount: items.reduce((sum, item) => sum + Number(item.finalAmount || 0), 0),
+      label: items.some((item) => item.sourceType === "manual") ? "已计算 · 含调整" : "已计算"
+    };
+  }
+  const product = findCommissionProductForRecord(record);
+  const rule = activeRuleForProduct(product?.id || record.productId);
+  return {
+    amount: estimateCommissionForRecord(record),
+    label: rule && rule.ruleType !== "none"
+      ? (record.status === "draft" ? "试算 · 待确认" : "试算 · 待计算")
+      : "未匹配规则"
+  };
+}
+
+function commissionRecordActions(record: MonthlySalesRecord) {
+  if (record.status !== "draft") {
+    return `<button class="btn" data-view-commission-detail>查看明细</button>`;
+  }
+  if (commissionRecordCalculationLocked(record)) {
+    return `<button class="btn" data-view-commission-detail>查看明细</button><button class="btn" disabled title="请先解锁右侧提成单">本月已锁定</button>`;
+  }
+  const missingFields = commissionRecordMissingFields(record);
+  if (missingFields.length) {
+    return `<button class="btn" data-view-commission-detail>查看明细</button><button class="btn primary" data-complete-commission-record title="缺少：${escapeHtml(missingFields.join("、"))}">补齐资料</button>`;
+  }
+  return `<button class="btn" data-view-commission-detail>查看明细</button><button class="btn" data-edit-commission-record>编辑</button><button class="btn primary" data-confirm-commission-record>确认</button>`;
 }
 
 function renderCommissionRecords() {
   const tbody = qs<HTMLElement>("#commissionRecordRows");
-  if (!tbody) return;
+  const cardList = qs<HTMLElement>("#commissionRecordCards");
+  if (!tbody || !cardList) return;
   const rows = state.commissionRecords
     .filter((record) => state.commissionFilter === "all" || record.status === state.commissionFilter)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  tbody.innerHTML = rows.length ? rows.map((record) => `
+  tbody.innerHTML = rows.length ? rows.map((record) => {
+    const commission = commissionAmountForRecord(record);
+    return `
     <tr data-commission-record-id="${escapeHtml(record.id)}">
-      <td><div class="commission-title-cell"><b>${escapeHtml(record.customerName)}</b><span>${escapeHtml(record.productName)}${record.edited ? " · 已编辑" : ""}</span></div></td>
-      <td>${Number(record.quantity || 0).toLocaleString("en-US")}</td>
-      <td>${amount(Number(record.unitPrice || 0))}</td>
-      <td>${amount(Number(record.settlementAmount || record.salesAmount || 0))}</td>
-      <td>${badge(commissionStatusLabel(record.status), commissionStatusTone(record.status))}</td>
-      <td>${badge(record.sourceType === "deal" ? "归档商机" : record.sourceType === "manual" ? "手工录入" : "人工修正", record.sourceType === "adjusted" ? "amber" : "gray")}</td>
-      <td><div class="commission-row-actions"><button class="btn" data-edit-commission-record>编辑</button><button class="btn" data-confirm-commission-record ${record.status === "draft" ? "" : "disabled"}>确认</button><button class="btn" data-view-commission-audits ${record.edited ? "" : "disabled"}>留痕</button></div></td>
+      <td><div class="commission-title-cell"><b>${escapeHtml(record.customerName)}</b><span>${escapeHtml(record.productName)} · ${Number(record.quantity || 0).toLocaleString("en-US")} × ${currencyAmount(record.unitPrice, record.currency)}${record.edited ? " · 已编辑" : ""}</span></div></td>
+      <td><div class="commission-money-cell"><b>${currencyAmount(record.salesAmount, record.currency)}</b><span>汇率 ${Number(record.exchangeRate || 0).toLocaleString("en-US")} · ${commissionExchangeSourceLabel(record.exchangeRateSource)}</span></div></td>
+      <td><div class="commission-money-cell"><b>${currencyAmount(record.settlementAmount, "CNY")}</b><span>${record.basisType === "receipt" ? "实际回款" : "成交金额待核对"} · ${escapeHtml(record.basisDate || "未填日期")}</span></div></td>
+      <td><div class="commission-money-cell"><b>${currencyAmount(commission.amount, "CNY")}</b><span>${escapeHtml(commission.label)}</span></div></td>
+      <td><div class="commission-status-stack">${badge(commissionStatusLabel(record.status), commissionStatusTone(record.status))}${badge(record.sourceType === "deal" ? "归档商机" : record.sourceType === "manual" ? "手工录入" : "人工修正", record.sourceType === "adjusted" ? "amber" : "gray")}</div></td>
+      <td><div class="commission-row-actions">${commissionRecordActions(record)}</div></td>
     </tr>
-  `).join("") : `<tr><td colspan="7" class="empty-cell">暂无销售记录。可以先同步本月已归档成交商机，或手工新增一条售卖记录。</td></tr>`;
-  qsa<HTMLButtonElement>("[data-edit-commission-record]", tbody).forEach((button) => {
+  `;
+  }).join("") : `<tr><td colspan="6" class="empty-cell">暂无销售记录。可以先同步本月已归档成交商机，或手工新增一条计提记录。</td></tr>`;
+  cardList.innerHTML = rows.length ? rows.map((record) => {
+    const commission = commissionAmountForRecord(record);
+    return `
+    <article class="commission-record-card" data-commission-record-id="${escapeHtml(record.id)}">
+      <div class="commission-record-card-head"><div><b>${escapeHtml(record.customerName)}</b><span>${escapeHtml(record.productName)}</span></div>${badge(commissionStatusLabel(record.status), commissionStatusTone(record.status))}</div>
+      <div class="commission-record-card-money"><span>原币金额<strong>${currencyAmount(record.salesAmount, record.currency)}</strong></span><span>结算金额<strong>${currencyAmount(record.settlementAmount, "CNY")}</strong></span><span class="commission-record-card-commission">提成额 · ${escapeHtml(commission.label)}<strong>${currencyAmount(commission.amount, "CNY")}</strong></span></div>
+      <p>${record.basisType === "receipt" ? "实际回款" : "成交金额待核对"} · ${escapeHtml(record.basisDate || "未填日期")} · ${commissionExchangeSourceLabel(record.exchangeRateSource)}${record.exchangeRateSource !== "pending" ? ` · ${Number(record.exchangeRate || 0).toLocaleString("en-US")}` : ""}</p>
+      <div class="commission-row-actions">${commissionRecordActions(record)}</div>
+    </article>
+  `;
+  }).join("") : `<div class="commission-empty">暂无销售记录。</div>`;
+  const actionRoot = qs<HTMLElement>("#commission") || document.body;
+  qsa<HTMLButtonElement>("[data-edit-commission-record]", actionRoot).forEach((button) => {
     button.addEventListener("click", () => {
-      const record = state.commissionRecords.find((item) => item.id === button.closest<HTMLElement>("tr")?.dataset.commissionRecordId);
+      const record = state.commissionRecords.find((item) => item.id === button.closest<HTMLElement>("[data-commission-record-id]")?.dataset.commissionRecordId);
       if (record) openCommissionRecordModal(record);
     });
   });
-  qsa<HTMLButtonElement>("[data-confirm-commission-record]", tbody).forEach((button) => {
-    button.addEventListener("click", () => void confirmCommissionRecord(button.closest<HTMLElement>("tr")?.dataset.commissionRecordId || ""));
+  qsa<HTMLButtonElement>("[data-complete-commission-record]", actionRoot).forEach((button) => {
+    button.addEventListener("click", () => {
+      const record = state.commissionRecords.find((item) => item.id === button.closest<HTMLElement>("[data-commission-record-id]")?.dataset.commissionRecordId);
+      if (!record) {
+        toast("未找到这条计提记录，请刷新后重试", "error");
+        return;
+      }
+      const missingFields = commissionRecordMissingFields(record);
+      toast(`请补齐：${missingFields.join("、")}`, "error");
+      openCommissionRecordModal(record);
+    });
   });
-  qsa<HTMLButtonElement>("[data-view-commission-audits]", tbody).forEach((button) => {
-    button.addEventListener("click", () => void openCommissionAuditModal(button.closest<HTMLElement>("tr")?.dataset.commissionRecordId || ""));
+  qsa<HTMLButtonElement>("[data-confirm-commission-record]", actionRoot).forEach((button) => {
+    button.addEventListener("click", () => void confirmCommissionRecord(
+      button.closest<HTMLElement>("[data-commission-record-id]")?.dataset.commissionRecordId || "",
+      button
+    ));
+  });
+  qsa<HTMLButtonElement>("[data-view-commission-detail]", actionRoot).forEach((button) => {
+    button.addEventListener("click", () => void openCommissionRecordDetailModal(button.closest<HTMLElement>("[data-commission-record-id]")?.dataset.commissionRecordId || ""));
   });
 }
 
@@ -3145,9 +4733,14 @@ function renderCommissionCalculations() {
   box.innerHTML = state.commissionCalculations.length ? state.commissionCalculations.map((calculation) => {
     const owner = state.commissionOwners.find((item) => item.id === calculation.ownerId)?.name || (calculation.ownerId === state.user?.id ? state.user.name : calculation.ownerId);
     return `<article class="commission-calc-row" data-commission-calculation-id="${escapeHtml(calculation.id)}">
-      <div class="commission-calc-top"><b>${escapeHtml(owner)} · ${escapeHtml(calculation.month)}</b>${badge(commissionStatusLabel(calculation.status), commissionStatusTone(calculation.status))}</div>
-      <div class="commission-calc-metrics"><span>销售额<strong>${amount(calculation.salesAmount)}</strong></span><span>自动提成<strong>${amount(calculation.autoCommission)}</strong></span><span>最终提成<strong>${amount(calculation.finalCommission)}</strong></span></div>
-      <div class="commission-row-actions"><button class="btn" data-select-commission-calc>选择调整</button></div>
+      <div class="commission-calc-top"><b>${escapeHtml(owner)} · ${escapeHtml(calculation.month)} · V${calculation.version || 1}</b>${badge(commissionStatusLabel(calculation.status), commissionStatusTone(calculation.status))}</div>
+      <div class="commission-calc-metrics"><span>计提基数<strong>${currencyAmount(calculation.salesAmount)}</strong></span><span>自动提成<strong>${currencyAmount(calculation.autoCommission)}</strong></span><span>最终提成<strong>${currencyAmount(calculation.finalCommission)}</strong></span></div>
+      <div class="commission-row-actions">
+        <button class="btn" data-view-commission-calc>查看明细</button>
+        ${state.commissionCanReview && calculation.status === "calculated" ? `<button class="btn" data-select-commission-calc>提成调整</button><button class="btn primary" data-review-commission-calc>复核</button>` : ""}
+        ${state.commissionCanReview && calculation.status === "reviewed" ? `<button class="btn primary" data-lock-commission-calc>锁定</button>` : ""}
+        ${state.commissionCanReview && calculation.status === "locked" ? `<button class="btn" data-unlock-commission-calc>解锁修正</button>` : ""}
+      </div>
     </article>`;
   }).join("") : `<div class="commission-empty">暂无计算结果。先确认销售记录，再点击“重新计算”。</div>`;
   qsa<HTMLButtonElement>("[data-select-commission-calc]", box).forEach((button) => {
@@ -3155,6 +4748,18 @@ function renderCommissionCalculations() {
       state.selectedCommissionCalculationId = button.closest<HTMLElement>(".commission-calc-row")?.dataset.commissionCalculationId || null;
       openCommissionManualItemModal();
     });
+  });
+  qsa<HTMLButtonElement>("[data-view-commission-calc]", box).forEach((button) => {
+    button.addEventListener("click", () => openCommissionCalculationDetailModal(button.closest<HTMLElement>(".commission-calc-row")?.dataset.commissionCalculationId || ""));
+  });
+  qsa<HTMLButtonElement>("[data-review-commission-calc]", box).forEach((button) => {
+    button.addEventListener("click", () => void reviewCommissionCalculation(button.closest<HTMLElement>(".commission-calc-row")?.dataset.commissionCalculationId || ""));
+  });
+  qsa<HTMLButtonElement>("[data-lock-commission-calc]", box).forEach((button) => {
+    button.addEventListener("click", () => void lockCommissionCalculation(button.closest<HTMLElement>(".commission-calc-row")?.dataset.commissionCalculationId || ""));
+  });
+  qsa<HTMLButtonElement>("[data-unlock-commission-calc]", box).forEach((button) => {
+    button.addEventListener("click", () => openCommissionUnlockModal(button.closest<HTMLElement>(".commission-calc-row")?.dataset.commissionCalculationId || ""));
   });
 }
 
@@ -3168,7 +4773,7 @@ function renderCommissionRules() {
     const rule = productRules.find((item) => item.enabled) || productRules[0];
     return `<article class="commission-rule-row">
       <div class="commission-rule-top"><b>${escapeHtml(product.name)}</b>${badge(product.status === "active" ? "产品启用" : "产品停用", product.status === "active" ? "green" : "gray")}</div>
-      <p>${escapeHtml(product.category || "未分类")} · ${escapeHtml(product.model || "无型号")} · 成本 ${amount(product.costPrice)} · ${rule ? commissionRuleLabel(rule) : "未配置规则"}${rule && !rule.enabled ? " · 规则停用" : ""}</p>
+      <p>${escapeHtml(product.category || "未分类")} · ${escapeHtml(product.model || "无型号")} · 成本 ${currencyAmount(product.costPrice, product.currency)} · ${rule ? commissionRuleLabel(rule) : "未配置规则"}${rule && !rule.enabled ? " · 规则停用" : ""}</p>
       ${state.commissionCanManage ? `<div class="commission-row-actions">
         <button class="btn" data-edit-commission-product="${escapeHtml(product.id)}">编辑产品</button>
         <button class="btn" data-edit-commission-rule="${escapeHtml(product.id)}">${rule ? "编辑规则" : "新增规则"}</button>
@@ -3227,7 +4832,12 @@ function openCommissionRecordModal(record?: MonthlySalesRecord) {
       <div class="form-field full"><label>产品名称</label><input id="commissionRecordProductNameInput" value="${escapeHtml(record?.productName || products[0]?.name || "")}"></div>
       <div class="form-field"><label>数量</label><input id="commissionRecordQuantityInput" type="number" step="1" min="0" value="${record?.quantity ?? 1}"></div>
       <div class="form-field"><label>单价</label><input id="commissionRecordUnitPriceInput" type="number" step="0.01" min="0" value="${record?.unitPrice ?? products[0]?.defaultPrice ?? 0}"></div>
-      <div class="form-field"><label>汇率</label><input id="commissionRecordExchangeInput" type="number" step="0.0001" min="0" value="${record?.exchangeRate ?? 1}"></div>
+      <div class="form-field"><label>原币币种</label><select id="commissionRecordCurrencyInput">${["USD", "EUR", "CNY", "GBP"].map((currency) => `<option ${currency === (record?.currency || "USD") ? "selected" : ""}>${currency}</option>`).join("")}</select></div>
+      <div class="form-field"><label>计提依据</label><select id="commissionRecordBasisTypeInput"><option value="receipt" ${record?.basisType !== "deal_amount" ? "selected" : ""}>实际回款</option><option value="deal_amount" ${record?.basisType === "deal_amount" ? "selected" : ""}>成交金额待核对</option></select></div>
+      <div class="form-field"><label>依据日期</label><input id="commissionRecordBasisDateInput" type="date" value="${escapeHtml(record?.basisDate || "")}"></div>
+      <div class="form-field"><label>兑 CNY 汇率</label><input id="commissionRecordExchangeInput" type="number" step="0.0001" min="0" value="${record?.exchangeRate ?? 1}"></div>
+      <div class="form-field"><label>汇率日期</label><input id="commissionRecordExchangeDateInput" type="date" value="${escapeHtml(record?.exchangeRateDate || "")}"></div>
+      <div class="form-field"><label>汇率来源</label><select id="commissionRecordExchangeSourceInput"><option value="pending" ${record?.exchangeRateSource === "pending" ? "selected" : ""}>待核对</option><option value="manual" ${record?.exchangeRateSource === "manual" ? "selected" : ""}>手工录入</option><option value="finance" ${record?.exchangeRateSource === "finance" ? "selected" : ""}>财务确认</option></select></div>
       <div class="form-field"><label>状态</label><select id="commissionRecordStatusInput"><option value="draft" ${record?.status === "draft" ? "selected" : ""}>待确认</option><option value="confirmed" ${record?.status === "confirmed" ? "selected" : ""}>已确认</option></select></div>
       ${record ? `<div class="form-field full"><label>修改原因</label><input id="commissionRecordEditNoteInput" placeholder="必须填写，例如：实际结算数量调整" value="${escapeHtml(record.editNote || "")}"></div>` : ""}
     </div>
@@ -3244,6 +4854,7 @@ function openCommissionRecordModal(record?: MonthlySalesRecord) {
 }
 
 async function saveCommissionRecord(id = "") {
+  const button = qs<HTMLButtonElement>("#saveCommissionRecordButton");
   const productId = qs<HTMLSelectElement>("#commissionRecordProductInput")?.value || "";
   const quantity = Number(qs<HTMLInputElement>("#commissionRecordQuantityInput")?.value || 0);
   const unitPrice = Number(qs<HTMLInputElement>("#commissionRecordUnitPriceInput")?.value || 0);
@@ -3256,7 +4867,13 @@ async function saveCommissionRecord(id = "") {
     quantity,
     unitPrice,
     salesAmount: Math.round(quantity * unitPrice * 100) / 100,
+    currency: qs<HTMLSelectElement>("#commissionRecordCurrencyInput")?.value || "USD",
     exchangeRate: Number(qs<HTMLInputElement>("#commissionRecordExchangeInput")?.value || 1),
+    exchangeRateDate: qs<HTMLInputElement>("#commissionRecordExchangeDateInput")?.value || "",
+    exchangeRateSource: qs<HTMLSelectElement>("#commissionRecordExchangeSourceInput")?.value || "pending",
+    settlementCurrency: "CNY",
+    basisType: qs<HTMLSelectElement>("#commissionRecordBasisTypeInput")?.value || "receipt",
+    basisDate: qs<HTMLInputElement>("#commissionRecordBasisDateInput")?.value || "",
     status: qs<HTMLSelectElement>("#commissionRecordStatusInput")?.value || "draft",
     editNote: qs<HTMLInputElement>("#commissionRecordEditNoteInput")?.value.trim() || ""
   };
@@ -3264,24 +4881,56 @@ async function saveCommissionRecord(id = "") {
     toast("编辑销售记录必须填写修改原因", "error");
     return;
   }
-  const result = await api<{ record: MonthlySalesRecord }>(id ? `/api/commission/sales-records/${id}` : "/api/commission/sales-records", {
-    method: id ? "PATCH" : "POST",
-    body: JSON.stringify(payload)
-  });
-  if (id) state.commissionRecords = state.commissionRecords.map((item) => item.id === id ? result.record : item);
-  else state.commissionRecords.unshift(result.record);
-  state.commissionMonth = result.record.month;
-  closeModal();
-  renderCommission();
-  toast(id ? "售卖记录已更新并留痕" : "售卖记录已新增");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "保存中...";
+  }
+  try {
+    const result = await api<{ record: MonthlySalesRecord }>(id ? `/api/commission/sales-records/${id}` : "/api/commission/sales-records", {
+      method: id ? "PATCH" : "POST",
+      body: JSON.stringify(payload)
+    });
+    if (id) state.commissionRecords = state.commissionRecords.map((item) => item.id === id ? result.record : item);
+    else state.commissionRecords.unshift(result.record);
+    state.commissionMonth = result.record.month;
+    closeModal();
+    renderCommission();
+    toast(id ? "售卖记录已更新并留痕" : "售卖记录已新增");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "销售记录保存失败", "error");
+  } finally {
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.textContent = "保存";
+    }
+  }
 }
 
-async function confirmCommissionRecord(id: string) {
-  if (!id) return;
-  const result = await api<{ record: MonthlySalesRecord }>(`/api/commission/sales-records/${id}/confirm`, { method: "POST" });
-  state.commissionRecords = state.commissionRecords.map((item) => item.id === id ? result.record : item);
-  renderCommission();
-  toast("销售记录已确认，可参与提成计算");
+async function confirmCommissionRecord(id: string, button?: HTMLButtonElement) {
+  const record = state.commissionRecords.find((item) => item.id === id);
+  if (!record) {
+    toast("未找到这条计提记录，请刷新后重试", "error");
+    return;
+  }
+  const originalLabel = button?.textContent || "确认";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "确认中...";
+  }
+  try {
+    const result = await api<{ record: MonthlySalesRecord }>(`/api/commission/sales-records/${id}/confirm`, { method: "POST" });
+    state.commissionRecords = state.commissionRecords.map((item) => item.id === id ? result.record : item);
+    renderCommission();
+    toast("销售记录已确认，可参与提成计算");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "销售记录确认失败";
+    toast(message, "error");
+  } finally {
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.textContent = originalLabel;
+    }
+  }
 }
 
 async function openCommissionAuditModal(id: string) {
@@ -3291,6 +4940,95 @@ async function openCommissionAuditModal(id: string) {
       ${result.audits.map((audit) => `<tr><td>${escapeHtml(audit.fieldName)}</td><td>${escapeHtml(audit.oldValue)}</td><td>${escapeHtml(audit.newValue)}</td><td>${escapeHtml(audit.reason)}</td><td>${escapeHtml(audit.operatorName)} · ${escapeHtml(formatDateTime(audit.createdAt))}</td></tr>`).join("") || `<tr><td colspan="5" class="empty-cell">暂无留痕</td></tr>`}
     </tbody></table></div>
   `, `<button class="btn primary" data-modal-close>知道了</button>`);
+}
+
+async function openCommissionRecordDetailModal(id: string) {
+  const record = state.commissionRecords.find((item) => item.id === id);
+  if (!record) return;
+  const items = state.commissionItems.filter((entry) => entry.recordId === record.id);
+  const item = items.find((entry) => entry.sourceType === "auto") || items[0];
+  const commission = commissionAmountForRecord(record);
+  let snapshot: { formula?: string; reason?: string } = {};
+  try {
+    snapshot = JSON.parse(item?.ruleSnapshotJson || "{}") as typeof snapshot;
+  } catch {
+    snapshot = {};
+  }
+  openModal("提成记录明细", `
+    <div class="commission-detail-grid">
+      <div><span>客户 / 产品</span><b>${escapeHtml(record.customerName)} · ${escapeHtml(record.productName)}</b></div>
+      <div><span>计提依据</span><b>${record.basisType === "receipt" ? "实际回款" : "成交金额待核对"} · ${escapeHtml(record.basisDate || "未填日期")}</b></div>
+      <div><span>原币金额</span><b>${currencyAmount(record.salesAmount, record.currency)}</b></div>
+      <div><span>汇率</span><b>${Number(record.exchangeRate || 0).toLocaleString("en-US")} · ${commissionExchangeSourceLabel(record.exchangeRateSource)} · ${escapeHtml(record.exchangeRateDate || "未填日期")}</b></div>
+      <div><span>结算金额</span><b>${currencyAmount(record.settlementAmount, "CNY")}</b></div>
+      <div><span>提成额</span><b>${currencyAmount(commission.amount, "CNY")} · ${escapeHtml(commission.label)}</b></div>
+      <div class="full"><span>计算公式</span><b>${escapeHtml(snapshot.formula || item?.remark || "尚未计算")}</b></div>
+      <div class="full"><span>状态与来源</span><b>${commissionStatusLabel(record.status)} · ${record.sourceType === "deal" ? "归档商机同步" : record.sourceType === "manual" ? "手工录入" : "人工修正"}</b></div>
+    </div>
+  `, `<button class="btn" id="commissionDetailAuditButton">${record.edited ? "查看编辑留痕" : "暂无编辑留痕"}</button><button class="btn primary" data-modal-close>关闭</button>`);
+  const auditButton = qs<HTMLButtonElement>("#commissionDetailAuditButton");
+  if (auditButton) {
+    auditButton.disabled = !record.edited;
+    auditButton.onclick = () => void openCommissionAuditModal(record.id);
+  }
+}
+
+function openCommissionCalculationDetailModal(id: string) {
+  const calculation = state.commissionCalculations.find((item) => item.id === id);
+  if (!calculation) return;
+  const items = state.commissionItems.filter((item) => item.calculationId === calculation.id);
+  openModal(`提成计算明细 · V${calculation.version || 1}`, `
+    <div class="commission-detail-summary">
+      <span>计提基数<strong>${currencyAmount(calculation.salesAmount)}</strong></span>
+      <span>自动提成<strong>${currencyAmount(calculation.autoCommission)}</strong></span>
+      <span>人工调整<strong>${currencyAmount(calculation.manualAdjustment)}</strong></span>
+      <span>最终提成<strong>${currencyAmount(calculation.finalCommission)}</strong></span>
+    </div>
+    <div class="commission-detail-list">${items.map((item) => {
+      const record = state.commissionRecords.find((entry) => entry.id === item.recordId);
+      let formula = item.remark;
+      try {
+        formula = (JSON.parse(item.ruleSnapshotJson || "{}") as { formula?: string }).formula || formula;
+      } catch {
+        formula = item.remark;
+      }
+      return `<article><div><b>${escapeHtml(record ? `${record.customerName} · ${record.productName}` : item.remark)}</b><span>${item.sourceType === "auto" ? escapeHtml(formula) : `人工调整 · ${escapeHtml(item.remark)}`}</span></div><strong>${currencyAmount(item.finalAmount)}</strong></article>`;
+    }).join("") || `<div class="commission-empty">暂无计算明细。</div>`}</div>
+    <p class="commission-detail-meta">状态：${commissionStatusLabel(calculation.status)} · 计算时间：${escapeHtml(calculation.calculatedAt ? formatDateTime(calculation.calculatedAt) : "尚未计算")}</p>
+  `, `<button class="btn primary" data-modal-close>关闭</button>`);
+}
+
+async function reviewCommissionCalculation(id: string) {
+  const result = await api<{ calculation: CommissionCalculation }>(`/api/commission/calculations/${id}/review`, { method: "POST" });
+  state.commissionCalculations = state.commissionCalculations.map((item) => item.id === id ? result.calculation : item);
+  await refreshCommissionData();
+  toast("提成单已复核，下一步可锁定");
+}
+
+async function lockCommissionCalculation(id: string) {
+  const result = await api<{ calculation: CommissionCalculation }>(`/api/commission/calculations/${id}/lock`, { method: "POST" });
+  state.commissionCalculations = state.commissionCalculations.map((item) => item.id === id ? result.calculation : item);
+  await refreshCommissionData();
+  toast("提成单已锁定，记录和金额不可再直接修改");
+}
+
+function openCommissionUnlockModal(id: string) {
+  openModal("解锁提成单", `
+    <div class="form-grid"><div class="form-field full"><label>解锁原因</label><textarea id="commissionUnlockReasonInput" rows="4" placeholder="说明为什么需要修正，以及准备调整的内容"></textarea></div></div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="confirmCommissionUnlockButton">确认解锁并生成新版本</button>`);
+  qs("#confirmCommissionUnlockButton")?.addEventListener("click", () => void unlockCommissionCalculation(id));
+}
+
+async function unlockCommissionCalculation(id: string) {
+  const reason = qs<HTMLTextAreaElement>("#commissionUnlockReasonInput")?.value.trim() || "";
+  if (reason.length < 4) {
+    toast("请填写至少 4 个字的解锁原因", "error");
+    return;
+  }
+  await api(`/api/commission/calculations/${id}/unlock`, { method: "POST", body: JSON.stringify({ reason }) });
+  closeModal();
+  await refreshCommissionData();
+  toast("已保留锁定版本，并生成待重算的新版本");
 }
 
 async function recalculateCommission() {
@@ -3317,6 +5055,7 @@ function openCommissionManualItemModal() {
   openModal("新增提成调整项", `
     <div class="form-grid">
       <div class="form-field full"><label>提成单</label><select id="commissionManualCalcInput">${state.commissionCalculations.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.month)} · ${escapeHtml(item.ownerId)} · ${amount(item.finalCommission)}</option>`).join("")}</select></div>
+      <div class="form-field full"><label>关联记录</label><select id="commissionManualRecordInput"><option value="">月度公共调整</option>${state.commissionRecords.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.customerName)} · ${escapeHtml(item.productName)}</option>`).join("")}</select></div>
       <div class="form-field"><label>类型</label><select id="commissionManualTypeInput"><option value="bonus">奖金</option><option value="deduction">扣减</option><option value="subsidy">补贴</option><option value="refund">退款扣回</option><option value="special">特殊项</option><option value="other">其它</option></select></div>
       <div class="form-field"><label>金额</label><input id="commissionManualAmountInput" type="number" step="0.01" value="0"></div>
       <div class="form-field full"><label>说明</label><input id="commissionManualRemarkInput" placeholder="例如：大客户首单专项奖励"></div>
@@ -3332,7 +5071,8 @@ async function saveCommissionManualItem() {
     body: JSON.stringify({
       itemType: qs<HTMLSelectElement>("#commissionManualTypeInput")?.value || "other",
       manualAmount: Number(qs<HTMLInputElement>("#commissionManualAmountInput")?.value || 0),
-      remark: qs<HTMLInputElement>("#commissionManualRemarkInput")?.value.trim() || "人工调整"
+      recordId: qs<HTMLSelectElement>("#commissionManualRecordInput")?.value || "",
+      remark: qs<HTMLInputElement>("#commissionManualRemarkInput")?.value.trim() || ""
     })
   });
   state.commissionCalculations = state.commissionCalculations.map((item) => item.id === result.calculation.id ? result.calculation : item);
@@ -3386,9 +5126,9 @@ async function saveCommissionProduct(id = "") {
 
 function ruleValueFor(rule?: CommissionRule) {
   if (!rule) return "";
-  if (rule.ruleType === "rate") return String(rule.rate || 0);
+  if (rule.ruleType === "rate") return String((rule.rate || 0) * 100);
   if (rule.ruleType === "fixed") return String(rule.fixedAmount || 0);
-  if (rule.ruleType === "gross_profit") return String(rule.grossProfitRate || 0);
+  if (rule.ruleType === "gross_profit") return String((rule.grossProfitRate || 0) * 100);
   return "";
 }
 
@@ -3407,7 +5147,7 @@ function openCommissionRuleModal(product: CommissionProduct, rule?: CommissionRu
         <option value="fixed" ${rule?.ruleType === "fixed" ? "selected" : ""}>固定金额</option>
         <option value="none" ${rule?.ruleType === "none" ? "selected" : ""}>不计提</option>
       </select></div>
-      <div class="form-field"><label>比例 / 金额</label><input id="commissionRuleValueInput" type="number" step="0.0001" value="${escapeHtml(ruleValueFor(rule))}" placeholder="比例填 0.03，固定填金额"></div>
+      <div class="form-field"><label>比例（%）/ 固定金额</label><input id="commissionRuleValueInput" type="number" step="0.01" min="0" value="${escapeHtml(ruleValueFor(rule))}" placeholder="比例填 3 表示 3%，固定规则填写金额"></div>
       <div class="form-field"><label>生效月份</label><input id="commissionRuleFromInput" type="month" value="${escapeHtml(rule?.effectiveFrom || state.commissionMonth)}"></div>
       <div class="form-field"><label>失效月份</label><input id="commissionRuleToInput" type="month" value="${escapeHtml(rule?.effectiveTo || "")}"></div>
       <div class="form-field"><label>状态</label><select id="commissionRuleEnabledInput"><option value="true" ${rule?.enabled !== false ? "selected" : ""}>启用</option><option value="false" ${rule?.enabled === false ? "selected" : ""}>停用</option></select></div>
@@ -3423,13 +5163,18 @@ async function saveCommissionRule(productId: string, ruleId = "") {
   const value = Number(qs<HTMLInputElement>("#commissionRuleValueInput")?.value || 0);
   const tierJson = qs<HTMLInputElement>("#commissionRuleTierInput")?.value.trim() || "";
   const remark = qs<HTMLInputElement>("#commissionRuleRemarkInput")?.value.trim() || "";
-  const result = await api<{ rule: CommissionRule }>(ruleId ? `/api/commission/rules/${ruleId}` : `/api/commission/products/${productId}/rules`, {
+  const normalizedRate = value / 100;
+  if ((ruleType === "rate" || ruleType === "gross_profit") && (value < 0 || value > 100)) {
+    toast("提成比例必须在 0% 到 100% 之间", "error");
+    return;
+  }
+  const result = await api<{ rule: CommissionRule; replacedRuleId?: string }>(ruleId ? `/api/commission/rules/${ruleId}` : `/api/commission/products/${productId}/rules`, {
     method: ruleId ? "PATCH" : "POST",
     body: JSON.stringify({
       ruleType,
-      rate: ruleType === "rate" ? value : 0,
+      rate: ruleType === "rate" ? normalizedRate : 0,
       fixedAmount: ruleType === "fixed" ? value : 0,
-      grossProfitRate: ruleType === "gross_profit" ? value : 0,
+      grossProfitRate: ruleType === "gross_profit" ? normalizedRate : 0,
       tierJson: ruleType === "tier" ? tierJson : "",
       effectiveFrom: qs<HTMLInputElement>("#commissionRuleFromInput")?.value || state.commissionMonth,
       effectiveTo: qs<HTMLInputElement>("#commissionRuleToInput")?.value || "",
@@ -3438,7 +5183,7 @@ async function saveCommissionRule(productId: string, ruleId = "") {
     })
   });
   state.commissionRules = ruleId
-    ? state.commissionRules.map((rule) => rule.id === result.rule.id ? result.rule : rule)
+    ? [result.rule, ...state.commissionRules.filter((rule) => rule.id !== result.rule.id && rule.id !== result.replacedRuleId)]
     : [result.rule, ...state.commissionRules];
   closeModal();
   renderCommission();
@@ -3458,7 +5203,7 @@ async function toggleCommissionRule(id: string) {
 }
 
 async function exportCommission() {
-  const result = await api<{ exportJob: { id: string; rows: number }; rows: Record<string, unknown>[] }>("/api/commission/export", {
+  const result = await api<{ exportJob: { id: string; rows: number }; rows: Record<string, unknown>[]; summaryRows: Record<string, unknown>[] }>("/api/commission/export", {
     method: "POST",
     body: JSON.stringify({
       month: state.commissionMonth,
@@ -3469,7 +5214,8 @@ async function exportCommission() {
   });
   const sheet = XLSX.utils.json_to_sheet(result.rows);
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, sheet, "提成对账");
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(result.summaryRows), "人员月度汇总");
+  XLSX.utils.book_append_sheet(workbook, sheet, "逐笔计提明细");
   XLSX.writeFile(workbook, `GoodJob-提成对账-${state.commissionMonth}.xlsx`);
   toast(`已导出 ${result.exportJob.rows} 行提成对账数据`);
 }
@@ -3478,53 +5224,191 @@ function renderReminders(reminders: Reminder[]) {
   const list = qs<HTMLElement>("#reminders .task-list");
   renderTopbarStats();
   if (!list) return;
-  const statusText: Record<string, string> = { pending: "待执行", sent: "已执行", done: "已完成" };
-  list.innerHTML = reminders.map((reminder) => {
+  qsa<HTMLButtonElement>("[data-reminder-view]", qs("#reminders") || undefined).forEach((button) => {
+    button.classList.toggle("active", button.dataset.reminderView === state.reminderView);
+    button.onclick = () => {
+      state.reminderView = button.dataset.reminderView === "rules" ? "rules" : "tasks";
+      renderReminders(state.reminders);
+    };
+  });
+  const filters = qs<HTMLElement>("#reminderTaskFilters");
+  if (filters) filters.hidden = state.reminderView !== "tasks";
+  qsa<HTMLButtonElement>("[data-reminder-filter]", filters || undefined).forEach((button) => {
+    button.classList.toggle("active", button.dataset.reminderFilter === state.reminderFilter);
+    button.onclick = () => {
+      state.reminderFilter = (button.dataset.reminderFilter as AppState["reminderFilter"]) || "pending";
+      renderReminders(state.reminders);
+    };
+  });
+  if (state.reminderView === "tasks") {
+    renderReminderTasks(list);
+    return;
+  }
+  list.innerHTML = reminders.length ? reminders.map((reminder) => {
     const priorityTone = reminder.priority === "high" ? "red" : reminder.priority === "medium" ? "amber" : "";
-    const accent = reminder.status === "done" ? "green" : reminder.priority === "high" ? "rose" : reminder.status === "sent" ? "brand" : "amber";
+    const enabled = reminder.enabled !== false;
+    const accent = enabled ? reminder.priority === "high" ? "rose" : "brand" : "gray";
+    const runSummary = reminder.lastRunAt
+      ? `最近手工运行 ${escapeHtml(formatDateTime(reminder.lastRunAt))}｜匹配 ${reminder.lastMatchedCount || 0}｜新建 ${reminder.lastCreatedCount || 0}｜跳过 ${reminder.lastSkippedCount || 0}｜失败 ${reminder.lastFailedCount || 0}`
+      : "尚未手工运行";
     return `<article class="task reminder-rule-card" data-reminder-id="${escapeHtml(reminder.id)}" style="--accent: var(--${accent})">
       <i class="task-line"></i>
       <div>
-        <div class="reminder-rule-top"><h3>${escapeHtml(reminder.title)}</h3>${badge(statusText[reminder.status] || reminder.status, reminder.status === "done" ? "green" : reminder.status === "sent" ? "amber" : "")}</div>
-        <p>${escapeHtml(reminder.rule)} · ${escapeHtml(reminder.dueAt)} · ${escapeHtml(reminder.channel)}</p>
+        <div class="reminder-rule-heading"><div><h3>${escapeHtml(reminder.title)}</h3><p>${escapeHtml(reminder.rule)}</p></div>${badge(enabled ? "已启用" : "已停用", enabled ? "green" : "gray")}</div>
         <div class="reminder-rule-meta">
           ${badge(reminderRuleTypeText(reminder.ruleType), "")}
           ${badge(reminder.targetStage || "不限阶段", "")}
           ${badge(`${reminder.days ?? 3} 天`, "")}
           ${badge(reminder.priority === "high" ? "高优先级" : reminder.priority === "medium" ? "中优先级" : "普通", priorityTone)}
-          ${badge(`命中 ${reminder.generatedCount || 0}`, reminder.generatedCount ? "green" : "gray")}
+          ${badge("站内任务", "gray")}
         </div>
+        <div class="reminder-run-summary">${runSummary}${reminder.lastError ? `｜${escapeHtml(reminder.lastError)}` : ""}</div>
       </div>
       <div class="reminder-rule-actions">
-        <button class="btn primary" data-run-reminder ${reminder.status === "done" ? "disabled" : ""}>执行规则</button>
-        <button class="btn" data-done-reminder>${reminder.status === "done" ? "已完成" : "完成"}</button>
+        <button class="btn" data-run-reminder ${enabled ? "" : "disabled"}>手工运行</button>
+        <button class="btn" data-edit-reminder aria-label="编辑规则">编辑</button>
+        <button class="btn" data-toggle-reminder>${enabled ? "停用" : "启用"}</button>
       </div>
     </article>`;
-  }).join("");
-  qsa<HTMLButtonElement>("[data-done-reminder]", list).forEach((button) => {
+  }).join("") : `<div class="reminder-empty">暂无个人提醒规则，可从右上角开始设置。</div>`;
+  qsa<HTMLButtonElement>("[data-toggle-reminder]", list).forEach((button) => {
     button.addEventListener("click", async () => {
       const row = button.closest<HTMLElement>(".task");
       if (!row?.dataset.reminderId) return;
-      await api(`/api/reminders/${row.dataset.reminderId}/done`, { method: "POST" });
-      const reminder = state.reminders.find((item) => item.id === row.dataset.reminderId);
-      if (reminder) reminder.status = "done";
-      button.textContent = "已完成";
-      renderTopbarStats();
-      toast("提醒已完成");
+      const result = await api<{ reminder: Reminder }>(`/api/reminders/${row.dataset.reminderId}/toggle`, { method: "POST" });
+      state.reminders = state.reminders.map((item) => item.id === result.reminder.id ? result.reminder : item);
+      renderReminders(state.reminders);
+      toast(result.reminder.enabled === false ? "规则已停用" : "规则已启用");
     });
   });
   qsa<HTMLButtonElement>("[data-run-reminder]", list).forEach((button) => {
     button.addEventListener("click", () => void runReminderRule(button.closest<HTMLElement>(".task")?.dataset.reminderId || "", button));
   });
+  qsa<HTMLButtonElement>("[data-edit-reminder]", list).forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.closest<HTMLElement>(".task")?.dataset.reminderId;
+      const reminder = state.reminders.find((item) => item.id === id);
+      if (reminder) openReminderModal(reminder);
+    });
+  });
+}
+
+function reminderDueDate(todo: Todo) {
+  const parsed = new Date(todo.dueAt.replace(" ", "T"));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function reminderTaskBucket(todo: Todo) {
+  if (todo.done) return "done";
+  const due = reminderDueDate(todo);
+  if (!due) return "future";
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const tomorrow = new Date(start.getTime() + 86400000);
+  if (due < start) return "overdue";
+  if (due < tomorrow) return "today";
+  if (todo.snoozeCount) return "snoozed";
+  return "future";
+}
+
+function renderReminderTasks(list: HTMLElement) {
+  const tasks = state.todos
+    .filter((todo) => todo.reminderRuleId)
+    .filter((todo) => state.reminderFilter === "pending" ? !todo.done : reminderTaskBucket(todo) === state.reminderFilter)
+    .sort((left, right) => (reminderDueDate(left)?.getTime() || Number.MAX_SAFE_INTEGER) - (reminderDueDate(right)?.getTime() || Number.MAX_SAFE_INTEGER));
+  list.innerHTML = tasks.length ? tasks.map((todo) => {
+    const customer = state.customers.find((item) => item.id === todo.customerId);
+    const deal = state.deals.find((item) => item.id === todo.dealId);
+    const bucket = reminderTaskBucket(todo);
+    const status = bucket === "overdue" ? badge("逾期", "red") : bucket === "today" ? badge("今天", "amber") : bucket === "snoozed" ? badge(`已延期 ${todo.snoozeCount || 1} 次`, "") : bucket === "done" ? badge("已完成", "green") : badge("未来", "gray");
+    return `<article class="task reminder-task-card" data-reminder-task-id="${escapeHtml(todo.id)}" style="--accent: var(--${bucket === "overdue" ? "rose" : bucket === "done" ? "green" : "brand"})">
+      <i class="task-line"></i>
+      <div>
+        <div class="reminder-task-heading"><div><h3><button data-open-reminder-customer>${escapeHtml(customer?.company || todo.related)}</button></h3><p>${deal ? `${escapeHtml(deal.title)} · ` : ""}${escapeHtml(todo.title)}</p></div>${status}</div>
+        <div class="reminder-run-summary">计划 ${escapeHtml(todo.dueAt)}${todo.snoozeReason ? `｜延期原因：${escapeHtml(todo.snoozeReason)}` : ""}${todo.completionResult ? `｜处理结果：${escapeHtml(todo.completionResult)}` : ""}</div>
+      </div>
+      <div class="reminder-task-actions">
+        ${todo.done ? `<button class="btn" disabled>已完成</button>` : `<button class="btn primary" data-complete-reminder-task>记录结果</button><button class="btn" data-snooze-reminder-task aria-label="延期">延期</button>`}
+      </div>
+    </article>`;
+  }).join("") : `<div class="reminder-empty">${state.reminderFilter === "pending" ? "当前没有待处理提醒。" : "当前筛选下没有提醒。"}</div>`;
+  qsa<HTMLButtonElement>("[data-open-reminder-customer]", list).forEach((button) => {
+    button.addEventListener("click", () => {
+      const todo = state.todos.find((item) => item.id === button.closest<HTMLElement>(".task")?.dataset.reminderTaskId);
+      const customer = state.customers.find((item) => item.id === todo?.customerId);
+      if (!customer) return;
+      activateNavView("customers", () => {
+        state.selectedCustomerId = customer.id;
+        renderCustomers(state.customers);
+        renderCustomerDrawer(customer);
+        openCustomerDrawer();
+      });
+    });
+  });
+  qsa<HTMLButtonElement>("[data-complete-reminder-task]", list).forEach((button) => {
+    button.addEventListener("click", () => openReminderTaskResult(button.closest<HTMLElement>(".task")?.dataset.reminderTaskId || ""));
+  });
+  qsa<HTMLButtonElement>("[data-snooze-reminder-task]", list).forEach((button) => {
+    button.addEventListener("click", () => openReminderTaskSnooze(button.closest<HTMLElement>(".task")?.dataset.reminderTaskId || ""));
+  });
+}
+
+function openReminderTaskResult(id: string) {
+  const todo = state.todos.find((item) => item.id === id);
+  if (!todo) return;
+  openModal("记录跟进结果", `
+    <div class="form-grid">
+      <div class="form-field full"><label>处理结果</label><select id="reminderResultType"><option>已联系客户，等待回复</option><option>客户已回复</option><option>已更新报价或方案</option><option>已记录样品反馈</option><option>无需继续跟进</option></select></div>
+      <div class="form-field full"><label>补充说明</label><textarea id="reminderResultNote" rows="3" placeholder="例如：客户周五前确认采购数量"></textarea></div>
+    </div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveReminderResult">保存并完成</button>`);
+  qs("#saveReminderResult")?.addEventListener("click", async () => {
+    const result = `${qs<HTMLSelectElement>("#reminderResultType")?.value || "已处理"}${qs<HTMLTextAreaElement>("#reminderResultNote")?.value.trim() ? `：${qs<HTMLTextAreaElement>("#reminderResultNote")?.value.trim()}` : ""}`;
+    const response = await api<{ todo: Todo }>(`/api/todos/${id}`, { method: "PATCH", body: JSON.stringify({ done: true, completionResult: result }) });
+    state.todos = state.todos.map((item) => item.id === id ? response.todo : item);
+    renderReminders(state.reminders);
+    closeModal();
+    toast("跟进结果已记录");
+  });
+}
+
+function openReminderTaskSnooze(id: string) {
+  const todo = state.todos.find((item) => item.id === id);
+  if (!todo) return;
+  const next = new Date();
+  next.setDate(next.getDate() + 1);
+  next.setHours(9, 0, 0, 0);
+  const localDateTime = [
+    next.getFullYear(),
+    String(next.getMonth() + 1).padStart(2, "0"),
+    String(next.getDate()).padStart(2, "0")
+  ].join("-") + `T${String(next.getHours()).padStart(2, "0")}:${String(next.getMinutes()).padStart(2, "0")}`;
+  openModal("延期提醒", `
+    <div class="form-grid">
+      <div class="form-field full"><label>新的跟进时间</label><input id="reminderSnoozeAt" type="datetime-local" value="${escapeHtml(localDateTime)}"></div>
+      <div class="form-field full"><label>延期原因</label><input id="reminderSnoozeReason" placeholder="例如：客户要求下周再联系"></div>
+    </div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveReminderSnooze">确认延期</button>`);
+  qs("#saveReminderSnooze")?.addEventListener("click", async () => {
+    const dueAt = qs<HTMLInputElement>("#reminderSnoozeAt")?.value.replace("T", " ") || "";
+    const snoozeReason = qs<HTMLInputElement>("#reminderSnoozeReason")?.value.trim() || "";
+    if (!dueAt || !snoozeReason) {
+      toast("请选择时间并填写延期原因", "error");
+      return;
+    }
+    const response = await api<{ todo: Todo }>(`/api/todos/${id}`, { method: "PATCH", body: JSON.stringify({ dueAt, snoozeReason }) });
+    state.todos = state.todos.map((item) => item.id === id ? response.todo : item);
+    renderReminders(state.reminders);
+    closeModal();
+    toast("提醒已延期并保留记录");
+  });
 }
 
 function reminderRuleTypeText(ruleType = "quote_no_reply") {
   const map: Record<string, string> = {
-    quote_no_reply: "报价未回复",
-    sample_feedback: "样品反馈",
-    inactive_customer: "长期未联系",
+    quote_no_reply: "已报价阶段停滞",
+    sample_feedback: "样品阶段待确认",
+    inactive_customer: "长期未产生客户活动",
     high_value_revisit: "高价值复访",
-    custom_due: "自定义日期"
+    custom_due: "商机下一动作到期"
   };
   return map[ruleType] || "自定义规则";
 }
@@ -3587,31 +5471,50 @@ function renderProblemDetail(problem?: ProblemItem) {
   if (tbody) tbody.innerHTML = Object.entries(groups).map(([category, item]) => `<tr><td>${escapeHtml(category)}</td><td>${item.count}</td><td>${badge(item.high ? "高" : "可控", item.high ? "red" : "green")}</td></tr>`).join("");
 }
 
-function renderMemos(memos: Memo[]) {
-  const sorted = [...memos].sort((a, b) => Number(b.pinned) - Number(a.pinned) || Number(a.archived) - Number(b.archived) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+function visibleMemos() {
+  const source = state.memoStatus === "deleted"
+    ? state.deletedMemos
+    : state.memos.filter((memo) => state.memoStatus === "archived" ? memo.archived : !memo.archived);
+  const keyword = state.memoSearch.trim().toLocaleLowerCase();
+  return source
+    .filter((memo) => !state.memoPinnedOnly || memo.pinned)
+    .filter((memo) => !keyword || [memo.title, memo.content, memo.tags].some((value) => value.toLocaleLowerCase().includes(keyword)))
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+}
+
+function memoRelationText(memo: Memo) {
+  const deal = memo.dealId ? state.deals.find((item) => item.id === memo.dealId) : undefined;
+  const customer = memo.customerId ? state.customers.find((item) => item.id === memo.customerId) : undefined;
+  if (deal) return `商机：${deal.title}`;
+  if (customer) return `客户：${customer.company}`;
+  if (memo.dealId || memo.customerId) return "关联对象不可访问";
+  return "";
+}
+
+function renderMemos(_memos?: Memo[]) {
+  const sorted = visibleMemos();
+  if (state.selectedMemoId && !sorted.some((item) => item.id === state.selectedMemoId)) state.selectedMemoId = sorted[0]?.id || null;
   const list = qs<HTMLElement>("#memos .memo-list");
   if (list) {
     list.innerHTML = sorted.length ? sorted.map((memo) => `<article class="memo-card ${state.selectedMemoId === memo.id ? "selected" : ""} ${memo.archived ? "archived" : ""}" data-memo-id="${escapeHtml(memo.id)}">
-      <div class="memo-top"><h3>${escapeHtml(memo.title)}</h3>${badge(memo.archived ? "归档" : memo.pinned ? "置顶" : memo.category, memo.archived ? "" : memo.pinned ? "green" : "amber")}</div>
-      <div class="memo-meta"><span>${escapeHtml(memo.category)}</span><span>${escapeHtml(memo.tags || "无标签")}</span></div>
+      <div class="memo-top"><h3>${escapeHtml(memo.title)}</h3>${badge(memo.deletedAt ? "已删除" : memo.archived ? "归档" : memo.pinned ? "置顶" : memo.category, memo.deletedAt || memo.archived ? "" : memo.pinned ? "green" : "amber")}</div>
+      <div class="memo-meta"><span>${escapeHtml(memo.category)}</span><span>${escapeHtml(memo.tags || "无标签")}</span><span>${escapeHtml(formatDateTime(memo.updatedAt))}</span></div>
       <p>${escapeHtml(memo.content.slice(0, 82) || "空白备忘")}</p>
+      ${memoRelationText(memo) ? `<div class="memo-relation">${escapeHtml(memoRelationText(memo))}</div>` : ""}
     </article>`).join("") : `<div class="todo-history-empty">暂无备忘，点击“新增备忘”开始记录</div>`;
-	    qsa<HTMLElement>(".memo-card", list).forEach((card) => {
-	      card.addEventListener("click", async () => {
-	        await saveCurrentMemoDraft();
-	        state.selectedMemoId = card.dataset.memoId || null;
-	        renderMemos(state.memos);
-	      });
-	    });
+    qsa<HTMLElement>(".memo-card", list).forEach((card) => {
+      card.addEventListener("click", async () => {
+        await saveCurrentMemoDraft();
+        state.selectedMemoId = card.dataset.memoId || null;
+        memoMobileDetailOpen = true;
+        renderMemos();
+      });
+    });
   }
-  const totalCount = qs("#memo-total-count");
-  const pinnedCount = qs("#memo-pinned-count");
-  const customerCount = qs("#memo-customer-count");
-  const archivedCount = qs("#memo-archived-count");
-  if (totalCount) totalCount.textContent = String(memos.length);
-  if (pinnedCount) pinnedCount.textContent = String(memos.filter((memo) => memo.pinned && !memo.archived).length);
-  if (customerCount) customerCount.textContent = String(memos.filter((memo) => memo.category.includes("客户")).length);
-  if (archivedCount) archivedCount.textContent = String(memos.filter((memo) => memo.archived).length);
+  qsa<HTMLButtonElement>("[data-memo-status]").forEach((button) => button.classList.toggle("active", button.dataset.memoStatus === state.memoStatus));
+  const pinnedOnly = qs<HTMLInputElement>("#memoPinnedOnly");
+  if (pinnedOnly) pinnedOnly.checked = state.memoPinnedOnly;
+  qs("#memoGrid")?.classList.toggle("detail-open", memoMobileDetailOpen);
   renderMemoDetail(sorted.find((item) => item.id === state.selectedMemoId) || sorted[0]);
 }
 
@@ -3631,25 +5534,118 @@ function renderMemoDetail(memo?: Memo) {
     return;
   }
   state.selectedMemoId = memo.id;
-  qs("#memo-detail-title")!.textContent = "备忘编辑";
-  qs("#memo-detail-meta")!.textContent = `${memo.category} · ${memo.archived ? "已归档" : "自动保存"}`;
+  const deleted = Boolean(memo.deletedAt);
+  qs("#memo-detail-title")!.textContent = deleted ? "已删除备忘" : "备忘编辑";
+  qs("#memo-detail-meta")!.textContent = deleted ? "恢复后可继续编辑" : `${memo.archived ? "已归档" : "个人私有"} · 输入停止后自动保存`;
   const titleEditor = qs<HTMLInputElement>("#memoTitleEditor");
+  const categoryEditor = qs<HTMLSelectElement>("#memoCategoryEditor");
   const tagsEditor = qs<HTMLInputElement>("#memoTagsEditor");
+  const customerEditor = qs<HTMLSelectElement>("#memoCustomerEditor");
+  const dealEditor = qs<HTMLSelectElement>("#memoDealEditor");
   const contentEditor = qs<HTMLTextAreaElement>("#memoContentEditor");
-  if (titleEditor) titleEditor.value = memo.title;
-  if (tagsEditor) tagsEditor.value = memo.tags;
-  if (contentEditor) contentEditor.value = memo.content || "";
-  memoDirty = false;
-  setMemoSaveState("已保存");
+  let editorValue = {
+    title: memo.title,
+    category: memo.category,
+    tags: memo.tags,
+    customerId: memo.customerId,
+    dealId: memo.dealId,
+    content: memo.content || ""
+  };
+  const draft = readMemoDraft(memo);
+  let restoredDraft = false;
+  if (!deleted && draft && !resolvedMemoDrafts.has(memo.id)) {
+    resolvedMemoDrafts.add(memo.id);
+    const conflict = draft.serverUpdatedAt !== memo.updatedAt;
+    const restore = window.confirm(conflict
+      ? `发现「${memo.title}」的本机草稿，但服务器内容已更新。是否仍恢复本机草稿？`
+      : `发现「${memo.title}」尚未同步的本机草稿，是否恢复？`);
+    if (restore) {
+      editorValue = draft;
+      restoredDraft = true;
+      memoEditRevision += 1;
+    } else {
+      clearMemoDraft(memo.id);
+    }
+  }
+  if (titleEditor) titleEditor.value = editorValue.title;
+  if (categoryEditor) categoryEditor.value = editorValue.category;
+  if (tagsEditor) tagsEditor.value = editorValue.tags;
+  renderMemoRelationOptions(editorValue.customerId, editorValue.dealId);
+  if (customerEditor) customerEditor.value = editorValue.customerId;
+  if (dealEditor) dealEditor.value = editorValue.dealId;
+  if (contentEditor) contentEditor.value = editorValue.content;
+  memoDirty = restoredDraft;
+  setMemoSaveState(deleted ? "只读" : restoredDraft ? "仅保存在本机，点击重试" : "已保存到服务器", restoredDraft);
   const pinButton = qs<HTMLButtonElement>("#memoPinButton");
   const archiveButton = qs<HTMLButtonElement>("#memoArchiveButton");
   const deleteButton = qs<HTMLButtonElement>("#memoDeleteButton");
   if (pinButton) pinButton.textContent = memo.pinned ? "取消置顶" : "置顶";
-  if (archiveButton) archiveButton.textContent = memo.archived ? "恢复" : "归档";
-  if (pinButton) pinButton.disabled = false;
+  if (archiveButton) archiveButton.textContent = deleted ? "恢复备忘" : memo.archived ? "恢复使用" : "归档";
+  if (deleteButton) deleteButton.textContent = deleted ? "永久删除" : "删除";
+  if (pinButton) pinButton.disabled = deleted;
   if (archiveButton) archiveButton.disabled = false;
   if (deleteButton) deleteButton.disabled = false;
-  bindMemoEditorEvents();
+  [titleEditor, categoryEditor, tagsEditor, customerEditor, dealEditor, contentEditor].forEach((input) => {
+    if (input) input.disabled = deleted;
+  });
+  if (!deleted) bindMemoEditorEvents();
+}
+
+function memoDraftKey(id: string) {
+  return `goodjob:memo-draft:${state.user?.id || "anonymous"}:${id}`;
+}
+
+function collectMemoEditorDraft(memo: Memo): MemoDraft {
+  return {
+    title: qs<HTMLInputElement>("#memoTitleEditor")?.value.trim() || memo.title,
+    category: qs<HTMLSelectElement>("#memoCategoryEditor")?.value || memo.category,
+    tags: qs<HTMLInputElement>("#memoTagsEditor")?.value.trim() || "",
+    customerId: qs<HTMLSelectElement>("#memoCustomerEditor")?.value || "",
+    dealId: qs<HTMLSelectElement>("#memoDealEditor")?.value || "",
+    content: qs<HTMLTextAreaElement>("#memoContentEditor")?.value || "",
+    serverUpdatedAt: memo.updatedAt,
+    draftAt: new Date().toISOString()
+  };
+}
+
+function writeMemoDraft(memo: Memo) {
+  localStorage.setItem(memoDraftKey(memo.id), JSON.stringify(collectMemoEditorDraft(memo)));
+}
+
+function readMemoDraft(memo: Memo): MemoDraft | null {
+  try {
+    const raw = localStorage.getItem(memoDraftKey(memo.id));
+    if (!raw) return null;
+    return JSON.parse(raw) as MemoDraft;
+  } catch {
+    clearMemoDraft(memo.id);
+    return null;
+  }
+}
+
+function clearMemoDraft(id: string) {
+  localStorage.removeItem(memoDraftKey(id));
+}
+
+function clearCurrentUserMemoDrafts() {
+  const prefix = `goodjob:memo-draft:${state.user?.id || "anonymous"}:`;
+  Object.keys(localStorage).filter((key) => key.startsWith(prefix)).forEach((key) => localStorage.removeItem(key));
+}
+
+function renderMemoRelationOptions(customerId: string, dealId: string) {
+  const customerEditor = qs<HTMLSelectElement>("#memoCustomerEditor");
+  const dealEditor = qs<HTMLSelectElement>("#memoDealEditor");
+  if (customerEditor) {
+    const inaccessible = customerId && !state.customers.some((item) => item.id === customerId);
+    customerEditor.innerHTML = `<option value="">不关联客户</option>${inaccessible ? `<option value="${escapeHtml(customerId)}">关联对象不可访问</option>` : ""}${state.customers.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.company)}</option>`).join("")}`;
+    customerEditor.value = customerId;
+  }
+  if (dealEditor) {
+    const available = state.deals.filter((item) => !customerId || item.customerId === customerId);
+    const inaccessible = dealId && !available.some((item) => item.id === dealId);
+    dealEditor.innerHTML = `<option value="">不关联商机</option>${inaccessible ? `<option value="${escapeHtml(dealId)}">关联对象不可访问</option>` : ""}${available.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join("")}`;
+    dealEditor.value = dealId;
+  }
 }
 
 function renderCompetitors(competitors: Competitor[]) {
@@ -3729,43 +5725,75 @@ function renderCaseDetail(caseStudy?: CaseStudy) {
 }
 
 function bindMemoEditorEvents() {
-  qsa<HTMLInputElement | HTMLTextAreaElement>("#memoTitleEditor, #memoTagsEditor, #memoContentEditor").forEach((input) => {
+  qsa<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("#memoTitleEditor, #memoCategoryEditor, #memoTagsEditor, #memoCustomerEditor, #memoDealEditor, #memoContentEditor").forEach((input) => {
     if (input.dataset.memoBound === "true") return;
     input.dataset.memoBound = "true";
     input.addEventListener("input", () => {
       memoDirty = true;
-      setMemoSaveState("未保存");
+      memoEditRevision += 1;
+      const memo = state.memos.find((item) => item.id === state.selectedMemoId);
+      if (memo) writeMemoDraft(memo);
+      setMemoSaveState("仅保存在本机");
+      window.clearTimeout(memoSaveTimer);
+      memoSaveTimer = window.setTimeout(() => void saveCurrentMemoDraft(), 700);
     });
-    input.addEventListener("blur", () => void saveCurrentMemoDraft());
+    input.addEventListener("change", () => {
+      if (input.id === "memoCustomerEditor") {
+        const customerId = (input as HTMLSelectElement).value;
+        const dealEditor = qs<HTMLSelectElement>("#memoDealEditor");
+        const currentDeal = state.deals.find((item) => item.id === dealEditor?.value);
+        renderMemoRelationOptions(customerId, currentDeal?.customerId === customerId ? currentDeal.id : "");
+      }
+      if (input.id === "memoDealEditor") {
+        const deal = state.deals.find((item) => item.id === (input as HTMLSelectElement).value);
+        if (deal) renderMemoRelationOptions(deal.customerId, deal.id);
+      }
+      input.dispatchEvent(new Event("input"));
+    });
+    input.addEventListener("blur", () => {
+      if (memoDirty) void saveCurrentMemoDraft();
+    });
   });
 }
 
-function setMemoSaveState(text: string) {
-  const node = qs<HTMLElement>("#memoSaveState");
-  if (node) node.textContent = text;
+function setMemoSaveState(text: string, retry = false) {
+  const node = qs<HTMLButtonElement>("#memoSaveState");
+  if (node) {
+    node.textContent = text;
+    node.classList.toggle("needs-retry", retry);
+    node.disabled = !retry;
+  }
 }
 
-function openReminderModal() {
-  openModal("设置提醒规则", `
+function openReminderModal(reminder?: Reminder) {
+  const type = reminder?.ruleType || "quote_no_reply";
+  const stage = reminder?.targetStage || "已报价";
+  const days = reminder?.days ?? 3;
+  openModal(reminder ? "编辑提醒规则" : "设置提醒规则", `
     <div class="form-grid">
-      <div class="form-field full"><label>规则模板</label><select id="reminderRuleTypeInput"><option value="quote_no_reply">报价后未回复</option><option value="sample_feedback">样品签收后待反馈</option><option value="inactive_customer">长期未联系客户</option><option value="high_value_revisit">高价值客户复访</option><option value="custom_due">自定义阶段提醒</option></select></div>
-      <div class="form-field full"><label>提醒名称</label><input id="reminderTitleInput" data-auto-title="true" value="报价后未回复提醒"></div>
-      <div class="form-field"><label>适用阶段</label><select id="reminderStageInput"><option>已报价</option><option>样品</option><option>谈判</option><option>询盘</option><option>已联系</option><option>成交</option></select></div>
-      <div class="form-field"><label>触发天数</label><input id="reminderDaysInput" type="number" min="0" max="90" value="3"></div>
-      <div class="form-field"><label>提醒时间</label><input id="reminderDueInput" value="今天 18:00"></div>
-      <div class="form-field"><label>渠道</label><select id="reminderChannelInput"><option>企业微信</option><option>站内</option><option>邮件</option></select></div>
+      <div class="form-field full"><label>规则模板</label><select id="reminderRuleTypeInput"><option value="quote_no_reply" ${type === "quote_no_reply" ? "selected" : ""}>已报价阶段停滞</option><option value="sample_feedback" ${type === "sample_feedback" ? "selected" : ""}>进入样品阶段后待确认</option><option value="inactive_customer" ${type === "inactive_customer" ? "selected" : ""}>长期未产生客户活动</option><option value="high_value_revisit" ${type === "high_value_revisit" ? "selected" : ""}>高价值客户复访</option><option value="custom_due" ${type === "custom_due" ? "selected" : ""}>商机下一动作到期</option></select></div>
+      <div class="form-field full"><label>提醒名称</label><input id="reminderTitleInput" data-auto-title="${reminder ? "false" : "true"}" value="${escapeHtml(reminder?.title || "报价阶段停滞提醒")}"></div>
+      <div class="form-field"><label>适用阶段</label><select id="reminderStageInput">${["已报价", "样品", "谈判", "询盘", "已联系", "成交", "丢单"].map((item) => `<option ${item === stage ? "selected" : ""}>${item}</option>`).join("")}</select></div>
+      <div class="form-field"><label>触发天数</label><input id="reminderDaysInput" type="number" min="0" max="90" value="${days}"></div>
+      <div class="form-field"><label>任务时间说明</label><input id="reminderDueInput" value="${escapeHtml(reminder?.dueAt || "按触发日期生成")}"></div>
+      <div class="form-field"><label>生成方式</label><input value="站内任务" disabled></div>
       <div class="form-field"><label>优先级</label><select id="reminderPriorityInput"><option value="high">高优先级</option><option value="medium" selected>中优先级</option><option value="normal">普通</option></select></div>
       <label class="form-field"><span>规则状态</span><select id="reminderEnabledInput"><option value="true">启用</option><option value="false">停用</option></select></label>
-      <div class="form-field full"><label>规则说明</label><input id="reminderRuleInput" value="已报价阶段客户报价后 3 天未回复，通过企业微信提醒"></div>
+      <div class="form-field full"><label>规则说明</label><input id="reminderRuleInput" value="${escapeHtml(reminder?.rule || "进入已报价阶段 3 天未更新时生成站内任务")}"></div>
     </div>
-  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveReminderButton">保存规则</button>`);
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveReminderButton">${reminder ? "保存修改" : "保存规则"}</button>`);
+  const priority = qs<HTMLSelectElement>("#reminderPriorityInput");
+  if (priority) priority.value = reminder?.priority || "medium";
+  const enabled = qs<HTMLSelectElement>("#reminderEnabledInput");
+  if (enabled) enabled.value = reminder?.enabled === false ? "false" : "true";
   bindReminderRulePreset();
-  qs("#saveReminderButton")?.addEventListener("click", () => void saveReminder());
+  if (reminder) reminderRuleDraft(false);
+  qs("#saveReminderButton")?.addEventListener("click", () => void saveReminder(reminder?.id));
 }
 
 function reminderRulePreset(type: string) {
   if (type === "sample_feedback") {
-    return { title: "样品反馈提醒", stage: "样品", days: "3" };
+    return { title: "样品阶段待确认", stage: "样品", days: "3" };
   }
   if (type === "inactive_customer") {
     return { title: "长期未联系提醒", days: "14" };
@@ -3774,9 +5802,9 @@ function reminderRulePreset(type: string) {
     return { title: "高价值客户复访", days: "7" };
   }
   if (type === "custom_due") {
-    return { title: "自定义阶段提醒" };
+    return { title: "商机下一动作到期提醒" };
   }
-  return { title: "报价后未回复提醒", stage: "已报价", days: "3" };
+  return { title: "报价阶段停滞提醒", stage: "已报价", days: "3" };
 }
 
 function reminderRuleDraft(applyPreset = false) {
@@ -3794,10 +5822,9 @@ function reminderRuleDraft(applyPreset = false) {
     }
   }
   const ruleInput = qs<HTMLInputElement>("#reminderRuleInput");
-  const channel = qs<HTMLSelectElement>("#reminderChannelInput")?.value || "企业微信";
   const stage = qs<HTMLSelectElement>("#reminderStageInput")?.value || "已报价";
   const days = qs<HTMLInputElement>("#reminderDaysInput")?.value || "3";
-  if (ruleInput) ruleInput.value = `${stage}阶段客户 ${days} 天未推进，通过${channel}提醒`;
+  if (ruleInput) ruleInput.value = `${stage}阶段 ${days} 天未更新时生成站内任务`;
 }
 
 function bindReminderRulePreset() {
@@ -3805,26 +5832,26 @@ function bindReminderRulePreset() {
     (event.currentTarget as HTMLInputElement).dataset.autoTitle = "false";
   });
   qs<HTMLElement>("#reminderRuleTypeInput")?.addEventListener("change", () => reminderRuleDraft(true));
-  ["#reminderStageInput", "#reminderDaysInput", "#reminderChannelInput"].forEach((selector) => {
+  ["#reminderStageInput", "#reminderDaysInput"].forEach((selector) => {
     qs<HTMLElement>(selector)?.addEventListener("change", () => reminderRuleDraft());
     qs<HTMLElement>(selector)?.addEventListener("input", () => reminderRuleDraft());
   });
   reminderRuleDraft(true);
 }
 
-async function saveReminder() {
+async function saveReminder(id?: string) {
   const title = qs<HTMLInputElement>("#reminderTitleInput")?.value.trim() || "";
   if (!title) {
     toast("请填写提醒名称", "error");
     return;
   }
-  const result = await api<{ reminder: Reminder }>("/api/reminders", {
-    method: "POST",
+  const result = await api<{ reminder: Reminder }>(id ? `/api/reminders/${id}` : "/api/reminders", {
+    method: id ? "PATCH" : "POST",
     body: JSON.stringify({
       title,
-      rule: qs<HTMLInputElement>("#reminderRuleInput")?.value || "报价后未回复",
+      rule: qs<HTMLInputElement>("#reminderRuleInput")?.value || "已报价阶段超过设定天数未更新",
       dueAt: qs<HTMLInputElement>("#reminderDueInput")?.value || "今天",
-      channel: qs<HTMLSelectElement>("#reminderChannelInput")?.value || "企业微信",
+      channel: "站内",
       ruleType: qs<HTMLSelectElement>("#reminderRuleTypeInput")?.value || "quote_no_reply",
       targetStage: qs<HTMLSelectElement>("#reminderStageInput")?.value || "已报价",
       days: Number(qs<HTMLInputElement>("#reminderDaysInput")?.value || 3),
@@ -3832,20 +5859,26 @@ async function saveReminder() {
       enabled: qs<HTMLSelectElement>("#reminderEnabledInput")?.value !== "false"
     })
   });
-  state.reminders.unshift(result.reminder);
+  state.reminders = id
+    ? state.reminders.map((item) => item.id === id ? result.reminder : item)
+    : [result.reminder, ...state.reminders];
+  state.reminderView = "rules";
   renderReminders(state.reminders);
   closeModal();
-  toast("提醒规则已保存：在本页执行规则后，会生成到工作台/待办清单");
+  toast(id ? "提醒规则已更新" : "提醒规则已保存，可先预览再手工运行");
 }
 
 async function runReminderRule(id: string, button?: HTMLButtonElement) {
   if (!id) return;
   try {
+    const preview = await api<{ matchedCount: number; creatableCount: number; skippedCount: number; preview: Array<{ customer: string; deal: string }> }>(`/api/reminders/${id}/preview`);
+    const sample = preview.preview.map((item) => `${item.customer}${item.deal ? ` / ${item.deal}` : ""}`).join("、") || "无";
+    if (!window.confirm(`预计命中 ${preview.matchedCount} 条，可新建 ${preview.creatableCount} 条，跳过 ${preview.skippedCount} 条。\n示例：${sample}\n\n确认手工运行？`)) return;
     if (button) {
       button.disabled = true;
-      button.textContent = "执行中";
+      button.textContent = "运行中";
     }
-    const result = await api<{ reminder: Reminder; createdCount: number; matchedCount: number }>(`/api/reminders/${id}/run`, { method: "POST" });
+    const result = await api<{ reminder: Reminder; createdCount: number; matchedCount: number; skippedCount: number; failedCount: number }>(`/api/reminders/${id}/run`, { method: "POST" });
     state.reminders = state.reminders.map((reminder) => reminder.id === result.reminder.id ? result.reminder : reminder);
     const todos = await api<{ todos: Todo[] }>("/api/todos");
     state.todos = todos.todos;
@@ -3853,13 +5886,13 @@ async function runReminderRule(id: string, button?: HTMLButtonElement) {
     renderTodos(state.todos);
     updateTodoChips(state.todos);
     renderTopbarStats();
-    toast(`规则已执行：命中 ${result.matchedCount}，生成 ${result.createdCount} 条待办，可到工作台/待办清单查看`);
+    toast(`手工运行完成：匹配 ${result.matchedCount}，新建 ${result.createdCount}，跳过 ${result.skippedCount}，失败 ${result.failedCount}`);
   } catch (error) {
     toast(error instanceof Error ? error.message : "执行提醒规则失败", "error");
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "执行规则";
+      button.textContent = "手工运行";
     }
   }
 }
@@ -3924,12 +5957,32 @@ function openMemoModal() {
   openModal("新增备忘", `
     <div class="form-grid">
       <div class="form-field full"><label>标题</label><input id="memoTitleInput" placeholder="例如：某客户报价偏好"></div>
-      <div class="form-field"><label>分类</label><select id="memoCategoryInput"><option>客户备忘</option><option>销售话术</option><option>产品知识</option><option>报价复盘</option><option>个人记录</option></select></div>
-      <div class="form-field"><label>标签</label><input id="memoTagsInput" placeholder="多个标签用逗号分隔"></div>
       <div class="form-field full"><label>内容</label><textarea id="memoContentInput" placeholder="记录关键信息、背景、下一步或复盘结论"></textarea></div>
+      <details class="form-field full memo-create-options">
+        <summary>关联与分类（可选）</summary>
+        <div class="form-grid">
+          <div class="form-field"><label>分类</label><select id="memoCategoryInput"><option>客户备忘</option><option>销售话术</option><option>产品知识</option><option>报价复盘</option><option>个人记录</option></select></div>
+          <div class="form-field"><label>标签</label><input id="memoTagsInput" placeholder="多个标签用逗号分隔"></div>
+          <div class="form-field"><label>关联客户</label><select id="memoCustomerInput"><option value="">不关联客户</option>${state.customers.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.company)}</option>`).join("")}</select></div>
+          <div class="form-field"><label>关联商机</label><select id="memoDealInput"><option value="">不关联商机</option>${state.deals.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join("")}</select></div>
+        </div>
+      </details>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveMemoButton">保存备忘</button>`);
   qs("#saveMemoButton")?.addEventListener("click", () => void saveMemo());
+  qs<HTMLSelectElement>("#memoCustomerInput")?.addEventListener("change", (event) => {
+    const customerId = (event.currentTarget as HTMLSelectElement).value;
+    const dealInput = qs<HTMLSelectElement>("#memoDealInput");
+    if (!dealInput) return;
+    dealInput.innerHTML = `<option value="">不关联商机</option>${state.deals.filter((item) => !customerId || item.customerId === customerId).map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join("")}`;
+  });
+  qs<HTMLSelectElement>("#memoDealInput")?.addEventListener("change", (event) => {
+    const deal = state.deals.find((item) => item.id === (event.currentTarget as HTMLSelectElement).value);
+    if (deal) {
+      const customerInput = qs<HTMLSelectElement>("#memoCustomerInput");
+      if (customerInput) customerInput.value = deal.customerId;
+    }
+  });
   qs<HTMLInputElement>("#memoTitleInput")?.focus();
 }
 
@@ -3945,38 +5998,70 @@ async function saveMemo() {
       title,
       category: qs<HTMLSelectElement>("#memoCategoryInput")?.value || "客户备忘",
       tags: qs<HTMLInputElement>("#memoTagsInput")?.value.trim() || "",
-      content: qs<HTMLTextAreaElement>("#memoContentInput")?.value.trim() || ""
+      content: qs<HTMLTextAreaElement>("#memoContentInput")?.value.trim() || "",
+      customerId: qs<HTMLSelectElement>("#memoCustomerInput")?.value || "",
+      dealId: qs<HTMLSelectElement>("#memoDealInput")?.value || ""
     })
   });
   state.memos.unshift(result.memo);
   state.selectedMemoId = result.memo.id;
-  renderMemos(state.memos);
+  state.memoStatus = "active";
+  memoMobileDetailOpen = true;
+  renderMemos();
   closeModal();
   toast("备忘已保存");
 }
 
 async function saveCurrentMemoDraft() {
-  if (memoSavePromise) return memoSavePromise;
+  window.clearTimeout(memoSaveTimer);
+  if (memoSavePromise) {
+    await memoSavePromise;
+    if (memoDirty) return saveCurrentMemoDraft();
+    return;
+  }
   if (!memoDirty) return;
   const memo = state.memos.find((item) => item.id === state.selectedMemoId);
   if (!memo) return;
-  const title = qs<HTMLInputElement>("#memoTitleEditor")?.value.trim() || memo.title;
-  const tags = qs<HTMLInputElement>("#memoTagsEditor")?.value.trim() || "";
-  const content = qs<HTMLTextAreaElement>("#memoContentEditor")?.value || "";
+  const revision = memoEditRevision;
+  const draft = collectMemoEditorDraft(memo);
   memoSaving = true;
   setMemoSaveState("保存中");
   memoSavePromise = (async () => {
-    const result = await api<{ memo: Memo }>(`/api/memos/${memo.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ title, tags, content })
-    });
-    Object.assign(memo, result.memo);
-    memoDirty = false;
-    setMemoSaveState("已自动保存");
-    renderMemos(state.memos);
+    try {
+      const result = await api<{ memo: Memo }>(`/api/memos/${memo.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          title: draft.title,
+          category: draft.category,
+          tags: draft.tags,
+          customerId: draft.customerId,
+          dealId: draft.dealId,
+          content: draft.content
+        })
+      });
+      Object.assign(memo, result.memo);
+      if (memoEditRevision === revision) {
+        memoDirty = false;
+        clearMemoDraft(memo.id);
+        setMemoSaveState("已保存到服务器");
+        renderMemos();
+      } else {
+        memoDirty = true;
+        writeMemoDraft(memo);
+        setMemoSaveState("仅保存在本机");
+        memoSaveTimer = window.setTimeout(() => void saveCurrentMemoDraft(), 700);
+      }
+    } catch (error) {
+      memoDirty = true;
+      writeMemoDraft(memo);
+      setMemoSaveState("保存失败，点击重试", true);
+      throw error;
+    }
   })();
   try {
     await memoSavePromise;
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "备忘保存失败", "error");
   } finally {
     memoSaving = false;
     memoSavePromise = null;
@@ -3992,22 +6077,67 @@ async function patchSelectedMemo(payload: Partial<Pick<Memo, "title" | "content"
     body: JSON.stringify(payload)
   });
   Object.assign(memo, result.memo);
-  renderMemos(state.memos);
+  if (typeof payload.archived === "boolean") state.memoStatus = payload.archived ? "archived" : "active";
+  renderMemos();
   toast(memo.archived ? "备忘已归档" : memo.pinned ? "备忘已置顶" : "备忘已更新");
 }
 
 async function deleteSelectedMemo() {
-  const memo = state.memos.find((item) => item.id === state.selectedMemoId);
+  if (memoDeleteBusy) return;
+  const memo = [...state.memos, ...state.deletedMemos].find((item) => item.id === state.selectedMemoId);
   if (!memo) {
     toast("请选择要删除的备忘", "error");
     return;
   }
-  await api<{ ok: boolean; id: string }>(`/api/memos/${memo.id}`, { method: "DELETE" });
-  state.memos = state.memos.filter((item) => item.id !== memo.id);
-  state.selectedMemoId = state.memos[0]?.id || null;
-  memoDirty = false;
-  renderMemos(state.memos);
-  toast("备忘已删除");
+  if (memo.deletedAt) {
+    if (!window.confirm(`确认永久删除「${memo.title}」？此操作不可恢复。`)) return;
+    memoDeleteBusy = true;
+    qs<HTMLButtonElement>("#memoDeleteButton")?.setAttribute("disabled", "true");
+    try {
+      await api<{ ok: boolean; id: string }>(`/api/memos/${memo.id}/permanent`, { method: "DELETE" });
+      state.deletedMemos = state.deletedMemos.filter((item) => item.id !== memo.id);
+      clearMemoDraft(memo.id);
+      state.selectedMemoId = state.deletedMemos[0]?.id || null;
+      memoMobileDetailOpen = Boolean(state.selectedMemoId);
+      renderMemos();
+      toast("备忘已永久删除");
+    } finally {
+      memoDeleteBusy = false;
+      qs<HTMLButtonElement>("#memoDeleteButton")?.removeAttribute("disabled");
+    }
+    return;
+  }
+  if (!window.confirm(`确认删除「${memo.title}」？删除后可在“已删除”中恢复。`)) return;
+  memoDeleteBusy = true;
+  qs<HTMLButtonElement>("#memoDeleteButton")?.setAttribute("disabled", "true");
+  try {
+    await saveCurrentMemoDraft();
+    const result = await api<{ ok: boolean; memo: Memo }>(`/api/memos/${memo.id}`, { method: "DELETE" });
+    state.memos = state.memos.filter((item) => item.id !== memo.id);
+    state.deletedMemos = [result.memo, ...state.deletedMemos.filter((item) => item.id !== result.memo.id)];
+    clearMemoDraft(memo.id);
+    state.memoStatus = "deleted";
+    state.selectedMemoId = result.memo.id;
+    memoDirty = false;
+    memoMobileDetailOpen = true;
+    renderMemos();
+    toast("备忘已移至已删除");
+  } finally {
+    memoDeleteBusy = false;
+    qs<HTMLButtonElement>("#memoDeleteButton")?.removeAttribute("disabled");
+  }
+}
+
+async function restoreSelectedMemo() {
+  const memo = state.deletedMemos.find((item) => item.id === state.selectedMemoId);
+  if (!memo) return;
+  const result = await api<{ memo: Memo }>(`/api/memos/${memo.id}/restore`, { method: "POST" });
+  state.deletedMemos = state.deletedMemos.filter((item) => item.id !== memo.id);
+  state.memos.unshift(result.memo);
+  state.memoStatus = result.memo.archived ? "archived" : "active";
+  state.selectedMemoId = result.memo.id;
+  renderMemos();
+  toast(result.memo.archived ? "备忘已恢复到归档" : "备忘已恢复");
 }
 
 function openCompetitorModal() {
@@ -4127,7 +6257,14 @@ function renderJobs(jobs: ImportExportJob[]) {
 }
 
 function documentStatusText(status: string) {
-  const map: Record<string, string> = { draft: "草稿", ready: "已配置", exported: "已导出" };
+  const map: Record<string, string> = {
+    draft: "草稿",
+    ready: "已配置",
+    pending_approval: "待审批",
+    approved: "已审批",
+    rejected: "已驳回",
+    exported: "已导出"
+  };
   return map[status] || "草稿";
 }
 
@@ -4151,6 +6288,9 @@ function defaultTradeDocument(type: "PI" | "CI" = "PI"): TradeDocument {
   const date = todayDateInput();
   return {
     id: "__new__",
+    customerId: "",
+    dealId: "",
+    revision: 1,
     type,
     title: type === "PI" ? "新建形式发票 PI" : "新建商业发票 CI",
     number: `${type}-${date.replace(/-/g, "")}-${Math.floor(Date.now() / 1000).toString().slice(-4)}`,
@@ -4171,6 +6311,8 @@ function defaultTradeDocument(type: "PI" | "CI" = "PI"): TradeDocument {
     notes: type === "PI" ? "Lead time starts after deposit and technical confirmation." : "The goods are of China origin and packed for export shipment.",
     templateStyle: "executive",
     status: "draft",
+    audits: [],
+    sendRecords: [],
     updatedAt: new Date().toISOString(),
     items: [
       { id: "new_item_1", product: "Smart Pressure Transmitter", model: "GJ-PT3051", hsCode: "902620", quantity: 10, unit: "PCS", unitPrice: 185, originCountry: "China", weightKg: 16, packageCount: 1 }
@@ -4208,6 +6350,7 @@ function renderTradeDocuments(documents: TradeDocument[]) {
 
 function fillDocumentEditor(document: TradeDocument) {
   setDocumentType(document.type);
+  renderDocumentWorkflow(document);
   const values: Record<string, string> = {
     docTitleInput: document.title,
     docNumberInput: document.number,
@@ -4234,6 +6377,141 @@ function fillDocumentEditor(document: TradeDocument) {
   });
   renderDocumentItems(document.items);
   renderDocumentPreview(collectDocumentDraft());
+}
+
+function renderDocumentWorkflow(document: TradeDocument) {
+  const customerSelect = qs<HTMLSelectElement>("#docCustomerInput");
+  const dealSelect = qs<HTMLSelectElement>("#docDealInput");
+  if (customerSelect) {
+    customerSelect.innerHTML = `<option value="">未关联客户</option>${state.customers.map((customer) => `<option value="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}${customer.country ? ` · ${escapeHtml(customer.country)}` : ""}</option>`).join("")}`;
+    customerSelect.value = document.customerId || "";
+  }
+  if (dealSelect) {
+    const visibleDeals = state.deals.filter((deal) => !document.customerId || deal.customerId === document.customerId);
+    dealSelect.innerHTML = `<option value="">未关联商机</option>${visibleDeals.map((deal) => `<option value="${escapeHtml(deal.id)}">${escapeHtml(deal.title)} · ${escapeHtml(deal.stage)}</option>`).join("")}`;
+    dealSelect.value = document.dealId || "";
+  }
+  const status = qs<HTMLElement>("#docStatusBadge");
+  if (status) status.textContent = `${documentStatusText(document.status)} · v${document.revision || 1}`;
+  const locked = document.status === "approved" || document.status === "exported";
+  const pending = document.status === "pending_approval";
+  const buttonState: Record<string, boolean> = {
+    documentSubmitApprovalButton: locked || pending,
+    documentApproveButton: !pending,
+    documentRejectButton: !pending,
+    documentSendButton: document.id === "__new__",
+    documentNewRevisionButton: !locked
+  };
+  Object.entries(buttonState).forEach(([id, disabled]) => {
+    const button = qs<HTMLButtonElement>(`#${id}`);
+    if (button) button.disabled = disabled;
+  });
+  const history = qs<HTMLElement>("#documentHistory");
+  if (history) {
+    const rows = [
+      ...(document.audits || []).slice(-12).reverse().map((audit) => `<div class="doc-history-item"><span><b>${escapeHtml(audit.field)}</b>：${escapeHtml(audit.oldValue || "空")} → ${escapeHtml(audit.newValue || "空")}</span><small>${escapeHtml(audit.operatorName)} · ${escapeHtml(audit.createdAt.slice(0, 16).replace("T", " "))}</small></div>`),
+      ...(document.sendRecords || []).slice(-8).reverse().map((record) => `<div class="doc-history-item"><span><b>发送</b>：${escapeHtml(record.channel)} · ${escapeHtml(record.recipient)}</span><small>${escapeHtml(record.operatorName)} · ${escapeHtml(record.createdAt.slice(0, 16).replace("T", " "))}</small></div>`)
+    ];
+    history.innerHTML = rows.length ? `<div class="doc-history-list">${rows.join("")}</div>` : `<p>暂无记录</p>`;
+  }
+}
+
+function applyDocumentCustomerDefaults(customerId: string) {
+  const customer = state.customers.find((item) => item.id === customerId);
+  if (!customer) return;
+  const values: Record<string, string> = {
+    docBuyerInput: customer.billingName?.trim() || customer.company,
+    docBuyerAddressInput: customer.billingAddress?.trim() || `${customer.country} / address to be confirmed`,
+    docBuyerContactInput: customer.documentContact?.trim() || customer.contact,
+    docIncotermInput: customer.defaultIncoterm?.trim() || "FOB Tianjin",
+    docPaymentInput: customer.defaultPaymentTerm?.trim() || "30% T/T deposit, 70% before shipment",
+    docPortDischargeInput: customer.defaultPortDischarge?.trim() || ""
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const input = qs<HTMLInputElement | HTMLSelectElement>(`#${id}`);
+    if (input) input.value = value;
+  });
+  renderDocumentPreview(collectDocumentDraft());
+}
+
+function updateActiveDocument(document: TradeDocument) {
+  state.tradeDocuments = state.tradeDocuments.map((item) => item.id === document.id ? document : item);
+  state.selectedDocumentId = document.id;
+  renderTradeDocuments(state.tradeDocuments);
+}
+
+async function submitDocumentApproval() {
+  const document = activeTradeDocument();
+  if (!document.id || document.id === "__new__") {
+    toast("请先保存单据，再提交审批", "error");
+    return;
+  }
+  const note = window.prompt("审批说明（可选）", "请确认客户、付款条款和交期") || "";
+  const result = await api<{ document: TradeDocument }>(`/api/trade-documents/${document.id}/submit-approval`, { method: "POST", body: JSON.stringify({ note }) });
+  updateActiveDocument(result.document);
+  toast("单据已提交审批");
+}
+
+async function approveActiveDocument() {
+  const document = activeTradeDocument();
+  if (!document.id || document.status !== "pending_approval") return;
+  const result = await api<{ document: TradeDocument }>(`/api/trade-documents/${document.id}/approve`, { method: "POST", body: JSON.stringify({}) });
+  updateActiveDocument(result.document);
+  toast("单据已审批通过");
+}
+
+async function rejectActiveDocument() {
+  const document = activeTradeDocument();
+  if (!document.id || document.status !== "pending_approval") return;
+  const note = window.prompt("请填写驳回原因", "请补充或确认付款条款")?.trim() || "";
+  if (!note) {
+    toast("驳回必须填写原因", "error");
+    return;
+  }
+  const result = await api<{ document: TradeDocument }>(`/api/trade-documents/${document.id}/reject`, { method: "POST", body: JSON.stringify({ note }) });
+  updateActiveDocument(result.document);
+  toast("单据已驳回，业务员可修改后重新提交");
+}
+
+async function sendActiveDocument() {
+  const document = activeTradeDocument();
+  if (!document.id || document.id === "__new__") {
+    toast("请先保存单据，再记录发送", "error");
+    return;
+  }
+  openModal("记录发送单据", `
+    <div class="form-grid">
+      <div class="form-field"><label>发送渠道</label><select id="documentSendChannelInput"><option value="email">Email</option><option value="whatsapp">WhatsApp</option><option value="wechat">微信</option><option value="manual">人工发送</option></select></div>
+      <div class="form-field"><label>发送对象</label><input id="documentSendRecipientInput" value="${escapeHtml(document.buyerContact || document.buyer)}" placeholder="邮箱、手机号或联系人"></div>
+      <div class="form-field full"><label>发送说明</label><textarea id="documentSendMessageInput" placeholder="例如：Please review the attached PI."></textarea></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="confirmDocumentSendButton">保存发送记录</button>`);
+  qs("#confirmDocumentSendButton")?.addEventListener("click", async () => {
+    const recipient = qs<HTMLInputElement>("#documentSendRecipientInput")?.value.trim() || "";
+    const channel = qs<HTMLSelectElement>("#documentSendChannelInput")?.value || "manual";
+    const message = qs<HTMLTextAreaElement>("#documentSendMessageInput")?.value.trim() || "";
+    if (!recipient) {
+      toast("请填写发送对象", "error");
+      return;
+    }
+    const result = await api<{ document: TradeDocument }>(`/api/trade-documents/${document.id}/send`, { method: "POST", body: JSON.stringify({ channel, recipient, message }) });
+    closeModal();
+    updateActiveDocument(result.document);
+    toast("发送记录已保存");
+  });
+}
+
+async function createDocumentRevision() {
+  const document = activeTradeDocument();
+  if (!document.id || document.id === "__new__") {
+    toast("请先保存单据，再另存新版本", "error");
+    return;
+  }
+  const result = await api<{ document: TradeDocument }>(`/api/trade-documents/${document.id}/revision`, { method: "POST", body: JSON.stringify({}) });
+  state.tradeDocuments = [result.document, ...state.tradeDocuments];
+  state.selectedDocumentId = result.document.id;
+  renderTradeDocuments(state.tradeDocuments);
+  toast(`已创建 v${result.document.revision} 新版本`);
 }
 
 function setDocumentType(type: "PI" | "CI") {
@@ -4296,6 +6574,9 @@ function collectDocumentDraft(): TradeDocument {
   const existing = state.tradeDocuments.find((document) => document.id === state.selectedDocumentId);
   return {
     id: existing?.id || state.selectedDocumentId || "__new__",
+    customerId: qs<HTMLSelectElement>("#docCustomerInput")?.value || existing?.customerId || "",
+    dealId: qs<HTMLSelectElement>("#docDealInput")?.value || existing?.dealId || "",
+    revision: existing?.revision || 1,
     type: currentDocumentType(),
     title: qs<HTMLInputElement>("#docTitleInput")?.value.trim() || "未命名单据",
     number: qs<HTMLInputElement>("#docNumberInput")?.value.trim() || `DOC-${Date.now()}`,
@@ -4316,6 +6597,8 @@ function collectDocumentDraft(): TradeDocument {
     notes: qs<HTMLTextAreaElement>("#docNotesInput")?.value.trim() || "",
     templateStyle: (qs<HTMLSelectElement>("#docTemplateInput")?.value as TradeDocument["templateStyle"]) || "executive",
     status: existing?.status || "draft",
+    audits: existing?.audits || [],
+    sendRecords: existing?.sendRecords || [],
     updatedAt: new Date().toISOString(),
     items: collectDocumentItems()
   };
@@ -4407,10 +6690,16 @@ async function saveTradeDocument() {
     return null;
   }
   const existing = state.tradeDocuments.find((document) => document.id === state.selectedDocumentId);
-  const result = await api<{ document: TradeDocument }>(existing ? `/api/trade-documents/${existing.id}` : "/api/trade-documents", {
-    method: existing ? "PATCH" : "POST",
-    body: JSON.stringify({ ...draft, status: draft.status === "exported" ? "ready" : "ready" })
-  });
+  let result: { document: TradeDocument };
+  try {
+    result = await api<{ document: TradeDocument }>(existing ? `/api/trade-documents/${existing.id}` : "/api/trade-documents", {
+      method: existing ? "PATCH" : "POST",
+      body: JSON.stringify({ ...draft, status: "ready" })
+    });
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "单据保存失败", "error");
+    return null;
+  }
   state.tradeDocuments = existing
     ? state.tradeDocuments.map((document) => document.id === result.document.id ? result.document : document)
     : [result.document, ...state.tradeDocuments];
@@ -4421,7 +6710,10 @@ async function saveTradeDocument() {
 }
 
 async function exportTradeDocumentPdf() {
-  const saved = await saveTradeDocument();
+  const current = activeTradeDocument();
+  const saved = current.id !== "__new__" && (current.status === "approved" || current.status === "exported")
+    ? current
+    : await saveTradeDocument();
   if (!saved) return;
   const result = await api<{ document: TradeDocument; job: ImportExportJob; fileName: string }>(`/api/trade-documents/${saved.id}/export`, { method: "POST" });
   state.tradeDocuments = state.tradeDocuments.map((document) => document.id === result.document.id ? result.document : document);
@@ -6133,24 +8425,41 @@ function contactEmail(value: string) {
   return value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
 }
 
+const PROSPECT_PAGE_SIZE = 10;
+
+const PROSPECT_STATUS_META: Record<WebsiteOpportunity["status"], { label: string; tone: string; action: string }> = {
+  preview: { label: "待核验", tone: "amber", action: "核验联系人与联系方式" },
+  contactable: { label: "可联系", tone: "green", action: "发送开发信或加入线索" },
+  contacted: { label: "已联系", tone: "green", action: "等待回复，必要时加入线索跟进" },
+  synced: { label: "已入线索", tone: "green", action: "在线索中心继续跟进" },
+  excluded: { label: "已排除", tone: "gray", action: "确认原因，必要时恢复核验" }
+};
+
+function prospectStatusMeta(item: WebsiteOpportunity) {
+  return PROSPECT_STATUS_META[item.status] || PROSPECT_STATUS_META.preview;
+}
+
 function prospectFilteredRows() {
   const keyword = qs<HTMLInputElement>("#prospectSearchInput")?.value.trim().toLowerCase() || "";
+  const statusWeight: Record<WebsiteOpportunity["status"], number> = {
+    contactable: 0,
+    preview: 1,
+    contacted: 2,
+    synced: 3,
+    excluded: 4
+  };
   return [...state.websiteOpportunities]
     .filter((item) => {
       const haystack = `${item.company} ${item.business} ${item.country} ${item.website} ${item.contact} ${item.contactInfo} ${item.description}`.toLowerCase();
       if (keyword && !haystack.includes(keyword)) return false;
-      if (state.prospectFilter === "pending") return item.status !== "synced" || !item.lastDevelopmentEmailAt;
-      if (state.prospectFilter === "mailed") return Boolean(item.lastDevelopmentEmailAt);
-      if (state.prospectFilter === "high") return leadFinderScore(item) >= 76;
-      if (state.prospectFilter === "synced") return item.status === "synced";
+      if (state.prospectFilter !== "all") return item.status === state.prospectFilter;
       return true;
     })
     .sort((left, right) => {
-      const leftMail = left.lastDevelopmentEmailAt ? 1 : 0;
-      const rightMail = right.lastDevelopmentEmailAt ? 1 : 0;
-      if (left.status !== right.status) return left.status === "synced" ? 1 : -1;
-      if (leftMail !== rightMail) return leftMail - rightMail;
-      return leadFinderScore(right) - leadFinderScore(left);
+      if (left.status !== right.status) return statusWeight[left.status] - statusWeight[right.status];
+      const scoreDifference = leadFinderScore(right) - leadFinderScore(left);
+      if (scoreDifference) return scoreDifference;
+      return String(right.statusChangedAt || right.createdAt).localeCompare(String(left.statusChangedAt || left.createdAt));
     });
 }
 
@@ -6218,68 +8527,168 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
   }
   const score = leadFinderScore(item);
   const duplicate = leadFinderDuplicateState(item);
+  const status = prospectStatusMeta(item);
+  const owner = state.prospectAssignees.find((assignee) => assignee.id === item.ownerId);
+  const canContact = ["contactable", "contacted", "synced"].includes(item.status);
+  const readonly = item.status === "synced" ? "disabled" : "";
   box.innerHTML = `
     <div class="prospect-detail-hero">
-      ${badge(item.status === "synced" ? "已入线索" : "待跟进", item.status === "synced" ? "green" : "amber")} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} ${badge(duplicate.text, duplicate.tone)}
+      ${badge(status.label, status.tone)} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} ${badge(duplicate.text, duplicate.tone)}
       <h2>${escapeHtml(item.company)}</h2>
       <p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(item.business || "业务待维护")} · ${escapeHtml(websiteDomain(item.website || ""))}</p>
     </div>
     <div class="prospect-field-grid">
-      <div class="prospect-field"><span>官网</span><b>${escapeHtml(item.website || "待补齐")}</b></div>
-      <div class="prospect-field"><span>联系人</span><b>${escapeHtml(item.contact || "待维护")}</b></div>
-      <div class="prospect-field"><span>联系方式</span><b>${escapeHtml(item.contactInfo || "待补齐")}</b></div>
+      <div class="form-field"><label>公司</label><input id="prospectEditCompany" value="${escapeHtml(item.company)}" ${readonly}></div>
+      <div class="form-field"><label>官网</label><input id="prospectEditWebsite" value="${escapeHtml(item.website)}" ${readonly}></div>
+      <div class="form-field"><label>业务方向</label><input id="prospectEditBusiness" value="${escapeHtml(item.business)}" ${readonly}></div>
+      <div class="form-field"><label>国家/地区</label><input id="prospectEditCountry" value="${escapeHtml(item.country)}" ${readonly}></div>
+      <div class="form-field"><label>联系人</label><input id="prospectEditContact" value="${escapeHtml(item.contact)}" ${readonly}></div>
+      <div class="form-field"><label>联系方式</label><input id="prospectEditContactInfo" value="${escapeHtml(item.contactInfo)}" ${readonly}></div>
+      <div class="prospect-field"><span>归属业务员</span><b>${escapeHtml(owner?.name || (item.ownerId === state.user?.id ? state.user?.name || "本人" : item.ownerId || "待分配"))}</b></div>
+      <div class="prospect-field"><span>来源</span><b>${escapeHtml(item.sourceLabel || item.source || "自动获客")}</b></div>
       <div class="prospect-field"><span>最近开发信</span><b>${item.lastDevelopmentEmailAt ? `${formatTime(item.lastDevelopmentEmailAt)} · ${escapeHtml(item.lastDevelopmentEmailSubject || "开发信")}` : "尚未发送"}</b></div>
-      <div class="prospect-field" style="grid-column:1/-1"><span>说明</span><b>${escapeHtml(item.description || "暂无说明")}</b></div>
+      <div class="form-field" style="grid-column:1/-1"><label>核验说明</label><textarea id="prospectEditDescription" ${readonly}>${escapeHtml(item.description || "")}</textarea></div>
+      ${item.excludedReason ? `<div class="prospect-field" style="grid-column:1/-1"><span>排除原因</span><b>${escapeHtml(item.excludedReason)}</b></div>` : ""}
     </div>
-    <div class="inline-alert"><b>建议动作</b><span>${score >= 76 ? "优先发开发信并加入线索中心，随后创建电话或WhatsApp跟进待办。" : "先补齐联系人和业务证据，再决定是否首轮触达。"}</span></div>
+    <div class="inline-alert"><b>下一步</b><span>${escapeHtml(status.action)}</span></div>
+    <div class="prospect-action-row">
+      ${item.status !== "synced" ? `<button class="btn" id="prospectSaveButton">保存核验资料</button>` : ""}
+      ${item.status === "preview" ? `<button class="btn" id="prospectDetailMarkButton">标记可联系</button>` : ""}
+      ${item.status === "excluded" ? `<button class="btn" id="prospectRestoreButton">恢复待核验</button>` : ""}
+      ${["contactable", "contacted"].includes(item.status) ? `<button class="btn primary" id="prospectDetailSyncButton">加入线索</button>` : ""}
+      ${item.status === "synced" && item.leadId ? `<button class="btn primary" id="prospectViewLeadButton">查看线索</button><button class="btn" id="prospectTodoButton">生成待办</button>` : ""}
+    </div>
   `;
-  if (!qs<HTMLInputElement>("#prospectMailTo")?.value.trim()) generateProspectMailDraft();
-  else renderProspectMailPreview();
+  qs<HTMLButtonElement>("#prospectSaveButton", box)?.addEventListener("click", (event) => void saveProspectVerification(item, event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectDetailMarkButton", box)?.addEventListener("click", (event) => void updateProspectBatch("mark-contactable", [item.id], event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectRestoreButton", box)?.addEventListener("click", (event) => void updateProspectBatch("restore", [item.id], event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectDetailSyncButton", box)?.addEventListener("click", (event) => void syncProspects([item.id], event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectViewLeadButton", box)?.addEventListener("click", () => void openProspectLead(item));
+  qs<HTMLButtonElement>("#prospectTodoButton", box)?.addEventListener("click", (event) => void createSelectedProspectTodo(event.currentTarget as HTMLButtonElement));
+  const mailWorkspace = qs<HTMLDetailsElement>("#prospectMailWorkspace");
+  if (mailWorkspace) mailWorkspace.open = canContact && Boolean(item.lastDevelopmentEmailAt);
+  renderProspectMailPreview();
+}
+
+async function saveProspectVerification(item: WebsiteOpportunity, button?: HTMLButtonElement) {
+  const value = (selector: string) => qs<HTMLInputElement | HTMLTextAreaElement>(selector)?.value.trim() || "";
+  const payload = {
+    company: value("#prospectEditCompany"),
+    website: value("#prospectEditWebsite"),
+    business: value("#prospectEditBusiness"),
+    country: value("#prospectEditCountry"),
+    contact: value("#prospectEditContact"),
+    contactInfo: value("#prospectEditContactInfo"),
+    description: value("#prospectEditDescription")
+  };
+  if (!payload.company || !payload.website) {
+    toast("公司和官网不能为空", "error");
+    return;
+  }
+  if (button) button.disabled = true;
+  try {
+    const result = await api<{ opportunity: WebsiteOpportunity }>(`/api/prospect-list/${encodeURIComponent(item.id)}/details`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+    Object.assign(item, result.opportunity);
+    renderProspectList();
+    toast("核验资料已保存");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "保存核验资料失败", "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function renderProspectList() {
   const rows = qs<HTMLElement>("#prospectListRows");
   const total = qs<HTMLElement>("#prospectTotalCount");
-  const pending = qs<HTMLElement>("#prospectPendingCount");
-  const mailed = qs<HTMLElement>("#prospectMailedCount");
+  const preview = qs<HTMLElement>("#prospectPreviewCount");
+  const contactable = qs<HTMLElement>("#prospectContactableCount");
+  const contacted = qs<HTMLElement>("#prospectContactedCount");
   const synced = qs<HTMLElement>("#prospectSyncedCount");
+  const excluded = qs<HTMLElement>("#prospectExcludedCount");
   const all = state.websiteOpportunities;
   const filtered = prospectFilteredRows();
-  if (!state.selectedProspectId || !all.some((item) => item.id === state.selectedProspectId)) state.selectedProspectId = filtered[0]?.id || all[0]?.id || null;
-  if (total) total.textContent = String(all.length);
-  if (pending) pending.textContent = String(all.filter((item) => item.status !== "synced" || !item.lastDevelopmentEmailAt).length);
-  if (mailed) mailed.textContent = String(all.filter((item) => item.lastDevelopmentEmailAt).length);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PROSPECT_PAGE_SIZE));
+  state.prospectPage = Math.min(Math.max(1, state.prospectPage), pageCount);
+  const pageRows = filtered.slice((state.prospectPage - 1) * PROSPECT_PAGE_SIZE, state.prospectPage * PROSPECT_PAGE_SIZE);
+  state.selectedProspectIds = state.selectedProspectIds.filter((id) => all.some((item) => item.id === id));
+  if (!state.selectedProspectId || !all.some((item) => item.id === state.selectedProspectId)) state.selectedProspectId = pageRows[0]?.id || filtered[0]?.id || all[0]?.id || null;
+  if (total) total.textContent = `${all.length} 条候选`;
+  if (preview) preview.textContent = String(all.filter((item) => item.status === "preview").length);
+  if (contactable) contactable.textContent = String(all.filter((item) => item.status === "contactable").length);
+  if (contacted) contacted.textContent = String(all.filter((item) => item.status === "contacted").length);
   if (synced) synced.textContent = String(all.filter((item) => item.status === "synced").length);
+  if (excluded) excluded.textContent = String(all.filter((item) => item.status === "excluded").length);
+  const selectedCount = qs<HTMLElement>("#prospectSelectedCount");
+  if (selectedCount) selectedCount.textContent = `已选 ${state.selectedProspectIds.length} 条`;
+  const pageSelect = qs<HTMLInputElement>("#prospectSelectPage");
+  if (pageSelect) {
+    pageSelect.checked = Boolean(pageRows.length) && pageRows.every((item) => state.selectedProspectIds.includes(item.id));
+    pageSelect.indeterminate = pageRows.some((item) => state.selectedProspectIds.includes(item.id)) && !pageSelect.checked;
+  }
+  const pageSummary = qs<HTMLElement>("#prospectPageSummary");
+  const pageNumber = qs<HTMLElement>("#prospectPageNumber");
+  if (pageSummary) pageSummary.textContent = filtered.length ? `第 ${(state.prospectPage - 1) * PROSPECT_PAGE_SIZE + 1}-${Math.min(state.prospectPage * PROSPECT_PAGE_SIZE, filtered.length)} 条，共 ${filtered.length} 条` : "0 条结果";
+  if (pageNumber) pageNumber.textContent = `${state.prospectPage} / ${pageCount}`;
+  const prev = qs<HTMLButtonElement>("#prospectPrevPage");
+  const next = qs<HTMLButtonElement>("#prospectNextPage");
+  if (prev) prev.disabled = state.prospectPage <= 1;
+  if (next) next.disabled = state.prospectPage >= pageCount;
+  const assigneeSelect = qs<HTMLSelectElement>("#prospectAssigneeSelect");
+  const assignButton = qs<HTMLButtonElement>("#prospectAssignButton");
+  const canAssign = state.prospectAssignees.length > 0;
+  if (assigneeSelect) {
+    assigneeSelect.hidden = !canAssign;
+    assigneeSelect.innerHTML = `<option value="">选择业务员</option>${state.prospectAssignees.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("")}`;
+  }
+  if (assignButton) assignButton.hidden = !canAssign;
   qsa<HTMLButtonElement>("[data-prospect-filter]").forEach((button) => button.classList.toggle("active", button.dataset.prospectFilter === state.prospectFilter));
   if (rows) {
-    rows.innerHTML = filtered.length ? filtered.map((item) => {
+    rows.innerHTML = pageRows.length ? pageRows.map((item) => {
       const score = leadFinderScore(item);
+      const status = prospectStatusMeta(item);
       return `
-        <button class="prospect-item ${item.id === state.selectedProspectId ? "active" : ""}" type="button" data-prospect-id="${escapeHtml(item.id)}">
-          <div class="prospect-item-top"><h3>${escapeHtml(item.company)}</h3><span class="prospect-score">${score}</span></div>
-          <p>${escapeHtml(item.business || "业务待维护")}</p>
-          <small>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website || ""))}</small>
-          <div class="prospect-meta-row">${badge(item.status === "synced" ? "已入线索" : "待跟进", item.status === "synced" ? "green" : "amber")}${item.lastDevelopmentEmailAt ? badge("已发开发信", "green") : badge("未触达", "")}</div>
-        </button>
+        <article class="prospect-item ${item.id === state.selectedProspectId ? "active" : ""}" data-prospect-id="${escapeHtml(item.id)}">
+          <input type="checkbox" data-prospect-select="${escapeHtml(item.id)}" ${state.selectedProspectIds.includes(item.id) ? "checked" : ""} aria-label="选择 ${escapeHtml(item.company)}">
+          <div class="prospect-item-main" data-prospect-open="${escapeHtml(item.id)}" role="button" tabindex="0">
+            <div class="prospect-item-top"><h3>${escapeHtml(item.company)}</h3><span class="prospect-score">${score}</span></div>
+            <p>${escapeHtml(item.business || "业务待维护")}</p>
+            <small>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website || ""))}</small>
+            <div class="prospect-meta-row">${badge(status.label, status.tone)}${item.lastDevelopmentEmailAt ? badge("已发开发信", "green") : ""}</div>
+            <span class="prospect-next-action">下一步：${escapeHtml(status.action)}</span>
+          </div>
+        </article>
       `;
     }).join("") : `<div class="empty-cell">暂无匹配线索。请调整筛选，或去自动获客生成新结果。</div>`;
-    qsa<HTMLButtonElement>("[data-prospect-id]", rows).forEach((button) => {
-      button.addEventListener("click", () => {
-        state.selectedProspectId = button.dataset.prospectId || null;
+    qsa<HTMLInputElement>("[data-prospect-select]", rows).forEach((input) => {
+      input.addEventListener("change", () => {
+        const id = input.dataset.prospectSelect || "";
+        state.selectedProspectIds = input.checked ? [...new Set([...state.selectedProspectIds, id])] : state.selectedProspectIds.filter((item) => item !== id);
+        renderProspectList();
+      });
+    });
+    qsa<HTMLElement>("[data-prospect-open]", rows).forEach((button) => {
+      const select = () => {
+        state.selectedProspectId = button.dataset.prospectOpen || null;
         qs<HTMLInputElement>("#prospectMailTo")!.value = "";
         qs<HTMLInputElement>("#prospectMailSubject")!.value = "";
         qs<HTMLTextAreaElement>("#prospectMailBody")!.value = "";
         renderProspectList();
+      };
+      button.addEventListener("click", select);
+      button.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") select();
       });
     });
   }
   renderProspectDetail(selectedProspect());
 }
 
-function selectedProspectAsSyncRow() {
-  const item = selectedProspect();
-  if (!item) return [];
-  return [{
+function prospectsAsSyncRows(ids: string[]) {
+  return state.websiteOpportunities.filter((item) => ids.includes(item.id)).map((item) => ({
     id: item.id,
     company: item.company,
     business: item.business,
@@ -6287,14 +8696,22 @@ function selectedProspectAsSyncRow() {
     website: item.website,
     contact: item.contact,
     contactInfo: item.contactInfo,
-    description: item.description
-  }];
+    description: item.description,
+    source: item.source || "",
+    sourceLabel: item.sourceLabel || ""
+  }));
 }
 
-async function syncSelectedProspect(button?: HTMLButtonElement) {
-  const opportunities = selectedProspectAsSyncRow();
+async function syncProspects(ids: string[], button?: HTMLButtonElement) {
+  const opportunities = prospectsAsSyncRows(ids);
+  const originalButtonText = button?.textContent || "";
   if (!opportunities.length) {
-    toast("请先选择一条搜客线索", "error");
+    toast("请先选择要入线索的候选", "error");
+    return;
+  }
+  const invalid = state.websiteOpportunities.filter((item) => ids.includes(item.id) && !["contactable", "contacted"].includes(item.status));
+  if (invalid.length) {
+    toast("只有“可联系”或“已联系”的候选可以入线索", "error");
     return;
   }
   if (button) {
@@ -6313,6 +8730,7 @@ async function syncSelectedProspect(button?: HTMLButtonElement) {
       else state.websiteOpportunities.unshift(item.opportunity);
       state.selectedProspectId = item.opportunity.id;
     });
+    state.selectedProspectIds = state.selectedProspectIds.filter((id) => !ids.includes(id));
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
@@ -6321,15 +8739,84 @@ async function syncSelectedProspect(button?: HTMLButtonElement) {
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "加入线索中心";
+      button.textContent = originalButtonText;
     }
   }
+}
+
+async function syncSelectedProspects(button?: HTMLButtonElement) {
+  await syncProspects(state.selectedProspectIds, button);
+}
+
+function requestProspectExclusion(ids: string[], button?: HTMLButtonElement) {
+  if (!ids.length) {
+    toast("请先选择候选", "error");
+    return;
+  }
+  openModal(
+    "排除候选",
+    `<div class="form-field"><label>排除原因</label><textarea id="prospectExcludeReasonInput" placeholder="例如：非目标行业、官网失效、联系方式无效"></textarea></div>`,
+    `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="confirmProspectExcludeButton">确认排除</button>`
+  );
+  qs<HTMLButtonElement>("#confirmProspectExcludeButton")?.addEventListener("click", async (event) => {
+    const reason = qs<HTMLTextAreaElement>("#prospectExcludeReasonInput")?.value.trim() || "";
+    closeModal();
+    await updateProspectBatch("exclude", ids, button || event.currentTarget as HTMLButtonElement, reason);
+  });
+}
+
+async function updateProspectBatch(
+  action: "mark-contactable" | "exclude" | "restore" | "assign",
+  ids: string[],
+  button?: HTMLButtonElement,
+  reason = ""
+) {
+  if (!ids.length) {
+    toast("请先选择候选", "error");
+    return;
+  }
+  const ownerId = action === "assign" ? qs<HTMLSelectElement>("#prospectAssigneeSelect")?.value || "" : "";
+  if (action === "assign" && !ownerId) {
+    toast("请选择目标业务员", "error");
+    return;
+  }
+  if (button) button.disabled = true;
+  try {
+    const result = await api<{ opportunities: WebsiteOpportunity[] }>("/api/prospect-list/batch", {
+      method: "PATCH",
+      body: JSON.stringify({ ids, action, ownerId: ownerId || undefined, reason })
+    });
+    result.opportunities.forEach((updated) => {
+      const existing = state.websiteOpportunities.find((item) => item.id === updated.id);
+      if (existing) Object.assign(existing, updated);
+    });
+    state.selectedProspectIds = state.selectedProspectIds.filter((id) => !ids.includes(id));
+    renderProspectList();
+    toast(action === "mark-contactable" ? "已标记为可联系" : action === "exclude" ? "已排除所选候选" : action === "restore" ? "已恢复为待核验" : "已完成分配");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "批量处理失败", "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function openProspectLead(item: WebsiteOpportunity) {
+  if (!item.leadId) {
+    toast("该候选尚未生成线索", "error");
+    return;
+  }
+  activateNavView("leads");
+  await openLead(item.leadId);
 }
 
 async function createSelectedProspectTodo(button?: HTMLButtonElement) {
   const item = selectedProspect();
   if (!item) {
     toast("请先选择一条搜客线索", "error");
+    return;
+  }
+  if (item.status !== "synced" || !item.leadId) {
+    toast("请先加入线索中心，再创建关联待办", "error");
     return;
   }
   if (button) {
@@ -6344,7 +8831,7 @@ async function createSelectedProspectTodo(button?: HTMLButtonElement) {
         type: "customer",
         priority: leadFinderScore(item) >= 76 ? "high" : "medium",
         dueAt: currentDateTimeText(),
-        related: item.company
+        related: `${item.company} · 线索 ${item.leadId}`
       })
     });
     state.todos.unshift(result.todo);
@@ -6364,6 +8851,10 @@ async function sendProspectDevelopmentEmail(button?: HTMLButtonElement) {
   const item = selectedProspect();
   if (!item) {
     toast("请先选择一条搜客线索", "error");
+    return;
+  }
+  if (!["contactable", "contacted", "synced"].includes(item.status)) {
+    toast("请先核验联系方式并标记为可联系", "error");
     return;
   }
   if (!state.user?.outboundEmail) {
@@ -6410,10 +8901,9 @@ function currentLeadFinderTitle() {
 }
 
 function currentLeadFinderSubtitle() {
-  const mode = qs<HTMLSelectElement>("#leadSearchModeInput")?.value || "公开公司获客";
-  const depth = qs<HTMLSelectElement>("#leadSearchDepthInput")?.value || "标准";
-  const validation = qs<HTMLSelectElement>("#leadValidationInput")?.value || "标准验证";
-  return `${mode} · ${depth} · ${validation}`;
+  const industry = qs<HTMLInputElement>("#leadIndustryInput")?.value.trim().split(/,|，/)[0]?.trim() || "行业待补充";
+  const limit = qs<HTMLSelectElement>("#leadLimit")?.value || "20";
+  return `${industry} · 目标 ${limit} 条 · 人工核验后入线索`;
 }
 
 function currentLeadFinderSources() {
@@ -6521,7 +9011,7 @@ function renderLeadFinderJobs() {
   });
   qsa<HTMLButtonElement>("[data-lead-job-import]").forEach((button) => {
     button.addEventListener("click", () => {
-      qs<HTMLDetailsElement>(".lead-import-drawer")?.setAttribute("open", "true");
+      qs<HTMLDetailsElement>(".lead-advanced-settings")?.setAttribute("open", "true");
       qs<HTMLTextAreaElement>("#leadFinderUrlInput")?.focus();
     });
   });
@@ -6596,24 +9086,22 @@ function renderLeadFinderSearchLinks() {
 }
 
 function collectLeadFinderRows() {
-  return qsa<HTMLTableRowElement>("#leadFinderResultRows tr[data-lead-id]")
-    .filter((row) => row.querySelector<HTMLInputElement>("[data-lead-select]")?.checked)
-    .map((row) => {
-      const value = (field: string) => {
-        const node = row.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-lead-field="${field}"]`);
-        return node?.value.trim() || "";
-      };
-      return {
-        id: row.dataset.leadId || "",
-        company: value("company"),
-        business: value("business"),
-        country: value("country"),
-        website: value("website"),
-        contact: value("contact"),
-        contactInfo: value("contactInfo"),
-        description: value("description")
-      };
-    }).filter((item) => item.company && item.website);
+  qsa<HTMLTableRowElement>("#leadFinderResultRows tr[data-lead-id]").forEach(syncLeadRowFields);
+  return state.websiteOpportunities
+    .filter((item) => item.selected)
+    .map((item) => ({
+      id: item.id,
+      company: item.company,
+      business: item.business,
+      country: item.country,
+      website: item.website,
+      contact: item.contact,
+      contactInfo: item.contactInfo,
+      description: item.description,
+      source: item.source,
+      sourceLabel: item.sourceLabel
+    }))
+    .filter((item) => item.company && item.website);
 }
 
 function renderLeadFinderDetail(item?: WebsiteOpportunity) {
@@ -6626,6 +9114,8 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
   const score = leadFinderScore(item);
   const duplicate = leadFinderDuplicateState(item);
   const domain = websiteDomain(item.website);
+  const owner = item.ownerId ? ownerName(item.ownerId) : (state.user?.name || "当前账号");
+  const externalId = item.id || `website_${domain}`;
   box.innerHTML = `
     <div class="lead-profile-head">
       <div><h3>${escapeHtml(item.company)}</h3><p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(domain)} · ${escapeHtml(item.business || "业务待维护")}</p></div>
@@ -6634,8 +9124,10 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
     <div class="lead-detail-stack">
       <div class="lead-detail-card"><span>ICP 判断</span><b>${score >= 76 ? "高匹配，建议优先核实采购/工程联系人。" : score >= 60 ? "中匹配，需要补齐联系人和产品证据。" : "信息不足，先确认官网和业务范围。"}</b></div>
       <div class="lead-detail-card"><span>联系方式</span><b>${escapeHtml(item.contactInfo || item.contact || "待补齐")}</b></div>
-      <div class="lead-detail-card"><span>来源状态</span><b>${badge(item.parseMode === "ai" ? "AI解析" : "规则解析", item.parseMode === "ai" ? "green" : "")} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} ${badge(duplicate.text, duplicate.tone)}</b></div>
-      <div class="lead-detail-card"><span>下一步建议</span><b>${escapeHtml(item.status === "synced" ? "已进入客户/商机，可在商机页继续推进报价、样品或跟进提醒。" : "先核实联系人与采购角色，再同步为客户和询盘商机，并生成首次触达待办。")}</b></div>
+      <div class="lead-detail-card"><span>来源与外部编号</span><b>${escapeHtml(item.sourceLabel || item.source || "官网导入")} · ${escapeHtml(externalId)}</b></div>
+      <div class="lead-detail-card"><span>重复与归属</span><b>${badge(duplicate.text, duplicate.tone)} ${escapeHtml(owner)}</b></div>
+      <div class="lead-detail-card"><span>资料完整度</span><b>${badge(item.parseMode === "ai" ? "AI解析" : "规则解析", item.parseMode === "ai" ? "green" : "")} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} · 分数仅表示资料完整度，不代表采购意向</b></div>
+      <div class="lead-detail-card"><span>下一步建议</span><b>${escapeHtml(item.status === "synced" ? "已进入线索中心，可创建首个正式跟进待办。" : "先核实官网、业务匹配和可用联系方式，再确认加入线索。")}</b></div>
     </div>
   `;
 }
@@ -6859,8 +9351,47 @@ function leadSourceTag(item: WebsiteOpportunity) {
   return `<span class="lead-src-tag ${tier}">${escapeHtml(label)}</span>`;
 }
 
+const leadFinderPageSize = 10;
+
+function updateLeadFinderSelectionCount() {
+  const count = state.websiteOpportunities.filter((item) => item.selected).length;
+  const label = qs<HTMLElement>("#leadFinderSelectedCount");
+  const bar = qs<HTMLElement>("#leadFinderBulkbar");
+  if (label) label.textContent = `已选 ${count} 条`;
+  bar?.classList.toggle("is-empty", count === 0);
+}
+
+function setLeadFinderSelected(id: string, selected: boolean) {
+  const item = state.websiteOpportunities.find((row) => row.id === id);
+  if (!item || item.status === "synced" || leadFinderDuplicateState(item).text === "已有客户") return;
+  item.selected = selected;
+  qsa<HTMLInputElement>(`[data-lead-select][data-lead-select-id="${CSS.escape(id)}"]`).forEach((input) => {
+    input.checked = selected;
+  });
+  updateLeadFinderSelectionCount();
+}
+
+function leadFinderMobileCard(item: WebsiteOpportunity) {
+  const score = leadFinderScore(item);
+  const duplicate = leadFinderDuplicateState(item);
+  const disabled = item.status === "synced" || duplicate.text === "已有客户";
+  return `
+    <article class="lead-mobile-card ${state.selectedLeadFinderId === item.id ? "selected" : ""}" data-lead-mobile-id="${escapeHtml(item.id)}">
+      <div class="lead-mobile-card-head">
+        <input type="checkbox" data-lead-select data-lead-select-id="${escapeHtml(item.id)}" ${item.selected ? "checked" : ""} ${disabled ? "disabled" : ""} aria-label="选择 ${escapeHtml(item.company)}">
+        <div><h3>${escapeHtml(item.company)}</h3><p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website) || "官网待补")}</p></div>
+        <span class="lead-mobile-score">${score}</span>
+      </div>
+      <div class="lead-mobile-meta">${leadSourceTag(item)}${badge(item.status === "synced" ? "已同步" : "待确认", item.status === "synced" ? "green" : "amber")}${badge(duplicate.text, duplicate.tone)}</div>
+      <div class="lead-mobile-contact">${escapeHtml(item.business || "业务待维护")}<br>${escapeHtml(item.contactInfo || item.contact || "联系方式待补齐")}</div>
+      <button class="btn lead-mobile-open" type="button" data-lead-mobile-open="${escapeHtml(item.id)}">查看核验信息</button>
+    </article>
+  `;
+}
+
 function renderLeadFinder(opportunities = state.websiteOpportunities) {
   const rows = qs<HTMLElement>("#leadFinderResultRows");
+  const mobileRows = qs<HTMLElement>("#leadFinderMobileRows");
   const total = qs<HTMLElement>("#leadFinderTotalCount");
   const pending = qs<HTMLElement>("#leadFinderPendingCount");
   const synced = qs<HTMLElement>("#leadFinderSyncedCount");
@@ -6875,9 +9406,15 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
     const bSel = b.selected ? 1 : 0;
     if (aSel !== bSel) return bSel - aSel;
     if (a.status !== b.status) return a.status === "synced" ? 1 : -1;
+    const createdDiff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    if (Number.isFinite(createdDiff) && createdDiff !== 0) return createdDiff;
     return leadFinderScore(b) - leadFinderScore(a);
   });
   const sorted = leadFinderFilteredRows(sortedAll);
+  const pageCount = Math.max(1, Math.ceil(sorted.length / leadFinderPageSize));
+  state.leadFinderPage = Math.min(Math.max(1, state.leadFinderPage), pageCount);
+  const pageStart = (state.leadFinderPage - 1) * leadFinderPageSize;
+  const pageRows = sorted.slice(pageStart, pageStart + leadFinderPageSize);
   if (!state.selectedLeadFinderId || !sortedAll.some((item) => item.id === state.selectedLeadFinderId)) {
     state.selectedLeadFinderId = sortedAll[0]?.id || null;
   }
@@ -6897,13 +9434,14 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
   qsa<HTMLButtonElement>("[data-lead-filter]").forEach((button) => {
     button.classList.toggle("active", button.dataset.leadFilter === state.leadFinderFilter);
   });
-  rows.innerHTML = sorted.length ? sorted.map((item) => {
+  rows.innerHTML = pageRows.length ? pageRows.map((item) => {
     const score = leadFinderScore(item);
     const duplicate = leadFinderDuplicateState(item);
     const selected = state.selectedLeadFinderId === item.id;
+    const disabled = item.status === "synced" || duplicate.text === "已有客户";
     return `
       <tr data-lead-id="${escapeHtml(item.id)}" class="${selected ? "selected" : ""}">
-        <td><input type="checkbox" data-lead-select ${(item.selected ?? item.status !== "synced") ? "checked" : ""}></td>
+        <td><input type="checkbox" data-lead-select data-lead-select-id="${escapeHtml(item.id)}" ${item.selected ? "checked" : ""} ${disabled ? "disabled" : ""}></td>
         <td class="lead-company-cell" data-lead-pick><div class="lead-cell-title"><input data-lead-field="company" value="${escapeHtml(item.company)}"><a href="${escapeHtml(normalizeWebsiteLink(item.website))}" target="_blank" rel="noreferrer" class="lead-cell-domain">${escapeHtml(websiteDomain(item.website) || "官网待补")}</a></div><input type="hidden" data-lead-field="website" value="${escapeHtml(item.website)}"><input type="hidden" data-lead-field="description" value="${escapeHtml(item.description)}"></td>
         <td>${leadSourceTag(item)}</td>
         <td><input data-lead-field="business" value="${escapeHtml(item.business)}"></td>
@@ -6915,6 +9453,15 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
       </tr>
     `;
   }).join("") : `<tr><td colspan="9" class="empty-cell">暂无候选客户。填写画像、选好数据源后点击“生成并运行任务”。</td></tr>`;
+  if (mobileRows) mobileRows.innerHTML = pageRows.length ? pageRows.map(leadFinderMobileCard).join("") : `<div class="empty-cell">暂无匹配候选。</div>`;
+  const pageSummary = qs<HTMLElement>("#leadFinderPageSummary");
+  const pageNumber = qs<HTMLElement>("#leadFinderPageNumber");
+  const prev = qs<HTMLButtonElement>("#leadFinderPrevPage");
+  const next = qs<HTMLButtonElement>("#leadFinderNextPage");
+  if (pageSummary) pageSummary.textContent = sorted.length ? `显示 ${pageStart + 1}-${Math.min(pageStart + leadFinderPageSize, sorted.length)}，共 ${sorted.length} 条` : "0 条结果";
+  if (pageNumber) pageNumber.textContent = `${state.leadFinderPage} / ${pageCount}`;
+  if (prev) prev.disabled = state.leadFinderPage <= 1;
+  if (next) next.disabled = state.leadFinderPage >= pageCount;
   qsa<HTMLElement>("#leadFinderResultRows tr[data-lead-id]").forEach((row) => {
     // 行内编辑即时同步到 state，保证重渲染与详情面板反映最新编辑
     qsa<HTMLInputElement | HTMLTextAreaElement>("[data-lead-field]", row).forEach((field) => {
@@ -6927,6 +9474,17 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
       renderLeadFinder(state.websiteOpportunities);
     });
   });
+  qsa<HTMLInputElement>("[data-lead-select]").forEach((input) => {
+    input.addEventListener("change", () => setLeadFinderSelected(input.dataset.leadSelectId || "", input.checked));
+  });
+  qsa<HTMLButtonElement>("[data-lead-mobile-open]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedLeadFinderId = button.dataset.leadMobileOpen || null;
+      qs<HTMLDetailsElement>(".lead-inline-detail")?.setAttribute("open", "true");
+      renderLeadFinder(state.websiteOpportunities);
+    });
+  });
+  updateLeadFinderSelectionCount();
   renderLeadFinderDetail(sortedAll.find((item) => item.id === state.selectedLeadFinderId));
   renderLeadFinderSearchLinks();
   renderLeadFinderJobs();
@@ -6983,7 +9541,8 @@ async function runLeadFinder(button?: HTMLButtonElement) {
       const existing = state.websiteOpportunities
         .filter((item) => !result.opportunities.some((next) => next.website === item.website || next.company === item.company))
         .map((item) => ({ ...item, selected: false }));
-      state.websiteOpportunities = [...result.opportunities.map((item) => ({ ...item, selected: true })), ...existing];
+      state.websiteOpportunities = [...result.opportunities.map((item) => ({ ...item, selected: false })), ...existing];
+      state.leadFinderPage = 1;
       state.selectedLeadFinderId = result.opportunities[0]?.id || state.selectedLeadFinderId;
       updateLeadFinderJob(job.id, result.opportunities.map((item) => item.id), result.opportunities.length ? "done" : "needs_input");
       renderLeadFinder(state.websiteOpportunities);
@@ -6999,7 +9558,8 @@ async function runLeadFinder(button?: HTMLButtonElement) {
     const existing = state.websiteOpportunities
       .filter((item) => !result.opportunities.some((next) => next.website === item.website))
       .map((item) => ({ ...item, selected: false }));
-    state.websiteOpportunities = [...result.opportunities.map((item) => ({ ...item, selected: true })), ...existing];
+    state.websiteOpportunities = [...result.opportunities.map((item) => ({ ...item, selected: false })), ...existing];
+    state.leadFinderPage = 1;
     state.selectedLeadFinderId = result.opportunities[0]?.id || state.selectedLeadFinderId;
     updateLeadFinderJob(job.id, result.opportunities.map((item) => item.id), "done");
     renderWebsiteOpportunities(state.websiteOpportunities);
@@ -7024,6 +9584,23 @@ async function syncLeadFinderRows(button?: HTMLButtonElement) {
     toast("请至少勾选一条候选客户", "error");
     return;
   }
+  const selectedItems = state.websiteOpportunities.filter((item) => opportunities.some((row) => row.id === item.id));
+  const duplicates = selectedItems.filter((item) => leadFinderDuplicateState(item).text !== "新候选");
+  const missingContact = selectedItems.filter((item) => !item.contactInfo.trim()).length;
+  if (duplicates.length) {
+    toast("所选候选包含已有客户或已入线索记录，请先取消选择", "error");
+    return;
+  }
+  const owner = state.user?.name || "当前账号";
+  const sourceSummary = [...new Set(selectedItems.map((item) => item.sourceLabel || item.source || "官网导入"))].join("、");
+  if (!window.confirm([
+    `确认将 ${opportunities.length} 条候选加入线索中心？`,
+    `来源：${sourceSummary}`,
+    `归属人：${owner}`,
+    `重复预检：未发现已知客户或已入线索记录`,
+    `缺少联系方式：${missingContact} 条`,
+    "加入后再创建首个正式跟进待办。"
+  ].join("\n"))) return;
   if (button) {
     button.disabled = true;
     button.textContent = "加入中";
@@ -7043,7 +9620,9 @@ async function syncLeadFinderRows(button?: HTMLButtonElement) {
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
     renderLeads();
-    toast(`已加入 ${result.created.length} 条线索`);
+    const duplicateCount = result.created.filter((item) => item.duplicate).length;
+    const createdCount = result.created.length - duplicateCount;
+    toast(`线索处理完成：新建 ${createdCount} 条，重复 ${duplicateCount} 条`);
   } finally {
     if (button) {
       button.disabled = false;
@@ -7058,6 +9637,11 @@ async function createLeadFinderTodos(button?: HTMLButtonElement) {
     toast("请先勾选需要跟进的候选客户", "error");
     return;
   }
+  const unsynced = opportunities.filter((item) => state.websiteOpportunities.find((row) => row.id === item.id)?.status !== "synced");
+  if (unsynced.length) {
+    toast("请先确认并加入线索，再创建首个正式待办", "error");
+    return;
+  }
   if (button) {
     button.disabled = true;
     button.textContent = "生成中";
@@ -7065,14 +9649,15 @@ async function createLeadFinderTodos(button?: HTMLButtonElement) {
   try {
     const created: Todo[] = [];
     for (const item of opportunities) {
+      const synced = state.websiteOpportunities.find((row) => row.id === item.id);
       const result = await api<{ todo: Todo }>("/api/todos", {
         method: "POST",
         body: JSON.stringify({
-          title: `核实搜客线索：${item.company}`,
+          title: `首次跟进线索：${item.company}`,
           type: "customer",
           priority: "medium",
           dueAt: currentDateTimeText(),
-          related: item.company
+          related: `${synced?.leadId || item.id} · ${item.company}`
         })
       });
       created.push(result.todo);
@@ -7081,7 +9666,7 @@ async function createLeadFinderTodos(button?: HTMLButtonElement) {
     renderTodos(state.todos);
     updateTodoChips(state.todos);
     renderTopbarStats();
-    toast(`已生成 ${created.length} 条搜客跟进待办`);
+    toast(`已生成 ${created.length} 条首个跟进待办`);
   } finally {
     if (button) {
       button.disabled = false;
@@ -7266,7 +9851,112 @@ function planTaskPriorityText(priority: PlanTask["priority"]) {
 }
 
 function planTaskStatusText(status: PlanTask["status"]) {
-  return status === "active" ? "进行中" : status === "done" ? "已完成" : "计划中";
+  return status === "active" ? "进行中" : status === "done" ? "已完成" : status === "cancelled" ? "已取消" : "计划中";
+}
+
+function parsePlanTaskDate(value: string) {
+  const matched = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!matched) return null;
+  const [, year, month, day, hour, minute] = matched;
+  const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
+  if (
+    date.getFullYear() !== Number(year)
+    || date.getMonth() !== Number(month) - 1
+    || date.getDate() !== Number(day)
+    || date.getHours() !== Number(hour)
+    || date.getMinutes() !== Number(minute)
+  ) return null;
+  return date;
+}
+
+function planTaskWeekRange(reference = new Date()) {
+  const start = new Date(reference.getFullYear(), reference.getMonth(), reference.getDate());
+  const offset = start.getDay() === 0 ? 6 : start.getDay() - 1;
+  start.setDate(start.getDate() - offset);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7);
+  return { start, end };
+}
+
+function sameLocalDay(left: Date, right: Date) {
+  return left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate();
+}
+
+function planTaskTimeState(task: PlanTask, now = new Date()) {
+  const due = parsePlanTaskDate(task.dueAt);
+  if (!due) return "unplanned" as const;
+  if (sameLocalDay(due, now)) return "today" as const;
+  if (due.getTime() < new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) return "overdue" as const;
+  const week = planTaskWeekRange(now);
+  if (due >= week.start && due < week.end) return "week" as const;
+  return "future" as const;
+}
+
+function formatPlanTaskTime(value?: string) {
+  if (!value) return "未排期";
+  const date = parsePlanTaskDate(value) || new Date(value);
+  if (!Number.isFinite(date.getTime())) return "未排期";
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+}
+
+function localDateTimeValue(date = new Date(Date.now() + 60 * 60 * 1000)) {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function planTaskRelationLabel(task: PlanTask) {
+  if (task.leadId) {
+    const lead = state.leads.find((item) => item.id === task.leadId);
+    return lead ? `线索 · ${lead.company}` : "线索 · 已不可见";
+  }
+  const customer = state.customers.find((item) => item.id === task.customerId);
+  const deal = state.deals.find((item) => item.id === task.dealId);
+  if (deal) return `${customer?.company || "客户"} · ${deal.title}`;
+  if (customer) return `客户 · ${customer.company}`;
+  return "未关联业务";
+}
+
+function planTaskStatusTone(status: PlanTask["status"]) {
+  return status === "done" ? "green" : status === "cancelled" ? "red" : status === "active" ? "amber" : "";
+}
+
+const instrumentWeekTodos = [
+  "第1天：整理仪表产品分类与参数卡",
+  "第1天：建立仪表客户搜索关键词库10组",
+  "第2天：整理公司证书与报价资料清单",
+  "第2天：新增30家仪表目标客户到客户池",
+  "第3天：完成客户角色-痛点-话术表",
+  "第3天：首触达20家高匹配客户",
+  "第4天：整理竞品替代切入点5条",
+  "第4天：跟进昨日未回复客户10家",
+  "第5天：制作参数确认表模板",
+  "第5天：深挖3家A类客户并写入CRM",
+  "第6天：完成第一周开发周报",
+  "第7天：复盘并优化ICP规则"
+];
+
+const instrumentMemoTitle = "计划任务执行方案";
+
+function instrumentPlanMemoContent() {
+  return [
+    "90天总目标：600+目标客户池，900+有效触达，60个有效回复，20个深度沟通，8个RFQ/样品/会议机会。",
+    "",
+    "每日最低动作：新增客户30家，首触达20家，二次跟进10家，深挖3家A类客户，CRM更新30条，15分钟复盘。",
+    "",
+    "前置知识：压力/温度/流量/液位/分析仪表/记录仪；量程、精度、介质、温压、连接方式、输出信号、供电、防护等级、材质；CE、RoHS、EMC、ATEX/IECEx、防爆、SIL、校准证书、ISO、材质报告。",
+    "",
+    "客户画像：工业自动化经销商、系统集成商、OEM设备厂、EPC/工程承包商、MRO维修服务商、终端工厂采购/工程师。",
+    "",
+    "周报结构：新增客户池、有效触达、有效回复、深度沟通、RFQ/样品/会议机会、问题与改进、下周计划。"
+  ].join("\n");
 }
 
 function planTemplatePlanTitle(template: PlanTemplate) {
@@ -7321,10 +10011,13 @@ function renderPlanTasks(tasks = state.planTasks) {
   const container = qs<HTMLElement>("#planTaskList");
   if (!container) return;
   const sorted = [...tasks].sort((left, right) => {
-    const statusWeight = { active: 0, planned: 1, done: 2 } as Record<PlanTask["status"], number>;
+    const statusWeight = { active: 0, planned: 1, done: 2, cancelled: 3 } as Record<PlanTask["status"], number>;
     const priorityWeight = { high: 0, medium: 1, normal: 2 } as Record<PlanTask["priority"], number>;
+    const leftDue = parsePlanTaskDate(left.dueAt)?.getTime() || Number.MAX_SAFE_INTEGER;
+    const rightDue = parsePlanTaskDate(right.dueAt)?.getTime() || Number.MAX_SAFE_INTEGER;
     return statusWeight[left.status] - statusWeight[right.status]
       || priorityWeight[left.priority] - priorityWeight[right.priority]
+      || leftDue - rightDue
       || String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
   });
   const stats = qs<HTMLElement>("#planTaskStats");
@@ -7335,27 +10028,38 @@ function renderPlanTasks(tasks = state.planTasks) {
       <div><span>任务总数</span><b>${tasks.length}</b></div>
       <div><span>进行中</span><b>${active}</b></div>
       <div><span>已完成</span><b>${done}</b></div>
-      <div><span>可推待办</span><b>${tasks.filter((task) => task.status !== "done").length}</b></div>
+      <div><span>可推待办</span><b>${tasks.filter((task) => task.status === "planned" || task.status === "active").length}</b></div>
     `;
   }
   container.innerHTML = sorted.length ? `
     <table class="plan-task-table">
-      <thead><tr><th><input id="planTaskSelectAll" type="checkbox"></th><th>任务</th><th>阶段/分类</th><th>目标</th><th>状态</th><th>时间</th><th>操作</th></tr></thead>
+      <thead><tr><th><input id="planTaskSelectAll" type="checkbox" aria-label="全选计划任务"></th><th>任务</th><th>阶段/分类</th><th>业务关联</th><th>目标/结果</th><th>状态/时间</th><th>操作</th></tr></thead>
       <tbody>
-        ${sorted.map((task) => `
+        ${sorted.map((task) => {
+    const result = task.status === "done"
+      ? task.completionResult || "未记录完成结果"
+      : task.status === "cancelled"
+        ? task.cancellationReason || "未记录取消原因"
+        : task.target || task.description || "未填写验收目标";
+    const open = task.status === "planned" || task.status === "active";
+    return `
           <tr data-plan-task-id="${escapeHtml(task.id)}">
-            <td><input type="checkbox" data-plan-task-check="${escapeHtml(task.id)}" ${state.selectedPlanTaskIds.includes(task.id) ? "checked" : ""}></td>
-            <td class="plan-title-cell"><b>${escapeHtml(task.title)}</b><small>${escapeHtml(task.description || "暂无说明")}</small></td>
+            <td><input type="checkbox" data-plan-task-check="${escapeHtml(task.id)}" ${state.selectedPlanTaskIds.includes(task.id) ? "checked" : ""} aria-label="选择${escapeHtml(task.title)}"></td>
+            <td class="plan-title-cell"><b>${escapeHtml(task.title)}</b><small>${escapeHtml(task.description || "暂无执行说明")}</small></td>
             <td><span class="badge aqua">${escapeHtml(task.phase)}</span><small>${escapeHtml(task.category)}</small></td>
-            <td>${escapeHtml(task.target || "未填写")}</td>
-            <td><span class="badge ${task.status === "done" ? "green" : task.status === "active" ? "amber" : ""}">${planTaskStatusText(task.status)}</span><small>${planTaskPriorityText(task.priority)}</small></td>
-            <td>${escapeHtml(task.dueAt || "未设置")}</td>
-            <td class="row-actions"><button class="btn compact" data-plan-push="${escapeHtml(task.id)}">推待办</button><button class="btn compact" data-plan-edit="${escapeHtml(task.id)}">编辑</button><button class="btn compact danger" data-plan-delete="${escapeHtml(task.id)}">删除</button></td>
+            <td><b>${escapeHtml(planTaskRelationLabel(task))}</b><small>${task.rescheduleReason ? `最近改期：${escapeHtml(task.rescheduleReason)}` : "仅本人可见"}</small></td>
+            <td><b>${escapeHtml(result)}</b><small>${task.status === "done" && task.completedAt ? `完成于 ${escapeHtml(formatDateTime(task.completedAt))}` : task.status === "cancelled" && task.cancelledAt ? `取消于 ${escapeHtml(formatDateTime(task.cancelledAt))}` : "完成时记录真实结果"}</small></td>
+            <td><span class="badge ${planTaskStatusTone(task.status)}">${planTaskStatusText(task.status)}</span><small>${planTaskPriorityText(task.priority)} · ${escapeHtml(formatPlanTaskTime(task.dueAt))}</small></td>
+            <td class="row-actions">
+              ${open ? `<button class="btn compact" data-plan-push="${escapeHtml(task.id)}">推待办</button><button class="btn compact primary" data-plan-complete="${escapeHtml(task.id)}">完成</button><button class="btn compact" data-plan-reschedule="${escapeHtml(task.id)}">改期</button><button class="btn compact" data-plan-edit="${escapeHtml(task.id)}">编辑</button><button class="btn compact" data-plan-cancel="${escapeHtml(task.id)}">取消</button>` : ""}
+              <button class="btn compact danger" data-plan-delete="${escapeHtml(task.id)}">删除</button>
+            </td>
           </tr>
-        `).join("")}
+    `;
+  }).join("")}
       </tbody>
     </table>
-  ` : `<div class="empty-state"><b>还没有计划任务</b><span>先新增一条开拓任务，再推送到待办执行。</span></div>`;
+  ` : `<div class="empty-state"><b>还没有计划任务</b><span>先新增一条开拓任务，再推送到待办执行。</span><button class="btn primary plan-empty-action" data-plan-empty-new>新增任务</button></div>`;
   qs<HTMLInputElement>("#planTaskSelectAll")?.addEventListener("change", (event) => {
     const checked = (event.currentTarget as HTMLInputElement).checked;
     state.selectedPlanTaskIds = checked ? sorted.map((task) => task.id) : [];
@@ -7371,23 +10075,75 @@ function renderPlanTasks(tasks = state.planTasks) {
   });
   qsa<HTMLButtonElement>("[data-plan-edit]", container).forEach((button) => button.addEventListener("click", () => openPlanTaskModal(state.planTasks.find((task) => task.id === button.dataset.planEdit))));
   qsa<HTMLButtonElement>("[data-plan-delete]", container).forEach((button) => button.addEventListener("click", () => void deletePlanTask(button.dataset.planDelete || "")));
+  qsa<HTMLButtonElement>("[data-plan-complete]", container).forEach((button) => button.addEventListener("click", () => openPlanTaskCompleteModal(button.dataset.planComplete || "")));
+  qsa<HTMLButtonElement>("[data-plan-cancel]", container).forEach((button) => button.addEventListener("click", () => openPlanTaskCancelModal(button.dataset.planCancel || "")));
+  qsa<HTMLButtonElement>("[data-plan-reschedule]", container).forEach((button) => button.addEventListener("click", () => openPlanTaskRescheduleModal(button.dataset.planReschedule || "")));
   qsa<HTMLButtonElement>("[data-plan-push]", container).forEach((button) => button.addEventListener("click", () => void pushPlanTasksToTodos([button.dataset.planPush || ""], button)));
+  qs<HTMLButtonElement>("[data-plan-empty-new]", container)?.addEventListener("click", () => openPlanTaskModal());
 }
 
 function openPlanTaskModal(task?: PlanTask) {
   const editing = Boolean(task);
+  if (task && (task.status === "done" || task.status === "cancelled")) {
+    toast("已结束任务只保留结果记录，不能再编辑", "error");
+    return;
+  }
+  const relationType = task?.leadId ? "lead" : task?.dealId ? "deal" : task?.customerId ? "customer" : "none";
+  const leadOptions = state.leads
+    .filter((lead) => !lead.deletedAt && lead.status !== "converted")
+    .map((lead) => `<option value="${escapeHtml(lead.id)}" ${task?.leadId === lead.id ? "selected" : ""}>${escapeHtml(lead.company)} · ${escapeHtml(lead.contact || "待维护")}</option>`)
+    .join("");
+  const customerOptions = state.customers
+    .map((customer) => `<option value="${escapeHtml(customer.id)}" ${task?.customerId === customer.id ? "selected" : ""}>${escapeHtml(customer.company)}</option>`)
+    .join("");
   openModal(editing ? "编辑计划任务" : "新增计划任务", `
     <div class="form-grid">
-      <div class="form-field full"><label>任务标题</label><input id="planTaskTitleInput" value="${escapeHtml(task?.title || "")}" placeholder="例如：新增30家目标客户到客户池"></div>
-      <div class="form-field"><label>阶段</label><input id="planTaskPhaseInput" value="${escapeHtml(task?.phase || "首周执行")}" placeholder="前置准备 / 触达准备"></div>
-      <div class="form-field"><label>分类</label><input id="planTaskCategoryInput" value="${escapeHtml(task?.category || "客户开发")}" placeholder="客户开发 / 产品知识"></div>
-      <div class="form-field"><label>优先级</label><select id="planTaskPriorityInput"><option value="high" ${task?.priority === "high" ? "selected" : ""}>高</option><option value="medium" ${task?.priority === "medium" ? "selected" : ""}>中</option><option value="normal" ${!task || task.priority === "normal" ? "selected" : ""}>普通</option></select></div>
-      <div class="form-field"><label>状态</label><select id="planTaskStatusInput"><option value="planned" ${!task || task.status === "planned" ? "selected" : ""}>计划中</option><option value="active" ${task?.status === "active" ? "selected" : ""}>进行中</option><option value="done" ${task?.status === "done" ? "selected" : ""}>已完成</option></select></div>
-      <div class="form-field full"><label>目标完成时间</label><input id="planTaskDueInput" value="${escapeHtml(task?.dueAt || "")}" placeholder="可留空，例如：2026-07-08 18:00"></div>
-      <div class="form-field full"><label>验收目标</label><input id="planTaskTargetInput" value="${escapeHtml(task?.target || "")}" placeholder="做到什么程度才算完成"></div>
-      <div class="form-field full"><label>执行说明</label><textarea id="planTaskDescriptionInput" rows="5" placeholder="写清动作、口径、资料和复盘标准">${escapeHtml(task?.description || "")}</textarea></div>
+      <div class="form-field full"><label>任务标题</label><input id="planTaskTitleInput" value="${escapeHtml(task?.title || "")}" placeholder="例如：跟进 Nordic Tools 报价反馈"></div>
+      <div class="form-field full"><label>计划时间</label><input id="planTaskDueInput" type="datetime-local" value="${escapeHtml(task?.dueAt || localDateTimeValue())}"></div>
     </div>
+    <details class="modal-advanced">
+      <summary>更多设置</summary>
+      <div class="form-grid" style="margin-top:12px">
+        <div class="form-field"><label>关联类型</label><select id="planTaskRelationType"><option value="none" ${relationType === "none" ? "selected" : ""}>不关联</option><option value="lead" ${relationType === "lead" ? "selected" : ""}>线索</option><option value="customer" ${relationType === "customer" ? "selected" : ""}>客户</option><option value="deal" ${relationType === "deal" ? "selected" : ""}>客户 + 商机</option></select></div>
+        <div class="form-field"><label>优先级</label><select id="planTaskPriorityInput"><option value="high" ${task?.priority === "high" ? "selected" : ""}>高</option><option value="medium" ${task?.priority === "medium" ? "selected" : ""}>中</option><option value="normal" ${!task || task.priority === "normal" ? "selected" : ""}>普通</option></select></div>
+        <div class="form-field full" id="planTaskLeadField"><label>关联线索</label><select id="planTaskLeadInput"><option value="">请选择线索</option>${leadOptions}</select></div>
+        <div class="form-field" id="planTaskCustomerField"><label>关联客户</label><select id="planTaskCustomerInput"><option value="">请选择客户</option>${customerOptions}</select></div>
+        <div class="form-field" id="planTaskDealField"><label>关联商机</label><select id="planTaskDealInput"></select></div>
+        <div class="form-field"><label>执行状态</label><select id="planTaskStatusInput"><option value="planned" ${!task || task.status === "planned" ? "selected" : ""}>计划中</option><option value="active" ${task?.status === "active" ? "selected" : ""}>进行中</option></select></div>
+        <div class="form-field full"><label>验收目标</label><input id="planTaskTargetInput" value="${escapeHtml(task?.target || "")}" placeholder="做到什么程度才算完成"></div>
+        <div class="form-field full"><label>执行说明</label><textarea id="planTaskDescriptionInput" rows="4" placeholder="可选：关键口径、资料要求或注意事项">${escapeHtml(task?.description || "")}</textarea></div>
+      </div>
+    </details>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="savePlanTaskButton" data-editing-id="${escapeHtml(task?.id || "")}">${editing ? "保存修改" : "保存任务"}</button>`);
+  const relationSelect = qs<HTMLSelectElement>("#planTaskRelationType");
+  const customerSelect = qs<HTMLSelectElement>("#planTaskCustomerInput");
+  const dealSelect = qs<HTMLSelectElement>("#planTaskDealInput");
+  const updateDealOptions = () => {
+    if (!dealSelect || !customerSelect) return;
+    const deals = state.deals.filter((deal) => !customerSelect.value || deal.customerId === customerSelect.value);
+    dealSelect.innerHTML = `<option value="">请选择商机</option>${deals.map((deal) => `<option value="${escapeHtml(deal.id)}" ${task?.dealId === deal.id ? "selected" : ""}>${escapeHtml(deal.title)}</option>`).join("")}`;
+  };
+  const updateRelationFields = () => {
+    const value = relationSelect?.value || "none";
+    const leadField = qs<HTMLElement>("#planTaskLeadField");
+    const customerField = qs<HTMLElement>("#planTaskCustomerField");
+    const dealField = qs<HTMLElement>("#planTaskDealField");
+    if (leadField) leadField.hidden = value !== "lead";
+    if (customerField) customerField.hidden = value !== "customer" && value !== "deal";
+    if (dealField) dealField.hidden = value !== "deal";
+    if (value === "deal") updateDealOptions();
+  };
+  relationSelect?.addEventListener("change", updateRelationFields);
+  customerSelect?.addEventListener("change", updateDealOptions);
+  dealSelect?.addEventListener("change", () => {
+    const deal = state.deals.find((item) => item.id === dealSelect.value);
+    if (deal && customerSelect) {
+      customerSelect.value = deal.customerId;
+      updateDealOptions();
+      dealSelect.value = deal.id;
+    }
+  });
+  updateRelationFields();
   qs("#savePlanTaskButton")?.addEventListener("click", () => void savePlanTask());
   qs<HTMLInputElement>("#planTaskTitleInput")?.focus();
 }
@@ -7400,24 +10156,172 @@ async function savePlanTask() {
   }
   const saveButton = qs<HTMLButtonElement>("#savePlanTaskButton");
   const editingId = saveButton?.dataset.editingId || "";
+  const relationType = qs<HTMLSelectElement>("#planTaskRelationType")?.value || "none";
+  const leadId = relationType === "lead" ? qs<HTMLSelectElement>("#planTaskLeadInput")?.value || "" : "";
+  const customerId = relationType === "customer" || relationType === "deal" ? qs<HTMLSelectElement>("#planTaskCustomerInput")?.value || "" : "";
+  const dealId = relationType === "deal" ? qs<HTMLSelectElement>("#planTaskDealInput")?.value || "" : "";
+  if (relationType === "lead" && !leadId) {
+    toast("请选择关联线索", "error");
+    return;
+  }
+  if ((relationType === "customer" || relationType === "deal") && !customerId) {
+    toast("请选择关联客户", "error");
+    return;
+  }
+  if (relationType === "deal" && !dealId) {
+    toast("请选择关联商机", "error");
+    return;
+  }
   const payload = {
     title,
-    phase: qs<HTMLInputElement>("#planTaskPhaseInput")?.value.trim() || "计划任务",
-    category: qs<HTMLInputElement>("#planTaskCategoryInput")?.value.trim() || "客户开发",
+    phase: "计划任务",
+    category: "客户开发",
     priority: (qs<HTMLSelectElement>("#planTaskPriorityInput")?.value || "normal") as PlanTask["priority"],
     status: (qs<HTMLSelectElement>("#planTaskStatusInput")?.value || "planned") as PlanTask["status"],
     dueAt: qs<HTMLInputElement>("#planTaskDueInput")?.value.trim() || "",
     target: qs<HTMLInputElement>("#planTaskTargetInput")?.value.trim() || "",
-    description: qs<HTMLTextAreaElement>("#planTaskDescriptionInput")?.value.trim() || ""
+    description: qs<HTMLTextAreaElement>("#planTaskDescriptionInput")?.value.trim() || "",
+    leadId,
+    customerId,
+    dealId
   };
-  const result = await api<{ task: PlanTask }>(editingId ? `/api/plan-tasks/${editingId}` : "/api/plan-tasks", {
-    method: editingId ? "PATCH" : "POST",
-    body: JSON.stringify(payload)
-  });
-  state.planTasks = editingId ? state.planTasks.map((task) => task.id === result.task.id ? result.task : task) : [result.task, ...state.planTasks];
+  if (saveButton) saveButton.disabled = true;
+  try {
+    const result = await api<{ task: PlanTask }>(editingId ? `/api/plan-tasks/${editingId}` : "/api/plan-tasks", {
+      method: editingId ? "PATCH" : "POST",
+      body: JSON.stringify(payload)
+    });
+    state.planTasks = editingId ? state.planTasks.map((task) => task.id === result.task.id ? result.task : task) : [result.task, ...state.planTasks];
+    renderPlanTasks(state.planTasks);
+    closeModal();
+    toast(editingId ? "计划任务已保存" : "计划任务已新增");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "计划任务保存失败", "error");
+  } finally {
+    if (saveButton) saveButton.disabled = false;
+  }
+}
+
+function replacePlanTask(updated: PlanTask) {
+  state.planTasks = state.planTasks.map((task) => task.id === updated.id ? updated : task);
   renderPlanTasks(state.planTasks);
-  closeModal();
-  toast(editingId ? "计划任务已保存" : "计划任务已新增");
+}
+
+function openPlanTaskCompleteModal(id: string) {
+  const task = state.planTasks.find((item) => item.id === id);
+  if (!task) return;
+  openModal("完成并记录结果", `
+    <div class="form-grid">
+      <div class="form-field full"><label>任务</label><input value="${escapeHtml(task.title)}" disabled></div>
+      <div class="form-field full"><label>完成结果</label><textarea id="planTaskCompleteResult" rows="5" placeholder="例如：客户确认参数，已发送新版报价，预计周五回复"></textarea></div>
+    </div>
+    <div class="template-actions" style="justify-content:flex-start;margin-top:10px">
+      <button class="btn compact" type="button" data-plan-result-preset="已完成触达，等待客户回复。">已触达</button>
+      <button class="btn compact" type="button" data-plan-result-preset="客户已回复，需求与关键参数已记录。">已回复</button>
+      <button class="btn compact" type="button" data-plan-result-preset="已完成报价或资料发送，并约定下一步。">已报价/发资料</button>
+    </div>
+  `, `<button class="btn" data-modal-close>暂不完成</button><button class="btn primary" id="confirmPlanTaskComplete">确认完成</button>`);
+  qsa<HTMLButtonElement>("[data-plan-result-preset]").forEach((button) => button.addEventListener("click", () => {
+    const input = qs<HTMLTextAreaElement>("#planTaskCompleteResult");
+    if (input) {
+      input.value = button.dataset.planResultPreset || "";
+      input.focus();
+    }
+  }));
+  qs<HTMLButtonElement>("#confirmPlanTaskComplete")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const result = qs<HTMLTextAreaElement>("#planTaskCompleteResult")?.value.trim() || "";
+    if (!result) {
+      toast("请记录完成结果", "error");
+      return;
+    }
+    button.disabled = true;
+    try {
+      const response = await api<{ task: PlanTask }>(`/api/plan-tasks/${id}/complete`, {
+        method: "POST",
+        body: JSON.stringify({ result })
+      });
+      replacePlanTask(response.task);
+      closeModal();
+      toast("任务已完成，结果已记录");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "任务完成失败", "error");
+      button.disabled = false;
+    }
+  });
+  qs<HTMLTextAreaElement>("#planTaskCompleteResult")?.focus();
+}
+
+function openPlanTaskCancelModal(id: string) {
+  const task = state.planTasks.find((item) => item.id === id);
+  if (!task) return;
+  openModal("取消计划任务", `
+    <div class="form-grid">
+      <div class="form-field full"><label>任务</label><input value="${escapeHtml(task.title)}" disabled></div>
+      <div class="form-field full"><label>取消原因</label><textarea id="planTaskCancelReason" rows="4" placeholder="说明为什么不再执行，便于后续复盘"></textarea></div>
+    </div>
+  `, `<button class="btn" data-modal-close>返回</button><button class="btn danger" id="confirmPlanTaskCancel">确认取消</button>`);
+  qs<HTMLButtonElement>("#confirmPlanTaskCancel")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const reason = qs<HTMLTextAreaElement>("#planTaskCancelReason")?.value.trim() || "";
+    if (!reason) {
+      toast("请填写取消原因", "error");
+      return;
+    }
+    button.disabled = true;
+    try {
+      const response = await api<{ task: PlanTask }>(`/api/plan-tasks/${id}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({ reason })
+      });
+      replacePlanTask(response.task);
+      closeModal();
+      toast("任务已取消，原因已记录");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "任务取消失败", "error");
+      button.disabled = false;
+    }
+  });
+  qs<HTMLTextAreaElement>("#planTaskCancelReason")?.focus();
+}
+
+function openPlanTaskRescheduleModal(id: string) {
+  const task = state.planTasks.find((item) => item.id === id);
+  if (!task) return;
+  const overdue = planTaskTimeState(task) === "overdue";
+  openModal("调整计划时间", `
+    <div class="form-grid">
+      <div class="form-field full"><label>任务</label><input value="${escapeHtml(task.title)}" disabled></div>
+      <div class="form-field full"><label>新的计划时间</label><input id="planTaskRescheduleDue" type="datetime-local" value="${escapeHtml(task.dueAt || localDateTimeValue())}"></div>
+      <div class="form-field full"><label>改期原因${overdue ? "（逾期任务必填）" : "（选填）"}</label><textarea id="planTaskRescheduleReason" rows="3" placeholder="例如：等待客户补充技术参数"></textarea></div>
+    </div>
+  `, `<button class="btn" data-modal-close>返回</button><button class="btn primary" id="confirmPlanTaskReschedule">确认改期</button>`);
+  qs<HTMLButtonElement>("#confirmPlanTaskReschedule")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const dueAt = qs<HTMLInputElement>("#planTaskRescheduleDue")?.value || "";
+    const reason = qs<HTMLTextAreaElement>("#planTaskRescheduleReason")?.value.trim() || "";
+    if (!dueAt) {
+      toast("请选择新的计划时间", "error");
+      return;
+    }
+    if (overdue && !reason) {
+      toast("逾期任务请填写改期原因", "error");
+      return;
+    }
+    button.disabled = true;
+    try {
+      const response = await api<{ task: PlanTask }>(`/api/plan-tasks/${id}/reschedule`, {
+        method: "POST",
+        body: JSON.stringify({ dueAt, reason })
+      });
+      replacePlanTask(response.task);
+      closeModal();
+      toast("计划时间已调整");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "任务改期失败", "error");
+      button.disabled = false;
+    }
+  });
 }
 
 function openPlanTemplateModal(template?: PlanTemplate) {
@@ -7487,6 +10391,7 @@ async function createPlanTaskFromTemplate(id: string, button?: HTMLButtonElement
   if (!template) return;
   const title = planTemplatePlanTitle(template);
   if (state.planTasks.some((task) => task.title === title)) {
+    renderPlanTasks(state.planTasks);
     toast("这条训练任务已在计划中");
     return;
   }
@@ -7518,14 +10423,14 @@ async function deletePlanTask(id: string) {
   if (!id || !window.confirm("确认删除这条计划任务？")) return;
   await api(`/api/plan-tasks/${id}`, { method: "DELETE" });
   state.planTasks = state.planTasks.filter((task) => task.id !== id);
-  state.selectedPlanTaskIds = state.selectedPlanTaskIds.filter((item) => item !== id);
+  state.selectedPlanTaskIds = state.selectedPlanTaskIds.filter((taskId) => taskId !== id);
   renderPlanTasks(state.planTasks);
   toast("计划任务已删除");
 }
 
 async function pushPlanTasksToTodos(ids: string[], button?: HTMLButtonElement) {
   const tasks = ids.map((id) => state.planTasks.find((task) => task.id === id)).filter(Boolean) as PlanTask[];
-  const pending = tasks.filter((task) => task.status !== "done");
+  const pending = tasks.filter((task) => task.status === "planned" || task.status === "active");
   if (!pending.length) {
     toast("请选择未完成的计划任务", "error");
     return;
@@ -7547,7 +10452,7 @@ async function pushPlanTasksToTodos(ids: string[], button?: HTMLButtonElement) {
           type: "other",
           priority: task.priority,
           dueAt: task.dueAt,
-          related: `计划任务 / ${task.phase}`
+          related: planTaskRelationLabel(task) === "未关联业务" ? `计划任务 / ${task.phase}` : planTaskRelationLabel(task)
         })
       });
       created.push(result.todo);
@@ -7570,7 +10475,7 @@ async function saveInstrumentPlanMemo(button?: HTMLButtonElement) {
   try {
     const existing = state.memos.find((memo) => memo.title === instrumentMemoTitle);
     const taskLines = state.planTasks.length
-      ? state.planTasks.map((task, index) => `${index + 1}. [${planTaskStatusText(task.status)}][${planTaskPriorityText(task.priority)}] ${task.title} - ${task.target || task.description || "待补充目标"}`).join("\n")
+      ? state.planTasks.map((task, index) => `${index + 1}. [${planTaskStatusText(task.status)}][${planTaskPriorityText(task.priority)}] ${task.title} - ${task.completionResult || task.cancellationReason || task.target || task.description || "待补充目标"}`).join("\n")
       : instrumentWeekTodos.map((title, index) => `${index + 1}. ${title}`).join("\n");
     const payload = {
       title: instrumentMemoTitle,
@@ -7606,21 +10511,25 @@ async function saveInstrumentPlanMemo(button?: HTMLButtonElement) {
 }
 
 function exportInstrumentPlanCsv() {
-  const taskRows = state.planTasks.length
-    ? state.planTasks.map((task) => [task.phase, task.title, planTaskPriorityText(task.priority), planTaskStatusText(task.status), task.dueAt || "", task.target || "", task.description || ""])
-    : instrumentWeekTodos.map((title, index) => ["首周执行", title, index < 4 ? "高优先级" : index < 8 ? "中优先级" : "普通", "计划中", "", "完成后在CRM更新结果与下一动作", ""]);
+  const taskRows = state.planTasks.map((task) => [
+    task.title,
+    planTaskPriorityText(task.priority),
+    planTaskStatusText(task.status),
+    task.dueAt || "",
+    planTaskRelationLabel(task),
+    task.target || "",
+    task.description || "",
+    task.completionResult || "",
+    task.completedAt || "",
+    task.cancellationReason || "",
+    task.cancelledAt || "",
+    task.rescheduledFrom || "",
+    task.rescheduleReason || "",
+    task.phase,
+    task.category
+  ]);
   const rows = [
-    ["阶段", "任务", "优先级", "状态", "目标完成时间", "验收目标", "执行说明"],
-    ["90天目标", "目标客户池", "高优先级", "计划中", "", "600+", "按国家、客户类型、产品线维护到CRM"],
-    ["90天目标", "有效触达", "高优先级", "计划中", "", "900+", "邮件、LinkedIn、WhatsApp、企业微信等渠道记录"],
-    ["90天目标", "有效回复", "中优先级", "计划中", "", "60", "有需求、参数、采购计划或后续沟通意愿"],
-    ["90天目标", "RFQ/样品/会议机会", "中优先级", "计划中", "", "8", "进入报价、样品、线上会议或项目清单阶段"],
-    ["每日动作", "新增客户", "高优先级", "计划中", "", "30家/天", "经销商、系统集成商、OEM、EPC、MRO、终端工程师"],
-    ["每日动作", "首触达", "高优先级", "计划中", "", "20家/天", "按角色发送对应英文话术"],
-    ["每日动作", "二次跟进", "中优先级", "计划中", "", "10家/天", "补资料、问参数、推进到有效回复"],
-    ["每日动作", "深挖A类客户", "中优先级", "计划中", "", "3家/天", "查官网、联系人、产品线、项目线索和竞品"],
-    ["前置知识", "关键参数", "高优先级", "计划中", "", "必须掌握", "量程、精度、介质、温压、连接、输出、供电、防护、材质"],
-    ["前置知识", "认证资料", "中优先级", "计划中", "", "资料化", "CE、RoHS、EMC、ATEX/IECEx、防爆、SIL、校准证书、ISO、材质报告"],
+    ["任务", "优先级", "状态", "计划时间", "业务关联", "验收目标", "执行说明", "完成结果", "完成时间", "取消原因", "取消时间", "改期前时间", "改期原因", "历史阶段", "历史分类"],
     ...taskRows
   ];
   const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -7687,6 +10596,10 @@ async function saveCustomer() {
   }
   state.selectedCustomerId = result.customer.id;
   renderCustomers(state.customers);
+  if (editingId) {
+    renderCustomerDrawer(result.customer);
+    openCustomerDrawer();
+  }
   void refreshDashboardOnly();
   closeModal();
   toast(editingId ? "客户已保存" : "客户已新增");
@@ -7727,10 +10640,44 @@ async function bulkDeleteCustomers() {
 }
 
 function addFollowRecord(customer: Customer) {
-  const timeline = qs<HTMLElement>("#customers .drawer .timeline");
-  if (!timeline) return;
-  timeline.insertAdjacentHTML("afterbegin", `<div class="timeline-item"><b>手动跟进</b><span>已新增 ${escapeHtml(customer.company)} 的电话/邮件跟进记录。</span></div>`);
-  toast(`已记录 ${customer.company} 的跟进动作`);
+  openModal(`新增跟进 · ${customer.company}`, `
+    <div class="form-grid">
+      <label class="form-field"><span>跟进方式</span><select id="customerFollowType"><option value="call">电话</option><option value="email">邮件</option><option value="whatsapp">WhatsApp</option><option value="wechat">微信</option><option value="meeting">会议</option><option value="note">备注</option></select></label>
+      <div class="form-field"><label>下次提醒</label><input id="customerFollowNext" value="${escapeHtml(customer.nextReminder || "明天 10:00")}"></div>
+      <div class="form-field full"><label>沟通结果与下一步</label><textarea id="customerFollowContent" placeholder="记录客户反馈、关键需求、承诺事项与下一动作"></textarea></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCustomerFollowButton">保存跟进</button>`);
+  qs("#saveCustomerFollowButton")?.addEventListener("click", () => void saveCustomerFollow(customer.id));
+  qs<HTMLTextAreaElement>("#customerFollowContent")?.focus();
+}
+
+async function saveCustomerFollow(customerId: string) {
+  const content = qs<HTMLTextAreaElement>("#customerFollowContent")?.value.trim() || "";
+  if (!content) {
+    toast("请填写本次沟通结果", "error");
+    return;
+  }
+  const button = qs<HTMLButtonElement>("#saveCustomerFollowButton");
+  try {
+    if (button) { button.disabled = true; button.textContent = "保存中"; }
+    const result = await api<{ customer: Customer }>(`/api/customers/${customerId}/activities`, {
+      method: "POST",
+      body: JSON.stringify({
+        type: qs<HTMLSelectElement>("#customerFollowType")?.value || "note",
+        content,
+        nextReminder: qs<HTMLInputElement>("#customerFollowNext")?.value.trim() || ""
+      })
+    });
+    state.customers = state.customers.map((customer) => customer.id === customerId ? result.customer : customer);
+    renderCustomers(state.customers);
+    renderCustomerDrawer(result.customer);
+    closeModal();
+    toast(`已记录 ${result.customer.company} 的跟进动作`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "保存跟进失败", "error");
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "保存跟进"; }
+  }
 }
 
 async function syncOcrLead(button: HTMLButtonElement) {
@@ -7751,15 +10698,159 @@ async function syncOcrLead(button: HTMLButtonElement) {
   }
 }
 
+function reportMoneyText(rows: ReportMoneyRow[]) {
+  return rows.length
+    ? rows.map((row) => `${row.currency} ${Number(row.amount || 0).toLocaleString("en-US", { maximumFractionDigits: 2 })}`).join(" / ")
+    : "暂无金额";
+}
+
+function reportMoneyHtml(rows: ReportMoneyRow[], tag = "b") {
+  return rows.length
+    ? rows.map((row) => `<${tag}>${escapeHtml(row.currency)} ${Number(row.amount || 0).toLocaleString("en-US", { maximumFractionDigits: 2 })}</${tag}>`).join("")
+    : `<span class="report-empty">暂无金额</span>`;
+}
+
+function renderExecutiveReport(report: ExecutiveReport) {
+  state.executiveReport = report;
+  const generatedAt = new Date(report.period.asOf);
+  const generatedText = Number.isFinite(generatedAt.getTime())
+    ? generatedAt.toLocaleString("zh-CN", { hour12: false })
+    : report.period.asOf;
+  const setText = (selector: string, value: string) => {
+    const node = qs<HTMLElement>(selector);
+    if (node) node.textContent = value;
+  };
+  const setHtml = (selector: string, value: string) => {
+    const node = qs<HTMLElement>(selector);
+    if (node) node.innerHTML = value;
+  };
+  setText("#reportPeriod", `${report.title} · ${report.period.label}`);
+  setText("#reportGeneratedAt", `GoodJob CRM · 生成于 ${generatedText}`);
+  setText("#reportHeadline", report.headline);
+  setText("#reportHeroNote", state.reportNote || report.note);
+  setText("#reportScope", `范围：${report.scope.label}`);
+  setText("#reportAmountBasis", `金额口径：${report.amountBasis.label}`);
+  setText("#reportDataStatus", `数据状态：${report.dataStatus}`);
+  setHtml("#reportWeightedForecast", reportMoneyHtml(report.metrics.weightedForecast));
+  setHtml("#reportExpectedAmount", reportMoneyHtml(report.metrics.expectedThisMonth));
+  setHtml("#reportRiskAmount", reportMoneyHtml(report.metrics.riskAmounts));
+  setHtml("#reportWinRate", `<b>${report.metrics.winRate === null ? "暂无可计算数据" : `${report.metrics.winRate}%`}</b><span>${report.metrics.closedCount} 个本月已关闭商机</span>`);
+  setHtml("#reportConclusions", report.conclusions.map((item, index) => `
+    <div class="summary-card"><strong>结论 ${index + 1}：${escapeHtml(item.title)}</strong><p>${escapeHtml(item.detail)}</p></div>
+  `).join(""));
+  setHtml("#reportFunnel", report.funnel.map((row) => `
+    <div class="funnel-step">
+      <b>${escapeHtml(row.stage)}</b>
+      <div class="bar" style="--w:${Math.max(0, Math.min(100, row.width))}%"></div>
+      <span>${row.count} 单</span>
+      <strong title="${escapeHtml(reportMoneyText(row.amounts))}">${escapeHtml(reportMoneyText(row.amounts))}${row.riskCount ? ` · 风险 ${row.riskCount}` : ""}</strong>
+    </div>
+  `).join(""));
+  setHtml("#reportActions", report.actions.length ? report.actions.map((item, index) => `
+    <div class="insight-item"><i>${index + 1}</i><div><b>${escapeHtml(item.title)}</b><span>${escapeHtml(item.detail)}</span></div></div>
+  `).join("") : `<div class="insight-item"><i>✓</i><div><b>暂无紧急行动项</b><span>当前范围未识别到风险商机或本月预计成交商机。</span></div></div>`);
+  const marketColors = ["var(--brand)", "var(--green)", "var(--amber)", "var(--violet)", "var(--rose)"];
+  setHtml("#reportMarket", report.market.length ? report.market.map((row, index) => `
+    <span><i style="--color:${marketColors[index % marketColors.length]}"></i>${escapeHtml(row.region)} ${row.share}% · ${row.count} 单 · ${escapeHtml(reportMoneyText(row.amounts))}${row.riskCount ? ` · 风险 ${row.riskCount}` : ""}</span>
+  `).join("") : `<span class="report-empty">暂无市场数据</span>`);
+  const donut = qs<HTMLElement>("#reports .donut");
+  if (donut) {
+    let cursor = 0;
+    const segments = report.market.map((row, index) => {
+      const start = cursor;
+      cursor += row.share;
+      return `${marketColors[index % marketColors.length]} ${start}% ${cursor}%`;
+    });
+    donut.style.background = segments.length ? `conic-gradient(${segments.join(",")})` : "#e8edf5";
+  }
+  const maxForecastCount = Math.max(...report.forecastByStage.map((row) => row.count), 1);
+  setHtml("#reportForecast", report.forecastByStage.map((row, index) => `
+    <div><i style="--h:${row.count ? Math.max(18, Math.round((row.count / maxForecastCount) * 150)) : 4}px; --c:${marketColors[index % marketColors.length]}"></i>
+    <span>${escapeHtml(row.stage)} ${Math.round(row.weight * 100)}%<br>${escapeHtml(reportMoneyText(row.weightedAmounts))}</span></div>
+  `).join(""));
+  setText("#reportPerformanceTitle", report.performanceTitle);
+  setHtml("#reportPerformanceRows", report.performance.length ? report.performance.map((row) => `
+    <tr><td>${escapeHtml(row.owner)}</td><td>${row.customerCount}</td><td>${row.followUpCount}</td><td>${row.activeDealCount}</td><td>${escapeHtml(reportMoneyText(row.forecastAmounts))}</td><td>${badge(row.riskLabel, row.riskCount ? "amber" : "green")}</td></tr>
+  `).join("") : `<tr><td colspan="6">暂无可展示人员数据</td></tr>`);
+  setHtml("#reportPerformanceCards", report.performance.length ? report.performance.map((row) => `
+    <article class="report-performance-card">
+      <header><b>${escapeHtml(row.owner)}</b>${badge(row.riskLabel, row.riskCount ? "amber" : "green")}</header>
+      <dl>
+        <div><dt>客户</dt><dd>${row.customerCount}</dd></div>
+        <div><dt>本月跟进</dt><dd>${row.followUpCount}</dd></div>
+        <div><dt>活跃商机</dt><dd>${row.activeDealCount}</dd></div>
+        <div><dt>加权预测</dt><dd>${escapeHtml(reportMoneyText(row.forecastAmounts))}</dd></div>
+      </dl>
+    </article>
+  `).join("") : `<div class="report-empty">暂无可展示人员数据</div>`);
+  setHtml("#reportDefinitions", report.definitions.map((item) => `<li>${escapeHtml(item)}</li>`).join(""));
+  const riskButton = qs<HTMLButtonElement>("#reportRiskDetailButton");
+  if (riskButton) {
+    riskButton.textContent = `查看风险明细（${report.riskRows.length}）`;
+    riskButton.disabled = report.riskRows.length === 0;
+  }
+}
+
+async function refreshExecutiveReport(showToast = false) {
+  const button = qs<HTMLButtonElement>("#reportRefreshButton");
+  try {
+    if (button) { button.disabled = true; button.textContent = "刷新中"; }
+    const report = await api<ExecutiveReport>("/api/reports/executive");
+    renderExecutiveReport(report);
+    if (showToast) toast("经营快照已刷新");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "经营快照加载失败", "error");
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "刷新数据"; }
+  }
+}
+
+function openReportRiskModal() {
+  const rows = state.executiveReport?.riskRows || [];
+  if (!rows.length) {
+    toast("当前范围暂无风险商机");
+    return;
+  }
+  openModal("风险商机明细", `
+    <div class="insight-list">${rows.map((row, index) => `
+      <div class="insight-item">
+        <i>${index + 1}</i>
+        <div><b>${escapeHtml(row.customer)} · ${escapeHtml(row.stage)} · ${escapeHtml(row.currency)} ${Number(row.amount).toLocaleString("en-US")}</b>
+        <span>${escapeHtml(row.owner)} · ${escapeHtml(row.riskReasons.join("、"))}<br>下一动作：${escapeHtml(row.nextAction || "待补充")} · 预计成交：${escapeHtml(row.expectedCloseAt || "待补充")}</span></div>
+      </div>
+    `).join("")}</div>
+  `, `<button class="btn primary" data-modal-close>关闭</button>`);
+}
+
 async function exportReport() {
-  const report = await api<{ title: string; forecastAmount: number; conversionRate: number; riskAmount: number; conclusions: string[] }>("/api/reports/executive");
+  const report = state.executiveReport || await api<ExecutiveReport>("/api/reports/executive");
+  if (!state.executiveReport) renderExecutiveReport(report);
   const content = [
     report.title,
-    `预测成交额：${amount(report.forecastAmount)}`,
-    `漏斗转化率：${report.conversionRate}%`,
-    `高风险金额：${amount(report.riskAmount)}`,
+    `统计范围：${report.scope.label}`,
+    `统计期间：${report.period.label}`,
+    `生成时间：${report.period.asOf}`,
+    `金额口径：${report.amountBasis.label}`,
+    `数据状态：${report.dataStatus}`,
     "",
-    ...report.conclusions.map((item, index) => `${index + 1}. ${item}`)
+    report.headline,
+    state.reportNote || report.note,
+    "",
+    `活跃管道：${reportMoneyText(report.metrics.activePipeline)}`,
+    `阶段加权预测：${reportMoneyText(report.metrics.weightedForecast)}`,
+    `本月预计成交：${reportMoneyText(report.metrics.expectedThisMonth)}`,
+    `本月已成交：${reportMoneyText(report.metrics.wonThisMonth)}`,
+    `风险商机：${report.metrics.riskDealCount} 个，${reportMoneyText(report.metrics.riskAmounts)}`,
+    `本月赢单率：${report.metrics.winRate === null ? "暂无可计算数据" : `${report.metrics.winRate}%`}`,
+    "",
+    "经营结论",
+    ...report.conclusions.map((item, index) => `${index + 1}. ${item.title}：${item.detail}`),
+    "",
+    "管理动作",
+    ...(report.actions.length ? report.actions.map((item, index) => `${index + 1}. ${item.title}：${item.detail}`) : ["暂无紧急行动项"]),
+    "",
+    "统计定义",
+    ...report.definitions.map((item, index) => `${index + 1}. ${item}`)
   ].join("\n");
   const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
   const link = document.createElement("a");
@@ -7771,20 +10862,25 @@ async function exportReport() {
 }
 
 function openReportNoteModal() {
-  openModal("汇报备注", `<div class="form-field full"><label>备注</label><input id="reportNoteInput" value="${escapeHtml(state.reportNote || "本周重点抢救欧洲报价逾期客户")}"></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveReportNoteButton">保存备注</button>`);
+  openModal("汇报备注", `<div class="form-field full"><label>备注</label><input id="reportNoteInput" value="${escapeHtml(state.reportNote)}" placeholder="补充本周管理重点，不会覆盖系统统计结论"></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveReportNoteButton">保存备注</button>`);
   qs("#saveReportNoteButton")?.addEventListener("click", saveReportNote);
 }
 
 function saveReportNote() {
   state.reportNote = qs<HTMLInputElement>("#reportNoteInput")?.value.trim() || "";
-  const hero = qs<HTMLElement>("#reports .report-hero p");
-  if (hero && state.reportNote) hero.textContent = state.reportNote;
+  if (state.user) localStorage.setItem(`gj_report_note_${state.user.id}`, state.reportNote);
+  const hero = qs<HTMLElement>("#reportHeroNote");
+  if (hero) hero.textContent = state.reportNote || state.executiveReport?.note || "";
   closeModal();
   toast("汇报备注已保存");
 }
 
 function installEvents() {
   ensureUiLayer();
+  window.addEventListener("pagehide", () => {
+    const memo = state.memos.find((item) => item.id === state.selectedMemoId);
+    if (memo && memoDirty) writeMemoDraft(memo);
+  });
   document.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
     if (target.closest(".todo-actions")) return;
@@ -7799,6 +10895,8 @@ function installEvents() {
     void loginWithPassword(email, password).catch((error) => toast(error instanceof Error ? error.message : "登录失败", "error"));
   }, true);
   qs<HTMLButtonElement>("#logoutButton")?.addEventListener("click", () => {
+    if (memoDirty && !window.confirm("当前备忘仍仅保存在本机。退出将清除此账号的本机草稿，确认退出？")) return;
+    clearCurrentUserMemoDrafts();
     localStorage.removeItem(storage.token);
     localStorage.removeItem(storage.user);
     state.user = null;
@@ -7816,6 +10914,7 @@ function installEvents() {
     toast("个人资料已刷新");
   });
   qs<HTMLButtonElement>("#profileOpenProspectsButton")?.addEventListener("click", () => activateNavView("prospect-list", renderProspectList));
+  qs<HTMLButtonElement>("#profileOpenWhatsAppButton")?.addEventListener("click", () => activateNavView("whatsapp", renderWhatsApp));
   qs<HTMLButtonElement>("#profileOpenSettingsButton")?.addEventListener("click", () => {
     if (state.user && ["admin", "super_admin"].includes(state.user.role)) activateNavView("settings");
     else toast("账号管理仅管理员和超级管理员可进入", "error");
@@ -7835,17 +10934,16 @@ function installEvents() {
     input.value = "";
     void createQuickTodo(title);
   });
-  qsa<HTMLButtonElement>("[data-dashboard-period]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.dashboardPeriod = (button.dataset.dashboardPeriod || "today") as AppState["dashboardPeriod"];
-      if (state.summary) renderDashboard(state.summary, state.todos, state.customers);
-      toast(`已切换到${dashboardPeriodLabel()}视图`);
-    });
-  });
   qs<HTMLButtonElement>("#morningViewButton")?.addEventListener("click", () => {
     state.morningView = !state.morningView;
     if (state.summary) renderDashboard(state.summary, state.todos, state.customers);
     toast(state.morningView ? "晨会视图已打开" : "晨会视图已关闭");
+  });
+  qsa<HTMLButtonElement>("[data-dashboard-period]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.dashboardPeriod = (button.dataset.dashboardPeriod || "today") as DashboardPeriod;
+      if (state.summary) renderDashboard(state.summary, state.todos, state.customers);
+    });
   });
   qsa<HTMLButtonElement>("#dashboard .section-head .btn").forEach((button) => {
     if (button.textContent?.includes("新增待办")) button.addEventListener("click", () => openTodoModal());
@@ -7868,8 +10966,65 @@ function installEvents() {
   qsa<HTMLButtonElement>("#customers .page-head .btn.primary").forEach((button) => {
     if (button.textContent?.includes("新增客户")) button.addEventListener("click", () => openCustomerModal());
   });
+  qs<HTMLInputElement>("#customerSearchInput")?.addEventListener("input", (event) => {
+    state.customerSearch = (event.currentTarget as HTMLInputElement).value;
+    renderCustomers(state.customers);
+  });
+  qs<HTMLSelectElement>("#customerQueueFilter")?.addEventListener("change", (event) => {
+    state.customerQueueFilter = (event.currentTarget as HTMLSelectElement).value as AppState["customerQueueFilter"];
+    renderCustomers(state.customers);
+  });
+  qs<HTMLButtonElement>("#customerFilterReset")?.addEventListener("click", () => {
+    state.customerSearch = "";
+    state.customerQueueFilter = "all";
+    const search = qs<HTMLInputElement>("#customerSearchInput");
+    const filter = qs<HTMLSelectElement>("#customerQueueFilter");
+    if (search) search.value = "";
+    if (filter) filter.value = "all";
+    renderCustomers(state.customers);
+  });
+  qs("#customerDrawerBackdrop")?.addEventListener("click", closeCustomerDrawer);
   qs<HTMLButtonElement>("#pipeline .page-head .btn.primary")?.addEventListener("click", () => openDealModal());
-  qs<HTMLButtonElement>("#reminders .page-head .btn.primary")?.addEventListener("click", openReminderModal);
+  qs("#dealDrawerBackdrop")?.addEventListener("click", closeDealDrawer);
+  qs<HTMLInputElement>("#pipelineSearchInput")?.addEventListener("input", (event) => {
+    state.pipelineSearch = (event.currentTarget as HTMLInputElement).value.trim();
+    renderPipeline(state.deals);
+  });
+  qs<HTMLSelectElement>("#pipelineDueFilter")?.addEventListener("change", (event) => {
+    state.pipelineDueFilter = (event.currentTarget as HTMLSelectElement).value;
+    renderPipeline(state.deals);
+  });
+  qs<HTMLButtonElement>("#pipelineFilterReset")?.addEventListener("click", () => {
+    state.pipelineSearch = "";
+    state.pipelineDueFilter = "all";
+    setFieldValue("#pipelineSearchInput", "");
+    setFieldValue("#pipelineDueFilter", "all");
+    renderPipeline(state.deals);
+  });
+  qs<HTMLInputElement>("#pipelineClosedSearch")?.addEventListener("change", (event) => {
+    state.closedDealKeyword = (event.currentTarget as HTMLInputElement).value.trim();
+    state.closedDealPage = 1;
+    void refreshClosedDeals();
+  });
+  qs<HTMLSelectElement>("#pipelineClosedStatus")?.addEventListener("change", (event) => {
+    state.closedDealStatus = (event.currentTarget as HTMLSelectElement).value;
+    state.closedDealPage = 1;
+    void refreshClosedDeals();
+  });
+  qs<HTMLInputElement>("#pipelineClosedMonth")?.addEventListener("change", (event) => {
+    state.closedDealMonth = (event.currentTarget as HTMLInputElement).value;
+    state.closedDealPage = 1;
+    void refreshClosedDeals();
+  });
+  qs<HTMLButtonElement>("#pipelineClosedPrev")?.addEventListener("click", () => {
+    state.closedDealPage = Math.max(1, state.closedDealPage - 1);
+    void refreshClosedDeals();
+  });
+  qs<HTMLButtonElement>("#pipelineClosedNext")?.addEventListener("click", () => {
+    state.closedDealPage += 1;
+    void refreshClosedDeals();
+  });
+  qs<HTMLButtonElement>("#reminders .page-head .btn.primary")?.addEventListener("click", () => openReminderModal());
   qs<HTMLButtonElement>("#chooseCustomerImportButton")?.addEventListener("click", () => qs<HTMLInputElement>("#customerImportInput")?.click());
   qs<HTMLInputElement>("#customerImportInput")?.addEventListener("change", (event) => {
     const fileName = (event.currentTarget as HTMLInputElement).files?.[0]?.name || "未选择文件";
@@ -7879,11 +11034,10 @@ function installEvents() {
   qs<HTMLButtonElement>("#runCustomerImportButton")?.addEventListener("click", (event) => void importCustomersFromFile(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#downloadCustomerTemplateButton")?.addEventListener("click", downloadCustomerTemplate);
   qs<HTMLButtonElement>("#exportCustomersButton")?.addEventListener("click", () => void exportCustomers());
-  qsa<HTMLButtonElement>("#reports .page-head .btn").forEach((button) => {
-    if (button.textContent?.includes("导出")) button.addEventListener("click", () => void exportReport());
-    if (button.textContent?.includes("切换月份")) button.addEventListener("click", () => toast("已切换到 2026 年 6 月经营汇报"));
-    if (button.textContent?.includes("汇报备注")) button.addEventListener("click", openReportNoteModal);
-  });
+  qs<HTMLButtonElement>("#reportExportButton")?.addEventListener("click", () => void exportReport());
+  qs<HTMLButtonElement>("#reportRefreshButton")?.addEventListener("click", () => void refreshExecutiveReport(true));
+  qs<HTMLButtonElement>("#reportNoteButton")?.addEventListener("click", openReportNoteModal);
+  qs<HTMLButtonElement>("#reportRiskDetailButton")?.addEventListener("click", openReportRiskModal);
   qsa<HTMLButtonElement>("#knowledge .page-head .btn, #knowledge .section-head .btn").forEach((button) => {
     if (button.textContent?.includes("上传资料")) button.addEventListener("click", openKnowledgeModal);
     if (button.textContent?.includes("新建类目")) button.addEventListener("click", () => toast("资料类目已新增：新品资料"));
@@ -7953,9 +11107,45 @@ function installEvents() {
   });
   qs<HTMLInputElement>("#leadSearchInput")?.addEventListener("input", (event) => {
     state.leadSearch = (event.target as HTMLInputElement).value;
+    state.leadPage = 1;
     renderLeads();
   });
-  ["#leadFinderGoalInput", "#leadSearchModeInput", "#leadSearchDepthInput", "#leadSearchLanguageInput", "#leadValidationInput", "#leadProductKeywords", "#leadCountries", "#leadIndustryInput", "#leadCustomerTypes", "#leadExcludeKeywords"].forEach((selector) => {
+  qs<HTMLInputElement>("#waThreadSearch")?.addEventListener("input", (event) => {
+    state.waThreadSearch = (event.target as HTMLInputElement).value;
+    renderWhatsAppThreads();
+  });
+  qs<HTMLButtonElement>("#leadActiveTab")?.addEventListener("click", () => {
+    state.leadView = "active";
+    state.leadPage = 1;
+    state.leadStageFilter = "all";
+    closeLeadDrawer();
+    renderLeads();
+  });
+  qs<HTMLButtonElement>("#leadTrashTab")?.addEventListener("click", () => {
+    state.leadView = "trash";
+    state.leadPage = 1;
+    state.leadStageFilter = "all";
+    closeLeadDrawer();
+    renderLeads();
+  });
+  qs<HTMLSelectElement>("#leadIntentFilter")?.addEventListener("change", (event) => {
+    state.leadIntentFilter = (event.target as HTMLSelectElement).value;
+    state.leadPage = 1;
+    renderLeads();
+  });
+  qs<HTMLSelectElement>("#leadSourceFilter")?.addEventListener("change", (event) => {
+    state.leadSourceFilter = (event.target as HTMLSelectElement).value;
+    state.leadPage = 1;
+    renderLeads();
+  });
+  qs<HTMLSelectElement>("#leadFollowFilter")?.addEventListener("change", (event) => {
+    state.leadFollowFilter = (event.target as HTMLSelectElement).value;
+    state.leadPage = 1;
+    renderLeads();
+  });
+  qs<HTMLButtonElement>("#leadFilterReset")?.addEventListener("click", resetLeadFilters);
+  qs("#leadDrawerBackdrop")?.addEventListener("click", closeLeadDrawer);
+  ["#leadFinderGoalInput", "#leadProductKeywords", "#leadCountries", "#leadIndustryInput", "#leadCustomerTypes", "#leadExcludeKeywords"].forEach((selector) => {
     qs<HTMLElement>(selector)?.addEventListener("input", renderLeadFinderSearchLinks);
     qs<HTMLElement>(selector)?.addEventListener("change", renderLeadFinderSearchLinks);
   });
@@ -7983,14 +11173,26 @@ function installEvents() {
   qsa<HTMLButtonElement>("[data-lead-filter]").forEach((button) => {
     button.addEventListener("click", () => {
       state.leadFinderFilter = (button.dataset.leadFilter || "all") as AppState["leadFinderFilter"];
+      state.leadFinderPage = 1;
       renderLeadFinder(state.websiteOpportunities);
     });
+  });
+  qs<HTMLButtonElement>("#leadFinderPrevPage")?.addEventListener("click", () => {
+    state.leadFinderPage = Math.max(1, state.leadFinderPage - 1);
+    renderLeadFinder(state.websiteOpportunities);
+  });
+  qs<HTMLButtonElement>("#leadFinderNextPage")?.addEventListener("click", () => {
+    state.leadFinderPage += 1;
+    renderLeadFinder(state.websiteOpportunities);
   });
   qs<HTMLButtonElement>("#leadFinderAiConfigButton")?.addEventListener("click", () => activateNavView("ai-config", () => {
     qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
     toast("已打开 AI 模型配置，保存后回到智能搜客即可启用 AI 解析");
   }));
-  qs<HTMLInputElement>("#prospectSearchInput")?.addEventListener("input", renderProspectList);
+  qs<HTMLInputElement>("#prospectSearchInput")?.addEventListener("input", () => {
+    state.prospectPage = 1;
+    renderProspectList();
+  });
   qs<HTMLButtonElement>("#prospectOpenFinderButton")?.addEventListener("click", () => activateNavView("lead-finder", () => renderLeadFinder(state.websiteOpportunities)));
   qs<HTMLButtonElement>("#prospectRefreshButton")?.addEventListener("click", async () => {
     const result = await api<{ opportunities: WebsiteOpportunity[] }>("/api/tools/website-opportunities");
@@ -8002,14 +11204,34 @@ function installEvents() {
   qs<HTMLButtonElement>("#prospectGenerateMailButton")?.addEventListener("click", generateProspectMailDraft);
   qs<HTMLButtonElement>("#prospectPreviewMailButton")?.addEventListener("click", renderProspectMailPreview);
   qs<HTMLButtonElement>("#prospectSendMailButton")?.addEventListener("click", (event) => void sendProspectDevelopmentEmail(event.currentTarget as HTMLButtonElement));
-  qs<HTMLButtonElement>("#prospectTodoButton")?.addEventListener("click", (event) => void createSelectedProspectTodo(event.currentTarget as HTMLButtonElement));
-  qs<HTMLButtonElement>("#prospectSyncButton")?.addEventListener("click", (event) => void syncSelectedProspect(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectSyncButton")?.addEventListener("click", (event) => void syncSelectedProspects(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectMarkContactableButton")?.addEventListener("click", (event) => void updateProspectBatch("mark-contactable", state.selectedProspectIds, event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectExcludeButton")?.addEventListener("click", (event) => requestProspectExclusion(state.selectedProspectIds, event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectAssignButton")?.addEventListener("click", (event) => void updateProspectBatch("assign", state.selectedProspectIds, event.currentTarget as HTMLButtonElement));
+  qs<HTMLInputElement>("#prospectSelectPage")?.addEventListener("change", (event) => {
+    const checked = (event.currentTarget as HTMLInputElement).checked;
+    const pageRows = prospectFilteredRows().slice((state.prospectPage - 1) * PROSPECT_PAGE_SIZE, state.prospectPage * PROSPECT_PAGE_SIZE);
+    const pageIds = pageRows.map((item) => item.id);
+    state.selectedProspectIds = checked
+      ? [...new Set([...state.selectedProspectIds, ...pageIds])]
+      : state.selectedProspectIds.filter((id) => !pageIds.includes(id));
+    renderProspectList();
+  });
+  qs<HTMLButtonElement>("#prospectPrevPage")?.addEventListener("click", () => {
+    state.prospectPage = Math.max(1, state.prospectPage - 1);
+    renderProspectList();
+  });
+  qs<HTMLButtonElement>("#prospectNextPage")?.addEventListener("click", () => {
+    state.prospectPage += 1;
+    renderProspectList();
+  });
   ["#prospectMailTo", "#prospectMailSubject", "#prospectMailBody"].forEach((selector) => {
     qs<HTMLInputElement | HTMLTextAreaElement>(selector)?.addEventListener("input", renderProspectMailPreview);
   });
   qsa<HTMLButtonElement>("[data-prospect-filter]").forEach((button) => {
     button.addEventListener("click", () => {
       state.prospectFilter = (button.dataset.prospectFilter || "all") as AppState["prospectFilter"];
+      state.prospectPage = 1;
       renderProspectList();
     });
   });
@@ -8054,6 +11276,31 @@ function installEvents() {
   qs<HTMLButtonElement>("#newDocumentButton")?.addEventListener("click", openNewDocument);
   qs<HTMLButtonElement>("#saveDocumentButton")?.addEventListener("click", () => void saveTradeDocument());
   qs<HTMLButtonElement>("#exportDocumentPdfButton")?.addEventListener("click", () => void exportTradeDocumentPdf());
+  qs<HTMLButtonElement>("#documentSubmitApprovalButton")?.addEventListener("click", () => void submitDocumentApproval());
+  qs<HTMLButtonElement>("#documentApproveButton")?.addEventListener("click", () => void approveActiveDocument());
+  qs<HTMLButtonElement>("#documentRejectButton")?.addEventListener("click", () => void rejectActiveDocument());
+  qs<HTMLButtonElement>("#documentSendButton")?.addEventListener("click", () => void sendActiveDocument());
+  qs<HTMLButtonElement>("#documentNewRevisionButton")?.addEventListener("click", () => void createDocumentRevision());
+  qs<HTMLSelectElement>("#docCustomerInput")?.addEventListener("change", (event) => {
+    const customerId = (event.currentTarget as HTMLSelectElement).value;
+    const dealSelect = qs<HTMLSelectElement>("#docDealInput");
+    if (dealSelect) {
+      const deals = state.deals.filter((deal) => !customerId || deal.customerId === customerId);
+      dealSelect.innerHTML = `<option value="">未关联商机</option>${deals.map((deal) => `<option value="${escapeHtml(deal.id)}">${escapeHtml(deal.title)} · ${escapeHtml(deal.stage)}</option>`).join("")}`;
+      dealSelect.value = "";
+    }
+    applyDocumentCustomerDefaults(customerId);
+  });
+  qs<HTMLSelectElement>("#docDealInput")?.addEventListener("change", (event) => {
+    const dealId = (event.currentTarget as HTMLSelectElement).value;
+    const deal = state.deals.find((item) => item.id === dealId);
+    if (!deal) return;
+    const customerSelect = qs<HTMLSelectElement>("#docCustomerInput");
+    if (customerSelect) customerSelect.value = deal.customerId || "";
+    applyDocumentCustomerDefaults(deal.customerId || "");
+    const currency = qs<HTMLSelectElement>("#docCurrencyInput");
+    if (currency && deal.currency) currency.value = deal.currency;
+  });
   qs<HTMLButtonElement>("#addDocumentItemButton")?.addEventListener("click", addDocumentItem);
   qs<HTMLButtonElement>("#refreshDocumentPreviewButton")?.addEventListener("click", () => renderDocumentPreview(collectDocumentDraft()));
   qsa<HTMLButtonElement>("#documentTypeTabs button").forEach((button) => {
@@ -8087,19 +11334,46 @@ function installEvents() {
     if (button.textContent?.includes("导出复盘")) button.addEventListener("click", () => toast("问题复盘已生成导出任务"));
   });
   qs<HTMLButtonElement>("#problemStatusButton")?.addEventListener("click", () => void advanceProblemStatus());
-  qsa<HTMLButtonElement>("#memos .page-head .btn").forEach((button) => {
-    if (button.textContent?.includes("新增备忘")) button.addEventListener("click", openMemoModal);
-    if (button.textContent?.includes("只看置顶")) button.addEventListener("click", () => {
-      const pinned = state.memos.filter((memo) => memo.pinned && !memo.archived);
-      renderMemos(pinned.length ? pinned : state.memos);
-      toast(pinned.length ? `已筛出 ${pinned.length} 条置顶备忘` : "暂无置顶备忘");
+  qs<HTMLButtonElement>("#memoNewButton")?.addEventListener("click", openMemoModal);
+  qs<HTMLInputElement>("#memoSearchInput")?.addEventListener("input", (event) => {
+    state.memoSearch = (event.currentTarget as HTMLInputElement).value;
+    memoMobileDetailOpen = false;
+    renderMemos();
+  });
+  qsa<HTMLButtonElement>("[data-memo-status]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await saveCurrentMemoDraft();
+      state.memoStatus = (button.dataset.memoStatus as AppState["memoStatus"]) || "active";
+      state.memoPinnedOnly = state.memoStatus === "deleted" ? false : state.memoPinnedOnly;
+      state.selectedMemoId = null;
+      memoMobileDetailOpen = false;
+      renderMemos();
     });
+  });
+  qs<HTMLInputElement>("#memoPinnedOnly")?.addEventListener("change", (event) => {
+    state.memoPinnedOnly = (event.currentTarget as HTMLInputElement).checked;
+    state.selectedMemoId = null;
+    memoMobileDetailOpen = false;
+    renderMemos();
+  });
+  qs<HTMLButtonElement>("#memoBackButton")?.addEventListener("click", async () => {
+    await saveCurrentMemoDraft();
+    memoMobileDetailOpen = false;
+    renderMemos();
+  });
+  qs<HTMLButtonElement>("#memoSaveState")?.addEventListener("click", () => {
+    if (memoDirty) void saveCurrentMemoDraft();
   });
   qs<HTMLButtonElement>("#memoPinButton")?.addEventListener("click", () => {
     const memo = state.memos.find((item) => item.id === state.selectedMemoId);
     if (memo) void patchSelectedMemo({ pinned: !memo.pinned });
   });
   qs<HTMLButtonElement>("#memoArchiveButton")?.addEventListener("click", () => {
+    const deletedMemo = state.deletedMemos.find((item) => item.id === state.selectedMemoId);
+    if (deletedMemo) {
+      void restoreSelectedMemo();
+      return;
+    }
     const memo = state.memos.find((item) => item.id === state.selectedMemoId);
     if (memo) void patchSelectedMemo({ archived: !memo.archived });
   });
@@ -8156,11 +11430,21 @@ function openSecondaryDropdownForView(view: string) {
 
 function activateNavView(view: string, after?: () => void) {
   if (!qs<HTMLElement>(`#${CSS.escape(view)}`)) view = "dashboard";
+  const activeView = qs<HTMLElement>(".view.active")?.id;
+  if (activeView === "memos" && view !== "memos" && memoDirty) void saveCurrentMemoDraft();
+  if (view !== "leads") closeLeadDrawer();
+  if (view !== "customers") closeCustomerDrawer();
+  if (view !== "pipeline") closeDealDrawer();
   rememberWorkspaceTab(view);
   qsa<HTMLElement>(".sidebar button[data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   openSecondaryDropdownForView(view);
   qsa<HTMLElement>(".view").forEach((node) => node.classList.toggle("active", node.id === view));
   renderTopbarForView(view);
+  if (view === "whatsapp") renderWhatsApp();
+  if (view === "reports") {
+    if (state.user) state.reportNote = localStorage.getItem(`gj_report_note_${state.user.id}`) || "";
+    void refreshExecutiveReport();
+  }
   window.scrollTo({ top: 0, behavior: "smooth" });
   after?.();
 }
@@ -8190,7 +11474,7 @@ function renderTopbarForView(view: string) {
 
 function renderTopbarStats() {
   const todoCount = activeTodos(state.todos).filter((todo) => !todo.done).length;
-  const reminderCount = state.reminders.filter((reminder) => reminder.status !== "done").length;
+  const reminderCount = state.todos.filter((todo) => todo.reminderRuleId && !todo.done).length;
   const todoNode = qs<HTMLElement>("#topTodoCount");
   const reminderNode = qs<HTMLElement>("#topReminderCount");
   if (todoNode) todoNode.textContent = String(todoCount);
@@ -8269,16 +11553,22 @@ async function restoreSession() {
   const rawUser = localStorage.getItem(storage.user);
   const token = localStorage.getItem(storage.token);
   if (!rawUser || !token) return;
+  let user: User;
   try {
-    const { user } = await api<{ user: User }>("/api/auth/me");
-    localStorage.setItem(storage.user, JSON.stringify(user));
-    state.user = user;
-    applyAuthedUser(user);
-    document.body.classList.add("is-authenticated");
-    await refreshAll(user);
+    ({ user } = await api<{ user: User }>("/api/auth/me"));
   } catch {
     localStorage.removeItem(storage.token);
     localStorage.removeItem(storage.user);
+    return;
+  }
+  localStorage.setItem(storage.user, JSON.stringify(user));
+  state.user = user;
+  applyAuthedUser(user);
+  document.body.classList.add("is-authenticated");
+  try {
+    await refreshAll(user);
+  } catch (error) {
+    toast(error instanceof Error ? `数据加载失败：${error.message}` : "数据加载失败，请稍后重试", "error");
   }
 }
 

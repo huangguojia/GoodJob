@@ -44,6 +44,17 @@ CREATE TABLE customers (
   INDEX idx_customers_team(team_id)
 );
 
+CREATE TABLE customer_activities (
+  id VARCHAR(64) PRIMARY KEY,
+  customer_id VARCHAR(64) NOT NULL,
+  type VARCHAR(30) DEFAULT 'note',
+  content TEXT,
+  operator_id VARCHAR(64) DEFAULT '',
+  next_reminder VARCHAR(100) DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_customer_activities_customer(customer_id)
+);
+
 CREATE TABLE leads (
   id VARCHAR(64) PRIMARY KEY,
   company VARCHAR(200) NOT NULL,
@@ -69,6 +80,11 @@ CREATE TABLE leads (
   remark TEXT,
   converted_customer_id VARCHAR(64) DEFAULT '',
   converted_deal_id VARCHAR(64) DEFAULT '',
+  deleted_at DATETIME NULL,
+  deleted_reason VARCHAR(255) DEFAULT '',
+  deleted_by VARCHAR(64) DEFAULT '',
+  purge_at DATETIME NULL,
+  status_before_delete VARCHAR(20) DEFAULT '',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_leads_owner(owner_id),
   INDEX idx_leads_team(team_id),
@@ -99,7 +115,7 @@ CREATE TABLE lead_source_events (
   raw_payload JSON,
   owner_id VARCHAR(64) NOT NULL,
   team_id VARCHAR(64) NOT NULL,
-  UNIQUE KEY uniq_lead_source_external (team_id, channel, external_id),
+  UNIQUE KEY uniq_lead_source_external (owner_id, channel, external_id),
   INDEX idx_lead_source_events_lead(lead_id)
 );
 
@@ -254,6 +270,9 @@ CREATE TABLE website_opportunities (
   last_development_email_at DATETIME NULL,
   last_development_email_subject VARCHAR(255) DEFAULT '',
   last_development_email_to VARCHAR(180) DEFAULT '',
+  verified_at DATETIME NULL,
+  status_changed_at DATETIME NULL,
+  excluded_reason VARCHAR(255) DEFAULT '',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_website_opps_owner(owner_id),
   INDEX idx_website_opps_team(team_id)
