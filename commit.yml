@@ -2,67 +2,94 @@
 branches: {
   }
 fileChange:
+  /WHATSAPP_BINDING_GUIDE.md:
+    newFile: !uuid '8ea93d52558ab07b3b347a0a168edb6d5168d15b'
+    oldFile: null
+  /WHATSAPP_IMPLEMENTATION_SUMMARY.md:
+    newFile: !uuid 'ab73a198ab63b515c42e597c5a25813ec2961f5f'
+    oldFile: null
+  /WHATSAPP_INTEGRATION_DESIGN.md:
+    newFile: !uuid '0281466af0884e7da50c918b08a5c072986f4e94'
+    oldFile: null
+  /WHATSAPP_README.md:
+    newFile: !uuid '35f1839191a4aa11aa67794d4e746fd49b8ef419'
+    oldFile: null
   /backend:
-    newFile: !uuid 'ca88b48fc72160ad1a0bfe8fefdc540836f7308d'
-    oldFile: !uuid '45ba4e26ad5fc2920dfea4a59f3cad2bb20ea260'
+    newFile: !uuid 'b4926bc82f053bb1a52846fdb8f86c3d9eefbd41'
+    oldFile: !uuid 'ca88b48fc72160ad1a0bfe8fefdc540836f7308d'
+  /backend/package.json:
+    newFile: !uuid 'd116de1bed94efe559f741f407c028f3cdc67d89'
+    oldFile: !uuid '91c4de0362cac18cdcd0615d25044b6e9303e639'
   /backend/schema.mysql.sql:
-    newFile: !uuid 'e1a75706a487c9b38ff8e4132db30d3c7e3d2e8b'
-    oldFile: !uuid '2506bcffffacd803cbae4ccc79e27a74fbe8ad96'
+    newFile: !uuid 'a75128a9a1e16116505d2713544ae7a99c7bdd5f'
+    oldFile: !uuid 'e1a75706a487c9b38ff8e4132db30d3c7e3d2e8b'
   /backend/src:
-    newFile: !uuid '6360621b6611613532e65e2db79df89c07a591cb'
-    oldFile: !uuid 'e996d11a380aee91364ef1b2ff9dbc54fb8108dd'
+    newFile: !uuid '84f6e7ab08bffdb68fc6afb1b3dfd83f7bf4954b'
+    oldFile: !uuid '6360621b6611613532e65e2db79df89c07a591cb'
   /backend/src/data.ts:
-    newFile: !uuid 'b0075adc4dfbaac1d0069d51a5554cc86ad39285'
-    oldFile: !uuid '4d4914190b5955d66bca2602df2d5f7acbfec87d'
+    newFile: !uuid 'd155003b4da1dd1b6312d46573f2ad5edefd0791'
+    oldFile: !uuid 'b0075adc4dfbaac1d0069d51a5554cc86ad39285'
   /backend/src/mysql-store.ts:
-    newFile: !uuid '631c54262801e6042be00520aad63cf4d26f507d'
-    oldFile: !uuid '003487cb3293f77acabcf37bc8805e53212e6433'
+    newFile: !uuid '91c37945019f97c8843a00c47cecee4b7bba9184'
+    oldFile: !uuid '631c54262801e6042be00520aad63cf4d26f507d'
   /backend/src/self-test.ts:
-    newFile: !uuid 'e031e6832af74cc5cdb2e8c2d0ed7315fa83c358'
-    oldFile: !uuid 'fe537417dbb89a8f96bc9c24a289d2a4e7648b51'
+    newFile: !uuid '2564c1a6fdfee4bbfce32213592793275e6f823a'
+    oldFile: !uuid 'e031e6832af74cc5cdb2e8c2d0ed7315fa83c358'
   /backend/src/server.ts:
-    newFile: !uuid '97072605595c62ce1c0ec324fb43202d724f48c5'
-    oldFile: !uuid 'f4d4b5a080d68c3f3c99142c671bfd5d48dba422'
+    newFile: !uuid 'f88015cc089514ce00c6d9461b45bfee53cba07c'
+    oldFile: !uuid '97072605595c62ce1c0ec324fb43202d724f48c5'
   /backend/src/store.ts:
-    newFile: !uuid 'a4718f2a2f3df46bcad4bc6f79ff3176be0eb747'
-    oldFile: !uuid '8129a0364a835aac3873bd19da8d8477e36b0958'
+    newFile: !uuid 'b250103fd2e86c6a6505636402af8c961e73a402'
+    oldFile: !uuid 'a4718f2a2f3df46bcad4bc6f79ff3176be0eb747'
   /backend/src/types.ts:
-    newFile: !uuid 'bf5fc0ff1131970ba43374522894330d44aaefb1'
-    oldFile: !uuid '4a7472cdb460e444b0580b1678e1989da21cefa1'
-  /deploy-ubuntu.sh:
-    newFile: !uuid '26f7dfe712bea527f3262169cb75f1bc914280cd'
+    newFile: !uuid '2b9396fd21b0ca63258c3f9684b2d0ea5391dea3'
+    oldFile: !uuid 'bf5fc0ff1131970ba43374522894330d44aaefb1'
+  /backend/src/whatsapp-service.ts:
+    newFile: !uuid '1410add9efddb6bb55bf3f9c134c9b07330d4fe0'
+    oldFile: null
+  /backend/update-db.mjs:
+    newFile: !uuid 'b3f13dc682cd6f0509b3eb93ae461cafedc32306'
     oldFile: null
   /frontend:
-    newFile: !uuid '9be57c24dc8bf486789dd1929e66e760e1f41b20'
-    oldFile: !uuid '13201922349df5a98e60087693a3598f892b79e7'
+    newFile: !uuid 'bd12eff302702ced78f1562cffa97736268a465b'
+    oldFile: !uuid '9be57c24dc8bf486789dd1929e66e760e1f41b20'
   /frontend/index.html:
-    newFile: !uuid '19d47a254b272f6f0e997fad9cae56d3dc243fd5'
-    oldFile: !uuid '7b99cc26a3a664dae480d53ef4fe6a6c7071fa90'
+    newFile: !uuid '2739b837a67d2f4bfa9e135a944eff2b209bc72e'
+    oldFile: !uuid '19d47a254b272f6f0e997fad9cae56d3dc243fd5'
+  /frontend/package.json:
+    newFile: !uuid '9b3c848e1a88ae44da8dae98c74c15dc26be460b'
+    oldFile: !uuid '5328c20bda3854cfac2f4cae859705840fbbd32b'
+  /frontend/playwright.config.ts:
+    newFile: !uuid '362e1efd6059ff9e08227e5fbba40ec77269f257'
+    oldFile: !uuid 'bbdaca5651220984350ea83c45cf56fe33563dfe'
   /frontend/src:
-    newFile: !uuid '61af97f9d288dc6f34a7105e1a90c05a148010a0'
-    oldFile: !uuid 'd43ae0bbaf7365cb22eb4b67537fba872c71ae4f'
+    newFile: !uuid '15bf0e9eecf23992c5323c301acd42127b0e1f06'
+    oldFile: !uuid '61af97f9d288dc6f34a7105e1a90c05a148010a0'
   /frontend/src/api.ts:
-    newFile: !uuid '7374bd81e090b9f15c3d9b166b97e29eca0b4c0e'
-    oldFile: !uuid '04f55c4c992c74e4eacd3e8dd10c768c6ac33538'
+    newFile: !uuid '0030c6b7453c43c49ee7a47a60477bdec3610595'
+    oldFile: !uuid '7374bd81e090b9f15c3d9b166b97e29eca0b4c0e'
   /frontend/src/main.tsx:
-    newFile: !uuid 'ae93d9c30edaec13201fefc8147169650a5b6af9'
-    oldFile: !uuid 'dd8a40af58eaad816c5e115d5a541a7c319c79d7'
+    newFile: !uuid 'da6f19476201e58f3ef83778a88953a1f68a9950'
+    oldFile: !uuid 'ae93d9c30edaec13201fefc8147169650a5b6af9'
   /frontend/src/prototype-api.ts:
-    newFile: !uuid '346bf604aac6a7b3e18c45e7ba574c4d5cc34320'
-    oldFile: !uuid 'cf53ced0d986a6381fb2ee8a1de9231852631131'
+    newFile: !uuid 'aa9031363ac3a0e41d70d6d94e655c41a9d56ed7'
+    oldFile: !uuid '346bf604aac6a7b3e18c45e7ba574c4d5cc34320'
   /frontend/src/self-test.ts:
-    newFile: !uuid 'a8bc2c562f4ee62caf9da543886bf7b5d9bef59b'
-    oldFile: !uuid 'ae456f45d99308a74614d4aabd38393e3f66c205'
-  /frontend/src/styles.css:
-    newFile: !uuid 'd935cd556c5d67bdee7766a7c1c72dbb4bb56ca7'
-    oldFile: !uuid '56c2ffe041b5e17ba4a717d6459764070a3f5945'
+    newFile: !uuid 'b7c1166da955f818f98b71ec76f35f6372f2799d'
+    oldFile: !uuid 'a8bc2c562f4ee62caf9da543886bf7b5d9bef59b'
   /frontend/tests:
-    newFile: !uuid 'e5c21cd2fb85f453940191d514b4a351890cc2da'
-    oldFile: !uuid 'df6cc0251f640931e2b17ec46d42786435a6c938'
+    newFile: !uuid '13db7b94f263522ccff91c514b150ad6c7f66e5b'
+    oldFile: !uuid 'e5c21cd2fb85f453940191d514b4a351890cc2da'
   /frontend/tests/crm.spec.ts:
-    newFile: !uuid '653fe9747f7dcb4a4a5edf2dbb38d7ddd49e328c'
-    oldFile: !uuid 'f5851018bb57203f86f1a84f2096eb86f85d80ee'
-gitCommitId: !uuid 'fcc09b97d1581343d819cf5a22898c3274f49d31'
+    newFile: !uuid '4b3b7bb014625d82953953675dae6527cc48634a'
+    oldFile: !uuid '653fe9747f7dcb4a4a5edf2dbb38d7ddd49e328c'
+  /frontend/vite.config.ts:
+    newFile: !uuid '136352fd3aa7c0840886aed53ef564f95d45cb8d'
+    oldFile: !uuid '77434a2482d78ed64dce5c22f4202d601fa1f374'
+  /package-lock.json:
+    newFile: !uuid '61a32f0a1cc3f8dfc4bacefe07a829b38b26f0a4'
+    oldFile: !uuid '54fab628cb4734b205a6da93e87b409b7f3ea7c0'
+gitCommitId: !uuid '45333be7a79699b74fa318222b6b007e95268ae9'
 renames: {
   }
-revisionId: 43
+revisionId: 44
