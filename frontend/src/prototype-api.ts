@@ -5214,10 +5214,58 @@ async function exportCommission() {
       fileType: "xlsx"
     })
   });
-  const sheet = XLSX.utils.json_to_sheet(result.rows);
+  const detailColumns = [
+    ["month", "计提月份"],
+    ["ownerName", "业务员"],
+    ["customerName", "客户名称"],
+    ["productName", "产品名称"],
+    ["quantity", "数量"],
+    ["unitPrice", "单价"],
+    ["currency", "原币币种"],
+    ["salesAmount", "原币金额"],
+    ["exchangeRate", "结算汇率"],
+    ["exchangeRateDate", "汇率日期"],
+    ["exchangeRateSource", "汇率来源"],
+    ["settlementCurrency", "结算币种"],
+    ["settlementAmount", "计提基数"],
+    ["basisType", "计提依据"],
+    ["basisDate", "计提日期"],
+    ["status", "记录状态"],
+    ["edited", "是否修正"],
+    ["recordCommission", "提成额"],
+    ["calculationStatus", "提成单状态"],
+    ["editNote", "修正说明"]
+  ] as const;
+  const summaryColumns = [
+    ["month", "计提月份"],
+    ["ownerName", "业务员"],
+    ["settlementCurrency", "结算币种"],
+    ["salesAmount", "计提基数"],
+    ["autoCommission", "自动提成"],
+    ["manualAdjustment", "人工调整"],
+    ["finalCommission", "最终提成"],
+    ["status", "提成单状态"],
+    ["version", "版本"]
+  ] as const;
+  const translateExportValue = (key: string, value: unknown) => {
+    const labels: Record<string, Record<string, string>> = {
+      exchangeRateSource: { pending: "待确认", finance: "财务汇率", manual: "手工录入" },
+      basisType: { receipt: "实际回款", deal_amount: "成交金额" },
+      status: { draft: "待确认", confirmed: "已确认", reviewed: "已复核", locked: "已锁定", calculated: "已计算", pending: "待计算" },
+      calculationStatus: { draft: "草稿", calculated: "已计算", reviewed: "已复核", locked: "已锁定", pending: "待计算" },
+      edited: { true: "是", false: "否" }
+    };
+    return labels[key]?.[String(value)] ?? value ?? "";
+  };
+  const toChineseRows = (rows: Record<string, unknown>[], columns: readonly (readonly [string, string])[]) =>
+    rows.map((row) => Object.fromEntries(columns.map(([key, label]) => [label, translateExportValue(key, row[key])])));
+  const detailSheet = XLSX.utils.json_to_sheet(toChineseRows(result.rows, detailColumns));
+  const summarySheet = XLSX.utils.json_to_sheet(toChineseRows(result.summaryRows, summaryColumns));
+  detailSheet["!cols"] = detailColumns.map(([, label]) => ({ wch: Math.max(label.length * 2 + 2, 12) }));
+  summarySheet["!cols"] = summaryColumns.map(([, label]) => ({ wch: Math.max(label.length * 2 + 2, 12) }));
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(result.summaryRows), "人员月度汇总");
-  XLSX.utils.book_append_sheet(workbook, sheet, "逐笔计提明细");
+  XLSX.utils.book_append_sheet(workbook, summarySheet, "人员月度汇总");
+  XLSX.utils.book_append_sheet(workbook, detailSheet, "逐笔计提明细");
   XLSX.writeFile(workbook, `GoodJob-提成对账-${state.commissionMonth}.xlsx`);
   toast(`已导出 ${result.exportJob.rows} 行提成对账数据`);
 }

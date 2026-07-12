@@ -344,6 +344,24 @@ MySQL 核心表：
 - PATCH /api/tools/ocr/jobs/{id}/fields
 - POST /api/tools/ocr/jobs/{id}/sync-lead
 
+### 7.1 Swagger API 调试
+
+部署后访问：
+
+```text
+https://你的域名/api/docs/
+```
+
+Swagger 文档默认启用，但必须先使用管理员或超级管理员账号登录 CRM。未登录用户和普通业务员无法读取文档页面或 OpenAPI JSON。
+
+- 页面入口：`/api/docs/`
+- OpenAPI JSON：`/api/docs/openapi.json`
+- 浏览器 Cookie 调试：自动携带登录会话，写请求自动附加 CSRF Token
+- Bearer 调试：调用 `/api/auth/login` 取得 `token`，在 Swagger 的 Authorize 中填写
+- 关闭文档：部署时设置 `ENABLE_API_DOCS=false`
+
+生产环境不要绕过管理员限制，也不要将管理员 Token 或生产密码写入 Swagger 示例、代码或 SVN。
+
 ## 8. 可用性与美观确认
 
 已按以下标准设计：

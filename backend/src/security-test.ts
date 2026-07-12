@@ -80,6 +80,12 @@ try {
   }
   results.cookieSession = cookieRead.response.status;
 
+  const docsWithoutLogin = await request("/api/docs/openapi.json");
+  await expectStatus("API docs without login", docsWithoutLogin.response.status, 401);
+  const docsAsSales = await request("/api/docs/openapi.json", { headers: bearer(shirley.json.token) });
+  await expectStatus("API docs as salesperson", docsAsSales.response.status, 403);
+  results.apiDocsProtected = true;
+
   const noCsrfWrite = await request("/api/todos", {
     method: "POST",
     headers: { cookie: shirley.cookies },
@@ -215,6 +221,44 @@ try {
   results.ssrfBlocked = true;
 
   const admin = await login("admin@goodjob.com", "goodjob123");
+  const docsAsAdmin = await request("/api/docs/openapi.json", { headers: bearer(admin.json.token) });
+  if (!docsAsAdmin.response.ok || docsAsAdmin.json.openapi !== "3.0.3") {
+    throw new Error("administrator must be able to read the OpenAPI document");
+  }
+  const documentedOperations = Object.values(docsAsAdmin.json.paths || {}).reduce(
+    (total: number, pathItem) => total + Object.keys(pathItem as object).filter((method) =>
+      ["get", "post", "put", "patch", "delete"].includes(method)
+    ).length,
+    0
+  );
+  const routeLayers: Array<{ route?: { path?: string; methods?: Record<string, boolean> } }> = ((app as typeof app & {
+    _router?: { stack?: Array<{ route?: { path?: string; methods?: Record<string, boolean> } }> };
+  })._router?.stack || []);
+  const registeredOperations = routeLayers.reduce((total: number, layer) => {
+    if (typeof layer.route?.path !== "string"
+      || !layer.route.path.startsWith("/api/")
+      || layer.route.path.startsWith("/api/docs")) return total;
+    return total + Object.entries(layer.route.methods || {})
+      .filter(([method, enabled]) => enabled && ["get", "post", "put", "patch", "delete"].includes(method))
+      .length;
+  }, 0);
+  if (documentedOperations !== registeredOperations) {
+    throw new Error(`OpenAPI coverage mismatch: ${documentedOperations}/${registeredOperations}`);
+  }
+  const docsUi = await fetch(`${baseUrl}/api/docs/`, {
+    headers: { authorization: `Bearer ${admin.json.token}` }
+  });
+  const docsHtml = await docsUi.text();
+  const docsInit = await fetch(`${baseUrl}/api/docs/swagger-ui-init.js`, {
+    headers: { authorization: `Bearer ${admin.json.token}` }
+  });
+  const docsInitScript = await docsInit.text();
+  if (!docsUi.ok || !docsHtml.includes("GoodJob CRM API 调试")
+    || !docsInit.ok || !docsInitScript.includes("X-CSRF-Token")) {
+    throw new Error("Swagger UI or automatic CSRF interceptor missing");
+  }
+  results.apiDocsOperations = documentedOperations;
+
   const tempEmail = `security-${Date.now()}@example.com`;
   const tempPassword = "Security-old-123";
   const createdAccount = await request("/api/accounts", {

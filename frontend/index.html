@@ -9595,11 +9595,12 @@
 
     .commission-kpis {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
     }
 
     .commission-kpi {
+      min-width: 0;
       min-height: 58px;
       padding: 9px 11px;
       border: 1px solid #dbe5f1;
@@ -9620,8 +9621,9 @@
       display: block;
       margin-top: 5px;
       color: #111d32;
-      font-size: 21px;
-      line-height: 1;
+      font-size: 17px;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
     }
 
     .commission-actions {
@@ -9760,7 +9762,7 @@
 
     .commission-detail-summary {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
       margin-bottom: 12px;
     }
@@ -9858,16 +9860,22 @@
 
     .commission-calc-metrics {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 6px;
     }
 
+    .commission-calc-metrics span:last-child {
+      grid-column: 1 / -1;
+    }
+
     .commission-calc-metrics span {
-      padding: 7px;
+      min-width: 0;
+      padding: 9px 10px;
       border-radius: 7px;
       background: #f3f7fc;
       color: #5f6f85;
-      font-size: 10px;
+      font-size: 11px;
+      line-height: 1.35;
       font-weight: 800;
     }
 
@@ -9875,8 +9883,10 @@
       display: block;
       margin-top: 3px;
       color: #101b2f;
-      font-size: 13px;
+      font-size: 12px;
+      line-height: 1.35;
       font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere;
     }
 
     .commission-rule-row p {
