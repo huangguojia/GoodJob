@@ -178,6 +178,7 @@ CREATE TABLE knowledge_assets (
   category VARCHAR(100),
   status VARCHAR(40),
   owner_id VARCHAR(64),
+  team_id VARCHAR(64) DEFAULT 'all',
   version VARCHAR(40),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -192,6 +193,8 @@ CREATE TABLE exams (
   duration_minutes INT DEFAULT 20,
   pass_score INT DEFAULT 80,
   target_role VARCHAR(40) DEFAULT 'sales',
+  owner_id VARCHAR(64) DEFAULT '',
+  team_id VARCHAR(64) DEFAULT 'all',
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -207,6 +210,8 @@ CREATE TABLE exam_questions (
   explanation TEXT,
   category VARCHAR(100),
   difficulty VARCHAR(20),
+  owner_id VARCHAR(64) DEFAULT '',
+  team_id VARCHAR(64) DEFAULT 'all',
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_exam_questions_exam_id (exam_id)
 );

@@ -11,6 +11,8 @@ echarts.use([LineChart, GridComponent, TooltipComponent, SVGRenderer]);
 
 let dashboardLeadFunnelChart: ReturnType<typeof echarts.init> | null = null;
 let dashboardLeadFunnelResizeObserver: ResizeObserver | null = null;
+let dashboardRefreshPromise: Promise<void> | null = null;
+const DASHBOARD_LIVE_REFRESH_MS = 10_000;
 
 interface User {
   id: string;
@@ -1415,7 +1417,7 @@ function applyAuthedUser(user: User) {
   const profileName = `${user.name} / ${roleLabel[user.role]}`;
   document.body.dataset.role = user.role;
   qs("#scopeUser")!.textContent = profileName;
-  qs("#scopeText")!.textContent = user.role === "sales" ? "仅本人业务与本人待办" : user.role === "manager" ? "团队业务数据，本人待办私有" : user.role === "admin" ? "全局业务数据、账号管理，本人待办私有" : "全局业务数据、最高账号权限，本人待办私有";
+  qs("#scopeText")!.textContent = user.role === "sales" ? "仅本人业务与本人待办" : user.role === "manager" ? "本团队业务数据，本人待办私有" : user.role === "admin" ? "本团队业务数据、团队账号管理，本人待办私有" : "全局业务数据、最高账号权限，本人待办私有";
   qs("#currentAvatar")!.textContent = user.avatar;
   const topUserName = qs<HTMLElement>("#topUserName");
   const topUserRole = qs<HTMLElement>("#topUserRole");
@@ -1441,7 +1443,7 @@ function syncTrainingManagementUi(user = state.user) {
 function roleScopeText(user: User) {
   if (user.role === "sales") return "仅本人业务与本人待办";
   if (user.role === "manager") return "团队业务数据，本人待办私有";
-  if (user.role === "admin") return "全局业务数据、账号管理，本人待办私有";
+  if (user.role === "admin") return "本团队业务数据、团队账号管理，本人待办私有";
   return "全局业务数据、最高账号权限，本人待办私有";
 }
 
@@ -1491,7 +1493,11 @@ function renderProfile(user = state.user) {
     emailBadge.className = `badge ${mailReady ? "green" : "amber"}`;
     emailBadge.textContent = mailReady ? "发件邮箱已绑定" : "发件邮箱待绑定";
   }
-  qs<HTMLElement>("#profileScopeMetric")!.textContent = user.role === "sales" ? "本人业务" : user.role === "manager" ? "团队业务" : "全局业务";
+  qs<HTMLElement>("#profileScopeMetric")!.textContent = user.role === "sales"
+    ? "本人业务"
+    : user.role === "super_admin"
+      ? "全局业务"
+      : "团队业务";
   qs<HTMLElement>("#profileRoleMetric")!.textContent = roleLabel[user.role];
   qs<HTMLElement>("#profileMailMetric")!.textContent = mailReady && user.smtpHost && user.hasSmtpPassword ? "可真实发信" : mailReady ? "待配SMTP" : "未绑定";
   qs<HTMLElement>("#profileLoginEmailText")!.textContent = user.email;
@@ -1830,22 +1836,48 @@ function renderDashboardCache(user: User) {
 }
 
 async function refreshDashboardOnly() {
-  if (!state.user) return;
-  const [summary, todos, customers] = await Promise.all([
-    api<DashboardSummary>("/api/dashboard/summary"),
-    api<{ todos: Todo[] }>("/api/todos"),
-    api<{ customers: Customer[] }>("/api/customers")
-  ]);
-  state.summary = summary;
-  state.todos = todos.todos;
-  state.customers = customers.customers;
-  writeDashboardCache(state.user, summary, todos.todos, customers.customers);
-  renderDashboard(summary, todos.todos, customers.customers);
-  renderTopbarStats();
+  const user = state.user;
+  if (!user) return;
+  if (dashboardRefreshPromise) return dashboardRefreshPromise;
+  dashboardRefreshPromise = (async () => {
+    const [summary, todos, customers] = await Promise.all([
+      api<DashboardSummary>("/api/dashboard/summary"),
+      api<{ todos: Todo[] }>("/api/todos"),
+      api<{ customers: Customer[] }>("/api/customers")
+    ]);
+    if (state.user?.id !== user.id) return;
+    state.summary = summary;
+    state.todos = todos.todos;
+    state.customers = customers.customers;
+    writeDashboardCache(user, summary, todos.todos, customers.customers);
+    renderDashboard(summary, todos.todos, customers.customers);
+    renderTopbarStats();
+  })();
+  try {
+    await dashboardRefreshPromise;
+  } finally {
+    dashboardRefreshPromise = null;
+  }
+}
+
+function requestDashboardRefresh() {
+  void refreshDashboardOnly().catch(() => {
+    // Background refresh failures should not interrupt the current workflow.
+  });
+}
+
+function refreshVisibleDashboard() {
+  if (!state.user || document.visibilityState !== "visible") return;
+  if (qs<HTMLElement>(".view.active")?.id !== "dashboard") return;
+  requestDashboardRefresh();
 }
 
 function renderDashboard(summary: DashboardSummary, todos: Todo[], customers: Customer[], fromCache = false) {
-  const roleBusinessScope = state.user?.role === "manager" ? "团队业务" : state.user && ["admin", "super_admin"].includes(state.user.role) ? "全局业务" : "本人业务";
+  const roleBusinessScope = state.user?.role === "super_admin"
+    ? "全局业务"
+    : state.user && ["manager", "admin"].includes(state.user.role)
+      ? "团队业务"
+      : "本人业务";
   const scopeLabels = summary.scopeLabels || {
     business: roleBusinessScope,
     todos: "本人待办"
@@ -3286,6 +3318,7 @@ async function reloadLeads() {
   state.leads = active.leads;
   state.leadTrash = trash.leads;
   renderLeads();
+  await refreshDashboardOnly();
 }
 
 function openLeadTrashModal(lead: Lead) {
@@ -7819,7 +7852,7 @@ async function renderAccounts(user: User) {
   state.accounts = accounts;
   tbody.innerHTML = accounts.map((account) => {
     const status = (account as User & { status?: string }).status === "disabled" ? "停用" : "启用";
-    const disableAllowed = account.id !== user.id && (user.role === "super_admin" || account.role !== "super_admin");
+    const disableAllowed = canManageRoleInUi(account);
     return `<tr data-account-id="${escapeHtml(account.id)}"><td><div class="company"><span class="avatar">${escapeHtml(account.avatar)}</span><div><b>${escapeHtml(account.name)}</b><span>${escapeHtml(account.email)}</span></div></div></td><td>${badge(roleLabel[account.role], account.role === "super_admin" ? "red" : account.role === "admin" ? "amber" : account.role === "manager" ? "green" : "")}</td><td>${accountBusinessScope(account.role)}</td><td>${accountPersonalScope(account.role)}</td><td>${badge(status, status === "停用" ? "gray" : "green")}</td><td><div class="inline-actions"><button class="btn" data-password-account ${canManageRoleInUi(account) ? "" : "disabled"}>设密码</button><button class="btn" data-disable-account ${disableAllowed ? "" : "disabled"}>${account.id === user.id ? "当前账号" : disableAllowed ? "停用" : "受保护"}</button><button class="btn danger" data-delete-account ${disableAllowed ? "" : "disabled"}>删除</button></div></td></tr>`;
   }).join("");
   qsa<HTMLButtonElement>("[data-password-account]", tbody).forEach((button) => {
@@ -7834,13 +7867,16 @@ async function renderAccounts(user: User) {
 }
 
 function canManageRoleInUi(account: User) {
-  return state.user?.role === "super_admin" || account.role !== "super_admin";
+  if (state.user?.role === "super_admin") return account.id !== state.user.id;
+  return state.user?.role === "admin"
+    && account.teamId === state.user.teamId
+    && (account.role === "sales" || account.role === "manager");
 }
 
 function accountBusinessScope(role: Role) {
   if (role === "sales") return "本人业务数据";
   if (role === "manager") return "本团队业务数据";
-  if (role === "admin") return "全局业务数据";
+  if (role === "admin") return "本团队业务数据 + 团队账号管理";
   return "全局业务数据 + 最高权限";
 }
 
@@ -7856,13 +7892,17 @@ function openAccountModal() {
   const roleOptions = [
     `<option value="sales">业务员</option>`,
     `<option value="manager">销售主管</option>`,
-    `<option value="admin">管理员</option>`,
+    state.user.role === "super_admin" ? `<option value="admin">团队管理员</option>` : "",
     state.user.role === "super_admin" ? `<option value="super_admin">超级管理员</option>` : ""
   ].join("");
+  const teamField = state.user.role === "super_admin"
+    ? `<div class="form-field full"><label>团队编号</label><input id="accountTeamInput" placeholder="例如 beta-001"></div>`
+    : "";
   openModal("新增账号", `
     <div class="form-grid">
       <div class="form-field"><label>姓名</label><input id="accountNameInput" value="New Sales"></div>
       <div class="form-field"><label>角色</label><select id="accountRoleInput">${roleOptions}</select></div>
+      ${teamField}
       <div class="form-field full"><label>邮箱</label><input id="accountEmailInput" value="new.sales.${Date.now()}@goodjob.com"></div>
       <div class="form-field full"><label>初始密码</label><input id="accountPasswordInput" type="password" value="goodjob123" autocomplete="new-password"></div>
     </div>
@@ -7878,8 +7918,14 @@ async function saveAccount() {
   const name = qs<HTMLInputElement>("#accountNameInput")?.value.trim() || "";
   const email = qs<HTMLInputElement>("#accountEmailInput")?.value.trim() || "";
   const password = qs<HTMLInputElement>("#accountPasswordInput")?.value || "";
-  if (!name || !email || password.length < 6) {
-    toast("请填写账号姓名、邮箱和至少 6 位密码", "error");
+  const role = qs<HTMLSelectElement>("#accountRoleInput")?.value || "sales";
+  const teamId = qs<HTMLInputElement>("#accountTeamInput")?.value.trim() || "";
+  if (!name || !email || password.length < 8) {
+    toast("请填写账号姓名、邮箱和至少 8 位密码", "error");
+    return;
+  }
+  if (state.user.role === "super_admin" && role !== "super_admin" && !teamId) {
+    toast("请填写账号所属团队编号", "error");
     return;
   }
   const result = await api<{ account: User }>("/api/accounts", {
@@ -7888,7 +7934,8 @@ async function saveAccount() {
       name,
       email,
       password,
-      role: qs<HTMLSelectElement>("#accountRoleInput")?.value || "sales"
+      role,
+      teamId: role === "super_admin" ? "all" : teamId || state.user.teamId
     })
   });
   state.accounts.unshift(result.account);
@@ -7910,7 +7957,7 @@ function openPasswordModal(id: string) {
   openModal("设置账号密码", `
     <div class="form-grid">
       <div class="form-field full"><label>账号</label><input value="${escapeHtml(account.email)}" disabled></div>
-      <div class="form-field full"><label>新密码</label><input id="accountNewPasswordInput" type="password" value="" autocomplete="new-password" placeholder="至少 6 位"></div>
+      <div class="form-field full"><label>新密码</label><input id="accountNewPasswordInput" type="password" value="" autocomplete="new-password" placeholder="至少 8 位"></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="savePasswordButton">保存密码</button>`);
   qs("#savePasswordButton")?.addEventListener("click", () => void saveAccountPassword(id));
@@ -7918,8 +7965,8 @@ function openPasswordModal(id: string) {
 
 async function saveAccountPassword(id: string) {
   const password = qs<HTMLInputElement>("#accountNewPasswordInput")?.value || "";
-  if (password.length < 6) {
-    toast("密码至少 6 位", "error");
+  if (password.length < 8) {
+    toast("密码至少 8 位", "error");
     return;
   }
   await api(`/api/accounts/${id}/password`, {
@@ -8807,6 +8854,7 @@ async function syncProspects(ids: string[], button?: HTMLButtonElement) {
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
     renderLeads();
+    requestDashboardRefresh();
     toast(`已加入 ${result.created.length} 条线索`);
   } finally {
     if (button) {
@@ -9692,6 +9740,7 @@ async function syncLeadFinderRows(button?: HTMLButtonElement) {
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
     renderLeads();
+    requestDashboardRefresh();
     const duplicateCount = result.created.filter((item) => item.duplicate).length;
     const createdCount = result.created.length - duplicateCount;
     toast(`线索处理完成：新建 ${createdCount} 条，重复 ${duplicateCount} 条`);
@@ -9833,6 +9882,7 @@ async function syncWebsiteOpportunities(button?: HTMLButtonElement) {
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
     renderLeads();
+    requestDashboardRefresh();
     toast(`已加入 ${result.created.length} 条线索`);
   } finally {
     if (button) {
@@ -10761,6 +10811,7 @@ async function syncOcrLead(button: HTMLButtonElement) {
       body: JSON.stringify(collectOcrFields())
     });
     await api("/api/tools/ocr/jobs/ocr1/sync-lead", { method: "POST" });
+    await reloadLeads();
     button.textContent = "已同步";
     qsa<HTMLElement>("#tools .sync-row").at(2)!.innerHTML = `<span>目标模块</span><b>线索池 / 欧洲组</b>${badge("已同步", "green")}`;
     toast("OCR 线索已同步");
@@ -10949,6 +11000,9 @@ function saveReportNote() {
 
 function installEvents() {
   ensureUiLayer();
+  window.setInterval(refreshVisibleDashboard, DASHBOARD_LIVE_REFRESH_MS);
+  window.addEventListener("focus", refreshVisibleDashboard);
+  document.addEventListener("visibilitychange", refreshVisibleDashboard);
   window.addEventListener("pagehide", () => {
     const memo = state.memos.find((item) => item.id === state.selectedMemoId);
     if (memo && memoDirty) writeMemoDraft(memo);
@@ -11518,6 +11572,7 @@ function activateNavView(view: string, after?: () => void) {
     if (state.user) state.reportNote = localStorage.getItem(`gj_report_note_${state.user.id}`) || "";
     void refreshExecutiveReport();
   }
+  if (view === "dashboard") requestDashboardRefresh();
   window.scrollTo({ top: 0, behavior: "smooth" });
   after?.();
 }

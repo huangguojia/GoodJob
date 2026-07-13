@@ -7,7 +7,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import nodemailer from "nodemailer";
 import { z } from "zod";
-import { AUTH_COOKIE_NAME, CSRF_COOKIE_NAME, canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, createCsrfToken, csrfCookieOptions, hashPassword, publicUser, requireAuth, sessionCookieOptions, signToken, verifyPassword } from "./auth.js";
+import { AUTH_COOKIE_NAME, CSRF_COOKIE_NAME, canManageAccount, canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, canSeeTeam, createCsrfToken, csrfCookieOptions, hashPassword, publicUser, requireAuth, sessionCookieOptions, signToken, verifyPassword } from "./auth.js";
 import { createMysqlStore } from "./mysql-store.js";
 import { getStore, setStore } from "./store.js";
 import { LEAD_PROVIDERS, getProvider, providerMeta, type LeadProvider, type LeadQuery, type RawLead } from "./lead-providers.js";
@@ -105,19 +105,33 @@ function canApproveTradeDocuments(user?: SessionUser) {
 }
 
 function canSeeKnowledgeAsset(user: SessionUser, asset: ReturnType<typeof getStore>["knowledgeAssets"][number]) {
+  const owner = getStore().users.find((item) => item.id === asset.ownerId);
+  const teamId = asset.teamId || owner?.teamId || "all";
+  if (user.role === "super_admin") return true;
+  if (teamId !== user.teamId) return false;
   if (asset.status === "published") return true;
-  if (user.role === "admin" || user.role === "super_admin") return true;
-  if (user.role === "manager") {
-    const owner = getStore().users.find((item) => item.id === asset.ownerId);
-    return owner?.teamId === user.teamId;
-  }
+  if (user.role === "admin" || user.role === "manager") return true;
   return asset.ownerId === user.id;
 }
 
 function canAccessExam(user: SessionUser, exam: Exam) {
+  if (user.role === "super_admin") return true;
+  if (exam.teamId && exam.teamId !== "all" && exam.teamId !== user.teamId) return false;
   if (canManageTraining(user)) return true;
   if (exam.status !== "published") return false;
   return exam.targetRole === "all" || exam.targetRole === user.role;
+}
+
+function canManageExam(user: SessionUser, exam: Exam) {
+  return user.role === "super_admin" || exam.teamId === user.teamId;
+}
+
+function canUseExamQuestion(user: SessionUser, question: ExamQuestion) {
+  return user.role === "super_admin" || !question.teamId || question.teamId === "all" || question.teamId === user.teamId;
+}
+
+function canManageExamQuestion(user: SessionUser, question: ExamQuestion) {
+  return user.role === "super_admin" || question.teamId === user.teamId;
 }
 
 function requireTrainingManager(req: Request, res: Response) {
@@ -231,11 +245,11 @@ function canManageProspectAssignments(user?: SessionUser) {
 function prospectAssigneesFor(user: SessionUser) {
   return getStore().users
     .filter((item) => item.status === "active" && item.role === "sales")
-    .filter((item) => user.role === "manager" ? item.teamId === user.teamId : canManageProspectAssignments(user))
+    .filter((item) => user.role === "super_admin" || item.teamId === user.teamId)
     .map((item) => ({ id: item.id, name: item.name, role: item.role, teamId: item.teamId }));
 }
 
-function examQuestionsFor(examId: string) {
+function examQuestionsFor(examId: string, user?: SessionUser) {
   const store = getStore();
   const linkedIds = store.examQuestionLinks
     .filter((link) => link.examId === examId)
@@ -244,21 +258,27 @@ function examQuestionsFor(examId: string) {
   const linked = linkedIds
     .map((questionId) => store.examQuestions.find((question) => question.id === questionId))
     .filter(Boolean) as ExamQuestion[];
-  if (linked.length) return linked;
-  return store.examQuestions.filter((question) => question.examId === examId);
+  const questions = linked.length ? linked : store.examQuestions.filter((question) => question.examId === examId);
+  return user ? questions.filter((question) => canUseExamQuestion(user, question)) : questions;
 }
 
-function bankQuestions() {
+function bankQuestions(user?: SessionUser) {
   const store = getStore();
   return store.examQuestions
     .filter((question) => question.examId === "bank" || !question.examId || !store.exams.some((exam) => exam.id === question.examId))
+    .filter((question) => !user || canUseExamQuestion(user, question))
     .sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
 }
 
 function examWithRuntimeStats(exam: Exam, user?: SessionUser) {
   const store = getStore();
-  const questions = examQuestionsFor(exam.id);
-  const attempts = store.examAttempts.filter((attempt) => attempt.examId === exam.id && (!user || canManageTraining(user) || attempt.userId === user.id));
+  const questions = examQuestionsFor(exam.id, user);
+  const attempts = store.examAttempts.filter((attempt) => {
+    if (attempt.examId !== exam.id) return false;
+    if (!user || user.role === "super_admin") return true;
+    if (!canManageTraining(user)) return attempt.userId === user.id;
+    return store.users.find((item) => item.id === attempt.userId)?.teamId === user.teamId;
+  });
   const passRate = attempts.length
     ? Math.round((attempts.filter((attempt) => attempt.passed).length / attempts.length) * 100)
     : canManageTraining(user) || !user ? exam.passRate : 0;
@@ -273,14 +293,19 @@ function examReport(user?: SessionUser) {
   const store = getStore();
   const visibleExams = user ? store.exams.filter((exam) => canAccessExam(user, exam)) : store.exams;
   const visibleExamIds = new Set(visibleExams.map((exam) => exam.id));
-  const attempts = store.examAttempts.filter((attempt) => visibleExamIds.has(attempt.examId) && (!user || canManageTraining(user) || attempt.userId === user.id));
+  const attempts = store.examAttempts.filter((attempt) => {
+    if (!visibleExamIds.has(attempt.examId)) return false;
+    if (!user || user.role === "super_admin") return true;
+    if (!canManageTraining(user)) return attempt.userId === user.id;
+    return store.users.find((item) => item.id === attempt.userId)?.teamId === user.teamId;
+  });
   const totalAttempts = attempts.length;
   const passedAttempts = attempts.filter((attempt) => attempt.passed).length;
   const averageScore = totalAttempts ? Math.round(attempts.reduce((sum, attempt) => sum + attempt.score, 0) / totalAttempts) : 0;
   const retakeAttempts = attempts.filter((attempt) => !attempt.passed).length;
-  const questionCount = canManageTraining(user) || !user ? bankQuestions().length : visibleExams.reduce((sum, exam) => sum + examQuestionsFor(exam.id).length, 0);
+  const questionCount = canManageTraining(user) || !user ? bankQuestions(user).length : visibleExams.reduce((sum, exam) => sum + examQuestionsFor(exam.id, user).length, 0);
   const difficultyRows = ["easy", "medium", "hard"].map((difficulty) => {
-    const questions = canManageTraining(user) || !user ? bankQuestions() : visibleExams.flatMap((exam) => examQuestionsFor(exam.id));
+    const questions = canManageTraining(user) || !user ? bankQuestions(user) : visibleExams.flatMap((exam) => examQuestionsFor(exam.id, user));
     const count = questions.filter((question) => question.difficulty === difficulty).length;
     return {
       difficulty,
@@ -598,7 +623,12 @@ app.get("/api/accounts", requireAuth, (req, res) => {
     return;
   }
   const { users } = getStore();
-  res.json({ accounts: users.map(accountUser) });
+  const accounts = req.user!.role === "super_admin"
+    ? users
+    : users.filter((user) => user.id === req.user!.id || (
+      user.teamId === req.user!.teamId && (user.role === "sales" || user.role === "manager")
+    ));
+  res.json({ accounts: accounts.map(accountUser) });
 });
 
 app.post("/api/accounts", requireAuth, asyncRoute(async (req, res) => {
@@ -623,7 +653,17 @@ app.post("/api/accounts", requireAuth, asyncRoute(async (req, res) => {
     res.status(409).json({ message: "账号邮箱已存在" });
     return;
   }
-  const teamId = body.role === "super_admin" || body.role === "admin" ? "all" : body.teamId || req.user!.teamId;
+  const teamId = req.user!.role === "super_admin"
+    ? (body.role === "super_admin" ? "all" : body.teamId || "")
+    : req.user!.teamId;
+  if (!teamId) {
+    res.status(400).json({ message: "超级管理员创建账号时必须指定团队编号" });
+    return;
+  }
+  if (body.role === "admin" && store.users.some((user) => user.role === "admin" && user.teamId === teamId)) {
+    res.status(409).json({ message: "该团队已存在管理员，每个公测团队只允许一名管理员" });
+    return;
+  }
   const user = {
     id: `u_${Date.now()}`,
     name: body.name,
@@ -652,8 +692,8 @@ app.patch("/api/accounts/:id/password", requireAuth, asyncRoute(async (req, res)
     res.status(404).json({ message: "账号不存在" });
     return;
   }
-  if (!canManageRole(req.user!, user.role)) {
-    res.status(403).json({ message: "无权设置该账号密码" });
+  if (!canManageAccount(req.user!, publicUser(user))) {
+    res.status(404).json({ message: "账号不存在" });
     return;
   }
   user.password = await hashPassword(body.password);
@@ -677,8 +717,8 @@ app.patch("/api/accounts/:id/disable", requireAuth, asyncRoute(async (req, res) 
     res.status(400).json({ message: "不能停用当前登录账号" });
     return;
   }
-  if (!canManageRole(req.user!, user.role)) {
-    res.status(403).json({ message: "无权停用该角色账号" });
+  if (!canManageAccount(req.user!, publicUser(user))) {
+    res.status(404).json({ message: "账号不存在" });
     return;
   }
   user.status = "disabled";
@@ -703,8 +743,8 @@ app.delete("/api/accounts/:id", requireAuth, asyncRoute(async (req, res) => {
     res.status(400).json({ message: "不能删除当前登录账号" });
     return;
   }
-  if (!canManageRole(req.user!, user.role)) {
-    res.status(403).json({ message: "无权删除该角色账号" });
+  if (!canManageAccount(req.user!, publicUser(user))) {
+    res.status(404).json({ message: "账号不存在" });
     return;
   }
   store.users.splice(index, 1);
@@ -2626,6 +2666,7 @@ function commissionOwnersFor(user: SessionUser) {
   if (canReviewCommission(user)) {
     return store.users
       .filter((item) => item.status === "active" && (item.role === "sales" || item.role === "manager"))
+      .filter((item) => user.role === "super_admin" || item.teamId === user.teamId)
       .map((item) => ({ id: item.id, name: item.name, email: item.email, role: item.role, teamId: item.teamId }));
   }
   return [{ id: user.id, name: user.name, email: user.email, role: user.role, teamId: user.teamId }];
@@ -2642,7 +2683,10 @@ function resolveCommissionOwnerId(user: SessionUser, requestedOwnerId?: string) 
 }
 
 function canAccessCommissionOwner(user: SessionUser, ownerId: string) {
-  if (canReviewCommission(user)) return true;
+  if (user.role === "super_admin") return true;
+  if (canReviewCommission(user)) {
+    return getStore().users.some((item) => item.id === ownerId && item.teamId === user.teamId);
+  }
   return ownerId === user.id;
 }
 
@@ -2658,10 +2702,21 @@ function visibleSalesRecords(user: SessionUser, month?: string, ownerId?: string
   });
 }
 
-function findCommissionProduct(productName = "") {
+function visibleCommissionProducts(user: SessionUser) {
+  return getStore().commissionProducts.filter((product) =>
+    user.role === "super_admin" || product.teamId === "all" || product.teamId === user.teamId
+  );
+}
+
+function canManageCommissionProduct(user: SessionUser, product: CommissionProduct) {
+  return user.role === "super_admin" || product.teamId === user.teamId;
+}
+
+function findCommissionProduct(productName = "", user?: SessionUser) {
   const normalized = productName.trim().toLowerCase();
   if (!normalized) return undefined;
-  return getStore().commissionProducts.find((product) => product.status === "active" && (
+  const products = user ? visibleCommissionProducts(user) : getStore().commissionProducts;
+  return products.find((product) => product.status === "active" && (
     product.name.toLowerCase() === normalized ||
     product.model.toLowerCase() === normalized ||
     normalized.includes(product.name.toLowerCase()) ||
@@ -2822,9 +2877,11 @@ const salesRecordSchema = z.object({
 
 app.get("/api/commission/products", requireAuth, (req, res) => {
   const store = getStore();
+  const products = visibleCommissionProducts(req.user!);
+  const productIds = new Set(products.map((product) => product.id));
   res.json({
-    products: store.commissionProducts,
-    rules: store.commissionRules,
+    products,
+    rules: store.commissionRules.filter((rule) => productIds.has(rule.productId)),
     canManage: canManageCommissionRules(req.user),
     canSelectOwner: canReviewCommission(req.user),
     owners: commissionOwnersFor(req.user!)
@@ -2858,7 +2915,7 @@ app.patch("/api/commission/products/:id", requireAuth, asyncRoute(async (req, re
   const body = commissionProductSchema.partial().parse(req.body);
   const store = getStore();
   const product = store.commissionProducts.find((item) => item.id === req.params.id);
-  if (!product) {
+  if (!product || !canManageCommissionProduct(req.user!, product)) {
     res.status(404).json({ message: "产品不存在" });
     return;
   }
@@ -2874,7 +2931,7 @@ app.post("/api/commission/products/:id/rules", requireAuth, asyncRoute(async (re
   }
   const store = getStore();
   const product = store.commissionProducts.find((item) => item.id === req.params.id);
-  if (!product) {
+  if (!product || !canManageCommissionProduct(req.user!, product)) {
     res.status(404).json({ message: "产品不存在" });
     return;
   }
@@ -2902,7 +2959,8 @@ app.patch("/api/commission/rules/:id", requireAuth, asyncRoute(async (req, res) 
   const body = commissionRulePatchSchema.parse(req.body);
   const store = getStore();
   const rule = store.commissionRules.find((item) => item.id === req.params.id);
-  if (!rule) {
+  const product = rule ? store.commissionProducts.find((item) => item.id === rule.productId) : undefined;
+  if (!rule || !product || !canManageCommissionProduct(req.user!, product)) {
     res.status(404).json({ message: "提成规则不存在" });
     return;
   }
@@ -2962,7 +3020,7 @@ app.post("/api/commission/sales-records/sync-from-deals", requireAuth, asyncRout
   for (const deal of archivedWonDeals) {
     if (store.monthlySalesRecords.some((record) => record.dealId === deal.id)) continue;
     const customer = store.customers.find((item) => item.id === deal.customerId);
-    const product = findCommissionProduct(deal.product);
+    const product = findCommissionProduct(deal.product, req.user!);
     const salesAmount = roundMoneyValue(Number(deal.amount || deal.quantity * deal.unitPrice || 0));
     const record: MonthlySalesRecord = {
       id: `msr_${Date.now()}_${created.length}`,
@@ -3201,7 +3259,7 @@ app.post("/api/commission/calculations/recalculate", requireAuth, asyncRoute(asy
     }
     store.commissionItems = store.commissionItems.filter((item) => item.calculationId !== calculation.id || item.sourceType !== "auto");
     ownerRecords.forEach((record, index) => {
-      const product = store.commissionProducts.find((item) => item.id === record.productId) || findCommissionProduct(record.productName);
+      const product = visibleCommissionProducts(req.user!).find((item) => item.id === record.productId) || findCommissionProduct(record.productName, req.user!);
       const rule = product ? activeCommissionRule(product.id, month) : undefined;
       const computed = calculateCommissionAmount(record, product, rule);
       const item: CommissionItem = {
@@ -3898,6 +3956,7 @@ app.post("/api/knowledge/assets", requireAuth, asyncRoute(async (req, res) => {
     id: `k_${Date.now()}`,
     status: req.user?.role === "sales" ? "review" as const : "published" as const,
     ownerId: req.user!.id,
+    teamId: req.user!.teamId,
     ...body
   };
   store.knowledgeAssets.unshift(asset);
@@ -3926,7 +3985,7 @@ app.get("/api/exam-questions", requireAuth, (req, res) => {
   const category = String(req.query.category || "").trim();
   const tag = String(req.query.tag || "").trim();
   const type = String(req.query.type || "").trim();
-  let questions = bankQuestions();
+  let questions = bankQuestions(req.user!);
   if (category) questions = questions.filter((question) => question.category === category);
   if (tag) questions = questions.filter((question) => (question.tags || []).includes(tag));
   if (type) questions = questions.filter((question) => (question.questionType || (correctIndexesFor(question).length > 1 ? "multiple" : "single")) === type);
@@ -3935,7 +3994,7 @@ app.get("/api/exam-questions", requireAuth, (req, res) => {
 
 app.get("/api/exam-questions/export", requireAuth, (_req, res) => {
   if (!requireTrainingManager(_req, res)) return;
-  res.json({ questions: bankQuestions() });
+  res.json({ questions: bankQuestions(_req.user!) });
 });
 
 app.post("/api/exam-questions", requireAuth, asyncRoute(async (req, res) => {
@@ -3944,7 +4003,7 @@ app.post("/api/exam-questions", requireAuth, asyncRoute(async (req, res) => {
   const body = examQuestionSchema.parse(req.body);
   let question: ExamQuestion;
   try {
-    question = buildExamQuestion(body);
+    question = { ...buildExamQuestion(body), ownerId: req.user!.id, teamId: req.user!.teamId };
   } catch (error) {
     res.status(400).json({ message: "正确答案序号超出选项数量" });
     return;
@@ -3962,7 +4021,7 @@ app.post("/api/exam-questions/import", requireAuth, asyncRoute(async (req, res) 
   const imported: ExamQuestion[] = [];
   for (const [index, item] of body.questions.entries()) {
     try {
-      imported.push(buildExamQuestion(item, index));
+      imported.push({ ...buildExamQuestion(item, index), ownerId: req.user!.id, teamId: req.user!.teamId });
     } catch (error) {
       res.status(400).json({ message: `第 ${index + 1} 行正确答案序号超出选项数量` });
       return;
@@ -3976,7 +4035,7 @@ app.post("/api/exam-questions/import", requireAuth, asyncRoute(async (req, res) 
 app.patch("/api/exam-questions/:id", requireAuth, asyncRoute(async (req, res) => {
   if (!requireTrainingManager(req, res)) return;
   const store = getStore();
-  const index = store.examQuestions.findIndex((question) => question.id === req.params.id);
+  const index = store.examQuestions.findIndex((question) => question.id === req.params.id && canManageExamQuestion(req.user!, question));
   if (index < 0) {
     res.status(404).json({ message: "题目不存在" });
     return;
@@ -3984,7 +4043,13 @@ app.patch("/api/exam-questions/:id", requireAuth, asyncRoute(async (req, res) =>
   const body = examQuestionSchema.parse(req.body);
   let question: ExamQuestion;
   try {
-    question = { ...buildExamQuestion(body), id: store.examQuestions[index].id, examId: store.examQuestions[index].examId || "bank" };
+    question = {
+      ...buildExamQuestion(body),
+      id: store.examQuestions[index].id,
+      examId: store.examQuestions[index].examId || "bank",
+      ownerId: store.examQuestions[index].ownerId,
+      teamId: store.examQuestions[index].teamId
+    };
   } catch (error) {
     res.status(400).json({ message: "正确答案序号超出选项数量" });
     return;
@@ -3998,7 +4063,7 @@ app.patch("/api/exam-questions/:id", requireAuth, asyncRoute(async (req, res) =>
 app.delete("/api/exam-questions/:id", requireAuth, asyncRoute(async (req, res) => {
   if (!requireTrainingManager(req, res)) return;
   const store = getStore();
-  const index = store.examQuestions.findIndex((question) => question.id === req.params.id);
+  const index = store.examQuestions.findIndex((question) => question.id === req.params.id && canManageExamQuestion(req.user!, question));
   if (index < 0) {
     res.status(404).json({ message: "题目不存在" });
     return;
@@ -4023,7 +4088,7 @@ app.get("/api/exams/:id/detail", requireAuth, (req, res) => {
     res.status(404).json({ message: "考试不存在" });
     return;
   }
-  const questions = examQuestionsFor(exam.id).map((question) => canManageTraining(req.user)
+  const questions = examQuestionsFor(exam.id, req.user!).map((question) => canManageTraining(req.user)
     ? question
     : { ...question, answerIndex: -1, answerIndexes: [], explanation: "" });
   const attempts = store.examAttempts.filter((item) => item.examId === exam.id);
@@ -4044,7 +4109,7 @@ app.post("/api/exams", requireAuth, asyncRoute(async (req, res) => {
   });
   const body = schema.parse(req.body);
   const uniqueQuestionIds = [...new Set(body.questionIds)];
-  const selectedQuestions = uniqueQuestionIds.map((id) => store.examQuestions.find((question) => question.id === id));
+  const selectedQuestions = uniqueQuestionIds.map((id) => store.examQuestions.find((question) => question.id === id && canUseExamQuestion(req.user!, question)));
   if (selectedQuestions.some((question) => !question)) {
     res.status(400).json({ message: "包含不存在的题目，请刷新题库后重试" });
     return;
@@ -4060,19 +4125,21 @@ app.post("/api/exams", requireAuth, asyncRoute(async (req, res) => {
     durationMinutes: body.durationMinutes,
     passScore: body.passScore,
     targetRole: body.targetRole,
+    ownerId: req.user!.id,
+    teamId: req.user!.teamId,
     updatedAt: now
   };
   store.exams.unshift(exam);
   store.examQuestionLinks.unshift(...uniqueQuestionIds.map((questionId, index) => ({ examId: exam.id, questionId, sortOrder: index + 1 })));
   refreshExamStats(exam);
   await store.persist();
-  res.json({ exam: examWithRuntimeStats(exam, req.user!), questions: examQuestionsFor(exam.id), report: examReport(req.user!) });
+  res.json({ exam: examWithRuntimeStats(exam, req.user!), questions: examQuestionsFor(exam.id, req.user!), report: examReport(req.user!) });
 }));
 
 app.post("/api/exams/:id/questions", requireAuth, asyncRoute(async (req, res) => {
   if (!requireTrainingManager(req, res)) return;
   const store = getStore();
-  const exam = store.exams.find((item) => item.id === req.params.id);
+  const exam = store.exams.find((item) => item.id === req.params.id && canManageExam(req.user!, item));
   if (!exam) {
     res.status(404).json({ message: "考试不存在" });
     return;
@@ -4080,13 +4147,13 @@ app.post("/api/exams/:id/questions", requireAuth, asyncRoute(async (req, res) =>
   const body = examQuestionSchema.parse({ ...req.body, category: req.body?.category || exam.category });
   let question: ExamQuestion;
   try {
-    question = buildExamQuestion(body);
+    question = { ...buildExamQuestion(body), ownerId: req.user!.id, teamId: req.user!.teamId };
   } catch (error) {
     res.status(400).json({ message: "正确答案序号超出选项数量" });
     return;
   }
   store.examQuestions.unshift(question);
-  store.examQuestionLinks.push({ examId: exam.id, questionId: question.id, sortOrder: examQuestionsFor(exam.id).length + 1 });
+  store.examQuestionLinks.push({ examId: exam.id, questionId: question.id, sortOrder: examQuestionsFor(exam.id, req.user!).length + 1 });
   refreshExamStats(exam);
   await store.persist();
   res.json({ question, exam: examWithRuntimeStats(exam, req.user!), report: examReport(req.user!) });
@@ -4095,7 +4162,7 @@ app.post("/api/exams/:id/questions", requireAuth, asyncRoute(async (req, res) =>
 app.post("/api/exams/:id/questions/import", requireAuth, asyncRoute(async (req, res) => {
   if (!requireTrainingManager(req, res)) return;
   const store = getStore();
-  const exam = store.exams.find((item) => item.id === req.params.id);
+  const exam = store.exams.find((item) => item.id === req.params.id && canManageExam(req.user!, item));
   if (!exam) {
     res.status(404).json({ message: "考试不存在" });
     return;
@@ -4105,14 +4172,14 @@ app.post("/api/exams/:id/questions/import", requireAuth, asyncRoute(async (req, 
   const imported: ExamQuestion[] = [];
   for (const [index, item] of body.questions.entries()) {
     try {
-      imported.push(buildExamQuestion({ ...item, category: item.category || exam.category }, index));
+      imported.push({ ...buildExamQuestion({ ...item, category: item.category || exam.category }, index), ownerId: req.user!.id, teamId: req.user!.teamId });
     } catch (error) {
       res.status(400).json({ message: `第 ${index + 1} 行正确答案序号超出选项数量` });
       return;
     }
   }
   store.examQuestions.unshift(...imported);
-  store.examQuestionLinks.push(...imported.map((question, index) => ({ examId: exam.id, questionId: question.id, sortOrder: examQuestionsFor(exam.id).length + index + 1 })));
+  store.examQuestionLinks.push(...imported.map((question, index) => ({ examId: exam.id, questionId: question.id, sortOrder: examQuestionsFor(exam.id, req.user!).length + index + 1 })));
   refreshExamStats(exam);
   await store.persist();
   res.json({ importedCount: imported.length, questions: imported, exam: examWithRuntimeStats(exam, req.user!), report: examReport(req.user!) });
@@ -4121,12 +4188,12 @@ app.post("/api/exams/:id/questions/import", requireAuth, asyncRoute(async (req, 
 app.patch("/api/exams/:id/publish", requireAuth, asyncRoute(async (req, res) => {
   if (!requireTrainingManager(req, res)) return;
   const store = getStore();
-  const exam = store.exams.find((item) => item.id === req.params.id);
+  const exam = store.exams.find((item) => item.id === req.params.id && canManageExam(req.user!, item));
   if (!exam) {
     res.status(404).json({ message: "考试不存在" });
     return;
   }
-  if (!examQuestionsFor(exam.id).length) {
+  if (!examQuestionsFor(exam.id, req.user!).length) {
     res.status(400).json({ message: "请先勾选至少 1 道题目组卷" });
     return;
   }
@@ -4142,7 +4209,7 @@ app.post("/api/exams/bulk-delete", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({ ids: z.array(z.string()).min(1).max(100) });
   const body = schema.parse(req.body);
   const ids = [...new Set(body.ids)];
-  const deleted = store.exams.filter((exam) => ids.includes(exam.id));
+  const deleted = store.exams.filter((exam) => ids.includes(exam.id) && canManageExam(req.user!, exam));
   if (!deleted.length) {
     res.status(404).json({ message: "未找到可删除的考试" });
     return;
@@ -4160,7 +4227,7 @@ app.post("/api/exams/bulk-delete", requireAuth, asyncRoute(async (req, res) => {
 app.delete("/api/exams/:id", requireAuth, asyncRoute(async (req, res) => {
   if (!requireTrainingManager(req, res)) return;
   const store = getStore();
-  const index = store.exams.findIndex((item) => item.id === req.params.id);
+  const index = store.exams.findIndex((item) => item.id === req.params.id && canManageExam(req.user!, item));
   if (index < 0) {
     res.status(404).json({ message: "考试不存在" });
     return;
@@ -4185,7 +4252,7 @@ app.post("/api/exams/:id/submit", requireAuth, asyncRoute(async (req, res) => {
     answers: z.record(z.string(), z.union([z.number().int().nonnegative(), z.array(z.number().int().nonnegative())])).default({})
   });
   const body = schema.parse(req.body);
-  const questions = examQuestionsFor(exam.id);
+  const questions = examQuestionsFor(exam.id, req.user!);
   if (!questions.length) {
     res.status(400).json({ message: "当前考试暂无题目" });
     return;
@@ -5679,7 +5746,7 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
   const scopedTodos = todos.filter((todo) => canSeePersonalData(req.user!, todo.ownerId));
   const scopedDeals = deals.filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId) && !deal.archivedAt && deal.stage !== "成交" && deal.stage !== "丢单");
   const scopedReminders = reminders.filter((reminder) => canSeeOwner(req.user!, reminder.ownerId, reminder.teamId));
-  const scopedKnowledge = req.user?.role === "sales" ? knowledgeAssets.filter((asset) => asset.ownerId === req.user?.id) : knowledgeAssets;
+  const scopedKnowledge = knowledgeAssets.filter((asset) => canSeeKnowledgeAsset(req.user!, asset));
   const scopedMessages = wecomMessages.filter((message) => canSeeOwner(req.user!, message.ownerId, message.teamId));
   const scopedExams = exams.filter((exam) => canAccessExam(req.user!, exam));
   const scopedExamReport = examReport(req.user!);
@@ -5799,9 +5866,9 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
     count: pendingTodos.filter((_, todoIndex) => todoIndex % 7 === index).length + (index < Math.min(pendingTodos.length, 7) ? 1 : 0)
   }));
   const topRiskNames = riskCustomers.slice(0, 3).map((customer) => customer.company).join("、") || topDeals.slice(0, 2).map((deal) => deal.title).join("、") || "暂无高风险客户";
-  const businessScopeLabel = req.user?.role === "sales" ? "本人业务" : req.user?.role === "manager" ? "团队业务" : "全局业务";
+  const businessScopeLabel = req.user?.role === "sales" ? "本人业务" : req.user?.role === "super_admin" ? "全局业务" : "本团队业务";
   res.json({
-    scope: req.user?.role === "sales" ? "仅本人业务与本人待办" : req.user?.role === "manager" ? "团队业务数据，本人待办" : "全局业务数据，本人待办",
+    scope: req.user?.role === "sales" ? "仅本人业务与本人待办" : req.user?.role === "super_admin" ? "全局业务数据，本人待办" : "本团队业务数据，本人待办",
     scopeLabels: {
       business: businessScopeLabel,
       todos: "本人待办"
@@ -5823,7 +5890,7 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
         ? `影响范围：${moneyText(riskAmount)} 风险金额，处理后可降低逾期和报价流失。`
         : `影响范围：${moneyText(readyDeals.reduce((sum, deal) => sum + deal.amount, 0))} 可推进金额，适合用于晨会安排。`,
       riskAmount,
-      riskLabel: req.user?.role === "sales" ? "本人名下风险" : req.user?.role === "manager" ? "团队风险金额" : "全局风险金额",
+      riskLabel: req.user?.role === "sales" ? "本人名下风险" : req.user?.role === "super_admin" ? "全局风险金额" : "团队风险金额",
       closableDeals: readyDeals.length,
       closableAmount: readyDeals.reduce((sum, deal) => sum + deal.amount, 0),
       unreadWecom: pendingMessages.length

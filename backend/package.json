@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "start:mysql": "CRM_STORE=mysql node dist/server.js",
+    "provision:beta-admins": "tsx src/provision-beta-admins.ts",
     "test": "NODE_ENV=test tsx src/self-test.ts",
     "test:security": "NODE_ENV=test JWT_SECRET=goodjob-security-test-secret-at-least-32-characters tsx src/security-test.ts"
   },

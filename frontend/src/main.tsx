@@ -38,7 +38,7 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
       <section className="loginHero">
         <div className="brandMark">GJ</div>
         <h1>GoodJob CRM</h1>
-        <p>登录后按账号角色加载不同数据范围：业务员看本人，主管看团队业务，管理员看全局业务；待办和备忘只看本人。</p>
+        <p>登录后按账号角色加载不同数据范围：业务员看本人，主管和管理员看本团队业务，超级管理员看全局业务；待办和备忘只看本人。</p>
         <div className="proof"><b>RBAC</b><b>Data Scope</b><b>Audit</b></div>
       </section>
       <section className="loginCard">
@@ -500,7 +500,7 @@ function Tools({ token }: { token: string }) {
 function Settings({ user, accounts }: { user: User; accounts: User[] }) {
   const canManage = user.role === "admin" || user.role === "super_admin";
   const visibleAccounts = canManage ? accounts : [user];
-  const scopeText = (role: User["role"]) => role === "sales" ? "本人业务，本人待办/备忘" : role === "manager" ? "团队业务，本人待办/备忘" : role === "admin" ? "全局业务，账号管理" : "全局业务，最高账号权限";
+  const scopeText = (role: User["role"]) => role === "sales" ? "本人业务，本人待办/备忘" : role === "manager" ? "本团队业务，本人待办/备忘" : role === "admin" ? "本团队业务，团队账号管理" : "全局业务，最高账号权限";
   return <section className="panel"><div className="panelHead"><h2>账号管理</h2><button disabled={!canManage}>新增账号</button></div>{!canManage ? <p>只有管理员和超级管理员可以管理账号。</p> : null}<table><thead><tr><th>账号</th><th>角色</th><th>数据范围</th></tr></thead><tbody>{visibleAccounts.map((account) => <tr key={account.id}><td><b>{account.name}</b><small>{account.email}</small></td><td>{account.role}</td><td>{scopeText(account.role)}</td></tr>)}</tbody></table></section>;
 }
 

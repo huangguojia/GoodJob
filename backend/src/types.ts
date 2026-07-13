@@ -247,6 +247,7 @@ export interface KnowledgeAsset {
   category: string;
   status: "published" | "draft" | "review";
   ownerId: string;
+  teamId?: string;
   version: string;
 }
 
@@ -260,6 +261,8 @@ export interface Exam {
   durationMinutes?: number;
   passScore?: number;
   targetRole?: "all" | "sales" | "manager";
+  ownerId?: string;
+  teamId?: string;
   updatedAt?: string;
 }
 
@@ -275,6 +278,8 @@ export interface ExamQuestion {
   tags?: string[];
   explanation: string;
   difficulty: "easy" | "medium" | "hard";
+  ownerId?: string;
+  teamId?: string;
   updatedAt?: string;
 }
 

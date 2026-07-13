@@ -185,9 +185,13 @@ export function csrfCookieOptions() {
 }
 
 export function canSeeOwner(user: SessionUser, ownerId: string, teamId: string) {
-  if (user.role === "admin" || user.role === "super_admin") return true;
-  if (user.role === "manager") return user.teamId === teamId;
+  if (user.role === "super_admin") return true;
+  if (user.role === "admin" || user.role === "manager") return user.teamId === teamId;
   return user.id === ownerId;
+}
+
+export function canSeeTeam(user: SessionUser, teamId: string) {
+  return user.role === "super_admin" || user.teamId === teamId;
 }
 
 export function canSeePersonalData(user: SessionUser, ownerId: string) {
@@ -201,5 +205,11 @@ export function canManageAccounts(user?: SessionUser) {
 export function canManageRole(operator: SessionUser, targetRole: string) {
   if (operator.role === "super_admin") return true;
   if (operator.role !== "admin") return false;
-  return targetRole !== "super_admin";
+  return targetRole === "sales" || targetRole === "manager";
+}
+
+export function canManageAccount(operator: SessionUser, target: SessionUser) {
+  if (operator.role === "super_admin") return true;
+  if (operator.role !== "admin") return false;
+  return target.teamId === operator.teamId && (target.role === "sales" || target.role === "manager");
 }

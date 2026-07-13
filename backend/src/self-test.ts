@@ -999,12 +999,12 @@ try {
   if (!dashboard.json.priorityTasks?.[0]?.reason || typeof dashboard.json.priorityTasks?.[0]?.score !== "number") throw new Error("priority task scoring failed");
 
   const managerDashboard = await request("/api/dashboard/summary", { headers: { authorization: `Bearer ${managerToken}` } });
-  if (!managerDashboard.response.ok || managerDashboard.json.scope !== "团队业务数据，本人待办") throw new Error("manager dashboard scope failed");
-  if (managerDashboard.json.scopeLabels?.business !== "团队业务" || managerDashboard.json.scopeLabels?.todos !== "本人待办" || managerDashboard.json.briefing?.riskLabel !== "团队风险金额") throw new Error("manager dashboard scope labels failed");
+  if (!managerDashboard.response.ok || managerDashboard.json.scope !== "本团队业务数据，本人待办") throw new Error("manager dashboard scope failed");
+  if (managerDashboard.json.scopeLabels?.business !== "本团队业务" || managerDashboard.json.scopeLabels?.todos !== "本人待办" || managerDashboard.json.briefing?.riskLabel !== "团队风险金额") throw new Error("manager dashboard scope labels failed");
   if (managerDashboard.json.periods.month.expectedDeals < dashboard.json.periods.month.expectedDeals) throw new Error("manager dashboard period scope should include the salesperson");
   const adminDashboard = await request("/api/dashboard/summary", { headers: { authorization: `Bearer ${adminToken}` } });
-  if (!adminDashboard.response.ok || adminDashboard.json.scope !== "全局业务数据，本人待办") throw new Error("admin dashboard personal todo scope failed");
-  if (adminDashboard.json.scopeLabels?.business !== "全局业务" || adminDashboard.json.scopeLabels?.todos !== "本人待办" || adminDashboard.json.briefing?.riskLabel !== "全局风险金额") throw new Error("admin dashboard scope labels failed");
+  if (!adminDashboard.response.ok || adminDashboard.json.scope !== "本团队业务数据，本人待办") throw new Error("admin dashboard personal todo scope failed");
+  if (adminDashboard.json.scopeLabels?.business !== "本团队业务" || adminDashboard.json.scopeLabels?.todos !== "本人待办" || adminDashboard.json.briefing?.riskLabel !== "团队风险金额") throw new Error("admin dashboard scope labels failed");
 
   const priorityBatch = await request("/api/dashboard/priority-tasks/batch-process", {
     method: "POST",
@@ -1592,7 +1592,11 @@ try {
   const accountList = await request("/api/accounts", {
     headers: { authorization: `Bearer ${adminToken}` }
   });
-  if (!accountList.response.ok || !accountList.json.accounts.some((item: { role: string }) => item.role === "super_admin")) throw new Error("admin account list failed");
+  if (!accountList.response.ok
+    || accountList.json.accounts.some((item: { role: string }) => item.role === "super_admin")
+    || accountList.json.accounts.some((item: { teamId: string }) => item.teamId !== "europe")) {
+    throw new Error("tenant admin account list failed");
+  }
 
   const forbiddenSuper = await request("/api/accounts", {
     method: "POST",
@@ -1604,7 +1608,7 @@ try {
   const account = await request("/api/accounts", {
     method: "POST",
     headers: { authorization: `Bearer ${superAdminToken}` },
-    body: JSON.stringify({ name: "Auto Sales", email: `auto.${Date.now()}@goodjob.com`, password: "start123", role: "sales" })
+    body: JSON.stringify({ name: "Auto Sales", email: `auto.${Date.now()}@goodjob.com`, password: "start123", role: "sales", teamId: "europe" })
   });
   if (!account.response.ok || account.json.account.name !== "Auto Sales") throw new Error("account create failed");
 

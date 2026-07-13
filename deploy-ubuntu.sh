@@ -15,6 +15,7 @@ INITIAL_ADMIN_EMAIL="${INITIAL_ADMIN_EMAIL:-admin@example.com}"
 INITIAL_ADMIN_PASSWORD="${INITIAL_ADMIN_PASSWORD:-}"
 INITIAL_ADMIN_NAME="${INITIAL_ADMIN_NAME:-Super Admin}"
 ENABLE_API_DOCS="${ENABLE_API_DOCS:-true}"
+PROVISION_BETA_ADMINS="${PROVISION_BETA_ADMINS:-true}"
 BACKEND_PORT="${BACKEND_PORT:-4188}"
 DOMAIN_EXPLICIT="${DOMAIN+x}"
 ENABLE_HTTPS_EXPLICIT="${ENABLE_HTTPS+x}"
@@ -31,6 +32,8 @@ CURRENT_LINK="$APP_ROOT/current"
 RELEASE_DIR="$RELEASES_DIR/$RELEASE_ID"
 ENV_FILE="$SHARED_DIR/.env"
 BACKUP_DIR="$SHARED_DIR/backups"
+BETA_ADMIN_CREDENTIALS_FILE="${BETA_ADMIN_CREDENTIALS_FILE:-$SHARED_DIR/beta-admin-credentials.txt}"
+BETA_ADMIN_CREDENTIALS_SOURCE="${BETA_ADMIN_CREDENTIALS_SOURCE:-}"
 DEPLOY_CONFIG="$APP_ROOT/deploy.conf"
 PREVIOUS_RELEASE=""
 SWITCHED_RELEASE=false
@@ -74,6 +77,9 @@ GoodJob CRM Ubuntu 无 Docker 一键部署脚本
   INITIAL_ADMIN_EMAIL  首次空库部署的超级管理员邮箱
   INITIAL_ADMIN_PASSWORD 首次空库部署的超级管理员密码，至少 12 位
   ENABLE_API_DOCS       true/false，是否启用仅管理员可访问的 Swagger 调试文档
+  PROVISION_BETA_ADMINS true/false，是否自动预置 40 个互相隔离的公测团队管理员
+  BETA_ADMIN_CREDENTIALS_FILE 公测管理员名单保存位置，默认位于 shared 受限目录
+  BETA_ADMIN_CREDENTIALS_SOURCE 已有管理员名单源文件；部署时安全复制并据此创建账号
   BACKEND_PORT         后端监听端口，默认 4188
   NON_INTERACTIVE      true/false；true 时不询问，适合自动部署
 
@@ -283,6 +289,9 @@ validate_domain
 for required_file in package.json package-lock.json backend/package.json frontend/package.json backend/src/server.ts; do
   [[ -f "$SOURCE_DIR/$required_file" ]] || die "源码目录缺少 $required_file：$SOURCE_DIR"
 done
+if [[ -n "$BETA_ADMIN_CREDENTIALS_SOURCE" ]]; then
+  [[ -f "$BETA_ADMIN_CREDENTIALS_SOURCE" ]] || die "公测管理员名单源文件不存在：$BETA_ADMIN_CREDENTIALS_SOURCE"
+fi
 
 if [[ "$DRY_RUN" == true ]]; then
   cat <<EOF
@@ -338,6 +347,10 @@ if ! id "$APP_USER" >/dev/null 2>&1; then
 fi
 install -d -m 0755 "$APP_ROOT" "$RELEASES_DIR"
 install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$SHARED_DIR" "$BACKUP_DIR"
+if is_true "$PROVISION_BETA_ADMINS" && [[ -n "$BETA_ADMIN_CREDENTIALS_SOURCE" ]]; then
+  install -o "$APP_USER" -g "$APP_USER" -m 0600 \
+    "$BETA_ADMIN_CREDENTIALS_SOURCE" "$BETA_ADMIN_CREDENTIALS_FILE"
+fi
 cat > "$DEPLOY_CONFIG" <<EOF
 DOMAIN=$DOMAIN
 ENABLE_HTTPS=$ENABLE_HTTPS
@@ -507,6 +520,16 @@ done
 [[ "$healthy" == true ]] || die "后端在 60 秒内未通过健康检查"
 SWITCHED_RELEASE=false
 
+if is_true "$PROVISION_BETA_ADMINS"; then
+  log "预置 40 个公测团队管理员"
+  runuser -u "$APP_USER" -- env \
+    HOME="/var/lib/$APP_USER" \
+    DATABASE_URL="mysql://$DB_USER:$encoded_password@127.0.0.1:3306/$DB_NAME" \
+    BETA_ADMIN_CREDENTIALS_FILE="$BETA_ADMIN_CREDENTIALS_FILE" \
+    npm run provision:beta-admins --prefix "$CURRENT_LINK"
+  chmod 0600 "$BETA_ADMIN_CREDENTIALS_FILE"
+fi
+
 if [[ -n "$DOMAIN" ]]; then
   curl -fsS -H "Host: $DOMAIN" "http://127.0.0.1/api/health" \
     | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' \
@@ -548,6 +571,9 @@ printf '服务状态：systemctl status %s\n' "$SERVICE_NAME"
 printf '实时日志：journalctl -u %s -f\n' "$SERVICE_NAME"
 printf '当前版本：%s\n' "$RELEASE_DIR"
 printf '数据库备份：%s\n' "$BACKUP_DIR"
+if is_true "$PROVISION_BETA_ADMINS"; then
+  printf '公测管理员名单：%s（仅服务器运行用户可读）\n' "$BETA_ADMIN_CREDENTIALS_FILE"
+fi
 
 if [[ "$DB_PASSWORD_WAS_GENERATED" == true ]]; then
   printf '\n首次部署已自动生成数据库密码，请立即妥善保存：\n'

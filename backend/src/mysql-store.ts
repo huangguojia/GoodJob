@@ -500,9 +500,11 @@ async function ensureSchema(pool: mysql.Pool) {
     category VARCHAR(100),
     status VARCHAR(40),
     owner_id VARCHAR(64),
+    team_id VARCHAR(64) DEFAULT 'all',
     version VARCHAR(40),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`);
+  await ensureColumn(pool, "knowledge_assets", "team_id", "VARCHAR(64) DEFAULT 'all'");
   await pool.query(`CREATE TABLE IF NOT EXISTS exams (
     id VARCHAR(64) PRIMARY KEY,
     title VARCHAR(200) NOT NULL,
@@ -513,11 +515,15 @@ async function ensureSchema(pool: mysql.Pool) {
     duration_minutes INT DEFAULT 20,
     pass_score INT DEFAULT 80,
     target_role VARCHAR(40) DEFAULT 'sales',
+    owner_id VARCHAR(64) DEFAULT '',
+    team_id VARCHAR(64) DEFAULT 'all',
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`);
   await ensureColumn(pool, "exams", "duration_minutes", "INT DEFAULT 20");
   await ensureColumn(pool, "exams", "pass_score", "INT DEFAULT 80");
   await ensureColumn(pool, "exams", "target_role", "VARCHAR(40) DEFAULT 'sales'");
+  await ensureColumn(pool, "exams", "owner_id", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "exams", "team_id", "VARCHAR(64) DEFAULT 'all'");
   await ensureColumn(pool, "exams", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
   await pool.query(`CREATE TABLE IF NOT EXISTS exam_questions (
     id VARCHAR(64) PRIMARY KEY,
@@ -531,12 +537,16 @@ async function ensureSchema(pool: mysql.Pool) {
     tags_json JSON,
     explanation TEXT,
     difficulty VARCHAR(20),
+    owner_id VARCHAR(64) DEFAULT '',
+    team_id VARCHAR(64) DEFAULT 'all',
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_exam_questions_exam(exam_id)
   )`);
   await ensureColumn(pool, "exam_questions", "answer_indexes_json", "JSON");
   await ensureColumn(pool, "exam_questions", "question_type", "VARCHAR(20) DEFAULT 'single'");
   await ensureColumn(pool, "exam_questions", "tags_json", "JSON");
+  await ensureColumn(pool, "exam_questions", "owner_id", "VARCHAR(64) DEFAULT ''");
+  await ensureColumn(pool, "exam_questions", "team_id", "VARCHAR(64) DEFAULT 'all'");
   await pool.query(`CREATE TABLE IF NOT EXISTS exam_question_links (
     exam_id VARCHAR(64) NOT NULL,
     question_id VARCHAR(64) NOT NULL,
@@ -1162,7 +1172,7 @@ async function loadReminders(pool: mysql.Pool): Promise<Reminder[]> {
 
 async function loadKnowledgeAssets(pool: mysql.Pool): Promise<KnowledgeAsset[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM knowledge_assets ORDER BY created_at DESC")).map((row) => ({
-    id: row.id, title: row.title, category: row.category, status: row.status, ownerId: row.owner_id, version: row.version
+    id: row.id, title: row.title, category: row.category, status: row.status, ownerId: row.owner_id, teamId: row.team_id || "all", version: row.version
   }));
 }
 
@@ -1177,6 +1187,8 @@ async function loadExams(pool: mysql.Pool): Promise<Exam[]> {
     durationMinutes: Number(row.duration_minutes || 20),
     passScore: Number(row.pass_score || 80),
     targetRole: row.target_role || "sales",
+    ownerId: row.owner_id || "",
+    teamId: row.team_id || "all",
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at
   }));
 }
@@ -1194,6 +1206,8 @@ async function loadExamQuestions(pool: mysql.Pool): Promise<ExamQuestion[]> {
     tags: row.tags_json ? (typeof row.tags_json === "string" ? JSON.parse(row.tags_json) : row.tags_json) : [],
     explanation: row.explanation || "",
     difficulty: row.difficulty || "medium",
+    ownerId: row.owner_id || "",
+    teamId: row.team_id || "all",
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at
   }));
 }
@@ -1606,9 +1620,9 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
     await replaceRows(connection, "plan_tasks", store.planTasks, (item) => [item.id, item.title, item.phase, item.category, item.priority, item.status, item.dueAt, item.target, item.description, item.customerId || "", item.leadId || "", item.dealId || "", item.completionResult || "", item.completedAt ? mysqlDate(item.completedAt) : null, item.cancellationReason || "", item.cancelledAt ? mysqlDate(item.cancelledAt) : null, item.rescheduledFrom || "", item.rescheduledAt ? mysqlDate(item.rescheduledAt) : null, item.rescheduleReason || "", item.ownerId, item.teamId, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,title,phase,category,priority,status,due_at,target,description,customer_id,lead_id,deal_id,completion_result,completed_at,cancellation_reason,cancelled_at,rescheduled_from,rescheduled_at,reschedule_reason,owner_id,team_id,created_at,updated_at)");
     await replaceRows(connection, "plan_templates", store.planTemplates, (item) => [item.id, item.section, item.title, item.summary, item.output, item.badge, item.badgeTone, item.phase, item.category, item.priority, item.target, item.description, item.sortOrder, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,section_name,title,summary,output_text,badge,badge_tone,phase,category,priority,target,description,sort_order,owner_id,team_id,updated_at)");
     await replaceRows(connection, "reminders", store.reminders, (item) => [item.id, item.title, item.rule, item.dueAt, item.ownerId, item.teamId, "站内", item.enabled === false ? "disabled" : "enabled", item.ruleType || null, item.targetStage || null, item.days ?? 3, item.priority || "normal", item.enabled ?? true, item.generatedCount || 0, item.targetOwnerId || item.ownerId, item.lastRunBy || "", item.lastRunAt ? mysqlDate(item.lastRunAt) : null, item.lastMatchedCount || 0, item.lastCreatedCount || 0, item.lastSkippedCount || 0, item.lastFailedCount || 0, item.lastError || ""], "(id,title,rule_text,due_at,owner_id,team_id,channel,status,rule_type,target_stage,days_count,priority,enabled,generated_count,target_owner_id,last_run_by,last_run_at,last_matched_count,last_created_count,last_skipped_count,last_failed_count,last_error)");
-    await replaceRows(connection, "knowledge_assets", store.knowledgeAssets, (item) => [item.id, item.title, item.category, item.status, item.ownerId, item.version], "(id,title,category,status,owner_id,version)");
-    await replaceRows(connection, "exams", store.exams, (item) => [item.id, item.title, item.category, item.status, item.passRate, item.questionCount, item.durationMinutes || 20, item.passScore || 80, item.targetRole || "sales", mysqlDate(item.updatedAt)], "(id,title,category,status,pass_rate,question_count,duration_minutes,pass_score,target_role,updated_at)");
-    await replaceRows(connection, "exam_questions", store.examQuestions, (item) => [item.id, item.examId || "bank", item.category, item.stem, JSON.stringify(item.options), item.answerIndex, JSON.stringify(item.answerIndexes?.length ? item.answerIndexes : [item.answerIndex]), item.questionType || ((item.answerIndexes?.length || 0) > 1 ? "multiple" : "single"), JSON.stringify(item.tags || []), item.explanation, item.difficulty, mysqlDate(item.updatedAt)], "(id,exam_id,category,stem,options_json,answer_index,answer_indexes_json,question_type,tags_json,explanation,difficulty,updated_at)");
+    await replaceRows(connection, "knowledge_assets", store.knowledgeAssets, (item) => [item.id, item.title, item.category, item.status, item.ownerId, item.teamId || "all", item.version], "(id,title,category,status,owner_id,team_id,version)");
+    await replaceRows(connection, "exams", store.exams, (item) => [item.id, item.title, item.category, item.status, item.passRate, item.questionCount, item.durationMinutes || 20, item.passScore || 80, item.targetRole || "sales", item.ownerId || "", item.teamId || "all", mysqlDate(item.updatedAt)], "(id,title,category,status,pass_rate,question_count,duration_minutes,pass_score,target_role,owner_id,team_id,updated_at)");
+    await replaceRows(connection, "exam_questions", store.examQuestions, (item) => [item.id, item.examId || "bank", item.category, item.stem, JSON.stringify(item.options), item.answerIndex, JSON.stringify(item.answerIndexes?.length ? item.answerIndexes : [item.answerIndex]), item.questionType || ((item.answerIndexes?.length || 0) > 1 ? "multiple" : "single"), JSON.stringify(item.tags || []), item.explanation, item.difficulty, item.ownerId || "", item.teamId || "all", mysqlDate(item.updatedAt)], "(id,exam_id,category,stem,options_json,answer_index,answer_indexes_json,question_type,tags_json,explanation,difficulty,owner_id,team_id,updated_at)");
     await replaceRows(connection, "exam_question_links", store.examQuestionLinks, (item) => [item.examId, item.questionId, item.sortOrder], "(exam_id,question_id,sort_order)");
     await replaceRows(connection, "exam_attempts", store.examAttempts, (item) => [item.id, item.examId, item.userId, item.score, item.passed, JSON.stringify(item.answers), item.correctCount, item.totalQuestions, mysqlDate(item.submittedAt)], "(id,exam_id,user_id,score,passed,answers_json,correct_count,total_questions,submitted_at)");
     await replaceRows(connection, "import_export_jobs", store.importExportJobs, (item) => [item.id, item.name, item.type, item.rows, item.status, item.operatorId, item.createdAt], "(id,name,type,rows_count,status,operator_id,created_at)");
