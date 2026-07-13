@@ -146,15 +146,15 @@ function userCurrentOcrId(user: SessionUser) {
 
 function defaultOcrFields() {
   return {
-    company: "NorthStar Lighting GmbH",
-    contact: "James Müller",
-    title: "Purchasing Manager",
-    email: "james.mueller@northstar-light.de",
-    whatsapp: "+49 151 2388 9012",
-    wechat: "james_light_de",
-    phone: "+49 30 8842 1290",
-    country: "德国",
-    city: "Berlin"
+    company: "",
+    contact: "",
+    title: "",
+    email: "",
+    whatsapp: "",
+    wechat: "",
+    phone: "",
+    country: "",
+    city: ""
   };
 }
 
@@ -167,12 +167,11 @@ function resolveOcrJob(user: SessionUser, requestedId: string, createIfMissing =
   const existingPersonal = store.ocrJobs.find((job) => job.id === personalId && canSeePersonalData(user, job.ownerId));
   if (existingPersonal) return existingPersonal;
   if (!createIfMissing) return null;
-  const template = store.ocrJobs.find((job) => job.id === "ocr1");
   const job: OcrJob = {
     id: personalId,
-    status: template?.status || "recognized",
-    confidence: template?.confidence || 94,
-    fields: { ...defaultOcrFields(), ...(template?.fields || {}) },
+    status: "recognized",
+    confidence: 0,
+    fields: defaultOcrFields(),
     ownerId: user.id,
     teamId: user.teamId
   };
@@ -769,8 +768,8 @@ app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
     billingAddress: z.string().optional().default(""),
     documentContact: z.string().optional().default(""),
     defaultPortDischarge: z.string().optional().default(""),
-    defaultIncoterm: z.string().optional().default("FOB Tianjin"),
-    defaultPaymentTerm: z.string().optional().default("30% T/T deposit, 70% before shipment")
+    defaultIncoterm: z.string().optional().default(""),
+    defaultPaymentTerm: z.string().optional().default("")
   });
   const body = schema.parse(req.body);
   const store = getStore();
@@ -1384,8 +1383,8 @@ app.post("/api/leads/:id/convert", requireAuth, asyncRoute(async (req, res) => {
       billingAddress: "",
       documentContact: lead.email ? `${lead.contact || "待维护"} / ${lead.email}` : lead.contact || "",
       defaultPortDischarge: "",
-      defaultIncoterm: "FOB Tianjin",
-      defaultPaymentTerm: "30% T/T deposit, 70% before shipment"
+      defaultIncoterm: "",
+      defaultPaymentTerm: ""
     };
     store.customers.unshift(customer);
   }
@@ -2026,16 +2025,16 @@ function normalizedPlanTaskRefs(user: SessionUser, refs: Pick<PlanTask, "custome
 }
 
 const defaultPlanTemplateDrafts: Array<Omit<PlanTemplate, "id" | "ownerId" | "teamId" | "updatedAt">> = [
-  { section: "knowledge", title: "产品分类地图", summary: "压力、温度、流量、液位、分析仪表、记录仪；每类写 3 个典型型号和应用场景。", output: "输出物：1页分类卡", badge: "必会", badgeTone: "green", phase: "前置知识", category: "产品知识", priority: "high", target: "完成6类仪表的分类卡和典型应用说明", description: "整理压力、温度、流量、液位、分析仪表、记录仪的型号、应用行业、常见客户问题。", sortOrder: 10 },
-  { section: "knowledge", title: "关键参数追问表", summary: "量程、精度、介质、温压、连接、输出信号、供电、防护、材质；必须能向客户追问。", output: "输出物：参数确认模板", badge: "必会", badgeTone: "green", phase: "前置知识", category: "参数训练", priority: "high", target: "形成可复制的英文参数确认表", description: "把量程、精度、介质、温度压力、接口、输出信号、供电和材质整理成询盘追问模板。", sortOrder: 20 },
-  { section: "knowledge", title: "证书与资料包", summary: "CE、RoHS、EMC、ATEX/IECEx、防爆、SIL、校准证书、ISO、材质报告，按产品归档。", output: "输出物：资料索引", badge: "资料化", badgeTone: "amber", phase: "前置知识", category: "资料维护", priority: "medium", target: "完成认证资料索引并标注适用产品", description: "按产品类型整理证书、测试报告、校准文件和对外解释口径，避免客户索要资料时临时翻找。", sortOrder: 30 },
-  { section: "knowledge", title: "行业应用场景", summary: "水处理、油气、化工、食品制药、HVAC、电力、船舶、环保设备、OEM 机械。", output: "输出物：行业话术", badge: "场景", badgeTone: "", phase: "前置知识", category: "场景训练", priority: "medium", target: "每个行业写出1条切入话术和1个典型应用", description: "围绕水处理、油气、化工、食品制药、HVAC、电力、船舶和OEM机械整理客户痛点。", sortOrder: 40 },
-  { section: "knowledge", title: "竞品替代口径", summary: "WIKA、Endress+Hauser、Yokogawa、Emerson、KROHNE、Ashcroft、Dwyer 的替代切入点。", output: "输出物：竞品对照表", badge: "谈判", badgeTone: "red", phase: "前置知识", category: "竞品研究", priority: "medium", target: "完成至少5个竞品品牌的替代切入点", description: "整理竞品主打产品、客户关注点、我方可替代卖点和风险边界。", sortOrder: 50 },
-  { section: "persona", title: "工业自动化经销商", summary: "要稳定供货、利润空间、资料齐全和快速响应。", output: "关键词：instrument distributor / automation supplier / country\n首触达：目录、代理优势、证书包、热销型号", badge: "高匹配", badgeTone: "green", phase: "客户画像", category: "客户开发", priority: "high", target: "筛选30家高匹配经销商并完成首触达", description: "使用instrument distributor、automation supplier等关键词，按国家筛选官网、联系人、产品线和代理品牌。", sortOrder: 110 },
-  { section: "persona", title: "系统集成商", summary: "关注项目参数匹配、交期、现场适配和技术支持。", output: "关键词：process automation integrator / control system integrator\n首触达：问应用场景、项目清单、参数范围", badge: "项目型", badgeTone: "aqua", phase: "客户画像", category: "客户开发", priority: "high", target: "筛选20家系统集成商并确认项目应用场景", description: "围绕process automation integrator等关键词查找项目型客户，首封邮件重点询问介质、量程、接口和证书需求。", sortOrder: 120 },
-  { section: "persona", title: "OEM 设备厂", summary: "关注批量一致性、定制接口、长期价格和替代型号。", output: "关键词：machine manufacturer sensor / OEM instrument supplier\n首触达：发参数确认表、询问年用量和安装空间", badge: "批量型", badgeTone: "amber", phase: "客户画像", category: "客户开发", priority: "medium", target: "建立20家OEM设备厂名单并完成参数确认", description: "按设备类型筛选OEM客户，重点记录年用量、现用型号、接口、输出信号和目标价。", sortOrder: 130 },
-  { section: "persona", title: "EPC / 工程承包商", summary: "关注认证、项目清单、交付风险、技术文件和投标资料。", output: "关键词：EPC water treatment instruments / project procurement\n首触达：索要 RFQ、项目清单、证书要求", badge: "高价值", badgeTone: "red", phase: "客户画像", category: "客户开发", priority: "medium", target: "筛选15家EPC客户并记录项目机会", description: "优先查水处理、化工、环保、电力工程客户，邮件重点强调证书、交付和项目配合能力。", sortOrder: 140 },
-  { section: "execution", title: "第 1 天", summary: "整理仪表产品分类与参数卡；建立客户搜索关键词库 10 组。", output: "整理仪表产品分类与参数卡。\n建立客户搜索关键词库 10 组。", badge: "启动", badgeTone: "green", phase: "首周执行", category: "产品知识", priority: "high", target: "完成分类卡和10组关键词库", description: "先把产品分类、参数卡和客户搜索关键词准备好，避免盲目找客户。", sortOrder: 210 },
+  { section: "knowledge", title: "产品分类地图", summary: "按产品线整理核心品类、典型型号、目标市场和应用场景。", output: "输出物：1页分类卡", badge: "必会", badgeTone: "green", phase: "前置知识", category: "产品知识", priority: "high", target: "完成核心产品分类卡和典型应用说明", description: "整理核心产品的型号、卖点、应用行业、常见客户问题和风险边界。", sortOrder: 10 },
+  { section: "knowledge", title: "需求追问表", summary: "用途、规格、数量、预算、交期、认证、包装和贸易条款；必须能向客户追问。", output: "输出物：需求确认模板", badge: "必会", badgeTone: "green", phase: "前置知识", category: "需求训练", priority: "high", target: "形成可复制的英文需求确认表", description: "把用途、规格、数量、预算、交期、认证、包装和贸易条款整理成询盘追问模板。", sortOrder: 20 },
+  { section: "knowledge", title: "证书与资料包", summary: "按产品归档目录、规格书、测试报告、认证文件、包装资料和常见问答。", output: "输出物：资料索引", badge: "资料化", badgeTone: "amber", phase: "前置知识", category: "资料维护", priority: "medium", target: "完成对外资料索引并标注适用产品", description: "按产品类型整理目录、规格书、认证和测试资料，避免客户索要资料时临时翻找。", sortOrder: 30 },
+  { section: "knowledge", title: "行业应用场景", summary: "按目标市场整理终端用户、经销渠道、工程项目和 OEM 客户的采购场景。", output: "输出物：行业话术", badge: "场景", badgeTone: "", phase: "前置知识", category: "场景训练", priority: "medium", target: "每类客户写出1条切入话术和1个典型应用", description: "围绕目标国家和主要客户类型整理采购痛点、决策角色和首触达理由。", sortOrder: 40 },
+  { section: "knowledge", title: "竞品替代口径", summary: "整理主要竞品的价格带、交期、渠道、卖点和替代边界。", output: "输出物：竞品对照表", badge: "谈判", badgeTone: "red", phase: "前置知识", category: "竞品研究", priority: "medium", target: "完成至少5个竞品品牌的替代切入点", description: "整理竞品主打产品、客户关注点、我方可替代卖点和风险边界。", sortOrder: 50 },
+  { section: "persona", title: "进口商与经销商", summary: "关注稳定供货、利润空间、资料齐全、区域支持和快速响应。", output: "关键词：product distributor / importer / wholesaler / country\n首触达：目录、渠道政策、认证资料、热销型号", badge: "高匹配", badgeTone: "green", phase: "客户画像", category: "客户开发", priority: "high", target: "筛选30家高匹配经销商并完成首触达", description: "使用产品词加 distributor、importer、wholesaler 等关键词，按国家筛选官网、联系人、产品线和代理品牌。", sortOrder: 110 },
+  { section: "persona", title: "项目采购商", summary: "关注规格匹配、交期、项目文件、质量保障和协同响应。", output: "关键词：project procurement / solution provider / country\n首触达：询问应用场景、采购清单、规格与交付要求", badge: "项目型", badgeTone: "aqua", phase: "客户画像", category: "客户开发", priority: "high", target: "筛选20家项目客户并确认采购场景", description: "围绕项目采购和解决方案关键词查找客户，首封邮件重点询问用途、规格、数量、交期和认证需求。", sortOrder: 120 },
+  { section: "persona", title: "OEM 制造商", summary: "关注批量一致性、定制能力、长期价格、包装和交付稳定性。", output: "关键词：manufacturer / OEM supplier / private label\n首触达：发需求确认表、询问年用量和定制要求", badge: "批量型", badgeTone: "amber", phase: "客户画像", category: "客户开发", priority: "medium", target: "建立20家OEM客户名单并完成需求确认", description: "按产品和应用类型筛选OEM客户，重点记录年用量、现用产品、定制要求、包装和目标价。", sortOrder: 130 },
+  { section: "persona", title: "工程承包商", summary: "关注认证、项目清单、交付风险、技术文件和投标资料。", output: "关键词：EPC contractor / project procurement\n首触达：索要 RFQ、项目清单、证书和交付要求", badge: "高价值", badgeTone: "red", phase: "客户画像", category: "客户开发", priority: "medium", target: "筛选15家工程客户并记录项目机会", description: "按目标行业筛选工程客户，邮件重点强调资料完整性、交付能力和项目配合经验。", sortOrder: 140 },
+  { section: "execution", title: "第 1 天", summary: "整理产品分类与卖点卡；建立客户搜索关键词库 10 组。", output: "整理产品分类与卖点卡。\n建立客户搜索关键词库 10 组。", badge: "启动", badgeTone: "green", phase: "首周执行", category: "产品知识", priority: "high", target: "完成分类卡和10组关键词库", description: "先把产品分类、卖点卡和客户搜索关键词准备好，避免盲目找客户。", sortOrder: 210 },
   { section: "execution", title: "第 2 天", summary: "整理证书、报价资料和应用案例；新增 30 家目标客户到 CRM。", output: "整理证书、报价资料和应用案例。\n新增 30 家目标客户到 CRM。", badge: "资料", badgeTone: "aqua", phase: "首周执行", category: "资料维护", priority: "high", target: "完成资料包并新增30家客户", description: "把资料准备和客户池新增绑定，新增客户必须带国家、官网、产品匹配点和下一步动作。", sortOrder: 220 },
   { section: "execution", title: "第 3 天", summary: "完成角色-痛点-话术表；首触达 20 家高匹配客户。", output: "完成角色-痛点-话术表。\n首触达 20 家高匹配客户。", badge: "触达", badgeTone: "amber", phase: "首周执行", category: "客户开发", priority: "high", target: "完成20家首触达并记录结果", description: "按客户角色使用不同邮件标题、开场和参数追问，不要所有客户发同一套内容。", sortOrder: 230 },
   { section: "execution", title: "第 4 天", summary: "整理竞品替代切入点 5 条；跟进昨日未回复客户 10 家。", output: "整理竞品替代切入点 5 条。\n跟进昨日未回复客户 10 家。", badge: "跟进", badgeTone: "amber", phase: "首周执行", category: "竞品研究", priority: "medium", target: "完成10家二次跟进和5条竞品切入点", description: "二次跟进要补充资料或新问题，不能只是重复问客户是否收到邮件。", sortOrder: 240 },
@@ -4500,8 +4499,8 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
     billingAddress: z.string().trim().optional().default(""),
     documentContact: z.string().trim().optional().default(""),
     defaultPortDischarge: z.string().trim().optional().default(""),
-    defaultIncoterm: z.string().trim().optional().default("FOB Tianjin"),
-    defaultPaymentTerm: z.string().trim().optional().default("30% T/T deposit, 70% before shipment")
+    defaultIncoterm: z.string().trim().optional().default(""),
+    defaultPaymentTerm: z.string().trim().optional().default("")
   });
   const schema = z.object({ rows: z.array(rowSchema).min(1).max(2000), fileName: z.string().optional().default("客户导入") });
   const body = schema.parse(req.body);
@@ -4525,8 +4524,8 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
         billingAddress: row.billingAddress || existing.billingAddress || "",
         documentContact: row.documentContact || existing.documentContact || row.contact,
         defaultPortDischarge: row.defaultPortDischarge || existing.defaultPortDischarge || "",
-        defaultIncoterm: row.defaultIncoterm || existing.defaultIncoterm || "FOB Tianjin",
-        defaultPaymentTerm: row.defaultPaymentTerm || existing.defaultPaymentTerm || "30% T/T deposit, 70% before shipment"
+        defaultIncoterm: row.defaultIncoterm || existing.defaultIncoterm || "",
+        defaultPaymentTerm: row.defaultPaymentTerm || existing.defaultPaymentTerm || ""
       });
       imported.push(existing);
       updated += 1;
@@ -4547,8 +4546,8 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
         billingAddress: row.billingAddress || "",
         documentContact: row.documentContact || row.contact || "待维护",
         defaultPortDischarge: row.defaultPortDischarge || "",
-        defaultIncoterm: row.defaultIncoterm || "FOB Tianjin",
-        defaultPaymentTerm: row.defaultPaymentTerm || "30% T/T deposit, 70% before shipment"
+        defaultIncoterm: row.defaultIncoterm || "",
+        defaultPaymentTerm: row.defaultPaymentTerm || ""
       };
       store.customers.unshift(customer);
       scopedCustomers.push(customer);
@@ -4596,7 +4595,7 @@ const documentItemSchema = z.object({
   quantity: z.number().nonnegative().default(1),
   unit: z.string().optional().default("PCS"),
   unitPrice: z.number().nonnegative().default(0),
-  originCountry: z.string().optional().default("China"),
+  originCountry: z.string().optional().default(""),
   weightKg: z.number().nonnegative().default(0),
   packageCount: z.number().int().nonnegative().default(0)
 });
@@ -4616,9 +4615,9 @@ const documentBodySchema = z.object({
   sellerAddress: z.string().optional().default(""),
   currency: z.string().min(1).default("USD"),
   incoterm: z.string().min(1).default("FOB"),
-  paymentTerm: z.string().optional().default("30% T/T deposit, 70% before shipment"),
+  paymentTerm: z.string().optional().default(""),
   shippingMethod: z.string().optional().default("Sea freight"),
-  portLoading: z.string().optional().default("Tianjin, China"),
+  portLoading: z.string().optional().default(""),
   portDischarge: z.string().optional().default(""),
   validityDate: z.string().optional().default(""),
   bankInfo: z.string().optional().default(""),
@@ -4675,8 +4674,8 @@ function documentBusinessDefaults(customer?: Customer) {
     buyer: customer.billingName || customer.company,
     buyerAddress: customer.billingAddress || "",
     buyerContact: customer.documentContact || customer.contact,
-    incoterm: customer.defaultIncoterm || "FOB Tianjin",
-    paymentTerm: customer.defaultPaymentTerm || "30% T/T deposit, 70% before shipment",
+    incoterm: customer.defaultIncoterm || "FOB",
+    paymentTerm: customer.defaultPaymentTerm || "",
     portDischarge: customer.defaultPortDischarge || ""
   };
 }
@@ -4709,11 +4708,11 @@ app.post("/api/trade-documents", requireAuth, asyncRoute(async (req, res) => {
   const completedBody = {
     ...body,
     customerId,
-    buyer: body.buyer || defaults.buyer || "Buyer Company",
+    buyer: body.buyer || defaults.buyer || "",
     buyerAddress: body.buyerAddress || defaults.buyerAddress || "",
     buyerContact: body.buyerContact || defaults.buyerContact || "",
-    incoterm: body.incoterm || defaults.incoterm || "FOB Tianjin",
-    paymentTerm: body.paymentTerm || defaults.paymentTerm || "30% T/T deposit, 70% before shipment",
+    incoterm: body.incoterm || defaults.incoterm || "FOB",
+    paymentTerm: body.paymentTerm || defaults.paymentTerm || "",
     portDischarge: body.portDischarge || defaults.portDischarge || ""
   };
   const revision = body.revision || (body.dealId
@@ -5004,17 +5003,17 @@ app.post("/api/tools/ocr/jobs/:id/recognize", requireAuth, asyncRoute(async (req
     return;
   }
   job.status = "recognized";
-  job.confidence = body.confidence ?? 96;
+  job.confidence = body.confidence ?? job.confidence;
   job.fields = {
     ...job.fields,
-    company: body.company || job.fields.company || "NorthStar Lighting GmbH",
-    contact: body.contact || job.fields.contact || "James Müller",
+    company: body.company ?? job.fields.company,
+    contact: body.contact ?? job.fields.contact,
     title: body.title ?? job.fields.title,
-    email: body.email || job.fields.email || "james.mueller@northstar-light.de",
-    whatsapp: body.whatsapp || job.fields.whatsapp || "+49 151 2388 9012",
-    wechat: body.wechat || job.fields.wechat || "james_light_de",
-    phone: body.phone || job.fields.phone || "+49 30 8842 1290",
-    country: body.country || job.fields.country || "德国",
+    email: body.email ?? job.fields.email,
+    whatsapp: body.whatsapp ?? job.fields.whatsapp,
+    wechat: body.wechat ?? job.fields.wechat,
+    phone: body.phone ?? job.fields.phone,
+    country: body.country ?? job.fields.country,
     city: body.city ?? job.fields.city
   };
   await store.persist();
@@ -6398,7 +6397,7 @@ async function searchWikidataLeads(body: z.infer<typeof leadFinderSearchSchema>,
     leadFinderQueryText(body),
     [firstProduct, firstIndustry, firstCountry].filter(Boolean).join(" "),
     [firstIndustry, "company"].filter(Boolean).join(" "),
-    firstProduct || firstIndustry || "instrumentation company"
+    firstProduct || firstIndustry || "product supplier"
   ].filter(Boolean);
   try {
     let records: Array<{ id?: string; label?: string; description?: string; concepturi?: string }> = [];
@@ -6719,13 +6718,9 @@ function companyFromTitle(title: string, hostname: string) {
 function inferBusiness(text: string) {
   const lower = text.toLowerCase();
   const dictionary = [
-    ["pressure", "压力仪表 / Pressure transmitter"],
-    ["flow", "流量仪表 / Flow meter"],
-    ["temperature", "温度仪表 / Temperature sensor"],
-    ["level", "液位仪表 / Level meter"],
-    ["sensor", "工业传感器 / Industrial sensor"],
-    ["instrument", "工业仪表 / Instrumentation"],
-    ["meter", "仪表计量 / Metering products"],
+    ["flow", "流体控制产品 / Flow control products"],
+    ["temperature", "温控产品 / Temperature control products"],
+    ["level", "液位控制产品 / Level control products"],
     ["valve", "阀门与过程控制 / Valve control"]
   ];
   const matched = dictionary.filter(([keyword]) => lower.includes(keyword)).map(([, label]) => label);
@@ -6782,6 +6777,7 @@ function reportRegion(country: string) {
 
 app.get("/api/reports/executive", requireAuth, (req, res) => {
   const store = getStore();
+  const reportOwner = store.users.find((user) => user.id === req.user!.id);
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
@@ -6942,6 +6938,7 @@ app.get("/api/reports/executive", requireAuth, (req, res) => {
       ? `本月共有 ${expectedThisMonth.length} 个商机进入预计成交窗口，当前识别 ${riskRows.length} 个风险商机。`
       : `当前有 ${activeDeals.length} 个活跃商机，本月尚无商机进入明确预计成交窗口。`,
     note: "活跃漏斗为当前快照；本月成交、丢单和跟进按自然月统计；预计成交按预计成交日期判断。",
+    reportNote: reportOwner?.reportNote || "",
     metrics: {
       activeDealCount: activeDeals.length,
       activePipeline: reportMoneyRows(activeDeals),
@@ -6975,6 +6972,21 @@ app.get("/api/reports/executive", requireAuth, (req, res) => {
     ]
   });
 });
+
+app.patch("/api/reports/executive/note", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    note: z.string().max(1000).default("")
+  }).parse(req.body);
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.user!.id);
+  if (!user) {
+    res.status(404).json({ message: "账号不存在" });
+    return;
+  }
+  user.reportNote = body.note.trim();
+  await store.persist();
+  res.json({ note: user.reportNote });
+}));
 
 registerSwagger(app);
 

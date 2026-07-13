@@ -54,7 +54,8 @@
   - 后端已抽象 `CrmStore`
   - 默认内存模式便于原型开发
   - 设置 `CRM_STORE=mysql` 或 `DATABASE_URL` / `MYSQL_URL` 后切换到 MySQL
-  - MySQL 启动时自动建表，空库会自动导入初始演示数据
+  - MySQL 启动时自动建表；仅开发/测试环境的空库会写入脱敏测试种子
+  - 生产环境只创建显式配置的初始超级管理员，业务表保持为空
   - 写接口会等待 `persist()` 完成后再返回，避免前端成功但数据库未落盘
 - 页面级自动化测试：
   - Playwright 覆盖登录、首页待办、客户新增、资料维护、在线考试、OCR 同步、PPT 级报表导出
@@ -62,8 +63,9 @@
 ## 已验证
 
 - `npm run test --workspace backend`
-  - 业务员 Shirley 只能看到 3 个客户
-  - 主管 Alex 可以看到 5 个客户
+  - 业务员只能看到本人负责的数据
+  - 团队管理员只能看到本团队数据
+  - 不同公测团队之间的数据相互不可见
   - OCR 名片可同步为线索
 - `npm run test --workspace frontend`
   - 高保真原型关键模块存在
@@ -115,7 +117,7 @@ npm run dev
 
 ## MySQL 持久化
 
-默认不设置环境变量时使用内存模式。启用 MySQL：
+默认不设置环境变量时使用内存模式。开发环境启用 MySQL：
 
 ```bash
 cd GoodJob/CRM
@@ -127,6 +129,10 @@ CRM_STORE=mysql DATABASE_URL="mysql://user:password@127.0.0.1:3306/goodjob_crm" 
 ```bash
 MYSQL_URL="mysql://user:password@127.0.0.1:3306/goodjob_crm" npm run dev
 ```
+
+生产环境必须显式配置 `DATABASE_URL` 或 `MYSQL_URL`，并配置
+`INITIAL_ADMIN_EMAIL`、至少 12 位的 `INITIAL_ADMIN_PASSWORD`。首次启动只创建该超级管理员，
+不会导入开发测试客户、线索、商机或其他业务数据。
 
 健康检查：
 

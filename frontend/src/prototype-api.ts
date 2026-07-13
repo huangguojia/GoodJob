@@ -862,6 +862,7 @@ interface ExecutiveReport {
   dataStatus: string;
   headline: string;
   note: string;
+  reportNote: string;
   metrics: {
     activeDealCount: number;
     activePipeline: ReportMoneyRow[];
@@ -1167,7 +1168,7 @@ const viewLabels: Record<string, string> = {
   customers: "客户",
   pipeline: "商机",
   reminders: "跟进提醒",
-  "instrument-growth": "计划任务",
+  "plan-growth": "计划任务",
   documents: "单据平台",
   commission: "提成对账",
   reports: "报表",
@@ -1543,8 +1544,8 @@ function generateDevelopmentEmailDraft() {
   const body = [
     `Dear ${company} team,`,
     "",
-    "We supply pressure, temperature, flow and level instruments for distributors, system integrators and industrial projects.",
-    "If you are evaluating instrumentation suppliers for your local market, we can support product selection, certificates, technical datasheets and quotation for your project requirements.",
+    "We support overseas buyers with product selection, specifications, certificates, samples and quotations.",
+    "If you are evaluating suppliers for your local market, we can prepare a proposal around your product, quality and delivery requirements.",
     "",
     "Could you share the main product categories you are currently sourcing and the applications you are focused on?",
     "",
@@ -2263,14 +2264,9 @@ function renderDashboardKnowledgePanels(assets = state.knowledgeAssets, exams = 
 }
 
 function ownerName(ownerId: string) {
-  const map: Record<string, string> = {
-    u_sales_shirley: "Shirley",
-    u_sales_mia: "Mia",
-    u_manager_alex: "Alex",
-    u_admin: "Admin",
-    u_super_admin: "Super Admin"
-  };
-  return map[ownerId] || "当前账号";
+  if (!ownerId) return "未分配";
+  if (state.user?.id === ownerId) return state.user.name;
+  return state.accounts.find((account) => account.id === ownerId)?.name || "未知账号";
 }
 
 function renderTodoInsights(summary: DashboardSummary) {
@@ -3440,7 +3436,7 @@ async function openLeadConversion(id: string) {
       <label class="conversion-deal-toggle"><input id="leadCreateDealInput" type="checkbox">同时创建商机</label>
       <div class="form-grid is-hidden" id="leadConversionDealFields">
         <div class="form-field full"><label>商机标题</label><input id="leadDealTitleInput" value="${escapeHtml(`${lead.company} 采购需求`)}"></div>
-        <div class="form-field"><label>产品/需求</label><input id="leadDealProductInput" placeholder="例如：压力变送器"></div>
+        <div class="form-field"><label>产品/需求</label><input id="leadDealProductInput" placeholder="请输入产品、数量或规格需求"></div>
         <div class="form-field"><label>预计金额</label><input id="leadDealAmountInput" type="number" min="0" value="${lead.estimatedAmount || 0}"></div>
         <div class="form-field full"><label>下一步动作</label><input id="leadDealNextActionInput" value="${escapeHtml(lead.nextFollowAt || "确认产品、数量与报价要求")}"></div>
       </div>
@@ -3760,8 +3756,8 @@ function renderCustomerDrawer(customer?: Customer) {
   const billingAddress = customer.billingAddress || `${customer.country} / 地址待维护`;
   const documentContact = customer.documentContact || customer.contact;
   const portDischarge = customer.defaultPortDischarge || "待确认";
-  const incoterm = customer.defaultIncoterm || "FOB Tianjin";
-  const paymentTerm = customer.defaultPaymentTerm || "30% T/T deposit, 70% before shipment";
+  const incoterm = customer.defaultIncoterm || "待维护";
+  const paymentTerm = customer.defaultPaymentTerm || "待维护";
   const pipelineStage = customer.pipelineStage || "暂无活跃商机";
   const pipelineAmount = customer.pipelineAmount || 0;
   const activeDealCount = customer.activeDealCount || 0;
@@ -3982,19 +3978,19 @@ function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
     number: `${type}-${date.replace(/-/g, "")}-${Math.floor(Date.now() / 1000).toString().slice(-4)}`,
     issueDate: date,
     buyer: customer.billingName?.trim() || customer.company,
-    buyerAddress: customer.billingAddress?.trim() || `${customer.country} / address to be confirmed`,
+    buyerAddress: customer.billingAddress?.trim() || "",
     buyerContact: customer.documentContact?.trim() || customer.contact,
-    seller: "GoodJob Instrument Co., Ltd.",
-    sellerAddress: "Tianjin, China",
+    seller: "",
+    sellerAddress: "",
     currency: deal.currency || "USD",
-    incoterm: customer.defaultIncoterm?.trim() || "FOB Tianjin",
-    paymentTerm: customer.defaultPaymentTerm?.trim() || "30% T/T deposit, 70% before shipment",
+    incoterm: customer.defaultIncoterm?.trim() || "FOB",
+    paymentTerm: customer.defaultPaymentTerm?.trim() || "",
     shippingMethod: "Sea freight",
-    portLoading: "Tianjin, China",
+    portLoading: "",
     portDischarge: customer.defaultPortDischarge?.trim() || "",
     validityDate: "",
-    bankInfo: "Beneficiary: GoodJob Instrument Co., Ltd. / Bank: Bank of China Tianjin Branch / SWIFT: BKCHCNBJ",
-    notes: `Generated from deal: ${deal.title}. ${deal.nextAction}`,
+    bankInfo: "",
+    notes: "",
     templateStyle: "executive",
     status: "ready",
     audits: [],
@@ -4008,7 +4004,7 @@ function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
       quantity,
       unit: "PCS",
       unitPrice: Math.round(unitPrice * 100) / 100,
-      originCountry: "China",
+      originCountry: "",
       weightKg: 0,
       packageCount: 0
     }]
@@ -4024,17 +4020,11 @@ async function printDealDocument(id: string) {
     return;
   }
   const draft = tradeDocumentFromDeal(deal, customer);
-  const created = await api<{ document: TradeDocument }>("/api/trade-documents", {
-    method: "POST",
-    body: JSON.stringify(draft)
-  });
-  state.tradeDocuments = [created.document, ...state.tradeDocuments.filter((document) => document.id !== created.document.id)];
-  await refreshDealsData(false);
-  state.selectedDocumentId = created.document.id;
+  state.selectedDocumentId = "__new__";
   activateNavView("documents");
-  renderTradeDocuments(state.tradeDocuments);
-  toast("已按客户资料生成并打印 PI 草稿；审批通过后可正式导出");
-  printDocumentPreview();
+  fillDocumentEditor(draft);
+  qsa<HTMLElement>(".doc-list-card").forEach((card) => card.classList.remove("active"));
+  toast("已按客户与商机资料生成 PI 草稿，请补齐卖方和结算资料后保存");
 }
 
 function openDealStageModal(id: string) {
@@ -4331,7 +4321,7 @@ function openDealModal(editing?: Deal) {
   openModal(editing ? "编辑商机" : "新增商机", `
     <div class="form-grid">
       <input id="dealIdInput" type="hidden" value="${escapeHtml(editing?.id || "")}">
-      <div class="form-field full"><label>商机名称</label><input id="dealTitleInput" value="${escapeHtml(title)}" placeholder="例如：Nordic Tools 年度压力仪表采购"></div>
+      <div class="form-field full"><label>商机名称</label><input id="dealTitleInput" value="${escapeHtml(title)}" placeholder="例如：年度采购项目"></div>
       <div class="form-field deal-customer-field">
         <label>关联客户（必选）</label>
         <input id="dealCustomerInput" value="${escapeHtml(defaultCustomer?.company || "")}" placeholder="输入客户名称并从列表选择" autocomplete="off">
@@ -4340,7 +4330,7 @@ function openDealModal(editing?: Deal) {
         <div class="deal-customer-options" id="dealCustomerOptions"></div>
       </div>
       <div class="form-field"><label>币种</label><select id="dealCurrencyInput">${["USD", "EUR", "GBP", "CNY", "JPY", "AED"].map((currency) => `<option ${currency === (editing?.currency || "USD") ? "selected" : ""}>${currency}</option>`).join("")}</select></div>
-      <div class="form-field full"><label>产品 / 采购需求（必填）</label><input id="dealProductInput" value="${escapeHtml(editing?.product || "")}" placeholder="例如：压力变送器 PT-2088 / 60 件"></div>
+      <div class="form-field full"><label>产品 / 采购需求（必填）</label><input id="dealProductInput" value="${escapeHtml(editing?.product || "")}" placeholder="例如：产品型号 / 数量 / 规格"></div>
       <div class="form-field"><label>数量</label><input id="dealQuantityInput" type="number" min="0" step="1" value="${quantity || 30}"></div>
       <div class="form-field"><label>单价</label><input id="dealUnitPriceInput" type="number" min="0" step="0.01" value="${unitPrice || 600}"></div>
       <div class="form-field"><label>金额</label><input id="dealAmountInput" type="number" value="${computedAmount}" readonly></div>
@@ -5534,6 +5524,10 @@ function renderProblemDetail(problem?: ProblemItem) {
     qs("#problem-root-cause")!.textContent = "暂无问题";
     qs("#problem-solution")!.textContent = "暂无解决方案";
     qs("#problem-next-action")!.textContent = "暂无下一动作";
+    const tbody = qs<HTMLElement>("#problem-category-table");
+    if (tbody) tbody.innerHTML = `<tr><td colspan="3">暂无问题分类数据</td></tr>`;
+    const button = qs<HTMLButtonElement>("#problemStatusButton");
+    if (button) button.textContent = "更新状态";
     return;
   }
   state.selectedProblemId = problem.id;
@@ -5758,7 +5752,17 @@ function renderCompetitors(competitors: Competitor[]) {
 }
 
 function renderCompetitorDetail(competitor?: Competitor) {
-  if (!competitor) return;
+  if (!competitor) {
+    qs("#competitor-detail-title")!.textContent = "竞争公司详情";
+    qs("#competitor-detail-meta")!.textContent = "选择左侧记录查看情报";
+    qs("#competitor-products")!.textContent = "暂无记录";
+    qs("#competitor-strengths")!.textContent = "暂无记录";
+    qs("#competitor-weaknesses")!.textContent = "暂无记录";
+    qs("#competitor-strategy")!.textContent = "暂无记录";
+    const button = qs<HTMLButtonElement>("#competitorThreatButton");
+    if (button) button.textContent = "更新威胁等级";
+    return;
+  }
   state.selectedCompetitorId = competitor.id;
   qs("#competitor-detail-title")!.textContent = competitor.company;
   qs("#competitor-detail-meta")!.textContent = `${competitor.country || "未知国家"} · ${competitor.segment || "未分类"} · ${threatText(competitor.threatLevel)}`;
@@ -5794,7 +5798,18 @@ function renderCaseStudies(caseStudies: CaseStudy[]) {
 }
 
 function renderCaseDetail(caseStudy?: CaseStudy) {
-  if (!caseStudy) return;
+  if (!caseStudy) {
+    qs("#case-detail-title")!.textContent = "成功案例详情";
+    qs("#case-detail-meta")!.textContent = "选择左侧案例查看内容";
+    qs("#case-product")!.textContent = "暂无记录";
+    qs("#case-result")!.textContent = "暂无记录";
+    qs("#case-industry")!.textContent = "暂无记录";
+    qs("#case-story")!.textContent = "暂无记录";
+    qs("#case-reusable")!.textContent = "暂无记录";
+    const button = qs<HTMLButtonElement>("#casePublishButton");
+    if (button) button.textContent = "发布案例";
+    return;
+  }
   state.selectedCaseId = caseStudy.id;
   qs("#case-detail-title")!.textContent = caseStudy.title;
   qs("#case-detail-meta")!.textContent = `${caseStudy.customer || "未关联客户"} · ${caseStudy.country || "未知国家"} · ${caseStatusText(caseStudy.status)}`;
@@ -6226,7 +6241,7 @@ async function restoreSelectedMemo() {
 function openCompetitorModal() {
   openModal("新增竞争公司", `
     <div class="form-grid">
-      <div class="form-field full"><label>公司名称</label><input id="competitorCompanyInput" placeholder="例如：EuroLift Tools GmbH"></div>
+      <div class="form-field full"><label>公司名称</label><input id="competitorCompanyInput" placeholder="请输入竞争公司名称"></div>
       <div class="form-field"><label>国家</label><input id="competitorCountryInput" value="德国"></div>
       <div class="form-field"><label>品类/赛道</label><input id="competitorSegmentInput" value="电动工具"></div>
       <div class="form-field"><label>威胁等级</label><select id="competitorThreatInput"><option value="medium">中威胁</option><option value="high">高威胁</option><option value="low">低威胁</option></select></div>
@@ -6289,7 +6304,7 @@ function openCaseModal() {
       <div class="form-field"><label>国家</label><input id="caseCountryInput" value="${escapeHtml(state.customers[0]?.country || "")}"></div>
       <div class="form-field"><label>产品</label><input id="caseProductInput" placeholder="例如：18V 无刷电钻套装"></div>
       <div class="form-field"><label>行业</label><input id="caseIndustryInput" placeholder="例如：工具批发"></div>
-      <div class="form-field full"><label>成果</label><input id="caseResultInput" placeholder="例如：拿下 $36,000 首单"></div>
+      <div class="form-field full"><label>成果</label><input id="caseResultInput" placeholder="请输入成交结果或客户反馈"></div>
       <div class="form-field full"><label>成交故事</label><textarea id="caseStoryInput" placeholder="客户背景、阻力、关键动作和成交过程"></textarea></div>
       <div class="form-field full"><label>可复用打法</label><textarea id="caseReusableInput" placeholder="可复制到其他客户的步骤和话术"></textarea></div>
     </div>
@@ -6378,27 +6393,27 @@ function defaultTradeDocument(type: "PI" | "CI" = "PI"): TradeDocument {
     title: type === "PI" ? "新建形式发票 PI" : "新建商业发票 CI",
     number: `${type}-${date.replace(/-/g, "")}-${Math.floor(Date.now() / 1000).toString().slice(-4)}`,
     issueDate: date,
-    buyer: state.customers[0]?.company || "Buyer Company",
-    buyerAddress: state.customers[0] ? `${state.customers[0].country} / address to be confirmed` : "",
-    buyerContact: state.customers[0]?.contact || "",
-    seller: "GoodJob Instrument Co., Ltd.",
-    sellerAddress: "Tianjin, China",
+    buyer: "",
+    buyerAddress: "",
+    buyerContact: "",
+    seller: "",
+    sellerAddress: "",
     currency: "USD",
-    incoterm: "FOB Tianjin",
-    paymentTerm: "30% T/T deposit, 70% before shipment",
+    incoterm: "FOB",
+    paymentTerm: "",
     shippingMethod: "Sea freight",
-    portLoading: "Tianjin, China",
+    portLoading: "",
     portDischarge: "",
     validityDate: "",
-    bankInfo: "Beneficiary: GoodJob Instrument Co., Ltd. / Bank: Bank of China Tianjin Branch / SWIFT: BKCHCNBJ",
-    notes: type === "PI" ? "Lead time starts after deposit and technical confirmation." : "The goods are of China origin and packed for export shipment.",
+    bankInfo: "",
+    notes: "",
     templateStyle: "executive",
     status: "draft",
     audits: [],
     sendRecords: [],
     updatedAt: new Date().toISOString(),
     items: [
-      { id: "new_item_1", product: "Smart Pressure Transmitter", model: "GJ-PT3051", hsCode: "902620", quantity: 10, unit: "PCS", unitPrice: 185, originCountry: "China", weightKg: 16, packageCount: 1 }
+      { id: "new_item_1", product: "", model: "", hsCode: "", quantity: 1, unit: "PCS", unitPrice: 0, originCountry: "", weightKg: 0, packageCount: 0 }
     ]
   };
 }
@@ -6504,10 +6519,10 @@ function applyDocumentCustomerDefaults(customerId: string) {
   if (!customer) return;
   const values: Record<string, string> = {
     docBuyerInput: customer.billingName?.trim() || customer.company,
-    docBuyerAddressInput: customer.billingAddress?.trim() || `${customer.country} / address to be confirmed`,
+    docBuyerAddressInput: customer.billingAddress?.trim() || "",
     docBuyerContactInput: customer.documentContact?.trim() || customer.contact,
-    docIncotermInput: customer.defaultIncoterm?.trim() || "FOB Tianjin",
-    docPaymentInput: customer.defaultPaymentTerm?.trim() || "30% T/T deposit, 70% before shipment",
+    docIncotermInput: customer.defaultIncoterm?.trim() || "FOB",
+    docPaymentInput: customer.defaultPaymentTerm?.trim() || "",
     docPortDischargeInput: customer.defaultPortDischarge?.trim() || ""
   };
   Object.entries(values).forEach(([id, value]) => {
@@ -6640,13 +6655,13 @@ function collectDocumentItems(): TradeDocumentItem[] {
     const numberField = (name: string) => Number(row.querySelector<HTMLInputElement>(`[data-doc-field="${name}"]`)?.value || 0);
     return {
       id: row.dataset.docItem || `item_${index}`,
-      product: field("product") || "Product",
+      product: field("product"),
       model: field("model"),
       hsCode: field("hsCode"),
       quantity: numberField("quantity"),
       unit: field("unit") || "PCS",
       unitPrice: numberField("unitPrice"),
-      originCountry: field("originCountry") || "China",
+      originCountry: field("originCountry"),
       weightKg: numberField("weightKg"),
       packageCount: Math.round(numberField("packageCount"))
     };
@@ -6664,13 +6679,13 @@ function collectDocumentDraft(): TradeDocument {
     title: qs<HTMLInputElement>("#docTitleInput")?.value.trim() || "未命名单据",
     number: qs<HTMLInputElement>("#docNumberInput")?.value.trim() || `DOC-${Date.now()}`,
     issueDate: qs<HTMLInputElement>("#docIssueDateInput")?.value || todayDateInput(),
-    buyer: qs<HTMLInputElement>("#docBuyerInput")?.value.trim() || "Buyer Company",
+    buyer: qs<HTMLInputElement>("#docBuyerInput")?.value.trim() || "",
     buyerAddress: qs<HTMLInputElement>("#docBuyerAddressInput")?.value.trim() || "",
     buyerContact: qs<HTMLInputElement>("#docBuyerContactInput")?.value.trim() || "",
-    seller: qs<HTMLInputElement>("#docSellerInput")?.value.trim() || "GoodJob Instrument Co., Ltd.",
+    seller: qs<HTMLInputElement>("#docSellerInput")?.value.trim() || "",
     sellerAddress: qs<HTMLInputElement>("#docSellerAddressInput")?.value.trim() || "",
     currency: qs<HTMLSelectElement>("#docCurrencyInput")?.value || "USD",
-    incoterm: qs<HTMLSelectElement>("#docIncotermInput")?.value || "FOB Tianjin",
+    incoterm: qs<HTMLSelectElement>("#docIncotermInput")?.value || "FOB",
     paymentTerm: qs<HTMLInputElement>("#docPaymentInput")?.value.trim() || "",
     shippingMethod: qs<HTMLSelectElement>("#docShippingInput")?.value || "Sea freight",
     portLoading: qs<HTMLInputElement>("#docPortLoadingInput")?.value.trim() || "",
@@ -6700,7 +6715,7 @@ function renderDocumentPreview(document: TradeDocument) {
         <div class="doc-logo-mark">GJ</div>
         <div>
           <b>${escapeHtml(document.seller)}</b>
-          <small>${escapeHtml(document.sellerAddress || "Tianjin, China")}<br>Export Documentation Center</small>
+          <small>${escapeHtml(document.sellerAddress)}</small>
         </div>
       </div>
       <div class="doc-number-box">
@@ -6754,7 +6769,7 @@ function renderDocumentPreview(document: TradeDocument) {
 
 function addDocumentItem() {
   const draft = collectDocumentDraft();
-  draft.items.push({ id: `item_${Date.now()}`, product: "", model: "", hsCode: "", quantity: 1, unit: "PCS", unitPrice: 0, originCountry: "China", weightKg: 0, packageCount: 0 });
+  draft.items.push({ id: `item_${Date.now()}`, product: "", model: "", hsCode: "", quantity: 1, unit: "PCS", unitPrice: 0, originCountry: "", weightKg: 0, packageCount: 0 });
   renderDocumentItems(draft.items);
   renderDocumentPreview(draft);
 }
@@ -6768,8 +6783,17 @@ function openNewDocument() {
 
 async function saveTradeDocument() {
   const draft = collectDocumentDraft();
+  if (!draft.seller) {
+    toast("请填写卖方公司", "error");
+    qs<HTMLInputElement>("#docSellerInput")?.focus();
+    return null;
+  }
   if (!draft.items.length) {
     toast("请至少保留一条商品明细", "error");
+    return null;
+  }
+  if (draft.items.some((item) => !item.product.trim())) {
+    toast("请填写每条商品明细的品名", "error");
     return null;
   }
   const existing = state.tradeDocuments.find((document) => document.id === state.selectedDocumentId);
@@ -6944,9 +6968,7 @@ async function exportCustomers() {
 }
 
 function downloadCustomerTemplate() {
-  const worksheet = XLSX.utils.json_to_sheet([
-    { 公司名: "Demo Instrument Trading Co., Ltd.", 国家: "德国", 联系人: "Demo Contact", 阶段: "询盘", 预计金额: 12000, 健康度: 70, 下一提醒: "明天 10:00", 企微绑定: "未绑定" }
-  ]);
+  const worksheet = XLSX.utils.aoa_to_sheet([["公司名", "国家", "联系人", "阶段", "预计金额", "健康度", "下一提醒", "企微绑定"]]);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "客户导入模板");
   XLSX.writeFile(workbook, "GoodJob客户导入模板.xlsx");
@@ -6955,8 +6977,27 @@ function downloadCustomerTemplate() {
 
 function renderWecom(messages: WecomMessage[]) {
   const chat = qs<HTMLElement>("#wecom .chat");
-  if (!chat) return;
-  chat.innerHTML = messages.map((message, index) => `<div class="bubble ${index % 2 ? "me" : ""}">${escapeHtml(message.summary)} ${message.status === "archived" ? "已归档" : "待归档"}</div>`).join("");
+  if (chat) {
+    chat.innerHTML = messages.length
+      ? messages.map((message, index) => `<div class="bubble ${index % 2 ? "me" : ""}">${escapeHtml(message.summary)} ${message.status === "archived" ? "已归档" : "待归档"}</div>`).join("")
+      : `<div class="bubble">暂无可见企微会话摘要</div>`;
+  }
+  const metrics = qsa<HTMLElement>("#wecom .kpi");
+  const archived = messages.filter((message) => message.status === "archived").length;
+  const pending = messages.length - archived;
+  const values = [
+    { value: "--", note: "当前接口未提供绑定客户统计" },
+    { value: String(pending), note: "待归档摘要" },
+    { value: String(messages.length), note: `${archived} 条已归档` },
+    { value: "--", note: "当前接口未提供授权状态" }
+  ];
+  metrics.forEach((metric, index) => {
+    const value = values[index];
+    const strong = metric.querySelector("strong");
+    const note = metric.querySelector("p");
+    if (strong && value) strong.textContent = value.value;
+    if (note && value) note.textContent = value.note;
+  });
 }
 
 async function syncWecomMessages() {
@@ -6972,10 +7013,19 @@ async function syncWecomMessages() {
 function renderKnowledge(assets: KnowledgeAsset[]) {
   const grid = qs<HTMLElement>("#knowledge .file-grid");
   if (!grid) return;
-  grid.innerHTML = assets.map((asset) => `<div class="file-card" data-asset-id="${escapeHtml(asset.id)}"><div class="file-icon">${escapeHtml(assetIcon(asset.category))}</div><b>${escapeHtml(asset.title)}</b><span>${escapeHtml(asset.category)} · ${asset.status === "published" ? "已发布" : "待审核"} · ${escapeHtml(asset.version)}</span><button class="btn" data-publish-asset>${asset.status === "published" ? "已发布" : "发布"}</button></div>`).join("");
+  grid.innerHTML = assets.length
+    ? assets.map((asset) => `<div class="file-card" data-asset-id="${escapeHtml(asset.id)}"><div class="file-icon">${escapeHtml(assetIcon(asset.category))}</div><b>${escapeHtml(asset.title)}</b><span>${escapeHtml(asset.category)} · ${asset.status === "published" ? "已发布" : "待审核"} · ${escapeHtml(asset.version)}</span><button class="btn" data-publish-asset>${asset.status === "published" ? "已发布" : "发布"}</button></div>`).join("")
+    : `<div class="todo-history-empty">暂无可见资料</div>`;
   const total = qsa<HTMLElement>("#knowledge .dense-card b");
   if (total[0]) total[0].textContent = String(assets.length);
   if (total[1]) total[1].textContent = String(assets.filter((item) => item.status !== "published").length);
+  if (total[2]) total[2].textContent = "--";
+  if (total[3]) total[3].textContent = "--";
+  const notes = qsa<HTMLElement>("#knowledge .dense-card small");
+  if (notes[0]) notes[0].textContent = `${new Set(assets.map((item) => item.category).filter(Boolean)).size} 个类目`;
+  if (notes[1]) notes[1].textContent = "来自数据库状态";
+  if (notes[2]) notes[2].textContent = "当前接口未记录下载次数";
+  if (notes[3]) notes[3].textContent = "当前接口未定义覆盖基准";
   qsa<HTMLButtonElement>("[data-publish-asset]", grid).forEach((button) => {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -7004,7 +7054,7 @@ async function publishAsset(id: string) {
 function openKnowledgeModal() {
   openModal("上传资料", `
     <div class="form-grid">
-      <div class="form-field full"><label>资料标题</label><input id="assetTitleInput" value="新品参数说明"></div>
+      <div class="form-field full"><label>资料标题</label><input id="assetTitleInput" placeholder="请输入资料标题"></div>
       <div class="form-field"><label>资料类目</label><select id="assetCategoryInput"><option>产品知识</option><option>认证资料</option><option>报价规则</option><option>销售 SOP</option></select></div>
       <div class="form-field"><label>版本</label><input id="assetVersionInput" value="v1"></div>
     </div>
@@ -7410,7 +7460,7 @@ async function ensureExamQuestionsLoaded() {
 
 async function openExamCreateModal(category = "产品知识") {
   await ensureExamQuestionsLoaded();
-  const categories = Array.from(new Set([...state.examQuestions.map((question) => question.category), category, "产品知识", "认证资料", "报价规则", "仪表产品"]));
+  const categories = Array.from(new Set([...state.examQuestions.map((question) => question.category), category, "产品知识", "认证资料", "报价规则"]));
   openModal("发布考试 · 勾选题目组卷", `
     <div class="form-grid exam-create-grid">
       <div class="form-field full"><label>考试名称</label><input id="examTitleInput" value="${escapeHtml(category)}新品知识抽考"></div>
@@ -7475,7 +7525,7 @@ async function saveExam(button?: HTMLButtonElement) {
 }
 
 function questionBankCategories() {
-  return Array.from(new Set([...state.examQuestions.map((question) => question.category), "产品知识", "认证资料", "报价规则", "仪表产品"])).filter(Boolean);
+  return Array.from(new Set([...state.examQuestions.map((question) => question.category), "产品知识", "认证资料", "报价规则"])).filter(Boolean);
 }
 
 function refreshQuestionBankCategoryOptions() {
@@ -7549,14 +7599,14 @@ function emptyQuestionDraft(): ExamQuestion {
   return {
     id: "",
     examId: "bank",
-    stem: "客户询问仪表量程时，销售应优先确认哪些参数？",
-    category: "仪表产品",
-    options: ["量程、精度、接口、工况", "客户公司规模", "包装颜色", "输出信号、供电和防护等级"],
+    stem: "",
+    category: "产品知识",
+    options: ["", "", "", ""],
     answerIndex: 0,
-    answerIndexes: [0, 3],
-    questionType: "multiple",
-    tags: ["仪表", "技术参数"],
-    explanation: "仪表类产品报价必须先确认量程、精度、接口和实际工况，避免型号匹配错误。",
+    answerIndexes: [0],
+    questionType: "single",
+    tags: [],
+    explanation: "",
     difficulty: "medium"
   };
 }
@@ -7800,7 +7850,7 @@ async function deleteBankQuestion(id: string) {
 }
 
 function openExamCategoryModal() {
-  const categories = Array.from(new Set([...state.exams.map((exam) => exam.category), "仪表产品", "认证资料", "报价规则"]));
+  const categories = Array.from(new Set([...state.exams.map((exam) => exam.category), "产品知识", "认证资料", "报价规则"]));
   openModal("分类目考试维护", `
     <div class="form-grid">
       <div class="form-field full"><label>选择类目</label><select id="categoryExamInput">${categories.map((category) => `<option>${escapeHtml(category)}</option>`).join("")}</select></div>
@@ -7846,10 +7896,12 @@ async function renderAccounts(user: User) {
   if (!canManage) {
     state.accounts = [user];
     tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><b>账号管理仅管理员可用</b><span>当前账号可查看授权范围说明；账号新增、停用和角色调整由管理员或超级管理员处理。</span></div></td></tr>`;
+    renderAccountMetrics([user], false);
     return;
   }
   const accounts = (await api<{ accounts: User[] }>("/api/accounts")).accounts;
   state.accounts = accounts;
+  renderAccountMetrics(accounts, true);
   tbody.innerHTML = accounts.map((account) => {
     const status = (account as User & { status?: string }).status === "disabled" ? "停用" : "启用";
     const disableAllowed = canManageRoleInUi(account);
@@ -7863,6 +7915,26 @@ async function renderAccounts(user: User) {
   });
   qsa<HTMLButtonElement>("[data-delete-account]", tbody).forEach((button) => {
     button.addEventListener("click", () => void deleteAccount(button.closest<HTMLElement>("tr")?.dataset.accountId || ""));
+  });
+}
+
+function renderAccountMetrics(accounts: User[], canManage: boolean) {
+  const cards = qsa<HTMLElement>("#settings .dense-card");
+  const active = accounts.filter((account) => (account as User & { status?: string }).status !== "disabled").length;
+  const managers = accounts.filter((account) => account.role === "manager").length;
+  const sales = accounts.filter((account) => account.role === "sales").length;
+  const values = [
+    { value: String(active), note: canManage ? "来自可见账号数据" : "当前账号" },
+    { value: String(managers), note: "可见范围内" },
+    { value: String(sales), note: "可见范围内" },
+    { value: "--", note: "当前接口未提供登录异常统计" }
+  ];
+  cards.forEach((card, index) => {
+    const value = values[index];
+    const strong = card.querySelector("b");
+    const note = card.querySelector("small");
+    if (strong && value) strong.textContent = value.value;
+    if (note && value) note.textContent = value.note;
   });
 }
 
@@ -7900,11 +7972,11 @@ function openAccountModal() {
     : "";
   openModal("新增账号", `
     <div class="form-grid">
-      <div class="form-field"><label>姓名</label><input id="accountNameInput" value="New Sales"></div>
+      <div class="form-field"><label>姓名</label><input id="accountNameInput" placeholder="请输入成员姓名" autocomplete="off"></div>
       <div class="form-field"><label>角色</label><select id="accountRoleInput">${roleOptions}</select></div>
       ${teamField}
-      <div class="form-field full"><label>邮箱</label><input id="accountEmailInput" value="new.sales.${Date.now()}@goodjob.com"></div>
-      <div class="form-field full"><label>初始密码</label><input id="accountPasswordInput" type="password" value="goodjob123" autocomplete="new-password"></div>
+      <div class="form-field full"><label>邮箱</label><input id="accountEmailInput" type="email" placeholder="请输入登录邮箱" autocomplete="off"></div>
+      <div class="form-field full"><label>初始密码</label><input id="accountPasswordInput" type="password" placeholder="至少 8 位" autocomplete="new-password"></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveAccountButton">保存账号</button>`);
   qs("#saveAccountButton")?.addEventListener("click", () => void saveAccount());
@@ -8024,21 +8096,30 @@ function renderOcr(job: OcrJob) {
   const cards = qs<HTMLElement>("#tools .ocr-fields");
   if (!cards) return;
   cards.innerHTML = Object.entries(mapping).map(([key, label]) => `<div class="field-card"><input type="checkbox" checked data-ocr-field="${escapeHtml(key)}"><div><label>${label}</label><input type="text" value="${escapeHtml(fields[key])}"></div></div>`).join("") +
-    `<div class="field-card"><input type="checkbox"><div><label>标签</label><input type="text" value="LED灯具 / 欧洲进口商"></div></div>`;
+    `<div class="field-card"><input type="checkbox"><div><label>标签</label><input type="text" value=""></div></div>`;
   const statusRows = qsa<HTMLElement>("#tools .sync-row");
-  if (statusRows[0]) statusRows[0].innerHTML = `<span>识别状态</span><b>${job.status === "synced" ? "已同步" : "完成"}</b>${badge(`${job.confidence}% 置信度`, "green")}`;
-  const cardTitle = qs<HTMLElement>("#tools .business-card h2");
-  if (cardTitle) cardTitle.textContent = fields.company;
+  const hasRecognizedFields = Object.values(fields).some((value) => String(value || "").trim());
+  if (statusRows[0]) statusRows[0].innerHTML = `<span>识别状态</span><b>${job.status === "synced" ? "已同步" : hasRecognizedFields ? "完成" : "等待名片"}</b>${badge(`${job.confidence}% 置信度`, job.confidence > 0 ? "green" : "")}`;
+  const currentTask = qs<HTMLElement>("#ocrCurrentTaskValue");
+  const recognizedFields = qs<HTMLElement>("#ocrRecognizedFieldsValue");
+  const confidence = qs<HTMLElement>("#ocrConfidenceValue");
+  const syncState = qs<HTMLElement>("#ocrSyncStateValue");
+  if (currentTask) currentTask.textContent = hasRecognizedFields ? "已识别" : "待上传";
+  if (recognizedFields) recognizedFields.textContent = String(Object.values(fields).filter((value) => String(value || "").trim()).length);
+  if (confidence) confidence.textContent = `${job.confidence}%`;
+  if (syncState) syncState.textContent = job.status === "synced" ? "已同步" : "未同步";
   const card = qs<HTMLElement>("#tools .business-card");
   if (card) {
-    card.innerHTML = `<h2>${escapeHtml(fields.company)}</h2><p>Import & Distribution</p><strong>${escapeHtml(fields.contact)}</strong><span>${escapeHtml(fields.title)}</span><span>${escapeHtml(fields.email)}</span><span>WhatsApp ${escapeHtml(fields.whatsapp)}</span><span>WeChat ${escapeHtml(fields.wechat)}</span><span>${escapeHtml(fields.city)}, ${escapeHtml(fields.country)}</span>`;
+    card.innerHTML = hasRecognizedFields
+      ? `<h2>${escapeHtml(fields.company || "未识别公司")}</h2><strong>${escapeHtml(fields.contact || "未识别联系人")}</strong><span>${escapeHtml(fields.title)}</span><span>${escapeHtml(fields.email)}</span><span>${fields.whatsapp ? `WhatsApp ${escapeHtml(fields.whatsapp)}` : ""}</span><span>${fields.wechat ? `WeChat ${escapeHtml(fields.wechat)}` : ""}</span><span>${escapeHtml([fields.city, fields.country].filter(Boolean).join(", "))}</span>`
+      : `<h2>等待名片识别</h2><p>上传名片后，识别结果将从数据库加载。</p>`;
   }
 }
 
 async function recognizeOcr(overrides: Partial<Record<string, string>> = {}) {
   const result = await api<{ job: OcrJob }>("/api/tools/ocr/jobs/ocr1/recognize", {
     method: "POST",
-    body: JSON.stringify({ confidence: 96, ...overrides })
+    body: JSON.stringify(overrides)
   });
   state.ocrJob = result.job;
   renderOcr(result.job);
@@ -8608,21 +8689,20 @@ function generateProspectMailDraft() {
     return;
   }
   const sender = state.user?.emailSenderName || state.user?.name || "GoodJob Sales";
-  const signature = state.user?.emailSignature?.trim() || `Best regards,\n${sender}\nGoodJob Instrument Sales`;
+  const signature = state.user?.emailSignature?.trim() || `Best regards,\n${sender}\nGoodJob Sales Team`;
   const mailTo = qs<HTMLInputElement>("#prospectMailTo");
   const subject = qs<HTMLInputElement>("#prospectMailSubject");
   const body = qs<HTMLTextAreaElement>("#prospectMailBody");
   if (mailTo && !mailTo.value.trim()) mailTo.value = contactEmail(item.contactInfo) || contactEmail(item.contact) || "";
-  if (subject && !subject.value.trim()) subject.value = `${item.business || "Instrumentation"} supplier support for ${item.company}`;
+  if (subject && !subject.value.trim()) subject.value = `${item.business || "Product"} supplier support for ${item.company}`;
   if (body) {
     body.value = [
       `Dear ${item.company} team,`,
       "",
-      `I noticed your company is active in ${item.business || "industrial instrumentation related business"}${item.country ? ` in ${item.country}` : ""}.`,
-      "GoodJob supplies pressure, temperature, flow and level instruments for distributors, system integrators and industrial projects.",
-      "We can support product selection, datasheets, certificates, quotation and sample coordination for your local projects.",
+      `I noticed your company is active in ${item.business || "international sourcing and distribution"}${item.country ? ` in ${item.country}` : ""}.`,
+      "GoodJob supports overseas buyers with product selection, specifications, certificates, quotations and sample coordination.",
       "",
-      "May I know which instrumentation categories you are currently sourcing, and whether you have any upcoming project requirements?",
+      "May I know which product categories you are currently sourcing, and whether you have any upcoming project requirements?",
       "",
       signature
     ].join("\n");
@@ -9179,7 +9259,7 @@ function renderLeadFinderSearchLinks() {
   const box = qs<HTMLElement>("#leadFinderSearchLinks");
   if (!box) return;
   const goal = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim() || "";
-  const keywords = qs<HTMLInputElement>("#leadProductKeywords")?.value.trim() || "pressure transmitter";
+  const keywords = qs<HTMLInputElement>("#leadProductKeywords")?.value.trim() || "product supplier";
   const countries = (qs<HTMLInputElement>("#leadCountries")?.value.trim() || "Germany").split(/,|，/).map((item) => item.trim()).filter(Boolean).slice(0, 3);
   const industries = (qs<HTMLInputElement>("#leadIndustryInput")?.value.trim() || "").split(/,|，/).map((item) => item.trim()).filter(Boolean).slice(0, 2);
   const customerType = qs<HTMLSelectElement>("#leadCustomerTypes")?.value.split("/")[1]?.trim() || qs<HTMLSelectElement>("#leadCustomerTypes")?.value || "distributor";
@@ -10050,34 +10130,21 @@ function planTaskStatusTone(status: PlanTask["status"]) {
   return status === "done" ? "green" : status === "cancelled" ? "red" : status === "active" ? "amber" : "";
 }
 
-const instrumentWeekTodos = [
-  "第1天：整理仪表产品分类与参数卡",
-  "第1天：建立仪表客户搜索关键词库10组",
-  "第2天：整理公司证书与报价资料清单",
-  "第2天：新增30家仪表目标客户到客户池",
-  "第3天：完成客户角色-痛点-话术表",
-  "第3天：首触达20家高匹配客户",
-  "第4天：整理竞品替代切入点5条",
-  "第4天：跟进昨日未回复客户10家",
-  "第5天：制作参数确认表模板",
-  "第5天：深挖3家A类客户并写入CRM",
-  "第6天：完成第一周开发周报",
-  "第7天：复盘并优化ICP规则"
-];
+const planMemoTitle = "计划任务执行方案";
 
-const instrumentMemoTitle = "计划任务执行方案";
-
-function instrumentPlanMemoContent() {
+function planMemoContent() {
+  const active = state.planTasks.filter((task) => task.status === "active" || task.status === "planned");
+  const done = state.planTasks.filter((task) => task.status === "done");
+  const taskLines = state.planTasks.map((task, index) => {
+    const result = task.completionResult || task.cancellationReason || task.target || task.description || "待补充目标";
+    return `${index + 1}. [${planTaskStatusText(task.status)}][${planTaskPriorityText(task.priority)}] ${task.title} - ${result}`;
+  });
   return [
-    "90天总目标：600+目标客户池，900+有效触达，60个有效回复，20个深度沟通，8个RFQ/样品/会议机会。",
+    `计划任务总数：${state.planTasks.length}`,
+    `待执行：${active.length}`,
+    `已完成：${done.length}`,
     "",
-    "每日最低动作：新增客户30家，首触达20家，二次跟进10家，深挖3家A类客户，CRM更新30条，15分钟复盘。",
-    "",
-    "前置知识：压力/温度/流量/液位/分析仪表/记录仪；量程、精度、介质、温压、连接方式、输出信号、供电、防护等级、材质；CE、RoHS、EMC、ATEX/IECEx、防爆、SIL、校准证书、ISO、材质报告。",
-    "",
-    "客户画像：工业自动化经销商、系统集成商、OEM设备厂、EPC/工程承包商、MRO维修服务商、终端工厂采购/工程师。",
-    "",
-    "周报结构：新增客户池、有效触达、有效回复、深度沟通、RFQ/样品/会议机会、问题与改进、下周计划。"
+    taskLines.length ? taskLines.join("\n") : "当前账号尚未创建计划任务。"
   ].join("\n");
 }
 
@@ -10220,7 +10287,7 @@ function openPlanTaskModal(task?: PlanTask) {
     .join("");
   openModal(editing ? "编辑计划任务" : "新增计划任务", `
     <div class="form-grid">
-      <div class="form-field full"><label>任务标题</label><input id="planTaskTitleInput" value="${escapeHtml(task?.title || "")}" placeholder="例如：跟进 Nordic Tools 报价反馈"></div>
+      <div class="form-field full"><label>任务标题</label><input id="planTaskTitleInput" value="${escapeHtml(task?.title || "")}" placeholder="例如：跟进重点客户报价反馈"></div>
       <div class="form-field full"><label>计划时间</label><input id="planTaskDueInput" type="datetime-local" value="${escapeHtml(task?.dueAt || localDateTimeValue())}"></div>
     </div>
     <details class="modal-advanced">
@@ -10589,21 +10656,18 @@ async function pushPlanTasksToTodos(ids: string[], button?: HTMLButtonElement) {
   }
 }
 
-async function saveInstrumentPlanMemo(button?: HTMLButtonElement) {
+async function savePlanMemo(button?: HTMLButtonElement) {
   if (button) {
     button.disabled = true;
     button.textContent = "写入中";
   }
   try {
-    const existing = state.memos.find((memo) => memo.title === instrumentMemoTitle);
-    const taskLines = state.planTasks.length
-      ? state.planTasks.map((task, index) => `${index + 1}. [${planTaskStatusText(task.status)}][${planTaskPriorityText(task.priority)}] ${task.title} - ${task.completionResult || task.cancellationReason || task.target || task.description || "待补充目标"}`).join("\n")
-      : instrumentWeekTodos.map((title, index) => `${index + 1}. ${title}`).join("\n");
+    const existing = state.memos.find((memo) => memo.title === planMemoTitle);
     const payload = {
-      title: instrumentMemoTitle,
+      title: planMemoTitle,
       category: "计划任务",
-      tags: "计划任务,外贸开拓,执行计划",
-      content: `${instrumentPlanMemoContent()}\n\n当前计划任务：\n${taskLines}`,
+      tags: "计划任务,执行计划",
+      content: planMemoContent(),
       pinned: true
     };
     if (existing) {
@@ -10632,7 +10696,7 @@ async function saveInstrumentPlanMemo(button?: HTMLButtonElement) {
   }
 }
 
-function exportInstrumentPlanCsv() {
+function exportPlanCsv() {
   const taskRows = state.planTasks.map((task) => [
     task.title,
     planTaskPriorityText(task.priority),
@@ -10668,17 +10732,17 @@ function openCustomerModal(customer?: Customer) {
   const editing = Boolean(customer);
   openModal(editing ? "编辑客户" : "新增客户", `
     <div class="form-grid">
-      <div class="form-field full"><label>公司名</label><input id="customerCompanyInput" placeholder="例如：示例进出口有限公司" value="${escapeHtml(customer?.company || "")}"></div>
-      <div class="form-field"><label>联系人</label><input id="customerContactInput" value="${escapeHtml(customer?.contact || "待维护")}"></div>
-      <div class="form-field"><label>国家</label><input id="customerCountryInput" value="${escapeHtml(customer?.country || "中国")}"></div>
-      <div class="form-field"><label>下一提醒</label><input id="customerReminderInput" value="${escapeHtml(customer?.nextReminder || "明天 10:00")}"></div>
+      <div class="form-field full"><label>公司名</label><input id="customerCompanyInput" placeholder="请输入客户公司名称" value="${escapeHtml(customer?.company || "")}"></div>
+      <div class="form-field"><label>联系人</label><input id="customerContactInput" value="${escapeHtml(customer?.contact || "")}"></div>
+      <div class="form-field"><label>国家</label><input id="customerCountryInput" value="${escapeHtml(customer?.country || "")}"></div>
+      <div class="form-field"><label>下一提醒</label><input id="customerReminderInput" value="${escapeHtml(customer?.nextReminder || "")}"></div>
       <label class="form-field"><span>企微绑定</span><select id="customerWecomInput"><option value="false" ${customer?.wecomBound ? "" : "selected"}>未绑定</option><option value="true" ${customer?.wecomBound ? "selected" : ""}>已绑定</option></select></label>
       <div class="form-field full"><label>单据抬头</label><input id="customerBillingNameInput" value="${escapeHtml(customer?.billingName || customer?.company || "")}" placeholder="用于对外单据的英文/正式公司名"></div>
       <div class="form-field full"><label>账单地址</label><input id="customerBillingAddressInput" value="${escapeHtml(customer?.billingAddress || "")}" placeholder="公司地址、城市、国家"></div>
       <div class="form-field full"><label>单据联系人</label><input id="customerDocumentContactInput" value="${escapeHtml(customer?.documentContact || customer?.contact || "")}" placeholder="联系人 / 邮箱 / 电话"></div>
       <div class="form-field"><label>默认目的港</label><input id="customerPortDischargeInput" value="${escapeHtml(customer?.defaultPortDischarge || "")}" placeholder="例如 Hamburg"></div>
-      <div class="form-field"><label>默认贸易条款</label><input id="customerIncotermInput" value="${escapeHtml(customer?.defaultIncoterm || "FOB Tianjin")}"></div>
-      <div class="form-field full"><label>默认付款条款</label><input id="customerPaymentTermInput" value="${escapeHtml(customer?.defaultPaymentTerm || "30% T/T deposit, 70% before shipment")}"></div>
+      <div class="form-field"><label>默认贸易条款</label><input id="customerIncotermInput" value="${escapeHtml(customer?.defaultIncoterm || "")}" placeholder="例如 FOB、CIF、DAP"></div>
+      <div class="form-field full"><label>默认付款条款</label><input id="customerPaymentTermInput" value="${escapeHtml(customer?.defaultPaymentTerm || "")}"></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCustomerButton" data-editing-id="${escapeHtml(customer?.id || "")}">${editing ? "保存修改" : "保存客户"}</button>`);
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
@@ -10704,8 +10768,8 @@ async function saveCustomer() {
     billingAddress: qs<HTMLInputElement>("#customerBillingAddressInput")?.value.trim() || "",
     documentContact: qs<HTMLInputElement>("#customerDocumentContactInput")?.value.trim() || qs<HTMLInputElement>("#customerContactInput")?.value || "待维护",
     defaultPortDischarge: qs<HTMLInputElement>("#customerPortDischargeInput")?.value.trim() || "",
-    defaultIncoterm: qs<HTMLInputElement>("#customerIncotermInput")?.value.trim() || "FOB Tianjin",
-    defaultPaymentTerm: qs<HTMLInputElement>("#customerPaymentTermInput")?.value.trim() || "30% T/T deposit, 70% before shipment"
+    defaultIncoterm: qs<HTMLInputElement>("#customerIncotermInput")?.value.trim() || "",
+    defaultPaymentTerm: qs<HTMLInputElement>("#customerPaymentTermInput")?.value.trim() || ""
   };
   const result = await api<{ customer: Customer }>(editingId ? `/api/customers/${editingId}` : "/api/customers", {
     method: editingId ? "PATCH" : "POST",
@@ -10835,6 +10899,7 @@ function reportMoneyHtml(rows: ReportMoneyRow[], tag = "b") {
 
 function renderExecutiveReport(report: ExecutiveReport) {
   state.executiveReport = report;
+  state.reportNote = report.reportNote || "";
   const generatedAt = new Date(report.period.asOf);
   const generatedText = Number.isFinite(generatedAt.getTime())
     ? generatedAt.toLocaleString("zh-CN", { hour12: false })
@@ -10989,9 +11054,13 @@ function openReportNoteModal() {
   qs("#saveReportNoteButton")?.addEventListener("click", saveReportNote);
 }
 
-function saveReportNote() {
-  state.reportNote = qs<HTMLInputElement>("#reportNoteInput")?.value.trim() || "";
-  if (state.user) localStorage.setItem(`gj_report_note_${state.user.id}`, state.reportNote);
+async function saveReportNote() {
+  const note = qs<HTMLInputElement>("#reportNoteInput")?.value.trim() || "";
+  const result = await api<{ note: string }>("/api/reports/executive/note", {
+    method: "PATCH",
+    body: JSON.stringify({ note })
+  });
+  state.reportNote = result.note;
   const hero = qs<HTMLElement>("#reportHeroNote");
   if (hero) hero.textContent = state.reportNote || state.executiveReport?.note || "";
   closeModal();
@@ -11087,8 +11156,8 @@ function installEvents() {
   qs<HTMLButtonElement>("#planTaskNewButton")?.addEventListener("click", () => openPlanTaskModal());
   qs<HTMLButtonElement>("#planTaskNewButtonInline")?.addEventListener("click", () => openPlanTaskModal());
   qs<HTMLButtonElement>("#planTaskPushSelectedButton")?.addEventListener("click", (event) => void pushPlanTasksToTodos(state.selectedPlanTaskIds, event.currentTarget as HTMLButtonElement));
-  qs<HTMLButtonElement>("#instrumentMemoButton")?.addEventListener("click", (event) => void saveInstrumentPlanMemo(event.currentTarget as HTMLButtonElement));
-  qs<HTMLButtonElement>("#instrumentExportButton")?.addEventListener("click", exportInstrumentPlanCsv);
+  qs<HTMLButtonElement>("#planMemoButton")?.addEventListener("click", (event) => void savePlanMemo(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#planExportButton")?.addEventListener("click", exportPlanCsv);
   qs<HTMLButtonElement>("#batchPriorityButton")?.addEventListener("click", (event) => void batchProcessPriorityTasks(event.currentTarget as HTMLButtonElement));
   qsa<HTMLButtonElement>("#customers .page-head .btn.primary").forEach((button) => {
     if (button.textContent?.includes("新增客户")) button.addEventListener("click", () => openCustomerModal());
@@ -11395,7 +11464,7 @@ function installEvents() {
     input.value = "";
   });
   qsa<HTMLButtonElement>("#tools .page-head .btn, #tools .section-head .btn").forEach((button) => {
-    if (button.textContent?.includes("加载名片")) button.addEventListener("click", () => void recognizeOcr({ company: "Demo Instrument Trading Co., Ltd.", contact: "Demo Contact", email: "sales@example.com", country: "中国" }));
+    if (button.textContent?.includes("加载名片")) button.addEventListener("click", () => toast("请接入上传或 OCR 服务后加载名片", "error"));
     if (button.textContent?.includes("重新识别")) button.addEventListener("click", () => void recognizeOcr());
     if (button.textContent?.includes("工具配置")) button.addEventListener("click", () => toast("OCR 字段映射配置已保存"));
     if (button.textContent?.includes("解析官网")) button.addEventListener("click", (event) => void parseWebsiteOpportunities(event.currentTarget as HTMLButtonElement));
@@ -11569,7 +11638,6 @@ function activateNavView(view: string, after?: () => void) {
   renderTopbarForView(view);
   if (view === "whatsapp") renderWhatsApp();
   if (view === "reports") {
-    if (state.user) state.reportNote = localStorage.getItem(`gj_report_note_${state.user.id}`) || "";
     void refreshExecutiveReport();
   }
   if (view === "dashboard") requestDashboardRefresh();

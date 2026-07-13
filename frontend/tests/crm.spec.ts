@@ -67,18 +67,18 @@ async function apiFromPage<T>(
 function buildQuestionWorkbookBuffer() {
   const worksheet = XLSX.utils.json_to_sheet([
     {
-      "题干": "Excel导入压力仪表：客户询价时第一步确认什么？",
-      "类目": "仪表产品",
-      "选项A": "量程、精度、接口、介质和工况",
+      "题干": "Excel导入定制产品：客户询价时第一步确认什么？",
+      "类目": "产品知识",
+      "选项A": "规格、数量、认证、交期和使用场景",
       "选项B": "客户名片颜色",
       "选项C": "包装偏好",
       "正确答案": "A",
-      "解析": "仪表报价必须先确认关键工况参数。",
+      "解析": "产品报价必须先确认关键需求参数。",
       "难度": "基础"
     },
     {
-      "题干": "Excel导入防爆仪表：需要优先确认什么？",
-      "类目": "仪表产品",
+      "题干": "Excel导入防爆产品：需要优先确认什么？",
+      "类目": "产品知识",
       "选项A": "防爆等级、认证体系和使用区域",
       "选项B": "是否需要彩盒",
       "选项C": "客户头像",
@@ -439,12 +439,12 @@ test.describe("GoodJob CRM prototype pages", () => {
     const rescheduledDue = new Date(todayDue);
     rescheduledDue.setMinutes(rescheduledDue.getMinutes() + 30);
 
-    await openView(page, "instrument-growth");
-    await expect(page.locator("#instrument-growth")).toContainText("Personal Execution Planner");
-    await expect(page.locator("#instrument-growth .instrument-hero")).toBeVisible();
-    await expect(page.locator("#instrument-growth")).toContainText("目标客户池");
-    await expect(page.locator("#instrument-growth")).toContainText("执行节奏建议");
-    await expect(page.locator("#instrument-growth")).toContainText("英文话术与参数确认");
+    await openView(page, "plan-growth");
+    await expect(page.locator("#plan-growth")).toContainText("Personal Execution Planner");
+    await expect(page.locator("#plan-growth .plan-hero")).toBeVisible();
+    await expect(page.locator("#plan-growth")).toContainText("目标客户池");
+    await expect(page.locator("#plan-growth")).toContainText("执行节奏建议");
+    await expect(page.locator("#plan-growth")).toContainText("英文话术与参数确认");
     await expect(page.locator("#knowledgeTemplateList")).toContainText("产品分类地图");
     await expect(page.locator("#executionTemplateList")).toContainText("第 1 天");
     const templateTitle = (await page.locator("#knowledgeTemplateList [data-plan-template-id]").first().locator("b").textContent()) || "";
@@ -504,7 +504,7 @@ test.describe("GoodJob CRM prototype pages", () => {
       dealId: string;
     }> }>(page, "/api/memos");
     const previousPlanMemo = memosBefore.memos.find((memo) => memo.title === "计划任务执行方案");
-    await page.locator("#instrumentMemoButton").click();
+    await page.locator("#planMemoButton").click();
     await expect(page.locator(".toast").last()).toContainText(/计划任务已写入备忘|计划任务备忘已更新/);
     const memosAfter = await apiFromPage<{ memos: Array<{ id: string; title: string; content: string }> }>(page, "/api/memos");
     const planMemo = memosAfter.memos.find((memo) => memo.title === "计划任务执行方案");
@@ -521,16 +521,16 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator(".plan-task-table tr", { hasText: cancelTitle })).toContainText("客户项目暂停");
 
     const downloadPromise = page.waitForEvent("download");
-    await page.locator("#instrumentExportButton").click();
+    await page.locator("#planExportButton").click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toContain("计划任务执行表");
     await expect(page.locator(".toast").last()).toContainText("计划任务执行表已导出");
 
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(page.locator("#instrument-growth .instrument-hero")).toBeVisible();
-    await expect(page.locator("#instrument-growth .head-actions")).toBeVisible();
+    await expect(page.locator("#plan-growth .plan-hero")).toBeVisible();
+    await expect(page.locator("#plan-growth .head-actions")).toBeVisible();
     const mobileLayout = await page.evaluate(() => {
-      const taskList = document.querySelector<HTMLElement>("#instrument-growth .plan-task-list");
+      const taskList = document.querySelector<HTMLElement>("#plan-growth .plan-task-list");
       return {
         viewportWidth: window.innerWidth,
         documentWidth: document.documentElement.scrollWidth,
@@ -627,7 +627,7 @@ test.describe("GoodJob CRM prototype pages", () => {
   });
 
   test("customer page can create and inspect a customer", async ({ page }) => {
-    const company = `示例仪表自动化-${runId}`;
+    const company = `示例产品自动化-${runId}`;
     const companyEdited = `${company}-已编辑`;
     const deleteCompanyA = `批量客户A-${runId}`;
     const deleteCompanyB = `批量客户B-${runId}`;
@@ -639,14 +639,14 @@ test.describe("GoodJob CRM prototype pages", () => {
     await activeCustomerRow.locator(".customer-name").click();
     await expect(page.locator("#customerDrawer")).toHaveClass(/open/);
     await expect(page.locator("#customerDrawer")).toContainText("相关商机进展");
-    await expect(page.locator("#customerDrawer")).toContainText("Nordic Tools 电动工具年度采购");
+    await expect(page.locator("#customerDrawer")).toContainText("Nordic Tools 年度采购");
     await expect(page.locator("#customerDrawer")).toContainText("Shirley");
     await page.locator("#customerDrawerClose").click();
     await expect(page.locator("#customerDrawer")).not.toHaveClass(/open/);
 
     await page.locator("#customers .page-head .btn.primary").click();
     await page.locator("#customerCompanyInput").fill(company);
-    await page.locator("#customerContactInput").fill("Demo Contact");
+    await page.locator("#customerContactInput").fill("Test Contact");
     await page.locator("#saveCustomerButton").click();
 
     await expect(page.locator("#customers tbody")).toContainText(company);
@@ -742,7 +742,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#customerBillingAddressInput").fill("Automation Street 18, Stockholm, Sweden");
     await page.locator("#customerDocumentContactInput").fill("Emma / pi-print@example.com");
     await page.locator("#customerPortDischargeInput").fill("Stockholm");
-    await page.locator("#customerIncotermInput").fill("FOB Tianjin");
+    await page.locator("#customerIncotermInput").fill("FOB");
     await page.locator("#customerPaymentTermInput").fill("40% deposit, 60% before shipment");
     await page.locator("#saveCustomerButton").click();
     await expect(page.locator("#customers .drawer")).toContainText(`Nordic Print Buyer ${runId}`);
@@ -755,14 +755,14 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#dealCustomerOptions")).toContainText("Nordic Tools AB");
     await page.locator("#dealCustomerOptions [data-deal-customer-id]").first().click();
     await expect(page.locator("#dealCustomerInput")).toHaveValue("Nordic Tools AB");
-    await page.locator("#dealProductInput").fill("自动化压力变送器");
+    await page.locator("#dealProductInput").fill("自动化 LED 工程灯");
     await page.locator("#dealQuantityInput").fill("14");
     await page.locator("#dealUnitPriceInput").fill("2000");
     await expect(page.locator("#dealAmountInput")).toHaveValue("28000");
     await page.locator("#saveDealButton").click();
 
     await expect(page.locator("#pipeline .pipeline-strip")).toContainText(dealTitle);
-    await expect(page.locator("#pipeline .deal", { hasText: dealTitle }).first()).toContainText("自动化压力变送器");
+    await expect(page.locator("#pipeline .deal", { hasText: dealTitle }).first()).toContainText("自动化 LED 工程灯");
     const dealCard = () => page.locator("#pipeline .deal", { hasText: dealTitle }).first();
     await expect(dealCard().getByRole("button", { name: "记录进展" })).toBeVisible();
     await expect(dealCard().locator(".deal-more")).toHaveCount(0);
@@ -772,14 +772,14 @@ test.describe("GoodJob CRM prototype pages", () => {
     await dealCard().getByText(dealTitle, { exact: true }).click();
     await expect(page.locator("#dealDrawer")).toHaveClass(/open/);
     await page.locator("#drawerEditDealButton").click();
-    await page.locator("#dealProductInput").fill("自动化差压仪表");
+    await page.locator("#dealProductInput").fill("自动化 LED 工程灯");
     await page.locator("#dealQuantityInput").fill("16");
     await page.locator("#dealUnitPriceInput").fill("1800");
     await page.locator("#dealNextActionInput").fill("确认修订报价");
     await expect(page.locator("#dealAmountInput")).toHaveValue("28800");
     await page.locator("#saveDealButton").click();
     await expect(page.locator(".toast").last()).toContainText("商机已更新");
-    await expect(dealCard()).toContainText("自动化差压仪表");
+    await expect(dealCard()).toContainText("自动化 LED 工程灯");
     await expect(dealCard()).toContainText("确认修订报价");
     await page.locator("#closeDealDrawerButton").click();
     await expect(page.locator("#dealDrawerBackdrop")).not.toHaveClass(/open/);
@@ -806,8 +806,9 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#documents")).toHaveClass(/active/);
     await expect(page.locator("#documentPreview")).toContainText("PROFORMA INVOICE");
     await expect(page.locator("#documentPreview")).toContainText(`Nordic Print Buyer ${runId}`);
-    await expect(page.locator("#documentPreview")).toContainText("自动化差压仪表");
-    await expect(page.locator("body")).toHaveAttribute("data-print-called", "true");
+    await expect(page.locator("#documentPreview")).toContainText("自动化 LED 工程灯");
+    await expect(page.locator("#docSellerInput")).toHaveValue("");
+    await expect(page.locator(".toast").last()).toContainText("请补齐卖方和结算资料后保存");
     await openView(page, "pipeline");
     await advanceDeal();
     await advanceDeal();
@@ -842,7 +843,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#dealTitleInput").fill(lostDeal);
     await page.locator("#dealCustomerInput").fill("Atlas");
     await page.locator("#dealCustomerOptions [data-deal-customer-id]").first().click();
-    await page.locator("#dealProductInput").fill("丢单测试仪表");
+    await page.locator("#dealProductInput").fill("丢单测试产品");
     await page.locator("#dealQuantityInput").fill("9");
     await page.locator("#dealUnitPriceInput").fill("1000");
     await page.locator("#saveDealButton").click();
@@ -1097,6 +1098,21 @@ test.describe("GoodJob CRM prototype pages", () => {
   test("reminders and import export modules perform real actions", async ({ page }) => {
     const reminderTitle = `自动化提醒-${runId}`;
     const importedCustomer = `Excel导入客户-${runId}`;
+    const reminderCustomer = await apiFromPage<{ customer: { id: string } }>(page, "/api/customers", {
+      method: "POST",
+      body: {
+        company: `提醒规则客户-${runId}`,
+        country: "德国",
+        contact: "Test Buyer"
+      }
+    });
+    await apiFromPage(page, `/api/customers/${reminderCustomer.customer.id}/activities`, {
+      method: "POST",
+      body: {
+        type: "note",
+        content: "用于验证数据库提醒任务生成"
+      }
+    });
     await openView(page, "reminders");
     await page.locator("#reminders .page-head .btn.primary").click();
     await page.locator("#reminderTitleInput").fill(reminderTitle);
@@ -1111,9 +1127,8 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#reminders .task", { hasText: reminderTitle }).first().getByRole("button", { name: "手工运行" }).click();
     await expect(page.locator(".toast").last()).toContainText("手工运行完成");
     await expect(page.locator("#reminders .task", { hasText: reminderTitle }).first()).toContainText("最近手工运行");
-    await openView(page, "dashboard");
-    await expect(page.locator("#dashboard .todo-list")).toContainText(reminderTitle);
-    await openView(page, "reminders");
+    const generatedTodos = await apiFromPage<{ todos: Array<{ title: string; reminderRuleId?: string }> }>(page, "/api/todos");
+    expect(generatedTodos.todos.some((todo) => todo.title.includes(reminderTitle))).toBe(true);
     await page.getByRole("tab", { name: "待执行提醒" }).click();
     const reminderTask = page.locator("#reminders .reminder-task-card", { hasText: reminderTitle }).first();
     await expect(reminderTask).toBeVisible();
@@ -1143,6 +1158,14 @@ test.describe("GoodJob CRM prototype pages", () => {
   });
 
   test("reminders mobile view keeps the action queue readable and touchable", async ({ page }) => {
+    const customer = await apiFromPage<{ customer: { id: string } }>(page, "/api/customers", {
+      method: "POST",
+      body: { company: `移动提醒客户-${runId}`, country: "德国", contact: "Test Buyer" }
+    });
+    await apiFromPage(page, `/api/customers/${customer.customer.id}/activities`, {
+      method: "POST",
+      body: { type: "note", content: "用于验证数据库提醒任务生成" }
+    });
     const rule = await apiFromPage<{ reminder: { id: string } }>(page, "/api/reminders", {
       method: "POST",
       body: { title: `移动提醒-${runId}`, ruleType: "inactive_customer", targetStage: "已报价", days: 0, dueAt: "按触发日期生成", channel: "站内", priority: "high" }
@@ -1185,20 +1208,22 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#documentTypeTabs button[data-doc-type='CI']").click();
     await page.locator("#docTitleInput").fill(docTitle);
     await page.locator("#docBuyerInput").fill(`发票客户-${runId}`);
+    await page.locator("#docSellerInput").fill("Automation Export Test Co., Ltd.");
+    await page.locator("#docSellerAddressInput").fill("Shanghai, China");
     await page.locator("#docPortDischargeInput").fill("Hamburg");
     await page.locator("#docTemplateInput").selectOption("classic");
-    await page.locator("#documentItemsEditor .doc-item-grid").first().locator("[data-doc-field='product']").fill("智能压力变送器 Smart Pressure Transmitter With Very Long Product Name For Wrapping Test");
-    await page.locator("#documentItemsEditor .doc-item-grid").first().locator("[data-doc-field='hsCode']").fill("902620");
+    await page.locator("#documentItemsEditor .doc-item-grid").first().locator("[data-doc-field='product']").fill("LED High Bay Light With Very Long Product Name For Wrapping Test");
+    await page.locator("#documentItemsEditor .doc-item-grid").first().locator("[data-doc-field='hsCode']").fill("940511");
     await page.locator("#documentItemsEditor .doc-item-grid").first().locator("[data-doc-field='quantity']").fill("5");
     await page.locator("#documentItemsEditor .doc-item-grid").first().locator("[data-doc-field='unitPrice']").fill("210");
     await page.locator("#addDocumentItemButton").click();
-    await page.locator("#documentItemsEditor .doc-item-grid").nth(1).locator("[data-doc-field='product']").fill("数字温度表");
+    await page.locator("#documentItemsEditor .doc-item-grid").nth(1).locator("[data-doc-field='product']").fill("LED Linear Light");
     await page.locator("#documentItemsEditor .doc-item-grid").nth(1).locator("[data-doc-field='quantity']").fill("8");
     await page.locator("#documentItemsEditor .doc-item-grid").nth(1).locator("[data-doc-field='unitPrice']").fill("48");
 
     await expect(page.locator("#documentPreview")).toContainText("COMMERCIAL INVOICE");
-    await expect(page.locator("#documentPreview")).toContainText("Export Documentation Center");
-    await expect(page.locator("#documentPreview")).toContainText("智能压力变送器");
+    await expect(page.locator("#documentPreview")).toContainText("Automation Export Test Co., Ltd.");
+    await expect(page.locator("#documentPreview")).toContainText("LED High Bay Light");
     await expect(page.locator("#documentPreview")).toContainText("HS Code");
     const tableFitsPaper = await page.locator("#documentPreview").evaluate((paper) => {
       const table = paper.querySelector("table");
@@ -1249,7 +1274,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     test.setTimeout(60_000);
     const assetTitle = `自动化资料-${runId}`;
     const examTitle = `自动化考试-${runId}`;
-    const manualQuestion = `${examTitle} 中客户询价仪表时第一步确认什么？`;
+    const manualQuestion = `${examTitle} 中客户询价产品时第一步确认什么？`;
     await openView(page, "knowledge");
     await expect(page.locator("#knowledge .knowledge-grid")).toBeVisible();
     await expect(page.locator("#knowledge .file-grid .file-card").first()).toBeVisible();
@@ -1274,11 +1299,14 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#question-bank .question-bank-editor-panel")).not.toContainText("选项 F");
     await page.locator("#newQuestionButton").click();
     await page.locator("#questionStemInput").fill(manualQuestion);
-    await page.locator("#questionCategoryInput").selectOption("仪表产品");
+    await page.locator("#questionCategoryInput").selectOption("产品知识");
+    await page.locator(".question-option-input").nth(0).fill("A选项：确认规格、数量、认证、交期和使用场景");
+    await page.locator(".question-option-input").nth(1).fill("B选项：只确认客户公司名称");
+    await page.locator(".question-option-input").nth(2).fill("C选项：只确认包装颜色");
     await page.locator(".question-option-input").nth(3).fill("D选项：输出信号、供电和防护等级");
     await page.locator("#questionTypeInput").selectOption("multiple");
     await page.locator("#questionAnswerInput").fill("A,D");
-    await page.locator("#questionTagsInput").fill(`仪表,自动化,${runId}`);
+    await page.locator("#questionTagsInput").fill(`产品,自动化,${runId}`);
     await page.locator("#saveQuestionButton").click();
     await expect(page.locator(".toast").last()).toContainText("题目已加入基础题库");
     await expect(page.locator("#questionBankList")).toContainText(manualQuestion);
@@ -1290,8 +1318,8 @@ test.describe("GoodJob CRM prototype pages", () => {
     });
     await page.locator("#importQuestionButton").click();
     await expect(page.locator(".toast").last()).toContainText("题库导入成功：2 道题");
-    await expect(page.locator("#questionBankList")).toContainText("Excel导入压力仪表");
-    await page.locator("#questionBankList .question-bank-row", { hasText: "Excel导入压力仪表" }).first().click();
+    await expect(page.locator("#questionBankList")).toContainText("Excel导入定制产品");
+    await page.locator("#questionBankList .question-bank-row", { hasText: "Excel导入定制产品" }).first().click();
     await page.once("dialog", (dialog) => dialog.accept());
     await page.locator("#deleteQuestionButton").click();
     await expect(page.locator(".toast").last()).toContainText("题目已删除");
@@ -1302,35 +1330,35 @@ test.describe("GoodJob CRM prototype pages", () => {
 
     await page.locator("#exam .page-head .btn.primary").click();
     await page.locator("#examTitleInput").fill(examTitle);
-    await page.locator("#examCategoryInput").selectOption("仪表产品");
+    await page.locator("#examCategoryInput").selectOption("产品知识");
     await page.locator("#selectCategoryQuestionsButton").click();
     await expect(page.locator("#examCreateSelectionSummary")).toContainText(/已选 [1-9]/);
     await page.locator("#saveExamButton").click();
     await expect(page.locator(".toast").last()).toContainText("考试已创建，已组卷");
     await expect(page.locator("#exam .exam-sidebar .category-list")).toContainText(examTitle);
-    await expect(page.locator("#exam .exam-paper")).toContainText(/Excel导入防爆仪表|客户询价仪表/);
+    await expect(page.locator("#exam .exam-paper")).toContainText(/Excel导入防爆产品|客户询价产品/);
     await expect(page.locator("#exam .exam-paper")).toContainText("多选");
 
     page.once("dialog", (dialog) => dialog.accept());
     await page.locator("#exam .category-item", { hasText: examTitle }).first().getByRole("button", { name: "发布" }).click();
     await expect(page.locator(".toast").last()).toContainText("考试已发布");
     await page.locator("#exam .page-head .btn", { hasText: "分类目考试维护" }).click();
-    await page.locator("#categoryExamInput").selectOption("仪表产品");
+    await page.locator("#categoryExamInput").selectOption("产品知识");
     await page.locator("#categoryExamTitleInput").fill(`专项-${runId}`);
     await page.locator("#createCategoryExamButton").click();
     await page.locator("#selectCategoryQuestionsButton").click();
     await page.locator("#saveExamButton").click();
-    await expect(page.locator("#exam .exam-sidebar .category-list")).toContainText(`仪表产品专项-${runId}`);
+    await expect(page.locator("#exam .exam-sidebar .category-list")).toContainText(`产品知识专项-${runId}`);
     page.once("dialog", (dialog) => dialog.accept());
-    await page.locator("#exam .category-item", { hasText: `仪表产品专项-${runId}` }).first().getByRole("button", { name: "删除" }).click();
+    await page.locator("#exam .category-item", { hasText: `产品知识专项-${runId}` }).first().getByRole("button", { name: "删除" }).click();
     await expect(page.locator(".toast").last()).toContainText("考试已删除");
-    await expect(page.locator("#exam .exam-sidebar .category-list")).not.toContainText(`仪表产品专项-${runId}`);
+    await expect(page.locator("#exam .exam-sidebar .category-list")).not.toContainText(`产品知识专项-${runId}`);
 
     const bulkExamTitles = [`批量删除A-${runId}`, `批量删除B-${runId}`];
     for (const title of bulkExamTitles) {
       await page.locator("#exam .page-head .btn.primary").click();
       await page.locator("#examTitleInput").fill(title);
-      await page.locator("#examCategoryInput").selectOption("仪表产品");
+      await page.locator("#examCategoryInput").selectOption("产品知识");
       await page.locator("#selectCategoryQuestionsButton").click();
       await page.locator("#saveExamButton").click();
       await expect(page.locator("#exam .exam-sidebar .category-list")).toContainText(title);
@@ -1382,8 +1410,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#logoutButton").click();
     await loginWithCredentials(page, "admin@goodjob.com", "goodjob123", "Admin");
     await openView(page, "settings");
-    await expect(page.locator("#settings tbody")).toContainText("Super Admin");
-    await expect(page.locator("#settings tbody tr", { hasText: "Super Admin" }).first().getByRole("button", { name: "受保护" })).toBeDisabled();
+    await expect(page.locator("#settings tbody")).not.toContainText("Super Admin");
     await page.locator("#settings .page-head .btn", { hasText: "新增账号" }).click();
     await page.locator("#accountNameInput").fill(accountName);
     await page.locator("#accountEmailInput").fill(`auto.account.${runId}@goodjob.com`);
@@ -1410,27 +1437,47 @@ test.describe("GoodJob CRM prototype pages", () => {
   });
 
   test("tools OCR recognizes a card and syncs selected fields", async ({ page }) => {
+    const company = `Example Trading ${runId} Co., Ltd.`;
+    await apiFromPage(page, "/api/tools/ocr/jobs/current/recognize", {
+      method: "POST",
+      body: {
+        confidence: 92,
+        company,
+        contact: "Test Contact",
+        email: `buyer.${runId}@example-trading.example`,
+        country: "德国"
+      }
+    });
+
+    await page.reload();
     await openView(page, "tools");
     await expect(page.locator("#tools .tools-grid")).toBeVisible();
-
-    await page.locator("#tools .section-head .btn", { hasText: "加载名片" }).click();
-    await expect(page.locator("#tools .business-card")).toContainText("Demo Instrument Trading Co., Ltd.");
-    await page.locator("#tools .field-card", { hasText: "公司名" }).locator("input[type='text']").fill("示例仪表");
+    await expect(page.locator("#tools .business-card")).toContainText(company);
+    const editedCompany = `OCR 客户-${runId}`;
+    await page.locator("#tools .field-card", { hasText: "公司名" }).locator("input[type='text']").fill(editedCompany);
     await page.locator("#tools .btn.primary", { hasText: /同步|确认同步/ }).first().click();
 
     await expect(page.locator("#tools .sync-row").nth(2)).toContainText("已同步");
     await expect(page.locator(".toast").last()).toContainText("OCR 线索已同步");
+    const leads = await apiFromPage<{ leads: Array<{ company: string }> }>(page, "/api/leads");
+    expect(leads.leads.some((lead) => lead.company === editedCompany)).toBe(true);
   });
 
   test("tools website scraping creates editable opportunities", async ({ page }) => {
     await openView(page, "tools");
-    const websiteCompany = `example-instrument-${runId}`;
+    const websiteCompany = `example-supplier-${runId}`;
     await expect(page.locator("#aiConfigBadge")).toContainText(/规则解析|AI/);
     await page.locator("#aiConfigName").fill("自动化AI官网解析");
     await page.locator("#aiModelInput").fill("gpt-4o-mini");
     await page.locator("#aiEnabledInput").uncheck();
+    const aiConfigResponse = page.waitForResponse((response) =>
+      response.url().includes("/api/tools/ai-config") &&
+      response.request().method() === "POST"
+    );
     await page.locator("#aiSaveButton").click();
-    await expect(page.locator(".toast").last()).toContainText("已保存");
+    const savedAiConfig = await aiConfigResponse;
+    expect(savedAiConfig.ok()).toBe(true);
+    expect((await savedAiConfig.json()).config.enabled).toBe(false);
     await page.locator("#websiteUseAiInput").check();
     await page.locator("#websiteUrlInput").fill(`https://example.com/${websiteCompany}`);
     await page.locator("#tools .section-head .btn", { hasText: "解析官网" }).click();
@@ -1446,14 +1493,14 @@ test.describe("GoodJob CRM prototype pages", () => {
     expect(websiteCandidateId).toBeTruthy();
     const websiteContactInfo = `buyer.website.${runId}@example.com`;
     await websiteRow.locator("[data-website-field='company']").fill(`官网商机-${runId}`);
-    await websiteRow.locator("[data-website-field='business']").fill("压力仪表 / 流量仪表");
+    await websiteRow.locator("[data-website-field='business']").fill("LED 工程灯 / 流量产品");
     await websiteRow.locator("[data-website-field='contact']").fill("Website Buyer");
     await websiteRow.locator("[data-website-field='contactInfo']").fill(websiteContactInfo);
     await apiFromPage(page, `/api/prospect-list/${encodeURIComponent(websiteCandidateId!)}/details`, {
       method: "PATCH",
       body: {
         company: `官网商机-${runId}`,
-        business: "压力仪表 / 流量仪表",
+        business: "LED 工程灯 / 流量产品",
         country: await websiteRow.locator("[data-website-field='country']").inputValue(),
         website: await websiteRow.locator("[data-website-field='website']").inputValue(),
         contact: "Website Buyer",
@@ -1494,7 +1541,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await form.locator('[name="externalId"]').fill(externalId);
     await form.locator('[name="sourceUrl"]').fill(`https://partner.example/rfq/${runId}`);
     await form.locator('[name="nextFollowAt"]').fill("2026-07-12 10:00");
-    await form.locator('[name="remark"]').fill("压力变送器，首轮确认量程与接口");
+    await form.locator('[name="remark"]').fill("LED 工程灯，首轮确认规格与认证要求");
     await form.getByRole("button", { name: "保存线索" }).click();
 
     await expect(page.locator(".toast").last()).toContainText("线索已创建");
@@ -1612,7 +1659,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator(".nav button[data-view='dashboard'] + button[data-view='lead-finder']")).toBeVisible();
     await openView(page, "lead-finder");
     await expect(page.locator("#lead-finder .page-head")).toContainText("自动获客");
-    await expect(page.locator("#leadFinderSearchLinks a").first()).toContainText(/pressure transmitter|flow meter/);
+    await expect(page.locator("#leadFinderSearchLinks a").first()).toContainText(/product supplier|OEM product/);
     await expect(page.locator(".lead-advanced-settings")).toHaveAttribute("open", "");
     await expect(page.locator(".lead-queue-panel")).toHaveAttribute("open", "");
 
@@ -1634,7 +1681,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     let firstRow = page.locator("#leadFinderResultRows tr[data-lead-id]").first();
     await expect(firstRow.locator("[data-lead-select]")).not.toBeChecked();
     await firstRow.locator("[data-lead-field='company']").fill(company);
-    await firstRow.locator("[data-lead-field='business']").fill("压力仪表 / 智能搜客测试");
+    await firstRow.locator("[data-lead-field='business']").fill("LED 工程灯 / 智能搜客测试");
     await firstRow.locator("[data-lead-field='country']").fill("德国");
     await firstRow.locator("[data-lead-field='contact']").fill("Lead Finder Buyer");
     const leadFinderContactInfo = `buyer.leadfinder.${runId}@example.com`;
@@ -1645,7 +1692,7 @@ test.describe("GoodJob CRM prototype pages", () => {
       method: "PATCH",
       body: {
         company,
-        business: "压力仪表 / 智能搜客测试",
+        business: "LED 工程灯 / 智能搜客测试",
         country: "德国",
         website: await firstRow.locator("[data-lead-field='website']").inputValue(),
         contact: "Lead Finder Buyer",
@@ -1685,7 +1732,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#leadCreateDealInput").check();
     const dealTitle = `${company} 首轮采购机会`;
     await page.locator("#leadDealTitleInput").fill(dealTitle);
-    await page.locator("#leadDealProductInput").fill("压力仪表 / 智能搜客测试");
+    await page.locator("#leadDealProductInput").fill("LED 工程灯 / 智能搜客测试");
     await page.locator("#leadDealAmountInput").fill("28000");
     await page.locator("#leadDealNextActionInput").fill("确认技术参数并报价");
     await page.locator("#confirmLeadConversionButton").click();
@@ -1741,7 +1788,7 @@ test.describe("GoodJob CRM prototype pages", () => {
         method: "PATCH",
         body: {
           company: `${prefix}-${String(index + 1).padStart(2, "0")}`,
-          business: "工业仪表分销",
+          business: "工业产品分销",
           country: index % 2 ? "德国" : "波兰",
           website: `https://example.com/prospect-${runId}-${index + 1}`,
           contact: "待核验采购联系人",
@@ -1817,7 +1864,7 @@ test.describe("GoodJob CRM prototype pages", () => {
       method: "PATCH",
       body: {
         company: secondCompany,
-        business: "工业仪表分销",
+        business: "工业产品分销",
         country: "德国",
         website: `https://example.com/prospect-${runId}-2`,
         contact: "Mark Buyer",
@@ -1970,7 +2017,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#problems .page-head .btn.primary").click();
     await page.locator("#problemTitleInput").fill(problemTitle);
     await page.locator("#problemSeverityInput").selectOption("high");
-    await page.locator("#problemCustomerInput").fill("示例仪表客户");
+    await page.locator("#problemCustomerInput").fill("示例产品客户");
     await page.locator("#problemRootInput").fill("客户审批缺少认证资料");
     await page.locator("#problemSolutionInput").fill("补发 CE 证书并同步报价模板");
     await page.locator("#problemNextInput").fill("今天 18:00 前完成二次确认");
@@ -2089,10 +2136,20 @@ test.describe("GoodJob CRM prototype pages", () => {
     expect(scopedReports.sales.scope.label).toBe("本人业务");
     expect(scopedReports.sales.performance.every((row: { owner: string }) => row.owner === "Shirley")).toBe(true);
     expect(scopedReports.admin.scope.label).toBe("全公司业务");
+    await page.evaluate(async () => {
+      await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "alex@goodjob.com", password: "goodjob123" })
+      });
+    });
 
     await page.locator("#reports .page-head .btn", { hasText: "汇报备注" }).click();
     await page.locator("#reportNoteInput").fill("自动化汇报备注：本周聚焦报价逾期客户");
     await page.locator("#saveReportNoteButton").click();
+    await expect(page.locator("#reports .report-hero")).toContainText("自动化汇报备注");
+    await page.reload();
+    await openView(page, "reports");
     await expect(page.locator("#reports .report-hero")).toContainText("自动化汇报备注");
 
     const downloadPromise = page.waitForEvent("download");

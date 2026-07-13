@@ -82,11 +82,23 @@ try {
   if (!managerTodosAfterBoundaryDelete.json.todos.some((todo: { id: string }) => todo.id === managerBoundaryTodo.json.todo.id)) throw new Error("customer delete must not remove manager personal todo");
   if (salesTodosAfterBoundaryDelete.json.todos.some((todo: { id: string }) => todo.id === salesBoundaryTodo.json.todo.id)) throw new Error("customer delete should remove current user's related todo");
 
+  const recognizedOcr = await request("/api/tools/ocr/jobs/ocr1/recognize", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      confidence: 92,
+      company: "Example Lighting GmbH",
+      contact: "Alex Buyer",
+      email: "buyer@example-lighting.example",
+      country: "德国"
+    })
+  });
+  if (!recognizedOcr.response.ok) throw new Error("ocr recognize failed");
   const ocr = await request("/api/tools/ocr/jobs/ocr1/sync-lead", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` }
   });
-  if (!ocr.response.ok || ocr.json.lead.company !== "NorthStar Lighting GmbH") {
+  if (!ocr.response.ok || ocr.json.lead.company !== "Example Lighting GmbH") {
     throw new Error("ocr sync failed");
   }
   const ocrRepeat = await request("/api/tools/ocr/jobs/ocr1/sync-lead", {
@@ -188,8 +200,8 @@ try {
     body: JSON.stringify({
       to: "buyer@example.com",
       company: "Buyer Test GmbH",
-      subject: "Instrumentation supplier for your local market",
-      body: "Dear Buyer Test GmbH team, we supply pressure and flow instruments for local distributors."
+      subject: "Industrial lighting supplier for your local market",
+      body: "Dear Buyer Test GmbH team, we supply commercial lighting products for local distributors."
     })
   });
   if (!profileMail.response.ok || profileMail.json.sent?.status !== "sent" || profileMail.json.user?.lastDevelopmentEmailTo !== "buyer@example.com") {
@@ -209,7 +221,7 @@ try {
       source: "自测录入",
       sourceType: "inbound",
       sourceChannel: "self-test-api",
-      sourceCampaign: "2026 欧洲仪表询盘",
+      sourceCampaign: "2026 欧洲照明询盘",
       externalId: `self-test-lead-${Date.now()}`,
       sourceUrl: "https://partner.example/leads/self-test",
       intent: "高",
@@ -254,7 +266,7 @@ try {
     || !activityTypes.includes("email")
     || sourceEvent?.channel !== "self-test-api"
     || sourceEvent?.externalId !== leadCreate.json.lead.externalId
-    || !String(sourceEvent?.rawPayload || "").includes("2026 欧洲仪表询盘")
+    || !String(sourceEvent?.rawPayload || "").includes("2026 欧洲照明询盘")
   ) {
     throw new Error("lead activity and source event detail failed");
   }
@@ -272,7 +284,7 @@ try {
     sourceCampaign: "2026 Europe RFQ",
     sourceUrl: "https://partner.example/rfq/123",
     estimatedAmount: 88000,
-    rawPayload: { rfqId: 123, product: "流量计" }
+    rawPayload: { rfqId: 123, product: "LED 工程灯" }
   };
   const externalLeadFirst = await request("/api/leads/ingest", {
     method: "POST",
@@ -313,7 +325,7 @@ try {
       customerMode: "existing",
       customerId: matchingCustomer.json.customer.id,
       createDeal: true,
-      deal: { title: "外部平台流量计 RFQ", product: "流量计", amount: 88000, nextAction: "确认量程与接口" }
+      deal: { title: "外部平台工程灯 RFQ", product: "LED 工程灯", amount: 88000, nextAction: "确认规格与认证要求" }
     })
   });
   if (!existingConversion.response.ok || existingConversion.json.deal?.customerId !== matchingCustomer.json.customer.id) throw new Error("existing customer conversion failed");
@@ -412,7 +424,7 @@ try {
   const websiteSyncBeforeVerify = await request("/api/tools/website-scrape/sync-opportunities", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ opportunities: [{ ...previewOpportunity, company: "自动化官网商机", business: "压力仪表" }] })
+    body: JSON.stringify({ opportunities: [{ ...previewOpportunity, company: "自动化官网商机", business: "LED 工程灯" }] })
   });
   if (websiteSyncBeforeVerify.response.status !== 400) throw new Error("unverified website opportunity must not sync");
 
@@ -421,7 +433,7 @@ try {
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({
       company: "自动化官网商机",
-      business: "压力仪表",
+      business: "LED 工程灯",
       country: previewOpportunity.country,
       website: previewOpportunity.website,
       contact: "Purchasing Team",
@@ -450,7 +462,7 @@ try {
     body: JSON.stringify({
       to: "verified.prospect@example.com",
       subject: "Verified prospect outreach",
-      body: "Dear team, we can support your verified pressure instrumentation sourcing requirements."
+      body: "Dear team, we can support your verified product sourcing requirements."
     })
   });
   if (!websiteContactMail.response.ok || websiteContactMail.json.opportunity?.status !== "contacted") {
@@ -460,7 +472,7 @@ try {
   const websiteSync = await request("/api/tools/website-scrape/sync-opportunities", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ opportunities: [{ ...websitePreview.json.opportunities[0], company: "自动化官网商机", business: "压力仪表" }] })
+    body: JSON.stringify({ opportunities: [{ ...websitePreview.json.opportunities[0], company: "自动化官网商机", business: "LED 工程灯" }] })
   });
   if (!websiteSync.response.ok || websiteSync.json.created?.[0]?.lead?.company !== "自动化官网商机" || websiteSync.json.created?.[0]?.opportunity?.leadId !== websiteSync.json.created?.[0]?.lead?.id) {
     throw new Error("website opportunity sync failed");
@@ -474,7 +486,7 @@ try {
   const websiteSyncRepeat = await request("/api/tools/website-scrape/sync-opportunities", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ opportunities: [{ ...websitePreview.json.opportunities[0], company: "自动化官网商机", business: "压力仪表" }] })
+    body: JSON.stringify({ opportunities: [{ ...websitePreview.json.opportunities[0], company: "自动化官网商机", business: "LED 工程灯" }] })
   });
   if (!websiteSyncRepeat.response.ok || !websiteSyncRepeat.json.created?.[0]?.duplicate || websiteSyncRepeat.json.created?.[0]?.lead?.id !== websiteSync.json.created?.[0]?.lead?.id) {
     throw new Error("website opportunity sync must be idempotent");
@@ -486,7 +498,7 @@ try {
       opportunities: [{
         id: `website_partner_${Date.now()}`,
         company: "自动化合作目录候选",
-        business: "温度仪表",
+        business: "智能家居产品",
         country: "德国",
         website: "https://partner.example",
         contact: "Purchasing Team",
@@ -640,8 +652,8 @@ try {
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({
       to: "prospect@example.com",
-      subject: "Instrumentation supplier support",
-      body: "Dear team, we can support your pressure and flow instrumentation sourcing."
+      subject: "Sourcing and supplier support",
+      body: "Dear team, we can support your lighting and home product sourcing."
     })
   });
   if (!prospectMail.response.ok || prospectMail.json.opportunity?.lastDevelopmentEmailTo !== "prospect@example.com") {
@@ -673,21 +685,21 @@ try {
   const newDeal = await request("/api/deals", {
     method: "POST",
     headers: { authorization: `Bearer ${managerToken}` },
-    body: JSON.stringify({ customerId: "c1", title: "自动化新增商机", product: "自动化压力仪表", quantity: 10, unitPrice: 1200, currency: "USD", nextAction: "确认采购清单", nextActionAt: "2026-07-12", expectedCloseAt: "2026-08-15" })
+    body: JSON.stringify({ customerId: "c1", title: "自动化新增商机", product: "自动化LED 工程灯", quantity: 10, unitPrice: 1200, currency: "USD", nextAction: "确认采购清单", nextActionAt: "2026-07-12", expectedCloseAt: "2026-08-15" })
   });
   if (!newDeal.response.ok || newDeal.json.deal.title !== "自动化新增商机" || newDeal.json.deal.amount !== 12000) throw new Error("deal create failed");
 
   const editedDeal = await request(`/api/deals/${newDeal.json.deal.id}`, {
     method: "PATCH",
     headers: { authorization: `Bearer ${managerToken}` },
-    body: JSON.stringify({ customerId: "c1", title: "自动化编辑商机", product: "自动化温度仪表", quantity: 12, unitPrice: 900, currency: "USD", nextAction: "发送修订报价", nextActionAt: "2026-07-13", expectedCloseAt: "2026-08-15" })
+    body: JSON.stringify({ customerId: "c1", title: "自动化编辑商机", product: "自动化智能家居产品", quantity: 12, unitPrice: 900, currency: "USD", nextAction: "发送修订报价", nextActionAt: "2026-07-13", expectedCloseAt: "2026-08-15" })
   });
-  if (!editedDeal.response.ok || editedDeal.json.deal.product !== "自动化温度仪表" || editedDeal.json.deal.amount !== 10800) throw new Error("deal edit failed");
+  if (!editedDeal.response.ok || editedDeal.json.deal.product !== "自动化智能家居产品" || editedDeal.json.deal.amount !== 10800) throw new Error("deal edit failed");
 
   const crossDealEdit = await request(`/api/deals/${newDeal.json.deal.id}`, {
     method: "PATCH",
     headers: { authorization: `Bearer ${miaToken}` },
-    body: JSON.stringify({ customerId: "c1", title: "越权编辑商机", product: "自动化温度仪表", quantity: 12, unitPrice: 900, currency: "USD", nextAction: "越权", nextActionAt: "2026-07-13", expectedCloseAt: "2026-08-15" })
+    body: JSON.stringify({ customerId: "c1", title: "越权编辑商机", product: "自动化智能家居产品", quantity: 12, unitPrice: 900, currency: "USD", nextAction: "越权", nextActionAt: "2026-07-13", expectedCloseAt: "2026-08-15" })
   });
   if (crossDealEdit.response.status !== 404) throw new Error("sales deal must be owner isolated");
 
@@ -774,9 +786,9 @@ try {
   const commissionProduct = await request("/api/commission/products", {
     method: "POST",
     headers: { authorization: `Bearer ${adminToken}` },
-    body: JSON.stringify({ name: "自动化温度仪表", category: "测试仪表", model: "AUTO-T", defaultPrice: 900, costPrice: 600, remark: "自动化测试产品" })
+    body: JSON.stringify({ name: "自动化智能家居产品", category: "测试产品", model: "AUTO-T", defaultPrice: 900, costPrice: 600, remark: "自动化测试产品" })
   });
-  if (!commissionProduct.response.ok || commissionProduct.json.product.name !== "自动化温度仪表") throw new Error("commission product create failed");
+  if (!commissionProduct.response.ok || commissionProduct.json.product.name !== "自动化智能家居产品") throw new Error("commission product create failed");
   const commissionRule = await request(`/api/commission/products/${commissionProduct.json.product.id}/rules`, {
     method: "POST",
     headers: { authorization: `Bearer ${adminToken}` },
@@ -1024,7 +1036,7 @@ try {
     body: JSON.stringify({
       title: "自动化计划任务",
       phase: "客户开发",
-      category: "仪表开拓",
+      category: "产品开拓",
       priority: "high",
       status: "planned",
       dueAt: "2026-07-13T18:00",
@@ -1379,21 +1391,21 @@ try {
       buyer: "Automation Buyer Ltd.",
       buyerAddress: "Berlin, Germany",
       buyerContact: "Auto Buyer",
-      seller: "GoodJob Instrument Co., Ltd.",
-      sellerAddress: "Tianjin, China",
+      seller: "GoodJob Trading Test Co., Ltd.",
+      sellerAddress: "Shanghai, China",
       currency: "USD",
-      incoterm: "FOB Tianjin",
+      incoterm: "FOB",
       paymentTerm: "30% T/T deposit, 70% before shipment",
       shippingMethod: "Sea freight",
-      portLoading: "Tianjin",
+      portLoading: "Shanghai",
       portDischarge: "Hamburg",
       validityDate: "2026-07-20",
-      bankInfo: "Bank of China",
+      bankInfo: "Example Commercial Bank",
       notes: "Automation document test",
       templateStyle: "executive",
       status: "ready",
       items: [
-        { product: "Pressure Transmitter", model: "GJ-PT", hsCode: "902620", quantity: 3, unit: "PCS", unitPrice: 180, originCountry: "China", weightKg: 5, packageCount: 1 }
+        { product: "LED High Bay Light", model: "TEST-HB", hsCode: "940511", quantity: 3, unit: "PCS", unitPrice: 180, originCountry: "China", weightKg: 5, packageCount: 1 }
       ]
     })
   });
@@ -1479,18 +1491,18 @@ try {
     method: "POST",
     headers: { authorization: `Bearer ${managerToken}` },
     body: JSON.stringify({
-      stem: "压力仪表报价前必须优先确认哪组参数？",
-      category: "仪表产品",
-      options: ["量程、精度、接口、介质和工况", "客户公司人数", "包装颜色", "输出信号与供电"],
+      stem: "定制产品报价前必须优先确认哪组参数？",
+      category: "产品知识",
+      options: ["规格、数量、认证、交期和使用场景", "客户公司人数", "包装颜色", "办公地址"],
       answerIndex: 0,
       answerIndexes: [0, 3],
       questionType: "multiple",
-      tags: ["仪表", "报价", "多选"],
-      explanation: "仪表选型先确认量程、精度、接口、介质和工况，同时关注输出信号与供电。",
+      tags: ["产品", "报价", "多选"],
+      explanation: "产品选型先确认规格、数量、认证、交期和使用场景。",
       difficulty: "medium"
     })
   });
-  if (!bankQuestion.response.ok || bankQuestion.json.question.tags[0] !== "仪表") throw new Error("bank question create failed");
+  if (!bankQuestion.response.ok || bankQuestion.json.question.tags[0] !== "产品") throw new Error("bank question create failed");
 
   const importedBankQuestions = await request("/api/exam-questions/import", {
     method: "POST",
@@ -1499,7 +1511,7 @@ try {
       questions: [
         {
           stem: "Excel导入：压力表选型优先确认什么？",
-          category: "仪表产品",
+          category: "产品知识",
           options: ["量程和介质", "客户邮箱", "包装颜色"],
           answerIndex: 0,
           tags: ["导入", "压力表"],
@@ -1508,7 +1520,7 @@ try {
         },
         {
           stem: "Excel导入：防爆场景需要确认什么？",
-          category: "仪表产品",
+          category: "产品知识",
           options: ["防爆等级和认证", "名片颜色", "聊天工具", "使用区域"],
           answerIndex: 0,
           answerIndexes: [0, 3],
@@ -1539,8 +1551,8 @@ try {
     method: "POST",
     headers: { authorization: `Bearer ${managerToken}` },
     body: JSON.stringify({
-      title: "自动化仪表专项考试",
-      category: "仪表产品",
+      title: "自动化产品知识专项考试",
+      category: "产品知识",
       questionIds,
       durationMinutes: 15,
       passScore: 80,

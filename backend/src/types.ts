@@ -22,6 +22,7 @@ export interface User {
   lastDevelopmentEmailAt?: string;
   lastDevelopmentEmailTo?: string;
   lastDevelopmentEmailSubject?: string;
+  reportNote?: string;
 }
 
 export interface SessionUser {

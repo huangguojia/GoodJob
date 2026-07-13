@@ -6546,14 +6546,14 @@
       margin-top: 3px;
     }
 
-    .instrument-hero {
+    .plan-hero {
       display: grid;
       grid-template-columns: minmax(0, 1.2fr) minmax(360px, .8fr);
       gap: 12px;
       margin-bottom: 12px;
     }
 
-    .instrument-brief {
+    .plan-brief {
       position: relative;
       min-height: 260px;
       padding: 18px;
@@ -6565,7 +6565,7 @@
       border-color: rgba(255,255,255,.14);
     }
 
-    .instrument-brief::after {
+    .plan-brief::after {
       content: "";
       position: absolute;
       inset: auto -28px -56px auto;
@@ -6575,9 +6575,9 @@
       background: radial-gradient(circle, rgba(125, 211, 252, .22), transparent 66%);
     }
 
-    .instrument-brief > * { position: relative; z-index: 1; }
+    .plan-brief > * { position: relative; z-index: 1; }
 
-    .instrument-brief h2 {
+    .plan-brief h2 {
       max-width: 760px;
       margin: 8px 0 8px;
       font-size: 25px;
@@ -6585,7 +6585,7 @@
       color: #fff;
     }
 
-    .instrument-brief p {
+    .plan-brief p {
       max-width: 820px;
       margin: 0;
       color: #cbd6e8;
@@ -6593,35 +6593,35 @@
       line-height: 1.7;
     }
 
-    .instrument-targets {
+    .plan-targets {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 8px;
       margin-top: 18px;
     }
 
-    .instrument-targets div {
+    .plan-targets div {
       padding: 10px;
       border-radius: var(--radius-sm);
       background: rgba(255,255,255,.09);
       border: 1px solid rgba(255,255,255,.12);
     }
 
-    .instrument-targets span {
+    .plan-targets span {
       display: block;
       color: #aebbd0;
       font-size: 11px;
       margin-bottom: 5px;
     }
 
-    .instrument-targets b {
+    .plan-targets b {
       display: block;
       color: #fff;
       font-size: 19px;
       line-height: 1;
     }
 
-    .instrument-rhythm {
+    .plan-rhythm {
       display: grid;
       gap: 8px;
       padding: 12px;
@@ -6666,7 +6666,7 @@
       font-size: 12px;
     }
 
-    .instrument-grid {
+    .plan-grid {
       display: grid;
       grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr);
       gap: 12px;
@@ -6674,14 +6674,14 @@
       margin-bottom: 12px;
     }
 
-    .instrument-tabs {
+    .plan-tabs {
       display: grid;
       grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: 6px;
       margin-bottom: 10px;
     }
 
-    .instrument-tab {
+    .plan-tab {
       min-height: 48px;
       padding: 8px;
       border-radius: var(--radius-sm);
@@ -6689,14 +6689,14 @@
       background: #fbfcff;
     }
 
-    .instrument-tab b {
+    .plan-tab b {
       display: block;
       color: var(--ink);
       font-size: 12px;
       margin-bottom: 3px;
     }
 
-    .instrument-tab span {
+    .plan-tab span {
       color: var(--muted);
       font-size: 11px;
       line-height: 1.35;
@@ -6905,7 +6905,7 @@
       margin-top: 10px;
     }
 
-    .instrument-actionbar {
+    .plan-actionbar {
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -6917,7 +6917,7 @@
       border: 1px solid var(--line-soft);
     }
 
-    .instrument-actionbar span {
+    .plan-actionbar span {
       color: var(--muted);
       font-size: 12px;
       line-height: 1.5;
@@ -9925,8 +9925,8 @@
       .report-hero-metrics,
       .ppt-grid,
       .matrix-grid,
-      .instrument-hero,
-      .instrument-grid,
+      .plan-hero,
+      .plan-grid,
       .execution-board,
       .knowledge-grid,
       .exam-grid,
@@ -10071,21 +10071,21 @@
       .ocr-fields,
       .todo-score,
       .permission-grid,
-      .instrument-targets,
-      .instrument-tabs,
+      .plan-targets,
+      .plan-tabs,
       .analytics-strip,
       .report-summary,
       .report-hero-metrics,
 	      .ppt-grid,
 	      .steps,
       .problem-flow { grid-template-columns: 1fr; }
-      #instrument-growth .head-actions { display: grid; grid-template-columns: 1fr 1fr; margin-top: 12px; }
-      #instrument-growth .head-actions .btn { min-height: 44px; }
-      #instrument-growth .instrument-grid { grid-template-columns: minmax(0, 1fr); min-width: 0; }
-      #instrument-growth .instrument-grid > .panel { min-width: 0; overflow-x: auto; }
+      #plan-growth .head-actions { display: grid; grid-template-columns: 1fr 1fr; margin-top: 12px; }
+      #plan-growth .head-actions .btn { min-height: 44px; }
+      #plan-growth .plan-grid { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+      #plan-growth .plan-grid > .panel { min-width: 0; overflow-x: auto; }
       .plan-task-list { overflow-x: auto; }
-      .instrument-actionbar { align-items: stretch; flex-direction: column; }
-      .instrument-actionbar .btn { min-height: 44px; }
+      .plan-actionbar { align-items: stretch; flex-direction: column; }
+      .plan-actionbar .btn { min-height: 44px; }
       .knowledge-row { grid-template-columns: 34px minmax(0, 1fr); }
       .knowledge-row em,
       .knowledge-row .template-actions { grid-column: 2; justify-self: start; }
@@ -10111,7 +10111,7 @@
       #reminders .reminder-task-actions,
       #reminders .reminder-rule-actions { grid-column: 2; display: grid; grid-template-columns: minmax(0, 1fr) 44px; width: 100%; }
       #reminders .reminder-task-actions .btn,
-      #reminders .reminder-rule-actions .btn { min-height: 44px; }
+      #reminders .reminder-rule-actions .btn { min-height: 45px; }
       #reminders .reminder-rule-meta { gap: 4px; }
       #memos .page-head .btn.primary { width: 100%; min-height: 44px; margin-top: 12px; }
       #memos .memo-grid { display: block; }
@@ -10297,7 +10297,7 @@
         <details class="nav-section" aria-label="业务工具">
           <summary class="nav-section-title"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.1-3.1a5 5 0 0 1-6.6 6.6L7.1 20a2 2 0 0 1-2.8-2.8l7.1-7.1a5 5 0 0 1 6.6-6.6z"/></svg><span>业务工具</span><i class="nav-chevron"></i></summary>
           <div class="nav-secondary-grid">
-            <button class="nav-secondary-button" data-view="instrument-growth" title="计划任务"><span>计划任务</span></button>
+            <button class="nav-secondary-button" data-view="plan-growth" title="计划任务"><span>计划任务</span></button>
             <button class="nav-secondary-button" data-view="documents" title="单据平台"><span>单据平台</span></button>
             <button class="nav-secondary-button" data-view="commission" title="提成对账"><span>提成对账</span></button>
             <button class="nav-secondary-button" data-view="reports" title="报表"><span>报表</span></button>
@@ -10375,8 +10375,8 @@
           <button class="btn icon-only" title="提醒"><svg width="17" height="17" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"/></svg></button>
           <div class="user-menu">
             <button class="profile-entry" id="profileEntryButton" type="button" title="个人主页">
-              <span class="avatar" id="currentAvatar">SH</span>
-              <span class="user-identity"><b id="topUserName">Shirley</b><span id="topUserRole">业务员</span></span>
+              <span class="avatar" id="currentAvatar">--</span>
+              <span class="user-identity"><b id="topUserName">账号加载中</b><span id="topUserRole">请先登录</span></span>
             </button>
             <button class="btn" id="logoutButton">退出</button>
           </div>
@@ -10398,7 +10398,7 @@
           </div>
 
           <div class="scope-banner">
-            <span>当前账号：<b id="scopeUser">Shirley / 业务员</b> · 数据范围：<b id="scopeText">仅本人客户、本人待办、本人线索</b></span>
+            <span>当前账号：<b id="scopeUser">登录后加载</b> · 数据范围：<b id="scopeText">登录后按账号权限读取</b></span>
             <span class="scope-tags"><span class="scope-tag" id="businessScopeTag">本人业务</span><span class="scope-tag personal" id="todoScopeTag">本人待办</span></span>
           </div>
 
@@ -10420,11 +10420,11 @@
                   <button type="button" data-dashboard-period="week" aria-pressed="false">本周</button>
                   <button type="button" data-dashboard-period="month" aria-pressed="false">本月</button>
                 </div>
-                <span id="dashboardUpdatedAt">09:30 已更新</span>
+                <span id="dashboardUpdatedAt">数据加载中</span>
               </div>
               <div class="focus-title">
-                <h2>今天最该抢救的是 7 个报价逾期客户，其中 3 个仍处于高成交概率。</h2>
-                <p>系统综合金额、客户等级、阶段停留时间和最近沟通，建议优先处理 Nordic Tools、Al Noor Trading 与 Kanto Retail。</p>
+                <h2>正在生成经营建议</h2>
+                <p>系统将根据当前账号可见的客户、商机、待办和线索数据生成建议。</p>
               </div>
               <div class="briefing-why">
                 <div><b>判断依据</b><span id="briefingBasis">依据待办、客户风险、商机阶段和企微状态生成。</span></div>
@@ -10432,10 +10432,10 @@
                 <div><b>业务影响</b><span id="briefingImpact">用于晨会安排、个人今日任务排序和主管协同判断。</span></div>
               </div>
               <div class="focus-metrics">
-                <div class="focus-metric"><span>高风险金额</span><b data-sales-text="$36k" data-manager-text="$92k">$36k</b><small data-sales-text="本人名下报价" data-manager-text="集中在欧洲市场">本人名下报价</small></div>
-                <div class="focus-metric"><span>高优先级待办</span><b>0 项</b><small>本人待办</small></div>
-                <div class="focus-metric"><span>今日预计成交金额</span><b>$0</b><small>0 个预计成交商机</small></div>
-                <div class="focus-metric"><span>企微未读提醒</span><b>6 条</b><small>已二次推送</small></div>
+                <div class="focus-metric"><span>高风险金额</span><b>--</b><small>数据加载中</small></div>
+                <div class="focus-metric"><span>高优先级待办</span><b>--</b><small>数据加载中</small></div>
+                <div class="focus-metric"><span>预计成交金额</span><b>--</b><small>数据加载中</small></div>
+                <div class="focus-metric"><span>新增线索</span><b>--</b><small>数据加载中</small></div>
               </div>
             </section>
 
@@ -10460,41 +10460,10 @@
                   <input placeholder="快速新增：例如 明天 10 点跟进重点客户报价" />
                 </label>
                 <div class="todo-filters">
-	                  <span class="todo-chip active" data-sales-text="今天 5" data-manager-text="今天 12">今天 5</span><span class="todo-chip" data-sales-text="逾期 2" data-manager-text="逾期 5">逾期 2</span><span class="todo-chip">我负责 18</span><span class="todo-chip">客户跟进</span><span class="todo-chip">历史清单 0</span>
+	                  <span class="todo-chip active">今天 --</span><span class="todo-chip">逾期 --</span><span class="todo-chip">我负责 --</span><span class="todo-chip">客户跟进</span><span class="todo-chip">历史清单 --</span>
                 </div>
               </div>
-              <div class="todo-list">
-                <article class="todo-row urgent">
-                  <i class="todo-check"></i>
-                  <div class="todo-main"><h3>补发 Nordic Tools AB 的 CE 证书与新版交期说明</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--rose)"></i><span>高优先级</span><span>今天 09:45</span><span>关联客户：Nordic Tools AB</span><span class="badge red">逾期</span></div></div>
-                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">SH</span><span class="mini-avatar">AL</span></div><div class="subtask-bar"><i style="--p:66%"></i></div></div>
-                </article>
-                <article class="todo-row">
-                  <i class="todo-check"></i>
-                  <div class="todo-main"><h3>审核“欧洲报价模板”并同步到资料库</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--amber)"></i><span>中优先级</span><span>今天 11:30</span><span>资料维护</span><span class="badge amber">待审核</span></div></div>
-                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">MI</span></div><div class="subtask-bar"><i style="--p:40%"></i></div></div>
-                </article>
-                <article class="todo-row manager-only">
-                  <i class="todo-check"></i>
-                  <div class="todo-main"><h3>分配欧洲组 5 个逾期报价客户给对应业务员</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--rose)"></i><span>主管任务</span><span>今天 17:00</span><span>团队管理</span><span class="badge red">团队视图</span></div></div>
-                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">AL</span></div><div class="subtask-bar"><i style="--p:20%"></i></div></div>
-                </article>
-                <article class="todo-row">
-                  <i class="todo-check"></i>
-                  <div class="todo-main"><h3>给中东组推送“认证资料专项”补考提醒</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--brand)"></i><span>普通</span><span>今天 15:00</span><span>在线考试</span><span class="badge">企微提醒</span></div></div>
-                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">AD</span><span class="mini-avatar">ER</span></div><div class="subtask-bar"><i style="--p:25%"></i></div></div>
-                </article>
-                <article class="todo-row">
-                  <i class="todo-check"></i>
-                  <div class="todo-main"><h3>复核 OCR 名片识别结果并同步 8 条展会线索</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--aqua)"></i><span>普通</span><span>今天 16:20</span><span>小工具 / OCR</span><span class="badge green">可同步</span></div></div>
-                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">LU</span></div><div class="subtask-bar"><i style="--p:80%"></i></div></div>
-                </article>
-	                <article class="todo-row done">
-	                  <i class="todo-check"></i>
-	                  <div class="todo-main"><h3>确认 Atlas Home Inc 样品签收状态</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--green)"></i><span>已完成</span><span>09:12</span><span>关联商机：样品阶段</span></div></div>
-	                  <div class="todo-side"><div class="assignee-stack"><span class="mini-avatar">AL</span></div><div class="subtask-bar"><i style="--p:100%"></i></div></div>
-	                </article>
-	              </div>
+              <div class="todo-list"><div class="todo-history-empty">待办数据加载中</div></div>
 	              <details class="todo-history">
 	                <summary class="todo-history-head">
 	                  <div><h3>历史清单</h3><span>隔天自动归档，当前清单只保留今天及未来待办</span></div>
@@ -10510,23 +10479,16 @@
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M8 17V9"/><path d="M13 17V5"/><path d="M18 17v-6"/></svg></span><div><h2>待办洞察</h2><span>按优先级和业务影响汇总</span></div></div></div>
               <div class="todo-insights">
                 <div class="todo-score">
-                  <div class="todo-score-card"><span>今日待办</span><b data-sales-text="5" data-manager-text="12">5</b></div>
-                  <div class="todo-score-card"><span>已逾期</span><b style="color:var(--rose)" data-sales-text="2" data-manager-text="5">2</b></div>
-                  <div class="todo-score-card"><span>完成率</span><b data-sales-text="76%" data-manager-text="68%">76%</b></div>
-                  <div class="todo-score-card"><span>高影响</span><b data-sales-text="$36k" data-manager-text="$92k">$36k</b></div>
+                  <div class="todo-score-card"><span>今日待办</span><b>--</b></div>
+                  <div class="todo-score-card"><span>已逾期</span><b style="color:var(--rose)">--</b></div>
+                  <div class="todo-score-card"><span>完成率</span><b>--</b></div>
+                  <div class="todo-score-card"><span>高影响</span><b>--</b></div>
                 </div>
                 <table class="mini-table">
                   <thead><tr><th>类型</th><th>数量</th><th>风险</th></tr></thead>
-                  <tbody>
-                    <tr><td>客户跟进</td><td>7</td><td><span class="badge red">高</span></td></tr>
-                    <tr><td>资料维护</td><td>3</td><td><span class="badge amber">中</span></td></tr>
-                    <tr><td>考试复训</td><td>2</td><td><span class="badge">普通</span></td></tr>
-                    <tr><td>OCR 线索</td><td>8</td><td><span class="badge green">可处理</span></td></tr>
-                  </tbody>
+                  <tbody><tr><td colspan="3">数据加载中</td></tr></tbody>
                 </table>
-                <div class="todo-calendar">
-                  <div class="todo-day">一<br>8</div><div class="todo-day hot">二<br>12</div><div class="todo-day ok">三<br>6</div><div class="todo-day">四<br>9</div><div class="todo-day hot">五<br>14</div><div class="todo-day ok">六<br>3</div><div class="todo-day">日<br>2</div>
-                </div>
+                <div class="todo-calendar"><div class="todo-day">加载中</div></div>
               </div>
             </aside>
           </div>
@@ -10537,51 +10499,33 @@
                 <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 8v5l3 3"/><circle cx="12" cy="12" r="10"/></svg></span><div><h2>跟进优先级队列 <span class="scope-tag" data-business-scope>业务范围</span></h2><span>按金额影响、商机阶段、客户风险、关联待办综合评分</span></div></div>
                 <button class="btn" id="batchPriorityButton">批量生成跟进待办</button>
               </div>
-              <div class="task-list">
-                <article class="task" style="--accent: var(--rose)"><i class="task-line"></i><div><h3>Nordic Tools AB 报价后 5 天未回复</h3><p>瑞典 · 采购电动工具 · 预计 $36,000 · 建议发送二次确认</p></div><span class="badge red">逾期</span></article>
-                <article class="task" style="--accent: var(--amber)"><i class="task-line"></i><div><h3>Atlas Home Inc 样品签收后待确认</h3><p>美国 · 家居用品 · 下一步：确认测试反馈和复购时间</p></div><span class="badge amber">今日</span></article>
-                <article class="task" style="--accent: var(--brand)"><i class="task-line"></i><div><h3>Al Noor Trading 需发送汇率更新报价</h3><p>阿联酋 · LED 灯具 · 客户关注 MOQ 与交期</p></div><span class="badge">10:30</span></article>
-                <article class="task" style="--accent: var(--green)"><i class="task-line"></i><div><h3>Kanto Retail 进入付款条款谈判</h3><p>日本 · 连锁零售 · 建议主管协同确认账期</p></div><span class="badge green">高意向</span></article>
-              </div>
+              <div class="task-list"><div class="todo-history-empty">跟进任务加载中</div></div>
             </div>
 
             <div class="panel section">
               <div class="section-head">
                 <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 6v12"/><path d="M17 6v12"/><path d="M3 18h18"/></svg></span><div><h2>管道健康度 <span class="scope-tag" data-business-scope>业务范围</span></h2><span>按真实商机阶段统计数量、金额和风险</span></div></div>
               </div>
-              <div class="bars">
-                <div class="bar-row"><span>询盘</span><div class="track"><div class="fill" style="width:92%"></div></div><b>42</b></div>
-                <div class="bar-row"><span>已联系</span><div class="track"><div class="fill aqua" style="width:74%"></div></div><b>31</b></div>
-                <div class="bar-row"><span>已报价</span><div class="track"><div class="fill amber" style="width:62%"></div></div><b>26</b></div>
-                <div class="bar-row"><span>样品</span><div class="track"><div class="fill green" style="width:33%"></div></div><b>14</b></div>
-                <div class="bar-row"><span>谈判</span><div class="track"><div class="fill violet" style="width:22%"></div></div><b>9</b></div>
-                <div class="bar-row"><span>成交</span><div class="track"><div class="fill green" style="width:16%"></div></div><b>6</b></div>
-              </div>
+              <div class="bars"><div class="todo-history-empty">商机管道加载中</div></div>
             </div>
           </div>
 
         </div>
 
-        <div class="view" id="instrument-growth">
+        <div class="view" id="plan-growth">
           <div class="page-head">
             <div><p class="eyebrow">Personal Execution Planner</p><h1>计划任务</h1><p class="sub">把新客户开拓、资料准备、触达话术和周报复盘拆成可编辑、可落库、可推待办的个人执行计划。</p></div>
-            <div class="head-actions"><button class="btn" id="instrumentExportButton">导出计划</button><button class="btn" id="instrumentMemoButton">写入备忘</button><button class="btn" id="planTaskPushSelectedButton">推送选中</button><button class="btn primary" id="planTaskNewButton">新增任务</button></div>
+            <div class="head-actions"><button class="btn" id="planExportButton">导出计划</button><button class="btn" id="planMemoButton">写入备忘</button><button class="btn" id="planTaskPushSelectedButton">推送选中</button><button class="btn primary" id="planTaskNewButton">新增任务</button></div>
           </div>
 
-          <div class="instrument-hero">
-            <section class="panel instrument-brief">
+          <div class="plan-hero">
+            <section class="panel plan-brief">
               <span class="badge aqua">个人计划 · 数据隔离 · 可推待办</span>
               <h2>先把计划拆到可执行，再把真正要做的任务推到今日待办。</h2>
-              <p>计划任务只属于当前账号；主管和管理员不会在个人待办压力之外看到员工的个人计划。适合承载仪表外贸新客户开拓、资料整理、客户画像、英文话术、复盘周报等长期动作。</p>
-              <div class="instrument-targets">
-                <div><span>目标客户池</span><b>600+</b></div>
-                <div><span>每日新增</span><b>30</b></div>
-                <div><span>每日首触达</span><b>20</b></div>
-                <div><span>周报复盘</span><b>1</b></div>
-              </div>
+              <p>计划任务只属于当前账号；主管和管理员不会在个人待办压力之外看到员工的个人计划。适合承载新客户开拓、资料整理、客户画像、英文话术、复盘周报等长期动作。</p>
             </section>
 
-            <aside class="instrument-rhythm">
+            <aside class="plan-rhythm">
               <div class="section-head" style="margin-bottom:2px"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 8v5l3 3"/><circle cx="12" cy="12" r="10"/></svg></span><div><h2>执行节奏建议</h2><span>可改成你自己的任务并推到待办</span></div></div></div>
               <div class="rhythm-item"><time>09:10</time><div><b>找客户</b><span>按国家、行业、客户类型建立目标客户池。</span></div><span class="badge">获客</span></div>
               <div class="rhythm-item"><time>11:00</time><div><b>首触达</b><span>邮件、LinkedIn、WhatsApp 分角色触达。</span></div><span class="badge green">触达</span></div>
@@ -10597,7 +10541,7 @@
             <div><span>可推待办</span><b>0</b></div>
           </div>
 
-          <div class="instrument-grid">
+          <div class="plan-grid">
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg></span><div><h2>前置知识训练清单</h2><span>按能否对外解释、报价、追问参数来验收</span></div></div></div>
               <div class="knowledge-matrix" id="knowledgeTemplateList"></div>
@@ -10614,21 +10558,21 @@
             <div id="planTaskList" class="plan-task-list"></div>
           </div>
 
-          <div class="instrument-grid">
+          <div class="plan-grid">
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 2v4"/><path d="M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/></svg></span><div><h2>首周执行拆解</h2><span>先把能力、资料、客户池和触达节奏跑通</span></div></div></div>
               <div class="execution-board" id="executionTemplateList"></div>
-              <div class="instrument-actionbar"><span>建议把这一块拆成自己的计划任务，成熟后再推到待办清单执行。</span><button class="btn primary" id="planTaskNewButtonInline">新增计划任务</button></div>
+              <div class="plan-actionbar"><span>建议把这一块拆成自己的计划任务，成熟后再推到待办清单执行。</span><button class="btn primary" id="planTaskNewButtonInline">新增计划任务</button></div>
             </section>
 
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg></span><div><h2>英文话术与参数确认</h2><span>可复制到邮件、WhatsApp、企业微信</span></div></div></div>
               <ul class="script-list">
-                <li><b>Distributor subject:</b> Instrumentation supplier for your local market.</li>
-                <li><b>OEM subject:</b> Instruments for your equipment applications.</li>
-                <li>We supply pressure, temperature, flow and level instruments with certificates and technical documents for project evaluation.</li>
-                <li>Could you share the medium, measuring range, accuracy, process connection, output signal, material and certificate requirements?</li>
-                <li>For replacement demand, please send the existing model/photo/nameplate, and we will check equivalent options.</li>
+                <li><b>Distributor subject:</b> Product supplier support for your local market.</li>
+                <li><b>OEM subject:</b> Product options for your equipment applications.</li>
+                <li>We can support product selection, specifications, certificates, quotations and sample coordination.</li>
+                <li>Could you share the intended use, required specifications, quantity, target price, certification and delivery requirements?</li>
+                <li>For replacement demand, please send the existing model, photo or specification sheet, and we will check equivalent options.</li>
               </ul>
               <table class="mini-table" style="margin-top:12px">
                 <thead><tr><th>周报字段</th><th>目标</th><th>说明</th></tr></thead>
@@ -10663,11 +10607,11 @@
                 <span class="badge" id="leadFinderAiBadge">规则解析</span>
               </div>
               <div class="lead-form-grid">
-                <div class="lead-field"><label>产品关键词</label><input id="leadProductKeywords" value="pressure transmitter, flow meter, level sensor"></div>
-                <div class="lead-field"><label>国家/地区</label><input id="leadCountries" value="Germany, UK, Turkey, UAE"></div>
-                <div class="lead-field"><label>行业/应用场景</label><input id="leadIndustryInput" value="water treatment, oil gas, automation, pump valve"></div>
+                <div class="lead-field"><label>产品关键词</label><input id="leadProductKeywords" placeholder="输入产品关键词"></div>
+                <div class="lead-field"><label>国家/地区</label><input id="leadCountries" placeholder="输入目标国家或地区"></div>
+                <div class="lead-field"><label>行业/应用场景</label><input id="leadIndustryInput" placeholder="输入目标行业或应用场景"></div>
                 <div class="lead-field"><label>客户类型</label><select id="leadCustomerTypes"><option>经销商 / Distributor</option><option>系统集成商 / System Integrator</option><option>OEM 设备厂</option><option>EPC 工程承包商</option><option>MRO 服务商</option><option>终端工厂</option></select></div>
-                <div class="lead-field"><label>排除词</label><input id="leadExcludeKeywords" value="job, used, repair, school, news"></div>
+                <div class="lead-field"><label>排除词</label><input id="leadExcludeKeywords" placeholder="输入需要排除的关键词"></div>
               </div>
               <details class="lead-advanced-settings" open>
                 <summary>高级设置 <span>数据源、AI、目标数量与链接导入</span></summary>
@@ -11230,10 +11174,7 @@
             <div class="table-wrap">
               <table>
                 <thead><tr><th>任务</th><th>类型</th><th>范围</th><th>状态</th><th>执行人</th><th>时间</th></tr></thead>
-                <tbody>
-                  <tr><td>2026 春季展会客户</td><td>导入</td><td>1,286 行</td><td><span class="badge green">完成</span></td><td>Admin</td><td>09:12</td></tr>
-                  <tr><td>欧洲 A 级客户</td><td>导出</td><td>客户 + 联系人</td><td><span class="badge amber">待审批</span></td><td>Shirley</td><td>08:40</td></tr>
-                </tbody>
+                <tbody><tr><td colspan="6" class="empty-cell">任务数据加载中</td></tr></tbody>
               </table>
             </div>
           </div>
@@ -11280,7 +11221,7 @@
                 <label><span>卖方公司</span><input id="docSellerInput"></label>
                 <label><span>币种</span><select id="docCurrencyInput"><option>USD</option><option>EUR</option><option>CNY</option><option>GBP</option></select></label>
                 <label class="wide"><span>卖方地址</span><input id="docSellerAddressInput"></label>
-                <label><span>贸易条款</span><select id="docIncotermInput"><option>FOB Tianjin</option><option>EXW Factory</option><option>CIF Destination Port</option><option>DAP Buyer Address</option><option>FCA Shanghai</option></select></label>
+                <label><span>贸易条款</span><select id="docIncotermInput"><option>FOB</option><option>EXW</option><option>CIF</option><option>DAP</option><option>FCA</option></select></label>
                 <label><span>运输方式</span><select id="docShippingInput"><option>Sea freight</option><option>Air freight</option><option>Express</option><option>Rail freight</option></select></label>
                 <label><span>装运港</span><input id="docPortLoadingInput"></label>
                 <label><span>目的港</span><input id="docPortDischargeInput"></label>
@@ -11441,20 +11382,16 @@
           <div class="wecom-card">
             <div class="panel section">
               <div class="kpis" style="grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom:0">
-                <div class="kpi" style="--accent: var(--aqua)"><label>已绑定客户</label><strong>412</strong><p>绑定率 64%</p></div>
-                <div class="kpi" style="--accent: var(--brand)"><label>今日提醒</label><strong>37</strong><p>已读 81%</p></div>
-                <div class="kpi" style="--accent: var(--green)"><label>会话摘要</label><strong>96</strong><p>自动归档</p></div>
-                <div class="kpi" style="--accent: var(--amber)"><label>异常授权</label><strong>0</strong><p>权限正常</p></div>
+                <div class="kpi" style="--accent: var(--aqua)"><label>已绑定客户</label><strong>--</strong><p>数据加载中</p></div>
+                <div class="kpi" style="--accent: var(--brand)"><label>今日提醒</label><strong>--</strong><p>数据加载中</p></div>
+                <div class="kpi" style="--accent: var(--green)"><label>会话摘要</label><strong>--</strong><p>数据加载中</p></div>
+                <div class="kpi" style="--accent: var(--amber)"><label>异常授权</label><strong>--</strong><p>数据加载中</p></div>
               </div>
             </div>
             <div class="phone">
               <div class="phone-screen">
                 <span class="badge green">企微提醒预览</span>
-                <div class="chat">
-                  <div class="bubble">Nordic Tools AB 报价已逾期 5 天，建议今日二次确认。</div>
-                  <div class="bubble me">已发送新版 CE 证书和交期说明。</div>
-                  <div class="bubble">摘要已归档到客户时间线，并生成明日 10:00 提醒。</div>
-                </div>
+                <div class="chat"><div class="bubble">会话摘要加载中</div></div>
               </div>
             </div>
           </div>
@@ -11467,49 +11404,36 @@
           </div>
 
           <div class="dense-grid">
-            <div class="dense-card"><span>资料总数</span><b>428</b><small>+18</small></div>
-            <div class="dense-card"><span>待审核</span><b>12</b><small style="color:var(--amber)">今日处理</small></div>
-            <div class="dense-card"><span>本月下载</span><b>2,846</b><small>+23%</small></div>
-            <div class="dense-card"><span>资料覆盖率</span><b>91%</b><small>+5%</small></div>
+            <div class="dense-card"><span>资料总数</span><b>--</b><small>加载中</small></div>
+            <div class="dense-card"><span>待审核</span><b>--</b><small>加载中</small></div>
+            <div class="dense-card"><span>本月下载</span><b>--</b><small>加载中</small></div>
+            <div class="dense-card"><span>资料覆盖率</span><b>--</b><small>加载中</small></div>
           </div>
 
           <div class="knowledge-grid">
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 5h18"/><path d="M3 12h18"/><path d="M3 19h18"/></svg></span><div><h2>资料类目维护</h2><span>用于资料归档与考试题库关联</span></div></div><button class="btn">调整排序</button></div>
-              <div class="category-list">
-                <div class="category-item"><div><b>产品知识 / LED 灯具</b><span>68 份资料 · 126 道题 · 负责人 Alex</span></div><span class="badge green">启用</span></div>
-                <div class="category-item"><div><b>认证资料 / CE RoHS</b><span>42 份资料 · 74 道题 · 负责人 Mia</span></div><span class="badge amber">待更新</span></div>
-                <div class="category-item"><div><b>报价规则 / 汇率与 MOQ</b><span>35 份资料 · 52 道题 · 负责人 Shirley</span></div><span class="badge green">启用</span></div>
-                <div class="category-item"><div><b>销售 SOP / 跟进话术</b><span>96 份资料 · 88 道题 · 负责人 Admin</span></div><span class="badge">修订中</span></div>
-                <div class="category-item"><div><b>包装物流 / 唛头与装柜</b><span>51 份资料 · 60 道题 · 负责人 Eric</span></div><span class="badge green">启用</span></div>
-              </div>
+              <div class="category-list"><div class="todo-history-empty">资料类目加载中</div></div>
             </section>
 
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></span><div><h2>资料库</h2><span>支持文档、图片、视频、链接与版本审核</span></div></div><button class="btn">批量发布</button></div>
-              <div class="file-grid">
-                <div class="file-card"><div class="file-icon">PDF</div><b>LED 灯具参数手册 V3</b><span>产品知识 · 已发布 · 2026-06-25</span></div>
-                <div class="file-card"><div class="file-icon">XLS</div><b>欧洲报价模板</b><span>报价规则 · 待审核 · 汇率已更新</span></div>
-                <div class="file-card"><div class="file-icon">VID</div><b>样品测试讲解视频</b><span>销售 SOP · 12 分钟 · 关联考试</span></div>
-                <div class="file-card"><div class="file-icon">DOC</div><b>CE 证书客户解释话术</b><span>认证资料 · 已发布 · 下载 184</span></div>
-                <div class="file-card"><div class="file-icon">IMG</div><b>包装唛头示例图库</b><span>包装物流 · 修订中 · 24 张图</span></div>
-                <div class="file-card"><div class="file-icon">URL</div><b>竞品参数对照链接</b><span>产品知识 · 内部可见 · 负责人 Mia</span></div>
-              </div>
+              <div class="file-grid"><div class="todo-history-empty">资料数据加载中</div></div>
             </section>
           </div>
 
           <div class="matrix-grid">
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2>审核流</h2><span>资料上线前必须留痕</span></div></div></div>
-              <table class="mini-table"><thead><tr><th>资料</th><th>审核人</th><th>状态</th></tr></thead><tbody><tr><td>欧洲报价模板</td><td>主管</td><td><span class="badge amber">待审</span></td></tr><tr><td>产品参数 V3</td><td>产品经理</td><td><span class="badge green">通过</span></td></tr><tr><td>竞品对照</td><td>管理员</td><td><span class="badge">修订</span></td></tr></tbody></table>
+              <table class="mini-table"><thead><tr><th>资料</th><th>审核人</th><th>状态</th></tr></thead><tbody><tr><td colspan="3">数据加载中</td></tr></tbody></table>
             </section>
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M3 12h18"/></svg></span><div><h2>字段维护</h2><span>资料标签与适用范围</span></div></div></div>
-              <table class="mini-table"><thead><tr><th>字段</th><th>值</th><th>状态</th></tr></thead><tbody><tr><td>适用市场</td><td>欧洲/北美/中东</td><td>启用</td></tr><tr><td>产品线</td><td>灯具/五金/家居</td><td>启用</td></tr><tr><td>权限</td><td>全员/主管/管理员</td><td>启用</td></tr></tbody></table>
+              <table class="mini-table"><thead><tr><th>字段</th><th>值</th><th>状态</th></tr></thead><tbody><tr><td colspan="3">数据加载中</td></tr></tbody></table>
             </section>
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4"/><path d="M20 6 9 17l-5-5"/></svg></span><div><h2>考试关联</h2><span>资料更新后自动触发复训</span></div></div></div>
-              <table class="mini-table"><thead><tr><th>类目</th><th>题库</th><th>动作</th></tr></thead><tbody><tr><td>认证资料</td><td>74 题</td><td><span class="badge amber">复训</span></td></tr><tr><td>报价规则</td><td>52 题</td><td><span class="badge green">同步</span></td></tr><tr><td>产品知识</td><td>126 题</td><td><span class="badge">抽考</span></td></tr></tbody></table>
+              <table class="mini-table"><thead><tr><th>类目</th><th>题库</th><th>动作</th></tr></thead><tbody><tr><td colspan="3">数据加载中</td></tr></tbody></table>
             </section>
           </div>
         </div>
@@ -11521,44 +11445,35 @@
           </div>
 
           <div class="dense-grid">
-            <div class="dense-card"><span>进行中考试</span><b>8</b><small>3 场今日截止</small></div>
-            <div class="dense-card"><span>题库总量</span><b>1,246</b><small>+86</small></div>
-            <div class="dense-card"><span>平均通过率</span><b>78%</b><small style="color:var(--amber)">认证类偏低</small></div>
-            <div class="dense-card"><span>需补考人数</span><b>19</b><small style="color:var(--rose)">自动提醒</small></div>
+            <div class="dense-card"><span>进行中考试</span><b>--</b><small>加载中</small></div>
+            <div class="dense-card"><span>题库总量</span><b>--</b><small>加载中</small></div>
+            <div class="dense-card"><span>平均通过率</span><b>--</b><small>加载中</small></div>
+            <div class="dense-card"><span>需补考人数</span><b>--</b><small>加载中</small></div>
           </div>
 
           <div class="exam-grid">
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4"/><path d="M7 3h10l2 4v14H5V7z"/></svg></span><div><h2>在线考试预览</h2><span>业务员答题界面，可限时、自动判分</span></div></div><span class="badge red">剩余 18:42</span></div>
-              <div class="exam-paper">
-                <div class="question-card"><h3>1. 客户要求 CE 证书时，销售应优先提供哪类资料？</h3><div class="option-row"><span>A. 工厂营业执照</span><span class="active">B. 对应产品型号的 CE 证书与测试报告</span><span>C. 产品宣传图</span><span>D. 海运提单</span></div></div>
-                <div class="question-card"><h3>2. 报价单中 MOQ 变化需要同步更新哪些内容？</h3><div class="option-row"><span>A. 单价、包装数、交期</span><span>B. 客户国家</span><span class="active">C. 单价、装箱、交期、付款条款影响</span><span>D. 仅备注即可</span></div></div>
-                <div class="question-card"><h3>3. 样品寄出后系统默认几天触发反馈提醒？</h3><div class="option-row"><span>A. 1 天</span><span class="active">B. 签收后 3 天</span><span>C. 30 天</span><span>D. 不提醒</span></div></div>
-              </div>
+              <div class="exam-paper"><div class="todo-history-empty">考试内容加载中</div></div>
             </section>
 
             <aside class="exam-sidebar">
               <section class="panel section">
-                <div class="progress-ring"><b>72%</b></div>
-                <div class="section-head"><div class="section-title"><div><h2>考试进度</h2><span>LED 灯具基础知识</span></div></div><span class="badge">25 题</span></div>
-                <table class="mini-table"><tbody><tr><td>已答</td><td>18/25</td></tr><tr><td>正确</td><td>14</td></tr><tr><td>及格线</td><td>80 分</td></tr><tr><td>允许补考</td><td>2 次</td></tr></tbody></table>
+                <div class="progress-ring"><b>--</b></div>
+                <div class="section-head"><div class="section-title"><div><h2>考试进度</h2><span>数据加载中</span></div></div><span class="badge">--</span></div>
+                <table class="mini-table"><tbody><tr><td colspan="2">数据加载中</td></tr></tbody></table>
               </section>
               <section class="panel section">
                 <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 5h18"/><path d="M3 12h18"/><path d="M3 19h18"/></svg></span><div><h2>分类目考试维护</h2><span>按产品线维护考试</span></div></div></div>
-                <div class="category-list">
-                  <div class="category-item"><div><b>LED 灯具基础</b><span>25 题 · 80 分及格 · 全员必考</span></div><span class="badge green">发布</span></div>
-                  <div class="category-item"><div><b>认证资料专项</b><span>30 题 · 85 分及格 · 新人必考</span></div><span class="badge amber">草稿</span></div>
-                  <div class="category-item"><div><b>报价规则进阶</b><span>20 题 · 80 分及格 · 销售必考</span></div><span class="badge">排期</span></div>
-                  <div class="category-item"><div><b>包装物流知识</b><span>18 题 · 75 分及格 · 选考</span></div><span class="badge green">发布</span></div>
-                </div>
+                <div class="category-list"><div class="todo-history-empty">考试列表加载中</div></div>
               </section>
             </aside>
           </div>
 
           <div class="matrix-grid">
-            <section class="panel section"><div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-7"/></svg></span><div><h2>成绩统计</h2><span>按团队与类目分析</span></div></div></div><table class="mini-table"><thead><tr><th>团队</th><th>参考</th><th>通过率</th><th>均分</th></tr></thead><tbody><tr><td>欧洲组</td><td>12</td><td>83%</td><td>86</td></tr><tr><td>北美组</td><td>10</td><td>78%</td><td>81</td></tr><tr><td>中东组</td><td>8</td><td>62%</td><td>73</td></tr></tbody></table></section>
-            <section class="panel section"><div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/></svg></span><div><h2>补考提醒</h2><span>企微自动推送</span></div></div></div><table class="mini-table"><thead><tr><th>人员</th><th>类目</th><th>状态</th></tr></thead><tbody><tr><td>Eric</td><td>认证资料</td><td><span class="badge red">未通过</span></td></tr><tr><td>Luna</td><td>报价规则</td><td><span class="badge amber">待补考</span></td></tr><tr><td>Owen</td><td>包装物流</td><td><span class="badge">未参加</span></td></tr></tbody></table></section>
-            <section class="panel section"><div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2>题型维护</h2><span>单选/多选/判断/问答</span></div></div></div><table class="mini-table"><thead><tr><th>题型</th><th>数量</th><th>占比</th></tr></thead><tbody><tr><td>单选</td><td>680</td><td>55%</td></tr><tr><td>多选</td><td>316</td><td>25%</td></tr><tr><td>判断</td><td>250</td><td>20%</td></tr></tbody></table></section>
+            <section class="panel section"><div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-7"/></svg></span><div><h2>成绩统计</h2><span>按团队与类目分析</span></div></div></div><table class="mini-table"><thead><tr><th>团队</th><th>参考</th><th>通过率</th><th>均分</th></tr></thead><tbody><tr><td colspan="4">数据加载中</td></tr></tbody></table></section>
+            <section class="panel section"><div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/></svg></span><div><h2>补考提醒</h2><span>企微自动推送</span></div></div></div><table class="mini-table"><thead><tr><th>人员</th><th>类目</th><th>状态</th></tr></thead><tbody><tr><td colspan="3">数据加载中</td></tr></tbody></table></section>
+            <section class="panel section"><div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2>题型维护</h2><span>按数据库题库实时统计</span></div></div></div><table class="mini-table"><thead><tr><th>题型</th><th>数量</th><th>占比</th></tr></thead><tbody><tr><td colspan="3">题型数据加载中</td></tr></tbody></table></section>
           </div>
         </div>
 
@@ -11633,10 +11548,10 @@
           </div>
 
           <div class="dense-grid">
-            <div class="dense-card"><span>今日识别名片</span><b>37</b><small>+12</small></div>
-            <div class="dense-card"><span>成功同步线索</span><b>29</b><small>78%</small></div>
-            <div class="dense-card"><span>字段平均置信度</span><b>94%</b><small>高</small></div>
-            <div class="dense-card"><span>待人工确认</span><b>8</b><small style="color:var(--amber)">需复核</small></div>
+            <div class="dense-card"><span>当前任务</span><b id="ocrCurrentTaskValue">--</b><small>数据库状态</small></div>
+            <div class="dense-card"><span>已识别字段</span><b id="ocrRecognizedFieldsValue">--</b><small>当前名片</small></div>
+            <div class="dense-card"><span>识别置信度</span><b id="ocrConfidenceValue">--</b><small>接口返回</small></div>
+            <div class="dense-card"><span>同步状态</span><b id="ocrSyncStateValue">--</b><small>线索中心</small></div>
           </div>
 
           <div class="tools-grid">
@@ -11657,46 +11572,29 @@
 
               <div class="ocr-workbench">
                 <div class="upload-card">
-                  <span class="badge">已加载：business-card-james.png</span>
+                  <span class="badge">等待上传名片</span>
                   <div class="business-card">
-                    <h2>NorthStar Lighting GmbH</h2>
-                    <p>Import & Distribution</p>
-                    <strong>James Müller</strong>
-                    <span>Purchasing Manager</span>
-                    <span>james.mueller@northstar-light.de</span>
-                    <span>WhatsApp +49 151 2388 9012</span>
-                    <span>WeChat james_light_de</span>
-                    <span>Berlin, Germany</span>
+                    <h2>识别结果加载中</h2>
+                    <p>数据将从当前账号的 OCR 任务读取。</p>
                   </div>
                   <div class="sync-preview">
-                    <div class="sync-row"><span>识别状态</span><b>完成</b><span class="badge green">94% 置信度</span></div>
-                    <div class="sync-row"><span>重复检查</span><b>未发现重复客户</b><span class="badge green">可同步</span></div>
-                    <div class="sync-row"><span>目标模块</span><b>线索池 / 欧洲组</b><span class="badge">待确认</span></div>
+                    <div class="sync-row"><span>识别状态</span><b>加载中</b><span class="badge">--</span></div>
+                    <div class="sync-row"><span>重复检查</span><b>同步前检查</b><span class="badge">待确认</span></div>
+                    <div class="sync-row"><span>目标模块</span><b>线索中心</b><span class="badge">当前团队</span></div>
                   </div>
                 </div>
 
                 <div>
-                  <div class="ocr-fields">
-                    <div class="field-card"><input type="checkbox" checked><div><label>公司名</label><input type="text" value="NorthStar Lighting GmbH"></div></div>
-                    <div class="field-card"><input type="checkbox" checked><div><label>联系人</label><input type="text" value="James Müller"></div></div>
-                    <div class="field-card"><input type="checkbox" checked><div><label>职位</label><input type="text" value="Purchasing Manager"></div></div>
-                    <div class="field-card"><input type="checkbox" checked><div><label>邮箱</label><input type="text" value="james.mueller@northstar-light.de"></div></div>
-                    <div class="field-card"><input type="checkbox" checked><div><label>WhatsApp</label><input type="text" value="+49 151 2388 9012"></div></div>
-                    <div class="field-card"><input type="checkbox" checked><div><label>微信</label><input type="text" value="james_light_de"></div></div>
-                    <div class="field-card"><input type="checkbox" checked><div><label>电话</label><input type="text" value="+49 30 8842 1290"></div></div>
-                    <div class="field-card"><input type="checkbox" checked><div><label>国家</label><input type="text" value="德国"></div></div>
-                    <div class="field-card"><input type="checkbox" checked><div><label>城市</label><input type="text" value="Berlin"></div></div>
-                    <div class="field-card"><input type="checkbox"><div><label>标签</label><input type="text" value="LED灯具 / 欧洲进口商"></div></div>
-                  </div>
+                  <div class="ocr-fields"><div class="empty-state"><b>识别字段加载中</b><span>接口返回后可逐项确认。</span></div></div>
 
                   <div class="matrix-grid" style="grid-template-columns: 1fr 1fr; margin-top:10px">
                     <section class="panel section" style="box-shadow:none">
                       <div class="section-head"><div class="section-title"><div><h2>同步字段</h2><span>勾选后写入线索</span></div></div></div>
-                      <table class="mini-table"><tbody><tr><td>客户名称</td><td>公司名</td><td><span class="badge green">已选</span></td></tr><tr><td>主联系人</td><td>联系人+职位</td><td><span class="badge green">已选</span></td></tr><tr><td>联系方式</td><td>邮箱/电话/WhatsApp/微信</td><td><span class="badge green">已选</span></td></tr><tr><td>国家地区</td><td>德国 / Berlin</td><td><span class="badge green">已选</span></td></tr></tbody></table>
+                      <table class="mini-table"><tbody><tr><td>客户名称</td><td>公司名</td><td><span class="badge">待识别</span></td></tr><tr><td>主联系人</td><td>联系人+职位</td><td><span class="badge">待识别</span></td></tr><tr><td>联系方式</td><td>邮箱/电话/WhatsApp/微信</td><td><span class="badge">待识别</span></td></tr><tr><td>国家地区</td><td>国家/城市</td><td><span class="badge">待识别</span></td></tr></tbody></table>
                     </section>
                     <section class="panel section" style="box-shadow:none">
                       <div class="section-head"><div class="section-title"><div><h2>同步结果预览</h2><span>生成线索前复核</span></div></div></div>
-                      <table class="mini-table"><tbody><tr><td>线索来源</td><td>名片 OCR</td></tr><tr><td>分配团队</td><td>欧洲组</td></tr><tr><td>初始阶段</td><td>新线索</td></tr><tr><td>下次动作</td><td>发送产品目录</td></tr></tbody></table>
+                      <table class="mini-table"><tbody><tr><td>线索来源</td><td>名片 OCR</td></tr><tr><td>分配团队</td><td>当前账号团队</td></tr><tr><td>初始阶段</td><td>新线索</td></tr><tr><td>下次动作</td><td>同步后维护</td></tr></tbody></table>
                     </section>
                   </div>
                 </div>
@@ -11714,9 +11612,9 @@
                     <p>可配置 OpenAI 兼容接口，系统先抓取官网公开文本，再交给你的模型提取产品业务、国家、联系人和联系方式；未配置或调用失败时自动回退规则解析。</p>
                   </div>
                   <div class="ai-config-grid">
-                    <div class="form-field"><label>配置名称</label><input id="aiConfigName" value="官网线索解析模型"></div>
-                    <div class="form-field"><label>Base URL</label><input id="aiBaseUrlInput" value="https://api.openai.com/v1"></div>
-                    <div class="form-field"><label>模型</label><input id="aiModelInput" value="gpt-4o-mini"></div>
+                    <div class="form-field"><label>配置名称</label><input id="aiConfigName" placeholder="从已保存配置读取"></div>
+                    <div class="form-field"><label>Base URL</label><input id="aiBaseUrlInput" placeholder="从已保存配置读取"></div>
+                    <div class="form-field"><label>模型</label><input id="aiModelInput" placeholder="从已保存配置读取"></div>
                     <div class="form-field"><label>API Key</label><input id="aiApiKeyInput" type="password" placeholder="保存后仅后端持久化"></div>
                     <label class="ai-toggle-line"><input id="aiEnabledInput" type="checkbox">启用 AI 解析</label>
                     <label class="ai-toggle-line"><input id="websiteUseAiInput" type="checkbox">本次解析使用 AI</label>
@@ -11726,9 +11624,7 @@
                 <div class="website-input-grid">
                   <div class="upload-card website-url-box" style="min-height:auto">
                     <span class="badge">每行一个官网</span>
-                    <textarea id="websiteUrlInput" placeholder="例如：
-https://www.omega.co.uk
-https://www.ifm.com"></textarea>
+                    <textarea id="websiteUrlInput" placeholder="每行输入一个客户官网地址"></textarea>
                     <div class="sync-preview">
                       <div class="sync-row" id="websiteScrapeStatus"><span>解析状态</span><b>待开始</b><span class="badge">可批量</span></div>
                       <div class="sync-row"><span>输出字段</span><b>公司名 / 业务 / 国家 / 官网 / 联系人 / 联系方式 / 说明</b><span class="badge green">可编辑</span></div>
@@ -11765,9 +11661,7 @@ https://www.ifm.com"></textarea>
           <div class="intel-grid">
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-3"/></svg></span><div><h2>竞争公司</h2><span>按威胁等级和更新时间排序</span></div></div><button class="btn">只看高威胁</button></div>
-              <div class="intel-list">
-                <article class="intel-card selected"><div class="intel-top"><h3>EuroLift Tools GmbH</h3><span class="badge red">高威胁</span></div><div class="intel-meta"><span>德国</span><span>电动工具</span><span>18V 无刷电钻</span></div><p>欧洲本地仓、交期短、CE 资料齐全。</p></article>
-              </div>
+              <div class="intel-list"><div class="todo-history-empty">竞争公司数据加载中</div></div>
             </section>
 
             <aside class="intel-detail">
@@ -11803,9 +11697,7 @@ https://www.ifm.com"></textarea>
           <div class="case-grid">
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v6a5 5 0 0 1-10 0z"/></svg></span><div><h2>案例列表</h2><span>按发布状态和更新时间排序</span></div></div><button class="btn">只看已发布</button></div>
-              <div class="case-list">
-                <article class="case-card selected"><div class="case-top"><h3>Nordic Tools 年度工具套装复购</h3><span class="badge green">已发布</span></div><div class="case-meta"><span>Nordic Tools AB</span><span>18V 无刷电钻套装</span></div><p>$36,000 首单，预计 Q3 复购 2 个柜。</p></article>
-              </div>
+              <div class="case-list"><div class="todo-history-empty">成功案例数据加载中</div></div>
             </section>
 
             <aside class="case-detail">
@@ -11841,9 +11733,7 @@ https://www.ifm.com"></textarea>
           <div class="problem-grid">
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M10.3 3.3 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.3a2 2 0 0 0-3.4 0z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg></span><div><h2>问题队列</h2><span>按状态、严重程度和创建时间排序</span></div></div><button class="btn">只看未解决</button></div>
-              <div class="problem-list">
-                <article class="problem-card selected"><div class="problem-top"><h3>Nordic Tools 报价后 5 天未回复</h3><span class="badge red">高</span></div><div class="problem-meta"><span>报价跟进</span><span>解决中</span><span>今天 16:00</span></div><p>CE 证书和交期说明不完整，客户采购内部审批被卡住。</p></article>
-              </div>
+              <div class="problem-list"><div class="todo-history-empty">问题数据加载中</div></div>
             </section>
 
             <aside class="problem-detail">
@@ -11857,7 +11747,7 @@ https://www.ifm.com"></textarea>
               </section>
               <section class="panel section">
                 <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M8 17V9"/><path d="M13 17V5"/><path d="M18 17v-6"/></svg></span><div><h2>问题分布</h2><span>用于晨会复盘和周会汇报</span></div></div></div>
-                <table class="mini-table"><thead><tr><th>类别</th><th>数量</th><th>风险</th></tr></thead><tbody id="problem-category-table"><tr><td>报价跟进</td><td>1</td><td><span class="badge red">高</span></td></tr></tbody></table>
+                <table class="mini-table"><thead><tr><th>类别</th><th>数量</th><th>风险</th></tr></thead><tbody id="problem-category-table"><tr><td colspan="3">数据加载中</td></tr></tbody></table>
               </section>
             </aside>
           </div>
@@ -11880,22 +11770,20 @@ https://www.ifm.com"></textarea>
                 </div>
                 <label class="memo-pin-filter"><input type="checkbox" id="memoPinnedOnly"> 只看置顶</label>
               </div>
-              <div class="memo-list">
-                <article class="memo-card selected"><div class="memo-top"><h3>欧洲客户常问认证资料</h3><span class="badge green">置顶</span></div><div class="memo-meta"><span>销售话术</span><span>CE,认证,欧洲</span></div><p>客户问 CE/ROHS 时，优先发对应型号证书、测试报告摘要、产品参数页。</p></article>
-              </div>
+              <div class="memo-list"><div class="todo-history-empty">备忘数据加载中</div></div>
             </section>
 
             <aside class="panel section memo-detail">
               <div class="section-head"><div class="section-title"><button class="btn memo-back-button" id="memoBackButton">返回列表</button><div><h2 id="memo-detail-title">备忘编辑</h2><span id="memo-detail-meta">输入停止后自动保存</span></div></div><div class="head-actions"><button class="memo-save-state" id="memoSaveState" type="button">已保存</button><button class="btn" id="memoPinButton">置顶</button><button class="btn" id="memoArchiveButton">归档</button><button class="btn memo-delete" id="memoDeleteButton">删除</button></div></div>
               <div class="memo-content-box">
-                <input class="memo-title-input" id="memoTitleEditor" value="欧洲客户常问认证资料">
+                <input class="memo-title-input" id="memoTitleEditor" value="" placeholder="选择或新建备忘">
                 <div class="memo-fields">
                   <label><span>分类</span><select class="memo-meta-input" id="memoCategoryEditor"><option>客户备忘</option><option>销售话术</option><option>产品知识</option><option>报价复盘</option><option>个人记录</option></select></label>
-                  <label><span>标签</span><input class="memo-meta-input" id="memoTagsEditor" value="CE,认证,欧洲" placeholder="多个标签用逗号分隔"></label>
+                  <label><span>标签</span><input class="memo-meta-input" id="memoTagsEditor" value="" placeholder="多个标签用逗号分隔"></label>
                   <label><span>关联客户</span><select class="memo-meta-input" id="memoCustomerEditor"><option value="">不关联客户</option></select></label>
                   <label><span>关联商机</span><select class="memo-meta-input" id="memoDealEditor"><option value="">不关联商机</option></select></label>
                 </div>
-                <textarea class="memo-editor" id="memoContentEditor">客户问 CE/ROHS 时，优先发对应型号证书、测试报告摘要、产品参数页。不要只发整包资料，容易增加客户筛选成本。</textarea>
+                <textarea class="memo-editor" id="memoContentEditor" placeholder="选择或新建备忘后编辑内容"></textarea>
               </div>
             </aside>
           </div>
@@ -11910,13 +11798,13 @@ https://www.ifm.com"></textarea>
           <div class="profile-grid">
             <section class="profile-hero-panel">
               <div class="profile-identity">
-                <div class="profile-avatar-xl" id="profileAvatarLarge">SH</div>
+                <div class="profile-avatar-xl" id="profileAvatarLarge">--</div>
                 <div>
-                  <h2 id="profileNameTitle">Shirley</h2>
-                  <p id="profileRoleText">业务员 · 仅本人数据</p>
+                  <h2 id="profileNameTitle">账号资料加载中</h2>
+                  <p id="profileRoleText">正在读取当前登录账号</p>
                   <div class="profile-hero-badges">
                     <span class="badge green" id="profileStatusBadge">账号正常</span>
-                    <span class="badge" id="profileTeamBadge">Europe Team</span>
+                    <span class="badge" id="profileTeamBadge">团队加载中</span>
                     <span class="badge amber" id="profileEmailBadge">邮箱待绑定</span>
                   </div>
                 </div>
@@ -11931,13 +11819,13 @@ https://www.ifm.com"></textarea>
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg></span><div><h2>账号资料</h2><span>登录身份、发件身份和个人签名集中维护</span></div></div></div>
               <div class="profile-info-list">
-                <div class="profile-info-row"><span>登录账号</span><b id="profileLoginEmailText">shirley@goodjob.com</b></div>
-                <div class="profile-info-row"><span>账号 ID</span><b id="profileIdText">u_sales_shirley</b></div>
-                <div class="profile-info-row"><span>权限范围</span><b id="profileScopeText">仅本人业务与本人待办</b></div>
+                <div class="profile-info-row"><span>登录账号</span><b id="profileLoginEmailText">--</b></div>
+                <div class="profile-info-row"><span>账号 ID</span><b id="profileIdText">--</b></div>
+                <div class="profile-info-row"><span>权限范围</span><b id="profileScopeText">--</b></div>
               </div>
               <div class="profile-form-grid" style="margin-top:12px">
                 <div class="form-field"><label>登录账号</label><input id="profileLoginEmail" readonly></div>
-                <div class="form-field"><label>发件邮箱</label><input id="profileOutboundEmail" placeholder="例如 shirley@your-company.com"></div>
+                <div class="form-field"><label>发件邮箱</label><input id="profileOutboundEmail" placeholder="例如 sales@your-company.com"></div>
                 <div class="form-field"><label>发件人名称</label><input id="profileSenderName" placeholder="例如 Sales Team"></div>
                 <div class="form-field"><label>SMTP服务器</label><input id="profileSmtpHost" placeholder="例如 smtp.exmail.qq.com"></div>
                 <div class="form-field"><label>SMTP端口</label><input id="profileSmtpPort" type="number" min="1" max="65535" placeholder="465 或 587"></div>
@@ -11975,10 +11863,10 @@ https://www.ifm.com"></textarea>
           </div>
 
           <div class="dense-grid">
-            <div class="dense-card"><span>启用账号</span><b>36</b><small>+3</small></div>
-            <div class="dense-card"><span>主管账号</span><b>5</b><small>全团队</small></div>
-            <div class="dense-card"><span>业务员账号</span><b>28</b><small>本人数据</small></div>
-            <div class="dense-card"><span>异常登录</span><b>0</b><small>安全</small></div>
+            <div class="dense-card"><span>启用账号</span><b>--</b><small>加载中</small></div>
+            <div class="dense-card"><span>主管账号</span><b>--</b><small>加载中</small></div>
+            <div class="dense-card"><span>业务员账号</span><b>--</b><small>加载中</small></div>
+            <div class="dense-card"><span>异常登录</span><b>--</b><small>加载中</small></div>
           </div>
 
           <div class="account-grid">
@@ -11987,12 +11875,7 @@ https://www.ifm.com"></textarea>
               <div class="table-wrap">
                 <table>
                   <thead><tr><th>账号</th><th>角色</th><th>业务数据范围</th><th>个人数据规则</th><th>状态</th><th>操作</th></tr></thead>
-                  <tbody>
-                    <tr><td><div class="company"><span class="avatar">SH</span><div><b>Shirley</b><span>shirley@goodjob.com</span></div></div></td><td><span class="badge">业务员</span></td><td>仅本人数据</td><td>128</td><td><span class="badge green">启用</span></td><td>今天 09:12</td></tr>
-                    <tr><td><div class="company"><span class="avatar">AL</span><div><b>Alex</b><span>alex@goodjob.com</span></div></div></td><td><span class="badge green">主管</span></td><td>欧洲组全部</td><td>642</td><td><span class="badge green">启用</span></td><td>今天 08:36</td></tr>
-                    <tr><td><div class="company"><span class="avatar">MI</span><div><b>Mia</b><span>mia@goodjob.com</span></div></div></td><td><span class="badge">业务员</span></td><td>仅本人数据</td><td>96</td><td><span class="badge green">启用</span></td><td>昨天 18:20</td></tr>
-                    <tr><td><div class="company"><span class="avatar">AD</span><div><b>Admin</b><span>admin@goodjob.com</span></div></div></td><td><span class="badge amber">管理员</span></td><td>全量权限</td><td>全部</td><td><span class="badge green">启用</span></td><td>今天 07:52</td></tr>
-                  </tbody>
+                  <tbody><tr><td colspan="6" class="empty-cell">账号数据加载中</td></tr></tbody>
                 </table>
               </div>
             </section>
@@ -12017,10 +11900,10 @@ https://www.ifm.com"></textarea>
           <div class="settings-grid">
             <div class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></svg></span><div><h2>MySQL 状态</h2><span>本地化部署</span></div></div></div>
-              <div class="setting-row"><span>主库</span><b>192.168.10.21:3306</b></div>
-              <div class="setting-row"><span>备份策略</span><b>每日 03:00</b></div>
-              <div class="setting-row"><span>最近备份</span><b><span class="badge green">成功</span></b></div>
-              <div class="setting-row"><span>审计日志</span><b>保留 180 天</b></div>
+              <div class="setting-row"><span>主库</span><b>由服务端环境配置</b></div>
+              <div class="setting-row"><span>备份策略</span><b>由部署环境配置</b></div>
+              <div class="setting-row"><span>最近备份</span><b>请查看服务器备份日志</b></div>
+              <div class="setting-row"><span>审计日志</span><b>按部署策略保留</b></div>
             </div>
             <div class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span><div><h2>角色权限</h2><span>RBAC + 数据范围</span></div></div></div>
@@ -12046,7 +11929,7 @@ https://www.ifm.com"></textarea>
       customers: "客户",
       pipeline: "商机",
       reminders: "跟进提醒",
-      "instrument-growth": "计划任务",
+      "plan-growth": "计划任务",
       documents: "单据平台",
       commission: "提成对账",
       reports: "报表",
@@ -12066,33 +11949,6 @@ https://www.ifm.com"></textarea>
     };
     let openTabs = ["dashboard"];
     let tabHistory = ["dashboard"];
-    const profiles = {
-      sales: {
-        name: "Shirley / 业务员",
-        scope: "仅本人客户、本人待办、本人线索",
-        avatar: "SH",
-        bodyRole: "sales"
-      },
-      manager: {
-        name: "Alex / 销售主管",
-        scope: "团队业务数据，本人待办私有",
-        avatar: "AL",
-        bodyRole: "manager"
-      },
-      admin: {
-        name: "Admin / 管理员",
-        scope: "全局业务数据、账号管理，本人待办私有",
-        avatar: "AD",
-        bodyRole: "admin"
-      },
-      super_admin: {
-        name: "Super Admin / 超级管理员",
-        scope: "全局业务数据、最高账号权限，本人待办私有",
-        avatar: "SA",
-        bodyRole: "super_admin"
-      }
-    };
-
     function activateView(id) {
       if (!document.getElementById(id)) id = "dashboard";
       if (!openTabs.includes(id)) openTabs.push(id);
@@ -12163,25 +12019,6 @@ https://www.ifm.com"></textarea>
       renderOpenTabs(id);
     }
 
-    function applyRole(role) {
-      const profile = profiles[role] || profiles.sales;
-      document.body.dataset.role = profile.bodyRole;
-      document.getElementById("scopeUser").textContent = profile.name;
-      document.getElementById("scopeText").textContent = profile.scope;
-      document.getElementById("currentAvatar").textContent = profile.avatar;
-      document.querySelectorAll("[data-sales-text]").forEach((node) => {
-        node.textContent = profile.bodyRole !== "sales" ? node.dataset.managerText : node.dataset.salesText;
-      });
-    }
-
-    function login() {
-      document.body.classList.add("is-authenticated");
-    }
-
-    function logout() {
-      document.body.classList.remove("is-authenticated");
-    }
-
     navButtons.forEach((button) => {
       button.addEventListener("click", () => activateView(button.dataset.view));
     });
@@ -12212,10 +12049,6 @@ https://www.ifm.com"></textarea>
       }
     });
 
-    document.getElementById("loginButton").addEventListener("click", login);
-    document.getElementById("logoutButton").addEventListener("click", logout);
-
-    applyRole("sales");
     renderTopbarForView("dashboard");
   </script>
   <script type="module" src="/src/prototype-api.ts"></script>

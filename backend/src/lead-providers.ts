@@ -101,7 +101,7 @@ function companyQueryText(query: LeadQuery) {
     .map(firstToken)
     .filter(Boolean)
     .join(" ")
-    .trim() || query.goal || "instrumentation supplier";
+    .trim() || query.goal || "product supplier";
 }
 
 function domainFromUrl(raw: string) {
@@ -173,7 +173,7 @@ const serper: LeadProvider = {
     const response = await fetchWithTimeout(`${base}/search`, {
       method: "POST",
       headers: { "X-API-KEY": cred.apiKey, "content-type": "application/json" },
-      body: JSON.stringify({ q: "industrial instrument supplier", num: 1 })
+      body: JSON.stringify({ q: "industrial product supplier", num: 1 })
     });
     if (response.status === 401 || response.status === 403) return { ok: false, message: "API Key 无效或未授权" };
     if (!response.ok) return { ok: false, message: `连接失败：HTTP ${response.status}` };
@@ -209,7 +209,7 @@ const brave: LeadProvider = {
   },
   async test(cred) {
     const base = (cred.baseUrl || this.defaultBaseUrl || "https://api.search.brave.com/res/v1").replace(/\/+$/, "");
-    const response = await fetchWithTimeout(`${base}/web/search?q=instrument%20supplier&count=1`, {
+    const response = await fetchWithTimeout(`${base}/web/search?q=industrial%20product%20supplier&count=1`, {
       headers: { "X-Subscription-Token": cred.apiKey, accept: "application/json" }
     });
     if (response.status === 401 || response.status === 422) return { ok: false, message: "Subscription Token 无效" };
@@ -370,7 +370,7 @@ const opencorporates: LeadProvider = {
   },
   async test(cred) {
     const base = (cred.baseUrl || this.defaultBaseUrl || "https://api.opencorporates.com/v0.4").replace(/\/+$/, "");
-    const response = await fetchWithTimeout(`${base}/companies/search?q=instrument&per_page=1&api_token=${encodeURIComponent(cred.apiKey)}`);
+    const response = await fetchWithTimeout(`${base}/companies/search?q=industrial%20product&per_page=1&api_token=${encodeURIComponent(cred.apiKey)}`);
     if (response.status === 401 || response.status === 403) return { ok: false, message: "API Token 无效或未授权" };
     if (!response.ok) return { ok: false, message: `连接失败：HTTP ${response.status}` };
     return { ok: true, message: "OpenCorporates 连接通过" };
@@ -412,7 +412,7 @@ const companiesHouse: LeadProvider = {
   async test(cred) {
     const base = (cred.baseUrl || this.defaultBaseUrl || "https://api.company-information.service.gov.uk").replace(/\/+$/, "");
     const auth = "Basic " + Buffer.from(`${cred.apiKey}:`).toString("base64");
-    const response = await fetchWithTimeout(`${base}/search/companies?q=instrument&items_per_page=1`, {
+    const response = await fetchWithTimeout(`${base}/search/companies?q=industrial%20product&items_per_page=1`, {
       headers: { authorization: auth, accept: "application/json" }
     });
     if (response.status === 401) return { ok: false, message: "API Key 无效" };

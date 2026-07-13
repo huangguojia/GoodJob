@@ -8,7 +8,11 @@ import type { AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport,
 const defaultUrl = "mysql://goodjob:change_me@127.0.0.1:3306/goodjob_crm";
 
 export async function createMysqlStore(): Promise<CrmStore> {
-  const databaseUrl = process.env.DATABASE_URL || process.env.MYSQL_URL || defaultUrl;
+  const configuredUrl = process.env.DATABASE_URL || process.env.MYSQL_URL;
+  if (process.env.NODE_ENV === "production" && !configuredUrl) {
+    throw new Error("生产环境必须配置 DATABASE_URL 或 MYSQL_URL");
+  }
+  const databaseUrl = configuredUrl || defaultUrl;
   const pool = mysql.createPool({ uri: databaseUrl, connectionLimit: 4, namedPlaceholders: true });
   await ensureSchema(pool);
 
@@ -56,8 +60,10 @@ export async function createMysqlStore(): Promise<CrmStore> {
     }
   };
 
+  const seedDevelopmentData = process.env.NODE_ENV !== "production";
+
   if (!store.users.length) {
-    if (process.env.NODE_ENV === "production") {
+    if (!seedDevelopmentData) {
       const email = process.env.INITIAL_ADMIN_EMAIL?.trim().toLowerCase();
       const password = process.env.INITIAL_ADMIN_PASSWORD || "";
       if (!email || password.length < 12) {
@@ -76,93 +82,93 @@ export async function createMysqlStore(): Promise<CrmStore> {
       });
     } else {
       store.users.push(...users);
-    }
-    store.customers.push(...customers);
-    store.customerActivities.push(...customerActivities);
-    store.leads.push(...leads);
-    store.leadActivities.push(...leadActivities);
-    store.leadSourceEvents.push(...leadSourceEvents);
-    store.todos.push(...todos);
-    store.deals.push(...deals);
-    store.dealEvents.push(...dealEvents);
-    store.reminders.push(...reminders);
-    store.knowledgeAssets.push(...knowledgeAssets);
-    store.exams.push(...exams);
-    store.examQuestions.push(...examQuestions);
-    store.examQuestionLinks.push(...examQuestionLinks);
-    store.examAttempts.push(...examAttempts);
-	    store.importExportJobs.push(...importExportJobs);
+      store.customers.push(...customers);
+      store.customerActivities.push(...customerActivities);
+      store.leads.push(...leads);
+      store.leadActivities.push(...leadActivities);
+      store.leadSourceEvents.push(...leadSourceEvents);
+      store.todos.push(...todos);
+      store.deals.push(...deals);
+      store.dealEvents.push(...dealEvents);
+      store.reminders.push(...reminders);
+      store.knowledgeAssets.push(...knowledgeAssets);
+      store.exams.push(...exams);
+      store.examQuestions.push(...examQuestions);
+      store.examQuestionLinks.push(...examQuestionLinks);
+      store.examAttempts.push(...examAttempts);
+      store.importExportJobs.push(...importExportJobs);
       store.tradeDocuments.push(...tradeDocuments);
-	    store.wecomMessages.push(...wecomMessages);
-	    store.ocrJobs.push(...ocrJobs);
-	    store.websiteOpportunities.push(...websiteOpportunities);
-	    store.aiModelConfigs.push(...aiModelConfigs);
-	    store.leadSourceConfigs.push(...leadSourceConfigs);
-	    store.planTasks.push(...planTasks);
-	    store.planTemplates.push(...planTemplates);
-		    store.problems.push(...problems);
-    store.memos.push(...memos);
-	    store.competitors.push(...competitors);
-	    store.caseStudies.push(...caseStudies);
-	    store.commissionProducts.push(...commissionProducts);
-	    store.commissionRules.push(...commissionRules);
-	    store.monthlySalesRecords.push(...monthlySalesRecords);
-	    store.salesRecordAudits.push(...salesRecordAudits);
-	    store.commissionCalculations.push(...commissionCalculations);
-	    store.commissionItems.push(...commissionItems);
-	    store.commissionExports.push(...commissionExports);
-	    store.whatsappBindings.push(...whatsappBindings);
-	    store.whatsappMessages.push(...whatsappMessages);
-	    await store.persist();
+      store.wecomMessages.push(...wecomMessages);
+      store.ocrJobs.push(...ocrJobs);
+      store.websiteOpportunities.push(...websiteOpportunities);
+      store.aiModelConfigs.push(...aiModelConfigs);
+      store.leadSourceConfigs.push(...leadSourceConfigs);
+      store.planTasks.push(...planTasks);
+      store.planTemplates.push(...planTemplates);
+      store.problems.push(...problems);
+      store.memos.push(...memos);
+      store.competitors.push(...competitors);
+      store.caseStudies.push(...caseStudies);
+      store.commissionProducts.push(...commissionProducts);
+      store.commissionRules.push(...commissionRules);
+      store.monthlySalesRecords.push(...monthlySalesRecords);
+      store.salesRecordAudits.push(...salesRecordAudits);
+      store.commissionCalculations.push(...commissionCalculations);
+      store.commissionItems.push(...commissionItems);
+      store.commissionExports.push(...commissionExports);
+      store.whatsappBindings.push(...whatsappBindings);
+      store.whatsappMessages.push(...whatsappMessages);
+    }
+    await store.persist();
   }
-  if (!store.problems.length) {
+  if (seedDevelopmentData && !store.problems.length) {
     store.problems.push(...problems);
     await store.persist();
   }
-  if (!store.memos.length) {
+  if (seedDevelopmentData && !store.memos.length) {
     store.memos.push(...memos);
     await store.persist();
   }
-  if (!store.competitors.length) {
+  if (seedDevelopmentData && !store.competitors.length) {
     store.competitors.push(...competitors);
     await store.persist();
   }
-	  if (!store.caseStudies.length) {
-	    store.caseStudies.push(...caseStudies);
-	    await store.persist();
-	  }
-	  if (!store.commissionProducts.length) {
-	    store.commissionProducts.push(...commissionProducts);
-	    store.commissionRules.push(...commissionRules);
-	    await store.persist();
-	  }
-  if (!store.planTasks.length) {
+  if (seedDevelopmentData && !store.caseStudies.length) {
+    store.caseStudies.push(...caseStudies);
+    await store.persist();
+  }
+  if (seedDevelopmentData && !store.commissionProducts.length) {
+    store.commissionProducts.push(...commissionProducts);
+    store.commissionRules.push(...commissionRules);
+    await store.persist();
+  }
+  if (seedDevelopmentData && !store.planTasks.length) {
     store.planTasks.push(...planTasks);
     await store.persist();
   }
-  if (!store.planTemplates.length && planTemplates.length) {
+  if (seedDevelopmentData && !store.planTemplates.length && planTemplates.length) {
     store.planTemplates.push(...planTemplates);
     await store.persist();
   }
-  if (!store.tradeDocuments.length) {
+  if (seedDevelopmentData && !store.tradeDocuments.length) {
     store.tradeDocuments.push(...tradeDocuments);
     await store.persist();
   }
-  if (!store.examQuestions.length) {
+  if (seedDevelopmentData && !store.examQuestions.length) {
     store.examQuestions.push(...examQuestions);
     await store.persist();
   }
-  if (!store.examQuestionLinks.length) {
+  if (seedDevelopmentData && !store.examQuestionLinks.length) {
     store.examQuestionLinks.push(...examQuestionLinks);
     await store.persist();
   }
-  if (!store.examAttempts.length) {
+  if (seedDevelopmentData && !store.examAttempts.length) {
     store.examAttempts.push(...examAttempts);
     await store.persist();
   }
-  const missingSeedUsers = process.env.NODE_ENV === "production"
-    ? []
-    : users.filter((seedUser) => !store.users.some((user) => user.id === seedUser.id || user.email === seedUser.email));
+  const missingSeedUsers = seedDevelopmentData
+    ? users.filter((seedUser) => !store.users.some((user) => user.id === seedUser.id || user.email === seedUser.email))
+    : [];
   if (missingSeedUsers.length) {
     store.users.push(...missingSeedUsers);
     await store.persist();
@@ -193,6 +199,7 @@ async function ensureSchema(pool: mysql.Pool) {
     last_development_email_at DATETIME NULL,
     last_development_email_to VARCHAR(180) DEFAULT '',
     last_development_email_subject VARCHAR(255) DEFAULT '',
+    report_note TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`);
   await pool.query("ALTER TABLE users MODIFY role VARCHAR(20) NOT NULL");
@@ -208,6 +215,7 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "users", "last_development_email_at", "DATETIME NULL");
   await ensureColumn(pool, "users", "last_development_email_to", "VARCHAR(180) DEFAULT ''");
   await ensureColumn(pool, "users", "last_development_email_subject", "VARCHAR(255) DEFAULT ''");
+  await ensureColumn(pool, "users", "report_note", "TEXT");
   await ensureColumn(pool, "users", "auth_version", "INT NOT NULL DEFAULT 1");
   await pool.query(`CREATE TABLE IF NOT EXISTS customers (
     id VARCHAR(64) PRIMARY KEY,
@@ -577,12 +585,21 @@ async function ensureSchema(pool: mysql.Pool) {
     confidence DECIMAL(5,2),
     fields_json JSON,
     created_by VARCHAR(64),
-    owner_id VARCHAR(64) NOT NULL DEFAULT 'u_sales_shirley',
-    team_id VARCHAR(64) NOT NULL DEFAULT 'europe',
+    owner_id VARCHAR(64) NOT NULL DEFAULT '',
+    team_id VARCHAR(64) NOT NULL DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`);
-  await ensureColumn(pool, "ocr_jobs", "owner_id", "VARCHAR(64) NOT NULL DEFAULT 'u_sales_shirley'");
-  await ensureColumn(pool, "ocr_jobs", "team_id", "VARCHAR(64) NOT NULL DEFAULT 'europe'");
+  await ensureColumn(pool, "ocr_jobs", "owner_id", "VARCHAR(64) NOT NULL DEFAULT ''");
+  await ensureColumn(pool, "ocr_jobs", "team_id", "VARCHAR(64) NOT NULL DEFAULT ''");
+  await pool.query("ALTER TABLE ocr_jobs MODIFY COLUMN owner_id VARCHAR(64) NOT NULL DEFAULT ''");
+  await pool.query("ALTER TABLE ocr_jobs MODIFY COLUMN team_id VARCHAR(64) NOT NULL DEFAULT ''");
+  await pool.query("UPDATE ocr_jobs SET owner_id = created_by WHERE owner_id = '' AND created_by IS NOT NULL AND created_by <> ''");
+  await pool.query(`
+    UPDATE ocr_jobs jobs
+    JOIN users ON users.id = jobs.owner_id
+    SET jobs.team_id = users.team_id
+    WHERE jobs.team_id = ''
+  `);
   await pool.query(`CREATE TABLE IF NOT EXISTS website_opportunities (
     id VARCHAR(64) PRIMARY KEY,
     company VARCHAR(200) NOT NULL,
@@ -1014,7 +1031,8 @@ async function loadUsers(pool: mysql.Pool): Promise<User[]> {
     hasSmtpPassword: Boolean(row.smtp_password),
     lastDevelopmentEmailAt: row.last_development_email_at instanceof Date ? row.last_development_email_at.toISOString() : row.last_development_email_at || "",
     lastDevelopmentEmailTo: row.last_development_email_to || "",
-    lastDevelopmentEmailSubject: row.last_development_email_subject || ""
+    lastDevelopmentEmailSubject: row.last_development_email_subject || "",
+    reportNote: row.report_note || ""
   }));
 }
 
@@ -1286,7 +1304,12 @@ async function loadWecomMessages(pool: mysql.Pool): Promise<WecomMessage[]> {
 
 async function loadOcrJobs(pool: mysql.Pool): Promise<OcrJob[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM ocr_jobs")).map((row) => ({
-    id: row.id, status: row.status, confidence: Number(row.confidence), fields: typeof row.fields_json === "string" ? JSON.parse(row.fields_json) : row.fields_json, ownerId: row.owner_id || row.created_by || "u_sales_shirley", teamId: row.team_id || "europe"
+    id: row.id,
+    status: row.status,
+    confidence: Number(row.confidence),
+    fields: typeof row.fields_json === "string" ? JSON.parse(row.fields_json) : row.fields_json,
+    ownerId: row.owner_id || row.created_by || "",
+    teamId: row.team_id || ""
   }));
 }
 
@@ -1608,7 +1631,7 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    await replaceRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status, item.authVersion || 1, item.outboundEmail || "", item.emailSenderName ?? "", item.emailSignature || "", item.smtpHost || "", item.smtpPort || 465, item.smtpSecure ?? true, item.smtpUser || "", item.smtpPassword || "", item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailTo || "", item.lastDevelopmentEmailSubject || ""], "(id,name,email,password_hash,role,team_id,avatar,status,auth_version,outbound_email,email_sender_name,email_signature,smtp_host,smtp_port,smtp_secure,smtp_user,smtp_password,last_development_email_at,last_development_email_to,last_development_email_subject)");
+    await replaceRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status, item.authVersion || 1, item.outboundEmail || "", item.emailSenderName ?? "", item.emailSignature || "", item.smtpHost || "", item.smtpPort || 465, item.smtpSecure ?? true, item.smtpUser || "", item.smtpPassword || "", item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailTo || "", item.lastDevelopmentEmailSubject || "", item.reportNote || ""], "(id,name,email,password_hash,role,team_id,avatar,status,auth_version,outbound_email,email_sender_name,email_signature,smtp_host,smtp_port,smtp_secure,smtp_user,smtp_password,last_development_email_at,last_development_email_to,last_development_email_subject,report_note)");
     await replaceRows(connection, "customers", store.customers, (item) => [item.id, item.company, item.country, item.contact, item.ownerId, item.teamId, item.stage, item.amount, item.health, item.nextReminder, item.wecomBound, item.billingName || "", item.billingAddress || "", item.documentContact || "", item.defaultPortDischarge || "", item.defaultIncoterm || "", item.defaultPaymentTerm || ""], "(id,company,country,contact,owner_id,team_id,stage,amount,health,next_reminder,wecom_bound,billing_name,billing_address,document_contact,default_port_discharge,default_incoterm,default_payment_term)");
     await replaceRows(connection, "customer_activities", store.customerActivities, (item) => [item.id, item.customerId, item.type || "note", item.content || "", item.operatorId || "", item.nextReminder || "", mysqlDate(item.createdAt)], "(id,customer_id,type,content,operator_id,next_reminder,created_at)");
     await replaceRows(connection, "leads", store.leads, (item) => [item.id, item.company, item.contact || "", item.country || "", item.email || "", item.phone || "", item.wechat || "", item.source || "", item.sourceType || "outbound", item.sourceChannel || "manual", item.sourceCampaign || "", item.externalId || "", item.sourceUrl || "", item.intent || "中", item.stage || "新线索", item.status || "new", item.ownerId, item.teamId, item.estimatedAmount || 0, item.nextFollowAt || "", item.lastActivityAt || "", item.remark || "", item.convertedCustomerId || "", item.convertedDealId || "", item.deletedAt ? mysqlDate(item.deletedAt) : null, item.deletedReason || "", item.deletedBy || "", item.purgeAt ? mysqlDate(item.purgeAt) : null, item.statusBeforeDelete || "", mysqlDate(item.createdAt)], "(id,company,contact,country,email,phone,wechat,source,source_type,source_channel,source_campaign,external_id,source_url,intent,stage,status,owner_id,team_id,estimated_amount,next_follow_at,last_activity_at,remark,converted_customer_id,converted_deal_id,deleted_at,deleted_reason,deleted_by,purge_at,status_before_delete,created_at)");
