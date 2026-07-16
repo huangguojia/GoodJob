@@ -12,6 +12,11 @@ const productConfig = JSON.parse(readFileSync(new URL("../public/product-config.
 const required = [
   "login-screen",
   "loginProductVersion",
+  "previewCustomsButton",
+  "customsPreviewPage",
+  "customs-pack-preview-page",
+  "customsDocumentValidation",
+  "is-missing",
   "todo-board",
   "report-deck",
   "id=\"knowledge\"",

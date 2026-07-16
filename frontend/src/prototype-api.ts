@@ -4822,38 +4822,290 @@ async function generateCustomsDocument(id: string) {
   }
 }
 
-function customsDocumentIssues(customsDoc: CustomsDocument) {
-  const issues: string[] = [];
-  const required: Array<[string, unknown]> = [
-    ["境内发货人", customsDoc.shipper],
-    ["发货人地址", customsDoc.shipperAddress],
-    ["发货人统一社会信用代码", customsDoc.shipperTaxNo],
-    ["生产销售单位", customsDoc.manufacturer],
-    ["生产销售单位统一社会信用代码", customsDoc.manufacturerTaxNo],
-    ["境外收货人", customsDoc.consignee],
-    ["收货人地址", customsDoc.consigneeAddress],
-    ["出境口岸", customsDoc.exitPort],
-    ["运抵国", customsDoc.destinationCountry],
-    ["合同号", customsDoc.contractNo],
-    ["付款条件", customsDoc.paymentTerm]
+interface CustomsValidationIssue {
+  label: string;
+  field?: keyof CustomsDocument;
+  itemIndex?: number;
+  itemField?: keyof TradeDocumentItem;
+}
+
+function customsDocumentValidation(customsDoc: CustomsDocument): CustomsValidationIssue[] {
+  const issues: CustomsValidationIssue[] = [];
+  const required: Array<[keyof CustomsDocument, string]> = [
+    ["shipper", "境内发货人"],
+    ["shipperAddress", "发货人地址"],
+    ["shipperTaxNo", "发货人统一社会信用代码"],
+    ["manufacturer", "生产销售单位"],
+    ["manufacturerTaxNo", "生产销售单位统一社会信用代码"],
+    ["consignee", "境外收货人"],
+    ["consigneeAddress", "收货人地址"],
+    ["exitPort", "出境口岸"],
+    ["destinationCountry", "运抵国"],
+    ["contractNo", "合同号"],
+    ["paymentTerm", "付款条件"]
   ];
-  required.forEach(([label, value]) => {
-    if (!String(value || "").trim()) issues.push(label);
+  required.forEach(([field, label]) => {
+    if (!String(customsDoc[field] || "").trim()) issues.push({ label, field });
   });
-  if (customsDoc.packageCount <= 0) issues.push("包装件数");
-  if (customsDoc.grossWeight <= 0) issues.push("总毛重");
-  if (customsDoc.netWeight <= 0) issues.push("总净重");
-  if (!customsDoc.items.length) issues.push("货物明细");
-  customsDoc.items.forEach((item, index) => {
-    const prefix = `第${index + 1}行`;
-    if (!item.product.trim()) issues.push(`${prefix}品名`);
-    if (!item.hsCode.trim()) issues.push(`${prefix}HS编码`);
-    if (item.quantity <= 0) issues.push(`${prefix}数量`);
-    if (!item.unit.trim()) issues.push(`${prefix}单位`);
-    if (item.weightKg <= 0) issues.push(`${prefix}重量`);
-    if (item.packageCount <= 0) issues.push(`${prefix}包装数`);
+  ([
+    ["packageCount", "包装件数"],
+    ["grossWeight", "总毛重"],
+    ["netWeight", "总净重"]
+  ] as Array<[keyof CustomsDocument, string]>).forEach(([field, label]) => {
+    if (Number(customsDoc[field] || 0) <= 0) issues.push({ label, field });
+  });
+  if (!customsDoc.items.length) issues.push({ label: "货物明细" });
+  customsDoc.items.forEach((item, itemIndex) => {
+    const prefix = `第${itemIndex + 1}行`;
+    const itemRules: Array<[keyof TradeDocumentItem, string, boolean]> = [
+      ["product", "品名", Boolean(item.product.trim())],
+      ["hsCode", "HS编码", Boolean(item.hsCode.trim())],
+      ["quantity", "数量", item.quantity > 0],
+      ["unit", "单位", Boolean(item.unit.trim())],
+      ["weightKg", "重量", item.weightKg > 0],
+      ["packageCount", "包装数", item.packageCount > 0]
+    ];
+    itemRules.forEach(([itemField, label, valid]) => {
+      if (!valid) issues.push({ label: `${prefix}${label}`, itemIndex, itemField });
+    });
   });
   return issues;
+}
+
+function customsDocumentIssues(customsDoc: CustomsDocument) {
+  return customsDocumentValidation(customsDoc).map((issue) => issue.label);
+}
+
+const CUSTOMS_PREVIEW_DOCUMENTS = [
+  { key: "declaration", label: "报关单" },
+  { key: "elements", label: "申报要素" },
+  { key: "invoice", label: "商业发票" },
+  { key: "packing", label: "装箱单" },
+  { key: "contract", label: "销售合同" },
+  { key: "authorization", label: "委托书" },
+  { key: "guide", label: "填制规范" }
+] as const;
+
+type CustomsPreviewDocumentKey = typeof CUSTOMS_PREVIEW_DOCUMENTS[number]["key"];
+
+function customsPreviewText(value: unknown, required = true) {
+  const text = String(value ?? "").trim();
+  if (!text) return required ? `<span class="customs-pack-preview-missing">待补充</span>` : "-";
+  return escapeHtml(text);
+}
+
+function customsPreviewNumber(value: unknown, required = true) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number) || (required && number <= 0)) return `<span class="customs-pack-preview-missing">待补充</span>`;
+  return number.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+}
+
+function customsPreviewAmount(value: number, currency: string) {
+  return `${escapeHtml(currency || "USD")} ${Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function customsPreviewHead(title: string, englishTitle: string, customsDoc: CustomsDocument) {
+  return `
+    <header class="customs-pack-doc-head">
+      <div>
+        <span class="customs-pack-doc-brand">${customsPreviewText(customsDoc.shipper)}</span>
+        <h1>${escapeHtml(title)}${englishTitle ? ` <span>${escapeHtml(englishTitle)}</span>` : ""}</h1>
+        <p>${customsPreviewText(customsDoc.destinationCountry)} · ${customsPreviewText(customsDoc.issueDate)}</p>
+      </div>
+      <div class="customs-pack-doc-number"><span>DOCUMENT NO.</span><b>${customsPreviewText(customsDoc.contractNo || customsDoc.number)}</b></div>
+    </header>`;
+}
+
+function customsPreviewInfoCell(label: string, value: string, wide = false) {
+  return `<div class="customs-pack-info-cell${wide ? " wide" : ""}"><label>${escapeHtml(label)}</label><span>${value}</span></div>`;
+}
+
+function renderCustomsPreviewSheet(customsDoc: CustomsDocument, key: CustomsPreviewDocumentKey) {
+  const itemAmount = (item: TradeDocumentItem) => Number(item.quantity || 0) * Number(item.unitPrice || 0);
+  const totalAmount = customsDoc.items.reduce((sum, item) => sum + itemAmount(item), 0);
+  const totalQuantity = customsDoc.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const totalPackages = customsDoc.items.reduce((sum, item) => sum + Number(item.packageCount || 0), 0);
+  const totalWeight = customsDoc.items.reduce((sum, item) => sum + Number(item.weightKg || 0), 0);
+  const itemRows = customsDoc.items.length ? customsDoc.items : [{
+    id: "preview_empty",
+    product: "",
+    model: "",
+    hsCode: "",
+    quantity: 0,
+    unit: "",
+    unitPrice: 0,
+    originCountry: "",
+    weightKg: 0,
+    packageCount: 0
+  }];
+
+  if (key === "declaration") {
+    return `${customsPreviewHead("中华人民共和国海关出口货物报关单", "", customsDoc)}
+      <div class="customs-pack-info-grid">
+        ${customsPreviewInfoCell("境内发货人", customsPreviewText(customsDoc.shipper), true)}
+        ${customsPreviewInfoCell("统一社会信用代码", customsPreviewText(customsDoc.shipperTaxNo), true)}
+        ${customsPreviewInfoCell("境外收货人", customsPreviewText(customsDoc.consignee), true)}
+        ${customsPreviewInfoCell("收货人地址", customsPreviewText(customsDoc.consigneeAddress), true)}
+        ${customsPreviewInfoCell("生产销售单位", customsPreviewText(customsDoc.manufacturer), true)}
+        ${customsPreviewInfoCell("生产单位信用代码", customsPreviewText(customsDoc.manufacturerTaxNo), true)}
+        ${customsPreviewInfoCell("运输方式", customsPreviewText(customsDoc.transportMode))}
+        ${customsPreviewInfoCell("运输工具 / 航次", customsPreviewText(customsDoc.vesselName, false))}
+        ${customsPreviewInfoCell("出境口岸", customsPreviewText(customsDoc.exitPort))}
+        ${customsPreviewInfoCell("运抵国", customsPreviewText(customsDoc.destinationCountry))}
+        ${customsPreviewInfoCell("监管方式", customsPreviewText(customsDoc.tradeMode))}
+        ${customsPreviewInfoCell("成交方式", customsPreviewText(customsDoc.tradeMethod || customsDoc.incoterm))}
+      </div>
+      <div class="customs-pack-table-wrap"><table class="customs-pack-table">
+        <thead><tr><th>序号</th><th>商品编号</th><th>商品名称</th><th>规格型号</th><th>数量</th><th>单位</th><th>单价</th><th>总价</th><th>原产国</th></tr></thead>
+        <tbody>${itemRows.map((item, index) => `<tr><td class="num">${index + 1}</td><td>${customsPreviewText(item.hsCode)}</td><td>${customsPreviewText(item.product)}</td><td>${customsPreviewText(item.model, false)}</td><td class="num">${customsPreviewNumber(item.quantity)}</td><td>${customsPreviewText(item.unit)}</td><td class="num">${customsPreviewNumber(item.unitPrice, false)}</td><td class="num">${customsPreviewAmount(itemAmount(item), customsDoc.currency)}</td><td>${customsPreviewText(item.originCountry, false)}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><td colspan="4">合计</td><td class="num">${customsPreviewNumber(totalQuantity)}</td><td colspan="2"></td><td class="num">${customsPreviewAmount(totalAmount, customsDoc.currency)}</td><td></td></tr></tfoot>
+      </table></div>
+      <div class="customs-pack-summary">
+        <div class="customs-pack-summary-item"><label>包装件数</label><b>${customsPreviewNumber(customsDoc.packageCount)}</b></div>
+        <div class="customs-pack-summary-item"><label>毛重 kg</label><b>${customsPreviewNumber(customsDoc.grossWeight)}</b></div>
+        <div class="customs-pack-summary-item"><label>净重 kg</label><b>${customsPreviewNumber(customsDoc.netWeight)}</b></div>
+        <div class="customs-pack-summary-item"><label>币制</label><b>${customsPreviewText(customsDoc.currency)}</b></div>
+      </div>`;
+  }
+
+  if (key === "elements") {
+    return `${customsPreviewHead("申报要素", "DECLARATION ELEMENTS", customsDoc)}
+      <div class="customs-pack-note">品牌、型号、HS 编码和出口享惠情况应与实际货物、包装标识及申报资料完全一致。</div>
+      <div class="customs-pack-section-head"><b>商品申报要素</b><span>${customsDoc.items.length} 项商品</span></div>
+      <div class="customs-pack-table-wrap"><table class="customs-pack-table">
+        <thead><tr><th>序号</th><th>品名</th><th>HS编码</th><th>检疫附加码</th><th>品牌</th><th>型号</th><th>品牌类型</th><th>出口享惠</th></tr></thead>
+        <tbody>${itemRows.map((item, index) => `<tr><td class="num">${index + 1}</td><td>${customsPreviewText(item.product)}</td><td>${customsPreviewText(item.hsCode)}</td><td>${customsPreviewText(item.inspectionCode, false)}</td><td>${customsPreviewText(item.brand || "无品牌", false)}</td><td>${customsPreviewText(item.model, false)}</td><td>${customsPreviewText(item.brandType || "无品牌", false)}</td><td>${customsPreviewText(item.exportBenefit || "不享惠", false)}</td></tr>`).join("")}</tbody>
+      </table></div>`;
+  }
+
+  if (key === "invoice") {
+    return `${customsPreviewHead("商业发票", "COMMERCIAL INVOICE", customsDoc)}
+      <div class="customs-pack-info-grid">
+        ${customsPreviewInfoCell("卖方 Seller", customsPreviewText(customsDoc.shipper), true)}
+        ${customsPreviewInfoCell("发票日期 Date", customsPreviewText(customsDoc.issueDate), true)}
+        ${customsPreviewInfoCell("卖方地址 Address", customsPreviewText(customsDoc.shipperAddress), true)}
+        ${customsPreviewInfoCell("发票号 Invoice No.", customsPreviewText(customsDoc.contractNo), true)}
+        ${customsPreviewInfoCell("买方 Buyer", customsPreviewText(customsDoc.consignee), true)}
+        ${customsPreviewInfoCell("贸易术语 Incoterm", customsPreviewText(customsDoc.incoterm), true)}
+        ${customsPreviewInfoCell("买方地址 Address", customsPreviewText(customsDoc.consigneeAddress), true)}
+        ${customsPreviewInfoCell("付款方式 Payment", customsPreviewText(customsDoc.paymentTerm), true)}
+      </div>
+      <div class="customs-pack-table-wrap"><table class="customs-pack-table">
+        <thead><tr><th>唛头 Mark</th><th>货物名称 Description</th><th>型号 Model</th><th>数量 Quantity</th><th>单位 Unit</th><th>单价 Unit Price</th><th>金额 Amount</th></tr></thead>
+        <tbody>${itemRows.map((item) => `<tr><td>N/M</td><td>${customsPreviewText(item.productEnglish || item.product)}</td><td>${customsPreviewText(item.model, false)}</td><td class="num">${customsPreviewNumber(item.quantity)}</td><td>${customsPreviewText(item.unit)}</td><td class="num">${customsPreviewAmount(item.unitPrice, customsDoc.currency)}</td><td class="num">${customsPreviewAmount(itemAmount(item), customsDoc.currency)}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><td colspan="6">TOTAL</td><td class="num">${customsPreviewAmount(totalAmount, customsDoc.currency)}</td></tr></tfoot>
+      </table></div>`;
+  }
+
+  if (key === "packing") {
+    return `${customsPreviewHead("装箱单", "PACKING LIST", customsDoc)}
+      <div class="customs-pack-info-grid">
+        ${customsPreviewInfoCell("收货人 Consignee", customsPreviewText(customsDoc.consignee), true)}
+        ${customsPreviewInfoCell("日期 Date", customsPreviewText(customsDoc.issueDate), true)}
+        ${customsPreviewInfoCell("地址 Address", customsPreviewText(customsDoc.consigneeAddress), true)}
+        ${customsPreviewInfoCell("合同号 Contract No.", customsPreviewText(customsDoc.contractNo), true)}
+        ${customsPreviewInfoCell("运输路线 Route", `${customsPreviewText(customsDoc.exitPort)} → ${customsPreviewText(customsDoc.destinationCountry)}`, true)}
+        ${customsPreviewInfoCell("包装种类 Package", customsPreviewText(customsDoc.packageType), true)}
+      </div>
+      <div class="customs-pack-table-wrap"><table class="customs-pack-table">
+        <thead><tr><th>箱号 Ctn.No.</th><th>货物名称 Description</th><th>箱数 Pkg</th><th>数量 Quantity</th><th>单位 Unit</th><th>毛重 kg</th><th>净重 kg</th></tr></thead>
+        <tbody>${itemRows.map((item, index) => `<tr><td class="num">${index + 1}</td><td>${customsPreviewText(item.productEnglish || item.product)}</td><td class="num">${customsPreviewNumber(item.packageCount)}</td><td class="num">${customsPreviewNumber(item.quantity)}</td><td>${customsPreviewText(item.unit)}</td><td class="num">${customsPreviewNumber(item.weightKg)}</td><td class="num">${customsPreviewNumber(Number(item.weightKg || 0) * .9)}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><td colspan="2">TOTAL</td><td class="num">${customsPreviewNumber(totalPackages)}</td><td class="num">${customsPreviewNumber(totalQuantity)}</td><td></td><td class="num">${customsPreviewNumber(totalWeight)}</td><td class="num">${customsPreviewNumber(customsDoc.netWeight)}</td></tr></tfoot>
+      </table></div>`;
+  }
+
+  if (key === "contract") {
+    return `${customsPreviewHead("销售合同", "SALES CONTRACT", customsDoc)}
+      <div class="customs-pack-info-grid">
+        ${customsPreviewInfoCell("卖方 Seller", customsPreviewText(customsDoc.shipper), true)}
+        ${customsPreviewInfoCell("买方 Buyer", customsPreviewText(customsDoc.consignee), true)}
+        ${customsPreviewInfoCell("卖方地址 Address", customsPreviewText(customsDoc.shipperAddress), true)}
+        ${customsPreviewInfoCell("买方地址 Address", customsPreviewText(customsDoc.consigneeAddress), true)}
+      </div>
+      <div class="customs-pack-table-wrap"><table class="customs-pack-table">
+        <thead><tr><th>No.</th><th>货物名称 Commodity</th><th>型号 Model</th><th>数量 Quantity</th><th>单位 Unit</th><th>单价 Unit Price</th><th>金额 Amount</th></tr></thead>
+        <tbody>${itemRows.map((item, index) => `<tr><td class="num">${index + 1}</td><td>${customsPreviewText(item.productEnglish || item.product)}</td><td>${customsPreviewText(item.model, false)}</td><td class="num">${customsPreviewNumber(item.quantity)}</td><td>${customsPreviewText(item.unit)}</td><td class="num">${customsPreviewAmount(item.unitPrice, customsDoc.currency)}</td><td class="num">${customsPreviewAmount(itemAmount(item), customsDoc.currency)}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><td colspan="6">TOTAL</td><td class="num">${customsPreviewAmount(totalAmount, customsDoc.currency)}</td></tr></tfoot>
+      </table></div>
+      <div class="customs-pack-section-head"><b>付款与交货条款 PAYMENT & DELIVERY TERMS</b></div>
+      <div class="customs-pack-info-grid">
+        ${customsPreviewInfoCell("付款方式 Payment", customsPreviewText(customsDoc.paymentTerm), true)}
+        ${customsPreviewInfoCell("交货条款 Delivery", `${customsPreviewText(customsDoc.incoterm)} ${customsPreviewText(customsDoc.exitPort)}`, true)}
+      </div>`;
+  }
+
+  if (key === "authorization") {
+    return `${customsPreviewHead("代理报关委托书", "", customsDoc)}
+      <div class="customs-pack-letter">
+        <p>委托单位：${customsPreviewText(customsDoc.shipper)}</p>
+        <p>统一社会信用代码：${customsPreviewText(customsDoc.shipperTaxNo)}</p>
+        <p>单位地址：${customsPreviewText(customsDoc.shipperAddress)}</p>
+        <p>我单位现委托代理报关企业办理本批货物的申报、预录入及相关通关事宜。</p>
+        <p>我单位保证遵守《海关法》及国家有关法规，所提供资料真实、完整、单货相符；如申报资料不实，我单位愿承担相关责任。</p>
+      </div>
+      <div class="customs-pack-signatures">
+        <div class="customs-pack-signature">委托方（盖章）</div>
+        <div class="customs-pack-signature">法定代表人或授权签字</div>
+      </div>`;
+  }
+
+  const guideRows = [
+    ["境内收发货人", "填报在海关备案并实际执行进出口合同的中国境内法人或组织名称及编码。"],
+    ["境外收发货人", "填报境外收货人或发货人的完整名称及地址。"],
+    ["运输方式", "根据货物实际运输方式填报，如水路、铁路、公路或航空运输。"],
+    ["监管方式", "根据实际监管方式填报，一般贸易通常填报 0110。"],
+    ["贸易国（地区）", "填报与境内企业签订贸易合同的外方所属国家或地区。"],
+    ["包装种类", "根据货物实际包装填报，如纸箱、木箱、托盘。"],
+    ["商品编号", "填报准确的 10 位 HS 编码。"],
+    ["申报要素", "品牌、型号等要素必须与实际货物及包装标识一致。"]
+  ];
+  return `${customsPreviewHead("海关出口货物报关单填制规范", "", customsDoc)}
+    <div class="customs-pack-section-head"><b>填制项目</b><span>正式申报前复核</span></div>
+    <table class="customs-pack-table customs-pack-guide"><thead><tr><th>项目</th><th>填制要求</th></tr></thead><tbody>${guideRows.map(([label, value]) => `<tr><td>${label}</td><td>${value}</td></tr>`).join("")}</tbody></table>`;
+}
+
+function closeCustomsPreviewPage() {
+  qs("#customsPreviewPage")?.remove();
+  document.body.classList.remove("customs-preview-open");
+}
+
+function openCustomsPreviewPage(customsDoc: CustomsDocument, customer: Customer, deal: Deal) {
+  closeCustomsPreviewPage();
+  const issues = customsDocumentValidation(customsDoc);
+  const totalAmount = customsDoc.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+  document.body.insertAdjacentHTML("beforeend", `
+    <section class="customs-pack-preview-page" id="customsPreviewPage" role="dialog" aria-modal="true" aria-label="报关资料预览">
+      <header class="customs-pack-preview-topbar">
+        <button type="button" class="btn" id="customsPreviewBackButton">返回编辑</button>
+        <div class="customs-pack-preview-title"><b>${escapeHtml(customer.company)} · 报关资料预览</b><span>${escapeHtml(deal.title)} · ${customsPreviewAmount(totalAmount, customsDoc.currency)}</span></div>
+        <div class="customs-pack-preview-actions">
+          <span class="customs-pack-preview-status${issues.length ? " has-issues" : ""}">${issues.length ? `${issues.length} 项待补` : "资料完整"}</span>
+          <button type="button" class="btn primary" id="customsPreviewExportButton"${issues.length ? " disabled" : ""}>导出 Excel</button>
+        </div>
+      </header>
+      <div class="customs-pack-preview-layout">
+        <nav class="customs-pack-preview-nav" aria-label="资料预览类型">
+          <div class="customs-pack-preview-nav-label">资料包 · 7 个工作表</div>
+          ${CUSTOMS_PREVIEW_DOCUMENTS.map((document, index) => `<button type="button" class="customs-pack-preview-tab${index === 0 ? " active" : ""}" data-customs-preview-key="${document.key}"><span class="customs-pack-preview-tab-index">${index + 1}</span><span>${document.label}</span></button>`).join("")}
+        </nav>
+        <main class="customs-pack-preview-stage"><article class="customs-pack-preview-sheet" id="customsPreviewSheet"></article></main>
+      </div>
+    </section>`);
+  document.body.classList.add("customs-preview-open");
+
+  const render = (key: CustomsPreviewDocumentKey) => {
+    const sheet = qs<HTMLElement>("#customsPreviewSheet");
+    if (sheet) sheet.innerHTML = renderCustomsPreviewSheet(customsDoc, key);
+    qsa<HTMLButtonElement>("[data-customs-preview-key]", qs("#customsPreviewPage")!).forEach((button) => {
+      button.classList.toggle("active", button.dataset.customsPreviewKey === key);
+    });
+  };
+  qsa<HTMLButtonElement>("[data-customs-preview-key]", qs("#customsPreviewPage")!).forEach((button) => {
+    button.addEventListener("click", () => render((button.dataset.customsPreviewKey || "declaration") as CustomsPreviewDocumentKey));
+  });
+  qs<HTMLButtonElement>("#customsPreviewBackButton")?.addEventListener("click", closeCustomsPreviewPage);
+  qs<HTMLButtonElement>("#customsPreviewExportButton")?.addEventListener("click", () => void exportCustomsDocument(customsDoc));
+  render("declaration");
 }
 
 function openCustomsDocumentModal(customsDoc: CustomsDocument, customer: Customer, deal: Deal, source: CustomsGenerationSource) {
@@ -4946,6 +5198,7 @@ function openCustomsDocumentModal(customsDoc: CustomsDocument, customer: Custome
     </div>
   `, `
     <button class="btn" data-modal-close>取消</button>
+    <button class="btn" id="previewCustomsButton">预览资料</button>
     <button class="btn primary" id="exportCustomsButton">检查资料</button>
   `);
 
@@ -5009,16 +5262,43 @@ function openCustomsDocumentModal(customsDoc: CustomsDocument, customer: Custome
 
   const updateReadiness = () => {
     workingDocument = collectDraft();
-    const issues = customsDocumentIssues(workingDocument);
+    const validationIssues = customsDocumentValidation(workingDocument);
+    const issues = validationIssues.map((issue) => issue.label);
     const totalChecks = 14 + Math.max(1, workingDocument.items.length) * 6;
     const score = Math.max(0, Math.round(((totalChecks - issues.length) / totalChecks) * 100));
     const totalAmount = workingDocument.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+    const workspace = qs<HTMLElement>("#appModal .customs-workspace");
+    qsa<HTMLElement>(".is-missing, .has-missing", workspace || undefined).forEach((node) => node.classList.remove("is-missing", "has-missing"));
+    qsa<HTMLInputElement>("[aria-invalid='true']", workspace || undefined).forEach((input) => input.removeAttribute("aria-invalid"));
+    validationIssues.forEach((issue) => {
+      const input = issue.field
+        ? qs<HTMLInputElement>(`[data-customs-field="${String(issue.field)}"]`, workspace || undefined)
+        : issue.itemIndex !== undefined && issue.itemField
+          ? qsa<HTMLElement>("[data-customs-item]", itemsEditor)[issue.itemIndex]?.querySelector<HTMLInputElement>(`[data-customs-item-field="${String(issue.itemField)}"]`) || null
+          : null;
+      input?.classList.add("is-missing");
+      input?.setAttribute("aria-invalid", "true");
+      input?.closest("label")?.classList.add("is-missing");
+      input?.closest("[data-customs-item]")?.classList.add("has-missing");
+    });
     qs<HTMLElement>("#customsReadinessValue")!.textContent = `${score}%`;
     qs<HTMLElement>("#customsTotalAmount")!.textContent = `${workingDocument.currency || "USD"} ${formatDocumentTableMoney(totalAmount)}`;
     qs<HTMLElement>("#customsIssueCount")!.textContent = issues.length ? `${issues.length}项待补` : "可以导出";
-    qs<HTMLElement>("#customsIssueList")!.innerHTML = issues.length
-      ? issues.slice(0, 12).map((issue) => `<span>${escapeHtml(issue)}</span>`).join("") + (issues.length > 12 ? `<small>另有 ${issues.length - 12} 项，请继续检查商品明细。</small>` : "")
+    qs<HTMLElement>("#customsIssueList")!.innerHTML = validationIssues.length
+      ? validationIssues.slice(0, 12).map((issue, index) => `<button type="button" data-customs-issue-index="${index}">${escapeHtml(issue.label)}</button>`).join("") + (validationIssues.length > 12 ? `<small>另有 ${validationIssues.length - 12} 项，请继续检查商品明细。</small>` : "")
       : `<div class="customs-ready-state"><b>资料检查通过</b><span>可以生成正式Excel资料包。</span></div>`;
+    qsa<HTMLButtonElement>("[data-customs-issue-index]", qs("#customsIssueList")!).forEach((button) => {
+      button.addEventListener("click", () => {
+        const issue = validationIssues[Number(button.dataset.customsIssueIndex || 0)];
+        const input = issue?.field
+          ? qs<HTMLInputElement>(`[data-customs-field="${String(issue.field)}"]`, workspace || undefined)
+          : issue?.itemIndex !== undefined && issue.itemField
+            ? qsa<HTMLElement>("[data-customs-item]", itemsEditor)[issue.itemIndex]?.querySelector<HTMLInputElement>(`[data-customs-item-field="${String(issue.itemField)}"]`) || null
+            : null;
+        input?.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+        window.setTimeout(() => input?.focus(), 180);
+      });
+    });
     const exportButton = qs<HTMLButtonElement>("#exportCustomsButton")!;
     exportButton.disabled = Boolean(issues.length);
     exportButton.textContent = issues.length ? `还需补齐 ${issues.length} 项` : "导出 Excel 资料包";
@@ -5075,6 +5355,10 @@ function openCustomsDocumentModal(customsDoc: CustomsDocument, customer: Custome
     updateReadiness();
     toast("已按商品明细汇总件数和重量");
   });
+  qs<HTMLButtonElement>("#previewCustomsButton")?.addEventListener("click", () => {
+    workingDocument = collectDraft();
+    openCustomsPreviewPage(workingDocument, customer, deal);
+  });
   qs<HTMLButtonElement>("#exportCustomsButton")?.addEventListener("click", () => {
     const draft = collectDraft();
     const issues = customsDocumentIssues(draft);
@@ -5119,6 +5403,7 @@ async function exportCustomsDocument(customsDoc: CustomsDocument) {
     window.URL.revokeObjectURL(url);
     document.body.removeChild(a);
 
+    closeCustomsPreviewPage();
     closeModal();
     toast("报关资料已导出");
   } catch (error) {
