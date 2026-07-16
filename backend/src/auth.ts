@@ -25,6 +25,10 @@ function jwtSecret() {
   return EPHEMERAL_DEVELOPMENT_SECRET;
 }
 
+export function validateAuthSecurity() {
+  jwtSecret();
+}
+
 function secureCookies() {
   if (process.env.SESSION_COOKIE_SECURE === "false") return false;
   if (process.env.SESSION_COOKIE_SECURE === "true") return true;

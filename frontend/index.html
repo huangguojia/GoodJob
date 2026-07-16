@@ -2146,7 +2146,7 @@
 
     .doc-studio {
       display: grid;
-      grid-template-columns: minmax(350px, .55fr) minmax(690px, 1.45fr);
+      grid-template-columns: minmax(560px, 1.08fr) minmax(520px, .92fr);
       gap: 12px;
       align-items: start;
     }
@@ -2401,7 +2401,7 @@
 
     .doc-item-grid {
       display: grid;
-      grid-template-columns: 1.4fr .75fr .62fr .42fr .42fr;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
       gap: 7px;
       align-items: end;
       padding: 9px;
@@ -2411,11 +2411,24 @@
     }
 
     .doc-item-grid label[data-doc-size="name"] {
+      grid-column: span 5;
+    }
+
+    .doc-item-grid label[data-doc-size="model"] {
+      grid-column: span 3;
+    }
+
+    .doc-item-grid label[data-doc-size="code"],
+    .doc-item-grid label[data-doc-size="short"] {
       grid-column: span 2;
     }
 
     .doc-item-grid label[data-doc-size="price"] {
-      grid-column: span 1;
+      grid-column: span 3;
+    }
+
+    .doc-item-grid label[data-doc-size="country"] {
+      grid-column: span 3;
     }
 
     .doc-item-grid label[data-doc-size="short"] input {
@@ -3675,19 +3688,22 @@
     }
 
     .lead-table {
-      min-width: 820px;
+      min-width: 1220px;
       width: 100%;
       font-size: 12px;
       border-collapse: collapse;
       table-layout: fixed;
     }
 
-    .lead-table col.col-pick { width: 34px; }
-    .lead-table col.col-company { width: 20%; }
-    .lead-table col.col-source { width: 62px; }
-    .lead-table col.col-country { width: 9%; }
-    .lead-table col.col-score { width: 58px; }
-    .lead-table col.col-status { width: 118px; }
+    .lead-table col.col-pick { width: 42px; }
+    .lead-table col.col-company { width: 210px; }
+    .lead-table col.col-source { width: 132px; }
+    .lead-table col.col-business { width: 220px; }
+    .lead-table col.col-country { width: 108px; }
+    .lead-table col.col-contact { width: 120px; }
+    .lead-table col.col-contact-info { width: 170px; }
+    .lead-table col.col-score { width: 68px; }
+    .lead-table col.col-status { width: 150px; }
 
     .lead-table thead th {
       position: sticky;
@@ -3705,6 +3721,7 @@
     .lead-table td {
       padding: 8px 10px;
       vertical-align: middle;
+      overflow: hidden;
     }
 
     .lead-table tbody tr {
@@ -3716,12 +3733,14 @@
 
     /* 单元格默认呈现为纯文本，点击才进入编辑态，避免整表像表单 */
     #lead-finder .lead-table input {
+      min-width: 0;
       height: 30px;
       padding: 0 7px;
       border: 1px solid transparent;
       background: transparent;
       border-radius: 6px;
       color: var(--text);
+      text-overflow: ellipsis;
       transition: border-color .12s ease, background .12s ease, box-shadow .12s ease;
     }
 
@@ -3736,10 +3755,31 @@
     #lead-finder .lead-table input[type="checkbox"] { height: auto; padding: 0; }
 
     .lead-cell-title { display: flex; flex-direction: column; gap: 1px; }
-    .lead-cell-title input[data-lead-field="company"] {
+    .lead-company-link {
+      width: fit-content;
+      max-width: 100%;
+      padding: 0 7px;
+      border: 0;
+      background: transparent;
       font-weight: 700;
-      color: var(--ink);
+      color: var(--brand);
       font-size: 13px;
+      line-height: 1.45;
+      text-align: left;
+      cursor: pointer;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .lead-company-link:hover {
+      text-decoration: underline;
+    }
+
+    .lead-company-link:focus-visible {
+      border-radius: 4px;
+      outline: 2px solid rgba(49, 87, 213, .28);
+      outline-offset: 1px;
     }
 
     .lead-cell-domain {
@@ -3756,11 +3796,15 @@
     .lead-company-cell { min-width: 190px; }
 
     .lead-status-cell {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 4px;
-      align-content: center;
-      min-width: 132px;
+      white-space: normal;
+    }
+
+    .lead-status-cell .badge {
+      max-width: 100%;
+      margin: 2px 4px 2px 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: middle;
     }
 
     .lead-score {
@@ -3814,6 +3858,269 @@
       color: var(--ink);
       font-size: 13px;
       line-height: 1.45;
+    }
+
+    .lead-verification-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px;
+      margin-bottom: 12px;
+    }
+
+    .lead-verification-grid label {
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .lead-verification-grid label.full {
+      grid-column: 1 / -1;
+    }
+
+    .lead-verification-grid textarea {
+      min-height: 76px;
+      resize: vertical;
+    }
+
+    .lead-evidence-section {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .lead-evidence-head,
+    .lead-detail-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .lead-evidence-head span {
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .lead-evidence-head b {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .lead-evidence-row {
+      display: grid;
+      gap: 5px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .lead-evidence-row:last-child {
+      border-bottom: 0;
+    }
+
+    .lead-evidence-row b,
+    .lead-evidence-row small,
+    .lead-evidence-row p {
+      display: block;
+      margin: 0;
+    }
+
+    .lead-evidence-row small,
+    .lead-evidence-row p {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .lead-evidence-row a {
+      width: fit-content;
+      color: var(--brand);
+      font-size: 11px;
+      font-weight: 800;
+      text-decoration: none;
+    }
+
+    .lead-detail-actions {
+      justify-content: flex-end;
+      margin-top: 12px;
+    }
+
+    .lead-verification-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 91;
+      visibility: hidden;
+      background: rgba(19, 29, 51, .28);
+      opacity: 0;
+      transition: opacity .18s ease, visibility .18s ease;
+    }
+
+    .lead-verification-backdrop.active {
+      visibility: visible;
+      opacity: 1;
+    }
+
+    .lead-verification-drawer {
+      position: fixed;
+      top: 54px;
+      right: 0;
+      bottom: 0;
+      z-index: 92;
+      width: min(520px, calc(100vw - 64px));
+      padding: 18px;
+      border-left: 1px solid #dfe6ef;
+      background: #fff;
+      box-shadow: -20px 0 44px rgba(24, 35, 58, .14);
+      overflow: auto;
+      transform: translateX(102%);
+      transition: transform .2s ease;
+    }
+
+    .lead-verification-drawer.open {
+      transform: translateX(0);
+    }
+
+    body.lead-verification-drawer-open {
+      overflow: hidden;
+    }
+
+    .lead-verification-drawer-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .lead-verification-drawer-head h2 {
+      margin: 2px 0 4px;
+      color: #172033;
+      font-size: 20px;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+    }
+
+    .lead-verification-drawer-head p,
+    .lead-verification-kicker {
+      margin: 0;
+      color: #6b778c;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .lead-verification-kicker {
+      color: #3157d5;
+      font-weight: 800;
+    }
+
+    .lead-report-summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      padding: 14px;
+      border: 1px solid #dfe7f2;
+      border-radius: 8px;
+      background: #f8fbff;
+    }
+
+    .lead-report-summary > p,
+    .lead-report-policy {
+      grid-column: 1 / -1;
+    }
+
+    .lead-report-summary > p {
+      margin: 0;
+      color: #344156;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .lead-report-level {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .lead-report-level b,
+    .lead-report-level small {
+      display: block;
+    }
+
+    .lead-report-level b {
+      color: #172033;
+      font-size: 14px;
+    }
+
+    .lead-report-level small {
+      margin-top: 2px;
+      color: #7a8699;
+      font-size: 10px;
+    }
+
+    .lead-report-policy {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 8px;
+      padding-top: 10px;
+      border-top: 1px solid #e1e8f2;
+      color: #526178;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .lead-report-policy b {
+      color: #0f766e;
+    }
+
+    .lead-report-checks {
+      display: grid;
+      gap: 0;
+      margin: 14px 0;
+      padding: 12px 14px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+    }
+
+    .lead-report-check {
+      display: grid;
+      gap: 4px;
+      padding: 10px 0;
+      border-bottom: 1px solid #edf1f6;
+    }
+
+    .lead-report-check:last-child {
+      border-bottom: 0;
+    }
+
+    .lead-report-check > div {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .lead-report-check b {
+      color: #25324a;
+      font-size: 12px;
+    }
+
+    .lead-report-check p,
+    .lead-report-check small,
+    .lead-report-empty {
+      margin: 0;
+      color: #66758b;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .lead-report-check small {
+      color: #8a95a6;
     }
 
     .lead-search-links {
@@ -4885,8 +5192,7 @@
     }
 
     .lead-advanced-settings,
-    .lead-queue-panel,
-    .lead-inline-detail {
+    .lead-queue-panel {
       border: 1px solid #dfe7f2;
       border-radius: 8px;
       background: #fbfcff;
@@ -4897,8 +5203,7 @@
     }
 
     .lead-advanced-settings > summary,
-    .lead-queue-summary,
-    .lead-inline-detail > summary {
+    .lead-queue-summary {
       padding: 10px 12px;
       color: #25324a;
       font-size: 12px;
@@ -4932,6 +5237,65 @@
 
     .lead-advanced-actions .ai-toggle-line {
       margin-right: auto;
+    }
+
+    .lead-schedule-config {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(130px, .6fr) minmax(0, 1.5fr);
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #e4eaf3;
+    }
+
+    .lead-schedule-toggle,
+    .lead-recurring-cost-check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      color: #344156;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .lead-schedule-toggle input,
+    .lead-recurring-cost-check input {
+      flex: 0 0 auto;
+    }
+
+    .lead-schedule-toggle b,
+    .lead-schedule-toggle small {
+      display: block;
+    }
+
+    .lead-schedule-toggle b {
+      color: #172033;
+      font-size: 12px;
+    }
+
+    .lead-schedule-toggle small {
+      color: #728096;
+      font-size: 10px;
+    }
+
+    .lead-schedule-frequency {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: #66758b;
+      font-size: 10px;
+    }
+
+    .lead-schedule-frequency select {
+      min-width: 88px;
+      height: 32px;
+      padding: 0 8px;
+    }
+
+    .lead-recurring-cost-check.is-disabled {
+      opacity: .48;
     }
 
     .lead-url-field {
@@ -5029,7 +5393,6 @@
 
     .lead-source-chips {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 6px;
     }
 
@@ -5038,6 +5401,42 @@
       color: #8a96a8;
       font-size: 11px;
     }
+
+    .lead-source-primary,
+    .lead-source-more-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    .lead-source-more {
+      padding-top: 7px;
+      border-top: 1px solid #e4eaf3;
+    }
+
+    .lead-source-more summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 28px;
+      color: #526178;
+      font-size: 11px;
+      font-weight: 800;
+      cursor: pointer;
+      list-style: none;
+    }
+
+    .lead-source-more summary::-webkit-details-marker { display: none; }
+
+    .lead-source-more summary::before {
+      content: "▸";
+      width: 16px;
+      color: #3157d5;
+    }
+
+    .lead-source-more[open] summary::before { content: "▾"; }
+    .lead-source-more summary span { margin-left: auto; color: #8a96a8; font-weight: 700; }
+    .lead-source-more-grid { padding-top: 5px; }
 
     .lead-source-chip {
       display: flex;
@@ -5089,10 +5488,17 @@
       border-style: dashed;
       color: #8a6a2c;
     }
+    .lead-source-chip.disabled {
+      border-color: #e1e5eb;
+      background: #f7f8fa;
+      color: #7d8796;
+    }
+    .lead-source-chip.disabled .dot { background: #9ba5b3; }
     .lead-source-chip:hover { border-color: rgba(49, 87, 213, .4); background: #f6f9ff; }
 
     .lead-source-chip.ai .dot { background: #7b61d1; }
     .lead-source-chip.ai.needkey .dot { background: #b3a6e0; }
+    .lead-source-chip.ai.disabled .dot { background: #9ba5b3; }
     .lead-source-chip.ai.active {
       border-color: rgba(123, 97, 209, .5);
       background: #f3efff;
@@ -5141,6 +5547,38 @@
       margin: 0 0 12px;
     }
 
+    .ls-group + .ls-group {
+      margin-top: 18px;
+      padding-top: 16px;
+      border-top: 1px solid #e7ecf4;
+    }
+
+    .ls-group-head {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 9px;
+    }
+
+    .ls-group-head h3 {
+      margin: 0;
+      color: #172033;
+      font-size: 14px;
+    }
+
+    .ls-group-head p {
+      margin: 3px 0 0;
+      color: #7a8598;
+      font-size: 11px;
+    }
+
+    .ls-group-head > span {
+      color: #8a96a8;
+      font-size: 10px;
+      white-space: nowrap;
+    }
+
     .ls-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5159,6 +5597,7 @@
 
     .ls-card.is-ready { border-color: rgba(22, 163, 106, .38); background: #f6fdf9; }
     .ls-card.is-open { box-shadow: 0 12px 30px rgba(27, 39, 68, .12); }
+    .ls-card.is-assisted { border-style: dashed; background: #fbfcfe; }
 
     .ls-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
     .ls-card-top h4 { margin: 0; font-size: 14px; color: #111827; }
@@ -5175,6 +5614,7 @@
     .ls-tier.byok_free { background: #eaf1ff; color: #2a4bb5; }
     .ls-tier.paid { background: #fdf0e2; color: #b5771c; }
     .ls-tier.ai { background: #efeaff; color: #6b4bd1; }
+    .ls-tier.assisted { background: #edf1f6; color: #58677d; }
 
     .ls-caps { display: flex; flex-wrap: wrap; gap: 5px; }
     .ls-cap { font-size: 10px; padding: 2px 7px; border-radius: 5px; background: #f0f4fb; color: #55627a; font-weight: 700; }
@@ -5184,6 +5624,7 @@
     .ls-status.ok .dot { background: #16a36a; }
     .ls-status.warn .dot { background: #d99518; }
     .ls-status.fail .dot { background: #de5a5a; }
+    .ls-status.manual .dot { background: #6f7f95; }
 
     .ls-form { display: flex; flex-direction: column; gap: 7px; border-top: 1px dashed #e2e8f4; padding-top: 8px; }
     .ls-form input {
@@ -5202,12 +5643,16 @@
 
     .lead-src-tag {
       display: inline-block;
+      max-width: 100%;
       font-size: 10px;
       font-weight: 700;
       padding: 2px 7px;
       border-radius: 5px;
       background: #f0f4fb;
       color: #55627a;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: middle;
       white-space: nowrap;
     }
     .lead-src-tag.free { background: #e7f7ee; color: #12885a; }
@@ -5266,6 +5711,374 @@
       max-height: 390px;
       overflow: auto;
       padding-right: 2px;
+    }
+
+    .lead-schedule-section {
+      margin-bottom: 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #edf1f7;
+    }
+
+    .lead-schedule-section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 7px;
+    }
+
+    .lead-schedule-section-head h3 {
+      margin: 0;
+      color: #182235;
+      font-size: 12px;
+    }
+
+    .lead-schedule-section-head span {
+      color: #718096;
+      font-size: 10px;
+    }
+
+    .lead-schedule-list {
+      display: grid;
+      gap: 6px;
+    }
+
+    .lead-schedule-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 9px;
+      border: 1px solid #e1e7f0;
+      border-radius: 7px;
+      background: #fbfcff;
+    }
+
+    .lead-schedule-row-main {
+      min-width: 0;
+    }
+
+    .lead-schedule-row-main b,
+    .lead-schedule-row-main span {
+      display: block;
+      overflow-wrap: anywhere;
+    }
+
+    .lead-schedule-row-main b {
+      color: #263244;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .lead-schedule-row-main span {
+      margin-top: 2px;
+      color: #748196;
+      font-size: 9px;
+      line-height: 1.4;
+    }
+
+    .lead-schedule-row-actions {
+      display: flex;
+      gap: 5px;
+    }
+
+    .lead-schedule-row-actions .btn {
+      height: 27px;
+      padding: 0 8px;
+      font-size: 10px;
+    }
+
+    .identity-conflict-review {
+      margin-bottom: 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #edf1f7;
+    }
+
+    .identity-conflict-review[hidden] {
+      display: none;
+    }
+
+    .identity-conflict-review-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 7px;
+    }
+
+    .identity-conflict-review-head h3,
+    .identity-conflict-review-head p {
+      margin: 0;
+    }
+
+    .identity-conflict-review-head h3 {
+      color: #182235;
+      font-size: 12px;
+    }
+
+    .identity-conflict-review-head p {
+      margin-top: 2px;
+      color: #718096;
+      font-size: 9px;
+      line-height: 1.4;
+    }
+
+    .identity-conflict-review-head > span {
+      flex: 0 0 auto;
+      color: #6551c7;
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .identity-conflict-list {
+      display: grid;
+      gap: 7px;
+    }
+
+    .identity-conflict-row {
+      display: grid;
+      gap: 7px;
+      padding: 9px;
+      border: 1px solid #e1e7f0;
+      border-radius: 7px;
+      background: #fbfcff;
+    }
+
+    .identity-conflict-row-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .identity-conflict-row-head b,
+    .identity-conflict-row-head span {
+      display: block;
+      overflow-wrap: anywhere;
+    }
+
+    .identity-conflict-row-head b {
+      color: #263244;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .identity-conflict-row-head span {
+      margin-top: 2px;
+      color: #748196;
+      font-size: 9px;
+      line-height: 1.4;
+    }
+
+    .identity-conflict-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    .identity-conflict-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+      padding: 5px 7px;
+      border: 1px solid #dce3ed;
+      border-radius: 6px;
+      background: #fff;
+      color: #3d485b;
+      font-size: 10px;
+      cursor: pointer;
+    }
+
+    .identity-conflict-option:has(input:checked) {
+      border-color: #8b79d7;
+      background: #f4f1ff;
+      color: #503da7;
+      font-weight: 800;
+    }
+
+    .identity-conflict-option input {
+      width: 13px;
+      height: 13px;
+      margin: 0;
+      accent-color: #6551c7;
+    }
+
+    .identity-conflict-note {
+      width: 100%;
+      min-height: 54px;
+      resize: vertical;
+      padding: 7px 8px;
+      border: 1px solid #dce3ed;
+      border-radius: 6px;
+      background: #fff;
+      color: #293448;
+      font: inherit;
+      font-size: 10px;
+      line-height: 1.45;
+    }
+
+    .identity-conflict-note:focus {
+      outline: 2px solid rgba(101, 81, 199, .14);
+      border-color: #8b79d7;
+    }
+
+    .identity-conflict-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+
+    .identity-conflict-actions .btn {
+      height: 29px;
+      padding: 0 9px;
+      font-size: 10px;
+    }
+
+    .prospect-performance-review {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #edf1f7;
+    }
+
+    .prospect-performance-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 9px;
+    }
+
+    .prospect-performance-head h3 {
+      margin: 0 0 2px;
+      color: #182235;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .prospect-performance-head p {
+      margin: 0;
+      color: #718096;
+      font-size: 10px;
+      line-height: 1.4;
+    }
+
+    .prospect-performance-head > span {
+      flex: 0 0 auto;
+      color: #3157d5;
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .prospect-performance-metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border: 1px solid #dfe7f2;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .prospect-performance-metrics > div {
+      min-width: 0;
+      padding: 8px 9px;
+      border-right: 1px solid #edf1f7;
+      border-bottom: 1px solid #edf1f7;
+    }
+
+    .prospect-performance-metrics > div:nth-child(4n) {
+      border-right: 0;
+    }
+
+    .prospect-performance-metrics > div:nth-last-child(-n + 4) {
+      border-bottom: 0;
+    }
+
+    .prospect-performance-metrics span,
+    .prospect-performance-metrics b {
+      display: block;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .prospect-performance-metrics span {
+      margin-bottom: 3px;
+      color: #718096;
+      font-size: 9px;
+    }
+
+    .prospect-performance-metrics b {
+      color: #172033;
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    .prospect-performance-revenue b {
+      color: #16796f;
+      font-size: 11px;
+    }
+
+    .prospect-suggestion-list {
+      display: grid;
+      gap: 7px;
+      margin-top: 8px;
+    }
+
+    .prospect-suggestion-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 9px;
+      border: 1px solid #e2e8f2;
+      border-radius: 8px;
+      background: #fbfcff;
+    }
+
+    .prospect-suggestion-row span,
+    .prospect-suggestion-row b,
+    .prospect-suggestion-row small {
+      display: block;
+    }
+
+    .prospect-suggestion-row span {
+      margin-bottom: 2px;
+      color: #3157d5;
+      font-size: 9px;
+      font-weight: 900;
+    }
+
+    .prospect-suggestion-row b {
+      color: #263244;
+      font-size: 10px;
+      line-height: 1.45;
+    }
+
+    .prospect-suggestion-row small {
+      margin-top: 2px;
+      color: #7a879a;
+      font-size: 9px;
+      line-height: 1.35;
+    }
+
+    .prospect-suggestion-actions {
+      display: flex;
+      gap: 5px;
+    }
+
+    .prospect-suggestion-actions .btn {
+      height: 27px;
+      padding: 0 8px;
+      font-size: 10px;
+    }
+
+    .prospect-performance-empty {
+      grid-column: 1 / -1;
+      padding: 10px;
+      color: #7a879a;
+      font-size: 10px;
+      line-height: 1.45;
+      text-align: center;
     }
 
     .lead-job-card {
@@ -5416,6 +6229,31 @@
       gap: 6px;
     }
 
+    .lead-job-source-list {
+      display: grid;
+      gap: 6px;
+    }
+
+    .lead-job-source-list > div {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 7px 8px;
+      border: 1px solid #dfe6f1;
+      border-radius: 6px;
+      background: #f8fafc;
+      font-size: 11px;
+    }
+
+    .lead-job-source-list > div b { color: #26344d; }
+    .lead-job-source-list > div span { color: #68758a; text-align: right; }
+    .lead-job-source-list > div.is-failed {
+      border-color: #f1d4d4;
+      background: #fff7f7;
+    }
+    .lead-job-source-list > div.is-failed b,
+    .lead-job-source-list > div.is-failed span { color: #9b3e3e; }
+
     .lead-job-detail-lines span {
       display: inline-flex;
       min-height: 22px;
@@ -5541,6 +6379,12 @@
       font-size: 11px;
     }
 
+    .lead-job-actions .btn.danger {
+      border-color: #efcaca;
+      color: #a23f3f;
+      background: #fff8f8;
+    }
+
     .lead-query-panel {
       margin-top: 12px;
       padding-top: 12px;
@@ -5588,19 +6432,6 @@
       min-height: 30px;
       padding: 0 10px;
       font-size: 11px;
-    }
-
-    .lead-inline-detail {
-      margin-top: 10px;
-    }
-
-    .lead-inline-detail[open] {
-      padding: 0 12px 12px;
-    }
-
-    .lead-inline-detail[open] > summary {
-      margin: 0 -12px 10px;
-      border-bottom: 1px solid #e6ebf3;
     }
 
     .lead-bulkbar > span {
@@ -5811,6 +6642,131 @@
       border: 1px solid rgba(49,87,213,.14);
       border-radius: 10px;
       background: linear-gradient(180deg, rgba(255,255,255,.94), rgba(246,248,255,.9));
+    }
+
+    .customer-intelligence {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .customer-intelligence .customer-deals-head h3 span {
+      display: inline-grid;
+      min-width: 20px;
+      height: 20px;
+      margin-left: 5px;
+      place-items: center;
+      border-radius: 10px;
+      background: #eef2ff;
+      color: #3157d5;
+      font-size: 10px;
+    }
+
+    .customer-intelligence .customer-deals-head > small {
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .customer-intelligence-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .customer-intelligence-item {
+      padding: 11px;
+      border: 1px solid rgba(49,87,213,.16);
+      border-radius: 8px;
+      background: #fbfcff;
+    }
+
+    .customer-intelligence-source {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .customer-intelligence-source b {
+      color: var(--ink);
+      font-size: 12px;
+    }
+
+    .customer-intelligence-source time {
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .customer-intelligence-item > p {
+      margin: 6px 0 0;
+      color: #526078;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .customer-intelligence-facts {
+      display: grid;
+      gap: 3px;
+      margin-top: 7px;
+    }
+
+    .customer-intelligence-facts span,
+    .customer-intelligence-evidence {
+      color: #526078;
+      font-size: 10px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .customer-intelligence-fields {
+      display: grid;
+      gap: 5px;
+      margin-top: 8px;
+    }
+
+    .customer-intelligence-fields label {
+      display: grid;
+      grid-template-columns: 16px minmax(0, 1fr);
+      gap: 6px;
+      align-items: start;
+      padding: 6px 7px;
+      border: 1px solid var(--line-soft);
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    .customer-intelligence-fields input {
+      margin: 2px 0 0;
+    }
+
+    .customer-intelligence-fields b,
+    .customer-intelligence-fields small {
+      display: block;
+    }
+
+    .customer-intelligence-fields b {
+      color: var(--ink);
+      font-size: 10px;
+    }
+
+    .customer-intelligence-fields small {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
+    .customer-intelligence-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .customer-intelligence-actions .btn {
+      min-height: 28px;
+      padding: 4px 9px;
+      font-size: 10px;
     }
 
     .customer-doc-info .timeline-item {
@@ -8816,6 +9772,16 @@
       line-height: 1.5;
     }
 
+    .login-product-version {
+      margin-top: 14px;
+      color: #7b879a;
+      font-size: 11px;
+      line-height: 1.4;
+      letter-spacing: 0;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+
     .login-test-hint {
       display: grid;
       gap: 4px;
@@ -9083,6 +10049,7 @@
     }
 
     .conversion-lead-summary span,
+    .conversion-lead-summary em,
     .conversion-customer-option small,
     .conversion-customer-option em,
     .conversion-no-match {
@@ -9107,6 +10074,95 @@
     .conversion-customer-option input { margin-top: 3px; }
     .conversion-deal-toggle { display: flex; align-items: center; gap: 8px; font-weight: 700; }
     #leadConversionDealFields.is-hidden { display: none; }
+
+    .procurement-panel {
+      display: grid;
+      gap: 9px;
+      margin: 12px 0;
+      padding: 12px;
+      border: 1px solid #d8e2ef;
+      border-left: 3px solid #6277c7;
+      border-radius: 8px;
+      background: #f9fbff;
+    }
+
+    .procurement-panel-head,
+    .procurement-actions,
+    .procurement-duplicates {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .procurement-panel-head {
+      justify-content: space-between;
+    }
+
+    .procurement-panel-head > div,
+    .procurement-recommendation,
+    .procurement-recommendation > div:first-child {
+      display: grid;
+      gap: 3px;
+    }
+
+    .procurement-panel-head span,
+    .procurement-panel small,
+    .procurement-action-hint,
+    .procurement-note {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .procurement-panel p {
+      margin: 0;
+      color: var(--ink);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .procurement-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    .procurement-recommendation {
+      padding-top: 9px;
+      border-top: 1px solid #e2e8f2;
+    }
+
+    .procurement-recommendation > div:first-child span {
+      color: #46546c;
+      font-size: 12px;
+    }
+
+    .procurement-duplicates {
+      padding: 8px;
+      border-radius: 7px;
+      background: #fff8ea;
+    }
+
+    .procurement-evidence-inputs {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      min-height: 34px;
+      padding: 7px 9px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .procurement-evidence-inputs label {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--ink);
+      font-size: 12px;
+    }
 
     .deal-customer-field {
       position: relative;
@@ -9906,6 +10962,692 @@
       font-size: 12px;
     }
 
+    .notification-bell {
+      position: relative;
+      overflow: visible;
+    }
+
+    .notification-bell-badge {
+      position: absolute;
+      top: -6px;
+      right: -7px;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 4px;
+      border: 2px solid #fff;
+      border-radius: 10px;
+      color: #fff;
+      background: #d13c58;
+      font-size: 9px;
+      line-height: 14px;
+      font-weight: 900;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      box-shadow: 0 3px 9px rgba(209, 60, 88, .28);
+      pointer-events: none;
+    }
+
+    .notification-bell.has-unread {
+      color: #2446ad;
+      border-color: #cbd7f7;
+      background: #f1f5ff;
+    }
+
+    .notification-center-shell {
+      max-width: 980px;
+      overflow: hidden;
+      border: 1px solid #d9e2ed;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .notification-center-head {
+      min-height: 54px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 18px;
+      border-bottom: 1px solid #e1e7ef;
+    }
+
+    .notification-center-head b {
+      color: #233149;
+      font-size: 13px;
+    }
+
+    .notification-center-head span {
+      color: #77849a;
+      font-size: 11px;
+    }
+
+    .notification-message-list {
+      display: grid;
+    }
+
+    .notification-message-row {
+      width: 100%;
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 13px;
+      padding: 15px 18px;
+      border: 0;
+      border-bottom: 1px solid #e8edf3;
+      color: #45536a;
+      background: #fff;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .notification-message-row:last-child {
+      border-bottom: 0;
+    }
+
+    .notification-message-row:hover {
+      background: #f7f9fc;
+    }
+
+    .notification-message-row.unread {
+      box-shadow: inset 3px 0 #3157d5;
+      background: #f8faff;
+    }
+
+    .notification-message-icon {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      color: #3157d5;
+      background: #e8edff;
+    }
+
+    .notification-message-icon svg {
+      width: 17px;
+      height: 17px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .notification-message-body {
+      min-width: 0;
+      display: grid;
+      gap: 5px;
+    }
+
+    .notification-message-meta {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      color: #8390a3;
+      font-size: 10px;
+    }
+
+    .notification-message-meta strong {
+      overflow: hidden;
+      color: #536178;
+      font-size: 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .notification-message-meta time {
+      flex: 0 0 auto;
+    }
+
+    .notification-message-body > b {
+      overflow: hidden;
+      color: #1d2a42;
+      font-size: 13px;
+      line-height: 1.4;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .notification-message-row.unread .notification-message-body > b {
+      color: #2146b6;
+    }
+
+    .notification-message-body p {
+      display: -webkit-box;
+      margin: 0;
+      overflow: hidden;
+      color: #68768b;
+      font-size: 11px;
+      line-height: 1.55;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+
+    .notification-message-action {
+      min-width: 76px;
+      display: grid;
+      justify-items: end;
+      gap: 7px;
+      color: #3157d5;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .notification-message-action small {
+      color: #8a96a8;
+      font-size: 9px;
+      font-weight: 700;
+    }
+
+    .notification-center-empty {
+      display: grid;
+      place-content: center;
+      min-height: 360px;
+      padding: 30px;
+      color: #8793a6;
+      text-align: center;
+    }
+
+    .notification-center-empty b {
+      margin-bottom: 5px;
+      color: #536177;
+      font-size: 14px;
+    }
+
+    .notification-center-empty span {
+      font-size: 11px;
+    }
+
+    .collab-page-head {
+      margin-bottom: 14px;
+    }
+
+    .collab-kpis {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .collab-kpis > div {
+      min-width: 0;
+      padding: 13px 14px;
+      border: 1px solid #dce4ee;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .collab-kpis span,
+    .collab-kpis small {
+      display: block;
+      color: #77849a;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .collab-kpis b {
+      display: block;
+      margin: 4px 0 2px;
+      color: #17233b;
+      font-size: 22px;
+      line-height: 1.2;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .daily-report-layout,
+    .inbox-layout {
+      display: grid;
+      grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+      min-height: 620px;
+      overflow: hidden;
+      border: 1px solid #d9e2ed;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .collab-rail {
+      min-width: 0;
+      border-right: 1px solid #dfe6ef;
+      background: #f8fafc;
+    }
+
+    .collab-filter {
+      display: grid;
+      gap: 9px;
+      padding: 13px;
+      border-bottom: 1px solid #dfe6ef;
+      background: #fff;
+    }
+
+    .collab-filter-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .collab-filter label {
+      display: grid;
+      gap: 5px;
+      min-width: 0;
+      color: #68768b;
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .collab-filter input,
+    .collab-filter select {
+      width: 100%;
+      min-width: 0;
+      height: 34px;
+      padding: 0 8px;
+      border: 1px solid #d6dfeb;
+      border-radius: 6px;
+      color: #26334a;
+      background: #fff;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .collab-list-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 43px;
+      padding: 0 13px;
+      border-bottom: 1px solid #e2e8f0;
+      color: #28364d;
+      font-size: 11px;
+    }
+
+    .collab-list-head span {
+      color: #8390a3;
+      font-weight: 700;
+    }
+
+    .daily-report-list,
+    .inbox-message-list {
+      max-height: 610px;
+      overflow-y: auto;
+    }
+
+    .daily-report-row,
+    .inbox-message-row {
+      display: grid;
+      width: 100%;
+      gap: 7px;
+      padding: 13px;
+      border: 0;
+      border-bottom: 1px solid #e5eaf1;
+      color: #45536a;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .daily-report-row:hover,
+    .inbox-message-row:hover {
+      background: #f1f5fa;
+    }
+
+    .daily-report-row.active,
+    .inbox-message-row.active {
+      box-shadow: inset 3px 0 #3157d5;
+      background: #edf2ff;
+    }
+
+    .daily-report-row-top,
+    .inbox-message-row-top,
+    .collab-author {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .daily-report-row-top time,
+    .inbox-message-row-top time {
+      flex: 0 0 auto;
+      margin-left: auto;
+      color: #8a96a8;
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .collab-avatar {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      color: #2442a2;
+      background: #dfe7ff;
+      font-size: 10px;
+      font-weight: 900;
+    }
+
+    .daily-report-row b,
+    .inbox-message-row b {
+      min-width: 0;
+      overflow: hidden;
+      color: #1b2840;
+      font-size: 12px;
+      line-height: 1.35;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .daily-report-row p,
+    .inbox-message-row p {
+      display: -webkit-box;
+      margin: 0;
+      overflow: hidden;
+      color: #6b788c;
+      font-size: 11px;
+      line-height: 1.5;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+
+    .daily-report-row-foot,
+    .inbox-message-row-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: #8390a2;
+      font-size: 10px;
+    }
+
+    .inbox-message-row.unread {
+      background: #fff;
+    }
+
+    .inbox-message-row.unread b {
+      color: #2146b6;
+    }
+
+    .inbox-unread-dot {
+      width: 7px;
+      height: 7px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: #3157d5;
+      box-shadow: 0 0 0 3px rgba(49, 87, 213, .11);
+    }
+
+    .collab-reading {
+      min-width: 0;
+      padding: 22px 24px 28px;
+      background: #fff;
+    }
+
+    .collab-empty {
+      display: grid;
+      place-content: center;
+      min-height: 480px;
+      color: #8a96a8;
+      text-align: center;
+    }
+
+    .collab-empty b {
+      color: #536177;
+      font-size: 14px;
+    }
+
+    .collab-empty span {
+      margin-top: 5px;
+      font-size: 11px;
+    }
+
+    .collab-detail-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding-bottom: 17px;
+      border-bottom: 1px solid #e1e7ef;
+    }
+
+    .collab-detail-head h2 {
+      margin: 0 0 4px;
+      color: #17243a;
+      font-size: 20px;
+      line-height: 1.35;
+    }
+
+    .collab-detail-head p {
+      margin: 0;
+      color: #7b8799;
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .daily-report-content {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0 22px;
+      margin-top: 4px;
+    }
+
+    .daily-report-section {
+      min-width: 0;
+      padding: 18px 0;
+      border-bottom: 1px solid #edf0f4;
+    }
+
+    .daily-report-section.full {
+      grid-column: 1 / -1;
+    }
+
+    .daily-report-section h3 {
+      margin: 0 0 8px;
+      color: #435169;
+      font-size: 11px;
+    }
+
+    .daily-report-section p,
+    .inbox-message-content {
+      margin: 0;
+      color: #26354d;
+      font-size: 13px;
+      line-height: 1.75;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .daily-report-section.is-risk p {
+      color: #9a3a4d;
+    }
+
+    .report-comments {
+      margin-top: 22px;
+    }
+
+    .report-comments-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #dfe6ef;
+    }
+
+    .report-comments-head h3 {
+      margin: 0;
+      color: #27354c;
+      font-size: 13px;
+    }
+
+    .report-comment-list {
+      display: grid;
+    }
+
+    .report-comment {
+      padding: 14px 0;
+      border-bottom: 1px solid #edf0f4;
+    }
+
+    .report-comment.reply {
+      margin-left: 38px;
+      padding-left: 13px;
+      border-left: 2px solid #dfe6f5;
+    }
+
+    .report-comment-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .report-comment-head b {
+      color: #28364d;
+      font-size: 11px;
+    }
+
+    .report-comment-head time {
+      margin-left: auto;
+      color: #8a96a8;
+      font-size: 10px;
+    }
+
+    .report-comment p {
+      margin: 7px 0 0 38px;
+      color: #44536a;
+      font-size: 12px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .report-comment-actions {
+      margin: 7px 0 0 38px;
+    }
+
+    .report-comment-actions button {
+      padding: 0;
+      border: 0;
+      color: #3157d5;
+      background: transparent;
+      font-size: 10px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .report-comment-composer {
+      display: grid;
+      gap: 8px;
+      margin-top: 14px;
+      padding: 13px;
+      border: 1px solid #dce4ef;
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+
+    .report-comment-composer textarea,
+    .daily-report-form textarea,
+    .internal-message-form textarea {
+      width: 100%;
+      min-height: 84px;
+      resize: vertical;
+      border: 1px solid #d5dfeb;
+      border-radius: 7px;
+      color: #26354d;
+      background: #fff;
+      font: inherit;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .report-comment-composer .btn {
+      justify-self: end;
+    }
+
+    .daily-report-form textarea {
+      min-height: 98px;
+    }
+
+    .daily-report-form .report-form-primary textarea {
+      min-height: 130px;
+    }
+
+    .inbox-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      padding: 8px;
+      border-bottom: 1px solid #dfe6ef;
+      background: #fff;
+    }
+
+    .inbox-tabs button {
+      height: 34px;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      color: #6d7a8e;
+      background: transparent;
+      font-size: 11px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .inbox-tabs button.active {
+      border-bottom-color: #3157d5;
+      color: #2446ad;
+    }
+
+    .inbox-tabs span {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 18px;
+      height: 18px;
+      margin-left: 3px;
+      padding: 0 5px;
+      border-radius: 9px;
+      color: #fff;
+      background: #d13c58;
+      font-size: 9px;
+    }
+
+    .inbox-reading .collab-detail-head {
+      margin-bottom: 20px;
+    }
+
+    .inbox-message-content {
+      min-height: 260px;
+    }
+
+    .inbox-message-actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 22px;
+      padding-top: 15px;
+      border-top: 1px solid #e1e7ef;
+    }
+
+    @media (max-width: 900px) {
+      .collab-kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .daily-report-layout,
+      .inbox-layout {
+        grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+      }
+
+      .daily-report-content {
+        grid-template-columns: 1fr;
+      }
+
+      .daily-report-section.full {
+        grid-column: auto;
+      }
+    }
+
     @media (max-width: 1180px) {
       .shell { grid-template-columns: 78px minmax(0, 1fr); }
       .brand { justify-content: center; padding: 6px 0 14px; }
@@ -9948,8 +11690,8 @@
       .content-grid > * { width: 100%; min-width: 0; }
       .doc-preview-shell { max-height: none; }
       .doc-item-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .doc-item-grid label[data-doc-size="name"],
-      .doc-item-grid label[data-doc-size="price"] { grid-column: span 1; }
+      .doc-item-grid label[data-doc-size] { grid-column: span 1; }
+      .doc-item-grid label[data-doc-size="name"] { grid-column: 1 / -1; }
       .doc-item-remove { width: 100%; }
       .dense-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .profile-hero-panel { grid-template-columns: 1fr; }
@@ -9977,10 +11719,30 @@
       .brand { display: none; }
       .nav { display: flex; width: max-content; }
       .nav-primary { display: flex; gap: 4px; }
+      .nav .nav-section { display: block; margin: 0; }
+      .nav .nav-section-title { display: none; }
+      .nav .nav-secondary-grid {
+        display: flex;
+        gap: 4px;
+        margin: 0;
+        padding: 0;
+        border-left: 0;
+        animation: none;
+      }
       .nav button {
         width: 42px;
         height: 38px;
         flex: 0 0 auto;
+      }
+      .nav button.nav-secondary-button {
+        width: auto;
+        min-width: 68px;
+        height: 38px;
+        padding: 0 9px;
+      }
+      .nav button.nav-secondary-button span {
+        display: block;
+        font-size: 11px;
       }
       #customers .customer-desktop-table { display: none; }
       #customers .customer-mobile-list { display: grid; gap: 8px; }
@@ -10182,6 +11944,8 @@
       #lead-finder .lead-source-chips { grid-template-columns: 1fr; }
       #lead-finder .lead-source-head { align-items: flex-start; flex-wrap: wrap; }
       #lead-finder .lead-advanced-settings > summary span { display: block; margin: 3px 0 0; }
+      #lead-finder .lead-schedule-config { grid-template-columns: 1fr; align-items: stretch; }
+      #lead-finder .lead-schedule-frequency select { flex: 1; min-height: 42px; }
       #lead-finder .lead-advanced-actions { align-items: stretch; }
       #lead-finder .lead-advanced-actions .ai-toggle-line { width: 100%; }
       #lead-finder .lead-advanced-actions .btn { min-height: 44px; flex: 1 1 120px; }
@@ -10191,7 +11955,22 @@
       #lead-finder .lead-queue-panel[open] { padding: 0 12px 12px; }
       #lead-finder .lead-queue-panel[open] > summary { margin: 0 -12px 10px; border-bottom: 1px solid #e6ebf3; }
       #lead-finder .lead-queue-panel .section-head { align-items: flex-start; }
+      #lead-finder .lead-schedule-row { grid-template-columns: minmax(0, 1fr) auto; }
+      #lead-finder .lead-schedule-row-actions { grid-column: 1 / -1; }
+      #lead-finder .lead-schedule-row-actions .btn { min-height: 38px; flex: 1; }
+      #lead-finder .identity-conflict-row-head { display: grid; }
+      #lead-finder .identity-conflict-options { display: grid; grid-template-columns: 1fr; }
+      #lead-finder .identity-conflict-option { min-height: 38px; }
+      #lead-finder .identity-conflict-actions .btn { min-height: 38px; flex: 1; }
       #lead-finder .lead-job-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #lead-finder .prospect-performance-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #lead-finder .prospect-performance-metrics > div,
+      #lead-finder .prospect-performance-metrics > div:nth-child(4n),
+      #lead-finder .prospect-performance-metrics > div:nth-last-child(-n + 4) { border-right: 1px solid #edf1f7; border-bottom: 1px solid #edf1f7; }
+      #lead-finder .prospect-performance-metrics > div:nth-child(2n) { border-right: 0; }
+      #lead-finder .prospect-performance-metrics > div:nth-last-child(-n + 2) { border-bottom: 0; }
+      #lead-finder .prospect-suggestion-row { grid-template-columns: 1fr; }
+      #lead-finder .prospect-suggestion-actions .btn { min-height: 38px; flex: 1; }
       #lead-finder .lead-results-panel > .section-head { align-items: flex-start; }
       #lead-finder .lead-bulkbar { width: 100%; justify-content: flex-start; }
       #lead-finder .lead-bulkbar .btn { min-height: 44px; flex: 1 1 140px; }
@@ -10208,6 +11987,7 @@
       #lead-finder .lead-mobile-card.selected { border-color: rgba(49,87,213,.5); background: #f5f8ff; }
       #lead-finder .lead-mobile-card-head { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 8px; align-items: start; }
       #lead-finder .lead-mobile-card h3 { margin: 0; font-size: 14px; line-height: 1.35; }
+      #lead-finder .lead-mobile-card .lead-company-link { padding: 0; font-size: 14px; }
       #lead-finder .lead-mobile-card p { margin: 2px 0 0; font-size: 11px; line-height: 1.4; }
       #prospect-list .head-actions { margin-top: 12px; }
       #prospect-list .head-actions .btn { min-height: 42px; flex: 1 1 130px; }
@@ -10222,10 +12002,35 @@
       #lead-finder .lead-mobile-score { color: #0f766e; font-size: 14px; font-weight: 900; }
       #lead-finder .lead-mobile-meta { display: flex; flex-wrap: wrap; gap: 5px; }
       #lead-finder .lead-mobile-contact { color: #40506a; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
-      #lead-finder .lead-mobile-open { min-height: 44px; width: 100%; }
+      .lead-verification-drawer { top: 54px; width: 100vw; padding: 16px 14px 24px; }
+      .lead-report-summary { grid-template-columns: 1fr; }
+      .lead-report-summary > p,
+      .lead-report-policy { grid-column: 1; }
+      .lead-verification-grid { grid-template-columns: 1fr; }
+      .lead-verification-grid label.full { grid-column: auto; }
       #lead-finder .lead-pagination { align-items: stretch; flex-direction: column; }
       #lead-finder .lead-pagination > div { width: 100%; justify-content: space-between; }
       #lead-finder .lead-pagination .btn { min-height: 44px; }
+      .collab-page-head .head-actions { display: grid; grid-template-columns: 1fr 1fr; margin-top: 12px; }
+      .collab-page-head .head-actions .btn { min-height: 42px; }
+      .collab-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .daily-report-layout,
+      .inbox-layout { display: block; min-height: 0; overflow: visible; }
+      .collab-rail { border-right: 0; border-bottom: 1px solid #dfe6ef; }
+      .daily-report-list,
+      .inbox-message-list { max-height: 330px; }
+      .collab-reading { min-height: 420px; padding: 16px 13px 22px; }
+      .collab-empty { min-height: 340px; }
+      .collab-detail-head { align-items: flex-start; flex-direction: column; }
+      .collab-detail-head .btn { min-height: 40px; }
+      .daily-report-content { grid-template-columns: 1fr; }
+      .daily-report-section.full { grid-column: auto; }
+      .report-comment.reply { margin-left: 18px; }
+      .inbox-message-content { min-height: 180px; }
+      .inbox-message-actions { align-items: stretch; flex-direction: column; }
+      .inbox-message-actions .btn { min-height: 42px; width: 100%; }
+      .notification-message-row { grid-template-columns: 34px minmax(0, 1fr); padding: 13px 12px; }
+      .notification-message-action { grid-column: 2; width: 100%; display: flex; justify-content: space-between; justify-items: stretch; }
     }
   </style>
 </head>
@@ -10250,9 +12055,10 @@
     <div class="login-panel">
       <h2>账号登录</h2>
       <p>请输入已分配的账号和密码。系统内不提供账号切换，切换身份需退出后重新登录。</p>
-      <div class="login-field"><label>账号</label><input id="loginEmail" value="admin@goodjob.com" autocomplete="username"></div>
-      <div class="login-field"><label>密码</label><input id="loginPassword" type="password" value="goodjob123" autocomplete="current-password"></div>
+      <div class="login-field"><label>账号</label><input id="loginEmail" value="admin@goodjob.com" placeholder="请输入登录邮箱" autocomplete="username"></div>
+      <div class="login-field"><label>密码</label><input id="loginPassword" type="password" value="goodjob123" placeholder="请输入密码" autocomplete="current-password"></div>
       <button class="btn primary" id="loginButton" style="width:100%; height:36px">登录系统</button>
+      <div class="login-product-version" id="loginProductVersion" aria-label="产品版本">GoodJob CRM · 正在读取版本</div>
     </div>
   </section>
 
@@ -10311,6 +12117,7 @@
             <button class="nav-secondary-button" data-view="knowledge" title="资料维护"><span>资料维护</span></button>
             <button class="nav-secondary-button" data-view="exam" title="在线考试"><span>在线考试</span></button>
             <button class="nav-secondary-button" data-view="wecom" title="企业微信"><span>企业微信</span></button>
+            <button class="nav-secondary-button" data-view="daily-reports" title="团队日报"><span>团队日报</span></button>
           </div>
         </details>
 
@@ -10372,7 +12179,10 @@
             <button class="btn ghost" id="topExportButton" title="导出"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg></span>导出</button>
             <button class="btn primary" id="topPrimaryAction" type="button"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/></svg><span>新增客户</span></button>
           </div>
-          <button class="btn icon-only" title="提醒"><svg width="17" height="17" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"/></svg></button>
+          <button class="btn icon-only notification-bell" id="notificationBellButton" type="button" title="消息通知" aria-label="消息通知">
+            <svg width="17" height="17" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M10 21h4"/></svg>
+            <b class="notification-bell-badge" id="notificationBellBadge" hidden>0</b>
+          </button>
           <div class="user-menu">
             <button class="profile-entry" id="profileEntryButton" type="button" title="个人主页">
               <span class="avatar" id="currentAvatar">--</span>
@@ -10597,14 +12407,14 @@
             <div class="lead-command-item"><span>候选结果</span><b id="leadFinderTotalCount">0</b><small>来自公开源与导入链接</small></div>
             <div class="lead-command-item"><span>待确认</span><b id="leadFinderPendingCount">0</b><small>核实后进入线索中心</small></div>
             <div class="lead-command-item"><span>已入线索</span><b id="leadFinderSyncedCount">0</b><small>进入统一跟进流程</small></div>
-            <div class="lead-command-item lead-parser-state"><span>当前解析</span><b id="leadFinderAiState">规则</b><small id="leadFinderAiSub">高级设置中可启用 AI</small></div>
+            <div class="lead-command-item lead-parser-state"><span>当前归纳</span><b id="leadFinderAiState">规则</b><small id="leadFinderAiSub">高级设置中可启用 AI</small></div>
           </div>
 
           <div class="lead-workbench">
             <section class="panel section lead-build-panel">
               <div class="section-head">
                 <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 21l-4.3-4.3"/><circle cx="11" cy="11" r="7"/><path d="M11 7v4l3 2"/></svg></span><div><h2>创建搜客任务</h2><span>不用先有官网，先把客户画像说清楚</span></div></div>
-                <span class="badge" id="leadFinderAiBadge">规则解析</span>
+                <span class="badge" id="leadFinderAiBadge">规则归纳</span>
               </div>
               <div class="lead-form-grid">
                 <div class="lead-field"><label>产品关键词</label><input id="leadProductKeywords" placeholder="输入产品关键词"></div>
@@ -10618,7 +12428,7 @@
                 <div class="lead-field lead-goal-field"><label>补充获客目标</label><textarea id="leadFinderGoalInput" placeholder="例如：优先寻找有水处理项目经验的德国分销商。"></textarea></div>
                 <div class="lead-field"><label>单次目标数量</label><select id="leadLimit"><option>10</option><option selected>20</option><option>30</option></select></div>
                 <div class="lead-source-box">
-                  <div class="lead-source-head"><b>获客数据源</b><span>免费源默认启用，计费源在运行前再次确认</span><button class="btn tiny" id="leadSourceManageInline" type="button">配置</button></div>
+                  <div class="lead-source-head"><b>获客数据源</b><span>推荐来源默认启用，其他免费来源可按需展开</span><button class="btn tiny" id="leadSourceManageInline" type="button">配置</button></div>
                   <div class="lead-source-chips" id="leadSourceChips"><span class="empty-inline">数据源加载中…</span></div>
                   <div class="lead-entry-head"><b>人工搜索入口</b><span>生成平台检索链接，核实后导入</span></div>
                   <div class="lead-entry-chips">
@@ -10630,8 +12440,25 @@
                   </div>
                 </div>
                 <div class="lead-field lead-url-field"><label>官网/平台结果链接</label><textarea id="leadFinderUrlInput" placeholder="每行一个链接，最多 12 条。留空时使用已启用数据源搜索。"></textarea></div>
+                <div class="lead-schedule-config">
+                  <label class="lead-schedule-toggle">
+                    <input id="leadFinderScheduleInput" type="checkbox">
+                    <span><b>定期继续搜索</b><small>本次即时任务完成创建后，按相同策略继续运行</small></span>
+                  </label>
+                  <label class="lead-schedule-frequency">执行频率
+                    <select id="leadFinderScheduleFrequency" disabled>
+                      <option value="daily">每天</option>
+                      <option value="weekly" selected>每周</option>
+                      <option value="monthly">每月</option>
+                    </select>
+                  </label>
+                  <label class="lead-recurring-cost-check is-disabled" id="leadFinderRecurringCostLine">
+                    <input id="leadFinderRecurringCostInput" type="checkbox" disabled>
+                    我确认定期任务可持续使用已选计费或 AI 数据源
+                  </label>
+                </div>
                 <div class="lead-advanced-actions">
-                  <label class="ai-toggle-line"><input id="leadFinderUseAiInput" type="checkbox">使用 AI 解析与评分</label>
+                  <label class="ai-toggle-line"><input id="leadFinderUseAiInput" type="checkbox">使用 AI 归纳与评分</label>
                   <button class="btn" id="leadSourceCenterButton" type="button">数据源中心</button>
                   <button class="btn" id="leadFinderAiConfigButton" type="button">AI配置</button>
                   <button class="btn" id="leadFinderExportButton" type="button">导出结果</button>
@@ -10649,9 +12476,36 @@
                 <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg></span><div><h2>任务队列</h2><span>记录搜索进度、启用渠道和后续导入动作</span></div></div>
                 <button class="btn" id="leadFinderExportButtonQueue">导出Excel</button>
               </div>
+              <section class="lead-schedule-section">
+                <div class="lead-schedule-section-head"><h3>定期搜索计划</h3><span id="leadFinderScheduleCount">0 个启用中</span></div>
+                <div class="lead-schedule-list" id="leadFinderScheduleList">
+                  <div class="empty-cell">暂无定期搜索计划。</div>
+                </div>
+              </section>
+              <section class="identity-conflict-review" id="identityConflictReviewSection" hidden>
+                <div class="identity-conflict-review-head">
+                  <div><h3>企业身份待复核</h3><p>仅建立企业归一映射，不改写候选资料或自动生成 CRM 数据</p></div>
+                  <span id="identityConflictReviewCount">0 条待处理</span>
+                </div>
+                <div class="identity-conflict-list" id="identityConflictReviewList">
+                  <div class="empty-cell">暂无待复核的企业身份冲突。</div>
+                </div>
+              </section>
               <div class="lead-job-list" id="leadFinderJobList">
                 <div class="empty-cell">还没有搜客任务。填写条件后点击“生成并运行任务”。</div>
               </div>
+              <section class="prospect-performance-review" aria-labelledby="prospectPerformanceTitle">
+                <div class="prospect-performance-head">
+                  <div><h3 id="prospectPerformanceTitle">获客效果复盘</h3><p>仅统计本人获客链路，成交结果回流后生成建议</p></div>
+                  <span id="prospectSuggestionCount">暂无待审核建议</span>
+                </div>
+                <div class="prospect-performance-metrics" id="prospectPerformanceMetrics">
+                  <div class="prospect-performance-empty">效果数据加载中...</div>
+                </div>
+                <div class="prospect-suggestion-list" id="prospectStrategySuggestionList">
+                  <div class="prospect-performance-empty">样本达到门槛后显示策略建议。</div>
+                </div>
+              </section>
               <div class="lead-query-panel">
                 <div class="section-title compact"><span class="icon"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg></span><div><h2>搜索入口</h2><span>复制/打开后把有效官网再导入</span></div></div>
                 <div class="lead-search-links" id="leadFinderSearchLinks"></div>
@@ -10674,7 +12528,7 @@
               </div>
               <div class="lead-table-wrap">
                 <table class="lead-table">
-                  <colgroup><col class="col-pick"><col class="col-company"><col class="col-source"><col><col class="col-country"><col><col><col class="col-score"><col class="col-status"></colgroup>
+                  <colgroup><col class="col-pick"><col class="col-company"><col class="col-source"><col class="col-business"><col class="col-country"><col class="col-contact"><col class="col-contact-info"><col class="col-score"><col class="col-status"></colgroup>
                   <thead><tr><th>选</th><th>公司 / 官网</th><th>来源</th><th>业务</th><th>国家</th><th>联系人</th><th>联系方式</th><th>评分</th><th>状态</th></tr></thead>
                   <tbody id="leadFinderResultRows"><tr><td colspan="9" class="empty-cell">暂无候选客户。填写画像、选好数据源后点击“生成并运行任务”。</td></tr></tbody>
                 </table>
@@ -10684,12 +12538,12 @@
                 <span id="leadFinderPageSummary">0 条结果</span>
                 <div><button class="btn" id="leadFinderPrevPage" type="button">上一页</button><span id="leadFinderPageNumber">1 / 1</span><button class="btn" id="leadFinderNextPage" type="button">下一页</button></div>
               </div>
-              <details class="lead-inline-detail">
-                <summary>查看当前候选的核验信息</summary>
-                <div id="leadFinderDetail" class="lead-detail-card"><span>未选择</span><b>点击候选列表中的公司行查看详情。</b></div>
-              </details>
             </section>
           </div>
+          <div class="lead-verification-backdrop" id="leadFinderVerificationBackdrop"></div>
+          <aside class="lead-verification-drawer" id="leadFinderVerificationDrawer" aria-label="候选校验报告">
+            <div id="leadFinderDetail"></div>
+          </aside>
         </div>
 
         <div class="view" id="prospect-list">
@@ -10784,10 +12638,10 @@
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><circle cx="12" cy="12" r="4"/></svg></span><div><h2>供应商预设</h2><span>点击后自动填充协议、地址和推荐模型</span></div></div></div>
               <div class="ai-provider-list" id="aiProviderList">
-                <button type="button" class="ai-provider-card active" data-ai-provider="openai"><div class="ai-provider-top"><div class="ai-provider-mark">AI</div><span class="badge green" id="gptConfigBadge">当前</span></div><h3>OpenAI GPT</h3><p>通用能力强，适合搜客解析、评分、开发信草稿和考试内容辅助。</p></button>
-                <button type="button" class="ai-provider-card" data-ai-provider="deepseek"><div class="ai-provider-top"><div class="ai-provider-mark">DS</div><span class="badge gray">兼容</span></div><h3>DeepSeek</h3><p>国内常用 OpenAI 兼容接口，成本友好，适合批量解析。</p></button>
+                <button type="button" class="ai-provider-card active" data-ai-provider="openai"><div class="ai-provider-top"><div class="ai-provider-mark">AI</div><span class="badge green" id="gptConfigBadge">当前</span></div><h3>OpenAI GPT</h3><p>通用能力强，适合搜客归纳、评分、开发信草稿和考试内容辅助。</p></button>
+                <button type="button" class="ai-provider-card" data-ai-provider="deepseek"><div class="ai-provider-top"><div class="ai-provider-mark">DS</div><span class="badge gray">兼容</span></div><h3>DeepSeek</h3><p>国内常用 OpenAI 兼容接口，成本友好，适合批量归纳。</p></button>
                 <button type="button" class="ai-provider-card" data-ai-provider="qwen"><div class="ai-provider-top"><div class="ai-provider-mark">QW</div><span class="badge gray">兼容</span></div><h3>通义千问</h3><p>阿里 DashScope 兼容模式，适合中文资料和知识库场景。</p></button>
-                <button type="button" class="ai-provider-card" data-ai-provider="anthropic"><div class="ai-provider-top"><div class="ai-provider-mark">CL</div><span class="badge gray">原生</span></div><h3>Claude</h3><p>长文本理解稳定，适合官网、资料和复杂客户背景整理。</p></button>
+                <button type="button" class="ai-provider-card" data-ai-provider="anthropic"><div class="ai-provider-top"><div class="ai-provider-mark">CL</div><span class="badge gray">原生</span></div><h3>Claude</h3><p>长文本理解稳定，适合授权资料和复杂客户背景整理。</p></button>
                 <button type="button" class="ai-provider-card" data-ai-provider="gemini"><div class="ai-provider-top"><div class="ai-provider-mark">GM</div><span class="badge gray">原生</span></div><h3>Google Gemini</h3><p>Google 原生 generateContent 协议，适合国际化数据处理。</p></button>
                 <button type="button" class="ai-provider-card" data-ai-provider="custom"><div class="ai-provider-top"><div class="ai-provider-mark">API</div><span class="badge gray">自定义</span></div><h3>自定义/本地模型</h3><p>支持 OpenRouter、Groq、Kimi、智谱、豆包、Ollama 等兼容服务。</p></button>
               </div>
@@ -10815,7 +12669,7 @@
                 </div>
                 <div class="ai-apply-box">
                   <label><input id="aiUseLeadFinder" type="checkbox"> 自动获客</label>
-                  <label><input id="aiUseWebsiteParse" type="checkbox"> 官网解析</label>
+                  <label title="为避免网页抓取风险，此能力已永久关闭"><input id="aiUseWebsiteParse" type="checkbox" disabled> 官网网页解析（已关闭）</label>
                   <label><input id="aiUseScoring" type="checkbox"> 线索评分</label>
                   <label><input id="aiUseEmailDraft" type="checkbox"> 开发信草稿</label>
                   <label><input id="aiUseExam" type="checkbox"> 资料/考试</label>
@@ -10836,7 +12690,7 @@
                 <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5"/></svg></span><div><h2>已覆盖模块</h2><span>开关会持久化到数据库</span></div></div></div>
                 <div class="ai-use-list">
                   <div class="ai-use-row" data-ai-use-row="leadFinder"><i>搜</i><div><b>自动获客</b><span>按产品、国家、行业筛选并辅助归纳客户</span></div><span class="badge">待启用</span></div>
-                  <div class="ai-use-row" data-ai-use-row="websiteParse"><i>网</i><div><b>官网解析</b><span>从官网公开文本提取商机字段</span></div><span class="badge">待启用</span></div>
+                  <div class="ai-use-row" data-ai-use-row="websiteParse"><i>网</i><div><b>官网网页解析</b><span>安全策略已永久关闭，系统不会访问企业网页</span></div><span class="badge gray">已关闭</span></div>
                   <div class="ai-use-row" data-ai-use-row="scoring"><i>评</i><div><b>线索评分</b><span>辅助判断匹配度、重复和优先级</span></div><span class="badge">待启用</span></div>
                   <div class="ai-use-row" data-ai-use-row="emailDraft"><i>信</i><div><b>开发信草稿</b><span>为搜客清单生成邮件内容</span></div><span class="badge">待启用</span></div>
                   <div class="ai-use-row" data-ai-use-row="exam"><i>题</i><div><b>资料/考试</b><span>辅助出题、解析和知识点整理</span></div><span class="badge">待启用</span></div>
@@ -10988,6 +12842,137 @@
           #whatsapp .wa-safety { margin-top: 14px; padding: 10px 12px; background: #fff7e6; border: 1px solid #ffe0a3; border-radius: 8px; font-size: 12px; color: #8a5a00; }
           @media (max-width: 1100px) { #whatsapp .wa-layout { grid-template-columns: 260px 1fr; } #whatsapp .wa-info { display: none; } }
           @media (max-width: 760px) { #whatsapp .wa-layout { grid-template-columns: 1fr; height: auto; } #whatsapp .wa-threads { max-height: 240px; } }
+
+          /* 商机生成报关资料工作台 */
+          .modal.customs-workspace-modal { width: min(1180px, calc(100vw - 32px)); }
+          .customs-workspace { display: grid; gap: 14px; min-width: 0; }
+          .customs-workspace-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 2px 2px 12px; border-bottom: 1px solid var(--line); }
+          .customs-workspace-head h3 { margin: 3px 0 4px; color: var(--ink); font-size: 20px; }
+          .customs-workspace-head p { margin: 0; color: var(--muted); font-size: 12px; }
+          .customs-kicker { color: #147d75; font-size: 10px; font-weight: 900; text-transform: uppercase; }
+          .customs-readiness { width: 98px; min-height: 58px; display: grid; place-content: center; text-align: center; border: 1px solid #cfe4df; border-radius: 8px; background: #f2faf7; }
+          .customs-readiness strong { color: #08766d; font-size: 22px; line-height: 1; }
+          .customs-readiness span { margin-top: 5px; color: #61726e; font-size: 10px; }
+          .customs-source-bar { display: grid; grid-template-columns: 1.25fr .75fr .75fr; gap: 8px; }
+          .customs-source-bar > div { min-width: 0; padding: 9px 11px; border-left: 2px solid #3157d5; background: #f6f8fc; }
+          .customs-source-bar span, .customs-source-bar strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .customs-source-bar span { color: var(--muted); font-size: 10px; }
+          .customs-source-bar strong { margin-top: 3px; color: var(--ink); font-size: 12px; }
+          .customs-editor-layout { display: grid; grid-template-columns: minmax(0, 1fr) 248px; gap: 12px; align-items: start; }
+          .customs-form-sections { display: grid; gap: 10px; min-width: 0; }
+          .customs-form-section, .customs-items-section-edit, .customs-output-section { padding: 12px; border: 1px solid var(--line-soft); border-radius: 8px; background: #fff; }
+          .customs-section-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+          .customs-section-title b, .customs-section-title span { display: block; }
+          .customs-section-title b { color: var(--ink); font-size: 13px; }
+          .customs-section-title span { margin-top: 2px; color: var(--muted); font-size: 10px; }
+          .customs-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+          .customs-field { display: grid; min-width: 0; gap: 4px; }
+          .customs-field.wide { grid-column: span 2; }
+          .customs-field span, .customs-item-edit-row label span { color: #69758a; font-size: 10px; font-weight: 700; }
+          .customs-field input, .customs-item-edit-row input { width: 100%; min-width: 0; height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: #fff; font-size: 12px; outline: none; }
+          .customs-field input:focus, .customs-item-edit-row input:focus { border-color: rgba(49,87,213,.5); box-shadow: 0 0 0 3px rgba(49,87,213,.08); }
+          .customs-check-panel { position: sticky; top: 0; padding: 12px; border: 1px solid #e4d9bc; border-radius: 8px; background: #fffbf2; }
+          .customs-check-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 9px; border-bottom: 1px solid #eadfca; }
+          .customs-check-head b { color: #443922; font-size: 13px; }
+          .customs-check-head span { color: #9a6408; font-size: 11px; font-weight: 800; }
+          .customs-issue-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 240px; padding: 10px 0; overflow-y: auto; }
+          .customs-issue-list > span { padding: 4px 6px; border: 1px solid #ead8b1; border-radius: 5px; color: #8b5d10; background: #fff; font-size: 10px; }
+          .customs-issue-list > small { width: 100%; color: #806b43; font-size: 10px; line-height: 1.5; }
+          .customs-ready-state { display: grid; gap: 4px; padding: 8px 0; }
+          .customs-ready-state b { color: #08766d; font-size: 12px; }
+          .customs-ready-state span { color: #61726e; font-size: 10px; }
+          .customs-check-note { padding-top: 9px; border-top: 1px solid #eadfca; color: #74684d; font-size: 10px; line-height: 1.55; }
+          .customs-items-editor-wrap { width: 100%; overflow-x: auto; }
+          .customs-items-editor { display: grid; gap: 7px; min-width: 1080px; }
+          .customs-item-edit-row { display: grid; grid-template-columns: 28px 1.5fr 1.5fr 1fr 1fr .8fr .62fr .58fr .76fr .8fr .72fr .66fr 30px; gap: 6px; align-items: end; padding: 8px; border: 1px solid #e5eaf2; border-radius: 7px; background: #fafbfd; }
+          .customs-item-edit-row label { display: grid; min-width: 0; gap: 4px; }
+          .customs-item-index { width: 24px; height: 24px; display: grid; place-items: center; margin-bottom: 5px; border-radius: 50%; color: #3157d5; background: #eaf0ff; font-size: 10px; font-weight: 900; }
+          .customs-item-remove { width: 30px; height: 34px; border: 1px solid #edcccc; border-radius: 6px; color: #a33c3c; background: #fff7f7; cursor: pointer; }
+          .customs-output-list { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+          .customs-output-list span { min-height: 34px; display: grid; place-items: center; padding: 5px; border: 1px solid #dce4f0; border-radius: 6px; color: #40506a; background: #f7f9fc; font-size: 10px; font-weight: 800; text-align: center; }
+          @media (max-width: 900px) {
+            .customs-editor-layout { grid-template-columns: 1fr; }
+            .customs-check-panel { position: static; }
+            .customs-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .customs-output-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+          }
+          @media (max-width: 600px) {
+            .modal-backdrop { padding: 0; }
+            .modal.customs-workspace-modal { width: 100vw; max-height: 100vh; border-radius: 0; }
+            .customs-workspace-head { align-items: flex-start; }
+            .customs-readiness { width: 78px; }
+            .customs-source-bar, .customs-form-grid { grid-template-columns: 1fr; }
+            .customs-field.wide { grid-column: auto; }
+            .customs-output-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          }
+
+          /* 报关资料现代化预览样式 */
+          .customs-preview-modern { background: linear-gradient(135deg, #f5f7fa 0%, #f9fbff 100%); padding: 32px; }
+          .customs-hero { background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%); border-radius: 16px; padding: 32px; display: flex; align-items: center; gap: 24px; margin-bottom: 24px; box-shadow: 0 8px 32px rgba(49, 87, 213, 0.2); }
+          .customs-hero-icon { flex-shrink: 0; width: 72px; height: 72px; background: rgba(255, 255, 255, 0.2); border-radius: 16px; display: flex; align-items: center; justify-content: center; color: white; }
+          .customs-hero-content { flex: 1; }
+          .customs-hero-content h2 { margin: 0; font-size: 28px; font-weight: 700; color: white; }
+          .customs-hero-content p { margin: 4px 0 0 0; font-size: 14px; color: rgba(255, 255, 255, 0.9); }
+          .customs-hero-badge { flex-shrink: 0; }
+          .customs-status-badge { background: rgba(255, 255, 255, 0.3); border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 20px; padding: 6px 16px; font-size: 13px; color: white; font-weight: 500; }
+          .customs-meta-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+          .customs-meta-item { background: white; border-radius: 12px; padding: 16px 20px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); border: 1px solid var(--line-soft); }
+          .customs-meta-item .meta-label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; font-weight: 500; }
+          .customs-meta-item .meta-value { display: block; font-size: 16px; color: var(--ink); font-weight: 600; }
+          .customs-meta-item .meta-value.highlight { color: var(--brand); font-size: 20px; }
+          .customs-docs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+          .customs-doc-card { background: white; border-radius: 12px; padding: 20px; text-align: center; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); border: 1px solid var(--line-soft); transition: all 0.2s; cursor: default; }
+          .customs-doc-card:hover { box-shadow: 0 4px 16px rgba(49, 87, 213, 0.12); transform: translateY(-2px); border-color: var(--brand); }
+          .customs-doc-card .doc-card-icon { font-size: 32px; margin-bottom: 8px; }
+          .customs-doc-card .doc-card-name { font-size: 13px; color: var(--text); font-weight: 500; }
+          .customs-info-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 24px; }
+          .customs-info-card { background: white; border-radius: 12px; padding: 24px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); border: 1px solid var(--line-soft); }
+          .info-card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 2px solid var(--line-soft); }
+          .info-card-header .info-card-icon { font-size: 24px; }
+          .info-card-header h3 { margin: 0; font-size: 16px; color: var(--ink); font-weight: 600; flex: 1; }
+          .info-card-header .items-count { font-size: 12px; color: var(--muted); background: var(--line-soft); padding: 4px 10px; border-radius: 12px; }
+          .info-card-body { display: flex; flex-direction: column; gap: 14px; }
+          .info-item { display: flex; flex-direction: column; gap: 4px; }
+          .info-item label { font-size: 12px; color: var(--muted); font-weight: 500; }
+          .info-item span { font-size: 14px; color: var(--text); }
+          .customs-transport-card { background: white; border-radius: 12px; padding: 24px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); border: 1px solid var(--line-soft); margin-bottom: 24px; }
+          .transport-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 20px; }
+          .transport-item { display: flex; align-items: center; gap: 12px; padding: 14px; background: var(--surface-2); border-radius: 10px; }
+          .transport-item .transport-icon { font-size: 24px; flex-shrink: 0; }
+          .transport-item .transport-content { flex: 1; }
+          .transport-item .transport-content label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; font-weight: 500; }
+          .transport-item .transport-content span { display: block; font-size: 14px; color: var(--ink); font-weight: 500; }
+          .customs-items-section { background: white; border-radius: 12px; padding: 24px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); border: 1px solid var(--line-soft); margin-bottom: 24px; }
+          .customs-items-modern-table { margin-top: 20px; }
+          .table-header { display: grid; grid-template-columns: 40px 2fr 1fr 1.2fr 1fr 1fr 1fr 1fr 0.8fr 0.8fr; gap: 12px; padding: 12px 16px; background: linear-gradient(135deg, var(--surface-2) 0%, #f0f4ff 100%); border-radius: 10px; font-size: 12px; font-weight: 600; color: var(--ink); margin-bottom: 8px; }
+          .table-row { display: grid; grid-template-columns: 40px 2fr 1fr 1.2fr 1fr 1fr 1fr 1fr 0.8fr 0.8fr; gap: 12px; padding: 14px 16px; background: white; border-radius: 10px; font-size: 13px; color: var(--text); margin-bottom: 6px; border: 1px solid var(--line-soft); transition: all 0.2s; }
+          .table-row:hover { background: #f9fbff; border-color: var(--brand); box-shadow: 0 2px 8px rgba(49, 87, 213, 0.08); }
+          .table-row .td { display: flex; align-items: center; }
+          .table-row .td-num { color: var(--muted); font-weight: 500; justify-content: center; }
+          .table-row .td-product strong { color: var(--ink); }
+          .table-row code { background: #f0f4ff; color: var(--brand); padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+          .table-row .td-qty small { color: var(--muted); margin-left: 2px; }
+          .table-row .td-amount strong { color: var(--brand); }
+          .table-footer { display: flex; justify-content: space-between; align-items: center; padding: 20px 16px; margin-top: 16px; background: linear-gradient(135deg, #f9fbff 0%, #f0f4ff 100%); border-radius: 10px; border: 2px solid var(--brand); }
+          .table-footer .footer-label { font-size: 16px; font-weight: 700; color: var(--ink); }
+          .table-footer .footer-values { display: flex; gap: 32px; }
+          .table-footer .footer-item { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+          .table-footer .footer-item label { font-size: 11px; color: var(--muted); font-weight: 500; }
+          .table-footer .footer-item span { font-size: 14px; color: var(--ink); font-weight: 600; }
+          .table-footer .footer-highlight { font-size: 20px; color: var(--brand); font-weight: 700; }
+          .customs-payment-card { background: white; border-radius: 12px; padding: 24px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); border: 1px solid var(--line-soft); margin-bottom: 24px; }
+          .payment-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 20px; }
+          .payment-item { padding: 14px; background: var(--surface-2); border-radius: 10px; }
+          .payment-item label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px; font-weight: 500; }
+          .payment-item span { display: block; font-size: 14px; color: var(--text); }
+          .payment-badge { display: inline-block; background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%); color: white; padding: 6px 12px; border-radius: 6px; font-weight: 600; font-size: 13px; }
+          .payment-item.payment-term { grid-column: 1 / -1; }
+          .customs-footer-notice { background: linear-gradient(135deg, #fff9e6 0%, #fffbf0 100%); border-left: 4px solid var(--amber); border-radius: 12px; padding: 20px 24px; display: flex; gap: 16px; }
+          .customs-footer-notice .notice-icon { font-size: 28px; flex-shrink: 0; }
+          .customs-footer-notice .notice-content { flex: 1; }
+          .customs-footer-notice .notice-content strong { display: block; font-size: 15px; color: var(--ink); margin-bottom: 8px; }
+          .customs-footer-notice .notice-content p { margin: 6px 0; font-size: 13px; color: var(--text); line-height: 1.6; }
+          .customs-footer-notice .notice-warning { color: #8a5a00; font-weight: 500; margin-top: 10px; }
         </style>
         <div class="view" id="whatsapp">
           <div class="page-head">
@@ -11190,7 +13175,7 @@
             <section class="panel doc-editor">
               <div class="doc-editor-head">
                 <div><h2>单据配置</h2><span>PI 用于报价确认，CI 用于成交/清关资料。切换类型会影响预览标题和关键字段。</span></div>
-                <div class="segmented" id="documentTypeTabs"><button data-doc-type="PI" class="active">PI</button><button data-doc-type="CI">CI</button></div>
+                <div class="segmented" id="documentTypeTabs"><button data-doc-type="PI" class="active">PI</button><button data-doc-type="CI">CI</button><button data-doc-type="CUSTOMS">报关资料</button></div>
               </div>
               <div class="doc-workflow-bar">
                 <div class="doc-workflow-links">
@@ -11397,6 +13382,59 @@
           </div>
         </div>
 
+        <div class="view" id="daily-reports">
+          <div class="page-head collab-page-head">
+            <div><p class="eyebrow">Team Daily Brief</p><h1>团队日报</h1><p class="sub">成员按日期提交工作进展，管理者集中查看、评论与回复。</p></div>
+            <div class="head-actions">
+              <button class="btn" id="dailyReportRefreshButton" type="button">刷新</button>
+              <button class="btn primary" id="newDailyReportButton" type="button">填写日报</button>
+            </div>
+          </div>
+
+          <div class="collab-kpis" id="dailyReportKpis">
+            <div><span>可见日报</span><b>0</b><small>当前筛选</small></div>
+            <div><span>本周提交</span><b>0</b><small>按日报日期</small></div>
+            <div><span>提交成员</span><b>0</b><small>当前可见范围</small></div>
+            <div><span>协作评论</span><b>0</b><small>管理反馈留痕</small></div>
+          </div>
+
+          <div class="daily-report-layout">
+            <aside class="collab-rail">
+              <div class="collab-filter">
+                <div class="collab-filter-row">
+                  <label>开始日期<input id="dailyReportFromInput" type="date"></label>
+                  <label>结束日期<input id="dailyReportToInput" type="date"></label>
+                </div>
+                <label id="dailyReportOwnerFilterWrap">成员<select id="dailyReportOwnerFilter"><option value="">全部成员</option></select></label>
+                <button class="btn" id="dailyReportFilterButton" type="button">应用筛选</button>
+              </div>
+              <div class="collab-list-head"><b>日报记录</b><span id="dailyReportListCount">0 份</span></div>
+              <div class="daily-report-list" id="dailyReportList"></div>
+            </aside>
+
+            <section class="collab-reading" id="dailyReportDetail">
+              <div class="collab-empty"><b>正在读取日报</b><span>日报内容和评论将在这里显示。</span></div>
+            </section>
+          </div>
+        </div>
+
+        <div class="view" id="inbox">
+          <div class="page-head collab-page-head">
+            <div><p class="eyebrow">Notification Center</p><h1>消息通知</h1><p class="sub">集中查看日报提交、评论回复等业务提醒，点击通知可直接进入对应内容。</p></div>
+            <div class="head-actions">
+              <button class="btn" id="inboxRefreshButton" type="button">刷新</button>
+            </div>
+          </div>
+
+          <section class="notification-center-shell">
+            <div class="notification-center-head">
+              <b>全部通知</b>
+              <span>未读 <strong id="inboxUnreadCount">0</strong> 条</span>
+            </div>
+            <div class="notification-message-list" id="inboxMessageList"></div>
+          </section>
+        </div>
+
         <div class="view" id="knowledge">
           <div class="page-head">
             <div><p class="eyebrow">Knowledge Maintenance</p><h1>资料维护</h1><p class="sub">维护产品知识、认证资料、报价话术、销售 SOP，并沉淀版本与审核记录。</p></div>
@@ -11557,7 +13595,7 @@
           <div class="tools-grid">
             <aside class="tool-list">
               <div class="tool-item active"><div class="tool-mark">OCR</div><div><b>名片 OCR 识别</b><span>解析公司、联系人、邮箱、WhatsApp 等</span></div><span class="badge green">启用</span></div>
-              <div class="tool-item active"><div class="tool-mark">WEB</div><div><b>官网产品扒取</b><span>输入官网，生成公司/业务/国家/联系方式线索候选表</span></div><span class="badge green">新功能</span></div>
+              <div class="tool-item active"><div class="tool-mark">WEB</div><div><b>官网链接登记</b><span>保存企业链接并建立待人工核验的线索候选</span></div><span class="badge green">零网页访问</span></div>
               <div class="tool-item"><div class="tool-mark">FX</div><div><b>汇率换算</b><span>报价时快速换算 USD/EUR/CNY</span></div><span class="badge">待接入</span></div>
               <div class="tool-item"><div class="tool-mark">DUP</div><div><b>客户去重</b><span>按邮箱域名、电话、公司名合并</span></div><span class="badge">规则</span></div>
               <div class="tool-item"><div class="tool-mark">TXT</div><div><b>跟进话术生成</b><span>按阶段生成邮件/企微话术</span></div><span class="badge amber">内测</span></div>
@@ -11602,38 +13640,26 @@
 
               <div class="website-scrape">
                 <div class="section-head">
-                  <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span><div><h2>官网产品扒取 → 线索整理</h2><span>粘贴多个官网，自动提取产品业务、国家、联系人和联系方式，人工修正后加入线索中心。</span></div></div>
-                  <div class="head-actions"><button class="btn">解析官网</button><button class="btn primary">加入线索中心</button></div>
+                  <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span><div><h2>官网链接登记 → 人工核验</h2><span>批量保存企业链接并生成待核验候选；系统不会访问、下载、解析或探测企业网页。</span></div></div>
+                  <div class="head-actions"><button class="btn" id="websiteReferenceRegisterButton">登记链接</button><button class="btn primary" id="websiteReferenceSyncButton">加入线索中心</button></div>
                 </div>
-                <div class="ai-config-panel">
-                  <div class="ai-status-card">
-                    <span class="badge" id="aiConfigBadge">规则解析</span>
-                    <h3>AI 增强解析</h3>
-                    <p>可配置 OpenAI 兼容接口，系统先抓取官网公开文本，再交给你的模型提取产品业务、国家、联系人和联系方式；未配置或调用失败时自动回退规则解析。</p>
-                  </div>
-                  <div class="ai-config-grid">
-                    <div class="form-field"><label>配置名称</label><input id="aiConfigName" placeholder="从已保存配置读取"></div>
-                    <div class="form-field"><label>Base URL</label><input id="aiBaseUrlInput" placeholder="从已保存配置读取"></div>
-                    <div class="form-field"><label>模型</label><input id="aiModelInput" placeholder="从已保存配置读取"></div>
-                    <div class="form-field"><label>API Key</label><input id="aiApiKeyInput" type="password" placeholder="保存后仅后端持久化"></div>
-                    <label class="ai-toggle-line"><input id="aiEnabledInput" type="checkbox">启用 AI 解析</label>
-                    <label class="ai-toggle-line"><input id="websiteUseAiInput" type="checkbox">本次解析使用 AI</label>
-                    <div class="ai-actions"><button class="btn" id="aiTestButton">测试连接</button><button class="btn primary" id="aiSaveButton">保存AI配置</button></div>
-                  </div>
+                <div class="inline-alert">
+                  <b>安全边界</b>
+                  <span>这里只保存链接文本。AI 网页解析已关闭，校验仅使用授权 API、企业登记数据、搜索 API 返回字段和业务员人工确认。</span>
                 </div>
                 <div class="website-input-grid">
                   <div class="upload-card website-url-box" style="min-height:auto">
                     <span class="badge">每行一个官网</span>
                     <textarea id="websiteUrlInput" placeholder="每行输入一个客户官网地址"></textarea>
                     <div class="sync-preview">
-                      <div class="sync-row" id="websiteScrapeStatus"><span>解析状态</span><b>待开始</b><span class="badge">可批量</span></div>
-                      <div class="sync-row"><span>输出字段</span><b>公司名 / 业务 / 国家 / 官网 / 联系人 / 联系方式 / 说明</b><span class="badge green">可编辑</span></div>
+                      <div class="sync-row" id="websiteScrapeStatus"><span>登记状态</span><b>待开始</b><span class="badge">可批量</span></div>
+                      <div class="sync-row"><span>候选字段</span><b>公司名 / 业务 / 国家 / 官网 / 联系人 / 联系方式 / 说明</b><span class="badge green">人工维护</span></div>
                     </div>
                   </div>
                   <div class="website-table-wrap">
                     <table class="website-table">
                       <thead><tr><th>选</th><th>公司名</th><th>业务</th><th>国家</th><th>官网</th><th>联系人</th><th>联系方式</th><th>说明</th><th>状态</th></tr></thead>
-                      <tbody id="websiteOpportunityRows"><tr><td colspan="9" class="empty-cell">粘贴官网后点击解析，系统会抓取产品、联系方式和国家线索。</td></tr></tbody>
+                      <tbody id="websiteOpportunityRows"><tr><td colspan="9" class="empty-cell">粘贴官网后点击登记。系统只保存链接，不会访问、下载或解析企业网页。</td></tr></tbody>
                     </table>
                   </div>
                 </div>
@@ -11937,6 +13963,8 @@
       exam: "在线考试",
       "question-bank": "题库维护",
       wecom: "企业微信",
+      "daily-reports": "团队日报",
+      inbox: "消息通知",
       tools: "小工具",
       competitors: "竞争公司",
       cases: "成功案例",

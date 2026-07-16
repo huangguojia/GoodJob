@@ -1,0 +1,39 @@
+# GoodJob CRM 宝塔部署配置
+# 复制为 deploy.conf 后修改。不要把填写密码后的 deploy.conf 提交到 SVN。
+
+# 必填：宝塔网站绑定的主域名，不要填写协议、路径或末尾斜杠。
+DOMAIN=crm.example.com
+
+# 必填：在宝塔中提前创建的空 MySQL 数据库和独立数据库用户。
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_NAME=goodjob_crm
+DB_USER=goodjob_crm
+DB_PASSWORD='请替换为宝塔数据库密码'
+
+# 可选：额外允许访问系统的完整来源。多个来源使用英文逗号分隔。
+# 示例：https://www.crm.example.com,https://crm-backup.example.com
+EXTRA_ALLOWED_ORIGINS=
+
+# Swagger 是否启用。接口文档仍要求登录并具备管理员权限。
+ENABLE_API_DOCS=true
+
+# 后端只监听服务器本机，由宝塔 Nginx 代理，不需要开放此端口。
+BACKEND_PORT=4188
+
+# 首次安装保持 false；升级现有系统时改为 true。
+REUSE_EXISTING_DATABASE=false
+
+# 危险：清空已有数据库并恢复初始化账号。正常安装和升级必须保持 false。
+REPLACE_DATABASE=false
+
+# 宝塔网站目录已有自定义文件时才设置 true。
+ALLOW_NONEMPTY_WEB_ROOT=false
+
+# 使用此配置文件执行时保持 true，不再进行交互提问。
+NON_INTERACTIVE=true
+
+# 一般不需要修改。
+APP_ROOT=/www/server/goodjob-crm
+APP_USER=goodjob-crm
+SERVICE_NAME=goodjob-crm

@@ -1,0 +1,127 @@
+GoodJob CRM 宝塔 Linux 安装说明
+===============================
+
+一、安装前准备
+
+1. 在宝塔面板创建一个网站，并绑定正式域名。
+2. 在宝塔面板为该网站开启 SSL。公测环境强烈建议先完成 HTTPS。
+3. 在宝塔数据库中创建一个空 MySQL 数据库和独立数据库用户。
+4. 在宝塔软件商店安装 Node.js 22 或更高版本。
+5. 确认服务器使用 systemd，且已有宝塔 Nginx、MySQL。
+6. 确认服务器可以访问 npm 软件源；安装脚本会联网下载并构建生产依赖。
+
+安装脚本不会安装或重配宝塔的 Nginx/MySQL，也不会开放 4188 端口。
+后端只监听 127.0.0.1:4188，由宝塔 Nginx 反向代理。
+
+二、上传和安装
+
+把整个压缩包上传到服务器，例如 /root，然后执行：
+
+  tar -xzf GoodJob-CRM-Baota-*.tar.gz
+  cd GoodJob-CRM-Baota-*
+  cp deploy.conf.example deploy.conf
+
+编辑 deploy.conf，只需要重点修改：
+
+  DOMAIN       宝塔网站绑定的正式域名，不含 http、https 和路径
+  DB_NAME      宝塔中创建的空数据库名
+  DB_USER      数据库用户名
+  DB_PASSWORD  数据库密码
+
+如网站还可以通过其他域名访问，在 EXTRA_ALLOWED_ORIGINS 中填写完整来源，
+例如 https://www.crm.example.com。多个来源使用英文逗号分隔，不要带路径或末尾斜杠。
+
+保存后执行：
+
+  bash install-baota.sh --check-package
+  sudo bash one-click-install.sh
+
+one-click-install.sh 会自动读取 deploy.conf，完成以下工作：
+
+  - 校验安装包和数据库初始化文件
+  - 安装 Node.js 生产依赖并构建前后端
+  - 初始化空数据库
+  - 生成独立生产密钥
+  - 创建并启动 systemd 服务
+  - 接入宝塔 Nginx
+  - 检查后端和域名代理健康状态
+
+首次安装必须使用空数据库。脚本会导入：
+
+  - 当前完整数据库结构
+  - 默认管理员 admin@goodjob.com
+  - 不含客户、线索、商机、待办等业务数据
+
+默认密码为 goodjob123，登录界面会自动填写。数据库中只保存 scrypt 哈希。
+
+三、安装后的检查
+
+  systemctl status goodjob-crm
+  journalctl -u goodjob-crm -f
+  curl http://127.0.0.1:4188/api/health
+
+也可以使用随包附带的服务管理脚本：
+
+  sudo bash manage-service.sh start
+  sudo bash manage-service.sh restart
+  bash manage-service.sh status
+  bash manage-service.sh health
+  sudo bash manage-service.sh logs
+
+浏览器访问：
+
+  https://你的域名/
+  https://你的域名/api/docs/
+
+Swagger 需要先使用管理员账号登录。
+
+四、没有提前开启 HTTPS
+
+先在宝塔网站设置中申请并开启 SSL，然后执行：
+
+  sudo sed -i \
+    's/^SESSION_COOKIE_SECURE=false$/SESSION_COOKIE_SECURE=true/' \
+    /www/server/goodjob-crm/shared/.env
+  sudo systemctl restart goodjob-crm
+
+再使用 HTTPS 登录并复测。不要在公网公测期间继续使用 HTTP。
+
+五、以后升级代码
+
+已有业务数据时必须显式复用数据库：
+
+把 deploy.conf 中 REUSE_EXISTING_DATABASE 改为 true，然后执行：
+
+  sudo bash one-click-install.sh
+
+脚本会保留数据库与原有加密密钥，只发布新代码。
+
+六、彻底重置为默认管理员
+
+这是破坏性操作，会先备份，再清空现有数据库：
+
+  sudo env REPLACE_DATABASE=true bash install-baota.sh
+
+不要把 REUSE_EXISTING_DATABASE 和 REPLACE_DATABASE 同时设置为 true。
+
+七、常用目录
+
+  程序目录：/www/server/goodjob-crm
+  当前版本：/www/server/goodjob-crm/current
+  环境文件：/www/server/goodjob-crm/shared/.env
+  备份目录：/www/server/goodjob-crm/shared/backups
+  systemd： /etc/systemd/system/goodjob-crm.service
+
+环境文件权限为 600。不要把它下载、提交到 SVN，或发给非运维人员。
+
+八、安装包内文件
+
+  deploy.conf.example   部署配置模板，复制为 deploy.conf 后修改
+  one-click-install.sh  一键安装和升级入口
+  manage-service.sh     启动、停止、重启、日志和健康检查
+  install-baota.sh      底层安装器，一般不需要手动修改
+  BAOTA-INSTALL.txt     本说明
+
+不要修改源码中的 .env。生产环境实际配置由安装器生成在：
+
+  /www/server/goodjob-crm/shared/.env

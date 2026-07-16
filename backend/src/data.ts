@@ -1,4 +1,89 @@
-import type { AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerActivity, Deal, DealEvent, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, Memo, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProblemItem, Reminder, SalesRecordAudit, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity, WhatsAppMessage, WhatsAppBinding } from "./types.js";
+import { createDefaultProviderCatalog } from "./provider-catalog.js";
+import type { AcquisitionOutcomeFeedback, AgentJob, AgentJobIdempotencyAlias, AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerActivity, CustomerIntelligenceSuggestion, DailyReport, DailyReportComment, Deal, DealEvent, DealRecommendation, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, InternalMessage, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, MarketOpportunityBatch, MarketOpportunityCalculationEvent, MarketOpportunitySnapshot, MarketTradeObservation, Memo, MonthlySalesRecord, OcrJob, Organization, OrganizationAcceptedIdentifier, OrganizationAliasFact, OrganizationCanonicalMapping, OrganizationIdentityClaim, OrganizationIdentityConflict, OrganizationIdentityConflictReview, OrganizationIdentityEvent, OrganizationIdentityResolution, OrganizationRelationFact, OrganizationSourceBinding, PlanTask, PlanTemplate, ProblemItem, ProcurementSignal, ProspectCampaign, ProspectCampaignEvent, ProspectCampaignVersion, ProspectCoverageEvent, ProspectExecutionAttempt, ProspectExecutionCheckpoint, ProspectExecutionEvent, ProspectExecutionKernelState, ProspectExecutionLease, ProspectExecutionPage, ProspectExecutionThrottleBucket, ProspectProviderRequestAccountingEvidence, ProspectProviderRequestAttemptBinding, ProspectProviderRequestDispatch, ProspectProviderRequestEvent, ProspectProviderRequestLedger, ProspectRunEvent, ProspectRunQueueChildBinding, ProspectRunQueueParentBinding, ProspectRunShard, ProspectSchedule, ProspectSearchRun, ProspectSourceRawBatch, ProspectSourceRawHit, ProspectSourceRawRecord, ProspectStrategy, ProspectStrategyEvent, ProspectStrategySourcePosition, ProspectStrategySuggestion, ProspectTouchpoint, ProviderCatalogItem, ProviderConnection, ProviderRequestLog, ProviderResponseCache, Reminder, SalesRecordAudit, TenantProspect, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity, WhatsAppMessage, WhatsAppBinding } from "./types.js";
+import type {
+  CompanyVerificationSnapshot,
+  ProspectContact,
+  ProspectContactChannel,
+  ProspectContactVerificationSnapshot,
+  ProspectContactabilityDecision,
+  ProspectEvidence,
+  ProspectIcpAssessmentSnapshot,
+  ProspectIcpPolicySnapshot,
+  ProspectSuppressionEvent
+} from "./types.js";
+
+export const providerCatalog: ProviderCatalogItem[] = createDefaultProviderCatalog();
+export const providerConnections: ProviderConnection[] = [];
+export const providerRequestLogs: ProviderRequestLog[] = [];
+export const providerResponseCache: ProviderResponseCache[] = [];
+export const marketTradeObservations: MarketTradeObservation[] = [];
+export const marketOpportunityBatches: MarketOpportunityBatch[] = [];
+export const marketOpportunitySnapshots: MarketOpportunitySnapshot[] = [];
+export const marketOpportunityCalculationEvents: MarketOpportunityCalculationEvent[] = [];
+export const agentJobs: AgentJob[] = [];
+export const agentJobIdempotencyAliases: AgentJobIdempotencyAlias[] = [];
+export const prospectCampaigns: ProspectCampaign[] = [];
+export const prospectCampaignVersions: ProspectCampaignVersion[] = [];
+export const prospectCampaignEvents: ProspectCampaignEvent[] = [];
+export const prospectStrategies: ProspectStrategy[] = [];
+export const prospectStrategyEvents: ProspectStrategyEvent[] = [];
+export const prospectSchedules: ProspectSchedule[] = [];
+export const prospectSearchRuns: ProspectSearchRun[] = [];
+export const prospectRunShards: ProspectRunShard[] = [];
+export const prospectRunEvents: ProspectRunEvent[] = [];
+export const prospectRunQueueParentBindings: ProspectRunQueueParentBinding[] = [];
+export const prospectRunQueueChildBindings: ProspectRunQueueChildBinding[] = [];
+export const prospectExecutionKernelStates: ProspectExecutionKernelState[] = [];
+export const prospectExecutionCheckpoints: ProspectExecutionCheckpoint[] = [];
+export const prospectStrategySourcePositions:
+  ProspectStrategySourcePosition[] = [];
+export const prospectExecutionLeases: ProspectExecutionLease[] = [];
+export const prospectExecutionAttempts: ProspectExecutionAttempt[] = [];
+export const prospectProviderRequestLedgers: ProspectProviderRequestLedger[] = [];
+export const prospectProviderRequestDispatches: ProspectProviderRequestDispatch[] = [];
+export const prospectProviderRequestEvents: ProspectProviderRequestEvent[] = [];
+export const prospectProviderRequestAttemptBindings: ProspectProviderRequestAttemptBinding[] = [];
+export const prospectProviderRequestAccountingEvidence: ProspectProviderRequestAccountingEvidence[] = [];
+export const prospectSourceRawBatches: ProspectSourceRawBatch[] = [];
+export const prospectSourceRawRecords: ProspectSourceRawRecord[] = [];
+export const prospectSourceRawHits: ProspectSourceRawHit[] = [];
+export const organizations: Organization[] = [];
+export const organizationIdentityClaims: OrganizationIdentityClaim[] = [];
+export const organizationAcceptedIdentifiers: OrganizationAcceptedIdentifier[] = [];
+export const organizationIdentityResolutions: OrganizationIdentityResolution[] = [];
+export const organizationSourceBindings: OrganizationSourceBinding[] = [];
+export const organizationIdentityConflicts: OrganizationIdentityConflict[] = [];
+export const organizationIdentityConflictReviews: OrganizationIdentityConflictReview[] = [];
+export const organizationCanonicalMappings: OrganizationCanonicalMapping[] = [];
+export const organizationAliasFacts: OrganizationAliasFact[] = [];
+export const organizationRelationFacts: OrganizationRelationFact[] = [];
+export const organizationIdentityEvents: OrganizationIdentityEvent[] = [];
+export const tenantProspects: TenantProspect[] = [];
+export const prospectCoverageEvents: ProspectCoverageEvent[] = [];
+export const prospectEvidence: ProspectEvidence[] = [];
+export const companyVerificationSnapshots: CompanyVerificationSnapshot[] = [];
+export const prospectIcpPolicySnapshots: ProspectIcpPolicySnapshot[] = [];
+export const prospectIcpAssessmentSnapshots: ProspectIcpAssessmentSnapshot[] = [];
+export const prospectContacts: ProspectContact[] = [];
+export const prospectContactChannels: ProspectContactChannel[] = [];
+export const prospectContactVerificationSnapshots:
+  ProspectContactVerificationSnapshot[] = [];
+export const prospectSuppressionEvents: ProspectSuppressionEvent[] = [];
+export const prospectContactabilityDecisions:
+  ProspectContactabilityDecision[] = [];
+export const prospectTouchpoints: ProspectTouchpoint[] = [];
+export const procurementSignals: ProcurementSignal[] = [];
+export const dealRecommendations: DealRecommendation[] = [];
+export const customerIntelligenceSuggestions:
+  CustomerIntelligenceSuggestion[] = [];
+export const acquisitionOutcomeFeedback: AcquisitionOutcomeFeedback[] = [];
+export const prospectStrategySuggestions: ProspectStrategySuggestion[] = [];
+export const prospectExecutionPages: ProspectExecutionPage[] = [];
+export const prospectExecutionEvents: ProspectExecutionEvent[] = [];
+export const prospectExecutionThrottleBuckets: ProspectExecutionThrottleBucket[] = [];
+export const dailyReports: DailyReport[] = [];
+export const dailyReportComments: DailyReportComment[] = [];
+export const internalMessages: InternalMessage[] = [];
 
 export const users: User[] = [
   { id: "u_sales_shirley", name: "Shirley", email: "shirley@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "SH", status: "active", authVersion: 1, outboundEmail: "", emailSenderName: "Shirley", emailSignature: "Best regards,\\nShirley\\nGoodJob Sales Team" },
@@ -197,7 +282,7 @@ export const websiteOpportunities: WebsiteOpportunity[] = [
     website: "https://supplier.example",
     contact: "待维护",
     contactInfo: "sales@supplier.example",
-    description: "脱敏开发数据：公开页面显示工业组件与 OEM 产品，需继续核实真实官网、联系人和采购意向。",
+    description: "脱敏开发数据：授权来源记录显示工业组件与 OEM 产品，需继续人工核实企业身份、联系人和采购意向。",
     ownerId: "u_sales_shirley",
     teamId: "europe",
     status: "preview",
@@ -210,7 +295,7 @@ export const aiModelConfigs: AiModelConfig[] = [
     id: "ai_default_shirley",
     provider: "openai",
     protocol: "openai-compatible",
-    name: "官网商机解析模型",
+    name: "授权来源归纳模型",
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4o-mini",
     apiKey: "",
@@ -310,6 +395,157 @@ export const tradeDocuments: TradeDocument[] = [
     items: [
       { id: "tdi_seed_1", product: "LED Project Light", model: "GJ-GL200", hsCode: "940541", quantity: 20, unit: "PCS", unitPrice: 185, originCountry: "China", weightKg: 32, packageCount: 2 },
       { id: "tdi_seed_2", product: "LED Sample Light", model: "GJ-SL100", hsCode: "940541", quantity: 30, unit: "PCS", unitPrice: 46, originCountry: "China", weightKg: 18, packageCount: 1 }
+    ]
+  },
+  {
+    id: "td_customs_demo_1",
+    customerId: "c1",
+    dealId: "d1",
+    revision: 1,
+    type: "CUSTOMS",
+    title: "Nordic Tools AB LED工程灯 报关资料",
+    number: "CUSTOMS-20260716-001",
+    issueDate: "2026-07-16",
+    buyer: "Nordic Tools AB",
+    buyerAddress: "Sveavagen 45, Stockholm, Sweden",
+    buyerContact: "Emma / purchasing@nordic-tools.example",
+    seller: "GoodJob Trading Co., Ltd.",
+    sellerAddress: "No.123 Export Road, Pudong District, Shanghai, China 200120",
+    currency: "USD",
+    incoterm: "FOB",
+    paymentTerm: "30% T/T deposit, 70% before shipment",
+    shippingMethod: "Sea freight",
+    portLoading: "Shanghai Port",
+    portDischarge: "Stockholm Port",
+    validityDate: "2026-08-15",
+    bankInfo: "Bank of China Shanghai Branch",
+    notes: "All documents prepared for customs clearance",
+    templateStyle: "executive",
+    status: "ready",
+    audits: [],
+    sendRecords: [],
+    ownerId: "u_sales_shirley",
+    teamId: "europe",
+    updatedAt: "2026-07-16T08:00:00.000Z",
+    items: [
+      {
+        id: "tdi_customs_1",
+        product: "LED Project Light",
+        model: "GJ-GL200",
+        hsCode: "9405410000",
+        quantity: 100,
+        unit: "PCS",
+        unitPrice: 185.50,
+        originCountry: "China",
+        weightKg: 320,
+        packageCount: 10,
+        brand: "GoodJob",
+        brandType: "自有品牌",
+        exportBenefit: "不享惠",
+        inspectionCode: "999",
+        productEnglish: "LED Project Light for Industrial Use"
+      },
+      {
+        id: "tdi_customs_2",
+        product: "LED Panel Light",
+        model: "GJ-PL300",
+        hsCode: "9405429000",
+        quantity: 200,
+        unit: "PCS",
+        unitPrice: 46.80,
+        originCountry: "China",
+        weightKg: 180,
+        packageCount: 8,
+        brand: "GoodJob",
+        brandType: "自有品牌",
+        exportBenefit: "不享惠",
+        inspectionCode: "999",
+        productEnglish: "LED Panel Light"
+      },
+      {
+        id: "tdi_customs_3",
+        product: "LED Strip Light",
+        model: "GJ-SL500",
+        hsCode: "9405409000",
+        quantity: 500,
+        unit: "MTR",
+        unitPrice: 12.50,
+        originCountry: "China",
+        weightKg: 75,
+        packageCount: 5,
+        brand: "GoodJob",
+        brandType: "自有品牌",
+        exportBenefit: "不享惠",
+        inspectionCode: "999",
+        productEnglish: "LED Strip Light 5050"
+      }
+    ]
+  },
+  {
+    id: "td_customs_demo_2",
+    customerId: "c3",
+    dealId: "d3",
+    revision: 1,
+    type: "CUSTOMS",
+    title: "Kanto Retail 家用电器 报关资料",
+    number: "CUSTOMS-20260716-002",
+    issueDate: "2026-07-16",
+    buyer: "Kanto Retail Co., Ltd.",
+    buyerAddress: "Tokyo, Japan",
+    buyerContact: "Sato / purchasing@kanto-retail.example",
+    seller: "GoodJob Trading Co., Ltd.",
+    sellerAddress: "No.123 Export Road, Pudong District, Shanghai, China 200120",
+    currency: "USD",
+    incoterm: "CIF",
+    paymentTerm: "T/T before shipment",
+    shippingMethod: "Sea freight",
+    portLoading: "Shanghai Port",
+    portDischarge: "Yokohama Port",
+    validityDate: "2026-08-20",
+    bankInfo: "Bank of China Shanghai Branch",
+    notes: "Urgent shipment - customer needs before August",
+    templateStyle: "executive",
+    status: "ready",
+    audits: [],
+    sendRecords: [],
+    ownerId: "u_sales_mia",
+    teamId: "europe",
+    updatedAt: "2026-07-16T09:00:00.000Z",
+    items: [
+      {
+        id: "tdi_customs_jp_1",
+        product: "Smart Air Purifier",
+        model: "GJ-AP800",
+        hsCode: "8421392990",
+        quantity: 50,
+        unit: "PCS",
+        unitPrice: 128.00,
+        originCountry: "China",
+        weightKg: 400,
+        packageCount: 50,
+        brand: "GoodJob",
+        brandType: "自有品牌",
+        exportBenefit: "不享惠",
+        inspectionCode: "L/M",
+        productEnglish: "Smart Air Purifier with HEPA Filter"
+      },
+      {
+        id: "tdi_customs_jp_2",
+        product: "Electric Kettle",
+        model: "GJ-EK200",
+        hsCode: "8516719000",
+        quantity: 200,
+        unit: "PCS",
+        unitPrice: 25.50,
+        originCountry: "China",
+        weightKg: 340,
+        packageCount: 20,
+        brand: "GoodJob",
+        brandType: "自有品牌",
+        exportBenefit: "不享惠",
+        inspectionCode: "L/M",
+        productEnglish: "Stainless Steel Electric Kettle 1.7L"
+      }
     ]
   }
 ];

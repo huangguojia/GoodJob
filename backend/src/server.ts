@@ -2,44 +2,222 @@ import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import nodemailer from "nodemailer";
 import { z } from "zod";
-import { AUTH_COOKIE_NAME, CSRF_COOKIE_NAME, canManageAccount, canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, canSeeTeam, createCsrfToken, csrfCookieOptions, hashPassword, publicUser, requireAuth, sessionCookieOptions, signToken, verifyPassword } from "./auth.js";
+import { AUTH_COOKIE_NAME, CSRF_COOKIE_NAME, canManageAccount, canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, canSeeTeam, createCsrfToken, csrfCookieOptions, hashPassword, publicUser, requireAuth, sessionCookieOptions, signToken, validateAuthSecurity, verifyPassword } from "./auth.js";
+import { assertAiBaseUrlAllowed, createAiHttpClient } from "./ai-http-security.js";
+import { validateAgentJobSecurity } from "./agent-job-security.js";
+import {
+  cancelAgentJob,
+  isProspectRunBridgeJob,
+  publicAgentJob,
+  retryAgentJob
+} from "./agent-jobs.js";
+import { createCredentialRef, decryptProviderConfiguration, encryptProviderConfiguration, validateProviderCredentialSecurity } from "./credential-security.js";
+import {
+  createMarketAnalysisRun,
+  MARKET_ANALYSIS_JOB_TYPE,
+  marketAnalysisRunMetadata,
+  MarketAnalysisRunProviderError,
+  MarketAnalysisRunRequestError,
+  retryMarketAnalysisJob
+} from "./market-analysis-runs.js";
 import { createMysqlStore } from "./mysql-store.js";
-import { getStore, setStore } from "./store.js";
-import { LEAD_PROVIDERS, getProvider, providerMeta, type LeadProvider, type LeadQuery, type RawLead } from "./lead-providers.js";
-import { assertPublicHttpUrl, fetchPublicUrl } from "./outbound-security.js";
+import { getStore, setStore, type CrmStore } from "./store.js";
+import {
+  DEFAULT_LEAD_SEARCH_PROVIDER_IDS,
+  LEAD_PROVIDERS,
+  getProvider,
+  providerMeta,
+  type LeadProvider,
+  type LeadQuery,
+  type RawLead
+} from "./lead-providers.js";
+import { getTradeProvider } from "./trade-providers.js";
+import { ProviderContractError, defineProvider, providerErrorFromUnknown, type ProviderErrorCode, type ProviderRecord } from "./provider-contract.js";
+import { assertProviderBaseUrlAllowed } from "./provider-http-client.js";
+import { providerRequestFingerprint } from "./provider-request-logging.js";
+import {
+  createProviderExecutionContext,
+  executeProviderEnrich,
+  executeProviderHealth,
+  executeProviderPreflight,
+  executeProviderSearch,
+  providerRequiresKey
+} from "./provider-runtime.js";
+import { ProspectScheduler } from "./prospect-scheduler.js";
+import { ProspectWorkerService } from "./prospect-worker-service.js";
+import { loadLocalEnv } from "./runtime-env.js";
 import { registerSwagger } from "./swagger.js";
-import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, Deal, DealEvent, Exam, ExamAttempt, ExamQuestion, Lead, LeadSourceConfig, LeadSourceEvent, LeadSourceType, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, SalesRecordAudit, SessionUser, Todo, TradeDocument, TradeDocumentAudit, TradeDocumentSendRecord, WebsiteOpportunity } from "./types.js";
-
-function loadLocalEnv() {
-  const currentDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    resolve(currentDir, "../../.env"),
-    resolve(process.cwd(), ".env")
-  ];
-  const envPath = candidates.find((path) => existsSync(path));
-  if (!envPath) return;
-  const content = readFileSync(envPath, "utf8");
-  for (const line of content.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
-    const index = trimmed.indexOf("=");
-    const key = trimmed.slice(0, index).trim();
-    const rawValue = trimmed.slice(index + 1).trim();
-    if (!key || process.env[key] !== undefined) continue;
-    process.env[key] = rawValue.replace(/^["']|["']$/g, "");
-  }
-}
+import { resolveBackendHost } from "./server-network.js";
+import {
+  listTradeObservations,
+  parseTradeObservationListQuery,
+  TradeObservationListRequestError,
+  validateTradeObservationCursorSecurity
+} from "./trade-observation-list.js";
+import {
+  listMarketOpportunities,
+  MarketOpportunityListRequestError,
+  parseMarketOpportunityListQuery,
+  validateMarketOpportunityCursorSecurity
+} from "./market-opportunity-list.js";
+import {
+  activateProspectCampaign,
+  createProspectCampaign,
+  createProspectCampaignSchema,
+  createProspectCampaignVersion,
+  createProspectCampaignVersionSchema,
+  getProspectCampaign,
+  listProspectCampaigns,
+  prospectCampaignActionSchema,
+  prospectCampaignEtag,
+  prospectCampaignIdSchema,
+  ProspectCampaignRequestError,
+  resolveMarketCampaignReference,
+  transitionProspectCampaign,
+  updateProspectCampaign,
+  updateProspectCampaignSchema
+} from "./prospect-campaigns.js";
+import {
+  convertProspectToLeadBodySchema,
+  PROSPECT_LEAD_SOURCE_CHANNEL,
+  ProspectLeadConversionError
+} from "./prospect-lead-conversion.js";
+import {
+  convertProspectToCustomerBodySchema,
+  ProspectCustomerConversionError
+} from "./prospect-customer-conversion.js";
+import {
+  acceptCustomerIntelligence,
+  generateCustomerIntelligenceSuggestion,
+  rejectCustomerIntelligence
+} from "./customer-intelligence.js";
+import {
+  CustomerOwnershipError,
+  isPublicCustomer
+} from "./customer-public-pool.js";
+import {
+  ProspectCoverageMemoryError
+} from "./prospect-coverage-memory.js";
+import {
+  syncProspectCandidateCoverage
+} from "./prospect-candidate-actions.js";
+import {
+  ensureProspectFollowUpTodo,
+  migrateProspectFollowUpTodos,
+  recordProspectTouchpoint
+} from "./prospect-outreach.js";
+import {
+  customsDocumentExportIssues,
+  generateCustomsDocumentFromDeal,
+  exportCustomsDocumentToExcel
+} from "./customs-export.js";
+import {
+  dismissDealRecommendation,
+  linkProcurementContextToCustomer,
+  linkProcurementContextToLead,
+  linkRecommendationToDeal,
+  proposeDealRecommendation,
+  recommendationReasonText,
+  recordProcurementSignal,
+  resolveRecommendationCustomerId
+} from "./procurement-signals.js";
+import {
+  generateProspectStrategySuggestions,
+  prospectPerformance,
+  recordAcquisitionOutcomeFeedback,
+  reviewProspectStrategySuggestion
+} from "./prospect-outcome-feedback.js";
+import {
+  approveProspectStrategy,
+  createProspectStrategy,
+  createProspectStrategySchema,
+  disableProspectStrategy,
+  getProspectStrategy,
+  listProspectStrategies,
+  previewProspectStrategy,
+  previewProspectStrategySchema,
+  prospectStrategyActionSchema,
+  prospectStrategyEtag,
+  prospectStrategyIdSchema,
+  ProspectStrategyRequestError,
+  updateProspectStrategy,
+  updateProspectStrategySchema
+} from "./prospect-strategies.js";
+import {
+  createProspectRun,
+  createProspectRunSchema,
+  getProspectRun,
+  listProspectRuns,
+  parseProspectRunListQuery,
+  prospectRunActionSchema,
+  prospectRunEtag,
+  prospectRunIdempotencyKeySchema,
+  prospectRunIdSchema,
+  ProspectRunRequestError,
+  transitionProspectRun,
+  validateProspectRunSecurity
+} from "./prospect-runs.js";
+import {
+  createProspectSchedule,
+  createProspectScheduleSchema,
+  deleteProspectSchedule,
+  listProspectSchedules,
+  prospectScheduleActionSchema,
+  prospectScheduleEtag,
+  prospectScheduleIdSchema,
+  ProspectScheduleRequestError,
+  transitionProspectSchedule
+} from "./prospect-schedules.js";
+import {
+  canonicalOrganizationId,
+  listOrganizationIdentityConflicts,
+  organizationIdentityConflictListQuerySchema,
+  organizationIdentityConflictReviewBodySchema,
+  OrganizationIdentityConflictReviewError,
+  reviewOrganizationIdentityConflict
+} from "./organization-identity-conflict-review.js";
+import {
+  organizationAliasBodySchema,
+  organizationIdentityProfile,
+  OrganizationRelationError,
+  organizationRelationBodySchema,
+  recordOrganizationAlias,
+  recordOrganizationRelation
+} from "./organization-relations.js";
+import { activeProspectRunsForOwner } from "./prospect-run-guards.js";
+import {
+  companyNameFromWebsiteReference,
+  ensureProspectVerificationReport,
+  normalizeWebsiteReference,
+  withProspectVerificationReport
+} from "./prospect-verification.js";
+import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, CustomerIntelligenceFieldKey, Deal, DealEvent, Exam, ExamAttempt, ExamQuestion, Lead, LeadSourceEvent, LeadSourceType, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProspectOutreachChannel, ProviderCatalogItem, ProviderConnection, ProviderEvidenceSnapshot, SalesRecordAudit, SessionUser, Todo, TradeDocument, TradeDocumentAudit, TradeDocumentSendRecord, WebsiteOpportunity } from "./types.js";
 
 loadLocalEnv();
 
 export const app = express();
+let activeProspectWorkerService: ProspectWorkerService | null = null;
+
+async function synchronizeProspectQueue() {
+  try {
+    await activeProspectWorkerService?.synchronize();
+  } catch (error) {
+    console.error("[prospect-queue]", {
+      event: "coordination_sync_failed",
+      code: typeof error === "object"
+        && error !== null
+        && "code" in error
+        ? String(error.code || "UNCLASSIFIED")
+        : "UNCLASSIFIED"
+    });
+  }
+}
+
 app.disable("x-powered-by");
-app.set("trust proxy", 1);
+app.set("trust proxy", "loopback");
 const allowedOrigins = new Set((process.env.CORS_ORIGINS || "")
   .split(",")
   .map((origin) => origin.trim())
@@ -92,8 +270,228 @@ function asyncRoute(handler: (req: Request, res: Response, next: NextFunction) =
   };
 }
 
+async function persistCandidateChanges(
+  store: CrmStore,
+  candidates: WebsiteOpportunity[],
+  persistOtherState = true
+) {
+  const candidateIds = [...new Set(candidates.map((item) => item.id))];
+  if (store.persistProspectCandidates) {
+    if (candidateIds.length) {
+      await store.persistProspectCandidates(candidateIds);
+    }
+    if (persistOtherState) await store.persist();
+    return;
+  }
+  await store.persist();
+}
+
+app.use(
+  "/api/prospect-list",
+  requireAuth,
+  asyncRoute(async (_req, _res, next) => {
+    await getStore().reloadProspectCandidates?.();
+    next();
+  })
+);
+
+function requestCorrelationId(req: Request) {
+  const provided = String(req.header("X-Request-Id") || "").trim();
+  return provided ? provided.slice(0, 100) : randomUUID();
+}
+
+function sendProspectCampaignError(
+  res: Response,
+  error: unknown
+) {
+  if (!(error instanceof ProspectCampaignRequestError)
+    && !(error instanceof ProspectStrategyRequestError)
+    && !(error instanceof ProspectRunRequestError)
+    && !(error instanceof ProspectScheduleRequestError)) return false;
+  res.status(error.status).json({
+    message: error.message,
+    errorCode: error.code,
+    ...error.details
+  });
+  return true;
+}
+
+function sendProspectLeadConversionError(
+  res: Response,
+  error: unknown
+) {
+  if (error instanceof ProspectLeadConversionError) {
+    res.status(error.status).json({
+      message: error.message,
+      errorCode: error.code
+    });
+    return true;
+  }
+  if (!(error instanceof ProspectCoverageMemoryError)) return false;
+  const status = error.code === "PROSPECT_COVERAGE_INVALID"
+    ? 400
+    : [
+        "PROSPECT_COVERAGE_CONCURRENCY_RETRY_EXHAUSTED",
+        "PROSPECT_COVERAGE_CACHE_UNAVAILABLE",
+        "PROSPECT_COVERAGE_COMMIT_OUTCOME_UNKNOWN"
+      ].includes(error.code)
+      ? 503
+      : [
+          "PROSPECT_COVERAGE_NOT_ELIGIBLE",
+          "PROSPECT_COVERAGE_REPLAY_CONFLICT",
+          "PROSPECT_COVERAGE_TEAM_BUSY"
+        ].includes(error.code)
+        ? 409
+        : 500;
+  res.status(status).json({
+    message: error.message,
+    errorCode: error.code
+  });
+  return true;
+}
+
+function sendProspectCustomerConversionError(
+  res: Response,
+  error: unknown
+) {
+  if (error instanceof ProspectCustomerConversionError) {
+    res.status(error.status).json({
+      message: error.message,
+      errorCode: error.code
+    });
+    return true;
+  }
+  return sendProspectLeadConversionError(res, error);
+}
+
+function sendOrganizationIdentityConflictReviewError(
+  res: Response,
+  error: unknown
+) {
+  if (!(error instanceof OrganizationIdentityConflictReviewError)) {
+    return false;
+  }
+  res.status(error.status).json({
+    message: error.message,
+    errorCode: error.code
+  });
+  return true;
+}
+
+function sendOrganizationRelationError(
+  res: Response,
+  error: unknown
+) {
+  if (!(error instanceof OrganizationRelationError)) return false;
+  res.status(error.status).json({
+    message: error.message,
+    errorCode: error.code
+  });
+  return true;
+}
+
+function setProspectRunEtag(
+  res: Response,
+  payload: { run: { id: string; revision: number } }
+) {
+  res.setHeader("ETag", prospectRunEtag(payload.run));
+  res.setHeader("Cache-Control", "no-store");
+}
+
+function setProspectScheduleEtag(
+  res: Response,
+  payload: { schedule: { id: string; revision: number } }
+) {
+  res.setHeader("ETag", prospectScheduleEtag(payload.schedule));
+  res.setHeader("Cache-Control", "no-store");
+}
+
+function setProspectStrategyEtag(
+  res: Response,
+  payload: { strategy: { id: string; revision: number } }
+) {
+  res.setHeader("ETag", prospectStrategyEtag(payload.strategy));
+  res.setHeader("Cache-Control", "no-store");
+}
+
+function setProspectCampaignEtag(
+  res: Response,
+  payload: { campaign: { id: string; revision: number } }
+) {
+  res.setHeader("ETag", prospectCampaignEtag(payload.campaign));
+  res.setHeader("Cache-Control", "no-store");
+}
+
 function accountUser(user: ReturnType<typeof getStore>["users"][number]) {
   return { ...publicUser(user), status: user.status };
+}
+
+function collaborationUser(userId: string) {
+  const user = getStore().users.find((item) => item.id === userId);
+  return user ? { id: user.id, name: user.name, avatar: user.avatar, role: user.role, teamId: user.teamId } : {
+    id: userId,
+    name: "已停用账号",
+    avatar: "--",
+    role: "sales" as const,
+    teamId: ""
+  };
+}
+
+function canViewDailyReport(user: SessionUser, report: ReturnType<typeof getStore>["dailyReports"][number]) {
+  if (user.role === "super_admin") return true;
+  if (user.role === "manager" || user.role === "admin") return report.teamId === user.teamId;
+  return report.ownerId === user.id;
+}
+
+function publicDailyReport(report: ReturnType<typeof getStore>["dailyReports"][number]) {
+  return {
+    ...report,
+    owner: collaborationUser(report.ownerId),
+    commentCount: getStore().dailyReportComments.filter((item) => item.reportId === report.id).length
+  };
+}
+
+function publicDailyReportComment(comment: ReturnType<typeof getStore>["dailyReportComments"][number]) {
+  return { ...comment, author: collaborationUser(comment.authorId) };
+}
+
+function publicInternalMessage(message: ReturnType<typeof getStore>["internalMessages"][number]) {
+  return {
+    ...message,
+    sender: collaborationUser(message.senderId),
+    recipient: collaborationUser(message.recipientId)
+  };
+}
+
+function createInternalNotification(input: {
+  senderId: string;
+  recipientId: string;
+  teamId: string;
+  subject: string;
+  content: string;
+  relatedType?: "daily_report" | "message" | "";
+  relatedId?: string;
+  threadId?: string;
+}) {
+  if (input.senderId === input.recipientId) return null;
+  const now = new Date().toISOString();
+  const message = {
+    id: `msg_${randomUUID()}`,
+    threadId: input.threadId || `thread_${randomUUID()}`,
+    senderId: input.senderId,
+    recipientId: input.recipientId,
+    teamId: input.teamId,
+    type: "system" as const,
+    subject: input.subject,
+    content: input.content,
+    relatedType: input.relatedType || "" as const,
+    relatedId: input.relatedId || "",
+    readAt: "",
+    createdAt: now,
+    updatedAt: now
+  };
+  getStore().internalMessages.unshift(message);
+  return message;
 }
 
 function canManageTraining(user?: SessionUser) {
@@ -399,7 +797,23 @@ function buildExamQuestion(body: z.infer<typeof examQuestionSchema>, index = 0):
 }
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, store: getStore().mode });
+  const workerStatus = activeProspectWorkerService?.status();
+  const queueStatus = workerStatus?.queue;
+  res.json({
+    ok: true,
+    store: getStore().mode,
+    prospectQueue: queueStatus
+      ? {
+          mode: queueStatus.mode,
+          running: queueStatus.running,
+          degraded: queueStatus.degraded
+        }
+      : {
+          mode: "mysql_polling",
+          running: false,
+          degraded: false
+        }
+  });
 });
 
 const loginSchema = z.object({
@@ -562,7 +976,8 @@ app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRout
   const schema = z.object({
     to: z.string().email(),
     subject: z.string().min(1).max(160),
-    body: z.string().min(10).max(3000)
+    body: z.string().min(10).max(3000),
+    requestId: z.string().min(1).max(120).optional()
   });
   const body = schema.parse(req.body);
   const store = getStore();
@@ -580,6 +995,34 @@ app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRout
     res.status(400).json({ message: "请先核验联系方式并标记为可联系，再发送开发信" });
     return;
   }
+  if (opportunity.ownerId !== req.user!.id) {
+    res.status(403).json({ message: "只有候选归属业务员可以发送开发信" });
+    return;
+  }
+  const requestId = body.requestId || requestCorrelationId(req);
+  const existingTouchpoint = store.prospectTouchpoints.find((item) =>
+    item.ownerId === req.user!.id
+    && item.prospectCandidateId === opportunity.id
+    && item.requestId === requestId
+  );
+  if (existingTouchpoint) {
+    res.json({
+      sent: {
+        id: existingTouchpoint.id,
+        status: "sent",
+        simulated: process.env.NODE_ENV === "test",
+        replayed: true,
+        to: existingTouchpoint.contactValue,
+        company: opportunity.company,
+        subject: existingTouchpoint.subject,
+        body: existingTouchpoint.content,
+        sentAt: existingTouchpoint.occurredAt
+      },
+      opportunity,
+      user: accountUser(user)
+    });
+    return;
+  }
   let mailInfo: Awaited<ReturnType<typeof sendOutboundEmail>>;
   try {
     mailInfo = await sendOutboundEmail(user, { to: body.to, subject: body.subject, body: body.body });
@@ -594,9 +1037,18 @@ app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRout
   opportunity.lastDevelopmentEmailAt = sentAt;
   opportunity.lastDevelopmentEmailTo = body.to;
   opportunity.lastDevelopmentEmailSubject = body.subject;
-  if (opportunity.status !== "synced") opportunity.status = "contacted";
-  opportunity.statusChangedAt = sentAt;
-  await store.persist();
+  const outreach = await recordProspectTouchpoint(store, {
+    candidate: opportunity,
+    actorId: req.user!.id,
+    channel: "email",
+    direction: "outbound",
+    contactValue: body.to,
+    subject: body.subject,
+    content: body.body,
+    requestId,
+    occurredAt: sentAt
+  });
+  await persistCandidateChanges(store, [opportunity]);
   res.json({
     sent: {
       id: `mail_${Date.now()}`,
@@ -609,11 +1061,562 @@ app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRout
       company: opportunity.company,
       subject: body.subject,
       body: body.body,
-      sentAt
+      sentAt,
+      replayed: false
     },
+    touchpoint: outreach.touchpoint,
+    todo: outreach.todo,
     opportunity,
     user: accountUser(user)
   });
+}));
+
+const prospectOutreachChannelSchema = z.enum(["email", "whatsapp", "call"]);
+const prospectReplyClassificationSchema = z.enum([
+  "clear_demand",
+  "interested_nurture",
+  "referral",
+  "no_current_demand",
+  "rejected",
+  "unsubscribed",
+  "bounced",
+  "auto_unknown"
+]);
+const procurementEvidenceTypeSchema = z.enum([
+  "quote_request",
+  "product_requirement",
+  "quantity",
+  "sample_request",
+  "purchase_timeline",
+  "target_price",
+  "certification",
+  "delivery",
+  "project_tender",
+  "manual_confirmation"
+]);
+
+function procurementContextForCandidate(candidate: WebsiteOpportunity) {
+  const store = getStore();
+  const signals = store.procurementSignals
+    .filter((item) =>
+      item.teamId === candidate.teamId
+      && item.ownerId === candidate.ownerId
+      && item.prospectCandidateId === candidate.id
+    )
+    .sort((left, right) => right.observedAt.localeCompare(left.observedAt));
+  const recommendations = store.dealRecommendations
+    .filter((item) =>
+      item.teamId === candidate.teamId
+      && item.ownerId === candidate.ownerId
+      && item.prospectCandidateId === candidate.id
+    )
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .map((recommendation) => {
+      const duplicateIds = new Set(recommendation.duplicateDealIds);
+      const duplicateDeals = store.deals
+        .filter((deal) =>
+          duplicateIds.has(deal.id)
+          && deal.teamId === candidate.teamId
+          && deal.ownerId === candidate.ownerId
+          && !deal.archivedAt
+        )
+        .map((deal) => ({
+          id: deal.id,
+          title: deal.title,
+          product: deal.product,
+          stage: deal.stage,
+          amount: deal.amount,
+          currency: deal.currency
+        }));
+      return {
+        ...recommendation,
+        reasonTexts: recommendationReasonText(recommendation),
+        duplicateDeals
+      };
+    });
+  return { signals, recommendations };
+}
+
+function resolveVisibleProspectCandidate(
+  req: Request,
+  candidateId: string
+) {
+  return getStore().websiteOpportunities.find((item) =>
+    item.id === candidateId
+    && canSeeOwner(req.user!, item.ownerId, item.teamId)
+  );
+}
+
+function requireOwnedProspectCandidate(
+  req: Request,
+  res: Response
+) {
+  const candidate = resolveVisibleProspectCandidate(req, req.params.id);
+  if (!candidate) {
+    res.status(404).json({ message: "搜客线索不存在或无权访问" });
+    return null;
+  }
+  if (candidate.ownerId !== req.user!.id) {
+    res.status(403).json({ message: "只有候选归属业务员可以记录触达和生成跟进待办" });
+    return null;
+  }
+  return candidate;
+}
+
+app.get("/api/prospect-list/:id/touchpoints", requireAuth, (req, res) => {
+  const candidate = resolveVisibleProspectCandidate(req, req.params.id);
+  if (!candidate) {
+    res.status(404).json({ message: "搜客线索不存在或无权访问" });
+    return;
+  }
+  const touchpoints = getStore().prospectTouchpoints
+    .filter((item) =>
+      item.teamId === candidate.teamId
+      && item.ownerId === candidate.ownerId
+      && item.prospectCandidateId === candidate.id
+    )
+    .sort((left, right) =>
+      right.occurredAt.localeCompare(left.occurredAt)
+    );
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ touchpoints, opportunity: candidate });
+});
+
+app.get("/api/prospect-list/:id/procurement-context", requireAuth, (req, res) => {
+  const candidate = resolveVisibleProspectCandidate(req, req.params.id);
+  if (!candidate) {
+    res.status(404).json({ message: "搜客线索不存在或无权访问" });
+    return;
+  }
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    opportunity: candidate,
+    ...procurementContextForCandidate(candidate)
+  });
+});
+
+app.post("/api/prospect-list/:id/touchpoints", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    channel: prospectOutreachChannelSchema,
+    contactValue: z.string().max(255).optional().default(""),
+    subject: z.string().max(255).optional().default(""),
+    content: z.string().max(5000).optional().default(""),
+    occurredAt: z.string().datetime().optional(),
+    nextFollowAt: z.string().max(40).optional(),
+    requestId: z.string().min(1).max(120)
+  });
+  const body = schema.parse(req.body);
+  const candidate = requireOwnedProspectCandidate(req, res);
+  if (!candidate) return;
+  const store = getStore();
+  const result = await recordProspectTouchpoint(store, {
+    candidate,
+    actorId: req.user!.id,
+    channel: body.channel,
+    direction: "outbound",
+    contactValue: body.contactValue,
+    subject: body.subject,
+    content: body.content,
+    occurredAt: body.occurredAt,
+    nextFollowAt: body.nextFollowAt,
+    requestId: body.requestId
+  });
+  await persistCandidateChanges(store, [candidate]);
+  res.status(result.replayed ? 200 : 201).json({
+    ...result,
+    opportunity: candidate
+  });
+}));
+
+app.post("/api/prospect-list/:id/replies", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    channel: prospectOutreachChannelSchema,
+    classification: prospectReplyClassificationSchema,
+    contactValue: z.string().max(255).optional().default(""),
+    subject: z.string().max(255).optional().default(""),
+    content: z.string().max(5000).optional().default(""),
+    occurredAt: z.string().datetime().optional(),
+    requestId: z.string().min(1).max(120),
+    procurement: z.object({
+      evidenceSummary: z.string().max(2000).optional().default(""),
+      evidenceTypes: z.array(procurementEvidenceTypeSchema)
+        .max(10)
+        .optional()
+        .default([]),
+      product: z.string().max(200).optional().default(""),
+      specification: z.string().max(1000).optional().default(""),
+      quantity: z.coerce.number().int().nonnegative().optional().default(0),
+      quantityType: z.enum([
+        "unknown",
+        "sample",
+        "trial",
+        "forecast",
+        "order"
+      ]).optional().default("unknown"),
+      targetPrice: z.coerce.number().nonnegative().optional().default(0),
+      currency: z.string().trim().regex(/^[A-Za-z]{3}$/).optional().default("USD"),
+      priceBasis: z.string().max(80).optional().default(""),
+      deliveryRequirement: z.string().max(500).optional().default(""),
+      certificationRequirement: z.string().max(500).optional().default(""),
+      purchaseTimeline: z.string().max(500).optional().default(""),
+      projectName: z.string().max(500).optional().default(""),
+      buyerRole: z.string().max(100).optional().default(""),
+      nextAction: z.string().max(200).optional().default(""),
+      confidence: z.coerce.number().min(0).max(100).optional().default(85)
+    }).optional()
+  });
+  const body = schema.parse(req.body);
+  const candidate = requireOwnedProspectCandidate(req, res);
+  if (!candidate) return;
+  const store = getStore();
+  const result = await recordProspectTouchpoint(store, {
+    candidate,
+    actorId: req.user!.id,
+    channel: body.channel,
+    direction: "inbound",
+    contactValue: body.contactValue,
+    subject: body.subject,
+    content: body.content,
+    replyClassification: body.classification,
+    occurredAt: body.occurredAt,
+    requestId: body.requestId
+  });
+  let procurement;
+  if (body.classification === "clear_demand") {
+    const signalResult = recordProcurementSignal(store, {
+      candidate,
+      touchpoint: result.touchpoint,
+      actorId: req.user!.id,
+      ...(body.procurement || {})
+    });
+    const recommendationResult = proposeDealRecommendation(
+      store,
+      signalResult.signal
+    );
+    procurement = {
+      signal: signalResult.signal,
+      assessment: recommendationResult.assessment,
+      recommendation: recommendationResult.recommendation,
+      signalReplayed: signalResult.replayed,
+      recommendationCreated: recommendationResult.created
+    };
+  }
+  await persistCandidateChanges(store, [candidate]);
+  res.status(result.replayed ? 200 : 201).json({
+    ...result,
+    procurement,
+    opportunity: candidate
+  });
+}));
+
+app.post("/api/deal-recommendations/:id/dismiss", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    reason: z.string().trim().max(500).optional().default("")
+  }).parse(req.body || {});
+  const store = getStore();
+  const recommendation = store.dealRecommendations.find((item) =>
+    item.id === req.params.id
+    && item.teamId === req.user!.teamId
+    && item.ownerId === req.user!.id
+  );
+  if (!recommendation) {
+    res.status(404).json({ message: "商机建议不存在或无权访问" });
+    return;
+  }
+  try {
+    dismissDealRecommendation(recommendation, req.user!.id, body.reason);
+  } catch (error) {
+    res.status(409).json({
+      message: error instanceof Error ? error.message : "当前建议不能忽略"
+    });
+    return;
+  }
+  await store.persist();
+  res.json({ recommendation });
+}));
+
+app.post("/api/deal-recommendations/:id/link-deal", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    dealId: z.string().trim().min(1)
+  }).parse(req.body);
+  const store = getStore();
+  const recommendation = store.dealRecommendations.find((item) =>
+    item.id === req.params.id
+    && item.teamId === req.user!.teamId
+    && item.ownerId === req.user!.id
+  );
+  const deal = store.deals.find((item) =>
+    item.id === body.dealId
+    && item.teamId === req.user!.teamId
+    && item.ownerId === req.user!.id
+  );
+  if (!recommendation || !deal) {
+    res.status(404).json({ message: "商机建议或商机不存在" });
+    return;
+  }
+  if (recommendation.status !== "generated") {
+    res.status(409).json({ message: "当前建议已经处理" });
+    return;
+  }
+  try {
+    linkRecommendationToDeal(
+      store,
+      recommendation,
+      deal,
+      req.user!.id,
+      "linked_existing_deal"
+    );
+  } catch (error) {
+    res.status(409).json({
+      message: error instanceof Error ? error.message : "商机关联失败"
+    });
+    return;
+  }
+  await store.persist();
+  res.json({ recommendation, deal });
+}));
+
+app.post("/api/prospect-list/:id/follow-up", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    channel: prospectOutreachChannelSchema.default("email"),
+    dueAt: z.string().max(40).optional().default(""),
+    priority: z.enum(["high", "medium", "normal"]).optional().default("medium")
+  });
+  const body = schema.parse(req.body || {});
+  const candidate = requireOwnedProspectCandidate(req, res);
+  if (!candidate) return;
+  const store = getStore();
+  const result = ensureProspectFollowUpTodo(store, {
+    candidate,
+    channel: body.channel as ProspectOutreachChannel,
+    dueAt: body.dueAt || undefined,
+    priority: body.priority,
+    reason: "人工安排跟进"
+  });
+  candidate.nextFollowAt = result.todo.dueAt;
+  await persistCandidateChanges(store, [candidate]);
+  res.status(result.created ? 201 : 200).json({
+    ...result,
+    opportunity: candidate
+  });
+}));
+
+const dailyReportBodySchema = z.object({
+  reportDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "日报日期格式不正确"),
+  completedWork: z.string().trim().min(1, "请填写今日完成工作").max(5000),
+  customerProgress: z.string().trim().max(5000).default(""),
+  results: z.string().trim().max(5000).default(""),
+  risks: z.string().trim().max(5000).default(""),
+  nextPlan: z.string().trim().max(5000).default(""),
+  supportNeeded: z.string().trim().max(5000).default("")
+});
+
+app.get("/api/daily-reports", requireAuth, (req, res) => {
+  const query = z.object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    ownerId: z.string().max(64).optional()
+  }).parse(req.query);
+  const store = getStore();
+  const reports = store.dailyReports
+    .filter((item) => canViewDailyReport(req.user!, item))
+    .filter((item) => !query.from || item.reportDate >= query.from)
+    .filter((item) => !query.to || item.reportDate <= query.to)
+    .filter((item) => !query.ownerId || item.ownerId === query.ownerId)
+    .sort((left, right) => right.reportDate.localeCompare(left.reportDate) || right.updatedAt.localeCompare(left.updatedAt))
+    .map(publicDailyReport);
+  const visibleOwners = store.users
+    .filter((item) => item.status === "active")
+    .filter((item) => req.user!.role === "super_admin" || item.teamId === req.user!.teamId)
+    .filter((item) => req.user!.role !== "sales" || item.id === req.user!.id)
+    .map((item) => collaborationUser(item.id));
+  res.json({
+    reports,
+    owners: visibleOwners,
+    canViewTeam: req.user!.role !== "sales"
+  });
+});
+
+app.post("/api/daily-reports", requireAuth, asyncRoute(async (req, res) => {
+  const body = dailyReportBodySchema.parse(req.body);
+  const store = getStore();
+  const now = new Date().toISOString();
+  let report = store.dailyReports.find((item) => item.ownerId === req.user!.id && item.reportDate === body.reportDate);
+  const created = !report;
+  if (report) {
+    Object.assign(report, body, {
+      status: "submitted" as const,
+      submittedAt: now,
+      updatedAt: now
+    });
+  } else {
+    report = {
+      id: `report_${randomUUID()}`,
+      ...body,
+      status: "submitted",
+      ownerId: req.user!.id,
+      teamId: req.user!.teamId,
+      submittedAt: now,
+      createdAt: now,
+      updatedAt: now
+    };
+    store.dailyReports.unshift(report);
+  }
+  const recipients = store.users.filter((item) =>
+    item.status === "active"
+    && item.teamId === req.user!.teamId
+    && (item.role === "manager" || item.role === "admin")
+  );
+  recipients.forEach((recipient) => createInternalNotification({
+    senderId: req.user!.id,
+    recipientId: recipient.id,
+    teamId: recipient.teamId,
+    subject: `${req.user!.name}${created ? "提交" : "更新"}了 ${body.reportDate} 日报`,
+    content: body.completedWork.slice(0, 240),
+    relatedType: "daily_report",
+    relatedId: report!.id
+  }));
+  await store.persist();
+  res.status(created ? 201 : 200).json({ report: publicDailyReport(report), created });
+}));
+
+app.get("/api/daily-reports/:id", requireAuth, (req, res) => {
+  const report = getStore().dailyReports.find((item) => item.id === req.params.id);
+  if (!report || !canViewDailyReport(req.user!, report)) {
+    res.status(404).json({ message: "日报不存在或无权查看" });
+    return;
+  }
+  const comments = getStore().dailyReportComments
+    .filter((item) => item.reportId === report.id)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .map(publicDailyReportComment);
+  res.json({ report: publicDailyReport(report), comments });
+});
+
+app.post("/api/daily-reports/:id/comments", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    content: z.string().trim().min(1, "评论内容不能为空").max(2000),
+    parentId: z.string().max(64).optional().default("")
+  }).parse(req.body);
+  const store = getStore();
+  const report = store.dailyReports.find((item) => item.id === req.params.id);
+  if (!report || !canViewDailyReport(req.user!, report)) {
+    res.status(404).json({ message: "日报不存在或无权评论" });
+    return;
+  }
+  const parent = body.parentId
+    ? store.dailyReportComments.find((item) => item.id === body.parentId && item.reportId === report.id)
+    : null;
+  if (body.parentId && !parent) {
+    res.status(400).json({ message: "回复的评论不存在" });
+    return;
+  }
+  const now = new Date().toISOString();
+  const comment = {
+    id: `comment_${randomUUID()}`,
+    reportId: report.id,
+    parentId: parent?.id || "",
+    content: body.content,
+    authorId: req.user!.id,
+    teamId: report.teamId,
+    createdAt: now,
+    updatedAt: now
+  };
+  store.dailyReportComments.push(comment);
+  const recipientIds = new Set<string>([report.ownerId]);
+  if (parent) recipientIds.add(parent.authorId);
+  recipientIds.delete(req.user!.id);
+  recipientIds.forEach((recipientId) => {
+    const recipient = store.users.find((item) => item.id === recipientId && item.status === "active");
+    if (!recipient) return;
+    createInternalNotification({
+      senderId: req.user!.id,
+      recipientId,
+      teamId: recipient.teamId,
+      subject: parent ? `${req.user!.name}回复了你的日报评论` : `${req.user!.name}评论了你的日报`,
+      content: body.content.slice(0, 240),
+      relatedType: "daily_report",
+      relatedId: report.id,
+      threadId: `daily_report_${report.id}`
+    });
+  });
+  await store.persist();
+  res.status(201).json({ comment: publicDailyReportComment(comment) });
+}));
+
+app.get("/api/internal-messages/recipients", requireAuth, (req, res) => {
+  const recipients = getStore().users
+    .filter((item) => item.status === "active" && item.id !== req.user!.id)
+    .filter((item) => req.user!.role === "super_admin" || item.teamId === req.user!.teamId)
+    .map((item) => collaborationUser(item.id));
+  res.json({ recipients });
+});
+
+app.get("/api/internal-messages", requireAuth, (req, res) => {
+  const box = z.enum(["inbox", "sent"]).catch("inbox").parse(req.query.box);
+  const store = getStore();
+  const messages = store.internalMessages
+    .filter((item) => box === "sent" ? item.senderId === req.user!.id : item.recipientId === req.user!.id)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, 300)
+    .map(publicInternalMessage);
+  res.json({
+    messages,
+    unreadCount: store.internalMessages.filter((item) => item.recipientId === req.user!.id && !item.readAt).length
+  });
+});
+
+app.post("/api/internal-messages", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    recipientId: z.string().min(1).max(64),
+    subject: z.string().trim().min(1, "请填写主题").max(180),
+    content: z.string().trim().min(1, "请填写消息内容").max(5000),
+    threadId: z.string().max(64).optional().default("")
+  }).parse(req.body);
+  const store = getStore();
+  const recipient = store.users.find((item) => item.id === body.recipientId && item.status === "active");
+  if (!recipient || recipient.id === req.user!.id) {
+    res.status(400).json({ message: "收件人不可用" });
+    return;
+  }
+  if (req.user!.role !== "super_admin" && recipient.teamId !== req.user!.teamId) {
+    res.status(403).json({ message: "不能向其他团队发送站内信" });
+    return;
+  }
+  const now = new Date().toISOString();
+  const message = {
+    id: `msg_${randomUUID()}`,
+    threadId: body.threadId || `thread_${randomUUID()}`,
+    senderId: req.user!.id,
+    recipientId: recipient.id,
+    teamId: recipient.teamId,
+    type: "manual" as const,
+    subject: body.subject,
+    content: body.content,
+    relatedType: "message" as const,
+    relatedId: "",
+    readAt: "",
+    createdAt: now,
+    updatedAt: now
+  };
+  store.internalMessages.unshift(message);
+  await store.persist();
+  res.status(201).json({ message: publicInternalMessage(message) });
+}));
+
+app.post("/api/internal-messages/:id/read", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const message = store.internalMessages.find((item) => item.id === req.params.id && item.recipientId === req.user!.id);
+  if (!message) {
+    res.status(404).json({ message: "站内信不存在" });
+    return;
+  }
+  if (!message.readAt) {
+    message.readAt = new Date().toISOString();
+    message.updatedAt = message.readAt;
+    await store.persist();
+  }
+  res.json({ message: publicInternalMessage(message) });
 }));
 
 app.get("/api/accounts", requireAuth, (req, res) => {
@@ -746,15 +1749,99 @@ app.delete("/api/accounts/:id", requireAuth, asyncRoute(async (req, res) => {
     res.status(404).json({ message: "账号不存在" });
     return;
   }
+  if (store.prospectCampaigns.some((item) => item.ownerId === user.id)) {
+    res.status(409).json({ message: "该账号仍负责获客项目，请先转交项目后再删除" });
+    return;
+  }
+  if (activeProspectRunsForOwner(store, user.teamId, user.id).length) {
+    res.status(409).json({
+      message: "该账号仍有活动搜索运行，请先取消运行后再删除"
+    });
+    return;
+  }
   store.users.splice(index, 1);
   await store.persist();
   res.json({ ok: true, id: req.params.id });
 }));
 
+function publicPoolCustomersFor(user: SessionUser) {
+  if (user.role === "super_admin") return [];
+  return getStore().customers.filter((customer) =>
+    customer.teamId === user.teamId && isPublicCustomer(customer)
+  );
+}
+
+function ownedCustomersFor(user: SessionUser, scope: "mine" | "team" = "mine") {
+  return getStore().customers.filter((customer) => {
+    if (isPublicCustomer(customer)) return false;
+    if (scope === "team") {
+      return user.role !== "super_admin" && customer.teamId === user.teamId;
+    }
+    return canSeeOwner(user, customer.ownerId, customer.teamId);
+  });
+}
+
+function customerPoolCounts(user: SessionUser) {
+  return {
+    mineCount: ownedCustomersFor(user).length,
+    publicCount: publicPoolCustomersFor(user).length
+  };
+}
+
+function findWritableCustomer(
+  user: SessionUser,
+  customerId: string,
+  res: Response
+) {
+  const customer = getStore().customers.find((item) => item.id === customerId);
+  if (!customer) {
+    res.status(404).json({ message: "客户不存在" });
+    return null;
+  }
+  if (isPublicCustomer(customer)) {
+    if (user.role !== "super_admin" && customer.teamId === user.teamId) {
+      res.status(409).json({ message: "公池客户为只读，请先领取后再操作" });
+    } else {
+      res.status(404).json({ message: "客户不存在" });
+    }
+    return null;
+  }
+  if (!canSeeOwner(user, customer.ownerId, customer.teamId)) {
+    res.status(404).json({ message: "客户不存在" });
+    return null;
+  }
+  return customer;
+}
+
+function ensureDealCustomerWritable(
+  user: SessionUser,
+  deal: Deal,
+  res: Response
+) {
+  return Boolean(findWritableCustomer(user, deal.customerId, res));
+}
+
+function sendCustomerOwnershipError(res: Response, error: unknown) {
+  if (error instanceof CustomerOwnershipError) {
+    res.status(error.status).json({ message: error.message, errorCode: error.code });
+    return true;
+  }
+  return false;
+}
+
 app.get("/api/customers", requireAuth, (req, res) => {
-  const { customers } = getStore();
-  const scoped = customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
-  res.json({ customers: scoped.map(customerWithPipeline) });
+  const parsedScope = z.enum(["mine", "public", "team"]).safeParse(req.query.scope || "mine");
+  if (!parsedScope.success) {
+    res.status(400).json({ message: "客户范围参数无效" });
+    return;
+  }
+  const scoped = parsedScope.data === "public"
+    ? publicPoolCustomersFor(req.user!)
+    : ownedCustomersFor(req.user!, parsedScope.data);
+  res.json({
+    customers: scoped.map(customerWithPipeline),
+    ...customerPoolCounts(req.user!)
+  });
 });
 
 app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
@@ -805,14 +1892,72 @@ app.patch("/api/customers/:id", requireAuth, asyncRoute(async (req, res) => {
   });
   const body = schema.parse(req.body);
   const store = getStore();
-  const customer = store.customers.find((item) => item.id === req.params.id);
-  if (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId)) {
-    res.status(404).json({ message: "客户不存在" });
-    return;
-  }
+  const customer = findWritableCustomer(req.user!, req.params.id, res);
+  if (!customer) return;
   Object.assign(customer, body);
   await store.persist();
   res.json({ customer: customerWithPipeline(customer) });
+}));
+
+app.post("/api/customers/:id/release", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    reason: z.string().trim().min(2).max(500),
+    expectedVersion: z.number().int().nonnegative().optional()
+  }).parse(req.body);
+  const store = getStore();
+  if (!store.mutateCustomerOwnership) {
+    res.status(503).json({ message: "客户公池服务暂不可用" });
+    return;
+  }
+  try {
+    const result = await store.mutateCustomerOwnership({
+      action: "release",
+      customerId: req.params.id,
+      actorId: req.user!.id,
+      actorRole: req.user!.role,
+      actorTeamId: req.user!.teamId,
+      reason: body.reason,
+      expectedVersion: body.expectedVersion,
+      occurredAt: new Date().toISOString()
+    });
+    res.json({
+      customer: customerWithPipeline(result.customer),
+      event: result.event,
+      cancelledTodoCount: result.cancelledTodoIds.length,
+      ...customerPoolCounts(req.user!)
+    });
+  } catch (error) {
+    if (!sendCustomerOwnershipError(res, error)) throw error;
+  }
+}));
+
+app.post("/api/customers/:id/claim", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    expectedVersion: z.number().int().nonnegative().optional()
+  }).parse(req.body || {});
+  const store = getStore();
+  if (!store.mutateCustomerOwnership) {
+    res.status(503).json({ message: "客户公池服务暂不可用" });
+    return;
+  }
+  try {
+    const result = await store.mutateCustomerOwnership({
+      action: "claim",
+      customerId: req.params.id,
+      actorId: req.user!.id,
+      actorRole: req.user!.role,
+      actorTeamId: req.user!.teamId,
+      expectedVersion: body.expectedVersion,
+      occurredAt: new Date().toISOString()
+    });
+    res.json({
+      customer: customerWithPipeline(result.customer),
+      event: result.event,
+      ...customerPoolCounts(req.user!)
+    });
+  } catch (error) {
+    if (!sendCustomerOwnershipError(res, error)) throw error;
+  }
 }));
 
 app.post("/api/customers/bulk-delete", requireAuth, asyncRoute(async (req, res) => {
@@ -820,7 +1965,11 @@ app.post("/api/customers/bulk-delete", requireAuth, asyncRoute(async (req, res) 
   const body = schema.parse(req.body);
   const store = getStore();
   const ids = [...new Set(body.ids)];
-  const deleted = store.customers.filter((customer) => ids.includes(customer.id) && canSeeOwner(req.user!, customer.ownerId, customer.teamId));
+  const deleted = store.customers.filter((customer) =>
+    ids.includes(customer.id)
+    && !isPublicCustomer(customer)
+    && canSeeOwner(req.user!, customer.ownerId, customer.teamId)
+  );
   if (!deleted.length) {
     res.status(404).json({ message: "未找到可删除的客户" });
     return;
@@ -829,6 +1978,10 @@ app.post("/api/customers/bulk-delete", requireAuth, asyncRoute(async (req, res) 
   const deletedNames = deleted.map((customer) => customer.company);
   store.customers = store.customers.filter((customer) => !deletedIds.has(customer.id));
   store.customerActivities = store.customerActivities.filter((activity) => !deletedIds.has(activity.customerId));
+  store.customerIntelligenceSuggestions =
+    store.customerIntelligenceSuggestions.filter(
+      (suggestion) => !deletedIds.has(suggestion.customerId)
+    );
   const deletedDealIds = new Set(store.deals.filter((deal) => deletedIds.has(deal.customerId)).map((deal) => deal.id));
   store.deals = store.deals.filter((deal) => !deletedIds.has(deal.customerId));
   store.dealEvents = store.dealEvents.filter((event) => !deletedDealIds.has(event.dealId));
@@ -838,7 +1991,7 @@ app.post("/api/customers/bulk-delete", requireAuth, asyncRoute(async (req, res) 
     return !currentUserTodo || !relatedToDeletedCustomer;
   });
   await store.persist();
-  const customers = store.customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
+  const customers = ownedCustomersFor(req.user!);
   res.json({ deleted, customers });
 }));
 
@@ -954,7 +2107,10 @@ function findCustomerMatches(user: SessionUser, lead: Lead) {
   const leadEmail = lead.email.trim().toLowerCase();
   const leadDomain = emailDomain(leadEmail);
   return store.customers
-    .filter((customer) => canSeeOwner(user, customer.ownerId, customer.teamId))
+    .filter((customer) =>
+      !isPublicCustomer(customer)
+      && canSeeOwner(user, customer.ownerId, customer.teamId)
+    )
     .map((customer) => {
       let score = 0;
       const reasons: string[] = [];
@@ -988,9 +2144,19 @@ function customerWithPipeline(customer: Customer) {
   const pipelineStage = activeDeals.reduce((best, deal) =>
     (pipelineStageRank[deal.stage] || 0) > (pipelineStageRank[best] || 0) ? deal.stage : best, ""
   );
+  const pendingIntelligence = store.customerIntelligenceSuggestions
+    .filter((item) =>
+      item.teamId === customer.teamId
+      && item.ownerId === customer.ownerId
+      && item.customerId === customer.id
+      && item.status === "pending"
+    )
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   return {
     ...customer,
     ownerName: store.users.find((user) => user.id === customer.ownerId)?.name || "未分配",
+    previousOwnerName: store.users.find((user) => user.id === customer.previousOwnerId)?.name || "",
+    releasedByName: store.users.find((user) => user.id === customer.releasedBy)?.name || "",
     activities: activities.map((activity) => ({
       ...activity,
       operatorName: store.users.find((user) => user.id === activity.operatorId)?.name || "未知操作人"
@@ -998,7 +2164,9 @@ function customerWithPipeline(customer: Customer) {
     lastActivityAt: activities[0]?.createdAt || "",
     pipelineStage: pipelineStage || "暂无活跃商机",
     pipelineAmount: activeDeals.reduce((sum, deal) => sum + deal.amount, 0),
-    activeDealCount: activeDeals.length
+    activeDealCount: activeDeals.length,
+    pendingIntelligence,
+    pendingIntelligenceCount: pendingIntelligence.length
   };
 }
 
@@ -1010,11 +2178,8 @@ app.post("/api/customers/:id/activities", requireAuth, asyncRoute(async (req, re
   });
   const body = schema.parse(req.body);
   const store = getStore();
-  const customer = store.customers.find((item) => item.id === req.params.id);
-  if (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId)) {
-    res.status(404).json({ message: "客户不存在或无权访问" });
-    return;
-  }
+  const customer = findWritableCustomer(req.user!, req.params.id, res);
+  if (!customer) return;
   const activity = {
     id: `ca_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     customerId: customer.id,
@@ -1028,6 +2193,91 @@ app.post("/api/customers/:id/activities", requireAuth, asyncRoute(async (req, re
   if (body.nextReminder) customer.nextReminder = body.nextReminder;
   await store.persist();
   res.json({ activity, customer: customerWithPipeline(customer) });
+}));
+
+app.get("/api/customers/:id/intelligence", requireAuth, (req, res) => {
+  const store = getStore();
+  const customer = store.customers.find((item) =>
+    item.id === req.params.id
+    && canSeeOwner(req.user!, item.ownerId, item.teamId)
+  );
+  if (!customer) {
+    res.status(404).json({ message: "客户不存在或无权访问" });
+    return;
+  }
+  const suggestions = store.customerIntelligenceSuggestions
+    .filter((item) =>
+      item.teamId === customer.teamId
+      && item.ownerId === customer.ownerId
+      && item.customerId === customer.id
+    )
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  res.json({ suggestions });
+});
+
+app.post("/api/customer-intelligence/:id/accept", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    selectedFields: z.array(z.enum([
+      "company",
+      "country",
+      "contact",
+      "documentContact"
+    ])).max(4).default([])
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const suggestion = store.customerIntelligenceSuggestions.find((item) =>
+    item.id === req.params.id
+    && item.teamId === req.user!.teamId
+  );
+  if (suggestion && !findWritableCustomer(req.user!, suggestion.customerId, res)) return;
+  try {
+    const result = acceptCustomerIntelligence(store, {
+      suggestionId: req.params.id,
+      teamId: req.user!.teamId,
+      ownerId: req.user!.id,
+      selectedFields: body.selectedFields as CustomerIntelligenceFieldKey[]
+    });
+    await store.persist();
+    res.json({
+      suggestion: result.suggestion,
+      customer: customerWithPipeline(result.customer)
+    });
+  } catch (error) {
+    res.status(400).json({
+      message: error instanceof Error ? error.message : "采纳客户情报失败"
+    });
+  }
+}));
+
+app.post("/api/customer-intelligence/:id/reject", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    reason: z.string().trim().max(500).optional().default("")
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const suggestion = store.customerIntelligenceSuggestions.find((item) =>
+    item.id === req.params.id
+    && item.teamId === req.user!.teamId
+  );
+  if (suggestion && !findWritableCustomer(req.user!, suggestion.customerId, res)) return;
+  try {
+    const result = rejectCustomerIntelligence(store, {
+      suggestionId: req.params.id,
+      teamId: req.user!.teamId,
+      ownerId: req.user!.id,
+      reason: body.reason
+    });
+    await store.persist();
+    res.json({
+      suggestion: result.suggestion,
+      customer: customerWithPipeline(result.customer)
+    });
+  } catch (error) {
+    res.status(400).json({
+      message: error instanceof Error ? error.message : "忽略客户情报失败"
+    });
+  }
 }));
 
 app.get("/api/leads", requireAuth, (req, res) => {
@@ -1050,7 +2300,22 @@ app.get("/api/leads/:id", requireAuth, (req, res) => {
   const sourceEvents = store.leadSourceEvents
     .filter((event) => event.leadId === lead.id && canSeeOwner(req.user!, event.ownerId, event.teamId))
     .sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1));
-  res.json({ lead, activities, sourceEvents });
+  const candidate = store.websiteOpportunities.find((item) =>
+    item.leadId === lead.id
+    && item.teamId === lead.teamId
+    && item.ownerId === lead.ownerId
+  );
+  res.json({
+    lead,
+    activities,
+    sourceEvents,
+    procurement: candidate
+      ? {
+        prospectCandidateId: candidate.id,
+        ...procurementContextForCandidate(candidate)
+      }
+      : { signals: [], recommendations: [] }
+  });
 });
 
 app.post("/api/leads", requireAuth, asyncRoute(async (req, res) => {
@@ -1352,6 +2617,21 @@ app.post("/api/leads/:id/convert", requireAuth, asyncRoute(async (req, res) => {
     res.status(404).json({ message: "线索不存在、已删除或无权访问" });
     return;
   }
+  const acquisitionSource = store.leadSourceEvents.find((item) =>
+    item.leadId === lead.id
+    && item.teamId === lead.teamId
+    && item.ownerId === lead.ownerId
+    && item.channel === PROSPECT_LEAD_SOURCE_CHANNEL
+    && item.externalId
+  );
+  if (lead.sourceChannel === PROSPECT_LEAD_SOURCE_CHANNEL
+    || acquisitionSource) {
+    res.status(409).json({
+      message: "智能获客线索必须通过候选客户转客户接口确认入库",
+      errorCode: "PROSPECT_CUSTOMER_CONVERSION_REQUIRED"
+    });
+    return;
+  }
   if (lead.convertedCustomerId) {
     const customer = store.customers.find((item) => item.id === lead.convertedCustomerId);
     const deal = lead.convertedDealId ? store.deals.find((item) => item.id === lead.convertedDealId) : undefined;
@@ -1361,11 +2641,8 @@ app.post("/api/leads/:id/convert", requireAuth, asyncRoute(async (req, res) => {
   const now = new Date().toISOString();
   let customer: Customer | undefined;
   if (body.customerMode === "existing") {
-    customer = store.customers.find((item) => item.id === body.customerId);
-    if (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId)) {
-      res.status(404).json({ message: "要关联的客户不存在或无权访问" });
-      return;
-    }
+    customer = findWritableCustomer(req.user!, body.customerId, res) || undefined;
+    if (!customer) return;
   } else {
     customer = {
       id: `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -1447,7 +2724,9 @@ app.post("/api/leads/:id/convert", requireAuth, asyncRoute(async (req, res) => {
 function findWhatsAppCustomer(user: SessionUser, customerId: string) {
   const store = getStore();
   const customer = store.customers.find((item) => item.id === customerId);
-  if (!customer || !canSeeOwner(user, customer.ownerId, customer.teamId)) return null;
+  if (!customer
+    || isPublicCustomer(customer)
+    || !canSeeOwner(user, customer.ownerId, customer.teamId)) return null;
   return customer;
 }
 
@@ -1498,7 +2777,7 @@ async function translateToChinese(user: SessionUser, text: string): Promise<stri
 app.get("/api/whatsapp/threads", requireAuth, (req, res) => {
   const store = getStore();
   const scopedCustomerIds = new Set(
-    store.customers.filter((c) => canSeeOwner(req.user!, c.ownerId, c.teamId)).map((c) => c.id)
+    ownedCustomersFor(req.user!).map((c) => c.id)
   );
   const threads = store.customers
     .filter((c) => scopedCustomerIds.has(c.id))
@@ -2009,11 +3288,13 @@ function validatePlanTaskBusinessRefs(user: SessionUser, refs: Pick<PlanTask, "c
     if (!deal) return "关联商机不存在或无权访问";
     if (customerId && customerId !== deal.customerId) return "商机与客户不匹配";
     const customer = store.customers.find((item) => item.id === deal.customerId && canSeeOwner(user, item.ownerId, item.teamId));
-    return customer ? "" : "商机所属客户不存在或无权访问";
+    if (!customer) return "商机所属客户不存在或无权访问";
+    return isPublicCustomer(customer) ? "公池客户请先领取后再创建计划任务" : "";
   }
   if (customerId) {
     const customer = store.customers.find((item) => item.id === customerId && canSeeOwner(user, item.ownerId, item.teamId));
-    return customer ? "" : "关联客户不存在或无权访问";
+    if (!customer) return "关联客户不存在或无权访问";
+    return isPublicCustomer(customer) ? "公池客户请先领取后再创建计划任务" : "";
   }
   return "";
 }
@@ -2303,6 +3584,9 @@ const dealBodySchema = z.object({
   nextActionAt: z.string().trim().min(1),
   expectedCloseAt: z.string().trim().optional().default("")
 });
+const createDealBodySchema = dealBodySchema.extend({
+  recommendationId: z.string().trim().max(90).optional().default("")
+});
 
 function calculatedDealAmount(body: { amount?: number; quantity: number; unitPrice: number }) {
   if (typeof body.amount === "number") return Math.round(body.amount * 100) / 100;
@@ -2329,12 +3613,38 @@ function dealEventTypeForStage(stage: Deal["stage"]): DealEvent["type"] {
 }
 
 app.post("/api/deals", requireAuth, asyncRoute(async (req, res) => {
-  const body = dealBodySchema.parse(req.body);
+  const body = createDealBodySchema.parse(req.body);
   const store = getStore();
-  const customer = store.customers.find((item) => item.id === body.customerId);
-  if (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId)) {
-    res.status(404).json({ message: "客户不存在" });
+  const customer = findWritableCustomer(req.user!, body.customerId, res);
+  if (!customer) return;
+  const recommendation = body.recommendationId
+    ? store.dealRecommendations.find((item) =>
+      item.id === body.recommendationId
+      && item.teamId === req.user!.teamId
+      && item.ownerId === req.user!.id
+    )
+    : undefined;
+  if (body.recommendationId && !recommendation) {
+    res.status(404).json({ message: "商机建议不存在或无权访问" });
     return;
+  }
+  if (recommendation) {
+    if (recommendation.status !== "generated") {
+      res.status(409).json({ message: "当前商机建议已经处理" });
+      return;
+    }
+    const recommendationCustomerId = resolveRecommendationCustomerId(
+      store,
+      recommendation
+    );
+    if (!recommendationCustomerId) {
+      res.status(409).json({ message: "请先将候选确认到客户，再使用商机建议" });
+      return;
+    }
+    if (recommendationCustomerId !== customer.id) {
+      res.status(409).json({ message: "商机建议与所选客户不一致" });
+      return;
+    }
   }
   const now = new Date().toISOString();
   const deal: Deal = {
@@ -2367,8 +3677,17 @@ app.post("/api/deals", requireAuth, asyncRoute(async (req, res) => {
     nextActionAt: deal.nextActionAt,
     createdAt: now
   });
+  if (recommendation) {
+    linkRecommendationToDeal(
+      store,
+      recommendation,
+      deal,
+      req.user!.id,
+      "converted_by_user"
+    );
+  }
   await store.persist();
-  res.json({ deal });
+  res.json({ deal, recommendation });
 }));
 
 app.patch("/api/deals/:id", requireAuth, asyncRoute(async (req, res) => {
@@ -2383,11 +3702,9 @@ app.patch("/api/deals/:id", requireAuth, asyncRoute(async (req, res) => {
     res.status(400).json({ message: "已归档商机不能编辑" });
     return;
   }
-  const customer = store.customers.find((item) => item.id === body.customerId);
-  if (!customer || !canSeeOwner(req.user!, customer.ownerId, customer.teamId)) {
-    res.status(404).json({ message: "客户不存在" });
-    return;
-  }
+  if (!ensureDealCustomerWritable(req.user!, deal, res)) return;
+  const customer = findWritableCustomer(req.user!, body.customerId, res);
+  if (!customer) return;
   const before = {
     customerId: deal.customerId,
     amount: deal.amount,
@@ -2443,6 +3760,7 @@ app.patch("/api/deals/:id/stage", requireAuth, asyncRoute(async (req, res) => {
     res.status(404).json({ message: "商机不存在" });
     return;
   }
+  if (!ensureDealCustomerWritable(req.user!, deal, res)) return;
   if (deal.archivedAt) {
     res.status(400).json({ message: "已归档商机不能推进阶段" });
     return;
@@ -2500,6 +3818,14 @@ app.patch("/api/deals/:id/stage", requireAuth, asyncRoute(async (req, res) => {
     nextActionAt: body.nextActionAt,
     createdAt: now
   });
+  if (body.stage === "成交") {
+    recordAcquisitionOutcomeFeedback(store, {
+      deal,
+      outcome: "won",
+      reason: body.wonReason,
+      closedAt: now
+    });
+  }
   await store.persist();
   res.json({ deal });
 }));
@@ -2518,6 +3844,7 @@ app.post("/api/deals/:id/events", requireAuth, asyncRoute(async (req, res) => {
     res.status(404).json({ message: "商机不存在" });
     return;
   }
+  if (!ensureDealCustomerWritable(req.user!, deal, res)) return;
   if (deal.archivedAt) {
     res.status(400).json({ message: "已归档商机不能记录新进展" });
     return;
@@ -2607,6 +3934,13 @@ app.post("/api/deals/:id/lost", requireAuth, asyncRoute(async (req, res) => {
     nextAction: deal.nextAction,
     nextActionAt: deal.nextActionAt,
     createdAt: now
+  });
+  recordAcquisitionOutcomeFeedback(store, {
+    deal,
+    outcome: "lost",
+    reasonCategory: body.category,
+    reason: body.reason,
+    closedAt: now
   });
   await store.persist();
   res.json({ deal });
@@ -3526,6 +4860,14 @@ app.post("/api/todos/:id/restore", requireAuth, asyncRoute(async (req, res) => {
     res.status(404).json({ message: "待办不存在" });
     return;
   }
+  if (todo.cancelledAt) {
+    res.status(409).json({
+      message: todo.cancellationReason
+        ? `该待办已取消：${todo.cancellationReason}`
+        : "该待办已取消，不能恢复"
+    });
+    return;
+  }
   todo.historyAt = "";
   todo.dueAt = currentMinuteText();
   todo.sortOrder = nextTodoSortOrder(store.todos, todo.ownerId);
@@ -3556,6 +4898,15 @@ app.patch("/api/todos/:id", requireAuth, asyncRoute(async (req, res) => {
   const todo = store.todos.find((item) => item.id === req.params.id);
   if (!todo || !canSeePersonalData(req.user!, todo.ownerId)) {
     res.status(404).json({ message: "待办不存在" });
+    return;
+  }
+  if (todo.cancelledAt
+    && (body.done === false || body.historyAt === "")) {
+    res.status(409).json({
+      message: todo.cancellationReason
+        ? `该待办已取消：${todo.cancellationReason}`
+        : "该待办已取消，不能重新启用"
+    });
     return;
   }
   if (typeof body.done === "boolean") {
@@ -4956,6 +6307,106 @@ app.post("/api/trade-documents/:id/export", requireAuth, asyncRoute(async (req, 
   res.json({ document, job, fileName: `${document.number}-${document.type}.pdf` });
 }));
 
+// 报关资料生成API
+app.post("/api/deals/:dealId/generate-customs", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const deal = store.deals.find((item) => item.id === req.params.dealId);
+  if (!deal || !canSeeOwner(req.user!, deal.ownerId, deal.teamId)) {
+    res.status(404).json({ message: "商机不存在" });
+    return;
+  }
+
+  const customer = store.customers.find((item) => item.id === deal.customerId);
+  if (!customer) {
+    res.status(404).json({ message: "请先关联客户" });
+    return;
+  }
+
+  // 查找关联的PI/CI单据
+  const tradeDocument = store.tradeDocuments
+    .filter((doc) => doc.dealId === deal.id && ["PI", "CI"].includes(doc.type))
+    .sort((left, right) => {
+      const leftApproved = ["approved", "exported"].includes(left.status) ? 1 : 0;
+      const rightApproved = ["approved", "exported"].includes(right.status) ? 1 : 0;
+      return rightApproved - leftApproved || right.updatedAt.localeCompare(left.updatedAt);
+    })[0];
+
+  const customsDoc = generateCustomsDocumentFromDeal(deal, customer, tradeDocument);
+
+  res.json({
+    customsDocument: customsDoc,
+    customer,
+    deal,
+    source: tradeDocument
+      ? { type: "trade_document", label: `${tradeDocument.type} · ${tradeDocument.number}` }
+      : { type: "deal", label: "商机资料（未找到关联 PI/CI）" }
+  });
+}));
+
+app.post("/api/customs-documents/export", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const { customsDocument } = req.body;
+
+  if (!customsDocument || !customsDocument.dealId) {
+    res.status(400).json({ message: "报关资料数据不完整" });
+    return;
+  }
+
+  const deal = store.deals.find((item) => item.id === customsDocument.dealId);
+  if (!deal || !canSeeOwner(req.user!, deal.ownerId, deal.teamId)) {
+    res.status(404).json({ message: "商机不存在" });
+    return;
+  }
+
+  const customer = store.customers.find((item) =>
+    item.id === customsDocument.customerId
+    && item.id === deal.customerId
+    && canSeeOwner(req.user!, item.ownerId, item.teamId)
+  );
+  if (!customer) {
+    res.status(404).json({ message: "客户不存在" });
+    return;
+  }
+
+  const exportIssues = customsDocumentExportIssues(customsDocument);
+  if (exportIssues.length) {
+    res.status(422).json({
+      message: `请先补齐：${exportIssues.slice(0, 4).join("、")}${exportIssues.length > 4 ? ` 等${exportIssues.length}项` : ""}`,
+      missingFields: exportIssues
+    });
+    return;
+  }
+
+  try {
+    const excelBuffer = exportCustomsDocumentToExcel(customsDocument, customer, deal);
+
+    // 创建导出任务记录
+    const job = {
+      id: `io_customs_export_${Date.now()}`,
+      name: `报关资料导出：${customer.company}`,
+      type: "export" as const,
+      rows: customsDocument.items.length,
+      status: "done" as const,
+      operatorId: req.user!.id,
+      createdAt: currentMinuteText()
+    };
+    store.importExportJobs.unshift(job);
+    await store.persist();
+
+    // 设置响应头
+    const downloadName = `${customer.company}-报关资料-${customsDocument.issueDate}.xlsx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="customs-${customsDocument.issueDate}.xlsx"; filename*=UTF-8''${encodeURIComponent(downloadName)}`
+    );
+    res.send(excelBuffer);
+  } catch (error) {
+    console.error("报关资料导出失败:", error);
+    res.status(500).json({ message: "导出失败" });
+  }
+}));
+
 app.get("/api/wecom/messages", requireAuth, (req, res) => {
   const { wecomMessages } = getStore();
   const scoped = wecomMessages.filter((message) => canSeeOwner(req.user!, message.ownerId, message.teamId));
@@ -5052,11 +6503,129 @@ app.post("/api/tools/ocr/jobs/:id/sync-lead", requireAuth, asyncRoute(async (req
   res.json(result);
 }));
 
-app.get("/api/tools/website-opportunities", requireAuth, (req, res) => {
-  const { websiteOpportunities } = getStore();
-  const scoped = websiteOpportunities.filter((item) => canSeeOwner(req.user!, item.ownerId, item.teamId));
+app.get("/api/organization-identity-conflicts", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  try {
+    const query = organizationIdentityConflictListQuerySchema.parse(req.query);
+    await store.reloadOrganizationIdentityConflictReviewTeam?.(
+      req.user!.teamId
+    );
+    const conflicts = listOrganizationIdentityConflicts(
+      store,
+      req.user!,
+      query.status
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ conflicts });
+  } catch (error) {
+    if (sendOrganizationIdentityConflictReviewError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/organization-identity-conflicts/:id/review", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  try {
+    const body = organizationIdentityConflictReviewBodySchema.parse(req.body);
+    const result = await reviewOrganizationIdentityConflict(store, {
+      user: req.user!,
+      conflictId: req.params.id,
+      ifMatch: req.header("If-Match") || "",
+      body
+    });
+    res.setHeader("ETag", result.etag);
+    res.setHeader("Cache-Control", "no-store");
+    res.json(result);
+  } catch (error) {
+    if (sendOrganizationIdentityConflictReviewError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.get("/api/organizations/:id/identity-profile", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  try {
+    await store.reloadOrganizationIdentityTeam?.(req.user!.teamId);
+    await store.reloadOrganizationIdentityConflictReviewTeam?.(
+      req.user!.teamId
+    );
+    await store.reloadOrganizationRelationsTeam?.(req.user!.teamId);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      profile: organizationIdentityProfile(
+        store,
+        req.user!,
+        req.params.id
+      )
+    });
+  } catch (error) {
+    if (sendOrganizationRelationError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/organizations/:id/aliases", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  try {
+    const body = organizationAliasBodySchema.parse(req.body);
+    const result = await recordOrganizationAlias(store, {
+      user: req.user!,
+      organizationId: req.params.id,
+      body
+    });
+    res.setHeader(
+      "Idempotency-Replayed",
+      result.replayed ? "true" : "false"
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.status(result.replayed ? 200 : 201).json(result);
+  } catch (error) {
+    if (sendOrganizationRelationError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/organization-relations", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  try {
+    const body = organizationRelationBodySchema.parse(req.body);
+    const result = await recordOrganizationRelation(store, {
+      user: req.user!,
+      body
+    });
+    res.setHeader(
+      "Idempotency-Replayed",
+      result.replayed ? "true" : "false"
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.status(result.replayed ? 200 : 201).json(result);
+  } catch (error) {
+    if (sendOrganizationRelationError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.get("/api/tools/website-opportunities", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  await store.reloadProspectCandidates?.();
+  const scoped = store.websiteOpportunities
+    .filter((item) =>
+      canSeeOwner(req.user!, item.ownerId, item.teamId)
+    )
+    .map((item) => ({
+      ...item,
+      verificationReport:
+        ensureProspectVerificationReport({ ...item }).verificationReport,
+      organizationId: item.organizationId
+        ? canonicalOrganizationId(
+            store,
+            item.teamId,
+            item.organizationId
+          )
+        : item.organizationId
+    }));
   res.json({ opportunities: scoped });
-});
+}));
 
 app.get("/api/prospect-list/assignees", requireAuth, (req, res) => {
   if (!canManageProspectAssignments(req.user)) {
@@ -5088,10 +6657,11 @@ app.patch("/api/prospect-list/:id/details", requireAuth, asyncRoute(async (req, 
     return;
   }
   Object.assign(opportunity, body, {
-    website: normalizeWebsite(body.website),
+    website: normalizeWebsiteReference(body.website),
     statusChangedAt: new Date().toISOString()
   });
-  await store.persist();
+  withProspectVerificationReport(opportunity);
+  await persistCandidateChanges(store, [opportunity], false);
   res.json({ opportunity });
 }));
 
@@ -5100,7 +6670,9 @@ app.patch("/api/prospect-list/batch", requireAuth, asyncRoute(async (req, res) =
     ids: z.array(z.string().min(1)).min(1).max(100),
     action: z.enum(["mark-contactable", "exclude", "restore", "assign"]),
     ownerId: z.string().min(1).optional(),
-    reason: z.string().max(255).optional().default("")
+    reason: z.string().max(255).optional().default(""),
+    requestId: z.string().min(1).max(120).optional(),
+    effectiveAt: z.string().datetime().optional()
   });
   const body = schema.parse(req.body);
   const store = getStore();
@@ -5131,29 +6703,63 @@ app.patch("/api/prospect-list/batch", requireAuth, asyncRoute(async (req, res) =
     res.status(400).json({ message: "选中项存在无有效邮箱、电话或即时通讯方式的数据，请先补齐联系方式" });
     return;
   }
+  if (body.action === "mark-contactable"
+    && opportunities.some((item) =>
+      item.status === "excluded" || item.status === "synced"
+    )) {
+    res.status(400).json({ message: "已排除候选请先恢复，已入线索候选请在线索中心继续跟进" });
+    return;
+  }
   if (body.action === "restore" && opportunities.some((item) => item.status !== "excluded")) {
     res.status(400).json({ message: "只有已排除的数据可以恢复为待核验" });
     return;
   }
-  const changedAt = new Date().toISOString();
-  for (const item of opportunities) {
-    if (body.action === "mark-contactable") {
-      item.status = "contactable";
-      item.verifiedAt = item.verifiedAt || changedAt;
-      item.excludedReason = "";
-    } else if (body.action === "exclude") {
-      item.status = "excluded";
-      item.excludedReason = body.reason.trim() || "人工核验后排除";
-    } else if (body.action === "restore") {
-      item.status = "preview";
-      item.excludedReason = "";
-    } else if (assignee) {
-      item.ownerId = assignee.id;
-      item.teamId = assignee.teamId;
-    }
-    item.statusChangedAt = changedAt;
+  const serverNow = Date.now();
+  if (body.effectiveAt
+    && Math.abs(new Date(body.effectiveAt).getTime() - serverNow)
+      > 5 * 60 * 1000) {
+    res.status(400).json({ message: "候选处理时间与服务器时间偏差过大，请刷新后重试" });
+    return;
   }
-  await store.persist();
+  const changedAt = body.effectiveAt || new Date(serverNow).toISOString();
+  const requestId = body.requestId || requestCorrelationId(req);
+  try {
+    for (const item of opportunities) {
+      let coverageResult = null;
+      if (body.action !== "assign") {
+        coverageResult = await syncProspectCandidateCoverage({
+          store,
+          candidate: item,
+          actorId: req.user!.id,
+          action: body.action,
+          requestId: `prospect-batch:${requestId}:${item.id}:${body.action}`,
+          effectiveAt: changedAt
+        });
+      }
+      if (body.action === "mark-contactable") {
+        if (!coverageResult && item.status !== "contacted") {
+          item.status = "contactable";
+        }
+        item.verifiedAt = item.verifiedAt || changedAt;
+        item.excludedReason = "";
+      } else if (body.action === "exclude") {
+        if (!coverageResult) item.status = "excluded";
+        item.excludedReason = body.reason.trim() || "人工核验后排除";
+      } else if (body.action === "restore") {
+        if (!coverageResult) item.status = "preview";
+        item.excludedReason = "";
+      } else if (assignee) {
+        item.ownerId = assignee.id;
+        item.teamId = assignee.teamId;
+      }
+      item.statusChangedAt = changedAt;
+      withProspectVerificationReport(item, changedAt);
+    }
+  } catch (error) {
+    if (sendProspectLeadConversionError(res, error)) return;
+    throw error;
+  }
+  await persistCandidateChanges(store, opportunities, false);
   res.json({ opportunities });
 }));
 
@@ -5181,8 +6787,12 @@ app.post("/api/tools/ai-config", requireAuth, asyncRoute(async (req, res) => {
     useExam: z.boolean().default(false)
   });
   const body = schema.parse(req.body);
-  if (process.env.ALLOW_PRIVATE_AI_ENDPOINTS !== "true") {
-    await assertPublicHttpUrl(body.baseUrl);
+  let baseUrl = "";
+  try {
+    baseUrl = assertAiBaseUrlAllowed(body.baseUrl);
+  } catch {
+    res.status(400).json({ message: "AI Base URL 必须是公网 HTTPS 标准端口地址，且不能包含账号、查询参数或片段" });
+    return;
   }
   const store = getStore();
   const existing = body.id ? store.aiModelConfigs.find((item) => item.id === body.id && item.ownerId === req.user!.id) : undefined;
@@ -5196,7 +6806,7 @@ app.post("/api/tools/ai-config", requireAuth, asyncRoute(async (req, res) => {
     provider: body.provider,
     protocol: body.protocol,
     name: body.name,
-    baseUrl: body.baseUrl.replace(/\/+$/, ""),
+    baseUrl,
     model: body.model,
     apiKey,
     enabled: body.enabled,
@@ -5267,63 +6877,629 @@ const leadFinderSearchSchema = z.object({
 app.post("/api/lead-finder/free-search", requireAuth, asyncRoute(async (req, res) => {
   const body = leadFinderSearchSchema.parse(req.body);
   const store = getStore();
+  const user = req.user!;
   const limit = Math.min(body.limit, 12);
-  const [gleif, wikidata] = await Promise.all([
-    searchGleifLeads(body, req.user!, Math.ceil(limit / 2)),
-    searchWikidataLeads(body, req.user!, Math.ceil(limit / 2))
-  ]);
-  const merged: WebsiteOpportunity[] = [];
-  for (const item of [...gleif, ...wikidata]) {
-    if (merged.some((row) => row.company.toLowerCase() === item.company.toLowerCase() || row.website === item.website)) continue;
-    merged.push(item);
+  const runId = `prun_free_${randomUUID()}`;
+  const query: LeadQuery = {
+    ...body,
+    excludeKeywords: "",
+    limit: Math.ceil(limit / 2)
+  };
+  const providerIds = [
+    "gleif",
+    "wikidata",
+    "eu_ted",
+    "world_bank_procurement",
+    "uk_contracts_finder"
+  ];
+  const sourceStats: Array<{
+    id: string;
+    name: string;
+    count: number;
+    status: string;
+    error?: string;
+    errorCode?: string;
+    retryable?: boolean;
+    retryAfterAt?: string | null;
+  }> = [];
+  const pages = await Promise.all(providerIds.map(async (providerId) => {
+    const provider = getProvider(providerId);
+    const catalog = providerCatalogByCode(providerId);
+    if (!provider || !catalog) {
+      recordProviderPreflightFailure(user, runId, providerId, "PROVIDER_CATALOG_MISSING", "free_search");
+      sourceStats.push({
+        id: providerId,
+        name: provider?.name || providerId,
+        count: 0,
+        status: "failed",
+        error: "数据源目录缺失",
+        errorCode: "PROVIDER_CATALOG_MISSING",
+        retryable: false,
+        retryAfterAt: null
+      });
+      return { providerId, records: [] as ProviderRecord[] };
+    }
+    try {
+      const page = await executeProviderSearch({
+        provider,
+        catalog,
+        context: createProviderExecutionContext({
+          teamId: user.teamId,
+          ownerId: user.id,
+          runId,
+          providerId,
+          operation: "search",
+          purpose: "legacy_free_search"
+        }),
+        credential: { apiKey: "", baseUrl: "" },
+        query,
+        onLogs: (logs) => store.providerRequestLogs.unshift(...logs)
+      });
+      sourceStats.push({
+        id: providerId,
+        name: catalog.name || provider.name,
+        count: page.records.length,
+        status: page.status
+      });
+      return { providerId, records: page.records };
+    } catch (error) {
+      const failure = providerErrorFromUnknown(error, "search");
+      sourceStats.push({
+        id: providerId,
+        name: catalog.name || provider.name,
+        count: 0,
+        status: "failed",
+        error: failure.publicMessage,
+        errorCode: failure.code,
+        retryable: failure.retryable,
+        retryAfterAt: failure.retryAfterAt
+      });
+      return { providerId, records: [] as ProviderRecord[] };
+    }
+  }));
+  const mergedRecords: Array<ProviderRecord & { source: string; sourceEvidence: ProviderEvidenceSnapshot[] }> = [];
+  const mergedByKey = new Map<string, (typeof mergedRecords)[number]>();
+  for (const page of pages) {
+    for (const record of page.records) {
+      const domain = websiteDomainKey(record.officialWebsite || record.website || "");
+      const strongKey = record.providerRecordId
+        ? `${page.providerId}:id:${record.providerRecordId}`
+        : record.payloadHash
+          ? `${page.providerId}:hash:${record.payloadHash}`
+          : "";
+      const domainKey = domain ? `domain:${domain}` : "";
+      const existing = [strongKey, domainKey]
+        .filter(Boolean)
+        .map((key) => mergedByKey.get(key))
+        .find(Boolean);
+      const evidence = providerEvidenceSnapshot(page.providerId, record);
+      if (existing) {
+        existing.sourceEvidence = mergeProviderEvidence(existing.sourceEvidence, [evidence]);
+        if (!existing.officialWebsite && record.officialWebsite) {
+          existing.officialWebsite = record.officialWebsite;
+          existing.website = record.officialWebsite;
+        }
+        if (!existing.contactInfo && record.contactInfo) existing.contactInfo = record.contactInfo;
+        if ((!existing.contact || existing.contact === "待维护") && record.contact) existing.contact = record.contact;
+        existing.confidence = Math.max(existing.confidence || 0, record.confidence || 0);
+        if (strongKey) mergedByKey.set(strongKey, existing);
+        if (domainKey) mergedByKey.set(domainKey, existing);
+        continue;
+      }
+      const mergedRecord = {
+        ...record,
+        source: page.providerId,
+        sourceEvidence: [evidence]
+      };
+      mergedRecords.push(mergedRecord);
+      if (strongKey) mergedByKey.set(strongKey, mergedRecord);
+      if (domainKey) mergedByKey.set(domainKey, mergedRecord);
+    }
   }
-  for (const item of merged) {
-    const existing = store.websiteOpportunities.find((row) => row.ownerId === req.user!.id && (row.website === item.website || row.company.toLowerCase() === item.company.toLowerCase()));
-    if (existing) Object.assign(existing, item, { id: existing.id, status: existing.status, customerId: existing.customerId, dealId: existing.dealId, leadId: existing.leadId });
-    else store.websiteOpportunities.unshift(item);
-  }
-  await store.persist();
-  res.json({ opportunities: merged, sources: { gleif: gleif.length, wikidata: wikidata.length } });
+  const merged: WebsiteOpportunity[] = mergedRecords.slice(0, limit).map((record) =>
+    withProspectVerificationReport({
+      id: `lf_${record.source}_${randomUUID()}`,
+      company: record.company,
+      business: record.business || "待维护",
+      country: record.country || "未知",
+      website: normalizeWebsite(record.officialWebsite || record.website || ""),
+      contact: record.contact || "待维护",
+      contactInfo: record.contactInfo || "",
+      description: record.description || record.evidenceSummary || "公开来源候选，待核实。",
+      ownerId: user.id,
+      teamId: user.teamId,
+      status: "preview",
+      createdAt: new Date().toISOString(),
+      parseMode: "rule",
+      source: record.source,
+      sourceLabel: getProvider(record.source)?.name || record.source,
+      sourceEvidence: record.sourceEvidence,
+      confidence: record.confidence
+    })
+  );
+  await store.reloadProspectCandidates?.();
+  const persistence = persistProviderOpportunities(merged, {
+    rawCount: pages.reduce((sum, page) => sum + page.records.length, 0),
+    deduplicatedCount: Math.max(0, pages.reduce((sum, page) => sum + page.records.length, 0) - mergedRecords.length)
+  });
+  await persistCandidateChanges(
+    store,
+    persistence.opportunities,
+    true
+  );
+  res.json({
+    opportunities: persistence.opportunities,
+    sources: Object.fromEntries(sourceStats.map((item) => [item.id, item.count])),
+    sourceStats,
+    incrementalStats: persistence.incrementalStats,
+    runId
+  });
 }));
 
 // ---------------------------------------------------------------------------
 // 自动获客 · 数据源中心（Provider 注册表 + 用户 Key 配置 + 统一搜索）
 // ---------------------------------------------------------------------------
 
-function getLeadSourceConfig(user: SessionUser, provider: string): LeadSourceConfig | undefined {
-  return getStore().leadSourceConfigs.find((item) => item.provider === provider && item.ownerId === user.id);
+function getProviderConnection(user: SessionUser, providerId: string): ProviderConnection | undefined {
+  return getStore().providerConnections.find((item) =>
+    item.providerId === providerId
+    && item.ownerId === user.id
+    && item.teamId === user.teamId
+    && item.scope === "personal"
+  );
 }
 
-function publicLeadSourceConfig(config: LeadSourceConfig) {
+function providerEvidenceSnapshot(providerId: string, record: ProviderRecord): ProviderEvidenceSnapshot {
   return {
-    id: config.id,
-    provider: config.provider,
-    scope: config.scope,
-    apiKey: config.apiKey ? `****${config.apiKey.slice(-4)}` : "",
-    hasApiKey: Boolean(config.apiKey),
-    baseUrl: config.baseUrl || "",
-    enabled: config.enabled,
-    lastTestAt: config.lastTestAt || "",
-    lastTestStatus: config.lastTestStatus || "untested",
-    lastTestMessage: config.lastTestMessage || "",
-    usage: config.usageJson || "",
-    updatedAt: config.updatedAt
+    providerId,
+    providerRecordId: record.providerRecordId,
+    officialWebsite: record.officialWebsite,
+    sourceUrl: record.sourceUrl,
+    recordType: record.recordType,
+    fetchedAt: record.fetchedAt,
+    payloadHash: record.payloadHash,
+    evidenceSummary: record.evidenceSummary,
+    matchedFields: [...record.matchedFields],
+    adapterVersion: record.adapterVersion,
+    catalogPolicyVersion: record.catalogPolicyVersion,
+    sourceLevel: record.sourceLevel,
+    retentionPolicyRef: record.retentionPolicyRef
+  };
+}
+
+function mergeProviderEvidence(
+  current: ProviderEvidenceSnapshot[] = [],
+  incoming: ProviderEvidenceSnapshot[] = []
+) {
+  const merged = new Map<string, ProviderEvidenceSnapshot>();
+  for (const evidence of [...current, ...incoming]) {
+    const key = `${evidence.providerId}:${evidence.providerRecordId || evidence.payloadHash}:${evidence.payloadHash}`;
+    merged.set(key, evidence);
+  }
+  return [...merged.values()];
+}
+
+function providerEvidenceRecordKeys(evidence: ProviderEvidenceSnapshot[] = []) {
+  return new Set(evidence
+    .filter((item) => item.providerId && item.providerRecordId)
+    .map((item) => `${item.providerId}:${item.providerRecordId}`));
+}
+
+const providerCountryAliases: Record<string, string> = {
+  at: "AT",
+  austria: "AT",
+  奥地利: "AT",
+  au: "AU",
+  australia: "AU",
+  澳大利亚: "AU",
+  be: "BE",
+  belgium: "BE",
+  比利时: "BE",
+  br: "BR",
+  brazil: "BR",
+  巴西: "BR",
+  ca: "CA",
+  canada: "CA",
+  加拿大: "CA",
+  ch: "CH",
+  switzerland: "CH",
+  瑞士: "CH",
+  cn: "CN",
+  china: "CN",
+  中国: "CN",
+  de: "DE",
+  germany: "DE",
+  deutschland: "DE",
+  德国: "DE",
+  es: "ES",
+  spain: "ES",
+  西班牙: "ES",
+  fr: "FR",
+  france: "FR",
+  法国: "FR",
+  gb: "GB",
+  uk: "GB",
+  unitedkingdom: "GB",
+  greatbritain: "GB",
+  英国: "GB",
+  id: "ID",
+  indonesia: "ID",
+  印度尼西亚: "ID",
+  in: "IN",
+  india: "IN",
+  印度: "IN",
+  it: "IT",
+  italy: "IT",
+  意大利: "IT",
+  jp: "JP",
+  japan: "JP",
+  日本: "JP",
+  kr: "KR",
+  southkorea: "KR",
+  korea: "KR",
+  韩国: "KR",
+  mx: "MX",
+  mexico: "MX",
+  墨西哥: "MX",
+  my: "MY",
+  malaysia: "MY",
+  马来西亚: "MY",
+  nl: "NL",
+  netherlands: "NL",
+  holland: "NL",
+  荷兰: "NL",
+  pl: "PL",
+  poland: "PL",
+  波兰: "PL",
+  ru: "RU",
+  russia: "RU",
+  俄罗斯: "RU",
+  sg: "SG",
+  singapore: "SG",
+  新加坡: "SG",
+  tr: "TR",
+  turkey: "TR",
+  türkiye: "TR",
+  土耳其: "TR",
+  tw: "TW",
+  taiwan: "TW",
+  中国台湾: "TW",
+  us: "US",
+  usa: "US",
+  unitedstates: "US",
+  unitedstatesofamerica: "US",
+  美国: "US",
+  vn: "VN",
+  vietnam: "VN",
+  越南: "VN"
+};
+
+function normalizeProviderCountry(country: string) {
+  const normalized = country
+    .normalize("NFKC")
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[.\s_()-]+/g, "");
+  if (!normalized || ["unknown", "未知", "待维护", "n/a", "na"].includes(normalized)) return "";
+  return providerCountryAliases[normalized] || normalized;
+}
+
+function isSameProviderOpportunity(existing: WebsiteOpportunity, incoming: WebsiteOpportunity) {
+  if (existing.ownerId !== incoming.ownerId || existing.teamId !== incoming.teamId) return false;
+  const incomingRecordKeys = providerEvidenceRecordKeys(incoming.sourceEvidence);
+  if (incomingRecordKeys.size > 0
+    && [...providerEvidenceRecordKeys(existing.sourceEvidence)].some((key) => incomingRecordKeys.has(key))) {
+    return true;
+  }
+  const existingDomain = websiteDomainKey(existing.website);
+  const incomingDomain = websiteDomainKey(incoming.website);
+  const existingCountry = normalizeProviderCountry(existing.country);
+  const incomingCountry = normalizeProviderCountry(incoming.country);
+  return Boolean(
+    existingDomain
+    && incomingDomain
+    && existingDomain === incomingDomain
+    && existingCountry
+    && incomingCountry
+    && existingCountry === incomingCountry
+  );
+}
+
+function recordProviderPreflightFailure(
+  user: SessionUser,
+  runId: string,
+  providerId: string,
+  errorCode: ProviderErrorCode,
+  endpointCode: string
+) {
+  const requestedAt = new Date().toISOString();
+  const normalizedProviderId = providerId.trim().slice(0, 64) || "unknown";
+  getStore().providerRequestLogs.unshift({
+    id: `prl_${randomUUID()}`,
+    teamId: user.teamId,
+    ownerId: user.id,
+    providerId: normalizedProviderId,
+    connectionId: "",
+    runId,
+    runShardId: `${runId}_${normalizedProviderId}`,
+    requestFingerprint: providerRequestFingerprint({ providerId: normalizedProviderId, endpointCode, errorCode }),
+    endpointCode,
+    httpStatus: 0,
+    attempt: 1,
+    quotaUnits: 0,
+    costAmount: 0,
+    currency: "",
+    durationMs: 0,
+    responseSize: 0,
+    errorCode: errorCode.toLocaleLowerCase(),
+    requestedAt
+  });
+}
+
+function hasManualProspectState(opportunity: WebsiteOpportunity) {
+  return Boolean(
+    opportunity.statusChangedAt
+    || opportunity.verifiedAt
+    || opportunity.status !== "preview"
+    || opportunity.customerId
+    || opportunity.dealId
+    || opportunity.leadId
+  );
+}
+
+interface LeadFinderIncrementalStats {
+  rawCount: number;
+  returnedCount: number;
+  deduplicatedCount: number;
+  newCount: number;
+  evidenceUpdatedCount: number;
+  multiSourceMergedCount: number;
+  unchangedCount: number;
+  excludedCount: number;
+}
+
+function providerEvidenceKeys(evidence: ProviderEvidenceSnapshot[] = []) {
+  return new Set(evidence.map((item) =>
+    `${item.providerId}:${item.providerRecordId || item.payloadHash}:${item.payloadHash}`
+  ));
+}
+
+function providerEvidenceSources(evidence: ProviderEvidenceSnapshot[] = []) {
+  return new Set(evidence.map((item) => item.providerId).filter(Boolean));
+}
+
+function providerOpportunityDetailsChanged(
+  existing: WebsiteOpportunity,
+  incoming: WebsiteOpportunity
+) {
+  return [
+    "company",
+    "business",
+    "country",
+    "website",
+    "contact",
+    "contactInfo",
+    "description"
+  ].some((key) =>
+    String(existing[key as keyof WebsiteOpportunity] || "").trim()
+      !== String(incoming[key as keyof WebsiteOpportunity] || "").trim()
+  );
+}
+
+function persistProviderOpportunities(
+  opportunities: WebsiteOpportunity[],
+  inputStats: Pick<LeadFinderIncrementalStats, "rawCount" | "deduplicatedCount">
+) {
+  const store = getStore();
+  const incrementalStats: LeadFinderIncrementalStats = {
+    ...inputStats,
+    returnedCount: opportunities.length,
+    newCount: 0,
+    evidenceUpdatedCount: 0,
+    multiSourceMergedCount: 0,
+    unchangedCount: 0,
+    excludedCount: 0
+  };
+  const persistedOpportunities = opportunities.map((item) => {
+    withProspectVerificationReport(item);
+    const existing = store.websiteOpportunities.find((row) => isSameProviderOpportunity(row, item));
+    if (!existing) {
+      store.websiteOpportunities.unshift(item);
+      incrementalStats.newCount += 1;
+      if (providerEvidenceSources(item.sourceEvidence).size > 1) {
+        incrementalStats.multiSourceMergedCount += 1;
+      }
+      return item;
+    }
+    if (existing.status === "excluded") {
+      incrementalStats.excludedCount += 1;
+    }
+    const existingEvidenceKeys = providerEvidenceKeys(existing.sourceEvidence);
+    const existingEvidenceSources = providerEvidenceSources(existing.sourceEvidence);
+    const sourceEvidence = mergeProviderEvidence(existing.sourceEvidence, item.sourceEvidence);
+    const mergedEvidenceKeys = providerEvidenceKeys(sourceEvidence);
+    const mergedEvidenceSources = providerEvidenceSources(sourceEvidence);
+    const evidenceUpdated = mergedEvidenceKeys.size > existingEvidenceKeys.size;
+    const detailsUpdated = providerOpportunityDetailsChanged(existing, item);
+    if (evidenceUpdated) incrementalStats.evidenceUpdatedCount += 1;
+    else if (existing.status !== "excluded") incrementalStats.unchangedCount += 1;
+    if (mergedEvidenceSources.size > existingEvidenceSources.size) {
+      incrementalStats.multiSourceMergedCount += 1;
+    }
+    const confidence = Math.max(existing.confidence || 0, item.confidence || 0);
+    const manualState = hasManualProspectState(existing);
+    const reportNeedsRefresh = evidenceUpdated
+      || (!manualState && detailsUpdated)
+      || !existing.verificationReport;
+    const existingVerificationReport = existing.verificationReport;
+    if (existing.customerId && (evidenceUpdated || detailsUpdated)) {
+      const customer = store.customers.find((row) =>
+        row.id === existing.customerId
+        && row.teamId === existing.teamId
+        && row.ownerId === existing.ownerId
+      );
+      if (customer) {
+        generateCustomerIntelligenceSuggestion(store, {
+          customer,
+          candidate: {
+            ...existing,
+            ...item,
+            id: existing.id,
+            teamId: existing.teamId,
+            ownerId: existing.ownerId,
+            customerId: existing.customerId,
+            leadId: existing.leadId,
+            dealId: existing.dealId,
+            tenantProspectId:
+              existing.tenantProspectId || item.tenantProspectId,
+            organizationId:
+              existing.organizationId || item.organizationId,
+            sourceEvidence
+          },
+          sourceEventId: sourceEvidence.at(-1)?.payloadHash,
+          observedAt: new Date().toISOString()
+        });
+      }
+    }
+    if (manualState) {
+      existing.sourceEvidence = sourceEvidence;
+      existing.confidence = confidence;
+      if (reportNeedsRefresh) withProspectVerificationReport(existing);
+      return existing;
+    }
+    Object.assign(existing, item, {
+      id: existing.id,
+      status: existing.status,
+      customerId: existing.customerId,
+      dealId: existing.dealId,
+      leadId: existing.leadId,
+      createdAt: existing.createdAt,
+      sourceEvidence,
+      confidence,
+      verificationReport: existingVerificationReport
+    });
+    if (reportNeedsRefresh) withProspectVerificationReport(existing);
+    return existing;
+  });
+  return { opportunities: persistedOpportunities, incrementalStats };
+}
+
+function readProviderConnectionConfiguration(connection?: ProviderConnection) {
+  if (!connection) {
+    return {
+      configuration: { apiKey: "", baseUrl: "" },
+      readable: true
+    };
+  }
+  try {
+    return {
+      configuration: decryptProviderConfiguration(connection, connection.configurationEncrypted),
+      readable: true
+    };
+  } catch {
+    return {
+      configuration: { apiKey: "", baseUrl: "" },
+      readable: false
+    };
+  }
+}
+
+function providerConnectionConfiguration(connection?: ProviderConnection) {
+  return readProviderConnectionConfiguration(connection).configuration;
+}
+
+function publicLeadSourceConfig(connection: ProviderConnection) {
+  const connectionRead = readProviderConnectionConfiguration(connection);
+  const configuration = connectionRead.configuration;
+  return {
+    id: connection.id,
+    provider: connection.providerId,
+    scope: connection.scope,
+    apiKey: configuration.apiKey ? `****${configuration.apiKey.slice(-4)}` : "",
+    hasApiKey: Boolean(configuration.apiKey),
+    baseUrl: configuration.baseUrl,
+    enabled: connection.status === "active" && connectionRead.readable,
+    lastTestAt: connection.lastHealthAt,
+    lastTestStatus: connectionRead.readable ? connection.lastHealthStatus : "failed",
+    lastTestMessage: connectionRead.readable ? connection.lastHealthMessage : "连接凭据不可读取，请重新保存",
+    usage: connection.usage,
+    updatedAt: connection.updatedAt
+  };
+}
+
+function publicProviderCatalogItem(item: ProviderCatalogItem) {
+  return {
+    id: item.id,
+    code: item.code,
+    name: item.name,
+    category: item.category,
+    sourceLevel: item.sourceLevel,
+    accessMode: item.accessMode,
+    baseUrl: item.baseUrl,
+    officialDocsUrl: item.officialDocsUrl,
+    capabilities: item.capabilities,
+    allowedFields: item.allowedFields,
+    licensePolicy: item.licensePolicy,
+    defaultRatePolicy: item.defaultRatePolicy,
+    retentionPolicy: item.retentionPolicy,
+    status: item.status,
+    version: item.version,
+    reviewedAt: item.reviewedAt,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt
+  };
+}
+
+function providerCatalogByCode(code: string) {
+  return getStore().providerCatalog.find((item) => item.code === code);
+}
+
+function catalogProviderMeta(provider: LeadProvider) {
+  const catalog = providerCatalogByCode(provider.id);
+  const licensePolicy = catalog?.licensePolicy || {};
+  return {
+    ...providerMeta(provider),
+    name: catalog?.name || provider.name,
+    category: catalog?.category || provider.category,
+    capabilities: catalog?.capabilities || provider.capabilities,
+    docsUrl: catalog?.officialDocsUrl || provider.docsUrl,
+    defaultBaseUrl: catalog?.baseUrl || provider.defaultBaseUrl || "",
+    accessMode: catalog?.accessMode || provider.accessMode,
+    tier: licensePolicy.tier === "free" || licensePolicy.tier === "byok_free" || licensePolicy.tier === "paid"
+      ? licensePolicy.tier
+      : provider.tier,
+    requiresKey: providerRequiresKey(provider, catalog),
+    keyHint: typeof licensePolicy.keyHint === "string" ? licensePolicy.keyHint : provider.keyHint,
+    costNote: typeof licensePolicy.costNote === "string" ? licensePolicy.costNote : provider.costNote
   };
 }
 
 function providerStatusFor(user: SessionUser, provider: LeadProvider) {
-  const config = getLeadSourceConfig(user, provider.id);
-  const hasKey = !provider.requiresKey || Boolean(config?.apiKey);
-  const enabled = provider.requiresKey ? Boolean(config?.enabled && config?.apiKey) : config ? config.enabled : true;
+  const connection = getProviderConnection(user, provider.id);
+  const connectionRead = readProviderConnectionConfiguration(connection);
+  const configuration = connectionRead.configuration;
+  const meta = catalogProviderMeta(provider);
+  const catalogEnabled = providerCatalogByCode(provider.id)?.status === "active";
+  const automated = meta.accessMode === "api";
+  const hasKey = !meta.requiresKey || Boolean(configuration.apiKey);
+  const connectionEnabled = !automated
+    ? true
+    : meta.requiresKey
+    ? Boolean(connectionRead.readable && connection?.status === "active" && configuration.apiKey)
+    : connection ? connectionRead.readable && connection.status === "active" : true;
   return {
-    ...providerMeta(provider),
-    hasApiKey: Boolean(config?.apiKey),
-    ready: hasKey,
-    enabled,
-    lastTestStatus: config?.lastTestStatus || (provider.requiresKey ? "untested" : "passed"),
-    lastTestMessage: config?.lastTestMessage || "",
-    lastTestAt: config?.lastTestAt || "",
-    usage: config?.usageJson || ""
+    ...meta,
+    hasApiKey: Boolean(configuration.apiKey),
+    ready: automated ? hasKey : true,
+    enabled: catalogEnabled && connectionEnabled,
+    lastTestStatus: connection && !connectionRead.readable
+      ? "failed"
+      : connection?.lastHealthStatus || (!automated || !meta.requiresKey ? "passed" : "untested"),
+    lastTestMessage: connection && !connectionRead.readable
+      ? "连接凭据不可读取，请重新保存"
+      : connection?.lastHealthMessage || (!automated ? "请使用官方入口核实后返回解析结果链接" : ""),
+    lastTestAt: connection?.lastHealthAt || "",
+    usage: connection?.usage || ""
   };
 }
 
@@ -5331,20 +7507,29 @@ function providerStatusFor(user: SessionUser, provider: LeadProvider) {
 function aiSearchStatus(user: SessionUser) {
   const config = getAiConfig(user, "leadFinder");
   const ready = Boolean(config?.enabled && config?.apiKey && config?.useLeadFinder);
+  const catalog = providerCatalogByCode("ai_search");
+  const enabled = ready && catalog?.status === "active";
+  const licensePolicy = catalog?.licensePolicy || {};
   return {
     id: "ai_search",
-    name: "AI 搜索",
+    name: catalog?.name || "AI 搜索",
     tier: "ai" as const,
-    category: "ai" as const,
+    category: (catalog?.category || "ai") as "ai",
+    accessMode: "api" as const,
+    recommended: false,
     requiresKey: false,
-    capabilities: ["ai", "company"],
-    docsUrl: "",
-    keyHint: "使用「AI 模型配置」中已启用并勾选自动获客的模型，无需在此另填 Key。",
-    defaultBaseUrl: "",
-    costNote: "调用你配置的 AI 模型直接生成候选公司，结果需人工核实。",
+    capabilities: catalog?.capabilities || ["ai", "company"],
+    docsUrl: catalog?.officialDocsUrl || "",
+    keyHint: typeof licensePolicy.keyHint === "string"
+      ? licensePolicy.keyHint
+      : "使用「AI 模型配置」中已启用并勾选自动获客的模型，无需在此另填 Key。",
+    defaultBaseUrl: catalog?.baseUrl || "",
+    costNote: typeof licensePolicy.costNote === "string"
+      ? licensePolicy.costNote
+      : "调用你配置的 AI 模型直接生成候选公司，结果需人工核实。",
     hasApiKey: ready,
     ready,
-    enabled: ready,
+    enabled,
     lastTestStatus: ready ? "passed" : "untested",
     lastTestMessage: ready ? `当前模型：${config?.model || "已配置"}` : "请先在「AI 模型配置」启用模型并勾选“自动获客”",
     lastTestAt: config?.lastTestAt || "",
@@ -5352,13 +7537,1020 @@ function aiSearchStatus(user: SessionUser) {
   };
 }
 
+function createAiSearchProvider(config: AiModelConfig) {
+  const base = new URL(config.baseUrl);
+  const basePath = base.pathname.endsWith("/") ? base.pathname : `${base.pathname}/`;
+  return defineProvider({
+    id: "ai_search",
+    name: "AI 搜索",
+    tier: "ai",
+    category: "ai",
+    requiresKey: false,
+    capabilities: ["ai", "company"],
+    docsUrl: "",
+    keyHint: "",
+    defaultBaseUrl: config.baseUrl,
+    costNote: "调用当前账号已配置的 AI 模型，候选结果必须人工核实。",
+    networkPolicy: {
+      allowedHosts: [base.hostname.toLocaleLowerCase()],
+      allowedPathPrefixes: [basePath],
+      allowedMethods: ["POST"],
+      timeoutMs: AI_MODEL_TIMEOUT_MS,
+      maxResponseBytes: 2 * 1024 * 1024
+    },
+    async search({ query }, credential, tools) {
+      const legacyQuery: LeadQuery = {
+        goal: query.goal,
+        productKeywords: query.productKeywords.join(", "),
+        countries: query.countries.join(", "),
+        industry: query.industries.join(", "),
+        customerType: query.customerTypes.join(", "),
+        excludeKeywords: query.excludeKeywords.join(", "),
+        limit: query.limit
+      };
+      const records = await aiGenerateLeads(
+        legacyQuery,
+        { ...config, apiKey: credential.apiKey },
+        (url, init) => tools.http.fetch(url, init)
+      );
+      return {
+        records,
+        rawCount: records.length,
+        invalidCount: 0,
+        nextCursor: null,
+        exhausted: true,
+        warnings: ["AI 生成候选仅属于辅助建议，进入跟进前必须核实企业身份与官网。"],
+        usage: {
+          requestCount: 1,
+          estimated: false,
+          display: ""
+        }
+      };
+    },
+    async health() {
+      return { ok: true, message: "AI 搜索复用当前账号已验证的模型配置" };
+    }
+  });
+}
+
 function allProviderStatuses(user: SessionUser) {
   return [aiSearchStatus(user), ...LEAD_PROVIDERS.map((provider) => providerStatusFor(user, provider))];
+}
+
+function getConfigurableProvider(id: string) {
+  return getProvider(id) || getTradeProvider(id);
 }
 
 app.get("/api/lead-finder/providers", requireAuth, (req, res) => {
   res.json({ providers: allProviderStatuses(req.user!) });
 });
+
+app.get("/api/lead-finder/provider-catalog", requireAuth, (_req, res) => {
+  const providers = getStore().providerCatalog
+    .filter((item) => item.status !== "disabled")
+    .map(publicProviderCatalogItem);
+  res.json({ providers });
+});
+
+app.get("/api/lead-finder/provider-request-logs", requireAuth, (req, res) => {
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+  const providerId = String(req.query.provider || "").trim();
+  const runId = String(req.query.runId || "").trim();
+  const visible = getStore().providerRequestLogs
+    .filter((item) => canSeeOwner(req.user!, item.ownerId, item.teamId))
+    .filter((item) => !providerId || item.providerId === providerId)
+    .filter((item) => !runId || item.runId === runId)
+    .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt));
+  res.json({ logs: visible.slice(0, limit), total: visible.length });
+});
+
+app.get("/api/prospect-agent-jobs", requireAuth, (req, res) => {
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+  const status = String(req.query.status || "").trim();
+  const jobType = String(req.query.jobType || "").trim();
+  const aggregateId = String(req.query.aggregateId || "").trim();
+  const visible = getStore().agentJobs
+    .filter((item) => !isProspectRunBridgeJob(item))
+    .filter((item) => canSeeOwner(req.user!, item.ownerId, item.teamId))
+    .filter((item) => !status || item.status === status)
+    .filter((item) => !jobType || item.jobType === jobType)
+    .filter((item) => !aggregateId || item.aggregateId === aggregateId)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  res.json({ jobs: visible.slice(0, limit).map(publicAgentJob), total: visible.length });
+});
+
+app.get("/api/prospect-agent-jobs/:id", requireAuth, (req, res) => {
+  const job = getStore().agentJobs.find((item) =>
+    item.id === req.params.id
+    && !isProspectRunBridgeJob(item)
+    && canSeeOwner(req.user!, item.ownerId, item.teamId)
+  );
+  if (!job) {
+    res.status(404).json({ message: "任务不存在或无权查看" });
+    return;
+  }
+  const childJobs = getStore().agentJobs
+    .filter((item) =>
+      item.parentJobId === job.id
+      && !isProspectRunBridgeJob(item)
+      && canSeeOwner(req.user!, item.ownerId, item.teamId)
+    )
+    .map(publicAgentJob);
+  res.json({ job: publicAgentJob(job), childJobs });
+});
+
+app.post("/api/prospect-agent-jobs/:id/retry", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const job = store.agentJobs.find((item) =>
+    item.id === req.params.id
+    && !isProspectRunBridgeJob(item)
+    && (item.jobType === MARKET_ANALYSIS_JOB_TYPE
+      ? item.ownerId === req.user!.id && item.teamId === req.user!.teamId
+      : canSeeOwner(req.user!, item.ownerId, item.teamId))
+  );
+  if (!job) {
+    res.status(404).json({ message: "任务不存在或无权重试" });
+    return;
+  }
+  if (job.jobType === MARKET_ANALYSIS_JOB_TYPE) {
+    try {
+      const result = await retryMarketAnalysisJob(store, req.user!, job);
+      res.location(`/api/prospect-agent-jobs/${job.id}`);
+      res.json(result);
+    } catch (error) {
+      if (error instanceof MarketAnalysisRunRequestError) {
+        res.status(error.status).json({
+          message: error.message,
+          errorCode: error.code,
+          ...marketAnalysisRunMetadata()
+        });
+        return;
+      }
+      if (error instanceof MarketAnalysisRunProviderError) {
+        res.location(`/api/prospect-agent-jobs/${error.job.id}`);
+        res.status(error.status).json({
+          message: error.failure.publicMessage,
+          errorCode: error.failure.code,
+          retryable: error.failure.retryable,
+          retryAfterAt: error.failure.retryAfterAt,
+          ...marketAnalysisRunMetadata(),
+          job: publicAgentJob(error.job)
+        });
+        return;
+      }
+      throw error;
+    }
+    return;
+  }
+  try {
+    retryAgentJob(job);
+  } catch (error) {
+    res.status(409).json({ message: error instanceof Error ? error.message : "当前任务不能重试" });
+    return;
+  }
+  await store.persist();
+  res.json({ job: publicAgentJob(job) });
+}));
+
+app.post("/api/prospect-agent-jobs/:id/cancel", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const job = store.agentJobs.find((item) =>
+    item.id === req.params.id
+    && !isProspectRunBridgeJob(item)
+    && canSeeOwner(req.user!, item.ownerId, item.teamId)
+  );
+  if (!job) {
+    res.status(404).json({ message: "任务不存在或无权取消" });
+    return;
+  }
+  if (job.jobType === MARKET_ANALYSIS_JOB_TYPE && job.status === "running") {
+    res.status(409).json({
+      message: "市场分析正在当前请求内同步执行，运行中不能中断",
+      errorCode: "INLINE_EXECUTION_NOT_CANCELLABLE",
+      ...marketAnalysisRunMetadata(),
+      job: publicAgentJob(job)
+    });
+    return;
+  }
+  try {
+    cancelAgentJob(job);
+  } catch (error) {
+    res.status(409).json({ message: error instanceof Error ? error.message : "当前任务不能取消" });
+    return;
+  }
+  await store.persist();
+  res.json({ job: publicAgentJob(job) });
+}));
+
+app.post("/api/prospects/:id/convert-to-lead", requireAuth, asyncRoute(async (req, res) => {
+  const body = convertProspectToLeadBodySchema.parse(req.body);
+  const idempotencyKey = String(
+    req.header("Idempotency-Key") || ""
+  ).trim();
+  if (!idempotencyKey) {
+    res.status(400).json({
+      message: "必须提供 Idempotency-Key 请求头",
+      errorCode: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    return;
+  }
+  const store = getStore();
+  if (!store.convertProspectToLead) {
+    res.status(503).json({
+      message: "候选转线索服务暂不可用",
+      errorCode: "PROSPECT_LEAD_CONVERSION_UNAVAILABLE"
+    });
+    return;
+  }
+  try {
+    const result = await store.convertProspectToLead({
+      ...body,
+      teamId: req.user!.teamId,
+      ownerId: req.user!.id,
+      prospectId: req.params.id,
+      idempotencyKey,
+      convertedAt: new Date().toISOString()
+    });
+    await store.reloadProspectCandidates?.();
+    const linkedCandidates = store.websiteOpportunities.filter((item) =>
+      item.teamId === req.user!.teamId
+      && item.ownerId === req.user!.id
+      && item.tenantProspectId === req.params.id
+    );
+    linkedCandidates.forEach((candidate) => {
+      migrateProspectFollowUpTodos(store, candidate, result.lead.id)
+      linkProcurementContextToLead(store, candidate, result.lead.id);
+    });
+    if (linkedCandidates.length) {
+      await persistCandidateChanges(store, linkedCandidates, true);
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader(
+      "Idempotency-Replayed",
+      result.replayed ? "true" : "false"
+    );
+    res.status(result.replayed ? 200 : 201).json({
+      replayed: result.replayed,
+      created: result.created,
+      lead: result.lead,
+      sourceEvent: result.sourceEvent,
+      activity: result.activity,
+      prospect: result.prospect
+    });
+  } catch (error) {
+    if (sendProspectLeadConversionError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospects/:id/convert-to-customer", requireAuth, asyncRoute(async (req, res) => {
+  const body = convertProspectToCustomerBodySchema.parse(req.body);
+  const idempotencyKey = String(
+    req.header("Idempotency-Key") || ""
+  ).trim();
+  if (!idempotencyKey) {
+    res.status(400).json({
+      message: "必须提供 Idempotency-Key 请求头",
+      errorCode: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    return;
+  }
+  const store = getStore();
+  if (!store.convertProspectToCustomer) {
+    res.status(503).json({
+      message: "候选转客户服务暂不可用",
+      errorCode: "PROSPECT_CUSTOMER_CONVERSION_UNAVAILABLE"
+    });
+    return;
+  }
+  try {
+    const result = await store.convertProspectToCustomer({
+      ...body,
+      teamId: req.user!.teamId,
+      ownerId: req.user!.id,
+      prospectId: req.params.id,
+      idempotencyKey,
+      convertedAt: new Date().toISOString()
+    });
+    await store.reloadProspectCandidates?.();
+    const linkedCandidates = store.websiteOpportunities.filter((item) =>
+      item.teamId === req.user!.teamId
+      && item.ownerId === req.user!.id
+      && item.tenantProspectId === req.params.id
+    );
+    const intelligenceSuggestions = linkedCandidates.flatMap((candidate) => {
+      candidate.customerId = result.customer.id;
+      if (result.created) return [];
+      const generated = generateCustomerIntelligenceSuggestion(store, {
+        customer: result.customer,
+        candidate,
+        leadId: result.lead.id,
+        sourceEventId: result.sourceEvent.id,
+        observedAt: result.sourceEvent.createdAt
+      });
+      return generated.suggestion ? [generated.suggestion] : [];
+    });
+    linkProcurementContextToCustomer(store, {
+      teamId: req.user!.teamId,
+      ownerId: req.user!.id,
+      leadId: result.lead.id,
+      tenantProspectId: req.params.id,
+      prospectCandidateIds: linkedCandidates.map((item) => item.id)
+    }, result.customer.id);
+    if (linkedCandidates.length) {
+      await persistCandidateChanges(store, linkedCandidates, true);
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader(
+      "Idempotency-Replayed",
+      result.replayed ? "true" : "false"
+    );
+    res.status(result.replayed ? 200 : 201).json({
+      replayed: result.replayed,
+      created: result.created,
+      customer: result.customer,
+      lead: result.lead,
+      sourceEvent: result.sourceEvent,
+      customerActivity: result.customerActivity,
+      leadActivity: result.leadActivity,
+      prospect: result.prospect,
+      intelligenceSuggestions
+    });
+  } catch (error) {
+    if (sendProspectCustomerConversionError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-performance", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const scope = {
+    teamId: req.user!.teamId,
+    ownerId: req.user!.id
+  };
+  const created = generateProspectStrategySuggestions(store, scope);
+  if (created.length) await store.persist();
+  res.json({
+    performance: prospectPerformance(store, scope),
+    generatedSuggestionCount: created.length
+  });
+}));
+
+app.get("/api/prospect-strategy-suggestions", requireAuth, (req, res) => {
+  const status = String(req.query.status || "all");
+  const allowedStatuses = new Set(["all", "pending", "accepted", "rejected"]);
+  if (!allowedStatuses.has(status)) {
+    res.status(400).json({ message: "策略建议状态参数无效" });
+    return;
+  }
+  const suggestions = getStore().prospectStrategySuggestions
+    .filter((item) =>
+      item.teamId === req.user!.teamId
+      && item.ownerId === req.user!.id
+      && (status === "all" || item.status === status)
+    )
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  res.json({ suggestions });
+});
+
+app.post("/api/prospect-strategy-suggestions/:id/accept", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    note: z.string().trim().max(500).optional().default("")
+  }).parse(req.body || {});
+  const store = getStore();
+  const suggestion = store.prospectStrategySuggestions.find((item) =>
+    item.id === req.params.id
+    && item.teamId === req.user!.teamId
+    && item.ownerId === req.user!.id
+  );
+  if (!suggestion) {
+    res.status(404).json({ message: "获客策略建议不存在" });
+    return;
+  }
+  if (suggestion.status !== "pending") {
+    res.status(400).json({ message: "该获客策略建议已经处理" });
+    return;
+  }
+  reviewProspectStrategySuggestion(store, {
+    teamId: req.user!.teamId,
+    ownerId: req.user!.id,
+    suggestionId: suggestion.id,
+    status: "accepted",
+    note: body.note
+  });
+  await store.persist();
+  res.json({ suggestion });
+}));
+
+app.post("/api/prospect-strategy-suggestions/:id/reject", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    note: z.string().trim().max(500).optional().default("")
+  }).parse(req.body || {});
+  const store = getStore();
+  const suggestion = store.prospectStrategySuggestions.find((item) =>
+    item.id === req.params.id
+    && item.teamId === req.user!.teamId
+    && item.ownerId === req.user!.id
+  );
+  if (!suggestion) {
+    res.status(404).json({ message: "获客策略建议不存在" });
+    return;
+  }
+  if (suggestion.status !== "pending") {
+    res.status(400).json({ message: "该获客策略建议已经处理" });
+    return;
+  }
+  reviewProspectStrategySuggestion(store, {
+    teamId: req.user!.teamId,
+    ownerId: req.user!.id,
+    suggestionId: suggestion.id,
+    status: "rejected",
+    note: body.note
+  });
+  await store.persist();
+  res.json({ suggestion });
+}));
+
+app.get("/api/prospect-campaigns", requireAuth, asyncRoute(async (req, res) => {
+  const includeArchived = z.enum(["true", "false"])
+    .default("false")
+    .parse(req.query.includeArchived) === "true";
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(listProspectCampaigns(store, req.user!, includeArchived));
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-campaigns", requireAuth, asyncRoute(async (req, res) => {
+  const body = createProspectCampaignSchema.parse(req.body);
+  try {
+    const result = await createProspectCampaign({
+      store: getStore(),
+      user: req.user!,
+      body,
+      requestId: requestCorrelationId(req)
+    });
+    setProspectCampaignEtag(res, result);
+    res.location(`/api/prospect-campaigns/${result.campaign.id}`);
+    res.status(201).json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-campaigns/:id", requireAuth, asyncRoute(async (req, res) => {
+  const campaignId = prospectCampaignIdSchema.parse(req.params.id);
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    const result = getProspectCampaign(store, req.user!, campaignId);
+    setProspectCampaignEtag(res, result);
+    res.json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.patch("/api/prospect-campaigns/:id", requireAuth, asyncRoute(async (req, res) => {
+  const campaignId = prospectCampaignIdSchema.parse(req.params.id);
+  const body = updateProspectCampaignSchema.parse(req.body);
+  try {
+    const result = await updateProspectCampaign({
+      store: getStore(),
+      user: req.user!,
+      campaignId,
+      ifMatch: req.header("If-Match"),
+      body,
+      requestId: requestCorrelationId(req)
+    });
+    setProspectCampaignEtag(res, result);
+    res.json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-campaigns/:id/versions", requireAuth, asyncRoute(async (req, res) => {
+  const campaignId = prospectCampaignIdSchema.parse(req.params.id);
+  const body = createProspectCampaignVersionSchema.parse(req.body);
+  try {
+    const result = await createProspectCampaignVersion({
+      store: getStore(),
+      user: req.user!,
+      campaignId,
+      ifMatch: req.header("If-Match"),
+      body,
+      requestId: requestCorrelationId(req)
+    });
+    setProspectCampaignEtag(res, result);
+    res.status(result.created ? 201 : 200).json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-campaigns/:id/strategies", requireAuth, asyncRoute(async (req, res) => {
+  const campaignId = prospectCampaignIdSchema.parse(req.params.id);
+  const includeDisabled = z.enum(["true", "false"])
+    .default("false")
+    .parse(req.query.includeDisabled) === "true";
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(listProspectStrategies(
+      store,
+      req.user!,
+      campaignId,
+      includeDisabled
+    ));
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-campaigns/:id/strategies", requireAuth, asyncRoute(async (req, res) => {
+  const campaignId = prospectCampaignIdSchema.parse(req.params.id);
+  const body = createProspectStrategySchema.parse(req.body);
+  try {
+    const result = await createProspectStrategy({
+      store: getStore(),
+      user: req.user!,
+      campaignId,
+      ifMatch: req.header("If-Match"),
+      body,
+      requestId: requestCorrelationId(req)
+    });
+    setProspectStrategyEtag(res, result);
+    res.setHeader(
+      "X-Campaign-ETag",
+      `"${result.campaign.id}:${result.campaign.revision}"`
+    );
+    res.location(`/api/prospect-strategies/${result.strategy.id}`);
+    res.status(201).json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-campaigns/:id/activate", requireAuth, asyncRoute(async (req, res) => {
+  const campaignId = prospectCampaignIdSchema.parse(req.params.id);
+  prospectCampaignActionSchema.parse(req.body);
+  try {
+    const result = await activateProspectCampaign({
+      store: getStore(),
+      user: req.user!,
+      campaignId,
+      ifMatch: req.header("If-Match"),
+      requestId: requestCorrelationId(req)
+    });
+    setProspectCampaignEtag(res, result);
+    res.json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+for (const action of [
+  ["pause", "paused"],
+  ["complete", "completed"],
+  ["archive", "archived"]
+] as const) {
+  app.post(`/api/prospect-campaigns/:id/${action[0]}`, requireAuth, asyncRoute(async (req, res) => {
+    const campaignId = prospectCampaignIdSchema.parse(req.params.id);
+    const body = prospectCampaignActionSchema.parse(req.body);
+    try {
+      const result = await transitionProspectCampaign({
+        store: getStore(),
+        user: req.user!,
+        campaignId,
+        ifMatch: req.header("If-Match"),
+        targetStatus: action[1],
+        reason: body.reason,
+        requestId: requestCorrelationId(req)
+      });
+      setProspectCampaignEtag(res, result);
+      res.json(result);
+    } catch (error) {
+      if (sendProspectCampaignError(res, error)) return;
+      throw error;
+    }
+  }));
+}
+
+app.get("/api/prospect-strategies/:id", requireAuth, asyncRoute(async (req, res) => {
+  const strategyId = prospectStrategyIdSchema.parse(req.params.id);
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    const result = getProspectStrategy(store, req.user!, strategyId);
+    setProspectStrategyEtag(res, result);
+    res.json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.patch("/api/prospect-strategies/:id", requireAuth, asyncRoute(async (req, res) => {
+  const strategyId = prospectStrategyIdSchema.parse(req.params.id);
+  const body = updateProspectStrategySchema.parse(req.body);
+  try {
+    const result = await updateProspectStrategy({
+      store: getStore(),
+      user: req.user!,
+      strategyId,
+      ifMatch: req.header("If-Match"),
+      body,
+      requestId: requestCorrelationId(req)
+    });
+    setProspectStrategyEtag(res, result);
+    res.json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-strategies/:id/preview", requireAuth, asyncRoute(async (req, res) => {
+  const strategyId = prospectStrategyIdSchema.parse(req.params.id);
+  const body = previewProspectStrategySchema.parse(req.body);
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(previewProspectStrategy({
+      store,
+      user: req.user!,
+      strategyId,
+      body
+    }));
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-strategies/:id/approve", requireAuth, asyncRoute(async (req, res) => {
+  const strategyId = prospectStrategyIdSchema.parse(req.params.id);
+  const body = prospectStrategyActionSchema.parse(req.body);
+  try {
+    const result = await approveProspectStrategy({
+      store: getStore(),
+      user: req.user!,
+      strategyId,
+      ifMatch: req.header("If-Match"),
+      reason: body.reason,
+      requestId: requestCorrelationId(req)
+    });
+    setProspectStrategyEtag(res, result);
+    res.json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-strategies/:id/disable", requireAuth, asyncRoute(async (req, res) => {
+  const strategyId = prospectStrategyIdSchema.parse(req.params.id);
+  const body = prospectStrategyActionSchema.parse(req.body);
+  try {
+    const result = await disableProspectStrategy({
+      store: getStore(),
+      user: req.user!,
+      strategyId,
+      ifMatch: req.header("If-Match"),
+      reason: body.reason,
+      requestId: requestCorrelationId(req)
+    });
+    setProspectStrategyEtag(res, result);
+    res.json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-strategies/:id/runs", requireAuth, asyncRoute(async (req, res) => {
+  const strategyId = prospectStrategyIdSchema.parse(req.params.id);
+  const body = createProspectRunSchema.parse(req.body);
+  const rawIdempotencyKey = req.header("Idempotency-Key");
+  if (!rawIdempotencyKey) {
+    res.status(400).json({
+      message: "必须提供 Idempotency-Key 请求头",
+      errorCode: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    return;
+  }
+  const idempotencyKey = prospectRunIdempotencyKeySchema.parse(
+    rawIdempotencyKey
+  );
+  try {
+    const result = await createProspectRun({
+      store: getStore(),
+      user: req.user!,
+      strategyId,
+      ifMatch: req.header("If-Match"),
+      idempotencyKey,
+      body,
+      requestId: requestCorrelationId(req)
+    });
+    await synchronizeProspectQueue();
+    setProspectRunEtag(res, result);
+    res.setHeader(
+      "Idempotency-Replayed",
+      result.idempotencyReplayed ? "true" : "false"
+    );
+    res.location(`/api/prospect-runs/${result.run.id}`);
+    res.status(result.idempotencyReplayed ? 200 : 201).json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-strategies/:id/schedules", requireAuth, asyncRoute(async (req, res) => {
+  const strategyId = prospectStrategyIdSchema.parse(req.params.id);
+  const body = createProspectScheduleSchema.parse(req.body);
+  try {
+    const result = await createProspectSchedule({
+      store: getStore(),
+      user: req.user!,
+      strategyId,
+      ifMatch: req.header("If-Match"),
+      body
+    });
+    setProspectScheduleEtag(res, result);
+    res.location(`/api/prospect-schedules/${result.schedule.id}`);
+    res.status(201).json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-schedules", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(listProspectSchedules(store, req.user!));
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+for (const action of ["pause", "resume"] as const) {
+  app.post(`/api/prospect-schedules/:id/${action}`, requireAuth, asyncRoute(async (req, res) => {
+    const scheduleId = prospectScheduleIdSchema.parse(req.params.id);
+    prospectScheduleActionSchema.parse(req.body);
+    try {
+      const result = await transitionProspectSchedule({
+        store: getStore(),
+        user: req.user!,
+        scheduleId,
+        ifMatch: req.header("If-Match"),
+        action
+      });
+      setProspectScheduleEtag(res, result);
+      res.json(result);
+    } catch (error) {
+      if (sendProspectCampaignError(res, error)) return;
+      throw error;
+    }
+  }));
+}
+
+app.delete("/api/prospect-schedules/:id", requireAuth, asyncRoute(async (req, res) => {
+  const scheduleId = prospectScheduleIdSchema.parse(req.params.id);
+  try {
+    const result = await deleteProspectSchedule({
+      store: getStore(),
+      user: req.user!,
+      scheduleId,
+      ifMatch: req.header("If-Match")
+    });
+    res.setHeader("Cache-Control", "no-store");
+    res.json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-runs", requireAuth, asyncRoute(async (req, res) => {
+  const query = parseProspectRunListQuery(req.query);
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(listProspectRuns({ store, user: req.user!, query }));
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-runs/:id", requireAuth, asyncRoute(async (req, res) => {
+  const runId = prospectRunIdSchema.parse(req.params.id);
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    const result = getProspectRun(store, req.user!, runId);
+    setProspectRunEtag(res, result);
+    res.json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+for (const action of ["pause", "resume", "cancel"] as const) {
+  app.post(`/api/prospect-runs/:id/${action}`, requireAuth, asyncRoute(async (req, res) => {
+    const runId = prospectRunIdSchema.parse(req.params.id);
+    const body = prospectRunActionSchema.parse(req.body);
+    try {
+      const result = await transitionProspectRun({
+        store: getStore(),
+        user: req.user!,
+        runId,
+        ifMatch: req.header("If-Match"),
+        action,
+        body,
+        requestId: requestCorrelationId(req)
+      });
+      await synchronizeProspectQueue();
+      setProspectRunEtag(res, result);
+      res.json(result);
+    } catch (error) {
+      if (sendProspectCampaignError(res, error)) return;
+      throw error;
+    }
+  }));
+}
+
+app.post("/api/prospect-campaigns/:id/market-analysis-runs", requireAuth, asyncRoute(async (req, res) => {
+  const campaignId = z.string()
+    .trim()
+    .min(1)
+    .max(80)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)
+    .parse(req.params.id);
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    resolveMarketCampaignReference({
+      store,
+      user: req.user!,
+      campaignId,
+      requireActive: true
+    });
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+  const rawIdempotencyKey = req.header("Idempotency-Key");
+  if (!rawIdempotencyKey) {
+    res.status(400).json({
+      message: "必须提供 Idempotency-Key 请求头",
+      errorCode: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    return;
+  }
+  const idempotencyKey = z.string()
+    .trim()
+    .min(8)
+    .max(200)
+    .regex(/^[A-Za-z0-9._:-]+$/)
+    .parse(rawIdempotencyKey);
+  const body = z.object({
+    providerId: z.string().trim().min(1).max(40).default("un_comtrade"),
+    reporterCodes: z.array(z.string()).min(1).max(20),
+    partnerCodes: z.array(z.string()).min(1).max(20),
+    flow: z.enum(["import", "export"]),
+    hsVersion: z.enum(["HS", "HS2017", "HS2022"]),
+    commodityCodes: z.array(z.string()).min(1).max(50),
+    periods: z.array(z.string()).min(1).max(36),
+    frequency: z.enum(["annual", "monthly"]),
+    limit: z.number().int().min(1).max(500).default(500)
+  }).strict().parse(req.body);
+
+  try {
+    const result = await createMarketAnalysisRun({
+      store,
+      user: req.user!,
+      campaignId,
+      providerId: body.providerId,
+      idempotencyKey,
+      query: body
+    });
+    res.location(`/api/prospect-agent-jobs/${result.job.id}`);
+    res.status(result.duplicate ? 200 : 201).json(result);
+  } catch (error) {
+    if (error instanceof MarketAnalysisRunRequestError) {
+      res.status(error.status).json({ message: error.message, errorCode: error.code });
+      return;
+    }
+    if (error instanceof MarketAnalysisRunProviderError) {
+      res.location(`/api/prospect-agent-jobs/${error.job.id}`);
+      res.status(error.status).json({
+        message: error.failure.publicMessage,
+        errorCode: error.failure.code,
+        retryable: error.failure.retryable,
+        retryAfterAt: error.failure.retryAfterAt,
+        ...marketAnalysisRunMetadata(),
+        job: publicAgentJob(error.job)
+      });
+      return;
+    }
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-campaigns/:id/trade-observations", requireAuth, asyncRoute(async (req, res) => {
+  const campaignId = z.string()
+    .trim()
+    .min(1)
+    .max(80)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)
+    .parse(req.params.id);
+  const query = parseTradeObservationListQuery(req.query);
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    const reference = resolveMarketCampaignReference({
+      store,
+      user: req.user!,
+      campaignId
+    });
+    res.json(listTradeObservations({
+      store,
+      user: req.user!,
+      campaignId,
+      campaignContractMode: reference.campaignContractMode,
+      query
+    }));
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    if (error instanceof TradeObservationListRequestError) {
+      res.status(error.status).json({
+        message: error.message,
+        errorCode: error.code
+      });
+      return;
+    }
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-campaigns/:id/market-opportunities", requireAuth, asyncRoute(async (req, res) => {
+  const campaignId = z.string()
+    .trim()
+    .min(1)
+    .max(80)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)
+    .parse(req.params.id);
+  const query = parseMarketOpportunityListQuery(req.query);
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    const reference = resolveMarketCampaignReference({
+      store,
+      user: req.user!,
+      campaignId
+    });
+    res.json(listMarketOpportunities({
+      store,
+      user: req.user!,
+      campaignId,
+      campaignContractMode: reference.campaignContractMode,
+      query
+    }));
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    if (error instanceof MarketOpportunityListRequestError) {
+      res.status(error.status).json({
+        message: error.message,
+        errorCode: error.code
+      });
+      return;
+    }
+    throw error;
+  }
+}));
 
 app.post("/api/lead-finder/source-config", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
@@ -5368,79 +8560,180 @@ app.post("/api/lead-finder/source-config", requireAuth, asyncRoute(async (req, r
     enabled: z.boolean().optional().default(false)
   });
   const body = schema.parse(req.body);
-  const provider = getProvider(body.provider);
+  const provider = getConfigurableProvider(body.provider);
   if (!provider) {
-    res.status(404).json({ message: "未知数据源" });
+    res.status(404).json({
+      message: "未知数据源",
+      errorCode: "PROVIDER_NOT_REGISTERED",
+      retryable: false,
+      retryAfterAt: null
+    });
     return;
   }
-  if (body.baseUrl) await assertPublicHttpUrl(body.baseUrl);
+  const catalog = providerCatalogByCode(provider.id);
+  if (!catalog) {
+    res.status(409).json({ message: "数据源目录缺失，暂不能保存连接" });
+    return;
+  }
+  if (catalog.accessMode !== "api" || provider.accessMode !== "api") {
+    res.status(400).json({
+      message: "该来源用于官方入口人工核验；取得企业页或结果页链接后，可返回获客页面解析，无需保存 API 连接",
+      errorCode: "PROVIDER_POLICY_BLOCKED",
+      retryable: false,
+      retryAfterAt: null
+    });
+    return;
+  }
+  if (provider.id === "us_census_trade" && body.baseUrl.trim()) {
+    res.status(400).json({ message: "美国 Census 数据源使用固定官方地址，不允许自定义基础地址" });
+    return;
+  }
+  if (body.baseUrl) assertProviderBaseUrlAllowed(body.baseUrl, provider.networkPolicy);
   const store = getStore();
-  const existing = getLeadSourceConfig(req.user!, body.provider);
-  const apiKey = body.apiKey && !body.apiKey.includes("****") ? body.apiKey : existing?.apiKey || "";
-  if (provider.requiresKey && body.enabled && !apiKey) {
+  const existing = getProviderConnection(req.user!, body.provider);
+  const existingConfiguration = providerConnectionConfiguration(existing);
+  const apiKey = body.apiKey && !body.apiKey.includes("****") ? body.apiKey : existingConfiguration.apiKey;
+  const baseUrl = provider.id === "us_census_trade"
+    ? ""
+    : body.baseUrl || existingConfiguration.baseUrl;
+  if (providerRequiresKey(provider, catalog) && body.enabled && !apiKey) {
     res.status(400).json({ message: "启用前请先填写该数据源的 API Key" });
     return;
   }
-  const config: LeadSourceConfig = {
-    id: existing?.id || `ls_${provider.id}_${req.user!.id}_${Date.now()}`,
-    provider: provider.id,
+  const now = new Date().toISOString();
+  const id = existing?.id || `pc_${provider.id}_${req.user!.id}_${Date.now()}`;
+  const context = { id, providerId: provider.id, ownerId: req.user!.id, teamId: req.user!.teamId };
+  const connection: ProviderConnection = {
+    ...context,
     scope: "personal",
-    apiKey,
-    baseUrl: body.baseUrl || existing?.baseUrl || "",
-    enabled: body.enabled,
-    lastTestAt: existing?.lastTestAt,
-    lastTestStatus: existing?.lastTestStatus || "untested",
-    lastTestMessage: existing?.lastTestMessage || "",
-    usageJson: existing?.usageJson,
-    ownerId: req.user!.id,
-    teamId: req.user!.teamId,
-    updatedAt: new Date().toISOString()
+    credentialRef: existing?.credentialRef || createCredentialRef(),
+    configurationEncrypted: encryptProviderConfiguration(context, { apiKey, baseUrl }),
+    status: body.enabled ? "active" : "disabled",
+    quotaPolicy: existing?.quotaPolicy || {},
+    budgetPolicy: existing?.budgetPolicy || {},
+    lastHealthAt: existing?.lastHealthAt || "",
+    lastHealthStatus: existing?.lastHealthStatus || "untested",
+    lastErrorCode: existing?.lastErrorCode || "",
+    lastHealthMessage: existing?.lastHealthMessage || "",
+    usage: existing?.usage || "",
+    createdBy: existing?.createdBy || req.user!.id,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now
   };
-  if (existing) Object.assign(existing, config);
-  else store.leadSourceConfigs.unshift(config);
+  if (existing) Object.assign(existing, connection);
+  else store.providerConnections.unshift(connection);
   await store.persist();
-  res.json({ config: publicLeadSourceConfig(config), providers: allProviderStatuses(req.user!) });
+  res.json({ config: publicLeadSourceConfig(connection), providers: allProviderStatuses(req.user!) });
 }));
 
 app.post("/api/lead-finder/source-config/test", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({ provider: z.string().min(1).max(40) });
   const body = schema.parse(req.body);
-  const provider = getProvider(body.provider);
+  const provider = getConfigurableProvider(body.provider);
   if (!provider) {
     res.status(404).json({ message: "未知数据源" });
     return;
   }
   const store = getStore();
-  const config = getLeadSourceConfig(req.user!, provider.id);
-  if (provider.requiresKey && !config?.apiKey) {
-    res.status(400).json({ message: "请先保存该数据源的 API Key，再测试连接" });
+  const catalog = providerCatalogByCode(provider.id);
+  if (!catalog) {
+    res.status(409).json({
+      message: "数据源目录缺失，暂不能测试连接",
+      errorCode: "PROVIDER_CATALOG_MISSING",
+      retryable: false,
+      retryAfterAt: null
+    });
     return;
   }
-  let result;
+  if (catalog.accessMode !== "api" || provider.accessMode !== "api") {
+    res.status(400).json({
+      message: "该来源不是自动 API，请通过官方入口检索或下载后导入",
+      errorCode: "PROVIDER_POLICY_BLOCKED",
+      retryable: false,
+      retryAfterAt: null
+    });
+    return;
+  }
+  const connection = getProviderConnection(req.user!, provider.id);
+  const connectionRead = readProviderConnectionConfiguration(connection);
+  const configuration = connectionRead.configuration;
+  if (connection && !connectionRead.readable) {
+    res.status(409).json({
+      message: "连接凭据不可读取，请重新保存后再测试",
+      errorCode: "PROVIDER_CONNECTION_INVALID",
+      retryable: false,
+      retryAfterAt: null
+    });
+    return;
+  }
+  if (providerRequiresKey(provider, catalog) && !configuration.apiKey) {
+    res.status(400).json({
+      message: "请先保存该数据源的 API Key，再测试连接",
+      errorCode: "PROVIDER_CONNECTION_INVALID",
+      retryable: false,
+      retryAfterAt: null
+    });
+    return;
+  }
+  const runId = `prun_test_${randomUUID()}`;
+  let result: Awaited<ReturnType<typeof executeProviderHealth>>;
+  let failure: ProviderContractError | null = null;
   try {
-    result = await provider.test({ apiKey: config?.apiKey || "", baseUrl: config?.baseUrl });
+    result = await executeProviderHealth({
+      provider,
+      catalog,
+      context: createProviderExecutionContext({
+        teamId: req.user!.teamId,
+        ownerId: req.user!.id,
+        runId,
+        providerId: provider.id,
+        operation: "health",
+        purpose: "provider_connection_test"
+      }),
+      connection,
+      credential: connection ? undefined : configuration,
+      allowDisabledConnectionForHealth: true,
+      onLogs: (logs) => store.providerRequestLogs.unshift(...logs)
+    });
   } catch (error) {
-    result = { ok: false, message: `连接异常：${error instanceof Error ? error.message : "未知错误"}` };
+    failure = providerErrorFromUnknown(error, "health");
+    result = { ok: false, message: `连接异常：${failure.publicMessage}` };
   }
-  if (config) {
-    config.lastTestAt = new Date().toISOString();
-    config.lastTestStatus = result.ok ? "passed" : "failed";
-    config.lastTestMessage = result.message;
-    if (result.usage) config.usageJson = result.usage;
-    config.updatedAt = new Date().toISOString();
-    await store.persist();
+  const errorCode = result.ok ? "" : failure?.code || "PROVIDER_UNAVAILABLE";
+  const retryable = result.ok ? false : failure?.retryable || false;
+  const retryAfterAt = result.ok ? null : failure?.retryAfterAt || null;
+  if (connection) {
+    connection.lastHealthAt = new Date().toISOString();
+    connection.lastHealthStatus = result.ok ? "passed" : "failed";
+    connection.lastErrorCode = errorCode.toLocaleLowerCase();
+    connection.lastHealthMessage = result.message;
+    if (result.usage?.display) connection.usage = result.usage.display;
+    connection.updatedAt = new Date().toISOString();
   }
-  res.json({ ok: result.ok, message: result.message, usage: result.usage || "", providers: allProviderStatuses(req.user!) });
+  await store.persist();
+  res.json({
+    ok: result.ok,
+    message: result.message,
+    usage: result.usage?.display || "",
+    errorCode,
+    retryable,
+    retryAfterAt,
+    providers: allProviderStatuses(req.user!)
+  });
 }));
 
 app.delete("/api/lead-finder/source-config/:provider", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
-  const index = store.leadSourceConfigs.findIndex((item) => item.provider === req.params.provider && item.ownerId === req.user!.id);
+  const index = store.providerConnections.findIndex((item) =>
+    item.providerId === req.params.provider
+    && item.ownerId === req.user!.id
+    && item.teamId === req.user!.teamId
+  );
   if (index < 0) {
     res.status(404).json({ message: "配置不存在或无权删除" });
     return;
   }
-  store.leadSourceConfigs.splice(index, 1);
+  store.providerConnections.splice(index, 1);
   await store.persist();
   res.json({ providers: allProviderStatuses(req.user!) });
 }));
@@ -5452,7 +8745,7 @@ const leadSearchSchema = z.object({
   industry: z.string().default(""),
   customerType: z.string().default(""),
   excludeKeywords: z.string().default(""),
-  sources: z.array(z.string()).default([]),
+  sources: z.array(z.string().trim().min(1).max(64).regex(/^[a-z0-9_]+$/i)).max(64).default([]),
   useAi: z.boolean().default(false),
   limit: z.number().min(1).max(30).default(12)
 });
@@ -5461,6 +8754,7 @@ app.post("/api/lead-finder/search", requireAuth, asyncRoute(async (req, res) => 
   const body = leadSearchSchema.parse(req.body);
   const store = getStore();
   const user = req.user!;
+  const runId = `prun_search_${randomUUID()}`;
   const query: LeadQuery = {
     goal: body.goal,
     productKeywords: body.productKeywords,
@@ -5471,131 +8765,390 @@ app.post("/api/lead-finder/search", requireAuth, asyncRoute(async (req, res) => 
     limit: Math.min(body.limit, 15)
   };
 
-  // 选中源 ∩ 已启用 ∩ (有 key)。免费源无 key 也可用；未选中时默认用免费源兜底。
+  // 是否需要 Key 统一以持久化 Catalog 策略为准，实际可执行性由 Runtime 校验并记录审计。
   const chosen = body.sources.length
     ? LEAD_PROVIDERS.filter((provider) => body.sources.includes(provider.id))
-    : LEAD_PROVIDERS.filter((provider) => !provider.requiresKey);
-  const runnable = chosen.filter((provider) => {
-    if (!provider.requiresKey) return true;
-    const config = getLeadSourceConfig(user, provider.id);
-    return Boolean(config?.apiKey && config.enabled);
-  });
-  const skipped = chosen.filter((provider) => !runnable.includes(provider)).map((provider) => provider.name);
-  // 用户明确选了源（哪怕只选 AI 搜索）就不再兜底跑免费源；完全没选时才用免费源兜底
-  const activeProviders = runnable.length ? runnable : (body.sources.length ? [] : LEAD_PROVIDERS.filter((provider) => !provider.requiresKey));
+    : LEAD_PROVIDERS.filter((provider) =>
+        DEFAULT_LEAD_SEARCH_PROVIDER_IDS.includes(
+          provider.id as (typeof DEFAULT_LEAD_SEARCH_PROVIDER_IDS)[number]
+        )
+      );
+  const activeProviders = chosen.filter((provider) =>
+    provider.accessMode === "api"
+    && providerCatalogByCode(provider.id)?.accessMode === "api"
+  );
+  const unknownSourceIds = [...new Set(body.sources.filter((id) =>
+    id !== "ai_search" && !LEAD_PROVIDERS.some((provider) => provider.id === id)
+  ))];
+  const skipped: string[] = [];
   const wantsAiSearch = body.sources.includes("ai_search");
 
   const searchProviders = activeProviders.filter((provider) => provider.category !== "email");
   const emailProviders = activeProviders.filter((provider) => provider.category === "email" && provider.enrich);
 
-  const sourceStats: Array<{ id: string; name: string; count: number; error?: string; usage?: string }> = [];
-  const collected: Array<RawLead & { source: string; sourceLabel: string }> = [];
+  const sourceStats: Array<{
+    id: string;
+    name: string;
+    count: number;
+    status?: string;
+    error?: string;
+    errorCode?: string;
+    retryable?: boolean;
+    retryAfterAt?: string | null;
+    nextCursor?: string | null;
+    usage?: string;
+  }> = [];
+  for (const providerId of unknownSourceIds) {
+    recordProviderPreflightFailure(user, runId, providerId, "PROVIDER_NOT_REGISTERED", "search_preflight");
+    sourceStats.push({
+      id: providerId,
+      name: providerId,
+      count: 0,
+      status: "failed",
+      error: "未知数据源",
+      errorCode: "PROVIDER_NOT_REGISTERED",
+      retryable: false,
+      retryAfterAt: null
+    });
+  }
+  type CollectedLead = RawLead & {
+    source: string;
+    sourceLabel: string;
+    payloadHash?: string;
+    sourceEvidence: ProviderEvidenceSnapshot[];
+  };
+  const collected: CollectedLead[] = [];
 
   await Promise.all(searchProviders.map(async (provider) => {
-    const config = getLeadSourceConfig(user, provider.id);
+    const connection = getProviderConnection(user, provider.id);
+    const catalog = providerCatalogByCode(provider.id);
+    if (!catalog) {
+      recordProviderPreflightFailure(user, runId, provider.id, "PROVIDER_CATALOG_MISSING", "search_preflight");
+      sourceStats.push({
+        id: provider.id,
+        name: provider.name,
+        count: 0,
+        status: "failed",
+        error: "数据源目录缺失",
+        errorCode: "PROVIDER_CATALOG_MISSING",
+        retryable: false,
+        retryAfterAt: null
+      });
+      return;
+    }
     try {
-      const result = await provider.search(query, { apiKey: config?.apiKey || "", baseUrl: config?.baseUrl });
-      for (const lead of result.leads) {
+      const result = await executeProviderSearch({
+        provider,
+        catalog,
+        context: createProviderExecutionContext({
+          teamId: user.teamId,
+          ownerId: user.id,
+          runId,
+          providerId: provider.id,
+          operation: "search",
+          purpose: "lead_finder_search"
+        }),
+        connection,
+        credential: connection ? undefined : { apiKey: "", baseUrl: "" },
+        query,
+        onLogs: (logs) => store.providerRequestLogs.unshift(...logs)
+      });
+      for (const lead of result.records) {
         if (!lead.company) continue;
-        collected.push({ ...lead, source: provider.id, sourceLabel: provider.name });
+        collected.push({
+          ...lead,
+          source: provider.id,
+          sourceLabel: provider.name,
+          sourceEvidence: [providerEvidenceSnapshot(provider.id, lead)]
+        });
       }
-      sourceStats.push({ id: provider.id, name: provider.name, count: result.leads.length, usage: result.usage });
+      sourceStats.push({
+        id: provider.id,
+        name: provider.name,
+        count: result.records.length,
+        status: result.status,
+        nextCursor: result.nextCursor,
+        usage: result.usage.display
+      });
     } catch (error) {
-      sourceStats.push({ id: provider.id, name: provider.name, count: 0, error: error instanceof Error ? error.message : "调用失败" });
+      const failure = providerErrorFromUnknown(error, "search");
+      sourceStats.push({
+        id: provider.id,
+        name: provider.name,
+        count: 0,
+        status: "failed",
+        error: failure.publicMessage,
+        errorCode: failure.code,
+        retryable: failure.retryable,
+        retryAfterAt: failure.retryAfterAt
+      });
     }
   }));
 
   // AI 搜索：用「AI 模型配置」里已启用并勾选自动获客的模型直接生成候选公司
   if (wantsAiSearch) {
     const aiSearchConfig = getAiConfig(user, "leadFinder");
-    if (aiSearchConfig?.enabled && aiSearchConfig.apiKey && aiSearchConfig.useLeadFinder) {
+    const catalog = providerCatalogByCode("ai_search");
+    if (!catalog) {
+      recordProviderPreflightFailure(user, runId, "ai_search", "PROVIDER_CATALOG_MISSING", "search_preflight");
+      sourceStats.push({
+        id: "ai_search",
+        name: "AI 搜索",
+        count: 0,
+        status: "failed",
+        error: "AI 搜索目录缺失",
+        errorCode: "PROVIDER_CATALOG_MISSING",
+        retryable: false,
+        retryAfterAt: null
+      });
+    } else if (aiSearchConfig?.enabled && aiSearchConfig.apiKey && aiSearchConfig.useLeadFinder) {
       try {
-        const aiLeads = await aiGenerateLeads(query, aiSearchConfig);
-        for (const lead of aiLeads) {
+        const provider = createAiSearchProvider(aiSearchConfig);
+        const result = await executeProviderSearch({
+          provider,
+          catalog,
+          context: createProviderExecutionContext({
+            teamId: user.teamId,
+            ownerId: user.id,
+            runId,
+            providerId: provider.id,
+            operation: "search",
+            purpose: "lead_finder_ai_search"
+          }),
+          credential: {
+            apiKey: aiSearchConfig.apiKey,
+            baseUrl: aiSearchConfig.baseUrl
+          },
+          query,
+          onLogs: (logs) => store.providerRequestLogs.unshift(...logs)
+        });
+        for (const lead of result.records) {
           if (!lead.company) continue;
-          collected.push({ ...lead, source: "ai_search", sourceLabel: "AI 搜索" });
+          collected.push({
+            ...lead,
+            source: "ai_search",
+            sourceLabel: "AI 搜索",
+            sourceEvidence: [providerEvidenceSnapshot("ai_search", lead)]
+          });
         }
-        sourceStats.push({ id: "ai_search", name: "AI 搜索", count: aiLeads.length });
+        sourceStats.push({
+          id: "ai_search",
+          name: "AI 搜索",
+          count: result.records.length,
+          status: result.status,
+          nextCursor: result.nextCursor,
+          usage: result.usage.display
+        });
       } catch (error) {
-        sourceStats.push({ id: "ai_search", name: "AI 搜索", count: 0, error: error instanceof Error ? error.message : "AI 调用失败" });
+        const failure = providerErrorFromUnknown(error, "search");
+        sourceStats.push({
+          id: "ai_search",
+          name: "AI 搜索",
+          count: 0,
+          status: "failed",
+          error: failure.publicMessage,
+          errorCode: failure.code,
+          retryable: failure.retryable,
+          retryAfterAt: failure.retryAfterAt
+        });
       }
     } else {
+      recordProviderPreflightFailure(user, runId, "ai_search", "PROVIDER_CONNECTION_INVALID", "search_preflight");
+      sourceStats.push({
+        id: "ai_search",
+        name: catalog.name || "AI 搜索",
+        count: 0,
+        status: "failed",
+        error: "请先启用可用于自动获客的 AI 模型",
+        errorCode: "PROVIDER_CONNECTION_INVALID",
+        retryable: false,
+        retryAfterAt: null
+      });
       skipped.push("AI 搜索（未启用模型）");
     }
   }
 
-  // 去重（域名 + 公司名）
-  const deduped: Array<RawLead & { source: string; sourceLabel: string }> = [];
+  // 同批次只按强标识或“官网域名 + 国家”合并；同名公司不再直接视为同一主体。
+  const deduped: CollectedLead[] = [];
   for (const lead of collected) {
-    const domain = websiteDomainKey(lead.website || "");
-    const key = domain || lead.company.toLowerCase();
-    if (deduped.some((row) => (domain && websiteDomainKey(row.website || "") === domain) || row.company.toLowerCase() === lead.company.toLowerCase())) continue;
+    const domain = websiteDomainKey(lead.officialWebsite || lead.website || "");
+    const country = (lead.country || "").trim().toLocaleLowerCase();
+    const existing = deduped.find((row) => {
+      const sameProviderRecord = Boolean(
+        lead.providerRecordId
+        && row.providerRecordId
+        && lead.source === row.source
+        && lead.providerRecordId === row.providerRecordId
+      );
+      const samePayload = Boolean(
+        lead.payloadHash
+        && row.payloadHash
+        && lead.source === row.source
+        && lead.payloadHash === row.payloadHash
+      );
+      const rowDomain = websiteDomainKey(row.officialWebsite || row.website || "");
+      const sameDomainCountry = Boolean(
+        domain
+        && rowDomain === domain
+        && (row.country || "").trim().toLocaleLowerCase() === country
+      );
+      return sameProviderRecord || samePayload || sameDomainCountry;
+    });
+    if (existing) {
+      existing.sourceEvidence = mergeProviderEvidence(existing.sourceEvidence, lead.sourceEvidence);
+      if (!existing.officialWebsite && lead.officialWebsite) {
+        existing.officialWebsite = lead.officialWebsite;
+        existing.website = lead.officialWebsite;
+      }
+      if (!existing.contactInfo && lead.contactInfo) existing.contactInfo = lead.contactInfo;
+      if ((!existing.contact || existing.contact === "待维护") && lead.contact) existing.contact = lead.contact;
+      existing.confidence = Math.max(existing.confidence || 0, lead.confidence || 0);
+      continue;
+    }
     deduped.push(lead);
   }
 
-  // Web 源结果做官网解析补全（best-effort，限量控制耗时）
-  const aiConfig = body.useAi ? getAiConfig(user, "websiteParse") : null;
-  const parseTargets = deduped.filter((lead) => ["serper", "brave", "serpapi", "ai_search"].includes(lead.source) && lead.website).slice(0, 6);
-  await Promise.all(parseTargets.map(async (lead) => {
-    try {
-      const parsed = await parseWebsiteOpportunity(lead.website!, 0, user, aiConfig);
-      if (parsed.company && !/unknown/i.test(parsed.company)) lead.company = parsed.company;
-      if (parsed.business && parsed.business !== "待维护") lead.business = parsed.business;
-      if (parsed.country && parsed.country !== "未知") lead.country = parsed.country;
-      if (parsed.contact && parsed.contact !== "待维护") lead.contact = parsed.contact;
-      if (parsed.contactInfo && parsed.contactInfo !== "待维护") lead.contactInfo = parsed.contactInfo;
-      if (parsed.description) lead.description = parsed.description;
-      if (parsed.parseMode === "ai") lead.confidence = Math.max(lead.confidence || 60, 74);
-    } catch {
-      // 解析失败保留搜索摘要
-    }
-  }));
-
   // 邮箱源补全（Hunter 等）：对缺联系方式且有域名的候选补邮箱
   for (const provider of emailProviders) {
-    const config = getLeadSourceConfig(user, provider.id);
+    const connection = getProviderConnection(user, provider.id);
+    const catalog = providerCatalogByCode(provider.id);
+    if (!catalog) {
+      recordProviderPreflightFailure(user, runId, provider.id, "PROVIDER_CATALOG_MISSING", "enrich_preflight");
+      sourceStats.push({
+        id: provider.id,
+        name: provider.name,
+        count: 0,
+        status: "failed",
+        error: "数据源目录缺失",
+        errorCode: "PROVIDER_CATALOG_MISSING",
+        retryable: false,
+        retryAfterAt: null
+      });
+      continue;
+    }
     const targets = deduped.filter((lead) => !lead.contactInfo && websiteDomainKey(lead.website || "")).slice(0, 8);
-    let filled = 0;
-    for (const lead of targets) {
-      const enriched = await provider.enrich!(websiteDomainKey(lead.website || ""), { apiKey: config?.apiKey || "", baseUrl: config?.baseUrl });
-      if (enriched?.contactInfo) {
-        lead.contactInfo = enriched.contactInfo;
-        if (enriched.contact) lead.contact = enriched.contact;
-        lead.confidence = Math.max(lead.confidence || 60, 74);
-        filled += 1;
+    if (!targets.length) {
+      try {
+        await executeProviderPreflight({
+          provider,
+          catalog,
+          context: createProviderExecutionContext({
+            teamId: user.teamId,
+            ownerId: user.id,
+            runId,
+            providerId: provider.id,
+            operation: "enrich",
+            purpose: "lead_finder_contact_enrichment_preflight"
+          }),
+          connection,
+          credential: connection ? undefined : { apiKey: "", baseUrl: "" },
+          onLogs: (logs) => store.providerRequestLogs.unshift(...logs)
+        });
+      } catch (error) {
+        const failure = providerErrorFromUnknown(error, "enrich");
+        sourceStats.push({
+          id: provider.id,
+          name: provider.name,
+          count: 0,
+          status: "failed",
+          error: failure.publicMessage,
+          errorCode: failure.code,
+          retryable: failure.retryable,
+          retryAfterAt: failure.retryAfterAt
+        });
+        continue;
       }
     }
-    sourceStats.push({ id: provider.id, name: provider.name, count: filled });
+    let filled = 0;
+    let enrichError: ProviderContractError | null = null;
+    for (const [targetIndex, lead] of targets.entries()) {
+      try {
+        const enriched = await executeProviderEnrich({
+          provider,
+          catalog,
+          context: createProviderExecutionContext({
+            teamId: user.teamId,
+            ownerId: user.id,
+            runId,
+            providerId: provider.id,
+            operation: "enrich",
+            purpose: "lead_finder_contact_enrichment",
+            suffix: String(targetIndex)
+          }),
+          connection,
+          credential: connection ? undefined : { apiKey: "", baseUrl: "" },
+          domain: websiteDomainKey(lead.website || ""),
+          onLogs: (logs) => store.providerRequestLogs.unshift(...logs)
+        });
+        if (enriched?.contactInfo) {
+          lead.contactInfo = enriched.contactInfo;
+          if (enriched.contact) lead.contact = enriched.contact;
+          lead.sourceEvidence = mergeProviderEvidence(lead.sourceEvidence, [
+            providerEvidenceSnapshot(provider.id, enriched.evidence)
+          ]);
+          if (typeof enriched.confidence === "number") {
+            lead.confidence = Math.max(lead.confidence || 0, enriched.confidence);
+          }
+          filled += 1;
+        }
+      } catch (error) {
+        enrichError = providerErrorFromUnknown(error, "enrich");
+        continue;
+      }
+    }
+    sourceStats.push({
+      id: provider.id,
+      name: provider.name,
+      count: filled,
+      status: enrichError ? (filled ? "partial_success" : "failed") : (filled ? "success" : "success_empty"),
+      error: enrichError?.publicMessage,
+      errorCode: enrichError?.code,
+      retryable: enrichError?.retryable,
+      retryAfterAt: enrichError?.retryAfterAt
+    });
   }
 
   // 落库为 WebsiteOpportunity
-  const now = Date.now();
-  const opportunities: WebsiteOpportunity[] = deduped.slice(0, query.limit * 2).map((lead, index) => ({
-    id: `lf_${lead.source}_${now}_${index}`,
-    company: lead.company,
-    business: lead.business || "待维护",
-    country: lead.country || "未知",
-    website: normalizeWebsite(lead.website || ""),
-    contact: lead.contact || "待维护",
-    contactInfo: lead.contactInfo || "",
-    description: lead.description || "自动获客候选，待核实。",
-    ownerId: user.id,
-    teamId: user.teamId,
-    status: "preview",
-    createdAt: new Date().toISOString(),
-    parseMode: aiConfig ? "ai" : "rule",
-    source: lead.source,
-    sourceLabel: lead.sourceLabel,
-    confidence: lead.confidence
-  }));
+  const opportunities: WebsiteOpportunity[] = deduped.slice(0, query.limit * 2).map((lead) =>
+    withProspectVerificationReport({
+      id: `lf_${lead.source}_${randomUUID()}`,
+      company: lead.company,
+      business: lead.business || "待维护",
+      country: lead.country || "未知",
+      website: normalizeWebsite(lead.website || ""),
+      contact: lead.contact || "待维护",
+      contactInfo: lead.contactInfo || "",
+      description: lead.description || "自动获客候选，待核实。",
+      ownerId: user.id,
+      teamId: user.teamId,
+      status: "preview",
+      createdAt: new Date().toISOString(),
+      parseMode: lead.source === "ai_search" ? "ai" : "rule",
+      source: lead.source,
+      sourceLabel: lead.sourceLabel,
+      sourceEvidence: lead.sourceEvidence,
+      confidence: lead.confidence
+    })
+  );
 
-  for (const item of opportunities) {
-    const existing = store.websiteOpportunities.find((row) => row.ownerId === user.id && (row.website === item.website || row.company.toLowerCase() === item.company.toLowerCase()));
-    if (existing) Object.assign(existing, item, { id: existing.id, status: existing.status, customerId: existing.customerId, dealId: existing.dealId, leadId: existing.leadId });
-    else store.websiteOpportunities.unshift(item);
-  }
-  await store.persist();
-  res.json({ opportunities, sourceStats, skipped, providersUsed: activeProviders.map((provider) => provider.id) });
+  await store.reloadProspectCandidates?.();
+  const persistence = persistProviderOpportunities(opportunities, {
+    rawCount: collected.length,
+    deduplicatedCount: Math.max(0, collected.length - deduped.length)
+  });
+  await persistCandidateChanges(
+    store,
+    persistence.opportunities,
+    true
+  );
+  res.json({
+    opportunities: persistence.opportunities,
+    sourceStats,
+    incrementalStats: persistence.incrementalStats,
+    skipped,
+    providersUsed: activeProviders.map((provider) => provider.id),
+    runId
+  });
 }));
 
 function websiteDomainKey(raw: string) {
@@ -5608,18 +9161,35 @@ function websiteDomainKey(raw: string) {
 }
 
 app.post("/api/tools/website-scrape/preview", requireAuth, asyncRoute(async (req, res) => {
-  const schema = z.object({ urls: z.array(z.string().min(3)).min(1).max(12), useAi: z.boolean().default(false) });
+  const schema = z.object({
+    urls: z.array(z.string().min(3)).min(1).max(12),
+    useAi: z.boolean().optional()
+  });
   const body = schema.parse(req.body);
-  const store = getStore();
-  const aiConfig = body.useAi ? getAiConfig(req.user!, "websiteParse") : null;
-  const parsed = await Promise.all(body.urls.map((url, index) => parseWebsiteOpportunity(url, index, req.user!, aiConfig)));
-  for (const item of parsed) {
-    const existing = store.websiteOpportunities.find((row) => row.ownerId === req.user!.id && row.website === item.website);
-    if (existing) Object.assign(existing, item, { id: existing.id, status: existing.status, customerId: existing.customerId, dealId: existing.dealId });
-    else store.websiteOpportunities.unshift(item);
+  if (body.useAi) {
+    res.status(400).json({
+      message: "官网链接登记不支持 AI 网页解析；系统只保存链接，不访问企业网页"
+    });
+    return;
   }
-  await store.persist();
-  res.json({ opportunities: parsed });
+  const store = getStore();
+  const parsed = body.urls.map((url, index) =>
+    parseWebsiteOpportunity(url, index, req.user!)
+  );
+  await store.reloadProspectCandidates?.();
+  const persistence = persistProviderOpportunities(parsed, {
+    rawCount: parsed.length,
+    deduplicatedCount: 0
+  });
+  await persistCandidateChanges(
+    store,
+    persistence.opportunities,
+    true
+  );
+  res.json({
+    opportunities: persistence.opportunities,
+    incrementalStats: persistence.incrementalStats
+  });
 }));
 
 app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute(async (req, res) => {
@@ -5635,14 +9205,21 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
       description: z.string().default(""),
       source: z.string().max(40).optional().default(""),
       sourceLabel: z.string().max(80).optional().default("")
-    })).min(1)
+    })).min(1).max(100)
   });
   const body = schema.parse(req.body);
   const store = getStore();
-  const created: Array<{ lead: Lead; sourceEvent: LeadSourceEvent; opportunity: WebsiteOpportunity; duplicate: boolean }> = [];
+  await store.reloadProspectCandidates?.();
+  const sources: Array<{
+    source: typeof body.opportunities[number];
+    stored: WebsiteOpportunity;
+  }> = [];
   for (const source of body.opportunities) {
-    const stored = store.websiteOpportunities.find((item) => item.id === source.id);
-    if (!stored || !canSeeOwner(req.user!, stored.ownerId, stored.teamId)) {
+    const stored = store.websiteOpportunities.find((item) =>
+      item.id === source.id
+      && canSeeOwner(req.user!, item.ownerId, item.teamId)
+    );
+    if (!stored) {
       res.status(404).json({ message: "搜客线索不存在或无权访问" });
       return;
     }
@@ -5654,6 +9231,12 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
       res.status(400).json({ message: "请先核验并标记为可联系，再加入线索" });
       return;
     }
+    sources.push({ source, stored });
+  }
+  const created: Array<{ lead: Lead; sourceEvent: LeadSourceEvent; opportunity: WebsiteOpportunity; duplicate: boolean }> = [];
+  const pending = [];
+  for (const entry of sources) {
+    const { source, stored } = entry;
     const verifiedSource = {
       ...source,
       company: stored.company,
@@ -5662,12 +9245,16 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
       website: stored.website,
       contact: stored.contact,
       contactInfo: stored.contactInfo,
-      description: stored.description
+      description: stored.description,
+      sourceEvidence: [...(stored.sourceEvidence || [])]
     };
     const contact = verifiedSource.contact || verifiedSource.contactInfo || "待维护";
     const sourceId = stored.id;
     const sourceChannel = stored.source || "website-scrape";
-    const sourceLabel = stored.sourceLabel || "官网导入";
+    const sourceLabel = stored.sourceLabel || "链接登记";
+    const evidenceSourceUrl = [...verifiedSource.sourceEvidence]
+      .reverse()
+      .find((item) => item.sourceUrl)?.sourceUrl;
     const intake = createLeadFromSource(req.user!, {
       company: verifiedSource.company,
       contact,
@@ -5680,7 +9267,7 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
       sourceChannel,
       sourceCampaign: "",
       externalId: sourceId,
-      sourceUrl: normalizeWebsite(verifiedSource.website),
+      sourceUrl: (evidenceSourceUrl || normalizeWebsite(verifiedSource.website)).slice(0, 500),
       intent: "中",
       stage: "新线索",
       estimatedAmount: 0,
@@ -5688,34 +9275,76 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
       remark: [verifiedSource.business, verifiedSource.description].filter(Boolean).join("；"),
       rawPayload: { ...verifiedSource, source: sourceChannel, sourceLabel }
     });
-    const opportunity: WebsiteOpportunity = {
-      id: sourceId,
-      company: verifiedSource.company,
-      business: verifiedSource.business || "待维护",
-      country: verifiedSource.country || "未知",
-      website: normalizeWebsite(verifiedSource.website),
+    pending.push({
+      intake,
+      stored,
+      verifiedSource,
       contact,
-      contactInfo: verifiedSource.contactInfo || "",
-      description: verifiedSource.description || "已加入线索中心，下一步核实采购负责人和真实采购需求。",
-      ownerId: req.user!.id,
-      teamId: req.user!.teamId,
-      status: "synced",
-      createdAt: new Date().toISOString(),
-      leadId: intake.lead.id,
-      parseMode: stored.parseMode || "rule",
-      source: sourceChannel,
-      sourceLabel,
-      confidence: stored.confidence,
-      verifiedAt: stored.verifiedAt,
-      statusChangedAt: new Date().toISOString(),
-      excludedReason: ""
-    };
-    const existing = store.websiteOpportunities.find((item) => item.id === opportunity.id || (item.ownerId === req.user!.id && item.website === opportunity.website));
-    if (existing) Object.assign(existing, opportunity, { id: existing.id });
-    else store.websiteOpportunities.unshift(opportunity);
-    created.push({ ...intake, opportunity: existing || opportunity });
+      sourceChannel,
+      sourceLabel
+    });
   }
+  // MySQL 覆盖事务只能关联已经落库的 CRM 线索。先持久化线索，
+  // 若后续关联失败，重试仍会按来源编号复用同一条线索。
   await store.persist();
+  try {
+    for (const item of pending) {
+      const linkedAt = item.intake.lead.createdAt;
+      await syncProspectCandidateCoverage({
+        store,
+        candidate: item.stored,
+        actorId: req.user!.id,
+        action: "link-lead",
+        requestId:
+          `website-opportunity:${item.stored.id}:lead:${item.intake.lead.id}`,
+        effectiveAt: linkedAt,
+        leadId: item.intake.lead.id
+      });
+      const opportunity: WebsiteOpportunity = {
+        ...item.stored,
+        company: item.verifiedSource.company,
+        business: item.verifiedSource.business || "待维护",
+        country: item.verifiedSource.country || "未知",
+        website: normalizeWebsite(item.verifiedSource.website),
+        contact: item.contact,
+        contactInfo: item.verifiedSource.contactInfo || "",
+        description: item.verifiedSource.description || "已加入线索中心，下一步核实采购负责人和真实采购需求。",
+        ownerId: req.user!.id,
+        teamId: req.user!.teamId,
+        status: "synced",
+        leadId: item.intake.lead.id,
+        parseMode: item.stored.parseMode || "rule",
+        source: item.sourceChannel,
+        sourceLabel: item.sourceLabel,
+        sourceEvidence: item.verifiedSource.sourceEvidence,
+        confidence: item.stored.confidence,
+        verifiedAt: item.stored.verifiedAt,
+        statusChangedAt: linkedAt,
+        excludedReason: ""
+      };
+      withProspectVerificationReport(opportunity, linkedAt);
+      Object.assign(item.stored, opportunity, { id: item.stored.id });
+      migrateProspectFollowUpTodos(
+        store,
+        item.stored,
+        item.intake.lead.id
+      );
+      linkProcurementContextToLead(
+        store,
+        item.stored,
+        item.intake.lead.id
+      );
+      created.push({ ...item.intake, opportunity: item.stored });
+    }
+  } catch (error) {
+    if (sendProspectLeadConversionError(res, error)) return;
+    throw error;
+  }
+  await persistCandidateChanges(
+    store,
+    created.map((item) => item.opportunity),
+    true
+  );
   res.json({ created });
 }));
 
@@ -6323,195 +9952,38 @@ function normalizeWebsite(raw: string) {
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
-function leadFinderQueryText(body: z.infer<typeof leadFinderSearchSchema>) {
-  return [body.goal, body.productKeywords, body.industry, body.customerType, body.countries]
-    .join(" ")
-    .replace(/[,，/]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-async function searchGleifLeads(body: z.infer<typeof leadFinderSearchSchema>, user: SessionUser, limit: number): Promise<WebsiteOpportunity[]> {
-  const firstCountry = body.countries.split(/,|，/)[0]?.trim();
-  const firstIndustry = body.industry.split(/,|，/)[0]?.trim();
-  const firstProduct = body.productKeywords.split(/,|，/)[0]?.trim();
-  const queryCandidates = [
-    leadFinderQueryText(body),
-    [firstIndustry, firstCountry].filter(Boolean).join(" "),
-    [firstProduct, firstCountry].filter(Boolean).join(" "),
-    [body.customerType, firstCountry].filter(Boolean).join(" "),
-    firstIndustry || firstProduct || firstCountry || "automation"
-  ].filter(Boolean);
-  try {
-    let records: Array<{
-      id?: string;
-      attributes?: {
-        lei?: string;
-        entity?: {
-          legalName?: { name?: string };
-          legalAddress?: { country?: string; city?: string };
-          headquartersAddress?: { country?: string; city?: string };
-        };
-      };
-    }> = [];
-    for (const query of queryCandidates) {
-      const url = `https://api.gleif.org/api/v1/lei-records?filter[fulltext]=${encodeURIComponent(query)}&page[size]=${limit}`;
-      const response = await fetch(url, { headers: { accept: "application/vnd.api+json" } });
-      if (!response.ok) continue;
-      const data = await response.json() as { data?: typeof records };
-      records = data.data || [];
-      if (records.length) break;
-    }
-    return records.slice(0, limit).map((item, index) => {
-      const entity = item.attributes?.entity;
-      const company = entity?.legalName?.name || `GLEIF Entity ${index + 1}`;
-      const country = entity?.legalAddress?.country || entity?.headquartersAddress?.country || body.countries.split(/,|，/)[0]?.trim() || "未知";
-      const city = entity?.legalAddress?.city || entity?.headquartersAddress?.city || "";
-      const lei = item.attributes?.lei || item.id || "";
-      return {
-        id: `lf_gleif_${Date.now()}_${index}`,
-        company,
-        business: body.productKeywords || body.industry || "法人实体 / 待核实业务",
-        country,
-        website: lei ? `https://search.gleif.org/#/record/${lei}` : "https://search.gleif.org/",
-        contact: "待维护",
-        contactInfo: "",
-        description: `GLEIF公开法人实体。${city ? `城市：${city}。` : ""}需继续核实官网、采购角色和产品匹配。`,
-        ownerId: user.id,
-        teamId: user.teamId,
-        status: "preview" as const,
-        createdAt: new Date().toISOString(),
-        parseMode: "rule" as const
-      };
-    });
-  } catch {
-    return [];
-  }
-}
-
-async function searchWikidataLeads(body: z.infer<typeof leadFinderSearchSchema>, user: SessionUser, limit: number): Promise<WebsiteOpportunity[]> {
-  const firstCountry = body.countries.split(/,|，/)[0]?.trim();
-  const firstIndustry = body.industry.split(/,|，/)[0]?.trim();
-  const firstProduct = body.productKeywords.split(/,|，/)[0]?.trim();
-  const queryCandidates = [
-    leadFinderQueryText(body),
-    [firstProduct, firstIndustry, firstCountry].filter(Boolean).join(" "),
-    [firstIndustry, "company"].filter(Boolean).join(" "),
-    firstProduct || firstIndustry || "product supplier"
-  ].filter(Boolean);
-  try {
-    let records: Array<{ id?: string; label?: string; description?: string; concepturi?: string }> = [];
-    for (const query of queryCandidates) {
-      const url = `https://www.wikidata.org/w/api.php?action=wbsearchentities&language=en&format=json&type=item&limit=${limit}&search=${encodeURIComponent(query)}`;
-      const response = await fetch(url, { headers: { accept: "application/json" } });
-      if (!response.ok) continue;
-      const data = await response.json() as { search?: typeof records };
-      records = data.search || [];
-      if (records.length) break;
-    }
-    return records
-      .filter((item) => item.label)
-      .slice(0, limit)
-      .map((item, index) => ({
-        id: `lf_wikidata_${Date.now()}_${index}`,
-        company: item.label || `Wikidata Entity ${index + 1}`,
-        business: body.productKeywords || body.industry || item.description || "公开实体 / 待核实业务",
-        country: body.countries.split(/,|，/)[0]?.trim() || "未知",
-        website: item.concepturi || (item.id ? `https://www.wikidata.org/wiki/${item.id}` : "https://www.wikidata.org/"),
-        contact: "待维护",
-        contactInfo: "",
-        description: `Wikidata公开实体：${item.description || "描述待补充"}。需继续核实官网、联系人和真实采购意向。`,
-        ownerId: user.id,
-        teamId: user.teamId,
-        status: "preview" as const,
-        createdAt: new Date().toISOString(),
-        parseMode: "rule" as const
-      }));
-  } catch {
-    return [];
-  }
-}
-
-async function parseWebsiteOpportunity(rawUrl: string, index: number, user: SessionUser, aiConfig?: AiModelConfig | null): Promise<WebsiteOpportunity> {
-  const website = normalizeWebsite(rawUrl);
-  await assertPublicHttpUrl(website);
-  let html = "";
-  let finalUrl = website;
-  let fetchNote = "";
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6500);
-    const response = await fetchPublicUrl(website, {
-      signal: controller.signal,
-      headers: { "user-agent": "GoodJobCRM/1.0 opportunity research" }
-    });
-    clearTimeout(timeout);
-    finalUrl = response.url || website;
-    html = response.ok ? await response.text() : "";
-    if (!response.ok) fetchNote = `官网返回 ${response.status}，已使用域名与可公开信息生成待核实商机。`;
-  } catch {
-    fetchNote = "官网暂时无法直接读取，已使用域名生成待核实商机。";
-  }
-  const text = cleanHtml(html).slice(0, 8000);
-  const title = firstMatch(html, /<title[^>]*>([\s\S]*?)<\/title>/i) || "";
-  const description = firstMatch(html, /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) || firstMatch(html, /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i) || "";
-  const headings = [...html.matchAll(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi)].slice(0, 4).map((item) => cleanHtml(item[1])).filter(Boolean);
-  const emails = [...new Set((html + " " + text).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [])].slice(0, 3);
-  const phones = [...new Set((text.match(/(?:\+|00)?\d[\d\s().-]{7,}\d/g) || []).map((item) => item.trim()))].slice(0, 2);
-  const wechat = firstMatch(text, /(?:WeChat|微信)[:：\s]*([A-Za-z0-9_-]{5,})/i);
-  const whatsapp = firstMatch(text, /(?:WhatsApp|Whatsapp|WA)[:：\s]*([+\d\s().-]{7,})/i);
-  const contactInfo = [emails[0], whatsapp ? `WhatsApp ${whatsapp}` : "", wechat ? `微信 ${wechat}` : "", phones[0]].filter(Boolean).join(" / ");
-  const url = new URL(finalUrl);
-  const company = companyFromTitle(title, url.hostname);
-  const business = inferBusiness([title, description, ...headings, text].join(" "));
-  const country = inferCountry(finalUrl, text);
-  const contact = inferContact(text);
-  const detail = [description || headings.join("；") || `${company} 官网产品信息待复核`, fetchNote].filter(Boolean).join(" ");
-  const ruleResult: WebsiteOpportunity = {
+function parseWebsiteOpportunity(
+  rawUrl: string,
+  index: number,
+  user: SessionUser
+): WebsiteOpportunity {
+  const website = normalizeWebsiteReference(rawUrl);
+  const createdAt = new Date().toISOString();
+  return withProspectVerificationReport({
     id: `web_${Date.now()}_${index}`,
-    company,
-    business,
-    country,
-    website: finalUrl,
-    contact,
-    contactInfo: contactInfo || "待维护",
-    description: detail.slice(0, 260),
+    company: companyNameFromWebsiteReference(website),
+    business: "待人工核实",
+    country: "待人工核实",
+    website,
+    contact: "待人工核实",
+    contactInfo: "",
+    description: "仅登记链接，系统未访问网页。",
     ownerId: user.id,
     teamId: user.teamId,
     status: "preview",
-    createdAt: new Date().toISOString(),
-    parseMode: "rule"
-  };
-  if (!aiConfig?.enabled || !aiConfig.apiKey || !aiConfig.useWebsiteParse) return ruleResult;
-  try {
-    const ai = await parseWebsiteWithAi(aiConfig, {
-      website: finalUrl,
-      title,
-      description,
-      headings,
-      text,
-      ruleResult
-    });
-    return {
-      ...ruleResult,
-      company: ai.company || ruleResult.company,
-      business: ai.business || ruleResult.business,
-      country: ai.country || ruleResult.country,
-      contact: ai.contact || ruleResult.contact,
-      contactInfo: ai.contactInfo || ruleResult.contactInfo,
-      description: `${ai.description || ruleResult.description}（AI解析）`.slice(0, 320),
-      parseMode: "ai"
-    };
-  } catch {
-    return {
-      ...ruleResult,
-      description: `${ruleResult.description} AI解析失败，已自动回退规则解析。`.slice(0, 320),
-      parseMode: "fallback"
-    };
-  }
+    createdAt,
+    parseMode: "reference",
+    source: "website-reference",
+    sourceLabel: "官网链接登记",
+    sourceEvidence: []
+  }, createdAt);
 }
 
-async function aiGenerateLeads(query: LeadQuery, config: AiModelConfig): Promise<RawLead[]> {
+async function aiGenerateLeads(
+  query: LeadQuery,
+  config: AiModelConfig,
+  fetcher?: (url: string, init?: RequestInit) => Promise<globalThis.Response>
+): Promise<RawLead[]> {
   const n = Math.min(query.limit, 12);
   const prompt = [
     "你是资深外贸获客研究助手。根据下面的客户画像，列出真实、可能存在的目标公司（分销商/系统集成商/OEM/EPC/MRO/终端工厂/贸易商等）。",
@@ -6529,7 +10001,7 @@ async function aiGenerateLeads(query: LeadQuery, config: AiModelConfig): Promise
     `获客目标：${query.goal || "未指定"}`,
     `排除：${query.excludeKeywords || "无"}`
   ].join("\n");
-  const content = await callAiModel(config, prompt, 4000);
+  const content = await callAiModel(config, prompt, 4000, fetcher);
   const parsed = extractJsonObject(content) as { companies?: unknown };
   const companies = Array.isArray(parsed.companies) ? parsed.companies : [];
   return companies
@@ -6538,65 +10010,43 @@ async function aiGenerateLeads(query: LeadQuery, config: AiModelConfig): Promise
       const item = (raw || {}) as Record<string, unknown>;
       const firstCountry = query.countries.split(/,|，/)[0]?.trim() || "未知";
       const detail = String(item.description || "").trim();
+      const officialWebsite = String(item.website || "").trim();
       return {
         company: String(item.company || "").trim(),
-        website: String(item.website || "").trim(),
+        officialWebsite,
+        website: officialWebsite,
         country: String(item.country || firstCountry).trim(),
         business: String(item.business || query.productKeywords || "待核实业务").trim(),
         contact: "待维护",
         contactInfo: "",
         description: `${detail}${detail ? "（AI 生成，待核实）" : "AI 生成候选，待核实。"}`,
-        confidence: 58
+        confidence: 58,
+        sourceUrl: "",
+        recordType: "assisted_suggestion",
+        evidenceSummary: `${detail || "AI 生成候选"}；尚未完成外部事实核验。`,
+        matchedFields: ["company", ...(officialWebsite ? ["officialWebsite"] : []), "country", "business"]
       };
     })
     .filter((lead) => lead.company);
 }
 
-async function parseWebsiteWithAi(config: AiModelConfig, context: {
-  website: string;
-  title: string;
-  description: string;
-  headings: string[];
-  text: string;
-  ruleResult: WebsiteOpportunity;
-}) {
-  const prompt = [
-    "你是外贸CRM商机研究助手。请从官网文本中提取真实商机字段。",
-    "只返回严格 JSON，不要 Markdown，不要解释。",
-    "JSON字段：company,business,country,website,contact,contactInfo,description。",
-    "业务字段要聚焦产品/服务；联系人和联系方式没有就写“待维护”；不要编造不存在的邮箱电话。",
-    `官网：${context.website}`,
-    `标题：${context.title}`,
-    `Meta：${context.description}`,
-    `标题组：${context.headings.join("；")}`,
-    `规则初稿：${JSON.stringify(context.ruleResult)}`,
-    `正文：${context.text.slice(0, 10000)}`
-  ].join("\n");
-  const content = await callAiModel(config, prompt, 12000);
-  const parsed = extractJsonObject(content);
-  return {
-    company: String(parsed.company || "").trim(),
-    business: String(parsed.business || "").trim(),
-    country: String(parsed.country || "").trim(),
-    website: String(parsed.website || context.website).trim(),
-    contact: String(parsed.contact || "").trim(),
-    contactInfo: String(parsed.contactInfo || parsed.contact_info || "").trim(),
-    description: String(parsed.description || "").trim()
-  };
-}
-
-async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars = 12000) {
+async function callAiModel(
+  config: AiModelConfig,
+  prompt: string,
+  maxInputChars = 12000,
+  fetcher?: (url: string, init?: RequestInit) => Promise<globalThis.Response>
+) {
   const protocol = config.protocol || "openai-compatible";
   const endpointBase = config.baseUrl.replace(/\/+$/, "");
-  if (process.env.ALLOW_PRIVATE_AI_ENDPOINTS !== "true") {
-    await assertPublicHttpUrl(endpointBase);
-  }
+  const secureClient = fetcher ? null : createAiHttpClient(endpointBase);
+  const request: (url: string, init?: RequestInit) => Promise<globalThis.Response> = fetcher
+    || ((url, init) => secureClient!.fetch(url, init));
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AI_MODEL_TIMEOUT_MS);
   try {
     if (protocol === "anthropic") {
       const endpoint = `${endpointBase}/messages`;
-      const response = await fetchPublicUrl(endpoint, {
+      const response = await request(endpoint, {
         method: "POST",
         signal: controller.signal,
         headers: {
@@ -6608,36 +10058,39 @@ async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars 
           model: config.model,
           max_tokens: 800,
           temperature: config.temperature ?? 0.1,
-          system: "你擅长把官网公开信息整理成外贸CRM商机。输出必须可被 JSON.parse 解析。",
+          system: "你擅长整理授权 API、搜索服务和用户提供的结构化资料。不得声称访问过企业网页，输出必须可被 JSON.parse 解析。",
           messages: [{ role: "user", content: prompt.slice(0, maxInputChars) }]
         })
       });
-      const data = await readAiJson<{ content?: Array<{ type?: string; text?: string }> }>(response, endpoint);
+      const data = await readAiJson<{ content?: Array<{ type?: string; text?: string }> }>(response);
       const content = data.content?.map((item) => item.text || "").join("\n").trim() || "";
       if (!content) throw new Error("模型返回为空");
       return content;
     }
     if (protocol === "gemini") {
-      const endpoint = `${endpointBase}/models/${encodeURIComponent(config.model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
-      const response = await fetchPublicUrl(endpoint, {
+      const endpoint = `${endpointBase}/models/${encodeURIComponent(config.model)}:generateContent`;
+      const response = await request(endpoint, {
         method: "POST",
         signal: controller.signal,
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "x-goog-api-key": config.apiKey
+        },
         body: JSON.stringify({
           generationConfig: { temperature: config.temperature ?? 0.1 },
           contents: [{
             role: "user",
-            parts: [{ text: `你擅长把官网公开信息整理成外贸CRM商机。输出必须可被 JSON.parse 解析。\n${prompt.slice(0, maxInputChars)}` }]
+            parts: [{ text: `你擅长整理授权 API、搜索服务和用户提供的结构化资料。不得声称访问过企业网页，输出必须可被 JSON.parse 解析。\n${prompt.slice(0, maxInputChars)}` }]
           }]
         })
       });
-      const data = await readAiJson<{ candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }>(response, endpoint);
+      const data = await readAiJson<{ candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }>(response);
       const content = data.candidates?.[0]?.content?.parts?.map((item) => item.text || "").join("\n").trim() || "";
       if (!content) throw new Error("模型返回为空");
       return content;
     }
     const endpoint = `${endpointBase}/chat/completions`;
-    const response = await fetchPublicUrl(endpoint, {
+    const response = await request(endpoint, {
       method: "POST",
       signal: controller.signal,
       headers: {
@@ -6648,13 +10101,13 @@ async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars 
         model: config.model,
         temperature: config.temperature ?? 0.1,
         messages: [
-          { role: "system", content: "你擅长把官网公开信息整理成外贸CRM商机。输出必须可被 JSON.parse 解析。" },
+          { role: "system", content: "你擅长整理授权 API、搜索服务和用户提供的结构化资料。不得声称访问过企业网页，输出必须可被 JSON.parse 解析。" },
           { role: "user", content: prompt.slice(0, maxInputChars) }
         ],
         response_format: { type: "json_object" }
       })
     });
-    const data = await readAiJson<{ choices?: Array<{ message?: { content?: string } }> }>(response, endpoint);
+    const data = await readAiJson<{ choices?: Array<{ message?: { content?: string } }> }>(response);
     const content = data.choices?.[0]?.message?.content || "";
     if (!content.trim()) throw new Error("模型返回为空");
     return content;
@@ -6663,24 +10116,29 @@ async function callAiModel(config: AiModelConfig, prompt: string, maxInputChars 
   }
 }
 
-async function readAiJson<T>(response: globalThis.Response, endpoint: string): Promise<T> {
+function aiHttpErrorMessage(status: number) {
+  if ([401, 403].includes(status)) return "模型认证失败，请检查 API Key 和账号权限";
+  if (status === 404) return "模型接口或模型名称不存在，请检查 Base URL 和 Model";
+  if (status === 429) return "模型请求过于频繁或额度不足，请稍后重试并检查配额";
+  if (status >= 500) return "模型服务暂时不可用，请稍后重试";
+  if (status >= 400) return "模型请求参数不被接受，请检查协议、模型名称和配置";
+  return `模型接口返回 HTTP ${status}`;
+}
+
+async function readAiJson<T>(response: globalThis.Response): Promise<T> {
   const contentType = response.headers.get("content-type") || "";
   const text = await response.text();
   let data: any = null;
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
-    const preview = text.slice(0, 120).replace(/\s+/g, " ").trim();
     if (contentType.includes("text/html") || text.trim().startsWith("<")) {
-      throw new Error(`接口返回 HTML 页面而不是 JSON。请检查 Base URL 是否填到了 API 地址，例如 OpenAI 兼容接口通常需要以 /v1 结尾；当前请求：${endpoint}`);
+      throw new Error("接口返回 HTML 页面而不是 JSON，请检查 Base URL 是否填写为 API 地址");
     }
-    throw new Error(`接口返回内容不是 JSON：${preview || "空响应"}`);
+    throw new Error("接口返回内容不是有效 JSON");
   }
   if (!response.ok) {
-    const providerMessage = data?.error?.message || data?.message || "";
-    const providerType = data?.error?.type || data?.error?.code || "";
-    const suffix = providerMessage ? `：${providerMessage}${providerType ? `（${providerType}）` : ""}` : "";
-    throw new Error(`HTTP ${response.status}${suffix}`);
+    throw new Error(aiHttpErrorMessage(response.status));
   }
   return data as T;
 }
@@ -6691,55 +10149,6 @@ function extractJsonObject(content: string) {
   const end = source.lastIndexOf("}");
   if (start < 0 || end <= start) throw new Error("AI JSON missing");
   return JSON.parse(source.slice(start, end + 1)) as Record<string, unknown>;
-}
-
-function cleanHtml(value: string) {
-  return value
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function firstMatch(value: string, pattern: RegExp) {
-  return cleanHtml(value.match(pattern)?.[1] || "");
-}
-
-function companyFromTitle(title: string, hostname: string) {
-  const host = hostname.replace(/^www\./, "").split(".")[0];
-  const fromTitle = title.split(/[-|–—]/)[0]?.trim();
-  const raw = fromTitle && fromTitle.length >= 3 ? fromTitle : host;
-  return raw.replace(/\b(home|official|website|products?)\b/gi, "").replace(/\s+/g, " ").trim() || host;
-}
-
-function inferBusiness(text: string) {
-  const lower = text.toLowerCase();
-  const dictionary = [
-    ["flow", "流体控制产品 / Flow control products"],
-    ["temperature", "温控产品 / Temperature control products"],
-    ["level", "液位控制产品 / Level control products"],
-    ["valve", "阀门与过程控制 / Valve control"]
-  ];
-  const matched = dictionary.filter(([keyword]) => lower.includes(keyword)).map(([, label]) => label);
-  return [...new Set(matched)].slice(0, 3).join("；") || "官网产品待核实";
-}
-
-function inferCountry(url: string, text: string) {
-  const lower = `${url} ${text}`.toLowerCase();
-  const rules: Array<[string, string]> = [
-    [".de", "德国"], [".co.uk", "英国"], [".uk", "英国"], [".fr", "法国"], [".it", "意大利"], [".es", "西班牙"],
-    [".us", "美国"], [".com.au", "澳大利亚"], [".ca", "加拿大"], [".jp", "日本"], [".kr", "韩国"], [".in", "印度"],
-    ["germany", "德国"], ["united kingdom", "英国"], ["usa", "美国"], ["japan", "日本"], ["india", "印度"], ["china", "中国"]
-  ];
-  return rules.find(([key]) => lower.includes(key))?.[1] || "未知";
-}
-
-function inferContact(text: string) {
-  const match = text.match(/(?:Contact|Sales|Manager|Director)[:：\s]+([A-Z][A-Za-z\s.-]{2,40})/);
-  return cleanHtml(match?.[1] || "") || "待维护";
 }
 
 const reportStageWeights: Record<string, number> = {
@@ -7008,12 +10417,29 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 async function startServer() {
-  const port = Number(process.env.PORT || 4188);
   const mysqlRequested = process.env.CRM_STORE === "mysql"
     || (process.env.CRM_STORE !== "memory" && Boolean(process.env.DATABASE_URL || process.env.MYSQL_URL));
+  let host = "127.0.0.1";
+  try {
+    validateAuthSecurity();
+    validateProviderCredentialSecurity();
+    validateAgentJobSecurity();
+    validateTradeObservationCursorSecurity();
+    validateMarketOpportunityCursorSecurity();
+    validateProspectRunSecurity();
+    host = resolveBackendHost();
+    if (process.env.NODE_ENV === "production" && !mysqlRequested) {
+      throw new Error("生产环境必须配置 MySQL 持久化，禁止使用内存存储");
+    }
+  } catch (error) {
+    console.error(`GoodJob CRM security validation failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+    return;
+  }
+  const port = Number(process.env.PORT || 4188);
   if (mysqlRequested) {
     try {
-      const store = await createMysqlStore();
+      const store = await createMysqlStore({ processRole: "api" });
       setStore(store);
       console.log("GoodJob CRM using MySQL persistence");
     } catch (error) {
@@ -7021,10 +10447,77 @@ async function startServer() {
       process.exit(1);
     }
   }
-  app.listen(port, () => {
-    console.log(`GoodJob CRM API listening on http://127.0.0.1:${port}`);
+  const store = getStore();
+  const prospectQueueRequired =
+    process.env.PROSPECT_QUEUE_REQUIRED === "true";
+  const prospectWorkerService =
+    process.env.PROSPECT_WORKER_ENABLED === "false"
+    ? null
+    : new ProspectWorkerService({ store });
+  if (!prospectWorkerService && prospectQueueRequired) {
+    console.error(
+      "GoodJob CRM prospect queue startup failed: "
+      + "启用强制队列时不能关闭 PROSPECT_WORKER_ENABLED"
+    );
+    await store.close?.();
+    process.exit(1);
+    return;
+  }
+  try {
+    await prospectWorkerService?.start();
+    activeProspectWorkerService = prospectWorkerService;
+  } catch (error) {
+    console.error(`GoodJob CRM prospect worker startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    await store.close?.();
+    process.exit(1);
+    return;
+  }
+  const prospectScheduler = process.env.PROSPECT_SCHEDULER_ENABLED === "false"
+    ? null
+    : new ProspectScheduler({
+        store,
+        pollMs: Number(process.env.PROSPECT_SCHEDULER_POLL_MS || 15_000),
+        onRunCreated: () => prospectWorkerService?.synchronize()
+      });
+  try {
+    await prospectScheduler?.start();
+  } catch (error) {
+    activeProspectWorkerService = null;
+    await prospectWorkerService?.stop();
+    await store.close?.();
+    console.error(`GoodJob CRM prospect scheduler startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+    return;
+  }
+  const httpServer = app.listen(port, host, () => {
+    console.log(`GoodJob CRM API listening on http://${host}:${port}`);
   });
   scheduleMidnightTodoArchive();
+
+  let shuttingDown = false;
+  const shutdown = async (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`GoodJob CRM received ${signal}, shutting down`);
+    try {
+      await prospectScheduler?.stop();
+      activeProspectWorkerService = null;
+      await prospectWorkerService?.stop();
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+      await store.close?.();
+      process.exit(0);
+    } catch (error) {
+      console.error(`GoodJob CRM shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  };
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  process.once("SIGINT", () => void shutdown("SIGINT"));
 }
 
 if (process.env.NODE_ENV !== "test") {

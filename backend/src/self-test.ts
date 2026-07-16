@@ -1,4 +1,9 @@
 import { app } from "./server.js";
+import { decryptAgentJobPayload } from "./agent-job-security.js";
+import { cancelAgentJob, completeAgentJob, enqueueAgentJob, failAgentJob, retryAgentJob, startAgentJob } from "./agent-jobs.js";
+import { decryptProviderConfiguration } from "./credential-security.js";
+import { setProviderHttpTestTransport } from "./provider-http-client.js";
+import { getStore } from "./store.js";
 
 const server = app.listen(0);
 const address = server.address();
@@ -12,6 +17,14 @@ async function request(path: string, options: RequestInit = {}) {
   });
   const json = await response.json();
   return { response, json };
+}
+
+function websiteDomain(raw: string) {
+  try {
+    return new URL(raw).hostname.replace(/^www\./i, "").toLocaleLowerCase();
+  } catch {
+    return "";
+  }
 }
 
 async function login(email: string) {
@@ -127,7 +140,7 @@ try {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({
-      name: "自动化AI解析配置",
+      name: "自动化AI归纳配置",
       baseUrl: "https://api.openai.com/v1",
       model: "gpt-4o-mini",
       apiKey: "test-secret-1234",
@@ -142,7 +155,7 @@ try {
     body: JSON.stringify({
       provider: "deepseek",
       protocol: "openai-compatible",
-      name: "自动化AI解析配置-第二套Key",
+      name: "自动化AI归纳配置-第二套Key",
       baseUrl: "https://api.deepseek.com/v1",
       model: "deepseek-chat",
       apiKey: "test-secret-5678",
@@ -413,12 +426,47 @@ try {
     throw new Error("lead permanent delete and source event cleanup failed");
   }
 
-  const websitePreview = await request("/api/tools/website-scrape/preview", {
+  const websiteReferenceOriginalFetch = globalThis.fetch;
+  let enterpriseWebsiteRequests = 0;
+  globalThis.fetch = (async (input, init) => {
+    const rawUrl = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (websiteDomain(rawUrl) === "example.com") {
+      enterpriseWebsiteRequests += 1;
+      throw new Error("website reference registration attempted an enterprise webpage request");
+    }
+    return websiteReferenceOriginalFetch(input, init);
+  }) as typeof globalThis.fetch;
+  let websitePreview: Awaited<ReturnType<typeof request>>;
+  try {
+    websitePreview = await request("/api/tools/website-scrape/preview", {
+      method: "POST",
+      headers: { authorization: `Bearer ${salesToken}` },
+      body: JSON.stringify({ urls: ["https://example.com"] })
+    });
+  } finally {
+    globalThis.fetch = websiteReferenceOriginalFetch;
+  }
+  if (enterpriseWebsiteRequests !== 0) {
+    throw new Error("website reference registration must make zero enterprise webpage requests");
+  }
+  if (!websitePreview.response.ok
+    || !websitePreview.json.opportunities?.[0]?.company
+    || websitePreview.json.opportunities?.[0]?.parseMode !== "reference"
+    || websitePreview.json.opportunities?.[0]?.verificationReport?.crawlerFree !== true) {
+    throw new Error("website reference registration failed");
+  }
+  const websiteAiAttempt = await request("/api/tools/website-scrape/preview", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ urls: ["https://example.com"] })
+    body: JSON.stringify({ urls: ["https://example.com"], useAi: true })
   });
-  if (!websitePreview.response.ok || !websitePreview.json.opportunities?.[0]?.company) throw new Error("website scrape preview failed");
+  if (websiteAiAttempt.response.status !== 400) {
+    throw new Error("website reference registration must reject AI webpage parsing");
+  }
   const previewOpportunity = websitePreview.json.opportunities[0];
 
   const websiteSyncBeforeVerify = await request("/api/tools/website-scrape/sync-opportunities", {
@@ -613,6 +661,34 @@ try {
   }
 
   // 自动获客数据源中心：注册表 / 保存 Key（掩码）/ 删除
+  const anonymousCatalog = await request("/api/lead-finder/provider-catalog");
+  if (anonymousCatalog.response.status !== 401) throw new Error("provider catalog must require authentication");
+  const salesCatalog = await request("/api/lead-finder/provider-catalog", {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  const adminCatalog = await request("/api/lead-finder/provider-catalog", {
+    headers: { authorization: `Bearer ${adminToken}` }
+  });
+  const catalogProviders = salesCatalog.json.providers || [];
+  if (!salesCatalog.response.ok || catalogProviders.length < 8) throw new Error("provider catalog read failed");
+  if (!adminCatalog.response.ok || JSON.stringify(adminCatalog.json.providers) !== JSON.stringify(catalogProviders)) {
+    throw new Error("provider catalog must be global neutral metadata");
+  }
+  const catalogPayload = JSON.stringify(salesCatalog.json);
+  for (const forbiddenField of ["apiKey", "credential", "ownerId", "teamId", "usage"]) {
+    if (catalogPayload.includes(`"${forbiddenField}"`)) {
+      throw new Error(`provider catalog leaked tenant or credential field: ${forbiddenField}`);
+    }
+  }
+  const serperCatalog = catalogProviders.find((item: any) => item.code === "serper");
+  if (!serperCatalog
+    || serperCatalog.accessMode !== "api"
+    || !Array.isArray(serperCatalog.capabilities)
+    || !Array.isArray(serperCatalog.allowedFields)
+    || serperCatalog.licensePolicy?.requiresKey !== true) {
+    throw new Error("provider catalog metadata incomplete");
+  }
+
   const leadProviders = await request("/api/lead-finder/providers", {
     headers: { authorization: `Bearer ${salesToken}` }
   });
@@ -624,14 +700,849 @@ try {
   const aiSearchMeta = providerList.find((item: any) => item.id === "ai_search");
   if (!aiSearchMeta || aiSearchMeta.tier !== "ai" || aiSearchMeta.requiresKey !== false) throw new Error("ai search source metadata failed");
 
+  const disabledCatalogProvider = getStore().providerCatalog.find((item) => item.code === "gleif");
+  if (!disabledCatalogProvider) throw new Error("disabled provider status test setup failed");
+  const originalDisabledCatalogStatus = disabledCatalogProvider.status;
+  try {
+    disabledCatalogProvider.status = "disabled";
+    const disabledProviderStatuses = await request("/api/lead-finder/providers", {
+      headers: { authorization: `Bearer ${salesToken}` }
+    });
+    const disabledGleifStatus = disabledProviderStatuses.json.providers
+      ?.find((item: { id?: string }) => item.id === "gleif");
+    if (!disabledProviderStatuses.response.ok || disabledGleifStatus?.ready !== true || disabledGleifStatus?.enabled !== false) {
+      throw new Error("provider status must distinguish ready credentials from disabled catalog");
+    }
+    const disabledProviderSearch = await request("/api/lead-finder/search", {
+      method: "POST",
+      headers: { authorization: `Bearer ${salesToken}` },
+      body: JSON.stringify({
+        goal: "validate disabled provider feedback",
+        productKeywords: "",
+        countries: "",
+        industry: "",
+        customerType: "",
+        excludeKeywords: "",
+        sources: ["gleif"],
+        useAi: false,
+        limit: 3
+      })
+    });
+    const disabledGleifStat = disabledProviderSearch.json.sourceStats
+      ?.find((item: { id?: string }) => item.id === "gleif");
+    if (!disabledProviderSearch.response.ok || disabledGleifStat?.errorCode !== "PROVIDER_DISABLED") {
+      throw new Error("disabled provider search must return PROVIDER_DISABLED");
+    }
+  } finally {
+    disabledCatalogProvider.status = originalDisabledCatalogStatus;
+    await getStore().persist();
+  }
+
+  const anonymousLeadProviders = await request("/api/lead-finder/providers");
+  if (anonymousLeadProviders.response.status !== 401) throw new Error("lead providers must require authentication");
+  const anonymousLeadSourceSave = await request("/api/lead-finder/source-config", {
+    method: "POST",
+    body: JSON.stringify({ provider: "serper", apiKey: "anonymous-secret", enabled: true })
+  });
+  if (anonymousLeadSourceSave.response.status !== 401) throw new Error("lead source config write must require authentication");
+
+  const shirleyProviderSecret = "serper-secret-9911";
   const leadSourceSave = await request("/api/lead-finder/source-config", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ provider: "serper", apiKey: "serper-secret-9911", enabled: true })
+    body: JSON.stringify({ provider: "serper", apiKey: shirleyProviderSecret, enabled: true })
   });
   const serperStatus = (leadSourceSave.json.providers || []).find((item: any) => item.id === "serper");
   if (!leadSourceSave.response.ok || leadSourceSave.json.config?.apiKey !== "****9911" || !serperStatus?.ready || !serperStatus?.enabled) {
     throw new Error("lead source config save failed");
+  }
+  if (JSON.stringify(leadSourceSave.json).includes(shirleyProviderSecret)) {
+    throw new Error("lead source config response leaked plaintext API key");
+  }
+  const shirleyConnection = getStore().providerConnections.find((item) =>
+    item.providerId === "serper" && item.ownerId === "u_sales_shirley" && item.teamId === "europe"
+  );
+  if (!shirleyConnection
+    || shirleyConnection.configurationEncrypted.includes(shirleyProviderSecret)
+    || JSON.stringify(shirleyConnection).includes(`"apiKey":"${shirleyProviderSecret}"`)) {
+    throw new Error("lead source config must be stored as ciphertext");
+  }
+  const decryptedShirleyConnection = decryptProviderConfiguration(
+    shirleyConnection,
+    shirleyConnection.configurationEncrypted
+  );
+  if (decryptedShirleyConnection.apiKey !== shirleyProviderSecret) {
+    throw new Error("lead source encrypted config cannot be read with its owner context");
+  }
+  for (const tamperedContext of [
+    { ...shirleyConnection, ownerId: "u_sales_mia" },
+    { ...shirleyConnection, teamId: "another-team" },
+    { ...shirleyConnection, providerId: "brave" }
+  ]) {
+    let tamperBlocked = false;
+    try {
+      decryptProviderConfiguration(tamperedContext, shirleyConnection.configurationEncrypted);
+    } catch {
+      tamperBlocked = true;
+    }
+    if (!tamperBlocked) throw new Error("provider credential AAD tampering must be rejected");
+  }
+  const catalogAfterSecretSave = await request("/api/lead-finder/provider-catalog", {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (JSON.stringify(catalogAfterSecretSave.json).includes(shirleyProviderSecret)) {
+    throw new Error("provider catalog must never expose connection secrets");
+  }
+
+  const miaBeforeSave = await request("/api/lead-finder/providers", {
+    headers: { authorization: `Bearer ${miaToken}` }
+  });
+  const miaSerperBeforeSave = (miaBeforeSave.json.providers || []).find((item: any) => item.id === "serper");
+  if (miaSerperBeforeSave?.hasApiKey || miaSerperBeforeSave?.enabled) {
+    throw new Error("lead source connection leaked to another salesperson");
+  }
+  const miaProviderSecret = "mia-serper-secret-2244";
+  const miaLeadSourceSave = await request("/api/lead-finder/source-config", {
+    method: "POST",
+    headers: { authorization: `Bearer ${miaToken}` },
+    body: JSON.stringify({ provider: "serper", apiKey: miaProviderSecret, enabled: true })
+  });
+  if (!miaLeadSourceSave.response.ok || miaLeadSourceSave.json.config?.apiKey !== "****2244") {
+    throw new Error("second salesperson must be able to save an independent provider connection");
+  }
+  const miaConnection = getStore().providerConnections.find((item) =>
+    item.providerId === "serper" && item.ownerId === "u_sales_mia" && item.teamId === "europe"
+  );
+  if (!miaConnection
+    || miaConnection.id === shirleyConnection.id
+    || miaConnection.configurationEncrypted.includes(miaProviderSecret)
+    || decryptProviderConfiguration(miaConnection, miaConnection.configurationEncrypted).apiKey !== miaProviderSecret) {
+    throw new Error("provider connections must remain independently encrypted per salesperson");
+  }
+
+  const hunterProviderSecret = "hunter-secret-8833";
+  const hunterLeadSourceSave = await request("/api/lead-finder/source-config", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ provider: "hunter", apiKey: hunterProviderSecret, enabled: true })
+  });
+  if (!hunterLeadSourceSave.response.ok || hunterLeadSourceSave.json.config?.apiKey !== "****8833") {
+    throw new Error("hunter provider connection save failed");
+  }
+  const providerLogSearchMarker = `confidential-search-${Date.now()}`;
+  const providerLogDomainMarker = `provider-log-${Date.now()}.example`;
+  const providerLogEmailMarker = `buyer@${providerLogDomainMarker}`;
+  const manuallyVerifiedEmail = `verified-${Date.now()}@example.test`;
+  const freeSearchRecordMarker = `FREE-${Date.now()}`;
+  const freeSearchCompany = `Free Search Shared Name ${Date.now()}`;
+  const originalFetch = globalThis.fetch;
+  let hunterRateLimited = false;
+  let serperHealthRateLimited = false;
+  let enterpriseWebsiteRequestsDuringProviderSearch = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.startsWith("https://api.gleif.org/api/v1/lei-records")) {
+      const body = JSON.stringify({
+        data: [{
+          id: freeSearchRecordMarker,
+          attributes: {
+            lei: freeSearchRecordMarker,
+            entity: {
+              legalName: { name: freeSearchCompany },
+              legalAddress: { country: "DE", city: "Hamburg" }
+            }
+          }
+        }]
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/vnd.api+json", "content-length": String(Buffer.byteLength(body)) }
+      });
+    }
+    if (url.startsWith("https://www.wikidata.org/w/api.php")) {
+      const body = JSON.stringify({
+        search: [{
+          id: `Q-${freeSearchRecordMarker}`,
+          label: freeSearchCompany,
+          description: "Independent public entity with the same display name",
+          concepturi: `https://www.wikidata.org/wiki/Q-${freeSearchRecordMarker}`
+        }]
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) }
+      });
+    }
+    if (url.startsWith("https://google.serper.dev/search")) {
+      const requestBody = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+      if (serperHealthRateLimited && requestBody.q === "industrial product supplier") {
+        return new Response("", {
+          status: 429,
+          headers: { "retry-after": "60" }
+        });
+      }
+      const organic = requestBody.q === "industrial product supplier"
+        ? []
+        : [{
+            title: "Provider Log Test Company",
+            link: `https://${providerLogDomainMarker}`,
+            snippet: "Public company profile for provider logging test"
+          }];
+      const body = JSON.stringify({ organic });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) }
+      });
+    }
+    if (url.startsWith("https://api.hunter.io/v2/domain-search?company=")) {
+      const body = JSON.stringify({ data: null });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) }
+      });
+    }
+    if (url.startsWith(`https://api.hunter.io/v2/domain-search?domain=${encodeURIComponent(providerLogDomainMarker)}`)) {
+      if (hunterRateLimited) {
+        return new Response("", {
+          status: 429,
+          headers: { "retry-after": "60" }
+        });
+      }
+      const body = JSON.stringify({
+        data: {
+          domain: providerLogDomainMarker,
+          organization: "Provider Log Test Company",
+          emails: [{ value: providerLogEmailMarker, first_name: "Test", last_name: "Buyer" }]
+        }
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) }
+      });
+    }
+    if (url.startsWith(`https://${providerLogDomainMarker}`)) {
+      enterpriseWebsiteRequestsDuringProviderSearch += 1;
+      throw new Error("provider search attempted an enterprise webpage request");
+    }
+    return originalFetch(input, init);
+  };
+  let providerConnectionTest;
+  let providerSearch;
+  let providerOpportunity;
+  setProviderHttpTestTransport(async (url, init) => await globalThis.fetch(url, init));
+  const runProviderSearch = () => request("/api/lead-finder/search", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      goal: "find importers",
+      productKeywords: providerLogSearchMarker,
+      countries: "Germany",
+      industry: "industrial lighting",
+      customerType: "importer",
+      excludeKeywords: "",
+      sources: ["serper", "hunter"],
+      useAi: false,
+      limit: 3
+    })
+  });
+  try {
+    const freeSearchRequest = () => request("/api/lead-finder/free-search", {
+      method: "POST",
+      headers: { authorization: `Bearer ${salesToken}` },
+      body: JSON.stringify({
+        productKeywords: freeSearchRecordMarker,
+        countries: "Germany",
+        industry: "industrial lighting",
+        customerType: "importer",
+        goal: "verify free provider persistence",
+        limit: 4
+      })
+    });
+    const firstFreeSearch = await freeSearchRequest();
+    const firstFreeByProvider = new Map<string, any>((firstFreeSearch.json.opportunities || []).map((item: any) => [
+      item.sourceEvidence?.[0]?.providerId,
+      item
+    ]));
+    const firstFreeGleif = firstFreeByProvider.get("gleif");
+    const firstFreeWikidata = firstFreeByProvider.get("wikidata");
+    const firstFreeSourceIds = new Set<string>(
+      (firstFreeSearch.json.sourceStats || []).map((item: { id?: string }) => item.id || "")
+    );
+    if (!firstFreeSearch.response.ok
+      || !firstFreeSearch.json.runId
+      || !firstFreeSourceIds.has("gleif")
+      || !firstFreeSourceIds.has("wikidata")
+      || firstFreeSearch.json.incrementalStats?.newCount !== firstFreeSearch.json.opportunities?.length
+      || !firstFreeGleif?.id
+      || !firstFreeWikidata?.id
+      || firstFreeGleif.id === firstFreeWikidata.id
+      || firstFreeGleif.company !== firstFreeWikidata.company) {
+      throw new Error("free provider search must preserve same-name independent provider records");
+    }
+    const freeManualEdit = await request(`/api/prospect-list/${firstFreeGleif.id}/details`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${salesToken}` },
+      body: JSON.stringify({
+        company: "人工核验免费源企业",
+        business: "人工确认免费源业务",
+        country: "德国",
+        website: "https://free-provider-verified.example",
+        contact: "Free Source Buyer",
+        contactInfo: "free-source-buyer@example.test",
+        description: "免费入口刷新不得覆盖人工核验字段"
+      })
+    });
+    if (!freeManualEdit.response.ok) throw new Error("free provider opportunity manual edit failed");
+    const secondFreeSearch = await freeSearchRequest();
+    const secondFreeGleif = secondFreeSearch.json.opportunities
+      ?.find((item: any) => item.sourceEvidence?.some((evidence: any) => evidence.providerId === "gleif"));
+    const secondFreeWikidata = secondFreeSearch.json.opportunities
+      ?.find((item: any) => item.sourceEvidence?.some((evidence: any) => evidence.providerId === "wikidata"));
+    if (!secondFreeSearch.response.ok
+      || secondFreeGleif?.id !== firstFreeGleif.id
+      || secondFreeWikidata?.id !== firstFreeWikidata.id
+      || secondFreeSearch.json.incrementalStats?.newCount !== 0
+      || secondFreeSearch.json.incrementalStats?.unchangedCount !== secondFreeSearch.json.opportunities?.length
+      || secondFreeGleif.company !== "人工核验免费源企业"
+      || secondFreeGleif.contactInfo !== "free-source-buyer@example.test"
+      || secondFreeGleif.description !== "免费入口刷新不得覆盖人工核验字段"
+      || secondFreeGleif.verificationReport?.generatedAt
+        !== freeManualEdit.json.opportunity?.verificationReport?.generatedAt) {
+      throw new Error("free provider search must return canonical ids and protect manual fields");
+    }
+
+    const serpapiCatalog = getStore().providerCatalog.find((item) => item.code === "serpapi");
+    const gleifCatalog = getStore().providerCatalog.find((item) => item.code === "gleif");
+    if (!serpapiCatalog || !gleifCatalog) throw new Error("provider catalog policy test setup failed");
+    const originalSerpapiLicense = { ...serpapiCatalog.licensePolicy };
+    const originalGleifLicense = { ...gleifCatalog.licensePolicy };
+    try {
+      serpapiCatalog.licensePolicy = { ...serpapiCatalog.licensePolicy, requiresKey: false };
+      const catalogAllowsKeylessSave = await request("/api/lead-finder/source-config", {
+        method: "POST",
+        headers: { authorization: `Bearer ${salesToken}` },
+        body: JSON.stringify({ provider: "serpapi", apiKey: "", enabled: true })
+      });
+      if (!catalogAllowsKeylessSave.response.ok) {
+        throw new Error("source config must follow catalog key policy when catalog makes a provider keyless");
+      }
+      gleifCatalog.licensePolicy = { ...gleifCatalog.licensePolicy, requiresKey: true };
+      const catalogRequiresKeySave = await request("/api/lead-finder/source-config", {
+        method: "POST",
+        headers: { authorization: `Bearer ${salesToken}` },
+        body: JSON.stringify({ provider: "gleif", apiKey: "", enabled: true })
+      });
+      if (catalogRequiresKeySave.response.status !== 400) {
+        throw new Error("source config must require a key when catalog policy requires one");
+      }
+    } finally {
+      serpapiCatalog.licensePolicy = originalSerpapiLicense;
+      gleifCatalog.licensePolicy = originalGleifLicense;
+      const temporaryConnectionIndex = getStore().providerConnections.findIndex((item) =>
+        item.providerId === "serpapi" && item.ownerId === "u_sales_shirley"
+      );
+      if (temporaryConnectionIndex >= 0) getStore().providerConnections.splice(temporaryConnectionIndex, 1);
+      await getStore().persist();
+    }
+
+    const unavailableHunter = await request("/api/lead-finder/search", {
+      method: "POST",
+      headers: { authorization: `Bearer ${miaToken}` },
+      body: JSON.stringify({
+        goal: "validate unavailable provider feedback",
+        productKeywords: "",
+        countries: "",
+        industry: "",
+        customerType: "",
+        excludeKeywords: "",
+        sources: ["hunter"],
+        useAi: false,
+        limit: 3
+      })
+    });
+    const unavailableHunterStat = unavailableHunter.json.sourceStats
+      ?.find((item: { id?: string }) => item.id === "hunter");
+    const unavailableHunterLog = getStore().providerRequestLogs.find((item) =>
+      item.runId === unavailableHunter.json.runId
+      && item.providerId === "hunter"
+      && item.errorCode === "provider_connection_invalid"
+    );
+    if (!unavailableHunter.response.ok
+      || unavailableHunterStat?.errorCode !== "PROVIDER_CONNECTION_INVALID"
+      || unavailableHunterStat?.retryable !== false
+      || !unavailableHunterLog) {
+      throw new Error("unavailable selected provider must return structured feedback and an audit record");
+    }
+
+    const unavailableAiSearch = await request("/api/lead-finder/search", {
+      method: "POST",
+      headers: { authorization: `Bearer ${miaToken}` },
+      body: JSON.stringify({
+        goal: "validate unavailable AI provider feedback",
+        productKeywords: "",
+        countries: "",
+        industry: "",
+        customerType: "",
+        excludeKeywords: "",
+        sources: ["ai_search"],
+        useAi: false,
+        limit: 3
+      })
+    });
+    const unavailableAiStat = unavailableAiSearch.json.sourceStats
+      ?.find((item: { id?: string }) => item.id === "ai_search");
+    const unavailableAiLog = getStore().providerRequestLogs.find((item) =>
+      item.runId === unavailableAiSearch.json.runId
+      && item.providerId === "ai_search"
+      && item.errorCode === "provider_connection_invalid"
+    );
+    if (!unavailableAiSearch.response.ok
+      || unavailableAiStat?.errorCode !== "PROVIDER_CONNECTION_INVALID"
+      || unavailableAiStat?.retryable !== false
+      || !unavailableAiLog) {
+      throw new Error("unavailable AI provider must return structured feedback and an audit record");
+    }
+
+    providerConnectionTest = await request("/api/lead-finder/source-config/test", {
+      method: "POST",
+      headers: { authorization: `Bearer ${salesToken}` },
+      body: JSON.stringify({ provider: "serper" })
+    });
+    if (!providerConnectionTest.response.ok || !providerConnectionTest.json.ok) {
+      throw new Error("provider connection test logging setup failed");
+    }
+    serperHealthRateLimited = true;
+    const rateLimitedConnectionTest = await request("/api/lead-finder/source-config/test", {
+      method: "POST",
+      headers: { authorization: `Bearer ${salesToken}` },
+      body: JSON.stringify({ provider: "serper" })
+    });
+    if (!rateLimitedConnectionTest.response.ok
+      || rateLimitedConnectionTest.json.ok
+      || rateLimitedConnectionTest.json.errorCode !== "PROVIDER_RATE_LIMITED"
+      || rateLimitedConnectionTest.json.retryable !== true
+      || !rateLimitedConnectionTest.json.retryAfterAt
+      || rateLimitedConnectionTest.json.message.includes(shirleyProviderSecret)) {
+      throw new Error("provider connection health failure must return structured retry feedback");
+    }
+    serperHealthRateLimited = false;
+    const firstProviderSearch = await runProviderSearch();
+    const firstProviderOpportunity = firstProviderSearch.json.opportunities
+      ?.find((item: { website?: string }) => websiteDomain(item.website || "") === providerLogDomainMarker);
+    if (!firstProviderSearch.response.ok || !firstProviderOpportunity?.id) {
+      throw new Error("initial provider search failed");
+    }
+    const sameNameDifferentDomain: typeof firstProviderOpportunity = {
+      ...firstProviderOpportunity,
+      id: `lf_same_name_${Date.now()}`,
+      website: `https://same-name-${Date.now()}.example/`,
+      contact: "待维护",
+      contactInfo: "",
+      description: "同名不同官网的独立候选",
+      sourceEvidence: [],
+      status: "preview",
+      createdAt: new Date().toISOString()
+    };
+    const sameDomainDifferentCountry: typeof firstProviderOpportunity = {
+      ...firstProviderOpportunity,
+      id: `lf_same_domain_country_${Date.now()}`,
+      company: "同官网加拿大独立法人",
+      country: "Canada",
+      contact: "待维护",
+      contactInfo: "",
+      description: "相同全球官网但国家不同，不得自动归并",
+      sourceEvidence: [],
+      status: "preview",
+      createdAt: new Date().toISOString()
+    };
+    getStore().websiteOpportunities.unshift(sameNameDifferentDomain);
+    getStore().websiteOpportunities.unshift(sameDomainDifferentCountry);
+    await getStore().persist();
+
+    const secondProviderSearch = await runProviderSearch();
+    const secondProviderOpportunity = secondProviderSearch.json.opportunities
+      ?.find((item: { website?: string }) => websiteDomain(item.website || "") === providerLogDomainMarker);
+    const collisionAfterRefresh = getStore().websiteOpportunities
+      .find((item) => item.id === sameNameDifferentDomain.id);
+    const countryCollisionAfterRefresh = getStore().websiteOpportunities
+      .find((item) => item.id === sameDomainDifferentCountry.id);
+    if (!secondProviderSearch.response.ok
+      || secondProviderOpportunity?.id !== firstProviderOpportunity.id
+      || secondProviderSearch.json.incrementalStats?.newCount !== 0
+      || secondProviderSearch.json.incrementalStats?.unchangedCount < 1
+      || secondProviderOpportunity?.verificationReport?.generatedAt
+        !== firstProviderOpportunity.verificationReport?.generatedAt
+      || websiteDomain(collisionAfterRefresh?.website || "") === providerLogDomainMarker
+      || countryCollisionAfterRefresh?.country !== "Canada"
+      || countryCollisionAfterRefresh?.company !== "同官网加拿大独立法人"
+      || countryCollisionAfterRefresh?.description !== "相同全球官网但国家不同，不得自动归并") {
+      throw new Error("repeated provider search must return the persisted id without merging same-name companies");
+    }
+
+    const manualProviderEdit = await request(`/api/prospect-list/${firstProviderOpportunity.id}/details`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${salesToken}` },
+      body: JSON.stringify({
+        company: "人工核验 Provider 企业",
+        business: "人工确认工业照明采购",
+        country: "德国",
+        website: `https://${providerLogDomainMarker}`,
+        contact: "Verified Buyer",
+        contactInfo: manuallyVerifiedEmail,
+        description: "人工核验字段不得被后续 Provider 刷新覆盖"
+      })
+    });
+    if (!manualProviderEdit.response.ok) throw new Error("provider opportunity manual verification edit failed");
+
+    providerSearch = await runProviderSearch();
+    providerOpportunity = providerSearch.json.opportunities
+      ?.find((item: { id?: string }) => item.id === firstProviderOpportunity.id);
+    const providerEvidence = providerOpportunity?.sourceEvidence;
+    if (!providerSearch.response.ok
+      || !providerSearch.json.runId
+      || !providerOpportunity?.id
+      || providerOpportunity.company !== "人工核验 Provider 企业"
+      || providerOpportunity.contact !== "Verified Buyer"
+      || providerOpportunity.contactInfo !== manuallyVerifiedEmail
+      || providerOpportunity.description !== "人工核验字段不得被后续 Provider 刷新覆盖"
+      || providerOpportunity.verificationReport?.generatedAt
+        !== manualProviderEdit.json.opportunity?.verificationReport?.generatedAt
+      || !Array.isArray(providerEvidence)
+      || !providerEvidence.some((item: any) =>
+        item.providerId === "serper"
+        && item.recordType === "discovery_page"
+        && new URL(item.sourceUrl).hostname === providerLogDomainMarker
+        && /^[a-f0-9]{64}$/.test(item.payloadHash)
+      )
+      || !providerEvidence.some((item: any) =>
+        item.providerId === "hunter"
+        && item.recordType === "contact_evidence"
+        && new URL(item.sourceUrl).hostname === "api.hunter.io"
+        && !item.sourceUrl.includes("api_key")
+        && item.matchedFields.includes("contactInfo")
+        && /^[a-f0-9]{64}$/.test(item.payloadHash)
+    )) {
+      throw new Error("provider search evidence and logging contract failed");
+    }
+
+    hunterRateLimited = true;
+    const rateLimitedProviderSearch = await runProviderSearch();
+    const hunterRateLimitStat = rateLimitedProviderSearch.json.sourceStats
+      ?.find((item: { id?: string }) => item.id === "hunter");
+    if (!rateLimitedProviderSearch.response.ok
+      || hunterRateLimitStat?.errorCode !== "PROVIDER_RATE_LIMITED"
+      || hunterRateLimitStat?.retryable !== true
+      || !hunterRateLimitStat?.retryAfterAt) {
+      throw new Error("provider rate limit feedback must include retry timing");
+    }
+    hunterRateLimited = false;
+  } finally {
+    setProviderHttpTestTransport(null);
+    globalThis.fetch = originalFetch;
+  }
+  if (enterpriseWebsiteRequestsDuringProviderSearch !== 0) {
+    throw new Error("provider search must make zero enterprise webpage requests");
+  }
+  const providerMarkContactable = await request("/api/prospect-list/batch", {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ ids: [providerOpportunity.id], action: "mark-contactable" })
+  });
+  if (!providerMarkContactable.response.ok
+    || providerMarkContactable.json.opportunities?.[0]?.status !== "contactable") {
+    throw new Error("provider opportunity verification failed");
+  }
+  const providerLeadSync = await request("/api/tools/website-scrape/sync-opportunities", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ opportunities: [providerOpportunity] })
+  });
+  const syncedProviderOpportunity = providerLeadSync.json.created?.[0]?.opportunity;
+  const syncedProviderSourceEvent = providerLeadSync.json.created?.[0]?.sourceEvent;
+  const syncedProviderRawPayload = JSON.parse(syncedProviderSourceEvent?.rawPayload || "{}");
+  if (!providerLeadSync.response.ok
+    || syncedProviderOpportunity?.status !== "synced"
+    || syncedProviderOpportunity?.ownerId !== "u_sales_shirley"
+    || syncedProviderOpportunity?.teamId !== "europe"
+    || !Array.isArray(syncedProviderOpportunity?.sourceEvidence)
+    || !syncedProviderOpportunity.sourceEvidence.some((item: any) => item.providerId === "serper")
+    || !syncedProviderOpportunity.sourceEvidence.some((item: any) =>
+      item.providerId === "hunter" && item.recordType === "contact_evidence"
+    )
+    || !Array.isArray(syncedProviderRawPayload.sourceEvidence)
+    || syncedProviderRawPayload.sourceEvidence.length !== syncedProviderOpportunity.sourceEvidence.length
+    || !syncedProviderRawPayload.sourceEvidence.some((item: any) =>
+      item.providerId === "hunter" && item.recordType === "contact_evidence"
+    )) {
+    throw new Error("provider evidence must survive opportunity-to-lead synchronization");
+  }
+  const anonymousProviderLogs = await request("/api/lead-finder/provider-request-logs");
+  if (anonymousProviderLogs.response.status !== 401) throw new Error("provider request logs must require authentication");
+  const shirleyProviderLogs = await request(`/api/lead-finder/provider-request-logs?runId=${providerSearch.json.runId}&limit=20`, {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  const loggedRequests = shirleyProviderLogs.json.logs || [];
+  if (!shirleyProviderLogs.response.ok
+    || loggedRequests.length !== 2
+    || !loggedRequests.every((item: any) =>
+      item.runId === providerSearch.json.runId
+      && item.ownerId === "u_sales_shirley"
+      && item.teamId === "europe"
+      && /^[a-f0-9]{64}$/.test(item.requestFingerprint)
+      && item.httpStatus === 200
+      && item.attempt === 1
+      && item.quotaUnits === 1
+      && item.durationMs >= 0
+      && item.responseSize > 0
+    )
+    || !loggedRequests.some((item: any) => item.providerId === "serper" && item.endpointCode === "search")
+    || !loggedRequests.some((item: any) => item.providerId === "hunter" && item.endpointCode === "enrich")) {
+    throw new Error("provider request logs are incomplete");
+  }
+  const connectionTestLogs = await request("/api/lead-finder/provider-request-logs?provider=serper&limit=20", {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!(connectionTestLogs.json.logs || []).some((item: any) =>
+    item.endpointCode === "connection_test" && item.connectionId === shirleyConnection.id && item.httpStatus === 200
+  )) {
+    throw new Error("provider connection test request was not logged");
+  }
+  const miaProviderLogs = await request(`/api/lead-finder/provider-request-logs?runId=${providerSearch.json.runId}`, {
+    headers: { authorization: `Bearer ${miaToken}` }
+  });
+  if ((miaProviderLogs.json.logs || []).length) throw new Error("provider request logs leaked to another salesperson");
+  const managerProviderLogs = await request(`/api/lead-finder/provider-request-logs?runId=${providerSearch.json.runId}`, {
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if ((managerProviderLogs.json.logs || []).length !== loggedRequests.length) {
+    throw new Error("team manager must see team provider request logs");
+  }
+  const providerLogPayload = JSON.stringify({
+    store: getStore().providerRequestLogs.filter((item) => item.runId === providerSearch.json.runId),
+    api: shirleyProviderLogs.json
+  });
+  for (const forbiddenValue of [
+    providerLogSearchMarker,
+    providerLogDomainMarker,
+    providerLogEmailMarker,
+    shirleyProviderSecret,
+    hunterProviderSecret,
+    "authorization",
+    "cookie",
+    "X-API-KEY",
+    "api_key="
+  ]) {
+    if (providerLogPayload.toLowerCase().includes(forbiddenValue.toLowerCase())) {
+      throw new Error(`provider request log leaked forbidden data: ${forbiddenValue}`);
+    }
+  }
+
+  const agentStore = getStore();
+  const agentJobMarker = `agent-job-${Date.now()}`;
+  const agentSearchMarker = `confidential-query-${Date.now()}`;
+  const agentEmailMarker = `buyer-${Date.now()}@example.com`;
+  const agentKeyMarker = `agent-provider-key-${Date.now()}`;
+  const baseAgentJob = {
+    teamId: "europe",
+    ownerId: "u_sales_shirley",
+    jobType: "prospect.discovery",
+    aggregateType: "lead_finder_run",
+    aggregateId: agentJobMarker,
+    idempotencyKey: `discover:${agentJobMarker}`,
+    input: {
+      searchTerm: agentSearchMarker,
+      contactEmail: agentEmailMarker,
+      providerKey: agentKeyMarker,
+      internalPrompt: "private orchestration instruction"
+    },
+    maxAttempts: 3
+  };
+  const expectAgentJobError = (label: string, action: () => unknown) => {
+    let failed = false;
+    try {
+      action();
+    } catch {
+      failed = true;
+    }
+    if (!failed) throw new Error(label);
+  };
+  expectAgentJobError("agent job must require team", () =>
+    enqueueAgentJob(agentStore, { ...baseAgentJob, teamId: "" }));
+  expectAgentJobError("agent job must require owner", () =>
+    enqueueAgentJob(agentStore, { ...baseAgentJob, ownerId: "" }));
+  expectAgentJobError("agent job must require idempotency key", () =>
+    enqueueAgentJob(agentStore, { ...baseAgentJob, idempotencyKey: "" }));
+  expectAgentJobError("agent job owner must belong to team", () =>
+    enqueueAgentJob(agentStore, { ...baseAgentJob, teamId: "all" }));
+
+  const agentJobResult = enqueueAgentJob(agentStore, baseAgentJob);
+  const agentJob = agentJobResult.job;
+  const duplicateAgentJob = enqueueAgentJob(agentStore, baseAgentJob);
+  if (agentJobResult.duplicate
+    || !duplicateAgentJob.duplicate
+    || duplicateAgentJob.job.id !== agentJob.id
+    || !/^[a-f0-9]{64}$/.test(agentJob.idempotencyKey)
+    || agentJob.idempotencyKey === baseAgentJob.idempotencyKey) {
+    throw new Error("agent job idempotency contract failed");
+  }
+  const globalAgentJob = enqueueAgentJob(agentStore, {
+    ...baseAgentJob,
+    teamId: "all",
+    ownerId: "u_super_admin"
+  });
+  if (globalAgentJob.duplicate || globalAgentJob.job.id === agentJob.id) {
+    throw new Error("agent job idempotency must be isolated by team");
+  }
+
+  const encryptedInput = agentJob.inputJsonEncrypted;
+  for (const forbiddenValue of [agentSearchMarker, agentEmailMarker, agentKeyMarker, baseAgentJob.idempotencyKey]) {
+    if (encryptedInput.includes(forbiddenValue)) {
+      throw new Error(`agent job ciphertext leaked protected input: ${forbiddenValue}`);
+    }
+  }
+  const decryptedInput = decryptAgentJobPayload(agentJob, "input", encryptedInput);
+  if (decryptedInput.searchTerm !== agentSearchMarker
+    || decryptedInput.contactEmail !== agentEmailMarker
+    || decryptedInput.providerKey !== agentKeyMarker) {
+    throw new Error("agent job encrypted input cannot be decrypted");
+  }
+  for (const tamperedContext of [
+    { ...agentJob, ownerId: "u_sales_mia" },
+    { ...agentJob, teamId: "all" },
+    { ...agentJob, jobType: "prospect.enrich" }
+  ]) {
+    expectAgentJobError("agent job AAD tampering must be rejected", () =>
+      decryptAgentJobPayload(tamperedContext, "input", encryptedInput));
+  }
+
+  const childAgentJob = enqueueAgentJob(agentStore, {
+    ...baseAgentJob,
+    jobType: "prospect.enrich",
+    idempotencyKey: `enrich:${agentJobMarker}`,
+    parentJobId: agentJob.id,
+    input: { domain: "example.com" }
+  }).job;
+  expectAgentJobError("agent job parent must remain in the same team", () =>
+    enqueueAgentJob(agentStore, {
+      ...baseAgentJob,
+      teamId: "all",
+      ownerId: "u_super_admin",
+      jobType: "prospect.score",
+      idempotencyKey: `score:${agentJobMarker}`,
+      parentJobId: agentJob.id
+    }));
+
+  startAgentJob(agentJob);
+  completeAgentJob(agentJob, { acceptedCount: 2, internalReasoning: "must stay encrypted" });
+  if (agentJob.status !== "succeeded"
+    || decryptAgentJobPayload(agentJob, "output", agentJob.outputJsonEncrypted).acceptedCount !== 2) {
+    throw new Error("agent job success state transition failed");
+  }
+  expectAgentJobError("succeeded agent job must not retry", () => retryAgentJob(agentJob));
+  expectAgentJobError("succeeded agent job must not cancel", () => cancelAgentJob(agentJob));
+
+  const scheduledAgentJob = enqueueAgentJob(agentStore, {
+    ...baseAgentJob,
+    jobType: "prospect.verify",
+    idempotencyKey: `verify:${agentJobMarker}`
+  }).job;
+  startAgentJob(scheduledAgentJob);
+  expectAgentJobError("agent job must reject invalid retry time", () =>
+    failAgentJob(scheduledAgentJob, "PROVIDER_TIMEOUT", "not-a-date"));
+  if (scheduledAgentJob.status !== "running" || scheduledAgentJob.errorCode) {
+    throw new Error("invalid retry time must not partially mutate agent job");
+  }
+  failAgentJob(scheduledAgentJob, "PROVIDER_TIMEOUT", new Date(Date.now() + 60_000).toISOString());
+  expectAgentJobError("scheduled agent job must not start before due time", () =>
+    startAgentJob(scheduledAgentJob));
+  scheduledAgentJob.nextAttemptAt = new Date(Date.now() - 1_000).toISOString();
+  startAgentJob(scheduledAgentJob);
+  failAgentJob(scheduledAgentJob, "PROVIDER_TIMEOUT");
+  if (String(scheduledAgentJob.status) !== "failed") throw new Error("agent job failure state transition failed");
+  retryAgentJob(scheduledAgentJob);
+  if (String(scheduledAgentJob.status) !== "queued") throw new Error("agent job manual retry failed");
+
+  const deadLetterAgentJob = enqueueAgentJob(agentStore, {
+    ...baseAgentJob,
+    jobType: "prospect.compliance",
+    idempotencyKey: `compliance:${agentJobMarker}`,
+    maxAttempts: 1
+  }).job;
+  startAgentJob(deadLetterAgentJob);
+  failAgentJob(deadLetterAgentJob, "PROVIDER_POLICY_BLOCKED");
+  if (deadLetterAgentJob.status !== "dead_letter") throw new Error("agent job dead-letter transition failed");
+  retryAgentJob(deadLetterAgentJob);
+  if (String(deadLetterAgentJob.status) !== "queued" || deadLetterAgentJob.maxAttempts !== 2) {
+    throw new Error("agent job dead-letter recovery failed");
+  }
+
+  const failedApiAgentJob = enqueueAgentJob(agentStore, {
+    ...baseAgentJob,
+    jobType: "prospect.email_enrich",
+    idempotencyKey: `email:${agentJobMarker}`
+  }).job;
+  startAgentJob(failedApiAgentJob);
+  failAgentJob(failedApiAgentJob, "PROVIDER_TIMEOUT");
+  const retryApiAgentJob = await request(`/api/prospect-agent-jobs/${failedApiAgentJob.id}/retry`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: "{}"
+  });
+  if (!retryApiAgentJob.response.ok || retryApiAgentJob.json.job?.status !== "queued") {
+    throw new Error("agent job retry API failed");
+  }
+  const cancelApiAgentJob = await request(`/api/prospect-agent-jobs/${childAgentJob.id}/cancel`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: "{}"
+  });
+  if (!cancelApiAgentJob.response.ok || cancelApiAgentJob.json.job?.status !== "cancelled") {
+    throw new Error("agent job cancel API failed");
+  }
+  const repeatCancelAgentJob = await request(`/api/prospect-agent-jobs/${childAgentJob.id}/cancel`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: "{}"
+  });
+  if (repeatCancelAgentJob.response.status !== 409) throw new Error("agent job repeat cancel must be rejected");
+
+  const shirleyAgentJobs = await request(`/api/prospect-agent-jobs?aggregateId=${agentJobMarker}&limit=50`, {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  const miaAgentJobs = await request(`/api/prospect-agent-jobs?aggregateId=${agentJobMarker}&limit=50`, {
+    headers: { authorization: `Bearer ${miaToken}` }
+  });
+  const managerAgentJobs = await request(`/api/prospect-agent-jobs?aggregateId=${agentJobMarker}&limit=50`, {
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  const agentJobDetail = await request(`/api/prospect-agent-jobs/${agentJob.id}`, {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!shirleyAgentJobs.response.ok
+    || shirleyAgentJobs.json.total < 5
+    || miaAgentJobs.json.total !== 0
+    || managerAgentJobs.json.total !== shirleyAgentJobs.json.total
+    || !agentJobDetail.response.ok
+    || agentJobDetail.json.childJobs?.[0]?.id !== childAgentJob.id) {
+    throw new Error("agent job API visibility or parent-child contract failed");
+  }
+  const publicAgentJobPayload = JSON.stringify({
+    list: shirleyAgentJobs.json,
+    detail: agentJobDetail.json
+  }).toLowerCase();
+  for (const forbiddenValue of [
+    "inputjsonencrypted",
+    "outputjsonencrypted",
+    "idempotencykey",
+    agentSearchMarker,
+    agentEmailMarker,
+    agentKeyMarker,
+    "internalprompt",
+    "internalreasoning"
+  ]) {
+    if (publicAgentJobPayload.includes(forbiddenValue.toLowerCase())) {
+      throw new Error(`agent job API leaked protected field: ${forbiddenValue}`);
+    }
   }
 
   const leadSourceReadBack = await request("/api/lead-finder/providers", {
@@ -640,12 +1551,61 @@ try {
   const serperReadBack = (leadSourceReadBack.json.providers || []).find((item: any) => item.id === "serper");
   if (!serperReadBack?.hasApiKey || !serperReadBack?.ready) throw new Error("lead source config persist failed");
 
+  const originalCiphertext = shirleyConnection.configurationEncrypted;
+  const corruptedCiphertextParts = originalCiphertext.split(".");
+  const authenticationTag = corruptedCiphertextParts[2] || "";
+  corruptedCiphertextParts[2] = `${authenticationTag.startsWith("A") ? "B" : "A"}${authenticationTag.slice(1)}`;
+  shirleyConnection.configurationEncrypted = corruptedCiphertextParts.join(".");
+  const corruptedConnectionRead = await request("/api/lead-finder/providers", {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  const corruptedSerper = (corruptedConnectionRead.json.providers || []).find((item: any) => item.id === "serper");
+  if (!corruptedConnectionRead.response.ok
+    || corruptedSerper?.enabled
+    || corruptedSerper?.hasApiKey
+    || corruptedSerper?.lastTestStatus !== "failed"
+    || corruptedSerper?.lastTestMessage !== "连接凭据不可读取，请重新保存"
+    || JSON.stringify(corruptedConnectionRead.json).includes(originalCiphertext)) {
+    throw new Error("corrupted provider credential must fail closed without breaking the provider list");
+  }
+  const corruptedConnectionTest = await request("/api/lead-finder/source-config/test", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ provider: "serper" })
+  });
+  if (corruptedConnectionTest.response.status !== 409
+    || corruptedConnectionTest.json.errorCode !== "PROVIDER_CONNECTION_INVALID"
+    || corruptedConnectionTest.json.retryable !== false
+    || corruptedConnectionTest.json.retryAfterAt !== null
+    || JSON.stringify(corruptedConnectionTest.json).includes(originalCiphertext)
+    || JSON.stringify(corruptedConnectionTest.json).includes(shirleyProviderSecret)) {
+    throw new Error("corrupted provider credential test must return a generic recovery response");
+  }
+  shirleyConnection.configurationEncrypted = originalCiphertext;
+
   const leadSourceDelete = await request("/api/lead-finder/source-config/serper", {
     method: "DELETE",
     headers: { authorization: `Bearer ${salesToken}` }
   });
   const serperAfterDelete = (leadSourceDelete.json.providers || []).find((item: any) => item.id === "serper");
   if (!leadSourceDelete.response.ok || serperAfterDelete?.hasApiKey) throw new Error("lead source config delete failed");
+  const miaAfterShirleyDelete = await request("/api/lead-finder/providers", {
+    headers: { authorization: `Bearer ${miaToken}` }
+  });
+  const miaSerperAfterShirleyDelete = (miaAfterShirleyDelete.json.providers || []).find((item: any) => item.id === "serper");
+  if (!miaSerperAfterShirleyDelete?.hasApiKey || !miaSerperAfterShirleyDelete?.enabled) {
+    throw new Error("deleting one salesperson connection must not delete another salesperson connection");
+  }
+  const miaLeadSourceDelete = await request("/api/lead-finder/source-config/serper", {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${miaToken}` }
+  });
+  if (!miaLeadSourceDelete.response.ok) throw new Error("second salesperson provider connection cleanup failed");
+  const hunterLeadSourceDelete = await request("/api/lead-finder/source-config/hunter", {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!hunterLeadSourceDelete.response.ok) throw new Error("hunter provider connection cleanup failed");
 
   const prospectMail = await request(`/api/prospect-list/${websiteSync.json.created[0].opportunity.id}/send-development-email`, {
     method: "POST",
@@ -1681,6 +2641,9 @@ try {
     developmentEmailTo: profileMail.json.user.lastDevelopmentEmailTo,
     prospectEmailTo: prospectMail.json.opportunity.lastDevelopmentEmailTo,
     leadProviderCount: providerList.length,
+    agentJobsVisibleToOwner: shirleyAgentJobs.json.total,
+    agentJobEncryption: agentJob.inputJsonEncrypted.startsWith("v1."),
+    agentJobDeadLetterRecovery: deadLetterAgentJob.maxAttempts,
     leadSourceMaskedKey: leadSourceSave.json.config.apiKey,
     leadSourceDeleted: !serperAfterDelete?.hasApiKey,
     importJob: customerImport.json.job.name,

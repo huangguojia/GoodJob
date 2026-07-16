@@ -1,6 +1,14 @@
 import jwt from "jsonwebtoken";
 import { app } from "./server.js";
+import { completeAgentJob, enqueueAgentJob, failAgentJob, startAgentJob } from "./agent-jobs.js";
+import {
+  decryptAiModelApiKey,
+  decryptProviderConfiguration,
+  encryptAiModelApiKey
+} from "./credential-security.js";
 import { assertPublicHttpUrl } from "./outbound-security.js";
+import { setProviderHttpTestTransport } from "./provider-http-client.js";
+import { resolveBackendHost } from "./server-network.js";
 import { getStore } from "./store.js";
 
 const TEST_JWT_SECRET = "goodjob-security-test-secret-at-least-32-characters";
@@ -48,9 +56,65 @@ async function expectStatus(label: string, actual: number, expected: number) {
 try {
   const results: Record<string, number | boolean> = {};
 
+  if (resolveBackendHost({ NODE_ENV: "production" }) !== "127.0.0.1") {
+    throw new Error("production backend host must default to loopback");
+  }
+  for (const unsafeHost of ["0.0.0.0", "::", "10.0.0.8"]) {
+    try {
+      resolveBackendHost({ NODE_ENV: "production", BACKEND_HOST: unsafeHost });
+      throw new Error(`production backend host unexpectedly accepted ${unsafeHost}`);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("production backend host unexpectedly")) throw error;
+    }
+  }
+  if (app.get("trust proxy") !== "loopback") throw new Error("Express must only trust loopback proxies");
+  results.productionLoopbackOnly = true;
+
+  const aiCredentialContext = {
+    id: "ai_security_test",
+    provider: "openai",
+    ownerId: "u_sales_shirley",
+    teamId: "europe"
+  };
+  const aiCredentialSecret = "ai-security-secret-7788";
+  const encryptedAiCredential = encryptAiModelApiKey(aiCredentialContext, aiCredentialSecret);
+  if (encryptedAiCredential.includes(aiCredentialSecret)) throw new Error("AI credential ciphertext leaked plaintext");
+  if (decryptAiModelApiKey(aiCredentialContext, encryptedAiCredential) !== aiCredentialSecret) {
+    throw new Error("AI credential encryption round trip failed");
+  }
+  try {
+    decryptAiModelApiKey({ ...aiCredentialContext, teamId: "other-team" }, encryptedAiCredential);
+    throw new Error("AI credential must be bound to its tenant context");
+  } catch (error) {
+    if (error instanceof Error && error.message === "AI credential must be bound to its tenant context") throw error;
+  }
+  results.aiCredentialEncrypted = true;
+
   const unauthenticated = await request("/api/customers");
   await expectStatus("protected endpoint", unauthenticated.response.status, 401);
   results.unauthenticated = unauthenticated.response.status;
+  const anonymousProviderCatalog = await request("/api/lead-finder/provider-catalog");
+  await expectStatus("provider catalog without login", anonymousProviderCatalog.response.status, 401);
+  const anonymousProviderList = await request("/api/lead-finder/providers");
+  await expectStatus("provider list without login", anonymousProviderList.response.status, 401);
+  const anonymousProviderWrite = await request("/api/lead-finder/source-config", {
+    method: "POST",
+    body: JSON.stringify({ provider: "serper", apiKey: "must-not-be-accepted", enabled: true })
+  });
+  await expectStatus("provider connection write without login", anonymousProviderWrite.response.status, 401);
+  const anonymousProviderLogs = await request("/api/lead-finder/provider-request-logs");
+  await expectStatus("provider request logs without login", anonymousProviderLogs.response.status, 401);
+  for (const [path, method] of [
+    ["/api/prospect-agent-jobs", "GET"],
+    ["/api/prospect-agent-jobs/missing", "GET"],
+    ["/api/prospect-agent-jobs/missing/retry", "POST"],
+    ["/api/prospect-agent-jobs/missing/cancel", "POST"]
+  ] as const) {
+    const anonymousAgentJob = await request(path, { method, body: method === "POST" ? "{}" : undefined });
+    await expectStatus(`agent job ${method} without login`, anonymousAgentJob.response.status, 401);
+  }
+  results.providerConnectionAuth = true;
+  results.agentJobAuth = true;
 
   const malformedJson = await request("/api/auth/login", { method: "POST", body: "{\"email\":" });
   await expectStatus("malformed JSON", malformedJson.response.status, 400);
@@ -79,6 +143,71 @@ try {
     throw new Error("cookie session read failed");
   }
   results.cookieSession = cookieRead.response.status;
+
+  const insecureAiConfig = await request("/api/tools/ai-config", {
+    method: "POST",
+    headers: bearer(shirley.json.token),
+    body: JSON.stringify({
+      provider: "custom",
+      protocol: "openai-compatible",
+      name: "不安全 HTTP 模型",
+      baseUrl: "http://api.openai.com/v1",
+      model: "test-model",
+      apiKey: "must-not-be-sent",
+      enabled: false
+    })
+  });
+  await expectStatus("insecure AI base URL", insecureAiConfig.response.status, 400);
+
+  const geminiSecret = "gemini-security-secret-8899";
+  const secureAiConfig = await request("/api/tools/ai-config", {
+    method: "POST",
+    headers: bearer(shirley.json.token),
+    body: JSON.stringify({
+      provider: "gemini",
+      protocol: "gemini",
+      name: "Gemini 安全传输测试",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      model: "gemini-test",
+      apiKey: geminiSecret,
+      enabled: false
+    })
+  });
+  if (!secureAiConfig.response.ok) throw new Error("secure Gemini configuration save failed");
+  let capturedAiUrl = "";
+  let capturedAiHeaders = new Headers();
+  setProviderHttpTestTransport(async (url, init) => {
+    capturedAiUrl = url;
+    capturedAiHeaders = new Headers(init.headers);
+    return new Response(`<html>${geminiSecret}</html>`, {
+      status: 502,
+      headers: { "content-type": "text/html" }
+    });
+  });
+  const aiConnectionTest = await request("/api/tools/ai-config/test", {
+    method: "POST",
+    headers: bearer(shirley.json.token),
+    body: JSON.stringify({ id: secureAiConfig.json.config.id })
+  });
+  setProviderHttpTestTransport(null);
+  if (!aiConnectionTest.response.ok || aiConnectionTest.json.ok !== false) {
+    throw new Error("AI connection failure must return a controlled result");
+  }
+  if (capturedAiUrl.includes(geminiSecret) || capturedAiUrl.includes("?key=")) {
+    throw new Error("Gemini API key must not be placed in the request URL");
+  }
+  if (capturedAiHeaders.get("x-goog-api-key") !== geminiSecret) {
+    throw new Error("Gemini API key must be sent through the protected request header");
+  }
+  const publicAiFailure = JSON.stringify(aiConnectionTest.json);
+  if (publicAiFailure.includes(geminiSecret) || publicAiFailure.includes("?key=")) {
+    throw new Error("AI connection error response leaked a credential");
+  }
+  const storedAiFailure = getStore().aiModelConfigs.find((item) => item.id === secureAiConfig.json.config.id)?.lastTestMessage || "";
+  if (storedAiFailure.includes(geminiSecret) || storedAiFailure.includes("?key=")) {
+    throw new Error("AI connection error persistence leaked a credential");
+  }
+  results.aiTransportProtected = true;
 
   const docsWithoutLogin = await request("/api/docs/openapi.json");
   await expectStatus("API docs without login", docsWithoutLogin.response.status, 401);
@@ -289,6 +418,20 @@ try {
   });
   await expectStatus("one administrator per tenant", duplicateTenantAdmin.response.status, 409);
   const tenantAdmin = await login(tenantAdminEmail, tenantAdminPassword);
+  const primaryProviderCatalog = await request("/api/lead-finder/provider-catalog", { headers: bearer(shirley.json.token) });
+  const tenantProviderCatalog = await request("/api/lead-finder/provider-catalog", { headers: bearer(tenantAdmin.json.token) });
+  if (!primaryProviderCatalog.response.ok
+    || !tenantProviderCatalog.response.ok
+    || JSON.stringify(primaryProviderCatalog.json.providers) !== JSON.stringify(tenantProviderCatalog.json.providers)) {
+    throw new Error("provider catalog must not expose tenant-specific state");
+  }
+  const providerCatalogPayload = JSON.stringify(tenantProviderCatalog.json);
+  for (const forbiddenField of ["apiKey", "credential", "ownerId", "teamId", "usage"]) {
+    if (providerCatalogPayload.includes(`"${forbiddenField}"`)) {
+      throw new Error(`provider catalog leaked protected field: ${forbiddenField}`);
+    }
+  }
+  results.providerCatalogIsolated = true;
   const tempEmail = `security-sales-${tenantSuffix}@example.com`;
   const tempPassword = "Security-old-123";
   const createdAccount = await request("/api/accounts", {
@@ -302,6 +445,215 @@ try {
   }
   const tempUserId = createdAccount.json.account.id;
   const tempUser = await login(tempEmail, tempPassword);
+  const tenantProviderSecret = `tenant-provider-${tenantSuffix}-7788`;
+  const tenantProviderSave = await request("/api/lead-finder/source-config", {
+    method: "POST",
+    headers: bearer(tempUser.json.token),
+    body: JSON.stringify({ provider: "serper", apiKey: tenantProviderSecret, enabled: true })
+  });
+  if (!tenantProviderSave.response.ok
+    || tenantProviderSave.json.config?.apiKey !== "****7788"
+    || JSON.stringify(tenantProviderSave.json).includes(tenantProviderSecret)) {
+    throw new Error("tenant provider connection save must mask its credential");
+  }
+  const tenantProviderConnection = getStore().providerConnections.find((item) =>
+    item.providerId === "serper" && item.ownerId === tempUserId && item.teamId === tenantTeamId
+  );
+  if (!tenantProviderConnection
+    || tenantProviderConnection.configurationEncrypted.includes(tenantProviderSecret)
+    || decryptProviderConfiguration(
+      tenantProviderConnection,
+      tenantProviderConnection.configurationEncrypted
+    ).apiKey !== tenantProviderSecret) {
+    throw new Error("tenant provider connection must be encrypted and tenant-bound");
+  }
+  const primaryAdminProviders = await request("/api/lead-finder/providers", { headers: bearer(admin.json.token) });
+  const primaryAdminSerper = primaryAdminProviders.json.providers?.find((item: { id: string }) => item.id === "serper");
+  if (primaryAdminSerper?.hasApiKey || JSON.stringify(primaryAdminProviders.json).includes(tenantProviderSecret)) {
+    throw new Error("provider connection leaked across tenants");
+  }
+  const primaryAdminDeleteTenantProvider = await request("/api/lead-finder/source-config/serper", {
+    method: "DELETE",
+    headers: bearer(admin.json.token)
+  });
+  await expectStatus("cross-tenant provider connection delete", primaryAdminDeleteTenantProvider.response.status, 404);
+  const tenantProvidersAfterCrossDelete = await request("/api/lead-finder/providers", {
+    headers: bearer(tempUser.json.token)
+  });
+  const tenantSerperAfterCrossDelete = tenantProvidersAfterCrossDelete.json.providers?.find(
+    (item: { id: string }) => item.id === "serper"
+  );
+  if (!tenantSerperAfterCrossDelete?.hasApiKey || !tenantSerperAfterCrossDelete?.enabled) {
+    throw new Error("cross-tenant provider delete must not affect the owner connection");
+  }
+  const tenantProviderLogId = `prl_security_${tenantSuffix}`;
+  getStore().providerRequestLogs.push({
+    id: tenantProviderLogId,
+    teamId: tenantTeamId,
+    ownerId: tempUserId,
+    providerId: "serper",
+    connectionId: tenantProviderConnection.id,
+    runId: `prun_security_${tenantSuffix}`,
+    runShardId: `prun_security_${tenantSuffix}_serper`,
+    requestFingerprint: "a".repeat(64),
+    endpointCode: "search",
+    httpStatus: 200,
+    attempt: 1,
+    quotaUnits: 1,
+    costAmount: 0,
+    currency: "",
+    durationMs: 25,
+    responseSize: 128,
+    errorCode: "",
+    requestedAt: new Date().toISOString()
+  });
+  const tenantSalesProviderLogs = await request(`/api/lead-finder/provider-request-logs?runId=prun_security_${tenantSuffix}`, {
+    headers: bearer(tempUser.json.token)
+  });
+  if (tenantSalesProviderLogs.json.logs?.length !== 1
+    || tenantSalesProviderLogs.json.logs[0]?.id !== tenantProviderLogId) {
+    throw new Error("provider request log owner read failed");
+  }
+  const tenantAdminProviderLogs = await request(`/api/lead-finder/provider-request-logs?runId=prun_security_${tenantSuffix}`, {
+    headers: bearer(tenantAdmin.json.token)
+  });
+  if (tenantAdminProviderLogs.json.logs?.length !== 1) {
+    throw new Error("tenant administrator must see team provider request logs");
+  }
+  const primaryAdminProviderLogs = await request(`/api/lead-finder/provider-request-logs?runId=prun_security_${tenantSuffix}`, {
+    headers: bearer(admin.json.token)
+  });
+  if (primaryAdminProviderLogs.json.logs?.length) {
+    throw new Error("provider request logs leaked across tenants");
+  }
+  const superAdminProviderLogs = await request(`/api/lead-finder/provider-request-logs?runId=prun_security_${tenantSuffix}`, {
+    headers: bearer(superAdmin.json.token)
+  });
+  if (superAdminProviderLogs.json.logs?.length !== 1) {
+    throw new Error("super administrator must retain provider request log visibility");
+  }
+  const providerLogSecurityPayload = JSON.stringify(tenantSalesProviderLogs.json).toLowerCase();
+  for (const forbiddenToken of [tenantProviderSecret.toLowerCase(), "authorization", "cookie", "api_key", "configurationencrypted"]) {
+    if (providerLogSecurityPayload.includes(forbiddenToken)) {
+      throw new Error(`provider request log API leaked protected token: ${forbiddenToken}`);
+    }
+  }
+  results.providerConnectionTenantIsolation = true;
+  results.providerRequestLogTenantIsolation = true;
+
+  const agentJobSecurityMarker = `agent-security-${tenantSuffix}`;
+  const agentJobSecretMarker = `secret-agent-input-${tenantSuffix}`;
+  const tenantFailedAgentJob = enqueueAgentJob(getStore(), {
+    teamId: tenantTeamId,
+    ownerId: tempUserId,
+    jobType: "prospect.security_check",
+    aggregateType: "security_test",
+    aggregateId: agentJobSecurityMarker,
+    idempotencyKey: `failed:${agentJobSecurityMarker}`,
+    input: { query: agentJobSecretMarker, internalPrompt: "must remain encrypted" }
+  }).job;
+  startAgentJob(tenantFailedAgentJob);
+  failAgentJob(tenantFailedAgentJob, "PROVIDER_TIMEOUT");
+  const tenantAdminAgentJob = enqueueAgentJob(getStore(), {
+    teamId: tenantTeamId,
+    ownerId: createdTenantAdmin.json.account.id,
+    jobType: "prospect.security_check",
+    aggregateType: "security_test",
+    aggregateId: agentJobSecurityMarker,
+    idempotencyKey: `admin-owned:${agentJobSecurityMarker}`,
+    input: { query: "tenant-admin-private" }
+  }).job;
+  const tenantSucceededAgentJob = enqueueAgentJob(getStore(), {
+    teamId: tenantTeamId,
+    ownerId: tempUserId,
+    jobType: "prospect.security_complete",
+    aggregateType: "security_test",
+    aggregateId: agentJobSecurityMarker,
+    idempotencyKey: `succeeded:${agentJobSecurityMarker}`,
+    input: { query: "completed-private" }
+  }).job;
+  startAgentJob(tenantSucceededAgentJob);
+  completeAgentJob(tenantSucceededAgentJob, { internalReasoning: "must remain encrypted" });
+
+  const tenantSalesAgentJobs = await request(`/api/prospect-agent-jobs?aggregateId=${agentJobSecurityMarker}`, {
+    headers: bearer(tempUser.json.token)
+  });
+  const tenantAdminAgentJobs = await request(`/api/prospect-agent-jobs?aggregateId=${agentJobSecurityMarker}`, {
+    headers: bearer(tenantAdmin.json.token)
+  });
+  const primaryAdminAgentJobs = await request(`/api/prospect-agent-jobs?aggregateId=${agentJobSecurityMarker}`, {
+    headers: bearer(admin.json.token)
+  });
+  const superAdminAgentJobs = await request(`/api/prospect-agent-jobs?aggregateId=${agentJobSecurityMarker}`, {
+    headers: bearer(superAdmin.json.token)
+  });
+  if (tenantSalesAgentJobs.json.total !== 2
+    || tenantSalesAgentJobs.json.jobs?.some((job: { ownerId: string }) => job.ownerId !== tempUserId)) {
+    throw new Error("salesperson agent jobs must remain owner-isolated");
+  }
+  if (tenantAdminAgentJobs.json.total !== 3
+    || primaryAdminAgentJobs.json.total !== 0
+    || superAdminAgentJobs.json.total !== 3) {
+    throw new Error("agent job tenant visibility contract failed");
+  }
+  const agentJobSecurityPayload = JSON.stringify({
+    sales: tenantSalesAgentJobs.json,
+    admin: tenantAdminAgentJobs.json
+  }).toLowerCase();
+  for (const forbiddenToken of [
+    agentJobSecretMarker.toLowerCase(),
+    "inputjsonencrypted",
+    "outputjsonencrypted",
+    "idempotencykey",
+    "internalprompt",
+    "internalreasoning"
+  ]) {
+    if (agentJobSecurityPayload.includes(forbiddenToken)) {
+      throw new Error(`agent job API leaked protected token: ${forbiddenToken}`);
+    }
+  }
+
+  const crossTenantAgentRetry = await request(`/api/prospect-agent-jobs/${tenantFailedAgentJob.id}/retry`, {
+    method: "POST",
+    headers: bearer(admin.json.token),
+    body: "{}"
+  });
+  const crossTenantAgentCancel = await request(`/api/prospect-agent-jobs/${tenantAdminAgentJob.id}/cancel`, {
+    method: "POST",
+    headers: bearer(admin.json.token),
+    body: "{}"
+  });
+  await expectStatus("cross-tenant agent job retry", crossTenantAgentRetry.response.status, 404);
+  await expectStatus("cross-tenant agent job cancel", crossTenantAgentCancel.response.status, 404);
+  const crossOwnerAgentCancel = await request(`/api/prospect-agent-jobs/${tenantAdminAgentJob.id}/cancel`, {
+    method: "POST",
+    headers: bearer(tempUser.json.token),
+    body: "{}"
+  });
+  await expectStatus("cross-owner agent job cancel", crossOwnerAgentCancel.response.status, 404);
+  const ownerAgentRetry = await request(`/api/prospect-agent-jobs/${tenantFailedAgentJob.id}/retry`, {
+    method: "POST",
+    headers: bearer(tempUser.json.token),
+    body: "{}"
+  });
+  if (!ownerAgentRetry.response.ok || ownerAgentRetry.json.job?.status !== "queued") {
+    throw new Error("agent job owner retry failed");
+  }
+  const tenantAdminCancel = await request(`/api/prospect-agent-jobs/${tenantAdminAgentJob.id}/cancel`, {
+    method: "POST",
+    headers: bearer(tenantAdmin.json.token),
+    body: "{}"
+  });
+  if (!tenantAdminCancel.response.ok || tenantAdminCancel.json.job?.status !== "cancelled") {
+    throw new Error("tenant administrator agent job cancel failed");
+  }
+  const completedAgentCancel = await request(`/api/prospect-agent-jobs/${tenantSucceededAgentJob.id}/cancel`, {
+    method: "POST",
+    headers: bearer(tempUser.json.token),
+    body: "{}"
+  });
+  await expectStatus("completed agent job cancel", completedAgentCancel.response.status, 409);
+  results.agentJobTenantIsolation = true;
 
   const tenantCustomer = await request("/api/customers", {
     method: "POST",
@@ -618,9 +970,12 @@ try {
 
   const corsBlocked = await request("/api/health", { headers: { origin: "https://attacker.example" } });
   await expectStatus("untrusted origin", corsBlocked.response.status, 403);
+  const corsLocalhostAllowed = await request("/api/health", { headers: { origin: "http://localhost:5188" } });
+  await expectStatus("trusted localhost origin", corsLocalhostAllowed.response.status, 200);
   results.corsBlocked = corsBlocked.response.status;
 
   console.log(JSON.stringify({ ok: true, ...results }, null, 2));
 } finally {
+  setProviderHttpTestTransport(null);
   server.close();
 }

@@ -6,6 +6,11 @@ import * as echarts from "echarts/core";
 import { LineChart } from "echarts/charts";
 import { GridComponent, TooltipComponent } from "echarts/components";
 import { SVGRenderer } from "echarts/renderers";
+import {
+  isLeadSourceExecutable,
+  resolveLeadSearchSources,
+  type BlockedLeadSource
+} from "./lead-source-selection";
 
 echarts.use([LineChart, GridComponent, TooltipComponent, SVGRenderer]);
 
@@ -57,6 +62,35 @@ interface Customer {
   ownerName?: string;
   activities?: CustomerActivity[];
   lastActivityAt?: string;
+  pendingIntelligence?: CustomerIntelligenceSuggestion[];
+  pendingIntelligenceCount?: number;
+}
+
+type CustomerIntelligenceFieldKey =
+  | "company"
+  | "country"
+  | "contact"
+  | "documentContact";
+
+interface CustomerIntelligenceField {
+  key: CustomerIntelligenceFieldKey;
+  label: string;
+  currentValue: string;
+  suggestedValue: string;
+  evidenceSummary: string;
+}
+
+interface CustomerIntelligenceSuggestion {
+  id: string;
+  sourceLabel: string;
+  sourceUrl: string;
+  suggestedFields: CustomerIntelligenceField[];
+  website: string;
+  business: string;
+  contactInfo: string;
+  evidenceSummary: string;
+  evidenceRefs: string[];
+  createdAt: string;
 }
 
 interface CustomerActivity {
@@ -95,6 +129,13 @@ interface Todo {
   completedAt?: string;
   completedBy?: string;
   completionResult?: string;
+  leadId?: string;
+  prospectCandidateId?: string;
+  tenantProspectId?: string;
+  outreachChannel?: ProspectOutreachChannel;
+  touchpointId?: string;
+  cancelledAt?: string;
+  cancellationReason?: string;
 }
 
 interface Deal {
@@ -178,6 +219,55 @@ interface TradeDocumentItem {
   originCountry: string;
   weightKg: number;
   packageCount: number;
+  brand?: string;
+  brandType?: string;
+  exportBenefit?: string;
+  inspectionCode?: string;
+  productEnglish?: string;
+}
+
+interface CustomsDocument {
+  id: string;
+  customerId: string;
+  dealId: string;
+  tradeDocumentId?: string;
+  number: string;
+  issueDate: string;
+  shipper: string;
+  shipperAddress: string;
+  shipperTaxNo: string;
+  consignee: string;
+  consigneeAddress: string;
+  manufacturer: string;
+  manufacturerTaxNo: string;
+  transportMode: string;
+  vesselName: string;
+  exitPort: string;
+  exitDate: string;
+  tradeMode: string;
+  supervisionMode: string;
+  tradeCountry: string;
+  destinationCountry: string;
+  packageType: string;
+  packageCount: number;
+  grossWeight: number;
+  netWeight: number;
+  tradeMethod: string;
+  contractNo: string;
+  currency: string;
+  incoterm: string;
+  paymentTerm: string;
+  notes: string;
+  status: "draft" | "ready" | "exported";
+  ownerId: string;
+  teamId: string;
+  updatedAt: string;
+  items: TradeDocumentItem[];
+}
+
+interface CustomsGenerationSource {
+  type: "trade_document" | "deal";
+  label: string;
 }
 
 interface TradeDocumentAudit {
@@ -205,7 +295,7 @@ interface TradeDocument {
   customerId: string;
   dealId: string;
   revision: number;
-  type: "PI" | "CI";
+  type: "PI" | "CI" | "CUSTOMS";
   title: string;
   number: string;
   issueDate: string;
@@ -442,6 +532,63 @@ interface WecomMessage {
   status: string;
 }
 
+interface CollaborationUser {
+  id: string;
+  name: string;
+  avatar: string;
+  role: Role;
+  teamId: string;
+}
+
+interface DailyReport {
+  id: string;
+  reportDate: string;
+  completedWork: string;
+  customerProgress: string;
+  results: string;
+  risks: string;
+  nextPlan: string;
+  supportNeeded: string;
+  status: "submitted";
+  ownerId: string;
+  teamId: string;
+  submittedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  owner: CollaborationUser;
+  commentCount: number;
+}
+
+interface DailyReportComment {
+  id: string;
+  reportId: string;
+  parentId: string;
+  content: string;
+  authorId: string;
+  teamId: string;
+  createdAt: string;
+  updatedAt: string;
+  author: CollaborationUser;
+}
+
+interface InternalMessage {
+  id: string;
+  threadId: string;
+  senderId: string;
+  recipientId: string;
+  teamId: string;
+  type: "system" | "manual";
+  subject: string;
+  content: string;
+  relatedType: "daily_report" | "message" | "";
+  relatedId: string;
+  readAt: string;
+  createdAt: string;
+  updatedAt: string;
+  sender: CollaborationUser;
+  recipient: CollaborationUser;
+}
+
 interface OcrJob {
   id: string;
   status: string;
@@ -449,6 +596,131 @@ interface OcrJob {
   fields: Record<string, string>;
   ownerId: string;
   teamId: string;
+}
+
+type ProspectOutreachChannel = "email" | "whatsapp" | "call";
+type ProspectReplyClassification =
+  | "clear_demand"
+  | "interested_nurture"
+  | "referral"
+  | "no_current_demand"
+  | "rejected"
+  | "unsubscribed"
+  | "bounced"
+  | "auto_unknown";
+
+interface ProspectTouchpoint {
+  id: string;
+  channel: ProspectOutreachChannel;
+  direction: "outbound" | "inbound";
+  contactValue: string;
+  subject: string;
+  content: string;
+  replyClassification?: ProspectReplyClassification;
+  occurredAt: string;
+}
+
+type ProcurementEvidenceType =
+  | "quote_request"
+  | "product_requirement"
+  | "quantity"
+  | "sample_request"
+  | "purchase_timeline"
+  | "target_price"
+  | "certification"
+  | "delivery"
+  | "project_tender"
+  | "manual_confirmation";
+
+interface ProcurementSignal {
+  id: string;
+  evidenceTypes: ProcurementEvidenceType[];
+  evidenceSummary: string;
+  product: string;
+  specification: string;
+  quantity: number;
+  quantityType: "unknown" | "sample" | "trial" | "forecast" | "order";
+  targetPrice: number;
+  currency: string;
+  priceBasis: string;
+  deliveryRequirement: string;
+  certificationRequirement: string;
+  purchaseTimeline: string;
+  projectName: string;
+  buyerRole: string;
+  nextAction: string;
+  confidence: number;
+  status: "needs_review" | "confirmed" | "dismissed" | "expired";
+  observedAt: string;
+  validUntil: string;
+}
+
+interface DealRecommendation {
+  id: string;
+  customerId?: string;
+  suggestedTitle: string;
+  suggestedProduct: string;
+  suggestedQuantity: number;
+  suggestedUnitPrice: number;
+  suggestedAmount: number;
+  currency: string;
+  nextAction: string;
+  nextActionAt: string;
+  expectedCloseAt: string;
+  reasonTexts: string[];
+  missingFields: string[];
+  recommendationScore: number;
+  status: "generated" | "dismissed" | "linked_existing_deal" | "converted_by_user" | "expired";
+  linkedDealId?: string;
+  duplicateDeals: Array<Pick<Deal, "id" | "title" | "product" | "stage" | "amount" | "currency">>;
+}
+
+interface ProcurementContext {
+  prospectCandidateId?: string;
+  signals: ProcurementSignal[];
+  recommendations: DealRecommendation[];
+}
+
+interface ProspectPerformance {
+  scope: {
+    teamId: string;
+    ownerId: string;
+  };
+  metrics: {
+    candidates: number;
+    contacted: number;
+    validReplies: number;
+    validReplyRate: number;
+    leads: number;
+    customers: number;
+    deals: number;
+    won: number;
+    lost: number;
+    wonRevenue: Array<{ currency: string; amount: number }>;
+    pendingSuggestions: number;
+  };
+}
+
+type ProspectStrategySuggestionType =
+  | "refine_targeting_keywords"
+  | "increase_provider_priority"
+  | "decrease_provider_priority"
+  | "review_icp_exclusions"
+  | "review_icp_weights";
+
+interface ProspectStrategySuggestion {
+  id: string;
+  campaignId: string;
+  campaignVersion: number;
+  strategyId: string;
+  suggestionType: ProspectStrategySuggestionType;
+  sampleMetrics: Record<string, unknown>;
+  proposedAdjustments: Record<string, unknown>;
+  rationale: string;
+  status: "pending" | "accepted" | "rejected";
+  sampleFrom: string;
+  sampleTo: string;
+  createdAt: string;
 }
 
 interface WebsiteOpportunity {
@@ -465,9 +737,39 @@ interface WebsiteOpportunity {
   customerId?: string;
   dealId?: string;
   leadId?: string;
-  parseMode?: "rule" | "ai" | "fallback";
+  parseMode?: "rule" | "ai" | "fallback" | "reference";
   source?: string;
   sourceLabel?: string;
+  sourceEvidence?: Array<{
+    providerId: string;
+    providerRecordId: string;
+    officialWebsite: string;
+    sourceUrl: string;
+    recordType: string;
+    fetchedAt: string;
+    payloadHash: string;
+    evidenceSummary: string;
+    matchedFields: string[];
+    adapterVersion: string;
+    catalogPolicyVersion: string;
+    sourceLevel: string;
+    retentionPolicyRef: string;
+  }>;
+  verificationReport?: {
+    level: "L0" | "L1" | "L2" | "L3" | "L4" | "L5";
+    levelLabel: string;
+    conclusion: string;
+    generatedAt: string;
+    crawlerFree: true;
+    checks: Array<{
+      code: string;
+      label: string;
+      status: "passed" | "partial" | "unverified" | "manual_required";
+      summary: string;
+      source: string;
+      checkedAt: string;
+    }>;
+  };
   confidence?: number;
   lastDevelopmentEmailAt?: string;
   lastDevelopmentEmailSubject?: string;
@@ -475,9 +777,47 @@ interface WebsiteOpportunity {
   verifiedAt?: string;
   statusChangedAt?: string;
   excludedReason?: string;
+  tenantProspectId?: string;
+  organizationId?: string;
+  coverageClassification?: string;
+  coverageQueueState?: string;
+  coverageReasonCode?: string;
+  lastTouchpointAt?: string;
+  lastTouchpointChannel?: ProspectOutreachChannel;
+  lastReplyClassification?: ProspectReplyClassification;
+  nextFollowAt?: string;
+  outreachState?: "uncontacted" | "awaiting_reply" | "replied" | "suppressed" | "contact_invalid";
+  invalidContactChannels?: ProspectOutreachChannel[];
   selected?: boolean;
   ownerId?: string;
   teamId?: string;
+}
+
+interface OrganizationIdentityConflictItem {
+  id: string;
+  conflictType:
+    | "identifier_split"
+    | "identifier_slot_conflict"
+    | "binding_conflict";
+  createdAt: string;
+  effectiveStatus: "open" | "resolved";
+  revision: number;
+  etag: string;
+  identifierCount: number;
+  candidateCount: number;
+  organizations: Array<{
+    id: string;
+    name: string;
+    canonicalOrganizationId: string;
+  }>;
+  review: {
+    action: "keep_separate" | "merge";
+    canonicalOrganizationId: string;
+    note: string;
+    reviewedBy: string;
+    reviewedByName: string;
+    createdAt: string;
+  } | null;
 }
 
 interface ProspectAssignee {
@@ -498,6 +838,8 @@ interface LeadProviderStatus {
   keyHint: string;
   defaultBaseUrl: string;
   costNote: string;
+  accessMode: "api" | "bulk_file" | "website_controlled" | "manual_assisted" | "disabled";
+  recommended: boolean;
   hasApiKey: boolean;
   ready: boolean;
   enabled: boolean;
@@ -511,7 +853,7 @@ interface LeadFinderJob {
   id: string;
   title: string;
   subtitle: string;
-  status: "ready" | "running" | "done" | "needs_input";
+  status: "ready" | "running" | "done" | "partial" | "failed" | "needs_input" | "paused" | "cancelled";
   resultCount: number;
   channelCount: number;
   elapsedText: string;
@@ -521,6 +863,147 @@ interface LeadFinderJob {
   expanded?: boolean;
   resultIds?: string[];
   detailLines?: string[];
+  incrementalStats?: LeadFinderIncrementalStats;
+  sourceStats?: LeadFinderSourceStat[];
+  backendRunId?: string;
+  backendRunRevision?: number;
+  backendRunStatus?: ProspectRunApiStatus;
+  metricLabel?: string;
+  metricValue?: string;
+  progressLabel?: string;
+  progressValue?: string;
+}
+
+interface LeadFinderSourceStat {
+  id: string;
+  name: string;
+  count?: number;
+  status?: string;
+  statusLabel?: string;
+  error?: string;
+  errorCode?: string;
+  retryable?: boolean;
+  retryAfterAt?: string | null;
+  usage?: string;
+}
+
+interface LeadFinderIncrementalStats {
+  rawCount: number;
+  returnedCount: number;
+  deduplicatedCount: number;
+  newCount: number;
+  evidenceUpdatedCount: number;
+  multiSourceMergedCount: number;
+  unchangedCount: number;
+  excludedCount: number;
+}
+
+interface ProspectCampaignApiRecord {
+  id: string;
+  name: string;
+  status: "draft" | "active" | "paused" | "completed" | "archived";
+  currentVersion: number;
+  revision: number;
+}
+
+interface ProspectStrategyApiRecord {
+  id: string;
+  campaignId: string;
+  campaignVersion: number;
+  name: string;
+  status: "draft" | "approved" | "disabled";
+  revision: number;
+}
+
+type ProspectRunApiStatus =
+  | "queued"
+  | "running"
+  | "pause_requested"
+  | "paused"
+  | "cancel_requested"
+  | "cancelled"
+  | "succeeded"
+  | "succeeded_empty"
+  | "partial_success"
+  | "failed";
+
+interface ProspectRunApiRecord {
+  id: string;
+  campaignId: string;
+  campaignVersion: number;
+  strategyId: string;
+  ownerId: string;
+  status: ProspectRunApiStatus;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  executionSnapshot?: {
+    campaign: {
+      id: string;
+      name: string;
+      version: number;
+      snapshot: {
+        goal: string;
+        products: string[];
+        markets: string[];
+        customerTypes: string[];
+        applicationScenarios: string[];
+        exclusionRules: string[];
+        sourceProviderIds: string[];
+      };
+    };
+    resolvedQuery: {
+      positiveKeywords: string[];
+      industryTerms: string[];
+      countries: string[];
+      customerTypes: string[];
+      exclusionKeywords: string[];
+    };
+  };
+}
+
+interface ProspectRunShardApiRecord {
+  id: string;
+  providerCode: string;
+  status: ProspectRunApiStatus | "retry_scheduled";
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ProspectRunDetailApiResponse {
+  run: ProspectRunApiRecord;
+  shards: ProspectRunShardApiRecord[];
+}
+
+interface ProspectScheduleApiRecord {
+  id: string;
+  ownerId: string;
+  campaignId: string;
+  campaignVersion: number;
+  strategyId: string;
+  frequency: "daily" | "weekly" | "monthly";
+  status: "active" | "paused";
+  timezone: string;
+  nextRunAt: string;
+  lastRunAt: string;
+  lastRunId: string;
+  lastPlannedAt: string;
+  lastFailureCode: string;
+  lastFailureReason: string;
+  recurringCostApproved: boolean;
+  orchestrationMode?: "campaign_rotation_v1";
+  approvedStrategyCount?: number;
+  rotatableStrategyCount?: number;
+  lastStrategyId?: string;
+  dueReviewCount?: number;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface LeadFinderLaunchResult extends ProspectRunDetailApiResponse {
+  schedule?: ProspectScheduleApiRecord;
+  scheduleError?: string;
 }
 
 interface AiModelConfig {
@@ -964,6 +1447,16 @@ interface AppState {
   jobs: ImportExportJob[];
   tradeDocuments: TradeDocument[];
   wecomMessages: WecomMessage[];
+  dailyReports: DailyReport[];
+  dailyReportOwners: CollaborationUser[];
+  dailyReportCanViewTeam: boolean;
+  dailyReportComments: DailyReportComment[];
+  selectedDailyReportId: string | null;
+  dailyReportFrom: string;
+  dailyReportTo: string;
+  dailyReportOwnerId: string;
+  internalMessages: InternalMessage[];
+  internalUnreadCount: number;
   knowledgeAssets: KnowledgeAsset[];
   exams: Exam[];
   examQuestions: ExamQuestion[];
@@ -1031,6 +1524,11 @@ interface AppState {
   prospectFilter: "all" | "preview" | "contactable" | "contacted" | "synced" | "excluded";
   prospectPage: number;
   prospectAssignees: ProspectAssignee[];
+  procurementContexts: Record<string, ProcurementContext>;
+  prospectPerformance: ProspectPerformance | null;
+  prospectStrategySuggestions: ProspectStrategySuggestion[];
+  prospectSchedules: ProspectScheduleApiRecord[];
+  identityConflicts: OrganizationIdentityConflictItem[];
   leadProviders: LeadProviderStatus[];
   selectedLeadSources: string[];
   leadSourceSelectionTouched: boolean;
@@ -1076,6 +1574,16 @@ const state: AppState = {
   jobs: [],
   tradeDocuments: [],
   wecomMessages: [],
+  dailyReports: [],
+  dailyReportOwners: [],
+  dailyReportCanViewTeam: false,
+  dailyReportComments: [],
+  selectedDailyReportId: null,
+  dailyReportFrom: "",
+  dailyReportTo: "",
+  dailyReportOwnerId: "",
+  internalMessages: [],
+  internalUnreadCount: 0,
   knowledgeAssets: [],
   exams: [],
   examQuestions: [],
@@ -1143,6 +1651,11 @@ const state: AppState = {
   prospectFilter: "all",
   prospectPage: 1,
   prospectAssignees: [],
+  procurementContexts: {},
+  prospectPerformance: null,
+  prospectStrategySuggestions: [],
+  prospectSchedules: [],
+  identityConflicts: [],
   leadProviders: [],
   selectedLeadSources: [],
   leadSourceSelectionTouched: false
@@ -1157,6 +1670,10 @@ let memoMobileDetailOpen = false;
 let memoDeleteBusy = false;
 const resolvedMemoDrafts = new Set<string>();
 let leadFinderJobs: LeadFinderJob[] = [];
+let leadFinderRunsLoading = false;
+let leadFinderRunPollTimer = 0;
+let prospectFeedbackLoading = false;
+let prospectFeedbackLoadedAt = 0;
 let customerClockTimer = 0;
 let openWorkspaceTabs = ["dashboard"];
 let workspaceTabHistory = ["dashboard"];
@@ -1176,6 +1693,8 @@ const viewLabels: Record<string, string> = {
   exam: "在线考试",
   "question-bank": "题库维护",
   wecom: "企业微信",
+  "daily-reports": "团队日报",
+  inbox: "消息通知",
   tools: "小工具",
   competitors: "竞争公司",
   cases: "成功案例",
@@ -1366,6 +1885,7 @@ function toast(message: string, type: "ok" | "error" = "ok") {
 
 function openModal(title: string, body: string, foot: string) {
   ensureUiLayer();
+  qs<HTMLElement>("#appModal .modal")?.classList.remove("customs-workspace-modal");
   qs("#modalTitle")!.textContent = title;
   qs("#modalBody")!.innerHTML = body;
   qs("#modalFoot")!.innerHTML = foot;
@@ -1778,7 +2298,15 @@ async function refreshAll(user: User) {
   renderLeadFinder(state.websiteOpportunities);
   renderProspectList();
   renderTopbarStats();
+  await Promise.all([
+    refreshDailyReports(false),
+    refreshInternalMessages(false)
+  ]);
   void loadLeadProviders();
+  void loadProspectFeedback(true, true);
+  void loadProspectSchedules(true);
+  void loadIdentityConflicts(true);
+  void loadProspectRuns(true);
   void reloadWhatsAppThreads();
 }
 
@@ -1787,11 +2315,13 @@ async function loadLeadProviders() {
     const result = await api<{ providers: LeadProviderStatus[] }>("/api/lead-finder/providers");
     state.leadProviders = result.providers || [];
     if (!state.leadSourceSelectionTouched) {
-      // 默认选中：所有免费源 + 已配置启用的源
-      // AI 搜索按 token 计费，默认不自动勾选，由用户按需开启
-    state.selectedLeadSources = state.leadProviders.filter((item) => item.ready && item.enabled && item.id !== "ai_search").map((item) => item.id);
+      // 默认只启用一组覆盖面稳定的公开源，其余来源由用户按场景展开选择。
+      state.selectedLeadSources = state.leadProviders
+        .filter((item) => item.id !== "ai_search" && item.recommended && isLeadSourceExecutable(item))
+        .map((item) => item.id);
     }
     renderLeadSourceChips();
+    renderLeadFinderJobs();
   } catch {
     // 数据源加载失败时保留兜底提示，不影响主流程
   }
@@ -2334,13 +2864,21 @@ function renderTodos(todos: Todo[]) {
     const optionalMeta = [formatTodoTime(todo.dueAt), todo.related].filter(Boolean).map((item) => `<span>${escapeHtml(item)}</span>`).join("");
     const isRunning = todo.status === "in_progress" && !todo.done;
     const pinBadge = todo.pinState === "top" ? badge("置顶", "aqua") : todo.pinState === "bottom" ? badge("沉底", "gray") : "";
-    const statusBadge = isHistoryView ? badge(todo.done ? "历史完成" : "历史归档", todo.done ? "green" : tone) : todo.done ? badge("已完成", "green") : isRunning ? badge("进行中", "aqua") : badge(todoTypeText(todo.type), tone);
+    const statusBadge = isHistoryView
+      ? todo.cancelledAt
+        ? badge("已取消", "gray")
+        : badge(todo.done ? "历史完成" : "历史归档", todo.done ? "green" : tone)
+      : todo.done
+        ? badge("已完成", "green")
+        : isRunning
+          ? badge("进行中", "aqua")
+          : badge(todoTypeText(todo.type), tone);
     const runIcon = isRunning ? `<svg viewBox="0 0 24 24"><path d="M7 7h10v10H7z"/></svg>` : `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
     const menuOpen = state.openTodoMenuId === todo.id;
     return `<article class="todo-row ${todo.priority === "high" ? "urgent" : ""} ${isRunning ? "in-progress" : ""} ${todo.done ? "done" : ""} ${state.draggingTodoId === todo.id ? "dragging" : ""}" data-todo-id="${escapeHtml(todo.id)}">
       <i class="todo-check" title="${todo.done ? "撤回未完成" : "完成待办"}"></i>
       <div class="todo-main"><h3>${escapeHtml(todo.title)}</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--${tone === "red" ? "rose" : tone})"></i><span>${escapeHtml(priorityText(todo.priority))}</span>${optionalMeta}${pinBadge}${statusBadge}</div></div>
-      <div class="todo-side"><div class="todo-actions"><div class="assignee-stack"><span class="mini-avatar">我</span></div>${isHistoryView ? `<button class="btn" data-todo-restore>回到今日</button>` : todo.done ? "" : `<button class="todo-run ${isRunning ? "active" : ""}" title="${isRunning ? "停止执行" : "开始执行"}" aria-label="${isRunning ? "停止执行" : "开始执行"}">${runIcon}</button>`}<button class="todo-more ${menuOpen ? "active" : ""}" title="更多操作" aria-label="更多操作"><span></span><span></span><span></span></button>${menuOpen ? `<div class="todo-menu">${isHistoryView ? "" : `<button data-todo-action="edit">编辑</button><button data-todo-action="top">置顶</button><button data-todo-action="bottom">沉底</button>`}<button class="danger" data-todo-action="delete">删除</button></div>` : ""}</div><div class="subtask-bar ${isRunning ? "running" : ""}"><i style="--p:${todo.done ? "100%" : isRunning ? "74%" : "55%"}"></i></div></div>
+      <div class="todo-side"><div class="todo-actions"><div class="assignee-stack"><span class="mini-avatar">我</span></div>${isHistoryView ? todo.cancelledAt ? "" : `<button class="btn" data-todo-restore>回到今日</button>` : todo.done ? "" : `<button class="todo-run ${isRunning ? "active" : ""}" title="${isRunning ? "停止执行" : "开始执行"}" aria-label="${isRunning ? "停止执行" : "开始执行"}">${runIcon}</button>`}<button class="todo-more ${menuOpen ? "active" : ""}" title="更多操作" aria-label="更多操作"><span></span><span></span><span></span></button>${menuOpen ? `<div class="todo-menu">${isHistoryView ? "" : `<button data-todo-action="edit">编辑</button><button data-todo-action="top">置顶</button><button data-todo-action="bottom">沉底</button>`}<button class="danger" data-todo-action="delete">删除</button></div>` : ""}</div><div class="subtask-bar ${isRunning ? "running" : ""}"><i style="--p:${todo.done ? "100%" : isRunning ? "74%" : "55%"}"></i></div></div>
     </article>`;
     }).join("");
   }
@@ -2568,7 +3106,7 @@ function renderTodoHistory(todos: Todo[]) {
     return `<article class="todo-history-row ${todo.done ? "done" : ""}" data-todo-id="${escapeHtml(todo.id)}">
       <span class="history-dot ${tone}"></span>
       <div><b>${escapeHtml(todo.title)}</b><span>${escapeHtml(meta)}</span></div>
-      <div class="todo-actions">${badge(todo.done ? "历史完成" : "历史归档", todo.done ? "green" : tone)}<button class="btn" data-todo-restore>回到今日</button><button class="todo-more ${menuOpen ? "active" : ""}" title="更多操作" aria-label="更多操作"><span></span><span></span><span></span></button>${menuOpen ? `<div class="todo-menu"><button class="danger" data-todo-action="delete">删除</button></div>` : ""}</div>
+      <div class="todo-actions">${todo.cancelledAt ? badge("已取消", "gray") : badge(todo.done ? "历史完成" : "历史归档", todo.done ? "green" : tone)}${todo.cancelledAt ? "" : `<button class="btn" data-todo-restore>回到今日</button>`}<button class="todo-more ${menuOpen ? "active" : ""}" title="更多操作" aria-label="更多操作"><span></span><span></span><span></span></button>${menuOpen ? `<div class="todo-menu"><button class="danger" data-todo-action="delete">删除</button></div>` : ""}</div>
     </article>`;
   }).join("") : `<div class="todo-history-empty">暂无隔天历史待办</div>`;
   qsa<HTMLElement>(".todo-history-row [data-todo-restore]", list).forEach((node) => {
@@ -3197,8 +3735,18 @@ async function openLead(id: string) {
   document.body.classList.add("lead-drawer-open");
   drawer.innerHTML = `<div class="drawer-head"><div><h2>加载中…</h2></div></div>`;
   try {
-    const data = await api<{ lead: Lead; activities: LeadActivity[]; sourceEvents: LeadSourceEvent[] }>(`/api/leads/${id}`);
-    renderLeadDrawer(data.lead, data.activities, data.sourceEvents || []);
+    const data = await api<{
+      lead: Lead;
+      activities: LeadActivity[];
+      sourceEvents: LeadSourceEvent[];
+      procurement: ProcurementContext;
+    }>(`/api/leads/${id}`);
+    renderLeadDrawer(
+      data.lead,
+      data.activities,
+      data.sourceEvents || [],
+      data.procurement
+    );
   } catch (error) {
     drawer.innerHTML = `<div class="drawer-head"><div><h2>加载失败</h2><p>${escapeHtml(error instanceof Error ? error.message : "")}</p></div><button class="btn icon-only" id="leadDrawerClose" title="关闭">×</button></div>`;
     qs("#leadDrawerClose", drawer)?.addEventListener("click", closeLeadDrawer);
@@ -3222,7 +3770,12 @@ function sourceTypeText(value?: string) {
   return labels[value || ""] || value || "未标注";
 }
 
-function renderLeadDrawer(lead: Lead, activities: LeadActivity[], sourceEvents: LeadSourceEvent[]) {
+function renderLeadDrawer(
+  lead: Lead,
+  activities: LeadActivity[],
+  sourceEvents: LeadSourceEvent[],
+  procurement?: ProcurementContext
+) {
   const drawer = qs<HTMLElement>("#leadDrawer");
   if (!drawer) return;
   const sourceProspect = state.websiteOpportunities.find((item) => item.leadId === lead.id);
@@ -3275,6 +3828,7 @@ function renderLeadDrawer(lead: Lead, activities: LeadActivity[], sourceEvents: 
         </div>
       </div>
     `}
+    ${sourceProspect ? renderProcurementContextPanel(procurement, sourceProspect) : ""}
     <section class="lead-detail-section"><h3>联系与需求</h3><div class="info-grid">${fields.map(([label, value]) => `<div class="info"><span>${label}</span><b>${escapeHtml(value)}</b></div>`).join("")}</div></section>
     <section class="lead-detail-section">
       <h3>来源证据</h3>
@@ -3304,6 +3858,9 @@ function renderLeadDrawer(lead: Lead, activities: LeadActivity[], sourceEvents: 
     state.prospectPage = index >= 0 ? Math.floor(index / PROSPECT_PAGE_SIZE) + 1 : 1;
     activateNavView("prospect-list", renderProspectList);
   });
+  if (sourceProspect) {
+    bindProcurementContextActions(drawer, sourceProspect, procurement);
+  }
 }
 
 async function reloadLeads() {
@@ -3408,10 +3965,22 @@ function renderLeadConversionDealFields(visible: boolean) {
   if (fields) fields.classList.toggle("is-hidden", !visible);
 }
 
-async function openLeadConversion(id: string) {
+async function openLeadConversion(
+  id: string,
+  recommendation?: DealRecommendation
+) {
   try {
     const preview = await api<{ lead: Lead; customerMatches: LeadConversionMatch[] }>(`/api/leads/${id}/conversion-preview`);
     const { lead, customerMatches } = preview;
+    const conversionRequestId = prospectRequestId("prospect-customer");
+    const suggestedQuantity = Number(recommendation?.suggestedQuantity || 0);
+    const suggestedUnitPrice = Number(recommendation?.suggestedUnitPrice || 0);
+    const suggestedAmount = Number(
+      recommendation?.suggestedAmount
+      || suggestedQuantity * suggestedUnitPrice
+      || lead.estimatedAmount
+      || 0
+    );
     const matchRows = customerMatches.map((match, index) => `
       <label class="conversion-customer-option">
         <input type="radio" name="leadCustomerMode" value="existing:${escapeHtml(match.customer.id)}" ${index === 0 ? "checked" : ""}>
@@ -3419,9 +3988,17 @@ async function openLeadConversion(id: string) {
       </label>
     `).join("");
     openModal("转为客户", `
+      <input id="leadConversionRequestId" type="hidden" value="${escapeHtml(conversionRequestId)}">
+      <input id="leadConversionRecommendationId" type="hidden" value="${escapeHtml(recommendation?.id || "")}">
+      <input id="leadConversionDealQuantity" type="hidden" value="${suggestedQuantity}">
+      <input id="leadConversionDealUnitPrice" type="hidden" value="${suggestedUnitPrice}">
+      <input id="leadConversionDealCurrency" type="hidden" value="${escapeHtml(recommendation?.currency || "USD")}">
+      <input id="leadConversionDealNextActionAt" type="hidden" value="${escapeHtml(recommendation?.nextActionAt || defaultFutureDate(2))}">
+      <input id="leadConversionDealExpectedCloseAt" type="hidden" value="${escapeHtml(recommendation?.expectedCloseAt || defaultFutureDate(21))}">
       <div class="conversion-lead-summary">
         <b>${escapeHtml(lead.company)}</b>
         <span>${escapeHtml(lead.contact || "联系人待补充")} · ${escapeHtml(lead.country || "国家待补充")} · ${escapeHtml(lead.sourceChannel || lead.source || "来源待确认")}</span>
+        ${recommendation ? `<em>已带入采购信号建议，商机仍由你自主决定是否创建。</em>` : ""}
       </div>
       <div class="form-field full">
         <label>客户归属</label>
@@ -3433,12 +4010,12 @@ async function openLeadConversion(id: string) {
           </label>
         </div>
       </div>
-      <label class="conversion-deal-toggle"><input id="leadCreateDealInput" type="checkbox">同时创建商机</label>
-      <div class="form-grid is-hidden" id="leadConversionDealFields">
-        <div class="form-field full"><label>商机标题</label><input id="leadDealTitleInput" value="${escapeHtml(`${lead.company} 采购需求`)}"></div>
-        <div class="form-field"><label>产品/需求</label><input id="leadDealProductInput" placeholder="请输入产品、数量或规格需求"></div>
-        <div class="form-field"><label>预计金额</label><input id="leadDealAmountInput" type="number" min="0" value="${lead.estimatedAmount || 0}"></div>
-        <div class="form-field full"><label>下一步动作</label><input id="leadDealNextActionInput" value="${escapeHtml(lead.nextFollowAt || "确认产品、数量与报价要求")}"></div>
+      <label class="conversion-deal-toggle"><input id="leadCreateDealInput" type="checkbox" ${recommendation ? "checked" : ""}>同时创建商机</label>
+      <div class="form-grid ${recommendation ? "" : "is-hidden"}" id="leadConversionDealFields">
+        <div class="form-field full"><label>商机标题</label><input id="leadDealTitleInput" value="${escapeHtml(recommendation?.suggestedTitle || `${lead.company} 采购需求`)}"></div>
+        <div class="form-field"><label>产品/需求</label><input id="leadDealProductInput" value="${escapeHtml(recommendation?.suggestedProduct || "")}" placeholder="请输入产品、数量或规格需求"></div>
+        <div class="form-field"><label>预计金额</label><input id="leadDealAmountInput" type="number" min="0" value="${suggestedAmount}"></div>
+        <div class="form-field full"><label>下一步动作</label><input id="leadDealNextActionInput" value="${escapeHtml(recommendation?.nextAction || lead.nextFollowAt || "确认产品、数量与报价要求")}"></div>
       </div>
     `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="confirmLeadConversionButton" data-lead-id="${escapeHtml(id)}">确认转为客户</button>`);
     qs<HTMLInputElement>("#leadCreateDealInput")?.addEventListener("change", (event) => {
@@ -3455,26 +4032,90 @@ async function confirmLeadConversion(id: string) {
   const createDeal = Boolean(qs<HTMLInputElement>("#leadCreateDealInput")?.checked);
   const button = qs<HTMLButtonElement>("#confirmLeadConversionButton");
   const customerMode = selected.startsWith("existing:") ? "existing" : "create";
+  const sourceProspect = state.websiteOpportunities.find((item) =>
+    item.leadId === id && Boolean(item.tenantProspectId)
+  );
+  const recommendationId = qs<HTMLInputElement>("#leadConversionRecommendationId")?.value.trim() || "";
+  const dealTitle = qs<HTMLInputElement>("#leadDealTitleInput")?.value.trim() || "";
+  const dealProduct = qs<HTMLInputElement>("#leadDealProductInput")?.value.trim() || "";
+  const dealAmount = Number(qs<HTMLInputElement>("#leadDealAmountInput")?.value || 0);
+  const dealNextAction = qs<HTMLInputElement>("#leadDealNextActionInput")?.value.trim() || "";
   const payload = {
     customerMode,
     customerId: customerMode === "existing" ? selected.slice("existing:".length) : "",
     createDeal,
     deal: createDeal ? {
-      title: qs<HTMLInputElement>("#leadDealTitleInput")?.value.trim() || "",
-      product: qs<HTMLInputElement>("#leadDealProductInput")?.value.trim() || "",
-      amount: Number(qs<HTMLInputElement>("#leadDealAmountInput")?.value || 0),
-      nextAction: qs<HTMLInputElement>("#leadDealNextActionInput")?.value.trim() || ""
+      title: dealTitle,
+      product: dealProduct,
+      amount: dealAmount,
+      nextAction: dealNextAction
     } : undefined
   };
+  if (createDeal && (!dealTitle || !dealProduct || !dealNextAction)) {
+    toast("请补齐商机标题、产品需求和下一步动作", "error");
+    return;
+  }
   try {
     if (button) {
       button.disabled = true;
       button.textContent = "入库中";
     }
-    const result = await api<{ customer: Customer; deal?: Deal }>(`/api/leads/${id}/convert`, {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
+    let result: { customer: Customer; deal?: Deal };
+    if (sourceProspect?.tenantProspectId) {
+      const conversionRequestId = qs<HTMLInputElement>("#leadConversionRequestId")?.value.trim()
+        || prospectRequestId("prospect-customer");
+      const conversion = await api<{ customer: Customer }>(
+        `/api/prospects/${encodeURIComponent(sourceProspect.tenantProspectId)}/convert-to-customer`,
+        {
+          method: "POST",
+          headers: { "Idempotency-Key": conversionRequestId },
+          body: JSON.stringify({
+            operationCode: "convert_prospect_to_customer_v1",
+            leadId: id,
+            mode: customerMode === "existing" ? "link_existing" : "create_new",
+            existingCustomerId: customerMode === "existing"
+              ? selected.slice("existing:".length)
+              : undefined,
+            company: customerMode === "create" ? previewLeadValue(id, "company") : undefined,
+            contact: customerMode === "create" ? previewLeadValue(id, "contact") : undefined,
+            country: customerMode === "create" ? previewLeadValue(id, "country") : undefined,
+            nextReminder: customerMode === "create"
+              ? previewLeadValue(id, "nextFollowAt")
+              : undefined
+          })
+        }
+      );
+      sourceProspect.customerId = conversion.customer.id;
+      result = { customer: conversion.customer };
+      if (createDeal) {
+        const suggestedQuantity = Number(qs<HTMLInputElement>("#leadConversionDealQuantity")?.value || 0);
+        const suggestedUnitPrice = Number(qs<HTMLInputElement>("#leadConversionDealUnitPrice")?.value || 0);
+        const quantity = suggestedQuantity > 0 ? suggestedQuantity : dealAmount > 0 ? 1 : 0;
+        const unitPrice = suggestedUnitPrice > 0 ? suggestedUnitPrice : quantity > 0 ? dealAmount / quantity : 0;
+        const dealResult = await api<{ deal: Deal }>("/api/deals", {
+          method: "POST",
+          body: JSON.stringify({
+            customerId: conversion.customer.id,
+            title: dealTitle,
+            product: dealProduct,
+            quantity,
+            unitPrice,
+            amount: dealAmount,
+            currency: qs<HTMLInputElement>("#leadConversionDealCurrency")?.value || "USD",
+            nextAction: dealNextAction,
+            nextActionAt: qs<HTMLInputElement>("#leadConversionDealNextActionAt")?.value || defaultFutureDate(2),
+            expectedCloseAt: qs<HTMLInputElement>("#leadConversionDealExpectedCloseAt")?.value || defaultFutureDate(21),
+            recommendationId
+          })
+        });
+        result.deal = dealResult.deal;
+      }
+    } else {
+      result = await api<{ customer: Customer; deal?: Deal }>(`/api/leads/${id}/convert`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+    }
     const [leads, customers, deals] = await Promise.all([
       api<{ leads: Lead[] }>("/api/leads"),
       api<{ customers: Customer[] }>("/api/customers"),
@@ -3498,6 +4139,15 @@ async function confirmLeadConversion(id: string) {
       button.textContent = "确认转为客户";
     }
   }
+}
+
+function previewLeadValue(
+  id: string,
+  field: "company" | "contact" | "country" | "nextFollowAt"
+) {
+  const lead = state.leads.find((item) => item.id === id)
+    || state.leadTrash.find((item) => item.id === id);
+  return lead?.[field] || "";
 }
 
 async function createLead(form: HTMLFormElement) {
@@ -3790,6 +4440,7 @@ function renderCustomerDrawer(customer?: Customer) {
       <div class="info"><span>企微状态</span><b>${customer.wecomBound ? "已绑定" : "未绑定"}</b></div>
     </div>
     <div class="inline-actions"><button class="btn primary" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button></div>
+    ${renderCustomerIntelligence(customer)}
     <section class="customer-doc-info">
       <div class="customer-deals-head"><h3>单据基础信息</h3><button class="btn" data-edit-customer-document-info>维护信息</button></div>
       <div class="info-grid">
@@ -3817,7 +4468,125 @@ function renderCustomerDrawer(customer?: Customer) {
   qsa<HTMLButtonElement>("[data-edit-customer-document-info]", drawer).forEach((button) => {
     button.addEventListener("click", () => openCustomerModal(customer));
   });
+  qsa<HTMLButtonElement>("[data-accept-customer-intelligence]", drawer).forEach((button) => {
+    button.addEventListener("click", () => void acceptCustomerIntelligenceSuggestion(
+      customer,
+      button.dataset.acceptCustomerIntelligence || "",
+      button
+    ));
+  });
+  qsa<HTMLButtonElement>("[data-reject-customer-intelligence]", drawer).forEach((button) => {
+    button.addEventListener("click", () => void rejectCustomerIntelligenceSuggestion(
+      customer,
+      button.dataset.rejectCustomerIntelligence || "",
+      button
+    ));
+  });
   qs<HTMLButtonElement>("[data-view-related-deals]", drawer)?.addEventListener("click", () => activateNavView("pipeline"));
+}
+
+function renderCustomerIntelligence(customer: Customer) {
+  const suggestions = customer.pendingIntelligence || [];
+  if (!suggestions.length) return "";
+  const canReview = customer.ownerId === state.user?.id;
+  return `<section class="customer-intelligence">
+    <div class="customer-deals-head">
+      <h3>待采纳情报 <span>${suggestions.length}</span></h3>
+      <small>${canReview ? "人工核对后更新客户资料" : "由归属业务员处理"}</small>
+    </div>
+    <div class="customer-intelligence-list">
+      ${suggestions.map((suggestion) => {
+        const facts = [
+          suggestion.website ? `官网：${suggestion.website}` : "",
+          suggestion.business ? `业务：${suggestion.business}` : "",
+          suggestion.contactInfo ? `联系：${suggestion.contactInfo}` : ""
+        ].filter(Boolean);
+        return `<article class="customer-intelligence-item" data-customer-intelligence-id="${escapeHtml(suggestion.id)}">
+          <div class="customer-intelligence-source">
+            <b>${escapeHtml(suggestion.sourceLabel || "智能获客")}</b>
+            <time>${escapeHtml(formatDateTime(suggestion.createdAt))}</time>
+          </div>
+          <p>${escapeHtml(suggestion.evidenceSummary || "发现新的客户资料")}</p>
+          ${facts.length ? `<div class="customer-intelligence-facts">${facts.map((fact) => `<span>${escapeHtml(fact)}</span>`).join("")}</div>` : ""}
+          ${suggestion.suggestedFields.length ? `<div class="customer-intelligence-fields">${suggestion.suggestedFields.map((field) => `
+            <label>
+              <input type="checkbox" data-intelligence-field="${escapeHtml(field.key)}" checked ${canReview ? "" : "disabled"}>
+              <span><b>${escapeHtml(field.label)}</b><small>${escapeHtml(field.currentValue || "空")} → ${escapeHtml(field.suggestedValue)}</small></span>
+            </label>
+          `).join("")}</div>` : `<div class="customer-intelligence-evidence">本条仅补充来源证据，不改客户主档。</div>`}
+          <div class="customer-intelligence-actions">
+            <button class="btn" data-reject-customer-intelligence="${escapeHtml(suggestion.id)}" ${canReview ? "" : "disabled"}>忽略</button>
+            <button class="btn primary" data-accept-customer-intelligence="${escapeHtml(suggestion.id)}" ${canReview ? "" : "disabled"}>采纳所选</button>
+          </div>
+        </article>`;
+      }).join("")}
+    </div>
+  </section>`;
+}
+
+async function acceptCustomerIntelligenceSuggestion(
+  customer: Customer,
+  suggestionId: string,
+  button: HTMLButtonElement
+) {
+  const card = button.closest<HTMLElement>("[data-customer-intelligence-id]");
+  if (!card || !suggestionId) return;
+  const selectedFields = qsa<HTMLInputElement>(
+    "[data-intelligence-field]:checked",
+    card
+  ).map((input) => input.dataset.intelligenceField as CustomerIntelligenceFieldKey);
+  try {
+    button.disabled = true;
+    button.textContent = "采纳中";
+    const result = await api<{ customer: Customer }>(
+      `/api/customer-intelligence/${encodeURIComponent(suggestionId)}/accept`,
+      {
+        method: "POST",
+        body: JSON.stringify({ selectedFields })
+      }
+    );
+    state.customers = state.customers.map((item) =>
+      item.id === customer.id ? result.customer : item
+    );
+    renderCustomers(state.customers);
+    renderCustomerDrawer(result.customer);
+    toast(selectedFields.length ? "客户资料已按所选字段更新" : "来源证据已记入客户时间线");
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "采纳所选";
+    toast(error instanceof Error ? error.message : "采纳客户情报失败", "error");
+  }
+}
+
+async function rejectCustomerIntelligenceSuggestion(
+  customer: Customer,
+  suggestionId: string,
+  button: HTMLButtonElement
+) {
+  if (!suggestionId) return;
+  const reason = window.prompt("忽略原因（可选）", "");
+  if (reason === null) return;
+  try {
+    button.disabled = true;
+    button.textContent = "处理中";
+    const result = await api<{ customer: Customer }>(
+      `/api/customer-intelligence/${encodeURIComponent(suggestionId)}/reject`,
+      {
+        method: "POST",
+        body: JSON.stringify({ reason })
+      }
+    );
+    state.customers = state.customers.map((item) =>
+      item.id === customer.id ? result.customer : item
+    );
+    renderCustomers(state.customers);
+    renderCustomerDrawer(result.customer);
+    toast("该条客户情报已忽略");
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "忽略";
+    toast(error instanceof Error ? error.message : "忽略客户情报失败", "error");
+  }
 }
 
 function customerActivityLabel(type: string) {
@@ -3892,6 +4661,7 @@ function renderPipeline(deals: Deal[]) {
           <div class="deal-secondary-actions">
             <button type="button" class="btn" data-record-deal>记录进展</button>
             ${["已报价", "样品", "谈判"].includes(deal.stage) ? `<button type="button" class="btn" data-print-deal-document>生成 PI</button>` : ""}
+            ${["已报价", "样品", "谈判", "成交"].includes(deal.stage) ? `<button type="button" class="btn" data-generate-customs>生成报关资料</button>` : ""}
             <button type="button" class="btn danger" data-lost-deal>标记丢单</button>
           </div>
         </div>
@@ -3914,6 +4684,9 @@ function renderPipeline(deals: Deal[]) {
   });
   qsa<HTMLButtonElement>("[data-print-deal-document]", strip).forEach((button) => {
     button.addEventListener("click", () => void printDealDocument(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
+  });
+  qsa<HTMLButtonElement>("[data-generate-customs]", strip).forEach((button) => {
+    button.addEventListener("click", () => void generateCustomsDocument(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
   });
   qsa<HTMLButtonElement>("[data-move-deal]", strip).forEach((button) => {
     button.addEventListener("click", () => openDealStageModal(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
@@ -4027,6 +4800,333 @@ async function printDealDocument(id: string) {
   toast("已按客户与商机资料生成 PI 草稿，请补齐卖方和结算资料后保存");
 }
 
+async function generateCustomsDocument(id: string) {
+  const deal = state.deals.find((item) => item.id === id);
+  if (!deal) return;
+  const customer = state.customers.find((item) => item.id === deal.customerId);
+  if (!customer) {
+    toast("请先给商机关联客户", "error");
+    return;
+  }
+
+  try {
+    toast("正在生成报关资料...");
+    const result = await api<{ customsDocument: CustomsDocument; customer: Customer; deal: Deal; source: CustomsGenerationSource }>(`/api/deals/${id}/generate-customs`, {
+      method: "POST"
+    });
+
+    openCustomsDocumentModal(result.customsDocument, result.customer, result.deal, result.source);
+  } catch (error) {
+    toast("生成报关资料失败", "error");
+    console.error(error);
+  }
+}
+
+function customsDocumentIssues(customsDoc: CustomsDocument) {
+  const issues: string[] = [];
+  const required: Array<[string, unknown]> = [
+    ["境内发货人", customsDoc.shipper],
+    ["发货人地址", customsDoc.shipperAddress],
+    ["发货人统一社会信用代码", customsDoc.shipperTaxNo],
+    ["生产销售单位", customsDoc.manufacturer],
+    ["生产销售单位统一社会信用代码", customsDoc.manufacturerTaxNo],
+    ["境外收货人", customsDoc.consignee],
+    ["收货人地址", customsDoc.consigneeAddress],
+    ["出境口岸", customsDoc.exitPort],
+    ["运抵国", customsDoc.destinationCountry],
+    ["合同号", customsDoc.contractNo],
+    ["付款条件", customsDoc.paymentTerm]
+  ];
+  required.forEach(([label, value]) => {
+    if (!String(value || "").trim()) issues.push(label);
+  });
+  if (customsDoc.packageCount <= 0) issues.push("包装件数");
+  if (customsDoc.grossWeight <= 0) issues.push("总毛重");
+  if (customsDoc.netWeight <= 0) issues.push("总净重");
+  if (!customsDoc.items.length) issues.push("货物明细");
+  customsDoc.items.forEach((item, index) => {
+    const prefix = `第${index + 1}行`;
+    if (!item.product.trim()) issues.push(`${prefix}品名`);
+    if (!item.hsCode.trim()) issues.push(`${prefix}HS编码`);
+    if (item.quantity <= 0) issues.push(`${prefix}数量`);
+    if (!item.unit.trim()) issues.push(`${prefix}单位`);
+    if (item.weightKg <= 0) issues.push(`${prefix}重量`);
+    if (item.packageCount <= 0) issues.push(`${prefix}包装数`);
+  });
+  return issues;
+}
+
+function openCustomsDocumentModal(customsDoc: CustomsDocument, customer: Customer, deal: Deal, source: CustomsGenerationSource) {
+  const field = (name: keyof CustomsDocument, label: string, value: unknown, options: { type?: string; wide?: boolean; min?: number; step?: number } = {}) => `
+    <label class="customs-field ${options.wide ? "wide" : ""}">
+      <span>${label}</span>
+      <input data-customs-field="${String(name)}" type="${options.type || "text"}" value="${escapeHtml(String(value ?? ""))}"${options.min !== undefined ? ` min="${options.min}"` : ""}${options.step !== undefined ? ` step="${options.step}"` : ""}>
+    </label>`;
+
+  openModal(`${customer.company} · 报关资料包`, `
+    <div class="customs-workspace">
+      <header class="customs-workspace-head">
+        <div>
+          <span class="customs-kicker">Customs Pack</span>
+          <h3>出口报关资料工作台</h3>
+          <p>${escapeHtml(deal.title)} · ${escapeHtml(customer.company)} · ${escapeHtml(customer.country)}</p>
+        </div>
+        <div class="customs-readiness"><strong id="customsReadinessValue">0%</strong><span>资料完整度</span></div>
+      </header>
+
+      <div class="customs-source-bar">
+        <div><span>资料来源</span><strong>${escapeHtml(source.label)}</strong></div>
+        <div><span>输出内容</span><strong>7个Excel工作表</strong></div>
+        <div><span>当前金额</span><strong id="customsTotalAmount">--</strong></div>
+      </div>
+
+      <div class="customs-editor-layout">
+        <main class="customs-form-sections">
+          <section class="customs-form-section">
+            <div class="customs-section-title"><div><b>单据与贸易</b><span>合同、币种和结算信息</span></div></div>
+            <div class="customs-form-grid">
+              ${field("number", "报关资料编号", customsDoc.number)}
+              ${field("issueDate", "制单日期", customsDoc.issueDate, { type: "date" })}
+              ${field("contractNo", "合同 / 发票号", customsDoc.contractNo)}
+              ${field("exitDate", "预计出口日期", customsDoc.exitDate, { type: "date" })}
+              ${field("tradeMode", "监管方式", customsDoc.tradeMode)}
+              ${field("currency", "币种", customsDoc.currency)}
+              ${field("incoterm", "贸易术语", customsDoc.incoterm)}
+              ${field("paymentTerm", "付款条件", customsDoc.paymentTerm, { wide: true })}
+            </div>
+          </section>
+
+          <section class="customs-form-section">
+            <div class="customs-section-title"><div><b>收发货主体</b><span>以实际备案主体和合同买方为准</span></div></div>
+            <div class="customs-form-grid">
+              ${field("shipper", "境内发货人", customsDoc.shipper)}
+              ${field("shipperTaxNo", "统一社会信用代码", customsDoc.shipperTaxNo)}
+              ${field("shipperAddress", "发货人地址", customsDoc.shipperAddress, { wide: true })}
+              ${field("manufacturer", "生产销售单位", customsDoc.manufacturer)}
+              ${field("manufacturerTaxNo", "生产单位信用代码", customsDoc.manufacturerTaxNo)}
+              ${field("consignee", "境外收货人", customsDoc.consignee)}
+              ${field("consigneeAddress", "境外收货人地址", customsDoc.consigneeAddress, { wide: true })}
+            </div>
+          </section>
+
+          <section class="customs-form-section">
+            <div class="customs-section-title"><div><b>运输与包装</b><span>重量和件数可按商品明细自动汇总</span></div><button class="btn" type="button" id="customsRecalculateButton">按明细汇总</button></div>
+            <div class="customs-form-grid">
+              ${field("transportMode", "运输方式", customsDoc.transportMode)}
+              ${field("vesselName", "运输工具 / 航次", customsDoc.vesselName)}
+              ${field("exitPort", "出境口岸", customsDoc.exitPort)}
+              ${field("destinationCountry", "运抵国", customsDoc.destinationCountry)}
+              ${field("tradeCountry", "贸易国", customsDoc.tradeCountry)}
+              ${field("packageType", "包装种类", customsDoc.packageType)}
+              ${field("packageCount", "总件数", customsDoc.packageCount, { type: "number", min: 0 })}
+              ${field("grossWeight", "总毛重 kg", customsDoc.grossWeight, { type: "number", min: 0, step: 0.01 })}
+              ${field("netWeight", "总净重 kg", customsDoc.netWeight, { type: "number", min: 0, step: 0.01 })}
+            </div>
+          </section>
+        </main>
+
+        <aside class="customs-check-panel">
+          <div class="customs-check-head"><b>导出检查</b><span id="customsIssueCount">--</span></div>
+          <div id="customsIssueList" class="customs-issue-list"></div>
+          <div class="customs-check-note">HS编码、品牌、型号、重量和包装应与实际货物及申报要素一致。</div>
+        </aside>
+      </div>
+
+      <section class="customs-items-section-edit">
+        <div class="customs-section-title"><div><b>商品申报明细</b><span>金额、箱单、发票和合同将共用以下明细</span></div><button class="btn" id="customsAddItemButton" type="button">增加商品</button></div>
+        <div class="customs-items-editor-wrap"><div class="customs-items-editor" id="customsItemsEditor"></div></div>
+      </section>
+
+      <section class="customs-output-section">
+        <div class="customs-section-title"><div><b>导出资料包</b><span>一次生成，工作表之间使用同一份确认数据</span></div></div>
+        <div class="customs-output-list">
+          <span>报关单</span><span>申报要素</span><span>商业发票</span><span>装箱单</span><span>销售合同</span><span>委托书</span><span>填制规范</span>
+        </div>
+      </section>
+    </div>
+  `, `
+    <button class="btn" data-modal-close>取消</button>
+    <button class="btn primary" id="exportCustomsButton">检查资料</button>
+  `);
+
+  qs<HTMLElement>("#appModal .modal")?.classList.add("customs-workspace-modal");
+  let workingDocument: CustomsDocument = { ...customsDoc, items: customsDoc.items.map((item) => ({ ...item })) };
+  const itemsEditor = qs<HTMLElement>("#customsItemsEditor")!;
+
+  const collectDraft = (): CustomsDocument => {
+    const textValue = (name: keyof CustomsDocument) => qs<HTMLInputElement>(`[data-customs-field="${String(name)}"]`)?.value.trim() || "";
+    const numberValue = (name: keyof CustomsDocument) => Number(qs<HTMLInputElement>(`[data-customs-field="${String(name)}"]`)?.value || 0);
+    const items = qsa<HTMLElement>("[data-customs-item]", itemsEditor).map((row, index) => {
+      const itemText = (name: string) => row.querySelector<HTMLInputElement>(`[data-customs-item-field="${name}"]`)?.value.trim() || "";
+      const itemNumber = (name: string) => Number(row.querySelector<HTMLInputElement>(`[data-customs-item-field="${name}"]`)?.value || 0);
+      return {
+        id: row.dataset.customsItem || `customs_item_${Date.now()}_${index}`,
+        product: itemText("product"),
+        productEnglish: itemText("productEnglish"),
+        model: itemText("model"),
+        hsCode: itemText("hsCode"),
+        brand: itemText("brand"),
+        quantity: itemNumber("quantity"),
+        unit: itemText("unit"),
+        unitPrice: itemNumber("unitPrice"),
+        originCountry: itemText("originCountry"),
+        weightKg: itemNumber("weightKg"),
+        packageCount: Math.round(itemNumber("packageCount"))
+      };
+    });
+    return {
+      ...workingDocument,
+      number: textValue("number"),
+      issueDate: textValue("issueDate"),
+      contractNo: textValue("contractNo"),
+      exitDate: textValue("exitDate"),
+      tradeMode: textValue("tradeMode"),
+      supervisionMode: textValue("tradeMode"),
+      currency: textValue("currency").toUpperCase(),
+      incoterm: textValue("incoterm"),
+      tradeMethod: textValue("incoterm"),
+      paymentTerm: textValue("paymentTerm"),
+      shipper: textValue("shipper"),
+      shipperAddress: textValue("shipperAddress"),
+      shipperTaxNo: textValue("shipperTaxNo"),
+      manufacturer: textValue("manufacturer"),
+      manufacturerTaxNo: textValue("manufacturerTaxNo"),
+      consignee: textValue("consignee"),
+      consigneeAddress: textValue("consigneeAddress"),
+      transportMode: textValue("transportMode"),
+      vesselName: textValue("vesselName"),
+      exitPort: textValue("exitPort"),
+      destinationCountry: textValue("destinationCountry"),
+      tradeCountry: textValue("tradeCountry"),
+      packageType: textValue("packageType"),
+      packageCount: numberValue("packageCount"),
+      grossWeight: numberValue("grossWeight"),
+      netWeight: numberValue("netWeight"),
+      updatedAt: new Date().toISOString(),
+      items
+    };
+  };
+
+  const updateReadiness = () => {
+    workingDocument = collectDraft();
+    const issues = customsDocumentIssues(workingDocument);
+    const totalChecks = 14 + Math.max(1, workingDocument.items.length) * 6;
+    const score = Math.max(0, Math.round(((totalChecks - issues.length) / totalChecks) * 100));
+    const totalAmount = workingDocument.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+    qs<HTMLElement>("#customsReadinessValue")!.textContent = `${score}%`;
+    qs<HTMLElement>("#customsTotalAmount")!.textContent = `${workingDocument.currency || "USD"} ${formatDocumentTableMoney(totalAmount)}`;
+    qs<HTMLElement>("#customsIssueCount")!.textContent = issues.length ? `${issues.length}项待补` : "可以导出";
+    qs<HTMLElement>("#customsIssueList")!.innerHTML = issues.length
+      ? issues.slice(0, 12).map((issue) => `<span>${escapeHtml(issue)}</span>`).join("") + (issues.length > 12 ? `<small>另有 ${issues.length - 12} 项，请继续检查商品明细。</small>` : "")
+      : `<div class="customs-ready-state"><b>资料检查通过</b><span>可以生成正式Excel资料包。</span></div>`;
+    const exportButton = qs<HTMLButtonElement>("#exportCustomsButton")!;
+    exportButton.disabled = Boolean(issues.length);
+    exportButton.textContent = issues.length ? `还需补齐 ${issues.length} 项` : "导出 Excel 资料包";
+  };
+
+  const renderItems = () => {
+    itemsEditor.innerHTML = workingDocument.items.map((item, index) => `
+      <div class="customs-item-edit-row" data-customs-item="${escapeHtml(item.id || `item_${index}`)}">
+        <span class="customs-item-index">${index + 1}</span>
+        <label class="product"><span>中文品名</span><input data-customs-item-field="product" value="${escapeHtml(item.product)}"></label>
+        <label class="product-en"><span>英文品名</span><input data-customs-item-field="productEnglish" value="${escapeHtml(item.productEnglish || "")}"></label>
+        <label><span>型号</span><input data-customs-item-field="model" value="${escapeHtml(item.model || "")}"></label>
+        <label><span>HS编码</span><input data-customs-item-field="hsCode" value="${escapeHtml(item.hsCode || "")}"></label>
+        <label><span>品牌</span><input data-customs-item-field="brand" value="${escapeHtml(item.brand || "无品牌")}"></label>
+        <label><span>数量</span><input data-customs-item-field="quantity" type="number" min="0" value="${item.quantity}"></label>
+        <label><span>单位</span><input data-customs-item-field="unit" value="${escapeHtml(item.unit || "PCS")}"></label>
+        <label><span>单价</span><input data-customs-item-field="unitPrice" type="number" min="0" step="0.01" value="${item.unitPrice}"></label>
+        <label><span>原产国</span><input data-customs-item-field="originCountry" value="${escapeHtml(item.originCountry || "中国")}"></label>
+        <label><span>重量kg</span><input data-customs-item-field="weightKg" type="number" min="0" step="0.01" value="${item.weightKg || 0}"></label>
+        <label><span>包装数</span><input data-customs-item-field="packageCount" type="number" min="0" value="${item.packageCount || 0}"></label>
+        <button type="button" class="customs-item-remove" title="删除商品" aria-label="删除第${index + 1}行">×</button>
+      </div>
+    `).join("");
+    qsa<HTMLInputElement>("[data-customs-item-field]", itemsEditor).forEach((input) => input.addEventListener("input", updateReadiness));
+    qsa<HTMLButtonElement>(".customs-item-remove", itemsEditor).forEach((button, index) => {
+      button.addEventListener("click", () => {
+        workingDocument = collectDraft();
+        workingDocument.items.splice(index, 1);
+        if (!workingDocument.items.length) {
+          workingDocument.items.push({ id: `customs_item_${Date.now()}`, product: "", productEnglish: "", model: "", hsCode: "", brand: "无品牌", quantity: 1, unit: "PCS", unitPrice: 0, originCountry: "中国", weightKg: 0, packageCount: 0 });
+        }
+        renderItems();
+        updateReadiness();
+      });
+    });
+  };
+
+  qsa<HTMLInputElement>("[data-customs-field]").forEach((input) => input.addEventListener("input", updateReadiness));
+  qs<HTMLButtonElement>("#customsAddItemButton")?.addEventListener("click", () => {
+    workingDocument = collectDraft();
+    workingDocument.items.push({ id: `customs_item_${Date.now()}`, product: "", productEnglish: "", model: "", hsCode: "", brand: "无品牌", quantity: 1, unit: "PCS", unitPrice: 0, originCountry: "中国", weightKg: 0, packageCount: 0 });
+    renderItems();
+    updateReadiness();
+  });
+  qs<HTMLButtonElement>("#customsRecalculateButton")?.addEventListener("click", () => {
+    workingDocument = collectDraft();
+    const packageCount = workingDocument.items.reduce((sum, item) => sum + Number(item.packageCount || 0), 0);
+    const grossWeight = workingDocument.items.reduce((sum, item) => sum + Number(item.weightKg || 0), 0);
+    const values: Record<string, number> = { packageCount, grossWeight, netWeight: Math.round(grossWeight * 0.9 * 100) / 100 };
+    Object.entries(values).forEach(([name, value]) => {
+      const input = qs<HTMLInputElement>(`[data-customs-field="${name}"]`);
+      if (input) input.value = String(value);
+    });
+    updateReadiness();
+    toast("已按商品明细汇总件数和重量");
+  });
+  qs<HTMLButtonElement>("#exportCustomsButton")?.addEventListener("click", () => {
+    const draft = collectDraft();
+    const issues = customsDocumentIssues(draft);
+    if (issues.length) {
+      toast(`请先补齐：${issues.slice(0, 3).join("、")}`, "error");
+      return;
+    }
+    void exportCustomsDocument(draft);
+  });
+
+  renderItems();
+  updateReadiness();
+}
+
+async function exportCustomsDocument(customsDoc: CustomsDocument) {
+  try {
+    toast("正在生成 Excel 文件...");
+    const csrfToken = cookieValue("gj_csrf");
+
+    const response = await fetch("/api/customs-documents/export", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        ...(csrfToken ? { "x-csrf-token": csrfToken } : {})
+      },
+      body: JSON.stringify({ customsDocument: customsDoc })
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ message: "导出失败" }));
+      throw new Error(body.message || "导出失败");
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${customsDoc.consignee}-报关资料-${customsDoc.issueDate}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+
+    closeModal();
+    toast("报关资料已导出");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "导出失败，请重试", "error");
+    console.error(error);
+  }
+}
+
 function openDealStageModal(id: string) {
   const deal = state.deals.find((item) => item.id === id);
   if (!deal) return;
@@ -4093,6 +5193,7 @@ async function moveDeal(id: string, nextStage: string) {
   closeModal();
   await refreshDealsData();
   void refreshDashboardOnly();
+  void loadProspectFeedback(true, true);
   toast(`商机已推进到：${nextStage}`);
 }
 
@@ -4136,6 +5237,7 @@ async function submitDealLost(id: string) {
   closeModal();
   await refreshDealsData();
   void refreshDashboardOnly();
+  void loadProspectFeedback(true, true);
   toast("商机已标记丢单，可在关闭区复盘");
 }
 
@@ -4253,6 +5355,7 @@ function renderDealDrawer(id: string) {
     <div class="deal-detail-actions">
       ${closed ? "" : `<button class="btn primary" id="drawerAdvanceDealButton">${dealPrimaryAction(deal.stage)}</button><button class="btn" id="drawerRecordDealButton">记录进展</button><button class="btn" id="drawerEditDealButton">编辑</button>`}
       ${["已报价", "样品", "谈判", "成交"].includes(deal.stage) ? `<button class="btn" id="drawerPrintDealButton">${deal.stage === "成交" ? "生成 CI" : "生成 PI"}</button>` : ""}
+      ${["已报价", "样品", "谈判", "成交"].includes(deal.stage) ? `<button class="btn" id="drawerGenerateCustomsButton">生成报关资料</button>` : ""}
       ${deal.stage === "成交" && !deal.archivedAt ? `<button class="btn" id="drawerArchiveDealButton">归档成交</button>` : ""}
     </div>
     <div class="section-head" style="margin-top:16px"><div><h3>商机时间线</h3><span class="subline">阶段、报价、样品、谈判、回款与关闭记录</span></div></div>
@@ -4268,6 +5371,7 @@ function renderDealDrawer(id: string) {
   qs("#drawerRecordDealButton", drawer)?.addEventListener("click", () => openDealEventModal(deal.id));
   qs("#drawerEditDealButton", drawer)?.addEventListener("click", () => openDealModal(deal));
   qs("#drawerPrintDealButton", drawer)?.addEventListener("click", () => void printDealDocument(deal.id));
+  qs("#drawerGenerateCustomsButton", drawer)?.addEventListener("click", () => void generateCustomsDocument(deal.id));
   qs("#drawerArchiveDealButton", drawer)?.addEventListener("click", () => void archiveDeal(deal.id));
 }
 
@@ -4310,17 +5414,31 @@ async function saveDealEvent(id: string) {
   toast("商机进展已记录");
 }
 
-function openDealModal(editing?: Deal) {
-  const defaultCustomer = editing?.customerId ? state.customers.find((item) => item.id === editing.customerId) : undefined;
-  const title = editing?.title || "";
-  const storedQuantity = Number(editing?.quantity || 0);
-  const storedUnitPrice = Number(editing?.unitPrice || 0);
-  const quantity = editing && !storedQuantity && !storedUnitPrice && editing.amount ? 1 : storedQuantity;
-  const unitPrice = editing && !storedQuantity && !storedUnitPrice && editing.amount ? Number(editing.amount) : storedUnitPrice;
-  const computedAmount = editing ? Number(editing.amount || quantity * unitPrice) : 18000;
+function openDealModal(
+  editing?: Deal,
+  recommendation?: DealRecommendation,
+  customerId?: string
+) {
+  const selectedCustomerId = editing?.customerId
+    || customerId
+    || recommendation?.customerId
+    || "";
+  const defaultCustomer = selectedCustomerId
+    ? state.customers.find((item) => item.id === selectedCustomerId)
+    : undefined;
+  const title = editing?.title || recommendation?.suggestedTitle || "";
+  const storedQuantity = Number(editing?.quantity || recommendation?.suggestedQuantity || 0);
+  const storedUnitPrice = Number(editing?.unitPrice || recommendation?.suggestedUnitPrice || 0);
+  const fallbackAmount = Number(editing?.amount || recommendation?.suggestedAmount || 0);
+  const quantity = !storedQuantity && !storedUnitPrice && fallbackAmount ? 1 : storedQuantity;
+  const unitPrice = !storedQuantity && !storedUnitPrice && fallbackAmount ? fallbackAmount : storedUnitPrice;
+  const computedAmount = editing
+    ? Number(editing.amount || quantity * unitPrice)
+    : Number(recommendation?.suggestedAmount || quantity * unitPrice || 18000);
   openModal(editing ? "编辑商机" : "新增商机", `
     <div class="form-grid">
       <input id="dealIdInput" type="hidden" value="${escapeHtml(editing?.id || "")}">
+      <input id="dealRecommendationIdInput" type="hidden" value="${escapeHtml(editing ? "" : recommendation?.id || "")}">
       <div class="form-field full"><label>商机名称</label><input id="dealTitleInput" value="${escapeHtml(title)}" placeholder="例如：年度采购项目"></div>
       <div class="form-field deal-customer-field">
         <label>关联客户（必选）</label>
@@ -4329,14 +5447,14 @@ function openDealModal(editing?: Deal) {
         <button class="deal-customer-clear" id="clearDealCustomerButton" type="button" title="清空关联客户">×</button>
         <div class="deal-customer-options" id="dealCustomerOptions"></div>
       </div>
-      <div class="form-field"><label>币种</label><select id="dealCurrencyInput">${["USD", "EUR", "GBP", "CNY", "JPY", "AED"].map((currency) => `<option ${currency === (editing?.currency || "USD") ? "selected" : ""}>${currency}</option>`).join("")}</select></div>
-      <div class="form-field full"><label>产品 / 采购需求（必填）</label><input id="dealProductInput" value="${escapeHtml(editing?.product || "")}" placeholder="例如：产品型号 / 数量 / 规格"></div>
+      <div class="form-field"><label>币种</label><select id="dealCurrencyInput">${["USD", "EUR", "GBP", "CNY", "JPY", "AED"].map((currency) => `<option ${currency === (editing?.currency || recommendation?.currency || "USD") ? "selected" : ""}>${currency}</option>`).join("")}</select></div>
+      <div class="form-field full"><label>产品 / 采购需求（必填）</label><input id="dealProductInput" value="${escapeHtml(editing?.product || recommendation?.suggestedProduct || "")}" placeholder="例如：产品型号 / 数量 / 规格"></div>
       <div class="form-field"><label>数量</label><input id="dealQuantityInput" type="number" min="0" step="1" value="${quantity || 30}"></div>
       <div class="form-field"><label>单价</label><input id="dealUnitPriceInput" type="number" min="0" step="0.01" value="${unitPrice || 600}"></div>
       <div class="form-field"><label>金额</label><input id="dealAmountInput" type="number" value="${computedAmount}" readonly></div>
-      <div class="form-field"><label>下一动作日期</label><input id="dealNextActionAtInput" type="date" value="${escapeHtml(editing?.nextActionAt || defaultFutureDate(2))}"></div>
-      <div class="form-field"><label>预计成交日期</label><input id="dealExpectedCloseAtInput" type="date" value="${escapeHtml(editing?.expectedCloseAt || defaultFutureDate(21))}"></div>
-      <div class="form-field full"><label>下一步动作</label><input id="dealNextActionInput" value="${escapeHtml(editing?.nextAction || "确认采购清单并安排报价")}"></div>
+      <div class="form-field"><label>下一动作日期</label><input id="dealNextActionAtInput" type="date" value="${escapeHtml(editing?.nextActionAt || recommendation?.nextActionAt || defaultFutureDate(2))}"></div>
+      <div class="form-field"><label>预计成交日期</label><input id="dealExpectedCloseAtInput" type="date" value="${escapeHtml(editing?.expectedCloseAt || recommendation?.expectedCloseAt || defaultFutureDate(21))}"></div>
+      <div class="form-field full"><label>下一步动作</label><input id="dealNextActionInput" value="${escapeHtml(editing?.nextAction || recommendation?.nextAction || "确认采购清单并安排报价")}"></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDealButton">${editing ? "保存修改" : "保存商机"}</button>`);
   bindDealCustomerPicker();
@@ -4431,6 +5549,7 @@ function bindDealCustomerPicker() {
 
 async function saveDeal() {
   const dealId = qs<HTMLInputElement>("#dealIdInput")?.value.trim() || "";
+  const recommendationId = qs<HTMLInputElement>("#dealRecommendationIdInput")?.value.trim() || "";
   const title = qs<HTMLInputElement>("#dealTitleInput")?.value.trim() || "";
   const product = qs<HTMLInputElement>("#dealProductInput")?.value.trim() || "";
   const customerText = qs<HTMLInputElement>("#dealCustomerInput")?.value.trim() || "";
@@ -4467,7 +5586,8 @@ async function saveDeal() {
       currency: qs<HTMLSelectElement>("#dealCurrencyInput")?.value || "USD",
       nextAction,
       nextActionAt,
-      expectedCloseAt: qs<HTMLInputElement>("#dealExpectedCloseAtInput")?.value || ""
+      expectedCloseAt: qs<HTMLInputElement>("#dealExpectedCloseAtInput")?.value || "",
+      ...(!dealId && recommendationId ? { recommendationId } : {})
     })
   });
   closeModal();
@@ -6382,16 +7502,14 @@ function todayDateInput() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function defaultTradeDocument(type: "PI" | "CI" = "PI"): TradeDocument {
+function defaultTradeDocument(type: "PI" | "CI" | "CUSTOMS" = "PI"): TradeDocument {
   const date = todayDateInput();
-  return {
+  const baseDoc = {
     id: "__new__",
     customerId: "",
     dealId: "",
     revision: 1,
     type,
-    title: type === "PI" ? "新建形式发票 PI" : "新建商业发票 CI",
-    number: `${type}-${date.replace(/-/g, "")}-${Math.floor(Date.now() / 1000).toString().slice(-4)}`,
     issueDate: date,
     buyer: "",
     buyerAddress: "",
@@ -6407,8 +7525,8 @@ function defaultTradeDocument(type: "PI" | "CI" = "PI"): TradeDocument {
     validityDate: "",
     bankInfo: "",
     notes: "",
-    templateStyle: "executive",
-    status: "draft",
+    templateStyle: "executive" as const,
+    status: "draft" as const,
     audits: [],
     sendRecords: [],
     updatedAt: new Date().toISOString(),
@@ -6416,6 +7534,20 @@ function defaultTradeDocument(type: "PI" | "CI" = "PI"): TradeDocument {
       { id: "new_item_1", product: "", model: "", hsCode: "", quantity: 1, unit: "PCS", unitPrice: 0, originCountry: "", weightKg: 0, packageCount: 0 }
     ]
   };
+
+  if (type === "CUSTOMS") {
+    return {
+      ...baseDoc,
+      title: "新建报关资料",
+      number: `CUSTOMS-${date.replace(/-/g, "")}-${Math.floor(Date.now() / 1000).toString().slice(-4)}`,
+    };
+  } else {
+    return {
+      ...baseDoc,
+      title: type === "PI" ? "新建形式发票 PI" : "新建商业发票 CI",
+      number: `${type}-${date.replace(/-/g, "")}-${Math.floor(Date.now() / 1000).toString().slice(-4)}`,
+    };
+  }
 }
 
 function activeTradeDocument() {
@@ -6612,14 +7744,18 @@ async function createDocumentRevision() {
   toast(`已创建 v${result.document.revision} 新版本`);
 }
 
-function setDocumentType(type: "PI" | "CI") {
+function setDocumentType(type: "PI" | "CI" | "CUSTOMS") {
   qsa<HTMLButtonElement>("#documentTypeTabs button").forEach((button) => {
     button.classList.toggle("active", button.dataset.docType === type);
   });
 }
 
-function currentDocumentType(): "PI" | "CI" {
-  return qs<HTMLButtonElement>("#documentTypeTabs button.active")?.dataset.docType === "CI" ? "CI" : "PI";
+function currentDocumentType(): "PI" | "CI" | "CUSTOMS" {
+  const activeButton = qs<HTMLButtonElement>("#documentTypeTabs button.active");
+  const docType = activeButton?.dataset.docType;
+  if (docType === "CUSTOMS") return "CUSTOMS";
+  if (docType === "CI") return "CI";
+  return "PI";
 }
 
 function renderDocumentItems(items: TradeDocumentItem[]) {
@@ -6628,12 +7764,12 @@ function renderDocumentItems(items: TradeDocumentItem[]) {
   box.innerHTML = items.map((item, index) => `
     <div class="doc-item-grid" data-doc-item="${escapeHtml(item.id || `item_${index}`)}">
       <label data-doc-size="name"><span>品名</span><input data-doc-field="product" value="${escapeHtml(item.product)}"></label>
-      <label><span>型号</span><input data-doc-field="model" value="${escapeHtml(item.model)}"></label>
-      <label><span>HS Code</span><input data-doc-field="hsCode" value="${escapeHtml(item.hsCode)}"></label>
+      <label data-doc-size="model"><span>型号</span><input data-doc-field="model" value="${escapeHtml(item.model)}"></label>
+      <label data-doc-size="code"><span>HS Code</span><input data-doc-field="hsCode" value="${escapeHtml(item.hsCode)}"></label>
       <label data-doc-size="short"><span>数量</span><input data-doc-field="quantity" type="number" min="0" value="${item.quantity}"></label>
       <label data-doc-size="short"><span>单位</span><input data-doc-field="unit" value="${escapeHtml(item.unit)}"></label>
       <label data-doc-size="price"><span>单价</span><input data-doc-field="unitPrice" type="number" min="0" step="0.01" value="${item.unitPrice}"></label>
-      <label><span>原产国</span><input data-doc-field="originCountry" value="${escapeHtml(item.originCountry)}"></label>
+      <label data-doc-size="country"><span>原产国</span><input data-doc-field="originCountry" value="${escapeHtml(item.originCountry)}"></label>
       <label data-doc-size="short"><span>重量kg</span><input data-doc-field="weightKg" type="number" min="0" step="0.01" value="${item.weightKg}"></label>
       <label data-doc-size="short"><span>包装</span><input data-doc-field="packageCount" type="number" min="0" value="${item.packageCount}"></label>
       <button class="doc-item-remove" type="button" title="删除明细">×</button>
@@ -6705,6 +7841,14 @@ function collectDocumentDraft(): TradeDocument {
 function renderDocumentPreview(document: TradeDocument) {
   const preview = qs<HTMLElement>("#documentPreview");
   if (!preview) return;
+
+  // 如果是报关资料类型，使用专门的预览格式
+  if (document.type === "CUSTOMS") {
+    renderCustomsDocumentPreview(document, preview);
+    return;
+  }
+
+  // PI/CI的原有预览格式
   const total = documentTotal(document);
   const title = document.type === "PI" ? "PROFORMA INVOICE" : "COMMERCIAL INVOICE";
   const status = document.type === "PI" ? "Quotation confirmation" : "Customs / shipment document";
@@ -6765,6 +7909,255 @@ function renderDocumentPreview(document: TradeDocument) {
   `;
   const meta = qs<HTMLElement>("#docPreviewMeta");
   if (meta) meta.textContent = `${document.type} · ${document.number} · ${formatDocumentMoney(total, document.currency)}`;
+}
+
+function renderCustomsDocumentPreview(document: TradeDocument, preview: HTMLElement) {
+  const total = documentTotal(document);
+  const totalWeight = document.items.reduce((sum, item) => sum + (item.weightKg || 0), 0);
+  const totalPackages = document.items.reduce((sum, item) => sum + (item.packageCount || 0), 0);
+
+  preview.className = `doc-paper customs-preview-modern ${document.templateStyle}`;
+  preview.innerHTML = `
+    <div class="customs-hero">
+      <div class="customs-hero-icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="18" height="18" rx="2"/>
+          <path d="M3 9h18"/>
+          <path d="M9 21V9"/>
+        </svg>
+      </div>
+      <div class="customs-hero-content">
+        <h2>报关资料</h2>
+        <p>Customs Clearance Documents</p>
+      </div>
+      <div class="customs-hero-badge">
+        <span class="customs-status-badge">${documentStatusText(document.status)}</span>
+      </div>
+    </div>
+
+    <div class="customs-meta-bar">
+      <div class="customs-meta-item">
+        <span class="meta-label">单据编号</span>
+        <span class="meta-value">${escapeHtml(document.number)}</span>
+      </div>
+      <div class="customs-meta-item">
+        <span class="meta-label">出口日期</span>
+        <span class="meta-value">${escapeHtml(document.issueDate)}</span>
+      </div>
+      <div class="customs-meta-item">
+        <span class="meta-label">总金额</span>
+        <span class="meta-value highlight">${formatDocumentMoney(total, document.currency)}</span>
+      </div>
+    </div>
+
+    <div class="customs-docs-grid">
+      <div class="customs-doc-card">
+        <div class="doc-card-icon">📋</div>
+        <div class="doc-card-name">报关单</div>
+      </div>
+      <div class="customs-doc-card">
+        <div class="doc-card-icon">🔍</div>
+        <div class="doc-card-name">申报要素</div>
+      </div>
+      <div class="customs-doc-card">
+        <div class="doc-card-icon">🧾</div>
+        <div class="doc-card-name">发票</div>
+      </div>
+      <div class="customs-doc-card">
+        <div class="doc-card-icon">📦</div>
+        <div class="doc-card-name">箱单</div>
+      </div>
+      <div class="customs-doc-card">
+        <div class="doc-card-icon">📄</div>
+        <div class="doc-card-name">合同</div>
+      </div>
+      <div class="customs-doc-card">
+        <div class="doc-card-icon">✍️</div>
+        <div class="doc-card-name">委托书</div>
+      </div>
+      <div class="customs-doc-card">
+        <div class="doc-card-icon">📖</div>
+        <div class="doc-card-name">填制规范</div>
+      </div>
+    </div>
+
+    <div class="customs-info-cards">
+      <div class="customs-info-card">
+        <div class="info-card-header">
+          <div class="info-card-icon">🏭</div>
+          <h3>发货人信息</h3>
+        </div>
+        <div class="info-card-body">
+          <div class="info-item">
+            <label>公司名称</label>
+            <span>${escapeHtml(document.seller)}</span>
+          </div>
+          <div class="info-item">
+            <label>公司地址</label>
+            <span>${escapeHtml(document.sellerAddress)}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="customs-info-card">
+        <div class="info-card-header">
+          <div class="info-card-icon">🌍</div>
+          <h3>收货人信息</h3>
+        </div>
+        <div class="info-card-body">
+          <div class="info-item">
+            <label>公司名称</label>
+            <span>${escapeHtml(document.buyer)}</span>
+          </div>
+          <div class="info-item">
+            <label>公司地址</label>
+            <span>${escapeHtml(document.buyerAddress)}</span>
+          </div>
+          <div class="info-item">
+            <label>联系方式</label>
+            <span>${escapeHtml(document.buyerContact)}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="customs-transport-card">
+      <div class="info-card-header">
+        <div class="info-card-icon">🚢</div>
+        <h3>运输与物流信息</h3>
+      </div>
+      <div class="transport-grid">
+        <div class="transport-item">
+          <div class="transport-icon">📍</div>
+          <div class="transport-content">
+            <label>装运口岸</label>
+            <span>${escapeHtml(document.portLoading)}</span>
+          </div>
+        </div>
+        <div class="transport-item">
+          <div class="transport-icon">🎯</div>
+          <div class="transport-content">
+            <label>目的口岸</label>
+            <span>${escapeHtml(document.portDischarge)}</span>
+          </div>
+        </div>
+        <div class="transport-item">
+          <div class="transport-icon">🚛</div>
+          <div class="transport-content">
+            <label>运输方式</label>
+            <span>${escapeHtml(document.shippingMethod)}</span>
+          </div>
+        </div>
+        <div class="transport-item">
+          <div class="transport-icon">⚖️</div>
+          <div class="transport-content">
+            <label>总毛重</label>
+            <span>${totalWeight.toFixed(2)} KG</span>
+          </div>
+        </div>
+        <div class="transport-item">
+          <div class="transport-icon">📦</div>
+          <div class="transport-content">
+            <label>包装件数</label>
+            <span>${totalPackages} 件</span>
+          </div>
+        </div>
+        <div class="transport-item">
+          <div class="transport-icon">💼</div>
+          <div class="transport-content">
+            <label>贸易术语</label>
+            <span>${escapeHtml(document.incoterm)}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="customs-items-section">
+      <div class="info-card-header">
+        <div class="info-card-icon">📝</div>
+        <h3>货物明细清单</h3>
+        <span class="items-count">${document.items.length} 项商品</span>
+      </div>
+      <div class="customs-items-modern-table">
+        <div class="table-header">
+          <div class="th th-num">#</div>
+          <div class="th th-product">货物名称</div>
+          <div class="th">型号</div>
+          <div class="th">HS编码</div>
+          <div class="th th-qty">数量</div>
+          <div class="th th-price">单价</div>
+          <div class="th th-amount">金额</div>
+          <div class="th">原产国</div>
+          <div class="th">重量</div>
+          <div class="th">包装</div>
+        </div>
+        ${document.items.map((item, index) => `
+          <div class="table-row">
+            <div class="td td-num">${index + 1}</div>
+            <div class="td td-product"><strong>${escapeHtml(item.product)}</strong></div>
+            <div class="td">${escapeHtml(item.model)}</div>
+            <div class="td"><code>${escapeHtml(item.hsCode)}</code></div>
+            <div class="td td-qty">${item.quantity} <small>${escapeHtml(item.unit)}</small></div>
+            <div class="td td-price">${formatDocumentTableMoney(item.unitPrice)}</div>
+            <div class="td td-amount"><strong>${formatDocumentTableMoney(item.quantity * item.unitPrice)}</strong></div>
+            <div class="td">${escapeHtml(item.originCountry || "中国")}</div>
+            <div class="td">${item.weightKg || 0} kg</div>
+            <div class="td">${item.packageCount || 0}</div>
+          </div>
+        `).join("")}
+        <div class="table-footer">
+          <div class="footer-label">合计</div>
+          <div class="footer-values">
+            <div class="footer-item">
+              <label>总金额</label>
+              <span class="footer-highlight">${formatDocumentMoney(total, document.currency)}</span>
+            </div>
+            <div class="footer-item">
+              <label>总重量</label>
+              <span>${totalWeight.toFixed(2)} KG</span>
+            </div>
+            <div class="footer-item">
+              <label>总件数</label>
+              <span>${totalPackages} 件</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="customs-payment-card">
+      <div class="info-card-header">
+        <div class="info-card-icon">💰</div>
+        <h3>支付与贸易条款</h3>
+      </div>
+      <div class="payment-grid">
+        <div class="payment-item">
+          <label>币种</label>
+          <span class="payment-badge">${escapeHtml(document.currency)}</span>
+        </div>
+        <div class="payment-item">
+          <label>贸易术语</label>
+          <span class="payment-badge">${escapeHtml(document.incoterm)}</span>
+        </div>
+        <div class="payment-item payment-term">
+          <label>付款条件</label>
+          <span>${escapeHtml(document.paymentTerm)}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="customs-footer-notice">
+      <div class="notice-icon">💡</div>
+      <div class="notice-content">
+        <strong>温馨提示</strong>
+        <p>点击顶部「导出 PDF」按钮将生成包含以上所有信息的完整Excel报关资料包（7个工作表）</p>
+        <p class="notice-warning">⚠️ 请仔细核对HS编码、品牌型号、重量等海关申报要素的准确性</p>
+      </div>
+    </div>
+  `;
+
+  const meta = qs<HTMLElement>("#docPreviewMeta");
+  if (meta) meta.textContent = `报关资料 · ${document.number} · ${formatDocumentMoney(total, document.currency)}`;
 }
 
 function addDocumentItem() {
@@ -8149,7 +9542,6 @@ function renderAiConfig(config: AiModelConfig | null) {
   const model = qs<HTMLInputElement>("#aiModelInput");
   const apiKey = qs<HTMLInputElement>("#aiApiKeyInput");
   const enabled = qs<HTMLInputElement>("#aiEnabledInput");
-  const useAi = qs<HTMLInputElement>("#websiteUseAiInput");
   const badgeNode = qs<HTMLElement>("#aiConfigBadge");
   const gptName = qs<HTMLInputElement>("#gptConfigName");
   const gptBaseUrl = qs<HTMLInputElement>("#gptBaseUrlInput");
@@ -8186,7 +9578,7 @@ function renderAiConfig(config: AiModelConfig | null) {
   const failed = config?.lastTestStatus === "failed";
   const useFlags = {
     leadFinder: config?.useLeadFinder ?? true,
-    websiteParse: config?.useWebsiteParse ?? true,
+    websiteParse: false,
     scoring: config?.useScoring ?? true,
     emailDraft: config?.useEmailDraft ?? true,
     exam: config?.useExam ?? false
@@ -8246,10 +9638,9 @@ function renderAiConfig(config: AiModelConfig | null) {
     apiKey.placeholder = config?.hasApiKey ? "已保存，重新填写可覆盖" : "保存后仅后端持久化";
   }
   if (enabled && !draftMode) enabled.checked = Boolean(config?.enabled);
-  if (useAi) useAi.checked = Boolean(config?.enabled && config?.hasApiKey && useFlags.websiteParse);
   if (badgeNode) {
     badgeNode.className = `badge ${ready ? "green" : config?.enabled ? "amber" : ""}`;
-    badgeNode.textContent = ready ? `AI已启用 · ${config?.model}` : config?.enabled ? "规则解析 · 缺少API Key" : "规则解析";
+    badgeNode.textContent = ready ? `AI已启用 · ${config?.model}` : config?.enabled ? "来源归纳 · 缺少API Key" : "来源归纳";
   }
   if (gptName && !draftMode) gptName.value = config?.name || defaultName;
   if (gptBaseUrl && !draftMode) gptBaseUrl.value = config?.baseUrl || defaultBaseUrl;
@@ -8280,7 +9671,7 @@ function renderAiConfig(config: AiModelConfig | null) {
     gptConnectionBadge.textContent = tested ? "连接通过" : failed ? "连接失败" : ready ? "待测试" : "未启用";
   }
   if (gptConnectionTitle) gptConnectionTitle.textContent = tested ? "AI 连接测试通过" : failed ? "AI 连接测试失败" : ready ? "已保存，建议立即测试" : config?.enabled ? "还需要填写 API Key" : "等待启用 AI";
-  if (gptConnectionText) gptConnectionText.textContent = config?.lastTestMessage || (ready ? `当前模型：${config?.model}。已勾选 ${useCount} 个业务模块。` : "配置完成后，自动获客、官网解析、线索评分、开发信草稿和考试资料可以按需调用。");
+  if (gptConnectionText) gptConnectionText.textContent = config?.lastTestMessage || (ready ? `当前模型：${config?.model}。已勾选 ${useCount} 个业务模块。` : "配置完成后，自动获客、线索评分、开发信草稿和考试资料可以按需调用。");
   if (gptState) gptState.textContent = ready ? "已启用" : config?.enabled ? "待补Key" : "未启用";
   if (gptSub) gptSub.textContent = tested ? "最近测试通过" : ready ? "可测试连接和调用" : "等待 API Key";
   if (gptModelState) gptModelState.textContent = config?.model || defaultModel;
@@ -8322,7 +9713,7 @@ function collectAiConfigPayload() {
       enabled: qs<HTMLSelectElement>("#gptEnabledSelect")?.value !== "false",
       temperature: Number(qs<HTMLInputElement>("#gptTemperatureInput")?.value || 0.1),
       useLeadFinder: Boolean(qs<HTMLInputElement>("#aiUseLeadFinder")?.checked),
-      useWebsiteParse: Boolean(qs<HTMLInputElement>("#aiUseWebsiteParse")?.checked),
+      useWebsiteParse: false,
       useScoring: Boolean(qs<HTMLInputElement>("#aiUseScoring")?.checked),
       useEmailDraft: Boolean(qs<HTMLInputElement>("#aiUseEmailDraft")?.checked),
       useExam: Boolean(qs<HTMLInputElement>("#aiUseExam")?.checked)
@@ -8332,14 +9723,14 @@ function collectAiConfigPayload() {
     id: state.selectedAiConfigId || state.aiConfig?.id || undefined,
     provider: state.aiConfig?.provider || "openai",
     protocol: state.aiConfig?.protocol || "openai-compatible",
-    name: qs<HTMLInputElement>("#aiConfigName")?.value.trim() || "官网线索解析模型",
+    name: qs<HTMLInputElement>("#aiConfigName")?.value.trim() || "获客归纳模型",
     baseUrl: qs<HTMLInputElement>("#aiBaseUrlInput")?.value.trim() || "https://api.openai.com/v1",
     model: qs<HTMLInputElement>("#aiModelInput")?.value.trim() || "gpt-4o-mini",
     apiKey: qs<HTMLInputElement>("#aiApiKeyInput")?.value.trim() || "",
     enabled: Boolean(qs<HTMLInputElement>("#aiEnabledInput")?.checked),
     temperature: state.aiConfig?.temperature ?? 0.1,
     useLeadFinder: state.aiConfig?.useLeadFinder ?? true,
-    useWebsiteParse: state.aiConfig?.useWebsiteParse ?? true,
+    useWebsiteParse: false,
     useScoring: state.aiConfig?.useScoring ?? true,
     useEmailDraft: state.aiConfig?.useEmailDraft ?? true,
     useExam: state.aiConfig?.useExam ?? false
@@ -8525,13 +9916,13 @@ function renderWebsiteOpportunities(opportunities: WebsiteOpportunity[]) {
   const tbody = qs<HTMLElement>("#websiteOpportunityRows");
   const count = qs<HTMLElement>("#websiteOpportunityCount");
   const status = qs<HTMLElement>("#websiteScrapeStatus");
-  const modeText = (mode?: WebsiteOpportunity["parseMode"]) => mode === "ai" ? "AI解析" : mode === "fallback" ? "AI回退" : "规则解析";
+  const modeText = (mode?: WebsiteOpportunity["parseMode"]) => mode === "reference" ? "链接登记" : mode === "ai" ? "AI归纳" : mode === "fallback" ? "AI回退" : "来源归纳";
   const modeTone = (mode?: WebsiteOpportunity["parseMode"]) => mode === "ai" ? "green" : mode === "fallback" ? "amber" : "";
   if (count) count.textContent = `${opportunities.length} 条`;
   if (status && opportunities.length) {
     const synced = opportunities.filter((item) => item.status === "synced").length;
     const aiCount = opportunities.filter((item) => item.parseMode === "ai").length;
-    status.innerHTML = `<b>${opportunities.length}</b><span>已解析官网</span>${badge(`${synced} 条已同步`, synced ? "green" : "")}${badge(aiCount ? `${aiCount} 条AI` : "规则/回退", aiCount ? "green" : "")}`;
+    status.innerHTML = `<b>${opportunities.length}</b><span>已登记链接</span>${badge(`${synced} 条已同步`, synced ? "green" : "")}${badge(aiCount ? `${aiCount} 条AI归纳` : "零网页访问", aiCount ? "green" : "")}`;
   }
   if (!tbody) return;
   tbody.innerHTML = opportunities.length ? opportunities.map((item) => `
@@ -8546,7 +9937,7 @@ function renderWebsiteOpportunities(opportunities: WebsiteOpportunity[]) {
       <td><textarea data-website-field="description">${escapeHtml(item.description)}</textarea></td>
       <td>${badge(item.status === "synced" ? "已同步" : "待同步", item.status === "synced" ? "green" : "amber")}${badge(modeText(item.parseMode), modeTone(item.parseMode))}</td>
     </tr>
-  `).join("") : `<tr><td colspan="9" class="empty-cell">粘贴官网后点击解析，系统会抓取产品、联系方式和国家线索。</td></tr>`;
+  `).join("") : `<tr><td colspan="9" class="empty-cell">粘贴官网后点击登记。系统只保存链接，不会访问、下载或解析企业网页。</td></tr>`;
 }
 
 function collectWebsiteRows() {
@@ -8634,6 +10025,188 @@ const PROSPECT_STATUS_META: Record<WebsiteOpportunity["status"], { label: string
   synced: { label: "已入线索", tone: "green", action: "在线索中心继续跟进" },
   excluded: { label: "已排除", tone: "gray", action: "确认原因，必要时恢复核验" }
 };
+
+const PROSPECT_CHANNEL_LABELS: Record<ProspectOutreachChannel, string> = {
+  email: "邮件",
+  whatsapp: "WhatsApp",
+  call: "电话"
+};
+
+const PROSPECT_REPLY_LABELS: Record<ProspectReplyClassification, string> = {
+  clear_demand: "明确需求",
+  interested_nurture: "有兴趣待培育",
+  referral: "转介绍",
+  no_current_demand: "当前无需求",
+  rejected: "明确拒绝",
+  unsubscribed: "要求退订",
+  bounced: "联系方式退信",
+  auto_unknown: "自动回复/待判断"
+};
+const PROCUREMENT_EVIDENCE_LABELS: Record<ProcurementEvidenceType, string> = {
+  quote_request: "要求报价",
+  product_requirement: "产品明确",
+  quantity: "数量明确",
+  sample_request: "样品需求",
+  purchase_timeline: "采购时间",
+  target_price: "目标价格",
+  certification: "认证要求",
+  delivery: "交付要求",
+  project_tender: "项目/招标",
+  manual_confirmation: "业务员确认"
+};
+const prospectProcurementLoading = new Set<string>();
+
+function renderProcurementContextPanel(
+  context: ProcurementContext | undefined,
+  item: WebsiteOpportunity
+) {
+  if (!context) {
+    return `<section class="procurement-panel"><div class="procurement-panel-head"><div><span>采购信号</span><b>正在读取</b></div></div></section>`;
+  }
+  const signal = context.signals[0];
+  const recommendation = context.recommendations[0];
+  if (!signal && !recommendation) return "";
+  const canWrite = item.ownerId === state.user?.id;
+  const signalDetails = signal ? [
+    signal.product,
+    signal.specification,
+    signal.quantity ? `数量 ${signal.quantity}` : "",
+    signal.targetPrice ? `${signal.currency} ${signal.targetPrice}` : "",
+    signal.purchaseTimeline
+  ].filter(Boolean).join(" · ") : "";
+  const recommendationAction = recommendation?.status === "generated" && canWrite
+    ? item.customerId
+      ? `<button class="btn primary tiny" data-use-deal-recommendation="${escapeHtml(recommendation.id)}">使用建议</button>`
+      : item.leadId
+        ? `<button class="btn primary tiny" data-convert-with-recommendation="${escapeHtml(recommendation.id)}">转客户并使用</button>`
+        : `<span class="procurement-action-hint">先加入线索，再确认客户和商机</span>`
+    : "";
+  return `
+    <section class="procurement-panel">
+      <div class="procurement-panel-head">
+        <div><span>采购信号</span><b>${signal?.status === "confirmed" ? "已确认" : signal ? "待补充" : "暂无有效信号"}</b></div>
+        ${recommendation ? badge(`建议 ${recommendation.recommendationScore} 分`, recommendation.status === "generated" ? "green" : "gray") : ""}
+      </div>
+      ${signal ? `
+        <p>${escapeHtml(signal.evidenceSummary || "已记录客户明确需求")}</p>
+        ${signalDetails ? `<small>${escapeHtml(signalDetails)}</small>` : ""}
+        <div class="procurement-tags">${signal.evidenceTypes.map((type) => badge(PROCUREMENT_EVIDENCE_LABELS[type] || type, "gray")).join("")}</div>
+      ` : ""}
+      ${recommendation ? `
+        <div class="procurement-recommendation">
+          <div><b>${escapeHtml(recommendation.suggestedTitle)}</b><span>${escapeHtml(recommendation.nextAction)}</span></div>
+          <small>推荐依据：${escapeHtml(recommendation.reasonTexts.join("、") || "客户明确回复")}</small>
+          ${recommendation.missingFields.length ? `<small>待补充：${escapeHtml(recommendation.missingFields.join("、"))}</small>` : ""}
+          ${recommendation.duplicateDeals.length ? `
+            <div class="procurement-duplicates">
+              <span>发现相似活跃商机</span>
+              ${recommendation.duplicateDeals.map((deal) => `<button class="btn tiny" data-link-recommendation="${escapeHtml(recommendation.id)}" data-link-deal="${escapeHtml(deal.id)}">${escapeHtml(deal.title)} · ${escapeHtml(deal.stage)}</button>`).join("")}
+            </div>
+          ` : ""}
+          <div class="procurement-actions">
+            ${recommendationAction}
+            ${recommendation.status === "generated" && canWrite ? `<button class="btn tiny" data-dismiss-recommendation="${escapeHtml(recommendation.id)}">暂不建立</button>` : ""}
+            ${recommendation.linkedDealId ? `<span>已关联商机</span>` : ""}
+          </div>
+        </div>
+      ` : signal?.status === "needs_review" ? `<div class="procurement-note">已保留需求证据；产品或真实采购动作不足时，系统不会建议建立商机。</div>` : ""}
+    </section>
+  `;
+}
+
+async function loadProspectProcurementContext(
+  item: WebsiteOpportunity,
+  force = false
+) {
+  if (!force && state.procurementContexts[item.id]) return;
+  if (prospectProcurementLoading.has(item.id)) return;
+  prospectProcurementLoading.add(item.id);
+  try {
+    const context = await api<ProcurementContext>(
+      `/api/prospect-list/${encodeURIComponent(item.id)}/procurement-context`
+    );
+    state.procurementContexts[item.id] = context;
+    if (state.selectedProspectId === item.id) renderProspectDetail(item);
+  } catch (error) {
+    if (force) toast(error instanceof Error ? error.message : "读取采购信号失败", "error");
+  } finally {
+    prospectProcurementLoading.delete(item.id);
+  }
+}
+
+function bindProcurementContextActions(
+  root: ParentNode,
+  item: WebsiteOpportunity,
+  context?: ProcurementContext
+) {
+  qsa<HTMLButtonElement>("[data-use-deal-recommendation]", root).forEach((button) => {
+    button.addEventListener("click", () => {
+      const recommendation = context?.recommendations.find((row) =>
+        row.id === button.dataset.useDealRecommendation
+      );
+      if (recommendation) openDealModal(undefined, recommendation, item.customerId);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-convert-with-recommendation]", root).forEach((button) => {
+    button.addEventListener("click", () => {
+      const recommendation = context?.recommendations.find((row) =>
+        row.id === button.dataset.convertWithRecommendation
+      );
+      if (!recommendation || !item.leadId) return;
+      void openLeadConversion(item.leadId, recommendation);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-dismiss-recommendation]", root).forEach((button) => {
+    button.addEventListener("click", () => void dismissDealRecommendation(
+      item,
+      button.dataset.dismissRecommendation || ""
+    ));
+  });
+  qsa<HTMLButtonElement>("[data-link-recommendation]", root).forEach((button) => {
+    button.addEventListener("click", () => void linkDealRecommendation(
+      item,
+      button.dataset.linkRecommendation || "",
+      button.dataset.linkDeal || ""
+    ));
+  });
+}
+
+async function dismissDealRecommendation(
+  item: WebsiteOpportunity,
+  recommendationId: string
+) {
+  if (!recommendationId) return;
+  try {
+    await api(`/api/deal-recommendations/${encodeURIComponent(recommendationId)}/dismiss`, {
+      method: "POST",
+      body: JSON.stringify({ reason: "业务员判断暂不建立商机" })
+    });
+    delete state.procurementContexts[item.id];
+    await loadProspectProcurementContext(item, true);
+    toast("已保留采购信号，暂不建立商机");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "处理商机建议失败", "error");
+  }
+}
+
+async function linkDealRecommendation(
+  item: WebsiteOpportunity,
+  recommendationId: string,
+  dealId: string
+) {
+  if (!recommendationId || !dealId) return;
+  try {
+    await api(`/api/deal-recommendations/${encodeURIComponent(recommendationId)}/link-deal`, {
+      method: "POST",
+      body: JSON.stringify({ dealId })
+    });
+    delete state.procurementContexts[item.id];
+    await loadProspectProcurementContext(item, true);
+    toast("已关联现有商机");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "关联商机失败", "error");
+  }
+}
 
 function prospectStatusMeta(item: WebsiteOpportunity) {
   return PROSPECT_STATUS_META[item.status] || PROSPECT_STATUS_META.preview;
@@ -8729,7 +10302,9 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
   const status = prospectStatusMeta(item);
   const owner = state.prospectAssignees.find((assignee) => assignee.id === item.ownerId);
   const canContact = ["contactable", "contacted", "synced"].includes(item.status);
+  const canWriteOutreach = item.ownerId === state.user?.id;
   const readonly = item.status === "synced" ? "disabled" : "";
+  const procurementContext = state.procurementContexts[item.id];
   box.innerHTML = `
     <div class="prospect-detail-hero">
       ${badge(status.label, status.tone)} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} ${badge(duplicate.text, duplicate.tone)}
@@ -8746,16 +10321,23 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
       <div class="prospect-field"><span>归属业务员</span><b>${escapeHtml(owner?.name || (item.ownerId === state.user?.id ? state.user?.name || "本人" : item.ownerId || "待分配"))}</b></div>
       <div class="prospect-field"><span>来源</span><b>${escapeHtml(item.sourceLabel || item.source || "自动获客")}</b></div>
       <div class="prospect-field"><span>最近开发信</span><b>${item.lastDevelopmentEmailAt ? `${formatTime(item.lastDevelopmentEmailAt)} · ${escapeHtml(item.lastDevelopmentEmailSubject || "开发信")}` : "尚未发送"}</b></div>
+      <div class="prospect-field"><span>最近触达</span><b>${item.lastTouchpointAt ? `${formatTime(item.lastTouchpointAt)} · ${escapeHtml(PROSPECT_CHANNEL_LABELS[item.lastTouchpointChannel || "email"])}` : "尚未记录"}</b></div>
+      <div class="prospect-field"><span>最近回复</span><b>${item.lastReplyClassification ? escapeHtml(PROSPECT_REPLY_LABELS[item.lastReplyClassification]) : "尚未记录"}</b></div>
+      <div class="prospect-field"><span>下次跟进</span><b>${escapeHtml(item.nextFollowAt || "待安排")}</b></div>
       <div class="form-field" style="grid-column:1/-1"><label>核验说明</label><textarea id="prospectEditDescription" ${readonly}>${escapeHtml(item.description || "")}</textarea></div>
       ${item.excludedReason ? `<div class="prospect-field" style="grid-column:1/-1"><span>排除原因</span><b>${escapeHtml(item.excludedReason)}</b></div>` : ""}
     </div>
     <div class="inline-alert"><b>下一步</b><span>${escapeHtml(status.action)}</span></div>
+    ${renderProcurementContextPanel(procurementContext, item)}
     <div class="prospect-action-row">
       ${item.status !== "synced" ? `<button class="btn" id="prospectSaveButton">保存核验资料</button>` : ""}
       ${item.status === "preview" ? `<button class="btn" id="prospectDetailMarkButton">标记可联系</button>` : ""}
       ${item.status === "excluded" ? `<button class="btn" id="prospectRestoreButton">恢复待核验</button>` : ""}
       ${["contactable", "contacted"].includes(item.status) ? `<button class="btn primary" id="prospectDetailSyncButton">加入线索</button>` : ""}
-      ${item.status === "synced" && item.leadId ? `<button class="btn primary" id="prospectViewLeadButton">查看线索</button><button class="btn" id="prospectTodoButton">生成待办</button>` : ""}
+      ${item.status === "synced" && item.leadId ? `<button class="btn primary" id="prospectViewLeadButton">查看线索</button>` : ""}
+      ${canWriteOutreach && canContact ? `<button class="btn" id="prospectTouchpointButton">记录触达</button><button class="btn" id="prospectReplyButton">记录回复</button>` : ""}
+      ${item.lastTouchpointAt ? `<button class="btn" id="prospectTouchpointHistoryButton">查看记录</button>` : ""}
+      ${canWriteOutreach && item.status !== "excluded" ? `<button class="btn" id="prospectTodoButton">生成待办</button>` : ""}
     </div>
   `;
   qs<HTMLButtonElement>("#prospectSaveButton", box)?.addEventListener("click", (event) => void saveProspectVerification(item, event.currentTarget as HTMLButtonElement));
@@ -8764,6 +10346,11 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
   qs<HTMLButtonElement>("#prospectDetailSyncButton", box)?.addEventListener("click", (event) => void syncProspects([item.id], event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectViewLeadButton", box)?.addEventListener("click", () => void openProspectLead(item));
   qs<HTMLButtonElement>("#prospectTodoButton", box)?.addEventListener("click", (event) => void createSelectedProspectTodo(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectTouchpointButton", box)?.addEventListener("click", () => openProspectTouchpointModal(item));
+  qs<HTMLButtonElement>("#prospectReplyButton", box)?.addEventListener("click", () => openProspectReplyModal(item));
+  qs<HTMLButtonElement>("#prospectTouchpointHistoryButton", box)?.addEventListener("click", () => void openProspectTouchpointHistory(item));
+  bindProcurementContextActions(box, item, procurementContext);
+  if (!procurementContext) void loadProspectProcurementContext(item);
   const mailWorkspace = qs<HTMLDetailsElement>("#prospectMailWorkspace");
   if (mailWorkspace) mailWorkspace.open = canContact && Boolean(item.lastDevelopmentEmailAt);
   renderProspectMailPreview();
@@ -8982,9 +10569,19 @@ async function updateProspectBatch(
   }
   if (button) button.disabled = true;
   try {
+    const requestId = globalThis.crypto?.randomUUID?.()
+      || `prospect-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const effectiveAt = new Date().toISOString();
     const result = await api<{ opportunities: WebsiteOpportunity[] }>("/api/prospect-list/batch", {
       method: "PATCH",
-      body: JSON.stringify({ ids, action, ownerId: ownerId || undefined, reason })
+      body: JSON.stringify({
+        ids,
+        action,
+        ownerId: ownerId || undefined,
+        reason,
+        requestId,
+        effectiveAt
+      })
     });
     result.opportunities.forEach((updated) => {
       const existing = state.websiteOpportunities.find((item) => item.id === updated.id);
@@ -9015,8 +10612,8 @@ async function createSelectedProspectTodo(button?: HTMLButtonElement) {
     toast("请先选择一条搜客线索", "error");
     return;
   }
-  if (item.status !== "synced" || !item.leadId) {
-    toast("请先加入线索中心，再创建关联待办", "error");
+  if (item.ownerId !== state.user?.id) {
+    toast("只有归属业务员可以生成跟进待办", "error");
     return;
   }
   if (button) {
@@ -9024,26 +10621,209 @@ async function createSelectedProspectTodo(button?: HTMLButtonElement) {
     button.textContent = "生成中";
   }
   try {
-    const result = await api<{ todo: Todo }>("/api/todos", {
+    const result = await api<{ todo: Todo; opportunity: WebsiteOpportunity }>(`/api/prospect-list/${encodeURIComponent(item.id)}/follow-up`, {
       method: "POST",
       body: JSON.stringify({
-        title: `跟进搜客线索：${item.company}`,
-        type: "customer",
-        priority: leadFinderScore(item) >= 76 ? "high" : "medium",
-        dueAt: currentDateTimeText(),
-        related: `${item.company} · 线索 ${item.leadId}`
+        channel: item.lastTouchpointChannel || "email",
+        priority: leadFinderScore(item) >= 76 ? "high" : "medium"
       })
     });
-    state.todos.unshift(result.todo);
+    syncProspectTodo(result.todo);
+    Object.assign(item, result.opportunity);
     renderTodos(state.todos);
     updateTodoChips(state.todos);
     renderTopbarStats();
+    renderProspectList();
     toast("已生成搜客跟进待办");
   } finally {
     if (button) {
       button.disabled = false;
       button.textContent = "生成待办";
     }
+  }
+}
+
+function syncProspectTodo(todo?: Todo) {
+  if (!todo) return;
+  const existing = state.todos.find((item) => item.id === todo.id);
+  if (existing) Object.assign(existing, todo);
+  else state.todos.unshift(todo);
+}
+
+function prospectRequestId(prefix: string) {
+  return globalThis.crypto?.randomUUID?.()
+    || `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function openProspectTouchpointModal(item: WebsiteOpportunity) {
+  openModal("记录触达", `
+    <div class="form-grid">
+      <div class="form-field"><label>触达方式</label><select id="prospectTouchChannel"><option value="email">邮件</option><option value="whatsapp">WhatsApp</option><option value="call">电话</option></select></div>
+      <div class="form-field"><label>触达时间</label><input id="prospectTouchOccurredAt" type="datetime-local" value="${escapeHtml(localDateTimeValue())}"></div>
+      <div class="form-field full"><label>联系方式</label><input id="prospectTouchContact" value="${escapeHtml(item.contactInfo || item.contact || "")}" placeholder="邮箱、WhatsApp 或电话号码"></div>
+      <div class="form-field full"><label>主题/目的</label><input id="prospectTouchSubject" placeholder="例如：首次产品介绍"></div>
+      <div class="form-field full"><label>沟通摘要</label><textarea id="prospectTouchContent" placeholder="记录发送内容、电话结论或下一步约定"></textarea></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveProspectTouchpointButton">保存触达</button>`);
+  qs<HTMLButtonElement>("#saveProspectTouchpointButton")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const occurredValue = qs<HTMLInputElement>("#prospectTouchOccurredAt")?.value || "";
+    button.disabled = true;
+    try {
+      const result = await api<{ touchpoint: ProspectTouchpoint; todo?: Todo; opportunity: WebsiteOpportunity }>(`/api/prospect-list/${encodeURIComponent(item.id)}/touchpoints`, {
+        method: "POST",
+        body: JSON.stringify({
+          channel: qs<HTMLSelectElement>("#prospectTouchChannel")?.value || "email",
+          contactValue: qs<HTMLInputElement>("#prospectTouchContact")?.value.trim() || "",
+          subject: qs<HTMLInputElement>("#prospectTouchSubject")?.value.trim() || "",
+          content: qs<HTMLTextAreaElement>("#prospectTouchContent")?.value.trim() || "",
+          occurredAt: occurredValue ? new Date(occurredValue).toISOString() : undefined,
+          requestId: prospectRequestId("touchpoint")
+        })
+      });
+      Object.assign(item, result.opportunity);
+      syncProspectTodo(result.todo);
+      closeModal();
+      renderProspectList();
+      renderTodos(state.todos);
+      updateTodoChips(state.todos);
+      toast("触达记录已保存，跟进待办已联动");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "保存触达失败", "error");
+      button.disabled = false;
+    }
+  });
+}
+
+function openProspectReplyModal(item: WebsiteOpportunity) {
+  openModal("记录客户回复", `
+    <div class="form-grid">
+      <div class="form-field"><label>回复渠道</label><select id="prospectReplyChannel"><option value="email">邮件</option><option value="whatsapp">WhatsApp</option><option value="call">电话</option></select></div>
+      <div class="form-field"><label>回复结论</label><select id="prospectReplyClassification">
+        <option value="clear_demand">明确需求</option>
+        <option value="interested_nurture">有兴趣待培育</option>
+        <option value="referral">转介绍</option>
+        <option value="no_current_demand">当前无需求</option>
+        <option value="auto_unknown">自动回复/待判断</option>
+        <option value="rejected">明确拒绝</option>
+        <option value="unsubscribed">要求退订</option>
+        <option value="bounced">联系方式退信</option>
+      </select></div>
+      <div class="form-field"><label>回复时间</label><input id="prospectReplyOccurredAt" type="datetime-local" value="${escapeHtml(localDateTimeValue())}"></div>
+      <div class="form-field"><label>联系方式</label><input id="prospectReplyContact" value="${escapeHtml(item.contactInfo || item.contact || "")}"></div>
+      <div class="form-field full"><label>回复内容</label><textarea id="prospectReplyContent" placeholder="记录客户原意和关键需求"></textarea></div>
+      <div class="form-grid" id="prospectProcurementFields" style="grid-column:1/-1">
+        <div class="form-field full"><label>产品 / 应用</label><input id="prospectProcurementProduct" placeholder="客户明确提到的产品、型号或应用"></div>
+        <div class="form-field full"><label>规格要求</label><input id="prospectProcurementSpecification" placeholder="材质、尺寸、包装或技术参数"></div>
+        <div class="form-field"><label>数量</label><input id="prospectProcurementQuantity" type="number" min="0" step="1" value="0"></div>
+        <div class="form-field"><label>数量口径</label><select id="prospectProcurementQuantityType"><option value="unknown">待确认</option><option value="sample">样品</option><option value="trial">试单</option><option value="forecast">预测用量</option><option value="order">正式订单</option></select></div>
+        <div class="form-field"><label>目标单价</label><input id="prospectProcurementTargetPrice" type="number" min="0" step="0.01" value="0"></div>
+        <div class="form-field"><label>币种</label><select id="prospectProcurementCurrency"><option>USD</option><option>EUR</option><option>GBP</option><option>CNY</option><option>JPY</option><option>AED</option></select></div>
+        <div class="form-field"><label>采购时间</label><input id="prospectProcurementTimeline" placeholder="例如：8 月前完成首单"></div>
+        <div class="form-field"><label>买方角色</label><input id="prospectProcurementBuyerRole" placeholder="采购经理、项目负责人等"></div>
+        <div class="form-field"><label>交付要求</label><input id="prospectProcurementDelivery" placeholder="交期、目的港或贸易条款"></div>
+        <div class="form-field"><label>认证要求</label><input id="prospectProcurementCertification" placeholder="CE、FDA、RoHS 等"></div>
+        <div class="form-field full"><label>明确采购动作</label><div class="procurement-evidence-inputs">
+          <label><input type="checkbox" value="quote_request">要求报价</label>
+          <label><input type="checkbox" value="sample_request">具体样品</label>
+          <label><input type="checkbox" value="project_tender">项目/招标</label>
+          <label><input type="checkbox" value="manual_confirmation">业务员确认真实推进</label>
+        </div></div>
+        <div class="form-field full"><label>下一步动作</label><input id="prospectProcurementNextAction" placeholder="例如：明天下午发送正式报价并确认样品数量"></div>
+      </div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveProspectReplyButton">保存回复</button>`);
+  qs<HTMLSelectElement>("#prospectReplyChannel")!.value = item.lastTouchpointChannel || "email";
+  const toggleProcurementFields = () => {
+    const clearDemand = qs<HTMLSelectElement>("#prospectReplyClassification")?.value === "clear_demand";
+    qs<HTMLElement>("#prospectProcurementFields")?.classList.toggle("is-hidden", !clearDemand);
+  };
+  qs<HTMLSelectElement>("#prospectReplyClassification")?.addEventListener("change", toggleProcurementFields);
+  toggleProcurementFields();
+  qs<HTMLButtonElement>("#saveProspectReplyButton")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const occurredValue = qs<HTMLInputElement>("#prospectReplyOccurredAt")?.value || "";
+    const classification = (qs<HTMLSelectElement>("#prospectReplyClassification")?.value || "auto_unknown") as ProspectReplyClassification;
+    const procurement = classification === "clear_demand" ? {
+      product: qs<HTMLInputElement>("#prospectProcurementProduct")?.value.trim() || "",
+      specification: qs<HTMLInputElement>("#prospectProcurementSpecification")?.value.trim() || "",
+      quantity: Number(qs<HTMLInputElement>("#prospectProcurementQuantity")?.value || 0),
+      quantityType: qs<HTMLSelectElement>("#prospectProcurementQuantityType")?.value || "unknown",
+      targetPrice: Number(qs<HTMLInputElement>("#prospectProcurementTargetPrice")?.value || 0),
+      currency: qs<HTMLSelectElement>("#prospectProcurementCurrency")?.value || "USD",
+      purchaseTimeline: qs<HTMLInputElement>("#prospectProcurementTimeline")?.value.trim() || "",
+      buyerRole: qs<HTMLInputElement>("#prospectProcurementBuyerRole")?.value.trim() || "",
+      deliveryRequirement: qs<HTMLInputElement>("#prospectProcurementDelivery")?.value.trim() || "",
+      certificationRequirement: qs<HTMLInputElement>("#prospectProcurementCertification")?.value.trim() || "",
+      evidenceTypes: qsa<HTMLInputElement>("#prospectProcurementFields input[type=checkbox]:checked").map((input) => input.value),
+      nextAction: qs<HTMLInputElement>("#prospectProcurementNextAction")?.value.trim() || ""
+    } : undefined;
+    button.disabled = true;
+    try {
+      const result = await api<{
+        touchpoint: ProspectTouchpoint;
+        todo?: Todo;
+        cancelled?: Todo[];
+        opportunity: WebsiteOpportunity;
+        procurement?: {
+          signal: ProcurementSignal;
+          recommendation?: DealRecommendation;
+          recommendationCreated: boolean;
+        };
+      }>(`/api/prospect-list/${encodeURIComponent(item.id)}/replies`, {
+        method: "POST",
+        body: JSON.stringify({
+          channel: qs<HTMLSelectElement>("#prospectReplyChannel")?.value || "email",
+          classification,
+          contactValue: qs<HTMLInputElement>("#prospectReplyContact")?.value.trim() || "",
+          content: qs<HTMLTextAreaElement>("#prospectReplyContent")?.value.trim() || "",
+          occurredAt: occurredValue ? new Date(occurredValue).toISOString() : undefined,
+          requestId: prospectRequestId("reply"),
+          procurement
+        })
+      });
+      Object.assign(item, result.opportunity);
+      syncProspectTodo(result.todo);
+      result.cancelled?.forEach(syncProspectTodo);
+      closeModal();
+      delete state.procurementContexts[item.id];
+      void loadProspectProcurementContext(item, true);
+      renderProspectList();
+      renderTodos(state.todos);
+      updateTodoChips(state.todos);
+      const savedClassification = result.touchpoint.replyClassification;
+      toast(
+        result.procurement?.recommendationCreated
+          ? "客户需求已保存，并生成可解释商机建议"
+          : savedClassification === "rejected" || savedClassification === "unsubscribed"
+          ? "客户回复已保存，相关跟进待办已取消"
+          : savedClassification === "bounced"
+            ? "退信已记录，请补充有效联系方式"
+            : "客户回复已保存，下一次跟进已联动"
+      );
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "保存回复失败", "error");
+      button.disabled = false;
+    }
+  });
+}
+
+async function openProspectTouchpointHistory(item: WebsiteOpportunity) {
+  try {
+    const result = await api<{ touchpoints: ProspectTouchpoint[] }>(`/api/prospect-list/${encodeURIComponent(item.id)}/touchpoints`);
+    openModal(`触达记录 · ${item.company}`, result.touchpoints.length ? `
+      <div class="activity-list">
+        ${result.touchpoints.map((touchpoint) => `
+          <div class="activity-item">
+            <b>${escapeHtml(PROSPECT_CHANNEL_LABELS[touchpoint.channel])} · ${touchpoint.direction === "inbound" ? "客户回复" : "主动触达"}</b>
+            <span>${escapeHtml(formatTime(touchpoint.occurredAt))}${touchpoint.replyClassification ? ` · ${escapeHtml(PROSPECT_REPLY_LABELS[touchpoint.replyClassification])}` : ""}</span>
+            <p>${escapeHtml(touchpoint.subject || touchpoint.content || "未填写摘要")}</p>
+          </div>
+        `).join("")}
+      </div>
+    ` : `<div class="empty-cell">暂无触达记录。</div>`, `<button class="btn primary" data-modal-close>关闭</button>`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "读取触达记录失败", "error");
   }
 }
 
@@ -9073,16 +10853,19 @@ async function sendProspectDevelopmentEmail(button?: HTMLButtonElement) {
     button.textContent = "发送中";
   }
   try {
-    const result = await api<{ sent: { simulated: boolean }; opportunity: WebsiteOpportunity; user: User }>(`/api/prospect-list/${encodeURIComponent(item.id)}/send-development-email`, {
+    const result = await api<{ sent: { simulated: boolean; replayed?: boolean }; opportunity: WebsiteOpportunity; user: User; todo?: Todo }>(`/api/prospect-list/${encodeURIComponent(item.id)}/send-development-email`, {
       method: "POST",
-      body: JSON.stringify({ to, subject, body })
+      body: JSON.stringify({ to, subject, body, requestId: prospectRequestId("development-email") })
     });
     updateStoredUser(result.user);
+    syncProspectTodo(result.todo);
     const existing = state.websiteOpportunities.find((row) => row.id === result.opportunity.id);
     if (existing) Object.assign(existing, result.opportunity);
     renderProspectList();
     renderLeadFinder(state.websiteOpportunities);
-    toast(result.sent.simulated ? "开发信已发送（测试模拟记录）" : "开发信已发送");
+    renderTodos(state.todos);
+    updateTodoChips(state.todos);
+    toast(result.sent.replayed ? "开发信发送结果已确认，无重复发送" : result.sent.simulated ? "开发信已发送（测试模拟记录）" : "开发信已发送");
   } catch (error) {
     toast(error instanceof Error ? error.message : "开发信发送失败", "error");
   } finally {
@@ -9107,9 +10890,8 @@ function currentLeadFinderSubtitle() {
 }
 
 function currentLeadFinderSources() {
-  return qsa<HTMLInputElement>("[data-lead-source]")
-    .filter((item) => item.checked)
-    .map((item) => item.closest("label")?.querySelector("b")?.textContent?.trim() || item.dataset.leadSource || "搜索源")
+  return state.selectedLeadSources
+    .map((id) => state.leadProviders.find((provider) => provider.id === id)?.name || id)
     .filter(Boolean);
 }
 
@@ -9132,6 +10914,10 @@ function buildLeadFinderJobDetails(resultIds: string[] = []) {
 
 function leadFinderJobStatusText(job: LeadFinderJob) {
   if (job.status === "done") return "已完成";
+  if (job.status === "partial") return "部分完成";
+  if (job.status === "failed") return "执行失败";
+  if (job.status === "paused") return "已暂停";
+  if (job.status === "cancelled") return "已取消";
   if (job.status === "needs_input") return "待导入";
   if (job.status === "ready") return "待运行";
   return "进行中";
@@ -9139,6 +10925,9 @@ function leadFinderJobStatusText(job: LeadFinderJob) {
 
 function leadFinderJobStatusTone(job: LeadFinderJob) {
   if (job.status === "done") return "green";
+  if (job.status === "partial") return "amber";
+  if (job.status === "failed") return "red";
+  if (job.status === "paused" || job.status === "cancelled") return "amber";
   if (job.status === "needs_input") return "amber";
   if (job.status === "running") return "blue";
   return "";
@@ -9159,9 +10948,44 @@ function renderLeadFinderJobDetails(job: LeadFinderJob) {
         </button>
       `).join("")}
     </div>
-  ` : `<div class="lead-job-loading">${job.status === "running" ? "正在检索公开API、生成平台搜索入口并等待候选结果..." : "本次任务暂无候选结果，可导入官网/平台链接继续解析。"}</div>`;
+  ` : `<div class="lead-job-loading">${job.backendRunId
+    ? job.status === "running"
+      ? "后台获客任务正在执行，结果将进入统一候选客户池。"
+      : "后台任务已保存，候选结果将在搜客清单中统一核验。"
+    : job.status === "running"
+      ? "正在解析导入网址并等待候选结果..."
+      : "本次任务暂无候选结果，可导入官网或平台链接继续解析。"}</div>`;
+  const incrementalHtml = job.incrementalStats ? `
+    <div class="lead-job-detail-lines">
+      <span>原始命中 ${job.incrementalStats.rawCount} 条</span>
+      <span>净新增 ${job.incrementalStats.newCount} 条</span>
+      <span>新证据 ${job.incrementalStats.evidenceUpdatedCount} 条</span>
+      <span>历史未变化 ${job.incrementalStats.unchangedCount} 条</span>
+      <span>同批去重 ${job.incrementalStats.deduplicatedCount} 条</span>
+      ${job.incrementalStats.multiSourceMergedCount ? `<span>多来源合并 ${job.incrementalStats.multiSourceMergedCount} 条</span>` : ""}
+      ${job.incrementalStats.excludedCount ? `<span>已排除 ${job.incrementalStats.excludedCount} 条</span>` : ""}
+    </div>
+  ` : "";
+  const sourceStatsHtml = job.sourceStats?.length ? `
+    <div class="lead-job-source-list">
+      ${job.sourceStats.map((source) => {
+        const failed = Boolean(source.error || source.status === "failed");
+        const retryAt = source.retryAfterAt ? new Date(source.retryAfterAt) : null;
+        const retryHint = retryAt && !Number.isNaN(retryAt.getTime())
+          ? ` · ${retryAt.toLocaleString("zh-CN", { hour12: false })} 后可重试`
+          : source.retryable ? " · 可重试" : "";
+        const successText = source.statusLabel
+          || (source.count === undefined
+            ? "执行完成"
+            : `${source.count} 条 · ${source.status === "success_empty" ? "成功无结果" : "执行成功"}`);
+        return `<div class="${failed ? "is-failed" : "is-success"}"><b>${escapeHtml(source.name)}</b><span>${failed ? escapeHtml(source.error || "执行失败") : escapeHtml(successText)}${escapeHtml(retryHint)}</span></div>`;
+      }).join("")}
+    </div>
+  ` : "";
   return `
     <div class="lead-job-detail" ${job.expanded ? "" : "hidden"}>
+      ${incrementalHtml}
+      ${sourceStatsHtml}
       <div class="lead-job-detail-lines">${(job.detailLines || buildLeadFinderJobDetails(job.resultIds)).map((line) => `<span>${escapeHtml(line)}</span>`).join("")}</div>
       ${foundHtml}
     </div>
@@ -9183,15 +11007,21 @@ function renderLeadFinderJobs() {
         ${badge(leadFinderJobStatusText(job), leadFinderJobStatusTone(job))}
       </div>
       <div class="lead-job-metrics">
-        <div><span>线索进度</span><b>${job.resultCount}/目标</b></div>
+        <div><span>${escapeHtml(job.metricLabel || (job.incrementalStats ? "净新增 / 命中" : "线索进度"))}</span><b>${escapeHtml(job.metricValue || (job.incrementalStats ? `${job.incrementalStats.newCount} / ${job.incrementalStats.returnedCount}` : `${job.resultCount}/目标`))}</b></div>
         <div><span>已耗时</span><b>${escapeHtml(job.elapsedText)}</b></div>
         <div><span>启用渠道</span><b>${job.channelCount} 个</b></div>
-        <div><span>预计进度</span><b>${job.progress}%</b></div>
+        <div><span>${escapeHtml(job.progressLabel || "预计进度")}</span><b>${escapeHtml(job.progressValue || `${job.progress}%`)}</b></div>
       </div>
       <div class="lead-job-progress"><i style="--p:${job.progress}%"></i></div>
       <div class="lead-job-steps">${job.steps.map((step, index) => `<span>${index + 1} ${escapeHtml(step)}</span>`).join("")}</div>
       ${renderLeadFinderJobDetails(job)}
-      <div class="lead-job-actions"><button class="btn" data-lead-job-import>导入结果链接</button><button class="btn primary" data-lead-job-sync>同步选中结果</button></div>
+      <div class="lead-job-actions">
+        ${job.backendRunId && job.backendRunStatus === "queued" ? `<button class="btn" data-lead-run-action="pause">暂停任务</button>` : ""}
+        ${job.backendRunId && job.backendRunStatus === "paused" ? `<button class="btn primary" data-lead-run-action="resume">恢复任务</button>` : ""}
+        ${job.backendRunId && ["queued", "paused"].includes(job.backendRunStatus || "") ? `<button class="btn danger" data-lead-run-action="cancel">取消任务</button>` : ""}
+        <button class="btn" data-lead-job-import>导入结果链接</button>
+        ${job.resultIds?.length ? `<button class="btn primary" data-lead-job-sync>同步选中结果</button>` : ""}
+      </div>
     </article>
   `).join("");
   qsa<HTMLButtonElement>("[data-lead-job-toggle]").forEach((button) => {
@@ -9218,6 +11048,147 @@ function renderLeadFinderJobs() {
   qsa<HTMLButtonElement>("[data-lead-job-sync]").forEach((button) => {
     button.addEventListener("click", (event) => void syncLeadFinderRows(event.currentTarget as HTMLButtonElement));
   });
+  qsa<HTMLButtonElement>("[data-lead-run-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.closest<HTMLElement>("[data-lead-job-id]")?.dataset.leadJobId;
+      const job = leadFinderJobs.find((item) => item.id === id);
+      const action = button.dataset.leadRunAction as "pause" | "resume" | "cancel";
+      if (job) void transitionLeadFinderRun(job, action, button);
+    });
+  });
+}
+
+async function transitionLeadFinderRun(
+  job: LeadFinderJob,
+  action: "pause" | "resume" | "cancel",
+  button: HTMLButtonElement
+) {
+  if (!job.backendRunId || !job.backendRunRevision) return;
+  const original = button.textContent || "";
+  button.disabled = true;
+  button.textContent = action === "pause" ? "暂停中" : action === "resume" ? "恢复中" : "取消中";
+  try {
+    await api(`/api/prospect-runs/${encodeURIComponent(job.backendRunId)}/${action}`, {
+      method: "POST",
+      headers: { "If-Match": `"${job.backendRunId}:${job.backendRunRevision}"` },
+      body: JSON.stringify({
+        reason: action === "pause" ? "用户从获客任务队列暂停" : action === "resume" ? "用户从获客任务队列恢复" : "用户从获客任务队列取消"
+      })
+    });
+    await loadProspectRuns(false);
+    toast(action === "pause" ? "获客任务已暂停" : action === "resume" ? "获客任务已恢复" : "获客任务已取消");
+  } catch (error) {
+    await loadProspectRuns(true);
+    toast(error instanceof Error ? error.message : "任务状态变更失败", "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+function prospectSuggestionLabel(type: ProspectStrategySuggestionType) {
+  const labels: Record<ProspectStrategySuggestionType, string> = {
+    refine_targeting_keywords: "优化目标关键词",
+    increase_provider_priority: "提高来源优先级",
+    decrease_provider_priority: "降低来源优先级",
+    review_icp_exclusions: "复核 ICP 排除条件",
+    review_icp_weights: "复核 ICP 评分权重"
+  };
+  return labels[type];
+}
+
+function prospectRevenueText(rows: Array<{ currency: string; amount: number }>) {
+  if (!rows.length) return "暂无";
+  return rows.map((row) => dealMoney(row.amount, row.currency)).join(" + ");
+}
+
+function renderProspectFeedback() {
+  const metricsBox = qs<HTMLElement>("#prospectPerformanceMetrics");
+  const suggestionsBox = qs<HTMLElement>("#prospectStrategySuggestionList");
+  const countBox = qs<HTMLElement>("#prospectSuggestionCount");
+  if (!metricsBox || !suggestionsBox || !countBox) return;
+  const metrics = state.prospectPerformance?.metrics;
+  if (!metrics) {
+    metricsBox.innerHTML = `<div class="prospect-performance-empty">效果数据加载中...</div>`;
+  } else {
+    const metricRows = [
+      ["候选", metrics.candidates],
+      ["已触达", metrics.contacted],
+      ["有效回复", `${metrics.validReplies} · ${metrics.validReplyRate}%`],
+      ["已入线索", metrics.leads],
+      ["已转客户", metrics.customers],
+      ["已建商机", metrics.deals],
+      ["成交 / 丢单", `${metrics.won} / ${metrics.lost}`]
+    ];
+    metricsBox.innerHTML = `
+      ${metricRows.map(([label, value]) => `<div><span>${escapeHtml(String(label))}</span><b>${escapeHtml(String(value))}</b></div>`).join("")}
+      <div class="prospect-performance-revenue"><span>获客成交额</span><b>${escapeHtml(prospectRevenueText(metrics.wonRevenue))}</b></div>
+    `;
+  }
+  const suggestions = state.prospectStrategySuggestions;
+  countBox.textContent = suggestions.length ? `${suggestions.length} 条待审核` : "暂无待审核建议";
+  suggestionsBox.innerHTML = suggestions.length ? suggestions.map((suggestion) => `
+    <article class="prospect-suggestion-row" data-prospect-suggestion-id="${escapeHtml(suggestion.id)}">
+      <div>
+        <span>${escapeHtml(prospectSuggestionLabel(suggestion.suggestionType))}</span>
+        <b>${escapeHtml(suggestion.rationale)}</b>
+        <small>基于已记录业务结果生成，仅供人工复核，不会自动修改策略。</small>
+      </div>
+      <div class="prospect-suggestion-actions">
+        <button class="btn primary" type="button" data-prospect-suggestion-review="accept">记录采纳</button>
+        <button class="btn" type="button" data-prospect-suggestion-review="reject">暂不采用</button>
+      </div>
+    </article>
+  `).join("") : `<div class="prospect-performance-empty">样本达到门槛后，系统会在这里生成可解释的策略建议。</div>`;
+  qsa<HTMLButtonElement>("[data-prospect-suggestion-review]", suggestionsBox).forEach((button) => {
+    button.addEventListener("click", () => {
+      const row = button.closest<HTMLElement>("[data-prospect-suggestion-id]");
+      const action = button.dataset.prospectSuggestionReview === "accept" ? "accept" : "reject";
+      if (row?.dataset.prospectSuggestionId) {
+        void reviewProspectSuggestion(row.dataset.prospectSuggestionId, action, button);
+      }
+    });
+  });
+}
+
+async function loadProspectFeedback(quiet = false, force = false) {
+  if (!state.user || prospectFeedbackLoading) return;
+  if (!force && Date.now() - prospectFeedbackLoadedAt < 15_000) return;
+  prospectFeedbackLoading = true;
+  try {
+    const performanceResult = await api<{ performance: ProspectPerformance }>("/api/prospect-performance");
+    const suggestionResult = await api<{ suggestions: ProspectStrategySuggestion[] }>("/api/prospect-strategy-suggestions?status=pending");
+    state.prospectPerformance = performanceResult.performance;
+    state.prospectStrategySuggestions = suggestionResult.suggestions;
+    prospectFeedbackLoadedAt = Date.now();
+    renderProspectFeedback();
+  } catch (error) {
+    if (!quiet) {
+      toast(error instanceof Error ? `获客复盘加载失败：${error.message}` : "获客复盘加载失败", "error");
+    }
+  } finally {
+    prospectFeedbackLoading = false;
+  }
+}
+
+async function reviewProspectSuggestion(
+  id: string,
+  action: "accept" | "reject",
+  button: HTMLButtonElement
+) {
+  button.disabled = true;
+  try {
+    await api(`/api/prospect-strategy-suggestions/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    await loadProspectFeedback(false, true);
+    toast(action === "accept" ? "已记录采纳，现有策略未被自动修改" : "已记录暂不采用");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "策略建议处理失败", "error");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function createLeadFinderJob(status: LeadFinderJob["status"] = "running") {
@@ -9242,17 +11213,508 @@ function createLeadFinderJob(status: LeadFinderJob["status"] = "running") {
   return job;
 }
 
-function updateLeadFinderJob(jobId: string, resultIds: string[], status: LeadFinderJob["status"]) {
+function updateLeadFinderJob(
+  jobId: string,
+  resultIds: string[],
+  status: LeadFinderJob["status"],
+  incrementalStats?: LeadFinderIncrementalStats,
+  sourceStats?: LeadFinderSourceStat[]
+) {
   const job = leadFinderJobs.find((item) => item.id === jobId);
   if (!job) return;
   job.status = status;
   job.resultCount = resultIds.length;
-  job.elapsedText = status === "done" ? "已完成" : "待导入";
-  job.progress = status === "done" ? 100 : 52;
-  job.steps = status === "done" ? ["生成搜索语法", "检索公开API", "提取公司资料", "等待同步"] : ["生成搜索语法", "打开平台入口", "导入官网/询盘链接"];
+  job.elapsedText = ["done", "partial", "failed"].includes(status) ? "已结束" : "待导入";
+  job.progress = ["done", "partial", "failed"].includes(status) ? 100 : 52;
+  job.steps = status === "done"
+    ? ["生成搜索语法", "检索公开API", "提取公司资料", "等待同步"]
+    : status === "partial"
+      ? ["生成搜索语法", "检索公开API", "保留成功结果", "重试失败来源"]
+      : status === "failed"
+        ? ["生成搜索语法", "来源执行失败", "检查配置或网络", "重新运行任务"]
+        : ["生成搜索语法", "打开平台入口", "导入官网/询盘链接"];
   job.resultIds = resultIds;
+  job.incrementalStats = incrementalStats;
+  job.sourceStats = sourceStats;
   job.detailLines = buildLeadFinderJobDetails(resultIds);
   renderLeadFinderJobs();
+}
+
+const prospectRunTerminalStatuses = new Set<ProspectRunApiStatus>([
+  "cancelled",
+  "succeeded",
+  "succeeded_empty",
+  "partial_success",
+  "failed"
+]);
+
+function prospectRunJobStatus(status: ProspectRunApiStatus): LeadFinderJob["status"] {
+  if (status === "succeeded" || status === "succeeded_empty") return "done";
+  if (status === "partial_success") return "partial";
+  if (status === "failed") return "failed";
+  if (status === "paused") return "paused";
+  if (status === "cancelled") return "cancelled";
+  return "running";
+}
+
+function prospectRunStatusLabel(status: ProspectRunApiStatus) {
+  const labels: Record<ProspectRunApiStatus, string> = {
+    queued: "排队中",
+    running: "执行中",
+    pause_requested: "正在暂停",
+    paused: "已暂停",
+    cancel_requested: "正在取消",
+    cancelled: "已取消",
+    succeeded: "已完成",
+    succeeded_empty: "完成无结果",
+    partial_success: "部分完成",
+    failed: "执行失败"
+  };
+  return labels[status];
+}
+
+function prospectShardStatusLabel(status: ProspectRunShardApiRecord["status"]) {
+  const labels: Record<ProspectRunShardApiRecord["status"], string> = {
+    queued: "等待执行",
+    running: "正在执行",
+    retry_scheduled: "等待重试",
+    pause_requested: "正在暂停",
+    paused: "已暂停",
+    cancel_requested: "正在取消",
+    cancelled: "已取消",
+    succeeded: "执行完成",
+    succeeded_empty: "完成无结果",
+    partial_success: "部分完成",
+    failed: "执行失败"
+  };
+  return labels[status];
+}
+
+function prospectRunElapsedText(run: ProspectRunApiRecord) {
+  const startedAt = new Date(run.createdAt).getTime();
+  const finishedAt = prospectRunTerminalStatuses.has(run.status)
+    ? new Date(run.updatedAt).getTime()
+    : Date.now();
+  const seconds = Math.max(0, Math.round((finishedAt - startedAt) / 1000));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} 小时 ${minutes % 60} 分`;
+}
+
+function prospectRunProgress(shards: ProspectRunShardApiRecord[], run: ProspectRunApiRecord) {
+  if (prospectRunTerminalStatuses.has(run.status)) return 100;
+  if (!shards.length) return 0;
+  const progressUnits = shards.reduce((total, shard) => {
+    if (["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled"].includes(shard.status)) return total + 1;
+    if (["running", "pause_requested", "cancel_requested"].includes(shard.status)) return total + 0.5;
+    return total;
+  }, 0);
+  return Math.round((progressUnits / shards.length) * 100);
+}
+
+function prospectRunSteps(run: ProspectRunApiRecord, shards: ProspectRunShardApiRecord[]) {
+  const completed = shards.filter((shard) => ["succeeded", "succeeded_empty", "partial_success"].includes(shard.status)).length;
+  const failed = shards.filter((shard) => shard.status === "failed").length;
+  if (run.status === "failed") return ["项目与策略已保存", "数据源执行失败", "查看来源配置", "可重新发起任务"];
+  if (run.status === "partial_success") return ["项目与策略已保存", "数据源并行执行", `成功 ${completed} 个来源`, `失败 ${failed} 个来源`];
+  if (run.status === "succeeded" || run.status === "succeeded_empty") return ["项目与策略已保存", "数据源执行完成", "结果已清洗入池", "等待业务核验"];
+  if (run.status === "paused" || run.status === "pause_requested") return ["项目与策略已保存", "任务已进入队列", "执行暂停", "等待恢复"];
+  if (run.status === "cancelled" || run.status === "cancel_requested") return ["项目与策略已保存", "任务已进入队列", "执行已取消", "可重新发起"];
+  return ["项目与策略已保存", "任务已进入队列", "数据源后台执行", "结果清洗入池"];
+}
+
+function prospectRunJob(detail: ProspectRunDetailApiResponse): LeadFinderJob {
+  const run = detail.run;
+  const snapshot = run.executionSnapshot;
+  const campaign = snapshot?.campaign;
+  const query = snapshot?.resolvedQuery;
+  const settled = detail.shards.filter((shard) =>
+    ["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled"].includes(shard.status)
+  ).length;
+  const expanded = leadFinderJobs.find((job) => job.backendRunId === run.id)?.expanded || false;
+  const providerName = (providerId: string) =>
+    state.leadProviders.find((provider) => provider.id === providerId)?.name || providerId;
+  const products = campaign?.snapshot.products || query?.positiveKeywords || [];
+  const markets = campaign?.snapshot.markets || query?.countries || [];
+  const industries = campaign?.snapshot.applicationScenarios || query?.industryTerms || [];
+  const customerTypes = campaign?.snapshot.customerTypes || query?.customerTypes || [];
+  return {
+    id: run.id,
+    backendRunId: run.id,
+    backendRunRevision: run.revision,
+    backendRunStatus: run.status,
+    title: campaign?.name || `获客任务 ${run.id.slice(-8)}`,
+    subtitle: `${industries.join("、") || "行业待补充"} · ${markets.join("、") || "目标市场"} · 后台持续执行`,
+    status: prospectRunJobStatus(run.status),
+    resultCount: 0,
+    channelCount: detail.shards.length,
+    elapsedText: prospectRunElapsedText(run),
+    progress: prospectRunProgress(detail.shards, run),
+    progressLabel: "执行状态",
+    progressValue: prospectRunStatusLabel(run.status),
+    metricLabel: "分片进度",
+    metricValue: `${settled} / ${detail.shards.length}`,
+    steps: prospectRunSteps(run, detail.shards),
+    createdAt: run.createdAt,
+    expanded,
+    resultIds: [],
+    detailLines: [
+      `产品：${products.join("、") || "未填写"}`,
+      `市场：${markets.join("、") || "未填写"}`,
+      `行业：${industries.join("、") || "未填写"}`,
+      `客户类型：${customerTypes.join("、") || "未填写"}`,
+      `任务编号：${run.id}`
+    ],
+    sourceStats: detail.shards.map((shard) => ({
+      id: shard.providerCode,
+      name: providerName(shard.providerCode),
+      status: shard.status,
+      statusLabel: prospectShardStatusLabel(shard.status),
+      error: shard.status === "failed" ? "执行失败，请检查数据源连接或稍后重试" : undefined,
+      retryable: shard.status === "retry_scheduled"
+    }))
+  };
+}
+
+function stopLeadFinderRunPolling() {
+  if (!leadFinderRunPollTimer) return;
+  window.clearInterval(leadFinderRunPollTimer);
+  leadFinderRunPollTimer = 0;
+}
+
+function syncLeadFinderRunPolling() {
+  const hasActiveRun = leadFinderJobs.some((job) =>
+    job.backendRunId && ["running", "paused"].includes(job.status)
+  );
+  const hasActiveSchedule = state.prospectSchedules.some((schedule) =>
+    schedule.status === "active"
+  );
+  if (!hasActiveRun && !hasActiveSchedule) {
+    stopLeadFinderRunPolling();
+    return;
+  }
+  if (leadFinderRunPollTimer) return;
+  leadFinderRunPollTimer = window.setInterval(() => {
+    if (!state.user || document.hidden) return;
+    void loadProspectRuns(true);
+    void loadProspectSchedules(true);
+  }, 5_000);
+}
+
+async function loadProspectRuns(quiet = false) {
+  if (!state.user || leadFinderRunsLoading) return;
+  leadFinderRunsLoading = true;
+  try {
+    const list = await api<{ runs: ProspectRunApiRecord[] }>("/api/prospect-runs?limit=6");
+    const detailResults = await Promise.allSettled(
+      list.runs.map((run) => api<ProspectRunDetailApiResponse>(`/api/prospect-runs/${encodeURIComponent(run.id)}`))
+    );
+    const backendJobs = detailResults
+      .filter((result): result is PromiseFulfilledResult<ProspectRunDetailApiResponse> => result.status === "fulfilled")
+      .map((result) => prospectRunJob(result.value));
+    const localJobs = leadFinderJobs.filter((job) => !job.backendRunId);
+    leadFinderJobs = [...backendJobs, ...localJobs]
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, 6);
+    renderLeadFinderJobs();
+    void loadProspectFeedback(true);
+    syncLeadFinderRunPolling();
+  } catch (error) {
+    if (!quiet && state.user?.role !== "super_admin") {
+      toast(error instanceof Error ? `获客任务加载失败：${error.message}` : "获客任务加载失败", "error");
+    }
+    stopLeadFinderRunPolling();
+  } finally {
+    leadFinderRunsLoading = false;
+  }
+}
+
+function prospectScheduleFrequencyLabel(frequency: ProspectScheduleApiRecord["frequency"]) {
+  return frequency === "daily" ? "每天" : frequency === "weekly" ? "每周" : "每月";
+}
+
+function renderProspectSchedules() {
+  const box = qs<HTMLElement>("#leadFinderScheduleList");
+  const count = qs<HTMLElement>("#leadFinderScheduleCount");
+  if (!box || !count) return;
+  const activeCount = state.prospectSchedules.filter((item) => item.status === "active").length;
+  count.textContent = `${activeCount} 个启用中`;
+  if (!state.prospectSchedules.length) {
+    box.innerHTML = `<div class="empty-cell">暂无定期搜索计划。</div>`;
+    return;
+  }
+  box.innerHTML = state.prospectSchedules.map((schedule) => {
+    const mine = schedule.ownerId === state.user?.id;
+    const nextRunAt = new Date(schedule.nextRunAt);
+    const nextText = Number.isNaN(nextRunAt.getTime())
+      ? "执行时间待刷新"
+      : nextRunAt.toLocaleString("zh-CN", { hour12: false });
+    const failure = schedule.lastFailureReason
+      ? ` · ${schedule.lastFailureReason}`
+      : "";
+    const orchestration = schedule.orchestrationMode === "campaign_rotation_v1"
+      ? ` · 轮换 ${schedule.rotatableStrategyCount || 0}/${schedule.approvedStrategyCount || 0} 个策略`
+      : "";
+    const review = schedule.dueReviewCount
+      ? ` · 待复查 ${schedule.dueReviewCount} 个`
+      : "";
+    return `
+      <article class="lead-schedule-row" data-prospect-schedule-id="${escapeHtml(schedule.id)}">
+        <div class="lead-schedule-row-main">
+          <b>${escapeHtml(prospectScheduleFrequencyLabel(schedule.frequency))}继续搜索 · ${schedule.status === "active" ? "运行中" : "已暂停"}</b>
+          <span>下次 ${escapeHtml(nextText)}${escapeHtml(orchestration)}${escapeHtml(review)}${escapeHtml(failure)}</span>
+        </div>
+        ${badge(schedule.status === "active" ? "启用" : "暂停", schedule.status === "active" ? "green" : "gray")}
+        <div class="lead-schedule-row-actions">
+          ${mine ? `<button class="btn" type="button" data-prospect-schedule-action="${schedule.status === "active" ? "pause" : "resume"}">${schedule.status === "active" ? "暂停" : "恢复"}</button><button class="btn" type="button" data-prospect-schedule-action="delete">删除</button>` : `<span class="badge gray">团队计划</span>`}
+        </div>
+      </article>
+    `;
+  }).join("");
+  qsa<HTMLButtonElement>("[data-prospect-schedule-action]", box).forEach((button) => {
+    button.addEventListener("click", () => {
+      const row = button.closest<HTMLElement>("[data-prospect-schedule-id]");
+      const schedule = state.prospectSchedules.find((item) =>
+        item.id === row?.dataset.prospectScheduleId
+      );
+      const action = button.dataset.prospectScheduleAction as "pause" | "resume" | "delete";
+      if (schedule) void mutateProspectSchedule(schedule, action, button);
+    });
+  });
+}
+
+async function loadProspectSchedules(quiet = false) {
+  if (!state.user) return;
+  try {
+    const result = await api<{ schedules: ProspectScheduleApiRecord[] }>(
+      "/api/prospect-schedules"
+    );
+    state.prospectSchedules = result.schedules || [];
+    renderProspectSchedules();
+    syncLeadFinderRunPolling();
+  } catch (error) {
+    state.prospectSchedules = [];
+    renderProspectSchedules();
+    if (!quiet && state.user.role !== "super_admin") {
+      toast(error instanceof Error ? error.message : "定期搜索计划加载失败", "error");
+    }
+  }
+}
+
+function canReviewOrganizationIdentityConflicts() {
+  return state.user?.role === "manager" || state.user?.role === "admin";
+}
+
+function organizationIdentityConflictTypeLabel(
+  type: OrganizationIdentityConflictItem["conflictType"]
+) {
+  const labels: Record<
+    OrganizationIdentityConflictItem["conflictType"],
+    string
+  > = {
+    identifier_split: "多个企业命中同一身份标识",
+    identifier_slot_conflict: "企业身份标识位置冲突",
+    binding_conflict: "来源记录归属冲突"
+  };
+  return labels[type];
+}
+
+function renderIdentityConflicts() {
+  const section = qs<HTMLElement>("#identityConflictReviewSection");
+  const list = qs<HTMLElement>("#identityConflictReviewList");
+  const count = qs<HTMLElement>("#identityConflictReviewCount");
+  if (!section || !list || !count) return;
+  const allowed = canReviewOrganizationIdentityConflicts();
+  section.hidden = !allowed;
+  if (!allowed) {
+    state.identityConflicts = [];
+    return;
+  }
+  count.textContent = `${state.identityConflicts.length} 条待处理`;
+  if (!state.identityConflicts.length) {
+    list.innerHTML =
+      `<div class="empty-cell">暂无待复核的企业身份冲突。</div>`;
+    return;
+  }
+  list.innerHTML = state.identityConflicts.map((conflict) => {
+    const options = conflict.organizations.map((organization, index) => `
+      <label class="identity-conflict-option">
+        <input type="radio"
+          name="identity-conflict-${escapeHtml(conflict.id)}"
+          value="${escapeHtml(organization.id)}"
+          ${index === 0 ? "checked" : ""}>
+        <span>${escapeHtml(organization.name)}</span>
+      </label>
+    `).join("");
+    return `
+      <article class="identity-conflict-row"
+        data-identity-conflict-id="${escapeHtml(conflict.id)}">
+        <div class="identity-conflict-row-head">
+          <div>
+            <b>${escapeHtml(organizationIdentityConflictTypeLabel(conflict.conflictType))}</b>
+            <span>${conflict.organizations.length} 个企业主体 · ${conflict.identifierCount} 个身份标识 · 影响 ${conflict.candidateCount} 条候选</span>
+          </div>
+          ${badge("待人工判断", "orange")}
+        </div>
+        <div class="identity-conflict-options">${options}</div>
+        <textarea class="identity-conflict-note"
+          maxlength="1000"
+          placeholder="填写判断依据，例如：官网、企业注册信息或来源记录核验结果"></textarea>
+        <div class="identity-conflict-actions">
+          <button class="btn" type="button"
+            data-identity-conflict-action="keep_separate">保持独立</button>
+          <button class="btn primary" type="button"
+            data-identity-conflict-action="merge">合并企业</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+  qsa<HTMLButtonElement>(
+    "[data-identity-conflict-action]",
+    list
+  ).forEach((button) => {
+    button.addEventListener("click", () => {
+      const row = button.closest<HTMLElement>(
+        "[data-identity-conflict-id]"
+      );
+      const action = button.dataset.identityConflictAction === "merge"
+        ? "merge"
+        : "keep_separate";
+      if (row?.dataset.identityConflictId) {
+        void reviewIdentityConflict(
+          row.dataset.identityConflictId,
+          action,
+          button
+        );
+      }
+    });
+  });
+}
+
+async function loadIdentityConflicts(quiet = false) {
+  if (!canReviewOrganizationIdentityConflicts()) {
+    state.identityConflicts = [];
+    renderIdentityConflicts();
+    return;
+  }
+  try {
+    const result = await api<{
+      conflicts: OrganizationIdentityConflictItem[];
+    }>("/api/organization-identity-conflicts?status=open");
+    state.identityConflicts = result.conflicts || [];
+    renderIdentityConflicts();
+  } catch (error) {
+    state.identityConflicts = [];
+    renderIdentityConflicts();
+    if (!quiet) {
+      toast(
+        error instanceof Error
+          ? `企业身份复核加载失败：${error.message}`
+          : "企业身份复核加载失败",
+        "error"
+      );
+    }
+  }
+}
+
+async function reviewIdentityConflict(
+  conflictId: string,
+  action: "keep_separate" | "merge",
+  button: HTMLButtonElement
+) {
+  const conflict = state.identityConflicts.find(
+    (item) => item.id === conflictId
+  );
+  const row = button.closest<HTMLElement>("[data-identity-conflict-id]");
+  const note = qs<HTMLTextAreaElement>(
+    ".identity-conflict-note",
+    row || undefined
+  )?.value.trim() || "";
+  const canonicalOrganizationId = qs<HTMLInputElement>(
+    ".identity-conflict-option input:checked",
+    row || undefined
+  )?.value || "";
+  if (!conflict) {
+    toast("冲突记录已变化，请刷新后重试", "error");
+    return;
+  }
+  if (note.length < 2) {
+    toast("请先填写至少 2 个字的复核依据", "error");
+    return;
+  }
+  if (action === "merge" && !canonicalOrganizationId) {
+    toast("请选择要保留的规范企业", "error");
+    return;
+  }
+  const buttons = qsa<HTMLButtonElement>(
+    "[data-identity-conflict-action]",
+    row || undefined
+  );
+  buttons.forEach((item) => {
+    item.disabled = true;
+  });
+  try {
+    await api(
+      `/api/organization-identity-conflicts/${encodeURIComponent(conflict.id)}/review`,
+      {
+        method: "POST",
+        headers: { "If-Match": conflict.etag },
+        body: JSON.stringify({
+          action,
+          canonicalOrganizationId:
+            action === "merge" ? canonicalOrganizationId : "",
+          note
+        })
+      }
+    );
+    await loadIdentityConflicts();
+    if (action === "merge") {
+      const result = await api<{ opportunities: WebsiteOpportunity[] }>(
+        "/api/tools/website-opportunities"
+      );
+      state.websiteOpportunities = result.opportunities || [];
+      renderWebsiteOpportunities(state.websiteOpportunities);
+      renderLeadFinder(state.websiteOpportunities);
+      renderProspectList();
+    }
+    toast(action === "merge" ? "企业归一映射已保存" : "已记录保持独立");
+  } catch (error) {
+    toast(
+      error instanceof Error ? error.message : "企业身份复核失败",
+      "error"
+    );
+  } finally {
+    buttons.forEach((item) => {
+      item.disabled = false;
+    });
+  }
+}
+
+async function mutateProspectSchedule(
+  schedule: ProspectScheduleApiRecord,
+  action: "pause" | "resume" | "delete",
+  button: HTMLButtonElement
+) {
+  if (action === "delete" && !window.confirm("确认删除这个定期搜索计划？已产生的搜客任务不会被删除。")) return;
+  button.disabled = true;
+  try {
+    const path = action === "delete"
+      ? `/api/prospect-schedules/${encodeURIComponent(schedule.id)}`
+      : `/api/prospect-schedules/${encodeURIComponent(schedule.id)}/${action}`;
+    await api(path, {
+      method: action === "delete" ? "DELETE" : "POST",
+      headers: { "If-Match": `"${schedule.id}:${schedule.revision}"` },
+      ...(action === "delete" ? {} : { body: JSON.stringify({}) })
+    });
+    await loadProspectSchedules();
+    toast(action === "delete" ? "定期搜索计划已删除" : action === "pause" ? "定期搜索计划已暂停" : "定期搜索计划已恢复");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "定期搜索计划操作失败", "error");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function renderLeadFinderSearchLinks() {
@@ -9304,11 +11766,44 @@ function collectLeadFinderRows() {
     .filter((item) => item.company && item.website);
 }
 
+function verificationCheckMeta(status: NonNullable<WebsiteOpportunity["verificationReport"]>["checks"][number]["status"]) {
+  if (status === "passed") return { label: "已通过", tone: "green" };
+  if (status === "partial") return { label: "部分有据", tone: "amber" };
+  if (status === "manual_required") return { label: "需人工核验", tone: "amber" };
+  return { label: "未核实", tone: "gray" };
+}
+
+function verificationLevelTone(level?: NonNullable<WebsiteOpportunity["verificationReport"]>["level"]) {
+  if (level === "L5" || level === "L4") return "green";
+  if (level === "L3" || level === "L2") return "amber";
+  return "gray";
+}
+
+function closeLeadFinderVerificationDrawer() {
+  qs<HTMLElement>("#leadFinderVerificationDrawer")?.classList.remove("open");
+  qs<HTMLElement>("#leadFinderVerificationBackdrop")?.classList.remove("active");
+  document.body.classList.remove("lead-verification-drawer-open");
+}
+
+function openLeadFinderVerificationDrawer(item: WebsiteOpportunity) {
+  state.selectedLeadFinderId = item.id;
+  qsa<HTMLElement>("[data-lead-id]").forEach((row) =>
+    row.classList.toggle("selected", row.dataset.leadId === item.id)
+  );
+  qsa<HTMLElement>("[data-lead-mobile-id]").forEach((card) =>
+    card.classList.toggle("selected", card.dataset.leadMobileId === item.id)
+  );
+  renderLeadFinderDetail(item);
+  qs<HTMLElement>("#leadFinderVerificationDrawer")?.classList.add("open");
+  qs<HTMLElement>("#leadFinderVerificationBackdrop")?.classList.add("active");
+  document.body.classList.add("lead-verification-drawer-open");
+}
+
 function renderLeadFinderDetail(item?: WebsiteOpportunity) {
   const box = qs<HTMLElement>("#leadFinderDetail");
   if (!box) return;
   if (!item) {
-    box.innerHTML = `<span>未选择</span><b>点击候选列表中的公司行查看详情。</b>`;
+    box.innerHTML = "";
     return;
   }
   const score = leadFinderScore(item);
@@ -9316,20 +11811,175 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
   const domain = websiteDomain(item.website);
   const owner = item.ownerId ? ownerName(item.ownerId) : (state.user?.name || "当前账号");
   const externalId = item.id || `website_${domain}`;
+  const status = prospectStatusMeta(item);
+  const evidence = item.sourceEvidence || [];
+  const report = item.verificationReport;
+  const readonly = item.status === "synced" ? "disabled" : "";
+  const reportChecks = report?.checks?.length
+    ? report.checks.map((entry) => {
+      const meta = verificationCheckMeta(entry.status);
+      return `
+        <div class="lead-report-check">
+          <div><b>${escapeHtml(entry.label)}</b>${badge(meta.label, meta.tone)}</div>
+          <p>${escapeHtml(entry.summary)}</p>
+          <small>${escapeHtml(entry.source || "待补充来源")} · ${escapeHtml(entry.checkedAt ? formatTime(entry.checkedAt) : "时间待确认")}</small>
+        </div>
+      `;
+    }).join("")
+    : `<div class="lead-report-empty">校验报告待刷新，请重新执行搜索或刷新清单。</div>`;
+  const evidenceHtml = evidence.length
+    ? evidence.map((entry, index) => {
+      const sourceUrl = normalizeWebsiteLink(entry.sourceUrl || entry.officialWebsite);
+      const fetchedAt = entry.fetchedAt ? formatTime(entry.fetchedAt) : "时间待确认";
+      const matched = entry.matchedFields?.length ? entry.matchedFields.join("、") : "企业基础信息";
+      return `
+        <div class="lead-evidence-row">
+          <div>
+            <b>${escapeHtml(entry.providerId || item.sourceLabel || item.source || `来源 ${index + 1}`)}</b>
+            <small>${escapeHtml(fetchedAt)} · 命中 ${escapeHtml(matched)}</small>
+          </div>
+          <p>${escapeHtml(entry.evidenceSummary || "公开来源记录，需人工复核。")}</p>
+          ${sourceUrl !== "#" ? `<a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noreferrer">打开原始来源</a>` : ""}
+        </div>
+      `;
+    }).join("")
+    : `
+      <div class="lead-evidence-row">
+        <div><b>${escapeHtml(item.sourceLabel || item.source || "链接登记")}</b><small>当前候选暂无结构化 Provider 证据</small></div>
+        <p>系统未访问企业网页。请由业务员人工打开参考链接，核对企业主体、业务范围和联系方式。</p>
+        ${item.website ? `<a href="${escapeHtml(normalizeWebsiteLink(item.website))}" target="_blank" rel="noreferrer">人工打开参考链接</a>` : ""}
+      </div>
+    `;
   box.innerHTML = `
+    <div class="lead-verification-drawer-head">
+      <div>
+        <span class="lead-verification-kicker">候选校验报告</span>
+        <h2>${escapeHtml(item.company)}</h2>
+        <p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(domain || "官网待补")} · ${escapeHtml(item.business || "业务待维护")}</p>
+      </div>
+      <button class="btn icon-only" id="leadFinderVerificationClose" type="button" title="关闭">×</button>
+    </div>
+    <section class="lead-report-summary">
+      <div class="lead-report-level">
+        ${badge(report?.level || "L0", verificationLevelTone(report?.level))}
+        <div><b>${escapeHtml(report?.levelLabel || "报告待生成")}</b><small>${escapeHtml(report?.generatedAt ? `生成于 ${formatTime(report.generatedAt)}` : "刷新后生成")}</small></div>
+      </div>
+      ${badge(report?.crawlerFree ? "零网页访问" : "策略待确认", report?.crawlerFree ? "green" : "amber")}
+      <p>${escapeHtml(report?.conclusion || "当前仅展示候选资料，企业真实性和联系方式需要人工确认。")}</p>
+      <div class="lead-report-policy"><b>安全边界</b><span>系统未访问、下载、解析或探测企业网页。官网仅作为人工打开的参考链接保存。</span></div>
+    </section>
+    <section class="lead-report-checks">
+      <div class="lead-evidence-head"><span>校验检查</span><b>${report?.checks?.length || 0} 项</b></div>
+      ${reportChecks}
+    </section>
     <div class="lead-profile-head">
-      <div><h3>${escapeHtml(item.company)}</h3><p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(domain)} · ${escapeHtml(item.business || "业务待维护")}</p></div>
-      <div class="lead-profile-score">${score}</div>
+      <div><h3>人工核验资料</h3><p>人工修正会保存到当前团队候选记录</p></div>
+      <div class="lead-profile-score" title="资料完整度">${score}</div>
+    </div>
+    <div class="lead-verification-grid">
+      <label><span>公司</span><input id="leadFinderDetailCompany" value="${escapeHtml(item.company)}" ${readonly}></label>
+      <label><span>官网</span><input id="leadFinderDetailWebsite" value="${escapeHtml(item.website)}" ${readonly}></label>
+      <label><span>业务方向</span><input id="leadFinderDetailBusiness" value="${escapeHtml(item.business)}" ${readonly}></label>
+      <label><span>国家/地区</span><input id="leadFinderDetailCountry" value="${escapeHtml(item.country)}" ${readonly}></label>
+      <label><span>联系人</span><input id="leadFinderDetailContact" value="${escapeHtml(item.contact)}" ${readonly}></label>
+      <label><span>联系方式</span><input id="leadFinderDetailContactInfo" value="${escapeHtml(item.contactInfo)}" ${readonly}></label>
+      <label class="full"><span>核验说明</span><textarea id="leadFinderDetailDescription" ${readonly}>${escapeHtml(item.description || "")}</textarea></label>
     </div>
     <div class="lead-detail-stack">
       <div class="lead-detail-card"><span>ICP 判断</span><b>${score >= 76 ? "高匹配，建议优先核实采购/工程联系人。" : score >= 60 ? "中匹配，需要补齐联系人和产品证据。" : "信息不足，先确认官网和业务范围。"}</b></div>
       <div class="lead-detail-card"><span>联系方式</span><b>${escapeHtml(item.contactInfo || item.contact || "待补齐")}</b></div>
-      <div class="lead-detail-card"><span>来源与外部编号</span><b>${escapeHtml(item.sourceLabel || item.source || "官网导入")} · ${escapeHtml(externalId)}</b></div>
+      <div class="lead-detail-card"><span>来源与外部编号</span><b>${escapeHtml(item.sourceLabel || item.source || "链接登记")} · ${escapeHtml(externalId)} · ${evidence.length || 1} 个核验入口</b></div>
       <div class="lead-detail-card"><span>重复与归属</span><b>${badge(duplicate.text, duplicate.tone)} ${escapeHtml(owner)}</b></div>
-      <div class="lead-detail-card"><span>资料完整度</span><b>${badge(item.parseMode === "ai" ? "AI解析" : "规则解析", item.parseMode === "ai" ? "green" : "")} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} · 分数仅表示资料完整度，不代表采购意向</b></div>
-      <div class="lead-detail-card"><span>下一步建议</span><b>${escapeHtml(item.status === "synced" ? "已进入线索中心，可创建首个正式跟进待办。" : "先核实官网、业务匹配和可用联系方式，再确认加入线索。")}</b></div>
+      <div class="lead-detail-card"><span>资料完整度</span><b>${badge(item.parseMode === "reference" ? "链接登记" : item.parseMode === "ai" ? "AI归纳" : "规则归纳", item.parseMode === "ai" ? "green" : "")} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} · 分数仅表示资料完整度，不代表采购意向</b></div>
+      <div class="lead-detail-card"><span>当前状态与下一步</span><b>${badge(status.label, status.tone)} ${escapeHtml(status.action)}</b></div>
+    </div>
+    <div class="lead-evidence-section">
+      <div class="lead-evidence-head"><span>来源证据</span><b>${evidence.length ? `${evidence.length} 条证据记录` : "官网人工核验"}</b></div>
+      ${evidenceHtml}
+    </div>
+    <div class="lead-detail-actions">
+      ${item.status !== "synced" ? `<button class="btn" id="leadFinderDetailSaveButton">保存核验资料</button>` : ""}
+      ${item.status === "preview" ? `<button class="btn primary" id="leadFinderDetailMarkButton">标记可联系</button>` : ""}
+      ${["contactable", "contacted"].includes(item.status) ? `<button class="btn primary" id="leadFinderDetailSyncButton">加入线索</button>` : ""}
+      ${item.status === "synced" && item.leadId ? `<button class="btn primary" id="leadFinderDetailOpenLeadButton">查看线索</button>` : ""}
     </div>
   `;
+  qs<HTMLButtonElement>("#leadFinderVerificationClose", box)?.addEventListener("click", closeLeadFinderVerificationDrawer);
+  qs<HTMLButtonElement>("#leadFinderDetailSaveButton", box)?.addEventListener("click", (event) => {
+    void saveLeadFinderVerification(item, event.currentTarget as HTMLButtonElement);
+  });
+  qs<HTMLButtonElement>("#leadFinderDetailMarkButton", box)?.addEventListener("click", (event) => {
+    void markLeadFinderContactable(item, event.currentTarget as HTMLButtonElement);
+  });
+  qs<HTMLButtonElement>("#leadFinderDetailSyncButton", box)?.addEventListener("click", (event) => {
+    void syncProspects([item.id], event.currentTarget as HTMLButtonElement);
+  });
+  qs<HTMLButtonElement>("#leadFinderDetailOpenLeadButton", box)?.addEventListener("click", () => {
+    void openProspectLead(item);
+  });
+}
+
+function leadFinderVerificationPayload() {
+  const value = (selector: string) => qs<HTMLInputElement | HTMLTextAreaElement>(selector)?.value.trim() || "";
+  return {
+    company: value("#leadFinderDetailCompany"),
+    website: value("#leadFinderDetailWebsite"),
+    business: value("#leadFinderDetailBusiness"),
+    country: value("#leadFinderDetailCountry"),
+    contact: value("#leadFinderDetailContact"),
+    contactInfo: value("#leadFinderDetailContactInfo"),
+    description: value("#leadFinderDetailDescription")
+  };
+}
+
+async function saveLeadFinderVerification(item: WebsiteOpportunity, button?: HTMLButtonElement, notify = true) {
+  const payload = leadFinderVerificationPayload();
+  if (!payload.company || !payload.website) {
+    toast("公司和官网不能为空", "error");
+    return false;
+  }
+  if (button) button.disabled = true;
+  try {
+    const result = await api<{ opportunity: WebsiteOpportunity }>(`/api/prospect-list/${encodeURIComponent(item.id)}/details`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+    Object.assign(item, result.opportunity);
+    renderLeadFinder(state.websiteOpportunities);
+    renderProspectList();
+    if (notify) toast("核验资料已保存");
+    return true;
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "保存核验资料失败", "error");
+    return false;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function markLeadFinderContactable(item: WebsiteOpportunity, button?: HTMLButtonElement) {
+  if (!await saveLeadFinderVerification(item, undefined, false)) return;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "标记中";
+  }
+  try {
+    const result = await api<{ opportunities: WebsiteOpportunity[] }>("/api/prospect-list/batch", {
+      method: "PATCH",
+      body: JSON.stringify({ ids: [item.id], action: "mark-contactable" })
+    });
+    Object.assign(item, result.opportunities[0]);
+    renderLeadFinder(state.websiteOpportunities);
+    renderProspectList();
+    toast("已保存核验资料并标记为可联系");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "标记可联系失败", "error");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "标记可联系";
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -9340,32 +11990,84 @@ function leadTierText(tier: string) {
   return tier === "free" ? "免费" : tier === "byok_free" ? "自带Key·免费额度" : tier === "ai" ? "AI 模型" : "付费·自带Key";
 }
 
-function leadCategoryText(category: string) {
-  return category === "web" ? "Web搜索" : category === "company" ? "公司库" : category === "ai" ? "AI 生成" : "邮箱发现";
+function leadCategoryText(provider: Pick<LeadProviderStatus, "category" | "capabilities">) {
+  if (provider.capabilities.includes("procurement")) return "采购机会";
+  return provider.category === "web" ? "Web搜索" : provider.category === "company" ? "公司库" : provider.category === "ai" ? "AI 生成" : "邮箱发现";
+}
+
+function leadSourceBlockedMessage(blocked: BlockedLeadSource[]) {
+  const labels = blocked.map((item) => state.leadProviders.find((provider) => provider.id === item.id)?.name || item.id);
+  if (blocked.some((item) => item.id === "ai_search" && item.reason === "not_ready")) {
+    return "AI 搜索尚未配置，请先在 AI 模型配置中启用模型并勾选“自动获客”";
+  }
+  if (blocked.some((item) => item.reason === "missing")) {
+    return `数据源状态已变化，请重新选择：${labels.join("、")}`;
+  }
+  if (blocked.some((item) => item.reason === "disabled")) {
+    return `所选数据源已停用，请先重新启用：${labels.join("、")}`;
+  }
+  if (blocked.some((item) => item.reason === "not_executable")) {
+    return `所选来源仅支持导入或人工检索，不能直接执行：${labels.join("、")}`;
+  }
+  return `所选数据源尚未配置：${labels.join("、")}`;
 }
 
 function renderLeadSourceChips() {
   const box = qs<HTMLElement>("#leadSourceChips");
   if (!box) return;
-  if (!state.leadProviders.length) {
+  const automaticProviders = state.leadProviders.filter((provider) => provider.accessMode === "api");
+  if (!automaticProviders.length) {
     box.innerHTML = `<span class="empty-inline">暂无数据源，点击“数据源中心”配置。</span>`;
     return;
   }
-  box.innerHTML = state.leadProviders.map((provider) => {
-    const selected = state.selectedLeadSources.includes(provider.id);
+  const chipHtml = (provider: LeadProviderStatus) => {
+    const executable = isLeadSourceExecutable(provider);
+    const selected = executable && state.selectedLeadSources.includes(provider.id);
     const isAi = provider.tier === "ai";
-    const cls = `${provider.ready ? (selected ? "ready active" : "ready") : "needkey"}${isAi ? " ai" : ""}`;
+    const cls = `${executable ? (selected ? "ready active" : "ready") : provider.ready ? "disabled" : "needkey"}${isAi ? " ai" : ""}`;
     const stateText = isAi
-      ? (provider.ready ? "已启用" : "未启用")
-      : provider.ready ? (provider.requiresKey ? "已连接" : "内置") : "未配置";
+      ? (!provider.ready ? "未配置" : provider.enabled ? "已启用" : "已停用")
+      : !provider.ready ? "未配置" : !provider.enabled ? "已停用" : provider.requiresKey ? "已连接" : "内置";
     return `<button type="button" class="lead-source-chip ${cls}" data-lead-provider="${escapeHtml(provider.id)}"><span class="dot"></span><span class="ls-chip-name">${escapeHtml(provider.name)}</span><small>${stateText}</small></button>`;
-  }).join("");
+  };
+  const recommended = automaticProviders.filter((provider) => provider.recommended);
+  const moreFree = automaticProviders.filter((provider) =>
+    !provider.recommended && (provider.tier === "free" || provider.tier === "byok_free")
+  );
+  const extended = automaticProviders.filter((provider) =>
+    !provider.recommended && provider.tier !== "free" && provider.tier !== "byok_free"
+  );
+  box.innerHTML = `
+    <div class="lead-source-primary">
+      ${recommended.length ? recommended.map(chipHtml).join("") : `<span class="empty-inline">暂无可用推荐来源。</span>`}
+    </div>
+    ${moreFree.length ? `
+      <details class="lead-source-more">
+        <summary>更多免费来源 <span>${moreFree.length} 个</span></summary>
+        <div class="lead-source-more-grid">${moreFree.map(chipHtml).join("")}</div>
+      </details>` : ""}
+    ${extended.length ? `
+      <details class="lead-source-more lead-source-extended">
+        <summary>扩展与 AI 来源 <span>${extended.length} 个</span></summary>
+        <div class="lead-source-more-grid">${extended.map(chipHtml).join("")}</div>
+      </details>` : ""}
+  `;
   qsa<HTMLButtonElement>("[data-lead-provider]", box).forEach((chip) => {
     chip.addEventListener("click", () => {
       const id = chip.dataset.leadProvider || "";
       const provider = state.leadProviders.find((item) => item.id === id);
       if (!provider) return;
-      if (!provider.ready) {
+      if (!isLeadSourceExecutable(provider)) {
+        if (provider.ready && !provider.enabled) {
+          if (provider.requiresKey) openLeadSourceCenter(id);
+          toast(
+            provider.requiresKey
+              ? `${provider.name} 已停用，请在数据源中心保存并启用`
+              : `${provider.name} 已停用，暂不能用于搜索`,
+            "error"
+          );
+          return;
+        }
         if (id === "ai_search") {
           activateNavView("ai-config", () => {
             qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
@@ -9384,19 +12086,50 @@ function renderLeadSourceChips() {
   });
 }
 
+function leadSourceGroup(provider: LeadProviderStatus) {
+  if (provider.accessMode !== "api") return "assisted";
+  if (provider.capabilities.includes("procurement") || provider.capabilities.includes("business_signal")) return "procurement";
+  if (provider.category === "web" || provider.category === "ai" || provider.category === "email") return "web";
+  return "company";
+}
+
+function leadSourceAccessText(provider: LeadProviderStatus) {
+  if (provider.accessMode === "bulk_file") return "官方文件人工筛选";
+  if (provider.accessMode === "website_controlled") return "官方网页人工检索";
+  if (provider.accessMode === "manual_assisted") return "人工检索并导入";
+  return "";
+}
+
 function leadSourceCardsHtml(focusId?: string) {
-  const cards = state.leadProviders.map((provider) => {
-    const statusCls = !provider.ready ? "warn" : provider.lastTestStatus === "failed" ? "fail" : provider.lastTestStatus === "passed" ? "ok" : "ok";
+  const cardHtml = (provider: LeadProviderStatus) => {
+    const executable = isLeadSourceExecutable(provider);
+    const assisted = provider.accessMode !== "api";
+    const statusCls = assisted ? "manual" : !provider.ready || !provider.enabled ? "warn" : provider.lastTestStatus === "failed" ? "fail" : "ok";
     const isAi = provider.id === "ai_search";
-    const statusText = isAi
-      ? (provider.ready ? (provider.lastTestMessage || "已启用，可作为获客来源") : "未启用，去「AI 模型配置」开启")
-      : !provider.requiresKey
-        ? "内置免费源，无需配置"
-        : provider.ready
+    const statusText = assisted
+      ? `${leadSourceAccessText(provider)}，不参与自动搜索`
+      : isAi
+      ? (!provider.ready
+          ? "未配置，去「AI 模型配置」开启"
+          : !provider.enabled
+            ? "模型已配置，但该来源当前停用"
+            : (provider.lastTestMessage || "已启用，可作为获客来源"))
+      : !provider.ready
+        ? "未配置 API Key"
+        : !provider.enabled
+          ? (provider.requiresKey ? "已保存 Key，但当前停用；点击“保存并启用”恢复" : "该来源当前已停用，暂不能用于搜索")
+          : !provider.requiresKey
+            ? "内置免费源，无需配置"
+            : provider.ready
           ? (provider.lastTestStatus === "passed" ? "已连接并通过测试" : provider.lastTestStatus === "failed" ? `测试失败：${provider.lastTestMessage || "请检查 Key"}` : "已保存 Key，建议点测试连接")
           : "未配置 API Key";
     const caps = provider.capabilities.map((cap) => `<span class="ls-cap">${escapeHtml(cap)}</span>`).join("");
-    const form = isAi ? `
+    const form = assisted ? `
+      <div class="ls-usage">${escapeHtml(provider.costNote)}</div>
+      <div class="ls-form-actions">
+        ${provider.docsUrl ? `<a class="btn" href="${escapeHtml(provider.docsUrl)}" target="_blank" rel="noreferrer">打开官方入口</a>` : ""}
+        <button class="btn primary" type="button" data-ls-import="${escapeHtml(provider.id)}">返回并导入链接</button>
+      </div>` : isAi ? `
       <div class="ls-usage">${escapeHtml(provider.costNote)}</div>
       <div class="ls-form-actions"><button class="btn" type="button" data-ls-ai-config>去 AI 模型配置</button></div>` : provider.requiresKey ? `
       <div class="ls-form">
@@ -9410,18 +12143,34 @@ function leadSourceCardsHtml(focusId?: string) {
         <div class="ls-usage">${escapeHtml(provider.keyHint)}</div>
       </div>` : `<div class="ls-usage">${escapeHtml(provider.costNote)}</div>`;
     return `
-      <div class="ls-card ${provider.ready && provider.requiresKey ? "is-ready" : ""} ${focusId === provider.id ? "is-open" : ""}">
+      <div class="ls-card ${assisted ? "is-assisted" : ""} ${executable && provider.requiresKey ? "is-ready" : ""} ${focusId === provider.id ? "is-open" : ""}">
         <div class="ls-card-top">
-          <div><h4>${escapeHtml(provider.name)}</h4><p>${leadCategoryText(provider.category)} · ${escapeHtml(provider.costNote)}</p></div>
-          <span class="ls-tier ${provider.tier}">${leadTierText(provider.tier)}</span>
+          <div><h4>${escapeHtml(provider.name)}</h4><p>${leadCategoryText(provider)} · ${escapeHtml(provider.costNote)}</p></div>
+          <span class="ls-tier ${assisted ? "assisted" : provider.tier}">${assisted ? "导入/人工检索" : leadTierText(provider.tier)}</span>
         </div>
         <div class="ls-caps">${caps}</div>
         <div class="ls-status ${statusCls}"><span class="dot"></span>${escapeHtml(statusText)}</div>
         ${form}
-        ${provider.docsUrl ? `<a class="ls-docs" href="${escapeHtml(provider.docsUrl)}" target="_blank" rel="noreferrer">查看官方文档 ↗</a>` : ""}
+        ${!assisted && provider.docsUrl ? `<a class="ls-docs" href="${escapeHtml(provider.docsUrl)}" target="_blank" rel="noreferrer">查看官方文档 ↗</a>` : ""}
       </div>`;
+  };
+  const groups = [
+    { id: "web", title: "Web 搜索", note: "官网发现、公开网页和联系人补充" },
+    { id: "company", title: "企业核验", note: "官方企业、机构、资质与身份记录" },
+    { id: "procurement", title: "采购信号", note: "政府采购、授标和公开商机" },
+    { id: "assisted", title: "导入/人工情报", note: "仅使用官方入口人工核实，取得企业或结果链接后返回解析" }
+  ];
+  const content = groups.map((group) => {
+    const providers = state.leadProviders.filter((provider) => leadSourceGroup(provider) === group.id);
+    if (!providers.length) return "";
+    return `
+      <section class="ls-group">
+        <div class="ls-group-head"><div><h3>${group.title}</h3><p>${group.note}</p></div><span>${providers.length} 个来源</span></div>
+        <div class="ls-grid">${providers.map(cardHtml).join("")}</div>
+      </section>
+    `;
   }).join("");
-  return `<p class="ls-center-intro">免费源无需配置即可使用；付费/自带 Key 源在此粘贴 API Key、测试连接后即可在搜客中启用。Key 仅本人可见，页面不回显明文。</p><div class="ls-grid">${cards}</div>`;
+  return `<p class="ls-center-intro">推荐来源默认启用；需要 Key 的免费源可在此配置。人工情报入口不会加入自动任务，核实后的企业或结果链接可返回获客页面解析；Key 仅本人可见且页面不回显明文。</p>${content}`;
 }
 
 function bindLeadSourceCards() {
@@ -9430,6 +12179,19 @@ function bindLeadSourceCards() {
   qsa<HTMLButtonElement>("[data-ls-save]", modal).forEach((button) => button.addEventListener("click", () => void saveLeadSourceConfig(button.dataset.lsSave || "", button)));
   qsa<HTMLButtonElement>("[data-ls-test]", modal).forEach((button) => button.addEventListener("click", () => void testLeadSourceConfig(button.dataset.lsTest || "", button)));
   qsa<HTMLButtonElement>("[data-ls-delete]", modal).forEach((button) => button.addEventListener("click", () => void deleteLeadSourceConfig(button.dataset.lsDelete || "", button)));
+  qsa<HTMLButtonElement>("[data-ls-import]", modal).forEach((button) => {
+    button.addEventListener("click", () => {
+      const provider = state.leadProviders.find((item) => item.id === button.dataset.lsImport);
+      closeModal();
+      activateNavView("lead-finder", () => {
+        qs<HTMLDetailsElement>(".lead-advanced-settings")?.setAttribute("open", "true");
+        const input = qs<HTMLTextAreaElement>("#leadFinderUrlInput");
+        input?.scrollIntoView({ behavior: "smooth", block: "center" });
+        input?.focus();
+        toast(`已返回链接导入入口，请粘贴从${provider?.name || "该来源"}核实到的企业或结果链接`);
+      });
+    });
+  });
   qs<HTMLButtonElement>("[data-ls-ai-config]", modal)?.addEventListener("click", () => {
     closeModal();
     activateNavView("ai-config", () => {
@@ -9447,8 +12209,9 @@ function openLeadSourceCenter(focusId?: string) {
 function refreshLeadSourceCenter(providers?: LeadProviderStatus[]) {
   if (providers) state.leadProviders = providers;
   if (!state.leadSourceSelectionTouched) {
-    // AI 搜索按 token 计费，默认不自动勾选，由用户按需开启
-    state.selectedLeadSources = state.leadProviders.filter((item) => item.ready && item.enabled && item.id !== "ai_search").map((item) => item.id);
+    state.selectedLeadSources = state.leadProviders
+      .filter((item) => item.id !== "ai_search" && item.recommended && isLeadSourceExecutable(item))
+      .map((item) => item.id);
   }
   renderLeadSourceChips();
   const modal = qs<HTMLElement>("#appModal");
@@ -9478,9 +12241,17 @@ async function saveLeadSourceConfig(providerId: string, button?: HTMLButtonEleme
       body: JSON.stringify({ provider: providerId, apiKey: key, enabled: true })
     });
     state.leadSourceSelectionTouched = true;
-    if (!state.selectedLeadSources.includes(providerId)) state.selectedLeadSources = [...state.selectedLeadSources, providerId];
     refreshLeadSourceCenter(result.providers);
-    toast(`已保存并启用：${provider?.name || providerId}`);
+    const nextProvider = state.leadProviders.find((item) => item.id === providerId);
+    if (isLeadSourceExecutable(nextProvider)) {
+      if (!state.selectedLeadSources.includes(providerId)) state.selectedLeadSources = [...state.selectedLeadSources, providerId];
+      renderLeadSourceChips();
+      toast(`已保存并启用：${provider?.name || providerId}`);
+    } else {
+      state.selectedLeadSources = state.selectedLeadSources.filter((item) => item !== providerId);
+      renderLeadSourceChips();
+      toast(`${provider?.name || providerId} 已保存，但来源目录当前停用`, "error");
+    }
   } catch (error) {
     toast(error instanceof Error ? error.message : "保存失败", "error");
   } finally {
@@ -9500,12 +12271,24 @@ async function testLeadSourceConfig(providerId: string, button?: HTMLButtonEleme
     if (provider?.requiresKey && key) {
       await api("/api/lead-finder/source-config", { method: "POST", body: JSON.stringify({ provider: providerId, apiKey: key, enabled: true }) });
     }
-    const result = await api<{ ok: boolean; message: string; usage: string; providers: LeadProviderStatus[] }>("/api/lead-finder/source-config/test", {
+    const result = await api<{
+      ok: boolean;
+      message: string;
+      usage: string;
+      errorCode: string;
+      retryable: boolean;
+      retryAfterAt: string | null;
+      providers: LeadProviderStatus[];
+    }>("/api/lead-finder/source-config/test", {
       method: "POST",
       body: JSON.stringify({ provider: providerId })
     });
     refreshLeadSourceCenter(result.providers);
-    toast(result.message + (result.usage ? ` · ${result.usage}` : ""), result.ok ? "ok" : "error");
+    const retryAt = result.retryAfterAt ? new Date(result.retryAfterAt) : null;
+    const retryHint = retryAt && !Number.isNaN(retryAt.getTime())
+      ? ` · ${retryAt.toLocaleString("zh-CN", { hour12: false })} 后可重试`
+      : result.retryable ? " · 可稍后重试" : "";
+    toast(result.message + (result.usage ? ` · ${result.usage}` : "") + retryHint, result.ok ? "ok" : "error");
   } catch (error) {
     toast(error instanceof Error ? error.message : "测试失败", "error");
   } finally {
@@ -9548,7 +12331,7 @@ function leadSourceTag(item: WebsiteOpportunity) {
   const provider = state.leadProviders.find((p) => p.id === item.source);
   const tier = provider?.tier || "byok_free";
   const label = item.sourceLabel || provider?.name || item.source || "来源";
-  return `<span class="lead-src-tag ${tier}">${escapeHtml(label)}</span>`;
+  return `<span class="lead-src-tag ${tier}" title="${escapeHtml(label)}">${escapeHtml(label)}</span>`;
 }
 
 const leadFinderPageSize = 10;
@@ -9563,7 +12346,7 @@ function updateLeadFinderSelectionCount() {
 
 function setLeadFinderSelected(id: string, selected: boolean) {
   const item = state.websiteOpportunities.find((row) => row.id === id);
-  if (!item || item.status === "synced" || leadFinderDuplicateState(item).text === "已有客户") return;
+  if (!item || !["contactable", "contacted"].includes(item.status) || leadFinderDuplicateState(item).text === "已有客户") return;
   item.selected = selected;
   qsa<HTMLInputElement>(`[data-lead-select][data-lead-select-id="${CSS.escape(id)}"]`).forEach((input) => {
     input.checked = selected;
@@ -9574,17 +12357,17 @@ function setLeadFinderSelected(id: string, selected: boolean) {
 function leadFinderMobileCard(item: WebsiteOpportunity) {
   const score = leadFinderScore(item);
   const duplicate = leadFinderDuplicateState(item);
-  const disabled = item.status === "synced" || duplicate.text === "已有客户";
+  const disabled = !["contactable", "contacted"].includes(item.status) || duplicate.text === "已有客户";
+  const status = prospectStatusMeta(item);
   return `
     <article class="lead-mobile-card ${state.selectedLeadFinderId === item.id ? "selected" : ""}" data-lead-mobile-id="${escapeHtml(item.id)}">
       <div class="lead-mobile-card-head">
         <input type="checkbox" data-lead-select data-lead-select-id="${escapeHtml(item.id)}" ${item.selected ? "checked" : ""} ${disabled ? "disabled" : ""} aria-label="选择 ${escapeHtml(item.company)}">
-        <div><h3>${escapeHtml(item.company)}</h3><p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website) || "官网待补")}</p></div>
+        <div><h3><button type="button" class="lead-company-link" data-lead-company-open="${escapeHtml(item.id)}">${escapeHtml(item.company)}</button></h3><p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website) || "官网待补")}</p></div>
         <span class="lead-mobile-score">${score}</span>
       </div>
-      <div class="lead-mobile-meta">${leadSourceTag(item)}${badge(item.status === "synced" ? "已同步" : "待确认", item.status === "synced" ? "green" : "amber")}${badge(duplicate.text, duplicate.tone)}</div>
+      <div class="lead-mobile-meta">${leadSourceTag(item)}${badge(status.label, status.tone)}${badge(duplicate.text, duplicate.tone)}</div>
       <div class="lead-mobile-contact">${escapeHtml(item.business || "业务待维护")}<br>${escapeHtml(item.contactInfo || item.contact || "联系方式待补齐")}</div>
-      <button class="btn lead-mobile-open" type="button" data-lead-mobile-open="${escapeHtml(item.id)}">查看核验信息</button>
     </article>
   `;
 }
@@ -9622,11 +12405,11 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
   if (pending) pending.textContent = String(sortedAll.filter((item) => item.status !== "synced").length);
   if (synced) synced.textContent = String(sortedAll.filter((item) => item.status === "synced").length);
   if (aiState) aiState.textContent = ready ? "AI" : "规则";
-  if (aiSub) aiSub.textContent = ready ? `${state.aiConfig?.model || "已配置"} 可用于解析` : "未启用或未授权自动获客时使用规则解析";
+  if (aiSub) aiSub.textContent = ready ? `${state.aiConfig?.model || "已配置"} 可用于授权来源归纳` : "未启用 AI 时使用授权来源字段归纳";
   [aiBadge, sourceAiBadge].forEach((node) => {
     if (!node) return;
     node.className = `badge ${ready ? "green" : ""}`;
-    node.textContent = ready ? "AI已配置" : "规则解析";
+    node.textContent = ready ? "AI已配置" : "来源归纳";
   });
   const useAi = qs<HTMLInputElement>("#leadFinderUseAiInput");
   if (useAi) useAi.disabled = !ready;
@@ -9638,18 +12421,19 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
     const score = leadFinderScore(item);
     const duplicate = leadFinderDuplicateState(item);
     const selected = state.selectedLeadFinderId === item.id;
-    const disabled = item.status === "synced" || duplicate.text === "已有客户";
+    const disabled = !["contactable", "contacted"].includes(item.status) || duplicate.text === "已有客户";
+    const status = prospectStatusMeta(item);
     return `
       <tr data-lead-id="${escapeHtml(item.id)}" class="${selected ? "selected" : ""}">
         <td><input type="checkbox" data-lead-select data-lead-select-id="${escapeHtml(item.id)}" ${item.selected ? "checked" : ""} ${disabled ? "disabled" : ""}></td>
-        <td class="lead-company-cell" data-lead-pick><div class="lead-cell-title"><input data-lead-field="company" value="${escapeHtml(item.company)}"><a href="${escapeHtml(normalizeWebsiteLink(item.website))}" target="_blank" rel="noreferrer" class="lead-cell-domain">${escapeHtml(websiteDomain(item.website) || "官网待补")}</a></div><input type="hidden" data-lead-field="website" value="${escapeHtml(item.website)}"><input type="hidden" data-lead-field="description" value="${escapeHtml(item.description)}"></td>
+        <td class="lead-company-cell"><div class="lead-cell-title"><button type="button" class="lead-company-link" data-lead-company-open="${escapeHtml(item.id)}">${escapeHtml(item.company)}</button><a href="${escapeHtml(normalizeWebsiteLink(item.website))}" target="_blank" rel="noreferrer" class="lead-cell-domain">${escapeHtml(websiteDomain(item.website) || "官网待补")}</a></div><input type="hidden" data-lead-field="company" value="${escapeHtml(item.company)}"><input type="hidden" data-lead-field="website" value="${escapeHtml(item.website)}"><input type="hidden" data-lead-field="description" value="${escapeHtml(item.description)}"></td>
         <td>${leadSourceTag(item)}</td>
         <td><input data-lead-field="business" value="${escapeHtml(item.business)}"></td>
         <td><input data-lead-field="country" value="${escapeHtml(item.country)}"></td>
         <td><input data-lead-field="contact" value="${escapeHtml(item.contact)}"></td>
         <td><input data-lead-field="contactInfo" value="${escapeHtml(item.contactInfo)}"></td>
         <td><div class="lead-score"><b>${score}</b><i style="--p:${score}%"></i></div></td>
-        <td class="lead-status-cell">${badge(item.status === "synced" ? "已同步" : "待确认", item.status === "synced" ? "green" : "amber")}${badge(duplicate.text, duplicate.tone)}${badge(item.parseMode === "ai" ? "AI" : "规则", item.parseMode === "ai" ? "green" : "")}</td>
+        <td class="lead-status-cell">${badge(status.label, status.tone)}${badge(duplicate.text, duplicate.tone)}${badge(item.parseMode === "reference" ? "链接" : item.parseMode === "ai" ? "AI" : "规则", item.parseMode === "ai" ? "green" : "")}</td>
       </tr>
     `;
   }).join("") : `<tr><td colspan="9" class="empty-cell">暂无候选客户。填写画像、选好数据源后点击“生成并运行任务”。</td></tr>`;
@@ -9667,21 +12451,16 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
     qsa<HTMLInputElement | HTMLTextAreaElement>("[data-lead-field]", row).forEach((field) => {
       field.addEventListener("input", () => syncLeadRowFields(row));
     });
-    row.addEventListener("click", (event) => {
-      if ((event.target as HTMLElement).matches("input, textarea")) return;
-      syncLeadRowFields(row);
-      state.selectedLeadFinderId = row.dataset.leadId || null;
-      renderLeadFinder(state.websiteOpportunities);
-    });
   });
   qsa<HTMLInputElement>("[data-lead-select]").forEach((input) => {
     input.addEventListener("change", () => setLeadFinderSelected(input.dataset.leadSelectId || "", input.checked));
   });
-  qsa<HTMLButtonElement>("[data-lead-mobile-open]").forEach((button) => {
+  qsa<HTMLButtonElement>("[data-lead-company-open]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.selectedLeadFinderId = button.dataset.leadMobileOpen || null;
-      qs<HTMLDetailsElement>(".lead-inline-detail")?.setAttribute("open", "true");
-      renderLeadFinder(state.websiteOpportunities);
+      const item = state.websiteOpportunities.find((row) =>
+        row.id === button.dataset.leadCompanyOpen
+      );
+      if (item) openLeadFinderVerificationDrawer(item);
     });
   });
   updateLeadFinderSelectionCount();
@@ -9690,20 +12469,174 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
   renderLeadFinderJobs();
 }
 
+function leadFinderValues(selector: string) {
+  return (qs<HTMLInputElement>(selector)?.value.trim() || "")
+    .split(/,|，|\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+async function launchProspectRunFromLeadFinder(
+  sources: string[],
+  limit: number
+): Promise<LeadFinderLaunchResult> {
+  const products = leadFinderValues("#leadProductKeywords");
+  const markets = leadFinderValues("#leadCountries");
+  const industries = leadFinderValues("#leadIndustryInput");
+  const exclusions = leadFinderValues("#leadExcludeKeywords");
+  const customerType = qs<HTMLSelectElement>("#leadCustomerTypes")?.value.trim() || "";
+  const goalInput = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim() || "";
+  if (!products.length) throw new Error("请先填写产品关键词");
+  if (!markets.length) throw new Error("请先填写目标国家或地区");
+  if (!customerType) throw new Error("请先选择客户类型");
+  const goal = goalInput || `开发${markets.join("、")}市场的${products.join("、")}${customerType}`;
+  const normalizedSources = [...new Set(sources.map((source) => source.trim().toLocaleLowerCase("en-US")).filter(Boolean))];
+  const campaignResult = await api<{
+    campaign: ProspectCampaignApiRecord;
+  }>("/api/prospect-campaigns", {
+    method: "POST",
+    body: JSON.stringify({
+      name: currentLeadFinderTitle(),
+      snapshot: {
+        goal,
+        products,
+        markets,
+        customerTypes: [customerType],
+        applicationScenarios: industries.length ? industries : [customerType],
+        icpRules: goalInput ? [goalInput] : [],
+        exclusionRules: exclusions,
+        sourceProviderIds: normalizedSources
+      }
+    })
+  });
+  const campaign = campaignResult.campaign;
+  const strategies = await api<{ strategies: ProspectStrategyApiRecord[] }>(
+    `/api/prospect-campaigns/${encodeURIComponent(campaign.id)}/strategies`
+  );
+  const defaultStrategy = strategies.strategies.find((strategy) =>
+    strategy.status === "draft" && strategy.campaignVersion === campaign.currentVersion
+  );
+  if (!defaultStrategy) throw new Error("系统未生成可用的默认搜索策略");
+  const updatedStrategy = await api<{ strategy: ProspectStrategyApiRecord }>(
+    `/api/prospect-strategies/${encodeURIComponent(defaultStrategy.id)}`,
+    {
+      method: "PATCH",
+      headers: { "If-Match": `"${defaultStrategy.id}:${defaultStrategy.revision}"` },
+      body: JSON.stringify({
+        name: `${currentLeadFinderTitle()} · 自动策略`,
+        query: {
+          keywordMode: "campaign_products",
+          positiveKeywords: [],
+          synonyms: [],
+          industryTerms: industries,
+          purchaseScenarioTerms: industries,
+          countryMode: "campaign_markets",
+          countries: [],
+          languages: [],
+          customerTypeMode: "campaign_customer_types",
+          customerTypes: [],
+          exclusionKeywords: exclusions,
+          exclusionDomains: [],
+          timeWindow: { mode: "all", from: "", to: "" }
+        },
+        providerPlan: normalizedSources.map((providerId, index) => ({
+          providerId,
+          priority: index + 1,
+          pageLimit: 1,
+          resultLimit: Math.max(1, Math.min(1000, limit)),
+          budgetLimit: null,
+          currency: ""
+        })),
+        reason: "由自动搜客页面生成"
+      })
+    }
+  );
+  const approvedStrategy = await api<{ strategy: ProspectStrategyApiRecord }>(
+    `/api/prospect-strategies/${encodeURIComponent(updatedStrategy.strategy.id)}/approve`,
+    {
+      method: "POST",
+      headers: { "If-Match": `"${updatedStrategy.strategy.id}:${updatedStrategy.strategy.revision}"` },
+      body: JSON.stringify({ reason: "业务员确认搜客条件并启动" })
+    }
+  );
+  await api(`/api/prospect-campaigns/${encodeURIComponent(campaign.id)}/activate`, {
+    method: "POST",
+    headers: { "If-Match": `"${campaign.id}:${campaign.revision}"` },
+    body: JSON.stringify({})
+  });
+  const runResult = await api<ProspectRunDetailApiResponse>(
+    `/api/prospect-strategies/${encodeURIComponent(approvedStrategy.strategy.id)}/runs`,
+    {
+      method: "POST",
+      headers: {
+        "If-Match": `"${approvedStrategy.strategy.id}:${approvedStrategy.strategy.revision}"`,
+        "Idempotency-Key": `lead-finder:${crypto.randomUUID()}`
+      },
+      body: JSON.stringify({ reason: "自动搜客页面立即运行" })
+    }
+  );
+  if (!qs<HTMLInputElement>("#leadFinderScheduleInput")?.checked) {
+    return runResult;
+  }
+  try {
+    const scheduleResult = await api<{ schedule: ProspectScheduleApiRecord }>(
+      `/api/prospect-strategies/${encodeURIComponent(approvedStrategy.strategy.id)}/schedules`,
+      {
+        method: "POST",
+        headers: {
+          "If-Match": `"${approvedStrategy.strategy.id}:${approvedStrategy.strategy.revision}"`
+        },
+        body: JSON.stringify({
+          frequency: qs<HTMLSelectElement>("#leadFinderScheduleFrequency")?.value || "weekly",
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai",
+          recurringCostApproved: Boolean(
+            qs<HTMLInputElement>("#leadFinderRecurringCostInput")?.checked
+          )
+        })
+      }
+    );
+    return { ...runResult, schedule: scheduleResult.schedule };
+  } catch (error) {
+    return {
+      ...runResult,
+      scheduleError: error instanceof Error ? error.message : "定期计划创建失败"
+    };
+  }
+}
+
 async function runLeadFinder(button?: HTMLButtonElement) {
   const originalText = button?.textContent || "生成并运行任务";
   const input = qs<HTMLTextAreaElement>("#leadFinderUrlInput");
   const urls = (input?.value || "").split(/\n|,|，/).map((item) => item.trim()).filter(Boolean).slice(0, Number(qs<HTMLSelectElement>("#leadLimit")?.value || 20));
-  const useAi = Boolean(qs<HTMLInputElement>("#leadFinderUseAiInput")?.checked);
+  const useAi = !urls.length && Boolean(qs<HTMLInputElement>("#leadFinderUseAiInput")?.checked);
   renderLeadFinderSearchLinks();
   if (useAi && (!state.aiConfig?.enabled || !state.aiConfig?.hasApiKey || !state.aiConfig?.useLeadFinder)) {
     toast("请先配置并启用 AI 模型，或关闭 AI 解析", "error");
     return;
   }
-  // 选中且已就绪的数据源；未选时用免费源兜底
-  const readySelected = state.selectedLeadSources.filter((id) => state.leadProviders.find((p) => p.id === id)?.ready);
-  const sources = readySelected.length ? readySelected : state.leadProviders.filter((p) => p.ready && !p.requiresKey).map((p) => p.id);
+  let sources: string[] = [];
+  if (!urls.length) {
+    const resolution = resolveLeadSearchSources(
+      state.leadProviders,
+      state.selectedLeadSources,
+      state.leadSourceSelectionTouched
+    );
+    if (resolution.requiresSelection) {
+      toast("请至少选择一个已启用的数据源", "error");
+      return;
+    }
+    if (resolution.blocked.length) {
+      toast(leadSourceBlockedMessage(resolution.blocked), "error");
+      return;
+    }
+    if (!resolution.sources.length) {
+      toast("当前没有可执行的数据源，请先完成配置或启用来源", "error");
+      return;
+    }
+    sources = resolution.sources;
+  }
   const limit = Number(qs<HTMLSelectElement>("#leadLimit")?.value || 12);
+  const scheduleEnabled = Boolean(qs<HTMLInputElement>("#leadFinderScheduleInput")?.checked);
 
   // 计费源成本护栏：付费 API 与 AI 搜索都会产生费用，搜索前确认
   if (!urls.length) {
@@ -9714,46 +12647,49 @@ async function runLeadFinder(button?: HTMLButtonElement) {
         : `· ${p.name}：约 ${Math.min(limit, 15)} 次调用${p.usage ? `（${p.usage}）` : ""}`).join("\n");
       if (!window.confirm(`本次将使用计费数据源：\n${lines}\n\n确认开始搜客吗？`)) return;
     }
+    if (scheduleEnabled
+      && billed.length
+      && !qs<HTMLInputElement>("#leadFinderRecurringCostInput")?.checked) {
+      toast("定期任务包含计费或 AI 数据源，请单独勾选持续费用确认", "error");
+      return;
+    }
   }
 
-  const job = createLeadFinderJob("running");
+  let job: LeadFinderJob | null = null;
   if (button) {
     button.disabled = true;
     button.classList.add("is-running");
-    button.textContent = useAi ? "AI搜客中" : "搜客任务运行中";
+    button.textContent = urls.length ? "正在登记链接" : "正在创建任务";
   }
   try {
     if (!urls.length) {
-      const result = await api<{ opportunities: WebsiteOpportunity[]; sourceStats: Array<{ id: string; name: string; count: number; error?: string; usage?: string }>; skipped: string[] }>("/api/lead-finder/search", {
-        method: "POST",
-        body: JSON.stringify({
-          goal: qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim() || "",
-          productKeywords: qs<HTMLInputElement>("#leadProductKeywords")?.value.trim() || "",
-          countries: qs<HTMLInputElement>("#leadCountries")?.value.trim() || "",
-          industry: qs<HTMLInputElement>("#leadIndustryInput")?.value.trim() || "",
-          customerType: qs<HTMLSelectElement>("#leadCustomerTypes")?.value || "",
-          excludeKeywords: qs<HTMLInputElement>("#leadExcludeKeywords")?.value.trim() || "",
-          sources,
-          useAi,
-          limit
-        })
-      });
-      const existing = state.websiteOpportunities
-        .filter((item) => !result.opportunities.some((next) => next.website === item.website || next.company === item.company))
-        .map((item) => ({ ...item, selected: false }));
-      state.websiteOpportunities = [...result.opportunities.map((item) => ({ ...item, selected: false })), ...existing];
-      state.leadFinderPage = 1;
-      state.selectedLeadFinderId = result.opportunities[0]?.id || state.selectedLeadFinderId;
-      updateLeadFinderJob(job.id, result.opportunities.map((item) => item.id), result.opportunities.length ? "done" : "needs_input");
-      renderLeadFinder(state.websiteOpportunities);
-      renderProspectList();
-      const statLine = result.sourceStats.filter((item) => item.count || item.error).map((item) => `${item.name} ${item.error ? "✕" : item.count}`).join(" · ");
-      toast(result.opportunities.length ? `已找到 ${result.opportunities.length} 条候选（${statLine || "多源合并"}）` : `本次未命中${result.skipped.length ? `；未配置：${result.skipped.join("、")}` : "，可放宽条件或增加数据源"}`, result.opportunities.length ? "ok" : "error");
+      const result = await launchProspectRunFromLeadFinder(sources, limit);
+      const backendJob = prospectRunJob(result);
+      leadFinderJobs = [backendJob, ...leadFinderJobs.filter((item) => item.backendRunId !== backendJob.backendRunId)]
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+        .slice(0, 6);
+      renderLeadFinderJobs();
+      if (result.schedule) {
+        state.prospectSchedules = [
+          result.schedule,
+          ...state.prospectSchedules.filter((item) => item.id !== result.schedule?.id)
+        ];
+        renderProspectSchedules();
+      }
+      syncLeadFinderRunPolling();
+      if (result.scheduleError) {
+        toast(`即时获客任务已创建，但定期计划未创建：${result.scheduleError}`, "error");
+      } else {
+        toast(result.schedule
+          ? `获客任务已创建，定期计划将在${prospectScheduleFrequencyLabel(result.schedule.frequency)}继续运行`
+          : `获客任务已创建，${result.shards.length} 个数据源正在后台执行`);
+      }
       return;
     }
+    job = createLeadFinderJob("running");
     const result = await api<{ opportunities: WebsiteOpportunity[] }>("/api/tools/website-scrape/preview", {
       method: "POST",
-      body: JSON.stringify({ urls, useAi })
+      body: JSON.stringify({ urls })
     });
     const existing = state.websiteOpportunities
       .filter((item) => !result.opportunities.some((next) => next.website === item.website))
@@ -9765,10 +12701,10 @@ async function runLeadFinder(button?: HTMLButtonElement) {
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
-    toast(`已生成 ${result.opportunities.length} 条候选客户`);
+    toast(`已登记 ${result.opportunities.length} 个官网链接，未访问企业网页`);
   } catch (error) {
-    updateLeadFinderJob(job.id, [], "needs_input");
-    throw error;
+    if (job) updateLeadFinderJob(job.id, [], "failed");
+    toast(`搜客任务失败：${error instanceof Error ? error.message : "请检查网络后重试"}`, "error");
   } finally {
     if (button) {
       button.disabled = false;
@@ -9781,7 +12717,7 @@ async function runLeadFinder(button?: HTMLButtonElement) {
 async function syncLeadFinderRows(button?: HTMLButtonElement) {
   const opportunities = collectLeadFinderRows();
   if (!opportunities.length) {
-    toast("请至少勾选一条候选客户", "error");
+    toast("请先核验候选并标记为可联系，再勾选加入线索", "error");
     return;
   }
   const selectedItems = state.websiteOpportunities.filter((item) => opportunities.some((row) => row.id === item.id));
@@ -9792,7 +12728,7 @@ async function syncLeadFinderRows(button?: HTMLButtonElement) {
     return;
   }
   const owner = state.user?.name || "当前账号";
-  const sourceSummary = [...new Set(selectedItems.map((item) => item.sourceLabel || item.source || "官网导入"))].join("、");
+  const sourceSummary = [...new Set(selectedItems.map((item) => item.sourceLabel || item.source || "链接登记"))].join("、");
   if (!window.confirm([
     `确认将 ${opportunities.length} 条候选加入线索中心？`,
     `来源：${sourceSummary}`,
@@ -9824,6 +12760,8 @@ async function syncLeadFinderRows(button?: HTMLButtonElement) {
     const duplicateCount = result.created.filter((item) => item.duplicate).length;
     const createdCount = result.created.length - duplicateCount;
     toast(`线索处理完成：新建 ${createdCount} 条，重复 ${duplicateCount} 条`);
+  } catch (error) {
+    toast(`加入线索失败：${error instanceof Error ? error.message : "请检查网络后重试"}`, "error");
   } finally {
     if (button) {
       button.disabled = false;
@@ -9868,6 +12806,8 @@ async function createLeadFinderTodos(button?: HTMLButtonElement) {
     updateTodoChips(state.todos);
     renderTopbarStats();
     toast(`已生成 ${created.length} 条首个跟进待办`);
+  } catch (error) {
+    toast(`生成待办失败：${error instanceof Error ? error.message : "请检查网络后重试"}`, "error");
   } finally {
     if (button) {
       button.disabled = false;
@@ -9900,26 +12840,21 @@ function exportLeadFinderRows() {
   toast("搜客结果已导出");
 }
 
-async function parseWebsiteOpportunities(button?: HTMLButtonElement) {
+async function registerWebsiteReferences(button?: HTMLButtonElement) {
   const input = qs<HTMLTextAreaElement>("#websiteUrlInput");
   const urls = (input?.value || "").split(/\n|,|，/).map((item) => item.trim()).filter(Boolean);
-  const useAi = Boolean(qs<HTMLInputElement>("#websiteUseAiInput")?.checked);
   if (!urls.length) {
     toast("请先粘贴官网地址", "error");
     return;
   }
-  if (useAi && (!state.aiConfig?.enabled || !state.aiConfig?.hasApiKey || !state.aiConfig?.useWebsiteParse)) {
-    toast("请先保存并启用 AI 配置，或关闭本次 AI 解析", "error");
-    return;
-  }
   if (button) {
     button.disabled = true;
-    button.textContent = useAi ? "AI解析中" : "解析中";
+    button.textContent = "正在登记链接";
   }
   try {
     const result = await api<{ opportunities: WebsiteOpportunity[] }>("/api/tools/website-scrape/preview", {
       method: "POST",
-      body: JSON.stringify({ urls, useAi })
+      body: JSON.stringify({ urls })
     });
     const existing = state.websiteOpportunities
       .filter((item) => !result.opportunities.some((next) => next.website === item.website))
@@ -9928,11 +12863,13 @@ async function parseWebsiteOpportunities(button?: HTMLButtonElement) {
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
-    toast(`${useAi ? "AI增强" : "规则"}已解析 ${result.opportunities.length} 个官网`);
+    toast(`已登记 ${result.opportunities.length} 个官网链接，未访问企业网页`);
+  } catch (error) {
+    toast(`链接登记失败：${error instanceof Error ? error.message : "请检查网址格式后重试"}`, "error");
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "解析官网";
+      button.textContent = "登记链接";
     }
   }
 }
@@ -9964,6 +12901,8 @@ async function syncWebsiteOpportunities(button?: HTMLButtonElement) {
     renderLeads();
     requestDashboardRefresh();
     toast(`已加入 ${result.created.length} 条线索`);
+  } catch (error) {
+    toast(`加入线索失败：${error instanceof Error ? error.message : "请检查网络后重试"}`, "error");
   } finally {
     if (button) {
       button.disabled = false;
@@ -11067,10 +14006,430 @@ async function saveReportNote() {
   toast("汇报备注已保存");
 }
 
+function localDateValue(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function collaborationDate(value: string) {
+  if (!value) return "日期待确认";
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isFinite(date.getTime())
+    ? date.toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "short" })
+    : value;
+}
+
+function collaborationDateTime(value: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime())
+    ? date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
+    : value;
+}
+
+function collaborationAvatar(user?: CollaborationUser) {
+  return `<span class="collab-avatar">${escapeHtml(user?.avatar || user?.name?.slice(0, 2) || "--")}</span>`;
+}
+
+function updateInternalMessageBadge() {
+  const unread = Math.max(0, state.internalUnreadCount);
+  const bell = qs<HTMLButtonElement>("#notificationBellButton");
+  const bellBadge = qs<HTMLElement>("#notificationBellBadge");
+  const count = qs<HTMLElement>("#inboxUnreadCount");
+  if (count) count.textContent = String(unread);
+  if (bell) {
+    bell.classList.toggle("has-unread", unread > 0);
+    bell.title = unread ? `消息通知，${unread} 条未读` : "消息通知";
+    bell.setAttribute("aria-label", bell.title);
+  }
+  if (bellBadge) {
+    bellBadge.hidden = unread === 0;
+    bellBadge.textContent = unread > 99 ? "99+" : String(unread);
+  }
+}
+
+function renderDailyReports() {
+  const list = qs<HTMLElement>("#dailyReportList");
+  const detail = qs<HTMLElement>("#dailyReportDetail");
+  const count = qs<HTMLElement>("#dailyReportListCount");
+  const ownerFilter = qs<HTMLSelectElement>("#dailyReportOwnerFilter");
+  const ownerWrap = qs<HTMLElement>("#dailyReportOwnerFilterWrap");
+  const kpis = qs<HTMLElement>("#dailyReportKpis");
+  if (!list || !detail) return;
+
+  if (ownerWrap) ownerWrap.hidden = !state.dailyReportCanViewTeam;
+  if (ownerFilter) {
+    ownerFilter.innerHTML = `<option value="">全部成员</option>${state.dailyReportOwners.map((owner) =>
+      `<option value="${escapeHtml(owner.id)}">${escapeHtml(owner.name)} · ${escapeHtml(roleLabel[owner.role])}</option>`
+    ).join("")}`;
+    ownerFilter.value = state.dailyReportOwnerId;
+  }
+  setFieldValue("#dailyReportFromInput", state.dailyReportFrom);
+  setFieldValue("#dailyReportToInput", state.dailyReportTo);
+  if (count) count.textContent = `${state.dailyReports.length} 份`;
+
+  const now = new Date();
+  const monday = new Date(now);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const weekStart = localDateValue(monday);
+  const weekCount = state.dailyReports.filter((item) => item.reportDate >= weekStart).length;
+  const ownerCount = new Set(state.dailyReports.map((item) => item.ownerId)).size;
+  const commentCount = state.dailyReports.reduce((sum, item) => sum + Number(item.commentCount || 0), 0);
+  if (kpis) {
+    kpis.innerHTML = `
+      <div><span>可见日报</span><b>${state.dailyReports.length}</b><small>当前筛选结果</small></div>
+      <div><span>本周提交</span><b>${weekCount}</b><small>按日报日期统计</small></div>
+      <div><span>提交成员</span><b>${ownerCount}</b><small>当前可见范围</small></div>
+      <div><span>协作评论</span><b>${commentCount}</b><small>评论与回复留痕</small></div>
+    `;
+  }
+
+  list.innerHTML = state.dailyReports.length ? state.dailyReports.map((report) => `
+    <button class="daily-report-row ${report.id === state.selectedDailyReportId ? "active" : ""}" data-daily-report-id="${escapeHtml(report.id)}" type="button">
+      <span class="daily-report-row-top">
+        ${collaborationAvatar(report.owner)}
+        <b>${escapeHtml(report.owner.name)}</b>
+        <time>${escapeHtml(collaborationDate(report.reportDate))}</time>
+      </span>
+      <p>${escapeHtml(report.completedWork || "未填写完成工作")}</p>
+      <span class="daily-report-row-foot"><span>${escapeHtml(report.results || report.customerProgress || "暂无结果摘要")}</span><span>${report.commentCount || 0} 条评论</span></span>
+    </button>
+  `).join("") : `<div class="collab-empty"><b>当前范围暂无日报</b><span>调整日期或成员筛选，也可以提交第一份日报。</span></div>`;
+
+  qsa<HTMLButtonElement>("[data-daily-report-id]", list).forEach((button) => {
+    button.addEventListener("click", () => void loadDailyReportDetail(button.dataset.dailyReportId || ""));
+  });
+
+  if (!state.selectedDailyReportId) {
+    detail.innerHTML = `<div class="collab-empty"><b>选择一份日报</b><span>工作进展、风险和管理反馈会显示在这里。</span></div>`;
+  }
+}
+
+async function refreshDailyReports(showToast = false) {
+  try {
+    const query = new URLSearchParams();
+    if (state.dailyReportFrom) query.set("from", state.dailyReportFrom);
+    if (state.dailyReportTo) query.set("to", state.dailyReportTo);
+    if (state.dailyReportOwnerId) query.set("ownerId", state.dailyReportOwnerId);
+    const result = await api<{ reports: DailyReport[]; owners: CollaborationUser[]; canViewTeam: boolean }>(
+      `/api/daily-reports${query.size ? `?${query.toString()}` : ""}`
+    );
+    state.dailyReports = result.reports;
+    state.dailyReportOwners = result.owners;
+    state.dailyReportCanViewTeam = result.canViewTeam;
+    if (!state.dailyReports.some((item) => item.id === state.selectedDailyReportId)) {
+      state.selectedDailyReportId = state.dailyReports[0]?.id || null;
+      state.dailyReportComments = [];
+    }
+    renderDailyReports();
+    if (state.selectedDailyReportId) await loadDailyReportDetail(state.selectedDailyReportId, false);
+    if (showToast) toast("团队日报已刷新");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "团队日报加载失败", "error");
+  }
+}
+
+function reportSection(title: string, content: string, className = "", full = false) {
+  return `
+    <section class="daily-report-section ${className} ${full ? "full" : ""}">
+      <h3>${escapeHtml(title)}</h3>
+      <p>${escapeHtml(content || "未填写")}</p>
+    </section>
+  `;
+}
+
+function reportCommentHtml(comment: DailyReportComment, comments: DailyReportComment[], depth = 0): string {
+  const children = comments.filter((item) => item.parentId === comment.id);
+  return `
+    <article class="report-comment ${depth ? "reply" : ""}">
+      <div class="report-comment-head">
+        ${collaborationAvatar(comment.author)}
+        <b>${escapeHtml(comment.author.name)} · ${escapeHtml(roleLabel[comment.author.role])}</b>
+        <time>${escapeHtml(collaborationDateTime(comment.createdAt))}</time>
+      </div>
+      <p>${escapeHtml(comment.content)}</p>
+      <div class="report-comment-actions"><button type="button" data-reply-daily-comment="${escapeHtml(comment.id)}">回复</button></div>
+    </article>
+    ${children.map((child) => reportCommentHtml(child, comments, depth + 1)).join("")}
+  `;
+}
+
+function renderDailyReportDetail(report: DailyReport, comments: DailyReportComment[]) {
+  const detail = qs<HTMLElement>("#dailyReportDetail");
+  if (!detail) return;
+  const roots = comments.filter((item) => !item.parentId || !comments.some((candidate) => candidate.id === item.parentId));
+  const canEdit = report.ownerId === state.user?.id;
+  detail.innerHTML = `
+    <div class="collab-detail-head">
+      <div class="collab-author">
+        ${collaborationAvatar(report.owner)}
+        <div>
+          <h2>${escapeHtml(report.owner.name)} · ${escapeHtml(collaborationDate(report.reportDate))}日报</h2>
+          <p>${escapeHtml(roleLabel[report.owner.role])} · 提交于 ${escapeHtml(collaborationDateTime(report.submittedAt))}${report.updatedAt !== report.createdAt ? ` · 最近更新 ${escapeHtml(collaborationDateTime(report.updatedAt))}` : ""}</p>
+        </div>
+      </div>
+      ${canEdit ? `<button class="btn" id="editDailyReportButton" type="button">修改日报</button>` : ""}
+    </div>
+    <div class="daily-report-content">
+      ${reportSection("今日完成工作", report.completedWork, "", true)}
+      ${reportSection("重点客户进展", report.customerProgress)}
+      ${reportSection("结果与数据", report.results)}
+      ${reportSection("风险与阻塞", report.risks, "is-risk")}
+      ${reportSection("下一步计划", report.nextPlan)}
+      ${reportSection("需要协助", report.supportNeeded, "", true)}
+    </div>
+    <section class="report-comments">
+      <div class="report-comments-head"><h3>评论与回复</h3><span class="badge">${comments.length} 条</span></div>
+      <div class="report-comment-list">${roots.length ? roots.map((comment) => reportCommentHtml(comment, comments)).join("") : `<div class="collab-empty" style="min-height:120px"><b>暂无评论</b><span>留下明确反馈，后续回复会自动通知相关成员。</span></div>`}</div>
+      <div class="report-comment-composer">
+        <textarea id="dailyReportCommentInput" placeholder="输入评论、建议或需要确认的问题"></textarea>
+        <button class="btn primary" id="submitDailyReportCommentButton" type="button">发表评论</button>
+      </div>
+    </section>
+  `;
+  qs<HTMLButtonElement>("#editDailyReportButton", detail)?.addEventListener("click", () => openDailyReportModal(report));
+  qs<HTMLButtonElement>("#submitDailyReportCommentButton", detail)?.addEventListener("click", (event) => {
+    const content = qs<HTMLTextAreaElement>("#dailyReportCommentInput", detail)?.value.trim() || "";
+    void submitDailyReportComment(report.id, "", content, event.currentTarget as HTMLButtonElement);
+  });
+  qsa<HTMLButtonElement>("[data-reply-daily-comment]", detail).forEach((button) => {
+    button.addEventListener("click", () => {
+      const comment = comments.find((item) => item.id === button.dataset.replyDailyComment);
+      if (comment) openDailyReportReplyModal(report, comment);
+    });
+  });
+}
+
+async function loadDailyReportDetail(id: string, rerenderList = true) {
+  if (!id) return;
+  const detail = qs<HTMLElement>("#dailyReportDetail");
+  if (detail) detail.innerHTML = `<div class="collab-empty"><b>正在读取日报</b><span>正在加载正文与评论。</span></div>`;
+  try {
+    const result = await api<{ report: DailyReport; comments: DailyReportComment[] }>(`/api/daily-reports/${encodeURIComponent(id)}`);
+    state.selectedDailyReportId = result.report.id;
+    state.dailyReportComments = result.comments;
+    const index = state.dailyReports.findIndex((item) => item.id === result.report.id);
+    if (index >= 0) state.dailyReports[index] = result.report;
+    if (rerenderList) renderDailyReports();
+    renderDailyReportDetail(result.report, result.comments);
+  } catch (error) {
+    if (detail) detail.innerHTML = `<div class="collab-empty"><b>日报读取失败</b><span>${escapeHtml(error instanceof Error ? error.message : "请稍后重试")}</span></div>`;
+  }
+}
+
+function openDailyReportModal(editing?: DailyReport) {
+  if (editing && editing.ownerId !== state.user?.id) {
+    toast("只能修改本人提交的日报", "error");
+    return;
+  }
+  const todayReport = !editing
+    ? state.dailyReports.find((item) => item.ownerId === state.user?.id && item.reportDate === localDateValue())
+    : undefined;
+  const report = editing || todayReport;
+  openModal(report ? "修改日报" : "填写日报", `
+    <div class="form-grid daily-report-form">
+      <div class="form-field"><label>日报日期</label><input id="dailyReportDateInput" type="date" value="${escapeHtml(report?.reportDate || localDateValue())}"></div>
+      <div class="form-field"><label>提交人</label><input value="${escapeHtml(state.user?.name || "")}" disabled></div>
+      <div class="form-field full report-form-primary"><label>今日完成工作（必填）</label><textarea id="dailyReportCompletedInput" placeholder="写清完成事项、推进对象和当前状态">${escapeHtml(report?.completedWork || "")}</textarea></div>
+      <div class="form-field full"><label>重点客户进展</label><textarea id="dailyReportCustomerInput" placeholder="客户、联系人、需求、报价或跟进结论">${escapeHtml(report?.customerProgress || "")}</textarea></div>
+      <div class="form-field"><label>结果与数据</label><textarea id="dailyReportResultsInput" placeholder="询盘、报价、样品、成交金额等可量化结果">${escapeHtml(report?.results || "")}</textarea></div>
+      <div class="form-field"><label>风险与阻塞</label><textarea id="dailyReportRisksInput" placeholder="客户异议、交期、价格、内部协同等风险">${escapeHtml(report?.risks || "")}</textarea></div>
+      <div class="form-field"><label>下一步计划</label><textarea id="dailyReportNextPlanInput" placeholder="下一工作日准备推进的事项">${escapeHtml(report?.nextPlan || "")}</textarea></div>
+      <div class="form-field"><label>需要协助</label><textarea id="dailyReportSupportInput" placeholder="需要主管或团队支持的事项">${escapeHtml(report?.supportNeeded || "")}</textarea></div>
+      <p class="modal-note full">同一账号同一日期再次提交会更新原日报，不会产生重复记录。</p>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDailyReportButton">${report ? "保存更新" : "提交日报"}</button>`);
+  qs<HTMLButtonElement>("#saveDailyReportButton")?.addEventListener("click", (event) => void saveDailyReport(event.currentTarget as HTMLButtonElement));
+}
+
+async function saveDailyReport(button: HTMLButtonElement) {
+  const reportDate = qs<HTMLInputElement>("#dailyReportDateInput")?.value || "";
+  const completedWork = qs<HTMLTextAreaElement>("#dailyReportCompletedInput")?.value.trim() || "";
+  if (!reportDate || !completedWork) {
+    toast("请选择日报日期并填写今日完成工作", "error");
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "提交中";
+  try {
+    const result = await api<{ report: DailyReport; created: boolean }>("/api/daily-reports", {
+      method: "POST",
+      body: JSON.stringify({
+        reportDate,
+        completedWork,
+        customerProgress: qs<HTMLTextAreaElement>("#dailyReportCustomerInput")?.value.trim() || "",
+        results: qs<HTMLTextAreaElement>("#dailyReportResultsInput")?.value.trim() || "",
+        risks: qs<HTMLTextAreaElement>("#dailyReportRisksInput")?.value.trim() || "",
+        nextPlan: qs<HTMLTextAreaElement>("#dailyReportNextPlanInput")?.value.trim() || "",
+        supportNeeded: qs<HTMLTextAreaElement>("#dailyReportSupportInput")?.value.trim() || ""
+      })
+    });
+    closeModal();
+    state.dailyReportFrom = "";
+    state.dailyReportTo = "";
+    state.dailyReportOwnerId = "";
+    state.selectedDailyReportId = result.report.id;
+    await Promise.all([refreshDailyReports(false), refreshInternalMessages(false)]);
+    toast(result.created ? "日报已提交，管理者已收到站内通知" : "日报已更新");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "日报提交失败", "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = "提交日报";
+  }
+}
+
+async function submitDailyReportComment(reportId: string, parentId: string, content: string, button?: HTMLButtonElement) {
+  if (!content) {
+    toast("请输入评论内容", "error");
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "发送中";
+  }
+  try {
+    await api(`/api/daily-reports/${encodeURIComponent(reportId)}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ content, parentId })
+    });
+    closeModal();
+    await Promise.all([loadDailyReportDetail(reportId), refreshInternalMessages(false)]);
+    toast(parentId ? "回复已发送" : "评论已发表");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "评论发送失败", "error");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = parentId ? "发送回复" : "发表评论";
+    }
+  }
+}
+
+function openDailyReportReplyModal(report: DailyReport, comment: DailyReportComment) {
+  openModal(`回复 ${comment.author.name}`, `
+    <div class="form-field full">
+      <label>回复内容</label>
+      <textarea id="dailyReportReplyInput" rows="6" placeholder="针对这条评论继续沟通"></textarea>
+    </div>
+    <p class="modal-note">回复会保留在 ${escapeHtml(collaborationDate(report.reportDate))} 日报下，并通过消息通知提醒对方。</p>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="sendDailyReportReplyButton">发送回复</button>`);
+  qs<HTMLButtonElement>("#sendDailyReportReplyButton")?.addEventListener("click", (event) => {
+    const content = qs<HTMLTextAreaElement>("#dailyReportReplyInput")?.value.trim() || "";
+    void submitDailyReportComment(report.id, comment.id, content, event.currentTarget as HTMLButtonElement);
+  });
+}
+
+function internalMessageActionLabel(message: InternalMessage) {
+  if (message.relatedType === "daily_report" && message.relatedId) return "查看日报";
+  return "查看消息";
+}
+
+function internalMessageIcon(message: InternalMessage) {
+  if (message.relatedType === "daily_report") {
+    return `<svg viewBox="0 0 24 24"><path d="M6 3h12a2 2 0 0 1 2 2v16H4V5a2 2 0 0 1 2-2Z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>`;
+  }
+  return `<svg viewBox="0 0 24 24"><path d="M4 5h16v12H8l-4 4V5Z"/><path d="M8 9h8M8 13h5"/></svg>`;
+}
+
+function showInternalMessage(message: InternalMessage) {
+  openModal("消息详情", `
+    <div class="collab-detail-head">
+      <div class="collab-author">
+        ${collaborationAvatar(message.sender)}
+        <div>
+          <h2>${escapeHtml(message.subject)}</h2>
+          <p>${escapeHtml(message.sender.name)} · ${escapeHtml(roleLabel[message.sender.role])} · ${escapeHtml(collaborationDateTime(message.createdAt))}</p>
+        </div>
+      </div>
+      ${message.type === "system" ? badge("系统通知", "amber") : badge("团队消息", "green")}
+    </div>
+    <div class="inbox-message-content">${escapeHtml(message.content)}</div>
+  `, `<button class="btn primary" data-modal-close>关闭</button>`);
+}
+
+function navigateFromInternalMessage(message: InternalMessage) {
+  if (message.relatedType === "daily_report" && message.relatedId) {
+    state.dailyReportFrom = "";
+    state.dailyReportTo = "";
+    state.dailyReportOwnerId = "";
+    state.selectedDailyReportId = message.relatedId;
+    activateNavView("daily-reports");
+    return;
+  }
+  showInternalMessage(message);
+}
+
+function renderInbox() {
+  const list = qs<HTMLElement>("#inboxMessageList");
+  if (!list) return;
+  updateInternalMessageBadge();
+  list.innerHTML = state.internalMessages.length ? state.internalMessages.map((message) => {
+    const unread = !message.readAt;
+    return `
+      <button class="notification-message-row ${unread ? "unread" : ""}" data-internal-message-id="${escapeHtml(message.id)}" type="button">
+        <span class="notification-message-icon">${internalMessageIcon(message)}</span>
+        <span class="notification-message-body">
+          <span class="notification-message-meta">
+            <strong>${escapeHtml(message.sender.name)} · ${message.type === "system" ? "系统提醒" : "团队消息"}</strong>
+            <time>${escapeHtml(collaborationDateTime(message.createdAt))}</time>
+          </span>
+          <b>${escapeHtml(message.subject)}</b>
+          <p>${escapeHtml(message.content)}</p>
+        </span>
+        <span class="notification-message-action">
+          <span>${internalMessageActionLabel(message)} →</span>
+          <small>${unread ? "未读" : "已读"}</small>
+        </span>
+      </button>
+    `;
+  }).join("") : `<div class="notification-center-empty"><b>暂无消息通知</b><span>日报提交、评论和回复提醒会出现在这里。</span></div>`;
+  qsa<HTMLButtonElement>("[data-internal-message-id]", list).forEach((button) => {
+    button.addEventListener("click", () => void openInternalMessage(button.dataset.internalMessageId || ""));
+  });
+}
+
+async function refreshInternalMessages(showToast = false) {
+  try {
+    const messages = await api<{ messages: InternalMessage[]; unreadCount: number }>("/api/internal-messages?box=inbox");
+    state.internalMessages = messages.messages;
+    state.internalUnreadCount = messages.unreadCount;
+    renderInbox();
+    if (showToast) toast("消息通知已刷新");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "消息通知加载失败", "error");
+  }
+}
+
+async function openInternalMessage(id: string) {
+  const message = state.internalMessages.find((item) => item.id === id);
+  if (!message) return;
+  if (!message.readAt) {
+    try {
+      const result = await api<{ message: InternalMessage }>(`/api/internal-messages/${encodeURIComponent(id)}/read`, { method: "POST" });
+      Object.assign(message, result.message);
+      state.internalUnreadCount = Math.max(0, state.internalUnreadCount - 1);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "消息已打开，但已读状态更新失败", "error");
+    }
+  }
+  renderInbox();
+  navigateFromInternalMessage(message);
+}
+
 function installEvents() {
   ensureUiLayer();
   window.setInterval(refreshVisibleDashboard, DASHBOARD_LIVE_REFRESH_MS);
+  window.setInterval(() => {
+    if (state.user && document.visibilityState === "visible") void refreshInternalMessages(false);
+  }, 30000);
   window.addEventListener("focus", refreshVisibleDashboard);
+  window.addEventListener("focus", () => {
+    if (state.user) void refreshInternalMessages(false);
+  });
   document.addEventListener("visibilitychange", refreshVisibleDashboard);
   window.addEventListener("pagehide", () => {
     const memo = state.memos.find((item) => item.id === state.selectedMemoId);
@@ -11182,6 +14541,7 @@ function installEvents() {
   qs("#customerDrawerBackdrop")?.addEventListener("click", closeCustomerDrawer);
   qs<HTMLButtonElement>("#pipeline .page-head .btn.primary")?.addEventListener("click", () => openDealModal());
   qs("#dealDrawerBackdrop")?.addEventListener("click", closeDealDrawer);
+  qs("#leadFinderVerificationBackdrop")?.addEventListener("click", closeLeadFinderVerificationDrawer);
   qs<HTMLInputElement>("#pipelineSearchInput")?.addEventListener("input", (event) => {
     state.pipelineSearch = (event.currentTarget as HTMLInputElement).value.trim();
     renderPipeline(state.deals);
@@ -11234,6 +14594,25 @@ function installEvents() {
   qs<HTMLButtonElement>("#reportRefreshButton")?.addEventListener("click", () => void refreshExecutiveReport(true));
   qs<HTMLButtonElement>("#reportNoteButton")?.addEventListener("click", openReportNoteModal);
   qs<HTMLButtonElement>("#reportRiskDetailButton")?.addEventListener("click", openReportRiskModal);
+  qs<HTMLButtonElement>("#newDailyReportButton")?.addEventListener("click", () => openDailyReportModal());
+  qs<HTMLButtonElement>("#dailyReportRefreshButton")?.addEventListener("click", () => void refreshDailyReports(true));
+  qs<HTMLButtonElement>("#dailyReportFilterButton")?.addEventListener("click", () => {
+    const from = qs<HTMLInputElement>("#dailyReportFromInput")?.value || "";
+    const to = qs<HTMLInputElement>("#dailyReportToInput")?.value || "";
+    if (from && to && from > to) {
+      toast("开始日期不能晚于结束日期", "error");
+      return;
+    }
+    state.dailyReportFrom = from;
+    state.dailyReportTo = to;
+    state.dailyReportOwnerId = state.dailyReportCanViewTeam ? qs<HTMLSelectElement>("#dailyReportOwnerFilter")?.value || "" : "";
+    state.selectedDailyReportId = null;
+    void refreshDailyReports(false);
+  });
+  qs<HTMLButtonElement>("#inboxRefreshButton")?.addEventListener("click", () => void refreshInternalMessages(true));
+  qs<HTMLButtonElement>("#notificationBellButton")?.addEventListener("click", () => {
+    activateNavView("inbox");
+  });
   qsa<HTMLButtonElement>("#knowledge .page-head .btn, #knowledge .section-head .btn").forEach((button) => {
     if (button.textContent?.includes("上传资料")) button.addEventListener("click", openKnowledgeModal);
     if (button.textContent?.includes("新建类目")) button.addEventListener("click", () => toast("资料类目已新增：新品资料"));
@@ -11269,10 +14648,6 @@ function installEvents() {
   qs<HTMLButtonElement>("#wecom .page-head .btn.primary")?.addEventListener("click", () => void syncWecomMessages());
   qs<HTMLButtonElement>("#aiSaveButton")?.addEventListener("click", (event) => void saveAiConfig(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#aiTestButton")?.addEventListener("click", (event) => void testAiConfig(event.currentTarget as HTMLButtonElement));
-  qs<HTMLInputElement>("#aiEnabledInput")?.addEventListener("change", () => {
-    const useAi = qs<HTMLInputElement>("#websiteUseAiInput");
-    if (useAi) useAi.checked = Boolean(qs<HTMLInputElement>("#aiEnabledInput")?.checked && state.aiConfig?.hasApiKey);
-  });
   qs<HTMLButtonElement>("#topPrimaryAction")?.addEventListener("click", () => {
     const view = qs<HTMLElement>(".view.active")?.id;
     if (view === "customers") openCustomerModal();
@@ -11355,6 +14730,18 @@ function installEvents() {
   qs<HTMLButtonElement>("#leadSourceManageInline")?.addEventListener("click", () => openLeadSourceCenter());
   qs<HTMLButtonElement>("#leadFinderStartButton")?.addEventListener("click", (event) => void runLeadFinder(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderStartButtonInline")?.addEventListener("click", (event) => void runLeadFinder(event.currentTarget as HTMLButtonElement));
+  qs<HTMLInputElement>("#leadFinderScheduleInput")?.addEventListener("change", (event) => {
+    const enabled = (event.currentTarget as HTMLInputElement).checked;
+    const frequency = qs<HTMLSelectElement>("#leadFinderScheduleFrequency");
+    const recurring = qs<HTMLInputElement>("#leadFinderRecurringCostInput");
+    const recurringLine = qs<HTMLElement>("#leadFinderRecurringCostLine");
+    if (frequency) frequency.disabled = !enabled;
+    if (recurring) {
+      recurring.disabled = !enabled;
+      if (!enabled) recurring.checked = false;
+    }
+    recurringLine?.classList.toggle("is-disabled", !enabled);
+  });
   qs<HTMLButtonElement>("#leadFinderSyncButton")?.addEventListener("click", (event) => void syncLeadFinderRows(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderTodoButton")?.addEventListener("click", (event) => void createLeadFinderTodos(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderExportButton")?.addEventListener("click", exportLeadFinderRows);
@@ -11467,7 +14854,12 @@ function installEvents() {
     if (button.textContent?.includes("加载名片")) button.addEventListener("click", () => toast("请接入上传或 OCR 服务后加载名片", "error"));
     if (button.textContent?.includes("重新识别")) button.addEventListener("click", () => void recognizeOcr());
     if (button.textContent?.includes("工具配置")) button.addEventListener("click", () => toast("OCR 字段映射配置已保存"));
-    if (button.textContent?.includes("解析官网")) button.addEventListener("click", (event) => void parseWebsiteOpportunities(event.currentTarget as HTMLButtonElement));
+  });
+  qs<HTMLButtonElement>("#websiteReferenceRegisterButton")?.addEventListener("click", (event) => {
+    void registerWebsiteReferences(event.currentTarget as HTMLButtonElement);
+  });
+  qs<HTMLButtonElement>("#websiteReferenceSyncButton")?.addEventListener("click", (event) => {
+    void syncWebsiteOpportunities(event.currentTarget as HTMLButtonElement);
   });
   qs<HTMLButtonElement>("#newDocumentButton")?.addEventListener("click", openNewDocument);
   qs<HTMLButtonElement>("#saveDocumentButton")?.addEventListener("click", () => void saveTradeDocument());
@@ -11501,9 +14893,12 @@ function installEvents() {
   qs<HTMLButtonElement>("#refreshDocumentPreviewButton")?.addEventListener("click", () => renderDocumentPreview(collectDocumentDraft()));
   qsa<HTMLButtonElement>("#documentTypeTabs button").forEach((button) => {
     button.addEventListener("click", () => {
-      setDocumentType(button.dataset.docType === "CI" ? "CI" : "PI");
+      setDocumentType(button.dataset.docType === "CUSTOMS" ? "CUSTOMS" : button.dataset.docType === "CI" ? "CI" : "PI");
       const title = qs<HTMLInputElement>("#docTitleInput");
-      if (title && (!title.value || title.value.includes("形式发票") || title.value.includes("商业发票"))) title.value = currentDocumentType() === "PI" ? "新建形式发票 PI" : "新建商业发票 CI";
+      if (title && (!title.value || title.value.includes("形式发票") || title.value.includes("商业发票") || title.value.includes("报关资料"))) {
+        const type = currentDocumentType();
+        title.value = type === "CUSTOMS" ? "新建报关资料" : type === "PI" ? "新建形式发票 PI" : "新建商业发票 CI";
+      }
       renderDocumentPreview(collectDocumentDraft());
     });
   });
@@ -11512,8 +14907,9 @@ function installEvents() {
     input.addEventListener("change", () => renderDocumentPreview(collectDocumentDraft()));
   });
   qsa<HTMLButtonElement>("#tools .btn.primary").forEach((button) => {
-    if (button.textContent?.includes("加入线索中心")) button.addEventListener("click", (event) => void syncWebsiteOpportunities(event.currentTarget as HTMLButtonElement));
-    else if (button.textContent?.includes("同步")) button.addEventListener("click", () => void syncOcrLead(button));
+    if (button.id !== "websiteReferenceSyncButton" && button.textContent?.includes("同步")) {
+      button.addEventListener("click", () => void syncOcrLead(button));
+    }
   });
   qsa<HTMLButtonElement>("#competitors .page-head .btn").forEach((button) => {
     if (button.textContent?.includes("新增竞争公司")) button.addEventListener("click", openCompetitorModal);
@@ -11631,6 +15027,7 @@ function activateNavView(view: string, after?: () => void) {
   if (view !== "leads") closeLeadDrawer();
   if (view !== "customers") closeCustomerDrawer();
   if (view !== "pipeline") closeDealDrawer();
+  if (view !== "lead-finder") closeLeadFinderVerificationDrawer();
   rememberWorkspaceTab(view);
   qsa<HTMLElement>(".sidebar button[data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   openSecondaryDropdownForView(view);
@@ -11640,7 +15037,14 @@ function activateNavView(view: string, after?: () => void) {
   if (view === "reports") {
     void refreshExecutiveReport();
   }
+  if (view === "daily-reports") {
+    void refreshDailyReports(false);
+  }
+  if (view === "inbox") {
+    void refreshInternalMessages(false);
+  }
   if (view === "dashboard") requestDashboardRefresh();
+  if (view === "lead-finder") void loadIdentityConflicts(true);
   window.scrollTo({ top: 0, behavior: "smooth" });
   after?.();
 }
@@ -11675,6 +15079,21 @@ function renderTopbarStats() {
   const reminderNode = qs<HTMLElement>("#topReminderCount");
   if (todoNode) todoNode.textContent = String(todoCount);
   if (reminderNode) reminderNode.textContent = String(reminderCount);
+}
+
+async function loadProductConfig() {
+  const versionNode = qs<HTMLElement>("#loginProductVersion");
+  try {
+    const response = await fetch("/product-config.json", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const config = await response.json() as { productName?: string; version?: string };
+    const productName = String(config.productName || "GoodJob CRM").trim();
+    const version = String(config.version || "").trim();
+    if (versionNode) versionNode.textContent = version ? `${productName} · 版本 ${version}` : productName;
+    if (version) document.title = `${productName} ${version} · 外贸客户管理系统`;
+  } catch {
+    if (versionNode) versionNode.textContent = "GoodJob CRM";
+  }
 }
 
 function resolveTopbarSearchView(rawValue: string) {
@@ -11725,6 +15144,12 @@ function resolveTopbarSearchView(rawValue: string) {
     ["report", "reports"],
     ["企业微信", "wecom"],
     ["微信", "wecom"],
+    ["日报", "daily-reports"],
+    ["daily report", "daily-reports"],
+    ["通知", "inbox"],
+    ["消息", "inbox"],
+    ["notification", "inbox"],
+    ["inbox", "inbox"],
     ["资料", "knowledge"],
     ["knowledge", "knowledge"],
     ["考试", "exam"],
@@ -11767,6 +15192,7 @@ async function restoreSession() {
   }
 }
 
+void loadProductConfig();
 installEvents();
 renderTopbarForView(qs<HTMLElement>(".view.active")?.id || "dashboard");
 void restoreSession();
