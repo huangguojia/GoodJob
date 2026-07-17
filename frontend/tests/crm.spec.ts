@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import * as XLSX from "xlsx";
 import { readFile } from "node:fs/promises";
+import { PNG } from "pngjs";
 
 async function loginWithCredentials(page: import("@playwright/test").Page, email: string, password: string, expectedName: string) {
   await page.goto("/");
@@ -761,6 +762,76 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#customerDrawer [data-open-customer-page]").click();
     await expect(page.locator("#customer-detail")).toHaveClass(/active/);
     await expect(page.locator("#customerDetailPage .customer-page-summary")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+  });
+
+  test("customer map renders, rotates and opens regional customers", async ({ page }) => {
+    await apiFromPage(page, "/api/customers", {
+      method: "POST",
+      body: {
+        company: `Taiwan Region Customer ${runId}`,
+        country: "中国台湾",
+        contact: "Regional Buyer",
+        stage: "询盘",
+        amount: 12000,
+        health: 76,
+        grade: "B"
+      }
+    });
+    await page.reload();
+    await expect(page.locator("body")).toHaveClass(/is-authenticated/);
+    await openView(page, "customers");
+    await page.locator("#customerMapModeButton").click();
+    await expect(page.locator("#customerMapWorkspace")).toBeVisible();
+    await expect(page.locator("#customerListWorkspace")).toBeHidden();
+    const canvas = page.locator("#customerGlobe canvas");
+    await expect(canvas).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("#customerMapSummary")).toContainText("客户");
+    await expect(page.locator('[data-map-market-country="中国"]')).toBeVisible();
+    await expect(page.locator("#customerMapRegion")).not.toContainText("台湾");
+
+    const desktopBox = await canvas.boundingBox();
+    expect(desktopBox?.width).toBeGreaterThan(500);
+    expect(desktopBox?.height).toBeGreaterThan(500);
+    const firstFrame = PNG.sync.read(await canvas.screenshot());
+    await page.waitForTimeout(900);
+    const secondFrame = PNG.sync.read(await canvas.screenshot());
+    const colors = new Set<string>();
+    let changedPixels = 0;
+    for (let index = 0; index < firstFrame.data.length; index += 64) {
+      colors.add(`${firstFrame.data[index]}:${firstFrame.data[index + 1]}:${firstFrame.data[index + 2]}`);
+      if (Math.abs(firstFrame.data[index] - secondFrame.data[index]) > 4
+        || Math.abs(firstFrame.data[index + 1] - secondFrame.data[index + 1]) > 4
+        || Math.abs(firstFrame.data[index + 2] - secondFrame.data[index + 2]) > 4) changedPixels += 1;
+    }
+    expect(colors.size).toBeGreaterThan(25);
+    expect(changedPixels).toBeGreaterThan(100);
+
+    await page.locator('[data-map-market-country="中国"]').click();
+    await expect(page.locator("#customerMapRegion")).toContainText("中国");
+    await expect(page.locator("#customerMapRegion")).toContainText(`Taiwan Region Customer ${runId}`);
+    await expect(page.locator("#customerMapRegion")).not.toContainText("台湾");
+    await page.locator("#customerMapRegion [data-customer-map-reset]").click();
+    await page.locator('[data-map-market-country="德国"]').click();
+    await expect(page.locator("#customerMapRegion")).toContainText("德国");
+    await expect(page.locator("#customerMapRegion")).toContainText("Evergreen GmbH");
+    await page.locator('#customerMapRegion [data-map-customer-id]').first().click();
+    await expect(page.locator("#customer-detail")).toHaveClass(/active/);
+    await expect(page.locator("#customerDetailPage")).toContainText("Evergreen GmbH");
+    await page.locator("#customerDetailPage [data-customer-page-back]").click();
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator("#customerMapWorkspace")).toBeVisible();
+    await expect(canvas).toBeVisible();
+    const mobileBox = await canvas.boundingBox();
+    expect(mobileBox?.width).toBeLessThanOrEqual(390);
+    expect(mobileBox?.height).toBeGreaterThanOrEqual(420);
+    const mobileFrame = PNG.sync.read(await canvas.screenshot());
+    const mobileColors = new Set<string>();
+    for (let index = 0; index < mobileFrame.data.length; index += 64) {
+      mobileColors.add(`${mobileFrame.data[index]}:${mobileFrame.data[index + 1]}:${mobileFrame.data[index + 2]}`);
+    }
+    expect(mobileColors.size).toBeGreaterThan(25);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   });
 

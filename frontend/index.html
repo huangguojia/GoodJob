@@ -3576,6 +3576,278 @@
     .customer-mobile-list { display: none; }
     .customer-last-activity { color: var(--muted); font-size: 11px; }
 
+    .customer-head-actions,
+    .customer-view-switch {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .customer-view-switch {
+      height: 36px;
+      gap: 2px;
+      padding: 3px;
+      border: 1px solid #dce3ec;
+      border-radius: 7px;
+      background: #f2f5f8;
+    }
+
+    .customer-view-switch button {
+      min-width: 58px;
+      height: 28px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 5px;
+      color: #667085;
+      background: transparent;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .customer-view-switch button.active {
+      color: #17233d;
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(22, 35, 61, .12);
+    }
+
+    #customers .customer-content-grid { display: block; }
+    .customer-workspace { width: 100%; min-width: 0; }
+    .customer-view-filter { margin-bottom: 10px; }
+    .customer-list-workspace { width: 100%; }
+    #customerListWorkspace.is-hidden,
+    #customerMapWorkspace.is-hidden { display: none !important; }
+
+    .customer-map-workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 330px;
+      width: 100%;
+      min-height: 610px;
+      overflow: hidden;
+      border-top: 1px solid #dfe6e3;
+      border-bottom: 1px solid #dfe6e3;
+      background: #fff;
+    }
+
+    .customer-map-stage {
+      position: relative;
+      min-width: 0;
+      min-height: clamp(610px, calc(100vh - 260px), 760px);
+      overflow: hidden;
+      background: #07110f;
+    }
+
+    .customer-globe {
+      position: absolute;
+      inset: 0;
+      min-width: 320px;
+      min-height: 420px;
+      overflow: hidden;
+    }
+
+    .customer-globe canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      outline: 0;
+    }
+
+    .customer-map-summary {
+      position: absolute;
+      z-index: 3;
+      top: 16px;
+      left: 16px;
+      display: flex;
+      align-items: stretch;
+      overflow: hidden;
+      border: 1px solid rgba(213, 234, 226, .22);
+      border-radius: 7px;
+      background: rgba(8, 24, 20, .76);
+      box-shadow: 0 14px 36px rgba(0, 0, 0, .2);
+      backdrop-filter: blur(12px);
+    }
+
+    .customer-map-summary span {
+      display: grid;
+      min-width: 76px;
+      gap: 3px;
+      padding: 10px 12px;
+      border-right: 1px solid rgba(213, 234, 226, .16);
+    }
+
+    .customer-map-summary span:last-child { border-right: 0; }
+    .customer-map-summary small { color: rgba(222, 238, 232, .62); font-size: 9px; }
+    .customer-map-summary b { color: #f4faf7; font-size: 17px; font-variant-numeric: tabular-nums; }
+
+    .customer-map-legend {
+      position: absolute;
+      z-index: 3;
+      left: 18px;
+      bottom: 17px;
+      display: flex;
+      gap: 16px;
+      color: rgba(232, 242, 238, .72);
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .customer-map-legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .customer-map-legend i { width: 8px; height: 8px; border-radius: 50%; background: #37d39d; box-shadow: 0 0 12px rgba(55, 211, 157, .7); }
+    .customer-map-legend span:last-child i { background: #f5b942; box-shadow: 0 0 12px rgba(245, 185, 66, .62); }
+
+    .customer-map-region {
+      min-width: 0;
+      padding: 24px 20px;
+      overflow-y: auto;
+      border-left: 1px solid #e2e8e5;
+      background: #fff;
+    }
+
+    .customer-map-region-head {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 14px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid #e8eeeb;
+    }
+
+    .customer-map-region-head span {
+      display: block;
+      margin-bottom: 6px;
+      color: #789087;
+      font-size: 9px;
+      font-weight: 900;
+    }
+
+    .customer-map-region-head h2 {
+      max-width: 230px;
+      margin: 0;
+      color: #14251f;
+      font-size: 22px;
+      line-height: 1.18;
+      overflow-wrap: anywhere;
+    }
+
+    .customer-map-reset {
+      width: 34px;
+      height: 34px;
+      flex: 0 0 auto;
+      border: 1px solid #dbe5e1;
+      border-radius: 6px;
+      color: #2b6352;
+      background: #f7faf9;
+      font-size: 18px;
+      cursor: pointer;
+    }
+
+    .customer-map-overview {
+      display: grid;
+      padding-top: 30px;
+    }
+
+    .customer-map-overview > strong {
+      color: #159269;
+      font-size: 54px;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .customer-map-overview > span { margin: 5px 0 28px; color: #66766f; font-size: 12px; font-weight: 700; }
+    .customer-map-overview dl { display: grid; margin: 0; }
+    .customer-map-overview dl div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; border-top: 1px solid #edf1ef; }
+    .customer-map-overview dt { color: #7b8984; font-size: 11px; }
+    .customer-map-overview dd { margin: 0; color: #172820; font-size: 13px; font-weight: 900; }
+
+    .customer-map-market-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+      margin-top: 18px;
+    }
+
+    .customer-map-market-list button {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+      height: 38px;
+      padding: 0 10px;
+      border: 1px solid #dfe8e4;
+      border-radius: 6px;
+      color: #39564b;
+      background: #f7faf8;
+      cursor: pointer;
+    }
+
+    .customer-map-market-list button:hover { border-color: #9bcdbb; background: #eff8f4; }
+    .customer-map-market-list span { overflow: hidden; font-size: 10px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+    .customer-map-market-list b { color: #11815d; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+    .customer-map-region-summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 14px 0;
+      color: #61716b;
+      font-size: 11px;
+    }
+
+    .customer-map-region-summary b { color: #172820; font-size: 12px; }
+    .customer-map-customer-list { display: grid; }
+
+    .customer-map-customer-list > button {
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      min-height: 68px;
+      padding: 11px 0;
+      border: 0;
+      border-top: 1px solid #edf1ef;
+      color: inherit;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .customer-map-customer-list > button:hover { background: #f7faf8; }
+    .customer-map-customer-list i { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid #d9e4df; border-radius: 6px; color: #586a63; background: #f4f7f6; font-size: 12px; font-style: normal; font-weight: 900; }
+    .customer-map-customer-list i.grade-a { color: #087c55; border-color: #b9dfd0; background: #eaf8f2; }
+    .customer-map-customer-list i.grade-b { color: #3157d5; border-color: #cbd7f7; background: #eff3ff; }
+    .customer-map-customer-list i.grade-c { color: #9a650d; border-color: #ead6ad; background: #fff8e9; }
+    .customer-map-customer-list > button > span,
+    .customer-map-customer-list > button > strong { min-width: 0; display: grid; gap: 4px; }
+    .customer-map-customer-list > button > span b { overflow: hidden; color: #182820; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .customer-map-customer-list small { color: #829089; font-size: 9px; font-weight: 700; }
+    .customer-map-customer-list > button > strong { color: #466157; font-size: 10px; text-align: right; white-space: nowrap; }
+    .customer-map-region-empty { display: grid; gap: 5px; padding: 34px 0; color: #7a8a84; text-align: center; }
+    .customer-map-region-empty b { color: #253b33; font-size: 14px; }
+
+    .customer-map-tooltip {
+      display: grid;
+      gap: 3px;
+      max-width: 220px;
+      padding: 8px 10px;
+      border: 1px solid rgba(221, 238, 232, .22);
+      border-radius: 6px;
+      color: #eaf5f1;
+      background: rgba(7, 17, 15, .9);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, .26);
+      font-size: 10px;
+      pointer-events: none;
+    }
+
+    .customer-map-tooltip strong { overflow-wrap: anywhere; }
+    .customer-map-tooltip span { color: #85cdb4; }
+    .customer-map-loading,
+    .customer-map-error { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 10px; color: #dcebe5; text-align: center; }
+    .customer-map-loading i { width: 26px; height: 26px; border: 2px solid rgba(117, 215, 182, .25); border-top-color: #75d7b6; border-radius: 50%; animation: spin .8s linear infinite; }
+    .customer-map-error span { max-width: 300px; color: #8fac9f; font-size: 11px; overflow-wrap: anywhere; }
+
     .drawer-head {
       display: flex;
       justify-content: space-between;
@@ -12803,6 +13075,20 @@
       #customers .customer-desktop-table { display: none; }
       #customers .customer-mobile-list { display: grid; gap: 8px; }
       #customers .customer-filter-row { grid-template-columns: 1fr; }
+      #customers .customer-head-actions { width: 100%; justify-content: space-between; }
+      #customers .customer-view-switch { flex: 1; }
+      #customers .customer-view-switch button { flex: 1; min-width: 0; }
+      #customers .customer-head-actions > .btn { min-width: 96px; }
+      #customers .customer-map-workspace { grid-template-columns: 1fr; min-height: 0; }
+      #customers .customer-map-stage { min-height: 480px; height: 58vh; max-height: 560px; }
+      #customers .customer-map-region { max-height: none; padding: 20px 16px 26px; border-top: 1px solid #e2e8e5; border-left: 0; }
+      #customers .customer-map-summary { top: 12px; left: 12px; }
+      #customers .customer-map-summary span { min-width: 66px; padding: 8px 10px; }
+      #customers .customer-map-summary b { font-size: 15px; }
+      #customers .customer-map-legend { left: 14px; bottom: 13px; }
+      #customers .customer-map-region-head h2 { max-width: 260px; font-size: 19px; }
+      #customers .customer-map-overview { padding-top: 22px; }
+      #customers .customer-map-overview > strong { font-size: 42px; }
       #customers .customer-mobile-card { display: grid; width: 100%; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: #fff; text-align: left; }
       #customers .customer-mobile-card .customer-name { overflow: visible; color: var(--brand); white-space: normal; overflow-wrap: anywhere; }
       #customers .customer-mobile-card .customer-name.has-active-deal { color: var(--green); }
@@ -14340,23 +14626,39 @@
         <div class="view" id="customers">
           <div class="page-head">
             <div><p class="eyebrow">Customer Intelligence</p><h1>客户管理</h1><p class="sub">客户、联系人、商机和跟进记录在一个详情面板内完成。</p></div>
-            <button class="btn primary">新增客户</button>
+            <div class="customer-head-actions">
+              <div class="customer-view-switch" role="tablist" aria-label="客户视图">
+                <button type="button" class="active" id="customerListModeButton" data-customer-view-mode="list" role="tab" aria-selected="true">列表</button>
+                <button type="button" id="customerMapModeButton" data-customer-view-mode="map" role="tab" aria-selected="false">地图</button>
+              </div>
+              <button class="btn primary">新增客户</button>
+            </div>
           </div>
-          <div class="content-grid">
-            <div class="panel section">
-              <div class="customer-filter-row">
+          <div class="content-grid customer-content-grid">
+            <div class="customer-workspace">
+              <div class="customer-filter-row customer-view-filter">
                 <input id="customerSearchInput" placeholder="搜索客户、联系人、国家或负责人" aria-label="搜索客户">
                 <select id="customerQueueFilter" aria-label="客户工作队列"><option value="all">全部客户</option><option value="overdue">提醒已逾期</option><option value="no-activity">暂无跟进记录</option><option value="no-deal">暂无活跃商机</option></select>
                 <button class="btn" id="customerFilterReset">重置</button>
               </div>
-              <div class="toolbar" id="customerBulkToolbar"></div>
-              <div class="table-wrap customer-desktop-table">
-                <table>
-                  <thead><tr><th style="width:34px">选</th><th>客户</th><th>活跃商机</th><th>健康度</th><th>客户价值</th><th>跟进节奏</th><th>通讯接入</th><th>操作</th></tr></thead>
-                  <tbody></tbody>
-                </table>
+              <div class="panel section customer-list-workspace" id="customerListWorkspace">
+                <div class="toolbar" id="customerBulkToolbar"></div>
+                <div class="table-wrap customer-desktop-table">
+                  <table>
+                    <thead><tr><th style="width:34px">选</th><th>客户</th><th>活跃商机</th><th>健康度</th><th>客户价值</th><th>跟进节奏</th><th>通讯接入</th><th>操作</th></tr></thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+                <div class="customer-mobile-list" id="customerMobileList"></div>
               </div>
-              <div class="customer-mobile-list" id="customerMobileList"></div>
+              <div class="customer-map-workspace is-hidden" id="customerMapWorkspace">
+                <div class="customer-map-stage">
+                  <div class="customer-map-summary" id="customerMapSummary"></div>
+                  <div class="customer-globe" id="customerGlobe"></div>
+                  <div class="customer-map-legend"><span><i></i>客户市场</span><span><i></i>成交市场</span></div>
+                </div>
+                <aside class="customer-map-region" id="customerMapRegion"></aside>
+              </div>
             </div>
           </div>
           <div class="customer-drawer-backdrop" id="customerDrawerBackdrop"></div>

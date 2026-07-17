@@ -11,12 +11,16 @@ import {
   resolveLeadSearchSources,
   type BlockedLeadSource
 } from "./lead-source-selection";
+import type { CustomerMapController, CustomerMapRegion } from "./customer-map";
 
 echarts.use([LineChart, GridComponent, TooltipComponent, SVGRenderer]);
 
 let dashboardLeadFunnelChart: ReturnType<typeof echarts.init> | null = null;
 let dashboardLeadFunnelResizeObserver: ResizeObserver | null = null;
 let dashboardRefreshPromise: Promise<void> | null = null;
+let customerMapController: CustomerMapController | null = null;
+let customerMapRegion: CustomerMapRegion | null = null;
+let customerMapLoading = false;
 const DASHBOARD_LIVE_REFRESH_MS = 10_000;
 
 interface User {
@@ -1596,6 +1600,7 @@ interface AppState {
   selectedCustomerIds: string[];
   customerSearch: string;
   customerQueueFilter: "all" | "overdue" | "no-activity" | "no-deal";
+  customerViewMode: "list" | "map";
   selectedProblemId: string | null;
   selectedMemoId: string | null;
   selectedPlanTemplateId: string | null;
@@ -1723,6 +1728,7 @@ const state: AppState = {
   selectedCustomerIds: [],
   customerSearch: "",
   customerQueueFilter: "all",
+  customerViewMode: "list",
   selectedProblemId: null,
   selectedMemoId: null,
   selectedPlanTemplateId: null,
@@ -4319,11 +4325,9 @@ function customerGradeHtml(customer: Customer) {
   return `<span class="customer-grade customer-grade-${grade.toLowerCase()}"><b>${grade}</b><small>${customerGradeLabel(grade)}</small></span>`;
 }
 
-function renderCustomers(customers: Customer[]) {
-  const tbody = qs<HTMLElement>("#customers tbody");
-  if (!tbody) return;
+function filteredCustomers(customers: Customer[]) {
   const query = state.customerSearch.trim().toLowerCase();
-  const visibleCustomers = customers.filter((customer) => {
+  return customers.filter((customer) => {
     const matchesQuery = !query || [customer.company, customer.contact, customer.country, customer.ownerName].some((value) => (value || "").toLowerCase().includes(query));
     const matchesQueue = state.customerQueueFilter === "all"
       || (state.customerQueueFilter === "overdue" && customer.nextReminder.includes("逾期"))
@@ -4331,6 +4335,21 @@ function renderCustomers(customers: Customer[]) {
       || (state.customerQueueFilter === "no-deal" && !customer.activeDealCount);
     return matchesQuery && matchesQueue;
   });
+}
+
+function renderCustomers(customers: Customer[]) {
+  const tbody = qs<HTMLElement>("#customers tbody");
+  if (!tbody) return;
+  const visibleCustomers = filteredCustomers(customers);
+  const mapActive = state.customerViewMode === "map";
+  qs<HTMLElement>("#customerListWorkspace")?.classList.toggle("is-hidden", mapActive);
+  qs<HTMLElement>("#customerMapWorkspace")?.classList.toggle("is-hidden", !mapActive);
+  qsa<HTMLButtonElement>("[data-customer-view-mode]", qs("#customers")!).forEach((button) => {
+    const active = button.dataset.customerViewMode === state.customerViewMode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  customerMapController?.setActive(mapActive);
   state.selectedCustomerIds = state.selectedCustomerIds.filter((id) => customers.some((customer) => customer.id === id));
   renderCustomerBulkBar(visibleCustomers);
   tbody.innerHTML = visibleCustomers.length ? visibleCustomers.map((customer) => {
@@ -4397,6 +4416,7 @@ function renderCustomers(customers: Customer[]) {
   });
   const selected = customers.find((item) => item.id === state.selectedCustomerId);
   if (selected && qs("#customerDrawer")?.classList.contains("open")) renderCustomerDrawer(selected);
+  if (mapActive) void renderCustomerMap(visibleCustomers);
 }
 
 function renderCustomerBulkBar(customers: Customer[]) {
@@ -4416,6 +4436,126 @@ function renderCustomerBulkBar(customers: Customer[]) {
     renderCustomers(state.customers);
   });
   qs<HTMLButtonElement>("[data-bulk-delete-customers]", toolbar)?.addEventListener("click", () => void bulkDeleteCustomers());
+}
+
+function customerMapMetrics(customers: Customer[]) {
+  return {
+    markets: new Set(customers.map((customer) => customerMapCountryLabel(customer.country)).filter(Boolean)).size,
+    won: customers.filter((customer) => customer.hasWonDeal).length,
+    pipeline: customers.reduce((total, customer) => total + Number(customer.pipelineAmount || 0), 0)
+  };
+}
+
+function customerMapCountryLabel(country: string) {
+  const value = country.trim();
+  const code = value.toUpperCase();
+  return value === "台湾" || value === "中国台湾" || code === "TW" || code === "TWN"
+    ? "中国"
+    : value;
+}
+
+function renderCustomerMapSummary(customers: Customer[]) {
+  const summary = qs<HTMLElement>("#customerMapSummary");
+  if (!summary) return;
+  const metrics = customerMapMetrics(customers);
+  summary.innerHTML = `
+    <span><small>客户</small><b>${customers.length}</b></span>
+    <span><small>市场</small><b>${metrics.markets}</b></span>
+    <span><small>已成交</small><b>${metrics.won}</b></span>
+  `;
+}
+
+function renderCustomerMapRegion(region: CustomerMapRegion | null, customers: Customer[]) {
+  const panel = qs<HTMLElement>("#customerMapRegion");
+  if (!panel) return;
+  customerMapRegion = region;
+  if (!region) {
+    const metrics = customerMapMetrics(customers);
+    const markets = Array.from(customers.reduce((groups, customer) => {
+      const country = customerMapCountryLabel(customer.country) || "未知";
+      groups.set(country, (groups.get(country) || 0) + 1);
+      return groups;
+    }, new Map<string, number>()).entries()).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "zh-CN")).slice(0, 6);
+    panel.innerHTML = `
+      <div class="customer-map-region-head">
+        <div><span>GLOBAL PORTFOLIO</span><h2>全球客户</h2></div>
+      </div>
+      <div class="customer-map-overview">
+        <strong>${metrics.markets}</strong><span>个客户市场</span>
+        <dl>
+          <div><dt>客户总数</dt><dd>${customers.length}</dd></div>
+          <div><dt>成交客户</dt><dd>${metrics.won}</dd></div>
+          <div><dt>在手商机</dt><dd>${money(metrics.pipeline)}</dd></div>
+        </dl>
+        <div class="customer-map-market-list">
+          ${markets.map(([country, count]) => `<button type="button" data-map-market-country="${escapeHtml(country)}"><span>${escapeHtml(country)}</span><b>${count}</b></button>`).join("")}
+        </div>
+      </div>
+    `;
+    qsa<HTMLButtonElement>("[data-map-market-country]", panel).forEach((button) => {
+      button.addEventListener("click", () => customerMapController?.focusCountry(button.dataset.mapMarketCountry || ""));
+    });
+    return;
+  }
+  const regionCustomers = region.customers
+    .map((item) => state.customers.find((customer) => customer.id === item.id))
+    .filter((item): item is Customer => Boolean(item));
+  const displayName = region.id === "156" ? "中国" : customerMapCountryLabel(regionCustomers[0]?.country || region.name);
+  const total = regionCustomers.reduce((sum, customer) => sum + Number(customer.pipelineAmount || customer.amount || 0), 0);
+  panel.innerHTML = `
+    <div class="customer-map-region-head">
+      <div><span>REGIONAL CUSTOMERS</span><h2>${escapeHtml(displayName)}</h2></div>
+      <button type="button" class="customer-map-reset" data-customer-map-reset title="返回全球" aria-label="返回全球">↺</button>
+    </div>
+    <div class="customer-map-region-summary"><b>${regionCustomers.length} 家客户</b><span>${money(total)}</span></div>
+    <div class="customer-map-customer-list">
+      ${regionCustomers.length ? regionCustomers.map((customer) => {
+        const grade = customerGradeValue(customer);
+        return `<button type="button" data-map-customer-id="${escapeHtml(customer.id)}">
+          <i class="grade-${grade.toLowerCase()}">${grade}</i>
+          <span><b>${escapeHtml(customer.company)}</b><small>${escapeHtml(customer.contact || "联系人待维护")} · ${escapeHtml(customer.ownerName || "未分配")}</small></span>
+          <strong>${escapeHtml(customer.pipelineStage || customer.stage || "待跟进")}<small>${customer.hasWonDeal ? `成交 ${customer.wonDealCount || 1} 次` : `${customer.activeDealCount || 0} 个商机`}</small></strong>
+        </button>`;
+      }).join("") : `<div class="customer-map-region-empty"><b>暂无客户</b><span>${escapeHtml(displayName)}</span></div>`}
+    </div>
+  `;
+  qs<HTMLButtonElement>("[data-customer-map-reset]", panel)?.addEventListener("click", () => customerMapController?.reset());
+  qsa<HTMLButtonElement>("[data-map-customer-id]", panel).forEach((button) => {
+    button.addEventListener("click", () => {
+      const customer = state.customers.find((item) => item.id === button.dataset.mapCustomerId);
+      if (customer) openCustomerDetailPage(customer);
+    });
+  });
+}
+
+async function renderCustomerMap(customers: Customer[]) {
+  renderCustomerMapSummary(customers);
+  if (customerMapController) {
+    customerMapController.update(customers);
+    customerMapController.setActive(true);
+    renderCustomerMapRegion(customerMapRegion, customers);
+    return;
+  }
+  if (customerMapLoading) return;
+  const host = qs<HTMLElement>("#customerGlobe");
+  if (!host) return;
+  customerMapLoading = true;
+  host.innerHTML = `<div class="customer-map-loading"><i></i><b>正在加载全球客户</b></div>`;
+  try {
+    const { createCustomerMap } = await import("./customer-map");
+    host.innerHTML = "";
+    customerMapController = createCustomerMap({
+      host,
+      customers,
+      onRegionSelect: (region) => renderCustomerMapRegion(region, filteredCustomers(state.customers))
+    });
+    customerMapController.setActive(state.customerViewMode === "map");
+    renderCustomerMapRegion(null, customers);
+  } catch (error) {
+    host.innerHTML = `<div class="customer-map-error"><b>地图加载失败</b><span>${escapeHtml(error instanceof Error ? error.message : "浏览器暂不支持 WebGL")}</span></div>`;
+  } finally {
+    customerMapLoading = false;
+  }
 }
 
 function customerRelatedDeals(customer: Customer) {
@@ -15960,6 +16100,12 @@ function installEvents() {
   qsa<HTMLButtonElement>("#customers .page-head .btn.primary").forEach((button) => {
     if (button.textContent?.includes("新增客户")) button.addEventListener("click", () => openCustomerModal());
   });
+  qsa<HTMLButtonElement>("[data-customer-view-mode]", qs("#customers")!).forEach((button) => {
+    button.addEventListener("click", () => {
+      state.customerViewMode = button.dataset.customerViewMode === "map" ? "map" : "list";
+      renderCustomers(state.customers);
+    });
+  });
   qs<HTMLInputElement>("#customerSearchInput")?.addEventListener("input", (event) => {
     state.customerSearch = (event.currentTarget as HTMLInputElement).value;
     renderCustomers(state.customers);
@@ -16464,6 +16610,7 @@ function activateNavView(view: string, after?: () => void) {
   if (activeView === "memos" && view !== "memos" && memoDirty) void saveCurrentMemoDraft();
   if (view !== "leads") closeLeadDrawer();
   if (view !== "customers") closeCustomerDrawer();
+  customerMapController?.setActive(view === "customers" && state.customerViewMode === "map");
   if (view !== "pipeline") closeDealDrawer();
   if (view !== "lead-finder") closeLeadFinderVerificationDrawer();
   rememberWorkspaceTab(view);
