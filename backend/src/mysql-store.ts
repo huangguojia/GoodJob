@@ -87,10 +87,12 @@ import {
   validateProviderCredentialSecurity
 } from "./credential-security.js";
 import { agentJobIdempotencyAliases, agentJobs, aiModelConfigs, caseStudies, commissionCalculations, commissionExports, commissionItems, commissionProducts, commissionRules, competitors, customerActivities, customerIntelligenceSuggestions, customers, dailyReportComments, dailyReports, dealEvents, deals, examAttempts, examQuestionLinks, examQuestions, exams, importExportJobs, internalMessages, knowledgeAssets, leadActivities, leadSourceConfigs, leadSourceEvents, leads, marketOpportunityBatches, marketOpportunityCalculationEvents, marketOpportunitySnapshots, marketTradeObservations, memos, monthlySalesRecords, ocrJobs, planTasks, planTemplates, problems, prospectCampaignEvents, prospectCampaigns, prospectCampaignVersions, prospectRunQueueChildBindings, prospectRunQueueParentBindings, prospectTouchpoints, providerCatalog as defaultProviderCatalog, providerConnections, providerRequestLogs, providerResponseCache, reminders, salesRecordAudits, todos, tradeDocuments, users, wecomMessages, websiteOpportunities, whatsappBindings, whatsappMessages } from "./data.js";
+import { companyProfiles } from "./data.js";
 import type { CrmStore, PersistedStoreMutation } from "./store.js";
 import type { WhatsAppBinding, WhatsAppMessage } from "./types.js";
 import type { DailyReport, DailyReportComment, InternalMessage } from "./types.js";
 import type { AcquisitionOutcomeFeedback, AgentJob, AgentJobIdempotencyAlias, AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerAcquisitionSourceEvent, CustomerActivity, CustomerIntelligenceSuggestion, CustomerOwnershipEvent, CustomerOwnershipMutationInput, CustomerOwnershipMutationResult, Deal, DealEvent, DealRecommendation, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, MarketOpportunityBatch, MarketOpportunityCalculationEvent, MarketOpportunitySnapshot, MarketTradeObservation, Memo, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProblemItem, ProcurementSignal, ProspectCampaign, ProspectCampaignEvent, ProspectCampaignVersion, ProspectCandidateProcessingState, ProspectExecutionAttempt, ProspectExecutionCheckpoint, ProspectExecutionEvent, ProspectExecutionKernelState, ProspectExecutionLease, ProspectExecutionPage, ProspectExecutionThrottleBucket, ProspectProviderRequestAccountingEvidence, ProspectProviderRequestAttemptBinding, ProspectProviderRequestDispatch, ProspectProviderRequestEvent, ProspectProviderRequestLedger, ProspectRunEvent, ProspectRunQueueChildBinding, ProspectRunQueueParentBinding, ProspectRunShard, ProspectSchedule, ProspectSearchRun, ProspectSourceRawBatch, ProspectSourceRawHit, ProspectSourceRawRecord, ProspectStrategy, ProspectStrategyEvent, ProspectStrategySourcePosition, ProspectStrategySuggestion, ProspectTouchpoint, ProviderCatalogItem, ProviderConnection, ProviderRequestLog, ProviderResponseCache, Reminder, SalesRecordAudit, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { CompanyProfile } from "./types.js";
 
 const defaultUrl = "mysql://goodjob:change_me@127.0.0.1:3306/goodjob_crm";
 
@@ -1245,6 +1247,7 @@ export async function createMysqlStore(
   store = {
     mode: "mysql",
     users: await loadUsers(pool),
+    companyProfiles: await loadCompanyProfiles(pool),
     dailyReports: await loadDailyReports(pool),
     dailyReportComments: await loadDailyReportComments(pool),
     internalMessages: await loadInternalMessages(pool),
@@ -1654,6 +1657,17 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "users", "last_development_email_subject", "VARCHAR(255) DEFAULT ''");
   await ensureColumn(pool, "users", "report_note", "TEXT");
   await ensureColumn(pool, "users", "auth_version", "INT NOT NULL DEFAULT 1");
+  await pool.query(`CREATE TABLE IF NOT EXISTS company_profiles (
+    team_id VARCHAR(64) PRIMARY KEY,
+    company_name VARCHAR(200) DEFAULT '',
+    website VARCHAR(300) DEFAULT '',
+    product_summary TEXT,
+    address TEXT,
+    phone VARCHAR(100) DEFAULT '',
+    email VARCHAR(180) DEFAULT '',
+    updated_by VARCHAR(64) DEFAULT '',
+    updated_at DATETIME(3) NOT NULL
+  )`);
   await pool.query(`CREATE TABLE IF NOT EXISTS customers (
     id VARCHAR(64) PRIMARY KEY,
     company VARCHAR(200) NOT NULL,
@@ -4609,6 +4623,20 @@ async function loadUsers(pool: mysql.Pool): Promise<User[]> {
     lastDevelopmentEmailTo: row.last_development_email_to || "",
     lastDevelopmentEmailSubject: row.last_development_email_subject || "",
     reportNote: row.report_note || ""
+  }));
+}
+
+async function loadCompanyProfiles(pool: mysql.Pool): Promise<CompanyProfile[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM company_profiles")).map((row) => ({
+    teamId: row.team_id,
+    companyName: row.company_name || "",
+    website: row.website || "",
+    productSummary: row.product_summary || "",
+    address: row.address || "",
+    phone: row.phone || "",
+    email: row.email || "",
+    updatedBy: row.updated_by || "",
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at || new Date().toISOString()
   }));
 }
 
@@ -9221,6 +9249,7 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
   try {
     await connection.beginTransaction();
     await replaceRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status, item.authVersion || 1, item.outboundEmail || "", item.emailSenderName ?? "", item.emailSignature || "", item.smtpHost || "", item.smtpPort || 465, item.smtpSecure ?? true, item.smtpUser || "", item.smtpPassword || "", item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailTo || "", item.lastDevelopmentEmailSubject || "", item.reportNote || ""], "(id,name,email,password_hash,role,team_id,avatar,status,auth_version,outbound_email,email_sender_name,email_signature,smtp_host,smtp_port,smtp_secure,smtp_user,smtp_password,last_development_email_at,last_development_email_to,last_development_email_subject,report_note)");
+    await replaceRows(connection, "company_profiles", store.companyProfiles, (item) => [item.teamId, item.companyName, item.website, item.productSummary, item.address, item.phone, item.email, item.updatedBy, mysqlDate(item.updatedAt)], "(team_id,company_name,website,product_summary,address,phone,email,updated_by,updated_at)");
     await replaceRows(connection, "daily_reports", store.dailyReports, (item) => [item.id, item.reportDate, item.completedWork, item.customerProgress, item.results, item.risks, item.nextPlan, item.supportNeeded, item.status, item.ownerId, item.teamId, mysqlDate(item.submittedAt), mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,report_date,completed_work,customer_progress,results_text,risks_text,next_plan,support_needed,report_status,owner_id,team_id,submitted_at,created_at,updated_at)");
     await replaceRows(connection, "daily_report_comments", store.dailyReportComments, (item) => [item.id, item.reportId, item.parentId || "", item.content, item.authorId, item.teamId, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,report_id,parent_id,content,author_id,team_id,created_at,updated_at)");
     await replaceRows(connection, "internal_messages", store.internalMessages, (item) => [item.id, item.threadId, item.senderId, item.recipientId, item.teamId, item.type, item.subject, item.content, item.relatedType, item.relatedId, item.readAt ? mysqlDate(item.readAt) : null, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,thread_id,sender_id,recipient_id,team_id,message_type,subject,content,related_type,related_id,read_at,created_at,updated_at)");

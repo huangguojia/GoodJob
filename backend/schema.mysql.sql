@@ -22,6 +22,18 @@ CREATE TABLE users (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE company_profiles (
+  team_id VARCHAR(64) PRIMARY KEY,
+  company_name VARCHAR(200) DEFAULT '',
+  website VARCHAR(300) DEFAULT '',
+  product_summary TEXT,
+  address TEXT,
+  phone VARCHAR(100) DEFAULT '',
+  email VARCHAR(180) DEFAULT '',
+  updated_by VARCHAR(64) DEFAULT '',
+  updated_at DATETIME(3) NOT NULL
+);
+
 CREATE TABLE customers (
   id VARCHAR(64) PRIMARY KEY,
   company VARCHAR(200) NOT NULL,

@@ -98,6 +98,63 @@ interface CustomerIntelligenceSuggestion {
   createdAt: string;
 }
 
+type BackgroundResearchEntity = "lead" | "customer";
+
+interface BackgroundResearch {
+  id: string;
+  entityType: BackgroundResearchEntity;
+  entityId: string;
+  company: string;
+  country: string;
+  score: number;
+  verdict: string;
+  summary: string;
+  facts: Array<{ label: string; value: string }>;
+  opportunities: string[];
+  risks: Array<{ level: "high" | "medium" | "low"; title: string; detail: string }>;
+  contacts: Array<{ channel: string; value: string }>;
+  sources: Array<{ title: string; url: string; observedAt: string }>;
+  nextAction: string;
+  engine: string;
+  completedAt: string;
+}
+
+interface CompanyProfile {
+  teamId: string;
+  companyName: string;
+  website: string;
+  productSummary: string;
+  address: string;
+  phone: string;
+  email: string;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+interface DevelopmentEmailDraft {
+  entityType: BackgroundResearchEntity;
+  entityId: string;
+  recipientCompany: string;
+  recipientName: string;
+  to: string;
+  subject: string;
+  body: string;
+  from: string;
+  senderName: string;
+  engine: string;
+}
+
+interface DevelopmentEmailReadiness {
+  personalReady: boolean;
+  companyReady: boolean;
+  personalMissing: string[];
+  companyMissing: string[];
+  aiReady: boolean;
+  aiGenerated: boolean;
+  aiConfigName: string;
+  aiError: string;
+}
+
 interface CustomerActivity {
   id: string;
   customerId: string;
@@ -1712,6 +1769,20 @@ let leadTaskVerboseSequence = 0;
 let prospectFeedbackLoading = false;
 let prospectFeedbackLoadedAt = 0;
 let customerClockTimer = 0;
+let backgroundResearchSubject: { entityType: BackgroundResearchEntity; entityId: string; company: string; backView: string } | null = null;
+let backgroundResearchResult: BackgroundResearch | null = null;
+let backgroundResearchLoading = false;
+let backgroundResearchStage = 0;
+let backgroundResearchStageTimer = 0;
+let developmentEmailSubject: { entityType: BackgroundResearchEntity; entityId: string; company: string; backView: string } | null = null;
+let developmentEmailDraft: DevelopmentEmailDraft | null = null;
+let developmentEmailReadiness: DevelopmentEmailReadiness | null = null;
+let developmentEmailCompanyProfile: CompanyProfile | null = null;
+let developmentEmailLoading = false;
+let developmentEmailSending = false;
+let developmentEmailTone: "professional" | "concise" | "warm" = "professional";
+let developmentEmailNextFollowAt = "";
+let companyProfileCanManage = false;
 let openWorkspaceTabs = ["dashboard"];
 let workspaceTabHistory = ["dashboard"];
 
@@ -1720,8 +1791,11 @@ const viewLabels: Record<string, string> = {
   "lead-finder": "自动获客",
   "lead-task-detail": "任务执行详情",
   "prospect-list": "搜客清单",
+  leads: "线索",
   customers: "客户",
   "customer-detail": "客户全景",
+  "ai-research": "AI背调",
+  "development-email": "开发信",
   pipeline: "商机",
   reminders: "跟进提醒",
   "plan-growth": "计划任务",
@@ -2079,6 +2153,8 @@ function renderProfile(user = state.user) {
   const smtpStatus = qs<HTMLElement>("#profileSmtpStatus");
   if (smtpStatus) smtpStatus.innerHTML = user.smtpHost && user.smtpUser && user.hasSmtpPassword ? `${badge("已配置", "green")} ${escapeHtml(user.smtpHost)}` : `${badge("未完整", "amber")} 填写SMTP后才能真实发信`;
   updateProfileSmtpHints(user);
+  renderEmailConfigurationReminders();
+  void loadCompanyProfile();
 }
 
 function collectDevelopmentEmailDraft() {
@@ -3839,7 +3915,7 @@ function renderLeadDrawer(
   drawer.innerHTML = `
     <div class="drawer-head">
       <div><h2>${escapeHtml(lead.company)}</h2><p>${escapeHtml(lead.country || "—")} · ${escapeHtml(lead.contact || "—")}</p></div>
-      <div class="lead-drawer-head-actions">${badge(inTrash ? "垃圾箱" : (LEAD_STATUS_LABEL[lead.status] || lead.status), inTrash ? "red" : (LEAD_STATUS_TONE[lead.status] || ""))}<button class="btn icon-only" id="leadDrawerClose" title="关闭">×</button></div>
+      <div class="lead-drawer-head-actions">${inTrash ? "" : `<button class="btn" id="leadDevelopmentEmailButton">写开发信</button><button class="btn primary ai-entry-button" id="leadAiResearchButton">${researchButtonIcon()}AI 背调</button>`}${badge(inTrash ? "垃圾箱" : (LEAD_STATUS_LABEL[lead.status] || lead.status), inTrash ? "red" : (LEAD_STATUS_TONE[lead.status] || ""))}<button class="btn icon-only" id="leadDrawerClose" title="关闭">×</button></div>
     </div>
     ${lead.remark ? `<p class="lead-remark">${escapeHtml(lead.remark)}</p>` : ""}
     ${inTrash ? `
@@ -3881,6 +3957,8 @@ function renderLeadDrawer(
     </div></section>`;
 
   qs("#leadDrawerClose", drawer)?.addEventListener("click", closeLeadDrawer);
+  qs<HTMLButtonElement>("#leadDevelopmentEmailButton", drawer)?.addEventListener("click", () => openDevelopmentEmail("lead", lead.id, lead.company, "leads"));
+  qs<HTMLButtonElement>("#leadAiResearchButton", drawer)?.addEventListener("click", () => openBackgroundResearch("lead", lead.id, lead.company, "leads"));
   qs<HTMLSelectElement>("#leadStageSelect", drawer)?.addEventListener("change", (event) => {
     void changeLeadStage(lead.id, (event.target as HTMLSelectElement).value);
   });
@@ -4399,6 +4477,383 @@ function customerContactIcon(channel: "email" | "phone" | "whatsapp" | "wechat")
   return `<svg viewBox="0 0 24 24"><path d="M8.5 5C5.5 5 3 7 3 9.5c0 1.5.9 2.9 2.3 3.7L5 15l2.1-1c.5.1.9.1 1.4.1 3 0 5.5-2 5.5-4.5S11.5 5 8.5 5z"/><path d="M15.5 10c3 0 5.5 2 5.5 4.5 0 1.5-.9 2.9-2.3 3.7L19 20l-2.1-1c-.5.1-.9.1-1.4.1-3 0-5.5-2-5.5-4.5"/></svg>`;
 }
 
+function researchButtonIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"/><path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z"/></svg>`;
+}
+
+function backgroundResearchBack() {
+  const backView = backgroundResearchSubject?.backView || (backgroundResearchSubject?.entityType === "lead" ? "leads" : "customers");
+  if (backView === "customer-detail") {
+    activateNavView("customer-detail", () => renderCustomerDetailPage());
+    return;
+  }
+  activateNavView(backView);
+}
+
+function renderBackgroundResearch() {
+  const box = qs<HTMLElement>("#aiResearchPage");
+  const subject = backgroundResearchSubject;
+  if (!box || !subject) return;
+  const stages = ["主体识别", "证据归并", "风险核验", "结论生成"];
+  if (backgroundResearchLoading) {
+    box.innerHTML = `
+      <header class="research-header">
+        <div class="research-identity">
+          <button class="customer-page-back" type="button" data-research-back title="返回" aria-label="返回"><svg viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button>
+          <div><h1>${escapeHtml(subject.company)}</h1><span>${subject.entityType === "lead" ? "线索背调" : "客户背调"}</span></div>
+        </div>
+      </header>
+      <section class="research-running">
+        <div class="research-orbit"><span></span><b>AI</b></div>
+        <div class="research-stage-list">${stages.map((stage, index) => `<div class="${index < backgroundResearchStage ? "done" : index === backgroundResearchStage ? "active" : ""}"><i>${index < backgroundResearchStage ? "✓" : String(index + 1)}</i><b>${stage}</b></div>`).join("")}</div>
+        <div class="research-progress"><i style="width:${Math.min(92, 16 + backgroundResearchStage * 24)}%"></i></div>
+      </section>`;
+  } else if (!backgroundResearchResult) {
+    box.innerHTML = `
+      <header class="research-header">
+        <div class="research-identity">
+          <button class="customer-page-back" type="button" data-research-back title="返回" aria-label="返回"><svg viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button>
+          <div><h1>${escapeHtml(subject.company)}</h1><span>${subject.entityType === "lead" ? "线索背调" : "客户背调"}</span></div>
+        </div>
+        <button class="btn primary research-run-button" type="button" data-research-run>${researchButtonIcon()}开始背调</button>
+      </header>`;
+  } else {
+    const report = backgroundResearchResult;
+    const scoreTone = report.score >= 78 ? "strong" : report.score >= 60 ? "steady" : "caution";
+    box.innerHTML = `
+      <header class="research-header">
+        <div class="research-identity">
+          <button class="customer-page-back" type="button" data-research-back title="返回" aria-label="返回"><svg viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button>
+          <div><h1>${escapeHtml(report.company)}</h1><span>${report.entityType === "lead" ? "线索背调" : "客户背调"} · ${escapeHtml(formatDateTime(report.completedAt))}</span></div>
+        </div>
+        <button class="btn research-run-button" type="button" data-research-run>${researchButtonIcon()}重新背调</button>
+      </header>
+
+      <section class="research-verdict ${scoreTone}">
+        <div class="research-score" style="--score:${report.score * 3.6}deg"><div><b>${report.score}</b><span>可信度</span></div></div>
+        <div class="research-verdict-copy"><span>综合判断</span><h2>${escapeHtml(report.verdict)}</h2><p>${escapeHtml(report.summary)}</p></div>
+        <div class="research-next"><span>下一步</span><b>${escapeHtml(report.nextAction)}</b></div>
+      </section>
+
+      <div class="research-layout">
+        <main class="research-main">
+          <section class="research-block">
+            <h2>业务机会</h2>
+            <div class="research-opportunities">${report.opportunities.length ? report.opportunities.map((item, index) => `<article><i>${String(index + 1).padStart(2, "0")}</i><b>${escapeHtml(item)}</b></article>`).join("") : `<div class="research-empty">暂无明确机会</div>`}</div>
+          </section>
+          <section class="research-block">
+            <h2>风险核验</h2>
+            <div class="research-risks">${report.risks.map((risk) => `<article class="${risk.level}"><i></i><div><b>${escapeHtml(risk.title)}</b><span>${escapeHtml(risk.detail)}</span></div></article>`).join("")}</div>
+          </section>
+        </main>
+
+        <aside class="research-side">
+          <section class="research-block">
+            <h2>公司事实</h2>
+            <dl class="research-facts">${report.facts.map((fact) => `<div><dt>${escapeHtml(fact.label)}</dt><dd>${escapeHtml(fact.value)}</dd></div>`).join("")}</dl>
+          </section>
+          <section class="research-block">
+            <h2>关键联系人</h2>
+            <dl class="research-facts">${report.contacts.length ? report.contacts.map((contact) => `<div><dt>${escapeHtml(contact.channel)}</dt><dd>${escapeHtml(contact.value)}</dd></div>`).join("") : `<div><dt>状态</dt><dd>待核实</dd></div>`}</dl>
+          </section>
+          <section class="research-block">
+            <h2>证据来源</h2>
+            <div class="research-sources">${report.sources.length ? report.sources.map((source) => {
+              const validUrl = /^https?:\/\//i.test(source.url);
+              const title = escapeHtml(source.title || source.url || "来源记录");
+              return validUrl
+                ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer"><b>${title}</b><span>${escapeHtml(source.observedAt ? formatDateTime(source.observedAt) : "")}</span></a>`
+                : `<div><b>${title}</b><span>${escapeHtml(source.observedAt ? formatDateTime(source.observedAt) : "")}</span></div>`;
+            }).join("") : `<div class="research-empty">暂无公开来源</div>`}</div>
+          </section>
+          <div class="research-engine"><span>分析引擎</span><b>${escapeHtml(report.engine)}</b></div>
+        </aside>
+      </div>`;
+  }
+  qsa<HTMLButtonElement>("[data-research-back]", box).forEach((button) => button.addEventListener("click", backgroundResearchBack));
+  qsa<HTMLButtonElement>("[data-research-run]", box).forEach((button) => button.addEventListener("click", () => void runBackgroundResearch()));
+}
+
+async function runBackgroundResearch() {
+  const subject = backgroundResearchSubject;
+  if (!subject || backgroundResearchLoading) return;
+  backgroundResearchLoading = true;
+  backgroundResearchResult = null;
+  backgroundResearchStage = 0;
+  if (backgroundResearchStageTimer) window.clearInterval(backgroundResearchStageTimer);
+  backgroundResearchStageTimer = window.setInterval(() => {
+    if (backgroundResearchStage < 3) {
+      backgroundResearchStage += 1;
+      renderBackgroundResearch();
+    }
+  }, 620);
+  renderBackgroundResearch();
+  try {
+    const result = await api<{ research: BackgroundResearch }>("/api/ai-background-research", {
+      method: "POST",
+      body: JSON.stringify({ entityType: subject.entityType, entityId: subject.entityId })
+    });
+    backgroundResearchResult = result.research;
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "背调失败", "error");
+  } finally {
+    if (backgroundResearchStageTimer) window.clearInterval(backgroundResearchStageTimer);
+    backgroundResearchStageTimer = 0;
+    backgroundResearchLoading = false;
+    renderBackgroundResearch();
+  }
+}
+
+function openBackgroundResearch(entityType: BackgroundResearchEntity, entityId: string, company: string, backView: string) {
+  backgroundResearchSubject = { entityType, entityId, company, backView };
+  backgroundResearchResult = null;
+  closeLeadDrawer();
+  closeCustomerDrawer();
+  activateNavView("ai-research", () => {
+    renderBackgroundResearch();
+    void runBackgroundResearch();
+  });
+}
+
+function developmentEmailBack() {
+  const subject = developmentEmailSubject;
+  if (!subject) {
+    activateNavView("leads");
+    return;
+  }
+  if (subject.backView === "customer-detail") {
+    activateNavView("customer-detail", () => renderCustomerDetailPage());
+    return;
+  }
+  activateNavView(subject.backView);
+}
+
+function syncDevelopmentEmailDraft() {
+  if (!developmentEmailDraft) return;
+  developmentEmailDraft.to = qs<HTMLInputElement>("#developmentEmailTo")?.value.trim() || "";
+  developmentEmailDraft.subject = qs<HTMLInputElement>("#developmentEmailSubject")?.value || "";
+  developmentEmailDraft.body = qs<HTMLTextAreaElement>("#developmentEmailBody")?.value || "";
+}
+
+function renderDevelopmentEmailPage() {
+  const box = qs<HTMLElement>("#developmentEmailPage");
+  const subject = developmentEmailSubject;
+  if (!box || !subject) return;
+  if (developmentEmailLoading || !developmentEmailDraft || !developmentEmailReadiness) {
+    box.innerHTML = `
+      <header class="mail-studio-header">
+        <div class="research-identity"><button class="customer-page-back" type="button" data-mail-back title="返回" aria-label="返回"><svg viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button><div><h1>${escapeHtml(subject.company)}</h1><span>开发信</span></div></div>
+      </header>
+      <div class="mail-studio-loading"><i></i><b>正在生成开发信</b></div>`;
+    qs<HTMLButtonElement>("[data-mail-back]", box)?.addEventListener("click", developmentEmailBack);
+    return;
+  }
+  const draft = developmentEmailDraft;
+  const readiness = developmentEmailReadiness;
+  const profile = developmentEmailCompanyProfile;
+  const sendReady = readiness.personalReady && readiness.companyReady && Boolean(draft.to && draft.subject && draft.body.trim().length >= 10);
+  box.innerHTML = `
+    <header class="mail-studio-header">
+      <div class="research-identity"><button class="customer-page-back" type="button" data-mail-back title="返回" aria-label="返回"><svg viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button><div><h1>${escapeHtml(draft.recipientCompany)}</h1><span>开发信</span></div></div>
+      <div class="mail-studio-actions"><button class="btn" type="button" data-mail-ai>${researchButtonIcon()}${readiness.aiReady ? "AI 重新撰写" : "配置 AI"}</button><button class="btn primary" type="button" data-mail-send ${sendReady && !developmentEmailSending ? "" : "disabled"}>${developmentEmailSending ? "发送中" : "发送邮件"}</button></div>
+    </header>
+
+    <div class="mail-studio-layout">
+      <aside class="mail-studio-context">
+        <section>
+          <h2>收件人</h2>
+          <label><span>邮箱</span><input id="developmentEmailTo" value="${escapeHtml(draft.to)}" placeholder="name@company.com"></label>
+          <dl><div><dt>联系人</dt><dd>${escapeHtml(draft.recipientName)}</dd></div><div><dt>公司</dt><dd>${escapeHtml(draft.recipientCompany)}</dd></div></dl>
+        </section>
+        <section>
+          <h2>发送设置</h2>
+          <label><span>语气</span><select id="developmentEmailTone"><option value="professional" ${developmentEmailTone === "professional" ? "selected" : ""}>专业</option><option value="concise" ${developmentEmailTone === "concise" ? "selected" : ""}>简洁</option><option value="warm" ${developmentEmailTone === "warm" ? "selected" : ""}>友好</option></select></label>
+          <label><span>下次跟进</span><input id="developmentEmailNext" value="${escapeHtml(developmentEmailNextFollowAt)}" placeholder="例如 3 天后"></label>
+        </section>
+      </aside>
+
+      <main class="mail-studio-editor">
+        <label class="mail-subject-field"><span>主题</span><input id="developmentEmailSubject" value="${escapeHtml(draft.subject)}"></label>
+        <label class="mail-body-field"><span>正文</span><textarea id="developmentEmailBody">${escapeHtml(draft.body)}</textarea></label>
+        <footer><span id="developmentEmailCount">${draft.body.length} 字符</span><b>${escapeHtml(draft.engine)}</b></footer>
+      </main>
+
+      <aside class="mail-studio-checks">
+        <section class="mail-readiness ${readiness.personalReady ? "ready" : "missing"}">
+          <div><i></i><h2>个人发件配置</h2></div>
+          <b>${readiness.personalReady ? `${escapeHtml(draft.senderName)} · ${escapeHtml(draft.from)}` : escapeHtml(readiness.personalMissing.join("、"))}</b>
+          ${readiness.personalReady ? "" : `<button class="btn" type="button" data-mail-config="profile">完善个人配置</button>`}
+        </section>
+        <section class="mail-readiness ${readiness.companyReady ? "ready" : "missing"}">
+          <div><i></i><h2>公司资料</h2></div>
+          <b>${readiness.companyReady ? `${escapeHtml(profile?.companyName || "")} · ${escapeHtml(profile?.website || "")}` : escapeHtml(readiness.companyMissing.join("、"))}</b>
+          ${readiness.companyReady ? "" : companyProfileCanManage ? `<button class="btn" type="button" data-mail-config="settings">维护公司资料</button>` : `<span>管理员维护</span>`}
+        </section>
+        <section class="mail-readiness ${readiness.aiReady ? "ready" : "missing"}">
+          <div><i></i><h2>AI 写作模型</h2></div>
+          <b>${readiness.aiReady ? escapeHtml(readiness.aiGenerated ? `${readiness.aiConfigName} · 当前草稿由 AI 生成` : `${readiness.aiConfigName} · ${readiness.aiError || "模型已就绪"}`) : "开发信模型、API Key"}</b>
+          ${readiness.aiReady ? "" : `<button class="btn" type="button" data-mail-config="ai-config">配置 AI 模型</button>`}
+        </section>
+        <section class="mail-sender-card"><span>发件人</span><b>${escapeHtml(draft.senderName || "待配置")}</b><small>${escapeHtml(draft.from || "待配置")}</small></section>
+      </aside>
+    </div>`;
+  qs<HTMLButtonElement>("[data-mail-back]", box)?.addEventListener("click", developmentEmailBack);
+  qs<HTMLButtonElement>("[data-mail-ai]", box)?.addEventListener("click", () => {
+    if (!developmentEmailReadiness?.aiReady) {
+      activateNavView("ai-config");
+      return;
+    }
+    void generateDevelopmentEmailDraftPage(true);
+  });
+  qs<HTMLButtonElement>("[data-mail-send]", box)?.addEventListener("click", () => void sendDevelopmentEmailFromStudio());
+  qsa<HTMLInputElement | HTMLTextAreaElement>("#developmentEmailTo, #developmentEmailSubject, #developmentEmailBody", box).forEach((input) => input.addEventListener("input", () => {
+    syncDevelopmentEmailDraft();
+    const count = qs<HTMLElement>("#developmentEmailCount", box);
+    if (count) count.textContent = `${developmentEmailDraft?.body.length || 0} 字符`;
+    const send = qs<HTMLButtonElement>("[data-mail-send]", box);
+    if (send && developmentEmailReadiness) send.disabled = !(developmentEmailReadiness.personalReady && developmentEmailReadiness.companyReady && Boolean(developmentEmailDraft?.to && developmentEmailDraft.subject && developmentEmailDraft.body.trim().length >= 10));
+  }));
+  qs<HTMLSelectElement>("#developmentEmailTone", box)?.addEventListener("change", (event) => { developmentEmailTone = (event.currentTarget as HTMLSelectElement).value as typeof developmentEmailTone; });
+  qs<HTMLInputElement>("#developmentEmailNext", box)?.addEventListener("input", (event) => { developmentEmailNextFollowAt = (event.currentTarget as HTMLInputElement).value; });
+  qsa<HTMLButtonElement>("[data-mail-config]", box).forEach((button) => button.addEventListener("click", () => activateNavView(button.dataset.mailConfig || "profile")));
+}
+
+async function generateDevelopmentEmailDraftPage(requireAi = false) {
+  const subject = developmentEmailSubject;
+  if (!subject || developmentEmailLoading) return;
+  developmentEmailTone = (qs<HTMLSelectElement>("#developmentEmailTone")?.value || developmentEmailTone) as typeof developmentEmailTone;
+  developmentEmailLoading = true;
+  renderDevelopmentEmailPage();
+  try {
+    const result = await api<{
+      draft: DevelopmentEmailDraft;
+      readiness: DevelopmentEmailReadiness;
+      companyProfile: CompanyProfile;
+    }>("/api/development-email/draft", {
+      method: "POST",
+      body: JSON.stringify({
+        entityType: subject.entityType,
+        entityId: subject.entityId,
+        tone: developmentEmailTone,
+        requireAi
+      })
+    });
+    developmentEmailDraft = result.draft;
+    developmentEmailReadiness = result.readiness;
+    developmentEmailCompanyProfile = result.companyProfile;
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "开发信生成失败", "error");
+  } finally {
+    developmentEmailLoading = false;
+    renderDevelopmentEmailPage();
+  }
+}
+
+async function sendDevelopmentEmailFromStudio() {
+  const subject = developmentEmailSubject;
+  if (!subject || !developmentEmailDraft || developmentEmailSending) return;
+  syncDevelopmentEmailDraft();
+  developmentEmailNextFollowAt = qs<HTMLInputElement>("#developmentEmailNext")?.value.trim() || developmentEmailNextFollowAt;
+  developmentEmailSending = true;
+  renderDevelopmentEmailPage();
+  try {
+    const result = await api<{ sent: { simulated: boolean }; user: User }>("/api/development-email/send", {
+      method: "POST",
+      body: JSON.stringify({
+        entityType: subject.entityType,
+        entityId: subject.entityId,
+        to: developmentEmailDraft.to,
+        subject: developmentEmailDraft.subject,
+        body: developmentEmailDraft.body,
+        nextFollowAt: developmentEmailNextFollowAt
+      })
+    });
+    state.user = result.user;
+    localStorage.setItem(storage.user, JSON.stringify(result.user));
+    applyAuthedUser(result.user);
+    toast(result.sent.simulated ? "开发信已发送（测试记录）" : "开发信已发送");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "开发信发送失败", "error");
+  } finally {
+    developmentEmailSending = false;
+    renderDevelopmentEmailPage();
+  }
+}
+
+function openDevelopmentEmail(entityType: BackgroundResearchEntity, entityId: string, company: string, backView: string) {
+  developmentEmailSubject = { entityType, entityId, company, backView };
+  developmentEmailDraft = null;
+  developmentEmailReadiness = null;
+  developmentEmailTone = "professional";
+  developmentEmailNextFollowAt = "";
+  closeLeadDrawer();
+  closeCustomerDrawer();
+  activateNavView("development-email", () => void generateDevelopmentEmailDraftPage());
+}
+
+function personalEmailReady(user = state.user) {
+  return Boolean(user?.outboundEmail && user.emailSenderName && user.emailSignature && user.smtpHost && user.smtpUser && user.hasSmtpPassword);
+}
+
+function renderEmailConfigurationReminders() {
+  const personal = qs<HTMLElement>("#profileDevelopmentEmailReady");
+  if (personal && state.user) {
+    const ready = personalEmailReady(state.user);
+    personal.className = `email-config-reminder ${ready ? "ready" : "missing"}`;
+    personal.innerHTML = `<i></i><div><span>开发信发件配置</span><b>${ready ? "已完成" : "请补齐发件邮箱、SMTP和邮件签名"}</b></div>`;
+  }
+  const profile = developmentEmailCompanyProfile;
+  const form = qs<HTMLElement>("#companyProfileForm");
+  if (form && profile) {
+    const fields: Array<[string, keyof CompanyProfile]> = [
+      ["#companyProfileName", "companyName"], ["#companyProfileWebsite", "website"], ["#companyProfileProducts", "productSummary"],
+      ["#companyProfileAddress", "address"], ["#companyProfilePhone", "phone"], ["#companyProfileEmail", "email"]
+    ];
+    fields.forEach(([selector, key]) => {
+      const input = qs<HTMLInputElement | HTMLTextAreaElement>(selector);
+      if (input) { input.value = String(profile[key] || ""); input.disabled = !companyProfileCanManage; }
+    });
+    const save = qs<HTMLButtonElement>("#companyProfileSaveButton");
+    if (save) save.classList.toggle("is-hidden", !companyProfileCanManage);
+  }
+}
+
+async function loadCompanyProfile() {
+  try {
+    const result = await api<{ profile: CompanyProfile; canManage: boolean }>("/api/company-profile");
+    developmentEmailCompanyProfile = result.profile;
+    companyProfileCanManage = result.canManage;
+    renderEmailConfigurationReminders();
+  } catch {
+  }
+}
+
+async function saveCompanyProfile() {
+  if (!companyProfileCanManage) return;
+  const button = qs<HTMLButtonElement>("#companyProfileSaveButton");
+  try {
+    if (button) { button.disabled = true; button.textContent = "保存中"; }
+    const result = await api<{ profile: CompanyProfile; canManage: boolean }>("/api/company-profile", {
+      method: "PUT",
+      body: JSON.stringify({
+        companyName: qs<HTMLInputElement>("#companyProfileName")?.value.trim() || "",
+        website: qs<HTMLInputElement>("#companyProfileWebsite")?.value.trim() || "",
+        productSummary: qs<HTMLTextAreaElement>("#companyProfileProducts")?.value.trim() || "",
+        address: qs<HTMLInputElement>("#companyProfileAddress")?.value.trim() || "",
+        phone: qs<HTMLInputElement>("#companyProfilePhone")?.value.trim() || "",
+        email: qs<HTMLInputElement>("#companyProfileEmail")?.value.trim() || ""
+      })
+    });
+    developmentEmailCompanyProfile = result.profile;
+    renderEmailConfigurationReminders();
+    toast("公司资料已保存");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "公司资料保存失败", "error");
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "保存公司资料"; }
+  }
+}
+
 function launchCustomerContact(customer: Customer, channel: "email" | "phone" | "whatsapp" | "wechat") {
   const contacts = customerContactDetails(customer);
   if (channel === "email") {
@@ -4447,7 +4902,7 @@ function renderCustomerDetailPage(customer?: Customer) {
           <p>${escapeHtml(current.country)} · ${escapeHtml(current.contact)} · 负责人 ${escapeHtml(current.ownerName || "未分配")} · 客户编号 ${escapeHtml(current.id)}</p>
         </div>
       </div>
-      <div class="customer-page-actions"><button class="btn" type="button" data-customer-page-edit>编辑客户</button><button class="btn primary" type="button" data-customer-page-follow>新增跟进</button></div>
+      <div class="customer-page-actions"><button class="btn primary ai-entry-button" type="button" data-customer-page-research>${researchButtonIcon()}AI 背调</button><button class="btn" type="button" data-customer-page-email>写开发信</button><button class="btn" type="button" data-customer-page-edit>编辑客户</button><button class="btn" type="button" data-customer-page-follow>新增跟进</button></div>
     </header>
 
     <section class="customer-page-summary" aria-label="客户摘要">
@@ -4513,6 +4968,8 @@ function renderCustomerDetailPage(customer?: Customer) {
   `;
   qs<HTMLButtonElement>("[data-customer-page-back]", box)?.addEventListener("click", () => activateNavView("customers"));
   qsa<HTMLButtonElement>("[data-customer-page-edit]", box).forEach((button) => button.addEventListener("click", () => openCustomerModal(current)));
+  qs<HTMLButtonElement>("[data-customer-page-research]", box)?.addEventListener("click", () => openBackgroundResearch("customer", current.id, current.company, "customer-detail"));
+  qs<HTMLButtonElement>("[data-customer-page-email]", box)?.addEventListener("click", () => openDevelopmentEmail("customer", current.id, current.company, "customer-detail"));
   qsa<HTMLButtonElement>("[data-customer-page-follow]", box).forEach((button) => button.addEventListener("click", () => addFollowRecord(current)));
   qs<HTMLButtonElement>("[data-customer-page-pipeline]", box)?.addEventListener("click", () => activateNavView("pipeline"));
   qsa<HTMLButtonElement>("[data-customer-contact]", box).forEach((button) => {
@@ -4646,7 +5103,7 @@ function renderCustomerDrawer(customer?: Customer) {
       <div class="info"><span>下一提醒</span><b>${escapeHtml(customer.nextReminder)}</b></div>
       <div class="info"><span>企业微信</span><b>待接入</b></div>
     </div>
-    <div class="inline-actions"><button class="btn primary" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button></div>
+    <div class="inline-actions"><button class="btn primary ai-entry-button" data-customer-research>${researchButtonIcon()}AI 背调</button><button class="btn" data-customer-email>写开发信</button><button class="btn" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button></div>
     ${renderCustomerIntelligence(customer)}
     <section class="customer-doc-info">
       <div class="customer-deals-head"><h3>单据基础信息</h3><button class="btn" data-edit-customer-document-info>维护信息</button></div>
@@ -4669,6 +5126,8 @@ function renderCustomerDrawer(customer?: Customer) {
   customerClockTimer = window.setInterval(() => renderCustomerWorldClock(customer), 1000);
   qs("#customerDrawerClose", drawer)?.addEventListener("click", closeCustomerDrawer);
   qs<HTMLButtonElement>("[data-open-customer-page]", drawer)?.addEventListener("click", () => openCustomerDetailPage(customer));
+  qs<HTMLButtonElement>("[data-customer-research]", drawer)?.addEventListener("click", () => openBackgroundResearch("customer", customer.id, customer.company, "customers"));
+  qs<HTMLButtonElement>("[data-customer-email]", drawer)?.addEventListener("click", () => openDevelopmentEmail("customer", customer.id, customer.company, "customers"));
   qs<HTMLButtonElement>("[data-add-follow]", drawer)?.addEventListener("click", () => addFollowRecord(customer));
   qsa<HTMLButtonElement>("[data-edit-customer-drawer]", drawer).forEach((button) => {
     button.addEventListener("click", () => openCustomerModal(customer));
@@ -15438,6 +15897,7 @@ function installEvents() {
   });
   qs<HTMLButtonElement>("#profileEntryButton")?.addEventListener("click", () => activateNavView("profile", () => renderProfile()));
   qs<HTMLButtonElement>("#profileSaveButton")?.addEventListener("click", (event) => void saveProfileEmailBinding(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#companyProfileSaveButton")?.addEventListener("click", () => void saveCompanyProfile());
   qs<HTMLButtonElement>("#profileTestSmtpButton")?.addEventListener("click", (event) => void sendProfileTestEmail(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#profileClearEmailButton")?.addEventListener("click", (event) => void clearProfileEmailBinding(event.currentTarget as HTMLButtonElement));
   qs<HTMLInputElement>("#profileSmtpPort")?.addEventListener("input", () => updateProfileSmtpHints());

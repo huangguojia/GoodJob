@@ -11,6 +11,7 @@ import type {
   ProspectIcpPolicySnapshot,
   ProspectSuppressionEvent
 } from "./types.js";
+import type { CompanyProfile } from "./types.js";
 
 export const providerCatalog: ProviderCatalogItem[] = createDefaultProviderCatalog();
 export const providerConnections: ProviderConnection[] = [];
@@ -84,6 +85,7 @@ export const prospectExecutionThrottleBuckets: ProspectExecutionThrottleBucket[]
 export const dailyReports: DailyReport[] = [];
 export const dailyReportComments: DailyReportComment[] = [];
 export const internalMessages: InternalMessage[] = [];
+export const companyProfiles: CompanyProfile[] = [];
 
 export const users: User[] = [
   { id: "u_sales_shirley", name: "Shirley", email: "shirley@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "SH", status: "active", authVersion: 1, outboundEmail: "", emailSenderName: "Shirley", emailSignature: "Best regards,\\nShirley\\nGoodJob Sales Team" },

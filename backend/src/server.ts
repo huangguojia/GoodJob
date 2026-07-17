@@ -195,6 +195,7 @@ import {
   withProspectVerificationReport
 } from "./prospect-verification.js";
 import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, CustomerIntelligenceFieldKey, Deal, DealEvent, Exam, ExamAttempt, ExamQuestion, Lead, LeadSourceEvent, LeadSourceType, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProspectOutreachChannel, ProviderCatalogItem, ProviderConnection, ProviderEvidenceSnapshot, SalesRecordAudit, SessionUser, Todo, TradeDocument, TradeDocumentAudit, TradeDocumentSendRecord, WebsiteOpportunity } from "./types.js";
+import type { CompanyProfile } from "./types.js";
 
 loadLocalEnv();
 
@@ -589,7 +590,7 @@ async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][numb
   if (smtpPort === 465 && !smtpSecure) {
     throw new Error("SMTP配置不匹配：端口 465 通常应选择 SSL/TLS；如果要使用 STARTTLS/普通，请把端口改为 587。");
   }
-  const transport = process.env.NODE_ENV === "test"
+  const transport = ["test", "e2e"].includes(process.env.NODE_ENV || "")
     ? nodemailer.createTransport({ streamTransport: true, newline: "unix", buffer: true })
     : nodemailer.createTransport({
       host: user.smtpHost,
@@ -2188,6 +2189,493 @@ function customerWithPipeline(customer: Customer) {
     pendingIntelligenceCount: pendingIntelligence.length
   };
 }
+
+type BackgroundResearchEntity = "lead" | "customer";
+
+interface BackgroundResearchSource {
+  title: string;
+  url: string;
+  observedAt: string;
+}
+
+function backgroundResearchSources(
+  candidates: WebsiteOpportunity[],
+  sourceEvents: LeadSourceEvent[],
+  extra: BackgroundResearchSource[] = []
+) {
+  const rows: BackgroundResearchSource[] = [...extra];
+  sourceEvents.forEach((event) => rows.push({
+    title: event.channel || "线索来源",
+    url: event.sourceUrl || "",
+    observedAt: event.receivedAt || event.occurredAt || ""
+  }));
+  candidates.forEach((candidate) => {
+    if (candidate.website) rows.push({
+      title: candidate.sourceLabel || "企业官网",
+      url: candidate.website,
+      observedAt: candidate.verifiedAt || candidate.createdAt
+    });
+    (candidate.sourceEvidence || []).forEach((evidence) => rows.push({
+      title: evidence.evidenceSummary || candidate.sourceLabel || "公开来源",
+      url: evidence.sourceUrl || evidence.officialWebsite || "",
+      observedAt: evidence.fetchedAt || candidate.createdAt
+    }));
+  });
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = `${row.title}|${row.url}`;
+    if ((!row.title && !row.url) || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 8);
+}
+
+function backgroundResearchRisk(level: "high" | "medium" | "low", title: string, detail: string) {
+  return { level, title, detail };
+}
+
+function researchText(value: unknown, fallback = "待核实") {
+  const text = String(value || "").trim();
+  return text && !["未知", "待维护", "待确认", "—"].includes(text) ? text : fallback;
+}
+
+app.post("/api/ai-background-research", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    entityType: z.enum(["lead", "customer"]),
+    entityId: z.string().trim().min(1).max(120)
+  }).parse(req.body);
+  const store = getStore();
+  const entityType = body.entityType as BackgroundResearchEntity;
+  const lead = entityType === "lead"
+    ? store.leads.find((item) => item.id === body.entityId && canSeeOwner(req.user!, item.ownerId, item.teamId))
+    : undefined;
+  const customer = entityType === "customer"
+    ? store.customers.find((item) => item.id === body.entityId && canSeeOwner(req.user!, item.ownerId, item.teamId))
+    : undefined;
+  if (!lead && !customer) {
+    res.status(404).json({ message: entityType === "lead" ? "线索不存在或无权访问" : "客户不存在或无权访问" });
+    return;
+  }
+
+  const ownerId = lead?.ownerId || customer!.ownerId;
+  const teamId = lead?.teamId || customer!.teamId;
+  const linkedLeads = lead ? [lead] : store.leads.filter((item) => item.convertedCustomerId === customer!.id);
+  const sourceEvents = store.leadSourceEvents.filter((event) =>
+    linkedLeads.some((item) => item.id === event.leadId)
+    && event.ownerId === ownerId
+    && event.teamId === teamId
+  );
+  const candidates = store.websiteOpportunities.filter((item) =>
+    item.ownerId === ownerId
+    && item.teamId === teamId
+    && (lead ? item.leadId === lead.id : item.customerId === customer!.id || linkedLeads.some((linked) => linked.id === item.leadId))
+  );
+  const deals = customer ? store.deals.filter((deal) => deal.customerId === customer.id) : [];
+  const activities = lead
+    ? store.leadActivities.filter((item) => item.leadId === lead.id)
+    : store.customerActivities.filter((item) => item.customerId === customer!.id);
+  const suggestions = customer
+    ? store.customerIntelligenceSuggestions.filter((item) => item.customerId === customer.id && item.teamId === teamId && item.ownerId === ownerId)
+    : [];
+  const sources = backgroundResearchSources(candidates, sourceEvents, suggestions.flatMap((item) =>
+    [item.sourceUrl, ...item.evidenceRefs].filter(Boolean).map((url) => ({
+      title: item.sourceLabel || "客户情报",
+      url,
+      observedAt: item.updatedAt || item.createdAt
+    }))
+  ));
+  const company = lead?.company || customer!.company;
+  const country = researchText(lead?.country || customer!.country);
+  const contactRows = lead
+    ? [
+        { channel: "联系人", value: researchText(lead.contact) },
+        { channel: "邮箱", value: researchText(lead.email) },
+        { channel: "电话", value: researchText(lead.phone) }
+      ]
+    : [
+        { channel: "联系人", value: researchText(customer!.contact) },
+        { channel: "联系资料", value: researchText(customer!.documentContact) }
+      ];
+  const usefulContacts = contactRows.filter((item) => item.value !== "待核实");
+  const candidate = candidates[0];
+  const business = researchText(candidate?.business || lead?.remark || deals[0]?.product, "尚无明确业务资料");
+  const facts = lead
+    ? [
+        { label: "主体", value: company },
+        { label: "国家 / 地区", value: country },
+        { label: "业务", value: business },
+        { label: "来源", value: researchText(lead.source || lead.sourceChannel) },
+        { label: "采购意向", value: researchText(lead.intent) },
+        { label: "预估金额", value: lead.estimatedAmount > 0 ? `${lead.estimatedAmount.toLocaleString("en-US")} USD` : "待核实" }
+      ]
+    : [
+        { label: "主体", value: company },
+        { label: "国家 / 地区", value: country },
+        { label: "业务", value: business },
+        { label: "客户分级", value: customer!.grade || customerGradeFromHealth(customer!.health) },
+        { label: "关联商机", value: `${deals.length} 个` },
+        { label: "成交记录", value: deals.some((deal) => deal.stage === "成交") ? "有" : "无" }
+      ];
+  const risks = [] as Array<ReturnType<typeof backgroundResearchRisk>>;
+  if (!sources.some((item) => /^https?:\/\//i.test(item.url))) {
+    risks.push(backgroundResearchRisk("high", "企业身份", "缺少可访问的公开来源"));
+  }
+  if (!usefulContacts.some((item) => ["邮箱", "电话", "联系资料"].includes(item.channel))) {
+    risks.push(backgroundResearchRisk("medium", "联系方式", "尚无可直接触达的联系方式"));
+  }
+  if (!activities.length) risks.push(backgroundResearchRisk("medium", "互动记录", "尚未形成有效互动记录"));
+  if (customer && customer.health < 60) risks.push(backgroundResearchRisk("medium", "客户健康度", `当前人工评分 ${customer.health}`));
+  if (!risks.length) risks.push(backgroundResearchRisk("low", "当前风险", "现有资料未发现明显冲突"));
+
+  const score = Math.max(35, Math.min(94,
+    35
+    + Math.min(24, sources.length * 6)
+    + Math.min(15, usefulContacts.length * 5)
+    + (business === "尚无明确业务资料" ? 0 : 10)
+    + (activities.length ? 8 : 0)
+  ));
+  let summary = `${company} 位于${country}，当前资料显示其业务与${business}相关。`;
+  let verdict = score >= 78 ? "可优先推进" : score >= 60 ? "建议核实后推进" : "暂缓关键交易动作";
+  let opportunities = [
+    customer && deals.length ? `围绕现有 ${deals[0]!.product || "商机"} 继续确认采购节奏` : `确认 ${business} 的具体采购需求`,
+    usefulContacts.length ? `通过${usefulContacts[0]!.channel}建立首次有效沟通` : "补齐采购联系人与直接联系方式"
+  ];
+  let nextAction = risks[0]?.level === "high" ? "先完成企业主体与官网核验" : "安排一次需求确认并记录采购时间表";
+  let engine = "CRM 证据分析";
+
+  const config = getAiConfig(req.user!, "scoring");
+  if (config?.enabled && config.apiKey) {
+    const prompt = [
+      "根据以下 CRM 事实与来源证据生成企业背调结论。只使用提供的数据，不得补充或猜测外部事实。",
+      "只返回 JSON：{\"summary\":\"\",\"verdict\":\"\",\"opportunities\":[\"\"],\"risks\":[{\"level\":\"high|medium|low\",\"title\":\"\",\"detail\":\"\"}],\"nextAction\":\"\"}",
+      JSON.stringify({ entityType, company, country, facts, contacts: usefulContacts, sources, activities: activities.slice(0, 6), deals: deals.slice(0, 5) })
+    ].join("\n");
+    try {
+      const parsed = extractJsonObject(await callAiModel(config, prompt, 10000)) as Record<string, unknown>;
+      if (typeof parsed.summary === "string" && parsed.summary.trim()) summary = parsed.summary.trim().slice(0, 600);
+      if (typeof parsed.verdict === "string" && parsed.verdict.trim()) verdict = parsed.verdict.trim().slice(0, 80);
+      if (Array.isArray(parsed.opportunities)) opportunities = parsed.opportunities.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 4);
+      if (typeof parsed.nextAction === "string" && parsed.nextAction.trim()) nextAction = parsed.nextAction.trim().slice(0, 300);
+      if (Array.isArray(parsed.risks)) {
+        const aiRisks = parsed.risks.flatMap((item) => {
+          if (!item || typeof item !== "object") return [];
+          const raw = item as Record<string, unknown>;
+          const level = ["high", "medium", "low"].includes(String(raw.level)) ? String(raw.level) as "high" | "medium" | "low" : "medium";
+          if (typeof raw.title !== "string" || typeof raw.detail !== "string") return [];
+          return [backgroundResearchRisk(level, raw.title.slice(0, 80), raw.detail.slice(0, 300))];
+        }).slice(0, 5);
+        if (aiRisks.length) risks.splice(0, risks.length, ...aiRisks);
+      }
+      engine = config.name || config.model;
+    } catch {
+      engine = "CRM 证据分析";
+    }
+  }
+
+  res.json({
+    research: {
+      id: `abr_${entityType}_${body.entityId}_${Date.now()}`,
+      entityType,
+      entityId: body.entityId,
+      company,
+      country,
+      score,
+      verdict,
+      summary,
+      facts,
+      opportunities,
+      risks,
+      contacts: usefulContacts,
+      sources,
+      nextAction,
+      engine,
+      completedAt: new Date().toISOString()
+    }
+  });
+}));
+
+function blankCompanyProfile(teamId: string): CompanyProfile {
+  return {
+    teamId,
+    companyName: "",
+    website: "",
+    productSummary: "",
+    address: "",
+    phone: "",
+    email: "",
+    updatedBy: "",
+    updatedAt: ""
+  };
+}
+
+function companyProfileForTeam(teamId: string) {
+  return getStore().companyProfiles.find((item) => item.teamId === teamId)
+    || blankCompanyProfile(teamId);
+}
+
+function canManageCompanyProfile(user: SessionUser) {
+  return user.role === "admin" || user.role === "super_admin";
+}
+
+app.get("/api/company-profile", requireAuth, (req, res) => {
+  res.json({
+    profile: companyProfileForTeam(req.user!.teamId),
+    canManage: canManageCompanyProfile(req.user!)
+  });
+});
+
+app.put("/api/company-profile", requireAuth, asyncRoute(async (req, res) => {
+  if (!canManageCompanyProfile(req.user!)) {
+    res.status(403).json({ message: "只有管理员可以维护公司资料" });
+    return;
+  }
+  const body = z.object({
+    companyName: z.string().trim().max(200).default(""),
+    website: z.string().trim().max(300).default(""),
+    productSummary: z.string().trim().max(2000).default(""),
+    address: z.string().trim().max(1000).default(""),
+    phone: z.string().trim().max(100).default(""),
+    email: z.string().trim().max(180).default("")
+  }).parse(req.body);
+  const store = getStore();
+  const current = store.companyProfiles.find((item) => item.teamId === req.user!.teamId);
+  const profile: CompanyProfile = {
+    teamId: req.user!.teamId,
+    ...body,
+    updatedBy: req.user!.id,
+    updatedAt: new Date().toISOString()
+  };
+  if (current) Object.assign(current, profile);
+  else store.companyProfiles.push(profile);
+  await store.persist();
+  res.json({ profile, canManage: true });
+}));
+
+function developmentEmailEntity(user: SessionUser, entityType: BackgroundResearchEntity, entityId: string) {
+  const store = getStore();
+  if (entityType === "lead") {
+    const lead = store.leads.find((item) => item.id === entityId && canSeeOwner(user, item.ownerId, item.teamId));
+    if (!lead) return null;
+    return {
+      entityType,
+      lead,
+      customer: undefined,
+      company: lead.company,
+      contactName: lead.contact || "there",
+      email: lead.email || "",
+      country: lead.country || "",
+      context: lead.remark || `${lead.intent || ""} intent · ${lead.source || "CRM lead"}`
+    };
+  }
+  const customer = store.customers.find((item) => item.id === entityId && canSeeOwner(user, item.ownerId, item.teamId));
+  if (!customer) return null;
+  const email = `${customer.documentContact || ""} ${customer.contact || ""}`.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
+  const deals = store.deals.filter((deal) => deal.customerId === customer.id);
+  return {
+    entityType,
+    lead: undefined,
+    customer,
+    company: customer.company,
+    contactName: customer.contact || "there",
+    email,
+    country: customer.country || "",
+    context: deals[0]?.product || customer.defaultIncoterm || "existing business relationship"
+  };
+}
+
+function developmentEmailReadiness(user: ReturnType<typeof getStore>["users"][number], profile: CompanyProfile) {
+  const personalMissing = [
+    !user.outboundEmail ? "发件邮箱" : "",
+    !user.emailSenderName ? "发件人名称" : "",
+    !user.emailSignature ? "邮件签名" : "",
+    !user.smtpHost ? "SMTP服务器" : "",
+    !user.smtpUser ? "SMTP账号" : "",
+    !user.smtpPassword ? "SMTP授权码" : ""
+  ].filter(Boolean);
+  const companyMissing = [
+    !profile.companyName ? "公司名称" : "",
+    !profile.productSummary ? "主营产品" : "",
+    !profile.website ? "公司官网" : ""
+  ].filter(Boolean);
+  return {
+    personalReady: personalMissing.length === 0,
+    companyReady: companyMissing.length === 0,
+    personalMissing,
+    companyMissing
+  };
+}
+
+function developmentEmailEnglishContext(value: string) {
+  const text = value.trim();
+  return text && !/[\u3400-\u9fff]/u.test(text)
+    ? text
+    : "your sourcing and product development needs";
+}
+
+function developmentEmailMarket(value: string) {
+  const markets: Record<string, string> = {
+    中国: "China", 德国: "Germany", 瑞典: "Sweden", 美国: "the United States",
+    日本: "Japan", 阿联酋: "the UAE", 法国: "France", 英国: "the United Kingdom"
+  };
+  return markets[value] || (value && !/[\u3400-\u9fff]/u.test(value) ? value : "your market");
+}
+
+app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    entityType: z.enum(["lead", "customer"]),
+    entityId: z.string().trim().min(1).max(120),
+    tone: z.enum(["professional", "concise", "warm"]).default("professional"),
+    requireAi: z.boolean().default(false)
+  }).parse(req.body);
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.user!.id);
+  const entity = developmentEmailEntity(req.user!, body.entityType, body.entityId);
+  if (!user || !entity) {
+    res.status(404).json({ message: "收件对象不存在或无权访问" });
+    return;
+  }
+  const companyProfile = companyProfileForTeam(req.user!.teamId);
+  const readiness = developmentEmailReadiness(user, companyProfile);
+  const config = getAiConfig(req.user!, "emailDraft");
+  const aiReady = Boolean(config?.enabled && config.apiKey);
+  if (body.requireAi && !aiReady) {
+    res.status(400).json({ message: "请先在 AI 配置中启用开发信模型并填写 API Key" });
+    return;
+  }
+  const senderName = user.emailSenderName || user.name;
+  const senderCompany = companyProfile.companyName || "[Company name]";
+  const productSummary = companyProfile.productSummary || "[Products and services]";
+  const websiteLine = companyProfile.website ? `\nWebsite: ${companyProfile.website}` : "";
+  const signature = user.emailSignature?.trim() || `Best regards,\n${senderName}`;
+  const outreachContext = developmentEmailEnglishContext(entity.context);
+  const outreachMarket = developmentEmailMarket(entity.country);
+  let subject = `Potential cooperation with ${entity.company}`;
+  let content = [
+    `Dear ${entity.contactName},`,
+    "",
+    `I am ${senderName} from ${senderCompany}. We specialize in ${productSummary}.`,
+    "",
+    `I am reaching out to ${entity.company} regarding ${outreachContext}. I would like to explore whether our products could support your current sourcing plans in ${outreachMarket}.`,
+    "",
+    "Would you be available for a brief conversation this week?",
+    "",
+    signature + websiteLine
+  ].join("\n");
+  let engine = "基础模板";
+  let aiGenerated = false;
+  let aiError = "";
+  if (aiReady && config) {
+    const prompt = [
+      "Write one concise B2B cold outreach email in English using only the supplied facts.",
+      "Do not invent certifications, customers, prices, capabilities or contact history.",
+      "Return JSON only: {\"subject\":\"\",\"body\":\"\"}.",
+      JSON.stringify({
+        tone: body.tone,
+        recipient: { company: entity.company, contact: entity.contactName, country: entity.country, context: entity.context },
+        sender: { name: senderName, company: companyProfile.companyName, products: companyProfile.productSummary, website: companyProfile.website },
+        signature
+      })
+    ].join("\n");
+    try {
+      const parsed = extractJsonObject(await callAiModel(config, prompt, 10000)) as Record<string, unknown>;
+      if (typeof parsed.subject === "string" && parsed.subject.trim()) subject = parsed.subject.trim().slice(0, 160);
+      if (typeof parsed.body === "string" && parsed.body.trim()) content = parsed.body.trim().slice(0, 6000);
+      engine = config.name || config.model;
+      aiGenerated = true;
+    } catch (error) {
+      aiError = error instanceof Error ? error.message : "AI 撰写失败";
+      if (body.requireAi) {
+        res.status(400).json({ message: aiError });
+        return;
+      }
+    }
+  }
+  res.json({
+    draft: {
+      entityType: body.entityType,
+      entityId: body.entityId,
+      recipientCompany: entity.company,
+      recipientName: entity.contactName,
+      to: entity.email,
+      subject,
+      body: content,
+      from: user.outboundEmail || "",
+      senderName,
+      engine
+    },
+    readiness: {
+      ...readiness,
+      aiReady,
+      aiGenerated,
+      aiConfigName: config?.name || config?.model || "",
+      aiError
+    },
+    companyProfile
+  });
+}));
+
+app.post("/api/development-email/send", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    entityType: z.enum(["lead", "customer"]),
+    entityId: z.string().trim().min(1).max(120),
+    to: z.string().trim().email(),
+    subject: z.string().trim().min(1).max(160),
+    body: z.string().trim().min(10).max(6000),
+    nextFollowAt: z.string().trim().max(100).default("")
+  }).parse(req.body);
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.user!.id);
+  const entity = developmentEmailEntity(req.user!, body.entityType, body.entityId);
+  if (!user || !entity) {
+    res.status(404).json({ message: "收件对象不存在或无权访问" });
+    return;
+  }
+  const readiness = developmentEmailReadiness(user, companyProfileForTeam(req.user!.teamId));
+  if (!readiness.companyReady) {
+    res.status(400).json({ message: "公司资料未完整，请联系管理员维护公司名称、主营产品和官网" });
+    return;
+  }
+  let mailInfo: Awaited<ReturnType<typeof sendOutboundEmail>>;
+  try {
+    mailInfo = await sendOutboundEmail(user, { to: body.to, subject: body.subject, body: body.body });
+  } catch (error) {
+    res.status(400).json({ message: outboundEmailError(error, user) });
+    return;
+  }
+  const sentAt = new Date().toISOString();
+  user.lastDevelopmentEmailAt = sentAt;
+  user.lastDevelopmentEmailTo = body.to;
+  user.lastDevelopmentEmailSubject = body.subject;
+  if (entity.lead) {
+    store.leadActivities.unshift({
+      id: `la_${Date.now()}`,
+      leadId: entity.lead.id,
+      type: "email",
+      content: `开发信发送：${body.subject}`,
+      operatorId: req.user!.id,
+      nextFollowAt: body.nextFollowAt,
+      createdAt: sentAt
+    });
+    entity.lead.lastActivityAt = "刚刚";
+    if (body.nextFollowAt) entity.lead.nextFollowAt = body.nextFollowAt;
+  } else if (entity.customer) {
+    store.customerActivities.unshift({
+      id: `ca_${Date.now()}`,
+      customerId: entity.customer.id,
+      type: "email",
+      content: `开发信发送：${body.subject}`,
+      operatorId: req.user!.id,
+      nextReminder: body.nextFollowAt,
+      createdAt: sentAt
+    });
+    if (body.nextFollowAt) entity.customer.nextReminder = body.nextFollowAt;
+  }
+  await store.persist();
+  res.json({
+    sent: { to: body.to, subject: body.subject, sentAt, messageId: mailInfo.messageId, simulated: ["test", "e2e"].includes(process.env.NODE_ENV || "") },
+    user: accountUser(user)
+  });
+}));
 
 app.post("/api/customers/:id/activities", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({

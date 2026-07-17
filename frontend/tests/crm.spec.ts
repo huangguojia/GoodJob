@@ -764,6 +764,100 @@ test.describe("GoodJob CRM prototype pages", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   });
 
+  test("AI background research works for leads and customers", async ({ page }) => {
+    await openView(page, "leads");
+    const leadRow = page.locator("#leadsTableBody tr", { hasText: "Example Lighting GmbH" }).first();
+    await leadRow.locator("[data-open-lead]").click();
+    await expect(page.locator("#leadDrawer")).toHaveClass(/open/);
+    await page.locator("#leadAiResearchButton").click();
+    await expect(page.locator("#ai-research")).toHaveClass(/active/);
+    await expect(page.locator("#aiResearchPage")).toContainText("Example Lighting GmbH");
+    await expect(page.locator("#aiResearchPage .research-verdict")).toBeVisible();
+    await expect(page.locator("#aiResearchPage")).toContainText("业务机会");
+    await expect(page.locator("#aiResearchPage")).toContainText("风险核验");
+    await expect(page.locator("#aiResearchPage")).toContainText("公司事实");
+    await expect(page.locator("#aiResearchPage")).toContainText("关键联系人");
+    await expect(page.locator("#aiResearchPage")).toContainText("证据来源");
+    await expect(page.locator("#aiResearchPage .badge")).toHaveCount(0);
+    await page.locator("#aiResearchPage [data-research-back]").click();
+    await expect(page.locator("#leads")).toHaveClass(/active/);
+
+    await openView(page, "customers");
+    const customerRow = page.locator("#customers tbody tr", { hasText: "Evergreen GmbH" }).first();
+    await customerRow.locator("[data-open-customer-page]").click();
+    await page.locator("#customerDetailPage [data-customer-page-research]").click();
+    await expect(page.locator("#ai-research")).toHaveClass(/active/);
+    await expect(page.locator("#aiResearchPage .research-verdict")).toBeVisible();
+    await expect(page.locator("#aiResearchPage")).toContainText("Evergreen GmbH");
+    await expect(page.locator("#aiResearchPage")).toContainText("成交记录");
+    await expect(page.locator("#aiResearchPage .badge")).toHaveCount(0);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator("#aiResearchPage .research-layout")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+    await page.locator("#aiResearchPage [data-research-back]").click();
+    await expect(page.locator("#customer-detail")).toHaveClass(/active/);
+  });
+
+  test("development email studio checks configuration, drafts and sends", async ({ page }) => {
+    await openView(page, "leads");
+    await page.locator("#leadsTableBody tr", { hasText: "Example Lighting GmbH" }).first().locator("[data-open-lead]").click();
+    await page.locator("#leadDevelopmentEmailButton").click();
+    await expect(page.locator("#development-email")).toHaveClass(/active/);
+    await expect(page.locator("#developmentEmailPage .mail-studio-editor")).toBeVisible();
+    await expect(page.locator("#developmentEmailSubject")).not.toHaveValue("");
+    await expect(page.locator("#developmentEmailBody")).toContainText("Example Lighting GmbH");
+    await expect(page.locator("#developmentEmailPage .mail-readiness.missing")).toHaveCount(3);
+    await expect(page.locator("#developmentEmailPage [data-mail-ai]")).toContainText("配置 AI");
+    await expect(page.locator("#developmentEmailPage [data-mail-send]")).toBeDisabled();
+    await expect(page.locator("#developmentEmailPage .badge")).toHaveCount(0);
+    await page.locator("#developmentEmailPage [data-mail-config='profile']").click();
+    await expect(page.locator("#profile")).toHaveClass(/active/);
+    await expect(page.locator("#profileDevelopmentEmailReady")).toHaveClass(/missing/);
+
+    await apiFromPage(page, "/api/auth/logout", { method: "POST" });
+    await page.reload();
+    await loginAsAdmin(page);
+    await apiFromPage(page, "/api/profile/email-binding", {
+      method: "PATCH",
+      body: {
+        outboundEmail: "admin.sender@example.com",
+        emailSenderName: "Admin Sales",
+        emailSignature: "Best regards,\nAdmin Sales\nGoodJob Export",
+        smtpHost: "smtp.example.com",
+        smtpPort: 465,
+        smtpSecure: true,
+        smtpUser: "admin.sender@example.com",
+        smtpPassword: "test-app-password",
+        clearSmtpPassword: false
+      }
+    });
+    await page.reload();
+    await expect(page.locator("body")).toHaveClass(/is-authenticated/);
+    await openView(page, "settings");
+    await page.locator("#companyProfileName").fill("GoodJob Export Ltd.");
+    await page.locator("#companyProfileWebsite").fill("https://goodjob.example.com");
+    await page.locator("#companyProfileEmail").fill("sales@goodjob.example.com");
+    await page.locator("#companyProfileProducts").fill("industrial lighting and export sourcing solutions");
+    await page.locator("#companyProfilePhone").fill("+86 755 0000 0000");
+    await page.locator("#companyProfileAddress").fill("Shenzhen, China");
+    await page.locator("#companyProfileSaveButton").click();
+    await expect(page.locator(".toast").last()).toContainText("公司资料已保存");
+
+    await openView(page, "leads");
+    await page.locator("#leadsTableBody tr", { hasText: "Example Lighting GmbH" }).first().locator("[data-open-lead]").click();
+    await page.locator("#leadDevelopmentEmailButton").click();
+    await expect(page.locator("#developmentEmailPage .mail-readiness.ready")).toHaveCount(2);
+    await page.locator("#developmentEmailSubject").fill(`Cooperation proposal ${runId}`);
+    await page.locator("#developmentEmailNext").fill("3 天后");
+    await expect(page.locator("#developmentEmailPage [data-mail-send]")).toBeEnabled();
+    await page.locator("#developmentEmailPage [data-mail-send]").click();
+    await expect(page.locator(".toast").last()).toContainText("开发信已发送");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+  });
+
   test("pipeline can create and move a deal", async ({ page }) => {
     test.setTimeout(60_000);
     const dealTitle = `自动化商机-${runId}`;

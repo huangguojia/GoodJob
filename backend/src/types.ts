@@ -46,6 +46,18 @@ export interface SessionUser {
   lastDevelopmentEmailSubject?: string;
 }
 
+export interface CompanyProfile {
+  teamId: string;
+  companyName: string;
+  website: string;
+  productSummary: string;
+  address: string;
+  phone: string;
+  email: string;
+  updatedBy: string;
+  updatedAt: string;
+}
+
 export type CustomerGrade = "A" | "B" | "C" | "D";
 
 export interface Customer {

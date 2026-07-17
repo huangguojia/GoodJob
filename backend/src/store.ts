@@ -9,6 +9,7 @@ import {
   commissionItems,
   commissionProducts,
   commissionRules,
+  companyProfiles,
   competitors,
   customerActivities,
   customers,
@@ -162,6 +163,7 @@ import type {
   ProspectIcpPolicySnapshot,
   ProspectSuppressionEvent
 } from "./types.js";
+import type { CompanyProfile } from "./types.js";
 
 export interface PersistedStoreMutation<T> {
   value: T;
@@ -171,6 +173,7 @@ export interface PersistedStoreMutation<T> {
 export interface CrmStore {
   mode: "memory" | "mysql";
   users: User[];
+  companyProfiles: CompanyProfile[];
   dailyReports: DailyReport[];
   dailyReportComments: DailyReportComment[];
   internalMessages: InternalMessage[];
@@ -334,6 +337,7 @@ export interface CrmStore {
 export const memoryStore: CrmStore = {
   mode: "memory",
   users,
+  companyProfiles,
   dailyReports,
   dailyReportComments,
   internalMessages,

@@ -7177,6 +7177,337 @@
       text-align: center;
     }
 
+    #ai-research { color: #202b3d; }
+
+    .research-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 58px;
+      margin-bottom: 14px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid #dfe5ee;
+    }
+
+    .research-identity {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .research-identity > div { min-width: 0; }
+    .research-identity h1 { margin: 0; overflow-wrap: anywhere; color: #111827; font-size: 22px; line-height: 1.25; }
+    .research-identity span { display: block; margin-top: 4px; color: #758196; font-size: 11px; }
+    .research-identity .customer-page-back svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    .ai-entry-button,
+    .research-run-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+    .ai-entry-button svg,
+    .research-run-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+    .research-running {
+      min-height: 560px;
+      display: grid;
+      align-content: center;
+      justify-items: center;
+      gap: 34px;
+      border: 1px solid #dfe5ee;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .research-orbit {
+      position: relative;
+      width: 92px;
+      height: 92px;
+      display: grid;
+      place-items: center;
+      border: 1px solid #dce4f2;
+      border-radius: 50%;
+      color: #3157d5;
+      background: #f6f8ff;
+    }
+
+    .research-orbit::before,
+    .research-orbit::after,
+    .research-orbit span {
+      content: "";
+      position: absolute;
+      border: 1px solid rgba(49,87,213,.2);
+      border-radius: 50%;
+    }
+
+    .research-orbit::before { inset: -10px; }
+    .research-orbit::after { inset: 13px; border-color: rgba(26,167,161,.32); }
+    .research-orbit span { width: 8px; height: 8px; border: 0; background: #1aa7a1; animation: research-orbit 2.2s linear infinite; }
+    .research-orbit b { font-size: 21px; letter-spacing: 0; }
+
+    @keyframes research-orbit {
+      from { transform: rotate(0deg) translateX(50px) rotate(0deg); }
+      to { transform: rotate(360deg) translateX(50px) rotate(-360deg); }
+    }
+
+    .research-stage-list {
+      width: min(620px, calc(100% - 48px));
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .research-stage-list > div {
+      min-width: 0;
+      display: grid;
+      justify-items: center;
+      gap: 8px;
+      color: #9aa4b2;
+      font-size: 11px;
+    }
+
+    .research-stage-list i {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border: 1px solid #dfe5ee;
+      border-radius: 50%;
+      background: #fff;
+      font-style: normal;
+    }
+
+    .research-stage-list .active { color: #3157d5; }
+    .research-stage-list .active i { border-color: #3157d5; box-shadow: 0 0 0 4px rgba(49,87,213,.08); }
+    .research-stage-list .done { color: #16815a; }
+    .research-stage-list .done i { border-color: #bde4d3; background: #ebf8f2; }
+    .research-progress { width: min(620px, calc(100% - 48px)); height: 3px; overflow: hidden; border-radius: 2px; background: #e8edf5; }
+    .research-progress i { display: block; height: 100%; border-radius: inherit; background: #3157d5; transition: width .35s ease; }
+
+    .research-verdict {
+      display: grid;
+      grid-template-columns: 116px minmax(0, 1fr) minmax(230px, .52fr);
+      gap: 22px;
+      align-items: center;
+      margin-bottom: 14px;
+      padding: 20px;
+      border: 1px solid #dfe5ee;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .research-score {
+      width: 88px;
+      height: 88px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: conic-gradient(#3157d5 0 var(--score), #e8edf5 var(--score) 360deg);
+    }
+
+    .research-score > div {
+      width: 72px;
+      height: 72px;
+      display: grid;
+      place-content: center;
+      border-radius: 50%;
+      background: #fff;
+      text-align: center;
+    }
+
+    .research-score b { color: #172033; font-size: 25px; line-height: 1; }
+    .research-score span { margin-top: 5px; color: #8490a1; font-size: 9px; }
+    .research-verdict.strong .research-score { background: conic-gradient(#16a36a 0 var(--score), #e8edf5 var(--score) 360deg); }
+    .research-verdict.caution .research-score { background: conic-gradient(#d99518 0 var(--score), #e8edf5 var(--score) 360deg); }
+    .research-verdict-copy { min-width: 0; }
+    .research-verdict-copy > span,
+    .research-next > span { color: #7d899a; font-size: 10px; }
+    .research-verdict-copy h2 { margin: 5px 0 7px; color: #111827; font-size: 24px; line-height: 1.2; }
+    .research-verdict-copy p { margin: 0; color: #58657a; font-size: 12px; line-height: 1.7; }
+    .research-next { min-width: 0; padding-left: 20px; border-left: 1px solid #e3e8f0; }
+    .research-next b { display: block; margin-top: 7px; overflow-wrap: anywhere; color: #24314a; font-size: 13px; line-height: 1.55; }
+
+    .research-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(330px, .65fr);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .research-main,
+    .research-side { min-width: 0; display: grid; gap: 14px; }
+
+    .research-block {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid #dfe5ee;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .research-block > h2 { margin: 0; padding: 13px 15px; border-bottom: 1px solid #e8edf3; color: #172033; background: #fbfcfe; font-size: 13px; }
+
+    .research-opportunities article {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      min-height: 64px;
+      padding: 12px 15px;
+      border-bottom: 1px solid #edf1f5;
+    }
+
+    .research-opportunities article:last-child,
+    .research-risks article:last-child,
+    .research-facts > div:last-child,
+    .research-sources > :last-child { border-bottom: 0; }
+    .research-opportunities i { color: #3157d5; font-size: 12px; font-style: normal; font-variant-numeric: tabular-nums; }
+    .research-opportunities b { color: #2c384d; font-size: 13px; font-weight: 700; line-height: 1.5; }
+
+    .research-risks article {
+      display: grid;
+      grid-template-columns: 10px minmax(0, 1fr);
+      gap: 11px;
+      min-height: 68px;
+      padding: 13px 15px;
+      border-bottom: 1px solid #edf1f5;
+    }
+
+    .research-risks article > i { width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: #16a36a; }
+    .research-risks article.medium > i { background: #d99518; }
+    .research-risks article.high > i { background: #d95757; }
+    .research-risks b { display: block; color: #29354a; font-size: 12px; }
+    .research-risks span { display: block; margin-top: 4px; color: #738095; font-size: 11px; line-height: 1.5; }
+
+    .research-facts { margin: 0; }
+    .research-facts > div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; padding: 11px 14px; border-bottom: 1px solid #edf1f5; }
+    .research-facts dt { color: #8591a2; font-size: 10px; }
+    .research-facts dd { margin: 0; overflow-wrap: anywhere; color: #2a354a; font-size: 11px; font-weight: 700; line-height: 1.45; }
+
+    .research-sources > a,
+    .research-sources > div {
+      display: grid;
+      gap: 4px;
+      padding: 11px 14px;
+      border-bottom: 1px solid #edf1f5;
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .research-sources > a:hover { background: #f8faff; }
+    .research-sources b { overflow-wrap: anywhere; color: #334057; font-size: 11px; }
+    .research-sources a b { color: #3157d5; }
+    .research-sources span { color: #8a96a7; font-size: 9px; }
+    .research-engine { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 3px 2px; color: #8490a1; font-size: 9px; }
+    .research-engine b { overflow-wrap: anywhere; color: #596579; font-size: 10px; text-align: right; }
+    .research-empty { padding: 24px 14px; color: #8995a6; font-size: 11px; text-align: center; }
+
+    .mail-studio-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 58px;
+      margin-bottom: 14px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid #dfe5ee;
+    }
+
+    .mail-studio-header .customer-page-back svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .mail-studio-actions { display: flex; gap: 8px; }
+    .mail-studio-actions .btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+
+    .mail-studio-loading {
+      min-height: 560px;
+      display: grid;
+      place-content: center;
+      justify-items: center;
+      gap: 18px;
+      border: 1px solid #dfe5ee;
+      border-radius: 8px;
+      background: #fff;
+      color: #354158;
+      font-size: 13px;
+    }
+
+    .mail-studio-loading i { width: 34px; height: 34px; border: 3px solid #e1e6ef; border-top-color: #3157d5; border-radius: 50%; animation: mail-spin .8s linear infinite; }
+    @keyframes mail-spin { to { transform: rotate(360deg); } }
+
+    .mail-studio-layout {
+      display: grid;
+      grid-template-columns: 240px minmax(420px, 1fr) 280px;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .mail-studio-context,
+    .mail-studio-checks { min-width: 0; display: grid; gap: 12px; }
+    .mail-studio-context > section,
+    .mail-readiness,
+    .mail-sender-card,
+    .mail-studio-editor { min-width: 0; border: 1px solid #dfe5ee; border-radius: 8px; background: #fff; }
+    .mail-studio-context h2,
+    .mail-readiness h2 { margin: 0; color: #172033; font-size: 13px; }
+    .mail-studio-context > section > h2 { padding: 13px 14px; border-bottom: 1px solid #e8edf3; background: #fbfcfe; }
+    .mail-studio-context label { display: grid; gap: 6px; padding: 11px 13px; border-bottom: 1px solid #edf1f5; }
+    .mail-studio-context label span { color: #7d899b; font-size: 10px; }
+    .mail-studio-context input,
+    .mail-studio-context select { width: 100%; height: 35px; min-width: 0; padding: 0 9px; border: 1px solid #d8e0eb; border-radius: 6px; color: #263249; background: #fff; }
+    .mail-studio-context dl { margin: 0; }
+    .mail-studio-context dl > div { display: grid; gap: 4px; padding: 10px 13px; border-bottom: 1px solid #edf1f5; }
+    .mail-studio-context dl > div:last-child { border-bottom: 0; }
+    .mail-studio-context dt { color: #8490a2; font-size: 9px; }
+    .mail-studio-context dd { margin: 0; overflow-wrap: anywhere; color: #2d394e; font-size: 11px; font-weight: 700; }
+
+    .mail-studio-editor { min-height: 650px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
+    .mail-studio-editor label { display: grid; }
+    .mail-studio-editor label > span { padding: 11px 15px 0; color: #7d899b; font-size: 10px; }
+    .mail-subject-field { border-bottom: 1px solid #e8edf3; }
+    .mail-subject-field input { width: 100%; min-width: 0; padding: 8px 15px 13px; border: 0; outline: 0; color: #1d293d; background: transparent; font-size: 16px; font-weight: 800; }
+    .mail-body-field { min-height: 0; }
+    .mail-body-field textarea { width: 100%; min-height: 540px; padding: 14px 15px 20px; resize: vertical; border: 0; outline: 0; color: #364258; background: transparent; font: 12px/1.75 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0; }
+    .mail-studio-editor footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 15px; border-top: 1px solid #e8edf3; color: #8a96a7; font-size: 9px; }
+    .mail-studio-editor footer b { color: #596579; font-size: 10px; }
+
+    .mail-readiness { padding: 14px; }
+    .mail-readiness > div { display: flex; align-items: center; gap: 9px; }
+    .mail-readiness i { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #d99518; }
+    .mail-readiness.ready i { background: #16a36a; }
+    .mail-readiness > b { display: block; margin-top: 10px; overflow-wrap: anywhere; color: #566278; font-size: 10px; line-height: 1.5; }
+    .mail-readiness > button { width: 100%; margin-top: 12px; }
+    .mail-readiness > span { display: block; margin-top: 10px; color: #9a6b16; font-size: 10px; font-weight: 700; }
+    .mail-sender-card { display: grid; gap: 5px; padding: 14px; }
+    .mail-sender-card span { color: #8490a2; font-size: 9px; }
+    .mail-sender-card b { color: #263249; font-size: 12px; }
+    .mail-sender-card small { overflow-wrap: anywhere; color: #6f7c90; font-size: 10px; }
+
+    .email-config-reminder {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      min-height: 54px;
+      padding: 10px 14px;
+      border: 1px solid #efdcae;
+      border-radius: 8px;
+      background: #fffaf0;
+    }
+    .email-config-reminder.ready { border-color: #cce9db; background: #f5fcf8; }
+    .email-config-reminder > i { width: 9px; height: 9px; border-radius: 50%; background: #d99518; }
+    .email-config-reminder.ready > i { background: #16a36a; }
+    .email-config-reminder span { display: block; color: #8a7550; font-size: 9px; }
+    .email-config-reminder b { display: block; margin-top: 3px; color: #4c3f28; font-size: 11px; }
+    .email-config-reminder.ready span { color: #668577; }
+    .email-config-reminder.ready b { color: #245941; }
+
+    .company-profile-panel { margin-bottom: 14px; }
+    .company-profile-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 14px; }
+    .company-profile-form label { min-width: 0; display: grid; gap: 6px; color: #748096; font-size: 10px; }
+    .company-profile-form label.wide { grid-column: span 2; }
+    .company-profile-form input,
+    .company-profile-form textarea { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid #d8e0eb; border-radius: 7px; color: #28354a; background: #fff; }
+    .company-profile-form textarea { min-height: 76px; resize: vertical; }
+    .company-profile-form input:disabled,
+    .company-profile-form textarea:disabled { color: #7d899a; background: #f5f7fa; }
+
     .report-grid {
       display: grid;
       grid-template-columns: minmax(0, 1.05fr) minmax(340px, .95fr);
@@ -12420,6 +12751,11 @@
 	      .customer-page-summary > div:nth-child(3n) { border-right: 0; }
 	      .customer-page-grid { grid-template-columns: 1fr; }
 	      .customer-page-section.full { grid-column: auto; }
+	      .research-layout { grid-template-columns: 1fr; }
+	      .research-side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	      .research-side .research-block:last-of-type { grid-column: 1 / -1; }
+	      .mail-studio-layout { grid-template-columns: 220px minmax(0, 1fr); }
+	      .mail-studio-checks { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 	      .pipeline-strip { grid-template-columns: repeat(5, minmax(210px, 1fr)); }
 	      .lead-workbench { grid-template-columns: 1fr; }
 	      .lead-queue-panel { position: static; width: 100%; }
@@ -12511,6 +12847,43 @@
       .customer-page-deal strong { grid-column: 2; grid-row: 1; }
       .customer-page-followup { grid-template-columns: 70px minmax(0, 1fr); }
       .customer-page-followup small { grid-column: 2; text-align: left; }
+      .research-header { align-items: stretch; flex-direction: column; }
+      .research-run-button { min-height: 40px; width: 100%; }
+      .research-identity h1 { font-size: 18px; }
+      .research-running { min-height: 480px; padding: 28px 12px; }
+      .research-stage-list { grid-template-columns: 1fr; gap: 10px; }
+      .research-stage-list > div { grid-template-columns: 28px minmax(0, 1fr); justify-items: start; align-items: center; }
+      .research-progress { width: calc(100% - 32px); }
+      .research-verdict { grid-template-columns: 78px minmax(0, 1fr); gap: 14px; padding: 15px 13px; }
+      .research-score { width: 72px; height: 72px; }
+      .research-score > div { width: 58px; height: 58px; }
+      .research-score b { font-size: 21px; }
+      .research-verdict-copy h2 { font-size: 19px; }
+      .research-verdict-copy p { font-size: 12px; }
+      .research-next { grid-column: 1 / -1; padding: 13px 0 0; border-top: 1px solid #e3e8f0; border-left: 0; }
+      .research-layout,
+      .research-main,
+      .research-side { gap: 10px; }
+      .research-side { grid-template-columns: 1fr; }
+      .research-side .research-block:last-of-type { grid-column: auto; }
+      .research-block > h2 { font-size: 14px; }
+      .research-opportunities b,
+      .research-risks b { font-size: 12px; }
+      .research-risks span,
+      .research-facts dd,
+      .research-sources b { font-size: 11px; }
+      .research-facts dt,
+      .research-sources span { font-size: 10px; }
+      .mail-studio-header { align-items: stretch; flex-direction: column; }
+      .mail-studio-actions { display: grid; grid-template-columns: 1fr 1fr; }
+      .mail-studio-actions .btn { min-height: 40px; }
+      .mail-studio-layout { grid-template-columns: 1fr; gap: 10px; }
+      .mail-studio-context { grid-template-columns: 1fr; }
+      .mail-studio-editor { min-height: 580px; }
+      .mail-body-field textarea { min-height: 470px; font-size: 12px; }
+      .mail-studio-checks { grid-column: auto; grid-template-columns: 1fr; }
+      .company-profile-form { grid-template-columns: 1fr; }
+      .company-profile-form label.wide { grid-column: auto; }
       .topbar {
         height: auto;
         flex-direction: column;
@@ -13994,6 +14367,14 @@
           <div id="customerDetailPage"></div>
         </div>
 
+        <div class="view" id="ai-research">
+          <div id="aiResearchPage"></div>
+        </div>
+
+        <div class="view" id="development-email">
+          <div id="developmentEmailPage"></div>
+        </div>
+
         <div class="view" id="pipeline">
           <div class="page-head">
             <div><p class="eyebrow">Deal Pipeline</p><h1>商机管道</h1><p class="sub">以外贸销售阶段为核心，金额、国家、下一步动作全部卡片化。</p></div>
@@ -14746,6 +15127,7 @@
           </div>
 
           <div class="profile-grid">
+            <div class="email-config-reminder missing" id="profileDevelopmentEmailReady"><i></i><div><span>开发信发件配置</span><b>正在检查</b></div></div>
             <section class="profile-hero-panel">
               <div class="profile-identity">
                 <div class="profile-avatar-xl" id="profileAvatarLarge">--</div>
@@ -14818,6 +15200,18 @@
             <div class="dense-card"><span>业务员账号</span><b>--</b><small>加载中</small></div>
             <div class="dense-card"><span>异常登录</span><b>--</b><small>加载中</small></div>
           </div>
+
+          <section class="panel section company-profile-panel" id="companyProfileForm">
+            <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M6 21V7l6-4 6 4v14"/><path d="M9 10h6"/><path d="M9 14h6"/></svg></span><div><h2>公司资料</h2><span>开发信统一使用</span></div></div><button class="btn primary" id="companyProfileSaveButton">保存公司资料</button></div>
+            <div class="company-profile-form">
+              <label><span>公司名称</span><input id="companyProfileName"></label>
+              <label><span>公司官网</span><input id="companyProfileWebsite"></label>
+              <label><span>对外邮箱</span><input id="companyProfileEmail"></label>
+              <label class="wide"><span>主营产品</span><textarea id="companyProfileProducts"></textarea></label>
+              <label><span>公司电话</span><input id="companyProfilePhone"></label>
+              <label class="wide"><span>公司地址</span><input id="companyProfileAddress"></label>
+            </div>
+          </section>
 
           <div class="account-grid">
             <section class="panel section">
