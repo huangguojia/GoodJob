@@ -47,6 +47,7 @@ interface Customer {
   stage: string;
   amount: number;
   health: number;
+  grade?: "A" | "B" | "C" | "D";
   nextReminder: string;
   wecomBound: boolean;
   billingName?: string;
@@ -64,6 +65,10 @@ interface Customer {
   lastActivityAt?: string;
   pendingIntelligence?: CustomerIntelligenceSuggestion[];
   pendingIntelligenceCount?: number;
+  hasWonDeal?: boolean;
+  wonDealCount?: number;
+  wonDealAmount?: number;
+  lastWonAt?: string;
 }
 
 type CustomerIntelligenceFieldKey =
@@ -1716,6 +1721,7 @@ const viewLabels: Record<string, string> = {
   "lead-task-detail": "任务执行详情",
   "prospect-list": "搜客清单",
   customers: "客户",
+  "customer-detail": "客户全景",
   pipeline: "商机",
   reminders: "跟进提醒",
   "plan-growth": "计划任务",
@@ -4218,6 +4224,23 @@ async function createLead(form: HTMLFormElement) {
   }
 }
 
+function customerGradeValue(customer: Customer) {
+  if (customer.grade && ["A", "B", "C", "D"].includes(customer.grade)) return customer.grade;
+  if (customer.health >= 85) return "A";
+  if (customer.health >= 70) return "B";
+  if (customer.health >= 55) return "C";
+  return "D";
+}
+
+function customerGradeLabel(grade: string) {
+  return ({ A: "核心", B: "重点", C: "常规", D: "低优先" } as Record<string, string>)[grade] || "常规";
+}
+
+function customerGradeHtml(customer: Customer) {
+  const grade = customerGradeValue(customer);
+  return `<span class="customer-grade customer-grade-${grade.toLowerCase()}"><b>${grade}</b><small>${customerGradeLabel(grade)}</small></span>`;
+}
+
 function renderCustomers(customers: Customer[]) {
   const tbody = qs<HTMLElement>("#customers tbody");
   if (!tbody) return;
@@ -4242,17 +4265,18 @@ function renderCustomers(customers: Customer[]) {
     <td><div class="company"><span class="flag">${countryFlag(customer.country)}</span><div><button type="button" class="customer-name ${activeDealCount > 0 ? "has-active-deal" : ""}" data-open-customer="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</button><span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")}</span></div></div></td>
     <td><div class="customer-follow-cell">${badge(pipelineStage, pipelineStage === "成交" || pipelineStage === "谈判" ? "green" : pipelineStage === "已报价" ? "amber" : "")}<span>${activeDealCount} 个活跃商机</span></div></td>
     <td><div class="customer-health-cell">${health(customer.health)}<span>${customer.health}%</span></div></td>
+    <td><div class="customer-value-cell">${customerGradeHtml(customer)}${badge(customer.hasWonDeal ? `已成交 ${customer.wonDealCount || 1} 次` : "未成交", customer.hasWonDeal ? "green" : "gray")}</div></td>
     <td><div class="customer-follow-cell"><span>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</span><b>${reminder}</b></div></td>
-    <td>${badge(customer.wecomBound ? "已绑定" : "未绑定", customer.wecomBound ? "green" : "gray")}</td>
-    <td><button class="btn" data-edit-customer>编辑</button></td>
+    <td>${badge("待接入", "gray")}</td>
+    <td><div class="customer-row-actions"><button class="btn" data-open-customer-page>全景</button><button class="btn" data-edit-customer>编辑</button></div></td>
   </tr>`;
-  }).join("") : `<tr><td colspan="7" class="empty-cell">当前筛选下暂无客户。</td></tr>`;
+  }).join("") : `<tr><td colspan="8" class="empty-cell">当前筛选下暂无客户。</td></tr>`;
   const mobile = qs<HTMLElement>("#customerMobileList");
   if (mobile) mobile.innerHTML = visibleCustomers.length ? visibleCustomers.map((customer) => `
     <article class="customer-mobile-card" data-customer-mobile-id="${escapeHtml(customer.id)}">
       <span class="customer-mobile-top"><button type="button" class="customer-name ${(customer.activeDealCount || 0) > 0 ? "has-active-deal" : ""}" data-open-customer="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</button>${badge(customer.pipelineStage || "暂无商机", customer.pipelineStage === "谈判" || customer.pipelineStage === "成交" ? "green" : customer.pipelineStage === "已报价" ? "amber" : "gray")}</span>
       <span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")}</span>
-      <span class="customer-mobile-meta"><i>${customer.activeDealCount || 0} 个活跃商机</i><i>${escapeHtml(customer.nextReminder || "待安排")}</i><i>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</i></span>
+      <span class="customer-mobile-meta"><i>${customerGradeValue(customer)}级 · ${customerGradeLabel(customerGradeValue(customer))}</i><i>${customer.hasWonDeal ? `已成交 ${customer.wonDealCount || 1} 次` : "未成交"}</i><i>${customer.activeDealCount || 0} 个活跃商机</i><i>${escapeHtml(customer.nextReminder || "待安排")}</i><i>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</i></span>
     </article>`).join("") : `<div class="empty-cell">当前筛选下暂无客户。</div>`;
   qsa<HTMLElement>("tr", tbody).forEach((row, index) => {
     const customer = visibleCustomers[index];
@@ -4284,6 +4308,13 @@ function renderCustomers(customers: Customer[]) {
       event.stopPropagation();
       const customer = state.customers.find((item) => item.id === button.closest<HTMLElement>("tr")?.dataset.customerId);
       if (customer) openCustomerModal(customer);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-open-customer-page]", tbody).forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const customer = state.customers.find((item) => item.id === button.closest<HTMLElement>("tr")?.dataset.customerId);
+      if (customer) openCustomerDetailPage(customer);
     });
   });
   const selected = customers.find((item) => item.id === state.selectedCustomerId);
@@ -4352,6 +4383,147 @@ function renderCustomerDealProgress(customer: Customer) {
       </div>
     </section>
   `;
+}
+
+function customerContactDetails(customer: Customer) {
+  const source = [customer.contact, customer.documentContact || ""].join(" ");
+  const email = source.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
+  const phone = source.match(/(?:\+?\d[\d\s()\-]{6,}\d)/)?.[0]?.trim() || "";
+  return { email, phone };
+}
+
+function customerContactIcon(channel: "email" | "phone" | "whatsapp" | "wechat") {
+  if (channel === "email") return `<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>`;
+  if (channel === "phone") return `<svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.78.62 2.63a2 2 0 0 1-.45 2.11L8 9.73a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.85.3 1.73.5 2.63.62A2 2 0 0 1 22 16.92z"/></svg>`;
+  if (channel === "whatsapp") return `<svg viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.5 9 9 0 0 1-4.2-1.1L3 20l1.3-4.4A8.5 8.5 0 1 1 21 11.5z"/><path d="M8.7 8.4c.5 3 2.2 4.7 5.2 5.2"/></svg>`;
+  return `<svg viewBox="0 0 24 24"><path d="M8.5 5C5.5 5 3 7 3 9.5c0 1.5.9 2.9 2.3 3.7L5 15l2.1-1c.5.1.9.1 1.4.1 3 0 5.5-2 5.5-4.5S11.5 5 8.5 5z"/><path d="M15.5 10c3 0 5.5 2 5.5 4.5 0 1.5-.9 2.9-2.3 3.7L19 20l-2.1-1c-.5.1-.9.1-1.4.1-3 0-5.5-2-5.5-4.5"/></svg>`;
+}
+
+function launchCustomerContact(customer: Customer, channel: "email" | "phone" | "whatsapp" | "wechat") {
+  const contacts = customerContactDetails(customer);
+  if (channel === "email") {
+    if (!contacts.email) {
+      toast("请先补充客户邮箱，再发起邮件联系");
+      openCustomerModal(customer);
+      return;
+    }
+    window.location.href = `mailto:${contacts.email}?subject=${encodeURIComponent(`GoodJob CRM · ${customer.company}`)}`;
+    return;
+  }
+  if (channel === "phone") {
+    if (!contacts.phone) {
+      toast("请先补充客户电话，再发起拨号");
+      openCustomerModal(customer);
+      return;
+    }
+    window.location.href = `tel:${contacts.phone.replace(/[^+\d]/g, "")}`;
+    return;
+  }
+  toast(`${channel === "whatsapp" ? "WhatsApp" : "企业微信"} 联系适配器已预留，通讯接口接入后可直接发起联系`);
+}
+
+function renderCustomerDetailPage(customer?: Customer) {
+  const box = qs<HTMLElement>("#customerDetailPage");
+  if (!box) return;
+  const current = customer
+    ? state.customers.find((item) => item.id === customer.id) || customer
+    : state.customers.find((item) => item.id === state.selectedCustomerId);
+  if (!current) {
+    box.innerHTML = `<div class="customer-page-empty">未找到客户资料，请返回客户列表重新选择。</div>`;
+    return;
+  }
+  state.selectedCustomerId = current.id;
+  const grade = customerGradeValue(current);
+  const deals = customerRelatedDeals(current);
+  const activities = current.activities || [];
+  const contacts = customerContactDetails(current);
+  const activeDeals = deals.filter((deal) => !deal.archivedAt && !["成交", "丢单"].includes(deal.stage));
+  box.innerHTML = `
+    <header class="customer-page-header">
+      <div class="customer-page-identity">
+        <button class="customer-page-back" type="button" data-customer-page-back title="返回客户列表" aria-label="返回客户列表"><svg viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button>
+        <div class="customer-page-copy">
+          <div class="customer-page-title"><h1>${escapeHtml(current.company)}</h1>${customerGradeHtml(current)}${badge(current.hasWonDeal ? "成交客户" : "未成交", current.hasWonDeal ? "green" : "gray")}</div>
+          <p>${escapeHtml(current.country)} · ${escapeHtml(current.contact)} · 负责人 ${escapeHtml(current.ownerName || "未分配")} · 客户编号 ${escapeHtml(current.id)}</p>
+        </div>
+      </div>
+      <div class="customer-page-actions"><button class="btn" type="button" data-customer-page-edit>编辑客户</button><button class="btn primary" type="button" data-customer-page-follow>新增跟进</button></div>
+    </header>
+
+    <section class="customer-page-summary" aria-label="客户摘要">
+      <div><span>客户分级</span><b>${grade} · ${customerGradeLabel(grade)}</b><small>人工维护的业务优先级</small></div>
+      <div class="${current.hasWonDeal ? "is-positive" : ""}"><span>成交历史</span><b>${current.hasWonDeal ? `已成交 ${current.wonDealCount || 1} 次` : "尚未成交"}</b><small>${current.lastWonAt ? `最近 ${escapeHtml(formatDateTime(current.lastWonAt))}` : "由关联商机自动判断"}</small></div>
+      <div><span>活跃商机</span><b>${activeDeals.length} 个</b><small>在手金额 ${money(current.pipelineAmount || 0)}</small></div>
+      <div><span>健康度</span><b>${current.health}%</b><small>人工评分，低于 60 进入风险提醒</small></div>
+      <div><span>跟进记录</span><b>${activities.length} 条</b><small>${current.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(current.lastActivityAt))}` : "暂无跟进"}</small></div>
+    </section>
+
+    <div class="customer-page-grid">
+      <section class="customer-page-section">
+        <div class="customer-page-section-head"><div><h2>客户信息</h2><p>主档、单据与交易基础资料</p></div><button class="btn" type="button" data-customer-page-edit>维护</button></div>
+        <div class="customer-profile-grid">
+          <div class="customer-profile-field"><span>公司名称</span><b>${escapeHtml(current.company)}</b></div>
+          <div class="customer-profile-field"><span>国家 / 地区</span><b>${escapeHtml(current.country)}</b></div>
+          <div class="customer-profile-field"><span>主联系人</span><b>${escapeHtml(current.contact)}</b></div>
+          <div class="customer-profile-field"><span>单据联系人</span><b>${escapeHtml(current.documentContact || "待维护")}</b></div>
+          <div class="customer-profile-field"><span>账单抬头</span><b>${escapeHtml(current.billingName || current.company)}</b></div>
+          <div class="customer-profile-field"><span>账单地址</span><b>${escapeHtml(current.billingAddress || "待维护")}</b></div>
+          <div class="customer-profile-field"><span>贸易 / 付款条款</span><b>${escapeHtml(current.defaultIncoterm || "待维护")} · ${escapeHtml(current.defaultPaymentTerm || "待维护")}</b></div>
+          <div class="customer-profile-field"><span>默认目的港</span><b>${escapeHtml(current.defaultPortDischarge || "待维护")}</b></div>
+        </div>
+        <div class="customer-health-note"><b>健康度说明：</b>当前健康度来自历史人工录入或导入，并非系统自动计算。它仍用于低健康度提醒和风险报表；客户分级用于更明确的销售优先级管理。</div>
+      </section>
+
+      <section class="customer-page-section">
+        <div class="customer-page-section-head"><div><h2>联系中心</h2><p>直接联系方式与通讯工具接入点</p></div>${badge("企业微信待接入", "gray")}</div>
+        <div class="customer-contact-list">
+          <div class="customer-contact-row"><span>联系人</span><b>${escapeHtml(current.contact)}</b><small>主联系人</small></div>
+          <div class="customer-contact-row"><span>邮箱</span><b>${escapeHtml(contacts.email || "未维护")}</b><small>${contacts.email ? "可直接发邮件" : "待补充"}</small></div>
+          <div class="customer-contact-row"><span>电话</span><b>${escapeHtml(contacts.phone || "未维护")}</b><small>${contacts.phone ? "可直接拨号" : "待补充"}</small></div>
+        </div>
+        <div class="customer-contact-actions">
+          <button class="customer-contact-action ${contacts.email ? "is-ready" : ""}" type="button" data-customer-contact="email">${customerContactIcon("email")}<span>邮件${contacts.email ? "" : " · 待维护"}</span></button>
+          <button class="customer-contact-action ${contacts.phone ? "is-ready" : ""}" type="button" data-customer-contact="phone">${customerContactIcon("phone")}<span>电话${contacts.phone ? "" : " · 待维护"}</span></button>
+          <button class="customer-contact-action" type="button" data-customer-contact="whatsapp">${customerContactIcon("whatsapp")}<span>WhatsApp · 去绑定</span></button>
+          <button class="customer-contact-action" type="button" data-customer-contact="wechat">${customerContactIcon("wechat")}<span>企业微信 · 待接入</span></button>
+        </div>
+      </section>
+
+      <section class="customer-page-section full">
+        <div class="customer-page-section-head"><div><h2>相关商机</h2><p>成交、推进中和历史关闭商机统一展示</p></div><button class="btn" type="button" data-customer-page-pipeline>打开商机管道</button></div>
+        <div class="customer-page-deals">${deals.length ? deals.map((deal) => `
+          <article class="customer-page-deal">
+            <div><b>${escapeHtml(deal.title)}</b><span>${escapeHtml(deal.product || "产品待维护")} · ${escapeHtml(deal.nextAction || "下一动作待维护")}</span></div>
+            <div><b>${escapeHtml(deal.nextActionAt || "时间待定")}</b><span>下一动作时间</span></div>
+            ${badge(deal.stage, dealTone(deal))}
+            <strong>${escapeHtml(dealMoney(deal.amount, deal.currency))}</strong>
+          </article>`).join("") : `<div class="customer-page-empty">暂无关联商机。新建商机并选择该客户后会自动出现在这里。</div>`}</div>
+      </section>
+
+      <section class="customer-page-section full">
+        <div class="customer-page-section-head"><div><h2>跟进记录</h2><p>电话、邮件、会议与社媒沟通的连续时间线</p></div><button class="btn primary" type="button" data-customer-page-follow>新增跟进</button></div>
+        <div class="customer-page-followups">${activities.length ? activities.map((activity) => `
+          <article class="customer-page-followup">
+            <time>${escapeHtml(formatDateTime(activity.createdAt))}</time>
+            <div><b>${escapeHtml(customerActivityLabel(activity.type))} · ${escapeHtml(activity.operatorName || "未知操作人")}</b><span>${escapeHtml(activity.content)}</span></div>
+            <small>${activity.nextReminder ? `下次：${escapeHtml(activity.nextReminder)}` : "未设置下次提醒"}</small>
+          </article>`).join("") : `<div class="customer-page-empty">暂无跟进记录。新增首条联系记录后会在这里形成时间线。</div>`}</div>
+      </section>
+    </div>
+  `;
+  qs<HTMLButtonElement>("[data-customer-page-back]", box)?.addEventListener("click", () => activateNavView("customers"));
+  qsa<HTMLButtonElement>("[data-customer-page-edit]", box).forEach((button) => button.addEventListener("click", () => openCustomerModal(current)));
+  qsa<HTMLButtonElement>("[data-customer-page-follow]", box).forEach((button) => button.addEventListener("click", () => addFollowRecord(current)));
+  qs<HTMLButtonElement>("[data-customer-page-pipeline]", box)?.addEventListener("click", () => activateNavView("pipeline"));
+  qsa<HTMLButtonElement>("[data-customer-contact]", box).forEach((button) => {
+    button.addEventListener("click", () => launchCustomerContact(current, button.dataset.customerContact as "email" | "phone" | "whatsapp" | "wechat"));
+  });
+}
+
+function openCustomerDetailPage(customer: Customer) {
+  state.selectedCustomerId = customer.id;
+  closeCustomerDrawer();
+  activateNavView("customer-detail", () => renderCustomerDetailPage(customer));
 }
 
 function customerTimeZone(country = "") {
@@ -4447,7 +4619,7 @@ function renderCustomerDrawer(customer?: Customer) {
   drawer.innerHTML = `
     <div class="drawer-head">
       <div><h2>${escapeHtml(customer.company)}</h2><p>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")} · ${escapeHtml(pipelineStage)}</p></div>
-      <div class="inline-actions">${customer.nextReminder.includes("逾期") ? badge("报价未回复", "red") : badge("跟进中", "green")}<button class="btn icon-only" id="customerDrawerClose" title="关闭" aria-label="关闭客户详情">×</button></div>
+      <div class="inline-actions">${customer.nextReminder.includes("逾期") ? badge("报价未回复", "red") : badge("跟进中", "green")}<button class="btn" type="button" data-open-customer-page>客户全景</button><button class="btn icon-only" id="customerDrawerClose" title="关闭" aria-label="关闭客户详情">×</button></div>
     </div>
     <section class="customer-time-card" aria-label="客户世界时间">
       <div>
@@ -4462,15 +4634,17 @@ function renderCustomerDrawer(customer?: Customer) {
     </section>
     <div class="score-card">
       <div class="score-ring"><span>${customer.health}</span></div>
-      <div><b>跟进评分：${customer.health >= 80 ? "健康" : customer.health >= 60 ? "需保持" : "需抢救"}</b><p>系统按阶段、健康度、企微状态和下一提醒生成跟进优先级。</p></div>
+      <div><b>健康度：${customer.health >= 80 ? "健康" : customer.health >= 60 ? "需保持" : "需关注"}</b><p>当前为人工维护的兼容评分，用于风险提醒；客户分级用于业务优先级。</p></div>
     </div>
     <div class="info-grid">
       <div class="info"><span>健康度</span><b>${customer.health}%</b></div>
+      <div class="info"><span>客户分级</span><b>${customerGradeValue(customer)} · ${customerGradeLabel(customerGradeValue(customer))}</b></div>
+      <div class="info"><span>成交历史</span><b>${customer.hasWonDeal ? `已成交 ${customer.wonDealCount || 1} 次` : "尚未成交"}</b></div>
       <div class="info"><span>最高活跃阶段</span><b>${escapeHtml(pipelineStage)}</b></div>
       <div class="info"><span>活跃商机数</span><b>${activeDealCount}</b></div>
       <div class="info"><span>在手商机额</span><b>${money(pipelineAmount)}</b></div>
       <div class="info"><span>下一提醒</span><b>${escapeHtml(customer.nextReminder)}</b></div>
-      <div class="info"><span>企微状态</span><b>${customer.wecomBound ? "已绑定" : "未绑定"}</b></div>
+      <div class="info"><span>企业微信</span><b>待接入</b></div>
     </div>
     <div class="inline-actions"><button class="btn primary" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button></div>
     ${renderCustomerIntelligence(customer)}
@@ -4494,6 +4668,7 @@ function renderCustomerDrawer(customer?: Customer) {
   renderCustomerWorldClock(customer);
   customerClockTimer = window.setInterval(() => renderCustomerWorldClock(customer), 1000);
   qs("#customerDrawerClose", drawer)?.addEventListener("click", closeCustomerDrawer);
+  qs<HTMLButtonElement>("[data-open-customer-page]", drawer)?.addEventListener("click", () => openCustomerDetailPage(customer));
   qs<HTMLButtonElement>("[data-add-follow]", drawer)?.addEventListener("click", () => addFollowRecord(customer));
   qsa<HTMLButtonElement>("[data-edit-customer-drawer]", drawer).forEach((button) => {
     button.addEventListener("click", () => openCustomerModal(customer));
@@ -8608,7 +8783,7 @@ async function parseCustomerImportFile(file: File): Promise<CustomerImportRow[]>
       amount: parseNumberCell(rowValue(row, ["预计金额", "金额", "商机金额", "amount", "Amount"])),
       health: Math.max(0, Math.min(100, Math.round(parseNumberCell(rowValue(row, ["健康度", "评分", "health", "Health"]), 70)))),
       nextReminder: String(rowValue(row, ["下一提醒", "提醒", "下次跟进", "nextReminder", "Next Reminder"]) || "待跟进").trim(),
-      wecomBound: parseBooleanCell(rowValue(row, ["企微绑定", "企业微信", "企微", "wecomBound", "WeCom"]))
+      wecomBound: false
     };
   }).filter((row) => row.company);
 }
@@ -8664,7 +8839,7 @@ async function exportCustomers() {
       在手商机额: customer.pipelineAmount || 0,
       健康度: customer.health,
       下一提醒: customer.nextReminder,
-      企微绑定: customer.wecomBound ? "已绑定" : "未绑定"
+      通讯接入: "待接入"
     }));
     const worksheet = XLSX.utils.json_to_sheet(rows);
     const workbook = XLSX.utils.book_new();
@@ -8679,7 +8854,7 @@ async function exportCustomers() {
 }
 
 function downloadCustomerTemplate() {
-  const worksheet = XLSX.utils.aoa_to_sheet([["公司名", "国家", "联系人", "阶段", "预计金额", "健康度", "下一提醒", "企微绑定"]]);
+  const worksheet = XLSX.utils.aoa_to_sheet([["公司名", "国家", "联系人", "阶段", "预计金额", "健康度", "下一提醒"]]);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "客户导入模板");
   XLSX.writeFile(workbook, "GoodJob客户导入模板.xlsx");
@@ -14462,13 +14637,15 @@ function exportPlanCsv() {
 
 function openCustomerModal(customer?: Customer) {
   const editing = Boolean(customer);
+  const selectedGrade = customer ? customerGradeValue(customer) : "C";
   openModal(editing ? "编辑客户" : "新增客户", `
     <div class="form-grid">
       <div class="form-field full"><label>公司名</label><input id="customerCompanyInput" placeholder="请输入客户公司名称" value="${escapeHtml(customer?.company || "")}"></div>
       <div class="form-field"><label>联系人</label><input id="customerContactInput" value="${escapeHtml(customer?.contact || "")}"></div>
       <div class="form-field"><label>国家</label><input id="customerCountryInput" value="${escapeHtml(customer?.country || "")}"></div>
+      <label class="form-field"><span>客户分级</span><select id="customerGradeInput"><option value="A" ${selectedGrade === "A" ? "selected" : ""}>A · 核心客户</option><option value="B" ${selectedGrade === "B" ? "selected" : ""}>B · 重点客户</option><option value="C" ${selectedGrade === "C" ? "selected" : ""}>C · 常规客户</option><option value="D" ${selectedGrade === "D" ? "selected" : ""}>D · 低优先级</option></select></label>
+      <div class="form-field"><label>健康度（人工评分）</label><input id="customerHealthInput" type="number" min="0" max="100" value="${customer?.health ?? 72}"></div>
       <div class="form-field"><label>下一提醒</label><input id="customerReminderInput" value="${escapeHtml(customer?.nextReminder || "")}"></div>
-      <label class="form-field"><span>企微绑定</span><select id="customerWecomInput"><option value="false" ${customer?.wecomBound ? "" : "selected"}>未绑定</option><option value="true" ${customer?.wecomBound ? "selected" : ""}>已绑定</option></select></label>
       <div class="form-field full"><label>单据抬头</label><input id="customerBillingNameInput" value="${escapeHtml(customer?.billingName || customer?.company || "")}" placeholder="用于对外单据的英文/正式公司名"></div>
       <div class="form-field full"><label>账单地址</label><input id="customerBillingAddressInput" value="${escapeHtml(customer?.billingAddress || "")}" placeholder="公司地址、城市、国家"></div>
       <div class="form-field full"><label>单据联系人</label><input id="customerDocumentContactInput" value="${escapeHtml(customer?.documentContact || customer?.contact || "")}" placeholder="联系人 / 邮箱 / 电话"></div>
@@ -14494,8 +14671,9 @@ async function saveCustomer() {
     company,
     contact: qs<HTMLInputElement>("#customerContactInput")?.value || "待维护",
     country: qs<HTMLInputElement>("#customerCountryInput")?.value || "未知",
+    grade: (qs<HTMLSelectElement>("#customerGradeInput")?.value || "C") as "A" | "B" | "C" | "D",
+    health: Math.max(0, Math.min(100, Number(qs<HTMLInputElement>("#customerHealthInput")?.value || 72))),
     nextReminder: qs<HTMLInputElement>("#customerReminderInput")?.value || "明天 10:00",
-    wecomBound: qs<HTMLSelectElement>("#customerWecomInput")?.value === "true",
     billingName: qs<HTMLInputElement>("#customerBillingNameInput")?.value.trim() || company,
     billingAddress: qs<HTMLInputElement>("#customerBillingAddressInput")?.value.trim() || "",
     documentContact: qs<HTMLInputElement>("#customerDocumentContactInput")?.value.trim() || qs<HTMLInputElement>("#customerContactInput")?.value || "待维护",
@@ -14515,8 +14693,12 @@ async function saveCustomer() {
   state.selectedCustomerId = result.customer.id;
   renderCustomers(state.customers);
   if (editingId) {
-    renderCustomerDrawer(result.customer);
-    openCustomerDrawer();
+    if (qs<HTMLElement>(".view.active")?.id === "customer-detail") {
+      renderCustomerDetailPage(result.customer);
+    } else {
+      renderCustomerDrawer(result.customer);
+      openCustomerDrawer();
+    }
   }
   void refreshDashboardOnly();
   closeModal();
@@ -14588,7 +14770,11 @@ async function saveCustomerFollow(customerId: string) {
     });
     state.customers = state.customers.map((customer) => customer.id === customerId ? result.customer : customer);
     renderCustomers(state.customers);
-    renderCustomerDrawer(result.customer);
+    if (qs<HTMLElement>("#customer-detail")?.classList.contains("active")) {
+      renderCustomerDetailPage(result.customer);
+    } else {
+      renderCustomerDrawer(result.customer);
+    }
     closeModal();
     toast(`已记录 ${result.customer.company} 的跟进动作`);
   } catch (error) {

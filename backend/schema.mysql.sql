@@ -32,6 +32,7 @@ CREATE TABLE customers (
   stage VARCHAR(40),
   amount DECIMAL(14,2) DEFAULT 0,
   health INT DEFAULT 0,
+  customer_grade VARCHAR(1) NOT NULL DEFAULT 'C',
   next_reminder VARCHAR(100),
   wecom_bound BOOLEAN DEFAULT FALSE,
   billing_name VARCHAR(200) DEFAULT '',

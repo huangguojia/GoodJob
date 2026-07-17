@@ -1851,6 +1851,8 @@ app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
     contact: z.string().min(1).default("待维护"),
     stage: z.string().min(1).default("询盘"),
     amount: z.number().int().nonnegative().default(0),
+    health: z.number().int().min(0).max(100).optional().default(72),
+    grade: z.enum(["A", "B", "C", "D"]).optional().default("C"),
     billingName: z.string().optional().default(""),
     billingAddress: z.string().optional().default(""),
     documentContact: z.string().optional().default(""),
@@ -1864,7 +1866,6 @@ app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
     id: `c_${Date.now()}`,
     ownerId: req.user!.id,
     teamId: req.user!.teamId,
-    health: 72,
     nextReminder: "明天 10:00",
     wecomBound: false,
     ...body
@@ -1881,6 +1882,8 @@ app.patch("/api/customers/:id", requireAuth, asyncRoute(async (req, res) => {
     contact: z.string().min(1).optional(),
     stage: z.string().min(1).optional(),
     amount: z.number().int().nonnegative().optional(),
+    health: z.number().int().min(0).max(100).optional(),
+    grade: z.enum(["A", "B", "C", "D"]).optional(),
     nextReminder: z.string().min(1).optional(),
     wecomBound: z.boolean().optional(),
     billingName: z.string().optional(),
@@ -2135,9 +2138,17 @@ function findCustomerMatches(user: SessionUser, lead: Lead) {
 
 const pipelineStageRank: Record<string, number> = { "询盘": 1, "已联系": 2, "已报价": 3, "样品": 4, "谈判": 5, "成交": 6 };
 
+function customerGradeFromHealth(health: number) {
+  if (health >= 85) return "A" as const;
+  if (health >= 70) return "B" as const;
+  if (health >= 55) return "C" as const;
+  return "D" as const;
+}
+
 function customerWithPipeline(customer: Customer) {
   const store = getStore();
   const activeDeals = store.deals.filter((deal) => deal.customerId === customer.id && !deal.archivedAt && deal.stage !== "丢单" && deal.stage !== "成交");
+  const wonDeals = store.deals.filter((deal) => deal.customerId === customer.id && deal.stage === "成交");
   const activities = store.customerActivities
     .filter((activity) => activity.customerId === customer.id)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
@@ -2162,6 +2173,14 @@ function customerWithPipeline(customer: Customer) {
       operatorName: store.users.find((user) => user.id === activity.operatorId)?.name || "未知操作人"
     })),
     lastActivityAt: activities[0]?.createdAt || "",
+    grade: customer.grade || customerGradeFromHealth(customer.health),
+    hasWonDeal: wonDeals.length > 0,
+    wonDealCount: wonDeals.length,
+    wonDealAmount: wonDeals.reduce((sum, deal) => sum + deal.amount, 0),
+    lastWonAt: wonDeals
+      .map((deal) => deal.closedAt || deal.stageChangedAt || "")
+      .filter(Boolean)
+      .sort((left, right) => right.localeCompare(left))[0] || "",
     pipelineStage: pipelineStage || "暂无活跃商机",
     pipelineAmount: activeDeals.reduce((sum, deal) => sum + deal.amount, 0),
     activeDealCount: activeDeals.length,
@@ -2654,6 +2673,7 @@ app.post("/api/leads/:id/convert", requireAuth, asyncRoute(async (req, res) => {
       stage: "询盘",
       amount: 0,
       health: 72,
+      grade: "C",
       nextReminder: lead.nextFollowAt || "明天 10:00",
       wecomBound: false,
       billingName: lead.company,
@@ -5844,6 +5864,7 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
     stage: z.string().trim().optional().default("询盘"),
     amount: z.number().nonnegative().optional().default(0),
     health: z.number().int().min(0).max(100).optional().default(70),
+    grade: z.enum(["A", "B", "C", "D"]).optional(),
     nextReminder: z.string().trim().optional().default("待跟进"),
     wecomBound: z.boolean().optional().default(false),
     billingName: z.string().trim().optional().default(""),
@@ -5869,6 +5890,7 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
         stage: row.stage || existing.stage,
         amount: row.amount,
         health: row.health,
+        grade: row.grade || existing.grade || customerGradeFromHealth(row.health),
         nextReminder: row.nextReminder || existing.nextReminder,
         wecomBound: row.wecomBound,
         billingName: row.billingName || existing.billingName || row.company,
@@ -5891,6 +5913,7 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
         stage: row.stage || "询盘",
         amount: row.amount,
         health: row.health,
+        grade: row.grade || customerGradeFromHealth(row.health),
         nextReminder: row.nextReminder || "待跟进",
         wecomBound: row.wecomBound,
         billingName: row.billingName || row.company,

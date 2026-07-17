@@ -46,6 +46,8 @@ export interface SessionUser {
   lastDevelopmentEmailSubject?: string;
 }
 
+export type CustomerGrade = "A" | "B" | "C" | "D";
+
 export interface Customer {
   id: string;
   company: string;
@@ -56,6 +58,7 @@ export interface Customer {
   stage: string;
   amount: number;
   health: number;
+  grade?: CustomerGrade;
   nextReminder: string;
   wecomBound: boolean;
   billingName: string;

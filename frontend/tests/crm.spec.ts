@@ -103,8 +103,7 @@ function buildCustomerWorkbookBuffer(company: string) {
       "阶段": "询盘",
       "预计金额": 23000,
       "健康度": 74,
-      "下一提醒": "明天 11:00",
-      "企微绑定": "已绑定"
+      "下一提醒": "明天 11:00"
     }
   ]);
   const workbook = XLSX.utils.book_new();
@@ -632,6 +631,27 @@ test.describe("GoodJob CRM prototype pages", () => {
     const deleteCompanyA = `批量客户A-${runId}`;
     const deleteCompanyB = `批量客户B-${runId}`;
     await openView(page, "customers");
+
+    const wonCustomerRow = page.locator("#customers tbody tr", { hasText: "Evergreen GmbH" }).first();
+    await expect(wonCustomerRow.locator(".customer-value-cell")).toContainText("A");
+    await expect(wonCustomerRow.locator(".customer-value-cell")).toContainText("已成交 1 次");
+    await wonCustomerRow.locator("[data-open-customer-page]").click();
+    await expect(page.locator("#customer-detail")).toHaveClass(/active/);
+    await expect(page.locator("#customerDetailPage")).toContainText("客户信息");
+    await expect(page.locator("#customerDetailPage")).toContainText("Evergreen GmbH 复购订单");
+    await expect(page.locator("#customerDetailPage")).toContainText("跟进记录");
+    await expect(page.locator("#customerDetailPage")).toContainText("联系中心");
+    const whatsappAction = page.locator("#customerDetailPage [data-customer-contact='whatsapp']");
+    const wechatAction = page.locator("#customerDetailPage [data-customer-contact='wechat']");
+    await expect(whatsappAction).not.toHaveClass(/is-ready/);
+    await expect(whatsappAction).toContainText("去绑定");
+    await expect(wechatAction).not.toHaveClass(/is-ready/);
+    await expect(wechatAction).toContainText("企业微信 · 待接入");
+    await whatsappAction.click();
+    await expect(page.locator(".toast").last()).toContainText("WhatsApp 联系适配器已预留");
+    await page.locator("#customerDetailPage [data-customer-page-back]").click();
+    await expect(page.locator("#customers")).toHaveClass(/active/);
+
     const activeCustomerRow = page.locator("#customers tbody tr", { hasText: "Nordic Tools AB" }).first();
     await expect(activeCustomerRow.locator(".customer-name")).toHaveClass(/has-active-deal/);
     await activeCustomerRow.locator("td").nth(2).click();
@@ -662,25 +682,37 @@ test.describe("GoodJob CRM prototype pages", () => {
 
     await page.locator("#customerDrawer [data-edit-customer-drawer]").click();
     await page.locator("#customerCompanyInput").fill(companyEdited);
+    await page.locator("#customerGradeInput").selectOption("B");
+    await page.locator("#customerHealthInput").fill("66");
     await page.locator("#customerReminderInput").fill("明天 18:00");
-    await page.locator("#customerWecomInput").selectOption("true");
     await page.locator("#saveCustomerButton").click();
     await expect(page.locator(".toast").last()).toContainText("客户已保存");
     await expect(page.locator("#customers tbody")).toContainText(companyEdited);
     await expect(page.locator("#customerDrawer")).toContainText("明天 18:00");
+    await expect(page.locator("#customerDrawer")).toContainText("B · 重点");
+    await expect(page.locator("#customerDrawer")).toContainText("66%");
+
+    await page.locator("#customerDrawer [data-open-customer-page]").click();
+    await expect(page.locator("#customer-detail")).toHaveClass(/active/);
+    await expect(page.locator("#customerDetailPage")).toContainText("B · 重点");
+    await expect(page.locator("#customerDetailPage")).toContainText("尚未成交");
+    await expect(page.locator("#customerDetailPage")).toContainText("健康度说明");
 
     const followContent = `确认参数与报价-${runId}`;
-    await page.locator("#customerDrawer [data-add-follow]").click();
+    await page.locator("#customerDetailPage [data-customer-page-follow]").first().click();
     await page.locator("#customerFollowType").selectOption("email");
     await page.locator("#customerFollowContent").fill(followContent);
     await page.locator("#customerFollowNext").fill("后天 10:30");
     await page.locator("#saveCustomerFollowButton").click();
-    await expect(page.locator("#customerDrawer .timeline")).toContainText(followContent);
-    await expect(page.locator("#customerDrawer")).toContainText("后天 10:30");
+    await expect(page.locator("#customer-detail")).toHaveClass(/active/);
+    await expect(page.locator("#customerDetailPage .customer-page-followups")).toContainText(followContent);
+    await expect(page.locator("#customerDetailPage")).toContainText("后天 10:30");
     await page.reload();
     await openView(page, "customers");
     await page.locator("#customers tbody tr", { hasText: companyEdited }).first().locator(".customer-name").click();
     await expect(page.locator("#customerDrawer .timeline")).toContainText(followContent);
+    await expect(page.locator("#customerDrawer")).toContainText("B · 重点");
+    await expect(page.locator("#customerDrawer")).toContainText("66%");
     await page.locator("#customerDrawerClose").click();
 
     for (const name of [deleteCompanyA, deleteCompanyB]) {
@@ -725,6 +757,10 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#customerDrawer")).toHaveClass(/open/);
     const drawerBox = await page.locator("#customerDrawer").boundingBox();
     expect(drawerBox?.width).toBeLessThanOrEqual(390);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+    await page.locator("#customerDrawer [data-open-customer-page]").click();
+    await expect(page.locator("#customer-detail")).toHaveClass(/active/);
+    await expect(page.locator("#customerDetailPage .customer-page-summary")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   });
 
