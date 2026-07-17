@@ -104,6 +104,17 @@ const countryAliases: Record<string, string> = {
 
 const CHINA_NUMERIC_ID = "156";
 const TAIWAN_SOURCE_NUMERIC_ID = "158";
+const mapColors = {
+  background: "#050A12",
+  land: "rgba(255, 255, 255, .035)",
+  marketLow: "rgba(54, 214, 165, .58)",
+  marketMedium: "rgba(24, 174, 130, .7)",
+  marketHigh: "rgba(5, 116, 87, .78)",
+  marketPoint: "#42D9AA",
+  won: "#F5B942",
+  selected: "rgba(83, 108, 255, .82)",
+  atmosphere: "#6AAED0"
+};
 
 function numericCountryCode(rawCountry: string) {
   const country = rawCountry.trim();
@@ -165,20 +176,21 @@ export function createCustomerMap(options: CustomerMapOptions): CustomerMapContr
   let resumeTimer = 0;
 
   const globe: GlobeInstance = new Globe(options.host, { animateIn: false, waitForGlobeReady: true })
-    .backgroundColor("#07110f")
+    .backgroundColor(mapColors.background)
+    .globeImageUrl("/assets/map/earth-blue-marble.jpg")
     .showAtmosphere(true)
-    .atmosphereColor("#75d7b6")
-    .atmosphereAltitude(0.16)
+    .atmosphereColor(mapColors.atmosphere)
+    .atmosphereAltitude(0.14)
     .showGraticules(false)
     .polygonsData(countryFeatures)
-    .polygonStrokeColor(() => "rgba(237, 246, 242, .18)")
-    .polygonSideColor(() => "rgba(26, 53, 47, .78)")
+    .polygonStrokeColor(() => "rgba(232, 241, 248, .28)")
+    .polygonSideColor(() => "rgba(16, 30, 43, .18)")
     .polygonCapCurvatureResolution(3)
     .polygonsTransitionDuration(240)
     .pointAltitude((item) => 0.035 + Math.min((item as CountryPoint).customers.length, 12) * 0.004)
     .pointRadius((item) => 0.19 + Math.min((item as CountryPoint).customers.length, 12) * 0.018)
     .pointResolution(18)
-    .pointColor((item) => (item as CountryPoint).customers.some((customer) => customer.hasWonDeal) ? "#f5b942" : "#37d39d")
+    .pointColor((item) => (item as CountryPoint).customers.some((customer) => customer.hasWonDeal) ? mapColors.won : mapColors.marketPoint)
     .pointLabel((item) => {
       const point = item as CountryPoint;
       return labelNode(point.name, `${point.customers.length} 家客户`);
@@ -199,10 +211,12 @@ export function createCustomerMap(options: CustomerMapOptions): CustomerMapContr
     });
 
   const globeMaterial = globe.globeMaterial();
-  globeMaterial.color.set("#102d27");
-  globeMaterial.emissive.set("#071612");
-  globeMaterial.emissiveIntensity = 0.42;
-  globeMaterial.shininess = 4;
+  globeMaterial.color.set("#FFFFFF");
+  globeMaterial.emissive.set("#06101C");
+  globeMaterial.emissiveIntensity = 0.08;
+  globeMaterial.opacity = 1;
+  globeMaterial.transparent = false;
+  globeMaterial.shininess = 5;
 
   const controls = globe.controls();
   controls.enableDamping = true;
@@ -213,13 +227,17 @@ export function createCustomerMap(options: CustomerMapOptions): CustomerMapContr
 
   function polygonColor(item: CountryFeature) {
     const id = countryId(item);
-    if (id === selectedCountryId) return "rgba(245, 185, 66, .96)";
-    if (id === hoveredCountryId) return customersByCountry.has(id) ? "rgba(91, 224, 179, .95)" : "rgba(220, 229, 225, .78)";
+    if (id === selectedCountryId) return mapColors.selected;
+    if (id === hoveredCountryId) return customersByCountry.has(id) ? "rgba(89, 229, 184, .72)" : "rgba(255, 255, 255, .16)";
     const count = customersByCountry.get(id)?.length || 0;
-    if (count >= 8) return "rgba(25, 154, 111, .94)";
-    if (count >= 4) return "rgba(39, 183, 134, .9)";
-    if (count > 0) return "rgba(84, 205, 163, .86)";
-    return "rgba(178, 192, 186, .5)";
+    if (count >= 8) return mapColors.marketHigh;
+    if (count >= 4) return mapColors.marketMedium;
+    if (count > 0) return mapColors.marketLow;
+    return mapColors.land;
+  }
+
+  function polygonStroke(item: CountryFeature) {
+    return countryId(item) === selectedCountryId ? "rgba(255, 255, 255, .96)" : "rgba(232, 241, 248, .28)";
   }
 
   function polygonAltitude(item: CountryFeature) {
@@ -232,6 +250,7 @@ export function createCustomerMap(options: CustomerMapOptions): CustomerMapContr
   function applyPolygonStyle() {
     globe
       .polygonCapColor((item) => polygonColor(item as CountryFeature))
+      .polygonStrokeColor((item) => polygonStroke(item as CountryFeature))
       .polygonAltitude((item) => polygonAltitude(item as CountryFeature));
   }
 

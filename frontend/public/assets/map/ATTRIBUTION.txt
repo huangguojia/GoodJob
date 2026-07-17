@@ -1,0 +1,5 @@
+Earth texture: NASA Visible Earth / Blue Marble
+Source and usage guidelines: https://www.nasa.gov/nasa-brand-center/images-and-media/
+
+Country boundaries: Natural Earth
+Public-domain terms: https://www.naturalearthdata.com/about/terms-of-use/

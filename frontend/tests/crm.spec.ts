@@ -786,6 +786,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#customerListWorkspace")).toBeHidden();
     const canvas = page.locator("#customerGlobe canvas");
     await expect(canvas).toBeVisible({ timeout: 15_000 });
+    expect(await page.evaluate(async () => (await fetch("/assets/map/earth-blue-marble.jpg")).ok)).toBeTruthy();
     await expect(page.locator("#customerMapSummary")).toContainText("客户");
     await expect(page.locator('[data-map-market-country="中国"]')).toBeVisible();
     await expect(page.locator("#customerMapRegion")).not.toContainText("台湾");
