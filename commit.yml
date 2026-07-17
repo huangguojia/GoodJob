@@ -2,25 +2,46 @@
 branches: {
   }
 fileChange:
+  /backend:
+    newFile: !uuid 'cbcedf18cd0f65589a2b07d04202c7188a0e0e6a'
+    oldFile: !uuid 'ca03fa48dc22d382f418b8340d1c680d4f9d269b'
+  /backend/schema.mysql.sql:
+    newFile: !uuid '7ceb384841afdddd093e52cff0b71532e16319f2'
+    oldFile: !uuid '0f25cc4880ebc97fabc87be127cb4b765f2a55a3'
+  /backend/src:
+    newFile: !uuid 'd1407e530b2d7990a10a3f44d2b169bddc319c01'
+    oldFile: !uuid 'ed139372dc261bb0813732be9536b4ee958dc7fd'
+  /backend/src/data.ts:
+    newFile: !uuid '114e58e17c5b3c90a5aa25237e81c8b026532678'
+    oldFile: !uuid 'b264d00f5ae5d889c9617bf952afe8d31610658f'
+  /backend/src/mysql-store.ts:
+    newFile: !uuid '74d074c5468dfa958c72b266d3cd119f55187203'
+    oldFile: !uuid '20d7271b051f8f32259d9e2ccc70ceef34e67506'
+  /backend/src/server.ts:
+    newFile: !uuid 'db95b3c10953f1dfe97d06027476fd653d6ec80e'
+    oldFile: !uuid '5f3de494d16dc87c97e778c5c5bb8a91afdf1526'
+  /backend/src/types.ts:
+    newFile: !uuid 'fe8f295c74507351a2dd9d4c3036064b9f48c1b4'
+    oldFile: !uuid '3d056d5f44a107b2eef404e6d724f795588deb83'
   /frontend:
-    newFile: !uuid 'ea86a23944c64c5f53061c8114a48eb6ef128116'
-    oldFile: !uuid '5c4f00c3636a72b8106765b8720e7a9969f3a43d'
+    newFile: !uuid '1936b88ecfd694ff13d3c54a1d5a500b45e3ad1c'
+    oldFile: !uuid 'ea86a23944c64c5f53061c8114a48eb6ef128116'
   /frontend/index.html:
-    newFile: !uuid 'c9cedcade7d1f0e933a3e23c813c2efe8e571f73'
-    oldFile: !uuid '98ce6885decd1a07a48c0244b85ba9d9548e20a4'
+    newFile: !uuid '4c86e09b5063dd1c86d60884d3c0bc35efaa624f'
+    oldFile: !uuid 'c9cedcade7d1f0e933a3e23c813c2efe8e571f73'
   /frontend/src:
-    newFile: !uuid '3e52b45ef0939a97abb4bf0c3fb2564b25dd204e'
-    oldFile: !uuid '120a195f68331c58bbbb415aea7ec58db7043bdb'
+    newFile: !uuid 'a61783dd99f6f9ffde2b5f5111fcd3296f65b4cb'
+    oldFile: !uuid '3e52b45ef0939a97abb4bf0c3fb2564b25dd204e'
   /frontend/src/prototype-api.ts:
-    newFile: !uuid '45832749fe3fb84fffe7027a319e97b93f88de6e'
-    oldFile: !uuid 'c7b06d2d4d2e81afb00a2ec794f76eab52543bd5'
+    newFile: !uuid '6c89511db90a60a1b19caca40748f8307e33d6f7'
+    oldFile: !uuid '45832749fe3fb84fffe7027a319e97b93f88de6e'
   /frontend/tests:
-    newFile: !uuid '8c8b718870333f7757688f991e8b1f8b0ba7337b'
-    oldFile: !uuid 'c34ef9bb0d78ba89905f9869080f44f427fbd7a4'
+    newFile: !uuid 'c6e59a084f5120d90ab4f99990b60a5853175ef5'
+    oldFile: !uuid '8c8b718870333f7757688f991e8b1f8b0ba7337b'
   /frontend/tests/crm.spec.ts:
-    newFile: !uuid '762447a148259cc469ed6b1e9922a7c8c502b684'
-    oldFile: !uuid '7dc50c520195ce68893fd21ceba8fa6c95bee15b'
-gitCommitId: !uuid 'cd653ea434f0fcbf6974f3df162b7d4f4599d859'
+    newFile: !uuid '9eff6ba091f12683e315664a5321ca88c0e8e609'
+    oldFile: !uuid '762447a148259cc469ed6b1e9922a7c8c502b684'
+gitCommitId: !uuid 'cd5464d929799550e1f84ee4d3552daa42d58540'
 renames: {
   }
-revisionId: 52
+revisionId: 53
