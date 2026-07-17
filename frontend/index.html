@@ -5165,7 +5165,7 @@
 
     .lead-workbench {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(280px, .42fr);
+      grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr);
       gap: 12px;
       align-items: start;
       margin-bottom: 12px;
@@ -5173,6 +5173,8 @@
 
     .lead-queue-panel {
       min-width: 0;
+      position: sticky;
+      top: 68px;
     }
 
     .lead-build-panel,
@@ -5192,7 +5194,8 @@
     }
 
     .lead-advanced-settings,
-    .lead-queue-panel {
+    .lead-queue-panel,
+    .lead-support-panel {
       border: 1px solid #dfe7f2;
       border-radius: 8px;
       background: #fbfcff;
@@ -5203,7 +5206,7 @@
     }
 
     .lead-advanced-settings > summary,
-    .lead-queue-summary {
+    .lead-support-panel > summary {
       padding: 10px 12px;
       color: #25324a;
       font-size: 12px;
@@ -5215,6 +5218,13 @@
       margin-left: 6px;
       color: #728096;
       font-size: 11px;
+      font-weight: 600;
+    }
+
+    .lead-support-panel > summary span {
+      margin-left: 6px;
+      color: #728096;
+      font-size: 10px;
       font-weight: 600;
     }
 
@@ -5708,9 +5718,62 @@
     .lead-job-list {
       display: grid;
       gap: 9px;
-      max-height: 390px;
+      max-height: calc(100vh - 250px);
+      min-height: 220px;
       overflow: auto;
       padding-right: 2px;
+    }
+
+    .lead-queue-panel > .section-head {
+      margin-bottom: 10px;
+    }
+
+    .lead-queue-live {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      color: #0f766e;
+      background: #e8f8f7;
+      font-size: 10px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .lead-queue-live::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #16a36a;
+    }
+
+    .lead-support-panel {
+      margin: 0 0 12px;
+      overflow: hidden;
+    }
+
+    .lead-support-panel[open] {
+      padding: 0 12px 12px;
+    }
+
+    .lead-support-panel[open] > summary {
+      margin: 0 -12px 12px;
+      border-bottom: 1px solid #e6ebf3;
+    }
+
+    .lead-support-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+    }
+
+    .lead-support-grid > .prospect-performance-review,
+    .lead-support-grid > .lead-query-panel {
+      margin: 0;
     }
 
     .lead-schedule-section {
@@ -11629,6 +11692,395 @@
       border-top: 1px solid #e1e7ef;
     }
 
+    .lead-job-card.is-openable {
+      cursor: pointer;
+    }
+
+    .lead-job-card.is-openable:hover {
+      border-color: rgba(49, 87, 213, .38);
+      box-shadow: 0 12px 28px rgba(23, 35, 61, .09);
+    }
+
+    .lead-job-open-hint {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 32px;
+      padding: 0 11px 0 9px;
+      border: 1px solid #cfd9ec;
+      border-radius: 7px;
+      color: #2949a8;
+      background: #fff;
+      box-shadow: 0 2px 7px rgba(35, 52, 88, .05);
+      font-size: 11px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: color .16s ease, border-color .16s ease, background .16s ease, box-shadow .16s ease, transform .16s ease;
+    }
+
+    .lead-job-open-hint span {
+      width: 20px;
+      height: 20px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      color: #fff;
+      background: #3157d5;
+    }
+
+    .lead-job-open-hint svg {
+      width: 12px;
+      height: 12px;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 2;
+    }
+
+    .lead-job-open-hint:hover {
+      color: #1e3a8a;
+      border-color: rgba(49, 87, 213, .46);
+      background: #f8faff;
+      box-shadow: 0 7px 16px rgba(49, 87, 213, .11);
+      transform: translateY(-1px);
+    }
+
+    .lead-job-open-hint:focus-visible {
+      outline: 3px solid rgba(49, 87, 213, .16);
+      outline-offset: 2px;
+    }
+
+    #lead-task-detail {
+      --run-blue: #3157d5;
+      --run-teal: #118b84;
+      --run-green: #13865a;
+      --run-amber: #b7791f;
+      --run-red: #c24141;
+      color: #243047;
+    }
+
+    .task-run-header {
+      position: sticky;
+      top: 54px;
+      z-index: 12;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      margin: -22px -22px 14px;
+      padding: 13px 22px;
+      border-bottom: 1px solid #dce4ef;
+      background: rgba(248, 250, 253, .96);
+      backdrop-filter: blur(14px);
+    }
+
+    .task-run-header-main,
+    .task-run-title-line,
+    .task-run-meta,
+    .task-run-header-actions,
+    .task-run-status {
+      display: flex;
+      align-items: center;
+    }
+
+    .task-run-header-main { gap: 12px; min-width: 0; }
+    .task-run-header-copy { min-width: 0; }
+    .task-run-title-line { gap: 9px; min-width: 0; }
+    .task-run-title-line h1 { margin: 0; overflow: hidden; color: #111827; font-size: 18px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+    .task-run-meta { flex-wrap: wrap; gap: 6px 14px; margin-top: 4px; color: #718096; font-size: 11px; }
+    .task-run-meta code { color: #46546a; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .task-run-header-actions { gap: 7px; }
+
+    .task-run-back {
+      width: 34px;
+      height: 34px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      border: 1px solid #d9e1ec;
+      border-radius: 7px;
+      color: #35445d;
+      background: #fff;
+      cursor: pointer;
+    }
+
+    .task-run-back svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
+
+    .task-run-status {
+      gap: 6px;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      color: #235a54;
+      background: #e8f7f5;
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .task-run-status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--run-teal);
+      box-shadow: 0 0 0 4px rgba(17, 139, 132, .11);
+    }
+
+    .task-run-status.is-running .task-run-status-dot { animation: task-run-breathe 1.8s ease-in-out infinite; }
+    .task-run-status.is-done { color: #17623f; background: #e9f7ef; }
+    .task-run-status.is-done .task-run-status-dot { background: var(--run-green); box-shadow: none; }
+    .task-run-status.is-warning { color: #805411; background: #fff5de; }
+    .task-run-status.is-warning .task-run-status-dot { background: var(--run-amber); box-shadow: none; }
+    .task-run-status.is-failed { color: #9b2f2f; background: #fff0f0; }
+    .task-run-status.is-failed .task-run-status-dot { background: var(--run-red); box-shadow: none; }
+
+    @keyframes task-run-breathe {
+      0%, 100% { opacity: .6; transform: scale(.82); }
+      50% { opacity: 1; transform: scale(1); }
+    }
+
+    .task-run-stage {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: end;
+      margin-bottom: 12px;
+      padding: 15px 16px 13px;
+      border: 1px solid #dce4ef;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .task-run-stage small { display: block; margin-bottom: 4px; color: #758399; font-size: 10px; font-weight: 800; }
+    .task-run-stage b { color: #172033; font-size: 14px; }
+    .task-run-stage p { margin: 4px 0 0; color: #647287; font-size: 11px; line-height: 1.45; }
+    .task-run-progress-text { color: #526178; font-size: 11px; font-weight: 800; white-space: nowrap; }
+    .task-run-progress-track { grid-column: 1 / -1; height: 4px; overflow: hidden; border-radius: 999px; background: #e8edf5; }
+    .task-run-progress-track i { display: block; width: var(--p); height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--run-blue), var(--run-teal)); transition: width .3s ease; }
+    .task-run-progress-track.is-running i { position: relative; overflow: hidden; }
+    .task-run-progress-track.is-running i::after { content: ""; position: absolute; inset: 0; width: 42%; background: rgba(255,255,255,.35); transform: translateX(-120%); animation: task-run-flow 2.4s linear infinite; }
+
+    @keyframes task-run-flow { to { transform: translateX(340%); } }
+
+    .task-run-metrics {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      margin-bottom: 12px;
+      overflow: hidden;
+      border: 1px solid #dce4ef;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .task-run-metric { min-width: 0; padding: 12px 13px; border-right: 1px solid #e7ecf3; }
+    .task-run-metric:last-child { border-right: 0; }
+    .task-run-metric span { display: block; color: #758399; font-size: 10px; }
+    .task-run-metric b { display: block; margin-top: 3px; overflow: hidden; color: #172033; font-size: 18px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+    .task-run-metric.is-gain b { color: var(--run-green); }
+    .task-run-metric small { display: block; margin-top: 2px; color: #98a2b1; font-size: 9px; }
+
+    .task-run-workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 7fr) minmax(320px, 5fr);
+      gap: 12px;
+      align-items: stretch;
+      margin-bottom: 12px;
+    }
+
+    .task-run-pane {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid #dce4ef;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .task-run-pane-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 52px;
+      padding: 10px 13px;
+      border-bottom: 1px solid #e7ecf3;
+      background: #fbfcfe;
+    }
+
+    .task-run-pane-head h2 { margin: 0; color: #172033; font-size: 13px; }
+    .task-run-pane-head p { margin: 2px 0 0; color: #7a8799; font-size: 10px; }
+    .task-run-live { display: inline-flex; align-items: center; gap: 5px; color: var(--run-teal); font-size: 10px; font-weight: 800; }
+    .task-run-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+    .task-run-pane-tools,
+    .task-run-stream-mode {
+      display: flex;
+      align-items: center;
+    }
+
+    .task-run-pane-tools { gap: 9px; }
+
+    .task-run-stream-mode {
+      height: 30px;
+      padding: 3px;
+      border: 1px solid #d8e0ec;
+      border-radius: 7px;
+      background: #eef2f7;
+    }
+
+    .task-run-stream-mode button {
+      height: 22px;
+      padding: 0 8px;
+      border: 0;
+      border-radius: 5px;
+      color: #6b788c;
+      background: transparent;
+      font-size: 10px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .task-run-stream-mode button.active {
+      color: #243f9a;
+      background: #fff;
+      box-shadow: 0 2px 5px rgba(35, 48, 76, .11);
+    }
+
+    .task-run-live.is-verbose { color: #3157d5; }
+    .task-run-live.is-verbose::before { animation: task-run-breathe .75s ease-in-out infinite; }
+
+    .task-run-stream {
+      height: 438px;
+      overflow: auto;
+      overscroll-behavior: contain;
+      scroll-behavior: smooth;
+      background: #fff;
+    }
+
+    .task-run-stream.is-verbose {
+      background: #fbfcff;
+    }
+
+    .task-run-stream.is-verbose .task-run-log {
+      min-height: 37px;
+      padding-top: 5px;
+      padding-bottom: 5px;
+    }
+
+    .task-run-stream.is-verbose .task-run-log-copy b,
+    .task-run-stream.is-verbose .task-run-log-result {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .task-run-new-events {
+      position: absolute;
+      left: 50%;
+      bottom: 12px;
+      z-index: 2;
+      min-height: 28px;
+      padding: 0 10px;
+      border: 1px solid rgba(49, 87, 213, .24);
+      border-radius: 999px;
+      color: #3157d5;
+      background: #fff;
+      box-shadow: 0 6px 18px rgba(35, 48, 76, .14);
+      font-size: 10px;
+      font-weight: 800;
+      cursor: pointer;
+      transform: translateX(-50%);
+    }
+
+    .task-run-pane:has(.task-run-stream) { position: relative; }
+
+    .task-run-log {
+      display: grid;
+      grid-template-columns: 58px 72px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      min-height: 45px;
+      padding: 7px 12px 7px 10px;
+      border-bottom: 1px solid #eef2f6;
+      border-left: 3px solid #cbd5e1;
+      animation: task-run-log-in .2s ease both;
+    }
+
+    .task-run-log:last-child { border-bottom: 0; }
+    .task-run-log.is-gain { border-left-color: var(--run-green); background: #fbfefc; }
+    .task-run-log.is-review { border-left-color: var(--run-amber); background: #fffdf8; }
+    .task-run-log.is-failed { border-left-color: var(--run-red); background: #fffafa; }
+    .task-run-log.is-live { border-left-color: var(--run-blue); background: #f8faff; }
+    .task-run-log time { color: #8a96a8; font-size: 10px; font-variant-numeric: tabular-nums; }
+    .task-run-log-source { display: inline-flex; justify-content: center; min-width: 0; padding: 3px 6px; overflow: hidden; border-radius: 4px; color: #526178; background: #edf1f6; font-size: 9px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+    .task-run-log-copy { min-width: 0; }
+    .task-run-log-copy b { display: block; color: #253149; font-size: 11px; line-height: 1.4; }
+    .task-run-log-copy span { display: block; margin-top: 2px; overflow: hidden; color: #7a8799; font-size: 10px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+    .task-run-log-result { color: #59687e; font-size: 10px; font-weight: 800; white-space: nowrap; }
+
+    @keyframes task-run-log-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+    .task-run-insights { display: grid; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+    .task-run-insight { min-height: 0; overflow: hidden; border: 1px solid #dce4ef; border-radius: 8px; background: #fff; }
+    .task-run-insight-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 46px; padding: 9px 12px; border-bottom: 1px solid #e7ecf3; background: #fbfcfe; }
+    .task-run-insight-head h2 { margin: 0; color: #172033; font-size: 12px; }
+    .task-run-insight-head span { color: #7a8799; font-size: 10px; }
+    .task-run-insight-list { max-height: 172px; overflow: auto; }
+    .task-run-insight-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; align-items: center; min-height: 43px; padding: 7px 11px; border-bottom: 1px solid #eef2f6; }
+    .task-run-insight-row:last-child { border-bottom: 0; }
+    .task-run-insight-row b { display: block; overflow: hidden; color: #2b374d; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .task-run-insight-row span { display: block; margin-top: 2px; color: #8390a2; font-size: 9px; }
+    .task-run-insight-row em { color: #59687e; font-size: 10px; font-style: normal; font-weight: 800; }
+    .task-run-insight-row.is-gain em { color: var(--run-green); }
+    .task-run-insight-empty { display: grid; place-items: center; min-height: 110px; padding: 16px; color: #8a96a8; font-size: 10px; line-height: 1.6; text-align: center; }
+
+    .task-run-sources,
+    .task-run-strategy { margin-bottom: 12px; overflow: hidden; border: 1px solid #dce4ef; border-radius: 8px; background: #fff; }
+    #leadTaskSourcesSummary { color: #7a8799; font-size: 10px; font-weight: 800; white-space: nowrap; }
+    .task-run-source-row { display: grid; grid-template-columns: minmax(140px, .9fr) minmax(280px, 1.8fr) minmax(120px, .7fr) 88px; gap: 12px; align-items: center; min-height: 49px; padding: 8px 13px; border-top: 1px solid #eef2f6; }
+    .task-run-source-row:first-child { border-top: 0; }
+    .task-run-source-name b { display: block; color: #263249; font-size: 11px; }
+    .task-run-source-name span { color: #8591a3; font-size: 9px; }
+    .task-run-source-steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
+    .task-run-source-step { display: flex; align-items: center; gap: 4px; color: #93a0b1; font-size: 9px; white-space: nowrap; }
+    .task-run-source-step::before { content: ""; width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: #d8dfe8; }
+    .task-run-source-step.is-done { color: #277057; }
+    .task-run-source-step.is-done::before { background: var(--run-green); }
+    .task-run-source-step.is-current { color: #3157d5; font-weight: 800; }
+    .task-run-source-step.is-current::before { background: var(--run-blue); box-shadow: 0 0 0 3px rgba(49,87,213,.1); }
+    .task-run-source-status { color: #526178; font-size: 10px; font-weight: 800; }
+    .task-run-source-time { color: #8a96a8; font-size: 9px; text-align: right; }
+
+    .task-run-strategy > summary { padding: 12px 13px; color: #263249; font-size: 11px; font-weight: 800; cursor: pointer; }
+    .task-run-strategy-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; border-top: 1px solid #eef2f6; }
+    .task-run-strategy-item { min-width: 0; padding: 10px 13px; border-right: 1px solid #eef2f6; border-bottom: 1px solid #eef2f6; }
+    .task-run-strategy-item:nth-child(3n) { border-right: 0; }
+    .task-run-strategy-item span { display: block; color: #8692a4; font-size: 9px; }
+    .task-run-strategy-item b { display: block; margin-top: 3px; overflow: hidden; color: #2c384e; font-size: 10px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .task-run-status.is-running .task-run-status-dot,
+      .task-run-progress-track.is-running i::after,
+      .task-run-log { animation: none; }
+    }
+
+    @media (max-width: 1180px) {
+      .task-run-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .task-run-metric:nth-child(3) { border-right: 0; }
+      .task-run-metric:nth-child(-n + 3) { border-bottom: 1px solid #e7ecf3; }
+      .task-run-workspace { grid-template-columns: minmax(0, 1fr); }
+      .task-run-insights { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: none; }
+      .task-run-insight-list { max-height: 190px; }
+    }
+
+    @media (max-width: 900px) {
+      .task-run-header { top: 48px; margin: -16px -16px 12px; padding: 11px 16px; }
+      .task-run-source-row { grid-template-columns: minmax(120px, .8fr) minmax(0, 1.5fr) 92px; }
+      .task-run-source-time { display: none; }
+      .task-run-strategy-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .task-run-strategy-item:nth-child(3n) { border-right: 1px solid #eef2f6; }
+      .task-run-strategy-item:nth-child(2n) { border-right: 0; }
+    }
+
     @media (max-width: 900px) {
       .collab-kpis {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -11703,7 +12155,8 @@
       #customers .content-grid { grid-template-columns: 1fr; }
 	      .pipeline-strip { grid-template-columns: repeat(5, minmax(210px, 1fr)); }
 	      .lead-workbench { grid-template-columns: 1fr; }
-	      .lead-queue-panel { width: 100%; }
+	      .lead-queue-panel { position: static; width: 100%; }
+	      .lead-support-grid { grid-template-columns: 1fr; }
 	      .prospect-list-layout { grid-template-columns: 1fr; }
 	    }
 
@@ -11951,10 +12404,10 @@
       #lead-finder .lead-advanced-actions .btn { min-height: 44px; flex: 1 1 120px; }
       #lead-finder .lead-runbar { align-items: stretch; flex-direction: column; }
       #lead-finder .lead-runbar .btn { width: 100%; min-height: 44px; }
-      #lead-finder .lead-queue-panel { padding: 0; }
-      #lead-finder .lead-queue-panel[open] { padding: 0 12px 12px; }
-      #lead-finder .lead-queue-panel[open] > summary { margin: 0 -12px 10px; border-bottom: 1px solid #e6ebf3; }
+      #lead-finder .lead-queue-panel { padding: 12px; }
       #lead-finder .lead-queue-panel .section-head { align-items: flex-start; }
+      #lead-finder .lead-job-list { max-height: 430px; }
+      #lead-finder .lead-support-panel > summary span { display: block; margin-top: 3px; color: #728096; font-size: 10px; font-weight: 600; }
       #lead-finder .lead-schedule-row { grid-template-columns: minmax(0, 1fr) auto; }
       #lead-finder .lead-schedule-row-actions { grid-column: 1 / -1; }
       #lead-finder .lead-schedule-row-actions .btn { min-height: 38px; flex: 1; }
@@ -12031,6 +12484,37 @@
       .inbox-message-actions .btn { min-height: 42px; width: 100%; }
       .notification-message-row { grid-template-columns: 34px minmax(0, 1fr); padding: 13px 12px; }
       .notification-message-action { grid-column: 2; width: 100%; display: flex; justify-content: space-between; justify-items: stretch; }
+      .task-run-header { position: relative; top: auto; grid-template-columns: minmax(0, 1fr); margin: -16px -12px 12px; }
+      .task-run-header-main { align-items: flex-start; }
+      .task-run-header-actions { padding-left: 46px; }
+      .task-run-header-actions .btn { min-height: 38px; flex: 1; }
+      .task-run-title-line { align-items: flex-start; flex-direction: column; gap: 5px; }
+      .task-run-title-line h1 { max-width: 100%; font-size: 16px; white-space: normal; }
+      .task-run-meta { align-items: flex-start; flex-direction: column; gap: 3px; }
+      .task-run-stage { grid-template-columns: 1fr; align-items: start; }
+      .task-run-progress-text { justify-self: start; }
+      .task-run-pane:has(.task-run-stream) > .task-run-pane-head { align-items: flex-start; flex-wrap: wrap; }
+      .task-run-pane-tools { width: 100%; justify-content: space-between; }
+      .task-run-stream-mode { flex: 1; }
+      .task-run-stream-mode button { flex: 1; }
+      .task-run-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .task-run-metric,
+      .task-run-metric:nth-child(3) { border-right: 1px solid #e7ecf3; border-bottom: 1px solid #e7ecf3; }
+      .task-run-metric:nth-child(2n) { border-right: 0; }
+      .task-run-metric:nth-last-child(-n + 2) { border-bottom: 0; }
+      .task-run-insights { grid-template-columns: 1fr; }
+      .task-run-stream { height: 390px; }
+      .task-run-log { grid-template-columns: 48px minmax(0, 1fr) auto; gap: 6px; }
+      .task-run-log-source { grid-column: 2; grid-row: 2; justify-self: start; }
+      .task-run-log-copy { grid-column: 2 / -1; grid-row: 1; }
+      .task-run-log-result { grid-column: 3; grid-row: 2; }
+      .task-run-source-row { grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+      .task-run-source-steps { grid-column: 1 / -1; grid-row: 2; }
+      .task-run-source-status { grid-column: 2; grid-row: 1; }
+      .task-run-strategy-grid { grid-template-columns: 1fr; }
+      .task-run-strategy-item,
+      .task-run-strategy-item:nth-child(2n),
+      .task-run-strategy-item:nth-child(3n) { border-right: 0; }
     }
   </style>
 </head>
@@ -12461,7 +12945,7 @@
                   <label class="ai-toggle-line"><input id="leadFinderUseAiInput" type="checkbox">使用 AI 归纳与评分</label>
                   <button class="btn" id="leadSourceCenterButton" type="button">数据源中心</button>
                   <button class="btn" id="leadFinderAiConfigButton" type="button">AI配置</button>
-                  <button class="btn" id="leadFinderExportButton" type="button">导出结果</button>
+                  <button class="btn" id="leadFinderExportButton" type="button">导出Excel</button>
                 </div>
               </details>
               <div class="lead-runbar">
@@ -12470,30 +12954,35 @@
               </div>
             </section>
 
-            <details class="panel section lead-queue-panel" open>
-              <summary class="lead-queue-summary">任务记录与人工搜索入口</summary>
+            <section class="panel section lead-queue-panel">
               <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg></span><div><h2>任务队列</h2><span>记录搜索进度、启用渠道和后续导入动作</span></div></div>
-                <button class="btn" id="leadFinderExportButtonQueue">导出Excel</button>
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg></span><div><h2>任务队列</h2><span>点击进行中任务，查看完整搜索过程</span></div></div>
+                <span class="lead-queue-live">自动更新</span>
               </div>
-              <section class="lead-schedule-section">
-                <div class="lead-schedule-section-head"><h3>定期搜索计划</h3><span id="leadFinderScheduleCount">0 个启用中</span></div>
-                <div class="lead-schedule-list" id="leadFinderScheduleList">
-                  <div class="empty-cell">暂无定期搜索计划。</div>
-                </div>
-              </section>
-              <section class="identity-conflict-review" id="identityConflictReviewSection" hidden>
-                <div class="identity-conflict-review-head">
-                  <div><h3>企业身份待复核</h3><p>仅建立企业归一映射，不改写候选资料或自动生成 CRM 数据</p></div>
-                  <span id="identityConflictReviewCount">0 条待处理</span>
-                </div>
-                <div class="identity-conflict-list" id="identityConflictReviewList">
-                  <div class="empty-cell">暂无待复核的企业身份冲突。</div>
-                </div>
-              </section>
               <div class="lead-job-list" id="leadFinderJobList">
                 <div class="empty-cell">还没有搜客任务。填写条件后点击“生成并运行任务”。</div>
               </div>
+            </section>
+          </div>
+
+          <details class="panel section lead-support-panel">
+            <summary>获客管理与搜索入口 <span>定期计划、企业身份复核与效果复盘</span></summary>
+            <section class="lead-schedule-section">
+              <div class="lead-schedule-section-head"><h3>定期搜索计划</h3><span id="leadFinderScheduleCount">0 个启用中</span></div>
+              <div class="lead-schedule-list" id="leadFinderScheduleList">
+                <div class="empty-cell">暂无定期搜索计划。</div>
+              </div>
+            </section>
+            <section class="identity-conflict-review" id="identityConflictReviewSection" hidden>
+              <div class="identity-conflict-review-head">
+                <div><h3>企业身份待复核</h3><p>仅建立企业归一映射，不改写候选资料或自动生成 CRM 数据</p></div>
+                <span id="identityConflictReviewCount">0 条待处理</span>
+              </div>
+              <div class="identity-conflict-list" id="identityConflictReviewList">
+                <div class="empty-cell">暂无待复核的企业身份冲突。</div>
+              </div>
+            </section>
+            <div class="lead-support-grid">
               <section class="prospect-performance-review" aria-labelledby="prospectPerformanceTitle">
                 <div class="prospect-performance-head">
                   <div><h3 id="prospectPerformanceTitle">获客效果复盘</h3><p>仅统计本人获客链路，成交结果回流后生成建议</p></div>
@@ -12510,8 +12999,8 @@
                 <div class="section-title compact"><span class="icon"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg></span><div><h2>搜索入口</h2><span>复制/打开后把有效官网再导入</span></div></div>
                 <div class="lead-search-links" id="leadFinderSearchLinks"></div>
               </div>
-            </details>
-          </div>
+            </div>
+          </details>
 
           <div class="lead-result-layout">
             <section class="panel section lead-results-panel">
@@ -12544,6 +13033,64 @@
           <aside class="lead-verification-drawer" id="leadFinderVerificationDrawer" aria-label="候选校验报告">
             <div id="leadFinderDetail"></div>
           </aside>
+        </div>
+
+        <div class="view" id="lead-task-detail">
+          <div class="task-run-header">
+            <div class="task-run-header-main">
+              <button class="task-run-back" id="leadTaskDetailBack" type="button" title="返回任务队列" aria-label="返回任务队列">
+                <svg viewBox="0 0 24 24"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+              </button>
+              <div class="task-run-header-copy">
+                <div class="task-run-title-line">
+                  <h1 id="leadTaskDetailTitle">任务执行详情</h1>
+                  <span class="task-run-status is-running" id="leadTaskDetailStatus"><i class="task-run-status-dot"></i><span>连接中</span></span>
+                </div>
+                <div class="task-run-meta" id="leadTaskDetailMeta"><span>正在读取任务状态...</span></div>
+              </div>
+            </div>
+            <div class="task-run-header-actions" id="leadTaskDetailActions"></div>
+          </div>
+
+          <section class="task-run-stage" id="leadTaskDetailStage" aria-label="当前执行阶段"></section>
+          <section class="task-run-metrics" id="leadTaskDetailMetrics" aria-label="任务数据摘要"></section>
+
+          <div class="task-run-workspace">
+            <section class="task-run-pane" aria-labelledby="leadTaskStreamTitle">
+              <div class="task-run-pane-head">
+                <div><h2 id="leadTaskStreamTitle">实时搜索过程</h2><p>基于任务事件和来源状态持续更新</p></div>
+                <div class="task-run-pane-tools">
+                  <div class="task-run-stream-mode" role="group" aria-label="日志显示模式">
+                    <button class="active" type="button" data-lead-stream-mode="summary">关键进度</button>
+                    <button type="button" data-lead-stream-mode="verbose">高速日志</button>
+                  </div>
+                  <span class="task-run-live" id="leadTaskStreamState">实时同步</span>
+                </div>
+              </div>
+              <div class="task-run-stream" id="leadTaskStream" aria-live="polite" aria-relevant="additions"></div>
+              <button class="task-run-new-events" id="leadTaskNewEvents" type="button" hidden>查看新动态</button>
+            </section>
+            <aside class="task-run-insights" aria-label="当前任务结果">
+              <section class="task-run-insight">
+                <div class="task-run-insight-head"><h2>当前收获</h2><span id="leadTaskGainSummary">持续更新</span></div>
+                <div class="task-run-insight-list" id="leadTaskGains"></div>
+              </section>
+              <section class="task-run-insight">
+                <div class="task-run-insight-head"><h2>清洗与分流</h2><span id="leadTaskCleanSummary">规则监测中</span></div>
+                <div class="task-run-insight-list" id="leadTaskCleaned"></div>
+              </section>
+            </aside>
+          </div>
+
+          <section class="task-run-sources" aria-labelledby="leadTaskSourcesTitle">
+            <div class="task-run-pane-head"><div><h2 id="leadTaskSourcesTitle">数据源执行矩阵</h2><p>搜索、解析、清洗状态按来源独立呈现</p></div><span id="leadTaskSourcesSummary"></span></div>
+            <div id="leadTaskSources"></div>
+          </section>
+
+          <details class="task-run-strategy" id="leadTaskStrategy">
+            <summary>搜索策略快照</summary>
+            <div class="task-run-strategy-grid" id="leadTaskStrategyGrid"></div>
+          </details>
         </div>
 
         <div class="view" id="prospect-list">

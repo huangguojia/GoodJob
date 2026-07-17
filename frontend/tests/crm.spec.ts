@@ -2098,7 +2098,9 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#lead-finder .page-head")).toContainText("自动获客");
     await expect(page.locator("#leadFinderSearchLinks a").first()).toContainText(/product supplier|OEM product/);
     await expect(page.locator(".lead-advanced-settings")).toHaveAttribute("open", "");
-    await expect(page.locator(".lead-queue-panel")).toHaveAttribute("open", "");
+    await expect(page.locator(".lead-queue-panel")).toBeVisible();
+    await expect(page.locator(".lead-queue-panel")).toContainText("自动更新");
+    await expect(page.locator(".lead-support-panel")).not.toHaveAttribute("open", "");
 
     await page.locator("#leadFinderUrlInput").fill(`https://example.org/${company}`);
     await page.route("**/api/tools/website-scrape/preview", async (route) => {
@@ -2108,6 +2110,24 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#leadFinderStartButton").click();
     const jobCard = page.locator("#leadFinderJobList .lead-job-card").first();
     await expect(jobCard).toContainText("进行中");
+    await jobCard.locator("[data-lead-job-open]").click();
+    await expect(page.locator("#lead-task-detail")).toHaveClass(/active/);
+    await expect(page.locator("#leadTaskDetailStatus")).toContainText(/进行中|已完成/);
+    await expect(page.locator("#leadTaskStream")).toContainText("客户画像与检索条件已解析");
+    await expect(page.locator("[data-lead-stream-mode='summary']")).toHaveClass(/active/);
+    await page.locator("[data-lead-stream-mode='verbose']").click();
+    await expect(page.locator("#leadTaskStream")).toHaveClass(/is-verbose/);
+    await expect(page.locator("#leadTaskStreamState")).toContainText("高速追踪");
+    await expect(page.locator("#leadTaskStream .task-run-log").nth(5)).toBeVisible({ timeout: 4_000 });
+    await expect(page.locator("#leadTaskStream")).toContainText(/读取任务运行修订|检查暂停与取消信号|同步本轮候选引用/);
+    await page.locator("[data-lead-stream-mode='summary']").click();
+    await expect(page.locator("#leadTaskStream")).not.toHaveClass(/is-verbose/);
+    await expect(page.locator("#leadTaskStream")).toContainText("客户画像与检索条件已解析");
+    await expect(page.locator("#lead-task-detail")).toContainText("当前收获");
+    await expect(page.locator("#lead-task-detail")).toContainText("清洗与分流");
+    await expect(page.locator("#leadTaskCleaned")).toContainText("域名或企业身份重复");
+    await page.locator("#leadTaskDetailBack").click();
+    await expect(page.locator("#lead-finder")).toHaveClass(/active/);
     await jobCard.locator("[data-lead-job-toggle]").click();
     await expect(jobCard).toContainText("检索公开API");
     await expect(page.locator("#leadFinderResultRows")).toContainText("example.org");

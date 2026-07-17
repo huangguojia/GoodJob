@@ -872,6 +872,7 @@ interface LeadFinderJob {
   metricValue?: string;
   progressLabel?: string;
   progressValue?: string;
+  runEvents?: ProspectRunEventApiRecord[];
 }
 
 interface LeadFinderSourceStat {
@@ -885,6 +886,8 @@ interface LeadFinderSourceStat {
   retryable?: boolean;
   retryAfterAt?: string | null;
   usage?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 interface LeadFinderIncrementalStats {
@@ -896,6 +899,18 @@ interface LeadFinderIncrementalStats {
   multiSourceMergedCount: number;
   unchangedCount: number;
   excludedCount: number;
+}
+
+type LeadTaskStreamMode = "summary" | "verbose";
+
+interface LeadTaskStreamLog {
+  key: string;
+  at: string;
+  source: string;
+  title: string;
+  detail: string;
+  result: string;
+  tone: string;
 }
 
 interface ProspectCampaignApiRecord {
@@ -970,9 +985,21 @@ interface ProspectRunShardApiRecord {
   updatedAt: string;
 }
 
+interface ProspectRunEventApiRecord {
+  id: string;
+  sequence: number;
+  eventType: "created" | "started" | "pause_requested" | "paused" | "resumed" | "cancel_requested" | "cancelled" | "completed" | "failed";
+  actorId: string;
+  fromStatus: ProspectRunApiStatus | "";
+  toStatus: ProspectRunApiStatus;
+  reason: string;
+  createdAt: string;
+}
+
 interface ProspectRunDetailApiResponse {
   run: ProspectRunApiRecord;
   shards: ProspectRunShardApiRecord[];
+  events: ProspectRunEventApiRecord[];
 }
 
 interface ProspectScheduleApiRecord {
@@ -1672,6 +1699,11 @@ const resolvedMemoDrafts = new Set<string>();
 let leadFinderJobs: LeadFinderJob[] = [];
 let leadFinderRunsLoading = false;
 let leadFinderRunPollTimer = 0;
+let activeLeadFinderJobId: string | null = null;
+let leadTaskDetailClockTimer = 0;
+let leadTaskStreamMode: LeadTaskStreamMode = "summary";
+let leadTaskVerboseTimer = 0;
+let leadTaskVerboseSequence = 0;
 let prospectFeedbackLoading = false;
 let prospectFeedbackLoadedAt = 0;
 let customerClockTimer = 0;
@@ -1681,6 +1713,7 @@ let workspaceTabHistory = ["dashboard"];
 const viewLabels: Record<string, string> = {
   dashboard: "工作台",
   "lead-finder": "自动获客",
+  "lead-task-detail": "任务执行详情",
   "prospect-list": "搜客清单",
   customers: "客户",
   pipeline: "商机",
@@ -11277,6 +11310,450 @@ function renderLeadFinderJobDetails(job: LeadFinderJob) {
   `;
 }
 
+function leadTaskDetailStatusClass(job: LeadFinderJob) {
+  if (job.status === "done") return "is-done";
+  if (["partial", "paused", "cancelled", "needs_input"].includes(job.status)) return "is-warning";
+  if (job.status === "failed") return "is-failed";
+  return "is-running";
+}
+
+function leadTaskDetailEventText(event: ProspectRunEventApiRecord) {
+  const copy: Record<ProspectRunEventApiRecord["eventType"], [string, string]> = {
+    created: ["任务创建完成", "搜索策略与来源计划已冻结，等待执行器接管"],
+    started: ["后台执行已启动", "多个数据源开始并行搜索目标企业"],
+    pause_requested: ["已提交暂停请求", event.reason || "将在安全检查点暂停任务"],
+    paused: ["任务已暂停", event.reason || "已有结果和执行位置均已保留"],
+    resumed: ["任务已恢复", event.reason || "从上次安全检查点继续执行"],
+    cancel_requested: ["已提交取消请求", event.reason || "正在停止未完成的数据源"],
+    cancelled: ["任务已取消", event.reason || "已保留取消前的有效结果"],
+    completed: ["任务执行完成", event.reason || "来源结果已进入清洗与候选归并流程"],
+    failed: ["任务执行失败", event.reason || "请检查数据源连接或任务配置"]
+  };
+  return copy[event.eventType];
+}
+
+function leadTaskDetailTime(value?: string) {
+  if (!value) return "--:--:--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--:--:--";
+  return date.toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+function leadTaskDetailDateTime(value?: string) {
+  if (!value) return "--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--";
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function leadTaskDetailLogs(job: LeadFinderJob) {
+  const logs: LeadTaskStreamLog[] = [{
+    key: `${job.id}:strategy`,
+    at: job.createdAt,
+    source: "策略",
+    title: "客户画像与检索条件已解析",
+    detail: "产品、市场、行业和排除条件已载入本次任务",
+    result: "已就绪",
+    tone: ""
+  }];
+  (job.runEvents || []).forEach((event) => {
+    const [title, detail] = leadTaskDetailEventText(event);
+    logs.push({
+      key: event.id,
+      at: event.createdAt,
+      source: "任务",
+      title,
+      detail,
+      result: prospectRunStatusLabel(event.toStatus),
+      tone: event.eventType === "failed" ? "is-failed" : event.eventType === "completed" ? "is-gain" : ["pause_requested", "paused", "cancel_requested", "cancelled"].includes(event.eventType) ? "is-review" : ""
+    });
+  });
+  (job.sourceStats || []).forEach((source) => {
+    const status = source.status || "queued";
+    const failed = Boolean(source.error || status === "failed");
+    const succeeded = ["succeeded", "succeeded_empty", "partial_success", "success", "success_empty"].includes(status);
+    const title = failed
+      ? `${source.name} 返回异常`
+      : succeeded
+        ? `${source.name} 已完成本轮检索`
+        : status === "running"
+          ? `${source.name} 正在检索与解析`
+          : status === "retry_scheduled"
+            ? `${source.name} 等待自动重试`
+            : `${source.name} 已进入执行队列`;
+    logs.push({
+      key: `${job.id}:${source.id}:${status}:${source.updatedAt || ""}`,
+      at: source.updatedAt || source.createdAt || job.createdAt,
+      source: source.name,
+      title,
+      detail: failed ? source.error || "来源执行失败" : source.statusLabel || "等待状态更新",
+      result: source.count === undefined ? (source.statusLabel || "进行中") : `${source.count} 条`,
+      tone: failed ? "is-failed" : succeeded ? "is-gain" : status === "retry_scheduled" ? "is-review" : ""
+    });
+  });
+  if (job.incrementalStats) {
+    const stats = job.incrementalStats;
+    logs.push({
+      key: `${job.id}:clean:${stats.rawCount}:${stats.newCount}:${stats.excludedCount}`,
+      at: new Date().toISOString(),
+      source: "清洗",
+      title: "候选归并与排除规则已更新",
+      detail: `同批去重 ${stats.deduplicatedCount} 条，排除 ${stats.excludedCount} 条，历史未变化 ${stats.unchangedCount} 条`,
+      result: `净新增 ${stats.newCount}`,
+      tone: stats.newCount ? "is-gain" : ""
+    });
+  }
+  logs.sort((left, right) => left.at.localeCompare(right.at) || left.key.localeCompare(right.key));
+  if (["running", "ready"].includes(job.status)) {
+    logs.push({
+      key: `${job.id}:live`,
+      at: new Date().toISOString(),
+      source: "实时",
+      title: "任务仍在后台持续执行",
+      detail: `${job.channelCount} 个来源保持连接，新事件将自动追加到这里`,
+      result: "监听中",
+      tone: "is-live"
+    });
+  }
+  return logs;
+}
+
+function leadTaskStreamLogHtml(log: LeadTaskStreamLog) {
+  return `
+    <div class="task-run-log ${log.tone}" data-task-log-key="${escapeHtml(log.key)}">
+      <time>${escapeHtml(leadTaskDetailTime(log.at))}</time>
+      <span class="task-run-log-source" title="${escapeHtml(log.source)}">${escapeHtml(log.source)}</span>
+      <div class="task-run-log-copy"><b>${escapeHtml(log.title)}</b><span>${escapeHtml(log.detail)}</span></div>
+      <strong class="task-run-log-result">${escapeHtml(log.result)}</strong>
+    </div>
+  `;
+}
+
+function leadTaskVerboseOperation(job: LeadFinderJob, sequence: number): LeadTaskStreamLog {
+  const sources = job.sourceStats || [];
+  const source = sources.length ? sources[sequence % sources.length]! : null;
+  const events = job.runEvents || [];
+  const latestEvent = events[events.length - 1];
+  const stats = job.incrementalStats;
+  const candidates = job.resultIds?.length || 0;
+  const conditions = job.detailLines?.length || 0;
+  const operations: Array<() => Omit<LeadTaskStreamLog, "key" | "at">> = [
+    () => ({ source: "调度器", title: "读取任务运行修订", detail: `任务 ${job.backendRunId || job.id} 当前状态 ${leadFinderJobStatusText(job)}`, result: `rev ${job.backendRunRevision || "local"}`, tone: "is-live" }),
+    () => ({ source: "策略", title: "核对检索条件快照", detail: `${conditions} 个任务条件保持锁定，避免运行中策略漂移`, result: "snapshot ok", tone: "" }),
+    () => ({ source: source?.name || "来源池", title: `检查${source ? ` ${source.name}` : "来源"}执行分片`, detail: source?.statusLabel || source?.error || `${job.channelCount} 个来源等待状态回传`, result: source?.status || "pending", tone: source?.error ? "is-failed" : "" }),
+    () => ({ source: "控制面", title: "检查暂停与取消信号", detail: `当前未处理控制状态：${job.backendRunStatus || job.status}`, result: "signal clear", tone: "" }),
+    () => ({ source: "候选索引", title: "同步本轮候选引用", detail: `已关联 ${candidates} 条候选，等待更多来源结果归并`, result: `${candidates} refs`, tone: candidates ? "is-gain" : "" }),
+    () => ({ source: "清洗器", title: "读取重复与排除计数", detail: stats ? `去重 ${stats.deduplicatedCount} · 排除 ${stats.excludedCount} · 无变化 ${stats.unchangedCount}` : "细分清洗统计尚未回传，保持监听", result: stats ? `${stats.rawCount} raw` : "awaiting", tone: "is-review" }),
+    () => ({ source: "身份归一", title: "检查多来源企业映射", detail: stats ? `已合并 ${stats.multiSourceMergedCount} 条多来源身份` : "等待企业身份和来源证据进入归并队列", result: stats ? `${stats.multiSourceMergedCount} merged` : "watching", tone: "" }),
+    () => ({ source: "事件流", title: "确认最新运行事件序号", detail: latestEvent ? `${latestEvent.eventType} · ${leadTaskDetailTime(latestEvent.createdAt)}` : "尚无新的后端控制事件", result: `seq ${latestEvent?.sequence || 0}`, tone: "" }),
+    () => ({ source: "计数器", title: "对齐增量统计快照", detail: stats ? `净新增 ${stats.newCount} · 新证据 ${stats.evidenceUpdatedCount}` : "净新增与证据计数等待来源完成", result: stats ? `+${stats.newCount}` : "pending", tone: stats?.newCount ? "is-gain" : "" }),
+    () => ({ source: "观察器", title: "刷新任务心跳", detail: "详情页保持与后台轮询同步，离开页面不会停止任务", result: "heartbeat", tone: "is-live" }),
+    () => ({ source: "队列", title: "扫描已结束来源", detail: `${sources.filter((item) => ["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled", "success", "success_empty"].includes(item.status || "")).length} / ${sources.length || job.channelCount} 个来源已结束`, result: "queue scan", tone: "" }),
+    () => ({ source: "审计", title: "写入前台追踪行", detail: "保留时间、来源、操作和结果，便于复盘任务执行过程", result: `trace ${sequence + 1}`, tone: "" })
+  ];
+  const operation = operations[sequence % operations.length]!();
+  return {
+    ...operation,
+    key: `${job.id}:trace:${sequence}`,
+    at: new Date().toISOString()
+  };
+}
+
+function syncLeadTaskStreamModeUi() {
+  qsa<HTMLButtonElement>("[data-lead-stream-mode]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.leadStreamMode === leadTaskStreamMode);
+  });
+  const stateNode = qs<HTMLElement>("#leadTaskStreamState");
+  if (stateNode) {
+    stateNode.textContent = leadTaskStreamMode === "verbose" ? "高速追踪" : "实时同步";
+    stateNode.classList.toggle("is-verbose", leadTaskStreamMode === "verbose");
+  }
+}
+
+function appendLeadTaskVerboseLog() {
+  if (leadTaskStreamMode !== "verbose" || qs<HTMLElement>(".view.active")?.id !== "lead-task-detail") return;
+  const job = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
+  const stream = qs<HTMLElement>("#leadTaskStream");
+  if (!job || !stream) return;
+  const wasFollowing = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 72;
+  const log = leadTaskVerboseOperation(job, leadTaskVerboseSequence++);
+  stream.insertAdjacentHTML("beforeend", leadTaskStreamLogHtml(log));
+  while (stream.children.length > 100) stream.firstElementChild?.remove();
+  stream.dataset.logCount = String(stream.children.length);
+  const newEventsButton = qs<HTMLButtonElement>("#leadTaskNewEvents");
+  if (wasFollowing || stream.children.length < 8) {
+    stream.scrollTop = stream.scrollHeight;
+    if (newEventsButton) newEventsButton.hidden = true;
+  } else if (newEventsButton) {
+    const pending = Number(newEventsButton.dataset.pending || 0) + 1;
+    newEventsButton.dataset.pending = String(pending);
+    newEventsButton.textContent = `${pending} 条新动态`;
+    newEventsButton.hidden = false;
+  }
+}
+
+function syncLeadTaskVerboseTimer(active: boolean) {
+  if (!active) {
+    if (leadTaskVerboseTimer) window.clearInterval(leadTaskVerboseTimer);
+    leadTaskVerboseTimer = 0;
+    return;
+  }
+  if (!leadTaskVerboseTimer) {
+    leadTaskVerboseTimer = window.setInterval(appendLeadTaskVerboseLog, 180);
+  }
+}
+
+function setLeadTaskStreamMode(mode: LeadTaskStreamMode) {
+  leadTaskStreamMode = mode;
+  const stream = qs<HTMLElement>("#leadTaskStream");
+  if (stream) {
+    stream.innerHTML = "";
+    stream.dataset.signature = "";
+    stream.dataset.logCount = "0";
+    stream.dataset.streamMode = mode;
+    stream.classList.toggle("is-verbose", mode === "verbose");
+  }
+  const newEventsButton = qs<HTMLButtonElement>("#leadTaskNewEvents");
+  if (newEventsButton) {
+    newEventsButton.hidden = true;
+    newEventsButton.dataset.pending = "0";
+  }
+  if (mode === "verbose") leadTaskVerboseSequence = 0;
+  syncLeadTaskStreamModeUi();
+  const job = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
+  if (job) renderLeadTaskStream(job);
+  syncLeadTaskVerboseTimer(mode === "verbose" && qs<HTMLElement>(".view.active")?.id === "lead-task-detail");
+}
+
+function renderLeadTaskStream(job: LeadFinderJob) {
+  const stream = qs<HTMLElement>("#leadTaskStream");
+  if (!stream) return;
+  if (leadTaskStreamMode === "verbose") {
+    stream.classList.add("is-verbose");
+    stream.dataset.streamMode = "verbose";
+    if (!stream.children.length) {
+      appendLeadTaskVerboseLog();
+      appendLeadTaskVerboseLog();
+    }
+    syncLeadTaskStreamModeUi();
+    return;
+  }
+  stream.classList.remove("is-verbose");
+  if (stream.dataset.streamMode !== "summary") {
+    stream.innerHTML = "";
+    stream.dataset.signature = "";
+    stream.dataset.logCount = "0";
+    stream.dataset.streamMode = "summary";
+  }
+  const logs = leadTaskDetailLogs(job);
+  const signature = logs.map((item) => item.key).join("|");
+  if (stream.dataset.signature === signature) return;
+  const wasFollowing = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 72;
+  const previousCount = Number(stream.dataset.logCount || 0);
+  stream.innerHTML = logs.map(leadTaskStreamLogHtml).join("");
+  stream.dataset.signature = signature;
+  stream.dataset.logCount = String(logs.length);
+  const newEventsButton = qs<HTMLButtonElement>("#leadTaskNewEvents");
+  if (wasFollowing || !previousCount) {
+    requestAnimationFrame(() => { stream.scrollTop = stream.scrollHeight; });
+    if (newEventsButton) newEventsButton.hidden = true;
+  } else if (newEventsButton && logs.length > previousCount) {
+    newEventsButton.textContent = `${logs.length - previousCount} 条新动态`;
+    newEventsButton.hidden = false;
+  }
+  syncLeadTaskStreamModeUi();
+}
+
+function leadTaskDetailSourceStep(status = "queued") {
+  if (["succeeded", "succeeded_empty", "partial_success", "success", "success_empty"].includes(status)) return 5;
+  if (["failed", "cancelled"].includes(status)) return 4;
+  if (["running", "pause_requested", "paused", "retry_scheduled", "cancel_requested"].includes(status)) return 1;
+  return 0;
+}
+
+function renderLeadTaskSources(job: LeadFinderJob) {
+  const box = qs<HTMLElement>("#leadTaskSources");
+  const summary = qs<HTMLElement>("#leadTaskSourcesSummary");
+  if (!box || !summary) return;
+  const sources = job.sourceStats || [];
+  const settled = sources.filter((source) => ["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled", "success", "success_empty"].includes(source.status || "")).length;
+  summary.textContent = `${settled} / ${sources.length || job.channelCount} 个来源已结束`;
+  if (!sources.length) {
+    box.innerHTML = `<div class="task-run-insight-empty">任务正在建立来源连接，执行矩阵会随状态回传自动展开。</div>`;
+    return;
+  }
+  const stepLabels = ["搜索", "解析", "清洗", "入池", "完成"];
+  box.innerHTML = sources.map((source) => {
+    const current = leadTaskDetailSourceStep(source.status);
+    const terminal = current === 5;
+    return `
+      <div class="task-run-source-row">
+        <div class="task-run-source-name"><b>${escapeHtml(source.name)}</b><span>${escapeHtml(source.id)}</span></div>
+        <div class="task-run-source-steps">${stepLabels.map((label, index) => `<span class="task-run-source-step ${terminal || index < current ? "is-done" : index === current ? "is-current" : ""}">${label}</span>`).join("")}</div>
+        <span class="task-run-source-status">${escapeHtml(source.statusLabel || "等待执行")}</span>
+        <time class="task-run-source-time">${escapeHtml(leadTaskDetailTime(source.updatedAt || source.createdAt))}</time>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderLeadTaskInsights(job: LeadFinderJob) {
+  const gains = qs<HTMLElement>("#leadTaskGains");
+  const cleaned = qs<HTMLElement>("#leadTaskCleaned");
+  const gainSummary = qs<HTMLElement>("#leadTaskGainSummary");
+  const cleanSummary = qs<HTMLElement>("#leadTaskCleanSummary");
+  if (!gains || !cleaned || !gainSummary || !cleanSummary) return;
+  const found = (job.resultIds || [])
+    .map((id) => state.websiteOpportunities.find((item) => item.id === id))
+    .filter(Boolean) as WebsiteOpportunity[];
+  const stats = job.incrementalStats;
+  gainSummary.textContent = stats ? `净新增 ${stats.newCount} 条` : found.length ? `${found.length} 条候选` : "持续更新";
+  if (found.length) {
+    gains.innerHTML = found.map((item) => `
+      <div class="task-run-insight-row is-gain"><div><b>${escapeHtml(item.company || "公司待确认")}</b><span>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website || ""))}</span></div><em>${leadFinderScore(item)} 分</em></div>
+    `).join("");
+  } else if (stats && (stats.newCount || stats.evidenceUpdatedCount)) {
+    gains.innerHTML = `
+      <div class="task-run-insight-row is-gain"><div><b>新增候选企业</b><span>通过本轮身份归一与去重</span></div><em>+${stats.newCount}</em></div>
+      <div class="task-run-insight-row is-gain"><div><b>已有企业新增证据</b><span>补充来源或联系线索</span></div><em>+${stats.evidenceUpdatedCount}</em></div>
+    `;
+  } else {
+    gains.innerHTML = `<div class="task-run-insight-empty">来源正在检索与归并。发现可核验企业后，会在这里持续追加当前收获。</div>`;
+  }
+  const cleanRows: Array<[string, string, number | null]> = [
+    ["域名或企业身份重复", "同批候选只保留一条主记录", stats?.deduplicatedCount ?? null],
+    ["命中排除条件", "按排除词与业务规则停止入池", stats?.excludedCount ?? null],
+    ["历史记录无新增证据", "避免重复进入人工核验队列", stats?.unchangedCount ?? null],
+    ["多来源身份合并", "来源证据归并到同一企业", stats?.multiSourceMergedCount ?? null]
+  ];
+  const cleanedTotal = stats ? stats.deduplicatedCount + stats.excludedCount + stats.unchangedCount : null;
+  cleanSummary.textContent = cleanedTotal === null ? "规则监测中" : `已分流 ${cleanedTotal} 条`;
+  cleaned.innerHTML = cleanRows.map(([title, detail, count]) => `
+    <div class="task-run-insight-row"><div><b>${escapeHtml(title)}</b><span>${escapeHtml(detail)}</span></div><em>${count === null ? "监测中" : `${count} 条`}</em></div>
+  `).join("");
+}
+
+function renderLeadTaskStrategy(job: LeadFinderJob) {
+  const box = qs<HTMLElement>("#leadTaskStrategyGrid");
+  if (!box) return;
+  const pairs = (job.detailLines || []).map((line) => {
+    const separator = line.indexOf("：");
+    return separator > 0 ? [line.slice(0, separator), line.slice(separator + 1)] : ["任务条件", line];
+  });
+  box.innerHTML = pairs.map(([label, value]) => `
+    <div class="task-run-strategy-item"><span>${escapeHtml(label)}</span><b title="${escapeHtml(value)}">${escapeHtml(value)}</b></div>
+  `).join("");
+}
+
+function updateLeadTaskDetailClock() {
+  if (qs<HTMLElement>(".view.active")?.id !== "lead-task-detail") return;
+  const job = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
+  if (!job) return;
+  const elapsed = qs<HTMLElement>("[data-task-run-elapsed]");
+  if (elapsed) {
+    if (["done", "partial", "failed", "cancelled"].includes(job.status)) {
+      elapsed.textContent = job.elapsedText;
+      return;
+    }
+    const start = new Date(job.createdAt).getTime();
+    const seconds = Math.max(0, Math.floor((Date.now() - start) / 1000));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const rest = seconds % 60;
+    elapsed.textContent = `${hours ? `${hours}:` : ""}${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+  }
+}
+
+function syncLeadTaskDetailClock(active: boolean) {
+  if (!active) {
+    if (leadTaskDetailClockTimer) window.clearInterval(leadTaskDetailClockTimer);
+    leadTaskDetailClockTimer = 0;
+    return;
+  }
+  if (!leadTaskDetailClockTimer) {
+    leadTaskDetailClockTimer = window.setInterval(updateLeadTaskDetailClock, 1_000);
+  }
+  updateLeadTaskDetailClock();
+}
+
+function renderLeadTaskDetail() {
+  const job = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
+  if (!job) {
+    activeLeadFinderJobId = leadFinderJobs[0]?.id || null;
+    if (!activeLeadFinderJobId) {
+      activateNavView("lead-finder");
+      return;
+    }
+    return renderLeadTaskDetail();
+  }
+  const status = qs<HTMLElement>("#leadTaskDetailStatus");
+  const title = qs<HTMLElement>("#leadTaskDetailTitle");
+  const meta = qs<HTMLElement>("#leadTaskDetailMeta");
+  const actions = qs<HTMLElement>("#leadTaskDetailActions");
+  const stage = qs<HTMLElement>("#leadTaskDetailStage");
+  const metrics = qs<HTMLElement>("#leadTaskDetailMetrics");
+  if (!status || !title || !meta || !actions || !stage || !metrics) return;
+  title.textContent = job.title;
+  status.className = `task-run-status ${leadTaskDetailStatusClass(job)}`;
+  status.innerHTML = `<i class="task-run-status-dot"></i><span>${escapeHtml(leadFinderJobStatusText(job))}</span>`;
+  meta.innerHTML = `
+    <span>任务编号 <code>${escapeHtml(job.backendRunId || job.id)}</code></span>
+    <span>开始于 ${escapeHtml(leadTaskDetailDateTime(job.createdAt))}</span>
+    <span>已持续 <b data-task-run-elapsed>00:00</b></span>
+  `;
+  actions.innerHTML = `
+    ${job.backendRunId && job.backendRunStatus === "queued" ? `<button class="btn" data-lead-detail-action="pause">暂停</button>` : ""}
+    ${job.backendRunId && job.backendRunStatus === "paused" ? `<button class="btn primary" data-lead-detail-action="resume">恢复</button>` : ""}
+    ${job.backendRunId && ["queued", "paused"].includes(job.backendRunStatus || "") ? `<button class="btn danger" data-lead-detail-action="cancel">取消任务</button>` : ""}
+  `;
+  const currentStep = job.steps[Math.min(job.steps.length - 1, Math.floor((Math.max(job.progress, 1) / 100) * job.steps.length))] || "准备执行";
+  stage.innerHTML = `
+    <div><small>当前执行阶段</small><b>${escapeHtml(currentStep)}</b><p>${job.status === "running" ? "任务在后台持续推进，离开此页面不会中断执行。" : "任务状态与过程记录已保存，可随时返回查看。"}</p></div>
+    <span class="task-run-progress-text">${escapeHtml(job.progressValue || leadFinderJobStatusText(job))}</span>
+    <div class="task-run-progress-track ${job.status === "running" ? "is-running" : ""}"><i style="--p:${Math.max(2, job.progress)}%"></i></div>
+  `;
+  const stats = job.incrementalStats;
+  const settledSources = (job.sourceStats || []).filter((source) => ["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled", "success", "success_empty"].includes(source.status || "")).length;
+  const metricRows: Array<[string, string, string, string]> = [
+    ["原始命中", stats ? String(stats.rawCount) : "--", stats ? "来源返回总量" : "等待来源回传", ""],
+    ["净新增", stats ? String(stats.newCount) : job.resultIds?.length ? String(job.resultIds.length) : "--", "进入候选池", "is-gain"],
+    ["新证据", stats ? String(stats.evidenceUpdatedCount) : "--", "补充已有企业", "is-gain"],
+    ["同批去重", stats ? String(stats.deduplicatedCount) : "--", "身份归一清洗", ""],
+    ["已排除", stats ? String(stats.excludedCount) : "--", "命中排除规则", ""],
+    ["来源完成", `${settledSources}/${job.sourceStats?.length || job.channelCount}`, "独立执行分片", ""]
+  ];
+  metrics.innerHTML = metricRows.map(([label, value, hint, tone]) => `<div class="task-run-metric ${tone}"><span>${label}</span><b>${escapeHtml(value)}</b><small>${hint}</small></div>`).join("");
+  renderLeadTaskStream(job);
+  renderLeadTaskInsights(job);
+  renderLeadTaskSources(job);
+  renderLeadTaskStrategy(job);
+  qs<HTMLButtonElement>("#leadTaskDetailBack")!.onclick = () => activateNavView("lead-finder");
+  qs<HTMLButtonElement>("#leadTaskNewEvents")!.onclick = () => {
+    const stream = qs<HTMLElement>("#leadTaskStream");
+    if (stream) stream.scrollTop = stream.scrollHeight;
+    const button = qs<HTMLButtonElement>("#leadTaskNewEvents");
+    if (button) {
+      button.hidden = true;
+      button.dataset.pending = "0";
+    }
+  };
+  qsa<HTMLButtonElement>("[data-lead-stream-mode]").forEach((button) => {
+    button.onclick = () => setLeadTaskStreamMode(button.dataset.leadStreamMode === "verbose" ? "verbose" : "summary");
+  });
+  qsa<HTMLButtonElement>("[data-lead-detail-action]", actions).forEach((button) => {
+    button.addEventListener("click", () => void transitionLeadFinderRun(job, button.dataset.leadDetailAction as "pause" | "resume" | "cancel", button));
+  });
+  updateLeadTaskDetailClock();
+}
+
+function openLeadTaskDetail(job: LeadFinderJob) {
+  activeLeadFinderJobId = job.id;
+  leadTaskStreamMode = "summary";
+  leadTaskVerboseSequence = 0;
+  syncLeadTaskVerboseTimer(false);
+  activateNavView("lead-task-detail", renderLeadTaskDetail);
+}
+
 function renderLeadFinderJobs() {
   const box = qs<HTMLElement>("#leadFinderJobList");
   if (!box) return;
@@ -11285,7 +11762,7 @@ function renderLeadFinderJobs() {
     return;
   }
   box.innerHTML = leadFinderJobs.map((job) => `
-    <article class="lead-job-card" data-lead-job-id="${escapeHtml(job.id)}">
+    <article class="lead-job-card is-openable" data-lead-job-id="${escapeHtml(job.id)}" tabindex="0" role="button" aria-label="查看任务 ${escapeHtml(job.title)} 的执行详情">
       <div class="lead-job-top">
         <button class="lead-job-toggle" type="button" data-lead-job-toggle aria-label="${job.expanded ? "收起任务详情" : "展开任务详情"}">${job.expanded ? "▾" : "▸"}</button>
         <div><h3>${escapeHtml(job.title)}</h3><p>${escapeHtml(job.subtitle)}</p></div>
@@ -11301,6 +11778,7 @@ function renderLeadFinderJobs() {
       <div class="lead-job-steps">${job.steps.map((step, index) => `<span>${index + 1} ${escapeHtml(step)}</span>`).join("")}</div>
       ${renderLeadFinderJobDetails(job)}
       <div class="lead-job-actions">
+        <button class="lead-job-open-hint" type="button" data-lead-job-open><span><svg viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg></span>执行详情</button>
         ${job.backendRunId && job.backendRunStatus === "queued" ? `<button class="btn" data-lead-run-action="pause">暂停任务</button>` : ""}
         ${job.backendRunId && job.backendRunStatus === "paused" ? `<button class="btn primary" data-lead-run-action="resume">恢复任务</button>` : ""}
         ${job.backendRunId && ["queued", "paused"].includes(job.backendRunStatus || "") ? `<button class="btn danger" data-lead-run-action="cancel">取消任务</button>` : ""}
@@ -11309,6 +11787,29 @@ function renderLeadFinderJobs() {
       </div>
     </article>
   `).join("");
+  qsa<HTMLElement>("[data-lead-job-id]", box).forEach((card) => {
+    const open = () => {
+      const job = leadFinderJobs.find((item) => item.id === card.dataset.leadJobId);
+      if (job) openLeadTaskDetail(job);
+    };
+    card.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement).closest("button, input, a, select, textarea")) return;
+      open();
+    });
+    card.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      if ((event.target as HTMLElement).closest("button")) return;
+      event.preventDefault();
+      open();
+    });
+  });
+  qsa<HTMLButtonElement>("[data-lead-job-open]", box).forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.closest<HTMLElement>("[data-lead-job-id]")?.dataset.leadJobId;
+      const job = leadFinderJobs.find((item) => item.id === id);
+      if (job) openLeadTaskDetail(job);
+    });
+  });
   qsa<HTMLButtonElement>("[data-lead-job-toggle]").forEach((button) => {
     button.addEventListener("click", () => {
       const id = button.closest<HTMLElement>("[data-lead-job-id]")?.dataset.leadJobId;
@@ -11523,6 +12024,9 @@ function updateLeadFinderJob(
   job.sourceStats = sourceStats;
   job.detailLines = buildLeadFinderJobDetails(resultIds);
   renderLeadFinderJobs();
+  if (qs<HTMLElement>(".view.active")?.id === "lead-task-detail" && activeLeadFinderJobId === job.id) {
+    renderLeadTaskDetail();
+  }
 }
 
 const prospectRunTerminalStatuses = new Set<ProspectRunApiStatus>([
@@ -11643,6 +12147,7 @@ function prospectRunJob(detail: ProspectRunDetailApiResponse): LeadFinderJob {
     metricValue: `${settled} / ${detail.shards.length}`,
     steps: prospectRunSteps(run, detail.shards),
     createdAt: run.createdAt,
+    runEvents: detail.events || [],
     expanded,
     resultIds: [],
     detailLines: [
@@ -11658,7 +12163,9 @@ function prospectRunJob(detail: ProspectRunDetailApiResponse): LeadFinderJob {
       status: shard.status,
       statusLabel: prospectShardStatusLabel(shard.status),
       error: shard.status === "failed" ? "执行失败，请检查数据源连接或稍后重试" : undefined,
-      retryable: shard.status === "retry_scheduled"
+      retryable: shard.status === "retry_scheduled",
+      createdAt: shard.createdAt,
+      updatedAt: shard.updatedAt
     }))
   };
 }
@@ -11704,6 +12211,7 @@ async function loadProspectRuns(quiet = false) {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, 6);
     renderLeadFinderJobs();
+    if (qs<HTMLElement>(".view.active")?.id === "lead-task-detail") renderLeadTaskDetail();
     void loadProspectFeedback(true);
     syncLeadFinderRunPolling();
   } catch (error) {
@@ -15030,7 +15538,6 @@ function installEvents() {
   qs<HTMLButtonElement>("#leadFinderSyncButton")?.addEventListener("click", (event) => void syncLeadFinderRows(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderTodoButton")?.addEventListener("click", (event) => void createLeadFinderTodos(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderExportButton")?.addEventListener("click", exportLeadFinderRows);
-  qs<HTMLButtonElement>("#leadFinderExportButtonQueue")?.addEventListener("click", exportLeadFinderRows);
   qs<HTMLButtonElement>("#leadFinderSyncButtonSide")?.addEventListener("click", (event) => void syncLeadFinderRows(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderTodoButtonSide")?.addEventListener("click", (event) => void createLeadFinderTodos(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderExportButtonSide")?.addEventListener("click", exportLeadFinderRows);
@@ -15317,6 +15824,8 @@ function activateNavView(view: string, after?: () => void) {
   qsa<HTMLElement>(".sidebar button[data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   openSecondaryDropdownForView(view);
   qsa<HTMLElement>(".view").forEach((node) => node.classList.toggle("active", node.id === view));
+  syncLeadTaskDetailClock(view === "lead-task-detail");
+  syncLeadTaskVerboseTimer(view === "lead-task-detail" && leadTaskStreamMode === "verbose");
   renderTopbarForView(view);
   if (view === "whatsapp") renderWhatsApp();
   if (view === "reports") {
