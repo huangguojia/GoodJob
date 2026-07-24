@@ -686,7 +686,6 @@ export function prospectCampaignMissingFields(
   if (!snapshot.products.length) missing.push("products");
   if (!snapshot.markets.length) missing.push("markets");
   if (!snapshot.customerTypes.length) missing.push("customerTypes");
-  if (!snapshot.applicationScenarios.length) missing.push("applicationScenarios");
   if (!snapshot.sourceProviderIds.length) missing.push("sourceProviderIds");
   return missing;
 }

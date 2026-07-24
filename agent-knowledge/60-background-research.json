@@ -1,0 +1,14 @@
+{
+  "id": "workflow.background-research.v1",
+  "kind": "workflow",
+  "module": "ai-research",
+  "title": "AI 背调与证据使用",
+  "summary": "背调基于 CRM 事实和公开来源证据，必须区分已验证事实、推断和缺失信息。",
+  "content": "背调对象必须是当前账号可见的真实客户或线索。结果应保留来源、检查时间、可信度和未验证项，不得把模型推断写成企业事实。背调结果用于补充判断和跟进行动，不自动覆盖客户资料；需要写回时必须单独确认字段和值。",
+  "keywords": ["背调", "企业调查", "可信度", "证据", "来源", "验证"],
+  "roles": ["sales", "manager", "admin", "super_admin"],
+  "toolRefs": ["research.run_background", "crm.get_customer_overview"],
+  "successCriteria": ["对象真实可见", "事实带来源", "推断与事实分开", "不自动覆盖客户资料"],
+  "failureCases": ["没有来源就声称已验证", "编造企业规模或合作历史", "背调后未经确认直接改客户资料"],
+  "version": "1.0.0"
+}

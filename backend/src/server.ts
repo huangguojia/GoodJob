@@ -4,9 +4,17 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { randomUUID } from "node:crypto";
 import nodemailer from "nodemailer";
+import QRCode from "qrcode";
 import { z } from "zod";
 import { AUTH_COOKIE_NAME, CSRF_COOKIE_NAME, canManageAccount, canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, canSeeTeam, createCsrfToken, csrfCookieOptions, hashPassword, publicUser, requireAuth, sessionCookieOptions, signToken, validateAuthSecurity, verifyPassword } from "./auth.js";
-import { assertAiBaseUrlAllowed, createAiHttpClient } from "./ai-http-security.js";
+import { assertAiBaseUrlAllowed } from "./ai-http-security.js";
+import {
+  callAiModel,
+  extractJsonObject
+} from "./ai-model-runtime.js";
+import { createAiSearchProvider } from "./ai-search-provider.js";
+import { compileAgentGoalSpec } from "./agent-goal.js";
+import { resolveAgentMissionRoute } from "./agent-turn-decision.js";
 import { validateAgentJobSecurity } from "./agent-job-security.js";
 import {
   cancelAgentJob,
@@ -14,6 +22,97 @@ import {
   publicAgentJob,
   retryAgentJob
 } from "./agent-jobs.js";
+import {
+  AgentBackgroundRunner,
+  cancelAgentMission,
+  agentCatalog,
+  agentMissionContextSnapshots,
+  createAgentPlan,
+  executeAgentStep,
+  getAgentRun,
+  listAgentConversations,
+  listAgentMissionCheckpoints,
+  listAgentRuns,
+  pauseAgentMission,
+  resumeAgentMission,
+  restoreAgentMissionCheckpoint,
+  resolveAgentTurnDecision,
+  steerAgentMission,
+  type AgentExecutionRuntime,
+  type AgentPlanningProgressHandler
+} from "./ai-agent.js";
+import {
+  deleteAgentMemory,
+  listAgentMemories,
+  proposeAgentMemory,
+  setAgentMemoryStatus,
+  updateAgentMemory
+} from "./agent-memory.js";
+import {
+  agentKnowledgeOverview,
+  createAgentKnowledgeDraft,
+  listAgentKnowledgeDocuments,
+  retrieveAgentKnowledge,
+  setAgentKnowledgeStatus,
+  updateAgentKnowledgeDraft
+} from "./agent-knowledge.js";
+import {
+  AgentTriggerRunner,
+  createAgentTriggerRule,
+  deleteAgentTriggerRule,
+  listAgentTriggerEvents,
+  listAgentTriggerRules,
+  runAgentTriggerRule,
+  setAgentTriggerRuleStatus,
+  updateAgentTriggerRule
+} from "./agent-triggers.js";
+import { agentModelMetrics, runAgentEvaluationSuite } from "./agent-model-governance.js";
+import {
+  getAgentSkill,
+  listAgentSkills,
+  publicAgentSkill,
+  rankAgentSkills,
+  selectAgentSkills
+} from "./agent-skills.js";
+import {
+  agentApiOperationContract,
+  assertAgentCompletionEvidence,
+  assertAgentOperationInput,
+  type AgentOperationContract
+} from "./agent-api-contracts.js";
+import {
+  activateSalesPlaybook,
+  createSalesDistillation,
+  listDistillationSources,
+  listSalesDistillations,
+  listSalesPlaybookActivations,
+  pauseSalesPlaybook,
+  publishSalesDistillation
+} from "./sales-distillation.js";
+import {
+  SalesTrainingRunner,
+  controlSalesTrainingRun,
+  createSalesTrainingRun,
+  getSalesTrainingRun,
+  listSalesTrainingRuns,
+  publishSalesTrainingRun,
+  retrainSalesTrainingRun,
+  updateSalesTrainingSample
+} from "./sales-training.js";
+import {
+  OutreachSequenceRunner,
+  controlOutreachSequence,
+  createOutreachSequence,
+  listOutreachSequences
+} from "./outreach-sequences.js";
+import type { OutreachSequence, OutreachSequenceStepSnapshot } from "./types.js";
+import {
+  CustomerMaintenanceRunner,
+  controlCustomerMaintenanceWatch,
+  createCustomerMaintenanceWatch,
+  listCustomerMaintenanceWatches,
+  previewCustomerMaintenance
+} from "./customer-maintenance.js";
 import { createCredentialRef, decryptProviderConfiguration, encryptProviderConfiguration, validateProviderCredentialSecurity } from "./credential-security.js";
 import {
   createMarketAnalysisRun,
@@ -24,6 +123,28 @@ import {
   retryMarketAnalysisJob
 } from "./market-analysis-runs.js";
 import { createMysqlStore } from "./mysql-store.js";
+import {
+  assertMysqlDataImportToken,
+  beginMysqlDataImport,
+  cancelMysqlDataImport,
+  completeMysqlDataImport,
+  failMysqlDataImport,
+  getMysqlDataImport,
+  importMysqlDataBatch,
+  listMysqlDataImports,
+  mysqlDataImportEnabled,
+  mysqlImportableSchema,
+  MysqlDataImportError
+} from "./mysql-data-import.js";
+import {
+  beginDatabaseBackup,
+  cancelDatabaseBackup,
+  databaseBackupDownload,
+  deleteDatabaseBackup,
+  getDatabaseBackupJob,
+  listDatabaseBackupJobs,
+  mysqlLocalBackupConfig
+} from "./database-backup.js";
 import { getStore, setStore, type CrmStore } from "./store.js";
 import {
   DEFAULT_LEAD_SEARCH_PROVIDER_IDS,
@@ -35,7 +156,7 @@ import {
   type RawLead
 } from "./lead-providers.js";
 import { getTradeProvider } from "./trade-providers.js";
-import { ProviderContractError, defineProvider, providerErrorFromUnknown, type ProviderErrorCode, type ProviderRecord } from "./provider-contract.js";
+import { ProviderContractError, providerErrorFromUnknown, type ProviderErrorCode, type ProviderRecord } from "./provider-contract.js";
 import { assertProviderBaseUrlAllowed } from "./provider-http-client.js";
 import { providerRequestFingerprint } from "./provider-request-logging.js";
 import {
@@ -47,9 +168,25 @@ import {
   providerRequiresKey
 } from "./provider-runtime.js";
 import { ProspectScheduler } from "./prospect-scheduler.js";
+import {
+  createProspectSuperSearch,
+  createProspectSuperSearchSchema,
+  listProspectSuperSearches,
+  prospectSuperSearchActionSchema,
+  prospectSuperSearchEtag,
+  prospectSuperSearchPreview,
+  prospectSuperSearchPreviewSchema,
+  ProspectSuperSearchError,
+  ProspectSuperSearchRunner,
+  refreshProspectSuperSearchMissionResults,
+  superSearchDetail,
+  transitionProspectSuperSearch
+} from "./prospect-super-search.js";
 import { ProspectWorkerService } from "./prospect-worker-service.js";
 import { loadLocalEnv } from "./runtime-env.js";
-import { registerSwagger } from "./swagger.js";
+import { createOpenApiDocument, registerSwagger } from "./swagger.js";
+import { agentApiRequestSchema, assertAgentApiToolRisk, classifyAgentApiRequest, deniedAgentApiReason, normalizeAgentApiPath, redactAgentApiData, routeTemplateMatches } from "./agent-api-policy.js";
+import { requestAgentInternalApi } from "./agent-internal-http.js";
 import { resolveBackendHost } from "./server-network.js";
 import {
   listTradeObservations,
@@ -308,7 +445,8 @@ function sendProspectCampaignError(
   if (!(error instanceof ProspectCampaignRequestError)
     && !(error instanceof ProspectStrategyRequestError)
     && !(error instanceof ProspectRunRequestError)
-    && !(error instanceof ProspectScheduleRequestError)) return false;
+    && !(error instanceof ProspectScheduleRequestError)
+    && !(error instanceof ProspectSuperSearchError)) return false;
   res.status(error.status).json({
     message: error.message,
     errorCode: error.code,
@@ -578,7 +716,7 @@ function resolveOcrJob(user: SessionUser, requestedId: string, createIfMissing =
   return job;
 }
 
-async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][number], payload: { to: string; subject: string; body: string }) {
+async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][number], payload: { to: string; subject: string; body: string; messageId?: string }) {
   if (!user.outboundEmail || !user.smtpHost || !user.smtpUser || !user.smtpPassword) {
     throw new Error("请先在个人信息页完整配置发件邮箱、SMTP服务器、账号和授权码");
   }
@@ -602,6 +740,7 @@ async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][numb
       }
     });
   return transport.sendMail({
+    ...(payload.messageId ? { messageId: payload.messageId } : {}),
     from: `"${user.emailSenderName || user.name}" <${user.outboundEmail}>`,
     to: payload.to,
     subject: payload.subject,
@@ -1634,6 +1773,176 @@ app.get("/api/accounts", requireAuth, (req, res) => {
   res.json({ accounts: accounts.map(accountUser) });
 });
 
+const mysqlImportValueSchema = z.union([
+  z.string().max(1_000_000),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+  z.object({ hex: z.string().regex(/^[0-9A-Fa-f]*$/).max(2_000_000) }).strict()
+]);
+
+function assertDatabaseImportAccess(req: Request) {
+  if (!req.user || !canManageAccounts(req.user)) {
+    throw new MysqlDataImportError(403, "只有管理员可以执行数据库迁移");
+  }
+  if (getStore().mode !== "mysql") {
+    throw new MysqlDataImportError(409, "当前不是 MySQL 持久化模式");
+  }
+  assertMysqlDataImportToken(req.header("x-database-import-token"));
+}
+
+app.get("/api/system/database-import/status", requireAuth, (req, res) => {
+  if (!canManageAccounts(req.user)) {
+    res.status(403).json({ message: "只有管理员可以查看数据库迁移" });
+    return;
+  }
+  res.json({
+    enabled: mysqlDataImportEnabled(),
+    store: getStore().mode,
+    acceptedExtensions: [".sql", ".sql.gz"],
+    maxBatchRows: 100
+  });
+});
+
+app.get("/api/system/database-maintenance/status", requireAuth, asyncRoute(async (req, res) => {
+  if (!canManageAccounts(req.user)) {
+    res.status(403).json({ message: "只有管理员可以查看数据库维护" });
+    return;
+  }
+  const backup = mysqlLocalBackupConfig();
+  const [imports, backups] = getStore().mode === "mysql"
+    ? await Promise.all([listMysqlDataImports(1), listDatabaseBackupJobs(1)])
+    : [[], []];
+  const latest = [...imports.map((job) => ({ ...job, type: "migration" as const })), ...backups.map((job) => ({ ...job, type: "backup" as const }))]
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+  res.json({
+    store: getStore().mode,
+    migration: {
+      enabled: mysqlDataImportEnabled() && getStore().mode === "mysql",
+      sourceStoredOnServer: false,
+      acceptedExtensions: [".sql", ".sql.gz"],
+      maxFileSize: 500 * 1024 * 1024,
+      maxBatchRows: 100
+    },
+    backup: {
+      enabled: backup.enabled && getStore().mode === "mysql",
+      retentionDays: backup.retentionDays,
+      reason: backup.enabled ? "" : "服务器已禁止本地备份"
+    },
+    latest: latest || null
+  });
+}));
+
+app.get("/api/system/database-maintenance/jobs", requireAuth, asyncRoute(async (req, res) => {
+  if (!canManageAccounts(req.user)) {
+    res.status(403).json({ message: "只有管理员可以查看数据库维护任务" });
+    return;
+  }
+  if (getStore().mode !== "mysql") {
+    res.json({ jobs: [] });
+    return;
+  }
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit || 30)));
+  const [imports, backups] = await Promise.all([listMysqlDataImports(limit), listDatabaseBackupJobs(limit)]);
+  const jobs = [
+    ...imports.map((job) => ({ ...job, type: "migration" as const })),
+    ...backups.map((job) => ({ ...job, type: "backup" as const }))
+  ].sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, limit);
+  res.json({ jobs });
+}));
+
+app.get("/api/system/database-import/schema", requireAuth, asyncRoute(async (req, res) => {
+  assertDatabaseImportAccess(req);
+  res.json({ tables: await mysqlImportableSchema() });
+}));
+
+app.post("/api/system/database-import/jobs", requireAuth, asyncRoute(async (req, res) => {
+  assertDatabaseImportAccess(req);
+  const body = z.object({
+    fileName: z.string().trim().min(1).max(255),
+    fileSize: z.number().int().min(1).max(500 * 1024 * 1024),
+    fileSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    conflictMode: z.enum(["skip", "overwrite"]).default("skip"),
+    tableRows: z.record(z.number().int().min(0).max(100_000_000)).refine((value) => Object.keys(value).length <= 500).optional(),
+    ignoredStatements: z.number().int().min(0).max(10_000_000).optional()
+  }).parse(req.body);
+  const job = await beginMysqlDataImport({ ...body, actorId: req.user!.id });
+  res.status(201).json({ job });
+}));
+
+app.get("/api/system/database-import/jobs/:id", requireAuth, asyncRoute(async (req, res) => {
+  assertDatabaseImportAccess(req);
+  res.json({ job: await getMysqlDataImport(req.params.id, req.user!.id) });
+}));
+
+app.post("/api/system/database-import/jobs/:id/batches", requireAuth, asyncRoute(async (req, res) => {
+  assertDatabaseImportAccess(req);
+  const body = z.object({
+    table: z.string().regex(/^[A-Za-z0-9_]+$/).max(128),
+    columns: z.array(z.string().regex(/^[A-Za-z0-9_]+$/).max(128)).min(1).max(300),
+    rows: z.array(z.array(mysqlImportValueSchema).min(1).max(300)).min(1).max(100),
+    tableComplete: z.boolean().optional().default(false)
+  }).parse(req.body);
+  const result = await importMysqlDataBatch({
+    jobId: req.params.id,
+    actorId: req.user!.id,
+    ...body
+  });
+  res.json({ result, job: await getMysqlDataImport(req.params.id, req.user!.id) });
+}));
+
+app.post("/api/system/database-import/jobs/:id/fail", requireAuth, asyncRoute(async (req, res) => {
+  assertDatabaseImportAccess(req);
+  const body = z.object({ message: z.string().trim().min(1).max(500) }).parse(req.body);
+  await failMysqlDataImport(req.params.id, req.user!.id, body.message);
+  res.json({ ok: true });
+}));
+
+app.post("/api/system/database-import/jobs/:id/cancel", requireAuth, asyncRoute(async (req, res) => {
+  assertDatabaseImportAccess(req);
+  res.json({ job: await cancelMysqlDataImport(req.params.id, req.user!.id) });
+}));
+
+app.post("/api/system/database-import/jobs/:id/complete", requireAuth, asyncRoute(async (req, res) => {
+  assertDatabaseImportAccess(req);
+  const job = await completeMysqlDataImport(req.params.id, req.user!.id);
+  const restartScheduled = process.env.NODE_ENV === "production";
+  res.json({ job, restartScheduled });
+  if (restartScheduled) {
+    res.once("finish", () => {
+      const timer = setTimeout(() => process.exit(75), 750);
+      timer.unref();
+    });
+  }
+}));
+
+app.post("/api/system/database-backups/jobs", requireAuth, asyncRoute(async (req, res) => {
+  assertDatabaseImportAccess(req);
+  const job = await beginDatabaseBackup({ actorId: req.user!.id });
+  res.status(201).json({ job });
+}));
+
+app.get("/api/system/database-backups/jobs/:id", requireAuth, asyncRoute(async (req, res) => {
+  assertDatabaseImportAccess(req);
+  res.json({ job: await getDatabaseBackupJob(req.params.id) });
+}));
+
+app.post("/api/system/database-backups/jobs/:id/cancel", requireAuth, asyncRoute(async (req, res) => {
+  assertDatabaseImportAccess(req);
+  res.json({ job: await cancelDatabaseBackup(req.params.id) });
+}));
+
+app.get("/api/system/database-backups/jobs/:id/download", requireAuth, asyncRoute(async (req, res) => {
+  assertDatabaseImportAccess(req);
+  const { job, path } = await databaseBackupDownload(req.params.id);
+  res.download(path, job.fileName);
+}));
+
+app.delete("/api/system/database-backups/jobs/:id", requireAuth, asyncRoute(async (req, res) => {
+  assertDatabaseImportAccess(req);
+  res.json(await deleteDatabaseBackup(req.params.id));
+}));
+
 app.post("/api/accounts", requireAuth, asyncRoute(async (req, res) => {
   if (!canManageAccounts(req.user)) {
     res.status(403).json({ message: "无账号管理权限" });
@@ -1840,7 +2149,7 @@ app.get("/api/customers", requireAuth, (req, res) => {
     ? publicPoolCustomersFor(req.user!)
     : ownedCustomersFor(req.user!, parsedScope.data);
   res.json({
-    customers: scoped.map(customerWithPipeline),
+    customers: scoped.map((customer) => customerWithPipeline(customer, req.user!)),
     ...customerPoolCounts(req.user!)
   });
 });
@@ -1850,6 +2159,7 @@ app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
     company: z.string().min(1),
     country: z.string().min(1).default("未知"),
     contact: z.string().min(1).default("待维护"),
+    whatsapp: z.string().trim().regex(/^\+[1-9]\d{6,14}$/, "WhatsApp 号码须包含国家码").or(z.literal("")).optional().default(""),
     stage: z.string().min(1).default("询盘"),
     amount: z.number().int().nonnegative().default(0),
     health: z.number().int().min(0).max(100).optional().default(72),
@@ -1873,7 +2183,7 @@ app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
   };
   store.customers.unshift(customer);
   await store.persist();
-  res.json({ customer: customerWithPipeline(customer) });
+  res.json({ customer: customerWithPipeline(customer, req.user!) });
 }));
 
 app.patch("/api/customers/:id", requireAuth, asyncRoute(async (req, res) => {
@@ -1881,6 +2191,7 @@ app.patch("/api/customers/:id", requireAuth, asyncRoute(async (req, res) => {
     company: z.string().min(1).optional(),
     country: z.string().min(1).optional(),
     contact: z.string().min(1).optional(),
+    whatsapp: z.string().trim().regex(/^\+[1-9]\d{6,14}$/, "WhatsApp 号码须包含国家码").or(z.literal("")).optional(),
     stage: z.string().min(1).optional(),
     amount: z.number().int().nonnegative().optional(),
     health: z.number().int().min(0).max(100).optional(),
@@ -1900,7 +2211,7 @@ app.patch("/api/customers/:id", requireAuth, asyncRoute(async (req, res) => {
   if (!customer) return;
   Object.assign(customer, body);
   await store.persist();
-  res.json({ customer: customerWithPipeline(customer) });
+  res.json({ customer: customerWithPipeline(customer, req.user!) });
 }));
 
 app.post("/api/customers/:id/release", requireAuth, asyncRoute(async (req, res) => {
@@ -1925,7 +2236,7 @@ app.post("/api/customers/:id/release", requireAuth, asyncRoute(async (req, res) 
       occurredAt: new Date().toISOString()
     });
     res.json({
-      customer: customerWithPipeline(result.customer),
+      customer: customerWithPipeline(result.customer, req.user!),
       event: result.event,
       cancelledTodoCount: result.cancelledTodoIds.length,
       ...customerPoolCounts(req.user!)
@@ -1955,7 +2266,7 @@ app.post("/api/customers/:id/claim", requireAuth, asyncRoute(async (req, res) =>
       occurredAt: new Date().toISOString()
     });
     res.json({
-      customer: customerWithPipeline(result.customer),
+      customer: customerWithPipeline(result.customer, req.user!),
       event: result.event,
       ...customerPoolCounts(req.user!)
     });
@@ -2146,7 +2457,7 @@ function customerGradeFromHealth(health: number) {
   return "D" as const;
 }
 
-function customerWithPipeline(customer: Customer) {
+function customerWithPipeline(customer: Customer, viewer?: SessionUser) {
   const store = getStore();
   const activeDeals = store.deals.filter((deal) => deal.customerId === customer.id && !deal.archivedAt && deal.stage !== "丢单" && deal.stage !== "成交");
   const wonDeals = store.deals.filter((deal) => deal.customerId === customer.id && deal.stage === "成交");
@@ -2164,8 +2475,9 @@ function customerWithPipeline(customer: Customer) {
       && item.status === "pending"
     )
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-  return {
+  const response = {
     ...customer,
+    whatsappPhone: customer.whatsapp || store.whatsappBindings.find((binding) => binding.customerId === customer.id)?.phoneNumber || "",
     ownerName: store.users.find((user) => user.id === customer.ownerId)?.name || "未分配",
     previousOwnerName: store.users.find((user) => user.id === customer.previousOwnerId)?.name || "",
     releasedByName: store.users.find((user) => user.id === customer.releasedBy)?.name || "",
@@ -2188,6 +2500,12 @@ function customerWithPipeline(customer: Customer) {
     pendingIntelligence,
     pendingIntelligenceCount: pendingIntelligence.length
   };
+  // WhatsApp 号码和绑定状态属于个人账号数据，不随团队客户列表暴露给管理员或同事。
+  if (!viewer || viewer.id !== customer.ownerId) {
+    delete (response as Partial<typeof response>).whatsapp;
+    delete (response as Partial<typeof response>).whatsappPhone;
+  }
+  return response;
 }
 
 type BackgroundResearchEntity = "lead" | "customer";
@@ -2239,23 +2557,21 @@ function researchText(value: unknown, fallback = "待核实") {
   return text && !["未知", "待维护", "待确认", "—"].includes(text) ? text : fallback;
 }
 
-app.post("/api/ai-background-research", requireAuth, asyncRoute(async (req, res) => {
-  const body = z.object({
-    entityType: z.enum(["lead", "customer"]),
-    entityId: z.string().trim().min(1).max(120)
-  }).parse(req.body);
+const backgroundResearchRequestSchema = z.object({
+  entityType: z.enum(["lead", "customer"]),
+  entityId: z.string().trim().min(1).max(120)
+});
+
+async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof backgroundResearchRequestSchema>) {
   const store = getStore();
   const entityType = body.entityType as BackgroundResearchEntity;
   const lead = entityType === "lead"
-    ? store.leads.find((item) => item.id === body.entityId && canSeeOwner(req.user!, item.ownerId, item.teamId))
+    ? store.leads.find((item) => item.id === body.entityId && canSeeOwner(user, item.ownerId, item.teamId))
     : undefined;
   const customer = entityType === "customer"
-    ? store.customers.find((item) => item.id === body.entityId && canSeeOwner(req.user!, item.ownerId, item.teamId))
+    ? store.customers.find((item) => item.id === body.entityId && canSeeOwner(user, item.ownerId, item.teamId))
     : undefined;
-  if (!lead && !customer) {
-    res.status(404).json({ message: entityType === "lead" ? "线索不存在或无权访问" : "客户不存在或无权访问" });
-    return;
-  }
+  if (!lead && !customer) return null;
 
   const ownerId = lead?.ownerId || customer!.ownerId;
   const teamId = lead?.teamId || customer!.teamId;
@@ -2343,7 +2659,7 @@ app.post("/api/ai-background-research", requireAuth, asyncRoute(async (req, res)
   let nextAction = risks[0]?.level === "high" ? "先完成企业主体与官网核验" : "安排一次需求确认并记录采购时间表";
   let engine = "CRM 证据分析";
 
-  const config = getAiConfig(req.user!, "scoring");
+  const config = getAiConfig(user, "scoring");
   if (config?.enabled && config.apiKey) {
     const prompt = [
       "根据以下 CRM 事实与来源证据生成企业背调结论。只使用提供的数据，不得补充或猜测外部事实。",
@@ -2372,7 +2688,7 @@ app.post("/api/ai-background-research", requireAuth, asyncRoute(async (req, res)
     }
   }
 
-  res.json({
+  return {
     research: {
       id: `abr_${entityType}_${body.entityId}_${Date.now()}`,
       entityType,
@@ -2391,7 +2707,17 @@ app.post("/api/ai-background-research", requireAuth, asyncRoute(async (req, res)
       engine,
       completedAt: new Date().toISOString()
     }
-  });
+  };
+}
+
+app.post("/api/ai-background-research", requireAuth, asyncRoute(async (req, res) => {
+  const body = backgroundResearchRequestSchema.parse(req.body);
+  const result = await buildBackgroundResearch(req.user!, body);
+  if (!result) {
+    res.status(404).json({ message: body.entityType === "lead" ? "线索不存在或无权访问" : "客户不存在或无权访问" });
+    return;
+  }
+  res.json(result);
 }));
 
 function blankCompanyProfile(teamId: string): CompanyProfile {
@@ -2699,7 +3025,7 @@ app.post("/api/customers/:id/activities", requireAuth, asyncRoute(async (req, re
   store.customerActivities.unshift(activity);
   if (body.nextReminder) customer.nextReminder = body.nextReminder;
   await store.persist();
-  res.json({ activity, customer: customerWithPipeline(customer) });
+  res.json({ activity, customer: customerWithPipeline(customer, req.user!) });
 }));
 
 app.get("/api/customers/:id/intelligence", requireAuth, (req, res) => {
@@ -2748,7 +3074,7 @@ app.post("/api/customer-intelligence/:id/accept", requireAuth, asyncRoute(async 
     await store.persist();
     res.json({
       suggestion: result.suggestion,
-      customer: customerWithPipeline(result.customer)
+      customer: customerWithPipeline(result.customer, req.user!)
     });
   } catch (error) {
     res.status(400).json({
@@ -2778,7 +3104,7 @@ app.post("/api/customer-intelligence/:id/reject", requireAuth, asyncRoute(async 
     await store.persist();
     res.json({
       suggestion: result.suggestion,
-      customer: customerWithPipeline(result.customer)
+      customer: customerWithPipeline(result.customer, req.user!)
     });
   } catch (error) {
     res.status(400).json({
@@ -3142,7 +3468,7 @@ app.post("/api/leads/:id/convert", requireAuth, asyncRoute(async (req, res) => {
   if (lead.convertedCustomerId) {
     const customer = store.customers.find((item) => item.id === lead.convertedCustomerId);
     const deal = lead.convertedDealId ? store.deals.find((item) => item.id === lead.convertedDealId) : undefined;
-    res.json({ lead, customer: customer ? customerWithPipeline(customer) : null, deal, duplicate: true });
+    res.json({ lead, customer: customer ? customerWithPipeline(customer, req.user!) : null, deal, duplicate: true });
     return;
   }
   const now = new Date().toISOString();
@@ -3223,7 +3549,7 @@ app.post("/api/leads/:id/convert", requireAuth, asyncRoute(async (req, res) => {
     createdAt: now
   });
   await store.persist();
-  res.json({ lead, customer: customerWithPipeline(customer), deal, duplicate: false });
+  res.json({ lead, customer: customerWithPipeline(customer, req.user!), deal, duplicate: false });
 }));
 
 // ---------------------------------------------------------------------------
@@ -3234,12 +3560,12 @@ function findWhatsAppCustomer(user: SessionUser, customerId: string) {
   const customer = store.customers.find((item) => item.id === customerId);
   if (!customer
     || isPublicCustomer(customer)
-    || !canSeeOwner(user, customer.ownerId, customer.teamId)) return null;
+    || customer.ownerId !== user.id) return null;
   return customer;
 }
 
 function canManageWhatsAppBinding(user: SessionUser, customer: Customer) {
-  return user.role === "admin" || user.role === "super_admin" || customer.ownerId === user.id;
+  return customer.ownerId === user.id;
 }
 
 function publicWhatsAppBinding(binding: ReturnType<typeof getStore>["whatsappBindings"][number] | null) {
@@ -3285,7 +3611,7 @@ async function translateToChinese(user: SessionUser, text: string): Promise<stri
 app.get("/api/whatsapp/threads", requireAuth, (req, res) => {
   const store = getStore();
   const scopedCustomerIds = new Set(
-    ownedCustomersFor(req.user!).map((c) => c.id)
+    getStore().customers.filter((c) => !isPublicCustomer(c) && c.ownerId === req.user!.id).map((c) => c.id)
   );
   const threads = store.customers
     .filter((c) => scopedCustomerIds.has(c.id))
@@ -3304,7 +3630,10 @@ app.get("/api/whatsapp/threads", requireAuth, (req, res) => {
         unreadCount: binding?.unreadCount || 0,
         lastMessage: last ? (last.content || "") : "",
         lastMessageAt: last ? last.createdAt : (binding?.lastMessageAt || ""),
-        messageCount: messages.length
+        messageCount: messages.length,
+        bindingMode: binding?.bindingMode || "manual",
+        connectionStatus: binding?.connectionStatus || "disconnected",
+        canManage: canManageWhatsAppBinding(req.user!, customer)
       };
     })
     .filter(Boolean)
@@ -3324,7 +3653,12 @@ app.get("/api/whatsapp/customers/:customerId/messages", requireAuth, (req, res) 
   const messages = store.whatsappMessages
     .filter((m) => m.customerId === customer.id)
     .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
-  res.json({ binding: publicWhatsAppBinding(binding), messages, customer: { id: customer.id, company: customer.company, country: customer.country, contact: customer.contact } });
+  res.json({
+    binding: publicWhatsAppBinding(binding),
+    messages,
+    canManage: canManageWhatsAppBinding(req.user!, customer),
+    customer: { id: customer.id, company: customer.company, country: customer.country, contact: customer.contact }
+  });
 });
 
 // 绑定/更新 WhatsApp 手机号
@@ -3335,11 +3669,11 @@ app.post("/api/whatsapp/customers/:customerId/binding", requireAuth, asyncRoute(
     return;
   }
   if (!canManageWhatsAppBinding(req.user!, customer)) {
-    res.status(403).json({ message: "只有客户负责人或管理员可以修改 WhatsApp 绑定" });
+    res.status(403).json({ message: "只有客户负责人可以修改 WhatsApp 绑定" });
     return;
   }
   const schema = z.object({
-    phoneNumber: z.string().min(5).max(20),
+    phoneNumber: z.string().trim().regex(/^\+[1-9]\d{6,14}$/, "请输入包含国家码的 E.164 号码"),
     waProfileName: z.string().optional().default("")
   });
   const body = schema.parse(req.body);
@@ -3349,6 +3683,8 @@ app.post("/api/whatsapp/customers/:customerId/binding", requireAuth, asyncRoute(
   if (binding) {
     binding.phoneNumber = body.phoneNumber;
     binding.waProfileName = body.waProfileName || binding.waProfileName;
+    binding.bindingMode = "manual";
+    binding.connectionStatus = "disconnected";
   } else {
     binding = {
       id: `wab_${Date.now()}`,
@@ -3357,10 +3693,13 @@ app.post("/api/whatsapp/customers/:customerId/binding", requireAuth, asyncRoute(
       waProfileName: body.waProfileName || "",
       lastMessageAt: "",
       unreadCount: 0,
-      createdAt: now
+      createdAt: now,
+      bindingMode: "manual",
+      connectionStatus: "disconnected"
     };
     store.whatsappBindings.push(binding);
   }
+  customer.whatsapp = body.phoneNumber;
   await store.persist();
   res.json({ binding: publicWhatsAppBinding(binding) });
 }));
@@ -3373,7 +3712,7 @@ app.post("/api/whatsapp/customers/:customerId/messages", requireAuth, asyncRoute
     return;
   }
   if (!canManageWhatsAppBinding(req.user!, customer)) {
-    res.status(403).json({ message: "只有客户负责人或管理员可以发起 WhatsApp 绑定" });
+    res.status(403).json({ message: "只有客户负责人可以发起 WhatsApp 绑定" });
     return;
   }
   const schema = z.object({
@@ -3384,6 +3723,29 @@ app.post("/api/whatsapp/customers/:customerId/messages", requireAuth, asyncRoute
   const body = schema.parse(req.body);
   const store = getStore();
   const now = new Date().toISOString();
+  const binding = store.whatsappBindings.find((b) => b.customerId === customer.id);
+  let status = body.direction === "outbound" ? "recorded" : "read";
+  let deliveryMode: "manual" | "web-scan" | "twilio-api" = binding?.bindingMode || "manual";
+  let delivered = deliveryMode === "manual";
+
+  if (body.direction === "outbound" && binding?.bindingMode === "twilio-api") {
+    try {
+      delivered = Boolean(binding.twilioPhoneNumber && binding.phoneNumber)
+        && await twilioManager.sendMessage(binding.twilioPhoneNumber || "", binding.phoneNumber, body.content);
+    } catch {
+      delivered = false;
+    }
+    status = delivered ? "sent" : "failed";
+  } else if (body.direction === "outbound" && binding?.bindingMode === "web-scan") {
+    try {
+      delivered = binding.connectionStatus === "connected" && Boolean(binding.sessionData && binding.phoneNumber)
+        && await whatsappWebManager.sendMessage(binding.sessionData || "", binding.phoneNumber, body.content);
+    } catch {
+      delivered = false;
+    }
+    status = delivered ? "sent" : "failed";
+  }
+
   const contentTranslated = await translateToChinese(req.user!, body.content);
   const message = {
     id: `wam_${Date.now()}`,
@@ -3392,16 +3754,29 @@ app.post("/api/whatsapp/customers/:customerId/messages", requireAuth, asyncRoute
     content: body.content,
     contentTranslated,
     mediaUrl: body.mediaUrl || "",
-    status: body.direction === "outbound" ? "sent" : "read",
+    status,
     waMessageId: "",
     createdAt: now
   };
   store.whatsappMessages.push(message);
   // 同步绑定的最近时间
-  const binding = store.whatsappBindings.find((b) => b.customerId === customer.id);
   if (binding) binding.lastMessageAt = now;
   await store.persist();
-  res.json({ message });
+  res.json({ message, delivery: { mode: deliveryMode, delivered } });
+}));
+
+app.post("/api/whatsapp/customers/:customerId/read", requireAuth, asyncRoute(async (req, res) => {
+  const customer = findWhatsAppCustomer(req.user!, req.params.customerId);
+  if (!customer) {
+    res.status(404).json({ message: "客户不存在或无权访问" });
+    return;
+  }
+  const binding = getStore().whatsappBindings.find((item) => item.customerId === customer.id);
+  if (binding?.unreadCount) {
+    binding.unreadCount = 0;
+    await getStore().persist();
+  }
+  res.json({ ok: true });
 }));
 
 // 对已有消息重新翻译(用户点击“翻译”按钮)
@@ -3458,6 +3833,7 @@ import { whatsappWebManager, twilioManager } from "./whatsapp-service.js";
 const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID || "";
 const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN || "";
 const twilioWebhookUrl = process.env.TWILIO_WEBHOOK_URL || "";
+const webScanEnabled = process.env.NODE_ENV !== "production" && process.env.WHATSAPP_ENABLE_WEB_SCAN === "true";
 
 if (twilioAccountSid && twilioAuthToken) {
   twilioManager.initialize(twilioAccountSid, twilioAuthToken, twilioWebhookUrl);
@@ -3467,15 +3843,19 @@ if (twilioAccountSid && twilioAuthToken) {
 // 获取可用的绑定模式
 app.get("/api/whatsapp/binding-modes", requireAuth, (req, res) => {
   const modes = {
-    webScan: { available: true, name: "扫码登录 (WhatsApp Web)", risk: "有封号风险" },
-    twilioApi: { available: twilioManager.isInitialized(), name: "官方API (Twilio)", risk: "零封号风险" },
-    manual: { available: true, name: "手动录入", risk: "无风险" }
+    webScan: { available: webScanEnabled, name: "测试扫码", risk: "仅限非生产测试" },
+    twilioApi: { available: twilioManager.isInitialized(), name: "WhatsApp Business API", risk: "官方通道" },
+    manual: { available: true, name: "人工同步", risk: "不调用外部接口" }
   };
   res.json({ modes });
 });
 
 // 开始 Web 扫码绑定流程
 app.post("/api/whatsapp/binding/web-scan/start", requireAuth, asyncRoute(async (req, res) => {
+  if (!webScanEnabled) {
+    res.status(403).json({ message: "测试扫码通道未启用" });
+    return;
+  }
   const schema = z.object({
     customerId: z.string()
   });
@@ -3483,6 +3863,10 @@ app.post("/api/whatsapp/binding/web-scan/start", requireAuth, asyncRoute(async (
   const customer = findWhatsAppCustomer(req.user!, body.customerId);
   if (!customer) {
     res.status(404).json({ message: "客户不存在或无权访问" });
+    return;
+  }
+  if (!canManageWhatsAppBinding(req.user!, customer)) {
+    res.status(403).json({ message: "只有客户负责人可以修改 WhatsApp 绑定" });
     return;
   }
 
@@ -3519,6 +3903,21 @@ app.post("/api/whatsapp/binding/web-scan/start", requireAuth, asyncRoute(async (
 
     await store.persist();
 
+    whatsappWebManager.onMessage(clientId, async (message) => {
+      const currentStore = getStore();
+      if (currentStore.whatsappMessages.some((item) => item.waMessageId === message.waMessageId)) return;
+      const currentBinding = currentStore.whatsappBindings.find((item) =>
+        item.customerId === customer.id && item.sessionData === clientId
+      );
+      if (!currentBinding) return;
+      message.customerId = customer.id;
+      message.contentTranslated = await translateToChinese(req.user!, message.content);
+      currentStore.whatsappMessages.push(message);
+      currentBinding.lastMessageAt = message.createdAt;
+      currentBinding.unreadCount = (currentBinding.unreadCount || 0) + 1;
+      await currentStore.persist();
+    });
+
     res.json({ clientId, bindingId: binding.id, status: "qr-pending" });
   } catch (error: any) {
     res.status(500).json({ message: "启动扫码失败: " + error.message });
@@ -3540,8 +3939,9 @@ app.get("/api/whatsapp/binding/web-scan/qr/:clientId", requireAuth, (req, res) =
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
 
-  const unsubscribe = whatsappWebManager.onQR(clientId, (qr) => {
-    res.write(`data: ${JSON.stringify({ qr })}\n\n`);
+  const unsubscribe = whatsappWebManager.onQR(clientId, async (qr) => {
+    const qrDataUrl = await QRCode.toDataURL(qr, { width: 220, margin: 1 });
+    res.write(`data: ${JSON.stringify({ qrDataUrl })}\n\n`);
   });
 
   // 30秒超时
@@ -3568,6 +3968,11 @@ app.get("/api/whatsapp/binding/web-scan/status/:clientId", requireAuth, (req, re
     return;
   }
   const status = whatsappWebManager.getClientStatus(clientId);
+  if (binding.connectionStatus !== status) {
+    binding.connectionStatus = status;
+    if (status === "connected") binding.lastConnectedAt = new Date().toISOString();
+    void getStore().persist();
+  }
   res.json({ status });
 });
 
@@ -3583,7 +3988,7 @@ app.post("/api/whatsapp/binding/web-scan/disconnect", requireAuth, asyncRoute(as
     return;
   }
   if (!canManageWhatsAppBinding(req.user!, customer)) {
-    res.status(403).json({ message: "只有客户负责人或管理员可以断开 WhatsApp 绑定" });
+    res.status(403).json({ message: "只有客户负责人可以断开 WhatsApp 绑定" });
     return;
   }
 
@@ -3608,7 +4013,8 @@ app.post("/api/whatsapp/binding/twilio/start", requireAuth, asyncRoute(async (re
 
   const schema = z.object({
     customerId: z.string(),
-    twilioPhoneNumber: z.string()
+    phoneNumber: z.string().trim().regex(/^\+[1-9]\d{6,14}$/, "请输入包含国家码的客户号码"),
+    twilioPhoneNumber: z.string().trim().regex(/^\+[1-9]\d{6,14}$/, "请输入包含国家码的企业发信号码")
   });
   const body = schema.parse(req.body);
   const customer = findWhatsAppCustomer(req.user!, body.customerId);
@@ -3617,7 +4023,7 @@ app.post("/api/whatsapp/binding/twilio/start", requireAuth, asyncRoute(async (re
     return;
   }
   if (!canManageWhatsAppBinding(req.user!, customer)) {
-    res.status(403).json({ message: "只有客户负责人或管理员可以修改 WhatsApp 绑定" });
+    res.status(403).json({ message: "只有客户负责人可以修改 WhatsApp 绑定" });
     return;
   }
 
@@ -3628,7 +4034,7 @@ app.post("/api/whatsapp/binding/twilio/start", requireAuth, asyncRoute(async (re
     binding = {
       id: `wab_${Date.now()}`,
       customerId: customer.id,
-      phoneNumber: body.twilioPhoneNumber,
+      phoneNumber: body.phoneNumber,
       waProfileName: "",
       lastMessageAt: "",
       unreadCount: 0,
@@ -3642,6 +4048,7 @@ app.post("/api/whatsapp/binding/twilio/start", requireAuth, asyncRoute(async (re
     store.whatsappBindings.push(binding);
   } else {
     binding.bindingMode = "twilio-api";
+    binding.phoneNumber = body.phoneNumber;
     binding.twilioPhoneNumber = body.twilioPhoneNumber;
     binding.userId = req.user!.id;
     binding.connectionStatus = "connected";
@@ -6349,6 +6756,7 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
     company: z.string().trim().min(1),
     country: z.string().trim().optional().default("未知"),
     contact: z.string().trim().optional().default("待维护"),
+    whatsapp: z.string().trim().regex(/^\+[1-9]\d{6,14}$/, "WhatsApp 号码须包含国家码").or(z.literal("")).optional().default(""),
     stage: z.string().trim().optional().default("询盘"),
     amount: z.number().nonnegative().optional().default(0),
     health: z.number().int().min(0).max(100).optional().default(70),
@@ -6375,6 +6783,7 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
       Object.assign(existing, {
         country: row.country || existing.country,
         contact: row.contact || existing.contact,
+        whatsapp: row.whatsapp || existing.whatsapp || "",
         stage: row.stage || existing.stage,
         amount: row.amount,
         health: row.health,
@@ -6396,6 +6805,7 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
         company: row.company,
         country: row.country || "未知",
         contact: row.contact || "待维护",
+        whatsapp: row.whatsapp || "",
         ownerId: req.user!.id,
         teamId: req.user!.teamId,
         stage: row.stage || "询盘",
@@ -6450,45 +6860,45 @@ app.post("/api/import-export/customers/export", requireAuth, asyncRoute(async (_
 }));
 
 const documentItemSchema = z.object({
-  id: z.string().optional().default(""),
-  product: z.string().min(1),
-  model: z.string().optional().default(""),
-  hsCode: z.string().optional().default(""),
+  id: z.string().max(64).optional().default(""),
+  product: z.string().min(1).max(500),
+  model: z.string().max(200).optional().default(""),
+  hsCode: z.string().max(40).optional().default(""),
   quantity: z.number().nonnegative().default(1),
-  unit: z.string().optional().default("PCS"),
+  unit: z.string().max(40).optional().default("PCS"),
   unitPrice: z.number().nonnegative().default(0),
-  originCountry: z.string().optional().default(""),
+  originCountry: z.string().max(80).optional().default(""),
   weightKg: z.number().nonnegative().default(0),
   packageCount: z.number().int().nonnegative().default(0)
 });
 
 const documentBodySchema = z.object({
-  customerId: z.string().trim().optional().default(""),
-  dealId: z.string().trim().optional().default(""),
+  customerId: z.string().trim().max(64).optional().default(""),
+  dealId: z.string().trim().max(64).optional().default(""),
   revision: z.coerce.number().int().positive().optional(),
   type: z.enum(["PI", "CI"]).default("PI"),
-  title: z.string().min(1),
-  number: z.string().min(1),
-  issueDate: z.string().min(1),
-  buyer: z.string().optional().default(""),
-  buyerAddress: z.string().optional().default(""),
-  buyerContact: z.string().optional().default(""),
-  seller: z.string().min(1),
-  sellerAddress: z.string().optional().default(""),
-  currency: z.string().min(1).default("USD"),
-  incoterm: z.string().min(1).default("FOB"),
-  paymentTerm: z.string().optional().default(""),
-  shippingMethod: z.string().optional().default("Sea freight"),
-  portLoading: z.string().optional().default(""),
-  portDischarge: z.string().optional().default(""),
-  validityDate: z.string().optional().default(""),
-  bankInfo: z.string().optional().default(""),
-  notes: z.string().optional().default(""),
+  title: z.string().min(1).max(255),
+  number: z.string().min(1).max(80),
+  issueDate: z.string().min(1).max(40),
+  buyer: z.string().max(200).optional().default(""),
+  buyerAddress: z.string().max(4_000).optional().default(""),
+  buyerContact: z.string().max(200).optional().default(""),
+  seller: z.string().min(1).max(200),
+  sellerAddress: z.string().max(4_000).optional().default(""),
+  currency: z.string().min(1).max(12).default("USD"),
+  incoterm: z.string().min(1).max(80).default("FOB"),
+  paymentTerm: z.string().max(255).optional().default(""),
+  shippingMethod: z.string().max(120).optional().default("Sea freight"),
+  portLoading: z.string().max(120).optional().default(""),
+  portDischarge: z.string().max(120).optional().default(""),
+  validityDate: z.string().max(40).optional().default(""),
+  bankInfo: z.string().max(8_000).optional().default(""),
+  notes: z.string().max(8_000).optional().default(""),
   templateStyle: z.enum(["executive", "classic", "compact"]).default("executive"),
   status: z.enum(["draft", "ready", "pending_approval", "approved", "rejected", "exported"]).optional().default("draft"),
-  approvalNote: z.string().optional().default(""),
-  approvedAt: z.string().optional(),
-  approvedBy: z.string().optional(),
+  approvalNote: z.string().max(2_000).optional().default(""),
+  approvedAt: z.string().max(100).optional(),
+  approvedBy: z.string().max(64).optional(),
   audits: z.array(z.any()).optional().default([]),
   sendRecords: z.array(z.any()).optional().default([]),
   items: z.array(documentItemSchema).min(1).max(80)
@@ -7274,6 +7684,1473 @@ app.patch("/api/prospect-list/batch", requireAuth, asyncRoute(async (req, res) =
   res.json({ opportunities });
 }));
 
+function agentInputText(input: Record<string, unknown>, key: string, fallback = "") {
+  const value = input[key];
+  return typeof value === "string" ? value.trim() : fallback;
+}
+
+function agentInputList(input: Record<string, unknown>, key: string) {
+  const value = input[key];
+  const items = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/,|，|、|\n/u)
+      : [];
+  return [...new Set(items
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean))];
+}
+
+function agentSessionUser(actor: { id: string }) {
+  const stored = getStore().users.find((item) => item.id === actor.id && item.status === "active");
+  if (!stored) throw new Error("Agent 执行账号不存在或已停用");
+  return { stored, session: publicUser(stored) };
+}
+
+async function buildAgentDevelopmentEmail(actor: { id: string }, input: Record<string, unknown>) {
+  const { stored, session } = agentSessionUser(actor);
+  const entityType = agentInputText(input, "entityType") === "lead" ? "lead" : "customer";
+  const entityId = agentInputText(input, "entityId");
+  const entity = developmentEmailEntity(session, entityType, entityId);
+  if (!entity) throw new Error("开发信对象不存在或当前账号无权访问");
+  const profile = companyProfileForTeam(session.teamId);
+  const readiness = developmentEmailReadiness(stored, profile);
+  const senderName = stored.emailSenderName || stored.name;
+  const signature = stored.emailSignature?.trim() || `Best regards,\n${senderName}`;
+  const requestedSubject = agentInputText(input, "subject");
+  const requestedBody = agentInputText(input, "body");
+  const requestedTo = agentInputText(input, "to");
+  let subject = requestedSubject || `Potential cooperation with ${entity.company}`;
+  let body = requestedBody || [
+    `Dear ${entity.contactName},`,
+    "",
+    `I am ${senderName} from ${profile.companyName || "our company"}. We specialize in ${profile.productSummary || "products for international buyers"}.`,
+    "",
+    `I am reaching out to ${entity.company} regarding ${developmentEmailEnglishContext(entity.context)}. Would you be available for a brief conversation this week?`,
+    "",
+    signature,
+    profile.website ? `Website: ${profile.website}` : ""
+  ].filter(Boolean).join("\n");
+  const config = getAiConfig(session, "emailDraft");
+  if (!requestedSubject && !requestedBody && config?.enabled && config.apiKey) {
+    try {
+      const prompt = [
+        "Write one concise B2B cold outreach email in English using only the supplied facts.",
+        "Do not invent certifications, customers, prices, capabilities or contact history.",
+        "Return JSON only: {\"subject\":\"\",\"body\":\"\"}.",
+        JSON.stringify({
+          instruction: agentInputText(input, "instruction"),
+          tone: agentInputText(input, "tone", "professional"),
+          recipient: { company: entity.company, contact: entity.contactName, country: entity.country, context: entity.context },
+          sender: { name: senderName, company: profile.companyName, products: profile.productSummary, website: profile.website },
+          signature
+        })
+      ].join("\n");
+      const parsed = extractJsonObject(await callAiModel(config, prompt, 12_000)) as Record<string, unknown>;
+      if (typeof parsed.subject === "string" && parsed.subject.trim()) subject = parsed.subject.trim().slice(0, 160);
+      if (typeof parsed.body === "string" && parsed.body.trim()) body = parsed.body.trim().slice(0, 6_000);
+    } catch {
+      // 模型不可用时保留基于真实 CRM 数据生成的安全模板。
+    }
+  }
+  return {
+    stored,
+    session,
+    entity,
+    readiness,
+    draft: {
+      entityType,
+      entityId,
+      recipientCompany: entity.company,
+      recipientName: entity.contactName,
+      to: requestedTo || entity.email,
+      subject,
+      body,
+      from: stored.outboundEmail || "",
+      senderName,
+      engine: config?.enabled && config.apiKey ? (config.name || config.model) : "安全模板"
+    }
+  };
+}
+
+async function communicationRequest<T>(session: SessionUser, path: string, init: RequestInit = {}): Promise<T> {
+  const port = Number(process.env.WHATSAPP_PLUGIN_PORT || 3100);
+  const response = await fetch(`http://127.0.0.1:${port}/api/v1${path}`, {
+    ...init,
+    headers: {
+      authorization: `Bearer ${signToken(session)}`,
+      ...(init.body ? { "content-type": "application/json" } : {}),
+      ...(init.headers || {})
+    },
+    signal: AbortSignal.timeout(30_000)
+  });
+  const text = await response.text();
+  let payload: unknown = null;
+  try { payload = text ? JSON.parse(text) : null; } catch { payload = text; }
+  if (!response.ok) {
+    const message = typeof payload === "object" && payload && "error" in payload
+      ? String((payload as { error?: unknown }).error || "")
+      : typeof payload === "object" && payload && "message" in payload
+        ? String((payload as { message?: unknown }).message || "")
+        : String(payload || `HTTP ${response.status}`);
+    throw new Error(`Communication 发送失败：${message}`);
+  }
+  return payload as T;
+}
+
+async function startAgentProspectSearch(
+  actor: { id: string },
+  input: Record<string, unknown>,
+  executionId: string
+) {
+  const { session } = agentSessionUser(actor);
+  const products = agentInputList(input, "products").slice(0, 20);
+  const markets = agentInputList(input, "markets").slice(0, 20);
+  const customerTypes = agentInputList(input, "customerTypes").slice(0, 20);
+  const industries = agentInputList(input, "industries").slice(0, 30);
+  const exclusions = agentInputList(input, "exclusions").slice(0, 30);
+  if (!products.length) throw new Error("启动搜客前需要明确产品关键词，请补充 products");
+  if (!markets.length) throw new Error("启动搜客前需要明确目标国家或地区，请补充 markets");
+  const resolvedCustomerTypes = customerTypes.length ? customerTypes : ["进口商/经销商"];
+  const resolvedIndustries = industries.length ? industries : [...resolvedCustomerTypes];
+  const providerStatuses = allProviderStatuses(session);
+  const requestedProviderIds = agentInputList(input, "providerIds")
+    .map((item) => item.toLocaleLowerCase("en-US"));
+  const recommendedFreeProviders = providerStatuses
+    .filter((item) => item.recommended && item.enabled && item.ready && item.accessMode === "api" && item.tier !== "paid" && item.id !== "ai_search")
+    .map((item) => item.id);
+  const providerIds = requestedProviderIds.length
+    ? requestedProviderIds
+    : (recommendedFreeProviders.length ? recommendedFreeProviders : providerStatuses
+      .filter((item) => item.enabled && item.ready && item.accessMode === "api" && item.tier !== "paid" && item.id !== "ai_search")
+      .map((item) => item.id).slice(0, 6));
+  const unavailableProviders = providerIds.filter((providerId) => {
+    const status = providerStatuses.find((item) => item.id === providerId);
+    return !status || !status.enabled || !status.ready || status.accessMode !== "api";
+  });
+  if (unavailableProviders.length) throw new Error(`以下数据源尚未配置或不可自动执行：${unavailableProviders.join("、")}`);
+  if (!providerIds.length) throw new Error("当前账号没有可执行的数据源，请先在自动获客中启用至少一个来源");
+  const limitValue = Number(input.limit || 20);
+  const limit = Number.isFinite(limitValue) ? Math.max(1, Math.min(1_000, Math.round(limitValue))) : 20;
+  const goal = agentInputText(
+    input,
+    "goal",
+    `开发${markets.join("、")}市场的${products.join("、")}${resolvedCustomerTypes.join("、")}`
+  ).slice(0, 1_000);
+  const title = agentInputText(
+    input,
+    "title",
+    `${markets[0]} · ${products[0]} · ${resolvedCustomerTypes[0]}`
+  ).slice(0, 160);
+  const store = getStore();
+  const requestPrefix = `agent-search:${executionId}`;
+  const existingCampaignEvent = store.prospectCampaignEvents.find((item) =>
+    item.eventType === "created"
+    && item.actorId === session.id
+    && item.teamId === session.teamId
+    && item.requestId === `${requestPrefix}:campaign`
+  );
+  let campaignDetail = existingCampaignEvent
+    ? getProspectCampaign(store, session, existingCampaignEvent.campaignId)
+    : await createProspectCampaign({
+      store,
+      user: session,
+      body: {
+        name: title,
+        snapshot: {
+          goal,
+          products,
+          markets,
+          customerTypes: resolvedCustomerTypes,
+          applicationScenarios: resolvedIndustries,
+          icpRules: [],
+          exclusionRules: exclusions,
+          sourceProviderIds: providerIds
+        }
+      },
+      requestId: `${requestPrefix}:campaign`
+    });
+  let strategy = listProspectStrategies(store, session, campaignDetail.campaign.id, false).strategies
+    .find((item) => item.campaignVersion === campaignDetail.campaign.currentVersion && item.status === "approved")
+    || listProspectStrategies(store, session, campaignDetail.campaign.id, false).strategies
+      .find((item) => item.campaignVersion === campaignDetail.campaign.currentVersion && item.status === "draft");
+  if (!strategy) throw new Error("系统未能为获客项目生成可用策略");
+  if (strategy.status === "draft") {
+    const updated = await updateProspectStrategy({
+      store,
+      user: session,
+      strategyId: strategy.id,
+      ifMatch: prospectStrategyEtag(strategy),
+      body: {
+        name: `${title} · Agent 策略`,
+        query: {
+          keywordMode: "campaign_products",
+          positiveKeywords: [],
+          synonyms: [],
+          industryTerms: resolvedIndustries,
+          purchaseScenarioTerms: resolvedIndustries,
+          countryMode: "campaign_markets",
+          countries: [],
+          languages: [],
+          customerTypeMode: "campaign_customer_types",
+          customerTypes: [],
+          exclusionKeywords: exclusions,
+          exclusionDomains: [],
+          timeWindow: { mode: "all", from: "", to: "" }
+        },
+        providerPlan: providerIds.map((providerId, index) => ({
+          providerId,
+          priority: index + 1,
+          pageLimit: 1,
+          resultLimit: limit,
+          budgetLimit: null,
+          currency: ""
+        })),
+        reason: "由 AI Agent 在用户确认后生成"
+      },
+      requestId: `${requestPrefix}:strategy`
+    });
+    const approved = await approveProspectStrategy({
+      store,
+      user: session,
+      strategyId: updated.strategy.id,
+      ifMatch: prospectStrategyEtag(updated.strategy),
+      reason: "用户已在 AI Agent 审批搜客条件",
+      requestId: `${requestPrefix}:approve`
+    });
+    strategy = approved.strategy;
+  }
+  campaignDetail = getProspectCampaign(store, session, campaignDetail.campaign.id);
+  if (campaignDetail.campaign.status === "draft" || campaignDetail.campaign.status === "paused") {
+    campaignDetail = await activateProspectCampaign({
+      store,
+      user: session,
+      campaignId: campaignDetail.campaign.id,
+      ifMatch: prospectCampaignEtag(campaignDetail.campaign),
+      requestId: `${requestPrefix}:activate`
+    });
+  }
+  const existingRunEvent = store.prospectRunEvents.find((item) =>
+    item.eventType === "created"
+    && item.actorId === session.id
+    && item.teamId === session.teamId
+    && item.requestId === `${requestPrefix}:run`
+  );
+  const runDetail = existingRunEvent
+    ? getProspectRun(store, session, existingRunEvent.runId)
+    : await createProspectRun({
+      store,
+      user: session,
+      strategyId: strategy.id,
+      ifMatch: prospectStrategyEtag(strategy),
+      idempotencyKey: requestPrefix,
+      body: { reason: "AI Agent 用户确认后立即运行" },
+      requestId: `${requestPrefix}:run`
+    });
+  await synchronizeProspectQueue();
+  return {
+    message: `搜客任务已进入后台队列，共 ${runDetail.shards.length} 个数据源`,
+    runId: runDetail.run.id,
+    campaignId: campaignDetail.campaign.id,
+    strategyId: strategy.id,
+    status: runDetail.run.status,
+    providerCount: runDetail.shards.length,
+    providerIds,
+    replayed: Boolean(existingRunEvent || ("idempotencyReplayed" in runDetail && runDetail.idempotencyReplayed))
+  };
+}
+
+async function getAgentProspectSearchProgress(actor: { id: string }, input: Record<string, unknown>) {
+  const { session } = agentSessionUser(actor);
+  const runId = agentInputText(input, "runId");
+  if (!runId) throw new Error("缺少搜客任务 runId");
+  const store = getStore();
+  await store.readBarrier();
+  const detail = getProspectRun(store, session, runId);
+  const terminalStatuses = new Set(["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled"]);
+  const settledStatuses = new Set(["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled"]);
+  const settledSources = detail.shards.filter((item) => settledStatuses.has(item.status)).length;
+  const progressUnits = detail.shards.reduce((total, shard) => {
+    if (settledStatuses.has(shard.status)) return total + 1;
+    if (["running", "pause_requested", "cancel_requested"].includes(shard.status)) return total + 0.5;
+    return total;
+  }, 0);
+  const progress = detail.shards.length
+    ? Math.round(progressUnits / detail.shards.length * 100)
+    : terminalStatuses.has(detail.run.status) ? 100 : 0;
+  const processingStates = (store.prospectCandidateProcessingStates || []).filter((item) =>
+    item.teamId === session.teamId && item.ownerId === detail.run.ownerId && item.runId === runId
+  );
+  const candidateIds = [...new Set(processingStates
+    .filter((item) => item.status === "completed" && item.candidateId)
+    .map((item) => item.candidateId!))];
+  const candidates = candidateIds
+    .map((candidateId) => store.websiteOpportunities.find((item) => item.id === candidateId))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const verifiedCount = candidates.filter((item) => item.verificationReport && item.verificationReport.level !== "L0").length;
+  const contactableCount = candidates.filter((item) => ["contactable", "contacted", "synced"].includes(item.status)).length;
+  const filteredCount = processingStates.filter((item) => item.status === "rejected").length
+    + candidates.filter((item) => item.status === "excluded").length;
+  const terminal = terminalStatuses.has(detail.run.status);
+  const currentAction = terminal
+    ? "搜客任务已经结束，正在核对候选与清洗结果"
+    : `搜客任务后台运行中，${settledSources}/${detail.shards.length} 个来源已结束`;
+  return {
+    message: terminal
+      ? `搜客结束：候选 ${candidates.length} 家，已复核 ${verifiedCount} 家，清洗淘汰 ${filteredCount} 家`
+      : `搜客进行中：${settledSources}/${detail.shards.length} 个来源已结束，当前候选 ${candidates.length} 家`,
+    runId,
+    status: detail.run.status,
+    terminal,
+    progress,
+    currentAction,
+    sourceCount: detail.shards.length,
+    settledSources,
+    candidateCount: candidates.length,
+    verifiedCount,
+    contactableCount,
+    filteredCount,
+    nextCheckAt: terminal ? "" : new Date(Date.now() + 4_000).toISOString(),
+    candidates: candidates.slice(0, 12).map((item) => ({
+      id: item.id,
+      company: item.company,
+      country: item.country,
+      website: item.website,
+      status: item.status,
+      verificationLevel: item.verificationReport?.level || "L0"
+    })),
+    sources: detail.shards.map((item) => ({ providerId: item.providerCode, status: item.status }))
+  };
+}
+
+async function listAgentProspectCandidates(actor: { id: string }, input: Record<string, unknown>) {
+  const { session } = agentSessionUser(actor);
+  const store = getStore();
+  await store.readBarrier();
+  const runId = agentInputText(input, "runId");
+  let candidateIds: string[] = [];
+  if (runId) {
+    getProspectRun(store, session, runId);
+    candidateIds = [...new Set((store.prospectCandidateProcessingStates || [])
+      .filter((item) => item.teamId === session.teamId && item.ownerId === session.id && item.runId === runId && item.status === "completed" && item.candidateId)
+      .map((item) => item.candidateId!))];
+  }
+  const limitValue = Number(input.limit || 20);
+  const limit = Number.isFinite(limitValue) ? Math.max(1, Math.min(50, Math.round(limitValue))) : 20;
+  const candidates = store.websiteOpportunities
+    .filter((item) => item.teamId === session.teamId && item.ownerId === session.id)
+    .filter((item) => !runId || candidateIds.includes(item.id))
+    .filter((item) => item.status !== "excluded")
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, limit)
+    .map((item) => {
+      const approvedDecision = item.tenantProspectId
+        ? store.prospectContactabilityDecisions
+          .filter((decision) =>
+            decision.teamId === session.teamId
+            && decision.ownerId === session.id
+            && decision.prospectId === item.tenantProspectId
+            && decision.status === "approved_contactable"
+          )
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+        : undefined;
+      return {
+        candidateId: item.id,
+        tenantProspectId: item.tenantProspectId || "",
+        company: item.company,
+        country: item.country,
+        business: item.business,
+        website: item.website,
+        contact: item.contact,
+        contactInfo: item.contactInfo,
+        confidence: item.confidence || 0,
+        verificationLevel: item.verificationReport?.level || "L0",
+        verificationConclusion: item.verificationReport?.conclusion || "尚未形成企业复核结论",
+        contactabilityApproved: Boolean(approvedDecision),
+        decisionId: approvedDecision?.id || "",
+        leadId: item.leadId || "",
+        customerId: item.customerId || "",
+        status: item.status
+      };
+    });
+  return {
+    message: `已读取 ${candidates.length} 家候选，其中 ${candidates.filter((item) => item.contactabilityApproved).length} 家已有人工可联系审批`,
+    runId,
+    count: candidates.length,
+    approvedCount: candidates.filter((item) => item.contactabilityApproved).length,
+    candidates
+  };
+}
+
+async function convertAgentProspectToLead(
+  actor: { id: string },
+  input: Record<string, unknown>,
+  executionId: string
+) {
+  const { session } = agentSessionUser(actor);
+  const store = getStore();
+  const candidateId = agentInputText(input, "candidateId");
+  const candidate = store.websiteOpportunities.find((item) =>
+    item.id === candidateId && item.teamId === session.teamId && item.ownerId === session.id
+  );
+  if (!candidate) throw new Error("候选不存在或不属于当前账号");
+  if (!candidate.tenantProspectId) throw new Error("候选尚未进入正式企业覆盖池，不能转为线索");
+  if (!store.convertProspectToLead) throw new Error("候选转线索服务暂不可用");
+  const approvedDecision = store.prospectContactabilityDecisions
+    .filter((decision) =>
+      decision.teamId === session.teamId
+      && decision.ownerId === session.id
+      && decision.prospectId === candidate.tenantProspectId
+      && decision.status === "approved_contactable"
+    )
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+  const decisionId = agentInputText(input, "decisionId") || approvedDecision?.id || "";
+  if (!decisionId) throw new Error("候选尚未完成人工可联系审批，请先在搜客清单完成复核");
+  const intentValue = agentInputText(input, "intent", "中");
+  const intent = intentValue === "高" || intentValue === "低" ? intentValue : "中";
+  const amountValue = Number(input.estimatedAmount || 0);
+  const result = await store.convertProspectToLead({
+    operationCode: "convert_prospect_to_lead_v1",
+    decisionId,
+    mode: "create_new",
+    existingLeadId: "",
+    company: candidate.company,
+    contact: candidate.contact,
+    country: candidate.country,
+    intent,
+    estimatedAmount: Number.isFinite(amountValue) ? Math.max(0, amountValue) : 0,
+    nextFollowAt: agentInputText(input, "nextFollowAt"),
+    remark: agentInputText(input, "remark", "由 AI Agent 在用户确认后转为线索").slice(0, 2_000),
+    teamId: session.teamId,
+    ownerId: session.id,
+    prospectId: candidate.tenantProspectId,
+    idempotencyKey: `agent-lead:${executionId}`,
+    convertedAt: new Date().toISOString()
+  });
+  await store.reloadProspectCandidates?.();
+  const linkedCandidates = store.websiteOpportunities.filter((item) =>
+    item.teamId === session.teamId && item.ownerId === session.id && item.tenantProspectId === candidate.tenantProspectId
+  );
+  linkedCandidates.forEach((item) => {
+    migrateProspectFollowUpTodos(store, item, result.lead.id);
+    linkProcurementContextToLead(store, item, result.lead.id);
+  });
+  if (linkedCandidates.length) await persistCandidateChanges(store, linkedCandidates, true);
+  return {
+    message: `${candidate.company} 已${result.created ? "新建" : "关联"}线索`,
+    converted: true,
+    replayed: result.replayed,
+    candidateId,
+    leadId: result.lead.id,
+    company: result.lead.company,
+    uiAction: { type: "open_lead", leadId: result.lead.id }
+  };
+}
+
+async function convertAgentProspectToCustomer(
+  actor: { id: string },
+  input: Record<string, unknown>,
+  executionId: string
+) {
+  const { session } = agentSessionUser(actor);
+  const store = getStore();
+  const candidateId = agentInputText(input, "candidateId");
+  const candidate = store.websiteOpportunities.find((item) =>
+    item.id === candidateId && item.teamId === session.teamId && item.ownerId === session.id
+  );
+  if (!candidate) throw new Error("候选不存在或不属于当前账号");
+  if (!candidate.tenantProspectId) throw new Error("候选尚未进入正式企业覆盖池，不能转为客户");
+  if (!store.convertProspectToCustomer) throw new Error("候选转客户服务暂不可用");
+  const leadId = agentInputText(input, "leadId") || candidate.leadId || "";
+  const lead = store.leads.find((item) => item.id === leadId && item.teamId === session.teamId && item.ownerId === session.id);
+  if (!lead) throw new Error("候选必须先转为当前账号的线索，才能继续转为客户");
+  const result = await store.convertProspectToCustomer({
+    operationCode: "convert_prospect_to_customer_v1",
+    leadId,
+    mode: "create_new",
+    existingCustomerId: "",
+    company: candidate.company,
+    contact: candidate.contact,
+    country: candidate.country,
+    nextReminder: agentInputText(input, "nextReminder") || lead.nextFollowAt,
+    teamId: session.teamId,
+    ownerId: session.id,
+    prospectId: candidate.tenantProspectId,
+    idempotencyKey: `agent-customer:${executionId}`,
+    convertedAt: new Date().toISOString()
+  });
+  await store.reloadProspectCandidates?.();
+  const linkedCandidates = store.websiteOpportunities.filter((item) =>
+    item.teamId === session.teamId && item.ownerId === session.id && item.tenantProspectId === candidate.tenantProspectId
+  );
+  linkedCandidates.forEach((item) => { item.customerId = result.customer.id; });
+  linkProcurementContextToCustomer(store, {
+    teamId: session.teamId,
+    ownerId: session.id,
+    leadId: result.lead.id,
+    tenantProspectId: candidate.tenantProspectId,
+    prospectCandidateIds: linkedCandidates.map((item) => item.id)
+  }, result.customer.id);
+  if (linkedCandidates.length) await persistCandidateChanges(store, linkedCandidates, true);
+  return {
+    message: `${candidate.company} 已${result.created ? "新建" : "关联"}客户`,
+    converted: true,
+    replayed: result.replayed,
+    candidateId,
+    leadId: result.lead.id,
+    customerId: result.customer.id,
+    company: result.customer.company,
+    uiAction: { type: "open_customer", customerId: result.customer.id }
+  };
+}
+
+async function agentOutreachSequenceStopReason(sequence: OutreachSequence) {
+  const store = getStore();
+  const lead = sequence.entityType === "lead" ? store.leads.find((item) => item.id === sequence.entityId) : undefined;
+  const customer = sequence.entityType === "customer" ? store.customers.find((item) => item.id === sequence.entityId) : undefined;
+  if (!lead && !customer) return "触达对象已不存在";
+  if (lead?.convertedCustomerId || lead?.status === "converted") return "线索已转化为客户";
+  const candidates = store.websiteOpportunities.filter((item) =>
+    item.ownerId === sequence.ownerId
+    && (item.leadId === sequence.entityId || item.customerId === sequence.entityId)
+  );
+  const blocked = candidates.find((item) => item.outreachState === "suppressed"
+    || item.outreachState === "contact_invalid"
+    || item.outreachState === "replied"
+    || item.lastReplyClassification === "unsubscribed"
+    || item.lastReplyClassification === "rejected"
+    || item.lastReplyClassification === "bounced");
+  if (blocked) {
+    if (blocked.lastReplyClassification === "unsubscribed") return "联系人已退订";
+    if (blocked.lastReplyClassification === "rejected") return "联系人已明确拒绝";
+    if (blocked.lastReplyClassification === "bounced" || blocked.outreachState === "contact_invalid") return "联系方式已失效或退信";
+    return "已检测到客户回复";
+  }
+  const since = new Date(sequence.lastSentAt || sequence.approvedAt).getTime();
+  const activities = customer
+    ? store.customerActivities.filter((item) => item.customerId === customer.id)
+    : store.leadActivities.filter((item) => item.leadId === lead!.id);
+  if (activities.some((item) => new Date(item.createdAt).getTime() > since
+    && !item.content.includes("[Agent:")
+    && /(客户回复|收到回复|客户来信|inbound|replied|退订|退信|拒绝)/iu.test(item.content))) {
+    return "CRM 已记录客户回复或拒绝信号";
+  }
+  if (sequence.channel !== "communication" || !customer) return "";
+  try {
+    const { session } = agentSessionUser({ id: sequence.ownerId });
+    type Account = { id: string; status: string };
+    type Conversation = { id: string; accountId: string; contactPhone: string };
+    type Message = { direction: "inbound" | "outbound"; occurredAt: string; createdAt: string };
+    const accounts = await communicationRequest<Account[]>(session, "/accounts");
+    const connected = accounts.filter((item) => item.status === "connected" && (!sequence.accountId || item.id === sequence.accountId));
+    const phone = (customer.whatsapp || "").replace(/[\s()-]/g, "");
+    for (const account of connected) {
+      const conversations = await communicationRequest<Conversation[]>(session, `/conversations?accountId=${encodeURIComponent(account.id)}`);
+      const conversation = conversations.find((item) => item.contactPhone.replace(/[\s()-]/g, "") === phone);
+      if (!conversation) continue;
+      const messages = await communicationRequest<Message[]>(session, `/conversations/${encodeURIComponent(conversation.id)}/messages`);
+      if (messages.some((item) => item.direction === "inbound" && new Date(item.occurredAt || item.createdAt).getTime() > since)) {
+        return "Communication 已收到客户回复";
+      }
+    }
+  } catch {
+    // 通讯服务暂不可用时不误判回复，发送阶段仍会做连接校验。
+  }
+  return "";
+}
+
+interface AgentApiCatalogRow {
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  path: string;
+  risk: "read" | "write" | "external";
+  operationId: string;
+  parameters: unknown[];
+  requestSchema: Record<string, unknown> | null;
+  guidance: string;
+  authorizationPolicy: AgentOperationContract["authorizationPolicy"];
+  completionEvidence: AgentOperationContract["completionEvidence"];
+  refreshView: string;
+  schemaSource: AgentOperationContract["schemaSource"];
+  executable: boolean;
+  contract: AgentOperationContract;
+}
+
+function agentApiCatalogRows(): AgentApiCatalogRow[] {
+  const document = createOpenApiDocument(app) as { paths?: Record<string, Record<string, any>> };
+  const rows: AgentApiCatalogRow[] = [];
+  for (const [path, operations] of Object.entries(document.paths || {})) {
+    if (deniedAgentApiReason(path)) continue;
+    for (const method of ["get", "post", "put", "patch", "delete"] as const) {
+      const operation = operations[method];
+      if (!operation) continue;
+      const upperMethod = method.toUpperCase() as AgentApiCatalogRow["method"];
+      let risk: AgentApiCatalogRow["risk"];
+      try {
+        const classified = classifyAgentApiRequest(upperMethod, path);
+        if (classified === "draft") continue;
+        risk = classified;
+      } catch {
+        continue;
+      }
+      const openApiSchema = operation.requestBody?.content?.["application/json"]?.schema || null;
+      const contract = agentApiOperationContract(upperMethod, path, openApiSchema, risk);
+      rows.push({
+        method: upperMethod,
+        path,
+        risk,
+        operationId: String(operation.operationId || ""),
+        parameters: Array.isArray(operation.parameters) ? operation.parameters.slice(0, 20) : [],
+        requestSchema: contract.requestSchema,
+        guidance: contract.guidance,
+        authorizationPolicy: contract.authorizationPolicy,
+        completionEvidence: contract.completionEvidence,
+        refreshView: contract.refreshView,
+        schemaSource: contract.schemaSource,
+        executable: contract.executable,
+        contract
+      });
+    }
+  }
+  return rows.sort((left, right) => left.path.localeCompare(right.path) || left.method.localeCompare(right.method));
+}
+
+function findAgentApiRoute(method: string, path: string) {
+  return agentApiCatalogRows().find((item) => item.method === method && routeTemplateMatches(item.path, path));
+}
+
+function appendAgentApiQuery(url: URL, query: Record<string, string | number | boolean | Array<string | number | boolean>>) {
+  for (const [key, rawValue] of Object.entries(query)) {
+    for (const value of Array.isArray(rawValue) ? rawValue : [rawValue]) url.searchParams.append(key, String(value));
+  }
+}
+
+const agentExecutionRuntime: AgentExecutionRuntime = {
+  async listCrmApiCatalog(_actor, input) {
+    const query = String(input.query || "").trim().toLowerCase();
+    const terms = query.split(/\s+/u).filter((item) => item.length > 1);
+    const method = String(input.method || "").trim().toUpperCase();
+    const offset = Math.max(0, Math.min(10_000, Number(input.offset || 0)));
+    const limit = Math.max(1, Math.min(100, Number(input.limit || 30)));
+    const all = agentApiCatalogRows();
+    const matched = all.filter((item) => (!method || item.method === method)
+      && (!terms.length || terms.some((term) => `${item.path} ${item.operationId}`.toLowerCase().includes(term))));
+    const routes = matched.slice(offset, offset + limit).map(({ contract: _contract, ...route }) => route);
+    const executable = all.filter((item) => item.executable).length;
+    return {
+      count: routes.length,
+      total: matched.length,
+      offset,
+      hasMore: offset + routes.length < matched.length,
+      coverage: { total: all.length, executable, blocked: all.length - executable, percent: all.length ? Math.round(executable / all.length * 1000) / 10 : 100 },
+      excluded: "账号、登录、个人资料、密钥、个人 Communication 绑定和 Agent 控制面",
+      routes
+    };
+  },
+  async requestCrmApi(actor, rawInput, tool, executionId) {
+    const parsed = agentApiRequestSchema.parse(rawInput);
+    const path = normalizeAgentApiPath(parsed.path);
+    assertAgentApiToolRisk(tool, parsed.method, path);
+    const route = findAgentApiRoute(parsed.method, path);
+    if (!route) throw new Error("接口不在当前可用业务目录中，请先通过 api.catalog 获取真实 method 和 path");
+    assertAgentOperationInput(route.contract, parsed.body);
+    const { session } = agentSessionUser(actor);
+    const port = Number(process.env.PORT || 4188);
+    const url = new URL(`http://127.0.0.1:${port}${path}`);
+    appendAgentApiQuery(url, parsed.query);
+    const serializedBody = parsed.body === undefined || parsed.method === "GET"
+      ? undefined
+      : JSON.stringify(parsed.body);
+    let response: Awaited<ReturnType<typeof requestAgentInternalApi>>;
+    try {
+      response = await requestAgentInternalApi({
+        url,
+        method: parsed.method,
+        headers: {
+          authorization: `Bearer ${signToken(session)}`,
+          "x-agent-execution-id": executionId,
+          ...parsed.headers,
+          ...(parsed.body === undefined ? {} : { "content-type": "application/json" })
+        },
+        body: serializedBody,
+        timeoutMs: 60_000
+      });
+    } catch (error) {
+      const cause = error && typeof error === "object" && "cause" in error
+        ? (error as { cause?: unknown }).cause
+        : undefined;
+      const causeCode = cause && typeof cause === "object" && "code" in cause
+        ? String((cause as { code?: unknown }).code || "")
+        : "";
+      const causeMessage = cause && typeof cause === "object" && "message" in cause
+        ? String((cause as { message?: unknown }).message || "")
+        : "";
+      const detail = [
+        error instanceof Error ? error.message : String(error),
+        causeCode,
+        causeMessage
+      ].filter((item, index, values) => item && values.indexOf(item) === index).join("; ");
+      throw new Error(`CRM 内部接口连接失败（${parsed.method} ${path}）：${detail || "未知网络错误"}`);
+    }
+    const contentType = String(response.headers["content-type"] || "");
+    let payload: unknown;
+    if (contentType.includes("json")) {
+      const text = response.body.toString("utf8");
+      try { payload = text ? JSON.parse(text) : null; } catch { payload = { message: text.slice(0, 20_000) }; }
+    } else {
+      const size = response.body.length;
+      payload = { contentType, size, message: "接口已执行；非 JSON 文件内容未注入 Agent 上下文" };
+    }
+    const safePayload = redactAgentApiData(payload);
+    if (response.status < 200 || response.status >= 300) {
+      const message = typeof safePayload === "object" && safePayload && "message" in safePayload
+        ? String((safePayload as { message?: unknown }).message || "")
+        : `HTTP ${response.status}`;
+      throw new Error(`CRM 接口调用失败（${response.status}）：${message}`);
+    }
+    assertAgentCompletionEvidence(route.contract, safePayload);
+    return {
+      status: response.status,
+      method: parsed.method,
+      path,
+      data: safePayload,
+      route: { template: route.path, operationId: route.operationId, contractVersion: route.contract.version },
+      completionEvidence: route.completionEvidence,
+      uiAction: parsed.method === "GET" || !route.refreshView ? undefined : { type: "refresh", view: route.refreshView }
+    };
+  },
+  async draftDevelopmentEmail(actor, input) {
+    const prepared = await buildAgentDevelopmentEmail(actor, input);
+    return {
+      draft: prepared.draft,
+      readiness: prepared.readiness,
+      uiAction: { type: "open_development_email", entityType: prepared.draft.entityType, entityId: prepared.draft.entityId }
+    };
+  },
+  async sendDevelopmentEmail(actor, input, executionId) {
+    const prepared = await buildAgentDevelopmentEmail(actor, input);
+    const { stored, entity, readiness, draft } = prepared;
+    if (!readiness.personalReady) throw new Error(`个人发件配置不完整：${readiness.personalMissing.join("、")}`);
+    if (!readiness.companyReady) throw new Error(`公司资料不完整，请管理员维护：${readiness.companyMissing.join("、")}`);
+    if (!draft.to) throw new Error("客户或线索没有可用邮箱，请先补齐邮箱");
+    const marker = `[Agent:${executionId}]`;
+    const replayedActivity = entity.lead
+      ? getStore().leadActivities.find((item) => item.leadId === entity.lead!.id && item.content.includes(marker))
+      : getStore().customerActivities.find((item) => item.customerId === entity.customer!.id && item.content.includes(marker));
+    if (replayedActivity) {
+      return { sent: true, replayed: true, activityId: replayedActivity.id, to: draft.to, subject: draft.subject, uiAction: { type: "open_development_email", entityType: draft.entityType, entityId: draft.entityId } };
+    }
+    const domain = (stored.outboundEmail || "").split("@")[1] || "goodjob.local";
+    const mailInfo = await sendOutboundEmail(stored, {
+      to: draft.to,
+      subject: draft.subject,
+      body: draft.body,
+      messageId: `<${executionId}@${domain}>`
+    });
+    const sentAt = new Date().toISOString();
+    const nextFollowAt = agentInputText(input, "nextFollowAt") || new Date(Date.now() + 3 * 86_400_000).toISOString();
+    stored.lastDevelopmentEmailAt = sentAt;
+    stored.lastDevelopmentEmailTo = draft.to;
+    stored.lastDevelopmentEmailSubject = draft.subject;
+    let activityId = "";
+    if (entity.lead) {
+      const activity = { id: `la_agent_${randomUUID()}`, leadId: entity.lead.id, type: "email" as const, content: `开发信已由 AI Agent 后台发送：${draft.subject} ${marker}`, operatorId: actor.id, nextFollowAt, createdAt: sentAt };
+      getStore().leadActivities.unshift(activity);
+      activityId = activity.id;
+      entity.lead.lastActivityAt = "刚刚";
+      entity.lead.nextFollowAt = nextFollowAt;
+    } else if (entity.customer) {
+      const activity = { id: `ca_agent_${randomUUID()}`, customerId: entity.customer.id, type: "email" as const, content: `开发信已由 AI Agent 后台发送：${draft.subject} ${marker}`, operatorId: actor.id, nextReminder: nextFollowAt, createdAt: sentAt };
+      getStore().customerActivities.unshift(activity);
+      activityId = activity.id;
+      entity.customer.nextReminder = nextFollowAt;
+    }
+    getStore().todos.unshift({
+      id: `t_agent_${randomUUID()}`, title: `跟进开发信回复：${entity.company}`, type: "customer", priority: "high", status: "pending", pinState: "", sortOrder: 0,
+      dueAt: nextFollowAt, ownerId: actor.id, teamId: actor.teamId, related: entity.company, done: false, createdAt: sentAt, historyAt: "", customerId: entity.customer?.id || ""
+    });
+    await getStore().persist();
+    return { sent: true, replayed: false, messageId: mailInfo.messageId, activityId, to: draft.to, subject: draft.subject, sentAt, followUpCreated: true, uiAction: { type: "open_development_email", entityType: draft.entityType, entityId: draft.entityId } };
+  },
+  async sendWhatsApp(actor, input, executionId) {
+    const { session } = agentSessionUser(actor);
+    const customerId = agentInputText(input, "customerId");
+    const customer = getStore().customers.find((item) => item.id === customerId && canSeeOwner(session, item.ownerId, item.teamId));
+    if (!customer || (customer.ownerId !== actor.id && !["admin", "super_admin"].includes(actor.role))) throw new Error("客户不存在，或只有客户负责人和管理员可以发送 Communication 消息");
+    const phone = (customer.whatsapp || "").replace(/[\s()-]/g, "");
+    if (!/^\+[1-9]\d{6,14}$/u.test(phone)) throw new Error("客户没有有效的 WhatsApp 国际号码");
+    let body = agentInputText(input, "body");
+    if (!body) {
+      const profile = companyProfileForTeam(actor.teamId);
+      body = `Hello ${customer.contact || "there"}, this is ${session.name} from ${profile.companyName || "our company"}. I would like to follow up regarding potential cooperation with ${customer.company}.`;
+    }
+    if (body.length > 4_000) throw new Error("Communication 消息不能超过 4000 字符");
+    type Account = { id: string; status: string; name: string };
+    type Contact = { id: string; accountId: string; phone: string };
+    type Conversation = { id: string; accountId: string };
+    type Message = { id: string; status: string; createdAt: string };
+    const accounts = await communicationRequest<Account[]>(session, "/accounts");
+    const requestedAccountId = agentInputText(input, "accountId");
+    const account = accounts.find((item) => item.status === "connected" && (!requestedAccountId || item.id === requestedAccountId));
+    if (!account) throw new Error("当前账号没有已连接的 Communication 发送账号，请先扫码或配置 Meta 账号");
+    const contacts = await communicationRequest<Contact[]>(session, `/contacts?accountId=${encodeURIComponent(account.id)}`);
+    let contact = contacts.find((item) => item.phone.replace(/[\s()-]/g, "") === phone);
+    if (!contact) {
+      contact = await communicationRequest<Contact>(session, "/contacts", { method: "POST", body: JSON.stringify({ accountId: account.id, displayName: customer.contact || customer.company, phone, createCrmContact: false }) });
+    }
+    const conversation = await communicationRequest<Conversation>(session, `/contacts/${encodeURIComponent(contact.id)}/conversation`, { method: "POST" });
+    const message = await communicationRequest<Message>(session, `/conversations/${encodeURIComponent(conversation.id)}/messages`, { method: "POST", body: JSON.stringify({ accountId: account.id, clientMessageId: executionId, body }) });
+    const marker = `[Agent:${executionId}]`;
+    let activity = getStore().customerActivities.find((item) => item.customerId === customer.id && item.content.includes(marker));
+    if (!activity) {
+      activity = { id: `ca_agent_${randomUUID()}`, customerId: customer.id, type: "whatsapp", content: `Communication 已由 AI Agent 后台发送：${body.slice(0, 500)} ${marker}`, operatorId: actor.id, nextReminder: agentInputText(input, "nextReminder"), createdAt: new Date().toISOString() };
+      getStore().customerActivities.unshift(activity);
+      await getStore().persist();
+    }
+    return { sent: true, accountId: account.id, accountName: account.name, conversationId: conversation.id, messageId: message.id, activityId: activity.id, status: message.status, phone, uiAction: { type: "open_communication", customerId: customer.id } };
+  },
+  async startProspectSearch(actor, input, executionId) {
+    return await startAgentProspectSearch(actor, input, executionId);
+  },
+  async getProspectSearchProgress(actor, input) {
+    return await getAgentProspectSearchProgress(actor, input);
+  },
+  async listProspectCandidates(actor, input) {
+    return await listAgentProspectCandidates(actor, input);
+  },
+  async convertProspectToLead(actor, input, executionId) {
+    return await convertAgentProspectToLead(actor, input, executionId);
+  },
+  async convertProspectToCustomer(actor, input, executionId) {
+    return await convertAgentProspectToCustomer(actor, input, executionId);
+  },
+  async createOutreachSequence(actor, input, executionId, missionRunId) {
+    const sequence = await createOutreachSequence(getStore(), actor, input, missionRunId, executionId);
+    void activeOutreachSequenceRunner?.synchronize();
+    return {
+      sequenceId: sequence.id,
+      status: sequence.status,
+      channel: sequence.channel,
+      entityName: sequence.entityName,
+      currentStep: sequence.currentStep,
+      maxSends: sequence.maxSends,
+      nextExecutionAt: sequence.nextExecutionAt,
+      stopReason: sequence.stopReason
+    };
+  },
+  async getOutreachSequenceProgress(actor, input) {
+    const sequenceId = agentInputText(input, "sequenceId");
+    const sequences = listOutreachSequences(getStore(), actor, 20)
+      .filter((item) => !sequenceId || item.id === sequenceId);
+    if (!sequenceId) return { count: sequences.length, sequences };
+    const sequence = sequences[0];
+    if (!sequence) throw new Error("触达序列不存在或当前账号无权查看");
+    const terminal = ["completed", "stopped", "cancelled", "failed"].includes(sequence.status);
+    const due = new Date(sequence.nextExecutionAt).getTime();
+    const nextCheckAt = terminal
+      ? ""
+      : Number.isFinite(due) && due > Date.now()
+        ? sequence.nextExecutionAt
+        : new Date(Date.now() + 5_000).toISOString();
+    return {
+      sequenceId: sequence.id,
+      status: sequence.status,
+      terminal,
+      progress: Math.round((sequence.currentStep / Math.max(1, sequence.maxSends)) * 100),
+      currentStep: sequence.currentStep,
+      maxSends: sequence.maxSends,
+      nextExecutionAt: sequence.nextExecutionAt,
+      nextCheckAt,
+      stopReason: sequence.stopReason,
+      currentAction: terminal ? (sequence.stopReason || "自动触达已结束") : `等待第 ${sequence.currentStep + 1}/${sequence.maxSends} 次触达`
+    };
+  },
+  async controlOutreachSequence(actor, input, action) {
+    const sequence = await controlOutreachSequence(getStore(), actor, agentInputText(input, "sequenceId"), action);
+    void activeOutreachSequenceRunner?.synchronize();
+    return { sequenceId: sequence.id, status: sequence.status, currentStep: sequence.currentStep, maxSends: sequence.maxSends, nextExecutionAt: sequence.nextExecutionAt, stopReason: sequence.stopReason };
+  },
+  async previewCustomerMaintenance(actor, input) {
+    return previewCustomerMaintenance(getStore(), actor, input);
+  },
+  async createCustomerMaintenanceWatch(actor, input, executionId, missionRunId) {
+    const watch = await createCustomerMaintenanceWatch(getStore(), actor, input, missionRunId, executionId);
+    void activeCustomerMaintenanceRunner?.synchronize();
+    return {
+      watchId: watch.id,
+      status: watch.status,
+      name: watch.name,
+      nextRunAt: watch.nextRunAt,
+      intervalHours: watch.rules.intervalHours,
+      maxTodosPerRun: watch.rules.maxTodosPerRun
+    };
+  },
+  async getCustomerMaintenanceProgress(actor, input) {
+    const watchId = agentInputText(input, "watchId");
+    const watches = listCustomerMaintenanceWatches(getStore(), actor, 20).filter((item) => !watchId || item.id === watchId);
+    return { count: watches.length, watches };
+  },
+  async controlCustomerMaintenanceWatch(actor, input, action) {
+    const watch = await controlCustomerMaintenanceWatch(getStore(), actor, agentInputText(input, "watchId"), action);
+    void activeCustomerMaintenanceRunner?.synchronize();
+    return { watchId: watch.id, status: watch.status, nextRunAt: watch.nextRunAt, totalCreatedCount: watch.totalCreatedCount, lastError: watch.lastError };
+  },
+  async runBackgroundResearch(actor, input) {
+    const { session } = agentSessionUser(actor);
+    const entityType = agentInputText(input, "entityType") === "lead" ? "lead" : "customer";
+    const entityId = agentInputText(input, "entityId");
+    if (!entityId) throw new Error("AI 背调需要明确客户或线索编号");
+    const payload = await buildBackgroundResearch(session, { entityType, entityId });
+    if (!payload) throw new Error(entityType === "lead" ? "线索不存在或当前账号无权访问" : "客户不存在或当前账号无权访问");
+    const research = payload.research as unknown as Record<string, unknown>;
+    return {
+      research,
+      score: research.score,
+      verdict: research.verdict,
+      riskCount: Array.isArray(research.risks) ? research.risks.length : 0,
+      opportunityCount: Array.isArray(research.opportunities) ? research.opportunities.length : 0,
+      uiAction: { type: "open_research", entityType, entityId }
+    };
+  },
+  async getCommunicationInbox(actor, input) {
+    const { session } = agentSessionUser(actor);
+    type Account = { id: string; status: string; name: string };
+    type Conversation = { id: string; accountId: string; contactName: string; contactPhone: string; unreadCount: number; lastMessage: string | null; lastMessageAt: string | null };
+    const limit = Math.max(1, Math.min(50, Number(input.limit || 20)));
+    const accounts = (await communicationRequest<Account[]>(session, "/accounts")).filter((item) => item.status === "connected");
+    const rows: Array<Record<string, unknown>> = [];
+    for (const account of accounts) {
+      const conversations = await communicationRequest<Conversation[]>(session, `/conversations?accountId=${encodeURIComponent(account.id)}`);
+      for (const conversation of conversations.filter((item) => item.unreadCount > 0)) {
+        const phone = conversation.contactPhone.replace(/[\s()-]/g, "");
+        const customer = getStore().customers.find((item) => item.ownerId === actor.id && (item.whatsapp || "").replace(/[\s()-]/g, "") === phone);
+        rows.push({
+          accountId: account.id,
+          accountName: account.name,
+          conversationId: conversation.id,
+          contactName: conversation.contactName,
+          phone,
+          unreadCount: conversation.unreadCount,
+          lastMessage: conversation.lastMessage || "",
+          lastMessageAt: conversation.lastMessageAt || "",
+          customerId: customer?.id || "",
+          customerCompany: customer?.company || "未关联 CRM 客户",
+          uiAction: customer ? { type: "open_communication", customerId: customer.id } : undefined
+        });
+      }
+    }
+    rows.sort((left, right) => String(right.lastMessageAt).localeCompare(String(left.lastMessageAt)));
+    const conversations = rows.slice(0, limit);
+    return {
+      count: conversations.length,
+      totalUnread: conversations.reduce((sum, item) => sum + Number(item.unreadCount || 0), 0),
+      connectedAccountCount: accounts.length,
+      conversations
+    };
+  }
+};
+
+let activeAgentBackgroundRunner: AgentBackgroundRunner | null = null;
+let activeOutreachSequenceRunner: OutreachSequenceRunner | null = null;
+let activeCustomerMaintenanceRunner: CustomerMaintenanceRunner | null = null;
+let activeAgentTriggerRunner: AgentTriggerRunner | null = null;
+let activeSalesTrainingRunner: SalesTrainingRunner | null = null;
+
+app.get("/api/agent/catalog", requireAuth, (_req, res) => {
+  res.json({ tools: agentCatalog() });
+});
+
+app.get("/api/agent/outreach-sequences", requireAuth, (req, res) => {
+  const limit = z.coerce.number().int().min(1).max(100).catch(20).parse(req.query.limit);
+  res.json({ sequences: listOutreachSequences(getStore(), req.user!, limit) });
+});
+
+app.post("/api/agent/outreach-sequences/:id/:action", requireAuth, asyncRoute(async (req, res) => {
+  const action = z.enum(["pause", "resume", "cancel"]).parse(req.params.action);
+  const sequence = await controlOutreachSequence(getStore(), req.user!, req.params.id, action);
+  void activeOutreachSequenceRunner?.synchronize();
+  res.json({ sequence });
+}));
+
+app.get("/api/agent/customer-maintenance", requireAuth, (req, res) => {
+  const limit = z.coerce.number().int().min(1).max(100).catch(20).parse(req.query.limit);
+  res.json({ watches: listCustomerMaintenanceWatches(getStore(), req.user!, limit) });
+});
+
+app.post("/api/agent/customer-maintenance/:id/:action", requireAuth, asyncRoute(async (req, res) => {
+  const action = z.enum(["pause", "resume", "cancel"]).parse(req.params.action);
+  const watch = await controlCustomerMaintenanceWatch(getStore(), req.user!, req.params.id, action);
+  void activeCustomerMaintenanceRunner?.synchronize();
+  res.json({ watch });
+}));
+
+app.get("/api/agent/sales-distillation/sources", requireAuth, (req, res) => {
+  res.json({ sources: listDistillationSources(getStore(), req.user!) });
+});
+
+app.get("/api/agent/sales-training", requireAuth, (req, res) => {
+  res.json({ runs: listSalesTrainingRuns(getStore(), req.user!) });
+});
+
+app.get("/api/agent/sales-training/:id", requireAuth, (req, res) => {
+  res.json({ run: getSalesTrainingRun(getStore(), req.user!, req.params.id) });
+});
+
+app.post("/api/agent/sales-training", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ sourceUserId: z.string().min(1).max(100), periodDays: z.coerce.number().int().min(7).max(365).optional().default(90) }).parse(req.body || {});
+  const run = await createSalesTrainingRun(getStore(), req.user!, body.sourceUserId, body.periodDays);
+  void activeSalesTrainingRunner?.synchronize();
+  res.status(201).json({ run });
+}));
+
+app.post("/api/agent/sales-training/:id/:action", requireAuth, asyncRoute(async (req, res, next) => {
+  const parsed = z.enum(["pause", "resume", "cancel", "retrain", "publish"]).safeParse(req.params.action);
+  if (!parsed.success) return next();
+  try {
+    if (parsed.data === "retrain") {
+      const run = await retrainSalesTrainingRun(getStore(), req.user!, req.params.id);
+      void activeSalesTrainingRunner?.synchronize();
+      res.status(201).json({ run });
+      return;
+    }
+    if (parsed.data === "publish") {
+      const result = await publishSalesTrainingRun(getStore(), req.user!, req.params.id);
+      res.json(result);
+      return;
+    }
+    const run = await controlSalesTrainingRun(getStore(), req.user!, req.params.id, parsed.data);
+    if (parsed.data === "resume") void activeSalesTrainingRunner?.synchronize();
+    res.json({ run });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "销售训练操作失败";
+    res.status(/无权|主管|管理员/u.test(message) ? 403 : 400).json({ message });
+  }
+}));
+
+app.patch("/api/agent/sales-training/:id/samples/:sampleId", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ label: z.enum(["positive", "negative", "neutral"]).optional(), included: z.boolean().optional(), managerNote: z.string().max(500).optional() }).parse(req.body || {});
+  const run = await updateSalesTrainingSample(getStore(), req.user!, req.params.id, req.params.sampleId, body);
+  res.json({ run });
+}));
+
+app.get("/api/agent/sales-distillation", requireAuth, (req, res) => {
+  res.json({
+    distillations: listSalesDistillations(getStore(), req.user!),
+    activations: listSalesPlaybookActivations(getStore(), req.user!)
+  });
+});
+
+app.post("/api/agent/sales-distillation", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    sourceUserId: z.string().min(1).max(100),
+    periodDays: z.coerce.number().int().min(7).max(365).optional().default(90)
+  }).parse(req.body || {});
+  const distillation = await createSalesDistillation(getStore(), req.user!, body.sourceUserId, body.periodDays);
+  res.status(201).json({ distillation });
+}));
+
+app.post("/api/agent/sales-distillation/:id/publish", requireAuth, asyncRoute(async (req, res) => {
+  try {
+    const distillation = await publishSalesDistillation(getStore(), req.user!, req.params.id);
+    res.json({ distillation });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "发布蒸馏打法失败";
+    res.status(/无权|需要主管|不存在/u.test(message) ? 403 : 400).json({ message });
+  }
+}));
+
+app.post("/api/agent/sales-distillation/:id/activate", requireAuth, asyncRoute(async (req, res) => {
+  const activation = await activateSalesPlaybook(getStore(), req.user!, req.params.id);
+  res.json({ activation, activations: listSalesPlaybookActivations(getStore(), req.user!) });
+}));
+
+app.post("/api/agent/sales-distillation/activations/:id/pause", requireAuth, asyncRoute(async (req, res) => {
+  const activation = await pauseSalesPlaybook(getStore(), req.user!, req.params.id);
+  res.json({ activation, activations: listSalesPlaybookActivations(getStore(), req.user!) });
+}));
+
+const agentPlanRequestSchema = z.object({
+  goal: z.string().trim().min(2).max(2_000),
+  context: z.record(z.unknown()).optional().default({})
+});
+
+async function resolveAgentPlanRequest(
+  user: NonNullable<Request["user"]>,
+  body: z.infer<typeof agentPlanRequestSchema>,
+  onProgress?: AgentPlanningProgressHandler
+) {
+  const conversationId = typeof body.context.conversationId === "string" ? body.context.conversationId : "";
+  const conversationRuns = conversationId ? listAgentRuns(getStore(), user, 20, conversationId) : [];
+  const missionSnapshots = agentMissionContextSnapshots(conversationRuns);
+  const turnDecision = await resolveAgentTurnDecision(getStore(), user, body.goal, missionSnapshots);
+  const relatedMission = turnDecision.missionId
+    ? conversationRuns.find((item) => item.id === turnDecision.missionId)
+    : missionSnapshots[0]
+      ? conversationRuns.find((item) => item.id === missionSnapshots[0]!.id)
+      : undefined;
+  const missionRoute = resolveAgentMissionRoute(turnDecision, relatedMission);
+  const context = {
+    conversationId: typeof body.context.conversationId === "string" ? body.context.conversationId : undefined,
+    activeView: typeof body.context.activeView === "string" ? body.context.activeView : undefined,
+    selectedCustomerId: typeof body.context.selectedCustomerId === "string" ? body.context.selectedCustomerId : undefined,
+    selectedLeadId: typeof body.context.selectedLeadId === "string" ? body.context.selectedLeadId : undefined,
+    selectedCustomerIds: Array.isArray(body.context.selectedCustomerIds)
+      ? body.context.selectedCustomerIds.filter((item): item is string => typeof item === "string")
+      : undefined,
+    turnDecision,
+    missionSnapshots
+  };
+  if (turnDecision.relationToMission !== "independent" && relatedMission) {
+    onProgress?.({
+      phase: "understanding",
+      requestKind: turnDecision.speechAct === "query_data" ? "query" : "execute",
+      message: "正在理解这条新指令与当前任务的关系",
+      detail: `已识别为 ${turnDecision.relationToMission}，目标任务 ${relatedMission.id}`
+    });
+    onProgress?.({
+      phase: "intent",
+      requestKind: "execute",
+      message: turnDecision.relationToMission === "answer"
+        ? "已确认：这是对当前任务缺失信息的回答"
+        : turnDecision.relationToMission === "continue"
+          ? "已确认：继续当前任务"
+          : turnDecision.relationToMission === "cancel"
+            ? "已确认：停止当前任务"
+            : "已确认：这是对当前任务的修正",
+      detail: `${turnDecision.reason}（置信度 ${Math.round(turnDecision.missionRelationConfidence * 100)}%）`
+    });
+  }
+  if (relatedMission && missionRoute === "cancel") {
+    return await cancelAgentMission(getStore(), user, relatedMission.id);
+  }
+  if (relatedMission && missionRoute === "resume") {
+    return await resumeAgentMission(getStore(), user, relatedMission.id, body.goal, turnDecision);
+  }
+  if (relatedMission && missionRoute === "keep_running") {
+    return relatedMission;
+  }
+  if (relatedMission && missionRoute === "steer") {
+    return await steerAgentMission(getStore(), user, relatedMission.id, body.goal, turnDecision);
+  }
+  return await createAgentPlan(getStore(), user, body.goal, context, onProgress);
+}
+
+app.post("/api/agent/plan", requireAuth, asyncRoute(async (req, res) => {
+  const body = agentPlanRequestSchema.parse(req.body || {});
+  const run = await resolveAgentPlanRequest(req.user!, body);
+  void activeAgentBackgroundRunner?.synchronize();
+  res.status(201).json({ run, context: body.context });
+}));
+
+app.post("/api/agent/plan/stream", requireAuth, asyncRoute(async (req, res) => {
+  const body = agentPlanRequestSchema.parse(req.body || {});
+  res.status(200);
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  const send = (eventName: string, payload: unknown) => {
+    res.write(`event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`);
+    (res as Response & { flush?: () => void }).flush?.();
+  };
+  try {
+    const run = await resolveAgentPlanRequest(req.user!, body, (progress) => send("progress", progress));
+    void activeAgentBackgroundRunner?.synchronize();
+    send("complete", { run, context: body.context });
+  } catch (error) {
+    send("error", { message: error instanceof Error ? error.message : "Agent 任务理解失败" });
+  } finally {
+    res.end();
+  }
+}));
+
+app.get("/api/agent/runs", requireAuth, (req, res) => {
+  const limit = z.coerce.number().int().min(1).max(100).catch(20).parse(req.query.limit);
+  const conversationId = z.string().trim().max(100).catch("").parse(req.query.conversationId);
+  res.json({ runs: listAgentRuns(getStore(), req.user!, limit, conversationId) });
+});
+
+app.get("/api/agent/conversations", requireAuth, (req, res) => {
+  const limit = z.coerce.number().int().min(1).max(100).catch(30).parse(req.query.limit);
+  res.json({ conversations: listAgentConversations(getStore(), req.user!, limit) });
+});
+
+app.get("/api/agent/skills", requireAuth, (req, res) => {
+  const query = z.string().trim().max(500).catch("").parse(req.query.query);
+  const activeView = z.string().trim().max(80).catch("").parse(req.query.activeView);
+  const all = listAgentSkills({ includeInactive: true });
+  const matched = query
+    ? new Set(selectAgentSkills(query, { activeView, limit: 4 }).map((skill) => skill.id))
+    : new Set<string>();
+  res.json({
+    directory: process.env.AGENT_SKILLS_DIR || "agent-skills",
+    skills: all.map((skill) => ({
+      ...publicAgentSkill(skill),
+      matched: matched.has(skill.id)
+    }))
+  });
+});
+
+app.get("/api/agent/skills/:id", requireAuth, (req, res) => {
+  const id = z.string().regex(/^[a-z0-9][a-z0-9-]{1,79}$/u).parse(req.params.id);
+  const skill = getAgentSkill(id);
+  if (!skill) {
+    res.status(404).json({ message: "Skill 不存在" });
+    return;
+  }
+  res.json({ skill: publicAgentSkill(skill, true) });
+});
+
+app.post("/api/agent/tuning/inspect", requireAuth, (req, res) => {
+  const body = z.object({
+    goal: z.string().trim().min(2).max(2_000),
+    context: z.object({
+      activeView: z.string().trim().max(80).optional(),
+      selectedCustomerId: z.string().trim().max(120).optional(),
+      selectedDealId: z.string().trim().max(120).optional(),
+      selectedLeadId: z.string().trim().max(120).optional()
+    }).strict().optional().default({})
+  }).parse(req.body || {});
+  const goalSpec = compileAgentGoalSpec(body.goal, body.context);
+  const skillMatches = rankAgentSkills(body.goal, {
+    activeView: body.context.activeView,
+    goalSpec,
+    limit: 4
+  });
+  const knowledgeHits = retrieveAgentKnowledge(getStore(), req.user!, body.goal, {
+    activeView: body.context.activeView,
+    limit: 6,
+    trackUsage: false
+  });
+  const toolRefs = [...new Set(skillMatches.flatMap((item) => item.skill.toolRefs))];
+  res.json({
+    goalSpec,
+    skills: skillMatches.map((item) => ({
+      id: item.skill.id,
+      name: item.skill.name,
+      version: item.skill.version,
+      score: Math.round(item.score),
+      reasons: item.reasons,
+      toolRefs: item.skill.toolRefs
+    })),
+    knowledge: knowledgeHits.map((item) => ({
+      id: item.document.id,
+      title: item.document.title,
+      module: item.document.module,
+      version: item.document.version,
+      score: Number(item.score.toFixed(2)),
+      reasons: item.reasons
+    })),
+    toolRefs,
+    authorization: goalSpec.authorization
+  });
+});
+
+app.get("/api/agent/memories", requireAuth, (req, res) => {
+  const query = z.object({
+    status: z.enum(["proposed", "active", "archived", "all"]).catch("all"),
+    type: z.enum(["user_preference", "company_knowledge", "customer_memory", "team_playbook", "all"]).catch("all"),
+    subjectId: z.string().trim().max(120).catch(""),
+    query: z.string().trim().max(200).catch("")
+  }).parse(req.query);
+  res.json({ memories: listAgentMemories(getStore(), req.user!, query) });
+});
+
+app.post("/api/agent/memories", requireAuth, asyncRoute(async (req, res) => {
+  const memory = await proposeAgentMemory(getStore(), req.user!, req.body || {});
+  res.status(201).json({ memory });
+}));
+
+app.patch("/api/agent/memories/:id", requireAuth, asyncRoute(async (req, res) => {
+  const memory = await updateAgentMemory(getStore(), req.user!, req.params.id, req.body || {});
+  res.json({ memory });
+}));
+
+app.post("/api/agent/memories/:id/activate", requireAuth, asyncRoute(async (req, res) => {
+  const memory = await setAgentMemoryStatus(getStore(), req.user!, req.params.id, "active");
+  res.json({ memory });
+}));
+
+app.post("/api/agent/memories/:id/archive", requireAuth, asyncRoute(async (req, res) => {
+  const memory = await setAgentMemoryStatus(getStore(), req.user!, req.params.id, "archived");
+  res.json({ memory });
+}));
+
+app.delete("/api/agent/memories/:id", requireAuth, asyncRoute(async (req, res) => {
+  const memory = await deleteAgentMemory(getStore(), req.user!, req.params.id);
+  res.json({ deleted: memory.id });
+}));
+
+app.get("/api/agent/knowledge/overview", requireAuth, (req, res) => {
+  res.json(agentKnowledgeOverview(getStore(), req.user!));
+});
+
+app.get("/api/agent/knowledge/documents", requireAuth, (req, res) => {
+  const query = z.object({
+    status: z.enum(["draft", "review", "published", "archived", "all"]).catch("all"),
+    kind: z.enum(["system", "module", "workflow", "policy", "field", "playbook", "failure_case", "all"]).catch("all"),
+    module: z.string().trim().max(80).catch(""),
+    query: z.string().trim().max(200).catch("")
+  }).parse(req.query);
+  const actor = req.user!;
+  const documents = listAgentKnowledgeDocuments(getStore(), actor, query).map((document) => ({
+    ...document,
+    canEdit: document.sourceType !== "system_file"
+      && (actor.role === "super_admin" || (document.teamId === actor.teamId && (document.ownerId === actor.id || ["manager", "admin"].includes(actor.role))))
+  }));
+  res.json({ documents });
+});
+
+app.get("/api/agent/knowledge/search", requireAuth, (req, res) => {
+  const query = z.object({
+    query: z.string().trim().min(1).max(500),
+    activeView: z.string().trim().max(80).catch(""),
+    limit: z.coerce.number().int().min(1).max(12).catch(8)
+  }).parse(req.query);
+  const hits = retrieveAgentKnowledge(getStore(), req.user!, query.query, {
+    activeView: query.activeView,
+    limit: query.limit,
+    trackUsage: false
+  });
+  res.json({ hits: hits.map((hit) => ({ document: hit.document, score: hit.score, reasons: hit.reasons })) });
+});
+
+app.post("/api/agent/knowledge/documents", requireAuth, asyncRoute(async (req, res) => {
+  const document = await createAgentKnowledgeDraft(getStore(), req.user!, req.body || {});
+  res.status(201).json({ document });
+}));
+
+app.patch("/api/agent/knowledge/documents/:id", requireAuth, asyncRoute(async (req, res) => {
+  const document = await updateAgentKnowledgeDraft(getStore(), req.user!, req.params.id, req.body || {});
+  res.json({ document });
+}));
+
+app.post("/api/agent/knowledge/documents/:id/:action", requireAuth, asyncRoute(async (req, res) => {
+  const action = z.enum(["submit", "publish", "archive"]).parse(req.params.action);
+  const document = await setAgentKnowledgeStatus(getStore(), req.user!, req.params.id, action);
+  res.json({ document });
+}));
+
+app.get("/api/agent/triggers", requireAuth, (req, res) => {
+  const limit = z.coerce.number().int().min(1).max(200).catch(50).parse(req.query.limit);
+  res.json({ rules: listAgentTriggerRules(getStore(), req.user!), events: listAgentTriggerEvents(getStore(), req.user!, limit) });
+});
+
+app.post("/api/agent/triggers", requireAuth, asyncRoute(async (req, res) => {
+  const rule = await createAgentTriggerRule(getStore(), req.user!, req.body || {});
+  void activeAgentTriggerRunner?.synchronize();
+  res.status(201).json({ rule });
+}));
+
+app.patch("/api/agent/triggers/:id", requireAuth, asyncRoute(async (req, res) => {
+  const rule = await updateAgentTriggerRule(getStore(), req.user!, req.params.id, req.body || {});
+  res.json({ rule });
+}));
+
+app.post("/api/agent/triggers/:id/:action", requireAuth, asyncRoute(async (req, res) => {
+  const action = z.enum(["pause", "resume", "run"]).parse(req.params.action);
+  const store = getStore();
+  const rule = listAgentTriggerRules(store, req.user!).find((item) => item.id === req.params.id);
+  if (!rule) throw new Error("自动触发规则不存在或无权访问");
+  if (action === "run") {
+    const result = await runAgentTriggerRule(store, req.user!, rule, (actor, goal, context) => createAgentPlan(store, actor, goal, context));
+    void activeAgentBackgroundRunner?.synchronize();
+    res.json({ result, rules: listAgentTriggerRules(store, req.user!), events: listAgentTriggerEvents(store, req.user!, 50) });
+    return;
+  }
+  const updated = await setAgentTriggerRuleStatus(store, req.user!, rule.id, action === "pause" ? "paused" : "active");
+  if (action === "resume") void activeAgentTriggerRunner?.synchronize();
+  res.json({ rule: updated });
+}));
+
+app.delete("/api/agent/triggers/:id", requireAuth, asyncRoute(async (req, res) => {
+  const rule = await deleteAgentTriggerRule(getStore(), req.user!, req.params.id);
+  res.json({ deleted: rule.id });
+}));
+
+app.get("/api/agent/governance", requireAuth, (req, res) => {
+  res.json(agentModelMetrics(getStore(), req.user!));
+});
+
+app.post("/api/agent/evaluations/run", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const evaluation = await runAgentEvaluationSuite(store, req.user!, (goal, context) => createAgentPlan(store, req.user!, goal, context));
+  res.json({ evaluation, metrics: agentModelMetrics(store, req.user!) });
+}));
+
+app.post("/api/agent/missions/:id/resume", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ message: z.string().trim().max(2_000).default("继续执行，保持原目标和完成标准") }).parse(req.body || {});
+  const run = await resumeAgentMission(getStore(), req.user!, req.params.id, body.message);
+  void activeAgentBackgroundRunner?.synchronize();
+  res.json({ run });
+}));
+
+app.post("/api/agent/missions/:id/steer", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ message: z.string().trim().min(2).max(2_000) }).parse(req.body || {});
+  const run = await steerAgentMission(getStore(), req.user!, req.params.id, body.message);
+  void activeAgentBackgroundRunner?.synchronize();
+  res.json({ run });
+}));
+
+app.get("/api/agent/missions/:id/checkpoints", requireAuth, (req, res) => {
+  const limit = z.coerce.number().int().min(1).max(80).catch(30).parse(req.query.limit);
+  res.json({ checkpoints: listAgentMissionCheckpoints(getStore(), req.user!, req.params.id, limit) });
+});
+
+app.post("/api/agent/missions/:id/checkpoints/:checkpointId/restore", requireAuth, asyncRoute(async (req, res) => {
+  const run = await restoreAgentMissionCheckpoint(getStore(), req.user!, req.params.id, req.params.checkpointId);
+  void activeAgentBackgroundRunner?.synchronize();
+  res.json({ run, checkpoints: listAgentMissionCheckpoints(getStore(), req.user!, req.params.id, 30) });
+}));
+
+app.post("/api/agent/missions/:id/pause", requireAuth, asyncRoute(async (req, res) => {
+  const run = await pauseAgentMission(getStore(), req.user!, req.params.id);
+  res.json({ run });
+}));
+
+app.post("/api/agent/missions/:id/cancel", requireAuth, asyncRoute(async (req, res) => {
+  const run = await cancelAgentMission(getStore(), req.user!, req.params.id);
+  res.json({ run });
+}));
+
+app.get("/api/agent/runs/:id", requireAuth, (req, res) => {
+  try {
+    res.json({ run: getAgentRun(getStore(), req.params.id, req.user!) });
+  } catch (error) {
+    res.status(404).json({ message: error instanceof Error ? error.message : "Agent 运行不存在" });
+  }
+});
+
+app.post("/api/agent/execute", requireAuth, async (req, res, next) => {
+  try {
+    const body = z.object({
+      runId: z.string().min(1).max(100),
+      stepId: z.string().min(1).max(100),
+      signature: z.string().min(1).max(200),
+      approved: z.boolean().default(false)
+    }).parse(req.body || {});
+    const run = await executeAgentStep(
+      getStore(),
+      req.user!,
+      body.runId,
+      body.stepId,
+      body.signature,
+      body.approved,
+      agentExecutionRuntime
+    );
+    void activeAgentBackgroundRunner?.synchronize();
+    res.json({ run });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Agent 动作执行失败";
+    if (/Agent (运行不存在|运行已过期|步骤不存在|步骤签名无效|步骤已被新指令替代)|需要确认|Mission 已停止/u.test(message)) {
+      res.status(400).json({ message });
+      return;
+    }
+    next(error);
+  }
+});
+
 app.get("/api/tools/ai-config", requireAuth, (req, res) => {
   const configs = getAiConfigs(req.user!);
   const config = getAiConfig(req.user!);
@@ -8016,6 +9893,9 @@ function providerStatusFor(user: SessionUser, provider: LeadProvider) {
 
 // AI 搜索作为一种数据源：不需要独立 API Key，直接复用「AI 模型配置」里已启用且勾选自动获客的模型
 function aiSearchStatus(user: SessionUser) {
+  const configured = getAiConfigs(user).find((item) =>
+    item.enabled && Boolean(item.apiKey)
+  );
   const config = getAiConfig(user, "leadFinder");
   const ready = Boolean(config?.enabled && config?.apiKey && config?.useLeadFinder);
   const catalog = providerCatalogByCode("ai_search");
@@ -8038,70 +9918,18 @@ function aiSearchStatus(user: SessionUser) {
     costNote: typeof licensePolicy.costNote === "string"
       ? licensePolicy.costNote
       : "调用你配置的 AI 模型直接生成候选公司，结果需人工核实。",
-    hasApiKey: ready,
+    hasApiKey: Boolean(configured),
     ready,
     enabled,
     lastTestStatus: ready ? "passed" : "untested",
-    lastTestMessage: ready ? `当前模型：${config?.model || "已配置"}` : "请先在「AI 模型配置」启用模型并勾选“自动获客”",
+    lastTestMessage: ready
+      ? `当前模型：${config?.model || "已配置"}`
+      : configured
+        ? `模型已配置：${configured.model || configured.name}，请启用“自动获客”用途`
+        : "请先在「AI 模型配置」保存并启用模型",
     lastTestAt: config?.lastTestAt || "",
     usage: ""
   };
-}
-
-function createAiSearchProvider(config: AiModelConfig) {
-  const base = new URL(config.baseUrl);
-  const basePath = base.pathname.endsWith("/") ? base.pathname : `${base.pathname}/`;
-  return defineProvider({
-    id: "ai_search",
-    name: "AI 搜索",
-    tier: "ai",
-    category: "ai",
-    requiresKey: false,
-    capabilities: ["ai", "company"],
-    docsUrl: "",
-    keyHint: "",
-    defaultBaseUrl: config.baseUrl,
-    costNote: "调用当前账号已配置的 AI 模型，候选结果必须人工核实。",
-    networkPolicy: {
-      allowedHosts: [base.hostname.toLocaleLowerCase()],
-      allowedPathPrefixes: [basePath],
-      allowedMethods: ["POST"],
-      timeoutMs: AI_MODEL_TIMEOUT_MS,
-      maxResponseBytes: 2 * 1024 * 1024
-    },
-    async search({ query }, credential, tools) {
-      const legacyQuery: LeadQuery = {
-        goal: query.goal,
-        productKeywords: query.productKeywords.join(", "),
-        countries: query.countries.join(", "),
-        industry: query.industries.join(", "),
-        customerType: query.customerTypes.join(", "),
-        excludeKeywords: query.excludeKeywords.join(", "),
-        limit: query.limit
-      };
-      const records = await aiGenerateLeads(
-        legacyQuery,
-        { ...config, apiKey: credential.apiKey },
-        (url, init) => tools.http.fetch(url, init)
-      );
-      return {
-        records,
-        rawCount: records.length,
-        invalidCount: 0,
-        nextCursor: null,
-        exhausted: true,
-        warnings: ["AI 生成候选仅属于辅助建议，进入跟进前必须核实企业身份与官网。"],
-        usage: {
-          requestCount: 1,
-          estimated: false,
-          display: ""
-        }
-      };
-    },
-    async health() {
-      return { ok: true, message: "AI 搜索复用当前账号已验证的模型配置" };
-    }
-  });
 }
 
 function allProviderStatuses(user: SessionUser) {
@@ -8875,6 +10703,74 @@ app.get("/api/prospect-runs", requireAuth, asyncRoute(async (req, res) => {
   }
 }));
 
+app.post("/api/prospect-super-search/preview", requireAuth, asyncRoute(async (req, res) => {
+  const body = prospectSuperSearchPreviewSchema.parse(req.body);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ preview: prospectSuperSearchPreview(body) });
+}));
+
+app.post("/api/prospect-super-search", requireAuth, asyncRoute(async (req, res) => {
+  const body = createProspectSuperSearchSchema.parse(req.body);
+  try {
+    const result = await createProspectSuperSearch({
+      store: getStore(),
+      user: req.user!,
+      body,
+      onRunCreated: synchronizeProspectQueue
+    });
+    res.setHeader("ETag", prospectSuperSearchEtag(result.mission));
+    res.location(`/api/prospect-super-search/${result.mission.id}`);
+    res.status(201).json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-super-search", requireAuth, asyncRoute(async (req, res) => {
+  const limit = z.coerce.number().int().min(1).max(100).default(30).parse(req.query.limit);
+  const store = getStore();
+  await store.readBarrier();
+  res.setHeader("Cache-Control", "no-store");
+  res.json(listProspectSuperSearches(store, req.user!, limit));
+}));
+
+app.get("/api/prospect-super-search/:id", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    const result = superSearchDetail(store, req.user!, String(req.params.id));
+    res.setHeader("ETag", prospectSuperSearchEtag(result.mission));
+    res.setHeader("Cache-Control", "no-store");
+    res.json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+for (const action of ["pause", "resume", "cancel"] as const) {
+  app.post(`/api/prospect-super-search/:id/${action}`, requireAuth, asyncRoute(async (req, res) => {
+    const body = prospectSuperSearchActionSchema.parse(req.body);
+    try {
+      const result = await transitionProspectSuperSearch({
+        store: getStore(),
+        user: req.user!,
+        missionId: String(req.params.id),
+        ifMatch: req.header("If-Match"),
+        action,
+        reason: body.reason,
+        onRunChanged: synchronizeProspectQueue
+      });
+      res.setHeader("ETag", prospectSuperSearchEtag(result.mission));
+      res.json(result);
+    } catch (error) {
+      if (sendProspectCampaignError(res, error)) return;
+      throw error;
+    }
+  }));
+}
+
 app.get("/api/prospect-runs/:id", requireAuth, asyncRoute(async (req, res) => {
   const runId = prospectRunIdSchema.parse(req.params.id);
   const store = getStore();
@@ -8883,6 +10779,202 @@ app.get("/api/prospect-runs/:id", requireAuth, asyncRoute(async (req, res) => {
     const result = getProspectRun(store, req.user!, runId);
     setProspectRunEtag(res, result);
     res.json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+const prospectPendingSelectionSchema = z.object({
+  hitIds: z.array(
+    z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9._:-]+$/)
+  ).min(1).max(200)
+}).strict();
+
+app.get("/api/prospect-runs/:id/pending-candidates", requireAuth, asyncRoute(async (req, res) => {
+  const runId = prospectRunIdSchema.parse(req.params.id);
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    const detail = getProspectRun(store, req.user!, runId);
+    if (!activeProspectWorkerService) {
+      res.status(503).json({
+        errorCode: "PROSPECT_WORKER_UNAVAILABLE",
+        message: "候选处理服务未启动，暂时无法读取待清洗结果"
+      });
+      return;
+    }
+    const candidates = activeProspectWorkerService.pendingCandidates({
+      teamId: req.user!.teamId,
+      ownerId: detail.run.ownerId,
+      runId
+    });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ candidates: candidates || [] });
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-runs/:id/import-pending", requireAuth, asyncRoute(async (req, res) => {
+  const runId = prospectRunIdSchema.parse(req.params.id);
+  const body = prospectPendingSelectionSchema.parse(req.body);
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    const detail = getProspectRun(store, req.user!, runId);
+    if (!["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled"].includes(detail.run.status)) {
+      throw new ProspectRunRequestError(
+        409,
+        "RUN_STILL_ACTIVE",
+        "任务仍在执行，结束后才能手动导入未处理结果"
+      );
+    }
+    if (!detail.diagnostics.cleaningReport.summary.pendingCount) {
+      res.setHeader("Cache-Control", "no-store");
+      res.json({
+        result: { attempted: 0, processed: 0, created: 0, updated: 0, suppressed: 0, skipped: 0, failures: [] },
+        detail
+      });
+      return;
+    }
+    if (!activeProspectWorkerService) {
+      res.status(503).json({
+        errorCode: "PROSPECT_WORKER_UNAVAILABLE",
+        message: "候选处理服务未启动，暂时无法手动导入"
+      });
+      return;
+    }
+    const selected = activeProspectWorkerService.pendingCandidates({
+      teamId: req.user!.teamId,
+      ownerId: detail.run.ownerId,
+      runId,
+      hitIds: body.hitIds
+    }) || [];
+    if (new Set(selected.map((item) => item.hitId)).size !== new Set(body.hitIds).size) {
+      throw new ProspectRunRequestError(
+        409,
+        "PENDING_SELECTION_CHANGED",
+        "部分待清洗记录已处理或不属于当前任务，请刷新后重新选择"
+      );
+    }
+    const result = await activeProspectWorkerService.processPendingCandidates({
+      teamId: req.user!.teamId,
+      ownerId: detail.run.ownerId,
+      runId,
+      hitIds: body.hitIds
+    });
+    if (!result) {
+      res.status(503).json({
+        errorCode: "CANDIDATE_PIPELINE_UNAVAILABLE",
+        message: "候选处理管线暂时不可用，请稍后重试"
+      });
+      return;
+    }
+    await store.readBarrier();
+    const updated = getProspectRun(store, req.user!, runId);
+    setProspectRunEtag(res, updated);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ result, detail: updated });
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-super-search/:id/pending-candidates", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    const detail = superSearchDetail(store, req.user!, String(req.params.id));
+    if (!activeProspectWorkerService) {
+      res.status(503).json({
+        errorCode: "PROSPECT_WORKER_UNAVAILABLE",
+        message: "候选处理服务未启动，暂时无法读取待清洗结果"
+      });
+      return;
+    }
+    const candidates = detail.rounds
+      .flatMap((round) => activeProspectWorkerService!.pendingCandidates({
+        teamId: req.user!.teamId,
+        ownerId: detail.mission.ownerId,
+        runId: round.runId
+      }) || [])
+      .sort((left, right) => left.fetchedAt.localeCompare(right.fetchedAt))
+      .slice(0, 200);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ candidates });
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-super-search/:id/import-pending", requireAuth, asyncRoute(async (req, res) => {
+  const body = prospectPendingSelectionSchema.parse(req.body);
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    const detail = superSearchDetail(store, req.user!, String(req.params.id));
+    if (["queued", "running", "paused"].includes(detail.mission.status)) {
+      throw new ProspectRunRequestError(
+        409,
+        "RUN_STILL_ACTIVE",
+        "超级搜索仍在执行，结束后才能手动导入待清洗结果"
+      );
+    }
+    if (!activeProspectWorkerService) {
+      res.status(503).json({
+        errorCode: "PROSPECT_WORKER_UNAVAILABLE",
+        message: "候选处理服务未启动，暂时无法手动导入"
+      });
+      return;
+    }
+    const runIds = new Set(detail.rounds.map((item) => item.runId));
+    const selected = activeProspectWorkerService.pendingCandidates({
+      teamId: req.user!.teamId,
+      ownerId: detail.mission.ownerId,
+      hitIds: body.hitIds
+    })?.filter((item) => runIds.has(item.runId)) || [];
+    if (new Set(selected.map((item) => item.hitId)).size !== new Set(body.hitIds).size) {
+      throw new ProspectRunRequestError(
+        409,
+        "PENDING_SELECTION_CHANGED",
+        "部分待清洗记录已处理或不属于当前超级搜索，请刷新后重新选择"
+      );
+    }
+    const totals = {
+      attempted: 0,
+      processed: 0,
+      created: 0,
+      updated: 0,
+      suppressed: 0,
+      skipped: 0,
+      failures: [] as Array<{ hitId: string; runId: string; ledgerId: string; code: string }>
+    };
+    for (const runId of [...new Set(selected.map((item) => item.runId))]) {
+      const hitIds = selected.filter((item) => item.runId === runId).map((item) => item.hitId);
+      const result = await activeProspectWorkerService.processPendingCandidates({
+        teamId: req.user!.teamId,
+        ownerId: detail.mission.ownerId,
+        runId,
+        hitIds
+      });
+      if (!result) continue;
+      totals.attempted += result.attempted;
+      totals.processed += result.processed;
+      totals.created += result.created;
+      totals.updated += result.updated;
+      totals.suppressed += result.suppressed;
+      totals.skipped += result.skipped;
+      totals.failures.push(...result.failures);
+    }
+    refreshProspectSuperSearchMissionResults(store, detail.mission.id);
+    await store.persist();
+    await store.readBarrier();
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ result: totals, detail: superSearchDetail(store, req.user!, String(req.params.id)) });
   } catch (error) {
     if (sendProspectCampaignError(res, error)) return;
     throw error;
@@ -9716,7 +11808,8 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
       description: z.string().default(""),
       source: z.string().max(40).optional().default(""),
       sourceLabel: z.string().max(80).optional().default("")
-    })).min(1).max(100)
+    })).min(1).max(100),
+    allowPending: z.boolean().optional().default(false)
   });
   const body = schema.parse(req.body);
   const store = getStore();
@@ -9738,7 +11831,11 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
       res.status(403).json({ message: "候选归属其他业务员，请先分配后再加入线索" });
       return;
     }
-    if (!["contactable", "contacted", "synced"].includes(stored.status)) {
+    if (stored.status === "excluded") {
+      res.status(400).json({ message: "已排除候选不能加入线索，请先恢复" });
+      return;
+    }
+    if (stored.status === "preview" && !body.allowPending) {
       res.status(400).json({ message: "请先核验并标记为可联系，再加入线索" });
       return;
     }
@@ -10367,7 +12464,6 @@ function localMinuteText(date: Date) {
 }
 
 type AiUseCase = "leadFinder" | "websiteParse" | "scoring" | "emailDraft" | "exam";
-const AI_MODEL_TIMEOUT_MS = 120000;
 
 function getAiConfigs(user: SessionUser) {
   return getStore().aiModelConfigs
@@ -10430,9 +12526,10 @@ async function testAiConfig(config: AiModelConfig) {
       message: ok ? `${providerLabel(config.provider)} 连接测试通过` : "模型已响应，但返回内容不符合测试格式"
     };
   } catch (error) {
+    const failure = providerErrorFromUnknown(error, "search");
     return {
       ok: false,
-      message: error instanceof Error ? `AI 连接失败：${error.message}` : "AI 连接失败，请检查 Base URL / Key / Model"
+      message: `AI 连接失败：${failure.publicMessage}`
     };
   }
 }
@@ -10488,178 +12585,6 @@ function parseWebsiteOpportunity(
     sourceLabel: "官网链接登记",
     sourceEvidence: []
   }, createdAt);
-}
-
-async function aiGenerateLeads(
-  query: LeadQuery,
-  config: AiModelConfig,
-  fetcher?: (url: string, init?: RequestInit) => Promise<globalThis.Response>
-): Promise<RawLead[]> {
-  const n = Math.min(query.limit, 12);
-  const prompt = [
-    "你是资深外贸获客研究助手。根据下面的客户画像，列出真实、可能存在的目标公司（分销商/系统集成商/OEM/EPC/MRO/终端工厂/贸易商等）。",
-    "严格只返回 JSON，不要解释、不要 Markdown。",
-    "JSON 结构：{\"companies\":[{\"company\":\"\",\"website\":\"\",\"country\":\"\",\"business\":\"\",\"description\":\"\"}]}",
-    "要求：",
-    "1. 只给你有把握真实存在的公司；website 用你所知的官网域名，不确定就留空字符串，绝不编造域名。",
-    "2. 绝不编造邮箱、电话或联系人。",
-    "3. business 聚焦公司产品/业务方向；description 用一句话说明为何匹配画像。",
-    `目标公司数量：${n}`,
-    `产品/关键词：${query.productKeywords || "未指定"}`,
-    `国家/地区：${query.countries || "未指定"}`,
-    `行业/场景：${query.industry || "未指定"}`,
-    `客户类型：${query.customerType || "未指定"}`,
-    `获客目标：${query.goal || "未指定"}`,
-    `排除：${query.excludeKeywords || "无"}`
-  ].join("\n");
-  const content = await callAiModel(config, prompt, 4000, fetcher);
-  const parsed = extractJsonObject(content) as { companies?: unknown };
-  const companies = Array.isArray(parsed.companies) ? parsed.companies : [];
-  return companies
-    .slice(0, n)
-    .map((raw): RawLead => {
-      const item = (raw || {}) as Record<string, unknown>;
-      const firstCountry = query.countries.split(/,|，/)[0]?.trim() || "未知";
-      const detail = String(item.description || "").trim();
-      const officialWebsite = String(item.website || "").trim();
-      return {
-        company: String(item.company || "").trim(),
-        officialWebsite,
-        website: officialWebsite,
-        country: String(item.country || firstCountry).trim(),
-        business: String(item.business || query.productKeywords || "待核实业务").trim(),
-        contact: "待维护",
-        contactInfo: "",
-        description: `${detail}${detail ? "（AI 生成，待核实）" : "AI 生成候选，待核实。"}`,
-        confidence: 58,
-        sourceUrl: "",
-        recordType: "assisted_suggestion",
-        evidenceSummary: `${detail || "AI 生成候选"}；尚未完成外部事实核验。`,
-        matchedFields: ["company", ...(officialWebsite ? ["officialWebsite"] : []), "country", "business"]
-      };
-    })
-    .filter((lead) => lead.company);
-}
-
-async function callAiModel(
-  config: AiModelConfig,
-  prompt: string,
-  maxInputChars = 12000,
-  fetcher?: (url: string, init?: RequestInit) => Promise<globalThis.Response>
-) {
-  const protocol = config.protocol || "openai-compatible";
-  const endpointBase = config.baseUrl.replace(/\/+$/, "");
-  const secureClient = fetcher ? null : createAiHttpClient(endpointBase);
-  const request: (url: string, init?: RequestInit) => Promise<globalThis.Response> = fetcher
-    || ((url, init) => secureClient!.fetch(url, init));
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), AI_MODEL_TIMEOUT_MS);
-  try {
-    if (protocol === "anthropic") {
-      const endpoint = `${endpointBase}/messages`;
-      const response = await request(endpoint, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "x-api-key": config.apiKey,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          model: config.model,
-          max_tokens: 800,
-          temperature: config.temperature ?? 0.1,
-          system: "你擅长整理授权 API、搜索服务和用户提供的结构化资料。不得声称访问过企业网页，输出必须可被 JSON.parse 解析。",
-          messages: [{ role: "user", content: prompt.slice(0, maxInputChars) }]
-        })
-      });
-      const data = await readAiJson<{ content?: Array<{ type?: string; text?: string }> }>(response);
-      const content = data.content?.map((item) => item.text || "").join("\n").trim() || "";
-      if (!content) throw new Error("模型返回为空");
-      return content;
-    }
-    if (protocol === "gemini") {
-      const endpoint = `${endpointBase}/models/${encodeURIComponent(config.model)}:generateContent`;
-      const response = await request(endpoint, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "content-type": "application/json",
-          "x-goog-api-key": config.apiKey
-        },
-        body: JSON.stringify({
-          generationConfig: { temperature: config.temperature ?? 0.1 },
-          contents: [{
-            role: "user",
-            parts: [{ text: `你擅长整理授权 API、搜索服务和用户提供的结构化资料。不得声称访问过企业网页，输出必须可被 JSON.parse 解析。\n${prompt.slice(0, maxInputChars)}` }]
-          }]
-        })
-      });
-      const data = await readAiJson<{ candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }>(response);
-      const content = data.candidates?.[0]?.content?.parts?.map((item) => item.text || "").join("\n").trim() || "";
-      if (!content) throw new Error("模型返回为空");
-      return content;
-    }
-    const endpoint = `${endpointBase}/chat/completions`;
-    const response = await request(endpoint, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        authorization: `Bearer ${config.apiKey}`,
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        model: config.model,
-        temperature: config.temperature ?? 0.1,
-        messages: [
-          { role: "system", content: "你擅长整理授权 API、搜索服务和用户提供的结构化资料。不得声称访问过企业网页，输出必须可被 JSON.parse 解析。" },
-          { role: "user", content: prompt.slice(0, maxInputChars) }
-        ],
-        response_format: { type: "json_object" }
-      })
-    });
-    const data = await readAiJson<{ choices?: Array<{ message?: { content?: string } }> }>(response);
-    const content = data.choices?.[0]?.message?.content || "";
-    if (!content.trim()) throw new Error("模型返回为空");
-    return content;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function aiHttpErrorMessage(status: number) {
-  if ([401, 403].includes(status)) return "模型认证失败，请检查 API Key 和账号权限";
-  if (status === 404) return "模型接口或模型名称不存在，请检查 Base URL 和 Model";
-  if (status === 429) return "模型请求过于频繁或额度不足，请稍后重试并检查配额";
-  if (status >= 500) return "模型服务暂时不可用，请稍后重试";
-  if (status >= 400) return "模型请求参数不被接受，请检查协议、模型名称和配置";
-  return `模型接口返回 HTTP ${status}`;
-}
-
-async function readAiJson<T>(response: globalThis.Response): Promise<T> {
-  const contentType = response.headers.get("content-type") || "";
-  const text = await response.text();
-  let data: any = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    if (contentType.includes("text/html") || text.trim().startsWith("<")) {
-      throw new Error("接口返回 HTML 页面而不是 JSON，请检查 Base URL 是否填写为 API 地址");
-    }
-    throw new Error("接口返回内容不是有效 JSON");
-  }
-  if (!response.ok) {
-    throw new Error(aiHttpErrorMessage(response.status));
-  }
-  return data as T;
-}
-
-function extractJsonObject(content: string) {
-  const source = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
-  const start = source.indexOf("{");
-  const end = source.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("AI JSON missing");
-  return JSON.parse(source.slice(start, end + 1)) as Record<string, unknown>;
 }
 
 const reportStageWeights: Record<string, number> = {
@@ -10911,6 +12836,10 @@ app.patch("/api/reports/executive/note", requireAuth, asyncRoute(async (req, res
 registerSwagger(app);
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  if (error instanceof MysqlDataImportError) {
+    res.status(error.status).json({ message: error.message });
+    return;
+  }
   if (error instanceof z.ZodError) {
     res.status(400).json({ message: "参数格式错误", issues: error.issues });
     return;
@@ -10959,6 +12888,20 @@ async function startServer() {
     }
   }
   const store = getStore();
+  const agentBackgroundRunner = new AgentBackgroundRunner(
+    store,
+    agentExecutionRuntime,
+    Number(process.env.AGENT_RUNNER_POLL_MS || 1_000)
+  );
+  try {
+    await agentBackgroundRunner.start();
+    activeAgentBackgroundRunner = agentBackgroundRunner;
+  } catch (error) {
+    console.error(`GoodJob CRM Agent runner startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    await store.close?.();
+    process.exit(1);
+    return;
+  }
   const prospectQueueRequired =
     process.env.PROSPECT_QUEUE_REQUIRED === "true";
   const prospectWorkerService =
@@ -10970,6 +12913,8 @@ async function startServer() {
       "GoodJob CRM prospect queue startup failed: "
       + "启用强制队列时不能关闭 PROSPECT_WORKER_ENABLED"
     );
+    activeAgentBackgroundRunner = null;
+    await agentBackgroundRunner.stop();
     await store.close?.();
     process.exit(1);
     return;
@@ -10979,6 +12924,8 @@ async function startServer() {
     activeProspectWorkerService = prospectWorkerService;
   } catch (error) {
     console.error(`GoodJob CRM prospect worker startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    activeAgentBackgroundRunner = null;
+    await agentBackgroundRunner.stop();
     await store.close?.();
     process.exit(1);
     return;
@@ -10995,8 +12942,124 @@ async function startServer() {
   } catch (error) {
     activeProspectWorkerService = null;
     await prospectWorkerService?.stop();
+    activeAgentBackgroundRunner = null;
+    await agentBackgroundRunner.stop();
     await store.close?.();
     console.error(`GoodJob CRM prospect scheduler startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+    return;
+  }
+  const superSearchRunner = new ProspectSuperSearchRunner(store, {
+    pollMs: Number(process.env.PROSPECT_SUPER_SEARCH_POLL_MS || 5_000),
+    onRunCreated: () => prospectWorkerService?.synchronize()
+  });
+  try {
+    await superSearchRunner.start();
+  } catch (error) {
+    await prospectScheduler?.stop();
+    activeProspectWorkerService = null;
+    await prospectWorkerService?.stop();
+    activeAgentBackgroundRunner = null;
+    await agentBackgroundRunner.stop();
+    await store.close?.();
+    console.error(`GoodJob CRM super search runner startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+    return;
+  }
+  const outreachSequenceRunner = new OutreachSequenceRunner(store, {
+    async send(sequence, step: OutreachSequenceStepSnapshot, executionId) {
+      const owner = store.users.find((item) => item.id === sequence.ownerId && item.status === "active");
+      if (!owner) throw new Error("触达序列所属账号不存在或已停用");
+      const input = sequence.channel === "email"
+        ? { entityType: sequence.entityType, entityId: sequence.entityId, subject: step.subject, body: step.body, nextFollowAt: sequence.steps.find((item) => item.status === "pending" && item.index > step.index)?.scheduledAt || "" }
+        : { customerId: sequence.entityId, body: step.body, accountId: sequence.accountId, nextReminder: sequence.steps.find((item) => item.status === "pending" && item.index > step.index)?.scheduledAt || "" };
+      const result = sequence.channel === "email"
+        ? await agentExecutionRuntime.sendDevelopmentEmail!(owner, input, executionId)
+        : await agentExecutionRuntime.sendWhatsApp!(owner, input, executionId);
+      if (typeof result.accountId === "string" && result.accountId) sequence.accountId = result.accountId;
+      return result;
+    },
+    stopReason: agentOutreachSequenceStopReason
+  }, Number(process.env.OUTREACH_SEQUENCE_POLL_MS || 5_000));
+  try {
+    await outreachSequenceRunner.start();
+    activeOutreachSequenceRunner = outreachSequenceRunner;
+  } catch (error) {
+    superSearchRunner.stop();
+    await prospectScheduler?.stop();
+    activeProspectWorkerService = null;
+    await prospectWorkerService?.stop();
+    activeAgentBackgroundRunner = null;
+    await agentBackgroundRunner.stop();
+    await store.close?.();
+    console.error(`GoodJob CRM outreach sequence runner startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+    return;
+  }
+  const customerMaintenanceRunner = new CustomerMaintenanceRunner(
+    store,
+    Number(process.env.CUSTOMER_MAINTENANCE_POLL_MS || 30_000)
+  );
+  try {
+    await customerMaintenanceRunner.start();
+    activeCustomerMaintenanceRunner = customerMaintenanceRunner;
+  } catch (error) {
+    activeOutreachSequenceRunner = null;
+    await outreachSequenceRunner.stop();
+    superSearchRunner.stop();
+    await prospectScheduler?.stop();
+    activeProspectWorkerService = null;
+    await prospectWorkerService?.stop();
+    activeAgentBackgroundRunner = null;
+    await agentBackgroundRunner.stop();
+    await store.close?.();
+    console.error(`GoodJob CRM customer maintenance runner startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+    return;
+  }
+  const agentTriggerRunner = new AgentTriggerRunner(
+    store,
+    (actor, goal, context) => createAgentPlan(store, actor, goal, context),
+    Number(process.env.AGENT_TRIGGER_POLL_MS || 60_000)
+  );
+  try {
+    await agentTriggerRunner.start();
+    activeAgentTriggerRunner = agentTriggerRunner;
+  } catch (error) {
+    activeCustomerMaintenanceRunner = null;
+    await customerMaintenanceRunner.stop();
+    activeOutreachSequenceRunner = null;
+    await outreachSequenceRunner.stop();
+    superSearchRunner.stop();
+    await prospectScheduler?.stop();
+    activeProspectWorkerService = null;
+    await prospectWorkerService?.stop();
+    activeAgentBackgroundRunner = null;
+    await agentBackgroundRunner.stop();
+    await store.close?.();
+    console.error(`GoodJob CRM Agent trigger runner startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+    return;
+  }
+  const salesTrainingRunner = new SalesTrainingRunner(store, Number(process.env.SALES_TRAINING_POLL_MS || 1_200));
+  try {
+    await salesTrainingRunner.start();
+    activeSalesTrainingRunner = salesTrainingRunner;
+  } catch (error) {
+    activeAgentTriggerRunner = null;
+    await agentTriggerRunner.stop();
+    activeCustomerMaintenanceRunner = null;
+    await customerMaintenanceRunner.stop();
+    activeOutreachSequenceRunner = null;
+    await outreachSequenceRunner.stop();
+    superSearchRunner.stop();
+    await prospectScheduler?.stop();
+    activeProspectWorkerService = null;
+    await prospectWorkerService?.stop();
+    activeAgentBackgroundRunner = null;
+    await agentBackgroundRunner.stop();
+    await store.close?.();
+    console.error(`GoodJob CRM sales training runner startup failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
     return;
   }
@@ -11011,9 +13074,20 @@ async function startServer() {
     shuttingDown = true;
     console.log(`GoodJob CRM received ${signal}, shutting down`);
     try {
+      activeSalesTrainingRunner = null;
+      salesTrainingRunner.stop();
+      activeAgentTriggerRunner = null;
+      await agentTriggerRunner.stop();
+      activeCustomerMaintenanceRunner = null;
+      await customerMaintenanceRunner.stop();
+      activeOutreachSequenceRunner = null;
+      await outreachSequenceRunner.stop();
+      superSearchRunner.stop();
       await prospectScheduler?.stop();
       activeProspectWorkerService = null;
       await prospectWorkerService?.stop();
+      activeAgentBackgroundRunner = null;
+      await agentBackgroundRunner.stop();
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => {
           if (error) reject(error);

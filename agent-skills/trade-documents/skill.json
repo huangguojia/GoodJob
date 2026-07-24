@@ -1,0 +1,13 @@
+{
+  "id": "trade-documents",
+  "name": "贸易单据制作与交付",
+  "version": "1.0.0",
+  "category": "documents",
+  "description": "从真实客户和商机制作 PI/CI，推进审批，导出并准备下载贸易单据。",
+  "status": "active",
+  "priority": 92,
+  "triggers": ["制作 PI", "生成 PI", "下载 PI", "导出 PI", "制作形式发票", "生成贸易单据"],
+  "keywords": ["PI", "CI", "形式发票", "商业发票", "单据", "审批", "导出", "下载", "PDF"],
+  "modules": ["documents", "pipeline", "customers"],
+  "toolRefs": ["crm.search_customers", "crm.get_pipeline_snapshot", "api.catalog", "api.read", "api.write", "ui.navigate"]
+}

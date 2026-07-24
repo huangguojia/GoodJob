@@ -259,6 +259,16 @@ export class ProspectWorker {
     }
   }
 
+  async processPendingCandidates(
+    filter: ProspectCandidatePipelineFilter = {}
+  ) {
+    return this.processCandidates(filter);
+  }
+
+  pendingCandidates(filter: ProspectCandidatePipelineFilter = {}) {
+    return this.candidatePipeline.pendingCandidates(filter);
+  }
+
   private logFailure(
     event: string,
     ids: Record<string, string>,

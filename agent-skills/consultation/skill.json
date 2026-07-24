@@ -1,0 +1,13 @@
+{
+  "id": "consultation",
+  "name": "Kevin 系统咨询与业务答疑",
+  "version": "1.0.0",
+  "category": "consultation",
+  "description": "回答 GoodJob CRM 功能、字段、流程、规则、业务方法和使用方式，不执行站内操作。",
+  "status": "active",
+  "priority": 95,
+  "triggers": ["能干什么", "可以做什么", "有什么用", "如何使用", "怎么管理", "为什么", "是什么意思", "有什么区别", "需要什么资料", "有哪些功能"],
+  "keywords": ["咨询", "解释", "介绍", "方法", "步骤", "规则", "流程", "功能", "字段", "模块", "怎么", "如何", "为什么"],
+  "modules": ["all"],
+  "toolRefs": []
+}

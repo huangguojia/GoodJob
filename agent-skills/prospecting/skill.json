@@ -1,0 +1,14 @@
+{
+  "id": "prospecting",
+  "name": "自动获客闭环",
+  "version": "1.0.0",
+  "category": "prospecting",
+  "description": "从获客目标、数据源搜索到清洗、候选复核和导入线索的完整流程。",
+  "status": "active",
+  "priority": 90,
+  "triggers": ["自动获客", "帮我搜客", "搜索客户", "找采购商", "找经销商", "持续搜索", "超级搜索"],
+  "keywords": ["搜客", "获客", "搜索", "候选", "采购商", "进口商", "经销商", "清洗", "数据源"],
+  "modules": ["lead-finder", "prospect-list"],
+  "toolRefs": ["prospect.preview_search_plan", "prospect.start_search", "prospect.get_search_progress", "prospect.list_candidates", "prospect.convert_to_lead", "prospect.convert_to_customer", "ui.navigate", "api.catalog", "api.read", "api.external", "api.write"]
+}
+

@@ -15,6 +15,8 @@ export type ProviderRecordType =
   | "assisted_suggestion";
 export type ProviderPageStatus = "success" | "success_empty" | "partial_success" | "failed" | "skipped";
 export type ProviderErrorCode =
+  | "AI_MODEL_REQUEST_REJECTED"
+  | "AI_MODEL_RESPONSE_INVALID"
   | "PROVIDER_AUTH_FAILED"
   | "PROVIDER_RATE_LIMITED"
   | "PROVIDER_QUOTA_EXHAUSTED"
@@ -335,12 +337,23 @@ export class ProviderContractError extends Error {
 export class ProviderHttpStatusError extends Error {
   readonly httpStatus: number;
   readonly retryAfterAt: string | null;
+  readonly providerLabel: string;
+  readonly upstreamCode: string;
+  readonly upstreamMessage: string;
 
-  constructor(httpStatus: number, retryAfterAt: string | null, providerLabel: string) {
+  constructor(
+    httpStatus: number,
+    retryAfterAt: string | null,
+    providerLabel: string,
+    details: { upstreamCode?: string; upstreamMessage?: string } = {}
+  ) {
     super(`${providerLabel} HTTP ${httpStatus}`);
     this.name = "ProviderHttpStatusError";
     this.httpStatus = httpStatus;
     this.retryAfterAt = retryAfterAt;
+    this.providerLabel = providerLabel;
+    this.upstreamCode = details.upstreamCode || "";
+    this.upstreamMessage = details.upstreamMessage || "";
   }
 }
 
@@ -355,8 +368,17 @@ function retryAfterAt(response: Response) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
-export function providerHttpStatusError(response: Response, providerLabel = "Provider") {
-  return new ProviderHttpStatusError(response.status, retryAfterAt(response), providerLabel);
+export function providerHttpStatusError(
+  response: Response,
+  providerLabel = "Provider",
+  details: { upstreamCode?: string; upstreamMessage?: string } = {}
+) {
+  return new ProviderHttpStatusError(
+    response.status,
+    retryAfterAt(response),
+    providerLabel,
+    details
+  );
 }
 
 const normalizedQuerySchema = z.object({
@@ -897,13 +919,27 @@ export function providerErrorFromUnknown(
     ? error.httpStatus
     : null;
   const retryAt = error instanceof ProviderHttpStatusError ? error.retryAfterAt : null;
+  const upstreamCode = error instanceof ProviderHttpStatusError
+    ? error.upstreamCode
+    : "";
+  const upstreamMessage = error instanceof ProviderHttpStatusError
+    ? error.upstreamMessage
+    : "";
+  const isAiModelRequest = error instanceof ProviderHttpStatusError
+    && error.providerLabel === "AI 模型";
+  const aiDetail = [upstreamCode, upstreamMessage]
+    .filter(Boolean)
+    .join("：")
+    .slice(0, 500);
   const lower = message.toLocaleLowerCase();
   if (httpStatus === 401 || httpStatus === 403) {
     return new ProviderContractError({
       code: "PROVIDER_AUTH_FAILED",
       retryable: false,
       retryAfterAt: null,
-      publicMessage: "数据源授权已失效，请检查连接配置",
+      publicMessage: isAiModelRequest
+        ? `AI 模型认证失败（HTTP ${httpStatus}）${aiDetail ? `：${aiDetail}` : "，请检查 API Key 和模型权限"}`
+        : "数据源授权已失效，请检查连接配置",
       httpStatus,
       phase
     }, { cause: error });
@@ -913,7 +949,9 @@ export function providerErrorFromUnknown(
       code: "PROVIDER_RATE_LIMITED",
       retryable: true,
       retryAfterAt: retryAt,
-      publicMessage: "数据源当前限流，可稍后重试",
+      publicMessage: isAiModelRequest
+        ? `AI 模型限流或额度不足（HTTP 429）${aiDetail ? `：${aiDetail}` : ""}`
+        : "数据源当前限流，可稍后重试",
       httpStatus,
       phase
     }, { cause: error });
@@ -923,7 +961,9 @@ export function providerErrorFromUnknown(
       code: "PROVIDER_QUOTA_EXHAUSTED",
       retryable: false,
       retryAfterAt: null,
-      publicMessage: "数据源额度已用尽，请检查套餐或预算",
+      publicMessage: isAiModelRequest
+        ? `AI 模型额度已用尽（HTTP 402）${aiDetail ? `：${aiDetail}` : ""}`
+        : "数据源额度已用尽，请检查套餐或预算",
       httpStatus,
       phase
     }, { cause: error });
@@ -953,17 +993,23 @@ export function providerErrorFromUnknown(
       code: "PROVIDER_UNAVAILABLE",
       retryable: true,
       retryAfterAt: null,
-      publicMessage: "数据源暂时不可用，可稍后重试",
+      publicMessage: isAiModelRequest
+        ? `AI 模型服务异常（HTTP ${httpStatus}）${aiDetail ? `：${aiDetail}` : "，可稍后重试"}`
+        : "数据源暂时不可用，可稍后重试",
       httpStatus,
       phase
     }, { cause: error });
   }
   if (httpStatus === 400 || httpStatus === 404 || httpStatus === 422) {
     return new ProviderContractError({
-      code: "PROVIDER_SCHEMA_CHANGED",
+      code: isAiModelRequest
+        ? "AI_MODEL_REQUEST_REJECTED"
+        : "PROVIDER_SCHEMA_CHANGED",
       retryable: false,
       retryAfterAt: null,
-      publicMessage: "数据源请求或返回结构不兼容，请检查适配器",
+      publicMessage: isAiModelRequest
+        ? `AI 模型请求被拒绝（HTTP ${httpStatus}）${aiDetail ? `：${aiDetail}` : "，请检查 Base URL、协议和模型名称"}`
+        : "数据源请求或返回结构不兼容，请检查适配器",
       httpStatus,
       phase
     }, { cause: error });

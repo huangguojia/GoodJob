@@ -70,9 +70,15 @@ try {
   const boundaryCustomer = await request("/api/customers", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ company: boundaryCompany, country: "德国", contact: "Boundary Buyer", stage: "询盘", amount: 1000 })
+    body: JSON.stringify({ company: boundaryCompany, country: "德国", contact: "Boundary Buyer", whatsapp: "+4915112345678", stage: "询盘", amount: 1000 })
   });
-  if (!boundaryCustomer.response.ok) throw new Error("boundary customer create failed");
+  if (!boundaryCustomer.response.ok || boundaryCustomer.json.customer.whatsapp !== "+4915112345678") throw new Error("boundary customer create failed");
+  const invalidWhatsappCustomer = await request("/api/customers", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ company: `无效号码客户-${Date.now()}`, country: "德国", contact: "Invalid Buyer", whatsapp: "15112345678" })
+  });
+  if (invalidWhatsappCustomer.response.status !== 400) throw new Error("customer WhatsApp validation failed");
   const managerBoundaryTodo = await request("/api/todos", {
     method: "POST",
     headers: { authorization: `Bearer ${managerToken}` },
@@ -524,6 +530,29 @@ try {
   });
   if (!websiteSync.response.ok || websiteSync.json.created?.[0]?.lead?.company !== "自动化官网商机" || websiteSync.json.created?.[0]?.opportunity?.leadId !== websiteSync.json.created?.[0]?.lead?.id) {
     throw new Error("website opportunity sync failed");
+  }
+  const pendingImportPreview = await request("/api/tools/website-scrape/preview", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ urls: ["https://pending-import.example"] })
+  });
+  const pendingImportOpportunity = pendingImportPreview.json.opportunities?.[0];
+  if (!pendingImportPreview.response.ok || pendingImportOpportunity?.status !== "preview") {
+    throw new Error("pending opportunity preview failed");
+  }
+  const pendingImportSync = await request("/api/tools/website-scrape/sync-opportunities", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      opportunities: [pendingImportOpportunity],
+      allowPending: true
+    })
+  });
+  if (!pendingImportSync.response.ok
+    || pendingImportSync.json.created?.[0]?.opportunity?.status !== "synced"
+    || pendingImportSync.json.created?.[0]?.lead?.id
+      !== pendingImportSync.json.created?.[0]?.opportunity?.leadId) {
+    throw new Error("explicit pending opportunity import failed");
   }
   const excludeSyncedWebsite = await request("/api/prospect-list/batch", {
     method: "PATCH",
@@ -2328,7 +2357,7 @@ try {
     body: JSON.stringify({
       fileName: "self-test-customers.xlsx",
       rows: [
-        { company: `自动化导入客户-${Date.now()}`, country: "德国", contact: "Import Buyer", stage: "询盘", amount: 19000, health: 76, nextReminder: "明天 10:00", wecomBound: true },
+        { company: `自动化导入客户-${Date.now()}`, country: "德国", contact: "Import Buyer", whatsapp: "+4915212345678", stage: "询盘", amount: 19000, health: 76, nextReminder: "明天 10:00", wecomBound: true },
         { company: "Nordic Tools AB", country: "瑞典", contact: "Emma Import", stage: "已报价", amount: 36000, health: 68, nextReminder: "今天 18:00", wecomBound: true }
       ]
     })
@@ -2339,6 +2368,23 @@ try {
     headers: { authorization: `Bearer ${salesToken}` }
   });
   if (!customerExport.response.ok || !Array.isArray(customerExport.json.customers) || customerExport.json.customers.length < 1) throw new Error("customer export failed");
+  if (!customerExport.json.customers.some((customer: { whatsapp?: string }) => customer.whatsapp === "+4915212345678")) throw new Error("customer WhatsApp import/export failed");
+
+  const oversizedTradeDocument = await request("/api/trade-documents", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      type: "PI",
+      title: "X".repeat(256),
+      number: "PI-LENGTH-CHECK",
+      issueDate: "2026-07-24",
+      seller: "GoodJob Trading Test Co., Ltd.",
+      items: [{ product: "Length validation", quantity: 1, unitPrice: 1 }]
+    })
+  });
+  if (oversizedTradeDocument.response.status !== 400 || /data too long/iu.test(String(oversizedTradeDocument.json.message || ""))) {
+    throw new Error("trade document length must be rejected before MySQL persistence");
+  }
 
   const tradeDocument = await request("/api/trade-documents", {
     method: "POST",

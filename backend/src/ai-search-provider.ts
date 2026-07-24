@@ -8,13 +8,17 @@ import {
 } from "./provider-contract.js";
 import type { AiModelConfig } from "./types.js";
 
+export const AI_SEARCH_ADAPTER_VERSION = "ai-search-control-v1";
+
 export function createAiSearchProvider(config: AiModelConfig) {
   const base = new URL(config.baseUrl);
-  const basePath = base.pathname.endsWith("/")
+  const fullEndpoint = /\/(?:chat\/completions|messages)$/iu.test(base.pathname);
+  const basePath = fullEndpoint || base.pathname.endsWith("/")
     ? base.pathname
     : `${base.pathname}/`;
   return defineProvider({
     id: "ai_search",
+    adapterVersion: AI_SEARCH_ADAPTER_VERSION,
     name: "AI 搜索",
     tier: "ai",
     category: "ai",
@@ -53,9 +57,6 @@ export function createAiSearchProvider(config: AiModelConfig) {
         invalidCount: 0,
         nextCursor: null,
         exhausted: true,
-        warnings: [
-          "AI 生成候选仅属于辅助建议，进入跟进前必须核实企业身份与官网。"
-        ],
         usage: {
           requestCount: 1,
           estimated: false,

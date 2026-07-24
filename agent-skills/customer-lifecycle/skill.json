@@ -1,0 +1,14 @@
+{
+  "id": "customer-lifecycle",
+  "name": "客户与商机闭环",
+  "version": "1.0.0",
+  "category": "crm",
+  "description": "覆盖线索、客户、跟进、待办和商机的查询、创建与推进。",
+  "status": "active",
+  "priority": 80,
+  "triggers": ["新增客户", "创建客户", "生成客户", "新增线索", "创建商机", "推进商机", "客户跟进", "安排待办"],
+  "keywords": ["客户", "线索", "商机", "跟进", "待办", "健康度", "分级", "成交", "管道"],
+  "modules": ["customers", "leads", "pipeline", "reminders"],
+  "toolRefs": ["crm.search_customers", "crm.search_leads", "crm.get_customer_overview", "crm.get_pipeline_snapshot", "crm.list_pending_todos", "crm.create_todo", "crm.record_customer_followup", "crm.update_customer_profile", "ui.open_customer", "ui.open_lead", "api.catalog", "api.read", "api.write"]
+}
+

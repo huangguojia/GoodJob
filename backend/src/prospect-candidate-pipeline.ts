@@ -117,6 +117,23 @@ export interface ProspectCandidatePipelineFilter {
   ownerId?: string;
   runId?: string;
   ledgerId?: string;
+  hitIds?: string[];
+}
+
+export interface ProspectPendingCandidatePreview {
+  hitId: string;
+  runId: string;
+  providerCode: string;
+  company: string;
+  country: string;
+  business: string;
+  website: string;
+  contact: string;
+  contactInfo: string;
+  evidenceSummary: string;
+  sourceUrl: string;
+  fetchedAt: string;
+  previewError: string;
 }
 
 export interface ProspectCandidatePipelineFailure {
@@ -575,6 +592,7 @@ export class ProspectCandidatePipeline {
         && (!filter.ownerId || hit.ownerId === filter.ownerId)
         && (!filter.runId || hit.runId === filter.runId)
         && (!filter.ledgerId || hit.ledgerId === filter.ledgerId)
+        && (!filter.hitIds?.length || filter.hitIds.includes(hit.id))
       )
       .sort((left, right) =>
         left.createdAt.localeCompare(right.createdAt)
@@ -641,6 +659,74 @@ export class ProspectCandidatePipeline {
       }
     }
     return result;
+  }
+
+  pendingCandidates(
+    filter: ProspectCandidatePipelineFilter = {}
+  ): ProspectPendingCandidatePreview[] {
+    const terminalHitIds = new Set(
+      (this.store.prospectCandidateProcessingStates || [])
+        .map((item) => item.hitId)
+    );
+    const selectedHitIds = filter.hitIds?.length
+      ? new Set(filter.hitIds)
+      : null;
+    return this.store.prospectSourceRawHits
+      .filter((hit) =>
+        !terminalHitIds.has(hit.id)
+        && (!filter.teamId || hit.teamId === filter.teamId)
+        && (!filter.ownerId || hit.ownerId === filter.ownerId)
+        && (!filter.runId || hit.runId === filter.runId)
+        && (!filter.ledgerId || hit.ledgerId === filter.ledgerId)
+        && (!selectedHitIds || selectedHitIds.has(hit.id))
+      )
+      .sort((left, right) =>
+        left.createdAt.localeCompare(right.createdAt)
+        || left.ordinal - right.ordinal
+      )
+      .slice(0, 200)
+      .map((hit) => {
+        try {
+          const raw = readProspectSourceRawRecord(this.store, {
+            teamId: hit.teamId,
+            ownerId: hit.ownerId,
+            recordId: hit.recordId,
+            envelopeSecret: this.rawEnvelopeSecret
+          });
+          const record = providerRecord(raw.plaintext.payload);
+          return {
+            hitId: hit.id,
+            runId: hit.runId,
+            providerCode: raw.record.providerCode,
+            company: record.company || "",
+            country: record.country || "",
+            business: record.business || record.description || "",
+            website: record.officialWebsite || record.website || "",
+            contact: record.contact || "",
+            contactInfo: record.contactInfo || "",
+            evidenceSummary: record.evidenceSummary || "",
+            sourceUrl: record.sourceUrl || "",
+            fetchedAt: hit.fetchedAt,
+            previewError: ""
+          };
+        } catch {
+          return {
+            hitId: hit.id,
+            runId: hit.runId,
+            providerCode: "unknown",
+            company: "原始记录待修复",
+            country: "",
+            business: "",
+            website: "",
+            contact: "",
+            contactInfo: "",
+            evidenceSummary: "",
+            sourceUrl: "",
+            fetchedAt: hit.fetchedAt,
+            previewError: "原始记录无法安全预览，导入时会保留失败原因"
+          };
+        }
+      });
   }
 
   private async processHit(hit: ProspectSourceRawHit) {

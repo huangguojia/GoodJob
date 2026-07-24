@@ -1,0 +1,15 @@
+GoodJob CRM
+Copyright 2026 GoodJob CRM contributors.
+
+The GoodJob CRM core is distributed under the Apache License, Version 2.0.
+The Communication plugin is a separate service and is distributed under the
+GNU General Public License, version 3.0, because its runtime dependency chain
+includes libsignal under GPL-3.0.
+
+This distribution includes third-party software. See THIRD_PARTY_NOTICES.md
+and LICENSES/ for attribution and license texts.
+
+WhatsApp is a trademark of WhatsApp LLC. GoodJob CRM is not affiliated with,
+endorsed by, or sponsored by WhatsApp LLC or Meta Platforms, Inc. The Baileys
+channel uses WhatsApp Web protocols and is not the Meta WhatsApp Business
+Platform API.

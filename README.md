@@ -1,5 +1,30 @@
 # GoodJob CRM 外贸客户管理软件原型交付
 
+## WhatsApp 集成
+
+CRM 的 `WhatsApp` 页面加载仓库内的独立服务 `whatsapp-plugin/`。该目录从已验收的
+`桌面/GoodJob/CRM系统对接` 迁入，保留 Baileys/Meta Provider、PGlite/PostgreSQL、
+AES-256-GCM AuthState、Socket.IO、AI 翻译、测试和部署文档，不使用 CRM 原有的
+`whatsapp-web.js` 页面作为聊天入口。
+
+首次拉取后分别安装依赖：
+
+```bash
+npm install
+npm --prefix whatsapp-plugin install --workspaces=false
+npm run dev
+```
+
+默认地址：CRM `http://127.0.0.1:5188/`，WhatsApp 插件前端
+`http://127.0.0.1:5193/whatsapp-plugin/`，插件 API `http://127.0.0.1:3100/`。
+根目录的 `build` 和 `test` 会同时验证 CRM 与 WhatsApp 插件。
+
+本机迁移数据位于 `whatsapp-plugin/.data/`，其中数据库和 `dev-master.key` 必须成对备份，
+不得提交；生产环境必须按 `whatsapp-plugin/docs/PRODUCTION_DEPLOYMENT.md` 改用 PostgreSQL、
+固定 `SESSION_MASTER_KEY`，并在 CRM 鉴权网关后发布。当前插件是单租户、单实例、私网部署边界。
+
+第三方组件归属见 `whatsapp-plugin/THIRD_PARTY_NOTICES.md`。
+
 ## 1. 产品定位
 
 GoodJob CRM 是一款面向外贸销售团队的网页版客户管理软件，采用前后端分离架构，后端数据本地化存储到 MySQL。产品核心不是“记录客户”，而是让外贸业务员每天知道：该跟谁、跟进到哪一步、哪些客户有风险、哪些商机最可能成交、团队的数据是否可导入导出和沉淀。
@@ -406,3 +431,14 @@ Swagger 文档默认启用，但必须先使用管理员或超级管理员账号
 
 - `frontend/index.html`：Vite 应用页面骨架，业务数据由后端接口加载。
 - `README.md`：产品、功能辩论、架构与页面说明。
+
+## 10. 开源许可证
+
+GoodJob CRM 自有核心代码使用 Apache-2.0，允许使用、修改、商用、销售和
+再分发，但必须保留许可证、版权和 NOTICE。Communication 是独立服务，因
+运行时包含 GPL-3.0 的 libsignal，使用 GPL-3.0-only；它同样允许商用，但
+分发时必须按 GPL 提供对应源代码并保留声明。
+
+WhatsApp 相关上游项目、版本和许可证见
+[`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。本项目不属于 Meta
+或 WhatsApp 官方产品。

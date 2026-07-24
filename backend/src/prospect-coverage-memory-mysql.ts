@@ -1691,6 +1691,7 @@ function conversionCustomerFromRow(
     company: String(row.company || ""),
     country: String(row.country || ""),
     contact: String(row.contact || ""),
+    whatsapp: String(row.whatsapp || ""),
     ownerId: String(row.owner_id),
     teamId: String(row.team_id),
     stage: String(row.stage || ""),
@@ -1840,16 +1841,17 @@ async function insertConvertedCustomer(
 ) {
   await connection.query(
     `INSERT INTO customers (
-       id,company,country,contact,owner_id,team_id,stage,amount,health,
+       id,company,country,contact,whatsapp,owner_id,team_id,stage,amount,health,
        next_reminder,wecom_bound,billing_name,billing_address,
        document_contact,default_port_discharge,default_incoterm,
        default_payment_term
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       customer.id,
       customer.company,
       customer.country,
       customer.contact,
+      customer.whatsapp || "",
       customer.ownerId,
       customer.teamId,
       customer.stage,

@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
+import { AI_SEARCH_ADAPTER_VERSION } from "./ai-search-provider.js";
 import { getProvider } from "./lead-providers.js";
+import { PROVIDER_CONTRACT_VERSION } from "./provider-contract.js";
 import { createProspectRun, ProspectRunRequestError } from "./prospect-runs.js";
 import {
   advanceProspectScheduleBeyond,
@@ -163,10 +165,10 @@ export class ProspectScheduler {
         )
         && item.endpointCode === "company-search"
         && item.adapterVersion === (
-          provider?.adapterVersion || "ai-search-control-v1"
+          provider?.adapterVersion || AI_SEARCH_ADAPTER_VERSION
         )
         && item.contractVersion === (
-          provider?.contractVersion || "search_run_control_plane_v1"
+          provider?.contractVersion || PROVIDER_CONTRACT_VERSION
         )
         && item.catalogVersion === catalog.version
       );

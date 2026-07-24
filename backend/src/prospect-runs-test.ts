@@ -26,6 +26,7 @@ import {
 } from "./prospect-strategies.js";
 import {
   createProspectRun,
+  prospectRunDiagnostics,
   ProspectRunRequestError,
   transitionProspectRun,
   validateProspectRunSecurity
@@ -435,6 +436,181 @@ try {
   assert.equal(childPayload.runId, runId);
   assert.equal(childPayload.shardId, created.json.shards[0].id);
   assert.equal(childPayload.providerCode, "gleif");
+  const createdRun = store.prospectSearchRuns.find((item) => item.id === runId)!;
+  const initialDiagnostics = prospectRunDiagnostics(store, createdRun);
+  assert.equal(initialDiagnostics.phases.length, 6);
+  assert.equal(initialDiagnostics.sources.length, 1);
+  assert.equal(initialDiagnostics.sources[0]?.providerCode, "gleif");
+  store.prospectExecutionAttempts.push({
+    id: "pea_diagnostics_failure",
+    teamId: salesA.teamId,
+    ownerId: salesA.id,
+    runId,
+    shardId: created.json.shards[0].id,
+    jobId: childJob.id,
+    leaseId: "pel_diagnostics",
+    providerCode: "gleif",
+    checkpointNo: 0,
+    checkpointCallNo: 1,
+    providerAttemptNo: 1,
+    status: "failed",
+    requestHash: "request-hash-not-exposed",
+    responseHash: "response-hash-not-exposed",
+    errorCode: "PROVIDER_TIMEOUT",
+    errorMessage: "来源连接超时",
+    retryable: true,
+    retryAfterAt: "2026-07-22T12:00:00.000Z",
+    usageJson: "{\"secret\":\"not-exposed\"}",
+    costKind: "unknown",
+    costAmount: null,
+    currency: "USD",
+    startedAt: "2026-07-22T11:59:00.000Z",
+    finishedAt: "2026-07-22T11:59:30.000Z",
+    createdAt: "2026-07-22T11:59:00.000Z",
+    version: 1
+  });
+  const failedDiagnostics = prospectRunDiagnostics(store, createdRun);
+  const failure = failedDiagnostics.sources[0]?.failure;
+  assert.equal(failure?.errorCode, "PROVIDER_TIMEOUT");
+  assert.equal(failure?.errorMessage, "来源连接超时");
+  assert.equal(failure?.retryable, true);
+  assert.equal(failedDiagnostics.sources[0]?.attempts.length, 1);
+  assert.equal(JSON.stringify(failedDiagnostics).includes("not-exposed"), false);
+  const diagnosticsShard = store.prospectRunShards.find(
+    (item) => item.id === created.json.shards[0].id
+  )!;
+  diagnosticsShard.providerCode = "ai_search";
+  diagnosticsShard.status = "failed";
+  childJob.status = "failed";
+  childJob.errorCode = "PROVIDER_INTERNAL_ERROR";
+  childJob.errorMessage = "数据源适配器执行异常，请检查配置或适配器";
+  const diagnosticsAttempt = store.prospectExecutionAttempts.find(
+    (item) => item.id === "pea_diagnostics_failure"
+  )!;
+  diagnosticsAttempt.providerCode = "ai_search";
+  diagnosticsAttempt.errorCode = "PROVIDER_INTERNAL_ERROR";
+  diagnosticsAttempt.errorMessage = "数据源适配器执行异常，请检查配置或适配器";
+  store.prospectExecutionCheckpoints.push({
+    id: "pec_legacy_ai_failure",
+    teamId: salesA.teamId,
+    ownerId: salesA.id,
+    runId,
+    shardId: diagnosticsShard.id,
+    jobId: childJob.id,
+    providerCode: "ai_search",
+    runEpoch: 1,
+    checkpointNo: 0,
+    encryptedCursor: "",
+    cursorHash: "",
+    pageSequence: 0,
+    totalCallCount: 1,
+    checkpointCallCount: 1,
+    acceptedCount: 0,
+    rawCount: 0,
+    invalidCount: 0,
+    duplicateCount: 0,
+    retryAfterAt: "",
+    lastErrorCode: "PROVIDER_INTERNAL_ERROR",
+    lastErrorMessage: "数据源适配器执行异常，请检查配置或适配器",
+    partial: false,
+    completionReason: "NON_RETRYABLE_FAILURE",
+    version: 1,
+    createdAt: "2026-07-22T12:00:00.000Z",
+    updatedAt: "2026-07-22T12:00:00.000Z"
+  });
+  store.prospectProviderRequestLedgers.push({
+    id: "pprl_legacy_ai_failure",
+    teamId: salesA.teamId,
+    ownerId: salesA.id,
+    runId,
+    shardId: diagnosticsShard.id,
+    jobId: childJob.id,
+    originAttemptId: diagnosticsAttempt.id,
+    checkpointNo: 0,
+    logicalRequestNo: 1,
+    providerCode: "ai_search",
+    connectionId: "pc_legacy_ai_failure",
+    connectionRevision: "1",
+    connectionConfigHash: "config-hash",
+    endpointCode: "company-search",
+    adapterVersion: "1",
+    contractVersion: "1",
+    requestSchemaVersion: "1",
+    idempotencyKey: "legacy-ai-failure",
+    requestHash: "request-hash",
+    encryptedRequestEnvelope: "",
+    requestEvidenceRef: "",
+    status: "settled",
+    externalRequestId: "",
+    dispatchConfirmationRef: "",
+    encryptedResponseEnvelope: "",
+    responseEvidenceRef: "",
+    responseHash: "",
+    rawResponseHash: "",
+    normalizedResultHash: "",
+    responseAccountingEvidenceHash: "",
+    httpStatus: 400,
+    providerOutcomeCode: "PROVIDER_INTERNAL_ERROR",
+    settlementKind: "failure",
+    settlementHash: "settlement-hash",
+    unknownReason: "",
+    errorCode: "PROVIDER_INTERNAL_ERROR",
+    kernelEpochAtPrepare: 1,
+    runEpochAtPrepare: 1,
+    fenceTokenAtPrepare: 1,
+    leaseIdAtPrepare: "pel_diagnostics",
+    preparedAt: "2026-07-22T12:00:00.000Z",
+    dispatchStartedAt: "2026-07-22T12:00:00.000Z",
+    dispatchConfirmedAt: "2026-07-22T12:00:00.000Z",
+    responseReceivedAt: "2026-07-22T12:00:01.000Z",
+    unknownAt: "",
+    settledAt: "2026-07-22T12:00:01.000Z",
+    cancelledLateAt: "",
+    updatedAt: "2026-07-22T12:00:01.000Z",
+    version: 1
+  });
+  const legacyAiDiagnostics = prospectRunDiagnostics(store, createdRun).sources[0]!;
+  assert.equal(legacyAiDiagnostics.failure?.errorCode, "PROVIDER_INTERNAL_ERROR");
+  assert.equal(legacyAiDiagnostics.failure?.httpStatus, 400);
+  assert.match(legacyAiDiagnostics.failure?.errorMessage || "", /不足以证明模型拒绝/u);
+  assert.equal(legacyAiDiagnostics.job?.errorCode, "PROVIDER_INTERNAL_ERROR");
+  assert.equal(legacyAiDiagnostics.checkpoint?.lastErrorCode, "PROVIDER_INTERNAL_ERROR");
+  assert.equal(legacyAiDiagnostics.attempts[0]?.errorCode, "PROVIDER_INTERNAL_ERROR");
+  assert.equal(legacyAiDiagnostics.requests[0]?.errorCode, "PROVIDER_INTERNAL_ERROR");
+  assert.equal(legacyAiDiagnostics.requests[0]?.providerOutcomeCode, "PROVIDER_INTERNAL_ERROR");
+  store.prospectExecutionCheckpoints = store.prospectExecutionCheckpoints.filter(
+    (item) => item.id !== "pec_legacy_ai_failure"
+  );
+  store.prospectProviderRequestLedgers = store.prospectProviderRequestLedgers.filter(
+    (item) => item.id !== "pprl_legacy_ai_failure"
+  );
+  diagnosticsShard.providerCode = "gleif";
+  diagnosticsShard.status = "queued";
+  childJob.status = "queued";
+  childJob.errorCode = "";
+  childJob.errorMessage = "";
+  store.prospectCandidateProcessingStates ||= [];
+  store.prospectCandidateProcessingStates.push({
+    hitId: "psrh_diagnostics_rejected",
+    teamId: salesA.teamId,
+    ownerId: salesA.id,
+    runId,
+    ledgerId: "pprl_diagnostics_rejected",
+    status: "rejected",
+    failureCode: "CANDIDATE_PAYLOAD_INVALID",
+    processedAt: "2026-07-22T12:01:00.000Z",
+    updatedAt: "2026-07-22T12:01:00.000Z"
+  });
+  const cleaningDiagnostics = prospectRunDiagnostics(store, createdRun).cleaningReport;
+  assert.equal(cleaningDiagnostics.stages.length, 4);
+  assert.equal(cleaningDiagnostics.summary.rejectedCount, 1);
+  assert.equal(cleaningDiagnostics.records[0]?.outcome, "rejected");
+  assert.equal(cleaningDiagnostics.records[0]?.reasonCode, "CANDIDATE_PAYLOAD_INVALID");
+  assert.match(cleaningDiagnostics.records[0]?.reason || "", /必需字段/u);
+  store.prospectCandidateProcessingStates = store.prospectCandidateProcessingStates.filter((item) =>
+    item.hitId !== "psrh_diagnostics_rejected"
+  );
+  store.prospectExecutionAttempts = store.prospectExecutionAttempts.filter((item) => item.id !== "pea_diagnostics_failure");
   assert.doesNotThrow(() => validateAllProspectRunQueueBridges(store));
   assert.throws(() => startAgentJob(parentJob), /通用任务入口/);
   assert.throws(
@@ -560,7 +736,7 @@ try {
   parentJob.traceId = originalTraceId;
 
   const originalChildPayload = childJob.inputJsonEncrypted;
-  childJob.inputJsonEncrypted = `${originalChildPayload.slice(0, -1)}x`;
+  childJob.inputJsonEncrypted = `${originalChildPayload.slice(0, -1)}${originalChildPayload.endsWith("x") ? "y" : "x"}`;
   const payloadTamperDetail = await request({
     path: `/api/prospect-runs/${runId}`,
     user: salesA

@@ -2,11 +2,13 @@
   "name": "goodjob-crm-frontend",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5188",
     "build": "tsc -b && vite build",
     "test": "tsx src/self-test.ts",
+    "test:mysql-import": "tsx src/mysql-dump-import-test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

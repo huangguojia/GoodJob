@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { createAiSearchProvider } from "./ai-search-provider.js";
 import { BullMqProspectQueueBackend } from "./prospect-bullmq-backend.js";
 import { ProspectProviderDispatcher } from "./prospect-provider-dispatcher.js";
+import type { ProspectCandidatePipelineFilter } from "./prospect-candidate-pipeline.js";
 import {
   ProspectQueueCoordinator,
   type ProspectQueueCoordinatorStatus
@@ -137,6 +138,20 @@ export class ProspectWorkerService {
         + "prospect worker continues with MySQL polling"
       );
     }
+  }
+
+  async processPendingCandidates(
+    filter: ProspectCandidatePipelineFilter
+  ) {
+    if (!this.running) return null;
+    const result = await this.worker.processPendingCandidates(filter);
+    await this.coordinator?.synchronize();
+    return result;
+  }
+
+  pendingCandidates(filter: ProspectCandidatePipelineFilter) {
+    if (!this.running) return null;
+    return this.worker.pendingCandidates(filter);
   }
 
   async stop() {

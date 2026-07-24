@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>WhatsApp 扫码测试工具</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        .test-item { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
+        .success { background: #d4edda; border-color: #c3e6cb; }
+        .error { background: #f8d7da; border-color: #f5c6cb; }
+        .info { background: #d1ecf1; border-color: #bee5eb; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin: 5px; }
+        pre { background: #f5f5f5; padding: 10px; overflow-x: auto; }
+        #log { max-height: 400px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <h1>WhatsApp 扫码功能诊断工具</h1>
+
+    <div class="test-item">
+        <h3>步骤 1: 登录</h3>
+        <input type="email" id="email" placeholder="邮箱" value="shirley@goodjob.com" style="width: 200px; padding: 8px;">
+        <input type="password" id="password" placeholder="密码" value="goodjob123" style="width: 200px; padding: 8px;">
+        <button onclick="testLogin()">登录</button>
+        <div id="loginResult"></div>
+    </div>
+
+    <div class="test-item">
+        <h3>步骤 2: 测试绑定模式 API</h3>
+        <button onclick="testBindingModes()">测试绑定模式</button>
+        <div id="modesResult"></div>
+    </div>
+
+    <div class="test-item">
+        <h3>步骤 3: 启动扫码绑定</h3>
+        <input type="text" id="customerId" placeholder="客户ID" value="c1" style="width: 200px; padding: 8px;">
+        <button onclick="testStartScan()">启动扫码</button>
+        <div id="scanResult"></div>
+    </div>
+
+    <div class="test-item info">
+        <h3>日志输出</h3>
+        <div id="log"></div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://127.0.0.1:4188';
+        let authCookie = '';
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            const color = type === 'error' ? 'red' : type === 'success' ? 'green' : 'black';
+            logDiv.innerHTML += `<div style="color: ${color}">[${time}] ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        async function testLogin() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const resultDiv = document.getElementById('loginResult');
+
+            log('发送登录请求...');
+
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password }),
+                    credentials: 'include'
+                });
+
+                const data = await response.json();
+
+                if (data.user) {
+                    resultDiv.className = 'success';
+                    resultDiv.innerHTML = `<pre>✓ 登录成功！\n用户: ${data.user.name}\n角色: ${data.user.role}</pre>`;
+                    log('登录成功', 'success');
+                } else {
+                    resultDiv.className = 'error';
+                    resultDiv.innerHTML = `<pre>✗ 登录失败\n${JSON.stringify(data, null, 2)}</pre>`;
+                    log('登录失败: ' + JSON.stringify(data), 'error');
+                }
+            } catch (error) {
+                resultDiv.className = 'error';
+                resultDiv.innerHTML = `<pre>✗ 请求错误: ${error.message}</pre>`;
+                log('登录请求错误: ' + error.message, 'error');
+            }
+        }
+
+        async function testBindingModes() {
+            const resultDiv = document.getElementById('modesResult');
+
+            log('测试绑定模式 API...');
+
+            try {
+                const response = await fetch(`${API_BASE}/api/whatsapp/binding-modes`, {
+                    credentials: 'include'
+                });
+
+                const data = await response.json();
+
+                if (data.modes) {
+                    resultDiv.className = 'success';
+                    resultDiv.innerHTML = `<pre>✓ API 正常\n${JSON.stringify(data, null, 2)}</pre>`;
+                    log('绑定模式 API 正常', 'success');
+                } else {
+                    resultDiv.className = 'error';
+                    resultDiv.innerHTML = `<pre>✗ 响应异常\n${JSON.stringify(data, null, 2)}</pre>`;
+                    log('绑定模式 API 异常: ' + JSON.stringify(data), 'error');
+                }
+            } catch (error) {
+                resultDiv.className = 'error';
+                resultDiv.innerHTML = `<pre>✗ 请求错误: ${error.message}</pre>`;
+                log('绑定模式请求错误: ' + error.message, 'error');
+            }
+        }
+
+        async function testStartScan() {
+            const customerId = document.getElementById('customerId').value;
+            const resultDiv = document.getElementById('scanResult');
+
+            log('启动扫码绑定...');
+
+            try {
+                const response = await fetch(`${API_BASE}/api/whatsapp/binding/web-scan/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ customerId }),
+                    credentials: 'include'
+                });
+
+                const data = await response.json();
+
+                if (data.clientId) {
+                    resultDiv.className = 'success';
+                    resultDiv.innerHTML = `<pre>✓ 扫码启动成功！\nClient ID: ${data.clientId}\nBinding ID: ${data.bindingId}\n状态: ${data.status}</pre>`;
+                    log('扫码启动成功！ClientID: ' + data.clientId, 'success');
+                } else {
+                    resultDiv.className = 'error';
+                    resultDiv.innerHTML = `<pre>✗ 启动失败\n${JSON.stringify(data, null, 2)}</pre>`;
+                    log('扫码启动失败: ' + JSON.stringify(data), 'error');
+                }
+            } catch (error) {
+                resultDiv.className = 'error';
+                resultDiv.innerHTML = `<pre>✗ 请求错误: ${error.message}</pre>`;
+                log('扫码启动请求错误: ' + error.message, 'error');
+            }
+        }
+
+        log('诊断工具已加载');
+        log('请先点击"登录"按钮');
+    </script>
+</body>
+</html>

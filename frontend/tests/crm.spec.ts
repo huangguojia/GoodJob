@@ -649,7 +649,10 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(wechatAction).not.toHaveClass(/is-ready/);
     await expect(wechatAction).toContainText("企业微信 · 待接入");
     await whatsappAction.click();
-    await expect(page.locator(".toast").last()).toContainText("WhatsApp 联系适配器已预留");
+    await expect(page.locator("#whatsapp")).toHaveClass(/active/);
+    await expect(page.locator("#waChatCol .wa-chat-title")).toContainText("Evergreen GmbH");
+    await page.locator("#topOpenTabs [data-tab-view='customer-detail']").click();
+    await expect(page.locator("#customer-detail")).toHaveClass(/active/);
     await page.locator("#customerDetailPage [data-customer-page-back]").click();
     await expect(page.locator("#customers")).toHaveClass(/active/);
 
@@ -2338,7 +2341,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#leadFinderPendingCount")).not.toHaveText("0");
 
     let firstRow = page.locator("#leadFinderResultRows tr[data-lead-id]").first();
-    await expect(firstRow.locator("[data-lead-select]")).toBeDisabled();
+    await expect(firstRow.locator("[data-lead-select]")).toBeEnabled();
     const leadFinderContactInfo = `buyer.leadfinder.${runId}@example.com`;
     const leadFinderCandidateId = await firstRow.getAttribute("data-lead-id");
     expect(leadFinderCandidateId).toBeTruthy();
@@ -2488,15 +2491,12 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#prospectListRows .prospect-item", { hasText: firstCompany }).locator("[data-prospect-open]").click();
     await expect(page.locator("#prospectDetail")).toContainText("待核验");
     await expect(page.locator("#prospectTodoButton")).toHaveCount(0);
-    await expect(page.locator("#prospectDetailSyncButton")).toHaveCount(0);
+    await expect(page.locator("#prospectDetailSyncButton")).toBeVisible();
     await page.locator("#prospectMailWorkspace").locator("summary").click();
     await page.locator("#prospectGenerateMailButton").click();
     await page.locator("#prospectSendMailButton").click();
     await expect(page.locator(".toast").last()).toContainText("请先核验联系方式并标记为可联系");
 
-    await page.locator("#prospectListRows .prospect-item", { hasText: firstCompany }).locator("[data-prospect-select]").check();
-    await page.locator("#prospectSyncButton").click();
-    await expect(page.locator(".toast").last()).toContainText("只有“可联系”或“已联系”的候选可以入线索");
     await page.locator("#prospectListRows .prospect-item", { hasText: firstCompany }).locator("[data-prospect-open]").click();
     await page.locator("#prospectEditContact").fill("Anna Buyer");
     await page.locator("#prospectEditContactInfo").fill(`anna.${runId}@example.com`);
@@ -2588,16 +2588,59 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#ai-config")).toHaveClass(/active/);
   });
 
+  test("whatsapp workspace starts a customer conversation and records messages", async ({ page }) => {
+    const company = `WhatsApp Customer ${runId}`;
+    await apiFromPage(page, "/api/customers", {
+      method: "POST",
+      body: {
+        company,
+        country: "Singapore",
+        contact: "Alicia Tan",
+        stage: "询盘",
+        amount: 18000,
+        health: 80,
+        grade: "A"
+      }
+    });
+    await page.reload();
+    await expect(page.locator("body")).toHaveClass(/is-authenticated/);
+
+    await openView(page, "whatsapp");
+    await expect(page.locator("#whatsapp .wa-layout")).toBeVisible();
+    await expect(page.locator("#waChannelStatus")).toContainText(/人工同步|官方通道/);
+    await page.locator("#waNewChatButton").click();
+    await page.locator("#waCustomerPickerSearch").fill(company);
+    await page.locator(`[data-wa-pick-customer]`).filter({ hasText: company }).click();
+    await expect(page.locator("#waChatCol .wa-chat-title")).toContainText(company);
+    await expect(page.locator("#waInfoCol")).toContainText("人工同步");
+
+    await page.locator("#waBindPhone").fill("+6591234567");
+    await page.locator("#waBindName").fill("Alicia");
+    await page.locator("#waBindButton").click();
+    await expect(page.locator(".toast").last()).toContainText("WhatsApp 号码已绑定");
+    await page.locator("#waDirection").selectOption("outbound");
+    await page.locator("#waContentInput").fill("Thanks Alicia, the quotation is ready.");
+    await page.locator("#waSendButton").click();
+    await expect(page.locator("#waMessages .wa-msg.out").last()).toContainText("Thanks Alicia, the quotation is ready.");
+    await expect(page.locator("#waMessages .wa-msg.out").last()).toContainText("已记录");
+    await expect(page.locator("#waThreadList")).toContainText(company);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator("#whatsapp .wa-layout")).toHaveClass(/wa-mobile-chat-open/);
+    await page.locator("#waMobileInfoButton").click();
+    await expect(page.locator("#waInfoCol")).toHaveClass(/is-open/);
+    await page.locator("#waInfoCloseButton").click();
+    await page.locator("#waMobileBackButton").click();
+    await expect(page.locator("#waThreadList")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBeTruthy();
+  });
+
   test("profile page binds outbound email and signature", async ({ page }) => {
-    await expect(page.locator(".nav-primary [data-view='whatsapp']")).toHaveCount(0);
     await page.locator("#profileEntryButton").click();
     await expect(page.locator("#profile")).toHaveClass(/active/);
     await expect(page.locator("#profileNameTitle")).toContainText("Alex");
-    await expect(page.locator("#profileOpenWhatsAppButton")).toBeVisible();
-    await page.locator("#profileOpenWhatsAppButton").click();
-    await expect(page.locator("#whatsapp")).toHaveClass(/active/);
-    await expect(page.locator("#whatsapp .page-head .sub")).toHaveText("开发中");
-    await page.locator("#profileEntryButton").click();
+    await expect(page.locator("#profileOpenWhatsAppButton")).toHaveCount(0);
+    await expect(page.locator("#profile")).not.toContainText("沟通渠道");
 
     const outboundEmail = `alex.sender.${runId}@example.com`;
     await page.locator("#profileOutboundEmail").fill(outboundEmail);

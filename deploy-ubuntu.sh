@@ -12,6 +12,10 @@ DB_USER="${DB_USER:-goodjob}"
 DB_PASSWORD="${DB_PASSWORD:-}"
 JWT_SECRET="${JWT_SECRET:-}"
 PROVIDER_CREDENTIAL_KEY="${PROVIDER_CREDENTIAL_KEY:-}"
+MYSQL_DATA_IMPORT_TOKEN="${MYSQL_DATA_IMPORT_TOKEN:-}"
+MYSQL_LOCAL_BACKUP_ENABLED="${MYSQL_LOCAL_BACKUP_ENABLED:-false}"
+MYSQL_LOCAL_BACKUP_DIR="${MYSQL_LOCAL_BACKUP_DIR:-$APP_ROOT/shared/database-backups}"
+MYSQL_LOCAL_BACKUP_RETENTION_DAYS="${MYSQL_LOCAL_BACKUP_RETENTION_DAYS:-7}"
 TRADE_OBSERVATION_CURSOR_SECRET="${TRADE_OBSERVATION_CURSOR_SECRET:-}"
 MARKET_OPPORTUNITY_CURSOR_SECRET="${MARKET_OPPORTUNITY_CURSOR_SECRET:-}"
 ORGANIZATION_IDENTITY_MASTER_SECRET="${ORGANIZATION_IDENTITY_MASTER_SECRET:-}"
@@ -36,7 +40,6 @@ SHARED_DIR="$APP_ROOT/shared"
 CURRENT_LINK="$APP_ROOT/current"
 RELEASE_DIR="$RELEASES_DIR/$RELEASE_ID"
 ENV_FILE="$SHARED_DIR/.env"
-BACKUP_DIR="$SHARED_DIR/backups"
 BETA_ADMIN_CREDENTIALS_FILE="${BETA_ADMIN_CREDENTIALS_FILE:-$SHARED_DIR/beta-admin-credentials.txt}"
 BETA_ADMIN_CREDENTIALS_SOURCE="${BETA_ADMIN_CREDENTIALS_SOURCE:-}"
 DEPLOY_CONFIG="$APP_ROOT/deploy.conf"
@@ -46,7 +49,7 @@ DB_PASSWORD_WAS_GENERATED=false
 INITIAL_ADMIN_BOOTSTRAP_REQUIRED=false
 
 readonly SCRIPT_DIR SOURCE_DIR APP_ROOT APP_USER SERVICE_NAME DB_NAME DB_USER BACKEND_PORT
-readonly RELEASE_ID RELEASES_DIR SHARED_DIR CURRENT_LINK RELEASE_DIR ENV_FILE BACKUP_DIR DEPLOY_CONFIG
+readonly RELEASE_ID RELEASES_DIR SHARED_DIR CURRENT_LINK RELEASE_DIR ENV_FILE DEPLOY_CONFIG
 
 log() {
   printf '\n\033[1;34m[%s]\033[0m %s\n' "$(date '+%H:%M:%S')" "$*"
@@ -81,6 +84,10 @@ GoodJob CRM Ubuntu 无 Docker 一键部署脚本
   DB_PASSWORD          数据库密码；首次部署留空会自动生成
   JWT_SECRET           会话签名密钥；留空自动生成并持久化
   PROVIDER_CREDENTIAL_KEY Provider 连接密钥加密主密钥；留空自动生成并持久化
+  MYSQL_DATA_IMPORT_TOKEN MySQL 文件数据迁移授权码；留空自动生成并持久化
+  MYSQL_LOCAL_BACKUP_ENABLED true/false，是否允许备份写入服务器磁盘；默认 false
+  MYSQL_LOCAL_BACKUP_DIR 本地备份目录；默认 shared/database-backups
+  MYSQL_LOCAL_BACKUP_RETENTION_DAYS 自动清理天数；默认 7，0 表示不清理
   TRADE_OBSERVATION_CURSOR_SECRET 贸易观测分页游标签名密钥；留空自动生成并持久化
   MARKET_OPPORTUNITY_CURSOR_SECRET 市场机会分页游标签名密钥；留空自动生成并持久化
   ORGANIZATION_IDENTITY_MASTER_SECRET 企业强身份派生主密钥；留空自动生成并持久化
@@ -102,7 +109,7 @@ GoodJob CRM Ubuntu 无 Docker 一键部署脚本
 
 说明：
   - 重复执行会发布新版本，不会清空数据库。
-  - 更新前会自动备份已有 MySQL 数据。
+  - 更新时仅读取已有 MySQL 结构并增量补齐，不创建数据库备份。
   - 新版本健康检查失败时会自动回滚到上一版本。
   - 首次管理员凭据只在空库初始化时注入，创建成功并二次启动后不再保留。
 EOF
@@ -283,6 +290,7 @@ fi
 if [[ -f "$ENV_FILE" ]]; then
   [[ -n "$JWT_SECRET" ]] || JWT_SECRET="$(read_existing_env_value JWT_SECRET)"
   [[ -n "$PROVIDER_CREDENTIAL_KEY" ]] || PROVIDER_CREDENTIAL_KEY="$(read_existing_env_value PROVIDER_CREDENTIAL_KEY)"
+  [[ -n "$MYSQL_DATA_IMPORT_TOKEN" ]] || MYSQL_DATA_IMPORT_TOKEN="$(read_existing_env_value MYSQL_DATA_IMPORT_TOKEN)"
   [[ -n "$TRADE_OBSERVATION_CURSOR_SECRET" ]] || TRADE_OBSERVATION_CURSOR_SECRET="$(read_existing_env_value TRADE_OBSERVATION_CURSOR_SECRET)"
   [[ -n "$MARKET_OPPORTUNITY_CURSOR_SECRET" ]] || MARKET_OPPORTUNITY_CURSOR_SECRET="$(read_existing_env_value MARKET_OPPORTUNITY_CURSOR_SECRET)"
   [[ -n "$ORGANIZATION_IDENTITY_MASTER_SECRET" ]] || ORGANIZATION_IDENTITY_MASTER_SECRET="$(read_existing_env_value ORGANIZATION_IDENTITY_MASTER_SECRET)"
@@ -309,6 +317,7 @@ if [[ -z "$DB_PASSWORD" ]]; then
 fi
 [[ -n "$JWT_SECRET" ]] || JWT_SECRET="$(generate_password)"
 [[ -n "$PROVIDER_CREDENTIAL_KEY" ]] || PROVIDER_CREDENTIAL_KEY="$(generate_password)"
+[[ -n "$MYSQL_DATA_IMPORT_TOKEN" ]] || MYSQL_DATA_IMPORT_TOKEN="$(generate_password)"
 [[ -n "$TRADE_OBSERVATION_CURSOR_SECRET" ]] || TRADE_OBSERVATION_CURSOR_SECRET="$(generate_password)"
 [[ -n "$MARKET_OPPORTUNITY_CURSOR_SECRET" ]] || MARKET_OPPORTUNITY_CURSOR_SECRET="$(generate_password)"
 [[ -n "$ORGANIZATION_IDENTITY_MASTER_SECRET" ]] || ORGANIZATION_IDENTITY_MASTER_SECRET="$(generate_password)"
@@ -323,6 +332,7 @@ validate_domain
 [[ "$DB_PASSWORD" != *$'\n'* && "$DB_PASSWORD" != *$'\r'* ]] || die "数据库密码不能包含换行符"
 (( ${#JWT_SECRET} >= 32 )) || die "JWT_SECRET 至少需要 32 位"
 (( ${#PROVIDER_CREDENTIAL_KEY} >= 32 )) || die "PROVIDER_CREDENTIAL_KEY 至少需要 32 位"
+(( ${#MYSQL_DATA_IMPORT_TOKEN} >= 32 )) || die "MYSQL_DATA_IMPORT_TOKEN 至少需要 32 位"
 (( ${#TRADE_OBSERVATION_CURSOR_SECRET} >= 32 )) || die "TRADE_OBSERVATION_CURSOR_SECRET 至少需要 32 位"
 (( ${#MARKET_OPPORTUNITY_CURSOR_SECRET} >= 32 )) || die "MARKET_OPPORTUNITY_CURSOR_SECRET 至少需要 32 位"
 (( ${#ORGANIZATION_IDENTITY_MASTER_SECRET} >= 32 )) || die "ORGANIZATION_IDENTITY_MASTER_SECRET 至少需要 32 位"
@@ -388,7 +398,7 @@ if ! id "$APP_USER" >/dev/null 2>&1; then
   useradd --system --create-home --home-dir "/var/lib/$APP_USER" --shell /usr/sbin/nologin "$APP_USER"
 fi
 install -d -m 0755 "$APP_ROOT" "$RELEASES_DIR"
-install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$SHARED_DIR" "$BACKUP_DIR"
+install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$SHARED_DIR"
 if is_true "$PROVISION_BETA_ADMINS" && [[ -n "$BETA_ADMIN_CREDENTIALS_SOURCE" ]]; then
   install -o "$APP_USER" -g "$APP_USER" -m 0600 \
     "$BETA_ADMIN_CREDENTIALS_SOURCE" "$BETA_ADMIN_CREDENTIALS_FILE"
@@ -413,17 +423,6 @@ GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX
   ON \`$DB_NAME\`.* TO '$DB_USER'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
-
-table_count="$(mysql --protocol=socket -N -B -uroot -e \
-  "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$DB_NAME';")"
-if (( table_count > 0 )); then
-  backup_file="$BACKUP_DIR/${DB_NAME}_${RELEASE_ID}.sql.gz"
-  log "备份现有数据库到 $backup_file"
-  MYSQL_PWD="$DB_PASSWORD" mysqldump --single-transaction --quick --no-tablespaces \
-    -h 127.0.0.1 -u "$DB_USER" "$DB_NAME" | gzip -9 > "$backup_file"
-  chown "$APP_USER:$APP_USER" "$backup_file"
-  chmod 0640 "$backup_file"
-fi
 
 users_table_exists="$(mysql --protocol=socket -N -B -uroot -e \
   "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$DB_NAME' AND table_name='users';")"
@@ -468,17 +467,30 @@ log "5/9 构建后端和前端"
 runuser -u "$APP_USER" -- env HOME="/var/lib/$APP_USER" \
   npm run build --prefix "$RELEASE_DIR"
 [[ -f "$RELEASE_DIR/backend/dist/server.js" ]] || die "后端构建产物不存在"
+[[ -f "$RELEASE_DIR/backend/dist/migrate-mysql.js" ]] || die "MySQL 增量迁移程序不存在"
 [[ -f "$RELEASE_DIR/frontend/dist/index.html" ]] || die "前端构建产物不存在"
 
 encoded_password="$(url_encode "$DB_PASSWORD")"
+database_url="mysql://$DB_USER:$encoded_password@127.0.0.1:3306/$DB_NAME"
+log "读取 MySQL 现有结构并执行幂等增量迁移（不创建数据库备份）"
+runuser -u "$APP_USER" -- env \
+  HOME="/var/lib/$APP_USER" \
+  DATABASE_URL="$database_url" \
+  GOODJOB_RELEASE_ID="$RELEASE_ID" \
+  node "$RELEASE_DIR/backend/dist/migrate-mysql.js"
+
 cat > "$ENV_FILE" <<EOF
 NODE_ENV=production
 CRM_STORE=mysql
-DATABASE_URL=mysql://$DB_USER:$encoded_password@127.0.0.1:3306/$DB_NAME
+DATABASE_URL=$database_url
 PORT=$BACKEND_PORT
 BACKEND_HOST=127.0.0.1
 JWT_SECRET=$JWT_SECRET
 PROVIDER_CREDENTIAL_KEY=$PROVIDER_CREDENTIAL_KEY
+MYSQL_DATA_IMPORT_TOKEN=$MYSQL_DATA_IMPORT_TOKEN
+MYSQL_LOCAL_BACKUP_ENABLED=$MYSQL_LOCAL_BACKUP_ENABLED
+MYSQL_LOCAL_BACKUP_DIR=$MYSQL_LOCAL_BACKUP_DIR
+MYSQL_LOCAL_BACKUP_RETENTION_DAYS=$MYSQL_LOCAL_BACKUP_RETENTION_DAYS
 TRADE_OBSERVATION_CURSOR_SECRET=$TRADE_OBSERVATION_CURSOR_SECRET
 MARKET_OPPORTUNITY_CURSOR_SECRET=$MARKET_OPPORTUNITY_CURSOR_SECRET
 ORGANIZATION_IDENTITY_MASTER_SECRET=$ORGANIZATION_IDENTITY_MASTER_SECRET
@@ -623,8 +635,6 @@ find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \
   | while IFS= read -r old_release; do
       [[ -n "$old_release" && "$old_release" != "$PREVIOUS_RELEASE" ]] && rm -rf -- "$old_release"
     done
-find "$BACKUP_DIR" -type f -name "${DB_NAME}_*.sql.gz" -mtime +30 -delete
-
 if is_true "$ENABLE_HTTPS"; then
   [[ -n "$DOMAIN" ]] || die "启用 HTTPS 时必须设置 DOMAIN"
   [[ -n "$LETSENCRYPT_EMAIL" ]] || die "启用 HTTPS 时必须设置 LETSENCRYPT_EMAIL"
@@ -646,7 +656,7 @@ printf '访问地址：%s\n' "$access_url"
 printf '服务状态：systemctl status %s\n' "$SERVICE_NAME"
 printf '实时日志：journalctl -u %s -f\n' "$SERVICE_NAME"
 printf '当前版本：%s\n' "$RELEASE_DIR"
-printf '数据库备份：%s\n' "$BACKUP_DIR"
+printf '数据库升级：复用现有 MySQL，仅执行幂等结构补齐，不创建数据副本\n'
 if is_true "$PROVISION_BETA_ADMINS"; then
   printf '公测管理员名单：%s（仅服务器运行用户可读）\n' "$BETA_ADMIN_CREDENTIALS_FILE"
 fi

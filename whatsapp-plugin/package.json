@@ -1,0 +1,63 @@
+{
+  "name": "whatsapp-crm-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,green \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "tsx watch src/server/index.ts",
+    "dev:web": "vite --host 127.0.0.1",
+    "build": "npm run build:web && npm run build:server",
+    "build:web": "vite build",
+    "build:server": "tsc -p tsconfig.server.json",
+    "start": "node dist-server/server/index.js",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate": "tsx src/server/scripts/migrate.ts",
+    "db:init": "tsx src/server/scripts/seed.ts",
+    "db:seed-demo": "tsx src/server/scripts/seed-demo.ts",
+    "db:cleanup-demo": "tsx src/server/scripts/cleanup-demo.ts"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.4",
+    "@tanstack/react-query": "5.101.2",
+    "@whiskeysockets/baileys": "7.0.0-rc13",
+    "cors": "2.8.5",
+    "dotenv": "16.6.1",
+    "express": "5.2.1",
+    "helmet": "8.1.0",
+    "https-proxy-agent": "9.1.0",
+    "lucide-react": "0.468.0",
+    "pg": "8.16.3",
+    "pino": "9.14.0",
+    "qrcode": "1.5.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "socket.io": "4.8.3",
+    "socket.io-client": "4.8.3",
+    "undici": "6.27.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/cors": "2.8.19",
+    "@types/express": "5.0.6",
+    "@types/node": "22.19.8",
+    "@types/pg": "8.15.6",
+    "@types/qrcode": "1.5.6",
+    "@types/react": "18.3.28",
+    "@types/react-dom": "18.3.7",
+    "@types/supertest": "6.0.3",
+    "@vitejs/plugin-react": "4.7.0",
+    "concurrently": "9.2.4",
+    "supertest": "7.2.2",
+    "tsx": "4.23.1",
+    "typescript": "5.7.3",
+    "vite": "6.4.3",
+    "vitest": "3.2.6"
+  }
+}

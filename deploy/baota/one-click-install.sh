@@ -3,6 +3,13 @@ set -Eeuo pipefail
 umask 027
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# 可靠部署入口会自动复用 /www/server/goodjob-crm/shared/deploy.conf。
+# 保留本脚本只为兼容已经写进运维手册的旧命令。
+if [[ -f "$SCRIPT_DIR/deploy-goodjob.sh" ]]; then
+  exec bash "$SCRIPT_DIR/deploy-goodjob.sh" "$@"
+fi
+
 CONFIG_FILE="${CONFIG_FILE:-$SCRIPT_DIR/deploy.conf}"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -13,6 +20,7 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
   cp "$SCRIPT_DIR/deploy.conf.example" "$SCRIPT_DIR/deploy.conf"
 
 然后修改 deploy.conf 中的 DOMAIN、DB_NAME、DB_USER、DB_PASSWORD，
+必要时填写 MYSQL_ROOT_PASSWORD，
 再执行：sudo bash "$SCRIPT_DIR/one-click-install.sh"
 EOF
   exit 1

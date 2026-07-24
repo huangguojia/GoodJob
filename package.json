@@ -2,11 +2,12 @@
   "name": "goodjob-crm",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "scripts": {
-    "dev": "concurrently \"npm run dev:mysql --workspace backend\" \"npm run dev --workspace frontend\"",
-    "dev:mysql": "concurrently \"npm run dev:mysql --workspace backend\" \"npm run dev --workspace frontend\"",
-    "build": "npm run build --workspace backend && npm run build --workspace frontend",
-    "test": "npm run test --workspace backend && npm run test --workspace frontend",
+    "dev": "concurrently -k -n crm-api,crm-web,whatsapp \"npm run dev:mysql --workspace backend\" \"npm run dev --workspace frontend\" \"npm --prefix whatsapp-plugin run dev\"",
+    "dev:mysql": "concurrently -k -n crm-api,crm-web,whatsapp \"npm run dev:mysql --workspace backend\" \"npm run dev --workspace frontend\" \"npm --prefix whatsapp-plugin run dev\"",
+    "build": "npm run build --workspace backend && npm run build --workspace frontend && npm --prefix whatsapp-plugin run build",
+    "test": "npm run test --workspace backend && npm run test --workspace frontend && npm --prefix whatsapp-plugin test",
     "test:e2e": "npm run test:e2e --workspace frontend"
   },
   "workspaces": [

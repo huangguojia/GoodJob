@@ -36,6 +36,7 @@ const store = getStore();
 const successCode = "worker_stage_success";
 const failureCode = "worker_stage_failure";
 const gleifCode = "gleif";
+const aiSearchCode = "ai_search";
 const adapterVersion = "worker-stage-v1";
 const catalogVersion = "worker-policy-v1";
 
@@ -361,6 +362,31 @@ const gleifProvider = defineProvider({
   }
 });
 
+const aiSearchCatalogFixture = defineProvider({
+  id: aiSearchCode,
+  name: "AI Search worker fixture",
+  adapterVersion,
+  tier: "ai",
+  category: "ai",
+  requiresKey: false,
+  capabilities: ["ai", "company"],
+  docsUrl: "",
+  keyHint: "",
+  defaultBaseUrl: "https://api.openai.com/v1",
+  costNote: "",
+  networkPolicy: {
+    allowedHosts: ["api.openai.com"],
+    allowedPathPrefixes: ["/v1/"],
+    allowedMethods: ["POST"]
+  },
+  async search() {
+    return { records: [], exhausted: true };
+  },
+  async health() {
+    return { ok: true, message: "ok" };
+  }
+});
+
 const originalPersist = store.persist;
 const originalPersistProspectExecutionMutation =
   store.persistProspectExecutionMutation;
@@ -389,12 +415,15 @@ store.users.push(ownerA, ownerB);
 store.providerCatalog.splice(
   0,
   store.providerCatalog.length,
-  ...store.providerCatalog.filter((item) => item.code !== gleifCode)
+  ...store.providerCatalog.filter((item) =>
+    item.code !== gleifCode && item.code !== aiSearchCode
+  )
 );
 store.providerCatalog.push(
   testProviderCatalog(successProvider),
   testProviderCatalog(failureProvider),
-  testProviderCatalog(gleifProvider)
+  testProviderCatalog(gleifProvider),
+  testProviderCatalog(aiSearchCatalogFixture)
 );
 
 const businessCounts = {
@@ -410,6 +439,7 @@ const teamARun = createRun(ownerA, [
 ]);
 const teamBRun = createRun(ownerB, [successCode]);
 const teamARepeatRun = createRun(ownerA, [gleifCode]);
+const teamAMissingAiRun = createRun(ownerA, [aiSearchCode]);
 const dispatchScopes: string[] = [];
 const dispatcher = new ProspectProviderDispatcher({
   store,
@@ -454,13 +484,21 @@ try {
   await waitFor(
     () => teamARun.status === "partial_success"
       && teamBRun.status === "succeeded"
-      && teamARepeatRun.status === "succeeded",
+      && teamARepeatRun.status === "succeeded"
+      && teamAMissingAiRun.status === "failed",
     "all team-scoped runs to finish"
   );
   assert.equal(teamARun.status, "partial_success");
   assert.equal(teamBRun.status, "succeeded");
   assert.equal(teamARepeatRun.status, "succeeded");
-  assert.equal(dispatchScopes.length, 5);
+  assert.equal(teamAMissingAiRun.status, "failed");
+  assert.equal(dispatchScopes.length, 6);
+  const missingAiAttempt = store.prospectExecutionAttempts.find((item) =>
+    item.runId === teamAMissingAiRun.id
+    && item.providerCode === aiSearchCode
+  );
+  assert.equal(missingAiAttempt?.errorCode, "PROVIDER_CONNECTION_INVALID");
+  assert.match(missingAiAttempt?.errorMessage || "", /API Key.*自动获客/u);
   assert.ok(
     executionMutationCount > 0,
     "execution kernel should prefer the prospect execution transaction path"
@@ -477,8 +515,9 @@ try {
     store.prospectProviderRequestLedgers.filter((item) =>
       item.runId === teamARun.id || item.runId === teamBRun.id
       || item.runId === teamARepeatRun.id
+      || item.runId === teamAMissingAiRun.id
     ).length,
-    5
+    6
   );
   assert.equal(
     store.prospectSourceRawHits.filter((item) =>
@@ -502,12 +541,15 @@ try {
     (item) => item.runId === teamARun.id
       || item.runId === teamBRun.id
       || item.runId === teamARepeatRun.id
+      || item.runId === teamAMissingAiRun.id
   )) {
     const run = ledger.runId === teamARun.id
       ? teamARun
       : ledger.runId === teamBRun.id
         ? teamBRun
-        : teamARepeatRun;
+        : ledger.runId === teamARepeatRun.id
+          ? teamARepeatRun
+          : teamAMissingAiRun;
     assert.equal(ledger.teamId, run.teamId);
     assert.equal(ledger.ownerId, run.ownerId);
     assert.equal(ledger.status, "settled");

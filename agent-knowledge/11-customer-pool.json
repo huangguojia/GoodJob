@@ -1,0 +1,14 @@
+{
+  "id": "workflow.customer-pool.v1",
+  "kind": "workflow",
+  "module": "customer-pool",
+  "title": "客户公池释放与领取",
+  "summary": "暂时无法维护的客户可释放到本团队公池，符合权限的成员可以领取。",
+  "content": "释放客户前必须确认操作者有权管理该客户，并检查是否仍有活跃商机。释放会取消未完成的客户待办并记录释放原因。公池客户没有当前负责人，只能由同团队业务员、主管或管理员领取。领取和释放都必须通过正式接口执行，不能直接改 ownerId。",
+  "keywords": ["公池", "释放客户", "扔进公池", "领取客户", "客户归属", "没人跟"],
+  "roles": ["sales", "manager", "admin", "super_admin"],
+  "toolRefs": ["api.catalog", "api.write", "crm.get_customer_overview"],
+  "successCriteria": ["检查活跃商机", "记录释放原因", "读取最新归属状态确认完成"],
+  "failureCases": ["跨团队领取", "存在活跃商机仍释放", "绕过公池接口直接修改负责人"],
+  "version": "1.0.0"
+}

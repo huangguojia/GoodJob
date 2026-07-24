@@ -1,4 +1,429 @@
+import type { AgentGoalSpec } from "./agent-goal.js";
+
 export type Role = "sales" | "manager" | "admin" | "super_admin";
+
+export type AgentRisk = "read" | "draft" | "write" | "external";
+export type AgentStepStatus = "ready" | "needs_confirmation" | "queued" | "running" | "done" | "failed" | "skipped";
+export type AgentRunStatus = "planning" | "awaiting_confirmation" | "running" | "paused" | "waiting_user" | "completed" | "failed" | "cancelled";
+export type AgentEventType = "plan" | "step" | "approval" | "result" | "error" | "assistant";
+
+export interface AgentRunRecord {
+  id: string;
+  conversationId: string;
+  ownerId: string;
+  teamId: string;
+  goal: string;
+  goalSpec?: AgentGoalSpec;
+  summary: string;
+  status: AgentRunStatus;
+  iteration: number;
+  maxIterations: number;
+  progress: number;
+  currentAction: string;
+  stopReason: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+}
+
+export interface AgentRunStepRecord {
+  id: string;
+  key: string;
+  dependsOn: string[];
+  runId: string;
+  ownerId: string;
+  teamId: string;
+  tool: string;
+  risk: AgentRisk;
+  status: AgentStepStatus;
+  title: string;
+  input: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: string;
+  signature: string;
+  approvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentRunEventRecord {
+  id: string;
+  runId: string;
+  ownerId: string;
+  teamId: string;
+  type: AgentEventType;
+  message: string;
+  createdAt: string;
+}
+
+export interface AgentMissionCheckpointRecord {
+  id: string;
+  runId: string;
+  ownerId: string;
+  teamId: string;
+  iteration: number;
+  status: AgentRunStatus;
+  reason: string;
+  stateHash: string;
+  snapshot: {
+    run: AgentRunRecord;
+    steps: AgentRunStepRecord[];
+    events: AgentRunEventRecord[];
+  };
+  createdAt: string;
+}
+
+export type AgentMemoryType = "user_preference" | "company_knowledge" | "customer_memory" | "team_playbook";
+export type AgentMemoryStatus = "proposed" | "active" | "archived";
+export type AgentMemoryScope = "personal" | "team" | "customer" | "company";
+
+export interface AgentMemoryRecord {
+  id: string;
+  ownerId: string;
+  teamId: string;
+  type: AgentMemoryType;
+  scope: AgentMemoryScope;
+  subjectId: string;
+  title: string;
+  content: string;
+  sourceType: "crm" | "manual" | "agent" | "playbook";
+  sourceId: string;
+  status: AgentMemoryStatus;
+  confidence: number;
+  expiresAt: string;
+  lastUsedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AgentKnowledgeKind = "system" | "module" | "workflow" | "policy" | "field" | "playbook" | "failure_case";
+export type AgentKnowledgeScope = "system" | "team" | "company";
+export type AgentKnowledgeStatus = "draft" | "review" | "published" | "archived";
+export type AgentKnowledgeSourceType = "system_file" | "manual" | "agent_feedback" | "distillation";
+export type AgentKnowledgeTrustLevel = "system" | "reviewed" | "candidate";
+
+export interface AgentKnowledgeDocument {
+  id: string;
+  ownerId: string;
+  teamId: string;
+  kind: AgentKnowledgeKind;
+  scope: AgentKnowledgeScope;
+  module: string;
+  title: string;
+  summary: string;
+  content: string;
+  keywords: string[];
+  roles: Role[];
+  toolRefs: string[];
+  successCriteria: string[];
+  failureCases: string[];
+  sourceType: AgentKnowledgeSourceType;
+  sourceId: string;
+  status: AgentKnowledgeStatus;
+  trustLevel: AgentKnowledgeTrustLevel;
+  version: string;
+  revision: number;
+  checksum: string;
+  publishedBy: string;
+  publishedAt: string;
+  usageCount: number;
+  lastUsedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AgentTriggerEventType = "lead_overdue" | "customer_reply" | "stalled_deal" | "next_action_due" | "health_decline" | "communication_unread" | "prospect_completed";
+export type AgentTriggerMode = "notify" | "internal" | "approval";
+export type AgentTriggerRuleStatus = "active" | "paused";
+
+export interface AgentTriggerRuleRecord {
+  id: string;
+  ownerId: string;
+  teamId: string;
+  name: string;
+  eventType: AgentTriggerEventType;
+  mode: AgentTriggerMode;
+  status: AgentTriggerRuleStatus;
+  intervalMinutes: number;
+  thresholdDays: number;
+  healthBelow: number;
+  maxPerScan: number;
+  lastScanAt: string;
+  lastTriggeredAt: string;
+  nextScanAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentTriggerEventRecord {
+  id: string;
+  ruleId: string;
+  ownerId: string;
+  teamId: string;
+  factKey: string;
+  entityType: "lead" | "customer" | "deal" | "communication" | "prospect_run";
+  entityId: string;
+  title: string;
+  message: string;
+  missionRunId: string;
+  status: "mission_created" | "skipped" | "failed";
+  createdAt: string;
+}
+
+export type AgentModelCallPurpose = "planning" | "evaluation";
+export interface AgentModelCallRecord {
+  id: string;
+  runId: string;
+  ownerId: string;
+  teamId: string;
+  purpose: AgentModelCallPurpose;
+  configId: string;
+  provider: string;
+  model: string;
+  routeIndex: number;
+  success: boolean;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostUsd: number;
+  latencyMs: number;
+  error: string;
+  createdAt: string;
+}
+
+export interface AgentEvaluationRunRecord {
+  id: string;
+  ownerId: string;
+  teamId: string;
+  version: string;
+  passed: number;
+  total: number;
+  results: Array<{ id: string; name: string; passed: boolean; detail: string }>;
+  createdAt: string;
+}
+
+export type OutreachSequenceChannel = "email" | "communication";
+export type OutreachSequenceStatus = "active" | "paused" | "completed" | "stopped" | "cancelled" | "failed";
+
+export interface OutreachSequenceStepSnapshot {
+  index: number;
+  delayHours: number;
+  subject: string;
+  body: string;
+  status: "pending" | "sending" | "sent" | "skipped" | "failed";
+  scheduledAt: string;
+  sentAt: string;
+  error: string;
+}
+
+export interface OutreachSequence {
+  id: string;
+  missionRunId: string;
+  approvalStepId: string;
+  ownerId: string;
+  teamId: string;
+  entityType: "customer" | "lead";
+  entityId: string;
+  entityName: string;
+  recipient: string;
+  channel: OutreachSequenceChannel;
+  accountId: string;
+  status: OutreachSequenceStatus;
+  currentStep: number;
+  maxSends: number;
+  steps: OutreachSequenceStepSnapshot[];
+  approvedBy: string;
+  approvedAt: string;
+  nextExecutionAt: string;
+  lastSentAt: string;
+  stopReason: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CustomerMaintenanceWatchStatus = "active" | "paused" | "cancelled" | "error";
+
+export interface CustomerMaintenanceRuleSnapshot {
+  intervalHours: number;
+  inactivityDays: number;
+  healthBelow: number;
+  includeOverdueReminder: boolean;
+  includeMissingNextAction: boolean;
+  grades: CustomerGrade[];
+  maxTodosPerRun: number;
+}
+
+export interface CustomerMaintenanceFinding {
+  customerId: string;
+  customerName: string;
+  dealId: string;
+  reasonCodes: string[];
+  reason: string;
+  priority: "high" | "medium" | "normal";
+  triggerKey: string;
+  playbookActivationId?: string;
+  playbookName?: string;
+  playbookAction?: string;
+}
+
+export interface CustomerMaintenanceWatch {
+  id: string;
+  missionRunId: string;
+  approvalStepId: string;
+  ownerId: string;
+  teamId: string;
+  name: string;
+  status: CustomerMaintenanceWatchStatus;
+  rules: CustomerMaintenanceRuleSnapshot;
+  nextRunAt: string;
+  lastRunAt: string;
+  lastMatchedCount: number;
+  lastCreatedCount: number;
+  lastSkippedCount: number;
+  totalCreatedCount: number;
+  lastFindings: CustomerMaintenanceFinding[];
+  lastError: string;
+  approvedBy: string;
+  approvedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SalesDistillationStatus = "draft" | "published";
+
+export interface SalesDistillationMetrics {
+  customerCount: number;
+  leadCount: number;
+  activeDealCount: number;
+  wonDealCount: number;
+  wonAmount: number;
+  followupCount: number;
+  completedTodoCount: number;
+  reportCount: number;
+}
+
+export interface SalesDistillationPlaybookItem {
+  stage: string;
+  action: string;
+  evidence: string;
+}
+
+export interface SalesDistillation {
+  id: string;
+  sourceUserId: string;
+  sourceUserName: string;
+  teamId: string;
+  periodDays: number;
+  metrics: SalesDistillationMetrics;
+  patterns: string[];
+  playbook: SalesDistillationPlaybookItem[];
+  coachingActions: string[];
+  modelLabel: string;
+  status: SalesDistillationStatus;
+  createdBy: string;
+  createdAt: string;
+  publishedBy?: string;
+  publishedAt?: string;
+  trainingRunId?: string;
+  version?: number;
+  maturity?: SalesTrainingMaturity;
+  evaluationScore?: number;
+  sampleCount?: number;
+}
+
+export type SalesTrainingStatus = "queued" | "collecting" | "cleaning" | "labeling" | "training" | "evaluating" | "awaiting_review" | "published" | "paused" | "failed" | "cancelled";
+export type SalesTrainingMaturity = "observation" | "trial" | "production" | "stable";
+export type SalesTrainingSampleLabel = "positive" | "negative" | "neutral";
+
+export interface SalesTrainingSample {
+  id: string;
+  entityType: "customer" | "lead" | "deal";
+  entityId: string;
+  title: string;
+  market: string;
+  stage: string;
+  outcome: string;
+  label: SalesTrainingSampleLabel;
+  included: boolean;
+  activityCount: number;
+  todoCount: number;
+  evidenceIds: string[];
+  summary: string;
+  managerNote: string;
+}
+
+export interface SalesTrainingRound {
+  id: string;
+  index: number;
+  name: string;
+  status: "pending" | "running" | "completed" | "failed";
+  summary: string;
+  startedAt: string;
+  completedAt: string;
+}
+
+export interface SalesTrainingEvaluation {
+  coverage: number;
+  balance: number;
+  traceability: number;
+  strategy: number;
+  safety: number;
+  overall: number;
+  passed: boolean;
+  blockers: string[];
+}
+
+export interface SalesTrainingEvent {
+  id: string;
+  stage: SalesTrainingStatus;
+  message: string;
+  createdAt: string;
+}
+
+export interface SalesTrainingRun {
+  id: string;
+  sourceUserId: string;
+  sourceUserName: string;
+  teamId: string;
+  createdBy: string;
+  parentRunId: string;
+  version: number;
+  periodDays: number;
+  status: SalesTrainingStatus;
+  resumeStatus: SalesTrainingStatus;
+  progress: number;
+  currentAction: string;
+  maturity: SalesTrainingMaturity;
+  metrics: SalesDistillationMetrics;
+  sampleStats: { source: number; valid: number; rejected: number; positive: number; negative: number; neutral: number; holdout: number };
+  samples: SalesTrainingSample[];
+  rounds: SalesTrainingRound[];
+  events: SalesTrainingEvent[];
+  patterns: string[];
+  playbook: SalesDistillationPlaybookItem[];
+  coachingActions: string[];
+  evaluation: SalesTrainingEvaluation;
+  modelLabel: string;
+  candidateDistillationId: string;
+  error: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string;
+  publishedAt: string;
+}
+
+export interface SalesPlaybookActivation {
+  id: string;
+  distillationId: string;
+  ownerId: string;
+  teamId: string;
+  status: "active" | "paused";
+  applicationCount: number;
+  taskCount: number;
+  lastUsedAt: string;
+  activatedBy: string;
+  activatedAt: string;
+  updatedAt: string;
+}
 
 export interface User {
   id: string;
@@ -65,6 +490,7 @@ export interface Customer {
   company: string;
   country: string;
   contact: string;
+  whatsapp?: string;
   ownerId: string;
   teamId: string;
   stage: string;
@@ -1058,6 +1484,34 @@ export interface ProspectRunProviderSnapshot {
   accessMode: ProviderAccessMode;
 }
 
+export interface ProspectSearchQueryPlanMetadata {
+  source: "super_search";
+  plannerVersion: string;
+  missionId: string;
+  roundNo: number;
+  theme: string;
+  planningMode?: "rules" | "ai_enhanced";
+  fingerprint: string;
+}
+
+export interface ProspectSearchQueryCell {
+  market: string;
+  language: string;
+  customerType: string;
+  queryTheme: string;
+  providerId: string;
+  queryText: string;
+  fingerprint: string;
+  status: "planned" | "succeeded" | "succeeded_empty" | "partial_success" | "failed" | "cancelled";
+  rawCount?: number;
+  invalidCount?: number;
+  duplicateCount?: number;
+  candidateCount?: number;
+  errorCode?: string;
+  errorMessage?: string;
+  completedAt?: string;
+}
+
 export interface ProspectRunExecutionSnapshot {
   contractVersion: "search_run_control_plane_v1";
   campaign: {
@@ -1076,6 +1530,7 @@ export interface ProspectRunExecutionSnapshot {
     query: ProspectStrategyQuery;
   };
   resolvedQuery: ProspectResolvedQuerySnapshot;
+  queryPlan?: ProspectSearchQueryPlanMetadata;
   providerPlan: ProspectRunProviderSnapshot[];
 }
 
@@ -1102,6 +1557,88 @@ export interface ProspectSearchRun {
   updatedAt: string;
   pausedAt: string;
   cancelledAt: string;
+}
+
+export type ProspectSuperSearchStatus =
+  | "queued"
+  | "running"
+  | "paused"
+  | "cancelled"
+  | "succeeded"
+  | "partial_success"
+  | "failed";
+
+export type ProspectSuperSearchDepth = "balanced" | "deep" | "extreme";
+
+export interface ProspectSuperSearchMission {
+  id: string;
+  teamId: string;
+  ownerId: string;
+  campaignId: string;
+  strategyId: string;
+  status: ProspectSuperSearchStatus;
+  targetCandidateCount: number;
+  maxDurationMinutes: number;
+  depth: ProspectSuperSearchDepth;
+  maxRounds: number;
+  costLimit: number;
+  currency: string;
+  aiMode: "auto" | "off";
+  currentRound: number;
+  currentRunId: string;
+  totalCost: number;
+  rawCount: number;
+  uniqueCount: number;
+  candidateCount: number;
+  pendingCount: number;
+  filteredCount: number;
+  revision: number;
+  startedAt: string;
+  deadlineAt: string;
+  stopReason: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProspectSuperSearchRound {
+  id: string;
+  missionId: string;
+  teamId: string;
+  ownerId: string;
+  roundNo: number;
+  runId: string;
+  queryPlanSnapshot: ProspectResolvedQuerySnapshot;
+  plannerVersion?: string;
+  planningMode?: "rules" | "ai_enhanced";
+  queryTheme?: string;
+  queryPlanFingerprint?: string;
+  coverageGaps?: string[];
+  queryCells?: ProspectSearchQueryCell[];
+  rawCount: number;
+  uniqueCount: number;
+  candidateCount: number;
+  duplicateCount: number;
+  filteredCount: number;
+  pendingCount: number;
+  duplicateRate: number;
+  yieldRate: number;
+  cost: number;
+  decision: "pending" | "continue" | "converged" | "limit_reached" | "manual_stop" | "failed";
+  decisionReason: string;
+  createdAt: string;
+  completedAt: string;
+}
+
+export interface ProspectSuperSearchEvent {
+  id: string;
+  missionId: string;
+  teamId: string;
+  ownerId: string;
+  sequence: number;
+  type: "created" | "round_started" | "round_completed" | "paused" | "resumed" | "cancelled" | "completed" | "failed";
+  message: string;
+  createdAt: string;
 }
 
 export interface ProspectRunShard {

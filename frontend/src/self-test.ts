@@ -23,6 +23,15 @@ const required = [
   "id=\"exam\"",
   "id=\"tools\"",
   "id=\"settings\"",
+  "id=\"database-maintenance\"",
+  "data-view=\"database-maintenance\"",
+  "MYSQL_LOCAL_BACKUP_ENABLED=true",
+  "/api/system/database-maintenance/status",
+  "/api/system/database-backups/jobs",
+  "databaseStreamLog",
+  "databaseTableProgressMeta",
+  "暂停滚动",
+  "下载日志",
   "prototype-api.ts",
   "/api/auth/login",
   "/api/dashboard/summary",
@@ -77,7 +86,34 @@ const required = [
   "notificationBellBadge",
   "消息通知",
   "navigateFromInternalMessage",
-  "查看日报"
+  "查看日报",
+  "agentPendingGoal",
+  "agentPendingProgress",
+  "/api/agent/plan/stream",
+  "正在理解你的目标和当前业务上下文",
+  "agent-live-execution",
+  "agent-action-chain",
+  "可审计动作链",
+  "最近执行记录",
+  "agentFailureDiagnosis",
+  "entry.type === \"assistant\"",
+  "data-agent-chat-approve",
+  "确认写入",
+  "agentKnowledgeStatus",
+  "/api/agent/knowledge/overview",
+  "/api/agent/knowledge/search",
+  "Agent 学习中心",
+  "leadSuperWebSearch",
+  "leadSuperMapSearch",
+  "leadSuperAiDiscovery",
+  "webSearchMode: superWebSearchMode()",
+  "mapSearchMode: superMapSearchMode()",
+  "aiDiscoveryMode: superAiDiscoveryMode()",
+  "google_places",
+  "leadTaskCandidates",
+  "leadTaskSyncCandidates",
+  "纳入候选池",
+  "可加入线索的候选"
 ];
 
 for (const token of required) {
@@ -87,9 +123,23 @@ for (const token of required) {
 assert.equal(prototype.includes("data-view=\"inbox\""), false, "消息通知不应出现在左侧导航");
 assert.equal(prototype.includes("写站内信"), false, "通知中心不应提供人工写信入口");
 assert.equal(apiLayer.includes("openInternalMessageComposeModal"), false, "不应保留旧写信交互");
+assert.match(prototype, /data-view="settings" data-scope="manager"/, "业务员导航中必须隐藏系统设置");
+assert.match(prototype, /id="settings" data-scope="manager"/, "业务员视图中必须隐藏系统设置页面");
+assert.match(prototype, /data-view="database-maintenance" data-scope="admin"/, "数据库维护导航必须只向管理员显示");
+assert.match(prototype, /id="database-maintenance" data-scope="admin"/, "数据库维护必须使用独立页面");
+assert.equal(prototype.includes("id=\"mysqlImportPanel\""), false, "数据库迁移不能继续嵌在账号管理页");
+assert.match(apiLayer, /view === "database-maintenance"[\s\S]*user\?\.role === "admin"[\s\S]*user\?\.role === "super_admin"/, "数据库维护页面必须限制管理员角色");
+assert.match(apiLayer, /连接中断，正在重连/, "数据库任务断流必须进入重连状态而非误报失败");
+assert.match(apiLayer, /if \(!canAccessWorkspaceView\(view\)\) \{[\s\S]*view = "dashboard";/, "页面切换必须阻止业务员进入系统设置");
 assert.match(apiLayer, /selectedDailyReportId = message\.relatedId;[\s\S]*activateNavView\("daily-reports"\)/);
+assert.match(apiLayer, /if \(view === "ai-agent"\) \{[\s\S]*renderAgent\(state\.agentRun\);[\s\S]*void loadAgentRuns\(\);[\s\S]*\}/, "进入 Agent 页面必须刷新蒸馏打法与后台任务状态");
+assert.match(apiLayer, /void loadAgentKnowledge\(false\)/, "进入 Agent 页面必须加载系统知识状态");
+assert.match(prototype, /\.agent-chat-bubble,[\s\S]*\.agent-chat-answer > p[\s\S]*user-select: text;/, "Agent 对话正文必须允许选择复制");
+assert.match(apiLayer, /copyableText \|\| window\.getSelection\(\)\?\.toString\(\)\.trim\(\)/, "选择 Agent 对话文字时不得触发整轮重新渲染");
+assert.match(apiLayer, /agentPendingProgress\.push\(progress\)/, "Agent 规划流必须保留同阶段的细粒度动作，不能互相覆盖");
+assert.match(apiLayer, /权限校验未通过：[\s\S]*接口参数或契约校验失败：[\s\S]*网络或上游服务调用失败：/, "Agent 失败链必须给出可读诊断");
 assert.equal(productConfig.productName, "GoodJob CRM");
-assert.match(productConfig.version || "", /^\d+\.\d+$/);
+assert.match(productConfig.version || "", /^\d+\.\d+(?:\.\d+)?$/);
 
 assert.equal(isLeadSourceExecutable({ id: "ready", ready: true, enabled: true, accessMode: "api" }), true);
 assert.equal(isLeadSourceExecutable({ id: "disabled", ready: true, enabled: false, accessMode: "api" }), false);
@@ -145,5 +195,16 @@ if (!prototype.includes(".report-hero") || !prototype.includes(".ocr-workbench")
 
 assert.equal(prototype.includes("collab-inbox-nav"), false, "message center must not remain in sidebar navigation");
 assert.equal(prototype.includes("id=\"composeMessageButton\""), false, "notification center must not present direct-message composition as its primary workflow");
+assert.match(apiLayer, /data-pending-hit-id/, "待清洗结果必须支持逐条选择");
+assert.match(apiLayer, /selectedPendingHitIds/, "待清洗导入必须保留明确选择状态");
+assert.match(apiLayer, /prospect-super-search\/\$\{encodeURIComponent\(job\.superSearchMissionId\)\}\/pending-candidates/, "超级搜索必须汇总全部轮次待清洗结果");
+assert.match(apiLayer, /body: JSON\.stringify\(\{ hitIds \}\)/, "手动导入只能提交已选择的原始记录");
+assert.equal(apiLayer.includes("lead-job-card is-openable"), false, "任务卡片不能整卡点击进入详情");
+assert.equal(apiLayer.includes("同步本任务结果"), false, "任务结果操作必须使用明确的候选与线索语义");
+assert.match(apiLayer, /data-lead-job-open[\s\S]*查看详情/, "只有查看详情按钮可以进入任务详情页");
+const pipelineNavIndex = prototype.indexOf('data-view="pipeline" title="商机"');
+const customerPoolNavIndex = prototype.indexOf('data-view="customer-pool" title="客户公池"');
+const whatsappNavIndex = prototype.indexOf('data-view="whatsapp" title="Communication"');
+assert.ok(pipelineNavIndex >= 0 && pipelineNavIndex < customerPoolNavIndex && customerPoolNavIndex < whatsappNavIndex, "customer pool and WhatsApp must follow pipeline in primary navigation");
 
 console.log(JSON.stringify({ ok: true, checked: required.length }, null, 2));

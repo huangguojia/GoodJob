@@ -287,6 +287,141 @@ const serpapi = defineProvider({
 });
 
 // ---------------------------------------------------------------------------
+// 地图企业源：只使用 Google Places 官方 API 返回的结构化地点数据。
+// ---------------------------------------------------------------------------
+
+interface GooglePlacesSearchResponse {
+  places?: Array<{
+    id?: string;
+    displayName?: { text?: string };
+    formattedAddress?: string;
+    internationalPhoneNumber?: string;
+    websiteUri?: string;
+    businessStatus?: string;
+    types?: string[];
+    googleMapsUri?: string;
+  }>;
+  nextPageToken?: string;
+}
+
+function googlePlacesQueryText(query: NormalizedProviderQuery) {
+  const structuredQuery = [
+    query.customerTypes.map(firstToken).filter((item) => item && item !== "*").join(" "),
+    query.industries.map(firstToken).filter(Boolean).join(" "),
+    query.productKeywords.map(firstToken).filter(Boolean).join(" "),
+    firstToken(query.countries)
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (structuredQuery || query.goal || "industrial supplier").slice(0, 500);
+}
+
+async function googlePlacesError(response: Response) {
+  const payload = await response.clone().json().catch(() => ({})) as {
+    error?: { status?: string; message?: string };
+  };
+  return providerHttpStatusError(response, "Google Places", {
+    upstreamCode: payload.error?.status || "",
+    upstreamMessage: payload.error?.message || ""
+  });
+}
+
+const googlePlaces = defineProvider({
+  id: "google_places",
+  name: "Google Places",
+  tier: "paid",
+  category: "company",
+  requiresKey: true,
+  capabilities: ["maps", "company"],
+  docsUrl: "https://developers.google.com/maps/documentation/places/web-service/text-search",
+  keyHint: "在 Google Cloud 启用 Places API (New)、绑定结算账号并创建受限 API Key。",
+  defaultBaseUrl: "https://places.googleapis.com/v1",
+  costNote: "Google 官方地图企业搜索，按请求字段与调用量计费。",
+  networkPolicy: {
+    allowedHosts: ["places.googleapis.com"],
+    allowedPathPrefixes: ["/v1/places:searchText"],
+    allowedMethods: ["POST"]
+  },
+  async search({ query, cursor }, cred, tools) {
+    const base = (cred.baseUrl || this.defaultBaseUrl || "https://places.googleapis.com/v1").replace(/\/+$/, "");
+    const textQuery = googlePlacesQueryText(query);
+    const regionCode = countryToGl(firstToken(query.countries));
+    const response = await tools.http.fetch(`${base}/places:searchText`, {
+      method: "POST",
+      headers: {
+        "X-Goog-Api-Key": cred.apiKey,
+        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.internationalPhoneNumber,places.websiteUri,places.businessStatus,places.types,places.googleMapsUri,nextPageToken",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        textQuery,
+        pageSize: Math.min(query.limit, 20),
+        ...(regionCode ? { regionCode } : {}),
+        ...(cursor ? { pageToken: cursor } : {})
+      })
+    });
+    if (!response.ok) throw await googlePlacesError(response);
+    const data = await response.json() as GooglePlacesSearchResponse;
+    const records = (data.places || []).flatMap((place): RawLead[] => {
+      const company = place.displayName?.text?.trim() || "";
+      if (!company || !place.id) return [];
+      const types = (place.types || [])
+        .slice(0, 4)
+        .map((item) => item.replace(/_/g, " "));
+      const sourceUrl = place.googleMapsUri
+        || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(company)}&query_place_id=${encodeURIComponent(place.id)}`;
+      const evidence = [
+        place.formattedAddress,
+        types.length ? `类型：${types.join("、")}` : "",
+        place.businessStatus ? `营业状态：${place.businessStatus}` : ""
+      ].filter(Boolean).join("；");
+      return [{
+        company: company.slice(0, 120),
+        officialWebsite: place.websiteUri || "",
+        country: firstToken(query.countries) || "待核实",
+        business: types.join("、").slice(0, 160) || query.industries.join("、").slice(0, 160) || "地图企业候选",
+        contact: place.internationalPhoneNumber ? "企业电话" : "待维护",
+        contactInfo: place.internationalPhoneNumber || "",
+        description: (place.formattedAddress || evidence).slice(0, 240),
+        confidence: place.websiteUri ? 78 : 68,
+        providerRecordId: place.id,
+        sourceUrl,
+        recordType: "discovery_page",
+        evidenceSummary: evidence.slice(0, 500) || "Google Places 企业地点结果",
+        matchedFields: [
+          "company",
+          ...(place.websiteUri ? ["officialWebsite"] : []),
+          ...(place.internationalPhoneNumber ? ["contactInfo"] : []),
+          "description"
+        ]
+      }];
+    });
+    return providerPage(records, {
+      rawCount: data.places?.length || 0,
+      nextCursor: data.nextPageToken || null,
+      exhausted: !data.nextPageToken,
+      display: "Google Places 官方 API"
+    });
+  },
+  async health(cred, tools) {
+    const base = (cred.baseUrl || this.defaultBaseUrl || "https://places.googleapis.com/v1").replace(/\/+$/, "");
+    const response = await tools.http.fetch(`${base}/places:searchText`, {
+      method: "POST",
+      headers: {
+        "X-Goog-Api-Key": cred.apiKey,
+        "X-Goog-FieldMask": "places.id,places.displayName",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ textQuery: "industrial supplier", pageSize: 1 })
+    });
+    if (!response.ok) throw await googlePlacesError(response);
+    return { ok: true, message: "Google Places 连接通过，可用于地图企业搜索" };
+  }
+});
+
+// ---------------------------------------------------------------------------
 // 公司库源：直接产出公司实体
 // ---------------------------------------------------------------------------
 
@@ -746,6 +881,7 @@ export const LEAD_PROVIDERS: LeadProvider[] = [
   serper,
   brave,
   serpapi,
+  googlePlaces,
   gleif,
   wikidata,
   EU_TED_PROVIDER,

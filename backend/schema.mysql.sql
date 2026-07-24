@@ -39,6 +39,7 @@ CREATE TABLE customers (
   company VARCHAR(200) NOT NULL,
   country VARCHAR(80),
   contact VARCHAR(100),
+  whatsapp VARCHAR(32) DEFAULT '',
   owner_id VARCHAR(64) NOT NULL,
   team_id VARCHAR(64) NOT NULL,
   stage VARCHAR(40),
@@ -1011,6 +1012,27 @@ CREATE TABLE prospect_strategy_events (
     ON UPDATE RESTRICT ON DELETE RESTRICT,
   CONSTRAINT chk_prospect_strategy_event_revision
     CHECK (from_revision >= 0 AND to_revision >= 1)
+);
+
+CREATE TABLE prospect_super_search_missions (
+  id VARCHAR(80) PRIMARY KEY,
+  team_id VARCHAR(64) NOT NULL,
+  owner_id VARCHAR(64) NOT NULL,
+  campaign_id VARCHAR(80) NOT NULL,
+  strategy_id VARCHAR(80) NOT NULL,
+  mission_status VARCHAR(30) NOT NULL,
+  revision_no INT NOT NULL,
+  mission_json JSON NOT NULL,
+  rounds_json JSON NOT NULL,
+  events_json JSON NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  INDEX idx_super_search_owner(team_id, owner_id, mission_status),
+  INDEX idx_super_search_strategy(team_id, strategy_id, mission_status),
+  CONSTRAINT chk_super_search_status CHECK (
+    mission_status IN ('queued','running','paused','cancelled','succeeded','partial_success','failed')
+  ),
+  CONSTRAINT chk_super_search_revision CHECK (revision_no >= 1)
 );
 
 CREATE TABLE prospect_search_runs (

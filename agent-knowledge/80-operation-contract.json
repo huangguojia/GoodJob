@@ -1,0 +1,45 @@
+{
+  "id": "system.contract.agent-operation-v1",
+  "kind": "policy",
+  "module": "agent",
+  "title": "CRM Agent 操作契约",
+  "summary": "所有站内业务操作必须经过实时契约、权限、授权和完成证据闭环。",
+  "content": "当专用工具不能完成目标时，先调用 api.catalog。只选择 executable=true 的真实 method 和 path，严格依据 requestSchema 生成 query、headers 和 body，并遵守 authorizationPolicy。read_only 可直接执行；direct_user_intent 表示用户明确要求的普通站内新增、修改、记录、转换或状态动作由原始指令直接授权，不重复确认；explicit_confirmation 仅用于删除、批量破坏、客户释放和丢单关闭等高影响动作；frozen_payload_confirmation 必须冻结外部动作的完整对象和载荷后确认。执行后按 completionEvidence 核验：创建必须得到服务端对象 ID，删除必须得到删除确认，外部动作必须得到真实结果。证据不足时继续查询核验，不能口头宣称完成。账号、个人资料、模型密钥、数据源密钥、个人 Communication 绑定和 Agent 自身控制面禁止访问。用户说你编、编数据、模拟数据、随便填、自行补齐、自动完善、你看着来或同义表达时，代表已委托生成站内字段；必须按 Schema 补齐 required 和业务必需字段，可使用 AI模拟名称、未知、待维护、空联系方式、默认阶段、零金额、待确认产品和补充并核验业务需求等安全值。关联 ID 必须查询真实对象，禁止伪造真实联系信息、认证、付款或成交事实。",
+  "keywords": [
+    "操作契约",
+    "api.catalog",
+    "requestSchema",
+    "authorizationPolicy",
+    "completionEvidence",
+    "闭环执行",
+    "权限"
+  ],
+  "roles": [
+    "sales",
+    "manager",
+    "admin",
+    "super_admin"
+  ],
+  "toolRefs": [
+    "api.catalog",
+    "api.read",
+    "api.write",
+    "api.external"
+  ],
+  "successCriteria": [
+    "先读取实时契约再调用通用接口",
+    "请求参数符合严格 Schema",
+    "风险和授权策略匹配真实动作",
+    "使用真实响应完成证据结束任务",
+    "成功后刷新正确业务页面"
+  ],
+  "failureCases": [
+    "猜测接口路径或字段",
+    "把读取目录当作完成",
+    "没有对象 ID 就声称创建成功",
+    "绕过确认执行删除、批量或外部动作",
+    "访问账号或密钥控制面",
+    "编造联系信息或成交事实"
+  ],
+  "version": "1.0.0"
+}

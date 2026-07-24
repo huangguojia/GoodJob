@@ -1,0 +1,14 @@
+{
+  "id": "outreach",
+  "name": "开发信与客户触达",
+  "version": "1.0.0",
+  "category": "outreach",
+  "description": "基于真实客户资料生成、发送开发信或 Communication 消息并安排后续跟进。",
+  "status": "active",
+  "priority": 85,
+  "triggers": ["写开发信", "生成开发信", "发送开发信", "发邮件", "发送 WhatsApp", "发送 Communication", "自动跟进"],
+  "keywords": ["开发信", "邮件", "Communication", "WhatsApp", "消息", "发送", "触达", "回复", "跟进序列"],
+  "modules": ["development-email", "whatsapp", "customers", "leads"],
+  "toolRefs": ["outreach.draft_development_email", "outreach.send_development_email", "outreach.send_whatsapp", "outreach.create_sequence", "outreach.get_sequence_progress", "outreach.pause_sequence", "outreach.resume_sequence", "outreach.cancel_sequence", "communication.get_inbox", "ui.open_development_email", "ui.open_communication", "api.catalog", "api.read", "api.external"]
+}
+

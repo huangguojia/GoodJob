@@ -33,6 +33,7 @@ CREATE TABLE customers (
   company VARCHAR(200) NOT NULL,
   country VARCHAR(80),
   contact VARCHAR(100),
+  whatsapp VARCHAR(32) DEFAULT '',
   owner_id VARCHAR(64) NOT NULL,
   team_id VARCHAR(64) NOT NULL,
   stage VARCHAR(40),

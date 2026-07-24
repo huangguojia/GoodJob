@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { AI_SEARCH_ADAPTER_VERSION } from "./ai-search-provider.js";
 import { getProvider } from "./lead-providers.js";
 import {
+  ProviderContractError,
   providerErrorFromUnknown,
   type LeadProvider,
   type LeadQuery,
@@ -30,6 +32,27 @@ import type {
 } from "./prospect-fake-provider.js";
 import type { CrmStore } from "./store.js";
 
+const LEGACY_AI_SEARCH_CONTRACT_VERSION = "search_run_control_plane_v1";
+
+export function providerSnapshotVersionsMatch(input: {
+  providerCode: string;
+  runtimeAdapterVersion: string;
+  runtimeContractVersion: string;
+  snapshotAdapterVersion: string;
+  snapshotContractVersion: string;
+}) {
+  const adapterMatches = input.runtimeAdapterVersion
+    === input.snapshotAdapterVersion;
+  const contractMatches = input.runtimeContractVersion
+    === input.snapshotContractVersion;
+  const legacyAiContractMatches = input.providerCode === "ai_search"
+    && input.runtimeAdapterVersion === AI_SEARCH_ADAPTER_VERSION
+    && input.snapshotAdapterVersion === AI_SEARCH_ADAPTER_VERSION
+    && input.runtimeContractVersion === "1.0"
+    && input.snapshotContractVersion === LEGACY_AI_SEARCH_CONTRACT_VERSION;
+  return adapterMatches && (contractMatches || legacyAiContractMatches);
+}
+
 export interface ProspectProviderResolution {
   provider: LeadProvider;
   credential?: ProviderCredential;
@@ -43,7 +66,10 @@ export interface ProspectProviderDispatcherOptions {
 }
 
 function joined(values: readonly string[]) {
-  return values.map((item) => item.trim()).filter(Boolean).join(", ");
+  return values
+    .map((item) => item.trim())
+    .filter((item) => Boolean(item) && item !== "*")
+    .join(", ");
 }
 
 function validHttpStatus(value: number | null, fallback: number) {
@@ -190,8 +216,29 @@ implements ProspectExecutionProviderDispatcher {
           const provider = getProvider(request.providerCode);
           return provider ? { provider } : undefined;
         })();
-      if (!run || !shard || !catalog || !resolved) {
-        throw new Error("Provider 运行、分片、目录或适配器不存在");
+      if (!run || !shard || !catalog) {
+        throw new ProviderContractError({
+          code: "PROVIDER_CATALOG_MISSING",
+          retryable: false,
+          retryAfterAt: null,
+          publicMessage: "搜索运行、来源分片或数据源目录不存在",
+          httpStatus: null,
+          phase: "search"
+        });
+      }
+      if (!resolved) {
+        throw new ProviderContractError({
+          code: request.providerCode === "ai_search"
+            ? "PROVIDER_CONNECTION_INVALID"
+            : "PROVIDER_NOT_REGISTERED",
+          retryable: false,
+          retryAfterAt: null,
+          publicMessage: request.providerCode === "ai_search"
+            ? "当前账号没有可用于自动获客的 AI 模型：请保存 API Key、启用该配置，并勾选“自动获客”"
+            : `数据源 ${request.providerCode} 未安装可执行适配器`,
+          httpStatus: null,
+          phase: "search"
+        });
       }
       if (providerRequest
         && (providerRequest.runId !== run.id
@@ -202,11 +249,26 @@ implements ProspectExecutionProviderDispatcher {
       }
       if (catalog.status !== "active"
         || catalog.version !== shard.catalogVersion
-        || resolved.provider.adapterVersion !== shard.adapterVersion
-        || resolved.provider.contractVersion !== shard.contractVersion
+        || !providerSnapshotVersionsMatch({
+          providerCode: request.providerCode,
+          runtimeAdapterVersion: resolved.provider.adapterVersion,
+          runtimeContractVersion: resolved.provider.contractVersion,
+          snapshotAdapterVersion: shard.adapterVersion,
+          snapshotContractVersion: shard.contractVersion
+        })
         || request.adapterVersion !== shard.adapterVersion
         || request.contractVersion !== shard.contractVersion) {
-        throw new Error("Provider 目录、适配器或合同版本与运行快照不一致");
+        throw new ProviderContractError({
+          code: "PROVIDER_POLICY_BLOCKED",
+          retryable: false,
+          retryAfterAt: null,
+          publicMessage:
+            `数据源 ${request.providerCode} 的运行版本与任务快照不一致`
+            + `（适配器 ${resolved.provider.adapterVersion}/${shard.adapterVersion}，`
+            + `契约 ${resolved.provider.contractVersion}/${shard.contractVersion}）`,
+          httpStatus: 409,
+          phase: "search"
+        });
       }
       const connection = request.connectionId.startsWith("builtin:")
         ? undefined

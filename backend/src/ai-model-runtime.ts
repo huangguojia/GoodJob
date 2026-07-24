@@ -1,8 +1,74 @@
 import { createAiHttpClient } from "./ai-http-security.js";
-import type { LeadQuery, RawLead } from "./provider-contract.js";
+import {
+  ProviderContractError,
+  providerHttpStatusError,
+  type LeadQuery,
+  type RawLead
+} from "./provider-contract.js";
 import type { AiModelConfig } from "./types.js";
 
 export const AI_MODEL_TIMEOUT_MS = 120_000;
+
+function sanitizedAiErrorText(value: unknown) {
+  return String(value || "")
+    .replace(/<[^>]+>/gu, " ")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer ****")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gu, "sk-****")
+    .replace(/\b(api[_ -]?key|token|secret|password)\s*[:=]\s*[^\s,;]+/giu, "$1=****")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 420);
+}
+
+function aiUpstreamErrorDetails(data: unknown, fallback = "") {
+  const root = data && typeof data === "object" && !Array.isArray(data)
+    ? data as Record<string, unknown>
+    : {};
+  const nested = root.error && typeof root.error === "object" && !Array.isArray(root.error)
+    ? root.error as Record<string, unknown>
+    : root;
+  return {
+    upstreamCode: sanitizedAiErrorText(
+      nested.code || nested.type || nested.status || root.code || root.status
+    ).slice(0, 100),
+    upstreamMessage: sanitizedAiErrorText(
+      nested.message || root.message || fallback
+    )
+  };
+}
+
+function modelEndpoint(endpointBase: string, suffix: string) {
+  return endpointBase.toLocaleLowerCase("en-US").endsWith(suffix)
+    ? endpointBase
+    : `${endpointBase}${suffix}`;
+}
+
+function reasoningModelWithoutTemperature(model: string) {
+  return /^(?:o1|o3|o4|gpt-5)(?:$|[-_.])/iu.test(model.trim());
+}
+
+function compatibilityRetryReason(error: unknown) {
+  if (!(error instanceof Error)
+    || !("httpStatus" in error)
+    || ![400, 422].includes(Number((error as { httpStatus?: unknown }).httpStatus))) {
+    return false;
+  }
+  const detail = "upstreamMessage" in error
+    ? String((error as { upstreamMessage?: unknown }).upstreamMessage || "")
+    : error.message;
+  return /(temperature|system.{0,20}role|role.{0,20}system|unsupported.{0,30}(parameter|field)|unknown.{0,20}(parameter|field))/iu.test(detail);
+}
+
+function aiResponseInvalid(message: string) {
+  return new ProviderContractError({
+    code: "AI_MODEL_RESPONSE_INVALID",
+    retryable: false,
+    retryAfterAt: null,
+    publicMessage: message,
+    httpStatus: 200,
+    phase: "search"
+  });
+}
 
 export async function callAiModel(
   config: AiModelConfig,
@@ -26,7 +92,7 @@ export async function callAiModel(
   );
   try {
     if (protocol === "anthropic") {
-      const response = await request(`${endpointBase}/messages`, {
+      const response = await request(modelEndpoint(endpointBase, "/messages"), {
         method: "POST",
         signal: controller.signal,
         headers: {
@@ -54,7 +120,7 @@ export async function callAiModel(
         ?.map((item) => item.text || "")
         .join("\n")
         .trim() || "";
-      if (!content) throw new Error("模型返回为空");
+      if (!content) throw aiResponseInvalid("AI 模型返回为空，请检查模型是否支持当前对话协议");
       return content;
     }
     if (protocol === "gemini") {
@@ -92,40 +158,103 @@ export async function callAiModel(
         ?.map((item) => item.text || "")
         .join("\n")
         .trim() || "";
-      if (!content) throw new Error("模型返回为空");
+      if (!content) throw aiResponseInvalid("AI 模型返回为空，请检查 Gemini 协议和模型名称");
       return content;
     }
-    const response = await request(`${endpointBase}/chat/completions`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        authorization: `Bearer ${config.apiKey}`,
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
+    const systemPrompt =
+      "你擅长整理授权 API、搜索服务和用户提供的结构化资料。"
+      + "不得声称访问过企业网页。"
+      + "输出必须可被 JSON.parse 解析。";
+    const endpoint = modelEndpoint(endpointBase, "/chat/completions");
+    type CompatibleContentPart = { text?: string; value?: string; content?: unknown };
+    type CompatibleToolCall = { function?: { arguments?: string } };
+    type CompatibleMessage = {
+      content?: string | CompatibleContentPart[] | CompatibleContentPart;
+      reasoning_content?: string | CompatibleContentPart[];
+      reasoning?: string | CompatibleContentPart[];
+      analysis?: string | CompatibleContentPart[];
+      tool_calls?: CompatibleToolCall[];
+      refusal?: string;
+    };
+    type CompatibleCompletion = {
+      choices?: Array<{
+        message?: CompatibleMessage;
+        delta?: CompatibleMessage;
+        text?: string;
+        finish_reason?: string;
+      }>;
+      output_text?: string;
+      response?: string | CompatibleContentPart[] | CompatibleContentPart;
+    };
+    const contentText = (value: unknown): string => {
+      if (Array.isArray(value)) return value.map((item) => contentText(item)).filter(Boolean).join("\n");
+      if (typeof value === "string") return value;
+      if (!value || typeof value !== "object") return "";
+      const item = value as Record<string, unknown>;
+      return contentText(item.text) || contentText(item.value) || contentText(item.content);
+    };
+    const completionText = (data: CompatibleCompletion) => {
+      const choice = data.choices?.[0];
+      const primary = contentText(choice?.message?.content)
+        || contentText(choice?.delta?.content)
+        || contentText(choice?.text)
+        || contentText(data.output_text)
+        || contentText(data.response)
+        || contentText(choice?.message?.tool_calls?.[0]?.function?.arguments);
+      if (primary.trim()) return primary;
+      const reasoning = contentText(choice?.message?.reasoning_content)
+        || contentText(choice?.message?.reasoning)
+        || contentText(choice?.message?.analysis)
+        || contentText(choice?.delta?.reasoning_content)
+        || contentText(choice?.delta?.reasoning)
+        || contentText(choice?.delta?.analysis);
+      return reasoning.includes("{") && reasoning.includes("}") ? reasoning : "";
+    };
+    const requestCompletion = async (compatibilityMode: boolean, repairMode = false) => {
+      const userPrompt = repairMode
+        ? `上一次响应以 finish_reason=stop 结束但没有可用内容。请重新完成任务，只输出一个完整 JSON 对象，不要只输出思考过程，也不要留空。\n${prompt.slice(0, maxInputChars)}`
+        : prompt.slice(0, maxInputChars);
+      const body: Record<string, unknown> = {
         model: config.model,
-        temperature: config.temperature ?? 0.1,
-        messages: [
-          {
-            role: "system",
-            content:
-              "你擅长整理授权 API、搜索服务和用户提供的结构化资料。"
-              + "不得声称访问过企业网页。"
-              + "输出必须可被 JSON.parse 解析。"
-          },
-          {
-            role: "user",
-            content: prompt.slice(0, maxInputChars)
-          }
-        ],
-        response_format: { type: "json_object" }
-      })
-    });
-    const data = await readAiJson<{
-      choices?: Array<{ message?: { content?: string } }>;
-    }>(response);
-    const content = data.choices?.[0]?.message?.content || "";
-    if (!content.trim()) throw new Error("模型返回为空");
+        messages: compatibilityMode
+          ? [{ role: "user", content: `${systemPrompt}\n${userPrompt}` }]
+          : [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt }
+            ]
+      };
+      if (!compatibilityMode && !reasoningModelWithoutTemperature(config.model)) {
+        body.temperature = config.temperature ?? 0.1;
+      }
+      const response = await request(endpoint, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          authorization: `Bearer ${config.apiKey}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(body)
+      });
+      return readAiJson<CompatibleCompletion>(response);
+    };
+    let data: CompatibleCompletion;
+    try {
+      data = await requestCompletion(false);
+    } catch (error) {
+      if (!compatibilityRetryReason(error)) throw error;
+      data = await requestCompletion(true);
+    }
+    let content = completionText(data);
+    if (!content.trim()) {
+      data = await requestCompletion(true, true);
+      content = completionText(data);
+    }
+    if (!content.trim()) {
+      const finishReason = String(data.choices?.[0]?.finish_reason || "unknown");
+      const refusal = String(data.choices?.[0]?.message?.refusal || "").trim();
+      const fields = Object.keys(data.choices?.[0]?.message || {}).slice(0, 8).join(",") || "none";
+      throw aiResponseInvalid(`AI 模型在一次修复重试后仍未返回可用内容（finish_reason=${finishReason}，message_fields=${fields}${refusal ? `，refusal=${refusal.slice(0, 120)}` : ""}）；运行时将改用确定性证据和基础执行继续处理`);
+    }
     return content;
   } finally {
     clearTimeout(timeout);
@@ -158,16 +287,28 @@ export async function readAiJson<T>(
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
+    if (!response.ok) {
+      throw providerHttpStatusError(response, "AI 模型", aiUpstreamErrorDetails(
+        null,
+        contentType.includes("text/html") || text.trim().startsWith("<")
+          ? "接口返回 HTML 页面而不是 JSON，Base URL 可能不是模型 API 地址"
+          : `接口返回非 JSON 错误正文：${text}`
+      ));
+    }
     if (contentType.includes("text/html")
       || text.trim().startsWith("<")) {
-      throw new Error(
+      throw aiResponseInvalid(
         "接口返回 HTML 页面而不是 JSON，请检查 Base URL 是否填写为 API 地址"
       );
     }
-    throw new Error("接口返回内容不是有效 JSON");
+    throw aiResponseInvalid("AI 模型返回内容不是有效 JSON，请检查协议与模型兼容性");
   }
   if (!response.ok) {
-    throw new Error(aiHttpErrorMessage(response.status));
+    throw providerHttpStatusError(
+      response,
+      "AI 模型",
+      aiUpstreamErrorDetails(data)
+    );
   }
   return data as T;
 }
@@ -179,12 +320,32 @@ export function extractJsonObject(content: string) {
     .replace(/^```\s*/i, "")
     .replace(/```$/i, "")
     .trim();
-  const start = source.indexOf("{");
-  const end = source.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("AI JSON missing");
-  return JSON.parse(
-    source.slice(start, end + 1)
-  ) as Record<string, unknown>;
+  for (let start = source.indexOf("{"); start >= 0; start = source.indexOf("{", start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < source.length; index += 1) {
+      const character = source[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') inString = true;
+      else if (character === "{") depth += 1;
+      else if (character === "}") {
+        depth -= 1;
+        if (depth !== 0) continue;
+        try {
+          return JSON.parse(source.slice(start, index + 1)) as Record<string, unknown>;
+        } catch {
+          break;
+        }
+      }
+    }
+  }
+  throw new Error("AI JSON missing or invalid");
 }
 
 export async function aiGenerateLeads(
@@ -210,7 +371,12 @@ export async function aiGenerateLeads(
     `排除：${query.excludeKeywords || "无"}`
   ].join("\n");
   const content = await callAiModel(config, prompt, 4_000, fetcher);
-  const parsed = extractJsonObject(content) as { companies?: unknown };
+  let parsed: { companies?: unknown };
+  try {
+    parsed = extractJsonObject(content) as { companies?: unknown };
+  } catch {
+    throw aiResponseInvalid("AI 模型已响应，但未返回可解析的公司 JSON，请检查模型能力或更换模型");
+  }
   const companies = Array.isArray(parsed.companies)
     ? parsed.companies
     : [];

@@ -95,7 +95,7 @@ async function loadOrCreateCredentials(filePath: string) {
   }
 }
 
-async function provision(credentials: BetaCredential[]) {
+async function provision(credentials: BetaCredential[], removePrimaryAdmin: boolean) {
   const databaseUrl = process.env.DATABASE_URL || process.env.MYSQL_URL;
   if (!databaseUrl) throw new Error("缺少 DATABASE_URL 或 MYSQL_URL，无法写入 MySQL");
   const connection = await mysql.createConnection(databaseUrl);
@@ -135,8 +135,31 @@ async function provision(credentials: BetaCredential[]) {
       );
       created += 1;
     }
+    const [betaRows] = await connection.execute<mysql.RowDataPacket[]>(
+      `SELECT COUNT(*) AS account_count,
+              COUNT(DISTINCT team_id) AS team_count,
+              SUM(status = 'active') AS active_count
+       FROM users
+       WHERE role = 'admin'
+         AND email REGEXP '^beta-admin-[0-9]{2}@goodjob-crm\\.com$'
+         AND team_id REGEXP '^beta-[0-9]{3}$'`
+    );
+    const betaSummary = betaRows[0] || {};
+    if (Number(betaSummary.account_count || 0) !== 40
+      || Number(betaSummary.team_count || 0) !== 40
+      || Number(betaSummary.active_count || 0) !== 40) {
+      throw new Error("40 个公测团队管理员核验失败，已取消删除旧管理员");
+    }
+    let removedPrimaryAdmin = 0;
+    if (removePrimaryAdmin) {
+      const [result] = await connection.execute<mysql.ResultSetHeader>(
+        "DELETE FROM users WHERE id = ? AND email = ? AND role = 'admin' AND team_id = ?",
+        ["u_admin", "admin@goodjob.com", "europe"]
+      );
+      removedPrimaryAdmin = Number(result.affectedRows || 0);
+    }
     await connection.commit();
-    return { created, skipped };
+    return { created, skipped, removedPrimaryAdmin };
   } catch (error) {
     await connection.rollback();
     throw error;
@@ -147,9 +170,10 @@ async function provision(credentials: BetaCredential[]) {
 
 const filePath = credentialFilePath();
 const credentials = await loadOrCreateCredentials(filePath);
+const removePrimaryAdmin = process.env.REMOVE_PRIMARY_ADMIN === "true";
 if (process.argv.includes("--generate-only")) {
   console.log(`已生成并校验 40 组公测管理员凭据：${filePath}`);
 } else {
-  const result = await provision(credentials);
-  console.log(`公测管理员预置完成：新增 ${result.created}，已存在 ${result.skipped}，凭据文件 ${filePath}`);
+  const result = await provision(credentials, removePrimaryAdmin);
+  console.log(`公测管理员预置完成：新增 ${result.created}，已存在 ${result.skipped}，删除旧管理员 ${result.removedPrimaryAdmin}，凭据文件 ${filePath}`);
 }

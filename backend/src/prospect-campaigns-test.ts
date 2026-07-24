@@ -116,6 +116,11 @@ const fullSnapshot = {
   sourceProviderIds: ["un_comtrade"]
 };
 
+const launchableSnapshotWithoutScenario = {
+  ...fullSnapshot,
+  applicationScenarios: []
+};
+
 try {
   const anonymous = await request({ path: "/api/prospect-campaigns" });
   assert.equal(anonymous.response.status, 401);
@@ -230,7 +235,6 @@ try {
   assert.deepEqual(
     [...emptyActivation.json.missingFields].sort(),
     [
-      "applicationScenarios",
       "customerTypes",
       "goal",
       "markets",
@@ -247,7 +251,7 @@ try {
     token: token(salesA),
     ifMatch: etag1!,
     body: {
-      snapshot: fullSnapshot,
+      snapshot: launchableSnapshotWithoutScenario,
       changeSummary: "补全德国市场画像"
     }
   });
@@ -277,7 +281,7 @@ try {
     method: "POST",
     token: token(salesA),
     ifMatch: etag2!,
-    body: { snapshot: fullSnapshot }
+    body: { snapshot: launchableSnapshotWithoutScenario }
   });
   assert.equal(duplicateVersion.response.status, 200);
   assert.equal(duplicateVersion.json.created, false);

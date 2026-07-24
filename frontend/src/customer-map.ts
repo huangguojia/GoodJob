@@ -59,6 +59,13 @@ interface CountryPoint {
   customers: CustomerMapRecord[];
 }
 
+interface CountryLabelPoint {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+}
+
 isoCountries.registerLocale(zhLocale);
 isoCountries.registerLocale(enLocale);
 
@@ -105,15 +112,15 @@ const countryAliases: Record<string, string> = {
 const CHINA_NUMERIC_ID = "156";
 const TAIWAN_SOURCE_NUMERIC_ID = "158";
 const mapColors = {
-  background: "#050A12",
-  land: "rgba(255, 255, 255, .035)",
-  marketLow: "rgba(54, 214, 165, .58)",
-  marketMedium: "rgba(24, 174, 130, .7)",
-  marketHigh: "rgba(5, 116, 87, .78)",
-  marketPoint: "#42D9AA",
-  won: "#F5B942",
-  selected: "rgba(83, 108, 255, .82)",
-  atmosphere: "#6AAED0"
+  background: "#d8e9ef",
+  land: "#d9e2d5",
+  marketLow: "#a9cdc0",
+  marketMedium: "#76b39f",
+  marketHigh: "#4b917c",
+  marketPoint: "#237b68",
+  won: "#c4872d",
+  selected: "#d9aa50",
+  atmosphere: "#8db7c6"
 };
 
 function numericCountryCode(rawCountry: string) {
@@ -151,7 +158,10 @@ function countryId(item: CountryFeature) {
 }
 
 function countryDisplayName(item: CountryFeature) {
-  return countryId(item) === CHINA_NUMERIC_ID ? "中国" : item.properties?.name || "";
+  const id = countryId(item);
+  if (id === CHINA_NUMERIC_ID) return "中国";
+  const alpha2 = isoCountries.numericToAlpha2(Number(id));
+  return (alpha2 && isoCountries.getName(alpha2, "zh")) || item.properties?.name || "";
 }
 
 function countryCenter(item: CountryFeature) {
@@ -168,6 +178,9 @@ export function createCustomerMap(options: CustomerMapOptions): CustomerMapContr
     const id = countryId(item);
     if (!featureById.has(id) || sourceCountryId(item) === id) featureById.set(id, item);
   });
+  const countryLabelPoints: CountryLabelPoint[] = Array.from(featureById.entries())
+    .map(([id, item]) => ({ id, name: countryDisplayName(item), ...countryCenter(item) }))
+    .filter((item) => item.name);
   let customersByCountry = new Map<string, CustomerMapRecord[]>();
   let points: CountryPoint[] = [];
   let selectedCountryId = "";
@@ -177,14 +190,13 @@ export function createCustomerMap(options: CustomerMapOptions): CustomerMapContr
 
   const globe: GlobeInstance = new Globe(options.host, { animateIn: false, waitForGlobeReady: true })
     .backgroundColor(mapColors.background)
-    .globeImageUrl("/assets/map/earth-blue-marble.jpg")
     .showAtmosphere(true)
     .atmosphereColor(mapColors.atmosphere)
     .atmosphereAltitude(0.14)
     .showGraticules(false)
     .polygonsData(countryFeatures)
-    .polygonStrokeColor(() => "rgba(232, 241, 248, .28)")
-    .polygonSideColor(() => "rgba(16, 30, 43, .18)")
+    .polygonStrokeColor(() => "rgba(92, 119, 119, .58)")
+    .polygonSideColor(() => "rgba(111, 145, 145, .28)")
     .polygonCapCurvatureResolution(3)
     .polygonsTransitionDuration(240)
     .pointAltitude((item) => 0.035 + Math.min((item as CountryPoint).customers.length, 12) * 0.004)
@@ -194,6 +206,17 @@ export function createCustomerMap(options: CustomerMapOptions): CustomerMapContr
     .pointLabel((item) => {
       const point = item as CountryPoint;
       return labelNode(point.name, `${point.customers.length} 家客户`);
+    })
+    .htmlElementsData(countryLabelPoints)
+    .htmlLat((item) => (item as CountryLabelPoint).lat)
+    .htmlLng((item) => (item as CountryLabelPoint).lng)
+    .htmlAltitude(0.018)
+    .htmlTransitionDuration(0)
+    .htmlElement((item) => {
+      const node = document.createElement("div");
+      node.className = "customer-map-country-label";
+      node.textContent = (item as CountryLabelPoint).name;
+      return node;
     })
     .polygonLabel((item) => {
       const country = item as CountryFeature;
@@ -211,12 +234,12 @@ export function createCustomerMap(options: CustomerMapOptions): CustomerMapContr
     });
 
   const globeMaterial = globe.globeMaterial();
-  globeMaterial.color.set("#FFFFFF");
-  globeMaterial.emissive.set("#06101C");
-  globeMaterial.emissiveIntensity = 0.08;
+  globeMaterial.color.set("#b6d1d9");
+  globeMaterial.emissive.set("#8daeb8");
+  globeMaterial.emissiveIntensity = 0.22;
   globeMaterial.opacity = 1;
   globeMaterial.transparent = false;
-  globeMaterial.shininess = 5;
+  globeMaterial.shininess = 2;
 
   const controls = globe.controls();
   controls.enableDamping = true;
@@ -224,6 +247,16 @@ export function createCustomerMap(options: CustomerMapOptions): CustomerMapContr
   controls.autoRotateSpeed = 0.42;
   controls.autoRotate = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   globe.pointOfView({ lat: 18, lng: 20, altitude: 2.15 }, 0);
+
+  function updateCountryLabelVisibility() {
+    const zoomedIn = globe.pointOfView().altitude < 1.78;
+    options.host.querySelectorAll<HTMLElement>(".customer-map-country-label").forEach((label) => {
+      label.classList.toggle("is-visible", zoomedIn);
+    });
+  }
+
+  controls.addEventListener("change", updateCountryLabelVisibility);
+  window.setTimeout(updateCountryLabelVisibility, 0);
 
   function polygonColor(item: CountryFeature) {
     const id = countryId(item);
@@ -237,7 +270,7 @@ export function createCustomerMap(options: CustomerMapOptions): CustomerMapContr
   }
 
   function polygonStroke(item: CountryFeature) {
-    return countryId(item) === selectedCountryId ? "rgba(255, 255, 255, .96)" : "rgba(232, 241, 248, .28)";
+    return countryId(item) === selectedCountryId ? "rgba(105, 75, 22, .95)" : "rgba(92, 119, 119, .58)";
   }
 
   function polygonAltitude(item: CountryFeature) {
@@ -261,6 +294,7 @@ export function createCustomerMap(options: CustomerMapOptions): CustomerMapContr
     applyPolygonStyle();
     const center = countryCenter(country);
     globe.pointOfView({ ...center, altitude: 1.48 }, 720);
+    window.setTimeout(updateCountryLabelVisibility, 760);
     options.onRegionSelect({
       id: selectedCountryId,
       name: countryDisplayName(country),
@@ -318,6 +352,7 @@ export function createCustomerMap(options: CustomerMapOptions): CustomerMapContr
     applyPolygonStyle();
     options.onRegionSelect(null);
     globe.pointOfView({ lat: 18, lng: 20, altitude: 2.15 }, 720);
+    window.setTimeout(updateCountryLabelVisibility, 760);
     if (active && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       resumeTimer = window.setTimeout(() => { controls.autoRotate = true; }, 800);
     }
@@ -370,6 +405,7 @@ export function createCustomerMap(options: CustomerMapOptions): CustomerMapContr
       window.clearTimeout(resumeTimer);
       resizeObserver.disconnect();
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      controls.removeEventListener("change", updateCountryLabelVisibility);
       options.host.removeEventListener("pointerdown", pauseForInteraction);
       options.host.removeEventListener("pointerup", resumeAfterInteraction);
       options.host.removeEventListener("wheel", resumeAfterInteraction);

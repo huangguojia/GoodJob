@@ -1,0 +1,14 @@
+{
+  "id": "system-overview",
+  "name": "GoodJob CRM 系统介绍",
+  "version": "1.0.0",
+  "category": "system",
+  "description": "让 Agent 理解 GoodJob CRM 的模块、业务对象、权限边界和通用完成标准。",
+  "status": "active",
+  "priority": 100,
+  "triggers": ["系统能做什么", "怎么使用系统", "打开页面", "进入页面", "去哪里", "功能在哪里"],
+  "keywords": ["系统", "页面", "模块", "功能", "导航", "工作台", "客户", "线索", "商机", "单据"],
+  "modules": ["all"],
+  "toolRefs": ["ui.navigate", "ui.open_customer", "ui.open_lead", "api.catalog", "api.read"]
+}
+

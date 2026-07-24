@@ -1,0 +1,14 @@
+{
+  "id": "module.communication.v1",
+  "kind": "module",
+  "module": "whatsapp",
+  "title": "Communication 会话与 WhatsApp",
+  "summary": "Communication 是独立会话页面，账号绑定和配置严格归属于个人账号。",
+  "content": "客户和线索有 WhatsApp 号码时可以打开 Communication；没有号码必须明确提示。Communication 账号、二维码会话、翻译 Provider 和绑定配置只属于当前个人，管理员不能查看、共享或代用他人的配置。读取收件箱只读取本人连接账号。发送消息属于外部动作，必须锁定客户、账号和正文并经过确认。",
+  "keywords": ["Communication", "WhatsApp", "扫码", "绑定", "会话", "消息", "翻译"],
+  "roles": ["sales", "manager", "admin", "super_admin"],
+  "toolRefs": ["ui.open_communication", "communication.get_inbox", "outreach.send_whatsapp"],
+  "successCriteria": ["使用本人连接账号", "确认客户有 WhatsApp 号码", "发送前确认完整正文", "根据真实回执判断结果"],
+  "failureCases": ["管理员读取他人绑定", "客户无号码仍打开会话", "把 CRM 主界面当作 Communication 页面"],
+  "version": "1.0.0"
+}

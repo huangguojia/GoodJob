@@ -6,7 +6,9 @@ import {
   timingSafeEqual
 } from "node:crypto";
 import { z } from "zod";
+import { AI_SEARCH_ADAPTER_VERSION } from "./ai-search-provider.js";
 import { getProvider } from "./lead-providers.js";
+import { PROVIDER_CONTRACT_VERSION } from "./provider-contract.js";
 import { isActiveProspectRun } from "./prospect-run-guards.js";
 import {
   cancelProspectRunQueueBridge,
@@ -20,16 +22,22 @@ import {
   prospectStrategyRunReadinessIssues,
   resolveProspectStrategyQuery
 } from "./prospect-strategies.js";
+import { validateProspectSearchQueryPlan } from "./prospect-search-planner.js";
 import type { CrmStore, PersistedStoreMutation } from "./store.js";
 import type {
   ProspectCampaign,
+  ProspectCandidateProcessingState,
+  ProspectExecutionPage,
   ProspectRunEvent,
   ProspectRunEventType,
   ProspectRunExecutionSnapshot,
   ProspectRunProviderSnapshot,
   ProspectRunShard,
+  ProspectResolvedQuerySnapshot,
+  ProspectSearchQueryPlanMetadata,
   ProspectSearchRun,
   ProspectSearchRunStatus,
+  ProspectSourceRawHit,
   ProspectStrategy,
   SessionUser
 } from "./types.js";
@@ -87,6 +95,11 @@ type CreateRunBody = z.infer<typeof createProspectRunSchema>;
 type RunActionBody = z.infer<typeof prospectRunActionSchema>;
 type RunListQuery = z.infer<typeof prospectRunListQuerySchema>;
 type CursorPayload = z.infer<typeof cursorPayloadSchema>;
+
+export interface ProspectRunQueryPlanOverride {
+  resolvedQuery: ProspectResolvedQuerySnapshot;
+  metadata: ProspectSearchQueryPlanMetadata;
+}
 
 interface NormalizedRunFilters {
   campaignId: string | null;
@@ -180,6 +193,7 @@ function createRequestHash(input: {
   strategyId: string;
   ifMatch: string;
   body: CreateRunBody;
+  queryPlanOverride?: ProspectRunQueryPlanOverride;
 }) {
   return stableHash({
     contractVersion: RUN_CONTRACT_VERSION,
@@ -189,7 +203,10 @@ function createRequestHash(input: {
     ifMatch: input.ifMatch.trim(),
     body: {
       reason: input.body.reason?.trim() || ""
-    }
+    },
+    ...(input.queryPlanOverride
+      ? { queryPlanOverride: input.queryPlanOverride }
+      : {})
   });
 }
 
@@ -395,8 +412,8 @@ function providerSnapshot(
       resultLimit: plan.resultLimit,
       budgetLimit: plan.budgetLimit,
       currency: plan.currency,
-      adapterVersion: provider?.adapterVersion || "ai-search-control-v1",
-      contractVersion: provider?.contractVersion || RUN_CONTRACT_VERSION,
+      adapterVersion: provider?.adapterVersion || AI_SEARCH_ADAPTER_VERSION,
+      contractVersion: provider?.contractVersion || PROVIDER_CONTRACT_VERSION,
       catalogVersion: catalog.version,
       capabilities: [...catalog.capabilities].sort(),
       accessMode: catalog.accessMode
@@ -407,9 +424,32 @@ function providerSnapshot(
 function executionSnapshot(
   store: CrmStore,
   campaign: ProspectCampaign,
-  strategy: ProspectStrategy
+  strategy: ProspectStrategy,
+  queryPlanOverride?: ProspectRunQueryPlanOverride
 ): ProspectRunExecutionSnapshot {
   const version = campaignVersion(store, campaign, strategy.campaignVersion);
+  if (queryPlanOverride) {
+    validateProspectSearchQueryPlan({
+      metadata: queryPlanOverride.metadata,
+      resolvedQuery: queryPlanOverride.resolvedQuery
+    });
+    const mission = store.prospectSuperSearchMissions.find((item) =>
+      item.id === queryPlanOverride.metadata.missionId
+      && item.teamId === campaign.teamId
+      && item.ownerId === campaign.ownerId
+      && item.campaignId === campaign.id
+      && item.strategyId === strategy.id
+    );
+    if (!mission
+      || queryPlanOverride.metadata.roundNo !== mission.currentRound + 1
+      || queryPlanOverride.metadata.roundNo > mission.maxRounds) {
+      throw new ProspectRunRequestError(
+        409,
+        "RUN_QUERY_PLAN_INVALID",
+        "超级搜索查询计划与当前任务轮次不一致"
+      );
+    }
+  }
   return {
     contractVersion: RUN_CONTRACT_VERSION,
     campaign: {
@@ -427,7 +467,12 @@ function executionSnapshot(
       queryFingerprint: strategy.queryFingerprint,
       query: structuredClone(strategy.query)
     },
-    resolvedQuery: resolveProspectStrategyQuery(strategy.query, version),
+    resolvedQuery: queryPlanOverride
+      ? structuredClone(queryPlanOverride.resolvedQuery)
+      : resolveProspectStrategyQuery(strategy.query, version),
+    ...(queryPlanOverride
+      ? { queryPlan: structuredClone(queryPlanOverride.metadata) }
+      : {}),
     providerPlan: providerSnapshot(store, strategy)
   };
 }
@@ -449,6 +494,9 @@ function publicExecutionSnapshot(snapshot: ProspectRunExecutionSnapshot) {
       query: structuredClone(snapshot.strategy.query)
     },
     resolvedQuery: structuredClone(snapshot.resolvedQuery),
+    ...(snapshot.queryPlan
+      ? { queryPlan: structuredClone(snapshot.queryPlan) }
+      : {}),
     providerPlan: structuredClone(snapshot.providerPlan)
   };
 }
@@ -484,6 +532,274 @@ function publicEvent(event: ProspectRunEvent) {
   return visible;
 }
 
+function executionPhaseStatus(run: ProspectSearchRun, phase: "snapshot" | "queue" | "sources" | "raw" | "clean" | "pool", count = 0) {
+  const terminal = ["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled"].includes(run.status);
+  if (phase === "snapshot") return "succeeded";
+  if (phase === "queue") return run.status === "queued" ? "running" : "succeeded";
+  if (phase === "sources") return run.status === "failed" ? "failed" : run.status === "partial_success" ? "partial" : terminal ? "succeeded" : "running";
+  if (!terminal) return count > 0 ? "running" : "pending";
+  if (run.status === "failed" && count === 0) return "blocked";
+  return "succeeded";
+}
+
+function failureStage(errorCode: string, hasRequest: boolean) {
+  if (/AUTH|CONNECTION|CONFIG|KEY/u.test(errorCode)) return "来源连接";
+  if (/RATE|THROTTLE|QUOTA|BUDGET/u.test(errorCode)) return "额度与限流";
+  if (/SCHEMA|RESPONSE|PARSE/u.test(errorCode)) return "响应解析";
+  if (/TIMEOUT|NETWORK|HTTP|REJECT|OUTCOME/u.test(errorCode) || hasRequest) return "来源请求";
+  if (/CANCEL|PAUSE/u.test(errorCode)) return "任务控制";
+  return "来源执行";
+}
+
+function cleaningReasonLabel(code: string) {
+  const labels: Record<string, string> = {
+    PROVIDER_INVALID_RECORD: "来源返回记录缺少有效字段，已在适配器解析阶段淘汰",
+    PROVIDER_DUPLICATE_RECORD: "来源页内记录重复，已在适配器归一阶段合并",
+    CANDIDATE_PAYLOAD_INVALID: "候选缺少公司名、来源编号、时间或摘要等必需字段",
+    PROSPECT_SOURCE_RAW_ENVELOPE_INVALID: "原始结果完整性校验失败，未进入候选池",
+    CANDIDATE_ID_CONFLICT: "候选唯一标识与已有记录冲突",
+    TEAM_FIRST_COVERAGE: "团队首次发现该企业，已进入候选池",
+    MATERIAL_EVIDENCE_ADDED: "已有企业出现新增证据，已归并到原候选",
+    REVIEW_DATE_REACHED: "已有企业达到复核时间，已重新进入核验队列",
+    EXCLUSION_EXPIRED_REQUIRES_REVIEW: "原排除规则已到期，已重新进入复核",
+    NO_MATERIAL_CHANGE: "已有企业且没有新增有效证据，不重复入池",
+    IDENTITY_OR_SOURCE_MATCH: "来源记录、官网域名与国家或企业身份命中已有候选，证据已合并",
+    COVERAGE_SUPPRESSED: "已命中团队重复、排除或勿联系规则，不重复进入候选池",
+    CANDIDATE_ACCEPTED: "候选通过字段校验与身份归一，已进入候选池",
+    PENDING_CLEANING: "来源已返回，但尚未完成字段校验、身份归一与覆盖分流"
+  };
+  return labels[code] || `按规则 ${code || "UNCLASSIFIED"} 完成处理`;
+}
+
+function prospectCleaningReport(
+  store: CrmStore,
+  run: ProspectSearchRun,
+  shards: ProspectRunShard[],
+  pages: ProspectExecutionPage[],
+  rawHits: ProspectSourceRawHit[],
+  processing: ProspectCandidateProcessingState[]
+) {
+  const shardById = new Map(shards.map((item) => [item.id, item]));
+  const ledgerById = new Map(
+    store.prospectProviderRequestLedgers
+      .filter((item) => item.teamId === run.teamId && item.runId === run.id)
+      .map((item) => [item.id, item])
+  );
+  const hitById = new Map(rawHits.map((item) => [item.id, item]));
+  const coverageByHit = new Map(
+    store.prospectCoverageEvents
+      .filter((item) => item.teamId === run.teamId && item.runId === run.id && item.sourceHitId)
+      .map((item) => [item.sourceHitId, item])
+  );
+  const candidateById = new Map(
+    store.websiteOpportunities
+      .filter((item) => item.teamId === run.teamId)
+      .map((item) => [item.id, item])
+  );
+  const providerRawCount = pages.reduce((sum, item) => sum + item.rawCount, 0);
+  const providerInvalidCount = pages.reduce((sum, item) => sum + item.invalidCount, 0);
+  const providerDuplicateCount = pages.reduce((sum, item) => sum + item.duplicateCount, 0);
+  const rejectedCount = processing.filter((item) => item.status === "rejected").length;
+  const suppressedCount = processing.filter((item) => item.status === "completed" && !item.candidateId).length;
+  const candidateReferences = processing.filter((item) => item.status === "completed" && item.candidateId);
+  const candidateIds = new Set(candidateReferences.map((item) => item.candidateId!));
+  const mergedCount = Math.max(0, candidateReferences.length - candidateIds.size);
+  const pendingCount = Math.max(0, rawHits.length - processing.length);
+  const reasonCounts = new Map<string, number>();
+  const addReason = (code: string, count = 1) => {
+    if (count > 0) reasonCounts.set(code, (reasonCounts.get(code) || 0) + count);
+  };
+  addReason("PROVIDER_INVALID_RECORD", providerInvalidCount);
+  addReason("PROVIDER_DUPLICATE_RECORD", providerDuplicateCount);
+  for (const item of processing) {
+    if (item.status === "rejected") {
+      addReason(item.failureCode || "CANDIDATE_PAYLOAD_INVALID");
+      continue;
+    }
+    const coverage = coverageByHit.get(item.hitId);
+    if (!item.candidateId) addReason(coverage?.reasonCode || "COVERAGE_SUPPRESSED");
+    else if (coverage?.classification === "duplicate" || coverage?.classification === "new_intelligence") {
+      addReason(coverage.reasonCode || "IDENTITY_OR_SOURCE_MATCH");
+    }
+  }
+  const seenCandidateIds = new Set<string>();
+  const processedRecords = [...processing]
+    .sort((left, right) => left.processedAt.localeCompare(right.processedAt) || left.hitId.localeCompare(right.hitId))
+    .map((item) => {
+      const hit = hitById.get(item.hitId);
+      const ledger = ledgerById.get(item.ledgerId);
+      const providerCode = ledger?.providerCode || (hit ? shardById.get(hit.shardId)?.providerCode : "") || "unknown";
+      const coverage = coverageByHit.get(item.hitId);
+      const candidate = item.candidateId ? candidateById.get(item.candidateId) : undefined;
+      let outcome: "accepted" | "merged" | "suppressed" | "rejected";
+      let reasonCode: string;
+      if (item.status === "rejected") {
+        outcome = "rejected";
+        reasonCode = item.failureCode || "CANDIDATE_PAYLOAD_INVALID";
+      } else if (!item.candidateId) {
+        outcome = "suppressed";
+        reasonCode = coverage?.reasonCode || "COVERAGE_SUPPRESSED";
+      } else if (coverage?.classification === "duplicate"
+        || coverage?.classification === "new_intelligence"
+        || seenCandidateIds.has(item.candidateId)) {
+        outcome = "merged";
+        reasonCode = coverage?.reasonCode || "IDENTITY_OR_SOURCE_MATCH";
+      } else {
+        outcome = "accepted";
+        reasonCode = coverage?.reasonCode || "CANDIDATE_ACCEPTED";
+      }
+      if (item.candidateId) seenCandidateIds.add(item.candidateId);
+      return {
+        hitId: item.hitId,
+        providerCode,
+        outcome,
+        reasonCode,
+        reason: cleaningReasonLabel(reasonCode),
+        candidateId: item.candidateId || "",
+        candidateName: candidate?.company || "",
+        processedAt: item.processedAt
+      };
+    });
+  const processedHitIds = new Set(processing.map((item) => item.hitId));
+  const pendingRecords = rawHits
+    .filter((item) => !processedHitIds.has(item.id))
+    .map((hit) => ({
+      hitId: hit.id,
+      providerCode: shardById.get(hit.shardId)?.providerCode || ledgerById.get(hit.ledgerId)?.providerCode || "unknown",
+      outcome: "pending" as const,
+      reasonCode: "PENDING_CLEANING",
+      reason: cleaningReasonLabel("PENDING_CLEANING"),
+      candidateId: "",
+      candidateName: "",
+      processedAt: hit.fetchedAt || hit.createdAt
+    }));
+  const records = [...processedRecords, ...pendingRecords]
+    .sort((left, right) => left.processedAt.localeCompare(right.processedAt) || left.hitId.localeCompare(right.hitId))
+    .slice(-100);
+  return {
+    summary: {
+      providerRawCount,
+      providerInvalidCount,
+      providerDuplicateCount,
+      pipelineHitCount: rawHits.length,
+      processedCount: processing.length,
+      pendingCount,
+      rejectedCount,
+      suppressedCount,
+      mergedCount,
+      candidateCount: candidateIds.size
+    },
+    stages: [
+      { id: "provider_normalize", name: "来源解析", input: providerRawCount, output: rawHits.length, removed: providerInvalidCount + providerDuplicateCount, result: `无效 ${providerInvalidCount}，来源内重复 ${providerDuplicateCount}` },
+      { id: "payload_validate", name: "字段校验", input: rawHits.length, output: Math.max(0, processing.length - rejectedCount), removed: rejectedCount, result: `拒绝 ${rejectedCount}，待处理 ${pendingCount}` },
+      { id: "identity_merge", name: "身份归一", input: candidateReferences.length, output: candidateIds.size, removed: mergedCount, result: `归并 ${mergedCount} 条到已有候选` },
+      { id: "coverage_route", name: "覆盖分流", input: processing.length, output: candidateIds.size, removed: suppressedCount, result: `重复、排除或勿联系分流 ${suppressedCount} 条` }
+    ],
+    reasons: [...reasonCounts.entries()]
+      .map(([code, count]) => ({ code, label: cleaningReasonLabel(code), count }))
+      .sort((left, right) => right.count - left.count || left.code.localeCompare(right.code)),
+    sources: shards.map((shard) => {
+      const sourcePages = pages.filter((item) => item.shardId === shard.id);
+      const sourceLedgers = new Set(
+        [...ledgerById.values()].filter((item) => item.shardId === shard.id).map((item) => item.id)
+      );
+      const sourceStates = processing.filter((item) => sourceLedgers.has(item.ledgerId));
+      return {
+        providerCode: shard.providerCode,
+        rawCount: sourcePages.reduce((sum, item) => sum + item.rawCount, 0),
+        invalidCount: sourcePages.reduce((sum, item) => sum + item.invalidCount, 0),
+        duplicateCount: sourcePages.reduce((sum, item) => sum + item.duplicateCount, 0),
+        processedCount: sourceStates.length,
+        rejectedCount: sourceStates.filter((item) => item.status === "rejected").length,
+        candidateCount: new Set(sourceStates.map((item) => item.candidateId).filter(Boolean)).size
+      };
+    }),
+    records
+  };
+}
+
+export function prospectRunDiagnostics(store: CrmStore, run: ProspectSearchRun) {
+  const shards = store.prospectRunShards
+    .filter((item) => item.teamId === run.teamId && item.runId === run.id)
+    .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id));
+  const rawHits = store.prospectSourceRawHits.filter((item) => item.teamId === run.teamId && item.runId === run.id);
+  const pages = store.prospectExecutionPages.filter((item) => item.teamId === run.teamId && item.runId === run.id);
+  const processing = (store.prospectCandidateProcessingStates || []).filter((item) => item.teamId === run.teamId && item.runId === run.id);
+  const accepted = processing.filter((item) => item.status === "completed").length;
+  const rejected = processing.filter((item) => item.status === "rejected").length;
+  const succeededSources = shards.filter((item) => ["succeeded", "succeeded_empty", "partial_success"].includes(item.status)).length;
+  const failedSources = shards.filter((item) => item.status === "failed").length;
+  const phases = [
+    { id: "snapshot", name: "策略与条件", status: executionPhaseStatus(run, "snapshot"), result: `${run.executionSnapshot.providerPlan.length} 个来源，策略版本 ${run.executionSnapshot.strategy.revision}` },
+    { id: "queue", name: "任务调度", status: executionPhaseStatus(run, "queue"), result: run.status === "queued" ? "正在等待 Worker" : `运行状态 ${run.status}` },
+    { id: "sources", name: "来源搜索", status: executionPhaseStatus(run, "sources"), result: `成功 ${succeededSources}，失败 ${failedSources}，共 ${shards.length}` },
+    { id: "raw", name: "原始结果", status: executionPhaseStatus(run, "raw", rawHits.length), result: `${pages.length} 页，${rawHits.length} 条原始命中` },
+    { id: "clean", name: "清洗归一", status: executionPhaseStatus(run, "clean", processing.length), result: `通过 ${accepted}，淘汰 ${rejected}` },
+    { id: "pool", name: "候选入池", status: executionPhaseStatus(run, "pool", accepted), result: `${accepted} 条形成候选` }
+  ];
+  const sources = shards.map((shard) => {
+    const binding = store.prospectRunQueueChildBindings.find((item) => item.teamId === run.teamId && item.runId === run.id && item.shardId === shard.id);
+    const job = binding ? store.agentJobs.find((item) => item.id === binding.jobId && item.teamId === run.teamId) : undefined;
+    const attempts = store.prospectExecutionAttempts
+      .filter((item) => item.teamId === run.teamId && item.runId === run.id && item.shardId === shard.id)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    const ledgers = store.prospectProviderRequestLedgers
+      .filter((item) => item.teamId === run.teamId && item.runId === run.id && item.shardId === shard.id)
+      .sort((left, right) => left.preparedAt.localeCompare(right.preparedAt));
+    const checkpoint = store.prospectExecutionCheckpoints
+      .filter((item) => item.teamId === run.teamId && item.runId === run.id && item.shardId === shard.id)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+    const latestAttempt = [...attempts].reverse().find((item) => item.errorCode || item.errorMessage);
+    const latestLedger = [...ledgers].reverse().find((item) => item.errorCode || item.httpStatus || item.providerOutcomeCode);
+    const storedErrorCode = latestAttempt?.errorCode || checkpoint?.lastErrorCode || job?.errorCode || latestLedger?.errorCode || "";
+    const storedErrorMessage = latestAttempt?.errorMessage || checkpoint?.lastErrorMessage || job?.errorMessage || "";
+    const legacyAiFailureDetailUnavailable = shard.providerCode === "ai_search"
+      && [400, 404, 422].includes(latestLedger?.httpStatus || 0)
+      && storedErrorCode === "PROVIDER_INTERNAL_ERROR";
+    const errorCode = storedErrorCode;
+    const errorMessage = legacyAiFailureDetailUnavailable
+      ? `AI 搜索执行失败；HTTP ${latestLedger?.httpStatus} 是旧版调度器的兜底状态，不足以证明模型拒绝了请求。该任务未保存原始失败原因，请重新测试模型配置或重跑 AI 来源`
+      : storedErrorMessage;
+    const visibleLegacyMessage = (code: string, message: string) => legacyAiFailureDetailUnavailable && code === "PROVIDER_INTERNAL_ERROR"
+      ? errorMessage
+      : message;
+    const failure = errorCode || errorMessage || shard.status === "failed" ? {
+      stage: failureStage(errorCode, Boolean(latestLedger)),
+      errorCode: errorCode || "PROVIDER_EXECUTION_FAILED",
+      errorMessage: errorMessage || "来源执行失败，未返回更多说明",
+      httpStatus: latestLedger?.httpStatus ?? null,
+      providerOutcomeCode: latestLedger?.providerOutcomeCode || "",
+      retryable: latestAttempt?.retryable ?? Boolean(job && job.attemptCount < job.maxAttempts),
+      retryAfterAt: latestAttempt?.retryAfterAt || checkpoint?.retryAfterAt || job?.nextAttemptAt || "",
+      occurredAt: latestAttempt?.finishedAt || job?.finishedAt || shard.updatedAt
+    } : null;
+    return {
+      shardId: shard.id,
+      providerCode: shard.providerCode,
+      status: shard.status,
+      job: job ? { id: job.id, status: job.status, attemptCount: job.attemptCount, maxAttempts: job.maxAttempts, errorCode: job.errorCode, errorMessage: visibleLegacyMessage(job.errorCode, job.errorMessage), nextAttemptAt: job.nextAttemptAt, startedAt: job.startedAt, finishedAt: job.finishedAt } : null,
+      checkpoint: checkpoint ? { pageSequence: checkpoint.pageSequence, totalCallCount: checkpoint.totalCallCount, acceptedCount: checkpoint.acceptedCount, rawCount: checkpoint.rawCount, invalidCount: checkpoint.invalidCount, duplicateCount: checkpoint.duplicateCount, partial: checkpoint.partial, completionReason: checkpoint.completionReason, lastErrorCode: checkpoint.lastErrorCode, lastErrorMessage: visibleLegacyMessage(checkpoint.lastErrorCode, checkpoint.lastErrorMessage), retryAfterAt: checkpoint.retryAfterAt, updatedAt: checkpoint.updatedAt } : null,
+      attempts: attempts.slice(-12).map((item) => ({ id: item.id, attempt: item.providerAttemptNo, status: item.status, errorCode: item.errorCode, errorMessage: visibleLegacyMessage(item.errorCode, item.errorMessage), retryable: item.retryable, retryAfterAt: item.retryAfterAt, startedAt: item.startedAt, finishedAt: item.finishedAt })),
+      requests: ledgers.slice(-12).map((item) => ({ id: item.id, endpointCode: item.endpointCode, status: item.status, httpStatus: item.httpStatus, providerOutcomeCode: item.providerOutcomeCode, settlementKind: item.settlementKind, errorCode: item.errorCode, preparedAt: item.preparedAt, responseReceivedAt: item.responseReceivedAt, settledAt: item.settledAt })),
+      failure
+    };
+  });
+  return {
+    phases,
+    sources,
+    cleaningReport: prospectCleaningReport(store, run, shards, pages, rawHits, processing),
+    summary: {
+      rawHits: rawHits.length,
+      pages: pages.length,
+      accepted,
+      rejected,
+      succeededSources,
+      failedSources,
+      candidateIds: [...new Set(processing.filter((item) => item.status === "completed" && item.candidateId).map((item) => item.candidateId!))]
+    }
+  };
+}
+
 function runDetail(store: CrmStore, run: ProspectSearchRun) {
   verifyStoredSnapshot(run);
   verifyQueueBridge(store, run);
@@ -501,7 +817,8 @@ function runDetail(store: CrmStore, run: ProspectSearchRun) {
       .sort((left, right) =>
         left.sequence - right.sequence || left.id.localeCompare(right.id)
       )
-      .map(publicEvent)
+      .map(publicEvent),
+    diagnostics: prospectRunDiagnostics(store, run)
   };
 }
 
@@ -750,6 +1067,7 @@ export async function createProspectRun(input: {
   idempotencyKey: string;
   body: CreateRunBody;
   requestId: string;
+  queryPlanOverride?: ProspectRunQueryPlanOverride;
 }) {
   const preflight = findVisibleStrategy(
     input.store,
@@ -764,7 +1082,8 @@ export async function createProspectRun(input: {
   const requestHash = createRequestHash({
     strategyId: input.strategyId,
     ifMatch,
-    body: input.body
+    body: input.body,
+    queryPlanOverride: input.queryPlanOverride
   });
 
   try {
@@ -816,7 +1135,12 @@ export async function createProspectRun(input: {
         strategy,
         campaign.ownerId
       );
-      const snapshot = executionSnapshot(input.store, campaign, strategy);
+      const snapshot = executionSnapshot(
+        input.store,
+        campaign,
+        strategy,
+        input.queryPlanOverride
+      );
       const before = snapshotRunState(input.store);
       const now = new Date().toISOString();
       const run: ProspectSearchRun = {

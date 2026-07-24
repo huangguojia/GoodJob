@@ -10,47 +10,46 @@ const { Client, LocalAuth } = whatsappWeb;
 // WhatsApp Web 客户端管理器
 class WhatsAppWebManager {
   private clients: Map<string, WhatsAppClient> = new Map();
+  private statuses: Map<string, "connected" | "disconnected" | "qr-pending" | "error"> = new Map();
+  private latestQr: Map<string, string> = new Map();
   private qrCallbacks: Map<string, (qr: string) => void> = new Map();
   private messageCallbacks: Map<string, (msg: WhatsAppMessage) => void> = new Map();
 
   // 创建新的 WhatsApp Web 客户端
-  async createClient(userId: string, sessionData?: string): Promise<string> {
+  async createClient(_userId: string): Promise<string> {
     const clientId = `wa_web_${randomBytes(24).toString("base64url")}`;
 
     const client = new Client({
       authStrategy: new LocalAuth({
         clientId: clientId,
-        dataPath: `./.wwebjs_auth/${clientId}`
+        dataPath: "./.wwebjs_auth"
       }),
       puppeteer: {
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        args: ["--no-sandbox", "--disable-setuid-sandbox"]
       }
     });
 
     // QR 码生成事件
     client.on("qr", (qr) => {
-      console.log(`QR Code generated for ${clientId}`);
+      this.statuses.set(clientId, "qr-pending");
+      this.latestQr.set(clientId, qr);
       qrcode.generate(qr, { small: true });
       const callback = this.qrCallbacks.get(clientId);
-      if (callback) {
-        callback(qr);
-      }
+      if (callback) callback(qr);
     });
 
     // 客户端就绪事件
     client.on("ready", () => {
-      console.log(`WhatsApp Web client ${clientId} is ready!`);
+      this.statuses.set(clientId, "connected");
+      this.latestQr.delete(clientId);
     });
 
     // 接收消息事件
     client.on("message", async (message: Message) => {
-      const contact = await message.getContact();
-      const chat = await message.getChat();
-
       const waMessage: WhatsAppMessage = {
-        id: `wam_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        customerId: "", // 需要通过电话号码匹配客户
+        id: `wam_${Date.now()}_${randomBytes(6).toString("hex")}`,
+        customerId: "",
         direction: "inbound",
         content: message.body,
         contentTranslated: "",
@@ -68,17 +67,24 @@ class WhatsAppWebManager {
 
     // 认证失败事件
     client.on("auth_failure", (msg) => {
+      this.statuses.set(clientId, "error");
       console.error(`Authentication failed for ${clientId}:`, msg);
     });
 
     // 断开连接事件
     client.on("disconnected", (reason) => {
-      console.log(`Client ${clientId} disconnected:`, reason);
+      this.statuses.set(clientId, "disconnected");
       this.clients.delete(clientId);
+      this.latestQr.delete(clientId);
+      console.log(`Client ${clientId} disconnected:`, reason);
     });
 
-    await client.initialize();
     this.clients.set(clientId, client);
+    this.statuses.set(clientId, "qr-pending");
+    void client.initialize().catch((error) => {
+      this.statuses.set(clientId, "error");
+      console.error(`WhatsApp Web client ${clientId} failed to initialize:`, error);
+    });
 
     return clientId;
   }
@@ -86,6 +92,8 @@ class WhatsAppWebManager {
   // 注册 QR 码回调
   onQR(clientId: string, callback: (qr: string) => void) {
     this.qrCallbacks.set(clientId, callback);
+    const qr = this.latestQr.get(clientId);
+    if (qr) callback(qr);
     return () => {
       if (this.qrCallbacks.get(clientId) === callback) this.qrCallbacks.delete(clientId);
     };
@@ -94,6 +102,9 @@ class WhatsAppWebManager {
   // 注册消息回调
   onMessage(clientId: string, callback: (msg: WhatsAppMessage) => void) {
     this.messageCallbacks.set(clientId, callback);
+    return () => {
+      if (this.messageCallbacks.get(clientId) === callback) this.messageCallbacks.delete(clientId);
+    };
   }
 
   // 发送消息
@@ -117,12 +128,8 @@ class WhatsAppWebManager {
   }
 
   // 获取客户端状态
-  getClientStatus(clientId: string): "connected" | "disconnected" | "qr-pending" {
-    const client = this.clients.get(clientId);
-    if (!client) return "disconnected";
-
-    // 简化状态判断
-    return "connected";
+  getClientStatus(clientId: string): "connected" | "disconnected" | "qr-pending" | "error" {
+    return this.statuses.get(clientId) || "disconnected";
   }
 
   // 断开客户端
@@ -131,6 +138,8 @@ class WhatsAppWebManager {
     if (client) {
       await client.destroy();
       this.clients.delete(clientId);
+      this.statuses.set(clientId, "disconnected");
+      this.latestQr.delete(clientId);
       this.qrCallbacks.delete(clientId);
       this.messageCallbacks.delete(clientId);
     }

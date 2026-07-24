@@ -88,6 +88,9 @@ import {
   prospectRunQueueParentBindings,
   prospectRunShards,
   prospectSearchRuns,
+  prospectSuperSearchEvents,
+  prospectSuperSearchMissions,
+  prospectSuperSearchRounds,
   prospectSchedules,
   prospectStrategies,
   prospectStrategyEvents,
@@ -150,8 +153,12 @@ import type {
   ProspectQualificationCommand,
   ProspectQualificationCommandResult
 } from "./prospect-qualification.js";
-import type { AcquisitionOutcomeFeedback, AgentJob, AgentJobIdempotencyAlias, AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerAcquisitionSourceEvent, CustomerActivity, CustomerIntelligenceSuggestion, CustomerOwnershipEvent, CustomerOwnershipMutationInput, CustomerOwnershipMutationResult, DailyReport, DailyReportComment, Deal, DealEvent, DealRecommendation, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, InternalMessage, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, MarketOpportunityBatch, MarketOpportunityCalculationEvent, MarketOpportunitySnapshot, MarketTradeObservation, Memo, MonthlySalesRecord, OcrJob, Organization, OrganizationAcceptedIdentifier, OrganizationAliasFact, OrganizationCanonicalMapping, OrganizationIdentityClaim, OrganizationIdentityConflict, OrganizationIdentityConflictReview, OrganizationIdentityEvent, OrganizationIdentityResolution, OrganizationRelationFact, OrganizationSourceBinding, PlanTask, PlanTemplate, ProblemItem, ProcurementSignal, ProspectCampaign, ProspectCampaignEvent, ProspectCampaignVersion, ProspectCandidateProcessingState, ProspectCoverageEvent, ProspectExecutionAttempt, ProspectExecutionCheckpoint, ProspectExecutionEvent, ProspectExecutionKernelState, ProspectExecutionLease, ProspectExecutionPage, ProspectExecutionThrottleBucket, ProspectProviderRequestAccountingEvidence, ProspectProviderRequestAttemptBinding, ProspectProviderRequestDispatch, ProspectProviderRequestEvent, ProspectProviderRequestLedger, ProspectRunEvent, ProspectRunQueueChildBinding, ProspectRunQueueParentBinding, ProspectRunShard, ProspectSchedule, ProspectSearchRun, ProspectSourceRawBatch, ProspectSourceRawHit, ProspectSourceRawRecord, ProspectStrategy, ProspectStrategyEvent, ProspectStrategySourcePosition, ProspectStrategySuggestion, ProspectTouchpoint, ProviderCatalogItem, ProviderConnection, ProviderRequestLog, ProviderResponseCache, Reminder, SalesRecordAudit, TenantProspect, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity, WhatsAppMessage, WhatsAppBinding } from "./types.js";
+import type { AcquisitionOutcomeFeedback, AgentJob, AgentJobIdempotencyAlias, AgentMemoryRecord, AgentMissionCheckpointRecord, AgentRunEventRecord, AgentRunRecord, AgentRunStepRecord, AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerAcquisitionSourceEvent, CustomerActivity, CustomerIntelligenceSuggestion, CustomerMaintenanceWatch, CustomerOwnershipEvent, CustomerOwnershipMutationInput, CustomerOwnershipMutationResult, DailyReport, DailyReportComment, Deal, DealEvent, DealRecommendation, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, InternalMessage, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, MarketOpportunityBatch, MarketOpportunityCalculationEvent, MarketOpportunitySnapshot, MarketTradeObservation, Memo, MonthlySalesRecord, OcrJob, Organization, OrganizationAcceptedIdentifier, OrganizationAliasFact, OrganizationCanonicalMapping, OrganizationIdentityClaim, OrganizationIdentityConflict, OrganizationIdentityConflictReview, OrganizationIdentityEvent, OrganizationIdentityResolution, OrganizationRelationFact, OrganizationSourceBinding, OutreachSequence, PlanTask, PlanTemplate, ProblemItem, ProcurementSignal, ProspectCampaign, ProspectCampaignEvent, ProspectCampaignVersion, ProspectCandidateProcessingState, ProspectCoverageEvent, ProspectExecutionAttempt, ProspectExecutionCheckpoint, ProspectExecutionEvent, ProspectExecutionKernelState, ProspectExecutionLease, ProspectExecutionPage, ProspectExecutionThrottleBucket, ProspectProviderRequestAccountingEvidence, ProspectProviderRequestAttemptBinding, ProspectProviderRequestDispatch, ProspectProviderRequestEvent, ProspectProviderRequestLedger, ProspectRunEvent, ProspectRunQueueChildBinding, ProspectRunQueueParentBinding, ProspectRunShard, ProspectSchedule, ProspectSearchRun, ProspectSourceRawBatch, ProspectSourceRawHit, ProspectSourceRawRecord, ProspectStrategy, ProspectStrategyEvent, ProspectStrategySourcePosition, ProspectStrategySuggestion, ProspectSuperSearchEvent, ProspectSuperSearchMission, ProspectSuperSearchRound, ProspectTouchpoint, ProviderCatalogItem, ProviderConnection, ProviderRequestLog, ProviderResponseCache, Reminder, SalesRecordAudit, SalesTrainingRun, TenantProspect, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity, WhatsAppMessage, WhatsAppBinding } from "./types.js";
 import { mutateCustomerOwnershipMemory } from "./customer-public-pool.js";
+import type { SalesDistillation, SalesPlaybookActivation } from "./types.js";
+import type { AgentTriggerEventRecord, AgentTriggerRuleRecord } from "./types.js";
+import type { AgentEvaluationRunRecord, AgentModelCallRecord } from "./types.js";
+import type { AgentKnowledgeDocument } from "./types.js";
 import type {
   CompanyVerificationSnapshot,
   ProspectContact,
@@ -210,6 +217,21 @@ export interface CrmStore {
   marketOpportunityCalculationEvents: MarketOpportunityCalculationEvent[];
   agentJobs: AgentJob[];
   agentJobIdempotencyAliases: AgentJobIdempotencyAlias[];
+  agentRuns: AgentRunRecord[];
+  agentRunSteps: AgentRunStepRecord[];
+  agentRunEvents: AgentRunEventRecord[];
+  agentMissionCheckpoints: AgentMissionCheckpointRecord[];
+  agentMemories: AgentMemoryRecord[];
+  agentKnowledgeDocuments: AgentKnowledgeDocument[];
+  agentTriggerRules: AgentTriggerRuleRecord[];
+  agentTriggerEvents: AgentTriggerEventRecord[];
+  agentModelCalls: AgentModelCallRecord[];
+  agentEvaluationRuns: AgentEvaluationRunRecord[];
+  outreachSequences: OutreachSequence[];
+  customerMaintenanceWatches: CustomerMaintenanceWatch[];
+  salesDistillations: SalesDistillation[];
+  salesPlaybookActivations: SalesPlaybookActivation[];
+  salesTrainingRuns: SalesTrainingRun[];
   prospectCampaigns: ProspectCampaign[];
   prospectCampaignVersions: ProspectCampaignVersion[];
   prospectCampaignEvents: ProspectCampaignEvent[];
@@ -217,6 +239,9 @@ export interface CrmStore {
   prospectStrategyEvents: ProspectStrategyEvent[];
   prospectSchedules: ProspectSchedule[];
   prospectSearchRuns: ProspectSearchRun[];
+  prospectSuperSearchMissions: ProspectSuperSearchMission[];
+  prospectSuperSearchRounds: ProspectSuperSearchRound[];
+  prospectSuperSearchEvents: ProspectSuperSearchEvent[];
   prospectRunShards: ProspectRunShard[];
   prospectRunEvents: ProspectRunEvent[];
   prospectRunQueueParentBindings: ProspectRunQueueParentBinding[];
@@ -376,6 +401,21 @@ export const memoryStore: CrmStore = {
   marketOpportunityCalculationEvents,
   agentJobs,
   agentJobIdempotencyAliases,
+  agentRuns: [],
+  agentRunSteps: [],
+  agentRunEvents: [],
+  agentMissionCheckpoints: [],
+  agentMemories: [],
+  agentKnowledgeDocuments: [],
+  agentTriggerRules: [],
+  agentTriggerEvents: [],
+  agentModelCalls: [],
+  agentEvaluationRuns: [],
+  outreachSequences: [],
+  customerMaintenanceWatches: [],
+  salesDistillations: [],
+  salesPlaybookActivations: [],
+  salesTrainingRuns: [],
     prospectCampaigns,
     prospectCampaignVersions,
     prospectCampaignEvents,
@@ -383,6 +423,9 @@ export const memoryStore: CrmStore = {
     prospectStrategyEvents,
     prospectSchedules,
     prospectSearchRuns,
+    prospectSuperSearchMissions,
+    prospectSuperSearchRounds,
+    prospectSuperSearchEvents,
     prospectRunShards,
     prospectRunEvents,
     prospectRunQueueParentBindings,

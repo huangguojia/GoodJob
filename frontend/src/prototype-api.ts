@@ -12,6 +12,13 @@ import {
   type BlockedLeadSource
 } from "./lead-source-selection";
 import type { CustomerMapController, CustomerMapRegion } from "./customer-map";
+import {
+  parseMysqlDump,
+  readMysqlDumpFile,
+  sha256File,
+  type MysqlDumpBatch,
+  type MysqlDumpPlan
+} from "./mysql-dump-import";
 
 echarts.use([LineChart, GridComponent, TooltipComponent, SVGRenderer]);
 
@@ -48,6 +55,7 @@ interface Customer {
   company: string;
   country: string;
   contact: string;
+  whatsapp?: string;
   stage: string;
   amount: number;
   health: number;
@@ -73,6 +81,14 @@ interface Customer {
   wonDealCount?: number;
   wonDealAmount?: number;
   lastWonAt?: string;
+  whatsappPhone?: string;
+  poolStatus?: "owned" | "public";
+  previousOwnerName?: string;
+  releasedByName?: string;
+  releasedAt?: string;
+  releaseReason?: string;
+  claimedAt?: string;
+  ownershipVersion?: number;
 }
 
 type CustomerIntelligenceFieldKey =
@@ -121,6 +137,95 @@ interface BackgroundResearch {
   nextAction: string;
   engine: string;
   completedAt: string;
+}
+
+interface SalesDistillationMetrics {
+  customerCount: number;
+  leadCount: number;
+  activeDealCount: number;
+  wonDealCount: number;
+  wonAmount: number;
+  followupCount: number;
+  completedTodoCount: number;
+  reportCount: number;
+}
+
+interface SalesDistillation {
+  id: string;
+  sourceUserId: string;
+  sourceUserName: string;
+  teamId: string;
+  periodDays: number;
+  metrics: SalesDistillationMetrics;
+  patterns: string[];
+  playbook: Array<{ stage: string; action: string; evidence: string }>;
+  coachingActions: string[];
+  modelLabel: string;
+  status: "draft" | "published";
+  createdBy: string;
+  createdAt: string;
+  publishedBy?: string;
+  publishedAt?: string;
+  trainingRunId?: string;
+  version?: number;
+  maturity?: SalesTrainingMaturity;
+  evaluationScore?: number;
+  sampleCount?: number;
+}
+
+type SalesTrainingStatus = "queued" | "collecting" | "cleaning" | "labeling" | "training" | "evaluating" | "awaiting_review" | "published" | "paused" | "failed" | "cancelled";
+type SalesTrainingMaturity = "observation" | "trial" | "production" | "stable";
+type SalesTrainingSampleLabel = "positive" | "negative" | "neutral";
+interface SalesTrainingRun {
+  id: string;
+  sourceUserId: string;
+  sourceUserName: string;
+  teamId: string;
+  createdBy: string;
+  parentRunId: string;
+  version: number;
+  periodDays: number;
+  status: SalesTrainingStatus;
+  resumeStatus: SalesTrainingStatus;
+  progress: number;
+  currentAction: string;
+  maturity: SalesTrainingMaturity;
+  metrics: SalesDistillationMetrics;
+  sampleStats: { source: number; valid: number; rejected: number; positive: number; negative: number; neutral: number; holdout: number };
+  samples: Array<{ id: string; entityType: "customer" | "lead" | "deal"; entityId: string; title: string; market: string; stage: string; outcome: string; label: SalesTrainingSampleLabel; included: boolean; activityCount: number; todoCount: number; evidenceIds: string[]; summary: string; managerNote: string }>;
+  rounds: Array<{ id: string; index: number; name: string; status: "pending" | "running" | "completed" | "failed"; summary: string; startedAt: string; completedAt: string }>;
+  events: Array<{ id: string; stage: SalesTrainingStatus; message: string; createdAt: string }>;
+  patterns: string[];
+  playbook: Array<{ stage: string; action: string; evidence: string }>;
+  coachingActions: string[];
+  evaluation: { coverage: number; balance: number; traceability: number; strategy: number; safety: number; overall: number; passed: boolean; blockers: string[] };
+  modelLabel: string;
+  candidateDistillationId: string;
+  error: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string;
+  publishedAt: string;
+}
+
+interface SalesPlaybookActivation {
+  id: string;
+  distillationId: string;
+  ownerId: string;
+  teamId: string;
+  status: "active" | "paused";
+  applicationCount: number;
+  taskCount: number;
+  lastUsedAt: string;
+  activatedAt: string;
+  updatedAt: string;
+}
+
+interface SalesDistillationSource {
+  id: string;
+  name: string;
+  role: Role;
+  teamId: string;
 }
 
 interface CompanyProfile {
@@ -511,6 +616,7 @@ interface CustomerImportRow {
   company: string;
   country: string;
   contact: string;
+  whatsapp: string;
   stage: string;
   amount: number;
   health: number;
@@ -939,12 +1045,108 @@ interface LeadFinderJob {
   progressLabel?: string;
   progressValue?: string;
   runEvents?: ProspectRunEventApiRecord[];
+  processPhases?: ProspectRunProcessPhase[];
+  cleaningReport?: ProspectRunCleaningReport;
+  superSearchMissionId?: string;
+  superSearchRevision?: number;
+  superSearchStatus?: ProspectSuperSearchMissionApi["status"];
+  superSearchRound?: number;
+  superSearchMaxRounds?: number;
+  superSearchTarget?: number;
+  superSearchRounds?: ProspectSuperSearchRoundApi[];
+  pendingCandidates?: ProspectPendingCandidatePreview[];
+  selectedPendingHitIds?: string[];
+  pendingCandidatesLoaded?: boolean;
+  selectedResultIds?: string[];
+}
+
+interface ProspectPendingCandidatePreview {
+  hitId: string;
+  runId: string;
+  providerCode: string;
+  company: string;
+  country: string;
+  business: string;
+  website: string;
+  contact: string;
+  contactInfo: string;
+  evidenceSummary: string;
+  sourceUrl: string;
+  fetchedAt: string;
+  previewError: string;
+}
+
+interface ProspectRunProcessPhase {
+  id: string;
+  name: string;
+  status: "pending" | "running" | "succeeded" | "partial" | "failed" | "blocked";
+  result: string;
+}
+
+interface ProspectRunFailureReport {
+  stage: string;
+  errorCode: string;
+  errorMessage: string;
+  httpStatus: number | null;
+  providerOutcomeCode: string;
+  retryable: boolean;
+  retryAfterAt: string;
+  occurredAt: string;
+}
+
+interface ProspectRunCleaningReport {
+  summary: {
+    providerRawCount: number;
+    providerInvalidCount: number;
+    providerDuplicateCount: number;
+    pipelineHitCount: number;
+    processedCount: number;
+    pendingCount: number;
+    rejectedCount: number;
+    suppressedCount: number;
+    mergedCount: number;
+    candidateCount: number;
+  };
+  stages: Array<{
+    id: string;
+    name: string;
+    input: number;
+    output: number;
+    removed: number;
+    result: string;
+  }>;
+  reasons: Array<{ code: string; label: string; count: number }>;
+  sources: Array<{
+    providerCode: string;
+    rawCount: number;
+    invalidCount: number;
+    duplicateCount: number;
+    processedCount: number;
+    rejectedCount: number;
+    candidateCount: number;
+  }>;
+  records: Array<{
+    hitId: string;
+    providerCode: string;
+    outcome: "pending" | "accepted" | "merged" | "suppressed" | "rejected";
+    reasonCode: string;
+    reason: string;
+    candidateId: string;
+    candidateName: string;
+    processedAt: string;
+  }>;
 }
 
 interface LeadFinderSourceStat {
   id: string;
   name: string;
   count?: number;
+  rawCount?: number;
+  invalidCount?: number;
+  duplicateCount?: number;
+  processedCount?: number;
+  rejectedCount?: number;
+  candidateCount?: number;
   status?: string;
   statusLabel?: string;
   error?: string;
@@ -954,6 +1156,11 @@ interface LeadFinderSourceStat {
   usage?: string;
   createdAt?: string;
   updatedAt?: string;
+  failure?: ProspectRunFailureReport | null;
+  job?: Record<string, unknown> | null;
+  checkpoint?: Record<string, unknown> | null;
+  attempts?: Array<Record<string, unknown>>;
+  requests?: Array<Record<string, unknown>>;
 }
 
 interface LeadFinderIncrementalStats {
@@ -1066,6 +1273,106 @@ interface ProspectRunDetailApiResponse {
   run: ProspectRunApiRecord;
   shards: ProspectRunShardApiRecord[];
   events: ProspectRunEventApiRecord[];
+  diagnostics?: {
+    phases: ProspectRunProcessPhase[];
+    sources: Array<{
+      shardId: string;
+      providerCode: string;
+      status: string;
+      failure: ProspectRunFailureReport | null;
+      job: Record<string, unknown> | null;
+      checkpoint: Record<string, unknown> | null;
+      attempts: Array<Record<string, unknown>>;
+      requests: Array<Record<string, unknown>>;
+    }>;
+    cleaningReport: ProspectRunCleaningReport;
+    summary: { rawHits: number; pages: number; accepted: number; rejected: number; succeededSources: number; failedSources: number; candidateIds: string[] };
+  };
+}
+
+interface ProspectSuperSearchRoundApi {
+  id: string;
+  missionId: string;
+  roundNo: number;
+  runId: string;
+  queryPlanSnapshot?: {
+    positiveKeywords: string[];
+    synonyms: string[];
+    industryTerms: string[];
+    purchaseScenarioTerms: string[];
+    countries: string[];
+    languages: string[];
+    customerTypes: string[];
+  };
+  plannerVersion?: string;
+  planningMode?: "rules" | "ai_enhanced";
+  queryTheme?: string;
+  queryPlanFingerprint?: string;
+  coverageGaps?: string[];
+  queryCells?: Array<{
+    market: string;
+    language: string;
+    customerType: string;
+    queryTheme: string;
+    providerId: string;
+    queryText: string;
+    fingerprint: string;
+    status: "planned" | "succeeded" | "succeeded_empty" | "partial_success" | "failed" | "cancelled";
+    rawCount?: number;
+    invalidCount?: number;
+    duplicateCount?: number;
+    candidateCount?: number;
+    errorCode?: string;
+    errorMessage?: string;
+    completedAt?: string;
+  }>;
+  rawCount: number;
+  uniqueCount: number;
+  candidateCount: number;
+  duplicateCount: number;
+  filteredCount: number;
+  pendingCount: number;
+  duplicateRate: number;
+  yieldRate: number;
+  decision: "pending" | "continue" | "converged" | "limit_reached" | "manual_stop" | "failed";
+  decisionReason: string;
+  createdAt: string;
+  completedAt: string;
+}
+
+interface ProspectSuperSearchMissionApi {
+  id: string;
+  campaignId: string;
+  strategyId: string;
+  ownerId: string;
+  status: "queued" | "running" | "paused" | "cancelled" | "succeeded" | "partial_success" | "failed";
+  targetCandidateCount: number;
+  maxDurationMinutes: number;
+  depth: "balanced" | "deep" | "extreme";
+  maxRounds: number;
+  costLimit: number;
+  currency: string;
+  currentRound: number;
+  currentRunId: string;
+  totalCost: number;
+  rawCount: number;
+  uniqueCount: number;
+  candidateCount: number;
+  pendingCount: number;
+  filteredCount: number;
+  revision: number;
+  deadlineAt: string;
+  stopReason: string;
+  webSearchMode?: "off" | "api";
+  webProviderIds?: string[];
+  mapSearchMode?: "off" | "google_places";
+  mapProviderIds?: string[];
+  aiDiscoveryMode?: "off" | "model";
+  aiDiscoveryProviderIds?: string[];
+  candidateIds?: string[];
+  createdAt: string;
+  updatedAt: string;
+  rounds: ProspectSuperSearchRoundApi[];
 }
 
 interface ProspectScheduleApiRecord {
@@ -1097,6 +1404,7 @@ interface ProspectScheduleApiRecord {
 interface LeadFinderLaunchResult extends ProspectRunDetailApiResponse {
   schedule?: ProspectScheduleApiRecord;
   scheduleError?: string;
+  superSearch?: ProspectSuperSearchMissionApi;
 }
 
 interface AiModelConfig {
@@ -1373,6 +1681,282 @@ interface LeadActivity {
   createdAt: string;
 }
 
+type AgentRisk = "read" | "draft" | "write" | "external";
+type AgentStepStatus = "ready" | "needs_confirmation" | "queued" | "running" | "done" | "failed" | "skipped";
+interface AgentStep {
+  id: string;
+  key: string;
+  dependsOn: string[];
+  tool: string;
+  risk: AgentRisk;
+  status: AgentStepStatus;
+  title: string;
+  input: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: string;
+  signature: string;
+}
+interface AgentRun {
+  id: string;
+  conversationId: string;
+  ownerId: string;
+  teamId: string;
+  goal: string;
+  goalSpec?: {
+    primaryAction: "navigate" | "read" | "analyze" | "create" | "update" | "record" | "search" | "draft" | "export" | "send" | "manage" | "unknown";
+    primaryDomain: string;
+    subject: string;
+    objectives: Array<{ id: string; action: string; domain: string; description: string; completionCriteria: string[] }>;
+    constraints: string[];
+    completionCriteria: string[];
+    compiledBy: "rules" | "model+rules";
+  };
+  summary: string;
+  status: "planning" | "awaiting_confirmation" | "running" | "paused" | "waiting_user" | "completed" | "failed" | "cancelled";
+  iteration: number;
+  maxIterations: number;
+  progress: number;
+  currentAction: string;
+  stopReason: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  steps: AgentStep[];
+  events: Array<{ id: string; type: "plan" | "step" | "approval" | "result" | "error" | "assistant"; message: string; createdAt: string }>;
+}
+
+interface AgentPlanningProgress {
+  phase: "understanding" | "intent" | "planning" | "ready";
+  requestKind: "execute" | "query" | "conversation";
+  message: string;
+  detail: string;
+}
+
+interface AgentConversation {
+  id: string;
+  title: string;
+  updatedAt: string;
+  status: AgentRun["status"];
+  turnCount: number;
+}
+
+interface AgentMissionCheckpoint {
+  id: string;
+  runId: string;
+  iteration: number;
+  status: AgentRun["status"];
+  reason: string;
+  stateHash: string;
+  createdAt: string;
+  stepCount: number;
+}
+
+type AgentMemoryStatus = "proposed" | "active" | "archived";
+interface AgentMemory {
+  id: string;
+  ownerId: string;
+  teamId: string;
+  type: "user_preference" | "company_knowledge" | "customer_memory" | "team_playbook";
+  scope: "personal" | "team" | "customer" | "company";
+  subjectId: string;
+  title: string;
+  content: string;
+  sourceType: "crm" | "manual" | "agent" | "playbook";
+  sourceId: string;
+  status: AgentMemoryStatus;
+  confidence: number;
+  expiresAt: string;
+  lastUsedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+type AgentKnowledgeStatus = "draft" | "review" | "published" | "archived";
+type AgentKnowledgeKind = "system" | "module" | "workflow" | "policy" | "field" | "playbook" | "failure_case";
+interface AgentKnowledgeDocument {
+  id: string;
+  ownerId: string;
+  teamId: string;
+  kind: AgentKnowledgeKind;
+  scope: "system" | "team" | "company";
+  module: string;
+  title: string;
+  summary: string;
+  content: string;
+  keywords: string[];
+  roles: Array<"sales" | "manager" | "admin" | "super_admin">;
+  toolRefs: string[];
+  successCriteria: string[];
+  failureCases: string[];
+  sourceType: "system_file" | "manual" | "agent_feedback" | "distillation";
+  sourceId: string;
+  status: AgentKnowledgeStatus;
+  trustLevel: "system" | "reviewed" | "candidate";
+  version: string;
+  revision: number;
+  checksum: string;
+  publishedBy: string;
+  publishedAt: string;
+  usageCount: number;
+  lastUsedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  canEdit?: boolean;
+}
+
+interface AgentKnowledgeOverview {
+  systemCount: number;
+  managedCount: number;
+  publishedCount: number;
+  reviewCount: number;
+  distillationCount: number;
+  modules: string[];
+  loadedAt: string;
+  directory: string;
+  errors: string[];
+  retrievalMode: string;
+  vectorEnabled: boolean;
+  canPublish: boolean;
+}
+
+interface AgentSkill {
+  id: string;
+  name: string;
+  version: string;
+  category: string;
+  description: string;
+  status: "active" | "draft" | "archived";
+  priority: number;
+  triggers: string[];
+  keywords: string[];
+  modules: string[];
+  toolRefs: string[];
+  directory: string;
+  instructions?: string;
+  matched?: boolean;
+}
+
+interface AgentTuningInspection {
+  goalSpec: {
+    primaryAction: string;
+    primaryDomain: string;
+    subject: string;
+    completionCriteria: string[];
+    authorization: {
+      readOnly: boolean;
+      directExecution: boolean;
+      delegatedFieldSynthesis: boolean;
+      externalConfirmationRequired: boolean;
+      destructiveConfirmationRequired: boolean;
+    };
+  };
+  skills: Array<{ id: string; name: string; version: string; score: number; reasons: string[]; toolRefs: string[] }>;
+  knowledge: Array<{ id: string; title: string; module: string; version: string; score: number; reasons: string[] }>;
+  toolRefs: string[];
+}
+
+type AgentTriggerEventType = "lead_overdue" | "customer_reply" | "stalled_deal" | "next_action_due" | "health_decline" | "communication_unread" | "prospect_completed";
+interface AgentTriggerRule {
+  id: string;
+  name: string;
+  eventType: AgentTriggerEventType;
+  mode: "notify" | "internal" | "approval";
+  status: "active" | "paused";
+  intervalMinutes: number;
+  thresholdDays: number;
+  healthBelow: number;
+  maxPerScan: number;
+  lastScanAt: string;
+  lastTriggeredAt: string;
+  nextScanAt: string;
+}
+interface AgentTriggerEvent {
+  id: string;
+  ruleId: string;
+  title: string;
+  message: string;
+  missionRunId: string;
+  status: "mission_created" | "skipped" | "failed";
+  createdAt: string;
+}
+interface AgentGovernance {
+  last24Hours: { calls: number; successes: number; failures: number; fallbackCalls: number; successRate: number; averageLatencyMs: number; totalTokens: number; estimatedCostUsd: number };
+  budgets: { dailyUsd: number; missionUsd: number };
+  routes: { planning: string; evaluation: string; fallbackEnabled: boolean };
+  recentCalls: Array<{ id: string; purpose: "planning" | "evaluation"; provider: string; model: string; routeIndex: number; success: boolean; inputTokens: number; outputTokens: number; estimatedCostUsd: number; latencyMs: number; error: string; createdAt: string }>;
+  evaluations: Array<{ id: string; version: string; passed: number; total: number; results: Array<{ id: string; name: string; passed: boolean; detail: string }>; createdAt: string }>;
+}
+
+interface OutreachSequenceStep {
+  index: number;
+  delayHours: number;
+  subject: string;
+  body: string;
+  status: "pending" | "sending" | "sent" | "skipped" | "failed";
+  scheduledAt: string;
+  sentAt: string;
+  error: string;
+}
+
+interface OutreachSequence {
+  id: string;
+  missionRunId: string;
+  entityName: string;
+  recipient: string;
+  channel: "email" | "communication";
+  status: "active" | "paused" | "completed" | "stopped" | "cancelled" | "failed";
+  currentStep: number;
+  maxSends: number;
+  steps: OutreachSequenceStep[];
+  nextExecutionAt: string;
+  lastSentAt: string;
+  stopReason: string;
+  createdAt: string;
+}
+
+interface CustomerMaintenanceFinding {
+  customerId: string;
+  customerName: string;
+  dealId: string;
+  reasonCodes: string[];
+  reason: string;
+  priority: "high" | "medium" | "normal";
+}
+
+interface CustomerMaintenanceWatch {
+  id: string;
+  missionRunId: string;
+  name: string;
+  status: "active" | "paused" | "cancelled" | "error";
+  rules: {
+    intervalHours: number;
+    inactivityDays: number;
+    healthBelow: number;
+    includeOverdueReminder: boolean;
+    includeMissingNextAction: boolean;
+    grades: Array<"A" | "B" | "C" | "D">;
+    maxTodosPerRun: number;
+  };
+  nextRunAt: string;
+  lastRunAt: string;
+  lastMatchedCount: number;
+  lastCreatedCount: number;
+  lastSkippedCount: number;
+  totalCreatedCount: number;
+  lastFindings: CustomerMaintenanceFinding[];
+  lastError: string;
+  createdAt: string;
+}
+
+interface AgentUiAction {
+  type: "navigate" | "open_customer" | "open_lead" | "open_development_email" | "open_communication" | "open_research" | "refresh";
+  view?: string;
+  customerId?: string;
+  leadId?: string;
+  entityType?: "customer" | "lead";
+  entityId?: string;
+}
+
 interface WhatsAppMessage {
   id: string;
   customerId: string;
@@ -1412,6 +1996,15 @@ interface WhatsAppThread {
   lastMessage: string;
   lastMessageAt: string;
   messageCount: number;
+  bindingMode: "web-scan" | "twilio-api" | "manual";
+  connectionStatus: "connected" | "disconnected" | "qr-pending" | "error";
+  canManage: boolean;
+}
+
+interface WhatsAppModes {
+  manual: { available: boolean; name: string; risk: string };
+  webScan: { available: boolean; name: string; risk: string };
+  twilioApi: { available: boolean; name: string; risk: string };
 }
 
 interface ReportMoneyRow {
@@ -1504,6 +2097,10 @@ interface AppState {
   user: User | null;
   summary: DashboardSummary | null;
   customers: Customer[];
+  publicCustomers: Customer[];
+  customerPoolCounts: { mineCount: number; publicCount: number };
+  customerPoolSearch: string;
+  customerPoolGradeFilter: "all" | "A" | "B" | "C" | "D";
   leads: Lead[];
   leadTrash: Lead[];
   leadActivities: LeadActivity[];
@@ -1518,6 +2115,7 @@ interface AppState {
   whatsappThreads: WhatsAppThread[];
   whatsappMessages: WhatsAppMessage[];
   whatsappBinding: WhatsAppBinding | null;
+  whatsappModes: WhatsAppModes | null;
   selectedWaCustomerId: string | null;
   waThreadSearch: string;
   todos: Todo[];
@@ -1556,6 +2154,27 @@ interface AppState {
   examReport: ExamReport | null;
   ocrJob: OcrJob | null;
   websiteOpportunities: WebsiteOpportunity[];
+  agentRun: AgentRun | null;
+  agentRuns: AgentRun[];
+  agentConversations: AgentConversation[];
+  agentMissionCheckpoints: AgentMissionCheckpoint[];
+  agentMemories: AgentMemory[];
+  agentKnowledgeDocuments: AgentKnowledgeDocument[];
+  agentKnowledgeOverview: AgentKnowledgeOverview | null;
+  agentSkills: AgentSkill[];
+  agentSkillDirectory: string;
+  agentTriggerRules: AgentTriggerRule[];
+  agentTriggerEvents: AgentTriggerEvent[];
+  agentGovernance: AgentGovernance | null;
+  agentCheckpointRunId: string;
+  outreachSequences: OutreachSequence[];
+  customerMaintenanceWatches: CustomerMaintenanceWatch[];
+  agentLoading: boolean;
+  salesDistillations: SalesDistillation[];
+  salesPlaybookActivations: SalesPlaybookActivation[];
+  salesDistillationSources: SalesDistillationSource[];
+  salesDistillationLoading: boolean;
+  salesTrainingRuns: SalesTrainingRun[];
   aiConfig: AiModelConfig | null;
   aiConfigs: AiModelConfig[];
   selectedAiConfigId: string | null;
@@ -1632,6 +2251,10 @@ const state: AppState = {
   user: null,
   summary: null,
   customers: [],
+  publicCustomers: [],
+  customerPoolCounts: { mineCount: 0, publicCount: 0 },
+  customerPoolSearch: "",
+  customerPoolGradeFilter: "all",
   leads: [],
   leadTrash: [],
   leadActivities: [],
@@ -1646,6 +2269,7 @@ const state: AppState = {
   whatsappThreads: [],
   whatsappMessages: [],
   whatsappBinding: null,
+  whatsappModes: null,
   selectedWaCustomerId: null,
   waThreadSearch: "",
   todos: [],
@@ -1684,6 +2308,27 @@ const state: AppState = {
   examReport: null,
   ocrJob: null,
   websiteOpportunities: [],
+  agentRun: null,
+  agentRuns: [],
+  agentConversations: [],
+  agentMissionCheckpoints: [],
+  agentMemories: [],
+  agentKnowledgeDocuments: [],
+  agentKnowledgeOverview: null,
+  agentSkills: [],
+  agentSkillDirectory: "agent-skills",
+  agentTriggerRules: [],
+  agentTriggerEvents: [],
+  agentGovernance: null,
+  agentCheckpointRunId: "",
+  outreachSequences: [],
+  customerMaintenanceWatches: [],
+  agentLoading: false,
+  salesDistillations: [],
+  salesPlaybookActivations: [],
+  salesDistillationSources: [],
+  salesDistillationLoading: false,
+  salesTrainingRuns: [],
   aiConfig: null,
   aiConfigs: [],
   selectedAiConfigId: null,
@@ -1767,6 +2412,8 @@ const resolvedMemoDrafts = new Set<string>();
 let leadFinderJobs: LeadFinderJob[] = [];
 let leadFinderRunsLoading = false;
 let leadFinderRunPollTimer = 0;
+let leadFinderMode: "standard" | "super" = "standard";
+let leadSuperPreviewTimer = 0;
 let activeLeadFinderJobId: string | null = null;
 let leadTaskDetailClockTimer = 0;
 let leadTaskStreamMode: LeadTaskStreamMode = "summary";
@@ -1789,6 +2436,23 @@ let developmentEmailSending = false;
 let developmentEmailTone: "professional" | "concise" | "warm" = "professional";
 let developmentEmailNextFollowAt = "";
 let companyProfileCanManage = false;
+let whatsappRefreshTimer = 0;
+let agentRunPollTimer = 0;
+let agentPendingGoal = "";
+let agentPendingProgress: AgentPlanningProgress[] = [];
+const appliedAgentUiSteps = new Set<string>();
+let agentOriginView = "dashboard";
+let agentConversationId = "";
+let agentConversationOwnerId = "";
+let agentMemoryTab: AgentMemoryStatus = "active";
+let agentKnowledgeStatus: AgentKnowledgeStatus | "all" = "all";
+let agentKnowledgeModule = "all";
+let agentKnowledgeQuery = "";
+let selectedAgentSkillId = "";
+let agentSkillQuery = "";
+let selectedSalesTrainingRunId = "";
+let salesTrainingPollTimer = 0;
+let whatsappRefreshing = false;
 let openWorkspaceTabs = ["dashboard"];
 let workspaceTabHistory = ["dashboard"];
 
@@ -1797,8 +2461,12 @@ const viewLabels: Record<string, string> = {
   "lead-finder": "自动获客",
   "lead-task-detail": "任务执行详情",
   "prospect-list": "搜客清单",
+  "ai-agent": "AI Agent",
+  "sales-distillation": "销售训练",
   leads: "线索",
   customers: "客户",
+  "customer-pool": "客户公池",
+  whatsapp: "Communication",
   "customer-detail": "客户全景",
   "ai-research": "AI背调",
   "development-email": "开发信",
@@ -1820,7 +2488,9 @@ const viewLabels: Record<string, string> = {
   problems: "问题清单",
   memos: "备忘录",
   imports: "导入导出",
+  "database-maintenance": "数据库维护",
   "ai-config": "AI配置",
+  "agent-skills": "Agent Skills",
   settings: "系统设置",
   profile: "个人设置"
 };
@@ -1859,6 +2529,31 @@ const storage = {
   user: "gj_user",
   dashboardCache: "gj_dashboard_cache"
 };
+
+function newAgentConversationId() {
+  return `agc_${crypto.randomUUID()}`;
+}
+
+function ensureAgentConversationId(userId = state.user?.id || "anonymous") {
+  const key = `gj_agent_conversation_${userId}`;
+  if (!agentConversationId || agentConversationOwnerId !== userId) {
+    agentConversationOwnerId = userId;
+    agentConversationId = localStorage.getItem(key) || newAgentConversationId();
+  }
+  localStorage.setItem(key, agentConversationId);
+  return agentConversationId;
+}
+
+function startNewAgentConversation() {
+  agentConversationId = newAgentConversationId();
+  ensureAgentConversationId();
+  state.agentRun = null;
+  state.agentRuns = [];
+  appliedAgentUiSteps.clear();
+  renderAgent(null);
+  renderAgentConversations();
+  qs<HTMLTextAreaElement>("#agentGoalInput")?.focus();
+}
 
 function cookieValue(name: string) {
   return document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) || "";
@@ -1974,6 +2669,1902 @@ function escapeHtml(value: string | number | undefined) {
   });
 }
 
+function agentRiskLabel(risk: AgentRisk) {
+  return ({ read: "读取", draft: "草稿", write: "写入", external: "外部" } as Record<AgentRisk, string>)[risk];
+}
+
+function agentStepStatusLabel(status: AgentStepStatus) {
+  return ({ ready: "待运行", needs_confirmation: "待确认", queued: "后台排队", running: "执行中", done: "已完成", failed: "失败", skipped: "已替代" } as Record<AgentStepStatus, string>)[status];
+}
+
+function agentRunStatusLabel(status: AgentRun["status"] | "idle" | "expired") {
+  return ({ idle: "等待目标", expired: "已过期", planning: "正在规划", awaiting_confirmation: "等待确认", running: "执行中", paused: "已暂停", waiting_user: "等待补充", completed: "已完成", failed: "执行受阻", cancelled: "已取消" } as Record<AgentRun["status"] | "idle" | "expired", string>)[status];
+}
+
+function agentResultSummary(result: Record<string, unknown> | undefined) {
+  if (!result) return "";
+  const parts: string[] = [];
+  ["count", "customerCount", "dealCount", "leadCount"].forEach((key) => {
+    if (typeof result[key] === "number") parts.push(`${key === "count" ? "结果" : key === "customerCount" ? "客户" : key === "dealCount" ? "商机" : "线索"} ${result[key]}`);
+  });
+  if (typeof result.amount === "number") parts.push(`金额 ${Number(result.amount).toLocaleString("en-US")}`);
+  if (typeof result.progress === "number") parts.push(`进度 ${result.progress}%`);
+  if (typeof result.settledSources === "number" && typeof result.sourceCount === "number") parts.push(`来源 ${result.settledSources}/${result.sourceCount}`);
+  if (typeof result.candidateCount === "number") parts.push(`候选 ${result.candidateCount}`);
+  if (typeof result.verifiedCount === "number") parts.push(`已复核 ${result.verifiedCount}`);
+  if (typeof result.filteredCount === "number") parts.push(`已淘汰 ${result.filteredCount}`);
+  if (typeof result.approvedCount === "number") parts.push(`可转线索 ${result.approvedCount}`);
+  if (typeof result.providerCount === "number") parts.push(`数据源 ${result.providerCount}`);
+  if (typeof result.message === "string") parts.push(result.message);
+  if (result.todo && typeof result.todo === "object") parts.push("已创建待办");
+  if (result.activity && typeof result.activity === "object") parts.push("已记录跟进");
+  if (typeof result.body === "string") parts.push(`正文 ${result.body.length} 字`);
+  if (result.draft && typeof result.draft === "object") parts.push("开发信草稿已生成");
+  if (result.sent === true) parts.push(result.replayed === true ? "发送记录已确认" : "已真实发送");
+  if (result.followUpCreated === true) parts.push("已创建后续跟进");
+  if (typeof result.accountName === "string") parts.push(`发送账号 ${result.accountName}`);
+  if (typeof result.sequenceId === "string") {
+    const maxSends = typeof result.maxSends === "number" ? ` · 最多 ${result.maxSends} 次` : "";
+    parts.push(`自动触达已启动${maxSends}`);
+  }
+  if (typeof result.matchedCount === "number" && typeof result.creatableCount === "number") parts.push(`发现 ${result.matchedCount} 项 · 可建待办 ${result.creatableCount}`);
+  if (typeof result.watchId === "string") parts.push(`客户守护已启用${typeof result.intervalHours === "number" ? ` · 每 ${result.intervalHours} 小时` : ""}`);
+  if (typeof result.score === "number" && typeof result.verdict === "string") parts.push(`背调可信度 ${result.score} · ${result.verdict}`);
+  if (typeof result.totalUnread === "number") parts.push(`Communication 未读 ${result.totalUnread} 条`);
+  if (typeof result.status === "number" && typeof result.path === "string") parts.push(`${result.status} · ${result.path}`);
+  const apiData = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : undefined;
+  if (typeof apiData?.fileName === "string") parts.push(`文件 ${apiData.fileName}`);
+  return parts.join(" · ") || "已返回结构化结果";
+}
+
+function agentExportDownload(step: AgentStep) {
+  const data = step.result?.data;
+  if (!data || typeof data !== "object") return null;
+  const record = data as Record<string, unknown>;
+  const document = record.document;
+  const documentId = document && typeof document === "object" ? String((document as Record<string, unknown>).id || "") : "";
+  const fileName = typeof record.fileName === "string" ? record.fileName : "";
+  return documentId && fileName ? { documentId, fileName } : null;
+}
+
+function agentWorkflowMarkup(run: AgentRun | null) {
+  if (!run?.goalSpec) return `<div class="agent-workflow-empty">行动方案生成后将在这里显示</div>`;
+  const isActionable = run.goalSpec.objectives.some((objective) => objective.action !== "unknown") || run.steps.length > 0 || run.stopReason.includes("高自由度推理");
+  if (!isActionable) return "";
+  const objectives = run.goalSpec.objectives.map((objective, index) =>
+    `<li><span>${index + 1}</span><div><b>${escapeHtml(objective.description)}</b><small>${escapeHtml(objective.completionCriteria.join("；"))}</small></div></li>`
+  ).join("");
+  const highFreedom = run.status === "waiting_user" && run.stopReason.includes("高自由度推理")
+    ? `<button class="btn primary" type="button" id="agentHighFreedomButton">启用高自由度推理</button>`
+    : "";
+  return `<div class="agent-workflow-head"><div><b>${escapeHtml(run.goalSpec.subject || run.goal)}</b><small>${run.goalSpec.compiledBy === "model+rules" ? "模型理解 + 服务端契约" : "服务端目标契约"}</small></div><div>${highFreedom}<button class="btn" type="button" id="agentSkillDraftButton">保存为 Skill 草稿</button></div></div><ol>${objectives}</ol>`;
+}
+
+async function openAgentExportDownload(stepId: string) {
+  const step = state.agentRun?.steps.find((item) => item.id === stepId);
+  const exportResult = step ? agentExportDownload(step) : null;
+  if (!exportResult || !state.user) return;
+  await refreshAll(state.user);
+  state.selectedDocumentId = exportResult.documentId;
+  activateNavView("documents", () => renderTradeDocuments(state.tradeDocuments));
+  window.setTimeout(() => printDocumentPreview(), 120);
+}
+
+async function saveAgentRunAsSkillDraft() {
+  const run = state.agentRun;
+  if (!run?.goalSpec) return;
+  const toolRefs = [...new Set(run.steps.map((step) => step.tool))];
+  const content = [
+    `用户目标：${run.goal}`,
+    "",
+    "执行流程：",
+    ...run.goalSpec.objectives.map((item, index) => `${index + 1}. ${item.description}`),
+    "",
+    "目标契约：",
+    JSON.stringify(run.goalSpec, null, 2)
+  ].join("\n").slice(0, 8_000);
+  try {
+    await api("/api/agent/knowledge/documents", {
+      method: "POST",
+      body: JSON.stringify({
+        kind: "workflow",
+        scope: "team",
+        module: run.goalSpec.primaryDomain || "agent",
+        title: `${run.goalSpec.subject || run.goal} Skill 草稿`.slice(0, 160),
+        summary: "由真实 Agent 执行目标、步骤和完成证据生成，发布前需要人工审核。",
+        content,
+        keywords: [run.goalSpec.primaryDomain, run.goalSpec.primaryAction, ...run.goalSpec.objectives.map((item) => item.action)].filter(Boolean),
+        roles: ["sales", "manager", "admin", "super_admin"],
+        toolRefs,
+        successCriteria: run.goalSpec.completionCriteria.slice(0, 20),
+        failureCases: ["不得用无关读取结果替代写入或导出目标", "缺少确定性完成证据时不得宣布任务完成"],
+        sourceType: "agent_feedback",
+        sourceId: run.id
+      })
+    });
+    toast("已保存为待审核的 Skill 调教草稿");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "Skill 草稿保存失败", "error");
+  }
+}
+
+function agentUiAction(result: Record<string, unknown> | undefined) {
+  const action = result?.uiAction;
+  if (!action || typeof action !== "object") return null;
+  return action as AgentUiAction;
+}
+
+function applyAgentUiAction(step: AgentStep) {
+  if (step.status !== "done" || appliedAgentUiSteps.has(step.id)) return;
+  const action = agentUiAction(step.result);
+  if (!action) return;
+  appliedAgentUiSteps.add(step.id);
+  if (action.type === "refresh") {
+    if (state.user) void refreshAll(state.user).then(() => renderAgent(state.agentRun));
+    return;
+  }
+  if (action.type === "navigate" && action.view) {
+    const aliases: Record<string, string> = { deals: "pipeline", deal: "pipeline", opportunities: "pipeline", opportunity: "pipeline", communication: "whatsapp", customer: "customers", lead: "leads", "trade-documents": "documents", document: "documents", invoices: "documents" };
+    const view = aliases[action.view.toLowerCase()] || action.view;
+    if (!qs<HTMLElement>(`#${CSS.escape(view)}`)) {
+      toast("Agent 返回了未知页面，未执行跳转", "error");
+      return;
+    }
+    activateNavView(view);
+    return;
+  }
+  if (action.type === "open_customer" && action.customerId) {
+    const customer = state.customers.find((item) => item.id === action.customerId);
+    if (customer) openCustomerDetailPage(customer);
+    return;
+  }
+  if (action.type === "open_lead" && action.leadId) {
+    activateNavView("leads", () => void openLead(action.leadId || ""));
+    return;
+  }
+  if (action.type === "open_development_email" && action.entityType && action.entityId) {
+    const entity = action.entityType === "customer"
+      ? state.customers.find((item) => item.id === action.entityId)
+      : state.leads.find((item) => item.id === action.entityId);
+    if (entity) openDevelopmentEmail(action.entityType, action.entityId, entity.company, "ai-agent");
+    return;
+  }
+  if (action.type === "open_communication" && action.customerId) {
+    const customer = state.customers.find((item) => item.id === action.customerId);
+    if (customer) void openWhatsAppForContact({ phone: customerContactDetails(customer).whatsapp, displayName: customer.contact || customer.company });
+    return;
+  }
+  if (action.type === "open_research" && action.entityType && action.entityId && step.result?.research) {
+    const research = step.result.research as unknown as BackgroundResearch;
+    backgroundResearchSubject = { entityType: action.entityType, entityId: action.entityId, company: research.company, backView: "ai-agent" };
+    backgroundResearchResult = research;
+    backgroundResearchLoading = false;
+    activateNavView("ai-research", renderBackgroundResearch);
+  }
+}
+
+function syncAgentRunPolling(run = state.agentRun) {
+  const pending = Boolean(run && (["planning", "running"].includes(run.status)
+    || run.steps.some((step) => step.status === "queued" || step.status === "running")
+    || state.outreachSequences.some((item) => item.status === "active" || item.steps.some((step) => step.status === "sending"))));
+  if (!pending) {
+    if (agentRunPollTimer) window.clearInterval(agentRunPollTimer);
+    agentRunPollTimer = 0;
+    return;
+  }
+  if (agentRunPollTimer) return;
+  agentRunPollTimer = window.setInterval(() => {
+    if (state.agentRun?.id) void refreshAgentRun(state.agentRun.id, true);
+  }, 1_000);
+}
+
+function outreachSequenceStatusLabel(status: OutreachSequence["status"]) {
+  return ({ active: "运行中", paused: "已暂停", completed: "已完成", stopped: "自动停止", cancelled: "已取消", failed: "发送受阻" } as Record<OutreachSequence["status"], string>)[status];
+}
+
+function renderOutreachSequences(run = state.agentRun) {
+  const box = qs<HTMLElement>("#agentSequenceList");
+  if (!box) return;
+  const related = state.outreachSequences.filter((item) => !run || item.missionRunId === run.id);
+  const sequences = (related.length ? related : state.outreachSequences).slice(0, 3);
+  box.innerHTML = sequences.length ? sequences.map((sequence) => {
+    const percent = Math.round((sequence.currentStep / Math.max(1, sequence.maxSends)) * 100);
+    const next = sequence.nextExecutionAt && sequence.status === "active"
+      ? new Date(sequence.nextExecutionAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+      : sequence.stopReason || outreachSequenceStatusLabel(sequence.status);
+    const controls = sequence.status === "active"
+      ? `<button class="btn" type="button" data-sequence-control="pause" data-sequence-id="${escapeHtml(sequence.id)}">暂停</button><button class="btn" type="button" data-sequence-control="cancel" data-sequence-id="${escapeHtml(sequence.id)}">取消</button>`
+      : sequence.status === "paused"
+        ? `<button class="btn primary" type="button" data-sequence-control="resume" data-sequence-id="${escapeHtml(sequence.id)}">继续</button><button class="btn" type="button" data-sequence-control="cancel" data-sequence-id="${escapeHtml(sequence.id)}">取消</button>`
+        : "";
+    return `<article class="agent-sequence-card">
+      <header><div><b>${escapeHtml(sequence.entityName)}</b><span>${sequence.channel === "email" ? "Email" : "Communication"} · ${escapeHtml(sequence.recipient)}</span></div><small>${outreachSequenceStatusLabel(sequence.status)}</small></header>
+      <div class="agent-sequence-track"><i style="width:${percent}%"></i></div>
+      <div class="agent-sequence-meta"><span>已发送 ${sequence.currentStep}/${sequence.maxSends}</span><span>${escapeHtml(next)}</span></div>
+      <div class="agent-sequence-steps">${sequence.steps.map((step) => `<i class="${escapeHtml(step.status)}" title="第 ${step.index + 1} 次"></i>`).join("")}</div>
+      ${controls ? `<footer>${controls}</footer>` : ""}
+    </article>`;
+  }).join("") : `<div class="agent-sequence-empty">暂无自动触达序列</div>`;
+  qsa<HTMLButtonElement>("[data-sequence-control]", box).forEach((button) => button.addEventListener("click", () => void controlOutreachSequenceFromUi(
+    button.dataset.sequenceId || "",
+    button.dataset.sequenceControl as "pause" | "resume" | "cancel"
+  )));
+}
+
+function agentSequenceApprovalPreview(step: AgentStep) {
+  if (step.tool !== "outreach.create_sequence" || !Array.isArray(step.input.steps)) return "";
+  const channel = step.input.channel === "communication" ? "Communication" : "Email";
+  const rows = step.input.steps.slice(0, 5).map((value, index) => {
+    const item = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    const delay = Number(item.delayHours || 0);
+    const subject = typeof item.subject === "string" ? item.subject : "";
+    const body = typeof item.body === "string" ? item.body : "";
+    return `<details class="agent-sequence-approval-step" ${index === 0 ? "open" : ""}><summary>第 ${index + 1} 次 · ${delay ? `${delay} 小时后` : "批准后"}${subject ? ` · ${escapeHtml(subject)}` : ""}</summary><p>${escapeHtml(body)}</p></details>`;
+  }).join("");
+  return `<div class="agent-sequence-approval"><b>${channel} · 最多 ${step.input.steps.length} 次</b>${rows}</div>`;
+}
+
+function maintenanceWatchStatusLabel(status: CustomerMaintenanceWatch["status"]) {
+  return ({ active: "守护中", paused: "已暂停", cancelled: "已取消", error: "巡检受阻" } as Record<CustomerMaintenanceWatch["status"], string>)[status];
+}
+
+function renderCustomerMaintenanceWatches(run = state.agentRun) {
+  const box = qs<HTMLElement>("#agentMaintenanceList");
+  if (!box) return;
+  const related = state.customerMaintenanceWatches.filter((item) => !run || item.missionRunId === run.id);
+  const watches = (related.length ? related : state.customerMaintenanceWatches).slice(0, 3);
+  box.innerHTML = watches.length ? watches.map((watch) => {
+    const next = watch.status === "active"
+      ? new Date(watch.nextRunAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+      : watch.lastError || maintenanceWatchStatusLabel(watch.status);
+    const controls = watch.status === "active"
+      ? `<button class="btn" type="button" data-maintenance-control="pause" data-maintenance-id="${escapeHtml(watch.id)}">暂停</button><button class="btn" type="button" data-maintenance-control="cancel" data-maintenance-id="${escapeHtml(watch.id)}">取消</button>`
+      : ["paused", "error"].includes(watch.status)
+        ? `<button class="btn primary" type="button" data-maintenance-control="resume" data-maintenance-id="${escapeHtml(watch.id)}">继续</button><button class="btn" type="button" data-maintenance-control="cancel" data-maintenance-id="${escapeHtml(watch.id)}">取消</button>`
+        : "";
+    const findings = watch.lastFindings.slice(0, 3).map((item) => `<li><b>${escapeHtml(item.customerName)}</b><span>${escapeHtml(item.reason)}</span></li>`).join("");
+    return `<article class="agent-maintenance-card">
+      <header><div><b>${escapeHtml(watch.name)}</b><span>每 ${watch.rules.intervalHours} 小时 · 单次上限 ${watch.rules.maxTodosPerRun}</span></div><small>${maintenanceWatchStatusLabel(watch.status)}</small></header>
+      <div class="agent-maintenance-metrics"><span><b>${watch.lastMatchedCount}</b>发现</span><span><b>${watch.lastCreatedCount}</b>新建</span><span><b>${watch.lastSkippedCount}</b>跳过</span><span><b>${watch.totalCreatedCount}</b>累计</span></div>
+      ${findings ? `<ul class="agent-maintenance-findings">${findings}</ul>` : ""}
+      <div class="agent-maintenance-next"><span>下次巡检</span><b>${escapeHtml(next)}</b></div>
+      ${controls ? `<footer>${controls}</footer>` : ""}
+    </article>`;
+  }).join("") : `<div class="agent-sequence-empty">暂无客户守护策略</div>`;
+  qsa<HTMLButtonElement>("[data-maintenance-control]", box).forEach((button) => button.addEventListener("click", () => void controlCustomerMaintenanceFromUi(
+    button.dataset.maintenanceId || "",
+    button.dataset.maintenanceControl as "pause" | "resume" | "cancel"
+  )));
+}
+
+function agentMaintenanceApprovalPreview(step: AgentStep) {
+  if (step.tool !== "maintenance.create_watch") return "";
+  const rules = step.input.rules && typeof step.input.rules === "object" ? step.input.rules as Record<string, unknown> : {};
+  const grades = Array.isArray(rules.grades) ? rules.grades.join("/") : "A/B/C/D";
+  return `<div class="agent-maintenance-approval"><span>每 ${escapeHtml(Number(rules.intervalHours || 24))} 小时</span><span>${escapeHtml(Number(rules.inactivityDays || 7))} 天未跟进</span><span>健康度低于 ${escapeHtml(Number(rules.healthBelow ?? 60))}</span><span>${escapeHtml(grades)} 级</span><span>单次最多 ${escapeHtml(Number(rules.maxTodosPerRun || 10))} 个待办</span></div>`;
+}
+
+function agentExternalApprovalPreview(step: AgentStep) {
+  if (["api.write", "api.external"].includes(step.tool)) {
+    const method = String(step.input.method || "");
+    const path = String(step.input.path || "");
+    const payload = JSON.stringify({ query: step.input.query || {}, body: step.input.body ?? null }, null, 2);
+    return `<details class="agent-external-preview" open><summary>${escapeHtml(method)} · ${escapeHtml(path)}</summary><p>${escapeHtml(payload)}</p></details>`;
+  }
+  if (step.risk !== "external" || step.tool === "outreach.create_sequence") return "";
+  if (step.tool === "outreach.send_development_email") {
+    return `<details class="agent-external-preview" open><summary>${escapeHtml(String(step.input.to || "收件邮箱由客户资料确定"))} · ${escapeHtml(String(step.input.subject || ""))}</summary><p>${escapeHtml(String(step.input.body || ""))}</p></details>`;
+  }
+  if (step.tool === "outreach.send_whatsapp") {
+    return `<details class="agent-external-preview" open><summary>Communication · ${escapeHtml(String(step.input.customerId || "当前客户"))}</summary><p>${escapeHtml(String(step.input.body || ""))}</p></details>`;
+  }
+  if (step.tool === "prospect.start_search") {
+    const products = Array.isArray(step.input.products) ? step.input.products.join("、") : "";
+    const markets = Array.isArray(step.input.markets) ? step.input.markets.join("、") : "";
+    return `<div class="agent-external-scope"><span>产品 ${escapeHtml(products)}</span><span>市场 ${escapeHtml(markets)}</span><span>上限 ${escapeHtml(Number(step.input.limit || 20))}</span></div>`;
+  }
+  return "";
+}
+
+function renderAgentCheckpoints(run = state.agentRun) {
+  const list = qs<HTMLElement>("#agentCheckpointList");
+  if (!list) return;
+  if (!run) {
+    list.innerHTML = `<div class="agent-checkpoint-empty">暂无检查点</div>`;
+    return;
+  }
+  if (state.agentCheckpointRunId !== run.id) {
+    list.innerHTML = `<div class="agent-checkpoint-empty">正在读取检查点</div>`;
+    return;
+  }
+  const checkpoints = state.agentMissionCheckpoints.slice(0, 6);
+  list.innerHTML = checkpoints.length ? checkpoints.map((item, index) => `<div class="agent-checkpoint-item"><div><b>${escapeHtml(item.reason)}</b><small>第 ${item.iteration} 轮 · ${escapeHtml(agentRunStatusLabel(item.status))} · ${escapeHtml(new Date(item.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}</small></div>${index === 0 ? `<span class="badge gray">当前</span>` : `<button class="btn" type="button" data-agent-checkpoint-restore="${escapeHtml(item.id)}">恢复</button>`}</div>`).join("") : `<div class="agent-checkpoint-empty">暂无可用检查点</div>`;
+  qsa<HTMLButtonElement>("[data-agent-checkpoint-restore]", list).forEach((button) => button.addEventListener("click", () => void restoreAgentCheckpointFromUi(button.dataset.agentCheckpointRestore || "", button)));
+}
+
+async function loadAgentCheckpoints(runId: string) {
+  if (!runId) return;
+  try {
+    const result = await api<{ checkpoints: AgentMissionCheckpoint[] }>(`/api/agent/missions/${encodeURIComponent(runId)}/checkpoints?limit=30`);
+    if (state.agentRun?.id !== runId) return;
+    state.agentMissionCheckpoints = result.checkpoints || [];
+    state.agentCheckpointRunId = runId;
+    renderAgentCheckpoints(state.agentRun);
+  } catch (error) {
+    if (state.agentRun?.id === runId) {
+      state.agentMissionCheckpoints = [];
+      state.agentCheckpointRunId = runId;
+      renderAgentCheckpoints(state.agentRun);
+    }
+    toast(error instanceof Error ? error.message : "Mission 检查点读取失败", "error");
+  }
+}
+
+async function restoreAgentCheckpointFromUi(checkpointId: string, button: HTMLButtonElement) {
+  if (!state.agentRun || !checkpointId || state.agentLoading) return;
+  if (!window.confirm("确认恢复到这个检查点？未开始的后续步骤会被替换，写入动作需要重新审批。")) return;
+  state.agentLoading = true;
+  button.disabled = true;
+  try {
+    const result = await api<{ run: AgentRun; checkpoints: AgentMissionCheckpoint[] }>(`/api/agent/missions/${encodeURIComponent(state.agentRun.id)}/checkpoints/${encodeURIComponent(checkpointId)}/restore`, { method: "POST" });
+    state.agentRun = result.run;
+    state.agentRuns = [result.run, ...state.agentRuns.filter((item) => item.id !== result.run.id)];
+    state.agentMissionCheckpoints = result.checkpoints || [];
+    state.agentCheckpointRunId = result.run.id;
+    renderAgent(result.run);
+    toast("Mission 已恢复到安全检查点");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "Mission 检查点恢复失败", "error");
+  } finally {
+    state.agentLoading = false;
+    renderAgent(state.agentRun);
+  }
+}
+
+function agentMemoryScopeLabel(scope: AgentMemory["scope"]) {
+  return ({ personal: "个人偏好", team: "团队打法", customer: "客户记忆", company: "公司知识" } as Record<AgentMemory["scope"], string>)[scope];
+}
+
+function agentMemorySourceLabel(source: AgentMemory["sourceType"]) {
+  return ({ crm: "CRM 事实", manual: "手动维护", agent: "Agent 建议", playbook: "蒸馏打法" } as Record<AgentMemory["sourceType"], string>)[source];
+}
+
+function renderAgentMemoryStatus() {
+  const button = qs<HTMLButtonElement>("#agentMemoryStatus");
+  if (!button) return;
+  const active = state.agentMemories.filter((item) => item.status === "active").length;
+  const proposed = state.agentMemories.filter((item) => item.status === "proposed").length;
+  button.innerHTML = `<span>业务记忆</span><b>${active ? `已启用 ${active} 条` : "尚无已启用记忆"}</b><small>${proposed ? `${proposed} 条待确认` : "偏好、客户事实和团队打法"}</small>`;
+}
+
+async function loadAgentMemories(showError = true) {
+  try {
+    const result = await api<{ memories: AgentMemory[] }>("/api/agent/memories?status=all");
+    state.agentMemories = result.memories || [];
+    renderAgentMemoryStatus();
+  } catch (error) {
+    if (showError) toast(error instanceof Error ? error.message : "业务记忆读取失败", "error");
+  }
+}
+
+function agentMemoryManagerBody() {
+  const counts = (status: AgentMemoryStatus) => state.agentMemories.filter((item) => item.status === status).length;
+  const items = state.agentMemories.filter((item) => item.status === agentMemoryTab);
+  const cards = items.map((item) => {
+    const expiry = item.expiresAt ? ` · 有效至 ${new Date(item.expiresAt).toLocaleDateString("zh-CN")}` : "";
+    const activate = item.status !== "active" ? `<button class="btn primary" type="button" data-agent-memory-action="activate" data-agent-memory-id="${escapeHtml(item.id)}">启用</button>` : "";
+    const archive = item.status === "active" ? `<button class="btn" type="button" data-agent-memory-action="archive" data-agent-memory-id="${escapeHtml(item.id)}">停用</button>` : "";
+    return `<article class="agent-memory-card"><div><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.content)}</p><small>${escapeHtml(agentMemoryScopeLabel(item.scope))} · ${escapeHtml(agentMemorySourceLabel(item.sourceType))} · 可信度 ${item.confidence}%${escapeHtml(expiry)}</small></div><div class="agent-memory-actions">${activate}${archive}<button class="btn" type="button" data-agent-memory-edit="${escapeHtml(item.id)}">编辑</button><button class="btn" type="button" data-agent-memory-action="delete" data-agent-memory-id="${escapeHtml(item.id)}">删除</button></div></article>`;
+  }).join("");
+  return `<div class="agent-memory-toolbar"><div class="agent-memory-tabs"><button type="button" data-agent-memory-tab="active" class="${agentMemoryTab === "active" ? "active" : ""}">已启用 ${counts("active")}</button><button type="button" data-agent-memory-tab="proposed" class="${agentMemoryTab === "proposed" ? "active" : ""}">待确认 ${counts("proposed")}</button><button type="button" data-agent-memory-tab="archived" class="${agentMemoryTab === "archived" ? "active" : ""}">已停用 ${counts("archived")}</button></div><button class="btn primary" type="button" id="agentMemoryCreateButton">新增记忆</button></div><div class="agent-memory-list">${cards || `<div class="agent-memory-empty">当前分组暂无业务记忆</div>`}</div>`;
+}
+
+function bindAgentMemoryManager() {
+  const modal = qs<HTMLElement>("#appModal");
+  qsa<HTMLButtonElement>("[data-agent-memory-tab]", modal || document).forEach((button) => button.addEventListener("click", () => {
+    agentMemoryTab = button.dataset.agentMemoryTab as AgentMemoryStatus;
+    openAgentMemoryManager(false);
+  }));
+  qs<HTMLButtonElement>("#agentMemoryCreateButton", modal || document)?.addEventListener("click", () => openAgentMemoryEditor());
+  qsa<HTMLButtonElement>("[data-agent-memory-edit]", modal || document).forEach((button) => button.addEventListener("click", () => {
+    const memory = state.agentMemories.find((item) => item.id === button.dataset.agentMemoryEdit);
+    if (memory) openAgentMemoryEditor(memory);
+  }));
+  qsa<HTMLButtonElement>("[data-agent-memory-action]", modal || document).forEach((button) => button.addEventListener("click", () => void mutateAgentMemory(
+    button.dataset.agentMemoryId || "",
+    button.dataset.agentMemoryAction as "activate" | "archive" | "delete",
+    button
+  )));
+}
+
+async function openAgentMemoryManager(reload = true) {
+  if (reload) await loadAgentMemories();
+  openModal("业务记忆", agentMemoryManagerBody(), `<button class="btn" data-modal-close>关闭</button>`);
+  qs<HTMLElement>("#appModal .modal")?.classList.add("agent-memory-modal");
+  bindAgentMemoryManager();
+}
+
+function openAgentMemoryEditor(memory?: AgentMemory) {
+  const canManageTeam = ["manager", "admin", "super_admin"].includes(state.user?.role || "");
+  const selectedCustomerId = memory?.subjectId || state.selectedCustomerId || state.customers[0]?.id || "";
+  const scopeOptions = memory
+    ? `<option value="${escapeHtml(memory.scope)}">${escapeHtml(agentMemoryScopeLabel(memory.scope))}</option>`
+    : `<option value="personal">个人偏好</option><option value="customer">客户记忆</option>${canManageTeam ? `<option value="team">团队打法</option><option value="company">公司知识</option>` : ""}`;
+  const customerOptions = state.customers.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === selectedCustomerId ? "selected" : ""}>${escapeHtml(item.company)}</option>`).join("");
+  const expiry = memory?.expiresAt ? memory.expiresAt.slice(0, 10) : "";
+  openModal(memory ? "编辑业务记忆" : "新增业务记忆", `<div class="form-grid"><div class="form-field"><label>范围</label><select id="agentMemoryScopeInput" ${memory ? "disabled" : ""}>${scopeOptions}</select></div><div class="form-field" id="agentMemoryCustomerField"><label>关联客户</label><select id="agentMemoryCustomerInput">${customerOptions || `<option value="">暂无客户</option>`}</select></div><div class="form-field full"><label>标题</label><input id="agentMemoryTitleInput" maxlength="120" value="${escapeHtml(memory?.title || "")}"></div><div class="form-field full"><label>内容</label><textarea id="agentMemoryContentInput" rows="6" maxlength="2000">${escapeHtml(memory?.content || "")}</textarea></div><div class="form-field"><label>有效期</label><input id="agentMemoryExpiryInput" type="date" value="${escapeHtml(expiry)}"></div></div>`, `<button class="btn" id="agentMemoryBackButton">返回</button><button class="btn primary" id="agentMemorySaveButton">保存</button>`);
+  qs<HTMLElement>("#appModal .modal")?.classList.add("agent-memory-modal");
+  const syncCustomer = () => {
+    const scope = qs<HTMLSelectElement>("#agentMemoryScopeInput")?.value;
+    const field = qs<HTMLElement>("#agentMemoryCustomerField");
+    if (field) field.style.display = scope === "customer" ? "grid" : "none";
+  };
+  qs<HTMLSelectElement>("#agentMemoryScopeInput")?.addEventListener("change", syncCustomer);
+  syncCustomer();
+  qs<HTMLButtonElement>("#agentMemoryBackButton")?.addEventListener("click", () => void openAgentMemoryManager(false));
+  qs<HTMLButtonElement>("#agentMemorySaveButton")?.addEventListener("click", (event) => void saveAgentMemory(memory, event.currentTarget as HTMLButtonElement));
+}
+
+async function saveAgentMemory(memory: AgentMemory | undefined, button: HTMLButtonElement) {
+  const scope = (qs<HTMLSelectElement>("#agentMemoryScopeInput")?.value || memory?.scope || "personal") as AgentMemory["scope"];
+  const title = qs<HTMLInputElement>("#agentMemoryTitleInput")?.value.trim() || "";
+  const content = qs<HTMLTextAreaElement>("#agentMemoryContentInput")?.value.trim() || "";
+  const expiry = qs<HTMLInputElement>("#agentMemoryExpiryInput")?.value || "";
+  if (title.length < 2 || content.length < 2) { toast("请完整填写标题和内容", "error"); return; }
+  const typeByScope: Record<AgentMemory["scope"], AgentMemory["type"]> = { personal: "user_preference", customer: "customer_memory", team: "team_playbook", company: "company_knowledge" };
+  button.disabled = true;
+  try {
+    await api(memory ? `/api/agent/memories/${encodeURIComponent(memory.id)}` : "/api/agent/memories", {
+      method: memory ? "PATCH" : "POST",
+      body: JSON.stringify(memory ? { title, content, expiresAt: expiry } : {
+        type: typeByScope[scope], scope, subjectId: scope === "customer" ? qs<HTMLSelectElement>("#agentMemoryCustomerInput")?.value || "" : "",
+        title, content, sourceType: "manual", confidence: 100, expiresAt: expiry
+      })
+    });
+    agentMemoryTab = memory?.status || "proposed";
+    await loadAgentMemories();
+    openAgentMemoryManager(false);
+    toast(memory ? "业务记忆已更新" : "业务记忆已保存，确认启用后生效");
+  } catch (error) {
+    button.disabled = false;
+    toast(error instanceof Error ? error.message : "业务记忆保存失败", "error");
+  }
+}
+
+async function mutateAgentMemory(id: string, action: "activate" | "archive" | "delete", button: HTMLButtonElement) {
+  if (!id) return;
+  if (action === "delete" && !window.confirm("确认删除这条业务记忆？")) return;
+  button.disabled = true;
+  try {
+    await api(`/api/agent/memories/${encodeURIComponent(id)}${action === "delete" ? "" : `/${action}`}`, { method: action === "delete" ? "DELETE" : "POST" });
+    if (action === "activate") agentMemoryTab = "active";
+    if (action === "archive") agentMemoryTab = "archived";
+    await loadAgentMemories();
+    openAgentMemoryManager(false);
+    toast(action === "activate" ? "业务记忆已启用" : action === "archive" ? "业务记忆已停用" : "业务记忆已删除");
+  } catch (error) {
+    button.disabled = false;
+    toast(error instanceof Error ? error.message : "业务记忆操作失败", "error");
+  }
+}
+
+function agentKnowledgeKindLabel(kind: AgentKnowledgeKind) {
+  return ({ system: "系统", module: "模块", workflow: "流程", policy: "政策", field: "字段", playbook: "打法", failure_case: "失败案例" } as Record<AgentKnowledgeKind, string>)[kind];
+}
+
+function agentKnowledgeStatusLabel(status: AgentKnowledgeStatus) {
+  return ({ draft: "草稿", review: "待审核", published: "已发布", archived: "已归档" } as Record<AgentKnowledgeStatus, string>)[status];
+}
+
+function renderAgentKnowledgeStatus() {
+  const button = qs<HTMLButtonElement>("#agentKnowledgeStatus");
+  const overview = state.agentKnowledgeOverview;
+  if (!button || !overview) return;
+  button.innerHTML = `<span>学习中心</span><b>${overview.systemCount + overview.publishedCount + overview.distillationCount} 条有效知识</b><small>${overview.reviewCount ? `${overview.reviewCount} 条待审核` : `${overview.modules.length} 个业务模块`}</small>`;
+}
+
+async function loadAgentKnowledge(showError = true) {
+  try {
+    const [overview, documents] = await Promise.all([
+      api<AgentKnowledgeOverview>("/api/agent/knowledge/overview"),
+      api<{ documents: AgentKnowledgeDocument[] }>("/api/agent/knowledge/documents?status=all")
+    ]);
+    state.agentKnowledgeOverview = overview;
+    state.agentKnowledgeDocuments = documents.documents || [];
+    renderAgentKnowledgeStatus();
+  } catch (error) {
+    if (showError) toast(error instanceof Error ? error.message : "知识中心读取失败", "error");
+  }
+}
+
+function renderAgentSkillMarkdown(source: string) {
+  const output: string[] = [];
+  let listType: "ul" | "ol" | "" = "";
+  const closeList = () => {
+    if (!listType) return;
+    output.push(`</${listType}>`);
+    listType = "";
+  };
+  for (const rawLine of source.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line) { closeList(); continue; }
+    const heading = /^(#{1,3})\s+(.+)$/u.exec(line);
+    if (heading) {
+      closeList();
+      output.push(`<h${heading[1]!.length}>${escapeHtml(heading[2]!)}</h${heading[1]!.length}>`);
+      continue;
+    }
+    const unordered = /^[-*]\s+(.+)$/u.exec(line);
+    const ordered = /^\d+\.\s+(.+)$/u.exec(line);
+    if (unordered || ordered) {
+      const nextType = unordered ? "ul" : "ol";
+      if (listType !== nextType) { closeList(); listType = nextType; output.push(`<${listType}>`); }
+      output.push(`<li>${escapeHtml((unordered || ordered)![1]!)}</li>`);
+      continue;
+    }
+    closeList();
+    output.push(`<p>${escapeHtml(line)}</p>`);
+  }
+  closeList();
+  return output.join("");
+}
+
+function filteredAgentSkills() {
+  const query = agentSkillQuery.toLocaleLowerCase("zh-CN");
+  return state.agentSkills.filter((skill) => !query
+    || `${skill.name} ${skill.description} ${skill.triggers.join(" ")} ${skill.toolRefs.join(" ")}`
+      .toLocaleLowerCase("zh-CN").includes(query));
+}
+
+function renderAgentSkillList() {
+  const list = qs<HTMLElement>("#agentSkillsList");
+  if (!list) return;
+  const skills = filteredAgentSkills();
+  list.innerHTML = skills.length
+    ? skills.map((skill) => `<button type="button" class="agent-skill-item${skill.id === selectedAgentSkillId ? " active" : ""}" data-agent-skill-id="${escapeHtml(skill.id)}"><span>${escapeHtml(skill.category)} · ${escapeHtml(skill.status)}</span><b>${escapeHtml(skill.name)}</b><small>${escapeHtml(skill.description)}</small></button>`).join("")
+    : `<div class="agent-skills-empty">没有匹配的 Skill</div>`;
+  qsa<HTMLButtonElement>("[data-agent-skill-id]", list).forEach((button) => button.addEventListener("click", () => void openAgentSkill(button.dataset.agentSkillId || "")));
+}
+
+function renderAgentSkillDetail(skill?: AgentSkill) {
+  const target = qs<HTMLElement>("#agentSkillsDetail");
+  if (!target) return;
+  if (!skill) {
+    target.innerHTML = `<div class="agent-skills-welcome"><span>SK</span><div><h2>选择一个 Skill</h2></div></div>`;
+    return;
+  }
+  target.innerHTML = `<div class="agent-skill-detail-head"><div><span>${escapeHtml(skill.category)} · ${escapeHtml(skill.status)}</span><h2>${escapeHtml(skill.name)}</h2><p>${escapeHtml(skill.description)}</p></div><div class="agent-skill-version">V${escapeHtml(skill.version)}</div></div>
+    <div class="agent-skill-meta"><div><span>目录</span><b>${escapeHtml(skill.directory)}</b></div><div><span>适用模块</span><b>${escapeHtml(skill.modules.join("、") || "全部")}</b></div><div><span>优先级</span><b>${skill.priority}</b></div></div>
+    <div class="agent-skill-chips">${skill.toolRefs.map((tool) => `<span>${escapeHtml(tool)}</span>`).join("")}</div>
+    <article class="agent-skill-markdown">${renderAgentSkillMarkdown(skill.instructions || "")}</article>`;
+}
+
+async function openAgentSkill(id: string) {
+  if (!id) return;
+  try {
+    const result = await api<{ skill: AgentSkill }>(`/api/agent/skills/${encodeURIComponent(id)}`);
+    selectedAgentSkillId = result.skill.id;
+    state.agentSkills = state.agentSkills.map((skill) => skill.id === result.skill.id ? result.skill : skill);
+    renderAgentSkillList();
+    renderAgentSkillDetail(result.skill);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "Skill 读取失败", "error");
+  }
+}
+
+async function loadAgentSkills(showError = true) {
+  try {
+    const result = await api<{ directory: string; skills: AgentSkill[] }>("/api/agent/skills");
+    state.agentSkills = result.skills || [];
+    state.agentSkillDirectory = result.directory || "agent-skills";
+    const active = state.agentSkills.filter((skill) => skill.status === "active");
+    const system = active.filter((skill) => skill.category === "system");
+    const setText = (selector: string, value: string) => { const node = qs<HTMLElement>(selector); if (node) node.textContent = value; };
+    setText("#agentSkillsActiveCount", String(active.length));
+    setText("#agentSkillsSystemCount", String(system.length));
+    setText("#agentSkillsBusinessCount", String(active.length - system.length));
+    setText("#agentSkillsDirectory", state.agentSkillDirectory);
+    if (!selectedAgentSkillId || !state.agentSkills.some((skill) => skill.id === selectedAgentSkillId)) {
+      selectedAgentSkillId = state.agentSkills.find((skill) => skill.id === "system-overview")?.id || state.agentSkills[0]?.id || "";
+    }
+    renderAgentSkillList();
+    if (selectedAgentSkillId) await openAgentSkill(selectedAgentSkillId);
+    else renderAgentSkillDetail();
+  } catch (error) {
+    if (showError) toast(error instanceof Error ? error.message : "Skills 读取失败", "error");
+  }
+}
+
+function agentTuningAuthorizationLabel(result: AgentTuningInspection) {
+  const authorization = result.goalSpec.authorization;
+  if (authorization.readOnly) return "只读自动执行";
+  if (authorization.externalConfirmationRequired) return "外部动作确认一次";
+  if (authorization.destructiveConfirmationRequired) return "高影响动作需确认";
+  if (authorization.directExecution) return "站内动作直接授权";
+  return "按目标继续判断";
+}
+
+function renderAgentTuningInspection(result: AgentTuningInspection) {
+  const target = qs<HTMLElement>("#agentTuningResult");
+  if (!target) return;
+  const skills = result.skills.filter((item) => item.id !== "system-overview");
+  const primarySkill = skills[0] || result.skills[0];
+  const primaryKnowledge = result.knowledge[0];
+  target.hidden = false;
+  target.innerHTML = [
+    `<section><span>目标契约</span><b>${escapeHtml(result.goalSpec.primaryAction)} / ${escapeHtml(result.goalSpec.primaryDomain)}</b><small>${escapeHtml(result.goalSpec.completionCriteria.slice(0, 2).join("；") || result.goalSpec.subject)}</small></section>`,
+    `<section><span>授权</span><b>${escapeHtml(agentTuningAuthorizationLabel(result))}</b><small>${result.goalSpec.authorization.delegatedFieldSynthesis ? "允许补齐非敏感字段" : "仅使用明确字段与真实业务数据"}</small></section>`,
+    `<section><span>Skill</span><b>${escapeHtml(primarySkill ? `${primarySkill.name} · ${primarySkill.score}` : "系统基础能力")}</b><small>${escapeHtml(primarySkill?.reasons.join("；") || "使用通用 Tool 契约")}</small></section>`,
+    `<section><span>知识与工具</span><b>${escapeHtml(primaryKnowledge?.title || "未命中专项知识")}</b><small>${result.knowledge.length} 条知识 · ${result.toolRefs.length} 个工具</small></section>`
+  ].join("");
+}
+
+async function inspectAgentTuning() {
+  const input = qs<HTMLInputElement>("#agentTuningGoalInput");
+  const button = qs<HTMLButtonElement>("#agentTuningInspectButton");
+  const goal = input?.value.trim() || "";
+  if (!goal) {
+    input?.focus();
+    return;
+  }
+  if (button) button.disabled = true;
+  try {
+    const activeView = qs<HTMLElement>(".view.active")?.id || "agent-skills";
+    const result = await api<AgentTuningInspection>("/api/agent/tuning/inspect", {
+      method: "POST",
+      body: JSON.stringify({ goal, context: { activeView } })
+    });
+    renderAgentTuningInspection(result);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "调教诊断失败", "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function agentKnowledgeCenterBody() {
+  const overview = state.agentKnowledgeOverview;
+  if (!overview) return `<div class="agent-memory-empty">知识索引正在加载</div>`;
+  const modules = ["all", ...overview.modules];
+  const filtered = state.agentKnowledgeDocuments
+    .filter((item) => agentKnowledgeStatus === "all" || item.status === agentKnowledgeStatus)
+    .filter((item) => agentKnowledgeModule === "all" || item.module === agentKnowledgeModule)
+    .filter((item) => !agentKnowledgeQuery || `${item.title} ${item.summary} ${item.content} ${item.keywords.join(" ")}`.toLowerCase().includes(agentKnowledgeQuery.toLowerCase()));
+  const rows = filtered.map((item) => {
+    const source = item.sourceType === "system_file" ? "系统版本" : item.sourceType === "distillation" ? "蒸馏打法" : item.sourceType === "agent_feedback" ? "执行经验" : "团队维护";
+    const action = item.sourceType === "system_file" || item.sourceType === "distillation"
+      ? ""
+      : item.status === "draft"
+        ? `<button class="btn" data-agent-knowledge-action="submit" data-agent-knowledge-id="${escapeHtml(item.id)}">提交审核</button>`
+        : item.status === "review" && overview.canPublish
+          ? `<button class="btn primary" data-agent-knowledge-action="publish" data-agent-knowledge-id="${escapeHtml(item.id)}">发布</button>`
+          : item.status !== "archived"
+            ? `<button class="btn" data-agent-knowledge-action="archive" data-agent-knowledge-id="${escapeHtml(item.id)}">归档</button>`
+            : "";
+    return `<article class="agent-knowledge-row"><button class="agent-knowledge-open" type="button" data-agent-knowledge-open="${escapeHtml(item.id)}"><span>${escapeHtml(item.module)} · ${escapeHtml(agentKnowledgeKindLabel(item.kind))}</span><b>${escapeHtml(item.title)}</b><p>${escapeHtml(item.summary)}</p><small>${escapeHtml(source)} · ${escapeHtml(item.version)} · ${escapeHtml(agentKnowledgeStatusLabel(item.status))}</small></button><div class="agent-knowledge-row-actions">${action}${item.canEdit ? `<button class="btn" data-agent-knowledge-edit="${escapeHtml(item.id)}">编辑</button>` : ""}</div></article>`;
+  }).join("");
+  const statusTabs: Array<[AgentKnowledgeStatus | "all", string]> = [["all", "全部"], ["published", "已发布"], ["review", "待审核"], ["draft", "草稿"], ["archived", "归档"]];
+  return `<div class="agent-knowledge-workspace">
+    <div class="agent-knowledge-metrics">
+      <div><span>系统知识</span><b>${overview.systemCount}</b></div>
+      <div><span>团队发布</span><b>${overview.publishedCount}</b></div>
+      <div><span>待审核</span><b>${overview.reviewCount}</b></div>
+      <div><span>蒸馏打法</span><b>${overview.distillationCount}</b></div>
+    </div>
+    <div class="agent-knowledge-toolbar">
+      <input id="agentKnowledgeQuery" value="${escapeHtml(agentKnowledgeQuery)}" placeholder="搜索知识、流程或失败案例">
+      <select id="agentKnowledgeModule">${modules.map((item) => `<option value="${escapeHtml(item)}" ${item === agentKnowledgeModule ? "selected" : ""}>${item === "all" ? "全部模块" : escapeHtml(item)}</option>`).join("")}</select>
+      <button class="btn primary" id="agentKnowledgeCreate">新增知识</button>
+    </div>
+    <div class="agent-memory-tabs">${statusTabs.map(([value, label]) => `<button type="button" data-agent-knowledge-status="${value}" class="${agentKnowledgeStatus === value ? "active" : ""}">${label}</button>`).join("")}</div>
+    <div class="agent-knowledge-grid">
+      <section class="agent-knowledge-list">${rows || `<div class="agent-memory-empty">当前条件下没有知识</div>`}</section>
+      <aside class="agent-knowledge-test">
+        <div><span>检索模式</span><b>${escapeHtml(overview.retrievalMode)}</b></div>
+        <input id="agentKnowledgeTestQuery" placeholder="输入一条真实业务指令">
+        <button class="btn" id="agentKnowledgeTestButton">测试检索</button>
+        <div id="agentKnowledgeTestResults"><div class="agent-knowledge-test-empty">等待检索</div></div>
+      </aside>
+    </div>
+  </div>`;
+}
+
+function bindAgentKnowledgeCenter() {
+  const modal = qs<HTMLElement>("#appModal");
+  qs<HTMLInputElement>("#agentKnowledgeQuery", modal || document)?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    agentKnowledgeQuery = (event.currentTarget as HTMLInputElement).value.trim();
+    openAgentKnowledgeCenter(false);
+  });
+  qs<HTMLSelectElement>("#agentKnowledgeModule", modal || document)?.addEventListener("change", (event) => {
+    agentKnowledgeModule = (event.currentTarget as HTMLSelectElement).value;
+    openAgentKnowledgeCenter(false);
+  });
+  qsa<HTMLButtonElement>("[data-agent-knowledge-status]", modal || document).forEach((button) => button.addEventListener("click", () => {
+    agentKnowledgeStatus = button.dataset.agentKnowledgeStatus as AgentKnowledgeStatus | "all";
+    openAgentKnowledgeCenter(false);
+  }));
+  qs<HTMLButtonElement>("#agentKnowledgeCreate", modal || document)?.addEventListener("click", () => openAgentKnowledgeEditor());
+  qsa<HTMLButtonElement>("[data-agent-knowledge-open]", modal || document).forEach((button) => button.addEventListener("click", () => {
+    const item = state.agentKnowledgeDocuments.find((entry) => entry.id === button.dataset.agentKnowledgeOpen);
+    if (item) openAgentKnowledgeDetail(item);
+  }));
+  qsa<HTMLButtonElement>("[data-agent-knowledge-edit]", modal || document).forEach((button) => button.addEventListener("click", () => {
+    const item = state.agentKnowledgeDocuments.find((entry) => entry.id === button.dataset.agentKnowledgeEdit);
+    if (item) openAgentKnowledgeEditor(item);
+  }));
+  qsa<HTMLButtonElement>("[data-agent-knowledge-action]", modal || document).forEach((button) => button.addEventListener("click", () => void mutateAgentKnowledge(
+    button.dataset.agentKnowledgeId || "",
+    button.dataset.agentKnowledgeAction as "submit" | "publish" | "archive",
+    button
+  )));
+  qs<HTMLButtonElement>("#agentKnowledgeTestButton", modal || document)?.addEventListener("click", (event) => void testAgentKnowledgeRetrieval(event.currentTarget as HTMLButtonElement));
+}
+
+async function openAgentKnowledgeCenter(reload = true) {
+  if (reload) await loadAgentKnowledge();
+  openModal("Agent 学习中心", agentKnowledgeCenterBody(), `<button class="btn" data-modal-close>关闭</button>`);
+  qs<HTMLElement>("#appModal .modal")?.classList.add("agent-knowledge-modal");
+  bindAgentKnowledgeCenter();
+}
+
+function openAgentKnowledgeDetail(document: AgentKnowledgeDocument) {
+  const criteria = document.successCriteria.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  const failures = document.failureCases.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  openModal(document.title, `<div class="agent-knowledge-detail"><header><span>${escapeHtml(document.module)} · ${escapeHtml(agentKnowledgeKindLabel(document.kind))}</span><b>${escapeHtml(document.version)}</b></header><p>${escapeHtml(document.content)}</p>${criteria ? `<section><h3>完成标准</h3><ul>${criteria}</ul></section>` : ""}${failures ? `<section><h3>常见失败</h3><ul>${failures}</ul></section>` : ""}<footer>${document.toolRefs.map((item) => `<code>${escapeHtml(item)}</code>`).join("")}</footer></div>`, `<button class="btn" id="agentKnowledgeBack">返回</button>${document.canEdit ? `<button class="btn primary" id="agentKnowledgeEditCurrent">编辑</button>` : ""}`);
+  qs<HTMLElement>("#appModal .modal")?.classList.add("agent-knowledge-modal");
+  qs<HTMLButtonElement>("#agentKnowledgeBack")?.addEventListener("click", () => void openAgentKnowledgeCenter(false));
+  qs<HTMLButtonElement>("#agentKnowledgeEditCurrent")?.addEventListener("click", () => openAgentKnowledgeEditor(document));
+}
+
+function openAgentKnowledgeEditor(document?: AgentKnowledgeDocument) {
+  const kindOptions: AgentKnowledgeKind[] = ["module", "workflow", "policy", "field", "playbook", "failure_case"];
+  const selectedRoles = new Set(document?.roles || ["sales", "manager", "admin", "super_admin"]);
+  const roleOptions: Array<[AgentKnowledgeDocument["roles"][number], string]> = [["sales", "业务员"], ["manager", "主管"], ["admin", "管理员"], ["super_admin", "超级管理员"]];
+  openModal(document ? "编辑团队知识" : "新增团队知识", `<div class="agent-knowledge-editor"><div class="form-grid">
+      <div class="form-field"><label>模块</label><input id="agentKnowledgeModuleInput" maxlength="80" value="${escapeHtml(document?.module || "")}"></div>
+      <div class="form-field"><label>类型</label><select id="agentKnowledgeKindInput">${kindOptions.map((item) => `<option value="${item}" ${item === document?.kind ? "selected" : ""}>${agentKnowledgeKindLabel(item)}</option>`).join("")}</select></div>
+      <div class="form-field"><label>范围</label><select id="agentKnowledgeScopeInput"><option value="team" ${document?.scope !== "company" ? "selected" : ""}>团队</option><option value="company" ${document?.scope === "company" ? "selected" : ""}>公司</option></select></div>
+      <div class="form-field agent-knowledge-role-field"><label>适用角色</label><div>${roleOptions.map(([value, label]) => `<label><input type="checkbox" value="${value}" data-agent-knowledge-role ${selectedRoles.has(value) ? "checked" : ""}>${label}</label>`).join("")}</div></div>
+      <div class="form-field full"><label>标题</label><input id="agentKnowledgeTitleInput" maxlength="160" value="${escapeHtml(document?.title || "")}"></div>
+      <div class="form-field full"><label>摘要</label><input id="agentKnowledgeSummaryInput" maxlength="500" value="${escapeHtml(document?.summary || "")}"></div>
+      <div class="form-field full"><label>知识正文</label><textarea id="agentKnowledgeContentInput" rows="8" maxlength="8000">${escapeHtml(document?.content || "")}</textarea></div>
+      <div class="form-field full"><label>关键词</label><input id="agentKnowledgeKeywordsInput" value="${escapeHtml((document?.keywords || []).join("，"))}"></div>
+      <div class="form-field full"><label>关联工具</label><input id="agentKnowledgeToolsInput" value="${escapeHtml((document?.toolRefs || []).join("，"))}"></div>
+      <div class="form-field"><label>完成标准</label><textarea id="agentKnowledgeCriteriaInput" rows="5">${escapeHtml((document?.successCriteria || []).join("\n"))}</textarea></div>
+      <div class="form-field"><label>常见失败</label><textarea id="agentKnowledgeFailuresInput" rows="5">${escapeHtml((document?.failureCases || []).join("\n"))}</textarea></div>
+    </div></div>`, `<button class="btn" id="agentKnowledgeEditorBack">返回</button><button class="btn primary" id="agentKnowledgeSave">保存</button>`);
+  qs<HTMLElement>("#appModal .modal")?.classList.add("agent-knowledge-modal");
+  qs<HTMLButtonElement>("#agentKnowledgeEditorBack")?.addEventListener("click", () => void openAgentKnowledgeCenter(false));
+  qs<HTMLButtonElement>("#agentKnowledgeSave")?.addEventListener("click", (event) => void saveAgentKnowledge(document, event.currentTarget as HTMLButtonElement));
+}
+
+function agentKnowledgeListValue(selector: string, splitLines = false) {
+  const value = qs<HTMLInputElement | HTMLTextAreaElement>(selector)?.value || "";
+  return value.split(splitLines ? /\r?\n/u : /[,，]/u).map((item) => item.trim()).filter(Boolean);
+}
+
+async function saveAgentKnowledge(document: AgentKnowledgeDocument | undefined, button: HTMLButtonElement) {
+  const roles = qsa<HTMLInputElement>("[data-agent-knowledge-role]:checked").map((item) => item.value);
+  const body = {
+    module: qs<HTMLInputElement>("#agentKnowledgeModuleInput")?.value.trim() || "",
+    kind: qs<HTMLSelectElement>("#agentKnowledgeKindInput")?.value,
+    scope: qs<HTMLSelectElement>("#agentKnowledgeScopeInput")?.value,
+    title: qs<HTMLInputElement>("#agentKnowledgeTitleInput")?.value.trim() || "",
+    summary: qs<HTMLInputElement>("#agentKnowledgeSummaryInput")?.value.trim() || "",
+    content: qs<HTMLTextAreaElement>("#agentKnowledgeContentInput")?.value.trim() || "",
+    keywords: agentKnowledgeListValue("#agentKnowledgeKeywordsInput"),
+    toolRefs: agentKnowledgeListValue("#agentKnowledgeToolsInput"),
+    successCriteria: agentKnowledgeListValue("#agentKnowledgeCriteriaInput", true),
+    failureCases: agentKnowledgeListValue("#agentKnowledgeFailuresInput", true),
+    roles,
+    sourceType: document?.sourceType === "agent_feedback" ? "agent_feedback" : "manual",
+    sourceId: document?.sourceId || ""
+  };
+  if (!body.module || body.title.length < 2 || body.summary.length < 2 || body.content.length < 10 || !roles.length) {
+    toast("请完整填写模块、标题、摘要、正文和适用角色", "error");
+    return;
+  }
+  button.disabled = true;
+  try {
+    await api(document ? `/api/agent/knowledge/documents/${encodeURIComponent(document.id)}` : "/api/agent/knowledge/documents", {
+      method: document ? "PATCH" : "POST",
+      body: JSON.stringify(body)
+    });
+    await loadAgentKnowledge();
+    agentKnowledgeStatus = document?.status === "published" ? "review" : document?.status || "draft";
+    openAgentKnowledgeCenter(false);
+    toast(document ? "知识已更新并进入审核" : "知识草稿已保存");
+  } catch (error) {
+    button.disabled = false;
+    toast(error instanceof Error ? error.message : "知识保存失败", "error");
+  }
+}
+
+async function mutateAgentKnowledge(id: string, action: "submit" | "publish" | "archive", button: HTMLButtonElement) {
+  if (!id) return;
+  button.disabled = true;
+  try {
+    await api(`/api/agent/knowledge/documents/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+    await loadAgentKnowledge();
+    agentKnowledgeStatus = action === "submit" ? "review" : action === "publish" ? "published" : "archived";
+    openAgentKnowledgeCenter(false);
+    toast(action === "submit" ? "已提交审核" : action === "publish" ? "团队知识已发布" : "知识已归档");
+  } catch (error) {
+    button.disabled = false;
+    toast(error instanceof Error ? error.message : "知识操作失败", "error");
+  }
+}
+
+async function testAgentKnowledgeRetrieval(button: HTMLButtonElement) {
+  const query = qs<HTMLInputElement>("#agentKnowledgeTestQuery")?.value.trim() || "";
+  if (!query) { toast("请输入业务指令", "error"); return; }
+  button.disabled = true;
+  try {
+    const result = await api<{ hits: Array<{ document: AgentKnowledgeDocument; score: number; reasons: string[] }> }>(`/api/agent/knowledge/search?query=${encodeURIComponent(query)}&activeView=ai-agent&limit=8`);
+    const target = qs<HTMLElement>("#agentKnowledgeTestResults");
+    if (target) target.innerHTML = result.hits.length ? result.hits.map((hit) => `<button type="button" data-agent-knowledge-test-open="${escapeHtml(hit.document.id)}"><b>${escapeHtml(hit.document.title)}</b><span>${hit.score} · ${escapeHtml(hit.reasons.join("、") || hit.document.trustLevel)}</span></button>`).join("") : `<div class="agent-knowledge-test-empty">没有匹配知识</div>`;
+    qsa<HTMLButtonElement>("[data-agent-knowledge-test-open]").forEach((item) => item.addEventListener("click", () => {
+      const document = result.hits.find((hit) => hit.document.id === item.dataset.agentKnowledgeTestOpen)?.document;
+      if (document) openAgentKnowledgeDetail(document);
+    }));
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "检索测试失败", "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function agentTriggerTypeLabel(type: AgentTriggerEventType) {
+  return ({ lead_overdue: "线索超时", customer_reply: "客户新回复", stalled_deal: "商机停滞", next_action_due: "下一动作到期", health_decline: "客户健康下降", communication_unread: "Communication 未读", prospect_completed: "搜客任务结束" } as Record<AgentTriggerEventType, string>)[type];
+}
+
+function agentTriggerModeLabel(mode: AgentTriggerRule["mode"]) {
+  return ({ notify: "只读提醒", internal: "站内任务待确认", approval: "审批型建议" } as Record<AgentTriggerRule["mode"], string>)[mode];
+}
+
+function renderAgentTriggerStatus() {
+  const button = qs<HTMLButtonElement>("#agentTriggerStatus");
+  if (!button) return;
+  const active = state.agentTriggerRules.filter((item) => item.status === "active").length;
+  const recent = state.agentTriggerEvents.filter((item) => Date.now() - new Date(item.createdAt).getTime() < 86_400_000).length;
+  button.innerHTML = `<span>自动触发</span><b>${active ? `${active} 条规则运行中` : "尚未创建运行规则"}</b><small>${recent ? `近 24 小时触发 ${recent} 次` : ""}</small>`;
+}
+
+async function loadAgentTriggers(showError = true) {
+  try {
+    const result = await api<{ rules: AgentTriggerRule[]; events: AgentTriggerEvent[] }>("/api/agent/triggers?limit=50");
+    state.agentTriggerRules = result.rules || [];
+    state.agentTriggerEvents = result.events || [];
+    renderAgentTriggerStatus();
+  } catch (error) {
+    if (showError) toast(error instanceof Error ? error.message : "自动触发规则读取失败", "error");
+  }
+}
+
+function agentTriggerManagerBody() {
+  const rules = state.agentTriggerRules.map((rule) => {
+    const action = rule.status === "active" ? "pause" : "resume";
+    const last = rule.lastTriggeredAt ? new Date(rule.lastTriggeredAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "尚未触发";
+    return `<article class="agent-trigger-card"><div><h3>${escapeHtml(rule.name)}</h3><p>${escapeHtml(agentTriggerTypeLabel(rule.eventType))} · ${escapeHtml(agentTriggerModeLabel(rule.mode))} · 每 ${rule.intervalMinutes} 分钟</p><small>${rule.status === "active" ? `运行中 · 最近 ${escapeHtml(last)}` : "已暂停"}</small></div><div class="agent-trigger-actions"><button class="btn" type="button" data-agent-trigger-action="run" data-agent-trigger-id="${escapeHtml(rule.id)}">立即扫描</button><button class="btn" type="button" data-agent-trigger-edit="${escapeHtml(rule.id)}">编辑</button><button class="btn" type="button" data-agent-trigger-action="${action}" data-agent-trigger-id="${escapeHtml(rule.id)}">${action === "pause" ? "暂停" : "继续"}</button><button class="btn" type="button" data-agent-trigger-action="delete" data-agent-trigger-id="${escapeHtml(rule.id)}">删除</button></div></article>`;
+  }).join("");
+  const events = state.agentTriggerEvents.slice(0, 8).map((item) => `<div class="agent-trigger-event"><b>${escapeHtml(item.title)}</b><span>${escapeHtml(item.message)} · ${escapeHtml(new Date(item.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }))}${item.missionRunId ? ` · <button class="btn" type="button" data-agent-trigger-mission="${escapeHtml(item.missionRunId)}">查看 Mission</button>` : ""}</span></div>`).join("");
+  return `<div class="agent-memory-toolbar"><div><b>${state.agentTriggerRules.length} 条规则</b></div><button class="btn primary" type="button" id="agentTriggerCreateButton">新增规则</button></div><div class="agent-trigger-list">${rules || `<div class="agent-memory-empty">尚未创建自动触发规则</div>`}</div><section class="agent-trigger-events"><h3>最近触发</h3>${events || `<div class="agent-memory-empty">暂无触发记录</div>`}</section>`;
+}
+
+function bindAgentTriggerManager() {
+  qs<HTMLButtonElement>("#agentTriggerCreateButton")?.addEventListener("click", () => openAgentTriggerEditor());
+  qsa<HTMLButtonElement>("[data-agent-trigger-edit]").forEach((button) => button.addEventListener("click", () => {
+    const rule = state.agentTriggerRules.find((item) => item.id === button.dataset.agentTriggerEdit);
+    if (rule) openAgentTriggerEditor(rule);
+  }));
+  qsa<HTMLButtonElement>("[data-agent-trigger-action]").forEach((button) => button.addEventListener("click", () => void mutateAgentTrigger(
+    button.dataset.agentTriggerId || "",
+    button.dataset.agentTriggerAction as "run" | "pause" | "resume" | "delete",
+    button
+  )));
+  qsa<HTMLButtonElement>("[data-agent-trigger-mission]").forEach((button) => button.addEventListener("click", () => {
+    closeModal();
+    void loadAgentRun(button.dataset.agentTriggerMission || "");
+  }));
+}
+
+async function openAgentTriggerManager(reload = true) {
+  if (reload) await loadAgentTriggers();
+  openModal("自动触发", agentTriggerManagerBody(), `<button class="btn" data-modal-close>关闭</button>`);
+  qs<HTMLElement>("#appModal .modal")?.classList.add("agent-memory-modal");
+  bindAgentTriggerManager();
+}
+
+function openAgentTriggerEditor(rule?: AgentTriggerRule) {
+  const options: Array<[AgentTriggerEventType, string]> = [["lead_overdue", "线索超时"], ["customer_reply", "客户新回复"], ["stalled_deal", "商机停滞"], ["next_action_due", "下一动作到期"], ["health_decline", "客户健康下降"], ["communication_unread", "Communication 未读"], ["prospect_completed", "搜客任务结束"]];
+  openModal(rule ? "编辑自动触发" : "新增自动触发", `<div class="form-grid"><div class="form-field full"><label>规则名称</label><input id="agentTriggerNameInput" maxlength="120" value="${escapeHtml(rule?.name || "")}"></div><div class="form-field"><label>触发事件</label><select id="agentTriggerTypeInput">${options.map(([value, label]) => `<option value="${value}" ${rule?.eventType === value ? "selected" : ""}>${label}</option>`).join("")}</select></div><div class="form-field"><label>处理方式</label><select id="agentTriggerModeInput"><option value="notify" ${rule?.mode === "notify" ? "selected" : ""}>只读提醒</option><option value="internal" ${rule?.mode === "internal" ? "selected" : ""}>站内任务待确认</option><option value="approval" ${rule?.mode === "approval" ? "selected" : ""}>审批型建议</option></select></div><div class="form-field"><label>扫描间隔（分钟）</label><input id="agentTriggerIntervalInput" type="number" min="5" max="10080" value="${rule?.intervalMinutes || 60}"></div><div class="form-field"><label>超时阈值（天）</label><input id="agentTriggerDaysInput" type="number" min="1" max="180" value="${rule?.thresholdDays || 3}"></div><div class="form-field"><label>健康度阈值</label><input id="agentTriggerHealthInput" type="number" min="0" max="100" value="${rule?.healthBelow ?? 60}"></div><div class="form-field"><label>单次上限</label><input id="agentTriggerMaxInput" type="number" min="1" max="20" value="${rule?.maxPerScan || 5}"></div></div>`, `<button class="btn" id="agentTriggerBackButton">返回</button><button class="btn primary" id="agentTriggerSaveButton">保存</button>`);
+  qs<HTMLElement>("#appModal .modal")?.classList.add("agent-memory-modal");
+  qs<HTMLButtonElement>("#agentTriggerBackButton")?.addEventListener("click", () => void openAgentTriggerManager(false));
+  qs<HTMLButtonElement>("#agentTriggerSaveButton")?.addEventListener("click", (event) => void saveAgentTrigger(rule, event.currentTarget as HTMLButtonElement));
+}
+
+async function saveAgentTrigger(rule: AgentTriggerRule | undefined, button: HTMLButtonElement) {
+  const name = qs<HTMLInputElement>("#agentTriggerNameInput")?.value.trim() || "";
+  if (name.length < 2) { toast("请填写规则名称", "error"); return; }
+  button.disabled = true;
+  try {
+    await api(rule ? `/api/agent/triggers/${encodeURIComponent(rule.id)}` : "/api/agent/triggers", { method: rule ? "PATCH" : "POST", body: JSON.stringify({ name, eventType: qs<HTMLSelectElement>("#agentTriggerTypeInput")?.value, mode: qs<HTMLSelectElement>("#agentTriggerModeInput")?.value, intervalMinutes: Number(qs<HTMLInputElement>("#agentTriggerIntervalInput")?.value || 60), thresholdDays: Number(qs<HTMLInputElement>("#agentTriggerDaysInput")?.value || 3), healthBelow: Number(qs<HTMLInputElement>("#agentTriggerHealthInput")?.value || 60), maxPerScan: Number(qs<HTMLInputElement>("#agentTriggerMaxInput")?.value || 5) }) });
+    await loadAgentTriggers();
+    openAgentTriggerManager(false);
+    toast(rule ? "自动触发规则已更新" : "自动触发规则已启动");
+  } catch (error) {
+    button.disabled = false;
+    toast(error instanceof Error ? error.message : "自动触发规则保存失败", "error");
+  }
+}
+
+async function mutateAgentTrigger(id: string, action: "run" | "pause" | "resume" | "delete", button: HTMLButtonElement) {
+  if (!id) return;
+  if (action === "delete" && !window.confirm("确认删除这条自动触发规则？历史触发记录会保留。")) return;
+  button.disabled = true;
+  try {
+    await api(`/api/agent/triggers/${encodeURIComponent(id)}${action === "delete" ? "" : `/${action}`}`, { method: action === "delete" ? "DELETE" : "POST" });
+    await loadAgentTriggers();
+    openAgentTriggerManager(false);
+    toast(action === "run" ? "扫描完成，符合条件的 Mission 已创建" : action === "pause" ? "规则已暂停" : action === "resume" ? "规则已恢复" : "规则已删除");
+    if (action === "run") void loadAgentConversations();
+  } catch (error) {
+    button.disabled = false;
+    toast(error instanceof Error ? error.message : "自动触发操作失败", "error");
+  }
+}
+
+function renderAgentGovernanceStatus() {
+  const button = qs<HTMLButtonElement>("#agentGovernanceStatus");
+  if (!button) return;
+  const metrics = state.agentGovernance?.last24Hours;
+  button.innerHTML = metrics
+    ? `<span>运行与成本</span><b>成功率 ${metrics.successRate}%</b><small>24 小时 ${metrics.calls} 次 · 估算 $${metrics.estimatedCostUsd.toFixed(4)}</small>`
+    : `<span>运行与成本</span><b>等待统计</b><small>模型路由、预算与安全评测</small>`;
+}
+
+async function loadAgentGovernance(showError = true) {
+  try {
+    state.agentGovernance = await api<AgentGovernance>("/api/agent/governance");
+    renderAgentGovernanceStatus();
+  } catch (error) {
+    if (showError) toast(error instanceof Error ? error.message : "Agent 运行统计读取失败", "error");
+  }
+}
+
+function agentGovernanceBody() {
+  const governance = state.agentGovernance;
+  if (!governance) return `<div class="agent-memory-empty">正在读取运行统计</div>`;
+  const metrics = governance.last24Hours;
+  const latest = governance.evaluations[0];
+  const evaluationResults = latest?.results.map((item) => `<div class="agent-evaluation-result ${item.passed ? "" : "failed"}"><span>${escapeHtml(item.name)}</span><b>${item.passed ? "通过" : "未通过"}</b></div>`).join("") || `<div class="agent-memory-empty">尚未运行安全评测</div>`;
+  const calls = governance.recentCalls.slice(0, 8).map((item) => `<div class="agent-trigger-event"><b>${escapeHtml(item.purpose === "planning" ? "任务规划" : "结果核验")} · ${escapeHtml(item.model)}</b><span>${item.success ? `${item.inputTokens + item.outputTokens} Token · ${item.latencyMs} ms · 估算 $${item.estimatedCostUsd.toFixed(6)}` : `失败 · ${escapeHtml(item.error)}`}${item.routeIndex > 0 ? " · 已降级" : ""}</span></div>`).join("") || `<div class="agent-memory-empty">暂无模型调用记录</div>`;
+  return `<div class="agent-governance-metrics"><div class="agent-governance-metric"><span>调用</span><b>${metrics.calls}</b></div><div class="agent-governance-metric"><span>成功率</span><b>${metrics.successRate}%</b></div><div class="agent-governance-metric"><span>平均延迟</span><b>${metrics.averageLatencyMs}ms</b></div><div class="agent-governance-metric"><span>估算成本</span><b>$${metrics.estimatedCostUsd.toFixed(4)}</b></div></div><section class="agent-governance-section"><header><h3>模型路由与预算</h3></header><div class="agent-governance-route"><span>任务规划</span><b>${escapeHtml(governance.routes.planning)}</b></div><div class="agent-governance-route"><span>结果核验</span><b>${escapeHtml(governance.routes.evaluation)}</b></div><div class="agent-governance-route"><span>预算上限</span><b>每日 $${governance.budgets.dailyUsd} · 单 Mission $${governance.budgets.missionUsd}</b></div></section><section class="agent-governance-section"><header><h3>安全评测${latest ? ` · ${latest.passed}/${latest.total}` : ""}</h3><button class="btn primary" type="button" id="agentEvaluationRunButton">运行评测</button></header>${evaluationResults}</section><section class="agent-governance-section"><header><h3>最近模型调用</h3></header>${calls}</section>`;
+}
+
+async function openAgentGovernance(reload = true) {
+  if (reload) await loadAgentGovernance();
+  openModal("Agent 运行与成本", agentGovernanceBody(), `<button class="btn" data-modal-close>关闭</button>`);
+  qs<HTMLElement>("#appModal .modal")?.classList.add("agent-memory-modal");
+  qs<HTMLButtonElement>("#agentEvaluationRunButton")?.addEventListener("click", (event) => void runAgentEvaluationFromUi(event.currentTarget as HTMLButtonElement));
+}
+
+async function runAgentEvaluationFromUi(button: HTMLButtonElement) {
+  button.disabled = true;
+  button.textContent = "评测中";
+  try {
+    const result = await api<{ evaluation: AgentGovernance["evaluations"][number]; metrics: AgentGovernance }>("/api/agent/evaluations/run", { method: "POST" });
+    state.agentGovernance = result.metrics;
+    openAgentGovernance(false);
+    toast(`安全评测完成：${result.evaluation.passed}/${result.evaluation.total} 通过`, result.evaluation.passed === result.evaluation.total ? "ok" : "error");
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "运行评测";
+    toast(error instanceof Error ? error.message : "Agent 安全评测失败", "error");
+  }
+}
+
+function agentRelativeTime(value: string) {
+  const elapsed = Math.max(0, Date.now() - new Date(value).getTime());
+  if (elapsed < 5_000) return "刚刚更新";
+  if (elapsed < 60_000) return `${Math.floor(elapsed / 1_000)} 秒前更新`;
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} 分钟前更新`;
+  return new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function agentDecisionTrace(run: AgentRun) {
+  const raw = [...run.events].reverse().find((item) => item.message.startsWith("本轮语义判决："))?.message.slice("本轮语义判决：".length);
+  if (!raw) return { action: "正在理解目标", target: run.goalSpec?.subject || run.goal, confidence: 0 };
+  try {
+    const decision = JSON.parse(raw) as { speechAct?: string; operation?: string; target?: string; intentConfidence?: number };
+    const actionLabels: Record<string, string> = {
+      execute: "执行业务动作",
+      query_data: "查询并核验数据",
+      navigate: "打开业务页面",
+      explain: "回答业务问题",
+      chat: "普通对话",
+      cancel: "停止当前任务"
+    };
+    return {
+      action: actionLabels[String(decision.speechAct || "")] || String(decision.operation || "已识别业务目标"),
+      target: String(decision.target || run.goalSpec?.subject || run.goal),
+      confidence: Math.round(Number(decision.intentConfidence || 0) * 100)
+    };
+  } catch {
+    return { action: "已识别业务目标", target: run.goalSpec?.subject || run.goal, confidence: 0 };
+  }
+}
+
+function agentStepTarget(step: AgentStep) {
+  if (["api.read", "api.write", "api.external"].includes(step.tool)) {
+    return `${String(step.input.method || "REQUEST").toUpperCase()} ${String(step.input.path || "待解析接口")}`;
+  }
+  if (step.tool.startsWith("ui.")) return `界面动作 · ${String(step.input.view || step.input.customerId || step.input.leadId || "当前页面")}`;
+  const references = ["customerId", "leadId", "dealId", "entityId", "runId", "sequenceId"]
+    .map((key) => step.input[key] ? `${key}=${String(step.input[key])}` : "")
+    .filter(Boolean)
+    .slice(0, 2);
+  return references.length ? `${step.tool} · ${references.join(" · ")}` : step.tool;
+}
+
+function agentFailureDiagnosis(error = "") {
+  if (!error) return "执行器没有返回明确错误，请查看执行记录。";
+  if (/(403|无权|权限|forbidden)/iu.test(error)) return `权限校验未通过：${error}`;
+  if (/(404|不存在|not found)/iu.test(error)) return `目标接口或业务对象不存在：${error}`;
+  if (/(400|参数|字段|schema|validation|invalid)/iu.test(error)) return `接口参数或契约校验失败：${error}`;
+  if (/(timeout|timed out|fetch failed|network|ECONN|连接)/iu.test(error)) return `网络或上游服务调用失败：${error}`;
+  if (/(工作流|依赖|结果路径|前置步骤)/u.test(error)) return `动作依赖或结果引用失败：${error}`;
+  return error;
+}
+
+function agentStepTraceDetail(step: AgentStep, run: AgentRun) {
+  const dependencies = step.dependsOn || [];
+  const dependencyStates = dependencies.map((key) => {
+    const source = run.steps.find((candidate) => candidate.key === key);
+    return `${key}=${source ? agentStepStatusLabel(source.status) : "不存在"}`;
+  });
+  if (step.status === "failed" || step.status === "skipped") return agentFailureDiagnosis(step.error || "");
+  if (dependencyStates.length && !dependencies.every((key) => run.steps.some((candidate) => candidate.key === key && candidate.status === "done"))) {
+    return `等待前置结果：${dependencyStates.join("，")}`;
+  }
+  if (step.status === "running") return `执行器正在调用 ${agentStepTarget(step)}`;
+  if (step.status === "queued") return `已经进入后台队列，等待执行器领取；目标 ${agentStepTarget(step)}`;
+  if (step.status === "needs_confirmation") return `最终参数已锁定，等待确认后调用 ${agentStepTarget(step)}`;
+  if (step.status === "ready") return `参数和权限校验已通过，等待调用 ${agentStepTarget(step)}`;
+  const evidence = agentResultSummary(step.result);
+  return `${evidence || "动作已完成"}${dependencyStates.length ? `；前置 ${dependencyStates.join("，")}` : ""}`;
+}
+
+function agentTraceSteps(run: AgentRun) {
+  const indexed = run.steps.map((step, index) => ({ step, index }));
+  const selected = new Map<number, { step: AgentStep; index: number }>();
+  indexed.filter(({ step }) => ["running", "queued", "needs_confirmation", "ready", "failed", "skipped"].includes(step.status))
+    .slice(0, 6)
+    .forEach((item) => selected.set(item.index, item));
+  [...indexed].reverse().filter(({ step }) => step.status === "done").slice(0, 3)
+    .forEach((item) => selected.set(item.index, item));
+  return [...selected.values()].sort((left, right) => left.index - right.index).slice(-9);
+}
+
+function agentExecutionTrace(run: AgentRun, live: boolean) {
+  if (!run.steps.length) return "";
+  const decision = agentDecisionTrace(run);
+  const completed = run.steps.filter((step) => step.status === "done").length;
+  const traceSteps = agentTraceSteps(run);
+  const recentEvents = run.events
+    .filter((item) => item.type !== "assistant" && !item.message.startsWith("本轮语义判决：") && !item.message.startsWith("任务上下文："))
+    .slice(-4);
+  const currentLabel = run.currentAction || (run.status === "completed" ? "完成证据已核验" : run.stopReason || "等待下一步");
+  const stepRows = traceSteps.map(({ step, index }) => {
+    const dependenciesReady = (step.dependsOn || []).every((key) => run.steps.some((candidate) => candidate.key === key && candidate.status === "done"));
+    const status = !dependenciesReady && ["ready", "needs_confirmation"].includes(step.status) ? "等待前置" : agentStepStatusLabel(step.status);
+    const approval = step.status === "needs_confirmation" && step.risk === "write" && dependenciesReady
+      ? `<button type="button" class="agent-chat-confirm" data-agent-chat-approve="${escapeHtml(step.id)}">确认写入</button>`
+      : `<small>${escapeHtml(status)}</small>`;
+    return `<div class="agent-trace-step ${escapeHtml(step.status)}"><span>${index + 1}</span><i></i><div><b>${escapeHtml(step.title)}</b><small>${escapeHtml(agentStepTarget(step))}</small><p class="${["failed", "skipped"].includes(step.status) ? "is-error" : ""}">${escapeHtml(agentStepTraceDetail(step, run))}</p></div>${approval}</div>`;
+  }).join("");
+  const eventRows = recentEvents.map((item) => `<div class="agent-trace-event ${escapeHtml(item.type)}"><i></i><span>${escapeHtml(item.message)}</span><time>${escapeHtml(agentRelativeTime(item.createdAt))}</time></div>`).join("");
+  const traceOpen = live || (run.status === "failed" && run.id === state.agentRun?.id);
+  return `<div class="agent-live-execution">
+    <div class="agent-live-current"><i class="${live && !["awaiting_confirmation", "paused"].includes(run.status) ? "" : "still"}"></i><div><small>当前阶段 · ${escapeHtml(agentRelativeTime(run.updatedAt))}</small><b>${escapeHtml(currentLabel)}</b></div><strong>${completed} / ${run.steps.length}</strong></div>
+    <div class="agent-trace-context"><div><span>意图</span><b>${escapeHtml(decision.action)}</b></div><div><span>目标</span><b>${escapeHtml(decision.target)}</b></div><div><span>判断</span><b>${decision.confidence ? `${decision.confidence}%` : `第 ${run.iteration} 轮`}</b></div></div>
+    <details class="agent-action-chain" ${traceOpen ? "open" : ""}><summary><span>可审计动作链</span><small>${traceSteps.length < run.steps.length ? `显示关键 ${traceSteps.length} 步 · 全部 ${run.steps.length} 步` : `${run.steps.length} 个动作`}</small></summary><div class="agent-trace-list">${stepRows || `<div class="agent-trace-empty">正在生成动作</div>`}</div></details>
+    ${eventRows ? `<div class="agent-trace-events"><header><span>最近执行记录</span><small>${live ? "持续更新" : "执行快照"}</small></header>${eventRows}</div>` : ""}
+  </div>`;
+}
+
+function renderAgentConversation() {
+  const container = qs<HTMLElement>("#agentChatMessages");
+  if (!container) return;
+  const wasFollowing = !container.dataset.timelineReady
+    || container.scrollHeight - container.scrollTop - container.clientHeight < 120
+    || Boolean(agentPendingGoal);
+  const runs = [...state.agentRuns].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  if (!runs.length && !agentPendingGoal) {
+    container.innerHTML = `<div class="agent-chat-welcome"><span>AI</span><div><h2>今天想推进什么？</h2></div></div>`;
+    container.dataset.timelineReady = "1";
+    return;
+  }
+
+  const timeLabel = (value: string) => new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  const assistantRow = (message: string, createdAt: string, status: string, tone: string, live = false, execution = "") => `<div class="agent-chat-row assistant">
+    <span class="agent-chat-avatar">AI</span>
+    <div class="agent-chat-answer ${live ? "is-progress" : "is-final"}">
+      <div class="agent-chat-answer-head"><span class="agent-chat-reply-state ${escapeHtml(tone)}"><i></i>${escapeHtml(status)}</span><time>${escapeHtml(timeLabel(createdAt))}</time></div>
+      <p>${escapeHtml(message)}</p>
+      ${execution}
+    </div>
+  </div>`;
+  const terminalReply = (item: AgentRun) => {
+    if (item.status === "completed") return item.summary || item.stopReason || "任务已完成。";
+    if (item.status === "waiting_user") {
+      if (!item.stopReason || item.summary.includes(item.stopReason)) return item.summary || item.stopReason;
+      return `${item.summary}${item.summary ? "\n\n" : ""}需要你补充：${item.stopReason}`;
+    }
+    if (item.status === "cancelled") return "任务已取消，未执行的动作已经停止。";
+    return item.stopReason || item.summary || "任务未能完成，请检查执行记录。";
+  };
+
+  container.innerHTML = runs.map((item) => {
+    const selected = item.id === state.agentRun?.id ? " active" : "";
+    const timeline: Array<{ role: "user" | "assistant"; message: string; createdAt: string; order: number }> = [{ role: "user", message: item.goal, createdAt: item.createdAt, order: 0 }];
+    item.events.forEach((entry, index) => {
+      if (entry.type === "assistant") timeline.push({ role: "assistant", message: entry.message, createdAt: entry.createdAt, order: index + 1 });
+      if (entry.type === "plan" && entry.message.startsWith("用户补充：")) timeline.push({ role: "user", message: entry.message.slice(5), createdAt: entry.createdAt, order: index + 1 });
+    });
+    timeline.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.order - right.order);
+    let latestUserIndex = -1;
+    let latestReplyIndex = -1;
+    timeline.forEach((entry, index) => {
+      if (entry.role === "user") latestUserIndex = index;
+      if (entry.role === "assistant") latestReplyIndex = index;
+    });
+    const settled = ["completed", "waiting_user", "failed", "cancelled"].includes(item.status);
+    if (settled && latestReplyIndex < latestUserIndex) {
+      timeline.push({ role: "assistant", message: terminalReply(item), createdAt: item.updatedAt, order: Number.MAX_SAFE_INTEGER });
+    }
+    const terminalAssistantIndex = settled
+      ? timeline.reduce((latest, entry, index) => entry.role === "assistant" ? index : latest, -1)
+      : -1;
+    const messages = timeline.map((entry, index) => {
+      if (entry.role === "user") return `<div class="agent-chat-row user"><div class="agent-chat-bubble">${escapeHtml(entry.message)}</div><time>${escapeHtml(timeLabel(entry.createdAt))}</time></div>`;
+      const followedByUser = timeline.slice(index + 1).some((candidate) => candidate.role === "user");
+      const replyStatus = followedByUser || item.status === "waiting_user" ? "等你回复" : item.status === "failed" ? "未完成" : item.status === "cancelled" ? "已取消" : "已完成";
+      const replyTone = followedByUser || item.status === "waiting_user" ? "waiting" : item.status === "failed" ? "danger" : item.status === "cancelled" ? "muted" : "done";
+      return assistantRow(entry.message, entry.createdAt, replyStatus, replyTone, false, index === terminalAssistantIndex ? agentExecutionTrace(item, false) : "");
+    })
+      .join("");
+    const live = !settled;
+    const liveStatus = item.status === "awaiting_confirmation" ? "等待确认" : item.status === "paused" ? "已暂停" : "进行中";
+    const liveTone = item.status === "awaiting_confirmation" ? "waiting" : item.status === "paused" ? "muted" : "running";
+    const liveMessage = item.status === "awaiting_confirmation"
+      ? item.currentAction || "行动计划等待确认，批准后会从当前位置继续。"
+      : item.status === "paused"
+        ? item.stopReason || "任务已暂停。"
+        : item.currentAction || item.summary || "正在理解目标并生成行动计划。";
+    const execution = agentExecutionTrace(item, true);
+    const liveRow = live ? assistantRow(liveMessage, item.updatedAt, liveStatus, liveTone, true, execution) : "";
+    return `<div class="agent-chat-turn${selected}" data-agent-chat-run="${escapeHtml(item.id)}">${messages}${liveRow}</div>`;
+  }).join("") + (agentPendingGoal ? (() => {
+    const progress = agentPendingProgress.length ? agentPendingProgress : [{
+      phase: "understanding" as const,
+      requestKind: "conversation" as const,
+      message: "正在理解你的目标和当前业务上下文",
+      detail: "先判断你希望获取信息，还是让我直接完成一项工作"
+    }];
+    const current = progress.at(-1)!;
+    const labels: Record<AgentPlanningProgress["phase"], string> = current.requestKind === "conversation"
+      ? { understanding: "理解中", intent: "已识别", planning: "组织回复", ready: "回复中" }
+      : current.requestKind === "query"
+        ? { understanding: "理解中", intent: "已识别", planning: "准备查询", ready: "开始查询" }
+        : { understanding: "理解中", intent: "已识别", planning: "准备执行", ready: "即将开始" };
+    const stream = `<div class="agent-thinking-stream">${progress.map((item, index) => `<div class="agent-thinking-line ${index === progress.length - 1 ? "active" : "done"}"><i></i><div><b>${escapeHtml(item.message)}</b><small>${escapeHtml(item.detail)}</small></div><span>${index === progress.length - 1 ? labels[item.phase] : "完成"}</span></div>`).join("")}</div>`;
+    return `<div class="agent-chat-turn pending"><div class="agent-chat-row user"><div class="agent-chat-bubble">${escapeHtml(agentPendingGoal)}</div></div>${assistantRow(current.message, new Date().toISOString(), labels[current.phase], "running", true, stream)}</div>`;
+  })() : "");
+  qsa<HTMLElement>("[data-agent-chat-run]", container).forEach((item) => item.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    const copyableText = target.closest(".agent-chat-bubble, .agent-chat-answer > p, .agent-live-current b, .agent-live-step span, .agent-thinking-line b, .agent-thinking-line small");
+    if (copyableText || window.getSelection()?.toString().trim()) return;
+    const runId = item.dataset.agentChatRun || "";
+    const run = state.agentRuns.find((candidate) => candidate.id === runId);
+    if (run) {
+      state.agentRun = run;
+      renderAgent(run);
+    }
+  }));
+  qsa<HTMLButtonElement>("[data-agent-chat-approve]", container).forEach((button) => button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    void executeAgentStepFromUi(button.dataset.agentChatApprove || "", true);
+  }));
+  container.dataset.timelineReady = "1";
+  if (wasFollowing) container.scrollTop = container.scrollHeight;
+}
+
+function renderAgent(run = state.agentRun) {
+  renderAgentMemoryStatus();
+  renderAgentKnowledgeStatus();
+  renderAgentTriggerStatus();
+  renderAgentGovernanceStatus();
+  const modelStatus = qs<HTMLElement>("#agentModelStatus");
+  const modelConfig = state.aiConfig;
+  if (modelStatus) {
+    modelStatus.innerHTML = modelConfig?.enabled && modelConfig.hasApiKey
+      ? `<span class="badge green">模型已启用</span><span>${escapeHtml(modelConfig.name || modelConfig.model || "当前模型")}</span>`
+      : `<span class="badge amber">基础执行</span><span>常用任务可用</span>`;
+  }
+  const playbookStatus = qs<HTMLButtonElement>("#agentPlaybookStatus");
+  if (playbookStatus) {
+    const activation = state.salesPlaybookActivations.find((item) => item.status === "active");
+    const distillation = activation ? state.salesDistillations.find((item) => item.id === activation.distillationId) : undefined;
+    playbookStatus.classList.toggle("active", Boolean(activation && distillation));
+    playbookStatus.innerHTML = activation && distillation
+      ? `<span>当前销售能力</span><b>${escapeHtml(distillation.sourceUserName)}${distillation.version ? ` · V${distillation.version}` : ""}</b><small>${distillation.maturity ? salesTrainingMaturityLabel(distillation.maturity) : "历史能力"} · 应用 ${activation.applicationCount} 次 · 待办 ${activation.taskCount} 个</small>`
+      : `<span>当前销售能力</span><b>尚未应用</b><small></small>`;
+    playbookStatus.onclick = () => activateNavView("sales-distillation", () => void loadSalesDistillationWorkspace());
+  }
+  const expired = Boolean(run && new Date(run.expiresAt).getTime() <= Date.now());
+  const runStatus = qs<HTMLElement>("#agentRunStatus");
+  if (runStatus) {
+    const tone = expired || ["cancelled", "paused"].includes(run?.status || "")
+      ? "gray"
+      : run?.status === "completed"
+        ? "green"
+        : run?.status === "failed"
+          ? "red"
+          : ["awaiting_confirmation", "waiting_user"].includes(run?.status || "")
+            ? "amber"
+            : run
+              ? "blue"
+              : "gray";
+    runStatus.innerHTML = `<span class="badge ${tone}">${agentRunStatusLabel(expired ? "expired" : run?.status || "idle")}</span>`;
+  }
+  const summary = qs<HTMLElement>("#agentPlanSummary");
+  if (summary) summary.textContent = run?.summary || "";
+  const workflow = qs<HTMLElement>("#agentWorkflowPreview");
+  if (workflow) {
+    workflow.innerHTML = agentWorkflowMarkup(run);
+    qs<HTMLButtonElement>("#agentHighFreedomButton", workflow)?.addEventListener("click", () => void controlAgentMission("resume", "启用高自由度推理，自主读取相关接口契约并持续执行到全部完成标准满足"));
+    qs<HTMLButtonElement>("#agentSkillDraftButton", workflow)?.addEventListener("click", () => void saveAgentRunAsSkillDraft());
+  }
+  const mission = qs<HTMLElement>("#agentMissionProgress");
+  if (mission) {
+    const completed = run?.steps.filter((step) => step.status === "done").length || 0;
+    const statusTone = run?.status === "completed" ? "done"
+      : run?.status === "failed" || run?.status === "cancelled" ? "failed"
+        : ["awaiting_confirmation", "waiting_user", "paused"].includes(run?.status || "") ? "waiting"
+          : run ? "running" : "";
+    mission.innerHTML = run
+      ? `<div class="agent-mission-state ${statusTone}"><i></i><b>${escapeHtml(agentRunStatusLabel(run.status))}</b><strong>${completed} / ${run.steps.length}</strong></div><div class="agent-mission-action">${escapeHtml(run.currentAction || run.stopReason || run.summary)}</div><div class="agent-mission-round">第 ${run.iteration} 轮 · 最多 ${run.maxIterations} 轮</div>`
+      : `<div class="agent-mission-state"><i></i><b>等待任务</b><strong>0 / 0</strong></div>`;
+  }
+  renderOutreachSequences(run);
+  renderCustomerMaintenanceWatches(run);
+  renderAgentCheckpoints(run);
+  renderAgentConversation();
+  const backgroundStatus = qs<HTMLElement>("#agentBackgroundStatus");
+  if (backgroundStatus) {
+    const queued = run?.steps.filter((step) => step.status === "queued").length || 0;
+    const running = run?.steps.filter((step) => step.status === "running").length || 0;
+    backgroundStatus.textContent = running
+      ? `${running} 个动作正在后台执行`
+      : queued
+        ? `${queued} 个动作正在等待后台执行`
+        : "队列已就绪";
+  }
+  const approveAll = qs<HTMLButtonElement>("#agentApproveAllButton");
+  if (approveAll) {
+    const count = run?.steps.filter((step) => step.status === "needs_confirmation" && step.risk === "external").length || 0;
+    approveAll.hidden = count < 2;
+    approveAll.textContent = count ? `批准全部外部动作（${count}）` : "批准全部外部动作";
+    approveAll.disabled = state.agentLoading;
+  }
+  const pauseButton = qs<HTMLButtonElement>("#agentPauseButton");
+  const resumeButton = qs<HTMLButtonElement>("#agentResumeButton");
+  const cancelButton = qs<HTMLButtonElement>("#agentCancelButton");
+  if (pauseButton) {
+    pauseButton.hidden = !run || !["planning", "running", "awaiting_confirmation"].includes(run.status);
+    pauseButton.disabled = state.agentLoading;
+  }
+  if (resumeButton) {
+    resumeButton.hidden = !run || !["paused", "waiting_user", "failed", "cancelled"].includes(run.status);
+    resumeButton.disabled = state.agentLoading;
+  }
+  if (cancelButton) {
+    cancelButton.hidden = !run || ["completed", "cancelled"].includes(run.status);
+    cancelButton.disabled = state.agentLoading;
+  }
+  const list = qs<HTMLElement>("#agentStepList");
+  if (list) {
+    list.innerHTML = run?.steps.length
+      ? run.steps.map((step, index) => {
+          const controlsLocked = !run || ["paused", "waiting_user", "completed", "cancelled"].includes(run.status);
+          const dependencies = step.dependsOn || [];
+          const dependenciesReady = dependencies.every((key) => run.steps.some((candidate) => candidate.key === key && candidate.status === "done"));
+          const dependencyText = dependencies.length
+            ? `<div class="agent-step-tool">${dependenciesReady ? "前置结果已就绪" : "等待前置步骤"} · ${escapeHtml(dependencies.join("、"))}</div>`
+            : "";
+          const action = expired || controlsLocked || !dependenciesReady ? "" : step.status === "needs_confirmation" || (step.status === "failed" && step.risk === "external")
+            ? `<button class="btn primary" type="button" data-agent-approve="${escapeHtml(step.id)}">${step.status === "failed" ? "确认重试" : "确认执行"}</button>`
+            : step.status === "ready"
+              ? `<button class="btn" type="button" data-agent-run="${escapeHtml(step.id)}">运行</button>`
+              : step.status === "failed" && step.risk !== "external"
+                ? `<button class="btn" type="button" data-agent-run="${escapeHtml(step.id)}">重试</button>`
+                : "";
+          const result = agentResultSummary(step.result);
+          const traceDetail = agentStepTraceDetail(step, run);
+          const exportDownload = agentExportDownload(step);
+          const downloadAction = exportDownload ? `<button class="btn primary" type="button" data-agent-document-download="${escapeHtml(step.id)}">打开并下载</button>` : "";
+          const approvalPreview = agentSequenceApprovalPreview(step);
+          const maintenancePreview = agentMaintenanceApprovalPreview(step);
+          const externalPreview = agentExternalApprovalPreview(step);
+          return `<article class="agent-step agent-step-${step.status}">
+            <span class="agent-step-index">${index + 1}</span>
+            <div><div class="agent-step-title">${escapeHtml(step.title)}</div><div class="agent-step-tool">${escapeHtml(step.key || step.id)} · ${escapeHtml(step.tool)} · ${agentRiskLabel(step.risk)}</div><div class="agent-step-target">${escapeHtml(agentStepTarget(step))}</div>${dependencyText}${approvalPreview}${maintenancePreview}${externalPreview}<div class="agent-step-trace ${["failed", "skipped"].includes(step.status) ? "is-error" : ""}">${escapeHtml(traceDetail || result)}</div></div>
+            <div class="agent-step-action"><span class="badge ${step.status === "done" ? "green" : step.status === "failed" ? "red" : step.status === "needs_confirmation" ? "amber" : ["queued", "running"].includes(step.status) ? "blue" : "gray"}">${!dependenciesReady && ["ready", "needs_confirmation"].includes(step.status) ? "等待前置步骤" : agentStepStatusLabel(step.status)}</span>${dependenciesReady ? downloadAction : ""}${action}</div>
+          </article>`;
+        }).join("")
+      : `<div class="agent-empty">暂无行动步骤</div>`;
+    qsa<HTMLButtonElement>("[data-agent-run]", list).forEach((button) => button.addEventListener("click", () => void executeAgentStepFromUi(button.dataset.agentRun || "", false)));
+    qsa<HTMLButtonElement>("[data-agent-approve]", list).forEach((button) => button.addEventListener("click", () => void executeAgentStepFromUi(button.dataset.agentApprove || "", true)));
+    qsa<HTMLButtonElement>("[data-agent-document-download]", list).forEach((button) => button.addEventListener("click", () => void openAgentExportDownload(button.dataset.agentDocumentDownload || "")));
+  }
+  const events = qs<HTMLElement>("#agentEventList");
+  if (events) {
+    const auditEvents = run?.events.filter((item) => item.type !== "assistant" && !item.message.startsWith("任务上下文：")) || [];
+    events.innerHTML = auditEvents.length
+      ? [...auditEvents].reverse().map((item) => `<div class="agent-event"><b>${escapeHtml(item.message)}</b><time>${new Date(item.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div>`).join("")
+      : `<div class="agent-empty">暂无执行事件</div>`;
+  }
+  const history = qs<HTMLElement>("#agentRecentRuns");
+  if (history) {
+    history.innerHTML = state.agentRuns.length
+      ? state.agentRuns.slice(0, 6).map((item) => {
+          const itemExpired = new Date(item.expiresAt).getTime() <= Date.now();
+          const active = run?.id === item.id ? " active" : "";
+          return `<button type="button" class="agent-history-item${active}" data-agent-run-id="${escapeHtml(item.id)}"><span>${escapeHtml(item.goal)}</span><small>${agentRunStatusLabel(itemExpired ? "expired" : item.status)} · ${new Date(item.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</small></button>`;
+        }).join("")
+      : `<div class="agent-history-empty">暂无运行记录</div>`;
+    qsa<HTMLButtonElement>("[data-agent-run-id]", history).forEach((button) => button.addEventListener("click", () => void loadAgentRun(button.dataset.agentRunId || "")));
+  }
+  run?.steps.forEach(applyAgentUiAction);
+  syncAgentRunPolling(run);
+}
+
+function salesDistillationMetricLabel(key: keyof SalesDistillationMetrics) {
+  return ({
+    customerCount: "客户",
+    leadCount: "有效线索",
+    activeDealCount: "活跃商机",
+    wonDealCount: "成交商机",
+    wonAmount: "成交金额",
+    followupCount: "跟进记录",
+    completedTodoCount: "完成待办",
+    reportCount: "日报"
+  } as Record<keyof SalesDistillationMetrics, string>)[key];
+}
+
+function salesTrainingStatusLabel(status: SalesTrainingStatus) {
+  return ({ queued: "等待训练", collecting: "采集样本", cleaning: "清洗证据", labeling: "结果标注", training: "策略训练", evaluating: "离线评测", awaiting_review: "等待审核", published: "已发布", paused: "已暂停", failed: "训练失败", cancelled: "已取消" } as Record<SalesTrainingStatus, string>)[status];
+}
+
+function salesTrainingMaturityLabel(maturity: SalesTrainingMaturity) {
+  return ({ observation: "观察级", trial: "试用级", production: "生产级", stable: "稳定级" } as Record<SalesTrainingMaturity, string>)[maturity];
+}
+
+function renderSalesTrainingWorkspace() {
+  const queue = qs<HTMLElement>("#salesTrainingQueue");
+  const count = qs<HTMLElement>("#salesTrainingQueueCount");
+  const detail = qs<HTMLElement>("#salesTrainingDetail");
+  const quality = qs<HTMLElement>("#salesTrainingQuality");
+  if (!queue || !detail || !quality) return;
+  if (count) count.textContent = String(state.salesTrainingRuns.length);
+  if (!selectedSalesTrainingRunId || !state.salesTrainingRuns.some((item) => item.id === selectedSalesTrainingRunId)) selectedSalesTrainingRunId = state.salesTrainingRuns[0]?.id || "";
+  queue.innerHTML = state.salesTrainingRuns.length
+    ? state.salesTrainingRuns.map((item) => {
+        const tone = ["queued", "collecting", "cleaning", "labeling", "training", "evaluating"].includes(item.status) ? "running" : item.status === "awaiting_review" ? "review" : item.status === "published" ? "published" : "";
+        return `<button class="sales-training-queue-item ${tone}${item.id === selectedSalesTrainingRunId ? " active" : ""}" type="button" data-sales-training-run="${escapeHtml(item.id)}"><div><b>${escapeHtml(item.sourceUserName)} · V${item.version}</b><i></i></div><small>${escapeHtml(salesTrainingStatusLabel(item.status))} · ${item.progress}%</small></button>`;
+      }).join("")
+    : `<div class="sales-training-empty">暂无训练任务</div>`;
+  qsa<HTMLButtonElement>("[data-sales-training-run]", queue).forEach((button) => button.addEventListener("click", () => { selectedSalesTrainingRunId = button.dataset.salesTrainingRun || ""; renderSalesTrainingWorkspace(); }));
+  const run = state.salesTrainingRuns.find((item) => item.id === selectedSalesTrainingRunId);
+  if (!run) {
+    detail.innerHTML = `<div class="sales-training-welcome"><span>AI</span><div><h2>暂无训练任务</h2></div></div>`;
+    quality.innerHTML = `<div class="sales-training-quality-empty">暂无训练质量</div>`;
+    return;
+  }
+  const active = ["queued", "collecting", "cleaning", "labeling", "training", "evaluating"].includes(run.status);
+  const canReviewSamples = ["awaiting_review", "paused", "failed"].includes(run.status);
+  const stageNames = ["样本采集", "证据清洗", "结果标注", "策略训练", "离线评测"];
+  const stageCards = stageNames.map((name, index) => {
+    const round = run.rounds.find((item) => item.index === index + 1);
+    const status = round?.status || "pending";
+    return `<div class="sales-training-stage ${status}"><b>${escapeHtml(name)}</b><small>${escapeHtml(round?.summary || (status === "running" ? "正在运行" : "等待开始"))}</small></div>`;
+  }).join("");
+  const controls = active
+    ? `<button class="btn" type="button" data-sales-training-control="pause">暂停</button><button class="btn" type="button" data-sales-training-control="cancel">取消</button>`
+    : ["paused", "failed"].includes(run.status)
+      ? `<button class="btn primary" type="button" data-sales-training-control="resume">继续训练</button><button class="btn" type="button" data-sales-training-control="cancel">取消</button>`
+      : "";
+  detail.innerHTML = `<div class="sales-training-run-head"><div><h2>${escapeHtml(run.sourceUserName)} 销售能力训练</h2><p>第 ${run.version} 版 · 近 ${run.periodDays} 天 · ${escapeHtml(run.modelLabel)}</p></div><div class="head-actions">${controls}</div></div>
+    <div class="sales-training-progress"><div><span>${escapeHtml(run.currentAction || salesTrainingStatusLabel(run.status))}</span><strong>${run.progress}%</strong></div><span><i style="width:${Math.max(0, Math.min(100, run.progress))}%"></i></span></div>
+    <div class="sales-training-stages">${stageCards}</div>
+    <div class="sales-training-section-title"><h3>训练动态</h3><span>${run.events.length} 条</span></div>
+    <div class="sales-training-events">${[...run.events].reverse().slice(0, 30).map((item) => `<div class="sales-training-event"><b>${escapeHtml(salesTrainingStatusLabel(item.stage))}</b><span>${escapeHtml(item.message)}</span><time>${new Date(item.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div>`).join("")}</div>
+    <div class="sales-training-section-title"><h3>训练样本</h3><span>有效 ${run.sampleStats.valid} · 淘汰 ${run.sampleStats.rejected}</span></div>
+    <div class="sales-training-samples">${run.samples.length ? run.samples.slice(0, 12).map((sample) => `<div class="sales-training-sample"><input type="checkbox" data-sales-training-sample-include="${escapeHtml(sample.id)}" ${sample.included ? "checked" : ""} ${canReviewSamples ? "" : "disabled"}><div><b>${escapeHtml(sample.title)}</b><small>${escapeHtml(sample.summary)}</small></div><select data-sales-training-sample-label="${escapeHtml(sample.id)}" ${canReviewSamples ? "" : "disabled"}><option value="positive" ${sample.label === "positive" ? "selected" : ""}>正向</option><option value="negative" ${sample.label === "negative" ? "selected" : ""}>负向</option><option value="neutral" ${sample.label === "neutral" ? "selected" : ""}>中性</option></select></div>`).join("") : `<div class="sales-training-empty">暂无训练样本</div>`}</div>`;
+  qsa<HTMLButtonElement>("[data-sales-training-control]", detail).forEach((button) => button.addEventListener("click", () => void controlSalesTrainingFromUi(button.dataset.salesTrainingControl as "pause" | "resume" | "cancel")));
+  qsa<HTMLInputElement>("[data-sales-training-sample-include]", detail).forEach((input) => input.addEventListener("change", () => void updateSalesTrainingSampleFromUi(input.dataset.salesTrainingSampleInclude || "", { included: input.checked })));
+  qsa<HTMLSelectElement>("[data-sales-training-sample-label]", detail).forEach((select) => select.addEventListener("change", () => void updateSalesTrainingSampleFromUi(select.dataset.salesTrainingSampleLabel || "", { label: select.value as SalesTrainingSampleLabel })));
+  const evaluationRows = [["覆盖度", run.evaluation.coverage], ["样本平衡", run.evaluation.balance], ["证据追溯", run.evaluation.traceability], ["策略完整", run.evaluation.strategy], ["安全性", run.evaluation.safety]] as Array<[string, number]>;
+  const canPublish = Boolean(state.user && ["manager", "admin", "super_admin"].includes(state.user.role) && run.status === "awaiting_review" && run.evaluation.passed);
+  quality.innerHTML = `<div class="sales-quality-head"><span>训练成熟度</span><b>${escapeHtml(salesTrainingMaturityLabel(run.maturity))}</b></div>
+    <div class="sales-quality-grid"><div class="sales-quality-metric"><span>有效样本</span><b>${run.sampleStats.valid}</b></div><div class="sales-quality-metric"><span>淘汰样本</span><b>${run.sampleStats.rejected}</b></div><div class="sales-quality-metric"><span>正向 / 负向</span><b>${run.sampleStats.positive} / ${run.sampleStats.negative}</b></div><div class="sales-quality-metric"><span>留出评测</span><b>${run.sampleStats.holdout}</b></div></div>
+    <div class="sales-training-section-title"><h3>离线评测</h3><span>${run.evaluation.overall} 分</span></div>${evaluationRows.map(([label, value]) => `<div class="sales-evaluation-row"><span>${label}</span><b>${value}</b></div>`).join("")}
+    ${run.evaluation.blockers.map((item) => `<div class="sales-training-blocker">${escapeHtml(item)}</div>`).join("")}
+    ${canPublish ? `<button class="btn primary" type="button" id="salesTrainingPublishButton">审核并发布能力</button>` : ""}
+    ${["awaiting_review", "published", "failed", "cancelled"].includes(run.status) ? `<button class="btn" type="button" id="salesTrainingRetrainButton">创建下一训练版本</button>` : ""}`;
+  qs<HTMLButtonElement>("#salesTrainingPublishButton", quality)?.addEventListener("click", () => void publishSalesTrainingFromUi());
+  qs<HTMLButtonElement>("#salesTrainingRetrainButton", quality)?.addEventListener("click", () => void retrainSalesTrainingFromUi());
+}
+
+function renderSalesDistillation() {
+  const sourceSelect = qs<HTMLSelectElement>("#salesDistillationSource");
+  const periodSelect = qs<HTMLSelectElement>("#salesDistillationPeriod");
+  const list = qs<HTMLElement>("#salesDistillationCards");
+  if (!sourceSelect || !periodSelect || !list) return;
+  const selectedSource = sourceSelect.value || state.user?.id || "";
+  sourceSelect.innerHTML = state.salesDistillationSources.map((source) => `<option value="${escapeHtml(source.id)}">${escapeHtml(source.name)} · ${escapeHtml(roleLabel[source.role])}</option>`).join("");
+  sourceSelect.value = state.salesDistillationSources.some((source) => source.id === selectedSource) ? selectedSource : state.salesDistillationSources[0]?.id || "";
+  renderSalesTrainingWorkspace();
+  const canPublish = Boolean(state.user && ["manager", "admin", "super_admin"].includes(state.user.role));
+  const published = state.salesDistillations.filter((item) => item.status === "published");
+  if (!published.length) {
+    list.innerHTML = `<div class="sales-distillation-empty"><div class="sales-distillation-empty-icon">◎</div><h3>暂无已发布能力</h3></div>`;
+    return;
+  }
+  list.innerHTML = published.map((item) => {
+    const metrics = Object.entries(item.metrics) as Array<[keyof SalesDistillationMetrics, number]>;
+    const activation = state.salesPlaybookActivations.find((entry) => entry.distillationId === item.id);
+    const active = activation?.status === "active";
+    const statusText = item.version ? `能力 V${item.version}` : "历史打法";
+    const publishButton = canPublish && item.status !== "published" ? `<button class="btn primary" type="button" data-sales-distillation-publish="${escapeHtml(item.id)}">发布团队打法</button>` : "";
+    const applyButton = item.status === "published"
+      ? active
+        ? `<button class="btn" type="button" data-sales-playbook-pause="${escapeHtml(activation.id)}">停用当前打法</button>`
+        : `<button class="btn primary" type="button" data-sales-playbook-activate="${escapeHtml(item.id)}">应用到我的 Agent</button>`
+      : "";
+    const usage = activation
+      ? `<span class="sales-playbook-usage ${active ? "active" : ""}"><b>${active ? "正在应用" : "已停用"}</b><small>应用 ${activation.applicationCount} 次 · 生成待办 ${activation.taskCount} 个${activation.lastUsedAt ? ` · 最近 ${escapeHtml(formatDateTime(activation.lastUsedAt))}` : ""}</small></span>`
+      : `<span></span>`;
+    return `<article class="sales-distillation-card">
+      <header class="sales-card-head"><div class="sales-person"><span class="sales-person-avatar">${escapeHtml(item.sourceUserName.slice(0, 1))}</span><div><h3>${escapeHtml(item.sourceUserName)}</h3><p>${escapeHtml(roleLabel[state.salesDistillationSources.find((source) => source.id === item.sourceUserId)?.role || "sales"])} · ${escapeHtml(item.maturity ? salesTrainingMaturityLabel(item.maturity) : "历史能力")} · ${item.sampleCount || 0} 个样本</p></div></div><div class="sales-card-meta"><span class="badge ${active ? "blue" : "green"}">${active ? "当前能力" : statusText}</span><small>评测 ${item.evaluationScore || "-"} · ${escapeHtml(item.modelLabel)} · ${new Date(item.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</small></div></header>
+      <div class="sales-metric-grid">${metrics.map(([key, value]) => `<div class="sales-metric"><span>${salesDistillationMetricLabel(key)}</span><b>${key === "wonAmount" ? amount(Number(value)) : Number(value).toLocaleString("zh-CN")}</b></div>`).join("")}</div>
+      <div class="sales-card-columns"><section><div class="sales-section-title"><span>01</span><h4>优势模式</h4></div><ul>${item.patterns.map((pattern) => `<li>${escapeHtml(pattern)}</li>`).join("")}</ul></section><section><div class="sales-section-title"><span>02</span><h4>可复制打法</h4></div><div class="sales-playbook">${item.playbook.map((step) => `<div class="sales-playbook-row"><b>${escapeHtml(step.stage)}</b><p>${escapeHtml(step.action)}</p><small>依据：${escapeHtml(step.evidence)}</small></div>`).join("")}</div></section><section><div class="sales-section-title"><span>03</span><h4>下一步训练</h4></div><ol>${item.coachingActions.map((action) => `<li>${escapeHtml(action)}</li>`).join("")}</ol></section></div>
+      <footer class="sales-card-foot">${usage}<div class="head-actions">${publishButton}${applyButton}</div></footer>
+    </article>`;
+  }).join("");
+  qsa<HTMLButtonElement>("[data-sales-distillation-publish]", list).forEach((button) => button.addEventListener("click", () => void publishSalesDistillationFromUi(button.dataset.salesDistillationPublish || "", button)));
+  qsa<HTMLButtonElement>("[data-sales-playbook-activate]", list).forEach((button) => button.addEventListener("click", () => void activateSalesPlaybookFromUi(button.dataset.salesPlaybookActivate || "", button)));
+  qsa<HTMLButtonElement>("[data-sales-playbook-pause]", list).forEach((button) => button.addEventListener("click", () => void pauseSalesPlaybookFromUi(button.dataset.salesPlaybookPause || "", button)));
+}
+
+async function loadSalesDistillationWorkspace() {
+  try {
+    const [sources, distillations, training] = await Promise.all([
+      api<{ sources: SalesDistillationSource[] }>("/api/agent/sales-distillation/sources"),
+      api<{ distillations: SalesDistillation[]; activations: SalesPlaybookActivation[] }>("/api/agent/sales-distillation"),
+      api<{ runs: SalesTrainingRun[] }>("/api/agent/sales-training")
+    ]);
+    state.salesDistillationSources = sources.sources || [];
+    state.salesDistillations = distillations.distillations || [];
+    state.salesPlaybookActivations = distillations.activations || [];
+    state.salesTrainingRuns = training.runs || [];
+    renderSalesDistillation();
+    syncSalesTrainingPolling();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "销售训练中心加载失败", "error");
+  }
+}
+
+function syncSalesTrainingPolling() {
+  const active = state.salesTrainingRuns.some((item) => ["queued", "collecting", "cleaning", "labeling", "training", "evaluating"].includes(item.status));
+  if (!active) {
+    if (salesTrainingPollTimer) window.clearInterval(salesTrainingPollTimer);
+    salesTrainingPollTimer = 0;
+    return;
+  }
+  if (!salesTrainingPollTimer) salesTrainingPollTimer = window.setInterval(() => {
+    if (qs<HTMLElement>("#sales-distillation")?.classList.contains("active")) void loadSalesDistillationWorkspace();
+  }, 1_500);
+}
+
+async function createSalesDistillationFromUi(button: HTMLButtonElement) {
+  const sourceUserId = qs<HTMLSelectElement>("#salesDistillationSource")?.value || state.user?.id || "";
+  const periodDays = Number(qs<HTMLSelectElement>("#salesDistillationPeriod")?.value || 90);
+  if (!sourceUserId) {
+    toast("当前账号没有可训练的业务员数据", "error");
+    return;
+  }
+  state.salesDistillationLoading = true;
+  button.disabled = true;
+  button.textContent = "正在创建";
+  try {
+    const result = await api<{ run: SalesTrainingRun }>("/api/agent/sales-training", { method: "POST", body: JSON.stringify({ sourceUserId, periodDays }) });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    selectedSalesTrainingRunId = result.run.id;
+    renderSalesDistillation();
+    syncSalesTrainingPolling();
+    toast(`${result.run.sourceUserName} 的训练任务已启动`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "创建训练任务失败", "error");
+  } finally {
+    state.salesDistillationLoading = false;
+    button.disabled = false;
+    button.textContent = "开始训练";
+  }
+}
+
+async function controlSalesTrainingFromUi(action: "pause" | "resume" | "cancel") {
+  if (!selectedSalesTrainingRunId) return;
+  try {
+    const result = await api<{ run: SalesTrainingRun }>(`/api/agent/sales-training/${encodeURIComponent(selectedSalesTrainingRunId)}/${action}`, { method: "POST" });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    renderSalesDistillation();
+    syncSalesTrainingPolling();
+    toast(action === "pause" ? "训练已暂停" : action === "resume" ? "训练已继续" : "训练已取消");
+  } catch (error) { toast(error instanceof Error ? error.message : "训练控制失败", "error"); }
+}
+
+async function updateSalesTrainingSampleFromUi(sampleId: string, body: { label?: SalesTrainingSampleLabel; included?: boolean }) {
+  if (!selectedSalesTrainingRunId || !sampleId) return;
+  try {
+    const result = await api<{ run: SalesTrainingRun }>(`/api/agent/sales-training/${encodeURIComponent(selectedSalesTrainingRunId)}/samples/${encodeURIComponent(sampleId)}`, { method: "PATCH", body: JSON.stringify(body) });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    renderSalesDistillation();
+  } catch (error) { toast(error instanceof Error ? error.message : "样本复核失败", "error"); }
+}
+
+async function publishSalesTrainingFromUi() {
+  if (!selectedSalesTrainingRunId) return;
+  try {
+    const result = await api<{ run: SalesTrainingRun; distillation: SalesDistillation }>(`/api/agent/sales-training/${encodeURIComponent(selectedSalesTrainingRunId)}/publish`, { method: "POST" });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    state.salesDistillations = [result.distillation, ...state.salesDistillations.filter((item) => item.id !== result.distillation.id)];
+    renderSalesDistillation();
+    toast(`${result.run.sourceUserName} 的第 ${result.run.version} 版能力已发布`);
+  } catch (error) { toast(error instanceof Error ? error.message : "能力发布失败", "error"); }
+}
+
+async function retrainSalesTrainingFromUi() {
+  if (!selectedSalesTrainingRunId) return;
+  try {
+    const result = await api<{ run: SalesTrainingRun }>(`/api/agent/sales-training/${encodeURIComponent(selectedSalesTrainingRunId)}/retrain`, { method: "POST" });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    selectedSalesTrainingRunId = result.run.id;
+    renderSalesDistillation();
+    syncSalesTrainingPolling();
+    toast(`第 ${result.run.version} 版训练已启动`);
+  } catch (error) { toast(error instanceof Error ? error.message : "创建再训练版本失败", "error"); }
+}
+
+async function publishSalesDistillationFromUi(id: string, button: HTMLButtonElement) {
+  if (!id) return;
+  button.disabled = true;
+  try {
+    const result = await api<{ distillation: SalesDistillation }>(`/api/agent/sales-distillation/${encodeURIComponent(id)}/publish`, { method: "POST" });
+    state.salesDistillations = state.salesDistillations.map((item) => item.id === id ? result.distillation : item);
+    renderSalesDistillation();
+    toast("已发布为团队可复用打法");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "发布失败", "error");
+    button.disabled = false;
+  }
+}
+
+async function activateSalesPlaybookFromUi(id: string, button: HTMLButtonElement) {
+  if (!id) return;
+  button.disabled = true;
+  try {
+    const result = await api<{ activation: SalesPlaybookActivation; activations: SalesPlaybookActivation[] }>(`/api/agent/sales-distillation/${encodeURIComponent(id)}/activate`, { method: "POST" });
+    state.salesPlaybookActivations = result.activations || [result.activation];
+    renderSalesDistillation();
+    renderAgent(state.agentRun);
+    toast("已应用到你的 Agent 和客户守护");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "应用打法失败", "error");
+    button.disabled = false;
+  }
+}
+
+async function pauseSalesPlaybookFromUi(id: string, button: HTMLButtonElement) {
+  if (!id) return;
+  button.disabled = true;
+  try {
+    const result = await api<{ activation: SalesPlaybookActivation; activations: SalesPlaybookActivation[] }>(`/api/agent/sales-distillation/activations/${encodeURIComponent(id)}/pause`, { method: "POST" });
+    state.salesPlaybookActivations = result.activations || [result.activation];
+    renderSalesDistillation();
+    renderAgent(state.agentRun);
+    toast("当前蒸馏打法已停用");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "停用打法失败", "error");
+    button.disabled = false;
+  }
+}
+
+async function loadAgentRuns() {
+  try {
+    const conversationId = ensureAgentConversationId();
+    const [result, sequenceResult, maintenanceResult, playbookResult] = await Promise.all([
+      api<{ runs: AgentRun[] }>(`/api/agent/runs?limit=50&conversationId=${encodeURIComponent(conversationId)}`),
+      api<{ sequences: OutreachSequence[] }>("/api/agent/outreach-sequences?limit=20"),
+      api<{ watches: CustomerMaintenanceWatch[] }>("/api/agent/customer-maintenance?limit=20"),
+      api<{ distillations: SalesDistillation[]; activations: SalesPlaybookActivation[] }>("/api/agent/sales-distillation")
+    ]);
+    state.agentRuns = result.runs;
+    state.outreachSequences = sequenceResult.sequences;
+    state.customerMaintenanceWatches = maintenanceResult.watches;
+    state.salesDistillations = playbookResult.distillations || [];
+    state.salesPlaybookActivations = playbookResult.activations || [];
+    state.agentRun = result.runs[0] || null;
+    state.agentMissionCheckpoints = [];
+    state.agentCheckpointRunId = "";
+    renderAgent(state.agentRun);
+    if (state.agentRun) void loadAgentCheckpoints(state.agentRun.id);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "Agent 历史加载失败", "error");
+  }
+}
+
+function renderAgentConversations() {
+  const list = qs<HTMLElement>("#agentConversationList");
+  if (!list) return;
+  list.innerHTML = state.agentConversations.length
+    ? state.agentConversations.slice(0, 12).map((item) => `<button type="button" class="agent-conversation-item${item.id === agentConversationId ? " active" : ""}" data-agent-conversation="${escapeHtml(item.id)}"><span>${escapeHtml(item.title)}</span><small>${item.turnCount} 轮 · ${new Date(item.updatedAt).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" })}</small></button>`).join("")
+    : `<div class="agent-conversation-empty">暂无历史对话</div>`;
+  qsa<HTMLButtonElement>("[data-agent-conversation]", list).forEach((button) => button.addEventListener("click", () => {
+    agentConversationId = button.dataset.agentConversation || newAgentConversationId();
+    ensureAgentConversationId();
+    state.agentRun = null;
+    state.agentRuns = [];
+    appliedAgentUiSteps.clear();
+    renderAgent(null);
+    renderAgentConversations();
+    void loadAgentRuns();
+  }));
+}
+
+async function loadAgentConversations() {
+  try {
+    const result = await api<{ conversations: AgentConversation[] }>("/api/agent/conversations?limit=30");
+    state.agentConversations = result.conversations || [];
+    renderAgentConversations();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "Agent 对话历史加载失败", "error");
+  }
+}
+
+async function loadAgentRun(runId: string) {
+  if (!runId || state.agentLoading) return;
+  await refreshAgentRun(runId, false);
+}
+
+async function refreshAgentRun(runId: string, quiet: boolean) {
+  if (!runId || (!quiet && state.agentLoading)) return;
+  try {
+    const [result, sequenceResult, maintenanceResult, playbookResult] = await Promise.all([
+      api<{ run: AgentRun }>(`/api/agent/runs/${encodeURIComponent(runId)}`),
+      api<{ sequences: OutreachSequence[] }>("/api/agent/outreach-sequences?limit=20"),
+      api<{ watches: CustomerMaintenanceWatch[] }>("/api/agent/customer-maintenance?limit=20"),
+      api<{ distillations: SalesDistillation[]; activations: SalesPlaybookActivation[] }>("/api/agent/sales-distillation")
+    ]);
+    state.agentRun = result.run;
+    state.outreachSequences = sequenceResult.sequences;
+    state.customerMaintenanceWatches = maintenanceResult.watches;
+    state.salesDistillations = playbookResult.distillations || [];
+    state.salesPlaybookActivations = playbookResult.activations || [];
+    state.agentRuns = [result.run, ...state.agentRuns.filter((item) => item.id !== result.run.id)];
+    renderAgent(result.run);
+    void loadAgentCheckpoints(result.run.id);
+  } catch (error) {
+    if (!quiet) toast(error instanceof Error ? error.message : "Agent 运行记录加载失败", "error");
+  }
+}
+
+async function controlOutreachSequenceFromUi(id: string, action: "pause" | "resume" | "cancel") {
+  if (!id) return;
+  try {
+    const result = await api<{ sequence: OutreachSequence }>(`/api/agent/outreach-sequences/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+    state.outreachSequences = [result.sequence, ...state.outreachSequences.filter((item) => item.id !== result.sequence.id)];
+    renderOutreachSequences(state.agentRun);
+    toast(action === "pause" ? "自动触达已暂停" : action === "resume" ? "自动触达已继续" : "自动触达已取消");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "自动触达控制失败", "error");
+  }
+}
+
+async function controlCustomerMaintenanceFromUi(id: string, action: "pause" | "resume" | "cancel") {
+  if (!id) return;
+  try {
+    const result = await api<{ watch: CustomerMaintenanceWatch }>(`/api/agent/customer-maintenance/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+    state.customerMaintenanceWatches = [result.watch, ...state.customerMaintenanceWatches.filter((item) => item.id !== result.watch.id)];
+    renderCustomerMaintenanceWatches(state.agentRun);
+    toast(action === "pause" ? "客户守护已暂停" : action === "resume" ? "客户守护已继续" : "客户守护已取消");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "客户守护控制失败", "error");
+  }
+}
+
+async function executeAgentStepFromUi(stepId: string, approved: boolean) {
+  if (!state.agentRun || !stepId || state.agentLoading) return;
+  const step = state.agentRun.steps.find((item) => item.id === stepId);
+  if (!step) return;
+  state.agentLoading = true;
+  renderAgent(state.agentRun);
+  try {
+    const result = await api<{ run: AgentRun }>("/api/agent/execute", {
+      method: "POST",
+      body: JSON.stringify({ runId: state.agentRun.id, stepId, signature: step.signature, approved })
+    });
+    state.agentRun = result.run;
+    state.agentRuns = [result.run, ...state.agentRuns.filter((item) => item.id !== result.run.id)];
+    renderAgent(state.agentRun);
+    void loadAgentCheckpoints(result.run.id);
+    toast(result.run.steps.find((item) => item.id === stepId)?.status === "queued" ? "已批准，Agent 将在后台执行" : "Agent 步骤已完成");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "Agent 步骤执行失败", "error");
+  } finally {
+    state.agentLoading = false;
+    renderAgent(state.agentRun);
+  }
+}
+
+async function approveAllExternalAgentSteps() {
+  const steps = state.agentRun?.steps.filter((step) => step.status === "needs_confirmation" && step.risk === "external") || [];
+  if (!steps.length) return;
+  const confirmed = window.confirm(`确认批准以下 ${steps.length} 个外部动作？\n\n${steps.map((step, index) => `${index + 1}. ${step.title}`).join("\n")}`);
+  if (!confirmed) return;
+  for (const step of steps) {
+    await executeAgentStepFromUi(step.id, true);
+  }
+}
+
+async function controlAgentMission(action: "pause" | "resume" | "cancel", resumeMessage = "继续执行，保持原目标和完成标准") {
+  if (!state.agentRun || state.agentLoading) return;
+  state.agentLoading = true;
+  renderAgent(state.agentRun);
+  try {
+    const result = await api<{ run: AgentRun }>(`/api/agent/missions/${encodeURIComponent(state.agentRun.id)}/${action}`, {
+      method: "POST",
+      body: action === "resume" ? JSON.stringify({ message: resumeMessage }) : undefined
+    });
+    state.agentRun = result.run;
+    state.agentRuns = [result.run, ...state.agentRuns.filter((item) => item.id !== result.run.id)];
+    void loadAgentCheckpoints(result.run.id);
+    toast(action === "pause" ? "Mission 已暂停" : action === "resume" ? "Mission 已恢复" : "Mission 已取消");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "Mission 控制失败", "error");
+  } finally {
+    state.agentLoading = false;
+    renderAgent(state.agentRun);
+  }
+}
+
+async function createAgentPlan() {
+  const input = qs<HTMLTextAreaElement>("#agentGoalInput");
+  const goal = input?.value.trim() || "";
+  if (goal.length < 2) {
+    toast("请先输入 Agent 目标", "error");
+    input?.focus();
+    return;
+  }
+  const button = qs<HTMLButtonElement>("#agentPlanButton");
+  state.agentLoading = true;
+  agentPendingGoal = goal;
+  agentPendingProgress = [{
+    phase: "understanding",
+    requestKind: "conversation",
+    message: "正在理解你的目标和当前业务上下文",
+    detail: "先判断你希望获取信息，还是让我直接完成一项工作"
+  }];
+  if (input) input.value = "";
+  renderAgentConversation();
+  if (button) { button.disabled = true; button.textContent = "思考中"; }
+  try {
+    const waitForPresentation = (milliseconds: number) => new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+    let progressPresentation = waitForPresentation(360);
+    const queuedProgress = new Set(agentPendingProgress.map((item) => `${item.phase}:${item.message}:${item.detail}`));
+    const presentProgress = (progress: AgentPlanningProgress) => {
+      const key = `${progress.phase}:${progress.message}:${progress.detail}`;
+      if (queuedProgress.has(key)) return;
+      queuedProgress.add(key);
+      progressPresentation = progressPresentation.then(async () => {
+        agentPendingProgress.push(progress);
+        if (agentPendingProgress.length > 9) agentPendingProgress.splice(0, agentPendingProgress.length - 9);
+        renderAgentConversation();
+        await waitForPresentation(progress.phase === "ready" ? 160 : 340);
+      });
+    };
+    const result = await streamAgentPlan(goal, {
+      conversationId: ensureAgentConversationId(),
+      activeView: agentOriginView,
+      selectedCustomerId: state.selectedCustomerId || undefined,
+      selectedLeadId: state.selectedLeadId || undefined,
+      selectedCustomerIds: state.selectedCustomerIds
+    }, presentProgress);
+    await progressPresentation;
+    agentPendingGoal = "";
+    agentPendingProgress = [];
+    state.agentRun = result.run;
+    state.agentRuns = [result.run, ...state.agentRuns.filter((item) => item.id !== result.run.id)];
+    state.agentMissionCheckpoints = [];
+    state.agentCheckpointRunId = "";
+    void loadAgentConversations();
+    renderAgent(state.agentRun);
+    void loadAgentCheckpoints(result.run.id);
+    toast(result.run.status === "waiting_user" ? "Mission 等待你补充信息" : "Mission 已启动，将在后台持续执行");
+  } catch (error) {
+    agentPendingGoal = "";
+    agentPendingProgress = [];
+    if (input && !input.value) input.value = goal;
+    toast(error instanceof Error ? error.message : "Agent 计划生成失败", "error");
+  } finally {
+    state.agentLoading = false;
+    if (button) { button.disabled = false; button.textContent = "发送"; }
+    renderAgent(state.agentRun);
+  }
+}
+
+async function streamAgentPlan(
+  goal: string,
+  context: Record<string, unknown>,
+  onProgress: (progress: AgentPlanningProgress) => void
+): Promise<{ run: AgentRun }> {
+  const csrfToken = cookieValue("gj_csrf");
+  const response = await fetch("/api/agent/plan/stream", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "content-type": "application/json",
+      ...(csrfToken ? { "x-csrf-token": csrfToken } : {})
+    },
+    body: JSON.stringify({ goal, context })
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({ message: "Agent 任务理解失败" }));
+    throw new Error(body.message || "Agent 任务理解失败");
+  }
+  if (!response.body) throw new Error("当前浏览器不支持 Agent 流式响应");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const streamState: { completed?: { run: AgentRun }; error?: string } = {};
+  const consume = (block: string) => {
+    const eventName = block.split("\n").find((line) => line.startsWith("event:"))?.slice(6).trim() || "message";
+    const dataText = block.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+    if (!dataText) return;
+    const payload = JSON.parse(dataText) as AgentPlanningProgress | { run: AgentRun } | { message: string };
+    if (eventName === "progress") onProgress(payload as AgentPlanningProgress);
+    if (eventName === "complete") streamState.completed = payload as { run: AgentRun };
+    if (eventName === "error") streamState.error = (payload as { message: string }).message || "Agent 任务理解失败";
+  };
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done }).replace(/\r\n/gu, "\n");
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      consume(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf("\n\n");
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) consume(buffer.trim());
+  if (streamState.error) throw new Error(streamState.error);
+  if (!streamState.completed) throw new Error("Agent 流式响应未返回执行任务");
+  return streamState.completed;
+}
+
 function ensureUiLayer() {
   if (!qs(".toast-stack")) {
     document.body.insertAdjacentHTML("beforeend", `<div class="toast-stack" aria-live="polite"></div>`);
@@ -2004,7 +4595,7 @@ function toast(message: string, type: "ok" | "error" = "ok") {
 
 function openModal(title: string, body: string, foot: string) {
   ensureUiLayer();
-  qs<HTMLElement>("#appModal .modal")?.classList.remove("customs-workspace-modal");
+  qs<HTMLElement>("#appModal .modal")?.classList.remove("customs-workspace-modal", "agent-memory-modal", "agent-knowledge-modal");
   qs("#modalTitle")!.textContent = title;
   qs("#modalBody")!.innerHTML = body;
   qs("#modalFoot")!.innerHTML = foot;
@@ -2050,12 +4641,12 @@ async function loginWithPassword(email: string, password: string) {
   applyAuthedUser(result.user);
   document.body.classList.add("is-authenticated");
   await refreshAll(result.user);
-  toast(`已登录：${result.user.name}`);
 }
 
 function applyAuthedUser(user: User) {
   const profileName = `${user.name} / ${roleLabel[user.role]}`;
   document.body.dataset.role = user.role;
+  syncWorkspaceAccess(user);
   qs("#scopeUser")!.textContent = profileName;
   qs("#scopeText")!.textContent = user.role === "sales" ? "仅本人业务与本人待办" : user.role === "manager" ? "本团队业务数据，本人待办私有" : user.role === "admin" ? "本团队业务数据、团队账号管理，本人待办私有" : "全局业务数据、最高账号权限，本人待办私有";
   qs("#currentAvatar")!.textContent = user.avatar;
@@ -2069,6 +4660,28 @@ function applyAuthedUser(user: User) {
 
 function canManageTrainingUi(user = state.user) {
   return user?.role === "manager" || user?.role === "admin" || user?.role === "super_admin";
+}
+
+function canAccessWorkspaceView(view: string, user = state.user) {
+  if (view === "database-maintenance") return user?.role === "admin" || user?.role === "super_admin";
+  return !(user?.role === "sales" && view === "settings");
+}
+
+function syncWorkspaceAccess(user = state.user) {
+  const settingsRestricted = !canAccessWorkspaceView("settings", user);
+  const databaseMaintenanceRestricted = !canAccessWorkspaceView("database-maintenance", user);
+  qsa<HTMLElement>('[data-view="settings"]').forEach((node) => { node.hidden = settingsRestricted; });
+  qsa<HTMLElement>('[data-view="database-maintenance"]').forEach((node) => { node.hidden = databaseMaintenanceRestricted; });
+  if (settingsRestricted) {
+    openWorkspaceTabs = openWorkspaceTabs.filter((view) => view !== "settings");
+    workspaceTabHistory = workspaceTabHistory.filter((view) => view !== "settings");
+    if (qs<HTMLElement>("#settings")?.classList.contains("active")) activateNavView("dashboard");
+  }
+  if (databaseMaintenanceRestricted) {
+    openWorkspaceTabs = openWorkspaceTabs.filter((view) => view !== "database-maintenance");
+    workspaceTabHistory = workspaceTabHistory.filter((view) => view !== "database-maintenance");
+    if (qs<HTMLElement>("#database-maintenance")?.classList.contains("active")) activateNavView("dashboard");
+  }
 }
 
 function syncTrainingManagementUi(user = state.user) {
@@ -2155,7 +4768,7 @@ function renderProfile(user = state.user) {
   const smtpSecure = qs<HTMLSelectElement>("#profileSmtpSecure");
   if (smtpSecure) smtpSecure.value = String(user.smtpSecure ?? true);
   if (status) status.innerHTML = user.outboundEmail ? `${badge("已绑定", "green")} ${escapeHtml(user.outboundEmail)}` : `${badge("未绑定", "amber")} 请先绑定发件邮箱`;
-  if (signatureStatus) signatureStatus.innerHTML = user.emailSignature?.trim() ? `${badge("已设置", "green")} ${escapeHtml((user.emailSignature.split("\n")[0] || "签名已维护").slice(0, 36))}` : `${badge("待完善", "amber")} 建议补充英文签名`;
+  if (signatureStatus) signatureStatus.innerHTML = user.emailSignature?.trim() ? `${badge("已设置", "green")} ${escapeHtml((user.emailSignature.split("\n")[0] || "签名已维护").slice(0, 36))}` : badge("待完善", "amber");
   const smtpStatus = qs<HTMLElement>("#profileSmtpStatus");
   if (smtpStatus) smtpStatus.innerHTML = user.smtpHost && user.smtpUser && user.hasSmtpPassword ? `${badge("已配置", "green")} ${escapeHtml(user.smtpHost)}` : `${badge("未完整", "amber")} 填写SMTP后才能真实发信`;
   updateProfileSmtpHints(user);
@@ -2315,9 +4928,10 @@ async function sendDevelopmentEmail(button?: HTMLButtonElement) {
 
 async function refreshAll(user: User) {
   renderDashboardCache(user);
-  const [summary, customers, leadsResp, leadTrashResp, todos, deals, reminders, jobs, tradeDocs, wecom, knowledge, exams, ocr, websiteOps, prospectAssignees, aiConfig, problems, memos, deletedMemos, planTasks, planTemplates, competitors, caseStudies, commissionProducts, commissionRecords, commissionCalculations] = await Promise.all([
+  const [summary, customers, publicCustomers, leadsResp, leadTrashResp, todos, deals, reminders, jobs, tradeDocs, wecom, knowledge, exams, ocr, websiteOps, prospectAssignees, aiConfig, problems, memos, deletedMemos, planTasks, planTemplates, competitors, caseStudies, commissionProducts, commissionRecords, commissionCalculations] = await Promise.all([
     api<DashboardSummary>("/api/dashboard/summary"),
-    api<{ customers: Customer[] }>("/api/customers"),
+    api<{ customers: Customer[]; mineCount: number; publicCount: number }>("/api/customers"),
+    api<{ customers: Customer[]; mineCount: number; publicCount: number }>("/api/customers?scope=public"),
     api<{ leads: Lead[] }>("/api/leads"),
     api<{ leads: Lead[] }>("/api/leads?trash=true"),
     api<{ todos: Todo[] }>("/api/todos"),
@@ -2346,6 +4960,8 @@ async function refreshAll(user: User) {
   state.user = user;
   state.summary = summary;
   state.customers = customers.customers;
+  state.publicCustomers = publicCustomers.customers;
+  state.customerPoolCounts = { mineCount: customers.mineCount, publicCount: publicCustomers.publicCount };
   state.leads = leadsResp.leads;
   state.leadTrash = leadTrashResp.leads;
   state.todos = todos.todos;
@@ -2395,6 +5011,7 @@ async function refreshAll(user: User) {
   writeDashboardCache(user, summary, todos.todos, customers.customers);
   renderDashboard(summary, todos.todos, customers.customers);
   renderCustomers(customers.customers);
+  renderCustomerPool();
   renderLeads();
   renderPipeline(deals.deals);
   void refreshClosedDeals();
@@ -2415,6 +5032,9 @@ async function refreshAll(user: User) {
   await renderAccounts(user);
   renderOcr(ocr.job);
   renderAiConfig(state.aiConfig);
+  renderAgent(state.agentRun);
+  void loadAgentRuns();
+  void loadAgentConversations();
   renderWebsiteOpportunities(state.websiteOpportunities);
   renderLeadFinder(state.websiteOpportunities);
   renderProspectList();
@@ -2428,7 +5048,6 @@ async function refreshAll(user: User) {
   void loadProspectSchedules(true);
   void loadIdentityConflicts(true);
   void loadProspectRuns(true);
-  void reloadWhatsAppThreads();
 }
 
 async function loadLeadProviders() {
@@ -2442,6 +5061,9 @@ async function loadLeadProviders() {
         .map((item) => item.id);
     }
     renderLeadSourceChips();
+    renderSuperWebSearchOption();
+    renderSuperMapSearchOption();
+    renderSuperAiDiscoveryOption();
     renderLeadFinderJobs();
   } catch {
     // 数据源加载失败时保留兜底提示，不影响主流程
@@ -3391,379 +6013,457 @@ function resetLeadFilters() {
   renderLeads();
 }
 
-// ===================== WhatsApp 聊天中心 =====================
+// ===================== WhatsApp 会话工作台 =====================
+type WhatsAppCustomerSummary = { id: string; company: string; country: string; contact: string };
+type WhatsAppBindingMode = "manual" | "twilio-api" | "web-scan";
+
 function waInitials(name: string) {
-  const s = (name || "?").trim();
-  return s ? s.slice(0, 2).toUpperCase() : "?";
+  const value = (name || "?").trim();
+  return value ? value.slice(0, 2).toUpperCase() : "?";
 }
 
-function waFormatTime(iso: string) {
+function waFormatTime(iso: string, compact = false) {
   if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const today = new Date();
+  const sameDay = date.toDateString() === today.toDateString();
+  if (compact && sameDay) return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return date.toLocaleString("zh-CN", compact
+    ? { month: "2-digit", day: "2-digit" }
+    : { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-/** 号码 → wa.me 深链(仅保留数字，去掉+/空格/横线)。空号码返回空串。 */
 function waMeLink(phone: string) {
   const digits = (phone || "").replace(/[^0-9]/g, "");
   return digits.length >= 6 ? `https://wa.me/${digits}` : "";
 }
 
-function renderWhatsAppThreads() {
-  const listEl = qs<HTMLElement>("#waThreadList");
-  if (!listEl) return;
-  const q = state.waThreadSearch.trim().toLowerCase();
-  const threads = state.whatsappThreads.filter((t) =>
-    !q || t.company.toLowerCase().includes(q) || (t.country || "").toLowerCase().includes(q) || (t.contact || "").toLowerCase().includes(q)
-  );
-  if (!threads.length) {
-    listEl.innerHTML = `<div class="wa-empty" style="height:auto;padding:24px">${state.whatsappThreads.length ? "无匹配客户" : "暂无 WhatsApp 会话，去客户/线索页发起对话"}</div>`;
-    return;
-  }
-  listEl.innerHTML = threads.map((t) => `
-    <div class="wa-thread ${t.customerId === state.selectedWaCustomerId ? "active" : ""}" data-wa-customer="${t.customerId}">
-      <span class="wa-avatar">${waInitials(t.company)}</span>
-      <div class="wa-thread-main">
-        <b>${escapeHtml(t.company)}</b>
-        <span>${escapeHtml(t.lastMessage || t.phoneNumber || "—")}</span>
-      </div>
-      ${t.unreadCount > 0 ? `<span class="wa-unread">${t.unreadCount}</span>` : ""}
-    </div>`).join("");
-  qsa<HTMLElement>(".wa-thread", listEl).forEach((el) => {
-    el.addEventListener("click", () => void openWhatsAppThread(el.dataset.waCustomer || ""));
-  });
+function waStatusLabel(status: string) {
+  return status === "read" ? "已读"
+    : status === "delivered" ? "已送达"
+      : status === "failed" ? "发送失败"
+        : status === "recorded" ? "已记录"
+          : status === "sent" ? "已发送" : status;
 }
 
-async function openWhatsAppThread(customerId: string) {
+function updateWhatsAppStatus() {
+  const unread = state.whatsappThreads.reduce((sum, item) => sum + Number(item.unreadCount || 0), 0);
+  const navUnread = qs<HTMLElement>("#waNavUnread");
+  if (navUnread) {
+    navUnread.hidden = unread === 0;
+    navUnread.textContent = unread > 99 ? "99+" : String(unread);
+  }
+  const status = qs<HTMLElement>("#waChannelStatus");
+  if (!status) return;
+  const officialReady = Boolean(state.whatsappModes?.twilioApi.available);
+  status.classList.toggle("is-ready", officialReady);
+  const label = qs<HTMLElement>("span", status);
+  if (label) label.textContent = officialReady ? "官方通道已连接" : "人工同步";
+}
+
+function renderWhatsAppThreads() {
+  const list = qs<HTMLElement>("#waThreadList");
+  if (!list) return;
+  const keyword = state.waThreadSearch.trim().toLowerCase();
+  const threads = state.whatsappThreads.filter((item) => {
+    const haystack = [item.company, item.country, item.contact, item.phoneNumber, item.lastMessage].join(" ").toLowerCase();
+    return !keyword || haystack.includes(keyword);
+  });
+  if (!threads.length) {
+    list.innerHTML = `<div class="wa-empty"><b>${state.whatsappThreads.length ? "没有匹配会话" : "暂无会话"}</b><span>${state.whatsappThreads.length ? "" : "点击新会话选择客户"}</span></div>`;
+    updateWhatsAppStatus();
+    return;
+  }
+  list.innerHTML = threads.map((item) => `
+    <button class="wa-thread ${item.customerId === state.selectedWaCustomerId ? "active" : ""}" data-wa-customer="${escapeHtml(item.customerId)}" type="button">
+      <span class="wa-avatar">${escapeHtml(waInitials(item.company))}</span>
+      <span class="wa-thread-main">
+        <span class="wa-thread-line"><b>${escapeHtml(item.company)}</b><time>${escapeHtml(waFormatTime(item.lastMessageAt, true))}</time></span>
+        <span>${escapeHtml(item.lastMessage || item.phoneNumber || item.contact || "暂无消息")}</span>
+      </span>
+      ${item.unreadCount ? `<span class="wa-unread">${Math.min(item.unreadCount, 99)}</span>` : ""}
+    </button>`).join("");
+  qsa<HTMLButtonElement>("[data-wa-customer]", list).forEach((button) => {
+    button.addEventListener("click", () => void openWhatsAppThread(button.dataset.waCustomer || ""));
+  });
+  updateWhatsAppStatus();
+}
+
+function openWhatsAppCustomerPicker() {
+  const renderList = (keyword = "") => {
+    const list = qs<HTMLElement>("#waCustomerPickerList");
+    if (!list) return;
+    const query = keyword.trim().toLowerCase();
+    const customers = state.customers.filter((customer) =>
+      !query || [customer.company, customer.contact, customer.country].join(" ").toLowerCase().includes(query)
+    );
+    list.innerHTML = customers.length ? customers.map((customer) => `
+      <button class="customer-picker-row" type="button" data-wa-pick-customer="${escapeHtml(customer.id)}">
+        <span class="wa-avatar">${escapeHtml(waInitials(customer.company))}</span>
+        <span><b>${escapeHtml(customer.company)}</b><small>${escapeHtml([customer.contact, customer.country].filter(Boolean).join(" · ") || "客户资料")}</small></span>
+      </button>`).join("") : `<div class="empty-cell">没有匹配客户</div>`;
+    qsa<HTMLButtonElement>("[data-wa-pick-customer]", list).forEach((button) => {
+      button.addEventListener("click", () => {
+        const customerId = button.dataset.waPickCustomer || "";
+        closeModal();
+        void openWhatsAppThread(customerId);
+      });
+    });
+  };
+  openModal("新建 WhatsApp 会话", `
+    <div class="form-field"><label>客户</label><input id="waCustomerPickerSearch" placeholder="搜索客户或联系人"></div>
+    <div class="customer-picker-list" id="waCustomerPickerList"></div>
+  `, `<button class="btn" data-modal-close>关闭</button>`);
+  renderList();
+  qs<HTMLInputElement>("#waCustomerPickerSearch")?.addEventListener("input", (event) => renderList((event.currentTarget as HTMLInputElement).value));
+}
+
+async function openWhatsAppThread(customerId: string, quiet = false) {
   if (!customerId) return;
   state.selectedWaCustomerId = customerId;
   renderWhatsAppThreads();
-  const chatCol = qs<HTMLElement>("#waChatCol");
-  if (chatCol) chatCol.innerHTML = `<div class="wa-empty">加载中…</div>`;
+  const layout = qs<HTMLElement>("#whatsapp .wa-layout");
+  layout?.classList.add("wa-mobile-chat-open");
+  qs<HTMLElement>("#waInfoCol")?.classList.remove("is-open");
+  const chat = qs<HTMLElement>("#waChatCol");
+  if (chat && !quiet) chat.innerHTML = `<div class="wa-empty"><b>正在读取会话</b></div>`;
   try {
-    const data = await api<{ binding: WhatsAppBinding | null; messages: WhatsAppMessage[]; customer: { id: string; company: string; country: string; contact: string } }>(`/api/whatsapp/customers/${customerId}/messages`);
+    const data = await api<{ binding: WhatsAppBinding | null; messages: WhatsAppMessage[]; canManage: boolean; customer: WhatsAppCustomerSummary }>(`/api/whatsapp/customers/${encodeURIComponent(customerId)}/messages`);
     state.whatsappMessages = data.messages;
     state.whatsappBinding = data.binding;
-    renderWhatsAppChat(data.customer, data.binding, data.messages);
-    renderWhatsAppInfo(data.customer, data.binding);
+    renderWhatsAppChat(data.customer, data.binding, data.messages, data.canManage);
+    renderWhatsAppInfo(data.customer, data.binding, data.canManage);
+    const thread = state.whatsappThreads.find((item) => item.customerId === customerId);
+    if (thread?.unreadCount) {
+      thread.unreadCount = 0;
+      renderWhatsAppThreads();
+      void api(`/api/whatsapp/customers/${encodeURIComponent(customerId)}/read`, { method: "POST" }).catch(() => null);
+    }
   } catch (error) {
-    if (chatCol) chatCol.innerHTML = `<div class="wa-empty">加载失败：${escapeHtml(error instanceof Error ? error.message : "")}</div>`;
+    if (chat) chat.innerHTML = `<div class="wa-empty"><b>会话读取失败</b><span>${escapeHtml(error instanceof Error ? error.message : "请稍后重试")}</span></div>`;
   }
 }
 
-function renderWhatsAppChat(customer: { id: string; company: string; country: string; contact: string }, binding: WhatsAppBinding | null, messages: WhatsAppMessage[]) {
-  const chatCol = qs<HTMLElement>("#waChatCol");
-  if (!chatCol) return;
-  const bubbles = messages.map((m) => {
-    const isCn = /[一-鿿]/.test(m.content);
-    const translated = m.contentTranslated
-      ? `<span class="wa-translated">${escapeHtml(m.contentTranslated)}</span>`
-      : (!isCn && m.direction === "inbound" ? `<button class="wa-translate-btn" data-wa-translate="${m.id}">翻译成中文</button>` : "");
-    return `<div class="wa-msg ${m.direction === "inbound" ? "in" : "out"}" data-wa-msg="${m.id}">
-      ${escapeHtml(m.content)}
-      ${translated}
-      <span class="wa-time">${waFormatTime(m.createdAt)}${m.direction === "outbound" ? " · " + (m.status === "read" ? "已读" : m.status === "delivered" ? "已送达" : "已发送") : ""}</span>
+function renderWhatsAppChat(customer: WhatsAppCustomerSummary, binding: WhatsAppBinding | null, messages: WhatsAppMessage[], canManage: boolean) {
+  const chat = qs<HTMLElement>("#waChatCol");
+  if (!chat) return;
+  const bubbles = messages.map((message) => {
+    const isChinese = /[一-鿿]/.test(message.content);
+    const translated = message.contentTranslated
+      ? `<span class="wa-translated">${escapeHtml(message.contentTranslated)}</span>`
+      : (!isChinese && message.direction === "inbound" ? `<button class="wa-translate-btn" data-wa-translate="${escapeHtml(message.id)}" type="button">翻译</button>` : "");
+    return `<div class="wa-msg ${message.direction === "inbound" ? "in" : "out"} ${message.status === "failed" ? "is-failed" : ""}" data-wa-msg="${escapeHtml(message.id)}">
+      ${escapeHtml(message.content)}${translated}
+      <span class="wa-time">${escapeHtml(waFormatTime(message.createdAt))}${message.direction === "outbound" ? ` · ${escapeHtml(waStatusLabel(message.status))}` : ""}</span>
     </div>`;
   }).join("");
-
-  const waLink = waMeLink(binding?.phoneNumber || "");
-  chatCol.innerHTML = `
+  const mode = binding?.bindingMode || "manual";
+  const integrated = mode !== "manual";
+  const connected = mode === "twilio-api" || (mode === "web-scan" && binding?.connectionStatus === "connected");
+  const canCompose = canManage && Boolean(binding) && (!integrated || connected);
+  const customerRecord = state.customers.find((item) => item.id === customer.id);
+  const masterWhatsapp = customerRecord ? customerContactDetails(customerRecord).whatsapp : "";
+  const link = waMeLink(binding?.phoneNumber || masterWhatsapp);
+  chat.innerHTML = `
     <div class="wa-chat-head">
-      <span class="wa-avatar" style="width:36px;height:36px">${waInitials(customer.company)}</span>
-      <div><b>${escapeHtml(customer.company)}</b> <span>${escapeHtml(binding?.phoneNumber || "未绑定号码")}</span></div>
-      ${waLink ? `<a class="btn wa-open-link" href="${waLink}" target="_blank" rel="noopener" title="在 WhatsApp 中打开对话">在 WhatsApp 打开</a>` : ""}
+      <button class="wa-icon-button wa-mobile-back" id="waMobileBackButton" type="button" title="返回会话" aria-label="返回会话"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
+      <span class="wa-avatar">${escapeHtml(waInitials(customer.company))}</span>
+      <span class="wa-chat-title"><b>${escapeHtml(customer.company)}</b><span>${escapeHtml(binding?.phoneNumber || masterWhatsapp || "未绑定号码")}</span></span>
+      <span class="wa-chat-actions">
+        ${link ? `<a class="wa-icon-button wa-open-link" href="${link}" target="_blank" rel="noopener" title="在 WhatsApp 打开" aria-label="在 WhatsApp 打开"><svg viewBox="0 0 24 24"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 13v6H5V5h6"/></svg></a>` : ""}
+        <button class="wa-icon-button wa-mobile-info" id="waMobileInfoButton" type="button" title="客户与通道" aria-label="客户与通道"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg></button>
+      </span>
     </div>
-    <div class="wa-messages" id="waMessages">${bubbles || `<div class="wa-empty">暂无对话记录，在下方录入第一条</div>`}</div>
+    <div class="wa-messages" id="waMessages">${bubbles || `<div class="wa-empty"><b>暂无消息</b></div>`}</div>
     <div class="wa-compose">
-      <select id="waDirection"><option value="inbound">客户发来</option><option value="outbound">我方发送</option></select>
-      <input id="waContentInput" placeholder="录入一条对话内容(非中文将自动翻译)" />
-      <button class="btn primary" id="waSendButton">录入</button>
+      <select id="waDirection" ${integrated ? "disabled" : ""}>${integrated ? `<option value="outbound">发送消息</option>` : `<option value="inbound">收到消息</option><option value="outbound">发送消息</option>`}</select>
+      <textarea id="waContentInput" placeholder="${!canManage ? "仅客户负责人可发送" : binding ? (canCompose ? "输入消息" : "通道未连接") : "先完成号码绑定"}" ${canCompose ? "" : "disabled"}></textarea>
+      <button class="btn" id="waSendButton" type="button" ${canCompose ? "" : "disabled"}>${integrated ? "发送" : "记录"}</button>
     </div>`;
-
-  const msgBox = qs<HTMLElement>("#waMessages");
-  if (msgBox) msgBox.scrollTop = msgBox.scrollHeight;
-
-  qsa<HTMLButtonElement>("[data-wa-translate]", chatCol).forEach((btn) => {
-    btn.addEventListener("click", () => void translateWhatsAppMessage(btn.dataset.waTranslate || "", customer.id));
+  const messageBox = qs<HTMLElement>("#waMessages", chat);
+  if (messageBox) messageBox.scrollTop = messageBox.scrollHeight;
+  qsa<HTMLButtonElement>("[data-wa-translate]", chat).forEach((button) => {
+    button.addEventListener("click", () => void translateWhatsAppMessage(button.dataset.waTranslate || "", customer.id));
   });
-  qs<HTMLButtonElement>("#waSendButton", chatCol)?.addEventListener("click", () => void addWhatsAppMessage(customer.id));
-  qs<HTMLInputElement>("#waContentInput", chatCol)?.addEventListener("keydown", (event) => {
-    if ((event as KeyboardEvent).key === "Enter") void addWhatsAppMessage(customer.id);
+  qs<HTMLButtonElement>("#waSendButton", chat)?.addEventListener("click", () => void addWhatsAppMessage(customer.id));
+  qs<HTMLTextAreaElement>("#waContentInput", chat)?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void addWhatsAppMessage(customer.id);
+    }
+  });
+  qs<HTMLButtonElement>("#waMobileBackButton", chat)?.addEventListener("click", () => layoutForWhatsApp()?.classList.remove("wa-mobile-chat-open"));
+  qs<HTMLButtonElement>("#waMobileInfoButton", chat)?.addEventListener("click", () => qs<HTMLElement>("#waInfoCol")?.classList.add("is-open"));
+}
+
+function layoutForWhatsApp() {
+  return qs<HTMLElement>("#whatsapp .wa-layout");
+}
+
+function renderWhatsAppInfo(customer: WhatsAppCustomerSummary, binding: WhatsAppBinding | null, canManage: boolean) {
+  const info = qs<HTMLElement>("#waInfoCol");
+  if (!info) return;
+  const mode = binding?.bindingMode || "manual";
+  const contact = state.customers.find((item) => item.id === customer.id);
+  const details = contact ? customerContactDetails(contact) : { email: "", phone: "", whatsapp: "", wechat: "" };
+  const modes = state.whatsappModes;
+  const modeOptions: Array<{ id: WhatsAppBindingMode; label: string; available: boolean }> = [
+    { id: "manual", label: "人工", available: true },
+    { id: "twilio-api", label: "官方 API", available: Boolean(modes?.twilioApi.available) || mode === "twilio-api" },
+    { id: "web-scan", label: "测试扫码", available: Boolean(modes?.webScan.available) || mode === "web-scan" }
+  ];
+  const link = waMeLink(binding?.phoneNumber || details.whatsapp || "");
+  info.innerHTML = `
+    <div class="wa-info-head">
+      <div><h3>${escapeHtml(customer.company)}</h3><p class="wa-info-sub">${escapeHtml([customer.contact, customer.country].filter(Boolean).join(" · ") || "客户资料")}</p></div>
+      <button class="wa-icon-button wa-info-close" id="waInfoCloseButton" type="button" title="关闭" aria-label="关闭"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="wa-contact-facts">
+      <div class="info"><span>客户号码</span><b>${escapeHtml(binding?.phoneNumber || details.whatsapp || "未绑定")}</b></div>
+      <div class="info"><span>联系人</span><b>${escapeHtml(customer.contact || binding?.waProfileName || "未填写")}</b></div>
+    </div>
+    <div class="wa-channel-panel">
+      <label>通道</label>
+      <div class="wa-mode-switch">${modeOptions.map((item) => `<button type="button" data-wa-mode="${item.id}" class="${item.id === mode ? "active" : ""}" ${item.available && canManage ? "" : "disabled"}>${item.label}</button>`).join("")}</div>
+      <div class="wa-binding-content" id="waBindingModeContent">${renderBindingModeContent(mode, binding, details.whatsapp, canManage)}</div>
+    </div>
+    <div class="wa-info-footer">
+      ${link ? `<a class="btn wa-open-link" href="${link}" target="_blank" rel="noopener">在 WhatsApp 打开</a>` : ""}
+      <button class="btn" id="waOpenCustomerButton" type="button">客户全景</button>
+    </div>`;
+  setupBindingModeListeners(customer.id, binding, details.whatsapp, canManage);
+  qs<HTMLButtonElement>("#waInfoCloseButton", info)?.addEventListener("click", () => info.classList.remove("is-open"));
+  qs<HTMLButtonElement>("#waOpenCustomerButton", info)?.addEventListener("click", () => {
+    if (!contact) return;
+    state.selectedCustomerId = contact.id;
+    renderCustomerDetailPage(contact);
+    activateNavView("customer-detail");
   });
 }
 
-function renderWhatsAppInfo(customer: { id: string; company: string; country: string; contact: string }, binding: WhatsAppBinding | null) {
-  const infoCol = qs<HTMLElement>("#waInfoCol");
-  if (!infoCol) return;
-
-  const bindingMode = binding?.bindingMode || "manual";
-  const connectionStatus = binding?.connectionStatus || "disconnected";
-
-  const modeLabels: Record<string, string> = {
-    "manual": "手动录入",
-    "web-scan": "扫码登录 (WhatsApp Web)",
-    "twilio-api": "官方API (Twilio)"
-  };
-
-  const statusLabels: Record<string, string> = {
-    "connected": "✅ 已连接",
-    "disconnected": "⚪ 未连接",
-    "qr-pending": "⏳ 等待扫码",
-    "error": "❌ 连接错误"
-  };
-
-  infoCol.innerHTML = `
-    <h3>${escapeHtml(customer.company)}</h3>
-    <p class="wa-info-sub">${escapeHtml(customer.country || "—")} · ${escapeHtml(customer.contact || "—")}</p>
-
-    <div class="wa-bind-box" style="padding:12px;background:#f9f9f9;border-radius:8px;margin-bottom:12px">
-      <div class="info"><span>绑定模式</span><b>${modeLabels[bindingMode]}</b></div>
-      ${bindingMode !== "manual" ? `<div class="info"><span>连接状态</span><b>${statusLabels[connectionStatus]}</b></div>` : ""}
-      <div class="info"><span>WhatsApp 号码</span><b>${escapeHtml(binding?.phoneNumber || "未绑定")}</b></div>
-      <div class="info"><span>WhatsApp 昵称</span><b>${escapeHtml(binding?.waProfileName || "—")}</b></div>
-    </div>
-
-    <div id="waBindingPanel">
-      ${renderBindingModeSelector(customer.id, binding)}
-    </div>
-
-    ${waMeLink(binding?.phoneNumber || "") ? `<a class="btn primary wa-open-link" href="${waMeLink(binding?.phoneNumber || "")}" target="_blank" rel="noopener" style="display:block;text-align:center;margin-top:10px">📲 在 WhatsApp 中打开对话</a>` : ""}
-  `;
-
-  setupBindingModeListeners(customer.id, binding);
-}
-
-function renderBindingModeSelector(customerId: string, binding: WhatsAppBinding | null): string {
-  const selectedMode = binding?.bindingMode || "manual";
-
+function renderBindingModeContent(mode: WhatsAppBindingMode, binding: WhatsAppBinding | null, fallbackPhone = "", canManage = true) {
+  const disabled = canManage ? "" : "disabled";
+  if (mode === "manual") {
+    return `
+      <div class="wa-binding-state"><i></i><span>${canManage ? "人工同步" : "仅查看"}</span></div>
+      <div class="wa-bind-box">
+        <input id="waBindPhone" placeholder="客户 WhatsApp 号码" value="${escapeHtml(binding?.phoneNumber || fallbackPhone)}" ${disabled}>
+        <input id="waBindName" placeholder="WhatsApp 昵称" value="${escapeHtml(binding?.waProfileName || "")}" ${disabled}>
+        <button class="btn" id="waBindButton" type="button" ${disabled}>保存绑定</button>
+      </div>`;
+  }
+  if (mode === "twilio-api") {
+    const available = Boolean(state.whatsappModes?.twilioApi.available);
+    return `
+      <div class="wa-binding-state ${binding?.connectionStatus === "connected" ? "is-connected" : ""}"><i></i><span>${binding?.connectionStatus === "connected" ? "官方通道已连接" : (available ? "官方通道可配置" : "管理员未配置官方通道")}</span></div>
+      <div class="wa-bind-box">
+        <input id="waOfficialCustomerPhone" placeholder="客户 WhatsApp 号码" value="${escapeHtml(binding?.phoneNumber || fallbackPhone)}" ${disabled}>
+        <input id="waTwilioPhone" placeholder="企业 WhatsApp 发信号码" value="${escapeHtml(binding?.twilioPhoneNumber || "")}" ${disabled}>
+        <button class="btn primary" id="waTwilioBindButton" type="button" ${available && canManage ? "" : "disabled"}>连接官方通道</button>
+      </div>
+      <div class="wa-safety wa-official-note">首次主动联系须使用已审核模板，客户回复后的会话窗口内可发送自由文本。</div>`;
+  }
+  const connected = binding?.connectionStatus === "connected";
+  const pending = binding?.connectionStatus === "qr-pending";
   return `
-    <div style="margin-bottom:12px">
-      <label style="display:block;margin-bottom:4px;font-weight:500">选择绑定方式：</label>
-      <select id="waBindingModeSelect" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px">
-        <option value="manual" ${selectedMode === "manual" ? "selected" : ""}>手动录入 (零风险)</option>
-        <option value="web-scan" ${selectedMode === "web-scan" ? "selected" : ""}>扫码登录 (有封号风险)</option>
-        <option value="twilio-api" ${selectedMode === "twilio-api" ? "selected" : ""}>官方API (需配置)</option>
-      </select>
-    </div>
-
-    <div id="waBindingModeContent">
-      ${renderBindingModeContent(selectedMode, binding)}
-    </div>
-  `;
+    <div class="wa-binding-state ${connected ? "is-connected" : ""}"><i></i><span>${connected ? "测试设备已连接" : pending ? "等待扫码" : "测试通道未连接"}</span></div>
+    ${connected
+      ? `<div class="wa-bind-box"><input id="waWebCustomerPhone" placeholder="客户 WhatsApp 号码" value="${escapeHtml(binding?.phoneNumber || fallbackPhone)}" ${disabled}><button class="btn" id="waDisconnectButton" type="button" ${disabled}>断开测试设备</button></div>`
+      : pending
+        ? `<div class="wa-qr" id="waQrCodeContainer"><span>正在生成二维码</span></div>`
+        : `<div class="wa-bind-box"><input id="waWebCustomerPhone" placeholder="客户 WhatsApp 号码" value="${escapeHtml(binding?.phoneNumber || fallbackPhone)}" ${disabled}><button class="btn" id="waStartScanButton" type="button" ${disabled}>启动测试扫码</button></div>`}
+    <div class="wa-safety">非官方协议仅限隔离测试账号，生产环境不可启用。</div>`;
 }
 
-function renderBindingModeContent(mode: string, binding: WhatsAppBinding | null): string {
-  switch (mode) {
-    case "manual":
-      return `
-        <div class="wa-bind-box" style="padding:0">
-          <input id="waBindPhone" placeholder="+8613800138000" value="${escapeHtml(binding?.phoneNumber || "")}" />
-          <input id="waBindName" placeholder="WhatsApp 昵称(选填)" value="${escapeHtml(binding?.waProfileName || "")}" />
-          <button class="btn" id="waBindButton" style="width:100%">${binding ? "更新绑定" : "绑定号码"}</button>
-        </div>
-        <div class="wa-safety">⚠️ 风控提示：手动录入模式，不接入任何非官方接口，零封号风险。</div>
-      `;
-
-    case "web-scan":
-      const isScanning = binding?.connectionStatus === "qr-pending";
-      const isConnected = binding?.connectionStatus === "connected";
-
-      return `
-        <div style="text-align:center;padding:16px;background:#fff;border:1px solid #ddd;border-radius:8px">
-          ${isConnected ? `
-            <p style="color:#22c55e;font-weight:500;margin-bottom:12px">✅ 已连接</p>
-            <button class="btn" id="waDisconnectButton" style="width:100%">断开连接</button>
-          ` : isScanning ? `
-            <p style="margin-bottom:12px">请使用 WhatsApp 扫描下方二维码</p>
-            <div id="waQrCodeContainer" style="min-height:200px;display:flex;align-items:center;justify-content:center">
-              <div>⏳ 正在生成二维码...</div>
-            </div>
-          ` : `
-            <p style="margin-bottom:12px">扫码绑定您的个人 WhatsApp 账号</p>
-            <button class="btn primary" id="waStartScanButton" style="width:100%">开始扫码绑定</button>
-          `}
-        </div>
-        <div class="wa-safety" style="background:#fef3c7;color:#92400e;padding:12px;border-radius:6px;margin-top:12px">
-          ⚠️ <strong>封号风险警告</strong>：此方式使用非官方协议，可能导致账号被封禁。建议仅用于测试，正式环境请使用官方API。
-        </div>
-      `;
-
-    case "twilio-api":
-      return `
-        <div class="wa-bind-box" style="padding:12px">
-          <input id="waTwilioPhone" placeholder="Twilio WhatsApp 号码" value="${escapeHtml(binding?.twilioPhoneNumber || "")}" />
-          <button class="btn primary" id="waTwilioBindButton" style="width:100%;margin-top:8px">配置 Twilio</button>
-        </div>
-        <div class="wa-safety" style="background:#e0f2fe;color:#0c4a6e">
-          ✅ 官方合规方案，零封号风险。需要先在 Twilio 申请 WhatsApp Business API。
-        </div>
-      `;
-
-    default:
-      return "";
-  }
-}
-
-function setupBindingModeListeners(customerId: string, binding: WhatsAppBinding | null) {
-  const modeSelect = qs<HTMLSelectElement>("#waBindingModeSelect");
-  const contentDiv = qs<HTMLElement>("#waBindingModeContent");
-
-  if (modeSelect && contentDiv) {
-    modeSelect.addEventListener("change", () => {
-      contentDiv.innerHTML = renderBindingModeContent(modeSelect.value, binding);
-      setupBindingActions(customerId, modeSelect.value, binding);
+function setupBindingModeListeners(customerId: string, binding: WhatsAppBinding | null, fallbackPhone = "", canManage = true) {
+  const content = qs<HTMLElement>("#waBindingModeContent");
+  qsa<HTMLButtonElement>("[data-wa-mode]", qs<HTMLElement>("#waInfoCol") || document).forEach((button) => {
+    button.addEventListener("click", () => {
+      const mode = button.dataset.waMode as WhatsAppBindingMode;
+      qsa<HTMLButtonElement>("[data-wa-mode]").forEach((item) => item.classList.toggle("active", item === button));
+      if (content) content.innerHTML = renderBindingModeContent(mode, binding, fallbackPhone, canManage);
+      setupBindingActions(customerId, mode);
     });
-  }
-
-  setupBindingActions(customerId, binding?.bindingMode || "manual", binding);
+  });
+  if (!canManage) return;
+  setupBindingActions(customerId, binding?.bindingMode || "manual");
 }
 
-function setupBindingActions(customerId: string, mode: string, binding: WhatsAppBinding | null) {
+function setupBindingActions(customerId: string, mode: WhatsAppBindingMode) {
   if (mode === "manual") {
     qs<HTMLButtonElement>("#waBindButton")?.addEventListener("click", () => void bindWhatsAppManual(customerId));
-  } else if (mode === "web-scan") {
-    qs<HTMLButtonElement>("#waStartScanButton")?.addEventListener("click", () => void startWebScanBinding(customerId));
-    qs<HTMLButtonElement>("#waDisconnectButton")?.addEventListener("click", () => void disconnectWebScan(customerId));
-
-    // 如果正在等待扫码，启动轮询获取二维码
-    if (binding?.connectionStatus === "qr-pending" && binding?.sessionData) {
-      void pollQrCode(binding.sessionData);
-    }
   } else if (mode === "twilio-api") {
     qs<HTMLButtonElement>("#waTwilioBindButton")?.addEventListener("click", () => void bindWhatsAppTwilio(customerId));
+  } else {
+    qs<HTMLButtonElement>("#waStartScanButton")?.addEventListener("click", () => void startWebScanBinding(customerId));
+    qs<HTMLButtonElement>("#waDisconnectButton")?.addEventListener("click", () => void disconnectWebScan(customerId));
   }
 }
 
 async function bindWhatsAppManual(customerId: string) {
   const phoneNumber = qs<HTMLInputElement>("#waBindPhone")?.value.trim() || "";
   const waProfileName = qs<HTMLInputElement>("#waBindName")?.value.trim() || "";
-  if (phoneNumber.length < 5) { toast("请输入有效号码", "error"); return; }
+  if (phoneNumber.length < 5) { toast("请输入有效的客户号码", "error"); return; }
   try {
-    await api(`/api/whatsapp/customers/${customerId}/binding`, { method: "POST", body: JSON.stringify({ phoneNumber, waProfileName }) });
-    await reloadWhatsAppThreads();
+    await api(`/api/whatsapp/customers/${encodeURIComponent(customerId)}/binding`, { method: "POST", body: JSON.stringify({ phoneNumber, waProfileName }) });
+    await reloadWhatsAppThreads(true);
     await openWhatsAppThread(customerId);
-    toast("绑定已保存");
+    toast("WhatsApp 号码已绑定");
   } catch (error) {
     toast(error instanceof Error ? error.message : "绑定失败", "error");
   }
 }
 
-async function startWebScanBinding(customerId: string) {
+async function bindWhatsAppTwilio(customerId: string) {
+  const phoneNumber = qs<HTMLInputElement>("#waOfficialCustomerPhone")?.value.trim() || "";
+  const twilioPhoneNumber = qs<HTMLInputElement>("#waTwilioPhone")?.value.trim() || "";
+  if (phoneNumber.length < 5 || twilioPhoneNumber.length < 5) { toast("请填写客户号码和企业发信号码", "error"); return; }
   try {
-    toast("正在启动扫码...");
-    const result = await api<{ clientId: string; bindingId: string; status: string }>(`/api/whatsapp/binding/web-scan/start`, {
-      method: "POST",
-      body: JSON.stringify({ customerId })
-    });
-
+    await api("/api/whatsapp/binding/twilio/start", { method: "POST", body: JSON.stringify({ customerId, phoneNumber, twilioPhoneNumber }) });
+    await reloadWhatsAppThreads(true);
     await openWhatsAppThread(customerId);
-    toast("请扫描二维码");
-
-    // 开始轮询获取二维码
-    void pollQrCode(result.clientId);
+    toast("官方通道已连接");
   } catch (error) {
-    toast(error instanceof Error ? error.message : "启动失败", "error");
+    toast(error instanceof Error ? error.message : "官方通道连接失败", "error");
   }
 }
 
-async function pollQrCode(clientId: string) {
-  const qrContainer = qs<HTMLElement>("#waQrCodeContainer");
-  if (!qrContainer) return;
-
+async function startWebScanBinding(customerId: string) {
+  const phoneNumber = qs<HTMLInputElement>("#waWebCustomerPhone")?.value.trim() || "";
+  if (phoneNumber.length < 5) { toast("请输入客户 WhatsApp 号码", "error"); return; }
   try {
-    const eventSource = new EventSource(`/api/whatsapp/binding/web-scan/qr/${clientId}`);
-
-    eventSource.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-
-      if (data.qr) {
-        // 显示二维码（使用 canvas 或者外部库渲染）
-        qrContainer.innerHTML = `
-          <div style="padding:12px;background:#fff">
-            <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(data.qr)}" alt="QR Code" style="display:block;margin:0 auto" />
-            <p style="text-align:center;margin-top:8px;color:#666;font-size:12px">请在 1 分钟内扫码</p>
-          </div>
-        `;
-      }
-
-      if (data.timeout) {
-        eventSource.close();
-        qrContainer.innerHTML = `<p style="color:#ef4444">二维码已过期，请重新开始</p>`;
-      }
-    };
-
-    eventSource.onerror = () => {
-      eventSource.close();
-      qrContainer.innerHTML = `<p style="color:#ef4444">连接失败</p>`;
-    };
+    await api(`/api/whatsapp/customers/${encodeURIComponent(customerId)}/binding`, { method: "POST", body: JSON.stringify({ phoneNumber, waProfileName: "" }) });
+    const result = await api<{ clientId: string }>("/api/whatsapp/binding/web-scan/start", { method: "POST", body: JSON.stringify({ customerId }) });
+    await openWhatsAppThread(customerId);
+    void pollQrCode(result.clientId, customerId);
   } catch (error) {
-    qrContainer.innerHTML = `<p style="color:#ef4444">加载二维码失败</p>`;
+    toast(error instanceof Error ? error.message : "测试扫码启动失败", "error");
   }
+}
+
+async function pollQrCode(clientId: string, customerId: string) {
+  const container = qs<HTMLElement>("#waQrCodeContainer");
+  if (!container) return;
+  const eventSource = new EventSource(`/api/whatsapp/binding/web-scan/qr/${encodeURIComponent(clientId)}`);
+  eventSource.onmessage = (event) => {
+    const data = JSON.parse(event.data) as { qrDataUrl?: string; timeout?: boolean };
+    if (data.qrDataUrl) container.innerHTML = `<img src="${escapeHtml(data.qrDataUrl)}" width="220" height="220" alt="WhatsApp 扫码二维码">`;
+    if (data.timeout) {
+      eventSource.close();
+      container.innerHTML = `<span>二维码已过期</span>`;
+    }
+  };
+  eventSource.onerror = () => {
+    eventSource.close();
+    if (!container.querySelector("img")) container.innerHTML = `<span>二维码读取失败</span>`;
+  };
+  let checks = 0;
+  const timer = window.setInterval(async () => {
+    checks += 1;
+    try {
+      const result = await api<{ status: string }>(`/api/whatsapp/binding/web-scan/status/${encodeURIComponent(clientId)}`);
+      if (result.status === "connected") {
+        window.clearInterval(timer);
+        eventSource.close();
+        await reloadWhatsAppThreads(true);
+        await openWhatsAppThread(customerId);
+        toast("测试设备已连接");
+      } else if (result.status === "error" || checks >= 30) {
+        window.clearInterval(timer);
+      }
+    } catch {
+      window.clearInterval(timer);
+    }
+  }, 2000);
 }
 
 async function disconnectWebScan(customerId: string) {
   try {
-    await api(`/api/whatsapp/binding/web-scan/disconnect`, {
-      method: "POST",
-      body: JSON.stringify({ customerId })
-    });
+    await api("/api/whatsapp/binding/web-scan/disconnect", { method: "POST", body: JSON.stringify({ customerId }) });
+    await reloadWhatsAppThreads(true);
     await openWhatsAppThread(customerId);
-    toast("已断开连接");
+    toast("测试设备已断开");
   } catch (error) {
     toast(error instanceof Error ? error.message : "断开失败", "error");
   }
 }
 
-async function bindWhatsAppTwilio(customerId: string) {
-  const twilioPhoneNumber = qs<HTMLInputElement>("#waTwilioPhone")?.value.trim() || "";
-  if (!twilioPhoneNumber) { toast("请输入 Twilio 号码", "error"); return; }
+async function reloadWhatsAppModes() {
   try {
-    await api(`/api/whatsapp/binding/twilio/start`, {
-      method: "POST",
-      body: JSON.stringify({ customerId, twilioPhoneNumber })
-    });
-    await reloadWhatsAppThreads();
-    await openWhatsAppThread(customerId);
-    toast("Twilio 已配置");
-  } catch (error) {
-    toast(error instanceof Error ? error.message : "配置失败", "error");
+    const data = await api<{ modes: WhatsAppModes }>("/api/whatsapp/binding-modes");
+    state.whatsappModes = data.modes;
+    updateWhatsAppStatus();
+  } catch {
+    state.whatsappModes = null;
+    updateWhatsAppStatus();
   }
 }
 
-async function reloadWhatsAppThreads() {
-  const data = await api<{ threads: WhatsAppThread[] }>("/api/whatsapp/threads");
-  state.whatsappThreads = data.threads;
-  renderWhatsAppThreads();
+async function reloadWhatsAppThreads(quiet = false) {
+  try {
+    const data = await api<{ threads: WhatsAppThread[] }>("/api/whatsapp/threads");
+    state.whatsappThreads = data.threads;
+    renderWhatsAppThreads();
+  } catch (error) {
+    if (!quiet) toast(error instanceof Error ? error.message : "WhatsApp 会话加载失败", "error");
+  }
+}
+
+async function refreshWhatsAppWorkspace() {
+  if (whatsappRefreshing) return;
+  whatsappRefreshing = true;
+  try {
+    await Promise.all([reloadWhatsAppThreads(true), reloadWhatsAppModes()]);
+    if (state.selectedWaCustomerId) await openWhatsAppThread(state.selectedWaCustomerId, true);
+  } finally {
+    whatsappRefreshing = false;
+  }
+}
+
+function syncWhatsAppRefresh(active: boolean) {
+  window.clearInterval(whatsappRefreshTimer);
+  whatsappRefreshTimer = 0;
+  if (!active) return;
+  whatsappRefreshTimer = window.setInterval(() => void refreshWhatsAppWorkspace(), 12000);
 }
 
 function renderWhatsApp() {
   renderWhatsAppThreads();
-  if (state.selectedWaCustomerId && state.whatsappThreads.some((t) => t.customerId === state.selectedWaCustomerId)) {
-    void openWhatsAppThread(state.selectedWaCustomerId);
-  }
+  if (!state.whatsappModes) void reloadWhatsAppModes();
+  if (state.selectedWaCustomerId) void openWhatsAppThread(state.selectedWaCustomerId);
 }
 
 async function addWhatsAppMessage(customerId: string) {
-  const direction = (qs<HTMLSelectElement>("#waDirection")?.value || "inbound") as "inbound" | "outbound";
-  const content = qs<HTMLInputElement>("#waContentInput")?.value.trim() || "";
-  if (!content) { toast("请输入对话内容", "error"); return; }
+  const direction = (qs<HTMLSelectElement>("#waDirection")?.value || "outbound") as "inbound" | "outbound";
+  const input = qs<HTMLTextAreaElement>("#waContentInput");
+  const content = input?.value.trim() || "";
+  if (!content) { toast("请输入消息内容", "error"); return; }
+  const button = qs<HTMLButtonElement>("#waSendButton");
+  if (button) button.disabled = true;
   try {
-    await api(`/api/whatsapp/customers/${customerId}/messages`, { method: "POST", body: JSON.stringify({ direction, content }) });
-    await reloadWhatsAppThreads();
-    await openWhatsAppThread(customerId);
-    toast("已录入");
+    const result = await api<{ delivery: { mode: WhatsAppBindingMode; delivered: boolean } }>(`/api/whatsapp/customers/${encodeURIComponent(customerId)}/messages`, { method: "POST", body: JSON.stringify({ direction, content }) });
+    if (input) input.value = "";
+    await reloadWhatsAppThreads(true);
+    await openWhatsAppThread(customerId, true);
+    if (direction === "outbound" && result.delivery.mode !== "manual") {
+      toast(result.delivery.delivered ? "消息已发送" : "消息发送失败，已保留失败记录", result.delivery.delivered ? "ok" : "error");
+    } else {
+      toast("消息已记录");
+    }
   } catch (error) {
-    toast(error instanceof Error ? error.message : "录入失败", "error");
+    toast(error instanceof Error ? error.message : "消息处理失败", "error");
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
 async function translateWhatsAppMessage(messageId: string, customerId: string) {
   if (!messageId) return;
   try {
-    const result = await api<{ skipped?: boolean }>(`/api/whatsapp/messages/${messageId}/translate`, { method: "POST" });
-    if (result.skipped) { toast("中文无需翻译"); return; }
-    await openWhatsAppThread(customerId);
+    const result = await api<{ skipped?: boolean }>(`/api/whatsapp/messages/${encodeURIComponent(messageId)}/translate`, { method: "POST" });
+    if (result.skipped) { toast("中文消息无需翻译"); return; }
+    await openWhatsAppThread(customerId, true);
     toast("翻译完成");
   } catch (error) {
     toast(error instanceof Error ? error.message : "翻译失败，请先配置 AI 模型", "error");
@@ -3921,7 +6621,7 @@ function renderLeadDrawer(
   drawer.innerHTML = `
     <div class="drawer-head">
       <div><h2>${escapeHtml(lead.company)}</h2><p>${escapeHtml(lead.country || "—")} · ${escapeHtml(lead.contact || "—")}</p></div>
-      <div class="lead-drawer-head-actions">${inTrash ? "" : `<button class="btn" id="leadDevelopmentEmailButton">写开发信</button><button class="btn primary ai-entry-button" id="leadAiResearchButton">${researchButtonIcon()}AI 背调</button>`}${badge(inTrash ? "垃圾箱" : (LEAD_STATUS_LABEL[lead.status] || lead.status), inTrash ? "red" : (LEAD_STATUS_TONE[lead.status] || ""))}<button class="btn icon-only" id="leadDrawerClose" title="关闭">×</button></div>
+      <div class="lead-drawer-head-actions">${inTrash ? "" : `<button class="btn" id="leadWhatsAppButton">WhatsApp</button><button class="btn" id="leadDevelopmentEmailButton">写开发信</button><button class="btn primary ai-entry-button" id="leadAiResearchButton">${researchButtonIcon()}AI 背调</button>`}${badge(inTrash ? "垃圾箱" : (LEAD_STATUS_LABEL[lead.status] || lead.status), inTrash ? "red" : (LEAD_STATUS_TONE[lead.status] || ""))}<button class="btn icon-only" id="leadDrawerClose" title="关闭">×</button></div>
     </div>
     ${lead.remark ? `<p class="lead-remark">${escapeHtml(lead.remark)}</p>` : ""}
     ${inTrash ? `
@@ -3963,6 +6663,9 @@ function renderLeadDrawer(
     </div></section>`;
 
   qs("#leadDrawerClose", drawer)?.addEventListener("click", closeLeadDrawer);
+  qs<HTMLButtonElement>("#leadWhatsAppButton", drawer)?.addEventListener("click", () => {
+    void openWhatsAppForContact({ phone: lead.phone || "", displayName: lead.contact || lead.company });
+  });
   qs<HTMLButtonElement>("#leadDevelopmentEmailButton", drawer)?.addEventListener("click", () => openDevelopmentEmail("lead", lead.id, lead.company, "leads"));
   qs<HTMLButtonElement>("#leadAiResearchButton", drawer)?.addEventListener("click", () => openBackgroundResearch("lead", lead.id, lead.company, "leads"));
   qs<HTMLSelectElement>("#leadStageSelect", drawer)?.addEventListener("change", (event) => {
@@ -4328,7 +7031,7 @@ function customerGradeHtml(customer: Customer) {
 function filteredCustomers(customers: Customer[]) {
   const query = state.customerSearch.trim().toLowerCase();
   return customers.filter((customer) => {
-    const matchesQuery = !query || [customer.company, customer.contact, customer.country, customer.ownerName].some((value) => (value || "").toLowerCase().includes(query));
+    const matchesQuery = !query || [customer.company, customer.contact, customer.whatsapp, customer.country, customer.ownerName].some((value) => (value || "").toLowerCase().includes(query));
     const matchesQueue = state.customerQueueFilter === "all"
       || (state.customerQueueFilter === "overdue" && customer.nextReminder.includes("逾期"))
       || (state.customerQueueFilter === "no-activity" && !customer.lastActivityAt)
@@ -4364,8 +7067,8 @@ function renderCustomers(customers: Customer[]) {
     <td><div class="customer-health-cell">${health(customer.health)}<span>${customer.health}%</span></div></td>
     <td><div class="customer-value-cell">${customerGradeHtml(customer)}${badge(customer.hasWonDeal ? `已成交 ${customer.wonDealCount || 1} 次` : "未成交", customer.hasWonDeal ? "green" : "gray")}</div></td>
     <td><div class="customer-follow-cell"><span>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</span><b>${reminder}</b></div></td>
-    <td>${badge("待接入", "gray")}</td>
-    <td><div class="customer-row-actions"><button class="btn" data-open-customer-page>全景</button><button class="btn" data-edit-customer>编辑</button></div></td>
+    <td><button class="btn" type="button" data-customer-whatsapp>WhatsApp</button></td>
+    <td><div class="customer-row-actions"><button class="btn" data-open-customer-page>全景</button><button class="btn" data-edit-customer>编辑</button><button class="btn" data-release-customer>放入公池</button></div></td>
   </tr>`;
   }).join("") : `<tr><td colspan="8" class="empty-cell">当前筛选下暂无客户。</td></tr>`;
   const mobile = qs<HTMLElement>("#customerMobileList");
@@ -4374,6 +7077,7 @@ function renderCustomers(customers: Customer[]) {
       <span class="customer-mobile-top"><button type="button" class="customer-name ${(customer.activeDealCount || 0) > 0 ? "has-active-deal" : ""}" data-open-customer="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</button>${badge(customer.pipelineStage || "暂无商机", customer.pipelineStage === "谈判" || customer.pipelineStage === "成交" ? "green" : customer.pipelineStage === "已报价" ? "amber" : "gray")}</span>
       <span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")}</span>
       <span class="customer-mobile-meta"><i>${customerGradeValue(customer)}级 · ${customerGradeLabel(customerGradeValue(customer))}</i><i>${customer.hasWonDeal ? `已成交 ${customer.wonDealCount || 1} 次` : "未成交"}</i><i>${customer.activeDealCount || 0} 个活跃商机</i><i>${escapeHtml(customer.nextReminder || "待安排")}</i><i>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</i></span>
+      <div class="customer-row-actions"><button class="btn" type="button" data-customer-mobile-whatsapp>WhatsApp</button><button class="btn" type="button" data-customer-mobile-pool>放入公池</button></div>
     </article>`).join("") : `<div class="empty-cell">当前筛选下暂无客户。</div>`;
   qsa<HTMLElement>("tr", tbody).forEach((row, index) => {
     const customer = visibleCustomers[index];
@@ -4414,9 +7118,157 @@ function renderCustomers(customers: Customer[]) {
       if (customer) openCustomerDetailPage(customer);
     });
   });
+  qsa<HTMLButtonElement>("[data-customer-whatsapp]", tbody).forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const customer = state.customers.find((item) => item.id === button.closest<HTMLElement>("tr")?.dataset.customerId);
+      if (customer) void openWhatsAppForContact({ phone: customerContactDetails(customer).whatsapp, displayName: customer.contact || customer.company });
+    });
+  });
+  qsa<HTMLButtonElement>("[data-release-customer]", tbody).forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const customer = state.customers.find((item) => item.id === button.closest<HTMLElement>("tr")?.dataset.customerId);
+      if (customer) openCustomerReleaseModal(customer);
+    });
+  });
+  qsa<HTMLElement>("[data-customer-mobile-id]", qs("#customerMobileList")!).forEach((card) => {
+    const customer = state.customers.find((item) => item.id === card.dataset.customerMobileId);
+    if (!customer) return;
+    qs<HTMLButtonElement>("[data-customer-mobile-whatsapp]", card)?.addEventListener("click", () => {
+      void openWhatsAppForContact({ phone: customerContactDetails(customer).whatsapp, displayName: customer.contact || customer.company });
+    });
+    qs<HTMLButtonElement>("[data-customer-mobile-pool]", card)?.addEventListener("click", () => openCustomerReleaseModal(customer));
+  });
   const selected = customers.find((item) => item.id === state.selectedCustomerId);
   if (selected && qs("#customerDrawer")?.classList.contains("open")) renderCustomerDrawer(selected);
   if (mapActive) void renderCustomerMap(visibleCustomers);
+}
+
+function filteredPublicCustomers() {
+  const query = state.customerPoolSearch.trim().toLowerCase();
+  return state.publicCustomers.filter((customer) => {
+    const matchesQuery = !query || [
+      customer.company,
+      customer.contact,
+      customer.country,
+      customer.previousOwnerName || "",
+      customer.releaseReason || ""
+    ].some((value) => value.toLowerCase().includes(query));
+    const matchesGrade = state.customerPoolGradeFilter === "all"
+      || customerGradeValue(customer) === state.customerPoolGradeFilter;
+    return matchesQuery && matchesGrade;
+  });
+}
+
+function renderCustomerPool() {
+  const summary = qs<HTMLElement>("#customerPoolSummary");
+  const tbody = qs<HTMLElement>("#customerPoolTableBody");
+  const mobile = qs<HTMLElement>("#customerPoolMobileList");
+  const navCount = qs<HTMLElement>("#customerPoolNavCount");
+  if (!summary || !tbody || !mobile) return;
+  const customers = filteredPublicCustomers();
+  const wonCount = state.publicCustomers.filter((customer) => customer.hasWonDeal).length;
+  summary.innerHTML = `
+    <div><span>我的客户</span><b>${state.customerPoolCounts.mineCount}</b><small>当前负责</small></div>
+    <div><span>公池客户</span><b>${state.customerPoolCounts.publicCount}</b><small>同团队可领取</small></div>
+    <div><span>成交客户</span><b>${wonCount}</b><small>公池历史成交</small></div>`;
+  if (navCount) navCount.textContent = String(state.customerPoolCounts.publicCount);
+  const empty = `<tr><td colspan="5" class="empty-cell">当前筛选下暂无公池客户。</td></tr>`;
+  tbody.innerHTML = customers.length ? customers.map((customer) => `
+    <tr data-pool-customer-id="${escapeHtml(customer.id)}">
+      <td><div class="customer-pool-company"><b>${escapeHtml(customer.company)}</b><span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact || "联系人待维护")}</span></div></td>
+      <td>${customerGradeHtml(customer)}</td>
+      <td><div class="customer-pool-company"><b>${escapeHtml(customer.previousOwnerName || "原负责人未记录")}</b><span>${escapeHtml(customer.releasedByName || "团队成员")} · ${escapeHtml(formatDateTime(customer.releasedAt || ""))}</span><span class="customer-pool-reason">${escapeHtml(customer.releaseReason || "未填写释放原因")}</span></div></td>
+      <td>${badge(customer.hasWonDeal ? `已成交 ${customer.wonDealCount || 1} 次` : "未成交", customer.hasWonDeal ? "green" : "gray")}</td>
+      <td><div class="customer-pool-actions"><button class="btn" type="button" data-pool-whatsapp>WhatsApp</button><button class="btn customer-pool-claim" type="button" data-pool-claim>领取客户</button></div></td>
+    </tr>`).join("") : empty;
+  mobile.innerHTML = customers.length ? customers.map((customer) => `
+    <article class="customer-pool-card" data-pool-customer-id="${escapeHtml(customer.id)}">
+      <div class="customer-pool-company"><b>${escapeHtml(customer.company)}</b><span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact || "联系人待维护")}</span></div>
+      <div>${customerGradeHtml(customer)} ${badge(customer.hasWonDeal ? `已成交 ${customer.wonDealCount || 1} 次` : "未成交", customer.hasWonDeal ? "green" : "gray")}</div>
+      <span>${escapeHtml(customer.previousOwnerName || "原负责人未记录")} · ${escapeHtml(formatDateTime(customer.releasedAt || ""))}</span>
+      <div class="customer-pool-reason">${escapeHtml(customer.releaseReason || "未填写释放原因")}</div>
+      <div class="customer-pool-actions"><button class="btn" type="button" data-pool-whatsapp>WhatsApp</button><button class="btn customer-pool-claim" type="button" data-pool-claim>领取客户</button></div>
+    </article>`).join("") : `<div class="empty-cell">当前筛选下暂无公池客户。</div>`;
+  qsa<HTMLElement>("[data-pool-customer-id]", qs("#customer-pool")!).forEach((row) => {
+    const customer = state.publicCustomers.find((item) => item.id === row.dataset.poolCustomerId);
+    if (!customer) return;
+    qs<HTMLButtonElement>("[data-pool-whatsapp]", row)?.addEventListener("click", () => {
+      void openWhatsAppForContact({ phone: customerContactDetails(customer).whatsapp, displayName: customer.contact || customer.company });
+    });
+    qs<HTMLButtonElement>("[data-pool-claim]", row)?.addEventListener("click", (event) => {
+      void claimCustomerFromPool(customer.id, event.currentTarget as HTMLButtonElement);
+    });
+  });
+}
+
+async function reloadCustomerScopes() {
+  const [owned, publicPool] = await Promise.all([
+    api<{ customers: Customer[]; mineCount: number; publicCount: number }>("/api/customers"),
+    api<{ customers: Customer[]; mineCount: number; publicCount: number }>("/api/customers?scope=public")
+  ]);
+  state.customers = owned.customers;
+  state.publicCustomers = publicPool.customers;
+  state.customerPoolCounts = { mineCount: owned.mineCount, publicCount: publicPool.publicCount };
+  state.selectedCustomerIds = state.selectedCustomerIds.filter((id) => state.customers.some((customer) => customer.id === id));
+  renderCustomers(state.customers);
+  renderCustomerPool();
+}
+
+function openCustomerReleaseModal(customer: Customer) {
+  openModal("放入客户公池", `
+    <div class="delete-warning"><b>${escapeHtml(customer.company)}</b><span>释放后同团队成员可立即领取，未完成的客户待办将停止。</span></div>
+    <div class="form-field full"><label>释放原因</label><textarea id="customerReleaseReason" rows="4" maxlength="500" placeholder="例如：近期无精力持续跟进，希望由团队其他成员接手"></textarea></div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="confirmCustomerReleaseButton">确认放入公池</button>`);
+  qs<HTMLButtonElement>("#confirmCustomerReleaseButton")?.addEventListener("click", (event) => {
+    void releaseCustomerToPool(customer.id, event.currentTarget as HTMLButtonElement);
+  });
+}
+
+async function releaseCustomerToPool(customerId: string, button?: HTMLButtonElement) {
+  const customer = state.customers.find((item) => item.id === customerId);
+  const reason = qs<HTMLTextAreaElement>("#customerReleaseReason")?.value.trim() || "";
+  if (!customer) return;
+  if (reason.length < 2) {
+    toast("请填写释放原因", "error");
+    return;
+  }
+  if (button) { button.disabled = true; button.textContent = "处理中"; }
+  try {
+    await api(`/api/customers/${encodeURIComponent(customerId)}/release`, {
+      method: "POST",
+      body: JSON.stringify({ reason, expectedVersion: customer.ownershipVersion || 0 })
+    });
+    closeModal();
+    closeCustomerDrawer();
+    if (state.selectedCustomerId === customerId) state.selectedCustomerId = null;
+    await reloadCustomerScopes();
+    toast("客户已放入团队公池");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "放入公池失败", "error");
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "确认放入公池"; }
+  }
+}
+
+async function claimCustomerFromPool(customerId: string, button?: HTMLButtonElement) {
+  const customer = state.publicCustomers.find((item) => item.id === customerId);
+  if (!customer) return;
+  if (button) { button.disabled = true; button.textContent = "领取中"; }
+  try {
+    await api(`/api/customers/${encodeURIComponent(customerId)}/claim`, {
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: customer.ownershipVersion || 0 })
+    });
+    await reloadCustomerScopes();
+    toast("客户已领取到我的客户");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "领取客户失败", "error");
+    await reloadCustomerScopes().catch(() => undefined);
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "领取客户"; }
+  }
 }
 
 function renderCustomerBulkBar(customers: Customer[]) {
@@ -4578,7 +7430,7 @@ function renderCustomerDealProgress(customer: Customer) {
     return `
       <section class="customer-deals">
         <div class="customer-deals-head"><h3>相关商机进展</h3><button class="btn" data-view-related-deals>查看商机管道</button></div>
-        <div class="customer-deal-empty">暂无关联商机。新增商机时选择该客户后，会自动显示在这里。</div>
+        <div class="customer-deal-empty">暂无关联商机</div>
       </section>
     `;
   }
@@ -4607,7 +7459,81 @@ function customerContactDetails(customer: Customer) {
   const source = [customer.contact, customer.documentContact || ""].join(" ");
   const email = source.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
   const phone = source.match(/(?:\+?\d[\d\s()\-]{6,}\d)/)?.[0]?.trim() || "";
-  return { email, phone };
+  const whatsapp = normalizeWhatsAppPhone(customer.whatsapp || customer.whatsappPhone || "");
+  return { email, phone, whatsapp };
+}
+
+interface WhatsAppPluginAccount {
+  id: string;
+  name: string;
+  status: string;
+}
+
+interface WhatsAppPluginConversation {
+  id: string;
+  accountId: string;
+  contactPhone: string;
+}
+
+function normalizeWhatsAppPhone(value: string) {
+  const digits = String(value || "").replace(/\D/gu, "");
+  if (!digits) return "";
+  const phone = `+${digits}`;
+  return /^\+[1-9]\d{7,14}$/u.test(phone) ? phone : "";
+}
+
+async function whatsappPluginRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(`/whatsapp-plugin/api${path}`, {
+    ...init,
+    headers: { "content-type": "application/json", ...(init.headers || {}) }
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error || `WhatsApp 服务请求失败 (${response.status})`);
+  }
+  return response.json() as Promise<T>;
+}
+
+function focusWhatsAppConversation(accountId: string, conversationId: string) {
+  const frame = qs<HTMLIFrameElement>("#whatsapp .whatsapp-plugin-frame");
+  if (frame) {
+    const query = new URLSearchParams({ embedded: "1", accountId, conversationId, launch: String(Date.now()) });
+    frame.src = `/whatsapp-plugin/?${query.toString()}`;
+  }
+  closeLeadDrawer();
+  closeCustomerDrawer();
+  activateNavView("whatsapp");
+}
+
+async function openWhatsAppForContact(input: { phone: string; displayName: string }) {
+  const phone = normalizeWhatsAppPhone(input.phone);
+  if (!phone) {
+    toast("该客户没有 WhatsApp 号码", "error");
+    return;
+  }
+  try {
+    const [accounts, conversations] = await Promise.all([
+      whatsappPluginRequest<WhatsAppPluginAccount[]>("/v1/accounts"),
+      whatsappPluginRequest<WhatsAppPluginConversation[]>("/v1/conversations")
+    ]);
+    const existing = conversations.find((item) => normalizeWhatsAppPhone(item.contactPhone) === phone);
+    if (existing) {
+      focusWhatsAppConversation(existing.accountId, existing.id);
+      return;
+    }
+    const account = accounts.find((item) => item.status === "connected");
+    if (!account) {
+      toast("WhatsApp 账号当前离线，连接后才能新建会话", "error");
+      return;
+    }
+    const created = await whatsappPluginRequest<{ conversation: WhatsAppPluginConversation }>("/v1/contacts", {
+      method: "POST",
+      body: JSON.stringify({ accountId: account.id, displayName: input.displayName, phone, createCrmContact: false })
+    });
+    focusWhatsAppConversation(account.id, created.conversation.id);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "WhatsApp 会话打开失败", "error");
+  }
 }
 
 function customerContactIcon(channel: "email" | "phone" | "whatsapp" | "wechat") {
@@ -5014,7 +7940,11 @@ function launchCustomerContact(customer: Customer, channel: "email" | "phone" | 
     window.location.href = `tel:${contacts.phone.replace(/[^+\d]/g, "")}`;
     return;
   }
-  toast(`${channel === "whatsapp" ? "WhatsApp" : "企业微信"} 联系适配器已预留，通讯接口接入后可直接发起联系`);
+  if (channel === "whatsapp") {
+    void openWhatsAppForContact({ phone: contacts.whatsapp, displayName: customer.contact || customer.company });
+    return;
+  }
+  toast("企业微信联系适配器已预留，通讯接口接入后可直接发起联系");
 }
 
 function renderCustomerDetailPage(customer?: Customer) {
@@ -5042,7 +7972,7 @@ function renderCustomerDetailPage(customer?: Customer) {
           <p>${escapeHtml(current.country)} · ${escapeHtml(current.contact)} · 负责人 ${escapeHtml(current.ownerName || "未分配")} · 客户编号 ${escapeHtml(current.id)}</p>
         </div>
       </div>
-      <div class="customer-page-actions"><button class="btn primary ai-entry-button" type="button" data-customer-page-research>${researchButtonIcon()}AI 背调</button><button class="btn" type="button" data-customer-page-email>写开发信</button><button class="btn" type="button" data-customer-page-edit>编辑客户</button><button class="btn" type="button" data-customer-page-follow>新增跟进</button></div>
+      <div class="customer-page-actions"><button class="btn" type="button" data-customer-page-whatsapp>WhatsApp</button><button class="btn primary ai-entry-button" type="button" data-customer-page-research>${researchButtonIcon()}AI 背调</button><button class="btn" type="button" data-customer-page-email>写开发信</button><button class="btn" type="button" data-customer-page-edit>编辑客户</button><button class="btn" type="button" data-customer-page-follow>新增跟进</button><button class="btn" type="button" data-customer-page-release>放入公池</button></div>
     </header>
 
     <section class="customer-page-summary" aria-label="客户摘要">
@@ -5060,13 +7990,13 @@ function renderCustomerDetailPage(customer?: Customer) {
           <div class="customer-profile-field"><span>公司名称</span><b>${escapeHtml(current.company)}</b></div>
           <div class="customer-profile-field"><span>国家 / 地区</span><b>${escapeHtml(current.country)}</b></div>
           <div class="customer-profile-field"><span>主联系人</span><b>${escapeHtml(current.contact)}</b></div>
+          <div class="customer-profile-field"><span>WhatsApp</span><b>${escapeHtml(contacts.whatsapp || "待维护")}</b></div>
           <div class="customer-profile-field"><span>单据联系人</span><b>${escapeHtml(current.documentContact || "待维护")}</b></div>
           <div class="customer-profile-field"><span>账单抬头</span><b>${escapeHtml(current.billingName || current.company)}</b></div>
           <div class="customer-profile-field"><span>账单地址</span><b>${escapeHtml(current.billingAddress || "待维护")}</b></div>
           <div class="customer-profile-field"><span>贸易 / 付款条款</span><b>${escapeHtml(current.defaultIncoterm || "待维护")} · ${escapeHtml(current.defaultPaymentTerm || "待维护")}</b></div>
           <div class="customer-profile-field"><span>默认目的港</span><b>${escapeHtml(current.defaultPortDischarge || "待维护")}</b></div>
         </div>
-        <div class="customer-health-note"><b>健康度说明：</b>当前健康度来自历史人工录入或导入，并非系统自动计算。它仍用于低健康度提醒和风险报表；客户分级用于更明确的销售优先级管理。</div>
       </section>
 
       <section class="customer-page-section">
@@ -5075,11 +8005,12 @@ function renderCustomerDetailPage(customer?: Customer) {
           <div class="customer-contact-row"><span>联系人</span><b>${escapeHtml(current.contact)}</b><small>主联系人</small></div>
           <div class="customer-contact-row"><span>邮箱</span><b>${escapeHtml(contacts.email || "未维护")}</b><small>${contacts.email ? "可直接发邮件" : "待补充"}</small></div>
           <div class="customer-contact-row"><span>电话</span><b>${escapeHtml(contacts.phone || "未维护")}</b><small>${contacts.phone ? "可直接拨号" : "待补充"}</small></div>
+          <div class="customer-contact-row"><span>WhatsApp</span><b>${escapeHtml(contacts.whatsapp || "未维护")}</b><small>${contacts.whatsapp ? "可直接沟通" : "待补充"}</small></div>
         </div>
         <div class="customer-contact-actions">
           <button class="customer-contact-action ${contacts.email ? "is-ready" : ""}" type="button" data-customer-contact="email">${customerContactIcon("email")}<span>邮件${contacts.email ? "" : " · 待维护"}</span></button>
           <button class="customer-contact-action ${contacts.phone ? "is-ready" : ""}" type="button" data-customer-contact="phone">${customerContactIcon("phone")}<span>电话${contacts.phone ? "" : " · 待维护"}</span></button>
-          <button class="customer-contact-action" type="button" data-customer-contact="whatsapp">${customerContactIcon("whatsapp")}<span>WhatsApp · 去绑定</span></button>
+          <button class="customer-contact-action ${contacts.whatsapp ? "is-ready" : ""}" type="button" data-customer-contact="whatsapp">${customerContactIcon("whatsapp")}<span>WhatsApp · ${contacts.whatsapp ? "直接沟通" : "未维护"}</span></button>
           <button class="customer-contact-action" type="button" data-customer-contact="wechat">${customerContactIcon("wechat")}<span>企业微信 · 待接入</span></button>
         </div>
       </section>
@@ -5092,7 +8023,7 @@ function renderCustomerDetailPage(customer?: Customer) {
             <div><b>${escapeHtml(deal.nextActionAt || "时间待定")}</b><span>下一动作时间</span></div>
             ${badge(deal.stage, dealTone(deal))}
             <strong>${escapeHtml(dealMoney(deal.amount, deal.currency))}</strong>
-          </article>`).join("") : `<div class="customer-page-empty">暂无关联商机。新建商机并选择该客户后会自动出现在这里。</div>`}</div>
+          </article>`).join("") : `<div class="customer-page-empty">暂无关联商机</div>`}</div>
       </section>
 
       <section class="customer-page-section full">
@@ -5108,6 +8039,10 @@ function renderCustomerDetailPage(customer?: Customer) {
   `;
   qs<HTMLButtonElement>("[data-customer-page-back]", box)?.addEventListener("click", () => activateNavView("customers"));
   qsa<HTMLButtonElement>("[data-customer-page-edit]", box).forEach((button) => button.addEventListener("click", () => openCustomerModal(current)));
+  qs<HTMLButtonElement>("[data-customer-page-whatsapp]", box)?.addEventListener("click", () => {
+    void openWhatsAppForContact({ phone: contacts.whatsapp, displayName: current.contact || current.company });
+  });
+  qs<HTMLButtonElement>("[data-customer-page-release]", box)?.addEventListener("click", () => openCustomerReleaseModal(current));
   qs<HTMLButtonElement>("[data-customer-page-research]", box)?.addEventListener("click", () => openBackgroundResearch("customer", current.id, current.company, "customer-detail"));
   qs<HTMLButtonElement>("[data-customer-page-email]", box)?.addEventListener("click", () => openDevelopmentEmail("customer", current.id, current.company, "customer-detail"));
   qsa<HTMLButtonElement>("[data-customer-page-follow]", box).forEach((button) => button.addEventListener("click", () => addFollowRecord(current)));
@@ -5231,7 +8166,7 @@ function renderCustomerDrawer(customer?: Customer) {
     </section>
     <div class="score-card">
       <div class="score-ring"><span>${customer.health}</span></div>
-      <div><b>健康度：${customer.health >= 80 ? "健康" : customer.health >= 60 ? "需保持" : "需关注"}</b><p>当前为人工维护的兼容评分，用于风险提醒；客户分级用于业务优先级。</p></div>
+      <div><b>健康度：${customer.health >= 80 ? "健康" : customer.health >= 60 ? "需保持" : "需关注"}</b></div>
     </div>
     <div class="info-grid">
       <div class="info"><span>健康度</span><b>${customer.health}%</b></div>
@@ -5241,9 +8176,10 @@ function renderCustomerDrawer(customer?: Customer) {
       <div class="info"><span>活跃商机数</span><b>${activeDealCount}</b></div>
       <div class="info"><span>在手商机额</span><b>${money(pipelineAmount)}</b></div>
       <div class="info"><span>下一提醒</span><b>${escapeHtml(customer.nextReminder)}</b></div>
+      <div class="info"><span>WhatsApp</span><b>${escapeHtml(customerContactDetails(customer).whatsapp || "待维护")}</b></div>
       <div class="info"><span>企业微信</span><b>待接入</b></div>
     </div>
-    <div class="inline-actions"><button class="btn primary ai-entry-button" data-customer-research>${researchButtonIcon()}AI 背调</button><button class="btn" data-customer-email>写开发信</button><button class="btn" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button></div>
+    <div class="inline-actions"><button class="btn" data-customer-whatsapp-drawer>WhatsApp</button><button class="btn primary ai-entry-button" data-customer-research>${researchButtonIcon()}AI 背调</button><button class="btn" data-customer-email>写开发信</button><button class="btn" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button><button class="btn" data-customer-release-drawer>放入公池</button></div>
     ${renderCustomerIntelligence(customer)}
     <section class="customer-doc-info">
       <div class="customer-deals-head"><h3>单据基础信息</h3><button class="btn" data-edit-customer-document-info>维护信息</button></div>
@@ -5257,7 +8193,7 @@ function renderCustomerDrawer(customer?: Customer) {
       <div class="timeline-item"><b>付款条款</b><span>${escapeHtml(paymentTerm)}</span></div>
     </section>
     <div class="timeline">
-      ${(customer.activities || []).length ? (customer.activities || []).map((activity) => `<div class="timeline-item"><b>${escapeHtml(customerActivityLabel(activity.type))}</b><span>${escapeHtml(activity.content)}</span><small>${escapeHtml(activity.operatorName || "未知操作人")} · ${escapeHtml(formatDateTime(activity.createdAt))}${activity.nextReminder ? ` · 下次：${escapeHtml(activity.nextReminder)}` : ""}</small></div>`).join("") : `<div class="timeline-item"><b>暂无跟进记录</b><span>新增首条电话、邮件或社媒跟进后，将在这里形成连续时间线。</span></div>`}
+      ${(customer.activities || []).length ? (customer.activities || []).map((activity) => `<div class="timeline-item"><b>${escapeHtml(customerActivityLabel(activity.type))}</b><span>${escapeHtml(activity.content)}</span><small>${escapeHtml(activity.operatorName || "未知操作人")} · ${escapeHtml(formatDateTime(activity.createdAt))}${activity.nextReminder ? ` · 下次：${escapeHtml(activity.nextReminder)}` : ""}</small></div>`).join("") : `<div class="timeline-item"><b>暂无跟进记录</b></div>`}
     </div>
     ${renderCustomerDealProgress(customer)}
   `;
@@ -5266,6 +8202,10 @@ function renderCustomerDrawer(customer?: Customer) {
   customerClockTimer = window.setInterval(() => renderCustomerWorldClock(customer), 1000);
   qs("#customerDrawerClose", drawer)?.addEventListener("click", closeCustomerDrawer);
   qs<HTMLButtonElement>("[data-open-customer-page]", drawer)?.addEventListener("click", () => openCustomerDetailPage(customer));
+  qs<HTMLButtonElement>("[data-customer-whatsapp-drawer]", drawer)?.addEventListener("click", () => {
+    void openWhatsAppForContact({ phone: customerContactDetails(customer).whatsapp, displayName: customer.contact || customer.company });
+  });
+  qs<HTMLButtonElement>("[data-customer-release-drawer]", drawer)?.addEventListener("click", () => openCustomerReleaseModal(customer));
   qs<HTMLButtonElement>("[data-customer-research]", drawer)?.addEventListener("click", () => openBackgroundResearch("customer", customer.id, customer.company, "customers"));
   qs<HTMLButtonElement>("[data-customer-email]", drawer)?.addEventListener("click", () => openDevelopmentEmail("customer", customer.id, customer.company, "customers"));
   qs<HTMLButtonElement>("[data-add-follow]", drawer)?.addEventListener("click", () => addFollowRecord(customer));
@@ -6090,10 +9030,10 @@ function openCustomsDocumentModal(customsDoc: CustomsDocument, customer: Custome
     });
     qs<HTMLElement>("#customsReadinessValue")!.textContent = `${score}%`;
     qs<HTMLElement>("#customsTotalAmount")!.textContent = `${workingDocument.currency || "USD"} ${formatDocumentTableMoney(totalAmount)}`;
-    qs<HTMLElement>("#customsIssueCount")!.textContent = issues.length ? `${issues.length}项待补` : "可以导出";
+  qs<HTMLElement>("#customsIssueCount")!.textContent = issues.length ? `${issues.length}项待补` : "检查通过";
     qs<HTMLElement>("#customsIssueList")!.innerHTML = validationIssues.length
       ? validationIssues.slice(0, 12).map((issue, index) => `<button type="button" data-customs-issue-index="${index}">${escapeHtml(issue.label)}</button>`).join("") + (validationIssues.length > 12 ? `<small>另有 ${validationIssues.length - 12} 项，请继续检查商品明细。</small>` : "")
-      : `<div class="customs-ready-state"><b>资料检查通过</b><span>可以生成正式Excel资料包。</span></div>`;
+      : `<div class="customs-ready-state"><b>资料检查通过</b></div>`;
     qsa<HTMLButtonElement>("[data-customs-issue-index]", qs("#customsIssueList")!).forEach((button) => {
       button.addEventListener("click", () => {
         const issue = validationIssues[Number(button.dataset.customsIssueIndex || 0)];
@@ -6922,7 +9862,7 @@ function renderCommissionRecords() {
       <td><div class="commission-row-actions">${commissionRecordActions(record)}</div></td>
     </tr>
   `;
-  }).join("") : `<tr><td colspan="6" class="empty-cell">暂无销售记录。可以先同步本月已归档成交商机，或手工新增一条计提记录。</td></tr>`;
+  }).join("") : `<tr><td colspan="6" class="empty-cell">暂无销售记录</td></tr>`;
   cardList.innerHTML = rows.length ? rows.map((record) => {
     const commission = commissionAmountForRecord(record);
     return `
@@ -6979,7 +9919,7 @@ function renderCommissionCalculations() {
         ${state.commissionCanReview && calculation.status === "locked" ? `<button class="btn" data-unlock-commission-calc>解锁修正</button>` : ""}
       </div>
     </article>`;
-  }).join("") : `<div class="commission-empty">暂无计算结果。先确认销售记录，再点击“重新计算”。</div>`;
+  }).join("") : `<div class="commission-empty">暂无计算结果</div>`;
   qsa<HTMLButtonElement>("[data-select-commission-calc]", box).forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedCommissionCalculationId = button.closest<HTMLElement>(".commission-calc-row")?.dataset.commissionCalculationId || null;
@@ -7017,7 +9957,7 @@ function renderCommissionRules() {
         ${rule ? `<button class="btn" data-toggle-commission-rule="${escapeHtml(rule.id)}">${rule.enabled ? "停用规则" : "启用规则"}</button>` : ""}
       </div>` : ""}
     </article>`;
-  }).join("") : `<div class="commission-empty">暂无产品规则。管理员可点击“产品维护”新增。</div>`;
+  }).join("") : `<div class="commission-empty">暂无产品规则</div>`;
   qsa<HTMLButtonElement>("[data-edit-commission-product]", box).forEach((button) => {
     button.addEventListener("click", () => {
       const product = state.commissionProducts.find((item) => item.id === button.dataset.editCommissionProduct);
@@ -7710,7 +10650,7 @@ function renderProblems(problems: ProblemItem[]) {
       <div class="problem-top"><h3>${escapeHtml(problem.title)}</h3>${badge(severityText(problem.severity), severityTone(problem.severity))}</div>
       <div class="problem-meta"><span>${escapeHtml(problem.category)}</span><span>${escapeHtml(problemStatusText(problem.status))}</span><span>${escapeHtml(problem.dueAt || "未设截止")}</span><span>${escapeHtml(problem.relatedCustomer || "未关联客户")}</span></div>
       <p>${escapeHtml(problem.rootCause || "暂未填写原因")}</p>
-    </article>`).join("") : `<div class="todo-history-empty">暂无问题，点击“新增问题”建立解决闭环</div>`;
+    </article>`).join("") : `<div class="todo-history-empty">暂无问题</div>`;
     qsa<HTMLElement>(".problem-card", list).forEach((card) => {
       card.addEventListener("click", () => {
         state.selectedProblemId = card.dataset.problemId || null;
@@ -7732,7 +10672,7 @@ function renderProblems(problems: ProblemItem[]) {
 function renderProblemDetail(problem?: ProblemItem) {
   if (!problem) {
     qs("#problem-detail-title")!.textContent = "问题解决方案";
-    qs("#problem-detail-meta")!.textContent = "选择左侧问题查看闭环";
+    qs("#problem-detail-meta")!.textContent = "";
     qs("#problem-root-cause")!.textContent = "暂无问题";
     qs("#problem-solution")!.textContent = "暂无解决方案";
     qs("#problem-next-action")!.textContent = "暂无下一动作";
@@ -7790,7 +10730,7 @@ function renderMemos(_memos?: Memo[]) {
       <div class="memo-meta"><span>${escapeHtml(memo.category)}</span><span>${escapeHtml(memo.tags || "无标签")}</span><span>${escapeHtml(formatDateTime(memo.updatedAt))}</span></div>
       <p>${escapeHtml(memo.content.slice(0, 82) || "空白备忘")}</p>
       ${memoRelationText(memo) ? `<div class="memo-relation">${escapeHtml(memoRelationText(memo))}</div>` : ""}
-    </article>`).join("") : `<div class="todo-history-empty">暂无备忘，点击“新增备忘”开始记录</div>`;
+    </article>`).join("") : `<div class="todo-history-empty">暂无备忘</div>`;
     qsa<HTMLElement>(".memo-card", list).forEach((card) => {
       card.addEventListener("click", async () => {
         await saveCurrentMemoDraft();
@@ -7810,13 +10750,13 @@ function renderMemos(_memos?: Memo[]) {
 function renderMemoDetail(memo?: Memo) {
   if (!memo) {
     qs("#memo-detail-title")!.textContent = "备忘详情";
-    qs("#memo-detail-meta")!.textContent = "选择左侧备忘查看内容";
+    qs("#memo-detail-meta")!.textContent = "未选择";
     const titleEditor = qs<HTMLInputElement>("#memoTitleEditor");
     const tagsEditor = qs<HTMLInputElement>("#memoTagsEditor");
     const contentEditor = qs<HTMLTextAreaElement>("#memoContentEditor");
     if (titleEditor) titleEditor.value = "暂无备忘";
     if (tagsEditor) tagsEditor.value = "";
-    if (contentEditor) contentEditor.value = "点击“新增备忘”记录客户偏好、报价复盘或临时事项。";
+    if (contentEditor) contentEditor.value = "";
     qs<HTMLButtonElement>("#memoPinButton")?.setAttribute("disabled", "true");
     qs<HTMLButtonElement>("#memoArchiveButton")?.setAttribute("disabled", "true");
     qs<HTMLButtonElement>("#memoDeleteButton")?.setAttribute("disabled", "true");
@@ -7948,7 +10888,7 @@ function renderCompetitors(competitors: Competitor[]) {
       <div class="intel-top"><h3>${escapeHtml(item.company)}</h3>${badge(threatText(item.threatLevel), severityTone(item.threatLevel))}</div>
       <div class="intel-meta"><span>${escapeHtml(item.country || "未知国家")}</span><span>${escapeHtml(item.segment || "未分类")}</span><span>${escapeHtml(item.competingProducts || "未维护产品")}</span></div>
       <p>${escapeHtml(item.strengths || "暂未维护竞争优势")}</p>
-    </article>`).join("") : `<div class="todo-history-empty">暂无竞争公司，点击“新增竞争公司”建立情报库</div>`;
+    </article>`).join("") : `<div class="todo-history-empty">暂无竞争公司</div>`;
     qsa<HTMLElement>(".intel-card", list).forEach((card) => {
       card.addEventListener("click", () => {
         state.selectedCompetitorId = card.dataset.competitorId || null;
@@ -7966,7 +10906,7 @@ function renderCompetitors(competitors: Competitor[]) {
 function renderCompetitorDetail(competitor?: Competitor) {
   if (!competitor) {
     qs("#competitor-detail-title")!.textContent = "竞争公司详情";
-    qs("#competitor-detail-meta")!.textContent = "选择左侧记录查看情报";
+    qs("#competitor-detail-meta")!.textContent = "";
     qs("#competitor-products")!.textContent = "暂无记录";
     qs("#competitor-strengths")!.textContent = "暂无记录";
     qs("#competitor-weaknesses")!.textContent = "暂无记录";
@@ -7994,7 +10934,7 @@ function renderCaseStudies(caseStudies: CaseStudy[]) {
       <div class="case-top"><h3>${escapeHtml(item.title)}</h3>${badge(caseStatusText(item.status), item.status === "published" ? "green" : "amber")}</div>
       <div class="case-meta"><span>${escapeHtml(item.customer || "未关联客户")}</span><span>${escapeHtml(item.product || "未维护产品")}</span><span>${escapeHtml(item.country || "未知国家")}</span></div>
       <p>${escapeHtml(item.result || "暂未填写成果")}</p>
-    </article>`).join("") : `<div class="todo-history-empty">暂无成功案例，点击“新增成功案例”沉淀销售素材</div>`;
+    </article>`).join("") : `<div class="todo-history-empty">暂无成功案例</div>`;
     qsa<HTMLElement>(".case-card", list).forEach((card) => {
       card.addEventListener("click", () => {
         state.selectedCaseId = card.dataset.caseId || null;
@@ -8012,7 +10952,7 @@ function renderCaseStudies(caseStudies: CaseStudy[]) {
 function renderCaseDetail(caseStudy?: CaseStudy) {
   if (!caseStudy) {
     qs("#case-detail-title")!.textContent = "成功案例详情";
-    qs("#case-detail-meta")!.textContent = "选择左侧案例查看内容";
+    qs("#case-detail-meta")!.textContent = "";
     qs("#case-product")!.textContent = "暂无记录";
     qs("#case-result")!.textContent = "暂无记录";
     qs("#case-industry")!.textContent = "暂无记录";
@@ -8659,7 +11599,7 @@ function renderTradeDocuments(documents: TradeDocument[]) {
         <span>${escapeHtml(document.number)} · ${document.type}</span>
         <small>${documentStatusText(document.status)} · ${formatDocumentMoney(documentTotal(document), document.currency)}</small>
       </article>
-    `).join("") : `<div class="empty-cell">暂无单据，点击新建单据开始。</div>`}
+    `).join("") : `<div class="empty-cell">暂无单据</div>`}
   `;
   qsa<HTMLElement>("[data-document-id]", list).forEach((card) => {
     card.addEventListener("click", () => {
@@ -9238,14 +12178,7 @@ function renderCustomsDocumentPreview(document: TradeDocument, preview: HTMLElem
       </div>
     </div>
 
-    <div class="customs-footer-notice">
-      <div class="notice-icon">💡</div>
-      <div class="notice-content">
-        <strong>温馨提示</strong>
-        <p>点击顶部「导出 PDF」按钮将生成包含以上所有信息的完整Excel报关资料包（7个工作表）</p>
-        <p class="notice-warning">⚠️ 请仔细核对HS编码、品牌型号、重量等海关申报要素的准确性</p>
-      </div>
-    </div>
+    <div class="customs-footer-notice"><div class="notice-content"><p class="notice-warning">请核对 HS 编码、品牌型号、重量等海关申报要素</p></div></div>
   `;
 
   const meta = qs<HTMLElement>("#docPreviewMeta");
@@ -9372,12 +12305,16 @@ async function parseCustomerImportFile(file: File): Promise<CustomerImportRow[]>
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
   if (rows.length > 2000) throw new Error("客户导入单次最多支持 2000 行");
-  return rows.map((row) => {
+  return rows.map((row, index) => {
     const company = String(rowValue(row, ["公司名", "客户", "客户名称", "公司", "客户公司", "company", "Company"])).trim();
+    const whatsappInput = String(rowValue(row, ["WhatsApp", "Whatsapp", "whatsapp", "WA号码", "WhatsApp号码"]) || "").trim();
+    const whatsapp = whatsappInput ? normalizeWhatsAppPhone(whatsappInput) : "";
+    if (whatsappInput && !whatsapp) throw new Error(`第 ${index + 2} 行 WhatsApp 号码无效，请填写含国家码的号码`);
     return {
       company,
       country: String(rowValue(row, ["国家", "市场", "country", "Country"]) || "未知").trim(),
       contact: String(rowValue(row, ["联系人", "联系人姓名", "contact", "Contact"]) || "待维护").trim(),
+      whatsapp,
       stage: String(rowValue(row, ["阶段", "客户阶段", "stage", "Stage"]) || "询盘").trim(),
       amount: parseNumberCell(rowValue(row, ["预计金额", "金额", "商机金额", "amount", "Amount"])),
       health: Math.max(0, Math.min(100, Math.round(parseNumberCell(rowValue(row, ["健康度", "评分", "health", "Health"]), 70)))),
@@ -9433,6 +12370,7 @@ async function exportCustomers() {
       公司名: customer.company,
       国家: customer.country,
       联系人: customer.contact,
+      WhatsApp: customer.whatsapp || customer.whatsappPhone || "",
       最高活跃商机阶段: customer.pipelineStage || "暂无活跃商机",
       活跃商机数: customer.activeDealCount || 0,
       在手商机额: customer.pipelineAmount || 0,
@@ -9632,7 +12570,7 @@ function renderExams(exams: Exam[]) {
           <div class="exam-row-main"><b>${escapeHtml(exam.title)}</b><span>${exam.questionCount} 题 · ${exam.passScore || 80} 分及格 · ${escapeHtml(exam.category)} · ${examTargetText(exam.targetRole)}</span></div>
           <div class="exam-actions">${badge(examStatusText(exam.status), examStatusTone(exam.status))}<button class="btn" data-start-exam>考试</button>${canManage ? `<button class="btn" data-question-bank>题库</button><button class="btn" data-publish-exam>发布</button><button class="btn danger" data-delete-exam>删除</button>` : ""}</div>
         </div>`;
-    }).join("")}` : `<div class="empty-state"><b>暂无考试</b><span>点击发布考试或分类目考试维护创建第一套题。</span></div>`;
+    }).join("")}` : `<div class="empty-state"><b>暂无考试</b></div>`;
   const cards = qsa<HTMLElement>("#exam .dense-card");
   const values = [
     { label: "进行中考试", value: String(exams.filter((item) => item.status !== "draft").length), note: `${exams.filter((item) => item.status === "published").length} 场已发布` },
@@ -9722,7 +12660,7 @@ async function renderExamPreview(exam?: Exam) {
         <div class="question-meta"><span>${escapeHtml(question.category)} · ${questionTypeText(question)}</span>${badge(question.difficulty === "hard" ? "高阶" : question.difficulty === "easy" ? "基础" : "应用", difficultyTone(question.difficulty))}</div>
         <h3>${index + 1}. ${escapeHtml(question.stem)}</h3>
         <div class="option-row">${question.options.map((option, optionIndex) => `<span class="${correctIndexesForQuestion(question).includes(optionIndex) ? "active" : ""}">${String.fromCharCode(65 + optionIndex)}. ${escapeHtml(option)}</span>`).join("")}</div>
-      </div>`).join("") : `<div class="empty-state"><b>题库为空</b><span>点击题库维护添加产品知识题。</span></div>`;
+      </div>`).join("") : `<div class="empty-state"><b>题库为空</b></div>`;
     if (progressPanel) {
       progressPanel.innerHTML = `
         <div class="progress-ring" style="background:conic-gradient(var(--brand) 0 ${detail.exam.passRate}%, #e7edf6 ${detail.exam.passRate}% 100%)"><b>${detail.exam.passRate}%</b></div>
@@ -9931,7 +12869,7 @@ function renderExamQuestionPicker(filterCategory = "") {
       <input type="checkbox" data-question-id="${escapeHtml(question.id)}">
       <span><b>${escapeHtml(question.stem)}</b><small>${escapeHtml(question.category)} · ${questionTypeText(question)} · ${escapeHtml(questionTagsText(question))}</small></span>
       ${badge(question.difficulty === "hard" ? "高阶" : question.difficulty === "easy" ? "基础" : "应用", difficultyTone(question.difficulty))}
-    </label>`).join("") : `<div class="empty-state"><b>当前筛选下没有题目</b><span>请先在基础题库维护中新增或导入题目。</span></div>`;
+    </label>`).join("") : `<div class="empty-state"><b>当前筛选下没有题目</b></div>`;
   qsa<HTMLInputElement>("input[data-question-id]", picker).forEach((input) => input.addEventListener("change", updateExamCreateSelectionSummary));
   updateExamCreateSelectionSummary();
 }
@@ -10053,7 +12991,7 @@ function renderQuestionBankStats() {
   if (totalCard) totalCard.innerHTML = `<span>题库总量</span><b>${total}</b><small>真实基础题库</small>`;
   if (multiCard) multiCard.innerHTML = `<span>多选题</span><b>${multi}</b><small>${Math.round((multi / Math.max(total, 1)) * 100)}% 占比</small>`;
   if (categoryCard) categoryCard.innerHTML = `<span>类目数</span><b>${categories.length}</b><small>产品知识分类</small>`;
-  if (selectedCard) selectedCard.innerHTML = `<span>当前题目</span><b>${selected ? questionTypeText(selected) : "未选择"}</b><small>${selected ? escapeHtml(selected.category) : "点击列表编辑"}</small>`;
+  if (selectedCard) selectedCard.innerHTML = `<span>当前题目</span><b>${selected ? questionTypeText(selected) : "未选择"}</b>${selected ? `<small>${escapeHtml(selected.category)}</small>` : ""}`;
 }
 
 function renderQuestionBankRows(_questions = state.examQuestions) {
@@ -10068,7 +13006,7 @@ function renderQuestionBankRows(_questions = state.examQuestions) {
       <div class="question-bank-row-meta"><span>#${index + 1}</span>${badge(questionTypeText(question), questionTypeText(question) === "多选" ? "amber" : "")}${badge(question.difficulty === "hard" ? "高阶" : question.difficulty === "easy" ? "基础" : "应用", difficultyTone(question.difficulty))}</div>
       <h3>${escapeHtml(question.stem)}</h3>
       <div class="question-bank-row-foot"><span>${escapeHtml(question.category)}</span><span>${escapeHtml(questionTagsText(question))}</span><span>${question.options.length} 个选项</span></div>
-    </article>`).join("") : `<div class="empty-state"><b>暂无匹配题目</b><span>可以调整筛选条件，或点击新增题目。</span></div>`;
+    </article>`).join("") : `<div class="empty-state"><b>暂无匹配题目</b></div>`;
   qsa<HTMLElement>("[data-bank-question]", list).forEach((row) => {
     row.addEventListener("click", () => {
       state.selectedQuestionId = row.dataset.bankQuestion || null;
@@ -10369,6 +13307,563 @@ async function refreshExamData() {
   renderDashboardKnowledgePanels();
 }
 
+interface MysqlImportSelection {
+  file: File;
+  plan: MysqlDumpPlan;
+  sha256: string;
+}
+
+let mysqlImportSelection: MysqlImportSelection | null = null;
+let mysqlImportRunning = false;
+let databaseMaintenanceMode: "migration" | "backup" = "migration";
+let databaseMaintenanceStatus: DatabaseMaintenanceStatus | null = null;
+let databaseMaintenanceJobs: DatabaseMaintenanceJob[] = [];
+let databaseCurrentJob: DatabaseMaintenanceJob | null = null;
+let databaseLocalEvents: DatabaseMaintenanceEvent[] = [];
+let databaseMaintenancePollTimer = 0;
+let databaseCancelRequested = false;
+let databaseLogFollow = true;
+
+interface DatabaseMaintenanceEvent {
+  id: string;
+  at: string;
+  level: "info" | "success" | "warning" | "error";
+  stage: string;
+  table: string;
+  message: string;
+}
+
+interface DatabaseTableStat {
+  status?: "pending" | "running" | "completed" | "failed";
+  total?: number;
+  rows?: number;
+  imported?: number;
+  skipped?: number;
+  failed?: number;
+  bytes?: number;
+}
+
+interface DatabaseMaintenanceJob {
+  id: string;
+  type: "migration" | "backup";
+  status: "running" | "queued" | "completed" | "failed" | "cancelled" | "expired";
+  phase: string;
+  currentTable: string;
+  totalTables: number;
+  processedTables: number;
+  totalRows?: number;
+  processedRows?: number;
+  importedRows?: number;
+  skippedRows?: number;
+  failedRows?: number;
+  estimatedRows?: number;
+  fileName: string;
+  fileSize: number;
+  fileSha256: string;
+  errorMessage: string;
+  tableStats: Record<string, DatabaseTableStat>;
+  events: DatabaseMaintenanceEvent[];
+  createdAt: string;
+  completedAt: string;
+}
+
+interface DatabaseMaintenanceStatus {
+  store: string;
+  migration: { enabled: boolean; sourceStoredOnServer: boolean; maxFileSize: number; maxBatchRows: number };
+  backup: { enabled: boolean; retentionDays: number; reason: string };
+  latest: (DatabaseMaintenanceJob & { type: "migration" | "backup" }) | null;
+}
+
+function mysqlImportHeaders() {
+  return { "x-database-import-token": qs<HTMLInputElement>("#mysqlImportToken")?.value.trim() || "" };
+}
+
+function formatFileSize(value: number) {
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
+}
+
+function appendDatabaseLocalEvent(stage: string, message: string, level: DatabaseMaintenanceEvent["level"] = "info", table = "") {
+  databaseLocalEvents.push({ id: `dbel_${crypto.randomUUID()}`, at: new Date().toISOString(), level, stage, table, message });
+  databaseLocalEvents = databaseLocalEvents.slice(-500);
+  renderDatabaseStream();
+}
+
+function setMysqlImportProgress(processed: number, total: number, text: string, indeterminate = false) {
+  const percent = total ? Math.min(100, Math.round(processed / total * 100)) : 0;
+  const bar = qs<HTMLElement>("#mysqlImportProgressBar");
+  const track = bar?.parentElement;
+  if (bar) bar.style.width = `${percent}%`;
+  track?.classList.toggle("is-indeterminate", indeterminate);
+  const label = qs<HTMLElement>("#mysqlImportProgressText");
+  const percentLabel = qs<HTMLElement>("#mysqlImportProgressPercent");
+  if (label) label.textContent = text;
+  if (percentLabel) percentLabel.textContent = indeterminate ? "进行中" : `${percent}%`;
+}
+
+function databaseJobStatusLabel(status: DatabaseMaintenanceJob["status"]) {
+  return ({ queued: "等待执行", running: "执行中", completed: "已完成", failed: "执行失败", cancelled: "已取消", expired: "已清理" } as Record<DatabaseMaintenanceJob["status"], string>)[status];
+}
+
+function databaseJobTypeLabel(type: DatabaseMaintenanceJob["type"]) {
+  return type === "backup" ? "本地备份" : "数据迁移";
+}
+
+function databaseJobProgress(job: DatabaseMaintenanceJob) {
+  if (job.type === "backup") return { processed: job.processedTables || 0, total: job.totalTables || 0 };
+  return { processed: job.processedRows || 0, total: job.totalRows || 0 };
+}
+
+function renderDatabaseCapability() {
+  const status = databaseMaintenanceStatus;
+  const storeReady = status?.store === "mysql";
+  const storeState = qs<HTMLElement>("#databaseStoreState");
+  const storeMeta = qs<HTMLElement>("#databaseStoreMeta");
+  const backupPolicy = qs<HTMLElement>("#databaseBackupPolicy");
+  const backupMeta = qs<HTMLElement>("#databaseBackupPolicyMeta");
+  const policyTitle = qs<HTMLElement>("#databaseBackupPolicyTitle");
+  const policyDescription = qs<HTMLElement>("#databaseBackupPolicyDescription");
+  const policyBox = qs<HTMLElement>("#databaseBackupPolicyBox");
+  const retention = qs<HTMLElement>("#databaseBackupRetention");
+  if (storeState) storeState.textContent = storeReady ? "连接正常" : status ? "非 MySQL 模式" : "正在检查";
+  if (storeMeta) storeMeta.textContent = storeReady ? "当前业务数据使用 MySQL 持久化" : "数据库维护需要 MySQL 持久化模式";
+  const backupEnabled = Boolean(status?.backup.enabled);
+  if (backupPolicy) backupPolicy.textContent = backupEnabled ? "允许本地备份" : status ? "禁止本地备份" : "正在检查";
+  if (backupMeta) backupMeta.textContent = backupEnabled ? `自动保留 ${status?.backup.retentionDays || 0} 天` : status?.backup.reason || "读取部署配置";
+  if (policyTitle) policyTitle.textContent = backupEnabled ? "服务器允许创建本地备份" : "服务器已禁止本地备份";
+  if (policyDescription) policyDescription.textContent = backupEnabled ? "备份将压缩保存，并按配置自动清理" : "部署者需要设置 MYSQL_LOCAL_BACKUP_ENABLED=true 才能使用";
+  policyBox?.classList.toggle("is-blocked", !backupEnabled);
+  if (retention) retention.textContent = backupEnabled ? `${status?.backup.retentionDays || 0} 天` : "未启用";
+  const backupStart = qs<HTMLButtonElement>("#databaseBackupStart");
+  if (backupStart) {
+    backupStart.disabled = !backupEnabled || Boolean(databaseCurrentJob && ["queued", "running"].includes(databaseCurrentJob.status));
+    backupStart.title = backupEnabled ? "创建压缩数据库备份" : "需要在部署配置中开启 MYSQL_LOCAL_BACKUP_ENABLED";
+  }
+  const latest = status?.latest;
+  const latestTitle = qs<HTMLElement>("#databaseLatestTask");
+  const latestMeta = qs<HTMLElement>("#databaseLatestTaskMeta");
+  if (latestTitle) latestTitle.textContent = latest ? `${databaseJobTypeLabel(latest.type)} · ${databaseJobStatusLabel(latest.status)}` : "暂无任务";
+  if (latestMeta) latestMeta.textContent = latest ? new Date(latest.createdAt).toLocaleString("zh-CN", { hour12: false }) : "迁移与备份记录";
+}
+
+function renderDatabaseMode() {
+  qsa<HTMLButtonElement>("[data-database-mode]").forEach((button) => button.classList.toggle("active", button.dataset.databaseMode === databaseMaintenanceMode));
+  qs<HTMLElement>("#databaseMigrationControls")?.classList.toggle("is-hidden", databaseMaintenanceMode !== "migration");
+  qs<HTMLElement>("#databaseBackupControls")?.classList.toggle("is-hidden", databaseMaintenanceMode !== "backup");
+  qs<HTMLButtonElement>("#mysqlImportStart")?.classList.toggle("is-hidden", databaseMaintenanceMode !== "migration");
+  qs<HTMLButtonElement>("#databaseBackupStart")?.classList.toggle("is-hidden", databaseMaintenanceMode !== "backup");
+  renderDatabaseCapability();
+}
+
+function databaseTableEntries() {
+  if (databaseCurrentJob && Object.keys(databaseCurrentJob.tableStats || {}).length) return Object.entries(databaseCurrentJob.tableStats);
+  return Object.entries(mysqlImportSelection?.plan.tableRows || {}).map(([table, total]) => [table, { total }] as [string, DatabaseTableStat]);
+}
+
+function renderDatabaseTableProgress() {
+  const list = qs<HTMLElement>("#mysqlImportTableList");
+  if (!list) return;
+  const entries = databaseTableEntries();
+  const job = databaseCurrentJob;
+  const meta = qs<HTMLElement>("#databaseTableProgressMeta");
+  if (meta) meta.textContent = `${job?.processedTables || 0} / ${job?.totalTables || entries.length}`;
+  list.innerHTML = entries.length ? entries.map(([table, stat]) => {
+    const total = Number(stat.total ?? stat.rows ?? 0);
+    const imported = Number(stat.imported || 0);
+    const skipped = Number(stat.skipped || 0);
+    const failed = Number(stat.failed || 0);
+    const handled = imported + skipped + failed;
+    const status = stat.status || (job?.currentTable === table && job.status === "running" ? "running" : handled && handled >= total ? "completed" : "pending");
+    const progress = total ? Math.min(100, Math.round(handled / total * 100)) : status === "completed" ? 100 : 0;
+    return `<div class="database-table-row ${job?.currentTable === table && job.status === "running" ? "is-current" : ""}">
+      <b title="${escapeHtml(table)}">${escapeHtml(table)}</b>
+      <span class="database-table-state is-${status}"><i></i>${status === "running" ? "进行中" : status === "completed" ? "完成" : status === "failed" ? "失败" : "等待"}</span>
+      <span>${progress}%</span><span>${total.toLocaleString()}</span><span>${imported.toLocaleString()}</span><span>${skipped.toLocaleString()}</span><span>${failed.toLocaleString()}</span>
+    </div>`;
+  }).join("") : `<div class="empty-cell">暂无任务数据</div>`;
+}
+
+function databaseVisibleEvents() {
+  const remote = databaseCurrentJob?.events || [];
+  const values = [...databaseLocalEvents, ...remote];
+  return [...new Map(values.map((event) => [event.id, event])).values()].sort((left, right) => left.at.localeCompare(right.at));
+}
+
+function renderDatabaseStream() {
+  const stream = qs<HTMLElement>("#databaseStreamLog");
+  if (!stream) return;
+  const events = databaseVisibleEvents();
+  stream.innerHTML = events.length ? events.map((event) => `<div class="database-stream-line is-${event.level}"><time>${new Date(event.at).toLocaleTimeString("zh-CN", { hour12: false })}</time><em>${escapeHtml(event.table || event.stage)}</em><span>${escapeHtml(event.message)}</span></div>`).join("") : `<div class="database-stream-empty">任务开始后将在这里持续输出执行过程</div>`;
+  if (databaseLogFollow) stream.scrollTop = stream.scrollHeight;
+  const follow = qs<HTMLButtonElement>("#databaseLogFollow");
+  if (follow) follow.textContent = databaseLogFollow ? "暂停滚动" : "继续滚动";
+}
+
+function renderDatabaseExecution() {
+  const job = databaseCurrentJob;
+  const title = qs<HTMLElement>("#databaseExecutionTitle");
+  const meta = qs<HTMLElement>("#databaseExecutionMeta");
+  const eyebrow = qs<HTMLElement>("#databaseExecutionEyebrow");
+  const status = qs<HTMLElement>("#databaseExecutionStatus");
+  if (job) {
+    if (eyebrow) eyebrow.textContent = databaseJobTypeLabel(job.type);
+    if (title) title.textContent = job.fileName || `${databaseJobTypeLabel(job.type)}任务`;
+    if (meta) meta.textContent = `${job.phase || "准备中"}${job.currentTable ? ` · 当前 ${job.currentTable}` : ""} · ${new Date(job.createdAt).toLocaleString("zh-CN", { hour12: false })}`;
+    if (status) {
+      status.className = `database-run-status is-${job.status === "queued" ? "running" : job.status}`;
+      status.innerHTML = `<i></i>${databaseJobStatusLabel(job.status)}`;
+    }
+    const progress = databaseJobProgress(job);
+    setMysqlImportProgress(progress.processed, progress.total, job.errorMessage || (job.status === "completed" ? "任务执行完成" : job.currentTable ? `正在处理 ${job.currentTable}` : job.phase), !progress.total && ["queued", "running"].includes(job.status));
+  } else {
+    if (eyebrow) eyebrow.textContent = "任务执行";
+    if (title) title.textContent = mysqlImportSelection ? mysqlImportSelection.file.name : "等待开始";
+    if (meta) meta.textContent = mysqlImportSelection ? `${mysqlImportSelection.plan.rowCount.toLocaleString()} 条记录等待迁移` : "选择迁移文件或切换到备份";
+    if (status) {
+      status.className = "database-run-status is-idle";
+      status.innerHTML = "<i></i>等待任务";
+    }
+    setMysqlImportProgress(0, mysqlImportSelection?.plan.rowCount || 0, mysqlImportSelection ? "文件解析完成" : "等待任务");
+  }
+  renderDatabaseTableProgress();
+  renderDatabaseStream();
+  const cancel = qs<HTMLButtonElement>("#databaseTaskCancel");
+  const running = Boolean(job && ["queued", "running"].includes(job.status));
+  if (cancel) cancel.classList.toggle("is-hidden", !running);
+}
+
+function renderDatabaseHistory() {
+  const tbody = qs<HTMLElement>("#databaseMaintenanceHistory");
+  if (!tbody) return;
+  tbody.innerHTML = databaseMaintenanceJobs.length ? databaseMaintenanceJobs.map((job) => {
+    const rows = job.type === "migration" ? `${Number(job.importedRows || 0).toLocaleString()} 写入` : `${job.processedTables}/${job.totalTables} 张表`;
+    const file = job.fileName ? `${escapeHtml(job.fileName)}${job.fileSize ? `<small>${formatFileSize(job.fileSize)}</small>` : ""}` : "--";
+    const download = job.type === "backup" && job.status === "completed" ? `<button class="btn" data-database-download="${escapeHtml(job.id)}">下载</button>` : "";
+    const remove = job.type === "backup" && !["queued", "running"].includes(job.status) ? `<button class="btn danger" data-database-delete="${escapeHtml(job.id)}" title="删除备份">删除</button>` : "";
+    return `<tr data-database-job="${escapeHtml(job.id)}"><td><b>${escapeHtml(job.fileName || job.id)}</b><small>${escapeHtml(job.id)}</small></td><td>${databaseJobTypeLabel(job.type)}</td><td>${databaseJobStatusLabel(job.status)}</td><td>${rows}</td><td>${file}</td><td>${new Date(job.createdAt).toLocaleString("zh-CN", { hour12: false })}</td><td><div class="database-history-actions"><button class="btn" data-database-open="${escapeHtml(job.id)}">查看</button>${download}${remove}</div></td></tr>`;
+  }).join("") : `<tr><td colspan="7" class="empty-cell">暂无维护记录</td></tr>`;
+  qsa<HTMLButtonElement>("[data-database-open]", tbody).forEach((button) => button.addEventListener("click", () => {
+    databaseCurrentJob = databaseMaintenanceJobs.find((job) => job.id === button.dataset.databaseOpen) || null;
+    databaseLocalEvents = [];
+    renderMysqlImport();
+    if (databaseCurrentJob && ["queued", "running"].includes(databaseCurrentJob.status)) pollDatabaseJob(databaseCurrentJob);
+  }));
+  qsa<HTMLButtonElement>("[data-database-download]", tbody).forEach((button) => button.addEventListener("click", () => void downloadDatabaseBackup(button.dataset.databaseDownload || "")));
+  qsa<HTMLButtonElement>("[data-database-delete]", tbody).forEach((button) => button.addEventListener("click", () => void removeDatabaseBackup(button.dataset.databaseDelete || "")));
+}
+
+function renderMysqlImport() {
+  const selection = mysqlImportSelection;
+  const fileName = qs<HTMLElement>("#mysqlImportFileName");
+  const fileMeta = qs<HTMLElement>("#mysqlImportFileMeta");
+  const tableCount = qs<HTMLElement>("#mysqlImportTableCount");
+  const rowCount = qs<HTMLElement>("#mysqlImportRowCount");
+  const appliedCount = qs<HTMLElement>("#mysqlImportAppliedCount");
+  const skippedCount = qs<HTMLElement>("#mysqlImportSkippedCount");
+  const list = qs<HTMLElement>("#mysqlImportTableList");
+  const start = qs<HTMLButtonElement>("#mysqlImportStart");
+  if (fileName) fileName.textContent = selection?.file.name || "选择 MySQL 文件";
+  if (fileMeta) fileMeta.textContent = selection
+    ? `${formatFileSize(selection.file.size)} · ${selection.plan.rowCount.toLocaleString()} 条记录`
+    : ".sql / .sql.gz · 文件仅在浏览器解析";
+  if (tableCount) tableCount.textContent = String(Object.keys(selection?.plan.tableRows || {}).length);
+  if (rowCount) rowCount.textContent = (selection?.plan.rowCount || 0).toLocaleString();
+  if (appliedCount) appliedCount.textContent = Number(databaseCurrentJob?.importedRows || 0).toLocaleString();
+  if (skippedCount) skippedCount.textContent = Number(databaseCurrentJob?.skippedRows || 0).toLocaleString();
+  if (start) start.disabled = !selection || mysqlImportRunning || Boolean(databaseCurrentJob && ["queued", "running"].includes(databaseCurrentJob.status));
+  void list;
+  renderDatabaseMode();
+  renderDatabaseExecution();
+  renderDatabaseHistory();
+}
+
+async function refreshDatabaseMaintenance() {
+  const canManage = state.user && ["admin", "super_admin"].includes(state.user.role);
+  if (!canManage) return;
+  const badgeNode = qs<HTMLElement>("#databaseMaintenanceState");
+  try {
+    const [status, history] = await Promise.all([
+      api<DatabaseMaintenanceStatus>("/api/system/database-maintenance/status"),
+      api<{ jobs: DatabaseMaintenanceJob[] }>("/api/system/database-maintenance/jobs?limit=40")
+    ]);
+    databaseMaintenanceStatus = status;
+    databaseMaintenanceJobs = history.jobs;
+    if (badgeNode) {
+      badgeNode.textContent = status.store === "mysql" ? "MySQL 正常" : "不可用";
+      badgeNode.className = `badge ${status.store === "mysql" ? "green" : "amber"}`;
+    }
+    renderMysqlImport();
+  } catch (error) {
+    if (badgeNode) {
+      badgeNode.textContent = "不可用";
+      badgeNode.className = "badge red";
+    }
+    appendDatabaseLocalEvent("connection", error instanceof Error ? error.message : "数据库维护状态读取失败", "error");
+  }
+}
+
+function refreshMysqlImportStatus() {
+  return refreshDatabaseMaintenance();
+}
+
+async function prepareMysqlImportFile(file: File) {
+  const badgeNode = qs<HTMLElement>("#mysqlImportState");
+  const start = qs<HTMLButtonElement>("#mysqlImportStart");
+  mysqlImportSelection = null;
+  databaseCurrentJob = null;
+  databaseLocalEvents = [];
+  if (start) start.disabled = true;
+  void badgeNode;
+  appendDatabaseLocalEvent("file", `正在读取 ${file.name}`);
+  setMysqlImportProgress(0, 1, "正在本地解析");
+  try {
+    const [sql, sha256] = await Promise.all([readMysqlDumpFile(file), sha256File(file)]);
+    const plan = parseMysqlDump(sql);
+    mysqlImportSelection = { file, plan, sha256 };
+    appendDatabaseLocalEvent("parse", `解析完成：${Object.keys(plan.tableRows).length} 张表、${plan.rowCount} 条记录`, "success");
+    if (plan.ignoredStatements) appendDatabaseLocalEvent("parse", `已忽略 ${plan.ignoredStatements} 条结构或控制语句`, "warning");
+    setMysqlImportProgress(0, plan.rowCount, "等待迁移");
+    renderMysqlImport();
+  } catch (error) {
+    appendDatabaseLocalEvent("parse", error instanceof Error ? error.message : "MySQL 文件解析失败", "error");
+    setMysqlImportProgress(0, 1, "文件无法解析");
+    renderMysqlImport();
+    toast(error instanceof Error ? error.message : "MySQL 文件解析失败", "error");
+  }
+}
+
+function fitBatchToSchema(
+  batch: MysqlDumpBatch,
+  tables: Record<string, { columns: string[]; primaryKeys: string[] }>
+) {
+  const target = tables[batch.table];
+  if (!target) return batch;
+  const indexes = batch.columns
+    .map((column, index) => target.columns.includes(column) ? index : -1)
+    .filter((index) => index >= 0);
+  if (!indexes.length) return null;
+  return {
+    table: batch.table,
+    columns: indexes.map((index) => batch.columns[index]),
+    rows: batch.rows.map((row) => indexes.map((index) => row[index]))
+  };
+}
+
+function splitLargeMysqlImportBatch(batch: MysqlDumpBatch): MysqlDumpBatch[] {
+  if (JSON.stringify(batch).length < 1_500_000 || batch.rows.length === 1) return [batch];
+  const middle = Math.ceil(batch.rows.length / 2);
+  return [
+    ...splitLargeMysqlImportBatch({ ...batch, rows: batch.rows.slice(0, middle) }),
+    ...splitLargeMysqlImportBatch({ ...batch, rows: batch.rows.slice(middle) })
+  ];
+}
+
+async function waitForMysqlImportRestart() {
+  await new Promise((resolve) => window.setTimeout(resolve, 2200));
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      const response = await fetch("/api/health", { cache: "no-store", credentials: "same-origin" });
+      if (response.ok) {
+        window.location.reload();
+        return;
+      }
+    } catch {
+      // The production service is restarting.
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+  }
+  toast("数据库已迁移，请刷新页面", "error");
+}
+
+async function startMysqlImport() {
+  if (!mysqlImportSelection || mysqlImportRunning) return;
+  const token = mysqlImportHeaders()["x-database-import-token"];
+  if (!token) {
+    toast("请输入迁移授权码", "error");
+    qs<HTMLInputElement>("#mysqlImportToken")?.focus();
+    return;
+  }
+  const selection = mysqlImportSelection;
+  let jobId = "";
+  mysqlImportRunning = true;
+  databaseCancelRequested = false;
+  databaseLocalEvents = [];
+  appendDatabaseLocalEvent("schema", "正在读取目标数据库结构");
+  renderMysqlImport();
+  try {
+    const headers = mysqlImportHeaders();
+    const schema = await api<{ tables: Record<string, { columns: string[]; primaryKeys: string[] }> }>("/api/system/database-import/schema", { headers });
+    const created = await api<{ job: DatabaseMaintenanceJob }>("/api/system/database-import/jobs", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        fileName: selection.file.name,
+        fileSize: selection.file.size,
+        fileSha256: selection.sha256,
+        conflictMode: qs<HTMLSelectElement>("#mysqlImportConflict")?.value === "overwrite" ? "overwrite" : "skip",
+        tableRows: selection.plan.tableRows,
+        ignoredStatements: selection.plan.ignoredStatements
+      })
+    });
+    jobId = created.job.id;
+    databaseCurrentJob = { ...created.job, type: "migration" } as DatabaseMaintenanceJob;
+    appendDatabaseLocalEvent("schema", "目标结构核对完成", "success");
+    const batches = selection.plan.batches
+      .map((batch) => fitBatchToSchema(batch, schema.tables))
+      .filter((batch): batch is MysqlDumpBatch => Boolean(batch))
+      .flatMap(splitLargeMysqlImportBatch);
+    const remaining = new Map<string, number>();
+    batches.forEach((batch) => remaining.set(batch.table, (remaining.get(batch.table) || 0) + 1));
+    for (const batch of batches) {
+      if (databaseCancelRequested) throw new Error("迁移已取消");
+      const left = (remaining.get(batch.table) || 1) - 1;
+      remaining.set(batch.table, left);
+      const response = await api<{ result: { imported: number; skipped: number; failed: number }; job: DatabaseMaintenanceJob }>(`/api/system/database-import/jobs/${encodeURIComponent(jobId)}/batches`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ...batch, tableComplete: left === 0 })
+      });
+      databaseCurrentJob = { ...response.job, type: "migration" };
+      renderMysqlImport();
+    }
+    const completed = await api<{ job: DatabaseMaintenanceJob; restartScheduled: boolean }>(`/api/system/database-import/jobs/${encodeURIComponent(jobId)}/complete`, {
+      method: "POST",
+      headers,
+      body: "{}"
+    });
+    databaseCurrentJob = { ...completed.job, type: "migration" };
+    appendDatabaseLocalEvent("completed", `迁移完成：写入 ${completed.job.importedRows || 0}，跳过 ${completed.job.skippedRows || 0}`, "success");
+    toast(`已写入 ${completed.job.importedRows || 0} 条，跳过 ${completed.job.skippedRows || 0} 条`);
+    await refreshDatabaseMaintenance();
+    if (completed.restartScheduled) void waitForMysqlImportRestart();
+    else toast("请重启本地后端以载入迁移数据");
+  } catch (error) {
+    if (jobId && !databaseCancelRequested) {
+      await api(`/api/system/database-import/jobs/${encodeURIComponent(jobId)}/fail`, {
+        method: "POST",
+        headers: mysqlImportHeaders(),
+        body: JSON.stringify({ message: error instanceof Error ? error.message : "数据库迁移失败" })
+      }).catch(() => null);
+    }
+    appendDatabaseLocalEvent(databaseCancelRequested ? "cancelled" : "failed", error instanceof Error ? error.message : "数据库迁移失败", databaseCancelRequested ? "warning" : "error");
+    if (!databaseCancelRequested) toast(error instanceof Error ? error.message : "数据库迁移失败", "error");
+    await refreshDatabaseMaintenance();
+  } finally {
+    mysqlImportRunning = false;
+    renderMysqlImport();
+  }
+}
+
+function databaseJobEndpoint(job: DatabaseMaintenanceJob) {
+  return job.type === "backup"
+    ? `/api/system/database-backups/jobs/${encodeURIComponent(job.id)}`
+    : `/api/system/database-import/jobs/${encodeURIComponent(job.id)}`;
+}
+
+function pollDatabaseJob(job: DatabaseMaintenanceJob) {
+  window.clearInterval(databaseMaintenancePollTimer);
+  databaseMaintenancePollTimer = window.setInterval(async () => {
+    try {
+      const response = await api<{ job: DatabaseMaintenanceJob }>(databaseJobEndpoint(job), { headers: mysqlImportHeaders() });
+      databaseCurrentJob = { ...response.job, type: job.type };
+      renderMysqlImport();
+      if (!["queued", "running"].includes(response.job.status)) {
+        window.clearInterval(databaseMaintenancePollTimer);
+        await refreshDatabaseMaintenance();
+      }
+    } catch {
+      appendDatabaseLocalEvent("connection", "连接中断，正在重连", "warning");
+    }
+  }, 700);
+}
+
+async function startDatabaseBackup() {
+  const token = mysqlImportHeaders()["x-database-import-token"];
+  if (!token) {
+    toast("请输入数据库维护授权码", "error");
+    qs<HTMLInputElement>("#mysqlImportToken")?.focus();
+    return;
+  }
+  if (!databaseMaintenanceStatus?.backup.enabled) {
+    toast("服务器已禁止本地备份", "error");
+    return;
+  }
+  databaseLocalEvents = [];
+  databaseCancelRequested = false;
+  appendDatabaseLocalEvent("queued", "正在创建数据库备份任务");
+  try {
+    const response = await api<{ job: DatabaseMaintenanceJob }>("/api/system/database-backups/jobs", { method: "POST", headers: mysqlImportHeaders(), body: "{}" });
+    databaseCurrentJob = { ...response.job, type: "backup" };
+    renderMysqlImport();
+    pollDatabaseJob(databaseCurrentJob);
+  } catch (error) {
+    appendDatabaseLocalEvent("failed", error instanceof Error ? error.message : "数据库备份启动失败", "error");
+    toast(error instanceof Error ? error.message : "数据库备份启动失败", "error");
+  }
+}
+
+async function cancelDatabaseMaintenanceTask() {
+  const job = databaseCurrentJob;
+  if (!job || !["queued", "running"].includes(job.status)) return;
+  databaseCancelRequested = true;
+  const path = job.type === "backup"
+    ? `/api/system/database-backups/jobs/${encodeURIComponent(job.id)}/cancel`
+    : `/api/system/database-import/jobs/${encodeURIComponent(job.id)}/cancel`;
+  try {
+    const response = await api<{ job: DatabaseMaintenanceJob }>(path, { method: "POST", headers: mysqlImportHeaders(), body: "{}" });
+    databaseCurrentJob = { ...response.job, type: job.type };
+    window.clearInterval(databaseMaintenancePollTimer);
+    appendDatabaseLocalEvent("cancelled", "任务已停止", "warning");
+    await refreshDatabaseMaintenance();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "停止任务失败", "error");
+  }
+}
+
+async function downloadDatabaseBackup(id: string) {
+  try {
+    const response = await fetch(`/api/system/database-backups/jobs/${encodeURIComponent(id)}/download`, { credentials: "same-origin", headers: mysqlImportHeaders() });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ message: "备份下载失败" }));
+      throw new Error(body.message || "备份下载失败");
+    }
+    const blob = await response.blob();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = databaseMaintenanceJobs.find((job) => job.id === id)?.fileName || "goodjob-database.sql.gz";
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "备份下载失败", "error");
+  }
+}
+
+async function removeDatabaseBackup(id: string) {
+  if (!window.confirm("确认删除这个服务器本地备份？删除后无法恢复。")) return;
+  try {
+    await api(`/api/system/database-backups/jobs/${encodeURIComponent(id)}`, { method: "DELETE", headers: mysqlImportHeaders() });
+    if (databaseCurrentJob?.id === id) databaseCurrentJob = null;
+    await refreshDatabaseMaintenance();
+    toast("备份已删除");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "备份删除失败", "error");
+  }
+}
+
+function databaseLogText() {
+  return databaseVisibleEvents().map((event) => `${event.at}\t${event.level}\t${event.table || event.stage}\t${event.message}`).join("\n");
+}
+
+function downloadDatabaseLog() {
+  const blob = new Blob([databaseLogText()], { type: "text/plain;charset=utf-8" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `goodjob-database-task-${databaseCurrentJob?.id || "local"}.log`;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
 async function renderAccounts(user: User) {
   const tbody = qs<HTMLElement>("#settings tbody");
   if (!tbody) return;
@@ -10379,6 +13874,7 @@ async function renderAccounts(user: User) {
     addButton.title = canManage ? "新增系统账号" : "只有管理员和超级管理员可以管理账号";
   }
   if (!canManage) {
+    void refreshMysqlImportStatus();
     state.accounts = [user];
     tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><b>账号管理仅管理员可用</b><span>当前账号可查看授权范围说明；账号新增、停用和角色调整由管理员或超级管理员处理。</span></div></td></tr>`;
     renderAccountMetrics([user], false);
@@ -10401,6 +13897,7 @@ async function renderAccounts(user: User) {
   qsa<HTMLButtonElement>("[data-delete-account]", tbody).forEach((button) => {
     button.addEventListener("click", () => void deleteAccount(button.closest<HTMLElement>("tr")?.dataset.accountId || ""));
   });
+  void refreshMysqlImportStatus();
 }
 
 function renderAccountMetrics(accounts: User[], canManage: boolean) {
@@ -10680,7 +14177,7 @@ function renderAiConfig(config: AiModelConfig | null) {
   if (list) {
     const draftRow = state.aiDraftMode ? `
       <button class="ai-instance-row active is-draft" type="button" data-ai-draft-row>
-        <span><b>未保存的新配置</b><small>填写参数后点击保存，系统会创建独立实例</small></span>
+        <span><b>未保存的新配置</b></span>
         <em>${badge("新增", "amber")}</em>
       </button>
     ` : "";
@@ -10695,7 +14192,7 @@ function renderAiConfig(config: AiModelConfig | null) {
         </button>
       `;
     }).join("");
-    list.innerHTML = draftRow || savedRows ? `${draftRow}${savedRows}` : `<div class="empty-cell">暂无配置，点击“新增配置”。</div>`;
+    list.innerHTML = draftRow || savedRows ? `${draftRow}${savedRows}` : `<div class="empty-cell">暂无配置</div>`;
     qsa<HTMLButtonElement>("#aiConfigList [data-ai-config-id]").forEach((button) => {
       button.addEventListener("click", () => {
         state.aiDraftMode = false;
@@ -10709,10 +14206,10 @@ function renderAiConfig(config: AiModelConfig | null) {
     modeAlert.innerHTML = state.pendingAiDeleteId && state.pendingAiDeleteId === config?.id
       ? `<b>确认删除</b><span>将删除“${escapeHtml(config.name)}”，再次点击“确认删除”才会执行。</span>`
       : state.aiDraftMode
-      ? `<b>新增配置</b><span>当前内容尚未保存，不会影响已有配置；保存后生成独立实例。</span>`
+      ? `<b>新增配置</b>`
       : config
-        ? `<b>编辑配置</b><span>${escapeHtml(config.name)} · 修改后点击保存，应用范围和启用状态会持久化。</span>`
-        : `<b>暂无配置</b><span>点击“新增配置”创建第一套模型参数。</span>`;
+        ? `<b>编辑配置</b><span>${escapeHtml(config.name)}</span>`
+        : `<b>暂无配置</b>`;
   }
   if (deleteButton) {
     deleteButton.disabled = state.aiDraftMode || !config;
@@ -10762,8 +14259,8 @@ function renderAiConfig(config: AiModelConfig | null) {
     gptConnectionBadge.className = `badge ${tested ? "green" : failed ? "red" : ready ? "amber" : ""}`;
     gptConnectionBadge.textContent = tested ? "连接通过" : failed ? "连接失败" : ready ? "待测试" : "未启用";
   }
-  if (gptConnectionTitle) gptConnectionTitle.textContent = tested ? "AI 连接测试通过" : failed ? "AI 连接测试失败" : ready ? "已保存，建议立即测试" : config?.enabled ? "还需要填写 API Key" : "等待启用 AI";
-  if (gptConnectionText) gptConnectionText.textContent = config?.lastTestMessage || (ready ? `当前模型：${config?.model}。已勾选 ${useCount} 个业务模块。` : "配置完成后，自动获客、线索评分、开发信草稿和考试资料可以按需调用。");
+  if (gptConnectionTitle) gptConnectionTitle.textContent = tested ? "AI 连接测试通过" : failed ? "AI 连接测试失败" : ready ? "配置已保存" : config?.enabled ? "缺少 API Key" : "AI 未启用";
+  if (gptConnectionText) gptConnectionText.textContent = config?.lastTestMessage || (ready ? `当前模型：${config?.model} · ${useCount} 个业务模块` : "");
   if (gptState) gptState.textContent = ready ? "已启用" : config?.enabled ? "待补Key" : "未启用";
   if (gptSub) gptSub.textContent = tested ? "最近测试通过" : ready ? "可测试连接和调用" : "等待 API Key";
   if (gptModelState) gptModelState.textContent = config?.model || defaultModel;
@@ -10868,10 +14365,12 @@ function newAiConfigDraft(provider = "openai") {
   }
   if (enabledSelect) enabledSelect.value = "false";
   if (tempInput) tempInput.value = "0.1";
-  ["#aiUseLeadFinder", "#aiUseWebsiteParse", "#aiUseScoring", "#aiUseEmailDraft"].forEach((selector) => {
+  ["#aiUseWebsiteParse", "#aiUseScoring", "#aiUseEmailDraft"].forEach((selector) => {
     const input = qs<HTMLInputElement>(selector);
     if (input) input.checked = false;
   });
+  const leadFinder = qs<HTMLInputElement>("#aiUseLeadFinder");
+  if (leadFinder) leadFinder.checked = true;
   const exam = qs<HTMLInputElement>("#aiUseExam");
   if (exam) exam.checked = false;
   renderAiConfig(null);
@@ -10902,6 +14401,7 @@ async function deleteAiConfig(button?: HTMLButtonElement) {
     state.pendingAiDeleteId = null;
     state.selectedAiConfigId = result.config?.id || state.aiConfigs[0]?.id || null;
     renderAiConfig(state.aiConfig);
+    await loadLeadProviders();
     renderLeadFinder(state.websiteOpportunities);
     toast(`已删除：${current.name}`);
   } finally {
@@ -10953,6 +14453,7 @@ async function saveAiConfig(button?: HTMLButtonElement, options: { silent?: bool
     state.aiDraftMode = false;
     state.pendingAiDeleteId = null;
     renderAiConfig(result.config);
+    await loadLeadProviders();
     renderLeadFinder(state.websiteOpportunities);
     if (!options.silent) toast(result.config.enabled ? `已保存并启用：${result.config.name}` : `已保存：${result.config.name}`);
   } finally {
@@ -10984,6 +14485,7 @@ async function testAiConfig(button?: HTMLButtonElement) {
       state.aiConfigs = result.configs || state.aiConfigs.map((item) => item.id === result.config?.id ? result.config : item);
       state.selectedAiConfigId = result.config.id;
       renderAiConfig(result.config);
+      await loadLeadProviders();
       renderLeadFinder(state.websiteOpportunities);
     }
     const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
@@ -11029,7 +14531,7 @@ function renderWebsiteOpportunities(opportunities: WebsiteOpportunity[]) {
       <td><textarea data-website-field="description">${escapeHtml(item.description)}</textarea></td>
       <td>${badge(item.status === "synced" ? "已同步" : "待同步", item.status === "synced" ? "green" : "amber")}${badge(modeText(item.parseMode), modeTone(item.parseMode))}</td>
     </tr>
-  `).join("") : `<tr><td colspan="9" class="empty-cell">粘贴官网后点击登记。系统只保存链接，不会访问、下载或解析企业网页。</td></tr>`;
+  `).join("") : `<tr><td colspan="9" class="empty-cell">暂无待核验企业</td></tr>`;
 }
 
 function collectWebsiteRows() {
@@ -11343,7 +14845,7 @@ function renderProspectMailPreview() {
     `To: ${qs<HTMLInputElement>("#prospectMailTo")?.value.trim() || "未填写"}`,
     `Subject: ${qs<HTMLInputElement>("#prospectMailSubject")?.value.trim() || "未填写"}`,
     "",
-    qs<HTMLTextAreaElement>("#prospectMailBody")?.value.trim() || (item ? "点击“生成正文”创建开发信。" : "选择一条线索后，可生成并预览开发信。")
+    qs<HTMLTextAreaElement>("#prospectMailBody")?.value.trim() || "暂无开发信"
   ].join("\n");
 }
 
@@ -11385,7 +14887,7 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
   }
   if (!box) return;
   if (!item) {
-    box.innerHTML = `<div class="empty-cell">点击左侧线索查看详情。</div>`;
+    box.innerHTML = `<div class="empty-cell">未选择线索</div>`;
     renderProspectMailPreview();
     return;
   }
@@ -11425,7 +14927,7 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
       ${item.status !== "synced" ? `<button class="btn" id="prospectSaveButton">保存核验资料</button>` : ""}
       ${item.status === "preview" ? `<button class="btn" id="prospectDetailMarkButton">标记可联系</button>` : ""}
       ${item.status === "excluded" ? `<button class="btn" id="prospectRestoreButton">恢复待核验</button>` : ""}
-      ${["contactable", "contacted"].includes(item.status) ? `<button class="btn primary" id="prospectDetailSyncButton">加入线索</button>` : ""}
+      ${["preview", "contactable", "contacted"].includes(item.status) ? `<button class="btn primary" id="prospectDetailSyncButton">加入线索</button>` : ""}
       ${item.status === "synced" && item.leadId ? `<button class="btn primary" id="prospectViewLeadButton">查看线索</button>` : ""}
       ${canWriteOutreach && canContact ? `<button class="btn" id="prospectTouchpointButton">记录触达</button><button class="btn" id="prospectReplyButton">记录回复</button>` : ""}
       ${item.lastTouchpointAt ? `<button class="btn" id="prospectTouchpointHistoryButton">查看记录</button>` : ""}
@@ -11587,9 +15089,9 @@ async function syncProspects(ids: string[], button?: HTMLButtonElement) {
     toast("请先选择要入线索的候选", "error");
     return;
   }
-  const invalid = state.websiteOpportunities.filter((item) => ids.includes(item.id) && !["contactable", "contacted"].includes(item.status));
+  const invalid = state.websiteOpportunities.filter((item) => ids.includes(item.id) && !["preview", "contactable", "contacted"].includes(item.status));
   if (invalid.length) {
-    toast("只有“可联系”或“已联系”的候选可以入线索", "error");
+    toast("已排除或已入线索的候选不能重复同步", "error");
     return;
   }
   if (button) {
@@ -11599,7 +15101,7 @@ async function syncProspects(ids: string[], button?: HTMLButtonElement) {
   try {
     const result = await api<{ created: LeadSyncResult[] }>("/api/tools/website-scrape/sync-opportunities", {
       method: "POST",
-      body: JSON.stringify({ opportunities })
+      body: JSON.stringify({ opportunities, allowPending: true })
     });
     result.created.forEach((item) => {
       if (!state.leads.some((lead) => lead.id === item.lead.id)) state.leads.unshift(item.lead);
@@ -11971,7 +15473,10 @@ async function sendProspectDevelopmentEmail(button?: HTMLButtonElement) {
 function currentLeadFinderTitle() {
   const product = qs<HTMLInputElement>("#leadProductKeywords")?.value.trim().split(/,|，/)[0]?.trim() || "产品";
   const country = qs<HTMLInputElement>("#leadCountries")?.value.trim().split(/,|，/)[0]?.trim() || "目标市场";
-  const type = qs<HTMLSelectElement>("#leadCustomerTypes")?.value.split("/")[0]?.trim() || "客户";
+  const customerType = qs<HTMLSelectElement>("#leadCustomerTypes");
+  const type = customerType?.value === "*"
+    ? "全部客户"
+    : customerType?.value.split("/")[0]?.trim() || "客户";
   return `${country} · ${product} · ${type}`;
 }
 
@@ -11987,11 +15492,285 @@ function currentLeadFinderSources() {
     .filter(Boolean);
 }
 
+const superWebProviderPriority = ["serper", "brave", "serpapi"];
+
+function superWebProviders(executableOnly = false) {
+  return state.leadProviders
+    .filter((provider) =>
+      provider.category === "web"
+      && provider.accessMode === "api"
+      && provider.capabilities.includes("web")
+      && (!executableOnly || isLeadSourceExecutable(provider))
+    )
+    .sort((left, right) => {
+      const leftIndex = superWebProviderPriority.indexOf(left.id);
+      const rightIndex = superWebProviderPriority.indexOf(right.id);
+      return (leftIndex < 0 ? 99 : leftIndex) - (rightIndex < 0 ? 99 : rightIndex);
+    });
+}
+
+function selectedSuperWebProviderIds() {
+  const webIds = new Set(superWebProviders().map((provider) => provider.id));
+  return state.selectedLeadSources.filter((providerId) => webIds.has(providerId));
+}
+
+function superMapProviders(executableOnly = false) {
+  return state.leadProviders.filter((provider) =>
+    provider.accessMode === "api"
+    && provider.capabilities.includes("maps")
+    && (!executableOnly || isLeadSourceExecutable(provider))
+  );
+}
+
+function selectedSuperMapProviderIds() {
+  const mapIds = new Set(superMapProviders().map((provider) => provider.id));
+  return state.selectedLeadSources.filter((providerId) => mapIds.has(providerId));
+}
+
+function superAiDiscoveryProvider() {
+  return state.leadProviders.find((provider) =>
+    provider.id === "ai_search"
+    && provider.accessMode === "api"
+    && provider.capabilities.includes("ai")
+  );
+}
+
+function selectedSuperAiDiscoveryProviderIds() {
+  const provider = superAiDiscoveryProvider();
+  return provider && state.selectedLeadSources.includes(provider.id) ? [provider.id] : [];
+}
+
+function superWebSearchMode(): "off" | "api" {
+  return leadFinderMode === "super" && Boolean(qs<HTMLInputElement>("#leadSuperWebSearch")?.checked)
+    ? "api"
+    : "off";
+}
+
+function superMapSearchMode(): "off" | "google_places" {
+  return leadFinderMode === "super" && Boolean(qs<HTMLInputElement>("#leadSuperMapSearch")?.checked)
+    ? "google_places"
+    : "off";
+}
+
+function superAiDiscoveryMode(): "off" | "model" {
+  return leadFinderMode === "super" && Boolean(qs<HTMLInputElement>("#leadSuperAiDiscovery")?.checked)
+    ? "model"
+    : "off";
+}
+
+function renderSuperWebSearchOption() {
+  const checkbox = qs<HTMLInputElement>("#leadSuperWebSearch");
+  const status = qs<HTMLElement>("#leadSuperWebStatus");
+  if (!checkbox || !status) return;
+  const selectedNames = selectedSuperWebProviderIds().map((providerId) =>
+    state.leadProviders.find((provider) => provider.id === providerId)?.name || providerId
+  );
+  status.textContent = checkbox.checked
+    ? selectedNames.length ? selectedNames.join("、") : "等待配置可用来源"
+    : "未启用";
+}
+
+function renderSuperMapSearchOption() {
+  const checkbox = qs<HTMLInputElement>("#leadSuperMapSearch");
+  const status = qs<HTMLElement>("#leadSuperMapStatus");
+  if (!checkbox || !status) return;
+  const selectedNames = selectedSuperMapProviderIds().map((providerId) =>
+    state.leadProviders.find((provider) => provider.id === providerId)?.name || providerId
+  );
+  status.textContent = checkbox.checked
+    ? selectedNames.length ? selectedNames.join("、") : "等待配置可用来源"
+    : "未启用";
+}
+
+function renderSuperAiDiscoveryOption() {
+  const checkbox = qs<HTMLInputElement>("#leadSuperAiDiscovery");
+  const status = qs<HTMLElement>("#leadSuperAiStatus");
+  if (!checkbox || !status) return;
+  const provider = superAiDiscoveryProvider();
+  status.textContent = checkbox.checked
+    ? provider && isLeadSourceExecutable(provider) ? provider.name : "等待配置可用模型"
+    : "未启用";
+}
+
+async function toggleSuperWebSearch(enabled: boolean) {
+  const checkbox = qs<HTMLInputElement>("#leadSuperWebSearch");
+  if (!checkbox) return;
+  if (!enabled) {
+    const webIds = new Set(superWebProviders().map((provider) => provider.id));
+    state.selectedLeadSources = state.selectedLeadSources.filter((providerId) => !webIds.has(providerId));
+    state.leadSourceSelectionTouched = true;
+    renderLeadSourceChips();
+    renderSuperWebSearchOption();
+    renderSuperSearchPreview();
+    return;
+  }
+  await loadLeadProviders();
+  const selectedExecutable = selectedSuperWebProviderIds().filter((providerId) =>
+    superWebProviders(true).some((provider) => provider.id === providerId)
+  );
+  if (!selectedExecutable.length) {
+    const provider = superWebProviders(true)[0];
+    if (provider) {
+      state.selectedLeadSources = [...new Set([...state.selectedLeadSources, provider.id])];
+      state.leadSourceSelectionTouched = true;
+    } else {
+      checkbox.checked = false;
+      renderSuperWebSearchOption();
+      openLeadSourceCenter(superWebProviders()[0]?.id);
+      toast("请先配置并启用一个 Web Search API", "error");
+      return;
+    }
+  }
+  renderLeadSourceChips();
+  renderSuperWebSearchOption();
+  renderSuperSearchPreview();
+}
+
+async function toggleSuperMapSearch(enabled: boolean) {
+  const checkbox = qs<HTMLInputElement>("#leadSuperMapSearch");
+  if (!checkbox) return;
+  if (!enabled) {
+    const mapIds = new Set(superMapProviders().map((provider) => provider.id));
+    state.selectedLeadSources = state.selectedLeadSources.filter((providerId) => !mapIds.has(providerId));
+    state.leadSourceSelectionTouched = true;
+    renderLeadSourceChips();
+    renderSuperMapSearchOption();
+    renderSuperSearchPreview();
+    return;
+  }
+  await loadLeadProviders();
+  const provider = superMapProviders(true).find((item) => item.id === "google_places");
+  if (!provider) {
+    checkbox.checked = false;
+    renderSuperMapSearchOption();
+    openLeadSourceCenter("google_places");
+    toast("请先配置并启用 Google Places API", "error");
+    return;
+  }
+  state.selectedLeadSources = [...new Set([...state.selectedLeadSources, provider.id])];
+  state.leadSourceSelectionTouched = true;
+  renderLeadSourceChips();
+  renderSuperMapSearchOption();
+  renderSuperSearchPreview();
+}
+
+async function toggleSuperAiDiscovery(enabled: boolean) {
+  const checkbox = qs<HTMLInputElement>("#leadSuperAiDiscovery");
+  if (!checkbox) return;
+  if (!enabled) {
+    state.selectedLeadSources = state.selectedLeadSources.filter((providerId) => providerId !== "ai_search");
+    state.leadSourceSelectionTouched = true;
+    renderLeadSourceChips();
+    renderSuperAiDiscoveryOption();
+    renderSuperSearchPreview();
+    return;
+  }
+  await loadLeadProviders();
+  const provider = superAiDiscoveryProvider();
+  if (!isLeadSourceExecutable(provider)) {
+    checkbox.checked = false;
+    renderSuperAiDiscoveryOption();
+    activateNavView("ai-config", () => {
+      qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
+      toast("启用模型并勾选自动获客后，即可使用 AI 深度发现", "error");
+    });
+    return;
+  }
+  state.selectedLeadSources = [...new Set([...state.selectedLeadSources, "ai_search"])];
+  state.leadSourceSelectionTouched = true;
+  renderLeadSourceChips();
+  renderSuperAiDiscoveryOption();
+  renderSuperSearchPreview();
+}
+
+function renderSuperSearchPreview() {
+  const box = qs<HTMLElement>("#leadSuperPlan");
+  if (!box) return;
+  if (leadFinderMode !== "super") return;
+  const products = leadFinderValues("#leadProductKeywords");
+  const markets = leadFinderValues("#leadCountries");
+  const customerTypes = leadFinderValues("#leadCustomerTypes");
+  const industries = leadFinderValues("#leadIndustryInput");
+  renderSuperWebSearchOption();
+  const webSearchMode = superWebSearchMode();
+  renderSuperMapSearchOption();
+  const mapSearchMode = superMapSearchMode();
+  renderSuperAiDiscoveryOption();
+  const aiDiscoveryMode = superAiDiscoveryMode();
+  const providerIds = state.selectedLeadSources.filter((id) => state.leadProviders.some((provider) =>
+    provider.id === id
+    && provider.accessMode === "api"
+    && (webSearchMode === "api" || provider.category !== "web")
+    && (mapSearchMode === "google_places" || !provider.capabilities.includes("maps"))
+    && (aiDiscoveryMode === "model" || provider.id !== "ai_search")
+  ));
+  if (!products.length || !markets.length || !customerTypes.length || !providerIds.length) {
+    box.innerHTML = `<span>填写产品、市场、客户类型并选择数据源后生成搜索计划</span>`;
+    return;
+  }
+  window.clearTimeout(leadSuperPreviewTimer);
+  leadSuperPreviewTimer = window.setTimeout(async () => {
+    try {
+      const result = await api<{ preview: { maxRounds: number; maximumCells: number; cellsPerRound: number; coverageCombinations: number; providerCount: number; webProviderCount: number; mapProviderCount: number; aiDiscoveryProviderCount: number; targetCandidateCount: number; maxDurationMinutes: number } }>("/api/prospect-super-search/preview", {
+        method: "POST",
+        body: JSON.stringify({
+          products, markets, customerTypes, industries, providerIds, webSearchMode, mapSearchMode, aiDiscoveryMode,
+          depth: qs<HTMLSelectElement>("#leadSuperDepth")?.value || "deep",
+          targetCandidateCount: Number(qs<HTMLInputElement>("#leadSuperTarget")?.value || 300),
+          maxDurationMinutes: Number(qs<HTMLSelectElement>("#leadSuperDuration")?.value || 480),
+          costLimit: Number(qs<HTMLInputElement>("#leadSuperCost")?.value || 0),
+          currency: Number(qs<HTMLInputElement>("#leadSuperCost")?.value || 0) > 0 ? "USD" : ""
+        })
+      });
+      const plan = result.preview;
+      box.innerHTML = `<span><b>${plan.coverageCombinations}</b> 个覆盖组合</span><span><b>${plan.maximumCells}</b> 个来源执行单元</span>${plan.webProviderCount ? `<span><b>${plan.webProviderCount}</b> 个实时 Web API</span>` : ""}${plan.mapProviderCount ? `<span><b>${plan.mapProviderCount}</b> 个地图来源</span>` : ""}${plan.aiDiscoveryProviderCount ? `<span><b>${plan.aiDiscoveryProviderCount}</b> 个 AI 发现来源</span>` : ""}<span><b>${plan.maxRounds}</b> 轮</span><span>目标 <b>${plan.targetCandidateCount}</b> 条</span>`;
+    } catch {
+      box.innerHTML = `<span>搜索计划暂不可用，请检查条件和数据源</span>`;
+    }
+  }, 280);
+}
+
+function setLeadFinderMode(mode: "standard" | "super") {
+  leadFinderMode = mode;
+  qsa<HTMLButtonElement>("[data-lead-search-mode]").forEach((button) => button.classList.toggle("active", button.dataset.leadSearchMode === mode));
+  const config = qs<HTMLElement>("#leadSuperSearchConfig");
+  if (config) config.hidden = mode !== "super";
+  const webSearch = qs<HTMLInputElement>("#leadSuperWebSearch");
+  if (mode === "super" && webSearch) {
+    webSearch.checked = selectedSuperWebProviderIds().length > 0;
+  }
+  const mapSearch = qs<HTMLInputElement>("#leadSuperMapSearch");
+  if (mode === "super" && mapSearch) {
+    mapSearch.checked = selectedSuperMapProviderIds().length > 0;
+  }
+  const aiDiscovery = qs<HTMLInputElement>("#leadSuperAiDiscovery");
+  if (mode === "super" && aiDiscovery) {
+    aiDiscovery.checked = selectedSuperAiDiscoveryProviderIds().length > 0;
+  }
+  const schedule = qs<HTMLInputElement>("#leadFinderScheduleInput");
+  const scheduleLine = schedule?.closest<HTMLElement>(".lead-schedule-toggle");
+  if (schedule) {
+    schedule.disabled = mode === "super";
+    if (mode === "super") schedule.checked = false;
+  }
+  scheduleLine?.classList.toggle("is-disabled", mode === "super");
+  const title = qs<HTMLButtonElement>("#leadFinderStartButton");
+  const inline = qs<HTMLButtonElement>("#leadFinderStartButtonInline");
+  [title, inline].forEach((button) => {
+    if (button) button.textContent = mode === "super" ? "启动超级搜索" : "开始搜客";
+  });
+  renderSuperWebSearchOption();
+  renderSuperMapSearchOption();
+  renderSuperAiDiscoveryOption();
+  renderSuperSearchPreview();
+}
+
 function buildLeadFinderJobDetails(resultIds: string[] = []) {
   const product = qs<HTMLInputElement>("#leadProductKeywords")?.value.trim() || "未填写产品";
   const countries = qs<HTMLInputElement>("#leadCountries")?.value.trim() || "未填写市场";
   const industry = qs<HTMLInputElement>("#leadIndustryInput")?.value.trim() || "未填写行业";
-  const customerType = qs<HTMLSelectElement>("#leadCustomerTypes")?.value || "未选择客户类型";
+  const customerTypeValue = qs<HTMLSelectElement>("#leadCustomerTypes")?.value || "*";
+  const customerType = customerTypeValue === "*" ? "全部客户类型" : customerTypeValue;
   const sourceText = currentLeadFinderSources().join("、") || "默认公开源";
   const lines = [
     `产品：${product}`,
@@ -12091,6 +15870,10 @@ function leadTaskDetailStatusClass(job: LeadFinderJob) {
   return "is-running";
 }
 
+function leadTaskJobIsLive(job?: LeadFinderJob | null) {
+  return job?.status === "running";
+}
+
 function leadTaskDetailEventText(event: ProspectRunEventApiRecord) {
   const copy: Record<ProspectRunEventApiRecord["eventType"], [string, string]> = {
     created: ["任务创建完成", "搜索策略与来源计划已冻结，等待执行器接管"],
@@ -12130,6 +15913,62 @@ function leadTaskDetailLogs(job: LeadFinderJob) {
     result: "已就绪",
     tone: ""
   }];
+  (job.superSearchRounds || []).forEach((round) => {
+    const query = round.queryPlanSnapshot;
+    const scope = [
+      query?.countries.join("、") || "全球",
+      query?.languages.join("、") || "自动语言",
+      query?.customerTypes.join("、") || "不限买家类型"
+    ].join(" · ");
+    logs.push({
+      key: `${job.id}:plan:${round.roundNo}:${round.queryPlanFingerprint || "legacy"}`,
+      at: round.createdAt,
+      source: "规划器",
+      title: `第 ${round.roundNo} 轮 · ${superSearchThemeLabel(round.queryTheme)}`,
+      detail: `${scope}；${round.coverageGaps?.join("；") || "建立覆盖基线"}`,
+      result: round.completedAt
+        ? `原始 ${round.rawCount} / 候选 ${round.candidateCount}`
+        : `${round.queryCells?.length || job.channelCount} 单元执行中`,
+      tone: round.candidateCount ? "is-gain" : round.completedAt ? "is-review" : "is-live"
+    });
+  });
+  const currentSuperRound = (job.superSearchRounds || []).find((round) =>
+    round.roundNo === job.superSearchRound
+  );
+  const currentSuperRoundCreatedAt = currentSuperRound?.createdAt || job.createdAt;
+  (currentSuperRound?.queryCells || []).forEach((cell) => {
+    const sourceName = state.leadProviders.find((item) => item.id === cell.providerId)?.name || cell.providerId;
+    const failed = cell.status === "failed";
+    const settled = cell.status !== "planned";
+    logs.push({
+      key: `${job.id}:cell:${cell.fingerprint}:${cell.status}`,
+      at: cell.completedAt || currentSuperRoundCreatedAt,
+      source: sourceName,
+      title: failed
+        ? "查询单元执行失败"
+        : cell.status === "succeeded_empty"
+          ? "查询单元完成，无返回"
+          : settled
+            ? "查询单元已完成"
+            : "查询单元正在执行",
+      detail: failed
+        ? `${cell.errorCode || "PROVIDER_EXECUTION_FAILED"} · ${cell.errorMessage || "查看来源失败报文"}`
+        : `${cell.market} · ${cell.language} · 原始 ${cell.rawCount || 0} · 无效 ${cell.invalidCount || 0} · 重复 ${cell.duplicateCount || 0}`,
+      result: failed ? "失败" : settled ? `${cell.candidateCount || 0} 候选` : "执行中",
+      tone: failed ? "is-failed" : cell.candidateCount ? "is-gain" : settled ? "is-review" : "is-live"
+    });
+  });
+  (job.processPhases || []).forEach((phase, index) => {
+    logs.push({
+      key: `${job.id}:phase:${phase.id}:${phase.status}:${phase.result}`,
+      at: job.runEvents?.[Math.min(index, Math.max(0, job.runEvents.length - 1))]?.createdAt || job.createdAt,
+      source: "流程",
+      title: phase.name,
+      detail: phase.result,
+      result: phase.status === "succeeded" ? "完成" : phase.status === "partial" ? "部分完成" : phase.status === "failed" ? "失败" : phase.status === "blocked" ? "受阻" : phase.status === "running" ? "进行中" : "等待",
+      tone: phase.status === "failed" || phase.status === "blocked" ? "is-failed" : phase.status === "succeeded" ? "is-gain" : phase.status === "partial" ? "is-review" : ""
+    });
+  });
   (job.runEvents || []).forEach((event) => {
     const [title, detail] = leadTaskDetailEventText(event);
     logs.push({
@@ -12234,13 +16073,19 @@ function leadTaskVerboseOperation(job: LeadFinderJob, sequence: number): LeadTas
 }
 
 function syncLeadTaskStreamModeUi() {
+  const job = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
+  const live = leadTaskJobIsLive(job);
   qsa<HTMLButtonElement>("[data-lead-stream-mode]").forEach((button) => {
     button.classList.toggle("active", button.dataset.leadStreamMode === leadTaskStreamMode);
+    button.disabled = button.dataset.leadStreamMode === "verbose" && !live;
   });
   const stateNode = qs<HTMLElement>("#leadTaskStreamState");
   if (stateNode) {
-    stateNode.textContent = leadTaskStreamMode === "verbose" ? "高速追踪" : "实时同步";
-    stateNode.classList.toggle("is-verbose", leadTaskStreamMode === "verbose");
+    stateNode.textContent = live
+      ? leadTaskStreamMode === "verbose" ? "高速追踪" : "实时同步"
+      : job?.status === "paused" ? "执行已暂停" : "记录已归档";
+    stateNode.classList.toggle("is-verbose", live && leadTaskStreamMode === "verbose");
+    stateNode.classList.toggle("is-terminal", !live);
   }
 }
 
@@ -12248,7 +16093,10 @@ function appendLeadTaskVerboseLog() {
   if (leadTaskStreamMode !== "verbose" || qs<HTMLElement>(".view.active")?.id !== "lead-task-detail") return;
   const job = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
   const stream = qs<HTMLElement>("#leadTaskStream");
-  if (!job || !stream) return;
+  if (!job || !stream || !leadTaskJobIsLive(job)) {
+    syncLeadTaskVerboseTimer(false);
+    return;
+  }
   const wasFollowing = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 72;
   const log = leadTaskVerboseOperation(job, leadTaskVerboseSequence++);
   stream.insertAdjacentHTML("beforeend", leadTaskStreamLogHtml(log));
@@ -12267,7 +16115,9 @@ function appendLeadTaskVerboseLog() {
 }
 
 function syncLeadTaskVerboseTimer(active: boolean) {
-  if (!active) {
+  const job = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
+  const shouldRun = active && leadTaskJobIsLive(job);
+  if (!shouldRun) {
     if (leadTaskVerboseTimer) window.clearInterval(leadTaskVerboseTimer);
     leadTaskVerboseTimer = 0;
     return;
@@ -12278,6 +16128,8 @@ function syncLeadTaskVerboseTimer(active: boolean) {
 }
 
 function setLeadTaskStreamMode(mode: LeadTaskStreamMode) {
+  const activeJob = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
+  if (mode === "verbose" && !leadTaskJobIsLive(activeJob)) mode = "summary";
   leadTaskStreamMode = mode;
   const stream = qs<HTMLElement>("#leadTaskStream");
   if (stream) {
@@ -12360,15 +16212,69 @@ function renderLeadTaskSources(job: LeadFinderJob) {
   box.innerHTML = sources.map((source) => {
     const current = leadTaskDetailSourceStep(source.status);
     const terminal = current === 5;
+    const returned = source.rawCount ?? source.count;
+    const resultText = returned === undefined
+      ? "等待来源返回"
+      : returned === 0
+        ? terminal || ["failed", "cancelled"].includes(source.status || "") ? "无返回" : "暂未返回"
+        : `返回 ${returned} 条 · 入池 ${source.candidateCount || 0} 条`;
     return `
       <div class="task-run-source-row">
         <div class="task-run-source-name"><b>${escapeHtml(source.name)}</b><span>${escapeHtml(source.id)}</span></div>
         <div class="task-run-source-steps">${stepLabels.map((label, index) => `<span class="task-run-source-step ${terminal || index < current ? "is-done" : index === current ? "is-current" : ""}">${label}</span>`).join("")}</div>
-        <span class="task-run-source-status">${escapeHtml(source.statusLabel || "等待执行")}</span>
+        <div class="task-run-source-result">
+          <span class="task-run-source-status">${escapeHtml(source.statusLabel || "等待执行")}</span>
+          <span class="task-run-source-count">${escapeHtml(resultText)}</span>
+          ${source.failure ? `<button type="button" data-lead-source-failure="${escapeHtml(source.id)}">查看失败报文</button>` : ""}
+        </div>
         <time class="task-run-source-time">${escapeHtml(leadTaskDetailTime(source.updatedAt || source.createdAt))}</time>
       </div>
     `;
   }).join("");
+  qsa<HTMLButtonElement>("[data-lead-source-failure]", box).forEach((button) => {
+    button.addEventListener("click", () => openLeadTaskFailureReport(job, button.dataset.leadSourceFailure || ""));
+  });
+}
+
+function renderLeadTaskPhases(job: LeadFinderJob) {
+  const box = qs<HTMLElement>("#leadTaskPhases");
+  const summary = qs<HTMLElement>("#leadTaskPhasesSummary");
+  if (!box || !summary) return;
+  const phases = job.processPhases?.length
+    ? job.processPhases
+    : job.steps.map((name, index) => ({ id: `local-${index}`, name, status: index === 0 ? "succeeded" as const : job.status === "failed" ? "blocked" as const : "pending" as const, result: index === 0 ? "任务条件已生成" : "等待后台结果" }));
+  const done = phases.filter((item) => item.status === "succeeded").length;
+  const failed = phases.filter((item) => ["failed", "blocked"].includes(item.status)).length;
+  summary.textContent = failed ? `${failed} 个流程异常` : `${done} / ${phases.length} 已完成`;
+  box.innerHTML = phases.map((phase, index) => `
+    <article class="task-run-phase is-${escapeHtml(phase.status)}">
+      <span>${String(index + 1).padStart(2, "0")}</span>
+      <div><b>${escapeHtml(phase.name)}</b><small>${escapeHtml(phase.result)}</small></div>
+      <em>${phase.status === "succeeded" ? "完成" : phase.status === "partial" ? "部分完成" : phase.status === "failed" ? "失败" : phase.status === "blocked" ? "受阻" : phase.status === "running" ? "进行中" : "等待"}</em>
+    </article>
+  `).join("");
+}
+
+function openLeadTaskFailureReport(job: LeadFinderJob, sourceId: string) {
+  const source = (job.sourceStats || []).find((item) => item.id === sourceId);
+  const dialog = qs<HTMLDialogElement>("#leadTaskFailureDialog");
+  const title = qs<HTMLElement>("#leadTaskFailureTitle");
+  const summary = qs<HTMLElement>("#leadTaskFailureSummary");
+  const body = qs<HTMLElement>("#leadTaskFailureBody");
+  if (!source?.failure || !dialog || !title || !summary || !body) return;
+  title.textContent = `${source.name} · 失败报文`;
+  summary.textContent = `${source.failure.stage} · ${source.failure.errorCode}`;
+  body.textContent = JSON.stringify({
+    taskId: job.backendRunId || job.id,
+    provider: source.id,
+    status: source.status,
+    failure: source.failure,
+    job: source.job,
+    checkpoint: source.checkpoint,
+    attempts: source.attempts || [],
+    requests: source.requests || []
+  }, null, 2);
+  if (!dialog.open) dialog.showModal();
 }
 
 function renderLeadTaskInsights(job: LeadFinderJob) {
@@ -12377,11 +16283,12 @@ function renderLeadTaskInsights(job: LeadFinderJob) {
   const gainSummary = qs<HTMLElement>("#leadTaskGainSummary");
   const cleanSummary = qs<HTMLElement>("#leadTaskCleanSummary");
   if (!gains || !cleaned || !gainSummary || !cleanSummary) return;
+  const live = leadTaskJobIsLive(job);
   const found = (job.resultIds || [])
     .map((id) => state.websiteOpportunities.find((item) => item.id === id))
     .filter(Boolean) as WebsiteOpportunity[];
   const stats = job.incrementalStats;
-  gainSummary.textContent = stats ? `净新增 ${stats.newCount} 条` : found.length ? `${found.length} 条候选` : "持续更新";
+  gainSummary.textContent = stats ? `净新增 ${stats.newCount} 条` : found.length ? `${found.length} 条候选` : live ? "持续更新" : "本轮无新增";
   if (found.length) {
     gains.innerHTML = found.map((item) => `
       <div class="task-run-insight-row is-gain"><div><b>${escapeHtml(item.company || "公司待确认")}</b><span>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website || ""))}</span></div><em>${leadFinderScore(item)} 分</em></div>
@@ -12392,7 +16299,7 @@ function renderLeadTaskInsights(job: LeadFinderJob) {
       <div class="task-run-insight-row is-gain"><div><b>已有企业新增证据</b><span>补充来源或联系线索</span></div><em>+${stats.evidenceUpdatedCount}</em></div>
     `;
   } else {
-    gains.innerHTML = `<div class="task-run-insight-empty">来源正在检索与归并。发现可核验企业后，会在这里持续追加当前收获。</div>`;
+    gains.innerHTML = `<div class="task-run-insight-empty">${live ? "来源正在检索与归并。发现可核验企业后，会在这里持续追加当前收获。" : "本轮任务已结束，未形成可入池的候选企业。"}</div>`;
   }
   const cleanRows: Array<[string, string, number | null]> = [
     ["域名或企业身份重复", "同批候选只保留一条主记录", stats?.deduplicatedCount ?? null],
@@ -12401,10 +16308,279 @@ function renderLeadTaskInsights(job: LeadFinderJob) {
     ["多来源身份合并", "来源证据归并到同一企业", stats?.multiSourceMergedCount ?? null]
   ];
   const cleanedTotal = stats ? stats.deduplicatedCount + stats.excludedCount + stats.unchangedCount : null;
-  cleanSummary.textContent = cleanedTotal === null ? "规则监测中" : `已分流 ${cleanedTotal} 条`;
+  cleanSummary.textContent = cleanedTotal === null ? live ? "规则监测中" : "本轮已结束" : `已分流 ${cleanedTotal} 条`;
   cleaned.innerHTML = cleanRows.map(([title, detail, count]) => `
     <div class="task-run-insight-row"><div><b>${escapeHtml(title)}</b><span>${escapeHtml(detail)}</span></div><em>${count === null ? "监测中" : `${count} 条`}</em></div>
   `).join("");
+}
+
+function renderLeadTaskCleaningReport(job: LeadFinderJob) {
+  const box = qs<HTMLElement>("#leadTaskCleaningReport");
+  const summary = qs<HTMLElement>("#leadTaskCleaningSummary");
+  const importButton = qs<HTMLButtonElement>("#leadTaskImportPending");
+  if (!box || !summary || !importButton) return;
+  const report = job.cleaningReport;
+  if (!report) {
+    summary.textContent = "等待清洗记录";
+    importButton.hidden = true;
+    importButton.style.display = "none";
+    box.innerHTML = `<div class="task-run-insight-empty">清洗流水尚未回传。</div>`;
+    return;
+  }
+  const providerName = (code: string) =>
+    state.leadProviders.find((item) => item.id === code)?.name || code;
+  const pendingCandidates = job.pendingCandidates || [];
+  const selectedPending = new Set(job.selectedPendingHitIds || []);
+  summary.textContent = `${report.summary.processedCount}/${report.summary.pipelineHitCount} 已处理 · ${report.summary.candidateCount} 条入池${job.superSearchMissionId && job.pendingCandidatesLoaded ? ` · 全任务待决定 ${pendingCandidates.length}` : ""}`;
+  const showImportButton = Boolean(
+    job.backendRunId
+    && (pendingCandidates.length > 0 || (!job.pendingCandidatesLoaded && report.summary.pendingCount > 0))
+  );
+  importButton.hidden = !showImportButton;
+  importButton.style.display = showImportButton ? "" : "none";
+  importButton.disabled = leadTaskJobIsLive(job) || Boolean(job.pendingCandidatesLoaded && !selectedPending.size);
+  importButton.textContent = leadTaskJobIsLive(job)
+    ? `等待任务结束（${pendingCandidates.length || report.summary.pendingCount}）`
+    : job.pendingCandidatesLoaded
+      ? `纳入候选池（${selectedPending.size}）`
+      : "查看待决定记录";
+  importButton.onclick = () => {
+    if (job.pendingCandidatesLoaded) void importPendingLeadTaskResults(job, importButton);
+    else void loadLeadTaskPendingCandidates(job);
+  };
+  const stages = report.stages.map((stage) => `
+    <div class="task-run-clean-stage">
+      <span>${escapeHtml(stage.name)}</span>
+      <b>${stage.input} → ${stage.output}</b>
+      <small>${escapeHtml(stage.result)}</small>
+    </div>
+  `).join("");
+  const sources = report.sources.length ? report.sources.map((source) => `
+    <div class="task-run-clean-reason">
+      <div><b>${escapeHtml(providerName(source.providerCode))}</b><code>返回 ${source.rawCount} · 无效 ${source.invalidCount} · 重复 ${source.duplicateCount} · 拒绝 ${source.rejectedCount}</code></div>
+      <strong>${source.candidateCount} 入池</strong>
+    </div>
+  `).join("") : `<div class="task-run-insight-empty">暂无来源清洗统计。</div>`;
+  const reasons = report.reasons.length ? report.reasons.map((reason) => `
+    <div class="task-run-clean-reason">
+      <div><b>${escapeHtml(reason.label)}</b><code>${escapeHtml(reason.code)}</code></div>
+      <strong>${reason.count} 条</strong>
+    </div>
+  `).join("") : `<div class="task-run-insight-empty">本轮没有淘汰、合并或分流记录。</div>`;
+  const outcomeLabels: Record<ProspectRunCleaningReport["records"][number]["outcome"], string> = {
+    pending: "等待清洗",
+    accepted: "进入候选池",
+    merged: "合并到已有候选",
+    suppressed: "规则分流",
+    rejected: "清洗淘汰"
+  };
+  const processedRecords = report.records.filter((record) => record.outcome !== "pending");
+  const processedRows = processedRecords.map((record) => `
+    <tr>
+      <td><span>--</span></td>
+      <td><b>${escapeHtml(providerName(record.providerCode))}</b><span title="${escapeHtml(record.hitId)}">${escapeHtml(record.hitId.slice(-12))}</span></td>
+      <td><span class="task-run-clean-outcome is-${escapeHtml(record.outcome)}">${escapeHtml(outcomeLabels[record.outcome])}</span></td>
+      <td><b>${escapeHtml(record.reason)}</b><span>${escapeHtml(record.reasonCode)}</span></td>
+      <td><b>${escapeHtml(record.candidateName || "未进入候选池")}</b><span>${escapeHtml(record.candidateId ? record.candidateId.slice(-16) : "无候选记录")}</span></td>
+      <td>${escapeHtml(leadTaskDetailTime(record.processedAt))}</td>
+    </tr>
+  `).join("");
+  const pendingRows = pendingCandidates.map((record) => `
+    <tr class="task-run-pending-row">
+      <td><input type="checkbox" data-pending-hit-id="${escapeHtml(record.hitId)}" ${selectedPending.has(record.hitId) ? "checked" : ""} aria-label="选择 ${escapeHtml(record.company)}"></td>
+      <td><b>${escapeHtml(providerName(record.providerCode))}</b><span title="${escapeHtml(record.hitId)}">${escapeHtml(record.hitId.slice(-12))}</span></td>
+      <td><span class="task-run-clean-outcome is-pending">等待决定</span></td>
+      <td><b>${escapeHtml(record.company || "公司名待确认")}</b><span>${escapeHtml([record.country, record.business].filter(Boolean).join(" · ") || record.previewError || "资料待核验")}</span></td>
+      <td><b>${escapeHtml(record.contact || "联系人待确认")}</b><span>${escapeHtml(record.contactInfo || record.website || record.sourceUrl || "暂无联系方式")}</span></td>
+      <td>${escapeHtml(leadTaskDetailTime(record.fetchedAt))}</td>
+    </tr>
+  `).join("");
+  const records = pendingRows || processedRows
+    ? `${pendingRows}${processedRows}`
+    : `<tr><td colspan="6" class="empty-cell">暂无逐条处理记录</td></tr>`;
+  box.innerHTML = `
+    <div class="task-run-clean-stages">${stages}</div>
+    <div class="task-run-clean-body">
+      <div class="task-run-clean-reasons">
+        <div class="task-run-clean-subhead"><span>按来源核对</span><span>${report.sources.length} 个来源</span></div>
+        <div class="task-run-clean-reason-list">${sources}</div>
+        <div class="task-run-clean-subhead"><span>淘汰与合并原因</span><span>${report.reasons.reduce((sum, item) => sum + item.count, 0)} 条</span></div>
+        <div class="task-run-clean-reason-list">${reasons}</div>
+      </div>
+      <div>
+        <div class="task-run-clean-subhead"><span>逐条去向与人工决定</span><span>最近 ${report.records.length} 条</span></div>
+        <div class="task-run-clean-table-wrap">
+          <table class="task-run-clean-table">
+            <thead><tr><th>选择</th><th>来源 / 记录</th><th>处理结果</th><th>公司 / 业务</th><th>联系线索</th><th>时间</th></tr></thead>
+            <tbody>${records}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+  qsa<HTMLInputElement>("[data-pending-hit-id]", box).forEach((input) => {
+    input.onchange = () => {
+      const selected = new Set(job.selectedPendingHitIds || []);
+      if (input.checked) selected.add(input.dataset.pendingHitId || "");
+      else selected.delete(input.dataset.pendingHitId || "");
+      selected.delete("");
+      job.selectedPendingHitIds = [...selected];
+      renderLeadTaskCleaningReport(job);
+    };
+  });
+}
+
+function leadTaskResultCandidates(job: LeadFinderJob) {
+  const resultIds = new Set(job.resultIds || []);
+  return state.websiteOpportunities.filter((item) => resultIds.has(item.id));
+}
+
+function renderLeadTaskCandidates(job: LeadFinderJob) {
+  const box = qs<HTMLElement>("#leadTaskCandidates");
+  const summary = qs<HTMLElement>("#leadTaskCandidatesSummary");
+  const selectAll = qs<HTMLInputElement>("#leadTaskSelectAllCandidates");
+  const syncButton = qs<HTMLButtonElement>("#leadTaskSyncCandidates");
+  const openButton = qs<HTMLButtonElement>("#leadTaskOpenCandidateList");
+  if (!box || !summary || !selectAll || !syncButton || !openButton) return;
+  const candidates = leadTaskResultCandidates(job);
+  const available = candidates.filter(canSelectLeadFinderItem);
+  const availableIds = new Set(available.map((item) => item.id));
+  const selected = new Set((job.selectedResultIds || []).filter((id) => availableIds.has(id)));
+  job.selectedResultIds = [...selected];
+  summary.textContent = `${available.length} 条可选 · 已选 ${selected.size} 条`;
+  syncButton.disabled = selected.size === 0;
+  syncButton.textContent = selected.size ? `加入线索（${selected.size}）` : "加入线索";
+  selectAll.disabled = available.length === 0;
+  selectAll.checked = available.length > 0 && selected.size === available.length;
+  selectAll.indeterminate = selected.size > 0 && selected.size < available.length;
+  openButton.onclick = () => activateNavView("prospect-list", () => {
+    state.prospectFilter = "all";
+    state.prospectPage = 1;
+    renderProspectList();
+  });
+  syncButton.onclick = () => void syncSelectedLeadTaskCandidates(job, syncButton);
+  selectAll.onchange = () => {
+    job.selectedResultIds = selectAll.checked ? available.map((item) => item.id) : [];
+    renderLeadTaskCandidates(job);
+  };
+  if (!candidates.length) {
+    const missingCount = job.resultIds?.length || 0;
+    box.innerHTML = `<div class="task-run-insight-empty">${missingCount ? "正在读取本任务候选资料。" : leadTaskJobIsLive(job) ? "任务仍在搜索和清洗，形成候选后会显示在这里。" : "本任务未形成可加入线索的候选。"}</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="task-run-candidate-list">${candidates.map((item) => {
+    const selectable = canSelectLeadFinderItem(item);
+    const duplicate = leadFinderDuplicateState(item);
+    const status = prospectStatusMeta(item);
+    const stateText = selectable
+      ? "可加入线索"
+      : item.status === "synced"
+        ? "已加入线索"
+        : duplicate.text !== "新候选"
+          ? duplicate.text
+          : status.label;
+    return `
+      <label class="task-run-candidate-row ${selectable ? "" : "is-disabled"}">
+        <input type="checkbox" data-task-candidate-id="${escapeHtml(item.id)}" ${selected.has(item.id) ? "checked" : ""} ${selectable ? "" : "disabled"} aria-label="选择 ${escapeHtml(item.company)}">
+        <div><b>${escapeHtml(item.company || "公司待确认")}</b><span>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website) || "官网待补充")}</span></div>
+        <div><b>${escapeHtml(item.sourceLabel || state.leadProviders.find((provider) => provider.id === item.source)?.name || item.source || "来源待确认")}</b><span>${escapeHtml(item.business || "业务待核验")}</span></div>
+        <div><b>${escapeHtml(item.contactInfo || "暂无联系方式")}</b><span>${escapeHtml(item.contact || "联系人待确认")}</span></div>
+        <strong class="task-run-candidate-score">${leadFinderScore(item)} 分</strong>
+        <em class="task-run-candidate-state ${selectable ? "" : "is-disabled"}">${escapeHtml(stateText)}</em>
+      </label>
+    `;
+  }).join("")}</div>`;
+  qsa<HTMLInputElement>("[data-task-candidate-id]", box).forEach((input) => {
+    input.onchange = () => {
+      const next = new Set(job.selectedResultIds || []);
+      const id = input.dataset.taskCandidateId || "";
+      if (input.checked) next.add(id);
+      else next.delete(id);
+      next.delete("");
+      job.selectedResultIds = [...next];
+      renderLeadTaskCandidates(job);
+    };
+  });
+}
+
+async function syncSelectedLeadTaskCandidates(job: LeadFinderJob, button: HTMLButtonElement) {
+  const selectedIds = [...new Set(job.selectedResultIds || [])];
+  if (!selectedIds.length) return;
+  const completed = await syncLeadFinderRows(button, selectedIds);
+  if (!completed) return;
+  job.selectedResultIds = [];
+  renderLeadTaskCandidates(job);
+}
+
+async function loadLeadTaskPendingCandidates(job: LeadFinderJob) {
+  if (!job.backendRunId || job.pendingCandidatesLoaded) return;
+  const path = job.superSearchMissionId
+    ? `/api/prospect-super-search/${encodeURIComponent(job.superSearchMissionId)}/pending-candidates`
+    : `/api/prospect-runs/${encodeURIComponent(job.backendRunId)}/pending-candidates`;
+  try {
+    const result = await api<{ candidates: ProspectPendingCandidatePreview[] }>(path);
+    job.pendingCandidates = result.candidates || [];
+    job.selectedPendingHitIds = (job.selectedPendingHitIds || []).filter((id) =>
+      job.pendingCandidates?.some((item) => item.hitId === id)
+    );
+    job.pendingCandidatesLoaded = true;
+    if (activeLeadFinderJobId === job.id) renderLeadTaskCleaningReport(job);
+  } catch (error) {
+    if (!leadTaskJobIsLive(job)) {
+      toast(error instanceof Error ? error.message : "待清洗结果读取失败", "error");
+    }
+  }
+}
+
+async function importPendingLeadTaskResults(
+  job: LeadFinderJob,
+  button: HTMLButtonElement
+) {
+  const hitIds = [...new Set(job.selectedPendingHitIds || [])];
+  if (!job.backendRunId || !hitIds.length) return;
+  const original = button.textContent || "纳入候选池";
+  button.disabled = true;
+  button.textContent = "正在处理";
+  try {
+    const path = job.superSearchMissionId
+      ? `/api/prospect-super-search/${encodeURIComponent(job.superSearchMissionId)}/import-pending`
+      : `/api/prospect-runs/${encodeURIComponent(job.backendRunId)}/import-pending`;
+    const response = await api<{
+      result: {
+        attempted: number;
+        processed: number;
+        created: number;
+        updated: number;
+        suppressed: number;
+        skipped: number;
+        failures: Array<{ code: string }>;
+      };
+      detail: ProspectRunDetailApiResponse | { mission: ProspectSuperSearchMissionApi };
+    }>(path, {
+      method: "POST",
+      body: JSON.stringify({ hitIds })
+    });
+    job.pendingCandidatesLoaded = false;
+    job.pendingCandidates = [];
+    job.selectedPendingHitIds = [];
+    await loadProspectRuns(true);
+    const refreshedJob = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
+    if (refreshedJob) await loadLeadTaskPendingCandidates(refreshedJob);
+    const opportunities = await api<{ opportunities: WebsiteOpportunity[] }>("/api/tools/website-opportunities");
+    state.websiteOpportunities = opportunities.opportunities || [];
+    renderLeadFinder(state.websiteOpportunities);
+    renderProspectList();
+    renderLeadTaskDetail();
+    toast(
+      response.result.failures.length
+        ? `已处理 ${response.result.processed} 条，${response.result.failures.length} 条仍未完成`
+        : `已选记录已纳入候选池：新增 ${response.result.created} 条，合并更新 ${response.result.updated} 条；可在下方选择并加入线索`
+    );
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "纳入候选池失败", "error");
+    button.disabled = false;
+    button.textContent = original;
+  }
 }
 
 function renderLeadTaskStrategy(job: LeadFinderJob) {
@@ -12439,9 +16615,12 @@ function updateLeadTaskDetailClock() {
 }
 
 function syncLeadTaskDetailClock(active: boolean) {
-  if (!active) {
+  const job = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
+  const shouldRun = active && leadTaskJobIsLive(job);
+  if (!shouldRun) {
     if (leadTaskDetailClockTimer) window.clearInterval(leadTaskDetailClockTimer);
     leadTaskDetailClockTimer = 0;
+    updateLeadTaskDetailClock();
     return;
   }
   if (!leadTaskDetailClockTimer) {
@@ -12459,6 +16638,11 @@ function renderLeadTaskDetail() {
       return;
     }
     return renderLeadTaskDetail();
+  }
+  const live = leadTaskJobIsLive(job);
+  if (!live && leadTaskStreamMode === "verbose") {
+    leadTaskStreamMode = "summary";
+    syncLeadTaskVerboseTimer(false);
   }
   const status = qs<HTMLElement>("#leadTaskDetailStatus");
   const title = qs<HTMLElement>("#leadTaskDetailTitle");
@@ -12482,24 +16666,26 @@ function renderLeadTaskDetail() {
   `;
   const currentStep = job.steps[Math.min(job.steps.length - 1, Math.floor((Math.max(job.progress, 1) / 100) * job.steps.length))] || "准备执行";
   stage.innerHTML = `
-    <div><small>当前执行阶段</small><b>${escapeHtml(currentStep)}</b><p>${job.status === "running" ? "任务在后台持续推进，离开此页面不会中断执行。" : "任务状态与过程记录已保存，可随时返回查看。"}</p></div>
+    <div><small>当前执行阶段</small><b>${escapeHtml(currentStep)}</b><p>${live ? "任务在后台持续推进，离开此页面不会中断执行。" : "任务状态与过程记录已保存，可随时返回查看。"}</p></div>
     <span class="task-run-progress-text">${escapeHtml(job.progressValue || leadFinderJobStatusText(job))}</span>
-    <div class="task-run-progress-track ${job.status === "running" ? "is-running" : ""}"><i style="--p:${Math.max(2, job.progress)}%"></i></div>
+    <div class="task-run-progress-track ${live ? "is-running" : ""}"><i style="--p:${Math.max(2, job.progress)}%"></i></div>
   `;
   const stats = job.incrementalStats;
-  const settledSources = (job.sourceStats || []).filter((source) => ["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled", "success", "success_empty"].includes(source.status || "")).length;
+  const cleaningSummary = job.cleaningReport?.summary;
+  const failedSources = (job.sourceStats || []).filter((source) => source.status === "failed").length;
   const metricRows: Array<[string, string, string, string]> = [
-    ["原始命中", stats ? String(stats.rawCount) : "--", stats ? "来源返回总量" : "等待来源回传", ""],
-    ["净新增", stats ? String(stats.newCount) : job.resultIds?.length ? String(job.resultIds.length) : "--", "进入候选池", "is-gain"],
-    ["新证据", stats ? String(stats.evidenceUpdatedCount) : "--", "补充已有企业", "is-gain"],
-    ["同批去重", stats ? String(stats.deduplicatedCount) : "--", "身份归一清洗", ""],
-    ["已排除", stats ? String(stats.excludedCount) : "--", "命中排除规则", ""],
-    ["来源完成", `${settledSources}/${job.sourceStats?.length || job.channelCount}`, "独立执行分片", ""]
+    ["来源返回", cleaningSummary ? String(cleaningSummary.providerRawCount) : stats ? String(stats.rawCount) : "--", "所有来源原始命中", ""],
+    ["进入候选池", cleaningSummary ? String(cleaningSummary.candidateCount) : String(job.resultIds?.length || 0), "已通过清洗，可继续核验", "is-gain"],
+    ["待人工决定", cleaningSummary ? String(cleaningSummary.pendingCount) : "--", "可手动纳入候选池", ""],
+    ["失败来源", String(failedSources), `共 ${job.sourceStats?.length || job.channelCount} 个来源`, failedSources ? "is-warning" : ""]
   ];
   metrics.innerHTML = metricRows.map(([label, value, hint, tone]) => `<div class="task-run-metric ${tone}"><span>${label}</span><b>${escapeHtml(value)}</b><small>${hint}</small></div>`).join("");
   renderLeadTaskStream(job);
+  renderLeadTaskPhases(job);
   renderLeadTaskInsights(job);
   renderLeadTaskSources(job);
+  renderLeadTaskCleaningReport(job);
+  renderLeadTaskCandidates(job);
   renderLeadTaskStrategy(job);
   qs<HTMLButtonElement>("#leadTaskDetailBack")!.onclick = () => activateNavView("lead-finder");
   qs<HTMLButtonElement>("#leadTaskNewEvents")!.onclick = () => {
@@ -12517,7 +16703,10 @@ function renderLeadTaskDetail() {
   qsa<HTMLButtonElement>("[data-lead-detail-action]", actions).forEach((button) => {
     button.addEventListener("click", () => void transitionLeadFinderRun(job, button.dataset.leadDetailAction as "pause" | "resume" | "cancel", button));
   });
-  updateLeadTaskDetailClock();
+  const failureDialog = qs<HTMLDialogElement>("#leadTaskFailureDialog");
+  const closeFailureDialog = qs<HTMLButtonElement>("#leadTaskFailureClose");
+  if (failureDialog && closeFailureDialog) closeFailureDialog.onclick = () => failureDialog.close();
+  syncLeadTaskDetailClock(qs<HTMLElement>(".view.active")?.id === "lead-task-detail");
 }
 
 function openLeadTaskDetail(job: LeadFinderJob) {
@@ -12526,17 +16715,23 @@ function openLeadTaskDetail(job: LeadFinderJob) {
   leadTaskVerboseSequence = 0;
   syncLeadTaskVerboseTimer(false);
   activateNavView("lead-task-detail", renderLeadTaskDetail);
+  void Promise.all([
+    loadLeadTaskPendingCandidates(job),
+    refreshLeadFinderOpportunities()
+  ]).then(() => {
+    if (activeLeadFinderJobId === job.id) renderLeadTaskDetail();
+  });
 }
 
 function renderLeadFinderJobs() {
   const box = qs<HTMLElement>("#leadFinderJobList");
   if (!box) return;
   if (!leadFinderJobs.length) {
-    box.innerHTML = `<div class="empty-cell">还没有搜客任务。填写条件后点击“生成并运行任务”。</div>`;
+    box.innerHTML = `<div class="empty-cell">暂无搜客任务</div>`;
     return;
   }
   box.innerHTML = leadFinderJobs.map((job) => `
-    <article class="lead-job-card is-openable" data-lead-job-id="${escapeHtml(job.id)}" tabindex="0" role="button" aria-label="查看任务 ${escapeHtml(job.title)} 的执行详情">
+    <article class="lead-job-card" data-lead-job-id="${escapeHtml(job.id)}">
       <div class="lead-job-top">
         <button class="lead-job-toggle" type="button" data-lead-job-toggle aria-label="${job.expanded ? "收起任务详情" : "展开任务详情"}">${job.expanded ? "▾" : "▸"}</button>
         <div><h3>${escapeHtml(job.title)}</h3><p>${escapeHtml(job.subtitle)}</p></div>
@@ -12552,31 +16747,13 @@ function renderLeadFinderJobs() {
       <div class="lead-job-steps">${job.steps.map((step, index) => `<span>${index + 1} ${escapeHtml(step)}</span>`).join("")}</div>
       ${renderLeadFinderJobDetails(job)}
       <div class="lead-job-actions">
-        <button class="lead-job-open-hint" type="button" data-lead-job-open><span><svg viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg></span>执行详情</button>
+        <button class="lead-job-open-hint" type="button" data-lead-job-open><span><svg viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg></span>查看详情</button>
         ${job.backendRunId && job.backendRunStatus === "queued" ? `<button class="btn" data-lead-run-action="pause">暂停任务</button>` : ""}
         ${job.backendRunId && job.backendRunStatus === "paused" ? `<button class="btn primary" data-lead-run-action="resume">恢复任务</button>` : ""}
         ${job.backendRunId && ["queued", "paused"].includes(job.backendRunStatus || "") ? `<button class="btn danger" data-lead-run-action="cancel">取消任务</button>` : ""}
-        <button class="btn" data-lead-job-import>导入结果链接</button>
-        ${job.resultIds?.length ? `<button class="btn primary" data-lead-job-sync>同步选中结果</button>` : ""}
       </div>
     </article>
   `).join("");
-  qsa<HTMLElement>("[data-lead-job-id]", box).forEach((card) => {
-    const open = () => {
-      const job = leadFinderJobs.find((item) => item.id === card.dataset.leadJobId);
-      if (job) openLeadTaskDetail(job);
-    };
-    card.addEventListener("click", (event) => {
-      if ((event.target as HTMLElement).closest("button, input, a, select, textarea")) return;
-      open();
-    });
-    card.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      if ((event.target as HTMLElement).closest("button")) return;
-      event.preventDefault();
-      open();
-    });
-  });
   qsa<HTMLButtonElement>("[data-lead-job-open]", box).forEach((button) => {
     button.addEventListener("click", () => {
       const id = button.closest<HTMLElement>("[data-lead-job-id]")?.dataset.leadJobId;
@@ -12599,15 +16776,6 @@ function renderLeadFinderJobs() {
       renderLeadFinder(state.websiteOpportunities);
     });
   });
-  qsa<HTMLButtonElement>("[data-lead-job-import]").forEach((button) => {
-    button.addEventListener("click", () => {
-      qs<HTMLDetailsElement>(".lead-advanced-settings")?.setAttribute("open", "true");
-      qs<HTMLTextAreaElement>("#leadFinderUrlInput")?.focus();
-    });
-  });
-  qsa<HTMLButtonElement>("[data-lead-job-sync]").forEach((button) => {
-    button.addEventListener("click", (event) => void syncLeadFinderRows(event.currentTarget as HTMLButtonElement));
-  });
   qsa<HTMLButtonElement>("[data-lead-run-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const id = button.closest<HTMLElement>("[data-lead-job-id]")?.dataset.leadJobId;
@@ -12628,9 +16796,13 @@ async function transitionLeadFinderRun(
   button.disabled = true;
   button.textContent = action === "pause" ? "暂停中" : action === "resume" ? "恢复中" : "取消中";
   try {
-    await api(`/api/prospect-runs/${encodeURIComponent(job.backendRunId)}/${action}`, {
+    const path = job.superSearchMissionId
+      ? `/api/prospect-super-search/${encodeURIComponent(job.superSearchMissionId)}/${action}`
+      : `/api/prospect-runs/${encodeURIComponent(job.backendRunId)}/${action}`;
+    const revision = job.superSearchMissionId ? job.superSearchRevision : job.backendRunRevision;
+    await api(path, {
       method: "POST",
-      headers: { "If-Match": `"${job.backendRunId}:${job.backendRunRevision}"` },
+      headers: { "If-Match": `"${job.superSearchMissionId || job.backendRunId}:${revision}"` },
       body: JSON.stringify({
         reason: action === "pause" ? "用户从获客任务队列暂停" : action === "resume" ? "用户从获客任务队列恢复" : "用户从获客任务队列取消"
       })
@@ -12692,14 +16864,13 @@ function renderProspectFeedback() {
       <div>
         <span>${escapeHtml(prospectSuggestionLabel(suggestion.suggestionType))}</span>
         <b>${escapeHtml(suggestion.rationale)}</b>
-        <small>基于已记录业务结果生成，仅供人工复核，不会自动修改策略。</small>
       </div>
       <div class="prospect-suggestion-actions">
         <button class="btn primary" type="button" data-prospect-suggestion-review="accept">记录采纳</button>
         <button class="btn" type="button" data-prospect-suggestion-review="reject">暂不采用</button>
       </div>
     </article>
-  `).join("") : `<div class="prospect-performance-empty">样本达到门槛后，系统会在这里生成可解释的策略建议。</div>`;
+  `).join("") : `<div class="prospect-performance-empty">暂无策略建议</div>`;
   qsa<HTMLButtonElement>("[data-prospect-suggestion-review]", suggestionsBox).forEach((button) => {
     button.addEventListener("click", () => {
       const row = button.closest<HTMLElement>("[data-prospect-suggestion-id]");
@@ -12836,6 +17007,13 @@ function prospectRunStatusLabel(status: ProspectRunApiStatus) {
   return labels[status];
 }
 
+function prospectRunActivityLabel(status: ProspectRunApiStatus) {
+  if (prospectRunTerminalStatuses.has(status)) return "执行已结束";
+  if (["paused", "pause_requested"].includes(status)) return "执行已暂停";
+  if (status === "cancel_requested") return "正在取消";
+  return "后台持续执行";
+}
+
 function prospectShardStatusLabel(status: ProspectRunShardApiRecord["status"]) {
   const labels: Record<ProspectRunShardApiRecord["status"], string> = {
     queued: "等待执行",
@@ -12896,9 +17074,13 @@ function prospectRunJob(detail: ProspectRunDetailApiResponse): LeadFinderJob {
   const settled = detail.shards.filter((shard) =>
     ["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled"].includes(shard.status)
   ).length;
-  const expanded = leadFinderJobs.find((job) => job.backendRunId === run.id)?.expanded || false;
+  const existingJob = leadFinderJobs.find((job) => job.backendRunId === run.id);
+  const expanded = existingJob?.expanded || false;
   const providerName = (providerId: string) =>
     state.leadProviders.find((provider) => provider.id === providerId)?.name || providerId;
+  const diagnosticsBySource = new Map((detail.diagnostics?.sources || []).map((item) => [item.shardId, item]));
+  const cleaningBySource = new Map((detail.diagnostics?.cleaningReport?.sources || []).map((item) => [item.providerCode, item]));
+  const processSummary = detail.diagnostics?.summary;
   const products = campaign?.snapshot.products || query?.positiveKeywords || [];
   const markets = campaign?.snapshot.markets || query?.countries || [];
   const industries = campaign?.snapshot.applicationScenarios || query?.industryTerms || [];
@@ -12909,21 +17091,36 @@ function prospectRunJob(detail: ProspectRunDetailApiResponse): LeadFinderJob {
     backendRunRevision: run.revision,
     backendRunStatus: run.status,
     title: campaign?.name || `获客任务 ${run.id.slice(-8)}`,
-    subtitle: `${industries.join("、") || "行业待补充"} · ${markets.join("、") || "目标市场"} · 后台持续执行`,
+    subtitle: `${industries.join("、") || "行业待补充"} · ${markets.join("、") || "目标市场"} · ${prospectRunActivityLabel(run.status)}`,
     status: prospectRunJobStatus(run.status),
-    resultCount: 0,
+    resultCount: processSummary?.accepted || 0,
     channelCount: detail.shards.length,
     elapsedText: prospectRunElapsedText(run),
     progress: prospectRunProgress(detail.shards, run),
     progressLabel: "执行状态",
     progressValue: prospectRunStatusLabel(run.status),
-    metricLabel: "分片进度",
-    metricValue: `${settled} / ${detail.shards.length}`,
+    metricLabel: processSummary ? "候选入池" : "分片进度",
+    metricValue: processSummary ? String(processSummary.accepted) : `${settled} / ${detail.shards.length}`,
     steps: prospectRunSteps(run, detail.shards),
     createdAt: run.createdAt,
     runEvents: detail.events || [],
+    processPhases: detail.diagnostics?.phases || [],
+    cleaningReport: detail.diagnostics?.cleaningReport,
+    pendingCandidates: existingJob?.pendingCandidates,
+    selectedPendingHitIds: existingJob?.selectedPendingHitIds,
+    pendingCandidatesLoaded: existingJob?.pendingCandidatesLoaded,
     expanded,
-    resultIds: [],
+    resultIds: processSummary?.candidateIds || [],
+    incrementalStats: processSummary ? {
+      rawCount: processSummary.rawHits,
+      returnedCount: processSummary.accepted + processSummary.rejected,
+      deduplicatedCount: 0,
+      newCount: processSummary.accepted,
+      evidenceUpdatedCount: 0,
+      multiSourceMergedCount: 0,
+      unchangedCount: 0,
+      excludedCount: processSummary.rejected
+    } : undefined,
     detailLines: [
       `产品：${products.join("、") || "未填写"}`,
       `市场：${markets.join("、") || "未填写"}`,
@@ -12931,17 +17128,133 @@ function prospectRunJob(detail: ProspectRunDetailApiResponse): LeadFinderJob {
       `客户类型：${customerTypes.join("、") || "未填写"}`,
       `任务编号：${run.id}`
     ],
-    sourceStats: detail.shards.map((shard) => ({
-      id: shard.providerCode,
-      name: providerName(shard.providerCode),
-      status: shard.status,
-      statusLabel: prospectShardStatusLabel(shard.status),
-      error: shard.status === "failed" ? "执行失败，请检查数据源连接或稍后重试" : undefined,
-      retryable: shard.status === "retry_scheduled",
-      createdAt: shard.createdAt,
-      updatedAt: shard.updatedAt
-    }))
+    sourceStats: detail.shards.map((shard) => {
+      const diagnostics = diagnosticsBySource.get(shard.id);
+      const cleaning = cleaningBySource.get(shard.providerCode);
+      return {
+        id: shard.providerCode,
+        name: providerName(shard.providerCode),
+        count: cleaning?.rawCount,
+        rawCount: cleaning?.rawCount,
+        invalidCount: cleaning?.invalidCount,
+        duplicateCount: cleaning?.duplicateCount,
+        processedCount: cleaning?.processedCount,
+        rejectedCount: cleaning?.rejectedCount,
+        candidateCount: cleaning?.candidateCount,
+        status: shard.status,
+        statusLabel: prospectShardStatusLabel(shard.status),
+        error: diagnostics?.failure?.errorMessage || (shard.status === "failed" ? "执行失败，点击查看失败报文" : undefined),
+        errorCode: diagnostics?.failure?.errorCode,
+        retryable: diagnostics?.failure?.retryable ?? shard.status === "retry_scheduled",
+        retryAfterAt: diagnostics?.failure?.retryAfterAt,
+        createdAt: shard.createdAt,
+        updatedAt: shard.updatedAt,
+        failure: diagnostics?.failure,
+        job: diagnostics?.job,
+        checkpoint: diagnostics?.checkpoint,
+        attempts: diagnostics?.attempts || [],
+        requests: diagnostics?.requests || []
+      };
+    })
   };
+}
+
+function superSearchStatusLabel(status: ProspectSuperSearchMissionApi["status"]) {
+  const labels: Record<ProspectSuperSearchMissionApi["status"], string> = {
+    queued: "等待启动",
+    running: "持续搜索",
+    paused: "已暂停",
+    cancelled: "已取消",
+    succeeded: "已完成",
+    partial_success: "部分完成",
+    failed: "执行失败"
+  };
+  return labels[status];
+}
+
+function superSearchThemeLabel(theme = "") {
+  const labels: Record<string, string> = {
+    baseline: "基础覆盖",
+    local_channel: "当地语言渠道",
+    procurement: "采购与招标",
+    project_engineering: "项目与工程",
+    trade_channel: "进口与批发渠道",
+    oem_integration: "OEM 与系统集成",
+    vendor_registration: "供应商准入",
+    directory_association: "行业协会与目录",
+    aftermarket_service: "售后与 MRO",
+    contract_award: "中标与框架合同",
+    expansion_signal: "扩产与新建项目",
+    certification_ecosystem: "认证与授权生态",
+    regional_long_tail: "区域长尾渠道",
+    application_specialist: "应用方案商",
+    replacement_demand: "改造与替换需求",
+    coverage_recovery: "覆盖缺口恢复"
+  };
+  return labels[theme] || theme || "覆盖规划";
+}
+
+function applySuperSearchMission(job: LeadFinderJob, mission: ProspectSuperSearchMissionApi) {
+  const active = ["queued", "running"].includes(mission.status);
+  const status: LeadFinderJob["status"] = active
+    ? "running"
+    : mission.status === "paused" ? "paused"
+      : mission.status === "cancelled" ? "cancelled"
+        : mission.status === "failed" ? "failed"
+          : mission.status === "partial_success" ? "partial" : "done";
+  job.id = mission.id;
+  job.title = `超级搜索 · ${job.title}`;
+  job.subtitle = `第 ${mission.currentRound}/${mission.maxRounds} 轮 · ${superSearchStatusLabel(mission.status)}`;
+  job.status = status;
+  job.resultCount = mission.candidateCount;
+  job.progress = mission.status === "succeeded" || mission.status === "partial_success" || mission.status === "failed" || mission.status === "cancelled"
+    ? 100
+    : Math.round((Math.max(0, mission.currentRound - 1) / mission.maxRounds) * 100 + 100 / mission.maxRounds * (job.progress / 100));
+  job.progressLabel = "轮次进度";
+  job.progressValue = `${mission.currentRound} / ${mission.maxRounds} 轮`;
+  job.metricLabel = "累计候选";
+  job.metricValue = `${mission.candidateCount} / ${mission.targetCandidateCount}`;
+  const currentRound = mission.rounds.find((item) => item.roundNo === mission.currentRound)
+    || mission.rounds[mission.rounds.length - 1];
+  const query = currentRound?.queryPlanSnapshot;
+  const theme = superSearchThemeLabel(currentRound?.queryTheme);
+  const gaps = currentRound?.coverageGaps || [];
+  const webProviderNames = (mission.webProviderIds || []).map((providerId) =>
+    state.leadProviders.find((provider) => provider.id === providerId)?.name || providerId
+  );
+  const mapProviderNames = (mission.mapProviderIds || []).map((providerId) =>
+    state.leadProviders.find((provider) => provider.id === providerId)?.name || providerId
+  );
+  const aiDiscoveryProviderNames = (mission.aiDiscoveryProviderIds || []).map((providerId) =>
+    state.leadProviders.find((provider) => provider.id === providerId)?.name || providerId
+  );
+  job.steps = ["生成覆盖矩阵", `${theme}检索`, "清洗与身份归一", "分析覆盖缺口", active ? "等待下一轮" : "执行报告已生成"];
+  job.detailLines = [
+    ...(job.detailLines || []),
+    `超级搜索：${superSearchStatusLabel(mission.status)}`,
+    `本轮主题：${theme}`,
+    `规划方式：${currentRound?.planningMode === "ai_enhanced" ? "AI 增强 + 规则校验" : "规则规划"}`,
+    `本轮市场：${query?.countries.join("、") || "全球"}`,
+    `查询语言：${query?.languages.join("、") || "自动"}`,
+    `买家角色：${query?.customerTypes.join("、") || "不限"}`,
+    `覆盖缺口：${gaps.join("；") || "正在建立覆盖基线"}`,
+    `查询矩阵：${currentRound?.queryCells?.length || job.channelCount} 个执行单元`,
+    `实时网页搜索：${mission.webSearchMode === "api" ? webProviderNames.join("、") || "已启用" : "未启用"}`,
+    `地图企业搜索：${mission.mapSearchMode === "google_places" ? mapProviderNames.join("、") || "Google Places" : "未启用"}`,
+    `AI 深度发现：${mission.aiDiscoveryMode === "model" ? aiDiscoveryProviderNames.join("、") || "AI 搜索" : "未启用"}`,
+    `累计原始命中：${mission.rawCount} · 已过滤：${mission.filteredCount} · 待清洗：${mission.pendingCount}`,
+    `轮次：${mission.currentRound}/${mission.maxRounds} · 目标：${mission.targetCandidateCount}`,
+    mission.stopReason ? `结束原因：${mission.stopReason}` : "任务会在达到目标、时长、预算或收敛条件后结束"
+  ];
+  job.superSearchMissionId = mission.id;
+  job.superSearchRevision = mission.revision;
+  job.superSearchStatus = mission.status;
+  job.superSearchRound = mission.currentRound;
+  job.superSearchMaxRounds = mission.maxRounds;
+  job.superSearchTarget = mission.targetCandidateCount;
+  job.superSearchRounds = mission.rounds;
+  job.resultIds = mission.candidateIds || job.resultIds || [];
+  return job;
 }
 
 function stopLeadFinderRunPolling() {
@@ -12969,21 +17282,51 @@ function syncLeadFinderRunPolling() {
   }, 5_000);
 }
 
+async function refreshLeadFinderOpportunities() {
+  const result = await api<{ opportunities: WebsiteOpportunity[] }>(
+    "/api/tools/website-opportunities"
+  );
+  state.websiteOpportunities = result.opportunities || [];
+  renderWebsiteOpportunities(state.websiteOpportunities);
+  renderLeadFinder(state.websiteOpportunities);
+  renderProspectList();
+}
+
 async function loadProspectRuns(quiet = false) {
   if (!state.user || leadFinderRunsLoading) return;
   leadFinderRunsLoading = true;
   try {
-    const list = await api<{ runs: ProspectRunApiRecord[] }>("/api/prospect-runs?limit=6");
+    const [list, superList] = await Promise.all([
+      api<{ runs: ProspectRunApiRecord[] }>("/api/prospect-runs?limit=20"),
+      api<{ missions: ProspectSuperSearchMissionApi[] }>("/api/prospect-super-search?limit=6")
+    ]);
+    const superRunIds = new Set(superList.missions.flatMap((mission) => mission.rounds.map((round) => round.runId)));
     const detailResults = await Promise.allSettled(
-      list.runs.map((run) => api<ProspectRunDetailApiResponse>(`/api/prospect-runs/${encodeURIComponent(run.id)}`))
+      list.runs.filter((run) => !superRunIds.has(run.id)).slice(0, 6).map((run) => api<ProspectRunDetailApiResponse>(`/api/prospect-runs/${encodeURIComponent(run.id)}`))
     );
     const backendJobs = detailResults
       .filter((result): result is PromiseFulfilledResult<ProspectRunDetailApiResponse> => result.status === "fulfilled")
       .map((result) => prospectRunJob(result.value));
+    const superDetails = await Promise.allSettled(
+      superList.missions.map((mission) => mission.currentRunId
+        ? api<ProspectRunDetailApiResponse>(`/api/prospect-runs/${encodeURIComponent(mission.currentRunId)}`)
+        : Promise.reject(new Error("超级搜索尚未创建当前轮次")))
+    );
+    const superJobs = superDetails
+      .map((result, index) => result.status === "fulfilled"
+        ? applySuperSearchMission(prospectRunJob(result.value), superList.missions[index])
+        : null)
+      .filter((job): job is LeadFinderJob => Boolean(job));
     const localJobs = leadFinderJobs.filter((job) => !job.backendRunId);
-    leadFinderJobs = [...backendJobs, ...localJobs]
+    leadFinderJobs = [...superJobs, ...backendJobs, ...localJobs]
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, 6);
+    if ([...backendJobs, ...superJobs].some((job) =>
+      ["done", "partial", "failed"].includes(job.status)
+      && Boolean(job.resultIds?.length)
+    )) {
+      await refreshLeadFinderOpportunities();
+    }
     renderLeadFinderJobs();
     if (qs<HTMLElement>(".view.active")?.id === "lead-task-detail") renderLeadTaskDetail();
     void loadProspectFeedback(true);
@@ -13287,11 +17630,11 @@ async function mutateProspectSchedule(
 function renderLeadFinderSearchLinks() {
   const box = qs<HTMLElement>("#leadFinderSearchLinks");
   if (!box) return;
-  const goal = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim() || "";
   const keywords = qs<HTMLInputElement>("#leadProductKeywords")?.value.trim() || "product supplier";
   const countries = (qs<HTMLInputElement>("#leadCountries")?.value.trim() || "Germany").split(/,|，/).map((item) => item.trim()).filter(Boolean).slice(0, 3);
   const industries = (qs<HTMLInputElement>("#leadIndustryInput")?.value.trim() || "").split(/,|，/).map((item) => item.trim()).filter(Boolean).slice(0, 2);
-  const customerType = qs<HTMLSelectElement>("#leadCustomerTypes")?.value.split("/")[1]?.trim() || qs<HTMLSelectElement>("#leadCustomerTypes")?.value || "distributor";
+  const customerTypeValue = qs<HTMLSelectElement>("#leadCustomerTypes")?.value || "*";
+  const customerType = customerTypeValue === "*" ? "" : customerTypeValue.split("/")[1]?.trim() || customerTypeValue;
   const exclude = (qs<HTMLInputElement>("#leadExcludeKeywords")?.value.trim() || "").split(/,|，/).map((item) => item.trim()).filter(Boolean).map((item) => `-${item}`).join(" ");
   // 免费搜索入口：读取用户勾选的平台开关
   const enabledSources = qsa<HTMLButtonElement>(".lead-entry-chip.active").map((item) => item.dataset.leadEntry || "google");
@@ -13299,11 +17642,11 @@ function renderLeadFinderSearchLinks() {
   const countryList = countries.length ? countries : ["Germany", "UK", "Turkey"];
   const industryText = industries.length ? industries.join(" ") : "";
   const sourceTemplates: Record<string, { label: string; query: (country: string) => string }> = {
-    google: { label: "Google/Web", query: (country) => `${goal} ${keywords} ${industryText} ${customerType} ${country} company website ${exclude}` },
-    alibaba: { label: "Alibaba询盘", query: (country) => `site:alibaba.com/rfq ${goal} ${keywords} ${industryText} ${country} buyer inquiry ${exclude}` },
-    madein: { label: "Made-in-China询盘", query: (country) => `site:made-in-china.com ${goal} ${keywords} ${industryText} ${country} sourcing request buyer ${exclude}` },
-    globalsources: { label: "Global Sources", query: (country) => `site:globalsources.com ${goal} ${keywords} ${industryText} ${country} buyer request ${exclude}` },
-    europages: { label: "Europages", query: (country) => `site:europages.com ${goal} ${keywords} ${industryText} ${customerType} ${country} ${exclude}` }
+    google: { label: "Google/Web", query: (country) => `${keywords} ${industryText} ${customerType} ${country} company website ${exclude}` },
+    alibaba: { label: "Alibaba询盘", query: (country) => `site:alibaba.com/rfq ${keywords} ${industryText} ${country} buyer inquiry ${exclude}` },
+    madein: { label: "Made-in-China询盘", query: (country) => `site:made-in-china.com ${keywords} ${industryText} ${country} sourcing request buyer ${exclude}` },
+    globalsources: { label: "Global Sources", query: (country) => `site:globalsources.com ${keywords} ${industryText} ${country} buyer request ${exclude}` },
+    europages: { label: "Europages", query: (country) => `site:europages.com ${keywords} ${industryText} ${customerType} ${country} ${exclude}` }
   };
   const rows = countryList.flatMap((country) => activeSources.map((source) => {
     const template = sourceTemplates[source] || sourceTemplates.google;
@@ -13466,8 +17809,8 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
     </div>
     <div class="lead-detail-actions">
       ${item.status !== "synced" ? `<button class="btn" id="leadFinderDetailSaveButton">保存核验资料</button>` : ""}
-      ${item.status === "preview" ? `<button class="btn primary" id="leadFinderDetailMarkButton">标记可联系</button>` : ""}
-      ${["contactable", "contacted"].includes(item.status) ? `<button class="btn primary" id="leadFinderDetailSyncButton">加入线索</button>` : ""}
+      ${item.status === "preview" ? `<button class="btn" id="leadFinderDetailMarkButton">标记可联系</button>` : ""}
+      ${["preview", "contactable", "contacted"].includes(item.status) ? `<button class="btn primary" id="leadFinderDetailSyncButton">加入线索</button>` : ""}
       ${item.status === "synced" && item.leadId ? `<button class="btn primary" id="leadFinderDetailOpenLeadButton">查看线索</button>` : ""}
     </div>
   `;
@@ -13559,6 +17902,7 @@ function leadTierText(tier: string) {
 
 function leadCategoryText(provider: Pick<LeadProviderStatus, "category" | "capabilities">) {
   if (provider.capabilities.includes("procurement")) return "采购机会";
+  if (provider.capabilities.includes("maps")) return "地图企业";
   return provider.category === "web" ? "Web搜索" : provider.category === "company" ? "公司库" : provider.category === "ai" ? "AI 生成" : "邮箱发现";
 }
 
@@ -13584,7 +17928,7 @@ function renderLeadSourceChips() {
   if (!box) return;
   const automaticProviders = state.leadProviders.filter((provider) => provider.accessMode === "api");
   if (!automaticProviders.length) {
-    box.innerHTML = `<span class="empty-inline">暂无数据源，点击“数据源中心”配置。</span>`;
+    box.innerHTML = `<span class="empty-inline">暂无数据源</span>`;
     return;
   }
   const chipHtml = (provider: LeadProviderStatus) => {
@@ -13593,7 +17937,7 @@ function renderLeadSourceChips() {
     const isAi = provider.tier === "ai";
     const cls = `${executable ? (selected ? "ready active" : "ready") : provider.ready ? "disabled" : "needkey"}${isAi ? " ai" : ""}`;
     const stateText = isAi
-      ? (!provider.ready ? "未配置" : provider.enabled ? "已启用" : "已停用")
+      ? (!provider.ready ? provider.hasApiKey ? "未启用自动获客" : "未配置" : provider.enabled ? "已启用" : "已停用")
       : !provider.ready ? "未配置" : !provider.enabled ? "已停用" : provider.requiresKey ? "已连接" : "内置";
     return `<button type="button" class="lead-source-chip ${cls}" data-lead-provider="${escapeHtml(provider.id)}"><span class="dot"></span><span class="ls-chip-name">${escapeHtml(provider.name)}</span><small>${stateText}</small></button>`;
   };
@@ -13609,12 +17953,12 @@ function renderLeadSourceChips() {
       ${recommended.length ? recommended.map(chipHtml).join("") : `<span class="empty-inline">暂无可用推荐来源。</span>`}
     </div>
     ${moreFree.length ? `
-      <details class="lead-source-more">
+      <details class="lead-source-more" open>
         <summary>更多免费来源 <span>${moreFree.length} 个</span></summary>
         <div class="lead-source-more-grid">${moreFree.map(chipHtml).join("")}</div>
       </details>` : ""}
     ${extended.length ? `
-      <details class="lead-source-more lead-source-extended">
+      <details class="lead-source-more lead-source-extended" open>
         <summary>扩展与 AI 来源 <span>${extended.length} 个</span></summary>
         <div class="lead-source-more-grid">${extended.map(chipHtml).join("")}</div>
       </details>` : ""}
@@ -13648,7 +17992,23 @@ function renderLeadSourceChips() {
       state.leadSourceSelectionTouched = true;
       if (state.selectedLeadSources.includes(id)) state.selectedLeadSources = state.selectedLeadSources.filter((item) => item !== id);
       else state.selectedLeadSources = [...state.selectedLeadSources, id];
+      if (leadFinderMode === "super" && provider.category === "web") {
+        const checkbox = qs<HTMLInputElement>("#leadSuperWebSearch");
+        if (checkbox) checkbox.checked = selectedSuperWebProviderIds().length > 0;
+      }
+      if (leadFinderMode === "super" && provider.capabilities.includes("maps")) {
+        const checkbox = qs<HTMLInputElement>("#leadSuperMapSearch");
+        if (checkbox) checkbox.checked = selectedSuperMapProviderIds().length > 0;
+      }
+      if (leadFinderMode === "super" && provider.id === "ai_search") {
+        const checkbox = qs<HTMLInputElement>("#leadSuperAiDiscovery");
+        if (checkbox) checkbox.checked = selectedSuperAiDiscoveryProviderIds().length > 0;
+      }
       renderLeadSourceChips();
+      renderSuperWebSearchOption();
+      renderSuperMapSearchOption();
+      renderSuperAiDiscoveryOption();
+      renderSuperSearchPreview();
     });
   });
 }
@@ -13656,6 +18016,7 @@ function renderLeadSourceChips() {
 function leadSourceGroup(provider: LeadProviderStatus) {
   if (provider.accessMode !== "api") return "assisted";
   if (provider.capabilities.includes("procurement") || provider.capabilities.includes("business_signal")) return "procurement";
+  if (provider.capabilities.includes("maps")) return "maps";
   if (provider.category === "web" || provider.category === "ai" || provider.category === "email") return "web";
   return "company";
 }
@@ -13684,11 +18045,11 @@ function leadSourceCardsHtml(focusId?: string) {
       : !provider.ready
         ? "未配置 API Key"
         : !provider.enabled
-          ? (provider.requiresKey ? "已保存 Key，但当前停用；点击“保存并启用”恢复" : "该来源当前已停用，暂不能用于搜索")
+          ? (provider.requiresKey ? "已保存 Key，当前停用" : "该来源当前已停用")
           : !provider.requiresKey
             ? "内置免费源，无需配置"
             : provider.ready
-          ? (provider.lastTestStatus === "passed" ? "已连接并通过测试" : provider.lastTestStatus === "failed" ? `测试失败：${provider.lastTestMessage || "请检查 Key"}` : "已保存 Key，建议点测试连接")
+          ? (provider.lastTestStatus === "passed" ? "已连接并通过测试" : provider.lastTestStatus === "failed" ? `测试失败：${provider.lastTestMessage || "请检查 Key"}` : "Key 已保存")
           : "未配置 API Key";
     const caps = provider.capabilities.map((cap) => `<span class="ls-cap">${escapeHtml(cap)}</span>`).join("");
     const form = assisted ? `
@@ -13722,22 +18083,23 @@ function leadSourceCardsHtml(focusId?: string) {
       </div>`;
   };
   const groups = [
-    { id: "web", title: "Web 搜索", note: "官网发现、公开网页和联系人补充" },
-    { id: "company", title: "企业核验", note: "官方企业、机构、资质与身份记录" },
-    { id: "procurement", title: "采购信号", note: "政府采购、授标和公开商机" },
-    { id: "assisted", title: "导入/人工情报", note: "仅使用官方入口人工核实，取得企业或结果链接后返回解析" }
+    { id: "web", title: "Web 搜索" },
+    { id: "maps", title: "地图企业" },
+    { id: "company", title: "企业核验" },
+    { id: "procurement", title: "采购信号" },
+    { id: "assisted", title: "导入/人工情报" }
   ];
   const content = groups.map((group) => {
     const providers = state.leadProviders.filter((provider) => leadSourceGroup(provider) === group.id);
     if (!providers.length) return "";
     return `
       <section class="ls-group">
-        <div class="ls-group-head"><div><h3>${group.title}</h3><p>${group.note}</p></div><span>${providers.length} 个来源</span></div>
+        <div class="ls-group-head"><div><h3>${group.title}</h3></div><span>${providers.length} 个来源</span></div>
         <div class="ls-grid">${providers.map(cardHtml).join("")}</div>
       </section>
     `;
   }).join("");
-  return `<p class="ls-center-intro">推荐来源默认启用；需要 Key 的免费源可在此配置。人工情报入口不会加入自动任务，核实后的企业或结果链接可返回获客页面解析；Key 仅本人可见且页面不回显明文。</p>${content}`;
+  return content;
 }
 
 function bindLeadSourceCards() {
@@ -13781,6 +18143,9 @@ function refreshLeadSourceCenter(providers?: LeadProviderStatus[]) {
       .map((item) => item.id);
   }
   renderLeadSourceChips();
+  renderSuperWebSearchOption();
+  renderSuperMapSearchOption();
+  renderSuperAiDiscoveryOption();
   const modal = qs<HTMLElement>("#appModal");
   if (modal?.classList.contains("active")) {
     const body = qs<HTMLElement>("#modalBody");
@@ -13812,7 +18177,18 @@ async function saveLeadSourceConfig(providerId: string, button?: HTMLButtonEleme
     const nextProvider = state.leadProviders.find((item) => item.id === providerId);
     if (isLeadSourceExecutable(nextProvider)) {
       if (!state.selectedLeadSources.includes(providerId)) state.selectedLeadSources = [...state.selectedLeadSources, providerId];
+      if (leadFinderMode === "super" && nextProvider?.category === "web") {
+        const checkbox = qs<HTMLInputElement>("#leadSuperWebSearch");
+        if (checkbox) checkbox.checked = true;
+      }
+      if (leadFinderMode === "super" && nextProvider?.capabilities.includes("maps")) {
+        const checkbox = qs<HTMLInputElement>("#leadSuperMapSearch");
+        if (checkbox) checkbox.checked = true;
+      }
       renderLeadSourceChips();
+      renderSuperWebSearchOption();
+      renderSuperMapSearchOption();
+      renderSuperSearchPreview();
       toast(`已保存并启用：${provider?.name || providerId}`);
     } else {
       state.selectedLeadSources = state.selectedLeadSources.filter((item) => item !== providerId);
@@ -13907,13 +18283,20 @@ function updateLeadFinderSelectionCount() {
   const count = state.websiteOpportunities.filter((item) => item.selected).length;
   const label = qs<HTMLElement>("#leadFinderSelectedCount");
   const bar = qs<HTMLElement>("#leadFinderBulkbar");
+  const syncButton = qs<HTMLButtonElement>("#leadFinderSyncButton");
   if (label) label.textContent = `已选 ${count} 条`;
   bar?.classList.toggle("is-empty", count === 0);
+  if (syncButton) syncButton.disabled = count === 0;
+}
+
+function canSelectLeadFinderItem(item: WebsiteOpportunity) {
+  return ["preview", "contactable", "contacted"].includes(item.status)
+    && leadFinderDuplicateState(item).text === "新候选";
 }
 
 function setLeadFinderSelected(id: string, selected: boolean) {
   const item = state.websiteOpportunities.find((row) => row.id === id);
-  if (!item || !["contactable", "contacted"].includes(item.status) || leadFinderDuplicateState(item).text === "已有客户") return;
+  if (!item || !canSelectLeadFinderItem(item)) return;
   item.selected = selected;
   qsa<HTMLInputElement>(`[data-lead-select][data-lead-select-id="${CSS.escape(id)}"]`).forEach((input) => {
     input.checked = selected;
@@ -13924,7 +18307,7 @@ function setLeadFinderSelected(id: string, selected: boolean) {
 function leadFinderMobileCard(item: WebsiteOpportunity) {
   const score = leadFinderScore(item);
   const duplicate = leadFinderDuplicateState(item);
-  const disabled = !["contactable", "contacted"].includes(item.status) || duplicate.text === "已有客户";
+  const disabled = !canSelectLeadFinderItem(item);
   const status = prospectStatusMeta(item);
   return `
     <article class="lead-mobile-card ${state.selectedLeadFinderId === item.id ? "selected" : ""}" data-lead-mobile-id="${escapeHtml(item.id)}">
@@ -13988,7 +18371,7 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
     const score = leadFinderScore(item);
     const duplicate = leadFinderDuplicateState(item);
     const selected = state.selectedLeadFinderId === item.id;
-    const disabled = !["contactable", "contacted"].includes(item.status) || duplicate.text === "已有客户";
+    const disabled = !canSelectLeadFinderItem(item);
     const status = prospectStatusMeta(item);
     return `
       <tr data-lead-id="${escapeHtml(item.id)}" class="${selected ? "selected" : ""}">
@@ -14003,7 +18386,7 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
         <td class="lead-status-cell">${badge(status.label, status.tone)}${badge(duplicate.text, duplicate.tone)}${badge(item.parseMode === "reference" ? "链接" : item.parseMode === "ai" ? "AI" : "规则", item.parseMode === "ai" ? "green" : "")}</td>
       </tr>
     `;
-  }).join("") : `<tr><td colspan="9" class="empty-cell">暂无候选客户。填写画像、选好数据源后点击“生成并运行任务”。</td></tr>`;
+  }).join("") : `<tr><td colspan="9" class="empty-cell">暂无候选客户</td></tr>`;
   if (mobileRows) mobileRows.innerHTML = pageRows.length ? pageRows.map(leadFinderMobileCard).join("") : `<div class="empty-cell">暂无匹配候选。</div>`;
   const pageSummary = qs<HTMLElement>("#leadFinderPageSummary");
   const pageNumber = qs<HTMLElement>("#leadFinderPageNumber");
@@ -14045,18 +18428,18 @@ function leadFinderValues(selector: string) {
 
 async function launchProspectRunFromLeadFinder(
   sources: string[],
-  limit: number
+  limit: number,
+  mode: "standard" | "super" = "standard"
 ): Promise<LeadFinderLaunchResult> {
   const products = leadFinderValues("#leadProductKeywords");
   const markets = leadFinderValues("#leadCountries");
   const industries = leadFinderValues("#leadIndustryInput");
   const exclusions = leadFinderValues("#leadExcludeKeywords");
-  const customerType = qs<HTMLSelectElement>("#leadCustomerTypes")?.value.trim() || "";
+  const customerType = qs<HTMLSelectElement>("#leadCustomerTypes")?.value.trim() || "*";
   const goalInput = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim() || "";
   if (!products.length) throw new Error("请先填写产品关键词");
   if (!markets.length) throw new Error("请先填写目标国家或地区");
-  if (!customerType) throw new Error("请先选择客户类型");
-  const goal = goalInput || `开发${markets.join("、")}市场的${products.join("、")}${customerType}`;
+  const goal = goalInput || `开发${markets.join("、")}市场的${products.join("、")}${customerType === "*" ? "客户" : customerType}`;
   const normalizedSources = [...new Set(sources.map((source) => source.trim().toLocaleLowerCase("en-US")).filter(Boolean))];
   const campaignResult = await api<{
     campaign: ProspectCampaignApiRecord;
@@ -14069,7 +18452,7 @@ async function launchProspectRunFromLeadFinder(
         products,
         markets,
         customerTypes: [customerType],
-        applicationScenarios: industries.length ? industries : [customerType],
+        applicationScenarios: industries,
         icpRules: goalInput ? [goalInput] : [],
         exclusionRules: exclusions,
         sourceProviderIds: normalizedSources
@@ -14100,7 +18483,7 @@ async function launchProspectRunFromLeadFinder(
           countryMode: "campaign_markets",
           countries: [],
           languages: [],
-          customerTypeMode: "campaign_customer_types",
+          customerTypeMode: customerType === "*" ? "all" : "campaign_customer_types",
           customerTypes: [],
           exclusionKeywords: exclusions,
           exclusionDomains: [],
@@ -14131,6 +18514,28 @@ async function launchProspectRunFromLeadFinder(
     headers: { "If-Match": `"${campaign.id}:${campaign.revision}"` },
     body: JSON.stringify({})
   });
+  if (mode === "super") {
+    const costLimit = Number(qs<HTMLInputElement>("#leadSuperCost")?.value || 0);
+    const superResult = await api<{
+      mission: ProspectSuperSearchMissionApi;
+      run: ProspectRunDetailApiResponse;
+    }>("/api/prospect-super-search", {
+      method: "POST",
+      body: JSON.stringify({
+        strategyId: approvedStrategy.strategy.id,
+        targetCandidateCount: Number(qs<HTMLInputElement>("#leadSuperTarget")?.value || 300),
+        maxDurationMinutes: Number(qs<HTMLSelectElement>("#leadSuperDuration")?.value || 480),
+        depth: qs<HTMLSelectElement>("#leadSuperDepth")?.value || "deep",
+        costLimit,
+        currency: costLimit > 0 ? "USD" : "",
+        aiMode: "auto",
+        webSearchMode: superWebSearchMode(),
+        mapSearchMode: superMapSearchMode(),
+        aiDiscoveryMode: superAiDiscoveryMode()
+      })
+    });
+    return { ...superResult.run, superSearch: superResult.mission };
+  }
   const runResult = await api<ProspectRunDetailApiResponse>(
     `/api/prospect-strategies/${encodeURIComponent(approvedStrategy.strategy.id)}/runs`,
     {
@@ -14183,6 +18588,7 @@ async function runLeadFinder(button?: HTMLButtonElement) {
   }
   let sources: string[] = [];
   if (!urls.length) {
+    await loadLeadProviders();
     const resolution = resolveLeadSearchSources(
       state.leadProviders,
       state.selectedLeadSources,
@@ -14201,13 +18607,53 @@ async function runLeadFinder(button?: HTMLButtonElement) {
       return;
     }
     sources = resolution.sources;
+    if (leadFinderMode === "super") {
+      const webIds = new Set(superWebProviders().map((provider) => provider.id));
+      const selectedWebSources = sources.filter((providerId) => webIds.has(providerId));
+      if (superWebSearchMode() === "api" && !selectedWebSources.length) {
+        renderSuperWebSearchOption();
+        openLeadSourceCenter(superWebProviders()[0]?.id);
+        toast("实时网页搜索尚无可用来源，请先完成配置", "error");
+        return;
+      }
+      if (superWebSearchMode() === "off") {
+        sources = sources.filter((providerId) => !webIds.has(providerId));
+      }
+      const mapIds = new Set(superMapProviders().map((provider) => provider.id));
+      const selectedMapSources = sources.filter((providerId) => mapIds.has(providerId));
+      if (superMapSearchMode() === "google_places" && !selectedMapSources.includes("google_places")) {
+        renderSuperMapSearchOption();
+        openLeadSourceCenter("google_places");
+        toast("地图企业搜索尚未配置 Google Places", "error");
+        return;
+      }
+      if (superMapSearchMode() === "off") {
+        sources = sources.filter((providerId) => !mapIds.has(providerId));
+      }
+      const selectedAiSources = sources.filter((providerId) => providerId === "ai_search");
+      if (superAiDiscoveryMode() === "model" && !selectedAiSources.length) {
+        renderSuperAiDiscoveryOption();
+        activateNavView("ai-config", () => {
+          qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
+          toast("AI 深度发现尚无可用模型，请先完成配置", "error");
+        });
+        return;
+      }
+      if (superAiDiscoveryMode() === "off") {
+        sources = sources.filter((providerId) => providerId !== "ai_search");
+      }
+    }
   }
   const limit = Number(qs<HTMLSelectElement>("#leadLimit")?.value || 12);
-  const scheduleEnabled = Boolean(qs<HTMLInputElement>("#leadFinderScheduleInput")?.checked);
+  const scheduleEnabled = leadFinderMode === "standard" && Boolean(qs<HTMLInputElement>("#leadFinderScheduleInput")?.checked);
 
   // 计费源成本护栏：付费 API 与 AI 搜索都会产生费用，搜索前确认
   if (!urls.length) {
     const billed = sources.map((id) => state.leadProviders.find((p) => p.id === id)).filter((p): p is LeadProviderStatus => Boolean(p && (p.tier === "paid" || p.tier === "ai")));
+    if (leadFinderMode === "super" && billed.length && Number(qs<HTMLInputElement>("#leadSuperCost")?.value || 0) <= 0) {
+      toast("超级搜索选择了计费或 AI 来源，请先设置费用上限", "error");
+      return;
+    }
     if (billed.length) {
       const lines = billed.map((p) => p.tier === "ai"
         ? `· ${p.name}：消耗你配置的 AI 模型 token`
@@ -14230,8 +18676,9 @@ async function runLeadFinder(button?: HTMLButtonElement) {
   }
   try {
     if (!urls.length) {
-      const result = await launchProspectRunFromLeadFinder(sources, limit);
+      const result = await launchProspectRunFromLeadFinder(sources, limit, leadFinderMode);
       const backendJob = prospectRunJob(result);
+      if (result.superSearch) applySuperSearchMission(backendJob, result.superSearch);
       leadFinderJobs = [backendJob, ...leadFinderJobs.filter((item) => item.backendRunId !== backendJob.backendRunId)]
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
         .slice(0, 6);
@@ -14281,18 +18728,36 @@ async function runLeadFinder(button?: HTMLButtonElement) {
   }
 }
 
-async function syncLeadFinderRows(button?: HTMLButtonElement) {
-  const opportunities = collectLeadFinderRows();
+async function syncLeadFinderRows(button?: HTMLButtonElement, explicitIds?: string[]) {
+  const explicitIdSet = explicitIds ? new Set(explicitIds) : null;
+  const explicitItems = explicitIdSet
+    ? state.websiteOpportunities.filter((item) => explicitIdSet.has(item.id))
+    : [];
+  const opportunities = explicitIdSet
+    ? explicitItems.map((item) => ({
+        id: item.id,
+        company: item.company,
+        business: item.business,
+        country: item.country,
+        website: item.website,
+        contact: item.contact,
+        contactInfo: item.contactInfo,
+        description: item.description,
+        source: item.source,
+        sourceLabel: item.sourceLabel
+      })).filter((item) => item.company && item.website)
+    : collectLeadFinderRows();
   if (!opportunities.length) {
-    toast("请先核验候选并标记为可联系，再勾选加入线索", "error");
-    return;
+    toast("请先勾选需要加入线索的候选", "error");
+    return false;
   }
   const selectedItems = state.websiteOpportunities.filter((item) => opportunities.some((row) => row.id === item.id));
   const duplicates = selectedItems.filter((item) => leadFinderDuplicateState(item).text !== "新候选");
   const missingContact = selectedItems.filter((item) => !item.contactInfo.trim()).length;
+  const pendingReview = selectedItems.filter((item) => item.status === "preview").length;
   if (duplicates.length) {
     toast("所选候选包含已有客户或已入线索记录，请先取消选择", "error");
-    return;
+    return false;
   }
   const owner = state.user?.name || "当前账号";
   const sourceSummary = [...new Set(selectedItems.map((item) => item.sourceLabel || item.source || "链接登记"))].join("、");
@@ -14302,8 +18767,10 @@ async function syncLeadFinderRows(button?: HTMLButtonElement) {
     `归属人：${owner}`,
     `重复预检：未发现已知客户或已入线索记录`,
     `缺少联系方式：${missingContact} 条`,
+    `待补充核验：${pendingReview} 条`,
     "加入后再创建首个正式跟进待办。"
-  ].join("\n"))) return;
+  ].join("\n"))) return false;
+  const originalText = button?.textContent || "加入线索";
   if (button) {
     button.disabled = true;
     button.textContent = "加入中";
@@ -14311,7 +18778,7 @@ async function syncLeadFinderRows(button?: HTMLButtonElement) {
   try {
     const result = await api<{ created: LeadSyncResult[] }>("/api/tools/website-scrape/sync-opportunities", {
       method: "POST",
-      body: JSON.stringify({ opportunities })
+      body: JSON.stringify({ opportunities, allowPending: true })
     });
     result.created.forEach((item) => {
       if (!state.leads.some((lead) => lead.id === item.lead.id)) state.leads.unshift(item.lead);
@@ -14327,12 +18794,14 @@ async function syncLeadFinderRows(button?: HTMLButtonElement) {
     const duplicateCount = result.created.filter((item) => item.duplicate).length;
     const createdCount = result.created.length - duplicateCount;
     toast(`线索处理完成：新建 ${createdCount} 条，重复 ${duplicateCount} 条`);
+    return true;
   } catch (error) {
     toast(`加入线索失败：${error instanceof Error ? error.message : "请检查网络后重试"}`, "error");
+    return false;
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "加入线索中心";
+      button.textContent = originalText;
     }
   }
 }
@@ -14678,7 +19147,7 @@ function renderPlanTemplates(templates = state.planTemplates) {
         <button class="btn compact danger" data-plan-template-delete="${escapeHtml(item.id)}">删除</button>
       </div>
     </div>
-  `).join("") : `<div class="empty-state"><b>暂无前置知识训练项</b><span>可在后续版本中新增模板，当前先使用计划任务手动维护。</span></div>`;
+  `).join("") : `<div class="empty-state"><b>暂无前置知识训练项</b></div>`;
   persona.innerHTML = personaItems.length ? personaItems.map((item) => {
     const [keyword = "", action = ""] = item.output.split("\n");
     return `
@@ -14689,14 +19158,14 @@ function renderPlanTemplates(templates = state.planTemplates) {
         <div class="template-actions"><button class="btn compact" data-plan-template-add="${escapeHtml(item.id)}">加入计划</button><button class="btn compact" data-plan-template-edit="${escapeHtml(item.id)}">编辑</button><button class="btn compact danger" data-plan-template-delete="${escapeHtml(item.id)}">删除</button></div>
       </article>
     `;
-  }).join("") : `<div class="empty-state"><b>暂无客户画像</b><span>可在后续版本中新增模板，当前先使用计划任务手动维护。</span></div>`;
+  }).join("") : `<div class="empty-state"><b>暂无客户画像</b></div>`;
   execution.innerHTML = executionItems.length ? executionItems.map((item) => `
     <div class="execution-day" data-plan-template-id="${escapeHtml(item.id)}">
       <div class="execution-title-row"><h3>${escapeHtml(item.title)}</h3><span class="badge ${escapeHtml(item.badgeTone)}">${escapeHtml(item.badge || "执行")}</span></div>
       <ul>${(item.output || item.summary).split("\n").filter(Boolean).map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>
       <div class="template-actions"><button class="btn compact" data-plan-template-add="${escapeHtml(item.id)}">加入计划</button><button class="btn compact" data-plan-template-edit="${escapeHtml(item.id)}">编辑</button></div>
     </div>
-  `).join("") : `<div class="empty-state"><b>暂无首周执行拆解</b><span>可编辑模板恢复首周节奏。</span></div>`;
+  `).join("") : `<div class="empty-state"><b>暂无首周执行拆解</b></div>`;
   qsa<HTMLButtonElement>("[data-plan-template-add]").forEach((button) => button.addEventListener("click", () => void createPlanTaskFromTemplate(button.dataset.planTemplateAdd || "", button)));
   qsa<HTMLButtonElement>("[data-plan-template-edit]").forEach((button) => button.addEventListener("click", () => openPlanTemplateModal(state.planTemplates.find((item) => item.id === button.dataset.planTemplateEdit))));
   qsa<HTMLButtonElement>("[data-plan-template-delete]").forEach((button) => button.addEventListener("click", () => void deletePlanTemplate(button.dataset.planTemplateDelete || "")));
@@ -15242,6 +19711,7 @@ function openCustomerModal(customer?: Customer) {
       <div class="form-field full"><label>公司名</label><input id="customerCompanyInput" placeholder="请输入客户公司名称" value="${escapeHtml(customer?.company || "")}"></div>
       <div class="form-field"><label>联系人</label><input id="customerContactInput" value="${escapeHtml(customer?.contact || "")}"></div>
       <div class="form-field"><label>国家</label><input id="customerCountryInput" value="${escapeHtml(customer?.country || "")}"></div>
+      <div class="form-field full"><label>WhatsApp</label><input id="customerWhatsappInput" inputmode="tel" value="${escapeHtml(customer?.whatsapp || customer?.whatsappPhone || "")}" placeholder="例如 +49123456789（含国家码）"></div>
       <label class="form-field"><span>客户分级</span><select id="customerGradeInput"><option value="A" ${selectedGrade === "A" ? "selected" : ""}>A · 核心客户</option><option value="B" ${selectedGrade === "B" ? "selected" : ""}>B · 重点客户</option><option value="C" ${selectedGrade === "C" ? "selected" : ""}>C · 常规客户</option><option value="D" ${selectedGrade === "D" ? "selected" : ""}>D · 低优先级</option></select></label>
       <div class="form-field"><label>健康度（人工评分）</label><input id="customerHealthInput" type="number" min="0" max="100" value="${customer?.health ?? 72}"></div>
       <div class="form-field"><label>下一提醒</label><input id="customerReminderInput" value="${escapeHtml(customer?.nextReminder || "")}"></div>
@@ -15266,10 +19736,18 @@ async function saveCustomer() {
   }
   const saveButton = qs<HTMLButtonElement>("#saveCustomerButton");
   const editingId = saveButton?.dataset.editingId || "";
+  const whatsappInput = qs<HTMLInputElement>("#customerWhatsappInput")?.value.trim() || "";
+  const whatsapp = whatsappInput ? normalizeWhatsAppPhone(whatsappInput) : "";
+  if (whatsappInput && !whatsapp) {
+    toast("WhatsApp 号码需包含国家码，例如 +49123456789", "error");
+    qs<HTMLInputElement>("#customerWhatsappInput")?.focus();
+    return;
+  }
   const payload = {
     company,
     contact: qs<HTMLInputElement>("#customerContactInput")?.value || "待维护",
     country: qs<HTMLInputElement>("#customerCountryInput")?.value || "未知",
+    whatsapp,
     grade: (qs<HTMLSelectElement>("#customerGradeInput")?.value || "C") as "A" | "B" | "C" | "D",
     health: Math.max(0, Math.min(100, Number(qs<HTMLInputElement>("#customerHealthInput")?.value || 72))),
     nextReminder: qs<HTMLInputElement>("#customerReminderInput")?.value || "明天 10:00",
@@ -15675,7 +20153,7 @@ function renderDailyReports() {
       <p>${escapeHtml(report.completedWork || "未填写完成工作")}</p>
       <span class="daily-report-row-foot"><span>${escapeHtml(report.results || report.customerProgress || "暂无结果摘要")}</span><span>${report.commentCount || 0} 条评论</span></span>
     </button>
-  `).join("") : `<div class="collab-empty"><b>当前范围暂无日报</b><span>调整日期或成员筛选，也可以提交第一份日报。</span></div>`;
+  `).join("") : `<div class="collab-empty"><b>当前范围暂无日报</b></div>`;
 
   qsa<HTMLButtonElement>("[data-daily-report-id]", list).forEach((button) => {
     button.addEventListener("click", () => void loadDailyReportDetail(button.dataset.dailyReportId || ""));
@@ -16038,6 +20516,32 @@ function installEvents() {
   qs<HTMLButtonElement>("#profileEntryButton")?.addEventListener("click", () => activateNavView("profile", () => renderProfile()));
   qs<HTMLButtonElement>("#profileSaveButton")?.addEventListener("click", (event) => void saveProfileEmailBinding(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#companyProfileSaveButton")?.addEventListener("click", () => void saveCompanyProfile());
+  qs<HTMLButtonElement>("#mysqlImportPicker")?.addEventListener("click", () => qs<HTMLInputElement>("#mysqlImportFile")?.click());
+  qs<HTMLInputElement>("#mysqlImportFile")?.addEventListener("change", (event) => {
+    const file = (event.currentTarget as HTMLInputElement).files?.[0];
+    if (file) void prepareMysqlImportFile(file);
+  });
+  qs<HTMLButtonElement>("#mysqlImportStart")?.addEventListener("click", () => void startMysqlImport());
+  qsa<HTMLButtonElement>("[data-database-mode]").forEach((button) => button.addEventListener("click", () => {
+    databaseMaintenanceMode = button.dataset.databaseMode === "backup" ? "backup" : "migration";
+    renderMysqlImport();
+  }));
+  qs<HTMLButtonElement>("#databaseMaintenanceRefresh")?.addEventListener("click", () => void refreshDatabaseMaintenance());
+  qs<HTMLButtonElement>("#databaseBackupStart")?.addEventListener("click", () => void startDatabaseBackup());
+  qs<HTMLButtonElement>("#databaseTaskCancel")?.addEventListener("click", () => void cancelDatabaseMaintenanceTask());
+  qs<HTMLButtonElement>("#databaseLogFollow")?.addEventListener("click", () => {
+    databaseLogFollow = !databaseLogFollow;
+    renderDatabaseStream();
+  });
+  qs<HTMLButtonElement>("#databaseLogLatest")?.addEventListener("click", () => {
+    databaseLogFollow = true;
+    renderDatabaseStream();
+  });
+  qs<HTMLButtonElement>("#databaseLogCopy")?.addEventListener("click", async () => {
+    await navigator.clipboard.writeText(databaseLogText());
+    toast("运行记录已复制");
+  });
+  qs<HTMLButtonElement>("#databaseLogDownload")?.addEventListener("click", downloadDatabaseLog);
   qs<HTMLButtonElement>("#profileTestSmtpButton")?.addEventListener("click", (event) => void sendProfileTestEmail(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#profileClearEmailButton")?.addEventListener("click", (event) => void clearProfileEmailBinding(event.currentTarget as HTMLButtonElement));
   qs<HTMLInputElement>("#profileSmtpPort")?.addEventListener("input", () => updateProfileSmtpHints());
@@ -16048,10 +20552,20 @@ function installEvents() {
     toast("个人资料已刷新");
   });
   qs<HTMLButtonElement>("#profileOpenProspectsButton")?.addEventListener("click", () => activateNavView("prospect-list", renderProspectList));
-  qs<HTMLButtonElement>("#profileOpenWhatsAppButton")?.addEventListener("click", () => activateNavView("whatsapp", renderWhatsApp));
   qs<HTMLButtonElement>("#profileOpenSettingsButton")?.addEventListener("click", () => {
     if (state.user && ["admin", "super_admin"].includes(state.user.role)) activateNavView("settings");
     else toast("账号管理仅管理员和超级管理员可进入", "error");
+  });
+  qs<HTMLButtonElement>("#agentSkillsRefreshButton")?.addEventListener("click", () => void loadAgentSkills());
+  qs<HTMLButtonElement>("#agentTuningInspectButton")?.addEventListener("click", () => void inspectAgentTuning());
+  qs<HTMLInputElement>("#agentTuningGoalInput")?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    void inspectAgentTuning();
+  });
+  qs<HTMLInputElement>("#agentSkillsSearchInput")?.addEventListener("input", (event) => {
+    agentSkillQuery = (event.currentTarget as HTMLInputElement).value.trim();
+    renderAgentSkillList();
   });
   qsa<HTMLElement>(".todo-chip").forEach((chip) => {
     chip.addEventListener("click", () => {
@@ -16122,6 +20636,35 @@ function installEvents() {
     if (search) search.value = "";
     if (filter) filter.value = "all";
     renderCustomers(state.customers);
+  });
+  qs<HTMLInputElement>("#customerPoolSearch")?.addEventListener("input", (event) => {
+    state.customerPoolSearch = (event.currentTarget as HTMLInputElement).value;
+    renderCustomerPool();
+  });
+  qs<HTMLSelectElement>("#customerPoolGradeFilter")?.addEventListener("change", (event) => {
+    state.customerPoolGradeFilter = (event.currentTarget as HTMLSelectElement).value as AppState["customerPoolGradeFilter"];
+    renderCustomerPool();
+  });
+  qs<HTMLButtonElement>("#customerPoolResetButton")?.addEventListener("click", () => {
+    state.customerPoolSearch = "";
+    state.customerPoolGradeFilter = "all";
+    setFieldValue("#customerPoolSearch", "");
+    setFieldValue("#customerPoolGradeFilter", "all");
+    renderCustomerPool();
+  });
+  qs<HTMLButtonElement>("#customerPoolRefreshButton")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    button.disabled = true;
+    button.textContent = "刷新中";
+    try {
+      await reloadCustomerScopes();
+      toast("客户公池已刷新");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "客户公池刷新失败", "error");
+    } finally {
+      button.disabled = false;
+      button.textContent = "刷新";
+    }
   });
   qs("#customerDrawerBackdrop")?.addEventListener("click", closeCustomerDrawer);
   qs<HTMLButtonElement>("#pipeline .page-head .btn.primary")?.addEventListener("click", () => openDealModal());
@@ -16233,6 +20776,33 @@ function installEvents() {
   qs<HTMLButtonElement>("#wecom .page-head .btn.primary")?.addEventListener("click", () => void syncWecomMessages());
   qs<HTMLButtonElement>("#aiSaveButton")?.addEventListener("click", (event) => void saveAiConfig(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#aiTestButton")?.addEventListener("click", (event) => void testAiConfig(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#agentPlanButton")?.addEventListener("click", () => void createAgentPlan());
+  qs<HTMLTextAreaElement>("#agentGoalInput")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void createAgentPlan();
+    }
+  });
+  qs<HTMLButtonElement>("#agentApproveAllButton")?.addEventListener("click", () => void approveAllExternalAgentSteps());
+  qs<HTMLButtonElement>("#agentPauseButton")?.addEventListener("click", () => void controlAgentMission("pause"));
+  qs<HTMLButtonElement>("#agentResumeButton")?.addEventListener("click", () => void controlAgentMission("resume"));
+  qs<HTMLButtonElement>("#agentCancelButton")?.addEventListener("click", () => void controlAgentMission("cancel"));
+  qs<HTMLButtonElement>("#agentMemoryStatus")?.addEventListener("click", () => void openAgentMemoryManager());
+  qs<HTMLButtonElement>("#agentKnowledgeStatus")?.addEventListener("click", () => void openAgentKnowledgeCenter());
+  qs<HTMLButtonElement>("#agentTriggerStatus")?.addEventListener("click", () => void openAgentTriggerManager());
+  qs<HTMLButtonElement>("#agentGovernanceStatus")?.addEventListener("click", () => void openAgentGovernance());
+  qs<HTMLButtonElement>("#salesDistillationButton")?.addEventListener("click", (event) => void createSalesDistillationFromUi(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#salesDistillationRefreshButton")?.addEventListener("click", () => void loadSalesDistillationWorkspace());
+  qs<HTMLButtonElement>("#agentNewPlanButton")?.addEventListener("click", () => {
+    setFieldValue("#agentGoalInput", "");
+    startNewAgentConversation();
+  });
+  qsa<HTMLButtonElement>("[data-agent-goal]").forEach((button) => {
+    button.addEventListener("click", () => {
+      setFieldValue("#agentGoalInput", button.dataset.agentGoal || "");
+      qs<HTMLTextAreaElement>("#agentGoalInput")?.focus();
+    });
+  });
   qs<HTMLButtonElement>("#topPrimaryAction")?.addEventListener("click", () => {
     const view = qs<HTMLElement>(".view.active")?.id;
     if (view === "customers") openCustomerModal();
@@ -16270,6 +20840,9 @@ function installEvents() {
     state.waThreadSearch = (event.target as HTMLInputElement).value;
     renderWhatsAppThreads();
   });
+  qs<HTMLButtonElement>("#waNewChatButton")?.addEventListener("click", openWhatsAppCustomerPicker);
+  qs<HTMLButtonElement>("#waThreadNewButton")?.addEventListener("click", openWhatsAppCustomerPicker);
+  qs<HTMLButtonElement>("#waRefreshButton")?.addEventListener("click", () => void refreshWhatsAppWorkspace());
   qs<HTMLButtonElement>("#leadActiveTab")?.addEventListener("click", () => {
     state.leadView = "active";
     state.leadPage = 1;
@@ -16304,6 +20877,36 @@ function installEvents() {
   ["#leadFinderGoalInput", "#leadProductKeywords", "#leadCountries", "#leadIndustryInput", "#leadCustomerTypes", "#leadExcludeKeywords"].forEach((selector) => {
     qs<HTMLElement>(selector)?.addEventListener("input", renderLeadFinderSearchLinks);
     qs<HTMLElement>(selector)?.addEventListener("change", renderLeadFinderSearchLinks);
+    qs<HTMLElement>(selector)?.addEventListener("input", renderSuperSearchPreview);
+    qs<HTMLElement>(selector)?.addEventListener("change", renderSuperSearchPreview);
+  });
+  qsa<HTMLButtonElement>("[data-lead-search-mode]").forEach((button) => {
+    button.addEventListener("click", () => setLeadFinderMode(button.dataset.leadSearchMode === "super" ? "super" : "standard"));
+  });
+  ["#leadSuperTarget", "#leadSuperDuration", "#leadSuperDepth", "#leadSuperCost"].forEach((selector) => {
+    qs<HTMLElement>(selector)?.addEventListener("input", renderSuperSearchPreview);
+    qs<HTMLElement>(selector)?.addEventListener("change", renderSuperSearchPreview);
+  });
+  qs<HTMLInputElement>("#leadSuperWebSearch")?.addEventListener("change", (event) => {
+    void toggleSuperWebSearch((event.currentTarget as HTMLInputElement).checked);
+  });
+  qs<HTMLButtonElement>("#leadSuperWebConfig")?.addEventListener("click", () => {
+    openLeadSourceCenter(selectedSuperWebProviderIds()[0] || superWebProviders()[0]?.id);
+  });
+  qs<HTMLInputElement>("#leadSuperMapSearch")?.addEventListener("change", (event) => {
+    void toggleSuperMapSearch((event.currentTarget as HTMLInputElement).checked);
+  });
+  qs<HTMLButtonElement>("#leadSuperMapConfig")?.addEventListener("click", () => {
+    openLeadSourceCenter("google_places");
+  });
+  qs<HTMLInputElement>("#leadSuperAiDiscovery")?.addEventListener("change", (event) => {
+    void toggleSuperAiDiscovery((event.currentTarget as HTMLInputElement).checked);
+  });
+  qs<HTMLButtonElement>("#leadSuperAiConfig")?.addEventListener("click", () => {
+    activateNavView("ai-config", () => {
+      qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
+      toast("已打开 AI 模型配置");
+    });
   });
   qsa<HTMLButtonElement>(".lead-entry-chip").forEach((chip) => {
     chip.addEventListener("click", () => {
@@ -16579,6 +21182,8 @@ function closeWorkspaceTab(view: string) {
 function renderOpenWorkspaceTabs(activeView: string) {
   const wrap = qs<HTMLElement>("#topOpenTabs");
   if (!wrap) return;
+  openWorkspaceTabs = openWorkspaceTabs.filter((view) => canAccessWorkspaceView(view));
+  workspaceTabHistory = workspaceTabHistory.filter((view) => canAccessWorkspaceView(view));
   if (!openWorkspaceTabs.includes("dashboard")) openWorkspaceTabs.unshift("dashboard");
   wrap.innerHTML = openWorkspaceTabs.map((view) => {
     const label = viewLabels[view] || view;
@@ -16606,7 +21211,13 @@ function openSecondaryDropdownForView(view: string) {
 
 function activateNavView(view: string, after?: () => void) {
   if (!qs<HTMLElement>(`#${CSS.escape(view)}`)) view = "dashboard";
+  if (!canAccessWorkspaceView(view)) {
+    toast("当前账号无权访问系统设置", "error");
+    view = "dashboard";
+    after = undefined;
+  }
   const activeView = qs<HTMLElement>(".view.active")?.id;
+  if (view === "ai-agent" && activeView && activeView !== "ai-agent") agentOriginView = activeView;
   if (activeView === "memos" && view !== "memos" && memoDirty) void saveCurrentMemoDraft();
   if (view !== "leads") closeLeadDrawer();
   if (view !== "customers") closeCustomerDrawer();
@@ -16617,10 +21228,11 @@ function activateNavView(view: string, after?: () => void) {
   qsa<HTMLElement>(".sidebar button[data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   openSecondaryDropdownForView(view);
   qsa<HTMLElement>(".view").forEach((node) => node.classList.toggle("active", node.id === view));
+  document.body.classList.toggle("is-whatsapp-view", view === "whatsapp");
   syncLeadTaskDetailClock(view === "lead-task-detail");
   syncLeadTaskVerboseTimer(view === "lead-task-detail" && leadTaskStreamMode === "verbose");
+  syncWhatsAppRefresh(false);
   renderTopbarForView(view);
-  if (view === "whatsapp") renderWhatsApp();
   if (view === "reports") {
     void refreshExecutiveReport();
   }
@@ -16631,7 +21243,31 @@ function activateNavView(view: string, after?: () => void) {
     void refreshInternalMessages(false);
   }
   if (view === "dashboard") requestDashboardRefresh();
-  if (view === "lead-finder") void loadIdentityConflicts(true);
+  if (view === "lead-finder") {
+    void loadIdentityConflicts(true);
+    void loadLeadProviders();
+  }
+  if (view === "customer-pool") {
+    renderCustomerPool();
+    void reloadCustomerScopes().catch((error) => toast(error instanceof Error ? error.message : "客户公池加载失败", "error"));
+  }
+  if (view === "sales-distillation") {
+    void loadSalesDistillationWorkspace();
+  }
+  if (view === "ai-agent") {
+    renderAgent(state.agentRun);
+    void loadAgentMemories(false);
+    void loadAgentKnowledge(false);
+    void loadAgentTriggers(false);
+    void loadAgentGovernance(false);
+    void loadAgentRuns();
+  }
+  if (view === "agent-skills") {
+    void loadAgentSkills();
+  }
+  if (view === "database-maintenance") {
+    void refreshDatabaseMaintenance();
+  }
   window.scrollTo({ top: 0, behavior: "smooth" });
   after?.();
 }
@@ -16698,6 +21334,11 @@ function resolveTopbarSearchView(rawValue: string) {
     ["线索搜索", "lead-finder"],
     ["lead", "lead-finder"],
     ["prospect", "prospect-list"],
+    ["ai agent", "ai-agent"],
+    ["智能体", "ai-agent"],
+    ["销售能力训练", "sales-distillation"],
+    ["销售训练", "sales-distillation"],
+    ["业务员蒸馏", "sales-distillation"],
     ["ai", "ai-config"],
     ["gpt", "ai-config"],
     ["模型", "ai-config"],
@@ -16709,8 +21350,12 @@ function resolveTopbarSearchView(rawValue: string) {
     ["个人设置", "profile"],
     ["邮箱", "profile"],
     ["profile", "profile"],
+    ["客户公池", "customer-pool"],
+    ["公池", "customer-pool"],
     ["客户", "customers"],
     ["customer", "customers"],
+    ["communication", "whatsapp"],
+    ["whatsapp", "whatsapp"],
     ["商机", "pipeline"],
     ["pipeline", "pipeline"],
     ["提醒", "reminders"],
@@ -16718,6 +21363,10 @@ function resolveTopbarSearchView(rawValue: string) {
     ["导入", "imports"],
     ["导出", "imports"],
     ["import", "imports"],
+    ["数据库维护", "database-maintenance"],
+    ["数据库迁移", "database-maintenance"],
+    ["数据库备份", "database-maintenance"],
+    ["mysql备份", "database-maintenance"],
     ["单据", "documents"],
     ["发票", "documents"],
     ["pi", "documents"],

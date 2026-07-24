@@ -56,6 +56,7 @@ import {
 import {
   prospectRunExecutionSnapshotHash
 } from "./prospect-runs.js";
+import { validateProspectSearchQueryPlan } from "./prospect-search-planner.js";
 import {
   prospectStrategySourcePositionIdentityHash
 } from "./prospect-strategy-source-position.js";
@@ -91,8 +92,13 @@ import { companyProfiles } from "./data.js";
 import type { CrmStore, PersistedStoreMutation } from "./store.js";
 import type { WhatsAppBinding, WhatsAppMessage } from "./types.js";
 import type { DailyReport, DailyReportComment, InternalMessage } from "./types.js";
-import type { AcquisitionOutcomeFeedback, AgentJob, AgentJobIdempotencyAlias, AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerAcquisitionSourceEvent, CustomerActivity, CustomerIntelligenceSuggestion, CustomerOwnershipEvent, CustomerOwnershipMutationInput, CustomerOwnershipMutationResult, Deal, DealEvent, DealRecommendation, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, MarketOpportunityBatch, MarketOpportunityCalculationEvent, MarketOpportunitySnapshot, MarketTradeObservation, Memo, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProblemItem, ProcurementSignal, ProspectCampaign, ProspectCampaignEvent, ProspectCampaignVersion, ProspectCandidateProcessingState, ProspectExecutionAttempt, ProspectExecutionCheckpoint, ProspectExecutionEvent, ProspectExecutionKernelState, ProspectExecutionLease, ProspectExecutionPage, ProspectExecutionThrottleBucket, ProspectProviderRequestAccountingEvidence, ProspectProviderRequestAttemptBinding, ProspectProviderRequestDispatch, ProspectProviderRequestEvent, ProspectProviderRequestLedger, ProspectRunEvent, ProspectRunQueueChildBinding, ProspectRunQueueParentBinding, ProspectRunShard, ProspectSchedule, ProspectSearchRun, ProspectSourceRawBatch, ProspectSourceRawHit, ProspectSourceRawRecord, ProspectStrategy, ProspectStrategyEvent, ProspectStrategySourcePosition, ProspectStrategySuggestion, ProspectTouchpoint, ProviderCatalogItem, ProviderConnection, ProviderRequestLog, ProviderResponseCache, Reminder, SalesRecordAudit, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
+import type { AcquisitionOutcomeFeedback, AgentJob, AgentJobIdempotencyAlias, AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerAcquisitionSourceEvent, CustomerActivity, CustomerIntelligenceSuggestion, CustomerOwnershipEvent, CustomerOwnershipMutationInput, CustomerOwnershipMutationResult, Deal, DealEvent, DealRecommendation, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, MarketOpportunityBatch, MarketOpportunityCalculationEvent, MarketOpportunitySnapshot, MarketTradeObservation, Memo, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProblemItem, ProcurementSignal, ProspectCampaign, ProspectCampaignEvent, ProspectCampaignVersion, ProspectCandidateProcessingState, ProspectExecutionAttempt, ProspectExecutionCheckpoint, ProspectExecutionEvent, ProspectExecutionKernelState, ProspectExecutionLease, ProspectExecutionPage, ProspectExecutionThrottleBucket, ProspectProviderRequestAccountingEvidence, ProspectProviderRequestAttemptBinding, ProspectProviderRequestDispatch, ProspectProviderRequestEvent, ProspectProviderRequestLedger, ProspectRunEvent, ProspectRunQueueChildBinding, ProspectRunQueueParentBinding, ProspectRunShard, ProspectSchedule, ProspectSearchRun, ProspectSourceRawBatch, ProspectSourceRawHit, ProspectSourceRawRecord, ProspectStrategy, ProspectStrategyEvent, ProspectStrategySourcePosition, ProspectStrategySuggestion, ProspectSuperSearchEvent, ProspectSuperSearchMission, ProspectSuperSearchRound, ProspectTouchpoint, ProviderCatalogItem, ProviderConnection, ProviderRequestLog, ProviderResponseCache, Reminder, SalesRecordAudit, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity } from "./types.js";
 import type { CompanyProfile } from "./types.js";
+import type { AgentMemoryRecord, AgentMissionCheckpointRecord, AgentRunEventRecord, AgentRunRecord, AgentRunStepRecord, CustomerMaintenanceWatch, OutreachSequence } from "./types.js";
+import type { AgentTriggerEventRecord, AgentTriggerRuleRecord } from "./types.js";
+import type { AgentEvaluationRunRecord, AgentModelCallRecord } from "./types.js";
+import type { AgentKnowledgeDocument } from "./types.js";
+import type { SalesDistillation, SalesPlaybookActivation, SalesTrainingRun } from "./types.js";
 
 const defaultUrl = "mysql://goodjob:change_me@127.0.0.1:3306/goodjob_crm";
 
@@ -955,6 +961,7 @@ export async function createMysqlStore(
     await pool.end();
   });
   const loadedProspectRunState = await loadProspectRunState(pool);
+  const loadedProspectSuperSearchState = await loadProspectSuperSearchState(pool);
   const loadedProspectExecutionState = await loadProspectExecutionState(pool);
   const loadedOrganizationIdentityState =
     await loadOrganizationIdentityState(
@@ -1288,12 +1295,30 @@ export async function createMysqlStore(
         marketOpportunityCalculationEvents: await loadMarketOpportunityCalculationEvents(pool),
 		    agentJobs: await loadAgentJobs(pool),
 		    agentJobIdempotencyAliases: await loadAgentJobIdempotencyAliases(pool),
+        agentRuns: await loadAgentRuns(pool),
+        agentRunSteps: await loadAgentRunSteps(pool),
+		    agentRunEvents: await loadAgentRunEvents(pool),
+        agentMissionCheckpoints: await loadAgentMissionCheckpoints(pool),
+        agentMemories: await loadAgentMemories(pool),
+        agentKnowledgeDocuments: await loadAgentKnowledgeDocuments(pool),
+        agentTriggerRules: await loadAgentTriggerRules(pool),
+        agentTriggerEvents: await loadAgentTriggerEvents(pool),
+        agentModelCalls: await loadAgentModelCalls(pool),
+        agentEvaluationRuns: await loadAgentEvaluationRuns(pool),
+        outreachSequences: await loadOutreachSequences(pool),
+        customerMaintenanceWatches: await loadCustomerMaintenanceWatches(pool),
+        salesDistillations: await loadSalesDistillations(pool),
+        salesPlaybookActivations: await loadSalesPlaybookActivations(pool),
+        salesTrainingRuns: await loadSalesTrainingRuns(pool),
         prospectCampaigns: await loadProspectCampaigns(pool),
         prospectCampaignVersions: await loadProspectCampaignVersions(pool),
         prospectCampaignEvents: await loadProspectCampaignEvents(pool),
         prospectStrategies: await loadProspectStrategies(pool),
         prospectStrategyEvents: await loadProspectStrategyEvents(pool),
         prospectSchedules: await loadProspectSchedules(pool),
+        prospectSuperSearchMissions: loadedProspectSuperSearchState.missions,
+        prospectSuperSearchRounds: loadedProspectSuperSearchState.rounds,
+        prospectSuperSearchEvents: loadedProspectSuperSearchState.events,
         prospectSearchRuns: loadedProspectRunState.runs,
         prospectRunShards: loadedProspectRunState.shards,
         prospectRunEvents: loadedProspectRunState.events,
@@ -1617,6 +1642,118 @@ export async function createMysqlStore(
   return store;
 }
 
+export const GOODJOB_MYSQL_SCHEMA_VERSION = "1.2.1-003";
+
+const MIGRATION_PROTECTED_TABLES = ["users", "customers", "leads", "deals"] as const;
+
+async function mysqlSchemaStats(pool: mysql.Pool) {
+  const [tableRows] = await pool.query(
+    "SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema = DATABASE()"
+  );
+  const [columnRows] = await pool.query(
+    "SELECT COUNT(*) AS count FROM information_schema.columns WHERE table_schema = DATABASE()"
+  );
+  return {
+    tables: Number((tableRows as Array<{ count: number }>)[0]?.count || 0),
+    columns: Number((columnRows as Array<{ count: number }>)[0]?.count || 0)
+  };
+}
+
+async function protectedMigrationRowCounts(pool: mysql.Pool) {
+  const counts: Record<string, number> = {};
+  for (const table of MIGRATION_PROTECTED_TABLES) {
+    const [existsRows] = await pool.query(
+      "SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?",
+      [table]
+    );
+    if (Number((existsRows as Array<{ count: number }>)[0]?.count || 0) === 0) continue;
+    const [countRows] = await pool.query(`SELECT COUNT(*) AS count FROM \`${table}\``);
+    counts[table] = Number((countRows as Array<{ count: number }>)[0]?.count || 0);
+  }
+  return counts;
+}
+
+export async function migrateMysqlSchema(input: {
+  databaseUrl?: string;
+  releaseId?: string;
+} = {}) {
+  const databaseUrl = input.databaseUrl || process.env.DATABASE_URL || process.env.MYSQL_URL;
+  if (!databaseUrl) throw new Error("增量迁移需要 DATABASE_URL 或 MYSQL_URL");
+  const releaseId = String(input.releaseId || process.env.GOODJOB_RELEASE_ID || "manual").slice(0, 100);
+  const pool = mysql.createPool({ uri: databaseUrl, connectionLimit: 4, namedPlaceholders: true });
+  const lockConnection = await pool.getConnection();
+  let lockAcquired = false;
+  try {
+    const [lockRows] = await lockConnection.query(
+      "SELECT GET_LOCK('goodjob_mysql_schema_migration', 60) AS acquired"
+    );
+    lockAcquired = Number((lockRows as Array<{ acquired: number | null }>)[0]?.acquired || 0) === 1;
+    if (!lockAcquired) throw new Error("无法取得数据库迁移锁，请确认没有其他升级正在执行");
+
+    await pool.query(`CREATE TABLE IF NOT EXISTS goodjob_schema_migrations (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      schema_version VARCHAR(100) NOT NULL,
+      release_id VARCHAR(100) NOT NULL,
+      tables_before INT NOT NULL,
+      tables_after INT NOT NULL,
+      columns_before INT NOT NULL,
+      columns_after INT NOT NULL,
+      applied_at DATETIME(3) NOT NULL,
+      UNIQUE KEY uk_goodjob_schema_release(schema_version, release_id)
+    ) ENGINE=InnoDB`);
+
+    const before = await mysqlSchemaStats(pool);
+    const protectedBefore = await protectedMigrationRowCounts(pool);
+    await ensureSchema(pool);
+    await ensureOrganizationIdentitySchema(pool);
+    await ensureOrganizationIdentityConflictReviewSchema(pool);
+    await ensureOrganizationRelationSchema(pool);
+    await ensureProspectCoverageSchema(pool);
+    await ensureProspectQualificationSchema(pool);
+    const after = await mysqlSchemaStats(pool);
+    const protectedAfter = await protectedMigrationRowCounts(pool);
+    for (const [table, count] of Object.entries(protectedBefore)) {
+      if (protectedAfter[table] !== count) {
+        throw new Error(`迁移前后核心业务表 ${table} 行数不一致，已停止启动新版本`);
+      }
+    }
+    await pool.query(
+      `INSERT INTO goodjob_schema_migrations
+        (schema_version, release_id, tables_before, tables_after, columns_before, columns_after, applied_at)
+       VALUES (?, ?, ?, ?, ?, ?, NOW(3))
+       ON DUPLICATE KEY UPDATE
+         tables_before=VALUES(tables_before),
+         tables_after=VALUES(tables_after),
+         columns_before=VALUES(columns_before),
+         columns_after=VALUES(columns_after),
+         applied_at=VALUES(applied_at)`,
+      [GOODJOB_MYSQL_SCHEMA_VERSION, releaseId, before.tables, after.tables, before.columns, after.columns]
+    );
+    return {
+      ok: true,
+      schemaVersion: GOODJOB_MYSQL_SCHEMA_VERSION,
+      releaseId,
+      tablesBefore: before.tables,
+      tablesAfter: after.tables,
+      columnsBefore: before.columns,
+      columnsAfter: after.columns,
+      addedTables: Math.max(0, after.tables - before.tables),
+      addedColumns: Math.max(0, after.columns - before.columns),
+      protectedRowsVerified: Object.keys(protectedBefore).length
+    };
+  } finally {
+    if (lockAcquired) {
+      try {
+        await lockConnection.query("SELECT RELEASE_LOCK('goodjob_mysql_schema_migration')");
+      } catch {
+        // Releasing the connection also releases the advisory lock.
+      }
+    }
+    lockConnection.release();
+    await pool.end();
+  }
+}
+
 async function ensureSchema(pool: mysql.Pool) {
   await pool.query(`CREATE TABLE IF NOT EXISTS users (
     id VARCHAR(64) PRIMARY KEY,
@@ -1673,6 +1810,7 @@ async function ensureSchema(pool: mysql.Pool) {
     company VARCHAR(200) NOT NULL,
     country VARCHAR(80),
     contact VARCHAR(100),
+    whatsapp VARCHAR(32) DEFAULT '',
     owner_id VARCHAR(64) NOT NULL,
     team_id VARCHAR(64) NOT NULL,
     stage VARCHAR(40),
@@ -1690,6 +1828,7 @@ async function ensureSchema(pool: mysql.Pool) {
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`);
   await ensureColumn(pool, "customers", "billing_name", "VARCHAR(200) DEFAULT ''");
+  await ensureColumn(pool, "customers", "whatsapp", "VARCHAR(32) DEFAULT ''");
   await ensureColumn(pool, "customers", "customer_grade", "VARCHAR(1) NOT NULL DEFAULT 'C'");
   await ensureColumn(pool, "customers", "billing_address", "TEXT");
   await ensureColumn(pool, "customers", "document_contact", "VARCHAR(200) DEFAULT ''");
@@ -2706,6 +2845,26 @@ async function ensureSchema(pool: mysql.Pool) {
     "uk_prospect_schedule_team_id",
     ["team_id", "id"]
   );
+  await pool.query(`CREATE TABLE IF NOT EXISTS prospect_super_search_missions (
+    id VARCHAR(80) PRIMARY KEY,
+    team_id VARCHAR(64) NOT NULL,
+    owner_id VARCHAR(64) NOT NULL,
+    campaign_id VARCHAR(80) NOT NULL,
+    strategy_id VARCHAR(80) NOT NULL,
+    mission_status VARCHAR(30) NOT NULL,
+    revision_no INT NOT NULL,
+    mission_json JSON NOT NULL,
+    rounds_json JSON NOT NULL,
+    events_json JSON NOT NULL,
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    INDEX idx_super_search_owner(team_id, owner_id, mission_status),
+    INDEX idx_super_search_strategy(team_id, strategy_id, mission_status),
+    CONSTRAINT chk_super_search_status CHECK (
+      mission_status IN ('queued','running','paused','cancelled','succeeded','partial_success','failed')
+    ),
+    CONSTRAINT chk_super_search_revision CHECK (revision_no >= 1)
+  ) ENGINE=InnoDB`);
   await pool.query(`CREATE TABLE IF NOT EXISTS prospect_search_runs (
     id VARCHAR(80) PRIMARY KEY,
     team_id VARCHAR(64) NOT NULL,
@@ -3237,6 +3396,318 @@ async function ensureSchema(pool: mysql.Pool) {
     created_at DATETIME NOT NULL,
     UNIQUE KEY uk_agent_job_alias_idempotency(team_id, job_type, idempotency_key),
     INDEX idx_agent_job_alias_job(job_id)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS agent_runs (
+    id VARCHAR(80) PRIMARY KEY,
+    conversation_id VARCHAR(100) NOT NULL DEFAULT '',
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    goal TEXT NOT NULL,
+    goal_spec_json LONGTEXT NULL,
+    summary VARCHAR(500) DEFAULT '',
+    status VARCHAR(30) NOT NULL,
+    iteration_no INT NOT NULL DEFAULT 1,
+    max_iterations INT NOT NULL DEFAULT 12,
+    progress_percent INT NOT NULL DEFAULT 0,
+    current_action VARCHAR(500) DEFAULT '',
+    stop_reason VARCHAR(500) DEFAULT '',
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    expires_at DATETIME(3) NOT NULL,
+    INDEX idx_agent_run_owner_time(owner_id, created_at),
+    INDEX idx_agent_run_team_time(team_id, created_at),
+    INDEX idx_agent_run_expiry(expires_at)
+  )`);
+  await ensureColumn(pool, "agent_runs", "conversation_id", "VARCHAR(100) NOT NULL DEFAULT ''");
+  await ensureColumn(pool, "agent_runs", "goal_spec_json", "LONGTEXT NULL");
+  await ensureColumn(pool, "agent_runs", "iteration_no", "INT NOT NULL DEFAULT 1");
+  await ensureColumn(pool, "agent_runs", "max_iterations", "INT NOT NULL DEFAULT 6");
+  await ensureColumn(pool, "agent_runs", "progress_percent", "INT NOT NULL DEFAULT 0");
+  await ensureColumn(pool, "agent_runs", "current_action", "VARCHAR(500) DEFAULT ''");
+  await ensureColumn(pool, "agent_runs", "stop_reason", "VARCHAR(500) DEFAULT ''");
+  await ensureColumn(pool, "agent_runs", "updated_at", "DATETIME(3) NULL");
+  await pool.query("ALTER TABLE agent_runs MODIFY summary TEXT NOT NULL, MODIFY current_action TEXT NOT NULL, MODIFY stop_reason TEXT NOT NULL");
+  await pool.query("UPDATE agent_runs SET updated_at=created_at WHERE updated_at IS NULL");
+  await pool.query(`CREATE TABLE IF NOT EXISTS agent_run_steps (
+    id VARCHAR(100) PRIMARY KEY,
+    step_key VARCHAR(80) NOT NULL DEFAULT '',
+    depends_on_json JSON NULL,
+    run_id VARCHAR(80) NOT NULL,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    tool VARCHAR(100) NOT NULL,
+    risk VARCHAR(20) NOT NULL,
+    status VARCHAR(30) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    input_json JSON NOT NULL,
+    result_json JSON NULL,
+    error_message VARCHAR(500) DEFAULT '',
+    signature VARCHAR(255) NOT NULL,
+    input_hash CHAR(64) NOT NULL,
+    result_hash CHAR(64) DEFAULT '',
+    approval_at DATETIME(3) NULL,
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    INDEX idx_agent_step_run(run_id, created_at),
+    INDEX idx_agent_step_owner(owner_id, updated_at),
+    INDEX idx_agent_step_status(team_id, status)
+  )`);
+  await ensureColumn(pool, "agent_run_steps", "step_key", "VARCHAR(80) NOT NULL DEFAULT ''");
+  await ensureColumn(pool, "agent_run_steps", "depends_on_json", "JSON NULL");
+  await pool.query(`CREATE TABLE IF NOT EXISTS agent_run_events (
+    id VARCHAR(100) PRIMARY KEY,
+    run_id VARCHAR(80) NOT NULL,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    event_type VARCHAR(30) NOT NULL,
+    message VARCHAR(500) NOT NULL,
+    created_at DATETIME(3) NOT NULL,
+    INDEX idx_agent_event_run(run_id, created_at),
+    INDEX idx_agent_event_owner(owner_id, created_at),
+    INDEX idx_agent_event_team(team_id, created_at)
+  )`);
+  await pool.query("ALTER TABLE agent_run_steps MODIFY error_message TEXT NOT NULL");
+  await pool.query("ALTER TABLE agent_run_events MODIFY message TEXT NOT NULL");
+  await pool.query(`CREATE TABLE IF NOT EXISTS agent_mission_checkpoints (
+    id VARCHAR(100) PRIMARY KEY,
+    run_id VARCHAR(80) NOT NULL,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    iteration_no INT NOT NULL,
+    run_status VARCHAR(30) NOT NULL,
+    reason VARCHAR(255) NOT NULL,
+    state_hash CHAR(64) NOT NULL,
+    snapshot_json LONGTEXT NOT NULL,
+    created_at DATETIME(3) NOT NULL,
+    UNIQUE KEY uk_agent_checkpoint_state(run_id, state_hash),
+    INDEX idx_agent_checkpoint_run(run_id, created_at),
+    INDEX idx_agent_checkpoint_owner(owner_id, created_at)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS agent_memories (
+    id VARCHAR(100) PRIMARY KEY,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    memory_type VARCHAR(40) NOT NULL,
+    memory_scope VARCHAR(20) NOT NULL,
+    subject_id VARCHAR(120) NOT NULL DEFAULT '',
+    title VARCHAR(160) NOT NULL,
+    content_text TEXT NOT NULL,
+    source_type VARCHAR(20) NOT NULL,
+    source_id VARCHAR(160) NOT NULL DEFAULT '',
+    memory_status VARCHAR(20) NOT NULL,
+    confidence_score INT NOT NULL DEFAULT 70,
+    expires_at DATETIME(3) NULL,
+    last_used_at DATETIME(3) NULL,
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    INDEX idx_agent_memory_owner(owner_id, memory_status, updated_at),
+    INDEX idx_agent_memory_team(team_id, memory_status, updated_at),
+    INDEX idx_agent_memory_subject(subject_id, memory_status)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS agent_knowledge_documents (
+    id VARCHAR(100) PRIMARY KEY,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    knowledge_kind VARCHAR(30) NOT NULL,
+    knowledge_scope VARCHAR(20) NOT NULL,
+    module_name VARCHAR(80) NOT NULL,
+    title VARCHAR(160) NOT NULL,
+    summary_text VARCHAR(500) NOT NULL,
+    content_text TEXT NOT NULL,
+    keywords_json JSON NOT NULL,
+    roles_json JSON NOT NULL,
+    tool_refs_json JSON NOT NULL,
+    success_criteria_json JSON NOT NULL,
+    failure_cases_json JSON NOT NULL,
+    source_type VARCHAR(30) NOT NULL,
+    source_id VARCHAR(160) NOT NULL DEFAULT '',
+    knowledge_status VARCHAR(20) NOT NULL,
+    trust_level VARCHAR(20) NOT NULL,
+    version_label VARCHAR(40) NOT NULL,
+    revision_no INT NOT NULL,
+    checksum_sha256 CHAR(64) NOT NULL,
+    published_by VARCHAR(64) NOT NULL DEFAULT '',
+    published_at DATETIME(3) NULL,
+    usage_count INT NOT NULL DEFAULT 0,
+    last_used_at DATETIME(3) NULL,
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    INDEX idx_agent_knowledge_team(team_id, knowledge_status, module_name),
+    INDEX idx_agent_knowledge_owner(owner_id, updated_at),
+    INDEX idx_agent_knowledge_source(source_type, source_id)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS agent_trigger_rules (
+    id VARCHAR(100) PRIMARY KEY,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    rule_name VARCHAR(160) NOT NULL,
+    event_type VARCHAR(40) NOT NULL,
+    trigger_mode VARCHAR(20) NOT NULL,
+    rule_status VARCHAR(20) NOT NULL,
+    interval_minutes INT NOT NULL,
+    threshold_days INT NOT NULL,
+    health_below INT NOT NULL,
+    max_per_scan INT NOT NULL,
+    last_scan_at DATETIME(3) NULL,
+    last_triggered_at DATETIME(3) NULL,
+    next_scan_at DATETIME(3) NOT NULL,
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    INDEX idx_agent_trigger_owner(owner_id, rule_status, next_scan_at)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS agent_trigger_events (
+    id VARCHAR(100) PRIMARY KEY,
+    rule_id VARCHAR(100) NOT NULL,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    fact_key CHAR(64) NOT NULL,
+    entity_type VARCHAR(30) NOT NULL,
+    entity_id VARCHAR(120) NOT NULL,
+    event_title VARCHAR(255) NOT NULL,
+    event_message TEXT NOT NULL,
+    mission_run_id VARCHAR(100) NOT NULL DEFAULT '',
+    event_status VARCHAR(30) NOT NULL,
+    created_at DATETIME(3) NOT NULL,
+    UNIQUE KEY uk_agent_trigger_fact(rule_id, fact_key),
+    INDEX idx_agent_trigger_event_owner(owner_id, created_at)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS agent_model_calls (
+    id VARCHAR(100) PRIMARY KEY,
+    run_id VARCHAR(100) NOT NULL,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    purpose VARCHAR(30) NOT NULL,
+    config_id VARCHAR(100) NOT NULL,
+    provider VARCHAR(50) NOT NULL,
+    model_name VARCHAR(160) NOT NULL,
+    route_index INT NOT NULL,
+    succeeded TINYINT(1) NOT NULL,
+    input_tokens INT NOT NULL,
+    output_tokens INT NOT NULL,
+    estimated_cost_usd DECIMAL(14,6) NOT NULL,
+    latency_ms INT NOT NULL,
+    error_text VARCHAR(500) NOT NULL DEFAULT '',
+    created_at DATETIME(3) NOT NULL,
+    INDEX idx_agent_model_owner(owner_id, created_at),
+    INDEX idx_agent_model_run(run_id, created_at)
+  )`);
+  await pool.query("ALTER TABLE agent_model_calls MODIFY error_text TEXT NOT NULL");
+  await pool.query(`CREATE TABLE IF NOT EXISTS agent_evaluation_runs (
+    id VARCHAR(100) PRIMARY KEY,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    suite_version VARCHAR(80) NOT NULL,
+    passed_count INT NOT NULL,
+    total_count INT NOT NULL,
+    results_json LONGTEXT NOT NULL,
+    created_at DATETIME(3) NOT NULL,
+    INDEX idx_agent_evaluation_owner(owner_id, created_at)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS outreach_sequences (
+    id VARCHAR(100) PRIMARY KEY,
+    mission_run_id VARCHAR(80) NOT NULL DEFAULT '',
+    approval_step_id VARCHAR(100) NOT NULL,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    entity_type VARCHAR(20) NOT NULL,
+    entity_id VARCHAR(120) NOT NULL,
+    entity_name VARCHAR(255) NOT NULL,
+    recipient VARCHAR(255) NOT NULL,
+    channel VARCHAR(30) NOT NULL,
+    account_id VARCHAR(120) NOT NULL DEFAULT '',
+    sequence_status VARCHAR(30) NOT NULL,
+    current_step INT NOT NULL DEFAULT 0,
+    max_sends INT NOT NULL,
+    steps_json JSON NOT NULL,
+    approved_by VARCHAR(64) NOT NULL,
+    approved_at DATETIME(3) NOT NULL,
+    next_execution_at DATETIME(3) NULL,
+    last_sent_at DATETIME(3) NULL,
+    stop_reason VARCHAR(500) NOT NULL DEFAULT '',
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    UNIQUE KEY uk_outreach_sequence_approval(owner_id, approval_step_id),
+    INDEX idx_outreach_sequence_due(sequence_status, next_execution_at),
+    INDEX idx_outreach_sequence_owner(owner_id, created_at),
+    INDEX idx_outreach_sequence_team(team_id, created_at)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS customer_maintenance_watches (
+    id VARCHAR(100) PRIMARY KEY,
+    mission_run_id VARCHAR(80) NOT NULL DEFAULT '',
+    approval_step_id VARCHAR(100) NOT NULL,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    watch_name VARCHAR(120) NOT NULL,
+    watch_status VARCHAR(30) NOT NULL,
+    rules_json JSON NOT NULL,
+    next_run_at DATETIME(3) NOT NULL,
+    last_run_at DATETIME(3) NULL,
+    last_matched_count INT NOT NULL DEFAULT 0,
+    last_created_count INT NOT NULL DEFAULT 0,
+    last_skipped_count INT NOT NULL DEFAULT 0,
+    total_created_count INT NOT NULL DEFAULT 0,
+    last_findings_json JSON NOT NULL,
+    last_error VARCHAR(500) NOT NULL DEFAULT '',
+    approved_by VARCHAR(64) NOT NULL,
+    approved_at DATETIME(3) NOT NULL,
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    UNIQUE KEY uk_customer_maintenance_approval(owner_id, approval_step_id),
+    INDEX idx_customer_maintenance_due(watch_status, next_run_at),
+    INDEX idx_customer_maintenance_owner(owner_id, created_at)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS sales_distillations (
+    id VARCHAR(80) PRIMARY KEY,
+    source_user_id VARCHAR(64) NOT NULL,
+    source_user_name VARCHAR(120) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    period_days INT NOT NULL,
+    metrics_json JSON NOT NULL,
+    patterns_json JSON NOT NULL,
+    playbook_json JSON NOT NULL,
+    coaching_actions_json JSON NOT NULL,
+    model_label VARCHAR(160) DEFAULT '',
+    status VARCHAR(20) NOT NULL DEFAULT 'draft',
+    created_by VARCHAR(64) NOT NULL,
+    created_at DATETIME(3) NOT NULL,
+    published_by VARCHAR(64) DEFAULT '',
+    published_at DATETIME(3) NULL,
+    INDEX idx_sales_distillation_team(team_id, created_at),
+    INDEX idx_sales_distillation_source(source_user_id, created_at),
+    INDEX idx_sales_distillation_status(team_id, status)
+  )`);
+  await ensureColumn(pool, "sales_distillations", "training_metadata_json", "JSON NULL");
+  await pool.query(`CREATE TABLE IF NOT EXISTS sales_playbook_activations (
+    id VARCHAR(100) PRIMARY KEY,
+    distillation_id VARCHAR(80) NOT NULL,
+    owner_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    activation_status VARCHAR(20) NOT NULL,
+    application_count INT NOT NULL DEFAULT 0,
+    task_count INT NOT NULL DEFAULT 0,
+    last_used_at DATETIME(3) NULL,
+    activated_by VARCHAR(64) NOT NULL,
+    activated_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    UNIQUE KEY uk_sales_playbook_owner_distillation(owner_id, distillation_id),
+    INDEX idx_sales_playbook_owner_status(owner_id, activation_status),
+    INDEX idx_sales_playbook_team(team_id, updated_at)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS sales_training_runs (
+    id VARCHAR(100) PRIMARY KEY,
+    source_user_id VARCHAR(64) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    created_by VARCHAR(64) NOT NULL,
+    training_status VARCHAR(30) NOT NULL,
+    version_no INT NOT NULL DEFAULT 1,
+    progress INT NOT NULL DEFAULT 0,
+    run_json JSON NOT NULL,
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    INDEX idx_sales_training_owner(created_by, updated_at),
+    INDEX idx_sales_training_source(source_user_id, version_no),
+    INDEX idx_sales_training_status(training_status, updated_at),
+    INDEX idx_sales_training_team(team_id, updated_at)
   )`);
   await repairAgentJobIdempotencyIntegrity(pool);
   await ensureUniqueIndex(pool, "agent_jobs", "uk_agent_job_idempotency", [
@@ -4682,6 +5153,7 @@ function customerFromRow(row: Record<string, any>): Customer {
     company: row.company,
     country: row.country,
     contact: row.contact,
+    whatsapp: row.whatsapp || "",
     ownerId: row.owner_id || "",
     teamId: row.team_id,
     stage: row.stage,
@@ -5901,6 +6373,15 @@ const prospectRunExecutionSnapshotPersistenceSchema = z.object({
     query: prospectStrategyQueryPersistenceSchema
   }).strict(),
   resolvedQuery: prospectResolvedQueryPersistenceSchema,
+  queryPlan: z.object({
+    source: z.literal("super_search"),
+    plannerVersion: z.string().min(1).max(80),
+    missionId: z.string().regex(new RegExp(`^pssm_${uuidV4Pattern}$`, "i")),
+    roundNo: z.number().int().min(1).max(100),
+    theme: z.string().min(1).max(80).regex(/^[a-z0-9_]+$/),
+    planningMode: z.enum(["rules", "ai_enhanced"]).optional(),
+    fingerprint: z.string().regex(/^[a-f0-9]{64}$/)
+  }).strict().optional(),
   providerPlan: z.array(
     prospectRunProviderSnapshotPersistenceSchema
   ).min(1).max(30)
@@ -6258,6 +6739,35 @@ async function loadProspectSchedules(
     },
     "定时获客计划"
   ));
+}
+
+async function loadProspectSuperSearchState(pool: MysqlQuerySource): Promise<{
+  missions: ProspectSuperSearchMission[];
+  rounds: ProspectSuperSearchRound[];
+  events: ProspectSuperSearchEvent[];
+}> {
+  const missionRows = await rows<Record<string, any>>(
+    pool,
+    "SELECT * FROM prospect_super_search_missions ORDER BY created_at DESC, id DESC"
+  );
+  const missions: ProspectSuperSearchMission[] = [];
+  const rounds: ProspectSuperSearchRound[] = [];
+  const events: ProspectSuperSearchEvent[] = [];
+  for (const row of missionRows) {
+    const mission = mysqlJson(row.mission_json) as ProspectSuperSearchMission;
+    if (!mission || mission.id !== row.id || mission.teamId !== row.team_id || mission.ownerId !== row.owner_id) {
+      throw new Error("超级搜索任务持久化校验失败");
+    }
+    missions.push(mission);
+    const missionRounds = mysqlJson(row.rounds_json);
+    const missionEvents = mysqlJson(row.events_json);
+    if (!Array.isArray(missionRounds) || !Array.isArray(missionEvents)) {
+      throw new Error("超级搜索轮次或事件持久化校验失败");
+    }
+    rounds.push(...missionRounds as ProspectSuperSearchRound[]);
+    events.push(...missionEvents as ProspectSuperSearchEvent[]);
+  }
+  return { missions, rounds, events };
 }
 
 async function loadProspectSearchRuns(
@@ -7296,12 +7806,29 @@ export function validateProspectRunPersistence(store: CrmStore) {
       || !isDeepStrictEqual(snapshot.strategy.query, strategy.query)) {
       throw new Error("获客搜索运行策略快照不一致");
     }
-    const resolvedQuery = resolveProspectStrategyQuery(
-      snapshot.strategy.query,
-      version
-    );
-    if (!isDeepStrictEqual(snapshot.resolvedQuery, resolvedQuery)) {
-      throw new Error("获客搜索运行解析查询快照不一致");
+    if (snapshot.queryPlan) {
+      const mission = store.prospectSuperSearchMissions.find((item) =>
+        item.id === snapshot.queryPlan?.missionId
+        && item.teamId === run.teamId
+        && item.ownerId === run.ownerId
+        && item.campaignId === run.campaignId
+        && item.strategyId === run.strategyId
+      );
+      if (!mission || snapshot.queryPlan.roundNo > mission.maxRounds) {
+        throw new Error("获客搜索运行引用了无效的超级搜索任务");
+      }
+      validateProspectSearchQueryPlan({
+        metadata: snapshot.queryPlan,
+        resolvedQuery: snapshot.resolvedQuery
+      });
+    } else {
+      const resolvedQuery = resolveProspectStrategyQuery(
+        snapshot.strategy.query,
+        version
+      );
+      if (!isDeepStrictEqual(snapshot.resolvedQuery, resolvedQuery)) {
+        throw new Error("获客搜索运行解析查询快照不一致");
+      }
     }
     if (snapshot.providerPlan.length !== strategy.providerPlan.length) {
       throw new Error("获客搜索运行数据源快照数量不一致");
@@ -8903,6 +9430,257 @@ function validateMarketOpportunityPersistence(store: CrmStore) {
   }
 }
 
+async function loadAgentRuns(pool: MysqlQuerySource): Promise<AgentRunRecord[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM agent_runs ORDER BY created_at DESC")).map((row) => ({
+    id: row.id,
+    conversationId: row.conversation_id || "",
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    goal: row.goal,
+    goalSpec: row.goal_spec_json ? mysqlJson(row.goal_spec_json) : undefined,
+    summary: row.summary || "",
+    status: row.status,
+    iteration: Number(row.iteration_no || 1),
+    maxIterations: Number(row.max_iterations || 6),
+    progress: Number(row.progress_percent || 0),
+    currentAction: row.current_action || "",
+    stopReason: row.stop_reason || "",
+    createdAt: mysqlIsoDate(row.created_at),
+    updatedAt: mysqlIsoDate(row.updated_at || row.created_at),
+    expiresAt: mysqlIsoDate(row.expires_at)
+  }));
+}
+
+async function loadAgentRunSteps(pool: MysqlQuerySource): Promise<AgentRunStepRecord[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM agent_run_steps ORDER BY created_at ASC")).map((row) => ({
+    id: row.id,
+    key: row.step_key || row.id,
+    dependsOn: row.depends_on_json ? mysqlJson(row.depends_on_json) || [] : [],
+    runId: row.run_id,
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    tool: row.tool,
+    risk: row.risk,
+    status: row.status,
+    title: row.title,
+    input: mysqlJson(row.input_json) || {},
+    result: row.result_json ? mysqlJson(row.result_json) : undefined,
+    error: row.error_message || undefined,
+    signature: row.signature,
+    approvedAt: row.approval_at ? mysqlIsoDate(row.approval_at) : undefined,
+    createdAt: mysqlIsoDate(row.created_at),
+    updatedAt: mysqlIsoDate(row.updated_at)
+  }));
+}
+
+async function loadAgentRunEvents(pool: MysqlQuerySource): Promise<AgentRunEventRecord[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM agent_run_events ORDER BY created_at ASC")).map((row) => ({
+    id: row.id,
+    runId: row.run_id,
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    type: row.event_type,
+    message: row.message,
+    createdAt: mysqlIsoDate(row.created_at)
+  }));
+}
+
+async function loadAgentMissionCheckpoints(pool: MysqlQuerySource): Promise<AgentMissionCheckpointRecord[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM agent_mission_checkpoints ORDER BY created_at ASC")).map((row) => ({
+    id: row.id,
+    runId: row.run_id,
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    iteration: Number(row.iteration_no || 1),
+    status: row.run_status,
+    reason: row.reason || "Mission 状态更新",
+    stateHash: row.state_hash,
+    snapshot: mysqlJson(row.snapshot_json),
+    createdAt: mysqlIsoDate(row.created_at)
+  }));
+}
+
+async function loadAgentMemories(pool: MysqlQuerySource): Promise<AgentMemoryRecord[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM agent_memories ORDER BY updated_at DESC")).map((row) => ({
+    id: row.id,
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    type: row.memory_type,
+    scope: row.memory_scope,
+    subjectId: row.subject_id || "",
+    title: row.title,
+    content: row.content_text,
+    sourceType: row.source_type,
+    sourceId: row.source_id || "",
+    status: row.memory_status,
+    confidence: Number(row.confidence_score || 0),
+    expiresAt: row.expires_at ? mysqlIsoDate(row.expires_at) : "",
+    lastUsedAt: row.last_used_at ? mysqlIsoDate(row.last_used_at) : "",
+    createdAt: mysqlIsoDate(row.created_at),
+    updatedAt: mysqlIsoDate(row.updated_at)
+  }));
+}
+
+async function loadAgentKnowledgeDocuments(pool: MysqlQuerySource): Promise<AgentKnowledgeDocument[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM agent_knowledge_documents ORDER BY updated_at DESC")).map((row) => ({
+    id: row.id,
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    kind: row.knowledge_kind,
+    scope: row.knowledge_scope,
+    module: row.module_name,
+    title: row.title,
+    summary: row.summary_text,
+    content: row.content_text,
+    keywords: mysqlJson(row.keywords_json) || [],
+    roles: mysqlJson(row.roles_json) || [],
+    toolRefs: mysqlJson(row.tool_refs_json) || [],
+    successCriteria: mysqlJson(row.success_criteria_json) || [],
+    failureCases: mysqlJson(row.failure_cases_json) || [],
+    sourceType: row.source_type,
+    sourceId: row.source_id || "",
+    status: row.knowledge_status,
+    trustLevel: row.trust_level,
+    version: row.version_label,
+    revision: Number(row.revision_no || 1),
+    checksum: row.checksum_sha256,
+    publishedBy: row.published_by || "",
+    publishedAt: row.published_at ? mysqlIsoDate(row.published_at) : "",
+    usageCount: Number(row.usage_count || 0),
+    lastUsedAt: row.last_used_at ? mysqlIsoDate(row.last_used_at) : "",
+    createdAt: mysqlIsoDate(row.created_at),
+    updatedAt: mysqlIsoDate(row.updated_at)
+  }));
+}
+
+async function loadAgentTriggerRules(pool: MysqlQuerySource): Promise<AgentTriggerRuleRecord[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM agent_trigger_rules ORDER BY updated_at DESC")).map((row) => ({
+    id: row.id, ownerId: row.owner_id, teamId: row.team_id, name: row.rule_name, eventType: row.event_type,
+    mode: row.trigger_mode, status: row.rule_status, intervalMinutes: Number(row.interval_minutes), thresholdDays: Number(row.threshold_days),
+    healthBelow: Number(row.health_below), maxPerScan: Number(row.max_per_scan), lastScanAt: row.last_scan_at ? mysqlIsoDate(row.last_scan_at) : "",
+    lastTriggeredAt: row.last_triggered_at ? mysqlIsoDate(row.last_triggered_at) : "", nextScanAt: mysqlIsoDate(row.next_scan_at),
+    createdAt: mysqlIsoDate(row.created_at), updatedAt: mysqlIsoDate(row.updated_at)
+  }));
+}
+
+async function loadAgentTriggerEvents(pool: MysqlQuerySource): Promise<AgentTriggerEventRecord[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM agent_trigger_events ORDER BY created_at DESC")).map((row) => ({
+    id: row.id, ruleId: row.rule_id, ownerId: row.owner_id, teamId: row.team_id, factKey: row.fact_key,
+    entityType: row.entity_type, entityId: row.entity_id, title: row.event_title, message: row.event_message,
+    missionRunId: row.mission_run_id || "", status: row.event_status, createdAt: mysqlIsoDate(row.created_at)
+  }));
+}
+
+async function loadAgentModelCalls(pool: MysqlQuerySource): Promise<AgentModelCallRecord[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM agent_model_calls ORDER BY created_at DESC")).map((row) => ({
+    id: row.id, runId: row.run_id, ownerId: row.owner_id, teamId: row.team_id, purpose: row.purpose, configId: row.config_id,
+    provider: row.provider, model: row.model_name, routeIndex: Number(row.route_index), success: Boolean(row.succeeded), inputTokens: Number(row.input_tokens),
+    outputTokens: Number(row.output_tokens), estimatedCostUsd: Number(row.estimated_cost_usd), latencyMs: Number(row.latency_ms), error: row.error_text || "", createdAt: mysqlIsoDate(row.created_at)
+  }));
+}
+
+async function loadAgentEvaluationRuns(pool: MysqlQuerySource): Promise<AgentEvaluationRunRecord[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM agent_evaluation_runs ORDER BY created_at DESC")).map((row) => ({
+    id: row.id, ownerId: row.owner_id, teamId: row.team_id, version: row.suite_version, passed: Number(row.passed_count), total: Number(row.total_count), results: mysqlJson(row.results_json), createdAt: mysqlIsoDate(row.created_at)
+  }));
+}
+
+async function loadOutreachSequences(pool: MysqlQuerySource): Promise<OutreachSequence[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM outreach_sequences ORDER BY created_at DESC")).map((row) => ({
+    id: row.id,
+    missionRunId: row.mission_run_id || "",
+    approvalStepId: row.approval_step_id || row.mission_run_id || "",
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    entityName: row.entity_name,
+    recipient: row.recipient,
+    channel: row.channel,
+    accountId: row.account_id || "",
+    status: row.sequence_status,
+    currentStep: Number(row.current_step || 0),
+    maxSends: Number(row.max_sends || 0),
+    steps: mysqlJson(row.steps_json) || [],
+    approvedBy: row.approved_by,
+    approvedAt: mysqlIsoDate(row.approved_at),
+    nextExecutionAt: row.next_execution_at ? mysqlIsoDate(row.next_execution_at) : "",
+    lastSentAt: row.last_sent_at ? mysqlIsoDate(row.last_sent_at) : "",
+    stopReason: row.stop_reason || "",
+    createdAt: mysqlIsoDate(row.created_at),
+    updatedAt: mysqlIsoDate(row.updated_at)
+  }));
+}
+
+async function loadCustomerMaintenanceWatches(pool: MysqlQuerySource): Promise<CustomerMaintenanceWatch[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM customer_maintenance_watches ORDER BY created_at DESC")).map((row) => ({
+    id: row.id,
+    missionRunId: row.mission_run_id || "",
+    approvalStepId: row.approval_step_id || row.mission_run_id || "",
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    name: row.watch_name,
+    status: row.watch_status,
+    rules: mysqlJson(row.rules_json),
+    nextRunAt: mysqlIsoDate(row.next_run_at),
+    lastRunAt: row.last_run_at ? mysqlIsoDate(row.last_run_at) : "",
+    lastMatchedCount: Number(row.last_matched_count || 0),
+    lastCreatedCount: Number(row.last_created_count || 0),
+    lastSkippedCount: Number(row.last_skipped_count || 0),
+    totalCreatedCount: Number(row.total_created_count || 0),
+    lastFindings: mysqlJson(row.last_findings_json) || [],
+    lastError: row.last_error || "",
+    approvedBy: row.approved_by,
+    approvedAt: mysqlIsoDate(row.approved_at),
+    createdAt: mysqlIsoDate(row.created_at),
+    updatedAt: mysqlIsoDate(row.updated_at)
+  }));
+}
+
+async function loadSalesDistillations(pool: MysqlQuerySource): Promise<SalesDistillation[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM sales_distillations ORDER BY created_at DESC")).map((row) => ({
+    id: row.id,
+    sourceUserId: row.source_user_id,
+    sourceUserName: row.source_user_name,
+    teamId: row.team_id,
+    periodDays: Number(row.period_days || 90),
+    metrics: mysqlJson(row.metrics_json) || { customerCount: 0, leadCount: 0, activeDealCount: 0, wonDealCount: 0, wonAmount: 0, followupCount: 0, completedTodoCount: 0, reportCount: 0 },
+    patterns: mysqlJson(row.patterns_json) || [],
+    playbook: mysqlJson(row.playbook_json) || [],
+    coachingActions: mysqlJson(row.coaching_actions_json) || [],
+    modelLabel: row.model_label || "规则蒸馏",
+    status: row.status === "published" ? "published" : "draft",
+    createdBy: row.created_by,
+    createdAt: mysqlIsoDate(row.created_at),
+    publishedBy: row.published_by || undefined,
+    publishedAt: row.published_at ? mysqlIsoDate(row.published_at) : undefined,
+    ...(mysqlJson(row.training_metadata_json) || {})
+  }));
+}
+
+async function loadSalesTrainingRuns(pool: MysqlQuerySource): Promise<SalesTrainingRun[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM sales_training_runs ORDER BY updated_at DESC")).map((row) => {
+    const run = mysqlJson(row.run_json) as SalesTrainingRun;
+    return { ...run, id: row.id, sourceUserId: row.source_user_id, teamId: row.team_id, createdBy: row.created_by, status: row.training_status, version: Number(row.version_no || run.version || 1), progress: Number(row.progress || run.progress || 0), createdAt: mysqlIsoDate(row.created_at), updatedAt: mysqlIsoDate(row.updated_at) };
+  });
+}
+
+async function loadSalesPlaybookActivations(pool: MysqlQuerySource): Promise<SalesPlaybookActivation[]> {
+  return (await rows<Record<string, any>>(pool, "SELECT * FROM sales_playbook_activations ORDER BY updated_at DESC")).map((row) => ({
+    id: row.id,
+    distillationId: row.distillation_id,
+    ownerId: row.owner_id,
+    teamId: row.team_id,
+    status: row.activation_status,
+    applicationCount: Number(row.application_count || 0),
+    taskCount: Number(row.task_count || 0),
+    lastUsedAt: row.last_used_at ? mysqlIsoDate(row.last_used_at) : "",
+    activatedBy: row.activated_by,
+    activatedAt: mysqlIsoDate(row.activated_at),
+    updatedAt: mysqlIsoDate(row.updated_at)
+  }));
+}
+
 async function loadAgentJobs(pool: MysqlQuerySource): Promise<AgentJob[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM agent_jobs ORDER BY created_at DESC")).map((row) => ({
     id: row.id,
@@ -9253,7 +10031,7 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
     await replaceRows(connection, "daily_reports", store.dailyReports, (item) => [item.id, item.reportDate, item.completedWork, item.customerProgress, item.results, item.risks, item.nextPlan, item.supportNeeded, item.status, item.ownerId, item.teamId, mysqlDate(item.submittedAt), mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,report_date,completed_work,customer_progress,results_text,risks_text,next_plan,support_needed,report_status,owner_id,team_id,submitted_at,created_at,updated_at)");
     await replaceRows(connection, "daily_report_comments", store.dailyReportComments, (item) => [item.id, item.reportId, item.parentId || "", item.content, item.authorId, item.teamId, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,report_id,parent_id,content,author_id,team_id,created_at,updated_at)");
     await replaceRows(connection, "internal_messages", store.internalMessages, (item) => [item.id, item.threadId, item.senderId, item.recipientId, item.teamId, item.type, item.subject, item.content, item.relatedType, item.relatedId, item.readAt ? mysqlDate(item.readAt) : null, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,thread_id,sender_id,recipient_id,team_id,message_type,subject,content,related_type,related_id,read_at,created_at,updated_at)");
-    await replaceRows(connection, "customers", store.customers, (item) => [item.id, item.company, item.country, item.contact, item.ownerId, item.teamId, item.stage, item.amount, item.health, item.grade || "C", item.nextReminder, item.wecomBound, item.billingName || "", item.billingAddress || "", item.documentContact || "", item.defaultPortDischarge || "", item.defaultIncoterm || "", item.defaultPaymentTerm || "", item.poolStatus || "owned", item.previousOwnerId || "", item.releasedBy || "", item.releasedAt ? mysqlDate(item.releasedAt) : null, item.releaseReason || "", item.claimedAt ? mysqlDate(item.claimedAt) : null, item.ownershipVersion || 0], "(id,company,country,contact,owner_id,team_id,stage,amount,health,customer_grade,next_reminder,wecom_bound,billing_name,billing_address,document_contact,default_port_discharge,default_incoterm,default_payment_term,pool_status,previous_owner_id,released_by,released_at,release_reason,claimed_at,ownership_version)");
+    await replaceRows(connection, "customers", store.customers, (item) => [item.id, item.company, item.country, item.contact, item.whatsapp || "", item.ownerId, item.teamId, item.stage, item.amount, item.health, item.grade || "C", item.nextReminder, item.wecomBound, item.billingName || "", item.billingAddress || "", item.documentContact || "", item.defaultPortDischarge || "", item.defaultIncoterm || "", item.defaultPaymentTerm || "", item.poolStatus || "owned", item.previousOwnerId || "", item.releasedBy || "", item.releasedAt ? mysqlDate(item.releasedAt) : null, item.releaseReason || "", item.claimedAt ? mysqlDate(item.claimedAt) : null, item.ownershipVersion || 0], "(id,company,country,contact,whatsapp,owner_id,team_id,stage,amount,health,customer_grade,next_reminder,wecom_bound,billing_name,billing_address,document_contact,default_port_discharge,default_incoterm,default_payment_term,pool_status,previous_owner_id,released_by,released_at,release_reason,claimed_at,ownership_version)");
     await replaceRows(connection, "customer_activities", store.customerActivities, (item) => [item.id, item.customerId, item.type || "note", item.content || "", item.operatorId || "", item.nextReminder || "", mysqlDate(item.createdAt)], "(id,customer_id,type,content,operator_id,next_reminder,created_at)");
     await replaceRows(connection, "customer_intelligence_suggestions", store.customerIntelligenceSuggestions, (item) => [item.id, item.teamId, item.ownerId, item.customerId, item.prospectCandidateId, item.tenantProspectId || "", item.organizationId || "", item.leadId || "", item.sourceEventId || "", item.sourceLabel || "", item.sourceUrl || "", JSON.stringify(item.suggestedFields || []), item.website || "", item.business || "", item.contactInfo || "", item.evidenceSummary || "", JSON.stringify(item.evidenceRefs || []), item.payloadHash, item.status, JSON.stringify(item.acceptedFields || []), item.reviewedBy || "", item.reviewedAt ? mysqlDate(item.reviewedAt) : null, item.reviewNote || "", mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,team_id,owner_id,customer_id,prospect_candidate_id,tenant_prospect_id,organization_id,lead_id,source_event_id,source_label,source_url,suggested_fields_json,website,business,contact_info,evidence_summary,evidence_refs_json,payload_hash,suggestion_status,accepted_fields_json,reviewed_by,reviewed_at,review_note,created_at,updated_at)");
     await replaceRows(connection, "leads", store.leads, (item) => [item.id, item.company, item.contact || "", item.country || "", item.email || "", item.phone || "", item.wechat || "", item.source || "", item.sourceType || "outbound", item.sourceChannel || "manual", item.sourceCampaign || "", item.externalId || "", item.sourceUrl || "", item.intent || "中", item.stage || "新线索", item.status || "new", item.ownerId, item.teamId, item.estimatedAmount || 0, item.nextFollowAt || "", item.lastActivityAt || "", item.remark || "", item.convertedCustomerId || "", item.convertedDealId || "", item.deletedAt ? mysqlDate(item.deletedAt) : null, item.deletedReason || "", item.deletedBy || "", item.purgeAt ? mysqlDate(item.purgeAt) : null, item.statusBeforeDelete || "", mysqlDate(item.createdAt)], "(id,company,contact,country,email,phone,wechat,source,source_type,source_channel,source_campaign,external_id,source_url,intent,stage,status,owner_id,team_id,estimated_amount,next_follow_at,last_activity_at,remark,converted_customer_id,converted_deal_id,deleted_at,deleted_reason,deleted_by,purge_at,status_before_delete,created_at)");
@@ -9289,6 +10067,26 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
       await syncProspectStrategyRows(connection, store.prospectStrategies);
       await appendProspectStrategyHistoryRows(connection, store);
       await syncProspectScheduleRows(connection, store.prospectSchedules);
+      await replaceRows(
+        connection,
+        "prospect_super_search_missions",
+        store.prospectSuperSearchMissions,
+        (item) => [
+          item.id,
+          item.teamId,
+          item.ownerId,
+          item.campaignId,
+          item.strategyId,
+          item.status,
+          item.revision,
+          JSON.stringify(item),
+          JSON.stringify(store.prospectSuperSearchRounds.filter((round) => round.missionId === item.id)),
+          JSON.stringify(store.prospectSuperSearchEvents.filter((event) => event.missionId === item.id)),
+          mysqlDate(item.createdAt),
+          mysqlDate(item.updatedAt)
+        ],
+        "(id,team_id,owner_id,campaign_id,strategy_id,mission_status,revision_no,mission_json,rounds_json,events_json,created_at,updated_at)"
+      );
 		    await replaceRows(connection, "market_trade_observations", store.marketTradeObservations, (item) => [item.id, item.teamId, item.ownerId, item.campaignId, item.providerId, item.reporterCountry, item.partnerCountry, item.reporterCode || "", item.partnerCode || "", item.tradeFlow, item.classification, item.commodityCode, item.commodityDescription || "", item.period, item.tradeValueUsd, item.netWeightKg, item.quantity, item.quantityUnit || "", item.isAggregate, item.suppressed, JSON.stringify(item.statusFlags || []), item.rawRecordId, item.payloadHash, item.adapterVersion, item.sourceRevision || "", mysqlDate(item.observedAt), mysqlDate(item.createdAt)], "(id,team_id,owner_id,campaign_id,provider_id,reporter_country,partner_country,reporter_code,partner_code,trade_flow,classification,commodity_code,commodity_description,period_value,trade_value_usd,net_weight_kg,quantity_value,quantity_unit,is_aggregate,suppressed,status_flags_json,raw_record_id,payload_hash,adapter_version,source_revision,observed_at,created_at)");
       await appendMarketOpportunityRows(connection, store);
       await syncAgentJobRows(
@@ -9301,6 +10099,101 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
         store.agentJobIdempotencyAliases,
         (item) => !isProspectRunBridgeJob(item)
       );
+      await replaceRows(connection, "agent_runs", store.agentRuns, (item) => [item.id, item.conversationId || "", item.ownerId, item.teamId, item.goal, item.goalSpec ? canonicalJsonStringify(item.goalSpec) : null, item.summary, item.status, item.iteration || 1, item.maxIterations || 6, item.progress || 0, item.currentAction || "", item.stopReason || "", mysqlDate(item.createdAt), mysqlDate(item.updatedAt || item.createdAt), mysqlDate(item.expiresAt)], "(id,conversation_id,owner_id,team_id,goal,goal_spec_json,summary,status,iteration_no,max_iterations,progress_percent,current_action,stop_reason,created_at,updated_at,expires_at)");
+      await replaceRows(connection, "agent_run_steps", store.agentRunSteps, (item) => {
+        const inputJson = canonicalJsonStringify(item.input || {});
+        const resultJson = item.result === undefined ? null : canonicalJsonStringify(item.result);
+        return [
+          item.id,
+          item.key || item.id,
+          canonicalJsonStringify(item.dependsOn || []),
+          item.runId,
+          item.ownerId,
+          item.teamId,
+          item.tool,
+          item.risk,
+          item.status,
+          item.title,
+          inputJson,
+          resultJson,
+          item.error || "",
+          item.signature,
+          createHash("sha256").update(inputJson).digest("hex"),
+          resultJson ? createHash("sha256").update(resultJson).digest("hex") : "",
+          item.approvedAt ? mysqlDate(item.approvedAt) : null,
+          mysqlDate(item.createdAt),
+          mysqlDate(item.updatedAt)
+        ];
+      }, "(id,step_key,depends_on_json,run_id,owner_id,team_id,tool,risk,status,title,input_json,result_json,error_message,signature,input_hash,result_hash,approval_at,created_at,updated_at)");
+      await replaceRows(connection, "agent_run_events", store.agentRunEvents, (item) => [item.id, item.runId, item.ownerId, item.teamId, item.type, item.message, mysqlDate(item.createdAt)], "(id,run_id,owner_id,team_id,event_type,message,created_at)");
+	    await replaceRows(connection, "agent_mission_checkpoints", store.agentMissionCheckpoints, (item) => [item.id, item.runId, item.ownerId, item.teamId, item.iteration, item.status, item.reason, item.stateHash, canonicalJsonStringify(item.snapshot), mysqlDate(item.createdAt)], "(id,run_id,owner_id,team_id,iteration_no,run_status,reason,state_hash,snapshot_json,created_at)");
+	    await replaceRows(connection, "agent_memories", store.agentMemories, (item) => [item.id, item.ownerId, item.teamId, item.type, item.scope, item.subjectId, item.title, item.content, item.sourceType, item.sourceId, item.status, item.confidence, item.expiresAt ? mysqlDate(item.expiresAt) : null, item.lastUsedAt ? mysqlDate(item.lastUsedAt) : null, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,owner_id,team_id,memory_type,memory_scope,subject_id,title,content_text,source_type,source_id,memory_status,confidence_score,expires_at,last_used_at,created_at,updated_at)");
+	    await replaceRows(connection, "agent_knowledge_documents", store.agentKnowledgeDocuments, (item) => [item.id, item.ownerId, item.teamId, item.kind, item.scope, item.module, item.title, item.summary, item.content, canonicalJsonStringify(item.keywords), canonicalJsonStringify(item.roles), canonicalJsonStringify(item.toolRefs), canonicalJsonStringify(item.successCriteria), canonicalJsonStringify(item.failureCases), item.sourceType, item.sourceId, item.status, item.trustLevel, item.version, item.revision, item.checksum, item.publishedBy, item.publishedAt ? mysqlDate(item.publishedAt) : null, item.usageCount, item.lastUsedAt ? mysqlDate(item.lastUsedAt) : null, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,owner_id,team_id,knowledge_kind,knowledge_scope,module_name,title,summary_text,content_text,keywords_json,roles_json,tool_refs_json,success_criteria_json,failure_cases_json,source_type,source_id,knowledge_status,trust_level,version_label,revision_no,checksum_sha256,published_by,published_at,usage_count,last_used_at,created_at,updated_at)");
+	    await replaceRows(connection, "agent_trigger_rules", store.agentTriggerRules, (item) => [item.id, item.ownerId, item.teamId, item.name, item.eventType, item.mode, item.status, item.intervalMinutes, item.thresholdDays, item.healthBelow, item.maxPerScan, item.lastScanAt ? mysqlDate(item.lastScanAt) : null, item.lastTriggeredAt ? mysqlDate(item.lastTriggeredAt) : null, mysqlDate(item.nextScanAt), mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,owner_id,team_id,rule_name,event_type,trigger_mode,rule_status,interval_minutes,threshold_days,health_below,max_per_scan,last_scan_at,last_triggered_at,next_scan_at,created_at,updated_at)");
+	    await replaceRows(connection, "agent_trigger_events", store.agentTriggerEvents, (item) => [item.id, item.ruleId, item.ownerId, item.teamId, item.factKey, item.entityType, item.entityId, item.title, item.message, item.missionRunId, item.status, mysqlDate(item.createdAt)], "(id,rule_id,owner_id,team_id,fact_key,entity_type,entity_id,event_title,event_message,mission_run_id,event_status,created_at)");
+	    await replaceRows(connection, "agent_model_calls", store.agentModelCalls, (item) => [item.id, item.runId, item.ownerId, item.teamId, item.purpose, item.configId, item.provider, item.model, item.routeIndex, item.success, item.inputTokens, item.outputTokens, item.estimatedCostUsd, item.latencyMs, item.error, mysqlDate(item.createdAt)], "(id,run_id,owner_id,team_id,purpose,config_id,provider,model_name,route_index,succeeded,input_tokens,output_tokens,estimated_cost_usd,latency_ms,error_text,created_at)");
+	    await replaceRows(connection, "agent_evaluation_runs", store.agentEvaluationRuns, (item) => [item.id, item.ownerId, item.teamId, item.version, item.passed, item.total, canonicalJsonStringify(item.results), mysqlDate(item.createdAt)], "(id,owner_id,team_id,suite_version,passed_count,total_count,results_json,created_at)");
+	    await replaceRows(connection, "outreach_sequences", store.outreachSequences, (item) => [
+        item.id,
+        item.missionRunId || "",
+        item.approvalStepId || item.missionRunId,
+        item.ownerId,
+        item.teamId,
+        item.entityType,
+        item.entityId,
+        item.entityName,
+        item.recipient,
+        item.channel,
+        item.accountId || "",
+        item.status,
+        item.currentStep,
+        item.maxSends,
+        JSON.stringify(item.steps),
+        item.approvedBy,
+        mysqlDate(item.approvedAt),
+        item.nextExecutionAt ? mysqlDate(item.nextExecutionAt) : null,
+        item.lastSentAt ? mysqlDate(item.lastSentAt) : null,
+        item.stopReason || "",
+        mysqlDate(item.createdAt),
+        mysqlDate(item.updatedAt)
+      ], "(id,mission_run_id,approval_step_id,owner_id,team_id,entity_type,entity_id,entity_name,recipient,channel,account_id,sequence_status,current_step,max_sends,steps_json,approved_by,approved_at,next_execution_at,last_sent_at,stop_reason,created_at,updated_at)");
+	    await replaceRows(connection, "customer_maintenance_watches", store.customerMaintenanceWatches, (item) => [
+        item.id,
+        item.missionRunId || "",
+        item.approvalStepId || item.missionRunId,
+        item.ownerId,
+        item.teamId,
+        item.name,
+        item.status,
+        JSON.stringify(item.rules),
+        mysqlDate(item.nextRunAt),
+        item.lastRunAt ? mysqlDate(item.lastRunAt) : null,
+        item.lastMatchedCount,
+        item.lastCreatedCount,
+        item.lastSkippedCount,
+        item.totalCreatedCount,
+        JSON.stringify(item.lastFindings),
+        item.lastError || "",
+        item.approvedBy,
+        mysqlDate(item.approvedAt),
+        mysqlDate(item.createdAt),
+        mysqlDate(item.updatedAt)
+      ], "(id,mission_run_id,approval_step_id,owner_id,team_id,watch_name,watch_status,rules_json,next_run_at,last_run_at,last_matched_count,last_created_count,last_skipped_count,total_created_count,last_findings_json,last_error,approved_by,approved_at,created_at,updated_at)");
+		    await replaceRows(connection, "sales_distillations", store.salesDistillations, (item) => [item.id, item.sourceUserId, item.sourceUserName, item.teamId, item.periodDays, JSON.stringify(item.metrics), JSON.stringify(item.patterns), JSON.stringify(item.playbook), JSON.stringify(item.coachingActions), item.modelLabel || "", item.status, item.createdBy, mysqlDate(item.createdAt), item.publishedBy || "", item.publishedAt ? mysqlDate(item.publishedAt) : null, JSON.stringify({ trainingRunId: item.trainingRunId || "", version: item.version || 0, maturity: item.maturity || "", evaluationScore: item.evaluationScore || 0, sampleCount: item.sampleCount || 0 })], "(id,source_user_id,source_user_name,team_id,period_days,metrics_json,patterns_json,playbook_json,coaching_actions_json,model_label,status,created_by,created_at,published_by,published_at,training_metadata_json)");
+	    await replaceRows(connection, "sales_playbook_activations", store.salesPlaybookActivations, (item) => [
+        item.id,
+        item.distillationId,
+        item.ownerId,
+        item.teamId,
+        item.status,
+        item.applicationCount,
+        item.taskCount,
+        item.lastUsedAt ? mysqlDate(item.lastUsedAt) : null,
+        item.activatedBy,
+        mysqlDate(item.activatedAt),
+        mysqlDate(item.updatedAt)
+      ], "(id,distillation_id,owner_id,team_id,activation_status,application_count,task_count,last_used_at,activated_by,activated_at,updated_at)");
+	    await replaceRows(connection, "sales_training_runs", store.salesTrainingRuns, (item) => [item.id, item.sourceUserId, item.teamId, item.createdBy, item.status, item.version, item.progress, JSON.stringify(item), mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,source_user_id,team_id,created_by,training_status,version_no,progress,run_json,created_at,updated_at)");
 	    await replaceRows(connection, "lead_source_configs", store.leadSourceConfigs, (item) => [item.id, item.provider, item.scope || "personal", item.apiKey, item.baseUrl || "", item.enabled, item.lastTestAt ? mysqlDate(item.lastTestAt) : null, item.lastTestStatus || "untested", item.lastTestMessage || "", item.usageJson || "", item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,provider,scope,api_key,base_url,enabled,last_test_at,last_test_status,last_test_message,usage_json,owner_id,team_id,updated_at)");
 	    await replaceRows(connection, "problems", store.problems, (item) => [item.id, item.title, item.category, item.severity, item.status, item.ownerId, item.teamId, item.relatedCustomer, item.rootCause, item.solution, item.nextAction, item.dueAt, mysqlDate(item.createdAt)], "(id,title,category,severity,status,owner_id,team_id,related_customer,root_cause,solution,next_action,due_at,created_at)");
 	    await replaceRows(connection, "memos", store.memos, (item) => [item.id, item.title, item.content, item.category, item.tags, item.customerId || "", item.dealId || "", item.ownerId, item.teamId, item.pinned, item.archived, item.deletedAt ? mysqlDate(item.deletedAt) : null, mysqlDate(item.updatedAt)], "(id,title,content,category,tags,customer_id,deal_id,owner_id,team_id,pinned,archived,deleted_at,updated_at)");

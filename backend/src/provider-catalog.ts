@@ -45,6 +45,7 @@ const TRADE_FIELDS = [
 function sourceLevel(provider: LeadProvider | TradeProvider) {
   if (provider.category === "market_trade") return "market_opportunity";
   if (provider.capabilities.includes("procurement")) return "business_signal";
+  if (provider.capabilities.includes("maps")) return "discovery";
   if (provider.category === "company") return "identity";
   if (provider.category === "email") return "contact";
   if (provider.category === "ai") return "assisted_discovery";
@@ -96,7 +97,14 @@ function providerCatalogItem(
           }
         : { cacheTtlSeconds: 86400 }
       : {},
-    retentionPolicy: { mode: "provider_terms" },
+    retentionPolicy: provider.id === "google_places"
+      ? {
+          mode: "provider_terms",
+          provider: "Google Maps Platform",
+          rawResponseStored: false,
+          productionTermsReviewRequired: true
+        }
+      : { mode: "provider_terms" },
     status: "active",
     version: "1.0",
     reviewedAt: CATALOG_TIMESTAMP,

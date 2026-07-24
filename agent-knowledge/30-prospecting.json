@@ -1,0 +1,14 @@
+{
+  "id": "workflow.prospecting.v1",
+  "kind": "workflow",
+  "module": "lead-finder",
+  "title": "自动获客与搜客任务",
+  "summary": "搜客从市场、产品、客户类型和来源生成候选，经过复核、清洗和人工可联系审批后进入线索。",
+  "content": "搜客不依赖 Agent 模型，未配置 Agent 时仍可独立运行。Agent 启动搜客前应明确产品、市场、客户类型、排除项、来源和数量。任务启动后必须持续读取进度，展示来源收获、企业复核、去重、清洗淘汰和最终候选。候选只有达到人工可联系条件后才能转线索；转客户必须先有对应线索。",
+  "keywords": ["搜客", "自动获客", "进口商", "候选", "清洗", "去重", "企业复核", "来源"],
+  "roles": ["sales", "manager", "admin", "super_admin"],
+  "toolRefs": ["prospect.preview_search_plan", "prospect.start_search", "prospect.get_search_progress", "prospect.list_candidates", "prospect.convert_to_lead", "prospect.convert_to_customer"],
+  "successCriteria": ["目标参数完整", "跟踪到终态", "报告来源和清洗结果", "只转化符合条件的候选"],
+  "failureCases": ["启动后不再跟踪", "没有人工可联系审批就转线索", "把无结果任务误报为成功"],
+  "version": "1.0.0"
+}
