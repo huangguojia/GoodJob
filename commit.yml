@@ -2,763 +2,190 @@
 branches: {
   }
 fileChange:
-  /.env.example:
-    newFile: !uuid '07588f129fbcac6eeb9f563cf0cfb2f189fc12e4'
-    oldFile: !uuid '3fe4f71b0ea3a878875b9a75e5e50db989e60e5d'
   /AI_AGENT_DESIGN_REVIEW.md:
-    newFile: !uuid 'f731db053293af430fe7df4fbebff1fbc3491c3d'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'f731db053293af430fe7df4fbebff1fbc3491c3d'
   /AI_AGENT_DEVELOPMENT.md:
-    newFile: !uuid 'ccfd14a11307ed8a7ecc914e469787cdba924982'
-    oldFile: null
-  /AUTHORS.md:
-    newFile: !uuid 'e19e39a4d57e6730aaaff840e14a7d382257eb21'
-    oldFile: null
-  /LICENSE:
-    newFile: !uuid 'd22267fba9f1ffba26d132aa06455fb7b1597340'
-    oldFile: !uuid 'f6c26977bbb993b180afd759658dcf5ea6619cd0'
-  /LICENSES:
-    newFile: !uuid '5fc424d91940518d3f93661d1ea21dccfeb5ff39'
-    oldFile: null
-  /LICENSES/Apache-2.0.txt:
-    newFile: !uuid 'd22267fba9f1ffba26d132aa06455fb7b1597340'
-    oldFile: null
-  /LICENSES/GPL-3.0-only.txt:
-    newFile: !uuid '94a045322262546cfb9d72561e1d587b5c2ffb1e'
-    oldFile: null
-  /LICENSES/LGPL-3.0-or-later.txt:
-    newFile: !uuid '0a041280bd00a9d068f503b8ee7ce35214bd24a1'
-    oldFile: null
-  /LICENSES/MIT.txt:
-    newFile: !uuid '772637b787dca4ada478bf3dc65a200cfaaae11c'
-    oldFile: null
-  /NOTICE:
-    newFile: !uuid 'a557b6708cd6838636d687341fbb829bd295e27d'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'ccfd14a11307ed8a7ecc914e469787cdba924982'
+  /DEVELOPMENT_DECISIONS.md:
+    newFile: null
+    oldFile: !uuid 'b015dbbbe5bb20663612ca91eb0320c0a4756662'
+  /DEVELOPMENT_STATUS.md:
+    newFile: null
+    oldFile: !uuid 'b7a8aea125352d94f35e1e98cbfb655fd4e05f03'
+  /DOCUMENT_STUDIO_DESIGN.md:
+    newFile: null
+    oldFile: !uuid 'a094accfa100ee2518161ef7714033ed2884edc7'
+  /EXAM_SYSTEM_DESIGN.md:
+    newFile: null
+    oldFile: !uuid 'c3e48e7e30305f0d54cff68a0a6a823c34b42d4d'
+  /LEAD_FINDER_DESIGN.md:
+    newFile: null
+    oldFile: !uuid 'ed1e13db4f6f8475e85071e4bf75d57565a3d94d'
+  /NAVIGATION_REDESIGN_DESIGN.md:
+    newFile: null
+    oldFile: !uuid '7bd241aabfa0f95a6dd68013b69358aaf10602e4'
+  /PERMISSION_DESIGN.md:
+    newFile: null
+    oldFile: !uuid '13e199692695b82421b18e535f5af16a089fdbd1'
+  /README.en.md:
+    newFile: null
+    oldFile: !uuid '2e9ea220101509c2d23bf622668fcbfb4c9eff80'
   /README.md:
-    newFile: !uuid 'c8927238cc703563083edaef983da7c19131ae97'
-    oldFile: !uuid '2298e290ef8ab7d9500346a0be839a5a6c9a4f96'
+    newFile: !uuid 'afcc5ef3d8a72c067378a872e9538258dd818609'
+    oldFile: !uuid 'c8927238cc703563083edaef983da7c19131ae97'
   /SALES_AGENT_TRAINING_DEVELOPMENT.md:
-    newFile: !uuid 'fb356ee33f383cfbf5827139e645dd3cc9b10e53'
-    oldFile: null
-  /THIRD_PARTY_NOTICES.md:
-    newFile: !uuid 'e4187946a84e806a6b1258f3c9f33835a721895a'
-    oldFile: null
-  /agent-knowledge:
-    newFile: !uuid '6acf53ebcd0cd5c55934a7986abb5bad7859f094'
-    oldFile: null
-  /agent-knowledge/00-system-contract.json:
-    newFile: !uuid 'cf81e335b728c6fb06b1e3b6894429fe6d70a42f'
-    oldFile: null
-  /agent-knowledge/10-customers.json:
-    newFile: !uuid 'be27a1b0d190bc7abb749eefd6492e9bc495a1ac'
-    oldFile: null
-  /agent-knowledge/11-customer-pool.json:
-    newFile: !uuid 'a66b00ad9124e4f317e1ff05327696d99d7648b4'
-    oldFile: null
-  /agent-knowledge/20-leads.json:
-    newFile: !uuid '00a4d7173f6c94381b4698857855284891761201'
-    oldFile: null
-  /agent-knowledge/30-prospecting.json:
-    newFile: !uuid '98bb6494bfce19201a02737bb77a5d69ee027af6'
-    oldFile: null
-  /agent-knowledge/40-development-email.json:
-    newFile: !uuid 'a900e535117e50761995f7cd427e27786b252c27'
-    oldFile: null
-  /agent-knowledge/50-communication.json:
-    newFile: !uuid '64b81e3a09453ca98b1506f541610d1d850db457'
-    oldFile: null
-  /agent-knowledge/60-background-research.json:
-    newFile: !uuid '9e308e3d3d5f4a7dc737c0673003b14e48d30960'
-    oldFile: null
-  /agent-knowledge/70-navigation.json:
-    newFile: !uuid 'd637d615ca5cde14e5a27971240489c06966c56a'
-    oldFile: null
-  /agent-knowledge/80-operation-contract.json:
-    newFile: !uuid '5c1135bf33bd600c76a84f0ae8fe46b046414888'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'fb356ee33f383cfbf5827139e645dd3cc9b10e53'
+  /WHATSAPP_BINDING_GUIDE.md:
+    newFile: null
+    oldFile: !uuid '8ea93d52558ab07b3b347a0a168edb6d5168d15b'
+  /WHATSAPP_IMPLEMENTATION_SUMMARY.md:
+    newFile: null
+    oldFile: !uuid 'ab73a198ab63b515c42e597c5a25813ec2961f5f'
+  /WHATSAPP_INTEGRATION_DESIGN.md:
+    newFile: null
+    oldFile: !uuid '0281466af0884e7da50c918b08a5c072986f4e94'
+  /WHATSAPP_README.md:
+    newFile: null
+    oldFile: !uuid '35f1839191a4aa11aa67794d4e746fd49b8ef419'
   /agent-skills:
-    newFile: !uuid '2f86a3bf58c860c1812be7dfe90db1a283b8b761'
-    oldFile: null
+    newFile: !uuid 'c30c1b1fc50a54ab7f269a1a94f40409d69f1bd5'
+    oldFile: !uuid '2f86a3bf58c860c1812be7dfe90db1a283b8b761'
   /agent-skills/README.md:
-    newFile: !uuid '8434a1c4a70bedf580a047c03af068abeed9f169'
-    oldFile: null
-  /agent-skills/consultation:
-    newFile: !uuid 'b1111e794aa900ef0e973d2a5c629e99bfa7eeec'
-    oldFile: null
-  /agent-skills/consultation/SKILL.md:
-    newFile: !uuid 'af4ff376667b4d448833040ede53287846ce8590'
-    oldFile: null
-  /agent-skills/consultation/skill.json:
-    newFile: !uuid 'f9ffbd68541c059fed19bc971be13c7fe4611978'
-    oldFile: null
-  /agent-skills/customer-lifecycle:
-    newFile: !uuid 'c96370a7f9c3b59824c4c7a5e76b2d14cf8294d5'
-    oldFile: null
-  /agent-skills/customer-lifecycle/SKILL.md:
-    newFile: !uuid '008bc6233a232ad1edf48e5a2df9caee6b3ae091'
-    oldFile: null
-  /agent-skills/customer-lifecycle/skill.json:
-    newFile: !uuid 'd1dbd1254ace2d5ae9b6fc91b6c79e538e1320e6'
-    oldFile: null
-  /agent-skills/outreach:
-    newFile: !uuid 'fb7970964bc6bcc4de90f3b36cf69e92b4eb45a1'
-    oldFile: null
-  /agent-skills/outreach/SKILL.md:
-    newFile: !uuid 'e6584183ab76d113e10b44a6dc8541266c04bf42'
-    oldFile: null
-  /agent-skills/outreach/skill.json:
-    newFile: !uuid 'd27e44c7443407c33ce52412060b6e81ce298959'
-    oldFile: null
-  /agent-skills/prospecting:
-    newFile: !uuid '2742a6f252be7366f4b815365d3b0397bd0593d5'
-    oldFile: null
-  /agent-skills/prospecting/SKILL.md:
-    newFile: !uuid '3bd3a786dc1c8b3f8dc9ca7f0b678a459454fb38'
-    oldFile: null
-  /agent-skills/prospecting/skill.json:
-    newFile: !uuid '52bb34d9babb56927e9c76d7e7cab2456a3c9486'
-    oldFile: null
-  /agent-skills/system-overview:
-    newFile: !uuid '481dc00001d80d15377d8a3c65d8b78fc7d95b63'
-    oldFile: null
-  /agent-skills/system-overview/SKILL.md:
-    newFile: !uuid 'fa0190063706568d9911c948c71bf9099e2dacd9'
-    oldFile: null
-  /agent-skills/system-overview/skill.json:
-    newFile: !uuid 'c48e45b7db06ab317c8a8d0f6ae43f240faa2e0e'
-    oldFile: null
-  /agent-skills/trade-documents:
-    newFile: !uuid 'eaa0507c9de22d1475d9880d98e0e28743a2be3b'
-    oldFile: null
-  /agent-skills/trade-documents/SKILL.md:
-    newFile: !uuid '78aeedfa305b6165ad046db235a2e5e9381c7ab3'
-    oldFile: null
-  /agent-skills/trade-documents/skill.json:
-    newFile: !uuid 'f44bf804283ba37b4ac71a1e89fe93841b5815a5'
-    oldFile: null
-  /backend:
-    newFile: !uuid '75b8972f53d0f9992b14a5ab981e593b46bd09b0'
-    oldFile: !uuid '6c826a8f26c7fb119db3c0d394a48e60c5663661'
-  /backend/goodjob_crm.full.sql:
-    newFile: !uuid '5f00787522a58d8c0717896e8094560e2ded9df6'
-    oldFile: !uuid '10792127206763ad90bb6fe2cf37c96c57fbafbf'
-  /backend/package.json:
-    newFile: !uuid 'a634915947bd7b681bd1fed24c2348cf343e3198'
-    oldFile: !uuid 'b8140352be782cd2f3fb9a02ef865f5137c1967a'
-  /backend/schema.mysql.sql:
-    newFile: !uuid 'd858d9f9f7a6547c99698fcc70fe9645d1276c09'
-    oldFile: !uuid '62b5e1cd279d77496375299cf7be22fb7a384708'
-  /backend/src:
-    newFile: !uuid '47cab295b032cd50d8ee363ca7ef6b265adfc8c6'
-    oldFile: !uuid '15b89ee95c4be94e44a0266375a2bb7dac2f43c0'
-  /backend/src/agent-api-contracts-test.ts:
-    newFile: !uuid '41e4c54a33d1f1174890cbff745539192c3b1921'
-    oldFile: null
-  /backend/src/agent-api-contracts.ts:
-    newFile: !uuid 'e0f22e6bfaf623425107d57d7d6d98577a787415'
-    oldFile: null
-  /backend/src/agent-api-policy-test.ts:
-    newFile: !uuid 'cb1806ecee2133bda2ce3a230202dac6424ca847'
-    oldFile: null
-  /backend/src/agent-api-policy.ts:
-    newFile: !uuid '6a571dd613943dfae28a33bb501da0d0b9e512f4'
-    oldFile: null
-  /backend/src/agent-benchmark-test.ts:
-    newFile: !uuid '8d651f260a4fd0b66252acbc76b610b0e7fe2d28'
-    oldFile: null
-  /backend/src/agent-benchmark.ts:
-    newFile: !uuid 'd2a7b248f5f1d25f8d2dcf570817560dca2a78b4'
-    oldFile: null
-  /backend/src/agent-goal.ts:
-    newFile: !uuid 'a28a9fc25c3569164ce3567bb2398c94952076d1'
-    oldFile: null
-  /backend/src/agent-intent-corpus-test.ts:
-    newFile: !uuid '004a8d81bcf2efa8ad7d75837e99f246c410feae'
-    oldFile: null
-  /backend/src/agent-intent-corpus.ts:
-    newFile: !uuid 'a8a30e123c7852fc6b7807866cef1d12bd45190b'
-    oldFile: null
-  /backend/src/agent-internal-http-test.ts:
-    newFile: !uuid 'de2e06da38d830967af745d23616466d421be547'
-    oldFile: null
-  /backend/src/agent-internal-http.ts:
-    newFile: !uuid 'cd1f280cf7ba1e07bb22684b71f856b308eb81f1'
-    oldFile: null
-  /backend/src/agent-knowledge-test.ts:
-    newFile: !uuid 'a47eb2f5482aac874b39879e9d4fe4790d42369c'
-    oldFile: null
-  /backend/src/agent-knowledge.ts:
-    newFile: !uuid '0c8f5bea6b833488209f71d111f3c56ead9f2054'
-    oldFile: null
-  /backend/src/agent-memory-test.ts:
-    newFile: !uuid '13fd4c9ace2796f387f796c3893d18101eb4a48a'
-    oldFile: null
-  /backend/src/agent-memory.ts:
-    newFile: !uuid 'e2362025422be1d1d70fef9be4f64a3aebd61c9d'
-    oldFile: null
-  /backend/src/agent-mission-state.ts:
-    newFile: !uuid 'd478aa7983c7c2ca1e9f97c663e0ad3df016317d'
-    oldFile: null
-  /backend/src/agent-mission-verifier.ts:
-    newFile: !uuid '11b906dcabd66891522760cf39c8db9dadf34adc'
-    oldFile: null
-  /backend/src/agent-model-governance-test.ts:
-    newFile: !uuid 'f962c43b950184f6345ecfc429a6d862beb67a44'
-    oldFile: null
-  /backend/src/agent-model-governance.ts:
-    newFile: !uuid 'a5e9aca6c3ad47a45b80c08f8660d5c92a22ba0c'
-    oldFile: null
-  /backend/src/agent-recovery.ts:
-    newFile: !uuid '7a77dd16490d950ad3d1178bc2d992f5cf82be2c'
-    oldFile: null
-  /backend/src/agent-runtime-architecture-test.ts:
-    newFile: !uuid '22cff354d04a692b06db31204b51d29ef9dc4775'
-    oldFile: null
-  /backend/src/agent-skills-test.ts:
-    newFile: !uuid '79ff33c0b7f3159f8c52bb7b6410a6608015f2fb'
-    oldFile: null
-  /backend/src/agent-skills.ts:
-    newFile: !uuid '065483bd0d6c150e009e28cf90c3a0cf939508c7'
-    oldFile: null
-  /backend/src/agent-triggers-test.ts:
-    newFile: !uuid '285d8746cf82d6fa4adc7f7f47a35e576609d8ae'
-    oldFile: null
-  /backend/src/agent-triggers.ts:
-    newFile: !uuid 'a9ecbd3c0a961a22e6f824352a669062a43a356b'
-    oldFile: null
-  /backend/src/agent-turn-decision-test.ts:
-    newFile: !uuid '3b3124ea243a8e5498cdda6033b487e36ed1aa75'
-    oldFile: null
-  /backend/src/agent-turn-decision.ts:
-    newFile: !uuid '8366dc7308202e2030d3066928e45b8e82cdb1c0'
-    oldFile: null
-  /backend/src/agent-workflow-test.ts:
-    newFile: !uuid '6260f8c970ec02781eafe0a7861ccfd6d0c3a1b0'
-    oldFile: null
-  /backend/src/agent-workflow.ts:
-    newFile: !uuid '889691bdc3c8e31ea0ebaa7dbce76ee0b33afc12'
-    oldFile: null
-  /backend/src/ai-agent-test.ts:
-    newFile: !uuid 'd0bec8459d4d8e966c2a2bf59c4c8e7519b5c843'
-    oldFile: null
-  /backend/src/ai-agent.ts:
-    newFile: !uuid 'ede6455f6a8a02999276bb30dc06c658afad641b'
-    oldFile: null
-  /backend/src/ai-model-runtime-test.ts:
-    newFile: !uuid '0c749b9db1cbcef9034995f08730a3840331568b'
-    oldFile: null
-  /backend/src/ai-model-runtime.ts:
-    newFile: !uuid '92c73a0bf688e86f0a2d42436b2ce89f4769f7ed'
-    oldFile: !uuid '7a93814772af894add6eab4dd7cff7a2d3b88049'
-  /backend/src/ai-search-provider.ts:
-    newFile: !uuid '77ea897ff2467bd10cb5692d1d8fd509a296e2df'
-    oldFile: !uuid '8c3bfc1f2758d36bc04e70c120a8912e26598218'
-  /backend/src/customer-maintenance-test.ts:
-    newFile: !uuid 'c9c4aec9fe379596408b289faa811091621c7c67'
-    oldFile: null
-  /backend/src/customer-maintenance.ts:
-    newFile: !uuid '1dd2279cadfdd3e26c6d62f16dfddccbc3e8b463'
-    oldFile: null
-  /backend/src/data.ts:
-    newFile: !uuid 'fa4e52faa35534972c877cdac77428ca35cf6b6c'
-    oldFile: !uuid '5de2b3b810ac5e2282c2bc29118407a738d2f8b5'
-  /backend/src/database-backup.ts:
-    newFile: !uuid '6e08bc70199bcc4ade9fc8672fc972cee07a293a'
-    oldFile: null
-  /backend/src/database-maintenance-mysql-test.ts:
-    newFile: !uuid '619c9805d86056f7e58cc800318ebe8b15e7d8dc'
-    oldFile: null
-  /backend/src/google-places-provider-test.ts:
-    newFile: !uuid 'c6e5c2bcb74fd76a3dc8faaf3cccae4844aae7d2'
-    oldFile: null
-  /backend/src/lead-providers.ts:
-    newFile: !uuid 'e20dcfad1f9eccf1a55292b67854eaefc6c8d494'
-    oldFile: !uuid '3ceeda21f511f074f2dd6bba71450469aed25061'
-  /backend/src/migrate-mysql.ts:
-    newFile: !uuid '187a0db2463b6fabde9a530a8e6eb675f85bcaa9'
-    oldFile: null
-  /backend/src/mysql-data-import-test.ts:
-    newFile: !uuid '2425c757eb18e51c4edb5df36677ae83c53e0c97'
-    oldFile: null
-  /backend/src/mysql-data-import.ts:
-    newFile: !uuid '2279f0588a0fecee49d925ee5269d4d971e7cbcd'
-    oldFile: null
-  /backend/src/mysql-store.ts:
-    newFile: !uuid '2325a2ed3e2bf28841e1ef306e2e3d21e6f53985'
-    oldFile: !uuid '7baeaec2b9d021b10ec9f517d583fcd19035e01f'
-  /backend/src/outreach-sequences-test.ts:
-    newFile: !uuid '57577526a28d7759e31cad96c41b27d8010ef1c3'
-    oldFile: null
-  /backend/src/outreach-sequences.ts:
-    newFile: !uuid 'ee9dd8e42041121c8a10db042e90d755addb8a9a'
-    oldFile: null
-  /backend/src/prospect-campaigns-test.ts:
-    newFile: !uuid '8104d25c79d30479586aaf06e0f61a7d865c7476'
-    oldFile: !uuid '885ae2fd46f9304c53dea93e80584beac9535cd9'
-  /backend/src/prospect-campaigns.ts:
-    newFile: !uuid '43fc4e1c76a8ed1c64c0c7a6c213d6bc6d463ae9'
-    oldFile: !uuid '443adcf829620530c64fa4d9dfe101ee26d193a5'
-  /backend/src/prospect-candidate-pipeline.ts:
-    newFile: !uuid '54fd915db34bdf7d764e4e57a3bca14cddcdbd62'
-    oldFile: !uuid '90af45b579f65eac4eb1f9e5b79d2b06e2bfaf7e'
-  /backend/src/prospect-coverage-memory-mysql.ts:
-    newFile: !uuid 'd6546c17d267a7398b6d6d5a9cb556aea977cdd3'
-    oldFile: !uuid 'acb2e7aeeb75202229ae02350d9e21f8295008e9'
-  /backend/src/prospect-provider-dispatcher.ts:
-    newFile: !uuid '529e3e44849ce1bdf9dbcc790097e2fcb9d32c1c'
-    oldFile: !uuid '6faeac73d458f03500eb9234536d4b752873ecdb'
-  /backend/src/prospect-runs-test.ts:
-    newFile: !uuid '64a2e8867f05cab690a90bb83be237f23dc6a747'
-    oldFile: !uuid '06981bc30fc7c28358e5b93a002ebd6f63232123'
-  /backend/src/prospect-runs.ts:
-    newFile: !uuid '6f1623e383d6096a40b9c1b1ae0a80d8a71c7e87'
-    oldFile: !uuid 'a61abd154111d90529a6dfa343b95f7cfd2215f4'
-  /backend/src/prospect-scheduler.ts:
-    newFile: !uuid 'f87c92d3d85169fa72c55080e4ae159d7252716e'
-    oldFile: !uuid '12f1bdf2a7eeb99653f0af27a5804bd5b781be13'
-  /backend/src/prospect-search-planner.ts:
-    newFile: !uuid '701f9cb18ffa660e4182aa814074e97bed9e4047'
-    oldFile: null
-  /backend/src/prospect-super-search-test.ts:
-    newFile: !uuid 'd18f5470017f04246c8d753c6b3039917b4350ca'
-    oldFile: null
-  /backend/src/prospect-super-search.ts:
-    newFile: !uuid '80643d12576d1e6388cf8badbbb14fbbf9ec56fa'
-    oldFile: null
-  /backend/src/prospect-worker-service.ts:
-    newFile: !uuid 'c0f2ebeadc10d97e8845e98c95dfa4109d97705a'
-    oldFile: !uuid 'd0e9b56c00a2a8e93a0adadfd9bddeff42617fe9'
-  /backend/src/prospect-worker-test.ts:
-    newFile: !uuid 'd55e47ba9f909ef9ff772bb268b9f6c530a2b230'
-    oldFile: !uuid 'f4693c85a8a0f7cdbc7840fb4f602b5d62b5ed57'
-  /backend/src/prospect-worker.ts:
-    newFile: !uuid 'e618e0deb2c1280828da01904582459c18d137ef'
-    oldFile: !uuid '5c08e99ee24e7f531880f7781180cabe697f34a7'
-  /backend/src/provider-catalog.ts:
-    newFile: !uuid '19cf23e6f5c6f77080b737d7219993898861669e'
-    oldFile: !uuid 'ae3a1feafde77fdcbdd645139ffb5ec95680f578'
-  /backend/src/provider-contract.ts:
-    newFile: !uuid 'e5a11f51fafb7e7559694ae3501b19902be661ad'
-    oldFile: !uuid 'b57c3b53632994fe3b568e70d2500d267e70b7de'
-  /backend/src/provision-beta-admins.ts:
-    newFile: !uuid '9170fb1acf0680a45d0810a2f98a18512cd12739'
-    oldFile: !uuid '3300f9c022f52ecac408ace6621ef30322be02c5'
-  /backend/src/sales-distillation-test.ts:
-    newFile: !uuid '567f3cbc0df49c7cf5abc26226a0b407302ede64'
-    oldFile: null
-  /backend/src/sales-distillation.ts:
-    newFile: !uuid '1c328b1278c8161c20d5ae61920d2320b3cedc17'
-    oldFile: null
-  /backend/src/sales-training.ts:
-    newFile: !uuid '36c24b5564caede776e08163e6e68f5e3b04d073'
-    oldFile: null
-  /backend/src/self-test.ts:
-    newFile: !uuid '80a14fe963ebfa619288ec0c29914ea5f3c8a542'
-    oldFile: !uuid '3c9e9287c23d818f2fbf36b964ad3e7b969fdfea'
-  /backend/src/server.ts:
-    newFile: !uuid 'fa1672d297a520d15c0fd6ffae0d92926d8c705c'
-    oldFile: !uuid '0061433e0d94f02cd4ec696d6f4254c967b97239'
-  /backend/src/store.ts:
-    newFile: !uuid '72a75cf2646dc799ceeb402ec33cc8817f231c5d'
-    oldFile: !uuid '6d98922fd452038c01219d0cdbd936a35261bfd8'
-  /backend/src/types.ts:
-    newFile: !uuid '7e01bea4245f7f6b15bc3d6f768279b3af29d0d8'
-    oldFile: !uuid '475e61bd8d046b7d93fff3b942fff1c2de9b83f8'
-  /backend/src/whatsapp-service.ts:
-    newFile: !uuid '8d622c8009ed81122e099fff8e62d3e191bd08b6'
-    oldFile: !uuid '5ed5bb9bf794848ded3bf7ad982d80c95d5f0168'
+    newFile: null
+    oldFile: !uuid '8434a1c4a70bedf580a047c03af068abeed9f169'
   /deploy:
-    newFile: !uuid '77e80e7c347675538947f881246fa95bb9f536d4'
-    oldFile: !uuid '21a3a9794785ee413aadc93b9c7fe12ece19595e'
-  /deploy-ubuntu.sh:
-    newFile: !uuid 'fbf985e145ea7e259170dcf8342e5cab365e3eb1'
-    oldFile: !uuid 'a229d69b9b374b3530eece55e92ea0677505cdf8'
+    newFile: null
+    oldFile: !uuid '77e80e7c347675538947f881246fa95bb9f536d4'
   /deploy/baota:
-    newFile: !uuid 'ef3977c99d2b9de6d1d1b0cd658c60fe12673004'
-    oldFile: !uuid '8ce207438072ee0e110629542b9f1553ff9527ba'
+    newFile: null
+    oldFile: !uuid 'ef3977c99d2b9de6d1d1b0cd658c60fe12673004'
   /deploy/baota/BAOTA-INSTALL.txt:
-    newFile: !uuid '51f30d16e20cbdf5dc9369182ab1d22866cdcfd2'
-    oldFile: !uuid 'c2c519fa8acfc38893f301c255297ad624e6508d'
+    newFile: null
+    oldFile: !uuid '51f30d16e20cbdf5dc9369182ab1d22866cdcfd2'
   /deploy/baota/build-package.sh:
-    newFile: !uuid '4fd8b0eb61d6e3b2565935e58d2a00331cd44210'
-    oldFile: !uuid '473a59bd374fd393b01822b4cc4221ad2ad9f3ce'
+    newFile: null
+    oldFile: !uuid '4fd8b0eb61d6e3b2565935e58d2a00331cd44210'
   /deploy/baota/database:
-    newFile: !uuid 'a68d10e60da0dde0dbfc9ea0a8c898779979376f'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'a68d10e60da0dde0dbfc9ea0a8c898779979376f'
   /deploy/baota/database/bootstrap.sql.gz:
-    newFile: !uuid '0ef1ba82caf7ed3740f8b079154b1320ad672491'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid '0ef1ba82caf7ed3740f8b079154b1320ad672491'
   /deploy/baota/database/bootstrap.sql.gz.sha256:
-    newFile: !uuid 'f84b17b3d647632bf6e3b231eb8bd6f400df2543'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'f84b17b3d647632bf6e3b231eb8bd6f400df2543'
   /deploy/baota/deploy-goodjob.sh:
-    newFile: !uuid 'b6f093c71d8671c048250df4b1e8f2161e76f6f1'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'b6f093c71d8671c048250df4b1e8f2161e76f6f1'
   /deploy/baota/deploy.conf.example:
-    newFile: !uuid '18270705a904a3ec5d8b9b3b335c421e23aa8469'
-    oldFile: !uuid 'b04d223fd2340ab3125628c3aecdcce22d442feb'
+    newFile: null
+    oldFile: !uuid '18270705a904a3ec5d8b9b3b335c421e23aa8469'
   /deploy/baota/install-baota.sh:
-    newFile: !uuid 'e8b0c50c623addc4c6e49a4eaadfd080048b5e9e'
-    oldFile: !uuid 'edf2b632549c3c069f0cb9eced411ce2ba70f112'
+    newFile: null
+    oldFile: !uuid 'e8b0c50c623addc4c6e49a4eaadfd080048b5e9e'
   /deploy/baota/manage-accounts.sh:
-    newFile: !uuid '91449afa626a99b22efb3f5c74eabcd5e8b9e3c2'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid '91449afa626a99b22efb3f5c74eabcd5e8b9e3c2'
   /deploy/baota/manage-service.sh:
-    newFile: !uuid '61fc41e778432d76d85d37301f59737a14fe4a63'
-    oldFile: !uuid '44a7d080eda7921d44ea5368ea7bedb3d49238df'
+    newFile: null
+    oldFile: !uuid '61fc41e778432d76d85d37301f59737a14fe4a63'
   /deploy/baota/one-click-install.sh:
-    newFile: !uuid '36ade4fd69b35f74fd72005991d2a64949540334'
-    oldFile: !uuid '350fefc718305bcd6a858be9493d999389c8a0c8'
+    newFile: null
+    oldFile: !uuid '36ade4fd69b35f74fd72005991d2a64949540334'
   /docs:
-    newFile: !uuid 'ad4f88e2deb1cb7e747d8905b77d8c372d367ddf'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'ad4f88e2deb1cb7e747d8905b77d8c372d367ddf'
   /docs/AGENT-CONSULTATION-RUNTIME.md:
-    newFile: !uuid 'dff5f90ba1dad01f093004519f168e2380f2cd88'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'dff5f90ba1dad01f093004519f168e2380f2cd88'
   /docs/AGENT-HIGH-FREEDOM-RUNTIME.md:
-    newFile: !uuid 'b5c334465c655927c3f079da51d8392d7f35f229'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'b5c334465c655927c3f079da51d8392d7f35f229'
   /docs/AGENT-TURN-SEMANTICS-RUNTIME.md:
-    newFile: !uuid '5081079b1bb60b353b321b2cc589ae8ce37abfe2'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid '5081079b1bb60b353b321b2cc589ae8ce37abfe2'
   /docs/AGENT_SKILLS_DEVELOPMENT.md:
-    newFile: !uuid '9589a316c45458938a934b51eeed9ad0e2969612'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid '9589a316c45458938a934b51eeed9ad0e2969612'
   /docs/AI-AGENT-CLOSED-LOOP.md:
-    newFile: !uuid 'daa10a84ef3be95f31590b1371ba3dd67e3b3bd7'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'daa10a84ef3be95f31590b1371ba3dd67e3b3bd7'
   /docs/AI-AGENT-IMPLEMENTATION-PLAN.md:
-    newFile: !uuid '5f26f0c6026c6139c54df210b61584c1eb30fd9f'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid '5f26f0c6026c6139c54df210b61584c1eb30fd9f'
   /docs/AI-AGENT-KNOWLEDGE-LAYER-DEVELOPMENT.md:
-    newFile: !uuid 'f9f779ed6c805d2ac9f8946edab71f6c97d816f9'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'f9f779ed6c805d2ac9f8946edab71f6c97d816f9'
   /docs/AI-AGENT-OPERATION-CONTRACT.md:
-    newFile: !uuid '12a6aef0c71dc3e3588a2ca5503c12987183238b'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid '12a6aef0c71dc3e3588a2ca5503c12987183238b'
   /docs/DATABASE_MAINTENANCE_DEVELOPMENT.md:
-    newFile: !uuid '80f588efa9cf220261ed43438426ea7c7ffb2fa5'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid '80f588efa9cf220261ed43438426ea7c7ffb2fa5'
   /docs/DEPLOYMENT-INCIDENT-2026-07.md:
-    newFile: !uuid 'b13a8913c61264e2a1ef58d2aa961eec56482064'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'b13a8913c61264e2a1ef58d2aa961eec56482064'
   /docs/GOODJOB-AGENT-RUNTIME-BENCHMARK.md:
-    newFile: !uuid '28ce813ab40e2f0e5a08e9ab832e0f91eb0343f8'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid '28ce813ab40e2f0e5a08e9ab832e0f91eb0343f8'
   /docs/GOODJOB-DEEP-SEARCH-DEVELOPMENT.md:
-    newFile: !uuid 'e121c231bcdd507bed21da2ce55292ed140ac153'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'e121c231bcdd507bed21da2ce55292ed140ac153'
   /docs/SOCIAL-MEDIA-INTEGRATION-RESEARCH-AND-PLAN.md:
-    newFile: !uuid '03c3a01696fa58fa754af051c17991e0b66a8442'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid '03c3a01696fa58fa754af051c17991e0b66a8442'
   /docs/SUPER-SEARCH-DESIGN.md:
-    newFile: !uuid '01399f8facded3e9b9cc1d4c3808e3cf7c4a72a8'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid '01399f8facded3e9b9cc1d4c3808e3cf7c4a72a8'
   /docs/SUPER-SEARCH-WEB-API-DEVELOPMENT.md:
-    newFile: !uuid '3e6f8fc8fceb434ae663c9833bc1987e0dc1b6c7'
-    oldFile: null
-  /frontend:
-    newFile: !uuid '876235fdfd1672b374ce9decc7c52b9ceb976216'
-    oldFile: !uuid '2fba9fdbddcaf40752e459a0105dc7db87000e90'
-  /frontend/index.html:
-    newFile: !uuid '4718d179334707db2ac70f7fdfe81bc349f6cc7e'
-    oldFile: !uuid '826e91c63e8692ade4a2f34bb6df72dc8e4deaa0'
-  /frontend/package.json:
-    newFile: !uuid 'cef35df42337aad5de83e508a6841ca505626e08'
-    oldFile: !uuid '1e816abd75a81ce07b216c9da894dba6ba029b28'
-  /frontend/public:
-    newFile: !uuid '9d5ec4705477f8664200bb6b70f4b65ad8e62ca3'
-    oldFile: !uuid 'e243d99f62d5a9d74072f73c81dd16c162037858'
-  /frontend/public/product-config.json:
-    newFile: !uuid '681dbb2a03fbf2fbbd85178d8bc4d5737037be19'
-    oldFile: !uuid 'accd2b9729b4edab8ccb1f7680ae2690550d5125'
-  /frontend/src:
-    newFile: !uuid '12f5f544754ecf253723647c0784e196bf7802cc'
-    oldFile: !uuid '6bf77916c29d018c70523446d09ae8d52d0c1aa8'
-  /frontend/src/customer-map.ts:
-    newFile: !uuid '484169e826320706423f3b570a8b88994220fc86'
-    oldFile: !uuid '84ed5e7d904609ac01faf3a5d3e441d191665ead'
-  /frontend/src/mysql-dump-import-test.ts:
-    newFile: !uuid '67339663137072118bdc8596b956d69c7a4e9706'
-    oldFile: null
-  /frontend/src/mysql-dump-import.ts:
-    newFile: !uuid '18a396c0befa5c03cfc66c1943ab0d70ede4099d'
-    oldFile: null
-  /frontend/src/prototype-api.ts:
-    newFile: !uuid 'f9b2e806946ad5bf993aa2155eaf2b54673da040'
-    oldFile: !uuid 'e82a360dbf0fc0b6ec46a7a8f2f1573bc5f6a0c5'
-  /frontend/src/self-test.ts:
-    newFile: !uuid 'f6a0c27cbdd8321cbb2f1881ddf97813cb0a25e8'
-    oldFile: !uuid 'caded0980a513205c8035f0242e92a5de00ce84b'
-  /frontend/tests:
-    newFile: !uuid '9483c116f54db8f638880681f767161b26ac1dfa'
-    oldFile: !uuid 'd4736a20cc6064bfebcbe06d8e94156ead8db579'
-  /frontend/tests/crm.spec.ts:
-    newFile: !uuid '345b6f3ba51da27cff43455affe1d1ca64ac18c4'
-    oldFile: !uuid '3bbbabf29ef231b139b72cc5647b0958a68f1c23'
-  /frontend/tests/customer-pool-whatsapp.spec.ts:
-    newFile: !uuid '4664c8522dc337d9f56e6e313eb2a399fe6de27d'
-    oldFile: null
-  /frontend/vite.config.ts:
-    newFile: !uuid '8c87347225cb132d62d267f9b6504b9df8869ef7'
-    oldFile: !uuid '136352fd3aa7c0840886aed53ef564f95d45cb8d'
-  /package-lock.json:
-    newFile: !uuid '14a27f6daa1db5de7290a3c798c76e023bce2e1e'
-    oldFile: !uuid '51fa2971419f0346dba5ccc7c439dfd7df4c9167'
-  /package.json:
-    newFile: !uuid '5cc5c6042cac74a575c9a864f3bc06ebb923139d'
-    oldFile: !uuid '2ba05fe5a98988c976c71dd36c112e663fe3a4f6'
-  /test-scan-ui.html:
-    newFile: !uuid '6487633338e7e6c002e1f7ce81f76f65667170ac'
-    oldFile: null
-  /whatsapp-diagnostic.html:
-    newFile: !uuid 'e2a088a3a73887f688c128cecb6b1659abd6a1eb'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid '3e6f8fc8fceb434ae663c9833bc1987e0dc1b6c7'
   /whatsapp-plugin:
-    newFile: !uuid 'ffe110dade2aa7335de15815f4306e6952cf948b'
-    oldFile: null
-  /whatsapp-plugin/.env.example:
-    newFile: !uuid '7d92d700f3bc8484276f3ab0504f4ea49acd87c8'
-    oldFile: null
-  /whatsapp-plugin/.gitignore:
-    newFile: !uuid '2742765172ead5a37990bfa1891252b1d7cc9db2'
-    oldFile: null
+    newFile: !uuid '0a5ce1e3e1b04809647b621c798873d59086cdbe'
+    oldFile: !uuid 'ffe110dade2aa7335de15815f4306e6952cf948b'
   /whatsapp-plugin/DESIGN.md:
-    newFile: !uuid '1caa8b1a3077b4982216060d2a68f5ed970c147f'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid '1caa8b1a3077b4982216060d2a68f5ed970c147f'
   /whatsapp-plugin/Evolution插件代码分析与执行方案.md:
-    newFile: !uuid '8635dad2bc36f5cd85c0ab3c7875fe9d84ba29bb'
-    oldFile: null
-  /whatsapp-plugin/LICENSE:
-    newFile: !uuid '94a045322262546cfb9d72561e1d587b5c2ffb1e'
-    oldFile: null
-  /whatsapp-plugin/LICENSES:
-    newFile: !uuid '47205f4f418b3b704afdaffb24f1406d42fd3435'
-    oldFile: null
-  /whatsapp-plugin/LICENSES/Baileys-MIT.txt:
-    newFile: !uuid '772637b787dca4ada478bf3dc65a200cfaaae11c'
-    oldFile: null
-  /whatsapp-plugin/LICENSES/libsignal-GPL-3.0.txt:
-    newFile: !uuid '94a045322262546cfb9d72561e1d587b5c2ffb1e'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid '8635dad2bc36f5cd85c0ab3c7875fe9d84ba29bb'
   /whatsapp-plugin/README.md:
-    newFile: !uuid 'f59eb186673405ba68cd45813fd6e8d52617ef35'
-    oldFile: null
-  /whatsapp-plugin/THIRD_PARTY_NOTICES.md:
-    newFile: !uuid '6abce2a5115334ff71f69608ddff2ac51a938c0a'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'f59eb186673405ba68cd45813fd6e8d52617ef35'
   /whatsapp-plugin/WhatsApp-CRM插件可行性报告.md:
-    newFile: !uuid 'ea5089103bd9a15527758108e9376eb4eeea6c7d'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'ea5089103bd9a15527758108e9376eb4eeea6c7d'
   /whatsapp-plugin/docs:
-    newFile: !uuid 'a831462ea0aab9db6e74b1f3cd0a1eb737fdb10e'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'a831462ea0aab9db6e74b1f3cd0a1eb737fdb10e'
   /whatsapp-plugin/docs/ARCHITECTURE.md:
-    newFile: !uuid '97a338561caf8f107b0eecfa8d6cae40a31e0c48'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid '97a338561caf8f107b0eecfa8d6cae40a31e0c48'
   /whatsapp-plugin/docs/PRODUCTION_DEPLOYMENT.md:
-    newFile: !uuid 'ede76fd9894235d67c1ef502624134ad9a0c27f7'
-    oldFile: null
-  /whatsapp-plugin/index.html:
-    newFile: !uuid '2a7a5606b16f9b8e58a1d7ea63ca4fdf0260f093'
-    oldFile: null
-  /whatsapp-plugin/package-lock.json:
-    newFile: !uuid '3785616d88e5223cac2637c8240f27297f5921ba'
-    oldFile: null
-  /whatsapp-plugin/package.json:
-    newFile: !uuid 'beb3d2bfc4c6a17a374dca9326999cf3e7e3dd1e'
-    oldFile: null
-  /whatsapp-plugin/src:
-    newFile: !uuid '720250d2d98854dbf3f42ce9d08bf3b8300cc541'
-    oldFile: null
-  /whatsapp-plugin/src/server:
-    newFile: !uuid '195391d80ef75030d62bf13ecf72456f1be39c9e'
-    oldFile: null
-  /whatsapp-plugin/src/server/app.ts:
-    newFile: !uuid '3fe4b963f059703dd1ca475d00bf35966e094286'
-    oldFile: null
-  /whatsapp-plugin/src/server/config.ts:
-    newFile: !uuid 'b093e2f1d581c725690499764e45c8d6fc4b5406'
-    oldFile: null
-  /whatsapp-plugin/src/server/crm-auth.ts:
-    newFile: !uuid '1ebfac81542001b7be4d068f307dcdcde99c861b'
-    oldFile: null
-  /whatsapp-plugin/src/server/db:
-    newFile: !uuid 'bb2bb841be6aa209f9b01931e623075fc3ee3ee1'
-    oldFile: null
-  /whatsapp-plugin/src/server/db/database.ts:
-    newFile: !uuid '05de3d676e4184525b731fd7bbc1228b140a2823'
-    oldFile: null
-  /whatsapp-plugin/src/server/db/demo-cleanup.ts:
-    newFile: !uuid 'ca8be6a56fbc235c4585d8b2a7028b046dd70b2f'
-    oldFile: null
-  /whatsapp-plugin/src/server/db/migrate.ts:
-    newFile: !uuid '7b75025ab4de8ef4bd859fd49273290952233192'
-    oldFile: null
-  /whatsapp-plugin/src/server/db/repository.ts:
-    newFile: !uuid '59c9676bbc8a5ee9e72f3575a6110efb038e38a2'
-    oldFile: null
-  /whatsapp-plugin/src/server/db/seed.ts:
-    newFile: !uuid '3682cc2d73ade1f6cab9539fbf749ca303bb975d'
-    oldFile: null
-  /whatsapp-plugin/src/server/errors.ts:
-    newFile: !uuid 'd25951880420ebb6f02dfea4602235b9574cb895'
-    oldFile: null
-  /whatsapp-plugin/src/server/index.ts:
-    newFile: !uuid '76e11e479b5a6724507d36b2162b96202af76852'
-    oldFile: null
-  /whatsapp-plugin/src/server/providers:
-    newFile: !uuid '463eaed4f5193da10bf2cc645a50ba53f169665e'
-    oldFile: null
-  /whatsapp-plugin/src/server/providers/baileys-auth-store.ts:
-    newFile: !uuid 'f48a3dea95e5149d7f806ebc5a42f0e35f1c5da6'
-    oldFile: null
-  /whatsapp-plugin/src/server/providers/baileys-provider.ts:
-    newFile: !uuid 'd43f392237c83d3d3df52e64a161084ebe392e90'
-    oldFile: null
-  /whatsapp-plugin/src/server/providers/demo-provider.ts:
-    newFile: !uuid '7fa90cb8eb3a88e4b04656d0d470159403a93f8a'
-    oldFile: null
-  /whatsapp-plugin/src/server/providers/meta-provider.ts:
-    newFile: !uuid '1c71f06dcd50c85e90b5a77f95513fec30b205da'
-    oldFile: null
-  /whatsapp-plugin/src/server/providers/provider-manager.ts:
-    newFile: !uuid 'e53d0e095e3f512e8982f59f4df1ee5a5519314a'
-    oldFile: null
-  /whatsapp-plugin/src/server/providers/types.ts:
-    newFile: !uuid '35b411c24b70f0b2017b8f9cf706e2f792ae2b9e'
-    oldFile: null
-  /whatsapp-plugin/src/server/realtime.ts:
-    newFile: !uuid '064c2ad69370745274e7535c222bc3e85ce2af7d'
-    oldFile: null
-  /whatsapp-plugin/src/server/scripts:
-    newFile: !uuid '4710b115900e8d3ac29e9278303959f89651cf4f'
-    oldFile: null
-  /whatsapp-plugin/src/server/scripts/cleanup-demo.ts:
-    newFile: !uuid '648a8d48be04a45573948bbfb9882b068c47c770'
-    oldFile: null
-  /whatsapp-plugin/src/server/scripts/migrate.ts:
-    newFile: !uuid '5d96cb85c9f7c7360ccbe237fda5a7d3fe031d0e'
-    oldFile: null
-  /whatsapp-plugin/src/server/scripts/seed-demo.ts:
-    newFile: !uuid 'eb2835227aad4f5fa3048b71a3b383500f867f03'
-    oldFile: null
-  /whatsapp-plugin/src/server/scripts/seed.ts:
-    newFile: !uuid 'c655537b986255445f92477a741b9f00c1d8b35a'
-    oldFile: null
-  /whatsapp-plugin/src/server/security:
-    newFile: !uuid 'dde3592483ed12096865f9be19894553b76b48e5'
-    oldFile: null
-  /whatsapp-plugin/src/server/security/encryption.ts:
-    newFile: !uuid '05b6293e06e2bf860c3a62d568f8476728a57848'
-    oldFile: null
-  /whatsapp-plugin/src/server/services:
-    newFile: !uuid '9a2080d314962a5c7fb45695e56f5e1e6847c4d6'
-    oldFile: null
-  /whatsapp-plugin/src/server/services/media-storage.ts:
-    newFile: !uuid 'b640b517841a60affbb2efb65ed6e38654cd93b6'
-    oldFile: null
-  /whatsapp-plugin/src/server/services/translation.ts:
-    newFile: !uuid 'f87e2515f8b417bb546a2a1e0cfbad887113b63c'
-    oldFile: null
-  /whatsapp-plugin/src/shared:
-    newFile: !uuid 'b70c5e6ab76f9098228767acd2ecf66d5c79f08e'
-    oldFile: null
-  /whatsapp-plugin/src/shared/types.ts:
-    newFile: !uuid 'd64aa94a2be7d4e02df2417c2c775c06a59b516b'
-    oldFile: null
-  /whatsapp-plugin/src/web:
-    newFile: !uuid 'c87549f0ff4746531814211657ff6b9ba3ce56ec'
-    oldFile: null
-  /whatsapp-plugin/src/web/App.tsx:
-    newFile: !uuid '5fd413a1da562e5188315e4938a8721d97751e6b'
-    oldFile: null
-  /whatsapp-plugin/src/web/api.ts:
-    newFile: !uuid '14ded55ef000f0b5b5b2e9b0b8c3180d60202c90'
-    oldFile: null
-  /whatsapp-plugin/src/web/components:
-    newFile: !uuid '28e1bbf7441983d7cbdcc207bd3ca1061c9458ba'
-    oldFile: null
-  /whatsapp-plugin/src/web/components/ui.tsx:
-    newFile: !uuid 'eb73744af716e895d14e8c345c8087c42d659bc4'
-    oldFile: null
-  /whatsapp-plugin/src/web/data.ts:
-    newFile: !uuid '56080f5dbdd9d0682939816f4e00e234745c73b8'
-    oldFile: null
-  /whatsapp-plugin/src/web/main.tsx:
-    newFile: !uuid '0fe767a18e37ab9f3ab133cdce72163293bfbfd7'
-    oldFile: null
-  /whatsapp-plugin/src/web/pages:
-    newFile: !uuid '8db58f43c80ccd717ecf4e1065f19c9192c32e56'
-    oldFile: null
-  /whatsapp-plugin/src/web/pages/AccessSettingsPage.tsx:
-    newFile: !uuid '3e7b84dda50898629581de581e8bb5c5651977e3'
-    oldFile: null
-  /whatsapp-plugin/src/web/pages/AccountsPage.tsx:
-    newFile: !uuid 'ea9b11b07451d3762f3bb6d75a8b5388c9545153'
-    oldFile: null
-  /whatsapp-plugin/src/web/pages/AiSettingsPage.tsx:
-    newFile: !uuid 'a4d4753ff8c51a94040e94784b56df83ade937c1'
-    oldFile: null
-  /whatsapp-plugin/src/web/pages/ContactsPage.tsx:
-    newFile: !uuid '14f6310bbdd3a0a52015db8b6ed49b76218b9a9d'
-    oldFile: null
-  /whatsapp-plugin/src/web/pages/DiagnosticsPage.tsx:
-    newFile: !uuid 'e115a7586a1f1925b3c48e2bb24eb085986b7306'
-    oldFile: null
-  /whatsapp-plugin/src/web/pages/RoutingPage.tsx:
-    newFile: !uuid '260a38a16ed58f8227dd81fb010bb336f1a3005b'
-    oldFile: null
-  /whatsapp-plugin/src/web/pages/WorkspacePage.tsx:
-    newFile: !uuid '6b5298346a08fe43337114f9d0fb14d21afc95a2'
-    oldFile: null
-  /whatsapp-plugin/src/web/styles.css:
-    newFile: !uuid 'ca0dad20db843d5294d325981d0a0d9084863265'
-    oldFile: null
-  /whatsapp-plugin/src/web/vite-env.d.ts:
-    newFile: !uuid '11f02fe2a0061d6e6e1f271b21da95423b448b32'
-    oldFile: null
-  /whatsapp-plugin/tests:
-    newFile: !uuid '9440faa0e526daac86f569fbe58d567c0c813417'
-    oldFile: null
-  /whatsapp-plugin/tests/api.integration.test.ts:
-    newFile: !uuid '64e1d1bbccee1661735b2f653d282366557278a0'
-    oldFile: null
-  /whatsapp-plugin/tests/baileys-provider.test.ts:
-    newFile: !uuid '665caa03ff24f4875e414dd0f6a70f962eda6c6d'
-    oldFile: null
-  /whatsapp-plugin/tests/config.test.ts:
-    newFile: !uuid 'c0c1cfbf3a4e3b952dbd78301358eb391406506a'
-    oldFile: null
-  /whatsapp-plugin/tests/data-lifecycle.test.ts:
-    newFile: !uuid '7d304dc91f6465c3112395cecac4f9875edf7010'
-    oldFile: null
-  /whatsapp-plugin/tests/meta.integration.test.ts:
-    newFile: !uuid '6022a8e85305a629756096eb8cfaff983f0a4f9f'
-    oldFile: null
-  /whatsapp-plugin/tests/ownership-security.test.ts:
-    newFile: !uuid 'e9f5ae5052215db2219e681eecd70454481815f6'
-    oldFile: null
-  /whatsapp-plugin/tests/runtime.production.test.ts:
-    newFile: !uuid 'a263f850f7fee7e4279d2169b2ca89fe0c6560f6'
-    oldFile: null
-  /whatsapp-plugin/tsconfig.json:
-    newFile: !uuid '777bda3d2235970d0527a8f2fd5046945e62c114'
-    oldFile: null
-  /whatsapp-plugin/tsconfig.server.json:
-    newFile: !uuid '472c20f449c7f22f9f6b44309d2d1ff600acfeb7'
-    oldFile: null
-  /whatsapp-plugin/vite.config.ts:
-    newFile: !uuid 'd5e74de8bc03bb4a2adeaa259e2781e124484adb'
-    oldFile: null
-  /whatsapp-plugin/vitest.config.ts:
-    newFile: !uuid 'd840fbe9e776cb802b22b21f5674cb615c5604e8'
-    oldFile: null
+    newFile: null
+    oldFile: !uuid 'ede76fd9894235d67c1ef502624134ad9a0c27f7'
   /whatsapp-plugin/开发进度与本机验收.md:
-    newFile: !uuid '5a8f2b4f1d84ad6ba3b3e20e724b8ed77706644b'
-    oldFile: null
-gitCommitId: !uuid '05858729b2f5959ffcb095e0535e88f73fdca71a'
+    newFile: null
+    oldFile: !uuid '5a8f2b4f1d84ad6ba3b3e20e724b8ed77706644b'
+  /报关资料功能总结.md:
+    newFile: null
+    oldFile: !uuid '3102d92d00bda7a73c08ae26248d55131074359a'
+  /报关资料功能说明.md:
+    newFile: null
+    oldFile: !uuid '8e54cb959b141f2f24735f5352500f5d41848159'
+  /报关资料访问指南.md:
+    newFile: null
+    oldFile: !uuid '4926d15a86c6758aa6b0f9954279d735ac8e5a46'
+  /报关资料预览界面升级说明.md:
+    newFile: null
+    oldFile: !uuid 'e8a4d026daf081c90ef1e86ae8e95172326419aa'
+  /查看报关资料演示.md:
+    newFile: null
+    oldFile: !uuid 'c3813c0c10232f473354daadb11c9df28fa2cb8f'
+gitCommitId: !uuid 'f451fbaf490681d8dbff711eeeef9b0c87a570fd'
 renames: {
   }
-revisionId: 57
+revisionId: 58
