@@ -4,7 +4,7 @@
 
 CRM 的 `WhatsApp` 页面加载仓库内的独立服务 `whatsapp-plugin/`。该目录从已验收的
 `桌面/GoodJob/CRM系统对接` 迁入，保留 Baileys/Meta Provider、PGlite/PostgreSQL、
-AES-256-GCM AuthState、Socket.IO、AI 翻译、测试和部署文档，不使用 CRM 原有的
+AES-256-GCM AuthState、Socket.IO、AI 翻译和测试，不使用 CRM 原有的
 `whatsapp-web.js` 页面作为聊天入口。
 
 首次拉取后分别安装依赖：
@@ -20,8 +20,8 @@ npm run dev
 根目录的 `build` 和 `test` 会同时验证 CRM 与 WhatsApp 插件。
 
 本机迁移数据位于 `whatsapp-plugin/.data/`，其中数据库和 `dev-master.key` 必须成对备份，
-不得提交；生产环境必须按 `whatsapp-plugin/docs/PRODUCTION_DEPLOYMENT.md` 改用 PostgreSQL、
-固定 `SESSION_MASTER_KEY`，并在 CRM 鉴权网关后发布。当前插件是单租户、单实例、私网部署边界。
+不得提交；生产环境必须改用 PostgreSQL、固定 `SESSION_MASTER_KEY`，并在 CRM 鉴权网关后发布。
+当前插件是单租户、单实例、私网部署边界。
 
 第三方组件归属见 `whatsapp-plugin/THIRD_PARTY_NOTICES.md`。
 
@@ -430,7 +430,7 @@ Swagger 文档默认启用，但必须先使用管理员或超级管理员账号
 ## 9. 文件说明
 
 - `frontend/index.html`：Vite 应用页面骨架，业务数据由后端接口加载。
-- `README.md`：产品、功能辩论、架构与页面说明。
+- `README.md`：产品、架构与运行说明。
 
 ## 10. 开源许可证
 
