@@ -2,19 +2,211 @@
 branches: {
   }
 fileChange:
+  /README.md:
+    newFile: !uuid 'c8927238cc703563083edaef983da7c19131ae97'
+    oldFile: !uuid 'afcc5ef3d8a72c067378a872e9538258dd818609'
+  /backend:
+    newFile: !uuid '0b512a0381ff4719c90ab9ad98623962afb38567'
+    oldFile: !uuid '75b8972f53d0f9992b14a5ab981e593b46bd09b0'
+  /backend/package.json:
+    newFile: !uuid 'b6a82075432a468cd4fe3bc30aa222fed410f30a'
+    oldFile: !uuid 'a634915947bd7b681bd1fed24c2348cf343e3198'
+  /backend/src:
+    newFile: !uuid '655c7ce9ad153f208e9a4b12d84680cd5ea51815'
+    oldFile: !uuid '47cab295b032cd50d8ee363ca7ef6b265adfc8c6'
+  /backend/src/agent-api-contracts-test.ts:
+    newFile: !uuid 'ae32b43a9815f69cb91cac649bb156d5ae0da886'
+    oldFile: !uuid '41e4c54a33d1f1174890cbff745539192c3b1921'
+  /backend/src/agent-api-contracts.ts:
+    newFile: !uuid '312802dab6e78a5b3ef3d762a284b2436a2efb23'
+    oldFile: !uuid 'e0f22e6bfaf623425107d57d7d6d98577a787415'
+  /backend/src/agent-api-policy.ts:
+    newFile: !uuid 'f11625c5d9c2d2c812d6c03cc2e2ebc76ca6e051'
+    oldFile: !uuid '6a571dd613943dfae28a33bb501da0d0b9e512f4'
+  /backend/src/data.ts:
+    newFile: !uuid 'cd3fe9283ee12128d8ed6018fe5da7e7d63ffcc0'
+    oldFile: !uuid 'fa4e52faa35534972c877cdac77428ca35cf6b6c'
+  /backend/src/identity-authority-providers-test.ts:
+    newFile: !uuid '51290b262254909b26f7637c4a30bc93d27b6805'
+    oldFile: null
+  /backend/src/lead-providers.ts:
+    newFile: !uuid '9afd9b5dd7b5435ce3090c643d80a5c0d6679cc7'
+    oldFile: !uuid 'e20dcfad1f9eccf1a55292b67854eaefc6c8d494'
+  /backend/src/mysql-store.ts:
+    newFile: !uuid '29821f3ac0f9c812da7d4312ae84a0b291b2ded1'
+    oldFile: !uuid '2325a2ed3e2bf28841e1ef306e2e3d21e6f53985'
+  /backend/src/organization-strong-identity-mysql.ts:
+    newFile: !uuid '9efab66dcce0b6df6ee8136a9835647a8d35c664'
+    oldFile: !uuid '6970a7b264f97cfcefa089875815cd4efe1fbcde'
+  /backend/src/outreach-sequences.ts:
+    newFile: !uuid 'b3941223d13fe5b3557775761b6639f9b7d8915b'
+    oldFile: !uuid 'ee9dd8e42041121c8a10db042e90d755addb8a9a'
+  /backend/src/prospect-candidate-pipeline.ts:
+    newFile: !uuid '94b91c54dbbf9e47289cac3b40dda8b516a6d01d'
+    oldFile: !uuid '54fd915db34bdf7d764e4e57a3bca14cddcdbd62'
+  /backend/src/prospect-coverage-memory.ts:
+    newFile: !uuid 'f25c0d9d4c84225b392d4acdcaf3b8e04f2f7b05'
+    oldFile: !uuid 'baa2893d826d108c52267adfa56bb38a6ff93dea'
+  /backend/src/prospect-identity-authority-profiles.ts:
+    newFile: !uuid '755ba7c49d7a85c38d0559a8b7a365c5b20a4a07'
+    oldFile: null
+  /backend/src/prospect-identity-bootstrap-http-test.ts:
+    newFile: !uuid '835d6ef6b3a250e725101642e6ebfc0a6d13c8f2'
+    oldFile: null
+  /backend/src/prospect-identity-bootstrap-mysql-test.ts:
+    newFile: !uuid 'f330c84f9f49546cd528d25160bee284602a8ec5'
+    oldFile: null
+  /backend/src/prospect-identity-bootstrap-test.ts:
+    newFile: !uuid '58260283bdfb798a9fb601ca4f8c031c7064268a'
+    oldFile: null
+  /backend/src/prospect-identity-bootstrap.ts:
+    newFile: !uuid 'df16df6f12e1af57071ccc3539b42d248e9198e0'
+    oldFile: null
+  /backend/src/prospect-lead-conversion-test.ts:
+    newFile: !uuid 'cdab494bdad8319fcb60e4d354c431de7f053b5f'
+    oldFile: !uuid 'a9eeed4e2a8bfc3063f30070d8f23174666b31c7'
+  /backend/src/prospect-lead-conversion.ts:
+    newFile: !uuid '0886ce765d4b24084e15fcc7a7e55ae29a08e969'
+    oldFile: !uuid '94f68434b624b646f1bff618304e51aa01a279b3'
+  /backend/src/prospect-live-events-test.ts:
+    newFile: !uuid '848678adf4aaf16c1e070797bb64ac5f47071449'
+    oldFile: null
+  /backend/src/prospect-live-events.ts:
+    newFile: !uuid '146366bb1463f7235db4021b779d7b40a609334a'
+    oldFile: null
+  /backend/src/prospect-outreach-eligibility.ts:
+    newFile: !uuid '25c1a1a03f27353316bb71ecdf76fd2cb3779ce1'
+    oldFile: null
+  /backend/src/prospect-outreach-http-test.ts:
+    newFile: !uuid '9277bf864bae179a19a5956a661b0247caefb0a8'
+    oldFile: null
+  /backend/src/prospect-outreach-test.ts:
+    newFile: !uuid '17d85293c11221e19bacf3ce0d3f66e4177ac14d'
+    oldFile: !uuid 'e3223de9c6df4567afc69a97b731a9a1b9234b1d'
+  /backend/src/prospect-outreach.ts:
+    newFile: !uuid 'bb9f85229c13c6bed01b1bfb9f3b2eedb7a547c6'
+    oldFile: !uuid 'fbf469bdf831fbe4da7aac93db17ba340d6b08f5'
+  /backend/src/prospect-qualification-mysql.ts:
+    newFile: !uuid '1c94addf43a721fd38557f905f64b0a0431543a5'
+    oldFile: !uuid '4e2de7338cb0027dcf82f50aced3f65ef71123a7'
+  /backend/src/prospect-qualification-test.ts:
+    newFile: !uuid '5d956d6f0c95f594c33427c38fd76a4f8b83d7cf'
+    oldFile: !uuid '816cf6e1d913efdf4abc65a6c582cad074e0face'
+  /backend/src/prospect-qualification-workflow-test.ts:
+    newFile: !uuid '79057c781b83e08979205e4b8e015637f36cb850'
+    oldFile: null
+  /backend/src/prospect-qualification-workflow.ts:
+    newFile: !uuid '9863c1676d12f4ae11cbd4c42c44661466730b8f'
+    oldFile: null
+  /backend/src/prospect-qualification.ts:
+    newFile: !uuid '148e688fcb6ce68d616ce43d1a2b0ecc4c7c820b'
+    oldFile: !uuid 'b34b2bafc7f90846df6066897c1ec1b32c750020'
+  /backend/src/prospect-runs-test.ts:
+    newFile: !uuid '823231045bc021f0438b5b7c1d361bab016dba7b'
+    oldFile: !uuid '64a2e8867f05cab690a90bb83be237f23dc6a747'
+  /backend/src/prospect-runs.ts:
+    newFile: !uuid 'a38a2ba5537d5813011d96471e517353cb6de237'
+    oldFile: !uuid '6f1623e383d6096a40b9c1b1ae0a80d8a71c7e87'
+  /backend/src/prospect-scorecard.ts:
+    newFile: !uuid '7a3b34307944fcdaf1ce817cd3ffa5936784eb91'
+    oldFile: null
+  /backend/src/prospect-search-planner.ts:
+    newFile: !uuid '1a25fceda552d4f963eb5459aca29eee87547cab'
+    oldFile: !uuid '701f9cb18ffa660e4182aa814074e97bed9e4047'
+  /backend/src/prospect-strategies.ts:
+    newFile: !uuid '9863de62d4de8d6f6fc65c820b4aa79260231f8b'
+    oldFile: !uuid 'bbb4beb897a87e8fd46e306feb89eeb009315bf1'
+  /backend/src/prospect-super-search-test.ts:
+    newFile: !uuid '74bb002d65337dbbd1af8c390f701096b8a8645e'
+    oldFile: !uuid 'd18f5470017f04246c8d753c6b3039917b4350ca'
+  /backend/src/prospect-super-search.ts:
+    newFile: !uuid '7d823a9a7c0def88eef6ec952cc639d946039415'
+    oldFile: !uuid '80643d12576d1e6388cf8badbbb14fbbf9ec56fa'
+  /backend/src/prospect-verification-test.ts:
+    newFile: !uuid '5c50428b335c7f581e317e65bded04d2dfca733a'
+    oldFile: !uuid 'ee2ef09b9f18a45f403622f213ec5b92e0a6ab41'
+  /backend/src/prospect-verification.ts:
+    newFile: !uuid '598b92e89df0b121b0bcf17c2a9870ff23b25749'
+    oldFile: !uuid '4ac457b6cd6cb9be38d35238ac14a43a6dcb24c5'
+  /backend/src/prospect-worker-test.ts:
+    newFile: !uuid '7c7a64f97847242b8a5cecfcf4863a787298b36e'
+    oldFile: !uuid 'd55e47ba9f909ef9ff772bb268b9f6c530a2b230'
+  /backend/src/provider-catalog.ts:
+    newFile: !uuid 'aa1c75139f07afdbdd71ecf5cb041218dc276851'
+    oldFile: !uuid '19cf23e6f5c6f77080b737d7219993898861669e'
+  /backend/src/provider-contract.ts:
+    newFile: !uuid '0404c0e34ade5ed4b6f19148113d1c4f0ad4499f'
+    oldFile: !uuid 'e5a11f51fafb7e7559694ae3501b19902be661ad'
+  /backend/src/provider-http-client.ts:
+    newFile: !uuid '2eb5c82519fc086b019b02df142a413c4783cf77'
+    oldFile: !uuid '73f4be5d77757a302850274636fe1b62687aa860'
+  /backend/src/public-company-providers.ts:
+    newFile: !uuid 'b0ee785274b3d2067a4af71805100e8faed7fd32'
+    oldFile: !uuid '03c1da7fc71f8edc48832e4b010c4035bc5cab70'
+  /backend/src/sec-edgar-provider-test.ts:
+    newFile: !uuid '668d9ee141f8504ae9071040b10471b3e714ab15'
+    oldFile: !uuid '3fdd348abf27a89d2542d7d17c1421f299e66453'
+  /backend/src/sec-edgar-provider.ts:
+    newFile: !uuid '8993f301dccab7727ffcc8695a58251483750671'
+    oldFile: !uuid '3d2221270239ce944e62de9183a71c6de71f16a8'
+  /backend/src/self-test.ts:
+    newFile: !uuid 'ad6944349cd5849c0d0f221979e21ea4fdaf8c19'
+    oldFile: !uuid '80a14fe963ebfa619288ec0c29914ea5f3c8a542'
+  /backend/src/server.ts:
+    newFile: !uuid '264779e6d1739c6c25f218e6dc0cf90206876856'
+    oldFile: !uuid 'fa1672d297a520d15c0fd6ffae0d92926d8c705c'
+  /backend/src/store.ts:
+    newFile: !uuid '1c4181f10ab0b32f1aa0b724dbf035c831964624'
+    oldFile: !uuid '72a75cf2646dc799ceeb402ec33cc8817f231c5d'
+  /backend/src/types.ts:
+    newFile: !uuid 'bed01333ee286e414ed7078f555cb9d91e30b993'
+    oldFile: !uuid '7e01bea4245f7f6b15bc3d6f768279b3af29d0d8'
+  /backend/src/website-probe-http-test.ts:
+    newFile: !uuid 'd5a7732baa5be2af627d7b736f4fd060de52c9a7'
+    oldFile: null
+  /backend/src/website-probe-test.ts:
+    newFile: !uuid '1385b10735451f4a6043e08ad950e2dd9ad52228'
+    oldFile: null
+  /backend/src/website-probe.ts:
+    newFile: !uuid '5be3f2ddf8667dfc3a5c4c9a490f5559d075dced'
+    oldFile: null
   /frontend:
-    newFile: !uuid 'd0be1bd90101d1ef009ef13bbdfea6db076d3ab0'
-    oldFile: !uuid '876235fdfd1672b374ce9decc7c52b9ceb976216'
+    newFile: !uuid '5582c9028342c9b1c60f3a1e9faf17930cf939b2'
+    oldFile: !uuid 'd0be1bd90101d1ef009ef13bbdfea6db076d3ab0'
   /frontend/index.html:
-    newFile: !uuid '9bef38e2b72f960997a0a42c2ffebf894db3b584'
-    oldFile: !uuid '4718d179334707db2ac70f7fdfe81bc349f6cc7e'
+    newFile: !uuid '9011d0885c00d5cbffb08441244efc8617558cea'
+    oldFile: !uuid '9bef38e2b72f960997a0a42c2ffebf894db3b584'
   /frontend/public:
-    newFile: !uuid 'dbec51cce998bc211336abd18f199de8745753f2'
-    oldFile: !uuid '9d5ec4705477f8664200bb6b70f4b65ad8e62ca3'
+    newFile: !uuid '9d5ec4705477f8664200bb6b70f4b65ad8e62ca3'
+    oldFile: !uuid 'dbec51cce998bc211336abd18f199de8745753f2'
   /frontend/public/product-config.json:
-    newFile: !uuid 'f789f8b4e9dad1c4141d42efe6439d83e5ac34de'
-    oldFile: !uuid '681dbb2a03fbf2fbbd85178d8bc4d5737037be19'
-gitCommitId: !uuid 'f84baa87af307cb2bd54943e786607af05e806be'
+    newFile: !uuid '681dbb2a03fbf2fbbd85178d8bc4d5737037be19'
+    oldFile: !uuid 'f789f8b4e9dad1c4141d42efe6439d83e5ac34de'
+  /frontend/src:
+    newFile: !uuid '81eef303a0070c56257c2fa8f71a1dca4acd6372'
+    oldFile: !uuid '12f5f544754ecf253723647c0784e196bf7802cc'
+  /frontend/src/lead-source-selection.ts:
+    newFile: !uuid '6929ac621e831793540a5e9c0f2eb2efdf609598'
+    oldFile: !uuid '9323ed897e3e7de30ea9c2ffcd51582ad37de693'
+  /frontend/src/prototype-api.ts:
+    newFile: !uuid 'a22fe44f9bfa58bbd8d53277ec847de5b42adcf9'
+    oldFile: !uuid 'f9b2e806946ad5bf993aa2155eaf2b54673da040'
+  /frontend/src/self-test.ts:
+    newFile: !uuid '75991534a81c0ac089f08afdc59d8fa0965e37df'
+    oldFile: !uuid 'f6a0c27cbdd8321cbb2f1881ddf97813cb0a25e8'
+  /frontend/tests:
+    newFile: !uuid 'd86cbcd5fc518cf5540a703c1ea6394995205820'
+    oldFile: !uuid '9483c116f54db8f638880681f767161b26ac1dfa'
+  /frontend/tests/crm.spec.ts:
+    newFile: !uuid 'd70fd1f7e8f395e5f427a04948620b87c589bfb9'
+    oldFile: !uuid '345b6f3ba51da27cff43455affe1d1ca64ac18c4'
+  /frontend/tests/prospect-identity-bootstrap.spec.ts:
+    newFile: !uuid '8d8b1dc8e4ffdea3399439f8f7b9760320caecb1'
+    oldFile: null
+  /package-lock.json:
+    newFile: !uuid '86df07668671a73b0d8e23294176036aba62cce2'
+    oldFile: !uuid '14a27f6daa1db5de7290a3c798c76e023bce2e1e'
+gitCommitId: !uuid 'f3f3dfa56ec773782c01b21c06b7de7b33729712'
 renames: {
   }
-revisionId: 59
+revisionId: 60
