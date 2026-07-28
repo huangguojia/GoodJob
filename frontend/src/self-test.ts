@@ -51,8 +51,8 @@ const required = [
   "incrementalStats",
   "净新增 / 命中",
   "历史未变化",
-  "部分完成",
-  "执行失败",
+  "已结束",
+  "事实事件同步",
   "lead-job-source-list",
   "搜客任务失败",
   "加入线索失败",
@@ -70,7 +70,8 @@ const required = [
   "data-ls-import",
   "返回并导入链接",
   "leadFinderDetailSaveButton",
-  "leadFinderDetailMarkButton",
+  "leadFinderDetailQualificationButton",
+  "stageCurrency",
   "来源证据",
   "sourceEvidence",
   "ai_search",
@@ -113,7 +114,20 @@ const required = [
   "leadTaskCandidates",
   "leadTaskSyncCandidates",
   "纳入候选池",
-  "可加入线索的候选"
+  "可加入线索的候选",
+  "leadFinderLiveOverview",
+  "leadFinderCleaningRows",
+  "最近一次执行",
+  "最多展示 100 条管线处置记录",
+  "来源解析阶段的数据无效与页内重复仅提供汇总",
+  "record.sourceRecordId",
+  "record.sourceCompany",
+  "record.sourceDomain",
+  "data-prospect-date-filter=\"today\"",
+  "prospectJoinedFrom",
+  "prospectSortSelect",
+  "加入候选池时间",
+  "prospect-mobile-detail-open"
 ];
 
 for (const token of required) {
@@ -123,6 +137,37 @@ for (const token of required) {
 assert.equal(prototype.includes("data-view=\"inbox\""), false, "消息通知不应出现在左侧导航");
 assert.equal(prototype.includes("写站内信"), false, "通知中心不应提供人工写信入口");
 assert.equal(apiLayer.includes("openInternalMessageComposeModal"), false, "不应保留旧写信交互");
+assert.equal(apiLayer.includes("leadFinderDetailMarkButton"), false, "自动获客不应保留标记可联系的授权语义");
+const standardRunStatusContract = apiLayer.slice(
+  apiLayer.indexOf("function prospectRunStatusLabel"),
+  apiLayer.indexOf("function prospectRunActivityLabel")
+);
+for (const status of ["cancelled", "succeeded", "succeeded_empty", "partial_success", "failed"]) {
+  assert.match(
+    standardRunStatusContract,
+    new RegExp(`${status}: \\"已结束\\"`),
+    `标准搜客终态 ${status} 的任务卡必须统一显示已结束`
+  );
+}
+const superSearchStatusContract = apiLayer.slice(
+  apiLayer.indexOf("function superSearchStatusLabel"),
+  apiLayer.indexOf("function superSearchThemeLabel")
+);
+for (const status of ["cancelled", "succeeded", "partial_success", "failed"]) {
+  assert.match(
+    superSearchStatusContract,
+    new RegExp(`${status}: \\"已结束\\"`),
+    `超级搜客终态 ${status} 的任务卡必须统一显示已结束`
+  );
+}
+assert.match(apiLayer, /来源返回 \/ 候选池 \/ RRQ \/ VQA/, "标准和超级搜客详情必须展示统一四段漏斗");
+assert.match(apiLayer, /partial_success: "部分成功"/, "部分成功只能保留在任务详情验收结论中");
+assert.match(apiLayer, /failed: "失败"/, "失败只能保留在任务详情验收结论中");
+assert.equal(apiLayer.includes("部分完成"), false, "任务与来源状态不得使用容易误解的“部分完成”提示");
+assert.match(apiLayer, /function localDateInputBoundary[\s\S]*new Date\(Number\(match\[1\]\), Number\(match\[2\]\) - 1, Number\(match\[3\]\)\)/, "加入时间必须按本地日期构造，不能把日期输入误解析为 UTC");
+assert.match(apiLayer, /localDateInputBoundary\(state\.prospectJoinedTo, 1\)/, "自定义结束日期必须使用次日零点作为排他边界");
+assert.match(apiLayer, /function syncLeadFinderLiveTransport[\s\S]*startLeadTaskEventStream/, "自动搜客主界面与详情必须共用实时任务传输入口");
+assert.match(apiLayer, /\["merged", "suppressed", "rejected"\]\.includes\(record\.outcome\)/, "清洗去除视图只能显示真实的归并、抑制与拒绝记录");
 assert.match(prototype, /data-view="settings" data-scope="manager"/, "业务员导航中必须隐藏系统设置");
 assert.match(prototype, /id="settings" data-scope="manager"/, "业务员视图中必须隐藏系统设置页面");
 assert.match(prototype, /data-view="database-maintenance" data-scope="admin"/, "数据库维护导航必须只向管理员显示");
@@ -150,7 +195,7 @@ assert.deepEqual(
     { id: "gleif", ready: true, enabled: true, accessMode: "api", recommended: true },
     { id: "wikidata", ready: true, enabled: false, accessMode: "api", recommended: true }
   ], [], false),
-  { sources: ["gleif"], blocked: [], requiresSelection: false }
+  { sources: ["ai_search", "gleif"], blocked: [], requiresSelection: false }
 );
 assert.deepEqual(
   resolveLeadSearchSources([

@@ -56,6 +56,11 @@ import {
 import {
   prospectRunExecutionSnapshotHash
 } from "./prospect-runs.js";
+import {
+  projectProspectLiveEvents,
+  type ProspectRunFeedReadInput,
+  type ProspectRunFeedReadResult
+} from "./prospect-live-events.js";
 import { validateProspectSearchQueryPlan } from "./prospect-search-planner.js";
 import {
   prospectStrategySourcePositionIdentityHash
@@ -419,6 +424,7 @@ async function persistProspectExecutionState(
     connection,
     store.providerRequestLogs
   );
+  await appendProspectRunFeedRows(connection, store);
 }
 
 export async function createMysqlStore(
@@ -844,6 +850,7 @@ export async function createMysqlStore(
         connection,
         processingStates
       );
+      await appendProspectRunFeedRows(connection, store);
       await connection.commit();
       transactionStarted = false;
       return applied.value;
@@ -953,6 +960,8 @@ export async function createMysqlStore(
   });
   let reloadProspectRuns!: () => Promise<void>;
   const readBarrier = () => reloadProspectRuns();
+  const readProspectRunFeed = (input: ProspectRunFeedReadInput) =>
+    readProspectRunFeedMysql(pool, input);
   let closed = false;
   const close = () => enqueuePersistence(async () => {
     if (closed) return;
@@ -1375,6 +1384,12 @@ export async function createMysqlStore(
           loadedProspectCoverageState.prospectCoverageEvents,
         prospectEvidence:
           loadedProspectQualificationState.prospectEvidence,
+        prospectCandidateQualificationRevisions:
+          loadedProspectQualificationState
+            .prospectCandidateQualificationRevisions,
+        prospectCandidateQualificationCheckpoints:
+          loadedProspectQualificationState
+            .prospectCandidateQualificationCheckpoints,
         companyVerificationSnapshots:
           loadedProspectQualificationState.companyVerificationSnapshots,
         prospectIcpPolicySnapshots:
@@ -1441,6 +1456,7 @@ export async function createMysqlStore(
         reloadProspectCoverageTeam,
         applyProspectQualification,
         reloadProspectQualificationTeam,
+        readProspectRunFeed,
         readBarrier,
         close
   };
@@ -1639,10 +1655,22 @@ export async function createMysqlStore(
   );
   if (recoveredMarketAnalysisJobs) await store.persist();
 
+  const feedConnection = await pool.getConnection();
+  try {
+    await feedConnection.beginTransaction();
+    await appendProspectRunFeedRows(feedConnection, store);
+    await feedConnection.commit();
+  } catch (error) {
+    await feedConnection.rollback();
+    throw error;
+  } finally {
+    feedConnection.release();
+  }
+
   return store;
 }
 
-export const GOODJOB_MYSQL_SCHEMA_VERSION = "1.2.1-003";
+export const GOODJOB_MYSQL_SCHEMA_VERSION = "1.2.1-004";
 
 const MIGRATION_PROTECTED_TABLES = ["users", "customers", "leads", "deals"] as const;
 
@@ -2309,6 +2337,7 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "website_opportunities", "source_label", "VARCHAR(80) DEFAULT ''");
   await ensureColumn(pool, "website_opportunities", "source_evidence_json", "JSON");
   await ensureColumn(pool, "website_opportunities", "verification_report_json", "JSON");
+  await ensureColumn(pool, "website_opportunities", "scorecard_json", "JSON");
   await ensureColumn(pool, "website_opportunities", "confidence", "INT NULL");
   await ensureColumn(pool, "website_opportunities", "last_development_email_at", "DATETIME NULL");
   await ensureColumn(pool, "website_opportunities", "last_development_email_subject", "VARCHAR(255) DEFAULT ''");
@@ -2327,6 +2356,8 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "website_opportunities", "next_follow_at", "VARCHAR(40) DEFAULT ''");
   await ensureColumn(pool, "website_opportunities", "outreach_state", "VARCHAR(30) DEFAULT 'uncontacted'");
   await ensureColumn(pool, "website_opportunities", "invalid_contact_channels_json", "JSON");
+  await ensureColumn(pool, "website_opportunities", "website_probe_attempts_json", "JSON");
+  await ensureColumn(pool, "website_opportunities", "identity_bootstrap_attempts_json", "JSON");
   await pool.query(`CREATE TABLE IF NOT EXISTS prospect_touchpoints (
     id VARCHAR(64) PRIMARY KEY,
     team_id VARCHAR(64) NOT NULL,
@@ -3137,6 +3168,32 @@ async function ensureSchema(pool: mysql.Pool) {
       'cancel_requested','cancelled','completed','failed'
     )`
   );
+  await pool.query(`CREATE TABLE IF NOT EXISTS prospect_run_feed_events (
+    offset_no BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    event_key VARCHAR(255) NOT NULL,
+    team_id VARCHAR(64) NOT NULL,
+    owner_id VARCHAR(64) NOT NULL,
+    run_id VARCHAR(80) NOT NULL,
+    event_type VARCHAR(80) NOT NULL,
+    stage VARCHAR(80) NOT NULL,
+    entity_type VARCHAR(80) NOT NULL,
+    entity_id VARCHAR(255) NOT NULL,
+    event_status VARCHAR(80) NOT NULL,
+    progress SMALLINT NULL,
+    metrics_json JSON NOT NULL,
+    failure_code VARCHAR(100) NOT NULL DEFAULT '',
+    retryable BOOLEAN NOT NULL DEFAULT FALSE,
+    message TEXT NOT NULL,
+    occurred_at DATETIME(3) NOT NULL,
+    UNIQUE KEY uk_prospect_run_feed_event_key(event_key),
+    INDEX idx_prospect_run_feed_cursor(team_id, run_id, offset_no),
+    CONSTRAINT fk_prospect_run_feed_run
+      FOREIGN KEY (team_id, run_id)
+      REFERENCES prospect_search_runs(team_id, id)
+      ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT chk_prospect_run_feed_progress
+      CHECK (progress IS NULL OR (progress >= 0 AND progress <= 100))
+  )`);
   await pool.query(`CREATE TABLE IF NOT EXISTS market_trade_observations (
     id VARCHAR(80) PRIMARY KEY,
     team_id VARCHAR(64) NOT NULL,
@@ -4474,6 +4531,10 @@ async function ensureSchema(pool: mysql.Pool) {
     processing_status VARCHAR(20) NOT NULL,
     failure_code VARCHAR(100) NOT NULL DEFAULT '',
     candidate_id VARCHAR(90) DEFAULT NULL,
+    source_record_id VARCHAR(255) NOT NULL DEFAULT '',
+    source_company VARCHAR(200) NOT NULL DEFAULT '',
+    source_country VARCHAR(120) NOT NULL DEFAULT '',
+    source_domain VARCHAR(255) NOT NULL DEFAULT '',
     processed_at DATETIME(3) NOT NULL,
     updated_at DATETIME(3) NOT NULL,
     UNIQUE KEY uk_pcp_team_owner_hit(team_id, owner_id, hit_id),
@@ -4487,6 +4548,10 @@ async function ensureSchema(pool: mysql.Pool) {
     CONSTRAINT chk_pcp_status
       CHECK (processing_status IN ('completed', 'rejected'))
   )`);
+  await ensureColumn(pool, "prospect_candidate_processing", "source_record_id", "VARCHAR(255) NOT NULL DEFAULT ''");
+  await ensureColumn(pool, "prospect_candidate_processing", "source_company", "VARCHAR(200) NOT NULL DEFAULT ''");
+  await ensureColumn(pool, "prospect_candidate_processing", "source_country", "VARCHAR(120) NOT NULL DEFAULT ''");
+  await ensureColumn(pool, "prospect_candidate_processing", "source_domain", "VARCHAR(255) NOT NULL DEFAULT ''");
   await pool.query(`CREATE TABLE IF NOT EXISTS prospect_execution_events (
     id VARCHAR(90) PRIMARY KEY,
     team_id VARCHAR(64) NOT NULL,
@@ -5768,6 +5833,11 @@ async function loadWebsiteOpportunities(pool: MysqlQuerySource): Promise<Website
         ? JSON.parse(row.verification_report_json)
         : row.verification_report_json)
       : undefined,
+    scorecard: row.scorecard_json
+      ? (typeof row.scorecard_json === "string"
+        ? JSON.parse(row.scorecard_json)
+        : row.scorecard_json)
+      : undefined,
     confidence: row.confidence === undefined || row.confidence === null ? undefined : Number(row.confidence),
     lastDevelopmentEmailAt: row.last_development_email_at instanceof Date ? row.last_development_email_at.toISOString() : row.last_development_email_at || "",
     lastDevelopmentEmailSubject: row.last_development_email_subject || "",
@@ -5790,6 +5860,16 @@ async function loadWebsiteOpportunities(pool: MysqlQuerySource): Promise<Website
         ? JSON.parse(row.invalid_contact_channels_json)
         : row.invalid_contact_channels_json)
       : [],
+    websiteProbeAttempts: row.website_probe_attempts_json
+      ? (typeof row.website_probe_attempts_json === "string"
+        ? JSON.parse(row.website_probe_attempts_json)
+        : row.website_probe_attempts_json)
+      : [],
+    identityBootstrapAttempts: row.identity_bootstrap_attempts_json
+      ? (typeof row.identity_bootstrap_attempts_json === "string"
+        ? JSON.parse(row.identity_bootstrap_attempts_json)
+        : row.identity_bootstrap_attempts_json)
+      : [],
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at
   }));
 }
@@ -5810,6 +5890,10 @@ async function loadProspectCandidateProcessingStates(
     status: row.processing_status,
     failureCode: row.failure_code || "",
     candidateId: row.candidate_id || undefined,
+    sourceRecordId: row.source_record_id || undefined,
+    sourceCompany: row.source_company || undefined,
+    sourceCountry: row.source_country || undefined,
+    sourceDomain: row.source_domain || undefined,
     processedAt: mysqlIsoDate(row.processed_at),
     updatedAt: mysqlIsoDate(row.updated_at)
   }));
@@ -10087,6 +10171,7 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
         ],
         "(id,team_id,owner_id,campaign_id,strategy_id,mission_status,revision_no,mission_json,rounds_json,events_json,created_at,updated_at)"
       );
+      await appendProspectRunFeedRows(connection, store);
 		    await replaceRows(connection, "market_trade_observations", store.marketTradeObservations, (item) => [item.id, item.teamId, item.ownerId, item.campaignId, item.providerId, item.reporterCountry, item.partnerCountry, item.reporterCode || "", item.partnerCode || "", item.tradeFlow, item.classification, item.commodityCode, item.commodityDescription || "", item.period, item.tradeValueUsd, item.netWeightKg, item.quantity, item.quantityUnit || "", item.isAggregate, item.suppressed, JSON.stringify(item.statusFlags || []), item.rawRecordId, item.payloadHash, item.adapterVersion, item.sourceRevision || "", mysqlDate(item.observedAt), mysqlDate(item.createdAt)], "(id,team_id,owner_id,campaign_id,provider_id,reporter_country,partner_country,reporter_code,partner_code,trade_flow,classification,commodity_code,commodity_description,period_value,trade_value_usd,net_weight_kg,quantity_value,quantity_unit,is_aggregate,suppressed,status_flags_json,raw_record_id,payload_hash,adapter_version,source_revision,observed_at,created_at)");
       await appendMarketOpportunityRows(connection, store);
       await syncAgentJobRows(
@@ -10255,6 +10340,7 @@ async function persistWebsiteOpportunityRows(
       item.verificationReport
         ? JSON.stringify(item.verificationReport)
         : null,
+      item.scorecard ? JSON.stringify(item.scorecard) : null,
       item.confidence ?? null,
       item.lastDevelopmentEmailAt
         ? mysqlDate(item.lastDevelopmentEmailAt)
@@ -10275,9 +10361,11 @@ async function persistWebsiteOpportunityRows(
       item.nextFollowAt || "",
       item.outreachState || "uncontacted",
       JSON.stringify(item.invalidContactChannels || []),
+      JSON.stringify(item.websiteProbeAttempts || []),
+      JSON.stringify(item.identityBootstrapAttempts || []),
       mysqlDate(item.createdAt)
     ],
-    "(id,company,business,country,website,contact,contact_info,description,owner_id,team_id,status,customer_id,deal_id,lead_id,parse_mode,source,source_label,source_evidence_json,verification_report_json,confidence,last_development_email_at,last_development_email_subject,last_development_email_to,verified_at,status_changed_at,excluded_reason,tenant_prospect_id,organization_id,coverage_classification,coverage_queue_state,coverage_reason_code,last_touchpoint_at,last_touchpoint_channel,last_reply_classification,next_follow_at,outreach_state,invalid_contact_channels_json,created_at)"
+    "(id,company,business,country,website,contact,contact_info,description,owner_id,team_id,status,customer_id,deal_id,lead_id,parse_mode,source,source_label,source_evidence_json,verification_report_json,scorecard_json,confidence,last_development_email_at,last_development_email_subject,last_development_email_to,verified_at,status_changed_at,excluded_reason,tenant_prospect_id,organization_id,coverage_classification,coverage_queue_state,coverage_reason_code,last_touchpoint_at,last_touchpoint_channel,last_reply_classification,next_follow_at,outreach_state,invalid_contact_channels_json,website_probe_attempts_json,identity_bootstrap_attempts_json,created_at)"
   );
 }
 
@@ -10315,11 +10403,16 @@ async function persistProspectCandidateProcessingStates(
         item.status,
         item.failureCode || "",
         item.candidateId || null,
+        item.sourceRecordId || "",
+        item.sourceCompany || "",
+        item.sourceCountry || "",
+        item.sourceDomain || "",
         mysqlDate(item.processedAt),
         mysqlDate(item.updatedAt)
       ],
       `(hit_id,team_id,owner_id,run_id,ledger_id,processing_status,
-        failure_code,candidate_id,processed_at,updated_at)`
+        failure_code,candidate_id,source_record_id,source_company,
+        source_country,source_domain,processed_at,updated_at)`
     );
   } catch (error) {
     if (isMysqlDuplicateKeyError(error)) {
@@ -10368,6 +10461,140 @@ async function insertRows<T>(
     `INSERT INTO ${table} ${columns} VALUES ${placeholders}`,
     mapped.flat()
   );
+}
+
+async function appendProspectRunFeedRows(
+  connection: mysql.PoolConnection,
+  store: CrmStore
+) {
+  const drafts = new Map<string, {
+    eventKey: string;
+    teamId: string;
+    ownerId: string;
+    runId: string;
+    eventType: string;
+    stage: string;
+    entityType: string;
+    entityId: string;
+    status: string;
+    progress: number | null;
+    metrics: Record<string, number | string | boolean | null>;
+    failureCode: string;
+    retryable: boolean;
+    message: string;
+    occurredAt: string;
+  }>();
+  for (const run of store.prospectSearchRuns) {
+    for (const event of projectProspectLiveEvents(store, run)) {
+      drafts.set(event.id, {
+        eventKey: event.id,
+        teamId: run.teamId,
+        ownerId: run.ownerId,
+        runId: run.id,
+        eventType: event.type,
+        stage: event.stage,
+        entityType: event.entityType,
+        entityId: event.entityId,
+        status: event.status,
+        progress: event.progress,
+        metrics: event.metrics,
+        failureCode: event.failureCode,
+        retryable: event.retryable,
+        message: event.message,
+        occurredAt: event.occurredAt
+      });
+    }
+  }
+  const rowsToInsert = [...drafts.values()];
+  for (let start = 0; start < rowsToInsert.length; start += 250) {
+    const batch = rowsToInsert.slice(start, start + 250);
+    if (!batch.length) continue;
+    const values = batch.map((item) => [
+      item.eventKey,
+      item.teamId,
+      item.ownerId,
+      item.runId,
+      item.eventType,
+      item.stage,
+      item.entityType,
+      item.entityId,
+      item.status,
+      item.progress,
+      JSON.stringify(item.metrics),
+      item.failureCode,
+      item.retryable,
+      item.message,
+      mysqlDate(item.occurredAt)
+    ]);
+    const placeholders = values.map((row) =>
+      `(${row.map(() => "?").join(",")})`
+    ).join(",");
+    await connection.query(
+      `INSERT IGNORE INTO prospect_run_feed_events
+        (event_key,team_id,owner_id,run_id,event_type,stage,entity_type,
+         entity_id,event_status,progress,metrics_json,failure_code,retryable,
+         message,occurred_at)
+       VALUES ${placeholders}`,
+      values.flat()
+    );
+  }
+}
+
+async function readProspectRunFeedMysql(
+  pool: mysql.Pool,
+  input: ProspectRunFeedReadInput
+): Promise<ProspectRunFeedReadResult> {
+  const after = /^\d+$/u.test(input.after || "0") ? input.after || "0" : "0";
+  const limit = Math.max(1, Math.min(500, input.limit));
+  const [eventResult, runResult] = await Promise.all([
+    pool.query(
+      `SELECT offset_no,event_type,stage,entity_type,entity_id,event_status,
+              progress,metrics_json,failure_code,retryable,message,occurred_at
+       FROM prospect_run_feed_events
+       WHERE team_id = ? AND run_id = ? AND offset_no > ?
+       ORDER BY offset_no
+       LIMIT ?`,
+      [input.teamId, input.runId, after, limit]
+    ),
+    pool.query(
+      `SELECT status FROM prospect_search_runs
+       WHERE team_id = ? AND id = ? LIMIT 1`,
+      [input.teamId, input.runId]
+    )
+  ]);
+  const eventRows = eventResult[0] as Array<Record<string, any>>;
+  const runRows = runResult[0] as Array<{ status: string }>;
+  return {
+    events: eventRows.map((row) => {
+      const offset = String(row.offset_no);
+      const numericSequence = Number(offset);
+      return {
+        id: offset,
+        runId: input.runId,
+        sequence: Number.isSafeInteger(numericSequence)
+          ? numericSequence
+          : Number.MAX_SAFE_INTEGER,
+        occurredAt: mysqlIsoDate(row.occurred_at),
+        type: row.event_type,
+        stage: row.stage,
+        entityType: row.entity_type,
+        entityId: row.entity_id,
+        status: row.event_status,
+        progress: row.progress === null ? null : Number(row.progress),
+        metrics: mysqlJson(row.metrics_json) as Record<string, number | string | boolean | null>,
+        failureCode: row.failure_code || "",
+        retryable: Boolean(row.retryable),
+        message: row.message || ""
+      };
+    }),
+    terminal: [
+      "cancelled",
+      "succeeded",
+      "succeeded_empty",
+      "partial_success",
+      "failed"
+    ].includes(runRows[0]?.status || "")
+  };
 }
 
 async function appendProviderRequestLogRows(

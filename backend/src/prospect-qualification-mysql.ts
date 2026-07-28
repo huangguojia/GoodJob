@@ -23,6 +23,8 @@ import type {
 import type { CrmStore } from "./store.js";
 import type {
   CompanyVerificationSnapshot,
+  ProspectCandidateQualificationCheckpoint,
+  ProspectCandidateQualificationRevision,
   ProspectContact,
   ProspectContactChannel,
   ProspectContactVerificationSnapshot,
@@ -48,6 +50,8 @@ type QualificationSecrets = {
 
 type QualificationRecord =
   | ProspectEvidence
+  | ProspectCandidateQualificationRevision
+  | ProspectCandidateQualificationCheckpoint
   | CompanyVerificationSnapshot
   | ProspectIcpPolicySnapshot
   | ProspectIcpAssessmentSnapshot
@@ -59,6 +63,10 @@ type QualificationRecord =
 
 export type ProspectQualificationState = {
   prospectEvidence: ProspectEvidence[];
+  prospectCandidateQualificationRevisions:
+    ProspectCandidateQualificationRevision[];
+  prospectCandidateQualificationCheckpoints:
+    ProspectCandidateQualificationCheckpoint[];
   companyVerificationSnapshots: CompanyVerificationSnapshot[];
   prospectIcpPolicySnapshots: ProspectIcpPolicySnapshot[];
   prospectIcpAssessmentSnapshots: ProspectIcpAssessmentSnapshot[];
@@ -72,6 +80,8 @@ export type ProspectQualificationState = {
 
 const EMPTY_STATE: ProspectQualificationState = {
   prospectEvidence: [],
+  prospectCandidateQualificationRevisions: [],
+  prospectCandidateQualificationCheckpoints: [],
   companyVerificationSnapshots: [],
   prospectIcpPolicySnapshots: [],
   prospectIcpAssessmentSnapshots: [],
@@ -392,6 +402,12 @@ function recordTypeRows(
   switch (arrayName) {
     case "prospectEvidence":
       return "kind" in record && "field" in record;
+    case "prospectCandidateQualificationRevisions":
+      return "candidateId" in record && "changedFields" in record
+        && "beforeBasisHash" in record;
+    case "prospectCandidateQualificationCheckpoints":
+      return "candidateId" in record && "stage" in record
+        && "sourceFactId" in record;
     case "companyVerificationSnapshots":
       return "status" in record && "authorityCodes" in record
         && "validUntil" in record;
@@ -662,6 +678,10 @@ export async function applyProspectQualificationCommandMysql(
 function stateFromStore(store: CrmStore): ProspectQualificationState {
   return {
     prospectEvidence: store.prospectEvidence,
+    prospectCandidateQualificationRevisions:
+      store.prospectCandidateQualificationRevisions,
+    prospectCandidateQualificationCheckpoints:
+      store.prospectCandidateQualificationCheckpoints,
     companyVerificationSnapshots: store.companyVerificationSnapshots,
     prospectIcpPolicySnapshots: store.prospectIcpPolicySnapshots,
     prospectIcpAssessmentSnapshots: store.prospectIcpAssessmentSnapshots,

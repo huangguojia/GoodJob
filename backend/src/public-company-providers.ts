@@ -36,6 +36,20 @@ function identityUsage(label: string) {
   return freeProcurementUsage(label);
 }
 
+function exactSiren(query: NormalizedProviderQuery) {
+  const values = [
+    ...query.productKeywords,
+    ...query.industries,
+    ...query.customerTypes,
+    query.goal
+  ];
+  for (const value of values) {
+    const normalized = value.trim().replace(/^SIREN\s*:?\s*/iu, "").replace(/\s+/gu, "");
+    if (/^\d{9}$/u.test(normalized)) return normalized;
+  }
+  return null;
+}
+
 const FRANCE_ALIASES = new Set(["france", "french", "法国"]);
 const FRANCE_HOST = "recherche-entreprises.api.gouv.fr";
 const FRANCE_BASE_URL = `https://${FRANCE_HOST}`;
@@ -68,7 +82,7 @@ const franceResponseSchema = z.object({
 export const FR_COMPANY_SEARCH_PROVIDER = defineProvider({
   id: "fr_company_search",
   name: "法国企业名录",
-  adapterVersion: "1.0.0",
+  adapterVersion: "1.1.0",
   tier: "free",
   category: "company",
   requiresKey: false,
@@ -88,7 +102,8 @@ export const FR_COMPANY_SEARCH_PROVIDER = defineProvider({
     if (!targetsCountry(query.countries, FRANCE_ALIASES)) {
       return skippedPage("目标国家不是法国，本次已自动跳过法国企业名录", "法国官方企业名录");
     }
-    const terms = procurementSearchTerms(query);
+    const siren = exactSiren(query);
+    const terms = siren ? [siren] : procurementSearchTerms(query);
     if (!terms.length) {
       return skippedPage("法国企业名录需要产品、行业或企业关键词", "法国官方企业名录");
     }
@@ -109,7 +124,10 @@ export const FR_COMPANY_SEARCH_PROVIDER = defineProvider({
     } catch (error) {
       throw procurementSchemaError("法国企业名录", error);
     }
-    const records = data.results
+    const eligibleResults = siren
+      ? data.results.filter((item) => item.siren.replace(/\s+/gu, "") === siren)
+      : data.results;
+    const records = eligibleResults
       .filter((item) => !isExcludedProcurement(
         `${item.nom_complet} ${item.activite_principale || ""} ${item.siege?.adresse || ""}`,
         query
@@ -133,7 +151,7 @@ export const FR_COMPANY_SEARCH_PROVIDER = defineProvider({
             address ? `注册地址：${address}` : "",
             item.siege?.siret ? `SIRET：${item.siege.siret}` : ""
           ].filter(Boolean).join("；"), 2000),
-          confidence: item.etat_administratif === "A" ? 94 : 86,
+          confidence: siren ? 98 : item.etat_administratif === "A" ? 94 : 86,
           providerRecordId: `SIREN:${item.siren}`,
           sourceUrl: `https://annuaire-entreprises.data.gouv.fr/entreprise/${encodeURIComponent(item.siren)}`,
           recordType: "identity_evidence",
@@ -142,7 +160,7 @@ export const FR_COMPANY_SEARCH_PROVIDER = defineProvider({
         };
       });
     const totalPages = data.total_pages || Math.ceil(data.total_results / limit);
-    const hasNext = page < totalPages && page < 100;
+    const hasNext = !siren && page < totalPages && page < 100;
     return {
       records,
       rawCount: data.results.length,
@@ -150,7 +168,11 @@ export const FR_COMPANY_SEARCH_PROVIDER = defineProvider({
       nextCursor: hasNext ? String(page + 1) : null,
       exhausted: !hasNext,
       warnings: [],
-      usage: identityUsage(`法国企业名录命中 ${data.total_results} 家`)
+      usage: identityUsage(siren
+        ? records.length
+          ? `法国企业名录按 SIREN ${siren} 精确核验`
+          : `法国企业名录未找到 SIREN ${siren}`
+        : `法国企业名录命中 ${data.total_results} 家`)
     };
   },
   async health() {

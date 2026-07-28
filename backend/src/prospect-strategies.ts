@@ -991,7 +991,7 @@ function providerReadinessIssues(
         code: "PROVIDER_CONNECTION_REQUIRED",
         field: "providerPlan",
         providerId: plan.providerId,
-        message: `数据源 ${catalog.name} 需要当前负责人配置 API Key`
+        message: `数据源 ${catalog.name} 需要当前负责人配置连接凭据`
       });
       continue;
     }
@@ -1005,7 +1005,7 @@ function providerReadinessIssues(
           code: "PROVIDER_CONNECTION_REQUIRED",
           field: "providerPlan",
           providerId: plan.providerId,
-          message: `数据源 ${catalog.name} 尚未配置 API Key`
+          message: `数据源 ${catalog.name} 尚未配置连接凭据`
         });
       }
     } catch {

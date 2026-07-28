@@ -916,6 +916,10 @@ export function setTenantProspectDisposition(
       invalid("候选不存在或不属于当前团队");
     }
     const prospect = structuredClone(matches[0]!);
+    if (rawInput.action === "resume"
+      && prospect.status === "do_not_contact") {
+      invalid("永久禁止联系不能通过普通恢复撤销，必须走合规复核流程");
+    }
     switch (rawInput.action) {
       case "exclude_temporary":
         if (prospect.status !== "converted") prospect.status = "excluded";

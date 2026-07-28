@@ -276,11 +276,38 @@ async function testOwnerIsolation() {
   assert.equal(store.todos.length, 0);
 }
 
+async function testHistoricalOutboundIsFactOnly() {
+  const store = isolatedStore();
+  const prospect = candidate("historical");
+  store.websiteOpportunities.push(prospect);
+  const before = structuredClone(prospect);
+
+  const result = await recordProspectTouchpoint(store, {
+    candidate: prospect,
+    actorId: prospect.ownerId,
+    recordMode: "historical",
+    channel: "email",
+    direction: "outbound",
+    contactValue: prospect.contactInfo,
+    subject: "Previously sent message",
+    content: "This message was sent outside the CRM yesterday.",
+    requestId: "historical-fact-only",
+    occurredAt: at(14)
+  });
+
+  assert.equal(result.replayed, false);
+  assert.equal(store.prospectTouchpoints.length, 1);
+  assert.equal(store.todos.length, 0);
+  assert.equal(result.todo, undefined);
+  assert.deepEqual(prospect, before);
+}
+
 await testOutboundIdempotencyAndTodoReuse();
 await testReplyReschedulesExistingTodo();
 await testSuppressionCancelsActiveTodo();
 await testBounceMarksChannelInvalid();
 await testLeadMigrationReusesOutreachData();
 await testOwnerIsolation();
+await testHistoricalOutboundIsFactOnly();
 
 console.log("Prospect outreach tests passed");

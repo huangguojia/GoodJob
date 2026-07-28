@@ -2,10 +2,11 @@ import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import nodemailer from "nodemailer";
 import QRCode from "qrcode";
 import { z } from "zod";
+import { once } from "node:events";
 import { AUTH_COOKIE_NAME, CSRF_COOKIE_NAME, canManageAccount, canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, canSeeTeam, createCsrfToken, csrfCookieOptions, hashPassword, publicUser, requireAuth, sessionCookieOptions, signToken, validateAuthSecurity, verifyPassword } from "./auth.js";
 import { assertAiBaseUrlAllowed } from "./ai-http-security.js";
 import {
@@ -242,10 +243,54 @@ import {
   syncProspectCandidateCoverage
 } from "./prospect-candidate-actions.js";
 import {
+  approveProspectContactability,
+  approveProspectIcpQualification,
+  currentApprovedProspectDecision,
+  evaluateProspectContactability,
+  prospectChannelQualificationSchema,
+  prospectCompanyQualificationSchema,
+  prospectContactabilityEvaluationSchema,
+  prospectIcpQualificationSchema,
+  prospectQualificationApprovalSchema,
+  prospectQualificationView,
+  prospectSuppressionSchema,
+  ProspectQualificationWorkflowError,
+  recordProspectChannelQualification,
+  recordProspectCompanyQualification,
+  recordProspectIcpQualification,
+  setProspectSuppression
+} from "./prospect-qualification-workflow.js";
+import {
+  applyProspectQualificationCommand,
+  prospectCandidateQualificationBasisHash,
+  prospectCandidateQualificationChangedFields,
+  ProspectQualificationError
+} from "./prospect-qualification.js";
+import {
+  assertCrmOutreachEligible,
+  assertProspectEmailOutreachEligible,
+  ProspectOutreachEligibilityError
+} from "./prospect-outreach-eligibility.js";
+import {
   ensureProspectFollowUpTodo,
   migrateProspectFollowUpTodos,
   recordProspectTouchpoint
 } from "./prospect-outreach.js";
+import {
+  queueWebsiteProbe,
+  websiteProbeCapability,
+  websiteProbeDetail,
+  WebsiteProbeError
+} from "./website-probe.js";
+import {
+  attachProspectIdentityBootstrapRun,
+  beginProspectIdentityBootstrap,
+  failProspectIdentityBootstrap,
+  normalizeProspectIdentityRegistration,
+  prospectIdentityBootstrapView,
+  reconcileProspectIdentityBootstrap,
+  ProspectIdentityBootstrapError
+} from "./prospect-identity-bootstrap.js";
 import {
   customsDocumentExportIssues,
   generateCustomsDocumentFromDeal,
@@ -298,6 +343,9 @@ import {
   validateProspectRunSecurity
 } from "./prospect-runs.js";
 import {
+  type ProspectLiveEvent
+} from "./prospect-live-events.js";
+import {
   createProspectSchedule,
   createProspectScheduleSchema,
   deleteProspectSchedule,
@@ -331,7 +379,8 @@ import {
   normalizeWebsiteReference,
   withProspectVerificationReport
 } from "./prospect-verification.js";
-import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, CustomerIntelligenceFieldKey, Deal, DealEvent, Exam, ExamAttempt, ExamQuestion, Lead, LeadSourceEvent, LeadSourceType, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProspectOutreachChannel, ProviderCatalogItem, ProviderConnection, ProviderEvidenceSnapshot, SalesRecordAudit, SessionUser, Todo, TradeDocument, TradeDocumentAudit, TradeDocumentSendRecord, WebsiteOpportunity } from "./types.js";
+import { refreshProspectScorecard } from "./prospect-scorecard.js";
+import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, CustomerIntelligenceFieldKey, Deal, DealEvent, Exam, ExamAttempt, ExamQuestion, Lead, LeadSourceEvent, LeadSourceType, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProspectIdentityBootstrapAttempt, ProspectOutreachChannel, ProviderCatalogItem, ProviderConnection, ProviderEvidenceSnapshot, SalesRecordAudit, SessionUser, Todo, TradeDocument, TradeDocumentAudit, TradeDocumentSendRecord, WebsiteOpportunity } from "./types.js";
 import type { CompanyProfile } from "./types.js";
 
 loadLocalEnv();
@@ -413,6 +462,10 @@ async function persistCandidateChanges(
   candidates: WebsiteOpportunity[],
   persistOtherState = true
 ) {
+  const scoredAt = new Date().toISOString();
+  candidates.forEach((candidate) =>
+    refreshProspectScorecard(store, candidate, scoredAt)
+  );
   const candidateIds = [...new Set(candidates.map((item) => item.id))];
   if (store.persistProspectCandidates) {
     if (candidateIds.length) {
@@ -483,6 +536,53 @@ function sendProspectLeadConversionError(
         ? 409
         : 500;
   res.status(status).json({
+    message: error.message,
+    errorCode: error.code
+  });
+  return true;
+}
+
+function sendProspectIdentityBootstrapError(
+  res: Response,
+  error: unknown
+) {
+  if (!(error instanceof ProspectIdentityBootstrapError)) return false;
+  res.status(error.status).json({
+    message: error.message,
+    errorCode: error.code
+  });
+  return true;
+}
+
+function sendProspectQualificationError(
+  res: Response,
+  error: unknown
+) {
+  if (error instanceof ProspectQualificationWorkflowError
+    || error instanceof ProspectOutreachEligibilityError) {
+    res.status(error.status).json({
+      message: error.message,
+      errorCode: error.code
+    });
+    return true;
+  }
+  if (!(error instanceof ProspectQualificationError)) return false;
+  const status = error.code.endsWith("_NOT_FOUND") ? 404
+    : error.code.includes("STALE")
+      || error.code.includes("CONFLICT")
+      || error.code.includes("TRANSITION")
+      ? 409
+      : 400;
+  res.status(status).json({
+    message: error.message,
+    errorCode: error.code
+  });
+  return true;
+}
+
+function sendWebsiteProbeError(res: Response, error: unknown) {
+  if (!(error instanceof WebsiteProbeError)) return false;
+  res.status(error.status).json({
     message: error.message,
     errorCode: error.code
   });
@@ -716,7 +816,30 @@ function resolveOcrJob(user: SessionUser, requestedId: string, createIfMissing =
   return job;
 }
 
+type OutboundEmailDispatchObservation = {
+  userId: string;
+  to: string;
+  subject: string;
+};
+
+let outboundEmailDispatchObserver:
+  ((event: OutboundEmailDispatchObservation) => void) | null = null;
+
+export function setOutboundEmailDispatchObserverForTest(
+  observer: ((event: OutboundEmailDispatchObservation) => void) | null
+) {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("邮件派发观察器只能在测试环境使用");
+  }
+  outboundEmailDispatchObserver = observer;
+}
+
 async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][number], payload: { to: string; subject: string; body: string; messageId?: string }) {
+  outboundEmailDispatchObserver?.({
+    userId: user.id,
+    to: payload.to,
+    subject: payload.subject
+  });
   if (!user.outboundEmail || !user.smtpHost || !user.smtpUser || !user.smtpPassword) {
     throw new Error("请先在个人信息页完整配置发件邮箱、SMTP服务器、账号和授权码");
   }
@@ -1131,10 +1254,6 @@ app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRout
     res.status(404).json({ message: "搜客线索不存在或无权访问" });
     return;
   }
-  if (!["contactable", "contacted", "synced"].includes(opportunity.status)) {
-    res.status(400).json({ message: "请先核验联系方式并标记为可联系，再发送开发信" });
-    return;
-  }
   if (opportunity.ownerId !== req.user!.id) {
     res.status(403).json({ message: "只有候选归属业务员可以发送开发信" });
     return;
@@ -1146,6 +1265,16 @@ app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRout
     && item.requestId === requestId
   );
   if (existingTouchpoint) {
+    if (existingTouchpoint.contactValue.trim().toLocaleLowerCase("en-US")
+        !== body.to.trim().toLocaleLowerCase("en-US")
+      || existingTouchpoint.subject !== body.subject
+      || existingTouchpoint.content !== body.body) {
+      res.status(409).json({
+        message: "该 requestId 已用于不同的开发信内容",
+        errorCode: "PROSPECT_OUTREACH_IDEMPOTENCY_CONFLICT"
+      });
+      return;
+    }
     res.json({
       sent: {
         id: existingTouchpoint.id,
@@ -1163,26 +1292,43 @@ app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRout
     });
     return;
   }
+  let eligibility;
+  try {
+    await store.reloadProspectQualificationTeam?.(req.user!.teamId);
+    eligibility = assertProspectEmailOutreachEligible(
+      store,
+      opportunity,
+      body.to,
+      new Date().toISOString()
+    );
+  } catch (error) {
+    if (sendProspectQualificationError(res, error)) return;
+    throw error;
+  }
   let mailInfo: Awaited<ReturnType<typeof sendOutboundEmail>>;
   try {
-    mailInfo = await sendOutboundEmail(user, { to: body.to, subject: body.subject, body: body.body });
+    mailInfo = await sendOutboundEmail(user, {
+      to: eligibility.recipient,
+      subject: body.subject,
+      body: body.body
+    });
   } catch (error) {
     res.status(400).json({ message: outboundEmailError(error, user) });
     return;
   }
   const sentAt = new Date().toISOString();
   user.lastDevelopmentEmailAt = sentAt;
-  user.lastDevelopmentEmailTo = body.to;
+  user.lastDevelopmentEmailTo = eligibility.recipient;
   user.lastDevelopmentEmailSubject = body.subject;
   opportunity.lastDevelopmentEmailAt = sentAt;
-  opportunity.lastDevelopmentEmailTo = body.to;
+  opportunity.lastDevelopmentEmailTo = eligibility.recipient;
   opportunity.lastDevelopmentEmailSubject = body.subject;
   const outreach = await recordProspectTouchpoint(store, {
     candidate: opportunity,
     actorId: req.user!.id,
     channel: "email",
     direction: "outbound",
-    contactValue: body.to,
+    contactValue: eligibility.recipient,
     subject: body.subject,
     content: body.body,
     requestId,
@@ -1197,7 +1343,7 @@ app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRout
       messageId: mailInfo.messageId,
       from: user.outboundEmail,
       senderName: user.emailSenderName || user.name,
-      to: body.to,
+      to: eligibility.recipient,
       company: opportunity.company,
       subject: body.subject,
       body: body.body,
@@ -1337,6 +1483,7 @@ app.get("/api/prospect-list/:id/procurement-context", requireAuth, (req, res) =>
 
 app.post("/api/prospect-list/:id/touchpoints", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
+    recordMode: z.literal("historical"),
     channel: prospectOutreachChannelSchema,
     contactValue: z.string().max(255).optional().default(""),
     subject: z.string().max(255).optional().default(""),
@@ -1352,6 +1499,7 @@ app.post("/api/prospect-list/:id/touchpoints", requireAuth, asyncRoute(async (re
   const result = await recordProspectTouchpoint(store, {
     candidate,
     actorId: req.user!.id,
+    recordMode: body.recordMode,
     channel: body.channel,
     direction: "outbound",
     contactValue: body.contactValue,
@@ -1361,7 +1509,7 @@ app.post("/api/prospect-list/:id/touchpoints", requireAuth, asyncRoute(async (re
     nextFollowAt: body.nextFollowAt,
     requestId: body.requestId
   });
-  await persistCandidateChanges(store, [candidate]);
+  await store.persist();
   res.status(result.replayed ? 200 : 201).json({
     ...result,
     opportunity: candidate
@@ -2961,16 +3109,31 @@ app.post("/api/development-email/send", requireAuth, asyncRoute(async (req, res)
     res.status(400).json({ message: "公司资料未完整，请联系管理员维护公司名称、主营产品和官网" });
     return;
   }
+  let outreachEligibility;
+  try {
+    await store.reloadProspectQualificationTeam?.(req.user!.teamId);
+    outreachEligibility = assertCrmOutreachEligible(store, {
+      target: entity.lead
+        ? { entityType: "lead", entity: entity.lead }
+        : { entityType: "customer", entity: entity.customer! },
+      actorId: req.user!.id,
+      channel: "email",
+      recipient: body.to
+    });
+  } catch (error) {
+    if (sendProspectQualificationError(res, error)) return;
+    throw error;
+  }
   let mailInfo: Awaited<ReturnType<typeof sendOutboundEmail>>;
   try {
-    mailInfo = await sendOutboundEmail(user, { to: body.to, subject: body.subject, body: body.body });
+    mailInfo = await sendOutboundEmail(user, { to: outreachEligibility.recipient, subject: body.subject, body: body.body });
   } catch (error) {
     res.status(400).json({ message: outboundEmailError(error, user) });
     return;
   }
   const sentAt = new Date().toISOString();
   user.lastDevelopmentEmailAt = sentAt;
-  user.lastDevelopmentEmailTo = body.to;
+  user.lastDevelopmentEmailTo = outreachEligibility.recipient;
   user.lastDevelopmentEmailSubject = body.subject;
   if (entity.lead) {
     store.leadActivities.unshift({
@@ -2998,7 +3161,7 @@ app.post("/api/development-email/send", requireAuth, asyncRoute(async (req, res)
   }
   await store.persist();
   res.json({
-    sent: { to: body.to, subject: body.subject, sentAt, messageId: mailInfo.messageId, simulated: ["test", "e2e"].includes(process.env.NODE_ENV || "") },
+    sent: { to: outreachEligibility.recipient, subject: body.subject, sentAt, messageId: mailInfo.messageId, simulated: ["test", "e2e"].includes(process.env.NODE_ENV || "") },
     user: accountUser(user)
   });
 }));
@@ -3375,16 +3538,29 @@ app.post("/api/leads/:id/send-email", requireAuth, asyncRoute(async (req, res) =
     res.status(404).json({ message: "线索不存在、已删除或无权访问" });
     return;
   }
+  let outreachEligibility;
+  try {
+    await store.reloadProspectQualificationTeam?.(req.user!.teamId);
+    outreachEligibility = assertCrmOutreachEligible(store, {
+      target: { entityType: "lead", entity: lead },
+      actorId: req.user!.id,
+      channel: "email",
+      recipient: body.to
+    });
+  } catch (error) {
+    if (sendProspectQualificationError(res, error)) return;
+    throw error;
+  }
   let mailInfo: Awaited<ReturnType<typeof sendOutboundEmail>>;
   try {
-    mailInfo = await sendOutboundEmail(user, { to: body.to, subject: body.subject, body: body.body });
+    mailInfo = await sendOutboundEmail(user, { to: outreachEligibility.recipient, subject: body.subject, body: body.body });
   } catch (error) {
     res.status(400).json({ message: outboundEmailError(error, user) });
     return;
   }
   const sentAt = new Date().toISOString();
   user.lastDevelopmentEmailAt = sentAt;
-  user.lastDevelopmentEmailTo = body.to;
+  user.lastDevelopmentEmailTo = outreachEligibility.recipient;
   user.lastDevelopmentEmailSubject = body.subject;
   const activity = {
     id: `la_${Date.now()}`,
@@ -3408,7 +3584,7 @@ app.post("/api/leads/:id/send-email", requireAuth, asyncRoute(async (req, res) =
       messageId: mailInfo.messageId,
       from: user.outboundEmail,
       senderName: user.emailSenderName || user.name,
-      to: body.to,
+      to: outreachEligibility.recipient,
       company: lead.company,
       subject: body.subject,
       sentAt
@@ -3727,6 +3903,21 @@ app.post("/api/whatsapp/customers/:customerId/messages", requireAuth, asyncRoute
   let status = body.direction === "outbound" ? "recorded" : "read";
   let deliveryMode: "manual" | "web-scan" | "twilio-api" = binding?.bindingMode || "manual";
   let delivered = deliveryMode === "manual";
+
+  if (body.direction === "outbound" && deliveryMode !== "manual") {
+    try {
+      await store.reloadProspectQualificationTeam?.(req.user!.teamId);
+      assertCrmOutreachEligible(store, {
+        target: { entityType: "customer", entity: customer },
+        actorId: req.user!.id,
+        channel: "whatsapp",
+        recipient: binding?.phoneNumber || customer.whatsapp || ""
+      });
+    } catch (error) {
+      if (sendProspectQualificationError(res, error)) return;
+      throw error;
+    }
+  }
 
   if (body.direction === "outbound" && binding?.bindingMode === "twilio-api") {
     try {
@@ -7533,18 +7724,20 @@ app.get("/api/tools/website-opportunities", requireAuth, asyncRoute(async (req, 
     .filter((item) =>
       canSeeOwner(req.user!, item.ownerId, item.teamId)
     )
-    .map((item) => ({
-      ...item,
-      verificationReport:
-        ensureProspectVerificationReport({ ...item }).verificationReport,
-      organizationId: item.organizationId
+    .map((item) => {
+      const scored = refreshProspectScorecard(store, { ...item });
+      return {
+      ...scored,
+      verificationReport: ensureProspectVerificationReport(scored).verificationReport,
+      organizationId: scored.organizationId
         ? canonicalOrganizationId(
             store,
-            item.teamId,
-            item.organizationId
+            scored.teamId,
+            scored.organizationId
           )
-        : item.organizationId
-    }));
+        : scored.organizationId
+      };
+    });
   res.json({ opportunities: scoped });
 }));
 
@@ -7556,6 +7749,654 @@ app.get("/api/prospect-list/assignees", requireAuth, (req, res) => {
   res.json({ assignees: prospectAssigneesFor(req.user!) });
 });
 
+function candidateForQualificationRequest(
+  store: CrmStore,
+  req: Request,
+  res: Response,
+  requireOwner = false
+) {
+  const candidate = store.websiteOpportunities.find((item) =>
+    item.id === req.params.id
+    && canSeeOwner(req.user!, item.ownerId, item.teamId)
+  );
+  if (!candidate) {
+    res.status(404).json({ message: "搜客候选不存在或无权访问" });
+    return null;
+  }
+  if (requireOwner && candidate.ownerId !== req.user!.id) {
+    res.status(403).json({
+      message: "只有候选归属业务员可以提交或批准资格事实"
+    });
+    return null;
+  }
+  return candidate;
+}
+
+async function prepareProspectQualificationRequest(
+  store: CrmStore,
+  candidate: WebsiteOpportunity
+) {
+  await store.reloadProspectQualificationTeam?.(candidate.teamId);
+}
+
+async function finishProspectQualificationRequest(
+  store: CrmStore,
+  candidate: WebsiteOpportunity,
+  qualification: ReturnType<typeof prospectQualificationView>
+) {
+  await persistCandidateChanges(store, [candidate], false);
+  return { qualification, opportunity: candidate };
+}
+
+app.get("/api/prospect-list/:id/qualification", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const candidate = candidateForQualificationRequest(store, req, res);
+  if (!candidate) return;
+  try {
+    await prepareProspectQualificationRequest(store, candidate);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      qualification: prospectQualificationView(store, candidate),
+      opportunity: candidate
+    });
+  } catch (error) {
+    if (sendProspectQualificationError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-list/website-probe/capability", requireAuth, (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json(websiteProbeCapability());
+});
+
+const prospectIdentityBootstrapBodySchema = z.object({
+  providerId: z.enum([
+    "gleif",
+    "companies_house",
+    "sec_edgar",
+    "fr_company_search"
+  ]),
+  registrationNumber: z.string().trim().min(1).max(80),
+  requestId: z.string().trim().min(8).max(120)
+}).strict();
+
+function prospectIdentityBootstrapPayload(
+  user: SessionUser,
+  candidateId: string,
+  attempt: ProspectIdentityBootstrapAttempt
+) {
+  const provider = allProviderStatuses(user).find((item) =>
+    item.id === attempt.providerId
+  );
+  return {
+    taskStatus: attempt.taskStatus,
+    taskStatusLabel: attempt.taskStatus === "ended" ? "已结束" : "进行中",
+    attempt,
+    provider: provider || null,
+    candidateId
+  };
+}
+
+app.get("/api/prospect-list/:id/identity-bootstrap", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  await Promise.all([
+    store.reloadOrganizationIdentityTeam?.(req.user!.teamId),
+    store.reloadProspectCoverageTeam?.(req.user!.teamId),
+    store.reloadProspectQualificationTeam?.(req.user!.teamId)
+  ]);
+  try {
+    const view = prospectIdentityBootstrapView(
+      store,
+      req.user!,
+      String(req.params.id)
+    );
+    const statuses = new Map(
+      allProviderStatuses(req.user!).map((item) => [item.id, item])
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      ...view,
+      providers: view.providers.map((provider) => ({
+        ...provider,
+        runtime: statuses.get(provider.id) || null
+      }))
+    });
+  } catch (error) {
+    if (sendProspectIdentityBootstrapError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-list/:id/identity-bootstrap", requireAuth, asyncRoute(async (req, res) => {
+  const body = prospectIdentityBootstrapBodySchema.parse(req.body);
+  const store = getStore();
+  let normalized;
+  try {
+    normalized = normalizeProspectIdentityRegistration(
+      body.providerId,
+      body.registrationNumber
+    );
+  } catch (error) {
+    if (sendProspectIdentityBootstrapError(res, error)) return;
+    throw error;
+  }
+  const provider = allProviderStatuses(req.user!).find((item) =>
+    item.id === body.providerId
+  );
+  if (!provider || !provider.enabled || !provider.ready
+    || provider.accessMode !== "api") {
+    res.status(409).json({
+      message: provider?.requiresKey && !provider.hasApiKey
+        ? provider.id === "sec_edgar"
+          ? "请先配置 SEC Fair Access User-Agent（系统名 联系邮箱），无需申请 API Key"
+          : `请先注册并配置 ${provider.name} API`
+        : `${provider?.name || normalized.guide.name} 当前不可执行`,
+      errorCode: "IDENTITY_AUTHORITY_PROVIDER_NOT_READY",
+      provider: provider || null,
+      registrationRequired: Boolean(provider?.requiresKey && !provider.hasApiKey),
+      docsUrl: provider?.docsUrl || ""
+    });
+    return;
+  }
+  const requestIdHash = createHash("sha256")
+    .update(JSON.stringify({
+      version: "prospect-identity-bootstrap-request-v1",
+      teamId: req.user!.teamId,
+      ownerId: req.user!.id,
+      candidateId: req.params.id,
+      requestId: body.requestId
+    }))
+    .digest("hex");
+  const now = new Date().toISOString();
+  const attemptId = `pib_${createHash("sha256")
+    .update(JSON.stringify({
+      version: "prospect-identity-bootstrap-attempt-id-v1",
+      requestIdHash
+    }))
+    .digest("hex").slice(0, 40)}`;
+  const attempt: ProspectIdentityBootstrapAttempt = {
+    id: attemptId,
+    version: "prospect-identity-bootstrap-v1",
+    requestIdHash,
+    providerId: body.providerId,
+    registrationNumber: normalized.registrationNumber,
+    normalizedIdentifier: normalized.normalizedIdentifier,
+    taskStatus: "running",
+    outcome: "pending",
+    campaignId: "",
+    campaignVersion: 0,
+    strategyId: "",
+    runId: "",
+    sourceCandidateId: "",
+    sourceRawRecordId: "",
+    sourceHitId: "",
+    resolutionId: "",
+    conflictId: "",
+    organizationId: "",
+    tenantProspectId: "",
+    errorCode: "",
+    errorMessage: "",
+    events: [{
+      id: `${attemptId}:event:1`,
+      sequence: 1,
+      stage: "validation",
+      status: "completed",
+      label: "权威注册号已校验",
+      detail: `${normalized.guide.name} · ${normalized.registrationNumber}`,
+      createdAt: now
+    }],
+    createdBy: req.user!.id,
+    createdAt: now,
+    updatedAt: now,
+    endedAt: ""
+  };
+  let started;
+  try {
+    started = await beginProspectIdentityBootstrap({
+      store,
+      user: req.user!,
+      candidateId: String(req.params.id),
+      attempt
+    });
+  } catch (error) {
+    if (sendProspectIdentityBootstrapError(res, error)) return;
+    throw error;
+  }
+  if (started.attempt.runId || started.attempt.taskStatus === "ended") {
+    res.setHeader("Cache-Control", "no-store");
+    res.status(200).json({
+      replayed: true,
+      ...prospectIdentityBootstrapPayload(
+        req.user!,
+        String(req.params.id),
+        started.attempt
+      )
+    });
+    return;
+  }
+  try {
+    const search = await startAgentProspectSearch(
+      { id: req.user!.id },
+      {
+        title: `${normalized.guide.identifierLabel} 身份核验 · ${normalized.registrationNumber}`,
+        goal: `仅通过 ${normalized.guide.name} 核验企业注册号 ${normalized.registrationNumber}`,
+        products: [normalized.registrationNumber],
+        markets: [normalized.guide.market],
+        customerTypes: ["企业身份核验"],
+        industries: ["企业注册身份"],
+        exclusions: [],
+        providerIds: [body.providerId],
+        limit: 5
+      },
+      `identity-bootstrap:${attemptId}`
+    );
+    const campaign = store.prospectCampaigns.find((item) =>
+      item.id === search.campaignId
+    );
+    const attached = await attachProspectIdentityBootstrapRun({
+      store,
+      user: req.user!,
+      candidateId: String(req.params.id),
+      attemptId,
+      campaignId: search.campaignId,
+      campaignVersion: campaign?.currentVersion || 1,
+      strategyId: search.strategyId,
+      runId: search.runId,
+      at: new Date().toISOString()
+    });
+    res.location(
+      `/api/prospect-list/${encodeURIComponent(String(req.params.id))}`
+      + `/identity-bootstrap/${encodeURIComponent(attemptId)}`
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.status(started.replayed ? 200 : 201).json({
+      replayed: started.replayed,
+      ...prospectIdentityBootstrapPayload(
+        req.user!,
+        String(req.params.id),
+        attached.attempt
+      )
+    });
+  } catch (error) {
+    const failed = await failProspectIdentityBootstrap({
+      store,
+      user: req.user!,
+      candidateId: String(req.params.id),
+      attemptId,
+      errorCode: typeof error === "object" && error && "code" in error
+        ? String(error.code || "IDENTITY_PROVIDER_START_FAILED")
+        : "IDENTITY_PROVIDER_START_FAILED",
+      errorMessage: error instanceof Error
+        ? error.message
+        : "权威来源搜索启动失败",
+      at: new Date().toISOString()
+    });
+    res.setHeader("Cache-Control", "no-store");
+    res.status(200).json({
+      replayed: started.replayed,
+      ...prospectIdentityBootstrapPayload(
+        req.user!,
+        String(req.params.id),
+        failed.attempt
+      )
+    });
+  }
+}));
+
+app.get("/api/prospect-list/:id/identity-bootstrap/:attemptId", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  await store.readBarrier();
+  const view = prospectIdentityBootstrapView(
+    store,
+    req.user!,
+    String(req.params.id)
+  );
+  const attempt = view.attempts.find((item) =>
+    item.id === String(req.params.attemptId)
+  );
+  if (!attempt) {
+    res.status(404).json({ message: "身份引导任务不存在" });
+    return;
+  }
+  let progress = null;
+  if (attempt.runId) {
+    try {
+      progress = await getAgentProspectSearchProgress(
+        { id: req.user!.id },
+        { runId: attempt.runId }
+      );
+    } catch {
+      progress = null;
+    }
+  }
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    ...prospectIdentityBootstrapPayload(
+      req.user!,
+      String(req.params.id),
+      attempt
+    ),
+    progress
+  });
+}));
+
+app.post("/api/prospect-list/:id/identity-bootstrap/:attemptId/reconcile", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  await store.readBarrier();
+  await Promise.all([
+    store.reloadProspectCandidates?.(),
+    store.reloadOrganizationIdentityTeam?.(req.user!.teamId),
+    store.reloadProspectCoverageTeam?.(req.user!.teamId),
+    store.reloadProspectQualificationTeam?.(req.user!.teamId)
+  ]);
+  try {
+    const result = await reconcileProspectIdentityBootstrap({
+      store,
+      user: req.user!,
+      candidateId: String(req.params.id),
+      attemptId: String(req.params.attemptId),
+      at: new Date().toISOString()
+    });
+    let progress = null;
+    if (result.attempt.runId) {
+      try {
+        progress = await getAgentProspectSearchProgress(
+          { id: req.user!.id },
+          { runId: result.attempt.runId }
+        );
+      } catch {
+        progress = null;
+      }
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      changed: result.changed,
+      candidate: result.candidate,
+      ...prospectIdentityBootstrapPayload(
+        req.user!,
+        String(req.params.id),
+        result.attempt
+      ),
+      progress
+    });
+  } catch (error) {
+    if (sendProspectIdentityBootstrapError(res, error)
+      || sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-list/:id/website-probe", requireAuth, asyncRoute(async (req, res) => {
+  z.object({}).strict().parse(req.body || {});
+  const store = getStore();
+  const candidate = candidateForQualificationRequest(store, req, res, true);
+  if (!candidate) return;
+  try {
+    const result = await queueWebsiteProbe(
+      store,
+      candidate,
+      req.user!.id,
+      async (current) => {
+        await persistCandidateChanges(store, [current], false);
+      }
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.status(result.replayed ? 200 : 202).json({
+      ...result,
+      opportunity: store.websiteOpportunities.find((item) =>
+        item.id === candidate.id
+      ) || candidate
+    });
+  } catch (error) {
+    if (sendWebsiteProbeError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-list/:id/website-probe/:attemptId", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const candidate = candidateForQualificationRequest(store, req, res);
+  if (!candidate) return;
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      ...websiteProbeDetail(candidate, String(req.params.attemptId)),
+      opportunity: candidate
+    });
+  } catch (error) {
+    if (sendWebsiteProbeError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-list/:id/website-probe/:attemptId/events", requireAuth, (req, res) => {
+  const store = getStore();
+  const initial = candidateForQualificationRequest(store, req, res);
+  if (!initial) return;
+  const attemptId = String(req.params.attemptId);
+  const after = Math.max(0, Number(req.query.after || 0));
+  res.status(200);
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+  let lastSequence = after;
+  let closed = false;
+  const send = () => {
+    if (closed) return;
+    const candidate = store.websiteOpportunities.find((item) =>
+      item.id === initial.id
+      && item.teamId === initial.teamId
+      && canSeeOwner(req.user!, item.ownerId, item.teamId)
+    );
+    if (!candidate) {
+      res.write(`event: error\ndata: ${JSON.stringify({ message: "候选已不可见" })}\n\n`);
+      res.end();
+      return;
+    }
+    try {
+      const detail = websiteProbeDetail(candidate, attemptId);
+      for (const event of detail.attempt.events.filter((item) =>
+        item.sequence > lastSequence
+      )) {
+        lastSequence = event.sequence;
+        res.write(`id: ${event.sequence}\nevent: probe_event\ndata: ${JSON.stringify(event)}\n\n`);
+      }
+      if (detail.terminal) {
+        res.write(`event: done\ndata: ${JSON.stringify({
+          attemptId,
+          status: detail.attempt.status,
+          outcome: detail.attempt.outcome,
+          lastSequence
+        })}\n\n`);
+        res.end();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "官网验证事件不可用";
+      res.write(`event: error\ndata: ${JSON.stringify({ message })}\n\n`);
+      res.end();
+    }
+  };
+  const timer = setInterval(send, 400);
+  req.on("close", () => {
+    closed = true;
+    clearInterval(timer);
+  });
+  send();
+});
+
+app.post("/api/prospect-list/:id/qualification/company", requireAuth, asyncRoute(async (req, res) => {
+  const body = prospectCompanyQualificationSchema.parse(req.body);
+  const store = getStore();
+  const candidate = candidateForQualificationRequest(store, req, res, true);
+  if (!candidate) return;
+  try {
+    await prepareProspectQualificationRequest(store, candidate);
+    const qualification = await recordProspectCompanyQualification(
+      store,
+      candidate,
+      req.user!.id,
+      body
+    );
+    res.json(await finishProspectQualificationRequest(
+      store,
+      candidate,
+      qualification
+    ));
+  } catch (error) {
+    if (sendProspectQualificationError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-list/:id/qualification/icp", requireAuth, asyncRoute(async (req, res) => {
+  const body = prospectIcpQualificationSchema.parse(req.body);
+  const store = getStore();
+  const candidate = candidateForQualificationRequest(store, req, res, true);
+  if (!candidate) return;
+  try {
+    await prepareProspectQualificationRequest(store, candidate);
+    const qualification = await recordProspectIcpQualification(
+      store,
+      candidate,
+      req.user!.id,
+      body
+    );
+    res.json(await finishProspectQualificationRequest(
+      store,
+      candidate,
+      qualification
+    ));
+  } catch (error) {
+    if (sendProspectQualificationError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-list/:id/qualification/icp/:assessmentId/approve", requireAuth, asyncRoute(async (req, res) => {
+  const body = prospectQualificationApprovalSchema.parse(req.body);
+  const store = getStore();
+  const candidate = candidateForQualificationRequest(store, req, res, true);
+  if (!candidate) return;
+  try {
+    await prepareProspectQualificationRequest(store, candidate);
+    const qualification = await approveProspectIcpQualification(
+      store,
+      candidate,
+      req.user!.id,
+      req.params.assessmentId,
+      body
+    );
+    res.json(await finishProspectQualificationRequest(
+      store,
+      candidate,
+      qualification
+    ));
+  } catch (error) {
+    if (sendProspectQualificationError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-list/:id/qualification/channel", requireAuth, asyncRoute(async (req, res) => {
+  const body = prospectChannelQualificationSchema.parse(req.body);
+  const store = getStore();
+  const candidate = candidateForQualificationRequest(store, req, res, true);
+  if (!candidate) return;
+  try {
+    await prepareProspectQualificationRequest(store, candidate);
+    const qualification = await recordProspectChannelQualification(
+      store,
+      candidate,
+      req.user!.id,
+      body
+    );
+    res.json(await finishProspectQualificationRequest(
+      store,
+      candidate,
+      qualification
+    ));
+  } catch (error) {
+    if (sendProspectQualificationError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-list/:id/qualification/contactability/evaluate", requireAuth, asyncRoute(async (req, res) => {
+  const body = prospectContactabilityEvaluationSchema.parse(req.body);
+  const store = getStore();
+  const candidate = candidateForQualificationRequest(store, req, res, true);
+  if (!candidate) return;
+  try {
+    await prepareProspectQualificationRequest(store, candidate);
+    const qualification = await evaluateProspectContactability(
+      store,
+      candidate,
+      req.user!.id,
+      body
+    );
+    res.json(await finishProspectQualificationRequest(
+      store,
+      candidate,
+      qualification
+    ));
+  } catch (error) {
+    if (sendProspectQualificationError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-list/:id/qualification/contactability/:decisionId/approve", requireAuth, asyncRoute(async (req, res) => {
+  const body = prospectQualificationApprovalSchema.parse(req.body);
+  const store = getStore();
+  const candidate = candidateForQualificationRequest(store, req, res, true);
+  if (!candidate) return;
+  try {
+    await prepareProspectQualificationRequest(store, candidate);
+    const qualification = await approveProspectContactability(
+      store,
+      candidate,
+      req.user!.id,
+      req.params.decisionId,
+      body
+    );
+    res.json(await finishProspectQualificationRequest(
+      store,
+      candidate,
+      qualification
+    ));
+  } catch (error) {
+    if (sendProspectQualificationError(res, error)) return;
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-list/:id/qualification/suppress", requireAuth, asyncRoute(async (req, res) => {
+  const body = prospectSuppressionSchema.parse(req.body);
+  const store = getStore();
+  const candidate = candidateForQualificationRequest(store, req, res, true);
+  if (!candidate) return;
+  try {
+    await prepareProspectQualificationRequest(store, candidate);
+    const qualification = await setProspectSuppression(
+      store,
+      candidate,
+      req.user!.id,
+      body
+    );
+    res.json(await finishProspectQualificationRequest(
+      store,
+      candidate,
+      qualification
+    ));
+  } catch (error) {
+    if (sendProspectQualificationError(res, error)
+      || sendProspectLeadConversionError(res, error)) return;
+    throw error;
+  }
+}));
+
 app.patch("/api/prospect-list/:id/details", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
     company: z.string().min(1).max(200),
@@ -7564,7 +8405,8 @@ app.patch("/api/prospect-list/:id/details", requireAuth, asyncRoute(async (req, 
     website: z.string().min(3).max(255),
     contact: z.string().max(120).default(""),
     contactInfo: z.string().max(255).default(""),
-    description: z.string().max(1000).default("")
+    description: z.string().max(1000).default(""),
+    requestId: z.string().min(8).max(120).optional()
   });
   const body = schema.parse(req.body);
   const store = getStore();
@@ -7577,13 +8419,56 @@ app.patch("/api/prospect-list/:id/details", requireAuth, asyncRoute(async (req, 
     res.status(400).json({ message: "已入线索的数据请在线索中心维护" });
     return;
   }
-  Object.assign(opportunity, body, {
+  if (opportunity.ownerId !== req.user!.id) {
+    res.status(403).json({ message: "只有候选归属业务员可以修改资格资料" });
+    return;
+  }
+  const changedAt = new Date().toISOString();
+  const nextDetails = {
+    company: body.company,
+    business: body.business,
+    country: body.country,
     website: normalizeWebsiteReference(body.website),
-    statusChangedAt: new Date().toISOString()
-  });
+    contact: body.contact,
+    contactInfo: body.contactInfo,
+    description: body.description
+  };
+  const changedFields = prospectCandidateQualificationChangedFields(
+    opportunity,
+    nextDetails
+  );
+  if (changedFields.length && opportunity.tenantProspectId) {
+    const command = {
+      kind: "amend_candidate_qualification_basis" as const,
+      teamId: opportunity.teamId,
+      ownerId: opportunity.ownerId,
+      actorId: req.user!.id,
+      prospectId: opportunity.tenantProspectId,
+      idempotencyKey: body.requestId
+        || `candidate-details:${requestCorrelationId(req)}`,
+      candidateId: opportunity.id,
+      changedFields,
+      beforeBasisHash: prospectCandidateQualificationBasisHash(opportunity),
+      afterBasisHash: prospectCandidateQualificationBasisHash(nextDetails),
+      createdAt: changedAt
+    };
+    if (store.applyProspectQualification) {
+      await store.applyProspectQualification(command);
+    } else {
+      applyProspectQualificationCommand(store, command);
+    }
+  }
+  Object.assign(opportunity, nextDetails, { statusChangedAt: changedAt });
   withProspectVerificationReport(opportunity);
   await persistCandidateChanges(store, [opportunity], false);
-  res.json({ opportunity });
+  res.json({
+    opportunity,
+    qualification: opportunity.tenantProspectId
+      ? prospectQualificationView(store, opportunity)
+      : null,
+    qualificationInvalidated: changedFields.length > 0,
+    changedFields
+  });
 }));
 
 app.patch("/api/prospect-list/batch", requireAuth, asyncRoute(async (req, res) => {
@@ -7597,6 +8482,13 @@ app.patch("/api/prospect-list/batch", requireAuth, asyncRoute(async (req, res) =
   });
   const body = schema.parse(req.body);
   const store = getStore();
+  if (body.action === "mark-contactable") {
+    res.status(409).json({
+      message: "“标记可联系”已停用，请完成企业、ICP、渠道和可联系门禁四步资格审查",
+      errorCode: "PROSPECT_QUALIFICATION_REQUIRED"
+    });
+    return;
+  }
   const ids = [...new Set(body.ids)];
   const opportunities = ids
     .map((id) => store.websiteOpportunities.find((item) => item.id === id && canSeeOwner(req.user!, item.ownerId, item.teamId)))
@@ -7618,17 +8510,6 @@ app.patch("/api/prospect-list/batch", requireAuth, asyncRoute(async (req, res) =
   }
   if (opportunities.some((item) => item.status === "synced") && ["exclude", "assign"].includes(body.action)) {
     res.status(400).json({ message: "已入线索的数据不能排除或重新分配，请在线索中心处理" });
-    return;
-  }
-  if (body.action === "mark-contactable" && opportunities.some((item) => !hasProspectContactInfo(item))) {
-    res.status(400).json({ message: "选中项存在无有效邮箱、电话或即时通讯方式的数据，请先补齐联系方式" });
-    return;
-  }
-  if (body.action === "mark-contactable"
-    && opportunities.some((item) =>
-      item.status === "excluded" || item.status === "synced"
-    )) {
-    res.status(400).json({ message: "已排除候选请先恢复，已入线索候选请在线索中心继续跟进" });
     return;
   }
   if (body.action === "restore" && opportunities.some((item) => item.status !== "excluded")) {
@@ -7657,13 +8538,7 @@ app.patch("/api/prospect-list/batch", requireAuth, asyncRoute(async (req, res) =
           effectiveAt: changedAt
         });
       }
-      if (body.action === "mark-contactable") {
-        if (!coverageResult && item.status !== "contacted") {
-          item.status = "contactable";
-        }
-        item.verifiedAt = item.verifiedAt || changedAt;
-        item.excludedReason = "";
-      } else if (body.action === "exclude") {
+      if (body.action === "exclude") {
         if (!coverageResult) item.status = "excluded";
         item.excludedReason = body.reason.trim() || "人工核验后排除";
       } else if (body.action === "restore") {
@@ -8210,6 +9085,22 @@ async function agentOutreachSequenceStopReason(sequence: OutreachSequence) {
   const lead = sequence.entityType === "lead" ? store.leads.find((item) => item.id === sequence.entityId) : undefined;
   const customer = sequence.entityType === "customer" ? store.customers.find((item) => item.id === sequence.entityId) : undefined;
   if (!lead && !customer) return "触达对象已不存在";
+  try {
+    await store.reloadProspectQualificationTeam?.(sequence.teamId);
+    assertCrmOutreachEligible(store, {
+      target: lead
+        ? { entityType: "lead", entity: lead }
+        : { entityType: "customer", entity: customer! },
+      actorId: sequence.ownerId,
+      channel: sequence.channel === "email" ? "email" : "whatsapp",
+      recipient: sequence.recipient
+    });
+  } catch (error) {
+    if (error instanceof ProspectOutreachEligibilityError) {
+      return error.message;
+    }
+    throw error;
+  }
   if (lead?.convertedCustomerId || lead?.status === "converted") return "线索已转化为客户";
   const candidates = store.websiteOpportunities.filter((item) =>
     item.ownerId === sequence.ownerId
@@ -8440,9 +9331,18 @@ const agentExecutionRuntime: AgentExecutionRuntime = {
     if (replayedActivity) {
       return { sent: true, replayed: true, activityId: replayedActivity.id, to: draft.to, subject: draft.subject, uiAction: { type: "open_development_email", entityType: draft.entityType, entityId: draft.entityId } };
     }
+    await getStore().reloadProspectQualificationTeam?.(actor.teamId);
+    const outreachEligibility = assertCrmOutreachEligible(getStore(), {
+      target: entity.lead
+        ? { entityType: "lead", entity: entity.lead }
+        : { entityType: "customer", entity: entity.customer! },
+      actorId: actor.id,
+      channel: "email",
+      recipient: draft.to
+    });
     const domain = (stored.outboundEmail || "").split("@")[1] || "goodjob.local";
     const mailInfo = await sendOutboundEmail(stored, {
-      to: draft.to,
+      to: outreachEligibility.recipient,
       subject: draft.subject,
       body: draft.body,
       messageId: `<${executionId}@${domain}>`
@@ -8450,7 +9350,7 @@ const agentExecutionRuntime: AgentExecutionRuntime = {
     const sentAt = new Date().toISOString();
     const nextFollowAt = agentInputText(input, "nextFollowAt") || new Date(Date.now() + 3 * 86_400_000).toISOString();
     stored.lastDevelopmentEmailAt = sentAt;
-    stored.lastDevelopmentEmailTo = draft.to;
+    stored.lastDevelopmentEmailTo = outreachEligibility.recipient;
     stored.lastDevelopmentEmailSubject = draft.subject;
     let activityId = "";
     if (entity.lead) {
@@ -8470,7 +9370,7 @@ const agentExecutionRuntime: AgentExecutionRuntime = {
       dueAt: nextFollowAt, ownerId: actor.id, teamId: actor.teamId, related: entity.company, done: false, createdAt: sentAt, historyAt: "", customerId: entity.customer?.id || ""
     });
     await getStore().persist();
-    return { sent: true, replayed: false, messageId: mailInfo.messageId, activityId, to: draft.to, subject: draft.subject, sentAt, followUpCreated: true, uiAction: { type: "open_development_email", entityType: draft.entityType, entityId: draft.entityId } };
+    return { sent: true, replayed: false, messageId: mailInfo.messageId, activityId, to: outreachEligibility.recipient, subject: draft.subject, sentAt, followUpCreated: true, uiAction: { type: "open_development_email", entityType: draft.entityType, entityId: draft.entityId } };
   },
   async sendWhatsApp(actor, input, executionId) {
     const { session } = agentSessionUser(actor);
@@ -8479,6 +9379,26 @@ const agentExecutionRuntime: AgentExecutionRuntime = {
     if (!customer || (customer.ownerId !== actor.id && !["admin", "super_admin"].includes(actor.role))) throw new Error("客户不存在，或只有客户负责人和管理员可以发送 Communication 消息");
     const phone = (customer.whatsapp || "").replace(/[\s()-]/g, "");
     if (!/^\+[1-9]\d{6,14}$/u.test(phone)) throw new Error("客户没有有效的 WhatsApp 国际号码");
+    const marker = `[Agent:${executionId}]`;
+    const replayedActivity = getStore().customerActivities.find((item) =>
+      item.customerId === customer.id && item.content.includes(marker)
+    );
+    if (replayedActivity) {
+      return {
+        sent: true,
+        replayed: true,
+        activityId: replayedActivity.id,
+        phone,
+        uiAction: { type: "open_communication", customerId: customer.id }
+      };
+    }
+    await getStore().reloadProspectQualificationTeam?.(actor.teamId);
+    assertCrmOutreachEligible(getStore(), {
+      target: { entityType: "customer", entity: customer },
+      actorId: actor.id,
+      channel: "whatsapp",
+      recipient: phone
+    });
     let body = agentInputText(input, "body");
     if (!body) {
       const profile = companyProfileForTeam(actor.teamId);
@@ -8500,7 +9420,6 @@ const agentExecutionRuntime: AgentExecutionRuntime = {
     }
     const conversation = await communicationRequest<Conversation>(session, `/contacts/${encodeURIComponent(contact.id)}/conversation`, { method: "POST" });
     const message = await communicationRequest<Message>(session, `/conversations/${encodeURIComponent(conversation.id)}/messages`, { method: "POST", body: JSON.stringify({ accountId: account.id, clientMessageId: executionId, body }) });
-    const marker = `[Agent:${executionId}]`;
     let activity = getStore().customerActivities.find((item) => item.customerId === customer.id && item.content.includes(marker));
     if (!activity) {
       activity = { id: `ca_agent_${randomUUID()}`, customerId: customer.id, type: "whatsapp", content: `Communication 已由 AI Agent 后台发送：${body.slice(0, 500)} ${marker}`, operatorId: actor.id, nextReminder: agentInputText(input, "nextReminder"), createdAt: new Date().toISOString() };
@@ -9438,6 +10357,7 @@ function getProviderConnection(user: SessionUser, providerId: string): ProviderC
 }
 
 function providerEvidenceSnapshot(providerId: string, record: ProviderRecord): ProviderEvidenceSnapshot {
+  const catalog = providerCatalogByCode(providerId);
   return {
     providerId,
     providerRecordId: record.providerRecordId,
@@ -9451,6 +10371,16 @@ function providerEvidenceSnapshot(providerId: string, record: ProviderRecord): P
     adapterVersion: record.adapterVersion,
     catalogPolicyVersion: record.catalogPolicyVersion,
     sourceLevel: record.sourceLevel,
+    fieldAuthority: Object.fromEntries(
+      [...new Set([
+        ...record.matchedFields,
+        ...(record.providerRecordId ? ["providerRecordId"] : []),
+        ...(record.officialWebsite ? ["officialWebsite"] : [])
+      ])].map((field) => [
+        field,
+        catalog?.fieldAuthority?.[field] || "discovery"
+      ])
+    ),
     retentionPolicyRef: record.retentionPolicyRef
   };
 }
@@ -9827,6 +10757,7 @@ function publicProviderCatalogItem(item: ProviderCatalogItem) {
     officialDocsUrl: item.officialDocsUrl,
     capabilities: item.capabilities,
     allowedFields: item.allowedFields,
+    fieldAuthority: item.fieldAuthority || {},
     licensePolicy: item.licensePolicy,
     defaultRatePolicy: item.defaultRatePolicy,
     retentionPolicy: item.retentionPolicy,
@@ -10749,6 +11680,109 @@ app.get("/api/prospect-super-search/:id", requireAuth, asyncRoute(async (req, re
   }
 }));
 
+const prospectLiveStreamQuerySchema = z.object({
+  once: z.enum(["0", "1"]).optional().default("0")
+}).passthrough();
+
+async function writeProspectLiveEvent(res: Response, event: ProspectLiveEvent) {
+  const payload = `id: ${event.id}\nevent: prospect\ndata: ${JSON.stringify(event)}\n\n`;
+  if (res.writableLength > 1_048_576) return false;
+  if (res.write(payload)) return true;
+  await Promise.race([
+    once(res, "drain"),
+    once(res, "close")
+  ]);
+  return !res.writableEnded && !res.destroyed;
+}
+
+app.get("/api/prospect-runs/:id/events/stream", requireAuth, asyncRoute(async (req, res) => {
+  const runId = prospectRunIdSchema.parse(req.params.id);
+  const query = prospectLiveStreamQuerySchema.parse(req.query);
+  const store = getStore();
+  await store.readBarrier();
+  try {
+    getProspectRun(store, req.user!, runId);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+
+  res.status(200);
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  res.write("retry: 3000\n\n");
+
+  const suppliedCursor = String(req.header("Last-Event-ID") || req.query.lastEventId || "0")
+    .trim()
+    .slice(0, 32);
+  if (!/^\d+$/u.test(suppliedCursor)) {
+    res.end();
+    return;
+  }
+  let cursor = suppliedCursor;
+  let closed = false;
+  let pumping = false;
+  let heartbeat: NodeJS.Timeout | null = null;
+  let poller: NodeJS.Timeout | null = null;
+
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    if (heartbeat) clearInterval(heartbeat);
+    if (poller) clearTimeout(poller);
+    if (!res.writableEnded) res.end();
+  };
+  const pump = async () => {
+    if (closed || pumping) return;
+    pumping = true;
+    try {
+      const feed = await store.readProspectRunFeed?.({
+        teamId: req.user!.teamId,
+        runId,
+        after: cursor,
+        limit: 200
+      });
+      if (!feed) {
+        close();
+        return;
+      }
+      for (const event of feed.events) {
+        if (closed || res.writableEnded) break;
+        if (!await writeProspectLiveEvent(res, event)) {
+          close();
+          return;
+        }
+        cursor = event.id;
+      }
+      if (query.once === "1") {
+        close();
+        return;
+      }
+      if (feed.terminal && feed.events.length === 0) {
+        close();
+        return;
+      }
+    } catch {
+      close();
+    } finally {
+      pumping = false;
+      if (!closed) {
+        poller = setTimeout(() => void pump(), 750);
+      }
+    }
+  };
+
+  req.on("close", close);
+  heartbeat = setInterval(() => {
+    if (closed || res.writableEnded) return;
+    res.write(`: heartbeat ${new Date().toISOString()}\n\n`);
+  }, 15_000);
+  await pump();
+}));
+
 for (const action of ["pause", "resume", "cancel"] as const) {
   app.post(`/api/prospect-super-search/:id/${action}`, requireAuth, asyncRoute(async (req, res) => {
     const body = prospectSuperSearchActionSchema.parse(req.body);
@@ -11200,7 +12234,11 @@ app.post("/api/lead-finder/source-config", requireAuth, asyncRoute(async (req, r
     ? ""
     : body.baseUrl || existingConfiguration.baseUrl;
   if (providerRequiresKey(provider, catalog) && body.enabled && !apiKey) {
-    res.status(400).json({ message: "启用前请先填写该数据源的 API Key" });
+    res.status(400).json({
+      message: provider.id === "sec_edgar"
+        ? "启用前请填写 SEC Fair Access User-Agent（系统名 联系邮箱）"
+        : "启用前请先填写该数据源的 API Key"
+    });
     return;
   }
   const now = new Date().toISOString();
@@ -11271,7 +12309,9 @@ app.post("/api/lead-finder/source-config/test", requireAuth, asyncRoute(async (r
   }
   if (providerRequiresKey(provider, catalog) && !configuration.apiKey) {
     res.status(400).json({
-      message: "请先保存该数据源的 API Key，再测试连接",
+      message: provider.id === "sec_edgar"
+        ? "请先保存 SEC Fair Access User-Agent，再测试连接"
+        : "请先保存该数据源的 API Key，再测试连接",
       errorCode: "PROVIDER_CONNECTION_INVALID",
       retryable: false,
       retryAfterAt: null
@@ -11744,6 +12784,30 @@ app.post("/api/lead-finder/search", requireAuth, asyncRoute(async (req, res) => 
     persistence.opportunities,
     true
   );
+
+  // 自动官网探测（翻官网挖联系人/邮箱）：对 Top N 家带 https 官网的候选做受控单页探测。
+  // 复用 queueWebsiteProbe，自带 robots 合规检查、域名限流队列、首页 64KB 上限与去噪。
+  // 总开关 AUTO_WEBSITE_PROBE_ENABLED=false 可关闭；WEBSITE_PROBE_ENABLED=false 时同样不生效。
+  // 用 Promise.allSettled + 吞错，不阻塞搜客响应，也不影响其余候选。
+  const autoProbeOn =
+    process.env.WEBSITE_PROBE_ENABLED !== "false"
+    && process.env.AUTO_WEBSITE_PROBE_ENABLED !== "false";
+  if (autoProbeOn) {
+    const autoProbeLimit = Math.max(1, Number(process.env.AUTO_WEBSITE_PROBE_LIMIT) || 5);
+    const probeTargets = persistence.opportunities
+      .filter((opp) => opp.website && /^https:\/\//i.test(opp.website))
+      .slice(0, autoProbeLimit);
+    // 不阻塞搜客响应：受控探测在后台进行，前端每 5s 轮询 website-opportunities 自动回填 contactInfo。
+    // 单个探测有独立超时与 24h 缓存，失败不影响其余候选与本次搜索返回。
+    void Promise.allSettled(
+      probeTargets.map((opp) =>
+        queueWebsiteProbe(store, opp, user.id, async (current) => {
+          await persistCandidateChanges(store, [current], false);
+        }).then(() => undefined).catch(() => undefined)
+      )
+    );
+  }
+
   res.json({
     opportunities: persistence.opportunities,
     sourceStats,
@@ -11797,6 +12861,7 @@ app.post("/api/tools/website-scrape/preview", requireAuth, asyncRoute(async (req
 
 app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
+    requestId: z.string().trim().min(8).max(120),
     opportunities: z.array(z.object({
       id: z.string().min(1),
       company: z.string().min(1),
@@ -11808,16 +12873,46 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
       description: z.string().default(""),
       source: z.string().max(40).optional().default(""),
       sourceLabel: z.string().max(80).optional().default("")
-    })).min(1).max(100),
-    allowPending: z.boolean().optional().default(false)
+    })).min(1).max(100)
+  }).superRefine((value, context) => {
+    const seen = new Set<string>();
+    value.opportunities.forEach((item, index) => {
+      if (!seen.has(item.id)) {
+        seen.add(item.id);
+        return;
+      }
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["opportunities", index, "id"],
+        message: "同一批次不能重复提交相同候选"
+      });
+    });
   });
   const body = schema.parse(req.body);
   const store = getStore();
   await store.reloadProspectCandidates?.();
+  await store.reloadProspectQualificationTeam?.(req.user!.teamId);
+  if (!store.convertProspectToLead) {
+    res.status(503).json({
+      message: "候选转线索服务暂不可用",
+      errorCode: "PROSPECT_LEAD_CONVERSION_UNAVAILABLE"
+    });
+    return;
+  }
+  type SyncResult = {
+    lead: Lead;
+    sourceEvent: LeadSourceEvent;
+    opportunity: WebsiteOpportunity;
+    duplicate: boolean;
+  };
   const sources: Array<{
     source: typeof body.opportunities[number];
     stored: WebsiteOpportunity;
+    approval: NonNullable<ReturnType<
+      typeof currentApprovedProspectDecision
+    >>;
   }> = [];
+  const resultByCandidateId = new Map<string, SyncResult>();
   for (const source of body.opportunities) {
     const stored = store.websiteOpportunities.find((item) =>
       item.id === source.id
@@ -11831,128 +12926,101 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
       res.status(403).json({ message: "候选归属其他业务员，请先分配后再加入线索" });
       return;
     }
-    if (stored.status === "excluded") {
-      res.status(400).json({ message: "已排除候选不能加入线索，请先恢复" });
-      return;
-    }
-    if (stored.status === "preview" && !body.allowPending) {
-      res.status(400).json({ message: "请先核验并标记为可联系，再加入线索" });
-      return;
-    }
-    sources.push({ source, stored });
-  }
-  const created: Array<{ lead: Lead; sourceEvent: LeadSourceEvent; opportunity: WebsiteOpportunity; duplicate: boolean }> = [];
-  const pending = [];
-  for (const entry of sources) {
-    const { source, stored } = entry;
-    const verifiedSource = {
-      ...source,
-      company: stored.company,
-      business: stored.business,
-      country: stored.country,
-      website: stored.website,
-      contact: stored.contact,
-      contactInfo: stored.contactInfo,
-      description: stored.description,
-      sourceEvidence: [...(stored.sourceEvidence || [])]
-    };
-    const contact = verifiedSource.contact || verifiedSource.contactInfo || "待维护";
-    const sourceId = stored.id;
-    const sourceChannel = stored.source || "website-scrape";
-    const sourceLabel = stored.sourceLabel || "链接登记";
-    const evidenceSourceUrl = [...verifiedSource.sourceEvidence]
-      .reverse()
-      .find((item) => item.sourceUrl)?.sourceUrl;
-    const intake = createLeadFromSource(req.user!, {
-      company: verifiedSource.company,
-      contact,
-      country: verifiedSource.country || "未知",
-      email: verifiedSource.contactInfo.includes("@") ? verifiedSource.contactInfo.trim() : "",
-      phone: verifiedSource.contactInfo.includes("@") ? "" : verifiedSource.contactInfo.trim(),
-      wechat: "",
-      source: sourceLabel,
-      sourceType: "outbound",
-      sourceChannel,
-      sourceCampaign: "",
-      externalId: sourceId,
-      sourceUrl: (evidenceSourceUrl || normalizeWebsite(verifiedSource.website)).slice(0, 500),
-      intent: "中",
-      stage: "新线索",
-      estimatedAmount: 0,
-      nextFollowAt: "",
-      remark: [verifiedSource.business, verifiedSource.description].filter(Boolean).join("；"),
-      rawPayload: { ...verifiedSource, source: sourceChannel, sourceLabel }
-    });
-    pending.push({
-      intake,
-      stored,
-      verifiedSource,
-      contact,
-      sourceChannel,
-      sourceLabel
-    });
-  }
-  // MySQL 覆盖事务只能关联已经落库的 CRM 线索。先持久化线索，
-  // 若后续关联失败，重试仍会按来源编号复用同一条线索。
-  await store.persist();
-  try {
-    for (const item of pending) {
-      const linkedAt = item.intake.lead.createdAt;
-      await syncProspectCandidateCoverage({
-        store,
-        candidate: item.stored,
-        actorId: req.user!.id,
-        action: "link-lead",
-        requestId:
-          `website-opportunity:${item.stored.id}:lead:${item.intake.lead.id}`,
-        effectiveAt: linkedAt,
-        leadId: item.intake.lead.id
+    refreshProspectScorecard(store, stored);
+    if (!stored.tenantProspectId || !stored.organizationId) {
+      res.status(409).json({
+        message: `${stored.company} 尚未完成正式企业身份归一`,
+        errorCode: "CANDIDATE_FORMAL_IDENTITY_MISSING"
       });
-      const opportunity: WebsiteOpportunity = {
-        ...item.stored,
-        company: item.verifiedSource.company,
-        business: item.verifiedSource.business || "待维护",
-        country: item.verifiedSource.country || "未知",
-        website: normalizeWebsite(item.verifiedSource.website),
-        contact: item.contact,
-        contactInfo: item.verifiedSource.contactInfo || "",
-        description: item.verifiedSource.description || "已加入线索中心，下一步核实采购负责人和真实采购需求。",
-        ownerId: req.user!.id,
+      return;
+    }
+    if (!stored.scorecard?.vqa.qualified) {
+      res.status(409).json({
+        message: `${stored.company} 未通过 VQA：${
+          stored.scorecard?.vqa.reasonCodes.join(", ") || "资格不完整"
+        }`,
+        errorCode: "PROSPECT_LEAD_CONVERSION_NOT_VQA"
+      });
+      return;
+    }
+    const approval = currentApprovedProspectDecision(store, stored);
+    if (!approval) {
+      res.status(409).json({
+        message: `${stored.company} 没有当前有效的人工可联系批准记录`,
+        errorCode: "PROSPECT_LEAD_CONVERSION_NOT_APPROVED"
+      });
+      return;
+    }
+    sources.push({ source, stored, approval });
+  }
+  const conversionRequestId = body.requestId;
+  sources.sort((left, right) => {
+    const leftConverted = left.stored.status === "synced"
+      || Boolean(left.stored.leadId);
+    const rightConverted = right.stored.status === "synced"
+      || Boolean(right.stored.leadId);
+    return Number(rightConverted) - Number(leftConverted);
+  });
+  try {
+    for (const item of sources) {
+      const result = await store.convertProspectToLead({
+        operationCode: "convert_prospect_to_lead_v1",
+        decisionId: item.approval.decision.id,
+        mode: "create_new",
+        existingLeadId: "",
+        company: item.stored.company,
+        contact: item.stored.contact,
+        country: item.stored.country,
+        intent: "中",
+        estimatedAmount: 0,
+        nextFollowAt: "",
+        remark: [item.stored.business, item.stored.description]
+          .filter(Boolean).join("；"),
         teamId: req.user!.teamId,
+        ownerId: req.user!.id,
+        prospectId: item.stored.tenantProspectId!,
+        sourceEvidence: structuredClone(item.stored.sourceEvidence || []),
+        idempotencyKey:
+          `website-opportunity:${conversionRequestId}:${item.stored.id}`,
+        convertedAt: new Date().toISOString()
+      });
+      Object.assign(item.stored, {
         status: "synced",
-        leadId: item.intake.lead.id,
-        parseMode: item.stored.parseMode || "rule",
-        source: item.sourceChannel,
-        sourceLabel: item.sourceLabel,
-        sourceEvidence: item.verifiedSource.sourceEvidence,
-        confidence: item.stored.confidence,
-        verifiedAt: item.stored.verifiedAt,
-        statusChangedAt: linkedAt,
+        leadId: result.lead.id,
+        statusChangedAt: result.sourceEvent.occurredAt,
         excludedReason: ""
-      };
-      withProspectVerificationReport(opportunity, linkedAt);
-      Object.assign(item.stored, opportunity, { id: item.stored.id });
+      });
       migrateProspectFollowUpTodos(
         store,
         item.stored,
-        item.intake.lead.id
+        result.lead.id
       );
       linkProcurementContextToLead(
         store,
         item.stored,
-        item.intake.lead.id
+        result.lead.id
       );
-      created.push({ ...item.intake, opportunity: item.stored });
+      resultByCandidateId.set(item.stored.id, {
+        lead: result.lead,
+        sourceEvent: result.sourceEvent,
+        opportunity: item.stored,
+        duplicate: result.replayed || !result.created
+      });
     }
   } catch (error) {
     if (sendProspectLeadConversionError(res, error)) return;
     throw error;
   }
-  await persistCandidateChanges(
-    store,
-    created.map((item) => item.opportunity),
-    true
-  );
+  if (sources.length) {
+    await persistCandidateChanges(
+      store,
+      sources.map((item) => item.stored),
+      true
+    );
+  }
+  const created = body.opportunities.map((item) =>
+    resultByCandidateId.get(item.id)
+  ).filter(Boolean) as SyncResult[];
   res.json({ created });
 }));
 

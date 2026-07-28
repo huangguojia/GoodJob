@@ -65,6 +65,358 @@ async function apiFromPage<T>(
   }, { requestPath: path, requestInit: init }) as Promise<T>;
 }
 
+async function mockFormalLeadFinderRun(
+  page: import("@playwright/test").Page,
+  input: {
+    suffix: string;
+    status: "running" | "succeeded" | "partial_success";
+    failSecondLaunch?: boolean;
+    superSearch?: boolean;
+  }
+) {
+  const now = new Date().toISOString();
+  const campaignId = `campaign_ui_${input.suffix}`;
+  const strategyId = `strategy_ui_${input.suffix}`;
+  const runId = `run_ui_${input.suffix}`;
+  let campaignCreates = 0;
+  const running = input.status === "running";
+  const failedSource = input.status === "partial_success";
+  const failure = {
+    stage: "provider_request",
+    errorCode: "PROVIDER_RATE_LIMITED",
+    errorMessage: "请求频率过高",
+    httpStatus: 429,
+    providerOutcomeCode: "rate_limited",
+    retryable: true,
+    retryAfterAt: new Date(Date.now() + 60_000).toISOString(),
+    occurredAt: now
+  };
+  const shards = [{
+    id: `shard_gleif_${input.suffix}`,
+    providerCode: "gleif",
+    status: running ? "running" : "succeeded",
+    createdAt: now,
+    updatedAt: now
+  }, ...(failedSource ? [{
+    id: `shard_wikidata_${input.suffix}`,
+    providerCode: "wikidata",
+    status: "failed",
+    createdAt: now,
+    updatedAt: now
+  }] : [])];
+  const detail = {
+    run: {
+      id: runId,
+      campaignId,
+      campaignVersion: 1,
+      strategyId,
+      ownerId: "u_manager_alex",
+      status: input.status,
+      revision: 1,
+      createdAt: now,
+      updatedAt: now,
+      executionSnapshot: {
+        campaign: {
+          id: campaignId,
+          name: `闭环搜客 ${input.suffix}`,
+          version: 1,
+          snapshot: {
+            goal: "寻找德国工业照明分销商",
+            products: ["工业照明"],
+            markets: ["德国"],
+            customerTypes: ["distributor"],
+            applicationScenarios: ["工业项目"],
+            exclusionRules: [],
+            sourceProviderIds: failedSource ? ["gleif", "wikidata"] : ["gleif"]
+          }
+        },
+        resolvedQuery: {
+          positiveKeywords: ["工业照明"],
+          industryTerms: ["工业项目"],
+          countries: ["德国"],
+          customerTypes: ["distributor"],
+          exclusionKeywords: []
+        }
+      }
+    },
+    shards,
+    events: [{
+      id: `event_${input.suffix}`,
+      sequence: 1,
+      eventType: running ? "started" : "completed",
+      actorId: "system",
+      fromStatus: running ? "queued" : "running",
+      toStatus: input.status,
+      reason: running ? "执行器已接管来源任务" : "所有来源均已结算，结果和失败明细已归档",
+      createdAt: now
+    }],
+    diagnostics: {
+      phases: [{
+        id: "provider_execution",
+        name: "来源执行",
+        status: failedSource ? "partial" : running ? "running" : "succeeded",
+        result: failedSource ? "一个来源返回结果，一个来源失败" : running ? "正在等待来源返回" : "来源执行完成"
+      }],
+      sources: shards.map((shard) => ({
+        shardId: shard.id,
+        providerCode: shard.providerCode,
+        status: shard.status,
+        failure: shard.status === "failed" ? failure : null,
+        job: null,
+        checkpoint: null,
+        attempts: [],
+        requests: []
+      })),
+      cleaningReport: {
+        summary: {
+          providerRawCount: 3,
+          providerInvalidCount: 0,
+          providerDuplicateCount: 1,
+          pipelineHitCount: 2,
+          processedCount: 2,
+          pendingCount: 0,
+          rejectedCount: 0,
+          suppressedCount: 0,
+          mergedCount: 1,
+          candidateCount: 1
+        },
+        stages: [],
+        reasons: [],
+        sources: shards.map((shard) => ({
+          providerCode: shard.providerCode,
+          rawCount: shard.status === "failed" ? 0 : 3,
+          invalidCount: 0,
+          duplicateCount: shard.status === "failed" ? 0 : 1,
+          processedCount: shard.status === "failed" ? 0 : 2,
+          rejectedCount: 0,
+          candidateCount: shard.status === "failed" ? 0 : 1
+        })),
+        records: [{
+          hitId: `hit_merged_${input.suffix}`,
+          providerCode: "gleif",
+          sourceRecordId: `LEI-${input.suffix}`,
+          sourceCompany: "Existing Lighting GmbH",
+          sourceCountry: "DE",
+          sourceDomain: "existing-lighting.example",
+          outcome: "merged",
+          reasonCode: "IDENTITY_ALREADY_EXISTS",
+          reason: "与已有企业身份一致，已归并到现有候选",
+          candidateId: `candidate_existing_${input.suffix}`,
+          candidateName: "Existing Lighting GmbH",
+          processedAt: now
+        }]
+      },
+      summary: {
+        rawHits: 3,
+        pages: 1,
+        accepted: 1,
+        rejected: 0,
+        succeededSources: 1,
+        failedSources: failedSource ? 1 : 0,
+        candidateIds: []
+      },
+      acceptance: {
+        outcome: failedSource ? "partial_success" : running ? "running" : "success",
+        sourceReturnedCount: 3,
+        candidateCount: 1,
+        reviewReadyCount: 0,
+        vqaCount: 0,
+        sourceSuccessCount: 1,
+        sourceFailureCount: failedSource ? 1 : 0,
+        sourceSkippedCount: 0,
+        totalCost: 0,
+        currency: "",
+        stopReason: running ? "任务仍在执行" : "所有来源均已结算",
+        recommendedNextAction: "打开候选池继续企业身份与资格核验"
+      }
+    }
+  };
+  const mission = {
+    id: `mission_ui_${input.suffix}`,
+    status: input.status,
+    revision: 1,
+    campaignId,
+    strategyId,
+    currentRunId: runId,
+    currentRound: 1,
+    maxRounds: 4,
+    targetCandidateCount: 300,
+    maxDurationMinutes: 480,
+    depth: "balanced",
+    costLimit: 0,
+    currency: "",
+    totalCost: 0,
+    rawCount: 3,
+    uniqueCount: 1,
+    candidateCount: 1,
+    reviewReadyCount: 0,
+    vqaCount: 0,
+    pendingCount: 0,
+    filteredCount: 2,
+    stopReason: "本轮覆盖矩阵已完成",
+    webSearchMode: "off",
+    mapSearchMode: "off",
+    aiDiscoveryMode: "off",
+    webProviderIds: [],
+    mapProviderIds: [],
+    aiDiscoveryProviderIds: [],
+    candidateIds: [],
+    acceptance: detail.diagnostics.acceptance,
+    rounds: [{
+      id: `round_ui_${input.suffix}`,
+      missionId: `mission_ui_${input.suffix}`,
+      roundNo: 1,
+      runId,
+      queryPlanSnapshot: {
+        positiveKeywords: ["工业照明"],
+        synonyms: ["industrial lighting"],
+        industryTerms: ["工业项目"],
+        purchaseScenarioTerms: ["distribution"],
+        countries: ["德国"],
+        languages: ["de"],
+        customerTypes: ["distributor"]
+      },
+      plannerVersion: "rules-v1",
+      planningMode: "rules",
+      queryTheme: "baseline",
+      queryPlanFingerprint: `fingerprint_${input.suffix}`,
+      coverageGaps: [],
+      queryCells: [{
+        market: "德国",
+        language: "de",
+        customerType: "distributor",
+        queryTheme: "baseline",
+        providerId: "gleif",
+        queryText: "工业照明 distributor Germany",
+        fingerprint: `cell_${input.suffix}`,
+        status: "succeeded",
+        rawCount: 3,
+        invalidCount: 0,
+        duplicateCount: 1,
+        candidateCount: 1,
+        completedAt: now
+      }],
+      rawCount: 3,
+      uniqueCount: 1,
+      candidateCount: 1,
+      reviewReadyCount: 0,
+      vqaCount: 0,
+      duplicateCount: 1,
+      filteredCount: 2,
+      pendingCount: 0,
+      duplicateRate: 0.33,
+      yieldRate: 0.33,
+      decision: "converged",
+      decisionReason: "覆盖矩阵已完成",
+      createdAt: now,
+      completedAt: now
+    }]
+  };
+
+  await page.route("**/api/prospect-campaigns**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path === "/api/prospect-campaigns" && request.method() === "POST") {
+      campaignCreates += 1;
+      if (input.failSecondLaunch && campaignCreates > 1) {
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ message: "服务暂时不可用，请稍后重试" })
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ campaign: { id: campaignId, name: `闭环搜客 ${input.suffix}`, status: "draft", currentVersion: 1, revision: 1 } })
+      });
+      return;
+    }
+    if (path === `/api/prospect-campaigns/${campaignId}/strategies` && request.method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ strategies: [{ id: strategyId, campaignId, campaignVersion: 1, name: "默认策略", status: "draft", revision: 1 }] })
+      });
+      return;
+    }
+    if (path === `/api/prospect-campaigns/${campaignId}/activate` && request.method() === "POST") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ campaign: { id: campaignId, name: `闭环搜客 ${input.suffix}`, status: "active", currentVersion: 1, revision: 2 } })
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.route("**/api/prospect-strategies/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path === `/api/prospect-strategies/${strategyId}` && request.method() === "PATCH") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ strategy: { id: strategyId, campaignId, campaignVersion: 1, name: "自动策略", status: "draft", revision: 2 } })
+      });
+      return;
+    }
+    if (path === `/api/prospect-strategies/${strategyId}/approve` && request.method() === "POST") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ strategy: { id: strategyId, campaignId, campaignVersion: 1, name: "自动策略", status: "approved", revision: 3 } })
+      });
+      return;
+    }
+    if (path === `/api/prospect-strategies/${strategyId}/runs` && request.method() === "POST") {
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(detail) });
+      return;
+    }
+    await route.fallback();
+  });
+
+  if (input.superSearch) {
+    await page.route("**/api/prospect-super-search**", async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path === "/api/prospect-super-search/preview" && request.method() === "POST") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            preview: {
+              maxRounds: 4,
+              maximumCells: 4,
+              cellsPerRound: 1,
+              coverageCombinations: 4,
+              providerCount: 1,
+              webProviderCount: 0,
+              mapProviderCount: 0,
+              aiDiscoveryProviderCount: 0,
+              targetCandidateCount: 300,
+              maxDurationMinutes: 480
+            }
+          })
+        });
+        return;
+      }
+      if (path === "/api/prospect-super-search" && request.method() === "POST") {
+        await route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({ mission, run: detail })
+        });
+        return;
+      }
+      await route.fallback();
+    });
+  }
+  return { runId, detail };
+}
+
 function buildQuestionWorkbookBuffer() {
   const worksheet = XLSX.utils.json_to_sheet([
     {
@@ -1668,7 +2020,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     expect(leads.leads.some((lead) => lead.company === editedCompany)).toBe(true);
   });
 
-  test("tools website reference registration creates editable opportunities without parsing pages", async ({ page }) => {
+  test("tools website reference registration stays blocked until authoritative identity resolution", async ({ page }) => {
     await openView(page, "tools");
     const websiteCompany = `example-supplier-${runId}`;
     await page.locator("#websiteUrlInput").fill(`https://example.com/${websiteCompany}`);
@@ -1704,16 +2056,17 @@ test.describe("GoodJob CRM prototype pages", () => {
         description: await websiteRow.locator("[data-website-field='description']").inputValue()
       }
     });
-    await apiFromPage(page, "/api/prospect-list/batch", {
-      method: "PATCH",
-      body: { ids: [websiteCandidateId], action: "mark-contactable" }
-    });
     await page.locator("#websiteReferenceSyncButton").click();
-    await expect(page.locator(".toast").last()).toContainText("已加入 1 条线索");
+    await expect(page.locator("#prospect-list")).toHaveClass(/active/);
+    await expect(page.locator("#prospectDetail")).toContainText("尚未完成正式企业身份归一");
+    await expect(page.locator("#prospectResolveIdentityButton")).toBeVisible();
     await openView(page, "leads");
-    await expect(page.locator("#leadsTableBody")).toContainText(`官网商机-${runId}`);
-    await openView(page, "pipeline");
-    await expect(page.locator("#pipeline .pipeline-strip")).not.toContainText(`官网商机-${runId} 官网产品机会`);
+    await expect(page.locator("#leadsTableBody")).not.toContainText(`官网商机-${runId}`);
+    await openView(page, "prospect-list");
+    await page.locator("#prospectSearchInput").fill(`官网商机-${runId}`);
+    await page.locator("#prospectListRows [data-prospect-open]").first().click();
+    await expect(page.locator("#prospectDetail")).toContainText("尚未完成正式企业身份归一");
+    await expect(page.locator("#prospectResolveIdentityButton")).toBeVisible();
   });
 
   test("lead management handles structured sources, trash, restore and permanent deletion", async ({ page }) => {
@@ -1854,12 +2207,14 @@ test.describe("GoodJob CRM prototype pages", () => {
     const providerBase = {
       tier: "free",
       category: "company",
+      accessMode: "api",
       requiresKey: false,
       capabilities: ["company"],
       docsUrl: "",
       keyHint: "",
       defaultBaseUrl: "",
       costNote: "测试来源",
+      recommended: false,
       hasApiKey: false,
       lastTestStatus: "passed",
       lastTestMessage: "",
@@ -1893,7 +2248,8 @@ test.describe("GoodJob CRM prototype pages", () => {
               id: "wikidata",
               name: "Wikidata",
               ready: true,
-              enabled: true
+              enabled: true,
+              recommended: true
             }
           ]
         })
@@ -1935,7 +2291,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     expect(searchRequests).toBe(0);
   });
 
-  test("lead finder shows net-new and repeated-search statistics", async ({ page }) => {
+  test("lead finder shows formal run cleaning statistics", async ({ page }) => {
     await page.route("**/api/lead-finder/providers", async (route) => {
       await route.fulfill({
         status: 200,
@@ -1946,12 +2302,14 @@ test.describe("GoodJob CRM prototype pages", () => {
             name: "GLEIF",
             tier: "free",
             category: "company",
+            accessMode: "api",
             requiresKey: false,
             capabilities: ["company"],
             docsUrl: "",
             keyHint: "",
             defaultBaseUrl: "",
             costNote: "免费官方来源",
+            recommended: true,
             hasApiKey: false,
             ready: true,
             enabled: true,
@@ -1963,59 +2321,187 @@ test.describe("GoodJob CRM prototype pages", () => {
         })
       });
     });
-    await page.route("**/api/lead-finder/search", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          opportunities: [{
-            id: `lf_incremental_${runId}`,
-            company: "Incremental Evidence GmbH",
-            business: "Industrial lighting",
-            country: "德国",
-            website: "https://incremental-evidence.example",
-            contact: "待维护",
-            contactInfo: "",
-            description: "已知企业新增一条有效证据",
-            ownerId: "u_manager_alex",
-            teamId: "europe",
-            status: "preview",
-            createdAt: new Date().toISOString(),
-            parseMode: "rule",
-            source: "gleif",
-            sourceLabel: "GLEIF",
-            sourceEvidence: []
-          }],
-          sourceStats: [{ id: "gleif", name: "GLEIF", count: 2, status: "success" }],
-          incrementalStats: {
-            rawCount: 3,
-            returnedCount: 1,
-            deduplicatedCount: 1,
-            newCount: 0,
-            evidenceUpdatedCount: 1,
-            multiSourceMergedCount: 1,
-            unchangedCount: 1,
-            excludedCount: 0
-          },
-          skipped: [],
-          providersUsed: ["gleif"],
-          runId: `run_incremental_${runId}`
-        })
-      });
+    await mockFormalLeadFinderRun(page, {
+      suffix: `cleaning_${runId}`,
+      status: "succeeded"
     });
     await page.reload();
     await expect(page.locator("body")).toHaveClass(/is-authenticated/);
     await openView(page, "lead-finder");
     await page.locator("#leadFinderUrlInput").fill("");
+    await page.locator("#leadProductKeywords").fill("工业照明");
+    await page.locator("#leadCountries").fill("德国");
     await page.locator("#leadFinderStartButton").click();
 
-    await expect(page.locator(".toast").last()).toContainText("本次命中 1 条：净新增 0 · 新证据 1 · 历史未变化 1 · 同批去重 1");
+    await expect(page.locator(".toast").last()).toContainText("获客任务已创建");
+    const liveOverview = page.locator("#leadFinderLiveOverview");
+    await expect(liveOverview).toContainText("最近一次执行");
+    await expect(liveOverview).toContainText("已结束");
+    await expect(liveOverview).toContainText("原始命中");
+    await expect(liveOverview).toContainText("候选入池");
+    await expect(liveOverview.locator("[role='progressbar']")).toHaveAttribute("aria-valuenow", "100");
     const jobCard = page.locator("#leadFinderJobList .lead-job-card").first();
-    await expect(jobCard).toContainText("净新增 / 命中");
-    await expect(jobCard).toContainText("0 / 1");
+    await expect(jobCard).toContainText("已结束");
+    await expect(jobCard).toContainText("候选入池");
     await jobCard.locator("[data-lead-job-toggle]").click();
     await expect(jobCard).toContainText("原始命中 3 条");
-    await expect(jobCard).toContainText("多来源合并 1 条");
+    await expect(jobCard).toContainText("进入候选池 1 条");
+    await expect(jobCard).toContainText("来源内重复 1 条");
+    await expect(jobCard).toContainText("身份合并 1 条");
+    await expect(jobCard).not.toContainText("部分完成");
+    await page.locator("[data-lead-result-view='cleaning']").click();
+    await expect(page.locator("#leadFinderCleaningView")).toBeVisible();
+    await expect(page.locator("#leadFinderCleaningView")).toContainText("最多展示 100 条管线处置记录");
+    await expect(page.locator("#leadFinderCleaningView")).toContainText("来源解析阶段的数据无效与页内重复仅提供汇总");
+    await expect(page.locator("#leadFinderCleaningRows .lead-cleaning-row")).toHaveCount(1);
+    await expect(page.locator("#leadFinderCleaningRows")).toContainText("已归并");
+    await expect(page.locator("#leadFinderCleaningRows")).toContainText("Existing Lighting GmbH");
+    await expect(page.locator("#leadFinderCleaningRows")).toContainText("DE / existing-lighting.example");
+    await expect(page.locator("#leadFinderCleaningRows")).toContainText(`来源记录 LEI-cleaning_${runId}`);
+  });
+
+  test("lead finder main console consumes live run events without opening details", async ({ page }) => {
+    await page.route("**/api/lead-finder/providers", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ providers: [{
+          id: "gleif",
+          name: "GLEIF",
+          tier: "free",
+          category: "company",
+          accessMode: "api",
+          requiresKey: false,
+          capabilities: ["company"],
+          docsUrl: "",
+          keyHint: "",
+          defaultBaseUrl: "",
+          costNote: "免费官方来源",
+          recommended: true,
+          hasApiKey: false,
+          ready: true,
+          enabled: true,
+          lastTestStatus: "passed",
+          lastTestMessage: "",
+          lastTestAt: "",
+          usage: ""
+        }] })
+      });
+    });
+    const mocked = await mockFormalLeadFinderRun(page, {
+      suffix: `live_${runId}`,
+      status: "running"
+    });
+    let streamRequests = 0;
+    await page.route("**/api/prospect-runs**", async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path === `/api/prospect-runs/${mocked.runId}/events/stream`) {
+        streamRequests += 1;
+        const event = {
+          id: `live_event_${runId}_${streamRequests}`,
+          runId: mocked.runId,
+          sequence: streamRequests + 1,
+          occurredAt: new Date().toISOString(),
+          type: "page.persisted",
+          stage: "candidate_persistence",
+          entityType: "run",
+          entityId: mocked.runId,
+          status: "running",
+          progress: 73,
+          metrics: { providerId: "gleif", rawCount: 12, acceptedCount: 4 },
+          failureCode: "",
+          retryable: false,
+          message: "GLEIF 已完成第一页，4 条候选正在入池"
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: "text/event-stream",
+          body: `id: ${event.id}\nevent: prospect\ndata: ${JSON.stringify(event)}\n\n`
+        });
+        return;
+      }
+      if (path === `/api/prospect-runs/${mocked.runId}` && request.method() === "GET") {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(mocked.detail) });
+        return;
+      }
+      if (path === "/api/prospect-runs" && request.method() === "GET") {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runs: [mocked.detail.run] }) });
+        return;
+      }
+      await route.fallback();
+    });
+    await page.reload();
+    await expect(page.locator("body")).toHaveClass(/is-authenticated/);
+    await openView(page, "lead-finder");
+    await page.locator("#leadFinderUrlInput").fill("");
+    await page.locator("#leadProductKeywords").fill("工业照明");
+    await page.locator("#leadCountries").fill("德国");
+    await page.locator("#leadFinderStartButton").click();
+
+    const overview = page.locator("#leadFinderLiveOverview");
+    await expect(page.locator("#lead-finder")).toHaveClass(/active/);
+    await expect(overview).toContainText("GLEIF 已完成第一页，4 条候选正在入池");
+    await expect(overview.locator("[role='progressbar']")).toHaveAttribute("aria-valuenow", "73");
+    expect(streamRequests).toBeGreaterThan(0);
+    await expect(page.locator("#lead-task-detail")).not.toHaveClass(/active/);
+  });
+
+  test("super search previews the matrix and ends as one closed mission", async ({ page }) => {
+    await page.route("**/api/lead-finder/providers", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          providers: [{
+            id: "gleif",
+            name: "GLEIF",
+            tier: "free",
+            category: "company",
+            accessMode: "api",
+            requiresKey: false,
+            capabilities: ["company"],
+            docsUrl: "",
+            keyHint: "",
+            defaultBaseUrl: "",
+            costNote: "免费官方来源",
+            recommended: true,
+            hasApiKey: false,
+            ready: true,
+            enabled: true,
+            lastTestStatus: "passed",
+            lastTestMessage: "",
+            lastTestAt: "",
+            usage: ""
+          }]
+        })
+      });
+    });
+    await mockFormalLeadFinderRun(page, {
+      suffix: `super_${runId}`,
+      status: "succeeded",
+      superSearch: true
+    });
+    await page.reload();
+    await expect(page.locator("body")).toHaveClass(/is-authenticated/);
+    await openView(page, "lead-finder");
+    await page.locator("[data-lead-search-mode='super']").click();
+    await page.locator("#leadProductKeywords").fill("工业照明");
+    await page.locator("#leadCountries").fill("德国");
+    await page.locator("#leadCustomerTypes").selectOption("经销商 / Distributor");
+
+    await expect(page.locator("#leadSuperPlan")).toContainText("4 个覆盖组合");
+    await expect(page.locator("#leadSuperPlan")).toContainText("4 个来源执行单元");
+    await page.locator("#leadFinderStartButton").click();
+
+    await expect(page.locator(".toast").last()).toContainText("获客任务已创建");
+    const jobCard = page.locator("#leadFinderJobList .lead-job-card").first();
+    await expect(jobCard).toContainText("超级搜索");
+    await expect(jobCard).toContainText("已结束");
+    await expect(jobCard).not.toContainText("部分完成");
+    await jobCard.locator("[data-lead-job-toggle]").click();
+    await expect(jobCard).toContainText("轮次：1/4");
+    await expect(jobCard).toContainText("查询矩阵：1 个执行单元");
   });
 
   test("lead finder keeps long source labels inside their result column", async ({ page }) => {
@@ -2066,20 +2552,31 @@ test.describe("GoodJob CRM prototype pages", () => {
     expect(sourceBox!.x + sourceBox!.width).toBeLessThanOrEqual(businessBox!.x + 0.5);
     expect(tagBox!.x + tagBox!.width).toBeLessThanOrEqual(sourceBox!.x + sourceBox!.width + 0.5);
     await expect(sourceTag).toHaveAttribute("title", "USAspending 联邦采购官方公开数据来源");
+    const candidateLayout = await page.locator("#lead-finder .lead-table-wrap").evaluate((wrap) => {
+      const candidateRow = wrap.querySelector("#leadFinderResultRows tr[data-lead-id]");
+      return {
+        hasHorizontalOverflow: wrap.scrollWidth > wrap.clientWidth,
+        rowHeight: candidateRow?.getBoundingClientRect().height || 0
+      };
+    });
+    expect(candidateLayout.hasHorizontalOverflow).toBeFalsy();
+    expect(candidateLayout.rowHeight).toBeGreaterThanOrEqual(96);
   });
 
-  test("lead finder keeps partial results and handles request failures locally", async ({ page }) => {
+  test("lead finder ends the task and keeps source failures in details", async ({ page }) => {
     const providers = ["gleif", "wikidata"].map((id) => ({
       id,
       name: id === "gleif" ? "GLEIF" : "Wikidata",
       tier: "free",
       category: "company",
+      accessMode: "api",
       requiresKey: false,
       capabilities: ["company"],
       docsUrl: "",
       keyHint: "",
       defaultBaseUrl: "",
       costNote: "免费官方来源",
+      recommended: true,
       hasApiKey: false,
       ready: true,
       enabled: true,
@@ -2095,82 +2592,28 @@ test.describe("GoodJob CRM prototype pages", () => {
         body: JSON.stringify({ providers })
       });
     });
-    let searchAttempt = 0;
-    await page.route("**/api/lead-finder/search", async (route) => {
-      searchAttempt += 1;
-      if (searchAttempt > 1) {
-        await route.fulfill({
-          status: 503,
-          contentType: "application/json",
-          body: JSON.stringify({ message: "服务暂时不可用，请稍后重试" })
-        });
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          opportunities: [{
-            id: `lf_partial_${runId}`,
-            company: "Partial Result GmbH",
-            business: "Industrial lighting",
-            country: "德国",
-            website: "https://partial-result.example",
-            contact: "待维护",
-            contactInfo: "",
-            description: "来自成功来源的候选",
-            ownerId: "u_manager_alex",
-            teamId: "europe",
-            status: "preview",
-            createdAt: new Date().toISOString(),
-            parseMode: "rule",
-            source: "gleif",
-            sourceLabel: "GLEIF",
-            sourceEvidence: []
-          }],
-          sourceStats: [
-            { id: "gleif", name: "GLEIF", count: 1, status: "success" },
-            {
-              id: "wikidata",
-              name: "Wikidata",
-              count: 0,
-              status: "failed",
-              error: "请求频率过高",
-              errorCode: "PROVIDER_RATE_LIMITED",
-              retryable: true,
-              retryAfterAt: new Date(Date.now() + 60_000).toISOString()
-            }
-          ],
-          incrementalStats: {
-            rawCount: 1,
-            returnedCount: 1,
-            deduplicatedCount: 0,
-            newCount: 1,
-            evidenceUpdatedCount: 0,
-            multiSourceMergedCount: 0,
-            unchangedCount: 0,
-            excludedCount: 0
-          },
-          skipped: [],
-          providersUsed: ["gleif", "wikidata"],
-          runId: `run_partial_${runId}`
-        })
-      });
+    await mockFormalLeadFinderRun(page, {
+      suffix: `source_failure_${runId}`,
+      status: "partial_success",
+      failSecondLaunch: true
     });
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.reload();
     await expect(page.locator("body")).toHaveClass(/is-authenticated/);
     await openView(page, "lead-finder");
+    await page.locator("#leadProductKeywords").fill("工业照明");
+    await page.locator("#leadCountries").fill("德国");
     const startButton = page.locator("#leadFinderStartButton");
 
     await startButton.click();
-    await expect(page.locator(".toast").last()).toContainText("部分来源执行失败");
+    await expect(page.locator(".toast").last()).toContainText("获客任务已创建");
     let jobCard = page.locator("#leadFinderJobList .lead-job-card").first();
-    await expect(jobCard).toContainText("部分完成");
+    await expect(jobCard).toContainText("已结束");
+    await expect(jobCard).not.toContainText("部分完成");
     await jobCard.locator("[data-lead-job-toggle]").click();
     await expect(jobCard).toContainText("GLEIF");
-    await expect(jobCard).toContainText("1 条 · 执行成功");
+    await expect(jobCard).toContainText("执行完成");
     await expect(jobCard).toContainText("Wikidata");
     await expect(jobCard).toContainText("请求频率过高");
     await expect(jobCard).toContainText("后可重试");
@@ -2178,7 +2621,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await startButton.click();
     await expect(page.locator(".toast").last()).toContainText("搜客任务失败：服务暂时不可用，请稍后重试");
     jobCard = page.locator("#leadFinderJobList .lead-job-card").first();
-    await expect(jobCard).toContainText("执行失败");
+    await expect(jobCard).toContainText("已结束");
     await expect(startButton).toBeEnabled();
     expect(pageErrors).toEqual([]);
   });
@@ -2207,8 +2650,39 @@ test.describe("GoodJob CRM prototype pages", () => {
             parseMode: "reference",
             source: "website-reference",
             sourceLabel: "官网链接登记",
-            sourceEvidence: []
+            sourceEvidence: [],
+            scorecard: {
+              version: "prospect-scorecard-v1",
+              generatedAt: new Date().toISOString(),
+              enterpriseConfidence: { score: 100, status: "verified", reasonCodes: [], evidenceRefs: [] },
+              icpMatch: { score: 90, status: "verified", reasonCodes: [], evidenceRefs: [] },
+              contactReadiness: { score: 100, status: "verified", reasonCodes: [], evidenceRefs: [] },
+              actionPriority: { score: 90, status: "verified", reasonCodes: [], evidenceRefs: [] },
+              vqa: { qualified: true, reasonCodes: [] }
+            }
           }]
+        })
+      });
+    });
+    await page.route(`**/api/prospect-list/lf_sync_failure_${runId}/qualification`, async (route) => {
+      const now = new Date().toISOString();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          qualification: {
+            candidateId: `lf_sync_failure_${runId}`,
+            prospectId: `prospect_sync_failure_${runId}`,
+            organizationId: `organization_sync_failure_${runId}`,
+            campaign: null,
+            blockers: [],
+            qualification: null,
+            approvedDecision: { id: `decision_${runId}`, channelId: `channel_${runId}`, status: "approved_contactable", approvedAt: now },
+            approvedChannel: { id: `channel_${runId}`, channelType: "email", value: `buyer-${runId}@example.test` },
+            stageCurrency: { company: true, icp: true, channel: true, contactability: true },
+            vqaQualified: true,
+            nextStep: "ready"
+          }
         })
       });
     });
@@ -2227,13 +2701,15 @@ test.describe("GoodJob CRM prototype pages", () => {
     const row = page.locator(`#leadFinderResultRows tr[data-lead-id="lf_sync_failure_${runId}"]`);
     await expect(row).toBeVisible();
     await row.locator("[data-lead-select]").check();
+    await expect(row).toHaveClass(/is-checked/);
+    await expect(row).toHaveAttribute("aria-selected", "true");
 
     page.once("dialog", (dialog) => dialog.accept());
     const syncButton = page.locator("#leadFinderSyncButton");
     await syncButton.click();
     await expect(page.locator(".toast").last()).toContainText("加入线索失败：线索服务暂时不可用");
     await expect(syncButton).toBeEnabled();
-    await expect(syncButton).toContainText("加入线索中心");
+    await expect(syncButton).toContainText("加入线索");
     expect(pageErrors).toEqual([]);
   });
 
@@ -2243,6 +2719,7 @@ test.describe("GoodJob CRM prototype pages", () => {
       name: "Serper (Google)",
       tier: "byok_free",
       category: "web",
+      accessMode: "api",
       requiresKey: true,
       capabilities: ["web"],
       docsUrl: "",
@@ -2296,7 +2773,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(testButton).toBeEnabled();
   });
 
-  test("lead finder page searches candidates and links to CRM workflow", async ({ page }) => {
+  test("lead finder page sends unresolved references into authoritative qualification", async ({ page }) => {
     const company = `leadfinder-${runId}`;
     await expect(page.locator(".nav button[data-view='dashboard'] + button[data-view='lead-finder']")).toBeVisible();
     await openView(page, "lead-finder");
@@ -2314,34 +2791,29 @@ test.describe("GoodJob CRM prototype pages", () => {
     });
     await page.locator("#leadFinderStartButton").click();
     const jobCard = page.locator("#leadFinderJobList .lead-job-card").first();
-    await expect(jobCard).toContainText("进行中");
+    await expect(jobCard).toContainText("执行中");
     await jobCard.locator("[data-lead-job-open]").click();
     await expect(page.locator("#lead-task-detail")).toHaveClass(/active/);
-    await expect(page.locator("#leadTaskDetailStatus")).toContainText(/进行中|已完成/);
+    await expect(page.locator("#leadTaskDetailStatus")).toContainText(/执行中|已结束/);
     await expect(page.locator("#leadTaskStream")).toContainText("客户画像与检索条件已解析");
-    await expect(page.locator("[data-lead-stream-mode='summary']")).toHaveClass(/active/);
-    await page.locator("[data-lead-stream-mode='verbose']").click();
-    await expect(page.locator("#leadTaskStream")).toHaveClass(/is-verbose/);
-    await expect(page.locator("#leadTaskStreamState")).toContainText("高速追踪");
-    await expect(page.locator("#leadTaskStream .task-run-log").nth(5)).toBeVisible({ timeout: 4_000 });
-    await expect(page.locator("#leadTaskStream")).toContainText(/读取任务运行修订|检查暂停与取消信号|同步本轮候选引用/);
-    await page.locator("[data-lead-stream-mode='summary']").click();
+    await expect(page.locator("[data-lead-stream-mode]")).toHaveCount(0);
     await expect(page.locator("#leadTaskStream")).not.toHaveClass(/is-verbose/);
+    await expect(page.locator("#leadTaskStreamState")).toContainText(/事实事件同步|记录已归档/);
     await expect(page.locator("#leadTaskStream")).toContainText("客户画像与检索条件已解析");
-    await expect(page.locator("#lead-task-detail")).toContainText("当前收获");
-    await expect(page.locator("#lead-task-detail")).toContainText("清洗与分流");
-    await expect(page.locator("#leadTaskCleaned")).toContainText("域名或企业身份重复");
+    await expect(page.locator("#lead-task-detail")).toContainText("可加入线索的候选");
+    await expect(page.locator("#lead-task-detail")).toContainText("清洗去向");
+    await expect(page.locator("#leadTaskCandidates")).toContainText("example.org");
     await page.locator("#leadTaskDetailBack").click();
     await expect(page.locator("#lead-finder")).toHaveClass(/active/);
     await jobCard.locator("[data-lead-job-toggle]").click();
     await expect(jobCard).toContainText("检索公开API");
     await expect(page.locator("#leadFinderResultRows")).toContainText("example.org");
-    await expect(page.locator("#leadFinderJobList")).toContainText("已完成");
+    await expect(page.locator("#leadFinderJobList")).toContainText("已结束");
     await expect(jobCard).toContainText("example.org");
     await expect(page.locator("#leadFinderPendingCount")).not.toHaveText("0");
 
     let firstRow = page.locator("#leadFinderResultRows tr[data-lead-id]").first();
-    await expect(firstRow.locator("[data-lead-select]")).toBeEnabled();
+    await expect(firstRow.locator("[data-lead-select]")).toBeDisabled();
     const leadFinderContactInfo = `buyer.leadfinder.${runId}@example.com`;
     const leadFinderCandidateId = await firstRow.getAttribute("data-lead-id");
     expect(leadFinderCandidateId).toBeTruthy();
@@ -2358,52 +2830,23 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#leadFinderDetail")).toContainText("重复与归属");
     await expect(page.locator("#leadFinderDetail")).toContainText("来源证据");
     await page.locator("#leadFinderDetailSaveButton").click();
-    await expect(page.locator(".toast").last()).toContainText("核验资料已保存");
-    await page.locator("#leadFinderDetailMarkButton").click();
-    await expect(page.locator(".toast").last()).toContainText("标记为可联系");
-    await page.locator("#leadFinderVerificationClose").click();
-    await expect(page.locator("#leadFinderVerificationDrawer")).not.toHaveClass(/open/);
-    firstRow = page.locator(`#leadFinderResultRows tr[data-lead-id="${leadFinderCandidateId}"]`);
-    await expect(firstRow.locator("[data-lead-select]")).toBeEnabled();
-    await firstRow.locator("[data-lead-select]").check();
-
-    await page.locator("#leadFinderTodoButton").click();
-    await expect(page.locator(".toast").last()).toContainText("请先确认并加入线索");
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.locator("#leadFinderSyncButton").click();
-    await expect(page.locator(".toast").last()).toContainText("新建 1 条");
-    await page.locator("#leadFinderTodoButton").click();
-    await expect(page.locator(".toast").last()).toContainText("首个跟进待办");
-
-    await openView(page, "leads");
-    const leadRow = page.locator("#leadsTableBody tr", { hasText: company }).first();
-    await expect(leadRow).toBeVisible();
-    await leadRow.locator(".lead-name").click();
-    await page.locator("#leadConvertButton").click();
-    await expect(page.locator("#modalTitle")).toHaveText("转为客户");
-    await page.locator('input[name="leadCustomerMode"][value="create"]').check();
-    await page.locator("#leadCreateDealInput").check();
-    const dealTitle = `${company} 首轮采购机会`;
-    await page.locator("#leadDealTitleInput").fill(dealTitle);
-    await page.locator("#leadDealProductInput").fill("LED 工程灯 / 智能搜客测试");
-    await page.locator("#leadDealAmountInput").fill("28000");
-    await page.locator("#leadDealNextActionInput").fill("确认技术参数并报价");
-    await page.locator("#confirmLeadConversionButton").click();
-    await expect(page.locator(".toast").last()).toContainText("已入客户并创建商机");
-    await expect(page.locator("#leadDrawer")).toContainText("已转客户");
-    await expect(page.locator("#leadDrawer")).toContainText("已建商机");
-    await openView(page, "pipeline");
-    await expect(page.locator("#pipeline .pipeline-strip")).toContainText(dealTitle);
-    await page.locator("#topSearchInput").fill("搜客");
-    await page.locator("#topSearchInput").press("Enter");
-    await expect(page.locator("#lead-finder")).toHaveClass(/active/);
+    await expect(page.locator(".toast").last()).toContainText("资料已保存；受影响的资格步骤已失效");
+    await expect(page.locator("#leadFinderDetailQualificationButton")).toBeVisible();
+    await page.locator("#leadFinderDetailQualificationButton").click();
+    await expect(page.locator("#prospect-list")).toHaveClass(/active/);
+    await expect(page.locator("#prospectDetail")).toContainText("尚未完成正式企业身份归一");
+    await expect(page.locator("#prospectResolveIdentityButton")).toBeVisible();
+    await page.locator("#prospectResolveIdentityButton").click();
+    await expect(page.locator("#prospect-list")).toHaveClass(/active/);
+    await expect(page.locator("#prospectIdentityProvider")).toBeFocused();
+    await expect(page.locator("#prospectIdentityRegistration")).toBeVisible();
   });
 
   test("lead finder pagination and mobile layout remain usable", async ({ page }) => {
     await apiFromPage(page, "/api/tools/website-scrape/preview", {
       method: "POST",
       body: {
-        urls: Array.from({ length: 12 }, (_, index) => `https://example.net/pagination-${runId}-${index + 1}`),
+        urls: Array.from({ length: 12 }, (_, index) => `https://pagination-${runId}-${index + 1}.example.net`),
         useAi: false
       }
     });
@@ -2420,7 +2863,340 @@ test.describe("GoodJob CRM prototype pages", () => {
     expect(overflow).toBeFalsy();
   });
 
-  test("prospect verification queue supports gated contact, pagination, bulk sync and lead return", async ({ page }) => {
+  test("prospect qualification UI closes the four-step loop and invalidates amended facts", async ({ page }) => {
+    test.setTimeout(90_000);
+    const candidateId = `qualification_ui_${runId}`;
+    const now = new Date().toISOString();
+    const future = new Date(Date.now() + 90 * 86400000).toISOString();
+    const scorecard = (qualified: boolean) => ({
+      version: "prospect-scorecard-v1",
+      generatedAt: now,
+      enterpriseConfidence: { score: qualified ? 100 : 30, status: qualified ? "verified" : "unverified", reasonCodes: [], evidenceRefs: [] },
+      icpMatch: { score: qualified ? 90 : 0, status: qualified ? "verified" : "unverified", reasonCodes: [], evidenceRefs: [] },
+      contactReadiness: { score: qualified ? 100 : 0, status: qualified ? "verified" : "unverified", reasonCodes: [], evidenceRefs: [] },
+      actionPriority: { score: qualified ? 92 : 10, status: qualified ? "verified" : "partial", reasonCodes: [], evidenceRefs: [] },
+      vqa: { qualified, reasonCodes: qualified ? [] : ["CONTACTABILITY_GATE_NOT_PASSED"] }
+    });
+    const candidate = {
+      id: candidateId,
+      company: `Qualification UI ${runId} Ltd`,
+      business: "Industrial lighting distribution",
+      country: "GB",
+      website: `https://qualification-${runId}.example`,
+      contact: "Sales Team",
+      contactInfo: `sales.${runId}@qualification.example`,
+      description: "Four-step qualification UI regression",
+      ownerId: "u_manager_alex",
+      teamId: "europe",
+      status: "preview",
+      createdAt: now,
+      parseMode: "rule",
+      source: "companies_house",
+      sourceLabel: "Companies House",
+      sourceEvidence: [],
+      tenantProspectId: `prospect_${runId}`,
+      organizationId: `organization_${runId}`,
+      scorecard: scorecard(false)
+    };
+    let stage = 0;
+    let forcedCurrency: null | {
+      company: boolean;
+      icp: boolean;
+      channel: boolean;
+      contactability: boolean;
+      nextStep: string;
+    } = null;
+    const qualificationView = () => {
+      const companyVerification = stage >= 1 ? {
+        id: `company_snapshot_${runId}`,
+        status: "verified_active",
+        reviewStatus: "approved",
+        reasonCodes: [],
+        validUntil: future,
+        createdAt: now
+      } : null;
+      const assessment = stage >= 2 ? {
+        id: `assessment_${runId}`,
+        totalScore: 100,
+        result: "qualified",
+        reviewStatus: stage >= 3 ? "approved" : "pending_review",
+        hardGateReasonCodes: [],
+        createdAt: now
+      } : null;
+      const verification = stage >= 4 ? {
+        id: `verification_${runId}`,
+        channelId: `channel_${runId}`,
+        status: "verified",
+        providerCode: "human_official_source_review",
+        reasonCode: "public_channel_confirmed",
+        verifiedAt: now,
+        expiresAt: future,
+        createdAt: now
+      } : null;
+      const decision = stage >= 5 ? {
+        id: `decision_${runId}`,
+        channelId: `channel_${runId}`,
+        status: stage >= 6 ? "approved_contactable" : "eligible",
+        reasonCodes: [],
+        approvedAt: stage >= 6 ? now : "",
+        createdAt: now
+      } : null;
+      const normalNextSteps = ["verify_company", "assess_icp", "approve_icp", "verify_channel", "evaluate_contactability", "approve_contactability", "ready"];
+      const currency = forcedCurrency || {
+        company: true,
+        icp: true,
+        channel: true,
+        contactability: true,
+        nextStep: normalNextSteps[stage]!
+      };
+      return {
+        candidateId,
+        prospectId: candidate.tenantProspectId,
+        organizationId: candidate.organizationId,
+        campaign: {
+          runId: `run_${runId}`,
+          campaignId: `campaign_${runId}`,
+          campaignVersion: 1,
+          campaignName: "Industrial lighting UK",
+          campaignSnapshot: {
+            goal: "Find qualified distributors",
+            products: ["industrial lighting"],
+            markets: ["GB"],
+            customerTypes: ["Distributor"],
+            applicationScenarios: ["industrial projects"],
+            icpRules: ["qualified distributor"],
+            exclusionRules: [],
+            sourceProviderIds: ["companies_house"]
+          }
+        },
+        blockers: [],
+        qualification: {
+          evidence: [],
+          companyVerification,
+          icpPolicies: [],
+          icpAssessments: assessment ? [assessment] : [],
+          contacts: verification ? [{ id: `contact_${runId}`, contactType: "department", name: "", department: "Sales", title: "" }] : [],
+          channels: verification ? [{ id: `channel_${runId}`, contactId: `contact_${runId}`, channelType: "email", value: candidate.contactInfo, sourceEvidenceId: `evidence_${runId}`, createdAt: now }] : [],
+          contactVerifications: verification ? [verification] : [],
+          suppressions: [],
+          contactabilityDecisions: decision ? [decision] : []
+        },
+        approvedDecision: stage >= 6 ? decision : null,
+        approvedChannel: stage >= 6 ? { id: `channel_${runId}`, channelType: "email", value: candidate.contactInfo } : null,
+        scorecard: scorecard(stage >= 6 && !forcedCurrency),
+        stageCurrency: {
+          company: currency.company,
+          icp: currency.icp,
+          channel: currency.channel,
+          contactability: currency.contactability
+        },
+        vqaQualified: stage >= 6 && !forcedCurrency,
+        nextStep: currency.nextStep
+      };
+    };
+    const qualificationOperations: string[] = [];
+    await page.route("**/api/tools/website-opportunities", async (route) => {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ opportunities: [candidate] }) });
+    });
+    await page.route(`**/api/prospect-list/${candidateId}/qualification**`, async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (route.request().method() === "POST") {
+        qualificationOperations.push(path);
+        forcedCurrency = null;
+        if (path.endsWith("/company")) stage = 1;
+        else if (/\/icp\/[^/]+\/approve$/u.test(path)) stage = 3;
+        else if (path.endsWith("/icp")) stage = 2;
+        else if (path.endsWith("/channel")) stage = 4;
+        else if (path.endsWith("/contactability/evaluate")) stage = 5;
+        else if (/\/contactability\/[^/]+\/approve$/u.test(path)) stage = 6;
+        candidate.scorecard = scorecard(stage >= 6);
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ qualification: qualificationView(), opportunity: candidate })
+      });
+    });
+    await page.route(`**/api/prospect-list/${candidateId}/details`, async (route) => {
+      const body = route.request().postDataJSON() as Record<string, string>;
+      const companyChanged = body.company !== candidate.company || body.website !== candidate.website;
+      const icpChanged = body.business !== candidate.business || body.country !== candidate.country;
+      const channelChanged = body.contact !== candidate.contact || body.contactInfo !== candidate.contactInfo;
+      candidate.company = body.company;
+      candidate.website = body.website;
+      candidate.business = body.business;
+      candidate.country = body.country;
+      candidate.contact = body.contact;
+      candidate.contactInfo = body.contactInfo;
+      candidate.description = body.description;
+      forcedCurrency = companyChanged
+        ? { company: false, icp: false, channel: false, contactability: false, nextStep: "verify_company" }
+        : icpChanged
+          ? { company: true, icp: false, channel: true, contactability: false, nextStep: "assess_icp" }
+          : channelChanged
+            ? { company: true, icp: true, channel: false, contactability: false, nextStep: "verify_channel" }
+            : null;
+      candidate.scorecard = scorecard(false);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          opportunity: candidate,
+          qualification: qualificationView(),
+          qualificationInvalidated: Boolean(forcedCurrency),
+          changedFields: []
+        })
+      });
+    });
+
+    const openCandidate = async () => {
+      await openView(page, "prospect-list");
+      await page.locator("#prospectSearchInput").fill(candidate.company);
+      await page.locator("#prospectListRows [data-prospect-open]").first().click();
+    };
+    await page.reload();
+    await expect(page.locator("body")).toHaveClass(/is-authenticated/);
+    await openCandidate();
+    await expect(page.locator("#prospectDetail")).toContainText("1. 企业核验");
+    await expect(page.locator("#prospectDetail")).toContainText("VQA 未通过");
+
+    await page.locator("#prospectVerifyCompanyButton").click();
+    await page.locator("#prospectCompanyRegistration").fill("01234567");
+    await page.locator("#prospectCompanySource").fill("https://find-and-update.company-information.service.gov.uk/company/01234567");
+    await page.locator("#prospectCompanySubmit").click();
+    await expect(page.locator("#prospectAssessIcpButton")).toBeEnabled();
+
+    await page.locator("#prospectAssessIcpButton").click();
+    await page.locator("#prospectIcpEvidence").fill("Official product page confirms industrial lighting distribution");
+    for (const [id, value] of [["Product", "30"], ["Customer", "15"], ["Market", "10"], ["Authenticity", "15"], ["Purchase", "15"], ["Contact", "10"], ["Freshness", "5"]]) {
+      await page.locator(`#prospectIcp${id}`).fill(value);
+    }
+    await page.locator("#prospectIcpSubmit").click();
+    await expect(page.locator("#prospectApproveIcpButton")).toBeVisible();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#prospectApproveIcpButton").click();
+    await expect(page.locator("#prospectVerifyChannelButton")).toBeEnabled();
+
+    await page.locator("#prospectVerifyChannelButton").click();
+    await page.locator("#prospectChannelConfirmed").check();
+    await page.locator("#prospectChannelSubmit").click();
+    await expect(page.locator("#prospectEvaluateContactabilityButton")).toBeVisible();
+    await page.locator("#prospectEvaluateContactabilityButton").click();
+    await expect(page.locator("#prospectApproveContactabilityButton")).toBeVisible();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#prospectApproveContactabilityButton").click();
+    await expect(page.locator("#prospectDetail")).toContainText("VQA 已通过");
+    await expect(page.locator("#prospectDetailSyncButton")).toBeVisible();
+    expect(qualificationOperations.map((path) => path.replace(`/api/prospect-list/${candidateId}/qualification`, ""))).toEqual([
+      "/company",
+      "/icp",
+      `/icp/assessment_${runId}/approve`,
+      "/channel",
+      "/contactability/evaluate",
+      `/contactability/decision_${runId}/approve`
+    ]);
+
+    await page.locator("#prospectEditBusiness").fill("Industrial automation distribution");
+    await page.locator("#prospectSaveButton").click();
+    await expect(page.locator("#prospectDetail")).toContainText("ICP 输入已变化，需重新评估");
+    await expect(page.locator("#prospectDetailSyncButton")).toHaveCount(0);
+
+    stage = 6;
+    forcedCurrency = null;
+    candidate.scorecard = scorecard(true);
+    await page.reload();
+    await openCandidate();
+    await page.locator("#prospectEditContactInfo").fill(`new.${runId}@qualification.example`);
+    await page.locator("#prospectSaveButton").click();
+    await expect(page.locator("#prospectDetail")).toContainText("渠道资料已变化，需重新核验");
+    await expect(page.locator("#prospectDetailSyncButton")).toHaveCount(0);
+
+    stage = 6;
+    forcedCurrency = null;
+    candidate.scorecard = scorecard(true);
+    await page.reload();
+    await openCandidate();
+    await page.locator("#prospectEditCompany").fill(`${candidate.company} Holdings`);
+    await page.locator("#prospectSaveButton").click();
+    await expect(page.locator("#prospectDetail")).toContainText("企业资料已变化，需重新核验");
+    await expect(page.locator("#prospectDetailSyncButton")).toHaveCount(0);
+  });
+
+  test("prospect list filters and sorts by local joined time and uses a mobile detail surface", async ({ page }) => {
+    const localNoon = (dayOffset: number) => {
+      const value = new Date();
+      value.setHours(12, 0, 0, 0);
+      value.setDate(value.getDate() + dayOffset);
+      return value;
+    };
+    const dateInput = (value: Date) => [
+      value.getFullYear(),
+      String(value.getMonth() + 1).padStart(2, "0"),
+      String(value.getDate()).padStart(2, "0")
+    ].join("-");
+    const joinedFixtures = [
+      { id: `joined_today_${runId}`, company: "Today Joined GmbH", createdAt: localNoon(0).toISOString() },
+      { id: `joined_week_${runId}`, company: "Week Boundary GmbH", createdAt: localNoon(-6).toISOString() },
+      { id: `joined_month_${runId}`, company: "Month Window GmbH", createdAt: localNoon(-20).toISOString() },
+      { id: `joined_old_${runId}`, company: "Oldest Joined GmbH", createdAt: localNoon(-31).toISOString() }
+    ].map((item) => ({
+      ...item,
+      business: "Industrial distribution",
+      country: "德国",
+      website: `https://${item.id}.example`,
+      contact: "Purchasing",
+      contactInfo: "buyer@example.com",
+      description: "加入时间筛选测试",
+      ownerId: "u_manager_alex",
+      teamId: "europe",
+      status: "preview",
+      parseMode: "rule",
+      source: "gleif",
+      sourceLabel: "GLEIF",
+      sourceEvidence: []
+    }));
+    await page.route("**/api/tools/website-opportunities", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ opportunities: joinedFixtures })
+      });
+    });
+    await page.reload();
+    await expect(page.locator("body")).toHaveClass(/is-authenticated/);
+    await openView(page, "prospect-list");
+
+    await expect(page.locator("#prospectListRows .prospect-item")).toHaveCount(4);
+    await expect(page.locator("#prospectListRows .prospect-item").first()).toContainText("加入候选池");
+    await page.locator("[data-prospect-date-filter='today']").click();
+    await expect(page.locator("#prospectListRows .prospect-item")).toHaveCount(1);
+    await expect(page.locator("#prospectListRows")).toContainText("Today Joined GmbH");
+    await page.locator("[data-prospect-date-filter='7d']").click();
+    await expect(page.locator("#prospectListRows .prospect-item")).toHaveCount(2);
+    await page.locator("[data-prospect-date-filter='30d']").click();
+    await expect(page.locator("#prospectListRows .prospect-item")).toHaveCount(3);
+
+    await page.locator("[data-prospect-date-filter='custom']").click();
+    await page.locator("#prospectJoinedFrom").fill(dateInput(localNoon(-6)));
+    await page.locator("#prospectJoinedTo").fill(dateInput(localNoon(0)));
+    await expect(page.locator("#prospectListRows .prospect-item")).toHaveCount(2);
+
+    await page.locator("[data-prospect-date-filter='all']").click();
+    await page.locator("#prospectSortSelect").selectOption("joined_asc");
+    await expect(page.locator("#prospectListRows .prospect-item").first()).toContainText("Oldest Joined GmbH");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator("#prospectListRows [data-prospect-open]").first().click();
+    await expect(page.locator("body")).toHaveClass(/prospect-mobile-detail-open/);
+    await expect(page.locator("#prospect-list .prospect-detail-panel")).toBeVisible();
+    await expect(page.locator("#prospectDetail")).toContainText("加入候选池");
+    await page.locator("#prospectMobileDetailClose").click();
+    await expect(page.locator("body")).not.toHaveClass(/prospect-mobile-detail-open/);
+    const dimensions = await page.evaluate(() => ({ viewport: document.documentElement.clientWidth, document: document.documentElement.scrollWidth }));
+    expect(dimensions.document).toBeLessThanOrEqual(dimensions.viewport + 1);
+  });
+
+  test("prospect verification queue supports identity gating, pagination and recovery navigation", async ({ page }) => {
     test.setTimeout(90_000);
     const prefix = `搜客清单自测-${runId}`;
     const previewResult = await apiFromPage<{ opportunities: Array<{ id: string }> }>(
@@ -2429,7 +3205,7 @@ test.describe("GoodJob CRM prototype pages", () => {
       {
         method: "POST",
         body: {
-          urls: Array.from({ length: 12 }, (_, index) => `https://example.com/prospect-${runId}-${index + 1}`),
+          urls: Array.from({ length: 12 }, (_, index) => `https://prospect-${runId}-${index + 1}.example`),
           useAi: false
         }
       }
@@ -2443,7 +3219,7 @@ test.describe("GoodJob CRM prototype pages", () => {
           company: `${prefix}-${String(index + 1).padStart(2, "0")}`,
           business: "工业产品分销",
           country: index % 2 ? "德国" : "波兰",
-          website: `https://example.com/prospect-${runId}-${index + 1}`,
+          website: `https://prospect-${runId}-${index + 1}.example`,
           contact: "待核验采购联系人",
           contactInfo: "待维护",
           description: "E2E 搜客清单核验流程"
@@ -2491,22 +3267,21 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#prospectListRows .prospect-item", { hasText: firstCompany }).locator("[data-prospect-open]").click();
     await expect(page.locator("#prospectDetail")).toContainText("待核验");
     await expect(page.locator("#prospectTodoButton")).toHaveCount(0);
-    await expect(page.locator("#prospectDetailSyncButton")).toBeVisible();
+    await expect(page.locator("#prospectDetailSyncButton")).toHaveCount(0);
     await page.locator("#prospectMailWorkspace").locator("summary").click();
     await page.locator("#prospectGenerateMailButton").click();
     await page.locator("#prospectSendMailButton").click();
-    await expect(page.locator(".toast").last()).toContainText("请先核验联系方式并标记为可联系");
+    await expect(page.locator(".toast").last()).toContainText("请先完成 VQA，并批准邮件通道");
 
     await page.locator("#prospectListRows .prospect-item", { hasText: firstCompany }).locator("[data-prospect-open]").click();
     await page.locator("#prospectEditContact").fill("Anna Buyer");
     await page.locator("#prospectEditContactInfo").fill(`anna.${runId}@example.com`);
     await page.locator("#prospectEditDescription").fill("已核验官网采购邮箱，可进行首轮开发");
     await page.locator("#prospectSaveButton").click();
-    await expect(page.locator(".toast").last()).toContainText("核验资料已保存");
-    await page.locator("#prospectDetailMarkButton").click();
-    await expect(page.locator(".toast").last()).toContainText("已标记为可联系");
-    await expect(page.locator("#prospectDetail")).toContainText("可联系");
-    await expect(page.locator("#prospectDetailSyncButton")).toBeVisible();
+    await expect(page.locator(".toast").last()).toContainText("资料已保存");
+    await expect(page.locator("#prospectDetail")).toContainText("尚未完成正式企业身份归一");
+    await expect(page.locator("#prospectResolveIdentityButton")).toBeVisible();
+    await expect(page.locator("#prospectDetailSyncButton")).toHaveCount(0);
     await expect(page.locator("#prospectTodoButton")).toHaveCount(0);
 
     const secondId = previewResult.opportunities[1].id;
@@ -2516,40 +3291,16 @@ test.describe("GoodJob CRM prototype pages", () => {
         company: secondCompany,
         business: "工业产品分销",
         country: "德国",
-        website: `https://example.com/prospect-${runId}-2`,
+        website: `https://prospect-${runId}-2.example`,
         contact: "Mark Buyer",
         contactInfo: `mark.${runId}@example.com`,
         description: "已核验第二联系人"
       }
     });
-    await apiFromPage(page, "/api/prospect-list/batch", {
-      method: "PATCH",
-      body: { ids: [secondId], action: "mark-contactable" }
-    });
     await page.locator("#prospectRefreshButton").click();
     await page.locator("#prospectSearchInput").fill(prefix);
-
-    for (const company of [firstCompany, secondCompany]) {
-      await page.locator("#prospectListRows .prospect-item", { hasText: company }).locator("[data-prospect-select]").check();
-    }
-    await expect(page.locator("#prospectSelectedCount")).toHaveText("已选 2 条");
-    await page.locator("#prospectSyncButton").click();
-    await expect(page.locator(".toast").last()).toContainText("已加入 2 条线索");
-    await expect(page.locator("#prospectSyncButton")).toHaveText("批量入线索");
-
-    await page.locator("[data-prospect-filter='synced']").click();
     await expect(page.locator("#prospectListRows")).toContainText(firstCompany);
     await expect(page.locator("#prospectListRows")).toContainText(secondCompany);
-    await page.locator("#prospectListRows .prospect-item", { hasText: firstCompany }).locator("[data-prospect-open]").click();
-    await expect(page.locator("#prospectViewLeadButton")).toBeVisible();
-    await expect(page.locator("#prospectTodoButton")).toBeVisible();
-    await page.locator("#prospectViewLeadButton").click();
-    await expect(page.locator("#leads")).toHaveClass(/active/);
-    await expect(page.locator("#leadDrawer")).toContainText(firstCompany);
-    await expect(page.locator("#leadBackToProspectButton")).toBeVisible();
-    await page.locator("#leadBackToProspectButton").click();
-    await expect(page.locator("#prospect-list")).toHaveClass(/active/);
-    await expect(page.locator("#prospectDetail")).toContainText(firstCompany);
 
     await page.setViewportSize({ width: 390, height: 844 });
     const mobileLayout = await page.evaluate(() => ({
@@ -2560,7 +3311,179 @@ test.describe("GoodJob CRM prototype pages", () => {
     expect(mobileLayout.documentWidth).toBeLessThanOrEqual(mobileLayout.viewportWidth + 1);
     expect(mobileLayout.listColumns.split(" ")).toHaveLength(1);
     await expect(page.locator("#prospect-list .lead-command-strip")).toBeVisible();
+    await expect(page.locator("#prospectDetail")).toBeHidden();
+    await page.locator("#prospectListRows [data-prospect-open]").first().click();
     await expect(page.locator("#prospectDetail")).toBeVisible();
+    await expect(page.locator("body")).toHaveClass(/prospect-mobile-detail-open/);
+  });
+
+  test("controlled website probe streams every stage and ends with detailed outcome", async ({ page }) => {
+    const candidateId = `probe_ui_${runId}`;
+    const attemptId = `probe_attempt_${runId}`;
+    const me = await apiFromPage<{ user: { id: string; teamId: string } }>(page, "/api/auth/me");
+    const now = new Date().toISOString();
+    const candidate = {
+      id: candidateId,
+      company: `Probe UI ${runId}`,
+      business: "Industrial components",
+      country: "GB",
+      website: "https://probe-ui.example.com/",
+      contact: "Purchasing",
+      contactInfo: "",
+      description: "Controlled website probe UI test",
+      ownerId: me.user.id,
+      teamId: me.user.teamId,
+      status: "preview",
+      createdAt: now,
+      outreachState: "uncontacted",
+      scorecard: {
+        version: "prospect-scorecard-v1",
+        generatedAt: now,
+        enterpriseConfidence: { score: 0, status: "unverified", reasonCodes: ["COMPANY_EVIDENCE_MISSING"], evidenceRefs: [] },
+        icpMatch: { score: 0, status: "unverified", reasonCodes: ["ICP_ASSESSMENT_MISSING"], evidenceRefs: [] },
+        contactReadiness: { score: 0, status: "unverified", reasonCodes: ["VERIFIED_CONTACT_CHANNEL_MISSING"], evidenceRefs: [] },
+        actionPriority: { score: 0, status: "partial", reasonCodes: ["PURCHASE_SIGNAL_MISSING"], evidenceRefs: [] },
+        vqa: { qualified: false, reasonCodes: ["RESOLVED_ORGANIZATION_MISSING"] }
+      },
+      websiteProbeAttempts: [] as Array<Record<string, unknown>>
+    };
+    const event = (sequence: number, stage: string, message: string) => ({
+      id: `event_${sequence}_${runId}`,
+      sequence,
+      stage,
+      status: "completed",
+      message,
+      metrics: {},
+      createdAt: now
+    });
+    const queuedAttempt = {
+      id: attemptId,
+      candidateId,
+      domain: "example.com",
+      sourceUrl: "https://probe-ui.example.com/",
+      purpose: "company_evidence_enrichment",
+      accessMode: "controlled_probe",
+      policyVersion: "website-probe-policy-v2",
+      status: "queued",
+      outcome: "pending",
+      robotsDecision: "pending",
+      httpStatus: 0,
+      responseBytes: 0,
+      redirected: false,
+      evidence: null,
+      events: [event(1, "queued", "官网低频验证已排队")],
+      failureCode: "",
+      failureMessage: "",
+      startedAt: "",
+      completedAt: "",
+      createdAt: now
+    };
+    const streamedEvents = [
+      event(2, "dns", "DNS 公网检查通过"),
+      event(3, "robots", "robots.txt 允许访问官网首页"),
+      event(4, "head", "首页状态和内容类型检查通过"),
+      event(5, "body", "首页正文样本读取完成，原文不会保存"),
+      event(6, "evidence", "已提取官网公开业务邮箱或组织级弱证据"),
+      event(7, "completed", "官网验证已结束：公开业务邮箱已回填，组织证据仍需交叉验证")
+    ];
+    const completedAttempt = {
+      ...queuedAttempt,
+      status: "completed",
+      outcome: "evidence_found",
+      robotsDecision: "allowed",
+      httpStatus: 200,
+      responseBytes: 816,
+      evidence: {
+        canonicalDomain: "example.com",
+        pageTitle: "Probe UI Company",
+        language: "en",
+        organizationName: "Probe UI Company Limited",
+        legalName: "Probe UI Company Limited",
+        addressCountry: "GB",
+        businessCategory: "Industrial components",
+        publicContactEmail: "sales@probe-ui.example.com",
+        sourceUrl: "https://probe-ui.example.com/",
+        payloadHash: "probe-ui-hash",
+        observedAt: now
+      },
+      events: [queuedAttempt.events[0], ...streamedEvents],
+      startedAt: now,
+      completedAt: now
+    };
+    await page.route("**/api/tools/website-opportunities", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ opportunities: [candidate] })
+      });
+    });
+    await page.route(`**/api/prospect-list/${candidateId}/qualification`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          qualification: {
+            candidateId,
+            prospectId: "",
+            organizationId: "",
+            campaign: null,
+            blockers: ["CANDIDATE_FORMAL_IDENTITY_MISSING"],
+            qualification: null,
+            approvedDecision: null,
+            approvedChannel: null,
+            scorecard: candidate.scorecard,
+            stageCurrency: { company: false, icp: false, channel: false, contactability: false },
+            vqaQualified: false,
+            nextStep: "blocked"
+          },
+          opportunity: candidate
+        })
+      });
+    });
+    await page.route(`**/api/prospect-list/${candidateId}/website-probe`, async (route) => {
+      candidate.websiteProbeAttempts = [queuedAttempt];
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ attempt: queuedAttempt, replayed: false, opportunity: candidate })
+      });
+    });
+    await page.route(`**/api/prospect-list/${candidateId}/website-probe/${attemptId}/events**`, async (route) => {
+      const body = `${streamedEvents.map((row) => `id: ${row.sequence}\nevent: probe_event\ndata: ${JSON.stringify(row)}\n\n`).join("")}event: done\ndata: ${JSON.stringify({ attemptId, status: "completed", outcome: "evidence_found", lastSequence: 7 })}\n\n`;
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" },
+        body
+      });
+    });
+    await page.route(`**/api/prospect-list/${candidateId}/website-probe/${attemptId}`, async (route) => {
+      candidate.websiteProbeAttempts = [completedAttempt];
+      candidate.contactInfo = "sales@probe-ui.example.com";
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ attempt: completedAttempt, terminal: true, opportunity: candidate })
+      });
+    });
+
+    await page.reload();
+    await expect(page.locator("body")).toHaveClass(/is-authenticated/);
+    await openView(page, "prospect-list");
+    await page.locator("#prospectSearchInput").fill(candidate.company);
+    await page.locator("#prospectListRows [data-prospect-open]").first().click();
+    await expect(page.locator(".prospect-probe-panel")).toContainText("受控访问 · 单次首页");
+    await page.locator("#prospectWebsiteProbeButton").click();
+    await expect(page.locator(".prospect-probe-panel")).toContainText("DNS 安全检查");
+    await expect(page.locator(".prospect-probe-panel")).toContainText("robots 规则");
+    await expect(page.locator(".prospect-probe-panel")).toContainText("首页预检");
+    await expect(page.locator(".prospect-probe-panel")).toContainText("正文样本");
+    await expect(page.locator(".prospect-probe-panel")).toContainText("最小证据");
+    await expect(page.locator(".prospect-probe-panel")).toContainText("已结束");
+    await expect(page.locator(".prospect-probe-panel")).toContainText("取得官网公开证据");
+    await expect(page.locator(".prospect-probe-panel")).toContainText("Probe UI Company Limited");
+    await expect(page.locator(".prospect-probe-panel")).toContainText("sales@probe-ui.example.com");
+    await expect(page.locator("#prospectEditContactInfo")).toHaveValue("sales@probe-ui.example.com");
+    await expect(page.locator(".prospect-probe-panel")).not.toContainText("部分完成");
   });
 
   test("ai config page saves GPT API key and tests connectivity", async ({ page }) => {

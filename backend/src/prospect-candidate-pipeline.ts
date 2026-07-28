@@ -2,10 +2,13 @@ import { createHash } from "node:crypto";
 import {
   ORGANIZATION_STRONG_IDENTITY_CONTRACT,
   resolveOrganizationStrongIdentity,
-  type OrganizationIdentityAuthorityProfile,
   type ResolveOrganizationStrongIdentityPersistedInput,
   type ResolveOrganizationStrongIdentityResult
 } from "./organization-strong-identity.js";
+import {
+  prospectOfficialIdentityMatch,
+  type ProspectOfficialIdentityMatch
+} from "./prospect-identity-authority-profiles.js";
 import {
   PROSPECT_COVERAGE_MEMORY_CONTRACT,
   recordProspectCoverage,
@@ -26,22 +29,6 @@ import type {
 } from "./types.js";
 
 const CANDIDATE_PIPELINE_VERSION = "prospect-candidate-pipeline-v1";
-const GLEIF_AUTHORITY_PROFILE: OrganizationIdentityAuthorityProfile = {
-  profileCode: "gleif-company-identity",
-  profileVersion: "v1",
-  providerCode: "gleif",
-  endpointCode: "company-search",
-  allowMultiIdentifierSubjectBinding: true,
-  rules: [{
-    kind: "lei",
-    scheme: "iso-17442",
-    jurisdictions: ["GLOBAL"],
-    entityTypes: ["legal_entity"],
-    normalizerVersions: ["gleif-lei-normalizer-v1"],
-    validatorVersions: ["iso-17442-mod97-v1"]
-  }]
-};
-
 const COUNTRY_ALIASES: Record<string, string> = {
   austria: "AT",
   奥地利: "AT",
@@ -163,6 +150,13 @@ interface ProspectCandidateMergeResult {
   alreadyProcessed?: boolean;
 }
 
+interface ProspectCandidateProcessingPreview {
+  sourceRecordId: string;
+  sourceCompany: string;
+  sourceCountry: string;
+  sourceDomain: string;
+}
+
 class ProspectCandidatePipelineError extends Error {
   constructor(
     readonly code: string,
@@ -205,6 +199,15 @@ function websiteDomain(value: string) {
   }
 }
 
+function candidateProcessingPreview(record: Partial<ProviderRecord>): ProspectCandidateProcessingPreview {
+  return {
+    sourceRecordId: text(record.providerRecordId, 255),
+    sourceCompany: text(record.company, 200),
+    sourceCountry: text(record.country, 120),
+    sourceDomain: websiteDomain(text(record.officialWebsite || record.website || record.sourceUrl, 1_000))
+  };
+}
+
 function normalizeCountry(value: string) {
   const normalized = value
     .normalize("NFKC")
@@ -216,24 +219,6 @@ function normalizeCountry(value: string) {
   }
   if (/^[a-z]{2}$/u.test(normalized)) return normalized.toUpperCase();
   return COUNTRY_ALIASES[normalized] || normalized;
-}
-
-function validLei(value: string) {
-  const normalized = value.trim().toLocaleUpperCase("en-US");
-  if (!/^[A-Z0-9]{20}$/u.test(normalized)) return false;
-  const expanded = normalized
-    .split("")
-    .map((character) =>
-      /[A-Z]/u.test(character)
-        ? String(character.charCodeAt(0) - 55)
-        : character
-    )
-    .join("");
-  let remainder = 0;
-  for (const character of expanded) {
-    remainder = (remainder * 10 + Number(character)) % 97;
-  }
-  return remainder === 1;
 }
 
 function providerRecord(payload: unknown): ProviderRecord {
@@ -265,9 +250,11 @@ function providerRecord(payload: unknown): ProviderRecord {
 }
 
 function evidenceSnapshot(
+  store: CrmStore,
   providerCode: string,
   record: ProviderRecord
 ): ProviderEvidenceSnapshot {
+  const catalog = store.providerCatalog.find((item) => item.code === providerCode);
   return {
     providerId: providerCode,
     providerRecordId: text(record.providerRecordId, 255),
@@ -285,6 +272,15 @@ function evidenceSnapshot(
     adapterVersion: text(record.adapterVersion, 100),
     catalogPolicyVersion: text(record.catalogPolicyVersion, 100),
     sourceLevel: text(record.sourceLevel, 100),
+    fieldAuthority: Object.fromEntries(
+      [...new Set([
+        ...record.matchedFields,
+        ...(record.providerRecordId ? ["providerRecordId"] : []),
+        ...(record.officialWebsite ? ["officialWebsite"] : [])
+      ])]
+        .filter((item): item is string => typeof item === "string")
+        .map((field) => [field, catalog?.fieldAuthority?.[field] || "discovery"])
+    ),
     retentionPolicyRef: text(record.retentionPolicyRef, 100)
   };
 }
@@ -408,7 +404,7 @@ function candidateFromRecord(
     parseMode: "rule",
     source: providerCode.slice(0, 40),
     sourceLabel: text(catalog?.name || providerCode, 80),
-    sourceEvidence: [evidenceSnapshot(providerCode, record)],
+    sourceEvidence: [evidenceSnapshot(store, providerCode, record)],
     confidence: typeof record.confidence === "number"
       ? Math.max(0, Math.min(100, Math.round(record.confidence)))
       : undefined
@@ -637,7 +633,8 @@ export class ProspectCandidatePipeline {
                 created: false,
                 updated: false,
                 suppressed: false
-              })
+              }),
+              this.safeCandidateProcessingPreview(hit)
             );
             result.skipped += 1;
           } catch (persistError) {
@@ -749,13 +746,17 @@ export class ProspectCandidatePipeline {
     let created = false;
     let updated = false;
     let suppressed = false;
-    if (providerCode === "gleif"
-      && raw.record.endpointCode === "company-search"
-      && validLei(record.providerRecordId)) {
-      const identity = await this.resolveGleifIdentity(
+    const officialIdentity = prospectOfficialIdentityMatch(
+      providerCode,
+      raw.record.endpointCode,
+      record
+    );
+    if (officialIdentity) {
+      const identity = await this.resolveOfficialIdentity(
         hit,
         raw.record.id,
-        record
+        record,
+        officialIdentity
       );
       trustedIdentityResolved = true;
       const coverage = await this.recordCoverage(hit, identity, record);
@@ -783,7 +784,7 @@ export class ProspectCandidatePipeline {
           suppressed: coverage.queueAction !== "enqueue",
           candidateId: outcome.candidate.id
         };
-      });
+      }, candidateProcessingPreview(record));
       if (merged.alreadyProcessed) {
         return {
           ...merged,
@@ -803,7 +804,7 @@ export class ProspectCandidatePipeline {
           suppressed: false,
           candidateId: outcome.candidate.id
         };
-      });
+      }, candidateProcessingPreview(record));
       if (merged.alreadyProcessed) {
         return {
           ...merged,
@@ -825,21 +826,45 @@ export class ProspectCandidatePipeline {
 
   private async persistCandidateMerge(
     hit: ProspectSourceRawHit,
-    operation: () => ProspectCandidateMergeResult
+    operation: () => ProspectCandidateMergeResult,
+    preview: ProspectCandidateProcessingPreview
   ) {
     return this.persistCandidateTerminal(
       hit,
       "completed",
       "",
-      operation
+      operation,
+      preview
     );
+  }
+
+  private safeCandidateProcessingPreview(hit: ProspectSourceRawHit): ProspectCandidateProcessingPreview {
+    try {
+      const raw = readProspectSourceRawRecord(this.store, {
+        teamId: hit.teamId,
+        ownerId: hit.ownerId,
+        recordId: hit.recordId,
+        envelopeSecret: this.rawEnvelopeSecret
+      });
+      const payload = raw.plaintext.payload && typeof raw.plaintext.payload === "object" && !Array.isArray(raw.plaintext.payload)
+        ? raw.plaintext.payload as Partial<ProviderRecord>
+        : {};
+      return {
+        ...candidateProcessingPreview(payload),
+        sourceRecordId: text(payload.providerRecordId, 255) || text(raw.plaintext.providerRecordId, 255),
+        sourceDomain: websiteDomain(text(payload.officialWebsite || payload.website || payload.sourceUrl || raw.plaintext.sourceUrl, 1_000))
+      };
+    } catch {
+      return { sourceRecordId: hit.recordId, sourceCompany: "", sourceCountry: "", sourceDomain: "" };
+    }
   }
 
   private async persistCandidateTerminal(
     hit: ProspectSourceRawHit,
     status: "completed" | "rejected",
     failure: string,
-    operation: () => ProspectCandidateMergeResult
+    operation: () => ProspectCandidateMergeResult,
+    preview: ProspectCandidateProcessingPreview
   ) {
     const mutation = () => candidateMutation(this.store, () => {
       const processingStates =
@@ -876,6 +901,10 @@ export class ProspectCandidatePipeline {
         status,
         failureCode: failure,
         candidateId: outcome.candidateId,
+        sourceRecordId: preview.sourceRecordId,
+        sourceCompany: preview.sourceCompany,
+        sourceCountry: preview.sourceCountry,
+        sourceDomain: preview.sourceDomain,
         processedAt,
         updatedAt: processedAt
       });
@@ -894,15 +923,13 @@ export class ProspectCandidatePipeline {
     }
   }
 
-  private async resolveGleifIdentity(
+  private async resolveOfficialIdentity(
     hit: ProspectSourceRawHit,
     rawRecordId: string,
-    record: ProviderRecord
+    record: ProviderRecord,
+    match: ProspectOfficialIdentityMatch
   ) {
     const observedAt = new Date(record.fetchedAt).toISOString();
-    const subjectRef = `gleif:${record.providerRecordId
-      .trim()
-      .toLocaleUpperCase("en-US")}`;
     const persistedInput: ResolveOrganizationStrongIdentityPersistedInput = {
       teamId: hit.teamId,
       ownerId: hit.ownerId,
@@ -911,25 +938,17 @@ export class ProspectCandidatePipeline {
       parserVersion: CANDIDATE_PIPELINE_VERSION,
       normalizerVersion: CANDIDATE_PIPELINE_VERSION,
       resolvedAt: observedAt,
-      authorityProfileCode: GLEIF_AUTHORITY_PROFILE.profileCode,
-      authorityProfileVersion: GLEIF_AUTHORITY_PROFILE.profileVersion,
+      authorityProfileCode: match.profile.profileCode,
+      authorityProfileVersion: match.profile.profileVersion,
       claims: [{
         kind: "legal_name" as const,
         value: record.company,
         entityType: "legal_entity" as const,
-        subjectRef,
-        normalizerVersion: "gleif-legal-name-normalizer-v1",
-        validatorVersion: "gleif-legal-name-present-v1",
+        subjectRef: match.subjectRef,
+        normalizerVersion: `${match.profile.providerCode}-legal-name-normalizer-v1`,
+        validatorVersion: `${match.profile.providerCode}-legal-name-present-v1`,
         observedAt
-      }, {
-        kind: "lei" as const,
-        value: record.providerRecordId,
-        entityType: "legal_entity" as const,
-        subjectRef,
-        normalizerVersion: "gleif-lei-normalizer-v1",
-        validatorVersion: "iso-17442-mod97-v1",
-        observedAt
-      }]
+      }, match.identifierClaim]
     };
     if (this.store.resolveOrganizationStrongIdentity) {
       return this.store.resolveOrganizationStrongIdentity(persistedInput);
@@ -938,7 +957,7 @@ export class ProspectCandidatePipeline {
       ...persistedInput,
       envelopeSecret: this.rawEnvelopeSecret,
       identitySecret: this.identitySecret,
-      authorityProfile: GLEIF_AUTHORITY_PROFILE
+      authorityProfile: match.profile
     });
   }
 
@@ -959,10 +978,9 @@ export class ProspectCandidatePipeline {
       evidence: [{
         kind: "strong_identifier" as const,
         factHash: sha256({
-          version: "gleif-lei-evidence-v1",
-          lei: record.providerRecordId
-            .trim()
-            .toLocaleUpperCase("en-US")
+          version: "official-identifier-evidence-v1",
+          authorityProfileCode: identity.resolution.authorityProfileCode,
+          providerRecordId: record.providerRecordId.trim()
         }),
         observedAt: coveredAt
       }]

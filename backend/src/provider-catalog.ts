@@ -1,7 +1,10 @@
 import { LEAD_PROVIDERS } from "./lead-providers.js";
 import { TRADE_PROVIDERS } from "./trade-providers.js";
 import type { LeadProvider, TradeProvider } from "./provider-contract.js";
-import type { ProviderCatalogItem } from "./types.js";
+import type {
+  ProviderCatalogItem,
+  ProviderFieldAuthorityLevel
+} from "./types.js";
 
 const CATALOG_TIMESTAMP = "2026-07-13T00:00:00.000Z";
 const LEAD_FIELDS = [
@@ -42,11 +45,118 @@ const TRADE_FIELDS = [
   "providerRecordId"
 ];
 
+const OFFICIAL_IDENTITY_PROVIDERS = new Set([
+  "gleif",
+  "companies_house",
+  "sec_edgar",
+  "fr_company_search",
+  "nppes",
+  "openfda_510k",
+  "mexico_denue",
+  "fmcsa_qcmobile"
+]);
+
+function fieldAuthority(
+  provider: LeadProvider | TradeProvider
+): Record<string, ProviderFieldAuthorityLevel> {
+  if (provider.category === "market_trade") {
+    return Object.fromEntries(
+      TRADE_FIELDS.map((field) => [field, "official" as const])
+    );
+  }
+  if (provider.category === "ai") {
+    return Object.fromEntries(
+      LEAD_FIELDS.map((field) => [field, "assisted" as const])
+    );
+  }
+  if (provider.accessMode !== "api") {
+    return Object.fromEntries(
+      LEAD_FIELDS.map((field) => [field, "assisted" as const])
+    );
+  }
+  if (provider.category === "web") {
+    return Object.fromEntries(
+      LEAD_FIELDS.map((field) => [field, "discovery" as const])
+    );
+  }
+  if (provider.category === "email") {
+    return {
+      company: "discovery",
+      website: "discovery",
+      officialWebsite: "discovery",
+      contact: "corroborated",
+      contactInfo: "corroborated",
+      description: "corroborated",
+      confidence: "corroborated",
+      providerRecordId: "official",
+      sourceUrl: "official",
+      recordType: "official",
+      evidenceSummary: "corroborated",
+      matchedFields: "official"
+    };
+  }
+  if (OFFICIAL_IDENTITY_PROVIDERS.has(provider.id)) {
+    return {
+      company: "official",
+      website: "corroborated",
+      officialWebsite: "corroborated",
+      country: "official",
+      business: "corroborated",
+      contact: "corroborated",
+      contactInfo: "corroborated",
+      description: "corroborated",
+      confidence: "corroborated",
+      providerRecordId: "official",
+      sourceUrl: "official",
+      recordType: "official",
+      evidenceSummary: "official",
+      matchedFields: "official"
+    };
+  }
+  if (provider.capabilities.includes("procurement")) {
+    return {
+      company: "corroborated",
+      website: "discovery",
+      officialWebsite: "discovery",
+      country: "corroborated",
+      business: "official",
+      contact: "corroborated",
+      contactInfo: "corroborated",
+      description: "official",
+      confidence: "corroborated",
+      providerRecordId: "official",
+      sourceUrl: "official",
+      recordType: "official",
+      evidenceSummary: "official",
+      matchedFields: "official"
+    };
+  }
+  if (provider.capabilities.includes("maps")) {
+    return Object.fromEntries(
+      LEAD_FIELDS.map((field) => [
+        field,
+        ["providerRecordId", "sourceUrl", "recordType", "matchedFields"].includes(field)
+          ? "official" as const
+          : "corroborated" as const
+      ])
+    );
+  }
+  return Object.fromEntries(
+    LEAD_FIELDS.map((field) => [
+      field,
+      ["providerRecordId", "sourceUrl", "recordType", "matchedFields"].includes(field)
+        ? "official" as const
+        : "corroborated" as const
+    ])
+  );
+}
+
 function sourceLevel(provider: LeadProvider | TradeProvider) {
   if (provider.category === "market_trade") return "market_opportunity";
   if (provider.capabilities.includes("procurement")) return "business_signal";
   if (provider.capabilities.includes("maps")) return "discovery";
-  if (provider.category === "company") return "identity";
+  if (OFFICIAL_IDENTITY_PROVIDERS.has(provider.id)) return "identity";
+  if (provider.category === "company") return "company_reference";
   if (provider.category === "email") return "contact";
   if (provider.category === "ai") return "assisted_discovery";
   return "discovery";
@@ -66,6 +176,7 @@ function providerCatalogItem(
     officialDocsUrl: provider.docsUrl,
     capabilities: [...provider.capabilities],
     allowedFields: provider.category === "market_trade" ? [...TRADE_FIELDS] : [...LEAD_FIELDS],
+    fieldAuthority: fieldAuthority(provider),
     licensePolicy: {
       tier: provider.tier,
       requiresKey: provider.requiresKey,
@@ -125,6 +236,9 @@ export function createDefaultProviderCatalog(): ProviderCatalogItem[] {
     officialDocsUrl: "",
     capabilities: ["ai", "company"],
     allowedFields: [...LEAD_FIELDS],
+    fieldAuthority: Object.fromEntries(
+      LEAD_FIELDS.map((field) => [field, "assisted" as const])
+    ),
     licensePolicy: {
       tier: "ai",
       requiresKey: false,

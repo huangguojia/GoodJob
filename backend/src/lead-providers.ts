@@ -1,4 +1,5 @@
 import {
+  ProviderContractError,
   defineProvider,
   providerHttpStatusError,
   type LeadProvider,
@@ -14,6 +15,7 @@ import { WORLD_BANK_PROCUREMENT_PROVIDER } from "./world-bank-procurement-provid
 import { PUBLIC_COMPANY_PROVIDERS } from "./public-company-providers.js";
 import { PUBLIC_PROCUREMENT_PROVIDERS } from "./public-procurement-providers.js";
 import { ASSISTED_SOURCE_PROVIDERS } from "./assisted-source-providers.js";
+import { validLei } from "./prospect-identity-authority-profiles.js";
 
 /**
  * 自动获客数据源适配层。
@@ -57,6 +59,45 @@ function companyQueryText(query: NormalizedProviderQuery) {
     .filter(Boolean)
     .join(" ")
     .trim() || query.goal || "product supplier";
+}
+
+function exactQueryValue(
+  query: NormalizedProviderQuery,
+  normalize: (value: string) => string | null
+) {
+  const values = [
+    ...query.productKeywords,
+    ...query.industries,
+    ...query.customerTypes,
+    query.goal
+  ];
+  for (const value of values) {
+    const normalized = normalize(value.trim());
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function exactLei(query: NormalizedProviderQuery) {
+  return exactQueryValue(query, (value) => {
+    const normalized = value
+      .toLocaleUpperCase("en-US")
+      .replace(/^LEI\s*:?\s*/u, "")
+      .replace(/\s+/gu, "");
+    return validLei(normalized) ? normalized : null;
+  });
+}
+
+function exactCompaniesHouseNumber(query: NormalizedProviderQuery) {
+  return exactQueryValue(query, (value) => {
+    const normalized = value
+      .toLocaleUpperCase("en-US")
+      .replace(/^(?:COMPANY(?:\s+NUMBER)?|注册号)\s*:?\s*/u, "")
+      .replace(/[\s-]+/gu, "");
+    return /^(?:\d{8}|[A-Z][A-Z0-9]\d{6})$/u.test(normalized)
+      ? normalized
+      : null;
+  });
 }
 
 function domainFromUrl(raw: string) {
@@ -428,6 +469,7 @@ const googlePlaces = defineProvider({
 const gleif = defineProvider({
   id: "gleif",
   name: "GLEIF 法人库",
+  adapterVersion: "1.1.0",
   tier: "free",
   category: "company",
   requiresKey: false,
@@ -443,15 +485,39 @@ const gleif = defineProvider({
   },
   async search({ query }, cred, tools) {
     const base = (cred.baseUrl || this.defaultBaseUrl || "https://api.gleif.org/api/v1").replace(/\/+$/, "");
+    const lei = exactLei(query);
     const q = companyQueryText(query);
-    const response = await tools.http.fetch(`${base}/lei-records?filter[fulltext]=${encodeURIComponent(q)}&page[size]=${Math.min(query.limit, 15)}`, {
+    const url = lei
+      ? `${base}/lei-records/${encodeURIComponent(lei)}`
+      : `${base}/lei-records?filter[fulltext]=${encodeURIComponent(q)}&page[size]=${Math.min(query.limit, 15)}`;
+    const response = await tools.http.fetch(url, {
       headers: { accept: "application/vnd.api+json" }
     });
+    if (lei && response.status === 404) {
+      return providerPage([], {
+        rawCount: 0,
+        display: `GLEIF 未找到 LEI ${lei}`
+      });
+    }
     if (!response.ok) throw providerHttpStatusError(response, "GLEIF");
-    const data = (await response.json()) as { data?: Array<{ id?: string; attributes?: { lei?: string; entity?: { legalName?: { name?: string }; legalAddress?: { country?: string; city?: string } } } }> };
-    const leads = (data.data || []).map((item): RawLead => {
+    type GleifRecord = { id?: string; attributes?: { lei?: string; entity?: { legalName?: { name?: string }; legalAddress?: { country?: string; city?: string }; status?: string } } };
+    const data = (await response.json()) as { data?: GleifRecord | GleifRecord[] };
+    const items = Array.isArray(data.data) ? data.data : data.data ? [data.data] : [];
+    if (lei && items.some((item) =>
+      (item.attributes?.lei || item.id || "").toLocaleUpperCase("en-US") !== lei
+    )) {
+      throw new ProviderContractError({
+        code: "PROVIDER_SCHEMA_CHANGED",
+        retryable: false,
+        retryAfterAt: null,
+        publicMessage: "GLEIF 精确查询返回了不同的 LEI，已拒绝该记录",
+        httpStatus: null,
+        phase: "search"
+      });
+    }
+    const leads = items.map((item): RawLead => {
       const entity = item.attributes?.entity;
-      const lei = item.attributes?.lei || item.id || "";
+      const recordLei = item.attributes?.lei || item.id || "";
       const city = entity?.legalAddress?.city || "";
       return {
         company: entity?.legalName?.name || "GLEIF Entity",
@@ -461,15 +527,18 @@ const gleif = defineProvider({
         contact: "待维护",
         contactInfo: "",
         description: `GLEIF 公开法人实体。${city ? `城市：${city}。` : ""}需继续核实官网、采购角色与产品匹配。`,
-        confidence: 46,
-        providerRecordId: lei,
-        sourceUrl: lei ? `https://search.gleif.org/#/record/${lei}` : "",
+        confidence: lei ? 98 : 46,
+        providerRecordId: recordLei,
+        sourceUrl: recordLei ? `https://search.gleif.org/#/record/${recordLei}` : "",
         recordType: "identity_evidence",
-        evidenceSummary: `GLEIF 法人身份记录${city ? `，注册地址城市 ${city}` : ""}`,
+        evidenceSummary: `GLEIF 法人身份记录${entity?.status ? `，状态 ${entity.status}` : ""}${city ? `，注册地址城市 ${city}` : ""}`,
         matchedFields: ["company", "country"]
       };
     });
-    return providerPage(leads, { rawCount: data.data?.length || 0 });
+    return providerPage(leads, {
+      rawCount: items.length,
+      display: lei ? `GLEIF 精确核验 LEI ${lei}` : undefined
+    });
   },
   async health() {
     return { ok: true, message: "GLEIF 免费公开接口，内置可用，无需配置" };
@@ -578,6 +647,7 @@ const opencorporates = defineProvider({
 const companiesHouse = defineProvider({
   id: "companies_house",
   name: "Companies House (UK)",
+  adapterVersion: "1.1.0",
   tier: "byok_free",
   category: "company",
   requiresKey: true,
@@ -594,28 +664,77 @@ const companiesHouse = defineProvider({
   async search({ query }, cred, tools) {
     const base = (cred.baseUrl || this.defaultBaseUrl || "https://api.company-information.service.gov.uk").replace(/\/+$/, "");
     const auth = "Basic " + Buffer.from(`${cred.apiKey}:`).toString("base64");
+    const companyNumber = exactCompaniesHouseNumber(query);
     const q = companyQueryText(query);
-    const response = await tools.http.fetch(`${base}/search/companies?q=${encodeURIComponent(q)}&items_per_page=${Math.min(query.limit, 15)}`, {
+    const url = companyNumber
+      ? `${base}/company/${encodeURIComponent(companyNumber)}`
+      : `${base}/search/companies?q=${encodeURIComponent(q)}&items_per_page=${Math.min(query.limit, 15)}`;
+    const response = await tools.http.fetch(url, {
       headers: { authorization: auth, accept: "application/json" }
     });
+    if (companyNumber && response.status === 404) {
+      return providerPage([], {
+        rawCount: 0,
+        display: `Companies House 未找到公司编号 ${companyNumber}`
+      });
+    }
     if (!response.ok) throw providerHttpStatusError(response, "Companies House");
-    const data = (await response.json()) as { items?: Array<{ title?: string; company_number?: string; address_snippet?: string; company_status?: string }> };
-    const leads = (data.items || []).map((item): RawLead => ({
-      company: item.title || "UK Company",
+    type CompaniesHouseRecord = {
+      title?: string;
+      company_name?: string;
+      company_number?: string;
+      address_snippet?: string;
+      company_status?: string;
+      registered_office_address?: {
+        address_line_1?: string;
+        address_line_2?: string;
+        locality?: string;
+        region?: string;
+        postal_code?: string;
+        country?: string;
+      };
+    };
+    const data = (await response.json()) as CompaniesHouseRecord & { items?: CompaniesHouseRecord[] };
+    const items = companyNumber ? [data] : data.items || [];
+    if (companyNumber && items.some((item) =>
+      (item.company_number || "").toLocaleUpperCase("en-US") !== companyNumber
+    )) {
+      throw new ProviderContractError({
+        code: "PROVIDER_SCHEMA_CHANGED",
+        retryable: false,
+        retryAfterAt: null,
+        publicMessage: "Companies House 精确查询返回了不同的公司编号，已拒绝该记录",
+        httpStatus: null,
+        phase: "search"
+      });
+    }
+    const leads = items.map((item): RawLead => {
+      const registeredAddress = Object.values(item.registered_office_address || {})
+        .filter(Boolean)
+        .join(", ");
+      const address = item.address_snippet || registeredAddress || "地址待补充";
+      return {
+      company: item.company_name || item.title || "UK Company",
       officialWebsite: "",
       country: "United Kingdom",
       business: query.productKeywords.join(", ") || query.industries.join(", ") || "英国注册公司 / 待核实业务",
       contact: "待维护",
       contactInfo: "",
-      description: `Companies House：${item.address_snippet || "地址待补充"}。状态 ${item.company_status || "-"}，注册号 ${item.company_number || "-"}。`,
-      confidence: 52,
+      description: `Companies House：${address}。状态 ${item.company_status || "-"}，注册号 ${item.company_number || "-"}。`,
+      confidence: companyNumber ? 98 : 52,
       providerRecordId: item.company_number || "",
       sourceUrl: item.company_number ? `https://find-and-update.company-information.service.gov.uk/company/${item.company_number}` : "",
       recordType: "identity_evidence",
       evidenceSummary: `英国公司注册号 ${item.company_number || "待补充"}，状态 ${item.company_status || "待补充"}`,
       matchedFields: ["company", "country", "description"]
-    }));
-    return providerPage(leads, { rawCount: data.items?.length || 0 });
+    };
+    });
+    return providerPage(leads, {
+      rawCount: items.length,
+      display: companyNumber
+        ? `Companies House 精确核验公司编号 ${companyNumber}`
+        : undefined
+    });
   },
   async health(cred, tools) {
     const base = (cred.baseUrl || this.defaultBaseUrl || "https://api.company-information.service.gov.uk").replace(/\/+$/, "");

@@ -65,6 +65,45 @@ assert.doesNotThrow(() => assertAgentOperationInput(customerUpdate, { health: 80
 const sendEmail = agentApiOperationContract("POST", "/api/development-email/send", undefined, "external");
 assert.equal(sendEmail.authorizationPolicy, "frozen_payload_confirmation");
 
+const qualificationApproval = agentApiOperationContract(
+  "POST",
+  "/api/prospect-list/{id}/qualification/contactability/{decisionId}/approve",
+  undefined,
+  "write"
+);
+assert.equal(qualificationApproval.authorizationPolicy, "explicit_confirmation");
+assert.doesNotThrow(() => assertAgentOperationInput(qualificationApproval, {
+  requestId: "qualification-approval-request"
+}));
+assert.throws(() => assertAgentOperationInput(qualificationApproval, {
+  requestId: "qualification-approval-request",
+  aiApproved: true
+}), /不在接口契约/u);
+
+const identityBootstrapRisk = classifyAgentApiRequest(
+  "POST",
+  "/api/prospect-list/prospect_1/identity-bootstrap"
+);
+assert.equal(identityBootstrapRisk, "external");
+const identityBootstrap = agentApiOperationContract(
+  "POST",
+  "/api/prospect-list/{id}/identity-bootstrap",
+  undefined,
+  identityBootstrapRisk
+);
+assert.equal(identityBootstrap.authorizationPolicy, "frozen_payload_confirmation");
+assert.doesNotThrow(() => assertAgentOperationInput(identityBootstrap, {
+  providerId: "gleif",
+  registrationNumber: "529900T8BM49AURSDO55",
+  requestId: "identity-bootstrap-request"
+}));
+assert.throws(() => assertAgentOperationInput(identityBootstrap, {
+  providerId: "gleif",
+  registrationNumber: "529900T8BM49AURSDO55",
+  requestId: "identity-bootstrap-request",
+  aiGeneratedCompany: "Fabricated Ltd"
+}), /不在接口契约/u);
+
 const tuningInspectRisk = classifyAgentApiRequest("POST", "/api/agent/tuning/inspect");
 const tuningInspect = agentApiOperationContract("POST", "/api/agent/tuning/inspect", undefined, tuningInspectRisk === "draft" ? "read" : tuningInspectRisk);
 assert.equal(tuningInspect.risk, "read");

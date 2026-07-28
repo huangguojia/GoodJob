@@ -108,11 +108,9 @@ function unique(values: string[], limit = 100) {
   return result;
 }
 
-function selectedMarkets(countries: string[], roundNo: number, depth: ProspectSuperSearchDepth) {
-  if (countries.length <= 1) return [...countries];
-  const size = depth === "balanced" ? 2 : depth === "deep" ? 3 : 4;
-  const start = ((roundNo - 1) * size) % countries.length;
-  return Array.from({ length: Math.min(size, countries.length) }, (_, index) => countries[(start + index) % countries.length]);
+function selectedMarket(countries: string[], roundNo: number) {
+  if (!countries.length) return "global";
+  return countries[(roundNo - 1) % countries.length]!;
 }
 
 function localeTerms(markets: string[]) {
@@ -177,24 +175,48 @@ export function planProspectSearchRound(input: ProspectSearchRoundPlanInput): Pr
     throw new Error("超级搜索轮次超出规划范围");
   }
   const theme = themes[(input.roundNo - 1) % themes.length];
-  const markets = selectedMarkets(unique(input.baseQuery.countries), input.roundNo, input.depth);
-  const locale = localeTerms(markets);
+  const market = selectedMarket(unique(input.baseQuery.countries), input.roundNo);
+  const locale = localeTerms([market]);
   const useLocalChannel = theme.code === "local_channel";
   const useLocalProcurement = theme.code === "procurement" || theme.code === "vendor_registration" || theme.code === "contract_award";
+  const keywordVariants = unique([
+    ...input.baseQuery.positiveKeywords,
+    ...input.baseQuery.synonyms
+  ]);
+  const keyword = keywordVariants[(input.roundNo - 1) % Math.max(1, keywordVariants.length)] || "business supplier";
+  const customerTypes = unique([
+    ...theme.customerTypes,
+    ...input.baseQuery.customerTypes
+  ]);
+  const customerType = customerTypes[(input.roundNo - 1) % Math.max(1, customerTypes.length)] || "unrestricted";
+  const languageChoices = unique([
+    ...(theme.code === "baseline" ? ["en"] : []),
+    ...locale.languages,
+    ...input.baseQuery.languages,
+    "en"
+  ]);
+  const language = languageChoices[(input.roundNo - 1) % languageChoices.length] || "en";
+  const purchaseTerms = unique([
+    ...(useLocalChannel ? locale.channelTerms : []),
+    ...(useLocalProcurement ? locale.procurementTerms : []),
+    ...theme.purchaseTerms,
+    ...input.baseQuery.purchaseScenarioTerms
+  ]);
+  const purchaseTerm = purchaseTerms[(input.roundNo - 1) % Math.max(1, purchaseTerms.length)] || "supplier";
+  const industryTerms = unique([
+    ...theme.industryTerms,
+    ...input.baseQuery.industryTerms
+  ]);
+  const industryTerm = industryTerms[(input.roundNo - 1) % Math.max(1, industryTerms.length)] || "";
   const resolvedQuery: ProspectResolvedQuerySnapshot = {
     ...structuredClone(input.baseQuery),
-    positiveKeywords: unique(input.baseQuery.positiveKeywords),
-    synonyms: unique(input.baseQuery.synonyms),
-    industryTerms: unique([...input.baseQuery.industryTerms, ...theme.industryTerms]),
-    purchaseScenarioTerms: unique([
-      ...input.baseQuery.purchaseScenarioTerms,
-      ...theme.purchaseTerms,
-      ...(useLocalChannel ? locale.channelTerms : []),
-      ...(useLocalProcurement ? locale.procurementTerms : [])
-    ]),
-    countries: markets,
-    languages: unique([...input.baseQuery.languages, ...locale.languages]),
-    customerTypes: unique([...input.baseQuery.customerTypes, ...theme.customerTypes]),
+    positiveKeywords: [keyword],
+    synonyms: [],
+    industryTerms: industryTerm ? [industryTerm] : [],
+    purchaseScenarioTerms: [purchaseTerm],
+    countries: [market],
+    languages: [language],
+    customerTypes: [customerType],
     exclusionKeywords: unique(input.baseQuery.exclusionKeywords),
     exclusionDomains: unique(input.baseQuery.exclusionDomains)
   };
@@ -215,13 +237,13 @@ export function planProspectSearchRound(input: ProspectSearchRoundPlanInput): Pr
     fingerprint
   };
   const providers = unique(input.providerIds, 30);
-  const market = markets.length ? markets.join(", ") : "global";
-  const customerType = resolvedQuery.customerTypes.join(", ") || "unrestricted";
-  const language = resolvedQuery.languages.join(", ") || "auto";
   const queryText = unique([
     ...resolvedQuery.positiveKeywords,
     ...resolvedQuery.synonyms,
-    ...resolvedQuery.purchaseScenarioTerms
+    ...resolvedQuery.industryTerms,
+    ...resolvedQuery.purchaseScenarioTerms,
+    customerType,
+    market
   ], 16).join(" ").slice(0, 600);
   const queryCells: ProspectSearchQueryCell[] = [];
   for (const providerId of providers) {
@@ -242,14 +264,11 @@ export function enhanceProspectSearchRoundPlan(
 ): ProspectSearchRoundPlan {
   const resolvedQuery: ProspectResolvedQuerySnapshot = {
     ...structuredClone(plan.resolvedQuery),
-    synonyms: unique([...plan.resolvedQuery.synonyms, ...(enhancement.synonyms || [])]),
-    industryTerms: unique([...plan.resolvedQuery.industryTerms, ...(enhancement.industryTerms || [])]),
-    purchaseScenarioTerms: unique([
-      ...plan.resolvedQuery.purchaseScenarioTerms,
-      ...(enhancement.purchaseScenarioTerms || [])
-    ]),
-    customerTypes: unique([...plan.resolvedQuery.customerTypes, ...(enhancement.customerTypes || [])]),
-    languages: unique([...plan.resolvedQuery.languages, ...(enhancement.languages || [])])
+    synonyms: unique([...(enhancement.synonyms || []), ...plan.resolvedQuery.synonyms], 1),
+    industryTerms: unique([...(enhancement.industryTerms || []), ...plan.resolvedQuery.industryTerms], 1),
+    purchaseScenarioTerms: unique([...(enhancement.purchaseScenarioTerms || []), ...plan.resolvedQuery.purchaseScenarioTerms], 1),
+    customerTypes: unique([...(enhancement.customerTypes || []), ...plan.resolvedQuery.customerTypes], 1),
+    languages: unique([...(enhancement.languages || []), ...plan.resolvedQuery.languages], 1)
   };
   const metadata: ProspectSearchQueryPlanMetadata = {
     ...plan.metadata,
@@ -265,13 +284,16 @@ export function enhanceProspectSearchRoundPlan(
   const queryText = unique([
     ...resolvedQuery.positiveKeywords,
     ...resolvedQuery.synonyms,
-    ...resolvedQuery.purchaseScenarioTerms
+    ...resolvedQuery.industryTerms,
+    ...resolvedQuery.purchaseScenarioTerms,
+    ...resolvedQuery.customerTypes,
+    ...resolvedQuery.countries
   ], 16).join(" ").slice(0, 600);
   const queryCells = plan.queryCells.map((cell) => {
     const cellBase = {
       market: cell.market,
-      language: resolvedQuery.languages.join(", ") || cell.language,
-      customerType: resolvedQuery.customerTypes.join(", ") || cell.customerType,
+      language: resolvedQuery.languages[0] || cell.language,
+      customerType: resolvedQuery.customerTypes[0] || cell.customerType,
       queryTheme: cell.queryTheme,
       providerId: cell.providerId,
       queryText

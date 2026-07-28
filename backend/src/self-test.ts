@@ -4,6 +4,20 @@ import { cancelAgentJob, completeAgentJob, enqueueAgentJob, failAgentJob, retryA
 import { decryptProviderConfiguration } from "./credential-security.js";
 import { setProviderHttpTestTransport } from "./provider-http-client.js";
 import { getStore } from "./store.js";
+import {
+  approveProspectContactability,
+  approveProspectIcpQualification,
+  evaluateProspectContactability,
+  prospectQualificationView,
+  recordProspectChannelQualification,
+  recordProspectCompanyQualification,
+  recordProspectIcpQualification
+} from "./prospect-qualification-workflow.js";
+import type { ProspectSearchRun } from "./types.js";
+
+process.env.PROSPECT_COVERAGE_MASTER_SECRET ||=
+  "goodjob-self-test-coverage-secret-at-least-32-characters";
+process.env.AUTO_WEBSITE_PROBE_ENABLED = "false";
 
 const server = app.listen(0);
 const address = server.address();
@@ -34,6 +48,224 @@ async function login(email: string) {
   });
   if (!response.ok) throw new Error(`login failed ${email}`);
   return json.token as string;
+}
+
+async function qualifyCandidateForSelfTest(candidateId: string) {
+  const store = getStore();
+  const candidate = store.websiteOpportunities.find((item) =>
+    item.id === candidateId
+  );
+  if (!candidate) throw new Error("qualification candidate missing");
+  const suffix = candidate.id.replace(/[^a-z0-9]/giu, "").slice(-24);
+  const organizationId = `org-self-${suffix}`;
+  const prospectId = `prospect-self-${suffix}`;
+  const campaignId = `campaign-self-${suffix}`;
+  const now = Date.now();
+  const at = (days: number) =>
+    new Date(now + days * 86_400_000).toISOString();
+  const hash = (seed: string) => seed.padEnd(64, "0").slice(0, 64);
+  store.organizations.push({
+    id: organizationId,
+    teamId: candidate.teamId,
+    scopeType: "team",
+    scopeId: candidate.teamId,
+    status: "active",
+    legalName: candidate.company,
+    normalizedName: candidate.company.trim().toLocaleLowerCase("en-US"),
+    organizationHash: hash("1"),
+    createdAt: at(-2)
+  });
+  store.tenantProspects.push({
+    id: prospectId,
+    teamId: candidate.teamId,
+    organizationId,
+    status: "active",
+    latestClassification: "net_new",
+    queueState: "pending",
+    queueReasonCode: "NET_NEW",
+    firstSeenAt: at(-2),
+    lastSeenAt: at(-2),
+    lastMaterialChangeAt: at(-2),
+    lastQueuedAt: at(-2),
+    lastReviewedAt: "",
+    nextReviewAt: "",
+    hitCount: 1,
+    sourceCount: 1,
+    evidenceCount: 1,
+    sourceKeyHashes: [hash("2")],
+    materialEvidenceKeyHashes: [hash("3")],
+    exclusionScope: "none",
+    exclusionMode: "none",
+    exclusionReasonCode: "",
+    excludedUntil: "",
+    leadId: "",
+    customerId: "",
+    dealId: "",
+    version: 1,
+    eventCount: 1,
+    eventTailHash: hash("4"),
+    prospectHash: hash("5"),
+    createdAt: at(-2),
+    updatedAt: at(-2)
+  });
+  store.prospectCampaigns.push({
+    id: campaignId,
+    teamId: candidate.teamId,
+    ownerId: candidate.ownerId,
+    name: "Self-test qualification campaign",
+    status: "active",
+    currentVersion: 1,
+    revision: 1,
+    createdBy: candidate.ownerId,
+    createdAt: at(-2),
+    updatedAt: at(-2),
+    archivedAt: ""
+  });
+  store.prospectCampaignVersions.push({
+    id: `campaign-version-self-${suffix}`,
+    teamId: candidate.teamId,
+    campaignId,
+    version: 1,
+    snapshot: {
+      goal: "Find verified industrial buyers",
+      products: ["LED engineering lighting"],
+      markets: [candidate.country || "GB"],
+      customerTypes: ["distributor"],
+      applicationScenarios: ["commercial projects"],
+      icpRules: ["Official business evidence required"],
+      exclusionRules: [],
+      sourceProviderIds: ["companies_house"]
+    },
+    contentHash: hash("6"),
+    changeSummary: "Self-test qualification",
+    createdBy: candidate.ownerId,
+    createdAt: at(-2)
+  });
+  const run = {
+    id: `run-self-${suffix}`,
+    teamId: candidate.teamId,
+    campaignId,
+    campaignVersion: 1,
+    strategyId: `strategy-self-${suffix}`,
+    ownerId: candidate.ownerId,
+    status: "succeeded",
+    createdAt: at(-2),
+    updatedAt: at(-2)
+  } as ProspectSearchRun;
+  store.prospectSearchRuns.push(run);
+  store.prospectCandidateProcessingStates ||= [];
+  store.prospectCandidateProcessingStates.push({
+    hitId: `hit-self-${suffix}`,
+    teamId: candidate.teamId,
+    ownerId: candidate.ownerId,
+    runId: run.id,
+    ledgerId: `ledger-self-${suffix}`,
+    status: "completed",
+    failureCode: "",
+    candidateId: candidate.id,
+    processedAt: at(-2),
+    updatedAt: at(-2)
+  });
+  candidate.organizationId = organizationId;
+  candidate.tenantProspectId = prospectId;
+
+  await recordProspectCompanyQualification(
+    store,
+    candidate,
+    candidate.ownerId,
+    {
+      requestId: `self-company-${suffix}`,
+      providerCode: "companies_house",
+      registrationNumber: "01234567",
+      operatingStatus: "active",
+      jurisdiction: "GB",
+      sourceRef: "https://find-and-update.company-information.service.gov.uk/company/01234567",
+      authorityCode: "GB-COMPANIES-HOUSE",
+      observedAt: at(-1),
+      validUntil: at(90),
+      officialDomain: candidate.website
+    }
+  );
+  await recordProspectIcpQualification(
+    store,
+    candidate,
+    candidate.ownerId,
+    {
+      requestId: `self-icp-${suffix}`,
+      campaignId: "",
+      dimensionScores: {
+        productApplicationMatch: 28,
+        customerType: 14,
+        marketCountry: 10,
+        companyAuthenticity: 15,
+        purchasingChannelCapability: 13,
+        contactability: 9,
+        freshness: 5
+      },
+      evidence: [{
+        field: "product_match",
+        value: "Official LED engineering lighting catalog",
+        sourceType: "official_website",
+        providerCode: "official_website_manual_review",
+        sourceRef: `${candidate.website.replace(/\/$/u, "")}/products`,
+        excerpt: "LED engineering lighting for commercial projects",
+        observedAt: at(-1),
+        expiresAt: at(30)
+      }],
+      hardGateReasonCodes: []
+    }
+  );
+  const assessment = store.prospectIcpAssessmentSnapshots.at(-1)!;
+  await approveProspectIcpQualification(
+    store,
+    candidate,
+    candidate.ownerId,
+    assessment.id,
+    { requestId: `self-icp-approval-${suffix}` }
+  );
+  await recordProspectChannelQualification(
+    store,
+    candidate,
+    candidate.ownerId,
+    {
+      requestId: `self-channel-${suffix}`,
+      contactType: "department",
+      name: "",
+      department: "Purchasing",
+      title: "",
+      identityStatus: "source_confirmed",
+      channelType: "email",
+      value: candidate.contactInfo,
+      sourceType: "official_website",
+      sourceProviderCode: "official_website_manual_review",
+      sourceRef: `${candidate.website.replace(/\/$/u, "")}/contact`,
+      excerpt: "Public purchasing email",
+      acquiredAt: at(-1),
+      verificationBasis: "official_source_manual",
+      verificationProviderCode: "human_official_source_review",
+      verificationReasonCode: "public_channel_confirmed",
+      verifiedAt: at(-1),
+      expiresAt: at(30),
+      humanConfirmed: true
+    }
+  );
+  await evaluateProspectContactability(store, candidate, candidate.ownerId, {
+    requestId: `self-contactability-${suffix}`,
+    channelId: ""
+  });
+  const decision = store.prospectContactabilityDecisions.at(-1)!;
+  await approveProspectContactability(
+    store,
+    candidate,
+    candidate.ownerId,
+    decision.id,
+    { requestId: `self-contactability-approval-${suffix}` }
+  );
+  const view = prospectQualificationView(store, candidate);
+  if (!view.vqaQualified) {
+    throw new Error(`self-test qualification failed: ${JSON.stringify(view)}`);
+  }
+  return view;
 }
 
 try {
@@ -475,12 +707,50 @@ try {
   }
   const previewOpportunity = websitePreview.json.opportunities[0];
 
+  const websiteSyncValidationCounts = {
+    leads: getStore().leads.length,
+    sourceEvents: getStore().leadSourceEvents.length,
+    activities: getStore().leadActivities.length,
+    coverageEvents: getStore().prospectCoverageEvents.length
+  };
+  const websiteSyncWithoutRequestId = await request("/api/tools/website-scrape/sync-opportunities", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ opportunities: [previewOpportunity] })
+  });
+  if (websiteSyncWithoutRequestId.response.status !== 400) {
+    throw new Error("website opportunity sync must require requestId");
+  }
+  const websiteSyncDuplicateIds = await request("/api/tools/website-scrape/sync-opportunities", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      requestId: "website-sync-duplicate-candidate-ids",
+      opportunities: [previewOpportunity, previewOpportunity]
+    })
+  });
+  if (websiteSyncDuplicateIds.response.status !== 400
+    || JSON.stringify(websiteSyncValidationCounts) !== JSON.stringify({
+      leads: getStore().leads.length,
+      sourceEvents: getStore().leadSourceEvents.length,
+      activities: getStore().leadActivities.length,
+      coverageEvents: getStore().prospectCoverageEvents.length
+    })) {
+    throw new Error("duplicate batch candidate ids must fail with zero side effects");
+  }
+
   const websiteSyncBeforeVerify = await request("/api/tools/website-scrape/sync-opportunities", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ opportunities: [{ ...previewOpportunity, company: "自动化官网商机", business: "LED 工程灯" }] })
+    body: JSON.stringify({
+      requestId: "website-sync-before-verification",
+      opportunities: [{ ...previewOpportunity, company: "自动化官网商机", business: "LED 工程灯" }]
+    })
   });
-  if (websiteSyncBeforeVerify.response.status !== 400) throw new Error("unverified website opportunity must not sync");
+  if (websiteSyncBeforeVerify.response.status !== 409
+    || websiteSyncBeforeVerify.json.errorCode !== "CANDIDATE_FORMAL_IDENTITY_MISSING") {
+    throw new Error("unverified website opportunity must not sync");
+  }
 
   const websiteVerificationEdit = await request(`/api/prospect-list/${previewOpportunity.id}/details`, {
     method: "PATCH",
@@ -499,15 +769,30 @@ try {
     throw new Error("website opportunity verification edit failed");
   }
 
+  await qualifyCandidateForSelfTest(previewOpportunity.id);
+
+  const websiteWrongRecipientMail = await request(`/api/prospect-list/${previewOpportunity.id}/send-development-email`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      to: "prospect@example.com",
+      subject: "Wrong approved channel",
+      body: "This message must be rejected before dispatch."
+    })
+  });
+  if (websiteWrongRecipientMail.response.status !== 400
+    || websiteWrongRecipientMail.json.errorCode !== "PROSPECT_OUTREACH_CHANNEL_MISMATCH") {
+    throw new Error("prospect list must reject a recipient outside the approved channel");
+  }
+
   const markWebsiteContactable = await request("/api/prospect-list/batch", {
     method: "PATCH",
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({ ids: [previewOpportunity.id], action: "mark-contactable" })
   });
-  if (!markWebsiteContactable.response.ok
-    || markWebsiteContactable.json.opportunities?.[0]?.status !== "contactable"
-    || !markWebsiteContactable.json.opportunities?.[0]?.verifiedAt) {
-    throw new Error("website opportunity verify failed");
+  if (markWebsiteContactable.response.status !== 409
+    || markWebsiteContactable.json.errorCode !== "PROSPECT_QUALIFICATION_REQUIRED") {
+    throw new Error("legacy mark-contactable action must remain disabled");
   }
 
   const websiteContactMail = await request(`/api/prospect-list/${previewOpportunity.id}/send-development-email`, {
@@ -526,7 +811,10 @@ try {
   const websiteSync = await request("/api/tools/website-scrape/sync-opportunities", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ opportunities: [{ ...websitePreview.json.opportunities[0], company: "自动化官网商机", business: "LED 工程灯" }] })
+    body: JSON.stringify({
+      requestId: "website-sync-qualified-candidate",
+      opportunities: [{ ...websitePreview.json.opportunities[0], company: "自动化官网商机", business: "LED 工程灯" }]
+    })
   });
   if (!websiteSync.response.ok || websiteSync.json.created?.[0]?.lead?.company !== "自动化官网商机" || websiteSync.json.created?.[0]?.opportunity?.leadId !== websiteSync.json.created?.[0]?.lead?.id) {
     throw new Error("website opportunity sync failed");
@@ -544,15 +832,14 @@ try {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({
+      requestId: "website-sync-pending-candidate",
       opportunities: [pendingImportOpportunity],
       allowPending: true
     })
   });
-  if (!pendingImportSync.response.ok
-    || pendingImportSync.json.created?.[0]?.opportunity?.status !== "synced"
-    || pendingImportSync.json.created?.[0]?.lead?.id
-      !== pendingImportSync.json.created?.[0]?.opportunity?.leadId) {
-    throw new Error("explicit pending opportunity import failed");
+  if (pendingImportSync.response.status !== 409
+    || pendingImportSync.json.errorCode !== "CANDIDATE_FORMAL_IDENTITY_MISSING") {
+    throw new Error("pending opportunity must not bypass verification gate");
   }
   const excludeSyncedWebsite = await request("/api/prospect-list/batch", {
     method: "PATCH",
@@ -560,18 +847,55 @@ try {
     body: JSON.stringify({ ids: [websiteSync.json.created[0].opportunity.id], action: "exclude" })
   });
   if (excludeSyncedWebsite.response.status !== 400) throw new Error("synced opportunity must not be excluded");
+  const websiteReplayCountsBefore = {
+    leads: getStore().leads.length,
+    sourceEvents: getStore().leadSourceEvents.length,
+    activities: getStore().leadActivities.length,
+    coverageEvents: getStore().prospectCoverageEvents.length
+  };
   const websiteSyncRepeat = await request("/api/tools/website-scrape/sync-opportunities", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ opportunities: [{ ...websitePreview.json.opportunities[0], company: "自动化官网商机", business: "LED 工程灯" }] })
+    body: JSON.stringify({
+      requestId: "website-sync-qualified-candidate",
+      opportunities: [{ ...websitePreview.json.opportunities[0], company: "自动化官网商机", business: "LED 工程灯" }]
+    })
   });
   if (!websiteSyncRepeat.response.ok || !websiteSyncRepeat.json.created?.[0]?.duplicate || websiteSyncRepeat.json.created?.[0]?.lead?.id !== websiteSync.json.created?.[0]?.lead?.id) {
     throw new Error("website opportunity sync must be idempotent");
+  }
+  if (websiteSyncRepeat.json.created[0].sourceEvent?.id !== websiteSync.json.created[0].sourceEvent?.id
+    || JSON.stringify(websiteReplayCountsBefore) !== JSON.stringify({
+      leads: getStore().leads.length,
+      sourceEvents: getStore().leadSourceEvents.length,
+      activities: getStore().leadActivities.length,
+      coverageEvents: getStore().prospectCoverageEvents.length
+    })) {
+    throw new Error("website opportunity replay must have zero conversion side effects");
+  }
+  const websiteSyncDifferentRequest = await request("/api/tools/website-scrape/sync-opportunities", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      requestId: "website-sync-qualified-candidate-different-request",
+      opportunities: [{ ...websitePreview.json.opportunities[0], company: "自动化官网商机", business: "LED 工程灯" }]
+    })
+  });
+  if (websiteSyncDifferentRequest.response.status !== 409
+    || websiteSyncDifferentRequest.json.errorCode !== "PROSPECT_LEAD_CONVERSION_ALREADY_COMPLETED"
+    || JSON.stringify(websiteReplayCountsBefore) !== JSON.stringify({
+      leads: getStore().leads.length,
+      sourceEvents: getStore().leadSourceEvents.length,
+      activities: getStore().leadActivities.length,
+      coverageEvents: getStore().prospectCoverageEvents.length
+    })) {
+    throw new Error("converted candidate must reject a different batch request with zero side effects");
   }
   const forgedSourceSync = await request("/api/tools/website-scrape/sync-opportunities", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({
+      requestId: "website-sync-forged-candidate",
       opportunities: [{
         id: `website_partner_${Date.now()}`,
         company: "自动化合作目录候选",
@@ -612,7 +936,10 @@ try {
   const crossWebsiteSync = await request("/api/tools/website-scrape/sync-opportunities", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ opportunities: [miaOpportunity] })
+    body: JSON.stringify({
+      requestId: "website-sync-cross-owner",
+      opportunities: [miaOpportunity]
+    })
   });
   if (crossWebsiteSync.response.status !== 404) {
     throw new Error("sales must not sync another salesperson website opportunity");
@@ -1034,9 +1361,7 @@ try {
       || secondFreeSearch.json.incrementalStats?.unchangedCount !== secondFreeSearch.json.opportunities?.length
       || secondFreeGleif.company !== "人工核验免费源企业"
       || secondFreeGleif.contactInfo !== "free-source-buyer@example.test"
-      || secondFreeGleif.description !== "免费入口刷新不得覆盖人工核验字段"
-      || secondFreeGleif.verificationReport?.generatedAt
-        !== freeManualEdit.json.opportunity?.verificationReport?.generatedAt) {
+      || secondFreeGleif.description !== "免费入口刷新不得覆盖人工核验字段") {
       throw new Error("free provider search must return canonical ids and protect manual fields");
     }
 
@@ -1199,8 +1524,6 @@ try {
       || secondProviderOpportunity?.id !== firstProviderOpportunity.id
       || secondProviderSearch.json.incrementalStats?.newCount !== 0
       || secondProviderSearch.json.incrementalStats?.unchangedCount < 1
-      || secondProviderOpportunity?.verificationReport?.generatedAt
-        !== firstProviderOpportunity.verificationReport?.generatedAt
       || websiteDomain(collisionAfterRefresh?.website || "") === providerLogDomainMarker
       || countryCollisionAfterRefresh?.country !== "Canada"
       || countryCollisionAfterRefresh?.company !== "同官网加拿大独立法人"
@@ -1234,8 +1557,6 @@ try {
       || providerOpportunity.contact !== "Verified Buyer"
       || providerOpportunity.contactInfo !== manuallyVerifiedEmail
       || providerOpportunity.description !== "人工核验字段不得被后续 Provider 刷新覆盖"
-      || providerOpportunity.verificationReport?.generatedAt
-        !== manualProviderEdit.json.opportunity?.verificationReport?.generatedAt
       || !Array.isArray(providerEvidence)
       || !providerEvidence.some((item: any) =>
         item.providerId === "serper"
@@ -1272,19 +1593,14 @@ try {
   if (enterpriseWebsiteRequestsDuringProviderSearch !== 0) {
     throw new Error("provider search must make zero enterprise webpage requests");
   }
-  const providerMarkContactable = await request("/api/prospect-list/batch", {
-    method: "PATCH",
-    headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ ids: [providerOpportunity.id], action: "mark-contactable" })
-  });
-  if (!providerMarkContactable.response.ok
-    || providerMarkContactable.json.opportunities?.[0]?.status !== "contactable") {
-    throw new Error("provider opportunity verification failed");
-  }
+  await qualifyCandidateForSelfTest(providerOpportunity.id);
   const providerLeadSync = await request("/api/tools/website-scrape/sync-opportunities", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ opportunities: [providerOpportunity] })
+    body: JSON.stringify({
+      requestId: "website-sync-provider-candidate",
+      opportunities: [providerOpportunity]
+    })
   });
   const syncedProviderOpportunity = providerLeadSync.json.created?.[0]?.opportunity;
   const syncedProviderSourceEvent = providerLeadSync.json.created?.[0]?.sourceEvent;
@@ -1645,8 +1961,9 @@ try {
       body: "Dear team, we can support your lighting and home product sourcing."
     })
   });
-  if (!prospectMail.response.ok || prospectMail.json.opportunity?.lastDevelopmentEmailTo !== "prospect@example.com") {
-    throw new Error("prospect list development email failed");
+  if (prospectMail.response.status !== 409
+    || prospectMail.json.errorCode !== "PROSPECT_OUTREACH_NOT_ACTIVE") {
+    throw new Error("converted prospect must not send from the candidate outreach route");
   }
 
   const profileClear = await request("/api/profile/email-binding", {
@@ -2685,7 +3002,7 @@ try {
     profileSmtpTestTo: profileTestMail.json.to,
     profileCleared: !profileClear.json.user.hasSmtpPassword,
     developmentEmailTo: profileMail.json.user.lastDevelopmentEmailTo,
-    prospectEmailTo: prospectMail.json.opportunity.lastDevelopmentEmailTo,
+    prospectEmailTo: websiteContactMail.json.opportunity.lastDevelopmentEmailTo,
     leadProviderCount: providerList.length,
     agentJobsVisibleToOwner: shirleyAgentJobs.json.total,
     agentJobEncryption: agentJob.inputJsonEncrypted.startsWith("v1."),

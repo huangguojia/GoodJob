@@ -598,6 +598,10 @@ try {
     ledgerId: "pprl_diagnostics_rejected",
     status: "rejected",
     failureCode: "CANDIDATE_PAYLOAD_INVALID",
+    sourceRecordId: "provider-record-rejected-01",
+    sourceCompany: "Rejected Industrial GmbH",
+    sourceCountry: "DE",
+    sourceDomain: "rejected-industrial.example",
     processedAt: "2026-07-22T12:01:00.000Z",
     updatedAt: "2026-07-22T12:01:00.000Z"
   });
@@ -607,6 +611,10 @@ try {
   assert.equal(cleaningDiagnostics.records[0]?.outcome, "rejected");
   assert.equal(cleaningDiagnostics.records[0]?.reasonCode, "CANDIDATE_PAYLOAD_INVALID");
   assert.match(cleaningDiagnostics.records[0]?.reason || "", /必需字段/u);
+  assert.equal(cleaningDiagnostics.records[0]?.sourceRecordId, "provider-record-rejected-01");
+  assert.equal(cleaningDiagnostics.records[0]?.sourceCompany, "Rejected Industrial GmbH");
+  assert.equal(cleaningDiagnostics.records[0]?.sourceCountry, "DE");
+  assert.equal(cleaningDiagnostics.records[0]?.sourceDomain, "rejected-industrial.example");
   store.prospectCandidateProcessingStates = store.prospectCandidateProcessingStates.filter((item) =>
     item.hitId !== "psrh_diagnostics_rejected"
   );

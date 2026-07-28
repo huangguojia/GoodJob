@@ -64,6 +64,24 @@ async function resolveAllowedAddress(hostname: string) {
   return allowed[0];
 }
 
+export async function resolveProviderPublicAddresses(hostname: string) {
+  const normalizedHostname = normalizeNetworkHostname(hostname);
+  if (providerHttpTestTransport && process.env.NODE_ENV === "test") {
+    return [{ address: "203.0.113.10", family: 4 }];
+  }
+  const addresses = isIP(normalizedHostname)
+    ? [{ address: normalizedHostname, family: isIP(normalizedHostname) }]
+    : await lookup(normalizedHostname, { all: true, verbatim: true });
+  if (!addresses.length
+    || addresses.some((item) => isPrivateNetworkAddress(item.address))) {
+    throw policyError("数据源地址未通过公网安全检查");
+  }
+  return addresses.map((item) => ({
+    address: item.address,
+    family: item.family
+  }));
+}
+
 function validateTarget(rawUrl: string, policy: ProviderNetworkPolicy, redirect = false) {
   let url: URL;
   try {
@@ -211,7 +229,7 @@ async function requestOnce(
   let address: Awaited<ReturnType<typeof resolveAllowedAddress>> | undefined;
   try {
     method = String(init.method || "GET").toUpperCase();
-    if (!policy.allowedMethods.includes(method as "GET" | "POST")) {
+    if (!policy.allowedMethods.includes(method as "GET" | "HEAD" | "POST")) {
       throw policyError("数据源请求方法不在已批准范围");
     }
     body = requestBody(init);
@@ -377,12 +395,16 @@ export function createProviderHttpClient(policy: ProviderNetworkPolicy): Provide
       const deadlineAt = Date.now() + (policy.timeoutMs || DEFAULT_TIMEOUT_MS);
       let current = validateTarget(rawUrl, policy);
       let currentInit = init;
-      for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
+      const maxRedirects = Math.max(0, Math.min(
+        MAX_REDIRECTS,
+        policy.maxRedirects ?? MAX_REDIRECTS
+      ));
+      for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
         const response = await requestOnce(current, currentInit, policy, deadlineAt);
         if (![301, 302, 303, 307, 308].includes(response.status)) return response;
         const location = response.headers.get("location");
         if (!location) return response;
-        if (redirectCount === MAX_REDIRECTS) throw policyError("数据源重定向次数过多");
+        if (redirectCount === maxRedirects) throw policyError("数据源重定向次数过多");
         const next = redirectTarget(
           current,
           location,
@@ -440,7 +462,7 @@ export function assertProviderRequestAllowed(
   policy: ProviderNetworkPolicy
 ) {
   validateTarget(rawUrl, policy);
-  if (!policy.allowedMethods.includes(method.toUpperCase() as "GET" | "POST")) {
+  if (!policy.allowedMethods.includes(method.toUpperCase() as "GET" | "HEAD" | "POST")) {
     throw policyError("数据源请求方法不在已批准范围");
   }
 }

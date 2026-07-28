@@ -11,6 +11,7 @@ import type {
 type RecordTouchpointInput = {
   candidate: WebsiteOpportunity;
   actorId: string;
+  recordMode?: "external_send" | "historical" | "inbound_reply";
   channel: ProspectOutreachChannel;
   direction: "outbound" | "inbound";
   contactValue?: string;
@@ -270,7 +271,9 @@ export async function recordProspectTouchpoint(
   if (replay) {
     return {
       touchpoint: replay,
-      todo: activeFollowUpTodo(store, candidate, replay.channel),
+      todo: input.recordMode === "historical"
+        ? undefined
+        : activeFollowUpTodo(store, candidate, replay.channel),
       replayed: true
     };
   }
@@ -297,6 +300,9 @@ export async function recordProspectTouchpoint(
     createdAt: new Date().toISOString()
   };
   store.prospectTouchpoints.unshift(touchpoint);
+  if (input.recordMode === "historical" && input.direction === "outbound") {
+    return { touchpoint, todo: undefined, replayed: false };
+  }
   candidate.lastTouchpointAt = occurredAt;
   candidate.lastTouchpointChannel = input.channel;
   candidate.statusChangedAt = occurredAt;

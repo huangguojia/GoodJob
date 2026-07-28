@@ -41,6 +41,7 @@ const externalPatterns = [
   /^\/api\/lead-finder\/(?:free-search|search)$/u,
   /^\/api\/lead-finder\/source-config\/test$/u,
   /^\/api\/tools\/website-scrape\/preview$/u,
+  /^\/api\/prospect-list\/[^/]+\/identity-bootstrap$/u,
   /^\/api\/prospect-strategies\/[^/]+\/runs$/u,
   /^\/api\/prospect-campaigns\/[^/]+\/market-analysis-runs$/u
 ];

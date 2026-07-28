@@ -19,6 +19,7 @@ import type {
   ProspectContact,
   ProspectContactChannel,
   ProspectContactabilityDecision,
+  ProviderEvidenceSnapshot,
   TenantProspect
 } from "./types.js";
 
@@ -67,6 +68,7 @@ export interface ConvertProspectToLeadPersistedInput
   prospectId: string;
   idempotencyKey: string;
   convertedAt: string;
+  sourceEvidence?: ProviderEvidenceSnapshot[];
 }
 
 export interface ConvertProspectToLeadInput
@@ -222,7 +224,10 @@ function normalizeInput(
     prospectId: requiredText(raw.prospectId, "候选客户", 90),
     idempotencyKey,
     convertedAt: normalizedIso(raw.convertedAt),
-    coverageSecret
+    coverageSecret,
+    sourceEvidence: Array.isArray(raw.sourceEvidence)
+      ? structuredClone(raw.sourceEvidence.slice(0, 50))
+      : []
   };
 }
 
@@ -617,7 +622,8 @@ function convertOnLocalStore(
       decisionId: decision.id,
       channelId: channel.id,
       contactId: contact.id,
-      approvedAt: decision.approvedAt
+      approvedAt: decision.approvedAt,
+      sourceEvidence: input.sourceEvidence
     }),
     ownerId: input.ownerId,
     teamId: input.teamId

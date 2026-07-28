@@ -564,6 +564,21 @@ function isConversionError(code: ProspectLeadConversionError["code"]) {
 
 function testCreateAndIdempotency() {
   const fixture = createApprovedFixture("create");
+  fixture.input.sourceEvidence = [{
+    providerId: "companies_house",
+    providerRecordId: "01234567",
+    officialWebsite: "https://create.example.test",
+    sourceUrl: "https://find-and-update.company-information.service.gov.uk/company/01234567",
+    recordType: "company_registry",
+    fetchedAt: fixture.input.convertedAt,
+    payloadHash: "a".repeat(64),
+    evidenceSummary: "Active company registry record",
+    matchedFields: ["company", "website"],
+    adapterVersion: "test-v1",
+    catalogPolicyVersion: "test-policy-v1",
+    sourceLevel: "official_registry",
+    retentionPolicyRef: "test-retention-v1"
+  }];
   const protectedCounts = {
     customers: fixture.store.customers.length,
     deals: fixture.store.deals.length,
@@ -579,6 +594,10 @@ function testCreateAndIdempotency() {
   assert.equal(result.lead.sourceChannel, "prospect_conversion");
   assert.equal(result.prospect.status, "converted");
   assert.equal(result.prospect.leadId, result.lead.id);
+  assert.equal(
+    JSON.parse(result.sourceEvent.rawPayload).sourceEvidence?.[0]?.providerId,
+    "companies_house"
+  );
   assert.equal(
     result.coverageEvent.reasonCode,
     "HUMAN_CONFIRMED_LEAD_CONVERSION"

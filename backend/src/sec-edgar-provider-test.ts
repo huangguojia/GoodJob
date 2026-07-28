@@ -52,6 +52,88 @@ assert.equal(adapterPage.records[0]?.providerRecordId, "CIK:0000320193");
 assert.equal(adapterPage.records[0]?.recordType, "identity_evidence");
 assert.match(adapterPage.records[0]?.sourceUrl || "", /CIK=0000320193/);
 
+setProviderHttpTestTransport(async (url, init) => {
+  requestedUrl = url;
+  requestedInit = init;
+  return new Response(JSON.stringify({
+    cik: "0000320193",
+    name: "Apple Inc.",
+    tickers: ["AAPL"],
+    exchanges: ["Nasdaq"],
+    sicDescription: "Electronic Computers",
+    stateOfIncorporation: "CA"
+  }));
+});
+const exactCikPage = await SEC_EDGAR_PROVIDER.search!(
+  {
+    query: normalizeProviderQuery({
+      goal: "verify SEC registrant",
+      productKeywords: "CIK:320193",
+      countries: "United States",
+      industry: "",
+      customerType: "",
+      excludeKeywords: "",
+      limit: 5
+    }),
+    cursor: ""
+  },
+  { apiKey: "GoodJobCRM admin@example.com" },
+  tools()
+);
+assert.equal(requestedUrl, "https://data.sec.gov/submissions/CIK0000320193.json");
+assert.equal(new Headers(requestedInit?.headers).get("user-agent"), "GoodJobCRM admin@example.com");
+assert.equal(exactCikPage.records.length, 1);
+assert.equal(exactCikPage.records[0]?.providerRecordId, "CIK:0000320193");
+assert.equal(exactCikPage.records[0]?.confidence, 98);
+assert.match(exactCikPage.usage?.display || "", /精确核验/);
+
+setProviderHttpTestTransport(async () => new Response("{}", { status: 404 }));
+const missingCikPage = await SEC_EDGAR_PROVIDER.search!(
+  {
+    query: normalizeProviderQuery({
+      goal: "verify SEC registrant",
+      productKeywords: "CIK:320193",
+      countries: "United States",
+      industry: "",
+      customerType: "",
+      excludeKeywords: "",
+      limit: 5
+    }),
+    cursor: ""
+  },
+  { apiKey: "GoodJobCRM admin@example.com" },
+  tools()
+);
+assert.equal(missingCikPage.records.length, 0);
+assert.match(missingCikPage.usage?.display || "", /未找到/);
+
+setProviderHttpTestTransport(async () => new Response(JSON.stringify({
+  cik: "0000789019",
+  name: "Wrong Registrant",
+  tickers: [],
+  exchanges: []
+})));
+await assert.rejects(
+  SEC_EDGAR_PROVIDER.search!(
+    {
+      query: normalizeProviderQuery({
+        goal: "verify SEC registrant",
+        productKeywords: "CIK:320193",
+        countries: "United States",
+        industry: "",
+        customerType: "",
+        excludeKeywords: "",
+        limit: 5
+      }),
+      cursor: ""
+    },
+    { apiKey: "GoodJobCRM admin@example.com" },
+    tools()
+  ),
+  (error: unknown) => error instanceof ProviderContractError
+    && error.code === "PROVIDER_SCHEMA_CHANGED"
+);
+
 const catalogItem = createDefaultProviderCatalog()
   .find((item) => item.code === SEC_EDGAR_PROVIDER.id)!;
 const normalizedPage = normalizeProviderPage({
@@ -129,6 +211,7 @@ await assert.rejects(
 
 assert.equal(LEAD_PROVIDERS.includes(SEC_EDGAR_PROVIDER), true);
 assert.equal(SEC_EDGAR_PROVIDER.requiresKey, true);
+assert.equal(SEC_EDGAR_PROVIDER.adapterVersion, "1.1.0");
 assert.equal(catalogItem.category, "company");
 assert.equal(catalogItem.defaultRatePolicy.minIntervalMs, 120);
 

@@ -895,6 +895,138 @@ interface ProspectStrategySuggestion {
   createdAt: string;
 }
 
+type WebsiteProbeStage = "queued" | "dns" | "robots" | "head" | "body" | "evidence" | "completed" | "failed";
+
+interface WebsiteProbeEvent {
+  id: string;
+  sequence: number;
+  stage: WebsiteProbeStage;
+  status: "started" | "completed" | "skipped" | "failed";
+  message: string;
+  metrics: Record<string, string | number | boolean | null>;
+  createdAt: string;
+}
+
+interface WebsiteProbeAttempt {
+  id: string;
+  candidateId: string;
+  domain: string;
+  sourceUrl: string;
+  purpose: "company_evidence_enrichment";
+  accessMode: "controlled_probe";
+  policyVersion: "website-probe-policy-v1" | "website-probe-policy-v2";
+  status: "queued" | "running" | "completed" | "failed";
+  outcome: "pending" | "evidence_found" | "no_evidence" | "robots_denied" | "unreachable" | "policy_blocked" | "rate_limited" | "circuit_open";
+  robotsDecision: "pending" | "allowed" | "denied" | "unavailable";
+  httpStatus: number;
+  responseBytes: number;
+  redirected: boolean;
+  evidence: null | {
+    canonicalDomain: string;
+    pageTitle: string;
+    language: string;
+    organizationName: string;
+    legalName: string;
+    addressCountry: string;
+    businessCategory: string;
+    publicContactEmail?: string;
+    sourceUrl: string;
+    payloadHash: string;
+    observedAt: string;
+  };
+  events: WebsiteProbeEvent[];
+  failureCode: string;
+  failureMessage: string;
+  startedAt: string;
+  completedAt: string;
+  createdAt: string;
+}
+
+type ProspectIdentityAuthorityProvider = "gleif" | "companies_house" | "sec_edgar" | "fr_company_search";
+
+interface ProspectIdentityBootstrapEvent {
+  id: string;
+  sequence: number;
+  stage: "validation" | "campaign" | "provider" | "identity" | "coverage" | "binding";
+  status: "completed" | "failed";
+  label: string;
+  detail: string;
+  createdAt: string;
+}
+
+interface ProspectIdentityBootstrapAttempt {
+  id: string;
+  version: "prospect-identity-bootstrap-v1";
+  requestIdHash: string;
+  providerId: ProspectIdentityAuthorityProvider;
+  registrationNumber: string;
+  normalizedIdentifier: string;
+  taskStatus: "running" | "ended";
+  outcome: "pending" | "linked" | "not_found" | "identity_conflict" | "failed";
+  campaignId: string;
+  campaignVersion: number;
+  strategyId: string;
+  runId: string;
+  sourceCandidateId: string;
+  sourceRawRecordId: string;
+  sourceHitId: string;
+  resolutionId: string;
+  conflictId: string;
+  organizationId: string;
+  tenantProspectId: string;
+  errorCode: string;
+  errorMessage: string;
+  events: ProspectIdentityBootstrapEvent[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  endedAt: string;
+}
+
+interface ProspectIdentityBootstrapProviderGuide {
+  id: ProspectIdentityAuthorityProvider;
+  name: string;
+  jurisdiction: string;
+  market: string;
+  identifierLabel: string;
+  example: string;
+  profileCode: string;
+  scheme: string;
+  requiresKey: boolean;
+  credentialKind: "none" | "api_key" | "fair_access_user_agent";
+  setupNote: string;
+  catalogStatus: string;
+  docsUrl: string;
+  runtime: LeadProviderStatus | null;
+}
+
+interface ProspectIdentityBootstrapView {
+  candidateId: string;
+  formallyResolved: boolean;
+  providers: ProspectIdentityBootstrapProviderGuide[];
+  attempts: ProspectIdentityBootstrapAttempt[];
+}
+
+interface ProspectIdentityBootstrapProgress {
+  status: string;
+  terminal: boolean;
+  progress: number;
+  currentAction: string;
+  sourceCount: number;
+  settledSources: number;
+  candidateCount: number;
+  verifiedCount: number;
+  filteredCount: number;
+  candidates: Array<{
+    id: string;
+    company: string;
+    country: string;
+    website: string;
+    source: string;
+    verificationLevel: string;
+  }>;
+}
+
 interface WebsiteOpportunity {
   id: string;
   company: string;
@@ -925,6 +1057,7 @@ interface WebsiteOpportunity {
     adapterVersion: string;
     catalogPolicyVersion: string;
     sourceLevel: string;
+    fieldAuthority?: Record<string, "official" | "corroborated" | "discovery" | "assisted">;
     retentionPolicyRef: string;
   }>;
   verificationReport?: {
@@ -932,7 +1065,8 @@ interface WebsiteOpportunity {
     levelLabel: string;
     conclusion: string;
     generatedAt: string;
-    crawlerFree: true;
+    crawlerFree: boolean;
+    accessMode: "reference_only" | "controlled_probe";
     checks: Array<{
       code: string;
       label: string;
@@ -941,6 +1075,15 @@ interface WebsiteOpportunity {
       source: string;
       checkedAt: string;
     }>;
+  };
+  scorecard?: {
+    version: "prospect-scorecard-v1";
+    generatedAt: string;
+    enterpriseConfidence: ProspectScoreComponentApi;
+    icpMatch: ProspectScoreComponentApi;
+    contactReadiness: ProspectScoreComponentApi;
+    actionPriority: ProspectScoreComponentApi;
+    vqa: { qualified: boolean; reasonCodes: string[] };
   };
   confidence?: number;
   lastDevelopmentEmailAt?: string;
@@ -960,9 +1103,63 @@ interface WebsiteOpportunity {
   nextFollowAt?: string;
   outreachState?: "uncontacted" | "awaiting_reply" | "replied" | "suppressed" | "contact_invalid";
   invalidContactChannels?: ProspectOutreachChannel[];
+  websiteProbeAttempts?: WebsiteProbeAttempt[];
+  identityBootstrapAttempts?: ProspectIdentityBootstrapAttempt[];
   selected?: boolean;
   ownerId?: string;
   teamId?: string;
+}
+
+interface ProspectQualificationViewApi {
+  candidateId: string;
+  prospectId: string;
+  organizationId: string;
+  campaign: null | {
+    runId: string;
+    campaignId: string;
+    campaignVersion: number;
+    campaignName: string;
+    campaignSnapshot: {
+      goal: string;
+      products: string[];
+      markets: string[];
+      customerTypes: string[];
+      applicationScenarios: string[];
+      icpRules: string[];
+      exclusionRules: string[];
+      sourceProviderIds: string[];
+    };
+  };
+  blockers: string[];
+  qualification: null | {
+    evidence: Array<{ id: string; field: string; sourceType: string; providerCode: string; sourceRef: string; observedAt: string; expiresAt: string }>;
+    companyVerification: null | { id: string; status: string; reviewStatus: string; reasonCodes: string[]; validUntil: string; createdAt: string };
+    icpPolicies: Array<{ id: string; campaignId: string; campaignVersion: number }>;
+    icpAssessments: Array<{ id: string; totalScore: number; result: string; reviewStatus: string; hardGateReasonCodes: string[]; createdAt: string }>;
+    contacts: Array<{ id: string; contactType: string; name: string; department: string; title: string }>;
+    channels: Array<{ id: string; contactId: string; channelType: "email" | "phone" | "whatsapp" | "website_form"; value: string; sourceEvidenceId: string; createdAt: string }>;
+    contactVerifications: Array<{ id: string; channelId: string; status: string; providerCode: string; reasonCode: string; verifiedAt: string; expiresAt: string; createdAt: string }>;
+    suppressions: Array<{ id: string; scope: string; action: string; reasonCode: string; effectiveAt: string; expiresAt: string }>;
+    contactabilityDecisions: Array<{ id: string; channelId: string; status: string; reasonCodes: string[]; approvedAt: string; createdAt: string }>;
+  };
+  approvedDecision: null | { id: string; channelId: string; status: string; approvedAt: string };
+  approvedChannel: null | { id: string; channelType: "email" | "phone" | "whatsapp" | "website_form"; value: string };
+  scorecard?: WebsiteOpportunity["scorecard"];
+  stageCurrency: {
+    company: boolean;
+    icp: boolean;
+    channel: boolean;
+    contactability: boolean;
+  };
+  vqaQualified: boolean;
+  nextStep: "resolve_identity" | "resolve_campaign" | "verify_company" | "assess_icp" | "approve_icp" | "verify_channel" | "evaluate_contactability" | "approve_contactability" | "ready";
+}
+
+interface ProspectScoreComponentApi {
+  score: number;
+  status: "verified" | "partial" | "unverified" | "blocked";
+  reasonCodes: string[];
+  evidenceRefs: string[];
 }
 
 interface OrganizationIdentityConflictItem {
@@ -1058,6 +1255,8 @@ interface LeadFinderJob {
   selectedPendingHitIds?: string[];
   pendingCandidatesLoaded?: boolean;
   selectedResultIds?: string[];
+  liveEvents?: ProspectLiveEventApiRecord[];
+  acceptance?: ProspectAcceptanceApi;
 }
 
 interface ProspectPendingCandidatePreview {
@@ -1128,6 +1327,10 @@ interface ProspectRunCleaningReport {
   records: Array<{
     hitId: string;
     providerCode: string;
+    sourceRecordId?: string;
+    sourceCompany?: string;
+    sourceCountry?: string;
+    sourceDomain?: string;
     outcome: "pending" | "accepted" | "merged" | "suppressed" | "rejected";
     reasonCode: string;
     reason: string;
@@ -1174,8 +1377,6 @@ interface LeadFinderIncrementalStats {
   excludedCount: number;
 }
 
-type LeadTaskStreamMode = "summary" | "verbose";
-
 interface LeadTaskStreamLog {
   key: string;
   at: string;
@@ -1184,6 +1385,23 @@ interface LeadTaskStreamLog {
   detail: string;
   result: string;
   tone: string;
+}
+
+interface ProspectLiveEventApiRecord {
+  id: string;
+  runId: string;
+  sequence: number;
+  occurredAt: string;
+  type: string;
+  stage: string;
+  entityType: string;
+  entityId: string;
+  status: string;
+  progress: number | null;
+  metrics: Record<string, number | string | boolean | null>;
+  failureCode: string;
+  retryable: boolean;
+  message: string;
 }
 
 interface ProspectCampaignApiRecord {
@@ -1269,6 +1487,27 @@ interface ProspectRunEventApiRecord {
   createdAt: string;
 }
 
+interface ProspectAcceptanceApi {
+  outcome: "running" | "success" | "partial_success" | "failed" | "empty" | "cancelled";
+  sourceReturnedCount?: number;
+  candidateCount: number;
+  reviewReadyCount?: number;
+  vqaCount: number;
+  targetVqaCount?: number;
+  targetReviewReadyCount?: number;
+  sourceSuccessCount: number;
+  sourceFailureCount: number;
+  sourceSkippedCount: number;
+  costs?: Array<{ currency: string; amount: number }>;
+  totalCost?: number;
+  currency?: string;
+  costUnknownCount?: number;
+  costIntegrityStatus?: "complete" | "unknown" | "currency_mismatch";
+  stopReason: string;
+  recommendedNextAction: string;
+  failedSources?: Array<{ providerId: string; errorCode: string; errorMessage: string }>;
+}
+
 interface ProspectRunDetailApiResponse {
   run: ProspectRunApiRecord;
   shards: ProspectRunShardApiRecord[];
@@ -1287,6 +1526,7 @@ interface ProspectRunDetailApiResponse {
     }>;
     cleaningReport: ProspectRunCleaningReport;
     summary: { rawHits: number; pages: number; accepted: number; rejected: number; succeededSources: number; failedSources: number; candidateIds: string[] };
+    acceptance: ProspectAcceptanceApi;
   };
 }
 
@@ -1329,6 +1569,8 @@ interface ProspectSuperSearchRoundApi {
   rawCount: number;
   uniqueCount: number;
   candidateCount: number;
+  reviewReadyCount?: number;
+  vqaCount?: number;
   duplicateCount: number;
   filteredCount: number;
   pendingCount: number;
@@ -1358,6 +1600,8 @@ interface ProspectSuperSearchMissionApi {
   rawCount: number;
   uniqueCount: number;
   candidateCount: number;
+  reviewReadyCount: number;
+  vqaCount: number;
   pendingCount: number;
   filteredCount: number;
   revision: number;
@@ -1373,6 +1617,7 @@ interface ProspectSuperSearchMissionApi {
   createdAt: string;
   updatedAt: string;
   rounds: ProspectSuperSearchRoundApi[];
+  acceptance?: ProspectAcceptanceApi;
 }
 
 interface ProspectScheduleApiRecord {
@@ -2235,8 +2480,13 @@ interface AppState {
   selectedProspectId: string | null;
   selectedProspectIds: string[];
   prospectFilter: "all" | "preview" | "contactable" | "contacted" | "synced" | "excluded";
+  prospectJoinedRange: "all" | "today" | "7d" | "30d" | "custom";
+  prospectJoinedFrom: string;
+  prospectJoinedTo: string;
+  prospectSort: "joined_desc" | "joined_asc" | "priority" | "status_changed";
   prospectPage: number;
   prospectAssignees: ProspectAssignee[];
+  prospectQualifications: Record<string, ProspectQualificationViewApi>;
   procurementContexts: Record<string, ProcurementContext>;
   prospectPerformance: ProspectPerformance | null;
   prospectStrategySuggestions: ProspectStrategySuggestion[];
@@ -2389,8 +2639,13 @@ const state: AppState = {
   selectedProspectId: null,
   selectedProspectIds: [],
   prospectFilter: "all",
+  prospectJoinedRange: "all",
+  prospectJoinedFrom: "",
+  prospectJoinedTo: "",
+  prospectSort: "joined_desc",
   prospectPage: 1,
   prospectAssignees: [],
+  prospectQualifications: {},
   procurementContexts: {},
   prospectPerformance: null,
   prospectStrategySuggestions: [],
@@ -2410,15 +2665,24 @@ let memoMobileDetailOpen = false;
 let memoDeleteBusy = false;
 const resolvedMemoDrafts = new Set<string>();
 let leadFinderJobs: LeadFinderJob[] = [];
+const prospectQualificationLoading = new Set<string>();
 let leadFinderRunsLoading = false;
 let leadFinderRunPollTimer = 0;
+let leadFinderStreamAbort: AbortController | null = null;
+let leadFinderStreamRunId = "";
+let leadFinderStreamConnected = false;
+let leadFinderStreamRefreshTimer = 0;
+const leadFinderStreamCursors = new Map<string, string>();
+let leadFinderResultView: "candidates" | "cleaning" = "candidates";
+let leadFinderCleaningFilter: "all" | "merged" | "suppressed" | "rejected" = "all";
 let leadFinderMode: "standard" | "super" = "standard";
+// 搜索简报的输入方式：自然语言 / 结构化表单，二者互斥，避免意图叠加互相限制
+let leadBriefMode: "nl" | "form" = "nl";
 let leadSuperPreviewTimer = 0;
 let activeLeadFinderJobId: string | null = null;
+let prospectMobileDetailOpen = false;
+let prospectMobileListScrollY = 0;
 let leadTaskDetailClockTimer = 0;
-let leadTaskStreamMode: LeadTaskStreamMode = "summary";
-let leadTaskVerboseTimer = 0;
-let leadTaskVerboseSequence = 0;
 let prospectFeedbackLoading = false;
 let prospectFeedbackLoadedAt = 0;
 let customerClockTimer = 0;
@@ -2504,7 +2768,7 @@ const aiProviderPresets: Record<string, {
 }> = {
   openai: { label: "OpenAI", protocol: "openai-compatible", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", name: "OpenAI 业务模型" },
   anthropic: { label: "Claude", protocol: "anthropic", baseUrl: "https://api.anthropic.com/v1", model: "claude-3-5-sonnet-latest", name: "Claude 长文本模型" },
-  gemini: { label: "Gemini", protocol: "gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta", model: "gemini-1.5-flash", name: "Gemini 国际化模型" },
+  gemini: { label: "Gemini", protocol: "gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta", model: "gemini-2.0-flash", name: "Gemini 国际化模型" },
   deepseek: { label: "DeepSeek", protocol: "openai-compatible", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", name: "DeepSeek 搜客解析模型" },
   qwen: { label: "通义千问", protocol: "openai-compatible", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus", name: "通义千问业务模型" },
   moonshot: { label: "Kimi", protocol: "openai-compatible", baseUrl: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k", name: "Kimi 业务模型" },
@@ -5055,9 +5319,9 @@ async function loadLeadProviders() {
     const result = await api<{ providers: LeadProviderStatus[] }>("/api/lead-finder/providers");
     state.leadProviders = result.providers || [];
     if (!state.leadSourceSelectionTouched) {
-      // 默认只启用一组覆盖面稳定的公开源，其余来源由用户按场景展开选择。
+      // 默认启用覆盖面稳定的公开源；AI 搜索在模型配置可用时也默认参与。
       state.selectedLeadSources = state.leadProviders
-        .filter((item) => item.id !== "ai_search" && item.recommended && isLeadSourceExecutable(item))
+        .filter((item) => (item.id === "ai_search" || item.recommended) && isLeadSourceExecutable(item))
         .map((item) => item.id);
     }
     renderLeadSourceChips();
@@ -14455,6 +14719,7 @@ async function saveAiConfig(button?: HTMLButtonElement, options: { silent?: bool
     renderAiConfig(result.config);
     await loadLeadProviders();
     renderLeadFinder(state.websiteOpportunities);
+    syncLeadFinderStartState();
     if (!options.silent) toast(result.config.enabled ? `已保存并启用：${result.config.name}` : `已保存：${result.config.name}`);
   } finally {
     if (button) {
@@ -14487,6 +14752,7 @@ async function testAiConfig(button?: HTMLButtonElement) {
       renderAiConfig(result.config);
       await loadLeadProviders();
       renderLeadFinder(state.websiteOpportunities);
+      syncLeadFinderStartState();
     }
     const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
     const gptConnectionTitle = qs<HTMLElement>("#gptConnectionTitle");
@@ -14529,7 +14795,7 @@ function renderWebsiteOpportunities(opportunities: WebsiteOpportunity[]) {
       <td><input value="${escapeHtml(item.contact)}" data-website-field="contact"></td>
       <td><input value="${escapeHtml(item.contactInfo)}" data-website-field="contactInfo"></td>
       <td><textarea data-website-field="description">${escapeHtml(item.description)}</textarea></td>
-      <td>${badge(item.status === "synced" ? "已同步" : "待同步", item.status === "synced" ? "green" : "amber")}${badge(modeText(item.parseMode), modeTone(item.parseMode))}</td>
+      <td>${badge(item.status === "synced" ? "已入线索" : "待资格审查", item.status === "synced" ? "green" : "amber")}${badge(modeText(item.parseMode), modeTone(item.parseMode))}</td>
     </tr>
   `).join("") : `<tr><td colspan="9" class="empty-cell">暂无待核验企业</td></tr>`;
 }
@@ -14570,16 +14836,9 @@ function normalizeWebsiteLink(value: string) {
 }
 
 function leadFinderScore(item: WebsiteOpportunity) {
-  let score = 42;
-  if (item.company && !/unknown|待维护/i.test(item.company)) score += 12;
-  if (item.business && !item.business.includes("待维护")) score += 12;
-  if (item.country && item.country !== "未知") score += 8;
-  if (item.contact && !item.contact.includes("待维护")) score += 8;
-  if (item.contactInfo) score += 10;
-  if (item.description && item.description.length > 30) score += 8;
-  if (item.parseMode === "ai") score += 6;
-  if (item.status === "synced") score += 4;
-  return Math.max(35, Math.min(score, 96));
+  return Math.max(0, Math.min(100, Math.round(
+    item.scorecard?.actionPriority.score || 0
+  )));
 }
 
 function leadFinderDuplicateState(item: WebsiteOpportunity) {
@@ -14806,8 +15065,50 @@ function prospectStatusMeta(item: WebsiteOpportunity) {
   return PROSPECT_STATUS_META[item.status] || PROSPECT_STATUS_META.preview;
 }
 
+function prospectJoinedTime(item: WebsiteOpportunity) {
+  const value = new Date(item.createdAt).getTime();
+  return Number.isFinite(value) ? value : null;
+}
+
+function localDateInputBoundary(value: string, dayOffset = 0) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value.trim());
+  if (!match) return null;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (date.getFullYear() !== Number(match[1]) || date.getMonth() !== Number(match[2]) - 1 || date.getDate() !== Number(match[3])) return null;
+  date.setDate(date.getDate() + dayOffset);
+  return date.getTime();
+}
+
+function prospectJoinedWindow(now = new Date()) {
+  if (state.prospectJoinedRange === "all") return null;
+  if (state.prospectJoinedRange === "custom") {
+    const start = state.prospectJoinedFrom ? localDateInputBoundary(state.prospectJoinedFrom) : null;
+    const end = state.prospectJoinedTo ? localDateInputBoundary(state.prospectJoinedTo, 1) : null;
+    return start === null && end === null ? null : { start, end };
+  }
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (state.prospectJoinedRange === "7d") start.setDate(start.getDate() - 6);
+  if (state.prospectJoinedRange === "30d") start.setDate(start.getDate() - 29);
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  return { start: start.getTime(), end: end.getTime() };
+}
+
+function formatProspectJoinedAt(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "时间未知";
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+}
+
 function prospectFilteredRows() {
   const keyword = qs<HTMLInputElement>("#prospectSearchInput")?.value.trim().toLowerCase() || "";
+  const joinedWindow = prospectJoinedWindow();
   const statusWeight: Record<WebsiteOpportunity["status"], number> = {
     contactable: 0,
     preview: 1,
@@ -14819,19 +15120,43 @@ function prospectFilteredRows() {
     .filter((item) => {
       const haystack = `${item.company} ${item.business} ${item.country} ${item.website} ${item.contact} ${item.contactInfo} ${item.description}`.toLowerCase();
       if (keyword && !haystack.includes(keyword)) return false;
-      if (state.prospectFilter !== "all") return item.status === state.prospectFilter;
+      if (state.prospectFilter !== "all" && item.status !== state.prospectFilter) return false;
+      if (joinedWindow) {
+        const joinedAt = prospectJoinedTime(item);
+        if (joinedAt === null) return false;
+        if (joinedWindow.start !== null && joinedAt < joinedWindow.start) return false;
+        if (joinedWindow.end !== null && joinedAt >= joinedWindow.end) return false;
+      }
       return true;
     })
     .sort((left, right) => {
-      if (left.status !== right.status) return statusWeight[left.status] - statusWeight[right.status];
-      const scoreDifference = leadFinderScore(right) - leadFinderScore(left);
-      if (scoreDifference) return scoreDifference;
-      return String(right.statusChangedAt || right.createdAt).localeCompare(String(left.statusChangedAt || left.createdAt));
+      const leftJoined = prospectJoinedTime(left);
+      const rightJoined = prospectJoinedTime(right);
+      let difference = 0;
+      if (state.prospectSort === "joined_desc" || state.prospectSort === "joined_asc") {
+        if (leftJoined === null && rightJoined !== null) return 1;
+        if (leftJoined !== null && rightJoined === null) return -1;
+        difference = ((rightJoined || 0) - (leftJoined || 0)) * (state.prospectSort === "joined_desc" ? 1 : -1);
+      } else if (state.prospectSort === "status_changed") {
+        const leftChanged = new Date(left.statusChangedAt || left.createdAt).getTime();
+        const rightChanged = new Date(right.statusChangedAt || right.createdAt).getTime();
+        difference = (Number.isFinite(rightChanged) ? rightChanged : 0) - (Number.isFinite(leftChanged) ? leftChanged : 0);
+      } else {
+        difference = statusWeight[left.status] - statusWeight[right.status];
+        if (!difference) difference = leadFinderScore(right) - leadFinderScore(left);
+      }
+      return difference || left.id.localeCompare(right.id);
     });
 }
 
 function selectedProspect() {
   return state.websiteOpportunities.find((item) => item.id === state.selectedProspectId) || null;
+}
+
+function closeProspectMobileDetail() {
+  prospectMobileDetailOpen = false;
+  document.body.classList.remove("prospect-mobile-detail-open");
+  window.requestAnimationFrame(() => window.scrollTo({ top: prospectMobileListScrollY }));
 }
 
 function renderProspectMailPreview() {
@@ -14860,7 +15185,13 @@ function generateProspectMailDraft() {
   const mailTo = qs<HTMLInputElement>("#prospectMailTo");
   const subject = qs<HTMLInputElement>("#prospectMailSubject");
   const body = qs<HTMLTextAreaElement>("#prospectMailBody");
-  if (mailTo && !mailTo.value.trim()) mailTo.value = contactEmail(item.contactInfo) || contactEmail(item.contact) || "";
+  const approvedEmail = state.prospectQualifications[item.id]
+    ?.approvedChannel?.channelType === "email"
+    ? state.prospectQualifications[item.id]!.approvedChannel!.value
+    : "";
+  if (mailTo && !mailTo.value.trim()) {
+    mailTo.value = approvedEmail;
+  }
   if (subject && !subject.value.trim()) subject.value = `${item.business || "Product"} supplier support for ${item.company}`;
   if (body) {
     body.value = [
@@ -14875,6 +15206,740 @@ function generateProspectMailDraft() {
     ].join("\n");
   }
   renderProspectMailPreview();
+}
+
+const PROSPECT_QUALIFICATION_REASON_LABELS: Record<string, string> = {
+  CANDIDATE_FORMAL_IDENTITY_MISSING: "尚未完成正式企业身份归一",
+  CANDIDATE_FORMAL_IDENTITY_STALE: "企业身份关联已失效",
+  CAMPAIGN_CONTEXT_MISSING: "缺少原始获客项目版本",
+  PROSPECT_DO_NOT_CONTACT: "企业处于永久禁止联系状态",
+  PROSPECT_NOT_ACTIVE: "候选不在可审查状态",
+  COMPANY_VERIFICATION_MISSING_OR_EXPIRED: "企业核验缺失或已过期",
+  COMPANY_UNVERIFIED: "企业身份未验证",
+  COMPANY_INACTIVE: "企业登记状态非存续",
+  COMPANY_IDENTITY_CONFLICT: "企业身份来源存在冲突",
+  ICP_ASSESSMENT_MISSING: "尚未完成 ICP 评估",
+  ICP_REVIEW_REQUIRED: "ICP 评估等待人工批准",
+  ICP_NOT_QUALIFIED: "ICP 评估未达到准入条件",
+  CONTACT_VERIFICATION_MISSING_OR_EXPIRED: "联系方式验证缺失或已过期",
+  CONTACT_DISCOVERED: "联系方式仅为发现状态",
+  CONTACT_SYNTAX_VALID: "联系方式仅通过格式校验",
+  CONTACT_DOMAIN_VALID: "联系方式仅通过域名校验",
+  CONTACT_BOUNCED: "联系方式已退信",
+  CONTACT_OPTED_OUT: "联系人已退订",
+  CONTACT_INVALID: "联系方式无效",
+  SUPPRESSED: "当前存在有效抑制记录",
+  QUALIFICATION_FACTS_CHANGED: "资格事实已变化，需要重新评估",
+  QUALIFICATION_CONTRACT_CHANGED: "资格门禁规则已升级，需要重新评估并批准",
+  CANDIDATE_IDENTITY_CHANGED: "企业资料已变化，需要重新核验",
+  CANDIDATE_ICP_INPUT_CHANGED: "ICP 输入已变化，需要重新评估",
+  CANDIDATE_CHANNEL_CHANGED: "渠道资料已变化，需要重新核验"
+};
+
+function qualificationReasonLabel(code: string) {
+  return PROSPECT_QUALIFICATION_REASON_LABELS[code]
+    || code.split("_").join(" ");
+}
+
+function prospectQualificationResult(
+  result: { qualification: ProspectQualificationViewApi; opportunity: WebsiteOpportunity }
+) {
+  state.prospectQualifications[result.opportunity.id] = result.qualification;
+  const existing = state.websiteOpportunities.find((item) =>
+    item.id === result.opportunity.id
+  );
+  if (existing) Object.assign(existing, result.opportunity);
+  renderProspectList();
+  renderLeadFinder(state.websiteOpportunities);
+}
+
+async function loadProspectQualification(
+  item: WebsiteOpportunity,
+  quiet = true,
+  force = false
+) {
+  if (!force && state.prospectQualifications[item.id]) {
+    return state.prospectQualifications[item.id];
+  }
+  if (prospectQualificationLoading.has(item.id)) return null;
+  prospectQualificationLoading.add(item.id);
+  if (state.selectedProspectId === item.id) renderProspectDetail(item);
+  try {
+    const result = await api<{
+      qualification: ProspectQualificationViewApi;
+      opportunity: WebsiteOpportunity;
+    }>(`/api/prospect-list/${encodeURIComponent(item.id)}/qualification`);
+    state.prospectQualifications[item.id] = result.qualification;
+    Object.assign(item, result.opportunity);
+    if (state.selectedProspectId === item.id) renderProspectDetail(item);
+    return result.qualification;
+  } catch (error) {
+    if (!quiet) {
+      toast(error instanceof Error ? error.message : "资格状态读取失败", "error");
+    }
+    return null;
+  } finally {
+    prospectQualificationLoading.delete(item.id);
+  }
+}
+
+function qualificationStep(
+  label: string,
+  stateText: string,
+  tone: "passed" | "current" | "blocked" | "pending"
+) {
+  return `<div class="prospect-qualification-step ${tone}"><span></span><div><b>${escapeHtml(label)}</b><small>${escapeHtml(stateText)}</small></div></div>`;
+}
+
+function renderProspectQualificationPanel(item: WebsiteOpportunity) {
+  const view = state.prospectQualifications[item.id];
+  if (!view) {
+    return `<section class="prospect-qualification-panel"><div class="prospect-qualification-head"><div><b>正式资格审查</b><small>正在读取持久化资格事实</small></div>${badge("读取中", "gray")}</div></section>`;
+  }
+  const qualification = view.qualification;
+  const company = qualification?.companyVerification;
+  const assessment = qualification?.icpAssessments.at(-1);
+  const verification = qualification?.contactVerifications.at(-1);
+  const decision = qualification?.contactabilityDecisions.at(-1);
+  const companyPassed = view.stageCurrency.company && (
+    company?.status === "verified_active"
+    || company?.status === "partially_verified" && company.reviewStatus === "approved"
+  );
+  const icpPassed = assessment?.result === "qualified"
+    && assessment.reviewStatus === "approved"
+    && view.stageCurrency.icp;
+  const channelPassed = view.stageCurrency.channel
+    && verification?.status === "verified"
+    && (!verification.expiresAt || verification.expiresAt >= new Date().toISOString());
+  const contactabilityPassed = Boolean(
+    view.approvedDecision && view.stageCurrency.contactability
+  );
+  const canWrite = item.ownerId === state.user?.id && item.status !== "synced";
+  const identityResolved = Boolean(view.prospectId && view.organizationId);
+  const blockerText = view.blockers.map(qualificationReasonLabel);
+  const currentReasons = decision?.reasonCodes.map(qualificationReasonLabel) || [];
+  const staleMessages = [
+    company && !view.stageCurrency.company ? "企业资料已变化，企业核验结果已失效" : "",
+    assessment && !view.stageCurrency.icp ? "ICP 输入已变化，评估与批准已失效" : "",
+    verification && !view.stageCurrency.channel ? "渠道资料已变化，联系方式核验已失效" : "",
+    decision && !view.stageCurrency.contactability ? "最终批准已失效，需要重新执行可联系门禁" : ""
+  ].filter(Boolean);
+  const stepTone = (passed: boolean, key: ProspectQualificationViewApi["nextStep"]) =>
+    passed ? "passed" as const
+      : view.nextStep === key ? "current" as const
+        : view.blockers.length ? "blocked" as const : "pending" as const;
+  return `
+    <section class="prospect-qualification-panel">
+      <div class="prospect-qualification-head">
+        <div><b>正式资格审查</b><small>${escapeHtml(view.campaign ? `${view.campaign.campaignName} · v${view.campaign.campaignVersion}` : "等待项目上下文")}</small></div>
+        ${badge(view.vqaQualified ? "VQA 已通过" : "VQA 未通过", view.vqaQualified ? "green" : "amber")}
+      </div>
+      <div class="prospect-qualification-steps">
+        ${qualificationStep("1. 企业核验", !view.stageCurrency.company ? "企业资料已变化，需重新核验" : companyPassed ? `已核验，有效至 ${formatTime(company!.validUntil)}` : company ? qualificationReasonLabel(company.reasonCodes[0] || company.status) : "等待权威登记证据", stepTone(Boolean(companyPassed), "verify_company"))}
+        ${qualificationStep("2. ICP 评估", !view.stageCurrency.icp ? "ICP 输入已变化，需重新评估" : icpPassed ? `已批准 · ${assessment!.totalScore} 分` : assessment ? `${assessment.totalScore} 分 · ${assessment.reviewStatus === "pending_review" ? "等待批准" : assessment.result}` : "等待证据与维度评分", stepTone(Boolean(icpPassed), assessment ? "approve_icp" : "assess_icp"))}
+        ${qualificationStep("3. 渠道核验", !view.stageCurrency.channel ? "渠道资料已变化，需重新核验" : channelPassed ? `已验证 · ${verification!.providerCode}` : verification ? qualificationReasonLabel(`CONTACT_${verification.status.toUpperCase()}`) : "等待来源和有效期", stepTone(Boolean(channelPassed), "verify_channel"))}
+        ${qualificationStep("4. 可联系门禁", !view.stageCurrency.contactability ? "最终批准已失效，需重新评估" : contactabilityPassed ? `人工批准于 ${formatTime(view.approvedDecision!.approvedAt)}` : decision ? `${decision.status} · ${currentReasons.join("；") || "等待人工批准"}` : "等待系统评估", stepTone(contactabilityPassed, decision?.status === "eligible" ? "approve_contactability" : "evaluate_contactability"))}
+      </div>
+      ${staleMessages.length ? `<div class="prospect-qualification-feedback is-blocked"><b>资料变更</b><span>${escapeHtml(staleMessages.join("；"))}</span></div>` : blockerText.length ? `<div class="prospect-qualification-feedback is-blocked"><b>当前阻断</b><span>${escapeHtml(blockerText.join("；"))}</span></div>` : currentReasons.length && !contactabilityPassed ? `<div class="prospect-qualification-feedback"><b>评估反馈</b><span>${escapeHtml(currentReasons.join("；"))}</span></div>` : ""}
+      ${view.approvedChannel ? `<div class="prospect-approved-channel"><span>已批准通道</span><b>${escapeHtml(view.approvedChannel.channelType)} · ${escapeHtml(view.approvedChannel.value)}</b></div>` : ""}
+      ${canWrite ? `<div class="prospect-qualification-actions">
+        ${identityResolved
+          ? `<button class="btn" type="button" id="prospectVerifyCompanyButton">${company ? "重新核验企业" : "核验企业"}</button>`
+          : `<button class="btn primary" type="button" id="prospectResolveIdentityButton">用权威 API 补充身份</button>`}
+        <button class="btn" type="button" id="prospectAssessIcpButton" ${companyPassed ? "" : "disabled"}>${assessment ? "重新评估 ICP" : "评估 ICP"}</button>
+        ${view.stageCurrency.icp && assessment?.result === "qualified" && assessment.reviewStatus === "pending_review" ? `<button class="btn primary" type="button" id="prospectApproveIcpButton">批准 ICP</button>` : ""}
+        <button class="btn" type="button" id="prospectVerifyChannelButton" ${icpPassed ? "" : "disabled"}>${verification ? "重新核验渠道" : "核验渠道"}</button>
+        ${channelPassed && !view.approvedDecision ? `<button class="btn" type="button" id="prospectEvaluateContactabilityButton">执行门禁评估</button>` : ""}
+        ${decision?.status === "eligible" ? `<button class="btn primary" type="button" id="prospectApproveContactabilityButton">批准可联系</button>` : ""}
+        <button class="btn danger" type="button" id="prospectSuppressButton">禁止联系</button>
+      </div>` : ""}
+    </section>
+  `;
+}
+
+async function mutateProspectQualification(
+  item: WebsiteOpportunity,
+  path: string,
+  body: Record<string, unknown>,
+  button: HTMLButtonElement | undefined,
+  successMessage: string
+) {
+  if (button) button.disabled = true;
+  try {
+    const result = await api<{
+      qualification: ProspectQualificationViewApi;
+      opportunity: WebsiteOpportunity;
+    }>(`/api/prospect-list/${encodeURIComponent(item.id)}/qualification${path}`, {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+    prospectQualificationResult(result);
+    closeModal();
+    toast(successMessage);
+    return result.qualification;
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "资格审查操作失败", "error");
+    return null;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function daysFromNow(days: number) {
+  return new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+}
+
+function openProspectCompanyQualification(item: WebsiteOpportunity) {
+  const provider = item.country.toUpperCase() === "GB" ? "companies_house"
+    : item.country.toUpperCase() === "US" ? "sec_edgar"
+      : item.country.toUpperCase() === "FR" ? "fr_company_search" : "gleif";
+  openModal(`企业核验 · ${item.company}`, `
+    <div class="form-grid">
+      <div class="form-field"><label>权威登记源</label><select id="prospectCompanyProvider"><option value="companies_house" ${provider === "companies_house" ? "selected" : ""}>UK Companies House</option><option value="sec_edgar" ${provider === "sec_edgar" ? "selected" : ""}>SEC EDGAR</option><option value="fr_company_search" ${provider === "fr_company_search" ? "selected" : ""}>法国政府企业库</option><option value="gleif" ${provider === "gleif" ? "selected" : ""}>GLEIF</option></select></div>
+      <div class="form-field"><label>注册号 / LEI</label><input id="prospectCompanyRegistration" placeholder="Companies House 8 位；CIK:10 位；SIREN:9 位"></div>
+      <div class="form-field"><label>登记状态</label><select id="prospectCompanyStatus"><option value="active">存续 / Active</option><option value="registered">已登记 / Registered</option><option value="inactive">非活跃 / Inactive</option><option value="dissolved">已注销 / Dissolved</option></select></div>
+      <div class="form-field"><label>司法辖区</label><input id="prospectCompanyJurisdiction" value="${escapeHtml(item.country || "GLOBAL")}"></div>
+      <div class="form-field full"><label>权威来源 URL</label><input id="prospectCompanySource" placeholder="https:// 官方登记详情页"></div>
+      <div class="form-field"><label>登记机关代码</label><input id="prospectCompanyAuthority" value="${provider === "companies_house" ? "GB-COMPANIES-HOUSE" : provider === "sec_edgar" ? "US-SEC" : provider === "fr_company_search" ? "FR-INPI" : "GLOBAL-LEI"}"></div>
+      <div class="form-field"><label>有效至</label><input id="prospectCompanyValidUntil" type="date" value="${daysFromNow(90)}"></div>
+      <div class="form-field full"><label>人工确认的官网</label><input id="prospectCompanyOfficialDomain" value="${escapeHtml(item.website)}"></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="prospectCompanySubmit">保存企业核验</button>`);
+  qs<HTMLButtonElement>("#prospectCompanySubmit")?.addEventListener("click", (event) => {
+    const value = (selector: string) => qs<HTMLInputElement | HTMLSelectElement>(selector)?.value.trim() || "";
+    const validDate = value("#prospectCompanyValidUntil");
+    void mutateProspectQualification(item, "/company", {
+      requestId: prospectRequestId("company-qualification"),
+      providerCode: value("#prospectCompanyProvider"),
+      registrationNumber: value("#prospectCompanyRegistration"),
+      operatingStatus: value("#prospectCompanyStatus"),
+      jurisdiction: value("#prospectCompanyJurisdiction"),
+      sourceRef: value("#prospectCompanySource"),
+      authorityCode: value("#prospectCompanyAuthority"),
+      observedAt: new Date().toISOString(),
+      validUntil: new Date(`${validDate}T23:59:59.000Z`).toISOString(),
+      officialDomain: value("#prospectCompanyOfficialDomain")
+    }, event.currentTarget as HTMLButtonElement, "企业核验快照已保存");
+  });
+}
+
+function openProspectIcpQualification(item: WebsiteOpportunity) {
+  openModal(`ICP 评估 · ${item.company}`, `
+    <div class="form-grid prospect-icp-form">
+      <div class="form-field full"><label>产品 / 应用匹配证据</label><textarea id="prospectIcpEvidence" placeholder="填写来源页面中能支持目标产品与应用匹配的事实"></textarea></div>
+      <div class="form-field full"><label>证据来源 URL</label><input id="prospectIcpSource" value="${escapeHtml(item.website)}"></div>
+      ${[["Product", "产品应用", 30], ["Customer", "客户类型", 15], ["Market", "市场国家", 10], ["Authenticity", "企业真实性", 15], ["Purchase", "采购渠道能力", 15], ["Contact", "可联系性", 10], ["Freshness", "新鲜度", 5]].map(([id, label, max]) => `<div class="form-field"><label>${label}（0-${max}）</label><input id="prospectIcp${id}" type="number" min="0" max="${max}" value="0"></div>`).join("")}
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="prospectIcpSubmit">生成评估快照</button>`);
+  qs<HTMLButtonElement>("#prospectIcpSubmit")?.addEventListener("click", (event) => {
+    const value = (selector: string) => qs<HTMLInputElement | HTMLTextAreaElement>(selector)?.value.trim() || "";
+    const score = (id: string) => Number(value(`#prospectIcp${id}`) || 0);
+    void mutateProspectQualification(item, "/icp", {
+      requestId: prospectRequestId("icp-qualification"),
+      dimensionScores: {
+        productApplicationMatch: score("Product"),
+        customerType: score("Customer"),
+        marketCountry: score("Market"),
+        companyAuthenticity: score("Authenticity"),
+        purchasingChannelCapability: score("Purchase"),
+        contactability: score("Contact"),
+        freshness: score("Freshness")
+      },
+      evidence: [{
+        field: "product_match",
+        value: value("#prospectIcpEvidence"),
+        sourceType: "official_website",
+        providerCode: "official_website_manual_review",
+        sourceRef: value("#prospectIcpSource"),
+        excerpt: value("#prospectIcpEvidence"),
+        observedAt: new Date().toISOString(),
+        expiresAt: new Date(`${daysFromNow(90)}T23:59:59.000Z`).toISOString()
+      }],
+      hardGateReasonCodes: []
+    }, event.currentTarget as HTMLButtonElement, "ICP 评估已生成，等待人工批准");
+  });
+}
+
+function openProspectChannelQualification(item: WebsiteOpportunity) {
+  const email = contactEmail(item.contactInfo) || contactEmail(item.contact);
+  openModal(`渠道核验 · ${item.company}`, `
+    <div class="form-grid">
+      <div class="form-field"><label>联系人类型</label><select id="prospectChannelContactType"><option value="department">部门</option><option value="named_person">具名联系人</option><option value="company_public">企业公开通道</option></select></div>
+      <div class="form-field"><label>姓名</label><input id="prospectChannelName" value="${escapeHtml(item.contact)}"></div>
+      <div class="form-field"><label>部门</label><input id="prospectChannelDepartment" value="${escapeHtml(item.contact || "Sales")}"></div>
+      <div class="form-field"><label>通道</label><select id="prospectChannelType"><option value="email">Email</option><option value="phone">电话</option><option value="whatsapp">WhatsApp</option><option value="website_form">官网表单</option></select></div>
+      <div class="form-field full"><label>联系方式</label><input id="prospectChannelValue" value="${escapeHtml(email || item.contactInfo)}"></div>
+      <div class="form-field full"><label>公开来源 URL</label><input id="prospectChannelSource" value="${escapeHtml(item.website)}"></div>
+      <div class="form-field"><label>有效至</label><input id="prospectChannelExpires" type="date" value="${daysFromNow(30)}"></div>
+      <label class="form-check full"><input id="prospectChannelConfirmed" type="checkbox">我已在该官方来源逐字核对联系方式，确认不是搜索摘要或 AI 生成内容</label>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="prospectChannelSubmit">保存渠道核验</button>`);
+  qs<HTMLButtonElement>("#prospectChannelSubmit")?.addEventListener("click", (event) => {
+    const value = (selector: string) => qs<HTMLInputElement | HTMLSelectElement>(selector)?.value.trim() || "";
+    if (!qs<HTMLInputElement>("#prospectChannelConfirmed")?.checked) {
+      toast("请先完成官方来源逐字核对", "error");
+      return;
+    }
+    const contactType = value("#prospectChannelContactType");
+    const contactValue = value("#prospectChannelValue");
+    void mutateProspectQualification(item, "/channel", {
+      requestId: prospectRequestId("channel-qualification"),
+      contactType,
+      name: value("#prospectChannelName"),
+      department: value("#prospectChannelDepartment"),
+      title: "",
+      identityStatus: "source_confirmed",
+      channelType: value("#prospectChannelType"),
+      value: contactValue,
+      sourceType: "official_website",
+      sourceProviderCode: "official_website_manual_review",
+      sourceRef: value("#prospectChannelSource"),
+      excerpt: `人工核对公开联系方式：${contactValue}`,
+      acquiredAt: new Date().toISOString(),
+      verificationBasis: "official_source_manual",
+      verificationProviderCode: "human_official_source_review",
+      verificationReasonCode: "public_channel_confirmed",
+      verifiedAt: new Date().toISOString(),
+      expiresAt: new Date(`${value("#prospectChannelExpires")}T23:59:59.000Z`).toISOString(),
+      humanConfirmed: true
+    }, event.currentTarget as HTMLButtonElement, "联系方式来源和有效期已保存");
+  });
+}
+
+function openProspectSuppression(item: WebsiteOpportunity) {
+  openModal(`禁止联系 · ${item.company}`, `
+    <div class="form-field"><label>原因</label><textarea id="prospectSuppressionReason" placeholder="例如：明确退订、法务要求、客户明确拒绝"></textarea></div>
+    <label class="form-check"><input id="prospectSuppressionDnc" type="checkbox" checked>永久禁止联系（普通恢复操作不能撤销）</label>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn danger" id="prospectSuppressionSubmit">确认禁止联系</button>`);
+  qs<HTMLButtonElement>("#prospectSuppressionSubmit")?.addEventListener("click", (event) => {
+    const reason = qs<HTMLTextAreaElement>("#prospectSuppressionReason")?.value.trim() || "";
+    const dnc = Boolean(qs<HTMLInputElement>("#prospectSuppressionDnc")?.checked);
+    if (!reason) {
+      toast("请填写禁止联系原因", "error");
+      return;
+    }
+    void mutateProspectQualification(item, "/suppress", {
+      requestId: prospectRequestId("suppression"),
+      scope: "organization_all",
+      action: "imposed",
+      reasonCode: dnc ? "HUMAN_DO_NOT_CONTACT" : "HUMAN_TEMPORARY_SUPPRESSION",
+      reasonNote: reason,
+      effectiveAt: new Date().toISOString(),
+      expiresAt: dnc ? "" : new Date(`${daysFromNow(90)}T23:59:59.000Z`).toISOString(),
+      doNotContact: dnc
+    }, event.currentTarget as HTMLButtonElement, "禁止联系状态已生效");
+  });
+}
+
+function bindProspectQualificationActions(
+  root: HTMLElement,
+  item: WebsiteOpportunity
+) {
+  const view = state.prospectQualifications[item.id];
+  qs<HTMLButtonElement>("#prospectResolveIdentityButton", root)?.addEventListener("click", async () => {
+    if (!prospectIdentityBootstrapViews.has(item.id)) {
+      await loadProspectIdentityBootstrap(item, false);
+    }
+    const currentRoot = qs<HTMLElement>("#prospectDetail");
+    const panel = currentRoot?.querySelector<HTMLElement>(".prospect-identity-panel");
+    panel?.scrollIntoView({ behavior: "smooth", block: "center" });
+    currentRoot?.querySelector<HTMLSelectElement>("#prospectIdentityProvider")?.focus();
+  });
+  qs<HTMLButtonElement>("#prospectVerifyCompanyButton", root)?.addEventListener("click", () => openProspectCompanyQualification(item));
+  qs<HTMLButtonElement>("#prospectAssessIcpButton", root)?.addEventListener("click", () => openProspectIcpQualification(item));
+  qs<HTMLButtonElement>("#prospectVerifyChannelButton", root)?.addEventListener("click", () => openProspectChannelQualification(item));
+  qs<HTMLButtonElement>("#prospectApproveIcpButton", root)?.addEventListener("click", (event) => {
+    const assessment = view?.qualification?.icpAssessments.at(-1);
+    if (!assessment || !window.confirm(`确认批准本次 ICP 评估（${assessment.totalScore} 分）？`)) return;
+    void mutateProspectQualification(item, `/icp/${encodeURIComponent(assessment.id)}/approve`, {
+      requestId: prospectRequestId("icp-approval")
+    }, event.currentTarget as HTMLButtonElement, "ICP 评估已批准");
+  });
+  qs<HTMLButtonElement>("#prospectEvaluateContactabilityButton", root)?.addEventListener("click", (event) => {
+    void mutateProspectQualification(item, "/contactability/evaluate", {
+      requestId: prospectRequestId("contactability-evaluation")
+    }, event.currentTarget as HTMLButtonElement, "门禁评估已完成");
+  });
+  qs<HTMLButtonElement>("#prospectApproveContactabilityButton", root)?.addEventListener("click", (event) => {
+    const decision = view?.qualification?.contactabilityDecisions.at(-1);
+    if (!decision || !window.confirm("确认该候选当前满足企业、ICP、渠道和合规门禁，并批准联系？")) return;
+    void mutateProspectQualification(item, `/contactability/${encodeURIComponent(decision.id)}/approve`, {
+      requestId: prospectRequestId("contactability-approval")
+    }, event.currentTarget as HTMLButtonElement, "候选已通过 VQA，可进入线索或触达流程");
+  });
+  qs<HTMLButtonElement>("#prospectSuppressButton", root)?.addEventListener("click", () => openProspectSuppression(item));
+}
+
+const prospectIdentityBootstrapViews = new Map<string, ProspectIdentityBootstrapView>();
+const prospectIdentityBootstrapProgress = new Map<string, ProspectIdentityBootstrapProgress>();
+const prospectIdentityBootstrapLoading = new Set<string>();
+let prospectIdentityBootstrapPollKey = "";
+let prospectIdentityBootstrapPollTimer = 0;
+
+const PROSPECT_IDENTITY_OUTCOME_LABELS: Record<ProspectIdentityBootstrapAttempt["outcome"], string> = {
+  pending: "等待权威来源结果",
+  linked: "正式企业身份已绑定",
+  not_found: "权威来源未找到该注册号",
+  identity_conflict: "企业身份存在冲突，等待人工复核",
+  failed: "权威来源任务失败"
+};
+
+function latestProspectIdentityBootstrap(item: WebsiteOpportunity) {
+  return [...(item.identityBootstrapAttempts || [])]
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+}
+
+function identityBootstrapProviderHint(provider?: ProspectIdentityBootstrapProviderGuide) {
+  if (!provider) return "请选择权威企业注册来源。";
+  if (!provider.runtime?.ready) {
+    return provider.runtime?.requiresKey && !provider.runtime.hasApiKey
+      ? provider.credentialKind === "fair_access_user_agent"
+        ? `${provider.name} 需要先配置 Fair Access User-Agent（系统名 联系邮箱），无需申请 API Key。`
+        : `${provider.name} 需要先配置 API Key；任务不会在未配置时创建。`
+      : `${provider.name} 当前不可执行，请先到数据源中心检查连接。`;
+  }
+  return `${provider.name} 已可执行。${provider.setupNote}系统只调用正式 API，不访问或抓取企业官网。`;
+}
+
+function renderProspectIdentityBootstrapPanel(item: WebsiteOpportunity) {
+  const attempt = latestProspectIdentityBootstrap(item);
+  const view = prospectIdentityBootstrapViews.get(item.id);
+  const progress = attempt ? prospectIdentityBootstrapProgress.get(attempt.id) : undefined;
+  const formallyResolved = Boolean(item.organizationId && item.tenantProspectId);
+  const canStart = item.ownerId === state.user?.id
+    && item.status !== "synced"
+    && !formallyResolved
+    && attempt?.taskStatus !== "running";
+  if (!attempt && formallyResolved) {
+    return `
+      <section class="prospect-identity-panel">
+        <div class="prospect-probe-head"><div><b>正式企业身份</b><small>强标识与团队覆盖对象已建立</small></div>${badge("已建立", "green")}</div>
+        <dl class="prospect-identity-lineage">
+          <div><dt>Organization</dt><dd>${escapeHtml(item.organizationId || "-")}</dd></div>
+          <div><dt>TenantProspect</dt><dd>${escapeHtml(item.tenantProspectId || "-")}</dd></div>
+        </dl>
+      </section>`;
+  }
+  const options = view?.providers.map((provider) => `
+    <option value="${provider.id}">${escapeHtml(provider.name)}${provider.runtime?.ready ? "" : " · 未配置"}</option>`).join("") || "";
+  const defaultProvider = view?.providers.find((provider) => provider.runtime?.ready)
+    || view?.providers[0];
+  const taskHeader = attempt
+    ? `<div class="prospect-probe-head"><div><b>正式身份引导</b><small>${escapeHtml(attempt.providerId)} · ${escapeHtml(attempt.registrationNumber)}</small></div>${badge(attempt.taskStatus === "ended" ? "已结束" : "进行中", attempt.taskStatus === "ended" ? "gray" : "amber")}</div>`
+    : `<div class="prospect-probe-head"><div><b>正式身份引导</b><small>权威注册 API · 强标识归一</small></div>${badge("尚未执行", "gray")}</div>`;
+  const candidates = progress?.candidates || [];
+  const taskDetail = attempt ? `
+    <details class="prospect-identity-detail" ${attempt.taskStatus === "running" ? "open" : ""}>
+      <summary>查看任务详情</summary>
+      <div class="prospect-identity-result ${attempt.outcome === "linked" ? "is-linked" : attempt.outcome === "pending" ? "" : "is-failed"}">
+        <b>${escapeHtml(PROSPECT_IDENTITY_OUTCOME_LABELS[attempt.outcome])}</b>
+        <span>${escapeHtml(attempt.errorMessage || (attempt.outcome === "linked" ? "候选已进入正式企业与团队覆盖链，下一步仍需完成四步资格审查。" : progress?.currentAction || "任务阶段会持续刷新。"))}</span>
+      </div>
+      ${progress ? `<div class="prospect-identity-metrics"><span>进度 <b>${progress.progress}%</b></span><span>来源 <b>${progress.settledSources}/${progress.sourceCount}</b></span><span>候选 <b>${progress.candidateCount}</b></span><span>清洗 <b>${progress.filteredCount}</b></span></div>` : ""}
+      ${candidates.length ? `<div class="prospect-identity-candidates">${candidates.map((candidate) => `<div><b>${escapeHtml(candidate.company || "公司名待确认")}</b><span>${escapeHtml([candidate.country, candidate.source, candidate.verificationLevel].filter(Boolean).join(" · "))}</span></div>`).join("")}</div>` : attempt.taskStatus === "running" ? `<p class="prospect-probe-summary">正在等待权威来源返回并完成候选清洗。</p>` : ""}
+      <div class="prospect-probe-timeline">
+        ${attempt.events.map((entry) => `<div class="prospect-probe-event ${entry.status}"><span></span><div><b>${escapeHtml(entry.label)}</b><small>${escapeHtml(entry.detail)}</small></div><time>${formatTime(entry.createdAt)}</time></div>`).join("")}
+      </div>
+      <dl class="prospect-identity-lineage">
+        <div><dt>Campaign / Run</dt><dd>${escapeHtml([attempt.campaignId, attempt.runId].filter(Boolean).join(" / ") || "待建立")}</dd></div>
+        <div><dt>Resolution</dt><dd>${escapeHtml(attempt.resolutionId || "待解析")}</dd></div>
+        <div><dt>Organization</dt><dd>${escapeHtml(attempt.organizationId || "待绑定")}</dd></div>
+        <div><dt>TenantProspect</dt><dd>${escapeHtml(attempt.tenantProspectId || "待绑定")}</dd></div>
+      </dl>
+      ${attempt.conflictId ? `<div class="prospect-probe-detail"><b>冲突编号</b><span>${escapeHtml(attempt.conflictId)}，需由负责人在企业身份冲突审核中处理。</span></div>` : ""}
+    </details>` : "";
+  return `
+    <section class="prospect-identity-panel">
+      ${taskHeader}
+      <p class="prospect-probe-summary">官网链接和低频官网验证都不能建立正式企业身份。系统只接受 GLEIF、Companies House、SEC 或法国企业登记返回的强注册标识。</p>
+      ${taskDetail}
+      ${canStart ? `<div class="prospect-identity-form">
+        <label><span>权威来源</span><select id="prospectIdentityProvider">${options || `<option value="">正在读取数据源</option>`}</select></label>
+        <label><span>注册号</span><input id="prospectIdentityRegistration" maxlength="80" placeholder="${escapeHtml(defaultProvider?.example || "输入正式注册号")}"></label>
+        <button class="btn primary" type="button" id="prospectIdentityStartButton" ${view?.providers.length ? "" : "disabled"}>开始身份核验</button>
+        <small id="prospectIdentityProviderHint">${escapeHtml(identityBootstrapProviderHint(defaultProvider))}</small>
+      </div>` : !formallyResolved && item.ownerId !== state.user?.id ? `<p class="prospect-probe-summary">只有归属业务员可以发起正式身份引导。</p>` : ""}
+    </section>`;
+}
+
+async function loadProspectIdentityBootstrap(item: WebsiteOpportunity, quiet = true) {
+  if (item.ownerId !== state.user?.id || prospectIdentityBootstrapLoading.has(item.id)) return;
+  prospectIdentityBootstrapLoading.add(item.id);
+  try {
+    const view = await api<ProspectIdentityBootstrapView>(
+      `/api/prospect-list/${encodeURIComponent(item.id)}/identity-bootstrap`
+    );
+    prospectIdentityBootstrapViews.set(item.id, view);
+    item.identityBootstrapAttempts = view.attempts;
+    if (state.selectedProspectId === item.id) renderProspectDetail(item);
+  } catch (error) {
+    if (!quiet) toast(error instanceof Error ? error.message : "企业身份引导加载失败", "error");
+  } finally {
+    prospectIdentityBootstrapLoading.delete(item.id);
+  }
+}
+
+function stopProspectIdentityBootstrapPolling() {
+  if (prospectIdentityBootstrapPollTimer) window.clearTimeout(prospectIdentityBootstrapPollTimer);
+  prospectIdentityBootstrapPollTimer = 0;
+  prospectIdentityBootstrapPollKey = "";
+}
+
+function pollProspectIdentityBootstrap(item: WebsiteOpportunity, attemptId: string) {
+  const key = `${item.id}:${attemptId}`;
+  if (prospectIdentityBootstrapPollKey === key) return;
+  stopProspectIdentityBootstrapPolling();
+  prospectIdentityBootstrapPollKey = key;
+  const tick = async () => {
+    if (state.selectedProspectId !== item.id || prospectIdentityBootstrapPollKey !== key) {
+      stopProspectIdentityBootstrapPolling();
+      return;
+    }
+    try {
+      const result = await api<{
+        taskStatus: "running" | "ended";
+        attempt: ProspectIdentityBootstrapAttempt;
+        candidate: WebsiteOpportunity;
+        progress: ProspectIdentityBootstrapProgress | null;
+      }>(`/api/prospect-list/${encodeURIComponent(item.id)}/identity-bootstrap/${encodeURIComponent(attemptId)}/reconcile`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      Object.assign(item, result.candidate);
+      item.identityBootstrapAttempts ||= [];
+      const index = item.identityBootstrapAttempts.findIndex((entry) => entry.id === result.attempt.id);
+      if (index >= 0) item.identityBootstrapAttempts[index] = result.attempt;
+      else item.identityBootstrapAttempts.unshift(result.attempt);
+      const view = prospectIdentityBootstrapViews.get(item.id);
+      if (view) view.attempts = item.identityBootstrapAttempts;
+      if (result.progress) prospectIdentityBootstrapProgress.set(attemptId, result.progress);
+      renderProspectDetail(item);
+      renderProspectList();
+      if (result.taskStatus === "ended") {
+        stopProspectIdentityBootstrapPolling();
+        if (result.attempt.outcome === "linked") {
+          await loadProspectQualification(item, true, true);
+          toast("身份核验已结束，正式企业身份已建立");
+        } else {
+          toast("身份核验已结束，可在详情查看结果");
+        }
+        return;
+      }
+    } catch {
+      // The next reconciliation can recover from a short API interruption.
+    }
+    prospectIdentityBootstrapPollTimer = window.setTimeout(tick, 900);
+  };
+  prospectIdentityBootstrapPollTimer = window.setTimeout(tick, 100);
+}
+
+async function startProspectIdentityBootstrap(item: WebsiteOpportunity, button: HTMLButtonElement) {
+  const providerId = qs<HTMLSelectElement>("#prospectIdentityProvider")?.value as ProspectIdentityAuthorityProvider | "";
+  const registrationNumber = qs<HTMLInputElement>("#prospectIdentityRegistration")?.value.trim() || "";
+  const view = prospectIdentityBootstrapViews.get(item.id);
+  const provider = view?.providers.find((entry) => entry.id === providerId);
+  if (!providerId || !registrationNumber) {
+    toast("请选择权威来源并填写正式注册号", "error");
+    return;
+  }
+  if (!provider?.runtime?.ready) {
+    toast(identityBootstrapProviderHint(provider), "error");
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "正在创建任务";
+  try {
+    const result = await api<{
+      taskStatus: "running" | "ended";
+      attempt: ProspectIdentityBootstrapAttempt;
+    }>(`/api/prospect-list/${encodeURIComponent(item.id)}/identity-bootstrap`, {
+      method: "POST",
+      body: JSON.stringify({
+        providerId,
+        registrationNumber,
+        requestId: prospectRequestId("identity-bootstrap")
+      })
+    });
+    item.identityBootstrapAttempts ||= [];
+    const existing = item.identityBootstrapAttempts.findIndex((entry) => entry.id === result.attempt.id);
+    if (existing >= 0) item.identityBootstrapAttempts[existing] = result.attempt;
+    else item.identityBootstrapAttempts.unshift(result.attempt);
+    if (view) view.attempts = item.identityBootstrapAttempts;
+    renderProspectDetail(item);
+    if (result.taskStatus === "ended") toast("身份核验已结束，可在详情查看结果");
+    else pollProspectIdentityBootstrap(item, result.attempt.id);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "企业身份核验启动失败", "error");
+    button.disabled = false;
+    button.textContent = "开始身份核验";
+  }
+}
+
+function bindProspectIdentityBootstrapActions(root: ParentNode, item: WebsiteOpportunity) {
+  const select = qs<HTMLSelectElement>("#prospectIdentityProvider", root);
+  const hint = qs<HTMLElement>("#prospectIdentityProviderHint", root);
+  const registration = qs<HTMLInputElement>("#prospectIdentityRegistration", root);
+  select?.addEventListener("change", () => {
+    const provider = prospectIdentityBootstrapViews.get(item.id)?.providers.find((entry) => entry.id === select.value);
+    if (hint) hint.textContent = identityBootstrapProviderHint(provider);
+    if (registration) registration.placeholder = provider?.example || "输入正式注册号";
+  });
+  qs<HTMLButtonElement>("#prospectIdentityStartButton", root)?.addEventListener("click", (event) => {
+    void startProspectIdentityBootstrap(item, event.currentTarget as HTMLButtonElement);
+  });
+}
+
+const WEBSITE_PROBE_STAGE_LABELS: Record<WebsiteProbeStage, string> = {
+  queued: "排队",
+  dns: "DNS 安全检查",
+  robots: "robots 规则",
+  head: "首页预检",
+  body: "正文样本",
+  evidence: "最小证据",
+  completed: "结束",
+  failed: "结束"
+};
+
+const WEBSITE_PROBE_OUTCOME_LABELS: Record<WebsiteProbeAttempt["outcome"], string> = {
+  pending: "等待结果",
+  evidence_found: "取得官网公开证据",
+  no_evidence: "未取得公开邮箱或组织证据",
+  robots_denied: "站点策略禁止访问",
+  unreachable: "官网暂时不可达",
+  policy_blocked: "安全策略阻止访问",
+  rate_limited: "站点触发限流",
+  circuit_open: "同域连续失败已熔断"
+};
+
+let activeWebsiteProbeStream: EventSource | null = null;
+
+function latestWebsiteProbe(item: WebsiteOpportunity) {
+  return [...(item.websiteProbeAttempts || [])]
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+}
+
+function renderWebsiteProbePanel(item: WebsiteOpportunity) {
+  const attempt = latestWebsiteProbe(item);
+  const canStart = item.ownerId === state.user?.id && /^https:\/\//iu.test(item.website);
+  if (!attempt) {
+    return `
+      <section class="prospect-probe-panel">
+        <div class="prospect-probe-head"><div><b>官网低频验证</b><small>受控访问 · 单次首页</small></div>${badge("尚未执行", "gray")}</div>
+        <p class="prospect-probe-summary">只读取 robots.txt 和官网首页，最多 64 KiB；可回填与官网同域的公开业务邮箱，不跟链接、不保存网页原文或电话。</p>
+        ${canStart ? `<button class="btn" type="button" id="prospectWebsiteProbeButton">验证官网并查找公开邮箱</button>` : ""}
+      </section>`;
+  }
+  const terminal = attempt.status === "completed" || attempt.status === "failed";
+  const evidence = attempt.evidence;
+  return `
+    <section class="prospect-probe-panel">
+      <div class="prospect-probe-head">
+        <div><b>官网低频验证</b><small>${escapeHtml(attempt.domain)} · ${escapeHtml(attempt.policyVersion)}</small></div>
+        ${badge(terminal ? "已结束" : attempt.status === "running" ? "验证中" : "排队中", terminal ? "gray" : "amber")}
+      </div>
+      <div class="prospect-probe-result ${attempt.outcome === "evidence_found" ? "has-evidence" : "is-neutral"}">
+        <b>${escapeHtml(WEBSITE_PROBE_OUTCOME_LABELS[attempt.outcome])}</b>
+        <span>${terminal ? "详细结果不会改变企业或 ICP 硬门禁；官网证据只能用于补充交叉验证。" : "正在按阶段执行，结果会实时追加。"}</span>
+      </div>
+      ${evidence ? `<dl class="prospect-probe-evidence">
+        <div><dt>组织名称</dt><dd>${escapeHtml(evidence.legalName || evidence.organizationName || "未发现")}</dd></div>
+        <div><dt>国家 / 语言</dt><dd>${escapeHtml([evidence.addressCountry, evidence.language].filter(Boolean).join(" · ") || "未发现")}</dd></div>
+        <div><dt>业务类别</dt><dd>${escapeHtml(evidence.businessCategory || "未发现")}</dd></div>
+        <div><dt>公开业务邮箱</dt><dd>${escapeHtml(evidence.publicContactEmail || "未发现")}</dd></div>
+        <div><dt>页面标题</dt><dd>${escapeHtml(evidence.pageTitle || "未发现")}</dd></div>
+      </dl>` : ""}
+      <div class="prospect-probe-timeline">
+        ${attempt.events.map((event) => `<div class="prospect-probe-event ${event.status}"><span></span><div><b>${escapeHtml(WEBSITE_PROBE_STAGE_LABELS[event.stage])}</b><small>${escapeHtml(event.message)}</small></div><time>${formatTime(event.createdAt)}</time></div>`).join("")}
+      </div>
+      ${attempt.failureMessage ? `<div class="prospect-probe-detail"><b>详细结果</b><span>${escapeHtml(attempt.failureMessage)}</span></div>` : ""}
+      <div class="prospect-probe-foot"><span>robots：${escapeHtml(attempt.robotsDecision)}</span><span>响应：${attempt.httpStatus || "-"}</span><span>正文：${attempt.responseBytes} B</span><span>跳转：${attempt.redirected ? "1 次" : "无"}</span></div>
+      ${canStart && terminal ? `<button class="btn" type="button" id="prospectWebsiteProbeButton">重新验证官网邮箱</button>` : ""}
+    </section>`;
+}
+
+async function refreshWebsiteProbe(
+  item: WebsiteOpportunity,
+  attemptId: string
+) {
+  const result = await api<{
+    attempt: WebsiteProbeAttempt;
+    terminal: boolean;
+    opportunity: WebsiteOpportunity;
+  }>(`/api/prospect-list/${encodeURIComponent(item.id)}/website-probe/${encodeURIComponent(attemptId)}`);
+  Object.assign(item, result.opportunity);
+  if (state.selectedProspectId === item.id) renderProspectDetail(item);
+  return result;
+}
+
+async function pollWebsiteProbe(item: WebsiteOpportunity, attemptId: string) {
+  const deadline = Date.now() + 2 * 60 * 1000;
+  while (Date.now() < deadline) {
+    try {
+      const result = await refreshWebsiteProbe(item, attemptId);
+      if (result.terminal) return;
+    } catch {
+      // A later poll can recover from a short API interruption.
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+  }
+}
+
+function streamWebsiteProbe(item: WebsiteOpportunity, attemptId: string) {
+  activeWebsiteProbeStream?.close();
+  const attempt = item.websiteProbeAttempts?.find((row) => row.id === attemptId);
+  const after = attempt?.events.at(-1)?.sequence || 0;
+  const stream = new EventSource(`/api/prospect-list/${encodeURIComponent(item.id)}/website-probe/${encodeURIComponent(attemptId)}/events?after=${after}`);
+  activeWebsiteProbeStream = stream;
+  stream.addEventListener("probe_event", (raw) => {
+    const event = JSON.parse((raw as MessageEvent).data) as WebsiteProbeEvent;
+    const current = item.websiteProbeAttempts?.find((row) => row.id === attemptId);
+    if (current && !current.events.some((row) => row.id === event.id)) {
+      current.events.push(event);
+      if (current.status === "queued" && event.stage !== "queued") current.status = "running";
+      if (state.selectedProspectId === item.id) renderProspectDetail(item);
+    }
+  });
+  stream.addEventListener("done", () => {
+    stream.close();
+    if (activeWebsiteProbeStream === stream) activeWebsiteProbeStream = null;
+    void refreshWebsiteProbe(item, attemptId);
+  });
+  stream.onerror = () => {
+    stream.close();
+    if (activeWebsiteProbeStream === stream) activeWebsiteProbeStream = null;
+    void pollWebsiteProbe(item, attemptId);
+  };
+}
+
+async function startWebsiteProbe(item: WebsiteOpportunity, button?: HTMLButtonElement) {
+  if (button) {
+    button.disabled = true;
+    button.textContent = "正在排队";
+  }
+  try {
+    const result = await api<{
+      attempt: WebsiteProbeAttempt;
+      replayed: boolean;
+      opportunity: WebsiteOpportunity;
+    }>(`/api/prospect-list/${encodeURIComponent(item.id)}/website-probe`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    Object.assign(item, result.opportunity);
+    renderProspectDetail(item);
+    const terminal = result.attempt.status === "completed" || result.attempt.status === "failed";
+    if (terminal) {
+      toast("官网验证已结束，可在详情查看结果");
+    } else {
+      streamWebsiteProbe(item, result.attempt.id);
+    }
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "官网验证启动失败", "error");
+    if (button) {
+      button.disabled = false;
+      button.textContent = "验证官网并查找公开邮箱";
+    }
+  }
 }
 
 function renderProspectDetail(item?: WebsiteOpportunity | null) {
@@ -14894,17 +15959,27 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
   const score = leadFinderScore(item);
   const duplicate = leadFinderDuplicateState(item);
   const status = prospectStatusMeta(item);
+  const qualification = state.prospectQualifications[item.id];
   const owner = state.prospectAssignees.find((assignee) => assignee.id === item.ownerId);
-  const canContact = ["contactable", "contacted", "synced"].includes(item.status);
+  const canContact = Boolean(
+    qualification?.vqaQualified
+    && qualification.approvedChannel
+  );
   const canWriteOutreach = item.ownerId === state.user?.id;
+  const dnc = qualification?.blockers.includes("PROSPECT_DO_NOT_CONTACT");
   const readonly = item.status === "synced" ? "disabled" : "";
   const procurementContext = state.procurementContexts[item.id];
   box.innerHTML = `
     <div class="prospect-detail-hero">
-      ${badge(status.label, status.tone)} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} ${badge(duplicate.text, duplicate.tone)}
+      ${badge(status.label, status.tone)} ${badge(`行动优先 ${score}`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} ${badge(duplicate.text, duplicate.tone)}
       <h2>${escapeHtml(item.company)}</h2>
       <p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(item.business || "业务待维护")} · ${escapeHtml(websiteDomain(item.website || ""))}</p>
+      <p>加入候选池：${escapeHtml(formatProspectJoinedAt(item.createdAt))}</p>
     </div>
+    ${renderProspectScorecard(item)}
+    ${renderProspectIdentityBootstrapPanel(item)}
+    ${renderProspectQualificationPanel(item)}
+    ${renderWebsiteProbePanel(item)}
     <div class="prospect-field-grid">
       <div class="form-field"><label>公司</label><input id="prospectEditCompany" value="${escapeHtml(item.company)}" ${readonly}></div>
       <div class="form-field"><label>官网</label><input id="prospectEditWebsite" value="${escapeHtml(item.website)}" ${readonly}></div>
@@ -14924,18 +15999,16 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
     <div class="inline-alert"><b>下一步</b><span>${escapeHtml(status.action)}</span></div>
     ${renderProcurementContextPanel(procurementContext, item)}
     <div class="prospect-action-row">
-      ${item.status !== "synced" ? `<button class="btn" id="prospectSaveButton">保存核验资料</button>` : ""}
-      ${item.status === "preview" ? `<button class="btn" id="prospectDetailMarkButton">标记可联系</button>` : ""}
-      ${item.status === "excluded" ? `<button class="btn" id="prospectRestoreButton">恢复待核验</button>` : ""}
-      ${["preview", "contactable", "contacted"].includes(item.status) ? `<button class="btn primary" id="prospectDetailSyncButton">加入线索</button>` : ""}
+      ${item.status !== "synced" ? `<button class="btn" id="prospectSaveButton">保存候选资料</button>` : ""}
+      ${item.status === "excluded" && !dnc ? `<button class="btn" id="prospectRestoreButton">恢复待核验</button>` : ""}
+      ${qualification?.vqaQualified && item.status !== "synced" ? `<button class="btn primary" id="prospectDetailSyncButton">加入线索</button>` : ""}
       ${item.status === "synced" && item.leadId ? `<button class="btn primary" id="prospectViewLeadButton">查看线索</button>` : ""}
-      ${canWriteOutreach && canContact ? `<button class="btn" id="prospectTouchpointButton">记录触达</button><button class="btn" id="prospectReplyButton">记录回复</button>` : ""}
+      ${canWriteOutreach && canContact ? `<button class="btn" id="prospectTouchpointButton">补录历史触达</button><button class="btn" id="prospectReplyButton">记录回复</button>` : ""}
       ${item.lastTouchpointAt ? `<button class="btn" id="prospectTouchpointHistoryButton">查看记录</button>` : ""}
-      ${canWriteOutreach && item.status !== "excluded" ? `<button class="btn" id="prospectTodoButton">生成待办</button>` : ""}
+      ${canWriteOutreach && item.status === "synced" && item.leadId ? `<button class="btn" id="prospectTodoButton">生成待办</button>` : ""}
     </div>
   `;
   qs<HTMLButtonElement>("#prospectSaveButton", box)?.addEventListener("click", (event) => void saveProspectVerification(item, event.currentTarget as HTMLButtonElement));
-  qs<HTMLButtonElement>("#prospectDetailMarkButton", box)?.addEventListener("click", (event) => void updateProspectBatch("mark-contactable", [item.id], event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectRestoreButton", box)?.addEventListener("click", (event) => void updateProspectBatch("restore", [item.id], event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectDetailSyncButton", box)?.addEventListener("click", (event) => void syncProspects([item.id], event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectViewLeadButton", box)?.addEventListener("click", () => void openProspectLead(item));
@@ -14943,10 +16016,35 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
   qs<HTMLButtonElement>("#prospectTouchpointButton", box)?.addEventListener("click", () => openProspectTouchpointModal(item));
   qs<HTMLButtonElement>("#prospectReplyButton", box)?.addEventListener("click", () => openProspectReplyModal(item));
   qs<HTMLButtonElement>("#prospectTouchpointHistoryButton", box)?.addEventListener("click", () => void openProspectTouchpointHistory(item));
+  bindProspectIdentityBootstrapActions(box, item);
+  bindProspectQualificationActions(box, item);
+  qs<HTMLButtonElement>("#prospectWebsiteProbeButton", box)?.addEventListener("click", (event) => void startWebsiteProbe(item, event.currentTarget as HTMLButtonElement));
   bindProcurementContextActions(box, item, procurementContext);
   if (!procurementContext) void loadProspectProcurementContext(item);
+  if (!qualification && !prospectQualificationLoading.has(item.id)) {
+    void loadProspectQualification(item);
+  }
+  if (!prospectIdentityBootstrapViews.has(item.id)
+    && !prospectIdentityBootstrapLoading.has(item.id)) {
+    void loadProspectIdentityBootstrap(item);
+  }
+  const identityAttempt = latestProspectIdentityBootstrap(item);
+  if (identityAttempt?.taskStatus === "running") {
+    pollProspectIdentityBootstrap(item, identityAttempt.id);
+  }
   const mailWorkspace = qs<HTMLDetailsElement>("#prospectMailWorkspace");
   if (mailWorkspace) mailWorkspace.open = canContact && Boolean(item.lastDevelopmentEmailAt);
+  const approvedEmail = qualification?.approvedChannel?.channelType === "email"
+    ? qualification.approvedChannel.value
+    : "";
+  const mailTo = qs<HTMLInputElement>("#prospectMailTo");
+  if (mailTo) {
+    if (approvedEmail) mailTo.value = approvedEmail;
+    mailTo.readOnly = Boolean(approvedEmail);
+    mailTo.placeholder = approvedEmail
+      ? "已锁定人工批准邮箱"
+      : "通过 VQA 后自动锁定批准邮箱";
+  }
   renderProspectMailPreview();
 }
 
@@ -14959,7 +16057,8 @@ async function saveProspectVerification(item: WebsiteOpportunity, button?: HTMLB
     country: value("#prospectEditCountry"),
     contact: value("#prospectEditContact"),
     contactInfo: value("#prospectEditContactInfo"),
-    description: value("#prospectEditDescription")
+    description: value("#prospectEditDescription"),
+    requestId: prospectRequestId("candidate-details")
   };
   if (!payload.company || !payload.website) {
     toast("公司和官网不能为空", "error");
@@ -14967,13 +16066,23 @@ async function saveProspectVerification(item: WebsiteOpportunity, button?: HTMLB
   }
   if (button) button.disabled = true;
   try {
-    const result = await api<{ opportunity: WebsiteOpportunity }>(`/api/prospect-list/${encodeURIComponent(item.id)}/details`, {
+    const result = await api<{
+      opportunity: WebsiteOpportunity;
+      qualification: ProspectQualificationViewApi | null;
+      qualificationInvalidated: boolean;
+      changedFields: string[];
+    }>(`/api/prospect-list/${encodeURIComponent(item.id)}/details`, {
       method: "PATCH",
       body: JSON.stringify(payload)
     });
     Object.assign(item, result.opportunity);
+    if (result.qualification) {
+      state.prospectQualifications[item.id] = result.qualification;
+    }
     renderProspectList();
-    toast("核验资料已保存");
+    toast(result.qualificationInvalidated
+      ? "资料已保存；受影响的资格步骤已失效，请按提示重新核验"
+      : "核验资料已保存");
   } catch (error) {
     toast(error instanceof Error ? error.message : "保存核验资料失败", "error");
   } finally {
@@ -14996,7 +16105,7 @@ function renderProspectList() {
   const pageRows = filtered.slice((state.prospectPage - 1) * PROSPECT_PAGE_SIZE, state.prospectPage * PROSPECT_PAGE_SIZE);
   state.selectedProspectIds = state.selectedProspectIds.filter((id) => all.some((item) => item.id === id));
   if (!state.selectedProspectId || !all.some((item) => item.id === state.selectedProspectId)) state.selectedProspectId = pageRows[0]?.id || filtered[0]?.id || all[0]?.id || null;
-  if (total) total.textContent = `${all.length} 条候选`;
+  if (total) total.textContent = filtered.length === all.length ? `${all.length} 条候选` : `${filtered.length} 条显示 · ${all.length} 条总计`;
   if (preview) preview.textContent = String(all.filter((item) => item.status === "preview").length);
   if (contactable) contactable.textContent = String(all.filter((item) => item.status === "contactable").length);
   if (contacted) contacted.textContent = String(all.filter((item) => item.status === "contacted").length);
@@ -15026,6 +16135,19 @@ function renderProspectList() {
   }
   if (assignButton) assignButton.hidden = !canAssign;
   qsa<HTMLButtonElement>("[data-prospect-filter]").forEach((button) => button.classList.toggle("active", button.dataset.prospectFilter === state.prospectFilter));
+  qsa<HTMLButtonElement>("[data-prospect-date-filter]").forEach((button) => {
+    const active = button.dataset.prospectDateFilter === state.prospectJoinedRange;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  const customDates = qs<HTMLElement>("#prospectCustomDates");
+  if (customDates) customDates.hidden = state.prospectJoinedRange !== "custom";
+  const joinedFrom = qs<HTMLInputElement>("#prospectJoinedFrom");
+  const joinedTo = qs<HTMLInputElement>("#prospectJoinedTo");
+  if (joinedFrom) joinedFrom.value = state.prospectJoinedFrom;
+  if (joinedTo) joinedTo.value = state.prospectJoinedTo;
+  const sortSelect = qs<HTMLSelectElement>("#prospectSortSelect");
+  if (sortSelect) sortSelect.value = state.prospectSort;
   if (rows) {
     rows.innerHTML = pageRows.length ? pageRows.map((item) => {
       const score = leadFinderScore(item);
@@ -15039,6 +16161,7 @@ function renderProspectList() {
             <small>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website || ""))}</small>
             <div class="prospect-meta-row">${badge(status.label, status.tone)}${item.lastDevelopmentEmailAt ? badge("已发开发信", "green") : ""}</div>
             <span class="prospect-next-action">下一步：${escapeHtml(status.action)}</span>
+            <div class="prospect-joined-at"><span>加入候选池</span><time datetime="${escapeHtml(item.createdAt)}" title="${escapeHtml(formatProspectJoinedAt(item.createdAt))}">${escapeHtml(formatProspectJoinedAt(item.createdAt))}</time></div>
           </div>
         </article>
       `;
@@ -15053,6 +16176,12 @@ function renderProspectList() {
     qsa<HTMLElement>("[data-prospect-open]", rows).forEach((button) => {
       const select = () => {
         state.selectedProspectId = button.dataset.prospectOpen || null;
+        prospectMobileDetailOpen = true;
+        document.body.classList.add("prospect-mobile-detail-open");
+        if (window.matchMedia("(max-width: 760px)").matches) {
+          prospectMobileListScrollY = window.scrollY;
+          qs<HTMLElement>("#prospect-list .prospect-detail-panel")?.scrollTo({ top: 0 });
+        }
         qs<HTMLInputElement>("#prospectMailTo")!.value = "";
         qs<HTMLInputElement>("#prospectMailSubject")!.value = "";
         qs<HTMLTextAreaElement>("#prospectMailBody")!.value = "";
@@ -15089,6 +16218,19 @@ async function syncProspects(ids: string[], button?: HTMLButtonElement) {
     toast("请先选择要入线索的候选", "error");
     return;
   }
+  const selectedCandidates = state.websiteOpportunities.filter((item) =>
+    ids.includes(item.id)
+  );
+  await Promise.all(selectedCandidates.map((item) =>
+    loadProspectQualification(item, true)
+  ));
+  const notVqa = selectedCandidates.filter((item) =>
+    !state.prospectQualifications[item.id]?.vqaQualified
+  );
+  if (notVqa.length) {
+    toast(`有 ${notVqa.length} 条候选未通过 VQA，请先完成四步资格审查`, "error");
+    return;
+  }
   const invalid = state.websiteOpportunities.filter((item) => ids.includes(item.id) && !["preview", "contactable", "contacted"].includes(item.status));
   if (invalid.length) {
     toast("已排除或已入线索的候选不能重复同步", "error");
@@ -15101,7 +16243,10 @@ async function syncProspects(ids: string[], button?: HTMLButtonElement) {
   try {
     const result = await api<{ created: LeadSyncResult[] }>("/api/tools/website-scrape/sync-opportunities", {
       method: "POST",
-      body: JSON.stringify({ opportunities, allowPending: true })
+      body: JSON.stringify({
+        requestId: prospectRequestId("lead-conversion"),
+        opportunities
+      })
     });
     result.created.forEach((item) => {
       if (!state.leads.some((lead) => lead.id === item.lead.id)) state.leads.unshift(item.lead);
@@ -15147,7 +16292,7 @@ function requestProspectExclusion(ids: string[], button?: HTMLButtonElement) {
 }
 
 async function updateProspectBatch(
-  action: "mark-contactable" | "exclude" | "restore" | "assign",
+  action: "exclude" | "restore" | "assign",
   ids: string[],
   button?: HTMLButtonElement,
   reason = ""
@@ -15183,7 +16328,7 @@ async function updateProspectBatch(
     });
     state.selectedProspectIds = state.selectedProspectIds.filter((id) => !ids.includes(id));
     renderProspectList();
-    toast(action === "mark-contactable" ? "已标记为可联系" : action === "exclude" ? "已排除所选候选" : action === "restore" ? "已恢复为待核验" : "已完成分配");
+    toast(action === "exclude" ? "已排除所选候选" : action === "restore" ? "已恢复为待核验" : "已完成分配");
   } catch (error) {
     toast(error instanceof Error ? error.message : "批量处理失败", "error");
   } finally {
@@ -15250,7 +16395,7 @@ function prospectRequestId(prefix: string) {
 }
 
 function openProspectTouchpointModal(item: WebsiteOpportunity) {
-  openModal("记录触达", `
+  openModal("补录历史触达", `
     <div class="form-grid">
       <div class="form-field"><label>触达方式</label><select id="prospectTouchChannel"><option value="email">邮件</option><option value="whatsapp">WhatsApp</option><option value="call">电话</option></select></div>
       <div class="form-field"><label>触达时间</label><input id="prospectTouchOccurredAt" type="datetime-local" value="${escapeHtml(localDateTimeValue())}"></div>
@@ -15258,7 +16403,7 @@ function openProspectTouchpointModal(item: WebsiteOpportunity) {
       <div class="form-field full"><label>主题/目的</label><input id="prospectTouchSubject" placeholder="例如：首次产品介绍"></div>
       <div class="form-field full"><label>沟通摘要</label><textarea id="prospectTouchContent" placeholder="记录发送内容、电话结论或下一步约定"></textarea></div>
     </div>
-  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveProspectTouchpointButton">保存触达</button>`);
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveProspectTouchpointButton">保存历史记录</button>`);
   qs<HTMLButtonElement>("#saveProspectTouchpointButton")?.addEventListener("click", async (event) => {
     const button = event.currentTarget as HTMLButtonElement;
     const occurredValue = qs<HTMLInputElement>("#prospectTouchOccurredAt")?.value || "";
@@ -15267,6 +16412,7 @@ function openProspectTouchpointModal(item: WebsiteOpportunity) {
       const result = await api<{ touchpoint: ProspectTouchpoint; todo?: Todo; opportunity: WebsiteOpportunity }>(`/api/prospect-list/${encodeURIComponent(item.id)}/touchpoints`, {
         method: "POST",
         body: JSON.stringify({
+          recordMode: "historical",
           channel: qs<HTMLSelectElement>("#prospectTouchChannel")?.value || "email",
           contactValue: qs<HTMLInputElement>("#prospectTouchContact")?.value.trim() || "",
           subject: qs<HTMLInputElement>("#prospectTouchSubject")?.value.trim() || "",
@@ -15276,12 +16422,9 @@ function openProspectTouchpointModal(item: WebsiteOpportunity) {
         })
       });
       Object.assign(item, result.opportunity);
-      syncProspectTodo(result.todo);
       closeModal();
       renderProspectList();
-      renderTodos(state.todos);
-      updateTodoChips(state.todos);
-      toast("触达记录已保存，跟进待办已联动");
+      toast("历史触达事实已保存，当前状态和待办未变更");
     } catch (error) {
       toast(error instanceof Error ? error.message : "保存触达失败", "error");
       button.disabled = false;
@@ -15427,8 +16570,11 @@ async function sendProspectDevelopmentEmail(button?: HTMLButtonElement) {
     toast("请先选择一条搜客线索", "error");
     return;
   }
-  if (!["contactable", "contacted", "synced"].includes(item.status)) {
-    toast("请先核验联系方式并标记为可联系", "error");
+  const qualification = state.prospectQualifications[item.id]
+    || await loadProspectQualification(item, false);
+  if (!qualification?.vqaQualified
+    || qualification.approvedChannel?.channelType !== "email") {
+    toast("请先完成 VQA，并批准邮件通道", "error");
     return;
   }
   if (!state.user?.outboundEmail) {
@@ -15440,6 +16586,11 @@ async function sendProspectDevelopmentEmail(button?: HTMLButtonElement) {
   const body = qs<HTMLTextAreaElement>("#prospectMailBody")?.value.trim() || "";
   if (!to || !subject || body.length < 10) {
     toast("请补齐收件邮箱、主题和正文", "error");
+    return;
+  }
+  if (to.toLocaleLowerCase("en-US")
+    !== qualification.approvedChannel.value.toLocaleLowerCase("en-US")) {
+    toast("收件邮箱必须与 VQA 批准邮箱一致", "error");
     return;
   }
   if (button) {
@@ -15754,6 +16905,8 @@ function setLeadFinderMode(mode: "standard" | "super") {
     if (mode === "super") schedule.checked = false;
   }
   scheduleLine?.classList.toggle("is-disabled", mode === "super");
+  // 目标搜索（超级搜索）下隐藏简报方式与表单搜索
+  applyBriefMode();
   const title = qs<HTMLButtonElement>("#leadFinderStartButton");
   const inline = qs<HTMLButtonElement>("#leadFinderStartButtonInline");
   [title, inline].forEach((button) => {
@@ -15763,6 +16916,95 @@ function setLeadFinderMode(mode: "standard" | "super") {
   renderSuperMapSearchOption();
   renderSuperAiDiscoveryOption();
   renderSuperSearchPreview();
+  syncLeadFinderStartState();
+}
+
+// AI 模型为搜客必选项：未配置且未贴链接时，禁止启动搜客并给出提示
+function syncLeadFinderStartState() {
+  const aiReady = Boolean(state.aiConfig?.enabled && state.aiConfig?.hasApiKey && state.aiConfig?.useLeadFinder);
+  const urlInput = qs<HTMLTextAreaElement>("#leadFinderUrlInput");
+  const urlCount = (urlInput?.value || "").split(/\n|,|，/).map((item) => item.trim()).filter(Boolean).length;
+  const blocked = !aiReady && urlCount === 0;
+  ["#leadFinderStartButton", "#leadFinderStartButtonInline", "[data-lead-empty-start]"].forEach((sel) => {
+    const button = qs<HTMLButtonElement>(sel);
+    if (!button) return;
+    button.disabled = blocked;
+    button.title = blocked ? "请先在「AI 配置」中配置并启用 AI 模型（含 API Key 且勾选自动获客）后再启动搜客" : "";
+    button.classList.toggle("is-blocked", blocked);
+  });
+  const hint = qs<HTMLElement>("#leadFinderAiRequiredHint");
+  if (hint) hint.hidden = !blocked;
+}
+
+// 自然语言 / 结构化表单 互斥：仅生效的那一组参与搜索
+function applyBriefMode() {
+  const bp = qs<HTMLElement>(".lead-brief-prompt");
+  const fg = qs<HTMLElement>(".lead-form-grid");
+  const bm = qs<HTMLElement>(".lead-brief-mode");
+  if (leadFinderMode === "super") {
+    // 目标搜索（超级搜索）下不展示简报方式与表单搜索
+    if (bp) bp.hidden = true;
+    if (fg) fg.hidden = true;
+    if (bm) bm.hidden = true;
+    return;
+  }
+  if (bp) bp.hidden = false;
+  if (fg) fg.hidden = false;
+  if (bm) bm.hidden = false;
+  const nl = leadBriefMode === "nl";
+  document.querySelectorAll<HTMLElement>("[data-brief='nl']").forEach((el) => { el.hidden = !nl; });
+  document.querySelectorAll<HTMLElement>("[data-brief='form']").forEach((el) => { el.hidden = nl; });
+  const links = qs<HTMLElement>("#leadFinderSearchLinks");
+  if (links) links.hidden = nl; // 人工检索链接由表单派生，自然语言模式下无意义
+  qsa<HTMLButtonElement>("[data-lead-brief-mode]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.leadBriefMode === leadBriefMode);
+  });
+}
+
+// 轻量解析自然语言目标：识别国家/地区、客户类型、排除词（精准拆解需后端 AI 解析，见后续增强）
+const BRIEF_COUNTRIES: Record<string, string> = {
+  "美国": "United States", "usa": "United States", "u.s.": "United States", "united states": "United States",
+  "中国": "China", "china": "China",
+  "德国": "Germany", "germany": "Germany", "德": "Germany",
+  "英国": "United Kingdom", "uk": "United Kingdom", "united kingdom": "United Kingdom", "england": "United Kingdom",
+  "法国": "France", "france": "France",
+  "日本": "Japan", "japan": "Japan",
+  "韩国": "South Korea", "korea": "South Korea", "韩国": "South Korea",
+  "印度": "India", "india": "India",
+  "加拿大": "Canada", "canada": "Canada",
+  "墨西哥": "Mexico", "mexico": "Mexico",
+  "巴西": "Brazil", "brazil": "Brazil",
+  "土耳其": "Turkey", "turkey": "Turkey",
+  "意大利": "Italy", "italy": "Italy",
+  "西班牙": "Spain", "spain": "Spain",
+  "荷兰": "Netherlands", "netherlands": "Netherlands",
+  "波兰": "Poland", "poland": "Poland",
+  "澳大利亚": "Australia", "australia": "Australia",
+  "新加坡": "Singapore", "singapore": "Singapore",
+  "东南亚": "Southeast Asia", "southeast asia": "Southeast Asia",
+  "欧洲": "Europe", "europe": "Europe",
+  "中东": "Middle East", "middle east": "Middle East",
+  "南美": "South America", "south america": "South America",
+  "北美": "North America", "north america": "North America"
+};
+
+function parseGoalToBrief(goal: string) {
+  const text = goal.trim();
+  const lower = text.toLowerCase();
+  const markets: string[] = [];
+  for (const [alias, canonical] of Object.entries(BRIEF_COUNTRIES)) {
+    if (lower.includes(alias.toLowerCase()) && !markets.includes(canonical)) markets.push(canonical);
+  }
+  let customerType = "*";
+  if (/分销|distributor|经销商/i.test(text)) customerType = "经销商 / Distributor";
+  else if (/集成|integrator|系统集成/i.test(text)) customerType = "系统集成商 / System Integrator";
+  else if (/\boem\b/i.test(text)) customerType = "OEM 设备厂";
+  else if (/epc|工程承包/i.test(text)) customerType = "EPC 工程承包商";
+  else if (/\bmro\b/i.test(text)) customerType = "MRO 服务商";
+  const exclusions: string[] = [];
+  const exMatch = text.match(/排除[：: ]*([^\n。]+)/i);
+  if (exMatch) exclusions.push(...exMatch[1].split(/[，,、]/).map((item) => item.trim()).filter(Boolean));
+  return { markets, customerType, exclusions };
 }
 
 function buildLeadFinderJobDetails(resultIds: string[] = []) {
@@ -15784,24 +17026,285 @@ function buildLeadFinderJobDetails(resultIds: string[] = []) {
 }
 
 function leadFinderJobStatusText(job: LeadFinderJob) {
-  if (job.status === "done") return "已完成";
-  if (job.status === "partial") return "部分完成";
-  if (job.status === "failed") return "执行失败";
+  if (["done", "partial", "failed", "cancelled"].includes(job.status)) return "已结束";
   if (job.status === "paused") return "已暂停";
-  if (job.status === "cancelled") return "已取消";
-  if (job.status === "needs_input") return "待导入";
-  if (job.status === "ready") return "待运行";
-  return "进行中";
+  if (job.status === "needs_input" || job.status === "ready") return "等待中";
+  return "执行中";
 }
 
 function leadFinderJobStatusTone(job: LeadFinderJob) {
-  if (job.status === "done") return "green";
-  if (job.status === "partial") return "amber";
-  if (job.status === "failed") return "red";
-  if (job.status === "paused" || job.status === "cancelled") return "amber";
+  if (["done", "partial", "failed", "cancelled"].includes(job.status)) return "";
+  if (job.status === "paused") return "amber";
   if (job.status === "needs_input") return "amber";
   if (job.status === "running") return "blue";
   return "";
+}
+
+function isLeadFinderJobTerminal(job: LeadFinderJob) {
+  return ["done", "partial", "failed", "cancelled"].includes(job.status);
+}
+
+function primaryLeadFinderLiveJob() {
+  const active = leadFinderJobs.find((job) => ["running", "paused", "needs_input", "ready"].includes(job.status));
+  return active || leadFinderJobs[0] || null;
+}
+
+function leadFinderLiveStage(job: LeadFinderJob) {
+  const phases = job.processPhases || [];
+  const current = phases.find((phase) => phase.status === "running")
+    || phases.find((phase) => ["failed", "blocked", "partial"].includes(phase.status))
+    || [...phases].reverse().find((phase) => phase.status === "succeeded");
+  if (current) return { name: current.name, result: current.result };
+  if (job.superSearchRound) return {
+    name: `超级搜索第 ${job.superSearchRound}/${job.superSearchMaxRounds || job.superSearchRound} 轮`,
+    result: job.progressValue || "等待当前轮次回传"
+  };
+  return {
+    name: ["done", "partial", "failed", "cancelled"].includes(job.status) ? "任务已结束" : "正在建立搜索任务",
+    result: job.progressValue || job.subtitle
+  };
+}
+
+function leadFinderLiveElapsed(job: LeadFinderJob) {
+  if (["done", "partial", "failed", "cancelled"].includes(job.status)) return job.elapsedText;
+  const startedAt = new Date(job.createdAt).getTime();
+  if (!Number.isFinite(startedAt)) return job.elapsedText;
+  const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return `${hours ? `${hours} 小时 ` : ""}${minutes} 分钟`;
+}
+
+function leadFinderLiveTransportLabel(job: LeadFinderJob) {
+  const live = leadFinderStreamConnected && leadFinderStreamRunId === job.backendRunId;
+  if (live) return { text: "事实事件实时连接", tone: "is-live" };
+  if (["done", "partial", "failed", "cancelled"].includes(job.status)) return { text: "任务记录已归档", tone: "" };
+  if (!job.backendRunId) return { text: "本地解析自动更新", tone: "is-live" };
+    return { text: "实时连接中断，5 秒自动刷新", tone: "is-fallback" };
+  }
+
+  function renderLeadFinderLiveOverview() {
+  const box = qs<HTMLElement>("#leadFinderLiveOverview");
+  if (!box) return;
+  const job = primaryLeadFinderLiveJob();
+  if (!job) {
+    box.innerHTML = `
+      <div class="lead-live-empty">
+        <div class="lead-live-empty-mark" aria-hidden="true">AI</div>
+        <div>
+          <span>搜客助手</span>
+          <h2>从一份客户简报开始</h2>
+          <p>任务启动后，检索、验证、清洗和候选入池会在这里按事实持续打印。</p>
+          <button class="lead-live-empty-action" type="button" data-lead-empty-start>新建搜客任务</button>
+        </div>
+      </div>`;
+    return;
+  }
+  const pipeline = job.cleaningReport?.summary;
+  const rawCount = pipeline?.providerRawCount ?? job.incrementalStats?.rawCount ?? 0;
+  const cleaningCount = pipeline
+    ? pipeline.providerInvalidCount + pipeline.providerDuplicateCount + pipeline.rejectedCount + pipeline.suppressedCount + pipeline.mergedCount
+    : job.incrementalStats?.deduplicatedCount ?? 0;
+  const candidateCount = pipeline?.candidateCount ?? job.incrementalStats?.newCount ?? job.resultCount ?? 0;
+  const sourceCount = job.sourceStats?.length || job.channelCount;
+  const settledSourceCount = (job.sourceStats || []).filter((source) =>
+    ["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled", "success", "success_empty"].includes(source.status || "")
+  ).length;
+  const stage = leadFinderLiveStage(job);
+  const progress = Math.max(0, Math.min(100, Number(job.progress) || 0));
+  const transport = leadFinderLiveTransportLabel(job);
+  const allLogs = leadTaskDetailLogs(job);
+  const logs = allLogs.slice(-12);
+  const hiddenLogCount = Math.max(0, allLogs.length - logs.length);
+  const lastUpdatedAt = logs[logs.length - 1]?.at || job.createdAt;
+  const statusText = leadFinderJobStatusText(job);
+  const terminal = isLeadFinderJobTerminal(job);
+  const sourceFact = job.backendRunId
+    ? `${settledSourceCount}/${sourceCount} 来源结束`
+    : terminal
+      ? `${candidateCount} 条链接已解析`
+      : `${sourceCount} 个搜索入口`;
+  const requestLines = (job.detailLines || [job.subtitle])
+    .filter(Boolean)
+    .slice(0, 5)
+    .map((line) => line === "客户类型：*" ? "客户类型：全部客户类型" : line);
+  const discoveries = (job.resultIds || [])
+    .map((id) => state.websiteOpportunities.find((item) => item.id === id))
+    .filter(Boolean)
+    .slice(-3) as WebsiteOpportunity[];
+  const previousThread = qs<HTMLElement>(".lead-live-thread", box);
+  const wasFollowing = !previousThread
+    || previousThread.scrollHeight - previousThread.scrollTop - previousThread.clientHeight < 72;
+  box.innerHTML = `
+    <div class="lead-live-console" data-lead-live-job-id="${escapeHtml(job.id)}">
+      <div class="lead-live-console-head">
+        <div>
+          <div class="lead-live-kicker"><span>${terminal ? "最近一次执行" : "当前任务"}</span><span class="lead-live-connection ${transport.tone}" id="leadFinderLiveConnection">${escapeHtml(transport.text)}</span></div>
+          <div class="lead-live-title-line"><h2>${escapeHtml(job.title)}</h2>${terminal ? "" : badge(statusText, leadFinderJobStatusTone(job))}</div>
+          <div class="lead-live-meta"><span>${job.superSearchMissionId ? "超级搜索" : "标准搜索"}</span><span>开始于 ${escapeHtml(leadTaskDetailDateTime(job.createdAt))}</span><span>已耗时 ${escapeHtml(leadFinderLiveElapsed(job))}</span><span>更新于 ${escapeHtml(leadTaskDetailTime(lastUpdatedAt))}</span></div>
+        </div>
+        <div class="lead-live-actions">
+          <button class="btn" type="button" data-lead-live-open>查看详情</button>
+          ${job.backendRunId && job.backendRunStatus === "queued" ? `<button class="btn" type="button" data-lead-live-action="pause">暂停</button>` : ""}
+          ${job.backendRunId && job.backendRunStatus === "paused" ? `<button class="btn primary" type="button" data-lead-live-action="resume">恢复</button>` : ""}
+          ${job.backendRunId && ["queued", "paused"].includes(job.backendRunStatus || "") ? `<button class="btn danger" type="button" data-lead-live-action="cancel">取消</button>` : ""}
+        </div>
+      </div>
+      <div class="lead-live-thread" role="log" aria-live="polite" aria-relevant="additions text">
+        <article class="lead-live-message is-request">
+          <div class="lead-live-avatar" aria-hidden="true">你</div>
+          <div class="lead-live-bubble">
+            <div class="lead-live-message-meta"><b>本次搜索目标</b><time>${escapeHtml(leadTaskDetailTime(job.createdAt))}</time></div>
+            <div class="lead-live-request-copy">${requestLines.map((line) => `<span>${escapeHtml(line)}</span>`).join("")}</div>
+          </div>
+        </article>
+        <article class="lead-live-message is-assistant ${terminal ? "is-terminal" : "is-active"}">
+          <div class="lead-live-avatar" aria-hidden="true">AI</div>
+          <div class="lead-live-bubble">
+            <div class="lead-live-message-meta"><b>${terminal ? "任务已结束" : escapeHtml(stage.name)}</b>${terminal ? "" : `<span>${progress}%</span>`}</div>
+            ${terminal ? "" : `<p>${escapeHtml(stage.result || "等待事实回传")}</p>`}
+            ${terminal ? `<span class="lead-live-terminal-progress" role="progressbar" aria-label="${escapeHtml(job.title)}执行进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"></span>` : `<div class="lead-live-progress" role="progressbar" aria-label="${escapeHtml(job.title)}执行进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}">
+              <div class="lead-live-progress-track"><i style="--p:${progress}%"></i></div>
+            </div>`}
+            <div class="lead-live-facts" aria-label="本次搜索事实摘要">
+              <span><b>${escapeHtml(sourceFact.split(" ")[0])}</b> ${escapeHtml(sourceFact.split(" ").slice(1).join(" "))}</span>
+              <span><b>${rawCount}</b> 原始命中</span>
+              <span><b>${cleaningCount}</b> 清洗去除</span>
+              <span><b>${candidateCount}</b> 候选入池</span>
+              <span><b>${job.acceptance?.reviewReadyCount || 0}</b> RRQ</span>
+              <span><b>${job.acceptance?.vqaCount || 0}</b> VQA</span>
+            </div>
+          </div>
+        </article>
+        <div class="lead-live-event-stream" aria-label="搜索过程">
+          ${hiddenLogCount ? `<p class="lead-live-history-note">较早的 ${hiddenLogCount} 条事实记录已收纳在执行详情</p>` : ""}
+          ${logs.length ? logs.map((log, index) => `
+            <article class="lead-live-message is-event ${log.tone} ${index === logs.length - 1 ? "is-latest" : ""}" data-lead-event-key="${escapeHtml(log.key)}">
+              <div class="lead-live-avatar" aria-hidden="true">${escapeHtml((log.source || "搜").slice(0, 1))}</div>
+              <div class="lead-live-bubble">
+                <div class="lead-live-message-meta"><b>${escapeHtml(log.source)}</b><time>${escapeHtml(leadTaskDetailTime(log.at))}</time></div>
+                <p><strong>${escapeHtml(log.title)}</strong><span>${escapeHtml(log.detail)}</span></p>
+                <em>${escapeHtml(log.result)}</em>
+              </div>
+            </article>
+          `).join("") : `
+            <article class="lead-live-message is-event is-latest">
+              <div class="lead-live-avatar" aria-hidden="true">搜</div>
+              <div class="lead-live-bubble">
+                <div class="lead-live-message-meta"><b>任务调度</b><time>--:--:--</time></div>
+                <p><strong>任务已建立</strong><span>等待来源与清洗事件回传</span></p>
+                <em>等待中</em>
+              </div>
+            </article>`}
+        </div>
+        ${discoveries.length ? `
+          <article class="lead-live-message is-discovery">
+            <div class="lead-live-avatar" aria-hidden="true">客</div>
+            <div class="lead-live-bubble">
+              <div class="lead-live-message-meta"><b>新候选已进入池</b><span>${discoveries.length} 条最新结果</span></div>
+              <div class="lead-live-discoveries">
+                ${discoveries.map((item) => `
+                  <button type="button" data-lead-live-candidate="${escapeHtml(item.id)}">
+                    <span><b>${escapeHtml(item.company || websiteDomain(item.website || "") || "公司待确认")}</b><small>${escapeHtml([item.country, item.sourceLabel || item.source, item.contactInfo, `加入 ${leadTaskDetailDateTime(item.createdAt)}`].filter(Boolean).join(" / "))}</small></span>
+                    <em>${leadFinderScore(item)} 分</em>
+                  </button>
+                `).join("")}
+              </div>
+            </div>
+          </article>` : ""}
+      </div>
+    </div>`;
+  const thread = qs<HTMLElement>(".lead-live-thread", box);
+  if (thread && wasFollowing) requestAnimationFrame(() => { thread.scrollTop = thread.scrollHeight; });
+  qs<HTMLButtonElement>("[data-lead-live-open]", box)?.addEventListener("click", () => openLeadTaskDetail(job));
+  qsa<HTMLButtonElement>("[data-lead-live-candidate]", box).forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = state.websiteOpportunities.find((candidate) => candidate.id === button.dataset.leadLiveCandidate);
+      if (item) openLeadFinderVerificationDrawer(item);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-lead-live-action]", box).forEach((button) => {
+    button.addEventListener("click", () => void transitionLeadFinderRun(job, button.dataset.leadLiveAction as "pause" | "resume" | "cancel", button));
+  });
+}
+
+function leadFinderCleaningOutcomeLabel(outcome: ProspectRunCleaningReport["records"][number]["outcome"]) {
+  if (outcome === "merged") return "已归并";
+  if (outcome === "suppressed") return "规则排除";
+  if (outcome === "rejected") return "数据无效";
+  if (outcome === "accepted") return "已入池";
+  return "待处理";
+}
+
+function renderLeadFinderCleaningLedger() {
+  const job = primaryLeadFinderLiveJob();
+  const report = job?.cleaningReport;
+  const rows = qs<HTMLElement>("#leadFinderCleaningRows");
+  const summary = qs<HTMLElement>("#leadFinderCleaningSummary");
+  const scope = qs<HTMLElement>("#leadFinderCleaningScope");
+  const count = qs<HTMLElement>("#leadFinderCleaningCount");
+  if (!rows || !summary || !scope || !count) return;
+  const removedRecords = (report?.records || []).filter((record) => ["merged", "suppressed", "rejected"].includes(record.outcome));
+  const filtered = leadFinderCleaningFilter === "all"
+    ? removedRecords
+    : removedRecords.filter((record) => record.outcome === leadFinderCleaningFilter);
+  count.textContent = String(removedRecords.length);
+  scope.textContent = job ? `${isLeadFinderJobTerminal(job) ? "最近任务" : (job.superSearchMissionId ? "当前超级搜索轮次" : "当前任务")} · ${removedRecords.length} 条逐条记录` : "等待任务数据";
+  qsa<HTMLButtonElement>("[data-lead-cleaning-filter]").forEach((button) => {
+    const active = button.dataset.leadCleaningFilter === leadFinderCleaningFilter;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  const data = report?.summary;
+  summary.innerHTML = data ? `
+    <div><span>原始命中</span><b>${data.providerRawCount}</b></div>
+    <div><span>解析无效</span><b>${data.providerInvalidCount}</b></div>
+    <div><span>来源内重复</span><b>${data.providerDuplicateCount}</b></div>
+    <div><span>已归并</span><b>${data.mergedCount}</b></div>
+    <div><span>规则排除</span><b>${data.suppressedCount}</b></div>
+    <div><span>数据无效</span><b>${data.rejectedCount}</b></div>
+  ` : `<div class="empty-cell">等待清洗统计</div>`;
+  rows.innerHTML = filtered.length ? filtered.map((record) => {
+    const provider = state.leadProviders.find((item) => item.id === record.providerCode);
+    const recordTitle = record.sourceCompany || record.candidateName || "未识别企业";
+    const sourceFacts = [record.sourceCountry, record.sourceDomain].filter(Boolean).join(" / ") || "未提供国家或官网域名";
+    const sourceRecordId = record.sourceRecordId || record.hitId;
+    return `
+      <article class="lead-cleaning-row">
+        <div class="lead-cleaning-source"><b>${escapeHtml(provider?.name || record.providerCode || "未知来源")}</b><span>${escapeHtml(record.providerCode || "未标记来源")}</span></div>
+        <div class="lead-cleaning-record"><b>${escapeHtml(recordTitle)}</b><span title="${escapeHtml(sourceFacts)}">${escapeHtml(sourceFacts)}</span><span title="${escapeHtml(sourceRecordId)}">来源记录 ${escapeHtml(sourceRecordId)}</span></div>
+        <span class="lead-cleaning-outcome is-${escapeHtml(record.outcome)}">${escapeHtml(leadFinderCleaningOutcomeLabel(record.outcome))}</span>
+        <div class="lead-cleaning-reason"><b>${escapeHtml(record.reason || "未提供清洗原因")}</b><span>${escapeHtml(record.reasonCode || "未标记原因码")}</span>${record.candidateId ? `<button class="lead-cleaning-candidate" type="button" data-lead-cleaning-candidate="${escapeHtml(record.candidateId)}">查看关联候选 ${escapeHtml(record.candidateName || "")}</button>` : ""}</div>
+        <time class="lead-cleaning-time" datetime="${escapeHtml(record.processedAt)}">${escapeHtml(leadTaskDetailDateTime(record.processedAt))}</time>
+      </article>`;
+  }).join("") : `<div class="empty-cell">${job ? "当前筛选下暂无清洗去除记录" : "暂无任务清洗记录"}</div>`;
+  qsa<HTMLButtonElement>("[data-lead-cleaning-candidate]", rows).forEach((button) => {
+    button.addEventListener("click", () => {
+      const candidateId = button.dataset.leadCleaningCandidate || "";
+      if (!state.websiteOpportunities.some((item) => item.id === candidateId)) return;
+      state.selectedProspectId = candidateId;
+      activateNavView("prospect-list", renderProspectList);
+    });
+  });
+}
+
+function renderLeadFinderResultView() {
+  const candidateView = qs<HTMLElement>("#leadFinderCandidateView");
+  const cleaningView = qs<HTMLElement>("#leadFinderCleaningView");
+  const bulkbar = qs<HTMLElement>("#leadFinderBulkbar");
+  const scope = qs<HTMLElement>("#leadFinderResultScope");
+  if (!candidateView || !cleaningView) return;
+  const cleaning = leadFinderResultView === "cleaning";
+  candidateView.hidden = cleaning;
+  cleaningView.hidden = !cleaning;
+  if (bulkbar) bulkbar.hidden = cleaning;
+  if (scope) scope.textContent = cleaning ? "逐条追溯当前任务的管线处置" : "候选入池后自动更新";
+  qsa<HTMLButtonElement>("[data-lead-result-view]").forEach((button) => {
+    const active = button.dataset.leadResultView === leadFinderResultView;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  renderLeadFinderCleaningLedger();
 }
 
 function renderLeadFinderJobDetails(job: LeadFinderJob) {
@@ -15826,7 +17329,17 @@ function renderLeadFinderJobDetails(job: LeadFinderJob) {
     : job.status === "running"
       ? "正在解析导入网址并等待候选结果..."
       : "本次任务暂无候选结果，可导入官网或平台链接继续解析。"}</div>`;
-  const incrementalHtml = job.incrementalStats ? `
+  const pipeline = job.cleaningReport?.summary;
+  const incrementalHtml = pipeline ? `
+    <div class="lead-job-detail-lines">
+      <span>原始命中 ${pipeline.providerRawCount} 条</span>
+      <span>进入候选池 ${pipeline.candidateCount} 条</span>
+      <span>来源内重复 ${pipeline.providerDuplicateCount} 条</span>
+      <span>身份合并 ${pipeline.mergedCount} 条</span>
+      <span>抑制 ${pipeline.suppressedCount} 条</span>
+      <span>待处理 ${pipeline.pendingCount} 条</span>
+    </div>
+  ` : job.incrementalStats ? `
     <div class="lead-job-detail-lines">
       <span>原始命中 ${job.incrementalStats.rawCount} 条</span>
       <span>净新增 ${job.incrementalStats.newCount} 条</span>
@@ -15904,6 +17417,27 @@ function leadTaskDetailDateTime(value?: string) {
 }
 
 function leadTaskDetailLogs(job: LeadFinderJob) {
+  if (job.backendRunId) {
+    if (job.liveEvents?.length) {
+      return job.liveEvents.map(leadTaskLiveEventLog);
+    }
+    return (job.runEvents || []).map((event) => {
+      const [title, detail] = leadTaskDetailEventText(event);
+      return {
+        key: event.id,
+        at: event.createdAt,
+        source: "任务",
+        title,
+        detail,
+        result: prospectRunStatusLabel(event.toStatus),
+        tone: event.eventType === "failed"
+          ? "is-failed"
+          : ["pause_requested", "paused", "cancel_requested", "cancelled"].includes(event.eventType)
+            ? "is-review"
+            : ""
+      };
+    });
+  }
   const logs: LeadTaskStreamLog[] = [{
     key: `${job.id}:strategy`,
     at: job.createdAt,
@@ -15965,7 +17499,7 @@ function leadTaskDetailLogs(job: LeadFinderJob) {
       source: "流程",
       title: phase.name,
       detail: phase.result,
-      result: phase.status === "succeeded" ? "完成" : phase.status === "partial" ? "部分完成" : phase.status === "failed" ? "失败" : phase.status === "blocked" ? "受阻" : phase.status === "running" ? "进行中" : "等待",
+      result: phase.status === "succeeded" ? "完成" : phase.status === "partial" ? "有产出" : phase.status === "failed" ? "失败" : phase.status === "blocked" ? "受阻" : phase.status === "running" ? "进行中" : "等待",
       tone: phase.status === "failed" || phase.status === "blocked" ? "is-failed" : phase.status === "succeeded" ? "is-gain" : phase.status === "partial" ? "is-review" : ""
     });
   });
@@ -16004,30 +17538,7 @@ function leadTaskDetailLogs(job: LeadFinderJob) {
       tone: failed ? "is-failed" : succeeded ? "is-gain" : status === "retry_scheduled" ? "is-review" : ""
     });
   });
-  if (job.incrementalStats) {
-    const stats = job.incrementalStats;
-    logs.push({
-      key: `${job.id}:clean:${stats.rawCount}:${stats.newCount}:${stats.excludedCount}`,
-      at: new Date().toISOString(),
-      source: "清洗",
-      title: "候选归并与排除规则已更新",
-      detail: `同批去重 ${stats.deduplicatedCount} 条，排除 ${stats.excludedCount} 条，历史未变化 ${stats.unchangedCount} 条`,
-      result: `净新增 ${stats.newCount}`,
-      tone: stats.newCount ? "is-gain" : ""
-    });
-  }
   logs.sort((left, right) => left.at.localeCompare(right.at) || left.key.localeCompare(right.key));
-  if (["running", "ready"].includes(job.status)) {
-    logs.push({
-      key: `${job.id}:live`,
-      at: new Date().toISOString(),
-      source: "实时",
-      title: "任务仍在后台持续执行",
-      detail: `${job.channelCount} 个来源保持连接，新事件将自动追加到这里`,
-      result: "监听中",
-      tone: "is-live"
-    });
-  }
   return logs;
 }
 
@@ -16042,135 +17553,21 @@ function leadTaskStreamLogHtml(log: LeadTaskStreamLog) {
   `;
 }
 
-function leadTaskVerboseOperation(job: LeadFinderJob, sequence: number): LeadTaskStreamLog {
-  const sources = job.sourceStats || [];
-  const source = sources.length ? sources[sequence % sources.length]! : null;
-  const events = job.runEvents || [];
-  const latestEvent = events[events.length - 1];
-  const stats = job.incrementalStats;
-  const candidates = job.resultIds?.length || 0;
-  const conditions = job.detailLines?.length || 0;
-  const operations: Array<() => Omit<LeadTaskStreamLog, "key" | "at">> = [
-    () => ({ source: "调度器", title: "读取任务运行修订", detail: `任务 ${job.backendRunId || job.id} 当前状态 ${leadFinderJobStatusText(job)}`, result: `rev ${job.backendRunRevision || "local"}`, tone: "is-live" }),
-    () => ({ source: "策略", title: "核对检索条件快照", detail: `${conditions} 个任务条件保持锁定，避免运行中策略漂移`, result: "snapshot ok", tone: "" }),
-    () => ({ source: source?.name || "来源池", title: `检查${source ? ` ${source.name}` : "来源"}执行分片`, detail: source?.statusLabel || source?.error || `${job.channelCount} 个来源等待状态回传`, result: source?.status || "pending", tone: source?.error ? "is-failed" : "" }),
-    () => ({ source: "控制面", title: "检查暂停与取消信号", detail: `当前未处理控制状态：${job.backendRunStatus || job.status}`, result: "signal clear", tone: "" }),
-    () => ({ source: "候选索引", title: "同步本轮候选引用", detail: `已关联 ${candidates} 条候选，等待更多来源结果归并`, result: `${candidates} refs`, tone: candidates ? "is-gain" : "" }),
-    () => ({ source: "清洗器", title: "读取重复与排除计数", detail: stats ? `去重 ${stats.deduplicatedCount} · 排除 ${stats.excludedCount} · 无变化 ${stats.unchangedCount}` : "细分清洗统计尚未回传，保持监听", result: stats ? `${stats.rawCount} raw` : "awaiting", tone: "is-review" }),
-    () => ({ source: "身份归一", title: "检查多来源企业映射", detail: stats ? `已合并 ${stats.multiSourceMergedCount} 条多来源身份` : "等待企业身份和来源证据进入归并队列", result: stats ? `${stats.multiSourceMergedCount} merged` : "watching", tone: "" }),
-    () => ({ source: "事件流", title: "确认最新运行事件序号", detail: latestEvent ? `${latestEvent.eventType} · ${leadTaskDetailTime(latestEvent.createdAt)}` : "尚无新的后端控制事件", result: `seq ${latestEvent?.sequence || 0}`, tone: "" }),
-    () => ({ source: "计数器", title: "对齐增量统计快照", detail: stats ? `净新增 ${stats.newCount} · 新证据 ${stats.evidenceUpdatedCount}` : "净新增与证据计数等待来源完成", result: stats ? `+${stats.newCount}` : "pending", tone: stats?.newCount ? "is-gain" : "" }),
-    () => ({ source: "观察器", title: "刷新任务心跳", detail: "详情页保持与后台轮询同步，离开页面不会停止任务", result: "heartbeat", tone: "is-live" }),
-    () => ({ source: "队列", title: "扫描已结束来源", detail: `${sources.filter((item) => ["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled", "success", "success_empty"].includes(item.status || "")).length} / ${sources.length || job.channelCount} 个来源已结束`, result: "queue scan", tone: "" }),
-    () => ({ source: "审计", title: "写入前台追踪行", detail: "保留时间、来源、操作和结果，便于复盘任务执行过程", result: `trace ${sequence + 1}`, tone: "" })
-  ];
-  const operation = operations[sequence % operations.length]!();
-  return {
-    ...operation,
-    key: `${job.id}:trace:${sequence}`,
-    at: new Date().toISOString()
-  };
-}
-
-function syncLeadTaskStreamModeUi() {
+function syncLeadTaskStreamStateUi() {
   const job = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
   const live = leadTaskJobIsLive(job);
-  qsa<HTMLButtonElement>("[data-lead-stream-mode]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.leadStreamMode === leadTaskStreamMode);
-    button.disabled = button.dataset.leadStreamMode === "verbose" && !live;
-  });
   const stateNode = qs<HTMLElement>("#leadTaskStreamState");
   if (stateNode) {
-    stateNode.textContent = live
-      ? leadTaskStreamMode === "verbose" ? "高速追踪" : "实时同步"
-      : job?.status === "paused" ? "执行已暂停" : "记录已归档";
-    stateNode.classList.toggle("is-verbose", live && leadTaskStreamMode === "verbose");
+    stateNode.textContent = live ? "事实事件同步" : job?.status === "paused" ? "执行已暂停" : "记录已归档";
     stateNode.classList.toggle("is-terminal", !live);
   }
-}
-
-function appendLeadTaskVerboseLog() {
-  if (leadTaskStreamMode !== "verbose" || qs<HTMLElement>(".view.active")?.id !== "lead-task-detail") return;
-  const job = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
-  const stream = qs<HTMLElement>("#leadTaskStream");
-  if (!job || !stream || !leadTaskJobIsLive(job)) {
-    syncLeadTaskVerboseTimer(false);
-    return;
-  }
-  const wasFollowing = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 72;
-  const log = leadTaskVerboseOperation(job, leadTaskVerboseSequence++);
-  stream.insertAdjacentHTML("beforeend", leadTaskStreamLogHtml(log));
-  while (stream.children.length > 100) stream.firstElementChild?.remove();
-  stream.dataset.logCount = String(stream.children.length);
-  const newEventsButton = qs<HTMLButtonElement>("#leadTaskNewEvents");
-  if (wasFollowing || stream.children.length < 8) {
-    stream.scrollTop = stream.scrollHeight;
-    if (newEventsButton) newEventsButton.hidden = true;
-  } else if (newEventsButton) {
-    const pending = Number(newEventsButton.dataset.pending || 0) + 1;
-    newEventsButton.dataset.pending = String(pending);
-    newEventsButton.textContent = `${pending} 条新动态`;
-    newEventsButton.hidden = false;
-  }
-}
-
-function syncLeadTaskVerboseTimer(active: boolean) {
-  const job = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
-  const shouldRun = active && leadTaskJobIsLive(job);
-  if (!shouldRun) {
-    if (leadTaskVerboseTimer) window.clearInterval(leadTaskVerboseTimer);
-    leadTaskVerboseTimer = 0;
-    return;
-  }
-  if (!leadTaskVerboseTimer) {
-    leadTaskVerboseTimer = window.setInterval(appendLeadTaskVerboseLog, 180);
-  }
-}
-
-function setLeadTaskStreamMode(mode: LeadTaskStreamMode) {
-  const activeJob = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
-  if (mode === "verbose" && !leadTaskJobIsLive(activeJob)) mode = "summary";
-  leadTaskStreamMode = mode;
-  const stream = qs<HTMLElement>("#leadTaskStream");
-  if (stream) {
-    stream.innerHTML = "";
-    stream.dataset.signature = "";
-    stream.dataset.logCount = "0";
-    stream.dataset.streamMode = mode;
-    stream.classList.toggle("is-verbose", mode === "verbose");
-  }
-  const newEventsButton = qs<HTMLButtonElement>("#leadTaskNewEvents");
-  if (newEventsButton) {
-    newEventsButton.hidden = true;
-    newEventsButton.dataset.pending = "0";
-  }
-  if (mode === "verbose") leadTaskVerboseSequence = 0;
-  syncLeadTaskStreamModeUi();
-  const job = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
-  if (job) renderLeadTaskStream(job);
-  syncLeadTaskVerboseTimer(mode === "verbose" && qs<HTMLElement>(".view.active")?.id === "lead-task-detail");
 }
 
 function renderLeadTaskStream(job: LeadFinderJob) {
   const stream = qs<HTMLElement>("#leadTaskStream");
   if (!stream) return;
-  if (leadTaskStreamMode === "verbose") {
-    stream.classList.add("is-verbose");
-    stream.dataset.streamMode = "verbose";
-    if (!stream.children.length) {
-      appendLeadTaskVerboseLog();
-      appendLeadTaskVerboseLog();
-    }
-    syncLeadTaskStreamModeUi();
-    return;
-  }
   stream.classList.remove("is-verbose");
-  if (stream.dataset.streamMode !== "summary") {
-    stream.innerHTML = "";
-    stream.dataset.signature = "";
-    stream.dataset.logCount = "0";
-    stream.dataset.streamMode = "summary";
-  }
+  stream.dataset.streamMode = "facts";
   const logs = leadTaskDetailLogs(job);
   const signature = logs.map((item) => item.key).join("|");
   if (stream.dataset.signature === signature) return;
@@ -16187,7 +17584,7 @@ function renderLeadTaskStream(job: LeadFinderJob) {
     newEventsButton.textContent = `${logs.length - previousCount} 条新动态`;
     newEventsButton.hidden = false;
   }
-  syncLeadTaskStreamModeUi();
+  syncLeadTaskStreamStateUi();
 }
 
 function leadTaskDetailSourceStep(status = "queued") {
@@ -16250,7 +17647,7 @@ function renderLeadTaskPhases(job: LeadFinderJob) {
     <article class="task-run-phase is-${escapeHtml(phase.status)}">
       <span>${String(index + 1).padStart(2, "0")}</span>
       <div><b>${escapeHtml(phase.name)}</b><small>${escapeHtml(phase.result)}</small></div>
-      <em>${phase.status === "succeeded" ? "完成" : phase.status === "partial" ? "部分完成" : phase.status === "failed" ? "失败" : phase.status === "blocked" ? "受阻" : phase.status === "running" ? "进行中" : "等待"}</em>
+      <em>${phase.status === "succeeded" ? "完成" : phase.status === "partial" ? "有产出" : phase.status === "failed" ? "失败" : phase.status === "blocked" ? "受阻" : phase.status === "running" ? "进行中" : "等待"}</em>
     </article>
   `).join("");
 }
@@ -16629,6 +18026,39 @@ function syncLeadTaskDetailClock(active: boolean) {
   updateLeadTaskDetailClock();
 }
 
+function renderLeadTaskAcceptance(job: LeadFinderJob) {
+  const box = qs<HTMLElement>("#leadTaskAcceptance");
+  if (!box) return;
+  const acceptance = job.acceptance;
+  if (!acceptance) {
+    box.innerHTML = `<div class="task-run-insight-empty">正在等待任务验收数据。</div>`;
+    return;
+  }
+  const labels: Record<ProspectAcceptanceApi["outcome"], string> = {
+    running: "执行中",
+    success: "成功",
+    partial_success: "部分成功",
+    failed: "失败",
+    empty: "无有效结果",
+    cancelled: "已取消"
+  };
+  const costs = acceptance.costs?.length
+    ? acceptance.costs.map((item) =>
+        `${item.currency} ${item.amount.toFixed(4)}`
+      ).join(" + ")
+    : acceptance.totalCost
+      ? `${acceptance.currency || ""} ${acceptance.totalCost.toFixed(4)}`.trim()
+      : "0";
+  box.innerHTML = `
+    <div class="task-acceptance-result is-${escapeHtml(acceptance.outcome)}"><span>验收结论</span><b>${escapeHtml(labels[acceptance.outcome])}</b></div>
+    <div><span>来源返回 / 候选池 / RRQ / VQA</span><b>${acceptance.sourceReturnedCount || 0} / ${acceptance.candidateCount} / ${acceptance.reviewReadyCount || 0} / ${acceptance.vqaCount}${acceptance.targetReviewReadyCount ? ` / RRQ 目标 ${acceptance.targetReviewReadyCount}` : acceptance.targetVqaCount ? ` / VQA 目标 ${acceptance.targetVqaCount}` : ""}</b></div>
+    <div><span>来源成功 / 失败 / 跳过</span><b>${acceptance.sourceSuccessCount} / ${acceptance.sourceFailureCount} / ${acceptance.sourceSkippedCount}</b></div>
+    <div><span>实际费用</span><b>${escapeHtml(costs)}${acceptance.costUnknownCount ? ` · ${acceptance.costUnknownCount} 笔未知` : ""}</b></div>
+    <div class="task-acceptance-wide"><span>结束原因</span><b>${escapeHtml(acceptance.stopReason || (acceptance.outcome === "running" ? "任务仍在执行" : "执行器已结束"))}</b></div>
+    <div class="task-acceptance-wide"><span>建议下一步</span><b>${escapeHtml(acceptance.recommendedNextAction)}</b></div>
+  `;
+}
+
 function renderLeadTaskDetail() {
   const job = leadFinderJobs.find((item) => item.id === activeLeadFinderJobId);
   if (!job) {
@@ -16640,10 +18070,6 @@ function renderLeadTaskDetail() {
     return renderLeadTaskDetail();
   }
   const live = leadTaskJobIsLive(job);
-  if (!live && leadTaskStreamMode === "verbose") {
-    leadTaskStreamMode = "summary";
-    syncLeadTaskVerboseTimer(false);
-  }
   const status = qs<HTMLElement>("#leadTaskDetailStatus");
   const title = qs<HTMLElement>("#leadTaskDetailTitle");
   const meta = qs<HTMLElement>("#leadTaskDetailMeta");
@@ -16672,14 +18098,14 @@ function renderLeadTaskDetail() {
   `;
   const stats = job.incrementalStats;
   const cleaningSummary = job.cleaningReport?.summary;
-  const failedSources = (job.sourceStats || []).filter((source) => source.status === "failed").length;
   const metricRows: Array<[string, string, string, string]> = [
     ["来源返回", cleaningSummary ? String(cleaningSummary.providerRawCount) : stats ? String(stats.rawCount) : "--", "所有来源原始命中", ""],
     ["进入候选池", cleaningSummary ? String(cleaningSummary.candidateCount) : String(job.resultIds?.length || 0), "已通过清洗，可继续核验", "is-gain"],
-    ["待人工决定", cleaningSummary ? String(cleaningSummary.pendingCount) : "--", "可手动纳入候选池", ""],
-    ["失败来源", String(failedSources), `共 ${job.sourceStats?.length || job.channelCount} 个来源`, failedSources ? "is-warning" : ""]
+    ["RRQ 可审查", String(job.acceptance?.reviewReadyCount || 0), "资格事实齐全，最多只差最终批准", job.acceptance?.reviewReadyCount ? "is-gain" : ""],
+    ["VQA 已通过", String(job.acceptance?.vqaCount || 0), "企业、ICP、渠道和合规门禁", job.acceptance?.vqaCount ? "is-gain" : ""],
   ];
   metrics.innerHTML = metricRows.map(([label, value, hint, tone]) => `<div class="task-run-metric ${tone}"><span>${label}</span><b>${escapeHtml(value)}</b><small>${hint}</small></div>`).join("");
+  renderLeadTaskAcceptance(job);
   renderLeadTaskStream(job);
   renderLeadTaskPhases(job);
   renderLeadTaskInsights(job);
@@ -16697,9 +18123,6 @@ function renderLeadTaskDetail() {
       button.dataset.pending = "0";
     }
   };
-  qsa<HTMLButtonElement>("[data-lead-stream-mode]").forEach((button) => {
-    button.onclick = () => setLeadTaskStreamMode(button.dataset.leadStreamMode === "verbose" ? "verbose" : "summary");
-  });
   qsa<HTMLButtonElement>("[data-lead-detail-action]", actions).forEach((button) => {
     button.addEventListener("click", () => void transitionLeadFinderRun(job, button.dataset.leadDetailAction as "pause" | "resume" | "cancel", button));
   });
@@ -16707,14 +18130,17 @@ function renderLeadTaskDetail() {
   const closeFailureDialog = qs<HTMLButtonElement>("#leadTaskFailureClose");
   if (failureDialog && closeFailureDialog) closeFailureDialog.onclick = () => failureDialog.close();
   syncLeadTaskDetailClock(qs<HTMLElement>(".view.active")?.id === "lead-task-detail");
+  if (job.backendRunId && qs<HTMLElement>(".view.active")?.id === "lead-task-detail") {
+    void startLeadTaskEventStream(job);
+  }
 }
 
 function openLeadTaskDetail(job: LeadFinderJob) {
   activeLeadFinderJobId = job.id;
-  leadTaskStreamMode = "summary";
-  leadTaskVerboseSequence = 0;
-  syncLeadTaskVerboseTimer(false);
-  activateNavView("lead-task-detail", renderLeadTaskDetail);
+  activateNavView("lead-task-detail", () => {
+    renderLeadTaskDetail();
+    void startLeadTaskEventStream(job);
+  });
   void Promise.all([
     loadLeadTaskPendingCandidates(job),
     refreshLeadFinderOpportunities()
@@ -16725,6 +18151,8 @@ function openLeadTaskDetail(job: LeadFinderJob) {
 
 function renderLeadFinderJobs() {
   const box = qs<HTMLElement>("#leadFinderJobList");
+  renderLeadFinderLiveOverview();
+  renderLeadFinderResultView();
   if (!box) return;
   if (!leadFinderJobs.length) {
     box.innerHTML = `<div class="empty-cell">暂无搜客任务</div>`;
@@ -16993,16 +18421,16 @@ function prospectRunJobStatus(status: ProspectRunApiStatus): LeadFinderJob["stat
 
 function prospectRunStatusLabel(status: ProspectRunApiStatus) {
   const labels: Record<ProspectRunApiStatus, string> = {
-    queued: "排队中",
+    queued: "等待中",
     running: "执行中",
-    pause_requested: "正在暂停",
+    pause_requested: "执行中",
     paused: "已暂停",
-    cancel_requested: "正在取消",
-    cancelled: "已取消",
-    succeeded: "已完成",
-    succeeded_empty: "完成无结果",
-    partial_success: "部分完成",
-    failed: "执行失败"
+    cancel_requested: "正在结束",
+    cancelled: "已结束",
+    succeeded: "已结束",
+    succeeded_empty: "已结束",
+    partial_success: "已结束",
+    failed: "已结束"
   };
   return labels[status];
 }
@@ -17025,7 +18453,7 @@ function prospectShardStatusLabel(status: ProspectRunShardApiRecord["status"]) {
     cancelled: "已取消",
     succeeded: "执行完成",
     succeeded_empty: "完成无结果",
-    partial_success: "部分完成",
+    partial_success: "结果已保存",
     failed: "执行失败"
   };
   return labels[status];
@@ -17106,9 +18534,11 @@ function prospectRunJob(detail: ProspectRunDetailApiResponse): LeadFinderJob {
     runEvents: detail.events || [],
     processPhases: detail.diagnostics?.phases || [],
     cleaningReport: detail.diagnostics?.cleaningReport,
+    acceptance: detail.diagnostics?.acceptance,
     pendingCandidates: existingJob?.pendingCandidates,
     selectedPendingHitIds: existingJob?.selectedPendingHitIds,
     pendingCandidatesLoaded: existingJob?.pendingCandidatesLoaded,
+    liveEvents: existingJob?.liveEvents || [],
     expanded,
     resultIds: processSummary?.candidateIds || [],
     incrementalStats: processSummary ? {
@@ -17161,13 +18591,13 @@ function prospectRunJob(detail: ProspectRunDetailApiResponse): LeadFinderJob {
 
 function superSearchStatusLabel(status: ProspectSuperSearchMissionApi["status"]) {
   const labels: Record<ProspectSuperSearchMissionApi["status"], string> = {
-    queued: "等待启动",
-    running: "持续搜索",
+    queued: "等待中",
+    running: "执行中",
     paused: "已暂停",
-    cancelled: "已取消",
-    succeeded: "已完成",
-    partial_success: "部分完成",
-    failed: "执行失败"
+    cancelled: "已结束",
+    succeeded: "已结束",
+    partial_success: "已结束",
+    failed: "已结束"
   };
   return labels[status];
 }
@@ -17212,8 +18642,9 @@ function applySuperSearchMission(job: LeadFinderJob, mission: ProspectSuperSearc
     : Math.round((Math.max(0, mission.currentRound - 1) / mission.maxRounds) * 100 + 100 / mission.maxRounds * (job.progress / 100));
   job.progressLabel = "轮次进度";
   job.progressValue = `${mission.currentRound} / ${mission.maxRounds} 轮`;
-  job.metricLabel = "累计候选";
-  job.metricValue = `${mission.candidateCount} / ${mission.targetCandidateCount}`;
+  job.metricLabel = "可审查候选";
+  job.metricValue = `${mission.reviewReadyCount || 0} / ${mission.targetCandidateCount}`;
+  job.acceptance = mission.acceptance;
   const currentRound = mission.rounds.find((item) => item.roundNo === mission.currentRound)
     || mission.rounds[mission.rounds.length - 1];
   const query = currentRound?.queryPlanSnapshot;
@@ -17257,6 +18688,184 @@ function applySuperSearchMission(job: LeadFinderJob, mission: ProspectSuperSearc
   return job;
 }
 
+function leadTaskLiveEventLog(event: ProspectLiveEventApiRecord): LeadTaskStreamLog {
+  const providerId = typeof event.metrics.providerId === "string"
+    ? event.metrics.providerId
+    : "";
+  const source = providerId
+    ? state.leadProviders.find((item) => item.id === providerId)?.name || providerId
+    : event.entityType === "run" ? "任务"
+      : event.entityType === "mission" ? "超级搜客"
+        : event.entityType === "query_cell" ? "查询单元"
+          : event.entityType === "candidate" ? "候选"
+            : "执行器";
+  let result = event.status || "已记录";
+  if (event.type === "page.persisted") {
+    result = `接受 ${Number(event.metrics.acceptedCount || 0)} / 原始 ${Number(event.metrics.rawCount || 0)}`;
+  } else if (event.type === "candidate.persisted") {
+    result = "已入候选池";
+  } else if (event.type === "candidate.rejected") {
+    result = "未入池";
+  } else if (event.type.startsWith("run.")) {
+    result = prospectRunStatusLabel(event.status as ProspectRunApiStatus);
+  } else if (event.type === "cell.completed") {
+    result = `${Number(event.metrics.candidateCount || 0)} 候选`;
+  } else if (event.type.startsWith("attempt.")) {
+    result = event.failureCode ? event.retryable ? "失败，可重试" : "失败" : "请求已结算";
+  }
+  const failed = Boolean(event.failureCode)
+    || ["failed", "rejected", "request_outcome_unknown"].includes(event.status);
+  const gained = event.type === "candidate.persisted"
+    || Number(event.metrics.acceptedCount || 0) > 0
+    || Number(event.metrics.candidateCount || 0) > 0;
+  return {
+    key: `feed:${event.id}`,
+    at: event.occurredAt,
+    source,
+    title: event.message,
+    detail: event.failureCode
+      ? `${event.failureCode}${event.retryable ? " · 系统允许重试" : " · 不自动重试"}`
+      : `${event.stage} · ${event.entityType} ${event.entityId}`,
+    result,
+    tone: failed ? "is-failed" : gained ? "is-gain" : event.retryable ? "is-review" : ""
+  };
+}
+
+function stopLeadTaskEventStream(enablePolling = true) {
+  leadFinderStreamAbort?.abort();
+  leadFinderStreamAbort = null;
+  leadFinderStreamRunId = "";
+  leadFinderStreamConnected = false;
+  if (leadFinderStreamRefreshTimer) window.clearTimeout(leadFinderStreamRefreshTimer);
+  leadFinderStreamRefreshTimer = 0;
+  if (enablePolling) syncLeadFinderRunPolling();
+}
+
+function scheduleLeadTaskEventRefresh(event: ProspectLiveEventApiRecord) {
+  const job = leadFinderJobs.find((item) => item.backendRunId === event.runId);
+  if (job && event.progress !== null) job.progress = event.progress;
+  if (job && activeLeadFinderJobId === job.id) {
+    renderLeadTaskStream(job);
+    syncLeadTaskStreamStateUi();
+  }
+  if (job && primaryLeadFinderLiveJob()?.id === job.id && qs<HTMLElement>(".view.active")?.id === "lead-finder") {
+    renderLeadFinderLiveOverview();
+  }
+  if (leadFinderStreamRefreshTimer) return;
+  leadFinderStreamRefreshTimer = window.setTimeout(() => {
+    leadFinderStreamRefreshTimer = 0;
+    void loadProspectRuns(true);
+    if (["page.persisted", "candidate.persisted", "candidate.rejected"].includes(event.type)) {
+      void refreshLeadFinderOpportunities();
+    }
+  }, 350);
+}
+
+async function consumeLeadTaskEventStream(
+  response: Response,
+  onEvent: (event: ProspectLiveEventApiRecord) => void
+) {
+  if (!response.body) throw new Error("当前浏览器不支持流式任务事件");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const consume = (block: string) => {
+    const eventName = block.split("\n").find((line) => line.startsWith("event:"))?.slice(6).trim() || "message";
+    if (eventName !== "prospect") return;
+    const dataText = block.split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+    if (!dataText) return;
+    onEvent(JSON.parse(dataText) as ProspectLiveEventApiRecord);
+  };
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done }).replace(/\r\n/gu, "\n");
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      consume(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf("\n\n");
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) consume(buffer.trim());
+}
+
+async function startLeadTaskEventStream(job: LeadFinderJob) {
+  const runId = job.backendRunId;
+  if (!runId || !state.user) return;
+  if (leadFinderStreamRunId === runId && leadFinderStreamAbort) return;
+  stopLeadTaskEventStream(false);
+  const controller = new AbortController();
+  leadFinderStreamAbort = controller;
+  leadFinderStreamRunId = runId;
+  const cursor = leadFinderStreamCursors.get(runId) || "0";
+  try {
+    const response = await fetch(`/api/prospect-runs/${encodeURIComponent(runId)}/events/stream`, {
+      method: "GET",
+      credentials: "same-origin",
+      headers: cursor !== "0" ? { "Last-Event-ID": cursor } : {},
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`实时事件连接失败：HTTP ${response.status}`);
+    if (leadFinderStreamAbort !== controller) return;
+    leadFinderStreamConnected = true;
+    stopLeadFinderRunPolling();
+    syncLeadTaskStreamStateUi();
+    renderLeadFinderLiveOverview();
+    await consumeLeadTaskEventStream(response, (event) => {
+      if (leadFinderStreamAbort !== controller || event.runId !== runId) return;
+      const current = leadFinderJobs.find((item) => item.backendRunId === runId);
+      if (!current) return;
+      current.liveEvents ||= [];
+      if (!current.liveEvents.some((item) => item.id === event.id)) {
+        current.liveEvents.push(event);
+        current.liveEvents.sort((left, right) => left.sequence - right.sequence);
+        if (current.liveEvents.length > 500) current.liveEvents.splice(0, current.liveEvents.length - 500);
+      }
+      leadFinderStreamCursors.set(runId, event.id);
+      scheduleLeadTaskEventRefresh(event);
+    });
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === "AbortError") && leadFinderStreamAbort === controller) {
+      console.warn("[prospect-events]", error);
+    }
+  } finally {
+    if (leadFinderStreamAbort !== controller) return;
+    leadFinderStreamAbort = null;
+    leadFinderStreamRunId = "";
+    leadFinderStreamConnected = false;
+    await loadProspectRuns(true);
+    syncLeadFinderRunPolling();
+    renderLeadFinderLiveOverview();
+    const current = leadFinderJobs.find((item) => item.backendRunId === runId);
+    if (current && !prospectRunTerminalStatuses.has(current.backendRunStatus || "queued")
+      && ["lead-finder", "lead-task-detail"].includes(qs<HTMLElement>(".view.active")?.id || "")
+      && (qs<HTMLElement>(".view.active")?.id === "lead-finder" || activeLeadFinderJobId === current.id)) {
+      window.setTimeout(() => void startLeadTaskEventStream(current), 1_500);
+    }
+  }
+}
+
+function syncLeadFinderLiveTransport(view = qs<HTMLElement>(".view.active")?.id || "") {
+  if (document.hidden || !state.user || !["lead-finder", "lead-task-detail"].includes(view)) {
+    stopLeadTaskEventStream(false);
+    return;
+  }
+  const job = view === "lead-task-detail"
+    ? leadFinderJobs.find((item) => item.id === activeLeadFinderJobId) || null
+    : primaryLeadFinderLiveJob();
+  if (view === "lead-finder") renderLeadFinderLiveOverview();
+  if (!job?.backendRunId || prospectRunTerminalStatuses.has(job.backendRunStatus || "queued")) {
+    if (leadFinderStreamAbort) stopLeadTaskEventStream(true);
+    else syncLeadFinderRunPolling();
+    return;
+  }
+  void startLeadTaskEventStream(job);
+}
+
 function stopLeadFinderRunPolling() {
   if (!leadFinderRunPollTimer) return;
   window.clearInterval(leadFinderRunPollTimer);
@@ -17264,6 +18873,10 @@ function stopLeadFinderRunPolling() {
 }
 
 function syncLeadFinderRunPolling() {
+  if (leadFinderStreamConnected) {
+    stopLeadFinderRunPolling();
+    return;
+  }
   const hasActiveRun = leadFinderJobs.some((job) =>
     job.backendRunId && ["running", "paused"].includes(job.status)
   );
@@ -17331,6 +18944,7 @@ async function loadProspectRuns(quiet = false) {
     if (qs<HTMLElement>(".view.active")?.id === "lead-task-detail") renderLeadTaskDetail();
     void loadProspectFeedback(true);
     syncLeadFinderRunPolling();
+    syncLeadFinderLiveTransport();
   } catch (error) {
     if (!quiet && state.user?.role !== "super_admin") {
       toast(error instanceof Error ? `获客任务加载失败：${error.message}` : "获客任务加载失败", "error");
@@ -17689,6 +19303,73 @@ function verificationLevelTone(level?: NonNullable<WebsiteOpportunity["verificat
   return "gray";
 }
 
+const PROSPECT_SCORE_REASON_LABELS: Record<string, string> = {
+  RESOLVED_ORGANIZATION_MISSING: "企业主体尚未完成唯一身份归一",
+  ENTERPRISE_VERIFICATION_NOT_PASSED: "企业可信度门禁未通过",
+  ICP_GATE_NOT_PASSED: "ICP 评估未达标或尚未审核",
+  CONTACTABILITY_GATE_NOT_PASSED: "联系方式未验证或尚未人工批准",
+  COMPLIANCE_BLOCKED: "存在排除、退订或禁止联系限制",
+  ICP_ASSESSMENT_MISSING: "尚未执行正式 ICP 评估",
+  VERIFIED_CONTACT_CHANNEL_MISSING: "尚无已验证联系渠道",
+  CANDIDATE_IDENTITY_CHANGED: "企业资料已变化，需要重新核验",
+  CANDIDATE_ICP_INPUT_CHANGED: "ICP 输入已变化，需要重新评估",
+  CANDIDATE_CHANNEL_CHANGED: "渠道资料已变化，需要重新核验",
+  COMPANY_EVIDENCE_MISSING: "尚无企业身份来源证据",
+  DISCOVERY_EVIDENCE_ONLY: "当前只有发现类证据，不能证明企业身份",
+  PURCHASE_SIGNAL_MISSING: "尚无采购或互动信号"
+};
+
+function prospectScoreReason(code: string) {
+  return PROSPECT_SCORE_REASON_LABELS[code] || code.replace(/_/gu, " ");
+}
+
+function leadFinderScoreSummary(item: WebsiteOpportunity) {
+  const scorecard = item.scorecard;
+  if (!scorecard) {
+    return `<div class="lead-score-summary"><span>评分待刷新</span></div>`;
+  }
+  const values = [
+    ["企", "企业可信度", scorecard.enterpriseConfidence.score],
+    ["I", "ICP 匹配", scorecard.icpMatch.score],
+    ["联", "联系就绪", scorecard.contactReadiness.score],
+    ["行", "行动优先级", scorecard.actionPriority.score]
+  ] as const;
+  const reasons = scorecard.vqa.reasonCodes
+    .map((code) => prospectScoreReason(code));
+  return `
+    <div class="lead-score-summary">
+      <div class="lead-score-values">${values.map(([short, label, value]) => `<span title="${escapeHtml(label)}">${short}<b>${value}</b></span>`).join("")}</div>
+      ${badge(scorecard.vqa.qualified ? "VQA 通过" : "待资格审查", scorecard.vqa.qualified ? "green" : "amber")}
+      ${reasons.length ? `<small>${escapeHtml(reasons.join("；"))}</small>` : ""}
+    </div>
+  `;
+}
+
+function renderProspectScorecard(item: WebsiteOpportunity) {
+  const scorecard = item.scorecard;
+  if (!scorecard) {
+    return `<section class="prospect-scorecard"><div class="prospect-scorecard-head"><b>搜索验证评分</b>${badge("等待评分", "gray")}</div><p>刷新候选后生成基于来源证据和资格门禁的四项评分。</p></section>`;
+  }
+  const rows: Array<[string, ProspectScoreComponentApi]> = [
+    ["企业可信度", scorecard.enterpriseConfidence],
+    ["ICP 匹配", scorecard.icpMatch],
+    ["联系就绪", scorecard.contactReadiness],
+    ["行动优先级", scorecard.actionPriority]
+  ];
+  const reasons = scorecard.vqa.reasonCodes.length
+    ? scorecard.vqa.reasonCodes.map((code) => prospectScoreReason(code)).join("；")
+    : "企业、ICP、有效渠道、合规与人工批准均已通过。";
+  return `
+    <section class="prospect-scorecard">
+      <div class="prospect-scorecard-head"><b>搜索验证评分</b>${badge(scorecard.vqa.qualified ? "VQA 已通过" : "VQA 未通过", scorecard.vqa.qualified ? "green" : "amber")}</div>
+      <div class="prospect-score-grid">${rows.map(([label, entry]) => `
+        <div><span>${label}</span><b>${entry.score}</b><i style="--p:${entry.score}%"></i><small>${entry.status === "verified" ? "已验证" : entry.status === "blocked" ? "受阻" : entry.status === "partial" ? "待补证" : "未验证"}</small></div>
+      `).join("")}</div>
+      <p>${escapeHtml(reasons)}</p>
+    </section>
+  `;
+}
+
 function closeLeadFinderVerificationDrawer() {
   qs<HTMLElement>("#leadFinderVerificationDrawer")?.classList.remove("open");
   qs<HTMLElement>("#leadFinderVerificationBackdrop")?.classList.remove("active");
@@ -17774,17 +19455,18 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
         ${badge(report?.level || "L0", verificationLevelTone(report?.level))}
         <div><b>${escapeHtml(report?.levelLabel || "报告待生成")}</b><small>${escapeHtml(report?.generatedAt ? `生成于 ${formatTime(report.generatedAt)}` : "刷新后生成")}</small></div>
       </div>
-      ${badge(report?.crawlerFree ? "零网页访问" : "策略待确认", report?.crawlerFree ? "green" : "amber")}
+      ${badge(report?.accessMode === "controlled_probe" ? "受控官网验证" : "零网页访问", report?.accessMode === "controlled_probe" ? "amber" : "green")}
       <p>${escapeHtml(report?.conclusion || "当前仅展示候选资料，企业真实性和联系方式需要人工确认。")}</p>
       <div class="lead-report-policy"><b>安全边界</b><span>系统未访问、下载、解析或探测企业网页。官网仅作为人工打开的参考链接保存。</span></div>
     </section>
+    ${renderProspectScorecard(item)}
     <section class="lead-report-checks">
       <div class="lead-evidence-head"><span>校验检查</span><b>${report?.checks?.length || 0} 项</b></div>
       ${reportChecks}
     </section>
     <div class="lead-profile-head">
       <div><h3>人工核验资料</h3><p>人工修正会保存到当前团队候选记录</p></div>
-      <div class="lead-profile-score" title="资料完整度">${score}</div>
+      <div class="lead-profile-score" title="行动优先级">${score}</div>
     </div>
     <div class="lead-verification-grid">
       <label><span>公司</span><input id="leadFinderDetailCompany" value="${escapeHtml(item.company)}" ${readonly}></label>
@@ -17796,11 +19478,11 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
       <label class="full"><span>核验说明</span><textarea id="leadFinderDetailDescription" ${readonly}>${escapeHtml(item.description || "")}</textarea></label>
     </div>
     <div class="lead-detail-stack">
-      <div class="lead-detail-card"><span>ICP 判断</span><b>${score >= 76 ? "高匹配，建议优先核实采购/工程联系人。" : score >= 60 ? "中匹配，需要补齐联系人和产品证据。" : "信息不足，先确认官网和业务范围。"}</b></div>
+      <div class="lead-detail-card"><span>ICP 判断</span><b>${item.scorecard?.icpMatch.status === "verified" ? `已通过正式 ICP 评估（${item.scorecard.icpMatch.score}）` : `未通过正式 ICP 门禁（${item.scorecard?.icpMatch.score || 0}）`}</b></div>
       <div class="lead-detail-card"><span>联系方式</span><b>${escapeHtml(item.contactInfo || item.contact || "待补齐")}</b></div>
       <div class="lead-detail-card"><span>来源与外部编号</span><b>${escapeHtml(item.sourceLabel || item.source || "链接登记")} · ${escapeHtml(externalId)} · ${evidence.length || 1} 个核验入口</b></div>
       <div class="lead-detail-card"><span>重复与归属</span><b>${badge(duplicate.text, duplicate.tone)} ${escapeHtml(owner)}</b></div>
-      <div class="lead-detail-card"><span>资料完整度</span><b>${badge(item.parseMode === "reference" ? "链接登记" : item.parseMode === "ai" ? "AI归纳" : "规则归纳", item.parseMode === "ai" ? "green" : "")} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} · 分数仅表示资料完整度，不代表采购意向</b></div>
+      <div class="lead-detail-card"><span>行动优先级</span><b>${badge(item.parseMode === "reference" ? "链接登记" : item.parseMode === "ai" ? "AI辅助" : "规则归纳", item.parseMode === "ai" ? "green" : "")} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} · AI 结论不作为事实门禁</b></div>
       <div class="lead-detail-card"><span>当前状态与下一步</span><b>${badge(status.label, status.tone)} ${escapeHtml(status.action)}</b></div>
     </div>
     <div class="lead-evidence-section">
@@ -17809,8 +19491,8 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
     </div>
     <div class="lead-detail-actions">
       ${item.status !== "synced" ? `<button class="btn" id="leadFinderDetailSaveButton">保存核验资料</button>` : ""}
-      ${item.status === "preview" ? `<button class="btn" id="leadFinderDetailMarkButton">标记可联系</button>` : ""}
-      ${["preview", "contactable", "contacted"].includes(item.status) ? `<button class="btn primary" id="leadFinderDetailSyncButton">加入线索</button>` : ""}
+      ${item.status !== "synced" && !item.scorecard?.vqa.qualified ? `<button class="btn primary" id="leadFinderDetailQualificationButton">进入资格审查</button>` : ""}
+      ${item.scorecard?.vqa.qualified && ["preview", "contactable", "contacted"].includes(item.status) ? `<button class="btn primary" id="leadFinderDetailSyncButton">加入线索</button>` : ""}
       ${item.status === "synced" && item.leadId ? `<button class="btn primary" id="leadFinderDetailOpenLeadButton">查看线索</button>` : ""}
     </div>
   `;
@@ -17818,8 +19500,13 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
   qs<HTMLButtonElement>("#leadFinderDetailSaveButton", box)?.addEventListener("click", (event) => {
     void saveLeadFinderVerification(item, event.currentTarget as HTMLButtonElement);
   });
-  qs<HTMLButtonElement>("#leadFinderDetailMarkButton", box)?.addEventListener("click", (event) => {
-    void markLeadFinderContactable(item, event.currentTarget as HTMLButtonElement);
+  qs<HTMLButtonElement>("#leadFinderDetailQualificationButton", box)?.addEventListener("click", () => {
+    closeLeadFinderVerificationDrawer();
+    state.selectedProspectId = item.id;
+    activateNavView("prospect-list", () => {
+      renderProspectList();
+      void loadProspectQualification(item, false, true);
+    });
   });
   qs<HTMLButtonElement>("#leadFinderDetailSyncButton", box)?.addEventListener("click", (event) => {
     void syncProspects([item.id], event.currentTarget as HTMLButtonElement);
@@ -17838,7 +19525,8 @@ function leadFinderVerificationPayload() {
     country: value("#leadFinderDetailCountry"),
     contact: value("#leadFinderDetailContact"),
     contactInfo: value("#leadFinderDetailContactInfo"),
-    description: value("#leadFinderDetailDescription")
+    description: value("#leadFinderDetailDescription"),
+    requestId: prospectRequestId("candidate-details")
   };
 }
 
@@ -17850,45 +19538,30 @@ async function saveLeadFinderVerification(item: WebsiteOpportunity, button?: HTM
   }
   if (button) button.disabled = true;
   try {
-    const result = await api<{ opportunity: WebsiteOpportunity }>(`/api/prospect-list/${encodeURIComponent(item.id)}/details`, {
+    const result = await api<{
+      opportunity: WebsiteOpportunity;
+      qualification: ProspectQualificationViewApi | null;
+      qualificationInvalidated: boolean;
+      changedFields: string[];
+    }>(`/api/prospect-list/${encodeURIComponent(item.id)}/details`, {
       method: "PATCH",
       body: JSON.stringify(payload)
     });
     Object.assign(item, result.opportunity);
+    if (result.qualification) {
+      state.prospectQualifications[item.id] = result.qualification;
+    }
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
-    if (notify) toast("核验资料已保存");
+    if (notify) toast(result.qualificationInvalidated
+      ? "资料已保存；受影响的资格步骤已失效，请重新核验"
+      : "核验资料已保存");
     return true;
   } catch (error) {
     toast(error instanceof Error ? error.message : "保存核验资料失败", "error");
     return false;
   } finally {
     if (button) button.disabled = false;
-  }
-}
-
-async function markLeadFinderContactable(item: WebsiteOpportunity, button?: HTMLButtonElement) {
-  if (!await saveLeadFinderVerification(item, undefined, false)) return;
-  if (button) {
-    button.disabled = true;
-    button.textContent = "标记中";
-  }
-  try {
-    const result = await api<{ opportunities: WebsiteOpportunity[] }>("/api/prospect-list/batch", {
-      method: "PATCH",
-      body: JSON.stringify({ ids: [item.id], action: "mark-contactable" })
-    });
-    Object.assign(item, result.opportunities[0]);
-    renderLeadFinder(state.websiteOpportunities);
-    renderProspectList();
-    toast("已保存核验资料并标记为可联系");
-  } catch (error) {
-    toast(error instanceof Error ? error.message : "标记可联系失败", "error");
-  } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = "标记可联系";
-    }
   }
 }
 
@@ -18028,12 +19701,17 @@ function leadSourceAccessText(provider: LeadProviderStatus) {
   return "";
 }
 
+function leadSourceCredentialLabel(provider: LeadProviderStatus) {
+  return provider.id === "sec_edgar" ? "Fair Access User-Agent" : "API Key";
+}
+
 function leadSourceCardsHtml(focusId?: string) {
   const cardHtml = (provider: LeadProviderStatus) => {
     const executable = isLeadSourceExecutable(provider);
     const assisted = provider.accessMode !== "api";
     const statusCls = assisted ? "manual" : !provider.ready || !provider.enabled ? "warn" : provider.lastTestStatus === "failed" ? "fail" : "ok";
     const isAi = provider.id === "ai_search";
+    const credentialLabel = leadSourceCredentialLabel(provider);
     const statusText = assisted
       ? `${leadSourceAccessText(provider)}，不参与自动搜索`
       : isAi
@@ -18043,14 +19721,14 @@ function leadSourceCardsHtml(focusId?: string) {
             ? "模型已配置，但该来源当前停用"
             : (provider.lastTestMessage || "已启用，可作为获客来源"))
       : !provider.ready
-        ? "未配置 API Key"
+        ? `未配置 ${credentialLabel}`
         : !provider.enabled
-          ? (provider.requiresKey ? "已保存 Key，当前停用" : "该来源当前已停用")
+          ? (provider.requiresKey ? `已保存 ${credentialLabel}，当前停用` : "该来源当前已停用")
           : !provider.requiresKey
             ? "内置免费源，无需配置"
             : provider.ready
-          ? (provider.lastTestStatus === "passed" ? "已连接并通过测试" : provider.lastTestStatus === "failed" ? `测试失败：${provider.lastTestMessage || "请检查 Key"}` : "Key 已保存")
-          : "未配置 API Key";
+          ? (provider.lastTestStatus === "passed" ? "已连接并通过测试" : provider.lastTestStatus === "failed" ? `测试失败：${provider.lastTestMessage || `请检查 ${credentialLabel}`}` : `${credentialLabel} 已保存`)
+          : `未配置 ${credentialLabel}`;
     const caps = provider.capabilities.map((cap) => `<span class="ls-cap">${escapeHtml(cap)}</span>`).join("");
     const form = assisted ? `
       <div class="ls-usage">${escapeHtml(provider.costNote)}</div>
@@ -18061,7 +19739,7 @@ function leadSourceCardsHtml(focusId?: string) {
       <div class="ls-usage">${escapeHtml(provider.costNote)}</div>
       <div class="ls-form-actions"><button class="btn" type="button" data-ls-ai-config>去 AI 模型配置</button></div>` : provider.requiresKey ? `
       <div class="ls-form">
-        <input type="password" data-ls-key="${escapeHtml(provider.id)}" placeholder="${provider.hasApiKey ? "已保存（留空不修改）" : "粘贴 API Key"}" autocomplete="off">
+        <input type="${provider.id === "sec_edgar" ? "text" : "password"}" data-ls-key="${escapeHtml(provider.id)}" placeholder="${provider.hasApiKey ? `${credentialLabel} 已保存（留空不修改）` : `填写 ${credentialLabel}`}" autocomplete="off">
         <div class="ls-form-actions">
           <button class="btn primary" type="button" data-ls-save="${escapeHtml(provider.id)}">保存并启用</button>
           <button class="btn" type="button" data-ls-test="${escapeHtml(provider.id)}">测试连接</button>
@@ -18162,7 +19840,7 @@ async function saveLeadSourceConfig(providerId: string, button?: HTMLButtonEleme
   const key = input?.value.trim() || "";
   const provider = state.leadProviders.find((item) => item.id === providerId);
   if (provider?.requiresKey && !key && !provider.hasApiKey) {
-    toast("请先粘贴该数据源的 API Key", "error");
+    toast(`请先填写${leadSourceCredentialLabel(provider)}`, "error");
     return;
   }
   const original = button?.textContent || "";
@@ -18290,7 +19968,8 @@ function updateLeadFinderSelectionCount() {
 }
 
 function canSelectLeadFinderItem(item: WebsiteOpportunity) {
-  return ["preview", "contactable", "contacted"].includes(item.status)
+  return Boolean(item.scorecard?.vqa.qualified)
+    && ["preview", "contactable", "contacted"].includes(item.status)
     && leadFinderDuplicateState(item).text === "新候选";
 }
 
@@ -18301,6 +19980,10 @@ function setLeadFinderSelected(id: string, selected: boolean) {
   qsa<HTMLInputElement>(`[data-lead-select][data-lead-select-id="${CSS.escape(id)}"]`).forEach((input) => {
     input.checked = selected;
   });
+  qsa<HTMLElement>(`[data-lead-id="${CSS.escape(id)}"], [data-lead-mobile-id="${CSS.escape(id)}"]`).forEach((row) => {
+    row.classList.toggle("is-checked", selected);
+    row.setAttribute("aria-selected", String(selected));
+  });
   updateLeadFinderSelectionCount();
 }
 
@@ -18310,14 +19993,14 @@ function leadFinderMobileCard(item: WebsiteOpportunity) {
   const disabled = !canSelectLeadFinderItem(item);
   const status = prospectStatusMeta(item);
   return `
-    <article class="lead-mobile-card ${state.selectedLeadFinderId === item.id ? "selected" : ""}" data-lead-mobile-id="${escapeHtml(item.id)}">
+    <article class="lead-mobile-card ${item.selected ? "is-checked" : ""}" data-lead-mobile-id="${escapeHtml(item.id)}" aria-selected="${item.selected ? "true" : "false"}">
       <div class="lead-mobile-card-head">
         <input type="checkbox" data-lead-select data-lead-select-id="${escapeHtml(item.id)}" ${item.selected ? "checked" : ""} ${disabled ? "disabled" : ""} aria-label="选择 ${escapeHtml(item.company)}">
-        <div><h3><button type="button" class="lead-company-link" data-lead-company-open="${escapeHtml(item.id)}">${escapeHtml(item.company)}</button></h3><p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website) || "官网待补")}</p></div>
-        <span class="lead-mobile-score">${score}</span>
+        <div><h3><button type="button" class="lead-company-link" data-lead-company-open="${escapeHtml(item.id)}">${escapeHtml(item.company)}</button></h3><p>${escapeHtml(websiteDomain(item.website) || "官网待补")} / ${escapeHtml(item.country || "国家待确认")}</p></div>
+        <span class="lead-mobile-score"><b>${score}</b><small>综合分</small></span>
       </div>
-      <div class="lead-mobile-meta">${leadSourceTag(item)}${badge(status.label, status.tone)}${badge(duplicate.text, duplicate.tone)}</div>
-      <div class="lead-mobile-contact">${escapeHtml(item.business || "业务待维护")}<br>${escapeHtml(item.contactInfo || item.contact || "联系方式待补齐")}</div>
+      <div class="lead-mobile-contact"><span>${escapeHtml(item.business || "业务待维护")}</span><b>${escapeHtml(item.contactInfo || item.contact || "联系方式待补齐")}</b></div>
+      <div class="lead-mobile-meta">${leadSourceTag(item)}<span>${escapeHtml(status.label)}</span><span>${escapeHtml(duplicate.text)}</span></div>
     </article>
   `;
 }
@@ -18332,6 +20015,9 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
   const aiSub = qs<HTMLElement>("#leadFinderAiSub");
   const aiBadge = qs<HTMLElement>("#leadFinderAiBadge");
   const sourceAiBadge = qs<HTMLElement>("#leadFinderSourceAiBadge");
+  opportunities.forEach((item) => {
+    if (item.selected && !canSelectLeadFinderItem(item)) item.selected = false;
+  });
   const ready = Boolean(state.aiConfig?.enabled && state.aiConfig?.hasApiKey && state.aiConfig?.useLeadFinder);
   const sortedAll = [...opportunities].sort((a, b) => {
     // 本轮搜客/勾选的新结果置顶，避免被历史高分种子埋没
@@ -18370,20 +20056,32 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
   rows.innerHTML = pageRows.length ? pageRows.map((item) => {
     const score = leadFinderScore(item);
     const duplicate = leadFinderDuplicateState(item);
-    const selected = state.selectedLeadFinderId === item.id;
     const disabled = !canSelectLeadFinderItem(item);
     const status = prospectStatusMeta(item);
+    const qualificationText = item.scorecard?.vqa.qualified ? "VQA 已通过" : item.scorecard ? "待资格审查" : "评分待刷新";
+    const qualificationReason = item.scorecard?.vqa.reasonCodes.map((code) => prospectScoreReason(code)).join("；") || qualificationText;
+    const parseMode = item.parseMode === "reference" ? "链接导入" : item.parseMode === "ai" ? "AI 归纳" : "规则归纳";
     return `
-      <tr data-lead-id="${escapeHtml(item.id)}" class="${selected ? "selected" : ""}">
-        <td><input type="checkbox" data-lead-select data-lead-select-id="${escapeHtml(item.id)}" ${item.selected ? "checked" : ""} ${disabled ? "disabled" : ""}></td>
-        <td class="lead-company-cell"><div class="lead-cell-title"><button type="button" class="lead-company-link" data-lead-company-open="${escapeHtml(item.id)}">${escapeHtml(item.company)}</button><a href="${escapeHtml(normalizeWebsiteLink(item.website))}" target="_blank" rel="noreferrer" class="lead-cell-domain">${escapeHtml(websiteDomain(item.website) || "官网待补")}</a></div><input type="hidden" data-lead-field="company" value="${escapeHtml(item.company)}"><input type="hidden" data-lead-field="website" value="${escapeHtml(item.website)}"><input type="hidden" data-lead-field="description" value="${escapeHtml(item.description)}"></td>
-        <td>${leadSourceTag(item)}</td>
-        <td><input data-lead-field="business" value="${escapeHtml(item.business)}"></td>
-        <td><input data-lead-field="country" value="${escapeHtml(item.country)}"></td>
-        <td><input data-lead-field="contact" value="${escapeHtml(item.contact)}"></td>
-        <td><input data-lead-field="contactInfo" value="${escapeHtml(item.contactInfo)}"></td>
-        <td><div class="lead-score"><b>${score}</b><i style="--p:${score}%"></i></div></td>
-        <td class="lead-status-cell">${badge(status.label, status.tone)}${badge(duplicate.text, duplicate.tone)}${badge(item.parseMode === "reference" ? "链接" : item.parseMode === "ai" ? "AI" : "规则", item.parseMode === "ai" ? "green" : "")}</td>
+      <tr data-lead-id="${escapeHtml(item.id)}" class="${item.selected ? "is-checked" : ""}" aria-selected="${item.selected ? "true" : "false"}">
+        <td class="lead-candidate-pick"><input type="checkbox" data-lead-select data-lead-select-id="${escapeHtml(item.id)}" ${item.selected ? "checked" : ""} ${disabled ? "disabled" : ""} aria-label="选择 ${escapeHtml(item.company)}"></td>
+        <td class="lead-company-cell">
+          <div class="lead-cell-title">
+            <button type="button" class="lead-company-link" data-lead-company-open="${escapeHtml(item.id)}">${escapeHtml(item.company || "公司待确认")}</button>
+            <a href="${escapeHtml(normalizeWebsiteLink(item.website))}" target="_blank" rel="noreferrer" class="lead-cell-domain">${escapeHtml(websiteDomain(item.website) || "官网待补")}</a>
+            <time datetime="${escapeHtml(item.createdAt)}">加入 ${escapeHtml(formatProspectJoinedAt(item.createdAt))}</time>
+          </div>
+          <input type="hidden" data-lead-field="company" value="${escapeHtml(item.company)}"><input type="hidden" data-lead-field="website" value="${escapeHtml(item.website)}"><input type="hidden" data-lead-field="description" value="${escapeHtml(item.description)}">
+        </td>
+        <td><div class="lead-candidate-source">${leadSourceTag(item)}<span>${escapeHtml(parseMode)}</span></div></td>
+        <td>
+          <div class="lead-candidate-profile"><b>${escapeHtml(item.country || "国家待确认")}</b><input class="lead-candidate-business-value" data-lead-field="business" value="${escapeHtml(item.business)}" title="${escapeHtml(item.business || "业务待维护")}" aria-label="业务方向" readonly tabindex="-1"></div>
+          <input type="hidden" data-lead-field="country" value="${escapeHtml(item.country)}">
+        </td>
+        <td class="lead-candidate-hidden-column"></td>
+        <td class="lead-candidate-hidden-column"><input type="hidden" data-lead-field="contact" value="${escapeHtml(item.contact)}"></td>
+        <td><div class="lead-candidate-contact"><b title="${escapeHtml(item.contactInfo || "联系方式待补齐")}">${escapeHtml(item.contactInfo || "联系方式待补齐")}</b><span>${escapeHtml(item.contact || "联系人待确认")}</span></div><input type="hidden" data-lead-field="contactInfo" value="${escapeHtml(item.contactInfo)}"></td>
+        <td><div class="lead-candidate-score"><strong>${score}</strong><span>综合评分</span><small class="${item.scorecard?.vqa.qualified ? "is-qualified" : ""}" title="${escapeHtml(qualificationReason)}">${escapeHtml(qualificationText)}</small></div></td>
+        <td><div class="lead-candidate-state"><b class="is-${escapeHtml(status.tone || "neutral")}">${escapeHtml(status.label)}</b><span>${escapeHtml(duplicate.text)}</span></div></td>
       </tr>
     `;
   }).join("") : `<tr><td colspan="9" class="empty-cell">暂无候选客户</td></tr>`;
@@ -18431,14 +20129,48 @@ async function launchProspectRunFromLeadFinder(
   limit: number,
   mode: "standard" | "super" = "standard"
 ): Promise<LeadFinderLaunchResult> {
-  const products = leadFinderValues("#leadProductKeywords");
-  const markets = leadFinderValues("#leadCountries");
-  const industries = leadFinderValues("#leadIndustryInput");
-  const exclusions = leadFinderValues("#leadExcludeKeywords");
-  const customerType = qs<HTMLSelectElement>("#leadCustomerTypes")?.value.trim() || "*";
-  const goalInput = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim() || "";
+  // 自然语言 / 结构化表单 互斥：仅读取生效的那一组意图，避免叠加互相限制
+  let products: string[];
+  let markets: string[];
+  let industries: string[];
+  let exclusions: string[];
+  let customerType: string;
+  let goalInput: string;
+  let marketOpen = false; // 自然语言未识别到具体市场时，按全球范围交给 AI 推断
+  if (leadBriefMode === "nl") {
+    goalInput = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim() || "";
+    if (!goalInput) throw new Error("请先在自然语言目标中描述你希望寻找的客户");
+    const parsed = parseGoalToBrief(goalInput);
+    let resolvedMarkets = parsed.markets;
+    if (!resolvedMarkets.length) {
+      toast("未识别到具体国家/地区，将按「全球」范围、由 AI 从你的描述推断目标市场", "warn");
+      resolvedMarkets = ["全球"];
+      marketOpen = true;
+    }
+    products = [goalInput]; // 产品意图以整句交给 AI 搜索源解析，表单关键词仅作兜底
+    markets = resolvedMarkets;
+    industries = [];
+    exclusions = parsed.exclusions;
+    customerType = parsed.customerType;
+    // 回填隐藏表单，复用既有提交流程（不影响界面展示）
+    const setVal = (sel: string, value: string) => { const el = qs<HTMLInputElement>(sel); if (el) el.value = value; };
+    setVal("#leadProductKeywords", products.join(", "));
+    setVal("#leadCountries", markets.join(", "));
+    setVal("#leadIndustryInput", industries.join(", "));
+    setVal("#leadExcludeKeywords", exclusions.join(", "));
+    const ct = qs<HTMLSelectElement>("#leadCustomerTypes");
+    if (ct) ct.value = customerType;
+  } else {
+    products = leadFinderValues("#leadProductKeywords");
+    markets = leadFinderValues("#leadCountries");
+    industries = leadFinderValues("#leadIndustryInput");
+    exclusions = leadFinderValues("#leadExcludeKeywords");
+    customerType = qs<HTMLSelectElement>("#leadCustomerTypes")?.value.trim() || "*";
+    goalInput = ""; // 结构化模式不使用目标作为 ICP 规则，避免与表单约束叠加
+  }
   if (!products.length) throw new Error("请先填写产品关键词");
-  if (!markets.length) throw new Error("请先填写目标国家或地区");
+  // 自然语言模式的市场由 AI 从整句推断兜底，仅结构化表单强制要求填写市场
+  if (leadBriefMode !== "nl" && !markets.length) throw new Error("请先填写目标国家或地区");
   const goal = goalInput || `开发${markets.join("、")}市场的${products.join("、")}${customerType === "*" ? "客户" : customerType}`;
   const normalizedSources = [...new Set(sources.map((source) => source.trim().toLocaleLowerCase("en-US")).filter(Boolean))];
   const campaignResult = await api<{
@@ -18480,7 +20212,7 @@ async function launchProspectRunFromLeadFinder(
           synonyms: [],
           industryTerms: industries,
           purchaseScenarioTerms: industries,
-          countryMode: "campaign_markets",
+          countryMode: marketOpen ? "all" : "campaign_markets",
           countries: [],
           languages: [],
           customerTypeMode: customerType === "*" ? "all" : "campaign_customer_types",
@@ -18580,10 +20312,11 @@ async function runLeadFinder(button?: HTMLButtonElement) {
   const originalText = button?.textContent || "生成并运行任务";
   const input = qs<HTMLTextAreaElement>("#leadFinderUrlInput");
   const urls = (input?.value || "").split(/\n|,|，/).map((item) => item.trim()).filter(Boolean).slice(0, Number(qs<HTMLSelectElement>("#leadLimit")?.value || 20));
-  const useAi = !urls.length && Boolean(qs<HTMLInputElement>("#leadFinderUseAiInput")?.checked);
+  const aiReady = Boolean(state.aiConfig?.enabled && state.aiConfig?.hasApiKey && state.aiConfig?.useLeadFinder);
   renderLeadFinderSearchLinks();
-  if (useAi && (!state.aiConfig?.enabled || !state.aiConfig?.hasApiKey || !state.aiConfig?.useLeadFinder)) {
-    toast("请先配置并启用 AI 模型，或关闭 AI 解析", "error");
+  // AI 模型为必选项：未配置不允许启动搜客，避免用户使用未授权/免费模型反复搜索
+  if (!urls.length && !aiReady) {
+    toast("请先在「AI 配置」中配置并启用 AI 模型（含 API Key 且勾选自动获客）后再启动搜索", "error");
     return;
   }
   let sources: string[] = [];
@@ -18691,6 +20424,7 @@ async function runLeadFinder(button?: HTMLButtonElement) {
         renderProspectSchedules();
       }
       syncLeadFinderRunPolling();
+      syncLeadFinderLiveTransport("lead-finder");
       if (result.scheduleError) {
         toast(`即时获客任务已创建，但定期计划未创建：${result.scheduleError}`, "error");
       } else {
@@ -18752,6 +20486,19 @@ async function syncLeadFinderRows(button?: HTMLButtonElement, explicitIds?: stri
     return false;
   }
   const selectedItems = state.websiteOpportunities.filter((item) => opportunities.some((row) => row.id === item.id));
+  await Promise.all(selectedItems.map((item) =>
+    loadProspectQualification(item, true, true)
+  ));
+  const notVqa = selectedItems.filter((item) =>
+    !state.prospectQualifications[item.id]?.vqaQualified
+  );
+  if (notVqa.length) {
+    const first = notVqa[0]!;
+    state.selectedProspectId = first.id;
+    toast(`有 ${notVqa.length} 条候选未通过当前 VQA，已转到资格审查`, "error");
+    activateNavView("prospect-list", () => renderProspectList());
+    return false;
+  }
   const duplicates = selectedItems.filter((item) => leadFinderDuplicateState(item).text !== "新候选");
   const missingContact = selectedItems.filter((item) => !item.contactInfo.trim()).length;
   const pendingReview = selectedItems.filter((item) => item.status === "preview").length;
@@ -18778,7 +20525,10 @@ async function syncLeadFinderRows(button?: HTMLButtonElement, explicitIds?: stri
   try {
     const result = await api<{ created: LeadSyncResult[] }>("/api/tools/website-scrape/sync-opportunities", {
       method: "POST",
-      body: JSON.stringify({ opportunities, allowPending: true })
+      body: JSON.stringify({
+        requestId: prospectRequestId("lead-conversion"),
+        opportunities
+      })
     });
     result.created.forEach((item) => {
       if (!state.leads.some((lead) => lead.id === item.lead.id)) state.leads.unshift(item.lead);
@@ -18910,39 +20660,46 @@ async function registerWebsiteReferences(button?: HTMLButtonElement) {
   }
 }
 
-async function syncWebsiteOpportunities(button?: HTMLButtonElement) {
+async function openWebsiteQualification(button?: HTMLButtonElement) {
   const opportunities = collectWebsiteRows();
   if (!opportunities.length) {
-    toast("请至少勾选一条官网线索候选", "error");
+    toast("请至少勾选一条待资格审查的官网候选", "error");
     return;
   }
   if (button) {
     button.disabled = true;
-    button.textContent = "加入中";
+    button.textContent = "保存中";
   }
   try {
-    const result = await api<{ created: LeadSyncResult[] }>("/api/tools/website-scrape/sync-opportunities", {
-      method: "POST",
-      body: JSON.stringify({ opportunities })
+    const saved = await Promise.all(opportunities.map((item) =>
+      api<{ opportunity: WebsiteOpportunity }>(`/api/prospect-list/${encodeURIComponent(item.id)}/details`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          ...item,
+          requestId: prospectRequestId("candidate-details")
+        })
+      })
+    ));
+    saved.forEach((result) => {
+      const existing = state.websiteOpportunities.find((item) =>
+        item.id === result.opportunity.id
+      );
+      if (existing) Object.assign(existing, result.opportunity);
     });
-    result.created.forEach((item) => {
-      if (!state.leads.some((lead) => lead.id === item.lead.id)) state.leads.unshift(item.lead);
-      const existing = state.websiteOpportunities.find((row) => row.id === item.opportunity.id || row.website === item.opportunity.website);
-      if (existing) Object.assign(existing, item.opportunity);
-      else state.websiteOpportunities.unshift(item.opportunity);
+    const first = saved[0]?.opportunity;
+    if (!first) return;
+    state.selectedProspectId = first.id;
+    state.prospectFilter = "all";
+    activateNavView("prospect-list", () => {
+      renderProspectList();
+      void loadProspectQualification(first, false, true);
     });
-    renderWebsiteOpportunities(state.websiteOpportunities);
-    renderLeadFinder(state.websiteOpportunities);
-    renderProspectList();
-    renderLeads();
-    requestDashboardRefresh();
-    toast(`已加入 ${result.created.length} 条线索`);
   } catch (error) {
-    toast(`加入线索失败：${error instanceof Error ? error.message : "请检查网络后重试"}`, "error");
+    toast(`候选资料保存失败：${error instanceof Error ? error.message : "请检查后重试"}`, "error");
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "加入线索中心";
+      button.textContent = "前往资格审查";
     }
   }
 }
@@ -20487,9 +22244,21 @@ function installEvents() {
     if (state.user) void refreshInternalMessages(false);
   });
   document.addEventListener("visibilitychange", refreshVisibleDashboard);
+  document.addEventListener("visibilitychange", () => {
+    const view = qs<HTMLElement>(".view.active")?.id || "";
+    if (document.hidden) {
+      stopLeadTaskEventStream(false);
+      return;
+    }
+    if (["lead-finder", "lead-task-detail"].includes(view)) {
+      void loadProspectRuns(true);
+      syncLeadFinderLiveTransport(view);
+    }
+  });
   window.addEventListener("pagehide", () => {
     const memo = state.memos.find((item) => item.id === state.selectedMemoId);
     if (memo && memoDirty) writeMemoDraft(memo);
+    stopLeadTaskEventStream(false);
   });
   document.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
@@ -20883,6 +22652,13 @@ function installEvents() {
   qsa<HTMLButtonElement>("[data-lead-search-mode]").forEach((button) => {
     button.addEventListener("click", () => setLeadFinderMode(button.dataset.leadSearchMode === "super" ? "super" : "standard"));
   });
+  qsa<HTMLButtonElement>("[data-lead-brief-mode]").forEach((button) => {
+    button.addEventListener("click", () => {
+      leadBriefMode = button.dataset.leadBriefMode === "form" ? "form" : "nl";
+      applyBriefMode();
+    });
+  });
+  applyBriefMode();
   ["#leadSuperTarget", "#leadSuperDuration", "#leadSuperDepth", "#leadSuperCost"].forEach((selector) => {
     qs<HTMLElement>(selector)?.addEventListener("input", renderSuperSearchPreview);
     qs<HTMLElement>(selector)?.addEventListener("change", renderSuperSearchPreview);
@@ -20918,6 +22694,28 @@ function installEvents() {
   qs<HTMLButtonElement>("#leadSourceManageInline")?.addEventListener("click", () => openLeadSourceCenter());
   qs<HTMLButtonElement>("#leadFinderStartButton")?.addEventListener("click", (event) => void runLeadFinder(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderStartButtonInline")?.addEventListener("click", (event) => void runLeadFinder(event.currentTarget as HTMLButtonElement));
+  qs<HTMLElement>("#leadFinderLiveOverview")?.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("[data-lead-empty-start]")) {
+      event.preventDefault();
+      void runLeadFinder(target.closest("[data-lead-empty-start]") as HTMLButtonElement);
+    }
+  });
+  qs<HTMLTextAreaElement>("#leadFinderUrlInput")?.addEventListener("input", syncLeadFinderStartState);
+  syncLeadFinderStartState();
+  qsa<HTMLButtonElement>("[data-lead-result-view]").forEach((button) => {
+    button.addEventListener("click", () => {
+      leadFinderResultView = button.dataset.leadResultView === "cleaning" ? "cleaning" : "candidates";
+      renderLeadFinderResultView();
+    });
+  });
+  qsa<HTMLButtonElement>("[data-lead-cleaning-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const filter = button.dataset.leadCleaningFilter;
+      leadFinderCleaningFilter = filter === "merged" || filter === "suppressed" || filter === "rejected" ? filter : "all";
+      renderLeadFinderCleaningLedger();
+    });
+  });
   qs<HTMLInputElement>("#leadFinderScheduleInput")?.addEventListener("change", (event) => {
     const enabled = (event.currentTarget as HTMLInputElement).checked;
     const frequency = qs<HTMLSelectElement>("#leadFinderScheduleFrequency");
@@ -20963,10 +22761,37 @@ function installEvents() {
     state.prospectPage = 1;
     renderProspectList();
   });
+  qsa<HTMLButtonElement>("[data-prospect-date-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const range = button.dataset.prospectDateFilter;
+      state.prospectJoinedRange = range === "today" || range === "7d" || range === "30d" || range === "custom" ? range : "all";
+      state.prospectPage = 1;
+      renderProspectList();
+      if (state.prospectJoinedRange === "custom") qs<HTMLInputElement>("#prospectJoinedFrom")?.focus();
+    });
+  });
+  qs<HTMLInputElement>("#prospectJoinedFrom")?.addEventListener("change", (event) => {
+    state.prospectJoinedFrom = (event.currentTarget as HTMLInputElement).value;
+    state.prospectPage = 1;
+    renderProspectList();
+  });
+  qs<HTMLInputElement>("#prospectJoinedTo")?.addEventListener("change", (event) => {
+    state.prospectJoinedTo = (event.currentTarget as HTMLInputElement).value;
+    state.prospectPage = 1;
+    renderProspectList();
+  });
+  qs<HTMLSelectElement>("#prospectSortSelect")?.addEventListener("change", (event) => {
+    state.prospectSort = (event.currentTarget as HTMLSelectElement).value as AppState["prospectSort"];
+    state.prospectPage = 1;
+    renderProspectList();
+  });
+  qs<HTMLButtonElement>("#prospectMobileDetailClose")?.addEventListener("click", closeProspectMobileDetail);
   qs<HTMLButtonElement>("#prospectOpenFinderButton")?.addEventListener("click", () => activateNavView("lead-finder", () => renderLeadFinder(state.websiteOpportunities)));
   qs<HTMLButtonElement>("#prospectRefreshButton")?.addEventListener("click", async () => {
     const result = await api<{ opportunities: WebsiteOpportunity[] }>("/api/tools/website-opportunities");
     state.websiteOpportunities = result.opportunities;
+    prospectMobileDetailOpen = false;
+    document.body.classList.remove("prospect-mobile-detail-open");
     renderProspectList();
     renderLeadFinder(state.websiteOpportunities);
     toast("搜客清单已刷新");
@@ -20975,7 +22800,6 @@ function installEvents() {
   qs<HTMLButtonElement>("#prospectPreviewMailButton")?.addEventListener("click", renderProspectMailPreview);
   qs<HTMLButtonElement>("#prospectSendMailButton")?.addEventListener("click", (event) => void sendProspectDevelopmentEmail(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectSyncButton")?.addEventListener("click", (event) => void syncSelectedProspects(event.currentTarget as HTMLButtonElement));
-  qs<HTMLButtonElement>("#prospectMarkContactableButton")?.addEventListener("click", (event) => void updateProspectBatch("mark-contactable", state.selectedProspectIds, event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectExcludeButton")?.addEventListener("click", (event) => requestProspectExclusion(state.selectedProspectIds, event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectAssignButton")?.addEventListener("click", (event) => void updateProspectBatch("assign", state.selectedProspectIds, event.currentTarget as HTMLButtonElement));
   qs<HTMLInputElement>("#prospectSelectPage")?.addEventListener("change", (event) => {
@@ -21046,7 +22870,7 @@ function installEvents() {
     void registerWebsiteReferences(event.currentTarget as HTMLButtonElement);
   });
   qs<HTMLButtonElement>("#websiteReferenceSyncButton")?.addEventListener("click", (event) => {
-    void syncWebsiteOpportunities(event.currentTarget as HTMLButtonElement);
+    void openWebsiteQualification(event.currentTarget as HTMLButtonElement);
   });
   qs<HTMLButtonElement>("#newDocumentButton")?.addEventListener("click", openNewDocument);
   qs<HTMLButtonElement>("#saveDocumentButton")?.addEventListener("click", () => void saveTradeDocument());
@@ -21217,10 +23041,17 @@ function activateNavView(view: string, after?: () => void) {
     after = undefined;
   }
   const activeView = qs<HTMLElement>(".view.active")?.id;
+  if (["lead-finder", "lead-task-detail"].includes(activeView || "") && !["lead-finder", "lead-task-detail"].includes(view)) {
+    stopLeadTaskEventStream(false);
+  }
   if (view === "ai-agent" && activeView && activeView !== "ai-agent") agentOriginView = activeView;
   if (activeView === "memos" && view !== "memos" && memoDirty) void saveCurrentMemoDraft();
   if (view !== "leads") closeLeadDrawer();
   if (view !== "customers") closeCustomerDrawer();
+  if (view !== "prospect-list" && prospectMobileDetailOpen) {
+    prospectMobileDetailOpen = false;
+    document.body.classList.remove("prospect-mobile-detail-open");
+  }
   customerMapController?.setActive(view === "customers" && state.customerViewMode === "map");
   if (view !== "pipeline") closeDealDrawer();
   if (view !== "lead-finder") closeLeadFinderVerificationDrawer();
@@ -21230,7 +23061,6 @@ function activateNavView(view: string, after?: () => void) {
   qsa<HTMLElement>(".view").forEach((node) => node.classList.toggle("active", node.id === view));
   document.body.classList.toggle("is-whatsapp-view", view === "whatsapp");
   syncLeadTaskDetailClock(view === "lead-task-detail");
-  syncLeadTaskVerboseTimer(view === "lead-task-detail" && leadTaskStreamMode === "verbose");
   syncWhatsAppRefresh(false);
   renderTopbarForView(view);
   if (view === "reports") {
@@ -21246,6 +23076,8 @@ function activateNavView(view: string, after?: () => void) {
   if (view === "lead-finder") {
     void loadIdentityConflicts(true);
     void loadLeadProviders();
+    void loadProspectRuns(true);
+    syncLeadFinderLiveTransport(view);
   }
   if (view === "customer-pool") {
     renderCustomerPool();

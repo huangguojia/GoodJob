@@ -1076,8 +1076,140 @@ export interface ProviderEvidenceSnapshot {
   adapterVersion: string;
   catalogPolicyVersion: string;
   sourceLevel: string;
+  fieldAuthority?: Partial<Record<string, ProviderFieldAuthorityLevel>>;
   retentionPolicyRef: string;
 }
+
+export type ProspectIdentityAuthorityProvider =
+  | "gleif"
+  | "companies_house"
+  | "sec_edgar"
+  | "fr_company_search";
+
+export type ProspectIdentityBootstrapStage =
+  | "validation"
+  | "campaign"
+  | "provider"
+  | "identity"
+  | "coverage"
+  | "binding";
+
+export interface ProspectIdentityBootstrapEvent {
+  id: string;
+  sequence: number;
+  stage: ProspectIdentityBootstrapStage;
+  status: "completed" | "failed";
+  label: string;
+  detail: string;
+  createdAt: string;
+}
+
+export interface ProspectIdentityBootstrapAttempt {
+  id: string;
+  version: "prospect-identity-bootstrap-v1";
+  requestIdHash: string;
+  providerId: ProspectIdentityAuthorityProvider;
+  registrationNumber: string;
+  normalizedIdentifier: string;
+  taskStatus: "running" | "ended";
+  outcome:
+    | "pending"
+    | "linked"
+    | "not_found"
+    | "identity_conflict"
+    | "failed";
+  campaignId: string;
+  campaignVersion: number;
+  strategyId: string;
+  runId: string;
+  sourceCandidateId: string;
+  sourceRawRecordId: string;
+  sourceHitId: string;
+  resolutionId: string;
+  conflictId: string;
+  organizationId: string;
+  tenantProspectId: string;
+  errorCode: string;
+  errorMessage: string;
+  events: ProspectIdentityBootstrapEvent[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  endedAt: string;
+}
+
+export type WebsiteProbeStage =
+  | "queued"
+  | "dns"
+  | "robots"
+  | "head"
+  | "body"
+  | "evidence"
+  | "completed"
+  | "failed";
+
+export interface WebsiteProbeEvent {
+  id: string;
+  sequence: number;
+  stage: WebsiteProbeStage;
+  status: "started" | "completed" | "skipped" | "failed";
+  message: string;
+  metrics: Record<string, string | number | boolean | null>;
+  createdAt: string;
+}
+
+export interface WebsiteProbeEvidence {
+  canonicalDomain: string;
+  pageTitle: string;
+  language: string;
+  organizationName: string;
+  legalName: string;
+  addressCountry: string;
+  businessCategory: string;
+  publicContactEmail: string;
+  sourceUrl: string;
+  payloadHash: string;
+  observedAt: string;
+}
+
+export interface WebsiteProbeAttempt {
+  id: string;
+  candidateId: string;
+  teamId: string;
+  ownerId: string;
+  domain: string;
+  sourceUrl: string;
+  purpose: "company_evidence_enrichment";
+  accessMode: "controlled_probe";
+  policyVersion: "website-probe-policy-v1" | "website-probe-policy-v2";
+  status: "queued" | "running" | "completed" | "failed";
+  outcome:
+    | "pending"
+    | "evidence_found"
+    | "no_evidence"
+    | "robots_denied"
+    | "unreachable"
+    | "policy_blocked"
+    | "rate_limited"
+    | "circuit_open";
+  robotsDecision: "pending" | "allowed" | "denied" | "unavailable";
+  httpStatus: number;
+  responseBytes: number;
+  redirected: boolean;
+  evidence: WebsiteProbeEvidence | null;
+  events: WebsiteProbeEvent[];
+  failureCode: string;
+  failureMessage: string;
+  startedAt: string;
+  completedAt: string;
+  createdAt: string;
+}
+
+export type ProviderFieldAuthorityLevel =
+  | "official"
+  | "corroborated"
+  | "discovery"
+  | "assisted";
 
 export type ProspectVerificationCheckStatus =
   | "passed"
@@ -1099,8 +1231,29 @@ export interface ProspectVerificationReport {
   levelLabel: string;
   conclusion: string;
   generatedAt: string;
-  crawlerFree: true;
+  crawlerFree: boolean;
+  accessMode: "reference_only" | "controlled_probe";
   checks: ProspectVerificationCheck[];
+}
+
+export interface ProspectScoreComponent {
+  score: number;
+  status: "verified" | "partial" | "unverified" | "blocked";
+  reasonCodes: string[];
+  evidenceRefs: string[];
+}
+
+export interface ProspectScorecard {
+  version: "prospect-scorecard-v1";
+  generatedAt: string;
+  enterpriseConfidence: ProspectScoreComponent;
+  icpMatch: ProspectScoreComponent;
+  contactReadiness: ProspectScoreComponent;
+  actionPriority: ProspectScoreComponent;
+  vqa: {
+    qualified: boolean;
+    reasonCodes: string[];
+  };
 }
 
 export interface WebsiteOpportunity {
@@ -1124,6 +1277,7 @@ export interface WebsiteOpportunity {
   sourceLabel?: string;
   sourceEvidence?: ProviderEvidenceSnapshot[];
   verificationReport?: ProspectVerificationReport;
+  scorecard?: ProspectScorecard;
   confidence?: number;
   lastDevelopmentEmailAt?: string;
   lastDevelopmentEmailSubject?: string;
@@ -1142,6 +1296,8 @@ export interface WebsiteOpportunity {
   nextFollowAt?: string;
   outreachState?: ProspectOutreachState;
   invalidContactChannels?: ProspectOutreachChannel[];
+  websiteProbeAttempts?: WebsiteProbeAttempt[];
+  identityBootstrapAttempts?: ProspectIdentityBootstrapAttempt[];
 }
 
 export type LeadSourceTier = "free" | "byok_free" | "paid";
@@ -1159,6 +1315,7 @@ export interface ProviderCatalogItem {
   officialDocsUrl: string;
   capabilities: string[];
   allowedFields: string[];
+  fieldAuthority?: Record<string, ProviderFieldAuthorityLevel>;
   licensePolicy: Record<string, unknown>;
   defaultRatePolicy: Record<string, unknown>;
   retentionPolicy: Record<string, unknown>;
@@ -1507,6 +1664,9 @@ export interface ProspectSearchQueryCell {
   invalidCount?: number;
   duplicateCount?: number;
   candidateCount?: number;
+  costAmount?: number;
+  costUnknownCount?: number;
+  currency?: string;
   errorCode?: string;
   errorMessage?: string;
   completedAt?: string;
@@ -1590,6 +1750,8 @@ export interface ProspectSuperSearchMission {
   rawCount: number;
   uniqueCount: number;
   candidateCount: number;
+  reviewReadyCount?: number;
+  vqaCount?: number;
   pendingCount: number;
   filteredCount: number;
   revision: number;
@@ -1618,12 +1780,16 @@ export interface ProspectSuperSearchRound {
   rawCount: number;
   uniqueCount: number;
   candidateCount: number;
+  reviewReadyCount?: number;
+  vqaCount?: number;
   duplicateCount: number;
   filteredCount: number;
   pendingCount: number;
   duplicateRate: number;
   yieldRate: number;
   cost: number;
+  costUnknownCount?: number;
+  costIntegrityStatus?: "complete" | "unknown" | "currency_mismatch";
   decision: "pending" | "continue" | "converged" | "limit_reached" | "manual_stop" | "failed";
   decisionReason: string;
   createdAt: string;
@@ -2096,6 +2262,10 @@ export interface ProspectCandidateProcessingState {
   status: "completed" | "rejected";
   failureCode: string;
   candidateId?: string;
+  sourceRecordId?: string;
+  sourceCompany?: string;
+  sourceCountry?: string;
+  sourceDomain?: string;
   processedAt: string;
   updatedAt: string;
 }
@@ -2358,6 +2528,55 @@ export interface ProspectEvidence {
   authorityCode: string;
   observedAt: string;
   expiresAt: string;
+  idempotencyKeyHash: string;
+  requestHash: string;
+  recordHash: string;
+  createdAt: string;
+}
+
+export type ProspectCandidateQualificationField =
+  | "company"
+  | "business"
+  | "country"
+  | "website"
+  | "contact"
+  | "contactInfo"
+  | "description";
+
+export type ProspectCandidateQualificationStage =
+  | "company"
+  | "icp"
+  | "channel"
+  | "contactability";
+
+export interface ProspectCandidateQualificationRevision {
+  id: string;
+  teamId: string;
+  ownerId: string;
+  prospectId: string;
+  organizationId: string;
+  candidateId: string;
+  revision: number;
+  changedFields: ProspectCandidateQualificationField[];
+  beforeBasisHash: string;
+  afterBasisHash: string;
+  changedBy: string;
+  idempotencyKeyHash: string;
+  requestHash: string;
+  recordHash: string;
+  createdAt: string;
+}
+
+export interface ProspectCandidateQualificationCheckpoint {
+  id: string;
+  teamId: string;
+  ownerId: string;
+  prospectId: string;
+  organizationId: string;
+  candidateId: string;
+  stage: ProspectCandidateQualificationStage;
+  revision: number;
+  sourceFactId: string;
   idempotencyKeyHash: string;
   requestHash: string;
   recordHash: string;

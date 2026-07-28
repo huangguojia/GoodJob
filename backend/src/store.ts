@@ -72,6 +72,8 @@ import {
   prospectContactChannels,
   prospectContactVerificationSnapshots,
   prospectContactabilityDecisions,
+  prospectCandidateQualificationCheckpoints,
+  prospectCandidateQualificationRevisions,
   prospectContacts,
   prospectCoverageEvents,
   prospectEvidence,
@@ -153,6 +155,11 @@ import type {
   ProspectQualificationCommand,
   ProspectQualificationCommandResult
 } from "./prospect-qualification.js";
+import {
+  readProspectRunFeedMemory,
+  type ProspectRunFeedReadInput,
+  type ProspectRunFeedReadResult
+} from "./prospect-live-events.js";
 import type { AcquisitionOutcomeFeedback, AgentJob, AgentJobIdempotencyAlias, AgentMemoryRecord, AgentMissionCheckpointRecord, AgentRunEventRecord, AgentRunRecord, AgentRunStepRecord, AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerAcquisitionSourceEvent, CustomerActivity, CustomerIntelligenceSuggestion, CustomerMaintenanceWatch, CustomerOwnershipEvent, CustomerOwnershipMutationInput, CustomerOwnershipMutationResult, DailyReport, DailyReportComment, Deal, DealEvent, DealRecommendation, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, InternalMessage, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, MarketOpportunityBatch, MarketOpportunityCalculationEvent, MarketOpportunitySnapshot, MarketTradeObservation, Memo, MonthlySalesRecord, OcrJob, Organization, OrganizationAcceptedIdentifier, OrganizationAliasFact, OrganizationCanonicalMapping, OrganizationIdentityClaim, OrganizationIdentityConflict, OrganizationIdentityConflictReview, OrganizationIdentityEvent, OrganizationIdentityResolution, OrganizationRelationFact, OrganizationSourceBinding, OutreachSequence, PlanTask, PlanTemplate, ProblemItem, ProcurementSignal, ProspectCampaign, ProspectCampaignEvent, ProspectCampaignVersion, ProspectCandidateProcessingState, ProspectCoverageEvent, ProspectExecutionAttempt, ProspectExecutionCheckpoint, ProspectExecutionEvent, ProspectExecutionKernelState, ProspectExecutionLease, ProspectExecutionPage, ProspectExecutionThrottleBucket, ProspectProviderRequestAccountingEvidence, ProspectProviderRequestAttemptBinding, ProspectProviderRequestDispatch, ProspectProviderRequestEvent, ProspectProviderRequestLedger, ProspectRunEvent, ProspectRunQueueChildBinding, ProspectRunQueueParentBinding, ProspectRunShard, ProspectSchedule, ProspectSearchRun, ProspectSourceRawBatch, ProspectSourceRawHit, ProspectSourceRawRecord, ProspectStrategy, ProspectStrategyEvent, ProspectStrategySourcePosition, ProspectStrategySuggestion, ProspectSuperSearchEvent, ProspectSuperSearchMission, ProspectSuperSearchRound, ProspectTouchpoint, ProviderCatalogItem, ProviderConnection, ProviderRequestLog, ProviderResponseCache, Reminder, SalesRecordAudit, SalesTrainingRun, TenantProspect, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity, WhatsAppMessage, WhatsAppBinding } from "./types.js";
 import { mutateCustomerOwnershipMemory } from "./customer-public-pool.js";
 import type { SalesDistillation, SalesPlaybookActivation } from "./types.js";
@@ -161,6 +168,8 @@ import type { AgentEvaluationRunRecord, AgentModelCallRecord } from "./types.js"
 import type { AgentKnowledgeDocument } from "./types.js";
 import type {
   CompanyVerificationSnapshot,
+  ProspectCandidateQualificationCheckpoint,
+  ProspectCandidateQualificationRevision,
   ProspectContact,
   ProspectContactChannel,
   ProspectContactVerificationSnapshot,
@@ -274,6 +283,10 @@ export interface CrmStore {
   tenantProspects: TenantProspect[];
   prospectCoverageEvents: ProspectCoverageEvent[];
   prospectEvidence: ProspectEvidence[];
+  prospectCandidateQualificationRevisions:
+    ProspectCandidateQualificationRevision[];
+  prospectCandidateQualificationCheckpoints:
+    ProspectCandidateQualificationCheckpoint[];
   companyVerificationSnapshots: CompanyVerificationSnapshot[];
   prospectIcpPolicySnapshots: ProspectIcpPolicySnapshot[];
   prospectIcpAssessmentSnapshots: ProspectIcpAssessmentSnapshot[];
@@ -355,6 +368,9 @@ export interface CrmStore {
     input: ProspectQualificationCommand
   ): Promise<ProspectQualificationCommandResult>;
   reloadProspectQualificationTeam?(teamId: string): Promise<void>;
+  readProspectRunFeed?(
+    input: ProspectRunFeedReadInput
+  ): Promise<ProspectRunFeedReadResult>;
   readBarrier(): Promise<void>;
   close?(): Promise<void>;
 }
@@ -458,6 +474,8 @@ export const memoryStore: CrmStore = {
     tenantProspects,
     prospectCoverageEvents,
     prospectEvidence,
+    prospectCandidateQualificationRevisions,
+    prospectCandidateQualificationCheckpoints,
     companyVerificationSnapshots,
     prospectIcpPolicySnapshots,
     prospectIcpAssessmentSnapshots,
@@ -533,6 +551,9 @@ export const memoryStore: CrmStore = {
   },
   async reloadProspectQualificationTeam() {
     // Memory mode already reads the current in-process qualification state.
+  },
+  async readProspectRunFeed(input) {
+    return readProspectRunFeedMemory(memoryStore, input);
   },
   async readBarrier() {
     // Memory mode has no asynchronous persistence queue.

@@ -23,6 +23,7 @@ import {
   resolveProspectStrategyQuery
 } from "./prospect-strategies.js";
 import { validateProspectSearchQueryPlan } from "./prospect-search-planner.js";
+import { prospectCandidateQualificationCounts } from "./prospect-scorecard.js";
 import type { CrmStore, PersistedStoreMutation } from "./store.js";
 import type {
   ProspectCampaign,
@@ -652,6 +653,10 @@ function prospectCleaningReport(
       return {
         hitId: item.hitId,
         providerCode,
+        sourceRecordId: item.sourceRecordId || hit?.recordId || "",
+        sourceCompany: item.sourceCompany || candidate?.company || "",
+        sourceCountry: item.sourceCountry || candidate?.country || "",
+        sourceDomain: item.sourceDomain || "",
         outcome,
         reasonCode,
         reason: cleaningReasonLabel(reasonCode),
@@ -666,6 +671,10 @@ function prospectCleaningReport(
     .map((hit) => ({
       hitId: hit.id,
       providerCode: shardById.get(hit.shardId)?.providerCode || ledgerById.get(hit.ledgerId)?.providerCode || "unknown",
+      sourceRecordId: hit.recordId,
+      sourceCompany: "",
+      sourceCountry: "",
+      sourceDomain: "",
       outcome: "pending" as const,
       reasonCode: "PENDING_CLEANING",
       reason: cleaningReasonLabel("PENDING_CLEANING"),
@@ -729,6 +738,57 @@ export function prospectRunDiagnostics(store: CrmStore, run: ProspectSearchRun) 
   const rejected = processing.filter((item) => item.status === "rejected").length;
   const succeededSources = shards.filter((item) => ["succeeded", "succeeded_empty", "partial_success"].includes(item.status)).length;
   const failedSources = shards.filter((item) => item.status === "failed").length;
+  const skippedSources = shards.filter((item) => item.status === "cancelled").length;
+  const candidateIds = [...new Set(processing
+    .filter((item) => item.status === "completed" && item.candidateId)
+    .map((item) => item.candidateId!))];
+  const candidateIdSet = new Set(candidateIds);
+  const { reviewReadyCount, vqaCount } =
+    prospectCandidateQualificationCounts(store, {
+      teamId: run.teamId,
+      ownerId: run.ownerId,
+      candidateIds: candidateIdSet
+    });
+  const completedAttempts = store.prospectExecutionAttempts.filter((item) =>
+    item.teamId === run.teamId
+    && item.ownerId === run.ownerId
+    && item.runId === run.id
+    && Boolean(item.finishedAt)
+  );
+  const costUnknownCount = completedAttempts.filter((item) =>
+    item.costAmount === null || item.costKind === "unknown"
+  ).length;
+  const costsByCurrency = new Map<string, number>();
+  completedAttempts.forEach((item) => {
+    if (item.costAmount === null || item.costKind === "unknown") return;
+    const currency = item.currency || "UNSPECIFIED";
+    costsByCurrency.set(
+      currency,
+      (costsByCurrency.get(currency) || 0) + item.costAmount
+    );
+  });
+  const terminal = [
+    "succeeded",
+    "succeeded_empty",
+    "partial_success",
+    "failed",
+    "cancelled"
+  ].includes(run.status);
+  const outcome = !terminal ? "running"
+    : run.status === "cancelled" ? "cancelled"
+      : vqaCount > 0 && failedSources === 0 ? "success"
+        : candidateIds.length > 0 || succeededSources > 0
+          ? "partial_success"
+          : run.status === "failed" ? "failed" : "empty";
+  const recommendedNextAction = outcome === "running"
+    ? "等待来源执行与候选清洗完成"
+    : vqaCount > 0
+      ? "复核 VQA 候选并确认转线索顺序"
+      : candidateIds.length > 0
+        ? "在搜客清单完成企业、ICP、渠道和可联系审批"
+        : failedSources > 0
+          ? "检查失败来源的错误码、配额和连接状态后重试"
+          : "调整目标条件或数据源后重新搜索";
   const phases = [
     { id: "snapshot", name: "策略与条件", status: executionPhaseStatus(run, "snapshot"), result: `${run.executionSnapshot.providerPlan.length} 个来源，策略版本 ${run.executionSnapshot.strategy.revision}` },
     { id: "queue", name: "任务调度", status: executionPhaseStatus(run, "queue"), result: run.status === "queued" ? "正在等待 Worker" : `运行状态 ${run.status}` },
@@ -795,7 +855,31 @@ export function prospectRunDiagnostics(store: CrmStore, run: ProspectSearchRun) 
       rejected,
       succeededSources,
       failedSources,
-      candidateIds: [...new Set(processing.filter((item) => item.status === "completed" && item.candidateId).map((item) => item.candidateId!))]
+      candidateIds
+    },
+    acceptance: {
+      outcome,
+      sourceReturnedCount: pages.reduce(
+        (sum, item) => sum + item.rawCount,
+        0
+      ),
+      candidateCount: candidateIds.length,
+      reviewReadyCount,
+      vqaCount,
+      sourceSuccessCount: succeededSources,
+      sourceFailureCount: failedSources,
+      sourceSkippedCount: skippedSources,
+      costs: [...costsByCurrency.entries()].map(([currency, amount]) => ({
+        currency,
+        amount
+      })),
+      costUnknownCount,
+      stopReason: terminal
+        ? store.prospectRunEvents
+            .filter((item) => item.teamId === run.teamId && item.runId === run.id)
+            .sort((left, right) => right.sequence - left.sequence)[0]?.reason || ""
+        : "",
+      recommendedNextAction
     }
   };
 }

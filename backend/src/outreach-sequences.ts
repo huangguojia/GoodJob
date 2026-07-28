@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AgentActor } from "./ai-agent.js";
+import { assertCrmOutreachEligible } from "./prospect-outreach-eligibility.js";
 import type { CrmStore } from "./store.js";
 import type { OutreachSequence, OutreachSequenceStepSnapshot } from "./types.js";
 
@@ -80,6 +81,22 @@ export async function createOutreachSequence(
   if (input.channel === "email" && steps.some((item) => !item.subject)) throw new Error("邮件序列的每一步都必须锁定主题");
   const replay = store.outreachSequences.find((item) => item.approvalStepId === approvalStepId && item.ownerId === user.id);
   if (replay) return replay;
+  await store.reloadProspectQualificationTeam?.(user.teamId);
+  if (input.entityType === "customer") {
+    assertCrmOutreachEligible(store, {
+      target: { entityType: "customer", entity: entity as typeof store.customers[number] },
+      actorId: user.id,
+      channel: input.channel === "email" ? "email" : "whatsapp",
+      recipient
+    });
+  } else {
+    assertCrmOutreachEligible(store, {
+      target: { entityType: "lead", entity: entity as typeof store.leads[number] },
+      actorId: user.id,
+      channel: "email",
+      recipient
+    });
+  }
   const sequence: OutreachSequence = {
     id: `oseq_${randomUUID()}`,
     missionRunId,

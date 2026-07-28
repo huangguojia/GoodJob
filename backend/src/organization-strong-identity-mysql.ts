@@ -25,6 +25,9 @@ import type {
   ResolveOrganizationStrongIdentityPersistedInput,
   ResolveOrganizationStrongIdentityResult
 } from "./organization-strong-identity.js";
+import {
+  PROSPECT_IDENTITY_AUTHORITY_PROFILES
+} from "./prospect-identity-authority-profiles.js";
 import { PROSPECT_SOURCE_RAW_ENVELOPE_VERSION } from "./prospect-source-raw.js";
 import type { CrmStore } from "./store.js";
 import type {
@@ -1637,21 +1640,8 @@ function namedDuplicateRecoveryRule(
 }
 
 function trustedProfiles() {
-  const profiles: OrganizationIdentityAuthorityProfile[] = [{
-    profileCode: "gleif-company-identity",
-    profileVersion: "v1",
-    providerCode: "gleif",
-    endpointCode: "company-search",
-    allowMultiIdentifierSubjectBinding: true,
-    rules: [{
-      kind: "lei",
-      scheme: "iso-17442",
-      jurisdictions: ["GLOBAL"],
-      entityTypes: ["legal_entity"],
-      normalizerVersions: ["gleif-lei-normalizer-v1"],
-      validatorVersions: ["iso-17442-mod97-v1"]
-    }]
-  }];
+  const profiles: OrganizationIdentityAuthorityProfile[] =
+    structuredClone(PROSPECT_IDENTITY_AUTHORITY_PROFILES);
   if (process.env.NODE_ENV === "test") {
     profiles.push({
       profileCode: "identity-authority-test",

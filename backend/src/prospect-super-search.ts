@@ -16,6 +16,7 @@ import {
   enhanceProspectSearchRoundPlan,
   planProspectSearchRound
 } from "./prospect-search-planner.js";
+import { prospectCandidateQualificationCounts } from "./prospect-scorecard.js";
 import type { CrmStore } from "./store.js";
 import type {
   ProspectSearchRun,
@@ -269,20 +270,127 @@ function missionSearchModes(store: CrmStore, mission: ProspectSuperSearchMission
   };
 }
 
-function updateMissionTotals(store: CrmStore, mission: ProspectSuperSearchMission) {
-  const rounds = missionRounds(store, mission.id);
-  const runIds = new Set(rounds.map((item) => item.runId));
-  const candidateIds = new Set(
+function candidateQualificationCounts(
+  store: CrmStore,
+  mission: ProspectSuperSearchMission,
+  candidateIds: ReadonlySet<string>
+) {
+  return prospectCandidateQualificationCounts(store, {
+    teamId: mission.teamId,
+    ownerId: mission.ownerId,
+    candidateIds
+  });
+}
+
+function missionCandidateIds(store: CrmStore, mission: ProspectSuperSearchMission) {
+  const runIds = new Set(missionRounds(store, mission.id).map((item) => item.runId));
+  return new Set(
     (store.prospectCandidateProcessingStates || [])
-      .filter((item) => runIds.has(item.runId) && item.status === "completed" && item.candidateId)
+      .filter((item) =>
+        item.teamId === mission.teamId
+        && item.ownerId === mission.ownerId
+        && runIds.has(item.runId)
+        && item.status === "completed"
+        && item.candidateId
+      )
       .map((item) => item.candidateId!)
   );
-  mission.rawCount = rounds.reduce((sum, item) => sum + item.rawCount, 0);
-  mission.uniqueCount = candidateIds.size || rounds.reduce((sum, item) => sum + item.uniqueCount, 0);
-  mission.candidateCount = candidateIds.size || rounds.reduce((sum, item) => sum + item.candidateCount, 0);
-  mission.pendingCount = rounds.reduce((sum, item) => sum + item.pendingCount, 0);
-  mission.filteredCount = rounds.reduce((sum, item) => sum + item.filteredCount, 0);
-  mission.totalCost = rounds.reduce((sum, item) => sum + item.cost, 0);
+}
+
+function liveMissionCounts(store: CrmStore, mission: ProspectSuperSearchMission) {
+  const rounds = missionRounds(store, mission.id);
+  const candidateIds = missionCandidateIds(store, mission);
+  const counts = candidateQualificationCounts(store, mission, candidateIds);
+  const hasCandidateRefs = candidateIds.size > 0;
+  return {
+    rawCount: rounds.reduce((sum, item) => sum + item.rawCount, 0),
+    uniqueCount: hasCandidateRefs
+      ? candidateIds.size
+      : rounds.reduce((sum, item) => sum + item.uniqueCount, 0),
+    candidateCount: hasCandidateRefs
+      ? candidateIds.size
+      : rounds.reduce((sum, item) => sum + item.candidateCount, 0),
+    reviewReadyCount: hasCandidateRefs
+      ? counts.reviewReadyCount
+      : mission.reviewReadyCount ?? mission.candidateCount,
+    vqaCount: hasCandidateRefs ? counts.vqaCount : mission.vqaCount || 0,
+    pendingCount: rounds.reduce((sum, item) => sum + item.pendingCount, 0),
+    filteredCount: rounds.reduce((sum, item) => sum + item.filteredCount, 0),
+    totalCost: rounds.reduce((sum, item) => sum + item.cost, 0)
+  };
+}
+
+function liveRoundSnapshot(
+  store: CrmStore,
+  mission: ProspectSuperSearchMission,
+  round: ProspectSuperSearchRound
+) {
+  const candidateIds = new Set(
+    (store.prospectCandidateProcessingStates || [])
+      .filter((item) =>
+        item.teamId === mission.teamId
+        && item.ownerId === mission.ownerId
+        && item.runId === round.runId
+        && item.status === "completed"
+        && item.candidateId
+      )
+      .map((item) => item.candidateId!)
+  );
+  if (!candidateIds.size) return { ...round };
+  const counts = candidateQualificationCounts(store, mission, candidateIds);
+  return {
+    ...round,
+    reviewReadyCount: counts.reviewReadyCount,
+    vqaCount: counts.vqaCount,
+    yieldRate: round.rawCount
+      ? counts.reviewReadyCount / round.rawCount
+      : 0
+  };
+}
+
+function updateMissionTotals(store: CrmStore, mission: ProspectSuperSearchMission) {
+  Object.assign(mission, liveMissionCounts(store, mission));
+}
+
+function runCostSummary(
+  store: CrmStore,
+  mission: ProspectSuperSearchMission,
+  runId: string
+) {
+  const byProvider = new Map<string, {
+    amount: number;
+    unknownCount: number;
+    currencyMismatch: boolean;
+  }>();
+  for (const attempt of store.prospectExecutionAttempts.filter((item) =>
+    item.runId === runId
+    && item.teamId === mission.teamId
+    && item.ownerId === mission.ownerId
+    && Boolean(item.finishedAt)
+  )) {
+    const current = byProvider.get(attempt.providerCode) || {
+      amount: 0,
+      unknownCount: 0,
+      currencyMismatch: false
+    };
+    if (attempt.costAmount === null || attempt.costKind === "unknown") {
+      current.unknownCount += 1;
+    } else {
+      current.amount += attempt.costAmount;
+      if (attempt.costAmount > 0
+        && mission.currency
+        && attempt.currency !== mission.currency) {
+        current.currencyMismatch = true;
+      }
+    }
+    byProvider.set(attempt.providerCode, current);
+  }
+  return {
+    byProvider,
+    amount: [...byProvider.values()].reduce((sum, item) => sum + item.amount, 0),
+    unknownCount: [...byProvider.values()].reduce((sum, item) => sum + item.unknownCount, 0),
+    currencyMismatch: [...byProvider.values()].some((item) => item.currencyMismatch)
+  };
 }
 
 export function refreshProspectSuperSearchMissionResults(
@@ -291,6 +399,10 @@ export function refreshProspectSuperSearchMissionResults(
 ) {
   const mission = store.prospectSuperSearchMissions.find((item) => item.id === missionId);
   if (!mission) return null;
+  const before = JSON.stringify({
+    mission,
+    rounds: missionRounds(store, mission.id)
+  });
   for (const round of missionRounds(store, mission.id)) {
     const run = store.prospectSearchRuns.find((item) =>
       item.id === round.runId && item.teamId === mission.teamId
@@ -301,28 +413,66 @@ export function refreshProspectSuperSearchMissionResults(
     const cleaningByProvider = new Map(
       report.sources.map((item) => [item.providerCode, item])
     );
+    const cost = runCostSummary(store, mission, run.id);
     round.rawCount = summary.providerRawCount;
     round.uniqueCount = summary.candidateCount;
     round.candidateCount = summary.candidateCount;
+    const roundCandidateIds = new Set(
+      (store.prospectCandidateProcessingStates || [])
+        .filter((item) =>
+          item.teamId === mission.teamId
+          && item.ownerId === mission.ownerId
+          && item.runId === run.id
+          && item.status === "completed"
+          && item.candidateId
+        )
+        .map((item) => item.candidateId!)
+    );
+    const qualificationCounts = candidateQualificationCounts(
+      store,
+      mission,
+      roundCandidateIds
+    );
+    round.reviewReadyCount = qualificationCounts.reviewReadyCount;
+    round.vqaCount = qualificationCounts.vqaCount;
     round.duplicateCount = summary.providerDuplicateCount + summary.mergedCount + summary.suppressedCount;
     round.filteredCount = summary.providerInvalidCount + summary.rejectedCount + summary.suppressedCount + summary.mergedCount;
     round.pendingCount = summary.pendingCount;
     round.duplicateRate = summary.providerRawCount ? round.duplicateCount / summary.providerRawCount : 0;
-    round.yieldRate = summary.providerRawCount ? round.candidateCount / summary.providerRawCount : 0;
+    round.yieldRate = summary.providerRawCount
+      ? (round.reviewReadyCount || 0) / summary.providerRawCount
+      : 0;
     round.queryCells = (round.queryCells || []).map((cell) => {
       const cleaning = cleaningByProvider.get(cell.providerId);
+      const providerCost = cost.byProvider.get(cell.providerId);
       return {
         ...cell,
         rawCount: cleaning?.rawCount || 0,
         invalidCount: cleaning?.invalidCount || 0,
         duplicateCount: cleaning?.duplicateCount || 0,
-        candidateCount: cleaning?.candidateCount || 0
+        candidateCount: cleaning?.candidateCount || 0,
+        costAmount: providerCost?.amount || 0,
+        costUnknownCount: providerCost?.unknownCount || 0,
+        currency: mission.currency
       };
     });
+    round.cost = cost.amount;
+    round.costUnknownCount = cost.unknownCount;
+    round.costIntegrityStatus = cost.currencyMismatch
+      ? "currency_mismatch"
+      : cost.unknownCount
+        ? "unknown"
+        : "complete";
   }
   updateMissionTotals(store, mission);
-  mission.revision += 1;
-  mission.updatedAt = new Date().toISOString();
+  const after = JSON.stringify({
+    mission,
+    rounds: missionRounds(store, mission.id)
+  });
+  if (before !== after) {
+    mission.revision += 1;
+    mission.updatedAt = new Date().toISOString();
+  }
   return mission;
 }
 
@@ -337,10 +487,12 @@ function completeRound(store: CrmStore, mission: ProspectSuperSearchMission, run
   const cleaningByProvider = new Map(
     diagnostics.cleaningReport.sources.map((item) => [item.providerCode, item])
   );
+  const cost = runCostSummary(store, mission, run.id);
   const completedAt = new Date().toISOString();
   round.queryCells = (round.queryCells || []).map((cell) => {
     const source = sourceByProvider.get(cell.providerId);
     const cleaning = cleaningByProvider.get(cell.providerId);
+    const providerCost = cost.byProvider.get(cell.providerId);
     const status = source?.status === "failed"
       ? "failed"
       : source?.status === "cancelled"
@@ -357,6 +509,9 @@ function completeRound(store: CrmStore, mission: ProspectSuperSearchMission, run
       invalidCount: cleaning?.invalidCount || 0,
       duplicateCount: cleaning?.duplicateCount || 0,
       candidateCount: cleaning?.candidateCount || 0,
+      costAmount: providerCost?.amount || 0,
+      costUnknownCount: providerCost?.unknownCount || 0,
+      currency: mission.currency,
       errorCode: source?.failure?.errorCode || "",
       errorMessage: source?.failure?.errorMessage || "",
       completedAt
@@ -365,29 +520,64 @@ function completeRound(store: CrmStore, mission: ProspectSuperSearchMission, run
   round.rawCount = summary.providerRawCount;
   round.uniqueCount = summary.candidateCount;
   round.candidateCount = summary.candidateCount;
+  const roundCandidateIds = new Set(
+    (store.prospectCandidateProcessingStates || [])
+      .filter((item) =>
+        item.teamId === mission.teamId
+        && item.ownerId === mission.ownerId
+        && item.runId === run.id
+        && item.status === "completed"
+        && item.candidateId
+      )
+      .map((item) => item.candidateId!)
+  );
+  const qualificationCounts = candidateQualificationCounts(
+    store,
+    mission,
+    roundCandidateIds
+  );
+  round.reviewReadyCount = qualificationCounts.reviewReadyCount;
+  round.vqaCount = qualificationCounts.vqaCount;
   round.duplicateCount = summary.providerDuplicateCount + summary.mergedCount + summary.suppressedCount;
   round.filteredCount = summary.providerInvalidCount + summary.rejectedCount + summary.suppressedCount + summary.mergedCount;
   round.pendingCount = summary.pendingCount;
   round.duplicateRate = summary.providerRawCount ? round.duplicateCount / summary.providerRawCount : 0;
-  round.yieldRate = summary.providerRawCount ? round.candidateCount / summary.providerRawCount : 0;
+  round.yieldRate = summary.providerRawCount
+    ? (round.reviewReadyCount || 0) / summary.providerRawCount
+    : 0;
+  round.cost = cost.amount;
+  round.costUnknownCount = cost.unknownCount;
+  round.costIntegrityStatus = cost.currencyMismatch
+    ? "currency_mismatch"
+    : cost.unknownCount
+      ? "unknown"
+      : "complete";
   round.completedAt = completedAt;
   updateMissionTotals(store, mission);
   appendEvent(
     store,
     mission,
     "round_completed",
-    `第 ${round.roundNo} 轮完成：原始 ${round.rawCount}，候选 ${round.candidateCount}，过滤 ${round.filteredCount}`
+    `第 ${round.roundNo} 轮完成：原始 ${round.rawCount}，候选 ${round.candidateCount}，可审查 ${round.reviewReadyCount || 0}，VQA ${round.vqaCount || 0}，过滤 ${round.filteredCount}`
   );
   return round;
 }
 
 export function prospectSuperSearchConvergenceReason(store: CrmStore, mission: ProspectSuperSearchMission) {
   const now = Date.now();
-  if (mission.candidateCount >= mission.targetCandidateCount) return "已达到目标候选数量";
+  if ((mission.reviewReadyCount || 0) >= mission.targetCandidateCount) {
+    return "已达到目标可审查候选数量";
+  }
   if (now >= new Date(mission.deadlineAt).getTime()) return "已达到最长运行时间";
-  if (mission.currentRound >= mission.maxRounds) return "已达到最大搜索轮次";
   if (mission.costLimit > 0 && mission.totalCost >= mission.costLimit) return "已达到费用上限";
   const completed = missionRounds(store, mission.id).filter((item) => item.completedAt);
+  if (mission.costLimit > 0 && completed.some((item) => item.costIntegrityStatus === "currency_mismatch")) {
+    return "费用回执币种与任务预算不一致，已停止后续调用";
+  }
+  if (mission.costLimit > 0 && completed.some((item) => (item.costUnknownCount || 0) > 0)) {
+    return "费用回执不完整，已停止后续调用";
+  }
+  if (mission.currentRound >= mission.maxRounds) return "已达到最大搜索轮次";
   const recent = completed.slice(-2);
   if (recent.length === 2 && recent.every((item) => item.yieldRate < 0.03 && item.duplicateRate > 0.9)) {
     return "连续两轮新增率过低且重复率过高，搜索已收敛";
@@ -515,12 +705,16 @@ async function startRound(
     rawCount: 0,
     uniqueCount: 0,
     candidateCount: 0,
+    reviewReadyCount: 0,
+    vqaCount: 0,
     duplicateCount: 0,
     filteredCount: 0,
     pendingCount: 0,
     duplicateRate: 0,
     yieldRate: 0,
     cost: 0,
+    costUnknownCount: 0,
+    costIntegrityStatus: "complete",
     decision: "pending",
     decisionReason: "",
     createdAt: now,
@@ -681,6 +875,7 @@ export async function createProspectSuperSearch(input: {
     rawCount: 0,
     uniqueCount: 0,
     candidateCount: 0,
+    vqaCount: 0,
     pendingCount: 0,
     filteredCount: 0,
     revision: 1,
@@ -696,7 +891,7 @@ export async function createProspectSuperSearch(input: {
     input.store,
     mission,
     "created",
-    `超级搜索已创建：目标 ${mission.targetCandidateCount} 家，最多 ${mission.maxRounds} 轮${webProviderIds.length ? `，实时 Web API ${webProviderIds.length} 个` : ""}${mapProviderIds.length ? `，地图来源 ${mapProviderIds.length} 个` : ""}${aiDiscoveryProviderIds.length ? "，AI 深度发现已启用" : ""}`
+    `超级搜索已创建：目标 ${mission.targetCandidateCount} 家可审查候选，最多 ${mission.maxRounds} 轮${webProviderIds.length ? `，实时 Web API ${webProviderIds.length} 个` : ""}${mapProviderIds.length ? `，地图来源 ${mapProviderIds.length} 个` : ""}${aiDiscoveryProviderIds.length ? "，AI 深度发现已启用" : ""}`
   );
   await input.store.persist();
   try {
@@ -714,24 +909,90 @@ export function listProspectSuperSearches(store: CrmStore, user: SessionUser, li
     .filter((item) => visibleTo(user, item))
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .slice(0, Math.min(100, Math.max(1, limit)))
-    .map((item) => ({
-      ...item,
+    .map((item) => {
+      const liveMission = { ...item, ...liveMissionCounts(store, item) };
+      return {
+      ...liveMission,
       ...missionSearchModes(store, item),
-      rounds: missionRounds(store, item.id)
-    }));
+      rounds: missionRounds(store, item.id).map((round) =>
+        liveRoundSnapshot(store, item, round)
+      ),
+      acceptance: superSearchAcceptance(store, liveMission)
+    };});
   return { missions, total: missions.length };
+}
+
+function superSearchAcceptance(
+  store: CrmStore,
+  mission: ProspectSuperSearchMission
+) {
+  const rounds = missionRounds(store, mission.id);
+  const cells = rounds.flatMap((item) => item.queryCells || []);
+  const failedSources = cells.filter((item) => item.status === "failed");
+  const skippedSources = cells.filter((item) => item.status === "cancelled");
+  const completedSources = cells.filter((item) =>
+    ["succeeded", "succeeded_empty", "partial_success"].includes(item.status)
+  );
+  const terminal = ["cancelled", "succeeded", "partial_success", "failed"]
+    .includes(mission.status);
+  const reviewReadyCount = mission.reviewReadyCount || 0;
+  const vqaCount = mission.vqaCount || 0;
+  const outcome = !terminal ? "running"
+    : mission.status === "cancelled" ? "cancelled"
+      : reviewReadyCount >= mission.targetCandidateCount ? "success"
+        : mission.candidateCount > 0 || completedSources.length > 0
+          ? "partial_success"
+          : mission.status === "failed" ? "failed" : "empty";
+  const recommendedNextAction = outcome === "running"
+    ? "等待当前搜索轮次完成"
+    : vqaCount > 0
+      ? "复核已通过 VQA 的候选并确认转线索顺序"
+      : reviewReadyCount > 0
+        ? "在搜客清单完成企业、ICP、渠道和可联系审批"
+        : failedSources.length
+          ? "检查失败来源的错误码、配额和连接状态后重试"
+          : "调整目标市场、关键词或数据源后重新搜索";
+  return {
+    outcome,
+    sourceReturnedCount: mission.rawCount,
+    candidateCount: mission.candidateCount,
+    reviewReadyCount,
+    vqaCount,
+    targetReviewReadyCount: mission.targetCandidateCount,
+    sourceSuccessCount: completedSources.length,
+    sourceFailureCount: failedSources.length,
+    sourceSkippedCount: skippedSources.length,
+    totalCost: mission.totalCost,
+    currency: mission.currency,
+    costIntegrityStatus: rounds.some((item) =>
+      item.costIntegrityStatus === "currency_mismatch"
+    ) ? "currency_mismatch"
+      : rounds.some((item) => item.costIntegrityStatus === "unknown")
+        ? "unknown" : "complete",
+    stopReason: mission.stopReason,
+    recommendedNextAction,
+    failedSources: failedSources.map((item) => ({
+      providerId: item.providerId,
+      errorCode: item.errorCode || "PROVIDER_EXECUTION_FAILED",
+      errorMessage: item.errorMessage || "来源执行失败"
+    }))
+  };
 }
 
 export function superSearchDetail(store: CrmStore, user: SessionUser, missionInput: string | ProspectSuperSearchMission) {
   const mission = typeof missionInput === "string" ? findVisibleMission(store, user, missionInput) : missionInput;
   if (!visibleTo(user, mission)) throw new ProspectSuperSearchError(404, "SUPER_SEARCH_NOT_FOUND", "超级搜索任务不存在或无权访问");
   const run = mission.currentRunId ? store.prospectSearchRuns.find((item) => item.id === mission.currentRunId) : undefined;
+  const liveMission = { ...mission, ...liveMissionCounts(store, mission) };
   return {
-    mission: { ...mission, ...missionSearchModes(store, mission) },
-    rounds: missionRounds(store, mission.id),
+    mission: { ...liveMission, ...missionSearchModes(store, mission) },
+    rounds: missionRounds(store, mission.id).map((round) =>
+      liveRoundSnapshot(store, mission, round)
+    ),
     events: missionEvents(store, mission.id),
     currentRun: run || null,
-    currentDiagnostics: run ? prospectRunDiagnostics(store, run) : null
+    currentDiagnostics: run ? prospectRunDiagnostics(store, run) : null,
+    acceptance: superSearchAcceptance(store, liveMission)
   };
 }
 
@@ -815,7 +1076,16 @@ export class ProspectSuperSearchRunner {
             round.decision = stopReason.includes("收敛") ? "converged" : "limit_reached";
             round.decisionReason = stopReason;
           }
-          finishMission(this.store, mission, mission.candidateCount ? "succeeded" : run.status === "failed" ? "failed" : "partial_success", stopReason);
+          finishMission(
+            this.store,
+            mission,
+            (mission.reviewReadyCount || 0) >= mission.targetCandidateCount
+              ? "succeeded"
+              : mission.candidateCount
+                ? "partial_success"
+                : run.status === "failed" ? "failed" : "partial_success",
+            stopReason
+          );
         } else {
           if (round && round.decision === "pending") {
             round.decision = "continue";

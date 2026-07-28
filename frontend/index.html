@@ -65,54 +65,121 @@
       height: 100vh;
       display: flex;
       flex-direction: column;
-      gap: 12px;
-      padding: 14px 12px;
-      color: #e8edf7;
-      background: linear-gradient(180deg, #151821 0%, #1b202c 54%, #10131a 100%);
-      border-right: 1px solid rgba(255, 255, 255, .08);
+      gap: 10px;
+      padding: 14px 11px 12px;
+      color: #edf0f7;
+      background: #161821;
+      border-right: 1px solid #282b37;
     }
 
     .brand {
+      position: relative;
       display: flex;
       align-items: center;
       gap: 12px;
-      padding: 6px 8px 12px;
-      border-bottom: 1px solid rgba(255, 255, 255, .1);
+      min-height: 58px;
+      padding: 4px 8px 13px;
+    }
+
+    .brand::after {
+      content: "";
+      position: absolute;
+      right: 8px;
+      bottom: 0;
+      left: 8px;
+      height: 1px;
+      background: #2b2e3a;
     }
 
     .brand-mark {
-      width: 38px;
-      height: 38px;
-      border-radius: var(--radius);
-      display: grid;
-      place-items: center;
-      color: white;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 42px;
+      height: 42px;
+      flex: 0 0 42px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, .78);
+      border-radius: 13px;
+      color: #1f2332;
+      background: #f5f6ff;
+      box-shadow: 0 10px 24px rgba(7, 9, 16, .24);
+      transition: transform .35s cubic-bezier(.16, 1, .3, 1), box-shadow .35s ease;
+    }
+
+    .brand-mark::after {
+      content: "";
+      position: absolute;
+      right: 5px;
+      bottom: 5px;
+      width: 8px;
+      height: 3px;
+      border-radius: 2px;
+      background: #3157d5;
+      transition: width .35s cubic-bezier(.16, 1, .3, 1);
+    }
+
+    .brand-mark span {
+      position: relative;
+      z-index: 1;
+      font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+      font-size: 17px;
       font-weight: 800;
-      background:
-        linear-gradient(135deg, var(--brand), var(--brand-2));
-      box-shadow: 0 10px 24px rgba(91, 83, 213, .34);
+      line-height: 1;
+      letter-spacing: 0;
+      transition: transform .35s cubic-bezier(.16, 1, .3, 1), color .25s ease;
     }
 
-    .brand strong {
-      display: block;
-      font-size: 15px;
-      color: #fff;
+    .brand-mark span:first-child {
+      transform: translateX(2px);
     }
 
-    .brand span {
+    .brand-mark span:last-child {
+      color: #3157d5;
+      transform: translate(-1px, 3px);
+    }
+
+    .brand:hover .brand-mark {
+      transform: rotate(-3deg) scale(1.035);
+      box-shadow: 0 14px 28px rgba(7, 9, 16, .3);
+    }
+
+    .brand:hover .brand-mark::after {
+      width: 15px;
+    }
+
+    .brand:hover .brand-mark span:first-child {
+      transform: translateX(-1px);
+    }
+
+    .brand:hover .brand-mark span:last-child {
+      transform: translate(2px, 3px);
+    }
+
+    .brand > div:last-child strong {
       display: block;
-      margin-top: 2px;
-      font-size: 12px;
-      color: #9ea9bc;
+      color: #f7f8fc;
+      font-size: 14px;
+      font-weight: 720;
+      line-height: 1.2;
+    }
+
+    .brand > div:last-child span {
+      display: block;
+      margin-top: 3px;
+      color: #858da0;
+      font-size: 10.5px;
+      line-height: 1.2;
     }
 
     .nav {
       display: grid;
-      gap: 3px;
+      gap: 2px;
       min-height: 0;
       overflow-y: auto;
       overscroll-behavior: contain;
-      padding-right: 2px;
+      padding: 2px 2px 6px 0;
       scrollbar-width: none;
     }
 
@@ -122,34 +189,50 @@
 
     .nav button {
       appearance: none;
+      position: relative;
       border: 0;
       width: 100%;
-      height: 34px;
-      border-radius: var(--radius);
+      height: 38px;
+      overflow: hidden;
+      border-radius: 10px;
       display: grid;
-      grid-template-columns: 28px 1fr auto;
+      grid-template-columns: 30px 1fr auto;
       align-items: center;
-      gap: 8px;
-      padding: 0 10px;
-      color: #b9c3d5;
+      gap: 7px;
+      padding: 0 9px;
+      color: #aeb5c4;
       background: transparent;
       cursor: pointer;
       text-align: left;
-      transition: background .18s ease, color .18s ease, transform .18s ease, box-shadow .18s ease;
+      transition: background .26s ease, color .22s ease, transform .3s cubic-bezier(.16, 1, .3, 1), box-shadow .3s ease;
     }
 
     .nav-primary {
       display: grid;
-      gap: 3px;
+      gap: 2px;
+    }
+
+    .nav-primary > button::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 9px;
+      width: 3px;
+      height: 20px;
+      border-radius: 0 3px 3px 0;
+      background: #3157d5;
+      opacity: 0;
+      transform: scaleY(.35);
+      transition: opacity .2s ease, transform .32s cubic-bezier(.16, 1, .3, 1);
     }
 
     .nav button.nav-secondary-button {
-      height: 28px;
+      height: 31px;
       grid-template-columns: 1fr;
       gap: 0;
-      padding: 0 10px 0 13px;
-      border-radius: 7px;
-      color: #98a4b8;
+      padding: 0 10px 0 14px;
+      border-radius: 8px;
+      color: #8f98aa;
       background: transparent;
       font-size: 12px;
       position: relative;
@@ -158,47 +241,73 @@
     .nav button.nav-secondary-button::before {
       content: "";
       position: absolute;
-      left: 4px;
-      top: 9px;
-      bottom: 9px;
+      left: 5px;
+      top: 10px;
+      bottom: 10px;
       width: 2px;
       border-radius: 999px;
       background: transparent;
-      transition: background .18s ease, top .18s ease, bottom .18s ease;
+      transition: background .2s ease, top .24s ease, bottom .24s ease, transform .24s ease;
     }
 
     .nav button.nav-secondary-button:hover,
     .nav button.nav-secondary-button.active {
-      color: #eef5ff;
-      background: rgba(255, 255, 255, .07);
-      transform: translateX(1px);
+      color: #f3f5fa;
+      background: #232631;
+      transform: translateX(3px);
       box-shadow: none;
     }
 
     .nav button.nav-secondary-button.active {
-      background: rgba(125, 211, 252, .11);
+      color: #fff;
+      background: #292d3b;
+      animation: navActiveIn .34s cubic-bezier(.16, 1, .3, 1) both;
     }
 
     .nav button.nav-secondary-button:hover::before,
     .nav button.nav-secondary-button.active::before {
-      top: 7px;
-      bottom: 7px;
-      background: #7dd3fc;
+      top: 6px;
+      bottom: 6px;
+      background: #6f83ed;
+      transform: scaleY(1);
     }
 
     .nav button:hover,
     .nav button.active {
       color: #fff;
-      background: rgba(255, 255, 255, .09);
+      background: #22252f;
     }
 
     .nav-primary button:hover {
-      transform: translateX(2px);
-      background: linear-gradient(135deg, rgba(255, 255, 255, .11), rgba(125, 211, 252, .08));
+      transform: translateX(3px);
+      background: #22252f;
     }
 
     .nav button.active {
-      box-shadow: inset 3px 0 0 #7dd3fc;
+      color: #22263a;
+      background: #f1f3ff;
+      box-shadow: 0 8px 22px rgba(5, 7, 13, .2);
+      animation: navActiveIn .34s cubic-bezier(.16, 1, .3, 1) both;
+    }
+
+    .nav-primary > button.active::before {
+      opacity: 1;
+      transform: scaleY(1);
+    }
+
+    .nav button:focus-visible,
+    .nav-section-title:focus-visible {
+      outline: 2px solid #8295f4;
+      outline-offset: 2px;
+    }
+
+    .nav button:active {
+      transform: translateX(2px) scale(.985);
+    }
+
+    @keyframes navActiveIn {
+      from { opacity: .72; transform: translateX(-5px) scale(.985); }
+      to { opacity: 1; transform: translateX(0) scale(1); }
     }
 
     .nav svg,
@@ -206,10 +315,23 @@
       width: 17px;
       height: 17px;
       stroke: currentColor;
-      stroke-width: 2;
+      stroke-width: 1.8;
       fill: none;
       stroke-linecap: round;
       stroke-linejoin: round;
+    }
+
+    .nav button > svg {
+      transition: transform .32s cubic-bezier(.16, 1, .3, 1), color .22s ease;
+    }
+
+    .nav-primary button:hover > svg {
+      transform: scale(1.12) rotate(-3deg);
+    }
+
+    .nav-primary button.active > svg {
+      color: #3157d5;
+      transform: scale(1.08);
     }
 
     .nav span {
@@ -217,41 +339,54 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      font-size: 14px;
+      font-size: 13px;
+      font-weight: 560;
     }
 
     .nav em {
       display: inline-grid;
       place-items: center;
-      min-width: 22px;
-      height: 20px;
-      padding: 0 6px;
-      border-radius: 999px;
-      color: #b7f5e8;
-      background: rgba(26, 167, 161, .14);
-      font-size: 11px;
+      min-width: 21px;
+      height: 19px;
+      padding: 0 5px;
+      border-radius: 6px;
+      color: #a9b1c4;
+      background: #242733;
+      font-size: 10px;
       font-style: normal;
+      transition: color .2s ease, background .2s ease, transform .3s cubic-bezier(.16, 1, .3, 1);
+    }
+
+    .nav button:hover em {
+      color: #e4e8f2;
+      background: #303442;
+      transform: translateX(-1px);
+    }
+
+    .nav button.active em {
+      color: #3157d5;
+      background: #dfe4ff;
     }
 
     .nav-section {
-      margin-top: 5px;
+      margin-top: 4px;
     }
 
     .nav-section-title {
       display: grid;
-      grid-template-columns: 28px minmax(0, 1fr) auto;
+      grid-template-columns: 30px minmax(0, 1fr) auto;
       align-items: center;
       gap: 8px;
-      min-height: 34px;
-      padding: 0 10px;
-      border-radius: var(--radius);
-      color: #b9c3d5;
-      font-size: 14px;
-      font-weight: 800;
+      min-height: 38px;
+      padding: 0 9px;
+      border-radius: 10px;
+      color: #aeb5c4;
+      font-size: 13px;
+      font-weight: 650;
       letter-spacing: 0;
       cursor: pointer;
       user-select: none;
-      transition: background .18s ease, color .18s ease, transform .18s ease, box-shadow .18s ease;
+      transition: background .26s ease, color .22s ease, transform .3s cubic-bezier(.16, 1, .3, 1), box-shadow .3s ease;
     }
 
     .nav-section-title::-webkit-details-marker {
@@ -266,7 +401,7 @@
       width: 17px;
       height: 17px;
       stroke: currentColor;
-      stroke-width: 2;
+      stroke-width: 1.8;
       fill: none;
       stroke-linecap: round;
       stroke-linejoin: round;
@@ -275,9 +410,14 @@
     .nav-section-title:hover,
     .nav-section[open] .nav-section-title {
       color: #fff;
-      background: rgba(255, 255, 255, .09);
-      transform: translateX(2px);
-      box-shadow: inset 3px 0 0 rgba(125, 211, 252, .75);
+      background: #22252f;
+      transform: translateX(3px);
+      box-shadow: none;
+    }
+
+    .nav-section:has(.nav-secondary-button.active) .nav-section-title {
+      color: #f4f6fb;
+      background: #20232d;
     }
 
     .nav-section-title span {
@@ -285,18 +425,18 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      font-size: 14px;
+      font-size: 13px;
     }
 
     .nav-chevron {
-      width: 20px;
-      height: 20px;
+      width: 22px;
+      height: 22px;
       display: inline-grid;
       place-items: center;
       border-radius: 999px;
-      color: #7dd3fc;
-      background: rgba(125, 211, 252, .08);
-      transition: transform .18s ease, background .18s ease, color .18s ease;
+      color: #8d96aa;
+      background: #232630;
+      transition: transform .3s cubic-bezier(.16, 1, .3, 1), background .22s ease, color .22s ease;
     }
 
     .nav-chevron::before {
@@ -310,7 +450,7 @@
 
     .nav-section[open] .nav-chevron {
       color: #fff;
-      background: rgba(125, 211, 252, .16);
+      background: #3157d5;
       transform: rotate(180deg);
     }
 
@@ -318,31 +458,30 @@
       display: grid;
       grid-template-columns: 1fr;
       gap: 2px;
-      padding: 2px 0 4px 12px;
+      padding: 3px 0 5px 12px;
       margin-left: 10px;
-      border-left: 1px solid rgba(255, 255, 255, .07);
-      animation: navDropdown .18s ease both;
+      border-left: 1px solid #2c303c;
+      animation: navDropdown .28s cubic-bezier(.16, 1, .3, 1) both;
     }
 
     @keyframes navDropdown {
       from {
         opacity: 0;
-        transform: translateY(-4px);
+        transform: translateY(-7px) scale(.985);
       }
       to {
         opacity: 1;
-        transform: translateY(0);
+        transform: translateY(0) scale(1);
       }
     }
 
     .nav-footer {
       margin-top: auto;
       display: grid;
-      gap: 10px;
-      padding: 12px;
-      border-radius: var(--radius);
-      background: rgba(255, 255, 255, .07);
-      border: 1px solid rgba(255, 255, 255, .1);
+      gap: 8px;
+      padding: 12px 9px 2px;
+      border-top: 1px solid #2b2e3a;
+      background: transparent;
     }
 
     .nav-footer .row {
@@ -350,16 +489,31 @@
       justify-content: space-between;
       align-items: center;
       gap: 10px;
-      font-size: 12px;
-      color: #aeb9ca;
+      color: #858da0;
+      font-size: 10.5px;
     }
 
     .dot-ok {
-      width: 8px;
-      height: 8px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
       background: #35d399;
-      box-shadow: 0 0 0 4px rgba(53, 211, 153, .12);
+      box-shadow: 0 0 0 3px rgba(53, 211, 153, .1);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .brand-mark,
+      .brand-mark::after,
+      .brand-mark span,
+      .nav button,
+      .nav button > svg,
+      .nav em,
+      .nav-section-title,
+      .nav-chevron,
+      .nav-secondary-grid {
+        animation: none !important;
+        transition: none !important;
+      }
     }
 
     .main {
@@ -4181,6 +4335,50 @@
       background: linear-gradient(90deg, var(--brand), var(--aqua));
     }
 
+    .lead-score-summary {
+      min-width: 164px;
+      display: grid;
+      gap: 5px;
+    }
+
+    .lead-score-values {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(30px, 1fr));
+      gap: 3px;
+    }
+
+    .lead-score-values span {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 2px;
+      padding: 3px 4px;
+      border: 1px solid #e4eaf3;
+      border-radius: 4px;
+      color: #718096;
+      background: #f8fafc;
+      font-size: 9px;
+    }
+
+    .lead-score-values b {
+      color: #263244;
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .lead-score-summary > .badge {
+      width: max-content;
+      max-width: 100%;
+    }
+
+    .lead-score-summary > small {
+      max-width: 190px;
+      color: #66758b;
+      font-size: 9px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
     .lead-detail-stack {
       display: grid;
       gap: 10px;
@@ -4615,7 +4813,7 @@
     .lead-task-card {
       padding: 11px;
       border: 1px solid var(--line-soft);
-      border-radius: 8px;
+      border-radius: 14px;
       background: #fff;
       cursor: pointer;
       transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease;
@@ -4623,8 +4821,8 @@
 
     .lead-task-card:hover,
     .lead-task-card.active {
-      border-color: rgba(49,87,213,.28);
-      box-shadow: 0 10px 24px rgba(27,39,68,.07);
+      border-color: rgba(79,70,229,.32);
+      box-shadow: 0 12px 28px rgba(79,70,229,.10);
       transform: translateY(-1px);
     }
 
@@ -4851,7 +5049,8 @@
     #lead-finder .lead-query-tip,
     #lead-finder .lead-detail-card,
     #lead-finder .lead-api-row {
-      border-color: #dce4f2;
+      border-color: var(--lf-line);
+      border-radius: 14px;
       background: #fff;
       box-shadow: 0 7px 18px rgba(27,39,68,.045);
     }
@@ -4949,10 +5148,71 @@
     }
 
     .ai-provider-card p {
-      margin: 0;
+      margin: 4px 0 0;
       color: var(--muted);
       font-size: 12px;
       line-height: 1.5;
+    }
+
+    .ai-provider {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .ai-provider-badges {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .ai-free-tag {
+      flex: none;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1;
+      color: #0a7d3b;
+      background: #e7f7ee;
+      border: 1px solid #b6e6c8;
+      border-radius: 999px;
+      padding: 3px 7px;
+    }
+
+    .ai-provider-apply {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      font-size: 11px;
+      font-weight: 800;
+      color: #3157d5;
+      background: #eef2ff;
+      border: 1px solid #d9e1fb;
+      border-radius: 7px;
+      padding: 7px 8px;
+      text-decoration: none;
+      transition: background .16s ease, border-color .16s ease, transform .16s ease;
+    }
+
+    .ai-provider-apply:hover {
+      background: #e2e9ff;
+      border-color: rgba(49,87,213,.4);
+      transform: translateY(-1px);
+    }
+
+    .ai-provider-apply:active {
+      transform: translateY(0);
+    }
+
+    .ai-provider-hint {
+      margin: 0 0 10px;
+      color: #7c8899;
+      font-size: 11px;
+      line-height: 1.6;
+    }
+
+    .ai-provider-hint b {
+      color: #3157d5;
     }
 
     .ai-form-card {
@@ -5433,6 +5693,513 @@
       line-height: 1.55;
     }
 
+    .prospect-scorecard {
+      margin-bottom: 10px;
+      padding: 11px;
+      border: 1px solid #dfe7f2;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .prospect-scorecard-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 9px;
+    }
+
+    .prospect-score-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .prospect-score-grid > div {
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid #e5eaf2;
+      border-radius: 6px;
+      background: #f8fafc;
+    }
+
+    .prospect-score-grid span,
+    .prospect-score-grid small {
+      display: block;
+      color: #66758b;
+      font-size: 10px;
+    }
+
+    .prospect-score-grid b {
+      display: block;
+      margin: 3px 0;
+      color: #111827;
+      font-size: 20px;
+    }
+
+    .prospect-score-grid i {
+      display: block;
+      height: 3px;
+      margin-bottom: 4px;
+      overflow: hidden;
+      border-radius: 2px;
+      background: #e5eaf2;
+    }
+
+    .prospect-score-grid i::before {
+      display: block;
+      width: var(--p);
+      height: 100%;
+      content: "";
+      background: #237a57;
+    }
+
+    .prospect-scorecard > p {
+      margin: 9px 0 0;
+      color: #526178;
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .prospect-qualification-panel {
+      margin: 0 0 12px;
+      padding: 12px 0;
+      border-top: 1px solid #dfe7f2;
+      border-bottom: 1px solid #dfe7f2;
+    }
+
+    .prospect-qualification-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .prospect-qualification-head b,
+    .prospect-qualification-head small {
+      display: block;
+    }
+
+    .prospect-qualification-head b {
+      color: #172033;
+      font-size: 13px;
+    }
+
+    .prospect-qualification-head small {
+      margin-top: 3px;
+      color: #66758b;
+      font-size: 10px;
+      overflow-wrap: anywhere;
+    }
+
+    .prospect-qualification-steps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .prospect-qualification-step {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 8px minmax(0, 1fr);
+      gap: 7px;
+      padding: 8px;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      background: #f8fafc;
+    }
+
+    .prospect-qualification-step > span {
+      width: 7px;
+      height: 7px;
+      margin-top: 3px;
+      border-radius: 50%;
+      background: #94a3b8;
+    }
+
+    .prospect-qualification-step.passed > span { background: #15805d; }
+    .prospect-qualification-step.current > span { background: #b7791f; }
+    .prospect-qualification-step.blocked > span { background: #b42318; }
+
+    .prospect-qualification-step b,
+    .prospect-qualification-step small {
+      display: block;
+      overflow-wrap: anywhere;
+    }
+
+    .prospect-qualification-step b {
+      color: #263244;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .prospect-qualification-step small {
+      margin-top: 3px;
+      color: #66758b;
+      font-size: 9px;
+      line-height: 1.45;
+    }
+
+    .prospect-qualification-feedback,
+    .prospect-approved-channel {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-top: 8px;
+      padding: 8px 9px;
+      border-left: 3px solid #b7791f;
+      background: #fff9eb;
+      color: #526178;
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .prospect-qualification-feedback.is-blocked {
+      border-left-color: #b42318;
+      background: #fff5f4;
+    }
+
+    .prospect-approved-channel {
+      border-left-color: #15805d;
+      background: #f1fbf7;
+    }
+
+    .prospect-qualification-feedback b,
+    .prospect-approved-channel span {
+      flex: 0 0 auto;
+      color: #263244;
+    }
+
+    .prospect-approved-channel b {
+      overflow-wrap: anywhere;
+    }
+
+    .prospect-qualification-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 10px;
+    }
+
+    .prospect-probe-panel {
+      margin: 0 0 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid #dfe7f2;
+    }
+
+    .prospect-probe-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .prospect-probe-head b,
+    .prospect-probe-head small {
+      display: block;
+    }
+
+    .prospect-probe-head b {
+      color: #172033;
+      font-size: 13px;
+    }
+
+    .prospect-probe-head small,
+    .prospect-probe-summary {
+      margin: 3px 0 0;
+      color: #66758b;
+      font-size: 10px;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+
+    .prospect-probe-summary {
+      margin: 0 0 9px;
+    }
+
+    .prospect-probe-result,
+    .prospect-probe-detail {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 9px;
+      border-left: 3px solid #68778d;
+      background: #f7f9fc;
+      color: #526178;
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .prospect-probe-result.has-evidence {
+      border-left-color: #15805d;
+      background: #f1fbf7;
+    }
+
+    .prospect-probe-result b,
+    .prospect-probe-detail b {
+      flex: 0 0 auto;
+      color: #263244;
+    }
+
+    .prospect-probe-evidence {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin: 8px 0 0;
+      border-top: 1px solid #e3e9f3;
+      border-left: 1px solid #e3e9f3;
+    }
+
+    .prospect-probe-evidence > div {
+      min-width: 0;
+      padding: 8px;
+      border-right: 1px solid #e3e9f3;
+      border-bottom: 1px solid #e3e9f3;
+    }
+
+    .prospect-probe-evidence dt {
+      color: #78869a;
+      font-size: 9px;
+    }
+
+    .prospect-probe-evidence dd {
+      margin: 3px 0 0;
+      color: #263244;
+      font-size: 10px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .prospect-probe-timeline {
+      display: grid;
+      gap: 0;
+      margin: 9px 0;
+      border-top: 1px solid #e3e9f3;
+    }
+
+    .prospect-probe-event {
+      display: grid;
+      grid-template-columns: 8px minmax(0, 1fr) auto;
+      gap: 7px;
+      align-items: start;
+      padding: 7px 0;
+      border-bottom: 1px solid #edf1f6;
+    }
+
+    .prospect-probe-event > span {
+      width: 7px;
+      height: 7px;
+      margin-top: 3px;
+      border-radius: 50%;
+      background: #b7791f;
+    }
+
+    .prospect-probe-event.completed > span { background: #15805d; }
+    .prospect-probe-event.failed > span { background: #b42318; }
+
+    .prospect-probe-event b,
+    .prospect-probe-event small {
+      display: block;
+    }
+
+    .prospect-probe-event b {
+      color: #263244;
+      font-size: 10px;
+    }
+
+    .prospect-probe-event small,
+    .prospect-probe-event time,
+    .prospect-probe-foot {
+      color: #66758b;
+      font-size: 9px;
+      line-height: 1.45;
+    }
+
+    .prospect-probe-event time {
+      white-space: nowrap;
+    }
+
+    .prospect-probe-detail {
+      margin-bottom: 8px;
+      border-left-color: #b42318;
+      background: #fff5f4;
+    }
+
+    .prospect-probe-foot {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px 12px;
+      margin-bottom: 8px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .prospect-identity-panel {
+      margin: 0 0 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid #dfe7f2;
+    }
+
+    .prospect-identity-form {
+      display: grid;
+      grid-template-columns: minmax(150px, .7fr) minmax(190px, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+      margin-top: 9px;
+    }
+
+    .prospect-identity-form label,
+    .prospect-identity-form label > span {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .prospect-identity-form label > span {
+      color: #66758b;
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .prospect-identity-form select,
+    .prospect-identity-form input {
+      width: 100%;
+      min-width: 0;
+      height: 34px;
+      padding: 0 9px;
+      border: 1px solid #d5deeb;
+      border-radius: 6px;
+      color: #263244;
+      background: #fff;
+      font-size: 11px;
+    }
+
+    .prospect-identity-form > small {
+      grid-column: 1 / -1;
+      color: #66758b;
+      font-size: 9px;
+      line-height: 1.5;
+    }
+
+    .prospect-identity-detail {
+      margin: 8px 0 10px;
+      border-top: 1px solid #e3e9f3;
+      border-bottom: 1px solid #e3e9f3;
+    }
+
+    .prospect-identity-detail > summary {
+      padding: 8px 0;
+      color: #33445d;
+      font-size: 10px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .prospect-identity-result {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 8px;
+      padding: 8px 9px;
+      border-left: 3px solid #b7791f;
+      color: #526178;
+      background: #fff9eb;
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .prospect-identity-result.is-linked {
+      border-left-color: #15805d;
+      background: #f1fbf7;
+    }
+
+    .prospect-identity-result.is-failed {
+      border-left-color: #b42318;
+      background: #fff5f4;
+    }
+
+    .prospect-identity-result b { color: #263244; }
+
+    .prospect-identity-metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      margin-top: 8px;
+      border: 1px solid #e3e9f3;
+      background: #e3e9f3;
+    }
+
+    .prospect-identity-metrics span {
+      padding: 7px;
+      color: #66758b;
+      background: #fbfcff;
+      font-size: 9px;
+    }
+
+    .prospect-identity-metrics b {
+      display: block;
+      margin-top: 2px;
+      color: #263244;
+      font-size: 11px;
+    }
+
+    .prospect-identity-candidates {
+      display: grid;
+      gap: 1px;
+      margin-top: 8px;
+      border: 1px solid #e3e9f3;
+      background: #e3e9f3;
+    }
+
+    .prospect-identity-candidates > div {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      padding: 7px 8px;
+      background: #fff;
+    }
+
+    .prospect-identity-candidates b,
+    .prospect-identity-candidates span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font-size: 9px;
+    }
+
+    .prospect-identity-candidates b { color: #263244; }
+    .prospect-identity-candidates span { color: #66758b; }
+
+    .prospect-identity-lineage {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin: 8px 0;
+      border-top: 1px solid #e3e9f3;
+      border-left: 1px solid #e3e9f3;
+    }
+
+    .prospect-identity-lineage > div {
+      min-width: 0;
+      padding: 7px 8px;
+      border-right: 1px solid #e3e9f3;
+      border-bottom: 1px solid #e3e9f3;
+    }
+
+    .prospect-identity-lineage dt {
+      color: #78869a;
+      font-size: 8px;
+    }
+
+    .prospect-identity-lineage dd {
+      margin: 3px 0 0;
+      color: #263244;
+      font-size: 9px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .prospect-icp-form input[type="number"] {
+      font-variant-numeric: tabular-nums;
+    }
+
     .prospect-field-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5509,19 +6276,33 @@
       margin-top: 10px;
     }
 
-    .lead-workbench {
-      display: grid;
-      grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr);
-      gap: 12px;
-      align-items: start;
-      margin-bottom: 12px;
-    }
+          .lead-workbench {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            align-items: stretch;
+            margin-bottom: 16px;
+          }
+          #lead-finder .lead-workbench > section,
+          #lead-finder .lead-workbench > .lead-live-overview { width: 100%; }
+          #lead-finder > .lead-command-strip { margin-top: 16px; }
+          #lead-finder > .lead-result-layout { margin-top: 16px; }
 
-    .lead-queue-panel {
-      min-width: 0;
-      position: sticky;
-      top: 68px;
-    }
+          /* 搜索简报：压扁拉长（更宽更矮、两个切换并排） */
+          #lead-finder .lead-build-panel { padding: 14px 16px 16px; }
+          #lead-finder .lead-build-panel > .section-head { margin-bottom: 12px; }
+          #lead-finder .lead-mode-switches { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+          #lead-finder .lead-mode-switches .lead-search-mode,
+          #lead-finder .lead-mode-switches .lead-brief-mode { margin-bottom: 0; width: auto; }
+          #lead-finder .lead-brief-prompt textarea { min-height: 56px; max-height: 120px; }
+          #lead-finder .lead-form-grid { gap: 8px; }
+          .lead-brief-prompt[hidden],
+          .lead-form-grid[hidden],
+          .lead-brief-mode[hidden] { display: none !important; }
+
+          .lead-queue-panel {
+            min-width: 0;
+          }
 
     .lead-build-panel,
     .lead-queue-panel,
@@ -5563,6 +6344,35 @@
     }
 
     .lead-search-mode button.active {
+      color: #17243b;
+      background: #fff;
+      box-shadow: 0 2px 8px rgba(31, 48, 77, .1);
+    }
+
+    .lead-brief-mode {
+      display: inline-grid;
+      grid-template-columns: repeat(2, minmax(120px, 1fr));
+      gap: 3px;
+      width: min(100%, 320px);
+      margin-bottom: 10px;
+      padding: 3px;
+      border: 1px solid #dce4ef;
+      border-radius: 7px;
+      background: #f3f6fa;
+    }
+
+    .lead-brief-mode button {
+      min-height: 34px;
+      border: 0;
+      border-radius: 5px;
+      color: #607087;
+      background: transparent;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .lead-brief-mode button.active {
       color: #17243b;
       background: #fff;
       box-shadow: 0 2px 8px rgba(31, 48, 77, .1);
@@ -6203,6 +7013,34 @@
       margin-bottom: 10px;
     }
 
+    /* 最近任务：默认收起（无 open 属性），点击标题展开 */
+    #lead-finder .lead-queue-panel > summary {
+      list-style: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      user-select: none;
+    }
+    #lead-finder .lead-queue-panel > summary::-webkit-details-marker { display: none; }
+    #lead-finder .lead-queue-panel:not([open]) > summary { margin-bottom: 0; }
+    #lead-finder .lead-queue-panel:not([open]) .lead-job-list { display: none; }
+    #lead-finder .lead-queue-panel .section-head-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #lead-finder .lead-queue-panel .section-caret {
+      width: 8px;
+      height: 8px;
+      border-right: 2px solid #8a97ab;
+      border-bottom: 2px solid #8a97ab;
+      transform: rotate(45deg);
+      transition: transform .15s ease;
+      flex: none;
+    }
+    #lead-finder .lead-queue-panel:not([open]) .section-caret { transform: rotate(-45deg); }
+
     .lead-queue-live {
       display: inline-flex;
       align-items: center;
@@ -6622,8 +7460,8 @@
     .lead-job-card {
       position: relative;
       padding: 11px;
-      border: 1px solid #dce4f2;
-      border-radius: 8px;
+      border: 1px solid var(--lf-line);
+      border-radius: 14px;
       background: #fff;
       box-shadow: 0 8px 20px rgba(23, 35, 61, .05);
       overflow: hidden;
@@ -6637,7 +7475,7 @@
       bottom: 10px;
       width: 3px;
       border-radius: 0 3px 3px 0;
-      background: #3157d5;
+      background: var(--lf-accent);
     }
 
     .lead-job-top {
@@ -6654,10 +7492,10 @@
       height: 22px;
       display: grid;
       place-items: center;
-      border: 1px solid #dce4f2;
+      border: 1px solid var(--lf-line);
       border-radius: 6px;
-      color: #3157d5;
-      background: #f8fbff;
+      color: var(--lf-accent);
+      background: var(--lf-accent-soft);
       font-size: 13px;
       line-height: 1;
       cursor: pointer;
@@ -6665,8 +7503,8 @@
     }
 
     .lead-job-toggle:hover {
-      border-color: rgba(49, 87, 213, .42);
-      box-shadow: 0 6px 14px rgba(49, 87, 213, .12);
+      border-color: rgba(79, 70, 229, .42);
+      box-shadow: 0 6px 14px rgba(79, 70, 229, .14);
       transform: translateY(-1px);
     }
 
@@ -10798,6 +11636,25 @@
       height: 14px;
     }
 
+    .lead-ai-required-hint {
+      flex: 0 0 100%;
+      margin-top: 2px;
+      padding: 8px 12px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.5;
+      color: #b42318;
+      background: #fef3f2;
+      border: 1px solid #fda29b;
+    }
+
+    #lead-finder .btn.is-blocked {
+      opacity: .55;
+      cursor: not-allowed;
+      filter: grayscale(.35);
+    }
+
     .ai-actions {
       display: flex;
       justify-content: flex-end;
@@ -14266,6 +15123,37 @@
     .task-run-metric.is-warning b { color: var(--run-red); }
     .task-run-metric small { display: block; margin-top: 2px; color: #98a2b1; font-size: 9px; }
 
+    .task-run-acceptance {
+      margin-bottom: 12px;
+      overflow: hidden;
+      border: 1px solid #dce4ef;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    #leadTaskAcceptance {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    #leadTaskAcceptance > div {
+      min-width: 0;
+      padding: 11px 13px;
+      border-right: 1px solid #e7ecf3;
+      border-top: 1px solid #e7ecf3;
+    }
+
+    #leadTaskAcceptance > div:nth-child(4n) { border-right: 0; }
+    #leadTaskAcceptance span,
+    #leadTaskAcceptance b { display: block; }
+    #leadTaskAcceptance span { color: #758399; font-size: 10px; }
+    #leadTaskAcceptance b { margin-top: 4px; color: #263249; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+    #leadTaskAcceptance .task-acceptance-wide { grid-column: span 2; }
+    #leadTaskAcceptance .task-acceptance-result.is-success b { color: var(--run-green); }
+    #leadTaskAcceptance .task-acceptance-result.is-partial_success b { color: var(--run-amber); }
+    #leadTaskAcceptance .task-acceptance-result.is-failed b,
+    #leadTaskAcceptance .task-acceptance-result.is-empty b { color: var(--run-red); }
+
     .task-run-workspace {
       display: grid;
       grid-template-columns: minmax(0, 1fr);
@@ -14571,6 +15459,9 @@
       .task-run-metric:nth-child(2n) { border-right: 0; }
       .task-run-metric:nth-child(-n + 2) { border-bottom: 1px solid #e7ecf3; }
       .task-run-workspace { grid-template-columns: minmax(0, 1fr); }
+      #leadTaskAcceptance { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #leadTaskAcceptance > div:nth-child(4n) { border-right: 1px solid #e7ecf3; }
+      #leadTaskAcceptance > div:nth-child(2n) { border-right: 0; }
       .task-run-insights { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: none; }
       .task-run-insight-list { max-height: 190px; }
       .task-run-phase-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -15039,7 +15930,9 @@
       #lead-finder .lead-schedule-config { grid-template-columns: 1fr; align-items: stretch; }
       #lead-finder .lead-schedule-frequency select { flex: 1; min-height: 42px; }
       #lead-finder .lead-advanced-actions { align-items: stretch; }
-      #lead-finder .lead-advanced-actions .ai-toggle-line { width: 100%; }
+      #lead-finder .lead-advanced-actions .ai-toggle-line { width: 100%; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      #lead-finder .lf-tag-source { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; color: #fff; background: linear-gradient(135deg, var(--lf-accent), var(--lf-accent-2)); box-shadow: 0 2px 8px rgba(79,70,229,.28); }
+      #lead-finder .badge.lf-ai-source-badge { background: linear-gradient(135deg, var(--lf-accent), var(--lf-accent-2)); color: #fff; border: 0; font-weight: 700; letter-spacing: .2px; }
       #lead-finder .lead-advanced-actions .btn { min-height: 44px; flex: 1 1 120px; }
       #lead-finder .lead-runbar { align-items: stretch; flex-direction: column; }
       #lead-finder .lead-runbar .btn { width: 100%; min-height: 44px; }
@@ -15089,6 +15982,17 @@
       #prospect-list .prospect-bulkbar .btn,
       #prospect-list .prospect-bulkbar select { flex: 1 1 120px; min-height: 40px; }
       #prospect-list .prospect-field-grid { grid-template-columns: 1fr; }
+      .prospect-score-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .prospect-qualification-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .prospect-probe-evidence { grid-template-columns: 1fr; }
+      .prospect-identity-form,
+      .prospect-identity-lineage { grid-template-columns: 1fr; }
+      .prospect-identity-form .btn { width: 100%; min-height: 40px; }
+      .prospect-identity-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .prospect-identity-candidates > div { grid-template-columns: 1fr; }
+      .prospect-probe-event { grid-template-columns: 8px minmax(0, 1fr); }
+      .prospect-probe-event time { grid-column: 2; }
+      .prospect-qualification-actions .btn { flex: 1 1 140px; min-height: 40px; }
       #prospect-list .prospect-field[style] { grid-column: auto !important; }
       #prospect-list .prospect-pagination { align-items: flex-start; flex-direction: column; }
       #lead-finder .lead-mobile-score { color: #0f766e; font-size: 14px; font-weight: 900; }
@@ -15662,6 +16566,1663 @@
             .database-execution-body { grid-template-rows: minmax(190px, 1fr) minmax(242px, .75fr); }
           }
         </style>
+        <style id="tdesign-prospect-workbench">
+          /* TDesign web light-theme tokens, scoped to the prospect workspaces. */
+          #lead-finder,
+          #lead-task-detail,
+          #prospect-list {
+            --td-brand-color-1: #f2f3ff;
+            --td-brand-color-2: #d9e1ff;
+            --td-brand-color-3: #b5c7ff;
+            --td-brand-color-6: #366ef4;
+            --td-brand-color-7: #0052d9;
+            --td-brand-color-8: #003cab;
+            --td-brand-color: var(--td-brand-color-7);
+            --td-brand-color-hover: var(--td-brand-color-6);
+            --td-brand-color-focus: var(--td-brand-color-2);
+            --td-brand-color-active: var(--td-brand-color-8);
+            --td-brand-color-light: var(--td-brand-color-1);
+            --td-success-color: #2ba471;
+            --td-success-color-light: #e3f9e9;
+            --td-warning-color: #e37318;
+            --td-warning-color-light: #fff1e9;
+            --td-error-color: #d54941;
+            --td-error-color-light: #fff0ed;
+            --td-bg-color-page: #eee;
+            --td-bg-color-container: #fff;
+            --td-bg-color-container-hover: #f3f3f3;
+            --td-bg-color-container-active: #e8e8e8;
+            --td-bg-color-secondarycontainer: #f3f3f3;
+            --td-bg-color-component: #e8e8e8;
+            --td-text-color-primary: rgba(0, 0, 0, .9);
+            --td-text-color-secondary: rgba(0, 0, 0, .6);
+            --td-text-color-placeholder: rgba(0, 0, 0, .4);
+            --td-text-color-disabled: rgba(0, 0, 0, .26);
+            --td-text-color-anti: #fff;
+            --td-text-color-brand: var(--td-brand-color);
+            --td-border-level-1-color: #e8e8e8;
+            --td-border-level-2-color: #ddd;
+            --td-radius-small: 2px;
+            --td-radius-default: 3px;
+            --td-radius-medium: 6px;
+            --td-radius-large: 9px;
+            --td-shadow-1: 0 1px 10px rgba(0,0,0,.05), 0 4px 5px rgba(0,0,0,.08), 0 2px 4px -1px rgba(0,0,0,.12);
+            --prospect-bg: var(--td-bg-color-page);
+            --prospect-surface: var(--td-bg-color-container);
+            --prospect-subtle: var(--td-bg-color-secondarycontainer);
+            --prospect-ink: var(--td-text-color-primary);
+            --prospect-muted: var(--td-text-color-secondary);
+            --prospect-line: var(--td-border-level-2-color);
+            --prospect-line-soft: var(--td-border-level-1-color);
+            --prospect-brand: var(--td-brand-color);
+            --prospect-success: var(--td-success-color);
+            --prospect-warning: var(--td-warning-color);
+            --prospect-danger: var(--td-error-color);
+            color: var(--td-text-color-primary);
+            background: var(--td-bg-color-page);
+            font-family: "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+          }
+
+          .main:has(#lead-finder.active),
+          .main:has(#lead-task-detail.active),
+          .main:has(#prospect-list.active) { background: var(--td-bg-color-page, #eee); }
+
+          .prospect-custom-dates[hidden],
+          #leadFinderCandidateView[hidden],
+          #leadFinderCleaningView[hidden] { display: none !important; }
+
+          #lead-finder::before,
+          #prospect-list::before { display: none; }
+
+          #lead-finder .btn,
+          #lead-task-detail .btn,
+          #prospect-list .btn {
+            min-height: 32px;
+            padding: 0 16px;
+            border: 1px solid var(--td-border-level-2-color);
+            border-radius: var(--td-radius-default);
+            color: var(--td-text-color-primary);
+            background: var(--td-bg-color-container);
+            box-shadow: none;
+            font-size: 14px;
+            font-weight: 400;
+            line-height: 30px;
+          }
+          #lead-finder .btn:hover,
+          #lead-task-detail .btn:hover,
+          #prospect-list .btn:hover { color: var(--td-brand-color-hover); border-color: var(--td-brand-color-hover); }
+          #lead-finder .btn:active,
+          #lead-task-detail .btn:active,
+          #prospect-list .btn:active { color: var(--td-brand-color-active); border-color: var(--td-brand-color-active); background: var(--td-bg-color-container-active); }
+          #lead-finder .btn.primary,
+          #lead-task-detail .btn.primary,
+          #prospect-list .btn.primary { color: var(--td-text-color-anti); border-color: var(--td-brand-color); background: var(--td-brand-color); }
+          #lead-finder .btn.primary:hover,
+          #lead-task-detail .btn.primary:hover,
+          #prospect-list .btn.primary:hover { color: var(--td-text-color-anti); border-color: var(--td-brand-color-hover); background: var(--td-brand-color-hover); }
+          #lead-finder .btn.primary:active,
+          #lead-task-detail .btn.primary:active,
+          #prospect-list .btn.primary:active { color: var(--td-text-color-anti); border-color: var(--td-brand-color-active); background: var(--td-brand-color-active); }
+          #lead-finder .btn.tiny,
+          #prospect-list .btn.tiny { height: 24px; min-height: 24px; padding: 0 8px; font-size: 12px; line-height: 22px; }
+          #lead-finder .btn:focus-visible,
+          #lead-task-detail .btn:focus-visible,
+          #prospect-list .btn:focus-visible { outline: 2px solid var(--td-brand-color-focus); outline-offset: 1px; }
+
+          #lead-finder input[type="checkbox"],
+          #lead-task-detail input[type="checkbox"],
+          #prospect-list input[type="checkbox"] { accent-color: var(--td-brand-color); }
+
+          .prospect-page-head { align-items: flex-end; margin-bottom: 16px; }
+          .prospect-page-head h1 { margin: 0; color: var(--td-text-color-primary); font-size: 20px; font-weight: 600; line-height: 28px; letter-spacing: 0; }
+          .prospect-page-head p { margin: 4px 0 0; color: var(--td-text-color-secondary); font-size: 14px; line-height: 22px; }
+          .prospect-page-head .head-actions { gap: 8px; }
+
+          #lead-finder .panel,
+          #prospect-list .panel {
+            border: 1px solid var(--td-border-level-2-color);
+            border-radius: var(--td-radius-default);
+            background: var(--td-bg-color-container);
+            box-shadow: none;
+          }
+          #lead-finder .section-head,
+          #prospect-list .section-head { min-height: 32px; margin-bottom: 16px; }
+          #lead-finder .section-head { margin-bottom: 10px; }
+          #lead-finder .section-title .icon,
+          #prospect-list .section-title .icon {
+            width: 32px;
+            height: 32px;
+            border: 0;
+            border-radius: var(--td-radius-default);
+            color: var(--td-brand-color);
+            background: var(--td-brand-color-light);
+          }
+          #lead-finder .section-title h2,
+          #prospect-list .section-title h2 { color: var(--td-text-color-primary); font-size: 16px; font-weight: 600; line-height: 24px; }
+          #lead-finder .section-title p,
+          #prospect-list .section-title p { margin: 2px 0 0; color: var(--td-text-color-secondary); font-size: 12px; font-weight: 400; line-height: 20px; }
+          #lead-finder .badge,
+          #prospect-list .badge { min-height: 22px; padding: 1px 8px; border: 0; border-radius: var(--td-radius-default); font-size: 12px; line-height: 20px; }
+
+          #lead-finder .lead-field label,
+          #lead-finder .lead-goal-field label,
+          #prospect-list .form-field label { margin-bottom: 8px; color: var(--td-text-color-primary); font-size: 14px; font-weight: 400; line-height: 22px; }
+          #lead-finder .lead-field input,
+          #lead-finder .lead-field select,
+          #lead-finder .lead-field textarea,
+          #prospect-list .form-field input,
+          #prospect-list .form-field select,
+          #prospect-list .form-field textarea {
+            min-height: 32px;
+            padding: 5px 12px;
+            border: 1px solid var(--td-border-level-2-color);
+            border-radius: var(--td-radius-default);
+            color: var(--td-text-color-primary);
+            background: var(--td-bg-color-container);
+            font-size: 14px;
+            line-height: 22px;
+          }
+          #lead-finder .lead-field input:focus,
+          #lead-finder .lead-field select:focus,
+          #lead-finder .lead-field textarea:focus,
+          #prospect-list .form-field input:focus,
+          #prospect-list .form-field select:focus,
+          #prospect-list .form-field textarea:focus { border-color: var(--td-brand-color); box-shadow: 0 0 0 2px var(--td-brand-color-focus); outline: 0; }
+
+          .lead-live-overview {
+            position: relative;
+            min-height: 240px;
+            margin-bottom: 16px;
+            overflow: hidden;
+            border: 1px solid var(--td-border-level-2-color);
+            border-radius: var(--td-radius-default);
+            background: var(--td-bg-color-container);
+          }
+          .lead-live-empty { display: grid; min-height: 238px; place-content: center; justify-items: center; padding: 32px; text-align: center; }
+          .lead-live-empty span { color: var(--td-text-color-brand); font-size: 12px; font-weight: 600; line-height: 20px; }
+          .lead-live-empty h2 { margin: 8px 0 4px; color: var(--td-text-color-primary); font-size: 20px; font-weight: 600; line-height: 28px; letter-spacing: 0; }
+          .lead-live-empty p { max-width: 560px; margin: 0; color: var(--td-text-color-secondary); font-size: 14px; line-height: 22px; }
+          .lead-live-console { min-width: 0; }
+          .lead-live-console-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 24px; padding: 20px 24px 16px; border-bottom: 1px solid var(--td-border-level-1-color); }
+          .lead-live-kicker { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+          .lead-live-kicker > span:first-child { color: var(--td-text-color-secondary); font-size: 12px; font-weight: 600; line-height: 20px; }
+          .lead-live-connection { display: inline-flex; align-items: center; min-height: 22px; padding: 1px 8px; border-radius: var(--td-radius-default); color: var(--td-text-color-secondary); background: var(--td-bg-color-secondarycontainer); font-size: 12px; line-height: 20px; }
+          .lead-live-connection.is-live { color: var(--td-success-color); background: var(--td-success-color-light); }
+          .lead-live-connection.is-fallback { color: var(--td-warning-color); background: var(--td-warning-color-light); }
+          .lead-live-title-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+          .lead-live-title-line h2 { min-width: 0; margin: 0; color: var(--td-text-color-primary); font-size: 20px; font-weight: 600; line-height: 28px; letter-spacing: 0; overflow-wrap: anywhere; }
+          .lead-live-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 6px; color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; }
+          .lead-live-meta span { font-variant-numeric: tabular-nums; }
+          .lead-live-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+          .lead-live-stage { display: grid; grid-template-columns: minmax(240px, .75fr) minmax(0, 1.25fr); gap: 24px; padding: 16px 24px; border-bottom: 1px solid var(--td-border-level-1-color); background: var(--td-bg-color-secondarycontainer); }
+          .lead-live-stage-copy { min-width: 0; }
+          .lead-live-stage-copy span { color: var(--td-text-color-secondary); font-size: 12px; font-weight: 400; line-height: 20px; }
+          .lead-live-stage-copy b { display: block; margin-top: 2px; color: var(--td-text-color-primary); font-size: 14px; font-weight: 600; line-height: 22px; overflow-wrap: anywhere; }
+          .lead-live-progress { display: grid; align-content: center; gap: 6px; min-width: 0; }
+          .lead-live-progress-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; }
+          .lead-live-progress-top strong { color: var(--td-text-color-primary); font-size: 14px; font-variant-numeric: tabular-nums; }
+          .lead-live-progress-track { height: 6px; overflow: hidden; border-radius: var(--td-radius-small); background: var(--td-bg-color-component); }
+          .lead-live-progress-track i { display: block; width: var(--p); height: 100%; border-radius: inherit; background: var(--td-brand-color); transition: width .22s ease; }
+          .lead-live-body { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(300px, .8fr); }
+          .lead-live-metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); min-width: 0; }
+          .lead-live-metric { min-width: 0; padding: 16px; border-right: 1px solid var(--td-border-level-1-color); }
+          .lead-live-metric span { display: block; overflow: hidden; color: var(--td-text-color-secondary); font-size: 12px; font-weight: 400; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+          .lead-live-metric b { display: block; margin-top: 4px; color: var(--td-text-color-primary); font-size: 20px; font-weight: 600; line-height: 28px; font-variant-numeric: tabular-nums; }
+          .lead-live-events { min-width: 0; padding: 12px 16px; background: var(--td-bg-color-secondarycontainer); }
+          .lead-live-events-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; color: var(--td-text-color-secondary); font-size: 12px; font-weight: 600; line-height: 20px; }
+          .lead-live-event { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 8px; padding: 6px 0; border-top: 1px solid var(--td-border-level-1-color); }
+          .lead-live-event time { color: var(--td-text-color-placeholder); font-size: 12px; font-variant-numeric: tabular-nums; line-height: 20px; }
+          .lead-live-event div { min-width: 0; }
+          .lead-live-event b,
+          .lead-live-event span { display: block; overflow: hidden; font-size: 12px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+          .lead-live-event b { color: var(--td-text-color-primary); font-weight: 600; }
+          .lead-live-event span { color: var(--td-text-color-secondary); }
+
+          #lead-finder .lead-pool-summary,
+          #prospect-list .lead-command-strip { display: grid; min-height: 0; gap: 8px; margin-bottom: 16px; overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+          #lead-finder .lead-pool-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 12px; }
+          #prospect-list .lead-command-strip { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+          #lead-finder .lead-pool-summary .lead-command-item,
+          #prospect-list .lead-command-item { min-height: 56px; padding: 9px 14px; border: 1px solid var(--td-border-level-2-color); border-radius: var(--td-radius-default); background: var(--td-bg-color-container); }
+          #lead-finder .lead-pool-summary .lead-command-item span,
+          #prospect-list .lead-command-item span { color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; }
+          #lead-finder .lead-pool-summary .lead-command-item b,
+          #prospect-list .lead-command-item b { margin-top: 2px; color: var(--td-text-color-primary); font-size: 20px; font-weight: 600; line-height: 28px; }
+
+          #lead-finder .lead-workbench { display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
+          #lead-finder .lead-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+          #lead-finder .lead-col-config { display: contents; }
+          #lead-finder .lead-insights-row { margin-top: 12px; }
+          #lead-finder .lead-build-panel,
+          #lead-finder .lead-queue-panel { padding: 16px 18px; }
+          #lead-finder .lead-queue-panel { position: static; }
+          #lead-finder .lead-search-mode { min-height: 40px; padding: 3px; display: inline-flex; gap: 3px; border: 1px solid var(--lf-line-strong); border-radius: 12px; background: var(--lf-surface); }
+          #lead-finder .lead-search-mode button { min-height: 32px; padding: 0 16px; border: 0; border-radius: 9px; color: var(--lf-muted); background: transparent; font-size: 13px; font-weight: 640; cursor: pointer; transition: all .18s ease; }
+          #lead-finder .lead-search-mode button:hover { color: var(--lf-accent); background: var(--lf-accent-soft); }
+          #lead-finder .lead-search-mode button.active { color: var(--lf-accent); background: var(--lf-white); box-shadow: 0 1px 2px rgba(15,23,42,.10); }
+          #lead-finder .lead-advanced-settings { border: 1px solid var(--td-border-level-2-color); border-radius: var(--td-radius-default); background: var(--td-bg-color-container); }
+          #lead-finder .lead-advanced-settings > summary { padding: 10px 13px; color: var(--td-text-color-primary); background: var(--td-bg-color-secondarycontainer); font-size: 14px; font-weight: 600; line-height: 22px; }
+          #lead-finder .lead-source-box,
+          #lead-finder .lead-schedule-config { border-color: var(--td-border-level-1-color); border-radius: var(--td-radius-default); background: var(--td-bg-color-secondarycontainer); }
+          #lead-finder .lead-source-chips button,
+          #lead-finder .lead-entry-chip { min-height: 28px; border-radius: var(--td-radius-default); font-size: 12px; }
+          #lead-finder .lead-entry-chip.active { color: var(--td-brand-color); border-color: var(--td-brand-color-focus); background: var(--td-brand-color-light); }
+          #lead-finder .lead-job-list { max-height: 720px; gap: 0; overflow: auto; border: 1px solid var(--td-border-level-2-color); border-radius: var(--td-radius-default); }
+          #lead-finder .lead-job-card { margin: 0; padding: 12px; border: 0; border-bottom: 1px solid var(--td-border-level-1-color); border-radius: 0; background: var(--td-bg-color-container); box-shadow: none; }
+          #lead-finder .lead-job-card:last-child { border-bottom: 0; }
+          #lead-finder .lead-job-card:hover { background: var(--td-bg-color-container-hover); }
+          #lead-finder .lead-job-progress { height: 6px; border-radius: var(--td-radius-small); background: var(--td-bg-color-component); }
+          #lead-finder .lead-job-progress i { background: var(--td-brand-color); }
+          #lead-finder .lead-job-metrics { gap: 0; overflow: hidden; border: 1px solid var(--td-border-level-1-color); border-radius: var(--td-radius-default); }
+          #lead-finder .lead-job-metrics > div { min-height: 52px; padding: 8px 12px; border-right: 1px solid var(--td-border-level-1-color); background: var(--td-bg-color-secondarycontainer); }
+          #lead-finder .lead-job-metrics > div:last-child { border-right: 0; }
+          #lead-finder .lead-job-actions { padding-top: 8px; }
+          #lead-finder .lead-job-open-hint { color: var(--td-text-color-brand); }
+          #lead-finder .lead-support-panel { margin-top: 12px; }
+          #lead-finder .lead-support-panel > summary { padding: 14px 20px; color: var(--td-text-color-primary); font-size: 14px; font-weight: 600; }
+
+          #lead-finder .lead-result-layout { margin-top: 12px; }
+          #lead-finder .lead-results-panel { padding: 20px 24px; }
+          .lead-result-view-tabs { position: relative; display: flex; gap: 24px; width: 100%; min-height: 36px; margin: 0 0 12px; padding: 0; border: 0; border-bottom: 1px solid var(--td-border-level-1-color); border-radius: 0; background: transparent; }
+          .lead-result-view-tabs button { position: relative; min-height: 40px; padding: 0 8px; border: 0; color: var(--td-text-color-secondary); background: transparent; font-size: 14px; font-weight: 400; cursor: pointer; }
+          .lead-result-view-tabs button:hover { color: var(--td-brand-color-hover); }
+          .lead-result-view-tabs button.active { color: var(--td-brand-color); background: transparent; box-shadow: none; }
+          .lead-result-view-tabs button.active::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 3px; background: var(--td-brand-color); content: ""; }
+          .lead-result-view-tabs button span { margin-left: 4px; color: var(--td-error-color); font-variant-numeric: tabular-nums; }
+          #lead-finder .lead-filter-tabs,
+          .lead-cleaning-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0 0 16px; }
+          #lead-finder .lead-filter-tabs button,
+          .lead-cleaning-filters button { min-height: 28px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--td-radius-default); color: var(--td-text-color-secondary); background: var(--td-bg-color-secondarycontainer); font-size: 12px; font-weight: 400; cursor: pointer; }
+          #lead-finder .lead-filter-tabs button:hover,
+          .lead-cleaning-filters button:hover { color: var(--td-brand-color-hover); background: var(--td-brand-color-light); }
+          #lead-finder .lead-filter-tabs button.active,
+          .lead-cleaning-filters button.active { color: var(--td-brand-color); border-color: var(--td-brand-color-focus); background: var(--td-brand-color-light); }
+          #lead-finder .lead-search-mode button:focus-visible,
+          #lead-finder .lead-source-chips button:focus-visible,
+          #lead-finder .lead-entry-chip:focus-visible,
+          .lead-result-view-tabs button:focus-visible,
+          #lead-finder .lead-filter-tabs button:focus-visible,
+          .lead-cleaning-filters button:focus-visible,
+          .prospect-date-presets button:focus-visible,
+          #prospect-list .prospect-tabs button:focus-visible {
+            outline: 0;
+            box-shadow: 0 0 0 2px var(--td-brand-color-focus);
+          }
+          #lead-finder .lead-table-wrap { border: 1px solid var(--td-border-level-2-color); border-radius: var(--td-radius-default); }
+          #lead-finder .lead-table thead th { padding: 10px 16px; border-bottom: 1px solid var(--td-border-level-2-color); color: var(--td-text-color-placeholder); background: var(--td-bg-color-secondarycontainer); font-size: 12px; font-weight: 400; line-height: 20px; }
+          #lead-finder .lead-table td { padding: 12px 16px; border-bottom: 1px solid var(--td-border-level-1-color); color: var(--td-text-color-primary); font-size: 14px; line-height: 22px; }
+          #lead-finder .lead-table tbody tr:hover td { background: var(--td-bg-color-container-hover); }
+          #lead-finder .lead-pagination,
+          #prospect-list .prospect-pagination { min-height: 48px; padding: 8px 0 0; color: var(--td-text-color-secondary); font-size: 12px; }
+
+          .lead-cleaning-ledger { min-height: 360px; }
+          .lead-cleaning-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 0 0 16px; }
+          .lead-cleaning-head h3 { margin: 0; color: var(--td-text-color-primary); font-size: 16px; font-weight: 600; line-height: 24px; letter-spacing: 0; }
+          .lead-cleaning-head p { max-width: 760px; margin: 4px 0 0; color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; }
+          .lead-cleaning-head > span { color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; white-space: nowrap; }
+          .lead-cleaning-summary { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; overflow: visible; border: 0; border-radius: 0; }
+          .lead-cleaning-summary > div { min-width: 0; padding: 12px 16px; border: 1px solid var(--td-border-level-1-color); border-radius: var(--td-radius-default); background: var(--td-bg-color-secondarycontainer); }
+          .lead-cleaning-summary span { display: block; color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; }
+          .lead-cleaning-summary b { display: block; margin-top: 2px; color: var(--td-text-color-primary); font-size: 18px; font-weight: 600; line-height: 26px; font-variant-numeric: tabular-nums; }
+          .lead-cleaning-rows { overflow: hidden; border: 1px solid var(--td-border-level-2-color); border-radius: var(--td-radius-default); background: var(--td-bg-color-container); }
+          .lead-cleaning-row { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(190px, 1fr) 96px minmax(240px, 1.5fr) 142px; align-items: center; gap: 16px; min-height: 72px; padding: 12px 16px; border-bottom: 1px solid var(--td-border-level-1-color); }
+          .lead-cleaning-row:last-child { border-bottom: 0; }
+          .lead-cleaning-row:hover { background: var(--td-bg-color-container-hover); }
+          .lead-cleaning-source,
+          .lead-cleaning-record,
+          .lead-cleaning-reason { min-width: 0; }
+          .lead-cleaning-source b,
+          .lead-cleaning-record b,
+          .lead-cleaning-reason b { display: block; overflow: hidden; color: var(--td-text-color-primary); font-size: 14px; font-weight: 400; line-height: 22px; text-overflow: ellipsis; white-space: nowrap; }
+          .lead-cleaning-source span,
+          .lead-cleaning-record span,
+          .lead-cleaning-reason span { display: block; overflow: hidden; color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+          .lead-cleaning-outcome { width: fit-content; min-height: 22px; padding: 1px 8px; border-radius: var(--td-radius-default); color: var(--td-error-color); background: var(--td-error-color-light); font-size: 12px; font-weight: 400; line-height: 20px; }
+          .lead-cleaning-outcome.is-merged { color: var(--td-brand-color); background: var(--td-brand-color-light); }
+          .lead-cleaning-outcome.is-suppressed { color: var(--td-warning-color); background: var(--td-warning-color-light); }
+          .lead-cleaning-time { color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; font-variant-numeric: tabular-nums; text-align: right; }
+          .lead-cleaning-candidate { margin-top: 4px; padding: 0; border: 0; color: var(--td-text-color-brand); background: transparent; font-size: 12px; line-height: 20px; cursor: pointer; text-align: left; }
+
+          #prospect-list .prospect-list-layout { grid-template-columns: minmax(420px, 460px) minmax(0, 1fr); gap: 16px; align-items: start; }
+          #prospect-list .prospect-list-panel,
+          #prospect-list .prospect-detail-panel { min-width: 0; padding: 20px 24px; }
+          #prospect-list .prospect-detail-panel { position: sticky; top: 0; }
+          .prospect-toolbar-v2 { display: grid; grid-template-columns: minmax(0, 1fr) 160px auto; align-items: end; gap: 12px; padding: 16px 16px 8px; border: 1px solid var(--td-border-level-1-color); border-bottom: 0; border-radius: var(--td-radius-default) var(--td-radius-default) 0 0; background: var(--td-bg-color-secondarycontainer); }
+          .prospect-toolbar-v2 label { display: grid; gap: 4px; color: var(--td-text-color-primary); font-size: 12px; font-weight: 400; line-height: 20px; }
+          .prospect-toolbar-v2 input,
+          .prospect-toolbar-v2 select { width: 100%; height: 32px; min-width: 0; padding: 0 12px; border: 1px solid var(--td-border-level-2-color); border-radius: var(--td-radius-default); color: var(--td-text-color-primary); background: var(--td-bg-color-container); font-size: 14px; outline: 0; }
+          .prospect-toolbar-v2 input:focus,
+          .prospect-toolbar-v2 select:focus { border-color: var(--td-brand-color); box-shadow: 0 0 0 2px var(--td-brand-color-focus); }
+          .prospect-total { align-self: end; min-width: 84px; height: 32px; display: grid; place-items: center; color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; font-variant-numeric: tabular-nums; }
+          .prospect-date-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 0; padding: 8px 16px 16px; border: 1px solid var(--td-border-level-1-color); border-top: 0; border-radius: 0 0 var(--td-radius-default) var(--td-radius-default); background: var(--td-bg-color-secondarycontainer); }
+          .prospect-date-toolbar > span { color: var(--td-text-color-primary); font-size: 12px; font-weight: 400; line-height: 20px; }
+          .prospect-date-presets { display: flex; flex-wrap: wrap; gap: 4px; }
+          .prospect-date-presets button { min-height: 28px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--td-radius-default); color: var(--td-text-color-secondary); background: transparent; font-size: 12px; cursor: pointer; }
+          .prospect-date-presets button:hover { color: var(--td-brand-color-hover); background: var(--td-bg-color-container-hover); }
+          .prospect-date-presets button.active { color: var(--td-brand-color); border-color: var(--td-brand-color-focus); background: var(--td-brand-color-light); }
+          .prospect-custom-dates { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+          .prospect-custom-dates label { display: flex; align-items: center; gap: 4px; color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; }
+          .prospect-custom-dates input { height: 28px; padding: 0 8px; border: 1px solid var(--td-border-level-2-color); border-radius: var(--td-radius-default); color: var(--td-text-color-primary); background: var(--td-bg-color-container); font-size: 12px; }
+          #prospect-list .prospect-tabs { display: flex; gap: 20px; min-height: 40px; margin-top: 16px; border-bottom: 1px solid var(--td-border-level-1-color); }
+          #prospect-list .prospect-tabs button { position: relative; min-height: 40px; padding: 0 4px; border: 0; border-radius: 0; color: var(--td-text-color-secondary); background: transparent; font-size: 14px; font-weight: 400; }
+          #prospect-list .prospect-tabs button:hover { color: var(--td-brand-color-hover); }
+          #prospect-list .prospect-tabs button.active { color: var(--td-brand-color); background: transparent; box-shadow: none; }
+          #prospect-list .prospect-tabs button.active::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 3px; background: var(--td-brand-color); content: ""; }
+          #prospect-list .prospect-bulkbar { min-height: 48px; margin-top: 12px; padding: 8px 12px; border: 1px solid var(--td-border-level-1-color); border-radius: var(--td-radius-default); background: var(--td-bg-color-secondarycontainer); }
+          #prospect-list .prospect-bulkbar label,
+          #prospect-list .prospect-bulkbar span { color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; }
+          #prospect-list .prospect-list { gap: 0; margin-top: 12px; overflow: hidden; border: 1px solid var(--td-border-level-2-color); border-radius: var(--td-radius-default); }
+          #prospect-list .prospect-item { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 8px; margin: 0; padding: 14px 16px; border: 0; border-bottom: 1px solid var(--td-border-level-1-color); border-radius: 0; background: var(--td-bg-color-container); box-shadow: none; }
+          #prospect-list .prospect-item:last-child { border-bottom: 0; }
+          #prospect-list .prospect-item:hover { background: var(--td-bg-color-container-hover); }
+          #prospect-list .prospect-item.active { background: var(--td-brand-color-light); box-shadow: inset 3px 0 0 var(--td-brand-color); }
+          #prospect-list .prospect-item-main { min-width: 0; }
+          #prospect-list .prospect-item-top { align-items: baseline; }
+          #prospect-list .prospect-item-top h3 { overflow: hidden; color: var(--td-text-color-primary); font-size: 14px; font-weight: 600; line-height: 22px; text-overflow: ellipsis; white-space: nowrap; }
+          #prospect-list .prospect-score { color: var(--td-text-color-brand); font-size: 16px; font-weight: 600; line-height: 24px; font-variant-numeric: tabular-nums; }
+          #prospect-list .prospect-item p { margin: 4px 0; overflow: hidden; color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+          #prospect-list .prospect-item small { display: block; overflow: hidden; color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+          #prospect-list .prospect-qualification-step small { font-size: 12px; line-height: 20px; }
+          .prospect-joined-at { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--td-border-level-1-color); }
+          .prospect-joined-at span,
+          .prospect-joined-at time { color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; }
+          .prospect-joined-at time { font-variant-numeric: tabular-nums; }
+          #prospect-list .prospect-meta-row { margin-top: 8px; }
+          #prospect-list .prospect-next-action { margin-top: 6px; color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; }
+          #prospect-list .prospect-detail-hero { padding: 20px; border: 1px solid var(--td-brand-color-focus); border-radius: var(--td-radius-default); background: var(--td-brand-color-light); box-shadow: none; }
+          #prospect-list .prospect-detail-hero h2 { color: var(--td-text-color-primary); font-size: 20px; font-weight: 600; line-height: 28px; }
+          #prospect-list .prospect-detail-hero p { color: var(--td-text-color-secondary); font-size: 14px; line-height: 22px; }
+          #prospect-list .prospect-qualification-panel,
+          #prospect-list .prospect-identity-panel,
+          #prospect-list .prospect-mail-workspace { border: 1px solid var(--td-border-level-2-color); border-radius: var(--td-radius-default); background: var(--td-bg-color-container); box-shadow: none; }
+          #prospect-list .prospect-qualification-step { border: 1px solid var(--td-border-level-1-color); border-radius: var(--td-radius-default); background: var(--td-bg-color-secondarycontainer); }
+          #prospect-list .prospect-mail-workspace > summary { padding: 14px 16px; color: var(--td-text-color-primary); background: var(--td-bg-color-secondarycontainer); font-size: 14px; font-weight: 600; line-height: 22px; }
+          .prospect-mobile-detail-close { display: none; width: 32px; height: 32px; border: 1px solid var(--td-border-level-2-color); border-radius: var(--td-radius-default); color: var(--td-text-color-secondary); background: var(--td-bg-color-container); font-size: 18px; cursor: pointer; }
+
+          #lead-task-detail { --run-blue: var(--td-brand-color); color: var(--td-text-color-primary); background: var(--td-bg-color-page); }
+          #lead-task-detail .task-run-header,
+          #lead-task-detail .task-run-stage,
+          #lead-task-detail .task-run-acceptance,
+          #lead-task-detail .task-run-sources,
+          #lead-task-detail .task-run-clean-report,
+          #lead-task-detail .task-run-candidates,
+          #lead-task-detail .task-run-phases,
+          #lead-task-detail .task-run-pane,
+          #lead-task-detail .task-run-strategy { border-color: var(--td-border-level-2-color); border-radius: var(--td-radius-default); background: var(--td-bg-color-container); box-shadow: none; }
+          #lead-task-detail .task-run-title-line h1 { color: var(--td-text-color-primary); font-size: 20px; font-weight: 600; line-height: 28px; }
+          #lead-task-detail .task-run-pane-head h2 { color: var(--td-text-color-primary); font-size: 16px; font-weight: 600; line-height: 24px; }
+          #lead-task-detail .task-run-pane-head p,
+          #lead-task-detail .task-run-meta { color: var(--td-text-color-secondary); font-size: 12px; line-height: 20px; }
+
+          @media (max-width: 1180px) {
+            .lead-live-body { grid-template-columns: 1fr; }
+            .lead-live-events { border-top: 1px solid var(--td-border-level-1-color); }
+            #lead-finder .lead-workbench { grid-template-columns: 1fr; }
+            #lead-finder .lead-job-list { max-height: 460px; }
+            #prospect-list .prospect-list-layout { grid-template-columns: minmax(370px, 420px) minmax(0, 1fr); }
+          }
+
+          @media (max-width: 760px) {
+            .prospect-page-head { align-items: stretch; }
+            .prospect-page-head .head-actions { width: 100%; }
+            .prospect-page-head .head-actions .btn { flex: 1; }
+            .lead-live-overview { height: min(560px, 76vh); }
+            .lead-live-console-head { grid-template-columns: 1fr; gap: 12px; padding: 16px; }
+            .lead-live-actions { justify-content: flex-start; }
+            .lead-live-stage { grid-template-columns: 1fr; gap: 12px; padding: 12px 16px; }
+            .lead-live-body { display: block; }
+            .lead-live-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .lead-live-metric { padding: 12px; border-bottom: 1px solid var(--td-border-level-1-color); }
+            .lead-live-metric:nth-child(3n) { border-right: 0; }
+            .lead-live-events { padding: 12px; }
+            #lead-finder .lead-pool-summary,
+            #prospect-list .lead-command-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            #prospect-list .lead-command-item:last-child { grid-column: 1 / -1; }
+            #lead-finder .lead-workbench { gap: 12px; }
+            #lead-finder .lead-build-panel,
+            #lead-finder .lead-queue-panel,
+            #lead-finder .lead-results-panel { padding: 16px; }
+            .lead-cleaning-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .lead-cleaning-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 12px; }
+            .lead-cleaning-record,
+            .lead-cleaning-reason { grid-column: 1 / -1; }
+            .lead-cleaning-time { grid-column: 2; grid-row: 1; }
+            .lead-cleaning-outcome { grid-column: 2; grid-row: 2; }
+            .lead-cleaning-head { display: grid; gap: 8px; }
+            .lead-cleaning-head > span { white-space: normal; }
+
+            #prospect-list .prospect-list-layout { grid-template-columns: 1fr; }
+            #prospect-list .prospect-list-panel { padding: 16px; }
+            .prospect-toolbar-v2 { grid-template-columns: minmax(0, 1fr) 126px; padding: 12px 12px 8px; }
+            .prospect-total { grid-column: 1 / -1; justify-self: start; place-items: center start; height: 22px; }
+            .prospect-date-toolbar { align-items: flex-start; padding: 8px 12px 12px; }
+            .prospect-date-toolbar > span { width: 100%; }
+            .prospect-custom-dates { width: 100%; margin-left: 0; }
+            .prospect-custom-dates label { flex: 1; }
+            .prospect-custom-dates input { width: 100%; }
+            #prospect-list .prospect-tabs { gap: 14px; overflow-x: auto; }
+            #prospect-list .prospect-tabs button { flex: 0 0 auto; }
+            #prospect-list .prospect-detail-panel {
+              position: fixed;
+              inset: 0;
+              z-index: 120;
+              display: none;
+              width: 100vw;
+              height: 100dvh;
+              padding: 16px;
+              overflow: auto;
+              border: 0;
+              border-radius: 0;
+              background: var(--td-bg-color-container);
+            }
+            #prospect-list .prospect-detail-panel > .section-head {
+              position: sticky;
+              top: -16px;
+              z-index: 1;
+              margin: -16px -16px 16px;
+              padding: 12px 16px;
+              border-bottom: 1px solid var(--td-border-level-1-color);
+              background: rgba(255,255,255,.98);
+            }
+            body.prospect-mobile-detail-open #prospect-list .prospect-detail-panel { display: block; }
+            body.prospect-mobile-detail-open { overflow: hidden; }
+            .prospect-mobile-detail-close { display: grid; place-items: center; }
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            .lead-live-progress-track i { transition: none; }
+          }
+        </style>
+        <style id="ai-conversation-lead-finder">
+          /* Automatic acquisition is one AI research thread with one composer and one result surface. */
+          .main:has(#lead-finder.active) { background: #f4f6fa; }
+
+          #lead-finder {
+            --lf-canvas: #eef1f7;
+            --lf-surface: #fbfcff;
+            --lf-white: #fefefe;
+            --lf-ink: #0f172a;
+            --lf-copy: #334155;
+            --lf-muted: #64748b;
+            --lf-faint: #94a3b8;
+            --lf-line: #e6eaf1;
+            --lf-line-strong: #d6dde8;
+            --lf-accent: #4f46e5;
+            --lf-accent-hover: #4338ca;
+            --lf-accent-2: #7c3aed;
+            --lf-accent-soft: #eef2ff;
+            --lf-success: #0ea371;
+            --lf-success-soft: #ecfdf5;
+            --lf-warning: #d97706;
+            --lf-warning-soft: #fffbeb;
+            --lf-danger: #e11d48;
+            --lf-danger-soft: #fff1f3;
+            --lf-info: #0ea5e9;
+            --lf-info-soft: #f0f9ff;
+            max-width: 1440px;
+            margin: 0 auto;
+            color: var(--lf-ink);
+            background: transparent;
+            font-family: "SF Pro Text", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+          }
+
+          #lead-finder .prospect-page-head {
+            align-items: center;
+            margin: 0 0 22px;
+            padding: 2px 2px 0;
+          }
+
+          #lead-finder .prospect-page-head h1 {
+            color: var(--lf-ink);
+            font-size: 25px;
+            font-weight: 720;
+            line-height: 1.25;
+            letter-spacing: 0;
+          }
+
+          #lead-finder .prospect-page-head p {
+            margin-top: 5px;
+            color: var(--lf-muted);
+            font-size: 13px;
+          }
+
+          #lead-finder .btn {
+            min-height: 38px;
+            padding: 0 15px;
+            border-color: var(--lf-line-strong);
+            border-radius: 10px;
+            color: var(--lf-copy);
+            background: var(--lf-white);
+            font-size: 13px;
+            font-weight: 650;
+            line-height: 36px;
+            transition: border-color .2s ease, color .2s ease, background-color .2s ease, transform .2s ease;
+          }
+
+          #lead-finder .btn:hover {
+            color: var(--lf-accent);
+            border-color: #9eb7ee;
+            background: #f8faff;
+          }
+
+          #lead-finder .btn:active { transform: translateY(1px); }
+
+          #lead-finder .btn.primary,
+          #lead-finder .btn.primary:hover {
+            color: #fff;
+            border-color: transparent;
+            background: linear-gradient(135deg, var(--lf-accent) 0%, var(--lf-accent-2) 100%);
+            box-shadow: 0 8px 20px rgba(79, 70, 229, .30);
+          }
+
+          #lead-finder .btn.primary:hover {
+            box-shadow: 0 12px 26px rgba(79, 70, 229, .42);
+            border-color: transparent;
+          }
+
+          #lead-finder .lead-live-overview {
+            height: auto;
+            min-height: 240px;
+            max-height: min(80vh, 760px);
+            margin: 0 0 14px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border: 1px solid var(--lf-line);
+            border-radius: 16px;
+            background: var(--lf-white);
+            box-shadow: 0 20px 60px rgba(37, 52, 82, .08);
+          }
+
+          #lead-finder .lead-live-empty {
+            display: grid;
+            flex: 0 0 auto;
+            min-height: 0;
+            grid-template-columns: 42px minmax(0, 1fr);
+            align-content: start;
+            justify-content: start;
+            justify-items: start;
+            gap: 12px;
+            padding: 28px clamp(20px, 4vw, 56px) 26px;
+            text-align: left;
+          }
+          #lead-finder .lead-live-empty .lead-live-empty-action {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 14px;
+            padding: 8px 16px;
+            border: 0;
+            border-radius: 10px;
+            color: #fff;
+            background: linear-gradient(135deg, var(--lf-accent) 0%, var(--lf-accent-2) 100%);
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: 0 8px 18px rgba(79, 70, 229, .28);
+            transition: transform .15s ease, box-shadow .15s ease;
+          }
+          #lead-finder .lead-live-empty .lead-live-empty-action:hover { transform: translateY(-1px); box-shadow: 0 10px 22px rgba(79, 70, 229, .34); }
+          #lead-finder .lead-live-empty .lead-live-empty-action.is-blocked { opacity: .55; cursor: not-allowed; filter: grayscale(.35); transform: none; }
+
+          #lead-finder .lead-live-empty-mark,
+          #lead-finder .lead-live-avatar {
+            display: grid;
+            flex: 0 0 auto;
+            place-items: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            color: #fefefe;
+            background: linear-gradient(135deg, var(--lf-accent) 0%, var(--lf-accent-2) 100%);
+            font-size: 10px;
+            font-weight: 760;
+            letter-spacing: 0;
+            box-shadow: 0 4px 10px rgba(79, 70, 229, .3), inset 0 0 0 2px rgba(255, 255, 255, .22);
+            transition: transform .2s ease;
+          }
+
+          #lead-finder .lead-live-empty-mark { width: 42px; height: 42px; }
+          #lead-finder .lead-live-empty span { color: var(--lf-accent); font-size: 11px; font-weight: 700; }
+          #lead-finder .lead-live-empty h2 { margin: 6px 0 6px; color: var(--lf-ink); font-size: clamp(20px, 2vw, 26px); font-weight: 700; line-height: 1.25; }
+          #lead-finder .lead-live-empty p { max-width: 520px; color: var(--lf-muted); font-size: 13px; line-height: 1.6; }
+
+          #lead-finder .lead-live-console { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+
+          #lead-finder .lead-live-console-head {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: start;
+            gap: 12px;
+            padding: 11px clamp(15px, 1.8vw, 22px) 9px;
+            border-bottom: 1px solid var(--lf-line);
+            background: var(--lf-white);
+          }
+
+          #lead-finder .lead-live-kicker {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+          }
+
+          #lead-finder .lead-live-kicker > span:first-child {
+            color: var(--lf-muted);
+            font-size: 10px;
+            font-weight: 650;
+          }
+
+          #lead-finder .lead-live-connection {
+            min-height: 0;
+            padding: 0;
+            color: var(--lf-muted);
+            background: transparent;
+            font-size: 11px;
+            line-height: 1.45;
+          }
+
+          #lead-finder .lead-live-connection::before {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            margin-right: 7px;
+            border-radius: 50%;
+            background: var(--lf-faint);
+            content: "";
+            vertical-align: 1px;
+          }
+
+          #lead-finder .lead-live-connection.is-live { color: #25715b; background: transparent; }
+          #lead-finder .lead-live-connection.is-live::before { background: #2a8b6b; }
+          #lead-finder .lead-live-connection.is-fallback { color: var(--lf-warning); background: transparent; }
+          #lead-finder .lead-live-connection.is-fallback::before { background: #bd7c22; }
+
+          #lead-finder .lead-live-title-line { gap: 10px; }
+          #lead-finder .lead-live-title-line h2 { color: var(--lf-ink); font-size: clamp(15px, 1.3vw, 18px); font-weight: 700; line-height: 1.3; }
+          #lead-finder .lead-live-title-line .badge { padding: 1px 8px; border-radius: 7px; color: var(--lf-copy); background: #edf0f5; font-size: 11px; font-weight: 650; }
+          #lead-finder .lead-live-title-line .badge.blue { color: var(--lf-accent); background: var(--lf-accent-soft); }
+          #lead-finder .lead-live-title-line .badge.amber { color: var(--lf-warning); background: #fff5e8; }
+
+          #lead-finder .lead-live-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 2px 13px;
+            margin-top: 4px;
+            color: var(--lf-muted);
+            font-size: 10.5px;
+            line-height: 1.55;
+          }
+
+          #lead-finder .lead-live-actions { align-self: center; gap: 8px; }
+          #lead-finder .lead-live-actions .btn { min-height: 30px; padding: 0 8px; line-height: 28px; }
+
+          #lead-finder .lead-live-thread {
+            position: relative;
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            display: grid;
+            gap: 22px;
+            padding: 24px clamp(18px, 4vw, 48px) 28px;
+            background: var(--lf-surface);
+          }
+
+          #lead-finder .lead-live-message + .lead-live-message { margin-top: 6px; }
+          #lead-finder .lead-live-message.is-request + .lead-live-message:not(.is-request),
+          #lead-finder .lead-live-message:not(.is-request) + .lead-live-message.is-request { margin-top: 16px; }
+
+          #lead-finder .lead-live-message {
+            position: relative;
+            display: grid;
+            grid-template-columns: 36px minmax(0, 1fr);
+            align-items: start;
+            gap: 14px;
+            min-width: 0;
+          }
+
+          #lead-finder .lead-live-message.is-request {
+            grid-template-columns: minmax(0, 1fr) 36px;
+          }
+
+          #lead-finder .lead-live-message.is-request .lead-live-avatar {
+            grid-column: 2;
+            color: #fff;
+            background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+          }
+
+          #lead-finder .lead-live-message.is-request .lead-live-bubble { grid-column: 1; grid-row: 1; }
+
+          #lead-finder .lead-live-message.is-assistant .lead-live-avatar {
+            color: var(--lf-accent);
+            background: #fff;
+            box-shadow: 0 3px 9px rgba(79, 70, 229, .16), inset 0 0 0 1.5px rgba(79, 70, 229, .5);
+          }
+
+          #lead-finder .lead-live-bubble {
+            min-width: 0;
+            max-width: 920px;
+            color: var(--lf-copy);
+          }
+
+          #lead-finder .is-request .lead-live-bubble {
+            justify-self: end;
+            max-width: min(82%, 600px);
+            padding: 15px 18px;
+            border-radius: 18px 18px 6px 18px;
+            color: #fefefe;
+            background: linear-gradient(135deg, var(--lf-accent) 0%, var(--lf-accent-2) 100%);
+            box-shadow: 0 12px 26px rgba(79, 70, 229, .32), 0 2px 6px rgba(79, 70, 229, .22);
+          }
+
+          #lead-finder .lead-live-message-meta {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 7px;
+          }
+
+          #lead-finder .lead-live-message-meta b { color: inherit; font-size: 13px; font-weight: 700; }
+          #lead-finder .lead-live-message-meta time,
+          #lead-finder .lead-live-message-meta > span { color: var(--lf-faint); font-size: 11px; font-weight: 550; font-variant-numeric: tabular-nums; }
+          #lead-finder .is-request .lead-live-message-meta time { color: rgba(255,255,255,.72); }
+
+          #lead-finder .lead-live-request-copy { display: flex; flex-wrap: wrap; gap: 5px 16px; }
+          #lead-finder .lead-live-request-copy span { color: rgba(255,255,255,.92); font-size: 13px; line-height: 1.65; }
+
+          #lead-finder .lead-live-message.is-assistant .lead-live-bubble {
+            justify-self: start;
+            max-width: min(92%, 720px);
+            padding: 18px 20px;
+            border: 1px solid #e9edf7;
+            border-radius: 6px 18px 18px 18px;
+            background: #fff;
+            box-shadow: 0 6px 18px rgba(37, 52, 82, .07), 0 1px 2px rgba(37, 52, 82, .04);
+          }
+
+          #lead-finder .lead-live-message.is-assistant p { margin: 0 0 16px; color: var(--lf-copy); font-size: 14px; line-height: 1.65; }
+          #lead-finder .lead-live-message.is-terminal .lead-live-avatar { background: var(--lf-accent); }
+          #lead-finder .lead-live-message.is-terminal .lead-live-bubble { padding-block: 18px; }
+          #lead-finder .lead-live-message.is-assistant.is-active .lead-live-bubble::after {
+            content: '';
+            display: inline-block;
+            width: 7px;
+            height: 7px;
+            margin-left: 8px;
+            border-radius: 50%;
+            background: var(--lf-accent);
+            box-shadow: 11px 0 0 var(--lf-accent), 22px 0 0 var(--lf-accent);
+            vertical-align: middle;
+            animation: lf-typing 1.3s infinite ease-in-out;
+          }
+          @keyframes lf-typing {
+            0%, 60%, 100% { opacity: .25; transform: translateY(0); }
+            30% { opacity: 1; transform: translateY(-2px); }
+          }
+          #lead-finder .lead-live-terminal-progress {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0 0 0 0);
+            clip-path: inset(50%);
+            white-space: nowrap;
+          }
+
+          #lead-finder .lead-live-progress { display: block; margin: 15px 0 0; }
+          #lead-finder .lead-live-progress-track { height: 2px; overflow: hidden; border-radius: 0; background: #dbe2ef; }
+          #lead-finder .lead-live-progress-track i { display: block; width: var(--p); height: 100%; border-radius: 0; background: var(--lf-accent); transition: width .35s cubic-bezier(.16, 1, .3, 1); }
+
+          /* 流式打印动效（纯显示层，不改动后台逻辑） */
+          #lead-finder .lead-live-bubble .lf-stream-char { opacity: 0; transition: opacity .14s linear; }
+          #lead-finder .lead-live-bubble p.lf-stream-on .lf-stream-char { opacity: 1; }
+          #lead-finder .lead-live-message.is-assistant.is-active .lead-live-bubble p::after {
+            content: '▋'; display: inline-block; margin-left: 2px; color: var(--lf-accent);
+            font-weight: 700; vertical-align: -1px; animation: lf-caret 1s steps(1, end) infinite;
+          }
+          @keyframes lf-caret { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+          #lead-finder .lead-live-message.is-event { transition: opacity .45s ease, transform .45s cubic-bezier(.16, 1, .3, 1); }
+          #lead-finder .lead-live-message.is-event.lf-print-hidden { opacity: 0; transform: translateY(10px); }
+
+          #lead-finder .lead-live-facts {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 22px;
+            margin-top: 14px;
+            color: var(--lf-muted);
+            font-size: 11px;
+            line-height: 1.6;
+          }
+
+          #lead-finder .lead-live-facts span { white-space: nowrap; }
+          #lead-finder .lead-live-facts b { margin-right: 4px; color: var(--lf-ink); font-size: 13px; font-variant-numeric: tabular-nums; }
+          #lead-finder .lead-live-facts .lead-live-fact {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 0;
+            padding: 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            color: inherit;
+            font: inherit;
+            cursor: default;
+          }
+          #lead-finder .lead-live-event-stream {
+            position: relative;
+            display: grid;
+            gap: 23px;
+          }
+
+          #lead-finder .lead-live-history-note {
+            position: relative;
+            z-index: 1;
+            margin: -3px 0 0 4px;
+            color: var(--lf-muted);
+            font-size: 11px;
+            line-height: 1.6;
+          }
+
+          #lead-finder .lead-live-event-stream::before {
+            display: none;
+          }
+
+          #lead-finder .lead-live-message.is-event .lead-live-avatar,
+          #lead-finder .lead-live-message.is-discovery .lead-live-avatar {
+            position: relative;
+            color: var(--lf-muted);
+            border: 1px solid var(--lf-line-strong);
+            background: var(--lf-white);
+          }
+
+          #lead-finder .lead-live-message.is-event .lead-live-bubble {
+            position: relative;
+            justify-self: start;
+            max-width: min(92%, 720px);
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 4px 20px;
+            align-items: center;
+            padding: 13px 16px;
+            border: 1px solid var(--lf-line);
+            border-left: 3px solid var(--lf-faint);
+            border-radius: 14px;
+            background: var(--lf-white);
+            box-shadow: 0 2px 10px rgba(15, 23, 42, .05);
+            transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+          }
+          #lead-finder .lead-live-message.is-event .lead-live-bubble::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 50%;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--lf-faint);
+            box-shadow: 0 0 0 3px var(--lf-white);
+            transform: translate(-50%, -50%);
+          }
+          #lead-finder .lead-live-message.is-event:hover .lead-live-bubble {
+            transform: translateX(3px);
+            box-shadow: 0 8px 18px rgba(15, 23, 42, .1);
+          }
+          #lead-finder .lead-live-message.is-event.is-live .lead-live-bubble::before { background: var(--lf-accent); }
+          #lead-finder .lead-live-message.is-event.is-gain .lead-live-bubble::before { background: var(--lf-success); }
+          #lead-finder .lead-live-message.is-event.is-review .lead-live-bubble::before { background: var(--lf-warning); }
+          #lead-finder .lead-live-message.is-event.is-failed .lead-live-bubble::before { background: var(--lf-danger); }
+
+          #lead-finder .lead-live-message.is-event .lead-live-message-meta { grid-column: 1 / -1; justify-content: flex-start; margin-bottom: 2px; }
+          #lead-finder .lead-live-message.is-event p { min-width: 0; margin: 0; }
+          #lead-finder .lead-live-message.is-event p strong,
+          #lead-finder .lead-live-message.is-event p span { display: block; overflow-wrap: anywhere; }
+          #lead-finder .lead-live-message.is-event p strong { color: var(--lf-ink); font-size: 13px; font-weight: 680; line-height: 1.55; }
+          #lead-finder .lead-live-message.is-event p span { margin-top: 2px; color: var(--lf-muted); font-size: 12px; line-height: 1.6; }
+          #lead-finder .lead-live-message.is-event em { align-self: center; color: var(--lf-muted); font-size: 11px; font-style: normal; font-weight: 650; white-space: nowrap; }
+          #lead-finder .lead-live-message.is-event.is-live em { color: var(--lf-accent); }
+          #lead-finder .lead-live-message.is-event.is-live .lead-live-bubble { border-left-color: var(--lf-accent); }
+          #lead-finder .lead-live-message.is-event.is-gain em { color: var(--lf-success); }
+          #lead-finder .lead-live-message.is-event.is-gain .lead-live-bubble { border-left-color: var(--lf-success); }
+          #lead-finder .lead-live-message.is-event.is-review em { color: var(--lf-warning); }
+          #lead-finder .lead-live-message.is-event.is-review .lead-live-bubble { border-left-color: var(--lf-warning); }
+          #lead-finder .lead-live-message.is-event.is-failed em { color: var(--lf-danger); }
+          #lead-finder .lead-live-message.is-event.is-failed .lead-live-bubble { border-left-color: var(--lf-danger); }
+
+          #lead-finder .lead-live-message.is-discovery .lead-live-avatar { color: var(--lf-accent); border-color: #c5d6f7; background: var(--lf-accent-soft); }
+          #lead-finder .lead-live-message.is-discovery .lead-live-bubble { width: min(100%, 920px); }
+          #lead-finder .lead-live-discoveries { margin-top: 4px; border-top: 1px solid var(--lf-line); }
+          #lead-finder .lead-live-discoveries button {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 18px;
+            width: 100%;
+            min-height: 58px;
+            padding: 10px 2px;
+            border: 0;
+            border-bottom: 1px solid var(--lf-line);
+            color: var(--lf-copy);
+            background: transparent;
+            cursor: pointer;
+            text-align: left;
+            transition: color .2s ease, padding-left .2s ease;
+          }
+
+          #lead-finder .lead-live-discoveries button:hover { padding-left: 7px; color: var(--lf-accent); }
+          #lead-finder .lead-live-discoveries button span,
+          #lead-finder .lead-live-discoveries button b,
+          #lead-finder .lead-live-discoveries button small { display: block; min-width: 0; }
+          #lead-finder .lead-live-discoveries button b { overflow: hidden; color: inherit; font-size: 13px; font-weight: 680; text-overflow: ellipsis; white-space: nowrap; }
+          #lead-finder .lead-live-discoveries button small { margin-top: 2px; overflow: hidden; color: var(--lf-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+          #lead-finder .lead-live-discoveries button em { max-width: 240px; overflow: hidden; color: var(--lf-muted); font-size: 11px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+
+          /* 候选池摘要：保留可见，并套用新配色（与流式对话框/任务卡统一） */
+          #lead-finder .lead-pool-summary { display: grid; }
+          #lead-finder .lead-pool-summary .lead-command-item { border-color: var(--lf-line); border-radius: 14px; background: var(--lf-white); box-shadow: 0 8px 22px rgba(37, 52, 82, .05); }
+          #lead-finder .lead-pool-summary .lead-command-item span { color: var(--lf-muted); }
+          #lead-finder .lead-pool-summary .lead-command-item b { color: var(--lf-ink); }
+          #lead-finder .lead-pool-summary .lead-command-item.lead-parser-state b { color: var(--lf-accent); }
+
+          #lead-finder .lead-workbench {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            align-items: stretch;
+            margin: 22px 2px 0;
+          }
+
+          #lead-finder .lead-build-panel,
+          #lead-finder .lead-queue-panel {
+            min-width: 0;
+            margin: 0;
+            box-shadow: none;
+          }
+
+          #lead-finder .lead-build-panel {
+            padding: 18px 20px 20px;
+            border: 1px solid var(--lf-line);
+            border-radius: 16px;
+            background: var(--lf-white);
+            box-shadow: 0 14px 42px rgba(37, 52, 82, .06);
+          }
+
+          #lead-finder .lead-queue-panel {
+            position: static;
+            padding: 4px 0 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+          }
+
+          #lead-finder .lead-build-panel > .section-head,
+          #lead-finder .lead-queue-panel > .section-head,
+          #lead-finder .lead-results-panel > .section-head {
+            min-height: 0;
+            margin-bottom: 14px;
+          }
+
+          #lead-finder .section-title h2 { color: var(--lf-ink); font-size: 17px; font-weight: 700; line-height: 1.4; }
+          #lead-finder .section-title p { margin-top: 3px; color: var(--lf-muted); font-size: 11px; line-height: 1.5; }
+          #lead-finder .section-title .icon { display: none; }
+          #lead-finder .lead-build-panel > .section-head .badge { color: var(--lf-accent); background: var(--lf-accent-soft); }
+
+          #lead-finder .lead-search-mode {
+            display: inline-grid;
+            grid-template-columns: repeat(2, minmax(118px, 1fr));
+            width: auto;
+            min-height: 36px;
+            margin-bottom: 14px;
+            padding: 3px;
+            border: 1px solid var(--lf-line);
+            border-radius: 11px;
+            background: #f2f4f8;
+          }
+
+          #lead-finder .lead-search-mode button {
+            min-height: 30px;
+            padding: 0 15px;
+            border: 0;
+            border-radius: 8px;
+            color: var(--lf-muted);
+            background: transparent;
+            font-size: 12px;
+            font-weight: 650;
+            cursor: pointer;
+          }
+
+          #lead-finder .lead-search-mode button.active { color: var(--lf-ink); background: var(--lf-white); box-shadow: 0 2px 7px rgba(31, 43, 68, .09); }
+
+          #lead-finder .lead-brief-prompt { margin-bottom: 12px; }
+          #lead-finder .lead-brief-prompt label { margin-bottom: 9px; color: var(--lf-ink); font-size: 13px; font-weight: 680; }
+          #lead-finder .lead-brief-prompt textarea {
+            min-height: 72px;
+            padding: 15px 16px;
+            border: 1px solid var(--lf-line-strong);
+            border-radius: 12px;
+            color: var(--lf-ink);
+            background: #f9fafc;
+            font-size: 14px;
+            line-height: 1.65;
+            resize: vertical;
+          }
+
+          #lead-finder .lead-brief-prompt textarea::placeholder { color: #818a99; }
+          #lead-finder .lead-brief-prompt textarea:focus { border-color: #87a7eb; background: var(--lf-white); box-shadow: 0 0 0 3px #e7efff; }
+
+          #lead-finder .lead-form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0 16px;
+            margin-bottom: 4px;
+          }
+
+          #lead-finder .lead-form-grid .lead-field {
+            min-width: 0;
+            padding: 10px 0 8px;
+            border-bottom: 1px solid var(--lf-line);
+          }
+
+          #lead-finder .lead-form-grid .lead-field:last-child { grid-column: 1 / -1; }
+          #lead-finder .lead-form-grid .lead-field label,
+          #lead-finder .lead-advanced-settings .lead-field label { margin-bottom: 5px; color: var(--lf-muted); font-size: 11px; font-weight: 600; }
+
+          #lead-finder .lead-form-grid .lead-field input,
+          #lead-finder .lead-form-grid .lead-field select {
+            min-height: 31px;
+            padding: 1px 0;
+            border: 0;
+            border-radius: 0;
+            color: var(--lf-ink);
+            background: transparent;
+            box-shadow: none;
+            font-size: 13px;
+          }
+
+          #lead-finder .lead-form-grid .lead-field input:focus,
+          #lead-finder .lead-form-grid .lead-field select:focus { box-shadow: none; outline: 2px solid transparent; }
+
+          #lead-finder .lead-advanced-settings {
+            margin-top: 18px;
+            border: 0;
+            border-top: 1px solid var(--lf-line);
+            border-radius: 0;
+            background: transparent;
+          }
+
+          #lead-finder .lead-advanced-settings > summary {
+            padding: 15px 1px 12px;
+            color: var(--lf-copy);
+            background: transparent;
+            font-size: 12px;
+            font-weight: 680;
+          }
+
+          #lead-finder .lead-advanced-settings[open] > summary { color: var(--lf-accent); }
+          #lead-finder .lead-advanced-settings > .lead-field { max-width: 220px; margin-bottom: 14px; }
+
+          #lead-finder .lead-source-box,
+          #lead-finder .lead-schedule-config {
+            margin: 0 0 14px;
+            padding: 14px 0;
+            border: 0;
+            border-top: 1px solid var(--lf-line);
+            border-bottom: 1px solid var(--lf-line);
+            border-radius: 0;
+            background: transparent;
+          }
+
+          #lead-finder .lead-source-chips,
+          #lead-finder .lead-entry-chips { gap: 7px; }
+
+          #lead-finder .lead-source-chips button,
+          #lead-finder .lead-entry-chip {
+            border-radius: 8px;
+            color: var(--lf-copy);
+            background: #f1f3f7;
+          }
+
+          #lead-finder .lead-entry-chip.active { color: var(--lf-accent); border-color: #bdcff3; background: var(--lf-accent-soft); }
+          #lead-finder .lead-url-field { max-width: none !important; }
+          #lead-finder .lead-url-field textarea { min-height: 74px; border-radius: 10px; background: #f9fafc; }
+
+          #lead-finder .lead-super-config {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            margin: 0 0 17px;
+            padding: 15px;
+            border: 1px solid #dce5f6;
+            border-radius: 12px;
+            background: #f4f7fd;
+          }
+
+          #lead-finder .lead-super-web { border-color: var(--lf-line); border-radius: 9px; background: var(--lf-white); }
+          #lead-finder .lead-super-plan { border-radius: 9px; }
+          #lead-finder .lead-advanced-actions { align-items: center; padding-top: 1px; }
+
+          #lead-finder .lead-queue-live {
+            color: #287159;
+            font-size: 11px;
+            font-weight: 650;
+          }
+
+          #lead-finder .lead-queue-live::before {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            margin-right: 6px;
+            border-radius: 50%;
+            background: #2a8b6b;
+            content: "";
+            vertical-align: 1px;
+          }
+
+          #lead-finder .lead-job-list {
+            display: grid;
+            max-height: 720px;
+            gap: 0;
+            overflow: auto;
+            border: 0;
+            border-top: 1px solid var(--lf-line-strong);
+            border-radius: 0;
+            background: transparent;
+          }
+
+          #lead-finder .lead-job-card {
+            margin: 0;
+            padding: 16px 0 17px;
+            border: 0;
+            border-bottom: 1px solid var(--lf-line);
+            border-radius: 0;
+            background: transparent;
+            box-shadow: none;
+          }
+
+          #lead-finder .lead-job-card::before { background: var(--lf-accent); }
+          #lead-finder .lead-job-card:hover { background: transparent; }
+          #lead-finder .lead-job-top { grid-template-columns: 22px minmax(0, 1fr) auto; margin-bottom: 10px; padding: 0; }
+          #lead-finder .lead-job-toggle { width: 22px; height: 22px; border: 0; border-radius: 50%; color: var(--lf-muted); background: #e9edf3; box-shadow: none; }
+          #lead-finder .lead-job-toggle:hover { color: var(--lf-accent); border: 0; box-shadow: none; transform: none; }
+          #lead-finder .lead-job-top h3 { color: var(--lf-ink); font-size: 13px; font-weight: 680; line-height: 1.45; }
+          #lead-finder .lead-job-top p { color: var(--lf-muted); font-size: 10px; line-height: 1.5; }
+          #lead-finder .lead-job-top .badge { padding: 1px 6px; border-radius: 6px; font-size: 10px; }
+
+          #lead-finder .lead-job-metrics {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px 18px;
+            margin: 0 0 10px 30px;
+            overflow: visible;
+            border: 0;
+            border-radius: 0;
+          }
+
+          #lead-finder .lead-job-metrics > div {
+            min-height: 0;
+            padding: 0;
+            border: 0;
+            background: transparent;
+          }
+
+          #lead-finder .lead-job-metrics span,
+          #lead-finder .lead-job-metrics b { display: inline; font-size: 10px; line-height: 1.5; }
+          #lead-finder .lead-job-metrics span { margin-right: 4px; color: var(--lf-muted); }
+          #lead-finder .lead-job-metrics b { color: var(--lf-copy); font-weight: 680; }
+          #lead-finder .lead-job-progress { height: 2px; margin: 0 0 10px 30px; border-radius: 0; background: #e0e5ed; }
+          #lead-finder .lead-job-progress i { border-radius: 0; background: var(--lf-accent); }
+          #lead-finder .lead-job-steps { margin-left: 30px; }
+          #lead-finder .lead-job-steps span { padding: 0; color: var(--lf-muted); background: transparent; font-size: 10px; }
+          #lead-finder .lead-job-actions { margin-left: 30px; padding-top: 7px; }
+          #lead-finder .lead-job-open-hint { color: var(--lf-accent); font-size: 11px; }
+          #lead-finder .lead-job-open-hint > span { display: none; }
+
+          #lead-finder .lead-support-panel {
+            margin: 16px 2px 0;
+            border: 0;
+            border-top: 1px solid var(--lf-line-strong);
+            border-radius: 0;
+            background: transparent;
+          }
+
+          #lead-finder .lead-support-panel > summary { padding: 16px 1px; color: var(--lf-muted); font-size: 12px; font-weight: 650; }
+
+          #lead-finder .lead-result-layout { margin: 20px 2px 0; }
+          #lead-finder .lead-results-panel { padding: 0 0 30px; border: 0; border-top: 1px solid var(--lf-line-strong); border-radius: 0; background: transparent; box-shadow: none; }
+          #lead-finder .lead-results-panel > .section-head { padding-top: 16px; }
+          #lead-finder .lead-result-view-tabs { gap: 28px; margin-bottom: 12px; border-color: var(--lf-line); }
+          #lead-finder .lead-result-view-tabs button { padding: 0 2px; color: var(--lf-muted); font-size: 13px; font-weight: 620; }
+          #lead-finder .lead-result-view-tabs button.active { color: var(--lf-accent); }
+          #lead-finder .lead-result-view-tabs button.active::after { height: 2px; background: var(--lf-accent); }
+
+          #lead-finder .lead-filter-tabs,
+          #lead-finder .lead-cleaning-filters { gap: 20px; padding-bottom: 15px; border-bottom: 1px solid var(--lf-line); }
+
+          #lead-finder .lead-filter-tabs button,
+          #lead-finder .lead-cleaning-filters button {
+            min-height: 28px;
+            padding: 0;
+            border: 0;
+            border-radius: 0;
+            color: var(--lf-muted);
+            background: transparent;
+            font-size: 11px;
+            font-weight: 620;
+          }
+
+          #lead-finder .lead-filter-tabs button.active,
+          #lead-finder .lead-cleaning-filters button.active { color: var(--lf-accent); border: 0; background: transparent; }
+
+          #lead-finder .lead-table-wrap {
+            overflow: auto;
+            border: 1px solid var(--lf-line);
+            border-radius: 12px;
+            background: var(--lf-white);
+            box-shadow: 0 10px 34px rgba(37, 52, 82, .04);
+          }
+
+          #lead-finder .lead-table thead th { color: var(--lf-muted); border-color: var(--lf-line); background: #f5f7fa; }
+          #lead-finder .lead-table td { border-color: var(--lf-line); background: var(--lf-white); }
+          #lead-finder .lead-table tbody tr:hover td { background: #f8faff; }
+
+          /* Candidate pool: a horizontal scanning surface, not an inline-edit form. */
+          #lead-finder .lead-table-wrap {
+            overflow-x: hidden;
+            border-color: var(--lf-line);
+            border-radius: 14px;
+            box-shadow: 0 10px 30px rgba(37, 52, 82, .05);
+          }
+
+          #lead-finder .lead-table {
+            width: 100%;
+            min-width: 0;
+            table-layout: fixed;
+          }
+
+          #lead-finder .lead-table col.col-pick { width: 46px; }
+          #lead-finder .lead-table col.col-company { width: 25%; }
+          #lead-finder .lead-table col.col-source { width: 12%; }
+          #lead-finder .lead-table col.col-business { width: 20%; }
+          #lead-finder .lead-table col.col-country,
+          #lead-finder .lead-table col.col-contact { display: none; }
+          #lead-finder .lead-table col.col-contact-info { width: 19%; }
+          #lead-finder .lead-table col.col-score { width: 12%; }
+          #lead-finder .lead-table col.col-status { width: 12%; }
+
+          #lead-finder .lead-table .lead-candidate-hidden-column { display: none; }
+
+          #lead-finder .lead-table thead th {
+            height: 42px;
+            padding: 0 14px;
+            color: var(--td-text-color-secondary);
+            background: #f6f7f9;
+            font-size: 12px;
+            font-weight: 500;
+            line-height: 20px;
+            letter-spacing: 0;
+          }
+
+          #lead-finder .lead-table tbody tr { border-bottom: 0; }
+          #lead-finder .lead-table tbody tr:last-child td { border-bottom: 0; }
+          #lead-finder .lead-table td {
+            height: 104px;
+            padding: 16px 14px;
+            border-bottom: 1px solid var(--lf-line);
+            background: var(--td-bg-color-container);
+            vertical-align: middle;
+            transition: background-color .16s cubic-bezier(.16, 1, .3, 1), box-shadow .16s cubic-bezier(.16, 1, .3, 1);
+          }
+
+          #lead-finder .lead-table tbody tr:hover td { background: #f8f9fb; }
+          #lead-finder .lead-table tbody tr.is-checked td { background: #f2f6ff; }
+          #lead-finder .lead-table tbody tr.is-checked:hover td { background: #edf3ff; }
+          #lead-finder .lead-table tbody tr.is-checked td:first-child { box-shadow: inset 3px 0 0 var(--lf-accent); }
+
+          #lead-finder .lead-candidate-pick { padding-right: 6px; text-align: center; }
+          #lead-finder .lead-candidate-pick input {
+            width: 16px;
+            height: 16px;
+            margin: 0;
+            accent-color: var(--lf-accent);
+            cursor: pointer;
+          }
+          #lead-finder .lead-candidate-pick input:disabled { cursor: not-allowed; opacity: .42; }
+
+          #lead-finder .lead-company-cell { min-width: 0; }
+          #lead-finder .lead-cell-title { gap: 4px; min-width: 0; }
+          #lead-finder .lead-company-link {
+            display: block;
+            width: 100%;
+            padding: 0;
+            overflow: hidden;
+            color: var(--td-text-color-primary);
+            font-size: 15px;
+            font-weight: 600;
+            line-height: 22px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          #lead-finder .lead-company-link:hover { color: var(--lf-accent); text-decoration: none; }
+          #lead-finder .lead-cell-domain {
+            display: block;
+            width: 100%;
+            padding: 0;
+            overflow: hidden;
+            color: var(--td-text-color-brand);
+            font-size: 12px;
+            line-height: 18px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          #lead-finder .lead-cell-title time {
+            overflow: hidden;
+            color: var(--td-text-color-placeholder);
+            font-size: 11px;
+            line-height: 16px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          #lead-finder .lead-candidate-source,
+          #lead-finder .lead-candidate-profile,
+          #lead-finder .lead-candidate-contact,
+          #lead-finder .lead-candidate-state {
+            display: grid;
+            gap: 5px;
+            min-width: 0;
+          }
+
+          #lead-finder .lead-candidate-source .lead-src-tag {
+            display: block;
+            width: 100%;
+            padding: 0;
+            border-radius: 0;
+            color: var(--td-text-color-primary);
+            background: transparent;
+            font-size: 13px;
+            font-weight: 500;
+            line-height: 20px;
+          }
+
+          #lead-finder .lead-candidate-source > span,
+          #lead-finder .lead-candidate-contact > span,
+          #lead-finder .lead-candidate-state > span {
+            overflow: hidden;
+            color: var(--td-text-color-secondary);
+            font-size: 12px;
+            font-weight: 400;
+            line-height: 18px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          #lead-finder .lead-table input.lead-candidate-business-value {
+            display: block;
+            width: 100%;
+            height: 18px;
+            min-width: 0;
+            padding: 0;
+            overflow: hidden;
+            border: 0;
+            border-radius: 0;
+            color: var(--td-text-color-secondary);
+            background: transparent;
+            box-shadow: none;
+            font-size: 12px;
+            font-weight: 400;
+            line-height: 18px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            cursor: default;
+          }
+          #lead-finder .lead-table input.lead-candidate-business-value:hover,
+          #lead-finder .lead-table input.lead-candidate-business-value:focus { border: 0; background: transparent; box-shadow: none; }
+
+          #lead-finder .lead-candidate-profile > b,
+          #lead-finder .lead-candidate-contact > b,
+          #lead-finder .lead-candidate-state > b {
+            overflow: hidden;
+            color: var(--td-text-color-primary);
+            font-size: 13px;
+            font-weight: 500;
+            line-height: 20px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          #lead-finder .lead-candidate-contact > b { color: var(--td-text-color-brand); }
+          #lead-finder .lead-candidate-state > b.is-green { color: var(--td-success-color); }
+          #lead-finder .lead-candidate-state > b.is-amber { color: var(--td-warning-color); }
+          #lead-finder .lead-candidate-state > b.is-red { color: var(--td-error-color); }
+
+          #lead-finder .lead-candidate-score {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            align-items: baseline;
+            column-gap: 6px;
+            min-width: 0;
+          }
+          #lead-finder .lead-candidate-score strong {
+            color: var(--td-text-color-primary);
+            font-size: 24px;
+            font-weight: 600;
+            line-height: 28px;
+            font-variant-numeric: tabular-nums;
+          }
+          #lead-finder .lead-candidate-score > span {
+            color: var(--td-text-color-placeholder);
+            font-size: 11px;
+            line-height: 18px;
+            white-space: nowrap;
+          }
+          #lead-finder .lead-candidate-score small {
+            grid-column: 1 / -1;
+            overflow: hidden;
+            margin-top: 4px;
+            color: var(--td-warning-color);
+            font-size: 11px;
+            font-weight: 500;
+            line-height: 18px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          #lead-finder .lead-candidate-score small.is-qualified { color: var(--td-success-color); }
+
+          #lead-finder .lead-mobile-card.is-checked {
+            border-color: rgba(79,70,229,.4);
+            background: var(--lf-accent-soft);
+            box-shadow: inset 3px 0 0 var(--lf-accent);
+          }
+          #lead-finder .lead-mobile-score { display: grid; justify-items: end; }
+          #lead-finder .lead-mobile-score b { color: var(--td-text-color-primary); font-size: 20px; font-weight: 600; line-height: 24px; }
+          #lead-finder .lead-mobile-score small { color: var(--td-text-color-placeholder); font-size: 10px; font-weight: 400; line-height: 16px; }
+          #lead-finder .lead-mobile-contact { display: grid; gap: 3px; min-width: 0; }
+          #lead-finder .lead-mobile-contact span,
+          #lead-finder .lead-mobile-contact b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          #lead-finder .lead-mobile-contact span { color: var(--td-text-color-secondary); font-size: 12px; font-weight: 400; line-height: 18px; }
+          #lead-finder .lead-mobile-contact b { color: var(--td-text-color-brand); font-size: 13px; font-weight: 500; line-height: 20px; }
+          #lead-finder .lead-mobile-meta > span { color: var(--td-text-color-secondary); font-size: 11px; line-height: 18px; }
+
+          @media (max-width: 1080px) and (min-width: 761px) {
+            #lead-finder .lead-table col.col-company { width: 24%; }
+            #lead-finder .lead-table col.col-source { width: 13%; }
+            #lead-finder .lead-table col.col-business { width: 19%; }
+            #lead-finder .lead-table col.col-contact-info { width: 18%; }
+            #lead-finder .lead-table col.col-score { width: 13%; }
+            #lead-finder .lead-table col.col-status { width: 13%; }
+            #lead-finder .lead-table thead th,
+            #lead-finder .lead-table td { padding-right: 10px; padding-left: 10px; }
+            #lead-finder .lead-company-link { font-size: 14px; }
+          }
+
+          /* ---- Cleaning ledger (清洗去除) : card layout, reasons fully visible ---- */
+          #lead-finder .lead-cleaning-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 0 0 16px; }
+          #lead-finder .lead-cleaning-head h3 { margin: 0; color: var(--lf-ink); font-size: 17px; font-weight: 680; line-height: 1.4; }
+          #lead-finder .lead-cleaning-head p,
+          #lead-finder .lead-cleaning-head > span { color: var(--lf-muted); font-size: 12px; line-height: 1.7; }
+
+          #lead-finder .lead-cleaning-summary {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 10px;
+            margin: 0 0 18px;
+          }
+          #lead-finder .lead-cleaning-summary > div {
+            min-width: 0;
+            padding: 12px 14px;
+            border: 1px solid var(--lf-line);
+            border-radius: 12px;
+            background: var(--lf-white);
+          }
+          #lead-finder .lead-cleaning-summary span { display: block; color: var(--lf-muted); font-size: 12px; line-height: 1.5; }
+          #lead-finder .lead-cleaning-summary b { display: block; margin-top: 3px; color: var(--lf-ink); font-size: 19px; font-weight: 680; line-height: 1.3; font-variant-numeric: tabular-nums; }
+
+          #lead-finder .lead-cleaning-rows {
+            display: grid;
+            gap: 12px;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            overflow: visible;
+          }
+          #lead-finder .lead-cleaning-row {
+            display: grid;
+            grid-template-columns: 172px minmax(0, 1fr) auto;
+            align-items: start;
+            gap: 6px 16px;
+            padding: 16px 18px;
+            border: 1px solid var(--lf-line);
+            border-radius: 14px;
+            background: var(--lf-white);
+            box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+            transition: border-color .16s ease, box-shadow .16s ease;
+          }
+          #lead-finder .lead-cleaning-row:hover { border-color: var(--lf-line-strong); box-shadow: 0 8px 22px rgba(15, 23, 42, .08); }
+          #lead-finder .lead-cleaning-source { grid-column: 1; }
+          #lead-finder .lead-cleaning-record { grid-column: 2; }
+          #lead-finder .lead-cleaning-outcome { grid-column: 3; justify-self: end; }
+          #lead-finder .lead-cleaning-reason {
+            grid-column: 1 / -1;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 4px 14px;
+            margin-top: 10px;
+            padding-top: 12px;
+            border-top: 1px dashed var(--lf-line);
+          }
+          #lead-finder .lead-cleaning-time { grid-column: 1 / -1; margin-top: 2px; color: var(--lf-faint); font-size: 12px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+
+          #lead-finder .lead-cleaning-source b,
+          #lead-finder .lead-cleaning-record b,
+          #lead-finder .lead-cleaning-reason b { display: block; color: var(--lf-ink); font-size: 14px; font-weight: 620; line-height: 1.55; }
+          #lead-finder .lead-cleaning-source span,
+          #lead-finder .lead-cleaning-record span,
+          #lead-finder .lead-cleaning-reason span { display: block; color: var(--lf-muted); font-size: 12px; line-height: 1.7; }
+          /* KEY FIX: cleaning reasons wrap and never truncate */
+          #lead-finder .lead-cleaning-reason b { white-space: normal; overflow: visible; text-overflow: clip; color: var(--lf-ink); }
+          #lead-finder .lead-cleaning-reason span { white-space: normal; overflow: visible; text-overflow: clip; }
+
+          #lead-finder .lead-cleaning-outcome {
+            width: fit-content;
+            min-height: 24px;
+            padding: 2px 11px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 20px;
+          }
+          #lead-finder .lead-cleaning-outcome.is-merged { color: var(--lf-accent); background: var(--lf-accent-soft); }
+          #lead-finder .lead-cleaning-outcome.is-suppressed { color: var(--lf-warning); background: var(--lf-warning-soft); }
+          #lead-finder .lead-cleaning-outcome.is-rejected { color: var(--lf-danger); background: var(--lf-danger-soft); }
+
+          #lead-finder .lead-cleaning-candidate {
+            margin: 2px 0 0;
+            padding: 4px 12px;
+            border: 1px solid var(--lf-line);
+            border-radius: 999px;
+            color: var(--lf-accent);
+            background: var(--lf-white);
+            font-size: 12px;
+            line-height: 1.5;
+            cursor: pointer;
+            transition: border-color .16s ease, background .16s ease;
+          }
+          #lead-finder .lead-cleaning-candidate:hover { border-color: var(--lf-accent); background: var(--lf-accent-soft); }
+
+          @media (prefers-reduced-motion: no-preference) {
+            #lead-finder .lead-live-message.is-latest { animation: lead-conversation-enter .42s cubic-bezier(.16, 1, .3, 1) both; }
+          }
+
+          @keyframes lead-conversation-enter {
+            from { opacity: 0; transform: translateY(9px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+
+          @media (max-width: 1180px) {
+            #lead-finder .lead-workbench { grid-template-columns: 1fr; }
+            #lead-finder .lead-col-live { position: static; }
+            #lead-finder .lead-queue-panel { margin-top: 4px; }
+            #lead-finder .lead-job-list { max-height: 430px; }
+          }
+
+          @media (max-width: 760px) {
+            #lead-finder { width: 100%; }
+            #lead-finder .prospect-page-head { align-items: center; gap: 12px; margin-bottom: 16px; }
+            #lead-finder .prospect-page-head .head-actions { width: auto; }
+            #lead-finder .prospect-page-head .head-actions .btn { min-width: 110px; }
+            #lead-finder .prospect-page-head h1 { font-size: 21px; }
+            #lead-finder .prospect-page-head p { display: none; }
+            #lead-finder .lead-live-overview { min-height: 0; border-radius: 13px; }
+            #lead-finder .lead-live-empty { grid-template-columns: 36px minmax(0, 1fr); min-height: 200px; padding: 20px 16px; }
+            #lead-finder .lead-live-empty-mark { width: 36px; height: 36px; }
+            #lead-finder .lead-live-empty h2 { font-size: 22px; }
+            #lead-finder .lead-live-console-head { grid-template-columns: 1fr; gap: 10px; padding: 11px 14px; }
+            #lead-finder .lead-live-title-line h2 { width: 100%; font-size: 16px; }
+            #lead-finder .lead-live-meta span:nth-child(3) { display: none; }
+            #lead-finder .lead-live-actions { justify-content: flex-start; }
+            #lead-finder .lead-live-thread { gap: 23px; padding: 25px 17px 32px; }
+            #lead-finder .lead-live-message { grid-template-columns: 32px minmax(0, 1fr); gap: 10px; }
+            #lead-finder .lead-live-message.is-request { grid-template-columns: minmax(0, 1fr) 32px; width: 94%; }
+            #lead-finder .lead-live-avatar { width: 32px; height: 32px; }
+            #lead-finder .lead-live-history-note { margin-left: 42px; }
+            #lead-finder .is-request .lead-live-bubble,
+            #lead-finder .lead-live-message.is-assistant .lead-live-bubble { padding: 14px; }
+            #lead-finder .lead-live-facts { gap: 6px 14px; }
+            #lead-finder .lead-live-message.is-event .lead-live-bubble { grid-template-columns: 1fr; }
+            #lead-finder .lead-live-message.is-event em { margin-top: 3px; }
+            #lead-finder .lead-live-discoveries button { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+            #lead-finder .lead-live-discoveries button em { max-width: 100%; }
+            #lead-finder .lead-workbench { gap: 28px; margin-top: 28px; }
+            #lead-finder .lead-build-panel { padding: 20px 16px 22px; border-radius: 13px; }
+            #lead-finder .lead-search-mode { display: grid; width: 100%; }
+            #lead-finder .lead-form-grid { grid-template-columns: 1fr; }
+            #lead-finder .lead-form-grid .lead-field:last-child { grid-column: auto; }
+            #lead-finder .lead-super-config { grid-template-columns: 1fr; padding: 12px; }
+            #lead-finder .lead-advanced-settings > .lead-field { max-width: none; }
+            #lead-finder .lead-advanced-actions { display: grid; grid-template-columns: 1fr 1fr; }
+            #lead-finder .lead-advanced-actions .ai-toggle-line { grid-column: 1 / -1; }
+            #lead-finder .lead-job-list { max-height: none; overflow: visible; }
+            #lead-finder .lead-job-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
+            #lead-finder .lead-result-layout { margin-top: 36px; }
+            #lead-finder .lead-filter-tabs,
+            #lead-finder .lead-cleaning-filters { flex-wrap: nowrap; gap: 20px; overflow-x: auto; }
+            #lead-finder .lead-filter-tabs button,
+            #lead-finder .lead-cleaning-filters button { flex: 0 0 auto; }
+            #lead-finder .lead-cleaning-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 16px; }
+            #lead-finder .lead-cleaning-row { grid-template-columns: 1fr auto; gap: 6px 12px; }
+            #lead-finder .lead-cleaning-source { grid-column: 1; }
+            #lead-finder .lead-cleaning-record { grid-column: 1 / -1; }
+            #lead-finder .lead-cleaning-outcome { grid-column: 2; grid-row: 1; }
+            #lead-finder .lead-cleaning-reason { grid-column: 1 / -1; }
+            #lead-finder .lead-cleaning-time { grid-column: 1 / -1; }
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            #lead-finder *,
+            #lead-finder *::before,
+            #lead-finder *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+          }
+        </style>
   </head>
 <body>
   <section class="login-screen" aria-label="登录">
@@ -15699,7 +18260,7 @@
       <div class="login-field"><label>账号</label><input id="loginEmail" value="admin@goodjob.com" placeholder="请输入登录邮箱" autocomplete="username"></div>
       <div class="login-field"><label>密码</label><input id="loginPassword" type="password" value="goodjob123" placeholder="请输入密码" autocomplete="current-password"></div>
       <button class="btn primary" id="loginButton">Enter GoodJob</button>
-      <div class="login-product-version" id="loginProductVersion" aria-label="产品版本">GoodJob CRM · 版本 1.2.2</div>
+      <div class="login-product-version" id="loginProductVersion" aria-label="产品版本">GoodJob CRM · 正在读取版本</div>
     </div>
     <span class="login-signature" aria-hidden="true">kevin</span>
   </section>
@@ -15707,7 +18268,7 @@
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">GJ</div>
+        <div class="brand-mark" aria-hidden="true"><span>G</span><span>J</span></div>
         <div>
           <strong>GoodJob CRM</strong>
           <span>外贸客户增长中台</span>
@@ -16030,28 +18591,29 @@
         </div>
 
         <div class="view" id="lead-finder">
-          <div class="page-head">
-            <div><h1>自动获客</h1></div>
-            <div class="head-actions"><button class="btn primary" id="leadFinderStartButton">开始搜客</button></div>
-          </div>
-
-          <div class="lead-command-strip">
-            <div class="lead-command-item"><span>候选结果</span><b id="leadFinderTotalCount">0</b></div>
-            <div class="lead-command-item"><span>待确认</span><b id="leadFinderPendingCount">0</b></div>
-            <div class="lead-command-item"><span>已入线索</span><b id="leadFinderSyncedCount">0</b></div>
-            <div class="lead-command-item lead-parser-state"><span>当前归纳</span><b id="leadFinderAiState">规则</b><small id="leadFinderAiSub"></small></div>
+          <div class="page-head prospect-page-head">
+            <div><h1>自动获客</h1><p>搜客、验证与清洗实时协作</p></div>
+            <div class="head-actions"><button class="btn primary" id="leadFinderStartButton">新建搜客任务</button></div>
           </div>
 
           <div class="lead-workbench">
-            <section class="panel section lead-build-panel">
+            <div class="lead-col lead-col-config">
+              <section class="panel section lead-build-panel">
               <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 21l-4.3-4.3"/><circle cx="11" cy="11" r="7"/><path d="M11 7v4l3 2"/></svg></span><div><h2>创建搜客任务</h2></div></div>
-                <span class="badge" id="leadFinderAiBadge">规则归纳</span>
+                <div class="section-title"><div><h2>搜索简报</h2><p>定义本次搜索的客户范围</p></div></div>
+                <span class="badge lf-ai-source-badge" id="leadFinderAiBadge">AI 归纳 · 作为来源</span>
               </div>
-              <div class="lead-search-mode" role="group" aria-label="搜索模式">
-                <button class="active" type="button" data-lead-search-mode="standard">标准搜索</button>
-                <button type="button" data-lead-search-mode="super">超级搜索</button>
+              <div class="lead-mode-switches">
+                <div class="lead-search-mode" role="group" aria-label="搜索模式">
+                  <button class="active" type="button" data-lead-search-mode="standard">标准搜索</button>
+                  <button type="button" data-lead-search-mode="super">超级搜索</button>
+                </div>
+                <div class="lead-brief-mode" role="group" aria-label="搜索方式">
+                  <button class="active" type="button" data-lead-brief-mode="nl">自然语言</button>
+                  <button type="button" data-lead-brief-mode="form">结构化表单</button>
+                </div>
               </div>
+              <div class="lead-field lead-goal-field lead-brief-prompt" data-brief="nl"><label>你希望寻找什么样的客户？</label><textarea id="leadFinderGoalInput" placeholder="例如：优先寻找有水处理项目经验的德国分销商。"></textarea></div>
               <div class="lead-super-config" id="leadSuperSearchConfig" hidden>
                 <div class="lead-field"><label>目标候选数</label><input id="leadSuperTarget" type="number" min="20" max="10000" value="300"></div>
                 <div class="lead-field"><label>最长运行</label><select id="leadSuperDuration"><option value="120">2 小时</option><option value="480" selected>8 小时</option><option value="1440">24 小时</option><option value="4320">72 小时</option></select></div>
@@ -16075,7 +18637,7 @@
                 </div>
                 <div class="lead-super-web">
                   <label class="lead-super-switch" aria-label="AI 深度发现">
-                    <input id="leadSuperAiDiscovery" type="checkbox">
+                    <input id="leadSuperAiDiscovery" type="checkbox" checked>
                     <span></span>
                   </label>
                   <div class="lead-super-web-copy"><b>AI 深度发现</b><small id="leadSuperAiStatus">未启用</small></div>
@@ -16083,22 +18645,21 @@
                 </div>
                 <div class="lead-super-plan" id="leadSuperPlan"><span>等待搜索条件</span></div>
               </div>
-              <div class="lead-form-grid">
+              <div class="lead-form-grid" data-brief="form">
                 <div class="lead-field"><label>产品关键词</label><input id="leadProductKeywords" placeholder="输入产品关键词"></div>
                 <div class="lead-field"><label>国家/地区</label><input id="leadCountries" placeholder="输入目标国家或地区"></div>
                 <div class="lead-field"><label>行业/应用场景</label><input id="leadIndustryInput" placeholder="输入目标行业或应用场景"></div>
                 <div class="lead-field"><label>客户类型</label><select id="leadCustomerTypes"><option value="*" selected>全部客户类型</option><option>经销商 / Distributor</option><option>系统集成商 / System Integrator</option><option>OEM 设备厂</option><option>EPC 工程承包商</option><option>MRO 服务商</option><option>终端工厂</option></select></div>
                 <div class="lead-field"><label>排除词</label><input id="leadExcludeKeywords" placeholder="输入需要排除的关键词"></div>
               </div>
-              <details class="lead-advanced-settings" open>
-                <summary>高级设置</summary>
-                <div class="lead-field lead-goal-field"><label>补充获客目标</label><textarea id="leadFinderGoalInput" placeholder="例如：优先寻找有水处理项目经验的德国分销商。"></textarea></div>
+              <details class="lead-advanced-settings">
+                <summary>来源与执行设置</summary>
                 <div class="lead-field"><label>单次目标数量</label><select id="leadLimit"><option>10</option><option selected>20</option><option>30</option></select></div>
                 <div class="lead-source-box">
                   <div class="lead-source-head"><b>获客数据源</b><button class="btn tiny" id="leadSourceManageInline" type="button">配置</button></div>
                   <div class="lead-source-chips" id="leadSourceChips"><span class="empty-inline">数据源加载中…</span></div>
                   <div class="lead-entry-head"><b>人工搜索入口</b></div>
-                  <div class="lead-entry-chips">
+                  <div class="lead-entry-chips" data-brief="form">
                     <button type="button" class="lead-entry-chip active" data-lead-entry="google">Google/Web</button>
                     <button type="button" class="lead-entry-chip active" data-lead-entry="alibaba">Alibaba RFQ</button>
                     <button type="button" class="lead-entry-chip active" data-lead-entry="madein">Made-in-China</button>
@@ -16125,45 +18686,98 @@
                   </label>
                 </div>
                 <div class="lead-advanced-actions">
-                  <label class="ai-toggle-line"><input id="leadFinderUseAiInput" type="checkbox">使用 AI 归纳与评分</label>
+                  <label class="ai-toggle-line"><input id="leadFinderUseAiInput" type="checkbox" checked>使用 AI 归纳与评分<span class="badge lf-tag-source">必选 · 未配置无法搜索</span></label>
+                  <div id="leadFinderAiRequiredHint" class="lead-ai-required-hint" hidden>⚠️ 请先在「AI 配置」中配置并启用 AI 模型（含 API Key 且勾选自动获客），否则无法启动搜客。</div>
                   <button class="btn" id="leadSourceCenterButton" type="button">数据源中心</button>
                   <button class="btn" id="leadFinderAiConfigButton" type="button">AI配置</button>
                   <button class="btn" id="leadFinderExportButton" type="button">导出Excel</button>
                 </div>
               </details>
-              <div class="lead-runbar">
-                <button class="btn primary" id="leadFinderStartButtonInline">开始搜客</button>
-              </div>
-            </section>
+              </section>
 
-            <section class="panel section lead-queue-panel">
-              <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg></span><div><h2>任务队列</h2></div></div>
-                <span class="lead-queue-live">自动更新</span>
+          <section class="lead-live-overview lead-live-hero" id="leadFinderLiveOverview" aria-live="polite">
+            <div class="lead-live-empty">
+              <div class="lead-live-empty-mark" aria-hidden="true">AI</div>
+              <div>
+                <span>搜客助手</span>
+                <h2>从一份客户简报开始</h2>
+                <p>任务启动后，检索、验证、清洗和候选入池会在这里按事实持续打印。</p>
+                <button class="lead-live-empty-action" type="button" data-lead-empty-start>新建搜客任务</button>
               </div>
+            </div>
+          </section>
+
+              <details class="panel section lead-queue-panel" id="leadFinderHistoryPanel">
+              <summary class="section-head">
+                <div class="section-title"><div><h2>最近任务</h2></div></div>
+                <div class="section-head-actions">
+                  <span class="lead-queue-live">自动更新</span>
+                  <span class="section-caret" aria-hidden="true"></span>
+                </div>
+              </summary>
               <div class="lead-job-list" id="leadFinderJobList">
                 <div class="empty-cell">暂无搜客任务</div>
               </div>
+              </details>
+            </div>
+          </div>
+
+          <div class="lead-command-strip lead-pool-summary" aria-label="候选池摘要">
+            <div class="lead-command-item"><span>候选结果</span><b id="leadFinderTotalCount">0</b></div>
+            <div class="lead-command-item"><span>待确认</span><b id="leadFinderPendingCount">0</b></div>
+            <div class="lead-command-item"><span>已入线索</span><b id="leadFinderSyncedCount">0</b></div>
+            <div class="lead-command-item lead-parser-state"><span>当前归纳</span><b id="leadFinderAiState">规则</b><small id="leadFinderAiSub"></small></div>
+          </div>
+
+          <div class="lead-result-layout">
+            <section class="panel section lead-results-panel">
+              <div class="section-head">
+                <div class="section-title"><div><h2>搜索结果</h2><p id="leadFinderResultScope">候选入池后自动更新</p></div></div>
+                <div class="lead-bulkbar" id="leadFinderBulkbar"><span id="leadFinderSelectedCount">已选 0 条</span><button class="btn primary" id="leadFinderSyncButton">加入线索</button><button class="btn" id="leadFinderTodoButton">创建首个待办</button></div>
+              </div>
+              <div class="lead-result-view-tabs" role="tablist" aria-label="实时结果视图">
+                <button class="active" type="button" role="tab" aria-selected="true" data-lead-result-view="candidates">候选入池</button>
+                <button type="button" role="tab" aria-selected="false" data-lead-result-view="cleaning">清洗去除 <span id="leadFinderCleaningCount">0</span></button>
+              </div>
+              <div id="leadFinderCandidateView">
+              <div class="lead-filter-tabs">
+                <button class="active" data-lead-filter="all">全部</button>
+                <button data-lead-filter="pending">待确认</button>
+                <button data-lead-filter="high">高匹配</button>
+                <button data-lead-filter="duplicate">可能重复</button>
+                <button data-lead-filter="synced">已同步</button>
+              </div>
+              <div class="lead-table-wrap">
+                <table class="lead-table">
+                  <colgroup><col class="col-pick"><col class="col-company"><col class="col-source"><col class="col-business"><col class="col-country"><col class="col-contact"><col class="col-contact-info"><col class="col-score"><col class="col-status"></colgroup>
+                  <thead><tr><th aria-label="选择"></th><th>客户</th><th>来源</th><th>市场 / 业务</th><th class="lead-candidate-hidden-column"></th><th class="lead-candidate-hidden-column"></th><th>联系线索</th><th>搜索验证</th><th>状态</th></tr></thead>
+                  <tbody id="leadFinderResultRows"><tr><td colspan="9" class="empty-cell">暂无候选客户</td></tr></tbody>
+                </table>
+              </div>
+              <div class="lead-mobile-list" id="leadFinderMobileRows"></div>
+              <div class="lead-pagination" id="leadFinderPagination">
+                <span id="leadFinderPageSummary">0 条结果</span>
+                <div><button class="btn" id="leadFinderPrevPage" type="button">上一页</button><span id="leadFinderPageNumber">1 / 1</span><button class="btn" id="leadFinderNextPage" type="button">下一页</button></div>
+              </div>
+              </div>
+              <section class="lead-cleaning-ledger" id="leadFinderCleaningView" hidden aria-label="清洗去除记录">
+                <div class="lead-cleaning-head">
+                  <div><h3>管线清洗记录</h3><p>最近任务最多展示 100 条管线处置记录；来源解析阶段的数据无效与页内重复仅提供汇总。</p></div>
+                  <span id="leadFinderCleaningScope">等待任务数据</span>
+                </div>
+                <div class="lead-cleaning-filters" role="group" aria-label="清洗结果筛选">
+                  <button class="active" type="button" data-lead-cleaning-filter="all">全部去除</button>
+                  <button type="button" data-lead-cleaning-filter="merged">已归并</button>
+                  <button type="button" data-lead-cleaning-filter="suppressed">规则排除</button>
+                  <button type="button" data-lead-cleaning-filter="rejected">数据无效</button>
+                </div>
+                <div class="lead-cleaning-summary" id="leadFinderCleaningSummary"></div>
+                <div class="lead-cleaning-rows" id="leadFinderCleaningRows"><div class="empty-cell">暂无清洗去除记录</div></div>
+              </section>
             </section>
           </div>
 
-          <details class="panel section lead-support-panel">
-            <summary>获客管理与搜索入口</summary>
-            <section class="lead-schedule-section">
-              <div class="lead-schedule-section-head"><h3>定期搜索计划</h3><span id="leadFinderScheduleCount">0 个启用中</span></div>
-              <div class="lead-schedule-list" id="leadFinderScheduleList">
-                <div class="empty-cell">暂无定期搜索计划。</div>
-              </div>
-            </section>
-            <section class="identity-conflict-review" id="identityConflictReviewSection" hidden>
-              <div class="identity-conflict-review-head">
-                <div><h3>企业身份待复核</h3></div>
-                <span id="identityConflictReviewCount">0 条待处理</span>
-              </div>
-              <div class="identity-conflict-list" id="identityConflictReviewList">
-                <div class="empty-cell">暂无待复核的企业身份冲突。</div>
-              </div>
-            </section>
+          <div class="lead-insights-row">
             <div class="lead-support-grid">
               <section class="prospect-performance-review" aria-labelledby="prospectPerformanceTitle">
                 <div class="prospect-performance-head">
@@ -16182,35 +18796,26 @@
                 <div class="lead-search-links" id="leadFinderSearchLinks"></div>
               </div>
             </div>
-          </details>
+          </div>
 
-          <div class="lead-result-layout">
-            <section class="panel section lead-results-panel">
-              <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg></span><div><h2>候选客户结果库</h2></div></div>
-                <div class="lead-bulkbar" id="leadFinderBulkbar"><span id="leadFinderSelectedCount">已选 0 条</span><button class="btn primary" id="leadFinderSyncButton">加入线索</button><button class="btn" id="leadFinderTodoButton">创建首个待办</button></div>
-              </div>
-              <div class="lead-filter-tabs">
-                <button class="active" data-lead-filter="all">全部</button>
-                <button data-lead-filter="pending">待确认</button>
-                <button data-lead-filter="high">高匹配</button>
-                <button data-lead-filter="duplicate">可能重复</button>
-                <button data-lead-filter="synced">已同步</button>
-              </div>
-              <div class="lead-table-wrap">
-                <table class="lead-table">
-                  <colgroup><col class="col-pick"><col class="col-company"><col class="col-source"><col class="col-business"><col class="col-country"><col class="col-contact"><col class="col-contact-info"><col class="col-score"><col class="col-status"></colgroup>
-                  <thead><tr><th>选</th><th>公司 / 官网</th><th>来源</th><th>业务</th><th>国家</th><th>联系人</th><th>联系方式</th><th>评分</th><th>状态</th></tr></thead>
-                  <tbody id="leadFinderResultRows"><tr><td colspan="9" class="empty-cell">暂无候选客户</td></tr></tbody>
-                </table>
-              </div>
-              <div class="lead-mobile-list" id="leadFinderMobileRows"></div>
-              <div class="lead-pagination" id="leadFinderPagination">
-                <span id="leadFinderPageSummary">0 条结果</span>
-                <div><button class="btn" id="leadFinderPrevPage" type="button">上一页</button><span id="leadFinderPageNumber">1 / 1</span><button class="btn" id="leadFinderNextPage" type="button">下一页</button></div>
+          <details class="panel section lead-support-panel">
+            <summary>定期计划与企业复核</summary>
+            <section class="lead-schedule-section">
+              <div class="lead-schedule-section-head"><h3>定期搜索计划</h3><span id="leadFinderScheduleCount">0 个启用中</span></div>
+              <div class="lead-schedule-list" id="leadFinderScheduleList">
+                <div class="empty-cell">暂无定期搜索计划。</div>
               </div>
             </section>
-          </div>
+            <section class="identity-conflict-review" id="identityConflictReviewSection" hidden>
+              <div class="identity-conflict-review-head">
+                <div><h3>企业身份待复核</h3></div>
+                <span id="identityConflictReviewCount">0 条待处理</span>
+              </div>
+              <div class="identity-conflict-list" id="identityConflictReviewList">
+                <div class="empty-cell">暂无待复核的企业身份冲突。</div>
+              </div>
+            </section>
+          </details>
           <div class="lead-verification-backdrop" id="leadFinderVerificationBackdrop"></div>
           <aside class="lead-verification-drawer" id="leadFinderVerificationDrawer" aria-label="候选校验报告">
             <div id="leadFinderDetail"></div>
@@ -16236,6 +18841,11 @@
 
           <section class="task-run-stage" id="leadTaskDetailStage" aria-label="当前执行阶段"></section>
           <section class="task-run-metrics" id="leadTaskDetailMetrics" aria-label="任务数据摘要"></section>
+
+          <section class="task-run-acceptance" aria-labelledby="leadTaskAcceptanceTitle">
+            <div class="task-run-pane-head"><div><h2 id="leadTaskAcceptanceTitle">任务验收</h2><p>成功、失败和未通过项只在详情中展示</p></div></div>
+            <div id="leadTaskAcceptance"></div>
+          </section>
 
           <section class="task-run-sources" aria-labelledby="leadTaskSourcesTitle">
             <div class="task-run-pane-head"><div><h2 id="leadTaskSourcesTitle">来源返回</h2><p>每个来源返回多少、留下多少、失败在哪里</p></div><span id="leadTaskSourcesSummary"></span></div>
@@ -16268,13 +18878,9 @@
           <div class="task-run-workspace">
             <section class="task-run-pane" aria-labelledby="leadTaskStreamTitle">
               <div class="task-run-pane-head">
-                <div><h2 id="leadTaskStreamTitle">执行日志</h2><p>需要排查过程时再查看详细输出</p></div>
+                <div><h2 id="leadTaskStreamTitle">事实事件</h2><p>仅展示后端返回的执行、来源与清洗记录</p></div>
                 <div class="task-run-pane-tools">
-                  <div class="task-run-stream-mode" role="group" aria-label="日志显示模式">
-                    <button class="active" type="button" data-lead-stream-mode="summary">关键进度</button>
-                    <button type="button" data-lead-stream-mode="verbose">高速日志</button>
-                  </div>
-                  <span class="task-run-live" id="leadTaskStreamState">实时同步</span>
+                  <span class="task-run-live" id="leadTaskStreamState">事实事件同步</span>
                 </div>
               </div>
               <div class="task-run-stream" id="leadTaskStream" aria-live="polite" aria-relevant="additions"></div>
@@ -16297,8 +18903,8 @@
         </div>
 
         <div class="view" id="prospect-list">
-          <div class="page-head">
-            <div><h1>搜客清单</h1></div>
+          <div class="page-head prospect-page-head">
+            <div><h1>搜客清单</h1><p>核验候选、推进联系并保留完整加入时间</p></div>
             <div class="head-actions"><button class="btn" id="prospectOpenFinderButton">去自动获客</button><button class="btn" id="prospectRefreshButton">刷新清单</button></div>
           </div>
 
@@ -16313,11 +18919,27 @@
           <div class="prospect-list-layout">
             <section class="panel section prospect-list-panel">
               <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg></span><div><h2>线索列表</h2></div></div>
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg></span><div><h2>候选池</h2></div></div>
               </div>
-              <div class="prospect-toolbar">
-                <input id="prospectSearchInput" placeholder="搜索公司、国家、业务、邮箱">
-                <span id="prospectTotalCount">0 条候选</span>
+              <div class="prospect-toolbar prospect-toolbar-v2">
+                <label class="prospect-search-field"><span>搜索候选</span><input id="prospectSearchInput" placeholder="公司、国家、业务或邮箱"></label>
+                <label class="prospect-sort-field"><span>排序</span><select id="prospectSortSelect"><option value="joined_desc">最新加入</option><option value="joined_asc">最早加入</option><option value="priority">行动优先级</option><option value="status_changed">最近状态变化</option></select></label>
+                <span class="prospect-total" id="prospectTotalCount">0 条候选</span>
+              </div>
+              <div class="prospect-date-toolbar">
+                <span>加入时间</span>
+                <div class="prospect-date-presets" role="group" aria-label="加入候选池时间">
+                  <button class="active" type="button" data-prospect-date-filter="all">全部</button>
+                  <button type="button" data-prospect-date-filter="today">今天</button>
+                  <button type="button" data-prospect-date-filter="7d">近 7 天</button>
+                  <button type="button" data-prospect-date-filter="30d">近 30 天</button>
+                  <button type="button" data-prospect-date-filter="custom">自定义</button>
+                </div>
+                <div class="prospect-custom-dates" id="prospectCustomDates" hidden>
+                  <label>从 <input id="prospectJoinedFrom" type="date"></label>
+                  <span>至</span>
+                  <label><input id="prospectJoinedTo" type="date" aria-label="加入时间结束日期"></label>
+                </div>
               </div>
               <div class="prospect-tabs">
                 <button class="active" data-prospect-filter="all">全部</button>
@@ -16330,7 +18952,6 @@
               <div class="prospect-bulkbar">
                 <label><input id="prospectSelectPage" type="checkbox">本页全选</label>
                 <span id="prospectSelectedCount">已选 0 条</span>
-                <button class="btn" id="prospectMarkContactableButton">标记可联系</button>
                 <button class="btn" id="prospectExcludeButton">排除</button>
                 <button class="btn primary" id="prospectSyncButton">批量入线索</button>
                 <select id="prospectAssigneeSelect" hidden aria-label="选择业务员"><option value="">选择业务员</option></select>
@@ -16347,7 +18968,8 @@
 
             <section class="panel section prospect-detail-panel">
               <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg></span><div><h2>线索详情</h2></div></div>
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg></span><div><h2>候选详情</h2></div></div>
+                <button class="prospect-mobile-detail-close" id="prospectMobileDetailClose" type="button" title="返回候选清单" aria-label="返回候选清单">×</button>
               </div>
               <div id="prospectDetail">
                 <div class="empty-cell">未选择线索</div>
@@ -16579,13 +19201,56 @@
           <div class="ai-studio-grid">
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><circle cx="12" cy="12" r="4"/></svg></span><div><h2>供应商预设</h2></div></div></div>
+              <p class="ai-provider-hint">标记 <b>免费</b> 的供应商均可零门槛或极低费用获取 API Key。点击卡片自动带入默认参数，点击「去官网申请免费 Key ›」前往对应平台自助开通。</p>
               <div class="ai-provider-list" id="aiProviderList">
-                <button type="button" class="ai-provider-card active" data-ai-provider="openai"><div class="ai-provider-top"><div class="ai-provider-mark">AI</div><span class="badge green" id="gptConfigBadge">当前</span></div><h3>OpenAI GPT</h3></button>
-                <button type="button" class="ai-provider-card" data-ai-provider="deepseek"><div class="ai-provider-top"><div class="ai-provider-mark">DS</div><span class="badge gray">兼容</span></div><h3>DeepSeek</h3></button>
-                <button type="button" class="ai-provider-card" data-ai-provider="qwen"><div class="ai-provider-top"><div class="ai-provider-mark">QW</div><span class="badge gray">兼容</span></div><h3>通义千问</h3></button>
-                <button type="button" class="ai-provider-card" data-ai-provider="anthropic"><div class="ai-provider-top"><div class="ai-provider-mark">CL</div><span class="badge gray">原生</span></div><h3>Claude</h3></button>
-                <button type="button" class="ai-provider-card" data-ai-provider="gemini"><div class="ai-provider-top"><div class="ai-provider-mark">GM</div><span class="badge gray">原生</span></div><h3>Google Gemini</h3></button>
-                <button type="button" class="ai-provider-card" data-ai-provider="custom"><div class="ai-provider-top"><div class="ai-provider-mark">API</div><span class="badge gray">自定义</span></div><h3>自定义/本地模型</h3></button>
+                <div class="ai-provider">
+                  <button type="button" class="ai-provider-card" data-ai-provider="deepseek"><div class="ai-provider-top"><div class="ai-provider-mark">DS</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>DeepSeek</h3><p>深度求索 · deepseek-chat 极便宜</p></button>
+                  <a class="ai-provider-apply" href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
+                </div>
+                <div class="ai-provider">
+                  <button type="button" class="ai-provider-card" data-ai-provider="zhipu"><div class="ai-provider-top"><div class="ai-provider-mark">智</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>智谱 GLM</h3><p>智谱 · glm-4-flash 长期免费</p></button>
+                  <a class="ai-provider-apply" href="https://open.bigmodel.cn/usercenter/apikeys" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
+                </div>
+                <div class="ai-provider">
+                  <button type="button" class="ai-provider-card" data-ai-provider="qwen"><div class="ai-provider-top"><div class="ai-provider-mark">QW</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>通义千问</h3><p>阿里 DashScope · qwen 系列免费额度</p></button>
+                  <a class="ai-provider-apply" href="https://dashscope.console.aliyun.com/" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
+                </div>
+                <div class="ai-provider">
+                  <button type="button" class="ai-provider-card" data-ai-provider="volcengine"><div class="ai-provider-top"><div class="ai-provider-mark">豆</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>火山豆包</h3><p>火山引擎 Ark · doubao 免费额度</p></button>
+                  <a class="ai-provider-apply" href="https://console.volcengine.com/ark" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
+                </div>
+                <div class="ai-provider">
+                  <button type="button" class="ai-provider-card" data-ai-provider="moonshot"><div class="ai-provider-top"><div class="ai-provider-mark">K</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>Moonshot Kimi</h3><p>月之暗面 · 中文长文免费试用</p></button>
+                  <a class="ai-provider-apply" href="https://platform.moonshot.cn/" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
+                </div>
+                <div class="ai-provider">
+                  <button type="button" class="ai-provider-card" data-ai-provider="groq"><div class="ai-provider-top"><div class="ai-provider-mark">GQ</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>Groq</h3><p>开源模型高速推理 · 免费档</p></button>
+                  <a class="ai-provider-apply" href="https://console.groq.com/keys" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
+                </div>
+                <div class="ai-provider">
+                  <button type="button" class="ai-provider-card" data-ai-provider="openrouter"><div class="ai-provider-top"><div class="ai-provider-mark">OR</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>OpenRouter</h3><p>聚合平台 · 含免费模型</p></button>
+                  <a class="ai-provider-apply" href="https://openrouter.ai/keys" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
+                </div>
+                <div class="ai-provider">
+                  <button type="button" class="ai-provider-card" data-ai-provider="ollama"><div class="ai-provider-top"><div class="ai-provider-mark">OL</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>Ollama 本地</h3><p>本机运行 · 0 成本、数据私有</p></button>
+                  <a class="ai-provider-apply" href="https://ollama.com/download" target="_blank" rel="noopener">下载客户端 ›</a>
+                </div>
+                <div class="ai-provider">
+                  <button type="button" class="ai-provider-card" data-ai-provider="gemini"><div class="ai-provider-top"><div class="ai-provider-mark">GM</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">原生</span></div></div><h3>Google Gemini</h3><p>Gemini · flash 免费档</p></button>
+                  <a class="ai-provider-apply" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
+                </div>
+                <div class="ai-provider">
+                  <button type="button" class="ai-provider-card" data-ai-provider="openai"><div class="ai-provider-top"><div class="ai-provider-mark">AI</div><div class="ai-provider-badges"><span class="badge green" id="gptConfigBadge">当前</span></div></div><h3>OpenAI GPT</h3><p>GPT 系列（付费）</p></button>
+                  <a class="ai-provider-apply" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">去官网申请 Key ›</a>
+                </div>
+                <div class="ai-provider">
+                  <button type="button" class="ai-provider-card" data-ai-provider="anthropic"><div class="ai-provider-top"><div class="ai-provider-mark">CL</div><div class="ai-provider-badges"><span class="badge gray">原生</span></div></div><h3>Claude</h3><p>Anthropic（付费）</p></button>
+                  <a class="ai-provider-apply" href="https://console.anthropic.com/" target="_blank" rel="noopener">去官网申请 Key ›</a>
+                </div>
+                <div class="ai-provider">
+                  <button type="button" class="ai-provider-card" data-ai-provider="custom"><div class="ai-provider-top"><div class="ai-provider-mark">API</div><div class="ai-provider-badges"><span class="badge gray">自定义</span></div></div><h3>自定义/本地模型</h3><p>任意 OpenAI 兼容接口</p></button>
+                  <a class="ai-provider-apply" href="https://platform.openai.com/docs/guides/text-generation" target="_blank" rel="noopener">查看兼容规范 ›</a>
+                </div>
               </div>
             </section>
 
@@ -17894,7 +20559,7 @@
               <div class="website-scrape">
                 <div class="section-head">
                   <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span><div><h2>官网链接登记 → 人工核验</h2></div></div>
-                  <div class="head-actions"><button class="btn" id="websiteReferenceRegisterButton">登记链接</button><button class="btn primary" id="websiteReferenceSyncButton">加入线索中心</button></div>
+                  <div class="head-actions"><button class="btn" id="websiteReferenceRegisterButton">登记链接</button><button class="btn primary" id="websiteReferenceSyncButton">前往资格审查</button></div>
                 </div>
                 <div class="inline-alert">
                   <b>安全边界</b>
@@ -18411,5 +21076,91 @@
     renderTopbarForView("dashboard");
   </script>
   <script type="module" src="/src/prototype-api.ts"></script>
+  <script>
+    /* 自动获客 · 进度框滚动交互（纯视图层，不改动后台逻辑）
+       - 进度框高度占满一屏（见 #lead-finder .lead-live-overview）
+       - 流式刷新有新内容时，若用户未手动滚动，自动滚到最底
+       - 用户一旦滚动滚轮/触摸，暂停自动滚动
+       - 仅当用户滚回底部（接近最底）时，恢复自动滚动 */
+    (function () {
+      var overview = document.getElementById('leadFinderLiveOverview');
+      if (!overview) return;
+      var stick = true;            // 是否保持在底部（自动滚动开启）
+      var programmatic = false;    // 本次 scroll 是否由程序自动滚动引发
+      function thread() { return overview.querySelector('.lead-live-thread'); }
+      function atBottom(el) {
+        return !!el && (el.scrollHeight - el.scrollTop - el.clientHeight) < 48;
+      }
+      // 捕获阶段监听，能感知内部 .lead-live-thread 的滚动（scroll 不冒泡）
+      overview.addEventListener('scroll', function () {
+        if (programmatic) { programmatic = false; return; } // 忽略程序自动滚动
+        stick = atBottom(thread()); // 用户滚动：到底=true 恢复，离开=false 暂停
+      }, true);
+      // 用户主动滚动 -> 暂停自动滚动
+      overview.addEventListener('wheel', function () { stick = false; }, true);
+      overview.addEventListener('touchmove', function () { stick = false; }, true);
+      function toBottom() {
+        if (!stick) return;
+        var el = thread();
+        if (!el) return;
+        programmatic = true;
+        el.scrollTop = el.scrollHeight;
+      }
+      // 监听进度框内容变化（每次刷新/新事件），有新内容且 stick 时滚到底
+      var mo = new MutationObserver(function () { requestAnimationFrame(toBottom); });
+      mo.observe(overview, { childList: true, subtree: true, characterData: true });
+      toBottom();
+    })();
+
+    /* 自动获客 · 流式打印动效（纯显示层，不改动后台逻辑）
+       - 监听对话框内容变化，对 AI 回复文本做逐字显现
+       - 对事件卡片做顺序打印入场
+       - 用文本指纹缓存，避免刷新重绘时重复播放打字 */
+    (function () {
+      var root = document.getElementById('leadFinderLiveOverview');
+      if (!root) return;
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      var seen = Object.create(null);
+      function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+      function streamP(p) {
+        if (p.dataset.lfStreamed) return;
+        var raw = p.textContent;
+        if (!raw || !raw.trim()) { p.dataset.lfStreamed = '1'; return; }
+        if (p.querySelector('*')) { p.dataset.lfStreamed = '1'; return; } // 含标签不处理
+        if (raw.length > 240) { p.dataset.lfStreamed = '1'; return; }     // 过长直接显示
+        if (seen[raw]) { p.dataset.lfStreamed = '1'; return; }
+        seen[raw] = true;
+        p.dataset.lfStreamed = '1';
+        var chars = Array.from(raw), html = '';
+        for (var i = 0; i < chars.length; i++) {
+          var c = chars[i] === ' ' ? ' ' : esc(chars[i]);
+          html += '<span class="lf-stream-char" style="transition-delay:' + (i * 16) + 'ms">' + c + '</span>';
+        }
+        p.innerHTML = html;
+        requestAnimationFrame(function () { p.classList.add('lf-stream-on'); });
+      }
+      function scan() {
+        var thread = root.querySelector('.lead-live-thread');
+        if (!thread) return;
+        var ps = thread.querySelectorAll('.lead-live-message.is-assistant p');
+        for (var i = 0; i < ps.length; i++) streamP(ps[i]);
+        var events = thread.querySelectorAll('.lead-live-message.is-event');
+        var order = 0;
+        for (var j = 0; j < events.length; j++) {
+          var ev = events[j], etext = ev.textContent;
+          if (ev.dataset.lfStaggered || seen[etext]) { ev.dataset.lfStaggered = '1'; continue; }
+          seen[etext] = true; ev.dataset.lfStaggered = '1';
+          ev.classList.add('lf-print-hidden');
+          ev.style.transitionDelay = (order * 90) + 'ms'; order++;
+          (function (node) {
+            requestAnimationFrame(function () { requestAnimationFrame(function () { node.classList.remove('lf-print-hidden'); }); });
+          })(ev);
+        }
+      }
+      var mo2 = new MutationObserver(function () { scan(); });
+      mo2.observe(root, { childList: true, subtree: true, characterData: true });
+      scan();
+    })();
+  </script>
 </body>
 </html>

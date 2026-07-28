@@ -598,6 +598,15 @@ try {
     )
   );
   assert.ok(gleifCandidate);
+  const gleifProcessingState = store.prospectCandidateProcessingStates?.find((item) =>
+    item.teamId === ownerA.teamId
+    && item.ownerId === ownerA.id
+    && item.sourceRecordId === "5493001KJTIIGC8Y1R12"
+  );
+  assert.ok(gleifProcessingState);
+  assert.equal(gleifProcessingState.sourceCompany, "GLEIF Worker Company");
+  assert.equal(gleifProcessingState.sourceCountry, "DE");
+  assert.equal(gleifProcessingState.sourceDomain, "search.gleif.org");
   assert.equal(
     store.organizations.filter((item) =>
       item.teamId === ownerA.teamId

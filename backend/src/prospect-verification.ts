@@ -44,11 +44,21 @@ function evidenceTime(evidence: ProviderEvidenceSnapshot[], fallback: string) {
     .at(-1) || fallback;
 }
 
+function fieldAuthorityRank(value: string | undefined) {
+  return ({ assisted: 0, discovery: 1, corroborated: 2, official: 3 } as Record<string, number>)[value || ""] ?? -1;
+}
+
+function fieldHasAuthority(
+  item: ProviderEvidenceSnapshot,
+  field: string,
+  minimum: "corroborated" | "official"
+) {
+  return fieldAuthorityRank(item.fieldAuthority?.[field]) >= fieldAuthorityRank(minimum);
+}
+
 function isIdentityEvidence(item: ProviderEvidenceSnapshot) {
-  return item.sourceLevel === "identity"
-    || /(registry|registration|legal[_ -]?entity|company[_ -]?registry|lei)/iu.test(
-      `${item.recordType} ${item.evidenceSummary}`
-    );
+  return fieldHasAuthority(item, "company", "official")
+    && fieldHasAuthority(item, "providerRecordId", "official");
 }
 
 function check(
@@ -76,6 +86,7 @@ export function buildProspectVerificationReport(
     | "source"
     | "lastReplyClassification"
     | "outreachState"
+    | "websiteProbeAttempts"
   >,
   generatedAt = new Date().toISOString()
 ): ProspectVerificationReport {
@@ -87,7 +98,9 @@ export function buildProspectVerificationReport(
   const evidenceWithDomains = evidence
     .map((item) => ({
       providerId: item.providerId,
-      domain: websiteDomain(item.officialWebsite)
+      domain: fieldHasAuthority(item, "officialWebsite", "corroborated")
+        ? websiteDomain(item.officialWebsite)
+        : ""
     }))
     .filter((item) => item.providerId && item.domain);
   const evidenceDomains = [...new Set(
@@ -108,19 +121,26 @@ export function buildProspectVerificationReport(
   const contactEvidence = evidence.some((item) =>
     item.matchedFields.some((field) =>
       /(contact|email|phone|whatsapp|wechat)/iu.test(field)
+      && fieldHasAuthority(item, field, "corroborated")
     )
   );
   const manuallyVerified = Boolean(
     opportunity.verifiedAt
     || ["contactable", "contacted", "synced"].includes(opportunity.status)
   );
-  const replied = opportunity.outreachState === "replied"
-    || hasValue(opportunity.lastReplyClassification);
+  const replied = new Set([
+    "clear_demand",
+    "interested_nurture",
+    "referral"
+  ]).has(opportunity.lastReplyClassification || "");
+  const latestProbe = [...(opportunity.websiteProbeAttempts || [])]
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+  const controlledProbe = Boolean(latestProbe);
 
   let level: ProspectVerificationReport["level"] = "L0";
   if (evidence.length) level = "L1";
   if (identityEvidence.length) level = "L2";
-  if (multiSourceDomainVerified) level = "L3";
+  if (identityEvidence.length && multiSourceDomainVerified) level = "L3";
   if (manuallyVerified) level = "L4";
   if (replied) level = "L5";
 
@@ -159,8 +179,10 @@ export function buildProspectVerificationReport(
       "crawler_free_policy",
       "网页访问策略",
       "passed",
-      "系统未访问、下载、解析或探测企业网页，仅保存链接和授权数据源返回字段。",
-      "系统安全策略",
+      controlledProbe
+        ? `已按 ${latestProbe!.policyVersion} 对规范官网执行受控低频验证；仅访问 robots.txt 和首页，可提取同域公开业务邮箱，不跟随站内链接或保存网页原文。`
+        : "系统尚未访问、下载、解析或探测企业网页，仅保存链接和授权数据源返回字段。",
+      controlledProbe ? "受控官网验证策略" : "系统安全策略",
       generatedAt
     ),
     check(
@@ -233,6 +255,21 @@ export function buildProspectVerificationReport(
     )
   ];
 
+  if (latestProbe) {
+    checks.push(check(
+      "controlled_website_probe",
+      "官网弱证据",
+      latestProbe.outcome === "evidence_found" ? "partial" : "unverified",
+      latestProbe.outcome === "evidence_found"
+        ? latestProbe.evidence?.publicContactEmail
+          ? `官网首页公开了业务邮箱 ${latestProbe.evidence.publicContactEmail}；该邮箱仍需人工确认后才能用于触达。`
+          : "官网首页提供了组织级结构化弱证据；该证据不能单独确认企业身份或通过 ICP 门禁。"
+        : "官网验证未取得公开业务邮箱或组织级结构化证据；不可达、拒绝访问或无证据均不降低企业与 ICP 评分。",
+      latestProbe.sourceUrl,
+      latestProbe.completedAt || latestProbe.createdAt
+    ));
+  }
+
   if (replied) {
     checks.push(check(
       "real_interaction",
@@ -249,7 +286,8 @@ export function buildProspectVerificationReport(
     levelLabel: levelMeta[level].label,
     conclusion: levelMeta[level].conclusion,
     generatedAt,
-    crawlerFree: true,
+    crawlerFree: !controlledProbe,
+    accessMode: controlledProbe ? "controlled_probe" : "reference_only",
     checks
   };
 }
@@ -274,6 +312,7 @@ export function prospectVerificationReferenceTime(
     | "lastDevelopmentEmailAt"
     | "lastTouchpointAt"
     | "sourceEvidence"
+    | "websiteProbeAttempts"
   >
 ) {
   const timestamps = [
@@ -282,7 +321,13 @@ export function prospectVerificationReferenceTime(
     opportunity.statusChangedAt,
     opportunity.lastDevelopmentEmailAt,
     opportunity.lastTouchpointAt,
-    ...(opportunity.sourceEvidence || []).map((item) => item.fetchedAt)
+    ...(opportunity.sourceEvidence || []).map((item) => item.fetchedAt),
+    ...(opportunity.websiteProbeAttempts || []).flatMap((item) => [
+      item.createdAt,
+      item.startedAt,
+      item.completedAt,
+      ...item.events.map((event) => event.createdAt)
+    ])
   ]
     .map((value) => Date.parse(String(value || "")))
     .filter(Number.isFinite);
@@ -294,10 +339,16 @@ export function prospectVerificationReferenceTime(
 export function ensureProspectVerificationReport<
   T extends WebsiteOpportunity
 >(opportunity: T): T {
-  if (!opportunity.verificationReport) {
+  const referenceTime = prospectVerificationReferenceTime(opportunity);
+  const expectedAccessMode = opportunity.websiteProbeAttempts?.length
+    ? "controlled_probe"
+    : "reference_only";
+  if (!opportunity.verificationReport
+    || opportunity.verificationReport.generatedAt < referenceTime
+    || opportunity.verificationReport.accessMode !== expectedAccessMode) {
     withProspectVerificationReport(
       opportunity,
-      prospectVerificationReferenceTime(opportunity)
+      referenceTime
     );
   }
   return opportunity;

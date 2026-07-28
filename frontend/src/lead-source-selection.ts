@@ -32,8 +32,8 @@ export function resolveLeadSearchSources(
     return {
       sources: providers
         .filter((provider) =>
-          provider.id !== "ai_search"
-          && provider.recommended
+          // AI 搜索在模型配置可用时默认参与；其余仅纳入推荐来源
+          (provider.id === "ai_search" || provider.recommended)
           && isLeadSourceExecutable(provider)
         )
         .map((provider) => provider.id),

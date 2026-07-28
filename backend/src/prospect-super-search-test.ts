@@ -33,7 +33,7 @@ import {
   transitionProspectSuperSearch
 } from "./prospect-super-search.js";
 import { getStore } from "./store.js";
-import type { Role, User } from "./types.js";
+import type { ProspectExecutionAttempt, Role, User } from "./types.js";
 
 function testUser(id: string, teamId: string, role: Role): User {
   return {
@@ -67,6 +67,7 @@ const original = {
   missions: [...store.prospectSuperSearchMissions],
   rounds: [...store.prospectSuperSearchRounds],
   events: [...store.prospectSuperSearchEvents],
+  executionAttempts: [...store.prospectExecutionAttempts],
   persist: store.persist,
   persistMutation: store.persistMutation,
   persistProspectExecutionMutation: store.persistProspectExecutionMutation
@@ -92,6 +93,7 @@ store.agentJobIdempotencyAliases.splice(0);
 store.prospectSuperSearchMissions.splice(0);
 store.prospectSuperSearchRounds.splice(0);
 store.prospectSuperSearchEvents.splice(0);
+store.prospectExecutionAttempts.splice(0);
 store.persist = async () => undefined;
 store.persistMutation = undefined;
 store.persistProspectExecutionMutation = undefined;
@@ -196,13 +198,31 @@ try {
     ["handler", "vertriebspartner", "distributeur", "revendeur"].includes(term)
   ));
   assert.ok(plannedRounds[2]?.resolvedQuery.purchaseScenarioTerms.some((term) =>
-    ["rfq", "tender", "procurement", "ausschreibung", "appel d'offres"].includes(term)
+    ["rfq", "tender", "procurement", "ausschreibung", "appel d'offres", "licitacion", "solicitud de cotizacion"].includes(term)
   ));
   assert.deepEqual(
     planProspectSearchRound({ ...plannerInput, roundNo: 2 }).resolvedQuery.countries,
     plannedRounds[1]?.resolvedQuery.countries
   );
   assert.ok(plannedRounds.every((item) => item.queryCells.length <= 48));
+  assert.ok(plannedRounds.every((item) =>
+    item.resolvedQuery.countries.length === 1
+    && item.resolvedQuery.languages.length === 1
+    && item.resolvedQuery.customerTypes.length === 1
+    && item.resolvedQuery.purchaseScenarioTerms.length === 1
+    && item.queryCells.length === plannerInput.providerIds.length
+    && item.queryCells.every((cell) =>
+      cell.market === item.resolvedQuery.countries[0]
+      && cell.language === item.resolvedQuery.languages[0]
+      && cell.customerType === item.resolvedQuery.customerTypes[0]
+    )
+  ));
+  assert.equal(
+    new Set(plannedRounds.flatMap((item) =>
+      item.queryCells.map((cell) => cell.fingerprint)
+    )).size,
+    plannedRounds.length * plannerInput.providerIds.length
+  );
   assert.ok(plannedRounds.every((item) => ![
     ...item.resolvedQuery.customerTypes,
     ...item.resolvedQuery.purchaseScenarioTerms
@@ -227,6 +247,9 @@ try {
   assert.equal(aiEnhancedPlan.metadata.planningMode, "ai_enhanced");
   assert.notEqual(aiEnhancedPlan.metadata.fingerprint, plannedRounds[1]?.metadata.fingerprint);
   assert.ok(aiEnhancedPlan.resolvedQuery.synonyms.includes("industrial process pump"));
+  assert.equal(aiEnhancedPlan.resolvedQuery.languages.length, 1);
+  assert.equal(aiEnhancedPlan.resolvedQuery.customerTypes.length, 1);
+  assert.equal(aiEnhancedPlan.resolvedQuery.purchaseScenarioTerms.length, 1);
   validateProspectSearchQueryPlan({
     metadata: aiEnhancedPlan.metadata,
     resolvedQuery: aiEnhancedPlan.resolvedQuery
@@ -481,7 +504,9 @@ try {
   assert.deepEqual(missionResult.mission.webProviderIds, []);
   assert.equal(missionResult.mission.mapSearchMode, "off");
   assert.equal(missionResult.mission.aiDiscoveryMode, "off");
-  assert.equal(missionResult.rounds[0]?.queryPlanSnapshot.synonyms[0], "industriepumpe");
+  assert.deepEqual(missionResult.rounds[0]?.queryPlanSnapshot.countries, ["germany"]);
+  assert.equal(missionResult.rounds[0]?.queryPlanSnapshot.customerTypes.length, 1);
+  assert.equal(missionResult.rounds[0]?.queryPlanSnapshot.languages.length, 1);
   assert.equal(missionResult.rounds[0]?.queryTheme, "baseline");
   assert.equal(missionResult.rounds[0]?.queryPlanFingerprint?.length, 64);
   assert.equal(
@@ -540,7 +565,76 @@ try {
   const storedCompletedMission = store.prospectSuperSearchMissions.find((item) => item.id === completed.mission.id)!;
   const revisionBeforeRefresh = storedCompletedMission.revision;
   refreshProspectSuperSearchMissionResults(store, completed.mission.id);
-  assert.equal(storedCompletedMission.revision, revisionBeforeRefresh + 1);
+  assert.equal(
+    storedCompletedMission.revision,
+    revisionBeforeRefresh,
+    "refresh without metric changes must not create a new mission revision"
+  );
+
+  const costRound = store.prospectSuperSearchRounds.find((item) =>
+    item.id === completed.rounds[0]!.id
+  )!;
+  const costShard = store.prospectRunShards.find((item) =>
+    item.runId === costRound.runId
+  )!;
+  const costAttempt = (overrides: Partial<ProspectExecutionAttempt>): ProspectExecutionAttempt => ({
+    id: `pea_${Math.random().toString(16).slice(2)}`,
+    teamId: mission.teamId,
+    ownerId: mission.ownerId,
+    runId: costRound.runId,
+    shardId: costShard.id,
+    jobId: "job-super-search-cost",
+    leaseId: "lease-super-search-cost",
+    providerCode: costShard.providerCode,
+    checkpointNo: 1,
+    checkpointCallNo: 1,
+    providerAttemptNo: 1,
+    status: "succeeded",
+    requestHash: "a".repeat(64),
+    responseHash: "b".repeat(64),
+    errorCode: "",
+    errorMessage: "",
+    retryable: false,
+    retryAfterAt: "",
+    usageJson: "{}",
+    costKind: "actual",
+    costAmount: 0.25,
+    currency: "USD",
+    startedAt: costRound.createdAt,
+    finishedAt: costRound.completedAt,
+    createdAt: costRound.createdAt,
+    version: 1,
+    ...overrides
+  });
+  store.prospectExecutionAttempts.push(costAttempt({}));
+  storedCompletedMission.currency = "USD";
+  const revisionBeforeCostRefresh = storedCompletedMission.revision;
+  refreshProspectSuperSearchMissionResults(store, completed.mission.id);
+  assert.equal(costRound.cost, 0.25);
+  assert.equal(costRound.costIntegrityStatus, "complete");
+  assert.equal(costRound.queryCells?.[0]?.costAmount, 0.25);
+  assert.equal(storedCompletedMission.totalCost, 0.25);
+  assert.equal(storedCompletedMission.revision, revisionBeforeCostRefresh + 1);
+  storedCompletedMission.costLimit = 0.2;
+  assert.equal(
+    prospectSuperSearchConvergenceReason(store, storedCompletedMission),
+    "已达到费用上限"
+  );
+  store.prospectExecutionAttempts.push(costAttempt({
+    id: "pea-super-search-unknown-cost",
+    checkpointCallNo: 2,
+    providerAttemptNo: 2,
+    costKind: "unknown",
+    costAmount: null,
+    currency: ""
+  }));
+  storedCompletedMission.costLimit = 10;
+  refreshProspectSuperSearchMissionResults(store, completed.mission.id);
+  assert.equal(costRound.costUnknownCount, 1);
+  assert.equal(
+    prospectSuperSearchConvergenceReason(store, storedCompletedMission),
+    "费用回执不完整，已停止后续调用"
+  );
 
   const standard = await createProspectRun({
     store,
@@ -568,7 +662,10 @@ try {
   completed.mission.maxRounds = 8;
   completed.mission.candidateCount = 0;
   completed.mission.deadlineAt = new Date(Date.now() + 60_000).toISOString();
-  completed.rounds.slice(-2).forEach((item) => {
+  store.prospectSuperSearchRounds
+    .filter((item) => item.missionId === completed.mission.id)
+    .slice(-2)
+    .forEach((item) => {
     item.yieldRate = 0.01;
     item.duplicateRate = 0.95;
   });
@@ -607,6 +704,7 @@ try {
   store.prospectSuperSearchMissions.splice(0, store.prospectSuperSearchMissions.length, ...original.missions);
   store.prospectSuperSearchRounds.splice(0, store.prospectSuperSearchRounds.length, ...original.rounds);
   store.prospectSuperSearchEvents.splice(0, store.prospectSuperSearchEvents.length, ...original.events);
+  store.prospectExecutionAttempts.splice(0, store.prospectExecutionAttempts.length, ...original.executionAttempts);
   store.persist = original.persist;
   store.persistMutation = original.persistMutation;
   store.persistProspectExecutionMutation = original.persistProspectExecutionMutation;

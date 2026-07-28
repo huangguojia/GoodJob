@@ -2,6 +2,8 @@ import { createDefaultProviderCatalog } from "./provider-catalog.js";
 import type { AcquisitionOutcomeFeedback, AgentJob, AgentJobIdempotencyAlias, AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerActivity, CustomerIntelligenceSuggestion, DailyReport, DailyReportComment, Deal, DealEvent, DealRecommendation, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, InternalMessage, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, MarketOpportunityBatch, MarketOpportunityCalculationEvent, MarketOpportunitySnapshot, MarketTradeObservation, Memo, MonthlySalesRecord, OcrJob, Organization, OrganizationAcceptedIdentifier, OrganizationAliasFact, OrganizationCanonicalMapping, OrganizationIdentityClaim, OrganizationIdentityConflict, OrganizationIdentityConflictReview, OrganizationIdentityEvent, OrganizationIdentityResolution, OrganizationRelationFact, OrganizationSourceBinding, PlanTask, PlanTemplate, ProblemItem, ProcurementSignal, ProspectCampaign, ProspectCampaignEvent, ProspectCampaignVersion, ProspectCoverageEvent, ProspectExecutionAttempt, ProspectExecutionCheckpoint, ProspectExecutionEvent, ProspectExecutionKernelState, ProspectExecutionLease, ProspectExecutionPage, ProspectExecutionThrottleBucket, ProspectProviderRequestAccountingEvidence, ProspectProviderRequestAttemptBinding, ProspectProviderRequestDispatch, ProspectProviderRequestEvent, ProspectProviderRequestLedger, ProspectRunEvent, ProspectRunQueueChildBinding, ProspectRunQueueParentBinding, ProspectRunShard, ProspectSchedule, ProspectSearchRun, ProspectSourceRawBatch, ProspectSourceRawHit, ProspectSourceRawRecord, ProspectStrategy, ProspectStrategyEvent, ProspectStrategySourcePosition, ProspectStrategySuggestion, ProspectSuperSearchEvent, ProspectSuperSearchMission, ProspectSuperSearchRound, ProspectTouchpoint, ProviderCatalogItem, ProviderConnection, ProviderRequestLog, ProviderResponseCache, Reminder, SalesRecordAudit, TenantProspect, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity, WhatsAppMessage, WhatsAppBinding } from "./types.js";
 import type {
   CompanyVerificationSnapshot,
+  ProspectCandidateQualificationCheckpoint,
+  ProspectCandidateQualificationRevision,
   ProspectContact,
   ProspectContactChannel,
   ProspectContactVerificationSnapshot,
@@ -65,6 +67,10 @@ export const organizationIdentityEvents: OrganizationIdentityEvent[] = [];
 export const tenantProspects: TenantProspect[] = [];
 export const prospectCoverageEvents: ProspectCoverageEvent[] = [];
 export const prospectEvidence: ProspectEvidence[] = [];
+export const prospectCandidateQualificationRevisions:
+  ProspectCandidateQualificationRevision[] = [];
+export const prospectCandidateQualificationCheckpoints:
+  ProspectCandidateQualificationCheckpoint[] = [];
 export const companyVerificationSnapshots: CompanyVerificationSnapshot[] = [];
 export const prospectIcpPolicySnapshots: ProspectIcpPolicySnapshot[] = [];
 export const prospectIcpAssessmentSnapshots: ProspectIcpAssessmentSnapshot[] = [];

@@ -6,13 +6,15 @@ import {
   ProspectQualificationError,
   validateProspectQualificationState
 } from "./prospect-qualification.js";
+import { buildProspectScorecard } from "./prospect-scorecard.js";
 import { getStore } from "./store.js";
 import type { CrmStore } from "./store.js";
 import type {
   Organization,
   ProspectCampaign,
   ProspectCampaignVersion,
-  TenantProspect
+  TenantProspect,
+  WebsiteOpportunity
 } from "./types.js";
 
 process.env.PROSPECT_QUALIFICATION_MASTER_SECRET =
@@ -437,6 +439,57 @@ assert.equal(currentContactabilityDecision(store, {
   at: at(16)
 })?.status, "approved_contactable");
 
+if (!("contractVersion" in approved.record)
+  || !("dependencyHash" in approved.record)) {
+  throw new Error("approved contactability record is missing version fields");
+}
+const currentContractVersion = approved.record.contractVersion;
+const currentDependencyHash = approved.record.dependencyHash;
+approved.record.contractVersion = "prospect-qualification-gate-v1";
+approved.record.dependencyHash = "legacy-dependency-hash";
+const legacyApproval = currentContactabilityDecision(store, {
+  teamId,
+  ownerId,
+  prospectId,
+  campaignId,
+  campaignVersion: 1,
+  channelId: channel.record.id,
+  at: at(16)
+});
+assert.equal(legacyApproval?.status, "stale");
+assert.equal(
+  legacyApproval?.reasonCodes.includes("QUALIFICATION_CONTRACT_CHANGED"),
+  true
+);
+approved.record.contractVersion = currentContractVersion;
+approved.record.dependencyHash = currentDependencyHash;
+
+const qualifiedCandidate: WebsiteOpportunity = {
+  id: "candidate-qualification-a",
+  company: organization.legalName,
+  business: "Industrial lighting distributor",
+  country: "DE",
+  website: "https://qualification.example/",
+  contact: "Sales",
+  contactInfo: "sales@qualification.example",
+  description: "Qualification scorecard fixture",
+  ownerId,
+  teamId,
+  status: "contactable",
+  tenantProspectId: prospectId,
+  organizationId,
+  createdAt: at(0)
+};
+const qualifiedScorecard = buildProspectScorecard(
+  store,
+  qualifiedCandidate,
+  at(16)
+);
+assert.equal(qualifiedScorecard.enterpriseConfidence.score, 100);
+assert.equal(qualifiedScorecard.icpMatch.score, 86);
+assert.equal(qualifiedScorecard.contactReadiness.score, 100);
+assert.equal(qualifiedScorecard.vqa.qualified, true);
+
 const otherOwnerView = listOwnerProspectQualification(store, {
   teamId,
   ownerId: otherOwnerId,
@@ -501,6 +554,17 @@ assert.equal(
   "reasonCodes" in blockedAfterSuppression.record
     ? blockedAfterSuppression.record.reasonCodes.includes("SUPPRESSED")
     : false,
+  true
+);
+const suppressedScorecard = buildProspectScorecard(
+  store,
+  qualifiedCandidate,
+  at(20)
+);
+assert.equal(suppressedScorecard.contactReadiness.status, "blocked");
+assert.equal(suppressedScorecard.vqa.qualified, false);
+assert.equal(
+  suppressedScorecard.vqa.reasonCodes.includes("COMPLIANCE_BLOCKED"),
   true
 );
 

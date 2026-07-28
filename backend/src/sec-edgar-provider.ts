@@ -12,6 +12,9 @@ import {
 const SEC_HOST = "www.sec.gov";
 const SEC_BASE_URL = `https://${SEC_HOST}`;
 const SEC_TICKERS_PATH = "/files/company_tickers.json";
+const SEC_DATA_HOST = "data.sec.gov";
+const SEC_DATA_BASE_URL = `https://${SEC_DATA_HOST}`;
+const SEC_SUBMISSIONS_PREFIX = "/submissions/";
 const SEC_BROWSE_URL = `${SEC_BASE_URL}/edgar/browse/`;
 
 const tickerRecordSchema = z.object({
@@ -24,6 +27,18 @@ const tickerRecordSchema = z.object({
 }).strict();
 
 const responseSchema = z.record(tickerRecordSchema);
+
+const submissionSchema = z.object({
+  cik: z.union([
+    z.number().int().positive(),
+    z.string().regex(/^\d{1,10}$/)
+  ]),
+  name: z.string().min(1).max(300),
+  tickers: z.array(z.string().max(30)).default([]),
+  exchanges: z.array(z.string().max(80)).default([]),
+  sicDescription: z.string().max(500).optional().default(""),
+  stateOfIncorporation: z.string().max(80).optional().default("")
+}).passthrough();
 
 const QUERY_STOP_WORDS = new Set([
   "buyer", "buyers", "company", "companies", "customer", "customers",
@@ -93,6 +108,22 @@ function queryTerms(query: NormalizedProviderQuery) {
   )].slice(0, 40);
 }
 
+function exactCik(query: NormalizedProviderQuery) {
+  const values = [
+    ...query.productKeywords,
+    ...query.industries,
+    ...query.customerTypes,
+    query.goal
+  ];
+  for (const value of values) {
+    const normalized = value.trim().replace(/^CIK\s*:?\s*/iu, "");
+    if (/^\d{1,10}$/u.test(normalized)) {
+      return normalized.padStart(10, "0");
+    }
+  }
+  return null;
+}
+
 function excluded(title: string, query: NormalizedProviderQuery) {
   const normalized = normalizeText(title);
   return query.excludeKeywords.some((keyword) => normalized.includes(normalizeText(keyword)));
@@ -130,6 +161,30 @@ function parseResponse(value: unknown) {
   }
 }
 
+function parseSubmission(value: unknown, requestedCik: string) {
+  let parsed: z.infer<typeof submissionSchema>;
+  try {
+    parsed = submissionSchema.parse(value);
+  } catch (error) {
+    throw new ProviderContractError({
+      code: "PROVIDER_SCHEMA_CHANGED",
+      retryable: false,
+      retryAfterAt: null,
+      publicMessage: "SEC EDGAR 企业申报档案返回字段发生变化，已暂停本次查询",
+      httpStatus: null,
+      phase: "search"
+    }, { cause: error });
+  }
+  const responseCik = String(parsed.cik).padStart(10, "0");
+  if (responseCik !== requestedCik) {
+    throw providerError(
+      "SEC EDGAR 精确查询返回了不同的 CIK，已拒绝该记录",
+      "PROVIDER_SCHEMA_CHANGED"
+    );
+  }
+  return parsed;
+}
+
 function toLead(
   record: z.infer<typeof tickerRecordSchema>,
   confidence: number
@@ -155,6 +210,38 @@ function toLead(
   };
 }
 
+function submissionToLead(
+  submission: z.infer<typeof submissionSchema>,
+  cik: string
+): RawLead {
+  const title = submission.name.trim().slice(0, 200);
+  const tickers = submission.tickers
+    .map((item) => item.trim().toLocaleUpperCase("en-US"))
+    .filter(Boolean);
+  const sourceUrl = `${SEC_BROWSE_URL}?CIK=${encodeURIComponent(cik)}&owner=exclude`;
+  return {
+    company: title,
+    officialWebsite: "",
+    country: "United States",
+    business: submission.sicDescription || "SEC 申报企业，具体业务待核实",
+    contact: "待维护",
+    contactInfo: "",
+    description: [
+      `SEC CIK ${cik}`,
+      tickers.length ? `Ticker ${tickers.join(", ")}` : "",
+      submission.stateOfIncorporation
+        ? `注册州 ${submission.stateOfIncorporation}`
+        : ""
+    ].filter(Boolean).join("；"),
+    confidence: 98,
+    providerRecordId: `CIK:${cik}`,
+    sourceUrl,
+    recordType: "identity_evidence",
+    evidenceSummary: `${title} 已通过 SEC 官方 submissions 档案按 CIK ${cik} 精确核验。`,
+    matchedFields: ["company", "country", "description"]
+  };
+}
+
 async function fetchTickers(
   userAgent: string,
   fetcher: (url: string, init?: RequestInit) => Promise<Response>
@@ -170,10 +257,30 @@ async function fetchTickers(
   return parseResponse(await response.json());
 }
 
+async function fetchSubmission(
+  cik: string,
+  userAgent: string,
+  fetcher: (url: string, init?: RequestInit) => Promise<Response>
+) {
+  const response = await fetcher(
+    `${SEC_DATA_BASE_URL}${SEC_SUBMISSIONS_PREFIX}CIK${cik}.json`,
+    {
+      method: "GET",
+      headers: {
+        accept: "application/json",
+        "user-agent": userAgent
+      }
+    }
+  );
+  if (response.status === 404) return null;
+  if (!response.ok) throw providerHttpStatusError(response, "SEC EDGAR");
+  return parseSubmission(await response.json(), cik);
+}
+
 export const SEC_EDGAR_PROVIDER = defineProvider({
   id: "sec_edgar",
   name: "SEC EDGAR",
-  adapterVersion: "1.0.0",
+  adapterVersion: "1.1.0",
   tier: "free",
   category: "company",
   requiresKey: true,
@@ -183,8 +290,8 @@ export const SEC_EDGAR_PROVIDER = defineProvider({
   defaultBaseUrl: SEC_BASE_URL,
   costNote: "免费官方接口；用于核验美国上市及 SEC 申报企业，不提供联系人。",
   networkPolicy: {
-    allowedHosts: [SEC_HOST],
-    allowedPathPrefixes: [],
+    allowedHosts: [SEC_HOST, SEC_DATA_HOST],
+    allowedPathPrefixes: [SEC_SUBMISSIONS_PREFIX],
     allowedPaths: [SEC_TICKERS_PATH],
     allowedMethods: ["GET"],
     maxResponseBytes: 12 * 1024 * 1024,
@@ -192,6 +299,23 @@ export const SEC_EDGAR_PROVIDER = defineProvider({
   },
   async search({ query }, cred, tools): Promise<ProviderAdapterPage> {
     const userAgent = validateConnection(cred.apiKey, cred.baseUrl || "", "search");
+    const cik = exactCik(query);
+    if (cik) {
+      const submission = await fetchSubmission(cik, userAgent, tools.http.fetch);
+      return {
+        records: submission ? [submissionToLead(submission, cik)] : [],
+        rawCount: submission ? 1 : 0,
+        invalidCount: 0,
+        exhausted: true,
+        warnings: [],
+        usage: {
+          ...usage(),
+          display: submission
+            ? `SEC EDGAR 按 CIK ${cik} 精确核验`
+            : `SEC EDGAR 未找到 CIK ${cik}`
+        }
+      };
+    }
     const terms = queryTerms(query);
     if (!terms.length) {
       return {

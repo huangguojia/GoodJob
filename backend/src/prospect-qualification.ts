@@ -7,6 +7,10 @@ import { canonicalJsonStringify } from "./canonical-json.js";
 import type { CrmStore } from "./store.js";
 import type {
   CompanyVerificationSnapshot,
+  ProspectCandidateQualificationCheckpoint,
+  ProspectCandidateQualificationField,
+  ProspectCandidateQualificationRevision,
+  ProspectCandidateQualificationStage,
   ProspectContact,
   ProspectContactChannel,
   ProspectContactChannelType,
@@ -22,11 +26,12 @@ import type {
   ProspectIcpPolicySnapshot,
   ProspectIcpWeights,
   ProspectSuppressionEvent,
-  ProspectSuppressionScope
+  ProspectSuppressionScope,
+  WebsiteOpportunity
 } from "./types.js";
 
 export const PROSPECT_QUALIFICATION_CONTRACT =
-  "prospect-qualification-gate-v1";
+  "prospect-qualification-gate-v2";
 export const PROSPECT_ICP_SCORING_CONTRACT =
   "prospect-icp-scoring-v1";
 
@@ -61,6 +66,8 @@ const INACTIVE_VALUES = new Set([
 
 export const PROSPECT_QUALIFICATION_ARRAYS = [
   "prospectEvidence",
+  "prospectCandidateQualificationRevisions",
+  "prospectCandidateQualificationCheckpoints",
   "companyVerificationSnapshots",
   "prospectIcpPolicySnapshots",
   "prospectIcpAssessmentSnapshots",
@@ -73,6 +80,10 @@ export const PROSPECT_QUALIFICATION_ARRAYS = [
 
 export const PROSPECT_QUALIFICATION_RECORD_TYPES = {
   prospectEvidence: "prospect_evidence",
+  prospectCandidateQualificationRevisions:
+    "prospect_candidate_qualification_revision",
+  prospectCandidateQualificationCheckpoints:
+    "prospect_candidate_qualification_checkpoint",
   companyVerificationSnapshots: "company_verification_snapshot",
   prospectIcpPolicySnapshots: "prospect_icp_policy_snapshot",
   prospectIcpAssessmentSnapshots: "prospect_icp_assessment_snapshot",
@@ -86,6 +97,8 @@ export const PROSPECT_QUALIFICATION_RECORD_TYPES = {
 
 type QualificationRecord =
   | ProspectEvidence
+  | ProspectCandidateQualificationRevision
+  | ProspectCandidateQualificationCheckpoint
   | CompanyVerificationSnapshot
   | ProspectIcpPolicySnapshot
   | ProspectIcpAssessmentSnapshot
@@ -105,6 +118,20 @@ type BaseCommand = {
 };
 
 export type ProspectQualificationCommand =
+  | (BaseCommand & {
+      kind: "amend_candidate_qualification_basis";
+      candidateId: string;
+      changedFields: ProspectCandidateQualificationField[];
+      beforeBasisHash: string;
+      afterBasisHash: string;
+    })
+  | (BaseCommand & {
+      kind: "checkpoint_candidate_qualification";
+      candidateId: string;
+      stage: ProspectCandidateQualificationStage;
+      revision: number;
+      sourceFactId: string;
+    })
   | (BaseCommand & {
       kind: "append_evidence";
       evidenceKind: ProspectEvidenceKind;
@@ -386,12 +413,246 @@ function latestByCreatedAt<T extends { createdAt: string }>(
   values: readonly T[]
 ) {
   return values.reduce<T | undefined>((latest, current) =>
-    !latest || current.createdAt > latest.createdAt ? current : latest,
+    !latest || current.createdAt >= latest.createdAt ? current : latest,
   undefined);
 }
 
 function isExpired(expiresAt: string, at: string) {
   return Boolean(expiresAt && expiresAt < at);
+}
+
+const QUALIFICATION_FIELDS = new Set<ProspectCandidateQualificationField>([
+  "company",
+  "business",
+  "country",
+  "website",
+  "contact",
+  "contactInfo",
+  "description"
+]);
+
+const QUALIFICATION_STAGE_FIELDS: Record<
+  ProspectCandidateQualificationStage,
+  ReadonlySet<ProspectCandidateQualificationField>
+> = {
+  company: new Set(["company", "country", "website"]),
+  icp: new Set(["company", "business", "country", "website", "description"]),
+  channel: new Set(["company", "website", "contact", "contactInfo"]),
+  contactability: QUALIFICATION_FIELDS
+};
+
+function normalizedBasisText(value: string) {
+  return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("en-US");
+}
+
+function normalizedBasisWebsite(value: string) {
+  const raw = value.trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(/^https?:\/\//iu.test(raw) ? raw : `https://${raw}`);
+    const host = url.hostname.replace(/^www\./iu, "").toLocaleLowerCase("en-US");
+    const path = url.pathname.replace(/\/+$/u, "");
+    return `${host}${path === "/" ? "" : path}`;
+  } catch {
+    return normalizedBasisText(raw).replace(/^https?:\/\//u, "")
+      .replace(/^www\./u, "").replace(/\/+$/u, "");
+  }
+}
+
+export function prospectCandidateQualificationBasisHash(
+  candidate: Pick<WebsiteOpportunity,
+    "company" | "business" | "country" | "website" | "contact"
+    | "contactInfo" | "description">
+) {
+  return sha256({
+    company: normalizedBasisText(candidate.company),
+    business: normalizedBasisText(candidate.business),
+    country: normalizedBasisText(candidate.country),
+    website: normalizedBasisWebsite(candidate.website),
+    contact: normalizedBasisText(candidate.contact),
+    contactInfo: normalizedBasisText(candidate.contactInfo),
+    description: normalizedBasisText(candidate.description)
+  });
+}
+
+export function prospectCandidateQualificationChangedFields(
+  before: Pick<WebsiteOpportunity,
+    "company" | "business" | "country" | "website" | "contact"
+    | "contactInfo" | "description">,
+  after: Pick<WebsiteOpportunity,
+    "company" | "business" | "country" | "website" | "contact"
+    | "contactInfo" | "description">
+) {
+  const changed: ProspectCandidateQualificationField[] = [];
+  const textFields = [
+    "company",
+    "business",
+    "country",
+    "contact",
+    "contactInfo",
+    "description"
+  ] as const;
+  for (const field of textFields) {
+    if (normalizedBasisText(before[field])
+      !== normalizedBasisText(after[field])) changed.push(field);
+  }
+  if (normalizedBasisWebsite(before.website)
+    !== normalizedBasisWebsite(after.website)) changed.push("website");
+  return changed.sort();
+}
+
+function candidateRevisionRows(
+  store: CrmStore,
+  candidate: Pick<WebsiteOpportunity,
+    "id" | "teamId" | "ownerId" | "tenantProspectId">
+) {
+  return store.prospectCandidateQualificationRevisions.filter((item) =>
+    item.teamId === candidate.teamId
+    && item.ownerId === candidate.ownerId
+    && item.prospectId === candidate.tenantProspectId
+    && item.candidateId === candidate.id
+  );
+}
+
+export function latestProspectCandidateQualificationRevision(
+  store: CrmStore,
+  candidate: Pick<WebsiteOpportunity,
+    "id" | "teamId" | "ownerId" | "tenantProspectId">
+) {
+  return candidateRevisionRows(store, candidate)
+    .sort((left, right) => right.revision - left.revision)[0] || null;
+}
+
+export function prospectCandidateQualificationStageCurrent(
+  store: CrmStore,
+  candidate: Pick<WebsiteOpportunity,
+    "id" | "teamId" | "ownerId" | "tenantProspectId">,
+  stage: ProspectCandidateQualificationStage
+) {
+  const affected = QUALIFICATION_STAGE_FIELDS[stage];
+  const latestRelevant = candidateRevisionRows(store, candidate)
+    .filter((item) => item.changedFields.some((field) => affected.has(field)))
+    .sort((left, right) => right.revision - left.revision)[0];
+  if (!latestRelevant) return true;
+  const checkpoint = store.prospectCandidateQualificationCheckpoints
+    .filter((item) =>
+      item.teamId === candidate.teamId
+      && item.ownerId === candidate.ownerId
+      && item.prospectId === candidate.tenantProspectId
+      && item.candidateId === candidate.id
+      && item.stage === stage
+    )
+    .sort((left, right) => right.revision - left.revision)[0];
+  return Boolean(checkpoint && checkpoint.revision >= latestRelevant.revision);
+}
+
+function amendCandidateQualificationBasis(
+  store: CrmStore,
+  command: Extract<ProspectQualificationCommand,
+    { kind: "amend_candidate_qualification_basis" }>
+) {
+  const replay = findReplay(
+    store.prospectCandidateQualificationRevisions,
+    command
+  );
+  if (replay.existing) return replay.existing;
+  const { organization } = requireProspect(
+    store,
+    command.teamId,
+    command.prospectId
+  );
+  const candidateId = required(command.candidateId, "候选资料");
+  const changedFields = [...new Set(command.changedFields)].sort();
+  if (!changedFields.length
+    || changedFields.some((field) => !QUALIFICATION_FIELDS.has(field))) {
+    fail("QUALIFICATION_INPUT_INVALID", "候选资料修订字段无效");
+  }
+  if (!/^[a-f0-9]{64}$/u.test(command.beforeBasisHash)
+    || !/^[a-f0-9]{64}$/u.test(command.afterBasisHash)
+    || command.beforeBasisHash === command.afterBasisHash) {
+    fail("QUALIFICATION_INPUT_INVALID", "候选资料修订摘要无效");
+  }
+  const previous = store.prospectCandidateQualificationRevisions
+    .filter((item) =>
+      item.teamId === command.teamId
+      && item.ownerId === command.ownerId
+      && item.prospectId === command.prospectId
+      && item.candidateId === candidateId
+    )
+    .sort((left, right) => right.revision - left.revision)[0];
+  const revision = finalize("prospect_candidate_qualification_revision", {
+    id: id("pcqr"),
+    teamId: command.teamId,
+    ownerId: command.ownerId,
+    prospectId: command.prospectId,
+    organizationId: organization.id,
+    candidateId,
+    revision: (previous?.revision || 0) + 1,
+    changedFields,
+    beforeBasisHash: command.beforeBasisHash,
+    afterBasisHash: command.afterBasisHash,
+    changedBy: command.actorId,
+    idempotencyKeyHash: replay.keyHash,
+    requestHash: replay.requestHash,
+    createdAt: iso(command.createdAt || new Date().toISOString(), "创建时间")
+  });
+  store.prospectCandidateQualificationRevisions.push(revision);
+  return revision;
+}
+
+function checkpointCandidateQualification(
+  store: CrmStore,
+  command: Extract<ProspectQualificationCommand,
+    { kind: "checkpoint_candidate_qualification" }>
+) {
+  const replay = findReplay(
+    store.prospectCandidateQualificationCheckpoints,
+    command
+  );
+  if (replay.existing) return replay.existing;
+  const { organization } = requireProspect(
+    store,
+    command.teamId,
+    command.prospectId
+  );
+  const candidateId = required(command.candidateId, "候选资料");
+  const latestRevision = store.prospectCandidateQualificationRevisions
+    .filter((item) =>
+      item.teamId === command.teamId
+      && item.ownerId === command.ownerId
+      && item.prospectId === command.prospectId
+      && item.candidateId === candidateId
+    )
+    .sort((left, right) => right.revision - left.revision)[0]?.revision || 0;
+  if (command.revision !== latestRevision) {
+    fail("QUALIFICATION_CHECKPOINT_STALE", "候选资料已再次变化，请重新完成资格步骤");
+  }
+  const sourceFactId = required(command.sourceFactId, "资格事实");
+  const sourceExists = PROSPECT_QUALIFICATION_ARRAYS
+    .filter((key) => ![
+      "prospectCandidateQualificationRevisions",
+      "prospectCandidateQualificationCheckpoints"
+    ].includes(key))
+    .some((key) => store[key].some((item) =>
+      item.id === sourceFactId && item.teamId === command.teamId
+    ));
+  if (!sourceExists) fail("QUALIFICATION_SOURCE_FACT_NOT_FOUND", "检查点引用的资格事实不存在");
+  const checkpoint = finalize("prospect_candidate_qualification_checkpoint", {
+    id: id("pcqc"),
+    teamId: command.teamId,
+    ownerId: command.ownerId,
+    prospectId: command.prospectId,
+    organizationId: organization.id,
+    candidateId,
+    stage: command.stage,
+    revision: command.revision,
+    sourceFactId,
+    idempotencyKeyHash: replay.keyHash,
+    requestHash: replay.requestHash,
+    createdAt: iso(command.createdAt || new Date().toISOString(), "创建时间")
+  });
+  store.prospectCandidateQualificationCheckpoints.push(checkpoint);
+  return checkpoint;
 }
 
 function evidenceSnapshotHash(evidence: readonly ProspectEvidence[]) {
@@ -1299,7 +1560,13 @@ function evaluateGateState(
   const blocked = new Set<string>();
   const review = new Set<string>();
 
-  if (prospect.status !== "active") blocked.add("PROSPECT_NOT_ACTIVE");
+  if (!["active", "converted"].includes(prospect.status)) {
+    blocked.add("PROSPECT_NOT_ACTIVE");
+  }
+  if (prospect.exclusionMode !== "none"
+    || prospect.queueState === "suppressed") {
+    blocked.add("PROSPECT_SUPPRESSED_OR_EXCLUDED");
+  }
   if (!company || isExpired(company.validUntil, input.at)) {
     blocked.add("COMPANY_VERIFICATION_MISSING_OR_EXPIRED");
   } else if (company.status === "verified_inactive") {
@@ -1344,9 +1611,16 @@ function evaluateGateState(
     contract: PROSPECT_QUALIFICATION_CONTRACT,
     prospect: {
       id: prospect.id,
-      version: prospect.version,
-      status: prospect.status,
-      prospectHash: prospect.prospectHash
+      organizationId: prospect.organizationId,
+      lifecycle: ["active", "converted"].includes(prospect.status)
+        ? "contactable_lifecycle"
+        : prospect.status,
+      exclusionScope: prospect.exclusionScope,
+      exclusionMode: prospect.exclusionMode,
+      excludedUntil: prospect.excludedUntil,
+      queueState: prospect.queueState === "suppressed"
+        ? "suppressed"
+        : "not_suppressed"
     },
     company: company
       ? { id: company.id, recordHash: company.recordHash }
@@ -1444,6 +1718,12 @@ function approveContactability(
   if (source.status !== "eligible") {
     fail("CONTACTABILITY_APPROVAL_INVALID", "只有待人工确认的可联系记录可批准");
   }
+  if (source.contractVersion !== PROSPECT_QUALIFICATION_CONTRACT) {
+    fail(
+      "CONTACTABILITY_STALE",
+      "可联系门禁规则版本已升级，请按当前规则重新执行评估后再批准"
+    );
+  }
   const createdAt = iso(
     command.createdAt || new Date().toISOString(),
     "创建时间"
@@ -1493,6 +1773,12 @@ export function applyProspectQualificationCommand(
   0);
   let record: QualificationRecord;
   switch (command.kind) {
+    case "amend_candidate_qualification_basis":
+      record = amendCandidateQualificationBasis(store, command);
+      break;
+    case "checkpoint_candidate_qualification":
+      record = checkpointCandidateQualification(store, command);
+      break;
     case "append_evidence":
       record = appendEvidence(store, command);
       break;
@@ -1559,6 +1845,17 @@ export function listOwnerProspectQualification(
   );
   return {
     evidence: ownerFilter(store.prospectEvidence),
+    candidateRevisions: store.prospectCandidateQualificationRevisions.filter(
+      (item) => item.teamId === input.teamId
+        && item.ownerId === input.ownerId
+        && item.prospectId === input.prospectId
+    ),
+    candidateCheckpoints:
+      store.prospectCandidateQualificationCheckpoints.filter((item) =>
+        item.teamId === input.teamId
+        && item.ownerId === input.ownerId
+        && item.prospectId === input.prospectId
+      ),
     companyVerification: latestCompanyVerification(
       store,
       input.teamId,
@@ -1621,7 +1918,10 @@ export function currentContactabilityDecision(
     ...input,
     at: iso(input.at || new Date().toISOString(), "检查时间")
   });
-  if (latest.dependencyHash === current.dependencyHash
+  const contractChanged = latest.contractVersion
+    !== PROSPECT_QUALIFICATION_CONTRACT;
+  if (!contractChanged
+    && latest.dependencyHash === current.dependencyHash
     && (latest.status !== "approved_contactable"
       || current.status === "eligible")) {
     return latest;
@@ -1631,7 +1931,9 @@ export function currentContactabilityDecision(
     status: "stale" as const,
     reasonCodes: normalizeList([
       ...latest.reasonCodes,
-      "QUALIFICATION_FACTS_CHANGED"
+      contractChanged
+        ? "QUALIFICATION_CONTRACT_CHANGED"
+        : "QUALIFICATION_FACTS_CHANGED"
     ])
   };
 }

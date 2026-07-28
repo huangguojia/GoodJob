@@ -226,7 +226,21 @@ const prospectContactFields: Record<string, JsonSchema> = {
   content: string({ maxLength: 5000 }), occurredAt: string({ format: "date-time" }), nextFollowAt: string({ maxLength: 40 }), requestId: string({ minLength: 1, maxLength: 120 })
 };
 define("POST /api/prospect-list/{id}/send-development-email", objectSchema(["to", "subject", "body"], { to: string({ format: "email" }), subject: string({ minLength: 1, maxLength: 160 }), body: string({ minLength: 10, maxLength: 3000 }), requestId: string({ minLength: 1, maxLength: 120 }) }), "真实向已核验可联系候选发送开发信；冻结收件人、主题、正文和幂等 requestId 后确认。");
-define("POST /api/prospect-list/{id}/touchpoints", objectSchema(["channel", "requestId"], prospectContactFields), "记录候选客户触达事实；requestId 用于避免重复记录。");
+define("POST /api/prospect-list/{id}/touchpoints", objectSchema(["recordMode", "channel", "requestId"], { ...prospectContactFields, recordMode: oneOf("historical") }), "只补录已经发生的候选客户历史触达事实；不发送、不推进状态、不创建待办。");
+define("POST /api/prospect-list/{id}/website-probe", emptySchema, "对已持久化候选的规范官网执行默认关闭的受控低频验证；不接受任意 URL，不提取个人联系方式。");
+defineMany(["GET /api/prospect-list/website-probe/capability", "GET /api/prospect-list/{id}/website-probe/{attemptId}"], emptySchema, "读取官网低频验证能力或持久化任务详情；可回填官网首页同域公开业务邮箱，不可达结果不改变企业或 ICP 评分。");
+define("POST /api/prospect-list/{id}/identity-bootstrap", objectSchema([
+  "providerId", "registrationNumber", "requestId"
+], {
+  providerId: oneOf("gleif", "companies_house", "sec_edgar", "fr_company_search"),
+  registrationNumber: string({ minLength: 1, maxLength: 80 }),
+  requestId: string({ minLength: 8, maxLength: 120 })
+}), "按用户明确选择的权威登记来源和正式注册号创建身份核验任务；该动作会调用外部官方 API，必须冻结 Provider、注册号和 requestId 后确认，AI 不得补造注册号。");
+define("POST /api/prospect-list/{id}/identity-bootstrap/{attemptId}/reconcile", emptySchema, "推进已由用户确认并启动的身份核验任务；只接受当前任务的持久化权威证据和强标识血缘，不能用 AI 或官网结果建立企业身份。");
+defineMany([
+  "GET /api/prospect-list/{id}/identity-bootstrap",
+  "GET /api/prospect-list/{id}/identity-bootstrap/{attemptId}"
+], emptySchema, "读取身份核验来源、任务状态、阶段事件和结果详情。");
 define("POST /api/prospect-list/{id}/replies", objectSchema(["channel", "classification", "requestId"], { ...prospectContactFields, classification: oneOf("clear_demand", "interested_nurture", "referral", "no_current_demand", "rejected", "unsubscribed", "bounced", "auto_unknown"), procurement: { type: "object", additionalProperties: false, properties: { evidenceSummary: string({ maxLength: 2000 }), evidenceTypes: array(oneOf("quote_request", "product_requirement", "quantity", "sample_request", "purchase_timeline", "target_price", "certification", "delivery", "project_tender", "manual_confirmation"), { maxItems: 10 }), product: string({ maxLength: 200 }), specification: string({ maxLength: 1000 }), quantity: integer({ minimum: 0 }), quantityType: oneOf("unknown", "sample", "trial", "forecast", "order"), targetPrice: number({ minimum: 0 }), currency: string({ pattern: "^[A-Za-z]{3}$" }), priceBasis: string({ maxLength: 80 }), deliveryRequirement: string({ maxLength: 500 }), certificationRequirement: string({ maxLength: 500 }), purchaseTimeline: string({ maxLength: 500 }), projectName: string({ maxLength: 500 }), buyerRole: string({ maxLength: 100 }), nextAction: string({ maxLength: 200 }), confidence: number({ minimum: 0, maximum: 100 }) } } }), "记录候选客户真实回复；明确需求时才提交有证据的采购信息。");
 define("POST /api/prospect-list/{id}/follow-up", objectSchema([], { channel: oneOf("email", "whatsapp", "call"), dueAt: string({ maxLength: 40 }), priority: oneOf("high", "medium", "normal") }), "为候选客户创建或复用跟进待办。");
 define("POST /api/deal-recommendations/{id}/dismiss", reasonSchema, "忽略商机建议并记录原因。");
@@ -289,6 +303,110 @@ define("POST /api/tools/ocr/jobs/{id}/recognize", objectSchema([], { confidence:
 define("PATCH /api/prospect-list/{id}/details", objectSchema(["company", "website"], { company: string({ minLength: 1, maxLength: 200 }), business: string({ maxLength: 255 }), country: string({ maxLength: 80 }), website: string({ minLength: 3, maxLength: 255 }), contact: string({ maxLength: 120 }), contactInfo: string({ maxLength: 255 }), description: string({ maxLength: 1000 }) }), "更新未入库候选详情，信息必须有来源依据。");
 define("PATCH /api/prospect-list/batch", objectSchema(["ids", "action"], { ids: array(string({ minLength: 1 }), { minItems: 1, maxItems: 100 }), action: oneOf("mark-contactable", "exclude", "restore", "assign"), ownerId: string({ minLength: 1 }), reason: string({ maxLength: 255 }), requestId: string({ minLength: 1, maxLength: 120 }), effectiveAt: string({ format: "date-time" }) }), "批量处理候选客户；分配涉及人员目录且只允许主管或管理员执行。");
 
+const qualificationRequestId = string({ minLength: 8, maxLength: 120 });
+const qualificationEvidenceSource = oneOf("official_website", "licensed_data", "public_directory", "crm_manual");
+define("POST /api/prospect-list/{id}/qualification/company", objectSchema([
+  "requestId", "providerCode", "registrationNumber", "operatingStatus", "jurisdiction",
+  "sourceRef", "authorityCode", "observedAt", "validUntil"
+], {
+  requestId: qualificationRequestId,
+  providerCode: oneOf("gleif", "companies_house", "sec_edgar", "fr_company_search"),
+  registrationNumber: string({ minLength: 2, maxLength: 80 }),
+  operatingStatus: oneOf("active", "registered", "operating", "in_operation", "inactive", "dissolved", "liquidated", "struck_off", "closed"),
+  jurisdiction: string({ minLength: 2, maxLength: 40 }),
+  sourceRef: string({ minLength: 3, maxLength: 1000, pattern: "^https://" }),
+  authorityCode: string({ minLength: 2, maxLength: 80 }),
+  observedAt: string({ format: "date-time" }),
+  validUntil: string({ format: "date-time" }),
+  officialDomain: string({ maxLength: 500 })
+}), "记录来自白名单企业登记机关的企业核验事实；AI 只能整理真实返回值，提交前必须由用户确认来源和注册号。");
+
+const icpDimensionScores = objectSchema([
+  "productApplicationMatch", "customerType", "marketCountry", "companyAuthenticity",
+  "purchasingChannelCapability", "contactability", "freshness"
+], {
+  productApplicationMatch: integer({ minimum: 0, maximum: 30 }),
+  customerType: integer({ minimum: 0, maximum: 15 }),
+  marketCountry: integer({ minimum: 0, maximum: 10 }),
+  companyAuthenticity: integer({ minimum: 0, maximum: 15 }),
+  purchasingChannelCapability: integer({ minimum: 0, maximum: 15 }),
+  contactability: integer({ minimum: 0, maximum: 10 }),
+  freshness: integer({ minimum: 0, maximum: 5 })
+});
+const icpEvidence = objectSchema([
+  "field", "value", "sourceType", "providerCode", "sourceRef", "observedAt"
+], {
+  field: oneOf("product_match", "customer_type", "market_match", "purchasing_capability", "freshness"),
+  value: string({ minLength: 2, maxLength: 1000 }),
+  sourceType: qualificationEvidenceSource,
+  providerCode: string({ minLength: 2, maxLength: 80 }),
+  sourceRef: string({ minLength: 3, maxLength: 1000 }),
+  excerpt: string({ maxLength: 1000 }),
+  observedAt: string({ format: "date-time" }),
+  expiresAt: string({ format: "date-time" })
+});
+define("POST /api/prospect-list/{id}/qualification/icp", objectSchema([
+  "requestId", "dimensionScores", "evidence"
+], {
+  requestId: qualificationRequestId,
+  campaignId: string({ maxLength: 80 }),
+  campaignVersion: integer({ minimum: 1 }),
+  dimensionScores: icpDimensionScores,
+  evidence: array(icpEvidence, { minItems: 1, maxItems: 12 }),
+  hardGateReasonCodes: array(string({ minLength: 1, maxLength: 80 }), { maxItems: 20 })
+}), "基于已记录证据生成 ICP 评分快照；不得让 AI 补造证据或把推断写成事实。");
+define("POST /api/prospect-list/{id}/qualification/icp/{assessmentId}/approve", objectSchema(["requestId"], {
+  requestId: qualificationRequestId
+}), "批准当前 ICP 评分快照；必须由用户明确确认，资料变化后旧批准失效。");
+
+define("POST /api/prospect-list/{id}/qualification/channel", objectSchema([
+  "requestId", "contactType", "identityStatus", "channelType", "value", "sourceType",
+  "sourceProviderCode", "sourceRef", "acquiredAt", "verificationBasis",
+  "verificationProviderCode", "verificationReasonCode", "verifiedAt", "expiresAt", "humanConfirmed"
+], {
+  requestId: qualificationRequestId,
+  contactType: oneOf("named_person", "department", "company_public"),
+  name: string({ maxLength: 120 }),
+  department: string({ maxLength: 120 }),
+  title: string({ maxLength: 120 }),
+  identityStatus: oneOf("unconfirmed", "source_confirmed", "human_confirmed"),
+  channelType: oneOf("email", "phone", "whatsapp", "website_form"),
+  value: string({ minLength: 3, maxLength: 500 }),
+  sourceType: qualificationEvidenceSource,
+  sourceProviderCode: string({ minLength: 2, maxLength: 80 }),
+  sourceRef: string({ minLength: 3, maxLength: 1000 }),
+  excerpt: string({ maxLength: 1000 }),
+  acquiredAt: string({ format: "date-time" }),
+  verificationBasis: oneOf("official_source_manual", "provider_verified", "positive_reply"),
+  verificationProviderCode: string({ minLength: 2, maxLength: 80 }),
+  verificationReasonCode: string({ minLength: 2, maxLength: 120 }),
+  verifiedAt: string({ format: "date-time" }),
+  expiresAt: string({ format: "date-time" }),
+  humanConfirmed: { type: "boolean", enum: [true] }
+}), "保存已核验联系渠道；humanConfirmed 只能代表用户实际完成确认，AI 不得自行设置为事实。");
+define("POST /api/prospect-list/{id}/qualification/contactability/evaluate", objectSchema(["requestId"], {
+  requestId: qualificationRequestId,
+  channelId: string({ maxLength: 90 })
+}), "针对当前企业、ICP 和渠道快照计算可联系门禁，不代表自动批准。");
+define("POST /api/prospect-list/{id}/qualification/contactability/{decisionId}/approve", objectSchema(["requestId"], {
+  requestId: qualificationRequestId
+}), "批准当前可联系决策；必须由归属业务员明确确认，AI 不得代替人工批准。");
+define("POST /api/prospect-list/{id}/qualification/suppress", objectSchema([
+  "requestId", "scope", "action", "reasonCode", "effectiveAt"
+], {
+  requestId: qualificationRequestId,
+  scope: oneOf("contact_channel", "contact_all", "organization_channel", "organization_all"),
+  action: oneOf("imposed", "revoked"),
+  contactId: string({ maxLength: 90 }),
+  channelId: string({ maxLength: 90 }),
+  channelType: oneOf("email", "phone", "whatsapp", "website_form"),
+  reasonCode: string({ minLength: 2, maxLength: 120 }),
+  reasonNote: string({ maxLength: 500 }),
+  effectiveAt: string({ format: "date-time" }),
+  expiresAt: string({ format: "date-time" }),
+  doNotContact: boolean()
+}), "施加或撤销联系抑制；企业永久禁止联系属于高影响人工确认动作。");
+
 const leadFinderFields: Record<string, JsonSchema> = { productKeywords: string(), countries: string(), industry: string(), customerType: string(), goal: string(), excludeKeywords: string(), sources: array(string({ pattern: "^[a-z0-9_]+$" }), { maxItems: 64 }), useAi: boolean(), limit: number({ minimum: 1, maximum: 30 }) };
 define("POST /api/lead-finder/free-search", objectSchema([], { productKeywords: string(), countries: string(), industry: string(), customerType: string(), goal: string(), limit: number({ minimum: 1, maximum: 30 }) }), "使用公开免费来源搜索候选客户，属于外部数据访问，需要确认搜索条件。");
 define("POST /api/lead-finder/search", objectSchema([], leadFinderFields), "使用已启用来源执行自动搜客，属于外部数据访问，需要确认来源和条件。");
@@ -300,7 +418,7 @@ defineMany([
   "POST /api/prospect-super-search/{id}/import-pending"
 ], hitIdsSchema, "只处理用户明确选择的待清洗原始命中；hitIds 必须属于当前账号可见的已结束任务，继续执行字段校验、身份归一和覆盖分流，不自动生成正式线索。");
 define("POST /api/tools/website-scrape/preview", objectSchema(["urls"], { urls: array(string({ minLength: 3 }), { minItems: 1, maxItems: 12 }), useAi: boolean() }), "登记官网链接并生成候选预览；当前实现不会抓取企业网页。");
-define("POST /api/tools/website-scrape/sync-opportunities", objectSchema(["opportunities"], { opportunities: array(objectSchema(["id", "company", "website"], { id: string({ minLength: 1 }), company: string({ minLength: 1 }), business: string(), country: string(), website: string({ minLength: 3 }), contact: string(), contactInfo: string(), description: string(), source: string({ maxLength: 40 }), sourceLabel: string({ maxLength: 80 }) }), { minItems: 1, maxItems: 100 }), allowPending: boolean() }), "把已有候选预览同步为线索；每个候选 ID 必须属于当前账号。allowPending=true 时允许用户主动导入尚未完成核验的候选。");
+define("POST /api/tools/website-scrape/sync-opportunities", objectSchema(["requestId", "opportunities"], { requestId: string({ minLength: 8, maxLength: 120 }), opportunities: array(objectSchema(["id", "company", "website"], { id: string({ minLength: 1 }), company: string({ minLength: 1 }), business: string(), country: string(), website: string({ minLength: 3 }), contact: string(), contactInfo: string(), description: string(), source: string({ maxLength: 40 }), sourceLabel: string({ maxLength: 80 }) }), { minItems: 1, maxItems: 100 }) }), "把已完成核验并标记为可联系的候选同步为线索；requestId 冻结整批幂等语义，每个候选 ID 必须属于当前账号，预览候选不能绕过核验门禁。");
 defineMany(["POST /api/prospect-strategy-suggestions/{id}/accept", "POST /api/prospect-strategy-suggestions/{id}/reject"], objectSchema([], { note: string({ maxLength: 500 }) }), "接受或拒绝本人获客策略建议。");
 define("POST /api/prospect-strategies/{id}/schedules", objectSchema(["frequency"], { frequency: oneOf("daily", "weekly", "monthly"), timezone: string({ minLength: 1, maxLength: 100 }), recurringCostApproved: boolean() }), "为已批准策略建立定时获客计划；重复外部成本必须明确授权。");
 define("PATCH /api/reports/executive/note", objectSchema([], { note: string({ maxLength: 1000 }) }), "维护本人经营报告备注。");
@@ -352,6 +470,8 @@ function completionFor(method: string, path: string): AgentCompletionEvidence {
 function authorizationFor(method: string, path: string, risk: AgentOperationRisk): AgentAuthorizationPolicy {
   if (risk === "read") return "read_only";
   if (risk === "external") return "frozen_payload_confirmation";
+  if (path.includes("/qualification/")
+    || path.includes("/identity-bootstrap/")) return "explicit_confirmation";
   if (method === "DELETE" || /(bulk|batch|\/permanent$|\/release$|\/lost$)/u.test(path)) return "explicit_confirmation";
   return "direct_user_intent";
 }
