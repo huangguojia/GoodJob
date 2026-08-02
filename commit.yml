@@ -2,16 +2,343 @@
 branches: {
   }
 fileChange:
+  /.env.example:
+    newFile: !uuid '172d35c90962126290c0c6bbfdfe8f59a8f972b4'
+    oldFile: !uuid '07588f129fbcac6eeb9f563cf0cfb2f189fc12e4'
+  /backend:
+    newFile: !uuid '0e13457086772852ff0d78e5eba2d0b61f3b9175'
+    oldFile: !uuid '0b512a0381ff4719c90ab9ad98623962afb38567'
+  /backend/goodjob_crm.full.sql:
+    newFile: !uuid 'b4867dfcf300a2d526f5fca163758ba0b7a7dc9d'
+    oldFile: !uuid '5f00787522a58d8c0717896e8094560e2ded9df6'
+  /backend/package.json:
+    newFile: !uuid '864f0f24ca2e51d623bd22193765fcc4ed997fea'
+    oldFile: !uuid 'b6a82075432a468cd4fe3bc30aa222fed410f30a'
+  /backend/schema.mysql.sql:
+    newFile: !uuid 'f9a061f43df932bd78311e03de8b14960901a16c'
+    oldFile: !uuid 'd858d9f9f7a6547c99698fcc70fe9645d1276c09'
+  /backend/src:
+    newFile: !uuid 'ba8fc93d42c9f137501b26a07302d74221dffbba'
+    oldFile: !uuid '655c7ce9ad153f208e9a4b12d84680cd5ea51815'
+  /backend/src/agent-api-contracts-test.ts:
+    newFile: !uuid 'd98ad4966c828df7ca7f81004e90110a65c0ce92'
+    oldFile: !uuid 'ae32b43a9815f69cb91cac649bb156d5ae0da886'
+  /backend/src/agent-api-contracts.ts:
+    newFile: !uuid '4bf29afb35cbd63435428b93c1a91d68496600d2'
+    oldFile: !uuid '312802dab6e78a5b3ef3d762a284b2436a2efb23'
+  /backend/src/agent-api-policy-test.ts:
+    newFile: !uuid '52bec9e235f7de2226777b026b93eccf68f0a864'
+    oldFile: !uuid 'cb1806ecee2133bda2ce3a230202dac6424ca847'
+  /backend/src/agent-api-policy.ts:
+    newFile: !uuid 'ea49320230785a969e3598519ca85653fb6b19d4'
+    oldFile: !uuid 'f11625c5d9c2d2c812d6c03cc2e2ebc76ca6e051'
+  /backend/src/agent-benchmark-test.ts:
+    newFile: !uuid 'adda91b8a4df3b2020d32339bb06600d318f0237'
+    oldFile: !uuid '8d651f260a4fd0b66252acbc76b610b0e7fe2d28'
+  /backend/src/agent-benchmark.ts:
+    newFile: !uuid 'bf04e842179c4bf090a536f248f02d294e909607'
+    oldFile: !uuid 'd2a7b248f5f1d25f8d2dcf570817560dca2a78b4'
+  /backend/src/agent-model-governance-test.ts:
+    newFile: !uuid '1975f72fcb3352f9bbba99722dd382985710130c'
+    oldFile: !uuid 'f962c43b950184f6345ecfc429a6d862beb67a44'
+  /backend/src/ai-agent-test.ts:
+    newFile: !uuid '450dfe964a83172dcf6316a698153cb5f716647a'
+    oldFile: !uuid 'd0bec8459d4d8e966c2a2bf59c4c8e7519b5c843'
+  /backend/src/ai-agent.ts:
+    newFile: !uuid '776e6b053e6ae79a7c66e17438ebd7a730e573d3'
+    oldFile: !uuid 'ede6455f6a8a02999276bb30dc06c658afad641b'
+  /backend/src/ai-model-runtime.ts:
+    newFile: !uuid '8979da20a0081d58de94aa50acb98f1a5586c397'
+    oldFile: !uuid '92c73a0bf688e86f0a2d42436b2ce89f4769f7ed'
+  /backend/src/auto-updater-test.ts:
+    newFile: !uuid 'c3df389fe3b1b7a55d7b4afe067fc3a7267c6024'
+    oldFile: null
+  /backend/src/auto-updater.ts:
+    newFile: !uuid '4ad0140397a3e0567ff18937c93a350b8f167354'
+    oldFile: null
+  /backend/src/customs-export.ts:
+    newFile: !uuid '903442bc67ef89edac2908bceb0d88d692e4da8e'
+    oldFile: !uuid 'bc5bfe05485f208a77bbf883434e5d8b7b3a0cfc'
+  /backend/src/data.ts:
+    newFile: !uuid '458e6bbd5620bf3854e22e125a6b6cc49f06cfee'
+    oldFile: !uuid 'cd3fe9283ee12128d8ed6018fe5da7e7d63ffcc0'
+  /backend/src/database-maintenance-mysql-test.ts:
+    newFile: !uuid '3937f34048127e252461ab586473c8bb7f0794f8'
+    oldFile: !uuid '619c9805d86056f7e58cc800318ebe8b15e7d8dc'
+  /backend/src/database-profile-test.ts:
+    newFile: !uuid '633a8dbf95f04eda4353331aca83d41fa2134860'
+    oldFile: null
+  /backend/src/database-profile.ts:
+    newFile: !uuid 'f955a89bcf7ebeea8d3b3568ee93c351c4a34327'
+    oldFile: null
+  /backend/src/lead-finder-launch-test.ts:
+    newFile: !uuid 'e1e9d2cf900c04a791d8845a6992082ac8679d52'
+    oldFile: null
+  /backend/src/lead-finder-launch.ts:
+    newFile: !uuid '821491245aa3dc9d2ea2892cb0b7c4983024c8f9'
+    oldFile: null
+  /backend/src/lead-providers.ts:
+    newFile: !uuid '01a4db45935549204f8813477ebfb5cd975c20a3'
+    oldFile: !uuid '9afd9b5dd7b5435ce3090c643d80a5c0d6679cc7'
+  /backend/src/mysql-data-import-test.ts:
+    newFile: !uuid '386a8632d46b3bc9d9251cbbfb98251a73209c3a'
+    oldFile: !uuid '2425c757eb18e51c4edb5df36677ae83c53e0c97'
+  /backend/src/mysql-data-import.ts:
+    newFile: !uuid '72c9b48a4ac3dbb658c86188113e7386f3a273ca'
+    oldFile: !uuid '2279f0588a0fecee49d925ee5269d4d971e7cbcd'
+  /backend/src/mysql-store.ts:
+    newFile: !uuid '73a4e9285a6f87417e89eea8899eb57565f6a755'
+    oldFile: !uuid '29821f3ac0f9c812da7d4312ae84a0b291b2ded1'
+  /backend/src/organization-strong-identity-mysql-test.ts:
+    newFile: !uuid 'f7af33e68c38613a6e80b3fc42e8c87d7d545539'
+    oldFile: !uuid 'd6d81b048c8286fbf35bb1bc86b8e447f01c7dbc'
+  /backend/src/prospect-campaign-mysql-test.ts:
+    newFile: !uuid '2fb88115d56c97187070bbdaf1384771b6dd4154'
+    oldFile: !uuid 'a47fef02d77406ac2760ace9c11e88b8f6ff3abc'
+  /backend/src/prospect-campaigns.ts:
+    newFile: !uuid 'eaab95749ef3f875ac848951cbcfb772cdf60228'
+    oldFile: !uuid '43fc4e1c76a8ed1c64c0c7a6c213d6bc6d463ae9'
+  /backend/src/prospect-candidate-pipeline.ts:
+    newFile: !uuid '6d7735e4b8e4d1bf4a7e6df4957dfdd49dc45dcf'
+    oldFile: !uuid '94b91c54dbbf9e47289cac3b40dda8b516a6d01d'
+  /backend/src/prospect-coverage-memory-mysql-test.ts:
+    newFile: !uuid 'e985d747c61cac78681d03606e56d34d786af093'
+    oldFile: !uuid '58ff9bfcfa99bf3da7d66fdd7763ab90b06734d9'
+  /backend/src/prospect-coverage-memory-mysql.ts:
+    newFile: !uuid '755839dab71246b200bbd26cd407b023fccbfc37'
+    oldFile: !uuid 'd6546c17d267a7398b6d6d5a9cb556aea977cdd3'
+  /backend/src/prospect-customer-conversion.ts:
+    newFile: !uuid 'f498d511508b230cfe4a2aff5e446740a7507610'
+    oldFile: !uuid 'a48184996836b10e2f965c1cdc16ff6382d04a19'
+  /backend/src/prospect-deep-mining-test.ts:
+    newFile: !uuid '401cdb8d24c214b66125ee311dcb98e7b371010c'
+    oldFile: null
+  /backend/src/prospect-deep-mining.ts:
+    newFile: !uuid '9513a70473ae70db1c0c15e85ef1e32e07c54d23'
+    oldFile: null
+  /backend/src/prospect-execution-kernel-test.ts:
+    newFile: !uuid '9175bbe4d26a74aad944b24c7feebcc96f5d2af1'
+    oldFile: !uuid 'e4d85a97c0c2ec706832faef2987d7fee8c31a3d'
+  /backend/src/prospect-execution-kernel.ts:
+    newFile: !uuid 'f067df44b413a25503b5ee0cc7a1003f38522e79'
+    oldFile: !uuid '5f8e77ecca5a70c7fc4d00c1daca63aa34441909'
+  /backend/src/prospect-execution-mysql-test.ts:
+    newFile: !uuid 'd5c3638f0ed86ed00a828aeceb030e12e06a1135'
+    oldFile: !uuid '6450bb8060cc9c12ecd1c69b982a346c746af630'
+  /backend/src/prospect-fake-provider.ts:
+    newFile: !uuid '1116b28dce9d1b1215e318377dfb10298c023843'
+    oldFile: !uuid '6be79ce74cd83ab8306e5969a83c5b379bb8f20f'
+  /backend/src/prospect-identity-bootstrap-mysql-test.ts:
+    newFile: !uuid '45f9f0aca6980e035bb453d2e9aa6e364bda3141'
+    oldFile: !uuid 'f330c84f9f49546cd528d25160bee284602a8ec5'
+  /backend/src/prospect-lead-conversion-mysql-test.ts:
+    newFile: !uuid 'aa38e7768ef96f7eb07a44eca8918d7c29619b6c'
+    oldFile: !uuid '47a3c57cac1036e6505d82d8fa801e35cb9b45af'
+  /backend/src/prospect-live-events-test.ts:
+    newFile: !uuid '059637f8e93980659ecc78ee1d72a96db2d2445c'
+    oldFile: !uuid '848678adf4aaf16c1e070797bb64ac5f47071449'
+  /backend/src/prospect-live-events.ts:
+    newFile: !uuid 'f89c10c79844a184763052856db206a9b5242dd9'
+    oldFile: !uuid '146366bb1463f7235db4021b779d7b40a609334a'
+  /backend/src/prospect-provider-dispatcher.ts:
+    newFile: !uuid 'b7c18f36b1cad3462f003f5115530f329dd5bcbd'
+    oldFile: !uuid '529e3e44849ce1bdf9dbcc790097e2fcb9d32c1c'
+  /backend/src/prospect-qualification-mysql-test.ts:
+    newFile: !uuid '193697316c4ce4cd1f56ff017422759934cd5558'
+    oldFile: !uuid '5163f42f6c1b6c85cd5eb7c76cb8985fb791325b'
+  /backend/src/prospect-run-mysql-test.ts:
+    newFile: !uuid '7ab5bebed00e2df5d921ba9601c4b03dc7f45860'
+    oldFile: !uuid '3ba222c859f92378dae79b11fe2de455e585c2f3'
+  /backend/src/prospect-runs.ts:
+    newFile: !uuid '20cb92a0beef525cbf1d624bb6fa570fab55d1ca'
+    oldFile: !uuid 'a38a2ba5537d5813011d96471e517353cb6de237'
+  /backend/src/prospect-schedules.ts:
+    newFile: !uuid 'a2315f976d596043e52e636531303dc378503cf7'
+    oldFile: !uuid '5783b39d3f94c170311cf3bacc591b9a0e5fc86a'
+  /backend/src/prospect-search-planner.ts:
+    newFile: !uuid 'ca2d73934edd9da5de08f9c4899e63cbd065aaf7'
+    oldFile: !uuid '1a25fceda552d4f963eb5459aca29eee87547cab'
+  /backend/src/prospect-strategies.ts:
+    newFile: !uuid '263e2aadc0188a852369ad648074724e2d4a95e5'
+    oldFile: !uuid '9863de62d4de8d6f6fc65c820b4aa79260231f8b'
+  /backend/src/prospect-strategy-mysql-test.ts:
+    newFile: !uuid 'f3fc452a456539b7f862085b52c43cf1b0b81d66'
+    oldFile: !uuid '53d3e503bef9f8dd65774d02e94e2888d5d42ade'
+  /backend/src/prospect-super-search.ts:
+    newFile: !uuid 'c75a204685f37ae5e3d5e8b84b9e0cb59e9502c9'
+    oldFile: !uuid '7d823a9a7c0def88eef6ec952cc639d946039415'
+  /backend/src/provider-mysql-persistence-test.ts:
+    newFile: !uuid 'c3eb98ee1fe904869280ff272a6de5f94e40e082'
+    oldFile: !uuid '95d1dead487abfe3c81c893f019a0dfc4844f6d8'
+  /backend/src/runtime-env.ts:
+    newFile: !uuid 'b42c123805d73daef2b4cfb3b2db2aad21e2ea57'
+    oldFile: !uuid '1c50168133d67e9e47f552da1c8287cc572a76d0'
+  /backend/src/security-test.ts:
+    newFile: !uuid '3e800e345412b0cfc5ada8857fb642fef01fa5f1'
+    oldFile: !uuid 'c17798cdd0dee3cb77265c68132f0497fb8ad50e'
+  /backend/src/server-network.ts:
+    newFile: !uuid 'c577e3a842105c6d335f82066c98448f8ee02f40'
+    oldFile: !uuid '6788a6e3b0e1aa84b38f52e764e920495b3463e6'
+  /backend/src/server.ts:
+    newFile: !uuid '9ecab194832b5cc7b0df2cbea2eef80aa827e7fd'
+    oldFile: !uuid '264779e6d1739c6c25f218e6dc0cf90206876856'
+  /backend/src/shipment-ocr.ts:
+    newFile: !uuid 'c6453009b27eb799e3313f68dfed03fae5331228'
+    oldFile: null
+  /backend/src/store.ts:
+    newFile: !uuid '257cd0be1dc8c446025c5cd7c4311f9cc33f47cc'
+    oldFile: !uuid '1c4181f10ab0b32f1aa0b724dbf035c831964624'
+  /backend/src/types.ts:
+    newFile: !uuid 'a8db08af5398c2221e9b01a054dfe4107abc61ce'
+    oldFile: !uuid 'bed01333ee286e414ed7078f555cb9d91e30b993'
+  /backend/src/website-probe-test.ts:
+    newFile: !uuid '2840968908bb9e5bf7a5a83fecfb3aa3997dfcf9'
+    oldFile: !uuid '1385b10735451f4a6043e08ad950e2dd9ad52228'
+  /backend/src/website-probe.ts:
+    newFile: !uuid 'b3c2aacdfde58ecf14c5345f98747d5160f530c8'
+    oldFile: !uuid '5be3f2ddf8667dfc3a5c4c9a490f5559d075dced'
+  /backend/tsconfig.json:
+    newFile: !uuid '7c19dcb4410c80642eb5194a9f8007a33aa257d7'
+    oldFile: !uuid 'a5492c6a23fb5cfce56c8affd6365802a1fb40cc'
   /frontend:
-    newFile: !uuid '459fc3501b69e80521a17c9f551980e262980e0f'
-    oldFile: !uuid '5582c9028342c9b1c60f3a1e9faf17930cf939b2'
+    newFile: !uuid '1d8da3139506b8e73561eb97771707aaae8d13e9'
+    oldFile: !uuid '459fc3501b69e80521a17c9f551980e262980e0f'
+  /frontend/index.html:
+    newFile: !uuid 'f44db8719822f6f38162357c5cea98ee2c904b9c'
+    oldFile: !uuid '9011d0885c00d5cbffb08441244efc8617558cea'
+  /frontend/package.json:
+    newFile: !uuid 'ac622169e891fd853894923df3508e846fbe04bf'
+    oldFile: !uuid 'cef35df42337aad5de83e508a6841ca505626e08'
   /frontend/public:
-    newFile: !uuid '1c06ef6f37ef5c92389b112755f84bf3f6ef5d09'
-    oldFile: !uuid '9d5ec4705477f8664200bb6b70f4b65ad8e62ca3'
+    newFile: !uuid 'fbfb234ddb551464d626ef45841dd489617e5d74'
+    oldFile: !uuid '1c06ef6f37ef5c92389b112755f84bf3f6ef5d09'
   /frontend/public/product-config.json:
-    newFile: !uuid '0daffcb300cd4837aacf9d2f3badaaced47d2448'
-    oldFile: !uuid '681dbb2a03fbf2fbbd85178d8bc4d5737037be19'
-gitCommitId: !uuid '2c6003ffb11c2e3eabdce00a5980153de4a782c7'
+    newFile: !uuid '16e6dc593ecdf9fe6649804e3f819478db8d85c8'
+    oldFile: !uuid '0daffcb300cd4837aacf9d2f3badaaced47d2448'
+  /frontend/src:
+    newFile: !uuid '3bd4237a503fe519b0e21d74bc7bea6af3b8b1f1'
+    oldFile: !uuid '81eef303a0070c56257c2fa8f71a1dca4acd6372'
+  /frontend/src/lead-ai-search.ts:
+    newFile: !uuid '37e5a8bf9ef84e6bc9f153c86c8395878ee00cf9'
+    oldFile: null
+  /frontend/src/lead-source-selection.ts:
+    newFile: !uuid '5a01cae9f2d45912c84f7cd512b870cb094516b5'
+    oldFile: !uuid '6929ac621e831793540a5e9c0f2eb2efdf609598'
+  /frontend/src/prospect-radar.ts:
+    newFile: !uuid 'd6c1132f6de11d6023de2b1f4aa0be8a7fd0a4d1'
+    oldFile: null
+  /frontend/src/prototype-api.ts:
+    newFile: !uuid '2ad54881c997c01a87dad553ce7bc539974d0c2f'
+    oldFile: !uuid 'a22fe44f9bfa58bbd8d53277ec847de5b42adcf9'
+  /frontend/src/self-test.ts:
+    newFile: !uuid 'c6f5fefeb0b9f2bb3829280ab0b9d21c6545a59e'
+    oldFile: !uuid '75991534a81c0ac089f08afdc59d8fa0965e37df'
+  /package-lock.json:
+    newFile: !uuid 'eafc8a26f42c1657d31d62e19a9ad19bff60a174'
+    oldFile: !uuid '86df07668671a73b0d8e23294176036aba62cce2'
+  /package.json:
+    newFile: !uuid '8a8d2b4ed1e2b287969c907fbe98a7ac81e82399'
+    oldFile: !uuid '5cc5c6042cac74a575c9a864f3bc06ebb923139d'
+  /scripts:
+    newFile: !uuid 'a8767b70149ffa68627cd6b4e670d159eba2ad2f'
+    oldFile: null
+  /scripts/check-database-safety.mjs:
+    newFile: !uuid '40dd6746202511290e9bc4a3aad9a92cc13c7c7d'
+    oldFile: null
+  /scripts/database-profile-status.mjs:
+    newFile: !uuid '8657540d4e56a92ff9c3504539995cd3b9681321'
+    oldFile: null
+  /scripts/provision-local-databases.mjs:
+    newFile: !uuid 'cadc7824ca5c9a8982595369300ce1639b3fac9e'
+    oldFile: null
+  /scripts/run-with-profile.mjs:
+    newFile: !uuid 'dd50ab4613903ff7914399218c55b875f24e0035'
+    oldFile: null
+  /whatsapp-plugin:
+    newFile: !uuid '8736013980542a0332311a0ca044acafd69466a8'
+    oldFile: !uuid '0a5ce1e3e1b04809647b621c798873d59086cdbe'
+  /whatsapp-plugin/.env.example:
+    newFile: !uuid '8b1beabe8772e55c8d53c8b4bd08acdafdd4f141'
+    oldFile: !uuid '7d92d700f3bc8484276f3ab0504f4ea49acd87c8'
+  /whatsapp-plugin/package-lock.json:
+    newFile: !uuid 'f83b567aaecff8d732837a4e388a58f938eeaae7'
+    oldFile: !uuid '3785616d88e5223cac2637c8240f27297f5921ba'
+  /whatsapp-plugin/package.json:
+    newFile: !uuid '1a549ce4c8be48f6f821cba155e6c3cd5dbdebf0'
+    oldFile: !uuid 'beb3d2bfc4c6a17a374dca9326999cf3e7e3dd1e'
+  /whatsapp-plugin/src:
+    newFile: !uuid '007392773055efb67ed8cbdddf6449b3da408870'
+    oldFile: !uuid '720250d2d98854dbf3f42ce9d08bf3b8300cc541'
+  /whatsapp-plugin/src/server:
+    newFile: !uuid 'b28446468401180c00b483a8063104d300439396'
+    oldFile: !uuid '195391d80ef75030d62bf13ecf72456f1be39c9e'
+  /whatsapp-plugin/src/server/app.ts:
+    newFile: !uuid 'db5761ad0a46c9671fe96328f4cb4b46d77b64fa'
+    oldFile: !uuid '3fe4b963f059703dd1ca475d00bf35966e094286'
+  /whatsapp-plugin/src/server/config.ts:
+    newFile: !uuid 'df31984b5313a19194404a69f7464d8acf80ba78'
+    oldFile: !uuid 'b093e2f1d581c725690499764e45c8d6fc4b5406'
+  /whatsapp-plugin/src/server/db:
+    newFile: !uuid 'f0f7335e36469302eb71e06d2d3dcc9d2e0255da'
+    oldFile: !uuid 'bb2bb841be6aa209f9b01931e623075fc3ee3ee1'
+  /whatsapp-plugin/src/server/db/communication-tables.ts:
+    newFile: !uuid '4e81c526ed2f0e47a9f773740b442e2db3d47006'
+    oldFile: null
+  /whatsapp-plugin/src/server/db/database.ts:
+    newFile: !uuid '7d53cca5e1584ff7c33d9ea8d24290d62562f76f'
+    oldFile: !uuid '05de3d676e4184525b731fd7bbc1228b140a2823'
+  /whatsapp-plugin/src/server/db/demo-cleanup.ts:
+    newFile: !uuid 'f94dc7c902ac7b23f5572291b58946f338164f95'
+    oldFile: !uuid 'ca8be6a56fbc235c4585d8b2a7028b046dd70b2f'
+  /whatsapp-plugin/src/server/db/migrate.ts:
+    newFile: !uuid '75a6b71e367381ca3e9b38bfa2b667b5fdc4a171'
+    oldFile: !uuid '7b75025ab4de8ef4bd859fd49273290952233192'
+  /whatsapp-plugin/src/server/db/mysql-migrate.ts:
+    newFile: !uuid '56a2f9411333e8c7745c7eacbfa61e144eedd62e'
+    oldFile: null
+  /whatsapp-plugin/src/server/db/repository.ts:
+    newFile: !uuid '63443ccc0e4510f16b814289e8a341ff0335e61a'
+    oldFile: !uuid '59c9676bbc8a5ee9e72f3575a6110efb038e38a2'
+  /whatsapp-plugin/src/server/db/seed.ts:
+    newFile: !uuid '6dd10d994575bc1a12cd2f42963fc84e28f03315'
+    oldFile: !uuid '3682cc2d73ade1f6cab9539fbf749ca303bb975d'
+  /whatsapp-plugin/src/server/scripts:
+    newFile: !uuid 'c72f726d5f9c89647c3e853a6d9e73984fac2766'
+    oldFile: !uuid '4710b115900e8d3ac29e9278303959f89651cf4f'
+  /whatsapp-plugin/src/server/scripts/migrate-postgres-to-mysql.ts:
+    newFile: !uuid 'd3a48e4ed579302b48501fdac80b8cb58c8595cc'
+    oldFile: null
+  /whatsapp-plugin/src/shared:
+    newFile: !uuid '663ec518a9df1ce7217e4e218b052fe5ae3f1a49'
+    oldFile: !uuid 'b70c5e6ab76f9098228767acd2ecf66d5c79f08e'
+  /whatsapp-plugin/src/shared/types.ts:
+    newFile: !uuid '4966c2e2f7137633be5ac247db3b186263550077'
+    oldFile: !uuid 'd64aa94a2be7d4e02df2417c2c775c06a59b516b'
+  /whatsapp-plugin/src/web:
+    newFile: !uuid 'f00c33134680a6cce7e869d899e2faca95d724ca'
+    oldFile: !uuid 'c87549f0ff4746531814211657ff6b9ba3ce56ec'
+  /whatsapp-plugin/src/web/pages:
+    newFile: !uuid 'e5a8cd5bfae006964a7548ee82eb8b17ec2bd9d2'
+    oldFile: !uuid '8db58f43c80ccd717ecf4e1065f19c9192c32e56'
+  /whatsapp-plugin/src/web/pages/DiagnosticsPage.tsx:
+    newFile: !uuid 'c5579b5de42530ec48e92d654b60db461e8138aa'
+    oldFile: !uuid 'e115a7586a1f1925b3c48e2bb24eb085986b7306'
+  /whatsapp-plugin/tests:
+    newFile: !uuid '50753d04174bb0860c55d507c949b1a9d634d291'
+    oldFile: !uuid '9440faa0e526daac86f569fbe58d567c0c813417'
+  /whatsapp-plugin/tests/config.test.ts:
+    newFile: !uuid '9006aebeef629a6ad900ee97382666baab92fcb1'
+    oldFile: !uuid 'c0c1cfbf3a4e3b952dbd78301358eb391406506a'
+  /whatsapp-plugin/tests/mysql-query.test.ts:
+    newFile: !uuid '3a7000c8142053b8ac4989f8ad2964f3ba37cc22'
+    oldFile: null
+  /whatsapp-plugin/tests/mysql.integration.test.ts:
+    newFile: !uuid '29e204cc12b45f3ad9e04a8651c7fd92c19e9885'
+    oldFile: null
+  /whatsapp-plugin/tests/postgres-to-mysql.integration.test.ts:
+    newFile: !uuid '7cbc8d6fe90ff862684849565234e9a91d4e4930'
+    oldFile: null
+gitCommitId: !uuid '3c5b4edcd2e7c3854c9ca830f7cdeb12dd0ab8b0'
 renames: {
   }
-revisionId: 61
+revisionId: 62
