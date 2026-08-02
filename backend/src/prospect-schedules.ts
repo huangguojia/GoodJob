@@ -333,6 +333,9 @@ function persistMutation<T>(
   store: CrmStore,
   mutation: () => PersistedStoreMutation<T>
 ) {
+  if (store.persistProspectCampaignMutation) {
+    return store.persistProspectCampaignMutation(mutation);
+  }
   if (store.persistMutation) return store.persistMutation(mutation);
   const applied = mutation();
   return store.persist()

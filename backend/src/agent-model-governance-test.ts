@@ -140,6 +140,7 @@ async function main() {
         assert.deepEqual(input.body, {
           company: "goodjob01", country: "未知", contact: "待维护", whatsapp: "", stage: "询盘", amount: 0,
           health: 72, grade: "C", billingName: "goodjob01", billingAddress: "", documentContact: "待维护",
+          phone: "", email: "", website: "",
           defaultPortDischarge: "", defaultIncoterm: "", defaultPaymentTerm: ""
         });
         return { status: 200, method: "POST", path: "/api/customers", data: { customer: { id: "c_goodjob01", ...input.body } }, uiAction: { type: "refresh", view: "customers" } };

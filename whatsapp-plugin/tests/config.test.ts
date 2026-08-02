@@ -10,8 +10,8 @@ import {
 
 const productionEnvironment = (overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
   NODE_ENV: "production",
-  DATABASE_CLIENT: "postgres",
-  DATABASE_URL: "postgresql://app:password@db.example.test:5432/plugin",
+  DATABASE_CLIENT: "mysql",
+  DATABASE_URL: "mysql://app:password@db.example.test:3306/goodjob_crm",
   SESSION_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
   WEB_ORIGIN: "https://crm.example.test",
   ...overrides
@@ -58,7 +58,7 @@ describe("server configuration", () => {
   it("uses fail-closed production defaults", () => {
     expect(loadConfig(productionEnvironment())).toMatchObject({
       nodeEnv: "production",
-      databaseClient: "postgres",
+      databaseClient: "mysql",
       seedDemo: false,
       enableDemoProvider: false,
       autoMigrate: false
@@ -70,7 +70,7 @@ describe("server configuration", () => {
   it("rejects ambiguous or unsafe production configuration", () => {
     expect(() => loadConfig({ NODE_ENV: "prod" })).toThrow(/NODE_ENV/u);
     expect(() => loadConfig({ DATABASE_CLIENT: "postres" })).toThrow(/DATABASE_CLIENT/u);
-    expect(() => loadConfig(productionEnvironment({ DATABASE_CLIENT: "pglite" }))).toThrow(/postgres in production/u);
+    expect(() => loadConfig(productionEnvironment({ DATABASE_CLIENT: "pglite" }))).toThrow(/mysql in production/u);
     expect(() => loadConfig(productionEnvironment({ DATABASE_URL: "" }))).toThrow(/DATABASE_URL/u);
     expect(() => loadConfig(productionEnvironment({ SESSION_MASTER_KEY: "not-base64" }))).toThrow(/32 bytes/u);
     expect(() => loadConfig(productionEnvironment({ SEED_DEMO: "true", ALLOW_DEMO_PROVIDER: "true" }))).toThrow(

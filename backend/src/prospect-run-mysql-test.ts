@@ -47,14 +47,12 @@ const fullSnapshot = {
 };
 
 async function main() {
-  const applicationUrl = process.env.DATABASE_URL
-    || process.env.MYSQL_URL
-    || process.env.MYSQL_TEST_ADMIN_URL;
-  const adminConnectionUrl = process.env.MYSQL_TEST_ADMIN_URL
-    || applicationUrl;
+  const adminConnectionUrl = process.env.MYSQL_TEST_ADMIN_URL;
+  const applicationUrl = process.env.MYSQL_TEST_APP_URL
+    || adminConnectionUrl;
   if (!applicationUrl || !adminConnectionUrl) {
     throw new Error(
-      "Prospect Run MySQL test requires MYSQL_TEST_ADMIN_URL, DATABASE_URL or MYSQL_URL"
+      "Prospect Run MySQL test requires MYSQL_TEST_ADMIN_URL"
     );
   }
 
@@ -308,11 +306,14 @@ async function main() {
     );
 
     stage = "same-store active uniqueness";
+    const pausedRaceCampaign = raceStore.prospectCampaigns.find(
+      (item) => item.id === raceStoreCampaign.id
+    )!;
     await activateProspectCampaign({
       store: raceStore,
       user: publicUser(raceStoreOwner),
-      campaignId: raceStoreCampaign.id,
-      ifMatch: prospectCampaignEtag(raceStoreCampaign),
+      campaignId: pausedRaceCampaign.id,
+      ifMatch: prospectCampaignEtag(pausedRaceCampaign),
       requestId: "run-mysql-race-reactivate"
     });
     const activeRaceResults = await Promise.allSettled([
@@ -753,17 +754,19 @@ async function main() {
         body: { reason: "过期实例重复暂停" },
         requestId: "run-mysql-stale-pause"
       }),
-      /并发版本冲突/
+      (error: unknown) =>
+        error instanceof ProspectRunRequestError
+        && error.code === "RUN_REVISION_CONFLICT"
     );
     const rolledBackRun = staleStore.prospectSearchRuns.find(
       (item) => item.id === runId
     )!;
-    assert.equal(rolledBackRun.status, "queued");
-    assert.equal(rolledBackRun.revision, 1);
+    assert.equal(rolledBackRun.status, "paused");
+    assert.equal(rolledBackRun.revision, 2);
     assert.equal(
       staleStore.prospectRunEvents.filter((item) => item.runId === runId)
         .length,
-      1
+        2
     );
 
     stage = "cold restart paused state";
@@ -816,13 +819,16 @@ async function main() {
       body: { reason: "人工恢复运行" },
       requestId: "run-mysql-resume"
     });
+    const resumedRun = pausedStore.prospectSearchRuns.find(
+      (item) => item.id === runId
+    )!;
     await transitionProspectRun({
       store: pausedStore,
       user: publicUser(
         pausedStore.users.find((item) => item.id === owner.id)!
       ),
       runId,
-      ifMatch: `"${runId}:${pausedRun.revision}"`,
+      ifMatch: `"${runId}:${resumedRun.revision}"`,
       action: "cancel",
       body: { reason: "结束控制面测试" },
       requestId: "run-mysql-cancel"
@@ -855,16 +861,25 @@ async function main() {
     );
 
     stage = "append-only persistence guard";
-    const immutableEvent = finalStore.prospectRunEvents.find(
-      (item) => item.runId === runId
-    )!;
-    const originalReason = immutableEvent.reason;
-    immutableEvent.reason = "试图改写运行审计历史";
+    const persistExecutionMutation =
+      finalStore.persistProspectExecutionMutation;
+    assert.ok(persistExecutionMutation);
     await assert.rejects(
-      finalStore.persist(),
+      persistExecutionMutation(() => {
+        const immutableEvent = finalStore.prospectRunEvents.find(
+          (item) => item.runId === runId
+        )!;
+        const originalReason = immutableEvent.reason;
+        immutableEvent.reason = "试图改写运行审计历史";
+        return {
+          value: undefined,
+          rollback: () => {
+            immutableEvent.reason = originalReason;
+          }
+        };
+      }),
       /获客搜索运行审计事件不可变历史被修改/
     );
-    immutableEvent.reason = originalReason;
 
     stage = "snapshot tamper cold-start guard";
     await admin.query(

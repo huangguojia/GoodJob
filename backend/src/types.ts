@@ -502,6 +502,9 @@ export interface Customer {
   billingName: string;
   billingAddress: string;
   documentContact: string;
+  phone?: string;
+  email?: string;
+  website?: string;
   defaultPortDischarge: string;
   defaultIncoterm: string;
   defaultPaymentTerm: string;
@@ -1144,6 +1147,7 @@ export type WebsiteProbeStage =
   | "robots"
   | "head"
   | "body"
+  | "contact_page"
   | "evidence"
   | "completed"
   | "failed";
@@ -1181,7 +1185,7 @@ export interface WebsiteProbeAttempt {
   sourceUrl: string;
   purpose: "company_evidence_enrichment";
   accessMode: "controlled_probe";
-  policyVersion: "website-probe-policy-v1" | "website-probe-policy-v2";
+  policyVersion: "website-probe-policy-v1" | "website-probe-policy-v2" | "website-probe-policy-v3";
   status: "queued" | "running" | "completed" | "failed";
   outcome:
     | "pending"
@@ -1649,6 +1653,7 @@ export interface ProspectSearchQueryPlanMetadata {
   theme: string;
   planningMode?: "rules" | "ai_enhanced";
   fingerprint: string;
+  providerQueriesFingerprint?: string;
 }
 
 export interface ProspectSearchQueryCell {
@@ -1674,6 +1679,11 @@ export interface ProspectSearchQueryCell {
 
 export interface ProspectRunExecutionSnapshot {
   contractVersion: "search_run_control_plane_v1";
+  /**
+   * Total accepted-result target for the run. Optional for backwards
+   * compatibility with snapshots created before global quota scheduling.
+   */
+  globalResultLimit?: number;
   campaign: {
     id: string;
     name: string;
@@ -1690,6 +1700,7 @@ export interface ProspectRunExecutionSnapshot {
     query: ProspectStrategyQuery;
   };
   resolvedQuery: ProspectResolvedQuerySnapshot;
+  providerResolvedQueries?: Record<string, ProspectResolvedQuerySnapshot>;
   queryPlan?: ProspectSearchQueryPlanMetadata;
   providerPlan: ProspectRunProviderSnapshot[];
 }
@@ -1730,6 +1741,113 @@ export type ProspectSuperSearchStatus =
 
 export type ProspectSuperSearchDepth = "balanced" | "deep" | "extreme";
 
+export type ProspectDeepMiningRelationType =
+  | "parent_subsidiary"
+  | "brand_distributor"
+  | "buyer_supplier"
+  | "project_owner_contractor"
+  | "procurement_award"
+  | "certified_partner"
+  | "regional_representative"
+  | "contact_channel"
+  | "related_company";
+
+export interface ProspectDeepMiningEvidence {
+  id: string;
+  nodeId: string;
+  candidateId: string;
+  providerId: string;
+  sourceUrl: string;
+  summary: string;
+  queryText: string;
+  authority: ProviderFieldAuthorityLevel;
+  observedAt: string;
+  payloadHash: string;
+}
+
+export interface ProspectDeepMiningNode {
+  id: string;
+  rootCandidateId: string;
+  candidateId: string;
+  parentNodeId: string;
+  company: string;
+  country: string;
+  website: string;
+  depth: number;
+  evidenceIds: string[];
+  enterpriseVerificationScore: number;
+  contactReadinessScore: number;
+  actionPriorityScore: number;
+  verificationStatus: "unverified" | "partial" | "verified" | "blocked";
+  conflict: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProspectDeepMiningEdge {
+  id: string;
+  rootCandidateId: string;
+  fromNodeId: string;
+  toNodeId: string;
+  relationType: ProspectDeepMiningRelationType;
+  confidence: number;
+  evidenceIds: string[];
+  sourceUrls: string[];
+  verified: boolean;
+  conflict: boolean;
+  createdAt: string;
+}
+
+export interface ProspectDeepMiningTask {
+  id: string;
+  rootCandidateId: string;
+  candidateId: string;
+  nodeId: string;
+  parentNodeId: string;
+  depth: number;
+  status: "queued" | "searching" | "verifying" | "completed" | "failed" | "stopped";
+  runId: string;
+  roundNo: number;
+  websiteProbeAttemptId: string;
+  queryText: string;
+  newNodeCount: number;
+  evidenceCount: number;
+  duplicateCount: number;
+  stopReason: string;
+  createdAt: string;
+  startedAt: string;
+  completedAt: string;
+}
+
+export interface ProspectDeepMiningState {
+  version: "prospect-deep-mining-v1";
+  status: "queued" | "searching" | "verifying" | "completed" | "failed";
+  maxDepth: number;
+  maxRootCandidates: number;
+  maxQueries: number;
+  maxWebsiteProbes: number;
+  queriesUsed: number;
+  websiteProbesUsed: number;
+  activeTaskId: string;
+  tasks: ProspectDeepMiningTask[];
+  nodes: ProspectDeepMiningNode[];
+  edges: ProspectDeepMiningEdge[];
+  evidence: ProspectDeepMiningEvidence[];
+  summary: {
+    rootCandidateCount: number;
+    researchedCandidateCount: number;
+    relationCount: number;
+    evidenceCount: number;
+    verifiedCompanyCount: number;
+    contactReadyCount: number;
+    researchReadyCount: number;
+    stoppedTaskCount: number;
+  };
+  stopReason: string;
+  startedAt: string;
+  endedAt: string;
+}
+
 export interface ProspectSuperSearchMission {
   id: string;
   teamId: string;
@@ -1761,6 +1879,7 @@ export interface ProspectSuperSearchMission {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  deepMining?: ProspectDeepMiningState;
 }
 
 export interface ProspectSuperSearchRound {
@@ -1769,6 +1888,10 @@ export interface ProspectSuperSearchRound {
   teamId: string;
   ownerId: string;
   roundNo: number;
+  roundKind?: "discovery" | "deep_mining";
+  focusCandidateId?: string;
+  focusNodeId?: string;
+  miningDepth?: number;
   runId: string;
   queryPlanSnapshot: ProspectResolvedQuerySnapshot;
   plannerVersion?: string;
@@ -1802,8 +1925,12 @@ export interface ProspectSuperSearchEvent {
   teamId: string;
   ownerId: string;
   sequence: number;
-  type: "created" | "round_started" | "round_completed" | "paused" | "resumed" | "cancelled" | "completed" | "failed";
+  type: "created" | "round_started" | "round_completed" | "paused" | "resumed" | "cancelled" | "completed" | "failed"
+    | "deep_mining_started" | "deep_query_started" | "deep_evidence_found"
+    | "deep_relation_found" | "deep_probe_queued" | "deep_probe_completed"
+    | "deep_candidate_converged" | "deep_mining_completed";
   message: string;
+  metadata?: Record<string, string | number | boolean | null>;
   createdAt: string;
 }
 
@@ -3161,6 +3288,62 @@ export interface AiModelConfig {
   updatedAt: string;
 }
 
+export interface Product {
+  id: string;
+  nameZh: string;
+  nameEn: string;
+  model: string;
+  category: string;
+  unit: string;
+  price: number;
+  currency: string;
+  hsCode: string;
+  descriptionZh: string;
+  descriptionEn: string;
+  tags: string[];
+  imageUrl: string;
+  ownerId: string;
+  teamId: string;
+  updatedAt: string;
+}
+
+export type ShipmentStatus = "draft" | "shipped" | "in_transit" | "delivered" | "exception";
+
+export interface ShipmentItem {
+  id: string;
+  productName: string;
+  model: string;
+  hsCode: string;
+  quantity: number;
+  unit: string;
+  netWeight: number;
+  grossWeight: number;
+  length: number;
+  width: number;
+  height: number;
+  volume: number;
+  note: string;
+}
+
+export interface Shipment {
+  id: string;
+  shipmentNo: string;
+  dealId: string;
+  dealTitle: string;
+  customerName: string;
+  courier: string;
+  trackingCode: string;
+  trackingImageUrl: string;
+  status: ShipmentStatus;
+  shippedAt: string;
+  estimatedArrival: string;
+  note: string;
+  items: ShipmentItem[];
+  ownerId: string;
+  teamId: string;
+  updatedAt: string;
+}
+
 export interface Deal {
   id: string;
   customerId: string;
@@ -3327,7 +3510,7 @@ export interface TradeDocument {
   customerId: string;
   dealId: string;
   revision: number;
-  type: "PI" | "CI" | "CUSTOMS";
+  type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING";
   title: string;
   number: string;
   issueDate: string;
@@ -3345,7 +3528,8 @@ export interface TradeDocument {
   validityDate: string;
   bankInfo: string;
   notes: string;
-  templateStyle: "executive" | "classic" | "compact";
+  language: "EN" | "ES" | "RU" | "AR" | "ZH";
+  templateStyle: "executive" | "classic" | "compact" | "indigo" | "emerald" | "rose" | "slate" | "amber";
   status: "draft" | "ready" | "pending_approval" | "approved" | "rejected" | "exported";
   approvalNote?: string;
   approvedAt?: string;

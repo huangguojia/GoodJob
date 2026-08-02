@@ -1,4 +1,5 @@
 import type { Database, DatabaseTransaction } from "./database.js";
+import { migrateMysql } from "./mysql-migrate.js";
 
 const initialSchema = `
 CREATE TABLE IF NOT EXISTS channel_accounts (
@@ -279,6 +280,10 @@ async function applyMigration(transaction: DatabaseTransaction, migration: Migra
 }
 
 export async function migrate(database: Database): Promise<void> {
+  if (database.kind === "mysql") {
+    await migrateMysql(database);
+    return;
+  }
   await database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version integer PRIMARY KEY,

@@ -89,6 +89,18 @@ function executionStateSnapshot(store: CrmStore) {
   };
 }
 
+function comparableExecutionStateSnapshot(store: CrmStore) {
+  const snapshot = executionStateSnapshot(store);
+  return Object.fromEntries(
+    Object.entries(snapshot).map(([key, values]) => [
+      key,
+      [...values].sort((left, right) =>
+        JSON.stringify(left).localeCompare(JSON.stringify(right))
+      )
+    ])
+  );
+}
+
 function restoreExecutionState(
   store: CrmStore,
   snapshot: ReturnType<typeof executionStateSnapshot>
@@ -191,13 +203,24 @@ async function expectRejectedMutation(
   mutate: () => void,
   pattern: RegExp
 ) {
-  const before = executionStateSnapshot(store);
-  try {
-    mutate();
-    await assert.rejects(store.persist(), pattern);
-  } finally {
-    restoreExecutionState(store, before);
-  }
+  const persist = store.persistProspectExecutionMutation;
+  assert.ok(persist);
+  await assert.rejects(
+    persist(() => {
+      const before = executionStateSnapshot(store);
+      try {
+        mutate();
+      } catch (error) {
+        restoreExecutionState(store, before);
+        throw error;
+      }
+      return {
+        value: undefined,
+        rollback: () => restoreExecutionState(store, before)
+      };
+    }),
+    pattern
+  );
 }
 
 class MysqlInspectingFakeProspectProvider
@@ -220,15 +243,12 @@ class MysqlInspectingFakeProspectProvider
 }
 
 async function main() {
-  const applicationUrl = process.env.DATABASE_URL
-    || process.env.MYSQL_URL
-    || process.env.MYSQL_TEST_ADMIN_URL;
-  const adminConnectionUrl = process.env.MYSQL_TEST_ADMIN_URL
-    || applicationUrl;
+  const adminConnectionUrl = process.env.MYSQL_TEST_ADMIN_URL;
+  const applicationUrl = process.env.MYSQL_TEST_APP_URL
+    || adminConnectionUrl;
   if (!applicationUrl || !adminConnectionUrl) {
     throw new Error(
-      "Prospect execution MySQL test requires MYSQL_TEST_ADMIN_URL, "
-      + "DATABASE_URL or MYSQL_URL"
+      "Prospect execution MySQL test requires MYSQL_TEST_ADMIN_URL"
     );
   }
 
@@ -516,10 +536,22 @@ async function main() {
     });
     const resumedKernelState = await resumedKernel.start(tick());
     assert.equal(resumedKernelState.kernelEpoch, 2);
-    const previousRunEpoch = pausedRun.executionEpoch;
+    const runBeforeResume = pausedStore.prospectSearchRuns.find(
+      (item) => item.id === firstRunId
+    );
+    assert.ok(runBeforeResume);
+    const previousRunEpoch = runBeforeResume.executionEpoch;
     await resumedKernel.resume(firstRunId, tick());
-    assert.equal(pausedRun.executionEpoch, previousRunEpoch + 1);
-    assert.equal(pausedCheckpoint.runEpoch, pausedRun.executionEpoch);
+    const resumedRun = pausedStore.prospectSearchRuns.find(
+      (item) => item.id === firstRunId
+    );
+    const resumedCheckpoint = pausedStore.prospectExecutionCheckpoints.find(
+      (item) => item.runId === firstRunId
+    );
+    assert.ok(resumedRun);
+    assert.ok(resumedCheckpoint);
+    assert.equal(resumedRun.executionEpoch, previousRunEpoch + 1);
+    assert.equal(resumedCheckpoint.runEpoch, resumedRun.executionEpoch);
     const resumedProvider = new DeterministicFakeProspectProvider({
       gleif: [{
         kind: "success",
@@ -539,7 +571,10 @@ async function main() {
       tick()
     );
     assert.equal(resumedResult.kind, "success");
-    assert.equal(pausedRun.status, "succeeded");
+    assert.equal(
+      pausedStore.prospectSearchRuns.find((item) => item.id === firstRunId)?.status,
+      "succeeded"
+    );
 
     stage = "verify costs usage hashes pages events and leases after reload";
     const finishedStore = await createMysqlStore();
@@ -918,7 +953,7 @@ async function main() {
       await cursorRollbackReader.claimNext(tick());
     assert.ok(cursorRollbackClaim);
     const beforeCursorRollback =
-      executionStateSnapshot(cancelledBeforeRequestStore);
+      comparableExecutionStateSnapshot(cancelledBeforeRequestStore);
     await assert.rejects(
       cursorRollbackReader.beginRequest({
         leaseId: cursorRollbackClaim.lease.id,
@@ -928,7 +963,7 @@ async function main() {
       /执行游标完整性校验失败/
     );
     assert.deepEqual(
-      executionStateSnapshot(cancelledBeforeRequestStore),
+      comparableExecutionStateSnapshot(cancelledBeforeRequestStore),
       beforeCursorRollback
     );
     const cursorRollbackColdStore = await createMysqlStore();
@@ -1132,6 +1167,9 @@ async function main() {
 
     stage = "stale kernel and checkpoint CAS";
     const staleKernelStore = await createMysqlStore();
+    const staleKernelState = structuredClone(
+      staleKernelStore.prospectExecutionKernelStates
+    );
     const freshKernelStore = await createMysqlStore();
     const freshKernel = new ProspectExecutionKernel({
       store: freshKernelStore,
@@ -1141,8 +1179,28 @@ async function main() {
       cursorSecret
     });
     await freshKernel.start(tick());
+    assert.ok(staleKernelStore.persistProspectExecutionMutation);
     await assert.rejects(
-      staleKernelStore.persist(),
+      staleKernelStore.persistProspectExecutionMutation(() => {
+        const refreshed = structuredClone(
+          staleKernelStore.prospectExecutionKernelStates
+        );
+        staleKernelStore.prospectExecutionKernelStates.splice(
+          0,
+          staleKernelStore.prospectExecutionKernelStates.length,
+          ...staleKernelState
+        );
+        return {
+          value: undefined,
+          rollback: () => {
+            staleKernelStore.prospectExecutionKernelStates.splice(
+              0,
+              staleKernelStore.prospectExecutionKernelStates.length,
+              ...refreshed
+            );
+          }
+        };
+      }),
       /搜索执行内核 epoch CAS 冲突/
     );
     const staleCheckpointStore = await createMysqlStore();
@@ -1156,8 +1214,33 @@ async function main() {
        SET version_no = version_no + 1 WHERE id = ?`,
       [staleCheckpoint.id]
     );
+    assert.ok(staleCheckpointStore.persistProspectExecutionMutation);
     await assert.rejects(
-      staleCheckpointStore.persist(),
+      staleCheckpointStore.persistProspectExecutionMutation(() => {
+        const refreshed = structuredClone(
+          staleCheckpointStore.prospectExecutionCheckpoints
+        );
+        const checkpointIndex =
+          staleCheckpointStore.prospectExecutionCheckpoints.findIndex(
+            (item) => item.id === staleCheckpoint.id
+          );
+        assert.notEqual(checkpointIndex, -1);
+        staleCheckpointStore.prospectExecutionCheckpoints.splice(
+          checkpointIndex,
+          1,
+          staleCheckpoint
+        );
+        return {
+          value: undefined,
+          rollback: () => {
+            staleCheckpointStore.prospectExecutionCheckpoints.splice(
+              0,
+              staleCheckpointStore.prospectExecutionCheckpoints.length,
+              ...refreshed
+            );
+          }
+        };
+      }),
       /搜索执行 checkpoint CAS 冲突或作用域被修改/
     );
     await admin.query(
@@ -2218,10 +2301,15 @@ async function main() {
     );
     const originalSettlementEnvelope =
       settlementLedgerB.encryptedResponseEnvelope;
-    settlementLedgerB.encryptedResponseEnvelope =
+    const tamperedSettlementEnvelope =
       `${originalSettlementEnvelope.slice(0, -1)}${
         originalSettlementEnvelope.endsWith("A") ? "B" : "A"
       }`;
+    await admin.query(
+      `UPDATE \`${databaseName}\`.prospect_provider_request_ledgers
+       SET encrypted_response_envelope = ? WHERE id = ?`,
+      [tamperedSettlementEnvelope, settlementLedgerB.id]
+    );
     await assert.rejects(
       settlementKernelB.settlePersistedProviderResponse({
         teamId: settlementLedgerB.teamId,
@@ -2234,6 +2322,11 @@ async function main() {
       (error: unknown) =>
         error instanceof ProspectExecutionKernelError
         && error.code === "EXECUTION_PROVIDER_RESPONSE_ENVELOPE_INVALID"
+    );
+    await admin.query(
+      `UPDATE \`${databaseName}\`.prospect_provider_request_ledgers
+       SET encrypted_response_envelope = ? WHERE id = ?`,
+      [originalSettlementEnvelope, settlementLedgerB.id]
     );
     settlementStoreB.prospectProviderRequestLedgers.find(
       (item) => item.id === prepared.ledger.id
@@ -2264,17 +2357,21 @@ async function main() {
     const rejectedSettlements = concurrentSettlements.filter(
       (item) => item.status === "rejected"
     );
-    assert.equal(fulfilledSettlements.length, 1);
-    assert.equal(rejectedSettlements.length, 1);
-    assert.match(
-      String(
-        (rejectedSettlements[0] as PromiseRejectedResult).reason
-      ),
-      /CAS|不可变证据|历史不允许删除/
+    assert.equal(fulfilledSettlements.length, 2);
+    assert.equal(rejectedSettlements.length, 0);
+    const settlementResults = concurrentSettlements.map((item) =>
+      (item as PromiseFulfilledResult<Awaited<ReturnType<
+        typeof settlementKernelA.settlePersistedProviderResponse
+      >>>).value
+    );
+    assert.deepEqual(
+      settlementResults.map((item) => item.idempotent).sort(),
+      [false, true]
     );
     const winnerIndex = concurrentSettlements.findIndex(
-      (item) => item.status === "fulfilled"
+      (item) => item.status === "fulfilled" && !item.value.idempotent
     );
+    assert.notEqual(winnerIndex, -1);
     const winningKernel = winnerIndex === 0
       ? settlementKernelA
       : settlementKernelB;
@@ -2466,10 +2563,15 @@ async function main() {
         (item) => item.id === prepared.ledger.id
       )!;
     const originalAuditEnvelope = auditLedger.encryptedResponseEnvelope;
-    auditLedger.encryptedResponseEnvelope =
+    const tamperedAuditEnvelope =
       `${originalAuditEnvelope.slice(0, -1)}${
         originalAuditEnvelope.endsWith("A") ? "B" : "A"
       }`;
+    await admin.query(
+      `UPDATE \`${databaseName}\`.prospect_provider_request_ledgers
+       SET encrypted_response_envelope = ? WHERE id = ?`,
+      [tamperedAuditEnvelope, auditLedger.id]
+    );
     await assert.rejects(
       settlementAuditKernel.settlePersistedProviderResponse({
         teamId: auditLedger.teamId,
@@ -2482,6 +2584,11 @@ async function main() {
       (error: unknown) =>
         error instanceof ProspectExecutionKernelError
         && error.code === "EXECUTION_PROVIDER_RESPONSE_ENVELOPE_INVALID"
+    );
+    await admin.query(
+      `UPDATE \`${databaseName}\`.prospect_provider_request_ledgers
+       SET encrypted_response_envelope = ? WHERE id = ?`,
+      [originalAuditEnvelope, auditLedger.id]
     );
     settledDispatchStore.prospectProviderRequestLedgers.find(
       (item) => item.id === prepared.ledger.id

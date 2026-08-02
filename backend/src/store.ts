@@ -179,7 +179,7 @@ import type {
   ProspectIcpPolicySnapshot,
   ProspectSuppressionEvent
 } from "./types.js";
-import type { CompanyProfile } from "./types.js";
+import type { CompanyProfile, Product, Shipment } from "./types.js";
 
 export interface PersistedStoreMutation<T> {
   value: T;
@@ -216,6 +216,8 @@ export interface CrmStore {
   ocrJobs: OcrJob[];
   websiteOpportunities: WebsiteOpportunity[];
   aiModelConfigs: AiModelConfig[];
+  products: Product[];
+  shipments: Shipment[];
   providerCatalog: ProviderCatalogItem[];
   providerConnections: ProviderConnection[];
   providerRequestLogs: ProviderRequestLog[];
@@ -321,12 +323,18 @@ export interface CrmStore {
   commissionItems: CommissionItem[];
   commissionExports: CommissionExport[];
   persist(): Promise<void>;
+  persistProducts(): Promise<void>;
+  persistShipments(): Promise<void>;
   persistMutation?<T>(
     mutation: () => PersistedStoreMutation<T>
   ): Promise<T>;
   persistProspectExecutionMutation?<T>(
     mutation: () => PersistedStoreMutation<T>
   ): Promise<T>;
+  persistProspectCampaignMutation?<T>(
+    mutation: () => PersistedStoreMutation<T>
+  ): Promise<T>;
+  persistProspectSuperSearches?(): Promise<void>;
   persistProspectCandidateMutation?<T>(
     mutation: () => PersistedStoreMutation<T>
   ): Promise<T>;
@@ -418,6 +426,8 @@ export const memoryStore: CrmStore = {
   agentJobs,
   agentJobIdempotencyAliases,
   agentRuns: [],
+  products: [],
+  shipments: [],
   agentRunSteps: [],
   agentRunEvents: [],
   agentMissionCheckpoints: [],
@@ -509,6 +519,12 @@ export const memoryStore: CrmStore = {
   commissionItems,
   commissionExports,
   async persist() {
+    // Memory mode intentionally keeps current in-process state only.
+  },
+  async persistProducts() {
+    // Memory mode intentionally keeps current in-process state only.
+  },
+  async persistShipments() {
     // Memory mode intentionally keeps current in-process state only.
   },
   async mutateCustomerOwnership(input) {

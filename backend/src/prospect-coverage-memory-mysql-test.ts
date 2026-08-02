@@ -355,15 +355,12 @@ async function countBusinessRows(connection: mysql.Connection) {
 }
 
 async function main() {
-  const applicationUrl = process.env.DATABASE_URL
-    || process.env.MYSQL_URL
-    || process.env.MYSQL_TEST_ADMIN_URL;
-  const adminConnectionUrl = process.env.MYSQL_TEST_ADMIN_URL
-    || applicationUrl;
+  const adminConnectionUrl = process.env.MYSQL_TEST_ADMIN_URL;
+  const applicationUrl = process.env.MYSQL_TEST_APP_URL
+    || adminConnectionUrl;
   if (!applicationUrl || !adminConnectionUrl) {
     throw new Error(
-      "Coverage MySQL test requires MYSQL_TEST_ADMIN_URL, "
-      + "DATABASE_URL or MYSQL_URL"
+      "Coverage MySQL test requires MYSQL_TEST_ADMIN_URL"
     );
   }
 

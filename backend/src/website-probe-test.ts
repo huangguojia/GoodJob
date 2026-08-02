@@ -5,6 +5,7 @@ import { getStore, type CrmStore } from "./store.js";
 import type { WebsiteOpportunity, WebsiteProbeAttempt } from "./types.js";
 import {
   queueWebsiteProbe,
+  resumeWebsiteProbeAttempt,
   WebsiteProbeError
 } from "./website-probe.js";
 
@@ -155,6 +156,104 @@ async function main() {
     assert.equal(evidenceCandidate.verificationReport?.crawlerFree, false);
     assert.deepEqual(requests.map((item) => item.method), ["GET", "HEAD", "GET"]);
 
+    requests = [];
+    setProviderHttpTestTransport(async (url, init) => {
+      requests.push({ url, method: String(init.method || "GET") });
+      if (url.endsWith("/robots.txt")) {
+        return new Response("User-agent: *\nAllow: /\n", { status: 200 });
+      }
+      if (init.method === "HEAD") {
+        return new Response(null, { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url.includes("/contact-us")) {
+        return new Response("<html><body>contact-private-marker <a href=\"mailto:export@contact-page-example.com\">Export</a></body></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" }
+        });
+      }
+      return new Response("<html><head><title>Contact Page Example</title></head><body><a href=\"/contact-us\">Contact us</a></body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    });
+    const contactCandidate = candidate("contact-page", "https://contact-page-example.com/products/pumps");
+    contactCandidate.contactInfo = "";
+    const contactAttempt = await queueAndWait(store, contactCandidate);
+    assert.equal(contactAttempt.outcome, "evidence_found");
+    assert.equal(contactAttempt.evidence?.publicContactEmail, "export@contact-page-example.com");
+    assert.equal(contactAttempt.evidence?.sourceUrl, "https://contact-page-example.com/contact-us");
+    assert.ok(contactAttempt.events.some((item) => item.stage === "contact_page" && item.status === "completed"));
+    assert.deepEqual(requests.map((item) => item.method), ["GET", "HEAD", "GET", "GET"]);
+    assert.doesNotMatch(JSON.stringify(contactAttempt), /contact-private-marker/u);
+
+    requests = [];
+    setProviderHttpTestTransport(async (url, init) => {
+      requests.push({ url, method: String(init.method || "GET") });
+      if (url.endsWith("/robots.txt")) return new Response("User-agent: *\nAllow: /\n", { status: 200 });
+      if (init.method === "HEAD") return new Response(null, { status: 200, headers: { "content-type": "text/html" } });
+      return new Response("<html><head><title>Resumed probe</title></head><body></body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    });
+    const resumedCandidate = candidate("resumed", "https://resume-example.com/");
+    const recoveredAttempt: WebsiteProbeAttempt = {
+      id: "wpa_recovered_test",
+      candidateId: resumedCandidate.id,
+      teamId: resumedCandidate.teamId,
+      ownerId: resumedCandidate.ownerId,
+      domain: "resume-example.com",
+      sourceUrl: "https://resume-example.com/",
+      purpose: "company_evidence_enrichment",
+      accessMode: "controlled_probe",
+      policyVersion: "website-probe-policy-v3",
+      status: "queued",
+      outcome: "pending",
+      robotsDecision: "pending",
+      httpStatus: 0,
+      responseBytes: 0,
+      redirected: false,
+      evidence: null,
+      events: [],
+      failureCode: "",
+      failureMessage: "",
+      startedAt: "",
+      completedAt: "",
+      createdAt: new Date().toISOString()
+    };
+    resumedCandidate.websiteProbeAttempts = [recoveredAttempt];
+    store.websiteOpportunities.push(resumedCandidate);
+    assert.equal(await resumeWebsiteProbeAttempt(
+      store,
+      resumedCandidate,
+      recoveredAttempt,
+      resumedCandidate.ownerId,
+      async () => undefined
+    ), true);
+    const resumedAttempt = await waitForTerminal(resumedCandidate, recoveredAttempt.id);
+    assert.equal(resumedAttempt.status, "completed");
+    assert.equal(await resumeWebsiteProbeAttempt(
+      store,
+      resumedCandidate,
+      recoveredAttempt,
+      resumedCandidate.ownerId,
+      async () => undefined
+    ), false);
+
+    requests = [];
+    setProviderHttpTestTransport(async (url, init) => {
+      requests.push({ url, method: String(init.method || "GET") });
+      if (url.endsWith("/robots.txt")) {
+        return new Response("User-agent: *\nAllow: /\n", {
+          status: 200,
+          headers: { "content-type": "text/plain" }
+        });
+      }
+      if (init.method === "HEAD") {
+        return new Response(null, { status: 200, headers: { "content-type": "text/html" } });
+      }
+      return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+    });
     const requestCountBeforeCache = requests.length;
     const cachedCandidate = candidate("cached", "https://www.evidence-example.com/");
     const cachedAttempt = await queueAndWait(store, cachedCandidate);

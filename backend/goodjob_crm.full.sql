@@ -1,9 +1,9 @@
--- GoodJob CRM MySQL initialization script.
--- Open-source safe: schema only, no private customer/todo/memo/business rows.
+-- GoodJob CRM development-only MySQL initialization script.
+-- Open-source safe: schema only. Never point this file at a personal database.
 
-DROP DATABASE IF EXISTS goodjob_crm;
-CREATE DATABASE goodjob_crm CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE goodjob_crm;
+DROP DATABASE IF EXISTS goodjob_crm_dev;
+CREATE DATABASE goodjob_crm_dev CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE goodjob_crm_dev;
 
 CREATE TABLE users (
   id VARCHAR(64) PRIMARY KEY,

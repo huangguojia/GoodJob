@@ -62,8 +62,84 @@ const customerUpdate = agentApiOperationContract("PATCH", "/api/customers/{id}",
 assert.equal(customerUpdate.authorizationPolicy, "direct_user_intent");
 assert.doesNotThrow(() => assertAgentOperationInput(customerUpdate, { health: 80, grade: "B" }));
 
+const meetingNotesRisk = classifyAgentApiRequest("POST", "/api/customers/c1/meeting-notes");
+const meetingNotes = agentApiOperationContract("POST", "/api/customers/{id}/meeting-notes", undefined, meetingNotesRisk);
+assert.equal(meetingNotesRisk, "external");
+assert.equal(meetingNotes.authorizationPolicy, "frozen_payload_confirmation");
+assert.doesNotThrow(() => assertAgentOperationInput(meetingNotes, { transcript: "客户确认下周接收样品。" }));
+assert.throws(() => assertAgentOperationInput(meetingNotes, { transcript: "已确认", customerId: "forged" }), /不在接口契约/u);
+
 const sendEmail = agentApiOperationContract("POST", "/api/development-email/send", undefined, "external");
 assert.equal(sendEmail.authorizationPolicy, "frozen_payload_confirmation");
+
+const productUpsert = agentApiOperationContract("POST", "/api/tools/products", undefined, "write");
+assert.doesNotThrow(() => assertAgentOperationInput(productUpsert, { nameZh: "压力表", price: 12.5 }));
+assert.throws(() => assertAgentOperationInput(productUpsert, { nameZh: "压力表", ownerId: "forged" }), /不在接口契约/u);
+
+const shipmentUpsert = agentApiOperationContract("POST", "/api/tools/shipments", undefined, "write");
+assert.doesNotThrow(() => assertAgentOperationInput(shipmentUpsert, {
+  shipmentNo: "SHP-001",
+  items: [{ productName: "Pressure gauge", quantity: 2, unit: "pcs" }]
+}));
+assert.throws(() => assertAgentOperationInput(shipmentUpsert, {
+  items: [{ productName: "Pressure gauge", teamId: "forged" }]
+}), /不在接口契约/u);
+
+const shipmentOcrRisk = classifyAgentApiRequest("POST", "/api/tools/shipments/ocr");
+const shipmentOcr = agentApiOperationContract(
+  "POST",
+  "/api/tools/shipments/ocr",
+  undefined,
+  shipmentOcrRisk === "draft" ? "read" : shipmentOcrRisk
+);
+assert.equal(shipmentOcrRisk, "external");
+assert.equal(shipmentOcr.authorizationPolicy, "frozen_payload_confirmation");
+assert.doesNotThrow(() => assertAgentOperationInput(shipmentOcr, { image: "aGVsbG8=", mime: "image/png" }));
+
+const parseGoalRisk = classifyAgentApiRequest("POST", "/api/lead-finder/parse-goal");
+const parseGoal = agentApiOperationContract(
+  "POST",
+  "/api/lead-finder/parse-goal",
+  undefined,
+  parseGoalRisk === "draft" ? "read" : parseGoalRisk
+);
+assert.equal(parseGoalRisk, "external");
+assert.equal(parseGoal.authorizationPolicy, "frozen_payload_confirmation");
+assert.doesNotThrow(() => assertAgentOperationInput(parseGoal, { goal: "寻找德国工业仪表经销商" }));
+
+const launchRisk = classifyAgentApiRequest("POST", "/api/lead-finder/launch");
+const launch = agentApiOperationContract(
+  "POST",
+  "/api/lead-finder/launch",
+  undefined,
+  launchRisk === "draft" ? "read" : launchRisk
+);
+assert.equal(launchRisk, "external");
+assert.equal(launch.authorizationPolicy, "frozen_payload_confirmation");
+assert.doesNotThrow(() => assertAgentOperationInput(launch, {
+  mode: "standard",
+  campaign: {
+    name: "German industrial meter distributors",
+    snapshot: {
+      products: ["industrial meter"],
+      markets: ["Germany"],
+      sourceProviderIds: ["gleif"]
+    }
+  },
+  strategy: {
+    providerPlan: [{
+      providerId: "gleif",
+      priority: 1,
+      pageLimit: 1,
+      resultLimit: 20,
+      budgetLimit: 0,
+      currency: ""
+    }]
+  }
+}));
+assert.doesNotThrow(() => assertAgentCompletionEvidence(launch, {
+  run: { id: "pr_1" }
+}));
 
 const qualificationApproval = agentApiOperationContract(
   "POST",

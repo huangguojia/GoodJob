@@ -1702,6 +1702,9 @@ function conversionCustomerFromRow(
     billingName: String(row.billing_name || ""),
     billingAddress: String(row.billing_address || ""),
     documentContact: String(row.document_contact || ""),
+    phone: String(row.phone || ""),
+    email: String(row.email || ""),
+    website: String(row.website || ""),
     defaultPortDischarge: String(row.default_port_discharge || ""),
     defaultIncoterm: String(row.default_incoterm || ""),
     defaultPaymentTerm: String(row.default_payment_term || "")

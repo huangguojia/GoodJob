@@ -2027,6 +2027,148 @@ export class ProspectExecutionKernel {
     return true;
   }
 
+  /**
+   * Older snapshots only know about per-source limits. New snapshots freeze a
+   * run-level target; keeping the fallback here makes old persisted runs
+   * replayable without changing their accounting semantics.
+   */
+  private runGlobalResultLimit(run: ProspectSearchRun) {
+    const configured = run.executionSnapshot.globalResultLimit;
+    if (typeof configured === "number"
+      && Number.isInteger(configured)
+      && configured > 0) {
+      return configured;
+    }
+    return run.executionSnapshot.providerPlan.reduce(
+      (sum, provider) => sum + Math.max(0, Math.trunc(provider.resultLimit)),
+      0
+    );
+  }
+
+  private runAcceptedCount(run: ProspectSearchRun) {
+    return this.store.prospectExecutionCheckpoints
+      .filter((item) => item.teamId === run.teamId && item.runId === run.id)
+      .reduce((sum, item) => sum + Math.max(0, Math.trunc(item.acceptedCount)), 0);
+  }
+
+  private providerRequestQuota(input: {
+    run: ProspectSearchRun;
+    shard: ProspectRunShard;
+    checkpoint: ProspectExecutionCheckpoint;
+  }) {
+    const localRemaining = Math.max(
+      0,
+      input.shard.resultLimit - input.checkpoint.acceptedCount
+    );
+    // Preserve the old per-source behaviour for legacy snapshots that do not
+    // carry a frozen run-level target.
+    if (input.run.executionSnapshot.globalResultLimit === undefined) {
+      return localRemaining;
+    }
+    const target = this.runGlobalResultLimit(input.run);
+    const globalRemaining = Math.max(
+      0,
+      target - this.runAcceptedCount(input.run)
+    );
+    if (!globalRemaining || !localRemaining) return 0;
+
+    const allShards = this.store.prospectRunShards
+      .filter((item) => item.teamId === input.run.teamId && item.runId === input.run.id);
+    // Retry-scheduled sources are temporarily left out of the split. They can
+    // rejoin on their next attempt and receive whatever quota remains then.
+    const eligible = allShards
+      .filter((item) =>
+        item.id === input.shard.id
+        || item.status === "queued"
+        || item.status === "running"
+      )
+      .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id));
+    const index = eligible.findIndex((item) => item.id === input.shard.id);
+    if (index < 0) return 0;
+    const base = Math.floor(globalRemaining / eligible.length);
+    const remainder = globalRemaining % eligible.length;
+    const fairShare = base + (index < remainder ? 1 : 0);
+    return Math.min(localRemaining, fairShare);
+  }
+
+  private finishQueuedShardsAtGlobalLimit(run: ProspectSearchRun, now: string) {
+    if (run.executionSnapshot.globalResultLimit === undefined
+      || this.runAcceptedCount(run) < this.runGlobalResultLimit(run)) {
+      return false;
+    }
+    let changed = false;
+    const terminalStatuses = new Set<ProspectRunShard["status"]>([
+      "cancelled",
+      "succeeded",
+      "succeeded_empty",
+      "partial_success",
+      "failed"
+    ]);
+    const shards = this.store.prospectRunShards.filter((item) =>
+      item.teamId === run.teamId && item.runId === run.id
+    );
+    for (const shard of shards) {
+      if (terminalStatuses.has(shard.status)) continue;
+      if (this.store.prospectExecutionLeases.some((lease) =>
+        lease.runId === run.id && lease.shardId === shard.id && lease.status === "active"
+      )) continue;
+      const binding = this.store.prospectRunQueueChildBindings.find((item) =>
+        item.teamId === run.teamId && item.runId === run.id && item.shardId === shard.id
+      );
+      const job = binding
+        ? this.store.agentJobs.find((item) =>
+            item.id === binding.jobId
+            && item.teamId === run.teamId
+            && item.ownerId === run.ownerId
+            && item.jobType === PROSPECT_RUN_PROVIDER_FETCH_JOB_TYPE
+          )
+        : undefined;
+      if (!job) continue;
+      let checkpoint = this.store.prospectExecutionCheckpoints.find((item) =>
+        item.teamId === run.teamId && item.runId === run.id && item.shardId === shard.id
+      );
+      checkpoint ||= this.createCheckpoint({
+        run,
+        shard,
+        job,
+        now,
+        completionReason: "GLOBAL_RESULT_LIMIT_REACHED"
+      });
+      if (!checkpoint.completionReason) {
+        checkpoint.completionReason = "GLOBAL_RESULT_LIMIT_REACHED";
+        checkpoint.updatedAt = now;
+        checkpoint.version += 1;
+      }
+      shard.status = "succeeded_empty";
+      shard.updatedAt = now;
+      job.status = "succeeded";
+      job.nextAttemptAt = "";
+      job.finishedAt = now;
+      job.errorCode = "";
+      job.errorMessage = "";
+      appendExecutionEvent(this.store, {
+        teamId: run.teamId,
+        ownerId: run.ownerId,
+        runId: run.id,
+        shardId: shard.id,
+        jobId: job.id,
+        eventType: "shard_completed",
+        kernelEpoch: this.kernelEpoch,
+        runEpoch: run.executionEpoch,
+        fenceToken: 0,
+        detail: {
+          status: shard.status,
+          acceptedCount: checkpoint.acceptedCount,
+          errorCode: "GLOBAL_RESULT_LIMIT_REACHED"
+        },
+        createdAt: now
+      });
+      changed = true;
+    }
+    if (changed) this.finishRunIfTerminal(run, now);
+    return changed;
+  }
+
   private finishRunIfTerminal(run: ProspectSearchRun, now: string) {
     const shards = this.store.prospectRunShards.filter((item) =>
       item.teamId === run.teamId && item.runId === run.id
@@ -2519,12 +2661,36 @@ export class ProspectExecutionKernel {
             lease.runId === run.id && lease.status === "active"
           )
         )
-        .sort((left, right) =>
-          left.run.createdAt.localeCompare(right.run.createdAt)
-          || left.shard.position - right.shard.position
-          || left.job.id.localeCompare(right.job.id)
-        );
+        .sort((left, right) => {
+          const leftCheckpoint = this.store.prospectExecutionCheckpoints.find((item) =>
+            item.teamId === left.run.teamId
+            && item.runId === left.run.id
+            && item.shardId === left.shard.id
+          );
+          const rightCheckpoint = this.store.prospectExecutionCheckpoints.find((item) =>
+            item.teamId === right.run.teamId
+            && item.runId === right.run.id
+            && item.shardId === right.shard.id
+          );
+          const roundRobinOrder = left.run.executionSnapshot.globalResultLimit !== undefined
+            ? (leftCheckpoint?.totalCallCount || 0)
+              - (rightCheckpoint?.totalCallCount || 0)
+            : 0;
+          return left.run.createdAt.localeCompare(right.run.createdAt)
+            || roundRobinOrder
+            || left.shard.position - right.shard.position
+            || left.job.id.localeCompare(right.job.id);
+        });
       for (const selected of candidates) {
+        if (selected.run.status !== "queued" && selected.run.status !== "running") {
+          continue;
+        }
+        if (selected.run.executionSnapshot.globalResultLimit !== undefined
+          && this.runAcceptedCount(selected.run)
+            >= this.runGlobalResultLimit(selected.run)) {
+          this.finishQueuedShardsAtGlobalLimit(selected.run, now);
+          continue;
+        }
         validateProspectRunQueueBridge(this.store, selected.run);
         let checkpoint = this.store.prospectExecutionCheckpoints.find(
           (item) =>
@@ -2617,6 +2783,44 @@ export class ProspectExecutionKernel {
           now,
           cursor: initialCursor
         });
+        const localRemaining = Math.max(
+          0,
+          selected.shard.resultLimit - checkpoint.acceptedCount
+        );
+        if (selected.run.executionSnapshot.globalResultLimit !== undefined
+          && this.providerRequestQuota({
+            run: selected.run,
+            shard: selected.shard,
+            checkpoint
+          }) <= 0) {
+          if (localRemaining === 0) {
+            checkpoint.completionReason = "SEARCH_LIMIT_REACHED";
+            checkpoint.updatedAt = now;
+            checkpoint.version += 1;
+            selected.shard.status = checkpoint.acceptedCount > 0
+              ? "succeeded"
+              : "succeeded_empty";
+            selected.shard.updatedAt = now;
+            selected.job.status = "succeeded";
+            selected.job.nextAttemptAt = "";
+            selected.job.finishedAt = now;
+            selected.job.startedAt = selected.job.startedAt || now;
+            selected.job.errorCode = "";
+            selected.job.errorMessage = "";
+            this.finishRunIfTerminal(selected.run, now);
+            continue;
+          }
+          // This source has no share in the current round. Let the source
+          // with a positive share run first; a failed/empty source will then
+          // naturally return the unused quota to this source.
+          selected.shard.status = "queued";
+          selected.shard.updatedAt = now;
+          selected.job.status = "queued";
+          selected.job.nextAttemptAt = "";
+          selected.job.startedAt = "";
+          selected.job.finishedAt = "";
+          continue;
+        }
         const fenceToken = this.store.prospectExecutionLeases.reduce(
           (highest, lease) =>
             lease.teamId === selected.run.teamId
@@ -2784,6 +2988,17 @@ export class ProspectExecutionKernel {
         const logicalRequestNo = scope.checkpoint.totalCallCount + 1;
         const checkpointCallNo =
           scope.checkpoint.checkpointCallCount + 1;
+        const requestedResultLimit = this.providerRequestQuota({
+          run: scope.run,
+          shard: scope.shard,
+          checkpoint: scope.checkpoint
+        });
+        if (requestedResultLimit <= 0) {
+          throw new ProspectExecutionKernelError(
+            "EXECUTION_GLOBAL_RESULT_LIMIT_REACHED",
+            "当前搜索运行已没有可分配的来源配额"
+          );
+        }
         const connectionId = this.providerConnectionId({
           teamId: scope.run.teamId,
           ownerId: scope.run.ownerId,
@@ -2811,9 +3026,18 @@ export class ProspectExecutionKernel {
           limits: {
             pageLimit: scope.shard.pageLimit,
             resultLimit: scope.shard.resultLimit,
+            ...(scope.run.executionSnapshot.globalResultLimit !== undefined
+              ? { requestedResultLimit }
+              : {}),
+            ...(scope.run.executionSnapshot.globalResultLimit !== undefined
+              ? { globalResultLimit: this.runGlobalResultLimit(scope.run) }
+              : {}),
             remainingResultLimit: Math.max(
               0,
-              scope.shard.resultLimit - scope.checkpoint.acceptedCount
+              Math.min(
+                scope.shard.resultLimit - scope.checkpoint.acceptedCount,
+                requestedResultLimit
+              )
             )
           }
         };
@@ -2860,7 +3084,10 @@ export class ProspectExecutionKernel {
           checkpointNo: scope.checkpoint.checkpointNo,
           checkpointCallNo,
           cursor,
-          requestHash
+          requestHash,
+          ...(scope.run.executionSnapshot.globalResultLimit !== undefined
+            ? { requestedResultLimit }
+            : {})
         };
         const existing =
           this.store.prospectProviderRequestLedgers.find((item) =>
@@ -3164,9 +3391,28 @@ export class ProspectExecutionKernel {
           limits: {
             pageLimit: scope.shard.pageLimit,
             resultLimit: scope.shard.resultLimit,
+            ...(scope.run.executionSnapshot.globalResultLimit !== undefined
+              ? {
+                  requestedResultLimit: this.providerRequestQuota({
+                    run: scope.run,
+                    shard: scope.shard,
+                    checkpoint: scope.checkpoint
+                  })
+                }
+              : {}),
+            ...(scope.run.executionSnapshot.globalResultLimit !== undefined
+              ? { globalResultLimit: this.runGlobalResultLimit(scope.run) }
+              : {}),
             remainingResultLimit: Math.max(
               0,
-              scope.shard.resultLimit - scope.checkpoint.acceptedCount
+              Math.min(
+                scope.shard.resultLimit - scope.checkpoint.acceptedCount,
+                this.providerRequestQuota({
+                  run: scope.run,
+                  shard: scope.shard,
+                  checkpoint: scope.checkpoint
+                })
+              )
             )
           }
         };
@@ -3224,7 +3470,16 @@ export class ProspectExecutionKernel {
           checkpointNo: ledger.checkpointNo,
           checkpointCallNo,
           cursor,
-          requestHash: ledger.requestHash
+          requestHash: ledger.requestHash,
+          ...(scope.run.executionSnapshot.globalResultLimit !== undefined
+            ? {
+                requestedResultLimit: this.providerRequestQuota({
+                  run: scope.run,
+                  shard: scope.shard,
+                  checkpoint: scope.checkpoint
+                })
+              }
+            : {})
         };
         if (ledger.connectionConfigHash !== expectedConnectionConfigHash
           || ledger.requestHash !== expectedRequestHash
@@ -4066,6 +4321,22 @@ export class ProspectExecutionKernel {
           );
         }
         const response = this.verifiedProviderResponse(ledger, dispatch);
+        const requestEnvelope = this.decryptProviderRequestEnvelope(ledger);
+        const requestLimits = requestEnvelope.providerPayload
+          && typeof requestEnvelope.providerPayload === "object"
+          && "limits" in requestEnvelope.providerPayload
+          && requestEnvelope.providerPayload.limits
+          && typeof requestEnvelope.providerPayload.limits === "object"
+          ? requestEnvelope.providerPayload.limits as {
+              requestedResultLimit?: unknown;
+            }
+          : undefined;
+        const requestedResultLimitValue = requestLimits?.requestedResultLimit;
+        const requestedResultLimit = Number.isInteger(
+          requestedResultLimitValue
+        ) && Number(requestedResultLimitValue) > 0
+          ? Number(requestedResultLimitValue)
+          : shard.resultLimit;
         const accountingEvidenceRows =
           this.store.prospectProviderRequestAccountingEvidence.filter(
             (item) =>
@@ -4273,16 +4544,28 @@ export class ProspectExecutionKernel {
           attempt.errorCode = "";
           attempt.errorMessage = "";
           attempt.retryable = false;
+          const runAcceptedBeforePage = this.runAcceptedCount(run);
+          const globalRemaining = run.executionSnapshot.globalResultLimit === undefined
+            ? Number.MAX_SAFE_INTEGER
+            : Math.max(
+                0,
+                this.runGlobalResultLimit(run) - runAcceptedBeforePage
+              );
           const remaining = Math.max(
             0,
-            shard.resultLimit - checkpoint.acceptedCount
+            Math.min(
+              shard.resultLimit - checkpoint.acceptedCount,
+              requestedResultLimit,
+              globalRemaining
+            )
           );
           const acceptedCount = Math.min(
             remaining,
             Math.trunc(response.step.acceptedCount)
           );
           const partial = response.step.partial
-            || acceptedCount !== response.step.acceptedCount;
+            || (run.executionSnapshot.globalResultLimit === undefined
+              && acceptedCount !== response.step.acceptedCount);
           page = {
             id: `pexpg_${randomUUID()}`,
             teamId: run.teamId,
@@ -4313,7 +4596,9 @@ export class ProspectExecutionKernel {
           checkpoint.lastErrorMessage = "";
           checkpoint.retryAfterAt = "";
           const reachedLimit = checkpoint.pageSequence >= shard.pageLimit
-            || checkpoint.acceptedCount >= shard.resultLimit;
+            || checkpoint.acceptedCount >= shard.resultLimit
+            || (run.executionSnapshot.globalResultLimit !== undefined
+              && this.runAcceptedCount(run) >= this.runGlobalResultLimit(run));
           const naturalEnd = !response.step.hasMore || reachedLimit;
           if (!naturalEnd) {
             const nextCheckpointNo = checkpoint.checkpointNo + 1;
@@ -4375,6 +4660,7 @@ export class ProspectExecutionKernel {
               now,
               status
             });
+            this.finishQueuedShardsAtGlobalLimit(run, now);
             this.settlePauseIfReady(run, now);
           } else if (run.status === "pause_requested") {
             shard.status = "paused";
@@ -4910,16 +5196,32 @@ export class ProspectExecutionKernel {
         };
       }
 
+      const requestedResultLimit = this.providerRequestQuota({
+        run: scope.run,
+        shard: scope.shard,
+        checkpoint: scope.checkpoint
+      });
+      const globalRemaining = scope.run.executionSnapshot.globalResultLimit === undefined
+        ? Number.MAX_SAFE_INTEGER
+        : Math.max(
+            0,
+            this.runGlobalResultLimit(scope.run) - this.runAcceptedCount(scope.run)
+          );
       const remaining = Math.max(
         0,
-        scope.shard.resultLimit - scope.checkpoint.acceptedCount
+        Math.min(
+          scope.shard.resultLimit - scope.checkpoint.acceptedCount,
+          requestedResultLimit,
+          globalRemaining
+        )
       );
       const acceptedCount = Math.min(
         remaining,
         Math.trunc(input.result.acceptedCount)
       );
       const partial = input.result.partial
-        || acceptedCount !== input.result.acceptedCount;
+        || (scope.run.executionSnapshot.globalResultLimit === undefined
+          && acceptedCount !== input.result.acceptedCount);
       scope.attempt.status = "succeeded";
       const page: ProspectExecutionPage = {
         id: `pexpg_${randomUUID()}`,
@@ -4952,7 +5254,10 @@ export class ProspectExecutionKernel {
       scope.checkpoint.retryAfterAt = "";
       const reachedLimit = scope.checkpoint.pageSequence
           >= scope.shard.pageLimit
-        || scope.checkpoint.acceptedCount >= scope.shard.resultLimit;
+        || scope.checkpoint.acceptedCount >= scope.shard.resultLimit
+        || (scope.run.executionSnapshot.globalResultLimit !== undefined
+          && this.runAcceptedCount(scope.run)
+            >= this.runGlobalResultLimit(scope.run));
       const naturalEnd = !input.result.hasMore || reachedLimit;
       if (!naturalEnd) {
         const nextCheckpointNo = scope.checkpoint.checkpointNo + 1;
@@ -5014,6 +5319,7 @@ export class ProspectExecutionKernel {
           now,
           status
         });
+        this.finishQueuedShardsAtGlobalLimit(scope.run, now);
         this.settlePauseIfReady(scope.run, now);
       } else if (scope.run.status === "pause_requested") {
         scope.shard.status = "paused";

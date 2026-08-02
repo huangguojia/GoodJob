@@ -77,7 +77,8 @@ export async function callAiModel(
   fetcher?: (
     url: string,
     init?: RequestInit
-  ) => Promise<globalThis.Response>
+  ) => Promise<globalThis.Response>,
+  timeoutMs = AI_MODEL_TIMEOUT_MS
 ) {
   const protocol = config.protocol || "openai-compatible";
   const endpointBase = config.baseUrl.replace(/\/+$/, "");
@@ -88,7 +89,7 @@ export async function callAiModel(
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(),
-    AI_MODEL_TIMEOUT_MS
+    Math.max(1_000, Math.min(AI_MODEL_TIMEOUT_MS, timeoutMs))
   );
   try {
     if (protocol === "anthropic") {

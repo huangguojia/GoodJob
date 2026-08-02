@@ -10,7 +10,7 @@ export interface AppConfig {
   host?: string;
   port: number;
   webOrigin: string;
-  databaseClient: "pglite" | "postgres";
+  databaseClient: "pglite" | "postgres" | "mysql";
   pglitePath: string;
   databaseUrl?: string;
   sessionMasterKey?: string;
@@ -125,7 +125,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   const databaseClient = parseEnum(
     "DATABASE_CLIENT",
     environment.DATABASE_CLIENT,
-    ["pglite", "postgres"] as const,
+    ["pglite", "postgres", "mysql"] as const,
     "pglite"
   );
   const databaseUrl = environment.DATABASE_URL?.trim() || undefined;
@@ -135,14 +135,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   const autoMigrate = parseBoolean("AUTO_MIGRATE", environment.AUTO_MIGRATE, nodeEnv !== "production");
   const metaGraphBaseUrl = parseMetaGraphBaseUrl(environment.META_GRAPH_BASE_URL);
 
-  if (databaseClient === "postgres" && !databaseUrl) {
-    throw new Error("DATABASE_URL is required when DATABASE_CLIENT=postgres");
+  if ((databaseClient === "postgres" || databaseClient === "mysql") && !databaseUrl) {
+    throw new Error(`DATABASE_URL is required when DATABASE_CLIENT=${databaseClient}`);
   }
   if (seedDemo && !enableDemoProvider) {
     throw new Error("SEED_DEMO requires ALLOW_DEMO_PROVIDER=true");
   }
   if (nodeEnv === "production") {
-    if (databaseClient !== "postgres") throw new Error("DATABASE_CLIENT must be postgres in production");
+    if (databaseClient !== "mysql") throw new Error("DATABASE_CLIENT must be mysql in production");
     if (!sessionMasterKey) throw new Error("SESSION_MASTER_KEY is required in production");
     if (seedDemo) throw new Error("SEED_DEMO must be false in production");
     if (enableDemoProvider) throw new Error("ALLOW_DEMO_PROVIDER must be false in production");

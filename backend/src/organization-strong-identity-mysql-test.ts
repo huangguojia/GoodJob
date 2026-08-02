@@ -772,15 +772,12 @@ function instrumentPool(base: mysql.Pool, hooks: PoolHooks): mysql.Pool {
 }
 
 async function main() {
-  const applicationUrl = process.env.DATABASE_URL
-    || process.env.MYSQL_URL
-    || process.env.MYSQL_TEST_ADMIN_URL;
-  const adminConnectionUrl = process.env.MYSQL_TEST_ADMIN_URL
-    || applicationUrl;
+  const adminConnectionUrl = process.env.MYSQL_TEST_ADMIN_URL;
+  const applicationUrl = process.env.MYSQL_TEST_APP_URL
+    || adminConnectionUrl;
   if (!applicationUrl || !adminConnectionUrl) {
     throw new Error(
-      "Organization Identity MySQL test requires MYSQL_TEST_ADMIN_URL, "
-      + "DATABASE_URL or MYSQL_URL"
+      "Organization Identity MySQL test requires MYSQL_TEST_ADMIN_URL"
     );
   }
 

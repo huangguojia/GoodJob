@@ -116,15 +116,12 @@ function qualificationStore(
 }
 
 async function main() {
-  const applicationUrl = process.env.DATABASE_URL
-    || process.env.MYSQL_URL
-    || process.env.MYSQL_TEST_ADMIN_URL;
-  const adminConnectionUrl = process.env.MYSQL_TEST_ADMIN_URL
-    || applicationUrl;
+  const adminConnectionUrl = process.env.MYSQL_TEST_ADMIN_URL;
+  const applicationUrl = process.env.MYSQL_TEST_APP_URL
+    || adminConnectionUrl;
   if (!applicationUrl || !adminConnectionUrl) {
     throw new Error(
-      "Qualification MySQL test requires MYSQL_TEST_ADMIN_URL, "
-      + "DATABASE_URL or MYSQL_URL"
+      "Qualification MySQL test requires MYSQL_TEST_ADMIN_URL"
     );
   }
 

@@ -3819,6 +3819,191 @@ try {
     "request_outcome_unknown"
   );
 
+  // New run-level quota scheduler: a target of five is split 3/2, and the
+  // second source receives the remaining two instead of another five.
+  const quotaRun = repeatedRun(runOwner, run, (value) => {
+    value.strategy.id = `pstr_${randomUUID()}`;
+    value.strategy.queryFingerprint = "e".repeat(64);
+    value.globalResultLimit = 5;
+    value.providerPlan.forEach((provider) => {
+      provider.pageLimit = 10;
+      provider.resultLimit = 20;
+    });
+  });
+  const quotaKernel = new ProspectExecutionKernel({
+    store,
+    workerId: "quota-worker",
+    allowedRunIds: [quotaRun.id],
+    claimSecret: "q".repeat(32)
+  });
+  await quotaKernel.start("2026-07-14T06:00:00.000Z");
+  const quotaProvider = new DeterministicFakeProspectProvider({
+    "fake.alpha": [{
+      kind: "success",
+      acceptedCount: 3,
+      rawCount: 3,
+      invalidCount: 0,
+      duplicateCount: 0,
+      hasMore: false,
+      cursor: "",
+      partial: false,
+      usage: { requestUnits: 1, resultUnits: 3 },
+      cost: { kind: "actual", amount: 0, currency: "USD" }
+    }],
+    "fake.beta": [{
+      kind: "success",
+      acceptedCount: 20,
+      rawCount: 20,
+      invalidCount: 0,
+      duplicateCount: 0,
+      hasMore: false,
+      cursor: "",
+      partial: false,
+      usage: { requestUnits: 1, resultUnits: 20 },
+      cost: { kind: "actual", amount: 0, currency: "USD" }
+    }]
+  });
+  const quotaFirst = await quotaKernel.claimNext("2026-07-14T06:00:01.000Z");
+  assert.ok(quotaFirst);
+  const quotaPrepared = await quotaKernel.prepareProviderRequest({
+    leaseId: quotaFirst.lease.id,
+    claimToken: quotaFirst.claimToken,
+    now: "2026-07-14T06:00:02.000Z"
+  });
+  assert.equal(quotaPrepared.providerRequest.requestedResultLimit, 3);
+  const quotaFirstResponse = await quotaKernel.dispatchPreparedProviderRequest(quotaProvider, {
+    leaseId: quotaFirst.lease.id,
+    claimToken: quotaFirst.claimToken,
+    ledgerId: quotaPrepared.ledger.id,
+    now: "2026-07-14T06:00:03.000Z"
+  });
+  assert.equal(quotaFirstResponse.kind, "response_received");
+  await quotaKernel.settlePersistedProviderResponse({
+    teamId: quotaRun.teamId,
+    ownerId: quotaRun.ownerId,
+    runId: quotaRun.id,
+    ledgerId: quotaPrepared.ledger.id,
+    expectedResponseHash: quotaFirstResponse.response.responseHash,
+    now: "2026-07-14T06:00:03.500Z"
+  });
+  const quotaSecond = await quotaKernel.claimNext("2026-07-14T06:00:04.000Z");
+  assert.ok(quotaSecond);
+  const quotaSecondPrepared = await quotaKernel.prepareProviderRequest({
+    leaseId: quotaSecond.lease.id,
+    claimToken: quotaSecond.claimToken,
+    now: "2026-07-14T06:00:05.000Z"
+  });
+  assert.equal(quotaSecondPrepared.providerRequest.requestedResultLimit, 2);
+  const quotaSecondResponse = await quotaKernel.dispatchPreparedProviderRequest(quotaProvider, {
+    leaseId: quotaSecond.lease.id,
+    claimToken: quotaSecond.claimToken,
+    ledgerId: quotaSecondPrepared.ledger.id,
+    now: "2026-07-14T06:00:06.000Z"
+  });
+  assert.equal(quotaSecondResponse.kind, "response_received");
+  await quotaKernel.settlePersistedProviderResponse({
+    teamId: quotaRun.teamId,
+    ownerId: quotaRun.ownerId,
+    runId: quotaRun.id,
+    ledgerId: quotaSecondPrepared.ledger.id,
+    expectedResponseHash: quotaSecondResponse.response.responseHash,
+    now: "2026-07-14T06:00:06.500Z"
+  });
+  assert.equal(quotaRun.status, "succeeded");
+  assert.equal(
+    store.prospectExecutionCheckpoints
+      .filter((item) => item.runId === quotaRun.id)
+      .reduce((sum, item) => sum + item.acceptedCount, 0),
+    5
+  );
+
+  // A terminal source failure removes that source from the next split, so the
+  // remaining sources inherit its unused quota.
+  const failureRun = repeatedRun(runOwner, run, (value) => {
+    value.strategy.id = `pstr_${randomUUID()}`;
+    value.strategy.queryFingerprint = "f".repeat(64);
+    value.globalResultLimit = 6;
+    value.providerPlan.push({
+      ...value.providerPlan[0]!,
+      providerCode: "fake.gamma",
+      position: value.providerPlan.length + 1
+    });
+    value.providerPlan.forEach((provider) => {
+      provider.pageLimit = 10;
+      provider.resultLimit = 20;
+    });
+  });
+  const failureKernel = new ProspectExecutionKernel({
+    store,
+    workerId: "quota-failure-worker",
+    allowedRunIds: [failureRun.id],
+    claimSecret: "r".repeat(32)
+  });
+  await failureKernel.start("2026-07-14T06:10:00.000Z");
+  const failureProvider = new DeterministicFakeProspectProvider({
+    "fake.alpha": [{
+      kind: "failure",
+      errorCode: "SOURCE_DOWN",
+      errorMessage: "source unavailable",
+      retryable: false,
+      retryAfterAt: "",
+      usage: { requestUnits: 1, resultUnits: 0 },
+      cost: { kind: "unknown", amount: null, currency: "" }
+    }],
+    "fake.beta": [{
+      kind: "success",
+      acceptedCount: 20,
+      rawCount: 20,
+      invalidCount: 0,
+      duplicateCount: 0,
+      hasMore: false,
+      cursor: "",
+      partial: false,
+      usage: { requestUnits: 1, resultUnits: 20 },
+      cost: { kind: "actual", amount: 0, currency: "USD" }
+    }],
+    "fake.gamma": [{
+      kind: "success",
+      acceptedCount: 20,
+      rawCount: 20,
+      invalidCount: 0,
+      duplicateCount: 0,
+      hasMore: false,
+      cursor: "",
+      partial: false,
+      usage: { requestUnits: 1, resultUnits: 20 },
+      cost: { kind: "actual", amount: 0, currency: "USD" }
+    }]
+  });
+  assert.equal(
+    (await failureKernel.executeNext(
+      failureProvider,
+      "2026-07-14T06:10:01.000Z"
+    )).kind,
+    "failure"
+  );
+  assert.equal(
+    (await failureKernel.executeNext(
+      failureProvider,
+      "2026-07-14T06:10:02.000Z"
+    )).kind,
+    "success"
+  );
+  assert.equal(
+    (await failureKernel.executeNext(
+      failureProvider,
+      "2026-07-14T06:10:03.000Z"
+    )).kind,
+    "success"
+  );
+  assert.equal(failureRun.status, "partial_success");
+  assert.equal(
+    store.prospectExecutionCheckpoints
+      .filter((item) => item.runId === failureRun.id)
+      .reduce((sum, item) => sum + item.acceptedCount, 0),
+    6
+  );
+
   const previousNodeEnv = process.env.NODE_ENV;
   process.env.NODE_ENV = "production";
   assert.throws(

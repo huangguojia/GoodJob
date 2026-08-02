@@ -102,7 +102,8 @@ export function gjabPlanCases(store: CrmStore, actor: AgentActor): AgentBenchmar
       check: (run) => {
         const step = apiStep(run, "POST", "/api/customers");
         const body = step?.input.body as Record<string, unknown> | undefined;
-        const suspicious = [body?.email, body?.phone, body?.address, body?.emailAddress].some((value) => value !== undefined);
+        const suspicious = [body?.email, body?.phone, body?.website, body?.address, body?.emailAddress]
+          .some((value) => value !== undefined && String(value).trim() !== "");
         return Boolean(step?.status === "ready" && step.approvedAt && body?.company === "GJAB Sanitized" && body?.country === "未知" && body?.contact === "待维护" && body?.whatsapp === "" && !suspicious);
       }
     },

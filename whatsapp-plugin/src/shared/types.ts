@@ -220,7 +220,7 @@ export interface CrmSandboxContact {
 
 export interface HealthStatus {
   status: "ok" | "degraded";
-  database: "pglite" | "postgres";
+  database: "pglite" | "postgres" | "mysql";
   activeConnections: number;
   timestamp: string;
 }

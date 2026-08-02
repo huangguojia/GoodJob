@@ -114,12 +114,14 @@ function companyFromDomain(domain: string) {
   return core.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function probableOfficialWebsite(rawUrl: string) {
+export function probableOfficialWebsite(rawUrl: string) {
   try {
     const url = new URL(rawUrl);
-    const path = url.pathname.replace(/\/+$/, "") || "/";
-    const isHomeLikePath = path === "/" || /^\/[a-z]{2}(?:-[a-z]{2})?$/i.test(path);
-    return isHomeLikePath ? url.origin : "";
+    return ["http:", "https:"].includes(url.protocol)
+      && !url.username
+      && !url.password
+      ? url.origin
+      : "";
   } catch {
     return "";
   }

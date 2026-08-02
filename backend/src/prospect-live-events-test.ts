@@ -232,6 +232,49 @@ try {
   assert.equal(attemptFinished.events[0].type, "attempt.succeeded");
   assert.equal(attemptFinished.events[0].metrics.costAmount, 0.01);
 
+  const missionId = `pssm_${randomUUID()}`;
+  memoryStore.prospectSuperSearchMissions.push({
+    id: missionId,
+    teamId,
+    ownerId,
+    campaignId,
+    strategyId,
+    status: "running"
+  } as any);
+  memoryStore.prospectSuperSearchRounds.push({
+    id: `pssr_${randomUUID()}`,
+    missionId,
+    teamId,
+    ownerId,
+    roundNo: 2,
+    runId,
+    roundKind: "deep_mining",
+    queryCells: [],
+    createdAt: now,
+    completedAt: ""
+  } as any);
+  memoryStore.prospectSuperSearchEvents.push({
+    id: `psse_${randomUUID()}`,
+    missionId,
+    teamId,
+    ownerId,
+    sequence: 1,
+    type: "deep_evidence_found",
+    message: "归档 2 条可追溯证据",
+    metadata: { evidenceCount: 2, candidateId: "candidate-a" },
+    createdAt: "2026-07-26T08:00:02.000Z"
+  });
+  const deepEvent = await readProspectRunFeedMemory(memoryStore, {
+    teamId,
+    runId,
+    after: attemptFinished.events[0].id,
+    limit: 100
+  });
+  assert.equal(deepEvent.events.length, 1);
+  assert.equal(deepEvent.events[0].type, "mission.deep_evidence_found");
+  assert.equal(deepEvent.events[0].stage, "deep_mining");
+  assert.equal(deepEvent.events[0].metrics.evidenceCount, 2);
+
   const hidden = await readProspectRunFeedMemory(memoryStore, {
     teamId: "another-team",
     runId,
@@ -244,7 +287,7 @@ try {
   const terminal = await readProspectRunFeedMemory(memoryStore, {
     teamId,
     runId,
-    after: attemptFinished.events[0].id,
+    after: deepEvent.events[0].id,
     limit: 100
   });
   assert.equal(terminal.terminal, true);

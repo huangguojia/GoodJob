@@ -70,6 +70,9 @@ const customerFields: Record<string, JsonSchema> = {
   billingName: string({ default: "" }),
   billingAddress: string({ default: "" }),
   documentContact: string({ default: "" }),
+  phone: string({ default: "" }),
+  email: string({ default: "" }),
+  website: string({ default: "" }),
   defaultPortDischarge: string({ default: "" }),
   defaultIncoterm: string({ default: "" }),
   defaultPaymentTerm: string({ default: "" })
@@ -130,6 +133,54 @@ const triggerFields: Record<string, JsonSchema> = {
   healthBelow: integer({ minimum: 0, maximum: 100 }), maxPerScan: integer({ minimum: 1, maximum: 20 })
 };
 
+const productFields: Record<string, JsonSchema> = {
+  id: string({ minLength: 1, maxLength: 64 }),
+  nameZh: string({ minLength: 1, maxLength: 200 }),
+  nameEn: string({ maxLength: 200 }),
+  model: string({ maxLength: 200 }),
+  category: string({ maxLength: 80 }),
+  unit: string({ maxLength: 20 }),
+  price: number({ minimum: 0 }),
+  currency: string({ minLength: 1, maxLength: 10 }),
+  hsCode: string({ maxLength: 40 }),
+  descriptionZh: string({ maxLength: 4000 }),
+  descriptionEn: string({ maxLength: 4000 }),
+  tags: array(string({ maxLength: 60 }), { maxItems: 30 }),
+  imageUrl: string({ maxLength: 512 })
+};
+
+const shipmentItemSchema = objectSchema([], {
+  id: string({ minLength: 1, maxLength: 120 }),
+  productName: string({ maxLength: 200 }),
+  model: string({ maxLength: 200 }),
+  hsCode: string({ maxLength: 40 }),
+  quantity: number({ minimum: 0 }),
+  unit: string({ maxLength: 20 }),
+  netWeight: number({ minimum: 0 }),
+  grossWeight: number({ minimum: 0 }),
+  length: number({ minimum: 0 }),
+  width: number({ minimum: 0 }),
+  height: number({ minimum: 0 }),
+  volume: number({ minimum: 0 }),
+  note: string({ maxLength: 500 })
+});
+
+const shipmentFields: Record<string, JsonSchema> = {
+  id: string({ minLength: 1, maxLength: 64 }),
+  shipmentNo: string({ maxLength: 80 }),
+  dealId: string({ maxLength: 64 }),
+  dealTitle: string({ maxLength: 200 }),
+  customerName: string({ maxLength: 200 }),
+  courier: string({ maxLength: 40 }),
+  trackingCode: string({ maxLength: 120 }),
+  trackingImageUrl: string({ maxLength: 512 }),
+  status: oneOf("draft", "shipped", "in_transit", "delivered", "exception"),
+  shippedAt: string({ maxLength: 40 }),
+  estimatedArrival: string({ maxLength: 40 }),
+  note: string({ maxLength: 4000 }),
+  items: array(shipmentItemSchema, { maxItems: 100 })
+};
+
 const registry: Record<string, AgentApiBusinessContract> = {};
 const define = (key: string, schema: JsonSchema, guidance: string) => { registry[key] = { schema, guidance }; };
 const defineMany = (keys: string[], schema: JsonSchema, guidance: string) => keys.forEach((key) => define(key, schema, guidance));
@@ -140,6 +191,9 @@ define("POST /api/customers/{id}/release", objectSchema(["reason"], { reason: st
 define("POST /api/customers/{id}/claim", objectSchema([], { expectedVersion: integer({ minimum: 0 }) }), "领取公池客户；使用列表返回的真实客户 ID 和版本。");
 define("POST /api/customers/bulk-delete", idsSchema, "批量删除客户会连带清理关联数据，必须展示完整 ID 清单并单独确认。");
 define("POST /api/customers/{id}/activities", objectSchema(["type", "content"], { type: oneOf("call", "email", "whatsapp", "wechat", "meeting", "note"), content: string({ minLength: 1, maxLength: 2000 }), nextReminder: string({ maxLength: 100 }) }), "记录真实客户跟进；响应 activity.id 是写入证据。");
+define("POST /api/customers/{id}/meeting-notes", objectSchema(["transcript"], {
+  transcript: string({ minLength: 1, maxLength: 50_000 })
+}), "把用户确认的会议转写发送给已配置的 AI 生成纪要，并写入客户跟进及待办；只能提交原始转写内容。");
 define("POST /api/customer-intelligence/{id}/accept", objectSchema([], { selectedFields: array(oneOf("company", "country", "contact", "documentContact"), { maxItems: 4 }) }), "采纳客户情报建议，只能选择人工确认过的字段。");
 define("POST /api/customer-intelligence/{id}/reject", reasonSchema, "拒绝客户情报建议，可记录原因。");
 
@@ -408,6 +462,81 @@ define("POST /api/prospect-list/{id}/qualification/suppress", objectSchema([
 }), "施加或撤销联系抑制；企业永久禁止联系属于高影响人工确认动作。");
 
 const leadFinderFields: Record<string, JsonSchema> = { productKeywords: string(), countries: string(), industry: string(), customerType: string(), goal: string(), excludeKeywords: string(), sources: array(string({ pattern: "^[a-z0-9_]+$" }), { maxItems: 64 }), useAi: boolean(), limit: number({ minimum: 1, maximum: 30 }) };
+define("POST /api/tools/products", objectSchema(["nameZh"], productFields), "创建或更新本人的产品资料；只能提交用户确认的产品字段，ownerId 和 teamId 由服务端写入。");
+define("DELETE /api/tools/products/{id}", emptySchema, "删除本人的产品资料；必须明确确认目标产品 ID。");
+define("POST /api/tools/shipments", objectSchema([], shipmentFields), "创建或更新本人的发货记录；运单号、物流状态和商品明细必须来自用户确认的信息。");
+define("DELETE /api/tools/shipments/{id}", emptySchema, "删除本人的发货记录；必须明确确认目标发货记录 ID。");
+define("POST /api/tools/shipments/ocr", objectSchema(["image"], {
+  image: string({ minLength: 1, maxLength: 20_000_000 }),
+  mime: oneOf("image/png", "image/jpeg")
+}), "把用户明确选择的运单图片发送给已配置的视觉模型识别；图片载荷和 MIME 类型必须冻结确认。");
+define("POST /api/lead-finder/parse-goal", objectSchema(["goal"], {
+  goal: string({ minLength: 1, maxLength: 2000 })
+}), "把用户的搜客目标发送给已配置的 AI 模型并返回可编辑搜索结构；不得把解析结果直接视为已启动搜客。");
+define("POST /api/lead-finder/launch", objectSchema(["mode", "campaign", "strategy"], {
+  mode: oneOf("standard", "super"),
+  campaign: objectSchema(["name", "snapshot"], {
+    name: string({ minLength: 1, maxLength: 160 }),
+    ownerId: string({ minLength: 1, maxLength: 64 }),
+    snapshot: objectSchema(["products", "markets", "sourceProviderIds"], {
+      goal: string({ maxLength: 1000 }),
+      products: array(string({ minLength: 1, maxLength: 200 }), { minItems: 1, maxItems: 100 }),
+      markets: array(string({ minLength: 1, maxLength: 200 }), { minItems: 1, maxItems: 100 }),
+      customerTypes: array(string({ minLength: 1, maxLength: 200 }), { maxItems: 100 }),
+      applicationScenarios: array(string({ minLength: 1, maxLength: 200 }), { maxItems: 100 }),
+      icpRules: array(string({ minLength: 1, maxLength: 200 }), { maxItems: 100 }),
+      exclusionRules: array(string({ minLength: 1, maxLength: 200 }), { maxItems: 100 }),
+      sourceProviderIds: array(string({ pattern: "^[A-Za-z0-9._-]+$" }), { minItems: 1, maxItems: 100 })
+    })
+  }),
+  strategy: objectSchema(["providerPlan"], {
+    name: string({ minLength: 1, maxLength: 160 }),
+    query: objectSchema([], {
+      keywordMode: oneOf("campaign_products", "specific"),
+      positiveKeywords: array(string(), { maxItems: 100 }),
+      synonyms: array(string(), { maxItems: 100 }),
+      industryTerms: array(string(), { maxItems: 100 }),
+      purchaseScenarioTerms: array(string(), { maxItems: 100 }),
+      countryMode: oneOf("campaign_markets", "specific", "global"),
+      countries: array(string(), { maxItems: 100 }),
+      languages: array(string(), { maxItems: 100 }),
+      customerTypeMode: oneOf("campaign_customer_types", "specific", "all"),
+      customerTypes: array(string(), { maxItems: 100 }),
+      exclusionKeywords: array(string(), { maxItems: 100 }),
+      exclusionDomains: array(string(), { maxItems: 100 }),
+      timeWindow: objectSchema([], {
+        mode: oneOf("all", "custom"),
+        from: string(),
+        to: string()
+      })
+    }),
+    providerPlan: array(objectSchema(["providerId", "priority", "pageLimit", "resultLimit"], {
+      providerId: string({ pattern: "^[A-Za-z0-9._-]+$" }),
+      priority: integer({ minimum: 1, maximum: 1000 }),
+      pageLimit: integer({ minimum: 1, maximum: 100 }),
+      resultLimit: integer({ minimum: 1, maximum: 1000 }),
+      budgetLimit: number({ minimum: 0 }),
+      currency: string({ pattern: "^$|^[A-Z]{3}$" })
+    }), { minItems: 1, maxItems: 100 }),
+    reason: string({ maxLength: 500 })
+  }),
+  schedule: objectSchema(["frequency"], {
+    frequency: oneOf("daily", "weekly", "monthly"),
+    timezone: string({ minLength: 1, maxLength: 100 }),
+    recurringCostApproved: boolean()
+  }),
+  superSearch: objectSchema(["targetCandidateCount", "maxDurationMinutes", "depth"], {
+    targetCandidateCount: integer({ minimum: 20, maximum: 10000 }),
+    maxDurationMinutes: integer({ minimum: 30, maximum: 4320 }),
+    depth: oneOf("balanced", "deep", "extreme"),
+    costLimit: number({ minimum: 0, maximum: 1000000 }),
+    currency: string({ pattern: "^$|^[A-Z]{3}$" }),
+    aiMode: oneOf("auto", "off"),
+    webSearchMode: oneOf("off", "api"),
+    mapSearchMode: oneOf("off", "google_places"),
+    aiDiscoveryMode: oneOf("off", "model")
+  })
+}), "一次性冻结活动、策略、来源、预算和运行方式并启动搜客；属于外部搜索动作，必须确认完整载荷和费用上限，响应 run.id 是入队证据。");
 define("POST /api/lead-finder/free-search", objectSchema([], { productKeywords: string(), countries: string(), industry: string(), customerType: string(), goal: string(), limit: number({ minimum: 1, maximum: 30 }) }), "使用公开免费来源搜索候选客户，属于外部数据访问，需要确认搜索条件。");
 define("POST /api/lead-finder/search", objectSchema([], leadFinderFields), "使用已启用来源执行自动搜客，属于外部数据访问，需要确认来源和条件。");
 define("POST /api/prospect-super-search/preview", objectSchema(["products", "markets", "customerTypes", "providerIds"], { products: array(string({ minLength: 1 }), { minItems: 1, maxItems: 30 }), markets: array(string({ minLength: 1 }), { minItems: 1, maxItems: 30 }), customerTypes: array(string({ minLength: 1 }), { minItems: 1, maxItems: 20 }), industries: array(string({ minLength: 1 }), { maxItems: 30 }), providerIds: array(string({ pattern: "^[a-z0-9_]+$" }), { minItems: 1, maxItems: 30 }), depth: oneOf("balanced", "deep", "extreme"), targetCandidateCount: integer({ minimum: 20, maximum: 10000 }), maxDurationMinutes: integer({ minimum: 30, maximum: 4320 }), costLimit: number({ minimum: 0 }), currency: string({ pattern: "^$|^[A-Z]{3}$" }) }), "预估超级搜索矩阵、轮次、时长与预算，不访问外部数据源。");
@@ -449,7 +578,7 @@ function refreshViewForPath(path: string) {
 }
 
 function completionFor(method: string, path: string): AgentCompletionEvidence {
-  if (method === "DELETE") return { type: "deleted_object", responsePaths: ["id", "deleted", "ok", "lead.id", "memo.id", "todo.id", "task.id", "template.id", "message.id", "question.id", "exam.id", "schedule.id", "rule.id", "memory.id"], description: "HTTP 成功且响应确认删除对象或状态" };
+  if (method === "DELETE") return { type: "deleted_object", responsePaths: ["id", "deleted", "ok", "lead.id", "memo.id", "todo.id", "task.id", "template.id", "message.id", "question.id", "exam.id", "schedule.id", "rule.id", "memory.id", "product.id", "shipment.id"], description: "HTTP 成功且响应确认删除对象或状态" };
   const createPaths: Record<string, string[]> = {
     "/api/customers": ["customer.id"], "/api/leads": ["lead.id"], "/api/deals": ["deal.id"], "/api/todos": ["todo.id"],
     "/api/plan-tasks": ["task.id"], "/api/plan-templates": ["template.id"], "/api/memos": ["memo.id"], "/api/problems": ["problem.id"], "/api/competitors": ["competitor.id"],
@@ -459,7 +588,9 @@ function completionFor(method: string, path: string): AgentCompletionEvidence {
     "/api/exam-questions": ["question.id"], "/api/exams": ["exam.id"], "/api/reminders": ["reminder.id"], "/api/trade-documents": ["document.id"],
     "/api/agent/sales-training": ["run.id"], "/api/agent/sales-distillation": ["distillation.id"],
     "/api/agent/memories": ["memory.id"], "/api/agent/knowledge/documents": ["document.id"], "/api/agent/triggers": ["rule.id"],
-    "/api/prospect-strategies/{id}/schedules": ["schedule.id"]
+    "/api/lead-finder/launch": ["run.id"],
+    "/api/prospect-strategies/{id}/schedules": ["schedule.id"],
+    "/api/tools/products": ["product.id"], "/api/tools/shipments": ["shipment.id"]
   };
   const responsePaths = createPaths[path];
   return responsePaths

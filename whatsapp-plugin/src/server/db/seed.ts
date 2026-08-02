@@ -1,5 +1,5 @@
 import type { AppConfig } from "../config.js";
-import type { Database } from "./database.js";
+import { databaseTimestamp, type Database } from "./database.js";
 import { Repository } from "./repository.js";
 
 export interface DemoSeedReport {
@@ -47,10 +47,13 @@ async function countDemoRows(database: Database): Promise<Omit<DemoSeedReport, "
 
 export async function seed(database: Database, _repository: Repository, _config: AppConfig): Promise<void> {
   await database.query(
-    `INSERT INTO translation_preferences(id,auto_translate,target_language,provider_id,crm_auto_create,updated_at)
-     VALUES('default',0,'zh-CN',NULL,0,$1)
-     ON CONFLICT(id) DO NOTHING`,
-    [new Date().toISOString()]
+    database.kind === "mysql"
+      ? `INSERT IGNORE INTO translation_preferences(id,auto_translate,target_language,provider_id,crm_auto_create,updated_at)
+         VALUES('default',0,'zh-CN',NULL,0,$1)`
+      : `INSERT INTO translation_preferences(id,auto_translate,target_language,provider_id,crm_auto_create,updated_at)
+         VALUES('default',0,'zh-CN',NULL,0,$1)
+         ON CONFLICT(id) DO NOTHING`,
+    [databaseTimestamp(new Date())]
   );
 }
 
@@ -77,7 +80,7 @@ export async function seedDemo(
   await database.query(
     `UPDATE translation_preferences SET auto_translate=1,provider_id=$1,updated_at=$2
      WHERE id='default' AND provider_id IS NULL`,
-    [mockProfile.id, new Date().toISOString()]
+    [mockProfile.id, databaseTimestamp(new Date())]
   );
 
   const existing = await countDemoRows(database);

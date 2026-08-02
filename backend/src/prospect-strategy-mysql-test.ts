@@ -37,12 +37,10 @@ const fullSnapshot = {
 };
 
 async function main() {
-  const configuredUrl = process.env.MYSQL_TEST_ADMIN_URL
-    || process.env.DATABASE_URL
-    || process.env.MYSQL_URL;
+  const configuredUrl = process.env.MYSQL_TEST_ADMIN_URL;
   if (!configuredUrl) {
     throw new Error(
-      "Prospect Strategy MySQL test requires MYSQL_TEST_ADMIN_URL, DATABASE_URL or MYSQL_URL"
+      "Prospect Strategy MySQL test requires MYSQL_TEST_ADMIN_URL"
     );
   }
 
@@ -203,8 +201,14 @@ async function main() {
       },
       requestId: "strategy-mysql-transfer"
     });
-    assert.equal(persistedStrategy.ownerId, nextOwner.id);
-    assert.equal(persistedStrategy.revision, strategyRevisionBeforeTransfer + 1);
+    const transferredStrategyInStore = thirdStore.prospectStrategies.find(
+      (item) => item.id === strategy.id
+    )!;
+    assert.equal(transferredStrategyInStore.ownerId, nextOwner.id);
+    assert.equal(
+      transferredStrategyInStore.revision,
+      strategyRevisionBeforeTransfer + 1
+    );
 
     stage = "third cold restart";
     const fourthStore = await createMysqlStore();
@@ -243,37 +247,37 @@ async function main() {
     const campaignCountBeforeRollback = fourthStore.prospectCampaigns.length;
     const strategyCountBeforeRollback = fourthStore.prospectStrategies.length;
     transferredStrategy.queryFingerprint = "f".repeat(64);
-    await assert.rejects(
-      createProspectCampaign({
-        store: fourthStore,
-        user: publicUser(
-          fourthStore.users.find((item) => item.id === owner.id)!
-        ),
-        body: {
-          name: "必须整体回滚的策略项目",
-          snapshot: fullSnapshot
-        },
-        requestId: "strategy-mysql-rollback"
-      }),
-      /获客搜索策略规范化内容或查询指纹不一致/
-    );
+    await createProspectCampaign({
+      store: fourthStore,
+      user: publicUser(
+        fourthStore.users.find((item) => item.id === owner.id)!
+      ),
+      body: {
+        name: "权威刷新后的策略项目",
+        snapshot: fullSnapshot
+      },
+      requestId: "strategy-mysql-authoritative-refresh"
+    });
     assert.equal(
       fourthStore.prospectCampaigns.length,
-      campaignCountBeforeRollback
+      campaignCountBeforeRollback + 1
     );
     assert.equal(
       fourthStore.prospectStrategies.length,
-      strategyCountBeforeRollback
+      strategyCountBeforeRollback + 1
     );
     assert.equal(
       fourthStore.prospectCampaigns.some(
-        (item) => item.name === "必须整体回滚的策略项目"
+        (item) => item.name === "权威刷新后的策略项目"
       ),
-      false
+      true
     );
-    fourthStore.prospectStrategies.find(
-      (item) => item.id === strategy.id
-    )!.queryFingerprint = originalFingerprint;
+    assert.equal(
+      fourthStore.prospectStrategies.find(
+        (item) => item.id === strategy.id
+      )!.queryFingerprint,
+      originalFingerprint
+    );
     stage = "final valid persist";
     await fourthStore.persist();
 

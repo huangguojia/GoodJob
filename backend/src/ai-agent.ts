@@ -757,7 +757,7 @@ function deterministicBusinessWriteIntent(
     if (!resolvedCompany) return { summary: "新增客户至少需要公司名称。", askUser: "请提供客户的公司名称；国家、联系人和 WhatsApp 可以一并提供。", steps: [] };
     return {
       summary: `正在新增客户 ${resolvedCompany}。`,
-      steps: [{ tool: "api.write", title: `新增客户：${resolvedCompany}`, input: { method: "POST", path: "/api/customers", query: {}, body: { company: resolvedCompany, country: "未知", contact: "待维护", whatsapp: "", stage: "询盘", amount: 0, health: 72, grade: "C", billingName: resolvedCompany, billingAddress: "", documentContact: "待维护", defaultPortDischarge: "", defaultIncoterm: "", defaultPaymentTerm: "" } } }]
+      steps: [{ tool: "api.write", title: `新增客户：${resolvedCompany}`, input: { method: "POST", path: "/api/customers", query: {}, body: { company: resolvedCompany, country: "未知", contact: "待维护", whatsapp: "", stage: "询盘", amount: 0, health: 72, grade: "C", billingName: resolvedCompany, billingAddress: "", documentContact: "待维护", phone: "", email: "", website: "", defaultPortDischarge: "", defaultIncoterm: "", defaultPaymentTerm: "" } } }]
     };
   }
   return undefined;

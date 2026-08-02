@@ -176,6 +176,7 @@ async function main() {
   assert.deepEqual(generatedCustomerIntent.steps[0]?.input.body, {
     company: "goodjob01", country: "未知", contact: "待维护", whatsapp: "", stage: "询盘", amount: 0,
     health: 72, grade: "C", billingName: "goodjob01", billingAddress: "", documentContact: "待维护",
+    phone: "", email: "", website: "",
     defaultPortDischarge: "", defaultIncoterm: "", defaultPaymentTerm: ""
   });
   assert.ok(generatedCustomerIntent.steps[0]?.approvedAt);

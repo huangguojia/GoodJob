@@ -22,13 +22,11 @@ function connectionOptions(databaseUrl: URL) {
 }
 
 async function main() {
-  const configuredUrl = process.env.MYSQL_TEST_ADMIN_URL
-    || process.env.DATABASE_URL
-    || process.env.MYSQL_URL;
+  const configuredUrl = process.env.MYSQL_TEST_ADMIN_URL;
   if (!configuredUrl) {
     throw new Error(
       "Prospect identity bootstrap MySQL test requires "
-      + "MYSQL_TEST_ADMIN_URL, DATABASE_URL or MYSQL_URL"
+      + "MYSQL_TEST_ADMIN_URL"
     );
   }
   const adminUrl = new URL(configuredUrl);

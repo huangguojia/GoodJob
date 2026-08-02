@@ -3,15 +3,28 @@ type DashboardPeriod = "today" | "week" | "month";
 
 import * as XLSX from "xlsx";
 import * as echarts from "echarts/core";
+import isoCountries from "i18n-iso-countries";
+import enCountries from "i18n-iso-countries/langs/en.json";
+import zhCountries from "i18n-iso-countries/langs/zh.json";
 import { LineChart } from "echarts/charts";
 import { GridComponent, TooltipComponent } from "echarts/components";
 import { SVGRenderer } from "echarts/renderers";
 import {
   isLeadSourceExecutable,
+  isLeadSourceAutoSelected,
   resolveLeadSearchSources,
   type BlockedLeadSource
 } from "./lead-source-selection";
+import { resolveLeadAiSearchDraft } from "./lead-ai-search";
 import type { CustomerMapController, CustomerMapRegion } from "./customer-map";
+import type {
+  ProspectRadarCandidate,
+  ProspectRadarController,
+  ProspectRadarFrame,
+  ProspectRadarFrameTone,
+  ProspectRadarModel,
+  ProspectRadarRelation
+} from "./prospect-radar";
 import {
   parseMysqlDump,
   readMysqlDumpFile,
@@ -21,6 +34,12 @@ import {
 } from "./mysql-dump-import";
 
 echarts.use([LineChart, GridComponent, TooltipComponent, SVGRenderer]);
+isoCountries.registerLocale(enCountries);
+isoCountries.registerLocale(zhCountries);
+const countryFlagAssets = Object.fromEntries(Object.entries(import.meta.glob(
+  "../../node_modules/flag-icons/flags/4x3/*.svg",
+  { eager: true, query: "?url", import: "default" }
+) as Record<string, string>).map(([file, url]) => [file.split("/").pop()?.replace(/\.svg$/u, "") || "", url]));
 
 let dashboardLeadFunnelChart: ReturnType<typeof echarts.init> | null = null;
 let dashboardLeadFunnelResizeObserver: ResizeObserver | null = null;
@@ -28,6 +47,9 @@ let dashboardRefreshPromise: Promise<void> | null = null;
 let customerMapController: CustomerMapController | null = null;
 let customerMapRegion: CustomerMapRegion | null = null;
 let customerMapLoading = false;
+let prospectRadarController: ProspectRadarController | null = null;
+let prospectRadarActiveJobId = "";
+let prospectRadarLoading = false;
 const DASHBOARD_LIVE_REFRESH_MS = 10_000;
 
 interface User {
@@ -65,6 +87,9 @@ interface Customer {
   billingName?: string;
   billingAddress?: string;
   documentContact?: string;
+  phone?: string;
+  email?: string;
+  website?: string;
   defaultPortDischarge?: string;
   defaultIncoterm?: string;
   defaultPaymentTerm?: string;
@@ -466,7 +491,7 @@ interface TradeDocument {
   customerId: string;
   dealId: string;
   revision: number;
-  type: "PI" | "CI" | "CUSTOMS";
+  type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING";
   title: string;
   number: string;
   issueDate: string;
@@ -484,7 +509,8 @@ interface TradeDocument {
   validityDate: string;
   bankInfo: string;
   notes: string;
-  templateStyle: "executive" | "classic" | "compact";
+  language: "EN" | "ES" | "RU" | "AR" | "ZH";
+  templateStyle: "executive" | "classic" | "compact" | "indigo" | "emerald" | "rose" | "slate" | "amber";
   status: "draft" | "ready" | "pending_approval" | "approved" | "rejected" | "exported";
   approvalNote?: string;
   approvedAt?: string;
@@ -621,6 +647,9 @@ interface CustomerImportRow {
   amount: number;
   health: number;
   nextReminder: string;
+  phone: string;
+  email: string;
+  website: string;
   wecomBound: boolean;
 }
 
@@ -1257,6 +1286,7 @@ interface LeadFinderJob {
   selectedResultIds?: string[];
   liveEvents?: ProspectLiveEventApiRecord[];
   acceptance?: ProspectAcceptanceApi;
+  deepMining?: ProspectDeepMiningApi;
 }
 
 interface ProspectPendingCandidatePreview {
@@ -1495,6 +1525,9 @@ interface ProspectAcceptanceApi {
   vqaCount: number;
   targetVqaCount?: number;
   targetReviewReadyCount?: number;
+  targetCandidateCount?: number;
+  researchReadyCount?: number;
+  deepMiningStatus?: string;
   sourceSuccessCount: number;
   sourceFailureCount: number;
   sourceSkippedCount: number;
@@ -1535,6 +1568,10 @@ interface ProspectSuperSearchRoundApi {
   missionId: string;
   roundNo: number;
   runId: string;
+  roundKind?: "discovery" | "deep_mining";
+  focusCandidateId?: string;
+  focusNodeId?: string;
+  miningDepth?: number;
   queryPlanSnapshot?: {
     positiveKeywords: string[];
     synonyms: string[];
@@ -1582,6 +1619,94 @@ interface ProspectSuperSearchRoundApi {
   completedAt: string;
 }
 
+interface ProspectDeepMiningApi {
+  version: "prospect-deep-mining-v1";
+  status: "queued" | "searching" | "verifying" | "completed" | "failed";
+  maxDepth: number;
+  maxRootCandidates: number;
+  maxQueries: number;
+  maxWebsiteProbes: number;
+  queriesUsed: number;
+  websiteProbesUsed: number;
+  activeTaskId: string;
+  tasks: Array<{
+    id: string;
+    rootCandidateId: string;
+    candidateId: string;
+    nodeId: string;
+    parentNodeId: string;
+    depth: number;
+    status: "queued" | "searching" | "verifying" | "completed" | "failed" | "stopped";
+    runId: string;
+    roundNo: number;
+    websiteProbeAttemptId: string;
+    queryText: string;
+    newNodeCount: number;
+    evidenceCount: number;
+    duplicateCount: number;
+    stopReason: string;
+    createdAt: string;
+    startedAt: string;
+    completedAt: string;
+  }>;
+  nodes: Array<{
+    id: string;
+    rootCandidateId: string;
+    candidateId: string;
+    parentNodeId: string;
+    company: string;
+    country: string;
+    website: string;
+    depth: number;
+    evidenceIds: string[];
+    enterpriseVerificationScore: number;
+    contactReadinessScore: number;
+    actionPriorityScore: number;
+    verificationStatus: "unverified" | "partial" | "verified" | "blocked";
+    conflict: boolean;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+  edges: Array<{
+    id: string;
+    rootCandidateId: string;
+    fromNodeId: string;
+    toNodeId: string;
+    relationType: string;
+    confidence: number;
+    evidenceIds: string[];
+    sourceUrls: string[];
+    verified: boolean;
+    conflict: boolean;
+    createdAt: string;
+  }>;
+  evidence: Array<{
+    id: string;
+    nodeId: string;
+    candidateId: string;
+    providerId: string;
+    sourceUrl: string;
+    summary: string;
+    queryText: string;
+    authority: "official" | "corroborated" | "discovery" | "assisted";
+    observedAt: string;
+    payloadHash: string;
+  }>;
+  summary: {
+    rootCandidateCount: number;
+    researchedCandidateCount: number;
+    relationCount: number;
+    evidenceCount: number;
+    verifiedCompanyCount: number;
+    contactReadyCount: number;
+    researchReadyCount: number;
+    stoppedTaskCount: number;
+  };
+  stopReason: string;
+  startedAt: string;
+  endedAt: string;
+}
+
 interface ProspectSuperSearchMissionApi {
   id: string;
   campaignId: string;
@@ -1616,6 +1741,7 @@ interface ProspectSuperSearchMissionApi {
   candidateIds?: string[];
   createdAt: string;
   updatedAt: string;
+  deepMining?: ProspectDeepMiningApi;
   rounds: ProspectSuperSearchRoundApi[];
   acceptance?: ProspectAcceptanceApi;
 }
@@ -1650,6 +1776,17 @@ interface LeadFinderLaunchResult extends ProspectRunDetailApiResponse {
   schedule?: ProspectScheduleApiRecord;
   scheduleError?: string;
   superSearch?: ProspectSuperSearchMissionApi;
+  launchReplayed?: boolean;
+  launchTimings?: {
+    campaignMs: number;
+    strategyMs: number;
+    approvalMs: number;
+    activationMs: number;
+    runMs: number;
+    scheduleMs: number;
+    queueMs: number;
+    totalMs: number;
+  };
 }
 
 interface AiModelConfig {
@@ -1671,6 +1808,62 @@ interface AiModelConfig {
   lastTestAt?: string;
   lastTestStatus?: "untested" | "passed" | "failed";
   lastTestMessage?: string;
+  updatedAt: string;
+}
+
+interface Product {
+  id: string;
+  nameZh: string;
+  nameEn: string;
+  model: string;
+  category: string;
+  unit: string;
+  price: number;
+  currency: string;
+  hsCode: string;
+  descriptionZh: string;
+  descriptionEn: string;
+  tags: string[];
+  imageUrl: string;
+  ownerId: string;
+  teamId: string;
+  updatedAt: string;
+}
+
+type ShipmentStatus = "draft" | "shipped" | "in_transit" | "delivered" | "exception";
+
+interface ShipmentItem {
+  id: string;
+  productName: string;
+  model: string;
+  hsCode: string;
+  quantity: number;
+  unit: string;
+  netWeight: number;
+  grossWeight: number;
+  length: number;
+  width: number;
+  height: number;
+  volume: number;
+  note: string;
+}
+
+interface Shipment {
+  id: string;
+  shipmentNo: string;
+  dealId: string;
+  dealTitle: string;
+  customerName: string;
+  courier: string;
+  trackingCode: string;
+  trackingImageUrl: string;
+  status: ShipmentStatus;
+  shippedAt: string;
+  estimatedArrival: string;
+  note: string;
+  items: ShipmentItem[];
+  ownerId: string;
+  teamId: string;
   updatedAt: string;
 }
 
@@ -2424,6 +2617,10 @@ interface AppState {
   aiConfigs: AiModelConfig[];
   selectedAiConfigId: string | null;
   aiDraftMode: boolean;
+  products: Product[];
+  shipments: Shipment[];
+  selectedProductIds: string[];
+  selectedShipmentIds: string[];
   pendingAiDeleteId: string | null;
   problems: ProblemItem[];
   memos: Memo[];
@@ -2582,6 +2779,10 @@ const state: AppState = {
   aiConfig: null,
   aiConfigs: [],
   selectedAiConfigId: null,
+  products: [],
+  shipments: [],
+  selectedProductIds: [],
+  selectedShipmentIds: [],
   aiDraftMode: false,
   pendingAiDeleteId: null,
   problems: [],
@@ -2665,6 +2866,8 @@ let memoMobileDetailOpen = false;
 let memoDeleteBusy = false;
 const resolvedMemoDrafts = new Set<string>();
 let leadFinderJobs: LeadFinderJob[] = [];
+let leadProvidersLoadedAt = 0;
+let leadProvidersInFlight: Promise<void> | null = null;
 const prospectQualificationLoading = new Set<string>();
 let leadFinderRunsLoading = false;
 let leadFinderRunPollTimer = 0;
@@ -2678,6 +2881,17 @@ let leadFinderCleaningFilter: "all" | "merged" | "suppressed" | "rejected" = "al
 let leadFinderMode: "standard" | "super" = "standard";
 // 搜索简报的输入方式：自然语言 / 结构化表单，二者互斥，避免意图叠加互相限制
 let leadBriefMode: "nl" | "form" = "nl";
+// AI 解析得到的自然语言目标结构（英文），预览面板可编辑，启动时直接采用
+interface LeadAiParsed {
+  name: string;
+  markets: string[];
+  products: string[];
+  industries: string[];
+  customerType: string;
+  exclusions: string[];
+}
+let leadAiParsed: LeadAiParsed | null = null;
+let leadAiParseInFlight: Promise<boolean> | null = null;
 let leadSuperPreviewTimer = 0;
 let activeLeadFinderJobId: string | null = null;
 let prospectMobileDetailOpen = false;
@@ -2739,6 +2953,7 @@ const viewLabels: Record<string, string> = {
   "plan-growth": "计划任务",
   documents: "单据平台",
   commission: "提成对账",
+  leaderboard: "排行",
   reports: "报表",
   knowledge: "资料维护",
   exam: "在线考试",
@@ -2772,7 +2987,8 @@ const aiProviderPresets: Record<string, {
   deepseek: { label: "DeepSeek", protocol: "openai-compatible", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", name: "DeepSeek 搜客解析模型" },
   qwen: { label: "通义千问", protocol: "openai-compatible", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus", name: "通义千问业务模型" },
   moonshot: { label: "Kimi", protocol: "openai-compatible", baseUrl: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k", name: "Kimi 业务模型" },
-  zhipu: { label: "智谱GLM", protocol: "openai-compatible", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4-flash", name: "智谱GLM业务模型" },
+  zhipu: { label: "智谱GLM", protocol: "openai-compatible", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4-flash-250414", name: "智谱GLM免费版" },
+      siliconflow: { label: "硅基流动", protocol: "openai-compatible", baseUrl: "https://api.siliconflow.cn/v1", model: "deepseek-ai/DeepSeek-V3", name: "硅基流动免费额度" },
   baidu: { label: "百度千帆", protocol: "openai-compatible", baseUrl: "https://qianfan.baidubce.com/v2", model: "ernie-4.0-turbo-8k", name: "百度千帆业务模型" },
   volcengine: { label: "豆包", protocol: "openai-compatible", baseUrl: "https://ark.cn-beijing.volces.com/api/v3", model: "doubao-pro-32k", name: "豆包业务模型" },
   mistral: { label: "Mistral", protocol: "openai-compatible", baseUrl: "https://api.mistral.ai/v1", model: "mistral-small-latest", name: "Mistral 业务模型" },
@@ -2791,7 +3007,8 @@ const roleLabel: Record<Role, string> = {
 
 const storage = {
   user: "gj_user",
-  dashboardCache: "gj_dashboard_cache"
+  dashboardCache: "gj_dashboard_cache",
+  workspaceView: "gj_workspace_view"
 };
 
 function newAgentConversationId() {
@@ -4847,7 +5064,10 @@ function ensureUiLayer() {
   }
 }
 
-function toast(message: string, type: "ok" | "error" = "ok") {
+function toast(
+  message: string,
+  type: "ok" | "error" | "success" | "warn" | "info" = "ok"
+) {
   ensureUiLayer();
   const stack = qs<HTMLElement>(".toast-stack")!;
   const item = document.createElement("div");
@@ -4905,6 +5125,7 @@ async function loginWithPassword(email: string, password: string) {
   applyAuthedUser(result.user);
   document.body.classList.add("is-authenticated");
   await refreshAll(result.user);
+  activateNavView(rememberedWorkspaceView(result.user));
 }
 
 function applyAuthedUser(user: User) {
@@ -5265,6 +5486,12 @@ async function refreshAll(user: User) {
   state.commissionCalculations = commissionCalculations.calculations;
   state.commissionItems = commissionCalculations.items;
   state.commissionCanReview = commissionCalculations.canReview;
+  const productsResp = await api<{ products: Product[] }>("/api/tools/products").catch(() => ({ products: state.products || [] }));
+  state.products = productsResp.products;
+  renderProducts();
+  const shipmentsResp = await api<{ shipments: Shipment[] }>("/api/tools/shipments").catch(() => ({ shipments: state.shipments || [] }));
+  state.shipments = shipmentsResp.shipments;
+  renderShipments();
   state.selectedCustomerId = state.selectedCustomerId || customers.customers[0]?.id || null;
   state.selectedProblemId = state.selectedProblemId || problems.problems[0]?.id || null;
   state.selectedMemoId = state.selectedMemoId || memos.memos[0]?.id || null;
@@ -5314,23 +5541,33 @@ async function refreshAll(user: User) {
   void loadProspectRuns(true);
 }
 
-async function loadLeadProviders() {
-  try {
-    const result = await api<{ providers: LeadProviderStatus[] }>("/api/lead-finder/providers");
-    state.leadProviders = result.providers || [];
-    if (!state.leadSourceSelectionTouched) {
-      // 默认启用覆盖面稳定的公开源；AI 搜索在模型配置可用时也默认参与。
-      state.selectedLeadSources = state.leadProviders
-        .filter((item) => (item.id === "ai_search" || item.recommended) && isLeadSourceExecutable(item))
-        .map((item) => item.id);
+async function loadLeadProviders(force = false) {
+  if (!force
+    && state.leadProviders.length
+    && Date.now() - leadProvidersLoadedAt < 30_000) return;
+  if (leadProvidersInFlight) return leadProvidersInFlight;
+  leadProvidersInFlight = (async () => {
+    try {
+      const result = await api<{ providers: LeadProviderStatus[] }>("/api/lead-finder/providers");
+      state.leadProviders = result.providers || [];
+      leadProvidersLoadedAt = Date.now();
+      if (!state.leadSourceSelectionTouched) {
+        // 默认只启用推荐的非免费来源；免费来源保留为手动选择，避免默认结果质量不可控。
+        state.selectedLeadSources = state.leadProviders.filter(isLeadSourceAutoSelected).map((item) => item.id);
+      }
+      renderLeadSourceChips();
+      renderSuperWebSearchOption();
+      renderSuperMapSearchOption();
+      renderSuperAiDiscoveryOption();
+      renderLeadFinderJobs();
+    } catch {
+      // 数据源加载失败时保留最近一次可用状态，由启动校验给出明确提示。
     }
-    renderLeadSourceChips();
-    renderSuperWebSearchOption();
-    renderSuperMapSearchOption();
-    renderSuperAiDiscoveryOption();
-    renderLeadFinderJobs();
-  } catch {
-    // 数据源加载失败时保留兜底提示，不影响主流程
+  })();
+  try {
+    await leadProvidersInFlight;
+  } finally {
+    leadProvidersInFlight = null;
   }
 }
 
@@ -5470,6 +5707,193 @@ function renderDashboard(summary: DashboardSummary, todos: Todo[], customers: Cu
   updateTodoChips(todos);
   renderDashboardControls();
   renderMorningPanel(summary);
+}
+
+async function loadBadges(containerId = "leaderboardBadges", tagId?: string) {
+  const container = qs<HTMLElement>(`#${containerId}`);
+  const tag = tagId ? qs<HTMLElement>(`#${tagId}`) : null;
+  if (!container) return;
+  try {
+    const result = await api<{ badges: Array<{ id: string; name: string; icon: string; desc: string; earned: boolean; progress: string }>; earnedCount: number; totalCount: number }>("/api/dashboard/badges");
+    if (tag) tag.textContent = `${result.earnedCount}/${result.totalCount}`;
+    container.innerHTML = result.badges.map((badge) => {
+      return `<div class="badge-card${badge.earned ? " earned" : " locked"}">
+        <span class="badge-icon">${badge.icon}</span>
+        <span class="badge-name">${escapeHtml(badge.name)}</span>
+        <span class="badge-progress">${badge.earned ? "已达成" : escapeHtml(badge.progress)}</span>
+        <div class="badge-tooltip">${escapeHtml(badge.desc)}</div>
+      </div>`;
+    }).join("");
+  } catch {
+    container.innerHTML = "";
+  }
+}
+
+type LeaderboardMetric = "wonAmount" | "newCustomers" | "followUps" | "score";
+const leaderboardMetricLabels: Record<LeaderboardMetric, string> = {
+  wonAmount: "成交额",
+  newCustomers: "新客数",
+  followUps: "跟进数",
+  score: "综合战力"
+};
+
+let leaderboardState: { period: string; metric: LeaderboardMetric } = { period: "week", metric: "wonAmount" };
+
+function renderLeaderboardPage() {
+  const view = qs<HTMLElement>("#leaderboard");
+  if (!view) return;
+  view.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h1>排行</h1>
+        <p class="page-sub">多维度比拼 · 让每一份努力都被看见</p>
+      </div>
+      <div class="head-actions">
+        <div class="lb-period-tabs" role="tablist" aria-label="统计周期">
+          <button type="button" data-lb-period="week" class="${leaderboardState.period === "week" ? "active" : ""}">近7天</button>
+          <button type="button" data-lb-period="month" class="${leaderboardState.period === "month" ? "active" : ""}">本月</button>
+          <button type="button" data-lb-period="quarter" class="${leaderboardState.period === "quarter" ? "active" : ""}">本季</button>
+          <button type="button" data-lb-period="year" class="${leaderboardState.period === "year" ? "active" : ""}">本年</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="lb-grid">
+      <section class="panel lb-main">
+        <div class="lb-metric-tabs" role="tablist" aria-label="排序维度">
+          <button type="button" data-lb-metric="wonAmount" class="${leaderboardState.metric === "wonAmount" ? "active" : ""}">按成交额</button>
+          <button type="button" data-lb-metric="newCustomers" class="${leaderboardState.metric === "newCustomers" ? "active" : ""}">按新客数</button>
+          <button type="button" data-lb-metric="followUps" class="${leaderboardState.metric === "followUps" ? "active" : ""}">按跟进数</button>
+          <button type="button" data-lb-metric="score" class="${leaderboardState.metric === "score" ? "active" : ""}">按综合战力</button>
+        </div>
+        <div class="lb-podium" id="lbPodium"><div class="lb-loading">加载中…</div></div>
+        <div class="lb-table" id="lbTable"><div class="lb-loading">加载中…</div></div>
+      </section>
+
+      <aside class="lb-side">
+        <section class="panel lb-hero" id="lbHero"><div class="lb-loading">加载中…</div></section>
+        <section class="panel lb-badges">
+          <div class="section-head">
+            <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 2l3 6 6 .9-4.5 4.4 1 6.2L12 17l-5.5 2.5 1-6.2L3 8.9 9 8z"/></svg></span><div><h2>成就徽章</h2></div></div>
+            <span class="badge-progress-tag" id="leaderboardBadgeTag">0/8</span>
+          </div>
+          <div class="badges-grid" id="leaderboardBadges"><div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">加载中…</div></div>
+        </section>
+      </aside>
+    </div>
+  `;
+
+  qsa<HTMLButtonElement>("[data-lb-period]", view).forEach((button) => {
+    button.addEventListener("click", () => {
+      leaderboardState.period = button.dataset.lbPeriod || "week";
+      qsa<HTMLButtonElement>("[data-lb-period]", view).forEach((b) => b.classList.toggle("active", b === button));
+      void loadLeaderboardData();
+    });
+  });
+  qsa<HTMLButtonElement>("[data-lb-metric]", view).forEach((button) => {
+    button.addEventListener("click", () => {
+      leaderboardState.metric = (button.dataset.lbMetric as LeaderboardMetric) || "wonAmount";
+      qsa<HTMLButtonElement>("[data-lb-metric]", view).forEach((b) => b.classList.toggle("active", b === button));
+      void loadLeaderboardData();
+    });
+  });
+
+  void loadLeaderboardData();
+  void loadBadges("leaderboardBadges", "leaderboardBadgeTag");
+}
+
+function formatLbAmount(value: number) {
+  if (value >= 1000) return `$${Number((value / 1000).toFixed(value % 1000 === 0 ? 0 : 1))}k`;
+  return `$${value}`;
+}
+
+function formatLbMetric(metric: LeaderboardMetric, value: number) {
+  if (metric === "wonAmount") return formatLbAmount(value);
+  if (metric === "score") return `${value} 战力`;
+  return String(value);
+}
+
+async function loadLeaderboardData() {
+  const podium = qs<HTMLElement>("#lbPodium");
+  const table = qs<HTMLElement>("#lbTable");
+  const hero = qs<HTMLElement>("#lbHero");
+  if (!podium || !table || !hero) return;
+  try {
+    const result = await api<{
+      scope: string;
+      period: string;
+      entries: Array<{
+        userId: string; userName: string; avatar: string;
+        wonAmount: number; wonCount: number; newCustomers: number;
+        conversionRate: number; followUps: number; prevWonAmount: number;
+        score: number; rank: number;
+      }>;
+    }>(`/api/dashboard/leaderboard?period=${encodeURIComponent(leaderboardState.period)}`);
+
+    const metric = leaderboardState.metric;
+    const sorted = [...result.entries].sort((a, b) => (b[metric] as number) - (a[metric] as number) || a.rank - b.rank);
+    sorted.forEach((entry, index) => { entry.rank = index + 1; });
+
+    const top3 = sorted.slice(0, 3);
+    const podiumOrder = [top3[1], top3[0], top3[2]].filter(Boolean);
+    const podiumHtml = podiumOrder.map((entry) => {
+      const place = entry.rank;
+      const medal = place === 1 ? "🥇" : place === 2 ? "🥈" : "🥉";
+      const isMe = entry.userId === state.user?.id;
+      return `<div class="lb-podium-card place${place}${isMe ? " me" : ""}">
+        <div class="lb-podium-medal">${medal}</div>
+        <div class="lb-podium-avatar">${escapeHtml(entry.userName.slice(0, 2))}</div>
+        <div class="lb-podium-name">${escapeHtml(entry.userName)}${isMe ? " (我)" : ""}</div>
+        <div class="lb-podium-value">${formatLbMetric(metric, entry[metric] as number)}</div>
+        <div class="lb-podium-sub">${entry.wonCount}单 · ${entry.newCustomers}新客</div>
+      </div>`;
+    }).join("");
+    podium.innerHTML = podiumHtml || `<div class="lb-empty">暂无排行数据</div>`;
+
+    const maxValue = Math.max(1, ...sorted.map((entry) => entry[metric] as number));
+    const tableHtml = sorted.map((entry) => {
+      const isMe = entry.userId === state.user?.id;
+      const value = entry[metric] as number;
+      const pct = Math.round((value / maxValue) * 100);
+      const delta = entry.wonAmount - entry.prevWonAmount;
+      const deltaHtml = entry.prevWonAmount > 0
+        ? `<span class="lb-delta ${delta >= 0 ? "up" : "down"}">${delta >= 0 ? "▲" : "▼"} ${formatLbAmount(Math.abs(delta))}</span>`
+        : `<span class="lb-delta flat">—</span>`;
+      return `<div class="lb-row${isMe ? " me" : ""}">
+        <span class="lb-rank">${entry.rank}</span>
+        <div class="lb-avatar">${escapeHtml(entry.userName.slice(0, 2))}</div>
+        <span class="lb-name">${escapeHtml(entry.userName)}${isMe ? " (我)" : ""}</span>
+        <span class="lb-value">${formatLbMetric(metric, value)}</span>
+        ${deltaHtml}
+        <div class="lb-bar"><span style="width:${pct}%"></span></div>
+      </div>`;
+    }).join("");
+    table.innerHTML = tableHtml || `<div class="lb-empty">暂无排行数据</div>`;
+
+    const me = sorted.find((entry) => entry.userId === state.user?.id) || sorted[0];
+    const rankInMetric = sorted.findIndex((entry) => entry.userId === (state.user?.id)) + 1;
+    const myIndex = sorted.findIndex((entry) => entry.userId === state.user?.id);
+    const above = myIndex > 0 ? sorted[myIndex - 1] : null;
+    const gap = above ? (above[metric] as number) - (me[metric] as number) : 0;
+    hero.innerHTML = `
+      <div class="section-head">
+        <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 2l3 6 6 .9-4.5 4.4 1 6.2L12 17l-5.5 2.5 1-6.2L3 8.9 9 8z"/></svg></span><div><h2>我的战绩</h2></div></div>
+      </div>
+      <div class="lb-hero-rank">第 <b>${myIndex >= 0 ? rankInMetric : "--"}</b> 名</div>
+      <div class="lb-hero-metrics">
+        <div class="lb-hero-metric"><span>成交额</span><b>${formatLbAmount(me?.wonAmount || 0)}</b></div>
+        <div class="lb-hero-metric"><span>成交单数</span><b>${me?.wonCount || 0}</b></div>
+        <div class="lb-hero-metric"><span>新客数</span><b>${me?.newCustomers || 0}</b></div>
+        <div class="lb-hero-metric"><span>综合战力</span><b>${me?.score || 0}</b></div>
+      </div>
+      ${above ? `<div class="lb-hero-gap">距上一名还差 <b>${formatLbMetric(metric, gap)}</b>（${escapeHtml(above.userName)}）</div>` : `<div class="lb-hero-gap champion">🏆 当前维度已登顶！</div>`}
+      <div class="lb-hero-conv">整体转化率 ${me?.conversionRate || 0}%</div>
+    `;
+  } catch {
+    podium.innerHTML = `<div class="lb-empty">数据加载失败</div>`;
+    table.innerHTML = "";
+    hero.innerHTML = `<div class="lb-empty">数据加载失败</div>`;
+  }
 }
 
 function dashboardMoneyText(rows: Array<{ currency: string; amount: number }>) {
@@ -6776,7 +7200,7 @@ function renderLeads() {
   }
 
   tbody.innerHTML = pageRows.length ? pageRows.map((lead) => `<tr data-lead-id="${lead.id}" class="${lead.id === state.selectedLeadId ? "selected" : ""}">
-    <td><div class="company"><span class="flag">${countryFlag(lead.country)}</span><div><button class="lead-name" data-open-lead="${lead.id}">${escapeHtml(lead.company)}</button><span>${escapeHtml(lead.contact || "联系人待补充")} · ${escapeHtml(lead.country || "国家待补充")}</span></div></div></td>
+    <td><div class="company">${countryFlag(lead.country)}<div><button class="lead-name" data-open-lead="${lead.id}">${escapeHtml(lead.company)}</button><span>${escapeHtml(lead.contact || "联系人待补充")} · ${escapeHtml(lead.country || "国家待补充")}</span></div></div></td>
     <td><div class="lead-decision-cell">${badge("意向" + lead.intent, lead.intent === "高" ? "red" : lead.intent === "中" ? "amber" : "gray")}${badge(lead.stage, leadStageTone(lead.stage))}</div></td>
     <td><div class="lead-follow-cell"><b>${escapeHtml(lead.nextFollowAt || "未安排")}</b><span>${leadFollowState(lead) === "overdue" ? "已逾期" : leadFollowState(lead) === "unset" ? "待安排" : "已计划"}</span></div></td>
     <td><div class="lead-source-cell"><b>${escapeHtml(leadSourceLabel(lead))}</b><span>${escapeHtml(lead.sourceCampaign || lead.externalId || "无活动编号")}</span></div></td>
@@ -7326,7 +7750,7 @@ function renderCustomers(customers: Customer[]) {
     const activeDealCount = customer.activeDealCount || 0;
     return `<tr class="${customer.id === state.selectedCustomerId ? "selected" : ""} ${checked ? "checked" : ""}">
     <td><input type="checkbox" data-select-customer ${checked ? "checked" : ""}></td>
-    <td><div class="company"><span class="flag">${countryFlag(customer.country)}</span><div><button type="button" class="customer-name ${activeDealCount > 0 ? "has-active-deal" : ""}" data-open-customer="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</button><span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")}</span></div></div></td>
+    <td><div class="company">${countryFlag(customer.country)}<div><button type="button" class="customer-name ${activeDealCount > 0 ? "has-active-deal" : ""}" data-open-customer="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</button><span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")}</span></div></div></td>
     <td><div class="customer-follow-cell">${badge(pipelineStage, pipelineStage === "成交" || pipelineStage === "谈判" ? "green" : pipelineStage === "已报价" ? "amber" : "")}<span>${activeDealCount} 个活跃商机</span></div></td>
     <td><div class="customer-health-cell">${health(customer.health)}<span>${customer.health}%</span></div></td>
     <td><div class="customer-value-cell">${customerGradeHtml(customer)}${badge(customer.hasWonDeal ? `已成交 ${customer.wonDealCount || 1} 次` : "未成交", customer.hasWonDeal ? "green" : "gray")}</div></td>
@@ -7338,7 +7762,7 @@ function renderCustomers(customers: Customer[]) {
   const mobile = qs<HTMLElement>("#customerMobileList");
   if (mobile) mobile.innerHTML = visibleCustomers.length ? visibleCustomers.map((customer) => `
     <article class="customer-mobile-card" data-customer-mobile-id="${escapeHtml(customer.id)}">
-      <span class="customer-mobile-top"><button type="button" class="customer-name ${(customer.activeDealCount || 0) > 0 ? "has-active-deal" : ""}" data-open-customer="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</button>${badge(customer.pipelineStage || "暂无商机", customer.pipelineStage === "谈判" || customer.pipelineStage === "成交" ? "green" : customer.pipelineStage === "已报价" ? "amber" : "gray")}</span>
+      <span class="customer-mobile-top"><span class="customer-mobile-company">${countryFlag(customer.country)}<button type="button" class="customer-name ${(customer.activeDealCount || 0) > 0 ? "has-active-deal" : ""}" data-open-customer="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</button></span>${badge(customer.pipelineStage || "暂无商机", customer.pipelineStage === "谈判" || customer.pipelineStage === "成交" ? "green" : customer.pipelineStage === "已报价" ? "amber" : "gray")}</span>
       <span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")}</span>
       <span class="customer-mobile-meta"><i>${customerGradeValue(customer)}级 · ${customerGradeLabel(customerGradeValue(customer))}</i><i>${customer.hasWonDeal ? `已成交 ${customer.wonDealCount || 1} 次` : "未成交"}</i><i>${customer.activeDealCount || 0} 个活跃商机</i><i>${escapeHtml(customer.nextReminder || "待安排")}</i><i>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</i></span>
       <div class="customer-row-actions"><button class="btn" type="button" data-customer-mobile-whatsapp>WhatsApp</button><button class="btn" type="button" data-customer-mobile-pool>放入公池</button></div>
@@ -7721,8 +8145,8 @@ function renderCustomerDealProgress(customer: Customer) {
 
 function customerContactDetails(customer: Customer) {
   const source = [customer.contact, customer.documentContact || ""].join(" ");
-  const email = source.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
-  const phone = source.match(/(?:\+?\d[\d\s()\-]{6,}\d)/)?.[0]?.trim() || "";
+  const email = customer.email || source.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
+  const phone = customer.phone || source.match(/(?:\+?\d[\d\s()\-]{6,}\d)/)?.[0]?.trim() || "";
   const whatsapp = normalizeWhatsAppPhone(customer.whatsapp || customer.whatsappPhone || "");
   return { email, phone, whatsapp };
 }
@@ -8443,7 +8867,7 @@ function renderCustomerDrawer(customer?: Customer) {
       <div class="info"><span>WhatsApp</span><b>${escapeHtml(customerContactDetails(customer).whatsapp || "待维护")}</b></div>
       <div class="info"><span>企业微信</span><b>待接入</b></div>
     </div>
-    <div class="inline-actions"><button class="btn" data-customer-whatsapp-drawer>WhatsApp</button><button class="btn primary ai-entry-button" data-customer-research>${researchButtonIcon()}AI 背调</button><button class="btn" data-customer-email>写开发信</button><button class="btn" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button><button class="btn" data-customer-release-drawer>放入公池</button></div>
+    <div class="inline-actions"><button class="btn" data-customer-whatsapp-drawer>WhatsApp</button><button class="btn primary ai-entry-button" data-customer-research>${researchButtonIcon()}AI 背调</button><button class="btn" data-customer-email>写开发信</button><button class="btn" data-customer-meeting><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><path d="M12 19v3"/></svg>录制会议</button><button class="btn" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button><button class="btn" data-customer-release-drawer>放入公池</button></div>
     ${renderCustomerIntelligence(customer)}
     <section class="customer-doc-info">
       <div class="customer-deals-head"><h3>单据基础信息</h3><button class="btn" data-edit-customer-document-info>维护信息</button></div>
@@ -8456,14 +8880,22 @@ function renderCustomerDrawer(customer?: Customer) {
       <div class="timeline-item"><b>账单地址</b><span>${escapeHtml(billingAddress)}</span></div>
       <div class="timeline-item"><b>付款条款</b><span>${escapeHtml(paymentTerm)}</span></div>
     </section>
-    <div class="timeline">
-      ${(customer.activities || []).length ? (customer.activities || []).map((activity) => `<div class="timeline-item"><b>${escapeHtml(customerActivityLabel(activity.type))}</b><span>${escapeHtml(activity.content)}</span><small>${escapeHtml(activity.operatorName || "未知操作人")} · ${escapeHtml(formatDateTime(activity.createdAt))}${activity.nextReminder ? ` · 下次：${escapeHtml(activity.nextReminder)}` : ""}</small></div>`).join("") : `<div class="timeline-item"><b>暂无跟进记录</b></div>`}
+    <div class="journey-timeline-section">
+      <div class="section-head" style="margin-bottom:8px"><div><h3>客户旅程</h3></div></div>
+      <div id="customerJourneyTimeline"><div style="padding:12px;text-align:center;color:var(--muted);font-size:12px;">加载中...</div></div>
     </div>
+    <details class="timeline-details">
+      <summary class="timeline-details-summary">完整跟进记录 (${(customer.activities || []).length})</summary>
+      <div class="timeline">
+        ${(customer.activities || []).length ? (customer.activities || []).map((activity) => `<div class="timeline-item"><b>${escapeHtml(customerActivityLabel(activity.type))}</b><span>${escapeHtml(activity.content)}</span><small>${escapeHtml(activity.operatorName || "未知操作人")} · ${escapeHtml(formatDateTime(activity.createdAt))}${activity.nextReminder ? ` · 下次：${escapeHtml(activity.nextReminder)}` : ""}</small></div>`).join("") : `<div class="timeline-item"><b>暂无跟进记录</b></div>`}
+      </div>
+    </details>
     ${renderCustomerDealProgress(customer)}
   `;
   if (customerClockTimer) window.clearInterval(customerClockTimer);
   renderCustomerWorldClock(customer);
   customerClockTimer = window.setInterval(() => renderCustomerWorldClock(customer), 1000);
+  void renderCustomerJourney(customer);
   qs("#customerDrawerClose", drawer)?.addEventListener("click", closeCustomerDrawer);
   qs<HTMLButtonElement>("[data-open-customer-page]", drawer)?.addEventListener("click", () => openCustomerDetailPage(customer));
   qs<HTMLButtonElement>("[data-customer-whatsapp-drawer]", drawer)?.addEventListener("click", () => {
@@ -8472,6 +8904,7 @@ function renderCustomerDrawer(customer?: Customer) {
   qs<HTMLButtonElement>("[data-customer-release-drawer]", drawer)?.addEventListener("click", () => openCustomerReleaseModal(customer));
   qs<HTMLButtonElement>("[data-customer-research]", drawer)?.addEventListener("click", () => openBackgroundResearch("customer", customer.id, customer.company, "customers"));
   qs<HTMLButtonElement>("[data-customer-email]", drawer)?.addEventListener("click", () => openDevelopmentEmail("customer", customer.id, customer.company, "customers"));
+  qs<HTMLButtonElement>("[data-customer-meeting]", drawer)?.addEventListener("click", () => openMeetingRecorder(customer));
   qs<HTMLButtonElement>("[data-add-follow]", drawer)?.addEventListener("click", () => addFollowRecord(customer));
   qsa<HTMLButtonElement>("[data-edit-customer-drawer]", drawer).forEach((button) => {
     button.addEventListener("click", () => openCustomerModal(customer));
@@ -8605,6 +9038,185 @@ function customerActivityLabel(type: string) {
   return labels[type] || "跟进";
 }
 
+function renderCustomerJourney(customer: Customer) {
+  const container = qs<HTMLElement>("#customerJourneyTimeline");
+  if (!container) return;
+  const activities = customer.activities || [];
+  const deals = customerRelatedDeals(customer);
+  const dealEvents = state.dealEvents.filter((e) => deals.some((d) => d.id === e.dealId)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  type JourneyNode = { type: string; icon: string; label: string; date: string; detail: string; color: string };
+  const nodes: JourneyNode[] = [];
+
+  const journeyIcons: Record<string, { icon: string; color: string }> = {
+    call: { icon: "📞", color: "var(--brand)" },
+    email: { icon: "✉️", color: "var(--amber)" },
+    whatsapp: { icon: "💬", color: "var(--green)" },
+    wechat: { icon: "💚", color: "var(--green)" },
+    meeting: { icon: "🤝", color: "var(--brand)" },
+    note: { icon: "📝", color: "var(--muted)" },
+    quote: { icon: "📄", color: "var(--amber)" },
+    sample: { icon: "📦", color: "var(--rose)" },
+    negotiation: { icon: " handshake", color: "var(--brand)" },
+    won: { icon: "🎉", color: "var(--green)" },
+    lost: { icon: "❌", color: "var(--rose)" },
+    created: { icon: "🆕", color: "var(--muted)" },
+  };
+
+  for (const activity of activities) {
+    const config = journeyIcons[activity.type] || journeyIcons.note;
+    nodes.push({ type: activity.type, icon: config.icon, label: customerActivityLabel(activity.type), date: activity.createdAt, detail: activity.content, color: config.color });
+  }
+  for (const event of dealEvents) {
+    const config = journeyIcons[event.type] || journeyIcons.note;
+    const deal = deals.find((d) => d.id === event.dealId);
+    nodes.push({ type: event.type, icon: config.icon, label: dealEventLabel(event.type), date: event.createdAt, detail: `${deal?.title || ""}: ${event.content}`, color: config.color });
+  }
+  nodes.sort((a, b) => a.date.localeCompare(b.date));
+
+  if (nodes.length === 0) {
+    container.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">暂无旅程数据</div>`;
+    return;
+  }
+
+  const maxNodes = 12;
+  const displayNodes = nodes.length > maxNodes ? nodes.slice(-maxNodes) : nodes;
+  container.innerHTML = `
+    <div class="journey-track">
+      <div class="journey-line"></div>
+      ${displayNodes.map((node, index) => `
+        <div class="journey-node" style="--delay:${index * 0.12}s" data-detail="${escapeHtml(node.detail)}" data-date="${escapeHtml(formatDateTime(node.date))}">
+          <div class="journey-dot" style="--node-color:${node.color}">${node.icon}</div>
+          <span class="journey-label">${escapeHtml(node.label)}</span>
+          <span class="journey-date">${escapeHtml(node.date.slice(5, 10))}</span>
+          <div class="journey-tooltip"><b>${escapeHtml(node.label)}</b><span>${escapeHtml(node.detail)}</span><small>${escapeHtml(formatDateTime(node.date))}</small></div>
+        </div>
+      `).join("")}
+    </div>`;
+  requestAnimationFrame(() => {
+    qsa<HTMLElement>(".journey-node", container).forEach((node) => node.classList.add("visible"));
+  });
+}
+
+let meetingRecognition: any = null;
+let meetingTranscript = "";
+
+function openMeetingRecorder(customer: Customer) {
+  meetingTranscript = "";
+  const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+  if (!SR) {
+    toast("当前浏览器不支持语音识别，请使用 Chrome/Edge 浏览器");
+    return;
+  }
+  openModal("录制会议纪要", `
+    <div class="meeting-recorder">
+      <div class="meeting-info">
+        <span>客户：${escapeHtml(customer.company)}</span>
+        <span>${escapeHtml(customer.contact)}</span>
+      </div>
+      <div class="meeting-mic-section" id="meetingMicSection">
+        <button class="btn primary meeting-mic-btn" id="meetingMicBtn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><path d="M12 19v3"/></svg>
+          <span>开始录音</span>
+        </button>
+        <span class="meeting-status" id="meetingStatus">点击按钮开始录音</span>
+      </div>
+      <div class="meeting-transcript-wrap" id="meetingTranscriptWrap" style="display:none">
+        <label>实时转写</label>
+        <div class="meeting-transcript" id="meetingTranscript"></div>
+      </div>
+      <div class="meeting-actions" id="meetingActions" style="display:none">
+        <button class="btn" id="meetingStopBtn">停止录音</button>
+        <button class="btn primary" id="meetingSummarizeBtn" disabled>AI 生成纪要</button>
+      </div>
+      <div class="meeting-result" id="meetingResult"></div>
+    </div>
+  `, `<button class="btn" data-modal-close>关闭</button>`);
+
+  const micBtn = qs<HTMLButtonElement>("#meetingMicBtn");
+  const status = qs<HTMLElement>("#meetingStatus");
+  const transcriptWrap = qs<HTMLElement>("#meetingTranscriptWrap");
+  const transcriptDiv = qs<HTMLElement>("#meetingTranscript");
+  const actionsDiv = qs<HTMLElement>("#meetingActions");
+  const stopBtn = qs<HTMLButtonElement>("#meetingStopBtn");
+  const summarizeBtn = qs<HTMLButtonElement>("#meetingSummarizeBtn");
+
+  micBtn?.addEventListener("click", () => {
+    meetingRecognition = new SR();
+    meetingRecognition.lang = "zh-CN";
+    meetingRecognition.continuous = true;
+    meetingRecognition.interimResults = true;
+    meetingRecognition.onresult = (event: any) => {
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          meetingTranscript += transcript;
+        } else {
+          interim += transcript;
+        }
+      }
+      if (transcriptDiv) transcriptDiv.innerHTML = `${escapeHtml(meetingTranscript)} <span style="color:var(--muted)">${escapeHtml(interim)}</span>`;
+    };
+    meetingRecognition.onerror = (event: any) => {
+      if (status) status.textContent = `录音错误: ${event.error}`;
+    };
+    meetingRecognition.onend = () => {
+      if (status) status.textContent = "录音已停止";
+      if (summarizeBtn) summarizeBtn.disabled = !meetingTranscript.trim();
+    };
+    meetingRecognition.start();
+    if (micBtn) micBtn.style.display = "none";
+    if (status) status.textContent = "录音中...";
+    if (transcriptWrap) transcriptWrap.style.display = "block";
+    if (actionsDiv) actionsDiv.style.display = "flex";
+  });
+
+  stopBtn?.addEventListener("click", () => {
+    if (meetingRecognition) meetingRecognition.stop();
+  });
+
+  summarizeBtn?.addEventListener("click", () => void summarizeMeeting(customer));
+}
+
+async function summarizeMeeting(customer: Customer) {
+  const resultDiv = qs<HTMLElement>("#meetingResult");
+  const summarizeBtn = qs<HTMLButtonElement>("#meetingSummarizeBtn");
+  if (!resultDiv || !meetingTranscript.trim()) return;
+  if (summarizeBtn) { summarizeBtn.disabled = true; summarizeBtn.textContent = "AI 分析中..."; }
+  resultDiv.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">AI 正在分析会议内容...</div>`;
+  try {
+    const result = await api<{ summary: string; actionItems: string[]; keyPoints: string[]; activityId: string }>("/api/customers/" + encodeURIComponent(customer.id) + "/meeting-notes", {
+      method: "POST",
+      body: JSON.stringify({ transcript: meetingTranscript })
+    });
+    resultDiv.innerHTML = `
+      <div class="meeting-note-card">
+        <div class="meeting-note-section">
+          <h4>会议摘要</h4>
+          <p>${escapeHtml(result.summary)}</p>
+        </div>
+        ${result.keyPoints.length ? `<div class="meeting-note-section"><h4>关键要点</h4><ul>${result.keyPoints.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}</ul></div>` : ""}
+        ${result.actionItems.length ? `<div class="meeting-note-section"><h4>行动项（已自动创建待办）</h4><ul>${result.actionItems.map((a) => `<li>${escapeHtml(a)}</li>`).join("")}</ul></div>` : ""}
+        <div class="meeting-note-footer">
+          <span>已保存为客户跟进记录</span>
+          ${result.actionItems.length ? "<span>已创建待办事项</span>" : ""}
+        </div>
+      </div>`;
+    if (summarizeBtn) summarizeBtn.style.display = "none";
+    state.customers = state.customers.map((c) => {
+      if (c.id !== customer.id) return c;
+      const updated = { ...c, activities: [{ id: result.activityId, customerId: c.id, type: "meeting", content: `【会议纪要】${result.summary}`, operatorId: state.user?.id || "", operatorName: state.user?.name || "我", nextReminder: "", createdAt: new Date().toISOString() }, ...(c.activities || [])] };
+      return updated;
+    });
+    const updatedCustomer = state.customers.find((c) => c.id === customer.id);
+    if (updatedCustomer) renderCustomerDrawer(updatedCustomer);
+  } catch (err) {
+    resultDiv.innerHTML = `<div style="padding:12px;color:var(--rose);font-size:12px;">AI 分析失败，请稍后重试。${escapeHtml(String(err))}</div>`;
+    if (summarizeBtn) { summarizeBtn.disabled = false; summarizeBtn.textContent = "重新生成纪要"; }
+  }
+}
+
 function openCustomerDrawer() {
   qs("#customerDrawer")?.classList.add("open");
   qs("#customerDrawerBackdrop")?.classList.add("active");
@@ -8619,8 +9231,26 @@ function closeCustomerDrawer() {
 }
 
 function countryFlag(country: string) {
-  const flags: Record<string, string> = { 瑞典: "SE", 美国: "US", 日本: "JP", 阿联酋: "AE", 德国: "DE" };
-  return flags[country] || "GL";
+  const normalized = country.trim();
+  const aliases: Record<string, string> = {
+    中国大陆: "CN", 中国: "CN", 中国香港: "HK", 香港: "HK", 中国澳门: "MO", 澳门: "MO", 中国台湾: "CN", 台湾: "CN",
+    美国: "US", 英国: "GB", 德国: "DE", 法国: "FR", 瑞典: "SE", 日本: "JP", 韩国: "KR", 新加坡: "SG", 阿联酋: "AE",
+    越南: "VN", 泰国: "TH", 马来西亚: "MY", 印度尼西亚: "ID", 俄罗斯: "RU", 捷克: "CZ", 荷兰: "NL", 西班牙: "ES",
+    意大利: "IT", 加拿大: "CA", 墨西哥: "MX", 巴西: "BR", 澳大利亚: "AU", 新西兰: "NZ", 南非: "ZA", 沙特: "SA",
+    沙特阿拉伯: "SA", 土耳其: "TR", 印度: "IN", 菲律宾: "PH", 波兰: "PL", 比利时: "BE", 瑞士: "CH", 奥地利: "AT",
+    "UNITED STATES OF AMERICA": "US", USA: "US", UK: "GB", UAE: "AE", TW: "CN"
+  };
+  const alias = aliases[normalized] || aliases[normalized.toUpperCase()];
+  const alpha2 = alias
+    || (/^[a-z]{2}$/i.test(normalized) ? normalized.toUpperCase() : "")
+    || isoCountries.getAlpha2Code(normalized, "zh")
+    || isoCountries.getAlpha2Code(normalized, "en")
+    || (/^[a-z]{3}$/i.test(normalized) ? isoCountries.alpha3ToAlpha2(normalized.toUpperCase()) : "");
+  const label = normalized ? `${normalized}国旗` : "国家待补充";
+  const assetUrl = alpha2 ? countryFlagAssets[alpha2.toLowerCase()] : "";
+  return assetUrl
+    ? `<span class="flag customer-country-flag" role="img" aria-label="${escapeHtml(label)}" title="${escapeHtml(normalized)}"><img src="${escapeHtml(assetUrl)}" alt="" aria-hidden="true"></span>`
+    : `<span class="flag customer-country-flag is-unknown" role="img" aria-label="${escapeHtml(label)}" title="${escapeHtml(normalized || "国家待补充")}"><span aria-hidden="true">?</span></span>`;
 }
 
 function health(value: number) {
@@ -8775,7 +9405,8 @@ function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
     validityDate: "",
     bankInfo: "",
     notes: "",
-    templateStyle: "executive",
+    language: "EN",
+    templateStyle: "indigo",
     status: "ready",
     audits: [],
     sendRecords: [],
@@ -9648,6 +10279,7 @@ function renderDealDrawer(id: string) {
       <div class="info"><span>关联单据</span><b>${documents.length ? documents.map((document) => `${document.type} ${escapeHtml(document.number)} v${document.revision}`).join(" · ") : "暂未关联 PI/CI"}</b></div>
       <div class="info"><span>${deal.stage === "丢单" ? "丢单复盘" : "关闭状态"}</span><b>${deal.stage === "丢单" ? `${escapeHtml(deal.lostReasonCategory || "未分类")}：${escapeHtml(deal.lostReason || "待补充")}` : deal.stage === "成交" ? escapeHtml(deal.wonReason || "已确认成交") : "活跃推进中"}</b></div>
     </div>
+    <div id="dealWinGauge"><div style="padding:12px;text-align:center;color:var(--muted);font-size:12px;">AI 赢率分析中...</div></div>
     <div class="deal-detail-actions">
       ${closed ? "" : `<button class="btn primary" id="drawerAdvanceDealButton">${dealPrimaryAction(deal.stage)}</button><button class="btn" id="drawerRecordDealButton">记录进展</button><button class="btn" id="drawerEditDealButton">编辑</button>`}
       ${["已报价", "样品", "谈判", "成交"].includes(deal.stage) ? `<button class="btn" id="drawerPrintDealButton">${deal.stage === "成交" ? "生成 CI" : "生成 PI"}</button>` : ""}
@@ -9669,6 +10301,64 @@ function renderDealDrawer(id: string) {
   qs("#drawerPrintDealButton", drawer)?.addEventListener("click", () => void printDealDocument(deal.id));
   qs("#drawerGenerateCustomsButton", drawer)?.addEventListener("click", () => void generateCustomsDocument(deal.id));
   qs("#drawerArchiveDealButton", drawer)?.addEventListener("click", () => void archiveDeal(deal.id));
+  void loadDealWinProbability(deal.id);
+}
+
+async function loadDealWinProbability(dealId: string) {
+  const container = qs<HTMLElement>("#dealWinGauge");
+  if (!container) return;
+  try {
+    const result = await api<{
+      winProbability: number;
+      factors: { name: string; score: number; description: string }[];
+      advice: string;
+      isClosed: boolean;
+    }>(`/api/deals/${encodeURIComponent(dealId)}/win-probability`);
+    const prob = result.winProbability;
+    const color = prob >= 61 ? "var(--green)" : prob >= 31 ? "var(--amber)" : "var(--rose)";
+    const arcLen = 220;
+    const dashOffset = Math.round(arcLen * (1 - prob / 100));
+    container.innerHTML = `
+      <div class="deal-win-gauge">
+        <div class="gauge-wrap">
+          <svg class="gauge-svg" viewBox="0 0 120 75">
+            <path class="gauge-arc-bg" d="M 10 65 A 50 50 0 1 1 110 65" />
+            <path class="gauge-arc-fg" id="gaugeArcFg" d="M 10 65 A 50 50 0 1 1 110 65"
+              stroke="${color}"
+              stroke-dasharray="${arcLen}"
+              stroke-dashoffset="${arcLen}" />
+          </svg>
+          <div class="gauge-center">
+            <b class="gauge-value" style="color:${color}">${prob}%</b>
+            <span class="gauge-label">${result.isClosed ? "已关闭" : "AI 预测赢率"}</span>
+          </div>
+        </div>
+        <div class="gauge-factors">
+          ${result.factors.map((factor) => {
+            const fc = factor.score >= 61 ? "var(--green)" : factor.score >= 31 ? "var(--amber)" : "var(--rose)";
+            return `<div class="gauge-factor">
+              <span class="gauge-factor-name">${escapeHtml(factor.name)}</span>
+              <div class="gauge-factor-bar"><div class="gauge-factor-fill" style="width:0;background:${fc}" data-target="${factor.score}"></div></div>
+              <span class="gauge-factor-score">${factor.score}</span>
+            </div>`;
+          }).join("")}
+        </div>
+        <div class="gauge-advice">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2a4 4 0 0 0-4 4v1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2V6a4 4 0 0 0-4-4z"/><path d="M9 14l2 2 4-4"/></svg>
+          <p>${escapeHtml(result.advice)}</p>
+        </div>
+      </div>`;
+    requestAnimationFrame(() => {
+      const arc = qs<HTMLElement>("#gaugeArcFg", container);
+      if (arc) arc.style.strokeDashoffset = String(dashOffset);
+      qsa<HTMLElement>(".gauge-factor-fill", container).forEach((bar) => {
+        const target = bar.dataset.target || "0";
+        bar.style.width = `${target}%`;
+      });
+    });
+  } catch {
+    container.innerHTML = "";
+  }
 }
 
 function openDealEventModal(id: string) {
@@ -11798,8 +12488,14 @@ function todayDateInput() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function defaultTradeDocument(type: "PI" | "CI" | "CUSTOMS" = "PI"): TradeDocument {
+function defaultTradeDocument(type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING" = "PI"): TradeDocument {
   const date = todayDateInput();
+  const docTypeNames: Record<string, string> = {
+    PI: "新建形式发票 PI", CI: "新建商业发票 CI", CUSTOMS: "新建报关资料",
+    PL: "新建装箱单 Packing List", CONTRACT: "新建销售合同 Sales Contract",
+    QUOTATION: "新建报价单 Quotation", COO: "新建原产地证 Certificate of Origin",
+    SHIPPING: "新建装运通知 Shipping Advice"
+  };
   const baseDoc = {
     id: "__new__",
     customerId: "",
@@ -11821,29 +12517,26 @@ function defaultTradeDocument(type: "PI" | "CI" | "CUSTOMS" = "PI"): TradeDocume
     validityDate: "",
     bankInfo: "",
     notes: "",
-    templateStyle: "executive" as const,
+    language: "EN" as const,
+    templateStyle: "indigo" as const,
     status: "draft" as const,
-    audits: [],
-    sendRecords: [],
+    audits: [] as TradeDocumentAudit[],
+    sendRecords: [] as TradeDocumentSendRecord[],
     updatedAt: new Date().toISOString(),
     items: [
       { id: "new_item_1", product: "", model: "", hsCode: "", quantity: 1, unit: "PCS", unitPrice: 0, originCountry: "", weightKg: 0, packageCount: 0 }
     ]
   };
-
-  if (type === "CUSTOMS") {
-    return {
-      ...baseDoc,
-      title: "新建报关资料",
-      number: `CUSTOMS-${date.replace(/-/g, "")}-${Math.floor(Date.now() / 1000).toString().slice(-4)}`,
-    };
-  } else {
-    return {
-      ...baseDoc,
-      title: type === "PI" ? "新建形式发票 PI" : "新建商业发票 CI",
-      number: `${type}-${date.replace(/-/g, "")}-${Math.floor(Date.now() / 1000).toString().slice(-4)}`,
-    };
-  }
+  return {
+    ...baseDoc,
+    title: docTypeNames[type] || "新建单据",
+    number: `${type}-${date.replace(/-/g, "")}-${Math.floor(Date.now() / 1000).toString().slice(-4)}`,
+    ...(type === "QUOTATION" ? {
+      validityDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      incoterm: "EXW",
+      paymentTerm: "T/T 30% deposit, 70% before shipment",
+    } : {}),
+  };
 }
 
 function activeTradeDocument() {
@@ -11861,7 +12554,7 @@ function renderTradeDocuments(documents: TradeDocument[]) {
       <article class="doc-list-card ${document.id === active.id ? "active" : ""}" data-document-id="${escapeHtml(document.id)}">
         <b>${escapeHtml(document.title)}</b>
         <span>${escapeHtml(document.number)} · ${document.type}</span>
-        <small>${documentStatusText(document.status)} · ${formatDocumentMoney(documentTotal(document), document.currency)}</small>
+        <small>${documentStatusText(document.status)}${["PL","COO","SHIPPING","CUSTOMS"].includes(document.type) ? "" : " · " + formatDocumentMoney(documentTotal(document), document.currency)}</small>
       </article>
     `).join("") : `<div class="empty-cell">暂无单据</div>`}
   `;
@@ -11882,6 +12575,8 @@ function fillDocumentEditor(document: TradeDocument) {
     docNumberInput: document.number,
     docIssueDateInput: document.issueDate,
     docTemplateInput: document.templateStyle,
+    docLanguageInput: document.language || "EN",
+    docThemeInput: document.templateStyle || "indigo",
     docBuyerInput: document.buyer,
     docBuyerContactInput: document.buyerContact,
     docBuyerAddressInput: document.buyerAddress,
@@ -11902,6 +12597,7 @@ function fillDocumentEditor(document: TradeDocument) {
     if (input) input.value = value || "";
   });
   renderDocumentItems(document.items);
+  renderDocThemeSwatches(document.templateStyle);
   renderDocumentPreview(collectDocumentDraft());
 }
 
@@ -12040,18 +12736,16 @@ async function createDocumentRevision() {
   toast(`已创建 v${result.document.revision} 新版本`);
 }
 
-function setDocumentType(type: "PI" | "CI" | "CUSTOMS") {
+function setDocumentType(type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING") {
   qsa<HTMLButtonElement>("#documentTypeTabs button").forEach((button) => {
     button.classList.toggle("active", button.dataset.docType === type);
   });
 }
 
-function currentDocumentType(): "PI" | "CI" | "CUSTOMS" {
+function currentDocumentType(): "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING" {
   const activeButton = qs<HTMLButtonElement>("#documentTypeTabs button.active");
-  const docType = activeButton?.dataset.docType;
-  if (docType === "CUSTOMS") return "CUSTOMS";
-  if (docType === "CI") return "CI";
-  return "PI";
+  const docType = activeButton?.dataset.docType as "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING" | undefined;
+  return docType || "PI";
 }
 
 function renderDocumentItems(items: TradeDocumentItem[]) {
@@ -12125,7 +12819,8 @@ function collectDocumentDraft(): TradeDocument {
     validityDate: qs<HTMLInputElement>("#docValidityInput")?.value || "",
     bankInfo: qs<HTMLTextAreaElement>("#docBankInput")?.value.trim() || "",
     notes: qs<HTMLTextAreaElement>("#docNotesInput")?.value.trim() || "",
-    templateStyle: (qs<HTMLSelectElement>("#docTemplateInput")?.value as TradeDocument["templateStyle"]) || "executive",
+    templateStyle: (qs<HTMLSelectElement>("#docThemeInput")?.value as TradeDocument["templateStyle"]) || (qs<HTMLSelectElement>("#docTemplateInput")?.value as TradeDocument["templateStyle"]) || "indigo",
+    language: (qs<HTMLSelectElement>("#docLanguageInput")?.value as TradeDocument["language"]) || "EN",
     status: existing?.status || "draft",
     audits: existing?.audits || [],
     sendRecords: existing?.sendRecords || [],
@@ -12134,88 +12829,229 @@ function collectDocumentDraft(): TradeDocument {
   };
 }
 
+const DOC_I18N: Record<string, Record<string, string>> = {
+  EN: { seller:"Seller", buyer:"Buyer", incoterm:"Incoterm", payment:"Payment", shipment:"Shipment", validity:"Validity", portLoading:"Port of Loading", portDischarge:"Port of Discharge", docType:"Document Type", status:"Status", description:"Description", model:"Model", hsCode:"HS Code", qty:"Qty", unitPrice:"Unit Price", amount:"Amount", origin:"Origin", weight:"Weight", pkgs:"Pkgs", totalAmount:"Total Amount", bankNotes:"Bank / Notes", authorized:"AUTHORIZED", no:"No.", date:"Date", currency:"Currency", netWeight:"Net Weight", grossWeight:"Gross Weight", totalPackages:"Total Packages", totalWeight:"Total Weight", countryOfOrigin:"Country of Origin", signedBy:"Signed By", dateOfIssue:"Date of Issue", vessel:"Vessel", blNo:"B/L No.", container:"Container", eta:"ETA", etd:"ETD", marks:"Marks & Numbers", descriptionOfGoods:"Description of Goods", quantity:"Quantity", unit:"Unit", packageType:"Package Type", terms:"Terms & Conditions", signatures:"Signatures", sellerSign:"For and on behalf of Seller", buyerSign:"For and on behalf of Buyer", thisIsToCertify:"This is to certify that the goods mentioned in this invoice originated in", issuedUnder:"Issued under", referenceNo:"Reference No.", subject:"Subject", dearSirs:"Dear Sirs,", weArePleased:"We are pleased to inform you that the following shipment has been dispatched:", regards:"Best Regards", packingListDesc:"Packing List", contractDesc:"Sales Contract", quotationDesc:"Quotation", quoteValidUntil:"Quote Valid Until", quotedBy:"Quoted By", acceptedBy:"Accepted By", quoteTerms:"Quotation Terms", priceSubjectToChange:"Prices are subject to final confirmation. This quotation expires after the validity date.", revisionLabel:"Rev.", quoteNumber:"Quote No.", cooDesc:"Certificate of Origin", shippingDesc:"Shipping Advice", proformaDesc:"Proforma Invoice", commercialDesc:"Commercial Invoice", customsTitle:"Customs Clearance Documents", customsSub:"Customs Declaration Package", exportDate:"Export Date", customsDecl:"Customs Declaration", declElements:"Declaration Elements", invoice:"Invoice", packingListShort:"Packing List", contractDoc:"Contract", authorization:"Power of Attorney", fillingGuide:"Filing Guide", shipperInfo:"Shipper Information", consigneeInfo:"Consignee Information", companyName:"Company Name", companyAddress:"Company Address", contactInfo:"Contact", transportInfo:"Transport & Logistics", totalGrossWeight:"Total Gross Weight", packageCount:"Package Count", tradeTerms:"Trade Terms", goodsList:"Goods Detail List", itemsUnit:"items", goodsName:"Goods Name", paymentTradeTerms:"Payment & Trade Terms", paymentCondition:"Payment Terms", customsNotice:"Please verify HS codes, brand/model, weight and other customs declaration elements" },
+  ES: { seller:"Vendedor", buyer:"Comprador", incoterm:"Incoterm", payment:"Pago", shipment:"Envío", validity:"Validez", portLoading:"Puerto de Carga", portDischarge:"Puerto de Descarga", docType:"Tipo de Documento", status:"Estado", description:"Descripción", model:"Modelo", hsCode:"Código HS", qty:"Cant.", unitPrice:"Precio Unit.", amount:"Importe", origin:"Origen", weight:"Peso", pkgs:"Bultos", totalAmount:"Total", bankNotes:"Banco / Notas", authorized:"AUTORIZADO", no:"Nº", date:"Fecha", currency:"Moneda", netWeight:"Peso Neto", grossWeight:"Peso Bruto", totalPackages:"Total Bultos", totalWeight:"Peso Total", countryOfOrigin:"País de Origen", signedBy:"Firmado por", dateOfIssue:"Fecha de Emisión", vessel:"Buque", blNo:"Nº B/L", container:"Contenedor", eta:"ETA", etd:"ETD", marks:"Marcas y Números", descriptionOfGoods:"Descripción de Mercancías", quantity:"Cantidad", unit:"Unidad", packageType:"Tipo de Embalaje", terms:"Términos y Condiciones", signatures:"Firmas", sellerSign:"En nombre del Vendedor", buyerSign:"En nombre del Comprador", thisIsToCertify:"Por la presente se certifica que las mercancías mencionadas en esta factura son originarias de", issuedUnder:"Emitido bajo", referenceNo:"Nº de Referencia", subject:"Asunto", dearSirs:"Estimados Señores,", weArePleased:"Nos complace informarle que el siguiente envío ha sido despachado:", regards:"Saludos Cordiales", packingListDesc:"Lista de Empaque", contractDesc:"Contrato de Venta", quotationDesc:"Cotización", quoteValidUntil:"Oferta válida hasta", quotedBy:"Cotizado por", acceptedBy:"Aceptado por", quoteTerms:"Términos de la Cotización", priceSubjectToChange:"Los precios están sujetos a confirmación final. Esta cotización expira después de la fecha de validez.", revisionLabel:"Rev.", quoteNumber:"Nº de Cotización", cooDesc:"Certificado de Origen", shippingDesc:"Aviso de Embarque", proformaDesc:"Factura Proforma", commercialDesc:"Factura Comercial", customsTitle:"Documentos de Despacho Aduanero", customsSub:"Paquete de Declaración Aduanera", exportDate:"Fecha de Exportación", customsDecl:"Declaración Aduanera", declElements:"Elementos de Declaración", invoice:"Factura", packingListShort:"Lista de Empaque", contractDoc:"Contrato", authorization:"Carta Poder", fillingGuide:"Guía de Declaración", shipperInfo:"Información del Exportador", consigneeInfo:"Información del Consignatario", companyName:"Nombre de la Empresa", companyAddress:"Dirección de la Empresa", contactInfo:"Contacto", transportInfo:"Transporte y Logística", totalGrossWeight:"Peso Bruto Total", packageCount:"Número de Bultos", tradeTerms:"Términos Comerciales", goodsList:"Lista Detallada de Mercancías", itemsUnit:"artículos", goodsName:"Nombre del Producto", paymentTradeTerms:"Pago y Términos Comerciales", paymentCondition:"Condiciones de Pago", customsNotice:"Verifique códigos HS, marca/modelo, peso y otros elementos de declaración aduanera" },
+  RU: { seller:"Продавец", buyer:"Покупатель", incoterm:"Инкотермс", payment:"Оплата", shipment:"Отгрузка", validity:"Срок действия", portLoading:"Порт погрузки", portDischarge:"Порт выгрузки", docType:"Тип документа", status:"Статус", description:"Описание", model:"Модель", hsCode:"Код ТН ВЭД", qty:"Кол-во", unitPrice:"Цена за ед.", amount:"Сумма", origin:"Происхождение", weight:"Вес", pkgs:"Мест", totalAmount:"Итого", bankNotes:"Банк / Примечания", authorized:"АВТОРИЗОВАНО", no:"№", date:"Дата", currency:"Валюта", netWeight:"Чистый вес", grossWeight:"Брутто вес", totalPackages:"Всего мест", totalWeight:"Общий вес", countryOfOrigin:"Страна происхождения", signedBy:"Подписано", dateOfIssue:"Дата выдачи", vessel:"Судно", blNo:"№ коносамента", container:"Контейнер", eta:"ETA", etd:"ETD", marks:"Марки и номера", descriptionOfGoods:"Описание товаров", quantity:"Количество", unit:"Единица", packageType:"Тип упаковки", terms:"Условия", signatures:"Подписи", sellerSign:"От имени Продавца", buyerSign:"От имени Покупателя", thisIsToCertify:"Настоящим удостоверяется, что товары, указанные в этом счете, происхождением из", issuedUnder:"Выдано в соответствии с", referenceNo:"Референс №", subject:"Тема", dearSirs:"Уважаемые господа,", weArePleased:"С удовольствием сообщаем вам, что следующая партия товара была отгружена:", regards:"С уважением", packingListDesc:"Упаковочный лист", contractDesc:"Договор купли-продажи", quotationDesc:"Коммерческое предложение", quoteValidUntil:"Предложение действует до", quotedBy:"Подготовил", acceptedBy:"Принято", quoteTerms:"Условия предложения", priceSubjectToChange:"Цены подлежат окончательному подтверждению. Предложение утрачивает силу после истечения срока действия.", revisionLabel:"Ред.", quoteNumber:"№ предложения", cooDesc:"Сертификат происхождения", shippingDesc:"Извещение об отгрузке", proformaDesc:"Проформа-счет", commercialDesc:"Коммерческий счет", customsTitle:"Таможенные документы", customsSub:"Таможенный пакет декларации", exportDate:"Дата экспорта", customsDecl:"Таможенная декларация", declElements:"Элементы декларации", invoice:"Счет-фактура", packingListShort:"Упаковочный лист", contractDoc:"Договор", authorization:"Доверенность", fillingGuide:"Руководство по заполнению", shipperInfo:"Информация об отправителе", consigneeInfo:"Информация о получателе", companyName:"Название компании", companyAddress:"Адрес компании", contactInfo:"Контакт", transportInfo:"Транспорт и логистика", totalGrossWeight:"Общий брутто вес", packageCount:"Количество мест", tradeTerms:"Торговые термины", goodsList:"Подробный перечень товаров", itemsUnit:"позиций", goodsName:"Наименование товара", paymentTradeTerms:"Оплата и торговые условия", paymentCondition:"Условия оплаты", customsNotice:"Проверьте коды ТН ВЭД, марку/модель, вес и другие элементы таможенной декларации" },
+  AR: { seller:"البائع", buyer:"المشتري", incoterm:"إنكوترمز", payment:"الدفع", shipment:"الشحن", validity:"الصلاحية", portLoading:"ميناء التحميل", portDischarge:"ميناء التفريغ", docType:"نوع المستند", status:"الحالة", description:"الوصف", model:"الموديل", hsCode:"رمز HS", qty:"الكمية", unitPrice:"سعر الوحدة", amount:"المبلغ", origin:"المنشأ", weight:"الوزن", pkgs:"العبوات", totalAmount:"المجموع", bankNotes:"البنك / الملاحظات", authorized:"معتمد", no:"رقم", date:"التاريخ", currency:"العملة", netWeight:"الوزن الصافي", grossWeight:"الوزن الإجمالي", totalPackages:"إجمالي العبوات", totalWeight:"الوزن الكلي", countryOfOrigin:"بلد المنشأ", signedBy:"موقّع من", dateOfIssue:"تاريخ الإصدار", vessel:"السفينة", blNo:"رقم بوليصة الشحن", container:"الحاوية", eta:"ETA", etd:"ETD", marks:"العلامات والأرقام", descriptionOfGoods:"وصف البضائع", quantity:"الكمية", unit:"الوحدة", packageType:"نوع التعبئة", terms:"الشروط والأحكام", signatures:"التوقيعات", sellerSign:"نيابة عن البائع", buyerSign:"نيابة عن المشتري", thisIsToCertify:"نشهد بأن البضائع المذكورة في هذه الفاتورة منشأها", issuedUnder:"صدر بموجب", referenceNo:"رقم المرجع", subject:"الموضوع", dearSirs:"السادة المحترمون،", weArePleased:"يسعدنا إعلامكم بأن الشحنة التالية قد تم إرسالها:", regards:"مع خالص التحيات", packingListDesc:"قائمة التعبئة", contractDesc:"عقد البيع", quotationDesc:"عرض سعر", quoteValidUntil:"العرض ساري حتى", quotedBy:"مُعد من قبل", acceptedBy:"مقبول من قبل", quoteTerms:"شروط العرض", priceSubjectToChange:"الأسعار قابلة للتأكيد النهائي. ينتهي هذا العرض بعد تاريخ الصلاحية.", revisionLabel:"إصدار", quoteNumber:"رقم العرض", cooDesc:"شهادة المنشأ", shippingDesc:"إشعار الشحن", proformaDesc:"فاتورة مبدئية", commercialDesc:"فاتورة تجارية", customsTitle:"وثائق التخليص الجمركي", customsSub:"حزمة الإقرار الجمركي", exportDate:"تاريخ التصدير", customsDecl:"الإقرار الجمركي", declElements:"عناصر الإقرار", invoice:"فاتورة", packingListShort:"قائمة التعبئة", contractDoc:"عقد", authorization:"وكالة", fillingGuide:"دليل التعبئة", shipperInfo:"معلومات المُصدّر", consigneeInfo:"معلومات المُستلم", companyName:"اسم الشركة", companyAddress:"عنوان الشركة", contactInfo:"جهة الاتصال", transportInfo:"النقل والخدمات اللوجستية", totalGrossWeight:"إجمالي الوزن الإجمالي", packageCount:"عدد العبوات", tradeTerms:"الشروط التجارية", goodsList:"قائمة تفصيلية للبضائع", itemsUnit:"أصناف", goodsName:"اسم المنتج", paymentTradeTerms:"الدفع والشروط التجارية", paymentCondition:"شروط الدفع", customsNotice:"يرجى التحقق من رموز HS والعلامة/الموديل والوزن وعناصر الإقرار الجمركي الأخرى" },
+  ZH: { seller:"卖方", buyer:"买方", incoterm:"贸易条款", payment:"付款条款", shipment:"运输方式", validity:"有效期", portLoading:"装运港", portDischarge:"目的港", docType:"单据类型", status:"状态", description:"品名", model:"型号", hsCode:"HS编码", qty:"数量", unitPrice:"单价", amount:"金额", origin:"原产国", weight:"重量", pkgs:"包装", totalAmount:"合计金额", bankNotes:"银行信息/备注", authorized:"授权签字", no:"编号", date:"日期", currency:"币种", netWeight:"净重", grossWeight:"毛重", totalPackages:"总包装数", totalWeight:"总重量", countryOfOrigin:"原产国", signedBy:"签字人", dateOfIssue:"签发日期", vessel:"船名", blNo:"提单号", container:"集装箱号", eta:"预计到港", etd:"预计开船", marks:"唛头", descriptionOfGoods:"货物描述", quantity:"数量", unit:"单位", packageType:"包装类型", terms:"条款与条件", signatures:"签字", sellerSign:"卖方代表签字", buyerSign:"买方代表签字", thisIsToCertify:"兹证明本发票所列货物原产于", issuedUnder:"签发依据", referenceNo:"参考号", subject:"事由", dearSirs:"敬启者：", weArePleased:"兹通知贵方，以下货物已发运：", regards:"此致敬礼", packingListDesc:"装箱单", contractDesc:"销售合同", quotationDesc:"报价单", quoteValidUntil:"报价有效期至", quotedBy:"报价方签字", acceptedBy:"客户确认签字", quoteTerms:"报价条款", priceSubjectToChange:"价格以最终确认为准，报价有效期后自动失效。", revisionLabel:"版本", quoteNumber:"报价编号", cooDesc:"原产地证书", shippingDesc:"装运通知", proformaDesc:"形式发票", commercialDesc:"商业发票", customsTitle:"报关资料", customsSub:"Customs Clearance Documents", exportDate:"出口日期", customsDecl:"报关单", declElements:"申报要素", invoice:"发票", packingListShort:"箱单", contractDoc:"合同", authorization:"委托书", fillingGuide:"填制规范", shipperInfo:"发货人信息", consigneeInfo:"收货人信息", companyName:"公司名称", companyAddress:"公司地址", contactInfo:"联系方式", transportInfo:"运输与物流信息", totalGrossWeight:"总毛重", packageCount:"包装件数", tradeTerms:"贸易术语", goodsList:"货物明细清单", itemsUnit:"项商品", goodsName:"货物名称", paymentTradeTerms:"支付与贸易条款", paymentCondition:"付款条件", customsNotice:"请核对 HS 编码、品牌型号、重量等海关申报要素" }
+};
+
+const DOC_THEMES: Record<string, { primary: string; light: string; text: string }> = {
+  indigo: { primary: "#3157d5", light: "#eef2ff", text: "#1e293b" },
+  emerald: { primary: "#059669", light: "#ecfdf5", text: "#1e293b" },
+  rose: { primary: "#e11d48", light: "#fff1f2", text: "#1e293b" },
+  slate: { primary: "#475569", light: "#f1f5f9", text: "#1e293b" },
+  amber: { primary: "#d97706", light: "#fffbeb", text: "#1e293b" },
+  executive: { primary: "#1e293b", light: "#f1f5f9", text: "#1e293b" },
+  classic: { primary: "#374151", light: "#f9fafb", text: "#1e293b" },
+  compact: { primary: "#6b7280", light: "#f3f4f6", text: "#1e293b" }
+};
+
+function docLabel(document: TradeDocument, key: string): string {
+  const lang = document.language || "EN";
+  return (DOC_I18N[lang] || DOC_I18N.EN)[key] || (DOC_I18N.EN)[key] || key;
+}
+
+function docTypeTitle(document: TradeDocument): string {
+  const map: Record<string, string> = { PI: "proformaDesc", CI: "commercialDesc", PL: "packingListDesc", CONTRACT: "contractDesc", QUOTATION: "quotationDesc", COO: "cooDesc", SHIPPING: "shippingDesc" };
+  return docLabel(document, map[document.type] || "proformaDesc");
+}
+
 function renderDocumentPreview(document: TradeDocument) {
   const preview = qs<HTMLElement>("#documentPreview");
   if (!preview) return;
 
-  // 如果是报关资料类型，使用专门的预览格式
+  // 报关资料使用专门预览
   if (document.type === "CUSTOMS") {
     renderCustomsDocumentPreview(document, preview);
     return;
   }
 
-  // PI/CI的原有预览格式
+  const lang = document.language || "EN";
+  const isRTL = lang === "AR";
+  const theme = DOC_THEMES[document.templateStyle] || DOC_THEMES.indigo;
   const total = documentTotal(document);
-  const title = document.type === "PI" ? "PROFORMA INVOICE" : "COMMERCIAL INVOICE";
-  const status = document.type === "PI" ? "Quotation confirmation" : "Customs / shipment document";
+  const totalWeight = document.items.reduce((s, i) => s + (i.weightKg || 0), 0);
+  const totalPkgs = document.items.reduce((s, i) => s + (i.packageCount || 0), 0);
+  const title = docTypeTitle(document);
+
   preview.className = `doc-paper ${document.templateStyle}`;
+  preview.style.setProperty("--doc-primary", theme.primary);
+  preview.style.setProperty("--doc-light", theme.light);
+  preview.style.setProperty("--doc-text", theme.text);
+  preview.dir = isRTL ? "rtl" : "ltr";
+
+  // 不同单据类型的表格列
+  const showPrices = !["PL", "COO", "SHIPPING"].includes(document.type);
+  const showWeight = ["PL", "CI", "CUSTOMS", "COO", "SHIPPING"].includes(document.type);
+  const showOrigin = ["CI", "COO", "CUSTOMS"].includes(document.type);
+
+  let itemsTable = "";
+  if (document.type === "SHIPPING") {
+    // 装运通知 - 信函格式
+    itemsTable = `
+      <div style="margin:24px 0;padding:16px;border:1px solid ${theme.primary};border-radius:8px;background:${theme.light};">
+        <p style="margin:4px 0;"><b>${docLabel(document,"vessel")}:</b> ${escapeHtml(document.shippingMethod || "—")}</p>
+        <p style="margin:4px 0;"><b>${docLabel(document,"blNo")}:</b> ${escapeHtml(document.number)}</p>
+        <p style="margin:4px 0;"><b>${docLabel(document,"portLoading")}:</b> ${escapeHtml(document.portLoading || "—")}</p>
+        <p style="margin:4px 0;"><b>${docLabel(document,"portDischarge")}:</b> ${escapeHtml(document.portDischarge || "—")}</p>
+        <p style="margin:4px 0;"><b>${docLabel(document,"date")}:</b> ${escapeHtml(document.issueDate)}</p>
+      </div>
+      <p style="margin:16px 0;font-size:14px;color:${theme.text};">${docLabel(document,"weArePleased")}</p>`;
+  } else if (document.type === "COO") {
+    // 原产地证 - 网格声明格式
+    itemsTable = `
+      <div style="margin:20px 0;padding:20px;border:2px solid ${theme.primary};border-radius:8px;text-align:center;">
+        <p style="font-size:15px;line-height:1.8;color:${theme.text};">${docLabel(document,"thisIsToCertify")} <b>${escapeHtml(document.seller)}</b>.</p>
+      </div>`;
+  } else if (document.type === "CONTRACT") {
+    // 销售合同 - 条款格式
+    itemsTable = `
+      <div style="margin:16px 0;padding:16px;border-radius:8px;background:${theme.light};">
+        <h3 style="color:${theme.primary};margin:0 0 8px;font-size:14px;">${docLabel(document,"terms")}</h3>
+        <ol style="margin:0;padding-${isRTL?"right":"left"}:20px;font-size:13px;line-height:1.8;color:${theme.text};">
+          <li>${docLabel(document,"payment")}: ${escapeHtml(document.paymentTerm || "—")}</li>
+          <li>${docLabel(document,"shipment")}: ${escapeHtml(document.shippingMethod || "—")}</li>
+          <li>${docLabel(document,"incoterm")}: ${escapeHtml(document.incoterm || "—")}</li>
+          <li>${docLabel(document,"validity")}: ${escapeHtml(document.validityDate || "—")}</li>
+          <li>${escapeHtml(document.notes || docLabel(document,"terms"))}</li>
+        </ol>
+      </div>`;
+  }
+
+  // 通用商品明细表格
+  if (document.type !== "SHIPPING" && document.type !== "COO") {
+    let cols = `<th>#</th><th>${docLabel(document,"description")}</th><th>${docLabel(document,"model")}</th>`;
+    if (document.type !== "CONTRACT") cols += `<th>${docLabel(document,"hsCode")}</th>`;
+    cols += `<th>${docLabel(document,"qty")}</th>`;
+    if (showWeight) cols += `<th>${docLabel(document,"weight")}</th><th>${docLabel(document,"pkgs")}</th>`;
+    if (showOrigin) cols += `<th>${docLabel(document,"origin")}</th>`;
+    if (showPrices) cols += `<th>${docLabel(document,"unitPrice")}</th><th>${docLabel(document,"amount")}</th>`;
+
+    itemsTable += `
+      <table class="doc-items-table ${document.type.toLowerCase()}" style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:${theme.primary};color:#fff;">${cols}</tr></thead>
+        <tbody>${document.items.map((item, index) => {
+          let row = `<tr style="border-bottom:1px solid #e5e7eb;">`;
+          row += `<td style="padding:8px;text-align:center;">${index + 1}</td>`;
+          row += `<td style="padding:8px;">${escapeHtml(item.product)}</td>`;
+          row += `<td style="padding:8px;">${escapeHtml(item.model)}</td>`;
+          if (document.type !== "CONTRACT") row += `<td style="padding:8px;">${escapeHtml(item.hsCode)}</td>`;
+          row += `<td style="padding:8px;text-align:center;">${item.quantity} ${escapeHtml(item.unit)}</td>`;
+          if (showWeight) row += `<td style="padding:8px;text-align:center;">${item.weightKg} kg</td><td style="padding:8px;text-align:center;">${item.packageCount}</td>`;
+          if (showOrigin) row += `<td style="padding:8px;text-align:center;">${escapeHtml(item.originCountry)}</td>`;
+          if (showPrices) row += `<td style="padding:8px;text-align:right;">${formatDocumentTableMoney(item.unitPrice)}</td><td style="padding:8px;text-align:right;">${formatDocumentTableMoney(item.quantity * item.unitPrice)}</td>`;
+          row += `</tr>`;
+          return row;
+        }).join("")}</tbody>
+      </table>`;
+  }
+
+  // 合同签字区
+  let signArea = "";
+  if (document.type === "CONTRACT") {
+    signArea = `
+      <div style="display:flex;justify-content:space-between;margin-top:32px;gap:24px;">
+        <div style="flex:1;">
+          <p style="border-top:1px solid ${theme.primary};padding-top:8px;font-size:13px;color:${theme.text};">${docLabel(document,"sellerSign")}</p>
+          <p style="font-size:12px;color:#999;margin-top:4px;">${escapeHtml(document.seller)}</p>
+        </div>
+        <div style="flex:1;">
+          <p style="border-top:1px solid ${theme.primary};padding-top:8px;font-size:13px;color:${theme.text};">${docLabel(document,"buyerSign")}</p>
+          <p style="font-size:12px;color:#999;margin-top:4px;">${escapeHtml(document.buyer)}</p>
+        </div>
+      </div>`;
+  } else if (document.type === "QUOTATION") {
+    // 报价单 - 报价条款 + 双签字(报价方/客户确认)
+    signArea = `
+      <div class="doc-quote-terms" style="margin-top:20px;padding:16px;border-radius:8px;background:${theme.light};border:1px solid ${theme.primary}33;">
+        <h3 style="color:${theme.primary};margin:0 0 8px;font-size:14px;">${docLabel(document,"quoteTerms")}</h3>
+        <p style="margin:0;font-size:13px;line-height:1.7;color:${theme.text};">${escapeHtml(document.notes || docLabel(document,"priceSubjectToChange"))}</p>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:28px;gap:24px;">
+        <div style="flex:1;">
+          <p style="border-top:1px solid ${theme.primary};padding-top:8px;font-size:13px;color:${theme.text};">${docLabel(document,"quotedBy")}</p>
+          <p style="font-size:12px;color:#999;margin-top:4px;">${escapeHtml(document.seller)}</p>
+        </div>
+        <div style="flex:1;">
+          <p style="border-top:1px solid ${theme.primary};padding-top:8px;font-size:13px;color:${theme.text};">${docLabel(document,"acceptedBy")}</p>
+          <p style="font-size:12px;color:#999;margin-top:4px;">${escapeHtml(document.buyer)}</p>
+        </div>
+      </div>`;
+  } else {
+    signArea = `
+      <div class="doc-sign">
+        <div class="doc-block"><h3 style="color:${theme.primary};">${docLabel(document,"bankNotes")}</h3><p>${escapeHtml(document.bankInfo)}</p><p>${escapeHtml(document.notes)}</p></div>
+        <div class="doc-stamp" style="color:${theme.primary};border-color:${theme.primary};">${docLabel(document,"authorized")}</div>
+      </div>`;
+  }
+
   preview.innerHTML = `
     <div class="doc-print-head">
       <div class="doc-letterhead">
-        <div class="doc-logo-mark">GJ</div>
+        <div class="doc-logo-mark" style="background:${theme.primary};">${escapeHtml((document.seller || "GJ").slice(0, 2).toUpperCase())}</div>
         <div>
           <b>${escapeHtml(document.seller)}</b>
           <small>${escapeHtml(document.sellerAddress)}</small>
         </div>
       </div>
       <div class="doc-number-box">
-        <p><b>No.</b> ${escapeHtml(document.number)}</p>
-        <p><b>Date</b> ${escapeHtml(document.issueDate)}</p>
-        <p><b>Currency</b> ${escapeHtml(document.currency)}</p>
+        <p><b>${document.type === "QUOTATION" ? docLabel(document,"quoteNumber") : docLabel(document,"no")}</b> ${escapeHtml(document.number)}</p>
+        <p><b>${docLabel(document,"date")}</b> ${escapeHtml(document.issueDate)}</p>
+        ${document.type === "QUOTATION" && document.revision > 0 ? `<p><b>${docLabel(document,"revisionLabel")}</b> ${document.revision}</p>` : ""}
+        ${showPrices ? `<p><b>${docLabel(document,"currency")}</b> ${escapeHtml(document.currency)}</p>` : ""}
       </div>
     </div>
-    <div class="doc-title-band">
-      <h2>${title}</h2>
-      <p>${escapeHtml(status)} · ${escapeHtml(document.title)}</p>
+    <div class="doc-title-band" style="background:${theme.light};border-${isRTL?"right":"left"}:4px solid ${theme.primary};">
+      <h2 style="color:${theme.primary};">${title}</h2>
+      <p>${escapeHtml(document.title)}</p>
     </div>
     <div class="doc-print-grid">
-      <div class="doc-block"><h3>Seller</h3><p><b>${escapeHtml(document.seller)}</b></p><p>${escapeHtml(document.sellerAddress)}</p></div>
-      <div class="doc-block"><h3>Buyer</h3><p><b>${escapeHtml(document.buyer)}</b></p><p>${escapeHtml(document.buyerAddress)}</p><p>${escapeHtml(document.buyerContact)}</p></div>
+      <div class="doc-block"><h3 style="color:${theme.primary};">${docLabel(document,"seller")}</h3><p><b>${escapeHtml(document.seller)}</b></p><p>${escapeHtml(document.sellerAddress)}</p></div>
+      <div class="doc-block"><h3 style="color:${theme.primary};">${docLabel(document,"buyer")}</h3><p><b>${escapeHtml(document.buyer)}</b></p><p>${escapeHtml(document.buyerAddress)}</p><p>${escapeHtml(document.buyerContact)}</p></div>
     </div>
     <div class="doc-terms">
-      <div class="doc-term"><span>Incoterm</span><b>${escapeHtml(document.incoterm)}</b></div>
-      <div class="doc-term"><span>Payment</span><b>${escapeHtml(document.paymentTerm)}</b></div>
-      <div class="doc-term"><span>Shipment</span><b>${escapeHtml(document.shippingMethod)}</b></div>
-      <div class="doc-term"><span>Validity</span><b>${escapeHtml(document.validityDate || "To be confirmed")}</b></div>
-      <div class="doc-term"><span>Port of Loading</span><b>${escapeHtml(document.portLoading)}</b></div>
-      <div class="doc-term"><span>Port of Discharge</span><b>${escapeHtml(document.portDischarge || "To be confirmed")}</b></div>
-      <div class="doc-term"><span>Document Type</span><b>${document.type}</b></div>
-      <div class="doc-term"><span>Status</span><b>${documentStatusText(document.status)}</b></div>
+      <div class="doc-term"><span>${docLabel(document,"incoterm")}</span><b>${escapeHtml(document.incoterm)}</b></div>
+      <div class="doc-term"><span>${docLabel(document,"payment")}</span><b>${escapeHtml(document.paymentTerm)}</b></div>
+      <div class="doc-term"><span>${docLabel(document,"shipment")}</span><b>${escapeHtml(document.shippingMethod)}</b></div>
+      <div class="doc-term"><span>${docLabel(document,"validity")}</span><b>${escapeHtml(document.validityDate || "—")}</b></div>
+      <div class="doc-term"><span>${docLabel(document,"portLoading")}</span><b>${escapeHtml(document.portLoading)}</b></div>
+      <div class="doc-term"><span>${docLabel(document,"portDischarge")}</span><b>${escapeHtml(document.portDischarge || "—")}</b></div>
     </div>
-    <table class="doc-items-table ${document.type === "CI" ? "ci" : "pi"}">
-      <thead><tr><th>#</th><th>Description</th><th>Model</th><th>HS Code</th><th>Qty</th><th>Unit Price</th><th>Amount</th>${document.type === "CI" ? "<th>Origin</th><th>Weight</th><th>Pkgs</th>" : ""}</tr></thead>
-      <tbody>${document.items.map((item, index) => `
-        <tr>
-          <td class="doc-num">${index + 1}</td>
-          <td class="doc-desc">${escapeHtml(item.product)}</td>
-          <td>${escapeHtml(item.model)}</td>
-          <td>${escapeHtml(item.hsCode)}</td>
-          <td class="doc-qty">${item.quantity} ${escapeHtml(item.unit)}</td>
-          <td class="doc-money">${formatDocumentTableMoney(item.unitPrice)}</td>
-          <td class="doc-money">${formatDocumentTableMoney(item.quantity * item.unitPrice)}</td>
-          ${document.type === "CI" ? `<td class="doc-origin">${escapeHtml(item.originCountry)}</td><td class="doc-weight">${item.weightKg} kg</td><td class="doc-pkgs">${item.packageCount}</td>` : ""}
-        </tr>
-      `).join("")}</tbody>
-    </table>
-    <div class="doc-total"><span>Total Amount</span><b>${formatDocumentMoney(total, document.currency)}</b></div>
-    <div class="doc-sign">
-      <div class="doc-block"><h3>Bank / Notes</h3><p>${escapeHtml(document.bankInfo)}</p><p>${escapeHtml(document.notes)}</p></div>
-      <div class="doc-stamp">AUTHORIZED</div>
-    </div>
+    ${document.type === "QUOTATION" ? `
+    <div style="margin:16px 0;padding:12px 20px;border-radius:8px;background:${theme.light};border:1px solid ${theme.primary};display:flex;align-items:center;gap:12px;">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${theme.primary}" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <span style="font-size:14px;color:${theme.primary};font-weight:600;">${docLabel(document,"quoteValidUntil")}:</span>
+      <span style="font-size:14px;color:${theme.text};font-weight:700;">${escapeHtml(document.validityDate || "—")}</span>
+    </div>` : ""}
+    ${itemsTable}
+    ${showPrices ? `<div class="doc-total" style="border-top:2px solid ${theme.primary};"><span>${docLabel(document,"totalAmount")}</span><b style="color:${theme.primary};">${formatDocumentMoney(total, document.currency)}</b></div>` : (showWeight ? `<div class="doc-total" style="border-top:2px solid ${theme.primary};"><span>${docLabel(document,"totalWeight")}</span><b>${totalWeight} kg</b></div><div class="doc-total"><span>${docLabel(document,"totalPackages")}</span><b>${totalPkgs}</b></div>` : "")}
+    ${signArea}
   `;
+
   const meta = qs<HTMLElement>("#docPreviewMeta");
-  if (meta) meta.textContent = `${document.type} · ${document.number} · ${formatDocumentMoney(total, document.currency)}`;
+  if (meta) meta.textContent = `${document.type} · ${document.number} · ${showPrices ? formatDocumentMoney(total, document.currency) : (totalWeight + " kg")}`;
 }
 
 function renderCustomsDocumentPreview(document: TradeDocument, preview: HTMLElement) {
   const total = documentTotal(document);
   const totalWeight = document.items.reduce((sum, item) => sum + (item.weightKg || 0), 0);
   const totalPackages = document.items.reduce((sum, item) => sum + (item.packageCount || 0), 0);
+  const lang = document.language || "EN";
+  const isRTL = lang === "AR";
+  const theme = DOC_THEMES[document.templateStyle] || DOC_THEMES.indigo;
+  const L = (k: string) => docLabel(document, k);
 
   preview.className = `doc-paper customs-preview-modern ${document.templateStyle}`;
+  preview.style.setProperty("--doc-primary", theme.primary);
+  preview.style.setProperty("--doc-light", theme.light);
+  preview.style.setProperty("--doc-text", theme.text);
+  preview.dir = isRTL ? "rtl" : "ltr";
+
   preview.innerHTML = `
-    <div class="customs-hero">
-      <div class="customs-hero-icon">
+    <div class="customs-hero" style="background:${theme.light};border-${isRTL?"right":"left"}:4px solid ${theme.primary};">
+      <div class="customs-hero-icon" style="color:${theme.primary};">
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="3" width="18" height="18" rx="2"/>
           <path d="M3 9h18"/>
@@ -12223,145 +13059,145 @@ function renderCustomsDocumentPreview(document: TradeDocument, preview: HTMLElem
         </svg>
       </div>
       <div class="customs-hero-content">
-        <h2>报关资料</h2>
-        <p>Customs Clearance Documents</p>
+        <h2 style="color:${theme.primary};">${L("customsTitle")}</h2>
+        <p>${L("customsSub")}</p>
       </div>
       <div class="customs-hero-badge">
-        <span class="customs-status-badge">${documentStatusText(document.status)}</span>
+        <span class="customs-status-badge" style="color:${theme.primary};background:${theme.light};">${documentStatusText(document.status)}</span>
       </div>
     </div>
 
-    <div class="customs-meta-bar">
+    <div class="customs-meta-bar" style="border-color:${theme.primary}33;">
       <div class="customs-meta-item">
-        <span class="meta-label">单据编号</span>
+        <span class="meta-label">${L("no")}</span>
         <span class="meta-value">${escapeHtml(document.number)}</span>
       </div>
       <div class="customs-meta-item">
-        <span class="meta-label">出口日期</span>
+        <span class="meta-label">${L("exportDate")}</span>
         <span class="meta-value">${escapeHtml(document.issueDate)}</span>
       </div>
       <div class="customs-meta-item">
-        <span class="meta-label">总金额</span>
-        <span class="meta-value highlight">${formatDocumentMoney(total, document.currency)}</span>
+        <span class="meta-label">${L("totalAmount")}</span>
+        <span class="meta-value highlight" style="color:${theme.primary};">${formatDocumentMoney(total, document.currency)}</span>
       </div>
     </div>
 
     <div class="customs-docs-grid">
-      <div class="customs-doc-card">
+      <div class="customs-doc-card" style="border-color:${theme.primary}22;">
         <div class="doc-card-icon">📋</div>
-        <div class="doc-card-name">报关单</div>
+        <div class="doc-card-name">${L("customsDecl")}</div>
       </div>
-      <div class="customs-doc-card">
+      <div class="customs-doc-card" style="border-color:${theme.primary}22;">
         <div class="doc-card-icon">🔍</div>
-        <div class="doc-card-name">申报要素</div>
+        <div class="doc-card-name">${L("declElements")}</div>
       </div>
-      <div class="customs-doc-card">
+      <div class="customs-doc-card" style="border-color:${theme.primary}22;">
         <div class="doc-card-icon">🧾</div>
-        <div class="doc-card-name">发票</div>
+        <div class="doc-card-name">${L("invoice")}</div>
       </div>
-      <div class="customs-doc-card">
+      <div class="customs-doc-card" style="border-color:${theme.primary}22;">
         <div class="doc-card-icon">📦</div>
-        <div class="doc-card-name">箱单</div>
+        <div class="doc-card-name">${L("packingListShort")}</div>
       </div>
-      <div class="customs-doc-card">
+      <div class="customs-doc-card" style="border-color:${theme.primary}22;">
         <div class="doc-card-icon">📄</div>
-        <div class="doc-card-name">合同</div>
+        <div class="doc-card-name">${L("contractDoc")}</div>
       </div>
-      <div class="customs-doc-card">
+      <div class="customs-doc-card" style="border-color:${theme.primary}22;">
         <div class="doc-card-icon">✍️</div>
-        <div class="doc-card-name">委托书</div>
+        <div class="doc-card-name">${L("authorization")}</div>
       </div>
-      <div class="customs-doc-card">
+      <div class="customs-doc-card" style="border-color:${theme.primary}22;">
         <div class="doc-card-icon">📖</div>
-        <div class="doc-card-name">填制规范</div>
+        <div class="doc-card-name">${L("fillingGuide")}</div>
       </div>
     </div>
 
     <div class="customs-info-cards">
-      <div class="customs-info-card">
+      <div class="customs-info-card" style="border-color:${theme.primary}22;">
         <div class="info-card-header">
           <div class="info-card-icon">🏭</div>
-          <h3>发货人信息</h3>
+          <h3 style="color:${theme.primary};">${L("shipperInfo")}</h3>
         </div>
         <div class="info-card-body">
           <div class="info-item">
-            <label>公司名称</label>
+            <label>${L("companyName")}</label>
             <span>${escapeHtml(document.seller)}</span>
           </div>
           <div class="info-item">
-            <label>公司地址</label>
+            <label>${L("companyAddress")}</label>
             <span>${escapeHtml(document.sellerAddress)}</span>
           </div>
         </div>
       </div>
 
-      <div class="customs-info-card">
+      <div class="customs-info-card" style="border-color:${theme.primary}22;">
         <div class="info-card-header">
           <div class="info-card-icon">🌍</div>
-          <h3>收货人信息</h3>
+          <h3 style="color:${theme.primary};">${L("consigneeInfo")}</h3>
         </div>
         <div class="info-card-body">
           <div class="info-item">
-            <label>公司名称</label>
+            <label>${L("companyName")}</label>
             <span>${escapeHtml(document.buyer)}</span>
           </div>
           <div class="info-item">
-            <label>公司地址</label>
+            <label>${L("companyAddress")}</label>
             <span>${escapeHtml(document.buyerAddress)}</span>
           </div>
           <div class="info-item">
-            <label>联系方式</label>
+            <label>${L("contactInfo")}</label>
             <span>${escapeHtml(document.buyerContact)}</span>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="customs-transport-card">
+    <div class="customs-transport-card" style="border-color:${theme.primary}22;">
       <div class="info-card-header">
         <div class="info-card-icon">🚢</div>
-        <h3>运输与物流信息</h3>
+        <h3 style="color:${theme.primary};">${L("transportInfo")}</h3>
       </div>
       <div class="transport-grid">
         <div class="transport-item">
           <div class="transport-icon">📍</div>
           <div class="transport-content">
-            <label>装运口岸</label>
+            <label>${L("portLoading")}</label>
             <span>${escapeHtml(document.portLoading)}</span>
           </div>
         </div>
         <div class="transport-item">
           <div class="transport-icon">🎯</div>
           <div class="transport-content">
-            <label>目的口岸</label>
+            <label>${L("portDischarge")}</label>
             <span>${escapeHtml(document.portDischarge)}</span>
           </div>
         </div>
         <div class="transport-item">
           <div class="transport-icon">🚛</div>
           <div class="transport-content">
-            <label>运输方式</label>
+            <label>${L("shipment")}</label>
             <span>${escapeHtml(document.shippingMethod)}</span>
           </div>
         </div>
         <div class="transport-item">
           <div class="transport-icon">⚖️</div>
           <div class="transport-content">
-            <label>总毛重</label>
+            <label>${L("totalGrossWeight")}</label>
             <span>${totalWeight.toFixed(2)} KG</span>
           </div>
         </div>
         <div class="transport-item">
           <div class="transport-icon">📦</div>
           <div class="transport-content">
-            <label>包装件数</label>
-            <span>${totalPackages} 件</span>
+            <label>${L("packageCount")}</label>
+            <span>${totalPackages}</span>
           </div>
         </div>
         <div class="transport-item">
           <div class="transport-icon">💼</div>
           <div class="transport-content">
-            <label>贸易术语</label>
+            <label>${L("tradeTerms")}</label>
             <span>${escapeHtml(document.incoterm)}</span>
           </div>
         </div>
@@ -12371,21 +13207,21 @@ function renderCustomsDocumentPreview(document: TradeDocument, preview: HTMLElem
     <div class="customs-items-section">
       <div class="info-card-header">
         <div class="info-card-icon">📝</div>
-        <h3>货物明细清单</h3>
-        <span class="items-count">${document.items.length} 项商品</span>
+        <h3 style="color:${theme.primary};">${L("goodsList")}</h3>
+        <span class="items-count">${document.items.length} ${L("itemsUnit")}</span>
       </div>
       <div class="customs-items-modern-table">
-        <div class="table-header">
+        <div class="table-header" style="background:${theme.primary};">
           <div class="th th-num">#</div>
-          <div class="th th-product">货物名称</div>
-          <div class="th">型号</div>
-          <div class="th">HS编码</div>
-          <div class="th th-qty">数量</div>
-          <div class="th th-price">单价</div>
-          <div class="th th-amount">金额</div>
-          <div class="th">原产国</div>
-          <div class="th">重量</div>
-          <div class="th">包装</div>
+          <div class="th th-product">${L("goodsName")}</div>
+          <div class="th">${L("model")}</div>
+          <div class="th">${L("hsCode")}</div>
+          <div class="th th-qty">${L("qty")}</div>
+          <div class="th th-price">${L("unitPrice")}</div>
+          <div class="th th-amount">${L("amount")}</div>
+          <div class="th">${L("origin")}</div>
+          <div class="th">${L("weight")}</div>
+          <div class="th">${L("pkgs")}</div>
         </div>
         ${document.items.map((item, index) => `
           <div class="table-row">
@@ -12396,57 +13232,57 @@ function renderCustomsDocumentPreview(document: TradeDocument, preview: HTMLElem
             <div class="td td-qty">${item.quantity} <small>${escapeHtml(item.unit)}</small></div>
             <div class="td td-price">${formatDocumentTableMoney(item.unitPrice)}</div>
             <div class="td td-amount"><strong>${formatDocumentTableMoney(item.quantity * item.unitPrice)}</strong></div>
-            <div class="td">${escapeHtml(item.originCountry || "中国")}</div>
+            <div class="td">${escapeHtml(item.originCountry || "China")}</div>
             <div class="td">${item.weightKg || 0} kg</div>
             <div class="td">${item.packageCount || 0}</div>
           </div>
         `).join("")}
-        <div class="table-footer">
-          <div class="footer-label">合计</div>
+        <div class="table-footer" style="border-top:2px solid ${theme.primary};">
+          <div class="footer-label">${L("totalAmount")}</div>
           <div class="footer-values">
             <div class="footer-item">
-              <label>总金额</label>
-              <span class="footer-highlight">${formatDocumentMoney(total, document.currency)}</span>
+              <label>${L("totalAmount")}</label>
+              <span class="footer-highlight" style="color:${theme.primary};">${formatDocumentMoney(total, document.currency)}</span>
             </div>
             <div class="footer-item">
-              <label>总重量</label>
+              <label>${L("totalWeight")}</label>
               <span>${totalWeight.toFixed(2)} KG</span>
             </div>
             <div class="footer-item">
-              <label>总件数</label>
-              <span>${totalPackages} 件</span>
+              <label>${L("totalPackages")}</label>
+              <span>${totalPackages}</span>
             </div>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="customs-payment-card">
+    <div class="customs-payment-card" style="border-color:${theme.primary}22;">
       <div class="info-card-header">
         <div class="info-card-icon">💰</div>
-        <h3>支付与贸易条款</h3>
+        <h3 style="color:${theme.primary};">${L("paymentTradeTerms")}</h3>
       </div>
       <div class="payment-grid">
         <div class="payment-item">
-          <label>币种</label>
-          <span class="payment-badge">${escapeHtml(document.currency)}</span>
+          <label>${L("currency")}</label>
+          <span class="payment-badge" style="color:${theme.primary};background:${theme.light};">${escapeHtml(document.currency)}</span>
         </div>
         <div class="payment-item">
-          <label>贸易术语</label>
-          <span class="payment-badge">${escapeHtml(document.incoterm)}</span>
+          <label>${L("tradeTerms")}</label>
+          <span class="payment-badge" style="color:${theme.primary};background:${theme.light};">${escapeHtml(document.incoterm)}</span>
         </div>
         <div class="payment-item payment-term">
-          <label>付款条件</label>
+          <label>${L("paymentCondition")}</label>
           <span>${escapeHtml(document.paymentTerm)}</span>
         </div>
       </div>
     </div>
 
-    <div class="customs-footer-notice"><div class="notice-content"><p class="notice-warning">请核对 HS 编码、品牌型号、重量等海关申报要素</p></div></div>
+    <div class="customs-footer-notice"><div class="notice-content"><p class="notice-warning" style="color:${theme.primary};">${L("customsNotice")}</p></div></div>
   `;
 
   const meta = qs<HTMLElement>("#docPreviewMeta");
-  if (meta) meta.textContent = `报关资料 · ${document.number} · ${formatDocumentMoney(total, document.currency)}`;
+  if (meta) meta.textContent = `${L("customsTitle")} · ${document.number} · ${formatDocumentMoney(total, document.currency)}`;
 }
 
 function addDocumentItem() {
@@ -12458,9 +13294,97 @@ function addDocumentItem() {
 
 function openNewDocument() {
   state.selectedDocumentId = "__new__";
-  fillDocumentEditor(defaultTradeDocument());
+  fillDocumentEditor(defaultTradeDocument(currentDocumentType()));
   qsa<HTMLElement>(".doc-list-card").forEach((card) => card.classList.remove("active"));
   toast("已创建单据草稿，保存后写入数据库");
+}
+
+function renderDocThemeSwatches(activeTheme?: string) {
+  const wrap = qs<HTMLElement>("#docThemeSwatches");
+  if (!wrap) return;
+  const themes = [
+    { id: "indigo", color: "#3157d5" }, { id: "emerald", color: "#059669" },
+    { id: "rose", color: "#e11d48" }, { id: "slate", color: "#475569" },
+    { id: "amber", color: "#d97706" }
+  ];
+  const current = activeTheme || qs<HTMLSelectElement>("#docThemeInput")?.value || "indigo";
+  wrap.innerHTML = themes.map((t) =>
+    `<button type="button" class="doc-swatch-btn${t.id === current ? " active" : ""}" data-theme-swatch="${t.id}" title="${t.id}" style="background:${t.color};color:${t.color};"></button>`
+  ).join("");
+  qsa<HTMLButtonElement>("[data-theme-swatch]", wrap).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const themeId = btn.dataset.themeSwatch || "indigo";
+      const th = qs<HTMLSelectElement>("#docThemeInput");
+      const tpl = qs<HTMLSelectElement>("#docTemplateInput");
+      if (th) th.value = themeId;
+      if (tpl) tpl.value = themeId;
+      renderDocThemeSwatches(themeId);
+      renderDocumentPreview(collectDocumentDraft());
+    });
+  });
+}
+
+function applyDataSource(source: string) {
+  if (source === "manual") return;
+  const draft = collectDocumentDraft();
+  if (source === "deal") {
+    const dealId = qs<HTMLSelectElement>("#docDealInput")?.value;
+    const deal = state.deals.find((d) => d.id === dealId);
+    if (!deal) { toast("请先选择关联商机", "error"); return; }
+    const customer = state.customers.find((c) => c.id === deal.customerId);
+    if (customer) {
+      const vals: Record<string, string> = {
+        docBuyerInput: customer.billingName?.trim() || customer.company,
+        docBuyerAddressInput: customer.billingAddress?.trim() || "",
+        docBuyerContactInput: customer.documentContact?.trim() || customer.contact,
+        docIncotermInput: customer.defaultIncoterm?.trim() || "FOB",
+        docPaymentInput: customer.defaultPaymentTerm?.trim() || "",
+        docPortDischargeInput: customer.defaultPortDischarge?.trim() || ""
+      };
+      Object.entries(vals).forEach(([id, v]) => { const el = qs<HTMLInputElement | HTMLSelectElement>(`#${id}`); if (el) el.value = v; });
+    }
+    if (deal.currency) { const c = qs<HTMLSelectElement>("#docCurrencyInput"); if (c) c.value = deal.currency; }
+    // 从商机关联的产品填充行项目
+    const dealProducts = (state as any).dealProducts?.filter((dp: any) => dp.dealId === deal.id) || [];
+    if (dealProducts.length) {
+      draft.items = dealProducts.map((dp: any, i: number) => {
+        const product = (state as any).products?.find((p: any) => p.id === dp.productId);
+        return {
+          id: `item_${Date.now()}_${i}`, product: product?.name || dp.productName || "",
+          model: product?.model || dp.model || "", hsCode: product?.hsCode || "",
+          quantity: dp.quantity || 1, unit: dp.unit || product?.unit || "PCS",
+          unitPrice: dp.unitPrice || product?.unitPrice || 0,
+          originCountry: product?.originCountry || "China",
+          weightKg: product?.weightKg || 0, packageCount: product?.packageCount || 0
+        };
+      });
+    }
+    toast("已从商机填充单据信息");
+  } else if (source === "customer") {
+    const customerId = qs<HTMLSelectElement>("#docCustomerInput")?.value;
+    const customer = state.customers.find((c) => c.id === customerId);
+    if (!customer) { toast("请先选择关联客户", "error"); return; }
+    applyDocumentCustomerDefaults(customerId || "");
+    toast("已从客户填充单据信息");
+  } else if (source === "product") {
+    const products = (state as any).products || [];
+    if (products.length) {
+      draft.items = products.slice(0, 5).map((p: any, i: number) => ({
+        id: `item_${Date.now()}_${i}`, product: p.name || "", model: p.model || "",
+        hsCode: p.hsCode || "", quantity: p.quantity || 1, unit: p.unit || "PCS",
+        unitPrice: p.unitPrice || 0, originCountry: p.originCountry || "China",
+        weightKg: p.weightKg || 0, packageCount: p.packageCount || 0
+      }));
+      renderDocumentItems(draft.items);
+      toast(`已从产品库填充 ${draft.items.length} 条明细`);
+    } else {
+      toast("产品库暂无数据", "error");
+    }
+  }
+  renderDocumentPreview(collectDocumentDraft());
+  // 重置为手动
+  const ds = qs<HTMLSelectElement>("#docDataSourceInput");
+  if (ds) ds.value = "manual";
 }
 
 async function saveTradeDocument() {
@@ -12504,18 +13428,26 @@ async function exportTradeDocumentPdf() {
     ? current
     : await saveTradeDocument();
   if (!saved) return;
-  if (saved.status !== "approved" && saved.status !== "exported") {
-    toast("已打印单据草稿；审批通过后会生成正式导出记录");
-    printDocumentPreview();
+  const preview = qs<HTMLElement>("#documentPreview");
+  if (!preview) {
+    toast("未找到单据预览，无法导出", "error");
     return;
   }
-  const result = await api<{ document: TradeDocument; job: ImportExportJob; fileName: string }>(`/api/trade-documents/${saved.id}/export`, { method: "POST" });
-  state.tradeDocuments = state.tradeDocuments.map((document) => document.id === result.document.id ? result.document : document);
-  state.jobs.unshift(result.job);
-  renderTradeDocuments(state.tradeDocuments);
-  renderJobs(state.jobs);
-  toast(`已生成 PDF 导出任务：${result.fileName}`);
-  printDocumentPreview();
+  const fileName = `${saved.number || "document"}-${saved.type}.pdf`;
+  if (saved.status === "approved" || saved.status === "exported") {
+    try {
+      const result = await api<{ document: TradeDocument; job: ImportExportJob; fileName: string }>(`/api/trade-documents/${saved.id}/export`, { method: "POST" });
+      state.tradeDocuments = state.tradeDocuments.map((document) => document.id === result.document.id ? result.document : document);
+      state.jobs.unshift(result.job);
+      renderTradeDocuments(state.tradeDocuments);
+      renderJobs(state.jobs);
+    } catch {
+      // 后端标记失败不影响客户端导出
+    }
+  } else {
+    toast("单据尚未审批，已直接导出当前预览 PDF");
+  }
+  await downloadDocumentPdf(preview, fileName);
 }
 
 function printDocumentPreview() {
@@ -12536,6 +13468,50 @@ function printDocumentPreview() {
   window.addEventListener("afterprint", cleanup);
   window.print();
   window.setTimeout(cleanup, 30000);
+}
+
+// 直接把单据预览渲染成彩色 PDF 并下载，绕开浏览器打印对话框（避免背景色丢失）
+async function downloadDocumentPdf(preview: HTMLElement, fileName: string) {
+  try {
+    toast("正在生成 PDF…");
+    const { toPng } = await import("html-to-image");
+    const { jsPDF } = await import("jspdf");
+    // html-to-image 使用浏览器原生渲染（SVG foreignObject），完整支持 color-mix / oklch /
+    // color() 等现代 CSS 颜色函数。html2canvas 1.4.1 解析不了这些颜色会直接抛
+    // "Attempting to parse an unsupported color function" 并降级到无背景的打印预览（黑屏）。
+    const dataUrl = await toPng(preview, {
+      pixelRatio: 2,
+      backgroundColor: "#ffffff",
+      cacheBust: true,
+    });
+    const img = new Image();
+    img.src = dataUrl;
+    await new Promise<void>((resolve) => { img.onload = () => resolve(); });
+    const imgData = dataUrl;
+    const naturalW = img.naturalWidth || img.width;
+    const naturalH = img.naturalHeight || img.height;
+    const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const imgW = pageW;
+    const imgH = (naturalH * imgW) / naturalW;
+    let heightLeft = imgH;
+    let position = 0;
+    pdf.addImage(imgData, "PNG", 0, position, imgW, imgH);
+    heightLeft -= pageH;
+    while (heightLeft > 0) {
+      position -= pageH;
+      pdf.addPage();
+      pdf.addImage(imgData, "PNG", 0, position, imgW, imgH);
+      heightLeft -= pageH;
+    }
+    pdf.save(fileName);
+    toast("PDF 已导出");
+  } catch (err) {
+    toast(err instanceof Error ? `PDF 生成失败：${err.message}` : "PDF 生成失败", "error");
+    // 降级：仍走浏览器打印
+    printDocumentPreview();
+  }
 }
 
 function parseNumberCell(value: unknown, fallback = 0) {
@@ -12583,6 +13559,9 @@ async function parseCustomerImportFile(file: File): Promise<CustomerImportRow[]>
       amount: parseNumberCell(rowValue(row, ["预计金额", "金额", "商机金额", "amount", "Amount"])),
       health: Math.max(0, Math.min(100, Math.round(parseNumberCell(rowValue(row, ["健康度", "评分", "health", "Health"]), 70)))),
       nextReminder: String(rowValue(row, ["下一提醒", "提醒", "下次跟进", "nextReminder", "Next Reminder"]) || "待跟进").trim(),
+      phone: String(rowValue(row, ["电话", "手机号", "联系电话", "Phone", "Tel", "phone", "Telephone"]) || "").trim(),
+      email: String(rowValue(row, ["邮箱", "电子邮件", "Email", "email", "E-mail"]) || "").trim(),
+      website: String(rowValue(row, ["官网", "网站", "Website", "website", "URL", "主页"]) || "").trim(),
       wecomBound: false
     };
   }).filter((row) => row.company);
@@ -12640,6 +13619,9 @@ async function exportCustomers() {
       在手商机额: customer.pipelineAmount || 0,
       健康度: customer.health,
       下一提醒: customer.nextReminder,
+      电话: customer.phone || "",
+      邮箱: customer.email || "",
+      官网: customer.website || "",
       通讯接入: "待接入"
     }));
     const worksheet = XLSX.utils.json_to_sheet(rows);
@@ -12655,7 +13637,7 @@ async function exportCustomers() {
 }
 
 function downloadCustomerTemplate() {
-  const worksheet = XLSX.utils.aoa_to_sheet([["公司名", "国家", "联系人", "阶段", "预计金额", "健康度", "下一提醒"]]);
+  const worksheet = XLSX.utils.aoa_to_sheet([["公司名", "国家", "联系人", "电话", "邮箱", "官网", "阶段", "预计金额", "健康度", "下一提醒"]]);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "客户导入模板");
   XLSX.writeFile(workbook, "GoodJob客户导入模板.xlsx");
@@ -14383,6 +15365,7 @@ function collectOcrFields() {
   return fields;
 }
 
+let aiTestingActive = false;
 function renderAiConfig(config: AiModelConfig | null) {
   const selected = state.aiDraftMode ? null : (state.aiConfigs.find((item) => item.id === state.selectedAiConfigId) || config || state.aiConfigs[0] || null);
   config = selected;
@@ -14519,12 +15502,12 @@ function renderAiConfig(config: AiModelConfig | null) {
       badgeNodeInCard.textContent = active ? "当前" : (card.dataset.aiProvider === "anthropic" || card.dataset.aiProvider === "gemini" ? "原生" : "兼容");
     }
   });
-  if (gptConnectionBadge) {
+  if (gptConnectionBadge && !aiTestingActive) {
     gptConnectionBadge.className = `badge ${tested ? "green" : failed ? "red" : ready ? "amber" : ""}`;
     gptConnectionBadge.textContent = tested ? "连接通过" : failed ? "连接失败" : ready ? "待测试" : "未启用";
   }
-  if (gptConnectionTitle) gptConnectionTitle.textContent = tested ? "AI 连接测试通过" : failed ? "AI 连接测试失败" : ready ? "配置已保存" : config?.enabled ? "缺少 API Key" : "AI 未启用";
-  if (gptConnectionText) gptConnectionText.textContent = config?.lastTestMessage || (ready ? `当前模型：${config?.model} · ${useCount} 个业务模块` : "");
+  if (gptConnectionTitle && !aiTestingActive) gptConnectionTitle.textContent = tested ? "AI 连接测试通过" : failed ? "AI 连接测试失败" : ready ? "配置已保存" : config?.enabled ? "缺少 API Key" : "AI 未启用";
+  if (gptConnectionText && !aiTestingActive) gptConnectionText.textContent = config?.lastTestMessage || (ready ? `当前模型：${config?.model} · ${useCount} 个业务模块` : "");
   if (gptState) gptState.textContent = ready ? "已启用" : config?.enabled ? "待补Key" : "未启用";
   if (gptSub) gptSub.textContent = tested ? "最近测试通过" : ready ? "可测试连接和调用" : "等待 API Key";
   if (gptModelState) gptModelState.textContent = config?.model || defaultModel;
@@ -14668,6 +15651,9 @@ async function deleteAiConfig(button?: HTMLButtonElement) {
     await loadLeadProviders();
     renderLeadFinder(state.websiteOpportunities);
     toast(`已删除：${current.name}`);
+  } catch (err) {
+    state.pendingAiDeleteId = null;
+    toast(err instanceof Error ? err.message : "删除失败，请重试", "error");
   } finally {
     if (button) {
       const selected = state.aiConfigs.find((item) => item.id === state.selectedAiConfigId);
@@ -14734,13 +15720,25 @@ async function saveAiConfig(button?: HTMLButtonElement, options: { silent?: bool
 }
 
 async function testAiConfig(button?: HTMLButtonElement) {
-  await saveAiConfig(undefined, { silent: true });
   const originalText = button?.textContent || "";
+  const testHero = qs<HTMLElement>("#aiTestResultHero");
+  const testBadge = qs<HTMLElement>("#gptConnectionBadge");
+  const testTitle = qs<HTMLElement>("#gptConnectionTitle");
+  const testText = qs<HTMLElement>("#gptConnectionText");
+  // 立即进入“测试中”呼吸态，确保点击即有反馈（不依赖保存是否成功）
+  aiTestingActive = true;
   if (button) {
     button.disabled = true;
     button.textContent = "测试中";
+    button.classList.add("is-testing");
   }
+  if (testHero) testHero.classList.add("is-testing");
+  if (testBadge) { testBadge.className = "badge"; testBadge.textContent = "测试中…"; }
+  if (testTitle) testTitle.textContent = "正在测试连接…";
+  if (testText) testText.textContent = "正在向模型接口发起请求，请稍候";
   try {
+    // 保存失败不阻断测试：测试接口会基于已保存配置或内存草稿校验
+    await saveAiConfig(undefined, { silent: true }).catch(() => {});
     const result = await api<{ ok: boolean; message: string; config?: AiModelConfig; configs?: AiModelConfig[] }>("/api/tools/ai-config/test", {
       method: "POST",
       body: JSON.stringify({ id: state.selectedAiConfigId || undefined })
@@ -14764,11 +15762,702 @@ async function testAiConfig(button?: HTMLButtonElement) {
     if (gptConnectionTitle) gptConnectionTitle.textContent = result.ok ? "AI 连接测试通过" : "AI 连接测试失败";
     if (gptConnectionText) gptConnectionText.textContent = result.message;
     toast(result.message, result.ok ? "ok" : "error");
+  } catch (err) {
+    const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
+    const gptConnectionTitle = qs<HTMLElement>("#gptConnectionTitle");
+    const gptConnectionText = qs<HTMLElement>("#gptConnectionText");
+    const msg = err instanceof Error ? err.message : "测试失败";
+    if (gptConnectionBadge) { gptConnectionBadge.className = "badge red"; gptConnectionBadge.textContent = "连接失败"; }
+    if (gptConnectionTitle) gptConnectionTitle.textContent = "AI 连接测试失败";
+    if (gptConnectionText) gptConnectionText.textContent = msg;
+    toast(msg, "error");
   } finally {
+    aiTestingActive = false;
     if (button) {
       button.disabled = false;
+      button.classList.remove("is-testing");
       button.textContent = originalText || "测试连接";
     }
+    if (testHero) testHero.classList.remove("is-testing");
+  }
+}
+
+// ===== 产品维护 =====
+let editingProductId: string | null = null;
+
+function formatNumber(value: number): string {
+  return Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+function formatProductDate(value?: string): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return "—";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function productThumbHtml(imageUrl: string): string {
+  if (imageUrl && /^https?:\/\//i.test(imageUrl)) {
+    return `<img class="product-thumb" src="${escapeHtml(imageUrl)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><div class="product-thumb-placeholder" style="display:none">图</div>`;
+  }
+  return `<div class="product-thumb-placeholder">图</div>`;
+}
+
+let currentProductVisibleIds: string[] = [];
+let currentShipmentVisibleIds: string[] = [];
+
+function renderProducts() {
+  const all = state.products.slice();
+  state.selectedProductIds = state.selectedProductIds.filter((id) => all.some((p) => p.id === id));
+  const search = (qs<HTMLInputElement>("#productSearch")?.value || "").trim().toLowerCase();
+  const catFilter = qs<HTMLSelectElement>("#productCategoryFilter")?.value || "";
+  const curFilter = qs<HTMLSelectElement>("#productCurrencyFilter")?.value || "";
+
+  const filtered = all.filter((p) => {
+    if (catFilter && p.category !== catFilter) return false;
+    if (curFilter && p.currency !== curFilter) return false;
+    if (search) {
+      const hay = `${p.nameZh} ${p.nameEn} ${p.model} ${p.hsCode} ${p.category} ${(p.tags || []).join(" ")}`.toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
+
+  const categories = Array.from(new Set(all.map((p) => p.category).filter(Boolean))).sort();
+  const catSelect = qs<HTMLSelectElement>("#productCategoryFilter");
+  if (catSelect) {
+    const cur = catSelect.value;
+    catSelect.innerHTML = `<option value="">全部分类</option>` + categories.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+    if (categories.includes(cur)) catSelect.value = cur;
+  }
+  const catList = qs<HTMLElement>("#productCategoryList");
+  if (catList) catList.innerHTML = categories.map((c) => `<option value="${escapeHtml(c)}"></option>`).join("");
+
+  const currencies = Array.from(new Set(all.map((p) => p.currency).filter(Boolean))).sort();
+  const curSelect = qs<HTMLSelectElement>("#productCurrencyFilter");
+  if (curSelect) {
+    const cur = curSelect.value;
+    curSelect.innerHTML = `<option value="">全部币种</option>` + currencies.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+    if (currencies.includes(cur)) curSelect.value = cur;
+  }
+
+  const countEl = qs<HTMLElement>("#productCount");
+  if (countEl) countEl.textContent = String(all.length);
+  const catCountEl = qs<HTMLElement>("#productCategoryCount");
+  if (catCountEl) catCountEl.textContent = String(categories.length);
+  const spreadEl = qs<HTMLElement>("#productCurrencySpread");
+  if (spreadEl) spreadEl.textContent = currencies.length ? currencies.slice(0, 3).join(" / ") + (currencies.length > 3 ? " …" : "") : "—";
+
+  const tbody = qs<HTMLElement>("#productTableBody");
+  if (tbody) {
+    if (filtered.length) {
+      tbody.innerHTML = filtered.map((p) => `
+        <tr data-product-id="${escapeHtml(p.id)}">
+          <td class="col-check"><input type="checkbox" data-select-product ${state.selectedProductIds.includes(p.id) ? "checked" : ""} aria-label="选择 ${escapeHtml(p.nameZh)}"></td>
+          <td>${productThumbHtml(p.imageUrl)}</td>
+          <td><div class="product-name-zh">${escapeHtml(p.nameZh)}</div>${p.nameEn ? `<div class="product-name-en">${escapeHtml(p.nameEn)}</div>` : ""}</td>
+          <td>${escapeHtml(p.model) || "—"}</td>
+          <td>${p.category ? `<span class="badge cat">${escapeHtml(p.category)}</span>` : "—"}</td>
+          <td class="col-price"><span class="product-price">${formatNumber(p.price)}<small>${escapeHtml(p.currency)}</small></span></td>
+          <td class="product-time">${formatProductDate(p.updatedAt)}</td>
+          <td class="col-actions"><span class="row-actions">
+            <button class="btn btn-sm" data-product-edit="${escapeHtml(p.id)}">编辑</button>
+            <button class="btn btn-sm btn-ghost" data-product-duplicate="${escapeHtml(p.id)}">复制</button>
+          </span></td>
+        </tr>`).join("");
+    } else if (all.length) {
+      tbody.innerHTML = `<tr><td colspan="9" class="empty-cell" style="text-align:center;color:var(--muted);padding:28px">未找到匹配的产品</td></tr>`;
+    } else {
+      tbody.innerHTML = "";
+    }
+  }
+
+  const visibleIds = filtered.map((p) => p.id);
+  currentProductVisibleIds = visibleIds;
+  const selVisible = visibleIds.filter((id) => state.selectedProductIds.includes(id)).length;
+  const selectAll = qs<HTMLInputElement>("#productSelectAll");
+  if (selectAll) {
+    selectAll.checked = visibleIds.length > 0 && selVisible === visibleIds.length;
+    selectAll.indeterminate = selVisible > 0 && selVisible < visibleIds.length;
+  }
+  updateProductSelectionUI();
+
+  if (tbody) {
+    qsa<HTMLInputElement>("[data-select-product]", tbody).forEach((checkbox) => {
+      checkbox.addEventListener("change", () => {
+        const id = checkbox.closest<HTMLElement>("tr")?.dataset.productId || "";
+        if (!id) return;
+        state.selectedProductIds = checkbox.checked
+          ? Array.from(new Set([...state.selectedProductIds, id]))
+          : state.selectedProductIds.filter((selectedId) => selectedId !== id);
+        updateProductSelectionUI();
+        const vis = visibleIds.filter((vid) => state.selectedProductIds.includes(vid)).length;
+        if (selectAll) {
+          selectAll.checked = visibleIds.length > 0 && vis === visibleIds.length;
+          selectAll.indeterminate = vis > 0 && vis < visibleIds.length;
+        }
+      });
+    });
+  }
+
+  const empty = qs<HTMLElement>("#productEmpty");
+  if (empty) empty.hidden = all.length > 0;
+}
+
+function updateProductSelectionUI() {
+  const count = state.selectedProductIds.length;
+  const countEl = qs<HTMLElement>("#productSelCount");
+  if (countEl) {
+    countEl.textContent = `已选 ${count} 项`;
+    countEl.hidden = count === 0;
+  }
+  const del = qs<HTMLButtonElement>("#productBulkDelete");
+  if (del) del.disabled = count === 0;
+}
+
+function openProductModal(product?: Product) {
+  editingProductId = product?.id || null;
+  const modal = qs<HTMLElement>("#productModal");
+  const title = qs<HTMLElement>("#productModalTitle");
+  if (title) title.textContent = product ? "编辑产品" : "新增产品";
+  const set = (sel: string, val: string) => { const el = qs<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(sel); if (el) el.value = val || ""; };
+  set("#productNameZh", product?.nameZh || "");
+  set("#productNameEn", product?.nameEn || "");
+  set("#productModel", product?.model || "");
+  set("#productCategory", product?.category || "");
+  set("#productUnit", product?.unit || "pcs");
+  set("#productPrice", product ? String(product.price) : "");
+  set("#productCurrency", product?.currency || "USD");
+  set("#productHsCode", product?.hsCode || "");
+  set("#productTags", (product?.tags || []).join(", "));
+  set("#productImageUrl", product?.imageUrl || "");
+  set("#productDescriptionZh", product?.descriptionZh || "");
+  set("#productDescriptionEn", product?.descriptionEn || "");
+  const del = qs<HTMLButtonElement>("#productDeleteButton");
+  if (del) del.hidden = !product;
+  if (modal) modal.classList.add("active");
+  qs<HTMLInputElement>("#productNameZh")?.focus();
+}
+
+function closeProductModal() {
+  const modal = qs<HTMLElement>("#productModal");
+  if (modal) modal.classList.remove("active");
+  editingProductId = null;
+}
+
+async function saveProduct() {
+  const nameZh = (qs<HTMLInputElement>("#productNameZh")?.value || "").trim();
+  if (!nameZh) { toast("请填写中文品名", "error"); return; }
+  const priceRaw = (qs<HTMLInputElement>("#productPrice")?.value || "").trim();
+  const price = priceRaw === "" ? 0 : Number(priceRaw);
+  if (isNaN(price) || price < 0) { toast("单价需为非负数字", "error"); return; }
+  const get = (sel: string) => (qs<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(sel)?.value || "").trim();
+  const tags = get("#productTags").split(",").map((t) => t.trim()).filter(Boolean);
+  const payload = {
+    id: editingProductId || undefined,
+    nameZh,
+    nameEn: get("#productNameEn"),
+    model: get("#productModel"),
+    category: get("#productCategory"),
+    unit: get("#productUnit") || "pcs",
+    price,
+    currency: get("#productCurrency") || "USD",
+    hsCode: get("#productHsCode"),
+    descriptionZh: get("#productDescriptionZh"),
+    descriptionEn: get("#productDescriptionEn"),
+    tags,
+    imageUrl: get("#productImageUrl")
+  };
+  const btn = qs<HTMLButtonElement>("#productSaveButton");
+  if (btn) { btn.disabled = true; btn.textContent = "保存中…"; }
+  try {
+    const result = await api<{ product: Product; products: Product[] }>("/api/tools/products", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.products = result.products || [];
+    closeProductModal();
+    renderProducts();
+    toast(editingProductId ? "已更新产品" : "已新增产品", "ok");
+  } catch (err) {
+    toast(err instanceof Error ? err.message : "保存失败", "error");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "保存"; }
+  }
+}
+
+async function deleteProduct(id: string) {
+  const product = state.products.find((p) => p.id === id);
+  if (!confirm(`确认删除产品「${product?.nameZh || "未命名"}」？此操作不可撤销。`)) return;
+  try {
+    const result = await api<{ products: Product[] }>(`/api/tools/products/${encodeURIComponent(id)}`, { method: "DELETE" });
+    state.products = result.products || state.products.filter((p) => p.id !== id);
+    closeProductModal();
+    renderProducts();
+    toast("已删除产品", "ok");
+  } catch (err) {
+    toast(err instanceof Error ? err.message : "删除失败", "error");
+  }
+}
+
+async function bulkDeleteProducts() {
+  const ids = state.selectedProductIds.filter((id) => state.products.some((p) => p.id === id));
+  if (!ids.length) {
+    toast("请先勾选要删除的产品", "error");
+    return;
+  }
+  const names = state.products.filter((p) => ids.includes(p.id)).map((p) => p.nameZh);
+  if (!window.confirm(`确认删除 ${ids.length} 个产品？\n${names.slice(0, 6).join("、")}${names.length > 6 ? "等" : ""}\n此操作不可撤销。`)) return;
+  const button = qs<HTMLButtonElement>("#productBulkDelete");
+  try {
+    if (button) { button.disabled = true; button.textContent = "删除中…"; }
+    let products = state.products;
+    for (const id of ids) {
+      const result = await api<{ products: Product[] }>(`/api/tools/products/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (result.products) products = result.products;
+    }
+    state.products = products;
+    state.selectedProductIds = [];
+    renderProducts();
+    toast(`已删除 ${ids.length} 个产品`, "ok");
+  } catch (err) {
+    toast(err instanceof Error ? err.message : "批量删除失败", "error");
+  } finally {
+    if (button) { button.disabled = state.selectedProductIds.length === 0; button.textContent = "删除"; }
+  }
+}
+
+const COURIER_MAP: Record<string, { label: string; url: string }> = {
+  sf: { label: "顺丰 SF", url: "https://www.sf-express.com/we/ow/waybill?waybillNo={code}" },
+  yto: { label: "圆通 YTO", url: "https://www.yto.net.cn/Query.aspx?WaybillNo={code}" },
+  zto: { label: "中通 ZTO", url: "https://www.zto.com/express/query?code={code}" },
+  sto: { label: "申通 STO", url: "https://www.sto.cn/query?num={code}" },
+  yunda: { label: "韵达 Yunda", url: "https://www.yundaex.com/query?code={code}" },
+  jd: { label: "京东物流 JD", url: "https://www.jd.com/order/track?waybillCode={code}" },
+  ems: { label: "EMS 邮政", url: "https://www.ems.com.cn/query?mailNum={code}" },
+  dhl: { label: "DHL", url: "https://www.dhl.com/cn-zh/home/tracking/tracking-parcel.html?tracking-id={code}" },
+  fedex: { label: "FedEx", url: "https://www.fedex.com/fedextrack/?trknbr={code}" },
+  ups: { label: "UPS", url: "https://www.ups.com/track?tracknum={code}" },
+  tt: { label: "17TRACK 通用", url: "https://www.17track.net/zh-cn/track?nums={code}" }
+};
+
+const SHIPMENT_STATUS_LABEL: Record<string, string> = {
+  draft: "草稿",
+  shipped: "已发货",
+  in_transit: "运输中",
+  delivered: "已签收",
+  exception: "异常"
+};
+
+let editingShipmentId: string | null = null;
+let pendingTrackingImage: string = "";
+let pendingTrackingImageUrl: string = "";
+
+function formatShipmentDate(value: string): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return value;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+async function copyToClipboard(text: string) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+  } catch {
+    /* 剪贴板不可用时静默失败，用户仍可手动复制 */
+  }
+}
+
+function renderShipments() {
+  const all = state.shipments.slice();
+  state.selectedShipmentIds = state.selectedShipmentIds.filter((id) => all.some((s) => s.id === id));
+  const search = (qs<HTMLInputElement>("#shipmentSearch")?.value || "").trim().toLowerCase();
+  const statusFilter = qs<HTMLSelectElement>("#shipmentStatusFilter")?.value || "";
+
+  const filtered = all.filter((s) => {
+    if (statusFilter && s.status !== statusFilter) return false;
+    if (search) {
+      const hay = `${s.shipmentNo} ${s.trackingCode} ${s.customerName} ${s.dealTitle} ${COURIER_MAP[s.courier]?.label || ""}`.toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
+
+  const countEl = qs<HTMLElement>("#shipmentCount");
+  if (countEl) countEl.textContent = String(all.length);
+  const transitEl = qs<HTMLElement>("#shipmentInTransit");
+  if (transitEl) transitEl.textContent = String(all.filter((s) => s.status === "shipped" || s.status === "in_transit").length);
+  const deliveredEl = qs<HTMLElement>("#shipmentDelivered");
+  if (deliveredEl) deliveredEl.textContent = String(all.filter((s) => s.status === "delivered").length);
+
+  const tbody = qs<HTMLElement>("#shipmentTableBody");
+  if (tbody) {
+    if (filtered.length) {
+      tbody.innerHTML = filtered.map((s) => {
+        const courier = COURIER_MAP[s.courier];
+        const dealText = [s.dealTitle, s.customerName].filter(Boolean).join(" · ") || "—";
+        const canTrack = !!s.trackingCode && !!courier;
+        return `
+        <tr data-shipment-id="${escapeHtml(s.id)}">
+          <td class="col-check"><input type="checkbox" data-select-shipment ${state.selectedShipmentIds.includes(s.id) ? "checked" : ""} aria-label="选择 ${escapeHtml(s.shipmentNo || "发货单")}"></td>
+          <td><b>${escapeHtml(s.shipmentNo || "—")}</b></td>
+          <td>${escapeHtml(dealText)}</td>
+          <td>${courier ? `<span class="badge cat">${escapeHtml(courier.label)}</span>` : "—"}</td>
+          <td>${s.trackingCode ? `<code>${escapeHtml(s.trackingCode)}</code>` : "<span style=\"color:var(--muted)\">未填</span>"}</td>
+          <td><span class="ship-status ${s.status}">${SHIPMENT_STATUS_LABEL[s.status] || s.status}</span></td>
+          <td class="col-actions"><span class="row-actions">
+            <button class="btn btn-sm" data-shipment-edit="${escapeHtml(s.id)}">编辑</button>
+            <button class="btn btn-sm btn-ghost${canTrack ? " ship-track-btn" : ""}" data-shipment-track="${escapeHtml(s.id)}" ${canTrack ? "" : "disabled title=\"需先填写运单号与快递公司\""}>查询</button>
+            <button class="btn btn-sm btn-ghost" data-shipment-delete="${escapeHtml(s.id)}">删除</button>
+          </span></td>
+        </tr>`;
+      }).join("");
+    } else if (all.length) {
+      tbody.innerHTML = `<tr><td colspan="7" class="empty-cell" style="text-align:center;color:var(--muted);padding:28px">未找到匹配的发货单</td></tr>`;
+    } else {
+      tbody.innerHTML = "";
+    }
+  }
+
+  const visibleIds = filtered.map((s) => s.id);
+  currentShipmentVisibleIds = visibleIds;
+  const selVisible = visibleIds.filter((id) => state.selectedShipmentIds.includes(id)).length;
+  const selectAll = qs<HTMLInputElement>("#shipmentSelectAll");
+  if (selectAll) {
+    selectAll.checked = visibleIds.length > 0 && selVisible === visibleIds.length;
+    selectAll.indeterminate = selVisible > 0 && selVisible < visibleIds.length;
+  }
+  updateShipmentSelectionUI();
+
+  if (tbody) {
+    qsa<HTMLInputElement>("[data-select-shipment]", tbody).forEach((checkbox) => {
+      checkbox.addEventListener("change", () => {
+        const id = checkbox.closest<HTMLElement>("tr")?.dataset.shipmentId || "";
+        if (!id) return;
+        state.selectedShipmentIds = checkbox.checked
+          ? Array.from(new Set([...state.selectedShipmentIds, id]))
+          : state.selectedShipmentIds.filter((selectedId) => selectedId !== id);
+        updateShipmentSelectionUI();
+        const vis = visibleIds.filter((vid) => state.selectedShipmentIds.includes(vid)).length;
+        if (selectAll) {
+          selectAll.checked = visibleIds.length > 0 && vis === visibleIds.length;
+          selectAll.indeterminate = vis > 0 && vis < visibleIds.length;
+        }
+      });
+    });
+  }
+
+  const empty = qs<HTMLElement>("#shipmentEmpty");
+  if (empty) empty.hidden = all.length > 0;
+}
+
+function updateShipmentSelectionUI() {
+  const count = state.selectedShipmentIds.length;
+  const countEl = qs<HTMLElement>("#shipmentSelCount");
+  if (countEl) {
+    countEl.textContent = `已选 ${count} 项`;
+    countEl.hidden = count === 0;
+  }
+  const del = qs<HTMLButtonElement>("#shipmentBulkDelete");
+  if (del) del.disabled = count === 0;
+}
+
+function addShipmentItemRow(item?: Partial<ShipmentItem>) {
+  const tbody = qs<HTMLElement>("#shipmentItemBody");
+  if (!tbody) return;
+  const id = item?.id || `si_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const val = (k: keyof ShipmentItem, fallback = "") => (item && item[k] != null ? String(item[k]) : fallback);
+  const tr = document.createElement("tr");
+  tr.dataset.itemId = id;
+  tr.innerHTML = `
+    <td><input type="text" data-field="productName" value="${escapeHtml(val("productName"))}" placeholder="品名" maxlength="200"></td>
+    <td><input type="text" data-field="model" value="${escapeHtml(val("model"))}" placeholder="型号" maxlength="200"></td>
+    <td><input type="text" data-field="hsCode" value="${escapeHtml(val("hsCode"))}" placeholder="HS" maxlength="40"></td>
+    <td><input type="number" data-field="quantity" value="${escapeHtml(val("quantity", "1"))}" min="0" step="1"></td>
+    <td><input type="text" data-field="unit" value="${escapeHtml(val("unit", "pcs"))}" maxlength="20"></td>
+    <td><input type="number" data-field="netWeight" value="${escapeHtml(val("netWeight"))}" min="0" step="0.001"></td>
+    <td><input type="number" data-field="grossWeight" value="${escapeHtml(val("grossWeight"))}" min="0" step="0.001"></td>
+    <td><input type="number" data-field="length" value="${escapeHtml(val("length"))}" min="0" step="0.1"></td>
+    <td><input type="number" data-field="width" value="${escapeHtml(val("width"))}" min="0" step="0.1"></td>
+    <td><input type="number" data-field="height" value="${escapeHtml(val("height"))}" min="0" step="0.1"></td>
+    <td><input type="number" data-field="volume" value="${escapeHtml(val("volume"))}" min="0" step="0.001"></td>
+    <td class="item-del"><button class="btn btn-ghost" data-item-remove type="button">×</button></td>`;
+  tbody.appendChild(tr);
+  tr.querySelector<HTMLButtonElement>("[data-item-remove]")?.addEventListener("click", () => tr.remove());
+}
+
+function collectShipmentItems(): ShipmentItem[] {
+  const tbody = qs<HTMLElement>("#shipmentItemBody");
+  if (!tbody) return [];
+  return Array.from(tbody.querySelectorAll("tr")).map((tr) => {
+    const get = (k: string) => (tr.querySelector<HTMLInputElement>(`[data-field="${k}"]`)?.value || "").trim();
+    const num = (k: string) => { const n = Number(get(k)); return Number.isFinite(n) ? n : 0; };
+    return {
+      id: tr.dataset.itemId || `si_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      productName: get("productName"),
+      model: get("model"),
+      hsCode: get("hsCode"),
+      quantity: num("quantity"),
+      unit: get("unit") || "pcs",
+      netWeight: num("netWeight"),
+      grossWeight: num("grossWeight"),
+      length: num("length"),
+      width: num("width"),
+      height: num("height"),
+      volume: num("volume"),
+      note: ""
+    };
+  });
+}
+
+let dealSearchTimer: number | undefined;
+async function searchDeals(keyword: string) {
+  const results = qs<HTMLElement>("#shipmentDealResults");
+  if (!results) return;
+  const kw = keyword.trim();
+  if (!kw) { results.hidden = true; results.innerHTML = ""; return; }
+  try {
+    const data = await api<{ deals: Array<{ id: string; title: string; product: string; customerId: string }> }>(
+      `/api/deals/closed?status=${encodeURIComponent("成交")}&keyword=${encodeURIComponent(kw)}&pageSize=8`
+    );
+    const deals = data.deals || [];
+    if (!deals.length) {
+      results.innerHTML = `<div class="deal-result"><small>未找到成交商机</small></div>`;
+      results.hidden = false;
+      return;
+    }
+    results.innerHTML = deals.map((d) => `
+      <div class="deal-result" data-deal-id="${escapeHtml(d.id)}" data-deal-title="${escapeHtml(d.title)}">
+        <b>${escapeHtml(d.title)}</b>
+        <small>${escapeHtml(d.product || "")}</small>
+      </div>`).join("");
+    results.hidden = false;
+    results.querySelectorAll<HTMLElement>(".deal-result[data-deal-id]").forEach((el) => {
+      el.addEventListener("click", () => {
+        const id = el.dataset.dealId || "";
+        const title = el.dataset.dealTitle || "";
+        selectDeal(id, title);
+      });
+    });
+  } catch {
+    results.hidden = true;
+  }
+}
+
+function selectDeal(id: string, title: string) {
+  const idEl = qs<HTMLInputElement>("#shipmentDealId");
+  const titleEl = qs<HTMLInputElement>("#shipmentDealSearch");
+  const hint = qs<HTMLElement>("#shipmentDealHint");
+  const customerEl = qs<HTMLInputElement>("#shipmentCustomerName");
+  if (idEl) idEl.value = id;
+  if (titleEl) titleEl.value = title;
+  if (hint) { hint.textContent = `已关联：${title}`; hint.style.color = "var(--ink)"; }
+  // 反查客户名（用于列表展示，若后端未回传）
+  const deal = state.deals?.find((d) => d.id === id);
+  if (customerEl && deal?.customerId) {
+    const customer = state.customers?.find((c) => c.id === deal.customerId);
+    if (customer) customerEl.value = customer.company || "";
+  }
+  const results = qs<HTMLElement>("#shipmentDealResults");
+  if (results) results.hidden = true;
+}
+
+function openShipmentModal(shipment?: Shipment) {
+  editingShipmentId = shipment?.id || null;
+  const modal = qs<HTMLElement>("#shipmentModal");
+  const title = qs<HTMLElement>("#shipmentModalTitle");
+  if (title) title.textContent = shipment ? "编辑发货单" : "新增发货单";
+  const set = (sel: string, val: string) => { const el = qs<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(sel); if (el) el.value = val || ""; };
+  set("#shipmentNo", shipment?.shipmentNo || "");
+  set("#shipmentStatus", shipment?.status || "draft");
+  set("#shipmentCourier", shipment?.courier || "");
+  set("#shipmentShippedAt", shipment?.shippedAt ? shipment.shippedAt.slice(0, 10) : "");
+  set("#shipmentEta", shipment?.estimatedArrival ? shipment.estimatedArrival.slice(0, 10) : "");
+  set("#shipmentTrackingCode", shipment?.trackingCode || "");
+  set("#shipmentNote", shipment?.note || "");
+  const dealIdEl = qs<HTMLInputElement>("#shipmentDealId");
+  const dealSearchEl = qs<HTMLInputElement>("#shipmentDealSearch");
+  const customerEl = qs<HTMLInputElement>("#shipmentCustomerName");
+  const hint = qs<HTMLElement>("#shipmentDealHint");
+  if (dealIdEl) dealIdEl.value = shipment?.dealId || "";
+  if (dealSearchEl) dealSearchEl.value = shipment?.dealTitle || "";
+  if (customerEl) customerEl.value = shipment?.customerName || "";
+  if (hint) { hint.textContent = shipment?.dealTitle ? `已关联：${shipment.dealTitle}` : "未选择"; hint.style.color = "var(--muted)"; }
+
+  pendingTrackingImage = "";
+  pendingTrackingImageUrl = shipment?.trackingImageUrl || "";
+  const preview = qs<HTMLElement>("#shipmentOcrPreview");
+  const img = qs<HTMLImageElement>("#shipmentOcrImg");
+  const ocrHint = qs<HTMLElement>("#shipmentOcrHint");
+  if (preview) preview.hidden = !pendingTrackingImageUrl;
+  if (img && pendingTrackingImageUrl) img.src = pendingTrackingImageUrl.startsWith("http") ? pendingTrackingImageUrl : `${location.origin}${pendingTrackingImageUrl}`;
+  if (ocrHint) ocrHint.textContent = "";
+
+  const tbody = qs<HTMLElement>("#shipmentItemBody");
+  if (tbody) tbody.innerHTML = "";
+  (shipment?.items && shipment.items.length ? shipment.items : []).forEach((it) => addShipmentItemRow(it));
+
+  const del = qs<HTMLButtonElement>("#shipmentDeleteButton");
+  if (del) del.hidden = !shipment;
+  if (modal) modal.classList.add("active");
+  qs<HTMLInputElement>("#shipmentNo")?.focus();
+}
+
+function closeShipmentModal() {
+  const modal = qs<HTMLElement>("#shipmentModal");
+  if (modal) modal.classList.remove("active");
+  editingShipmentId = null;
+  pendingTrackingImage = "";
+  pendingTrackingImageUrl = "";
+}
+
+async function runShipmentOcr() {
+  const fileInput = qs<HTMLInputElement>("#shipmentTrackingImage");
+  const file = fileInput?.files?.[0];
+  const hint = qs<HTMLElement>("#shipmentOcrHint");
+  const btn = qs<HTMLButtonElement>("#shipmentOcrButton");
+  if (!file) { if (hint) hint.textContent = "请先选择运单号图片"; return; }
+  const dataUrl = await new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => resolve("");
+    reader.readAsDataURL(file);
+  });
+  if (!dataUrl) { if (hint) hint.textContent = "图片读取失败"; return; }
+  pendingTrackingImage = dataUrl;
+  const preview = qs<HTMLElement>("#shipmentOcrPreview");
+  const img = qs<HTMLImageElement>("#shipmentOcrImg");
+  if (preview) preview.hidden = false;
+  if (img) img.src = dataUrl;
+  if (btn) { btn.disabled = true; btn.textContent = "识别中…"; }
+  if (hint) hint.textContent = "AI 正在识别运单号…";
+  try {
+    const result = await api<{ ok: boolean; trackingCode: string; imageUrl: string; message?: string }>("/api/tools/shipments/ocr", {
+      method: "POST",
+      body: JSON.stringify({ image: dataUrl, mime: file.type || "image/png" })
+    });
+    if (result.ok && result.trackingCode) {
+      const codeEl = qs<HTMLInputElement>("#shipmentTrackingCode");
+      if (codeEl) codeEl.value = result.trackingCode;
+      pendingTrackingImageUrl = result.imageUrl || pendingTrackingImageUrl;
+      if (hint) hint.textContent = "AI 识别成功，已填入运单号";
+    } else {
+      if (hint) hint.textContent = (result.message || "未能识别") + "，请手动填写运单号";
+    }
+  } catch (err) {
+    if (hint) hint.textContent = (err instanceof Error ? err.message : "识别失败") + "，请手动填写运单号";
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "AI 识别"; }
+  }
+}
+
+function trackShipment(shipment: Shipment) {
+  const courier = COURIER_MAP[shipment.courier];
+  if (!courier || !shipment.trackingCode) {
+    toast("请先填写快递公司与运单号", "error");
+    return;
+  }
+  void copyToClipboard(shipment.trackingCode);
+  const url = courier.url.replace("{code}", encodeURIComponent(shipment.trackingCode));
+  window.open(url, "_blank");
+  toast(`已复制运单号并打开${courier.label}查询页`, "ok");
+}
+
+async function saveShipment() {
+  const trackingCode = (qs<HTMLInputElement>("#shipmentTrackingCode")?.value || "").trim();
+  if (!trackingCode) { toast("请填写运单号（可上传图片 AI 识别）", "error"); return; }
+  const get = (sel: string) => (qs<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(sel)?.value || "").trim();
+  const dealId = qs<HTMLInputElement>("#shipmentDealId")?.value || "";
+  const dealSearchValue = qs<HTMLInputElement>("#shipmentDealSearch")?.value || "";
+  // 只有真正选中了成交商机，才将搜索框内容作为商机标题；否则清空，避免搜索过程中的临时文本被保存
+  const dealTitle = dealId ? dealSearchValue : "";
+  const customerName = qs<HTMLInputElement>("#shipmentCustomerName")?.value || "";
+  const payload = {
+    id: editingShipmentId || undefined,
+    shipmentNo: get("#shipmentNo"),
+    dealId,
+    dealTitle,
+    customerName,
+    courier: get("#shipmentCourier"),
+    trackingCode,
+    trackingImageUrl: pendingTrackingImageUrl,
+    status: get("#shipmentStatus") || "draft",
+    shippedAt: get("#shipmentShippedAt"),
+    estimatedArrival: get("#shipmentEta"),
+    note: get("#shipmentNote"),
+    items: collectShipmentItems()
+  };
+  const btn = qs<HTMLButtonElement>("#shipmentSaveButton");
+  if (btn) { btn.disabled = true; btn.textContent = "保存中…"; }
+  const wasEditing = !!editingShipmentId;
+  try {
+    const result = await api<{ shipment: Shipment; shipments: Shipment[] }>("/api/tools/shipments", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.shipments = result.shipments || [];
+    closeShipmentModal();
+    renderShipments();
+    toast(wasEditing ? "已更新发货单" : "已新增发货单", "ok");
+  } catch (err) {
+    toast(err instanceof Error ? err.message : "保存失败", "error");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "保存"; }
+  }
+}
+
+async function deleteShipment(id: string) {
+  const shipment = state.shipments.find((s) => s.id === id);
+  if (!confirm(`确认删除发货单「${shipment?.shipmentNo || shipment?.dealTitle || "未命名"}」？此操作不可撤销。`)) return;
+  try {
+    const result = await api<{ shipments: Shipment[] }>(`/api/tools/shipments/${encodeURIComponent(id)}`, { method: "DELETE" });
+    state.shipments = result.shipments || state.shipments.filter((s) => s.id !== id);
+    closeShipmentModal();
+    renderShipments();
+    toast("已删除发货单", "ok");
+  } catch (err) {
+    toast(err instanceof Error ? err.message : "删除失败", "error");
+  }
+}
+
+async function bulkDeleteShipments() {
+  const ids = state.selectedShipmentIds.filter((id) => state.shipments.some((s) => s.id === id));
+  if (!ids.length) {
+    toast("请先勾选要删除的发货单", "error");
+    return;
+  }
+  const names = state.shipments.filter((s) => ids.includes(s.id)).map((s) => s.shipmentNo || s.dealTitle);
+  if (!window.confirm(`确认删除 ${ids.length} 张发货单？\n${names.slice(0, 6).join("、")}${names.length > 6 ? "等" : ""}\n此操作不可撤销。`)) return;
+  const button = qs<HTMLButtonElement>("#shipmentBulkDelete");
+  try {
+    if (button) { button.disabled = true; button.textContent = "删除中…"; }
+    let shipments = state.shipments;
+    for (const id of ids) {
+      const result = await api<{ shipments: Shipment[] }>(`/api/tools/shipments/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (result.shipments) shipments = result.shipments;
+    }
+    state.shipments = shipments;
+    state.selectedShipmentIds = [];
+    renderShipments();
+    toast(`已删除 ${ids.length} 张发货单`, "ok");
+  } catch (err) {
+    toast(err instanceof Error ? err.message : "批量删除失败", "error");
+  } finally {
+    if (button) { button.disabled = state.selectedShipmentIds.length === 0; button.textContent = "删除"; }
   }
 }
 
@@ -16919,21 +18608,21 @@ function setLeadFinderMode(mode: "standard" | "super") {
   syncLeadFinderStartState();
 }
 
-// AI 模型为搜客必选项：未配置且未贴链接时，禁止启动搜客并给出提示
+// 搜客按钮始终可点击：未配置 AI 模型且未贴链接时，点击后由 runLeadFinder 提示先配置 AI 模型
 function syncLeadFinderStartState() {
   const aiReady = Boolean(state.aiConfig?.enabled && state.aiConfig?.hasApiKey && state.aiConfig?.useLeadFinder);
   const urlInput = qs<HTMLTextAreaElement>("#leadFinderUrlInput");
   const urlCount = (urlInput?.value || "").split(/\n|,|，/).map((item) => item.trim()).filter(Boolean).length;
-  const blocked = !aiReady && urlCount === 0;
+  const needsAi = !aiReady && urlCount === 0;
   ["#leadFinderStartButton", "#leadFinderStartButtonInline", "[data-lead-empty-start]"].forEach((sel) => {
     const button = qs<HTMLButtonElement>(sel);
     if (!button) return;
-    button.disabled = blocked;
-    button.title = blocked ? "请先在「AI 配置」中配置并启用 AI 模型（含 API Key 且勾选自动获客）后再启动搜客" : "";
-    button.classList.toggle("is-blocked", blocked);
+    button.disabled = false;
+    button.title = needsAi ? "未配置 AI 模型：点击后将提示先配置 AI 模型（含 API Key 且勾选自动获客）再启动搜客" : "";
+    button.classList.remove("is-blocked");
   });
   const hint = qs<HTMLElement>("#leadFinderAiRequiredHint");
-  if (hint) hint.hidden = !blocked;
+  if (hint) hint.hidden = !needsAi;
 }
 
 // 自然语言 / 结构化表单 互斥：仅生效的那一组参与搜索
@@ -16941,18 +18630,16 @@ function applyBriefMode() {
   const bp = qs<HTMLElement>(".lead-brief-prompt");
   const fg = qs<HTMLElement>(".lead-form-grid");
   const bm = qs<HTMLElement>(".lead-brief-mode");
-  if (leadFinderMode === "super") {
-    // 目标搜索（超级搜索）下不展示简报方式与表单搜索
-    if (bp) bp.hidden = true;
-    if (fg) fg.hidden = true;
-    if (bm) bm.hidden = true;
-    return;
-  }
+  // 超级搜索同样需要搜索条件（目标/产品/市场），因此保留简报与表单，
+  // 仅把超级搜索专有的运行配置（目标候选数、时长、深度、费用、来源）叠加在其下方展示
   if (bp) bp.hidden = false;
   if (fg) fg.hidden = false;
   if (bm) bm.hidden = false;
   const nl = leadBriefMode === "nl";
   document.querySelectorAll<HTMLElement>("[data-brief='nl']").forEach((el) => { el.hidden = !nl; });
+  // AI 解析预览面板仅在 NL 模式下、且已解析后由解析逻辑显示；切换模式时此处负责收起
+  const leadAiPreview = qs<HTMLElement>("#leadAiPreview");
+  if (leadAiPreview && !nl) leadAiPreview.hidden = true;
   document.querySelectorAll<HTMLElement>("[data-brief='form']").forEach((el) => { el.hidden = nl; });
   const links = qs<HTMLElement>("#leadFinderSearchLinks");
   if (links) links.hidden = nl; // 人工检索链接由表单派生，自然语言模式下无意义
@@ -16961,50 +18648,92 @@ function applyBriefMode() {
   });
 }
 
-// 轻量解析自然语言目标：识别国家/地区、客户类型、排除词（精准拆解需后端 AI 解析，见后续增强）
-const BRIEF_COUNTRIES: Record<string, string> = {
-  "美国": "United States", "usa": "United States", "u.s.": "United States", "united states": "United States",
-  "中国": "China", "china": "China",
-  "德国": "Germany", "germany": "Germany", "德": "Germany",
-  "英国": "United Kingdom", "uk": "United Kingdom", "united kingdom": "United Kingdom", "england": "United Kingdom",
-  "法国": "France", "france": "France",
-  "日本": "Japan", "japan": "Japan",
-  "韩国": "South Korea", "korea": "South Korea", "韩国": "South Korea",
-  "印度": "India", "india": "India",
-  "加拿大": "Canada", "canada": "Canada",
-  "墨西哥": "Mexico", "mexico": "Mexico",
-  "巴西": "Brazil", "brazil": "Brazil",
-  "土耳其": "Turkey", "turkey": "Turkey",
-  "意大利": "Italy", "italy": "Italy",
-  "西班牙": "Spain", "spain": "Spain",
-  "荷兰": "Netherlands", "netherlands": "Netherlands",
-  "波兰": "Poland", "poland": "Poland",
-  "澳大利亚": "Australia", "australia": "Australia",
-  "新加坡": "Singapore", "singapore": "Singapore",
-  "东南亚": "Southeast Asia", "southeast asia": "Southeast Asia",
-  "欧洲": "Europe", "europe": "Europe",
-  "中东": "Middle East", "middle east": "Middle East",
-  "南美": "South America", "south america": "South America",
-  "北美": "North America", "north america": "North America"
-};
-
-function parseGoalToBrief(goal: string) {
-  const text = goal.trim();
-  const lower = text.toLowerCase();
-  const markets: string[] = [];
-  for (const [alias, canonical] of Object.entries(BRIEF_COUNTRIES)) {
-    if (lower.includes(alias.toLowerCase()) && !markets.includes(canonical)) markets.push(canonical);
+// 把自然语言目标交给后端 AI 模型，解析为标准英文搜索结构并渲染到可编辑预览面板
+async function runLeadAiParse(): Promise<boolean> {
+  const goal = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim();
+  if (!goal) {
+    toast("请先输入自然语言目标", "error");
+    return false;
   }
-  let customerType = "*";
-  if (/分销|distributor|经销商/i.test(text)) customerType = "经销商 / Distributor";
-  else if (/集成|integrator|系统集成/i.test(text)) customerType = "系统集成商 / System Integrator";
-  else if (/\boem\b/i.test(text)) customerType = "OEM 设备厂";
-  else if (/epc|工程承包/i.test(text)) customerType = "EPC 工程承包商";
-  else if (/\bmro\b/i.test(text)) customerType = "MRO 服务商";
-  const exclusions: string[] = [];
-  const exMatch = text.match(/排除[：: ]*([^\n。]+)/i);
-  if (exMatch) exclusions.push(...exMatch[1].split(/[，,、]/).map((item) => item.trim()).filter(Boolean));
-  return { markets, customerType, exclusions };
+  // 去重：失焦自动解析与「开始搜客」自动解析可能同时触发，复用同一个进行中的请求
+  if (leadAiParseInFlight) return leadAiParseInFlight;
+  const btn = qs<HTMLButtonElement>("#leadAiParseButton");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "AI 解析中…";
+  }
+  leadAiParseInFlight = (async () => {
+    try {
+      const result = await api<LeadAiParsed>("/api/lead-finder/parse-goal", {
+        method: "POST",
+        body: JSON.stringify({ goal })
+      });
+      leadAiParsed = result;
+      fillLeadAiPreview(result);
+      toast("AI 已解析为标准搜索词", "success");
+      return true;
+    } catch (err) {
+      clearLeadAiPreview(true);
+      const detail = err instanceof Error ? err.message : "模型未返回可用结果";
+      toast(`${detail.startsWith("AI 解析失败") ? detail : `AI 解析失败：${detail}`}，未生成解析结果`, "error");
+      return false;
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "AI 解析为标准搜索词";
+      }
+    }
+  })();
+  try {
+    return await leadAiParseInFlight;
+  } finally {
+    leadAiParseInFlight = null;
+  }
+}
+
+function fillLeadAiPreview(data: LeadAiParsed) {
+  const preview = qs<HTMLElement>("#leadAiPreview");
+  if (preview) preview.hidden = false;
+  const set = (sel: string, value: string) => {
+    const el = qs<HTMLInputElement>(sel);
+    if (el) el.value = value;
+  };
+  set("#leadAiName", data.name || "");
+  set("#leadAiMarkets", data.markets.join(", "));
+  set("#leadAiProducts", data.products.join(", "));
+  set("#leadAiIndustries", data.industries.join(", "));
+  set("#leadAiExclusions", data.exclusions.join(", "));
+  const ct = qs<HTMLSelectElement>("#leadAiCustomerType");
+  if (ct) ct.value = data.customerType || "*";
+}
+
+function clearLeadAiPreview(silent = false) {
+  leadAiParsed = null;
+  const preview = qs<HTMLElement>("#leadAiPreview");
+  if (preview) {
+    preview.hidden = true;
+    preview.querySelectorAll<HTMLInputElement>("input").forEach((el) => { el.value = ""; });
+    const ct = qs<HTMLSelectElement>("#leadAiCustomerType");
+    if (ct) ct.value = "*";
+  }
+  if (!silent) toast("已清除 AI 解析结果", "info");
+}
+
+const LEAD_COUNTRY_OPTIONS = [
+  "Global", "United States", "China", "Germany", "United Kingdom", "France", "Japan", "South Korea",
+  "India", "Canada", "Mexico", "Brazil", "Turkey", "Italy", "Spain", "Netherlands", "Poland", "Australia",
+  "Singapore", "Thailand", "Vietnam", "Malaysia", "Indonesia", "Philippines", "Russia", "UAE", "Saudi Arabia",
+  "South Africa", "Chile", "Argentina", "Colombia", "Egypt", "Nigeria", "Sweden", "Switzerland", "Belgium",
+  "Austria", "Denmark", "Norway", "Finland", "Portugal", "Ireland", "New Zealand", "Israel", "Qatar",
+  "Bangladesh", "Pakistan", "Kazakhstan", "Ukraine", "Southeast Asia", "Europe", "Middle East", "South America",
+  "North America"
+];
+
+// 给 AI 解析结果提供可编辑的标准英文市场候选。
+function populateLeadCountryDatalist() {
+  const list = qs<HTMLDataListElement>("#leadCountryList");
+  if (!list) return;
+  list.innerHTML = LEAD_COUNTRY_OPTIONS.map((country) => `<option value="${escapeHtml(country)}"></option>`).join("");
 }
 
 function buildLeadFinderJobDetails(resultIds: string[] = []) {
@@ -17080,10 +18809,432 @@ function leadFinderLiveTransportLabel(job: LeadFinderJob) {
   if (live) return { text: "事实事件实时连接", tone: "is-live" };
   if (["done", "partial", "failed", "cancelled"].includes(job.status)) return { text: "任务记录已归档", tone: "" };
   if (!job.backendRunId) return { text: "本地解析自动更新", tone: "is-live" };
-    return { text: "实时连接中断，5 秒自动刷新", tone: "is-fallback" };
+  return { text: "实时连接中断，5 秒自动刷新", tone: "is-fallback" };
+}
+
+function prospectRadarTone(value: string): ProspectRadarFrameTone {
+  if (value.includes("failed")) return "failed";
+  if (value.includes("gain")) return "gain";
+  if (value.includes("review")) return "review";
+  return "live";
+}
+
+function prospectRadarFrameKind(log: LeadTaskStreamLog): ProspectRadarFrame["kind"] {
+  const text = `${log.source} ${log.title} ${log.detail}`;
+  if (/关系/u.test(text)) return "relation";
+  if (/证据|深挖/u.test(text)) return "evidence";
+  if (/验证|官网/u.test(text)) return "verification";
+  if (/候选|入池/u.test(text)) return "candidate";
+  return "source";
+}
+
+function buildProspectRadarModel(job: LeadFinderJob): ProspectRadarModel {
+  const opportunities = (job.resultIds || [])
+    .map((id) => state.websiteOpportunities.find((item) => item.id === id))
+    .filter((item): item is WebsiteOpportunity => Boolean(item));
+  const opportunityById = new Map(opportunities.map((item) => [item.id, item]));
+  const candidates: ProspectRadarCandidate[] = [];
+  const candidateRadarIdByCandidateId = new Map<string, string>();
+
+  (job.deepMining?.nodes || []).forEach((node) => {
+    const opportunity = opportunityById.get(node.candidateId);
+    const score = node.enterpriseVerificationScore || opportunity?.scorecard?.enterpriseConfidence.score || 0;
+    candidates.push({
+      id: node.id,
+      candidateId: node.candidateId,
+      company: node.company || opportunity?.company || "企业名称待确认",
+      country: node.country || opportunity?.country || "",
+      website: node.website || opportunity?.website || "",
+      createdAt: node.createdAt || opportunity?.createdAt || job.createdAt,
+      kind: node.depth > 0 ? "related" : "candidate",
+      verificationScore: Math.max(0, Math.min(100, Math.round(score)))
+    });
+    candidateRadarIdByCandidateId.set(node.candidateId, node.id);
+  });
+
+  opportunities.forEach((item) => {
+    if (candidateRadarIdByCandidateId.has(item.id)) return;
+    const radarId = `candidate:${item.id}`;
+    candidates.push({
+      id: radarId,
+      candidateId: item.id,
+      company: item.company || websiteDomain(item.website || "") || "企业名称待确认",
+      country: item.country || "",
+      website: item.website || "",
+      createdAt: item.createdAt || job.createdAt,
+      kind: "candidate",
+      verificationScore: Math.max(0, Math.min(100, Math.round(item.scorecard?.enterpriseConfidence.score || item.confidence || 0)))
+    });
+    candidateRadarIdByCandidateId.set(item.id, radarId);
+  });
+
+  const relations: ProspectRadarRelation[] = (job.deepMining?.edges || []).map((edge) => ({
+    id: edge.id,
+    fromId: edge.fromNodeId,
+    toId: edge.toNodeId,
+    relationType: edge.relationType || "企业关系",
+    confidence: Math.max(0, Math.min(100, edge.confidence <= 1 ? Math.round(edge.confidence * 100) : Math.round(edge.confidence))),
+    verified: edge.verified,
+    createdAt: edge.createdAt || job.createdAt
+  }));
+  const candidateById = new Map(candidates.map((item) => [item.id, item]));
+  const frames: ProspectRadarFrame[] = leadTaskDetailLogs(job).map((log) => ({
+    id: `log:${log.key}`,
+    at: log.at || job.createdAt,
+    kind: prospectRadarFrameKind(log),
+    tone: prospectRadarTone(log.tone),
+    source: log.source,
+    title: log.title,
+    detail: log.detail,
+    result: log.result
+  }));
+
+  candidates.forEach((candidate) => {
+    frames.push({
+      id: `discovery:${candidate.id}`,
+      at: candidate.createdAt || job.createdAt,
+      kind: "candidate",
+      tone: "gain",
+      source: candidate.kind === "related" ? "深挖关系图" : "候选池",
+      title: candidate.kind === "related" ? "发现关联企业" : "新候选已进入搜索视野",
+      detail: [candidate.company, candidate.country, candidate.website].filter(Boolean).join(" / "),
+      result: candidate.verificationScore ? `企业验证 ${candidate.verificationScore} 分` : "等待验证",
+      country: candidate.country,
+      candidateId: candidate.id
+    });
+  });
+
+  (job.deepMining?.evidence || []).forEach((evidence) => {
+    const candidate = candidateById.get(evidence.nodeId);
+    frames.push({
+      id: `evidence:${evidence.id}`,
+      at: evidence.observedAt || job.createdAt,
+      kind: "evidence",
+      tone: evidence.authority === "official" || evidence.authority === "corroborated" ? "gain" : "review",
+      source: evidence.providerId || "证据搜索",
+      title: evidence.authority === "official" ? "发现官方来源证据" : "发现可核验来源",
+      detail: evidence.summary || evidence.sourceUrl || "来源已写入证据图谱",
+      result: evidence.authority === "official" ? "官方来源" : evidence.authority === "corroborated" ? "交叉印证" : "待验证",
+      country: candidate?.country,
+      candidateId: evidence.nodeId
+    });
+  });
+
+  relations.forEach((relation) => {
+    const target = candidateById.get(relation.toId);
+    frames.push({
+      id: `relation:${relation.id}`,
+      at: relation.createdAt || job.createdAt,
+      kind: "relation",
+      tone: relation.verified ? "gain" : "review",
+      source: "关系验证",
+      title: relation.relationType || "发现企业关系",
+      detail: relation.verified ? "关系已有来源证据支持" : "关系已记录，等待更多来源交叉验证",
+      result: `${relation.confidence} 分置信度`,
+      country: target?.country,
+      relationId: relation.id
+    });
+  });
+
+  opportunities.forEach((item) => {
+    if (!item.verificationReport && !item.verifiedAt) return;
+    const radarId = candidateRadarIdByCandidateId.get(item.id);
+    frames.push({
+      id: `verification:${item.id}:${item.verifiedAt || item.verificationReport?.generatedAt || item.createdAt}`,
+      at: item.verifiedAt || item.verificationReport?.generatedAt || item.createdAt || job.createdAt,
+      kind: "verification",
+      tone: item.verificationReport?.level === "L0" ? "review" : "gain",
+      source: "官网验证",
+      title: `${item.company || "候选企业"}：验证已更新`,
+      detail: item.verificationReport?.conclusion || "验证结果已写入候选档案",
+      result: item.verificationReport?.levelLabel || item.verificationReport?.level || "已验证",
+      country: item.country,
+      candidateId: radarId
+    });
+  });
+
+  if (isLeadFinderJobTerminal(job)) {
+    const lastAt = [
+      job.deepMining?.endedAt,
+      ...frames.map((item) => item.at)
+    ].filter(Boolean).sort().at(-1) || job.createdAt;
+    frames.push({
+      id: `complete:${job.id}:${job.status}`,
+      at: lastAt,
+      kind: "complete",
+      tone: job.status === "failed" ? "failed" : "complete",
+      source: "任务报告",
+      title: "任务已结束",
+      detail: `候选 ${opportunities.length || job.resultCount || 0} 家，证据 ${job.deepMining?.summary.evidenceCount || 0} 条，关系 ${job.deepMining?.summary.relationCount || 0} 条`,
+      result: job.status === "failed" ? "查看详细失败项" : "结果已归档"
+    });
   }
 
-  function renderLeadFinderLiveOverview() {
+  const frameOrder: Record<ProspectRadarFrame["kind"], number> = {
+    source: 0,
+    candidate: 1,
+    evidence: 2,
+    relation: 3,
+    verification: 4,
+    complete: 5
+  };
+  frames.sort((left, right) => {
+    const byTime = new Date(left.at).getTime() - new Date(right.at).getTime();
+    return (Number.isFinite(byTime) && byTime !== 0 ? byTime : 0)
+      || frameOrder[left.kind] - frameOrder[right.kind]
+      || left.id.localeCompare(right.id);
+  });
+  if (!frames.length) {
+    frames.push({
+      id: `ready:${job.id}`,
+      at: job.createdAt,
+      kind: "source",
+      tone: "live",
+      source: "任务调度",
+      title: "搜索任务已建立",
+      detail: "等待真实来源事件回传",
+      result: "等待中"
+    });
+  }
+
+  const focusCountries = new Set(candidates.map((item) => item.country).filter(Boolean));
+  (job.detailLines || []).forEach((line) => {
+    const match = line.match(/^(?:市场|本轮市场)：(.+)$/u);
+    if (!match) return;
+    match[1].split(/[、,，/]/u).map((item) => item.trim()).filter((item) => item && item !== "全球").forEach((item) => focusCountries.add(item));
+  });
+  return {
+    title: job.title,
+    live: !isLeadFinderJobTerminal(job),
+    frames,
+    candidates,
+    relations,
+    focusCountries: [...focusCountries]
+  };
+}
+
+function renderProspectRadarMetrics(job: LeadFinderJob, model: ProspectRadarModel) {
+  const pipeline = job.cleaningReport?.summary;
+  const values: Record<string, string> = {
+    prospectRadarSourceCount: String(job.sourceStats?.length || job.channelCount || 0),
+    prospectRadarCandidateCount: String(model.candidates.filter((item) => item.kind === "candidate").length || job.resultCount || 0),
+    prospectRadarEvidenceCount: String(job.deepMining?.summary.evidenceCount || 0),
+    prospectRadarReadyCount: String(job.deepMining?.summary.researchReadyCount || 0),
+    prospectRadarRemovedCount: String(pipeline
+      ? pipeline.providerInvalidCount + pipeline.providerDuplicateCount + pipeline.rejectedCount + pipeline.suppressedCount + pipeline.mergedCount
+      : job.incrementalStats?.deduplicatedCount || 0)
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const element = qs<HTMLElement>(`#${id}`);
+    if (element) element.textContent = value;
+  });
+}
+
+function buildProspectPoolRadarModel(): ProspectRadarModel {
+  const opportunities = [...state.websiteOpportunities]
+    .filter((item) => item.createdAt)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  const candidates: ProspectRadarCandidate[] = opportunities.map((item) => ({
+    id: `candidate:${item.id}`,
+    candidateId: item.id,
+    company: item.company || websiteDomain(item.website || "") || "企业名称待确认",
+    country: item.country || "",
+    website: item.website || "",
+    createdAt: item.createdAt,
+    kind: "candidate",
+    verificationScore: leadFinderScore(item)
+  }));
+  const frames: ProspectRadarFrame[] = [];
+  opportunities.forEach((item) => {
+    const candidateId = `candidate:${item.id}`;
+    frames.push({
+      id: `pool:${item.id}`,
+      at: item.createdAt,
+      kind: "candidate",
+      tone: "gain",
+      source: item.sourceLabel || item.source || "候选池",
+      title: "候选企业加入记录",
+      detail: [item.company, item.country, item.business, item.website].filter(Boolean).join(" / "),
+      result: `搜索验证 ${leadFinderScore(item)} 分`,
+      country: item.country,
+      candidateId
+    });
+    (item.sourceEvidence || []).forEach((evidence, index) => {
+      frames.push({
+        id: `pool-evidence:${item.id}:${evidence.payloadHash || index}`,
+        at: evidence.fetchedAt || item.createdAt,
+        kind: "evidence",
+        tone: evidence.sourceLevel === "official" ? "gain" : "review",
+        source: evidence.providerId || item.sourceLabel || "来源证据",
+        title: evidence.sourceLevel === "official" ? "官方来源已归档" : "来源记录已归档",
+        detail: evidence.evidenceSummary || evidence.sourceUrl || "来源记录已写入候选档案",
+        result: evidence.sourceLevel || "可核验来源",
+        country: item.country,
+        candidateId
+      });
+    });
+    if (item.verificationReport || item.verifiedAt) {
+      frames.push({
+        id: `pool-verification:${item.id}:${item.verifiedAt || item.verificationReport?.generatedAt || item.createdAt}`,
+        at: item.verifiedAt || item.verificationReport?.generatedAt || item.createdAt,
+        kind: "verification",
+        tone: item.verificationReport?.level === "L0" ? "review" : "gain",
+        source: "搜索验证",
+        title: `${item.company || "候选企业"}：验证已更新`,
+        detail: item.verificationReport?.conclusion || "验证结果已写入候选档案",
+        result: item.verificationReport?.levelLabel || item.verificationReport?.level || "已验证",
+        country: item.country,
+        candidateId
+      });
+    }
+  });
+  frames.sort((left, right) => left.at.localeCompare(right.at) || left.id.localeCompare(right.id));
+  // 空候选池也保留一个真实的“待命”帧，让雷达入口始终可用；不生成虚假的企业点位。
+  if (!frames.length) {
+    frames.push({
+      id: "pool:ready",
+      at: new Date().toISOString(),
+      kind: "source",
+      tone: "live",
+      source: "全球雷达",
+      title: "全球雷达已就绪",
+      detail: "候选池暂时为空，新的搜索结果会在任务完成后按真实事件显示",
+      result: "等待首个候选"
+    });
+  }
+  return {
+    title: "当前候选池探索图",
+    live: false,
+    frames,
+    candidates,
+    relations: [],
+    focusCountries: [...new Set(candidates.map((item) => item.country).filter(Boolean))]
+  };
+}
+
+function renderProspectPoolRadarMetrics(model: ProspectRadarModel) {
+  const opportunities = state.websiteOpportunities;
+  const values: Record<string, string> = {
+    prospectRadarSourceCount: String(new Set(opportunities.map((item) => item.sourceLabel || item.source).filter(Boolean)).size),
+    prospectRadarCandidateCount: String(model.candidates.length),
+    prospectRadarEvidenceCount: String(opportunities.reduce((sum, item) => sum + (item.sourceEvidence?.length || 0), 0)),
+    prospectRadarReadyCount: String(opportunities.filter((item) => item.scorecard?.vqa.qualified).length),
+    prospectRadarRemovedCount: "--"
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const element = qs<HTMLElement>(`#${id}`);
+    if (element) element.textContent = value;
+  });
+}
+
+function renderProspectRadarFrame(frame: ProspectRadarFrame, index: number, total: number) {
+  const dialog = qs<HTMLDialogElement>("#prospectRadarDialog");
+  if (!dialog) return;
+  dialog.dataset.tone = frame.tone;
+  const values: Record<string, string> = {
+    prospectRadarFrameSource: frame.source,
+    prospectRadarFrameTitle: frame.title,
+    prospectRadarFrameDetail: frame.detail,
+    prospectRadarFrameResult: frame.result,
+    prospectRadarFrameTime: leadTaskDetailTime(frame.at),
+    prospectRadarFrameCount: `${index + 1} / ${total}`
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const element = qs<HTMLElement>(`#${id}`);
+    if (element) element.textContent = value;
+  });
+  const progress = qs<HTMLElement>("#prospectRadarTimelineProgress");
+  if (progress) progress.style.transform = `scaleX(${total > 1 ? index / (total - 1) : 1})`;
+}
+
+function setProspectRadarPlaybackUi(playing: boolean) {
+  const button = qs<HTMLButtonElement>("#prospectRadarPlayButton");
+  if (!button) return;
+  button.dataset.playing = String(playing);
+  button.textContent = playing ? "暂停" : "继续";
+  button.setAttribute("aria-label", playing ? "暂停动画" : "继续动画");
+}
+
+function destroyProspectRadar() {
+  prospectRadarController?.destroy();
+  prospectRadarController = null;
+  qs<HTMLElement>("#prospectRadarGlobe")?.replaceChildren();
+  prospectRadarActiveJobId = "";
+  prospectRadarLoading = false;
+  document.body.classList.remove("prospect-radar-open");
+}
+
+function closeProspectRadar() {
+  const dialog = qs<HTMLDialogElement>("#prospectRadarDialog");
+  if (dialog?.open) dialog.close();
+  else destroyProspectRadar();
+}
+
+async function openProspectRadarStage(
+  stageId: string,
+  model: ProspectRadarModel,
+  labels: { title: string; mode: string; state: string },
+  renderMetrics: () => void
+) {
+  const dialog = qs<HTMLDialogElement>("#prospectRadarDialog");
+  const host = qs<HTMLElement>("#prospectRadarGlobe");
+  if (!dialog || !host || prospectRadarLoading) return;
+  prospectRadarActiveJobId = stageId;
+  renderMetrics();
+  qs<HTMLElement>("#prospectRadarTaskTitle")!.textContent = labels.title;
+  qs<HTMLElement>("#prospectRadarTaskMode")!.textContent = labels.mode;
+  qs<HTMLElement>("#prospectRadarLiveState")!.textContent = labels.state;
+  host.innerHTML = `<div class="prospect-radar-loading"><i></i><b>正在建立全球搜索视图</b><span>只读取真实候选、来源证据和已记录关系</span></div>`;
+  if (!dialog.open) dialog.showModal();
+  document.body.classList.add("prospect-radar-open");
+  prospectRadarLoading = true;
+  try {
+    const { createProspectRadar } = await import("./prospect-radar");
+    if (!dialog.open || prospectRadarActiveJobId !== stageId) return;
+    prospectRadarController?.destroy();
+    host.innerHTML = "";
+    prospectRadarController = createProspectRadar({
+      host,
+      model,
+      onFrameChange: renderProspectRadarFrame,
+      onPlaybackChange: setProspectRadarPlaybackUi
+    });
+  } catch (error) {
+    host.innerHTML = `<div class="prospect-radar-error"><b>动画加载失败</b><span>${escapeHtml(error instanceof Error ? error.message : "当前浏览器不支持 WebGL")}</span><button type="button" data-prospect-radar-close>关闭</button></div>`;
+    qs<HTMLButtonElement>("[data-prospect-radar-close]", host)?.addEventListener("click", closeProspectRadar);
+  } finally {
+    prospectRadarLoading = false;
+  }
+}
+
+async function openProspectRadar(job: LeadFinderJob) {
+  const model = buildProspectRadarModel(job);
+  await openProspectRadarStage(job.id, model, {
+    title: job.title,
+    mode: job.superSearchMissionId ? "超级搜索实况" : "标准搜索实况",
+    state: isLeadFinderJobTerminal(job) ? "任务记录回放" : "正在跟随实时事件"
+  }, () => renderProspectRadarMetrics(job, model));
+}
+
+async function openProspectPoolRadar() {
+  const model = buildProspectPoolRadarModel();
+  await openProspectRadarStage("prospect-pool", model, {
+    title: model.title,
+    mode: model.candidates.length ? "候选池历史数据" : "全球雷达待命",
+    state: model.candidates.length ? "按真实加入时间回放" : "等待首个真实候选"
+  }, () => renderProspectPoolRadarMetrics(model));
+}
+
+function syncProspectRadar(job: LeadFinderJob) {
+  const dialog = qs<HTMLDialogElement>("#prospectRadarDialog");
+  if (!dialog?.open || prospectRadarActiveJobId !== job.id || !prospectRadarController) return;
+  const model = buildProspectRadarModel(job);
+  renderProspectRadarMetrics(job, model);
+  qs<HTMLElement>("#prospectRadarLiveState")!.textContent = isLeadFinderJobTerminal(job) ? "任务记录回放" : "正在跟随实时事件";
+  prospectRadarController.update(model);
+}
+
+function renderLeadFinderLiveOverview() {
   const box = qs<HTMLElement>("#leadFinderLiveOverview");
   if (!box) return;
   const job = primaryLeadFinderLiveJob();
@@ -17095,9 +19246,13 @@ function leadFinderLiveTransportLabel(job: LeadFinderJob) {
           <span>搜客助手</span>
           <h2>从一份客户简报开始</h2>
           <p>任务启动后，检索、验证、清洗和候选入池会在这里按事实持续打印。</p>
-          <button class="lead-live-empty-action" type="button" data-lead-empty-start>新建搜客任务</button>
+          <div class="lead-live-empty-actions">
+            <button class="lead-live-empty-action" type="button" data-lead-empty-start>新建搜客任务</button>
+            <button class="lead-radar-launch" type="button" data-lead-pool-radar><span aria-hidden="true">▶</span>${state.websiteOpportunities.length ? "回放候选池" : "打开全球雷达"}</button>
+          </div>
         </div>
       </div>`;
+    qs<HTMLButtonElement>("[data-lead-pool-radar]", box)?.addEventListener("click", () => void openProspectPoolRadar());
     return;
   }
   const pipeline = job.cleaningReport?.summary;
@@ -17132,6 +19287,13 @@ function leadFinderLiveTransportLabel(job: LeadFinderJob) {
     .map((id) => state.websiteOpportunities.find((item) => item.id === id))
     .filter(Boolean)
     .slice(-3) as WebsiteOpportunity[];
+  const deepMining = job.deepMining;
+  const activeDeepTask = deepMining?.tasks.find((item) => item.id === deepMining.activeTaskId)
+    || [...(deepMining?.tasks || [])].reverse().find((item) => ["searching", "verifying", "completed"].includes(item.status));
+  const activeDeepNode = activeDeepTask
+    ? deepMining?.nodes.find((item) => item.id === activeDeepTask.nodeId)
+    : undefined;
+  const latestDeepEvidence = deepMining?.evidence[deepMining.evidence.length - 1];
   const previousThread = qs<HTMLElement>(".lead-live-thread", box);
   const wasFollowing = !previousThread
     || previousThread.scrollHeight - previousThread.scrollTop - previousThread.clientHeight < 72;
@@ -17144,6 +19306,7 @@ function leadFinderLiveTransportLabel(job: LeadFinderJob) {
           <div class="lead-live-meta"><span>${job.superSearchMissionId ? "超级搜索" : "标准搜索"}</span><span>开始于 ${escapeHtml(leadTaskDetailDateTime(job.createdAt))}</span><span>已耗时 ${escapeHtml(leadFinderLiveElapsed(job))}</span><span>更新于 ${escapeHtml(leadTaskDetailTime(lastUpdatedAt))}</span></div>
         </div>
         <div class="lead-live-actions">
+          <button class="lead-radar-launch" type="button" data-lead-live-radar><span aria-hidden="true">▶</span>${terminal ? "重新演示" : "实时回放"}</button>
           <button class="btn" type="button" data-lead-live-open>查看详情</button>
           ${job.backendRunId && job.backendRunStatus === "queued" ? `<button class="btn" type="button" data-lead-live-action="pause">暂停</button>` : ""}
           ${job.backendRunId && job.backendRunStatus === "paused" ? `<button class="btn primary" type="button" data-lead-live-action="resume">恢复</button>` : ""}
@@ -17171,11 +19334,21 @@ function leadFinderLiveTransportLabel(job: LeadFinderJob) {
               <span><b>${rawCount}</b> 原始命中</span>
               <span><b>${cleaningCount}</b> 清洗去除</span>
               <span><b>${candidateCount}</b> 候选入池</span>
-              <span><b>${job.acceptance?.reviewReadyCount || 0}</b> RRQ</span>
-              <span><b>${job.acceptance?.vqaCount || 0}</b> VQA</span>
+              <span><b>${job.deepMining?.summary.researchReadyCount || 0}</b> 研究就绪</span>
+              <span><b>${job.deepMining?.summary.evidenceCount || 0}</b> 来源证据</span>
             </div>
           </div>
         </article>
+        ${deepMining && deepMining.summary.rootCandidateCount ? `
+          <article class="lead-live-message is-deep-mining ${deepMining.status === "completed" ? "is-complete" : "is-active"}">
+            <div class="lead-live-avatar" aria-hidden="true">研</div>
+            <div class="lead-live-bubble">
+              <div class="lead-live-message-meta"><b>候选关系深挖</b><span>${deepMining.status === "completed" ? "已归档" : activeDeepTask?.status === "verifying" ? "官网验证中" : "证据搜索中"}</span></div>
+              <p><strong>${escapeHtml(activeDeepNode?.company || "正在选择高优先级候选")}</strong><span>${activeDeepTask ? `第 ${activeDeepTask.depth + 1}/${deepMining.maxDepth} 层 · 查询 ${deepMining.queriesUsed}/${deepMining.maxQueries}` : `根候选 ${deepMining.summary.rootCandidateCount} 个`}</span></p>
+              <em>${escapeHtml(latestDeepEvidence?.summary || deepMining.stopReason || "仅归档带真实来源的企业、关系与公开联系证据")}</em>
+              <div class="lead-live-deep-line"><span>${deepMining.summary.researchedCandidateCount} 个研究节点</span><span>${deepMining.summary.relationCount} 条关系</span><span>${deepMining.summary.evidenceCount} 条证据</span><span>${deepMining.summary.researchReadyCount} 个研究就绪</span></div>
+            </div>
+          </article>` : ""}
         <div class="lead-live-event-stream" aria-label="搜索过程">
           ${hiddenLogCount ? `<p class="lead-live-history-note">较早的 ${hiddenLogCount} 条事实记录已收纳在执行详情</p>` : ""}
           ${logs.length ? logs.map((log, index) => `
@@ -17216,6 +19389,7 @@ function leadFinderLiveTransportLabel(job: LeadFinderJob) {
     </div>`;
   const thread = qs<HTMLElement>(".lead-live-thread", box);
   if (thread && wasFollowing) requestAnimationFrame(() => { thread.scrollTop = thread.scrollHeight; });
+  qs<HTMLButtonElement>("[data-lead-live-radar]", box)?.addEventListener("click", () => void openProspectRadar(job));
   qs<HTMLButtonElement>("[data-lead-live-open]", box)?.addEventListener("click", () => openLeadTaskDetail(job));
   qsa<HTMLButtonElement>("[data-lead-live-candidate]", box).forEach((button) => {
     button.addEventListener("click", () => {
@@ -17226,6 +19400,7 @@ function leadFinderLiveTransportLabel(job: LeadFinderJob) {
   qsa<HTMLButtonElement>("[data-lead-live-action]", box).forEach((button) => {
     button.addEventListener("click", () => void transitionLeadFinderRun(job, button.dataset.leadLiveAction as "pause" | "resume" | "cancel", button));
   });
+  syncProspectRadar(job);
 }
 
 function leadFinderCleaningOutcomeLabel(outcome: ProspectRunCleaningReport["records"][number]["outcome"]) {
@@ -18051,11 +20226,71 @@ function renderLeadTaskAcceptance(job: LeadFinderJob) {
       : "0";
   box.innerHTML = `
     <div class="task-acceptance-result is-${escapeHtml(acceptance.outcome)}"><span>验收结论</span><b>${escapeHtml(labels[acceptance.outcome])}</b></div>
-    <div><span>来源返回 / 候选池 / RRQ / VQA</span><b>${acceptance.sourceReturnedCount || 0} / ${acceptance.candidateCount} / ${acceptance.reviewReadyCount || 0} / ${acceptance.vqaCount}${acceptance.targetReviewReadyCount ? ` / RRQ 目标 ${acceptance.targetReviewReadyCount}` : acceptance.targetVqaCount ? ` / VQA 目标 ${acceptance.targetVqaCount}` : ""}</b></div>
+    <div><span>来源返回 / 候选池 / RRQ / VQA · 深挖研究就绪</span><b>${acceptance.sourceReturnedCount || 0} / ${acceptance.candidateCount} / ${acceptance.reviewReadyCount || 0} / ${acceptance.vqaCount} · ${acceptance.researchReadyCount || 0}${acceptance.targetCandidateCount ? ` / 候选目标 ${acceptance.targetCandidateCount}` : acceptance.targetVqaCount ? ` / VQA 目标 ${acceptance.targetVqaCount}` : ""}</b></div>
     <div><span>来源成功 / 失败 / 跳过</span><b>${acceptance.sourceSuccessCount} / ${acceptance.sourceFailureCount} / ${acceptance.sourceSkippedCount}</b></div>
     <div><span>实际费用</span><b>${escapeHtml(costs)}${acceptance.costUnknownCount ? ` · ${acceptance.costUnknownCount} 笔未知` : ""}</b></div>
     <div class="task-acceptance-wide"><span>结束原因</span><b>${escapeHtml(acceptance.stopReason || (acceptance.outcome === "running" ? "任务仍在执行" : "执行器已结束"))}</b></div>
     <div class="task-acceptance-wide"><span>建议下一步</span><b>${escapeHtml(acceptance.recommendedNextAction)}</b></div>
+  `;
+}
+
+function deepRelationLabel(type = "") {
+  const labels: Record<string, string> = {
+    parent_subsidiary: "母子公司",
+    brand_distributor: "品牌与经销",
+    buyer_supplier: "买卖方",
+    project_owner_contractor: "业主与承包商",
+    procurement_award: "采购中标",
+    certified_partner: "认证伙伴",
+    regional_representative: "区域代表",
+    contact_channel: "公开联系渠道",
+    related_company: "来源关联企业"
+  };
+  return labels[type] || "待核验关系";
+}
+
+function renderLeadTaskDeepMining(job: LeadFinderJob) {
+  const section = qs<HTMLElement>("#leadTaskDeepMiningSection");
+  const box = qs<HTMLElement>("#leadTaskDeepMining");
+  const summaryBox = qs<HTMLElement>("#leadTaskDeepMiningSummary");
+  if (!section || !box || !summaryBox) return;
+  const mining = job.deepMining;
+  section.hidden = !mining;
+  if (!mining) return;
+  summaryBox.textContent = mining.status === "completed"
+    ? "深挖已归档"
+    : mining.status === "verifying" ? "官网验证中" : "深挖执行中";
+  const nodes = [...mining.nodes].sort((left, right) =>
+    left.rootCandidateId.localeCompare(right.rootCandidateId)
+    || left.depth - right.depth
+    || left.createdAt.localeCompare(right.createdAt)
+  );
+  box.innerHTML = `
+    <div class="task-deep-summary-line">
+      <span>根候选<b>${mining.summary.rootCandidateCount}</b></span>
+      <span>研究节点<b>${mining.summary.researchedCandidateCount}</b></span>
+      <span>关系<b>${mining.summary.relationCount}</b></span>
+      <span>来源证据<b>${mining.summary.evidenceCount}</b></span>
+      <span>研究就绪<b>${mining.summary.researchReadyCount}</b></span>
+      <span>查询预算<b>${mining.queriesUsed}/${mining.maxQueries}</b></span>
+    </div>
+    ${nodes.length ? `<div class="task-deep-list">${nodes.map((node) => {
+      const parent = mining.nodes.find((item) => item.id === node.parentNodeId);
+      const edge = mining.edges.find((item) => item.toNodeId === node.id);
+      const evidence = node.evidenceIds
+        .map((id) => mining.evidence.find((item) => item.id === id))
+        .filter((item): item is ProspectDeepMiningApi["evidence"][number] => Boolean(item));
+      const latestEvidence = evidence[evidence.length - 1];
+      const task = mining.tasks.find((item) => item.nodeId === node.id);
+      const source = latestEvidence ? normalizeWebsiteLink(latestEvidence.sourceUrl) : "#";
+      return `<article class="task-deep-row">
+        <div><b>${escapeHtml(node.company || "企业名称待确认")}</b><span>${escapeHtml(node.country || "国家待确认")} · 第 ${node.depth} 层</span><small>加入研究 ${escapeHtml(leadTaskDetailDateTime(node.createdAt))}</small></div>
+        <div><span>${node.depth === 0 ? "根候选" : escapeHtml(deepRelationLabel(edge?.relationType))}</span><b>${escapeHtml(parent?.company || (node.depth === 0 ? "本次研究起点" : "父节点待恢复"))}</b><small>${edge ? `关系验证 ${edge.confidence} 分${edge.verified ? " · 已交叉佐证" : " · 待复核"}` : "等待关系证据"}</small></div>
+        <div class="task-deep-scores"><span>企业验证 ${node.enterpriseVerificationScore}</span><span>联系就绪 ${node.contactReadinessScore}</span><span>行动优先 ${node.actionPriorityScore}</span><small>${node.conflict ? "存在证据冲突" : escapeHtml(node.verificationStatus)}</small></div>
+        <div><span>${latestEvidence ? escapeHtml(latestEvidence.providerId) : "尚无来源证据"}</span><b>${escapeHtml(latestEvidence?.summary || task?.stopReason || "等待带来源的搜索结果")}</b>${source !== "#" ? `<a href="${escapeHtml(source)}" target="_blank" rel="noreferrer">打开原始来源</a>` : ""}<small>${escapeHtml(task?.stopReason || (task ? `状态：${task.status}` : "仅作为关系节点归档"))}</small></div>
+      </article>`;
+    }).join("")}</div>` : `<div class="task-run-insight-empty">候选入池后会自动选择高优先级根候选开始深挖。</div>`}
+    ${mining.stopReason ? `<div class="task-deep-summary-line"><span>深挖停止原因<b>${escapeHtml(mining.stopReason)}</b></span></div>` : ""}
   `;
 }
 
@@ -18101,11 +20336,12 @@ function renderLeadTaskDetail() {
   const metricRows: Array<[string, string, string, string]> = [
     ["来源返回", cleaningSummary ? String(cleaningSummary.providerRawCount) : stats ? String(stats.rawCount) : "--", "所有来源原始命中", ""],
     ["进入候选池", cleaningSummary ? String(cleaningSummary.candidateCount) : String(job.resultIds?.length || 0), "已通过清洗，可继续核验", "is-gain"],
-    ["RRQ 可审查", String(job.acceptance?.reviewReadyCount || 0), "资格事实齐全，最多只差最终批准", job.acceptance?.reviewReadyCount ? "is-gain" : ""],
-    ["VQA 已通过", String(job.acceptance?.vqaCount || 0), "企业、ICP、渠道和合规门禁", job.acceptance?.vqaCount ? "is-gain" : ""],
+    ["研究就绪", String(job.deepMining?.summary.researchReadyCount || 0), "企业验证和来源证据达到研究门槛", job.deepMining?.summary.researchReadyCount ? "is-gain" : ""],
+    ["关系 / 证据", job.deepMining ? `${job.deepMining.summary.relationCount} / ${job.deepMining.summary.evidenceCount}` : "0 / 0", "候选级证据图谱累计", job.deepMining?.summary.evidenceCount ? "is-gain" : ""],
   ];
   metrics.innerHTML = metricRows.map(([label, value, hint, tone]) => `<div class="task-run-metric ${tone}"><span>${label}</span><b>${escapeHtml(value)}</b><small>${hint}</small></div>`).join("");
   renderLeadTaskAcceptance(job);
+  renderLeadTaskDeepMining(job);
   renderLeadTaskStream(job);
   renderLeadTaskPhases(job);
   renderLeadTaskInsights(job);
@@ -18619,12 +20855,17 @@ function superSearchThemeLabel(theme = "") {
     regional_long_tail: "区域长尾渠道",
     application_specialist: "应用方案商",
     replacement_demand: "改造与替换需求",
-    coverage_recovery: "覆盖缺口恢复"
+    coverage_recovery: "覆盖缺口恢复",
+    deep_candidate: "候选关系深挖"
   };
   return labels[theme] || theme || "覆盖规划";
 }
 
 function applySuperSearchMission(job: LeadFinderJob, mission: ProspectSuperSearchMissionApi) {
+  // Older launch responses may omit the embedded round list; keep the first
+  // render usable while the normal polling request refreshes the full mission.
+  const rounds = Array.isArray(mission.rounds) ? mission.rounds : [];
+  const maxRounds = Math.max(1, Number(mission.maxRounds) || rounds.length || 1);
   const active = ["queued", "running"].includes(mission.status);
   const status: LeadFinderJob["status"] = active
     ? "running"
@@ -18634,22 +20875,23 @@ function applySuperSearchMission(job: LeadFinderJob, mission: ProspectSuperSearc
           : mission.status === "partial_success" ? "partial" : "done";
   job.id = mission.id;
   job.title = `超级搜索 · ${job.title}`;
-  job.subtitle = `第 ${mission.currentRound}/${mission.maxRounds} 轮 · ${superSearchStatusLabel(mission.status)}`;
+  job.subtitle = `第 ${mission.currentRound}/${maxRounds} 轮 · ${superSearchStatusLabel(mission.status)}`;
   job.status = status;
   job.resultCount = mission.candidateCount;
   job.progress = mission.status === "succeeded" || mission.status === "partial_success" || mission.status === "failed" || mission.status === "cancelled"
     ? 100
-    : Math.round((Math.max(0, mission.currentRound - 1) / mission.maxRounds) * 100 + 100 / mission.maxRounds * (job.progress / 100));
+    : Math.round((Math.max(0, mission.currentRound - 1) / maxRounds) * 100 + 100 / maxRounds * (job.progress / 100));
   job.progressLabel = "轮次进度";
   job.progressValue = `${mission.currentRound} / ${mission.maxRounds} 轮`;
-  job.metricLabel = "可审查候选";
-  job.metricValue = `${mission.reviewReadyCount || 0} / ${mission.targetCandidateCount}`;
+  job.metricLabel = "候选目标";
+  job.metricValue = `${mission.candidateCount || 0} / ${mission.targetCandidateCount}`;
   job.acceptance = mission.acceptance;
-  const currentRound = mission.rounds.find((item) => item.roundNo === mission.currentRound)
-    || mission.rounds[mission.rounds.length - 1];
+  const currentRound = rounds.find((item) => item.roundNo === mission.currentRound)
+    || rounds[rounds.length - 1];
   const query = currentRound?.queryPlanSnapshot;
   const theme = superSearchThemeLabel(currentRound?.queryTheme);
   const gaps = currentRound?.coverageGaps || [];
+  const deepSummary = mission.deepMining?.summary;
   const webProviderNames = (mission.webProviderIds || []).map((providerId) =>
     state.leadProviders.find((provider) => provider.id === providerId)?.name || providerId
   );
@@ -18659,22 +20901,23 @@ function applySuperSearchMission(job: LeadFinderJob, mission: ProspectSuperSearc
   const aiDiscoveryProviderNames = (mission.aiDiscoveryProviderIds || []).map((providerId) =>
     state.leadProviders.find((provider) => provider.id === providerId)?.name || providerId
   );
-  job.steps = ["生成覆盖矩阵", `${theme}检索`, "清洗与身份归一", "分析覆盖缺口", active ? "等待下一轮" : "执行报告已生成"];
+  job.steps = ["生成覆盖矩阵", `${theme}检索`, "清洗与身份归一", "候选关系深挖", active ? "等待下一步事实" : "执行报告已生成"];
   job.detailLines = [
     ...(job.detailLines || []),
     `超级搜索：${superSearchStatusLabel(mission.status)}`,
     `本轮主题：${theme}`,
     `规划方式：${currentRound?.planningMode === "ai_enhanced" ? "AI 增强 + 规则校验" : "规则规划"}`,
-    `本轮市场：${query?.countries.join("、") || "全球"}`,
-    `查询语言：${query?.languages.join("、") || "自动"}`,
-    `买家角色：${query?.customerTypes.join("、") || "不限"}`,
+    `本轮市场：${query?.countries?.join("、") || "全球"}`,
+    `查询语言：${query?.languages?.join("、") || "自动"}`,
+    `买家角色：${query?.customerTypes?.join("、") || "不限"}`,
     `覆盖缺口：${gaps.join("；") || "正在建立覆盖基线"}`,
     `查询矩阵：${currentRound?.queryCells?.length || job.channelCount} 个执行单元`,
     `实时网页搜索：${mission.webSearchMode === "api" ? webProviderNames.join("、") || "已启用" : "未启用"}`,
     `地图企业搜索：${mission.mapSearchMode === "google_places" ? mapProviderNames.join("、") || "Google Places" : "未启用"}`,
-    `AI 深度发现：${mission.aiDiscoveryMode === "model" ? aiDiscoveryProviderNames.join("、") || "AI 搜索" : "未启用"}`,
+    `AI 查询辅助：${mission.aiDiscoveryMode === "model" ? aiDiscoveryProviderNames.join("、") || "AI 搜索" : "未启用"}`,
+    `候选深挖：${deepSummary ? `${deepSummary.researchedCandidateCount || 0} 个节点 · ${deepSummary.relationCount || 0} 条关系 · ${deepSummary.evidenceCount || 0} 条证据` : "等待根候选"}`,
     `累计原始命中：${mission.rawCount} · 已过滤：${mission.filteredCount} · 待清洗：${mission.pendingCount}`,
-    `轮次：${mission.currentRound}/${mission.maxRounds} · 目标：${mission.targetCandidateCount}`,
+    `轮次：${mission.currentRound}/${maxRounds} · 目标：${mission.targetCandidateCount}`,
     mission.stopReason ? `结束原因：${mission.stopReason}` : "任务会在达到目标、时长、预算或收敛条件后结束"
   ];
   job.superSearchMissionId = mission.id;
@@ -18683,7 +20926,8 @@ function applySuperSearchMission(job: LeadFinderJob, mission: ProspectSuperSearc
   job.superSearchRound = mission.currentRound;
   job.superSearchMaxRounds = mission.maxRounds;
   job.superSearchTarget = mission.targetCandidateCount;
-  job.superSearchRounds = mission.rounds;
+  job.superSearchRounds = rounds;
+  job.deepMining = mission.deepMining;
   job.resultIds = mission.candidateIds || job.resultIds || [];
   return job;
 }
@@ -18694,7 +20938,8 @@ function leadTaskLiveEventLog(event: ProspectLiveEventApiRecord): LeadTaskStream
     : "";
   const source = providerId
     ? state.leadProviders.find((item) => item.id === providerId)?.name || providerId
-    : event.entityType === "run" ? "任务"
+    : event.stage === "deep_mining" ? "深挖"
+      : event.entityType === "run" ? "任务"
       : event.entityType === "mission" ? "超级搜客"
         : event.entityType === "query_cell" ? "查询单元"
           : event.entityType === "candidate" ? "候选"
@@ -18712,6 +20957,12 @@ function leadTaskLiveEventLog(event: ProspectLiveEventApiRecord): LeadTaskStream
     result = `${Number(event.metrics.candidateCount || 0)} 候选`;
   } else if (event.type.startsWith("attempt.")) {
     result = event.failureCode ? event.retryable ? "失败，可重试" : "失败" : "请求已结算";
+  } else if (event.type === "mission.deep_evidence_found") {
+    result = `${Number(event.metrics.evidenceCount || 0)} 条证据`;
+  } else if (event.type === "mission.deep_relation_found") {
+    result = `${Number(event.metrics.relationCount || 0)} 条关系`;
+  } else if (event.type.startsWith("mission.deep_")) {
+    result = event.type.endsWith("completed") ? "已归档" : "研究中";
   }
   const failed = Boolean(event.failureCode)
     || ["failed", "rejected", "request_outcome_unknown"].includes(event.status);
@@ -18725,7 +20976,9 @@ function leadTaskLiveEventLog(event: ProspectLiveEventApiRecord): LeadTaskStream
     title: event.message,
     detail: event.failureCode
       ? `${event.failureCode}${event.retryable ? " · 系统允许重试" : " · 不自动重试"}`
-      : `${event.stage} · ${event.entityType} ${event.entityId}`,
+      : event.stage === "deep_mining"
+        ? `候选级证据图谱 · ${event.entityId}`
+        : `${event.stage} · ${event.entityType} ${event.entityId}`,
     result,
     tone: failed ? "is-failed" : gained ? "is-gain" : event.retryable ? "is-review" : ""
   };
@@ -19614,21 +21867,20 @@ function renderLeadSourceChips() {
       : !provider.ready ? "未配置" : !provider.enabled ? "已停用" : provider.requiresKey ? "已连接" : "内置";
     return `<button type="button" class="lead-source-chip ${cls}" data-lead-provider="${escapeHtml(provider.id)}"><span class="dot"></span><span class="ls-chip-name">${escapeHtml(provider.name)}</span><small>${stateText}</small></button>`;
   };
-  const recommended = automaticProviders.filter((provider) => provider.recommended);
-  const moreFree = automaticProviders.filter((provider) =>
-    !provider.recommended && (provider.tier === "free" || provider.tier === "byok_free")
-  );
+  const isFreeSource = (provider: LeadProviderStatus) => provider.tier === "free" || provider.tier === "byok_free";
+  const freeSources = automaticProviders.filter(isFreeSource);
+  const recommended = automaticProviders.filter((provider) => provider.recommended && !isFreeSource(provider));
   const extended = automaticProviders.filter((provider) =>
-    !provider.recommended && provider.tier !== "free" && provider.tier !== "byok_free"
+    !provider.recommended && !isFreeSource(provider)
   );
   box.innerHTML = `
     <div class="lead-source-primary">
       ${recommended.length ? recommended.map(chipHtml).join("") : `<span class="empty-inline">暂无可用推荐来源。</span>`}
     </div>
-    ${moreFree.length ? `
+    ${freeSources.length ? `
       <details class="lead-source-more" open>
-        <summary>更多免费来源 <span>${moreFree.length} 个</span></summary>
-        <div class="lead-source-more-grid">${moreFree.map(chipHtml).join("")}</div>
+        <summary>更多免费来源（效果可能不佳，默认不勾选） <span>${freeSources.length} 个</span></summary>
+        <div class="lead-source-more-grid">${freeSources.map(chipHtml).join("")}</div>
       </details>` : ""}
     ${extended.length ? `
       <details class="lead-source-more lead-source-extended" open>
@@ -19817,7 +22069,7 @@ function refreshLeadSourceCenter(providers?: LeadProviderStatus[]) {
   if (providers) state.leadProviders = providers;
   if (!state.leadSourceSelectionTouched) {
     state.selectedLeadSources = state.leadProviders
-      .filter((item) => item.id !== "ai_search" && item.recommended && isLeadSourceExecutable(item))
+      .filter((item) => item.id !== "ai_search" && isLeadSourceAutoSelected(item))
       .map((item) => item.id);
   }
   renderLeadSourceChips();
@@ -20127,7 +22379,8 @@ function leadFinderValues(selector: string) {
 async function launchProspectRunFromLeadFinder(
   sources: string[],
   limit: number,
-  mode: "standard" | "super" = "standard"
+  mode: "standard" | "super" = "standard",
+  onStage?: (stage: string) => void
 ): Promise<LeadFinderLaunchResult> {
   // 自然语言 / 结构化表单 互斥：仅读取生效的那一组意图，避免叠加互相限制
   let products: string[];
@@ -20137,29 +22390,33 @@ async function launchProspectRunFromLeadFinder(
   let customerType: string;
   let goalInput: string;
   let marketOpen = false; // 自然语言未识别到具体市场时，按全球范围交给 AI 推断
+  let parsedName = ""; // AI 解析给出的英文项目名称，优先于表单推导的标题
   if (leadBriefMode === "nl") {
     goalInput = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim() || "";
     if (!goalInput) throw new Error("请先在自然语言目标中描述你希望寻找的客户");
-    const parsed = parseGoalToBrief(goalInput);
-    let resolvedMarkets = parsed.markets;
-    if (!resolvedMarkets.length) {
-      toast("未识别到具体国家/地区，将按「全球」范围、由 AI 从你的描述推断目标市场", "warn");
-      resolvedMarkets = ["全球"];
-      marketOpen = true;
-    }
-    products = [goalInput]; // 产品意图以整句交给 AI 搜索源解析，表单关键词仅作兜底
-    markets = resolvedMarkets;
-    industries = [];
-    exclusions = parsed.exclusions;
-    customerType = parsed.customerType;
-    // 回填隐藏表单，复用既有提交流程（不影响界面展示）
     const setVal = (sel: string, value: string) => { const el = qs<HTMLInputElement>(sel); if (el) el.value = value; };
-    setVal("#leadProductKeywords", products.join(", "));
-    setVal("#leadCountries", markets.join(", "));
-    setVal("#leadIndustryInput", industries.join(", "));
-    setVal("#leadExcludeKeywords", exclusions.join(", "));
-    const ct = qs<HTMLSelectElement>("#leadCustomerTypes");
-    if (ct) ct.value = customerType;
+    if (leadAiParsed) {
+      // 采用 AI 解析预览里的结构化英文值（尊重用户在面板上的手动修改）
+      const resolved = resolveLeadAiSearchDraft({
+        name: qs<HTMLInputElement>("#leadAiName")?.value || "",
+        products: leadFinderValues("#leadAiProducts"),
+        markets: leadFinderValues("#leadAiMarkets"),
+        industries: leadFinderValues("#leadAiIndustries"),
+        exclusions: leadFinderValues("#leadAiExclusions"),
+        customerType: qs<HTMLSelectElement>("#leadAiCustomerType")?.value || "*"
+      });
+      ({ products, markets, industries, exclusions, customerType, marketOpen } = resolved);
+      // 回填隐藏表单，复用既有提交流程与标题生成
+      setVal("#leadProductKeywords", products.join(", "));
+      setVal("#leadCountries", markets.join(", "));
+      setVal("#leadIndustryInput", industries.join(", "));
+      setVal("#leadExcludeKeywords", exclusions.join(", "));
+      const ct = qs<HTMLSelectElement>("#leadCustomerTypes");
+      if (ct) ct.value = customerType;
+      parsedName = resolved.parsedName;
+      // 解析成功后，搜索只使用当前预览字段；原始自然语言不再作为隐藏 ICP 约束参与执行。
+      goalInput = "";
+    } else throw new Error("请先完成 AI 解析，再启动自然语言搜索");
   } else {
     products = leadFinderValues("#leadProductKeywords");
     markets = leadFinderValues("#leadCountries");
@@ -20171,141 +22428,96 @@ async function launchProspectRunFromLeadFinder(
   if (!products.length) throw new Error("请先填写产品关键词");
   // 自然语言模式的市场由 AI 从整句推断兜底，仅结构化表单强制要求填写市场
   if (leadBriefMode !== "nl" && !markets.length) throw new Error("请先填写目标国家或地区");
-  const goal = goalInput || `开发${markets.join("、")}市场的${products.join("、")}${customerType === "*" ? "客户" : customerType}`;
+  const goal = [
+    `Products: ${products.join(", ")}`,
+    `Markets: ${markets.join(", ")}`,
+    industries.length ? `Industries: ${industries.join(", ")}` : "",
+    customerType === "*" ? "Customer types: all" : `Customer type: ${customerType}`,
+    exclusions.length ? `Exclusions: ${exclusions.join(", ")}` : ""
+  ].filter(Boolean).join("; ");
   const normalizedSources = [...new Set(sources.map((source) => source.trim().toLocaleLowerCase("en-US")).filter(Boolean))];
-  const campaignResult = await api<{
-    campaign: ProspectCampaignApiRecord;
-  }>("/api/prospect-campaigns", {
-    method: "POST",
-    body: JSON.stringify({
-      name: currentLeadFinderTitle(),
-      snapshot: {
-        goal,
-        products,
-        markets,
-        customerTypes: [customerType],
-        applicationScenarios: industries,
-        icpRules: goalInput ? [goalInput] : [],
-        exclusionRules: exclusions,
-        sourceProviderIds: normalizedSources
+  if (!normalizedSources.length) {
+    throw new Error(mode === "super"
+      ? "超级搜索当前没有可执行的数据源，请先选择并启用至少一个来源"
+      : "当前没有可执行的数据源，请先完成配置或启用来源");
+  }
+  const strategy = {
+    name: `${currentLeadFinderTitle()} · 自动策略`,
+    query: {
+      keywordMode: "campaign_products",
+      positiveKeywords: [],
+      synonyms: [],
+      industryTerms: industries,
+      purchaseScenarioTerms: industries,
+      countryMode: marketOpen ? "global" : "campaign_markets",
+      countries: [],
+      languages: [],
+      customerTypeMode: customerType === "*" ? "all" : "campaign_customer_types",
+      customerTypes: [],
+      exclusionKeywords: exclusions,
+      exclusionDomains: [],
+      timeWindow: { mode: "all", from: "", to: "" }
+    },
+    providerPlan: normalizedSources.map((providerId, index) => ({
+      providerId,
+      priority: index + 1,
+      // Let the run-level allocator paginate a source when it has more
+      // results; the total accepted result count is still capped globally.
+      pageLimit: 100,
+      resultLimit: Math.max(1, Math.min(1000, limit)),
+      budgetLimit: null,
+      currency: ""
+    })),
+    reason: "由自动搜客页面生成"
+  };
+  const costLimit = Number(qs<HTMLInputElement>("#leadSuperCost")?.value || 0);
+  const superSearch = mode === "super" ? {
+    targetCandidateCount: Number(qs<HTMLInputElement>("#leadSuperTarget")?.value || 300),
+    maxDurationMinutes: Number(qs<HTMLSelectElement>("#leadSuperDuration")?.value || 480),
+    depth: qs<HTMLSelectElement>("#leadSuperDepth")?.value || "deep",
+    costLimit,
+    currency: costLimit > 0 ? "USD" : "",
+    aiMode: "auto",
+    webSearchMode: superWebSearchMode(),
+    mapSearchMode: superMapSearchMode(),
+    aiDiscoveryMode: superAiDiscoveryMode()
+  } : undefined;
+  const schedule = mode === "standard"
+    && qs<HTMLInputElement>("#leadFinderScheduleInput")?.checked
+    ? {
+        frequency: qs<HTMLSelectElement>("#leadFinderScheduleFrequency")?.value || "weekly",
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai",
+        recurringCostApproved: Boolean(
+          qs<HTMLInputElement>("#leadFinderRecurringCostInput")?.checked
+        )
       }
+    : undefined;
+  onStage?.("正在提交策略并启动搜索");
+  return api<LeadFinderLaunchResult>("/api/lead-finder/launch", {
+    method: "POST",
+    headers: {
+      "Idempotency-Key": `lead-finder:${crypto.randomUUID()}`
+    },
+    body: JSON.stringify({
+      mode,
+      campaign: {
+        name: parsedName || currentLeadFinderTitle(),
+        snapshot: {
+          goal,
+          products,
+          markets,
+          customerTypes: [customerType],
+          applicationScenarios: industries,
+          icpRules: [],
+          exclusionRules: exclusions,
+          sourceProviderIds: normalizedSources
+        }
+      },
+      strategy,
+      ...(superSearch ? { superSearch } : {}),
+      ...(schedule ? { schedule } : {})
     })
   });
-  const campaign = campaignResult.campaign;
-  const strategies = await api<{ strategies: ProspectStrategyApiRecord[] }>(
-    `/api/prospect-campaigns/${encodeURIComponent(campaign.id)}/strategies`
-  );
-  const defaultStrategy = strategies.strategies.find((strategy) =>
-    strategy.status === "draft" && strategy.campaignVersion === campaign.currentVersion
-  );
-  if (!defaultStrategy) throw new Error("系统未生成可用的默认搜索策略");
-  const updatedStrategy = await api<{ strategy: ProspectStrategyApiRecord }>(
-    `/api/prospect-strategies/${encodeURIComponent(defaultStrategy.id)}`,
-    {
-      method: "PATCH",
-      headers: { "If-Match": `"${defaultStrategy.id}:${defaultStrategy.revision}"` },
-      body: JSON.stringify({
-        name: `${currentLeadFinderTitle()} · 自动策略`,
-        query: {
-          keywordMode: "campaign_products",
-          positiveKeywords: [],
-          synonyms: [],
-          industryTerms: industries,
-          purchaseScenarioTerms: industries,
-          countryMode: marketOpen ? "all" : "campaign_markets",
-          countries: [],
-          languages: [],
-          customerTypeMode: customerType === "*" ? "all" : "campaign_customer_types",
-          customerTypes: [],
-          exclusionKeywords: exclusions,
-          exclusionDomains: [],
-          timeWindow: { mode: "all", from: "", to: "" }
-        },
-        providerPlan: normalizedSources.map((providerId, index) => ({
-          providerId,
-          priority: index + 1,
-          pageLimit: 1,
-          resultLimit: Math.max(1, Math.min(1000, limit)),
-          budgetLimit: null,
-          currency: ""
-        })),
-        reason: "由自动搜客页面生成"
-      })
-    }
-  );
-  const approvedStrategy = await api<{ strategy: ProspectStrategyApiRecord }>(
-    `/api/prospect-strategies/${encodeURIComponent(updatedStrategy.strategy.id)}/approve`,
-    {
-      method: "POST",
-      headers: { "If-Match": `"${updatedStrategy.strategy.id}:${updatedStrategy.strategy.revision}"` },
-      body: JSON.stringify({ reason: "业务员确认搜客条件并启动" })
-    }
-  );
-  await api(`/api/prospect-campaigns/${encodeURIComponent(campaign.id)}/activate`, {
-    method: "POST",
-    headers: { "If-Match": `"${campaign.id}:${campaign.revision}"` },
-    body: JSON.stringify({})
-  });
-  if (mode === "super") {
-    const costLimit = Number(qs<HTMLInputElement>("#leadSuperCost")?.value || 0);
-    const superResult = await api<{
-      mission: ProspectSuperSearchMissionApi;
-      run: ProspectRunDetailApiResponse;
-    }>("/api/prospect-super-search", {
-      method: "POST",
-      body: JSON.stringify({
-        strategyId: approvedStrategy.strategy.id,
-        targetCandidateCount: Number(qs<HTMLInputElement>("#leadSuperTarget")?.value || 300),
-        maxDurationMinutes: Number(qs<HTMLSelectElement>("#leadSuperDuration")?.value || 480),
-        depth: qs<HTMLSelectElement>("#leadSuperDepth")?.value || "deep",
-        costLimit,
-        currency: costLimit > 0 ? "USD" : "",
-        aiMode: "auto",
-        webSearchMode: superWebSearchMode(),
-        mapSearchMode: superMapSearchMode(),
-        aiDiscoveryMode: superAiDiscoveryMode()
-      })
-    });
-    return { ...superResult.run, superSearch: superResult.mission };
-  }
-  const runResult = await api<ProspectRunDetailApiResponse>(
-    `/api/prospect-strategies/${encodeURIComponent(approvedStrategy.strategy.id)}/runs`,
-    {
-      method: "POST",
-      headers: {
-        "If-Match": `"${approvedStrategy.strategy.id}:${approvedStrategy.strategy.revision}"`,
-        "Idempotency-Key": `lead-finder:${crypto.randomUUID()}`
-      },
-      body: JSON.stringify({ reason: "自动搜客页面立即运行" })
-    }
-  );
-  if (!qs<HTMLInputElement>("#leadFinderScheduleInput")?.checked) {
-    return runResult;
-  }
-  try {
-    const scheduleResult = await api<{ schedule: ProspectScheduleApiRecord }>(
-      `/api/prospect-strategies/${encodeURIComponent(approvedStrategy.strategy.id)}/schedules`,
-      {
-        method: "POST",
-        headers: {
-          "If-Match": `"${approvedStrategy.strategy.id}:${approvedStrategy.strategy.revision}"`
-        },
-        body: JSON.stringify({
-          frequency: qs<HTMLSelectElement>("#leadFinderScheduleFrequency")?.value || "weekly",
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai",
-          recurringCostApproved: Boolean(
-            qs<HTMLInputElement>("#leadFinderRecurringCostInput")?.checked
-          )
-        })
-      }
-    );
-    return { ...runResult, schedule: scheduleResult.schedule };
-  } catch (error) {
-    return {
-      ...runResult,
-      scheduleError: error instanceof Error ? error.message : "定期计划创建失败"
-    };
-  }
 }
 
 async function runLeadFinder(button?: HTMLButtonElement) {
@@ -20376,6 +22588,15 @@ async function runLeadFinder(button?: HTMLButtonElement) {
         sources = sources.filter((providerId) => providerId !== "ai_search");
       }
     }
+    if (!sources.length) {
+      if (leadFinderMode === "super") {
+        renderSuperSearchPreview();
+        toast("超级搜索当前没有可执行的数据源，请开启网页、地图或 AI 深度发现，或选择一个企业数据源", "error");
+      } else {
+        toast("当前没有可执行的数据源，请先完成配置或启用来源", "error");
+      }
+      return;
+    }
   }
   const limit = Number(qs<HTMLSelectElement>("#leadLimit")?.value || 12);
   const scheduleEnabled = leadFinderMode === "standard" && Boolean(qs<HTMLInputElement>("#leadFinderScheduleInput")?.checked);
@@ -20409,9 +22630,44 @@ async function runLeadFinder(button?: HTMLButtonElement) {
   }
   try {
     if (!urls.length) {
-      const result = await launchProspectRunFromLeadFinder(sources, limit, leadFinderMode);
+      // 自然语言模式：若尚未解析，启动前自动解析（描述完直接点搜索也能用，无需手动点「AI 解析」）
+      if (leadBriefMode === "nl") {
+        const goal = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim();
+        if (goal && !leadAiParsed) {
+          if (button) button.textContent = "正在解析搜索目标";
+          const parsed = await runLeadAiParse();
+          if (!parsed) return;
+        }
+      }
+      const result = await launchProspectRunFromLeadFinder(
+        sources,
+        limit,
+        leadFinderMode,
+        (stage) => { if (button) button.textContent = stage; }
+      );
+      if (button) button.textContent = "搜索已进入队列";
       const backendJob = prospectRunJob(result);
-      if (result.superSearch) applySuperSearchMission(backendJob, result.superSearch);
+      if (result.launchTimings) {
+        const timing = result.launchTimings;
+        backendJob.detailLines = [
+          ...(backendJob.detailLines || []),
+          `任务准备耗时：${(timing.totalMs / 1000).toFixed(1)} 秒（项目 ${timing.campaignMs}ms、策略 ${Math.round(timing.strategyMs + timing.approvalMs)}ms、启动 ${Math.round(timing.activationMs + timing.runMs + timing.queueMs)}ms）`
+        ];
+        console.info("Lead finder launch timings", timing);
+      }
+      if (result.superSearch) {
+        try {
+          applySuperSearchMission(backendJob, result.superSearch);
+        } catch (error) {
+          // The run is already accepted by the backend. Keep it visible even
+          // if an optional legacy snapshot field cannot be rendered yet.
+          console.error("Unable to enrich super search task card", error);
+          backendJob.detailLines = [
+            ...(backendJob.detailLines || []),
+            "超级搜索已进入队列，详细轮次正在同步"
+          ];
+        }
+      }
       leadFinderJobs = [backendJob, ...leadFinderJobs.filter((item) => item.backendRunId !== backendJob.backendRunId)]
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
         .slice(0, 6);
@@ -21469,6 +23725,9 @@ function openCustomerModal(customer?: Customer) {
       <div class="form-field"><label>联系人</label><input id="customerContactInput" value="${escapeHtml(customer?.contact || "")}"></div>
       <div class="form-field"><label>国家</label><input id="customerCountryInput" value="${escapeHtml(customer?.country || "")}"></div>
       <div class="form-field full"><label>WhatsApp</label><input id="customerWhatsappInput" inputmode="tel" value="${escapeHtml(customer?.whatsapp || customer?.whatsappPhone || "")}" placeholder="例如 +49123456789（含国家码）"></div>
+      <div class="form-field"><label>电话</label><input id="customerPhoneInput" inputmode="tel" value="${escapeHtml(customer?.phone || "")}" placeholder="公司电话或联系人电话"></div>
+      <div class="form-field"><label>邮箱</label><input id="customerEmailInput" type="email" value="${escapeHtml(customer?.email || "")}" placeholder="例如 sales@example.com"></div>
+      <div class="form-field full"><label>官网</label><input id="customerWebsiteInput" value="${escapeHtml(customer?.website || "")}" placeholder="例如 https://example.com"></div>
       <label class="form-field"><span>客户分级</span><select id="customerGradeInput"><option value="A" ${selectedGrade === "A" ? "selected" : ""}>A · 核心客户</option><option value="B" ${selectedGrade === "B" ? "selected" : ""}>B · 重点客户</option><option value="C" ${selectedGrade === "C" ? "selected" : ""}>C · 常规客户</option><option value="D" ${selectedGrade === "D" ? "selected" : ""}>D · 低优先级</option></select></label>
       <div class="form-field"><label>健康度（人工评分）</label><input id="customerHealthInput" type="number" min="0" max="100" value="${customer?.health ?? 72}"></div>
       <div class="form-field"><label>下一提醒</label><input id="customerReminderInput" value="${escapeHtml(customer?.nextReminder || "")}"></div>
@@ -21505,6 +23764,9 @@ async function saveCustomer() {
     contact: qs<HTMLInputElement>("#customerContactInput")?.value || "待维护",
     country: qs<HTMLInputElement>("#customerCountryInput")?.value || "未知",
     whatsapp,
+    phone: qs<HTMLInputElement>("#customerPhoneInput")?.value.trim() || "",
+    email: qs<HTMLInputElement>("#customerEmailInput")?.value.trim() || "",
+    website: qs<HTMLInputElement>("#customerWebsiteInput")?.value.trim() || "",
     grade: (qs<HTMLSelectElement>("#customerGradeInput")?.value || "C") as "A" | "B" | "C" | "D",
     health: Math.max(0, Math.min(100, Number(qs<HTMLInputElement>("#customerHealthInput")?.value || 72))),
     nextReminder: qs<HTMLInputElement>("#customerReminderInput")?.value || "明天 10:00",
@@ -22235,6 +24497,14 @@ async function openInternalMessage(id: string) {
 
 function installEvents() {
   ensureUiLayer();
+  qs<HTMLButtonElement>("#prospectRadarCloseButton")?.addEventListener("click", closeProspectRadar);
+  qs<HTMLButtonElement>("#prospectRadarPlayButton")?.addEventListener("click", (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    if (button.dataset.playing === "true") prospectRadarController?.pause();
+    else prospectRadarController?.resume();
+  });
+  qs<HTMLButtonElement>("#prospectRadarReplayButton")?.addEventListener("click", () => prospectRadarController?.replay());
+  qs<HTMLDialogElement>("#prospectRadarDialog")?.addEventListener("close", destroyProspectRadar);
   window.setInterval(refreshVisibleDashboard, DASHBOARD_LIVE_REFRESH_MS);
   window.setInterval(() => {
     if (state.user && document.visibilityState === "visible") void refreshInternalMessages(false);
@@ -22258,6 +24528,7 @@ function installEvents() {
   window.addEventListener("pagehide", () => {
     const memo = state.memos.find((item) => item.id === state.selectedMemoId);
     if (memo && memoDirty) writeMemoDraft(memo);
+    destroyProspectRadar();
     stopLeadTaskEventStream(false);
   });
   document.addEventListener("click", (event) => {
@@ -22659,6 +24930,14 @@ function installEvents() {
     });
   });
   applyBriefMode();
+  qs<HTMLButtonElement>("#leadAiParseButton")?.addEventListener("click", () => void runLeadAiParse());
+  qs<HTMLButtonElement>("#leadAiClearButton")?.addEventListener("click", () => clearLeadAiPreview());
+  qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.addEventListener("input", () => { if (leadAiParsed) clearLeadAiPreview(true); });
+  // 自然语言框失焦时自动解析（描述完离开焦点即解析，预览自动出现，无需手动点「AI 解析」）
+  qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.addEventListener("blur", () => {
+    if (leadBriefMode === "nl" && !leadAiParsed) void runLeadAiParse();
+  });
+  populateLeadCountryDatalist();
   ["#leadSuperTarget", "#leadSuperDuration", "#leadSuperDepth", "#leadSuperCost"].forEach((selector) => {
     qs<HTMLElement>(selector)?.addEventListener("input", renderSuperSearchPreview);
     qs<HTMLElement>(selector)?.addEventListener("change", renderSuperSearchPreview);
@@ -22694,6 +24973,98 @@ function installEvents() {
   qs<HTMLButtonElement>("#leadSourceManageInline")?.addEventListener("click", () => openLeadSourceCenter());
   qs<HTMLButtonElement>("#leadFinderStartButton")?.addEventListener("click", (event) => void runLeadFinder(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderStartButtonInline")?.addEventListener("click", (event) => void runLeadFinder(event.currentTarget as HTMLButtonElement));
+  // ===== 产品维护事件绑定 =====
+  qs<HTMLButtonElement>("#productAddButton")?.addEventListener("click", () => openProductModal());
+  qs<HTMLButtonElement>("#productEmptyAdd")?.addEventListener("click", () => openProductModal());
+  qs<HTMLButtonElement>("#productBulkDelete")?.addEventListener("click", () => void bulkDeleteProducts());
+  qs<HTMLInputElement>("#productSelectAll")?.addEventListener("change", (event) => {
+    const checked = (event.currentTarget as HTMLInputElement).checked;
+    state.selectedProductIds = checked
+      ? Array.from(new Set([...state.selectedProductIds, ...currentProductVisibleIds]))
+      : state.selectedProductIds.filter((id) => !currentProductVisibleIds.includes(id));
+    renderProducts();
+  });
+  qs<HTMLButtonElement>("#productModalClose")?.addEventListener("click", closeProductModal);
+  qs<HTMLButtonElement>("#productCancelButton")?.addEventListener("click", closeProductModal);
+  qs<HTMLButtonElement>("#productSaveButton")?.addEventListener("click", () => void saveProduct());
+  qs<HTMLButtonElement>("#productDeleteButton")?.addEventListener("click", () => { if (editingProductId) void deleteProduct(editingProductId); });
+  qs<HTMLElement>("#productModal")?.addEventListener("click", (event) => { if (event.target === qs<HTMLElement>("#productModal")) closeProductModal(); });
+  qs<HTMLInputElement>("#productSearch")?.addEventListener("input", renderProducts);
+  qs<HTMLSelectElement>("#productCategoryFilter")?.addEventListener("change", renderProducts);
+  qs<HTMLSelectElement>("#productCurrencyFilter")?.addEventListener("change", renderProducts);
+  qs<HTMLElement>("#productTableBody")?.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    const editId = target.getAttribute("data-product-edit");
+    const dupId = target.getAttribute("data-product-duplicate");
+    if (editId) {
+      const product = state.products.find((p) => p.id === editId);
+      if (product) openProductModal(product);
+    } else if (dupId) {
+      const product = state.products.find((p) => p.id === dupId);
+      if (product) openProductModal({ ...product, id: `prod_${state.user?.id || ""}_${Date.now()}`, nameZh: `${product.nameZh} (副本)`, updatedAt: new Date().toISOString() });
+    }
+  });
+  // ===== 发货跟踪事件绑定 =====
+  qs<HTMLButtonElement>("#shipmentAddButton")?.addEventListener("click", () => openShipmentModal());
+  qs<HTMLButtonElement>("#shipmentEmptyAdd")?.addEventListener("click", () => openShipmentModal());
+  qs<HTMLButtonElement>("#shipmentBulkDelete")?.addEventListener("click", () => void bulkDeleteShipments());
+  qs<HTMLInputElement>("#shipmentSelectAll")?.addEventListener("change", (event) => {
+    const checked = (event.currentTarget as HTMLInputElement).checked;
+    state.selectedShipmentIds = checked
+      ? Array.from(new Set([...state.selectedShipmentIds, ...currentShipmentVisibleIds]))
+      : state.selectedShipmentIds.filter((id) => !currentShipmentVisibleIds.includes(id));
+    renderShipments();
+  });
+  qs<HTMLButtonElement>("#shipmentModalClose")?.addEventListener("click", closeShipmentModal);
+  qs<HTMLButtonElement>("#shipmentCancelButton")?.addEventListener("click", closeShipmentModal);
+  qs<HTMLButtonElement>("#shipmentSaveButton")?.addEventListener("click", () => void saveShipment());
+  qs<HTMLButtonElement>("#shipmentDeleteButton")?.addEventListener("click", () => { if (editingShipmentId) void deleteShipment(editingShipmentId); });
+  qs<HTMLElement>("#shipmentModal")?.addEventListener("click", (event) => { if (event.target === qs<HTMLElement>("#shipmentModal")) closeShipmentModal(); });
+  qs<HTMLInputElement>("#shipmentSearch")?.addEventListener("input", renderShipments);
+  qs<HTMLSelectElement>("#shipmentStatusFilter")?.addEventListener("change", renderShipments);
+  qs<HTMLInputElement>("#shipmentDealSearch")?.addEventListener("input", (event) => {
+    const kw = (event.currentTarget as HTMLInputElement).value;
+    const idEl = qs<HTMLInputElement>("#shipmentDealId");
+    if (idEl) idEl.value = "";
+    const hint = qs<HTMLElement>("#shipmentDealHint");
+    if (hint) { hint.textContent = "未选择"; hint.style.color = "var(--muted)"; }
+    if (dealSearchTimer) window.clearTimeout(dealSearchTimer);
+    dealSearchTimer = window.setTimeout(() => void searchDeals(kw), 250);
+  });
+  document.addEventListener("click", (event) => {
+    const results = qs<HTMLElement>("#shipmentDealResults");
+    if (!results || results.hidden) return;
+    const target = event.target as HTMLElement;
+    if (!target.closest(".deal-picker")) results.hidden = true;
+  });
+  qs<HTMLInputElement>("#shipmentTrackingImage")?.addEventListener("change", () => void runShipmentOcr());
+  qs<HTMLButtonElement>("#shipmentOcrButton")?.addEventListener("click", () => void runShipmentOcr());
+  qs<HTMLButtonElement>("#shipmentOcrClear")?.addEventListener("click", () => {
+    pendingTrackingImage = "";
+    pendingTrackingImageUrl = "";
+    const fileInput = qs<HTMLInputElement>("#shipmentTrackingImage");
+    if (fileInput) fileInput.value = "";
+    const preview = qs<HTMLElement>("#shipmentOcrPreview");
+    if (preview) preview.hidden = true;
+    const ocrHint = qs<HTMLElement>("#shipmentOcrHint");
+    if (ocrHint) ocrHint.textContent = "";
+  });
+  qs<HTMLButtonElement>("#shipmentItemAdd")?.addEventListener("click", () => addShipmentItemRow());
+  qs<HTMLElement>("#shipmentTableBody")?.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    const editId = target.getAttribute("data-shipment-edit");
+    const trackId = target.getAttribute("data-shipment-track");
+    const delId = target.getAttribute("data-shipment-delete");
+    if (editId) {
+      const shipment = state.shipments.find((s) => s.id === editId);
+      if (shipment) openShipmentModal(shipment);
+    } else if (trackId) {
+      const shipment = state.shipments.find((s) => s.id === trackId);
+      if (shipment) trackShipment(shipment);
+    } else if (delId) {
+      void deleteShipment(delId);
+    }
+  });
   qs<HTMLElement>("#leadFinderLiveOverview")?.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
     if (target.closest("[data-lead-empty-start]")) {
@@ -22904,14 +25275,39 @@ function installEvents() {
   qs<HTMLButtonElement>("#refreshDocumentPreviewButton")?.addEventListener("click", () => renderDocumentPreview(collectDocumentDraft()));
   qsa<HTMLButtonElement>("#documentTypeTabs button").forEach((button) => {
     button.addEventListener("click", () => {
-      setDocumentType(button.dataset.docType === "CUSTOMS" ? "CUSTOMS" : button.dataset.docType === "CI" ? "CI" : "PI");
+      const newType = (button.dataset.docType || "PI") as "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING";
+      setDocumentType(newType);
       const title = qs<HTMLInputElement>("#docTitleInput");
-      if (title && (!title.value || title.value.includes("形式发票") || title.value.includes("商业发票") || title.value.includes("报关资料"))) {
-        const type = currentDocumentType();
-        title.value = type === "CUSTOMS" ? "新建报关资料" : type === "PI" ? "新建形式发票 PI" : "新建商业发票 CI";
+      const number = qs<HTMLInputElement>("#docNumberInput");
+      if (title && (!title.value || title.value.includes("新建"))) {
+        const dd = defaultTradeDocument(newType);
+        title.value = dd.title;
+        if (number && (!number.value || number.value.includes("-"))) number.value = dd.number;
       }
       renderDocumentPreview(collectDocumentDraft());
     });
+  });
+  // 语言切换 - 实时更新预览
+  qs<HTMLSelectElement>("#docLanguageInput")?.addEventListener("change", () => renderDocumentPreview(collectDocumentDraft()));
+  // 主题切换 - 同步 templateInput 并更新预览
+  qs<HTMLSelectElement>("#docThemeInput")?.addEventListener("change", (event) => {
+    const val = (event.currentTarget as HTMLSelectElement).value;
+    const tpl = qs<HTMLSelectElement>("#docTemplateInput");
+    if (tpl) tpl.value = val;
+    renderDocThemeSwatches(val);
+    renderDocumentPreview(collectDocumentDraft());
+  });
+  qs<HTMLSelectElement>("#docTemplateInput")?.addEventListener("change", (event) => {
+    const val = (event.currentTarget as HTMLSelectElement).value;
+    const th = qs<HTMLSelectElement>("#docThemeInput");
+    if (th) th.value = val;
+    renderDocThemeSwatches(val);
+    renderDocumentPreview(collectDocumentDraft());
+  });
+  // 数据源填充
+  qs<HTMLSelectElement>("#docDataSourceInput")?.addEventListener("change", (event) => {
+    const source = (event.currentTarget as HTMLSelectElement).value;
+    applyDataSource(source);
   });
   qsa<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("#documents input, #documents select, #documents textarea").forEach((input) => {
     input.addEventListener("input", () => renderDocumentPreview(collectDocumentDraft()));
@@ -23033,6 +25429,16 @@ function openSecondaryDropdownForView(view: string) {
   if (section) section.open = true;
 }
 
+function workspaceViewStorageKey(user = state.user) {
+  return `${storage.workspaceView}:${user?.id || "anonymous"}`;
+}
+
+function rememberedWorkspaceView(user = state.user) {
+  const view = sessionStorage.getItem(workspaceViewStorageKey(user)) || "dashboard";
+  if (!qs<HTMLElement>(`#${CSS.escape(view)}`) || !canAccessWorkspaceView(view, user)) return "dashboard";
+  return view;
+}
+
 function activateNavView(view: string, after?: () => void) {
   if (!qs<HTMLElement>(`#${CSS.escape(view)}`)) view = "dashboard";
   if (!canAccessWorkspaceView(view)) {
@@ -23056,6 +25462,7 @@ function activateNavView(view: string, after?: () => void) {
   if (view !== "pipeline") closeDealDrawer();
   if (view !== "lead-finder") closeLeadFinderVerificationDrawer();
   rememberWorkspaceTab(view);
+  sessionStorage.setItem(workspaceViewStorageKey(), view);
   qsa<HTMLElement>(".sidebar button[data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   openSecondaryDropdownForView(view);
   qsa<HTMLElement>(".view").forEach((node) => node.classList.toggle("active", node.id === view));
@@ -23065,6 +25472,9 @@ function activateNavView(view: string, after?: () => void) {
   renderTopbarForView(view);
   if (view === "reports") {
     void refreshExecutiveReport();
+  }
+  if (view === "leaderboard") {
+    renderLeaderboardPage();
   }
   if (view === "daily-reports") {
     void refreshDailyReports(false);
@@ -23085,6 +25495,12 @@ function activateNavView(view: string, after?: () => void) {
   }
   if (view === "sales-distillation") {
     void loadSalesDistillationWorkspace();
+  }
+  if (view === "products") {
+    renderProducts();
+  }
+  if (view === "shipments") {
+    renderShipments();
   }
   if (view === "ai-agent") {
     renderAgent(state.agentRun);
@@ -23258,9 +25674,247 @@ async function restoreSession() {
   } catch (error) {
     toast(error instanceof Error ? `数据加载失败：${error.message}` : "数据加载失败，请稍后重试", "error");
   }
+  activateNavView(rememberedWorkspaceView(user));
 }
 
 void loadProductConfig();
 installEvents();
 renderTopbarForView(qs<HTMLElement>(".view.active")?.id || "dashboard");
 void restoreSession();
+
+// ════════════════════════════════════════════════════════════════
+//  系统更新模块
+// ════════════════════════════════════════════════════════════════
+
+let updatePolling = false;
+let pendingUpdateCredits: string | null = null;
+
+// 默认鸣谢内容 (编译进 JS, 永远存在, 不会被更新覆盖)
+const DEFAULT_CREDITS = `<div style="text-align:center;margin-bottom:16px;">
+  <div style="font-size:18px;font-weight:600;color:var(--accent,#3157d5);margin-bottom:4px;">GoodJob CRM</div>
+  <div style="font-size:12px;color:var(--text-2,#999);">外贸客户关系管理系统</div>
+</div>
+<p style="margin-bottom:12px;">感谢您使用 GoodJob CRM，即将开始更新。本软件在开发过程中使用了以下开源项目，在此表示感谢：</p>
+<div style="background:var(--surface-2,#f5f7fa);border-radius:8px;padding:12px 16px;margin-bottom:12px;">
+  <div style="font-weight:600;margin-bottom:8px;font-size:13px;">开源依赖</div>
+  <div style="font-size:12px;line-height:2;color:var(--text-2,#666);">
+    Node.js · Express · TypeScript · Zod · MySQL2<br>
+    Vite · ChromeHeadless · xlsx (SheetJS)<br>
+    以及所有 npm 生态中的开源贡献者
+  </div>
+</div>
+<p style="font-size:12px;color:var(--text-2,#999);margin-bottom:8px;">系统会先创建数据库压缩备份并校验 SHA256；只有备份成功后，才下载、校验、迁移和切换新版本。</p>
+<p style="font-size:12px;color:var(--text-2,#999);">任何一步失败都会停止更新并保留旧版本；数据库迁移失败也不会继续。点击「确认并继续更新」表示你同意短暂停止本地服务。</p>`;
+
+async function initSystemUpdate() {
+  const checkBtn = qs<HTMLButtonElement>("#checkUpdateBtn");
+  const applyBtn = qs<HTMLButtonElement>("#applyUpdateBtn");
+  const saveMirrorBtn = qs<HTMLButtonElement>("#saveMirrorBtn");
+
+  if (checkBtn) checkBtn.addEventListener("click", handleCheckUpdate);
+  if (applyBtn) applyBtn.addEventListener("click", handleApplyUpdate);
+  if (saveMirrorBtn) saveMirrorBtn.addEventListener("click", handleSaveMirror);
+
+  // 加载当前镜像源配置和版本
+  try {
+    const config = await api<{ mirrorUrl: string; currentVersion: string }>("/api/admin/updates/config");
+    const mirrorInput = qs<HTMLInputElement>("#mirrorUrlInput");
+    if (mirrorInput) mirrorInput.value = config.mirrorUrl || "";
+    const versionBadge = qs<HTMLElement>("#updateVersionBadge");
+    if (versionBadge) versionBadge.textContent = `v${config.currentVersion}`;
+    const currentVersionEl = qs<HTMLElement>("#updateCurrentVersion");
+    if (currentVersionEl) currentVersionEl.textContent = `v${config.currentVersion}`;
+  } catch { /* 非管理员或未登录 */ }
+}
+
+async function handleCheckUpdate() {
+  const btn = qs<HTMLButtonElement>("#checkUpdateBtn");
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = "检查中...";
+
+  try {
+    const status = await api<{
+      currentVersion: string;
+      latestVersion: string | null;
+      hasUpdate: boolean;
+      changelog: string | null;
+      credits: string | null;
+      lastChecked: string | null;
+      error: string | null;
+    }>("/api/admin/updates/check");
+
+    // 保存远程 credits (如果有), 供更新弹窗使用
+    pendingUpdateCredits = status.credits;
+
+    const currentEl = qs<HTMLElement>("#updateCurrentVersion");
+    const latestEl = qs<HTMLElement>("#updateLatestVersion");
+    const lastCheckedEl = qs<HTMLElement>("#updateLastChecked");
+    const statusEl = qs<HTMLElement>("#updateStatusText");
+    const changelogArea = qs<HTMLElement>("#updateChangelogArea");
+    const changelogContent = qs<HTMLElement>("#updateChangelogContent");
+    const actionArea = qs<HTMLElement>("#updateActionArea");
+
+    if (currentEl) currentEl.textContent = `v${status.currentVersion}`;
+    if (latestEl) latestEl.textContent = status.latestVersion ? `v${status.latestVersion}` : "--";
+    if (lastCheckedEl) lastCheckedEl.textContent = status.lastChecked ? new Date(status.lastChecked).toLocaleString("zh-CN") : "--";
+
+    if (status.error) {
+      if (statusEl) statusEl.innerHTML = `<span class="badge red">检查失败</span>`;
+      toast(`更新检查失败: ${status.error}`, "error");
+    } else if (status.hasUpdate) {
+      if (statusEl) statusEl.innerHTML = `<span class="badge amber">有新版本</span>`;
+      if (changelogArea && changelogContent) {
+        changelogContent.textContent = status.changelog || "无更新说明";
+        changelogArea.hidden = false;
+      }
+      if (actionArea) actionArea.hidden = false;
+      toast(`发现新版本 v${status.latestVersion}!`, "success");
+    } else {
+      if (statusEl) statusEl.innerHTML = `<span class="badge green">已是最新</span>`;
+      if (changelogArea) changelogArea.hidden = true;
+      if (actionArea) actionArea.hidden = true;
+      toast("当前已是最新版本", "info");
+    }
+  } catch (error) {
+    toast(error instanceof Error ? `检查失败: ${error.message}` : "检查失败", "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "检查更新";
+  }
+}
+
+async function handleApplyUpdate() {
+  // 先弹出鸣谢说明 (页面内 DOM 模态框, 不会被弹窗拦截器/广告拦截器阻止)
+  const modal = qs<HTMLElement>("#updateCreditsModal");
+  const contentEl = qs<HTMLElement>("#creditsModalContent");
+  if (modal && contentEl) {
+    // 优先用远程 credits, 没有则用编译进 JS 的默认内容
+    contentEl.innerHTML = pendingUpdateCredits || DEFAULT_CREDITS;
+    modal.classList.add("active");
+
+    // 等待用户确认或取消
+    const confirmed = await new Promise<boolean>((resolve) => {
+      const confirmBtn = qs<HTMLButtonElement>("#creditsModalConfirm");
+      const cancelBtn = qs<HTMLButtonElement>("#creditsModalCancel");
+      const closeBtn = qs<HTMLButtonElement>("#creditsModalClose");
+
+      const onConfirm = () => { cleanup(); resolve(true); };
+      const onCancel = () => { cleanup(); resolve(false); };
+
+      const cleanup = () => {
+        confirmBtn?.removeEventListener("click", onConfirm);
+        cancelBtn?.removeEventListener("click", onCancel);
+        closeBtn?.removeEventListener("click", onCancel);
+      };
+
+      confirmBtn?.addEventListener("click", onConfirm);
+      cancelBtn?.addEventListener("click", onCancel);
+      closeBtn?.addEventListener("click", onCancel);
+    });
+
+    modal.classList.remove("active");
+
+    if (!confirmed) return;
+  }
+
+  const btn = qs<HTMLButtonElement>("#applyUpdateBtn");
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = "更新中...";
+
+  try {
+    const result = await api<{ message: string }>("/api/admin/updates/apply", { method: "POST" });
+    toast(result.message || "更新器已启动，将先备份数据库", "success");
+
+    // 显示进度条
+    const progressBar = qs<HTMLElement>("#updateProgressBar");
+    const progressFill = qs<HTMLElement>("#updateProgressFill");
+    const progressText = qs<HTMLElement>("#updateProgressText");
+    if (progressBar) progressBar.hidden = false;
+
+    // 轮询进度
+    updatePolling = true;
+    pollUpdateProgress(progressFill, progressText);
+  } catch (error) {
+    toast(error instanceof Error ? `更新失败: ${error.message}` : "更新失败", "error");
+    btn.disabled = false;
+    btn.textContent = "立即更新";
+  }
+}
+
+async function pollUpdateProgress(fillEl: HTMLElement | null, textEl: HTMLElement | null) {
+  if (!updatePolling) return;
+
+  try {
+    const data = await api<{
+      progress: {
+        stage: string;
+        message: string;
+        percent: number;
+        backupFile?: string;
+        backupSize?: number;
+        backupSha256?: string;
+        failedStage?: string;
+      };
+    }>("/api/admin/updates/progress");
+
+    const { stage, message, percent } = data.progress;
+    const backupProof = qs<HTMLElement>("#updateBackupProof");
+
+    if (fillEl) fillEl.style.width = `${percent}%`;
+    if (textEl) textEl.textContent = `${message} (${percent}%)`;
+    if (backupProof && data.progress.backupFile && data.progress.backupSha256) {
+      backupProof.hidden = false;
+      backupProof.textContent = `数据库备份已校验 · ${data.progress.backupFile} · ${data.progress.backupSize || 0} 字节 · SHA256 ${data.progress.backupSha256}`;
+    }
+
+    if (stage === "done") {
+      if (textEl) textEl.textContent = message || "更新完成，服务已经恢复";
+      updatePolling = false;
+      setTimeout(() => window.location.reload(), 3000);
+      return;
+    }
+
+    if (stage === "error") {
+      if (textEl) textEl.textContent = `更新失败${data.progress.failedStage ? `（${data.progress.failedStage}）` : ""}: ${message}`;
+      updatePolling = false;
+      const btn = qs<HTMLButtonElement>("#applyUpdateBtn");
+      if (btn) { btn.disabled = false; btn.textContent = "立即更新"; }
+      return;
+    }
+  } catch { /* 服务可能正在重启 */ }
+
+  setTimeout(() => pollUpdateProgress(fillEl, textEl), 2000);
+}
+
+async function handleSaveMirror() {
+  const btn = qs<HTMLButtonElement>("#saveMirrorBtn");
+  const input = qs<HTMLInputElement>("#mirrorUrlInput");
+  if (!btn || !input) return;
+
+  const url = input.value.trim();
+  if (!url) {
+    toast("请输入镜像源 URL", "error");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "保存中...";
+
+  try {
+    await api("/api/admin/updates/mirror", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    });
+    toast("镜像源配置已保存", "success");
+  } catch (error) {
+    toast(error instanceof Error ? `保存失败: ${error.message}` : "保存失败", "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "保存";
+  }
+}
+
+// 页面加载后初始化更新模块
+void initSystemUpdate();

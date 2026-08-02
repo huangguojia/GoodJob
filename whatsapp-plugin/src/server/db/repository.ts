@@ -21,9 +21,10 @@ import type {
   Translation,
   TranslationPreference
 } from "../../shared/types.js";
-import type { Database } from "./database.js";
+import { databaseTimestamp, type Database } from "./database.js";
 
 const now = (): string => new Date().toISOString();
+const dbTime = (value: string): ReturnType<typeof databaseTimestamp> => databaseTimestamp(value);
 const toBoolean = (value: number | string | boolean): boolean => value === true || value === 1 || value === "1";
 
 interface AccountRow {
@@ -338,8 +339,8 @@ export class Repository {
         input.priority ?? 100,
         input.riskAccepted ? 1 : 0,
         input.ownerUserId ?? (process.env.NODE_ENV === "test" ? "test-user" : null),
-        timestamp,
-        timestamp
+        dbTime(timestamp),
+        dbTime(timestamp)
       ]
     );
     return (await this.getAccount(id))!;
@@ -356,7 +357,7 @@ export class Repository {
         phone=COALESCE($3, phone), qr_data_url=$4, last_error=$5, last_event_at=$6,
         last_connected_at=CASE WHEN $2='connected' THEN $6 ELSE last_connected_at END,
         updated_at=$6 WHERE id=$1`,
-      [id, status, details.phone ?? null, details.qrDataUrl ?? null, details.error ?? null, timestamp]
+      [id, status, details.phone ?? null, details.qrDataUrl ?? null, details.error ?? null, dbTime(timestamp)]
     );
     const account = await this.getAccount(id);
     if (!account) throw new Error("Account not found");
@@ -385,9 +386,12 @@ export class Repository {
     const row = result.rows[0];
     if (!row && ownerUserId) {
       await this.database.query(
-        `INSERT INTO integration_preferences(id,strategy,default_provider,updated_at)
-         SELECT $1,strategy,default_provider,updated_at FROM integration_preferences WHERE id='default'
-         ON CONFLICT(id) DO NOTHING`,
+        this.database.kind === "mysql"
+          ? `INSERT IGNORE INTO integration_preferences(id,strategy,default_provider,updated_at)
+             SELECT $1,strategy,default_provider,updated_at FROM integration_preferences WHERE id='default'`
+          : `INSERT INTO integration_preferences(id,strategy,default_provider,updated_at)
+             SELECT $1,strategy,default_provider,updated_at FROM integration_preferences WHERE id='default'
+             ON CONFLICT(id) DO NOTHING`,
         [ownerUserId]
       );
       return this.getIntegrationPreference(ownerUserId);
@@ -403,7 +407,7 @@ export class Repository {
     await this.getIntegrationPreference(ownerUserId);
     await this.database.query(
       "UPDATE integration_preferences SET strategy=$1,default_provider=$2,updated_at=$3 WHERE id=$4",
-      [input.strategy, input.defaultProvider, now(), ownerUserId ?? "default"]
+      [input.strategy, input.defaultProvider, dbTime(now()), ownerUserId ?? "default"]
     );
     return this.getIntegrationPreference(ownerUserId);
   }
@@ -457,7 +461,7 @@ export class Repository {
         input.verifyTokenMask,
         input.webhookKey,
         input.ownerUserId ?? null,
-        timestamp
+        dbTime(timestamp)
       ]
     );
     return (await this.getMetaApp(id, input.ownerUserId))!;
@@ -523,15 +527,24 @@ export class Repository {
   }): Promise<MetaAccountConfiguration> {
     const timestamp = now();
     await this.database.query(
-      `INSERT INTO meta_account_credentials(
-        account_id,app_config_id,waba_id,phone_number_id,access_token_cipher,access_token_mask,graph_api_version,
-        sending_enabled,created_at,updated_at
-       ) VALUES($1,$2,$3,$4,$5,$6,$7,0,$8,$8)
-       ON CONFLICT(account_id) DO UPDATE SET
-        app_config_id=EXCLUDED.app_config_id,waba_id=EXCLUDED.waba_id,phone_number_id=EXCLUDED.phone_number_id,
-        access_token_cipher=EXCLUDED.access_token_cipher,access_token_mask=EXCLUDED.access_token_mask,
-        graph_api_version=EXCLUDED.graph_api_version,display_phone_number=NULL,verified_name=NULL,quality_rating=NULL,
-        sending_enabled=0,last_verified_at=NULL,last_error=NULL,updated_at=EXCLUDED.updated_at`,
+      this.database.kind === "mysql"
+        ? `INSERT INTO meta_account_credentials(
+            account_id,app_config_id,waba_id,phone_number_id,access_token_cipher,access_token_mask,graph_api_version,
+            sending_enabled,created_at,updated_at
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,0,$8,$8)
+           ON DUPLICATE KEY UPDATE
+            app_config_id=$2,waba_id=$3,phone_number_id=$4,access_token_cipher=$5,access_token_mask=$6,
+            graph_api_version=$7,display_phone_number=NULL,verified_name=NULL,quality_rating=NULL,
+            sending_enabled=0,last_verified_at=NULL,last_error=NULL,updated_at=$8`
+        : `INSERT INTO meta_account_credentials(
+            account_id,app_config_id,waba_id,phone_number_id,access_token_cipher,access_token_mask,graph_api_version,
+            sending_enabled,created_at,updated_at
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,0,$8,$8)
+           ON CONFLICT(account_id) DO UPDATE SET
+            app_config_id=EXCLUDED.app_config_id,waba_id=EXCLUDED.waba_id,phone_number_id=EXCLUDED.phone_number_id,
+            access_token_cipher=EXCLUDED.access_token_cipher,access_token_mask=EXCLUDED.access_token_mask,
+            graph_api_version=EXCLUDED.graph_api_version,display_phone_number=NULL,verified_name=NULL,quality_rating=NULL,
+            sending_enabled=0,last_verified_at=NULL,last_error=NULL,updated_at=EXCLUDED.updated_at`,
       [
         input.accountId,
         input.appConfigId,
@@ -540,7 +553,7 @@ export class Repository {
         input.accessTokenCipher,
         input.accessTokenMask,
         input.graphApiVersion,
-        timestamp
+        dbTime(timestamp)
       ]
     );
     return (await this.getMetaConfiguration(input.accountId))!;
@@ -565,7 +578,7 @@ export class Repository {
         input.displayPhoneNumber ?? null,
         input.verifiedName ?? null,
         input.qualityRating ?? null,
-        now(),
+        dbTime(now()),
         input.error ?? null
       ]
     );
@@ -577,14 +590,14 @@ export class Repository {
   async setMetaSendingEnabled(accountId: string, enabled: boolean): Promise<void> {
     await this.database.query(
       "UPDATE meta_account_credentials SET sending_enabled=$2,updated_at=$3 WHERE account_id=$1",
-      [accountId, enabled ? 1 : 0, now()]
+      [accountId, enabled ? 1 : 0, dbTime(now())]
     );
   }
 
   async touchMetaWebhook(accountId: string): Promise<void> {
     await this.database.query(
       "UPDATE meta_account_credentials SET last_webhook_at=$2,updated_at=$2 WHERE account_id=$1",
-      [accountId, now()]
+      [accountId, dbTime(now())]
     );
   }
 
@@ -598,10 +611,14 @@ export class Repository {
 
   async setSessionValue(accountId: string, keyType: string, keyId: string, cipherText: string): Promise<void> {
     await this.database.query(
-      `INSERT INTO provider_session_keys(account_id,key_type,key_id,cipher_text,updated_at)
-       VALUES($1,$2,$3,$4,$5)
-       ON CONFLICT(account_id,key_type,key_id) DO UPDATE SET cipher_text=EXCLUDED.cipher_text,updated_at=EXCLUDED.updated_at`,
-      [accountId, keyType, keyId, cipherText, now()]
+      this.database.kind === "mysql"
+        ? `INSERT INTO provider_session_keys(account_id,key_type,key_id,cipher_text,updated_at)
+           VALUES($1,$2,$3,$4,$5)
+           ON DUPLICATE KEY UPDATE cipher_text=$4,updated_at=$5`
+        : `INSERT INTO provider_session_keys(account_id,key_type,key_id,cipher_text,updated_at)
+           VALUES($1,$2,$3,$4,$5)
+           ON CONFLICT(account_id,key_type,key_id) DO UPDATE SET cipher_text=EXCLUDED.cipher_text,updated_at=EXCLUDED.updated_at`,
+      [accountId, keyType, keyId, cipherText, dbTime(now())]
     );
   }
 
@@ -666,15 +683,22 @@ export class Repository {
     const displayName = input.displayName?.trim() || input.phone;
     const hasDisplayName = Boolean(input.displayName?.trim());
     const hasAvatar = input.avatarUrl !== undefined;
-    const result = await this.database.query<{ id: string }>(
-      `INSERT INTO contacts(id,account_id,provider_contact_id,display_name,phone,avatar_url,source,origin,last_seen_at,created_at,updated_at)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$9)
-       ON CONFLICT(account_id,phone) DO UPDATE SET
-         display_name=CASE WHEN $10::integer=1 THEN EXCLUDED.display_name ELSE contacts.display_name END,
-         phone=EXCLUDED.phone,
-         avatar_url=CASE WHEN $11::integer=1 THEN EXCLUDED.avatar_url ELSE contacts.avatar_url END,
-         last_seen_at=EXCLUDED.last_seen_at,updated_at=EXCLUDED.updated_at
-       RETURNING id`,
+    await this.database.query(
+      this.database.kind === "mysql"
+        ? `INSERT INTO contacts(id,account_id,provider_contact_id,display_name,phone,avatar_url,source,origin,last_seen_at,created_at,updated_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$9)
+           ON DUPLICATE KEY UPDATE
+             display_name=CASE WHEN $10=1 THEN $4 ELSE display_name END,
+             phone=$5,
+             avatar_url=CASE WHEN $11=1 THEN $6 ELSE avatar_url END,
+             last_seen_at=$9,updated_at=$9`
+        : `INSERT INTO contacts(id,account_id,provider_contact_id,display_name,phone,avatar_url,source,origin,last_seen_at,created_at,updated_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$9)
+           ON CONFLICT(account_id,phone) DO UPDATE SET
+             display_name=CASE WHEN $10::integer=1 THEN EXCLUDED.display_name ELSE contacts.display_name END,
+             phone=EXCLUDED.phone,
+             avatar_url=CASE WHEN $11::integer=1 THEN EXCLUDED.avatar_url ELSE contacts.avatar_url END,
+             last_seen_at=EXCLUDED.last_seen_at,updated_at=EXCLUDED.updated_at`,
       [
         id,
         input.accountId,
@@ -684,12 +708,12 @@ export class Repository {
         input.avatarUrl ?? null,
         input.source,
         input.origin ?? "whatsapp_sync",
-        timestamp,
+        dbTime(timestamp),
         hasDisplayName ? 1 : 0,
         hasAvatar ? 1 : 0
       ]
     );
-    return (await this.getContact(result.rows[0].id))!;
+    return (await this.getContactByAccountPhone(input.accountId, input.phone))!;
   }
 
   async listConversations(accountId?: string, ownerUserId?: string): Promise<Conversation[]> {
@@ -700,7 +724,7 @@ export class Repository {
        FROM conversations v JOIN contacts c ON c.id=v.contact_id
        JOIN channel_accounts a ON a.id=v.account_id
        WHERE ($1::text IS NULL OR v.account_id=$1) AND ($2::text IS NULL OR a.owner_user_id=$2)
-       ORDER BY v.last_message_at DESC NULLS LAST, v.created_at DESC`,
+       ORDER BY (v.last_message_at IS NULL), v.last_message_at DESC, v.created_at DESC`,
       [accountId ?? null, ownerUserId ?? null]
     );
     return result.rows.map(mapConversation);
@@ -725,12 +749,20 @@ export class Repository {
     providerConversationId: string;
   }): Promise<Conversation> {
     const timestamp = now();
+    const id = randomUUID();
+    await this.database.query(
+      this.database.kind === "mysql"
+        ? `INSERT INTO conversations(id,account_id,contact_id,provider_conversation_id,unread_count,created_at,updated_at)
+           VALUES($1,$2,$3,$4,0,$5,$5)
+           ON DUPLICATE KEY UPDATE contact_id=$3,updated_at=$5`
+        : `INSERT INTO conversations(id,account_id,contact_id,provider_conversation_id,unread_count,created_at,updated_at)
+           VALUES($1,$2,$3,$4,0,$5,$5)
+           ON CONFLICT(account_id,provider_conversation_id) DO UPDATE SET contact_id=EXCLUDED.contact_id,updated_at=EXCLUDED.updated_at`,
+      [id, input.accountId, input.contactId, input.providerConversationId, dbTime(timestamp)]
+    );
     const result = await this.database.query<{ id: string }>(
-      `INSERT INTO conversations(id,account_id,contact_id,provider_conversation_id,unread_count,created_at,updated_at)
-       VALUES($1,$2,$3,$4,0,$5,$5)
-       ON CONFLICT(account_id,provider_conversation_id) DO UPDATE SET contact_id=EXCLUDED.contact_id,updated_at=EXCLUDED.updated_at
-       RETURNING id`,
-      [randomUUID(), input.accountId, input.contactId, input.providerConversationId, timestamp]
+      "SELECT id FROM conversations WHERE account_id=$1 AND provider_conversation_id=$2",
+      [input.accountId, input.providerConversationId]
     );
     return (await this.getConversation(result.rows[0].id))!;
   }
@@ -746,7 +778,7 @@ export class Repository {
   }
 
   async markConversationRead(id: string): Promise<void> {
-    await this.database.query("UPDATE conversations SET unread_count=0,updated_at=$2 WHERE id=$1", [id, now()]);
+    await this.database.query("UPDATE conversations SET unread_count=0,updated_at=$2 WHERE id=$1", [id, dbTime(now())]);
   }
 
   async getLastInboundAt(conversationId: string): Promise<string | null> {
@@ -789,10 +821,13 @@ export class Repository {
 
     const id = randomUUID();
     const occurredAt = input.occurredAt ?? now();
-    const inserted = await this.database.query<{ id: string }>(
-      `INSERT INTO messages(id,account_id,conversation_id,provider_message_id,client_message_id,direction,message_type,body,status,source_language,occurred_at,created_at,media_file_name,media_mime_type,media_size_bytes)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-       ON CONFLICT DO NOTHING RETURNING id`,
+    await this.database.query(
+      this.database.kind === "mysql"
+        ? `INSERT IGNORE INTO messages(id,account_id,conversation_id,provider_message_id,client_message_id,direction,message_type,body,status,source_language,occurred_at,created_at,media_file_name,media_mime_type,media_size_bytes)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`
+        : `INSERT INTO messages(id,account_id,conversation_id,provider_message_id,client_message_id,direction,message_type,body,status,source_language,occurred_at,created_at,media_file_name,media_mime_type,media_size_bytes)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+           ON CONFLICT DO NOTHING`,
       [
         id,
         input.accountId,
@@ -804,15 +839,15 @@ export class Repository {
         input.body,
         input.status,
         input.sourceLanguage ?? null,
-        occurredAt,
-        now(),
+        dbTime(occurredAt),
+        dbTime(now()),
         input.media?.fileName ?? null,
         input.media?.mimeType ?? null,
         input.media?.sizeBytes ?? null
       ]
     );
-    const insertedId = inserted.rows[0]?.id;
-    if (!insertedId) {
+    const inserted = await this.getMessage(id);
+    if (!inserted) {
       const concurrent = await this.findMessageByIdempotency(
         input.accountId,
         input.providerMessageId ?? undefined,
@@ -824,9 +859,9 @@ export class Repository {
     await this.database.query(
       `UPDATE conversations SET last_message_at=$2,updated_at=$2,
        unread_count=unread_count + CASE WHEN $3='inbound' THEN 1 ELSE 0 END WHERE id=$1`,
-      [input.conversationId, occurredAt, input.direction]
+      [input.conversationId, dbTime(occurredAt), input.direction]
     );
-    return (await this.getMessage(insertedId))!;
+    return inserted;
   }
 
   async updateMessageStatus(id: string, status: MessageStatus, providerMessageId?: string): Promise<ChatMessage> {
@@ -872,7 +907,7 @@ export class Repository {
   async updateMessageMediaStorage(id: string, storageKey: string, expiresAt: string): Promise<ChatMessage> {
     await this.database.query(
       "UPDATE messages SET media_storage_key=$2,media_expires_at=$3 WHERE id=$1 AND revoked_at IS NULL",
-      [id, storageKey, expiresAt]
+      [id, storageKey, dbTime(expiresAt)]
     );
     const message = await this.getMessage(id);
     if (!message) throw new Error("Message not found");
@@ -899,7 +934,7 @@ export class Repository {
   async listExpiredMessageMedia(at = now()): Promise<Array<{ id: string; storageKey: string }>> {
     const result = await this.database.query<{ id: string; media_storage_key: string }>(
       "SELECT id,media_storage_key FROM messages WHERE media_storage_key IS NOT NULL AND media_expires_at IS NOT NULL AND media_expires_at <= $1",
-      [at]
+      [dbTime(at)]
     );
     return result.rows.map((row) => ({ id: row.id, storageKey: row.media_storage_key }));
   }
@@ -908,7 +943,7 @@ export class Repository {
     await this.database.query(
       `UPDATE messages SET revoked_at=$2,body='你撤回了一条消息',media_storage_key=NULL,media_expires_at=NULL,
        media_file_name=NULL,media_mime_type=NULL,media_size_bytes=NULL WHERE id=$1`,
-      [id, now()]
+      [id, dbTime(now())]
     );
     const message = await this.getMessage(id);
     if (!message) throw new Error("Message not found");
@@ -923,9 +958,12 @@ export class Repository {
     const row = result.rows[0];
     if (!row && ownerUserId) {
       await this.database.query(
-        `INSERT INTO media_retention_settings(id,mode,retention_days,updated_at)
-         SELECT $1,mode,retention_days,updated_at FROM media_retention_settings WHERE id='default'
-         ON CONFLICT(id) DO NOTHING`,
+        this.database.kind === "mysql"
+          ? `INSERT IGNORE INTO media_retention_settings(id,mode,retention_days,updated_at)
+             SELECT $1,mode,retention_days,updated_at FROM media_retention_settings WHERE id='default'`
+          : `INSERT INTO media_retention_settings(id,mode,retention_days,updated_at)
+             SELECT $1,mode,retention_days,updated_at FROM media_retention_settings WHERE id='default'
+             ON CONFLICT(id) DO NOTHING`,
         [ownerUserId]
       );
       return this.getMediaRetentionPolicy(ownerUserId);
@@ -938,9 +976,12 @@ export class Repository {
   async updateMediaRetentionPolicy(mode: MediaRetentionPolicy["mode"], days: number, ownerUserId?: string): Promise<MediaRetentionPolicy> {
     const updatedAt = now();
     await this.database.query(
-      `INSERT INTO media_retention_settings(id,mode,retention_days,updated_at) VALUES($4,$1,$2,$3)
-       ON CONFLICT(id) DO UPDATE SET mode=EXCLUDED.mode,retention_days=EXCLUDED.retention_days,updated_at=EXCLUDED.updated_at`,
-      [mode, days, updatedAt, ownerUserId ?? "default"]
+      this.database.kind === "mysql"
+        ? `INSERT INTO media_retention_settings(id,mode,retention_days,updated_at) VALUES($4,$1,$2,$3)
+           ON DUPLICATE KEY UPDATE mode=$1,retention_days=$2,updated_at=$3`
+        : `INSERT INTO media_retention_settings(id,mode,retention_days,updated_at) VALUES($4,$1,$2,$3)
+           ON CONFLICT(id) DO UPDATE SET mode=EXCLUDED.mode,retention_days=EXCLUDED.retention_days,updated_at=EXCLUDED.updated_at`,
+      [mode, days, dbTime(updatedAt), ownerUserId ?? "default"]
     );
     return { mode, days, updatedAt };
   }
@@ -1052,7 +1093,7 @@ export class Repository {
     await this.database.query(
       `INSERT INTO ai_provider_profiles(id,name,kind,base_url,api_key_cipher,api_key_mask,model,enabled,last_test_status,owner_user_id,created_at,updated_at)
        VALUES($1,$2,$3,$4,$5,$6,$7,1,'untested',$8,$9,$9)`,
-      [id, input.name, input.kind, input.baseUrl ?? null, input.apiKeyCipher ?? null, input.apiKeyMask ?? null, input.model, input.ownerUserId ?? null, timestamp]
+      [id, input.name, input.kind, input.baseUrl ?? null, input.apiKeyCipher ?? null, input.apiKeyMask ?? null, input.model, input.ownerUserId ?? null, dbTime(timestamp)]
     );
     return (await this.getAiProfile(id, input.ownerUserId))!;
   }
@@ -1060,18 +1101,20 @@ export class Repository {
   async updateAiProfileTest(id: string, status: "success" | "failed", error: string | null): Promise<void> {
     await this.database.query(
       "UPDATE ai_provider_profiles SET last_test_status=$2,last_test_error=$3,updated_at=$4 WHERE id=$1",
-      [id, status, error, now()]
+      [id, status, error, dbTime(now())]
     );
   }
 
   async deleteAiProfile(id: string, ownerUserId?: string): Promise<boolean> {
-    const result = await this.database.query<{ id: string }>(
+    const existing = await this.getAiProfile(id, ownerUserId);
+    if (!existing) return false;
+    await this.database.query(
       `UPDATE ai_provider_profiles
        SET enabled=0,base_url=NULL,api_key_cipher=NULL,api_key_mask=NULL,last_test_error=NULL,updated_at=$2
-       WHERE id=$1 AND enabled=1 AND ($3::text IS NULL OR owner_user_id=$3) RETURNING id`,
-      [id, now(), ownerUserId ?? null]
+       WHERE id=$1 AND enabled=1 AND ($3::text IS NULL OR owner_user_id=$3)`,
+      [id, dbTime(now()), ownerUserId ?? null]
     );
-    return result.rows.length > 0;
+    return true;
   }
 
   async getTranslationPreference(ownerUserId?: string): Promise<TranslationPreference> {
@@ -1084,9 +1127,12 @@ export class Repository {
     const row = result.rows[0];
     if (!row && ownerUserId) {
       await this.database.query(
-        `INSERT INTO translation_preferences(id,auto_translate,target_language,provider_id,crm_auto_create,updated_at)
-         SELECT $1,auto_translate,target_language,provider_id,crm_auto_create,updated_at FROM translation_preferences WHERE id='default'
-         ON CONFLICT(id) DO NOTHING`,
+        this.database.kind === "mysql"
+          ? `INSERT IGNORE INTO translation_preferences(id,auto_translate,target_language,provider_id,crm_auto_create,updated_at)
+             SELECT $1,auto_translate,target_language,provider_id,crm_auto_create,updated_at FROM translation_preferences WHERE id='default'`
+          : `INSERT INTO translation_preferences(id,auto_translate,target_language,provider_id,crm_auto_create,updated_at)
+             SELECT $1,auto_translate,target_language,provider_id,crm_auto_create,updated_at FROM translation_preferences WHERE id='default'
+             ON CONFLICT(id) DO NOTHING`,
         [ownerUserId]
       );
       return this.getTranslationPreference(ownerUserId);
@@ -1106,7 +1152,7 @@ export class Repository {
     await this.database.query(
       `UPDATE translation_preferences SET auto_translate=$1,target_language=$2,provider_id=$3,crm_auto_create=$4,updated_at=$5
        WHERE id=$6`,
-      [next.autoTranslate ? 1 : 0, next.targetLanguage, next.providerId, next.crmAutoCreate ? 1 : 0, now(), ownerUserId ?? "default"]
+      [next.autoTranslate ? 1 : 0, next.targetLanguage, next.providerId, next.crmAutoCreate ? 1 : 0, dbTime(now()), ownerUserId ?? "default"]
     );
     return next;
   }
@@ -1130,7 +1176,7 @@ export class Repository {
     await this.database.query(
       `INSERT INTO translations(id,message_id,source_language,target_language,profile_id,model,trigger_type,status,prompt_version,created_at,updated_at)
        VALUES($1,$2,$3,$4,$5,$6,$7,'pending','translate-v1',$8,$8)`,
-      [id, input.messageId, input.sourceLanguage, input.targetLanguage, input.profileId, input.model, input.trigger, timestamp]
+      [id, input.messageId, input.sourceLanguage, input.targetLanguage, input.profileId, input.model, input.trigger, dbTime(timestamp)]
     );
     return (await this.getTranslation(id))!;
   }
@@ -1174,7 +1220,7 @@ export class Repository {
   async completeTranslation(id: string, translatedText: string, tokenUsage: number): Promise<Translation> {
     await this.database.query(
       "UPDATE translations SET status='translated',translated_text=$2,error=NULL,token_usage=$3,updated_at=$4 WHERE id=$1",
-      [id, translatedText, tokenUsage, now()]
+      [id, translatedText, tokenUsage, dbTime(now())]
     );
     return (await this.getTranslation(id))!;
   }
@@ -1182,7 +1228,7 @@ export class Repository {
   async failTranslation(id: string, error: string): Promise<Translation> {
     await this.database.query(
       "UPDATE translations SET status='failed',error=$2,updated_at=$3 WHERE id=$1",
-      [id, error, now()]
+      [id, error, dbTime(now())]
     );
     return (await this.getTranslation(id))!;
   }
@@ -1220,7 +1266,7 @@ export class Repository {
     await this.database.query(
       `INSERT INTO routing_rules(id,name,lead_type,region,preferred_account_id,fallback_account_id,priority,enabled,owner_user_id,created_at,updated_at)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`,
-      [id, input.name, input.leadType, input.region, input.preferredAccountId, input.fallbackAccountId, input.priority, input.enabled ? 1 : 0, input.ownerUserId ?? null, timestamp]
+      [id, input.name, input.leadType, input.region, input.preferredAccountId, input.fallbackAccountId, input.priority, input.enabled ? 1 : 0, input.ownerUserId ?? null, dbTime(timestamp)]
     );
     return (await this.listRoutingRules(input.ownerUserId)).find((item) => item.id === id)!;
   }
@@ -1234,9 +1280,11 @@ export class Repository {
     input: Omit<RoutingRule, "id" | "createdAt" | "updatedAt">,
     ownerUserId?: string
   ): Promise<RoutingRule | null> {
-    const result = await this.database.query<{ id: string }>(
+    const existing = await this.getRoutingRule(id, ownerUserId);
+    if (!existing) return null;
+    await this.database.query(
       `UPDATE routing_rules SET name=$2,lead_type=$3,region=$4,preferred_account_id=$5,
-       fallback_account_id=$6,priority=$7,enabled=$8,updated_at=$9 WHERE id=$1 AND ($10::text IS NULL OR owner_user_id=$10) RETURNING id`,
+       fallback_account_id=$6,priority=$7,enabled=$8,updated_at=$9 WHERE id=$1 AND ($10::text IS NULL OR owner_user_id=$10)`,
       [
         id,
         input.name,
@@ -1246,19 +1294,21 @@ export class Repository {
         input.fallbackAccountId,
         input.priority,
         input.enabled ? 1 : 0,
-        now(),
+        dbTime(now()),
         ownerUserId ?? null
       ]
     );
-    return result.rows[0] ? this.getRoutingRule(id, ownerUserId) : null;
+    return this.getRoutingRule(id, ownerUserId);
   }
 
   async deleteRoutingRule(id: string, ownerUserId?: string): Promise<boolean> {
-    const result = await this.database.query<{ id: string }>(
-      "DELETE FROM routing_rules WHERE id=$1 AND ($2::text IS NULL OR owner_user_id=$2) RETURNING id",
+    const existing = await this.getRoutingRule(id, ownerUserId);
+    if (!existing) return false;
+    await this.database.query(
+      "DELETE FROM routing_rules WHERE id=$1 AND ($2::text IS NULL OR owner_user_id=$2)",
       [id, ownerUserId ?? null]
     );
-    return Boolean(result.rows[0]);
+    return true;
   }
 
   async resolveRouting(leadType: string, region: string, ownerUserId?: string): Promise<RoutingResolution> {
@@ -1316,19 +1366,24 @@ export class Repository {
   async createCrmContact(contactId: string): Promise<CrmSandboxContact> {
     const contact = await this.getContact(contactId);
     if (!contact) throw new Error("Contact not found");
-    const result = await this.database.query<{ id: string }>(
-      `INSERT INTO crm_contacts(id,phone,name,source,source_contact_id,created_at)
-       VALUES($1,$2,$3,$4,$5,$6)
-       ON CONFLICT(phone) DO UPDATE SET name=EXCLUDED.name RETURNING id`,
-      [randomUUID(), contact.phone, contact.displayName, contact.source, contact.id, now()]
+    const id = randomUUID();
+    await this.database.query(
+      this.database.kind === "mysql"
+        ? `INSERT INTO crm_contacts(id,phone,name,source,source_contact_id,created_at)
+           VALUES($1,$2,$3,$4,$5,$6)
+           ON DUPLICATE KEY UPDATE name=$3`
+        : `INSERT INTO crm_contacts(id,phone,name,source,source_contact_id,created_at)
+           VALUES($1,$2,$3,$4,$5,$6)
+           ON CONFLICT(phone) DO UPDATE SET name=EXCLUDED.name`,
+      [id, contact.phone, contact.displayName, contact.source, contact.id, dbTime(now())]
     );
-    return (await this.listCrmContacts()).find((item) => item.id === result.rows[0].id)!;
+    return (await this.listCrmContacts()).find((item) => item.phone === contact.phone)!;
   }
 
   async audit(action: string, targetType: string, targetId: string, result: string, details: object = {}): Promise<void> {
     await this.database.query(
       "INSERT INTO audit_logs(id,action,target_type,target_id,result,details_json,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)",
-      [randomUUID(), action, targetType, targetId, result, JSON.stringify(details), now()]
+      [randomUUID(), action, targetType, targetId, result, JSON.stringify(details), dbTime(now())]
     );
   }
 }

@@ -304,12 +304,14 @@ export function projectProspectLiveEvents(
       runId: run.id,
       occurredAt: event.createdAt,
       type: `mission.${event.type}`,
-      stage: event.type.startsWith("round_") ? "round" : "mission",
+      stage: event.type.startsWith("deep_")
+        ? "deep_mining"
+        : event.type.startsWith("round_") ? "round" : "mission",
       entityType: "mission",
       entityId: event.missionId,
       status: event.type,
       progress: null,
-      metrics: {},
+      metrics: event.metadata || {},
       failureCode: event.type === "failed" ? "MISSION_FAILED" : "",
       retryable: false,
       message: event.message

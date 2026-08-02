@@ -2,7 +2,11 @@ import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
+import httpProxy from "http-proxy";
 import { createHash, randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import nodemailer from "nodemailer";
 import QRCode from "qrcode";
 import { z } from "zod";
@@ -160,6 +164,10 @@ import { getTradeProvider } from "./trade-providers.js";
 import { ProviderContractError, providerErrorFromUnknown, type ProviderErrorCode, type ProviderRecord } from "./provider-contract.js";
 import { assertProviderBaseUrlAllowed } from "./provider-http-client.js";
 import { providerRequestFingerprint } from "./provider-request-logging.js";
+import {
+  launchLeadFinder,
+  launchLeadFinderSchema
+} from "./lead-finder-launch.js";
 import {
   createProviderExecutionContext,
   executeProviderEnrich,
@@ -381,12 +389,26 @@ import {
 } from "./prospect-verification.js";
 import { refreshProspectScorecard } from "./prospect-scorecard.js";
 import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, CustomerIntelligenceFieldKey, Deal, DealEvent, Exam, ExamAttempt, ExamQuestion, Lead, LeadSourceEvent, LeadSourceType, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProspectIdentityBootstrapAttempt, ProspectOutreachChannel, ProviderCatalogItem, ProviderConnection, ProviderEvidenceSnapshot, SalesRecordAudit, SessionUser, Todo, TradeDocument, TradeDocumentAudit, TradeDocumentSendRecord, WebsiteOpportunity } from "./types.js";
-import type { CompanyProfile } from "./types.js";
+import type { CompanyProfile, Product, Shipment, ShipmentItem } from "./types.js";
+import { recognizeTrackingCode } from "./shipment-ocr.js";
 
 loadLocalEnv();
 
 export const app = express();
 let activeProspectWorkerService: ProspectWorkerService | null = null;
+const communicationTarget = process.env.COMMUNICATION_API_ORIGIN?.trim() || "http://127.0.0.1:3100";
+const communicationProxy = httpProxy.createProxyServer({
+  target: communicationTarget,
+  changeOrigin: false,
+  ws: true
+});
+communicationProxy.on("error", (error, _request, response) => {
+  console.error(`Communication proxy failed: ${error.message}`);
+  if (response && "writeHead" in response && !response.headersSent) {
+    response.writeHead(502, { "content-type": "application/json; charset=utf-8" });
+  }
+  if (response && "end" in response) response.end(JSON.stringify({ message: "Communication 服务暂不可用" }));
+});
 
 async function synchronizeProspectQueue() {
   try {
@@ -404,7 +426,7 @@ async function synchronizeProspectQueue() {
 }
 
 app.disable("x-powered-by");
-app.set("trust proxy", "loopback");
+app.set("trust proxy", process.env.TRUST_PROXY_HOPS === "1" ? 1 : "loopback");
 const allowedOrigins = new Set((process.env.CORS_ORIGINS || "")
   .split(",")
   .map((origin) => origin.trim())
@@ -430,6 +452,10 @@ app.use(cors({
     callback(null, originAllowed(origin));
   }
 }));
+app.use("/whatsapp-plugin/api", (req, res) => {
+  req.url = `/api${req.url}`;
+  communicationProxy.web(req, res);
+});
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "2mb" }));
 app.use(express.urlencoded({ extended: false, limit: "256kb" }));
 
@@ -1078,6 +1104,77 @@ app.get("/api/health", (_req, res) => {
         }
   });
 });
+
+// ── 自动更新 API ──────────────────────────────────────────────────
+import {
+  checkForUpdate,
+  applyUpdate,
+  getUpdateProgress,
+  getLastCheckResult,
+  setMirrorUrl,
+  getMirrorConfig,
+} from "./auto-updater.js";
+
+// 检查更新 (需管理员权限)
+app.get("/api/admin/updates/check", requireAuth, asyncRoute(async (req, res) => {
+  if (req.user!.role !== "admin" && req.user!.role !== "super_admin") {
+    res.status(403).json({ message: "需要管理员权限" });
+    return;
+  }
+  const status = await checkForUpdate();
+  res.json(status);
+}));
+
+// 应用更新 (需管理员权限)
+app.post("/api/admin/updates/apply", requireAuth, asyncRoute(async (req, res) => {
+  if (req.user!.role !== "admin" && req.user!.role !== "super_admin") {
+    res.status(403).json({ message: "需要管理员权限" });
+    return;
+  }
+  const result = await applyUpdate();
+  if (!result.success) {
+    res.status(409).json({ message: result.message });
+    return;
+  }
+  res.status(202).json({ message: result.message });
+}));
+
+// 获取更新进度
+app.get("/api/admin/updates/progress", requireAuth, asyncRoute(async (req, res) => {
+  if (req.user!.role !== "admin" && req.user!.role !== "super_admin") {
+    res.status(403).json({ message: "需要管理员权限" });
+    return;
+  }
+  const progress = getUpdateProgress();
+  const lastCheck = getLastCheckResult();
+  const config = getMirrorConfig();
+  res.json({ progress, lastCheck, config });
+}));
+
+// 配置镜像源 URL
+app.post("/api/admin/updates/mirror", requireAuth, asyncRoute(async (req, res) => {
+  if (req.user!.role !== "admin" && req.user!.role !== "super_admin") {
+    res.status(403).json({ message: "需要管理员权限" });
+    return;
+  }
+  const { url } = req.body as { url?: string };
+  if (!url || typeof url !== "string") {
+    res.status(400).json({ message: "请提供镜像源 URL" });
+    return;
+  }
+  setMirrorUrl(url.trim());
+  res.json({ message: "镜像源已配置", url: url.trim() });
+}));
+
+// 获取镜像源配置
+app.get("/api/admin/updates/config", requireAuth, asyncRoute(async (req, res) => {
+  if (req.user!.role !== "admin" && req.user!.role !== "super_admin") {
+    res.status(403).json({ message: "需要管理员权限" });
+    return;
+  }
+  const config = getMirrorConfig();
+  res.json(config);
+}));
 
 const loginSchema = z.object({
   email: z.string().trim().email().max(180).transform((value) => value.toLowerCase()),
@@ -2315,6 +2412,9 @@ app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
     billingName: z.string().optional().default(""),
     billingAddress: z.string().optional().default(""),
     documentContact: z.string().optional().default(""),
+    phone: z.string().optional().default(""),
+    email: z.string().optional().default(""),
+    website: z.string().optional().default(""),
     defaultPortDischarge: z.string().optional().default(""),
     defaultIncoterm: z.string().optional().default(""),
     defaultPaymentTerm: z.string().optional().default("")
@@ -2349,6 +2449,9 @@ app.patch("/api/customers/:id", requireAuth, asyncRoute(async (req, res) => {
     billingName: z.string().optional(),
     billingAddress: z.string().optional(),
     documentContact: z.string().optional(),
+    phone: z.string().optional(),
+    email: z.string().optional(),
+    website: z.string().optional(),
     defaultPortDischarge: z.string().optional(),
     defaultIncoterm: z.string().optional(),
     defaultPaymentTerm: z.string().optional()
@@ -3187,8 +3290,86 @@ app.post("/api/customers/:id/activities", requireAuth, asyncRoute(async (req, re
   };
   store.customerActivities.unshift(activity);
   if (body.nextReminder) customer.nextReminder = body.nextReminder;
-  await store.persist();
+  void store.persist().catch((err) => console.error("customer activity persist failed:", err));
   res.json({ activity, customer: customerWithPipeline(customer, req.user!) });
+}));
+
+app.post("/api/customers/:id/meeting-notes", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const customer = findWritableCustomer(req.user!, req.params.id, res);
+  if (!customer) return;
+  const transcript = String(req.body?.transcript || "").trim();
+  if (!transcript) { res.status(400).json({ message: "转写内容为空" }); return; }
+
+  const config = getAiConfig(req.user!, "emailDraft");
+  if (!config || !config.apiKey) {
+    const activity = {
+      id: `ca_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      customerId: customer.id,
+      type: "meeting" as const,
+      content: `会议转写记录：${transcript.slice(0, 500)}${transcript.length > 500 ? "..." : ""}`,
+      operatorId: req.user!.id,
+      nextReminder: "",
+      createdAt: new Date().toISOString()
+    };
+    store.customerActivities.unshift(activity);
+    await store.persist();
+    res.json({ summary: "AI 未配置，已保存原始转写记录。", actionItems: [], keyPoints: [], activityId: activity.id });
+    return;
+  }
+
+  const prompt = `你是一个专业的外贸会议纪要助手。请分析以下会议转写内容，生成结构化纪要。\n\n转写内容：\n${transcript.slice(0, 8000)}\n\n请返回 JSON 格式：\n{"summary":"200字以内的会议摘要","keyPoints":["关键要点1","关键要点2"],"actionItems":["待办事项1（需要具体可执行）","待办事项2"]}\n\n注意：actionItems 中每条应是一个具体的待办任务，15字以内。只返回 JSON，不要其他内容。`;
+  try {
+    const aiResult = await callAiModel(config, prompt, 10000);
+    const parsed = extractJsonObject(aiResult) as { summary: string; keyPoints: string[]; actionItems: string[] } | null;
+    const summary = parsed?.summary || "会议纪要生成失败，请查看原始转写。";
+    const keyPoints = parsed?.keyPoints || [];
+    const actionItems = parsed?.actionItems || [];
+
+    const activity = {
+      id: `ca_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      customerId: customer.id,
+      type: "meeting" as const,
+      content: `【会议纪要】${summary}${keyPoints.length ? `\n关键要点：${keyPoints.join("；")}` : ""}`,
+      operatorId: req.user!.id,
+      nextReminder: "",
+      createdAt: new Date().toISOString()
+    };
+    store.customerActivities.unshift(activity);
+
+    for (const item of actionItems.slice(0, 5)) {
+      const todo = {
+        id: `todo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        title: item,
+        type: "customer" as const,
+        customerId: customer.id,
+        ownerId: req.user!.id,
+        teamId: req.user!.teamId,
+        priority: "medium" as const,
+        related: customer.company,
+        done: false,
+        dueAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+        createdAt: new Date().toISOString()
+      };
+      store.todos.unshift(todo);
+    }
+
+    await store.persist();
+    res.json({ summary, actionItems, keyPoints, activityId: activity.id });
+  } catch (err) {
+    const activity = {
+      id: `ca_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      customerId: customer.id,
+      type: "meeting" as const,
+      content: `会议转写记录：${transcript.slice(0, 500)}`,
+      operatorId: req.user!.id,
+      nextReminder: "",
+      createdAt: new Date().toISOString()
+    };
+    store.customerActivities.unshift(activity);
+    await store.persist();
+    res.json({ summary: `AI 分析失败，已保存原始转写。错误：${String(err).slice(0, 100)}`, actionItems: [], keyPoints: [], activityId: activity.id });
+  }
 }));
 
 app.get("/api/customers/:id/intelligence", requireAuth, (req, res) => {
@@ -3483,7 +3664,7 @@ app.post("/api/leads/:id/activities", requireAuth, asyncRoute(async (req, res) =
   lead.lastActivityAt = "刚刚";
   if (body.nextFollowAt) lead.nextFollowAt = body.nextFollowAt;
   if (lead.status === "new") lead.status = "following";
-  await store.persist();
+  void store.persist().catch((err) => console.error("lead activity persist failed:", err));
   res.json({ activity, lead });
 }));
 
@@ -3515,7 +3696,7 @@ app.post("/api/leads/:id/social-touch", requireAuth, asyncRoute(async (req, res)
   lead.lastActivityAt = "刚刚";
   if (body.nextFollowAt) lead.nextFollowAt = body.nextFollowAt;
   if (lead.status === "new") lead.status = "following";
-  await store.persist();
+  void store.persist().catch((err) => console.error("lead social-touch persist failed:", err));
   res.json({ activity, lead });
 }));
 
@@ -4968,7 +5149,7 @@ app.post("/api/deals/:id/events", requireAuth, asyncRoute(async (req, res) => {
     nextAction: body.nextAction,
     nextActionAt: body.nextActionAt
   });
-  await store.persist();
+  void store.persist().catch((err) => console.error("deal event persist failed:", err));
   res.json({ deal, event });
 }));
 
@@ -5051,6 +5232,91 @@ app.post("/api/deals/:id/lost", requireAuth, asyncRoute(async (req, res) => {
   await store.persist();
   res.json({ deal });
 }));
+
+app.get("/api/deals/:id/win-probability", requireAuth, (req, res) => {
+  const store = getStore();
+  const deal = store.deals.find((item) => item.id === req.params.id);
+  if (!deal || !canSeeOwner(req.user!, deal.ownerId, deal.teamId)) {
+    res.status(404).json({ message: "商机不存在" });
+    return;
+  }
+
+  const events = store.dealEvents
+    .filter((event) => event.dealId === deal.id)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+
+  // Factor 1: Stage progression
+  const stageScores: Record<string, number> = { "询盘": 5, "已联系": 15, "已报价": 30, "样品": 50, "谈判": 75, "成交": 100, "丢单": 0 };
+  const stageScore = stageScores[deal.stage] ?? 10;
+
+  // Factor 2: Customer historical win rate
+  const customerDeals = store.deals.filter((d) => d.customerId === deal.customerId && d.id !== deal.id);
+  const wonCount = customerDeals.filter((d) => d.stage === "成交").length;
+  const lostCount = customerDeals.filter((d) => d.stage === "丢单").length;
+  const totalClosed = wonCount + lostCount;
+  const customerWinRate = totalClosed > 0 ? Math.round((wonCount / totalClosed) * 100) : 50;
+  const customerScore = totalClosed === 0 ? 50 : customerWinRate;
+
+  // Factor 3: Follow-up frequency (last 7 days)
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const recentEvents = events.filter((event) => new Date(event.createdAt).getTime() > sevenDaysAgo);
+  const followUpScore = Math.min(100, recentEvents.length * 20);
+
+  // Factor 4: Amount reasonableness (compare with avg won deal amount)
+  const wonDeals = store.deals.filter((d) => d.stage === "成交" && d.currency === deal.currency);
+  const avgWonAmount = wonDeals.length > 0 ? wonDeals.reduce((sum, d) => sum + d.amount, 0) / wonDeals.length : 0;
+  let amountScore: number;
+  if (avgWonAmount === 0) {
+    amountScore = 50;
+  } else {
+    const ratio = deal.amount / avgWonAmount;
+    if (ratio >= 0.5 && ratio <= 2.0) amountScore = 80;
+    else if (ratio >= 0.3 && ratio <= 3.0) amountScore = 60;
+    else amountScore = 30;
+  }
+
+  // Factor 5: Stage momentum (days in current stage — shorter = better)
+  const stageChangedDate = new Date(deal.stageChangedAt).getTime();
+  const daysInStage = Math.floor((Date.now() - stageChangedDate) / (24 * 60 * 60 * 1000));
+  const momentumScore = Math.max(10, Math.min(100, 100 - daysInStage * 5));
+
+  // Weighted overall probability
+  const weights = { stage: 0.35, customer: 0.20, followUp: 0.20, amount: 0.10, momentum: 0.15 };
+  const winProbability = Math.round(
+    stageScore * weights.stage +
+    customerScore * weights.customer +
+    followUpScore * weights.followUp +
+    amountScore * weights.amount +
+    momentumScore * weights.momentum
+  );
+
+  // Generate advice text
+  const adviceParts: string[] = [];
+  if (stageScore >= 75) adviceParts.push("商机已进入谈判阶段，建议尽快确认合同条款并安排签约。");
+  else if (stageScore >= 50) adviceParts.push("已进入样品阶段，建议在48小时内跟进客户反馈并准备报价确认。");
+  else if (stageScore >= 30) adviceParts.push("已完成报价，建议主动跟进客户反馈，避免报价超期。");
+  else adviceParts.push("商机处于早期阶段，建议尽快建立联系并了解客户需求。");
+
+  if (followUpScore < 40) adviceParts.push("近期跟进频率偏低，建议本周至少完成2次有效跟进。");
+  if (customerScore >= 70) adviceParts.push("该客户历史成交率高，建议加大投入力度。");
+  else if (customerScore < 30 && totalClosed > 0) adviceParts.push("该客户历史成交率偏低，建议谨慎评估投入。");
+  if (daysInStage > 14) adviceParts.push(`当前阶段已停留${daysInStage}天，建议推动进入下一阶段。`);
+
+  const factors = [
+    { name: "阶段进展", score: stageScore, description: `${deal.stage}阶段 · 基准${stageScore}%` },
+    { name: "客户成交率", score: customerScore, description: totalClosed > 0 ? `${wonCount}胜${lostCount}负 · ${customerWinRate}%` : "无历史数据 · 50%" },
+    { name: "跟进频率", score: followUpScore, description: `近7天${recentEvents.length}次跟进` },
+    { name: "金额合理度", score: amountScore, description: avgWonAmount > 0 ? `${deal.currency} ${deal.amount.toLocaleString()} vs 均价 ${Math.round(avgWonAmount).toLocaleString()}` : "无参考数据" },
+    { name: "阶段动能", score: momentumScore, description: `当前阶段停留${daysInStage}天` }
+  ];
+
+  res.json({
+    winProbability: Math.min(99, Math.max(1, winProbability)),
+    factors,
+    advice: adviceParts.join(""),
+    isClosed: deal.stage === "成交" || deal.stage === "丢单"
+  });
+});
 
 app.get("/api/deals/closed", requireAuth, (req, res) => {
   const store = getStore();
@@ -6957,6 +7223,9 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
     billingName: z.string().trim().optional().default(""),
     billingAddress: z.string().trim().optional().default(""),
     documentContact: z.string().trim().optional().default(""),
+    phone: z.string().trim().optional().default(""),
+    email: z.string().trim().optional().default(""),
+    website: z.string().trim().optional().default(""),
     defaultPortDischarge: z.string().trim().optional().default(""),
     defaultIncoterm: z.string().trim().optional().default(""),
     defaultPaymentTerm: z.string().trim().optional().default("")
@@ -6984,6 +7253,9 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
         billingName: row.billingName || existing.billingName || row.company,
         billingAddress: row.billingAddress || existing.billingAddress || "",
         documentContact: row.documentContact || existing.documentContact || row.contact,
+        phone: row.phone || existing.phone || "",
+        email: row.email || existing.email || "",
+        website: row.website || existing.website || "",
         defaultPortDischarge: row.defaultPortDischarge || existing.defaultPortDischarge || "",
         defaultIncoterm: row.defaultIncoterm || existing.defaultIncoterm || "",
         defaultPaymentTerm: row.defaultPaymentTerm || existing.defaultPaymentTerm || ""
@@ -7008,6 +7280,9 @@ app.post("/api/import-export/customers/import", requireAuth, asyncRoute(async (r
         billingName: row.billingName || row.company,
         billingAddress: row.billingAddress || "",
         documentContact: row.documentContact || row.contact || "待维护",
+        phone: row.phone || "",
+        email: row.email || "",
+        website: row.website || "",
         defaultPortDischarge: row.defaultPortDischarge || "",
         defaultIncoterm: row.defaultIncoterm || "",
         defaultPaymentTerm: row.defaultPaymentTerm || ""
@@ -7067,7 +7342,7 @@ const documentBodySchema = z.object({
   customerId: z.string().trim().max(64).optional().default(""),
   dealId: z.string().trim().max(64).optional().default(""),
   revision: z.coerce.number().int().positive().optional(),
-  type: z.enum(["PI", "CI"]).default("PI"),
+  type: z.enum(["PI", "CI", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING"]).default("PI"),
   title: z.string().min(1).max(255),
   number: z.string().min(1).max(80),
   issueDate: z.string().min(1).max(40),
@@ -7085,7 +7360,8 @@ const documentBodySchema = z.object({
   validityDate: z.string().max(40).optional().default(""),
   bankInfo: z.string().max(8_000).optional().default(""),
   notes: z.string().max(8_000).optional().default(""),
-  templateStyle: z.enum(["executive", "classic", "compact"]).default("executive"),
+  language: z.enum(["EN", "ES", "RU", "AR", "ZH"]).optional().default("EN"),
+  templateStyle: z.enum(["executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber"]).default("indigo"),
   status: z.enum(["draft", "ready", "pending_approval", "approved", "rejected", "exported"]).optional().default("draft"),
   approvalNote: z.string().max(2_000).optional().default(""),
   approvedAt: z.string().max(100).optional(),
@@ -7230,7 +7506,7 @@ app.patch("/api/trade-documents/:id", requireAuth, asyncRoute(async (req, res) =
   const auditFields = [
     "title", "number", "issueDate", "buyer", "buyerAddress", "buyerContact", "seller",
     "sellerAddress", "currency", "incoterm", "paymentTerm", "shippingMethod",
-    "portLoading", "portDischarge", "validityDate", "bankInfo", "notes", "templateStyle", "status"
+    "portLoading", "portDischarge", "validityDate", "bankInfo", "notes", "templateStyle", "language", "status"
   ] as const;
   auditFields.forEach((field) => appendDocumentAudit(document, field, existing[field], document[field], req.user!));
   store.tradeDocuments[index] = document;
@@ -8651,7 +8927,22 @@ async function buildAgentDevelopmentEmail(actor: { id: string }, input: Record<s
 
 async function communicationRequest<T>(session: SessionUser, path: string, init: RequestInit = {}): Promise<T> {
   const port = Number(process.env.WHATSAPP_PLUGIN_PORT || 3100);
-  const response = await fetch(`http://127.0.0.1:${port}/api/v1${path}`, {
+  const configuredBaseUrl = String(process.env.WHATSAPP_PLUGIN_INTERNAL_URL || "").trim();
+  const baseUrl = configuredBaseUrl || `http://127.0.0.1:${port}`;
+  let internalUrl: URL;
+  try {
+    internalUrl = new URL(baseUrl);
+  } catch {
+    throw new Error("Communication 内部服务地址格式不正确");
+  }
+  if (!["http:", "https:"].includes(internalUrl.protocol)
+    || internalUrl.username
+    || internalUrl.password
+    || internalUrl.search
+    || internalUrl.hash) {
+    throw new Error("Communication 内部服务地址必须是不含凭据、查询参数和片段的 HTTP(S) URL");
+  }
+  const response = await fetch(new URL(`/api/v1${path}`, `${internalUrl.toString().replace(/\/+$/u, "")}/`), {
     ...init,
     headers: {
       authorization: `Bearer ${signToken(session)}`,
@@ -10144,9 +10435,223 @@ app.delete("/api/tools/ai-config/:id", requireAuth, asyncRoute(async (req, res) 
     return;
   }
   store.aiModelConfigs.splice(index, 1);
-  await store.persist();
   const config = getAiConfig(req.user!);
   res.json({ config: config ? publicAiConfig(config) : null, configs: getAiConfigs(req.user!).map(publicAiConfig) });
+  // 持久化在后台进行，不阻塞删除响应（全量快照写入较慢）
+  void store.persist().catch((err) => console.error("ai-config delete persist failed:", err));
+}));
+
+app.get("/api/tools/products", requireAuth, (req, res) => {
+  const store = getStore();
+  const products = store.products
+    .filter((item) => item.ownerId === req.user!.id)
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  res.json({ products });
+});
+
+app.post("/api/tools/products", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    id: z.string().min(1).max(64).optional(),
+    nameZh: z.string().min(1, "中文品名必填").max(200),
+    nameEn: z.string().max(200).default(""),
+    model: z.string().max(200).default(""),
+    category: z.string().max(80).default(""),
+    unit: z.string().max(20).default("pcs"),
+    price: z.number().min(0).default(0),
+    currency: z.string().max(10).default("USD"),
+    hsCode: z.string().max(40).default(""),
+    descriptionZh: z.string().max(4000).default(""),
+    descriptionEn: z.string().max(4000).default(""),
+    tags: z.array(z.string().max(60)).max(30).default([]),
+    imageUrl: z.string().max(512).default("")
+  });
+  let body;
+  try {
+    body = schema.parse(req.body);
+  } catch (err) {
+    res.status(400).json({ message: err instanceof Error ? err.message : "产品参数不合法" });
+    return;
+  }
+  const store = getStore();
+  const existing = body.id
+    ? store.products.find((item) => item.id === body.id && item.ownerId === req.user!.id)
+    : undefined;
+  const product: Product = {
+    id: existing?.id || body.id || `prod_${req.user!.id}_${Date.now()}`,
+    nameZh: body.nameZh,
+    nameEn: body.nameEn,
+    model: body.model,
+    category: body.category,
+    unit: body.unit,
+    price: body.price,
+    currency: body.currency,
+    hsCode: body.hsCode,
+    descriptionZh: body.descriptionZh,
+    descriptionEn: body.descriptionEn,
+    tags: body.tags,
+    imageUrl: body.imageUrl,
+    ownerId: req.user!.id,
+    teamId: req.user!.teamId,
+    updatedAt: new Date().toISOString()
+  };
+  if (existing) Object.assign(existing, product);
+  else store.products.unshift(product);
+  // 轻量级、同步落库：仅写 products 表，毫秒级完成，避免全量快照的卡顿，同时保证刷新不丢数据
+  await store.persistProducts().catch((err) => console.error("products persist failed:", err));
+  res.json({ product, products: store.products.filter((item) => item.ownerId === req.user!.id) });
+}));
+
+app.delete("/api/tools/products/:id", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const index = store.products.findIndex((item) => item.id === req.params.id && item.ownerId === req.user!.id);
+  if (index < 0) {
+    res.status(404).json({ message: "产品不存在或无权删除" });
+    return;
+  }
+  const removed = store.products[index];
+  store.products.splice(index, 1);
+  await store.persistProducts().catch((err) => console.error("products delete persist failed:", err));
+  res.json({ product: removed, products: store.products.filter((item) => item.ownerId === req.user!.id) });
+}));
+
+const uploadsDir = path.resolve(process.env.GOODJOB_UPLOADS_DIR?.trim() || path.resolve(process.cwd(), "uploads"));
+app.use("/uploads", express.static(uploadsDir));
+
+function coerceShipmentItems(input: unknown): ShipmentItem[] {
+  if (!Array.isArray(input)) return [];
+  return input.map((raw, index) => {
+    const item = (raw || {}) as Record<string, unknown>;
+    const num = (value: unknown) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : 0;
+    };
+    return {
+      id: typeof item.id === "string" && item.id ? item.id : `si_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
+      productName: String(item.productName || "").slice(0, 200),
+      model: String(item.model || "").slice(0, 200),
+      hsCode: String(item.hsCode || "").slice(0, 40),
+      quantity: num(item.quantity),
+      unit: String(item.unit || "pcs").slice(0, 20),
+      netWeight: num(item.netWeight),
+      grossWeight: num(item.grossWeight),
+      length: num(item.length),
+      width: num(item.width),
+      height: num(item.height),
+      volume: num(item.volume),
+      note: String(item.note || "").slice(0, 500)
+    };
+  });
+}
+
+app.get("/api/tools/shipments", requireAuth, (req, res) => {
+  const store = getStore();
+  const shipments = store.shipments
+    .filter((item) => item.ownerId === req.user!.id)
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  res.json({ shipments });
+});
+
+app.post("/api/tools/shipments", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    id: z.string().min(1).max(64).optional(),
+    shipmentNo: z.string().max(80).default(""),
+    dealId: z.string().max(64).default(""),
+    dealTitle: z.string().max(200).default(""),
+    customerName: z.string().max(200).default(""),
+    courier: z.string().max(40).default(""),
+    trackingCode: z.string().max(120).default(""),
+    trackingImageUrl: z.string().max(512).default(""),
+    status: z.enum(["draft", "shipped", "in_transit", "delivered", "exception"]).default("draft"),
+    shippedAt: z.string().max(40).default(""),
+    estimatedArrival: z.string().max(40).default(""),
+    note: z.string().max(4000).default(""),
+    items: z.array(z.any()).max(100).default([])
+  });
+  let body;
+  try {
+    body = schema.parse(req.body);
+  } catch (err) {
+    res.status(400).json({ message: err instanceof Error ? err.message : "发货单参数不合法" });
+    return;
+  }
+  const store = getStore();
+  const existing = body.id
+    ? store.shipments.find((item) => item.id === body.id && item.ownerId === req.user!.id)
+    : undefined;
+  const shipment: Shipment = {
+    id: existing?.id || body.id || `ship_${req.user!.id}_${Date.now()}`,
+    shipmentNo: body.shipmentNo,
+    dealId: body.dealId,
+    dealTitle: body.dealTitle,
+    customerName: body.customerName,
+    courier: body.courier,
+    trackingCode: body.trackingCode,
+    trackingImageUrl: body.trackingImageUrl,
+    status: body.status,
+    shippedAt: body.shippedAt,
+    estimatedArrival: body.estimatedArrival,
+    note: body.note,
+    items: coerceShipmentItems(body.items),
+    ownerId: req.user!.id,
+    teamId: req.user!.teamId,
+    updatedAt: new Date().toISOString()
+  };
+  if (existing) Object.assign(existing, shipment);
+  else store.shipments.unshift(shipment);
+  // 轻量级、同步落库：仅写 shipments 表，毫秒级完成，保证刷新不丢数据
+  await store.persistShipments().catch((err) => console.error("shipments persist failed:", err));
+  res.json({ shipment, shipments: store.shipments.filter((item) => item.ownerId === req.user!.id) });
+}));
+
+app.delete("/api/tools/shipments/:id", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const index = store.shipments.findIndex((item) => item.id === req.params.id && item.ownerId === req.user!.id);
+  if (index < 0) {
+    res.status(404).json({ message: "发货单不存在或无权删除" });
+    return;
+  }
+  const removed = store.shipments[index];
+  store.shipments.splice(index, 1);
+  await store.persistShipments().catch((err) => console.error("shipments delete persist failed:", err));
+  res.json({ shipment: removed, shipments: store.shipments.filter((item) => item.ownerId === req.user!.id) });
+}));
+
+app.post("/api/tools/shipments/ocr", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    image: z.string().min(1, "请先上传运单号图片"),
+    mime: z.string().max(80).default("image/png")
+  });
+  let body;
+  try {
+    body = schema.parse(req.body);
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err instanceof Error ? err.message : "参数不合法" });
+    return;
+  }
+  const config = getAiConfig(req.user!);
+  if (!config || !config.enabled || !config.apiKey || !config.baseUrl || !config.model) {
+    res.status(422).json({ ok: false, message: "未配置可用的 AI 视觉模型，请手动填写运单号" });
+    return;
+  }
+  const mime = body.mime.includes("png") ? "image/png" : "image/jpeg";
+  const ext = mime === "image/png" ? "png" : "jpg";
+  const fileId = `ship_ocr_${req.user!.id}_${Date.now()}`;
+  let imageUrl = "";
+  try {
+    await mkdir(uploadsDir, { recursive: true });
+    const base64 = body.image.includes(",") ? body.image.split(",")[1] : body.image;
+    await writeFile(path.join(uploadsDir, `${fileId}.${ext}`), Buffer.from(base64, "base64"));
+    imageUrl = `/uploads/${fileId}.${ext}`;
+  } catch (err) {
+    console.error("shipment ocr image save failed:", err);
+  }
+  try {
+    const trackingCode = await recognizeTrackingCode(body.image, mime, config);
+    res.json({ ok: true, trackingCode, imageUrl });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "AI 识别运单号失败";
+    res.status(422).json({ ok: false, message, imageUrl });
+  }
 }));
 
 app.post("/api/tools/ai-config/test", requireAuth, asyncRoute(async (req, res) => {
@@ -10874,6 +11379,106 @@ function getConfigurableProvider(id: string) {
 app.get("/api/lead-finder/providers", requireAuth, (req, res) => {
   res.json({ providers: allProviderStatuses(req.user!) });
 });
+
+// 将自然语言搜客目标解析为标准英文搜索结构（国家/产品/行业/客户类型/排除词/项目名称）
+// 复用用户已配置的「搜客」用途 AI 模型，结果在界面上可编辑确认后用于创建获客项目
+app.post("/api/lead-finder/parse-goal", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ goal: z.string().trim().min(1).max(2000) }).parse(req.body);
+  const config = getAiConfig(req.user!, "leadFinder");
+  if (!config || !config.apiKey || !configSupportsUseCase(config, "leadFinder")) {
+    res.status(422).json({ message: "未配置可用于搜客的 AI 模型，请先在「AI 模型配置」中启用「搜客」用途" });
+    return;
+  }
+  const customerTypes = [
+    "*", "经销商 / Distributor", "系统集成商 / System Integrator",
+    "OEM 设备厂", "EPC 工程承包商", "MRO 服务商", "终端工厂"
+  ];
+  const prompt = [
+    "你是一个外贸获客意图解析器。用户用中文或英文描述他想寻找的客户，你需要把它转述成用于海外搜索引擎的标准英文搜索条件。",
+    "只输出一个 JSON 对象，不要任何解释、不要 markdown 代码块。JSON 结构：",
+    "{",
+    "  \"name\": \"简短的英文项目名称，用于标识这次搜客任务\",",
+    "  \"markets\": [\"标准英文国家/地区名数组，例如 Thailand、United States、Germany；若未指定具体国家填 [\\\"Global\\\"]\"],",
+    "  \"products\": [\"英文产品/行业关键词数组，描述要找买家的具体产品，例如 instruments and meters\"],",
+    "  \"industries\": [\"英文行业词数组，可选，可空\"],",
+    "  \"customerType\": \"必须是下列之一: " + customerTypes.join(" | ") + "\",",
+    "  \"exclusions\": [\"不想要的客户/关键词英文数组，可选，可空\"]",
+    "}",
+    "要求：",
+    "1. 全部用英文，使用外贸/搜索引擎友好的标准术语。",
+    "2. markets 用规范英文国名；若用户说全球/worldwide/不限国家，用 [\"Global\"]。",
+    "3. customerType 必须严格是给定枚举中的一个（含 \"*\" 表示不限）。",
+    "4. products 至少给 1 个，尽量贴合用户意图。",
+    `用户输入：${body.goal}`
+  ].join("\n");
+  let parsed: Record<string, unknown>;
+  try {
+    const content = await callAiModel(config, prompt, 4000, undefined, 45_000);
+    parsed = extractJsonObject(content) as Record<string, unknown>;
+  } catch (err) {
+    res.status(502).json({ message: "AI 解析失败：" + (err instanceof Error ? err.message : "模型返回无法解析") });
+    return;
+  }
+  const strArr = (value: unknown): string[] =>
+    Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean).slice(0, 30) : [];
+  let markets = strArr(parsed.markets);
+  const products = strArr(parsed.products);
+  const industries = strArr(parsed.industries);
+  const exclusions = strArr(parsed.exclusions);
+  const name = String(parsed.name || "").trim().slice(0, 200);
+  let customerType = String(parsed.customerType || "*").trim();
+  if (!customerTypes.includes(customerType)) customerType = "*";
+  const isGlobal = markets.length === 0 || markets.some((m) => /^(global|全球|all|worldwide|不限)$/i.test(m.trim()));
+  if (isGlobal) markets = ["Global"];
+  if (!products.length && isGlobal) {
+    res.status(422).json({ message: "AI 未能从描述中识别出产品或市场，请补充更具体的目标（如产品、国家）" });
+    return;
+  }
+  res.json({ name, markets, products, industries, customerType, exclusions });
+}));
+
+app.post("/api/lead-finder/launch", requireAuth, asyncRoute(async (req, res) => {
+  const rawIdempotencyKey = req.header("Idempotency-Key");
+  if (!rawIdempotencyKey) {
+    res.status(400).json({
+      message: "必须提供 Idempotency-Key 请求头",
+      errorCode: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    return;
+  }
+  const idempotencyKey = prospectRunIdempotencyKeySchema.parse(
+    rawIdempotencyKey
+  );
+  const body = launchLeadFinderSchema.parse(req.body);
+  try {
+    const result = await launchLeadFinder({
+      store: getStore(),
+      user: req.user!,
+      body,
+      idempotencyKey,
+      onRunCreated: synchronizeProspectQueue
+    });
+    setProspectRunEtag(res, result);
+    res.setHeader(
+      "Server-Timing",
+      [
+        `campaign;dur=${result.launchTimings.campaignMs}`,
+        `strategy;dur=${result.launchTimings.strategyMs}`,
+        `approval;dur=${result.launchTimings.approvalMs}`,
+        `activation;dur=${result.launchTimings.activationMs}`,
+        `run;dur=${result.launchTimings.runMs}`,
+        `queue;dur=${result.launchTimings.queueMs}`,
+        `total;dur=${result.launchTimings.totalMs}`
+      ].join(", ")
+    );
+    res.setHeader("Idempotency-Replayed", result.launchReplayed ? "true" : "false");
+    res.location(`/api/prospect-runs/${result.run.id}`);
+    res.status(result.launchReplayed ? 200 : 201).json(result);
+  } catch (error) {
+    if (sendProspectCampaignError(res, error)) return;
+    throw error;
+  }
+}));
 
 app.get("/api/lead-finder/provider-catalog", requireAuth, (_req, res) => {
   const providers = getStore().providerCatalog
@@ -13260,6 +13865,89 @@ app.get("/api/dashboard/summary", requireAuth, (req, res) => {
   });
 });
 
+app.get("/api/dashboard/leaderboard", requireAuth, (req, res) => {
+  const store = getStore();
+  const periodParam = String(req.query.period || "week");
+  const periodDays = periodParam === "month" ? 30 : periodParam === "quarter" ? 90 : periodParam === "year" ? 365 : 7;
+  const periodLabel = periodParam === "month" ? "近30天" : periodParam === "quarter" ? "近90天" : periodParam === "year" ? "近365天" : "近7天";
+  const windowStart = Date.now() - periodDays * 24 * 60 * 60 * 1000;
+  const prevWindowStart = Date.now() - periodDays * 2 * 24 * 60 * 60 * 1000;
+  const users = store.users.filter((u) => u.status === "active");
+  const isManager = req.user!.role === "super_admin" || req.user!.role === "manager" || req.user!.role === "admin";
+
+  const buildEntry = (user: typeof users[number], from: number, to: number) => {
+    const userDeals = store.deals.filter((d) => d.ownerId === user.id);
+    const wonDeals = userDeals.filter((d) => d.stage === "成交" && new Date(d.stageChangedAt).getTime() >= from && new Date(d.stageChangedAt).getTime() < to);
+    const wonAmount = wonDeals.reduce((sum, d) => sum + d.amount, 0);
+    const newCustomers = store.leads.filter((l) => l.ownerId === user.id && l.convertedCustomerId && new Date(l.createdAt).getTime() >= from && new Date(l.createdAt).getTime() < to).length;
+    const totalDeals = userDeals.filter((d) => d.stage !== "丢单" && !d.archivedAt).length;
+    const wonTotal = userDeals.filter((d) => d.stage === "成交").length;
+    const conversionRate = totalDeals > 0 ? Math.round((wonTotal / totalDeals) * 100) : 0;
+    const followUps = store.dealEvents.filter((e) => {
+      const deal = userDeals.find((d) => d.id === e.dealId);
+      return deal && new Date(e.createdAt).getTime() >= from && new Date(e.createdAt).getTime() < to;
+    }).length;
+    const score = Math.round(wonAmount / 1000 + wonDeals.length * 200 + newCustomers * 500 + followUps * 20);
+    return { userId: user.id, userName: user.name, avatar: user.avatar, wonAmount, wonCount: wonDeals.length, newCustomers, conversionRate, followUps, score };
+  };
+
+  const entries = users.map((user) => {
+    const current = buildEntry(user, windowStart, Date.now());
+    const prev = buildEntry(user, prevWindowStart, windowStart);
+    return { ...current, prevWonAmount: prev.wonAmount };
+  });
+
+  entries.sort((a, b) => b.wonAmount - a.wonAmount || b.newCustomers - a.newCustomers || b.score - a.score);
+  const ranked = entries.map((e, i) => ({ ...e, rank: i + 1 }));
+
+  res.json({
+    scope: isManager ? "全员" : "仅本人",
+    period: periodLabel,
+    entries: isManager ? ranked : ranked.filter((e) => e.userId === req.user!.id)
+  });
+});
+
+app.get("/api/dashboard/badges", requireAuth, (req, res) => {
+  const store = getStore();
+  const user = req.user!;
+  const userDeals = store.deals.filter((d) => d.ownerId === user.id);
+  const userCustomers = store.customers.filter((c) => c.ownerId === user.id);
+  const userEvents = store.dealEvents.filter((e) => userDeals.some((d) => d.id === e.dealId));
+
+  const wonDeals = userDeals.filter((d) => d.stage === "成交");
+  const firstWon = wonDeals.length >= 1;
+  const weekFollowUps = userEvents.filter((e) => new Date(e.createdAt).getTime() > Date.now() - 7 * 24 * 60 * 60 * 1000).length;
+  const streak7 = weekFollowUps >= 7;
+  const monthWon = wonDeals.filter((d) => new Date(d.stageChangedAt).getMonth() === new Date().getMonth()).length;
+  const isMonthlyChamp = monthWon >= 3;
+  const customerCount = userCustomers.length;
+  const isExplorer = customerCount >= 20;
+  const sampleDeals = userDeals.filter((d) => d.stage === "样品" || d.stage === "谈判" || d.stage === "成交");
+  const isSampleMaster = sampleDeals.length >= 5;
+  const totalAmount = wonDeals.reduce((sum, d) => sum + d.amount, 0);
+  const isMillionaire = totalAmount >= 100000;
+  const bigDeal = wonDeals.some((d) => d.amount >= 50000);
+  const fastCloser = wonDeals.some((d) => {
+    const createdEvent = userEvents.find((e) => e.dealId === d.id && e.type === "created");
+    const created = createdEvent ? new Date(createdEvent.createdAt).getTime() : new Date(d.stageChangedAt).getTime();
+    const closed = new Date(d.stageChangedAt).getTime();
+    return closed - created < 7 * 24 * 60 * 60 * 1000;
+  });
+
+  const badges = [
+    { id: "first_won", name: "首单达成", icon: "🎯", desc: "完成第一笔成交订单", earned: firstWon, progress: `${wonDeals.length}/1` },
+    { id: "streak_7", name: "持续跟进", icon: "🔥", desc: "连续7天有跟进记录", earned: streak7, progress: `${weekFollowUps}/7天` },
+    { id: "monthly_champ", name: "月度之星", icon: "⭐", desc: "当月成交3笔以上", earned: isMonthlyChamp, progress: `${monthWon}/3` },
+    { id: "explorer", name: "客户开拓者", icon: "🧭", desc: "名下客户达20个", earned: isExplorer, progress: `${customerCount}/20` },
+    { id: "sample_master", name: "样品达人", icon: "📦", desc: "推动5个商机进入样品阶段", earned: isSampleMaster, progress: `${sampleDeals.length}/5` },
+    { id: "millionaire", name: "十万俱乐部", icon: "💰", desc: "累计成交金额达$100K", earned: isMillionaire, progress: `$${Math.round(totalAmount / 1000)}K/$100K` },
+    { id: "big_deal", name: "大单猎手", icon: "🏆", desc: "单笔成交金额超$50K", earned: bigDeal, progress: bigDeal ? "已达成" : "未达成" },
+    { id: "fast_closer", name: "闪电成交", icon: "⚡", desc: "7天内从创建到成交", earned: fastCloser, progress: fastCloser ? "已达成" : "未达成" },
+  ];
+
+  res.json({ badges, earnedCount: badges.filter((b) => b.earned).length, totalCount: badges.length });
+});
+
 app.post("/api/dashboard/priority-tasks/batch-process", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
   const scopedCustomers = store.customers.filter((customer) => canSeeOwner(req.user!, customer.ownerId, customer.teamId));
@@ -14131,8 +14819,51 @@ async function startServer() {
     process.exit(1);
     return;
   }
+  // ── 生产模式：后端直接 serve 前端静态文件（单端口模式）────────────
+  const frontendDist = process.env.FRONTEND_DIST
+    || path.resolve(process.cwd(), "../frontend/dist")
+    || path.resolve(process.cwd(), "frontend/dist");
+  const communicationFrontendDist = process.env.COMMUNICATION_FRONTEND_DIST?.trim();
+  if (communicationFrontendDist && existsSync(communicationFrontendDist)) {
+    app.use("/whatsapp-plugin", express.static(communicationFrontendDist, {
+      index: false,
+      maxAge: "7d",
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith(".html")) res.setHeader("Cache-Control", "no-store");
+      }
+    }));
+    app.get("/whatsapp-plugin/*", (_req, res) => {
+      res.sendFile(path.resolve(communicationFrontendDist, "index.html"));
+    });
+    console.log(`GoodJob CRM serving Communication frontend from ${communicationFrontendDist}`);
+  }
+  if (existsSync(frontendDist)) {
+    app.use(express.static(frontendDist, {
+      index: false,
+      maxAge: "7d",
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith(".html")) {
+          res.setHeader("Cache-Control", "no-store");
+        }
+      }
+    }));
+    // SPA 回退：所有非 /api、非 /uploads 的 GET 请求返回 index.html
+    app.get("*", (req, res, next) => {
+      if (req.path.startsWith("/api/") || req.path.startsWith("/uploads/")) {
+        return next();
+      }
+      res.sendFile(path.resolve(frontendDist, "index.html"));
+    });
+    console.log(`GoodJob CRM serving frontend from ${frontendDist}`);
+  }
+
   const httpServer = app.listen(port, host, () => {
     console.log(`GoodJob CRM API listening on http://${host}:${port}`);
+  });
+  httpServer.on("upgrade", (request, socket, head) => {
+    if (!request.url?.startsWith("/whatsapp-plugin/socket.io")) return;
+    request.url = request.url.replace(/^\/whatsapp-plugin\/socket\.io/u, "/socket.io");
+    communicationProxy.ws(request, socket, head);
   });
   scheduleMidnightTodoArchive();
 

@@ -4,6 +4,7 @@ export interface LeadSourceAvailability {
   enabled: boolean;
   accessMode: "api" | "bulk_file" | "website_controlled" | "manual_assisted" | "disabled";
   recommended?: boolean;
+  tier?: "free" | "byok_free" | "paid" | "ai";
 }
 
 export type LeadSourceBlockReason = "missing" | "not_ready" | "disabled" | "not_executable";
@@ -23,6 +24,17 @@ export function isLeadSourceExecutable(provider: LeadSourceAvailability | undefi
   return Boolean(provider?.accessMode === "api" && provider.ready && provider.enabled);
 }
 
+export function isLeadSourceAutoSelected(provider: LeadSourceAvailability | undefined) {
+  // 免费来源保留给用户主动选择，避免默认搜索质量和稳定性不可控。
+  return Boolean(
+    provider
+      && (provider.id === "ai_search" || provider.recommended)
+      && provider.tier !== "free"
+      && provider.tier !== "byok_free"
+      && isLeadSourceExecutable(provider)
+  );
+}
+
 export function resolveLeadSearchSources(
   providers: LeadSourceAvailability[],
   selectedIds: string[],
@@ -31,11 +43,7 @@ export function resolveLeadSearchSources(
   if (!selectionTouched) {
     return {
       sources: providers
-        .filter((provider) =>
-          // AI 搜索在模型配置可用时默认参与；其余仅纳入推荐来源
-          (provider.id === "ai_search" || provider.recommended)
-          && isLeadSourceExecutable(provider)
-        )
+        .filter(isLeadSourceAutoSelected)
         .map((provider) => provider.id),
       blocked: [],
       requiresSelection: false

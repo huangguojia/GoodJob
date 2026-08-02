@@ -16,7 +16,21 @@ import {
   enhanceProspectSearchRoundPlan,
   planProspectSearchRound
 } from "./prospect-search-planner.js";
+import {
+  attachDeepMiningWebsiteProbe,
+  canQueueDeepMiningWebsiteProbe,
+  createProspectDeepMiningState,
+  deepMiningHasPendingWork,
+  finishDeepMiningState,
+  planProspectDeepMiningRound,
+  selectNextDeepMiningTask,
+  settleDeepMiningRound,
+  settleDeepMiningVerification,
+  startDeepMiningTask,
+  synchronizeDeepMiningCandidates
+} from "./prospect-deep-mining.js";
 import { prospectCandidateQualificationCounts } from "./prospect-scorecard.js";
+import { queueWebsiteProbe, resumeWebsiteProbeAttempt } from "./website-probe.js";
 import type { CrmStore } from "./store.js";
 import type {
   ProspectSearchRun,
@@ -24,6 +38,7 @@ import type {
   ProspectSuperSearchEvent,
   ProspectSuperSearchMission,
   ProspectSuperSearchRound,
+  ProspectDeepMiningTask,
   SessionUser
 } from "./types.js";
 
@@ -64,6 +79,12 @@ const queryThemeLabels: Record<string, string> = {
   replacement_demand: "改造与替换需求",
   coverage_recovery: "覆盖缺口恢复"
 };
+
+function persistSuperSearchState(store: CrmStore) {
+  return store.persistProspectSuperSearches
+    ? store.persistProspectSuperSearches()
+    : store.persist();
+}
 
 export const prospectSuperSearchPreviewSchema = z.object({
   products: z.array(z.string().trim().min(1).max(200)).min(1).max(30),
@@ -158,7 +179,8 @@ function appendEvent(
   store: CrmStore,
   mission: ProspectSuperSearchMission,
   type: ProspectSuperSearchEvent["type"],
-  message: string
+  message: string,
+  metadata?: ProspectSuperSearchEvent["metadata"]
 ) {
   const sequence = store.prospectSuperSearchEvents.filter((item) => item.missionId === mission.id).length + 1;
   store.prospectSuperSearchEvents.push({
@@ -169,6 +191,7 @@ function appendEvent(
     sequence,
     type,
     message,
+    ...(metadata ? { metadata } : {}),
     createdAt: new Date().toISOString()
   });
 }
@@ -558,15 +581,18 @@ function completeRound(store: CrmStore, mission: ProspectSuperSearchMission, run
     store,
     mission,
     "round_completed",
-    `第 ${round.roundNo} 轮完成：原始 ${round.rawCount}，候选 ${round.candidateCount}，可审查 ${round.reviewReadyCount || 0}，VQA ${round.vqaCount || 0}，过滤 ${round.filteredCount}`
+    round.roundKind === "deep_mining"
+      ? `第 ${round.roundNo} 轮深挖搜索完成：原始 ${round.rawCount}，关联候选 ${round.candidateCount}，过滤 ${round.filteredCount}`
+      : `第 ${round.roundNo} 轮完成：原始 ${round.rawCount}，候选 ${round.candidateCount}，可审查 ${round.reviewReadyCount || 0}，VQA ${round.vqaCount || 0}，过滤 ${round.filteredCount}`
   );
   return round;
 }
 
 export function prospectSuperSearchConvergenceReason(store: CrmStore, mission: ProspectSuperSearchMission) {
   const now = Date.now();
-  if ((mission.reviewReadyCount || 0) >= mission.targetCandidateCount) {
-    return "已达到目标可审查候选数量";
+  if (mission.candidateCount >= mission.targetCandidateCount
+    && !deepMiningHasPendingWork(mission.deepMining)) {
+    return "已达到目标候选数量，深挖队列已完成";
   }
   if (now >= new Date(mission.deadlineAt).getTime()) return "已达到最长运行时间";
   if (mission.costLimit > 0 && mission.totalCost >= mission.costLimit) return "已达到费用上限";
@@ -606,7 +632,8 @@ function finishMission(
 async function startRound(
   store: CrmStore,
   mission: ProspectSuperSearchMission,
-  onRunCreated?: () => void | Promise<void>
+  onRunCreated?: () => void | Promise<void>,
+  deepTask?: ProspectDeepMiningTask
 ) {
   const strategy = store.prospectStrategies.find((item) => item.id === mission.strategyId && item.teamId === mission.teamId);
   if (!strategy || strategy.status !== "approved") {
@@ -623,23 +650,54 @@ async function startRound(
     throw new ProspectSuperSearchError(409, "SUPER_SEARCH_VERSION_INVALID", "超级搜索项目版本不存在");
   }
   const previousRounds = missionRounds(store, mission.id);
-  let plan = planProspectSearchRound({
-    baseQuery: resolveProspectStrategyQuery(strategy.query, version),
-    missionId: mission.id,
-    roundNo,
-    maxRounds: mission.maxRounds,
-    depth: mission.depth,
-    providerIds: strategy.providerPlan.map((item) => item.providerId),
-    previousRounds: previousRounds.map((item) => ({
-      roundNo: item.roundNo,
-      rawCount: item.rawCount,
-      candidateCount: item.candidateCount,
-      duplicateRate: item.duplicateRate,
-      yieldRate: item.yieldRate,
-      queryTheme: item.queryTheme
-    }))
-  });
-  if (mission.aiMode === "auto") {
+  const providerIds = strategy.providerPlan.map((item) => item.providerId);
+  const providerKinds = Object.fromEntries(providerIds.map((providerId) => {
+    const catalog = store.providerCatalog.find((item) => item.code === providerId);
+    return [providerId, [catalog?.category, ...(catalog?.capabilities || [])].filter(Boolean).join(" ")];
+  }));
+  const baseQuery = resolveProspectStrategyQuery(strategy.query, version);
+  const focusCandidate = deepTask
+    ? store.websiteOpportunities.find((item) =>
+        item.id === deepTask.candidateId
+        && item.teamId === mission.teamId
+        && item.ownerId === mission.ownerId
+      )
+    : undefined;
+  if (deepTask && !focusCandidate) {
+    deepTask.status = "failed";
+    deepTask.stopReason = "深挖候选不存在或已离开当前团队范围";
+    deepTask.completedAt = new Date().toISOString();
+    throw new ProspectSuperSearchError(409, "DEEP_MINING_CANDIDATE_MISSING", deepTask.stopReason);
+  }
+  let plan = deepTask && focusCandidate
+    ? planProspectDeepMiningRound({
+        mission,
+        task: deepTask,
+        candidate: focusCandidate,
+        baseQuery,
+        providerIds,
+        providerKinds
+      })
+    : planProspectSearchRound({
+        baseQuery,
+        missionId: mission.id,
+        roundNo,
+        maxRounds: mission.maxRounds,
+        depth: mission.depth,
+        providerIds,
+        providerKinds,
+        previousRounds: previousRounds.map((item) => ({
+          roundNo: item.roundNo,
+          rawCount: item.rawCount,
+          candidateCount: item.candidateCount,
+          duplicateRate: item.duplicateRate,
+          yieldRate: item.yieldRate,
+          queryTheme: item.queryTheme
+        }))
+      });
+  // 首轮先按用户已经确认的规则立即入队，避免可选 AI 扩词阻塞任务启动。
+  // 从第二轮开始，AI 会结合真实覆盖缺口继续扩展查询。
+  if (!deepTask && roundNo > 1 && mission.aiMode === "auto") {
     const config = store.aiModelConfigs
       .filter((item) =>
         item.ownerId === mission.ownerId
@@ -682,6 +740,7 @@ async function startRound(
     requestId: `super-search:${mission.id}:${roundNo}`,
     queryPlanOverride: {
       resolvedQuery: plan.resolvedQuery,
+      providerResolvedQueries: plan.providerResolvedQueries,
       metadata: plan.metadata
     }
   });
@@ -694,6 +753,10 @@ async function startRound(
     teamId: mission.teamId,
     ownerId: mission.ownerId,
     roundNo,
+    roundKind: deepTask ? "deep_mining" : "discovery",
+    focusCandidateId: deepTask?.candidateId,
+    focusNodeId: deepTask?.nodeId,
+    miningDepth: deepTask?.depth,
     runId: result.run.id,
     queryPlanSnapshot: structuredClone(storedRun.executionSnapshot.resolvedQuery),
     plannerVersion: plan.metadata.plannerVersion,
@@ -726,13 +789,59 @@ async function startRound(
   mission.status = "running";
   mission.revision += 1;
   mission.updatedAt = now;
+  if (deepTask && mission.deepMining) {
+    startDeepMiningTask(
+      mission.deepMining,
+      deepTask,
+      result.run.id,
+      roundNo,
+      plan.queryCells.map((item) => item.queryText).join(" | ").slice(0, 1_000)
+    );
+    appendEvent(store, mission, "deep_query_started", `正在深挖“${focusCandidate!.company}”的企业关系与采购证据`, {
+      candidateId: focusCandidate!.id,
+      nodeId: deepTask.nodeId,
+      depth: deepTask.depth,
+      roundNo
+    });
+    if (canQueueDeepMiningWebsiteProbe(mission.deepMining, focusCandidate!)) {
+      try {
+        const queued = await queueWebsiteProbe(
+          store,
+          focusCandidate!,
+          mission.ownerId,
+          async (candidate) => {
+            if (store.persistProspectCandidates) {
+              await store.persistProspectCandidates([candidate.id]);
+            } else {
+              await store.persist();
+            }
+          }
+        );
+        if (attachDeepMiningWebsiteProbe(mission.deepMining, deepTask, queued.attempt.id)) {
+          appendEvent(store, mission, "deep_probe_queued", `已低频排队验证“${focusCandidate!.company}”官网`, {
+            candidateId: focusCandidate!.id,
+            attemptId: queued.attempt.id,
+            replayed: queued.replayed
+          });
+        }
+      } catch (error) {
+        appendEvent(store, mission, "deep_probe_completed", `“${focusCandidate!.company}”官网未进入探针，不影响关系搜索继续`, {
+          candidateId: focusCandidate!.id,
+          failed: true,
+          reason: error instanceof Error ? error.message.slice(0, 300) : "官网验证不可用"
+        });
+      }
+    }
+  }
   appendEvent(
     store,
     mission,
     "round_started",
-    `第 ${roundNo} 轮“${queryThemeLabels[plan.metadata.theme] || plan.metadata.theme}”已进入队列，执行 ${result.shards.length} 个数据源`
+    deepTask
+      ? `第 ${roundNo} 轮候选深挖已进入队列，执行 ${result.shards.length} 个数据源`
+      : `第 ${roundNo} 轮“${queryThemeLabels[plan.metadata.theme] || plan.metadata.theme}”已进入队列，执行 ${result.shards.length} 个数据源`
   );
-  await store.persist();
+  await persistSuperSearchState(store);
   await onRunCreated?.();
   return result;
 }
@@ -743,6 +852,7 @@ export function prospectSuperSearchPreview(input: z.infer<typeof prospectSuperSe
   const mapProviderIds = mapProviderIdsFromIds(undefined, parsed.providerIds);
   const aiDiscoveryProviderIds = aiDiscoveryProviderIdsFromIds(undefined, parsed.providerIds);
   const maxRounds = depthRounds[parsed.depth];
+  const deepMining = createProspectDeepMiningState(parsed.depth, maxRounds);
   const marketCells = parsed.markets.length * parsed.customerTypes.length;
   const queryThemes = Math.max(1, parsed.products.length + parsed.industries.length);
   const coverageCombinations = Math.min(500, marketCells * queryThemes);
@@ -769,7 +879,11 @@ export function prospectSuperSearchPreview(input: z.infer<typeof prospectSuperSe
     maxDurationMinutes: parsed.maxDurationMinutes,
     costLimit: parsed.costLimit,
     currency: parsed.currency,
-    usesPaidBudget: parsed.costLimit > 0
+    usesPaidBudget: parsed.costLimit > 0,
+    deepMiningEnabled: true,
+    maxMiningDepth: deepMining.maxDepth,
+    maxRootCandidates: deepMining.maxRootCandidates,
+    maxMiningQueries: deepMining.maxQueries
   };
 }
 
@@ -884,22 +998,23 @@ export async function createProspectSuperSearch(input: {
     stopReason: "",
     createdBy: input.user.id,
     createdAt: now.toISOString(),
-    updatedAt: now.toISOString()
+    updatedAt: now.toISOString(),
+    deepMining: createProspectDeepMiningState(body.depth, depthRounds[body.depth])
   };
   input.store.prospectSuperSearchMissions.push(mission);
   appendEvent(
     input.store,
     mission,
     "created",
-    `超级搜索已创建：目标 ${mission.targetCandidateCount} 家可审查候选，最多 ${mission.maxRounds} 轮${webProviderIds.length ? `，实时 Web API ${webProviderIds.length} 个` : ""}${mapProviderIds.length ? `，地图来源 ${mapProviderIds.length} 个` : ""}${aiDiscoveryProviderIds.length ? "，AI 深度发现已启用" : ""}`
+    `超级搜索已创建：目标 ${mission.targetCandidateCount} 家候选，最多 ${mission.maxRounds} 轮，关系深挖最多 ${mission.deepMining!.maxDepth} 层${webProviderIds.length ? `，实时 Web API ${webProviderIds.length} 个` : ""}${mapProviderIds.length ? `，地图来源 ${mapProviderIds.length} 个` : ""}${aiDiscoveryProviderIds.length ? "，AI 查询辅助已启用" : ""}`
   );
-  await input.store.persist();
+  await persistSuperSearchState(input.store);
   try {
     const run = await startRound(input.store, mission, input.onRunCreated);
     return { ...superSearchDetail(input.store, input.user, mission), run };
   } catch (error) {
     finishMission(input.store, mission, "failed", error instanceof Error ? error.message : "首轮搜索启动失败");
-    await input.store.persist();
+    await persistSuperSearchState(input.store);
     throw error;
   }
 }
@@ -939,7 +1054,7 @@ function superSearchAcceptance(
   const vqaCount = mission.vqaCount || 0;
   const outcome = !terminal ? "running"
     : mission.status === "cancelled" ? "cancelled"
-      : reviewReadyCount >= mission.targetCandidateCount ? "success"
+      : mission.candidateCount >= mission.targetCandidateCount ? "success"
         : mission.candidateCount > 0 || completedSources.length > 0
           ? "partial_success"
           : mission.status === "failed" ? "failed" : "empty";
@@ -959,6 +1074,9 @@ function superSearchAcceptance(
     reviewReadyCount,
     vqaCount,
     targetReviewReadyCount: mission.targetCandidateCount,
+    targetCandidateCount: mission.targetCandidateCount,
+    researchReadyCount: mission.deepMining?.summary.researchReadyCount || 0,
+    deepMiningStatus: mission.deepMining?.status || "queued",
     sourceSuccessCount: completedSources.length,
     sourceFailureCount: failedSources.length,
     sourceSkippedCount: skippedSources.length,
@@ -1034,9 +1152,71 @@ export async function transitionProspectSuperSearch(input: {
     }
     finishMission(input.store, mission, "cancelled", input.reason || "用户取消超级搜索");
   }
-  await input.store.persist();
+  await persistSuperSearchState(input.store);
   await input.onRunChanged?.();
   return superSearchDetail(input.store, input.user, mission);
+}
+
+async function resumePendingDeepMiningProbes(
+  store: CrmStore,
+  mission: ProspectSuperSearchMission
+) {
+  const state = mission.deepMining;
+  if (!state) return;
+  for (const task of state.tasks.filter((item) =>
+    item.status === "verifying" && item.websiteProbeAttemptId
+  )) {
+    const candidate = store.websiteOpportunities.find((item) =>
+      item.id === task.candidateId
+      && item.teamId === mission.teamId
+      && item.ownerId === mission.ownerId
+    );
+    const attempt = candidate?.websiteProbeAttempts?.find((item) =>
+      item.id === task.websiteProbeAttemptId
+    );
+    if (!candidate || !attempt) {
+      task.status = "failed";
+      task.stopReason = "官网验证恢复失败：候选或探针记录不存在";
+      task.completedAt = new Date().toISOString();
+      if (state.activeTaskId === task.id) state.activeTaskId = "";
+      state.status = "queued";
+      continue;
+    }
+    if (["completed", "failed"].includes(attempt.status)) continue;
+    try {
+      const resumed = await resumeWebsiteProbeAttempt(
+        store,
+        candidate,
+        attempt,
+        mission.ownerId,
+        async (changedCandidate) => {
+          if (store.persistProspectCandidates) {
+            await store.persistProspectCandidates([changedCandidate.id]);
+          } else {
+            await store.persist();
+          }
+        }
+      );
+      if (resumed) {
+        appendEvent(store, mission, "deep_probe_queued", `已从持久化进度恢复“${candidate.company}”官网验证`, {
+          candidateId: candidate.id,
+          attemptId: attempt.id,
+          resumed: true
+        });
+      }
+    } catch (error) {
+      task.status = "failed";
+      task.stopReason = error instanceof Error ? error.message.slice(0, 500) : "官网验证恢复失败";
+      task.completedAt = new Date().toISOString();
+      if (state.activeTaskId === task.id) state.activeTaskId = "";
+      state.status = "queued";
+      appendEvent(store, mission, "deep_probe_completed", task.stopReason, {
+        candidateId: candidate.id,
+        attemptId: attempt.id,
+        failed: true
+      });
+    }
+  }
 }
 
 export class ProspectSuperSearchRunner {
@@ -1065,13 +1245,81 @@ export class ProspectSuperSearchRunner {
     try {
       await this.store.readBarrier();
       for (const mission of this.store.prospectSuperSearchMissions.filter((item) => activeMissionStatuses.has(item.status))) {
+        await resumePendingDeepMiningProbes(this.store, mission);
+        const verifiedTasks = settleDeepMiningVerification(this.store, mission);
+        for (const task of verifiedTasks) {
+          appendEvent(this.store, mission, "deep_probe_completed", "候选官网低频验证已结束，评分与证据已刷新", {
+            candidateId: task.candidateId,
+            taskId: task.id
+          });
+          appendEvent(this.store, mission, "deep_candidate_converged", task.stopReason, {
+            candidateId: task.candidateId,
+            taskId: task.id,
+            newNodeCount: task.newNodeCount,
+            evidenceCount: task.evidenceCount
+          });
+        }
         const run = this.store.prospectSearchRuns.find((item) => item.id === mission.currentRunId && item.teamId === mission.teamId);
-        if (!run || !terminalRunStatuses.has(run.status)) continue;
+        if (!run || !terminalRunStatuses.has(run.status)) {
+          if (verifiedTasks.length) await persistSuperSearchState(this.store);
+          continue;
+        }
         const round = completeRound(this.store, mission, run);
+        if (!round) continue;
+        const deepOutcome = settleDeepMiningRound(this.store, mission, round);
+        const rootsBefore = mission.deepMining?.summary.rootCandidateCount || 0;
+        synchronizeDeepMiningCandidates(this.store, mission, missionCandidateIds(this.store, mission));
+        const rootsAfter = mission.deepMining?.summary.rootCandidateCount || 0;
+        if (rootsBefore === 0 && rootsAfter > 0) {
+          appendEvent(this.store, mission, "deep_mining_started", `已选出 ${rootsAfter} 个根候选，开始候选级证据深挖`, {
+            rootCandidateCount: rootsAfter,
+            maxDepth: mission.deepMining?.maxDepth || 0,
+            maxQueries: mission.deepMining?.maxQueries || 0
+          });
+        }
+        if (deepOutcome.evidence > 0) {
+          appendEvent(this.store, mission, "deep_evidence_found", `本轮归档 ${deepOutcome.evidence} 条可追溯证据`, {
+            evidenceCount: deepOutcome.evidence,
+            duplicateCount: deepOutcome.duplicates,
+            roundNo: round.roundNo
+          });
+        }
+        if (deepOutcome.relations > 0) {
+          appendEvent(this.store, mission, "deep_relation_found", `本轮发现 ${deepOutcome.relations} 条候选关系`, {
+            relationCount: deepOutcome.relations,
+            newNodeCount: deepOutcome.newNodes,
+            roundNo: round.roundNo
+          });
+        }
+        if (mission.deepMining?.status === "verifying") {
+          await persistSuperSearchState(this.store);
+          continue;
+        }
+        if (mission.deepMining
+          && mission.deepMining.status !== "completed"
+          && mission.deepMining.queriesUsed >= mission.deepMining.maxQueries) {
+          finishDeepMiningState(mission.deepMining, "深挖查询预算已用尽，已保留全部证据并停止剩余深挖任务");
+          appendEvent(this.store, mission, "deep_mining_completed", mission.deepMining.stopReason, {
+            queriesUsed: mission.deepMining.queriesUsed,
+            evidenceCount: mission.deepMining.summary.evidenceCount,
+            relationCount: mission.deepMining.summary.relationCount
+          });
+        }
         const stopReason = prospectSuperSearchConvergenceReason(this.store, mission);
         if (run.status === "cancelled") {
+          if (mission.deepMining && mission.deepMining.status !== "completed") {
+            finishDeepMiningState(mission.deepMining, "用户结束任务，剩余深挖队列已停止");
+          }
           finishMission(this.store, mission, "cancelled", "当前轮次已取消");
         } else if (stopReason) {
+          if (mission.deepMining && mission.deepMining.status !== "completed") {
+            finishDeepMiningState(mission.deepMining, stopReason);
+            appendEvent(this.store, mission, "deep_mining_completed", stopReason, {
+              queriesUsed: mission.deepMining.queriesUsed,
+              evidenceCount: mission.deepMining.summary.evidenceCount,
+              relationCount: mission.deepMining.summary.relationCount
+            });
+          }
           if (round && round.decision === "pending") {
             round.decision = stopReason.includes("收敛") ? "converged" : "limit_reached";
             round.decisionReason = stopReason;
@@ -1079,7 +1327,7 @@ export class ProspectSuperSearchRunner {
           finishMission(
             this.store,
             mission,
-            (mission.reviewReadyCount || 0) >= mission.targetCandidateCount
+            mission.candidateCount >= mission.targetCandidateCount
               ? "succeeded"
               : mission.candidateCount
                 ? "partial_success"
@@ -1091,9 +1339,18 @@ export class ProspectSuperSearchRunner {
             round.decision = "continue";
             round.decisionReason = "仍有覆盖空间，继续下一轮";
           }
-          await this.store.persist();
+          await persistSuperSearchState(this.store);
           try {
-            await startRound(this.store, mission, this.options.onRunCreated);
+            const nextDeepTask = round.roundKind !== "deep_mining"
+              || mission.candidateCount >= mission.targetCandidateCount
+              ? selectNextDeepMiningTask(mission.deepMining!)
+              : undefined;
+            await startRound(
+              this.store,
+              mission,
+              this.options.onRunCreated,
+              nextDeepTask
+            );
           } catch (error) {
             finishMission(
               this.store,
@@ -1101,11 +1358,11 @@ export class ProspectSuperSearchRunner {
               "failed",
               error instanceof Error ? error.message : "下一轮搜索启动失败"
             );
-            await this.store.persist();
+            await persistSuperSearchState(this.store);
           }
           continue;
         }
-        await this.store.persist();
+        await persistSuperSearchState(this.store);
       }
     } catch (error) {
       if (process.env.NODE_ENV !== "test") console.error("[super-search]", error);

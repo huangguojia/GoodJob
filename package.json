@@ -4,8 +4,17 @@
   "private": true,
   "license": "Apache-2.0",
   "scripts": {
-    "dev": "concurrently -k -n crm-api,crm-web,whatsapp \"npm run dev:mysql --workspace backend\" \"npm run dev --workspace frontend\" \"npm --prefix whatsapp-plugin run dev\"",
-    "dev:mysql": "concurrently -k -n crm-api,crm-web,whatsapp \"npm run dev:mysql --workspace backend\" \"npm run dev --workspace frontend\" \"npm --prefix whatsapp-plugin run dev\"",
+    "dev": "npm run app:dev",
+    "dev:mysql": "npm run app:dev",
+    "dev:services": "concurrently -k -n crm-api,crm-web,whatsapp \"npm run dev:mysql --workspace backend\" \"npm run dev --workspace frontend\" \"PORT=3100 npm --prefix whatsapp-plugin run dev\"",
+    "app:personal": "node scripts/run-with-profile.mjs personal npm run dev:services",
+    "app:dev": "node scripts/run-with-profile.mjs development npm run dev:services",
+    "db:migrate:personal": "node scripts/run-with-profile.mjs personal npm run db:migrate:mysql --workspace backend",
+    "db:migrate:dev": "node scripts/run-with-profile.mjs development npm run db:migrate:mysql --workspace backend",
+    "db:profiles:provision": "node scripts/provision-local-databases.mjs",
+    "db:profiles:status": "node scripts/database-profile-status.mjs",
+    "test:mysql": "node scripts/run-with-profile.mjs test npm run test:mysql:suite --workspace backend",
+    "svn:check-database": "node scripts/check-database-safety.mjs",
     "build": "npm run build --workspace backend && npm run build --workspace frontend && npm --prefix whatsapp-plugin run build",
     "test": "npm run test --workspace backend && npm run test --workspace frontend && npm --prefix whatsapp-plugin test",
     "test:e2e": "npm run test:e2e --workspace frontend"
@@ -16,5 +25,8 @@
   ],
   "devDependencies": {
     "concurrently": "^9.2.1"
+  },
+  "dependencies": {
+    "html-to-image": "^1.11.13"
   }
 }

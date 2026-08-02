@@ -34,12 +34,10 @@ const fullSnapshot = {
 };
 
 async function main() {
-  const configuredUrl = process.env.MYSQL_TEST_ADMIN_URL
-    || process.env.DATABASE_URL
-    || process.env.MYSQL_URL;
+  const configuredUrl = process.env.MYSQL_TEST_ADMIN_URL;
   if (!configuredUrl) {
     throw new Error(
-      "Prospect Campaign MySQL test requires MYSQL_TEST_ADMIN_URL, DATABASE_URL or MYSQL_URL"
+      "Prospect Campaign MySQL test requires MYSQL_TEST_ADMIN_URL"
     );
   }
 
@@ -226,24 +224,34 @@ async function main() {
     thirdStore.prospectCampaignVersions.push(invalidExistingVersion);
     const campaignCountBeforeRollback = thirdStore.prospectCampaigns.length;
     const eventCountBeforeRollback = thirdStore.prospectCampaignEvents.length;
-    await assert.rejects(
-      createProspectCampaign({
-        store: thirdStore,
-        user: publicUser(
-          thirdStore.users.find((item) => item.id === owner.id)!
-        ),
-        body: { name: "必须回滚的项目" },
-        requestId: "mysql-campaign-rollback"
-      }),
-      /获客项目版本快照或内容哈希不一致/
-    );
-    assert.equal(thirdStore.prospectCampaigns.length, campaignCountBeforeRollback);
-    assert.equal(thirdStore.prospectCampaignEvents.length, eventCountBeforeRollback);
+    await createProspectCampaign({
+      store: thirdStore,
+      user: publicUser(
+        thirdStore.users.find((item) => item.id === owner.id)!
+      ),
+      body: { name: "权威刷新后创建的项目" },
+      requestId: "mysql-campaign-authoritative-refresh"
+    });
     assert.equal(
-      thirdStore.prospectCampaigns.some((item) => item.name === "必须回滚的项目"),
+      thirdStore.prospectCampaigns.length,
+      campaignCountBeforeRollback + 1
+    );
+    assert.equal(
+      thirdStore.prospectCampaignEvents.length,
+      eventCountBeforeRollback + 1
+    );
+    assert.equal(
+      thirdStore.prospectCampaigns.some(
+        (item) => item.name === "权威刷新后创建的项目"
+      ),
+      true
+    );
+    assert.equal(
+      thirdStore.prospectCampaignVersions.some(
+        (item) => item.id === invalidExistingVersion.id
+      ),
       false
     );
-    thirdStore.prospectCampaignVersions.pop();
 
     await thirdStore.persist();
     const [campaignRows] = await admin.query<Array<RowDataPacket>>(

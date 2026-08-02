@@ -283,7 +283,8 @@ implements ProspectExecutionProviderDispatcher {
       if (!request.connectionId.startsWith("builtin:") && !connection) {
         throw new Error("Provider 连接不存在、未启用或不属于当前业务员");
       }
-      const querySnapshot = run.executionSnapshot.resolvedQuery;
+      const querySnapshot = run.executionSnapshot.providerResolvedQueries?.[request.providerCode]
+        || run.executionSnapshot.resolvedQuery;
       const checkpoint = this.store.prospectExecutionCheckpoints.find(
         (item) =>
           item.teamId === run.teamId
@@ -293,7 +294,8 @@ implements ProspectExecutionProviderDispatcher {
       );
       const remaining = Math.max(
         1,
-        shard.resultLimit - (checkpoint?.acceptedCount || 0)
+        providerRequest?.requestedResultLimit
+          || shard.resultLimit - (checkpoint?.acceptedCount || 0)
       );
       const query: LeadQuery = {
         goal: [

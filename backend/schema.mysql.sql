@@ -94,7 +94,7 @@ CREATE TABLE customer_intelligence_suggestions (
   reviewed_by VARCHAR(64) DEFAULT '',
   reviewed_at DATETIME NULL,
   review_note VARCHAR(500) DEFAULT '',
-  created_at DATETIME NOT NULL,
+  created_at DATETIME(3) NOT NULL,
   updated_at DATETIME NOT NULL,
   UNIQUE KEY uniq_customer_intelligence_payload (
     team_id, owner_id, customer_id, payload_hash

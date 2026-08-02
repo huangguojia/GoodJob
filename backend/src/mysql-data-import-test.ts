@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import mysql from "mysql2/promise";
+import { assertDatabaseProfile } from "./database-profile.js";
 import {
   assertMysqlDataImportToken,
   beginMysqlDataImport,
@@ -11,6 +12,7 @@ import {
 
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error("mysql-data-import-test 需要 DATABASE_URL");
+assertDatabaseProfile(process.env, url);
 process.env.MYSQL_DATA_IMPORT_TOKEN ||= "goodjob-mysql-import-test-token-20260724";
 
 assertMysqlDataImportToken(process.env.MYSQL_DATA_IMPORT_TOKEN);

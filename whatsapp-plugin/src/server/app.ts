@@ -194,7 +194,7 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   const autoMigrate = config.autoMigrate ?? config.nodeEnv !== "production";
   if (config.seedDemo && !demoProviderEnabled) throw new Error("Demo seed requires the Demo Provider to be enabled");
   if (config.nodeEnv === "production") {
-    if (config.databaseClient !== "postgres") throw new Error("DATABASE_CLIENT must be postgres in production");
+    if (config.databaseClient !== "mysql") throw new Error("DATABASE_CLIENT must be mysql in production");
     if (!config.sessionMasterKey || Buffer.from(config.sessionMasterKey, "base64").length !== 32) {
       throw new Error("SESSION_MASTER_KEY must decode to exactly 32 bytes in production");
     }

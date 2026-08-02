@@ -397,6 +397,9 @@ function newCustomer(
     billingName: "",
     billingAddress: "",
     documentContact: "",
+    phone: "",
+    email: "",
+    website: "",
     defaultPortDischarge: "",
     defaultIncoterm: "",
     defaultPaymentTerm: ""

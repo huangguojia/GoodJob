@@ -16,12 +16,13 @@ import type {
   WebsiteProbeStage
 } from "./types.js";
 
-const POLICY_VERSION = "website-probe-policy-v2" as const;
+const POLICY_VERSION = "website-probe-policy-v3" as const;
 const USER_AGENT = "GoodJobCRM-WebsiteProbe/1.0";
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const CACHE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const CIRCUIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const domainQueues = new Map<string, Promise<void>>();
+const scheduledAttemptIds = new Set<string>();
 const teamNextAllowedAt = new Map<string, number>();
 const parseRobots = robotsParser as unknown as (
   url: string,
@@ -199,12 +200,12 @@ function alternateHost(hostname: string, domain: string) {
   return "";
 }
 
-function networkPolicy(hostname: string, domain: string) {
+function networkPolicy(hostname: string, domain: string, extraPaths: string[] = []) {
   const alternate = alternateHost(hostname, domain);
   return {
     allowedHosts: [hostname],
     redirectHosts: alternate ? [alternate] : [],
-    allowedPaths: ["/", "/robots.txt"],
+    allowedPaths: ["/", "/robots.txt", ...extraPaths],
     allowedPathPrefixes: [],
     allowedMethods: ["GET", "HEAD"] as Array<"GET" | "HEAD">,
     maxRedirects: 1,
@@ -357,6 +358,63 @@ function publicContactEmail(
     })[0] || "";
 }
 
+const contactPathPattern = /(?:^|\/)(?:contact(?:-us)?|kontakt|impressum|contacto|contatti|about)(?:\/|$)/iu;
+
+function contactPageUrl(
+  html: string,
+  sourceUrl: string,
+  hostname: string,
+  domain: string
+) {
+  const $ = load(html, { xmlMode: false });
+  const candidates: Array<{ url: string; rank: number }> = [];
+  $("a[href]").each((_index, element) => {
+    const href = ($(element).attr("href") || "").trim();
+    if (!href || /^(?:mailto|tel|javascript):/iu.test(href)) return;
+    try {
+      const url = new URL(href, sourceUrl);
+      const targetDomain = getDomain(url.hostname, { allowPrivateDomains: false })
+        ?.toLocaleLowerCase("en-US") || "";
+      if (url.protocol !== "https:"
+        || targetDomain !== domain
+        || url.hostname.toLocaleLowerCase("en-US") !== hostname
+        || url.pathname === "/") return;
+      const anchorText = normalizedText($(element).text(), 100);
+      if (!contactPathPattern.test(url.pathname)
+        && !/contact|kontakt|impressum|contacto|contatti|about|联系|关于/iu.test(anchorText)) return;
+      url.hash = "";
+      url.search = "";
+      candidates.push({
+        url: url.toString(),
+        rank: /contact|kontakt|contacto|contatti|联系/iu.test(`${url.pathname} ${anchorText}`) ? 0 : 1
+      });
+    } catch {
+      // Invalid and cross-origin links are ignored.
+    }
+  });
+  return candidates.sort((left, right) => left.rank - right.rank || left.url.localeCompare(right.url))[0]?.url || "";
+}
+
+function mergePageEvidence(
+  home: WebsiteProbeEvidence,
+  contact: WebsiteProbeEvidence | null
+) {
+  if (!contact) return home;
+  const facts = {
+    canonicalDomain: home.canonicalDomain,
+    pageTitle: home.pageTitle || contact.pageTitle,
+    language: home.language || contact.language,
+    organizationName: home.organizationName || contact.organizationName,
+    legalName: home.legalName || contact.legalName,
+    addressCountry: home.addressCountry || contact.addressCountry,
+    businessCategory: home.businessCategory || contact.businessCategory,
+    publicContactEmail: contact.publicContactEmail || home.publicContactEmail,
+    sourceUrl: contact.publicContactEmail ? contact.sourceUrl : home.sourceUrl,
+    observedAt: contact.observedAt > home.observedAt ? contact.observedAt : home.observedAt
+  };
+  return { ...facts, payloadHash: sha256(JSON.stringify(facts)) };
+}
+
 function extractEvidence(
   html: string,
   sourceUrl: string,
@@ -506,10 +564,11 @@ async function executeAttempt(
       return;
     }
     let robotsAllowed = true;
+    let robotsRules: ReturnType<typeof parseRobots> | null = null;
     if (robotsResponse.ok) {
       const robotsText = await robotsResponse.text();
-      robotsAllowed = parseRobots(target.robotsUrl, robotsText)
-        .isAllowed(target.homeUrl, USER_AGENT) !== false;
+      robotsRules = parseRobots(target.robotsUrl, robotsText);
+      robotsAllowed = robotsRules.isAllowed(target.homeUrl, USER_AGENT) !== false;
     }
     await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
       attempt.robotsDecision = robotsAllowed ? "allowed" : "denied";
@@ -634,12 +693,84 @@ async function executeAttempt(
     const html = await bodyResponse.text();
     const responseBytes = Buffer.byteLength(html);
     const observedAt = nowIso();
-    const evidence = extractEvidence(
+    const homeEvidence = extractEvidence(
       html,
       bodyResponse.url || target.homeUrl,
       target.domain,
       observedAt
     );
+    const selectedContactUrl = contactPageUrl(
+      html,
+      bodyResponse.url || target.homeUrl,
+      target.hostname,
+      target.domain
+    );
+    let contactEvidence: WebsiteProbeEvidence | null = null;
+    let contactBytes = 0;
+    if (selectedContactUrl) {
+      const contactPath = new URL(selectedContactUrl).pathname;
+      const contactAllowed = robotsRules?.isAllowed(selectedContactUrl, USER_AGENT) !== false;
+      if (!contactAllowed) {
+        await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
+          appendEvent(attempt, "contact_page", "skipped", "robots.txt 禁止访问首页发现的联系页", {
+            path: contactPath,
+            allowed: false
+          });
+        });
+      } else {
+        await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
+          appendEvent(attempt, "contact_page", "started", "正在读取首页发现的同域联系页样本", {
+            path: contactPath,
+            maxResponseBytes: MAX_RESPONSE_BYTES
+          });
+        });
+        try {
+          const contactResponse = await fetchWithOneTransientRetry(
+            () => controlledFetch(
+              selectedContactUrl,
+              "GET",
+              networkPolicy(target.hostname, target.domain, [contactPath])
+            ),
+            async (reason) => mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
+              appendEvent(attempt, "contact_page", "started", "联系页瞬时失败，正在进行唯一一次重试", { retry: 1, reason });
+            })
+          );
+          const contactType = (contactResponse.headers.get("content-type") || "")
+            .split(";")[0]!.trim().toLocaleLowerCase("en-US");
+          if (contactResponse.ok && (!contactType || ["text/html", "text/plain"].includes(contactType))) {
+            const contactHtml = await contactResponse.text();
+            contactBytes = Buffer.byteLength(contactHtml);
+            contactEvidence = extractEvidence(
+              contactHtml,
+              contactResponse.url || selectedContactUrl,
+              target.domain,
+              nowIso()
+            );
+            await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
+              appendEvent(attempt, "contact_page", "completed", "同域联系页样本读取完成，原文不会保存", {
+                httpStatus: contactResponse.status,
+                responseBytes: contactBytes,
+                publicContactEmail: Boolean(contactEvidence?.publicContactEmail)
+              });
+            });
+          } else {
+            await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
+              appendEvent(attempt, "contact_page", "skipped", "联系页响应不符合最小取证策略", {
+                httpStatus: contactResponse.status,
+                contentType: contactType || "unknown"
+              });
+            });
+          }
+        } catch (error) {
+          await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
+            appendEvent(attempt, "contact_page", "failed", "联系页访问失败，首页证据仍会正常归档", {
+              reason: error instanceof Error ? error.message.slice(0, 200) : "NETWORK_ERROR"
+            });
+          });
+        }
+      }
+    }
+    const evidence = mergePageEvidence(homeEvidence, contactEvidence);
     const hasOrganizationEvidence = Boolean(
       evidence.organizationName
       || evidence.legalName
@@ -654,12 +785,12 @@ async function executeAttempt(
     }
     await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
       attempt.httpStatus = bodyResponse.status;
-      attempt.responseBytes = responseBytes;
+      attempt.responseBytes = responseBytes + contactBytes;
       attempt.redirected = attempt.redirected
         || Boolean(bodyResponse.url && bodyResponse.url !== target.homeUrl);
       appendEvent(attempt, "body", "completed", "首页正文样本读取完成，原文不会保存", {
         httpStatus: bodyResponse.status,
-        responseBytes,
+        responseBytes: responseBytes + contactBytes,
         contentType: bodyType || "unknown",
         redirected: attempt.redirected
       });
@@ -679,7 +810,7 @@ async function executeAttempt(
       outcome: hasUsableEvidence ? "evidence_found" : "no_evidence",
       stage: "completed",
       message: hasUsableEvidence
-        ? "官网验证已结束：公开业务邮箱已回填，组织证据仍需交叉验证"
+        ? "官网验证已结束：首页和联系页公开证据已归档，组织事实仍需交叉验证"
         : "官网验证已结束：未取得公开邮箱或组织级证据，候选评分保持不变"
     });
   } catch (error) {
@@ -699,6 +830,64 @@ async function executeAttempt(
       });
     }
   }
+}
+
+function scheduleAttemptWork(
+  store: CrmStore,
+  candidate: WebsiteOpportunity,
+  attempt: WebsiteProbeAttempt,
+  target: ReturnType<typeof canonicalTarget>,
+  persist: PersistCandidate
+) {
+  if (scheduledAttemptIds.has(attempt.id)) return false;
+  scheduledAttemptIds.add(attempt.id);
+  const queueKey = `${candidate.teamId}:${target.domain}`;
+  const previous = domainQueues.get(queueKey) || Promise.resolve();
+  const work = previous
+    .catch(() => undefined)
+    .then(() => executeAttempt(
+      store,
+      candidate.id,
+      attempt.id,
+      target,
+      persist
+    ))
+    .finally(() => {
+      scheduledAttemptIds.delete(attempt.id);
+      if (domainQueues.get(queueKey) === work) domainQueues.delete(queueKey);
+    });
+  domainQueues.set(queueKey, work);
+  void work.catch(() => undefined);
+  return true;
+}
+
+export async function resumeWebsiteProbeAttempt(
+  store: CrmStore,
+  candidate: WebsiteOpportunity,
+  attempt: WebsiteProbeAttempt,
+  actorId: string,
+  persist: PersistCandidate
+) {
+  if (["completed", "failed"].includes(attempt.status)) return false;
+  if (candidate.ownerId !== actorId
+    || attempt.candidateId !== candidate.id
+    || attempt.teamId !== candidate.teamId
+    || attempt.ownerId !== candidate.ownerId) {
+    throw new WebsiteProbeError(
+      "WEBSITE_PROBE_NOT_OWNED",
+      "官网探针恢复任务与候选隔离范围不一致",
+      403
+    );
+  }
+  const target = canonicalTarget(candidate);
+  if (target.domain !== attempt.domain) {
+    throw new WebsiteProbeError(
+      "WEBSITE_PROBE_URL_INVALID",
+      "候选官网已变化，不能恢复旧域名的验证任务",
+      409
+    );
+  }
+  return scheduleAttemptWork(store, candidate, attempt, target, persist);
 }
 
 export async function queueWebsiteProbe(
@@ -751,7 +940,8 @@ export async function queueWebsiteProbe(
     domain: target.domain,
     maxBodyBytes: MAX_RESPONSE_BYTES,
     cacheHours: 24,
-    maxRedirects: 1
+    maxRedirects: 1,
+    maxContactPages: 1
   });
   candidate.websiteProbeAttempts ||= [];
   candidate.websiteProbeAttempts.unshift(attempt);
@@ -799,22 +989,7 @@ export async function queueWebsiteProbe(
   }
 
   await persist(candidate);
-  const queueKey = `${candidate.teamId}:${target.domain}`;
-  const previous = domainQueues.get(queueKey) || Promise.resolve();
-  const work = previous
-    .catch(() => undefined)
-    .then(() => executeAttempt(
-      store,
-      candidate.id,
-      attempt.id,
-      target,
-      persist
-    ))
-    .finally(() => {
-      if (domainQueues.get(queueKey) === work) domainQueues.delete(queueKey);
-    });
-  domainQueues.set(queueKey, work);
-  void work.catch(() => undefined);
+  scheduleAttemptWork(store, candidate, attempt, target, persist);
   return { attempt, replayed: false };
 }
 
@@ -848,6 +1023,7 @@ export function websiteProbeCapability() {
     accessMode: "controlled_probe" as const,
     maxResponseBytes: MAX_RESPONSE_BYTES,
     cacheHours: 24,
-    maxRedirects: 1
+    maxRedirects: 1,
+    maxContactPages: 1
   };
 }

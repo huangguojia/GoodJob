@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { Database, DatabaseTransaction } from "./database.js";
+import { databaseTimestamp, type Database, type DatabaseTransaction } from "./database.js";
 
 interface SnapshotRow {
   id: string;
@@ -293,9 +293,13 @@ export async function planDemoCleanup(database: DatabaseTransaction): Promise<De
   return (await buildInternalPlan(database)).report;
 }
 
-async function deleteReturningCount(database: DatabaseTransaction, sql: string): Promise<number> {
-  const result = await database.query<{ id: string }>(sql);
-  return result.rows.length;
+async function deleteReturningCount(
+  database: DatabaseTransaction,
+  postgresSql: string,
+  mysqlSql: string
+): Promise<number> {
+  const result = await database.query<{ id: string }>(database.kind === "mysql" ? mysqlSql : postgresSql);
+  return database.kind === "mysql" ? Number(result.affectedRows ?? 0) : result.rows.length;
 }
 
 export async function applyDemoCleanup(database: Database, expectedPlanDigest: string): Promise<DemoCleanupResult> {
@@ -310,6 +314,23 @@ export async function applyDemoCleanup(database: Database, expectedPlanDigest: s
           routing_rules,crm_contacts,ai_provider_profiles,translation_preferences,meta_app_configs,
           meta_account_credentials IN SHARE ROW EXCLUSIVE MODE;
       `);
+    } else if (transaction.kind === "mysql") {
+      for (const table of [
+        "channel_accounts",
+        "provider_session_keys",
+        "contacts",
+        "conversations",
+        "messages",
+        "translations",
+        "routing_rules",
+        "crm_contacts",
+        "ai_provider_profiles",
+        "translation_preferences",
+        "meta_app_configs",
+        "meta_account_credentials"
+      ]) {
+        await transaction.query(`SELECT 1 FROM \`${table}\` FOR UPDATE`);
+      }
     }
 
     const before = await buildInternalPlan(transaction);
@@ -340,25 +361,40 @@ export async function applyDemoCleanup(database: Database, expectedPlanDigest: s
        ) AND NOT EXISTS (
          SELECT 1 FROM channel_accounts a
          WHERE a.provider<>'demo' AND (a.id=r.preferred_account_id OR a.id=r.fallback_account_id)
-       ) RETURNING r.id`
+       ) RETURNING r.id`,
+      `DELETE r FROM routing_rules r WHERE EXISTS (
+         SELECT 1 FROM channel_accounts a
+         WHERE a.provider='demo' AND (a.id=r.preferred_account_id OR a.id=r.fallback_account_id)
+       ) AND NOT EXISTS (
+         SELECT 1 FROM channel_accounts a
+         WHERE a.provider<>'demo' AND (a.id=r.preferred_account_id OR a.id=r.fallback_account_id)
+       )`
     );
     const crmContacts = await deleteReturningCount(
       transaction,
       `DELETE FROM crm_contacts crm WHERE crm.source='demo' OR EXISTS (
          SELECT 1 FROM contacts c JOIN channel_accounts a ON a.id=c.account_id
          WHERE a.provider='demo' AND c.id=crm.source_contact_id
-       ) RETURNING crm.id`
+       ) RETURNING crm.id`,
+      `DELETE crm FROM crm_contacts crm WHERE crm.source='demo' OR EXISTS (
+         SELECT 1 FROM contacts c JOIN channel_accounts a ON a.id=c.account_id
+         WHERE a.provider='demo' AND c.id=crm.source_contact_id
+       )`
     );
     const accounts = await deleteReturningCount(
       transaction,
-      "DELETE FROM channel_accounts WHERE provider='demo' RETURNING id"
+      "DELETE FROM channel_accounts WHERE provider='demo' RETURNING id",
+      "DELETE FROM channel_accounts WHERE provider='demo'"
     );
     const mockProfiles = await deleteReturningCount(
       transaction,
       `DELETE FROM ai_provider_profiles p WHERE p.kind='mock'
          AND NOT EXISTS (SELECT 1 FROM translation_preferences pref WHERE pref.provider_id=p.id)
          AND NOT EXISTS (SELECT 1 FROM translations t WHERE t.profile_id=p.id)
-       RETURNING p.id`
+       RETURNING p.id`,
+      `DELETE p FROM ai_provider_profiles p WHERE p.kind='mock'
+         AND NOT EXISTS (SELECT 1 FROM translation_preferences pref WHERE pref.provider_id=p.id)
+         AND NOT EXISTS (SELECT 1 FROM translations t WHERE t.profile_id=p.id)`
     );
 
     const deleted = { accounts, routingRules, crmContacts, mockProfiles };
@@ -383,7 +419,7 @@ export async function applyDemoCleanup(database: Database, expectedPlanDigest: s
         randomUUID(),
         randomUUID(),
         JSON.stringify({ planDigest: before.report.planDigest, deleted, cascadeCounts: before.report.counts }),
-        new Date().toISOString()
+        databaseTimestamp(new Date())
       ]
     );
 

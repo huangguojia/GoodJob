@@ -74,6 +74,8 @@ export interface FakeProspectProviderRequest {
   checkpointCallNo: number;
   cursor: string;
   requestHash: string;
+  /** Quota reserved for this physical provider request. */
+  requestedResultLimit?: number;
 }
 
 export interface FakeProspectProviderDispatchRequest {

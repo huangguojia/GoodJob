@@ -4,11 +4,21 @@ import { fileURLToPath } from "node:url";
 
 export function loadLocalEnv() {
   const currentDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    resolve(currentDir, "../../.env"),
-    resolve(process.cwd(), ".env")
-  ];
+  const projectRoot = resolve(currentDir, "../..");
+  const requested = String(process.env.GOODJOB_ENV_FILE || "").trim();
+  const candidates = requested
+    ? [
+        resolve(projectRoot, requested),
+        resolve(process.cwd(), requested)
+      ]
+    : [
+        resolve(projectRoot, ".env"),
+        resolve(process.cwd(), ".env")
+      ];
   const envPath = candidates.find((path) => existsSync(path));
+  if (requested && !envPath) {
+    throw new Error(`指定的环境配置不存在：${requested}`);
+  }
   if (!envPath) return;
   const content = readFileSync(envPath, "utf8");
   for (const line of content.split(/\r?\n/)) {
@@ -22,4 +32,5 @@ export function loadLocalEnv() {
     if (!key || process.env[key] !== undefined) continue;
     process.env[key] = rawValue.replace(/^["']|["']$/g, "");
   }
+  process.env.GOODJOB_ENV_FILE = envPath;
 }

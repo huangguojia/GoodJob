@@ -67,6 +67,23 @@ try {
       if (error instanceof Error && error.message.startsWith("production backend host unexpectedly")) throw error;
     }
   }
+  if (resolveBackendHost({
+    NODE_ENV: "production",
+    BACKEND_HOST: "0.0.0.0",
+    CONTAINER_NETWORK_BIND: "true"
+  }) !== "0.0.0.0") {
+    throw new Error("container network bind opt-in must allow 0.0.0.0");
+  }
+  try {
+    resolveBackendHost({
+      NODE_ENV: "production",
+      BACKEND_HOST: "10.0.0.8",
+      CONTAINER_NETWORK_BIND: "true"
+    });
+    throw new Error("container network bind opt-in must not allow arbitrary addresses");
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("container network bind opt-in must not")) throw error;
+  }
   if (app.get("trust proxy") !== "loopback") throw new Error("Express must only trust loopback proxies");
   results.productionLoopbackOnly = true;
 

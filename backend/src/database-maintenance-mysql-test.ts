@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import mysql from "mysql2/promise";
+import { assertDatabaseProfile } from "./database-profile.js";
 import { parseMysqlDump } from "../../frontend/src/mysql-dump-import.js";
 import {
   beginDatabaseBackup,
@@ -21,6 +22,7 @@ import {
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("database-maintenance-mysql-test 需要 DATABASE_URL");
+assertDatabaseProfile(process.env, databaseUrl);
 
 const originalEnabled = process.env.MYSQL_LOCAL_BACKUP_ENABLED;
 const originalDirectory = process.env.MYSQL_LOCAL_BACKUP_DIR;

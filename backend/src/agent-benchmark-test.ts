@@ -96,6 +96,7 @@ async function main() {
     assert.deepEqual(hostileBody, {
       company: "GJAB Sanitized", country: "未知", contact: "待维护", whatsapp: "", stage: "询盘", amount: 0,
       health: 72, grade: "C", billingName: "GJAB Sanitized", billingAddress: "", documentContact: "待维护",
+      phone: "", email: "", website: "",
       defaultPortDischarge: "", defaultIncoterm: "", defaultPaymentTerm: ""
     });
 
@@ -112,7 +113,9 @@ async function main() {
     assert.match(String(resumedBody.company), /^AI模拟客户-/u);
     assert.equal(resumedBody.contact, "待维护");
     assert.equal(resumedBody.whatsapp, "");
-    assert.equal(resumedBody.email, undefined);
+    assert.equal(resumedBody.email, "");
+    assert.equal(resumedBody.phone, "");
+    assert.equal(resumedBody.website, "");
 
     const steerStore = isolatedStore();
     const steerActor = steerStore.users.find((item) => item.id === actor.id)!;
@@ -123,7 +126,9 @@ async function main() {
     assert.match(String(steeredBody.company), /^AI模拟客户-/u);
     assert.equal(steeredBody.contact, "待维护");
     assert.equal(steeredBody.whatsapp, "");
-    assert.equal(steeredBody.phone, undefined);
+    assert.equal(steeredBody.phone, "");
+    assert.equal(steeredBody.email, "");
+    assert.equal(steeredBody.website, "");
   } finally {
     setProviderHttpTestTransport(null);
   }

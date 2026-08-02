@@ -107,7 +107,15 @@ async function ensureImportSchema(pool: Pool | PoolConnection) {
   );
   const existing = new Set((columnRows as Array<{ column_name: string }>).map((row) => String(row.column_name)));
   for (const [column, definition] of additions) {
-    if (!existing.has(column)) await pool.query(`ALTER TABLE goodjob_data_import_jobs ADD COLUMN \`${column}\` ${definition}`);
+    if (!existing.has(column)) {
+      try {
+        await pool.query(`ALTER TABLE goodjob_data_import_jobs ADD COLUMN \`${column}\` ${definition}`);
+      } catch (err: any) {
+        // Ignore "Duplicate column name" errors (ER_DUP_FIELDNAME / errno 1060)
+        // Can happen due to concurrent calls or information_schema caching
+        if (err?.errno !== 1060 && err?.code !== 'ER_DUP_FIELDNAME') throw err;
+      }
+    }
   }
 }
 

@@ -33,11 +33,9 @@ function connectionOptions(databaseUrl: URL) {
 }
 
 async function main() {
-  const configuredUrl = process.env.MYSQL_TEST_ADMIN_URL
-    || process.env.DATABASE_URL
-    || process.env.MYSQL_URL;
+  const configuredUrl = process.env.MYSQL_TEST_ADMIN_URL;
   if (!configuredUrl) {
-    throw new Error("Provider MySQL persistence test requires MYSQL_TEST_ADMIN_URL, DATABASE_URL or MYSQL_URL");
+    throw new Error("Provider MySQL persistence test requires MYSQL_TEST_ADMIN_URL");
   }
 
   const adminUrl = new URL(configuredUrl);
@@ -45,6 +43,7 @@ async function main() {
   const admin = await mysql.createConnection(connectionOptions(adminUrl));
   let exitCode = 1;
   let databaseCreated = false;
+  let stage = "setup";
 
   try {
     const queuedAliases = ["alias-that-must-roll-back"];
@@ -609,6 +608,7 @@ async function main() {
     );
 
     const barrierOrder: string[] = [];
+    stage = "queued write and read barrier";
     const queuedWrite = firstStart.persist().then(() => {
       barrierOrder.push("write");
     });
@@ -649,6 +649,9 @@ async function main() {
     customizedProvider.updatedAt = "2026-07-13T09:00:00.000Z";
     firstStart.providerCatalog.splice(firstStart.providerCatalog.indexOf(removedProvider), 1);
     firstStart.providerRequestLogs.unshift(millisecondRequestLog);
+    assert.ok(firstStart.persistProspectCandidates);
+    await firstStart.persistProspectCandidates([opportunity.id]);
+    stage = "persist provider customizations";
     await firstStart.persist();
     await firstStart.persist();
     await writeProviderResponseCache(cacheKey, cachePayload, {
@@ -735,6 +738,7 @@ async function main() {
         }
       }
     }).job;
+    stage = "persist conflict target job";
     await firstStart.persist();
     const conflictingAliasId = `ajia_conflict_${randomUUID()}`;
     await admin.query(
@@ -771,6 +775,7 @@ async function main() {
       ]
     );
 
+    stage = "second cold start and orphan cleanup";
     const secondStart = await createMysqlStore();
     setStore(secondStart);
     const recoveredInterruptedJob = secondStart.agentJobs.find(
@@ -940,11 +945,13 @@ async function main() {
 
     const originalCommodityDescription = reloadedMarketSnapshot.commodityDescription;
     reloadedMarketSnapshot.commodityDescription = "attempted immutable rewrite";
+    stage = "reject immutable market snapshot rewrite";
     await assert.rejects(
       () => secondStart.persist(),
       /市场机会事实快照不可变历史被删除或修改/
     );
     reloadedMarketSnapshot.commodityDescription = originalCommodityDescription;
+    stage = "persist restored market snapshot";
     await secondStart.persist();
 
     await admin.query(
@@ -1005,6 +1012,7 @@ async function main() {
         }
       }
     }).job;
+    stage = "persist cross-owner trigger job";
     await secondStart.persist();
     await admin.query(
       `UPDATE \`${databaseName}\`.market_opportunity_calculation_events
@@ -1069,6 +1077,7 @@ async function main() {
        DROP INDEX uk_market_opportunity_snapshot,
        ADD INDEX uk_market_opportunity_snapshot(batch_id, reporter_country)`
     );
+    stage = "market snapshot index migration";
     await createMysqlStore();
     const [marketSnapshotIndexRows] = await admin.query<Array<RowDataPacket & {
       Non_unique: number;
@@ -1088,6 +1097,7 @@ async function main() {
       marketSnapshotIndexRows.every((item) => Number(item.Non_unique) === 0)
     );
 
+    stage = "third cold start";
     const thirdStart = await createMysqlStore();
     setStore(thirdStart);
     assert.equal(
@@ -1206,6 +1216,7 @@ async function main() {
     console.log("Provider MySQL evidence, public cache and private trade observation persistence tests passed");
     exitCode = 0;
   } catch (error) {
+    console.error(`Provider MySQL test failed at: ${stage}`);
     console.error(error);
   } finally {
     if (databaseCreated) {

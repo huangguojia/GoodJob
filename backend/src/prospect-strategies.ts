@@ -515,6 +515,9 @@ async function persistStrategyMutation<T>(
   store: CrmStore,
   mutation: () => PersistedStoreMutation<T>
 ) {
+  if (store.persistProspectCampaignMutation) {
+    return store.persistProspectCampaignMutation(mutation);
+  }
   if (store.persistMutation) return store.persistMutation(mutation);
   const applied = mutation();
   try {

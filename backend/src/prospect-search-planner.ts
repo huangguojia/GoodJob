@@ -20,6 +20,7 @@ interface PreviousRoundMetric {
 
 export interface ProspectSearchRoundPlan {
   resolvedQuery: ProspectResolvedQuerySnapshot;
+  providerResolvedQueries: Record<string, ProspectResolvedQuerySnapshot>;
   metadata: ProspectSearchQueryPlanMetadata;
   coverageGaps: string[];
   queryCells: ProspectSearchQueryCell[];
@@ -32,6 +33,7 @@ export interface ProspectSearchRoundPlanInput {
   maxRounds: number;
   depth: ProspectSuperSearchDepth;
   providerIds: string[];
+  providerKinds?: Record<string, string>;
   previousRounds?: PreviousRoundMetric[];
 }
 
@@ -141,6 +143,7 @@ export function prospectSearchQueryPlanFingerprint(input: {
   theme: string;
   planningMode?: "rules" | "ai_enhanced";
   resolvedQuery: ProspectResolvedQuerySnapshot;
+  providerResolvedQueries?: Record<string, ProspectResolvedQuerySnapshot>;
 }) {
   return hash({
     plannerVersion: PROSPECT_SEARCH_PLANNER_VERSION,
@@ -152,9 +155,19 @@ export function prospectSearchQueryPlanFingerprint(input: {
   });
 }
 
+export function prospectProviderQueriesFingerprint(
+  providerResolvedQueries: Record<string, ProspectResolvedQuerySnapshot>
+) {
+  return hash({
+    plannerVersion: PROSPECT_SEARCH_PLANNER_VERSION,
+    providerResolvedQueries
+  });
+}
+
 export function validateProspectSearchQueryPlan(input: {
   metadata: ProspectSearchQueryPlanMetadata;
   resolvedQuery: ProspectResolvedQuerySnapshot;
+  providerResolvedQueries?: Record<string, ProspectResolvedQuerySnapshot>;
 }) {
   if (input.metadata.source !== "super_search"
     || input.metadata.plannerVersion !== PROSPECT_SEARCH_PLANNER_VERSION
@@ -165,9 +178,72 @@ export function validateProspectSearchQueryPlan(input: {
       theme: input.metadata.theme,
       planningMode: input.metadata.planningMode,
       resolvedQuery: input.resolvedQuery
-    })) {
+    })
+    || Boolean(input.metadata.providerQueriesFingerprint
+      && input.providerResolvedQueries
+      && input.metadata.providerQueriesFingerprint !== prospectProviderQueriesFingerprint(input.providerResolvedQueries))) {
     throw new Error("超级搜索查询计划完整性校验失败");
   }
+}
+
+function providerKind(providerId: string, configured = "") {
+  const value = `${providerId} ${configured}`.toLocaleLowerCase("en-US");
+  if (/google_places|maps?|places/u.test(value)) return "maps";
+  if (/procurement|tender|contract|award|sam_gov|ted_europa/u.test(value)) return "procurement";
+  if (/registry|identity|companies_house|sec_edgar|gleif|company_search/u.test(value)) return "registry";
+  if (/ai_search|\bai\b/u.test(value)) return "ai";
+  return "web";
+}
+
+export function buildProspectProviderResolvedQueries(input: {
+  resolvedQuery: ProspectResolvedQuerySnapshot;
+  providerIds: string[];
+  providerKinds?: Record<string, string>;
+  focusCompany?: string;
+}) {
+  const result: Record<string, ProspectResolvedQuerySnapshot> = {};
+  const focusCompany = normalize(input.focusCompany || "");
+  for (const providerId of unique(input.providerIds, 30)) {
+    const kind = providerKind(providerId, input.providerKinds?.[providerId]);
+    const base = structuredClone(input.resolvedQuery);
+    if (kind === "maps") {
+      result[providerId] = {
+        ...base,
+        positiveKeywords: unique([focusCompany, ...base.positiveKeywords], 12),
+        purchaseScenarioTerms: unique(["distributor", "dealer", "supplier", ...base.purchaseScenarioTerms], 12),
+        customerTypes: unique(["distributor", "dealer", ...base.customerTypes], 12)
+      };
+    } else if (kind === "procurement") {
+      result[providerId] = {
+        ...base,
+        positiveKeywords: unique([focusCompany, ...base.positiveKeywords], 12),
+        purchaseScenarioTerms: unique(["rfq", "tender", "contract award", "procurement", "approved supplier", ...base.purchaseScenarioTerms], 16),
+        customerTypes: unique(["buyer", "supplier", "contractor", ...base.customerTypes], 12)
+      };
+    } else if (kind === "registry") {
+      result[providerId] = {
+        ...base,
+        positiveKeywords: unique([focusCompany || base.positiveKeywords[0] || ""], 2),
+        synonyms: [],
+        industryTerms: [],
+        purchaseScenarioTerms: [],
+        customerTypes: []
+      };
+    } else if (kind === "ai") {
+      result[providerId] = {
+        ...base,
+        positiveKeywords: unique([focusCompany, ...base.positiveKeywords], 12),
+        purchaseScenarioTerms: unique(["source-backed company relationship", "official source", "public evidence", ...base.purchaseScenarioTerms], 16)
+      };
+    } else {
+      result[providerId] = {
+        ...base,
+        positiveKeywords: unique([focusCompany, ...base.positiveKeywords], 12),
+        purchaseScenarioTerms: unique([...(focusCompany ? ["subsidiary", "distributor", "partner", "supplier", "project"] : []), ...base.purchaseScenarioTerms], 18)
+      };
+    }
+  }
+  return result;
 }
 
 export function planProspectSearchRound(input: ProspectSearchRoundPlanInput): ProspectSearchRoundPlan {
@@ -220,12 +296,18 @@ export function planProspectSearchRound(input: ProspectSearchRoundPlanInput): Pr
     exclusionKeywords: unique(input.baseQuery.exclusionKeywords),
     exclusionDomains: unique(input.baseQuery.exclusionDomains)
   };
+  const providerResolvedQueries = buildProspectProviderResolvedQueries({
+    resolvedQuery,
+    providerIds: input.providerIds,
+    providerKinds: input.providerKinds
+  });
   const fingerprint = prospectSearchQueryPlanFingerprint({
     missionId: input.missionId,
     roundNo: input.roundNo,
     theme: theme.code,
     planningMode: "rules",
-    resolvedQuery
+    resolvedQuery,
+    providerResolvedQueries
   });
   const metadata: ProspectSearchQueryPlanMetadata = {
     source: "super_search",
@@ -234,24 +316,27 @@ export function planProspectSearchRound(input: ProspectSearchRoundPlanInput): Pr
     roundNo: input.roundNo,
     theme: theme.code,
     planningMode: "rules",
-    fingerprint
+    fingerprint,
+    providerQueriesFingerprint: prospectProviderQueriesFingerprint(providerResolvedQueries)
   };
   const providers = unique(input.providerIds, 30);
-  const queryText = unique([
-    ...resolvedQuery.positiveKeywords,
-    ...resolvedQuery.synonyms,
-    ...resolvedQuery.industryTerms,
-    ...resolvedQuery.purchaseScenarioTerms,
-    customerType,
-    market
-  ], 16).join(" ").slice(0, 600);
   const queryCells: ProspectSearchQueryCell[] = [];
   for (const providerId of providers) {
+    const providerQuery = providerResolvedQueries[providerId] || resolvedQuery;
+    const queryText = unique([
+      ...providerQuery.positiveKeywords,
+      ...providerQuery.synonyms,
+      ...providerQuery.industryTerms,
+      ...providerQuery.purchaseScenarioTerms,
+      customerType,
+      market
+    ], 16).join(" ").slice(0, 600);
     const cellBase = { market, language, customerType, queryTheme: theme.code, providerId, queryText };
     queryCells.push({ ...cellBase, fingerprint: hash(cellBase), status: "planned" });
   }
   return {
     resolvedQuery,
+    providerResolvedQueries,
     metadata,
     coverageGaps: coverageGaps(input.previousRounds || []),
     queryCells
@@ -270,6 +355,10 @@ export function enhanceProspectSearchRoundPlan(
     customerTypes: unique([...(enhancement.customerTypes || []), ...plan.resolvedQuery.customerTypes], 1),
     languages: unique([...(enhancement.languages || []), ...plan.resolvedQuery.languages], 1)
   };
+  const providerResolvedQueries = buildProspectProviderResolvedQueries({
+    resolvedQuery,
+    providerIds: plan.queryCells.map((item) => item.providerId)
+  });
   const metadata: ProspectSearchQueryPlanMetadata = {
     ...plan.metadata,
     planningMode: "ai_enhanced",
@@ -278,18 +367,20 @@ export function enhanceProspectSearchRoundPlan(
       roundNo: plan.metadata.roundNo,
       theme: plan.metadata.theme,
       planningMode: "ai_enhanced",
-      resolvedQuery
-    })
+      resolvedQuery,
+    }),
+    providerQueriesFingerprint: prospectProviderQueriesFingerprint(providerResolvedQueries)
   };
-  const queryText = unique([
-    ...resolvedQuery.positiveKeywords,
-    ...resolvedQuery.synonyms,
-    ...resolvedQuery.industryTerms,
-    ...resolvedQuery.purchaseScenarioTerms,
-    ...resolvedQuery.customerTypes,
-    ...resolvedQuery.countries
-  ], 16).join(" ").slice(0, 600);
   const queryCells = plan.queryCells.map((cell) => {
+    const providerQuery = providerResolvedQueries[cell.providerId] || resolvedQuery;
+    const queryText = unique([
+      ...providerQuery.positiveKeywords,
+      ...providerQuery.synonyms,
+      ...providerQuery.industryTerms,
+      ...providerQuery.purchaseScenarioTerms,
+      ...providerQuery.customerTypes,
+      ...providerQuery.countries
+    ], 16).join(" ").slice(0, 600);
     const cellBase = {
       market: cell.market,
       language: resolvedQuery.languages[0] || cell.language,
@@ -310,6 +401,7 @@ export function enhanceProspectSearchRoundPlan(
   );
   return {
     resolvedQuery,
+    providerResolvedQueries,
     metadata,
     queryCells,
     coverageGaps: [

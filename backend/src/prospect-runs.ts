@@ -99,6 +99,7 @@ type CursorPayload = z.infer<typeof cursorPayloadSchema>;
 
 export interface ProspectRunQueryPlanOverride {
   resolvedQuery: ProspectResolvedQuerySnapshot;
+  providerResolvedQueries?: Record<string, ProspectResolvedQuerySnapshot>;
   metadata: ProspectSearchQueryPlanMetadata;
 }
 
@@ -432,7 +433,8 @@ function executionSnapshot(
   if (queryPlanOverride) {
     validateProspectSearchQueryPlan({
       metadata: queryPlanOverride.metadata,
-      resolvedQuery: queryPlanOverride.resolvedQuery
+      resolvedQuery: queryPlanOverride.resolvedQuery,
+      providerResolvedQueries: queryPlanOverride.providerResolvedQueries
     });
     const mission = store.prospectSuperSearchMissions.find((item) =>
       item.id === queryPlanOverride.metadata.missionId
@@ -453,6 +455,12 @@ function executionSnapshot(
   }
   return {
     contractVersion: RUN_CONTRACT_VERSION,
+    // resultLimit on a provider is a per-source safety ceiling. The run-level
+    // target is frozen separately so source failures can be rebalanced.
+    globalResultLimit: Math.max(
+      1,
+      ...providerSnapshot(store, strategy).map((provider) => provider.resultLimit)
+    ),
     campaign: {
       id: campaign.id,
       name: campaign.name,
@@ -471,6 +479,9 @@ function executionSnapshot(
     resolvedQuery: queryPlanOverride
       ? structuredClone(queryPlanOverride.resolvedQuery)
       : resolveProspectStrategyQuery(strategy.query, version),
+    ...(queryPlanOverride?.providerResolvedQueries
+      ? { providerResolvedQueries: structuredClone(queryPlanOverride.providerResolvedQueries) }
+      : {}),
     ...(queryPlanOverride
       ? { queryPlan: structuredClone(queryPlanOverride.metadata) }
       : {}),
@@ -481,6 +492,9 @@ function executionSnapshot(
 function publicExecutionSnapshot(snapshot: ProspectRunExecutionSnapshot) {
   return {
     contractVersion: snapshot.contractVersion,
+    ...(snapshot.globalResultLimit !== undefined
+      ? { globalResultLimit: snapshot.globalResultLimit }
+      : {}),
     campaign: {
       id: snapshot.campaign.id,
       name: snapshot.campaign.name,
@@ -495,6 +509,9 @@ function publicExecutionSnapshot(snapshot: ProspectRunExecutionSnapshot) {
       query: structuredClone(snapshot.strategy.query)
     },
     resolvedQuery: structuredClone(snapshot.resolvedQuery),
+    ...(snapshot.providerResolvedQueries
+      ? { providerResolvedQueries: structuredClone(snapshot.providerResolvedQueries) }
+      : {}),
     ...(snapshot.queryPlan
       ? { queryPlan: structuredClone(snapshot.queryPlan) }
       : {}),

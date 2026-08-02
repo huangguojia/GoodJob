@@ -199,6 +199,23 @@ function websiteDomain(value: string) {
   }
 }
 
+export function webDiscoveryWebsite(
+  catalogCategory: string | undefined,
+  sourceUrl: string
+) {
+  if (catalogCategory !== "web" || !sourceUrl) return "";
+  try {
+    const url = new URL(sourceUrl);
+    if (!["http:", "https:"].includes(url.protocol)
+      || url.username
+      || url.password
+      || !url.hostname.includes(".")) return "";
+    return `https://${url.hostname.toLocaleLowerCase("en-US")}`;
+  } catch {
+    return "";
+  }
+}
+
 function candidateProcessingPreview(record: Partial<ProviderRecord>): ProspectCandidateProcessingPreview {
   return {
     sourceRecordId: text(record.providerRecordId, 255),
@@ -376,6 +393,7 @@ function candidateFromRecord(
   );
   const website = normalizeWebsite(
     text(record.officialWebsite || record.website, 255)
+    || webDiscoveryWebsite(catalog?.category, text(record.sourceUrl, 1_000))
   );
   return withProspectVerificationReport({
     id: candidateId({

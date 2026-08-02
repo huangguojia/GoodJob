@@ -8,6 +8,7 @@ const denied = [
   "/api/system/database-import/status",
   "/api/system/database-maintenance/status",
   "/api/system/database-backups/jobs",
+  "/api/admin/updates/apply",
   "/api/profile",
   "/api/profile/email-binding",
   "/api/tools/ai-config",
@@ -27,6 +28,7 @@ assert.equal(classifyAgentApiRequest("PATCH", "/api/deals/d1"), "write");
 assert.equal(classifyAgentApiRequest("POST", "/api/development-email/send"), "external");
 assert.equal(classifyAgentApiRequest("POST", "/api/whatsapp/customers/c1/messages"), "external");
 assert.equal(classifyAgentApiRequest("POST", "/api/lead-finder/search"), "external");
+assert.equal(classifyAgentApiRequest("POST", "/api/lead-finder/launch"), "external");
 assert.equal(classifyAgentApiRequest("POST", "/api/internal-messages"), "external");
 assert.throws(() => classifyAgentApiRequest("GET", "/api/accounts"), /账号/u);
 assert.throws(() => normalizeAgentApiPath("https://example.com/api/customers"), /站内接口/u);
