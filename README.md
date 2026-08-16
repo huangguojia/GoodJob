@@ -246,23 +246,68 @@ GoodJob CRM 是一款面向外贸销售团队的网页版客户管理软件，�
 
 ## 7. 本地开发与验证
 
-启动：
+数据库首次拆分（只执行一次）：
 
 ```bash
 cd GoodJob/CRM
+npm run db:profiles:provision
+```
+
+该命令会先备份当前 `.env` 指向的数据库，再建立互相隔离的个人库、开发库和测试账号。
+本地凭据分别写入 `.env.personal.local`、`.env.development.local` 和 `.env.test.local`，
+这些文件禁止进入版本控制。
+
+日常使用个人库：
+
+```bash
+npm run app:personal
+```
+
+开发时使用开发库：
+
+```bash
 npm run dev
 ```
+
+`npm run dev` 固定等同于 `npm run app:dev`。每次启动都会校验数据库档位和数据库名；
+个人档位只能连接 `goodjob_crm_personal`，开发档位只能连接 `goodjob_crm_dev`。
+
+查看两套数据库的连接状态：
+
+```bash
+npm run db:profiles:status
+```
+
+分别执行迁移：
+
+```bash
+npm run db:migrate:personal
+npm run db:migrate:dev
+```
+
+运行隔离的 MySQL 集成测试：
+
+```bash
+npm run test:mysql
+```
+
+MySQL 测试必须使用 `.env.test.local` 中的 `MYSQL_TEST_ADMIN_URL`，测试用例只创建并删除
+`goodjob_*_test_*` 随机临时库，不允许回退到个人库或开发库。
+
+提交 SVN 前执行：
+
+```bash
+npm run svn:check-database
+```
+
+SVN 只保存 `backend/schema.mysql.sql`、迁移代码及程序内的虚构开发种子；
+真实数据库、备份和 `.env.*.local` 均不得提交。
 
 访问：
 
 - 前端：http://127.0.0.1:5188/
-- 后端：http://127.0.0.1:4188/
-
-启用 MySQL 持久化：
-
-```bash
-CRM_STORE=mysql CRM_SEED_DEVELOPMENT_DATA=false DATABASE_URL="mysql://user:password@127.0.0.1:3306/goodjob_crm" npm run dev
-```
+- 个人档位后端：http://127.0.0.1:4188/
+- 开发档位后端：http://127.0.0.1:4190/
 
 MySQL 模式默认不会写入演示账号或演示业务数据。只有隔离的开发数据库需要演示数据时，才显式设置 `CRM_SEED_DEVELOPMENT_DATA=true`；不要在公测或生产数据库启用该开关。
 

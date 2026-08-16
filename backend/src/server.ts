@@ -86,25 +86,6 @@ import {
   type AgentOperationContract
 } from "./agent-api-contracts.js";
 import {
-  activateSalesPlaybook,
-  createSalesDistillation,
-  listDistillationSources,
-  listSalesDistillations,
-  listSalesPlaybookActivations,
-  pauseSalesPlaybook,
-  publishSalesDistillation
-} from "./sales-distillation.js";
-import {
-  SalesTrainingRunner,
-  controlSalesTrainingRun,
-  createSalesTrainingRun,
-  getSalesTrainingRun,
-  listSalesTrainingRuns,
-  publishSalesTrainingRun,
-  retrainSalesTrainingRun,
-  updateSalesTrainingSample
-} from "./sales-training.js";
-import {
   OutreachSequenceRunner,
   controlOutreachSequence,
   createOutreachSequence,
@@ -9864,7 +9845,6 @@ let activeAgentBackgroundRunner: AgentBackgroundRunner | null = null;
 let activeOutreachSequenceRunner: OutreachSequenceRunner | null = null;
 let activeCustomerMaintenanceRunner: CustomerMaintenanceRunner | null = null;
 let activeAgentTriggerRunner: AgentTriggerRunner | null = null;
-let activeSalesTrainingRunner: SalesTrainingRunner | null = null;
 
 app.get("/api/agent/catalog", requireAuth, (_req, res) => {
   res.json({ tools: agentCatalog() });
@@ -9894,90 +9874,6 @@ app.post("/api/agent/customer-maintenance/:id/:action", requireAuth, asyncRoute(
   res.json({ watch });
 }));
 
-app.get("/api/agent/sales-distillation/sources", requireAuth, (req, res) => {
-  res.json({ sources: listDistillationSources(getStore(), req.user!) });
-});
-
-app.get("/api/agent/sales-training", requireAuth, (req, res) => {
-  res.json({ runs: listSalesTrainingRuns(getStore(), req.user!) });
-});
-
-app.get("/api/agent/sales-training/:id", requireAuth, (req, res) => {
-  res.json({ run: getSalesTrainingRun(getStore(), req.user!, req.params.id) });
-});
-
-app.post("/api/agent/sales-training", requireAuth, asyncRoute(async (req, res) => {
-  const body = z.object({ sourceUserId: z.string().min(1).max(100), periodDays: z.coerce.number().int().min(7).max(365).optional().default(90) }).parse(req.body || {});
-  const run = await createSalesTrainingRun(getStore(), req.user!, body.sourceUserId, body.periodDays);
-  void activeSalesTrainingRunner?.synchronize();
-  res.status(201).json({ run });
-}));
-
-app.post("/api/agent/sales-training/:id/:action", requireAuth, asyncRoute(async (req, res, next) => {
-  const parsed = z.enum(["pause", "resume", "cancel", "retrain", "publish"]).safeParse(req.params.action);
-  if (!parsed.success) return next();
-  try {
-    if (parsed.data === "retrain") {
-      const run = await retrainSalesTrainingRun(getStore(), req.user!, req.params.id);
-      void activeSalesTrainingRunner?.synchronize();
-      res.status(201).json({ run });
-      return;
-    }
-    if (parsed.data === "publish") {
-      const result = await publishSalesTrainingRun(getStore(), req.user!, req.params.id);
-      res.json(result);
-      return;
-    }
-    const run = await controlSalesTrainingRun(getStore(), req.user!, req.params.id, parsed.data);
-    if (parsed.data === "resume") void activeSalesTrainingRunner?.synchronize();
-    res.json({ run });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "销售训练操作失败";
-    res.status(/无权|主管|管理员/u.test(message) ? 403 : 400).json({ message });
-  }
-}));
-
-app.patch("/api/agent/sales-training/:id/samples/:sampleId", requireAuth, asyncRoute(async (req, res) => {
-  const body = z.object({ label: z.enum(["positive", "negative", "neutral"]).optional(), included: z.boolean().optional(), managerNote: z.string().max(500).optional() }).parse(req.body || {});
-  const run = await updateSalesTrainingSample(getStore(), req.user!, req.params.id, req.params.sampleId, body);
-  res.json({ run });
-}));
-
-app.get("/api/agent/sales-distillation", requireAuth, (req, res) => {
-  res.json({
-    distillations: listSalesDistillations(getStore(), req.user!),
-    activations: listSalesPlaybookActivations(getStore(), req.user!)
-  });
-});
-
-app.post("/api/agent/sales-distillation", requireAuth, asyncRoute(async (req, res) => {
-  const body = z.object({
-    sourceUserId: z.string().min(1).max(100),
-    periodDays: z.coerce.number().int().min(7).max(365).optional().default(90)
-  }).parse(req.body || {});
-  const distillation = await createSalesDistillation(getStore(), req.user!, body.sourceUserId, body.periodDays);
-  res.status(201).json({ distillation });
-}));
-
-app.post("/api/agent/sales-distillation/:id/publish", requireAuth, asyncRoute(async (req, res) => {
-  try {
-    const distillation = await publishSalesDistillation(getStore(), req.user!, req.params.id);
-    res.json({ distillation });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "发布蒸馏打法失败";
-    res.status(/无权|需要主管|不存在/u.test(message) ? 403 : 400).json({ message });
-  }
-}));
-
-app.post("/api/agent/sales-distillation/:id/activate", requireAuth, asyncRoute(async (req, res) => {
-  const activation = await activateSalesPlaybook(getStore(), req.user!, req.params.id);
-  res.json({ activation, activations: listSalesPlaybookActivations(getStore(), req.user!) });
-}));
-
-app.post("/api/agent/sales-distillation/activations/:id/pause", requireAuth, asyncRoute(async (req, res) => {
-  const activation = await pauseSalesPlaybook(getStore(), req.user!, req.params.id);
-  res.json({ activation, activations: listSalesPlaybookActivations(getStore(), req.user!) });
-}));
 
 const agentPlanRequestSchema = z.object({
   goal: z.string().trim().min(2).max(2_000),
@@ -14797,28 +14693,6 @@ async function startServer() {
     process.exit(1);
     return;
   }
-  const salesTrainingRunner = new SalesTrainingRunner(store, Number(process.env.SALES_TRAINING_POLL_MS || 1_200));
-  try {
-    await salesTrainingRunner.start();
-    activeSalesTrainingRunner = salesTrainingRunner;
-  } catch (error) {
-    activeAgentTriggerRunner = null;
-    await agentTriggerRunner.stop();
-    activeCustomerMaintenanceRunner = null;
-    await customerMaintenanceRunner.stop();
-    activeOutreachSequenceRunner = null;
-    await outreachSequenceRunner.stop();
-    superSearchRunner.stop();
-    await prospectScheduler?.stop();
-    activeProspectWorkerService = null;
-    await prospectWorkerService?.stop();
-    activeAgentBackgroundRunner = null;
-    await agentBackgroundRunner.stop();
-    await store.close?.();
-    console.error(`GoodJob CRM sales training runner startup failed: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
-    return;
-  }
   // ── 生产模式：后端直接 serve 前端静态文件（单端口模式）────────────
   const frontendDist = process.env.FRONTEND_DIST
     || path.resolve(process.cwd(), "../frontend/dist")
@@ -14873,8 +14747,6 @@ async function startServer() {
     shuttingDown = true;
     console.log(`GoodJob CRM received ${signal}, shutting down`);
     try {
-      activeSalesTrainingRunner = null;
-      salesTrainingRunner.stop();
       activeAgentTriggerRunner = null;
       await agentTriggerRunner.stop();
       activeCustomerMaintenanceRunner = null;

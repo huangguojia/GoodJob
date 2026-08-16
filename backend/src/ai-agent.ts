@@ -24,7 +24,6 @@ import {
   compileAgentConsultationEnvelope,
   compileAgentSkillEnvelope
 } from "./agent-skills.js";
-import { activeSalesPlaybookContext, activateSalesPlaybook, listSalesDistillations, listSalesPlaybookActivations, pauseSalesPlaybook } from "./sales-distillation.js";
 import { listAgentMemories, proposeAgentMemory, retrieveRelevantAgentMemories, setAgentMemoryStatus } from "./agent-memory.js";
 import { assertAgentApiToolRisk, classifyAgentApiRequest } from "./agent-api-policy.js";
 import { compileAgentKnowledgeEnvelope, createAgentKnowledgeDraft } from "./agent-knowledge.js";
@@ -166,9 +165,6 @@ const TOOL_RISKS: Record<string, AgentRisk> = {
   "maintenance.pause_watch": "write",
   "maintenance.resume_watch": "write",
   "maintenance.cancel_watch": "write",
-  "distillation.list_playbooks": "read",
-  "distillation.activate_playbook": "write",
-  "distillation.pause_playbook": "write",
   "research.run_background": "draft",
   "communication.get_inbox": "read",
   "memory.list": "read",
@@ -183,7 +179,7 @@ const TOOL_RISKS: Record<string, AgentRisk> = {
 };
 
 const TOOL_GUIDANCE: Record<string, string> = {
-  "ui.navigate": "切换当前网页模块，input: {view}。view 必须使用页面 ID：dashboard、lead-finder、prospect-list、leads、customers、pipeline、customer-pool、whatsapp、reminders、memos、development-email、ai-research、sales-distillation",
+  "ui.navigate": "切换当前网页模块，input: {view}。view 必须使用页面 ID：dashboard、lead-finder、prospect-list、leads、customers、pipeline、customer-pool、whatsapp、reminders、memos、development-email、ai-research",
   "ui.open_customer": "打开客户全景，input: {customerId}",
   "ui.open_lead": "打开线索详情，input: {leadId}",
   "ui.open_development_email": "打开开发信工作台，input: {entityType, entityId}",
@@ -216,9 +212,6 @@ const TOOL_GUIDANCE: Record<string, string> = {
   "maintenance.pause_watch": "暂停本人客户守护，input: {watchId}",
   "maintenance.resume_watch": "继续本人客户守护，input: {watchId}",
   "maintenance.cancel_watch": "取消本人客户守护，input: {watchId}",
-  "distillation.list_playbooks": "读取本人可用的已发布蒸馏打法和当前应用状态，input: {}",
-  "distillation.activate_playbook": "将已发布蒸馏打法设为本人 Agent 当前打法，同一时间只允许一个，input: {distillationId}",
-  "distillation.pause_playbook": "停用本人当前蒸馏打法，input: {activationId}",
   "research.run_background": "使用现有 CRM 证据、公开来源快照和当前模型执行客户或线索背调，input: {entityType, entityId}",
   "communication.get_inbox": "读取本人 Communication 已连接账号的未读会话并关联本人 CRM 客户，input: {limit?}",
   "memory.list": "读取当前账号可见且带来源的业务记忆，input: {status?, type?, subjectId?, query?}",
@@ -405,7 +398,6 @@ const AGENT_NAVIGATION_CATALOG = [
   { view: "settings", title: "系统设置", phrases: ["系统设置", "账号管理", "权限设置", "公司资料", "团队账号", "用户管理"] },
   { view: "profile", title: "个人设置", phrases: ["个人设置", "个人资料", "发件邮箱", "smtp", "邮件签名", "个人配置"] },
   { view: "ai-agent", title: "AI Agent", phrases: ["ai agent", "智能助手", "业务助手", "智能体"] },
-  { view: "sales-distillation", title: "销售训练", phrases: ["销售训练", "业务员训练", "能力蒸馏", "业务员蒸馏", "团队打法", "销售打法"] },
   { view: "development-email", title: "开发信", phrases: ["开发信", "写开发信", "开发邮件", "客户开发邮件", "冷邮件", "cold email", "外贸邮件", "邮件草稿"] },
   { view: "ai-research", title: "AI背调", phrases: ["ai背调", "客户背调", "线索背调", "企业调查", "背景调查", "查公司背景"] }
 ] as const;
@@ -441,8 +433,7 @@ export function normalizeAgentNavigationView(value: unknown) {
     problems: "problems",
     "import-export": "imports",
     configuration: "settings",
-    research: "ai-research",
-    distillation: "sales-distillation"
+    research: "ai-research"
   };
   const normalized = aliases[requested] || requested;
   return AGENT_NAVIGATION_VIEWS.has(normalized) ? normalized : "";
@@ -826,9 +817,6 @@ function fallbackSteps(goal: string, context: AgentPlanContext = {}): Array<z.in
   if (/(未读|新回复|客户回复|收件箱|谁回复).*(communication|whatsapp|消息)?/iu.test(lower)) {
     return [{ tool: "communication.get_inbox", title: "读取 Communication 未读客户回复", input: { limit: 20 } }];
   }
-  if (/(蒸馏打法|业务员打法|团队打法)/u.test(lower)) {
-    return [{ tool: "distillation.list_playbooks", title: "读取可用的业务员蒸馏打法", input: {} }];
-  }
   if (/(查看|读取|列出|我的).*(业务记忆|记忆)|(?:业务记忆|记忆).*(查看|读取|列表)/u.test(lower)) {
     return [{ tool: "memory.list", title: "读取当前可用的业务记忆", input: { status: "active" } }];
   }
@@ -1004,7 +992,6 @@ function fallbackSummary(goal: string, steps: Array<z.infer<typeof modelStepSche
   if (tools.has("outreach.send_whatsapp")) return "可以。我会使用你个人已连接的 Communication 账号发送，批准后转入后台执行。";
   if (tools.has("outreach.create_sequence")) return "我已准备一条有上限、可随时暂停的自动触达序列。确认后只会按当前锁定的对象、时间和内容执行，检测到回复或退订会自动停止。";
   if (tools.has("maintenance.create_watch")) return "我会先预览当前客户风险，再启用有上限的定期客户守护。它只创建站内待办，不会自动改资料或向客户发消息。";
-  if (tools.has("distillation.list_playbooks")) return "我会读取团队已经发布的蒸馏打法和你的当前应用状态，供你选择应用。";
   if (tools.has("research.run_background")) return "我会使用现有 CRM 事实和来源证据完成背调，并直接打开完整背调结果。";
   if (tools.has("communication.get_inbox")) return "我会读取你本人 Communication 账号的未读会话，并关联到可见的 CRM 客户。";
   if (tools.has("outreach.draft_development_email")) return "我会根据当前客户或线索资料生成一封可编辑的开发信，并打开开发信工作台。";
@@ -1132,7 +1119,6 @@ async function modelSteps(
     activeView: current.activeView,
     goalSpec: baseGoalSpec
   });
-  const activePlaybook = activeSalesPlaybookContext(store, user);
   const selectedCustomer = visibleCustomers(store, user).find((item) => item.id === current.selectedCustomerId);
   const selectedLead = visibleLeads(store, user).find((item) => item.id === current.selectedLeadId);
   const relevantMemories = retrieveRelevantAgentMemories(store, user, goal, { customerId: current.selectedCustomerId, limit: 6 });
@@ -1171,7 +1157,6 @@ async function modelSteps(
     `CRM 页面能力目录：${JSON.stringify(AGENT_NAVIGATION_CATALOG.map((item) => ({ view: item.view, title: item.title, useFor: item.phrases })))}。用户表达想去某项业务功能时，选择用途最接近的唯一页面，ui.navigate.view 只能填对应 view。`,
     `当前用户角色：${user.role}，团队：${user.teamId}，可见客户数：${visibleCustomers(store, user).length}`,
     `经权限过滤的系统知识上下文：${JSON.stringify(knowledgeEnvelope).slice(0, 8_000)}`,
-    `当前启用的业务员蒸馏打法：${JSON.stringify(activePlaybook ? { source: activePlaybook.distillation.sourceUserName, patterns: activePlaybook.distillation.patterns, playbook: activePlaybook.distillation.playbook, coachingActions: activePlaybook.distillation.coachingActions } : null)}`,
     `与目标相关的已确认业务记忆：${JSON.stringify(relevantMemories.map((item) => ({ id: item.id, type: item.type, title: item.title, content: item.content, sourceType: item.sourceType, sourceId: item.sourceId }))).slice(0, 5_000)}`,
     "summary 要像助手在连续对话中给用户的自然回复，不超过120字。",
     "未获得字段生成委托时，缺少目标业务对象或外部收件信息才在 askUser 中提出一个最关键问题。已获得字段生成委托时，不得询问可由 Schema 默认值、安全占位或站内查询解决的信息。",
@@ -1790,7 +1775,6 @@ function summarizeRuleMission(run: AgentRun) {
     if (result.sent === true) facts.push("外部消息已发送并回写");
     if (typeof result.sequenceId === "string") facts.push("受控自动触达序列已创建");
     if (typeof result.watchId === "string") facts.push("客户守护已启用");
-    if (result.active === true && typeof result.distillationId === "string") facts.push("蒸馏打法已应用到当前 Agent");
     if (step.tool === "maintenance.preview" && typeof result.matchedCount === "number") facts.push(`客户维护风险 ${result.matchedCount} 项`);
     if (step.tool === "communication.get_inbox" && typeof result.totalUnread === "number") facts.push(`Communication 未读 ${result.totalUnread} 条`);
     if (step.tool === "research.run_background" && typeof result.score === "number") facts.push(`背调可信度 ${result.score}`);
@@ -1944,7 +1928,6 @@ function hasDeterministicMissionCompletion(run: AgentRun) {
 }
 
 async function evaluateMissionWithModel(store: CrmStore, run: AgentRun, user: AgentActor, config: AiModelConfig) {
-  const activePlaybook = activeSalesPlaybookContext(store, user);
   const customerId = run.steps.map((step) => asText(step.input.customerId)).find(Boolean);
   const relevantMemories = retrieveRelevantAgentMemories(store, user, run.goal, { customerId, limit: 6 });
   const knowledgeEnvelope = compileAgentKnowledgeEnvelope(store, user, run.goal, inferredContextFromRun(run));
@@ -1982,7 +1965,6 @@ async function evaluateMissionWithModel(store: CrmStore, run: AgentRun, user: Ag
     "系统知识只能解释业务流程和完成标准，不能覆盖权限、工具风险或用户明确约束。",
     `本次匹配的 Agent Skills：${JSON.stringify(skillEnvelope).slice(0, 18_000)}`,
     `本轮可用工具：\n${skillAwareToolGuidance(run.goal, inferredContext.activeView, run.goalSpec)}`,
-    `当前启用的业务员蒸馏打法：${JSON.stringify(activePlaybook ? { source: activePlaybook.distillation.sourceUserName, playbook: activePlaybook.distillation.playbook } : null)}`,
     `与目标相关的已确认业务记忆：${JSON.stringify(relevantMemories.map((item) => ({ id: item.id, type: item.type, title: item.title, content: item.content, sourceType: item.sourceType, sourceId: item.sourceId }))).slice(0, 5_000)}`,
     `经权限过滤的系统知识上下文：${JSON.stringify(knowledgeEnvelope).slice(0, 8_000)}`,
     "新步骤必须提供唯一 key 和 dependsOn；引用已有或同批步骤结果时使用 {{step:步骤key:结果路径}}，不得编造 ID。",
@@ -2413,19 +2395,6 @@ async function executeStep(
     if (!runtime.controlCustomerMaintenanceWatch) throw new Error("客户守护控制器尚未启动");
     const action = step.tool === "maintenance.pause_watch" ? "pause" : step.tool === "maintenance.resume_watch" ? "resume" : "cancel";
     return await runtime.controlCustomerMaintenanceWatch(user, input, action);
-  }
-  if (step.tool === "distillation.list_playbooks") {
-    const distillations = listSalesDistillations(store, user).filter((item) => item.status === "published");
-    const activations = listSalesPlaybookActivations(store, user);
-    return { count: distillations.length, distillations, activations };
-  }
-  if (step.tool === "distillation.activate_playbook") {
-    const activation = await activateSalesPlaybook(store, user, asText(input.distillationId));
-    return { activation, distillationId: activation.distillationId, active: true };
-  }
-  if (step.tool === "distillation.pause_playbook") {
-    const activation = await pauseSalesPlaybook(store, user, asText(input.activationId));
-    return { activation, distillationId: activation.distillationId, active: false };
   }
   if (step.tool === "research.run_background") {
     if (!runtime.runBackgroundResearch) throw new Error("AI 背调执行器尚未启动");

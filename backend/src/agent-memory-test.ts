@@ -81,7 +81,7 @@ async function main() {
     title: "团队报价打法",
     content: "报价前确认采购窗口和决策链。",
     sourceType: "playbook",
-    sourceId: "distillation-test"
+    sourceId: "playbook-test"
   });
   assert.equal(listAgentMemories(store, shirley).some((item) => item.id === teamMemory.id), false);
   await setAgentMemoryStatus(store, manager, teamMemory.id, "active");

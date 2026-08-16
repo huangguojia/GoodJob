@@ -179,47 +179,6 @@ function updateChecksum(document: AgentKnowledgeDocument) {
   document.checksum = hashKnowledge(semanticDocument(document));
 }
 
-function distillationDocuments(store: CrmStore, actor: AgentActor): AgentKnowledgeDocument[] {
-  return store.salesDistillations
-    .filter((item) => item.status === "published" && sameTeam(actor, item.teamId))
-    .map((item) => {
-      const content = [
-        ...item.patterns,
-        ...item.playbook.map((entry) => `${entry.stage}：${entry.action}；依据：${entry.evidence}`),
-        ...item.coachingActions.map((entry) => `训练动作：${entry}`)
-      ].join("\n");
-      const publishedAt = item.publishedAt || item.createdAt;
-      return {
-        id: `distillation.${item.id}`,
-        ownerId: item.createdBy,
-        teamId: item.teamId,
-        kind: "playbook",
-        scope: "team",
-        module: "sales",
-        title: `${item.sourceUserName} 业务打法`,
-        summary: `${item.periodDays} 天业务样本形成的已发布团队打法`,
-        content,
-        keywords: ["业务员蒸馏", "销售打法", ...item.playbook.map((entry) => entry.stage)],
-        roles: ["sales", "manager", "admin", "super_admin"],
-        toolRefs: ["distillation.list_playbooks", "distillation.activate_playbook"],
-        successCriteria: item.coachingActions,
-        failureCases: [],
-        sourceType: "distillation",
-        sourceId: item.id,
-        status: "published",
-        trustLevel: "reviewed",
-        version: "1.0.0",
-        revision: 1,
-        checksum: hashKnowledge({ id: item.id, content }),
-        publishedBy: item.publishedBy || item.createdBy,
-        publishedAt,
-        usageCount: 0,
-        lastUsedAt: "",
-        createdAt: item.createdAt,
-        updatedAt: publishedAt
-      };
-    });
-}
 
 export function listAgentKnowledgeDocuments(store: CrmStore, actor: AgentActor, options: {
   status?: AgentKnowledgeStatus | "all";
@@ -234,8 +193,7 @@ export function listAgentKnowledgeDocuments(store: CrmStore, actor: AgentActor, 
     ? systemAgentKnowledge().documents.filter((item) => item.roles.includes(actor.role as Role))
     : [];
   const managed = store.agentKnowledgeDocuments.filter((item) => canSeeManaged(actor, item, true));
-  const derived = distillationDocuments(store, actor);
-  return [...systemDocuments, ...managed, ...derived]
+  return [...systemDocuments, ...managed]
     .filter((item) => !options.status || options.status === "all" || item.status === options.status)
     .filter((item) => !options.kind || options.kind === "all" || item.kind === options.kind)
     .filter((item) => !options.module || item.module === options.module)
@@ -351,7 +309,6 @@ function goalDomainModule(query: string, activeView = "") {
     communication: "whatsapp",
     research: "ai-research",
     maintenance: "customers",
-    "sales-training": "sales-distillation",
     knowledge: "knowledge"
   };
   return {
@@ -371,8 +328,7 @@ export function retrieveAgentKnowledge(store: CrmStore, actor: AgentActor, query
   const moduleName = semantic.moduleName;
   const documents = [
     ...systemAgentKnowledge().documents.filter((item) => item.roles.includes(actor.role as Role)),
-    ...store.agentKnowledgeDocuments.filter((item) => canSeeManaged(actor, item, false) && item.status === "published"),
-    ...distillationDocuments(store, actor)
+    ...store.agentKnowledgeDocuments.filter((item) => canSeeManaged(actor, item, false) && item.status === "published")
   ];
   const documentTerms = new Map(documents.map((document) => [document.id, knowledgeTerms([
     document.module,
@@ -467,14 +423,12 @@ export function compileAgentKnowledgeEnvelope(store: CrmStore, actor: AgentActor
 export function agentKnowledgeOverview(store: CrmStore, actor: AgentActor) {
   const state = systemAgentKnowledge();
   const visibleManaged = store.agentKnowledgeDocuments.filter((item) => canSeeManaged(actor, item, true));
-  const publishedDistillations = distillationDocuments(store, actor);
-  const modules = [...new Set([...state.documents, ...visibleManaged, ...publishedDistillations].map((item) => item.module))].sort();
+  const modules = [...new Set([...state.documents, ...visibleManaged].map((item) => item.module))].sort();
   return {
     systemCount: state.documents.length,
     managedCount: visibleManaged.length,
     publishedCount: visibleManaged.filter((item) => item.status === "published").length,
     reviewCount: visibleManaged.filter((item) => item.status === "review").length,
-    distillationCount: publishedDistillations.length,
     modules,
     loadedAt: state.loadedAt,
     directory: state.directory,

@@ -99,7 +99,7 @@ export interface AgentMemoryRecord {
 export type AgentKnowledgeKind = "system" | "module" | "workflow" | "policy" | "field" | "playbook" | "failure_case";
 export type AgentKnowledgeScope = "system" | "team" | "company";
 export type AgentKnowledgeStatus = "draft" | "review" | "published" | "archived";
-export type AgentKnowledgeSourceType = "system_file" | "manual" | "agent_feedback" | "distillation";
+export type AgentKnowledgeSourceType = "system_file" | "manual" | "agent_feedback";
 export type AgentKnowledgeTrustLevel = "system" | "reviewed" | "candidate";
 
 export interface AgentKnowledgeDocument {
@@ -260,9 +260,6 @@ export interface CustomerMaintenanceFinding {
   reason: string;
   priority: "high" | "medium" | "normal";
   triggerKey: string;
-  playbookActivationId?: string;
-  playbookName?: string;
-  playbookAction?: string;
 }
 
 export interface CustomerMaintenanceWatch {
@@ -288,142 +285,6 @@ export interface CustomerMaintenanceWatch {
   updatedAt: string;
 }
 
-export type SalesDistillationStatus = "draft" | "published";
-
-export interface SalesDistillationMetrics {
-  customerCount: number;
-  leadCount: number;
-  activeDealCount: number;
-  wonDealCount: number;
-  wonAmount: number;
-  followupCount: number;
-  completedTodoCount: number;
-  reportCount: number;
-}
-
-export interface SalesDistillationPlaybookItem {
-  stage: string;
-  action: string;
-  evidence: string;
-}
-
-export interface SalesDistillation {
-  id: string;
-  sourceUserId: string;
-  sourceUserName: string;
-  teamId: string;
-  periodDays: number;
-  metrics: SalesDistillationMetrics;
-  patterns: string[];
-  playbook: SalesDistillationPlaybookItem[];
-  coachingActions: string[];
-  modelLabel: string;
-  status: SalesDistillationStatus;
-  createdBy: string;
-  createdAt: string;
-  publishedBy?: string;
-  publishedAt?: string;
-  trainingRunId?: string;
-  version?: number;
-  maturity?: SalesTrainingMaturity;
-  evaluationScore?: number;
-  sampleCount?: number;
-}
-
-export type SalesTrainingStatus = "queued" | "collecting" | "cleaning" | "labeling" | "training" | "evaluating" | "awaiting_review" | "published" | "paused" | "failed" | "cancelled";
-export type SalesTrainingMaturity = "observation" | "trial" | "production" | "stable";
-export type SalesTrainingSampleLabel = "positive" | "negative" | "neutral";
-
-export interface SalesTrainingSample {
-  id: string;
-  entityType: "customer" | "lead" | "deal";
-  entityId: string;
-  title: string;
-  market: string;
-  stage: string;
-  outcome: string;
-  label: SalesTrainingSampleLabel;
-  included: boolean;
-  activityCount: number;
-  todoCount: number;
-  evidenceIds: string[];
-  summary: string;
-  managerNote: string;
-}
-
-export interface SalesTrainingRound {
-  id: string;
-  index: number;
-  name: string;
-  status: "pending" | "running" | "completed" | "failed";
-  summary: string;
-  startedAt: string;
-  completedAt: string;
-}
-
-export interface SalesTrainingEvaluation {
-  coverage: number;
-  balance: number;
-  traceability: number;
-  strategy: number;
-  safety: number;
-  overall: number;
-  passed: boolean;
-  blockers: string[];
-}
-
-export interface SalesTrainingEvent {
-  id: string;
-  stage: SalesTrainingStatus;
-  message: string;
-  createdAt: string;
-}
-
-export interface SalesTrainingRun {
-  id: string;
-  sourceUserId: string;
-  sourceUserName: string;
-  teamId: string;
-  createdBy: string;
-  parentRunId: string;
-  version: number;
-  periodDays: number;
-  status: SalesTrainingStatus;
-  resumeStatus: SalesTrainingStatus;
-  progress: number;
-  currentAction: string;
-  maturity: SalesTrainingMaturity;
-  metrics: SalesDistillationMetrics;
-  sampleStats: { source: number; valid: number; rejected: number; positive: number; negative: number; neutral: number; holdout: number };
-  samples: SalesTrainingSample[];
-  rounds: SalesTrainingRound[];
-  events: SalesTrainingEvent[];
-  patterns: string[];
-  playbook: SalesDistillationPlaybookItem[];
-  coachingActions: string[];
-  evaluation: SalesTrainingEvaluation;
-  modelLabel: string;
-  candidateDistillationId: string;
-  error: string;
-  createdAt: string;
-  updatedAt: string;
-  completedAt: string;
-  publishedAt: string;
-}
-
-export interface SalesPlaybookActivation {
-  id: string;
-  distillationId: string;
-  ownerId: string;
-  teamId: string;
-  status: "active" | "paused";
-  applicationCount: number;
-  taskCount: number;
-  lastUsedAt: string;
-  activatedBy: string;
-  activatedAt: string;
-  updatedAt: string;
-}
 
 export interface User {
   id: string;

@@ -252,10 +252,7 @@ define("POST /api/ai-background-research", objectSchema(["entityType", "entityId
 define("POST /api/development-email/draft", objectSchema(["entityType", "entityId"], { entityType: oneOf("lead", "customer"), entityId: string({ minLength: 1, maxLength: 120 }), tone: oneOf("professional", "concise", "warm"), requireAi: boolean() }), "生成开发信草稿，不发送。");
 define("POST /api/development-email/send", objectSchema(["entityType", "entityId", "to", "subject", "body"], { entityType: oneOf("lead", "customer"), entityId: string({ minLength: 1, maxLength: 120 }), to: string({ format: "email" }), subject: string({ minLength: 1, maxLength: 160 }), body: string({ minLength: 10, maxLength: 6000 }), nextFollowAt: string({ maxLength: 100 }) }), "真实发送开发信；收件人、主题、正文必须冻结并确认。");
 
-define("POST /api/agent/sales-training", objectSchema(["sourceUserId"], { sourceUserId: string({ minLength: 1, maxLength: 100 }), periodDays: integer({ minimum: 7, maximum: 365 }) }), "创建业务员训练任务；只能选择服务端允许的团队成员。");
-define("PATCH /api/agent/sales-training/{id}/samples/{sampleId}", objectSchema([], { label: oneOf("positive", "negative", "neutral"), included: boolean(), managerNote: string({ maxLength: 500 }) }), "人工标注训练样本，作为后续训练证据。");
-define("POST /api/agent/sales-distillation", objectSchema(["sourceUserId"], { sourceUserId: string({ minLength: 1, maxLength: 100 }), periodDays: integer({ minimum: 7, maximum: 365 }) }), "创建业务打法蒸馏任务。");
-defineMany(["POST /api/agent/outreach-sequences/{id}/{action}", "POST /api/agent/customer-maintenance/{id}/{action}", "POST /api/agent/sales-training/{id}/{action}", "POST /api/agent/sales-distillation/{id}/publish", "POST /api/agent/sales-distillation/{id}/activate", "POST /api/agent/sales-distillation/activations/{id}/pause"], emptySchema, "执行 Agent 业务对象的状态动作；路径 action 必须来自接口目录允许值。");
+defineMany(["POST /api/agent/outreach-sequences/{id}/{action}", "POST /api/agent/customer-maintenance/{id}/{action}"], emptySchema, "执行 Agent 业务对象的状态动作；路径 action 必须来自接口目录允许值。");
 define("POST /api/agent/memories", objectSchema(["type", "scope", "title", "content"], memoryFields), "创建待审核业务记忆；团队、公司或客户范围仍受当前角色和对象权限限制。");
 define("PATCH /api/agent/memories/{id}", objectSchema([], { title: memoryFields.title, content: memoryFields.content, expiresAt: memoryFields.expiresAt }), "修改当前账号有权管理的业务记忆。");
 defineMany(["DELETE /api/agent/memories/{id}", "POST /api/agent/memories/{id}/activate", "POST /api/agent/memories/{id}/archive"], emptySchema, "管理业务记忆状态；删除需要明确确认。");
@@ -572,7 +569,7 @@ function refreshViewForPath(path: string) {
     ["/api/customers", "customers"], ["/api/leads", "leads"], ["/api/deals", "pipeline"], ["/api/todos", "todos"],
     ["/api/plan-", "plan"], ["/api/whatsapp", "whatsapp"], ["/api/reminders", "reminders"], ["/api/memos", "memos"],
     ["/api/development-email", "development-email"], ["/api/trade-documents", "documents"], ["/api/prospect", "lead-finder"],
-    ["/api/lead-finder", "lead-finder"], ["/api/agent/sales-", "sales-distillation"], ["/api/reports", "reports"]
+    ["/api/lead-finder", "lead-finder"], ["/api/reports", "reports"]
   ];
   return rules.find(([prefix]) => path.startsWith(prefix))?.[1] || "";
 }
@@ -586,7 +583,6 @@ function completionFor(method: string, path: string): AgentCompletionEvidence {
     "/api/daily-reports/{id}/comments": ["comment.id"], "/api/internal-messages": ["message.id"],
     "/api/commission/products": ["product.id"], "/api/commission/products/{id}/rules": ["rule.id"], "/api/commission/sales-records": ["record.id"],
     "/api/exam-questions": ["question.id"], "/api/exams": ["exam.id"], "/api/reminders": ["reminder.id"], "/api/trade-documents": ["document.id"],
-    "/api/agent/sales-training": ["run.id"], "/api/agent/sales-distillation": ["distillation.id"],
     "/api/agent/memories": ["memory.id"], "/api/agent/knowledge/documents": ["document.id"], "/api/agent/triggers": ["rule.id"],
     "/api/lead-finder/launch": ["run.id"],
     "/api/prospect-strategies/{id}/schedules": ["schedule.id"],

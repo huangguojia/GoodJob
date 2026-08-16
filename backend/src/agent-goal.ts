@@ -27,7 +27,6 @@ export const agentGoalDomainSchema = z.enum([
   "communication",
   "research",
   "maintenance",
-  "sales-training",
   "knowledge",
   "navigation",
   "general"
@@ -128,7 +127,6 @@ function inferDomain(goal: string): AgentGoalDomain {
   if (/(开发信|外贸邮件|冷邮件|邮件草稿|首次联系邮件|跟进邮件|这封邮件|发送.{0,6}邮件|发一封.{0,6}邮件)/u.test(goal)) return "outreach";
   if (/(背调|尽调|企业调查|客户调查|公司背景|企业背景|调查这家企业|研究这家.{0,6}(?:买家|客户)|采购能力)/u.test(goal)) return "research";
   if (/(客户守护|自动维护|定期维护|健康度巡检|定期检查.{0,8}客户)/u.test(goal)) return "maintenance";
-  if (/(蒸馏|业务员训练|销售训练|打法训练|训练任务|训练进度)/u.test(goal)) return "sales-training";
   if (/(搜客|获客|超级搜索|采购商|进口商|经销商|批发商|买家|潜在企业|目标市场|市场客户|海外目标客户|采购线索|公开来源.{0,8}找|挖掘.{0,8}客户|寻找.{0,8}企业)/u.test(goal)) return "prospecting";
   if (/(PI|CI|单据|形式发票|商业发票|装箱单|报关)/iu.test(goal)) return "documents";
   if (/(商机|管道|成交机会|报价机会|这条机会|成交进度)/u.test(goal)) return "deals";

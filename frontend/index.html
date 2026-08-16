@@ -104,7 +104,7 @@
       gap: 10px;
       padding: 14px 11px 12px;
       color: #edf0f7;
-      background: #161821;
+      background: #12131a; /* 调深一档 */
       border-right: 1px solid #282b37;
     }
 
@@ -11975,14 +11975,6 @@
     .agent-conversation-item small, .agent-conversation-empty { margin-top: 3px; color: #8c97a8; font-size: 8px; }
     .agent-conversation-empty { padding: 7px 8px; }
     .agent-chat-sidebar .agent-model-state { display: grid; justify-content: stretch; margin: 0; }
-    .agent-playbook-state { width: 100%; margin-top: 8px; padding: 9px 10px; border: 1px solid #dce3ed; border-radius: 7px; color: #27364d; background: var(--surface); text-align: left; cursor: pointer; }
-    .agent-playbook-state:hover { border-color: #b9c8dd; background: #f9fbfd; }
-    .agent-playbook-state span, .agent-playbook-state b, .agent-playbook-state small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .agent-playbook-state span { color: #8793a4; font-size: 8px; }
-    .agent-playbook-state b { margin-top: 3px; font-size: 10px; }
-    .agent-playbook-state small { margin-top: 3px; color: #748197; font-size: 8px; }
-    .agent-playbook-state.active { border-color: #bcded1; background: #f5fbf8; }
-    .agent-playbook-state.active b { color: #167a5b; }
     .agent-memory-state { width: 100%; margin-top: 8px; padding: 9px 10px; border: 1px solid #dce3ed; border-radius: 7px; color: #27364d; background: var(--surface); text-align: left; cursor: pointer; }
     .agent-memory-state:hover { border-color: #b9c8dd; background: #f9fbfd; }
     .agent-memory-state span, .agent-memory-state b, .agent-memory-state small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -19741,7 +19733,6 @@
         <details class="nav-section" aria-label="知识协作">
           <summary class="nav-section-title"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/><path d="M8 7h8"/><path d="M8 11h6"/></svg><span>知识协作</span><i class="nav-chevron"></i></summary>
           <div class="nav-secondary-grid">
-            <button class="nav-secondary-button" data-view="sales-distillation" title="销售能力训练"><span>销售训练</span></button>
             <button class="nav-secondary-button" data-view="knowledge" title="资料维护"><span>资料维护</span></button>
             <button class="nav-secondary-button" data-view="exam" title="在线考试"><span>在线考试</span></button>
             <button class="nav-secondary-button" data-view="wecom" title="企业微信"><span>企业微信</span></button>
@@ -19772,11 +19763,6 @@
           </div>
         </details>
       </nav>
-
-      <div class="nav-footer">
-        <div class="row"><span>MySQL 主库</span><i class="dot-ok"></i></div>
-        <div class="row"><span>数据迁移</span><b>本地文件</b></div>
-      </div>
     </aside>
 
     <main class="main">
@@ -20451,7 +20437,6 @@
               <details class="agent-more-tools">
                 <summary>常用任务与能力</summary>
                 <div class="agent-model-state" id="agentModelStatus"><span class="badge amber">基础执行</span><span>正在读取模型状态</span></div>
-                <button class="agent-playbook-state" id="agentPlaybookStatus" type="button"><span>销售打法</span><b>尚未应用</b><small></small></button>
                 <button class="agent-memory-state" id="agentMemoryStatus" type="button"><span>业务记忆</span><b>尚无已启用记忆</b><small></small></button>
                 <button class="agent-memory-state" id="agentKnowledgeStatus" type="button"><span>系统知识</span><b>正在载入</b><small></small></button>
                 <button class="agent-memory-state" id="agentTriggerStatus" type="button"><span>自动触发</span><b>尚未创建规则</b><small></small></button>
@@ -20496,142 +20481,6 @@
           </div>
         </div>
 
-        <div class="view" id="sales-distillation">
-          <div class="page-head sales-distillation-head">
-            <div><h1>销售能力训练</h1></div>
-            <div class="head-actions"><button class="btn" id="salesDistillationRefreshButton" type="button">刷新</button><button class="btn primary" id="salesDistillationButton" type="button">开始训练</button></div>
-          </div>
-          <section class="sales-distillation-toolbar">
-            <div class="sales-distillation-select"><label for="salesDistillationSource">训练对象</label><select id="salesDistillationSource"><option>正在读取业务员...</option></select></div>
-            <div class="sales-distillation-select"><label for="salesDistillationPeriod">样本周期</label><select id="salesDistillationPeriod"><option value="30">近 30 天</option><option value="90" selected>近 90 天</option><option value="180">近 180 天</option><option value="365">近一年</option></select></div>
-            <div class="sales-distillation-toolbar-note"><span class="sales-live-dot"></span><div><b>训练工作器已就绪</b><small>任务在后台分阶段运行</small></div></div>
-          </section>
-          <section class="sales-training-workspace">
-            <aside class="sales-training-queue"><header><b>训练任务</b><span id="salesTrainingQueueCount">0</span></header><div id="salesTrainingQueue"><div class="sales-training-empty">暂无训练任务</div></div></aside>
-            <main class="sales-training-main" id="salesTrainingDetail"><div class="sales-training-welcome"><span>AI</span><div><h2>暂无训练任务</h2></div></div></main>
-            <aside class="sales-training-quality" id="salesTrainingQuality"><div class="sales-training-quality-empty">暂无训练质量</div></aside>
-          </section>
-          <div class="sales-training-published-head"><div><h2>已发布能力</h2></div></div>
-          <section id="salesDistillationCards" class="sales-distillation-cards"><div class="sales-distillation-empty"><div class="sales-distillation-empty-icon">◎</div><h3>暂无已发布能力</h3></div></section>
-          <style>
-            #sales-distillation { --sales-ink: #17233d; --sales-muted: #728099; --sales-line: #e4eaf3; }
-            #sales-distillation .sales-distillation-head { align-items: flex-start; }
-            #sales-distillation .sales-distillation-toolbar { display: flex; align-items: flex-end; gap: 18px; margin-bottom: 18px; padding: 15px 18px; border: 1px solid var(--sales-line); border-radius: 10px; background: rgba(255,255,255,.82); box-shadow: 0 8px 24px rgba(27,39,68,.05); }
-            #sales-distillation .sales-distillation-select { display: grid; gap: 6px; min-width: 220px; }
-            #sales-distillation .sales-distillation-select label { color: var(--sales-muted); font-size: 11px; font-weight: 800; }
-            #sales-distillation .sales-distillation-select select { height: 38px; min-width: 220px; padding: 0 12px; border: 1px solid #d5deeb; border-radius: 7px; color: var(--sales-ink); background: var(--surface); outline: 0; }
-            #sales-distillation .sales-distillation-toolbar-note { display: flex; align-items: center; gap: 9px; min-height: 38px; margin-left: auto; color: var(--sales-ink); }
-            #sales-distillation .sales-distillation-toolbar-note b, #sales-distillation .sales-distillation-toolbar-note small { display: block; }
-            #sales-distillation .sales-distillation-toolbar-note b { font-size: 12px; }
-            #sales-distillation .sales-distillation-toolbar-note small { margin-top: 3px; color: var(--sales-muted); font-size: 11px; }
-            #sales-distillation .sales-live-dot { width: 9px; height: 9px; border-radius: 50%; background: #23b47e; box-shadow: 0 0 0 4px rgba(35,180,126,.13); }
-            #sales-distillation .sales-distillation-cards { display: grid; gap: 16px; }
-            #sales-distillation .sales-distillation-card { overflow: hidden; border: 1px solid var(--sales-line); border-radius: 10px; background: var(--surface); box-shadow: 0 12px 28px rgba(27,39,68,.06); }
-            #sales-distillation .sales-card-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 20px 15px; border-bottom: 1px solid #edf1f7; }
-            #sales-distillation .sales-person { display: flex; align-items: center; gap: 11px; min-width: 0; }
-            #sales-distillation .sales-person-avatar { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; color: #fff; background: linear-gradient(135deg,#3157d5,#6f4bd8); font-size: 16px; font-weight: 900; }
-            #sales-distillation .sales-person h3 { margin: 0; color: var(--sales-ink); font-size: 16px; }
-            #sales-distillation .sales-person p { margin: 4px 0 0; color: var(--sales-muted); font-size: 11px; }
-            #sales-distillation .sales-card-meta { display: grid; justify-items: end; gap: 6px; }
-            #sales-distillation .sales-card-meta small { color: var(--sales-muted); font-size: 10px; }
-            #sales-distillation .sales-metric-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 1px; background: #edf1f7; border-bottom: 1px solid #edf1f7; }
-            #sales-distillation .sales-metric { min-height: 72px; padding: 13px 14px; background: #fbfcfe; }
-            #sales-distillation .sales-metric span { display: block; color: var(--sales-muted); font-size: 10px; }
-            #sales-distillation .sales-metric b { display: block; margin-top: 8px; color: var(--sales-ink); font-size: 18px; font-variant-numeric: tabular-nums; }
-            #sales-distillation .sales-card-columns { display: grid; grid-template-columns: 1fr 1.25fr 1fr; gap: 0; }
-            #sales-distillation .sales-card-columns > section { min-width: 0; padding: 18px 20px; border-right: 1px solid #edf1f7; }
-            #sales-distillation .sales-card-columns > section:last-child { border-right: 0; }
-            #sales-distillation .sales-section-title { display: flex; align-items: center; gap: 8px; margin-bottom: 11px; }
-            #sales-distillation .sales-section-title span { color: #3157d5; font-size: 10px; font-weight: 900; }
-            #sales-distillation .sales-section-title h4 { margin: 0; color: var(--sales-ink); font-size: 13px; }
-            #sales-distillation .sales-card-columns ul, #sales-distillation .sales-card-columns ol { margin: 0; padding-left: 18px; color: #40506c; font-size: 12px; line-height: 1.7; }
-            #sales-distillation .sales-card-columns li + li { margin-top: 7px; }
-            #sales-distillation .sales-playbook { display: grid; gap: 10px; }
-            #sales-distillation .sales-playbook-row { padding-left: 10px; border-left: 2px solid #dce5ff; }
-            #sales-distillation .sales-playbook-row b { display: block; color: #3157d5; font-size: 11px; }
-            #sales-distillation .sales-playbook-row p { margin: 3px 0 2px; color: #40506c; font-size: 12px; line-height: 1.55; }
-            #sales-distillation .sales-playbook-row small { color: var(--sales-muted); font-size: 10px; }
-            #sales-distillation .sales-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; border-top: 1px solid #edf1f7; color: var(--sales-muted); font-size: 10px; }
-            #sales-distillation .sales-playbook-usage { display: grid; gap: 3px; }
-            #sales-distillation .sales-playbook-usage b { color: #718097; font-size: 11px; }
-            #sales-distillation .sales-playbook-usage.active b { color: #16815f; }
-            #sales-distillation .sales-playbook-usage small { color: var(--sales-muted); font-size: 10px; }
-            #sales-distillation .sales-distillation-empty { display: grid; justify-items: center; gap: 8px; padding: 74px 20px; border: 1px dashed #ccd7e7; border-radius: 10px; background: rgba(255,255,255,.68); text-align: center; }
-            #sales-distillation .sales-distillation-empty-icon { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 50%; color: #3157d5; background: var(--brand-tint); font-size: 26px; }
-            #sales-distillation .sales-distillation-empty h3 { margin: 4px 0 0; color: var(--sales-ink); font-size: 16px; }
-            #sales-distillation .sales-distillation-empty p { margin: 0; color: var(--sales-muted); font-size: 12px; }
-            #sales-distillation .sales-training-workspace { display: grid; grid-template-columns: 230px minmax(480px,1fr) 280px; min-height: 610px; overflow: hidden; border: 1px solid var(--sales-line); border-radius: 8px; background: var(--surface); box-shadow: 0 10px 28px rgba(27,39,68,.05); }
-            #sales-distillation .sales-training-queue { min-width: 0; padding: 14px 10px; border-right: 1px solid var(--sales-line); background: var(--surface-2); }
-            #sales-distillation .sales-training-queue > header { display: flex; align-items: center; justify-content: space-between; padding: 0 6px 10px; color: var(--sales-ink); font-size: 11px; }
-            #sales-distillation .sales-training-queue > header span { color: #7c899c; font-size: 9px; }
-            #sales-distillation #salesTrainingQueue { display: grid; gap: 5px; }
-            #sales-distillation .sales-training-queue-item { width: 100%; min-width: 0; padding: 10px; border: 1px solid transparent; border-radius: 7px; color: #34435b; background: transparent; text-align: left; cursor: pointer; }
-            #sales-distillation .sales-training-queue-item:hover, #sales-distillation .sales-training-queue-item.active { border-color: #d7e0ee; background: var(--surface); }
-            #sales-distillation .sales-training-queue-item div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-            #sales-distillation .sales-training-queue-item b, #sales-distillation .sales-training-queue-item small { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-            #sales-distillation .sales-training-queue-item b { font-size: 11px; }
-            #sales-distillation .sales-training-queue-item small { margin-top: 5px; color: #8290a3; font-size: 9px; }
-            #sales-distillation .sales-training-queue-item i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #9ea9b8; }
-            #sales-distillation .sales-training-queue-item.running i { background: #3157d5; box-shadow: 0 0 0 4px rgba(49,87,213,.1); }
-            #sales-distillation .sales-training-queue-item.review i { background: #d99518; }
-            #sales-distillation .sales-training-queue-item.published i { background: #1ca876; }
-            #sales-distillation .sales-training-main { min-width: 0; padding: 18px; }
-            #sales-distillation .sales-training-welcome { min-height: 570px; display: flex; align-items: center; justify-content: center; gap: 12px; color: var(--sales-ink); }
-            #sales-distillation .sales-training-welcome > span { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 8px; color: #fff; background: #3157d5; font-size: 11px; font-weight: 900; }
-            #sales-distillation .sales-training-welcome h2 { margin: 0; font-size: 17px; }
-            #sales-distillation .sales-training-welcome p { max-width: 420px; margin: 5px 0 0; color: var(--sales-muted); font-size: 11px; line-height: 1.55; }
-            #sales-distillation .sales-training-run-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid #e9edf3; }
-            #sales-distillation .sales-training-run-head h2 { margin: 0; color: var(--sales-ink); font-size: 17px; }
-            #sales-distillation .sales-training-run-head p { margin: 5px 0 0; color: var(--sales-muted); font-size: 10px; }
-            #sales-distillation .sales-training-progress { margin: 16px 0; }
-            #sales-distillation .sales-training-progress > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #4b5a72; font-size: 10px; }
-            #sales-distillation .sales-training-progress strong { color: #3157d5; font-size: 13px; }
-            #sales-distillation .sales-training-progress > span { display: block; height: 6px; margin-top: 8px; overflow: hidden; border-radius: 3px; background: #e4e9f2; }
-            #sales-distillation .sales-training-progress > span i { display: block; height: 100%; border-radius: inherit; background: #3157d5; transition: width .3s ease; }
-            #sales-distillation .sales-training-stages { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 6px; margin-bottom: 17px; }
-            #sales-distillation .sales-training-stage { min-width: 0; padding: 8px; border: 1px solid #e2e7ef; border-radius: 6px; background: #fafbfd; }
-            #sales-distillation .sales-training-stage b, #sales-distillation .sales-training-stage small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-            #sales-distillation .sales-training-stage b { color: #44536a; font-size: 9px; }
-            #sales-distillation .sales-training-stage small { margin-top: 4px; color: #8a95a6; font-size: 8px; }
-            #sales-distillation .sales-training-stage.completed { border-color: #cde8dc; background: #f6fbf8; }
-            #sales-distillation .sales-training-stage.running { border-color: #cbd8f5; background: #f5f8ff; }
-            #sales-distillation .sales-training-section-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 16px 0 8px; }
-            #sales-distillation .sales-training-section-title h3 { margin: 0; color: var(--sales-ink); font-size: 12px; }
-            #sales-distillation .sales-training-section-title span { color: #8491a3; font-size: 9px; }
-            #sales-distillation .sales-training-events { max-height: 210px; overflow-y: auto; border-top: 1px solid #e7ebf2; }
-            #sales-distillation .sales-training-event { display: grid; grid-template-columns: 70px minmax(0,1fr) auto; gap: 8px; padding: 8px 2px; border-bottom: 1px solid #edf1f5; color: #46556d; font-size: 9px; }
-            #sales-distillation .sales-training-event b { color: #3157d5; font-size: 8px; }
-            #sales-distillation .sales-training-event time { color: #97a1b0; font-size: 8px; }
-            #sales-distillation .sales-training-samples { display: grid; gap: 5px; }
-            #sales-distillation .sales-training-sample { display: grid; grid-template-columns: 18px minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 8px; border: 1px solid #e2e7ef; border-radius: 6px; background: var(--surface); }
-            #sales-distillation .sales-training-sample input { width: 14px; height: 14px; }
-            #sales-distillation .sales-training-sample b, #sales-distillation .sales-training-sample small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-            #sales-distillation .sales-training-sample b { color: #35445c; font-size: 10px; }
-            #sales-distillation .sales-training-sample small { margin-top: 3px; color: #8692a4; font-size: 8px; }
-            #sales-distillation .sales-training-sample select { height: 26px; padding: 0 5px; border: 1px solid #d8e0eb; border-radius: 5px; color: #536178; background: var(--surface); font-size: 9px; }
-            #sales-distillation .sales-training-quality { min-width: 0; padding: 16px 14px; overflow-y: auto; border-left: 1px solid var(--sales-line); background: #fbfcfe; }
-            #sales-distillation .sales-training-quality-empty, #sales-distillation .sales-training-empty { padding: 18px 8px; color: #8b96a7; font-size: 9px; text-align: center; }
-            #sales-distillation .sales-quality-head { padding-bottom: 12px; border-bottom: 1px solid #e7ebf2; }
-            #sales-distillation .sales-quality-head span, #sales-distillation .sales-quality-head b { display: block; }
-            #sales-distillation .sales-quality-head span { color: #7c899b; font-size: 9px; }
-            #sales-distillation .sales-quality-head b { margin-top: 5px; color: var(--sales-ink); font-size: 18px; }
-            #sales-distillation .sales-quality-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px; margin: 12px 0; }
-            #sales-distillation .sales-quality-metric { padding: 9px; border: 1px solid #e2e7ef; border-radius: 6px; background: var(--surface); }
-            #sales-distillation .sales-quality-metric span, #sales-distillation .sales-quality-metric b { display: block; }
-            #sales-distillation .sales-quality-metric span { color: #8290a3; font-size: 8px; }
-            #sales-distillation .sales-quality-metric b { margin-top: 4px; color: #2f3e56; font-size: 13px; }
-            #sales-distillation .sales-evaluation-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; padding: 7px 0; border-bottom: 1px solid #e9edf3; color: #65738a; font-size: 9px; }
-            #sales-distillation .sales-evaluation-row b { color: #31415a; }
-            #sales-distillation .sales-training-blocker { margin-top: 7px; padding: 8px; border-left: 2px solid #d99518; color: #7b5b1b; background: #fffaf0; font-size: 9px; line-height: 1.45; }
-            #sales-distillation .sales-training-quality .btn { width: 100%; margin-top: 8px; }
-            #sales-distillation .sales-training-published-head { margin: 22px 0 10px; }
-            #sales-distillation .sales-training-published-head h2 { margin: 0; color: var(--sales-ink); font-size: 15px; }
-            #sales-distillation .sales-training-published-head p { margin: 4px 0 0; color: var(--sales-muted); font-size: 10px; }
-            @media (max-width: 1366px) { #sales-distillation .sales-training-workspace { grid-template-columns: 190px minmax(430px,1fr) 250px; } }
-            @media (max-width: 1080px) { #sales-distillation .sales-metric-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } #sales-distillation .sales-card-columns { grid-template-columns: 1fr 1fr; } #sales-distillation .sales-card-columns > section:last-child { grid-column: 1 / -1; border-top: 1px solid #edf1f7; } }
-            @media (max-width: 720px) { #sales-distillation .sales-distillation-toolbar { align-items: stretch; flex-direction: column; } #sales-distillation .sales-distillation-select, #sales-distillation .sales-distillation-select select { min-width: 0; width: 100%; } #sales-distillation .sales-distillation-toolbar-note { margin-left: 0; } #sales-distillation .sales-card-head { align-items: flex-start; flex-direction: column; } #sales-distillation .sales-card-meta { justify-items: start; } #sales-distillation .sales-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } #sales-distillation .sales-card-columns { grid-template-columns: 1fr; } #sales-distillation .sales-card-columns > section { border-right: 0; border-bottom: 1px solid #edf1f7; } #sales-distillation .sales-card-columns > section:last-child { border-bottom: 0; } #sales-distillation .sales-card-foot { align-items: flex-start; flex-direction: column; } }
-          </style>
-        </div>
 
         <div class="view" id="ai-config">
           <div class="dense-grid">

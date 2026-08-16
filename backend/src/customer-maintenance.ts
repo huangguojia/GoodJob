@@ -3,7 +3,6 @@ import { z } from "zod";
 import type { AgentActor } from "./ai-agent.js";
 import type { CrmStore } from "./store.js";
 import type { CustomerMaintenanceFinding, CustomerMaintenanceWatch, Todo } from "./types.js";
-import { recordSalesPlaybookUsage, salesPlaybookActionForStage } from "./sales-distillation.js";
 
 const rulesSchema = z.object({
   intervalHours: z.coerce.number().int().min(1).max(24 * 7).default(24),
@@ -50,7 +49,6 @@ function appendMissionEvent(store: CrmStore, watch: CustomerMaintenanceWatch, me
 export function scanCustomerMaintenance(store: CrmStore, watch: CustomerMaintenanceWatch, now = new Date()) {
   const inactivityBoundary = now.getTime() - watch.rules.inactivityDays * 86_400_000;
   const findings: CustomerMaintenanceFinding[] = [];
-  const owner = store.users.find((item) => item.id === watch.ownerId && item.teamId === watch.teamId);
   for (const customer of store.customers.filter((item) =>
     item.ownerId === watch.ownerId
     && item.teamId === watch.teamId
@@ -104,7 +102,6 @@ export function scanCustomerMaintenance(store: CrmStore, watch: CustomerMaintena
       nextAction: deal?.nextAction || "",
       nextActionAt: deal?.nextActionAt || ""
     })).digest("hex").slice(0, 32);
-    const playbook = salesPlaybookActionForStage(store, { id: watch.ownerId, teamId: watch.teamId, role: owner?.role || "sales" }, deal?.stage || customer.stage);
     findings.push({
       customerId: customer.id,
       customerName: customer.company,
@@ -112,10 +109,7 @@ export function scanCustomerMaintenance(store: CrmStore, watch: CustomerMaintena
       reasonCodes,
       reason: reasons.join("；"),
       priority: reasonCodes.includes("overdue_followup") || customer.health < 40 ? "high" : "medium",
-      triggerKey: `maintenance:${watch.id}:${fingerprint}`,
-      playbookActivationId: playbook?.activation.id,
-      playbookName: playbook?.distillation.sourceUserName,
-      playbookAction: playbook?.item.action
+      triggerKey: `maintenance:${watch.id}:${fingerprint}`
     });
   }
   return findings.sort((left, right) => {
@@ -239,7 +233,7 @@ export async function runCustomerMaintenanceWatch(store: CrmStore, watch: Custom
       dueAt: localMinuteText(now),
       ownerId: watch.ownerId,
       teamId: watch.teamId,
-      related: `${customer.company} · ${finding.reason}${finding.playbookAction ? ` · 打法：${finding.playbookAction}` : ""}`,
+      related: `${customer.company} · ${finding.reason}`,
       done: false,
       impactAmount: customer.amount,
       createdAt: now.toISOString(),
@@ -248,7 +242,6 @@ export async function runCustomerMaintenanceWatch(store: CrmStore, watch: Custom
       reminderRuleId: `maintenance_watch:${watch.id}`,
       triggerKey: finding.triggerKey
     });
-    if (finding.playbookActivationId) recordSalesPlaybookUsage(store, finding.playbookActivationId, true);
   }
   store.todos.unshift(...created);
   watch.lastRunAt = now.toISOString();

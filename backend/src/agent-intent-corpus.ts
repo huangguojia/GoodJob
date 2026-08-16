@@ -194,13 +194,6 @@ export const GJAB_INTENT_CORPUS: AgentIntentCorpusCase[] = [
     "创建备忘：季度采购计划",
     "把这段内容保存成备忘"
   ]),
-  ...cases("training", "sales-training", undefined, [
-    "查看业务员蒸馏",
-    "开始销售打法训练",
-    "应用团队蒸馏打法",
-    "检查业务员训练进度",
-    "暂停当前训练任务"
-  ]),
   ...cases("knowledge", "knowledge", undefined, [
     "查看产品知识库",
     "查询公司的销售 SOP",

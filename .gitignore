@@ -1,0 +1,16 @@
+.env
+.env.*.local
+.data/
+backups/
+*.dump
+*.db
+*.sqlite
+*.sql.gz
+node_modules/
+dist/
+test-results/
+playwright-report/
+*.log
+backend/.wwebjs_auth/
+backend/uploads/
+dist-packages/

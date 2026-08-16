@@ -104,7 +104,6 @@ import type { AgentMemoryRecord, AgentMissionCheckpointRecord, AgentRunEventReco
 import type { AgentTriggerEventRecord, AgentTriggerRuleRecord } from "./types.js";
 import type { AgentEvaluationRunRecord, AgentModelCallRecord } from "./types.js";
 import type { AgentKnowledgeDocument } from "./types.js";
-import type { SalesDistillation, SalesPlaybookActivation, SalesTrainingRun } from "./types.js";
 
 const defaultUrl = "mysql://goodjob:change_me@127.0.0.1:3306/goodjob_crm";
 
@@ -1559,9 +1558,6 @@ export async function createMysqlStore(
         agentEvaluationRuns: await loadAgentEvaluationRuns(pool),
         outreachSequences: await loadOutreachSequences(pool),
         customerMaintenanceWatches: await loadCustomerMaintenanceWatches(pool),
-        salesDistillations: await loadSalesDistillations(pool),
-        salesPlaybookActivations: await loadSalesPlaybookActivations(pool),
-        salesTrainingRuns: await loadSalesTrainingRuns(pool),
         prospectCampaigns: await loadProspectCampaigns(pool),
         prospectCampaignVersions: await loadProspectCampaignVersions(pool),
         prospectCampaignEvents: await loadProspectCampaignEvents(pool),
@@ -4006,59 +4002,6 @@ async function ensureSchema(pool: mysql.Pool) {
     UNIQUE KEY uk_customer_maintenance_approval(owner_id, approval_step_id),
     INDEX idx_customer_maintenance_due(watch_status, next_run_at),
     INDEX idx_customer_maintenance_owner(owner_id, created_at)
-  )`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS sales_distillations (
-    id VARCHAR(80) PRIMARY KEY,
-    source_user_id VARCHAR(64) NOT NULL,
-    source_user_name VARCHAR(120) NOT NULL,
-    team_id VARCHAR(64) NOT NULL,
-    period_days INT NOT NULL,
-    metrics_json JSON NOT NULL,
-    patterns_json JSON NOT NULL,
-    playbook_json JSON NOT NULL,
-    coaching_actions_json JSON NOT NULL,
-    model_label VARCHAR(160) DEFAULT '',
-    status VARCHAR(20) NOT NULL DEFAULT 'draft',
-    created_by VARCHAR(64) NOT NULL,
-    created_at DATETIME(3) NOT NULL,
-    published_by VARCHAR(64) DEFAULT '',
-    published_at DATETIME(3) NULL,
-    INDEX idx_sales_distillation_team(team_id, created_at),
-    INDEX idx_sales_distillation_source(source_user_id, created_at),
-    INDEX idx_sales_distillation_status(team_id, status)
-  )`);
-  await ensureColumn(pool, "sales_distillations", "training_metadata_json", "JSON NULL");
-  await pool.query(`CREATE TABLE IF NOT EXISTS sales_playbook_activations (
-    id VARCHAR(100) PRIMARY KEY,
-    distillation_id VARCHAR(80) NOT NULL,
-    owner_id VARCHAR(64) NOT NULL,
-    team_id VARCHAR(64) NOT NULL,
-    activation_status VARCHAR(20) NOT NULL,
-    application_count INT NOT NULL DEFAULT 0,
-    task_count INT NOT NULL DEFAULT 0,
-    last_used_at DATETIME(3) NULL,
-    activated_by VARCHAR(64) NOT NULL,
-    activated_at DATETIME(3) NOT NULL,
-    updated_at DATETIME(3) NOT NULL,
-    UNIQUE KEY uk_sales_playbook_owner_distillation(owner_id, distillation_id),
-    INDEX idx_sales_playbook_owner_status(owner_id, activation_status),
-    INDEX idx_sales_playbook_team(team_id, updated_at)
-  )`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS sales_training_runs (
-    id VARCHAR(100) PRIMARY KEY,
-    source_user_id VARCHAR(64) NOT NULL,
-    team_id VARCHAR(64) NOT NULL,
-    created_by VARCHAR(64) NOT NULL,
-    training_status VARCHAR(30) NOT NULL,
-    version_no INT NOT NULL DEFAULT 1,
-    progress INT NOT NULL DEFAULT 0,
-    run_json JSON NOT NULL,
-    created_at DATETIME(3) NOT NULL,
-    updated_at DATETIME(3) NOT NULL,
-    INDEX idx_sales_training_owner(created_by, updated_at),
-    INDEX idx_sales_training_source(source_user_id, version_no),
-    INDEX idx_sales_training_status(training_status, updated_at),
-    INDEX idx_sales_training_team(team_id, updated_at)
   )`);
   await repairAgentJobIdempotencyIntegrity(pool);
   await ensureUniqueIndex(pool, "agent_jobs", "uk_agent_job_idempotency", [
@@ -10109,49 +10052,6 @@ async function loadCustomerMaintenanceWatches(pool: MysqlQuerySource): Promise<C
   }));
 }
 
-async function loadSalesDistillations(pool: MysqlQuerySource): Promise<SalesDistillation[]> {
-  return (await rows<Record<string, any>>(pool, "SELECT * FROM sales_distillations ORDER BY created_at DESC")).map((row) => ({
-    id: row.id,
-    sourceUserId: row.source_user_id,
-    sourceUserName: row.source_user_name,
-    teamId: row.team_id,
-    periodDays: Number(row.period_days || 90),
-    metrics: mysqlJson(row.metrics_json) || { customerCount: 0, leadCount: 0, activeDealCount: 0, wonDealCount: 0, wonAmount: 0, followupCount: 0, completedTodoCount: 0, reportCount: 0 },
-    patterns: mysqlJson(row.patterns_json) || [],
-    playbook: mysqlJson(row.playbook_json) || [],
-    coachingActions: mysqlJson(row.coaching_actions_json) || [],
-    modelLabel: row.model_label || "规则蒸馏",
-    status: row.status === "published" ? "published" : "draft",
-    createdBy: row.created_by,
-    createdAt: mysqlIsoDate(row.created_at),
-    publishedBy: row.published_by || undefined,
-    publishedAt: row.published_at ? mysqlIsoDate(row.published_at) : undefined,
-    ...(mysqlJson(row.training_metadata_json) || {})
-  }));
-}
-
-async function loadSalesTrainingRuns(pool: MysqlQuerySource): Promise<SalesTrainingRun[]> {
-  return (await rows<Record<string, any>>(pool, "SELECT * FROM sales_training_runs ORDER BY updated_at DESC")).map((row) => {
-    const run = mysqlJson(row.run_json) as SalesTrainingRun;
-    return { ...run, id: row.id, sourceUserId: row.source_user_id, teamId: row.team_id, createdBy: row.created_by, status: row.training_status, version: Number(row.version_no || run.version || 1), progress: Number(row.progress || run.progress || 0), createdAt: mysqlIsoDate(row.created_at), updatedAt: mysqlIsoDate(row.updated_at) };
-  });
-}
-
-async function loadSalesPlaybookActivations(pool: MysqlQuerySource): Promise<SalesPlaybookActivation[]> {
-  return (await rows<Record<string, any>>(pool, "SELECT * FROM sales_playbook_activations ORDER BY updated_at DESC")).map((row) => ({
-    id: row.id,
-    distillationId: row.distillation_id,
-    ownerId: row.owner_id,
-    teamId: row.team_id,
-    status: row.activation_status,
-    applicationCount: Number(row.application_count || 0),
-    taskCount: Number(row.task_count || 0),
-    lastUsedAt: row.last_used_at ? mysqlIsoDate(row.last_used_at) : "",
-    activatedBy: row.activated_by,
-    activatedAt: mysqlIsoDate(row.activated_at),
-    updatedAt: mysqlIsoDate(row.updated_at)
-  }));
-}
 
 async function loadAgentJobs(pool: MysqlQuerySource): Promise<AgentJob[]> {
   return (await rows<Record<string, any>>(pool, "SELECT * FROM agent_jobs ORDER BY created_at DESC")).map((row) => ({
@@ -10635,21 +10535,6 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
         mysqlDate(item.createdAt),
         mysqlDate(item.updatedAt)
       ], "(id,mission_run_id,approval_step_id,owner_id,team_id,watch_name,watch_status,rules_json,next_run_at,last_run_at,last_matched_count,last_created_count,last_skipped_count,total_created_count,last_findings_json,last_error,approved_by,approved_at,created_at,updated_at)");
-		    await replaceRows(connection, "sales_distillations", store.salesDistillations, (item) => [item.id, item.sourceUserId, item.sourceUserName, item.teamId, item.periodDays, JSON.stringify(item.metrics), JSON.stringify(item.patterns), JSON.stringify(item.playbook), JSON.stringify(item.coachingActions), item.modelLabel || "", item.status, item.createdBy, mysqlDate(item.createdAt), item.publishedBy || "", item.publishedAt ? mysqlDate(item.publishedAt) : null, JSON.stringify({ trainingRunId: item.trainingRunId || "", version: item.version || 0, maturity: item.maturity || "", evaluationScore: item.evaluationScore || 0, sampleCount: item.sampleCount || 0 })], "(id,source_user_id,source_user_name,team_id,period_days,metrics_json,patterns_json,playbook_json,coaching_actions_json,model_label,status,created_by,created_at,published_by,published_at,training_metadata_json)");
-	    await replaceRows(connection, "sales_playbook_activations", store.salesPlaybookActivations, (item) => [
-        item.id,
-        item.distillationId,
-        item.ownerId,
-        item.teamId,
-        item.status,
-        item.applicationCount,
-        item.taskCount,
-        item.lastUsedAt ? mysqlDate(item.lastUsedAt) : null,
-        item.activatedBy,
-        mysqlDate(item.activatedAt),
-        mysqlDate(item.updatedAt)
-      ], "(id,distillation_id,owner_id,team_id,activation_status,application_count,task_count,last_used_at,activated_by,activated_at,updated_at)");
-	    await replaceRows(connection, "sales_training_runs", store.salesTrainingRuns, (item) => [item.id, item.sourceUserId, item.teamId, item.createdBy, item.status, item.version, item.progress, JSON.stringify(item), mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,source_user_id,team_id,created_by,training_status,version_no,progress,run_json,created_at,updated_at)");
 	    await replaceRows(connection, "lead_source_configs", store.leadSourceConfigs, (item) => [item.id, item.provider, item.scope || "personal", item.apiKey, item.baseUrl || "", item.enabled, item.lastTestAt ? mysqlDate(item.lastTestAt) : null, item.lastTestStatus || "untested", item.lastTestMessage || "", item.usageJson || "", item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,provider,scope,api_key,base_url,enabled,last_test_at,last_test_status,last_test_message,usage_json,owner_id,team_id,updated_at)");
 	    await replaceRows(connection, "problems", store.problems, (item) => [item.id, item.title, item.category, item.severity, item.status, item.ownerId, item.teamId, item.relatedCustomer, item.rootCause, item.solution, item.nextAction, item.dueAt, mysqlDate(item.createdAt)], "(id,title,category,severity,status,owner_id,team_id,related_customer,root_cause,solution,next_action,due_at,created_at)");
 	    await replaceRows(connection, "memos", store.memos, (item) => [item.id, item.title, item.content, item.category, item.tags, item.customerId || "", item.dealId || "", item.ownerId, item.teamId, item.pinned, item.archived, item.deletedAt ? mysqlDate(item.deletedAt) : null, mysqlDate(item.updatedAt)], "(id,title,content,category,tags,customer_id,deal_id,owner_id,team_id,pinned,archived,deleted_at,updated_at)");
