@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { canonicalJsonStringify } from "./canonical-json.js";
+import { hasIamPermission } from "./auth.js";
 import type { CrmStore } from "./store.js";
 import type {
   OrganizationCanonicalMapping,
@@ -105,7 +106,7 @@ export function organizationIdentityConflictEtag(
 }
 
 export function requireOrganizationIdentityReviewer(user: SessionUser) {
-  if (user.role !== "manager" && user.role !== "admin") {
+  if (!hasIamPermission(user, "prospect.execute")) {
     throw new OrganizationIdentityConflictReviewError(
       "IDENTITY_REVIEW_FORBIDDEN",
       "只有本团队主管或管理员可以复核企业身份冲突",

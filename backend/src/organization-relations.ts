@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { canonicalJsonStringify } from "./canonical-json.js";
 import { canonicalOrganizationId } from "./organization-identity-conflict-review.js";
+import { hasIamPermission } from "./auth.js";
 import type { CrmStore } from "./store.js";
 import type {
   OrganizationAliasFact,
@@ -142,7 +143,7 @@ export function organizationRelationFactHash(
 }
 
 function requireProfileReader(user: SessionUser) {
-  if (!["sales", "manager", "admin"].includes(user.role)) {
+  if (!hasIamPermission(user, "prospect.read")) {
     throw new OrganizationRelationError(
       "ORGANIZATION_PROFILE_FORBIDDEN",
       "企业画像只允许当前团队成员读取",
@@ -152,7 +153,7 @@ function requireProfileReader(user: SessionUser) {
 }
 
 function requireFactWriter(user: SessionUser) {
-  if (user.role !== "manager" && user.role !== "admin") {
+  if (!hasIamPermission(user, "prospect.execute")) {
     throw new OrganizationRelationError(
       "ORGANIZATION_FACT_WRITE_FORBIDDEN",
       "只有本团队主管或管理员可以维护企业别名和集团关系",

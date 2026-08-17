@@ -127,6 +127,17 @@ export class TranslationService {
     }
   }
 
+  async completeStructuredJson(profileId: string, ownerUserId: string, system: string, user: string): Promise<{ content: string; model: string; tokenUsage: number }> {
+    const profile = await this.repository.getAiProfile(profileId, ownerUserId);
+    if (!profile || !profile.enabled) throw new Error("AI Provider is unavailable");
+    if (profile.kind !== "openai") throw new Error("Mock Provider cannot run commercial customer analysis");
+    const result = await this.openAiChat(profile.baseUrl, profile.apiKeyCipher, profile.model, [
+      { role: "system", content: system },
+      { role: "user", content: user }
+    ]);
+    return { ...result, model: profile.model };
+  }
+
   private mockTranslate(text: string, targetLanguage: string): { text: string; tokenUsage: number } {
     const translated = mockTranslations.get(text) ?? `[${targetLanguage} 模拟译文] ${text}`;
     return { text: translated, tokenUsage: Math.ceil((text.length + translated.length) / 3) };
@@ -140,6 +151,25 @@ export class TranslationService {
     sourceLanguage: string,
     targetLanguage: string
   ): Promise<{ text: string; tokenUsage: number }> {
+    const result = await this.openAiChat(baseUrl, apiKeyCipher, model, [
+      {
+        role: "system",
+        content: "You are a precise B2B trade translator. Preserve names, numbers, currencies, dates, model numbers, URLs, paragraphs and tone. Return only the translation."
+      },
+      {
+        role: "user",
+        content: `Translate from ${sourceLanguage} to ${targetLanguage}:\n\n${text}`
+      }
+    ]);
+    return { text: result.content, tokenUsage: result.tokenUsage };
+  }
+
+  private async openAiChat(
+    baseUrl: string | null,
+    apiKeyCipher: string | null,
+    model: string,
+    messages: Array<{ role: "system" | "user"; content: string }>
+  ): Promise<{ content: string; tokenUsage: number }> {
     if (!baseUrl) throw new Error("AI Base URL is not configured");
     if (!apiKeyCipher) throw new Error("AI API Key is not configured");
     const endpoint = await this.validateEndpoint(baseUrl);
@@ -153,17 +183,7 @@ export class TranslationService {
       body: JSON.stringify({
         model,
         temperature: 0,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a precise B2B trade translator. Preserve names, numbers, currencies, dates, model numbers, URLs, paragraphs and tone. Return only the translation."
-          },
-          {
-            role: "user",
-            content: `Translate from ${sourceLanguage} to ${targetLanguage}:\n\n${text}`
-          }
-        ]
+        messages
       }),
       signal: AbortSignal.timeout(20_000)
     });
@@ -175,9 +195,9 @@ export class TranslationService {
       choices?: Array<{ message?: { content?: string } }>;
       usage?: { total_tokens?: number };
     };
-    const translated = payload.choices?.[0]?.message?.content?.trim();
-    if (!translated) throw new Error("AI response did not contain translated text");
-    return { text: translated, tokenUsage: payload.usage?.total_tokens ?? 0 };
+    const content = payload.choices?.[0]?.message?.content?.trim();
+    if (!content) throw new Error("AI response did not contain message content");
+    return { content, tokenUsage: payload.usage?.total_tokens ?? 0 };
   }
 
   private async validateEndpoint(baseUrl: string): Promise<string> {

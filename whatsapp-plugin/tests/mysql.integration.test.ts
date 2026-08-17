@@ -41,7 +41,7 @@ describeMysql("MySQL Communication persistence", () => {
     const versions = await database.query<{ version: number }>(
       "SELECT version FROM communication_schema_migrations ORDER BY version"
     );
-    expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5]);
+    expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     const collations = await database.query<{ table_collation: string }>(
       `SELECT DISTINCT table_collation AS table_collation FROM information_schema.tables
        WHERE table_schema=DATABASE() AND table_name IN ('channel_accounts','provider_session_keys','messages')`
@@ -59,6 +59,44 @@ describeMysql("MySQL Communication persistence", () => {
       throw new Error("rollback marker");
     })).rejects.toThrow("rollback marker");
     expect((await database.query("SELECT id FROM channel_accounts WHERE id=$1", [id])).rows).toHaveLength(0);
+  });
+
+  it("self-heals owner defaults when legacy defaults are absent", async () => {
+    await database.query("DELETE FROM integration_preferences WHERE id='default'");
+    await database.query("DELETE FROM media_retention_settings WHERE id='default'");
+
+    await expect(repository.getIntegrationPreference("mysql-default-recovery-user")).resolves.toMatchObject({
+      strategy: "free_first",
+      defaultProvider: "baileys"
+    });
+    await expect(repository.getMediaRetentionPolicy("mysql-default-recovery-user")).resolves.toMatchObject({
+      mode: "immediate",
+      days: 0
+    });
+
+    await seed(database, repository, config);
+    expect((await database.query("SELECT id FROM integration_preferences WHERE id='default'")).rows).toHaveLength(1);
+    expect((await database.query("SELECT id FROM media_retention_settings WHERE id='default'")).rows).toHaveLength(1);
+  });
+
+  it("round-trips automation timestamps as UTC instants", async () => {
+    const nextAnalysisAt = new Date(Date.now() + 6 * 3_600_000).toISOString();
+    const nextDailyTodoAt = new Date(Date.now() + 18 * 3_600_000).toISOString();
+    const settings = await repository.saveAutomationSettings({
+      ownerUserId: "mysql-timezone-user",
+      analysisIntervalHours: 6,
+      intelligenceMode: "rules",
+      intelligenceProviderId: null,
+      dailyTodoHour: 9,
+      dailyTodoMinute: 0,
+      timezone: "Asia/Shanghai",
+      enabled: true,
+      nextAnalysisAt,
+      nextDailyTodoAt
+    });
+
+    expect(new Date(settings.nextAnalysisAt!).getTime()).toBe(new Date(nextAnalysisAt).getTime());
+    expect(new Date(settings.nextDailyTodoAt!).getTime()).toBe(new Date(nextDailyTodoAt).getTime());
   });
 
   it("preserves idempotency, ownership, encrypted sessions, relations, and cleanup invariants", async () => {

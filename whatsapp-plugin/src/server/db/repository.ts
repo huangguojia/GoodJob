@@ -15,6 +15,11 @@ import type {
   MessageStatus,
   MetaAccountConfiguration,
   MetaAppConfig,
+  ConversationAnalysis,
+  ConversationFollowUp,
+  ConversationTrait,
+  ConversationTraitFeedback,
+  AutomationRun,
   ProviderKind,
   RoutingResolution,
   RoutingRule,
@@ -163,6 +168,71 @@ interface MetaConfigurationRow {
   updated_at: string;
 }
 
+export type MetaWebhookEventStatus = "pending" | "processing" | "processed" | "failed";
+
+interface MetaWebhookEventRow {
+  id: string;
+  app_config_id: string;
+  event_hash: string;
+  payload_cipher: string;
+  status: MetaWebhookEventStatus;
+  attempts: number | string;
+  last_error: string | null;
+  received_at: string;
+  processing_started_at: string | null;
+  processed_at: string | null;
+  updated_at: string;
+}
+
+interface ConversationAnalysisRow {
+  id: string;
+  conversation_id: string;
+  account_id: string;
+  status: ConversationAnalysis["status"];
+  summary: string;
+  key_points_json: string;
+  traits_json: string;
+  buying_intent: ConversationAnalysis["buyingIntent"];
+  risk_level: ConversationAnalysis["riskLevel"];
+  next_action: string;
+  source_message_count: number | string;
+  engine: ConversationAnalysis["engine"];
+  model: string | null;
+  prompt_version: string;
+  error: string | null;
+  generated_at: string;
+  updated_at: string;
+}
+
+interface ConversationFollowUpRow {
+  id: string;
+  conversation_id: string;
+  analysis_id: string;
+  source_key: string;
+  title: string;
+  reason: string;
+  priority: ConversationFollowUp["priority"];
+  due_at: string;
+  status: ConversationFollowUp["status"];
+  evidence_message_ids_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MetaWebhookEvent {
+  id: string;
+  appConfigId: string;
+  eventHash: string;
+  payloadCipher: string;
+  status: MetaWebhookEventStatus;
+  attempts: number;
+  lastError: string | null;
+  receivedAt: string;
+  processingStartedAt: string | null;
+  processedAt: string | null;
+  updatedAt: string;
+}
+
 export interface MetaAppSecret extends MetaAppConfig {
   appSecretCipher: string;
   verifyTokenDigest: string;
@@ -282,6 +352,69 @@ function mapMetaConfiguration(row: MetaConfigurationRow): MetaAccountConfigurati
   };
 }
 
+function mapMetaWebhookEvent(row: MetaWebhookEventRow): MetaWebhookEvent {
+  return {
+    id: row.id,
+    appConfigId: row.app_config_id,
+    eventHash: row.event_hash,
+    payloadCipher: row.payload_cipher,
+    status: row.status,
+    attempts: Number(row.attempts),
+    lastError: row.last_error,
+    receivedAt: row.received_at,
+    processingStartedAt: row.processing_started_at,
+    processedAt: row.processed_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function parseJsonArray<T>(value: string, fallback: T[] = []): T[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed as T[] : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function mapConversationAnalysis(row: ConversationAnalysisRow): ConversationAnalysis {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    status: row.status,
+    summary: row.summary,
+    keyPoints: parseJsonArray<string>(row.key_points_json),
+    traits: parseJsonArray<ConversationTrait>(row.traits_json),
+    buyingIntent: row.buying_intent,
+    riskLevel: row.risk_level,
+    nextAction: row.next_action,
+    sourceMessageCount: Number(row.source_message_count),
+    engine: row.engine ?? "rules",
+    model: row.model ?? null,
+    promptVersion: row.prompt_version ?? "rules-v1",
+    generatedAt: row.generated_at,
+    updatedAt: row.updated_at,
+    error: row.error
+  };
+}
+
+function mapConversationFollowUp(row: ConversationFollowUpRow): ConversationFollowUp {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    analysisId: row.analysis_id,
+    sourceKey: row.source_key,
+    title: row.title,
+    reason: row.reason,
+    priority: row.priority,
+    dueAt: row.due_at,
+    status: row.status,
+    evidenceMessageIds: parseJsonArray<string>(row.evidence_message_ids_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
 export class Repository {
   constructor(private readonly database: Database) {}
 
@@ -388,11 +521,11 @@ export class Repository {
       await this.database.query(
         this.database.kind === "mysql"
           ? `INSERT IGNORE INTO integration_preferences(id,strategy,default_provider,updated_at)
-             SELECT $1,strategy,default_provider,updated_at FROM integration_preferences WHERE id='default'`
+             VALUES($1,'free_first','baileys',$2)`
           : `INSERT INTO integration_preferences(id,strategy,default_provider,updated_at)
-             SELECT $1,strategy,default_provider,updated_at FROM integration_preferences WHERE id='default'
+             VALUES($1,'free_first','baileys',$2)
              ON CONFLICT(id) DO NOTHING`,
-        [ownerUserId]
+        [ownerUserId, dbTime(now())]
       );
       return this.getIntegrationPreference(ownerUserId);
     }
@@ -410,6 +543,13 @@ export class Repository {
       [input.strategy, input.defaultProvider, dbTime(now()), ownerUserId ?? "default"]
     );
     return this.getIntegrationPreference(ownerUserId);
+  }
+
+  async enforceOfficialIntegrationPreference(): Promise<void> {
+    await this.database.query(
+      "UPDATE integration_preferences SET strategy='official_first',default_provider='meta',updated_at=$1 WHERE strategy='free_first' OR default_provider='baileys'",
+      [dbTime(now())]
+    );
   }
 
   async listMetaApps(ownerUserId?: string): Promise<MetaAppConfig[]> {
@@ -601,6 +741,109 @@ export class Repository {
     );
   }
 
+  async createMetaWebhookEvent(input: {
+    appConfigId: string;
+    eventHash: string;
+    payloadCipher: string;
+  }): Promise<MetaWebhookEvent> {
+    const id = randomUUID();
+    const timestamp = dbTime(now());
+    await this.database.query(
+      this.database.kind === "mysql"
+        ? `INSERT INTO meta_webhook_events(
+             id,app_config_id,event_hash,payload_cipher,status,attempts,received_at,updated_at
+           ) VALUES($1,$2,$3,$4,'pending',0,$5,$5)
+           ON DUPLICATE KEY UPDATE id=id`
+        : `INSERT INTO meta_webhook_events(
+             id,app_config_id,event_hash,payload_cipher,status,attempts,received_at,updated_at
+           ) VALUES($1,$2,$3,$4,'pending',0,$5,$5)
+           ON CONFLICT(app_config_id,event_hash) DO NOTHING`,
+      [id, input.appConfigId, input.eventHash, input.payloadCipher, timestamp]
+    );
+    const event = await this.getMetaWebhookEventByHash(input.appConfigId, input.eventHash);
+    if (!event) throw new Error("Meta webhook event was not persisted");
+    return event;
+  }
+
+  async getMetaWebhookEvent(id: string): Promise<MetaWebhookEvent | null> {
+    const result = await this.database.query<MetaWebhookEventRow>(
+      "SELECT * FROM meta_webhook_events WHERE id=$1",
+      [id]
+    );
+    return result.rows[0] ? mapMetaWebhookEvent(result.rows[0]) : null;
+  }
+
+  async getMetaWebhookEventByHash(appConfigId: string, eventHash: string): Promise<MetaWebhookEvent | null> {
+    const result = await this.database.query<MetaWebhookEventRow>(
+      "SELECT * FROM meta_webhook_events WHERE app_config_id=$1 AND event_hash=$2",
+      [appConfigId, eventHash]
+    );
+    return result.rows[0] ? mapMetaWebhookEvent(result.rows[0]) : null;
+  }
+
+  async claimMetaWebhookEvent(
+    id: string,
+    options: { maxAttempts: number; staleBefore: string }
+  ): Promise<MetaWebhookEvent | null> {
+    return this.database.transaction(async (transaction) => {
+      const eligible = await transaction.query<MetaWebhookEventRow>(
+        `SELECT * FROM meta_webhook_events
+         WHERE id=$1 AND attempts<$2 AND (
+           status IN ('pending','failed') OR
+           (status='processing' AND processing_started_at IS NOT NULL AND processing_started_at<=$3)
+         ) FOR UPDATE`,
+        [id, options.maxAttempts, dbTime(options.staleBefore)]
+      );
+      if (!eligible.rows[0]) return null;
+      const timestamp = dbTime(now());
+      await transaction.query(
+        `UPDATE meta_webhook_events
+         SET status='processing',attempts=attempts+1,last_error=NULL,
+             processing_started_at=$2,processed_at=NULL,updated_at=$2
+         WHERE id=$1`,
+        [id, timestamp]
+      );
+      const claimed = await transaction.query<MetaWebhookEventRow>(
+        "SELECT * FROM meta_webhook_events WHERE id=$1",
+        [id]
+      );
+      return claimed.rows[0] ? mapMetaWebhookEvent(claimed.rows[0]) : null;
+    });
+  }
+
+  async listRecoverableMetaWebhookEvents(options: {
+    maxAttempts: number;
+    staleBefore: string;
+    limit: number;
+  }): Promise<MetaWebhookEvent[]> {
+    const result = await this.database.query<MetaWebhookEventRow>(
+      `SELECT * FROM meta_webhook_events
+       WHERE attempts<$1 AND (
+         status IN ('pending','failed') OR
+         (status='processing' AND processing_started_at IS NOT NULL AND processing_started_at<=$2)
+       ) ORDER BY received_at LIMIT $3`,
+      [options.maxAttempts, dbTime(options.staleBefore), options.limit]
+    );
+    return result.rows.map(mapMetaWebhookEvent);
+  }
+
+  async markMetaWebhookEventProcessed(id: string): Promise<void> {
+    const timestamp = dbTime(now());
+    await this.database.query(
+      `UPDATE meta_webhook_events SET status='processed',last_error=NULL,processed_at=$2,updated_at=$2
+       WHERE id=$1 AND status='processing'`,
+      [id, timestamp]
+    );
+  }
+
+  async markMetaWebhookEventFailed(id: string, error: string): Promise<void> {
+    await this.database.query(
+      `UPDATE meta_webhook_events SET status='failed',last_error=$2,updated_at=$3
+       WHERE id=$1 AND status='processing'`,
+      [id, error.slice(0, 2_000), dbTime(now())]
+    );
+  }
+
   async getSessionValue(accountId: string, keyType: string, keyId: string): Promise<string | null> {
     const result = await this.database.query<{ cipher_text: string }>(
       "SELECT cipher_text FROM provider_session_keys WHERE account_id=$1 AND key_type=$2 AND key_id=$3",
@@ -728,6 +971,182 @@ export class Repository {
       [accountId ?? null, ownerUserId ?? null]
     );
     return result.rows.map(mapConversation);
+  }
+
+  async listAutomationConversations(ownerUserId?: string): Promise<Conversation[]> {
+    return this.listConversations(undefined, ownerUserId);
+  }
+
+  async createAutomationRun(input: Pick<AutomationRun, "ownerUserId" | "trigger"> & { totalConversations: number }): Promise<AutomationRun> {
+    const id = `automation_run_${randomUUID()}`;
+    const timestamp = dbTime(new Date().toISOString());
+    const triggerColumn = this.database.kind === "mysql" ? "trigger_type" : "trigger";
+    await this.database.query(
+      `INSERT INTO automation_runs(id,owner_user_id,${triggerColumn},status,total_conversations,processed_conversations,analysis_updated,todos_created,notifications_sent,skipped,current_conversation,error,started_at,finished_at,updated_at)
+       VALUES($1,$2,$3,'running',$4,0,0,0,0,0,NULL,NULL,$5,NULL,$5)`,
+      [id, input.ownerUserId ?? null, input.trigger, input.totalConversations, timestamp]
+    );
+    return (await this.getAutomationRun(id, input.ownerUserId))!;
+  }
+
+  async getAutomationRun(id: string, ownerUserId?: string | null): Promise<AutomationRun | null> {
+    const result = await this.database.query<Record<string, unknown>>(
+      `SELECT * FROM automation_runs WHERE id=$1 AND ($2::text IS NULL OR owner_user_id=$2) LIMIT 1`,
+      [id, ownerUserId ?? null]
+    );
+    return result.rows[0] ? this.mapAutomationRun(result.rows[0]) : null;
+  }
+
+  async listAutomationRuns(ownerUserId?: string, limit = 12): Promise<AutomationRun[]> {
+    const result = await this.database.query<Record<string, unknown>>(
+      `SELECT * FROM automation_runs WHERE ($1::text IS NULL OR owner_user_id=$1) ORDER BY started_at DESC LIMIT $2`,
+      [ownerUserId ?? null, Math.max(1, Math.min(50, limit))]
+    );
+    return result.rows.map((row) => this.mapAutomationRun(row));
+  }
+
+  async updateAutomationRunProgress(id: string, values: Partial<Pick<AutomationRun, "status" | "processedConversations" | "analysisUpdated" | "todosCreated" | "notificationsSent" | "skipped" | "currentConversation" | "error" | "finishedAt">>): Promise<AutomationRun | null> {
+    const current = await this.getAutomationRun(id);
+    if (!current) return null;
+    const next = { ...current, ...values, updatedAt: new Date().toISOString() };
+    await this.database.query(
+      `UPDATE automation_runs SET status=$2,processed_conversations=$3,analysis_updated=$4,todos_created=$5,notifications_sent=$6,skipped=$7,current_conversation=$8,error=$9,finished_at=$10,updated_at=$11 WHERE id=$1`,
+      [id, next.status, next.processedConversations, next.analysisUpdated, next.todosCreated, next.notificationsSent, next.skipped, next.currentConversation, next.error, next.finishedAt ? dbTime(next.finishedAt) : null, dbTime(next.updatedAt)]
+    );
+    return this.getAutomationRun(id);
+  }
+
+  private mapAutomationRun(row: Record<string, unknown>): AutomationRun {
+    const date = (key: string): string | null => {
+      if (row[key] == null) return null;
+      const parsed = row[key] instanceof Date ? row[key] as Date : new Date(String(row[key]));
+      return Number.isNaN(parsed.getTime()) ? String(row[key]) : parsed.toISOString();
+    };
+    return {
+      id: String(row.id), ownerUserId: row.owner_user_id == null ? null : String(row.owner_user_id),
+      trigger: String(row.trigger_type ?? row.trigger) as AutomationRun["trigger"], status: String(row.status) as AutomationRun["status"],
+      totalConversations: Number(row.total_conversations ?? 0), processedConversations: Number(row.processed_conversations ?? 0),
+      analysisUpdated: Number(row.analysis_updated ?? 0), todosCreated: Number(row.todos_created ?? 0),
+      notificationsSent: Number(row.notifications_sent ?? 0), skipped: Number(row.skipped ?? 0),
+      currentConversation: row.current_conversation == null ? null : String(row.current_conversation), error: row.error == null ? null : String(row.error),
+      startedAt: date("started_at") ?? new Date().toISOString(), finishedAt: date("finished_at"), updatedAt: date("updated_at") ?? new Date().toISOString()
+    };
+  }
+
+  async getAutomationSettings(ownerUserId?: string): Promise<import("../../shared/types.js").AutomationSettings> {
+    const result = await this.database.query<Record<string, unknown>>(
+      `SELECT * FROM automation_settings WHERE owner_user_id=$1 OR (owner_user_id IS NULL AND $1 IS NULL) LIMIT 1`,
+      [ownerUserId ?? null]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      if (ownerUserId) {
+        return this.saveAutomationSettings({ ownerUserId, analysisIntervalHours: 6, intelligenceMode: "rules", intelligenceProviderId: null, dailyTodoHour: 9, dailyTodoMinute: 0, timezone: "Asia/Shanghai", enabled: true, nextAnalysisAt: new Date(Date.now() + 6 * 3600000).toISOString(), nextDailyTodoAt: new Date(Date.now() + 24 * 3600000).toISOString() });
+      }
+      return {
+        analysisIntervalHours: 6, intelligenceMode: "rules", intelligenceProviderId: null, dailyTodoHour: 9, dailyTodoMinute: 0, timezone: "Asia/Shanghai", enabled: true,
+        lastAnalysisAt: null, nextAnalysisAt: new Date(Date.now() + 6 * 3600000).toISOString(), lastDailyTodoAt: null,
+        nextDailyTodoAt: null, lastRunStatus: "idle", lastRunSummary: "尚未运行", updatedAt: new Date().toISOString()
+      };
+    }
+    const value = (key: string): string | null => {
+      if (row[key] == null) return null;
+      const parsed = row[key] instanceof Date ? row[key] as Date : new Date(String(row[key]));
+      return Number.isNaN(parsed.getTime()) ? String(row[key]) : parsed.toISOString();
+    };
+    return {
+      analysisIntervalHours: Number(row.analysis_interval_hours ?? 6),
+      intelligenceMode: String(row.intelligence_mode ?? "rules") as import("../../shared/types.js").AutomationSettings["intelligenceMode"],
+      intelligenceProviderId: row.intelligence_provider_id == null ? null : String(row.intelligence_provider_id),
+      dailyTodoHour: Number(row.daily_todo_hour ?? 9),
+      dailyTodoMinute: Number(row.daily_todo_minute ?? 0), timezone: String(row.timezone ?? "Asia/Shanghai"),
+      enabled: Boolean(Number(row.enabled ?? 1)), lastAnalysisAt: value("last_analysis_at"), nextAnalysisAt: value("next_analysis_at"),
+      lastDailyTodoAt: value("last_daily_todo_at"), nextDailyTodoAt: value("next_daily_todo_at"),
+      lastRunStatus: (String(row.last_run_status ?? "idle") as import("../../shared/types.js").AutomationSettings["lastRunStatus"]),
+      lastRunSummary: String(row.last_run_summary ?? ""), updatedAt: value("updated_at") ?? new Date().toISOString()
+    };
+  }
+
+  async saveAutomationSettings(input: { ownerUserId?: string; analysisIntervalHours: number; intelligenceMode: import("../../shared/types.js").AutomationSettings["intelligenceMode"]; intelligenceProviderId: string | null; dailyTodoHour: number; dailyTodoMinute: number; timezone: string; enabled: boolean; nextAnalysisAt: string; nextDailyTodoAt: string }): Promise<import("../../shared/types.js").AutomationSettings> {
+    const id = input.ownerUserId ? `settings_${input.ownerUserId}` : "default";
+    const timestamp = dbTime(new Date().toISOString());
+    await this.database.query(this.database.kind === "mysql"
+      ? `INSERT INTO automation_settings(id,analysis_interval_hours,intelligence_mode,intelligence_provider_id,daily_todo_hour,daily_todo_minute,timezone,enabled,next_analysis_at,next_daily_todo_at,last_run_status,last_run_summary,updated_at,owner_user_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'idle','已保存节奏设置',$11,$12) ON DUPLICATE KEY UPDATE analysis_interval_hours=$2,intelligence_mode=$3,intelligence_provider_id=$4,daily_todo_hour=$5,daily_todo_minute=$6,timezone=$7,enabled=$8,next_analysis_at=$9,next_daily_todo_at=$10,updated_at=$11`
+      : `INSERT INTO automation_settings(id,analysis_interval_hours,intelligence_mode,intelligence_provider_id,daily_todo_hour,daily_todo_minute,timezone,enabled,next_analysis_at,next_daily_todo_at,last_run_status,last_run_summary,updated_at,owner_user_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'idle','已保存节奏设置',$11,$12) ON CONFLICT(id) DO UPDATE SET analysis_interval_hours=EXCLUDED.analysis_interval_hours,intelligence_mode=EXCLUDED.intelligence_mode,intelligence_provider_id=EXCLUDED.intelligence_provider_id,daily_todo_hour=EXCLUDED.daily_todo_hour,daily_todo_minute=EXCLUDED.daily_todo_minute,timezone=EXCLUDED.timezone,enabled=EXCLUDED.enabled,next_analysis_at=EXCLUDED.next_analysis_at,next_daily_todo_at=EXCLUDED.next_daily_todo_at,updated_at=EXCLUDED.updated_at`,
+      [id, input.analysisIntervalHours, input.intelligenceMode, input.intelligenceProviderId, input.dailyTodoHour, input.dailyTodoMinute, input.timezone, input.enabled ? 1 : 0, dbTime(input.nextAnalysisAt), dbTime(input.nextDailyTodoAt), timestamp, input.ownerUserId ?? null]);
+    return this.getAutomationSettings(input.ownerUserId);
+  }
+
+  async updateAutomationRun(ownerUserId: string | undefined, values: { status: string; summary: string; lastAnalysisAt?: string; nextAnalysisAt?: string; lastDailyTodoAt?: string; nextDailyTodoAt?: string }): Promise<void> {
+    const current = await this.getAutomationSettings(ownerUserId);
+    const id = ownerUserId ? `settings_${ownerUserId}` : "default";
+    await this.database.query(this.database.kind === "mysql"
+      ? `UPDATE automation_settings SET last_run_status=$2,last_run_summary=$3,last_analysis_at=$4,next_analysis_at=$5,last_daily_todo_at=$6,next_daily_todo_at=$7,updated_at=$8 WHERE id=$1`
+      : `UPDATE automation_settings SET last_run_status=$2,last_run_summary=$3,last_analysis_at=$4,next_analysis_at=$5,last_daily_todo_at=$6,next_daily_todo_at=$7,updated_at=$8 WHERE id=$1`,
+      [id, values.status, values.summary, values.lastAnalysisAt ? dbTime(values.lastAnalysisAt) : current.lastAnalysisAt ? dbTime(current.lastAnalysisAt) : null, values.nextAnalysisAt ? dbTime(values.nextAnalysisAt) : current.nextAnalysisAt ? dbTime(current.nextAnalysisAt) : null, values.lastDailyTodoAt ? dbTime(values.lastDailyTodoAt) : current.lastDailyTodoAt ? dbTime(current.lastDailyTodoAt) : null, values.nextDailyTodoAt ? dbTime(values.nextDailyTodoAt) : current.nextDailyTodoAt ? dbTime(current.nextDailyTodoAt) : null, dbTime(new Date().toISOString())]);
+  }
+
+  async claimAutomationDelivery(ownerUserId: string, followupId: string, runDate: string, deliveryType: string): Promise<boolean> {
+    const id = randomUUID();
+    const timestamp = dbTime(new Date().toISOString());
+    if (this.database.kind === "mysql") {
+      const inserted = await this.database.query(
+        `INSERT IGNORE INTO automation_deliveries(id,owner_user_id,followup_id,run_date,delivery_type,status,attempts,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'pending',1,$6,$6)`,
+        [id, ownerUserId, followupId, runDate, deliveryType, timestamp]
+      );
+      if ((inserted.affectedRows ?? 0) > 0) return true;
+      const retried = await this.database.query(
+        `UPDATE automation_deliveries SET status='pending',attempts=attempts+1,last_error=NULL,next_retry_at=NULL,updated_at=$5
+         WHERE owner_user_id=$1 AND followup_id=$2 AND run_date=$3 AND delivery_type=$4 AND status='failed'`,
+        [ownerUserId, followupId, runDate, deliveryType, timestamp]
+      );
+      return (retried.affectedRows ?? 0) > 0;
+    }
+    const inserted = await this.database.query<{ id: string }>(
+      `INSERT INTO automation_deliveries(id,owner_user_id,followup_id,run_date,delivery_type,status,attempts,created_at,updated_at)
+       VALUES($1,$2,$3,$4,$5,'pending',1,$6,$6) ON CONFLICT(owner_user_id,followup_id,run_date,delivery_type) DO NOTHING RETURNING id`,
+      [id, ownerUserId, followupId, runDate, deliveryType, timestamp]
+    );
+    if (inserted.rows.length > 0) return true;
+    const retried = await this.database.query<{ id: string }>(
+      `UPDATE automation_deliveries SET status='pending',attempts=attempts+1,last_error=NULL,next_retry_at=NULL,updated_at=$5
+       WHERE owner_user_id=$1 AND followup_id=$2 AND run_date=$3 AND delivery_type=$4 AND status='failed' RETURNING id`,
+      [ownerUserId, followupId, runDate, deliveryType, timestamp]
+    );
+    return retried.rows.length > 0;
+  }
+
+  async completeAutomationDelivery(ownerUserId: string, followupId: string, runDate: string, deliveryType: string, externalId?: string | null): Promise<void> {
+    await this.database.query(
+      "UPDATE automation_deliveries SET status='success',external_id=$5,last_error=NULL,next_retry_at=NULL,updated_at=$6 WHERE owner_user_id=$1 AND followup_id=$2 AND run_date=$3 AND delivery_type=$4",
+      [ownerUserId, followupId, runDate, deliveryType, externalId ?? null, dbTime(new Date().toISOString())]
+    );
+  }
+
+  async failAutomationDelivery(ownerUserId: string, followupId: string, runDate: string, deliveryType: string, error: string): Promise<void> {
+    await this.database.query(
+      "UPDATE automation_deliveries SET status='failed',last_error=$5,next_retry_at=$6,updated_at=$6 WHERE owner_user_id=$1 AND followup_id=$2 AND run_date=$3 AND delivery_type=$4",
+      [ownerUserId, followupId, runDate, deliveryType, error.slice(0, 2000), dbTime(new Date().toISOString())]
+    );
+  }
+
+  async listAutomationDeliveries(ownerUserId: string, limit = 30): Promise<import("../../shared/types.js").AutomationDelivery[]> {
+    const result = await this.database.query<Record<string, unknown>>(
+      `SELECT * FROM automation_deliveries WHERE owner_user_id=$1 ORDER BY updated_at DESC,created_at DESC LIMIT $2`,
+      [ownerUserId, Math.min(100, Math.max(1, limit))]
+    );
+    const iso = (value: unknown): string | null => {
+      if (value == null) return null;
+      const parsed = value instanceof Date ? value : new Date(String(value));
+      return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toISOString();
+    };
+    return result.rows.map((row) => ({
+      id: String(row.id), followupId: String(row.followup_id), runDate: iso(row.run_date)?.slice(0, 10) ?? String(row.run_date),
+      deliveryType: String(row.delivery_type) as "todo" | "notification", status: String(row.status ?? "success") as "pending" | "success" | "failed",
+      attempts: Number(row.attempts ?? 1), externalId: row.external_id == null ? null : String(row.external_id),
+      lastError: row.last_error == null ? null : String(row.last_error), nextRetryAt: iso(row.next_retry_at),
+      updatedAt: iso(row.updated_at) ?? iso(row.created_at) ?? new Date().toISOString()
+    }));
   }
 
   async getConversation(id: string, ownerUserId?: string): Promise<Conversation | null> {
@@ -960,11 +1379,11 @@ export class Repository {
       await this.database.query(
         this.database.kind === "mysql"
           ? `INSERT IGNORE INTO media_retention_settings(id,mode,retention_days,updated_at)
-             SELECT $1,mode,retention_days,updated_at FROM media_retention_settings WHERE id='default'`
+             VALUES($1,'immediate',0,$2)`
           : `INSERT INTO media_retention_settings(id,mode,retention_days,updated_at)
-             SELECT $1,mode,retention_days,updated_at FROM media_retention_settings WHERE id='default'
+             VALUES($1,'immediate',0,$2)
              ON CONFLICT(id) DO NOTHING`,
-        [ownerUserId]
+        [ownerUserId, dbTime(now())]
       );
       return this.getMediaRetentionPolicy(ownerUserId);
     }
@@ -992,6 +1411,206 @@ export class Repository {
       [conversationId, ownerUserId ?? null]
     );
     return this.assembleMessages(result.rows);
+  }
+
+  async getConversationAnalysis(conversationId: string, ownerUserId?: string): Promise<ConversationAnalysis | null> {
+    const result = await this.database.query<ConversationAnalysisRow>(
+      `SELECT x.* FROM conversation_analyses x
+       JOIN channel_accounts a ON a.id=x.account_id
+       WHERE x.conversation_id=$1 AND ($2::text IS NULL OR a.owner_user_id=$2)`,
+      [conversationId, ownerUserId ?? null]
+    );
+    return result.rows[0] ? mapConversationAnalysis(result.rows[0]) : null;
+  }
+
+  async listConversationFollowups(conversationId: string, ownerUserId?: string): Promise<ConversationFollowUp[]> {
+    const result = await this.database.query<ConversationFollowUpRow>(
+      `SELECT f.* FROM conversation_followups f
+       JOIN channel_accounts a ON a.id=(SELECT account_id FROM conversations WHERE id=f.conversation_id)
+       WHERE f.conversation_id=$1 AND ($2::text IS NULL OR a.owner_user_id=$2)
+       ORDER BY CASE f.status WHEN 'pending' THEN 0 ELSE 1 END,f.due_at,f.created_at`,
+      [conversationId, ownerUserId ?? null]
+    );
+    return result.rows.map(mapConversationFollowUp);
+  }
+
+  async listConversationTraitFeedback(conversationId: string, ownerUserId?: string): Promise<ConversationTraitFeedback[]> {
+    const result = await this.database.query<Record<string, unknown>>(
+      `SELECT f.* FROM conversation_trait_feedback f
+       JOIN conversations c ON c.id=f.conversation_id JOIN channel_accounts a ON a.id=c.account_id
+       WHERE f.conversation_id=$1 AND ($2::text IS NULL OR a.owner_user_id=$2)
+       ORDER BY f.updated_at DESC`,
+      [conversationId, ownerUserId ?? null]
+    );
+    return result.rows.map((row) => ({
+      id: String(row.id), conversationId: String(row.conversation_id), traitKey: String(row.trait_key), traitLabel: String(row.trait_label),
+      verdict: String(row.verdict) as ConversationTraitFeedback["verdict"], correctionText: row.correction_text == null ? null : String(row.correction_text),
+      actorUserId: String(row.actor_user_id), createdAt: new Date(String(row.created_at)).toISOString(), updatedAt: new Date(String(row.updated_at)).toISOString()
+    }));
+  }
+
+  async saveConversationTraitFeedback(input: { conversationId: string; traitKey: string; traitLabel: string; verdict: ConversationTraitFeedback["verdict"]; correctionText?: string | null; actorUserId: string }): Promise<ConversationTraitFeedback> {
+    const id = randomUUID();
+    const timestamp = dbTime(now());
+    await this.database.query(
+      this.database.kind === "mysql"
+        ? `INSERT INTO conversation_trait_feedback(id,conversation_id,trait_key,trait_label,verdict,correction_text,actor_user_id,created_at,updated_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8)
+           ON DUPLICATE KEY UPDATE trait_label=$4,verdict=$5,correction_text=$6,actor_user_id=$7,updated_at=$8`
+        : `INSERT INTO conversation_trait_feedback(id,conversation_id,trait_key,trait_label,verdict,correction_text,actor_user_id,created_at,updated_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8)
+           ON CONFLICT(conversation_id,trait_key) DO UPDATE SET trait_label=EXCLUDED.trait_label,verdict=EXCLUDED.verdict,
+             correction_text=EXCLUDED.correction_text,actor_user_id=EXCLUDED.actor_user_id,updated_at=EXCLUDED.updated_at`,
+      [id, input.conversationId, input.traitKey, input.traitLabel, input.verdict, input.correctionText?.trim() || null, input.actorUserId, timestamp]
+    );
+    return (await this.listConversationTraitFeedback(input.conversationId)).find((item) => item.traitKey === input.traitKey)!;
+  }
+
+  async deleteConversationTraitFeedback(conversationId: string, traitKey: string, ownerUserId?: string): Promise<boolean> {
+    const existing = (await this.listConversationTraitFeedback(conversationId, ownerUserId)).find((item) => item.traitKey === traitKey);
+    if (!existing) return false;
+    await this.database.query("DELETE FROM conversation_trait_feedback WHERE conversation_id=$1 AND trait_key=$2", [conversationId, traitKey]);
+    return true;
+  }
+
+  async restoreConversationFollowupsByTraitKey(conversationId: string, traitKey: string): Promise<void> {
+    await this.database.query(
+      `UPDATE conversation_followups SET status='pending',updated_at=$3
+       WHERE conversation_id=$1 AND status='dismissed' AND source_key LIKE $2`,
+      [conversationId, `${traitKey}:%`, dbTime(now())]
+    );
+  }
+
+  async saveConversationAnalysis(input: {
+    id: string;
+    conversationId: string;
+    accountId: string;
+    status: ConversationAnalysis["status"];
+    summary: string;
+    keyPoints: string[];
+    traits: ConversationTrait[];
+    buyingIntent: ConversationAnalysis["buyingIntent"];
+    riskLevel: ConversationAnalysis["riskLevel"];
+    nextAction: string;
+    sourceMessageCount: number;
+    engine: ConversationAnalysis["engine"];
+    model: string | null;
+    promptVersion: string;
+    error?: string | null;
+    followups: Array<{
+      sourceKey: string;
+      title: string;
+      reason: string;
+      priority: ConversationFollowUp["priority"];
+      dueAt: string;
+      evidenceMessageIds: string[];
+    }>;
+  }): Promise<{ analysis: ConversationAnalysis; followups: ConversationFollowUp[] }> {
+    const timestamp = dbTime(now());
+    await this.database.query(
+      this.database.kind === "mysql"
+        ? `INSERT INTO conversation_analyses(
+             id,conversation_id,account_id,status,summary,key_points_json,traits_json,buying_intent,risk_level,next_action,
+             source_message_count,engine,model,prompt_version,error,generated_at,updated_at
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16)
+           ON DUPLICATE KEY UPDATE status=$4,summary=$5,key_points_json=$6,traits_json=$7,buying_intent=$8,risk_level=$9,
+             next_action=$10,source_message_count=$11,engine=$12,model=$13,prompt_version=$14,error=$15,generated_at=$16,updated_at=$16`
+        : `INSERT INTO conversation_analyses(
+             id,conversation_id,account_id,status,summary,key_points_json,traits_json,buying_intent,risk_level,next_action,
+             source_message_count,engine,model,prompt_version,error,generated_at,updated_at
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16)
+           ON CONFLICT(conversation_id) DO UPDATE SET status=EXCLUDED.status,summary=EXCLUDED.summary,
+             key_points_json=EXCLUDED.key_points_json,traits_json=EXCLUDED.traits_json,buying_intent=EXCLUDED.buying_intent,
+             risk_level=EXCLUDED.risk_level,next_action=EXCLUDED.next_action,source_message_count=EXCLUDED.source_message_count,
+             engine=EXCLUDED.engine,model=EXCLUDED.model,prompt_version=EXCLUDED.prompt_version,
+             error=EXCLUDED.error,generated_at=EXCLUDED.generated_at,updated_at=EXCLUDED.updated_at`,
+      [
+        input.id,
+        input.conversationId,
+        input.accountId,
+        input.status,
+        input.summary,
+        JSON.stringify(input.keyPoints),
+        JSON.stringify(input.traits),
+        input.buyingIntent,
+        input.riskLevel,
+        input.nextAction,
+        input.sourceMessageCount,
+        input.engine,
+        input.model,
+        input.promptVersion,
+        input.error ?? null,
+        timestamp
+      ]
+    );
+    const analysis = (await this.database.query<ConversationAnalysisRow>(
+      "SELECT * FROM conversation_analyses WHERE conversation_id=$1",
+      [input.conversationId]
+    )).rows[0];
+    if (!analysis) throw new Error("Conversation analysis was not persisted");
+    const activeSourceKeys = input.followups.map((followup) => followup.sourceKey);
+    await this.database.query(
+      activeSourceKeys.length
+        ? `UPDATE conversation_followups SET status='dismissed',updated_at=$2
+           WHERE conversation_id=$1 AND status='pending' AND source_key NOT IN (${activeSourceKeys.map((_, index) => `$${index + 3}`).join(",")})`
+        : `UPDATE conversation_followups SET status='dismissed',updated_at=$2
+           WHERE conversation_id=$1 AND status='pending'`,
+      [input.conversationId, timestamp, ...activeSourceKeys]
+    );
+    for (const followup of input.followups) {
+      await this.database.query(
+        this.database.kind === "mysql"
+          ? `INSERT INTO conversation_followups(
+               id,conversation_id,analysis_id,source_key,title,reason,priority,due_at,status,evidence_message_ids_json,created_at,updated_at
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$10,$10)
+             ON DUPLICATE KEY UPDATE analysis_id=$3,title=$5,reason=$6,priority=$7,due_at=$8,evidence_message_ids_json=$9,updated_at=$10`
+          : `INSERT INTO conversation_followups(
+               id,conversation_id,analysis_id,source_key,title,reason,priority,due_at,status,evidence_message_ids_json,created_at,updated_at
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$10,$10)
+             ON CONFLICT(conversation_id,source_key) DO UPDATE SET analysis_id=EXCLUDED.analysis_id,title=EXCLUDED.title,
+               reason=EXCLUDED.reason,priority=EXCLUDED.priority,due_at=EXCLUDED.due_at,
+               evidence_message_ids_json=EXCLUDED.evidence_message_ids_json,updated_at=EXCLUDED.updated_at
+             WHERE conversation_followups.status='pending'`,
+        [
+          randomUUID(),
+          input.conversationId,
+          analysis.id,
+          followup.sourceKey,
+          followup.title,
+          followup.reason,
+          followup.priority,
+          dbTime(followup.dueAt),
+          JSON.stringify(followup.evidenceMessageIds),
+          timestamp
+        ]
+      );
+    }
+    return {
+      analysis: mapConversationAnalysis(analysis),
+      followups: await this.listConversationFollowups(input.conversationId)
+    };
+  }
+
+  async updateConversationFollowupStatus(
+    id: string,
+    status: ConversationFollowUp["status"],
+    ownerUserId?: string
+  ): Promise<ConversationFollowUp | null> {
+    await this.database.query(
+      `UPDATE conversation_followups f SET status=$2,updated_at=$3
+       WHERE f.id=$1 AND EXISTS (
+         SELECT 1 FROM conversations c JOIN channel_accounts a ON a.id=c.account_id
+         WHERE c.id=f.conversation_id AND ($4::text IS NULL OR a.owner_user_id=$4)
+       )`,
+      [id, status, dbTime(now()), ownerUserId ?? null]
+    );
+    const result = await this.database.query<ConversationFollowUpRow>(
+      `SELECT f.* FROM conversation_followups f
+       JOIN conversations c ON c.id=f.conversation_id JOIN channel_accounts a ON a.id=c.account_id
+       WHERE f.id=$1 AND ($2::text IS NULL OR a.owner_user_id=$2)`,
+      [id, ownerUserId ?? null]
+    );
+    return result.rows[0] ? mapConversationFollowUp(result.rows[0]) : null;
   }
 
   async getMessage(id: string, ownerUserId?: string): Promise<ChatMessage | null> {
@@ -1378,6 +1997,23 @@ export class Repository {
       [id, contact.phone, contact.displayName, contact.source, contact.id, dbTime(now())]
     );
     return (await this.listCrmContacts()).find((item) => item.phone === contact.phone)!;
+  }
+
+  async upsertExternalCrmContact(contactId: string, input: { id: string; name: string; phone: string }): Promise<CrmSandboxContact> {
+    const contact = await this.getContact(contactId);
+    if (!contact) throw new Error("Contact not found");
+    const id = randomUUID();
+    await this.database.query(
+      this.database.kind === "mysql"
+        ? `INSERT INTO crm_contacts(id,phone,name,source,source_contact_id,created_at)
+           VALUES($1,$2,$3,'goodjob_crm',$4,$5)
+           ON DUPLICATE KEY UPDATE name=$3,source='goodjob_crm',source_contact_id=$4`
+        : `INSERT INTO crm_contacts(id,phone,name,source,source_contact_id,created_at)
+           VALUES($1,$2,$3,'goodjob_crm',$4,$5)
+           ON CONFLICT(phone) DO UPDATE SET name=EXCLUDED.name,source='goodjob_crm',source_contact_id=EXCLUDED.source_contact_id`,
+      [id, input.phone, input.name, input.id, dbTime(now())]
+    );
+    return (await this.listCrmContacts()).find((item) => item.phone === input.phone)!;
   }
 
   async audit(action: string, targetType: string, targetId: string, result: string, details: object = {}): Promise<void> {

@@ -26,7 +26,7 @@ export interface OutreachSequenceRuntime {
 
 function canAccess(sequence: OutreachSequence, user: AgentActor) {
   return sequence.ownerId === user.id
-    && (user.role === "super_admin" || sequence.teamId === user.teamId);
+    && sequence.teamId === user.teamId;
 }
 
 function appendMissionEvent(store: CrmStore, sequence: OutreachSequence, message: string, type: "result" | "error" = "result") {
@@ -51,8 +51,8 @@ export async function createOutreachSequence(
 ) {
   const input = sequenceInputSchema.parse(rawInput);
   const entity = input.entityType === "customer"
-    ? store.customers.find((item) => item.id === input.entityId && item.ownerId === user.id && (user.role === "super_admin" || item.teamId === user.teamId))
-    : store.leads.find((item) => item.id === input.entityId && item.ownerId === user.id && !item.deletedAt && (user.role === "super_admin" || item.teamId === user.teamId));
+    ? store.customers.find((item) => item.id === input.entityId && item.ownerId === user.id && item.teamId === user.teamId)
+    : store.leads.find((item) => item.id === input.entityId && item.ownerId === user.id && !item.deletedAt && item.teamId === user.teamId);
   if (!entity) throw new Error("触达对象不存在，或仅对象负责人可创建自动触达序列");
   if (input.channel === "communication" && input.entityType !== "customer") {
     throw new Error("Communication 自动触达目前仅支持已进入客户库的对象");

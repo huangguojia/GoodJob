@@ -6,7 +6,7 @@
   "summary": "开发信基于真实客户或线索资料生成，草稿可编辑，发送属于外部动作。",
   "content": "生成开发信前读取对象、产品和联系人事实。缺少个人发件信息时提醒业务员维护个人配置；缺少公司基础信息时提醒管理员维护公司资料。用户说先不要发、只写草稿或只预览时，禁止生成发送步骤。真实发送必须冻结收件人、主题、正文和后续跟进时间并经过确认。发送完成后读取发送结果和跟进任务。",
   "keywords": ["开发信", "邮件", "草稿", "英文邮件", "发件配置", "不要发送", "跟进"],
-  "roles": ["sales", "manager", "admin", "super_admin"],
+  "permissionCodes": ["communication.send"],
   "toolRefs": ["outreach.draft_development_email", "ui.open_development_email", "outreach.send_development_email", "outreach.create_sequence"],
   "successCriteria": ["草稿引用真实资料", "遵守是否发送约束", "发送前锁定完整内容", "发送后核验结果"],
   "failureCases": ["用户要求草稿却直接发送", "编造收件邮箱", "发送后没有创建或检查跟进"],

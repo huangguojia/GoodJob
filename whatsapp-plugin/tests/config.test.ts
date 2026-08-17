@@ -28,6 +28,7 @@ describe("server configuration", () => {
       seedDemo: false,
       enableDemoProvider: false,
       autoMigrate: true,
+      officialOnly: false,
       allowPrivateAiEndpoints: false
     });
   });
@@ -55,13 +56,19 @@ describe("server configuration", () => {
     expect(() => parseBaileysProxyUrl("not a url")).toThrow(/valid HTTP\(S\) URL/u);
   });
 
+  it("allows non-production runtimes to opt into the official-only boundary", () => {
+    expect(loadConfig({ NODE_ENV: "test", WHATSAPP_OFFICIAL_ONLY: "true" }).officialOnly).toBe(true);
+    expect(loadConfig({ NODE_ENV: "test", WHATSAPP_OFFICIAL_ONLY: "false" }).officialOnly).toBe(false);
+  });
+
   it("uses fail-closed production defaults", () => {
     expect(loadConfig(productionEnvironment())).toMatchObject({
       nodeEnv: "production",
       databaseClient: "mysql",
       seedDemo: false,
       enableDemoProvider: false,
-      autoMigrate: false
+      autoMigrate: false,
+      officialOnly: true
     });
     expect(loadConfig(productionEnvironment({ META_GRAPH_BASE_URL: "https://graph.facebook.com/" })).metaGraphBaseUrl)
       .toBe("https://graph.facebook.com");
@@ -78,6 +85,7 @@ describe("server configuration", () => {
     );
     expect(() => loadConfig(productionEnvironment({ ALLOW_DEMO_PROVIDER: "true" }))).toThrow(/ALLOW_DEMO_PROVIDER/u);
     expect(() => loadConfig(productionEnvironment({ AUTO_MIGRATE: "true" }))).toThrow(/AUTO_MIGRATE/u);
+    expect(() => loadConfig(productionEnvironment({ WHATSAPP_OFFICIAL_ONLY: "false" }))).toThrow(/WHATSAPP_OFFICIAL_ONLY/u);
     expect(() => loadConfig(productionEnvironment({ META_GRAPH_BASE_URL: "https://graph-proxy.example.test" }))).toThrow(
       /graph\.facebook\.com/u
     );

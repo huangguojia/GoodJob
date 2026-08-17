@@ -10,6 +10,7 @@ import { assertPublicHttpUrl } from "./outbound-security.js";
 import { setProviderHttpTestTransport } from "./provider-http-client.js";
 import { resolveBackendHost } from "./server-network.js";
 import { getStore } from "./store.js";
+import { hashPassword } from "./auth.js";
 
 const TEST_JWT_SECRET = "goodjob-security-test-secret-at-least-32-characters";
 const server = app.listen(0);
@@ -160,6 +161,25 @@ try {
     throw new Error("cookie session read failed");
   }
   results.cookieSession = cookieRead.response.status;
+
+  for (const [entityType, ownedId, foreignId] of [
+    ["customer", "c1", "c3"],
+    ["lead", "l1", "l3"]
+  ] as const) {
+    const allowedResearch = await request("/api/ai-background-research", {
+      method: "POST",
+      headers: bearer(shirley.json.token),
+      body: JSON.stringify({ entityType, entityId: ownedId })
+    });
+    await expectStatus(`${entityType} background research in scope`, allowedResearch.response.status, 200);
+    const deniedResearch = await request("/api/ai-background-research", {
+      method: "POST",
+      headers: bearer(shirley.json.token),
+      body: JSON.stringify({ entityType, entityId: foreignId })
+    });
+    await expectStatus(`${entityType} background research outside scope`, deniedResearch.response.status, 404);
+  }
+  results.backgroundResearchScoped = true;
 
   const insecureAiConfig = await request("/api/tools/ai-config", {
     method: "POST",
@@ -377,16 +397,31 @@ try {
     ).length,
     0
   );
-  const routeLayers: Array<{ route?: { path?: string; methods?: Record<string, boolean> } }> = ((app as typeof app & {
-    _router?: { stack?: Array<{ route?: { path?: string; methods?: Record<string, boolean> } }> };
+  const routeLayers: Array<{
+    name?: string;
+    route?: { path?: string; methods?: Record<string, boolean> };
+    handle?: { stack?: Array<{ route?: { path?: string; methods?: Record<string, boolean> } }> };
+  }> = ((app as typeof app & {
+    _router?: { stack?: Array<{
+      name?: string;
+      route?: { path?: string; methods?: Record<string, boolean> };
+      handle?: { stack?: Array<{ route?: { path?: string; methods?: Record<string, boolean> } }> };
+    }> };
   })._router?.stack || []);
   const registeredOperations = routeLayers.reduce((total: number, layer) => {
-    if (typeof layer.route?.path !== "string"
-      || !layer.route.path.startsWith("/api/")
-      || layer.route.path.startsWith("/api/docs")) return total;
-    return total + Object.entries(layer.route.methods || {})
+    const direct = typeof layer.route?.path === "string"
+      && layer.route.path.startsWith("/api/")
+      && !layer.route.path.startsWith("/api/docs")
+      ? Object.entries(layer.route.methods || {})
       .filter(([method, enabled]) => enabled && ["get", "post", "put", "patch", "delete"].includes(method))
-      .length;
+      .length
+      : 0;
+    const mounted = layer.name === "router"
+      ? (layer.handle?.stack || []).reduce((count, nested) => count + Object.entries(nested.route?.methods || {})
+        .filter(([method, enabled]) => enabled && ["get", "post", "put", "patch", "delete"].includes(method))
+        .length, 0)
+      : 0;
+    return total + direct + mounted;
   }, 0);
   if (documentedOperations !== registeredOperations) {
     throw new Error(`OpenAPI coverage mismatch: ${documentedOperations}/${registeredOperations}`);
@@ -410,7 +445,7 @@ try {
   const tenantTeamId = `security-beta-${tenantSuffix}`;
   const tenantAdminEmail = `security-admin-${tenantSuffix}@example.com`;
   const tenantAdminPassword = "Security-admin-123";
-  const createdTenantAdmin = await request("/api/accounts", {
+  const legacyPlatformCreate = await request("/api/accounts", {
     method: "POST",
     headers: bearer(superAdmin.json.token),
     body: JSON.stringify({
@@ -421,7 +456,21 @@ try {
       teamId: tenantTeamId
     })
   });
-  if (!createdTenantAdmin.response.ok) throw new Error("tenant administrator creation failed");
+  await expectStatus("platform cannot bypass tenant account boundary", legacyPlatformCreate.response.status, 403);
+  const tenantAdminFixture = {
+    id: `security-admin-${tenantSuffix}`,
+    name: "Security Beta Admin",
+    email: tenantAdminEmail,
+    password: await hashPassword(tenantAdminPassword),
+    role: "admin" as const,
+    teamId: tenantTeamId,
+    avatar: "SA",
+    status: "active" as const,
+    authVersion: 1
+  };
+  getStore().users.push(tenantAdminFixture);
+  await getStore().persist();
+  const createdTenantAdmin = { json: { account: tenantAdminFixture } };
   const duplicateTenantAdmin = await request("/api/accounts", {
     method: "POST",
     headers: bearer(superAdmin.json.token),
@@ -433,7 +482,7 @@ try {
       teamId: tenantTeamId
     })
   });
-  await expectStatus("one administrator per tenant", duplicateTenantAdmin.response.status, 409);
+  await expectStatus("platform cannot create tenant administrator through legacy endpoint", duplicateTenantAdmin.response.status, 403);
   const tenantAdmin = await login(tenantAdminEmail, tenantAdminPassword);
   const primaryProviderCatalog = await request("/api/lead-finder/provider-catalog", { headers: bearer(shirley.json.token) });
   const tenantProviderCatalog = await request("/api/lead-finder/provider-catalog", { headers: bearer(tenantAdmin.json.token) });
@@ -546,9 +595,7 @@ try {
   const superAdminProviderLogs = await request(`/api/lead-finder/provider-request-logs?runId=prun_security_${tenantSuffix}`, {
     headers: bearer(superAdmin.json.token)
   });
-  if (superAdminProviderLogs.json.logs?.length !== 1) {
-    throw new Error("super administrator must retain provider request log visibility");
-  }
+  await expectStatus("platform operator direct provider-log access", superAdminProviderLogs.response.status, 403);
   const providerLogSecurityPayload = JSON.stringify(tenantSalesProviderLogs.json).toLowerCase();
   for (const forbiddenToken of [tenantProviderSecret.toLowerCase(), "authorization", "cookie", "api_key", "configurationencrypted"]) {
     if (providerLogSecurityPayload.includes(forbiddenToken)) {
@@ -609,10 +656,10 @@ try {
     throw new Error("salesperson agent jobs must remain owner-isolated");
   }
   if (tenantAdminAgentJobs.json.total !== 3
-    || primaryAdminAgentJobs.json.total !== 0
-    || superAdminAgentJobs.json.total !== 3) {
+    || primaryAdminAgentJobs.json.total !== 0) {
     throw new Error("agent job tenant visibility contract failed");
   }
+  await expectStatus("platform operator direct agent-job access", superAdminAgentJobs.response.status, 403);
   const agentJobSecurityPayload = JSON.stringify({
     sales: tenantSalesAgentJobs.json,
     admin: tenantAdminAgentJobs.json
@@ -896,7 +943,9 @@ try {
     [`/api/deals/${tenantDealId}/archive`, { method: "POST", body: "{}" }, "deal"],
     [`/api/reminders/${tenantReminderId}`, { method: "PATCH", body: JSON.stringify({ title: "cross-team" }) }, "reminder"],
     [`/api/trade-documents/${tenantDocumentId}/approve`, { method: "POST", body: "{}" }, "trade document"],
+    [`/api/problems/${tenantProblemId}`, { method: "PATCH", body: JSON.stringify({ title: "cross-team" }) }, "problem edit"],
     [`/api/problems/${tenantProblemId}/status`, { method: "PATCH", body: JSON.stringify({ status: "resolved" }) }, "problem"],
+    [`/api/problems/${tenantProblemId}`, { method: "DELETE", body: "{}" }, "problem delete"],
     [`/api/competitors/${tenantCompetitorId}/threat`, { method: "PATCH", body: JSON.stringify({ threatLevel: "low" }) }, "competitor"],
     [`/api/case-studies/${tenantCaseId}/publish`, { method: "PATCH", body: "{}" }, "case study"],
     [`/api/knowledge/assets/${tenantKnowledgeId}/publish`, { method: "PATCH", body: "{}" }, "knowledge asset"],
@@ -948,10 +997,7 @@ try {
   });
   await expectStatus("tenant admin cannot create admin", tenantAdminCreatesAdmin.response.status, 403);
   const superAccounts = await request("/api/accounts", { headers: bearer(superAdmin.json.token) });
-  if (!superAccounts.json.accounts?.some((account: { id: string }) => account.id === tempUserId)
-    || !superAccounts.json.accounts?.some((account: { id: string }) => account.id === createdTenantAdmin.json.account.id)) {
-    throw new Error("super administrator must retain global account visibility");
-  }
+  await expectStatus("platform cannot enumerate tenant accounts through legacy endpoint", superAccounts.response.status, 403);
   results.managerTeamIsolated = true;
   results.tenantAccountsIsolated = true;
 

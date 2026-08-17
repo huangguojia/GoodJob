@@ -476,6 +476,16 @@ assert.doesNotThrow(() => assertProviderRedirectAllowed(
   "https://download.example.com/v1/result",
   { ...networkPolicy, allowedPathPrefixes: ["/v1/"] }
 ));
+assert.doesNotThrow(() => assertProviderRedirectAllowed(
+  "https://api.example.com/v1/search",
+  "https://api.example.com/en-US/search",
+  { ...networkPolicy, redirectPathPrefixes: ["/"] }
+));
+assert.throws(() => assertProviderRedirectAllowed(
+  "https://api.example.com/v1/search",
+  "https://api.example.com/admin",
+  networkPolicy
+));
 assert.throws(() => assertProviderRedirectAllowed(
   "https://api.example.com/v1/search",
   "https://download.example.com/v1/result",
@@ -511,6 +521,29 @@ try {
   const startedAt = Date.now();
   await assert.rejects(timeoutClient.fetch("https://api.example.com/v1/search"), /timeout/i);
   assert.ok(Date.now() - startedAt < 120, "redirect chain must share one absolute deadline");
+} finally {
+  setProviderHttpTestTransport(null);
+}
+
+let sameHostLocaleRedirectCalls = 0;
+setProviderHttpTestTransport(async (url) => {
+  sameHostLocaleRedirectCalls += 1;
+  return url.endsWith("/v1/search")
+    ? new Response("", {
+      status: 302,
+      headers: { location: "https://api.example.com/en-US/search" }
+    })
+    : new Response("ok", { status: 200 });
+});
+try {
+  const localeRedirectClient = createProviderHttpClient({
+    ...networkPolicy,
+    redirectPathPrefixes: ["/"],
+    maxRedirects: 1
+  });
+  const localeResponse = await localeRedirectClient.fetch("https://api.example.com/v1/search");
+  assert.equal(localeResponse.status, 200);
+  assert.equal(sameHostLocaleRedirectCalls, 2);
 } finally {
   setProviderHttpTestTransport(null);
 }

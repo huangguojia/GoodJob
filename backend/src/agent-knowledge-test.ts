@@ -34,7 +34,7 @@ const draft = await createAgentKnowledgeDraft(memoryStore, sales, {
   summary: "样品发送前核对地址和费用",
   content: "样品发送前必须核对收件地址、样品费用、快递账号和预计送达日期。",
   keywords: ["样品", "地址", "费用"],
-  roles: ["sales", "manager", "admin", "super_admin"],
+  permissionCodes: ["agent.use"],
   toolRefs: ["api.catalog"],
   successCriteria: ["地址已确认", "费用已确认"],
   failureCases: ["地址未确认就发出"]

@@ -1,5 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { createAiSearchProvider } from "./ai-search-provider.js";
+import { callAiModelWithWebSearch } from "./ai-model-runtime.js";
+import { getProvider } from "./lead-providers.js";
+import { aiWebsiteCitationsToProviderRecords } from "./prospect-ai-website-discovery.js";
 import { BullMqProspectQueueBackend } from "./prospect-bullmq-backend.js";
 import { ProspectProviderDispatcher } from "./prospect-provider-dispatcher.js";
 import type { ProspectCandidatePipelineFilter } from "./prospect-candidate-pipeline.js";
@@ -9,6 +12,10 @@ import {
 } from "./prospect-queue-coordinator.js";
 import { ProspectWorker } from "./prospect-worker.js";
 import type { CrmStore } from "./store.js";
+import {
+  createProviderExecutionContext,
+  executeProviderSearch
+} from "./provider-runtime.js";
 
 const DEVELOPMENT_CLAIM_SECRET =
   randomBytes(48).toString("base64url");
@@ -56,6 +63,7 @@ export class ProspectWorkerService {
     this.queueRequired =
       options.queueRequired
       ?? process.env.PROSPECT_QUEUE_REQUIRED === "true";
+    const nativeWebSearchCooldowns = new Map<string, number>();
     this.worker = new ProspectWorker({
       store: this.store,
       dispatcher: new ProspectProviderDispatcher({
@@ -94,6 +102,172 @@ export class ProspectWorkerService {
         process.env.PROSPECT_COVERAGE_MASTER_SECRET
         || process.env.ORGANIZATION_IDENTITY_MASTER_SECRET,
       pollMs: Number(process.env.PROSPECT_WORKER_POLL_MS || 1_000),
+      concurrency: Number(process.env.PROSPECT_WORKER_CONCURRENCY || 3),
+      websiteDiscoverySearch: async ({ candidate, runId, query }) => {
+        let lastFailure: unknown;
+        let lastFailedProvider = "";
+        const aiConfig = this.store.aiModelConfigs
+          .filter((item) =>
+            item.teamId === candidate.teamId
+            && item.ownerId === candidate.ownerId
+            && item.enabled
+            && item.useLeadFinder
+            && item.protocol === "openai-compatible"
+            && Boolean(item.apiKey)
+          )
+          .sort((left, right) =>
+            new Date(right.updatedAt).getTime()
+            - new Date(left.updatedAt).getTime()
+          )[0];
+        if (aiConfig
+          && (nativeWebSearchCooldowns.get(aiConfig.id) || 0) <= Date.now()) {
+          try {
+            const result = await callAiModelWithWebSearch(
+              aiConfig,
+              [
+                `Find the official website for this company: ${candidate.company}`,
+                `Country or region: ${candidate.country || "unknown"}`,
+                `Business: ${candidate.business || "unknown"}`,
+                "Search the public web and cite the company's own official HTTPS website.",
+                "Do not cite directories, social networks, marketplaces, news articles or Wikipedia.",
+                "If the official website cannot be confirmed, say so and do not invent a domain."
+              ].join("\n"),
+              4_000,
+              undefined,
+              45_000
+            );
+            if (result.usedSearch && result.citations.length) {
+              const records = aiWebsiteCitationsToProviderRecords(
+                candidate,
+                result.citations
+              );
+              if (records.length) {
+                return { providerId: "openai_web_search", records };
+              }
+            }
+          } catch (error) {
+            lastFailure = error;
+            lastFailedProvider = "openai_web_search";
+            nativeWebSearchCooldowns.set(
+              aiConfig.id,
+              Date.now() + 30 * 60 * 1000
+            );
+          }
+        }
+        const preferredProviders = ["brave", "serper", "serpapi", "google_places"];
+        const connections = this.store.providerConnections
+          .filter((item) =>
+            item.teamId === candidate.teamId
+            && item.ownerId === candidate.ownerId
+            && item.scope === "personal"
+            && item.status === "active"
+            && preferredProviders.includes(item.providerId)
+          )
+          .sort((left, right) =>
+            preferredProviders.indexOf(left.providerId)
+            - preferredProviders.indexOf(right.providerId)
+          );
+        let lastSuccessfulProvider = "";
+        for (const connection of connections) {
+          const provider = getProvider(connection.providerId);
+          const catalog = this.store.providerCatalog.find((item) =>
+            item.code === connection.providerId && item.status === "active"
+          );
+          if (!provider || !provider.search || !catalog) continue;
+          try {
+            const page = await executeProviderSearch({
+              provider,
+              catalog,
+              context: createProviderExecutionContext({
+                teamId: candidate.teamId,
+                ownerId: candidate.ownerId,
+                runId,
+                providerId: provider.id,
+                operation: "search",
+                purpose: "prospect_official_website_discovery",
+                suffix: candidate.id.slice(-12)
+              }),
+              connection,
+              query: {
+                goal: query,
+                productKeywords: candidate.company,
+                countries: candidate.country,
+                industry: candidate.business,
+                customerType: "company",
+                excludeKeywords: "directory, linkedin, facebook, wikipedia",
+                limit: 5
+              },
+              cursor: "",
+              onLogs: (logs) => this.store.providerRequestLogs.unshift(...logs)
+            });
+            lastSuccessfulProvider = provider.id;
+            if (page.records.some((record) => record.officialWebsite || record.website)) {
+              return { providerId: provider.id, records: page.records };
+            }
+          } catch (error) {
+            lastFailure = error;
+            lastFailedProvider = provider.id;
+          }
+        }
+        const wikidata = getProvider("wikidata");
+        const wikidataCatalog = this.store.providerCatalog.find((item) =>
+          item.code === "wikidata" && item.status === "active"
+        );
+        if (wikidata?.search && wikidataCatalog) {
+          try {
+            const page = await executeProviderSearch({
+              provider: wikidata,
+              catalog: wikidataCatalog,
+              context: createProviderExecutionContext({
+                teamId: candidate.teamId,
+                ownerId: candidate.ownerId,
+                runId,
+                providerId: wikidata.id,
+                operation: "search",
+                purpose: "prospect_official_website_discovery_free_fallback",
+                suffix: candidate.id.slice(-12)
+              }),
+              credential: { apiKey: "", baseUrl: "" },
+              query: {
+                goal: query,
+                productKeywords: candidate.company,
+                countries: candidate.country,
+                industry: candidate.business,
+                customerType: "company",
+                excludeKeywords: "",
+                limit: 5
+              },
+              cursor: "",
+              onLogs: (logs) => this.store.providerRequestLogs.unshift(...logs)
+            });
+            if (page.records.some((record) => record.officialWebsite || record.website)) {
+              return { providerId: wikidata.id, records: page.records };
+            }
+          } catch (error) {
+            lastFailure ||= error;
+            lastFailedProvider ||= wikidata.id;
+          }
+        }
+        if (lastSuccessfulProvider) {
+          return { providerId: lastSuccessfulProvider, records: [] };
+        }
+        if (lastFailure) {
+          return {
+            providerId: lastFailedProvider || connections[0]?.providerId || "",
+            records: [],
+            errorCode: "WEBSITE_SEARCH_PROVIDER_FAILED",
+            errorMessage: lastFailure instanceof Error
+              ? lastFailure.message.slice(0, 240)
+              : "已配置的官网搜索能力均执行失败"
+          };
+        }
+        return {
+          providerId: "wikidata",
+          records: [],
+          errorCode: "WEBSITE_SEARCH_PROVIDER_UNAVAILABLE",
+          errorMessage: "OpenAI 联网与免费 Wikidata 均未取得官网；可配置 Brave Search、Serper、SerpApi 或 Google Places 扩大覆盖"
+        };
+      },
       onStateChanged: () => this.coordinator?.synchronize()
     });
   }
@@ -152,6 +326,13 @@ export class ProspectWorkerService {
   pendingCandidates(filter: ProspectCandidatePipelineFilter) {
     if (!this.running) return null;
     return this.worker.pendingCandidates(filter);
+  }
+
+  async requestCancel(runId: string) {
+    if (!this.running) {
+      throw new Error("搜客执行服务未运行，无法取消搜索任务");
+    }
+    return await this.worker.requestCancel(runId);
   }
 
   async stop() {

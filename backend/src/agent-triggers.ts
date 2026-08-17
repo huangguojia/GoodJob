@@ -26,7 +26,7 @@ type TriggerFact = {
 export type AgentTriggerMissionFactory = (actor: AgentActor, goal: string, context: AgentPlanContext) => Promise<{ id: string }>;
 
 function canAccess(rule: AgentTriggerRuleRecord, actor: AgentActor) {
-  return rule.ownerId === actor.id && (actor.role === "super_admin" || rule.teamId === actor.teamId);
+  return rule.ownerId === actor.id && rule.teamId === actor.teamId;
 }
 
 function hashFact(rule: AgentTriggerRuleRecord, parts: unknown[]) {
@@ -95,7 +95,7 @@ export function listAgentTriggerRules(store: CrmStore, actor: AgentActor) {
 }
 
 export function listAgentTriggerEvents(store: CrmStore, actor: AgentActor, limit = 50) {
-  return store.agentTriggerEvents.filter((item) => item.ownerId === actor.id && (actor.role === "super_admin" || item.teamId === actor.teamId)).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, Math.max(1, Math.min(200, limit)));
+  return store.agentTriggerEvents.filter((item) => item.ownerId === actor.id && item.teamId === actor.teamId).sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, Math.max(1, Math.min(200, limit)));
 }
 
 export async function createAgentTriggerRule(store: CrmStore, actor: AgentActor, rawInput: unknown) {

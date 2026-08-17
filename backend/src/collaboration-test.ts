@@ -55,6 +55,23 @@ try {
   const otherManagerToken = await login("other-manager@goodjob.com");
   const reportDate = "2026-07-16";
 
+  const systemMessageKey = `self-test:system-message:${Date.now()}`;
+  const systemMessage = await request("/api/internal-messages/system", {
+    method: "POST",
+    headers: auth(shirleyToken),
+    body: JSON.stringify({ subject: "WhatsApp 今日跟进", content: "请联系客户确认报价。", relatedId: "followup-test", idempotencyKey: systemMessageKey })
+  });
+  assert(systemMessage.response.status === 201 && !systemMessage.json.deduplicated, "first system message delivery must create a message");
+  const duplicateSystemMessage = await request("/api/internal-messages/system", {
+    method: "POST",
+    headers: auth(shirleyToken),
+    body: JSON.stringify({ subject: "不应重复", content: "不应生成第二条消息。", relatedId: "followup-test", idempotencyKey: systemMessageKey })
+  });
+  assert(duplicateSystemMessage.response.ok && duplicateSystemMessage.json.deduplicated === true,
+    "system message delivery must deduplicate by recipient and idempotency key");
+  assert(duplicateSystemMessage.json.message?.id === systemMessage.json.message?.id,
+    "deduplicated system message must return the original message");
+
   const created = await request("/api/daily-reports", {
     method: "POST",
     headers: auth(shirleyToken),

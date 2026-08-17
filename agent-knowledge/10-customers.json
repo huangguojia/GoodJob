@@ -6,7 +6,7 @@
   "summary": "客户模块管理客户档案、分级、健康度、成交历史、商机、跟进和联系方式。",
   "content": "客户分级使用 A、B、C、D。健康度反映资料完整、跟进及时、商机活跃和互动情况，不等同于客户分级。客户全景用于查看客户资料、相关商机、跟进记录和联系方式。新增客户至少需要公司名称；修改资料前必须定位真实 customerId。联系方式属于客户业务资料，Communication 账号绑定属于个人配置，二者不能混用。",
   "keywords": ["客户", "客户全景", "分级", "健康度", "成交", "跟进", "联系方式"],
-  "roles": ["sales", "manager", "admin", "super_admin"],
+  "permissionCodes": ["customer.read"],
   "toolRefs": ["crm.search_customers", "crm.get_customer_overview", "crm.record_customer_followup", "crm.update_customer_profile", "ui.open_customer"],
   "successCriteria": ["客户 ID 唯一确定", "写入后重新读取客户信息核验", "跟进包含明确内容和下一动作"],
   "failureCases": ["把健康度当作分级", "没有 customerId 就写入", "把个人 Communication 绑定暴露给团队"],

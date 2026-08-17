@@ -180,7 +180,7 @@ export function buildProspectVerificationReport(
       "网页访问策略",
       "passed",
       controlledProbe
-        ? `已按 ${latestProbe!.policyVersion} 对规范官网执行受控低频验证；仅访问 robots.txt 和首页，可提取同域公开业务邮箱，不跟随站内链接或保存网页原文。`
+        ? `已按 ${latestProbe!.policyVersion} 对规范官网执行受控低频验证；仅访问 robots.txt、首页和最多一个由首页发现的同域联系页，不下载文件或保存网页原文。`
         : "系统尚未访问、下载、解析或探测企业网页，仅保存链接和授权数据源返回字段。",
       controlledProbe ? "受控官网验证策略" : "系统安全策略",
       generatedAt

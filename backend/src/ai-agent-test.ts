@@ -205,6 +205,20 @@ async function main() {
   });
   assert.equal(apiCatalogDone.steps[0]?.result?.count, 2);
 
+  const integrationReadRun = await createAgentPlan(fixture.store, admin, 'MCP company.lookup {"query":"Example"}');
+  const integrationReadStep = integrationReadRun.steps[0]!;
+  assert.equal(integrationReadStep.tool, "integration.read");
+  const integrationReadDone = await executeAgentStep(fixture.store, admin, integrationReadRun.id, integrationReadStep.id, integrationReadStep.signature, false, {
+    requestIntegrationRead: async (_actor, input) => ({
+      status: "succeeded",
+      stableAlias: input.stableAlias,
+      result: { company: "Example" },
+      evidence: { source: "fake-mcp://company.lookup", observedAt: "2026-08-07T00:00:00.000Z" }
+    })
+  });
+  assert.equal(integrationReadDone.steps[0]?.result?.status, "succeeded");
+  assert.equal((integrationReadDone.steps[0]?.result?.evidence as Record<string, unknown>).source, "fake-mcp://company.lookup");
+
   const apiWriteRun = await createAgentPlan(fixture.store, admin, 'POST /api/memos {"title":"接口测试","content":"受控写入"}');
   const apiWriteStep = apiWriteRun.steps[0]!;
   assert.equal(apiWriteStep.tool, "api.write");

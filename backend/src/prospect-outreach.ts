@@ -4,6 +4,7 @@ import type {
   ProspectOutreachChannel,
   ProspectReplyClassification,
   ProspectTouchpoint,
+  ProspectTouchpointEventType,
   Todo,
   WebsiteOpportunity
 } from "./types.js";
@@ -21,6 +22,20 @@ type RecordTouchpointInput = {
   requestId: string;
   occurredAt?: string;
   nextFollowAt?: string;
+  messageId?: string;
+  eventType?: ProspectTouchpointEventType;
+};
+
+export type ProspectEngagementInput = {
+  candidate: WebsiteOpportunity;
+  eventType: "open" | "click";
+  messageId: string;
+  contactValue?: string;
+  subject?: string;
+  content?: string;
+  occurredAt?: string;
+  requestId?: string;
+  channel?: ProspectOutreachChannel;
 };
 
 type FollowUpInput = {
@@ -297,7 +312,15 @@ export async function recordProspectTouchpoint(
     replyClassification: input.replyClassification,
     requestId,
     occurredAt,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    messageId: input.messageId?.trim() || undefined,
+    eventType:
+      input.eventType
+      || (input.direction === "outbound"
+        ? "send"
+        : input.replyClassification === "bounced"
+          ? "bounce"
+          : "reply")
   };
   store.prospectTouchpoints.unshift(touchpoint);
   if (input.recordMode === "historical" && input.direction === "outbound") {
@@ -370,6 +393,74 @@ export async function recordProspectTouchpoint(
     reason: replyLabels[classification]
   });
   return { touchpoint, todo: result.todo, replayed: false };
+}
+
+export function normalizeMessageId(value: string) {
+  return value.trim().replace(/^</, "").replace(/>$/, "").toLowerCase();
+}
+
+export function findOutboundTouchpointByMessageId(
+  store: CrmStore,
+  messageId: string
+) {
+  const target = normalizeMessageId(messageId || "");
+  if (!target) return undefined;
+  return store.prospectTouchpoints.find((item) =>
+    item.direction === "outbound"
+    && !!item.messageId
+    && normalizeMessageId(item.messageId) === target
+  );
+}
+
+/**
+ * 打开/点击属于"轻量互动信号"：只记录事件与计数，
+ * 不参与回复分类、不改 outreachState、不生成或取消跟进待办。
+ */
+export function recordProspectEngagementEvent(
+  store: CrmStore,
+  input: ProspectEngagementInput
+) {
+  const candidate = input.candidate;
+  const occurredAt = new Date(input.occurredAt || Date.now()).toISOString();
+  const requestId = (input.requestId || "").trim()
+    || `track:${input.eventType}:${normalizeMessageId(input.messageId)}:${occurredAt.slice(0, 16)}`;
+  const replay = store.prospectTouchpoints.find((item) =>
+    item.ownerId === candidate.ownerId
+    && item.prospectCandidateId === candidate.id
+    && item.requestId === requestId
+  );
+  if (replay) {
+    return { touchpoint: replay, replayed: true };
+  }
+  const touchpoint: ProspectTouchpoint = {
+    id: `ptp_${randomUUID()}`,
+    teamId: candidate.teamId,
+    ownerId: candidate.ownerId,
+    prospectCandidateId: candidate.id,
+    tenantProspectId: candidate.tenantProspectId,
+    organizationId: candidate.organizationId,
+    leadId: candidate.leadId,
+    channel: input.channel || "email",
+    direction: "inbound",
+    contactValue: input.contactValue?.trim() || "",
+    subject: input.subject?.trim()
+      || (input.eventType === "open" ? "邮件被打开" : "邮件链接被点击"),
+    content: input.content?.trim() || "",
+    requestId,
+    occurredAt,
+    createdAt: new Date().toISOString(),
+    messageId: normalizeMessageId(input.messageId) || undefined,
+    eventType: input.eventType
+  };
+  store.prospectTouchpoints.unshift(touchpoint);
+  if (input.eventType === "open") {
+    candidate.lastOpenedAt = occurredAt;
+    candidate.openCount = (candidate.openCount || 0) + 1;
+  } else {
+    candidate.lastClickedAt = occurredAt;
+    candidate.clickCount = (candidate.clickCount || 0) + 1;
+  }
+  return { touchpoint, replayed: false };
 }
 
 export function migrateProspectFollowUpTodos(

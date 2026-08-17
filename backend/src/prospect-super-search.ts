@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { canSeeOwner, isPlatformIdentity } from "./auth.js";
 import { callAiModel, extractJsonObject } from "./ai-model-runtime.js";
 import { getProvider } from "./lead-providers.js";
 import {
@@ -54,6 +55,49 @@ const activeMissionStatuses = new Set<ProspectSuperSearchMission["status"]>([
   "queued",
   "running"
 ]);
+
+function superSearchRunStallMs() {
+  const configured = Number(
+    process.env.PROSPECT_SUPER_SEARCH_STALL_MS || 15 * 60_000
+  );
+  return Number.isFinite(configured)
+    ? Math.max(2 * 60_000, Math.min(60 * 60_000, configured))
+    : 15 * 60_000;
+}
+
+function superSearchAiPlanningTimeoutMs() {
+  const configured = Number(
+    process.env.PROSPECT_SUPER_SEARCH_AI_PLANNING_TIMEOUT_MS || 20_000
+  );
+  return Number.isFinite(configured)
+    ? Math.max(5_000, Math.min(30_000, configured))
+    : 20_000;
+}
+
+function latestRunProgressAt(store: CrmStore, run: ProspectSearchRun) {
+  const timestamps = [
+    run.updatedAt,
+    ...store.prospectRunShards
+      .filter((item) => item.teamId === run.teamId && item.runId === run.id)
+      .map((item) => item.updatedAt),
+    ...store.prospectExecutionCheckpoints
+      .filter((item) => item.teamId === run.teamId && item.runId === run.id)
+      .map((item) => item.updatedAt),
+    ...store.prospectExecutionAttempts
+      .filter((item) => item.teamId === run.teamId && item.runId === run.id)
+      .flatMap((item) => [item.startedAt, item.finishedAt]),
+    ...store.prospectExecutionLeases
+      .filter((item) => item.teamId === run.teamId && item.runId === run.id)
+      .flatMap((item) => [item.claimedAt, item.releasedAt]),
+    ...store.prospectProviderRequestLedgers
+      .filter((item) => item.teamId === run.teamId && item.runId === run.id)
+      .map((item) => item.updatedAt)
+  ];
+  return Math.max(
+    ...timestamps.map((value) => new Date(value || 0).getTime()).filter(Number.isFinite),
+    0
+  );
+}
 
 const depthRounds: Record<ProspectSuperSearchDepth, number> = {
   balanced: 4,
@@ -155,9 +199,7 @@ export class ProspectSuperSearchError extends Error {
 }
 
 function visibleTo(user: SessionUser, mission: ProspectSuperSearchMission) {
-  if (user.role === "super_admin") return false;
-  if (user.role === "manager" || user.role === "admin") return mission.teamId === user.teamId;
-  return mission.teamId === user.teamId && mission.ownerId === user.id;
+  return canSeeOwner(user, mission.ownerId, mission.teamId);
 }
 
 function findVisibleMission(store: CrmStore, user: SessionUser, missionId: string) {
@@ -198,7 +240,7 @@ function appendEvent(
 
 function missionUser(store: CrmStore, mission: ProspectSuperSearchMission): SessionUser {
   const user = store.users.find((item) => item.id === mission.ownerId && item.teamId === mission.teamId && item.status === "active");
-  if (!user || user.role === "super_admin") {
+  if (!user || user.teamId === "all") {
     throw new ProspectSuperSearchError(409, "SUPER_SEARCH_OWNER_INVALID", "超级搜索任务负责人不存在或已停用");
   }
   return { ...user, authVersion: user.authVersion || 1 };
@@ -708,6 +750,11 @@ async function startRound(
       )
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
     if (config) {
+      appendEvent(store, mission, "ai_planning_started", `AI 正在结合第 ${roundNo - 1} 轮结果规划第 ${roundNo} 轮查询`, {
+        roundNo,
+        timeoutMs: superSearchAiPlanningTimeoutMs()
+      });
+      await persistSuperSearchState(store);
       try {
         const content = await callAiModel(config, [
           "你是外贸 B2B 查询规划器，只补充搜索表达，不生成公司、联系人、邮箱、电话或网址。",
@@ -716,9 +763,13 @@ async function startRound(
           `本轮主题：${plan.metadata.theme}`,
           `当前查询：${JSON.stringify(plan.resolvedQuery)}`,
           `覆盖缺口：${JSON.stringify(plan.coverageGaps)}`
-        ].join("\n"));
+        ].join("\n"), 12_000, undefined, superSearchAiPlanningTimeoutMs());
         const enhancement = aiQueryEnhancementSchema.parse(extractJsonObject(content));
         plan = enhanceProspectSearchRoundPlan(plan, enhancement);
+        appendEvent(store, mission, "ai_planning_completed", `AI 已完成第 ${roundNo} 轮查询扩展，搜索继续`, {
+          roundNo,
+          planningMode: plan.metadata.planningMode || "ai_enhanced"
+        });
       } catch {
         plan = {
           ...plan,
@@ -727,6 +778,10 @@ async function startRound(
             "AI 查询扩展不可用或未通过校验，已自动使用规则规划继续"
           ]
         };
+        appendEvent(store, mission, "ai_planning_fallback", `AI 查询扩展超时或不可用，第 ${roundNo} 轮已由规则规划接管`, {
+          roundNo,
+          planningMode: "rule_fallback"
+        });
       }
     }
   }
@@ -897,13 +952,13 @@ export async function createProspectSuperSearch(input: {
   body: z.infer<typeof createProspectSuperSearchSchema>;
   onRunCreated?: () => void | Promise<void>;
 }) {
-  if (input.user.role === "super_admin") {
+  if (isPlatformIdentity(input.user)) {
     throw new ProspectSuperSearchError(403, "SUPER_SEARCH_FORBIDDEN", "超级管理员默认不能创建团队搜客任务");
   }
   const body = createProspectSuperSearchSchema.parse(input.body);
   const strategy = input.store.prospectStrategies.find((item) =>
     item.id === body.strategyId && item.teamId === input.user.teamId
-    && (item.ownerId === input.user.id || input.user.role === "manager" || input.user.role === "admin")
+    && canSeeOwner(input.user, item.ownerId, item.teamId)
   );
   if (!strategy || strategy.status !== "approved") {
     throw new ProspectSuperSearchError(409, "SUPER_SEARCH_STRATEGY_INVALID", "请先使用当前账号审批一个可执行搜索策略");
@@ -1225,7 +1280,11 @@ export class ProspectSuperSearchRunner {
 
   constructor(
     private readonly store: CrmStore,
-    private readonly options: { pollMs?: number; onRunCreated?: () => void | Promise<void> } = {}
+    private readonly options: {
+      pollMs?: number;
+      onRunCreated?: () => void | Promise<void>;
+      onRunStalled?: (runId: string) => void | Promise<void>;
+    } = {}
   ) {}
 
   async start() {
@@ -1261,6 +1320,36 @@ export class ProspectSuperSearchRunner {
         }
         const run = this.store.prospectSearchRuns.find((item) => item.id === mission.currentRunId && item.teamId === mission.teamId);
         if (!run || !terminalRunStatuses.has(run.status)) {
+          const deadlineReached = Date.now() >= new Date(mission.deadlineAt).getTime();
+          const stalled = Boolean(run)
+            && Date.now() - latestRunProgressAt(this.store, run!) >= superSearchRunStallMs();
+          if (run && (deadlineReached || stalled)) {
+            const reason = deadlineReached
+              ? "已达到最长运行时间，系统已停止当前轮次并保留已有结果"
+              : "当前轮次长时间无进展，系统已自动停止并保留已有结果";
+            try {
+              if (!this.options.onRunStalled) {
+                throw new Error("未配置搜索任务取消处理器");
+              }
+              await this.options.onRunStalled(run.id);
+            } catch (error) {
+              if (process.env.NODE_ENV !== "test") {
+                console.warn("[super-search] stalled run cancellation failed", error);
+              }
+              continue;
+            }
+            if (mission.deepMining && mission.deepMining.status !== "completed") {
+              finishDeepMiningState(mission.deepMining, reason);
+            }
+            finishMission(
+              this.store,
+              mission,
+              mission.candidateCount ? "partial_success" : "failed",
+              reason
+            );
+            await persistSuperSearchState(this.store);
+            continue;
+          }
           if (verifiedTasks.length) await persistSuperSearchState(this.store);
           continue;
         }

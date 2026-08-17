@@ -4,9 +4,11 @@ import { setProviderHttpTestTransport } from "./provider-http-client.js";
 import { getStore, type CrmStore } from "./store.js";
 import type { WebsiteOpportunity, WebsiteProbeAttempt } from "./types.js";
 import {
+  extractEvidence,
   queueWebsiteProbe,
   resumeWebsiteProbeAttempt,
-  WebsiteProbeError
+  WebsiteProbeError,
+  websiteProbeCapability
 } from "./website-probe.js";
 
 function isolatedStore(): CrmStore {
@@ -29,7 +31,7 @@ function candidate(id: string, website: string): WebsiteOpportunity {
     id,
     company: `Probe ${id}`,
     business: "Industrial components",
-    country: "Unknown",
+    country: "United Kingdom",
     website,
     contact: "Purchasing",
     contactInfo: "private-buyer@example.test",
@@ -98,6 +100,29 @@ async function main() {
     );
     assert.equal(privateTarget.websiteProbeAttempts, undefined);
 
+    for (const [id, country, website] of [
+      ["mainland-country", "中国", "https://example.test/"],
+      ["unknown-country", "未知", "https://example.test/"],
+      ["unknown-english", "Unknown", "https://example.test/"],
+      ["hong-kong-country", "香港", "https://example.test/"],
+      ["macau-country", "Macao", "https://example.test/"],
+      ["taiwan-country", "TW", "https://example.test/"],
+      ["mainland-domain", "United Kingdom", "https://example.cn/"],
+      ["hong-kong-domain", "United Kingdom", "https://example.hk/"],
+      ["macau-domain", "United Kingdom", "https://example.mo/"],
+      ["taiwan-domain", "United Kingdom", "https://example.tw/"],
+      ["chinese-idn-domain", "United Kingdom", "https://example.xn--fiqs8s/"]
+    ] as const) {
+      const restricted = { ...candidate(id, website), country };
+      await assert.rejects(
+        queueWebsiteProbe(store, restricted, restricted.ownerId, async () => undefined),
+        (error: unknown) => error instanceof WebsiteProbeError
+          && error.code === "WEBSITE_PROBE_COUNTRY_BLOCKED"
+      );
+      assert.equal(restricted.websiteProbeAttempts, undefined);
+    }
+    assert.equal(websiteProbeCapability().foreignOnly, true);
+
     setProviderHttpTestTransport(async (url, init) => {
       requests.push({ url, method: String(init.method || "GET") });
       if (url.endsWith("/robots.txt")) {
@@ -127,12 +152,15 @@ async function main() {
           telephone: "+1-202-555-0199",
           address: { addressCountry: "US" }
         })}</script></head><body>private-body-marker do-not-store@example.test
+        <p>Industry leading protective coatings for global infrastructure.</p>
+        <p>John Smith - Sales Manager</p>
         <a href="mailto:sales@evidence-example.com">Sales</a></body></html>`, {
         status: 200,
         headers: { "content-type": "text/html; charset=utf-8" }
       });
     });
     const evidenceCandidate = candidate("evidence", "https://www.evidence-example.com/about");
+    evidenceCandidate.contact = "待维护";
     evidenceCandidate.contactInfo = "";
     const scoreBefore = buildProspectScorecard(store, evidenceCandidate);
     const evidenceAttempt = await queueAndWait(store, evidenceCandidate);
@@ -144,6 +172,11 @@ async function main() {
     assert.equal(evidenceAttempt.evidence?.addressCountry, "US");
     assert.equal(evidenceAttempt.evidence?.publicContactEmail, "sales@evidence-example.com");
     assert.equal(evidenceCandidate.contactInfo, "sales@evidence-example.com");
+    assert.equal(evidenceCandidate.contact, "John Smith");
+    assert.deepEqual(
+      evidenceCandidate.extractedContacts?.filter((item) => item.kind === "person").map((item) => item.name),
+      ["John Smith"]
+    );
     assert.equal(evidenceAttempt.events.map((item) => item.stage).join(","),
       "queued,dns,dns,robots,robots,head,head,body,body,evidence,completed");
     const persistedJson = JSON.stringify(evidenceAttempt);
@@ -184,7 +217,86 @@ async function main() {
     assert.equal(contactAttempt.evidence?.sourceUrl, "https://contact-page-example.com/contact-us");
     assert.ok(contactAttempt.events.some((item) => item.stage === "contact_page" && item.status === "completed"));
     assert.deepEqual(requests.map((item) => item.method), ["GET", "HEAD", "GET", "GET"]);
+    assert.ok(requests.some((item) => item.url === "https://contact-page-example.com/products/pumps"));
     assert.doesNotMatch(JSON.stringify(contactAttempt), /contact-private-marker/u);
+
+    const explicitExternalEmail = extractEvidence(
+      '<html><body><a href="mailto:export.team@gmail.com">Email export sales</a></body></html>',
+      "https://foreign-email-example.com/",
+      "foreign-email-example.com",
+      new Date().toISOString()
+    );
+    assert.equal(explicitExternalEmail.publicContactEmail, "export.team@gmail.com");
+    const unlinkedExternalEmail = extractEvidence(
+      "<html><body>Unrelated text: someone@gmail.com</body></html>",
+      "https://foreign-email-example.com/",
+      "foreign-email-example.com",
+      new Date().toISOString()
+    );
+    assert.equal(unlinkedExternalEmail.publicContactEmail, "");
+
+    requests = [];
+    setProviderHttpTestTransport(async (url, init) => {
+      requests.push({ url, method: String(init.method || "GET") });
+      if (url.endsWith("/robots.txt")) {
+        return new Response("User-agent: *\nAllow: /\n", { status: 200 });
+      }
+      if (init.method === "HEAD") {
+        return new Response(null, { status: 200, headers: { "content-type": "text/html" } });
+      }
+      return new Response(`<html><head><script type="application/ld+json">${JSON.stringify({
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        name: "Phone Only Example",
+        telephone: ["20260806", "0160123", "11111111"]
+      })}</script></head><body>Updated 2022-06-08 · Order 105700270617923 · Ref 02-70617923 <a href="tel:+44-20-7946-0958">Call sales</a></body></html>`, {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    });
+    const phoneCandidate = candidate("phone-only", "https://phone-only-example.com/");
+    phoneCandidate.contactInfo = "";
+    const phoneAttempt = await queueAndWait(store, phoneCandidate);
+    assert.equal(phoneAttempt.outcome, "evidence_found");
+    assert.equal(phoneCandidate.contactInfo, "+442079460958");
+    assert.deepEqual(phoneAttempt.evidence?.publicContactPhones, ["+442079460958"]);
+    assert.deepEqual(phoneCandidate.extractedContacts?.[0]?.phones, ["+442079460958"]);
+
+    requests = [];
+    setProviderHttpTestTransport(async (url, init) => {
+      requests.push({ url, method: String(init.method || "GET") });
+      if (url.endsWith("/robots.txt")) {
+        return new Response("User-agent: *\nAllow: /\n", { status: 200 });
+      }
+      if (new URL(url).pathname === "/" && init.method === "HEAD") {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://locale-redirect-example.com/en-US/" }
+        });
+      }
+      if (new URL(url).pathname === "/" && init.method === "GET") {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://locale-redirect-example.com/en-US/" }
+        });
+      }
+      if (init.method === "HEAD") {
+        return new Response(null, { status: 200, headers: { "content-type": "text/html" } });
+      }
+      return new Response(
+        "<html><body><a href=\"mailto:sales@locale-redirect-example.com\">Sales</a></body></html>",
+        { status: 200, headers: { "content-type": "text/html" } }
+      );
+    });
+    const localeRedirectCandidate = candidate(
+      "locale-redirect",
+      "https://locale-redirect-example.com/"
+    );
+    localeRedirectCandidate.contactInfo = "";
+    const localeRedirectAttempt = await queueAndWait(store, localeRedirectCandidate);
+    assert.equal(localeRedirectAttempt.outcome, "evidence_found");
+    assert.equal(localeRedirectCandidate.contactInfo, "sales@locale-redirect-example.com");
+    assert.ok(requests.some((item) => item.url.endsWith("/en-US/")));
 
     requests = [];
     setProviderHttpTestTransport(async (url, init) => {
@@ -308,7 +420,7 @@ async function main() {
           headers: { "content-type": "text/html" }
         });
       }
-      return new Response("x".repeat(64 * 1024 + 1), {
+      return new Response("x".repeat(256 * 1024 + 1), {
         status: 200,
         headers: { "content-type": "text/html" }
       });
@@ -317,10 +429,15 @@ async function main() {
       store,
       candidate("large", "https://large-example.com/")
     );
-    assert.equal(largeAttempt.status, "failed");
-    assert.equal(largeAttempt.outcome, "policy_blocked");
-    assert.equal(largeAttempt.evidence, null);
-    assert.equal(largeAttempt.responseBytes, 0);
+    assert.equal(largeAttempt.status, "completed");
+    assert.equal(largeAttempt.outcome, "no_evidence");
+    assert.equal(largeAttempt.evidence?.publicContactEmail, "");
+    assert.deepEqual(largeAttempt.evidence?.publicContactPhones, []);
+    assert.equal(largeAttempt.responseBytes, 256 * 1024);
+    assert.equal(
+      largeAttempt.events.find((item) => item.stage === "body" && item.status === "completed")?.metrics.truncated,
+      true
+    );
 
     requests = [];
     setProviderHttpTestTransport(async (url, init) => {

@@ -571,23 +571,47 @@ const wikidata = defineProvider({
     });
     if (!response.ok) throw providerHttpStatusError(response, "Wikidata");
     const data = (await response.json()) as { search?: Array<{ id?: string; label?: string; description?: string; concepturi?: string }> };
+    const searchItems = (data.search || []).filter((item) => item.id && item.label);
+    const entityIds = searchItems.map((item) => item.id!).slice(0, 15);
+    const websiteByEntity = new Map<string, string>();
+    if (entityIds.length) {
+      const entityResponse = await tools.http.fetch(
+        `${base}?action=wbgetentities&format=json&props=claims&ids=${encodeURIComponent(entityIds.join("|"))}`,
+        { headers: { accept: "application/json" } }
+      );
+      if (entityResponse.ok) {
+        type WebsiteClaim = { mainsnak?: { datavalue?: { value?: unknown } } };
+        const entityData = (await entityResponse.json()) as {
+          entities?: Record<string, { claims?: { P856?: WebsiteClaim[] } }>;
+        };
+        for (const [id, entity] of Object.entries(entityData.entities || {})) {
+          const website = entity.claims?.P856
+            ?.map((claim) => claim.mainsnak?.datavalue?.value)
+            .find((value): value is string => typeof value === "string" && /^https?:\/\//iu.test(value));
+          if (website) websiteByEntity.set(id, website);
+        }
+      }
+    }
     const leads = (data.search || [])
       .filter((item) => item.label)
-      .map((item): RawLead => ({
-        company: item.label || "Wikidata Entity",
-        officialWebsite: "",
-        country: firstToken(query.countries) || "未知",
-        business: query.productKeywords.join(", ") || query.industries.join(", ") || item.description || "公开实体 / 待核实业务",
-        contact: "待维护",
-        contactInfo: "",
-        description: `Wikidata 公开实体：${item.description || "描述待补充"}。需继续核实官网与真实采购意向。`,
-        confidence: 42,
-        providerRecordId: item.id || "",
-        sourceUrl: item.concepturi || (item.id ? `https://www.wikidata.org/wiki/${item.id}` : ""),
-        recordType: "identity_evidence",
-        evidenceSummary: `Wikidata 实体描述：${item.description || "待补充"}`,
-        matchedFields: ["company", "description"]
-      }));
+      .map((item): RawLead => {
+        const officialWebsite = websiteByEntity.get(item.id || "") || "";
+        return {
+          company: item.label || "Wikidata Entity",
+          officialWebsite,
+          country: firstToken(query.countries) || "未知",
+          business: query.productKeywords.join(", ") || query.industries.join(", ") || item.description || "公开实体 / 待核实业务",
+          contact: "待维护",
+          contactInfo: "",
+          description: `Wikidata 公开实体：${item.description || "描述待补充"}。需继续核实官网与真实采购意向。`,
+          confidence: officialWebsite ? 58 : 42,
+          providerRecordId: item.id || "",
+          sourceUrl: item.concepturi || (item.id ? `https://www.wikidata.org/wiki/${item.id}` : ""),
+          recordType: "identity_evidence",
+          evidenceSummary: `Wikidata 实体描述：${item.description || "待补充"}${officialWebsite ? `；官方网站 ${officialWebsite}` : ""}`,
+          matchedFields: ["company", "description", ...(officialWebsite ? ["officialWebsite"] : [])]
+        };
+      });
     return providerPage(leads, { rawCount: data.search?.length || 0 });
   },
   async health() {

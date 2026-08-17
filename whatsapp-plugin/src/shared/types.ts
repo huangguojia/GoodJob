@@ -41,7 +41,7 @@ export interface ContactSyncResult {
   note?: string;
 }
 
-export type ContactOrigin = "whatsapp_sync" | "inbound_message" | "manual" | "crm_import";
+export type ContactOrigin = "whatsapp_sync" | "inbound_message" | "manual" | "crm_import" | "history_import";
 
 export const E164_PHONE_PATTERN = /^\+[1-9]\d{7,14}$/u;
 
@@ -107,6 +107,136 @@ export interface Conversation {
   lastMessage: string | null;
   lastMessageAt: string | null;
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConversationTrait {
+  key: string;
+  label: string;
+  value: string;
+  confidence: number;
+  evidenceMessageIds: string[];
+}
+
+export interface ConversationTraitFeedback {
+  id: string;
+  conversationId: string;
+  traitKey: string;
+  traitLabel: string;
+  verdict: "confirmed" | "rejected";
+  correctionText: string | null;
+  actorUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConversationAnalysis {
+  id: string;
+  conversationId: string;
+  status: "ready" | "failed";
+  summary: string;
+  keyPoints: string[];
+  traits: ConversationTrait[];
+  buyingIntent: "high" | "medium" | "low";
+  riskLevel: "high" | "medium" | "low";
+  nextAction: string;
+  sourceMessageCount: number;
+  engine: "rules" | "ai";
+  model: string | null;
+  promptVersion: string;
+  generatedAt: string;
+  updatedAt: string;
+  error: string | null;
+}
+
+export interface ConversationFollowUp {
+  id: string;
+  conversationId: string;
+  analysisId: string;
+  sourceKey: string;
+  title: string;
+  reason: string;
+  priority: "high" | "medium" | "normal";
+  dueAt: string;
+  status: "pending" | "completed" | "dismissed";
+  evidenceMessageIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationSettings {
+  analysisIntervalHours: number;
+  intelligenceMode: "rules" | "ai";
+  intelligenceProviderId: string | null;
+  dailyTodoHour: number;
+  dailyTodoMinute: number;
+  timezone: string;
+  enabled: boolean;
+  lastAnalysisAt: string | null;
+  nextAnalysisAt: string | null;
+  lastDailyTodoAt: string | null;
+  nextDailyTodoAt: string | null;
+  lastRunStatus: "idle" | "running" | "success" | "failed";
+  lastRunSummary: string;
+  updatedAt: string;
+}
+
+export type ReadinessStatus = "pass" | "warning" | "blocking";
+
+export interface CommercialReadinessCheck {
+  key: string;
+  label: string;
+  detail: string;
+  status: ReadinessStatus;
+  actionView: "accounts" | "access" | "ai" | "automation" | "diagnostics" | null;
+}
+
+export interface CommercialReadiness {
+  readyForMetaRegistration: boolean;
+  readyForCommercialUse: boolean;
+  checkedAt: string;
+  checks: CommercialReadinessCheck[];
+}
+
+export type AutomationRunStatus = "running" | "success" | "failed";
+
+export interface AutomationRun {
+  id: string;
+  ownerUserId: string | null;
+  trigger: "scheduled" | "manual";
+  status: AutomationRunStatus;
+  totalConversations: number;
+  processedConversations: number;
+  analysisUpdated: number;
+  todosCreated: number;
+  notificationsSent: number;
+  skipped: number;
+  currentConversation: string | null;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  updatedAt: string;
+}
+
+export interface AutomationRunResult {
+  analysisScanned: number;
+  analysisUpdated: number;
+  todosCreated: number;
+  notificationsSent: number;
+  skipped: number;
+  ranAt: string;
+}
+
+export interface AutomationDelivery {
+  id: string;
+  followupId: string;
+  runDate: string;
+  deliveryType: "todo" | "notification";
+  status: "pending" | "success" | "failed";
+  attempts: number;
+  externalId: string | null;
+  lastError: string | null;
+  nextRetryAt: string | null;
   updatedAt: string;
 }
 

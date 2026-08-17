@@ -4,7 +4,8 @@ import { resolve } from "node:path";
 import process from "node:process";
 
 const projectRoot = resolve(import.meta.dirname, "..");
-const forbiddenPath = /(?:^|\/)(?:\.env(?:\..+)?\.local|backups?|personal-data|\.wwebjs_auth|uploads|dist-packages)(?:\/|$)|\.(?:dump|db|sqlite|sql\.gz)$/iu;
+const allowedSchemaPath = "backend/schema.mysql.sql";
+const forbiddenPath = /(?:^|\/)(?:\.env(?:\..+)?\.local|backups?|personal-data|\.wwebjs_auth|uploads|dist-packages)(?:\/|$)|\.(?:dump|db|sqlite|sql|sql\.gz)$/iu;
 
 let status = "";
 try {
@@ -20,20 +21,20 @@ try {
 const unsafe = status.split(/\r?\n/u).filter(Boolean).filter((line) => {
   const state = line[0];
   const path = line.slice(8).trim();
-  return state !== "I" && forbiddenPath.test(path);
+  return !["D", "I"].includes(state) && path !== allowedSchemaPath && forbiddenPath.test(path);
 });
 if (unsafe.length) {
   console.error(`发现禁止提交的数据库或环境文件：\n${unsafe.join("\n")}`);
   process.exit(1);
 }
 
-const legacySql = readFileSync(
-  resolve(projectRoot, "backend/goodjob_crm.full.sql"),
+const schemaSql = readFileSync(
+  resolve(projectRoot, allowedSchemaPath),
   "utf8"
 );
-if (!/CREATE DATABASE goodjob_crm_dev\b/u.test(legacySql)
-  || /goodjob_crm_(?:personal|local)\b/u.test(legacySql)) {
-  console.error("goodjob_crm.full.sql 只能初始化 goodjob_crm_dev");
+if (!/CREATE TABLE(?: IF NOT EXISTS)?\b/iu.test(schemaSql)
+  || /goodjob_crm_(?:personal|local)\b/u.test(schemaSql)) {
+  console.error("backend/schema.mysql.sql 必须是无个人数据库引用的结构文件");
   process.exit(1);
 }
 

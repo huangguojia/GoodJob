@@ -27,6 +27,12 @@ interface ProviderResponseCacheContext {
   licenseScope: string;
 }
 
+interface MailCredentialContext {
+  id: string;
+  teamId: string;
+  kind: "smtp" | "imap";
+}
+
 const DEVELOPMENT_FALLBACK_SECRET = randomBytes(48).toString("base64url");
 
 function credentialSecret() {
@@ -58,6 +64,55 @@ function providerResponseCacheEncryptionKey() {
     .update("goodjob-provider-response-cache-v1|")
     .update(credentialSecret())
     .digest();
+}
+
+function mailCredentialEncryptionKey() {
+  return createHash("sha256")
+    .update("goodjob-mail-credential-v1|")
+    .update(credentialSecret())
+    .digest();
+}
+
+function mailCredentialAdditionalData(context: MailCredentialContext) {
+  return Buffer.from(["mail-credential", context.id, context.teamId, context.kind].join("|"), "utf8");
+}
+
+export function isEncryptedMailCredential(value: string) {
+  return value.startsWith("mail-v1.");
+}
+
+export function encryptMailCredential(context: MailCredentialContext, value: string) {
+  if (!value) return "";
+  if (isEncryptedMailCredential(value)) return value;
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", mailCredentialEncryptionKey(), iv);
+  cipher.setAAD(mailCredentialAdditionalData(context));
+  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  return [
+    "mail-v1",
+    iv.toString("base64url"),
+    cipher.getAuthTag().toString("base64url"),
+    encrypted.toString("base64url")
+  ].join(".");
+}
+
+export function decryptMailCredential(context: MailCredentialContext, value: string) {
+  if (!value || !isEncryptedMailCredential(value)) return value || "";
+  const [version, ivValue, tagValue, payloadValue] = value.split(".");
+  if (version !== "mail-v1" || !ivValue || !tagValue || !payloadValue) {
+    throw new Error("邮箱授权码密文格式无效");
+  }
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    mailCredentialEncryptionKey(),
+    Buffer.from(ivValue, "base64url")
+  );
+  decipher.setAAD(mailCredentialAdditionalData(context));
+  decipher.setAuthTag(Buffer.from(tagValue, "base64url"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(payloadValue, "base64url")),
+    decipher.final()
+  ]).toString("utf8");
 }
 
 export function validateProviderCredentialSecurity() {

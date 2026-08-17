@@ -49,6 +49,73 @@ describe("WhatsApp CRM Plugin API", () => {
     expect(health.body).toMatchObject({ status: "ok", database: "pglite", activeConnections: 2 });
   });
 
+  it("records automation runs and exposes progress history", async () => {
+    const settings = await request(runtime.app).get("/api/v1/automation/settings").expect(200);
+    expect(settings.body).toMatchObject({ enabled: true, analysisIntervalHours: 6, intelligenceMode: "rules", intelligenceProviderId: null });
+    const result = await request(runtime.app).post("/api/v1/automation/run").expect(500);
+    expect(result.body).toMatchObject({ code: "INTERNAL_ERROR", requestId: expect.any(String) });
+    const runs = await request(runtime.app).get("/api/v1/automation/runs?limit=3").expect(200);
+    expect(runs.body[0]).toMatchObject({ status: "failed", trigger: "manual", totalConversations: expect.any(Number), processedConversations: expect.any(Number), error: expect.stringContaining("CRM 交付失败"), finishedAt: expect.any(String) });
+    const deliveries = await request(runtime.app).get("/api/v1/automation/deliveries?limit=10").expect(200);
+    expect(Array.isArray(deliveries.body)).toBe(true);
+  });
+
+  it("validates customer intelligence engine settings", async () => {
+    await request(runtime.app).put("/api/v1/automation/settings").send({
+      analysisIntervalHours: 6,
+      intelligenceMode: "ai",
+      intelligenceProviderId: null,
+      dailyTodoHour: 9,
+      dailyTodoMinute: 0,
+      timezone: "Asia/Shanghai",
+      enabled: true
+    }).expect(409);
+    const providers = await request(runtime.app).get("/api/v1/ai/providers").expect(200);
+    const selected = providers.body[0];
+    const saved = await request(runtime.app).put("/api/v1/automation/settings").send({
+      analysisIntervalHours: 12,
+      intelligenceMode: "ai",
+      intelligenceProviderId: selected.id,
+      dailyTodoHour: 8,
+      dailyTodoMinute: 30,
+      timezone: "Asia/Shanghai",
+      enabled: true
+    }).expect(200);
+    expect(saved.body).toMatchObject({ intelligenceMode: "ai", intelligenceProviderId: selected.id, analysisIntervalHours: 12 });
+    await request(runtime.app).put("/api/v1/automation/settings").send({
+      analysisIntervalHours: 6,
+      intelligenceMode: "rules",
+      intelligenceProviderId: null,
+      dailyTodoHour: 9,
+      dailyTodoMinute: 0,
+      timezone: "Asia/Shanghai",
+      enabled: true
+    }).expect(200);
+  });
+
+  it("reports actionable commercial readiness blockers", async () => {
+    const readiness = await request(runtime.app).get("/api/v1/commercial-readiness").expect(200);
+    expect(readiness.body).toMatchObject({ readyForMetaRegistration: false, readyForCommercialUse: false, checkedAt: expect.any(String) });
+    expect(readiness.body.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "meta_app", status: "blocking", actionView: "access" }),
+      expect.objectContaining({ key: "meta_connection", status: "blocking" }),
+      expect.objectContaining({ key: "public_https", status: "blocking" }),
+      expect.objectContaining({ key: "production_database", status: "blocking" }),
+      expect.objectContaining({ key: "retention", status: "pass" })
+    ]));
+  });
+
+  it("previews and idempotently imports WhatsApp text history", async () => {
+    const content = "[08/08/2026, 23:33:00] Maria Import: Please send your best FOB price.\n[09/08/2026, 00:33:00] Admin: I will prepare it.";
+    const preview = await request(runtime.app).post("/api/v1/imports/whatsapp-text/preview").send({ content, dateOrder: "dmy" }).expect(200);
+    expect(preview.body).toMatchObject({ messageCount: 2, participants: ["Maria Import", "Admin"] });
+    const payload = { accountId: accounts[0].id, phone: "+491234567891", displayName: "Maria Import", customerSender: "Maria Import", content, dateOrder: "dmy" };
+    const first = await request(runtime.app).post("/api/v1/imports/whatsapp-text").send(payload).expect(201);
+    expect(first.body).toMatchObject({ imported: 2, duplicates: 0, parsed: 2, analysis: { sourceMessageCount: 2 } });
+    const second = await request(runtime.app).post("/api/v1/imports/whatsapp-text").send(payload).expect(201);
+    expect(second.body).toMatchObject({ imported: 0, duplicates: 2, parsed: 2 });
+  });
+
   it("rejects contradictory fixed integration strategies", async () => {
     await request(runtime.app)
       .put("/api/v1/integration/preference")
@@ -352,6 +419,18 @@ describe("WhatsApp CRM Plugin API", () => {
     });
     expect(second.body.contact.id).toBe(first.body.contact.id);
     expect(second.body.conversation.id).toBe(first.body.conversation.id);
+  });
+
+  it("imports a contact supplied by the parent GoodJob CRM and preserves its external identity", async () => {
+    const response = await request(runtime.app)
+      .post(`/api/v1/crm/contacts/gj_customer_42/import`)
+      .send({
+        accountId: accounts[1].id,
+        externalContact: { id: "gj_customer_42", name: "Parent CRM buyer", phone: "+14155550199" }
+      })
+      .expect(201);
+    expect(response.body.crmContact).toMatchObject({ source: "goodjob_crm", sourceContactId: "gj_customer_42", phone: "+14155550199" });
+    expect(response.body.contact.crmContactId).toBe(response.body.crmContact.id);
   });
 
   it("protects a routed account from logout when deletion cannot succeed", async () => {

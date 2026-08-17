@@ -147,6 +147,7 @@ interface ProspectCandidateMergeResult {
   updated: boolean;
   suppressed: boolean;
   candidateId?: string;
+  failureCode?: string;
   alreadyProcessed?: boolean;
 }
 
@@ -327,6 +328,61 @@ function evidenceRecordKeys(evidence: ProviderEvidenceSnapshot[] = []) {
     .map((item) => `${item.providerId}:${item.providerRecordId}`));
 }
 
+const EMPTY_CANDIDATE_VALUES = new Set([
+  "", "unknown", "未知", "待维护", "待人工核实", "n/a", "na"
+]);
+
+function meaningfulCandidateValue(value: string | undefined) {
+  return !EMPTY_CANDIDATE_VALUES.has(
+    String(value || "").trim().toLocaleLowerCase("en-US")
+  );
+}
+
+function normalizedCandidateValue(value: string | undefined) {
+  return String(value || "")
+    .normalize("NFKC")
+    .trim()
+    .toLocaleLowerCase("en-US")
+    .replace(/\s+/gu, " ");
+}
+
+function hasNewTrustedEvidence(
+  existing: WebsiteOpportunity,
+  incoming: WebsiteOpportunity
+) {
+  const existingKeys = new Set((existing.sourceEvidence || []).map(evidenceKey));
+  return (incoming.sourceEvidence || []).some((item) => {
+    if (existingKeys.has(evidenceKey(item))) return false;
+    return Object.values(item.fieldAuthority || {}).some((authority) =>
+      authority === "official" || authority === "corroborated"
+    );
+  });
+}
+
+function candidateMaterialChanges(
+  existing: WebsiteOpportunity,
+  incoming: WebsiteOpportunity
+) {
+  const changes: string[] = [];
+  const existingDomain = websiteDomain(existing.website);
+  const incomingDomain = websiteDomain(incoming.website);
+  if (incomingDomain && incomingDomain !== existingDomain) changes.push("website");
+  for (const field of ["contact", "contactInfo"] as const) {
+    if (meaningfulCandidateValue(incoming[field])
+      && normalizedCandidateValue(incoming[field]) !== normalizedCandidateValue(existing[field])) {
+      changes.push(field);
+    }
+  }
+  if (hasNewTrustedEvidence(existing, incoming)) changes.push("trusted_evidence");
+  return changes;
+}
+
+function preferCandidateValue(existing: string, incoming: string, max: number) {
+  if (!meaningfulCandidateValue(incoming)) return existing;
+  if (!meaningfulCandidateValue(existing)) return incoming.slice(0, max);
+  return existing;
+}
+
 function sameCandidate(
   existing: WebsiteOpportunity,
   incoming: WebsiteOpportunity
@@ -366,6 +422,7 @@ function hasManualState(opportunity: WebsiteOpportunity) {
     || opportunity.lastDevelopmentEmailSubject
     || opportunity.lastDevelopmentEmailTo
     || opportunity.excludedReason
+    || opportunity.shortlistedAt
   );
 }
 
@@ -452,8 +509,10 @@ function mergeCandidate(
       );
     }
     store.websiteOpportunities.unshift(incoming);
-    return { candidate: incoming, created: true };
+    return { candidate: incoming, created: true, materialChanges: ["new_candidate"], evidenceAdded: true };
   }
+  const materialChanges = candidateMaterialChanges(existing, incoming);
+  const previousEvidenceCount = existing.sourceEvidence?.length || 0;
   const sourceEvidence = mergeEvidence(
     existing.sourceEvidence,
     incoming.sourceEvidence
@@ -475,8 +534,11 @@ function mergeCandidate(
       || existing.coverageQueueState;
     existing.coverageReasonCode = incoming.coverageReasonCode
       || existing.coverageReasonCode;
+    existing.website = preferCandidateValue(existing.website, incoming.website, 255);
+    existing.contact = preferCandidateValue(existing.contact, incoming.contact, 120);
+    existing.contactInfo = preferCandidateValue(existing.contactInfo, incoming.contactInfo, 255);
     withProspectVerificationReport(existing);
-    return { candidate: existing, created: false };
+    return { candidate: existing, created: false, materialChanges, evidenceAdded: sourceEvidence.length > previousEvidenceCount };
   }
   Object.assign(existing, incoming, {
     id: existing.id,
@@ -485,11 +547,14 @@ function mergeCandidate(
     customerId: existing.customerId,
     dealId: existing.dealId,
     leadId: existing.leadId,
+    website: preferCandidateValue(existing.website, incoming.website, 255),
+    contact: preferCandidateValue(existing.contact, incoming.contact, 120),
+    contactInfo: preferCandidateValue(existing.contactInfo, incoming.contactInfo, 255),
     sourceEvidence,
     confidence
   });
   withProspectVerificationReport(existing);
-  return { candidate: existing, created: false };
+  return { candidate: existing, created: false, materialChanges, evidenceAdded: sourceEvidence.length > previousEvidenceCount };
 }
 
 function existingCandidate(
@@ -796,11 +861,13 @@ export class ProspectCandidatePipeline {
         }
         const outcome = mergeCandidate(this.store, incoming);
         applyCoverageState(outcome.candidate, coverage);
+        const visibleInCurrentRun = coverage.queueAction === "enqueue";
         return {
           created: outcome.created,
-          updated: !outcome.created,
-          suppressed: coverage.queueAction !== "enqueue",
-          candidateId: outcome.candidate.id
+          updated: !outcome.created && (outcome.materialChanges.length > 0 || outcome.evidenceAdded),
+          suppressed: !visibleInCurrentRun,
+          candidateId: visibleInCurrentRun ? outcome.candidate.id : undefined,
+          failureCode: visibleInCurrentRun ? "" : coverage.event.reasonCode || "NO_MATERIAL_CHANGE"
         };
       }, candidateProcessingPreview(record));
       if (merged.alreadyProcessed) {
@@ -815,12 +882,16 @@ export class ProspectCandidatePipeline {
       suppressed = merged.suppressed;
     } else {
       const merged = await this.persistCandidateMerge(hit, () => {
+        const existing = existingCandidate(this.store, incoming);
+        const materialChanges = existing ? candidateMaterialChanges(existing, incoming) : ["new_candidate"];
         const outcome = mergeCandidate(this.store, incoming);
+        const visibleInCurrentRun = outcome.created || materialChanges.length > 0;
         return {
           created: outcome.created,
-          updated: !outcome.created,
-          suppressed: false,
-          candidateId: outcome.candidate.id
+          updated: !outcome.created && (outcome.materialChanges.length > 0 || outcome.evidenceAdded),
+          suppressed: !visibleInCurrentRun,
+          candidateId: visibleInCurrentRun ? outcome.candidate.id : undefined,
+          failureCode: visibleInCurrentRun ? "" : "HISTORICAL_DUPLICATE_NO_CHANGE"
         };
       }, candidateProcessingPreview(record));
       if (merged.alreadyProcessed) {
@@ -832,6 +903,7 @@ export class ProspectCandidatePipeline {
       }
       created = merged.created;
       updated = merged.updated;
+      suppressed = merged.suppressed;
     }
     return {
       created,
@@ -917,7 +989,7 @@ export class ProspectCandidatePipeline {
         runId: hit.runId,
         ledgerId: hit.ledgerId,
         status,
-        failureCode: failure,
+        failureCode: outcome.failureCode || failure,
         candidateId: outcome.candidateId,
         sourceRecordId: preview.sourceRecordId,
         sourceCompany: preview.sourceCompany,

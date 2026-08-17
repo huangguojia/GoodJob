@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AgentActor } from "./ai-agent.js";
+import { canSeeOwner, hasIamPermission } from "./auth.js";
 import type { CrmStore } from "./store.js";
 import type { AgentMemoryRecord, AgentMemoryScope, AgentMemoryStatus, AgentMemoryType } from "./types.js";
 
@@ -17,17 +18,16 @@ const memoryInputSchema = z.object({
 });
 
 function canManageTeam(actor: AgentActor) {
-  return ["manager", "admin", "super_admin"].includes(actor.role);
+  return hasIamPermission(actor, "agent.manage");
 }
 
 function canSeeCustomer(store: CrmStore, actor: AgentActor, customerId: string) {
   const customer = store.customers.find((item) => item.id === customerId);
-  if (!customer || (actor.role !== "super_admin" && customer.teamId !== actor.teamId)) return false;
-  return actor.role === "super_admin" || actor.role === "admin" || actor.role === "manager" || customer.ownerId === actor.id;
+  return Boolean(customer && canSeeOwner(actor, customer.ownerId, customer.teamId));
 }
 
 function visibleMemory(store: CrmStore, actor: AgentActor, item: AgentMemoryRecord) {
-  if (actor.role !== "super_admin" && item.teamId !== actor.teamId) return false;
+  if (item.teamId !== actor.teamId) return false;
   if (item.scope === "personal") return item.ownerId === actor.id;
   if (item.scope === "customer") return canSeeCustomer(store, actor, item.subjectId) && (item.status === "active" || item.ownerId === actor.id || canManageTeam(actor));
   return item.status === "active" || item.ownerId === actor.id || canManageTeam(actor);

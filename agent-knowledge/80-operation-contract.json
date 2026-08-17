@@ -14,12 +14,7 @@
     "闭环执行",
     "权限"
   ],
-  "roles": [
-    "sales",
-    "manager",
-    "admin",
-    "super_admin"
-  ],
+  "permissionCodes": ["agent.use"],
   "toolRefs": [
     "api.catalog",
     "api.read",

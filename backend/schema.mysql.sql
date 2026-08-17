@@ -16,6 +16,17 @@ CREATE TABLE users (
   smtp_secure BOOLEAN DEFAULT TRUE,
   smtp_user VARCHAR(180) DEFAULT '',
   smtp_password TEXT,
+  imap_host VARCHAR(180) DEFAULT '',
+  imap_port INT DEFAULT 993,
+  imap_secure BOOLEAN DEFAULT TRUE,
+  imap_user VARCHAR(180) DEFAULT '',
+  imap_password TEXT,
+  inbound_sync_enabled BOOLEAN DEFAULT FALSE,
+  last_inbound_sync_at DATETIME(3) NULL,
+  last_inbound_sync_status VARCHAR(20) DEFAULT '',
+  last_inbound_sync_error VARCHAR(1000) DEFAULT '',
+  last_inbound_uid BIGINT UNSIGNED DEFAULT 0,
+  inbound_uid_validity VARCHAR(40) DEFAULT '',
   last_development_email_at DATETIME NULL,
   last_development_email_to VARCHAR(180) DEFAULT '',
   last_development_email_subject VARCHAR(255) DEFAULT '',
@@ -34,6 +45,86 @@ CREATE TABLE company_profiles (
   updated_at DATETIME(3) NOT NULL
 );
 
+CREATE TABLE document_letterheads (
+  id VARCHAR(64) PRIMARY KEY,
+  team_id VARCHAR(64) NOT NULL,
+  asset_name VARCHAR(160) NOT NULL,
+  company_name VARCHAR(240) NOT NULL,
+  address TEXT,
+  phone VARCHAR(120) DEFAULT '',
+  email VARCHAR(180) DEFAULT '',
+  website VARCHAR(500) DEFAULT '',
+  bank_info TEXT,
+  logo_url VARCHAR(512) DEFAULT '',
+  logo_placement_json JSON,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_by VARCHAR(64) DEFAULT '',
+  updated_at DATETIME(3) NOT NULL,
+  INDEX idx_document_letterheads_team(team_id, enabled, updated_at)
+);
+
+CREATE TABLE document_stamps (
+  id VARCHAR(64) PRIMARY KEY,
+  team_id VARCHAR(64) NOT NULL,
+  asset_name VARCHAR(160) NOT NULL,
+  image_url VARCHAR(512) NOT NULL,
+  placement_json JSON,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_by VARCHAR(64) DEFAULT '',
+  updated_at DATETIME(3) NOT NULL,
+  INDEX idx_document_stamps_team(team_id, enabled, updated_at)
+);
+
+CREATE TABLE document_signatures (
+  id VARCHAR(64) PRIMARY KEY,
+  team_id VARCHAR(64) NOT NULL,
+  asset_name VARCHAR(160) NOT NULL,
+  signer_name VARCHAR(160) DEFAULT '',
+  signer_title VARCHAR(160) DEFAULT '',
+  image_url VARCHAR(512) NOT NULL,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_by VARCHAR(64) DEFAULT '',
+  updated_at DATETIME(3) NOT NULL,
+  INDEX idx_document_signatures_team(team_id, enabled, updated_at)
+);
+
+CREATE TABLE document_default_profiles (
+  team_id VARCHAR(64) PRIMARY KEY,
+  seller VARCHAR(240) DEFAULT '',
+  seller_address TEXT,
+  seller_contact VARCHAR(200) DEFAULT '',
+  seller_phone VARCHAR(120) DEFAULT '',
+  seller_email VARCHAR(180) DEFAULT '',
+  seller_website VARCHAR(500) DEFAULT '',
+  seller_tax_no VARCHAR(160) DEFAULT '',
+  bank_info TEXT,
+  currency VARCHAR(12) DEFAULT 'USD',
+  incoterm VARCHAR(80) DEFAULT 'FOB',
+  payment_term VARCHAR(255) DEFAULT '',
+  shipping_method VARCHAR(120) DEFAULT 'Sea freight',
+  port_loading VARCHAR(120) DEFAULT '',
+  validity_days INT NOT NULL DEFAULT 0,
+  notes TEXT,
+  language VARCHAR(8) DEFAULT 'EN',
+  template_style VARCHAR(40) DEFAULT 'indigo',
+  letterhead_id VARCHAR(64) DEFAULT '',
+  stamp_id VARCHAR(64) DEFAULT '',
+  signature_id VARCHAR(64) DEFAULT '',
+  include_product_images BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_by VARCHAR(64) DEFAULT '',
+  updated_at DATETIME(3) NOT NULL
+);
+
+CREATE TABLE team_system_settings (
+  team_id VARCHAR(64) PRIMARY KEY,
+  require_document_excel_approval BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_by VARCHAR(64) DEFAULT '',
+  updated_at DATETIME(3) NOT NULL
+);
+
 CREATE TABLE customers (
   id VARCHAR(64) PRIMARY KEY,
   company VARCHAR(200) NOT NULL,
@@ -42,15 +133,22 @@ CREATE TABLE customers (
   whatsapp VARCHAR(32) DEFAULT '',
   owner_id VARCHAR(64) NOT NULL,
   team_id VARCHAR(64) NOT NULL,
+  tenant_id VARCHAR(64) GENERATED ALWAYS AS (team_id) STORED,
   stage VARCHAR(40),
   amount DECIMAL(14,2) DEFAULT 0,
   health INT DEFAULT 0,
+  customer_source VARCHAR(120) DEFAULT '',
   customer_grade VARCHAR(1) NOT NULL DEFAULT 'C',
+  lifecycle_status VARCHAR(20) NOT NULL DEFAULT 'open',
+  won_at DATETIME(3) NULL,
+  won_by_deal_id VARCHAR(64) DEFAULT '',
   next_reminder VARCHAR(100),
   wecom_bound BOOLEAN DEFAULT FALSE,
   billing_name VARCHAR(200) DEFAULT '',
+  company_full_name VARCHAR(200) DEFAULT '',
   billing_address TEXT,
   document_contact VARCHAR(200) DEFAULT '',
+  contact_remark VARCHAR(500) DEFAULT '',
   default_port_discharge VARCHAR(120) DEFAULT '',
   default_incoterm VARCHAR(80) DEFAULT '',
   default_payment_term VARCHAR(255) DEFAULT '',
@@ -217,6 +315,7 @@ CREATE TABLE leads (
   status VARCHAR(20) DEFAULT 'new',
   owner_id VARCHAR(64) NOT NULL,
   team_id VARCHAR(64) NOT NULL,
+  tenant_id VARCHAR(64) GENERATED ALWAYS AS (team_id) STORED,
   estimated_amount DECIMAL(14,2) DEFAULT 0,
   next_follow_at VARCHAR(100) DEFAULT '',
   last_activity_at VARCHAR(100) DEFAULT '',
@@ -270,9 +369,11 @@ CREATE TABLE deals (
   product VARCHAR(200) DEFAULT '',
   quantity INT DEFAULT 0,
   unit_price DECIMAL(14,2) DEFAULT 0,
+  items_json JSON,
   amount DECIMAL(14,2) DEFAULT 0,
   owner_id VARCHAR(64) NOT NULL,
   team_id VARCHAR(64) NOT NULL,
+  tenant_id VARCHAR(64) GENERATED ALWAYS AS (team_id) STORED,
   next_action VARCHAR(200),
   archived_at TIMESTAMP NULL,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -322,6 +423,15 @@ CREATE TABLE knowledge_assets (
   owner_id VARCHAR(64),
   team_id VARCHAR(64) DEFAULT 'all',
   version VARCHAR(40),
+  source_type VARCHAR(30) DEFAULT 'legacy',
+  source_url VARCHAR(2048) DEFAULT '',
+  share_code VARCHAR(64) DEFAULT '',
+  file_type VARCHAR(30) DEFAULT 'other',
+  description TEXT,
+  tags_json JSON,
+  access_count INT DEFAULT 0,
+  last_accessed_at TIMESTAMP NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -335,6 +445,13 @@ CREATE TABLE exams (
   duration_minutes INT DEFAULT 20,
   pass_score INT DEFAULT 80,
   target_role VARCHAR(40) DEFAULT 'sales',
+  instructions TEXT,
+  start_at TIMESTAMP NULL,
+  end_at TIMESTAMP NULL,
+  max_attempts INT DEFAULT 1,
+  allow_review BOOLEAN DEFAULT FALSE,
+  published_at TIMESTAMP NULL,
+  closed_at TIMESTAMP NULL,
   owner_id VARCHAR(64) DEFAULT '',
   team_id VARCHAR(64) DEFAULT 'all',
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -378,9 +495,37 @@ CREATE TABLE exam_attempts (
   answers_json JSON,
   correct_count INT DEFAULT 0,
   total_questions INT DEFAULT 0,
+  attempt_status VARCHAR(30) DEFAULT 'submitted',
+  started_at TIMESTAMP NULL,
+  expires_at TIMESTAMP NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_exam_attempts_exam_id (exam_id),
   INDEX idx_exam_attempts_user_id (user_id)
+);
+
+CREATE TABLE exam_assignments (
+  id VARCHAR(96) PRIMARY KEY,
+  exam_id VARCHAR(64) NOT NULL,
+  user_id VARCHAR(64) NOT NULL,
+  assigned_by_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  assignment_status VARCHAR(30) DEFAULT 'pending',
+  attempt_count INT DEFAULT 0,
+  best_score DECIMAL(5,2) DEFAULT 0,
+  latest_attempt_id VARCHAR(64) DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_exam_assignment (exam_id, user_id),
+  INDEX idx_exam_assignments_user (user_id),
+  INDEX idx_exam_assignments_team (team_id)
+);
+
+CREATE TABLE exam_snapshots (
+  exam_id VARCHAR(64) PRIMARY KEY,
+  questions_json JSON NOT NULL,
+  rules_json JSON NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE ocr_jobs (
@@ -415,6 +560,9 @@ CREATE TABLE website_opportunities (
   source VARCHAR(40) DEFAULT '',
   source_label VARCHAR(80) DEFAULT '',
   source_evidence_json JSON,
+  extracted_contacts_json JSON,
+  contact_enrichment_attempts_json JSON,
+  website_discovery_attempts_json JSON,
   confidence INT NULL,
   last_development_email_at DATETIME NULL,
   last_development_email_subject VARCHAR(255) DEFAULT '',
@@ -643,6 +791,9 @@ CREATE TABLE import_export_jobs (
 
 CREATE TABLE trade_documents (
   id VARCHAR(64) PRIMARY KEY,
+  customer_id VARCHAR(64) DEFAULT '',
+  deal_id VARCHAR(64) DEFAULT '',
+  revision INT DEFAULT 1,
   doc_type VARCHAR(10) NOT NULL,
   title VARCHAR(255) NOT NULL,
   doc_number VARCHAR(80) NOT NULL,
@@ -652,6 +803,11 @@ CREATE TABLE trade_documents (
   buyer_contact VARCHAR(200),
   seller VARCHAR(200),
   seller_address TEXT,
+  seller_contact VARCHAR(200) DEFAULT '',
+  seller_phone VARCHAR(120) DEFAULT '',
+  seller_email VARCHAR(180) DEFAULT '',
+  seller_website VARCHAR(500) DEFAULT '',
+  seller_tax_no VARCHAR(160) DEFAULT '',
   currency VARCHAR(12),
   incoterm VARCHAR(80),
   payment_term VARCHAR(255),
@@ -662,13 +818,60 @@ CREATE TABLE trade_documents (
   bank_info TEXT,
   notes TEXT,
   template_style VARCHAR(40),
+  language VARCHAR(8) DEFAULT 'EN',
   status VARCHAR(40),
+  approval_note TEXT,
+  approved_at VARCHAR(100),
+  approved_by VARCHAR(64),
+  audits_json JSON,
+  send_records_json JSON,
   owner_id VARCHAR(64) NOT NULL,
   team_id VARCHAR(64) NOT NULL,
   items_json JSON,
+  letterhead_id VARCHAR(64) DEFAULT '',
+  stamp_id VARCHAR(64) DEFAULT '',
+  signature_id VARCHAR(64) DEFAULT '',
+  include_product_images BOOLEAN NOT NULL DEFAULT FALSE,
+  letterhead_snapshot_json JSON,
+  stamp_snapshot_json JSON,
+  signature_snapshot_json JSON,
+  derived_from_document_id VARCHAR(64) DEFAULT '',
+  derived_from_type VARCHAR(20) DEFAULT '',
+  import_analysis_id VARCHAR(64) DEFAULT '',
+  import_source_file_name VARCHAR(255) DEFAULT '',
+  import_source_sha256 CHAR(64) DEFAULT '',
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_trade_documents_owner(owner_id),
   INDEX idx_trade_documents_team(team_id)
+);
+
+CREATE TABLE trade_document_import_analyses (
+  id VARCHAR(64) PRIMARY KEY,
+  source_file_name VARCHAR(255) NOT NULL,
+  source_mime VARCHAR(120) NOT NULL,
+  source_storage_key VARCHAR(255) NOT NULL,
+  source_sha256 CHAR(64) NOT NULL,
+  source_size BIGINT UNSIGNED NOT NULL,
+  analysis_status VARCHAR(30) NOT NULL,
+  detected_type VARCHAR(20) NOT NULL,
+  confidence DECIMAL(6,5) NOT NULL DEFAULT 0,
+  extracted_document_json JSON NOT NULL,
+  field_evidence_json JSON,
+  warnings_json JSON,
+  source_preview_json JSON,
+  calculated_total DECIMAL(18,4) NOT NULL DEFAULT 0,
+  declared_total DECIMAL(18,4) NULL,
+  total_difference DECIMAL(18,4) NULL,
+  created_document_id VARCHAR(64) DEFAULT '',
+  confirmed_by VARCHAR(64) DEFAULT '',
+  confirmed_at DATETIME(3) NULL,
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_trade_document_import_team_hash(team_id, source_sha256),
+  INDEX idx_trade_document_import_owner(owner_id, created_at),
+  INDEX idx_trade_document_import_team(team_id, created_at)
 );
 
 CREATE TABLE wecom_messages (
@@ -694,6 +897,7 @@ CREATE TABLE problems (
   solution TEXT,
   next_action VARCHAR(255),
   due_at VARCHAR(100),
+  resolved_at DATETIME NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_problems_owner(owner_id),
   INDEX idx_problems_team(team_id)
@@ -2531,3 +2735,465 @@ CREATE TABLE prospect_qualification_facts (
     visibility_scope IN ('team','owner')
   )
 ) ENGINE=InnoDB;
+
+-- IAM foundation. Runtime migration also creates and seeds these tables from
+-- legacy users.team_id/users.role without changing business table ownership.
+CREATE TABLE IF NOT EXISTS tenants (
+  id VARCHAR(64) PRIMARY KEY,
+  code VARCHAR(64) NOT NULL UNIQUE,
+  name VARCHAR(200) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  plan_code VARCHAR(40) NOT NULL DEFAULT 'beta',
+  seat_limit INT NOT NULL DEFAULT 50,
+  trial_expires_at DATETIME(3) NULL,
+  data_region VARCHAR(40) NOT NULL DEFAULT '',
+  timezone VARCHAR(80) NOT NULL DEFAULT 'Asia/Shanghai',
+  locale VARCHAR(20) NOT NULL DEFAULT 'zh-CN',
+  authz_revision BIGINT NOT NULL DEFAULT 1,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  CONSTRAINT chk_tenants_status CHECK (status IN ('trial','active','suspended','closed'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS tenant_memberships (
+  id VARCHAR(90) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  user_id VARCHAR(64) NOT NULL,
+  employee_no VARCHAR(80) NOT NULL DEFAULT '',
+  title VARCHAR(120) NOT NULL DEFAULT '',
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  primary_org_unit_id VARCHAR(90) NULL,
+  membership_auth_version BIGINT NOT NULL DEFAULT 1,
+  joined_at DATETIME(3) NULL,
+  left_at DATETIME(3) NULL,
+  invited_by VARCHAR(90) NULL,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_tenant_membership_user(tenant_id, user_id),
+  UNIQUE KEY uk_tenant_membership_scope(tenant_id, id),
+  INDEX idx_tenant_membership_status(tenant_id, status),
+  CONSTRAINT fk_tenant_membership_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  CONSTRAINT fk_tenant_membership_user FOREIGN KEY (user_id) REFERENCES users(id),
+  CONSTRAINT chk_tenant_membership_status CHECK (status IN ('invited','active','suspended','left'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS organization_units (
+  id VARCHAR(90) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  parent_id VARCHAR(90) NULL,
+  name VARCHAR(160) NOT NULL,
+  code VARCHAR(80) NOT NULL,
+  unit_type VARCHAR(20) NOT NULL,
+  path VARCHAR(900) NOT NULL,
+  depth INT NOT NULL DEFAULT 0,
+  sort_order INT NOT NULL DEFAULT 0,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  version_no BIGINT NOT NULL DEFAULT 1,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_organization_unit_code(tenant_id, code),
+  UNIQUE KEY uk_organization_unit_scope(tenant_id, id),
+  INDEX idx_organization_unit_path(tenant_id, path(255)),
+  CONSTRAINT fk_organization_unit_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  CONSTRAINT chk_organization_unit_depth CHECK (depth BETWEEN 0 AND 8),
+  CONSTRAINT chk_organization_unit_status CHECK (status IN ('active','disabled'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS organization_memberships (
+  id VARCHAR(90) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  membership_id VARCHAR(90) NOT NULL,
+  org_unit_id VARCHAR(90) NOT NULL,
+  relation_type VARCHAR(20) NOT NULL,
+  is_leader BOOLEAN NOT NULL DEFAULT FALSE,
+  valid_from DATETIME(3) NULL,
+  valid_until DATETIME(3) NULL,
+  created_by VARCHAR(90) NULL,
+  created_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_org_membership_relation(tenant_id, membership_id, org_unit_id, relation_type),
+  INDEX idx_org_membership_unit(tenant_id, org_unit_id),
+  CONSTRAINT fk_org_membership_member FOREIGN KEY (tenant_id, membership_id) REFERENCES tenant_memberships(tenant_id, id),
+  CONSTRAINT fk_org_membership_unit FOREIGN KEY (tenant_id, org_unit_id) REFERENCES organization_units(tenant_id, id),
+  CONSTRAINT chk_org_membership_relation CHECK (relation_type IN ('primary','secondary'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS permissions (
+  code VARCHAR(120) PRIMARY KEY,
+  domain_name VARCHAR(20) NOT NULL DEFAULT 'tenant',
+  module_name VARCHAR(80) NOT NULL,
+  resource_name VARCHAR(80) NOT NULL,
+  action_name VARCHAR(80) NOT NULL,
+  name VARCHAR(160) NOT NULL,
+  description VARCHAR(500) NOT NULL DEFAULT '',
+  risk_level VARCHAR(20) NOT NULL,
+  scope_modes_json JSON NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  introduced_version VARCHAR(40) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  CONSTRAINT chk_permissions_risk CHECK (risk_level IN ('normal','sensitive','high','critical'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS roles (
+  id VARCHAR(90) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  code VARCHAR(80) NOT NULL,
+  description VARCHAR(500) NOT NULL DEFAULT '',
+  source VARCHAR(20) NOT NULL DEFAULT 'custom',
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  is_protected BOOLEAN NOT NULL DEFAULT FALSE,
+  version_no BIGINT NOT NULL DEFAULT 1,
+  created_by VARCHAR(90) NULL,
+  updated_by VARCHAR(90) NULL,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_roles_code(tenant_id, code),
+  UNIQUE KEY uk_roles_scope(tenant_id, id),
+  CONSTRAINT fk_roles_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  CONSTRAINT chk_roles_status CHECK (status IN ('draft','active','disabled'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS role_permission_bindings (
+  id VARCHAR(90) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  role_id VARCHAR(90) NOT NULL,
+  permission_code VARCHAR(120) NOT NULL,
+  scope_mode VARCHAR(20) NOT NULL,
+  scope_config_json JSON NULL,
+  field_policy_id VARCHAR(90) NULL,
+  condition_policy_id VARCHAR(90) NULL,
+  created_by VARCHAR(90) NULL,
+  created_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_role_permission_binding(tenant_id, role_id, permission_code, scope_mode),
+  INDEX idx_role_permission_permission(permission_code),
+  CONSTRAINT fk_role_permission_role FOREIGN KEY (tenant_id, role_id) REFERENCES roles(tenant_id, id),
+  CONSTRAINT fk_role_permission_code FOREIGN KEY (permission_code) REFERENCES permissions(code),
+  CONSTRAINT chk_role_permission_scope CHECK (scope_mode IN ('self','org_unit','org_subtree','tenant','public_pool','assigned_set'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS member_role_assignments (
+  id VARCHAR(90) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  membership_id VARCHAR(90) NOT NULL,
+  role_id VARCHAR(90) NOT NULL,
+  scope_anchor_org_unit_id VARCHAR(90) NULL,
+  valid_from DATETIME(3) NULL,
+  valid_until DATETIME(3) NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  reason VARCHAR(500) NOT NULL DEFAULT '',
+  granted_by VARCHAR(90) NULL,
+  revoked_by VARCHAR(90) NULL,
+  revoked_at DATETIME(3) NULL,
+  created_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_member_role_active(tenant_id, membership_id, role_id),
+  INDEX idx_member_role_status(tenant_id, membership_id, status),
+  CONSTRAINT fk_member_role_member FOREIGN KEY (tenant_id, membership_id) REFERENCES tenant_memberships(tenant_id, id),
+  CONSTRAINT fk_member_role_role FOREIGN KEY (tenant_id, role_id) REFERENCES roles(tenant_id, id),
+  CONSTRAINT chk_member_role_status CHECK (status IN ('active','revoked','expired'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS member_permission_grants (
+  id VARCHAR(90) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  membership_id VARCHAR(90) NOT NULL,
+  permission_code VARCHAR(120) NOT NULL,
+  scope_mode VARCHAR(20) NOT NULL,
+  scope_config_json JSON NULL,
+  valid_until DATETIME(3) NOT NULL,
+  reason VARCHAR(500) NOT NULL,
+  ticket_no VARCHAR(120) NOT NULL DEFAULT '',
+  granted_by VARCHAR(90) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  revoked_by VARCHAR(90) NULL,
+  revoked_at DATETIME(3) NULL,
+  created_at DATETIME(3) NOT NULL,
+  INDEX idx_member_permission_active(tenant_id, membership_id, status, valid_until),
+  CONSTRAINT fk_member_permission_member FOREIGN KEY (tenant_id, membership_id) REFERENCES tenant_memberships(tenant_id, id),
+  CONSTRAINT fk_member_permission_code FOREIGN KEY (permission_code) REFERENCES permissions(code),
+  CONSTRAINT chk_member_permission_status CHECK (status IN ('active','revoked','expired'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS authorization_revisions (
+  tenant_id VARCHAR(64) NOT NULL,
+  membership_id VARCHAR(90) NOT NULL DEFAULT '',
+  revision BIGINT NOT NULL DEFAULT 1,
+  changed_at DATETIME(3) NOT NULL,
+  PRIMARY KEY (tenant_id, membership_id),
+  CONSTRAINT fk_authorization_revision_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS authorization_audit_events (
+  id VARCHAR(90) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  actor_identity_id VARCHAR(64) NOT NULL,
+  actor_membership_id VARCHAR(90) NULL,
+  target_type VARCHAR(40) NOT NULL,
+  target_id VARCHAR(120) NOT NULL,
+  action_code VARCHAR(120) NOT NULL,
+  before_summary_json JSON NULL,
+  after_summary_json JSON NULL,
+  impact_summary VARCHAR(500) NOT NULL DEFAULT '',
+  reason VARCHAR(500) NOT NULL DEFAULT '',
+  ticket_no VARCHAR(120) NOT NULL DEFAULT '',
+  request_id VARCHAR(90) NOT NULL DEFAULT '',
+  session_id_hash CHAR(64) NOT NULL DEFAULT '',
+  ip_hash CHAR(64) NOT NULL DEFAULT '',
+  result_status VARCHAR(20) NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  INDEX idx_authorization_audit_tenant(tenant_id, created_at, id),
+  INDEX idx_authorization_audit_target(tenant_id, target_type, target_id),
+  CONSTRAINT fk_authorization_audit_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  CONSTRAINT chk_authorization_audit_status CHECK (result_status IN ('success','rejected','failed','rolled_back'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS platform_operators (
+  id VARCHAR(90) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL UNIQUE,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  mfa_required BOOLEAN NOT NULL DEFAULT TRUE,
+  auth_version BIGINT NOT NULL DEFAULT 1,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  CONSTRAINT fk_platform_operator_user FOREIGN KEY (user_id) REFERENCES users(id),
+  CONSTRAINT chk_platform_operator_status CHECK (status IN ('active','suspended','disabled'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS platform_operator_mfa (
+  operator_id VARCHAR(90) PRIMARY KEY,
+  secret_encrypted TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  last_used_step BIGINT NULL,
+  failed_attempts INT NOT NULL DEFAULT 0,
+  locked_until DATETIME(3) NULL,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  CONSTRAINT fk_platform_mfa_operator FOREIGN KEY (operator_id) REFERENCES platform_operators(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS platform_mfa_challenges (
+  id VARCHAR(120) PRIMARY KEY,
+  operator_id VARCHAR(90) NOT NULL,
+  expires_at DATETIME(3) NOT NULL,
+  used BOOLEAN NOT NULL DEFAULT FALSE,
+  failed_attempts INT NOT NULL DEFAULT 0,
+  used_at DATETIME(3) NULL,
+  created_at DATETIME(3) NOT NULL,
+  INDEX idx_platform_mfa_challenge_operator(operator_id, expires_at),
+  CONSTRAINT fk_platform_mfa_challenge_operator FOREIGN KEY (operator_id) REFERENCES platform_operators(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS platform_mfa_recovery_codes (
+  id VARCHAR(120) PRIMARY KEY,
+  operator_id VARCHAR(90) NOT NULL,
+  code_hash CHAR(64) NOT NULL,
+  used_at DATETIME(3) NULL,
+  created_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_platform_mfa_recovery_code(operator_id, code_hash),
+  CONSTRAINT fk_platform_mfa_recovery_operator FOREIGN KEY (operator_id) REFERENCES platform_operators(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS platform_roles (
+  id VARCHAR(90) PRIMARY KEY,
+  code VARCHAR(80) NOT NULL UNIQUE,
+  name VARCHAR(120) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  is_protected BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS platform_role_permissions (
+  role_id VARCHAR(90) NOT NULL,
+  permission_code VARCHAR(120) NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  PRIMARY KEY (role_id, permission_code),
+  CONSTRAINT fk_platform_role_permission_role FOREIGN KEY (role_id) REFERENCES platform_roles(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS platform_operator_role_assignments (
+  operator_id VARCHAR(90) NOT NULL,
+  role_id VARCHAR(90) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  granted_at DATETIME(3) NOT NULL,
+  PRIMARY KEY (operator_id, role_id),
+  CONSTRAINT fk_platform_operator_role_operator FOREIGN KEY (operator_id) REFERENCES platform_operators(id),
+  CONSTRAINT fk_platform_operator_role_role FOREIGN KEY (role_id) REFERENCES platform_roles(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS platform_audit_events (
+  id VARCHAR(90) PRIMARY KEY,
+  actor_operator_id VARCHAR(90) NOT NULL,
+  action_code VARCHAR(120) NOT NULL,
+  target_type VARCHAR(60) NOT NULL,
+  target_id VARCHAR(120) NOT NULL,
+  tenant_id VARCHAR(64) NULL,
+  result_status VARCHAR(20) NOT NULL,
+  reason VARCHAR(500) NOT NULL DEFAULT '',
+  request_id VARCHAR(90) NOT NULL DEFAULT '',
+  ip_hash CHAR(64) NOT NULL DEFAULT '',
+  summary_json JSON NULL,
+  created_at DATETIME(3) NOT NULL,
+  INDEX idx_platform_audit_created(created_at, id),
+  INDEX idx_platform_audit_tenant(tenant_id, created_at),
+  CONSTRAINT fk_platform_audit_operator FOREIGN KEY (actor_operator_id) REFERENCES platform_operators(id),
+  CONSTRAINT fk_platform_audit_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  CONSTRAINT chk_platform_audit_status CHECK (result_status IN ('success','rejected','failed'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS tenant_lifecycle_events (
+  id VARCHAR(90) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  event_type VARCHAR(40) NOT NULL,
+  previous_status VARCHAR(20) NOT NULL DEFAULT '',
+  next_status VARCHAR(20) NOT NULL,
+  reason VARCHAR(500) NOT NULL,
+  actor_operator_id VARCHAR(90) NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  INDEX idx_tenant_lifecycle(tenant_id, created_at),
+  CONSTRAINT fk_tenant_lifecycle_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  CONSTRAINT fk_tenant_lifecycle_operator FOREIGN KEY (actor_operator_id) REFERENCES platform_operators(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS support_access_requests (
+  id VARCHAR(90) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  ticket_no VARCHAR(120) NOT NULL,
+  reason VARCHAR(500) NOT NULL,
+  permission_codes_json JSON NOT NULL,
+  requested_minutes INT NOT NULL DEFAULT 15,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  requested_by VARCHAR(90) NOT NULL,
+  reviewed_by VARCHAR(90) NULL,
+  review_note VARCHAR(500) NOT NULL DEFAULT '',
+  reviewed_at DATETIME(3) NULL,
+  expires_at DATETIME(3) NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  INDEX idx_support_request_status(status, created_at),
+  INDEX idx_support_request_tenant(tenant_id, created_at),
+  CONSTRAINT fk_support_request_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  CONSTRAINT fk_support_request_requester FOREIGN KEY (requested_by) REFERENCES platform_operators(id),
+  CONSTRAINT fk_support_request_reviewer FOREIGN KEY (reviewed_by) REFERENCES platform_operators(id),
+  CONSTRAINT chk_support_request_status CHECK (status IN ('pending','approved','rejected','expired','cancelled')),
+  CONSTRAINT chk_support_request_minutes CHECK (requested_minutes BETWEEN 1 AND 60)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS support_sessions (
+  id VARCHAR(90) PRIMARY KEY,
+  request_id VARCHAR(90) NOT NULL UNIQUE,
+  tenant_id VARCHAR(64) NOT NULL,
+  operator_id VARCHAR(90) NOT NULL,
+  permission_codes_json JSON NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  started_at DATETIME(3) NOT NULL,
+  expires_at DATETIME(3) NOT NULL,
+  terminated_at DATETIME(3) NULL,
+  terminated_by VARCHAR(90) NULL,
+  termination_reason VARCHAR(500) NOT NULL DEFAULT '',
+  last_accessed_at DATETIME(3) NULL,
+  access_count BIGINT NOT NULL DEFAULT 0,
+  INDEX idx_support_session_active(operator_id, status, expires_at),
+  INDEX idx_support_session_tenant(tenant_id, started_at),
+  CONSTRAINT fk_support_session_request FOREIGN KEY (request_id) REFERENCES support_access_requests(id),
+  CONSTRAINT fk_support_session_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  CONSTRAINT fk_support_session_operator FOREIGN KEY (operator_id) REFERENCES platform_operators(id),
+  CONSTRAINT fk_support_session_terminator FOREIGN KEY (terminated_by) REFERENCES platform_operators(id),
+  CONSTRAINT chk_support_session_status CHECK (status IN ('active','expired','terminated'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS approval_workflow_definitions (
+  id VARCHAR(90) PRIMARY KEY, tenant_id VARCHAR(64) NOT NULL, code VARCHAR(80) NOT NULL,
+  name VARCHAR(160) NOT NULL, business_type VARCHAR(60) NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'draft',
+  current_version_id VARCHAR(90) NULL, draft_version_id VARCHAR(90) NULL, allow_parallel BOOLEAN NOT NULL DEFAULT FALSE,
+  priority INT NOT NULL DEFAULT 100, is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  created_by VARCHAR(90) NOT NULL, updated_by VARCHAR(90) NOT NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_approval_workflow_code(tenant_id, code), INDEX idx_approval_workflow_status(tenant_id, status),
+  CONSTRAINT fk_approval_workflow_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS approval_workflow_versions (
+  id VARCHAR(90) PRIMARY KEY, tenant_id VARCHAR(64) NOT NULL, definition_id VARCHAR(90) NOT NULL,
+  version_no INT NOT NULL, trigger_config_json JSON NOT NULL, form_schema_json JSON NOT NULL,
+  snapshot_json JSON NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'draft', published_by VARCHAR(90) NULL,
+  published_at DATETIME(3) NULL, created_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_approval_workflow_version(tenant_id, definition_id, version_no),
+  CONSTRAINT fk_approval_version_definition FOREIGN KEY (definition_id) REFERENCES approval_workflow_definitions(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS approval_nodes (
+  id VARCHAR(90) PRIMARY KEY, tenant_id VARCHAR(64) NOT NULL, workflow_version_id VARCHAR(90) NOT NULL,
+  node_type VARCHAR(20) NOT NULL DEFAULT 'approval', name VARCHAR(120) NOT NULL,
+  approver_strategy VARCHAR(40) NOT NULL, approver_config_json JSON NOT NULL,
+  approval_mode VARCHAR(20) NOT NULL DEFAULT 'single', timeout_config_json JSON NOT NULL, sort_order INT NOT NULL,
+  INDEX idx_approval_nodes_version(tenant_id, workflow_version_id, sort_order),
+  CONSTRAINT fk_approval_node_version FOREIGN KEY (workflow_version_id) REFERENCES approval_workflow_versions(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS approval_instances (
+  id VARCHAR(90) PRIMARY KEY, tenant_id VARCHAR(64) NOT NULL, workflow_definition_id VARCHAR(90) NOT NULL,
+  workflow_version_id VARCHAR(90) NOT NULL, business_type VARCHAR(60) NOT NULL, business_id VARCHAR(120) NOT NULL DEFAULT '',
+  applicant_membership_id VARCHAR(90) NOT NULL, applicant_org_unit_id VARCHAR(90) NULL,
+  title VARCHAR(220) NOT NULL, summary VARCHAR(500) NOT NULL DEFAULT '', form_data_json JSON NOT NULL,
+  business_snapshot_json JSON NOT NULL, status VARCHAR(20) NOT NULL, current_node_ids_json JSON NOT NULL,
+  idempotency_key VARCHAR(160) NOT NULL, version_no BIGINT NOT NULL DEFAULT 1,
+  submitted_at DATETIME(3) NOT NULL, completed_at DATETIME(3) NULL, updated_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_approval_instance_idempotency(tenant_id, applicant_membership_id, idempotency_key),
+  INDEX idx_approval_instance_status(tenant_id, status, updated_at),
+  CONSTRAINT fk_approval_instance_workflow FOREIGN KEY (workflow_definition_id) REFERENCES approval_workflow_definitions(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS approval_tasks (
+  id VARCHAR(90) PRIMARY KEY, tenant_id VARCHAR(64) NOT NULL, instance_id VARCHAR(90) NOT NULL, node_id VARCHAR(90) NOT NULL,
+  assignee_membership_id VARCHAR(90) NOT NULL, delegated_from VARCHAR(90) NULL, status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  due_at DATETIME(3) NULL, acted_at DATETIME(3) NULL, version_no BIGINT NOT NULL DEFAULT 1, created_at DATETIME(3) NOT NULL,
+  INDEX idx_approval_task_assignee(tenant_id, assignee_membership_id, status, created_at),
+  CONSTRAINT fk_approval_task_instance FOREIGN KEY (instance_id) REFERENCES approval_instances(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS approval_actions (
+  id VARCHAR(90) PRIMARY KEY, tenant_id VARCHAR(64) NOT NULL, instance_id VARCHAR(90) NOT NULL, task_id VARCHAR(90) NULL,
+  action_type VARCHAR(30) NOT NULL, actor_membership_id VARCHAR(90) NOT NULL, target_membership_id VARCHAR(90) NULL,
+  comment_text VARCHAR(1000) NOT NULL DEFAULT '', idempotency_key VARCHAR(160) NOT NULL, metadata_json JSON NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_approval_action_idempotency(tenant_id, instance_id, action_type, idempotency_key),
+  INDEX idx_approval_action_instance(tenant_id, instance_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS approval_delegations (
+  id VARCHAR(90) PRIMARY KEY, tenant_id VARCHAR(64) NOT NULL, delegator_membership_id VARCHAR(90) NOT NULL,
+  delegate_membership_id VARCHAR(90) NOT NULL, business_type VARCHAR(60) NOT NULL DEFAULT '*',
+  starts_at DATETIME(3) NOT NULL, ends_at DATETIME(3) NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'active', created_at DATETIME(3) NOT NULL,
+  INDEX idx_approval_delegation_active(tenant_id, delegator_membership_id, status, starts_at, ends_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS approval_outbox_events (
+  id VARCHAR(90) PRIMARY KEY, tenant_id VARCHAR(64) NOT NULL, instance_id VARCHAR(90) NOT NULL,
+  event_type VARCHAR(80) NOT NULL, aggregate_type VARCHAR(60) NOT NULL, aggregate_id VARCHAR(120) NOT NULL,
+  payload_json JSON NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'pending', attempt_count INT NOT NULL DEFAULT 0,
+  available_at DATETIME(3) NOT NULL, processed_at DATETIME(3) NULL, last_error VARCHAR(500) NOT NULL DEFAULT '', created_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_approval_outbox_event(instance_id, event_type), INDEX idx_approval_outbox_pending(status, available_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS skill_resources (
+  id VARCHAR(90) PRIMARY KEY,
+  name VARCHAR(160) NOT NULL,
+  category VARCHAR(100) NOT NULL,
+  version VARCHAR(40) NOT NULL DEFAULT '1.0.0',
+  summary VARCHAR(1200) NOT NULL DEFAULT '',
+  usage_guide TEXT,
+  training_guide TEXT,
+  optimization_advice TEXT,
+  acquisition_instructions TEXT,
+  download_url VARCHAR(2048) NOT NULL,
+  extraction_code VARCHAR(64) NOT NULL DEFAULT '',
+  tags_json JSON,
+  author VARCHAR(120) NOT NULL DEFAULT '',
+  license_text VARCHAR(120) NOT NULL DEFAULT '',
+  resource_status VARCHAR(20) NOT NULL DEFAULT 'draft',
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  access_count INT NOT NULL DEFAULT 0,
+  last_accessed_at DATETIME(3) NULL,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  INDEX idx_skill_resources_team_status(team_id, resource_status, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -18,6 +18,7 @@ export default defineConfig({
         target: "http://127.0.0.1:5193",
         ws: true
       },
+      "/uploads": process.env.VITE_API_TARGET || "http://127.0.0.1:4188",
       "/api": process.env.VITE_API_TARGET || "http://127.0.0.1:4188"
     }
   }

@@ -1995,29 +1995,73 @@ test.describe("GoodJob CRM prototype pages", () => {
 
   test("tools OCR recognizes a card and syncs selected fields", async ({ page }) => {
     const company = `Example Trading ${runId} Co., Ltd.`;
-    await apiFromPage(page, "/api/tools/ocr/jobs/current/recognize", {
-      method: "POST",
-      body: {
-        confidence: 92,
-        company,
-        contact: "Test Contact",
-        email: `buyer.${runId}@example-trading.example`,
-        country: "德国"
-      }
+    await page.route("**/api/tools/ocr/jobs/current/recognize-image", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job: {
+            id: "ocr_u_sales_shirley",
+            status: "recognized",
+            confidence: 92,
+            fields: {
+              company,
+              contact: "Test Contact",
+              title: "Purchasing Manager",
+              email: `buyer.${runId}@example-trading.example`,
+              whatsapp: "",
+              wechat: "",
+              phone: "+49 123 456",
+              country: "德国",
+              city: "Hamburg"
+            },
+            ownerId: "u_sales_shirley",
+            teamId: "europe",
+            hasImage: true,
+            imageUrl: "/api/tools/ocr/jobs/current/image"
+          }
+        })
+      });
     });
 
-    await page.reload();
     await openView(page, "tools");
-    await expect(page.locator("#tools .tools-grid")).toBeVisible();
-    await expect(page.locator("#tools .business-card")).toContainText(company);
-    const editedCompany = `OCR 客户-${runId}`;
-    await page.locator("#tools .field-card", { hasText: "公司名" }).locator("input[type='text']").fill(editedCompany);
-    await page.locator("#tools .btn.primary", { hasText: /同步|确认同步/ }).first().click();
+    await page.locator('[data-tool-view="business-card"]').click();
+    await expect(page.locator("#business-card")).toHaveClass(/active/);
 
-    await expect(page.locator("#tools .sync-row").nth(2)).toContainText("已同步");
+    const invalidChooserPromise = page.waitForEvent("filechooser");
+    await page.locator("#ocrLoadButton").click();
+    const invalidChooser = await invalidChooserPromise;
+    await invalidChooser.setFiles({
+      name: "not-an-image.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("not an image")
+    });
+    await expect(page.locator(".toast").last()).toContainText("只支持 PNG、JPG 或 WebP");
+
+    const validPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+    const validChooserPromise = page.waitForEvent("filechooser");
+    await page.locator("#ocrLoadButton").click();
+    const validChooser = await validChooserPromise;
+    await validChooser.setFiles({
+      name: "business-card.png",
+      mimeType: "image/png",
+      buffer: validPng
+    });
+    await expect(page.locator("#ocrUploadBadge")).toContainText("名片已安全加载");
+    await expect(page.locator("#ocrPreviewCard img")).toBeVisible();
+    await expect(page.locator("#business-card .field-card", { hasText: "公司名" }).locator("input[type='text']")).toHaveValue(company);
+    await expect(page.locator("#ocrConfidenceValue")).toHaveText("92%");
+    const editedCompany = `OCR 客户-${runId}`;
+    await page.locator("#business-card .field-card", { hasText: "公司名" }).locator("input[type='text']").fill(editedCompany);
+    await page.locator("#ocrSyncButton").click();
+
+    await expect(page.locator("#business-card .sync-row").nth(2)).toContainText("已同步");
     await expect(page.locator(".toast").last()).toContainText("OCR 线索已同步");
     const leads = await apiFromPage<{ leads: Array<{ company: string }> }>(page, "/api/leads");
     expect(leads.leads.some((lead) => lead.company === editedCompany)).toBe(true);
+
+    await page.locator("#ocrRemoveButton").click();
+    await expect(page.locator("#ocrPreviewCard")).toContainText("尚未加载名片");
   });
 
   test("tools website reference registration stays blocked until authoritative identity resolution", async ({ page }) => {

@@ -16,6 +16,8 @@ const denied = [
   "/api/internal-messages/recipients",
   "/api/prospect-list/assignees",
   "/api/whatsapp/binding/web-scan/start",
+  "/api/integrations/catalog",
+  "/api/integrations/tools/tool_a/test",
   "/api/agent/plan",
   "/api/agent/runs/one",
   "/api/agent/api/request"

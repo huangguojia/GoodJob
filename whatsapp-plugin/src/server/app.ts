@@ -6,7 +6,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import helmet from "helmet";
 import pino from "pino";
 import { z, ZodError } from "zod";
-import { E164_PHONE_PATTERN, isE164PhoneNumber, type ContactOrigin, type CrmSandboxContact } from "../shared/types.js";
+import { E164_PHONE_PATTERN, isE164PhoneNumber, type CommercialReadinessCheck, type ContactOrigin, type CrmSandboxContact } from "../shared/types.js";
 import type { AppConfig } from "./config.js";
 import { createDatabase, type Database } from "./db/database.js";
 import { migrate } from "./db/migrate.js";
@@ -21,7 +21,10 @@ import { RealtimeHub } from "./realtime.js";
 import { EncryptionService } from "./security/encryption.js";
 import { TranslationService } from "./services/translation.js";
 import { MediaStorageService } from "./services/media-storage.js";
+import { ConversationIntelligenceService } from "./services/conversation-intelligence.js";
 import { requireCrmAuth } from "./crm-auth.js";
+import { AutomationRhythmService } from "./services/automation-rhythm.js";
+import { historyMessageId, parseWhatsAppHistory, previewWhatsAppHistory } from "./services/whatsapp-history-import.js";
 
 export interface AppRuntime {
   app: Express;
@@ -192,6 +195,7 @@ const beginHttpClose = (server: HttpServer): Promise<void> => {
 export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   const demoProviderEnabled = config.enableDemoProvider ?? config.nodeEnv !== "production";
   const autoMigrate = config.autoMigrate ?? config.nodeEnv !== "production";
+  const officialOnly = config.officialOnly ?? config.nodeEnv === "production";
   if (config.seedDemo && !demoProviderEnabled) throw new Error("Demo seed requires the Demo Provider to be enabled");
   if (config.nodeEnv === "production") {
     if (config.databaseClient !== "mysql") throw new Error("DATABASE_CLIENT must be mysql in production");
@@ -200,6 +204,7 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     }
     if (config.seedDemo || demoProviderEnabled) throw new Error("Demo features must be disabled in production");
     if (autoMigrate) throw new Error("AUTO_MIGRATE must be false in production");
+    if (!officialOnly) throw new Error("WHATSAPP_OFFICIAL_ONLY must be true in production");
     const graphBaseUrl = config.metaGraphBaseUrl?.replace(/\/+$/u, "");
     if (graphBaseUrl && graphBaseUrl !== "https://graph.facebook.com") {
       throw new Error("META_GRAPH_BASE_URL must use https://graph.facebook.com in production");
@@ -227,6 +232,7 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   if (autoMigrate) await migrate(database);
   const repository = new Repository(database);
   await seed(database, repository, config);
+  if (officialOnly) await repository.enforceOfficialIntegrationPreference();
   if (config.seedDemo && demoProviderEnabled) await seedDemoData(database, repository, config);
   const encryption = await EncryptionService.create(config);
   const mediaStorage = new MediaStorageService(
@@ -238,10 +244,12 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   const server = createServer(app);
   const realtime = new RealtimeHub(server, config);
   const translation = new TranslationService(repository, encryption, realtime, config);
+  const intelligence = new ConversationIntelligenceService(repository, realtime, translation);
+  const automation = new AutomationRhythmService(repository, intelligence, config.crmBaseUrl ?? "http://127.0.0.1:4188", config.crmJwtSecret);
   const demo = new DemoProvider(repository, realtime, translation);
   const baileys = new BaileysProvider(repository, encryption, realtime, translation, config);
-  const meta = new MetaProvider(repository, encryption, realtime, translation, config);
-  const providers = new ProviderManager(repository, demo, baileys, meta, demoProviderEnabled);
+  const meta = new MetaProvider(repository, encryption, realtime, translation, config, intelligence);
+  const providers = new ProviderManager(repository, demo, baileys, meta, demoProviderEnabled, officialOnly);
   const cleanupExpiredMedia = async (): Promise<void> => {
     const expired = await repository.listExpiredMessageMedia();
     for (const item of expired) {
@@ -254,6 +262,7 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     void cleanupExpiredMedia().catch(() => undefined);
   }, 60 * 60 * 1_000);
   mediaCleanupTimer.unref();
+  await automation.start();
   let shuttingDown = false;
   let closePromise: Promise<void> | null = null;
 
@@ -406,13 +415,61 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   app.get("/api/v1/capabilities", (_request, response) => {
     response.json({
       demoProviderEnabled,
+      officialOnly,
       providers: {
         demo: demoProviderEnabled,
-        baileys: true,
+        baileys: !officialOnly,
         meta: true
       }
     });
   });
+
+  app.get("/api/v1/commercial-readiness", asyncRoute(async (request, response) => {
+    const ownerUserId = request.crmIdentity!.userId;
+    const [accounts, apps, configurations, providersList, preference, automationSettings, crm, retention] = await Promise.all([
+      repository.listAccounts(ownerUserId),
+      repository.listMetaApps(ownerUserId),
+      repository.listMetaConfigurations(ownerUserId),
+      repository.listAiProfiles(ownerUserId),
+      repository.getIntegrationPreference(ownerUserId),
+      repository.getAutomationSettings(ownerUserId),
+      automation.checkCrm(ownerUserId),
+      repository.getMediaRetentionPolicy(ownerUserId)
+    ]);
+    const metaAccounts = accounts.filter((account) => account.provider === "meta");
+    const configuredMetaAccountIds = new Set(configurations.map((configuration) => configuration.accountId));
+    const connectedMeta = metaAccounts.filter((account) => account.status === "connected" && configuredMetaAccountIds.has(account.id));
+    const verifiedMetaConfigurations = configurations.filter((configuration) => Boolean(configuration.lastVerifiedAt));
+    const webhookReceived = configurations.some((configuration) => Boolean(configuration.lastWebhookAt));
+    const testedProvider = providersList.find((provider) => provider.lastTestStatus === "success");
+    const publicOrigin = (() => {
+      try {
+        const url = new URL(config.webOrigin);
+        return url.protocol === "https:" && !["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+      } catch { return false; }
+    })();
+    const checks: CommercialReadinessCheck[] = [
+      { key: "crm_auth", label: "CRM 身份与权限", detail: "当前请求已通过 GoodJob CRM 会话身份验证。", status: "pass", actionView: null },
+      { key: "crm_adapter", label: "CRM 待办与站内信通道", detail: crm.ok ? "即刻沟通可以使用当前用户身份访问 CRM。" : crm.error ?? "CRM 连接失败。", status: crm.ok ? "pass" : "blocking", actionView: "diagnostics" },
+      { key: "official_strategy", label: "官方通道策略", detail: preference.defaultProvider === "meta" ? "新账号默认使用 Meta 官方通道。" : "当前仍默认创建免费通道账号，正式上线建议切换为官方优先。", status: preference.defaultProvider === "meta" ? "pass" : "warning", actionView: "access" },
+      { key: "meta_app", label: "Meta App 密钥", detail: apps.length ? `已加密保存 ${apps.length} 个 Meta App。` : "尚未保存 Meta App、App Secret 与 Verify Token。", status: apps.length ? "pass" : "blocking", actionView: "access" },
+      { key: "meta_account", label: "Meta 号码与 Token", detail: configurations.length ? `已配置 ${configurations.length} 个官方号码。` : "尚未绑定 WABA、Phone Number ID 与 Access Token。", status: configurations.length ? "pass" : "blocking", actionView: "access" },
+      { key: "meta_connection", label: "Graph API 连接", detail: connectedMeta.length && verifiedMetaConfigurations.length ? `${connectedMeta.length} 个 Meta 账号已配置且最近验证通过。` : "尚无同时完成号码配置与 Graph API 验证的 Meta 官方账号。", status: connectedMeta.length && verifiedMetaConfigurations.length ? "pass" : "blocking", actionView: "accounts" },
+      { key: "public_https", label: "公网 HTTPS 回调", detail: publicOrigin ? `${config.webOrigin} 可作为生产 HTTPS Origin。` : "当前 Origin 不是公网 HTTPS 地址，注册 Meta Webhook 前需配置正式域名或安全隧道。", status: publicOrigin ? "pass" : "blocking", actionView: "access" },
+      { key: "webhook", label: "真实 Webhook 入站", detail: webhookReceived ? "已收到并验证过 Meta Webhook。" : "尚未收到真实 Meta Webhook，接入后需完成一条测试消息。", status: webhookReceived ? "pass" : "blocking", actionView: "access" },
+      { key: "ai_intelligence", label: "客户 AI 深度分析", detail: automationSettings.intelligenceMode === "ai" && testedProvider ? `已使用通过测试的 ${testedProvider.name}。` : testedProvider ? "Provider 已通过测试，可在自动化节奏中启用 AI 深度分析。" : "当前使用规则分析；商业使用前建议配置并测试 AI Provider。", status: automationSettings.intelligenceMode === "ai" && testedProvider ? "pass" : "warning", actionView: automationSettings.intelligenceMode === "ai" ? "ai" : "automation" },
+      { key: "automation", label: "周期分析与每日通知", detail: automationSettings.enabled ? `自动运行已启用，最近状态：${automationSettings.lastRunStatus}。` : "自动化已暂停，不会周期分析或生成每日待办。", status: automationSettings.enabled && automationSettings.lastRunStatus !== "failed" ? "pass" : "blocking", actionView: "automation" },
+      { key: "production_database", label: "即刻沟通生产数据库", detail: database.kind === "mysql" ? "即刻沟通已运行在目标 MySQL 数据库。" : `当前使用 ${database.kind}，仅适合本地验证，商业运行必须切换至 MySQL。`, status: database.kind === "mysql" ? "pass" : "blocking", actionView: "diagnostics" },
+      { key: "retention", label: "附件数据保留", detail: retention.mode === "immediate" ? "附件发送后立即清理本地副本。" : `附件本地副本保留 ${retention.days} 天。`, status: "pass", actionView: "accounts" }
+    ];
+    const registrationKeys = new Set(["crm_auth", "crm_adapter", "meta_app", "meta_account", "meta_connection", "public_https"]);
+    response.json({
+      readyForMetaRegistration: checks.filter((check) => registrationKeys.has(check.key)).every((check) => check.status !== "blocking"),
+      readyForCommercialUse: checks.every((check) => check.status !== "blocking"),
+      checkedAt: new Date().toISOString(),
+      checks
+    });
+  }));
 
   app.get(
     "/api/v1/integration/preference",
@@ -423,7 +480,15 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   app.put(
     "/api/v1/integration/preference",
     asyncRoute(async (request, response) => {
-      const preference = await repository.updateIntegrationPreference(integrationPreferenceSchema.parse(request.body), request.crmIdentity!.userId);
+      const input = integrationPreferenceSchema.parse(request.body);
+      if (officialOnly && (input.strategy === "free_first" || input.defaultProvider === "baileys")) {
+        throw new DomainError(
+          "UNOFFICIAL_PROVIDER_DISABLED",
+          403,
+          "This runtime accepts official WhatsApp channels only; use Meta as the default provider"
+        );
+      }
+      const preference = await repository.updateIntegrationPreference(input, request.crmIdentity!.userId);
       await repository.audit("integration.preference.updated", "integration", "default", "success", preference);
       realtime.publish("integration.preference.changed", null, preference);
       response.json(preference);
@@ -476,6 +541,13 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
       const input = accountSchema.parse(request.body);
       if (input.provider === "demo" && !demoProviderEnabled) {
         throw new DomainError("DEMO_PROVIDER_DISABLED", 403, "Demo Provider is disabled in this environment");
+      }
+      if (input.provider === "baileys" && officialOnly) {
+        throw new DomainError(
+          "UNOFFICIAL_PROVIDER_DISABLED",
+          403,
+          "Baileys account creation is disabled because this runtime accepts official WhatsApp channels only"
+        );
       }
       if (input.provider === "baileys" && !input.riskAccepted) {
         response.status(400).json({ error: "创建 Baileys 账号前必须确认非官方通道风险" });
@@ -634,6 +706,64 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
       response.json(await repository.listConversations(accountId, request.crmIdentity!.userId));
     })
   );
+  app.post("/api/v1/imports/whatsapp-text/preview", asyncRoute(async (request, response) => {
+    const input = z.object({
+      content: z.string().min(1).max(1_500_000),
+      dateOrder: z.enum(["dmy", "mdy"]).default("dmy")
+    }).parse(request.body);
+    const preview = previewWhatsAppHistory(input.content, input.dateOrder);
+    if (!preview.messageCount) throw new DomainError("WHATSAPP_HISTORY_EMPTY", 422, "没有识别到 WhatsApp 聊天消息，请检查导出格式和日期顺序");
+    response.json(preview);
+  }));
+  app.post("/api/v1/imports/whatsapp-text", asyncRoute(async (request, response) => {
+    const input = z.object({
+      accountId: z.string().uuid(),
+      phone: z.string().trim(),
+      displayName: z.string().trim().min(1).max(180),
+      customerSender: z.string().trim().min(1).max(180),
+      content: z.string().min(1).max(1_500_000),
+      dateOrder: z.enum(["dmy", "mdy"]).default("dmy")
+    }).parse(request.body);
+    if (!isE164PhoneNumber(input.phone)) throw new DomainError("PHONE_INVALID", 400, "客户号码必须使用 E.164 格式，例如 +491234567890");
+    const account = await ownedAccount(request, input.accountId);
+    const parsed = parseWhatsAppHistory(input.content, input.dateOrder);
+    if (!parsed.messages.length) throw new DomainError("WHATSAPP_HISTORY_EMPTY", 422, "没有识别到可导入的聊天消息");
+    if (!parsed.messages.some((message) => message.sender === input.customerSender)) throw new DomainError("WHATSAPP_HISTORY_SENDER_NOT_FOUND", 422, "所选客户名称不存在于导出记录中");
+    const contact = await repository.upsertContact({
+      accountId: account.id,
+      providerContactId: `history:${input.phone.replace(/\D/gu, "")}`,
+      displayName: input.displayName,
+      phone: input.phone,
+      source: account.provider,
+      origin: "history_import"
+    });
+    const conversation = await repository.ensureConversationForContact(contact.id);
+    let imported = 0;
+    let duplicates = 0;
+    for (const message of parsed.messages) {
+      const providerMessageId = historyMessageId({ accountId: account.id, phone: input.phone, message });
+      if (await repository.findMessageByIdempotency(account.id, providerMessageId)) {
+        duplicates += 1;
+        continue;
+      }
+      await repository.createMessage({
+        accountId: account.id,
+        conversationId: conversation.id,
+        providerMessageId,
+        direction: message.sender === input.customerSender ? "inbound" : "outbound",
+        body: message.body,
+        status: "read",
+        occurredAt: message.occurredAt
+      });
+      imported += 1;
+    }
+    await repository.markConversationRead(conversation.id);
+    const intelligenceResult = await intelligence.analyzeConversation(conversation.id);
+    realtime.publish("contact.upserted", account.id, contact);
+    realtime.publish("conversation.upserted", account.id, await repository.getConversation(conversation.id));
+    await repository.audit("whatsapp.history.imported", "conversation", conversation.id, "success", { imported, duplicates, parsed: parsed.messages.length });
+    response.status(201).json({ contact, conversation: await repository.getConversation(conversation.id), imported, duplicates, parsed: parsed.messages.length, analysis: intelligenceResult.analysis });
+  }));
   app.get(
     "/api/v1/conversations/:id/messages",
     asyncRoute(async (request, response) => {
@@ -644,6 +774,92 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
       }
       await repository.markConversationRead(conversation.id);
       response.json(await repository.listMessages(conversation.id, request.crmIdentity!.userId));
+    })
+  );
+  app.get(
+    "/api/v1/conversations/:id/intelligence",
+    asyncRoute(async (request, response) => {
+      const conversationId = routeParam(request.params.id);
+      const conversation = await repository.getConversation(conversationId, request.crmIdentity!.userId);
+      if (!conversation) throw new DomainError("CONVERSATION_NOT_FOUND", 404, "Conversation not found");
+      response.json(await intelligence.getConversationIntelligence(conversationId, request.crmIdentity!.userId));
+    })
+  );
+  app.get("/api/v1/automation/settings", asyncRoute(async (request, response) => {
+    response.json(await automation.get(request.crmIdentity!.userId));
+  }));
+  app.put("/api/v1/automation/settings", asyncRoute(async (request, response) => {
+    const input = z.object({
+      analysisIntervalHours: z.number().int().min(1).max(168),
+      intelligenceMode: z.enum(["rules", "ai"]),
+      intelligenceProviderId: z.string().uuid().nullable(),
+      dailyTodoHour: z.number().int().min(0).max(23),
+      dailyTodoMinute: z.number().int().min(0).max(59),
+      timezone: z.string().trim().min(1).max(64),
+      enabled: z.boolean()
+    }).parse(request.body);
+    if (input.intelligenceMode === "ai") {
+      if (!input.intelligenceProviderId) throw new DomainError("INTELLIGENCE_PROVIDER_REQUIRED", 409, "AI 深度分析需要选择 Provider");
+      if (!(await repository.getAiProfile(input.intelligenceProviderId, request.crmIdentity!.userId))) {
+        throw new DomainError("AI_PROVIDER_NOT_FOUND", 404, "AI Provider not found");
+      }
+    }
+    response.json(await automation.update(request.crmIdentity!.userId, input));
+  }));
+  app.post("/api/v1/automation/run", asyncRoute(async (request, response) => {
+    response.json(await automation.runNow(request.crmIdentity!.userId));
+  }));
+  app.get("/api/v1/automation/runs", asyncRoute(async (request, response) => {
+    const limit = typeof request.query.limit === "string" ? Number(request.query.limit) : 12;
+    response.json(await repository.listAutomationRuns(request.crmIdentity!.userId, Number.isFinite(limit) ? limit : 12));
+  }));
+  app.get("/api/v1/automation/deliveries", asyncRoute(async (request, response) => {
+    const limit = Number(request.query.limit ?? 30);
+    response.json(await repository.listAutomationDeliveries(request.crmIdentity!.userId, Number.isFinite(limit) ? limit : 30));
+  }));
+  app.post(
+    "/api/v1/conversations/:id/intelligence/analyze",
+    asyncRoute(async (request, response) => {
+      const conversationId = routeParam(request.params.id);
+      const conversation = await repository.getConversation(conversationId, request.crmIdentity!.userId);
+      if (!conversation) throw new DomainError("CONVERSATION_NOT_FOUND", 404, "Conversation not found");
+      const result = await intelligence.analyzeConversation(conversationId);
+      await repository.audit("conversation.analysis.generated", "conversation", conversationId, "success", {
+        sourceMessageCount: result.analysis.sourceMessageCount,
+        followupCount: result.followups.length
+      });
+      response.json(result);
+    })
+  );
+  app.put("/api/v1/conversations/:id/intelligence/feedback", asyncRoute(async (request, response) => {
+    const conversationId = routeParam(request.params.id);
+    const conversation = await repository.getConversation(conversationId, request.crmIdentity!.userId);
+    if (!conversation) throw new DomainError("CONVERSATION_NOT_FOUND", 404, "Conversation not found");
+    const input = z.object({ traitKey: z.string().trim().min(1).max(100).regex(/^[a-z0-9_-]+$/i), traitLabel: z.string().trim().min(1).max(180), verdict: z.enum(["confirmed", "rejected"]), correctionText: z.string().trim().max(500).optional() }).parse(request.body);
+    await repository.saveConversationTraitFeedback({ conversationId, ...input, actorUserId: request.crmIdentity!.userId });
+    await intelligence.analyzeConversation(conversationId);
+    await repository.audit("conversation.trait.feedback", "conversation", conversationId, "success", { traitKey: input.traitKey, verdict: input.verdict });
+    response.json(await intelligence.getConversationIntelligence(conversationId, request.crmIdentity!.userId));
+  }));
+  app.delete("/api/v1/conversations/:id/intelligence/feedback/:traitKey", asyncRoute(async (request, response) => {
+    const conversationId = routeParam(request.params.id);
+    const conversation = await repository.getConversation(conversationId, request.crmIdentity!.userId);
+    if (!conversation) throw new DomainError("CONVERSATION_NOT_FOUND", 404, "Conversation not found");
+    const deleted = await repository.deleteConversationTraitFeedback(conversationId, routeParam(request.params.traitKey), request.crmIdentity!.userId);
+    if (!deleted) throw new DomainError("TRAIT_FEEDBACK_NOT_FOUND", 404, "Trait feedback not found");
+    await repository.restoreConversationFollowupsByTraitKey(conversationId, routeParam(request.params.traitKey));
+    await intelligence.analyzeConversation(conversationId);
+    await repository.audit("conversation.trait.feedback.removed", "conversation", conversationId, "success", { traitKey: routeParam(request.params.traitKey) });
+    response.json(await intelligence.getConversationIntelligence(conversationId, request.crmIdentity!.userId));
+  }));
+  app.patch(
+    "/api/v1/followups/:id",
+    asyncRoute(async (request, response) => {
+      const input = z.object({ status: z.enum(["pending", "completed", "dismissed"]) }).parse(request.body);
+      const followup = await repository.updateConversationFollowupStatus(routeParam(request.params.id), input.status, request.crmIdentity!.userId);
+      if (!followup) throw new DomainError("FOLLOWUP_NOT_FOUND", 404, "Follow-up item not found");
+      await repository.audit("conversation.followup.updated", "followup", followup.id, "success", { status: followup.status });
+      response.json(followup);
     })
   );
   app.post(
@@ -919,22 +1135,42 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   app.post(
     "/api/v1/crm/contacts/:id/import",
     asyncRoute(async (request, response) => {
-      const input = z.object({ accountId: z.string().uuid() }).parse(request.body);
+      const input = z.object({
+        accountId: z.string().uuid(),
+        externalContact: z.object({
+          id: z.string().trim().min(1).max(191),
+          name: z.string().trim().min(1).max(120),
+          phone: z.string().trim().regex(E164_PHONE_PATTERN)
+        }).optional()
+      }).parse(request.body);
       await ownedAccount(request, input.accountId);
-      const crmContact = await repository.getCrmContact(routeParam(request.params.id), request.crmIdentity!.userId);
+      const crmContact = input.externalContact
+        ? {
+            id: input.externalContact.id,
+            phone: input.externalContact.phone,
+            name: input.externalContact.name,
+            source: "goodjob_crm",
+            sourceContactId: input.externalContact.id,
+            createdAt: new Date().toISOString()
+          }
+        : await repository.getCrmContact(routeParam(request.params.id), request.crmIdentity!.userId);
       if (!crmContact) {
         response.status(404).json({ error: "CRM contact not found" });
         return;
       }
-      response.status(201).json(
-        await provisionContact({
-          accountId: input.accountId,
-          displayName: crmContact.name,
-          phone: crmContact.phone,
-          origin: "crm_import",
-          existingCrmContact: crmContact
-        })
-      );
+      const provisioned = await provisionContact({
+        accountId: input.accountId,
+        displayName: crmContact.name,
+        phone: crmContact.phone,
+        origin: "crm_import",
+        existingCrmContact: crmContact
+      });
+      if (input.externalContact) {
+        const linked = await repository.upsertExternalCrmContact(provisioned.contact.id, input.externalContact);
+        response.status(201).json({ ...provisioned, contact: (await repository.getContact(provisioned.contact.id, request.crmIdentity!.userId))!, crmContact: linked });
+        return;
+      }
+      response.status(201).json(provisioned);
     })
   );
   app.post(
@@ -1029,10 +1265,14 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
 
   const accounts = await repository.listAccounts();
   for (const account of accounts) realtime.registerAccountOwner(account.id, account.ownerUserId);
+  const recoveredMetaWebhooks = await meta.recoverPendingWebhookEvents();
+  if (recoveredMetaWebhooks.failed > 0) {
+    logger.warn({ recoveredMetaWebhooks }, "some Meta webhook events remain failed after startup recovery");
+  }
   await Promise.all(
     accounts.map(async (account) => {
       if (demoProviderEnabled && account.provider === "demo" && account.status === "connected") await demo.connect(account.id);
-      if (account.provider === "baileys" && !["unconfigured", "logged_out"].includes(account.status)) {
+      if (!officialOnly && account.provider === "baileys" && !["unconfigured", "logged_out"].includes(account.status)) {
         void baileys.connect(account.id).catch((error) => {
           logger.warn(
             { accountId: account.id, provider: "baileys", errorType: error instanceof Error ? error.name : typeof error },
@@ -1058,6 +1298,7 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     closePromise = (async () => {
       const httpClose = beginHttpClose(server);
       try {
+        await automation.close();
         await realtime.close();
         await httpClose;
       } finally {

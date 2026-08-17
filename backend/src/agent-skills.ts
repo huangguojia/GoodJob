@@ -15,7 +15,16 @@ const skillManifestSchema = z.object({
   triggers: z.array(z.string().min(1).max(120)).max(50).default([]),
   keywords: z.array(z.string().min(1).max(80)).max(100).default([]),
   modules: z.array(z.string().min(1).max(80)).max(50).default([]),
-  toolRefs: z.array(z.string().min(1).max(120)).max(100).default([])
+  toolRefs: z.array(z.string().min(1).max(120)).max(100).default([]),
+  sourceType: z.enum(["builtin", "download", "repository", "marketplace", "manual"]).default("builtin"),
+  acquisitionMethod: z.string().max(500).default("系统内置"),
+  downloadUrl: z.string().trim().max(2048).refine((value) => !value || /^https:\/\//iu.test(value), "downloadUrl 必须使用 HTTPS").default(""),
+  extractionCode: z.string().max(64).default(""),
+  installCommand: z.string().max(1000).default(""),
+  acquisitionInstructions: z.string().max(3000).default(""),
+  homepageUrl: z.string().trim().max(2048).refine((value) => !value || /^https:\/\//iu.test(value), "homepageUrl 必须使用 HTTPS").default(""),
+  author: z.string().max(120).default("GoodJob"),
+  license: z.string().max(120).default("内部使用")
 }).strict();
 
 export interface AgentSkill extends z.infer<typeof skillManifestSchema> {
@@ -248,6 +257,15 @@ export function publicAgentSkill(skill: AgentSkill, detail = false) {
     keywords: skill.keywords,
     modules: skill.modules,
     toolRefs: skill.toolRefs,
+    sourceType: skill.sourceType,
+    acquisitionMethod: skill.acquisitionMethod,
+    downloadUrl: skill.downloadUrl,
+    extractionCode: skill.extractionCode,
+    installCommand: skill.installCommand,
+    acquisitionInstructions: skill.acquisitionInstructions,
+    homepageUrl: skill.homepageUrl,
+    author: skill.author,
+    license: skill.license,
     directory: skill.directory,
     ...(detail ? { instructions: skill.instructions } : {})
   };

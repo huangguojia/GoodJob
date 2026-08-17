@@ -8,11 +8,13 @@ const pluginBasePath = import.meta.env.BASE_URL.replace(/\/$/u, "");
 
 export const queryKeys = {
   health: ["health"] as const,
+  commercialReadiness: ["commercial-readiness"] as const,
   capabilities: ["capabilities"] as const,
   accounts: ["accounts"] as const,
   contacts: (accountId?: string) => ["contacts", accountId ?? "all"] as const,
   conversations: (accountId?: string) => ["conversations", accountId ?? "all"] as const,
   messages: (conversationId?: string) => ["messages", conversationId ?? "none"] as const,
+  intelligence: (conversationId?: string) => ["intelligence", conversationId ?? "none"] as const,
   preference: ["translation-preference"] as const,
   aiProviders: ["ai-providers"] as const,
   integrationPreference: ["integration-preference"] as const,
@@ -20,7 +22,11 @@ export const queryKeys = {
   metaApps: ["meta-apps"] as const,
   metaConfigurations: ["meta-configurations"] as const,
   routingRules: ["routing-rules"] as const,
-  crmContacts: ["crm-contacts"] as const
+  crmContacts: ["crm-contacts"] as const,
+  crmCustomers: ["crm-customers"] as const,
+  crmTodos: ["crm-todos"] as const,
+  automation: ["automation"] as const,
+  automationRuns: ["automation-runs"] as const
 };
 
 export function useAccounts() {
@@ -53,6 +59,9 @@ export function useRealtimeInvalidation(onEvent?: (event: RealtimeEvent) => void
       if (event.eventType.startsWith("message.") || event.eventType.startsWith("translation.")) {
         void queryClient.invalidateQueries({ queryKey: ["messages"] });
         void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      }
+      if (event.eventType.startsWith("conversation.analysis.")) {
+        void queryClient.invalidateQueries({ queryKey: ["intelligence"] });
       }
       if (event.eventType.startsWith("contact.") || event.eventType.startsWith("crm.")) {
         void queryClient.invalidateQueries({ queryKey: ["contacts"] });

@@ -6,6 +6,7 @@ import zhLocale from "i18n-iso-countries/langs/zh.json";
 import { feature } from "topojson-client";
 import type { Feature, FeatureCollection, MultiPolygon, Polygon } from "geojson";
 import type { GeometryCollection, Topology } from "topojson-specification";
+import type { MeshPhongMaterial } from "three";
 import countriesTopology from "world-atlas/countries-110m.json";
 
 export type ProspectRadarFrameKind = "source" | "candidate" | "evidence" | "relation" | "verification" | "complete";
@@ -425,7 +426,7 @@ export function createProspectRadar(options: ProspectRadarOptions): ProspectRada
     .htmlTransitionDuration(reducedMotion ? 0 : 240)
     .htmlElement((item) => companyMarker(item as RadarPoint));
 
-  const globeMaterial = globe.globeMaterial();
+  const globeMaterial = globe.globeMaterial() as MeshPhongMaterial;
   globeMaterial.color.set("#102b22");
   globeMaterial.emissive.set("#0d241c");
   globeMaterial.emissiveIntensity = 0.7;

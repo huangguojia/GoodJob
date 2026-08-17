@@ -2,13 +2,10 @@ type Role = "sales" | "manager" | "admin" | "super_admin";
 type DashboardPeriod = "today" | "week" | "month";
 
 import * as XLSX from "xlsx";
-import * as echarts from "echarts/core";
+import * as echarts from "echarts";
 import isoCountries from "i18n-iso-countries";
 import enCountries from "i18n-iso-countries/langs/en.json";
 import zhCountries from "i18n-iso-countries/langs/zh.json";
-import { LineChart } from "echarts/charts";
-import { GridComponent, TooltipComponent } from "echarts/components";
-import { SVGRenderer } from "echarts/renderers";
 import {
   isLeadSourceExecutable,
   isLeadSourceAutoSelected,
@@ -32,8 +29,8 @@ import {
   type MysqlDumpBatch,
   type MysqlDumpPlan
 } from "./mysql-dump-import";
+import { mountIntegrationCenter, type IntegrationCenterController } from "./integrations/integration-center";
 
-echarts.use([LineChart, GridComponent, TooltipComponent, SVGRenderer]);
 isoCountries.registerLocale(enCountries);
 isoCountries.registerLocale(zhCountries);
 const countryFlagAssets = Object.fromEntries(Object.entries(import.meta.glob(
@@ -50,6 +47,8 @@ let customerMapLoading = false;
 let prospectRadarController: ProspectRadarController | null = null;
 let prospectRadarActiveJobId = "";
 let prospectRadarLoading = false;
+let integrationCenterController: IntegrationCenterController | null = null;
+let examTimerHandle: number | null = null;
 const DASHBOARD_LIVE_REFRESH_MS = 10_000;
 
 interface User {
@@ -57,6 +56,9 @@ interface User {
   name: string;
   email: string;
   role: Role;
+  iamRoleNames?: string[];
+  iamSource?: "iam" | "legacy_compatibility" | "platform";
+  iamPermissions?: Record<string, string[]>;
   teamId: string;
   avatar: string;
   outboundEmail?: string;
@@ -67,26 +69,265 @@ interface User {
   smtpSecure?: boolean;
   smtpUser?: string;
   hasSmtpPassword?: boolean;
+  imapHost?: string;
+  imapPort?: number;
+  imapSecure?: boolean;
+  imapUser?: string;
+  hasImapPassword?: boolean;
+  inboundSyncEnabled?: boolean;
+  lastInboundSyncAt?: string;
+  lastInboundSyncStatus?: "ok" | "error" | "";
+  lastInboundSyncError?: string;
   lastDevelopmentEmailAt?: string;
   lastDevelopmentEmailTo?: string;
   lastDevelopmentEmailSubject?: string;
+  theme?: string;
+}
+
+type AccessControlPage = "members" | "organization" | "roles" | "authorization" | "audit";
+type AccessControlScope = "none" | "self" | "org_unit" | "org_subtree" | "tenant" | "public_pool" | "platform";
+
+interface AccessControlOverview {
+  foundation: {
+    schemaVersion: string;
+    mode: "legacy_compatibility" | "iam";
+    permissionCount: number;
+  };
+  companies: Array<{ id: string; name: string; memberCount: number }>;
+  company: { id: string; name: string } | null;
+  metrics: {
+    memberCount: number;
+    activeMemberCount: number;
+    roleCount: number;
+    organizationUnitCount: number;
+    unassignedMemberCount: number;
+  } | null;
+  organizationUnits: Array<{
+    id: string;
+    parentId: string;
+    name: string;
+    type: "company" | "department" | "team" | "unassigned";
+    memberCount: number;
+    status?: "active" | "disabled";
+    code?: string;
+  }>;
+  roles: Array<{
+    id: string;
+    code: string;
+    name: string;
+    summary?: string;
+    description?: string;
+    memberCount: number;
+    permissionCount: number;
+    moduleCount: number;
+    source: string;
+    status?: "draft" | "active" | "disabled";
+    is_protected?: boolean;
+  }>;
+  permissions: Array<{
+    code: string;
+    module: string;
+    name: string;
+    riskLevel: "normal" | "sensitive" | "high" | "critical";
+    scopeModes?: AccessControlScope[];
+    grants: Record<string, AccessControlScope>;
+  }>;
+  members: Array<{
+    id: string;
+    membershipId?: string;
+    name: string;
+    email: string;
+    avatar: string;
+    status: "active" | "disabled";
+    roleId: string;
+    roleCode: string;
+    roleName: string;
+    employeeNo?: string;
+    title?: string;
+    organizationUnitId: string;
+    organizationUnitName: string;
+    roleIds?: string[];
+    temporaryGrants?: Array<{ id: string; permissionCode: string; scopeMode: AccessControlScope; validUntil: string; reason: string }>;
+  }>;
+}
+
+interface AccessAuditEvent {
+  id: string;
+  actorIdentityId: string;
+  targetType: string;
+  targetId: string;
+  actionCode: string;
+  impactSummary: string;
+  resultStatus: string;
+  createdAt: string;
+}
+
+interface IamCapabilitySnapshot {
+  schemaVersion: string;
+  tenantId: string;
+  membershipId: string;
+  revision: string;
+  source: "iam" | "legacy_compatibility" | "platform";
+  permissions: Record<string, Array<"self" | "org_unit" | "org_subtree" | "tenant" | "public_pool">>;
+  roleNames: string[];
+  generatedAt: string;
+}
+
+interface PlatformTenant {
+  id: string;
+  code: string;
+  name: string;
+  status: "trial" | "active" | "suspended" | "closed";
+  planCode: string;
+  seatLimit: number;
+  memberCount: number;
+  activeMemberCount: number;
+  authorizationRevision: number;
+  trialExpiresAt: string;
+  createdAt: string;
+}
+
+interface PlatformSupportRequest {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  ticketNo: string;
+  reason: string;
+  permissionCodes: string[];
+  requestedMinutes: number;
+  status: "pending" | "approved" | "rejected" | "expired" | "cancelled";
+  requestedByUserId: string;
+  reviewedByUserId: string;
+  reviewNote: string;
+  createdAt: string;
+  expiresAt: string;
+  session: null | { id: string; status: "active" | "expired" | "terminated"; accessCount: number; startedAt: string; expiresAt: string };
+}
+
+interface PlatformOperator {
+  id: string;
+  userId: string;
+  name: string;
+  email: string;
+  status: string;
+  mfaRequired: boolean;
+  roleNames: string;
+  updatedAt: string;
+}
+
+interface PlatformAuditEvent {
+  id: string;
+  actionCode: string;
+  targetType: string;
+  targetId: string;
+  tenantId: string;
+  resultStatus: string;
+  reason: string;
+  requestId: string;
+  actorName: string;
+  createdAt: string;
+}
+
+interface ApprovalWorkflow {
+  id: string;
+  code: string;
+  name: string;
+  businessType: string;
+  status: "draft" | "active" | "disabled";
+  currentVersionId: string;
+  draftVersionId?: string;
+  versionNo: number;
+  allowParallel: boolean;
+  priority?: number;
+  isDefault?: boolean;
+  triggerConfig?: Record<string, unknown>;
+  formSchema?: Record<string, unknown>;
+  nodeCount?: number;
+  createdAt: string;
+  updatedAt: string;
+  nodes?: ApprovalWorkflowNode[];
+  edges?: ApprovalWorkflowEdge[];
+}
+
+type ApprovalWorkflowNodeType = "start" | "approval" | "condition" | "cc" | "automation" | "end";
+interface ApprovalWorkflowNode {
+  id: string;
+  type: ApprovalWorkflowNodeType;
+  name: string;
+  position: { x: number; y: number };
+  approverStrategy: "specific_member" | "role_in_tenant" | "requester_manager" | "permission_holder";
+  approverConfig: Record<string, unknown>;
+  approvalMode: "single" | "all" | "any";
+  config: Record<string, unknown>;
+  sortOrder: number;
+}
+interface ApprovalWorkflowEdge {
+  id: string;
+  source: string;
+  target: string;
+  label: string;
+  priority: number;
+  condition?: { field: string; operator: "equals" | "not_equals" | "greater_than" | "greater_or_equal" | "less_than" | "less_or_equal" | "contains" | "in" | "exists"; value?: unknown };
+}
+
+interface ApprovalInstance {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  businessType: string;
+  businessId: string;
+  title: string;
+  summary: string;
+  status: "draft" | "running" | "approved" | "rejected" | "withdrawn" | "cancelled" | "failed";
+  version: number;
+  applicantName: string;
+  applicantMembershipId: string;
+  submittedAt: string;
+  completedAt: string;
+  updatedAt: string;
+}
+
+interface ApprovalTask {
+  id: string;
+  instance_id?: string;
+  instanceId?: string;
+  node_name?: string;
+  title: string;
+  summary: string;
+  business_type?: string;
+  business_id?: string;
+  applicant_name?: string;
+  status: string;
+  version_no?: number;
+  submitted_at?: string;
+}
+
+interface ApprovalAction {
+  id: string;
+  action_type: string;
+  actor_name: string;
+  comment_text: string;
+  created_at: string;
 }
 
 interface Customer {
   id: string;
   company: string;
+  companyFullName?: string;
   country: string;
   contact: string;
   whatsapp?: string;
   stage: string;
   amount: number;
   health: number;
+  source?: string;
   grade?: "A" | "B" | "C" | "D";
   nextReminder: string;
   wecomBound: boolean;
   billingName?: string;
   billingAddress?: string;
   documentContact?: string;
+  contactRemark?: string;
   phone?: string;
   email?: string;
   website?: string;
@@ -103,6 +344,7 @@ interface Customer {
   pendingIntelligence?: CustomerIntelligenceSuggestion[];
   pendingIntelligenceCount?: number;
   hasWonDeal?: boolean;
+  lifecycleStatus?: "open" | "won";
   wonDealCount?: number;
   wonDealAmount?: number;
   lastWonAt?: string;
@@ -158,7 +400,8 @@ interface BackgroundResearch {
   opportunities: string[];
   risks: Array<{ level: "high" | "medium" | "low"; title: string; detail: string }>;
   contacts: Array<{ channel: string; value: string }>;
-  sources: Array<{ title: string; url: string; observedAt: string }>;
+  sources: Array<{ title: string; url: string; observedAt: string; detail?: string; authority?: string }>;
+  sourceChecks?: Array<{ providerId: string; providerName: string; status: "matched" | "empty" | "failed" | "skipped"; matchCount: number; message: string }>;
   nextAction: string;
   engine: string;
   completedAt: string;
@@ -176,6 +419,13 @@ interface CompanyProfile {
   updatedAt: string;
 }
 
+interface TeamSystemSettings {
+  teamId: string;
+  requireDocumentExcelApproval: boolean;
+  updatedBy: string;
+  updatedAt: string;
+}
+
 interface DevelopmentEmailDraft {
   entityType: BackgroundResearchEntity;
   entityId: string;
@@ -188,6 +438,8 @@ interface DevelopmentEmailDraft {
   senderName: string;
   engine: string;
 }
+
+type DevelopmentEmailScenario = "first_touch" | "daily_contact" | "holiday_greeting" | "new_product" | "custom_goal";
 
 interface DevelopmentEmailReadiness {
   personalReady: boolean;
@@ -245,6 +497,15 @@ interface Todo {
   cancellationReason?: string;
 }
 
+interface DealItem {
+  id: string;
+  productId?: string;
+  product: string;
+  model?: string;
+  quantity: number;
+  unitPrice: number;
+}
+
 interface Deal {
   id: string;
   customerId: string;
@@ -253,6 +514,7 @@ interface Deal {
   product?: string;
   quantity?: number;
   unitPrice?: number;
+  items?: DealItem[];
   amount: number;
   currency: string;
   amountType: "estimate" | "quoted" | "won";
@@ -317,8 +579,12 @@ interface ImportExportJob {
 
 interface TradeDocumentItem {
   id: string;
+  productId?: string;
+  imageUrl?: string;
   product: string;
   model: string;
+  material?: string;
+  finish?: string;
   hsCode: string;
   quantity: number;
   unit: string;
@@ -331,6 +597,62 @@ interface TradeDocumentItem {
   exportBenefit?: string;
   inspectionCode?: string;
   productEnglish?: string;
+}
+
+interface TradeDocumentImportEvidence {
+  field: string;
+  value: string;
+  source: string;
+  confidence: number;
+}
+
+interface TradeDocumentImportDraft {
+  customerId: string;
+  dealId: string;
+  type: TradeDocument["type"];
+  title: string;
+  number: string;
+  issueDate: string;
+  buyer: string;
+  buyerAddress: string;
+  buyerContact: string;
+  seller: string;
+  sellerAddress: string;
+  currency: string;
+  incoterm: string;
+  paymentTerm: string;
+  shippingMethod: string;
+  portLoading: string;
+  portDischarge: string;
+  validityDate: string;
+  bankInfo: string;
+  notes: string;
+  language: TradeDocument["language"];
+  templateStyle: TradeDocument["templateStyle"];
+  items: TradeDocumentItem[];
+}
+
+interface TradeDocumentImportAnalysis {
+  id: string;
+  sourceFileName: string;
+  sourceMime: string;
+  sourceSha256: string;
+  sourceSize: number;
+  status: "needs_review" | "confirmed" | "failed";
+  detectedType: TradeDocument["type"];
+  confidence: number;
+  extractedDocument: TradeDocumentImportDraft;
+  fieldEvidence: TradeDocumentImportEvidence[];
+  warnings: string[];
+  sourcePreview: string[];
+  calculatedTotal: number;
+  declaredTotal?: number;
+  totalDifference?: number;
+  createdDocumentId?: string;
+  confirmedBy?: string;
+  confirmedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface CustomsDocument {
@@ -402,6 +724,11 @@ interface TradeDocument {
   customerId: string;
   dealId: string;
   revision: number;
+  derivedFromDocumentId?: string;
+  derivedFromType?: TradeDocument["type"];
+  importAnalysisId?: string;
+  importSourceFileName?: string;
+  importSourceSha256?: string;
   type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING";
   title: string;
   number: string;
@@ -411,6 +738,11 @@ interface TradeDocument {
   buyerContact: string;
   seller: string;
   sellerAddress: string;
+  sellerContact?: string;
+  sellerPhone?: string;
+  sellerEmail?: string;
+  sellerWebsite?: string;
+  sellerTaxNo?: string;
   currency: string;
   incoterm: string;
   paymentTerm: string;
@@ -428,8 +760,119 @@ interface TradeDocument {
   approvedBy?: string;
   audits: TradeDocumentAudit[];
   sendRecords: TradeDocumentSendRecord[];
+  letterheadId?: string;
+  stampId?: string;
+  signatureId?: string;
+  includeProductImages?: boolean;
+  letterheadSnapshot?: DocumentLetterheadSnapshot;
+  stampSnapshot?: DocumentStampSnapshot;
+  signatureSnapshot?: DocumentSignatureSnapshot;
+  ownerId?: string;
+  teamId?: string;
   updatedAt: string;
   items: TradeDocumentItem[];
+}
+
+interface DocumentLetterheadSnapshot {
+  name: string;
+  companyName: string;
+  address: string;
+  phone: string;
+  email: string;
+  website: string;
+  bankInfo: string;
+  logoUrl: string;
+  logoPlacement?: DocumentAssetPlacement;
+}
+
+interface DocumentStampSnapshot {
+  name: string;
+  imageUrl: string;
+  placement?: DocumentAssetPlacement;
+}
+
+interface DocumentAssetPlacement {
+  horizontal: "template" | "left" | "center" | "right";
+  vertical: "template" | "top" | "middle" | "bottom";
+  offsetX: number;
+  offsetY: number;
+  scale: number;
+}
+
+interface DocumentSignatureSnapshot {
+  name: string;
+  signerName: string;
+  signerTitle: string;
+  imageUrl: string;
+}
+
+interface DocumentLetterhead extends DocumentLetterheadSnapshot {
+  id: string;
+  teamId: string;
+  isDefault: boolean;
+  enabled: boolean;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+interface DocumentStamp extends DocumentStampSnapshot {
+  id: string;
+  teamId: string;
+  isDefault: boolean;
+  enabled: boolean;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+interface DocumentSignature extends DocumentSignatureSnapshot {
+  id: string;
+  teamId: string;
+  isDefault: boolean;
+  enabled: boolean;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+interface DocumentDefaultProfile {
+  teamId: string;
+  seller: string;
+  sellerAddress: string;
+  sellerContact: string;
+  sellerPhone: string;
+  sellerEmail: string;
+  sellerWebsite: string;
+  sellerTaxNo: string;
+  bankInfo: string;
+  currency: string;
+  incoterm: string;
+  paymentTerm: string;
+  shippingMethod: string;
+  portLoading: string;
+  validityDays: number;
+  notes: string;
+  language: TradeDocument["language"];
+  templateStyle: TradeDocument["templateStyle"];
+  letterheadId: string;
+  stampId: string;
+  signatureId: string;
+  includeProductImages: boolean;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+interface DocumentAssetsResponse {
+  letterheads: DocumentLetterhead[];
+  stamps: DocumentStamp[];
+  signatures: DocumentSignature[];
+  canManage: boolean;
+}
+
+interface TradeDocumentHistoryResponse {
+  documents: TradeDocument[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
 }
 
 type CommissionRuleType = "rate" | "fixed" | "tier" | "gross_profit" | "none";
@@ -550,16 +993,21 @@ interface CommissionOwner {
 }
 
 interface CustomerImportRow {
+  customerId: string;
   company: string;
+  companyFullName: string;
   country: string;
   contact: string;
   whatsapp: string;
   stage: string;
   amount: number;
   health: number;
+  source: string;
+  lifecycleStatus?: "open" | "won";
   nextReminder: string;
   phone: string;
   email: string;
+  contactRemark: string;
   website: string;
   wecomBound: boolean;
 }
@@ -571,6 +1019,17 @@ interface KnowledgeAsset {
   status: string;
   ownerId: string;
   version: string;
+  teamId?: string;
+  sourceType?: "external_url" | "baidu_share" | "legacy";
+  sourceUrl?: string;
+  shareCode?: string;
+  fileType?: "pdf" | "word" | "excel" | "image" | "video" | "archive" | "link" | "other";
+  description?: string;
+  tags?: string[];
+  accessCount?: number;
+  lastAccessedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 interface Exam {
@@ -583,7 +1042,42 @@ interface Exam {
   durationMinutes?: number;
   passScore?: number;
   targetRole?: "all" | "sales" | "manager";
+  instructions?: string;
+  startAt?: string;
+  endAt?: string;
+  maxAttempts?: number;
+  allowReview?: boolean;
+  publishedAt?: string;
+  closedAt?: string;
+  runtimeStatus?: "draft" | "upcoming" | "open" | "expired" | "closed";
+  assignedCount?: number;
+  completedCount?: number;
+  attemptsUsed?: number;
+  bestScore?: number;
+  inProgressAttemptId?: string;
+  assignment?: ExamAssignment | null;
   updatedAt?: string;
+}
+
+interface ExamAssignment {
+  id: string;
+  examId: string;
+  userId: string;
+  assignedById: string;
+  teamId: string;
+  status: "pending" | "in_progress" | "submitted" | "passed" | "failed";
+  attemptCount: number;
+  bestScore: number;
+  latestAttemptId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ExamCandidate {
+  id: string;
+  name: string;
+  role: Role;
+  avatar: string;
 }
 
 interface ExamQuestion {
@@ -609,6 +1103,10 @@ interface ExamAttempt {
   answers: Record<string, number | number[]>;
   correctCount: number;
   totalQuestions: number;
+  status?: "in_progress" | "submitted" | "auto_submitted";
+  startedAt?: string;
+  expiresAt?: string;
+  updatedAt?: string;
   submittedAt: string;
   examTitle?: string;
   category?: string;
@@ -692,7 +1190,7 @@ interface InternalMessage {
   type: "system" | "manual";
   subject: string;
   content: string;
-  relatedType: "daily_report" | "message" | "";
+  relatedType: "daily_report" | "message" | "email_return" | "integration_approval" | "integration_call" | "integration_connection" | "integration_event" | "integration_connector" | "";
   relatedId: string;
   readAt: string;
   createdAt: string;
@@ -706,8 +1204,14 @@ interface OcrJob {
   status: string;
   confidence: number;
   fields: Record<string, string>;
+  batchId?: string;
+  sourceFileName?: string;
+  errorMessage?: string;
+  createdAt?: string;
   ownerId: string;
   teamId: string;
+  hasImage?: boolean;
+  imageUrl?: string;
 }
 
 type ProspectOutreachChannel = "email" | "whatsapp" | "call";
@@ -835,7 +1339,7 @@ interface ProspectStrategySuggestion {
   createdAt: string;
 }
 
-type WebsiteProbeStage = "queued" | "dns" | "robots" | "head" | "body" | "evidence" | "completed" | "failed";
+type WebsiteProbeStage = "queued" | "dns" | "robots" | "head" | "body" | "contact_page" | "evidence" | "completed" | "failed";
 
 interface WebsiteProbeEvent {
   id: string;
@@ -854,7 +1358,7 @@ interface WebsiteProbeAttempt {
   sourceUrl: string;
   purpose: "company_evidence_enrichment";
   accessMode: "controlled_probe";
-  policyVersion: "website-probe-policy-v1" | "website-probe-policy-v2";
+  policyVersion: "website-probe-policy-v1" | "website-probe-policy-v2" | "website-probe-policy-v3" | "website-probe-policy-v4-foreign-only";
   status: "queued" | "running" | "completed" | "failed";
   outcome: "pending" | "evidence_found" | "no_evidence" | "robots_denied" | "unreachable" | "policy_blocked" | "rate_limited" | "circuit_open";
   robotsDecision: "pending" | "allowed" | "denied" | "unavailable";
@@ -870,6 +1374,8 @@ interface WebsiteProbeAttempt {
     addressCountry: string;
     businessCategory: string;
     publicContactEmail?: string;
+    publicContactPhones?: string[];
+    publicContactNames?: Array<{ name: string; title: string }>;
     sourceUrl: string;
     payloadHash: string;
     observedAt: string;
@@ -1032,6 +1538,9 @@ interface WebsiteOpportunity {
   verifiedAt?: string;
   statusChangedAt?: string;
   excludedReason?: string;
+  shortlistedAt?: string;
+  shortlistedBy?: string;
+  shortlistSourceRunId?: string;
   tenantProspectId?: string;
   organizationId?: string;
   coverageClassification?: string;
@@ -1044,7 +1553,74 @@ interface WebsiteOpportunity {
   outreachState?: "uncontacted" | "awaiting_reply" | "replied" | "suppressed" | "contact_invalid";
   invalidContactChannels?: ProspectOutreachChannel[];
   websiteProbeAttempts?: WebsiteProbeAttempt[];
+  websiteDiscoveryAttempts?: Array<{
+    id: string;
+    runId: string;
+    providerId: string;
+    status: "completed" | "failed";
+    outcome: "source_provided" | "discovered" | "not_found" | "provider_unavailable" | "provider_failed";
+    selectedWebsite: string;
+    reasonCode: string;
+    reason: string;
+    candidates: Array<{ website: string; title: string; score: number; reasons: string[] }>;
+    events: Array<{ id: string; stage: string; status: string; message: string; createdAt: string }>;
+    createdAt: string;
+    completedAt: string;
+  }>;
   identityBootstrapAttempts?: ProspectIdentityBootstrapAttempt[];
+  extractedContacts?: Array<{
+    kind: "company" | "person";
+    name: string;
+    title: string;
+    emails: string[];
+    phones: string[];
+    whatsapp: string[];
+    source: string;
+    sourceLabel?: string;
+    sourceKind?: "source_record" | "contact_provider" | "official_website" | "manual";
+    confidence?: number;
+    verificationStatus?: "verified" | "source_confirmed" | "syntax_valid" | "unverified";
+    observedAt?: string;
+    reasonCodes?: string[];
+    corroboratedSources?: Array<{ sourceId: string; sourceLabel: string; evidenceUrl: string }>;
+    evidenceUrl: string;
+  }>;
+  contactEnrichmentAttempts?: Array<{
+    id: string;
+    runId: string;
+    status: "queued" | "running" | "completed" | "partial" | "failed";
+    sources: Array<{
+      id: string;
+      sourceId: string;
+      sourceLabel: string;
+      sourceKind: "source_record" | "contact_provider" | "official_website" | "manual";
+      status: "queued" | "running" | "completed" | "failed" | "blocked" | "skipped";
+      outcome: "pending" | "contact_found" | "no_contact" | "not_configured" | "policy_blocked" | "provider_failed";
+      contactCount: number;
+      message: string;
+      errorCode?: string;
+      retryable?: boolean;
+      retryAfterAt?: string | null;
+      startedAt: string;
+      completedAt: string;
+    }>;
+    recommendedContact: null | {
+      contactName: string;
+      contactTitle: string;
+      channelType: "email" | "phone" | "whatsapp";
+      channelValue: string;
+      sourceId: string;
+      sourceLabel: string;
+      confidence: number;
+      verificationStatus: "verified" | "source_confirmed" | "syntax_valid" | "unverified";
+      reason: string;
+    };
+    contactCount: number;
+    summary: string;
+    createdAt: string;
+    startedAt: string;
+    completedAt: string;
+  }>;
   selected?: boolean;
   ownerId?: string;
   teamId?: string;
@@ -1246,6 +1822,10 @@ interface ProspectRunCleaningReport {
     suppressedCount: number;
     mergedCount: number;
     candidateCount: number;
+    websiteResolvedCount?: number;
+    websiteDiscoveredCount?: number;
+    websiteDiscoveryFailedCount?: number;
+    websiteDiscoveryPendingCount?: number;
   };
   stages: Array<{
     id: string;
@@ -1277,6 +1857,11 @@ interface ProspectRunCleaningReport {
     reason: string;
     candidateId: string;
     candidateName: string;
+    website?: string;
+    websiteOutcome?: string;
+    websiteReasonCode?: string;
+    websiteReason?: string;
+    websiteProvider?: string;
     processedAt: string;
   }>;
 }
@@ -1736,6 +2321,7 @@ interface Product {
   descriptionEn: string;
   tags: string[];
   imageUrl: string;
+  packWeight?: number;
   ownerId: string;
   teamId: string;
   updatedAt: string;
@@ -1765,10 +2351,17 @@ interface Shipment {
   dealId: string;
   dealTitle: string;
   customerName: string;
+  destinationCountry?: string;
+  destinationPort?: string;
+  destinationAddress?: string;
   courier: string;
   trackingCode: string;
   trackingImageUrl: string;
   status: ShipmentStatus;
+  statusSource: "local" | "carrier";
+  lastSyncedAt?: string;
+  syncError?: string;
+  trackingEvents?: TrackingEvent[];
   shippedAt: string;
   estimatedArrival: string;
   note: string;
@@ -1776,6 +2369,14 @@ interface Shipment {
   ownerId: string;
   teamId: string;
   updatedAt: string;
+}
+
+interface TrackingEvent {
+  id: string;
+  time: string;
+  status: ShipmentStatus;
+  location: string;
+  description: string;
 }
 
 interface ProblemItem {
@@ -1790,6 +2391,7 @@ interface ProblemItem {
   nextAction: string;
   dueAt: string;
   createdAt: string;
+  resolvedAt?: string;
 }
 
 interface Memo {
@@ -2134,6 +2736,7 @@ interface AgentKnowledgeDocument {
   content: string;
   keywords: string[];
   roles: Array<"sales" | "manager" | "admin" | "super_admin">;
+  permissionCodes: string[];
   toolRefs: string[];
   successCriteria: string[];
   failureCases: string[];
@@ -2173,15 +2776,34 @@ interface AgentSkill {
   version: string;
   category: string;
   description: string;
-  status: "active" | "draft" | "archived";
+  status: "active" | "published" | "draft" | "archived";
   priority: number;
   triggers: string[];
   keywords: string[];
   modules: string[];
   toolRefs: string[];
+  sourceType: "builtin" | "download" | "repository" | "marketplace" | "manual";
+  acquisitionMethod: string;
+  downloadUrl: string;
+  extractionCode: string;
+  installCommand: string;
+  acquisitionInstructions: string;
+  homepageUrl: string;
+  author: string;
+  license: string;
   directory: string;
   instructions?: string;
   matched?: boolean;
+  resourceKind?: "system" | "download";
+  usageGuide?: string;
+  trainingGuide?: string;
+  optimizationAdvice?: string;
+  accessCount?: number;
+  ownerId?: string;
+  teamId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  downloadAvailable?: boolean;
 }
 
 interface AgentTuningInspection {
@@ -2443,6 +3065,7 @@ interface ExecutiveReport {
 
 interface AppState {
   user: User | null;
+  iamCapabilities: IamCapabilitySnapshot | null;
   summary: DashboardSummary | null;
   customers: Customer[];
   publicCustomers: Customer[];
@@ -2485,6 +3108,13 @@ interface AppState {
   reminderFilter: "pending" | "overdue" | "today" | "future" | "snoozed" | "done";
   jobs: ImportExportJob[];
   tradeDocuments: TradeDocument[];
+  globalRouteDocuments: TradeDocument[];
+  documentDefaultProfile: DocumentDefaultProfile | null;
+  documentAssets: DocumentAssetsResponse;
+  documentDefaultsCanManage: boolean;
+  documentHistoryPage: number;
+  documentHistoryPageCount: number;
+  documentHistoryTotal: number;
   wecomMessages: WecomMessage[];
   dailyReports: DailyReport[];
   dailyReportOwners: CollaborationUser[];
@@ -2497,6 +3127,12 @@ interface AppState {
   internalMessages: InternalMessage[];
   internalUnreadCount: number;
   knowledgeAssets: KnowledgeAsset[];
+  knowledgeSearch: string;
+  knowledgeCategoryFilter: string;
+  knowledgeSourceFilter: string;
+  knowledgeStatusFilter: string;
+  knowledgeTypeFilter: string;
+  selectedKnowledgeAssetId: string | null;
   exams: Exam[];
   examQuestions: ExamQuestion[];
   examReport: ExamReport | null;
@@ -2511,6 +3147,7 @@ interface AppState {
   agentKnowledgeOverview: AgentKnowledgeOverview | null;
   agentSkills: AgentSkill[];
   agentSkillDirectory: string;
+  agentSkillCanManage: boolean;
   agentTriggerRules: AgentTriggerRule[];
   agentTriggerEvents: AgentTriggerEvent[];
   agentGovernance: AgentGovernance | null;
@@ -2523,7 +3160,9 @@ interface AppState {
   selectedAiConfigId: string | null;
   aiDraftMode: boolean;
   products: Product[];
+  productCategories: string[];
   shipments: Shipment[];
+  logs: LogEntry[];
   selectedProductIds: string[];
   selectedShipmentIds: string[];
   pendingAiDeleteId: string | null;
@@ -2566,18 +3205,28 @@ interface AppState {
   selectedCustomerIds: string[];
   customerSearch: string;
   customerQueueFilter: "all" | "overdue" | "no-activity" | "no-deal";
-  customerViewMode: "list" | "map";
+  customerOutcomeFilter: "open" | "won";
+  customerViewMode: "list" | "map" | "board";
+  customerPage: number;
+  customerPageSize: 20 | 50 | 100;
   selectedProblemId: string | null;
+  problemSearch: string;
+  problemStatusFilter: "all" | "open" | "solving" | "resolved";
+  problemSeverityFilter: "all" | "high" | "medium" | "low";
+  problemCategoryFilter: string;
   selectedMemoId: string | null;
   selectedPlanTemplateId: string | null;
   selectedCompetitorId: string | null;
   selectedCaseId: string | null;
   selectedExamId: string | null;
   selectedExamIds: string[];
+  examCanManage: boolean;
+  examCandidates: ExamCandidate[];
+  examWorkspaceMode: "manage" | "mine" | "results";
   selectedQuestionId: string | null;
   selectedDocumentId: string | null;
   selectedLeadFinderId: string | null;
-  leadFinderFilter: "all" | "pending" | "high" | "duplicate" | "synced";
+  leadFinderFilter: "all" | "pending" | "high" | "duplicate" | "shortlisted";
   leadFinderPage: number;
   selectedProspectId: string | null;
   selectedProspectIds: string[];
@@ -2601,6 +3250,7 @@ interface AppState {
 
 const state: AppState = {
   user: null,
+  iamCapabilities: null,
   summary: null,
   customers: [],
   publicCustomers: [],
@@ -2643,6 +3293,13 @@ const state: AppState = {
   reminderFilter: "pending",
   jobs: [],
   tradeDocuments: [],
+  globalRouteDocuments: [],
+  documentDefaultProfile: null,
+  documentAssets: { letterheads: [], stamps: [], signatures: [], canManage: false },
+  documentDefaultsCanManage: false,
+  documentHistoryPage: 1,
+  documentHistoryPageCount: 1,
+  documentHistoryTotal: 0,
   wecomMessages: [],
   dailyReports: [],
   dailyReportOwners: [],
@@ -2655,6 +3312,12 @@ const state: AppState = {
   internalMessages: [],
   internalUnreadCount: 0,
   knowledgeAssets: [],
+  knowledgeSearch: "",
+  knowledgeCategoryFilter: "all",
+  knowledgeSourceFilter: "all",
+  knowledgeStatusFilter: "all",
+  knowledgeTypeFilter: "all",
+  selectedKnowledgeAssetId: null,
   exams: [],
   examQuestions: [],
   examReport: null,
@@ -2669,6 +3332,7 @@ const state: AppState = {
   agentKnowledgeOverview: null,
   agentSkills: [],
   agentSkillDirectory: "agent-skills",
+  agentSkillCanManage: false,
   agentTriggerRules: [],
   agentTriggerEvents: [],
   agentGovernance: null,
@@ -2680,7 +3344,9 @@ const state: AppState = {
   aiConfigs: [],
   selectedAiConfigId: null,
   products: [],
+  productCategories: [],
   shipments: [],
+  logs: [],
   selectedProductIds: [],
   selectedShipmentIds: [],
   aiDraftMode: false,
@@ -2724,14 +3390,24 @@ const state: AppState = {
   selectedCustomerIds: [],
   customerSearch: "",
   customerQueueFilter: "all",
+  customerOutcomeFilter: "open",
   customerViewMode: "list",
+  customerPage: 1,
+  customerPageSize: 20,
   selectedProblemId: null,
+  problemSearch: "",
+  problemStatusFilter: "all",
+  problemSeverityFilter: "all",
+  problemCategoryFilter: "all",
   selectedMemoId: null,
   selectedPlanTemplateId: null,
   selectedCompetitorId: null,
   selectedCaseId: null,
   selectedExamId: null,
   selectedExamIds: [],
+  examCanManage: false,
+  examCandidates: [],
+  examWorkspaceMode: "mine",
   selectedQuestionId: null,
   selectedDocumentId: null,
   selectedLeadFinderId: null,
@@ -2775,6 +3451,9 @@ let leadFinderStreamAbort: AbortController | null = null;
 let leadFinderStreamRunId = "";
 let leadFinderStreamConnected = false;
 let leadFinderStreamRefreshTimer = 0;
+let leadFinderOpportunityRefreshPending = false;
+let websiteProbeRefreshTimer = 0;
+let websiteProbeRefreshDeadline = 0;
 const leadFinderStreamCursors = new Map<string, string>();
 let leadFinderResultView: "candidates" | "cleaning" = "candidates";
 let leadFinderCleaningFilter: "all" | "merged" | "suppressed" | "rejected" = "all";
@@ -2811,9 +3490,16 @@ let developmentEmailReadiness: DevelopmentEmailReadiness | null = null;
 let developmentEmailCompanyProfile: CompanyProfile | null = null;
 let developmentEmailLoading = false;
 let developmentEmailSending = false;
+let developmentEmailRequestId = "";
+let profileDevelopmentEmailRequestId = "";
 let developmentEmailTone: "professional" | "concise" | "warm" = "professional";
+let developmentEmailScenario: DevelopmentEmailScenario = "first_touch";
+let developmentEmailGoal = "";
+const developmentEmailScenarioDrafts = new Map<DevelopmentEmailScenario, Pick<DevelopmentEmailDraft, "subject" | "body" | "engine"> & { aiGenerated: boolean }>();
 let developmentEmailNextFollowAt = "";
 let companyProfileCanManage = false;
+let teamSystemSettings: TeamSystemSettings = { teamId: "", requireDocumentExcelApproval: false, updatedBy: "", updatedAt: "" };
+let teamSystemSettingsCanManage = false;
 let whatsappRefreshTimer = 0;
 let agentRunPollTimer = 0;
 let agentPendingGoal = "";
@@ -2828,9 +3514,41 @@ let agentKnowledgeModule = "all";
 let agentKnowledgeQuery = "";
 let selectedAgentSkillId = "";
 let agentSkillQuery = "";
+let agentSkillCategoryFilter = "all";
+let agentSkillStatusFilter = "all";
+let agentSkillSourceFilter = "all";
 let whatsappRefreshing = false;
 let openWorkspaceTabs = ["dashboard"];
 let workspaceTabHistory = ["dashboard"];
+let accessControlOverview: AccessControlOverview | null = null;
+let accessControlSelectedRoleId = "";
+let accessControlSelectedMemberId = "";
+let accessControlOrganizationFilter: "all" | "unassigned" = "all";
+let accessControlAuditEvents: AccessAuditEvent[] = [];
+type PlatformTab = "overview" | "tenants" | "support" | "operators" | "health" | "audit";
+let platformActiveTab: PlatformTab = "overview";
+let platformOverview: { metrics: Record<string, number>; generatedAt: string } | null = null;
+let platformTenants: PlatformTenant[] = [];
+let platformSupportRequests: PlatformSupportRequest[] = [];
+let platformOperators: PlatformOperator[] = [];
+let platformHealthServices: Array<Record<string, unknown>> = [];
+let platformAuditEvents: PlatformAuditEvent[] = [];
+let approvalWorkflows: ApprovalWorkflow[] = [];
+let approvalInstances: ApprovalInstance[] = [];
+let approvalTasks: ApprovalTask[] = [];
+let approvalCenterTab: "pending" | "mine" | "completed" = "pending";
+let selectedApprovalInstanceId = "";
+let approvalDesignerWorkflow: ApprovalWorkflow | null = null;
+let approvalDesignerSelectedNodeId = "";
+let approvalDesignerSelectedEdgeId = "";
+let approvalDesignerConnectionSource = "";
+let approvalDesignerDirty = false;
+let ocrLocalPreviewUrl = "";
+let ocrPreviewRevision = 0;
+let ocrBusy = false;
+let ocrBatchId = "";
+let ocrBatchJobs: OcrJob[] = [];
+let ocrBatchRunning = false;
 
 const viewLabels: Record<string, string> = {
   dashboard: "工作台",
@@ -2838,13 +3556,17 @@ const viewLabels: Record<string, string> = {
   "lead-task-detail": "任务执行详情",
   "prospect-list": "搜客清单",
   "ai-agent": "AI Agent",
+  "integration-center": "集成中心",
+  "approval-center": "审批中心",
+  "approval-workflows": "审批设置",
   leads: "线索",
   customers: "客户",
   "customer-pool": "客户公池",
-  whatsapp: "Communication",
+  whatsapp: "即刻沟通",
   "customer-detail": "客户全景",
   "ai-research": "AI背调",
   "development-email": "开发信",
+  "email-return-flow": "开发信回流",
   pipeline: "商机",
   reminders: "跟进提醒",
   "plan-growth": "计划任务",
@@ -2866,7 +3588,14 @@ const viewLabels: Record<string, string> = {
   imports: "导入导出",
   "database-maintenance": "数据库维护",
   "ai-config": "AI配置",
+  "business-card": "名片识别",
   "agent-skills": "Agent Skills",
+  "member-management": "成员管理",
+  "organization-structure": "组织架构",
+  "role-management": "角色管理",
+  "member-authorization": "成员授权",
+  "permission-audit": "权限审计",
+  "platform-operations": "平台运维",
   settings: "系统设置",
   profile: "个人设置"
 };
@@ -2907,6 +3636,8 @@ const storage = {
   dashboardCache: "gj_dashboard_cache",
   workspaceView: "gj_workspace_view"
 };
+
+const DEMO_ACCOUNT_PASSWORD = "goodjob123";
 
 function newAgentConversationId() {
   return `agc_${crypto.randomUUID()}`;
@@ -3088,7 +3819,7 @@ function agentResultSummary(result: Record<string, unknown> | undefined) {
   if (typeof result.matchedCount === "number" && typeof result.creatableCount === "number") parts.push(`发现 ${result.matchedCount} 项 · 可建待办 ${result.creatableCount}`);
   if (typeof result.watchId === "string") parts.push(`客户守护已启用${typeof result.intervalHours === "number" ? ` · 每 ${result.intervalHours} 小时` : ""}`);
   if (typeof result.score === "number" && typeof result.verdict === "string") parts.push(`背调可信度 ${result.score} · ${result.verdict}`);
-  if (typeof result.totalUnread === "number") parts.push(`Communication 未读 ${result.totalUnread} 条`);
+  if (typeof result.totalUnread === "number") parts.push(`即刻沟通未读 ${result.totalUnread} 条`);
   if (typeof result.status === "number" && typeof result.path === "string") parts.push(`${result.status} · ${result.path}`);
   const apiData = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : undefined;
   if (typeof apiData?.fileName === "string") parts.push(`文件 ${apiData.fileName}`);
@@ -3256,7 +3987,7 @@ function renderOutreachSequences(run = state.agentRun) {
         ? `<button class="btn primary" type="button" data-sequence-control="resume" data-sequence-id="${escapeHtml(sequence.id)}">继续</button><button class="btn" type="button" data-sequence-control="cancel" data-sequence-id="${escapeHtml(sequence.id)}">取消</button>`
         : "";
     return `<article class="agent-sequence-card">
-      <header><div><b>${escapeHtml(sequence.entityName)}</b><span>${sequence.channel === "email" ? "Email" : "Communication"} · ${escapeHtml(sequence.recipient)}</span></div><small>${outreachSequenceStatusLabel(sequence.status)}</small></header>
+      <header><div><b>${escapeHtml(sequence.entityName)}</b><span>${sequence.channel === "email" ? "Email" : "即刻沟通"} · ${escapeHtml(sequence.recipient)}</span></div><small>${outreachSequenceStatusLabel(sequence.status)}</small></header>
       <div class="agent-sequence-track"><i style="width:${percent}%"></i></div>
       <div class="agent-sequence-meta"><span>已发送 ${sequence.currentStep}/${sequence.maxSends}</span><span>${escapeHtml(next)}</span></div>
       <div class="agent-sequence-steps">${sequence.steps.map((step) => `<i class="${escapeHtml(step.status)}" title="第 ${step.index + 1} 次"></i>`).join("")}</div>
@@ -3271,7 +4002,7 @@ function renderOutreachSequences(run = state.agentRun) {
 
 function agentSequenceApprovalPreview(step: AgentStep) {
   if (step.tool !== "outreach.create_sequence" || !Array.isArray(step.input.steps)) return "";
-  const channel = step.input.channel === "communication" ? "Communication" : "Email";
+  const channel = step.input.channel === "communication" ? "即刻沟通" : "Email";
   const rows = step.input.steps.slice(0, 5).map((value, index) => {
     const item = value && typeof value === "object" ? value as Record<string, unknown> : {};
     const delay = Number(item.delayHours || 0);
@@ -3334,7 +4065,7 @@ function agentExternalApprovalPreview(step: AgentStep) {
     return `<details class="agent-external-preview" open><summary>${escapeHtml(String(step.input.to || "收件邮箱由客户资料确定"))} · ${escapeHtml(String(step.input.subject || ""))}</summary><p>${escapeHtml(String(step.input.body || ""))}</p></details>`;
   }
   if (step.tool === "outreach.send_whatsapp") {
-    return `<details class="agent-external-preview" open><summary>Communication · ${escapeHtml(String(step.input.customerId || "当前客户"))}</summary><p>${escapeHtml(String(step.input.body || ""))}</p></details>`;
+    return `<details class="agent-external-preview" open><summary>即刻沟通 · ${escapeHtml(String(step.input.customerId || "当前客户"))}</summary><p>${escapeHtml(String(step.input.body || ""))}</p></details>`;
   }
   if (step.tool === "prospect.start_search") {
     const products = Array.isArray(step.input.products) ? step.input.products.join("、") : "";
@@ -3380,7 +4111,13 @@ async function loadAgentCheckpoints(runId: string) {
 
 async function restoreAgentCheckpointFromUi(checkpointId: string, button: HTMLButtonElement) {
   if (!state.agentRun || !checkpointId || state.agentLoading) return;
-  if (!window.confirm("确认恢复到这个检查点？未开始的后续步骤会被替换，写入动作需要重新审批。")) return;
+  if (!await confirmAction({
+    title: "恢复 Mission 检查点",
+    message: "Mission 将回到所选检查点继续执行。",
+    consequences: ["未开始的后续步骤会被替换", "涉及写入的动作需要重新审批"],
+    confirmLabel: "恢复检查点",
+    tone: "warning"
+  })) return;
   state.agentLoading = true;
   button.disabled = true;
   try {
@@ -3463,7 +4200,7 @@ async function openAgentMemoryManager(reload = true) {
 }
 
 function openAgentMemoryEditor(memory?: AgentMemory) {
-  const canManageTeam = ["manager", "admin", "super_admin"].includes(state.user?.role || "");
+  const canManageTeam = hasIamCapability("agent.manage");
   const selectedCustomerId = memory?.subjectId || state.selectedCustomerId || state.customers[0]?.id || "";
   const scopeOptions = memory
     ? `<option value="${escapeHtml(memory.scope)}">${escapeHtml(agentMemoryScopeLabel(memory.scope))}</option>`
@@ -3511,7 +4248,18 @@ async function saveAgentMemory(memory: AgentMemory | undefined, button: HTMLButt
 
 async function mutateAgentMemory(id: string, action: "activate" | "archive" | "delete", button: HTMLButtonElement) {
   if (!id) return;
-  if (action === "delete" && !window.confirm("确认删除这条业务记忆？")) return;
+  if (action === "delete") {
+    const confirmed = await confirmAction({
+      title: "删除业务记忆",
+      message: "这条业务记忆将不再参与 Agent 判断。",
+      consequences: ["记忆内容会被移除", "后续 Agent 任务不会再引用它"],
+      confirmLabel: "删除记忆"
+    });
+    if (!confirmed) {
+      openAgentMemoryManager(false);
+      return;
+    }
+  }
   button.disabled = true;
   try {
     await api(`/api/agent/memories/${encodeURIComponent(id)}${action === "delete" ? "" : `/${action}`}`, { method: action === "delete" ? "DELETE" : "POST" });
@@ -3589,19 +4337,85 @@ function renderAgentSkillMarkdown(source: string) {
 
 function filteredAgentSkills() {
   const query = agentSkillQuery.toLocaleLowerCase("zh-CN");
-  return state.agentSkills.filter((skill) => !query
-    || `${skill.name} ${skill.description} ${skill.triggers.join(" ")} ${skill.toolRefs.join(" ")}`
-      .toLocaleLowerCase("zh-CN").includes(query));
+  return state.agentSkills.filter((skill) => {
+    if (agentSkillCategoryFilter !== "all" && skill.category !== agentSkillCategoryFilter) return false;
+    if (agentSkillStatusFilter !== "all" && skill.status !== agentSkillStatusFilter) return false;
+    if (agentSkillSourceFilter !== "all" && (skill.sourceType || "builtin") !== agentSkillSourceFilter) return false;
+    if (!query) return true;
+    return [
+      skill.name,
+      skill.description,
+      skill.category,
+      ...(skill.triggers || []),
+      ...(skill.keywords || []),
+      ...(skill.toolRefs || []),
+      ...(skill.modules || []),
+      skill.acquisitionMethod,
+      skill.acquisitionInstructions,
+      skill.usageGuide,
+      skill.trainingGuide,
+      skill.optimizationAdvice,
+      skill.author
+    ].join(" ").toLocaleLowerCase("zh-CN").includes(query);
+  });
+}
+
+function agentSkillStatusLabel(status: AgentSkill["status"]) {
+  return ({ active: "系统启用", published: "已上架", draft: "草稿", archived: "已归档" } as const)[status];
+}
+
+function agentSkillSourceLabel(sourceType: AgentSkill["sourceType"] | undefined) {
+  return ({ builtin: "系统内置", download: "下载包", repository: "代码仓库", marketplace: "Skill 市场", manual: "人工获取" } as const)[sourceType || "builtin"];
+}
+
+function isHttpsUrl(value: string | undefined) {
+  if (!value) return false;
+  try { return new URL(value).protocol === "https:"; } catch { return false; }
+}
+
+function renderAgentSkillFilters() {
+  const select = qs<HTMLSelectElement>("#agentSkillsCategoryFilter");
+  if (!select) return;
+  const categories = [...new Set(state.agentSkills.map((skill) => skill.category).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, "zh-CN"));
+  select.innerHTML = `<option value="all">全部分类</option>${categories.map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`).join("")}`;
+  select.value = categories.includes(agentSkillCategoryFilter) ? agentSkillCategoryFilter : "all";
+  agentSkillCategoryFilter = select.value;
 }
 
 function renderAgentSkillList() {
-  const list = qs<HTMLElement>("#agentSkillsList");
+  const list = qs<HTMLElement>("#agentSkillsGrid");
   if (!list) return;
   const skills = filteredAgentSkills();
+  const count = qs<HTMLElement>("#agentSkillsResultCount");
+  if (count) count.textContent = `${skills.length} 个 Skill`;
   list.innerHTML = skills.length
-    ? skills.map((skill) => `<button type="button" class="agent-skill-item${skill.id === selectedAgentSkillId ? " active" : ""}" data-agent-skill-id="${escapeHtml(skill.id)}"><span>${escapeHtml(skill.category)} · ${escapeHtml(skill.status)}</span><b>${escapeHtml(skill.name)}</b><small>${escapeHtml(skill.description)}</small></button>`).join("")
-    : `<div class="agent-skills-empty">没有匹配的 Skill</div>`;
-  qsa<HTMLButtonElement>("[data-agent-skill-id]", list).forEach((button) => button.addEventListener("click", () => void openAgentSkill(button.dataset.agentSkillId || "")));
+    ? skills.map((skill) => {
+      const tags = (skill.modules || []).slice(0, 3);
+      return `<button type="button" class="agent-skill-card${skill.id === selectedAgentSkillId ? " active" : ""}" data-agent-skill-id="${escapeHtml(skill.id)}" data-agent-skill-kind="${escapeHtml(skill.resourceKind || "system")}" aria-label="查看 ${escapeHtml(skill.name)}">
+        <span class="agent-skill-card-top"><span class="agent-skill-category${skill.resourceKind === "download" ? " agent-skill-resource-mark" : ""}">${escapeHtml(skill.resourceKind === "download" ? `下载资源 · ${skill.category}` : skill.category)}</span><span class="agent-skill-state ${escapeHtml(skill.status)}">${escapeHtml(agentSkillStatusLabel(skill.status))}</span></span>
+        <h2>${escapeHtml(skill.name)}</h2>
+        <p>${escapeHtml(skill.description)}</p>
+        <span class="agent-skill-card-tags">${tags.map((module) => `<span>${escapeHtml(module)}</span>`).join("")}${(skill.modules || []).length > 3 ? `<span>+${skill.modules.length - 3}</span>` : ""}</span>
+        <span class="agent-skill-card-foot"><span class="agent-skill-source">${escapeHtml(skill.acquisitionMethod || agentSkillSourceLabel(skill.sourceType))}</span><b>${skill.resourceKind === "download" ? `${skill.accessCount || 0} 次获取` : `V${escapeHtml(skill.version)}`}</b></span>
+      </button>`;
+    }).join("")
+    : `<div class="agent-skills-empty">没有符合当前条件的 Skill，请调整搜索或筛选条件</div>`;
+  qsa<HTMLButtonElement>("[data-agent-skill-id]", list).forEach((button) => button.addEventListener("click", () => void openAgentSkill(button.dataset.agentSkillId || "", button.dataset.agentSkillKind || "system")));
+}
+
+function closeAgentSkillDetail() {
+  const target = qs<HTMLElement>("#agentSkillsDetail");
+  const backdrop = qs<HTMLElement>("#agentSkillDrawerBackdrop");
+  target?.classList.remove("open");
+  target?.setAttribute("aria-hidden", "true");
+  backdrop?.classList.remove("active");
+  document.body.classList.remove("agent-skill-drawer-open");
+}
+
+function agentSkillCopyField(label: string, value: string, full = false) {
+  if (!value) return "";
+  return `<div class="agent-skill-copy-field${full ? " full" : ""}"><span>${escapeHtml(label)}</span><div class="agent-skill-copy-row"><code title="${escapeHtml(value)}">${escapeHtml(value)}</code><button type="button" data-agent-skill-copy="${escapeHtml(value)}" data-agent-skill-copy-label="${escapeHtml(label)}">复制</button></div></div>`;
 }
 
 function renderAgentSkillDetail(skill?: AgentSkill) {
@@ -3611,20 +4425,71 @@ function renderAgentSkillDetail(skill?: AgentSkill) {
     target.innerHTML = `<div class="agent-skills-welcome"><span>SK</span><div><h2>选择一个 Skill</h2></div></div>`;
     return;
   }
-  target.innerHTML = `<div class="agent-skill-detail-head"><div><span>${escapeHtml(skill.category)} · ${escapeHtml(skill.status)}</span><h2>${escapeHtml(skill.name)}</h2><p>${escapeHtml(skill.description)}</p></div><div class="agent-skill-version">V${escapeHtml(skill.version)}</div></div>
-    <div class="agent-skill-meta"><div><span>目录</span><b>${escapeHtml(skill.directory)}</b></div><div><span>适用模块</span><b>${escapeHtml(skill.modules.join("、") || "全部")}</b></div><div><span>优先级</span><b>${skill.priority}</b></div></div>
-    <div class="agent-skill-chips">${skill.toolRefs.map((tool) => `<span>${escapeHtml(tool)}</span>`).join("")}</div>
-    <article class="agent-skill-markdown">${renderAgentSkillMarkdown(skill.instructions || "")}</article>`;
+  const sourceLabel = agentSkillSourceLabel(skill.sourceType);
+  const downloadUrl = isHttpsUrl(skill.downloadUrl) ? skill.downloadUrl : "";
+  const homepageUrl = isHttpsUrl(skill.homepageUrl) ? skill.homepageUrl : "";
+  const canDownload = Boolean(downloadUrl || skill.downloadAvailable);
+  const acquisitionFields = [
+    downloadUrl ? `<div class="agent-skill-copy-field full"><span>下载链接</span><div class="agent-skill-copy-row"><a href="${escapeHtml(downloadUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(downloadUrl)}">${escapeHtml(downloadUrl)}</a><button type="button" data-agent-skill-copy="${escapeHtml(downloadUrl)}" data-agent-skill-copy-label="下载链接">复制</button></div></div>` : "",
+    agentSkillCopyField("提取码", skill.extractionCode || ""),
+    agentSkillCopyField("安装命令", skill.installCommand || "", !skill.extractionCode),
+  ].join("");
+  const acquisition = `<section class="agent-skill-section"><h3>${skill.resourceKind === "download" ? "下载与安装" : "获取与安装"}</h3><div class="agent-skill-acquisition-grid">
+      <div class="agent-skill-copy-field"><span>来源类型</span><div class="agent-skill-copy-row"><code>${escapeHtml(sourceLabel)}</code></div></div>
+      <div class="agent-skill-copy-field"><span>获取方式</span><div class="agent-skill-copy-row"><code>${escapeHtml(skill.acquisitionMethod || sourceLabel)}</code></div></div>
+      ${acquisitionFields}
+    </div>
+    ${skill.acquisitionInstructions ? `<p style="margin-top:11px">${escapeHtml(skill.acquisitionInstructions)}</p>` : skill.sourceType === "builtin" || !skill.sourceType ? `<p style="margin-top:11px">该 Skill 随系统目录加载，无需单独下载或安装。</p>` : ""}
+    ${homepageUrl || canDownload ? `<div class="agent-skill-actions">${canDownload ? `<a class="btn primary" href="${escapeHtml(downloadUrl || "#")}" target="_blank" rel="noopener noreferrer">去下载</a>` : ""}${homepageUrl ? `<a class="btn" href="${escapeHtml(homepageUrl)}" target="_blank" rel="noopener noreferrer">访问主页</a>` : ""}</div>` : ""}
+  </section>`;
+  const learning = skill.resourceKind === "download" ? `<section class="agent-skill-section"><h3>学习与训练</h3><div class="agent-skill-learning">
+      <details open><summary>使用说明</summary><article>${escapeHtml(skill.usageGuide || "暂无使用说明")}</article></details>
+      <details><summary>如何训练这个 Skill</summary><article>${escapeHtml(skill.trainingGuide || "暂无训练教程")}</article></details>
+      <details><summary>后续优化方向</summary><article>${escapeHtml(skill.optimizationAdvice || "暂无优化建议")}</article></details>
+    </div></section>` : "";
+  const management = skill.resourceKind === "download" && state.agentSkillCanManage ? `<div class="agent-skill-actions"><button class="btn" id="agentSkillResourceEdit">编辑</button>${skill.status !== "published" ? `<button class="btn primary" id="agentSkillResourcePublish">发布上架</button>` : `<button class="btn" id="agentSkillResourceArchive">下架</button>`}<button class="btn danger" id="agentSkillResourceDelete">删除</button></div>` : "";
+  target.innerHTML = `<div class="agent-skill-detail-bar"><span>${skill.resourceKind === "download" ? "Skill 资源详情" : "系统 Skill 详情"}</span><button class="agent-skill-detail-close" id="agentSkillDetailClose" type="button" aria-label="关闭" title="关闭">×</button></div>
+    <div class="agent-skill-detail-head"><div><span>${escapeHtml(skill.category)} · ${escapeHtml(agentSkillStatusLabel(skill.status))}</span><h2>${escapeHtml(skill.name)}</h2><p>${escapeHtml(skill.description)}</p></div><div class="agent-skill-version">V${escapeHtml(skill.version)}</div></div>
+    <div class="agent-skill-meta"><div><span>${skill.resourceKind === "download" ? "资源类型" : "目录"}</span><b>${escapeHtml(skill.resourceKind === "download" ? "可下载 Skill" : skill.directory)}</b></div><div><span>适用范围</span><b>${escapeHtml((skill.modules || []).join("、") || "通用")}</b></div><div><span>${skill.resourceKind === "download" ? "累计获取" : "优先级"}</span><b>${skill.resourceKind === "download" ? `${skill.accessCount || 0} 次` : skill.priority}</b></div><div><span>作者</span><b>${escapeHtml(skill.author || "未填写")}</b></div><div><span>许可</span><b>${escapeHtml(skill.license || "未填写")}</b></div><div><span>版本</span><b>${escapeHtml(skill.version)}</b></div></div>
+    ${acquisition}
+    ${learning}
+    ${(skill.toolRefs || []).length ? `<section class="agent-skill-section"><h3>关联工具</h3><div class="agent-skill-chips">${skill.toolRefs.map((tool) => `<span>${escapeHtml(tool)}</span>`).join("")}</div></section>` : ""}
+    ${skill.instructions ? `<section class="agent-skill-section"><h3>Skill 说明</h3><article class="agent-skill-markdown">${renderAgentSkillMarkdown(skill.instructions)}</article></section>` : ""}
+    ${management}`;
+  qs<HTMLButtonElement>("#agentSkillDetailClose", target)?.addEventListener("click", closeAgentSkillDetail);
+  qsa<HTMLButtonElement>("[data-agent-skill-copy]", target).forEach((button) => button.addEventListener("click", async () => {
+    await copyToClipboard(button.dataset.agentSkillCopy || "");
+    toast(`${button.dataset.agentSkillCopyLabel || "内容"}已复制`);
+  }));
+  qs<HTMLAnchorElement>(".agent-skill-actions a.btn.primary", target)?.addEventListener("click", (event) => {
+    if (skill.resourceKind !== "download") return;
+    event.preventDefault();
+    void accessSkillResource(skill);
+  });
+  qs("#agentSkillResourceEdit", target)?.addEventListener("click", () => openSkillResourceModal(skill));
+  qs("#agentSkillResourcePublish", target)?.addEventListener("click", () => void updateSkillResourceStatus(skill, "published"));
+  qs("#agentSkillResourceArchive", target)?.addEventListener("click", () => void updateSkillResourceStatus(skill, "archived"));
+  qs("#agentSkillResourceDelete", target)?.addEventListener("click", () => void deleteSkillResource(skill));
 }
 
-async function openAgentSkill(id: string) {
+async function openAgentSkill(id: string, kind = "system") {
   if (!id) return;
   try {
-    const result = await api<{ skill: AgentSkill }>(`/api/agent/skills/${encodeURIComponent(id)}`);
-    selectedAgentSkillId = result.skill.id;
-    state.agentSkills = state.agentSkills.map((skill) => skill.id === result.skill.id ? result.skill : skill);
+    let selected = state.agentSkills.find((skill) => skill.id === id);
+    if (kind !== "download") {
+      const result = await api<{ skill: AgentSkill }>(`/api/agent/skills/${encodeURIComponent(id)}`);
+      selected = { ...result.skill, resourceKind: "system" };
+      state.agentSkills = state.agentSkills.map((skill) => skill.id === result.skill.id ? selected! : skill);
+    }
+    if (!selected) throw new Error("Skill 不存在");
+    selectedAgentSkillId = selected.id;
     renderAgentSkillList();
-    renderAgentSkillDetail(result.skill);
+    renderAgentSkillDetail(selected);
+    const target = qs<HTMLElement>("#agentSkillsDetail");
+    target?.classList.add("open");
+    target?.setAttribute("aria-hidden", "false");
+    qs<HTMLElement>("#agentSkillDrawerBackdrop")?.classList.add("active");
+    document.body.classList.add("agent-skill-drawer-open");
   } catch (error) {
     toast(error instanceof Error ? error.message : "Skill 读取失败", "error");
   }
@@ -3632,24 +4497,130 @@ async function openAgentSkill(id: string) {
 
 async function loadAgentSkills(showError = true) {
   try {
-    const result = await api<{ directory: string; skills: AgentSkill[] }>("/api/agent/skills");
-    state.agentSkills = result.skills || [];
+    const [result, resourceResult] = await Promise.all([
+      api<{ directory: string; skills: AgentSkill[] }>("/api/agent/skills"),
+      api<{ resources: Array<Record<string, any>>; canManage: boolean }>("/api/agent/skill-resources")
+    ]);
+    const resources: AgentSkill[] = (resourceResult.resources || []).map((item) => ({
+      id: item.id, name: item.name, version: item.version, category: item.category, description: item.summary,
+      status: item.status, priority: 0, triggers: [], keywords: item.tags || [], modules: item.tags || [], toolRefs: [],
+      sourceType: "download", acquisitionMethod: "百度网盘获取", downloadUrl: item.downloadUrl,
+      extractionCode: item.extractionCode || "", installCommand: "", acquisitionInstructions: item.acquisitionInstructions || "",
+      homepageUrl: "", author: item.author || "", license: item.license || "", directory: "团队资源库",
+      resourceKind: "download", usageGuide: item.usageGuide || "", trainingGuide: item.trainingGuide || "",
+      optimizationAdvice: item.optimizationAdvice || "", accessCount: item.accessCount || 0, ownerId: item.ownerId,
+      teamId: item.teamId, createdAt: item.createdAt, updatedAt: item.updatedAt, downloadAvailable: Boolean(item.downloadAvailable || item.downloadUrl)
+    }));
+    state.agentSkills = [...resources, ...(result.skills || []).map((skill) => ({ ...skill, resourceKind: "system" as const }))];
+    state.agentSkillCanManage = resourceResult.canManage;
     state.agentSkillDirectory = result.directory || "agent-skills";
     const active = state.agentSkills.filter((skill) => skill.status === "active");
     const system = active.filter((skill) => skill.category === "system");
     const setText = (selector: string, value: string) => { const node = qs<HTMLElement>(selector); if (node) node.textContent = value; };
-    setText("#agentSkillsActiveCount", String(active.length));
-    setText("#agentSkillsSystemCount", String(system.length));
-    setText("#agentSkillsBusinessCount", String(active.length - system.length));
-    setText("#agentSkillsDirectory", state.agentSkillDirectory);
-    if (!selectedAgentSkillId || !state.agentSkills.some((skill) => skill.id === selectedAgentSkillId)) {
-      selectedAgentSkillId = state.agentSkills.find((skill) => skill.id === "system-overview")?.id || state.agentSkills[0]?.id || "";
-    }
+    setText("#agentSkillsActiveCount", String(active.length + resources.filter((item) => item.status === "published").length));
+    setText("#agentSkillsSystemCount", String((result.skills || []).length));
+    setText("#agentSkillsBusinessCount", String(resources.length));
+    setText("#agentSkillsDirectory", String(resources.reduce((sum, item) => sum + (item.accessCount || 0), 0)));
+    const addButton = qs<HTMLButtonElement>("#agentSkillAddButton");
+    if (addButton) addButton.hidden = !state.agentSkillCanManage;
+    if (!state.agentSkills.some((skill) => skill.id === selectedAgentSkillId)) selectedAgentSkillId = "";
+    renderAgentSkillFilters();
     renderAgentSkillList();
-    if (selectedAgentSkillId) await openAgentSkill(selectedAgentSkillId);
-    else renderAgentSkillDetail();
+    const selected = state.agentSkills.find((skill) => skill.id === selectedAgentSkillId);
+    if (qs<HTMLElement>("#agentSkillsDetail")?.classList.contains("open") && selected) await openAgentSkill(selected.id, selected.resourceKind || "system");
   } catch (error) {
     if (showError) toast(error instanceof Error ? error.message : "Skills 读取失败", "error");
+  }
+}
+
+function skillResourcePayload() {
+  const value = (selector: string) => qs<HTMLInputElement | HTMLTextAreaElement>(selector)?.value.trim() || "";
+  return {
+    name: value("#skillResourceName"),
+    category: value("#skillResourceCategory") || "业务效率",
+    version: value("#skillResourceVersion") || "1.0.0",
+    summary: value("#skillResourceSummary"),
+    usageGuide: value("#skillResourceUsage"),
+    trainingGuide: value("#skillResourceTraining"),
+    optimizationAdvice: value("#skillResourceOptimization"),
+    acquisitionInstructions: value("#skillResourceAcquisition"),
+    downloadUrl: value("#skillResourceUrl"),
+    extractionCode: value("#skillResourceCode"),
+    tags: value("#skillResourceTags").split(/[，,]/u).map((item) => item.trim()).filter(Boolean),
+    author: value("#skillResourceAuthor"),
+    license: value("#skillResourceLicense") || "内部使用"
+  };
+}
+
+function openSkillResourceModal(skill?: AgentSkill) {
+  if (!state.agentSkillCanManage) return;
+  openModal(skill ? "编辑 Skill" : "上架 Skill", `<div class="form-grid">
+    <div class="form-field full"><label>Skill 名称</label><input id="skillResourceName" maxlength="160" value="${escapeHtml(skill?.name || "")}" placeholder="例如：外贸开发信优化 Skill"></div>
+    <div class="form-field"><label>分类</label><input id="skillResourceCategory" maxlength="100" value="${escapeHtml(skill?.category || "业务效率")}"></div>
+    <div class="form-field"><label>版本</label><input id="skillResourceVersion" maxlength="40" value="${escapeHtml(skill?.version || "1.0.0")}"></div>
+    <div class="form-field full"><label>简介</label><textarea id="skillResourceSummary" rows="3" maxlength="1200" placeholder="说清楚它能解决什么问题、适合谁使用">${escapeHtml(skill?.description || "")}</textarea></div>
+    <div class="form-field full"><label>百度网盘链接</label><input id="skillResourceUrl" value="${escapeHtml(skill?.downloadUrl || "")}" placeholder="https://pan.baidu.com/s/..."></div>
+    <div class="form-field"><label>提取码</label><input id="skillResourceCode" maxlength="64" value="${escapeHtml(skill?.extractionCode || "")}"></div>
+    <div class="form-field"><label>作者</label><input id="skillResourceAuthor" maxlength="120" value="${escapeHtml(skill?.author || state.user?.name || "")}"></div>
+    <div class="form-field"><label>许可说明</label><input id="skillResourceLicense" maxlength="120" value="${escapeHtml(skill?.license || "内部使用")}"></div>
+    <div class="form-field"><label>标签</label><input id="skillResourceTags" value="${escapeHtml((skill?.keywords || []).join("，"))}" placeholder="开发信，销售，写作"></div>
+    <div class="form-field full"><label>使用说明</label><textarea id="skillResourceUsage" rows="5" maxlength="8000" placeholder="安装位置、触发方式、输入要求和使用步骤">${escapeHtml(skill?.usageGuide || "")}</textarea></div>
+    <div class="form-field full"><label>训练教程</label><textarea id="skillResourceTraining" rows="6" maxlength="12000" placeholder="如何准备样本、调整指令、验证结果和迭代版本">${escapeHtml(skill?.trainingGuide || "")}</textarea></div>
+    <div class="form-field full"><label>优化方向建议</label><textarea id="skillResourceOptimization" rows="5" maxlength="12000" placeholder="当前边界、常见失败和下一步可提升方向">${escapeHtml(skill?.optimizationAdvice || "")}</textarea></div>
+    <div class="form-field full"><label>获取与安装说明</label><textarea id="skillResourceAcquisition" rows="4" maxlength="4000" placeholder="下载、解压、放置目录及启用方法">${escapeHtml(skill?.acquisitionInstructions || "")}</textarea></div>
+  </div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="skillResourceSave">${skill ? "保存修改" : "保存草稿"}</button>`);
+  qs("#skillResourceSave")?.addEventListener("click", () => void saveSkillResource(skill));
+}
+
+async function saveSkillResource(skill?: AgentSkill) {
+  const payload = skillResourcePayload();
+  if (!payload.name || !payload.summary || !payload.downloadUrl) return void toast("名称、简介和下载链接为必填", "error");
+  try {
+    await api(skill ? `/api/agent/skill-resources/${skill.id}` : "/api/agent/skill-resources", { method: skill ? "PATCH" : "POST", body: JSON.stringify(payload) });
+    closeModal();
+    await loadAgentSkills(false);
+    toast(skill ? "Skill 已更新" : "Skill 草稿已保存，可在详情中发布");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "Skill 保存失败", "error");
+  }
+}
+
+async function updateSkillResourceStatus(skill: AgentSkill, status: "published" | "archived") {
+  try {
+    await api(`/api/agent/skill-resources/${skill.id}/status`, { method: "PATCH", body: JSON.stringify({ status }) });
+    closeAgentSkillDetail();
+    await loadAgentSkills(false);
+    toast(status === "published" ? "Skill 已发布上架" : "Skill 已下架");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "状态更新失败", "error");
+  }
+}
+
+async function accessSkillResource(skill: AgentSkill) {
+  const popup = window.open("", "_blank");
+  if (popup) popup.opener = null;
+  try {
+    const result = await api<{ access: { url: string; extractionCode: string } }>(`/api/agent/skill-resources/${skill.id}/access`, { method: "POST", body: "{}" });
+    if (result.access.extractionCode) await copyToClipboard(result.access.extractionCode);
+    if (popup) popup.location.href = result.access.url;
+    else window.open(result.access.url, "_blank", "noopener,noreferrer");
+    toast(result.access.extractionCode ? "已打开网盘，提取码已复制" : "已打开下载链接");
+    void loadAgentSkills(false);
+  } catch (error) {
+    popup?.close();
+    toast(error instanceof Error ? error.message : "Skill 获取失败", "error");
+  }
+}
+
+async function deleteSkillResource(skill: AgentSkill) {
+  if (!await confirmAction({ title: "删除 Skill", message: `确定删除「${skill.name}」吗？`, consequences: ["只删除 CRM 中的上架记录", "不会删除百度网盘中的文件"], confirmLabel: "删除", tone: "danger" })) return;
+  try {
+    await api(`/api/agent/skill-resources/${skill.id}`, { method: "DELETE", body: "{}" });
+    closeAgentSkillDetail();
+    await loadAgentSkills(false);
+    toast("Skill 已删除");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "Skill 删除失败", "error");
   }
 }
 
@@ -3727,7 +4698,7 @@ function agentKnowledgeCenterBody() {
       <div><span>系统知识</span><b>${overview.systemCount}</b></div>
       <div><span>团队发布</span><b>${overview.publishedCount}</b></div>
       <div><span>待审核</span><b>${overview.reviewCount}</b></div>
-      <div><span>团队维护</span><b>${overview.managedCount}</b></div>
+      <div><span>知识总量</span><b>${overview.systemCount + overview.managedCount}</b></div>
     </div>
     <div class="agent-knowledge-toolbar">
       <input id="agentKnowledgeQuery" value="${escapeHtml(agentKnowledgeQuery)}" placeholder="搜索知识、流程或失败案例">
@@ -3797,13 +4768,11 @@ function openAgentKnowledgeDetail(document: AgentKnowledgeDocument) {
 
 function openAgentKnowledgeEditor(document?: AgentKnowledgeDocument) {
   const kindOptions: AgentKnowledgeKind[] = ["module", "workflow", "policy", "field", "playbook", "failure_case"];
-  const selectedRoles = new Set(document?.roles || ["sales", "manager", "admin", "super_admin"]);
-  const roleOptions: Array<[AgentKnowledgeDocument["roles"][number], string]> = [["sales", "业务员"], ["manager", "主管"], ["admin", "管理员"], ["super_admin", "超级管理员"]];
   openModal(document ? "编辑团队知识" : "新增团队知识", `<div class="agent-knowledge-editor"><div class="form-grid">
       <div class="form-field"><label>模块</label><input id="agentKnowledgeModuleInput" maxlength="80" value="${escapeHtml(document?.module || "")}"></div>
       <div class="form-field"><label>类型</label><select id="agentKnowledgeKindInput">${kindOptions.map((item) => `<option value="${item}" ${item === document?.kind ? "selected" : ""}>${agentKnowledgeKindLabel(item)}</option>`).join("")}</select></div>
       <div class="form-field"><label>范围</label><select id="agentKnowledgeScopeInput"><option value="team" ${document?.scope !== "company" ? "selected" : ""}>团队</option><option value="company" ${document?.scope === "company" ? "selected" : ""}>公司</option></select></div>
-      <div class="form-field agent-knowledge-role-field"><label>适用角色</label><div>${roleOptions.map(([value, label]) => `<label><input type="checkbox" value="${value}" data-agent-knowledge-role ${selectedRoles.has(value) ? "checked" : ""}>${label}</label>`).join("")}</div></div>
+      <div class="form-field agent-knowledge-role-field"><label>适用权限</label><input id="agentKnowledgePermissionsInput" value="${escapeHtml((document?.permissionCodes || ["agent.use"]).join("，"))}"></div>
       <div class="form-field full"><label>标题</label><input id="agentKnowledgeTitleInput" maxlength="160" value="${escapeHtml(document?.title || "")}"></div>
       <div class="form-field full"><label>摘要</label><input id="agentKnowledgeSummaryInput" maxlength="500" value="${escapeHtml(document?.summary || "")}"></div>
       <div class="form-field full"><label>知识正文</label><textarea id="agentKnowledgeContentInput" rows="8" maxlength="8000">${escapeHtml(document?.content || "")}</textarea></div>
@@ -3823,7 +4792,6 @@ function agentKnowledgeListValue(selector: string, splitLines = false) {
 }
 
 async function saveAgentKnowledge(document: AgentKnowledgeDocument | undefined, button: HTMLButtonElement) {
-  const roles = qsa<HTMLInputElement>("[data-agent-knowledge-role]:checked").map((item) => item.value);
   const body = {
     module: qs<HTMLInputElement>("#agentKnowledgeModuleInput")?.value.trim() || "",
     kind: qs<HTMLSelectElement>("#agentKnowledgeKindInput")?.value,
@@ -3835,12 +4803,12 @@ async function saveAgentKnowledge(document: AgentKnowledgeDocument | undefined, 
     toolRefs: agentKnowledgeListValue("#agentKnowledgeToolsInput"),
     successCriteria: agentKnowledgeListValue("#agentKnowledgeCriteriaInput", true),
     failureCases: agentKnowledgeListValue("#agentKnowledgeFailuresInput", true),
-    roles,
+    permissionCodes: agentKnowledgeListValue("#agentKnowledgePermissionsInput"),
     sourceType: document?.sourceType === "agent_feedback" ? "agent_feedback" : "manual",
     sourceId: document?.sourceId || ""
   };
-  if (!body.module || body.title.length < 2 || body.summary.length < 2 || body.content.length < 10 || !roles.length) {
-    toast("请完整填写模块、标题、摘要、正文和适用角色", "error");
+  if (!body.module || body.title.length < 2 || body.summary.length < 2 || body.content.length < 10 || !body.permissionCodes.length) {
+    toast("请完整填写模块、标题、摘要、正文和适用权限", "error");
     return;
   }
   button.disabled = true;
@@ -3894,7 +4862,7 @@ async function testAgentKnowledgeRetrieval(button: HTMLButtonElement) {
 }
 
 function agentTriggerTypeLabel(type: AgentTriggerEventType) {
-  return ({ lead_overdue: "线索超时", customer_reply: "客户新回复", stalled_deal: "商机停滞", next_action_due: "下一动作到期", health_decline: "客户健康下降", communication_unread: "Communication 未读", prospect_completed: "搜客任务结束" } as Record<AgentTriggerEventType, string>)[type];
+  return ({ lead_overdue: "线索超时", customer_reply: "客户新回复", stalled_deal: "商机停滞", next_action_due: "下一动作到期", health_decline: "客户健康下降", communication_unread: "即刻沟通未读", prospect_completed: "搜客任务结束" } as Record<AgentTriggerEventType, string>)[type];
 }
 
 function agentTriggerModeLabel(mode: AgentTriggerRule["mode"]) {
@@ -3955,7 +4923,7 @@ async function openAgentTriggerManager(reload = true) {
 }
 
 function openAgentTriggerEditor(rule?: AgentTriggerRule) {
-  const options: Array<[AgentTriggerEventType, string]> = [["lead_overdue", "线索超时"], ["customer_reply", "客户新回复"], ["stalled_deal", "商机停滞"], ["next_action_due", "下一动作到期"], ["health_decline", "客户健康下降"], ["communication_unread", "Communication 未读"], ["prospect_completed", "搜客任务结束"]];
+  const options: Array<[AgentTriggerEventType, string]> = [["lead_overdue", "线索超时"], ["customer_reply", "客户新回复"], ["stalled_deal", "商机停滞"], ["next_action_due", "下一动作到期"], ["health_decline", "客户健康下降"], ["communication_unread", "即刻沟通未读"], ["prospect_completed", "搜客任务结束"]];
   openModal(rule ? "编辑自动触发" : "新增自动触发", `<div class="form-grid"><div class="form-field full"><label>规则名称</label><input id="agentTriggerNameInput" maxlength="120" value="${escapeHtml(rule?.name || "")}"></div><div class="form-field"><label>触发事件</label><select id="agentTriggerTypeInput">${options.map(([value, label]) => `<option value="${value}" ${rule?.eventType === value ? "selected" : ""}>${label}</option>`).join("")}</select></div><div class="form-field"><label>处理方式</label><select id="agentTriggerModeInput"><option value="notify" ${rule?.mode === "notify" ? "selected" : ""}>只读提醒</option><option value="internal" ${rule?.mode === "internal" ? "selected" : ""}>站内任务待确认</option><option value="approval" ${rule?.mode === "approval" ? "selected" : ""}>审批型建议</option></select></div><div class="form-field"><label>扫描间隔（分钟）</label><input id="agentTriggerIntervalInput" type="number" min="5" max="10080" value="${rule?.intervalMinutes || 60}"></div><div class="form-field"><label>超时阈值（天）</label><input id="agentTriggerDaysInput" type="number" min="1" max="180" value="${rule?.thresholdDays || 3}"></div><div class="form-field"><label>健康度阈值</label><input id="agentTriggerHealthInput" type="number" min="0" max="100" value="${rule?.healthBelow ?? 60}"></div><div class="form-field"><label>单次上限</label><input id="agentTriggerMaxInput" type="number" min="1" max="20" value="${rule?.maxPerScan || 5}"></div></div>`, `<button class="btn" id="agentTriggerBackButton">返回</button><button class="btn primary" id="agentTriggerSaveButton">保存</button>`);
   qs<HTMLElement>("#appModal .modal")?.classList.add("agent-memory-modal");
   qs<HTMLButtonElement>("#agentTriggerBackButton")?.addEventListener("click", () => void openAgentTriggerManager(false));
@@ -3979,7 +4947,18 @@ async function saveAgentTrigger(rule: AgentTriggerRule | undefined, button: HTML
 
 async function mutateAgentTrigger(id: string, action: "run" | "pause" | "resume" | "delete", button: HTMLButtonElement) {
   if (!id) return;
-  if (action === "delete" && !window.confirm("确认删除这条自动触发规则？历史触发记录会保留。")) return;
+  if (action === "delete") {
+    const confirmed = await confirmAction({
+      title: "删除自动触发规则",
+      message: "这条规则将停止后续自动扫描。",
+      consequences: ["规则配置会被删除", "已经产生的历史触发记录会保留"],
+      confirmLabel: "删除规则"
+    });
+    if (!confirmed) {
+      openAgentTriggerManager(false);
+      return;
+    }
+  }
   button.disabled = true;
   try {
     await api(`/api/agent/triggers/${encodeURIComponent(id)}${action === "delete" ? "" : `/${action}`}`, { method: action === "delete" ? "DELETE" : "POST" });
@@ -4524,7 +5503,16 @@ async function executeAgentStepFromUi(stepId: string, approved: boolean) {
 async function approveAllExternalAgentSteps() {
   const steps = state.agentRun?.steps.filter((step) => step.status === "needs_confirmation" && step.risk === "external") || [];
   if (!steps.length) return;
-  const confirmed = window.confirm(`确认批准以下 ${steps.length} 个外部动作？\n\n${steps.map((step, index) => `${index + 1}. ${step.title}`).join("\n")}`);
+  const confirmed = await confirmAction({
+    title: `批准 ${steps.length} 个外部动作`,
+    message: "这些动作获批后将由 Agent 依次提交到外部系统。",
+    detail: steps.map((step, index) => `${index + 1}. ${step.title}`).join("；"),
+    detailLabel: "待批准动作",
+    consequences: ["动作会按当前任务参数执行", "每个动作的执行结果会写入任务记录", "外部系统产生的变更可能需要单独撤回"],
+    confirmLabel: `批准 ${steps.length} 个动作`,
+    tone: "warning",
+    verificationText: steps.length > 1 ? String(steps.length) : undefined
+  });
   if (!confirmed) return;
   for (const step of steps) {
     await executeAgentStepFromUi(step.id, true);
@@ -4675,13 +5663,16 @@ function ensureUiLayer() {
     document.body.insertAdjacentHTML("beforeend", `
       <div class="modal-backdrop" id="appModal" role="dialog" aria-modal="true">
         <div class="modal">
-          <div class="modal-head"><h2 id="modalTitle">操作</h2><button class="btn icon-only" data-modal-close title="关闭">×</button></div>
+          <div class="modal-head"><div class="modal-heading"><span class="modal-heading-mark" aria-hidden="true"></span><div><h2 id="modalTitle">操作</h2><p id="modalDescription">填写信息后保存，随时可以关闭此窗口</p></div></div><button class="btn icon-only modal-close" data-modal-close title="关闭" aria-label="关闭弹窗">×</button></div>
           <div class="modal-body" id="modalBody"></div>
           <div class="modal-foot" id="modalFoot"></div>
         </div>
       </div>
     `);
     qs("[data-modal-close]")?.addEventListener("click", closeModal);
+    qs<HTMLElement>("#appModal")?.addEventListener("mousedown", (event) => {
+      if (modalCloseOnBackdrop && event.target === event.currentTarget) closeModal();
+    });
   }
 }
 
@@ -4692,25 +5683,163 @@ function toast(
   ensureUiLayer();
   const stack = qs<HTMLElement>(".toast-stack")!;
   const item = document.createElement("div");
-  item.className = `toast ${type === "error" ? "error" : ""}`;
-  item.textContent = message;
+  const normalizedType = type === "ok" ? "success" : type === "warn" ? "warning" : type;
+  const labels: Record<string, string> = { success: "已完成", error: "需要处理", warning: "请留意", info: "提示" };
+  const icons: Record<string, string> = { success: "✓", error: "!", warning: "!", info: "i" };
+  item.className = `toast toast-${normalizedType}`;
+  item.setAttribute("role", normalizedType === "error" ? "alert" : "status");
+  item.innerHTML = `<span class="toast-icon" aria-hidden="true">${icons[normalizedType] || "i"}</span><span class="toast-copy"><b>${labels[normalizedType] || "提示"}</b><span>${escapeHtml(message)}</span></span><button class="toast-dismiss" type="button" aria-label="关闭提示">×</button>`;
+  item.querySelector<HTMLButtonElement>(".toast-dismiss")?.addEventListener("click", () => item.remove());
   stack.appendChild(item);
-  window.setTimeout(() => item.remove(), 2600);
+  window.setTimeout(() => { item.classList.add("is-leaving"); window.setTimeout(() => item.remove(), 180); }, normalizedType === "error" ? 5200 : 3400);
 }
 
-function openModal(title: string, body: string, foot: string) {
+let modalDismissHandler: (() => void) | null = null;
+let modalReturnFocus: HTMLElement | null = null;
+let modalBodyOverflow = "";
+let modalCloseOnBackdrop = false;
+
+interface ModalOptions {
+  closeOnBackdrop?: boolean;
+}
+
+function openModal(title: string, body: string, foot: string, options: ModalOptions = {}) {
   ensureUiLayer();
-  qs<HTMLElement>("#appModal .modal")?.classList.remove("customs-workspace-modal", "agent-memory-modal", "agent-knowledge-modal");
+  if (modalDismissHandler) {
+    const dismiss = modalDismissHandler;
+    modalDismissHandler = null;
+    dismiss();
+  }
+  const modalRoot = qs<HTMLElement>("#appModal")!;
+  modalCloseOnBackdrop = options.closeOnBackdrop ?? false;
+  if (!modalRoot.classList.contains("active")) {
+    modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    modalBodyOverflow = document.body.style.overflow;
+  }
+  document.body.style.overflow = "hidden";
+  modalRoot.setAttribute("role", "dialog");
+  modalRoot.removeAttribute("aria-describedby");
+  qs<HTMLElement>("#appModal .modal")?.classList.remove("customs-workspace-modal", "agent-memory-modal", "agent-knowledge-modal", "confirm-modal", "trade-document-import-modal", "document-asset-editor-modal", "deal-editor-modal", "ac-guide-modal");
   qs("#modalTitle")!.textContent = title;
+  qs<HTMLElement>("#modalDescription")!.textContent = title.includes("删除") || title.includes("停用") ? "此操作可能影响现有业务数据" : "填写信息后保存，随时可以关闭此窗口";
   qs("#modalBody")!.innerHTML = body;
   qs("#modalFoot")!.innerHTML = foot;
   qsa("[data-modal-close]", qs("#appModal")!).forEach((node) => node.addEventListener("click", closeModal));
   qs("#appModal")!.classList.add("active");
+  window.setTimeout(() => qs<HTMLElement>("#appModal input, #appModal select, #appModal textarea, #appModal [data-modal-cancel], #appModal button:not([data-modal-close])")?.focus(), 50);
 }
 
 function closeModal() {
   qs("#appModal")?.classList.remove("active");
+  modalCloseOnBackdrop = false;
+  document.body.style.overflow = modalBodyOverflow;
+  const dismiss = modalDismissHandler;
+  modalDismissHandler = null;
+  dismiss?.();
+  const returnFocus = modalReturnFocus;
+  modalReturnFocus = null;
+  window.setTimeout(() => {
+    if (returnFocus?.isConnected) returnFocus.focus();
+  }, 0);
 }
+
+interface ConfirmActionOptions {
+  title: string;
+  message: string;
+  consequences?: string[];
+  detail?: string;
+  detailLabel?: string;
+  confirmLabel?: string;
+  tone?: "danger" | "warning" | "normal";
+  verificationText?: string;
+}
+
+function confirmAction({
+  title,
+  message,
+  consequences = [],
+  detail = "",
+  detailLabel = "本次选择",
+  confirmLabel = "确认",
+  tone = "danger",
+  verificationText
+}: ConfirmActionOptions): Promise<boolean> {
+  return new Promise((resolve) => {
+    const verification = verificationText
+      ? `<label class="confirm-verification"><span>输入 <b>${escapeHtml(verificationText)}</b> 以继续</span><input id="confirmVerificationInput" autocomplete="off" inputmode="numeric" aria-describedby="confirmVerificationHint"><small id="confirmVerificationHint">用于避免批量操作被误触</small></label>`
+      : "";
+    const consequenceList = consequences.length
+      ? `<div class="confirm-consequences"><b>确认后将发生</b><ul>${consequences.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`
+      : "";
+    const selection = detail ? `<div class="confirm-selection"><span>${escapeHtml(detailLabel)}</span><strong>${escapeHtml(detail)}</strong></div>` : "";
+
+    openModal(title, `
+      <div class="confirm-dialog confirm-${tone}">
+        <div class="confirm-symbol" aria-hidden="true">!</div>
+        <div class="confirm-copy">
+          <p id="confirmDialogDescription">${escapeHtml(message)}</p>
+          ${selection}
+          ${consequenceList}
+          ${verification}
+        </div>
+      </div>
+    `, `<button class="btn" data-modal-close data-modal-cancel type="button">取消</button><button class="btn ${tone === "danger" ? "danger" : tone === "warning" ? "warning" : "primary"}" id="confirmActionButton" type="button" ${verificationText ? "disabled" : ""}>${escapeHtml(confirmLabel)}</button>`);
+
+    const modalRoot = qs<HTMLElement>("#appModal")!;
+    modalRoot.setAttribute("role", "alertdialog");
+    modalRoot.setAttribute("aria-describedby", "confirmDialogDescription");
+    qs<HTMLElement>("#appModal .modal")?.classList.add("confirm-modal");
+    const confirmButton = qs<HTMLButtonElement>("#confirmActionButton")!;
+    const input = qs<HTMLInputElement>("#confirmVerificationInput");
+    if (input && verificationText) {
+      input.addEventListener("input", () => {
+        confirmButton.disabled = input.value.trim() !== verificationText;
+      });
+      input.focus();
+    }
+    modalDismissHandler = () => resolve(false);
+    confirmButton.addEventListener("click", () => {
+      modalDismissHandler = null;
+      closeModal();
+      resolve(true);
+    });
+  });
+}
+
+function setButtonPending(button: HTMLButtonElement | null, pending: boolean, idleLabel: string, pendingLabel: string) {
+  if (!button) return;
+  button.disabled = pending;
+  button.classList.toggle("is-loading", pending);
+  if (pending) button.setAttribute("aria-busy", "true");
+  else button.removeAttribute("aria-busy");
+  button.textContent = pending ? pendingLabel : idleLabel;
+}
+
+document.addEventListener("keydown", (event) => {
+  const modalRoot = qs<HTMLElement>("#appModal");
+  if (!modalRoot?.classList.contains("active")) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeModal();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = qsa<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex='-1'])", modalRoot)
+    .filter((element) => element.getClientRects().length > 0 && element.getAttribute("aria-hidden") !== "true");
+  if (!focusable.length) {
+    event.preventDefault();
+    return;
+  }
+  const first = focusable[0]!;
+  const last = focusable[focusable.length - 1]!;
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method || "GET").toUpperCase();
@@ -4736,17 +5865,59 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function completeLogin(user: User) {
+  localStorage.setItem(storage.user, JSON.stringify(user));
+  state.user = user;
+  applyAuthedUser(user);
+  document.body.classList.add("is-authenticated");
+  await refreshAll(user);
+  activateNavView(state.iamCapabilities?.source === "platform" ? "platform-operations" : rememberedWorkspaceView(user));
+  void recordLog({ level: "info", category: "auth", action: "login", message: `用户 ${user.name} 登录系统`, meta: { role: user.role } });
+}
+
+async function openMfaEnrollment(setupToken: string) {
+  const enrollment = await api<{ secret: string; qrCode: string; recoveryCodes: string[] }>("/api/auth/mfa/enroll", {
+    method: "POST",
+    body: JSON.stringify({ setupToken })
+  });
+  openModal("启用运维双重验证", `
+    <div class="form-grid">
+      <div class="form-field full" style="text-align:center"><img src="${escapeHtml(enrollment.qrCode)}" alt="MFA 二维码" width="220" height="220"></div>
+      <div class="form-field full"><label>手动密钥</label><input readonly value="${escapeHtml(enrollment.secret)}"></div>
+      <div class="form-field full"><label>恢复码（仅展示一次）</label><textarea readonly rows="4">${escapeHtml(enrollment.recoveryCodes.join("  "))}</textarea></div>
+      <div class="form-field full"><label>验证器中的 6 位验证码</label><input id="mfaEnrollmentCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6"></div>
+    </div>`, `<button class="btn primary" id="confirmMfaEnrollment">确认启用</button>`);
+  qs<HTMLInputElement>("#mfaEnrollmentCode")?.focus();
+  qs("#confirmMfaEnrollment")?.addEventListener("click", () => void (async () => {
+    const code = qs<HTMLInputElement>("#mfaEnrollmentCode")?.value.trim() || "";
+    await api("/api/auth/mfa/confirm", { method: "POST", body: JSON.stringify({ setupToken, code }) });
+    closeModal();
+    toast("双重验证已启用，请重新登录", "success");
+  })().catch((error) => toast(error instanceof Error ? error.message : "验证码确认失败", "error")));
+}
+
+function openMfaChallenge(email: string, challengeId: string) {
+  openModal("运维安全验证", `
+    <div class="form-grid"><div class="form-field full"><label>验证器验证码或恢复码</label><input id="mfaLoginCode" autocomplete="one-time-code" autofocus></div></div>`,
+  `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="verifyMfaLogin">验证并登录</button>`);
+  qs<HTMLInputElement>("#mfaLoginCode")?.focus();
+  qs("#verifyMfaLogin")?.addEventListener("click", () => void (async () => {
+    const code = qs<HTMLInputElement>("#mfaLoginCode")?.value.trim() || "";
+    const verified = await api<{ user: User }>("/api/auth/mfa/verify", { method: "POST", body: JSON.stringify({ email, challengeId, code }) });
+    closeModal();
+    await completeLogin(verified.user);
+  })().catch((error) => toast(error instanceof Error ? error.message : "安全验证失败", "error")));
+}
+
 async function loginWithPassword(email: string, password: string) {
-  const result = await api<{ user: User }>("/api/auth/login", {
+  const result = await api<{ user?: User; mfaRequired?: boolean; mfaSetupRequired?: boolean; setupToken?: string; challengeId?: string; email?: string }>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password })
   });
-  localStorage.setItem(storage.user, JSON.stringify(result.user));
-  state.user = result.user;
-  applyAuthedUser(result.user);
-  document.body.classList.add("is-authenticated");
-  await refreshAll(result.user);
-  activateNavView(rememberedWorkspaceView(result.user));
+  if (result.mfaSetupRequired && result.setupToken) { await openMfaEnrollment(result.setupToken); return; }
+  if (result.mfaRequired && result.challengeId) { openMfaChallenge(result.email || email, result.challengeId); return; }
+  if (!result.user) throw new Error("登录响应缺少用户信息");
+  await completeLogin(result.user);
 }
 
 function applyAuthedUser(user: User) {
@@ -4754,40 +5925,120 @@ function applyAuthedUser(user: User) {
   document.body.dataset.role = user.role;
   syncWorkspaceAccess(user);
   qs("#scopeUser")!.textContent = profileName;
-  qs("#scopeText")!.textContent = user.role === "sales" ? "仅本人业务与本人待办" : user.role === "manager" ? "本团队业务数据，本人待办私有" : user.role === "admin" ? "本团队业务数据、团队账号管理，本人待办私有" : "全局业务数据、最高账号权限，本人待办私有";
+  qs("#scopeText")!.textContent = roleScopeText(user);
   qs("#currentAvatar")!.textContent = user.avatar;
   const topUserName = qs<HTMLElement>("#topUserName");
   const topUserRole = qs<HTMLElement>("#topUserRole");
   if (topUserName) topUserName.textContent = user.name;
-  if (topUserRole) topUserRole.textContent = roleLabel[user.role];
+  if (topUserRole) topUserRole.textContent = user.iamRoleNames?.join(" / ") || roleLabel[user.role];
   syncTrainingManagementUi(user);
   renderProfile(user);
+  applyTheme(getInitialTheme());
 }
 
 function canManageTrainingUi(user = state.user) {
-  return user?.role === "manager" || user?.role === "admin" || user?.role === "super_admin";
+  return Boolean(user && hasIamCapability("training.manage"));
+}
+
+const accessControlViews = [
+  "member-management",
+  "organization-structure",
+  "role-management",
+  "member-authorization",
+  "permission-audit"
+] as const;
+
+function isAccessControlView(view: string): view is typeof accessControlViews[number] {
+  return (accessControlViews as readonly string[]).includes(view);
+}
+
+function isSystemAdministrator(user = state.user) {
+  return Boolean(user && (user.role === "admin" || user.role === "super_admin"));
+}
+
+const viewPermissionRequirements: Record<string, string> = {
+  dashboard: "workspace.dashboard.read",
+  "lead-finder": "prospect.read",
+  "prospect-list": "prospect.read",
+  "ai-agent": "agent.use",
+  "agent-skills": "agent.use",
+  "integration-center": "integration.read",
+  leads: "lead.read",
+  customers: "customer.read",
+  "customer-pool": "customer.pool.claim",
+  whatsapp: "communication.read",
+  wecom: "communication.read",
+  pipeline: "deal.read",
+  documents: "document.read",
+  commission: "commission.read",
+  reports: "report.read",
+  leaderboard: "report.read",
+  "daily-reports": "daily_report.read",
+  "approval-center": "approval.read",
+  "approval-workflows": "approval.workflow.manage",
+  inbox: "message.read",
+  knowledge: "training.read",
+  exam: "training.read",
+  "question-bank": "training.manage",
+  products: "product.read",
+  shipments: "shipment.read",
+  "member-management": "member.read",
+  "organization-structure": "org.read",
+  "role-management": "role.read",
+  "member-authorization": "permission.assign",
+  "permission-audit": "audit.read",
+  settings: "system.settings.manage",
+  "database-maintenance": "database.maintain",
+  "platform-operations": "platform.dashboard.read"
+};
+
+function hasIamCapability(permissionCode: string) {
+  return Boolean(state.iamCapabilities?.permissions[permissionCode]?.length);
 }
 
 function canAccessWorkspaceView(view: string, user = state.user) {
-  if (view === "database-maintenance") return user?.role === "admin" || user?.role === "super_admin";
-  return !(user?.role === "sales" && view === "settings");
+  if (!user) return false;
+  if (state.iamCapabilities?.source === "platform") {
+    if (isAccessControlView(view) && user.role === "super_admin") {
+      return view === "permission-audit"
+        ? hasIamCapability("platform.audit.read") && hasIamCapability("platform.tenant.metadata.read")
+        : hasIamCapability("platform.tenant.metadata.read");
+    }
+    return (view === "platform-operations" && hasIamCapability("platform.dashboard.read"))
+      || (view === "integration-center" && hasIamCapability("platform.integration.connector.review"));
+  }
+  if (isAccessControlView(view) && !isSystemAdministrator(user)) return false;
+  const requiredPermission = viewPermissionRequirements[view];
+  if (requiredPermission && state.iamCapabilities) return hasIamCapability(requiredPermission);
+  if (view === "database-maintenance") return hasIamCapability("database.maintain");
+  if (isAccessControlView(view)) return hasIamCapability(view === "member-management" ? "member.read" : view === "organization-structure" ? "org.read" : view === "role-management" ? "role.read" : view === "member-authorization" ? "permission.assign" : "audit.read");
+  return true;
 }
 
 function syncWorkspaceAccess(user = state.user) {
-  const settingsRestricted = !canAccessWorkspaceView("settings", user);
-  const databaseMaintenanceRestricted = !canAccessWorkspaceView("database-maintenance", user);
-  qsa<HTMLElement>('[data-view="settings"]').forEach((node) => { node.hidden = settingsRestricted; });
-  qsa<HTMLElement>('[data-view="database-maintenance"]').forEach((node) => { node.hidden = databaseMaintenanceRestricted; });
-  if (settingsRestricted) {
-    openWorkspaceTabs = openWorkspaceTabs.filter((view) => view !== "settings");
-    workspaceTabHistory = workspaceTabHistory.filter((view) => view !== "settings");
-    if (qs<HTMLElement>("#settings")?.classList.contains("active")) activateNavView("dashboard");
-  }
-  if (databaseMaintenanceRestricted) {
-    openWorkspaceTabs = openWorkspaceTabs.filter((view) => view !== "database-maintenance");
-    workspaceTabHistory = workspaceTabHistory.filter((view) => view !== "database-maintenance");
-    if (qs<HTMLElement>("#database-maintenance")?.classList.contains("active")) activateNavView("dashboard");
-  }
+  document.body.classList.toggle("platform-mode", state.iamCapabilities?.source === "platform");
+  qsa<HTMLElement>("[data-admin-only]").forEach((node) => {
+    node.hidden = !isSystemAdministrator(user);
+  });
+  const restrictedViews = new Set<string>();
+  qsa<HTMLElement>(".sidebar button[data-view]").forEach((node) => {
+    const view = node.dataset.view || "";
+    const restricted = !canAccessWorkspaceView(view, user);
+    node.hidden = restricted;
+    if (restricted) restrictedViews.add(view);
+  });
+  Object.keys(viewPermissionRequirements).forEach((view) => {
+    const node = qs<HTMLElement>(`#${CSS.escape(view)}`);
+    if (node) node.hidden = !canAccessWorkspaceView(view, user);
+  });
+  qsa<HTMLElement>("[data-permission]").forEach((node) => {
+    const permission = String(node.dataset.permission || "").trim();
+    if (permission && state.iamCapabilities) node.hidden = !hasIamCapability(permission);
+  });
+  openWorkspaceTabs = openWorkspaceTabs.filter((view) => !restrictedViews.has(view));
+  workspaceTabHistory = workspaceTabHistory.filter((view) => !restrictedViews.has(view));
+  const activeRestrictedView = [...restrictedViews].find((view) => qs<HTMLElement>(`#${CSS.escape(view)}`)?.classList.contains("active"));
+  if (activeRestrictedView) activateNavView("dashboard");
 }
 
 function syncTrainingManagementUi(user = state.user) {
@@ -4800,10 +6051,14 @@ function syncTrainingManagementUi(user = state.user) {
 }
 
 function roleScopeText(user: User) {
-  if (user.role === "sales") return "仅本人业务与本人待办";
-  if (user.role === "manager") return "团队业务数据，本人待办私有";
-  if (user.role === "admin") return "本团队业务数据、团队账号管理，本人待办私有";
-  return "全局业务数据、最高账号权限，本人待办私有";
+  const permissions = state.iamCapabilities?.permissions || user.iamPermissions || {};
+  if (state.iamCapabilities?.source === "platform" || user.iamSource === "platform") return "平台运维权限，禁止直接访问公司业务数据";
+  const scopes = Object.values(permissions).flat();
+  if (scopes.includes("tenant")) return "当前公司范围，具体模块按角色授权";
+  if (scopes.includes("org_subtree")) return "本人及授权组织下属成员数据";
+  if (scopes.includes("org_unit")) return "本人及授权组织成员数据";
+  if (scopes.includes("self")) return "仅本人业务与本人待办";
+  return "当前账号尚未获得业务数据范围";
 }
 
 function updateProfileSmtpHints(user = state.user) {
@@ -4844,7 +6099,8 @@ function renderProfile(user = state.user) {
   const mailReady = Boolean(user.outboundEmail);
   if (avatar) avatar.textContent = user.avatar;
   if (name) name.textContent = user.name;
-  if (role) role.textContent = `${roleLabel[user.role]} · ${roleScopeText(user)}`;
+  const effectiveRoleName = state.iamCapabilities?.roleNames.join(" / ") || user.iamRoleNames?.join(" / ") || roleLabel[user.role];
+  if (role) role.textContent = `${effectiveRoleName} · ${roleScopeText(user)}`;
   qs<HTMLElement>("#profileStatusBadge")!.textContent = "账号正常";
   qs<HTMLElement>("#profileTeamBadge")!.textContent = teamText;
   const emailBadge = qs<HTMLElement>("#profileEmailBadge");
@@ -4852,12 +6108,11 @@ function renderProfile(user = state.user) {
     emailBadge.className = `badge ${mailReady ? "green" : "amber"}`;
     emailBadge.textContent = mailReady ? "发件邮箱已绑定" : "发件邮箱待绑定";
   }
-  qs<HTMLElement>("#profileScopeMetric")!.textContent = user.role === "sales"
-    ? "本人业务"
-    : user.role === "super_admin"
-      ? "全局业务"
-      : "团队业务";
-  qs<HTMLElement>("#profileRoleMetric")!.textContent = roleLabel[user.role];
+  const allScopes = Object.values(state.iamCapabilities?.permissions || user.iamPermissions || {}).flat();
+  qs<HTMLElement>("#profileScopeMetric")!.textContent = user.iamSource === "platform" || state.iamCapabilities?.source === "platform"
+    ? "平台运维"
+    : allScopes.includes("tenant") ? "公司范围" : allScopes.includes("org_subtree") || allScopes.includes("org_unit") ? "组织范围" : "本人业务";
+  qs<HTMLElement>("#profileRoleMetric")!.textContent = effectiveRoleName;
   qs<HTMLElement>("#profileMailMetric")!.textContent = mailReady && user.smtpHost && user.hasSmtpPassword ? "可真实发信" : mailReady ? "待配SMTP" : "未绑定";
   qs<HTMLElement>("#profileLoginEmailText")!.textContent = user.email;
   qs<HTMLElement>("#profileIdText")!.textContent = user.id;
@@ -4877,6 +6132,24 @@ function renderProfile(user = state.user) {
   if (signatureStatus) signatureStatus.innerHTML = user.emailSignature?.trim() ? `${badge("已设置", "green")} ${escapeHtml((user.emailSignature.split("\n")[0] || "签名已维护").slice(0, 36))}` : badge("待完善", "amber");
   const smtpStatus = qs<HTMLElement>("#profileSmtpStatus");
   if (smtpStatus) smtpStatus.innerHTML = user.smtpHost && user.smtpUser && user.hasSmtpPassword ? `${badge("已配置", "green")} ${escapeHtml(user.smtpHost)}` : `${badge("未完整", "amber")} 填写SMTP后才能真实发信`;
+  const imapEnabled = qs<HTMLInputElement>("#profileImapEnabled");
+  if (imapEnabled) imapEnabled.checked = Boolean(user.inboundSyncEnabled);
+  setFieldValue("#profileImapHost", user.imapHost || "");
+  setFieldValue("#profileImapPort", String(user.imapPort || 993));
+  setFieldValue("#profileImapUser", user.imapUser || "");
+  setFieldValue("#profileImapPassword", "");
+  const imapSecure = qs<HTMLSelectElement>("#profileImapSecure");
+  if (imapSecure) imapSecure.value = String(user.imapSecure ?? true);
+  const imapSync = qs<HTMLElement>("#profileImapSyncStatus");
+  if (imapSync) {
+    if (user.lastInboundSyncAt) {
+      const label = user.lastInboundSyncStatus === "error" ? "同步异常" : "已同步";
+      const cls = user.lastInboundSyncStatus === "error" ? "amber" : "green";
+      imapSync.innerHTML = `${badge(label, cls)} <span title="${escapeHtml(user.lastInboundSyncError || "")}">${escapeHtml(formatTime(user.lastInboundSyncAt))}</span>`;
+    } else {
+      imapSync.textContent = user.inboundSyncEnabled ? "等待首次同步" : "尚未开启";
+    }
+  }
   updateProfileSmtpHints(user);
   renderEmailConfigurationReminders();
   void loadCompanyProfile();
@@ -4935,7 +6208,7 @@ function updateStoredUser(user: User) {
   applyAuthedUser(user);
 }
 
-async function saveProfileEmailBinding(button?: HTMLButtonElement, clearSmtpPassword = false) {
+async function saveProfileEmailBinding(button?: HTMLButtonElement, clearSmtpPassword = false, clearImapPassword = false) {
   const outboundEmail = qs<HTMLInputElement>("#profileOutboundEmail")?.value.trim() || "";
   const emailSenderName = qs<HTMLInputElement>("#profileSenderName")?.value.trim() || "";
   const emailSignature = qs<HTMLTextAreaElement>("#profileEmailSignature")?.value.trim() || "";
@@ -4944,6 +6217,12 @@ async function saveProfileEmailBinding(button?: HTMLButtonElement, clearSmtpPass
   const smtpSecure = qs<HTMLSelectElement>("#profileSmtpSecure")?.value !== "false";
   const smtpUser = qs<HTMLInputElement>("#profileSmtpUser")?.value.trim() || "";
   const smtpPassword = qs<HTMLInputElement>("#profileSmtpPassword")?.value || "";
+  const inboundSyncEnabled = qs<HTMLInputElement>("#profileImapEnabled")?.checked || false;
+  const imapHost = qs<HTMLInputElement>("#profileImapHost")?.value.trim() || "";
+  const imapPort = Number(qs<HTMLInputElement>("#profileImapPort")?.value || 993);
+  const imapSecure = qs<HTMLSelectElement>("#profileImapSecure")?.value !== "false";
+  const imapUser = qs<HTMLInputElement>("#profileImapUser")?.value.trim() || "";
+  const imapPassword = qs<HTMLInputElement>("#profileImapPassword")?.value || "";
   const idleText = clearSmtpPassword ? "清空邮箱绑定" : "保存个人资料";
   if (button) {
     button.disabled = true;
@@ -4952,10 +6231,11 @@ async function saveProfileEmailBinding(button?: HTMLButtonElement, clearSmtpPass
   try {
     const result = await api<{ user: User }>("/api/profile/email-binding", {
       method: "PATCH",
-      body: JSON.stringify({ outboundEmail, emailSenderName, emailSignature, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPassword, clearSmtpPassword })
+      body: JSON.stringify({ outboundEmail, emailSenderName, emailSignature, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPassword, clearSmtpPassword, imapHost, imapPort, imapSecure, imapUser, imapPassword, clearImapPassword, inboundSyncEnabled })
     });
     updateStoredUser(result.user);
-    toast(outboundEmail ? "个人邮箱配置已保存" : "个人邮箱配置已清空");
+    if (clearImapPassword && !clearSmtpPassword) toast("IMAP 密码已清除");
+    else toast(outboundEmail ? "个人邮箱配置已保存" : "个人邮箱配置已清空");
   } catch (error) {
     toast(error instanceof Error ? error.message : "个人邮箱配置保存失败", "error");
   } finally {
@@ -4967,7 +6247,12 @@ async function saveProfileEmailBinding(button?: HTMLButtonElement, clearSmtpPass
 }
 
 async function clearProfileEmailBinding(button?: HTMLButtonElement) {
-  if (!window.confirm("确认清空发件邮箱、SMTP配置、授权码和邮件签名？")) return;
+  if (!await confirmAction({
+    title: "清空发件邮箱绑定",
+    message: "将清除当前账号的发件邮箱配置。",
+    consequences: ["SMTP 主机、账号和授权码会被清空", "发件人名称与邮件签名会被清空", "重新配置前无法从 CRM 发信"],
+    confirmLabel: "清空绑定"
+  })) return;
   setFieldValue("#profileOutboundEmail", "");
   setFieldValue("#profileSenderName", "");
   setFieldValue("#profileEmailSignature", "");
@@ -4977,6 +6262,17 @@ async function clearProfileEmailBinding(button?: HTMLButtonElement) {
   setFieldValue("#profileSmtpPassword", "");
   setFieldValue("#profileTestEmailTo", "");
   await saveProfileEmailBinding(button, true);
+}
+
+async function clearProfileImapPassword(button?: HTMLButtonElement) {
+  if (!await confirmAction({
+    title: "清除 IMAP 授权码",
+    message: "将清除当前账号保存的收信授权码。",
+    consequences: ["收信监听将在下次同步时停止", "重新填写有效授权码后才会恢复"],
+    confirmLabel: "清除授权码"
+  })) return;
+  setFieldValue("#profileImapPassword", "");
+  await saveProfileEmailBinding(button, false, true);
 }
 
 async function sendProfileTestEmail(button?: HTMLButtonElement) {
@@ -5001,6 +6297,46 @@ async function sendProfileTestEmail(button?: HTMLButtonElement) {
   }
 }
 
+async function testProfileImap(button?: HTMLButtonElement) {
+  if (button) setButtonPending(button, true, "测试 IMAP", "连接中");
+  try {
+    await api<{ ok: boolean }>("/api/profile/inbound-mail/test", { method: "POST" });
+    toast("IMAP 连接成功，可以接收回信和退信");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "IMAP 连接失败", "error");
+  } finally {
+    if (button) setButtonPending(button, false, "测试 IMAP", "连接中");
+  }
+}
+
+async function checkProfileEmailDomain(button?: HTMLButtonElement) {
+  if (button) setButtonPending(button, true, "域名检测", "检测中");
+  try {
+    const result = await api<{ authentication: {
+      domain: string;
+      ready: boolean;
+      spf: { ok: boolean };
+      dmarc: { ok: boolean };
+      dkim: { ok: boolean; selector: string; definitive: boolean };
+    } }>("/api/profile/email-domain-authentication");
+    const auth = result.authentication;
+    const line = (label: string, ok: boolean, detail = "") =>
+      `<div class="profile-info-row"><span>${escapeHtml(label)}</span><b>${badge(ok ? "通过" : "待配置", ok ? "green" : "amber")} ${escapeHtml(detail)}</b></div>`;
+    openModal(`发件域名检测 · ${auth.domain}`, `
+      <div class="profile-info-list">
+        ${line("SPF", auth.spf.ok)}
+        ${line("DMARC", auth.dmarc.ok)}
+        ${line("DKIM", auth.dkim.ok, auth.dkim.selector ? `selector: ${auth.dkim.selector}` : auth.dkim.definitive ? "指定 selector 未发现" : "请向邮箱服务商确认 selector")}
+      </div>
+      <div class="form-hint" style="margin-top:12px">检测通过可显著降低进入垃圾邮件的风险，但不能保证送达；DKIM selector 由邮箱服务商提供。</div>
+    `, `<button class="btn primary" data-modal-close>关闭</button>`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "域名检测失败", "error");
+  } finally {
+    if (button) setButtonPending(button, false, "域名检测", "检测中");
+  }
+}
+
 async function sendDevelopmentEmail(button?: HTMLButtonElement) {
   const draft = collectDevelopmentEmailDraft();
   if (!draft.from) {
@@ -5011,17 +6347,28 @@ async function sendDevelopmentEmail(button?: HTMLButtonElement) {
     toast("请补齐收件邮箱、目标公司、主题和正文", "error");
     return;
   }
+  if (!await confirmAction({
+    title: "确认发送开发信",
+    message: "邮件将通过你绑定的真实邮箱立即发出，请最后核对收件信息。",
+    detailLabel: "发件 / 收件",
+    detail: `${draft.from} → ${draft.to}`,
+    consequences: [`目标公司：${draft.company}`, `邮件主题：${draft.subject}`],
+    confirmLabel: "确认发送",
+    tone: "normal"
+  })) return;
+  profileDevelopmentEmailRequestId ||= prospectRequestId("profile-development-email");
   if (button) {
     button.disabled = true;
     button.textContent = "发送中";
   }
   try {
-    const result = await api<{ sent: { simulated: boolean }; user: User }>("/api/profile/send-development-email", {
+    const result = await api<{ sent: { simulated: boolean; replayed?: boolean }; user: User }>("/api/profile/send-development-email", {
       method: "POST",
-      body: JSON.stringify({ to: draft.to, company: draft.company, subject: draft.subject, body: draft.body })
+      body: JSON.stringify({ to: draft.to, company: draft.company, subject: draft.subject, body: draft.body, requestId: profileDevelopmentEmailRequestId })
     });
     updateStoredUser(result.user);
-    toast(result.sent.simulated ? "开发信已发送（系统模拟记录）" : "开发信已发送");
+    profileDevelopmentEmailRequestId = "";
+    toast(result.sent.replayed ? "发送结果已确认，未重复发送" : result.sent.simulated ? "开发信已发送（系统模拟记录）" : "开发信已发送");
   } catch (error) {
     toast(error instanceof Error ? error.message : "开发信发送失败", "error");
   } finally {
@@ -5032,9 +6379,636 @@ async function sendDevelopmentEmail(button?: HTMLButtonElement) {
   }
 }
 
+async function loadIamCapabilities(user: User) {
+  try {
+    const response = await api<{ snapshot: IamCapabilitySnapshot }>("/api/iam/capabilities");
+    state.iamCapabilities = response.snapshot;
+  } catch {
+    state.iamCapabilities = null;
+  }
+  if (state.iamCapabilities) {
+    const roleNames = state.iamCapabilities.roleNames || [];
+    const topUserRole = qs<HTMLElement>("#topUserRole");
+    if (topUserRole) topUserRole.textContent = roleNames.join(" / ") || roleLabel[user.role];
+    const scopeUser = qs<HTMLElement>("#scopeUser");
+    if (scopeUser) scopeUser.textContent = `${user.name} / ${roleNames.join(" / ") || roleLabel[user.role]}`;
+    const allScopes = Object.values(state.iamCapabilities.permissions).flat();
+    const scopeText = qs<HTMLElement>("#scopeText");
+    if (scopeText) scopeText.textContent = state.iamCapabilities.source === "platform" ? "平台运维控制域，不直接拥有公司业务权限" : allScopes.includes("tenant") ? "已按角色授权公司范围" : allScopes.includes("org_subtree") || allScopes.includes("org_unit") ? "已按角色授权组织范围" : "已按角色授权本人范围";
+  }
+  syncWorkspaceAccess(user);
+  renderTopbarForView(qs<HTMLElement>(".view.active")?.id || "dashboard");
+}
+
+const platformTabPermission: Record<PlatformTab, string> = {
+  overview: "platform.dashboard.read",
+  tenants: "platform.tenant.metadata.read",
+  support: "platform.support.request.create",
+  operators: "platform.operator.read",
+  health: "platform.health.read",
+  audit: "platform.audit.read"
+};
+
+function platformStatusLabel(status: string) {
+  return ({ trial: "公测", active: "启用", suspended: "已暂停", closed: "已关闭", pending: "待审批", approved: "已批准", rejected: "已拒绝", expired: "已过期", cancelled: "已取消", terminated: "已结束" } as Record<string, string>)[status] || status;
+}
+
+function platformMetric(label: string, value: number) {
+  return `<div class="platform-metric"><span>${escapeHtml(label)}</span><b>${Number(value || 0).toLocaleString("zh-CN")}</b></div>`;
+}
+
+function platformTenantRows(items = platformTenants.slice(0, 12)) {
+  return items.map((tenant) => `<tr>
+    <td><div class="platform-cell-main"><b>${escapeHtml(tenant.name)}</b><small>${escapeHtml(tenant.code)} · ${escapeHtml(tenant.id)}</small></div></td>
+    <td><span class="platform-status ${escapeHtml(tenant.status)}">${escapeHtml(platformStatusLabel(tenant.status))}</span></td>
+    <td>${escapeHtml(tenant.planCode)}</td><td>${tenant.activeMemberCount} / ${tenant.seatLimit}</td>
+    <td>${tenant.authorizationRevision}</td><td>${escapeHtml(formatTime(tenant.createdAt))}</td>
+    <td><div class="platform-actions">${tenant.activeMemberCount === 0 && hasIamCapability("platform.tenant.admin.bootstrap")
+      ? `<button class="platform-command primary" type="button" data-platform-bootstrap-admin data-tenant-id="${escapeHtml(tenant.id)}">设置管理员</button>` : ""}${tenant.status === "suspended"
+      ? `<button class="platform-command" type="button" data-platform-tenant-action="restore" data-tenant-id="${escapeHtml(tenant.id)}">恢复</button>`
+      : tenant.status !== "closed" ? `<button class="platform-command danger" type="button" data-platform-tenant-action="suspend" data-tenant-id="${escapeHtml(tenant.id)}">暂停</button>` : ""}</div></td>
+  </tr>`).join("");
+}
+
+function renderPlatformOverview() {
+  const metrics = platformOverview?.metrics || {};
+  return `<div class="platform-metrics">
+    ${platformMetric("公司总数", metrics.tenantCount || 0)}${platformMetric("正常服务", metrics.activeTenantCount || 0)}${platformMetric("暂停公司", metrics.suspendedTenantCount || 0)}
+    ${platformMetric("启用成员", metrics.activeMemberCount || 0)}${platformMetric("待批支持", metrics.pendingSupportCount || 0)}${platformMetric("今日审计", metrics.todayAuditCount || 0)}
+  </div>
+  <section class="platform-section"><div class="platform-section-head"><h2>公司运行概况</h2><button class="platform-command" type="button" data-platform-open-tab="tenants">查看全部公司</button></div>
+    <div class="platform-table-wrap"><table class="platform-table"><thead><tr><th>公司</th><th>状态</th><th>套餐</th><th>启用成员 / 席位</th><th>授权版本</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${platformTenantRows() || `<tr><td colspan="7" class="platform-empty">暂无公司</td></tr>`}</tbody></table></div>
+  </section>`;
+}
+
+function renderPlatformTenants() {
+  return `<section class="platform-section" style="margin-top:0"><div class="platform-section-head"><h2>公司管理</h2><div class="platform-actions"><span class="platform-status active">${platformTenants.length} 家公司</span>${hasIamCapability("platform.tenant.create") ? `<button class="platform-command primary" type="button" data-platform-create-tenant>创建公司</button>` : ""}</div></div>
+    <div class="platform-table-wrap"><table class="platform-table"><thead><tr><th>公司</th><th>状态</th><th>套餐</th><th>启用成员 / 席位</th><th>授权版本</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${platformTenantRows(platformTenants) || `<tr><td colspan="7" class="platform-empty">暂无公司</td></tr>`}</tbody></table></div>
+  </section>`;
+}
+
+function renderPlatformSupport() {
+  const permissionLabels: Record<string, string> = { "customer.read": "客户", "lead.read": "线索", "deal.read": "商机", "daily_report.read": "日报" };
+  const rows = platformSupportRequests.map((request) => {
+    const ownRequest = request.requestedByUserId === state.user?.id;
+    const session = request.session;
+    const actions = request.status === "pending"
+      ? `${hasIamCapability("platform.support.request.approve") && !ownRequest ? `<button class="platform-command primary" data-platform-support-review="approve" data-request-id="${escapeHtml(request.id)}">批准</button><button class="platform-command" data-platform-support-review="reject" data-request-id="${escapeHtml(request.id)}">拒绝</button>` : `<span class="platform-status">等待异人审批</span>`}`
+      : request.status === "approved" && !session && ownRequest && hasIamCapability("platform.support.session.start")
+        ? `<button class="platform-command primary" data-platform-support-start="${escapeHtml(request.id)}">启动会话</button>`
+        : session?.status === "active"
+          ? `<button class="platform-command" data-platform-support-read="${escapeHtml(session.id)}">进入支持视图</button><button class="platform-command danger" data-platform-support-terminate="${escapeHtml(session.id)}">结束</button>`
+          : "";
+    return `<tr><td><div class="platform-cell-main"><b>${escapeHtml(request.tenantName)}</b><small>${escapeHtml(request.ticketNo)}</small></div></td>
+      <td><div class="platform-cell-main"><b>${escapeHtml(request.reason)}</b><small>${request.permissionCodes.map((code) => escapeHtml(permissionLabels[code] || code)).join("、")} · ${request.requestedMinutes} 分钟</small></div></td>
+      <td><span class="platform-status ${escapeHtml(session?.status || request.status)}">${escapeHtml(platformStatusLabel(session?.status || request.status))}</span></td>
+      <td>${escapeHtml(formatTime(request.createdAt))}</td><td>${actions}</td></tr>`;
+  }).join("");
+  return `<section class="platform-section" style="margin-top:0"><div class="platform-section-head"><h2>客户支持访问</h2>${hasIamCapability("platform.support.request.create") ? `<button class="platform-command primary" type="button" data-platform-create-support>创建访问申请</button>` : ""}</div>
+    <div class="platform-table-wrap"><table class="platform-table"><thead><tr><th>公司 / 工单</th><th>访问原因与范围</th><th>状态</th><th>申请时间</th><th>操作</th></tr></thead><tbody>${rows || `<tr><td colspan="5" class="platform-empty">暂无支持访问申请</td></tr>`}</tbody></table></div>
+  </section>`;
+}
+
+function renderPlatformOperators() {
+  const rows = platformOperators.map((operator) => `<tr><td><div class="platform-cell-main"><b>${escapeHtml(operator.name)}</b><small>${escapeHtml(operator.email)}</small></div></td><td>${escapeHtml(operator.roleNames)}</td><td><span class="platform-status ${escapeHtml(operator.status)}">${escapeHtml(platformStatusLabel(operator.status))}</span></td><td>${operator.mfaRequired ? "强制" : "未强制"}</td><td>${escapeHtml(formatTime(operator.updatedAt))}</td></tr>`).join("");
+  return `<section class="platform-section" style="margin-top:0"><div class="platform-section-head"><h2>平台人员</h2><span class="platform-status">平台身份域</span></div><div class="platform-table-wrap"><table class="platform-table"><thead><tr><th>平台账号</th><th>平台角色</th><th>状态</th><th>MFA 策略</th><th>更新时间</th></tr></thead><tbody>${rows || `<tr><td colspan="5" class="platform-empty">暂无平台人员</td></tr>`}</tbody></table></div></section>`;
+}
+
+function renderPlatformHealth() {
+  return `<section class="platform-section" style="margin-top:0"><div class="platform-section-head"><h2>服务健康</h2><span class="platform-status active">实时探测</span></div><div class="platform-health-grid">${platformHealthServices.map((service) => `<div class="platform-health-row"><div><span>${escapeHtml(String(service.code || "service"))}</span><b>${escapeHtml(String(service.name || "服务"))}</b></div><div><span class="platform-status active">正常 · ${escapeHtml(String(service.latencyMs ?? 0))} ms</span></div></div>`).join("") || `<div class="platform-empty">暂无健康数据</div>`}</div></section>`;
+}
+
+function renderPlatformAudit() {
+  const rows = platformAuditEvents.map((event) => `<tr><td>${escapeHtml(formatTime(event.createdAt))}</td><td><div class="platform-cell-main"><b>${escapeHtml(event.actorName)}</b><small>${escapeHtml(event.actionCode)}</small></div></td><td>${escapeHtml(event.targetType)} · ${escapeHtml(event.targetId)}</td><td>${escapeHtml(event.tenantId || "平台")}</td><td>${escapeHtml(event.reason || "-")}</td><td><span class="platform-status active">${escapeHtml(event.resultStatus)}</span></td></tr>`).join("");
+  return `<section class="platform-section" style="margin-top:0"><div class="platform-section-head"><h2>平台审计</h2><span class="platform-status">最近 ${platformAuditEvents.length} 条</span></div><div class="platform-table-wrap"><table class="platform-table"><thead><tr><th>时间</th><th>操作者 / 动作</th><th>目标</th><th>公司</th><th>原因</th><th>结果</th></tr></thead><tbody>${rows || `<tr><td colspan="6" class="platform-empty">暂无平台审计记录</td></tr>`}</tbody></table></div></section>`;
+}
+
+function renderPlatformOperations() {
+  const root = qs<HTMLElement>("#platformOperationsRoot");
+  if (!root) return;
+  qsa<HTMLButtonElement>("[data-platform-tab]", qs("#platformTabs") || document).forEach((button) => {
+    const tab = button.dataset.platformTab as PlatformTab;
+    button.hidden = !hasIamCapability(platformTabPermission[tab]);
+    button.classList.toggle("active", tab === platformActiveTab);
+  });
+  if (!hasIamCapability(platformTabPermission[platformActiveTab])) {
+    platformActiveTab = (Object.keys(platformTabPermission) as PlatformTab[]).find((tab) => hasIamCapability(platformTabPermission[tab])) || "overview";
+  }
+  root.innerHTML = platformActiveTab === "tenants" ? renderPlatformTenants()
+    : platformActiveTab === "support" ? renderPlatformSupport()
+      : platformActiveTab === "operators" ? renderPlatformOperators()
+        : platformActiveTab === "health" ? renderPlatformHealth()
+          : platformActiveTab === "audit" ? renderPlatformAudit()
+            : renderPlatformOverview();
+  installPlatformOperationEvents();
+}
+
+function approvalStatusLabel(status: string) {
+  return ({ draft: "草稿", running: "审批中", pending: "待处理", approved: "已通过", rejected: "已驳回", withdrawn: "已撤回", cancelled: "已取消", failed: "异常", active: "已发布", disabled: "已停用" } as Record<string, string>)[status] || status;
+}
+
+function approvalBusinessLabel(type: string) {
+  return ({ quote: "报价审批", discount: "折扣审批", customer_transfer: "客户转移", export: "数据导出", commission: "提成审批", custom: "通用审批" } as Record<string, string>)[type] || type || "通用审批";
+}
+
+function approvalTaskInstanceId(task: ApprovalTask) { return String(task.instance_id || task.instanceId || ""); }
+function approvalActionKey(prefix = "approval") { return `${prefix}:${Date.now()}:${crypto.randomUUID()}`; }
+
+function renderApprovalMetrics() {
+  const root = qs<HTMLElement>("#approvalMetrics");
+  if (!root) return;
+  const pending = approvalTasks.filter((item) => item.status === "pending").length;
+  const running = approvalInstances.filter((item) => item.status === "running").length;
+  const approved = approvalInstances.filter((item) => item.status === "approved").length;
+  const rejected = approvalInstances.filter((item) => item.status === "rejected").length;
+  root.innerHTML = `<div class="approval-metric"><span>待我审批</span><strong>${pending}</strong><small>${pending ? "请及时处理" : "当前没有积压"}</small></div><div class="approval-metric"><span>进行中</span><strong>${running}</strong><small>含我发起和参与事项</small></div><div class="approval-metric"><span>已通过</span><strong>${approved}</strong><small>当前可见范围</small></div><div class="approval-metric"><span>已驳回</span><strong>${rejected}</strong><small>当前可见范围</small></div>`;
+  const navCount = qs<HTMLElement>("#approvalNavCount");
+  if (navCount) { navCount.textContent = String(pending); navCount.hidden = pending === 0; }
+}
+
+function approvalCenterItems() {
+  if (approvalCenterTab === "pending") return approvalTasks.filter((item) => item.status === "pending").map((task) => ({ task, id: approvalTaskInstanceId(task), title: task.title, summary: task.summary, status: task.status, owner: task.applicant_name || "申请人", time: task.submitted_at || "" }));
+  if (approvalCenterTab === "completed") return approvalTasks.filter((item) => item.status !== "pending").map((task) => ({ task, id: approvalTaskInstanceId(task), title: task.title, summary: task.summary, status: task.status, owner: task.applicant_name || "申请人", time: task.submitted_at || "" }));
+  const membershipId = state.iamCapabilities?.membershipId || "";
+  return approvalInstances.filter((item) => !membershipId || item.applicantMembershipId === membershipId || state.iamCapabilities?.source === "legacy_compatibility").map((instance) => ({ instance, id: instance.id, title: instance.title, summary: instance.summary, status: instance.status, owner: instance.applicantName || "我发起", time: instance.submittedAt }));
+}
+
+function renderApprovalCenterList() {
+  const root = qs<HTMLElement>("#approvalCenterList");
+  const count = qs<HTMLElement>("#approvalListCount");
+  const title = qs<HTMLElement>("#approvalListTitle");
+  if (!root) return;
+  const items = approvalCenterItems();
+  if (count) count.textContent = `${items.length} 项`;
+  if (title) title.textContent = approvalCenterTab === "pending" ? "待我审批" : approvalCenterTab === "mine" ? "我发起的" : "已处理";
+  root.innerHTML = items.length ? items.map((item) => `<button type="button" class="approval-list-item ${selectedApprovalInstanceId === item.id ? "active" : ""}" data-approval-instance-id="${escapeHtml(item.id)}"><header><b>${escapeHtml(item.title || "未命名审批")}</b><em class="approval-state ${escapeHtml(item.status)}">${escapeHtml(approvalStatusLabel(item.status))}</em></header><p>${escapeHtml(item.summary || "未填写审批摘要")}</p><div class="approval-list-meta"><span>${escapeHtml(item.owner)}</span><time>${escapeHtml(item.time ? formatTime(item.time) : "")}</time></div></button>`).join("") : `<div class="approval-empty">${approvalCenterTab === "pending" ? "当前没有待审批事项" : approvalCenterTab === "mine" ? "尚未发起审批" : "暂无已处理事项"}</div>`;
+  qsa<HTMLButtonElement>("[data-approval-instance-id]", root).forEach((button) => button.onclick = () => void openApprovalInstance(button.dataset.approvalInstanceId || ""));
+}
+
+function approvalActionText(action: ApprovalAction) {
+  return ({ submit: "提交审批", approve: "审批通过", reject: "驳回申请", withdraw: "撤回申请", remind: "发起催办", comment: "补充评论", transfer: "转交审批", add_approver: "增加审批人" } as Record<string, string>)[action.action_type] || action.action_type;
+}
+
+async function openApprovalInstance(instanceId: string) {
+  if (!instanceId) return;
+  selectedApprovalInstanceId = instanceId;
+  renderApprovalCenterList();
+  const root = qs<HTMLElement>("#approvalCenterDetail");
+  if (!root) return;
+  root.innerHTML = `<div class="approval-detail-empty">正在读取审批详情</div>`;
+  try {
+    const data = await api<{ instance: ApprovalInstance; tasks: ApprovalTask[]; actions: ApprovalAction[] }>(`/api/v1/approval-instances/${encodeURIComponent(instanceId)}`);
+    const instance = data.instance;
+    const activeTask = (data.tasks || []).find((task) => task.status === "pending" && approvalTasks.some((mine) => mine.id === task.id));
+    const canAct = Boolean(activeTask && hasIamCapability("approval.task.act"));
+    const canWithdraw = instance.status === "running" && instance.applicantMembershipId === state.iamCapabilities?.membershipId;
+    const actions = (data.actions || []).map((action) => `<li><i></i><div><b>${escapeHtml(approvalActionText(action))} · ${escapeHtml(action.actor_name || "系统")}</b><small>${escapeHtml(action.comment_text || "无补充说明")}</small></div><time>${escapeHtml(formatTime(action.created_at))}</time></li>`).join("");
+    root.innerHTML = `<header class="approval-detail-head"><div><h2>${escapeHtml(instance.title)}</h2><p>${escapeHtml(instance.summary || "未填写审批摘要")}</p></div><div class="approval-detail-actions">${canWithdraw ? `<button class="btn" type="button" data-approval-withdraw>撤回</button>` : ""}${canAct ? `<button class="btn" type="button" data-approval-reject>驳回</button><button class="btn primary" type="button" data-approval-approve>同意</button>` : ""}</div></header><div class="approval-facts"><div><span>审批类型</span><b>${escapeHtml(approvalBusinessLabel(instance.businessType))}</b></div><div><span>当前状态</span><b>${escapeHtml(approvalStatusLabel(instance.status))}</b></div><div><span>申请人</span><b>${escapeHtml(instance.applicantName || "--")}</b></div><div><span>提交时间</span><b>${escapeHtml(formatTime(instance.submittedAt))}</b></div></div><ul class="approval-timeline">${actions || `<li><i></i><div><b>审批已创建</b><small>等待流程动作</small></div><time>${escapeHtml(formatTime(instance.submittedAt))}</time></li>`}</ul>`;
+    qs<HTMLButtonElement>("[data-approval-approve]", root)?.addEventListener("click", () => activeTask && openApprovalDecision(activeTask, "approve"));
+    qs<HTMLButtonElement>("[data-approval-reject]", root)?.addEventListener("click", () => activeTask && openApprovalDecision(activeTask, "reject"));
+    qs<HTMLButtonElement>("[data-approval-withdraw]", root)?.addEventListener("click", () => void withdrawApprovalInstance(instance));
+  } catch (error) { root.innerHTML = `<div class="approval-detail-empty">加载失败：${escapeHtml(error instanceof Error ? error.message : "未知错误")}</div>`; }
+}
+
+function openApprovalDecision(task: ApprovalTask, decision: "approve" | "reject") {
+  openModal(decision === "approve" ? "同意审批" : "驳回审批", `<div class="form-grid"><div class="form-field full"><label>审批意见</label><textarea id="approvalDecisionComment" maxlength="1000" placeholder="${decision === "approve" ? "可填写确认说明" : "请说明驳回原因"}"></textarea></div></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn ${decision === "approve" ? "primary" : "danger"}" id="approvalDecisionConfirm">确认${decision === "approve" ? "同意" : "驳回"}</button>`);
+  qs<HTMLButtonElement>("#approvalDecisionConfirm")?.addEventListener("click", async () => {
+    const comment = qs<HTMLTextAreaElement>("#approvalDecisionComment")?.value.trim() || "";
+    if (decision === "reject" && !comment) { toast("驳回时请填写原因", "error"); return; }
+    try {
+      await api(`/api/v1/approval-tasks/${encodeURIComponent(task.id)}/${decision}`, { method: "POST", body: JSON.stringify({ version: Number(task.version_no || 1), comment, idempotencyKey: approvalActionKey(decision) }) });
+      closeModal(); toast(decision === "approve" ? "审批已通过" : "申请已驳回", "success"); await refreshApprovalCenter(true); await openApprovalInstance(approvalTaskInstanceId(task));
+    } catch (error) { toast(error instanceof Error ? error.message : "审批处理失败", "error"); }
+  });
+}
+
+async function withdrawApprovalInstance(instance: ApprovalInstance) {
+  if (!await confirmAction({
+    title: "撤回审批申请",
+    message: `将撤回「${instance.title}」。`,
+    consequences: ["当前审批流程会终止", "审批历史和操作记录会保留", "需要时可重新发起新的申请"],
+    confirmLabel: "撤回申请",
+    tone: "warning"
+  })) return;
+  try {
+    await api(`/api/v1/approval-instances/${encodeURIComponent(instance.id)}/withdraw`, { method: "POST", body: JSON.stringify({ comment: "申请人主动撤回", idempotencyKey: approvalActionKey("withdraw") }) });
+    toast("审批已撤回", "success"); await refreshApprovalCenter(true); await openApprovalInstance(instance.id);
+  } catch (error) { toast(error instanceof Error ? error.message : "撤回失败", "error"); }
+}
+
+async function refreshApprovalCenter(showError = false) {
+  const root = qs<HTMLElement>("#approvalCenterList");
+  if (root) root.innerHTML = `<div class="approval-loading">正在同步审批数据</div>`;
+  try {
+    const [taskData, instanceData, workflowData] = await Promise.all([api<{ tasks: ApprovalTask[] }>("/api/v1/approval-tasks"), api<{ instances: ApprovalInstance[] }>("/api/v1/approval-instances"), api<{ workflows: ApprovalWorkflow[] }>("/api/v1/approval-workflows")]);
+    approvalTasks = taskData.tasks || []; approvalInstances = instanceData.instances || []; approvalWorkflows = workflowData.workflows || [];
+    renderApprovalMetrics(); renderApprovalCenterList();
+    if (selectedApprovalInstanceId) void openApprovalInstance(selectedApprovalInstanceId);
+  } catch (error) { if (root) root.innerHTML = `<div class="approval-empty">审批数据加载失败</div>`; if (showError) toast(error instanceof Error ? error.message : "审批数据加载失败", "error"); }
+}
+
+function openApprovalInstanceCreate() {
+  const active = approvalWorkflows.filter((item) => item.status === "active");
+  if (!active.length) { toast("请先发布至少一个审批流程", "error"); if (hasIamCapability("approval.workflow.manage")) activateNavView("approval-workflows"); return; }
+  const options = active.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} · ${escapeHtml(approvalBusinessLabel(item.businessType))}</option>`).join("");
+  openModal("发起审批", `<div class="form-grid"><div class="form-field full"><label>审批流程</label><select id="approvalCreateWorkflow">${options}</select></div><div class="form-field full"><label>审批标题</label><input id="approvalCreateTitle" maxlength="220" placeholder="例如：客户报价折扣申请"></div><div class="form-field"><label>关联业务编号</label><input id="approvalCreateBusinessId" maxlength="120"></div><div class="form-field full"><label>申请摘要</label><textarea id="approvalCreateSummary" maxlength="500"></textarea></div></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="approvalCreateConfirm">提交审批</button>`);
+  qs<HTMLButtonElement>("#approvalCreateConfirm")?.addEventListener("click", async () => {
+    const workflowId = qs<HTMLSelectElement>("#approvalCreateWorkflow")?.value || "";
+    const title = qs<HTMLInputElement>("#approvalCreateTitle")?.value.trim() || "";
+    const summary = qs<HTMLTextAreaElement>("#approvalCreateSummary")?.value.trim() || "";
+    const businessId = qs<HTMLInputElement>("#approvalCreateBusinessId")?.value.trim() || "";
+    if (!title) { toast("请填写审批标题", "error"); return; }
+    try {
+      const data = await api<{ instance: ApprovalInstance }>("/api/v1/approval-instances", { method: "POST", body: JSON.stringify({ workflowId, title, summary, businessId, formData: {}, businessSnapshot: {}, comment: "", idempotencyKey: approvalActionKey("submit") }) });
+      closeModal(); toast("审批已提交", "success"); await refreshApprovalCenter(); await openApprovalInstance(data.instance.id);
+    } catch (error) { toast(error instanceof Error ? error.message : "审批提交失败", "error"); }
+  });
+}
+
+function renderApprovalWorkflows() {
+  const root = qs<HTMLElement>("#approvalWorkflowList"); const metrics = qs<HTMLElement>("#approvalWorkflowMetrics");
+  if (!root) return;
+  const active = approvalWorkflows.filter((item) => item.status === "active").length;
+  const drafts = approvalWorkflows.filter((item) => item.status === "draft" || Boolean(item.draftVersionId)).length;
+  const nodeCount = approvalWorkflows.reduce((sum, item) => sum + (item.nodeCount ?? item.nodes?.length ?? 0), 0);
+  if (metrics) metrics.innerHTML = `<div class="approval-metric"><span>流程总数</span><strong>${approvalWorkflows.length}</strong><small>当前公司</small></div><div class="approval-metric"><span>已发布</span><strong>${active}</strong><small>可用于发起申请</small></div><div class="approval-metric"><span>草稿</span><strong>${drafts}</strong><small>发布前可检查</small></div><div class="approval-metric"><span>审批节点</span><strong>${nodeCount}</strong><small>全部流程合计</small></div>`;
+  root.innerHTML = approvalWorkflows.length ? `<div class="approval-workflow-row head"><span>流程</span><span>业务类型</span><span>版本</span><span>状态</span><span>操作</span></div>${approvalWorkflows.map((item) => {
+    const hasDraft = item.status === "draft" || Boolean(item.draftVersionId);
+    return `<div class="approval-workflow-row"><div class="approval-workflow-primary"><i class="approval-workflow-mark">${escapeHtml(approvalBusinessLabel(item.businessType).slice(0, 1))}</i><div><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.code)} · ${item.nodeCount ?? item.nodes?.length ?? 0} 个节点 · 优先级 ${item.priority || 100}</small></div></div><span>${escapeHtml(approvalBusinessLabel(item.businessType))}</span><span>V${item.versionNo || 1}</span><span>${hasDraft ? `<em class="approval-draft-dot">待发布</em>` : `<em class="approval-state ${escapeHtml(item.status)}">${escapeHtml(approvalStatusLabel(item.status))}</em>`}</span><div class="approval-workflow-actions"><button class="btn" type="button" data-approval-workflow-view="${escapeHtml(item.id)}">${hasDraft ? "继续设计" : "编辑流程"}</button>${hasDraft ? `<button class="btn primary" type="button" data-approval-workflow-publish="${escapeHtml(item.id)}">检查并发布</button>` : ""}</div></div>`;
+  }).join("")}` : `<div class="approval-empty">尚未配置审批流程，创建第一条流程后即可按业务自动流转。</div>`;
+  qsa<HTMLButtonElement>("[data-approval-workflow-view]", root).forEach((button) => button.onclick = () => void showApprovalWorkflow(button.dataset.approvalWorkflowView || ""));
+  qsa<HTMLButtonElement>("[data-approval-workflow-publish]", root).forEach((button) => button.onclick = () => void publishApprovalWorkflow(button.dataset.approvalWorkflowPublish || ""));
+}
+
+async function refreshApprovalWorkflows(showError = false) {
+  const root = qs<HTMLElement>("#approvalWorkflowList"); if (root) root.innerHTML = `<div class="approval-loading">正在同步审批流程</div>`;
+  try { const data = await api<{ workflows: ApprovalWorkflow[] }>("/api/v1/approval-workflows"); approvalWorkflows = data.workflows || []; renderApprovalWorkflows(); }
+  catch (error) { if (root) root.innerHTML = `<div class="approval-empty">审批流程加载失败</div>`; if (showError) toast(error instanceof Error ? error.message : "审批流程加载失败", "error"); }
+}
+
+async function showApprovalWorkflow(workflowId: string) {
+  try {
+    const { workflow } = await api<{ workflow: ApprovalWorkflow }>(`/api/v1/approval-workflows/${encodeURIComponent(workflowId)}`);
+    openApprovalWorkflowDesigner(normalizeApprovalWorkflowClient(workflow));
+  } catch (error) { toast(error instanceof Error ? error.message : "流程详情加载失败", "error"); }
+}
+
+async function publishApprovalWorkflow(workflowId: string) {
+  const workflow = approvalWorkflows.find((item) => item.id === workflowId);
+  try {
+    const validation = await api<{ valid: boolean; issues: string[] }>(`/api/v1/approval-workflows/${encodeURIComponent(workflowId)}/validate`, { method: "POST", body: "{}" });
+    if (!validation.valid) { toast(validation.issues?.[0] || "流程检查未通过", "error"); if (approvalDesignerWorkflow?.id === workflowId) showApprovalValidation(validation); return; }
+  } catch (error) { toast(error instanceof Error ? error.message : "流程检查失败", "error"); return; }
+  if (!await confirmAction({
+    title: "发布审批流程",
+    message: `将发布「${workflow?.name || "当前审批流程"}」。`,
+    consequences: ["新申请会固定使用这个版本", "已经运行的审批实例不会切换版本"],
+    confirmLabel: "发布流程",
+    tone: "normal"
+  })) return;
+  try { await api(`/api/v1/approval-workflows/${encodeURIComponent(workflowId)}/publish`, { method: "POST", body: "{}" }); toast("审批流程已发布", "success"); approvalDesignerDirty = false; closeApprovalWorkflowDesigner(); await refreshApprovalWorkflows(); }
+  catch (error) { toast(error instanceof Error ? error.message : "流程发布失败", "error"); }
+}
+
+function openApprovalWorkflowCreate() {
+  openModal("新建审批流程", `<div class="form-grid"><div class="form-field full"><label>流程名称</label><input id="approvalWorkflowName" maxlength="160" placeholder="例如：大额报价审批"></div><div class="form-field"><label>流程编码</label><input id="approvalWorkflowCode" maxlength="80" placeholder="large_quote_approval"></div><div class="form-field"><label>业务类型</label><select id="approvalWorkflowBusiness"><option value="quote">报价审批</option><option value="discount">折扣审批</option><option value="customer_transfer">客户转移</option><option value="export">数据导出</option><option value="commission">提成审批</option><option value="custom">通用审批</option></select></div><div class="form-field full"><label>说明</label><div class="field-help">系统会建立开始、审批人和结束三个基础节点，进入设计器后可继续拖入条件、抄送和自动动作。</div></div></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="approvalWorkflowCreateConfirm">创建并设计</button>`);
+  qs<HTMLButtonElement>("#approvalWorkflowCreateConfirm")?.addEventListener("click", async () => {
+    const name = qs<HTMLInputElement>("#approvalWorkflowName")?.value.trim() || "";
+    const code = qs<HTMLInputElement>("#approvalWorkflowCode")?.value.trim() || "";
+    const businessType = qs<HTMLSelectElement>("#approvalWorkflowBusiness")?.value || "custom";
+    if (!name || !code) { toast("请填写流程名称和编码", "error"); return; }
+    const startId = approvalDesignerId("start"); const approvalId = approvalDesignerId("node"); const endId = approvalDesignerId("end");
+    try {
+      const data = await api<{ workflow: ApprovalWorkflow }>("/api/v1/approval-workflows", { method: "POST", body: JSON.stringify({ name, code, businessType, allowParallel: false, priority: 100, isDefault: false, triggerConfig: { enabled: true, conditions: [] }, formSchema: {}, nodes: [approvalDesignerNode(startId, "start", 80, 250), approvalDesignerNode(approvalId, "approval", 340, 250), approvalDesignerNode(endId, "end", 600, 250)], edges: [{ id: approvalDesignerId("edge"), source: startId, target: approvalId, label: "", priority: 10 }, { id: approvalDesignerId("edge"), source: approvalId, target: endId, label: "", priority: 20 }] }) });
+      closeModal(); await refreshApprovalWorkflows(); openApprovalWorkflowDesigner(normalizeApprovalWorkflowClient(data.workflow));
+    } catch (error) { toast(error instanceof Error ? error.message : "流程创建失败", "error"); }
+  });
+}
+
+function approvalDesignerId(prefix: string) {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function approvalDesignerNode(id: string, type: ApprovalWorkflowNodeType, x: number, y: number): ApprovalWorkflowNode {
+  const names: Record<ApprovalWorkflowNodeType, string> = { start: "发起申请", approval: "直属负责人审批", condition: "条件判断", cc: "抄送通知", automation: "自动动作", end: "流程结束" };
+  return { id, type, name: names[type], position: { x, y }, approverStrategy: "requester_manager", approverConfig: {}, approvalMode: "single", config: {}, sortOrder: 1 };
+}
+
+function normalizeApprovalWorkflowClient(workflow: ApprovalWorkflow): ApprovalWorkflow {
+  let nodes = (workflow.nodes || []).map((node, index) => ({
+    ...node, type: node.type || "approval", position: node.position || { x: 300 + index * 220, y: 240 },
+    approverStrategy: node.approverStrategy || "requester_manager", approverConfig: node.approverConfig || {},
+    approvalMode: node.approvalMode || "single", config: node.config || {}, sortOrder: node.sortOrder || index + 1
+  }));
+  let edges = [...(workflow.edges || [])];
+  if (!nodes.some((node) => node.type === "start")) nodes.unshift(approvalDesignerNode(approvalDesignerId("start"), "start", 70, 240));
+  if (!nodes.some((node) => node.type === "end")) nodes.push(approvalDesignerNode(approvalDesignerId("end"), "end", 300 + nodes.length * 220, 240));
+  if (!edges.length && nodes.length > 1) edges = nodes.slice(0, -1).map((node, index) => ({ id: approvalDesignerId("edge"), source: node.id, target: nodes[index + 1].id, label: "", priority: (index + 1) * 10 }));
+  return { ...workflow, priority: workflow.priority || 100, triggerConfig: workflow.triggerConfig || { enabled: true, conditions: [] }, nodes, edges };
+}
+
+function approvalNodeMeta(node: ApprovalWorkflowNode) {
+  const strategy = node.approverStrategy === "requester_manager" ? "申请人所在组织负责人" : node.approverStrategy === "permission_holder" ? "按权限匹配审批人" : node.approverStrategy === "role_in_tenant" ? "按角色匹配审批人" : "指定成员";
+  const meta: Record<ApprovalWorkflowNodeType, { symbol: string; detail: string }> = {
+    start: { symbol: "S", detail: "业务提交后进入流程" }, approval: { symbol: "✓", detail: strategy }, condition: { symbol: "◇", detail: "按业务字段选择分支" },
+    cc: { symbol: "↗", detail: "向相关成员发送通知" }, automation: { symbol: "⚡", detail: "触发配置的业务动作" }, end: { symbol: "E", detail: "审批流程完成" }
+  };
+  return meta[node.type];
+}
+
+function markApprovalDesignerDirty() {
+  approvalDesignerDirty = true;
+  const stateEl = qs<HTMLElement>("#approvalDesignerSaveState");
+  if (stateEl) { stateEl.textContent = "有未保存改动"; stateEl.classList.add("dirty"); }
+}
+
+function approvalDesignerPortAction(kind: "input" | "output", nodeId: string) {
+  const workflow = approvalDesignerWorkflow; if (!workflow) return;
+  if (kind === "output") { approvalDesignerConnectionSource = nodeId; renderApprovalDesigner(); return; }
+  const source = approvalDesignerConnectionSource;
+  if (!source) { toast("请先点击来源节点右侧的连接点", "error"); return; }
+  if (source === nodeId || (workflow.edges || []).some((edge) => edge.source === source && edge.target === nodeId)) { toast("不能重复连接或连接到自身", "error"); return; }
+  const edge: ApprovalWorkflowEdge = { id: approvalDesignerId("edge"), source, target: nodeId, label: "", priority: (workflow.edges || []).filter((item) => item.source === source).length * 10 + 10 };
+  workflow.edges = [...(workflow.edges || []), edge]; approvalDesignerConnectionSource = ""; approvalDesignerSelectedNodeId = ""; approvalDesignerSelectedEdgeId = edge.id; markApprovalDesignerDirty(); renderApprovalDesigner(); renderApprovalInspector();
+}
+
+function renderApprovalDesigner() {
+  const workflow = approvalDesignerWorkflow; const nodeLayer = qs<HTMLElement>("#approvalNodeLayer"); const edgeLayer = qs<SVGElement>("#approvalEdgeLayer");
+  if (!workflow || !nodeLayer || !edgeLayer) return;
+  const nodes = workflow.nodes || []; const edges = workflow.edges || []; const byId = new Map(nodes.map((node) => [node.id, node]));
+  nodeLayer.innerHTML = nodes.map((node) => {
+    const meta = approvalNodeMeta(node); const selected = node.id === approvalDesignerSelectedNodeId ? " selected" : "";
+    return `<article class="approval-flow-node ${escapeHtml(node.type)}${selected}" data-approval-node="${escapeHtml(node.id)}" style="left:${Math.round(node.position.x)}px;top:${Math.round(node.position.y)}px"><header><i>${escapeHtml(meta.symbol)}</i><div><b>${escapeHtml(node.name)}</b><small>${escapeHtml(meta.detail)}</small></div></header>${node.type !== "start" ? `<button class="approval-node-port input" type="button" data-approval-port-input="${escapeHtml(node.id)}" aria-label="连接到该节点"><span aria-hidden="true">•</span></button>` : ""}${node.type !== "end" ? `<button class="approval-node-port output${approvalDesignerConnectionSource === node.id ? " active" : ""}" type="button" data-approval-port-output="${escapeHtml(node.id)}" aria-label="从该节点连线"><span aria-hidden="true">+</span></button>` : ""}</article>`;
+  }).join("");
+  qsa<HTMLButtonElement>("[data-approval-port-output]", nodeLayer).forEach((button) => { button.onclick = (event) => { event.stopPropagation(); approvalDesignerPortAction("output", button.dataset.approvalPortOutput || ""); }; });
+  qsa<HTMLButtonElement>("[data-approval-port-input]", nodeLayer).forEach((button) => { button.onclick = (event) => { event.stopPropagation(); approvalDesignerPortAction("input", button.dataset.approvalPortInput || ""); }; });
+  const paths = edges.map((edge) => {
+    const source = byId.get(edge.source); const target = byId.get(edge.target); if (!source || !target) return "";
+    const sx = source.position.x + 174; const sy = source.position.y + 34; const tx = target.position.x; const ty = target.position.y + 34; const bend = Math.max(58, Math.abs(tx - sx) * .48);
+    const d = `M ${sx} ${sy} C ${sx + bend} ${sy}, ${tx - bend} ${ty}, ${tx} ${ty}`; const selected = edge.id === approvalDesignerSelectedEdgeId;
+    const label = edge.label || (edge.condition ? `${edge.condition.field} ${edge.condition.operator}` : ""); const lx = (sx + tx) / 2; const ly = (sy + ty) / 2 - 7;
+    return `<path class="approval-edge${selected ? " selected" : ""}" d="${d}" marker-end="url(#approvalArrow)"></path><path class="approval-edge-hit" d="${d}" data-approval-edge="${escapeHtml(edge.id)}"></path>${label ? `<text class="approval-edge-label" x="${lx}" y="${ly}" text-anchor="middle">${escapeHtml(label)}</text>` : ""}`;
+  }).join("");
+  edgeLayer.innerHTML = `<defs><marker id="approvalArrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8fa39c"></path></marker></defs>${paths}`;
+  qsa<HTMLElement>("[data-approval-node]", nodeLayer).forEach((element) => setupApprovalNodeDrag(element));
+  qsa<SVGPathElement>("[data-approval-edge]", edgeLayer).forEach((path) => path.addEventListener("click", (event) => { event.stopPropagation(); approvalDesignerSelectedEdgeId = path.dataset.approvalEdge || ""; approvalDesignerSelectedNodeId = ""; renderApprovalDesigner(); renderApprovalInspector(); }));
+}
+
+function setupApprovalNodeDrag(element: HTMLElement) {
+  element.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    const output = target.closest<HTMLButtonElement>("[data-approval-port-output]");
+    if (output) { event.stopPropagation(); approvalDesignerConnectionSource = output.dataset.approvalPortOutput || ""; qsa<HTMLElement>(".approval-node-port.output", qs("#approvalNodeLayer") || document).forEach((port) => port.classList.toggle("active", port === output)); return; }
+    const input = target.closest<HTMLButtonElement>("[data-approval-port-input]");
+    if (input) {
+      event.stopPropagation(); const workflow = approvalDesignerWorkflow; const source = approvalDesignerConnectionSource; const targetId = input.dataset.approvalPortInput || ""; if (!workflow) return;
+      if (!source) { toast("请先点击来源节点右侧的连接点", "error"); return; }
+      if (source === targetId || (workflow.edges || []).some((edge) => edge.source === source && edge.target === targetId)) { toast("不能重复连接或连接到自身", "error"); return; }
+      const edge: ApprovalWorkflowEdge = { id: approvalDesignerId("edge"), source, target: targetId, label: "", priority: (workflow.edges || []).filter((item) => item.source === source).length * 10 + 10 };
+      workflow.edges = [...(workflow.edges || []), edge]; approvalDesignerConnectionSource = ""; approvalDesignerSelectedNodeId = ""; approvalDesignerSelectedEdgeId = edge.id; markApprovalDesignerDirty(); renderApprovalDesigner(); renderApprovalInspector(); return;
+    }
+    approvalDesignerSelectedNodeId = element.dataset.approvalNode || ""; approvalDesignerSelectedEdgeId = ""; renderApprovalDesigner(); renderApprovalInspector();
+  });
+  element.addEventListener("pointerdown", (event) => {
+    const outputPort = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-approval-port-output]");
+    if (outputPort) { event.stopPropagation(); approvalDesignerConnectionSource = outputPort.dataset.approvalPortOutput || ""; qsa<HTMLElement>(".approval-node-port.output", qs("#approvalNodeLayer") || document).forEach((port) => port.classList.toggle("active", port === outputPort)); return; }
+    if ((event.target as HTMLElement).closest("button")) return;
+    const workflow = approvalDesignerWorkflow; const node = workflow?.nodes?.find((item) => item.id === element.dataset.approvalNode); if (!workflow || !node) return;
+    approvalDesignerSelectedNodeId = node.id; approvalDesignerSelectedEdgeId = ""; renderApprovalInspector();
+    const startX = event.clientX; const startY = event.clientY; const originX = node.position.x; const originY = node.position.y;
+    element.setPointerCapture(event.pointerId);
+    const move = (moveEvent: PointerEvent) => { node.position = { x: Math.max(18, Math.min(1380, originX + moveEvent.clientX - startX)), y: Math.max(64, Math.min(880, originY + moveEvent.clientY - startY)) }; element.style.left = `${node.position.x}px`; element.style.top = `${node.position.y}px`; markApprovalDesignerDirty(); renderApprovalEdgesOnly(); };
+    const up = () => { element.removeEventListener("pointermove", move); element.removeEventListener("pointerup", up); renderApprovalDesigner(); };
+    element.addEventListener("pointermove", move); element.addEventListener("pointerup", up);
+    qsa<HTMLElement>(".approval-flow-node", qs("#approvalNodeLayer") || document).forEach((item) => item.classList.toggle("selected", item === element));
+  });
+}
+
+function renderApprovalEdgesOnly() {
+  const workflow = approvalDesignerWorkflow; const edgeLayer = qs<SVGElement>("#approvalEdgeLayer"); if (!workflow || !edgeLayer) return;
+  const byId = new Map((workflow.nodes || []).map((node) => [node.id, node]));
+  qsa<SVGPathElement>(".approval-edge,.approval-edge-hit", edgeLayer).forEach((path, index) => {
+    const edge = (workflow.edges || [])[Math.floor(index / 2)]; const source = edge && byId.get(edge.source); const target = edge && byId.get(edge.target); if (!source || !target) return;
+    const sx = source.position.x + 174; const sy = source.position.y + 34; const tx = target.position.x; const ty = target.position.y + 34; const bend = Math.max(58, Math.abs(tx - sx) * .48);
+    path.setAttribute("d", `M ${sx} ${sy} C ${sx + bend} ${sy}, ${tx - bend} ${ty}, ${tx} ${ty}`);
+  });
+}
+
+function renderApprovalInspector(mode: "selection" | "workflow" = "selection") {
+  const root = qs<HTMLElement>("#approvalInspector"); const workflow = approvalDesignerWorkflow; if (!root || !workflow) return;
+  const node = workflow.nodes?.find((item) => item.id === approvalDesignerSelectedNodeId); const edge = workflow.edges?.find((item) => item.id === approvalDesignerSelectedEdgeId);
+  if (mode === "workflow") { renderApprovalWorkflowSettings(root, workflow); return; }
+  if (edge) { renderApprovalEdgeSettings(root, edge); return; }
+  if (!node) { root.innerHTML = `<div class="approval-inspector-empty"><i>↖</i><b>选择一个节点</b><span>节点的审批人、条件和通知规则会显示在这里。</span></div>`; return; }
+  const strategyValue = node.approverStrategy === "permission_holder" ? String(node.approverConfig.permissionCode || "approval.task.act") : node.approverStrategy === "role_in_tenant" ? String(node.approverConfig.roleCode || "") : node.approverStrategy === "specific_member" ? (Array.isArray(node.approverConfig.membershipIds) ? node.approverConfig.membershipIds.join(",") : "") : "";
+  root.innerHTML = `<div class="approval-inspector-form"><header><div><span>节点属性</span><h2>${escapeHtml(node.name)}</h2></div><em>${escapeHtml(node.type)}</em></header><label class="approval-inspector-field"><span>节点名称</span><input id="approvalInspectorNodeName" maxlength="120" value="${escapeHtml(node.name)}"></label>${node.type === "approval" ? `<label class="approval-inspector-field"><span>审批人来源</span><select id="approvalInspectorStrategy"><option value="requester_manager"${node.approverStrategy === "requester_manager" ? " selected" : ""}>申请人所在组织负责人</option><option value="permission_holder"${node.approverStrategy === "permission_holder" ? " selected" : ""}>拥有指定权限的成员</option><option value="role_in_tenant"${node.approverStrategy === "role_in_tenant" ? " selected" : ""}>指定角色成员</option><option value="specific_member"${node.approverStrategy === "specific_member" ? " selected" : ""}>指定成员</option></select><small>人员来自成员、角色、权限和组织关系配置。</small></label><label class="approval-inspector-field"><span>审批规则</span><select id="approvalInspectorMode"><option value="single"${node.approvalMode === "single" ? " selected" : ""}>单人审批</option><option value="all"${node.approvalMode === "all" ? " selected" : ""}>会签：所有人同意</option><option value="any"${node.approvalMode === "any" ? " selected" : ""}>或签：任一人同意</option></select></label><label class="approval-inspector-field" id="approvalInspectorStrategyValueWrap"><span>策略参数</span><input id="approvalInspectorStrategyValue" maxlength="300" value="${escapeHtml(strategyValue)}" placeholder="权限编码 / 角色编码 / 成员 ID"><small>多个成员 ID 使用英文逗号分隔。</small></label><label class="approval-inspector-toggle"><input id="approvalInspectorSelf" type="checkbox"${node.approverConfig.allowSelfApproval === true ? " checked" : ""}><span><b>允许申请人审批自己提交的申请</b><small>默认关闭，避免同一人提交并通过。</small></span></label>` : node.type === "cc" ? `<label class="approval-inspector-field"><span>抄送对象</span><input id="approvalInspectorConfigValue" value="${escapeHtml(String(node.config.target || ""))}" placeholder="角色编码或成员 ID"></label>` : node.type === "automation" ? `<label class="approval-inspector-field"><span>业务动作</span><select id="approvalInspectorConfigValue"><option value="notify"${node.config.action === "notify" ? " selected" : ""}>发送站内通知</option><option value="update_status"${node.config.action === "update_status" ? " selected" : ""}>更新业务状态</option><option value="webhook"${node.config.action === "webhook" ? " selected" : ""}>触发已授权集成</option></select><small>动作进入可靠事件队列，由对应业务模块消费。</small></label>` : `<div class="approval-palette-note"><b>${node.type === "condition" ? "分支条件配置在线条上" : "系统节点"}</b><span>${node.type === "condition" ? "选中条件节点发出的连线，为每个分支填写字段、运算符和值，并保留一个默认分支。" : "开始和结束节点用于界定流程边界。"}</span></div>`}</div>`;
+  qs<HTMLInputElement>("#approvalInspectorNodeName")?.addEventListener("change", (event) => { node.name = (event.currentTarget as HTMLInputElement).value.trim() || node.name; markApprovalDesignerDirty(); renderApprovalDesigner(); renderApprovalInspector(); });
+  qs<HTMLSelectElement>("#approvalInspectorStrategy")?.addEventListener("change", (event) => { node.approverStrategy = (event.currentTarget as HTMLSelectElement).value as ApprovalWorkflowNode["approverStrategy"]; node.approverConfig = {}; markApprovalDesignerDirty(); renderApprovalDesigner(); renderApprovalInspector(); });
+  qs<HTMLSelectElement>("#approvalInspectorMode")?.addEventListener("change", (event) => { node.approvalMode = (event.currentTarget as HTMLSelectElement).value as ApprovalWorkflowNode["approvalMode"]; markApprovalDesignerDirty(); });
+  qs<HTMLInputElement>("#approvalInspectorStrategyValue")?.addEventListener("change", (event) => { const value = (event.currentTarget as HTMLInputElement).value.trim(); node.approverConfig = node.approverStrategy === "permission_holder" ? { ...node.approverConfig, permissionCode: value } : node.approverStrategy === "role_in_tenant" ? { ...node.approverConfig, roleCode: value } : node.approverStrategy === "specific_member" ? { ...node.approverConfig, membershipIds: value.split(",").map((item) => item.trim()).filter(Boolean) } : node.approverConfig; markApprovalDesignerDirty(); });
+  qs<HTMLInputElement>("#approvalInspectorSelf")?.addEventListener("change", (event) => { node.approverConfig = { ...node.approverConfig, allowSelfApproval: (event.currentTarget as HTMLInputElement).checked }; markApprovalDesignerDirty(); });
+  qs<HTMLInputElement>("#approvalInspectorConfigValue")?.addEventListener("change", (event) => { node.config = { ...node.config, target: (event.currentTarget as HTMLInputElement).value.trim() }; markApprovalDesignerDirty(); });
+  qs<HTMLSelectElement>("#approvalInspectorConfigValue")?.addEventListener("change", (event) => { node.config = { ...node.config, action: (event.currentTarget as HTMLSelectElement).value }; markApprovalDesignerDirty(); });
+}
+
+function renderApprovalEdgeSettings(root: HTMLElement, edge: ApprovalWorkflowEdge) {
+  const isDefault = !edge.condition;
+  root.innerHTML = `<div class="approval-inspector-form"><header><div><span>连线属性</span><h2>${isDefault ? "默认分支" : "条件分支"}</h2></div><em>EDGE</em></header><label class="approval-inspector-field"><span>分支名称</span><input id="approvalInspectorEdgeLabel" maxlength="80" value="${escapeHtml(edge.label || "")}" placeholder="例如：金额超过 5 万"></label><label class="approval-inspector-toggle"><input id="approvalInspectorEdgeDefault" type="checkbox"${isDefault ? " checked" : ""}><span><b>设为默认分支</b><small>其它条件都不满足时走这条线。</small></span></label><label class="approval-inspector-field"><span>业务字段</span><input id="approvalInspectorEdgeField" value="${escapeHtml(edge.condition?.field || "amount")}"${isDefault ? " disabled" : ""} placeholder="amount / customer.grade"></label><label class="approval-inspector-field"><span>判断方式</span><select id="approvalInspectorEdgeOperator"${isDefault ? " disabled" : ""}><option value="greater_than">大于</option><option value="greater_or_equal">大于等于</option><option value="less_than">小于</option><option value="equals">等于</option><option value="not_equals">不等于</option><option value="contains">包含</option><option value="in">属于列表</option><option value="exists">已填写</option></select></label><label class="approval-inspector-field"><span>比较值</span><input id="approvalInspectorEdgeValue" value="${escapeHtml(String(edge.condition?.value ?? ""))}"${isDefault ? " disabled" : ""} placeholder="50000"></label></div>`;
+  const operator = qs<HTMLSelectElement>("#approvalInspectorEdgeOperator"); if (operator && edge.condition) operator.value = edge.condition.operator;
+  const sync = () => { const makeDefault = qs<HTMLInputElement>("#approvalInspectorEdgeDefault")?.checked; edge.label = qs<HTMLInputElement>("#approvalInspectorEdgeLabel")?.value.trim() || ""; edge.condition = makeDefault ? undefined : { field: qs<HTMLInputElement>("#approvalInspectorEdgeField")?.value.trim() || "amount", operator: (qs<HTMLSelectElement>("#approvalInspectorEdgeOperator")?.value || "equals") as NonNullable<ApprovalWorkflowEdge["condition"]>["operator"], value: qs<HTMLInputElement>("#approvalInspectorEdgeValue")?.value ?? "" }; markApprovalDesignerDirty(); renderApprovalDesigner(); if (makeDefault !== isDefault) renderApprovalInspector(); };
+  ["#approvalInspectorEdgeLabel", "#approvalInspectorEdgeDefault", "#approvalInspectorEdgeField", "#approvalInspectorEdgeOperator", "#approvalInspectorEdgeValue"].forEach((selector) => qs<HTMLElement>(selector)?.addEventListener("change", sync));
+}
+
+function renderApprovalWorkflowSettings(root: HTMLElement, workflow: ApprovalWorkflow) {
+  const conditions = Array.isArray(workflow.triggerConfig?.conditions) ? workflow.triggerConfig.conditions as Array<Record<string, unknown>> : []; const condition = conditions[0] || {};
+  root.innerHTML = `<div class="approval-inspector-form"><header><div><span>流程设置</span><h2>${escapeHtml(workflow.name)}</h2></div><em>V${workflow.versionNo || 1}</em></header><label class="approval-inspector-field"><span>流程名称</span><input id="approvalInspectorWorkflowName" maxlength="160" value="${escapeHtml(workflow.name)}"></label><label class="approval-inspector-field"><span>业务类型</span><select id="approvalInspectorBusiness"><option value="quote">报价审批</option><option value="discount">折扣审批</option><option value="customer_transfer">客户转移</option><option value="export">数据导出</option><option value="commission">提成审批</option><option value="custom">通用审批</option></select></label><label class="approval-inspector-field"><span>匹配优先级</span><input id="approvalInspectorPriority" type="number" min="1" max="999" value="${workflow.priority || 100}"><small>数字越小越先匹配。</small></label><label class="approval-inspector-toggle"><input id="approvalInspectorDefault" type="checkbox"${workflow.isDefault ? " checked" : ""}><span><b>作为该业务类型的兜底流程</b><small>没有其它条件命中时使用。</small></span></label><label class="approval-inspector-field"><span>自动匹配字段</span><input id="approvalInspectorTriggerField" value="${escapeHtml(String(condition.field || ""))}" placeholder="例如 amount；不填则始终匹配"></label><label class="approval-inspector-field"><span>匹配方式</span><select id="approvalInspectorTriggerOperator"><option value="greater_than">大于</option><option value="greater_or_equal">大于等于</option><option value="less_than">小于</option><option value="equals">等于</option><option value="not_equals">不等于</option><option value="contains">包含</option></select></label><label class="approval-inspector-field"><span>匹配值</span><input id="approvalInspectorTriggerValue" value="${escapeHtml(String(condition.value ?? ""))}" placeholder="例如 50000"></label></div>`;
+  const business = qs<HTMLSelectElement>("#approvalInspectorBusiness"); if (business) business.value = workflow.businessType;
+  const triggerOperator = qs<HTMLSelectElement>("#approvalInspectorTriggerOperator"); if (triggerOperator) triggerOperator.value = String(condition.operator || "greater_than");
+  const sync = () => { workflow.name = qs<HTMLInputElement>("#approvalInspectorWorkflowName")?.value.trim() || workflow.name; workflow.businessType = qs<HTMLSelectElement>("#approvalInspectorBusiness")?.value || workflow.businessType; workflow.priority = Math.max(1, Number(qs<HTMLInputElement>("#approvalInspectorPriority")?.value || 100)); workflow.isDefault = Boolean(qs<HTMLInputElement>("#approvalInspectorDefault")?.checked); const field = qs<HTMLInputElement>("#approvalInspectorTriggerField")?.value.trim() || ""; workflow.triggerConfig = { enabled: true, conditions: field ? [{ field, operator: qs<HTMLSelectElement>("#approvalInspectorTriggerOperator")?.value || "equals", value: qs<HTMLInputElement>("#approvalInspectorTriggerValue")?.value ?? "" }] : [] }; markApprovalDesignerDirty(); const title = qs<HTMLElement>("#approvalDesignerTitle"); if (title) title.textContent = workflow.name; };
+  ["#approvalInspectorWorkflowName", "#approvalInspectorBusiness", "#approvalInspectorPriority", "#approvalInspectorDefault", "#approvalInspectorTriggerField", "#approvalInspectorTriggerOperator", "#approvalInspectorTriggerValue"].forEach((selector) => qs<HTMLElement>(selector)?.addEventListener("change", sync));
+}
+
+function openApprovalWorkflowDesigner(workflow: ApprovalWorkflow) {
+  approvalDesignerWorkflow = workflow; approvalDesignerSelectedNodeId = ""; approvalDesignerSelectedEdgeId = ""; approvalDesignerConnectionSource = ""; approvalDesignerDirty = false;
+  const library = qs<HTMLElement>("#approvalWorkflowLibrary"); const designer = qs<HTMLElement>("#approvalWorkflowDesigner"); if (library) library.hidden = true; if (designer) designer.hidden = false;
+  const title = qs<HTMLElement>("#approvalDesignerTitle"); const saveState = qs<HTMLElement>("#approvalDesignerSaveState"); if (title) title.textContent = workflow.name; if (saveState) { saveState.textContent = workflow.draftVersionId || workflow.status === "draft" ? "草稿待发布" : `已发布 V${workflow.versionNo || 1}`; saveState.classList.remove("dirty"); }
+  renderApprovalDesigner(); renderApprovalInspector(); setTimeout(() => fitApprovalDesignerCanvas(), 30);
+}
+
+function closeApprovalWorkflowDesigner() { const library = qs<HTMLElement>("#approvalWorkflowLibrary"); const designer = qs<HTMLElement>("#approvalWorkflowDesigner"); if (library) library.hidden = false; if (designer) designer.hidden = true; approvalDesignerWorkflow = null; }
+
+async function requestCloseApprovalWorkflowDesigner() {
+  if (approvalDesignerDirty && !await confirmAction({ title: "离开流程设计器", message: "当前还有未保存的修改。", consequences: ["离开后，本次画布调整不会保留"], confirmLabel: "放弃修改", tone: "warning" })) return;
+  closeApprovalWorkflowDesigner(); await refreshApprovalWorkflows();
+}
+
+async function saveApprovalWorkflow(showToast = true) {
+  const workflow = approvalDesignerWorkflow; if (!workflow) return false;
+  try {
+    const nodes = (workflow.nodes || []).map((node, index) => ({ ...node, sortOrder: index + 1 }));
+    const data = await api<{ workflow: ApprovalWorkflow }>(`/api/v1/approval-workflows/${encodeURIComponent(workflow.id)}`, { method: "PUT", body: JSON.stringify({ name: workflow.name, code: workflow.code, businessType: workflow.businessType, allowParallel: workflow.allowParallel || false, priority: workflow.priority || 100, isDefault: workflow.isDefault || false, triggerConfig: workflow.triggerConfig || {}, formSchema: workflow.formSchema || {}, nodes, edges: workflow.edges || [] }) });
+    approvalDesignerWorkflow = normalizeApprovalWorkflowClient(data.workflow); approvalDesignerDirty = false; const stateEl = qs<HTMLElement>("#approvalDesignerSaveState"); if (stateEl) { stateEl.textContent = "草稿已保存"; stateEl.classList.remove("dirty"); } renderApprovalDesigner(); renderApprovalInspector(); if (showToast) toast("审批流草稿已保存", "success"); return true;
+  } catch (error) { toast(error instanceof Error ? error.message : "审批流保存失败", "error"); return false; }
+}
+
+function showApprovalValidation(result: { valid: boolean; issues: string[] }) {
+  const drawer = qs<HTMLElement>("#approvalValidationDrawer"); const content = qs<HTMLElement>("#approvalValidationContent"); if (!drawer || !content) return;
+  drawer.hidden = false; content.innerHTML = result.valid ? `<div class="approval-validation-ok">流程结构完整，可以发布。</div>` : (result.issues || []).map((issue) => `<div class="approval-validation-issue">${escapeHtml(issue)}</div>`).join("");
+}
+
+async function validateApprovalDesigner() { const workflow = approvalDesignerWorkflow; if (!workflow || !await saveApprovalWorkflow(false)) return null; try { const result = await api<{ valid: boolean; issues: string[] }>(`/api/v1/approval-workflows/${encodeURIComponent(workflow.id)}/validate`, { method: "POST", body: "{}" }); showApprovalValidation(result); return result; } catch (error) { toast(error instanceof Error ? error.message : "流程检查失败", "error"); return null; } }
+
+function fitApprovalDesignerCanvas() { const canvas = qs<HTMLElement>("#approvalCanvas"); const nodes = approvalDesignerWorkflow?.nodes || []; if (!canvas || !nodes.length) return; const minX = Math.min(...nodes.map((node) => node.position.x)); const minY = Math.min(...nodes.map((node) => node.position.y)); canvas.scrollTo({ left: Math.max(0, minX - 90), top: Math.max(0, minY - 100), behavior: "smooth" }); }
+
+function deleteApprovalDesignerSelection() {
+  const workflow = approvalDesignerWorkflow; if (!workflow) return;
+  if (approvalDesignerSelectedEdgeId) { workflow.edges = (workflow.edges || []).filter((edge) => edge.id !== approvalDesignerSelectedEdgeId); approvalDesignerSelectedEdgeId = ""; }
+  else if (approvalDesignerSelectedNodeId) { const node = workflow.nodes?.find((item) => item.id === approvalDesignerSelectedNodeId); if (!node || node.type === "start" || node.type === "end") { toast("开始和结束节点不能删除", "error"); return; } workflow.nodes = (workflow.nodes || []).filter((item) => item.id !== node.id); workflow.edges = (workflow.edges || []).filter((edge) => edge.source !== node.id && edge.target !== node.id); approvalDesignerSelectedNodeId = ""; }
+  else { toast("请先选择节点或连线", "error"); return; }
+  markApprovalDesignerDirty(); renderApprovalDesigner(); renderApprovalInspector();
+}
+
+function setupApprovalEvents() {
+  qs<HTMLButtonElement>("#approvalRefreshButton")?.addEventListener("click", () => void refreshApprovalCenter(true));
+  qs<HTMLButtonElement>("#approvalCreateInstanceButton")?.addEventListener("click", openApprovalInstanceCreate);
+  qs<HTMLButtonElement>("#approvalWorkflowRefreshButton")?.addEventListener("click", () => void refreshApprovalWorkflows(true));
+  qs<HTMLButtonElement>("#approvalWorkflowCreateButton")?.addEventListener("click", openApprovalWorkflowCreate);
+  qs<HTMLButtonElement>("#approvalDesignerBack")?.addEventListener("click", () => void requestCloseApprovalWorkflowDesigner());
+  qs<HTMLButtonElement>("#approvalDesignerSettings")?.addEventListener("click", () => { approvalDesignerSelectedNodeId = ""; approvalDesignerSelectedEdgeId = ""; renderApprovalDesigner(); renderApprovalInspector("workflow"); });
+  qs<HTMLButtonElement>("#approvalDesignerSave")?.addEventListener("click", () => void saveApprovalWorkflow());
+  qs<HTMLButtonElement>("#approvalDesignerValidate")?.addEventListener("click", () => void validateApprovalDesigner());
+  qs<HTMLButtonElement>("#approvalDesignerPublish")?.addEventListener("click", async () => { const workflow = approvalDesignerWorkflow; if (!workflow) return; const result = await validateApprovalDesigner(); if (result?.valid) await publishApprovalWorkflow(workflow.id); });
+  qs<HTMLButtonElement>("#approvalDesignerDelete")?.addEventListener("click", deleteApprovalDesignerSelection);
+  qs<HTMLButtonElement>("#approvalDesignerFit")?.addEventListener("click", fitApprovalDesignerCanvas);
+  qs<HTMLButtonElement>("#approvalValidationClose")?.addEventListener("click", () => { const drawer = qs<HTMLElement>("#approvalValidationDrawer"); if (drawer) drawer.hidden = true; });
+  qsa<HTMLButtonElement>("[data-approval-palette]").forEach((button) => {
+    button.addEventListener("dragstart", (event) => event.dataTransfer?.setData("application/x-goodjob-approval-node", button.dataset.approvalPalette || "approval"));
+    button.addEventListener("click", () => {
+      const workflow = approvalDesignerWorkflow; const canvas = qs<HTMLElement>("#approvalCanvas"); const type = button.dataset.approvalPalette as ApprovalWorkflowNodeType; if (!workflow || !canvas) return;
+      const node = approvalDesignerNode(approvalDesignerId("node"), type, canvas.scrollLeft + Math.max(80, canvas.clientWidth / 2 - 87), canvas.scrollTop + Math.max(110, canvas.clientHeight / 2 - 34));
+      workflow.nodes = [...(workflow.nodes || []), node]; approvalDesignerSelectedNodeId = node.id; approvalDesignerSelectedEdgeId = ""; markApprovalDesignerDirty(); renderApprovalDesigner(); renderApprovalInspector();
+    });
+  });
+  const canvas = qs<HTMLElement>("#approvalCanvas");
+  canvas?.addEventListener("dragover", (event) => { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = "copy"; });
+  canvas?.addEventListener("drop", (event) => {
+    event.preventDefault(); const workflow = approvalDesignerWorkflow; const type = event.dataTransfer?.getData("application/x-goodjob-approval-node") as ApprovalWorkflowNodeType; if (!workflow || !["approval", "condition", "cc", "automation"].includes(type)) return;
+    const rect = canvas.getBoundingClientRect(); const node = approvalDesignerNode(approvalDesignerId("node"), type, Math.max(20, event.clientX - rect.left + canvas.scrollLeft - 87), Math.max(64, event.clientY - rect.top + canvas.scrollTop - 34));
+    workflow.nodes = [...(workflow.nodes || []), node]; approvalDesignerSelectedNodeId = node.id; approvalDesignerSelectedEdgeId = ""; markApprovalDesignerDirty(); renderApprovalDesigner(); renderApprovalInspector();
+  });
+  canvas?.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    const output = target.closest<HTMLButtonElement>("[data-approval-port-output]");
+    if (output) { approvalDesignerConnectionSource = output.dataset.approvalPortOutput || ""; renderApprovalDesigner(); return; }
+    const input = target.closest<HTMLButtonElement>("[data-approval-port-input]");
+    if (input) {
+      const workflow = approvalDesignerWorkflow; const source = approvalDesignerConnectionSource; const targetId = input.dataset.approvalPortInput || ""; if (!workflow) return;
+      if (!source) { toast("请先点击来源节点右侧的连接点", "error"); return; }
+      if (source === targetId || (workflow.edges || []).some((edge) => edge.source === source && edge.target === targetId)) { toast("不能重复连接或连接到自身", "error"); return; }
+      const edge: ApprovalWorkflowEdge = { id: approvalDesignerId("edge"), source, target: targetId, label: "", priority: (workflow.edges || []).filter((item) => item.source === source).length * 10 + 10 };
+      workflow.edges = [...(workflow.edges || []), edge]; approvalDesignerConnectionSource = ""; approvalDesignerSelectedNodeId = ""; approvalDesignerSelectedEdgeId = edge.id; markApprovalDesignerDirty(); renderApprovalDesigner(); renderApprovalInspector(); return;
+    }
+    if (target.closest(".approval-flow-node") || (event.target as SVGElement).hasAttribute?.("data-approval-edge")) return;
+    approvalDesignerSelectedNodeId = ""; approvalDesignerSelectedEdgeId = ""; approvalDesignerConnectionSource = ""; renderApprovalDesigner(); renderApprovalInspector();
+  });
+  qsa<HTMLButtonElement>("[data-approval-center-tab]").forEach((button) => button.addEventListener("click", () => {
+    approvalCenterTab = button.dataset.approvalCenterTab as typeof approvalCenterTab;
+    qsa<HTMLButtonElement>("[data-approval-center-tab]").forEach((item) => item.classList.toggle("active", item === button));
+    selectedApprovalInstanceId = ""; renderApprovalCenterList();
+    const detail = qs<HTMLElement>("#approvalCenterDetail"); if (detail) detail.innerHTML = `<div class="approval-detail-empty">从左侧选择一项查看审批内容</div>`;
+  }));
+}
+
+async function refreshPlatformOperations() {
+  const calls: Array<Promise<void>> = [];
+  if (hasIamCapability("platform.dashboard.read")) calls.push(api<{ metrics: Record<string, number>; generatedAt: string }>("/api/platform/v1/overview").then((data) => { platformOverview = data; }));
+  if (hasIamCapability("platform.tenant.metadata.read")) calls.push(api<{ tenants: PlatformTenant[] }>("/api/platform/v1/tenants").then((data) => { platformTenants = data.tenants || []; }));
+  if (hasIamCapability("platform.support.request.create")) calls.push(api<{ requests: PlatformSupportRequest[] }>("/api/platform/v1/support-requests").then((data) => { platformSupportRequests = data.requests || []; }));
+  if (hasIamCapability("platform.operator.read")) calls.push(api<{ operators: PlatformOperator[] }>("/api/platform/v1/operators").then((data) => { platformOperators = data.operators || []; }));
+  if (hasIamCapability("platform.health.read")) calls.push(api<{ services: Array<Record<string, unknown>> }>("/api/platform/v1/health").then((data) => { platformHealthServices = data.services || []; }));
+  if (hasIamCapability("platform.audit.read")) calls.push(api<{ events: PlatformAuditEvent[] }>("/api/platform/v1/audit?limit=100").then((data) => { platformAuditEvents = data.events || []; }));
+  const results = await Promise.allSettled(calls);
+  const failed = results.find((result) => result.status === "rejected");
+  renderPlatformOperations();
+  if (failed?.status === "rejected") toast(failed.reason instanceof Error ? failed.reason.message : "部分平台数据读取失败", "error");
+}
+
+async function runPlatformMutation(action: () => Promise<unknown>, successMessage: string) {
+  try {
+    await action();
+    closeModal();
+    toast(successMessage);
+    await refreshPlatformOperations();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "平台操作失败", "error");
+  }
+}
+
+function openPlatformTenantCreator() {
+  openModal("创建公司", `<div class="form-grid"><div class="form-field full"><label>公司名称</label><input id="platformTenantName" maxlength="200"></div><div class="form-field"><label>公司编码</label><input id="platformTenantCode" maxlength="64" placeholder="例如 acme-trading"></div><div class="form-field"><label>席位上限</label><input id="platformTenantSeats" type="number" min="1" max="10000" value="50"></div><div class="form-field full"><label>开通原因</label><textarea id="platformTenantReason" maxlength="500">公测公司开通</textarea></div></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="platformTenantSave">创建</button>`);
+  qs("#platformTenantSave")?.addEventListener("click", () => void runPlatformMutation(() => api("/api/platform/v1/tenants", { method: "POST", body: JSON.stringify({ name: qs<HTMLInputElement>("#platformTenantName")?.value.trim(), code: qs<HTMLInputElement>("#platformTenantCode")?.value.trim(), seatLimit: Number(qs<HTMLInputElement>("#platformTenantSeats")?.value || 50), reason: qs<HTMLTextAreaElement>("#platformTenantReason")?.value.trim() }) }), "公司已创建"));
+}
+
+function openPlatformTenantAdminCreator(tenantId: string) {
+  openModal("设置公司管理员", `<div class="form-grid"><div class="form-field"><label>管理员姓名</label><input id="platformAdminName" maxlength="100"></div><div class="form-field"><label>登录邮箱</label><input id="platformAdminEmail" type="email" maxlength="180"></div><div class="form-field full"><label>初始密码</label><input id="platformAdminPassword" type="password" minlength="12" maxlength="200" autocomplete="new-password"></div><div class="form-field full"><label>设置原因</label><textarea id="platformAdminReason" maxlength="500">公司管理员初始化</textarea></div></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="platformAdminSave">确认设置</button>`);
+  qs("#platformAdminSave")?.addEventListener("click", () => void runPlatformMutation(() => api(`/api/platform/v1/tenants/${encodeURIComponent(tenantId)}/bootstrap-admin`, { method: "POST", body: JSON.stringify({ name: qs<HTMLInputElement>("#platformAdminName")?.value.trim(), email: qs<HTMLInputElement>("#platformAdminEmail")?.value.trim(), password: qs<HTMLInputElement>("#platformAdminPassword")?.value || "", reason: qs<HTMLTextAreaElement>("#platformAdminReason")?.value.trim() }) }), "公司管理员已设置"));
+}
+
+function openPlatformSupportCreator() {
+  const tenantOptions = platformTenants.filter((tenant) => tenant.status !== "closed").map((tenant) => `<option value="${escapeHtml(tenant.id)}">${escapeHtml(tenant.name)}</option>`).join("");
+  openModal("创建支持访问申请", `<div class="form-grid"><div class="form-field full"><label>目标公司</label><select id="platformSupportTenant">${tenantOptions}</select></div><div class="form-field"><label>工单号</label><input id="platformSupportTicket" maxlength="120"></div><div class="form-field"><label>访问时长</label><select id="platformSupportMinutes"><option value="15">15 分钟</option><option value="30">30 分钟</option><option value="60">60 分钟</option></select></div><div class="form-field full"><label>只读范围</label><div><label><input type="checkbox" data-platform-support-permission value="customer.read" checked> 客户</label>　<label><input type="checkbox" data-platform-support-permission value="lead.read"> 线索</label>　<label><input type="checkbox" data-platform-support-permission value="deal.read"> 商机</label>　<label><input type="checkbox" data-platform-support-permission value="daily_report.read"> 日报</label></div></div><div class="form-field full"><label>访问原因</label><textarea id="platformSupportReason" maxlength="500" placeholder="说明客户问题和排查目的"></textarea></div></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="platformSupportSave">提交审批</button>`);
+  qs("#platformSupportSave")?.addEventListener("click", () => void runPlatformMutation(() => api("/api/platform/v1/support-requests", { method: "POST", body: JSON.stringify({ tenantId: qs<HTMLSelectElement>("#platformSupportTenant")?.value, ticketNo: qs<HTMLInputElement>("#platformSupportTicket")?.value.trim(), reason: qs<HTMLTextAreaElement>("#platformSupportReason")?.value.trim(), requestedMinutes: Number(qs<HTMLSelectElement>("#platformSupportMinutes")?.value || 15), permissionCodes: qsa<HTMLInputElement>("[data-platform-support-permission]:checked").map((item) => item.value) }) }), "支持访问申请已提交"));
+}
+
+function openPlatformReasonAction(title: string, placeholder: string, action: (reason: string) => Promise<unknown>, successMessage: string) {
+  openModal(title, `<div class="form-field"><label>操作原因</label><textarea id="platformActionReason" maxlength="500" placeholder="${escapeHtml(placeholder)}"></textarea></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="platformActionConfirm">确认</button>`);
+  qs("#platformActionConfirm")?.addEventListener("click", () => void runPlatformMutation(() => action(qs<HTMLTextAreaElement>("#platformActionReason")?.value.trim() || ""), successMessage));
+}
+
+async function openPlatformSupportData(sessionId: string) {
+  const request = platformSupportRequests.find((item) => item.session?.id === sessionId);
+  if (!request) return;
+  const resourceByPermission: Record<string, string> = { "customer.read": "customers", "lead.read": "leads", "deal.read": "deals", "daily_report.read": "daily-reports" };
+  const resource = resourceByPermission[request.permissionCodes[0]] || "customers";
+  openModal(`支持视图 · ${request.tenantName}`, `<div class="platform-loading">正在读取限时支持数据</div>`, `<button class="btn" data-modal-close>关闭</button>`);
+  try {
+    const result = await api<{ permissionCode: string; items: Array<Record<string, unknown>> }>(`/api/platform/v1/support-sessions/${encodeURIComponent(sessionId)}/resources/${resource}`);
+    const keys = Object.keys(result.items[0] || {});
+    const table = result.items.length ? `<div class="platform-table-wrap"><table class="platform-table"><thead><tr>${keys.map((key) => `<th>${escapeHtml(key)}</th>`).join("")}</tr></thead><tbody>${result.items.map((item) => `<tr>${keys.map((key) => `<td>${escapeHtml(String(item[key] ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<div class="platform-empty">该范围暂无数据</div>`;
+    openModal(`支持视图 · ${request.tenantName}`, `<p class="field-hint">限时只读 · ${escapeHtml(result.permissionCode)} · 每次读取均写入平台审计</p>${table}`, `<button class="btn" data-modal-close>关闭</button>`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "支持数据读取失败", "error");
+    closeModal();
+  }
+}
+
+function installPlatformOperationEvents() {
+  qsa<HTMLButtonElement>("[data-platform-tab]", qs("#platformTabs") || document).forEach((button) => button.onclick = () => { platformActiveTab = button.dataset.platformTab as PlatformTab; renderPlatformOperations(); });
+  qsa<HTMLButtonElement>("[data-platform-open-tab]").forEach((button) => button.onclick = () => { platformActiveTab = button.dataset.platformOpenTab as PlatformTab; renderPlatformOperations(); });
+  qs<HTMLButtonElement>("[data-platform-create-tenant]")?.addEventListener("click", openPlatformTenantCreator);
+  qsa<HTMLButtonElement>("[data-platform-bootstrap-admin]").forEach((button) => button.onclick = () => openPlatformTenantAdminCreator(button.dataset.tenantId || ""));
+  qs<HTMLButtonElement>("[data-platform-create-support]")?.addEventListener("click", openPlatformSupportCreator);
+  qsa<HTMLButtonElement>("[data-platform-tenant-action]").forEach((button) => button.onclick = () => {
+    const action = button.dataset.platformTenantAction as "suspend" | "restore"; const tenantId = button.dataset.tenantId || "";
+    openPlatformReasonAction(action === "suspend" ? "暂停公司" : "恢复公司", "填写状态变更原因", (reason) => api(`/api/platform/v1/tenants/${encodeURIComponent(tenantId)}/${action}`, { method: "POST", body: JSON.stringify({ reason }) }), action === "suspend" ? "公司已暂停" : "公司已恢复");
+  });
+  qsa<HTMLButtonElement>("[data-platform-support-review]").forEach((button) => button.onclick = () => {
+    const decision = button.dataset.platformSupportReview || "reject"; const requestId = button.dataset.requestId || "";
+    openPlatformReasonAction(decision === "approve" ? "批准支持访问" : "拒绝支持访问", "填写审批意见", (reviewNote) => api(`/api/platform/v1/support-requests/${encodeURIComponent(requestId)}/${decision}`, { method: "POST", body: JSON.stringify({ reviewNote }) }), decision === "approve" ? "申请已批准" : "申请已拒绝");
+  });
+  qsa<HTMLButtonElement>("[data-platform-support-start]").forEach((button) => button.onclick = () => void runPlatformMutation(() => api(`/api/platform/v1/support-requests/${encodeURIComponent(button.dataset.platformSupportStart || "")}/start-session`, { method: "POST", body: "{}" }), "限时支持会话已启动"));
+  qsa<HTMLButtonElement>("[data-platform-support-terminate]").forEach((button) => button.onclick = () => openPlatformReasonAction("结束支持会话", "填写结束原因", (reason) => api(`/api/platform/v1/support-sessions/${encodeURIComponent(button.dataset.platformSupportTerminate || "")}/terminate`, { method: "POST", body: JSON.stringify({ reason }) }), "支持会话已结束"));
+  qsa<HTMLButtonElement>("[data-platform-support-read]").forEach((button) => button.onclick = () => void openPlatformSupportData(button.dataset.platformSupportRead || ""));
+}
+
 async function refreshAll(user: User) {
+  await loadIamCapabilities(user);
+  if (state.iamCapabilities?.source === "platform") {
+    await refreshPlatformOperations();
+    return;
+  }
   renderDashboardCache(user);
-  const [summary, customers, publicCustomers, leadsResp, leadTrashResp, todos, deals, reminders, jobs, tradeDocs, wecom, knowledge, exams, ocr, websiteOps, prospectAssignees, aiConfig, problems, memos, deletedMemos, planTasks, planTemplates, competitors, caseStudies, commissionProducts, commissionRecords, commissionCalculations] = await Promise.all([
+  const [summary, customers, publicCustomers, leadsResp, leadTrashResp, todos, deals, reminders, jobs, tradeDocs, documentDefaults, documentAssets, wecom, knowledge, exams, ocr, websiteOps, prospectAssignees, aiConfig, problems, memos, deletedMemos, planTasks, planTemplates, competitors, caseStudies, commissionProducts, commissionRecords, commissionCalculations] = await Promise.all([
     api<DashboardSummary>("/api/dashboard/summary"),
     api<{ customers: Customer[]; mineCount: number; publicCount: number }>("/api/customers"),
     api<{ customers: Customer[]; mineCount: number; publicCount: number }>("/api/customers?scope=public"),
@@ -5045,10 +7019,12 @@ async function refreshAll(user: User) {
     api<{ reminders: Reminder[] }>("/api/reminders"),
     api<{ jobs: ImportExportJob[] }>("/api/import-export/jobs"),
     api<{ documents: TradeDocument[] }>("/api/trade-documents"),
+    api<{ profile: DocumentDefaultProfile; canManage: boolean }>("/api/document-defaults"),
+    api<DocumentAssetsResponse>("/api/document-assets"),
     api<{ messages: WecomMessage[] }>("/api/wecom/messages"),
     api<{ assets: KnowledgeAsset[] }>("/api/knowledge/assets"),
-    api<{ exams: Exam[]; report: ExamReport }>("/api/exams"),
-    api<{ job: OcrJob }>("/api/tools/ocr/jobs/ocr1"),
+    api<{ exams: Exam[]; report: ExamReport; canManage: boolean; candidates: ExamCandidate[] }>("/api/exams"),
+    api<{ job: OcrJob }>("/api/tools/ocr/jobs/current"),
     api<{ opportunities: WebsiteOpportunity[] }>("/api/tools/website-opportunities"),
     api<{ assignees: ProspectAssignee[] }>("/api/prospect-list/assignees"),
     api<{ config: AiModelConfig | null; configs?: AiModelConfig[] }>("/api/tools/ai-config"),
@@ -5076,10 +7052,16 @@ async function refreshAll(user: User) {
   state.reminders = reminders.reminders;
   state.jobs = jobs.jobs;
   state.tradeDocuments = tradeDocs.documents;
+  state.documentDefaultProfile = documentDefaults.profile;
+  state.documentDefaultsCanManage = documentDefaults.canManage;
+  state.documentAssets = documentAssets;
   state.wecomMessages = wecom.messages;
   state.knowledgeAssets = knowledge.assets;
   state.exams = exams.exams;
   state.examReport = exams.report;
+  state.examCanManage = exams.canManage;
+  state.examCandidates = exams.candidates || [];
+  state.examWorkspaceMode = exams.canManage ? "manage" : "mine";
   state.ocrJob = ocr.job;
   state.websiteOpportunities = websiteOps.opportunities;
   state.prospectAssignees = prospectAssignees.assignees;
@@ -5107,8 +7089,9 @@ async function refreshAll(user: User) {
   state.commissionCalculations = commissionCalculations.calculations;
   state.commissionItems = commissionCalculations.items;
   state.commissionCanReview = commissionCalculations.canReview;
-  const productsResp = await api<{ products: Product[] }>("/api/tools/products").catch(() => ({ products: state.products || [] }));
+  const productsResp = await api<{ products: Product[]; categories: string[] }>("/api/tools/products").catch(() => ({ products: state.products || [], categories: state.productCategories || [] }));
   state.products = productsResp.products;
+  state.productCategories = productsResp.categories || [];
   renderProducts();
   const shipmentsResp = await api<{ shipments: Shipment[] }>("/api/tools/shipments").catch(() => ({ shipments: state.shipments || [] }));
   state.shipments = shipmentsResp.shipments;
@@ -5158,6 +7141,7 @@ async function refreshAll(user: User) {
   void loadLeadProviders();
   void loadProspectFeedback(true, true);
   void loadProspectSchedules(true);
+  scheduleWebsiteProbeRefresh();
   void loadIdentityConflicts(true);
   void loadProspectRuns(true);
 }
@@ -5269,11 +7253,9 @@ function refreshVisibleDashboard() {
 }
 
 function renderDashboard(summary: DashboardSummary, todos: Todo[], customers: Customer[], fromCache = false) {
-  const roleBusinessScope = state.user?.role === "super_admin"
-    ? "全局业务"
-    : state.user && ["manager", "admin"].includes(state.user.role)
-      ? "团队业务"
-      : "本人业务";
+  const businessScopes = state.iamCapabilities?.permissions["workspace.dashboard.read"] || [];
+  const roleBusinessScope = businessScopes.includes("tenant") ? "全公司业务"
+    : businessScopes.includes("org_subtree") || businessScopes.includes("org_unit") ? "组织业务" : "本人业务";
   const scopeLabels = summary.scopeLabels || {
     business: roleBusinessScope,
     todos: "本人待办"
@@ -5629,9 +7611,10 @@ function renderLeadFunnel(summary: DashboardSummary) {
   if (chartHost) {
     const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const maxCount = Math.max(1, ...data.stages.map((stage) => stage.count));
-    const chart = echarts.init(chartHost, undefined, { renderer: "svg" });
-    dashboardLeadFunnelChart = chart;
-    chart.setOption({
+    try {
+      const chart = echarts.init(chartHost, undefined, { renderer: "svg" });
+      dashboardLeadFunnelChart = chart;
+      chart.setOption({
       animation: !prefersReducedMotion,
       animationDuration: 720,
       animationDurationUpdate: 350,
@@ -5725,25 +7708,33 @@ function renderLeadFunnel(summary: DashboardSummary) {
           }
         }))
       }]
-    });
-    chart.on("click", (params) => {
-      const stage = params.data as { key?: string } | undefined;
-      openLeadFunnelStage(stage?.key || "entered");
-    });
-    const travelLight = qs<HTMLElement>("[data-lead-funnel-light]", funnel);
-    const positionTravelLight = () => {
-      chart.resize();
-      if (!travelLight || prefersReducedMotion) return;
-      travelLight.style.offsetPath = buildLeadFlowMotionPath(
-        chartHost.clientWidth,
-        chartHost.clientHeight,
-        data.stages.map((stage) => stage.count),
-        Math.max(2, Math.ceil(maxCount * 1.28))
-      );
-    };
-    positionTravelLight();
-    dashboardLeadFunnelResizeObserver = new ResizeObserver(positionTravelLight);
-    dashboardLeadFunnelResizeObserver.observe(chartHost);
+      });
+      chart.on("click", (params) => {
+        const stage = params.data as { key?: string } | undefined;
+        openLeadFunnelStage(stage?.key || "entered");
+      });
+      const travelLight = qs<HTMLElement>("[data-lead-funnel-light]", funnel);
+      const positionTravelLight = () => {
+        try {
+          chart.resize();
+          if (!travelLight || prefersReducedMotion) return;
+          travelLight.style.offsetPath = buildLeadFlowMotionPath(
+            chartHost.clientWidth,
+            chartHost.clientHeight,
+            data.stages.map((stage) => stage.count),
+            Math.max(2, Math.ceil(maxCount * 1.28))
+          );
+        } catch {
+          // Chart resize is optional; the stage list remains usable if the host is replaced.
+        }
+      };
+      positionTravelLight();
+      dashboardLeadFunnelResizeObserver = new ResizeObserver(positionTravelLight);
+      dashboardLeadFunnelResizeObserver.observe(chartHost);
+    } catch {
+      dashboardLeadFunnelChart = null;
+      chartHost.innerHTML = `<div class="lead-funnel-chart-fallback" aria-label="线索漏斗图表暂时不可用">线索阶段数据已加载</div>`;
+    }
   }
 
   qsa<HTMLButtonElement>("[data-lead-funnel-key]", funnel).forEach((button) => {
@@ -5969,7 +7960,7 @@ function renderTodos(todos: Todo[]) {
         return;
       }
       if (action === "delete") {
-        await deleteTodo(row.dataset.todoId);
+        await deleteTodo(row.dataset.todoId, node as HTMLButtonElement);
         return;
       }
       if (isHistoryView) return;
@@ -6181,7 +8172,7 @@ function renderTodoHistory(todos: Todo[]) {
       event.stopPropagation();
       const row = node.closest<HTMLElement>(".todo-history-row");
       state.openTodoMenuId = null;
-      if (row?.dataset.todoId) await deleteTodo(row.dataset.todoId);
+      if (row?.dataset.todoId) await deleteTodo(row.dataset.todoId, node as HTMLButtonElement);
     });
   });
   qsa<HTMLElement>(".todo-history-row", list).forEach((row) => {
@@ -6192,18 +8183,41 @@ function renderTodoHistory(todos: Todo[]) {
   });
 }
 
-async function deleteTodo(id: string) {
+async function deleteTodo(id: string, button?: HTMLButtonElement) {
   const todo = state.todos.find((item) => item.id === id);
   if (!todo) {
     toast("待办不存在", "error");
     return;
   }
-  await api<{ ok: boolean; id: string }>(`/api/todos/${id}`, { method: "DELETE" });
-  state.todos = state.todos.filter((item) => item.id !== id);
-  renderTodos(state.todos);
-  updateTodoChips(state.todos);
-  void refreshDashboardOnly();
-  toast("待办已删除");
+  const confirmed = await confirmAction({
+    title: "永久删除待办",
+    message: "这条待办会从当前清单和历史记录中永久移除。",
+    detail: todo.title,
+    detailLabel: "待删除待办",
+    consequences: ["相关客户或商机不会被删除", "待办内容与执行记录无法恢复"],
+    confirmLabel: "永久删除",
+    tone: "danger"
+  });
+  if (!confirmed) {
+    renderTodos(state.todos);
+    window.setTimeout(() => {
+      const row = qsa<HTMLElement>(".todo-row, .todo-history-row").find((item) => item.dataset.todoId === id);
+      row?.querySelector<HTMLButtonElement>(".todo-more")?.focus();
+    }, 0);
+    return;
+  }
+  setButtonPending(button || null, true, "删除", "删除中");
+  try {
+    await api<{ ok: boolean; id: string }>(`/api/todos/${id}`, { method: "DELETE" });
+    state.todos = state.todos.filter((item) => item.id !== id);
+    renderTodos(state.todos);
+    updateTodoChips(state.todos);
+    void refreshDashboardOnly();
+    toast("待办已永久删除");
+  } catch (error) {
+    setButtonPending(button || null, false, "删除", "删除中");
+    toast(error instanceof Error ? error.message : "删除待办失败", "error");
+  }
 }
 
 async function restoreTodoFromHistory(id: string) {
@@ -6826,18 +8840,32 @@ function renderLeads() {
     <td><div class="lead-follow-cell"><b>${escapeHtml(lead.nextFollowAt || "未安排")}</b><span>${leadFollowState(lead) === "overdue" ? "已逾期" : leadFollowState(lead) === "unset" ? "待安排" : "已计划"}</span></div></td>
     <td><div class="lead-source-cell"><b>${escapeHtml(leadSourceLabel(lead))}</b><span>${escapeHtml(lead.sourceCampaign || lead.externalId || "无活动编号")}</span></div></td>
     <td>${badge(state.leadView === "trash" ? "垃圾箱" : (LEAD_STATUS_LABEL[lead.status] || lead.status), state.leadView === "trash" ? "red" : (LEAD_STATUS_TONE[lead.status] || ""))}</td>
-  </tr>`).join("") : `<tr><td colspan="5" class="empty-cell">${state.leadView === "trash" ? "垃圾箱中没有符合条件的线索" : "暂无符合条件的线索"}</td></tr>`;
+    <td><div class="lead-row-actions">${state.leadView === "trash"
+      ? `<button class="btn tiny" type="button" data-lead-row-action="restore" data-lead-row-id="${lead.id}">恢复</button>${lead.convertedCustomerId ? "" : `<button class="btn tiny danger" type="button" data-lead-row-action="permanent" data-lead-row-id="${lead.id}">永久删除</button>`}`
+      : `<button class="btn tiny danger subtle" type="button" data-lead-row-action="trash" data-lead-row-id="${lead.id}">删除</button>`}</div></td>
+  </tr>`).join("") : `<tr><td colspan="6" class="empty-cell">${state.leadView === "trash" ? "垃圾箱中没有符合条件的线索" : "暂无符合条件的线索"}</td></tr>`;
 
   cards.innerHTML = pageRows.length ? pageRows.map((lead) => `
     <article class="lead-mobile-card ${lead.id === state.selectedLeadId ? "selected" : ""}" data-lead-id="${lead.id}">
       <span class="lead-mobile-top"><button class="lead-name" data-open-lead="${lead.id}">${escapeHtml(lead.company)}</button>${badge("意向" + lead.intent, lead.intent === "高" ? "red" : lead.intent === "中" ? "amber" : "gray")}</span>
       <span>${escapeHtml(lead.contact || "联系人待补充")} · ${escapeHtml(lead.country || "国家待补充")}</span>
       <span class="lead-mobile-meta"><i>${escapeHtml(lead.stage)}</i><i>${escapeHtml(leadSourceLabel(lead))}</i><i>${escapeHtml(lead.nextFollowAt || "待安排跟进")}</i></span>
+      <span class="lead-mobile-actions">${state.leadView === "trash"
+        ? `<button class="btn tiny" type="button" data-lead-row-action="restore" data-lead-row-id="${lead.id}">恢复</button>${lead.convertedCustomerId ? "" : `<button class="btn tiny danger" type="button" data-lead-row-action="permanent" data-lead-row-id="${lead.id}">永久删除</button>`}`
+        : `<button class="btn tiny danger subtle" type="button" data-lead-row-action="trash" data-lead-row-id="${lead.id}">删除</button>`}</span>
     </article>`).join("") : `<div class="empty-cell">${state.leadView === "trash" ? "垃圾箱中没有符合条件的线索" : "暂无符合条件的线索"}</div>`;
 
   qsa<HTMLButtonElement>("[data-open-lead]", qs("#leads")!).forEach((button) => button.addEventListener("click", () => {
     const id = button.dataset.openLead || "";
     if (id) void openLead(id);
+  }));
+  qsa<HTMLButtonElement>("[data-lead-row-action]", qs("#leads")!).forEach((button) => button.addEventListener("click", () => {
+    const lead = activeLeads.find((item) => item.id === button.dataset.leadRowId);
+    if (!lead) return;
+    const action = button.dataset.leadRowAction;
+    if (action === "trash") openLeadTrashModal(lead);
+    if (action === "restore") void restoreLead(lead.id);
+    if (action === "permanent") openLeadPermanentModal(lead);
   }));
 
   const pagination = qs<HTMLElement>("#leadPagination");
@@ -6940,7 +8968,7 @@ function renderLeadDrawer(
         <div><span>操作账号</span><b>${escapeHtml(lead.deletedBy || "—")}</b></div>
         <div><span>计划清理</span><b>${escapeHtml(formatLeadDate(lead.purgeAt))}</b></div>
       </div>
-      <div class="lead-drawer-actions"><button class="btn primary" id="leadRestoreButton">恢复线索</button><button class="btn danger" id="leadPermanentButton">永久删除</button></div>
+      <div class="lead-drawer-actions"><button class="btn primary" id="leadRestoreButton">恢复线索</button>${lead.convertedCustomerId ? `<span class="lead-retention-note">关联客户和商机仍在使用，不能永久删除来源记录</span>` : `<button class="btn danger" id="leadPermanentButton">永久删除</button>`}</div>
     ` : `
       <div class="lead-compose">
         <select id="leadNoteType"><option value="call">电话</option><option value="wechat">微信</option><option value="whatsapp">WhatsApp</option><option value="linkedin">LinkedIn</option><option value="email">邮件</option><option value="meeting">会面</option><option value="note">备注</option></select>
@@ -6953,7 +8981,8 @@ function renderLeadDrawer(
         <div>
           ${lead.convertedCustomerId
             ? `${badge("已转客户", "green")}${lead.convertedDealId ? badge("已建商机", "green") : ""}`
-            : `<button class="btn primary" id="leadConvertButton">转为客户</button><button class="btn danger subtle" id="leadTrashButton">移入垃圾箱</button>`}
+            : `<button class="btn primary" id="leadConvertButton">转为客户</button>`}
+          <button class="btn danger subtle" id="leadTrashButton">移入垃圾箱</button>
           ${sourceProspect ? `<button class="btn" id="leadBackToProspectButton">返回来源候选</button>` : ""}
         </div>
       </div>
@@ -7011,7 +9040,7 @@ async function reloadLeads() {
 
 function openLeadTrashModal(lead: Lead) {
   openModal("移入垃圾箱", `
-    <p class="modal-note">线索将退出日常跟进列表，并保留 30 天来源与删除审计。已转客户线索不能删除。</p>
+    <p class="modal-note">线索将退出日常跟进列表，并保留 30 天来源与删除审计。${lead.convertedCustomerId ? "已生成的客户和商机不会被删除，仍可在对应模块继续使用。" : "需要时可从垃圾箱恢复。"}</p>
     <div class="form-field full"><label>删除原因</label><textarea id="leadDeleteReason" rows="3" placeholder="例如：联系方式无效、非目标市场、重复询盘"></textarea></div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn danger" id="confirmLeadTrashButton">确认移入</button>`);
   qs<HTMLButtonElement>("#confirmLeadTrashButton")?.addEventListener("click", () => void trashLead(lead.id));
@@ -7328,6 +9357,10 @@ function customerGradeValue(customer: Customer) {
   return "D";
 }
 
+function customerDocumentName(customer: Customer) {
+  return customer.companyFullName?.trim() || customer.billingName?.trim() || customer.company;
+}
+
 function customerGradeLabel(grade: string) {
   return ({ A: "核心", B: "重点", C: "常规", D: "低优先" } as Record<string, string>)[grade] || "常规";
 }
@@ -7340,31 +9373,136 @@ function customerGradeHtml(customer: Customer) {
 function filteredCustomers(customers: Customer[]) {
   const query = state.customerSearch.trim().toLowerCase();
   return customers.filter((customer) => {
-    const matchesQuery = !query || [customer.company, customer.contact, customer.whatsapp, customer.country, customer.ownerName].some((value) => (value || "").toLowerCase().includes(query));
+    const matchesQuery = !query || [customer.company, customer.companyFullName, customer.contact, customer.whatsapp, customer.country, customer.ownerName, customer.source, customer.id].some((value) => (value || "").toLowerCase().includes(query));
+    const matchesOutcome = state.customerOutcomeFilter === "won" ? customer.hasWonDeal === true : customer.hasWonDeal !== true;
     const matchesQueue = state.customerQueueFilter === "all"
       || (state.customerQueueFilter === "overdue" && customer.nextReminder.includes("逾期"))
       || (state.customerQueueFilter === "no-activity" && !customer.lastActivityAt)
       || (state.customerQueueFilter === "no-deal" && !customer.activeDealCount);
-    return matchesQuery && matchesQueue;
+    return matchesQuery && matchesOutcome && matchesQueue;
+  });
+}
+
+function customerOutcomeLabel() {
+  return state.customerOutcomeFilter === "won" ? "已成交客户" : "未成交客户";
+}
+
+function customerWonLabel(customer: Customer) {
+  if (!customer.hasWonDeal) return "未成交";
+  return customer.wonDealCount ? `已成交 ${customer.wonDealCount} 次` : "已成交客户";
+}
+
+function customerPageRows(customers: Customer[]) {
+  const pageCount = Math.max(1, Math.ceil(customers.length / state.customerPageSize));
+  state.customerPage = Math.min(Math.max(1, state.customerPage), pageCount);
+  const start = (state.customerPage - 1) * state.customerPageSize;
+  return {
+    pageCount,
+    start,
+    rows: customers.slice(start, start + state.customerPageSize)
+  };
+}
+
+function renderCustomerPagination(total: number, pageCount: number, start: number) {
+  const summary = qs<HTMLElement>("#customerPageSummary");
+  const number = qs<HTMLElement>("#customerPageNumber");
+  const prev = qs<HTMLButtonElement>("#customerPrevPage");
+  const next = qs<HTMLButtonElement>("#customerNextPage");
+  const size = qs<HTMLSelectElement>("#customerPageSize");
+  if (summary) summary.textContent = total
+    ? `共 ${total} 条，当前 ${start + 1}-${Math.min(start + state.customerPageSize, total)} 条`
+    : "共 0 条";
+  if (number) number.textContent = `${state.customerPage} / ${pageCount}`;
+  if (prev) prev.disabled = state.customerPage <= 1;
+  if (next) next.disabled = state.customerPage >= pageCount;
+  if (size) size.value = String(state.customerPageSize);
+}
+
+function boardSearchMatch(customer: Customer) {
+  const query = state.customerSearch.trim().toLowerCase();
+  if (!query) return true;
+  return [customer.company, customer.contact, customer.country, customer.ownerName, customer.whatsapp]
+    .some((value) => (value || "").toLowerCase().includes(query));
+}
+
+function customerBoardCardHtml(customer: Customer, key: string) {
+  const flag = countryFlag(customer.country);
+  const reminder = customer.nextReminder.includes("逾期") ? badge(customer.nextReminder, "red") : escapeHtml(customer.nextReminder);
+  const wonBadge = badge(customerWonLabel(customer), customer.hasWonDeal ? "green" : "gray");
+  const pipelineStage = customer.pipelineStage || "暂无活跃商机";
+  const pipelineBadge = badge(pipelineStage, pipelineStage === "成交" || pipelineStage === "谈判" ? "green" : pipelineStage === "已报价" ? "amber" : "");
+  const grade = customerGradeValue(customer);
+  const owner = key === "pool" ? (customer.previousOwnerName ? `原 ${customer.previousOwnerName}` : "公池") : (customer.ownerName || "未分配");
+  return `<article class="customer-board-card" data-open-customer="${escapeHtml(customer.id)}">
+    <div class="customer-board-card-top">
+      <span class="company"><span class="flag">${flag}</span>${escapeHtml(customer.company)}</span>
+      ${customerGradeHtml(customer)}
+    </div>
+    <div class="meta"><b>${escapeHtml(customer.country)}</b> · ${escapeHtml(customer.contact)} · ${escapeHtml(owner)}</div>
+    <div class="badge-row">${wonBadge}${pipelineBadge}</div>
+    <div class="customer-board-card-row"><span class="label">在手商机</span><b>${customer.activeDealCount || 0} 个</b></div>
+    <div class="customer-board-card-row"><span class="label">下一提醒</span><b>${reminder}</b></div>
+    <div class="standard-row"><span class="label">标准</span><span class="value">${grade} · ${customerGradeLabel(grade)}</span></div>
+  </article>`;
+}
+
+function renderCustomerBoard() {
+  const board = qs<HTMLElement>("#customerBoardWorkspace");
+  if (!board) return;
+  const owned = filteredCustomers(state.customers);
+  const won = owned.filter((customer) => customer.hasWonDeal);
+  const intent = owned.filter((customer) => !customer.hasWonDeal);
+  const pool = (state.publicCustomers || []).filter(boardSearchMatch);
+  const columns: Array<{ key: string; title: string; list: Customer[] }> = [
+    { key: "won", title: "已成交客户", list: won },
+    { key: "intent", title: "意向客户", list: intent },
+    { key: "pool", title: "公池客户", list: pool }
+  ];
+  board.innerHTML = columns.map((col) => `
+    <section class="customer-board-col customer-board-col--${col.key}">
+      <div class="customer-board-col-head">
+        <span class="col-title"><i class="col-dot"></i>${col.title}</span>
+        <span class="col-count">${col.list.length}</span>
+      </div>
+      <div class="customer-board-col-body">
+        ${col.list.length ? col.list.map((customer) => customerBoardCardHtml(customer, col.key)).join("") : `<div class="customer-board-empty">暂无客户</div>`}
+      </div>
+    </section>
+  `).join("");
+  qsa<HTMLElement>("[data-open-customer]", board).forEach((card) => {
+    card.addEventListener("click", () => {
+      const id = card.dataset.openCustomer || "";
+      const customer = state.customers.find((item) => item.id === id) || (state.publicCustomers || []).find((item) => item.id === id);
+      if (!customer) return;
+      state.selectedCustomerId = id;
+      renderCustomerDrawer(customer);
+      openCustomerDrawer();
+    });
   });
 }
 
 function renderCustomers(customers: Customer[]) {
   const tbody = qs<HTMLElement>("#customers tbody");
   if (!tbody) return;
-  const visibleCustomers = filteredCustomers(customers);
-  const mapActive = state.customerViewMode === "map";
-  qs<HTMLElement>("#customerListWorkspace")?.classList.toggle("is-hidden", mapActive);
+  const pageTitle = qs<HTMLElement>("#customerPageTitle");
+  if (pageTitle) pageTitle.textContent = customerOutcomeLabel();
+  const mode = state.customerViewMode;
+  const listActive = mode === "list";
+  const mapActive = mode === "map";
+  const boardActive = mode === "board";
+  qs<HTMLElement>("#customerListWorkspace")?.classList.toggle("is-hidden", !listActive);
   qs<HTMLElement>("#customerMapWorkspace")?.classList.toggle("is-hidden", !mapActive);
-  qsa<HTMLButtonElement>("[data-customer-view-mode]", qs("#customers")!).forEach((button) => {
-    const active = button.dataset.customerViewMode === state.customerViewMode;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-selected", String(active));
-  });
+  qs<HTMLElement>("#customerBoardWorkspace")?.classList.toggle("is-hidden", !boardActive);
+  const modeSelect = qs<HTMLSelectElement>("#customerViewModeSelect");
+  if (modeSelect) modeSelect.value = mode;
   customerMapController?.setActive(mapActive);
+  if (boardActive) { renderCustomerBoard(); return; }
+  const visibleCustomers = filteredCustomers(customers);
+  const { pageCount, start, rows: pageCustomers } = customerPageRows(visibleCustomers);
+  renderCustomerPagination(visibleCustomers.length, pageCount, start);
   state.selectedCustomerIds = state.selectedCustomerIds.filter((id) => customers.some((customer) => customer.id === id));
-  renderCustomerBulkBar(visibleCustomers);
-  tbody.innerHTML = visibleCustomers.length ? visibleCustomers.map((customer) => {
+  renderCustomerBulkBar(pageCustomers);
+  tbody.innerHTML = pageCustomers.length ? pageCustomers.map((customer) => {
     const checked = state.selectedCustomerIds.includes(customer.id);
     const reminder = customer.nextReminder.includes("逾期") ? badge(customer.nextReminder, "red") : escapeHtml(customer.nextReminder);
     const pipelineStage = customer.pipelineStage || "暂无活跃商机";
@@ -7373,23 +9511,23 @@ function renderCustomers(customers: Customer[]) {
     <td><input type="checkbox" data-select-customer ${checked ? "checked" : ""}></td>
     <td><div class="company">${countryFlag(customer.country)}<div><button type="button" class="customer-name ${activeDealCount > 0 ? "has-active-deal" : ""}" data-open-customer="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</button><span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")}</span></div></div></td>
     <td><div class="customer-follow-cell">${badge(pipelineStage, pipelineStage === "成交" || pipelineStage === "谈判" ? "green" : pipelineStage === "已报价" ? "amber" : "")}<span>${activeDealCount} 个活跃商机</span></div></td>
-    <td><div class="customer-health-cell">${health(customer.health)}<span>${customer.health}%</span></div></td>
-    <td><div class="customer-value-cell">${customerGradeHtml(customer)}${badge(customer.hasWonDeal ? `已成交 ${customer.wonDealCount || 1} 次` : "未成交", customer.hasWonDeal ? "green" : "gray")}</div></td>
+    <td><div class="customer-follow-cell"><b>${escapeHtml(customer.source || "未登记")}</b><span>获客渠道</span></div></td>
+    <td><div class="customer-value-cell">${customerGradeHtml(customer)}${badge(customerWonLabel(customer), customer.hasWonDeal ? "green" : "gray")}</div></td>
     <td><div class="customer-follow-cell"><span>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</span><b>${reminder}</b></div></td>
     <td><button class="btn" type="button" data-customer-whatsapp>WhatsApp</button></td>
     <td><div class="customer-row-actions"><button class="btn" data-open-customer-page>全景</button><button class="btn" data-edit-customer>编辑</button><button class="btn" data-release-customer>放入公池</button></div></td>
   </tr>`;
-  }).join("") : `<tr><td colspan="8" class="empty-cell">当前筛选下暂无客户。</td></tr>`;
+  }).join("") : `<tr><td colspan="8" class="empty-cell">当前${customerOutcomeLabel()}筛选下暂无客户。</td></tr>`;
   const mobile = qs<HTMLElement>("#customerMobileList");
-  if (mobile) mobile.innerHTML = visibleCustomers.length ? visibleCustomers.map((customer) => `
+  if (mobile) mobile.innerHTML = pageCustomers.length ? pageCustomers.map((customer) => `
     <article class="customer-mobile-card" data-customer-mobile-id="${escapeHtml(customer.id)}">
       <span class="customer-mobile-top"><span class="customer-mobile-company">${countryFlag(customer.country)}<button type="button" class="customer-name ${(customer.activeDealCount || 0) > 0 ? "has-active-deal" : ""}" data-open-customer="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</button></span>${badge(customer.pipelineStage || "暂无商机", customer.pipelineStage === "谈判" || customer.pipelineStage === "成交" ? "green" : customer.pipelineStage === "已报价" ? "amber" : "gray")}</span>
       <span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")}</span>
-      <span class="customer-mobile-meta"><i>${customerGradeValue(customer)}级 · ${customerGradeLabel(customerGradeValue(customer))}</i><i>${customer.hasWonDeal ? `已成交 ${customer.wonDealCount || 1} 次` : "未成交"}</i><i>${customer.activeDealCount || 0} 个活跃商机</i><i>${escapeHtml(customer.nextReminder || "待安排")}</i><i>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</i></span>
+      <span class="customer-mobile-meta"><i>来源 · ${escapeHtml(customer.source || "未登记")}</i><i>${customerGradeValue(customer)}级 · ${customerGradeLabel(customerGradeValue(customer))}</i><i>${customerWonLabel(customer)}</i><i>${customer.activeDealCount || 0} 个活跃商机</i><i>${escapeHtml(customer.nextReminder || "待安排")}</i><i>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</i></span>
       <div class="customer-row-actions"><button class="btn" type="button" data-customer-mobile-whatsapp>WhatsApp</button><button class="btn" type="button" data-customer-mobile-pool>放入公池</button></div>
-    </article>`).join("") : `<div class="empty-cell">当前筛选下暂无客户。</div>`;
+    </article>`).join("") : `<div class="empty-cell">当前${customerOutcomeLabel()}筛选下暂无客户。</div>`;
   qsa<HTMLElement>("tr", tbody).forEach((row, index) => {
-    const customer = visibleCustomers[index];
+    const customer = pageCustomers[index];
     if (!customer) return;
     row.dataset.customerId = customer.id;
     row.classList.toggle("selected", customer.id === (state.selectedCustomerId || customers[0]?.id));
@@ -7489,13 +9627,13 @@ function renderCustomerPool() {
       <td><div class="customer-pool-company"><b>${escapeHtml(customer.company)}</b><span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact || "联系人待维护")}</span></div></td>
       <td>${customerGradeHtml(customer)}</td>
       <td><div class="customer-pool-company"><b>${escapeHtml(customer.previousOwnerName || "原负责人未记录")}</b><span>${escapeHtml(customer.releasedByName || "团队成员")} · ${escapeHtml(formatDateTime(customer.releasedAt || ""))}</span><span class="customer-pool-reason">${escapeHtml(customer.releaseReason || "未填写释放原因")}</span></div></td>
-      <td>${badge(customer.hasWonDeal ? `已成交 ${customer.wonDealCount || 1} 次` : "未成交", customer.hasWonDeal ? "green" : "gray")}</td>
+      <td>${badge(customerWonLabel(customer), customer.hasWonDeal ? "green" : "gray")}</td>
       <td><div class="customer-pool-actions"><button class="btn" type="button" data-pool-whatsapp>WhatsApp</button><button class="btn customer-pool-claim" type="button" data-pool-claim>领取客户</button></div></td>
     </tr>`).join("") : empty;
   mobile.innerHTML = customers.length ? customers.map((customer) => `
     <article class="customer-pool-card" data-pool-customer-id="${escapeHtml(customer.id)}">
       <div class="customer-pool-company"><b>${escapeHtml(customer.company)}</b><span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact || "联系人待维护")}</span></div>
-      <div>${customerGradeHtml(customer)} ${badge(customer.hasWonDeal ? `已成交 ${customer.wonDealCount || 1} 次` : "未成交", customer.hasWonDeal ? "green" : "gray")}</div>
+      <div>${customerGradeHtml(customer)} ${badge(customerWonLabel(customer), customer.hasWonDeal ? "green" : "gray")}</div>
       <span>${escapeHtml(customer.previousOwnerName || "原负责人未记录")} · ${escapeHtml(formatDateTime(customer.releasedAt || ""))}</span>
       <div class="customer-pool-reason">${escapeHtml(customer.releaseReason || "未填写释放原因")}</div>
       <div class="customer-pool-actions"><button class="btn" type="button" data-pool-whatsapp>WhatsApp</button><button class="btn customer-pool-claim" type="button" data-pool-claim>领取客户</button></div>
@@ -7584,7 +9722,7 @@ function renderCustomerBulkBar(customers: Customer[]) {
   const toolbar = qs<HTMLElement>("#customerBulkToolbar");
   if (!toolbar) return;
   const selectedCount = state.selectedCustomerIds.length;
-  const allSelected = customers.length > 0 && selectedCount === customers.length;
+  const allSelected = customers.length > 0 && customers.every((customer) => state.selectedCustomerIds.includes(customer.id));
   toolbar.innerHTML = `
     <label class="customer-select-all"><input type="checkbox" data-select-all-customers ${allSelected ? "checked" : ""}>全选</label>
     <span class="filter">已选 ${selectedCount} 个客户</span>
@@ -7593,7 +9731,10 @@ function renderCustomerBulkBar(customers: Customer[]) {
     <button class="btn">批量导出</button>
   `;
   qs<HTMLInputElement>("[data-select-all-customers]", toolbar)?.addEventListener("change", (event) => {
-    state.selectedCustomerIds = (event.currentTarget as HTMLInputElement).checked ? customers.map((customer) => customer.id) : [];
+    const pageIds = new Set(customers.map((customer) => customer.id));
+    state.selectedCustomerIds = (event.currentTarget as HTMLInputElement).checked
+      ? Array.from(new Set([...state.selectedCustomerIds, ...pageIds]))
+      : state.selectedCustomerIds.filter((id) => !pageIds.has(id));
     renderCustomers(state.customers);
   });
   qs<HTMLButtonElement>("[data-bulk-delete-customers]", toolbar)?.addEventListener("click", () => void bulkDeleteCustomers());
@@ -7675,7 +9816,7 @@ function renderCustomerMapRegion(region: CustomerMapRegion | null, customers: Cu
         return `<button type="button" data-map-customer-id="${escapeHtml(customer.id)}">
           <i class="grade-${grade.toLowerCase()}">${grade}</i>
           <span><b>${escapeHtml(customer.company)}</b><small>${escapeHtml(customer.contact || "联系人待维护")} · ${escapeHtml(customer.ownerName || "未分配")}</small></span>
-          <strong>${escapeHtml(customer.pipelineStage || customer.stage || "待跟进")}<small>${customer.hasWonDeal ? `成交 ${customer.wonDealCount || 1} 次` : `${customer.activeDealCount || 0} 个商机`}</small></strong>
+          <strong>${escapeHtml(customer.pipelineStage || customer.stage || "待跟进")}<small>${customer.hasWonDeal ? customerWonLabel(customer) : `${customer.activeDealCount || 0} 个商机`}</small></strong>
         </button>`;
       }).join("") : `<div class="customer-map-region-empty"><b>暂无客户</b><span>${escapeHtml(displayName)}</span></div>`}
     </div>
@@ -7765,7 +9906,7 @@ function renderCustomerDealProgress(customer: Customer) {
 }
 
 function customerContactDetails(customer: Customer) {
-  const source = [customer.contact, customer.documentContact || ""].join(" ");
+  const source = [customer.contact, customer.documentContact || "", customer.contactRemark || ""].join(" ");
   const email = customer.email || source.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
   const phone = customer.phone || source.match(/(?:\+?\d[\d\s()\-]{6,}\d)/)?.[0]?.trim() || "";
   const whatsapp = normalizeWhatsAppPhone(customer.whatsapp || customer.whatsappPhone || "");
@@ -7782,6 +9923,23 @@ interface WhatsAppPluginConversation {
   id: string;
   accountId: string;
   contactPhone: string;
+  contactName?: string;
+  lastMessage?: string | null;
+  lastMessageAt?: string | null;
+}
+
+interface WhatsAppConversationInsight {
+  analysis: {
+    summary: string;
+    keyPoints: string[];
+    traits: Array<{ key: string; label: string; value: string; confidence: number; evidenceMessageIds: string[] }>;
+    buyingIntent: "high" | "medium" | "low";
+    riskLevel: "high" | "medium" | "low";
+    nextAction: string;
+    sourceMessageCount: number;
+    generatedAt: string;
+  } | null;
+  followups: Array<{ id: string; title: string; reason: string; priority: "high" | "medium" | "normal"; dueAt: string; status: "pending" | "completed" | "dismissed" }>;
 }
 
 function normalizeWhatsAppPhone(value: string) {
@@ -7801,6 +9959,77 @@ async function whatsappPluginRequest<T>(path: string, init: RequestInit = {}): P
     throw new Error(body.error || `WhatsApp 服务请求失败 (${response.status})`);
   }
   return response.json() as Promise<T>;
+}
+
+function setInstantCommunicationState(mode: "loading" | "error", title: string, message: string, retry: boolean) {
+  const stateNode = qs<HTMLElement>("#instantCommunicationState");
+  const titleNode = qs<HTMLElement>("#instantCommunicationStateTitle");
+  const messageNode = qs<HTMLElement>("#instantCommunicationStateMessage");
+  const actionsNode = qs<HTMLElement>("#instantCommunicationStateActions");
+  if (!stateNode || !titleNode || !messageNode || !actionsNode) return;
+  stateNode.hidden = false;
+  stateNode.classList.toggle("is-loading", mode === "loading");
+  stateNode.classList.toggle("is-error", mode === "error");
+  titleNode.textContent = title;
+  messageNode.textContent = message;
+  actionsNode.hidden = !retry;
+}
+
+function markInstantCommunicationReady() {
+  const stateNode = qs<HTMLElement>("#instantCommunicationState");
+  const frame = qs<HTMLIFrameElement>("#whatsapp .whatsapp-plugin-frame");
+  if (stateNode) stateNode.hidden = true;
+  if (frame) {
+    frame.hidden = false;
+    frame.dataset.ready = "true";
+  }
+}
+
+function installInstantCommunicationFrame() {
+  const frame = qs<HTMLIFrameElement>("#whatsapp .whatsapp-plugin-frame");
+  const retry = qs<HTMLButtonElement>("#instantCommunicationRetry");
+  if (!frame) return;
+  if (frame.dataset.bound !== "true") {
+    frame.dataset.bound = "true";
+    frame.addEventListener("load", () => {
+      if (frame.src !== "about:blank") markInstantCommunicationReady();
+    });
+  }
+  if (retry && retry.dataset.bound !== "true") {
+    retry.dataset.bound = "true";
+    retry.addEventListener("click", () => void ensureInstantCommunicationLoaded(true));
+  }
+}
+
+async function ensureInstantCommunicationLoaded(force = false) {
+  const frame = qs<HTMLIFrameElement>("#whatsapp .whatsapp-plugin-frame");
+  if (!frame) return;
+  installInstantCommunicationFrame();
+  if (!force && frame.dataset.ready === "true") return;
+  frame.hidden = true;
+  frame.dataset.ready = "false";
+  setInstantCommunicationState("loading", "正在连接即刻沟通", "正在检查 WhatsApp 会话服务与客户分析引擎。", false);
+  try {
+    const response = await fetch("/whatsapp-plugin/api/health/ready", {
+      cache: "no-store",
+      signal: AbortSignal.timeout(3_000)
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({})) as { message?: string; error?: string };
+      throw new Error(payload.message || payload.error || `服务返回 ${response.status}`);
+    }
+    const launch = new URLSearchParams({ embedded: "1", launch: String(Date.now()) });
+    frame.src = `/whatsapp-plugin/?${launch.toString()}`;
+  } catch (error) {
+    setInstantCommunicationState(
+      "error",
+      "即刻沟通暂不可用",
+      error instanceof Error && error.message.includes("服务暂不可用")
+        ? "会话服务尚未启动，请启动 CRM 全部服务后重试。"
+        : "会话服务没有响应，请检查服务状态后重试。",
+      true
+    );
+  }
 }
 
 function focusWhatsAppConversation(accountId: string, conversationId: string) {
@@ -7869,7 +10098,7 @@ function renderBackgroundResearch() {
   const box = qs<HTMLElement>("#aiResearchPage");
   const subject = backgroundResearchSubject;
   if (!box || !subject) return;
-  const stages = ["主体识别", "证据归并", "风险核验", "结论生成"];
+  const stages = ["主体识别", "联网检索", "风险核验", "结论生成"];
   if (backgroundResearchLoading) {
     box.innerHTML = `
       <header class="research-header">
@@ -7941,7 +10170,8 @@ function renderBackgroundResearch() {
                 : `<div><b>${title}</b><span>${escapeHtml(source.observedAt ? formatDateTime(source.observedAt) : "")}</span></div>`;
             }).join("") : `<div class="research-empty">暂无公开来源</div>`}</div>
           </section>
-          <div class="research-engine"><span>分析引擎</span><b>${escapeHtml(report.engine)}</b></div>
+          ${report.sourceChecks?.length ? `<section class="research-block"><h2>联网检索</h2><dl class="research-facts">${report.sourceChecks.map((item) => `<div><dt>${escapeHtml(item.providerName)}</dt><dd>${escapeHtml(item.status === "matched" ? `命中 ${item.matchCount} 条` : item.message)}</dd></div>`).join("")}</dl></section>` : ""}
+          <div class="research-engine"><span>分析引擎</span><b>${escapeHtml(report.engine)}${report.sourceChecks?.length ? ` · 联网 ${report.sourceChecks.filter((item) => item.status === "matched").length}/${report.sourceChecks.filter((item) => item.status !== "skipped").length}` : ""}</b></div>
         </aside>
       </div>`;
   }
@@ -8010,16 +10240,50 @@ function syncDevelopmentEmailDraft() {
   developmentEmailDraft.body = qs<HTMLTextAreaElement>("#developmentEmailBody")?.value || "";
 }
 
+const developmentEmailScenarios: Array<{ id: DevelopmentEmailScenario; label: string }> = [
+  { id: "first_touch", label: "首次触达" },
+  { id: "daily_contact", label: "日常联系" },
+  { id: "holiday_greeting", label: "节日问候" },
+  { id: "new_product", label: "新产品介绍" },
+  { id: "custom_goal", label: "自然语言目标" }
+];
+
+function rememberDevelopmentEmailScenarioDraft() {
+  syncDevelopmentEmailDraft();
+  if (!developmentEmailDraft) return;
+  developmentEmailScenarioDrafts.set(developmentEmailScenario, {
+    subject: developmentEmailDraft.subject,
+    body: developmentEmailDraft.body,
+    engine: developmentEmailDraft.engine,
+    aiGenerated: Boolean(developmentEmailReadiness?.aiGenerated)
+  });
+}
+
+async function switchDevelopmentEmailScenario(scenario: DevelopmentEmailScenario) {
+  if (scenario === developmentEmailScenario || developmentEmailLoading) return;
+  rememberDevelopmentEmailScenarioDraft();
+  developmentEmailScenario = scenario;
+  const remembered = developmentEmailScenarioDrafts.get(scenario);
+  if (remembered && developmentEmailDraft) {
+    Object.assign(developmentEmailDraft, remembered);
+    if (developmentEmailReadiness) developmentEmailReadiness.aiGenerated = remembered.aiGenerated;
+    developmentEmailRequestId = "";
+    renderDevelopmentEmailPage();
+    return;
+  }
+  await generateDevelopmentEmailDraftPage(false);
+}
+
 function renderDevelopmentEmailPage() {
   const box = qs<HTMLElement>("#developmentEmailPage");
   const subject = developmentEmailSubject;
   if (!box || !subject) return;
-  if (developmentEmailLoading || !developmentEmailDraft || !developmentEmailReadiness) {
+  if (!developmentEmailDraft || !developmentEmailReadiness) {
     box.innerHTML = `
       <header class="mail-studio-header">
         <div class="research-identity"><button class="customer-page-back" type="button" data-mail-back title="返回" aria-label="返回"><svg viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button><div><h1>${escapeHtml(subject.company)}</h1><span>开发信</span></div></div>
       </header>
-      <div class="mail-studio-loading"><i></i><b>正在生成开发信</b></div>`;
+      <div class="mail-studio-loading"><i></i><b>正在加载开发信工作区</b></div>`;
     qs<HTMLButtonElement>("[data-mail-back]", box)?.addEventListener("click", developmentEmailBack);
     return;
   }
@@ -8030,7 +10294,7 @@ function renderDevelopmentEmailPage() {
   box.innerHTML = `
     <header class="mail-studio-header">
       <div class="research-identity"><button class="customer-page-back" type="button" data-mail-back title="返回" aria-label="返回"><svg viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button><div><h1>${escapeHtml(draft.recipientCompany)}</h1><span>开发信</span></div></div>
-      <div class="mail-studio-actions"><button class="btn" type="button" data-mail-ai>${researchButtonIcon()}${readiness.aiReady ? "AI 重新撰写" : "配置 AI"}</button><button class="btn primary" type="button" data-mail-send ${sendReady && !developmentEmailSending ? "" : "disabled"}>${developmentEmailSending ? "发送中" : "发送邮件"}</button></div>
+      <div class="mail-studio-actions"><button class="btn" type="button" data-mail-ai ${developmentEmailLoading ? "disabled" : ""}>${researchButtonIcon()}${developmentEmailLoading ? "AI 生成中" : readiness.aiReady ? readiness.aiGenerated ? "AI 重新生成" : "AI 生成" : "配置 AI"}</button><button class="btn primary" type="button" data-mail-send ${sendReady && !developmentEmailSending && !developmentEmailLoading ? "" : "disabled"}>${developmentEmailSending ? "发送中" : "发送邮件"}</button></div>
     </header>
 
     <div class="mail-studio-layout">
@@ -8048,6 +10312,13 @@ function renderDevelopmentEmailPage() {
       </aside>
 
       <main class="mail-studio-editor">
+        <section class="mail-compose-config" aria-label="开发信写作配置">
+          <div class="mail-scenario-row">
+            <span>写作场景</span>
+            <div class="mail-scenario-options">${developmentEmailScenarios.map((item) => `<button type="button" class="${item.id === developmentEmailScenario ? "active" : ""}" data-mail-scenario="${item.id}" ${developmentEmailLoading ? "disabled" : ""}>${item.label}</button>`).join("")}</div>
+          </div>
+          <label class="mail-goal-field"><span>写作目标${developmentEmailScenario === "custom_goal" ? "（必填）" : "（可选）"}</span><textarea id="developmentEmailGoal" maxlength="1000" placeholder="例如：邀请客户在本周安排 15 分钟视频会议，并突出交期稳定">${escapeHtml(developmentEmailGoal)}</textarea></label>
+        </section>
         <label class="mail-subject-field"><span>主题</span><input id="developmentEmailSubject" value="${escapeHtml(draft.subject)}"></label>
         <label class="mail-body-field"><span>正文</span><textarea id="developmentEmailBody">${escapeHtml(draft.body)}</textarea></label>
         <footer><span id="developmentEmailCount">${draft.body.length} 字符</span><b>${escapeHtml(draft.engine)}</b></footer>
@@ -8078,17 +10349,28 @@ function renderDevelopmentEmailPage() {
       activateNavView("ai-config");
       return;
     }
+    developmentEmailGoal = qs<HTMLTextAreaElement>("#developmentEmailGoal", box)?.value.trim() || "";
+    if (developmentEmailScenario === "custom_goal" && !developmentEmailGoal) {
+      toast("请先填写自然语言写作目标", "error");
+      qs<HTMLTextAreaElement>("#developmentEmailGoal", box)?.focus();
+      return;
+    }
     void generateDevelopmentEmailDraftPage(true);
   });
+  qsa<HTMLButtonElement>("[data-mail-scenario]", box).forEach((button) => button.addEventListener("click", () => {
+    void switchDevelopmentEmailScenario(button.dataset.mailScenario as DevelopmentEmailScenario);
+  }));
   qs<HTMLButtonElement>("[data-mail-send]", box)?.addEventListener("click", () => void sendDevelopmentEmailFromStudio());
   qsa<HTMLInputElement | HTMLTextAreaElement>("#developmentEmailTo, #developmentEmailSubject, #developmentEmailBody", box).forEach((input) => input.addEventListener("input", () => {
     syncDevelopmentEmailDraft();
+    developmentEmailRequestId = "";
     const count = qs<HTMLElement>("#developmentEmailCount", box);
     if (count) count.textContent = `${developmentEmailDraft?.body.length || 0} 字符`;
     const send = qs<HTMLButtonElement>("[data-mail-send]", box);
     if (send && developmentEmailReadiness) send.disabled = !(developmentEmailReadiness.personalReady && developmentEmailReadiness.companyReady && Boolean(developmentEmailDraft?.to && developmentEmailDraft.subject && developmentEmailDraft.body.trim().length >= 10));
   }));
   qs<HTMLSelectElement>("#developmentEmailTone", box)?.addEventListener("change", (event) => { developmentEmailTone = (event.currentTarget as HTMLSelectElement).value as typeof developmentEmailTone; });
+  qs<HTMLTextAreaElement>("#developmentEmailGoal", box)?.addEventListener("input", (event) => { developmentEmailGoal = (event.currentTarget as HTMLTextAreaElement).value; });
   qs<HTMLInputElement>("#developmentEmailNext", box)?.addEventListener("input", (event) => { developmentEmailNextFollowAt = (event.currentTarget as HTMLInputElement).value; });
   qsa<HTMLButtonElement>("[data-mail-config]", box).forEach((button) => button.addEventListener("click", () => activateNavView(button.dataset.mailConfig || "profile")));
 }
@@ -8096,7 +10378,9 @@ function renderDevelopmentEmailPage() {
 async function generateDevelopmentEmailDraftPage(requireAi = false) {
   const subject = developmentEmailSubject;
   if (!subject || developmentEmailLoading) return;
+  syncDevelopmentEmailDraft();
   developmentEmailTone = (qs<HTMLSelectElement>("#developmentEmailTone")?.value || developmentEmailTone) as typeof developmentEmailTone;
+  developmentEmailGoal = qs<HTMLTextAreaElement>("#developmentEmailGoal")?.value.trim() || developmentEmailGoal;
   developmentEmailLoading = true;
   renderDevelopmentEmailPage();
   try {
@@ -8110,10 +10394,18 @@ async function generateDevelopmentEmailDraftPage(requireAi = false) {
         entityType: subject.entityType,
         entityId: subject.entityId,
         tone: developmentEmailTone,
+        scenario: developmentEmailScenario,
+        goal: developmentEmailGoal,
         requireAi
       })
     });
     developmentEmailDraft = result.draft;
+    developmentEmailScenarioDrafts.set(developmentEmailScenario, {
+      subject: result.draft.subject,
+      body: result.draft.body,
+      engine: result.draft.engine,
+      aiGenerated: result.readiness.aiGenerated
+    });
     developmentEmailReadiness = result.readiness;
     developmentEmailCompanyProfile = result.companyProfile;
   } catch (error) {
@@ -8129,10 +10421,20 @@ async function sendDevelopmentEmailFromStudio() {
   if (!subject || !developmentEmailDraft || developmentEmailSending) return;
   syncDevelopmentEmailDraft();
   developmentEmailNextFollowAt = qs<HTMLInputElement>("#developmentEmailNext")?.value.trim() || developmentEmailNextFollowAt;
+  if (!await confirmAction({
+    title: "确认发送开发信",
+    message: "邮件将通过绑定邮箱真实发出。打开和点击仅作为追踪信号，不能等同于客户意向。",
+    detailLabel: "发件 / 收件",
+    detail: `${developmentEmailDraft.from || state.user?.outboundEmail || "待配置"} → ${developmentEmailDraft.to}`,
+    consequences: [`客户：${developmentEmailDraft.recipientCompany}`, `主题：${developmentEmailDraft.subject}`],
+    confirmLabel: "确认发送",
+    tone: "normal"
+  })) return;
+  developmentEmailRequestId ||= prospectRequestId("development-email-studio");
   developmentEmailSending = true;
   renderDevelopmentEmailPage();
   try {
-    const result = await api<{ sent: { simulated: boolean }; user: User }>("/api/development-email/send", {
+    const result = await api<{ sent: { simulated: boolean; replayed?: boolean }; user: User }>("/api/development-email/send", {
       method: "POST",
       body: JSON.stringify({
         entityType: subject.entityType,
@@ -8140,13 +10442,15 @@ async function sendDevelopmentEmailFromStudio() {
         to: developmentEmailDraft.to,
         subject: developmentEmailDraft.subject,
         body: developmentEmailDraft.body,
-        nextFollowAt: developmentEmailNextFollowAt
+        nextFollowAt: developmentEmailNextFollowAt,
+        requestId: developmentEmailRequestId
       })
     });
     state.user = result.user;
     localStorage.setItem(storage.user, JSON.stringify(result.user));
     applyAuthedUser(result.user);
-    toast(result.sent.simulated ? "开发信已发送（测试记录）" : "开发信已发送");
+    developmentEmailRequestId = "";
+    toast(result.sent.replayed ? "发送结果已确认，未重复发送" : result.sent.simulated ? "开发信已发送（测试记录）" : "开发信已发送");
   } catch (error) {
     toast(error instanceof Error ? error.message : "开发信发送失败", "error");
   } finally {
@@ -8160,7 +10464,11 @@ function openDevelopmentEmail(entityType: BackgroundResearchEntity, entityId: st
   developmentEmailDraft = null;
   developmentEmailReadiness = null;
   developmentEmailTone = "professional";
+  developmentEmailScenario = "first_touch";
+  developmentEmailGoal = "";
+  developmentEmailScenarioDrafts.clear();
   developmentEmailNextFollowAt = "";
+  developmentEmailRequestId = "";
   closeLeadDrawer();
   closeCustomerDrawer();
   activateNavView("development-email", () => void generateDevelopmentEmailDraftPage());
@@ -8229,6 +10537,48 @@ async function saveCompanyProfile() {
   }
 }
 
+function renderTeamSystemSettings() {
+  const input = qs<HTMLInputElement>("#documentExcelApprovalSetting");
+  const status = qs<HTMLElement>("#documentExcelApprovalStatus");
+  if (input) {
+    input.checked = teamSystemSettings.requireDocumentExcelApproval;
+    input.disabled = !teamSystemSettingsCanManage;
+  }
+  if (status) {
+    status.className = `badge ${teamSystemSettings.requireDocumentExcelApproval ? "amber" : "green"}`;
+    status.textContent = teamSystemSettings.requireDocumentExcelApproval ? "已开启" : "默认关闭";
+  }
+}
+
+async function loadTeamSystemSettings() {
+  const result = await api<{ settings: TeamSystemSettings; canManage: boolean }>("/api/system-settings");
+  teamSystemSettings = result.settings;
+  teamSystemSettingsCanManage = result.canManage;
+  renderTeamSystemSettings();
+  return result.settings;
+}
+
+async function saveTeamSystemSettings(button?: HTMLButtonElement) {
+  if (!teamSystemSettingsCanManage) return;
+  const requireDocumentExcelApproval = Boolean(qs<HTMLInputElement>("#documentExcelApprovalSetting")?.checked);
+  try {
+    if (button) setButtonPending(button, true, "保存设置", "保存中");
+    const result = await api<{ settings: TeamSystemSettings; canManage: boolean }>("/api/system-settings", {
+      method: "PUT",
+      body: JSON.stringify({ requireDocumentExcelApproval })
+    });
+    teamSystemSettings = result.settings;
+    teamSystemSettingsCanManage = result.canManage;
+    renderTeamSystemSettings();
+    toast(requireDocumentExcelApproval ? "Excel 正式导出审批已开启" : "Excel 正式导出审批已关闭", "success");
+  } catch (error) {
+    renderTeamSystemSettings();
+    toast(error instanceof Error ? error.message : "系统设置保存失败", "error");
+  } finally {
+    if (button) setButtonPending(button, false, "保存设置", "保存中");
+  }
+}
+
 function launchCustomerContact(customer: Customer, channel: "email" | "phone" | "whatsapp" | "wechat") {
   const contacts = customerContactDetails(customer);
   if (channel === "email") {
@@ -8278,7 +10628,7 @@ function renderCustomerDetailPage(customer?: Customer) {
         <button class="customer-page-back" type="button" data-customer-page-back title="返回客户列表" aria-label="返回客户列表"><svg viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button>
         <div class="customer-page-copy">
           <div class="customer-page-title"><h1>${escapeHtml(current.company)}</h1>${customerGradeHtml(current)}${badge(current.hasWonDeal ? "成交客户" : "未成交", current.hasWonDeal ? "green" : "gray")}</div>
-          <p>${escapeHtml(current.country)} · ${escapeHtml(current.contact)} · 负责人 ${escapeHtml(current.ownerName || "未分配")} · 客户编号 ${escapeHtml(current.id)}</p>
+          <p>${escapeHtml(current.country)} · ${escapeHtml(current.contact)} · 负责人 ${escapeHtml(current.ownerName || "未分配")}</p>
         </div>
       </div>
       <div class="customer-page-actions"><button class="btn" type="button" data-customer-page-whatsapp>WhatsApp</button><button class="btn primary ai-entry-button" type="button" data-customer-page-research>${researchButtonIcon()}AI 背调</button><button class="btn" type="button" data-customer-page-email>写开发信</button><button class="btn" type="button" data-customer-page-edit>编辑客户</button><button class="btn" type="button" data-customer-page-follow>新增跟进</button><button class="btn" type="button" data-customer-page-release>放入公池</button></div>
@@ -8286,7 +10636,7 @@ function renderCustomerDetailPage(customer?: Customer) {
 
     <section class="customer-page-summary" aria-label="客户摘要">
       <div><span>客户分级</span><b>${grade} · ${customerGradeLabel(grade)}</b><small>人工维护的业务优先级</small></div>
-      <div class="${current.hasWonDeal ? "is-positive" : ""}"><span>成交历史</span><b>${current.hasWonDeal ? `已成交 ${current.wonDealCount || 1} 次` : "尚未成交"}</b><small>${current.lastWonAt ? `最近 ${escapeHtml(formatDateTime(current.lastWonAt))}` : "由关联商机自动判断"}</small></div>
+      <div class="${current.hasWonDeal ? "is-positive" : ""}"><span>成交历史</span><b>${current.hasWonDeal ? customerWonLabel(current) : "尚未成交"}</b><small>${current.lastWonAt ? `最近 ${escapeHtml(formatDateTime(current.lastWonAt))}` : current.hasWonDeal ? "由导入状态确认" : "商机成交后自动转入"}</small></div>
       <div><span>活跃商机</span><b>${activeDeals.length} 个</b><small>在手金额 ${money(current.pipelineAmount || 0)}</small></div>
       <div><span>健康度</span><b>${current.health}%</b><small>人工评分，低于 60 进入风险提醒</small></div>
       <div><span>跟进记录</span><b>${activities.length} 条</b><small>${current.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(current.lastActivityAt))}` : "暂无跟进"}</small></div>
@@ -8298,10 +10648,11 @@ function renderCustomerDetailPage(customer?: Customer) {
         <div class="customer-profile-grid">
           <div class="customer-profile-field"><span>公司名称</span><b>${escapeHtml(current.company)}</b></div>
           <div class="customer-profile-field"><span>国家 / 地区</span><b>${escapeHtml(current.country)}</b></div>
+          <div class="customer-profile-field"><span>客户来源</span><b>${escapeHtml(current.source || "未登记")}</b></div>
           <div class="customer-profile-field"><span>主联系人</span><b>${escapeHtml(current.contact)}</b></div>
           <div class="customer-profile-field"><span>WhatsApp</span><b>${escapeHtml(contacts.whatsapp || "待维护")}</b></div>
           <div class="customer-profile-field"><span>单据联系人</span><b>${escapeHtml(current.documentContact || "待维护")}</b></div>
-          <div class="customer-profile-field"><span>账单抬头</span><b>${escapeHtml(current.billingName || current.company)}</b></div>
+          <div class="customer-profile-field"><span>公司全名</span><b>${escapeHtml(customerDocumentName(current))}</b></div>
           <div class="customer-profile-field"><span>账单地址</span><b>${escapeHtml(current.billingAddress || "待维护")}</b></div>
           <div class="customer-profile-field"><span>贸易 / 付款条款</span><b>${escapeHtml(current.defaultIncoterm || "待维护")} · ${escapeHtml(current.defaultPaymentTerm || "待维护")}</b></div>
           <div class="customer-profile-field"><span>默认目的港</span><b>${escapeHtml(current.defaultPortDischarge || "待维护")}</b></div>
@@ -8315,6 +10666,7 @@ function renderCustomerDetailPage(customer?: Customer) {
           <div class="customer-contact-row"><span>邮箱</span><b>${escapeHtml(contacts.email || "未维护")}</b><small>${contacts.email ? "可直接发邮件" : "待补充"}</small></div>
           <div class="customer-contact-row"><span>电话</span><b>${escapeHtml(contacts.phone || "未维护")}</b><small>${contacts.phone ? "可直接拨号" : "待补充"}</small></div>
           <div class="customer-contact-row"><span>WhatsApp</span><b>${escapeHtml(contacts.whatsapp || "未维护")}</b><small>${contacts.whatsapp ? "可直接沟通" : "待补充"}</small></div>
+          <div class="customer-contact-row"><span>其它渠道</span><b>${escapeHtml(current.contactRemark || "未维护")}</b><small>${current.contactRemark ? "已登记备注" : "可补充 LinkedIn / 微信等"}</small></div>
         </div>
         <div class="customer-contact-actions">
           <button class="customer-contact-action ${contacts.email ? "is-ready" : ""}" type="button" data-customer-contact="email">${customerContactIcon("email")}<span>邮件${contacts.email ? "" : " · 待维护"}</span></button>
@@ -8328,11 +10680,16 @@ function renderCustomerDetailPage(customer?: Customer) {
         <div class="customer-page-section-head"><div><h2>相关商机</h2><p>成交、推进中和历史关闭商机统一展示</p></div><button class="btn" type="button" data-customer-page-pipeline>打开商机管道</button></div>
         <div class="customer-page-deals">${deals.length ? deals.map((deal) => `
           <article class="customer-page-deal">
-            <div><b>${escapeHtml(deal.title)}</b><span>${escapeHtml(deal.product || "产品待维护")} · ${escapeHtml(deal.nextAction || "下一动作待维护")}</span></div>
+            <div><b>${escapeHtml(deal.title)}</b><span>${escapeHtml(dealProductsText(deal))} · ${escapeHtml(deal.nextAction || "下一动作待维护")}</span></div>
             <div><b>${escapeHtml(deal.nextActionAt || "时间待定")}</b><span>下一动作时间</span></div>
             ${badge(deal.stage, dealTone(deal))}
             <strong>${escapeHtml(dealMoney(deal.amount, deal.currency))}</strong>
           </article>`).join("") : `<div class="customer-page-empty">暂无关联商机</div>`}</div>
+      </section>
+
+      <section class="customer-page-section full customer-communication-section" id="customerCommunicationInsights">
+        <div class="customer-page-section-head"><div><h2>WhatsApp 客户洞察</h2><p>实时会话、客户特点、风险与下一动作</p></div><span class="communication-sync-status"><i></i>正在同步</span></div>
+        <div class="communication-insight-loading"><span class="loading-dot"></span><b>正在读取即刻沟通客户画像</b><small>只读同步，不会发送任何消息</small></div>
       </section>
 
       <section class="customer-page-section full">
@@ -8359,6 +10716,110 @@ function renderCustomerDetailPage(customer?: Customer) {
   qsa<HTMLButtonElement>("[data-customer-contact]", box).forEach((button) => {
     button.addEventListener("click", () => launchCustomerContact(current, button.dataset.customerContact as "email" | "phone" | "whatsapp" | "wechat"));
   });
+  void loadCustomerCommunicationInsights(current);
+}
+
+function communicationLevelLabel(value: "high" | "medium" | "low") {
+  return value === "high" ? "高" : value === "medium" ? "中" : "低";
+}
+
+function communicationDueLabel(value: string) {
+  if (!value) return "未安排时间";
+  const due = new Date(value);
+  if (Number.isNaN(due.getTime())) return value;
+  const delta = due.getTime() - Date.now();
+  const hours = Math.ceil(Math.abs(delta) / 3_600_000);
+  const relative = delta < 0 ? `已逾期 ${hours} 小时` : hours < 24 ? `${hours} 小时内` : `${Math.ceil(hours / 24)} 天内`;
+  return `${relative} · ${formatDateTime(value)}`;
+}
+
+function communicationTodoTriggerKey(customerId: string, followupId: string) {
+  return `whatsapp-insight:${customerId}:${followupId}`;
+}
+
+function todoMatchesCommunicationFollowup(todo: Todo, customer: Customer, followup: WhatsAppConversationInsight["followups"][number]) {
+  const triggerKey = communicationTodoTriggerKey(customer.id, followup.id);
+  if (todo.triggerKey === triggerKey) return true;
+  const belongsToCustomer = todo.customerId === customer.id || (!todo.customerId && (todo.related || "").includes(customer.company));
+  return belongsToCustomer && todo.title.trim() === followup.title.trim() && (todo.related || "").includes("WhatsApp");
+}
+
+async function createCustomerCommunicationTodo(customer: Customer, followup: WhatsAppConversationInsight["followups"][number], button: HTMLButtonElement) {
+  try {
+    button.disabled = true;
+    button.textContent = "创建中";
+    const result = await api<{ todo: Todo }>("/api/todos", {
+      method: "POST",
+      body: JSON.stringify({
+        title: followup.title,
+        type: "customer",
+        priority: followup.priority,
+        dueAt: followup.dueAt,
+        related: `WhatsApp · ${customer.company} · ${followup.reason}`,
+        customerId: customer.id,
+        triggerKey: communicationTodoTriggerKey(customer.id, followup.id)
+      })
+    });
+    if (!state.todos.some((todo) => todo.id === result.todo.id)) state.todos.unshift(result.todo);
+    button.textContent = "已加入待办";
+    toast("已加入 GoodJob 待办");
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "转为待办";
+    toast(error instanceof Error ? error.message : "待办创建失败", "error");
+  }
+}
+
+async function loadCustomerCommunicationInsights(customer: Customer) {
+  const box = qs<HTMLElement>("#customerCommunicationInsights");
+  if (!box || state.selectedCustomerId !== customer.id) return;
+  const phone = normalizeWhatsAppPhone(customerContactDetails(customer).whatsapp);
+  if (!phone) {
+    box.innerHTML = `<div class="customer-page-section-head"><div><h2>WhatsApp 客户洞察</h2><p>实时会话、客户特点、风险与下一动作</p></div>${badge("待绑定号码", "gray")}</div><div class="communication-insight-empty"><b>尚未维护 WhatsApp 号码</b><span>补充号码后，客户会话分析将自动汇总到这里。</span><button class="btn" type="button" data-communication-edit>维护客户资料</button></div>`;
+    qs<HTMLButtonElement>("[data-communication-edit]", box)?.addEventListener("click", () => openCustomerModal(customer));
+    return;
+  }
+  try {
+    const conversations = await whatsappPluginRequest<WhatsAppPluginConversation[]>("/v1/conversations");
+    const conversation = conversations.find((item) => normalizeWhatsAppPhone(item.contactPhone) === phone);
+    if (!conversation) {
+      box.innerHTML = `<div class="customer-page-section-head"><div><h2>WhatsApp 客户洞察</h2><p>实时会话、客户特点、风险与下一动作</p></div>${badge("等待首条消息", "gray")}</div><div class="communication-insight-empty"><b>尚未收到该客户的 Meta 会话</b><span>客户通过 WhatsApp 发来首条消息后，系统会自动建档、分析并在此展示；无需从 CRM 主动发送。</span></div>`;
+      return;
+    }
+    const insight = await whatsappPluginRequest<WhatsAppConversationInsight>(`/v1/conversations/${encodeURIComponent(conversation.id)}/intelligence`);
+    if (state.selectedCustomerId !== customer.id) return;
+    const analysis = insight.analysis;
+    const pending = insight.followups.filter((item) => item.status === "pending");
+    const relatedTodos = state.todos.filter((todo) => todo.customerId === customer.id || (!todo.customerId && (todo.related || "").includes(customer.company)));
+    const unmatchedLinkedTodos = relatedTodos.filter((todo) => !todo.done && (todo.related || "").includes("WhatsApp") && !pending.some((item) => todoMatchesCommunicationFollowup(todo, customer, item)));
+    box.innerHTML = `
+      <div class="customer-page-section-head"><div><h2>WhatsApp 客户洞察</h2><p>${escapeHtml(conversation.contactName || customer.contact)} · ${escapeHtml(conversation.contactPhone)} · ${conversation.lastMessageAt ? `最近消息 ${escapeHtml(formatDateTime(conversation.lastMessageAt))}` : "等待新消息"}</p></div><span class="communication-sync-status is-ready"><i></i>实时同步</span></div>
+      ${analysis ? `<div class="communication-command-center">
+        <div><span>现在最重要</span><h3>${escapeHtml(analysis.nextAction)}</h3><p>${escapeHtml(analysis.summary)}</p></div>
+        <div class="communication-score-grid"><span class="intent-${analysis.buyingIntent}"><small>购买意向</small><b>${communicationLevelLabel(analysis.buyingIntent)}</b></span><span class="risk-${analysis.riskLevel}"><small>风险等级</small><b>${communicationLevelLabel(analysis.riskLevel)}</b></span><span><small>分析证据</small><b>${analysis.sourceMessageCount} 条</b></span></div>
+      </div>
+      <div class="communication-insight-grid">
+        <div><h3>客户特点</h3><div class="communication-traits">${analysis.traits.length ? analysis.traits.map((trait) => `<span><b>${escapeHtml(trait.label)}</b><small>${escapeHtml(trait.value || "已识别")} · ${Math.round(trait.confidence * 100)}% 可信 · ${trait.evidenceMessageIds.length} 条证据</small></span>`).join("") : `<span class="is-empty">当前会话证据不足</span>`}</div></div>
+        <div><h3>关键决策信号</h3><div class="communication-points">${analysis.keyPoints.length ? analysis.keyPoints.map((point) => `<span><i>✓</i>${escapeHtml(point)}</span>`).join("") : `<span>尚未提取到明确采购信号</span>`}</div></div>
+      </div>` : `<div class="communication-insight-empty"><b>客户画像正在等待首次分析</b><span>周期分析任务会自动生成客户特点、风险和跟进建议。</span></div>`}
+      <div class="communication-followup-block"><div class="communication-block-head"><div><h3>最近要跟进的事项</h3><p>即刻沟通建议与 GoodJob 待办统一呈现</p></div><b>${pending.length + unmatchedLinkedTodos.length}</b></div><div class="communication-followups">
+        ${pending.map((item) => {
+          const linkedTodo = relatedTodos.find((todo) => todoMatchesCommunicationFollowup(todo, customer, item));
+          const buttonLabel = linkedTodo ? (linkedTodo.done ? "待办已完成" : "已加入待办") : "转为待办";
+          return `<article class="priority-${item.priority}${linkedTodo ? " is-crm-todo" : ""}"><i></i><div><b>${escapeHtml(item.title)}</b><span>${escapeHtml(communicationDueLabel(item.dueAt))}</span><p>${escapeHtml(linkedTodo ? (linkedTodo.done ? "关联待办已完成" : "已进入 GoodJob 待办") : item.reason)}</p></div><button class="btn" type="button" data-communication-todo="${escapeHtml(item.id)}"${linkedTodo ? " disabled" : ""}>${buttonLabel}</button></article>`;
+        }).join("")}
+        ${unmatchedLinkedTodos.slice(0, 4).map((todo) => `<article class="is-crm-todo"><i></i><div><b>${escapeHtml(todo.title)}</b><span>${escapeHtml(communicationDueLabel(todo.dueAt))}</span><p>已进入 GoodJob 待办</p></div><em>CRM</em></article>`).join("")}
+        ${pending.length + unmatchedLinkedTodos.length === 0 ? `<div class="communication-insight-empty compact"><b>暂无未完成事项</b><span>新消息完成分析后，行动建议会自动出现。</span></div>` : ""}
+      </div></div>`;
+    qsa<HTMLButtonElement>("[data-communication-todo]", box).forEach((button) => {
+      const followup = pending.find((item) => item.id === button.dataset.communicationTodo);
+      if (followup) button.addEventListener("click", () => void createCustomerCommunicationTodo(customer, followup, button));
+    });
+  } catch (error) {
+    if (state.selectedCustomerId !== customer.id) return;
+    box.innerHTML = `<div class="customer-page-section-head"><div><h2>WhatsApp 客户洞察</h2><p>实时会话、客户特点、风险与下一动作</p></div>${badge("暂不可用", "red")}</div><div class="communication-insight-empty"><b>即刻沟通数据读取失败</b><span>${escapeHtml(error instanceof Error ? error.message : "请稍后重试")}</span><button class="btn" type="button" data-communication-retry>重新读取</button></div>`;
+    qs<HTMLButtonElement>("[data-communication-retry]", box)?.addEventListener("click", () => void loadCustomerCommunicationInsights(customer));
+  }
 }
 
 function openCustomerDetailPage(customer: Customer) {
@@ -8379,6 +10840,19 @@ function customerTimeZone(country = "") {
     "united states": "America/New_York",
     日本: "Asia/Tokyo",
     japan: "Asia/Tokyo",
+    韩国: "Asia/Seoul",
+    korea: "Asia/Seoul",
+    "south korea": "Asia/Seoul",
+    新加坡: "Asia/Singapore",
+    singapore: "Asia/Singapore",
+    越南: "Asia/Ho_Chi_Minh",
+    vietnam: "Asia/Ho_Chi_Minh",
+    泰国: "Asia/Bangkok",
+    thailand: "Asia/Bangkok",
+    马来西亚: "Asia/Kuala_Lumpur",
+    malaysia: "Asia/Kuala_Lumpur",
+    印尼: "Asia/Jakarta",
+    indonesia: "Asia/Jakarta",
     阿联酋: "Asia/Dubai",
     uae: "Asia/Dubai",
     德国: "Europe/Berlin",
@@ -8400,13 +10874,139 @@ function customerTimeZone(country = "") {
     土耳其: "Europe/Istanbul",
     turkey: "Europe/Istanbul",
     智利: "America/Santiago",
-    chile: "America/Santiago"
+    chile: "America/Santiago",
+    巴西: "America/Sao_Paulo",
+    brazil: "America/Sao_Paulo",
+    墨西哥: "America/Mexico_City",
+    mexico: "America/Mexico_City",
+    加拿大: "America/Toronto",
+    canada: "America/Toronto",
+    俄罗斯: "Europe/Moscow",
+    russia: "Europe/Moscow",
+    南非: "Africa/Johannesburg",
+    "south africa": "Africa/Johannesburg",
+    波兰: "Europe/Warsaw",
+    poland: "Europe/Warsaw",
+    比利时: "Europe/Brussels",
+    belgium: "Europe/Brussels",
+    奥地利: "Europe/Vienna",
+    austria: "Europe/Vienna",
+    瑞士: "Europe/Zurich",
+    switzerland: "Europe/Zurich",
+    丹麦: "Europe/Copenhagen",
+    denmark: "Europe/Copenhagen",
+    挪威: "Europe/Oslo",
+    norway: "Europe/Oslo",
+    芬兰: "Europe/Helsinki",
+    finland: "Europe/Helsinki",
+    葡萄牙: "Europe/Lisbon",
+    portugal: "Europe/Lisbon",
+    爱尔兰: "Europe/Dublin",
+    ireland: "Europe/Dublin",
+    捷克: "Europe/Prague",
+    czechia: "Europe/Prague",
+    新西兰: "Pacific/Auckland",
+    "new zealand": "Pacific/Auckland",
+    沙特: "Asia/Riyadh",
+    saudi: "Asia/Riyadh",
+    埃及: "Africa/Cairo",
+    egypt: "Africa/Cairo",
+    菲律宾: "Asia/Manila",
+    philippines: "Asia/Manila",
+    柬埔寨: "Asia/Phnom_Penh",
+    cambodia: "Asia/Phnom_Penh",
+    老挝: "Asia/Vientiane",
+    laos: "Asia/Vientiane",
+    缅甸: "Asia/Yangon",
+    myanmar: "Asia/Yangon",
+    巴基斯坦: "Asia/Karachi",
+    pakistan: "Asia/Karachi",
+    孟加拉国: "Asia/Dhaka",
+    bangladesh: "Asia/Dhaka",
+    斯里兰卡: "Asia/Colombo",
+    sri_lanka: "Asia/Colombo",
+    尼泊尔: "Asia/Kathmandu",
+    nepal: "Asia/Kathmandu",
+    哈萨克斯坦: "Asia/Almaty",
+    kazakhstan: "Asia/Almaty",
+    乌兹别克斯坦: "Asia/Tashkent",
+    uzbekistan: "Asia/Tashkent",
+    以色列: "Asia/Jerusalem",
+    israel: "Asia/Jerusalem",
+    约旦: "Asia/Amman",
+    jordan: "Asia/Amman",
+    黎巴嫩: "Asia/Beirut",
+    lebanon: "Asia/Beirut",
+    卡塔尔: "Asia/Qatar",
+    qatar: "Asia/Qatar",
+    科威特: "Asia/Kuwait",
+    kuwait: "Asia/Kuwait",
+    伊朗: "Asia/Tehran",
+    iran: "Asia/Tehran",
+    伊拉克: "Asia/Baghdad",
+    iraq: "Asia/Baghdad",
+    尼日利亚: "Africa/Lagos",
+    nigeria: "Africa/Lagos",
+    肯尼亚: "Africa/Nairobi",
+    kenya: "Africa/Nairobi",
+    摩洛哥: "Africa/Casablanca",
+    morocco: "Africa/Casablanca",
+    阿根廷: "America/Argentina/Buenos_Aires",
+    argentina: "America/Argentina/Buenos_Aires",
+    哥伦比亚: "America/Bogota",
+    colombia: "America/Bogota",
+    秘鲁: "America/Lima",
+    peru: "America/Lima",
+    委内瑞拉: "America/Caracas",
+    venezuela: "America/Caracas",
+    乌克兰: "Europe/Kyiv",
+    ukraine: "Europe/Kyiv",
+    罗马尼亚: "Europe/Bucharest",
+    romania: "Europe/Bucharest",
+    希腊: "Europe/Athens",
+    greece: "Europe/Athens",
+    匈牙利: "Europe/Budapest",
+    hungary: "Europe/Budapest",
+    斯洛伐克: "Europe/Bratislava",
+    slovakia: "Europe/Bratislava",
+    保加利亚: "Europe/Sofia",
+    bulgaria: "Europe/Sofia",
+    克罗地亚: "Europe/Zagreb",
+    croatia: "Europe/Zagreb",
+    塞尔维亚: "Europe/Belgrade",
+    serbia: "Europe/Belgrade",
+    冰岛: "Atlantic/Reykjavik",
+    iceland: "Atlantic/Reykjavik",
+    卢森堡: "Europe/Luxembourg",
+    luxembourg: "Europe/Luxembourg",
+    斯洛文尼亚: "Europe/Ljubljana",
+    slovenia: "Europe/Ljubljana",
+    爱沙尼亚: "Europe/Tallinn",
+    estonia: "Europe/Tallinn",
+    拉脱维亚: "Europe/Riga",
+    latvia: "Europe/Riga",
+    立陶宛: "Europe/Vilnius",
+    lithuania: "Europe/Vilnius",
+    白俄罗斯: "Europe/Minsk",
+    belarus: "Europe/Minsk",
+    蒙古: "Asia/Ulaanbaatar",
+    mongolia: "Asia/Ulaanbaatar",
+    中国香港: "Asia/Hong_Kong",
+    "hong kong": "Asia/Hong_Kong",
+    中国澳门: "Asia/Shanghai",
+    macau: "Asia/Shanghai",
+    macao: "Asia/Shanghai",
+    中国台湾: "Asia/Shanghai",
+    taiwan: "Asia/Shanghai"
   };
-  return zones[normalized] || zones[country.trim()] || "UTC";
+  return zones[normalized] || zones[country.trim()] || null;
 }
 
 function customerWorldTimeParts(country: string) {
   const timeZone = customerTimeZone(country);
+  if (!timeZone) {
+    return { time: "--:--", date: "时区未维护", timeZone: "未配置", dayPart: "未知", contactHint: "未维护该国家时区" };
+  }
   const now = new Date();
   try {
     const time = new Intl.DateTimeFormat("zh-CN", {
@@ -8445,10 +11045,89 @@ function renderCustomerWorldClock(customer: Customer) {
   status.textContent = `${parts.dayPart} · ${parts.contactHint}`;
 }
 
+function customerMeetingTriggerKey(customerId: string, activityId: string) {
+  return `customer-meeting:${customerId}:${activityId}`;
+}
+
+function customerUpcomingMeeting(customer: Customer) {
+  const activity = [...(customer.activities || [])]
+    .filter((item) => item.type === "meeting"
+      && !item.content.startsWith("【会议纪要】")
+      && Boolean(item.nextReminder || /(约定|预约|安排|schedule|meeting on|周[一二三四五六日天]|星期[一二三四五六日天])/iu.test(item.content)))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  if (!activity) return null;
+  const sections = activity.content.split(/[；;]/u).map((item) => item.trim()).filter(Boolean);
+  const timeMatch = activity.content.match(/(?:周[一二三四五六日天]|星期[一二三四五六日天]|今天|明天|后天)(?:上午|下午|晚上)?\s*\d{1,2}(?::|：)\d{2}/u)
+    || activity.content.match(/\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b(?:\s+at)?\s+\d{1,2}:\d{2}/iu);
+  const preparationSection = sections.find((item) => /(会前准备|提前准备|需提前)/u.test(item));
+  const preparation = preparationSection
+    ? preparationSection.replace(/^(?:会前准备|提前准备|需提前准备)[:：]?/u, "").trim()
+    : "待补充会前准备清单";
+  const reminderDate = activity.nextReminder ? new Date(activity.nextReminder) : null;
+  const reminderText = reminderDate && !Number.isNaN(reminderDate.getTime()) ? formatDateTime(activity.nextReminder) : activity.nextReminder;
+  return {
+    activity,
+    time: timeMatch?.[0] || reminderText || "时间待确认",
+    subject: sections[0] || activity.content,
+    preparation,
+    linkedTodo: state.todos.find((todo) => todo.triggerKey === customerMeetingTriggerKey(customer.id, activity.id))
+  };
+}
+
+function renderCustomerMeetingBrief(customer: Customer) {
+  const meeting = customerUpcomingMeeting(customer);
+  if (!meeting) return "";
+  return `<section class="customer-meeting-brief">
+    <div class="customer-meeting-brief-head"><div><span>关键安排</span><h3>客户会议</h3></div>${badge(meeting.linkedTodo ? "待办已创建" : "待准备", meeting.linkedTodo ? "green" : "amber")}</div>
+    <div class="customer-meeting-brief-main">
+      <div class="customer-meeting-time"><span>会议时间</span><strong>${escapeHtml(meeting.time)}</strong><small>以客户所在时区再次确认</small></div>
+      <div class="customer-meeting-topic"><span>会议议题</span><b>${escapeHtml(meeting.subject)}</b><small>会前准备：${escapeHtml(meeting.preparation)}</small></div>
+    </div>
+    <div class="customer-meeting-brief-actions"><button class="btn primary" type="button" data-customer-meeting-todo="${escapeHtml(meeting.activity.id)}" ${meeting.linkedTodo ? "disabled" : ""}>${meeting.linkedTodo ? "已加入待办" : "生成会前待办"}</button></div>
+  </section>`;
+}
+
+async function createCustomerMeetingTodo(customer: Customer, activityId: string, button: HTMLButtonElement) {
+  const meeting = customerUpcomingMeeting(customer);
+  if (!meeting || meeting.activity.id !== activityId) {
+    toast("会议安排已更新，请重新打开客户详情", "error");
+    return;
+  }
+  setButtonPending(button, true, "生成会前待办", "创建中");
+  try {
+    const result = await api<{ todo: Todo }>("/api/todos", {
+      method: "POST",
+      body: JSON.stringify({
+        title: `准备客户会议：${customer.company}`,
+        type: "customer",
+        priority: "high",
+        dueAt: meeting.activity.nextReminder || customer.nextReminder || currentDateTimeText(),
+        related: `会议准备：${customer.company}；${meeting.preparation}`,
+        customerId: customer.id,
+        triggerKey: customerMeetingTriggerKey(customer.id, meeting.activity.id)
+      })
+    });
+    if (!state.todos.some((todo) => todo.id === result.todo.id)) state.todos.unshift(result.todo);
+    button.textContent = "已加入待办";
+    button.disabled = true;
+    const status = button.closest<HTMLElement>(".customer-meeting-brief")?.querySelector<HTMLElement>(".badge");
+    if (status) {
+      status.className = "badge green";
+      status.textContent = "待办已创建";
+    }
+    updateTodoChips(state.todos);
+    renderTopbarStats();
+    toast("会前准备已加入 GoodJob 待办");
+  } catch (error) {
+    setButtonPending(button, false, "生成会前待办", "创建中");
+    toast(error instanceof Error ? error.message : "会前待办创建失败", "error");
+  }
+}
+
 function renderCustomerDrawer(customer?: Customer) {
   const drawer = qs<HTMLElement>("#customerDrawer");
   if (!drawer || !customer) return;
-  const billingName = customer.billingName || customer.company;
+  const billingName = customerDocumentName(customer);
   const billingAddress = customer.billingAddress || `${customer.country} / 地址待维护`;
   const documentContact = customer.documentContact || customer.contact;
   const portDischarge = customer.defaultPortDischarge || "待确认";
@@ -8480,16 +11159,23 @@ function renderCustomerDrawer(customer?: Customer) {
     <div class="info-grid">
       <div class="info"><span>健康度</span><b>${customer.health}%</b></div>
       <div class="info"><span>客户分级</span><b>${customerGradeValue(customer)} · ${customerGradeLabel(customerGradeValue(customer))}</b></div>
-      <div class="info"><span>成交历史</span><b>${customer.hasWonDeal ? `已成交 ${customer.wonDealCount || 1} 次` : "尚未成交"}</b></div>
+      <div class="info"><span>客户来源</span><b>${escapeHtml(customer.source || "未登记")}</b></div>
+      <div class="info"><span>成交历史</span><b>${customer.hasWonDeal ? customerWonLabel(customer) : "尚未成交"}</b></div>
       <div class="info"><span>最高活跃阶段</span><b>${escapeHtml(pipelineStage)}</b></div>
       <div class="info"><span>活跃商机数</span><b>${activeDealCount}</b></div>
       <div class="info"><span>在手商机额</span><b>${money(pipelineAmount)}</b></div>
       <div class="info"><span>下一提醒</span><b>${escapeHtml(customer.nextReminder)}</b></div>
       <div class="info"><span>WhatsApp</span><b>${escapeHtml(customerContactDetails(customer).whatsapp || "待维护")}</b></div>
+      <div class="info"><span>其它渠道</span><b>${escapeHtml(customer.contactRemark || "待维护")}</b></div>
       <div class="info"><span>企业微信</span><b>待接入</b></div>
     </div>
     <div class="inline-actions"><button class="btn" data-customer-whatsapp-drawer>WhatsApp</button><button class="btn primary ai-entry-button" data-customer-research>${researchButtonIcon()}AI 背调</button><button class="btn" data-customer-email>写开发信</button><button class="btn" data-customer-meeting><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><path d="M12 19v3"/></svg>录制会议</button><button class="btn" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button><button class="btn" data-customer-release-drawer>放入公池</button></div>
+    ${renderCustomerMeetingBrief(customer)}
     ${renderCustomerIntelligence(customer)}
+    <section class="customer-communication-drawer" id="customerCommunicationDrawerInsights">
+      <div class="customer-deals-head"><h3>WhatsApp 行动摘要</h3><small>只读同步</small></div>
+      <div class="communication-drawer-loading">正在读取客户会话...</div>
+    </section>
     <section class="customer-doc-info">
       <div class="customer-deals-head"><h3>单据基础信息</h3><button class="btn" data-edit-customer-document-info>维护信息</button></div>
       <div class="info-grid">
@@ -8517,6 +11203,7 @@ function renderCustomerDrawer(customer?: Customer) {
   renderCustomerWorldClock(customer);
   customerClockTimer = window.setInterval(() => renderCustomerWorldClock(customer), 1000);
   void renderCustomerJourney(customer);
+  void loadCustomerCommunicationDrawerInsights(customer);
   qs("#customerDrawerClose", drawer)?.addEventListener("click", closeCustomerDrawer);
   qs<HTMLButtonElement>("[data-open-customer-page]", drawer)?.addEventListener("click", () => openCustomerDetailPage(customer));
   qs<HTMLButtonElement>("[data-customer-whatsapp-drawer]", drawer)?.addEventListener("click", () => {
@@ -8526,6 +11213,10 @@ function renderCustomerDrawer(customer?: Customer) {
   qs<HTMLButtonElement>("[data-customer-research]", drawer)?.addEventListener("click", () => openBackgroundResearch("customer", customer.id, customer.company, "customers"));
   qs<HTMLButtonElement>("[data-customer-email]", drawer)?.addEventListener("click", () => openDevelopmentEmail("customer", customer.id, customer.company, "customers"));
   qs<HTMLButtonElement>("[data-customer-meeting]", drawer)?.addEventListener("click", () => openMeetingRecorder(customer));
+  qs<HTMLButtonElement>("[data-customer-meeting-todo]", drawer)?.addEventListener("click", (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    void createCustomerMeetingTodo(customer, button.dataset.customerMeetingTodo || "", button);
+  });
   qs<HTMLButtonElement>("[data-add-follow]", drawer)?.addEventListener("click", () => addFollowRecord(customer));
   qsa<HTMLButtonElement>("[data-edit-customer-drawer]", drawer).forEach((button) => {
     button.addEventListener("click", () => openCustomerModal(customer));
@@ -8541,7 +11232,7 @@ function renderCustomerDrawer(customer?: Customer) {
     ));
   });
   qsa<HTMLButtonElement>("[data-reject-customer-intelligence]", drawer).forEach((button) => {
-    button.addEventListener("click", () => void rejectCustomerIntelligenceSuggestion(
+    button.addEventListener("click", () => openCustomerIntelligenceRejectModal(
       customer,
       button.dataset.rejectCustomerIntelligence || "",
       button
@@ -8589,6 +11280,30 @@ function renderCustomerIntelligence(customer: Customer) {
   </section>`;
 }
 
+async function loadCustomerCommunicationDrawerInsights(customer: Customer) {
+  const box = qs<HTMLElement>("#customerCommunicationDrawerInsights");
+  if (!box || state.selectedCustomerId !== customer.id) return;
+  const phone = normalizeWhatsAppPhone(customerContactDetails(customer).whatsapp);
+  if (!phone) {
+    box.innerHTML = `<div class="customer-deals-head"><h3>WhatsApp 行动摘要</h3>${badge("待绑定号码", "gray")}</div><div class="communication-drawer-empty">补充 WhatsApp 号码后，客户画像和跟进建议会自动出现在这里。</div>`;
+    return;
+  }
+  try {
+    const conversations = await whatsappPluginRequest<WhatsAppPluginConversation[]>("/v1/conversations");
+    const conversation = conversations.find((item) => normalizeWhatsAppPhone(item.contactPhone) === phone);
+    if (!conversation) {
+      box.innerHTML = `<div class="customer-deals-head"><h3>WhatsApp 行动摘要</h3>${badge("等待首条消息", "gray")}</div><div class="communication-drawer-empty">尚未收到该客户的 WhatsApp 消息。Meta 入站后会自动更新这里。</div>`;
+      return;
+    }
+    const insight = await whatsappPluginRequest<WhatsAppConversationInsight>(`/v1/conversations/${encodeURIComponent(conversation.id)}/intelligence`);
+    const analysis = insight.analysis;
+    const pending = insight.followups.filter((item) => item.status === "pending");
+    box.innerHTML = `<div class="customer-deals-head"><h3>WhatsApp 行动摘要</h3><span class="communication-drawer-live"><i></i>已同步</span></div>${analysis ? `<div class="communication-drawer-command"><span>下一动作</span><b>${escapeHtml(analysis.nextAction)}</b><p>${escapeHtml(analysis.summary)}</p></div><div class="communication-drawer-metrics"><span>意向 <b>${communicationLevelLabel(analysis.buyingIntent)}</b></span><span>风险 <b>${communicationLevelLabel(analysis.riskLevel)}</b></span><span>待跟进 <b>${pending.length}</b></span></div>${pending.slice(0, 3).map((item) => `<div class="communication-drawer-followup"><i class="priority-${item.priority}"></i><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(communicationDueLabel(item.dueAt))}</small></span></div>`).join("")}` : `<div class="communication-drawer-empty">会话已同步，周期分析尚未生成。分析完成后会显示客户特点和下一动作。</div>`}`;
+  } catch (error) {
+    box.innerHTML = `<div class="customer-deals-head"><h3>WhatsApp 行动摘要</h3>${badge("暂不可用", "red")}</div><div class="communication-drawer-empty">${escapeHtml(error instanceof Error ? error.message : "暂时无法读取即刻沟通")}</div>`;
+  }
+}
+
 async function acceptCustomerIntelligenceSuggestion(
   customer: Customer,
   suggestionId: string,
@@ -8623,17 +11338,35 @@ async function acceptCustomerIntelligenceSuggestion(
   }
 }
 
+function openCustomerIntelligenceRejectModal(
+  customer: Customer,
+  suggestionId: string,
+  sourceButton: HTMLButtonElement
+) {
+  if (!suggestionId) return;
+  const suggestion = customer.pendingIntelligence?.find((item) => item.id === suggestionId);
+  openModal("忽略客户情报", `
+    <div class="form-field full"><label>情报来源</label><input value="${escapeHtml(suggestion?.sourceLabel || "智能获客")}" disabled></div>
+    <div class="form-field full"><label>忽略原因</label><textarea id="customerIntelligenceRejectReason" rows="4" placeholder="可选，例如：来源过旧、主体不匹配或已有更可靠资料"></textarea><small>原因会保留在情报审核记录中，便于后续复盘。</small></div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn warning" id="confirmCustomerIntelligenceRejectButton">确认忽略</button>`);
+  qs<HTMLButtonElement>("#confirmCustomerIntelligenceRejectButton")?.addEventListener("click", (event) => void rejectCustomerIntelligenceSuggestion(
+    customer,
+    suggestionId,
+    qs<HTMLTextAreaElement>("#customerIntelligenceRejectReason")?.value.trim() || "",
+    event.currentTarget as HTMLButtonElement,
+    sourceButton
+  ));
+}
+
 async function rejectCustomerIntelligenceSuggestion(
   customer: Customer,
   suggestionId: string,
-  button: HTMLButtonElement
+  reason: string,
+  button: HTMLButtonElement,
+  sourceButton: HTMLButtonElement
 ) {
-  if (!suggestionId) return;
-  const reason = window.prompt("忽略原因（可选）", "");
-  if (reason === null) return;
+  setButtonPending(button, true, "确认忽略", "处理中");
   try {
-    button.disabled = true;
-    button.textContent = "处理中";
     const result = await api<{ customer: Customer }>(
       `/api/customer-intelligence/${encodeURIComponent(suggestionId)}/reject`,
       {
@@ -8641,6 +11374,7 @@ async function rejectCustomerIntelligenceSuggestion(
         body: JSON.stringify({ reason })
       }
     );
+    closeModal();
     state.customers = state.customers.map((item) =>
       item.id === customer.id ? result.customer : item
     );
@@ -8648,8 +11382,8 @@ async function rejectCustomerIntelligenceSuggestion(
     renderCustomerDrawer(result.customer);
     toast("该条客户情报已忽略");
   } catch (error) {
-    button.disabled = false;
-    button.textContent = "忽略";
+    setButtonPending(button, false, "确认忽略", "处理中");
+    sourceButton.disabled = false;
     toast(error instanceof Error ? error.message : "忽略客户情报失败", "error");
   }
 }
@@ -8879,6 +11613,30 @@ function health(value: number) {
   return `<span class="health ${value < 60 ? "bad" : value < 75 ? "warn" : ""}">${[1, 2, 3, 4, 5].map((item) => `<i class="${item <= active ? "on" : ""}"></i>`).join("")}</span>`;
 }
 
+function dealItemsOf(deal: Deal): DealItem[] {
+  if (deal.items?.length) return deal.items;
+  return [{
+    id: `legacy_${deal.id || "new"}`,
+    product: deal.product?.trim() || "",
+    model: "",
+    quantity: Number(deal.quantity || 0) || 1,
+    unitPrice: Number(deal.unitPrice || 0) || (Number(deal.amount || 0) / Math.max(1, Number(deal.quantity || 1)))
+  }];
+}
+
+function dealProductsText(deal: Deal) {
+  const items = dealItemsOf(deal).filter((item) => item.product);
+  if (!items.length) return "产品待维护";
+  const names = items.slice(0, 2).map((item) => item.product);
+  return items.length > 2 ? `${names.join("、")} 等 ${items.length} 项` : names.join("、");
+}
+
+function dealItemsSummary(deal: Deal) {
+  const items = dealItemsOf(deal).filter((item) => item.product);
+  if (items.length === 1) return `${items[0].product} · ${items[0].quantity || "-"} × ${dealMoney(items[0].unitPrice, deal.currency)}`;
+  return `${dealProductsText(deal)} · ${items.length} 项产品`;
+}
+
 function renderPipeline(deals: Deal[]) {
   const strip = qs<HTMLElement>("#pipeline .pipeline-strip");
   if (!strip) return;
@@ -8888,7 +11646,7 @@ function renderPipeline(deals: Deal[]) {
   const today = todayDateInput();
   const filtered = activeDeals.filter((deal) => {
     const customer = state.customers.find((item) => item.id === deal.customerId);
-    const haystack = `${deal.title} ${deal.product || ""} ${customer?.company || ""}`.toLowerCase();
+    const haystack = `${deal.title} ${dealProductsText(deal)} ${customer?.company || ""} ${customer?.companyFullName || ""} ${customer?.id || ""}`.toLowerCase();
     if (state.pipelineSearch && !haystack.includes(state.pipelineSearch.toLowerCase())) return false;
     if (state.pipelineDueFilter === "overdue") return Boolean(deal.nextActionAt && deal.nextActionAt < today);
     if (state.pipelineDueFilter === "today") return deal.nextActionAt === today;
@@ -8904,16 +11662,13 @@ function renderPipeline(deals: Deal[]) {
     return `<section class="stage ${stage === state.pipelineStageFilter ? "mobile-active" : ""}" data-pipeline-stage="${stage}" aria-label="${stage}阶段">
       <div class="stage-head"><span class="stage-head-main"><b>${stage}</b><small>${stageDeals.length} 个 · ${dealMoney(stageAmount, stageDeals[0]?.currency || "USD")}${overdue ? ` · ${overdue} 个逾期` : ""}</small></span><b>${stageDeals.length}</b></div>
       ${stageDeals.map((deal) => {
-      const product = deal.product?.trim() || "产品待维护";
-      const quantity = Number(deal.quantity || 0);
-      const unitPrice = Number(deal.unitPrice || 0);
       const customer = state.customers.find((item) => item.id === deal.customerId);
       const isOverdue = Boolean(deal.nextActionAt && deal.nextActionAt < today);
       const hasDocument = state.tradeDocuments.some((document) => document.dealId === deal.id);
       return `<article class="deal" data-deal-id="${escapeHtml(deal.id)}" tabindex="0">
         <b>${escapeHtml(deal.title)}</b>
         <span class="deal-customer">${escapeHtml(customer?.company || "客户待确认")} · ${escapeHtml(customer?.country || "未知国家")}</span>
-        <span class="deal-product">${escapeHtml(product)} · ${quantity || "-"} 件 × ${dealMoney(unitPrice, deal.currency)}</span>
+        <span class="deal-product">${escapeHtml(dealItemsSummary(deal))}</span>
         <span>${escapeHtml(deal.nextAction)}</span>
         <span class="deal-date ${isOverdue ? "overdue" : ""}">${isOverdue ? "已逾期" : "下一动作"} · ${escapeHtml(deal.nextActionAt || "待安排")}</span>
         <span class="deal-doc-status">${hasDocument ? "已关联单据" : "未关联单据"} · 预计成交 ${escapeHtml(deal.expectedCloseAt || "待评估")}</span>
@@ -8997,13 +11752,37 @@ function renderPipelineStageTabs(stages: string[], deals: Deal[]) {
   });
 }
 
+function controlledDocumentImageUrl(value: string | undefined) {
+  const imageUrl = value?.trim() || "";
+  return /^\/uploads\/[A-Za-z0-9._-]+\.(?:png|jpe?g)$/i.test(imageUrl) ? imageUrl : "";
+}
+
 function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
   const type: "PI" | "CI" = deal.stage === "成交" ? "CI" : "PI";
   const date = todayDateInput();
-  const quantity = Math.max(1, Math.round(Number(deal.quantity || 0)));
-  const unitPrice = Number(deal.unitPrice || 0) || Number(deal.amount || 0) / quantity;
-  const product = deal.product?.trim() || deal.title;
+  const product = dealProductsText(deal) || deal.title;
+  const documentItems = dealItemsOf(deal).map((dealItem, index) => {
+    const normalizedProduct = dealItem.product.trim().toLowerCase().replace(/[\s_-]+/g, " ");
+    const matchedProduct = state.products.find((item) => item.id === dealItem.productId || [item.nameZh, item.nameEn, item.model]
+      .some((value) => value.trim().toLowerCase().replace(/[\s_-]+/g, " ") === normalizedProduct));
+    return {
+      id: `deal_item_${deal.id}_${index + 1}`,
+      productId: matchedProduct?.id || dealItem.productId || "",
+      imageUrl: controlledDocumentImageUrl(matchedProduct?.imageUrl),
+      product: dealItem.product,
+      model: dealItem.model || matchedProduct?.model || "",
+      hsCode: matchedProduct?.hsCode || "",
+      quantity: dealItem.quantity,
+      unit: matchedProduct?.unit || "PCS",
+      unitPrice: Math.round(dealItem.unitPrice * 100) / 100,
+      originCountry: "",
+      weightKg: matchedProduct?.packWeight || 0,
+      packageCount: 0
+    };
+  });
+  const defaults = defaultTradeDocument(type);
   return {
+    ...defaults,
     id: "__new__",
     customerId: customer.id,
     dealId: deal.id,
@@ -9012,38 +11791,19 @@ function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
     title: `${customer.company} ${product} ${type}`,
     number: `${type}-${date.replace(/-/g, "")}-${Math.floor(Date.now() / 1000).toString().slice(-4)}`,
     issueDate: date,
-    buyer: customer.billingName?.trim() || customer.company,
+    buyer: customerDocumentName(customer),
     buyerAddress: customer.billingAddress?.trim() || "",
     buyerContact: customer.documentContact?.trim() || customer.contact,
-    seller: "",
-    sellerAddress: "",
     currency: deal.currency || "USD",
-    incoterm: customer.defaultIncoterm?.trim() || "FOB",
-    paymentTerm: customer.defaultPaymentTerm?.trim() || "",
-    shippingMethod: "Sea freight",
-    portLoading: "",
+    incoterm: customer.defaultIncoterm?.trim() || defaults.incoterm,
+    paymentTerm: customer.defaultPaymentTerm?.trim() || defaults.paymentTerm,
     portDischarge: customer.defaultPortDischarge?.trim() || "",
-    validityDate: "",
-    bankInfo: "",
-    notes: "",
-    language: "EN",
-    templateStyle: "indigo",
+    includeProductImages: documentItems.some((item) => Boolean(item.imageUrl)) || defaults.includeProductImages,
     status: "ready",
     audits: [],
     sendRecords: [],
     updatedAt: new Date().toISOString(),
-    items: [{
-      id: `deal_item_${deal.id}`,
-      product,
-      model: "",
-      hsCode: "",
-      quantity,
-      unit: "PCS",
-      unitPrice: Math.round(unitPrice * 100) / 100,
-      originCountry: "",
-      weightKg: 0,
-      packageCount: 0
-    }]
+    items: documentItems
   };
 }
 
@@ -9734,10 +12494,14 @@ async function moveDeal(id: string, nextStage: string) {
     toast("请填写客户确认成交的依据", "error");
     return;
   }
-  const result = await api<{ deal: Deal }>(`/api/deals/${id}/stage`, {
+  const result = await api<{ deal: Deal; customer?: Customer }>(`/api/deals/${id}/stage`, {
     method: "PATCH",
     body: JSON.stringify({ stage: nextStage, result: resultText, nextAction, nextActionAt, expectedCloseAt, wonReason })
   });
+  if (result.customer) {
+    const customerIndex = state.customers.findIndex((customer) => customer.id === result.customer!.id);
+    if (customerIndex >= 0) state.customers[customerIndex] = result.customer;
+  }
   closeModal();
   await refreshDealsData();
   void refreshDashboardOnly();
@@ -9818,7 +12582,7 @@ function renderArchivedDeals(deals: Deal[], total: number, page: number, pageSiz
   if (summary) summary.textContent = `已成交 ${state.closedDealCounts.won} · 已丢单 ${state.closedDealCounts.lost} · 待复访 ${state.closedDealCounts.revisit}`;
   box.innerHTML = deals.length ? deals.map((deal) => {
     const customer = state.customers.find((item) => item.id === deal.customerId);
-    const product = `${deal.product?.trim() || "产品待维护"} · ${Number(deal.quantity || 0) || "-"} 件 × ${money(Number(deal.unitPrice || 0))}`;
+    const product = dealItemsSummary(deal);
     const review = deal.stage === "丢单"
       ? `${deal.lostReasonCategory || "未分类"}：${deal.lostReason || "待补充复盘"}${deal.revisitAt ? ` · ${deal.revisitAt} 复访` : ""}`
       : `${deal.wonReason || "已成交"}${deal.archivedAt ? " · 已归档" : " · 待归档"}`;
@@ -9889,7 +12653,7 @@ function renderDealDrawer(id: string) {
   const closed = deal.stage === "成交" || deal.stage === "丢单";
   drawer.innerHTML = `
     <div class="deal-detail-head">
-      <div><h2>${escapeHtml(deal.title)}</h2><p>${escapeHtml(customer?.company || "客户待确认")} · ${escapeHtml(deal.product || "产品待维护")}</p></div>
+      <div><h2>${escapeHtml(deal.title)}</h2><p>${escapeHtml(customer?.company || "客户待确认")} · ${escapeHtml(dealProductsText(deal))}</p></div>
       <button class="btn" id="closeDealDrawerButton">关闭</button>
     </div>
     <div class="deal-detail-grid">
@@ -9899,6 +12663,10 @@ function renderDealDrawer(id: string) {
       <div class="info"><span>预计成交</span><b>${escapeHtml(deal.expectedCloseAt || "待评估")}</b></div>
       <div class="info"><span>关联单据</span><b>${documents.length ? documents.map((document) => `${document.type} ${escapeHtml(document.number)} v${document.revision}`).join(" · ") : "暂未关联 PI/CI"}</b></div>
       <div class="info"><span>${deal.stage === "丢单" ? "丢单复盘" : "关闭状态"}</span><b>${deal.stage === "丢单" ? `${escapeHtml(deal.lostReasonCategory || "未分类")}：${escapeHtml(deal.lostReason || "待补充")}` : deal.stage === "成交" ? escapeHtml(deal.wonReason || "已确认成交") : "活跃推进中"}</b></div>
+    </div>
+    <div class="deal-detail-products">
+      <div class="section-head"><div><h3>产品明细</h3><span class="subline">${dealItemsOf(deal).length} 项 · ${dealMoney(deal.amount, deal.currency)}</span></div></div>
+      ${dealItemsOf(deal).map((item) => `<div class="deal-detail-product-row"><span><b>${escapeHtml(item.product)}</b><small>${escapeHtml(item.model || "型号未填写")}</small></span><span>${item.quantity} × ${dealMoney(item.unitPrice, deal.currency)}</span><strong>${dealMoney(item.quantity * item.unitPrice, deal.currency)}</strong></div>`).join("")}
     </div>
     <div id="dealWinGauge"><div style="padding:12px;text-align:center;color:var(--muted);font-size:12px;">AI 赢率分析中...</div></div>
     <div class="deal-detail-actions">
@@ -10034,14 +12802,25 @@ function openDealModal(
     ? state.customers.find((item) => item.id === selectedCustomerId)
     : undefined;
   const title = editing?.title || recommendation?.suggestedTitle || "";
-  const storedQuantity = Number(editing?.quantity || recommendation?.suggestedQuantity || 0);
-  const storedUnitPrice = Number(editing?.unitPrice || recommendation?.suggestedUnitPrice || 0);
-  const fallbackAmount = Number(editing?.amount || recommendation?.suggestedAmount || 0);
-  const quantity = !storedQuantity && !storedUnitPrice && fallbackAmount ? 1 : storedQuantity;
-  const unitPrice = !storedQuantity && !storedUnitPrice && fallbackAmount ? fallbackAmount : storedUnitPrice;
-  const computedAmount = editing
-    ? Number(editing.amount || quantity * unitPrice)
-    : Number(recommendation?.suggestedAmount || quantity * unitPrice || 18000);
+  const existingItems = dealItemsOf(editing || {
+    id: "",
+    customerId: selectedCustomerId,
+    title,
+    stage: "询盘",
+    product: recommendation?.suggestedProduct || "",
+    quantity: recommendation?.suggestedQuantity || 30,
+    unitPrice: recommendation?.suggestedUnitPrice || (recommendation?.suggestedAmount ? recommendation.suggestedAmount / Math.max(1, recommendation.suggestedQuantity || 1) : 600),
+    amount: recommendation?.suggestedAmount || 18000,
+    currency: recommendation?.currency || "USD",
+    amountType: "estimate",
+    nextAction: recommendation?.nextAction || "",
+    nextActionAt: recommendation?.nextActionAt || "",
+    expectedCloseAt: recommendation?.expectedCloseAt || "",
+    stageChangedAt: ""
+  });
+  const productOptions = state.products.flatMap((product) => [product.nameZh, product.nameEn, product.model].filter(Boolean))
+    .filter((value, index, list) => list.indexOf(value) === index)
+    .map((value) => `<option value="${escapeHtml(value)}"></option>`).join("");
   openModal(editing ? "编辑商机" : "新增商机", `
     <div class="form-grid">
       <input id="dealIdInput" type="hidden" value="${escapeHtml(editing?.id || "")}">
@@ -10049,37 +12828,87 @@ function openDealModal(
       <div class="form-field full"><label>商机名称</label><input id="dealTitleInput" value="${escapeHtml(title)}" placeholder="例如：年度采购项目"></div>
       <div class="form-field deal-customer-field">
         <label>关联客户（必选）</label>
-        <input id="dealCustomerInput" value="${escapeHtml(defaultCustomer?.company || "")}" placeholder="输入客户名称并从列表选择" autocomplete="off">
+        <input id="dealCustomerInput" value="${escapeHtml(defaultCustomer?.company || "")}" placeholder="输入客户简称并从列表选择" autocomplete="off">
         <input id="dealCustomerIdInput" type="hidden" value="${escapeHtml(defaultCustomer?.id || "")}">
         <button class="deal-customer-clear" id="clearDealCustomerButton" type="button" title="清空关联客户">×</button>
         <div class="deal-customer-options" id="dealCustomerOptions"></div>
       </div>
       <div class="form-field"><label>币种</label><select id="dealCurrencyInput">${["USD", "EUR", "GBP", "CNY", "JPY", "AED"].map((currency) => `<option ${currency === (editing?.currency || recommendation?.currency || "USD") ? "selected" : ""}>${currency}</option>`).join("")}</select></div>
-      <div class="form-field full"><label>产品 / 采购需求（必填）</label><input id="dealProductInput" value="${escapeHtml(editing?.product || recommendation?.suggestedProduct || "")}" placeholder="例如：产品型号 / 数量 / 规格"></div>
-      <div class="form-field"><label>数量</label><input id="dealQuantityInput" type="number" min="0" step="1" value="${quantity || 30}"></div>
-      <div class="form-field"><label>单价</label><input id="dealUnitPriceInput" type="number" min="0" step="0.01" value="${unitPrice || 600}"></div>
-      <div class="form-field"><label>金额</label><input id="dealAmountInput" type="number" value="${computedAmount}" readonly></div>
+      <div class="form-field full deal-items-field">
+        <div class="deal-items-heading"><label>产品明细（至少一项）</label><button class="btn" id="addDealItemButton" type="button">+ 添加产品</button></div>
+        <datalist id="dealProductCatalogOptions">${productOptions}</datalist>
+        <div class="deal-items-list" id="dealItemsList">${existingItems.map((item) => renderDealItemEditorRow(item)).join("")}</div>
+        <div class="deal-items-total"><span>商机总金额</span><b id="dealAmountDisplay">0.00</b></div>
+      </div>
       <div class="form-field"><label>下一动作日期</label><input id="dealNextActionAtInput" type="date" value="${escapeHtml(editing?.nextActionAt || recommendation?.nextActionAt || defaultFutureDate(2))}"></div>
       <div class="form-field"><label>预计成交日期</label><input id="dealExpectedCloseAtInput" type="date" value="${escapeHtml(editing?.expectedCloseAt || recommendation?.expectedCloseAt || defaultFutureDate(21))}"></div>
       <div class="form-field full"><label>下一步动作</label><input id="dealNextActionInput" value="${escapeHtml(editing?.nextAction || recommendation?.nextAction || "确认采购清单并安排报价")}"></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDealButton">${editing ? "保存修改" : "保存商机"}</button>`);
+  qs<HTMLElement>("#appModal .modal")?.classList.add("deal-editor-modal");
   bindDealCustomerPicker();
-  bindDealAmountCalculator();
+  bindDealItemsEditor();
   qs("#saveDealButton")?.addEventListener("click", () => void saveDeal());
 }
 
-function bindDealAmountCalculator() {
-  const quantity = qs<HTMLInputElement>("#dealQuantityInput");
-  const unitPrice = qs<HTMLInputElement>("#dealUnitPriceInput");
-  const amount = qs<HTMLInputElement>("#dealAmountInput");
+function renderDealItemEditorRow(item: DealItem) {
+  return `<div class="deal-item-row" data-deal-item-id="${escapeHtml(item.id)}" data-product-id="${escapeHtml(item.productId || "")}">
+    <label class="deal-item-product"><span>产品</span><input data-deal-item-product list="dealProductCatalogOptions" value="${escapeHtml(item.product)}" placeholder="产品名称" autocomplete="off"></label>
+    <label><span>型号</span><input data-deal-item-model value="${escapeHtml(item.model || "")}" placeholder="可选"></label>
+    <label><span>数量</span><input data-deal-item-quantity type="number" min="1" step="1" value="${Number(item.quantity || 1)}"></label>
+    <label><span>单价</span><input data-deal-item-price type="number" min="0" step="0.01" value="${Number(item.unitPrice || 0)}"></label>
+    <span class="deal-item-subtotal"><small>小计</small><b data-deal-item-subtotal>0.00</b></span>
+    <button class="deal-item-remove" data-remove-deal-item type="button" title="删除产品" aria-label="删除产品">×</button>
+  </div>`;
+}
+
+function bindDealItemsEditor() {
+  const list = qs<HTMLElement>("#dealItemsList");
+  const total = qs<HTMLElement>("#dealAmountDisplay");
+  if (!list || !total) return;
   const update = () => {
-    if (!amount) return;
-    const next = Number(quantity?.value || 0) * Number(unitPrice?.value || 0);
-    amount.value = String(Math.round(next * 100) / 100);
+    let amount = 0;
+    qsa<HTMLElement>(".deal-item-row", list).forEach((row) => {
+      const subtotal = Number(qs<HTMLInputElement>("[data-deal-item-quantity]", row)?.value || 0)
+        * Number(qs<HTMLInputElement>("[data-deal-item-price]", row)?.value || 0);
+      amount += subtotal;
+      const node = qs<HTMLElement>("[data-deal-item-subtotal]", row);
+      if (node) node.textContent = subtotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    });
+    total.textContent = amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
-  quantity?.addEventListener("input", update);
-  unitPrice?.addEventListener("input", update);
+  const bindRow = (row: HTMLElement) => {
+    qsa<HTMLInputElement>("input", row).forEach((input) => input.addEventListener("input", update));
+    qs<HTMLInputElement>("[data-deal-item-product]", row)?.addEventListener("change", (event) => {
+      const value = (event.currentTarget as HTMLInputElement).value.trim().toLowerCase();
+      const product = state.products.find((item) => [item.nameZh, item.nameEn, item.model].some((field) => field.trim().toLowerCase() === value));
+      if (!product) return;
+      row.dataset.productId = product.id;
+      const model = qs<HTMLInputElement>("[data-deal-item-model]", row);
+      const price = qs<HTMLInputElement>("[data-deal-item-price]", row);
+      if (model && !model.value) model.value = product.model;
+      if (price && !Number(price.value)) price.value = String(product.price || 0);
+      update();
+    });
+    qs<HTMLButtonElement>("[data-remove-deal-item]", row)?.addEventListener("click", () => {
+      if (qsa(".deal-item-row", list).length <= 1) {
+        toast("商机至少保留一项产品", "error");
+        return;
+      }
+      row.remove();
+      update();
+    });
+  };
+  qsa<HTMLElement>(".deal-item-row", list).forEach(bindRow);
+  qs<HTMLButtonElement>("#addDealItemButton")?.addEventListener("click", () => {
+    list.insertAdjacentHTML("beforeend", renderDealItemEditorRow({ id: `deal_item_${crypto.randomUUID()}`, product: "", model: "", quantity: 1, unitPrice: 0 }));
+    const row = list.lastElementChild as HTMLElement | null;
+    if (row) {
+      bindRow(row);
+      qs<HTMLInputElement>("[data-deal-item-product]", row)?.focus();
+    }
+    update();
+  });
   update();
 }
 
@@ -10087,7 +12916,7 @@ function filteredDealCustomers(keyword: string) {
   const normalized = keyword.trim().toLowerCase();
   if (!normalized) return state.customers.slice(0, 8);
   return state.customers
-    .filter((customer) => `${customer.company} ${customer.contact} ${customer.country}`.toLowerCase().includes(normalized))
+    .filter((customer) => `${customer.company} ${customer.companyFullName || ""} ${customer.contact} ${customer.country} ${customer.id}`.toLowerCase().includes(normalized))
     .slice(0, 8);
 }
 
@@ -10158,15 +12987,22 @@ async function saveDeal() {
   const dealId = qs<HTMLInputElement>("#dealIdInput")?.value.trim() || "";
   const recommendationId = qs<HTMLInputElement>("#dealRecommendationIdInput")?.value.trim() || "";
   const title = qs<HTMLInputElement>("#dealTitleInput")?.value.trim() || "";
-  const product = qs<HTMLInputElement>("#dealProductInput")?.value.trim() || "";
+  const items = qsa<HTMLElement>("#dealItemsList .deal-item-row").map((row) => ({
+    id: row.dataset.dealItemId || `deal_item_${crypto.randomUUID()}`,
+    productId: row.dataset.productId || "",
+    product: qs<HTMLInputElement>("[data-deal-item-product]", row)?.value.trim() || "",
+    model: qs<HTMLInputElement>("[data-deal-item-model]", row)?.value.trim() || "",
+    quantity: Number(qs<HTMLInputElement>("[data-deal-item-quantity]", row)?.value || 0),
+    unitPrice: Number(qs<HTMLInputElement>("[data-deal-item-price]", row)?.value || 0)
+  }));
   const customerText = qs<HTMLInputElement>("#dealCustomerInput")?.value.trim() || "";
   const customerId = qs<HTMLInputElement>("#dealCustomerIdInput")?.value.trim() || "";
   if (!title) {
     toast("请填写商机名称", "error");
     return;
   }
-  if (!product) {
-    toast("请填写产品或采购需求", "error");
+  if (!items.length || items.some((item) => !item.product || !Number.isInteger(item.quantity) || item.quantity <= 0 || item.unitPrice < 0)) {
+    toast("请完整填写每项产品、数量和单价", "error");
     return;
   }
   if (!customerText || !customerId) {
@@ -10179,8 +13015,10 @@ async function saveDeal() {
     toast("请填写下一动作和日期", "error");
     return;
   }
-  const quantity = Number(qs<HTMLInputElement>("#dealQuantityInput")?.value || 0);
-  const unitPrice = Number(qs<HTMLInputElement>("#dealUnitPriceInput")?.value || 0);
+  const product = items.length > 2 ? `${items.slice(0, 2).map((item) => item.product).join("、")} 等 ${items.length} 项` : items.map((item) => item.product).join("、");
+  const quantity = items.reduce((sum, item) => sum + item.quantity, 0);
+  const unitPrice = items.length === 1 ? items[0].unitPrice : 0;
+  const amount = Math.round(items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0) * 100) / 100;
   const result = await api<{ deal: Deal }>(dealId ? `/api/deals/${dealId}` : "/api/deals", {
     method: dealId ? "PATCH" : "POST",
     body: JSON.stringify({
@@ -10189,7 +13027,8 @@ async function saveDeal() {
       product,
       quantity,
       unitPrice,
-      amount: Math.round(quantity * unitPrice * 100) / 100,
+      items,
+      amount,
       currency: qs<HTMLSelectElement>("#dealCurrencyInput")?.value || "USD",
       nextAction,
       nextActionAt,
@@ -11214,65 +14053,98 @@ function reminderRuleTypeText(ruleType = "quote_no_reply") {
 }
 
 function renderProblems(problems: ProblemItem[]) {
-  const sorted = [...problems].sort((a, b) => {
+  const categories = [...new Set(problems.map((item) => item.category).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+  if (state.problemCategoryFilter !== "all" && !categories.includes(state.problemCategoryFilter)) state.problemCategoryFilter = "all";
+  const categorySelect = qs<HTMLSelectElement>("#problemCategoryFilter");
+  if (categorySelect) {
+    categorySelect.innerHTML = `<option value="all">全部分类</option>${categories.map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`).join("")}`;
+    categorySelect.value = state.problemCategoryFilter;
+  }
+  const keyword = state.problemSearch.trim().toLocaleLowerCase();
+  const sorted = problems.filter((problem) => {
+    const matchesKeyword = !keyword || [problem.title, problem.category, problem.relatedCustomer, problem.rootCause, problem.solution, problem.nextAction]
+      .some((value) => String(value || "").toLocaleLowerCase().includes(keyword));
+    const matchesStatus = state.problemStatusFilter === "all" || problem.status === state.problemStatusFilter;
+    const matchesSeverity = state.problemSeverityFilter === "all" || problem.severity === state.problemSeverityFilter;
+    const matchesCategory = state.problemCategoryFilter === "all" || problem.category === state.problemCategoryFilter;
+    return matchesKeyword && matchesStatus && matchesSeverity && matchesCategory;
+  }).sort((a, b) => {
     const statusWeight = (item: ProblemItem) => item.status === "resolved" ? 2 : item.status === "solving" ? 1 : 0;
     const severityWeight = (item: ProblemItem) => item.severity === "high" ? 0 : item.severity === "medium" ? 1 : 2;
     return statusWeight(a) - statusWeight(b) || severityWeight(a) - severityWeight(b) || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   });
   const list = qs<HTMLElement>("#problems .problem-list");
   if (list) {
-    list.innerHTML = sorted.length ? sorted.map((problem) => `<article class="problem-card ${state.selectedProblemId === problem.id ? "selected" : ""}" data-problem-id="${escapeHtml(problem.id)}">
-      <div class="problem-top"><h3>${escapeHtml(problem.title)}</h3>${badge(severityText(problem.severity), severityTone(problem.severity))}</div>
-      <div class="problem-meta"><span>${escapeHtml(problem.category)}</span><span>${escapeHtml(problemStatusText(problem.status))}</span><span>${escapeHtml(problem.dueAt || "未设截止")}</span><span>${escapeHtml(problem.relatedCustomer || "未关联客户")}</span></div>
-      <p>${escapeHtml(problem.rootCause || "暂未填写原因")}</p>
-    </article>`).join("") : `<div class="todo-history-empty">暂无问题</div>`;
-    qsa<HTMLElement>(".problem-card", list).forEach((card) => {
-      card.addEventListener("click", () => {
-        state.selectedProblemId = card.dataset.problemId || null;
-        renderProblems(state.problems);
-      });
-    });
+    list.innerHTML = sorted.length ? sorted.map((problem) => `<div class="problem-row" data-problem-id="${escapeHtml(problem.id)}">
+      <div class="problem-row-title" title="${escapeHtml(problem.title)}"><button class="problem-name" type="button" data-problem-open="${escapeHtml(problem.id)}">${escapeHtml(problem.title)}</button></div>
+      <span class="problem-row-cell" title="${escapeHtml(problem.category)}">${escapeHtml(problem.category)}</span>
+      <span>${badge(severityText(problem.severity), severityTone(problem.severity))}</span>
+      <span>${badge(problemStatusText(problem.status), problem.status === "resolved" ? "green" : problem.status === "solving" ? "amber" : "red")}</span>
+      <span class="problem-row-cell" title="${escapeHtml(formatDateTime(problem.createdAt))}">${escapeHtml(formatDateTime(problem.createdAt))}</span>
+      <span class="problem-row-cell" title="${escapeHtml(formatDateTime(problem.resolvedAt))}">${escapeHtml(formatDateTime(problem.resolvedAt))}</span>
+      <div class="problem-row-actions"><button class="btn" type="button" data-problem-edit="${escapeHtml(problem.id)}">编辑</button><button class="btn" type="button" data-problem-status="${escapeHtml(problem.id)}">${problem.status === "resolved" ? "重新打开" : problem.status === "open" ? "开始解决" : "标记解决"}</button><button class="btn danger subtle" type="button" data-problem-delete="${escapeHtml(problem.id)}">删除</button></div>
+    </div>`).join("") : `<div class="problem-empty">没有符合当前筛选条件的问题</div>`;
+    qsa<HTMLButtonElement>("[data-problem-open]", list).forEach((button) => button.addEventListener("click", () => openProblemDrawer(button.dataset.problemOpen || "")));
+    qsa<HTMLButtonElement>("[data-problem-edit]", list).forEach((button) => button.addEventListener("click", () => {
+      const problem = state.problems.find((item) => item.id === button.dataset.problemEdit);
+      if (problem) openProblemModal(problem);
+    }));
+    qsa<HTMLButtonElement>("[data-problem-status]", list).forEach((button) => button.addEventListener("click", () => void advanceProblemStatus(button.dataset.problemStatus || "")));
+    qsa<HTMLButtonElement>("[data-problem-delete]", list).forEach((button) => button.addEventListener("click", () => void deleteSelectedProblem(button.dataset.problemDelete || "")));
   }
-  const open = problems.filter((item) => item.status === "open").length;
-  const solving = problems.filter((item) => item.status === "solving").length;
-  const resolved = problems.filter((item) => item.status === "resolved").length;
-  const high = problems.filter((item) => item.severity === "high" && item.status !== "resolved").length;
-  qs("#problem-open-count")!.textContent = String(open);
-  qs("#problem-solving-count")!.textContent = String(solving);
-  qs("#problem-resolved-count")!.textContent = String(resolved);
-  qs("#problem-high-count")!.textContent = String(high);
-  renderProblemDetail(sorted.find((item) => item.id === state.selectedProblemId) || sorted[0]);
+  const resultCount = qs("#problemResultCount");
+  if (resultCount) resultCount.textContent = `${sorted.length} / ${problems.length} 条`;
+  if (qs("#problemDrawer")?.classList.contains("open")) {
+    const selected = state.problems.find((item) => item.id === state.selectedProblemId);
+    if (selected) renderProblemDrawer(selected);
+    else closeProblemDrawer();
+  }
 }
 
-function renderProblemDetail(problem?: ProblemItem) {
-  if (!problem) {
-    qs("#problem-detail-title")!.textContent = "问题解决方案";
-    qs("#problem-detail-meta")!.textContent = "";
-    qs("#problem-root-cause")!.textContent = "暂无问题";
-    qs("#problem-solution")!.textContent = "暂无解决方案";
-    qs("#problem-next-action")!.textContent = "暂无下一动作";
-    const tbody = qs<HTMLElement>("#problem-category-table");
-    if (tbody) tbody.innerHTML = `<tr><td colspan="3">暂无问题分类数据</td></tr>`;
-    const button = qs<HTMLButtonElement>("#problemStatusButton");
-    if (button) button.textContent = "更新状态";
-    return;
-  }
+function openProblemDrawer(problemId: string) {
+  const problem = state.problems.find((item) => item.id === problemId);
+  if (!problem) return;
   state.selectedProblemId = problem.id;
-  qs("#problem-detail-title")!.textContent = problem.title;
-  qs("#problem-detail-meta")!.textContent = `${problem.category} · ${problemStatusText(problem.status)} · ${problem.relatedCustomer || "未关联客户"}`;
-  qs("#problem-root-cause")!.textContent = problem.rootCause || "暂未填写原因";
-  qs("#problem-solution")!.textContent = problem.solution || "暂未填写解决方案";
-  qs("#problem-next-action")!.textContent = problem.nextAction || "暂未填写下一动作";
-  const button = qs<HTMLButtonElement>("#problemStatusButton");
-  if (button) button.textContent = problem.status === "resolved" ? "重新打开" : problem.status === "open" ? "开始解决" : "标记解决";
-  const groups = state.problems.reduce<Record<string, { count: number; high: boolean }>>((acc, item) => {
-    acc[item.category] = acc[item.category] || { count: 0, high: false };
-    acc[item.category].count += 1;
-    acc[item.category].high = acc[item.category].high || item.severity === "high";
-    return acc;
-  }, {});
-  const tbody = qs<HTMLElement>("#problem-category-table");
-  if (tbody) tbody.innerHTML = Object.entries(groups).map(([category, item]) => `<tr><td>${escapeHtml(category)}</td><td>${item.count}</td><td>${badge(item.high ? "高" : "可控", item.high ? "red" : "green")}</td></tr>`).join("");
+  renderProblemDrawer(problem);
+  qs("#problemDrawer")?.classList.add("open");
+  qs("#problemDrawerBackdrop")?.classList.add("active");
+  document.body.classList.add("problem-drawer-open");
+}
+
+function closeProblemDrawer() {
+  qs("#problemDrawer")?.classList.remove("open");
+  qs("#problemDrawerBackdrop")?.classList.remove("active");
+  document.body.classList.remove("problem-drawer-open");
+}
+
+function renderProblemDrawer(problem: ProblemItem) {
+  const drawer = qs<HTMLElement>("#problemDrawer");
+  if (!drawer) return;
+  const summary: Array<[string, string]> = [
+    ["分类", problem.category || "未分类"],
+    ["严重程度", severityText(problem.severity)],
+    ["状态", problemStatusText(problem.status)],
+    ["问题时间", formatDateTime(problem.createdAt)],
+    ["解决时间", formatDateTime(problem.resolvedAt)],
+    ["截止时间", problem.dueAt || "未设置"],
+    ["关联对象", problem.relatedCustomer || "未关联"]
+  ];
+  drawer.innerHTML = `
+    <div class="drawer-head">
+      <div><h2>${escapeHtml(problem.title)}</h2><p>${escapeHtml(problem.category)} · ${escapeHtml(problemStatusText(problem.status))}</p></div>
+      <button class="btn icon-only" id="problemDrawerClose" type="button" title="关闭" aria-label="关闭问题详情">×</button>
+    </div>
+    <div class="problem-drawer-summary">${summary.map(([label, value]) => `<div class="info"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b></div>`).join("")}</div>
+    <div class="problem-drawer-blocks">
+      <div class="detail-block"><span>问题原因</span><p>${escapeHtml(problem.rootCause || "暂未填写")}</p></div>
+      <div class="detail-block problem-solution-highlight"><span>解决方案</span><p>${escapeHtml(problem.solution || "暂未填写")}</p></div>
+      <div class="detail-block"><span>下一动作</span><p>${escapeHtml(problem.nextAction || "暂未填写")}</p></div>
+    </div>
+    <div class="problem-drawer-actions"><button class="btn" id="problemDrawerEdit" type="button">编辑</button><button class="btn primary" id="problemDrawerStatus" type="button">${problem.status === "resolved" ? "重新打开" : problem.status === "open" ? "开始解决" : "标记解决"}</button><button class="btn danger subtle" id="problemDrawerDelete" type="button">删除</button></div>`;
+  qs("#problemDrawerClose", drawer)?.addEventListener("click", closeProblemDrawer);
+  qs("#problemDrawerEdit", drawer)?.addEventListener("click", () => openProblemModal(problem));
+  qs("#problemDrawerStatus", drawer)?.addEventListener("click", () => void advanceProblemStatus(problem.id));
+  qs("#problemDrawerDelete", drawer)?.addEventListener("click", () => void deleteSelectedProblem(problem.id));
 }
 
 function visibleMemos() {
@@ -11332,6 +14204,11 @@ function renderMemoDetail(memo?: Memo) {
     if (titleEditor) titleEditor.value = "暂无备忘";
     if (tagsEditor) tagsEditor.value = "";
     if (contentEditor) contentEditor.value = "";
+    const draftRecovery = qs<HTMLElement>("#memoDraftRecovery");
+    if (draftRecovery) {
+      draftRecovery.hidden = true;
+      draftRecovery.innerHTML = "";
+    }
     qs<HTMLButtonElement>("#memoPinButton")?.setAttribute("disabled", "true");
     qs<HTMLButtonElement>("#memoArchiveButton")?.setAttribute("disabled", "true");
     qs<HTMLButtonElement>("#memoDeleteButton")?.setAttribute("disabled", "true");
@@ -11347,7 +14224,7 @@ function renderMemoDetail(memo?: Memo) {
   const customerEditor = qs<HTMLSelectElement>("#memoCustomerEditor");
   const dealEditor = qs<HTMLSelectElement>("#memoDealEditor");
   const contentEditor = qs<HTMLTextAreaElement>("#memoContentEditor");
-  let editorValue = {
+  const editorValue = {
     title: memo.title,
     category: memo.category,
     tags: memo.tags,
@@ -11356,21 +14233,6 @@ function renderMemoDetail(memo?: Memo) {
     content: memo.content || ""
   };
   const draft = readMemoDraft(memo);
-  let restoredDraft = false;
-  if (!deleted && draft && !resolvedMemoDrafts.has(memo.id)) {
-    resolvedMemoDrafts.add(memo.id);
-    const conflict = draft.serverUpdatedAt !== memo.updatedAt;
-    const restore = window.confirm(conflict
-      ? `发现「${memo.title}」的本机草稿，但服务器内容已更新。是否仍恢复本机草稿？`
-      : `发现「${memo.title}」尚未同步的本机草稿，是否恢复？`);
-    if (restore) {
-      editorValue = draft;
-      restoredDraft = true;
-      memoEditRevision += 1;
-    } else {
-      clearMemoDraft(memo.id);
-    }
-  }
   if (titleEditor) titleEditor.value = editorValue.title;
   if (categoryEditor) categoryEditor.value = editorValue.category;
   if (tagsEditor) tagsEditor.value = editorValue.tags;
@@ -11378,8 +14240,50 @@ function renderMemoDetail(memo?: Memo) {
   if (customerEditor) customerEditor.value = editorValue.customerId;
   if (dealEditor) dealEditor.value = editorValue.dealId;
   if (contentEditor) contentEditor.value = editorValue.content;
-  memoDirty = restoredDraft;
-  setMemoSaveState(deleted ? "只读" : restoredDraft ? "仅保存在本机，点击重试" : "已保存到服务器", restoredDraft);
+  memoDirty = false;
+  setMemoSaveState(deleted ? "只读" : "已保存到服务器");
+  const draftRecovery = qs<HTMLElement>("#memoDraftRecovery");
+  if (draftRecovery) {
+    const recoverableDraft = !deleted && draft && !resolvedMemoDrafts.has(memo.id) ? draft : null;
+    draftRecovery.hidden = !recoverableDraft;
+    draftRecovery.innerHTML = recoverableDraft ? `
+      <div class="memo-draft-recovery-copy">
+        <span class="memo-draft-recovery-icon" aria-hidden="true">!</span>
+        <div><b>${recoverableDraft.serverUpdatedAt !== memo.updatedAt ? "发现本机草稿，但服务器内容已更新" : "发现尚未同步的本机草稿"}</b><small>草稿保存于 ${escapeHtml(formatDateTime(recoverableDraft.draftAt))}，当前先展示服务器版本。</small></div>
+      </div>
+      <div class="memo-draft-recovery-actions">
+        <button class="btn" id="memoKeepServerDraftButton" type="button">保留服务器版本</button>
+        <button class="btn warning" id="memoRestoreLocalDraftButton" type="button">恢复本机草稿</button>
+      </div>
+    ` : "";
+    draftRecovery.setAttribute("role", "status");
+    qs<HTMLButtonElement>("#memoRestoreLocalDraftButton", draftRecovery)?.addEventListener("click", (event) => {
+      if (!recoverableDraft) return;
+      if (titleEditor) titleEditor.value = recoverableDraft.title;
+      if (categoryEditor) categoryEditor.value = recoverableDraft.category;
+      if (tagsEditor) tagsEditor.value = recoverableDraft.tags;
+      renderMemoRelationOptions(recoverableDraft.customerId, recoverableDraft.dealId);
+      if (customerEditor) customerEditor.value = recoverableDraft.customerId;
+      if (dealEditor) dealEditor.value = recoverableDraft.dealId;
+      if (contentEditor) contentEditor.value = recoverableDraft.content;
+      resolvedMemoDrafts.add(memo.id);
+      memoDirty = true;
+      memoEditRevision += 1;
+      setMemoSaveState("仅保存在本机，点击重试", true);
+      draftRecovery.hidden = true;
+      draftRecovery.innerHTML = "";
+      (contentEditor || titleEditor || (event.currentTarget as HTMLButtonElement)).focus();
+    });
+    qs<HTMLButtonElement>("#memoKeepServerDraftButton", draftRecovery)?.addEventListener("click", (event) => {
+      resolvedMemoDrafts.add(memo.id);
+      clearMemoDraft(memo.id);
+      memoDirty = false;
+      setMemoSaveState("已保存到服务器");
+      draftRecovery.hidden = true;
+      draftRecovery.innerHTML = "";
+      (titleEditor || (event.currentTarget as HTMLButtonElement)).focus();
+    });
+  }
   const pinButton = qs<HTMLButtonElement>("#memoPinButton");
   const archiveButton = qs<HTMLButtonElement>("#memoArchiveButton");
   const deleteButton = qs<HTMLButtonElement>("#memoDeleteButton");
@@ -11698,7 +14602,15 @@ async function runReminderRule(id: string, button?: HTMLButtonElement) {
   try {
     const preview = await api<{ matchedCount: number; creatableCount: number; skippedCount: number; preview: Array<{ customer: string; deal: string }> }>(`/api/reminders/${id}/preview`);
     const sample = preview.preview.map((item) => `${item.customer}${item.deal ? ` / ${item.deal}` : ""}`).join("、") || "无";
-    if (!window.confirm(`预计命中 ${preview.matchedCount} 条，可新建 ${preview.creatableCount} 条，跳过 ${preview.skippedCount} 条。\n示例：${sample}\n\n确认手工运行？`)) return;
+    if (!await confirmAction({
+      title: "手工运行提醒规则",
+      message: `预计命中 ${preview.matchedCount} 条记录，可新建 ${preview.creatableCount} 条提醒。`,
+      detail: sample,
+      detailLabel: "命中示例",
+      consequences: [`将跳过 ${preview.skippedCount} 条重复或不符合条件的记录`, "新提醒会立即加入当前账号的待办队列"],
+      confirmLabel: "运行规则",
+      tone: "normal"
+    })) return;
     if (button) {
       button.disabled = true;
       button.textContent = "运行中";
@@ -11722,19 +14634,25 @@ async function runReminderRule(id: string, button?: HTMLButtonElement) {
   }
 }
 
-function openProblemModal() {
-  openModal("新增问题", `
+let editingProblemId = "";
+
+function openProblemModal(problem?: ProblemItem) {
+  editingProblemId = problem?.id || "";
+  const categories = [...new Set(["其它", "报价跟进", "资料维护", "工具/OCR", "客户服务", "团队执行", problem?.category || ""].filter(Boolean))];
+  const selected = (value: string, current?: string) => value === current ? " selected" : "";
+  openModal(problem ? "编辑问题" : "新增问题", `
     <div class="form-grid">
-      <div class="form-field full"><label>问题标题</label><input id="problemTitleInput" placeholder="例如：客户报价后超过 5 天未回复"></div>
-      <div class="form-field"><label>类别</label><select id="problemCategoryInput"><option>报价跟进</option><option>资料维护</option><option>工具/OCR</option><option>客户服务</option><option>团队执行</option></select></div>
-      <div class="form-field"><label>严重程度</label><select id="problemSeverityInput"><option value="medium">中</option><option value="high">高</option><option value="low">低</option></select></div>
-      <div class="form-field"><label>关联客户</label><input id="problemCustomerInput" placeholder="可选：客户或线索名称"></div>
-      <div class="form-field"><label>截止时间</label><input id="problemDueInput" placeholder="例如：今天 18:00"></div>
-      <div class="form-field full"><label>问题原因</label><textarea id="problemRootInput" placeholder="描述问题产生原因"></textarea></div>
-      <div class="form-field full"><label>解决方案</label><textarea id="problemSolutionInput" placeholder="写清楚解决路径、标准和注意事项"></textarea></div>
-      <div class="form-field full"><label>下一动作</label><input id="problemNextInput" placeholder="例如：今天发送补充资料，明天企微确认"></div>
+      <div class="form-field full"><label>问题标题</label><input id="problemTitleInput" value="${escapeHtml(problem?.title || "")}" placeholder="例如：客户报价后超过 5 天未回复"></div>
+      <div class="form-field"><label>问题类型</label><select id="problemCategoryInput">${categories.map((category) => `<option${selected(category, problem?.category || "其它")}>${escapeHtml(category)}</option>`).join("")}</select></div>
+      <div class="form-field"><label>严重程度</label><select id="problemSeverityInput"><option value="medium"${selected("medium", problem?.severity || "medium")}>中</option><option value="high"${selected("high", problem?.severity)}>高</option><option value="low"${selected("low", problem?.severity)}>低</option></select></div>
+      <div class="form-field"><label>状态</label><select id="problemStatusInput"><option value="open"${selected("open", problem?.status || "open")}>未解决</option><option value="solving"${selected("solving", problem?.status)}>解决中</option><option value="resolved"${selected("resolved", problem?.status)}>已解决</option></select></div>
+      <div class="form-field"><label>关联客户</label><input id="problemCustomerInput" value="${escapeHtml(problem?.relatedCustomer || "")}" placeholder="可选：客户或线索名称"></div>
+      <div class="form-field"><label>截止时间</label><input id="problemDueInput" value="${escapeHtml(problem?.dueAt || "")}" placeholder="例如：今天 18:00"></div>
+      <div class="form-field full"><label>问题原因</label><textarea id="problemRootInput" placeholder="描述问题产生原因">${escapeHtml(problem?.rootCause || "")}</textarea></div>
+      <div class="form-field full problem-solution-field"><label>解决方案</label><textarea id="problemSolutionInput" placeholder="写清楚解决路径、标准和注意事项">${escapeHtml(problem?.solution || "")}</textarea></div>
+      <div class="form-field full"><label>下一动作</label><input id="problemNextInput" value="${escapeHtml(problem?.nextAction || "")}" placeholder="例如：今天发送补充资料，明天企微确认"></div>
     </div>
-  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveProblemButton">保存问题</button>`);
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveProblemButton">${problem ? "保存修改" : "保存问题"}</button>`, { closeOnBackdrop: false });
   qs("#saveProblemButton")?.addEventListener("click", () => void saveProblem());
   qs<HTMLInputElement>("#problemTitleInput")?.focus();
 }
@@ -11745,28 +14663,40 @@ async function saveProblem() {
     toast("请填写问题标题", "error");
     return;
   }
-  const result = await api<{ problem: ProblemItem }>("/api/problems", {
-    method: "POST",
-    body: JSON.stringify({
-      title,
-      category: qs<HTMLSelectElement>("#problemCategoryInput")?.value || "客户问题",
-      severity: qs<HTMLSelectElement>("#problemSeverityInput")?.value || "medium",
-      relatedCustomer: qs<HTMLInputElement>("#problemCustomerInput")?.value.trim() || "",
-      rootCause: qs<HTMLTextAreaElement>("#problemRootInput")?.value.trim() || "",
-      solution: qs<HTMLTextAreaElement>("#problemSolutionInput")?.value.trim() || "",
-      nextAction: qs<HTMLInputElement>("#problemNextInput")?.value.trim() || "",
-      dueAt: qs<HTMLInputElement>("#problemDueInput")?.value.trim() || ""
-    })
-  });
-  state.problems.unshift(result.problem);
-  state.selectedProblemId = result.problem.id;
-  renderProblems(state.problems);
-  closeModal();
-  toast("问题已新增");
+  const button = qs<HTMLButtonElement>("#saveProblemButton");
+  const body = {
+    title,
+    category: qs<HTMLSelectElement>("#problemCategoryInput")?.value || "其它",
+    severity: qs<HTMLSelectElement>("#problemSeverityInput")?.value || "medium",
+    status: qs<HTMLSelectElement>("#problemStatusInput")?.value || "open",
+    relatedCustomer: qs<HTMLInputElement>("#problemCustomerInput")?.value.trim() || "",
+    rootCause: qs<HTMLTextAreaElement>("#problemRootInput")?.value.trim() || "",
+    solution: qs<HTMLTextAreaElement>("#problemSolutionInput")?.value.trim() || "",
+    nextAction: qs<HTMLInputElement>("#problemNextInput")?.value.trim() || "",
+    dueAt: qs<HTMLInputElement>("#problemDueInput")?.value.trim() || ""
+  };
+  try {
+    setButtonPending(button, true, editingProblemId ? "保存修改" : "保存问题", "保存中");
+    const result = await api<{ problem: ProblemItem }>(editingProblemId ? `/api/problems/${encodeURIComponent(editingProblemId)}` : "/api/problems", {
+      method: editingProblemId ? "PATCH" : "POST",
+      body: JSON.stringify(body)
+    });
+    const index = state.problems.findIndex((item) => item.id === result.problem.id);
+    if (index >= 0) state.problems[index] = result.problem;
+    else state.problems.unshift(result.problem);
+    state.selectedProblemId = result.problem.id;
+    renderProblems(state.problems);
+    closeModal();
+    toast(editingProblemId ? "问题已更新" : "问题已新增");
+    editingProblemId = "";
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "问题保存失败", "error");
+    setButtonPending(button, false, editingProblemId ? "保存修改" : "保存问题", "保存中");
+  }
 }
 
-async function advanceProblemStatus() {
-  const problem = state.problems.find((item) => item.id === state.selectedProblemId);
+async function advanceProblemStatus(problemId = state.selectedProblemId || "") {
+  const problem = state.problems.find((item) => item.id === problemId);
   if (!problem) return;
   const nextStatus = problem.status === "open" ? "solving" : problem.status === "solving" ? "resolved" : "open";
   const result = await api<{ problem: ProblemItem }>(`/api/problems/${problem.id}/status`, {
@@ -11776,6 +14706,29 @@ async function advanceProblemStatus() {
   Object.assign(problem, result.problem);
   renderProblems(state.problems);
   toast(`问题状态已更新：${problemStatusText(problem.status)}`);
+}
+
+async function deleteSelectedProblem(problemId = state.selectedProblemId || "") {
+  const problem = state.problems.find((item) => item.id === problemId);
+  if (!problem || !await confirmAction({
+    title: "删除问题",
+    message: `确定删除“${problem.title}”吗？`,
+    consequences: ["该问题记录会从团队问题清单中永久移除", "此操作无法撤销"],
+    detail: problem.category,
+    detailLabel: "问题分类",
+    confirmLabel: "删除问题",
+    tone: "danger"
+  })) return;
+  try {
+    await api(`/api/problems/${encodeURIComponent(problem.id)}`, { method: "DELETE" });
+    state.problems = state.problems.filter((item) => item.id !== problem.id);
+    state.selectedProblemId = null;
+    closeProblemDrawer();
+    renderProblems(state.problems);
+    toast("问题已删除");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "问题删除失败", "error");
+  }
 }
 
 function openMemoModal() {
@@ -11915,7 +14868,12 @@ async function deleteSelectedMemo() {
     return;
   }
   if (memo.deletedAt) {
-    if (!window.confirm(`确认永久删除「${memo.title}」？此操作不可恢复。`)) return;
+    if (!await confirmAction({
+      title: "永久删除备忘",
+      message: `将永久删除「${memo.title}」。`,
+      consequences: ["备忘内容和标签会被彻底移除", "删除后无法从“已删除”中恢复"],
+      confirmLabel: "永久删除"
+    })) return;
     memoDeleteBusy = true;
     qs<HTMLButtonElement>("#memoDeleteButton")?.setAttribute("disabled", "true");
     try {
@@ -11932,7 +14890,13 @@ async function deleteSelectedMemo() {
     }
     return;
   }
-  if (!window.confirm(`确认删除「${memo.title}」？删除后可在“已删除”中恢复。`)) return;
+  if (!await confirmAction({
+    title: "移入已删除",
+    message: `将把「${memo.title}」移入“已删除”。`,
+    consequences: ["备忘会从当前列表移除", "之后仍可在“已删除”中恢复"],
+    confirmLabel: "移入已删除",
+    tone: "warning"
+  })) return;
   memoDeleteBusy = true;
   qs<HTMLButtonElement>("#memoDeleteButton")?.setAttribute("disabled", "true");
   try {
@@ -12117,6 +15081,8 @@ function defaultTradeDocument(type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" 
     QUOTATION: "新建报价单 Quotation", COO: "新建原产地证 Certificate of Origin",
     SHIPPING: "新建装运通知 Shipping Advice"
   };
+  const profile = state.documentDefaultProfile;
+  const validityDate = profile?.validityDays ? new Date(Date.now() + profile.validityDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) : "";
   const baseDoc = {
     id: "__new__",
     customerId: "",
@@ -12127,22 +15093,31 @@ function defaultTradeDocument(type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" 
     buyer: "",
     buyerAddress: "",
     buyerContact: "",
-    seller: "",
-    sellerAddress: "",
-    currency: "USD",
-    incoterm: "FOB",
-    paymentTerm: "",
-    shippingMethod: "Sea freight",
-    portLoading: "",
+    seller: profile?.seller || "",
+    sellerAddress: profile?.sellerAddress || "",
+    sellerContact: profile?.sellerContact || "",
+    sellerPhone: profile?.sellerPhone || "",
+    sellerEmail: profile?.sellerEmail || "",
+    sellerWebsite: profile?.sellerWebsite || "",
+    sellerTaxNo: profile?.sellerTaxNo || "",
+    currency: profile?.currency || "USD",
+    incoterm: profile?.incoterm || "FOB",
+    paymentTerm: profile?.paymentTerm || "",
+    shippingMethod: profile?.shippingMethod || "Sea freight",
+    portLoading: profile?.portLoading || "",
     portDischarge: "",
-    validityDate: "",
-    bankInfo: "",
-    notes: "",
-    language: "EN" as const,
-    templateStyle: "indigo" as const,
+    validityDate,
+    bankInfo: profile?.bankInfo || "",
+    notes: profile?.notes || "",
+    language: profile?.language || "EN" as const,
+    templateStyle: profile?.templateStyle || "indigo" as const,
     status: "draft" as const,
     audits: [] as TradeDocumentAudit[],
     sendRecords: [] as TradeDocumentSendRecord[],
+    letterheadId: profile?.letterheadId || "",
+    stampId: profile?.stampId || "",
+    signatureId: profile?.signatureId || "",
+    includeProductImages: profile?.includeProductImages || false,
     updatedAt: new Date().toISOString(),
     items: [
       { id: "new_item_1", product: "", model: "", hsCode: "", quantity: 1, unit: "PCS", unitPrice: 0, originCountry: "", weightKg: 0, packageCount: 0 }
@@ -12170,7 +15145,7 @@ function renderTradeDocuments(documents: TradeDocument[]) {
   const active = documents.find((document) => document.id === state.selectedDocumentId) || documents[0] || defaultTradeDocument();
   state.selectedDocumentId = active.id;
   list.innerHTML = `
-    <div class="section-title"><h2>单据列表</h2><span>${documents.length} 份</span></div>
+    <div class="section-title"><h2>最近单据</h2><span>最多显示 9 份</span></div>
     ${documents.length ? documents.map((document) => `
       <article class="doc-list-card ${document.id === active.id ? "active" : ""}" data-document-id="${escapeHtml(document.id)}">
         <b>${escapeHtml(document.title)}</b>
@@ -12188,6 +15163,679 @@ function renderTradeDocuments(documents: TradeDocument[]) {
   fillDocumentEditor(active);
 }
 
+function documentTypeLabel(type: string) {
+  return ({ PI: "形式发票", CI: "商业发票", CUSTOMS: "报关资料", PL: "装箱单", CONTRACT: "销售合同", QUOTATION: "报价单", COO: "原产地证", SHIPPING: "装运通知" } as Record<string, string>)[type] || type;
+}
+
+async function uploadDocumentImage(file: File, kind: "letterhead-logo" | "stamp" | "signature" | "product") {
+  if (!["image/png", "image/jpeg"].includes(file.type)) throw new Error("只支持 PNG 或 JPEG 图片");
+  if (file.size > 2 * 1024 * 1024) throw new Error("图片不能超过 2 MB");
+  const image = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.readAsDataURL(file);
+  });
+  return api<{ imageUrl: string }>("/api/document-assets/upload", {
+    method: "POST",
+    body: JSON.stringify({ image, mime: file.type, kind })
+  });
+}
+
+function documentAssetPlacementValue(placement?: DocumentAssetPlacement): DocumentAssetPlacement {
+  return {
+    horizontal: placement?.horizontal || "template",
+    vertical: placement?.vertical || "template",
+    offsetX: Math.max(-200, Math.min(200, Number(placement?.offsetX) || 0)),
+    offsetY: Math.max(-200, Math.min(200, Number(placement?.offsetY) || 0)),
+    scale: Math.max(50, Math.min(150, Number(placement?.scale) || 100))
+  };
+}
+
+function documentAssetPlacementFields(prefix: string, title: string, placement?: DocumentAssetPlacement, imageUrl = "") {
+  const value = documentAssetPlacementValue(placement);
+  const selectedKey = value.horizontal === "template" || value.vertical === "template" ? "template" : `${value.horizontal}-${value.vertical}`;
+  const positions = [
+    ["left-top", "左上"], ["center-top", "上中"], ["right-top", "右上"],
+    ["left-middle", "左中"], ["center-middle", "居中"], ["right-middle", "右中"],
+    ["left-bottom", "左下"], ["center-bottom", "下中"], ["right-bottom", "右下"]
+  ];
+  return `<div class="document-asset-placement" data-placement-root="${prefix}">
+    <div class="document-asset-placement-head"><div><b>${escapeHtml(title)}位置与大小</b><small>默认跟随单据模板安全区域</small></div><button type="button" class="btn" data-placement-reset="${prefix}">恢复模板默认</button></div>
+    <div class="document-asset-placement-body">
+      <div class="document-asset-placement-preview" data-placement-preview="${prefix}"><span>模板放置区</span>${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="" data-placement-preview-image="${prefix}">` : `<i>未上传图片</i>`}</div>
+      <div class="document-asset-placement-controls">
+        <input type="hidden" id="${prefix}PlacementHorizontal" value="${escapeHtml(value.horizontal)}">
+        <input type="hidden" id="${prefix}PlacementVertical" value="${escapeHtml(value.vertical)}">
+        <div class="document-placement-grid" role="group" aria-label="选择图片位置">${positions.map(([key, label]) => `<button type="button" class="document-placement-cell ${selectedKey === key ? "active" : ""}" data-placement-position="${prefix}" data-placement-key="${key}" title="${label}">${label}</button>`).join("")}</div>
+        <button type="button" class="document-placement-template ${selectedKey === "template" ? "active" : ""}" data-placement-template="${prefix}">跟随模板</button>
+        <div class="document-placement-numbers"><label><span>水平微调 (px)</span><input id="${prefix}PlacementOffsetX" type="number" min="-200" max="200" step="1" value="${value.offsetX}"></label><label><span>垂直微调 (px)</span><input id="${prefix}PlacementOffsetY" type="number" min="-200" max="200" step="1" value="${value.offsetY}"></label></div>
+        <label class="document-placement-scale"><span>缩放 <b data-placement-scale-value="${prefix}">${value.scale}%</b></span><input id="${prefix}PlacementScale" type="range" min="50" max="150" step="5" value="${value.scale}"></label>
+      </div>
+    </div>
+  </div>`;
+}
+
+function readDocumentAssetPlacement(prefix: string): DocumentAssetPlacement {
+  const horizontal = qs<HTMLInputElement>(`#${prefix}PlacementHorizontal`)?.value as DocumentAssetPlacement["horizontal"] || "template";
+  const vertical = qs<HTMLInputElement>(`#${prefix}PlacementVertical`)?.value as DocumentAssetPlacement["vertical"] || "template";
+  return documentAssetPlacementValue({
+    horizontal,
+    vertical,
+    offsetX: Number(qs<HTMLInputElement>(`#${prefix}PlacementOffsetX`)?.value || 0),
+    offsetY: Number(qs<HTMLInputElement>(`#${prefix}PlacementOffsetY`)?.value || 0),
+    scale: Number(qs<HTMLInputElement>(`#${prefix}PlacementScale`)?.value || 100)
+  });
+}
+
+function bindDocumentAssetPlacement(prefix: string, fileInputSelector: string) {
+  const update = () => {
+    const value = readDocumentAssetPlacement(prefix);
+    const image = qs<HTMLImageElement>(`[data-placement-preview-image="${prefix}"]`);
+    const scale = qs<HTMLElement>(`[data-placement-scale-value="${prefix}"]`);
+    if (scale) scale.textContent = `${value.scale}%`;
+    if (image) {
+      image.style.justifySelf = value.horizontal === "right" ? "end" : value.horizontal === "center" || value.horizontal === "template" ? "center" : "start";
+      image.style.alignSelf = value.vertical === "bottom" ? "end" : value.vertical === "middle" || value.vertical === "template" ? "center" : "start";
+      image.style.transform = `translate(${value.offsetX / 2}px, ${value.offsetY / 2}px) scale(${value.scale / 100})`;
+      image.style.transformOrigin = `${value.horizontal === "right" ? "right" : value.horizontal === "center" ? "center" : "left"} ${value.vertical === "bottom" ? "bottom" : value.vertical === "middle" ? "center" : "top"}`;
+    }
+  };
+  qsa<HTMLButtonElement>(`[data-placement-position="${prefix}"]`).forEach((button) => button.addEventListener("click", () => {
+    const [horizontal, vertical] = String(button.dataset.placementKey || "left-top").split("-");
+    const h = qs<HTMLInputElement>(`#${prefix}PlacementHorizontal`);
+    const v = qs<HTMLInputElement>(`#${prefix}PlacementVertical`);
+    if (h) h.value = horizontal;
+    if (v) v.value = vertical;
+    qsa<HTMLButtonElement>(`[data-placement-position="${prefix}"], [data-placement-template="${prefix}"]`).forEach((item) => item.classList.remove("active"));
+    button.classList.add("active");
+    update();
+  }));
+  qsa<HTMLButtonElement>(`[data-placement-template="${prefix}"]`).forEach((button) => button.addEventListener("click", () => {
+    const h = qs<HTMLInputElement>(`#${prefix}PlacementHorizontal`);
+    const v = qs<HTMLInputElement>(`#${prefix}PlacementVertical`);
+    if (h) h.value = "template";
+    if (v) v.value = "template";
+    qsa<HTMLButtonElement>(`[data-placement-position="${prefix}"], [data-placement-template="${prefix}"]`).forEach((item) => item.classList.remove("active"));
+    button.classList.add("active");
+    update();
+  }));
+  qs<HTMLButtonElement>(`[data-placement-reset="${prefix}"]`)?.addEventListener("click", () => {
+    const h = qs<HTMLInputElement>(`#${prefix}PlacementHorizontal`);
+    const v = qs<HTMLInputElement>(`#${prefix}PlacementVertical`);
+    const x = qs<HTMLInputElement>(`#${prefix}PlacementOffsetX`);
+    const y = qs<HTMLInputElement>(`#${prefix}PlacementOffsetY`);
+    const scale = qs<HTMLInputElement>(`#${prefix}PlacementScale`);
+    if (h) h.value = "template";
+    if (v) v.value = "template";
+    if (x) x.value = "0";
+    if (y) y.value = "0";
+    if (scale) scale.value = "100";
+    qsa<HTMLButtonElement>(`[data-placement-position="${prefix}"], [data-placement-template="${prefix}"]`).forEach((item) => item.classList.remove("active"));
+    qs<HTMLButtonElement>(`[data-placement-template="${prefix}"]`)?.classList.add("active");
+    update();
+  });
+  qsa<HTMLInputElement>(`#${prefix}PlacementOffsetX, #${prefix}PlacementOffsetY, #${prefix}PlacementScale`).forEach((input) => input.addEventListener("input", update));
+  qs<HTMLInputElement>(fileInputSelector)?.addEventListener("change", (event) => {
+    const file = (event.currentTarget as HTMLInputElement).files?.[0];
+    const preview = qs<HTMLElement>(`[data-placement-preview="${prefix}"]`);
+    if (!file || !preview) return;
+    let image = qs<HTMLImageElement>(`[data-placement-preview-image="${prefix}"]`);
+    if (!image) {
+      image = document.createElement("img");
+      image.dataset.placementPreviewImage = prefix;
+      image.alt = "";
+      preview.querySelector("i")?.remove();
+      preview.append(image);
+    }
+    const reader = new FileReader();
+    reader.onload = () => { if (image) { image.src = String(reader.result || ""); update(); } };
+    reader.readAsDataURL(file);
+  });
+  update();
+}
+
+function documentAssetList(assets: DocumentAssetsResponse) {
+  return `<div class="document-asset-columns">
+    <section><div class="section-title"><h3>抬头</h3><button class="btn" type="button" id="documentAssetAddLetterhead">新增抬头</button></div><div class="document-asset-list">${assets.letterheads.length ? assets.letterheads.map((item) => `<article><div>${item.logoUrl ? `<img src="${escapeHtml(item.logoUrl)}" alt="">` : `<span class="document-asset-placeholder">抬头</span>`}<p><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.companyName)}${item.isDefault ? " · 默认" : ""}${item.enabled ? "" : " · 已停用"}</small></p></div><button class="btn" data-edit-letterhead="${escapeHtml(item.id)}">编辑</button></article>`).join("") : `<p class="empty-cell">尚未维护抬头</p>`}</div></section>
+    <section><div class="section-title"><h3>印章</h3><button class="btn" type="button" id="documentAssetAddStamp">新增印章</button></div><div class="document-asset-list">${assets.stamps.length ? assets.stamps.map((item) => `<article><div><img src="${escapeHtml(item.imageUrl)}" alt=""><p><b>${escapeHtml(item.name)}</b><small>${item.isDefault ? "默认印章" : "可选印章"}${item.enabled ? "" : " · 已停用"}</small></p></div><button class="btn" data-edit-stamp="${escapeHtml(item.id)}">编辑</button></article>`).join("") : `<p class="empty-cell">尚未维护印章</p>`}</div></section>
+    <section><div class="section-title"><h3>签名</h3><button class="btn" type="button" id="documentAssetAddSignature">新增签名</button></div><div class="document-asset-list">${assets.signatures.length ? assets.signatures.map((item) => `<article><div><img src="${escapeHtml(item.imageUrl)}" alt=""><p><b>${escapeHtml(item.name)}</b><small>${escapeHtml([item.signerName, item.signerTitle].filter(Boolean).join(" · "))}${item.isDefault ? " · 默认" : ""}${item.enabled ? "" : " · 已停用"}</small></p></div><button class="btn" data-edit-signature="${escapeHtml(item.id)}">编辑</button></article>`).join("") : `<p class="empty-cell">尚未维护签名</p>`}</div></section>
+  </div>`;
+}
+
+function openDocumentAssetManager(assets: DocumentAssetsResponse) {
+  openModal("单据品牌资产", documentAssetList(assets), `<button class="btn" data-modal-close>关闭</button>`);
+  const refresh = async () => {
+    const next = await api<DocumentAssetsResponse>("/api/document-assets");
+    state.documentAssets = next;
+    openDocumentAssetManager(next);
+  };
+  const openLetterhead = (asset?: DocumentLetterhead) => {
+    openModal(asset ? "编辑抬头" : "新增抬头", `<div class="form-grid document-asset-form">
+      <div class="form-field"><label>抬头名称</label><input id="assetLetterheadName" value="${escapeHtml(asset?.name || "")}" placeholder="如：香港公司抬头"></div>
+      <div class="form-field"><label>公司英文全称</label><input id="assetLetterheadCompany" value="${escapeHtml(asset?.companyName || "")}"></div>
+      <div class="form-field full"><label>英文地址</label><textarea id="assetLetterheadAddress">${escapeHtml(asset?.address || "")}</textarea></div>
+      <div class="form-field"><label>电话</label><input id="assetLetterheadPhone" value="${escapeHtml(asset?.phone || "")}"></div>
+      <div class="form-field"><label>邮箱</label><input id="assetLetterheadEmail" value="${escapeHtml(asset?.email || "")}"></div>
+      <div class="form-field"><label>网站</label><input id="assetLetterheadWebsite" value="${escapeHtml(asset?.website || "")}"></div>
+      <div class="form-field"><label>Logo</label><input id="assetLetterheadLogo" type="file" accept="image/png,image/jpeg"><input id="assetLetterheadLogoUrl" type="hidden" value="${escapeHtml(asset?.logoUrl || "")}"></div>
+      <div class="form-field full">${documentAssetPlacementFields("assetLetterhead", "Logo ", asset?.logoPlacement, asset?.logoUrl)}</div>
+      <div class="form-field full"><label>银行资料</label><textarea id="assetLetterheadBank">${escapeHtml(asset?.bankInfo || "")}</textarea></div>
+      <label class="check-row"><input id="assetLetterheadDefault" type="checkbox" ${asset?.isDefault ? "checked" : ""}>设为默认抬头</label>
+      <label class="check-row"><input id="assetLetterheadEnabled" type="checkbox" ${asset?.enabled === false ? "" : "checked"}>启用</label>
+    </div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDocumentLetterhead">保存抬头</button>`);
+    qs<HTMLElement>("#appModal .modal")?.classList.add("document-asset-editor-modal");
+    qs<HTMLButtonElement>("#saveDocumentLetterhead")?.addEventListener("click", async (event) => {
+      const button = event.currentTarget as HTMLButtonElement;
+      setButtonPending(button, true, "保存抬头", "保存中");
+      try {
+        const file = qs<HTMLInputElement>("#assetLetterheadLogo")?.files?.[0];
+        const logoUrl = file ? (await uploadDocumentImage(file, "letterhead-logo")).imageUrl : qs<HTMLInputElement>("#assetLetterheadLogoUrl")?.value || "";
+        await api("/api/document-assets/letterheads", { method: "POST", body: JSON.stringify({
+          id: asset?.id, name: qs<HTMLInputElement>("#assetLetterheadName")?.value.trim(), companyName: qs<HTMLInputElement>("#assetLetterheadCompany")?.value.trim(),
+          address: qs<HTMLTextAreaElement>("#assetLetterheadAddress")?.value.trim(), phone: qs<HTMLInputElement>("#assetLetterheadPhone")?.value.trim(), email: qs<HTMLInputElement>("#assetLetterheadEmail")?.value.trim(), website: qs<HTMLInputElement>("#assetLetterheadWebsite")?.value.trim(), bankInfo: qs<HTMLTextAreaElement>("#assetLetterheadBank")?.value.trim(), logoUrl, logoPlacement: readDocumentAssetPlacement("assetLetterhead"),
+          isDefault: Boolean(qs<HTMLInputElement>("#assetLetterheadDefault")?.checked), enabled: Boolean(qs<HTMLInputElement>("#assetLetterheadEnabled")?.checked)
+        }) });
+        await refresh();
+      } catch (error) { toast(error instanceof Error ? error.message : "抬头保存失败", "error"); setButtonPending(button, false, "保存抬头", "保存中"); }
+    });
+    bindDocumentAssetPlacement("assetLetterhead", "#assetLetterheadLogo");
+  };
+  const openStamp = (asset?: DocumentStamp) => {
+    openModal(asset ? "编辑印章" : "新增印章", `<div class="form-grid document-asset-form"><div class="form-field"><label>印章名称</label><input id="assetStampName" value="${escapeHtml(asset?.name || "")}" placeholder="如：英文合同章"></div><div class="form-field"><label>透明 PNG 印章</label><input id="assetStampImage" type="file" accept="image/png,image/jpeg"><input id="assetStampImageUrl" type="hidden" value="${escapeHtml(asset?.imageUrl || "")}"></div><div class="form-field full">${documentAssetPlacementFields("assetStamp", "公章 ", asset?.placement, asset?.imageUrl)}</div><label class="check-row"><input id="assetStampDefault" type="checkbox" ${asset?.isDefault ? "checked" : ""}>设为默认印章</label><label class="check-row"><input id="assetStampEnabled" type="checkbox" ${asset?.enabled === false ? "" : "checked"}>启用</label></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDocumentStamp">保存印章</button>`);
+    qs<HTMLElement>("#appModal .modal")?.classList.add("document-asset-editor-modal");
+    qs<HTMLButtonElement>("#saveDocumentStamp")?.addEventListener("click", async (event) => {
+      const button = event.currentTarget as HTMLButtonElement;
+      setButtonPending(button, true, "保存印章", "保存中");
+      try {
+        const file = qs<HTMLInputElement>("#assetStampImage")?.files?.[0];
+        const imageUrl = file ? (await uploadDocumentImage(file, "stamp")).imageUrl : qs<HTMLInputElement>("#assetStampImageUrl")?.value || "";
+        await api("/api/document-assets/stamps", { method: "POST", body: JSON.stringify({ id: asset?.id, name: qs<HTMLInputElement>("#assetStampName")?.value.trim(), imageUrl, placement: readDocumentAssetPlacement("assetStamp"), isDefault: Boolean(qs<HTMLInputElement>("#assetStampDefault")?.checked), enabled: Boolean(qs<HTMLInputElement>("#assetStampEnabled")?.checked) }) });
+        await refresh();
+      } catch (error) { toast(error instanceof Error ? error.message : "印章保存失败", "error"); setButtonPending(button, false, "保存印章", "保存中"); }
+    });
+    bindDocumentAssetPlacement("assetStamp", "#assetStampImage");
+  };
+  const openSignature = (asset?: DocumentSignature) => {
+    openModal(asset ? "编辑签名" : "新增签名", `<div class="form-grid document-asset-form"><div class="form-field"><label>资产名称</label><input id="assetSignatureName" value="${escapeHtml(asset?.name || "")}" placeholder="如：销售总监英文签名"></div><div class="form-field"><label>签署人</label><input id="assetSignatureSigner" value="${escapeHtml(asset?.signerName || "")}"></div><div class="form-field"><label>职务</label><input id="assetSignatureTitle" value="${escapeHtml(asset?.signerTitle || "")}"></div><div class="form-field"><label>透明 PNG / JPEG</label><input id="assetSignatureImage" type="file" accept="image/png,image/jpeg"><input id="assetSignatureImageUrl" type="hidden" value="${escapeHtml(asset?.imageUrl || "")}"></div><label class="check-row"><input id="assetSignatureDefault" type="checkbox" ${asset?.isDefault ? "checked" : ""}>设为默认签名</label><label class="check-row"><input id="assetSignatureEnabled" type="checkbox" ${asset?.enabled === false ? "" : "checked"}>启用</label></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDocumentSignature">保存签名</button>`);
+    qs<HTMLButtonElement>("#saveDocumentSignature")?.addEventListener("click", async (event) => {
+      const button = event.currentTarget as HTMLButtonElement;
+      setButtonPending(button, true, "保存签名", "保存中");
+      try {
+        const file = qs<HTMLInputElement>("#assetSignatureImage")?.files?.[0];
+        const imageUrl = file ? (await uploadDocumentImage(file, "signature")).imageUrl : qs<HTMLInputElement>("#assetSignatureImageUrl")?.value || "";
+        await api("/api/document-assets/signatures", { method: "POST", body: JSON.stringify({ id: asset?.id, name: qs<HTMLInputElement>("#assetSignatureName")?.value.trim(), signerName: qs<HTMLInputElement>("#assetSignatureSigner")?.value.trim(), signerTitle: qs<HTMLInputElement>("#assetSignatureTitle")?.value.trim(), imageUrl, isDefault: Boolean(qs<HTMLInputElement>("#assetSignatureDefault")?.checked), enabled: Boolean(qs<HTMLInputElement>("#assetSignatureEnabled")?.checked) }) });
+        await refresh();
+      } catch (error) { toast(error instanceof Error ? error.message : "签名保存失败", "error"); setButtonPending(button, false, "保存签名", "保存中"); }
+    });
+  };
+  qs<HTMLButtonElement>("#documentAssetAddLetterhead")?.addEventListener("click", () => openLetterhead());
+  qs<HTMLButtonElement>("#documentAssetAddStamp")?.addEventListener("click", () => openStamp());
+  qs<HTMLButtonElement>("#documentAssetAddSignature")?.addEventListener("click", () => openSignature());
+  qsa<HTMLButtonElement>("[data-edit-letterhead]").forEach((button) => button.addEventListener("click", () => openLetterhead(assets.letterheads.find((item) => item.id === button.dataset.editLetterhead))));
+  qsa<HTMLButtonElement>("[data-edit-stamp]").forEach((button) => button.addEventListener("click", () => openStamp(assets.stamps.find((item) => item.id === button.dataset.editStamp))));
+  qsa<HTMLButtonElement>("[data-edit-signature]").forEach((button) => button.addEventListener("click", () => openSignature(assets.signatures.find((item) => item.id === button.dataset.editSignature))));
+}
+
+
+function documentConversionTargets(type: TradeDocument["type"]) {
+  const map: Record<TradeDocument["type"], TradeDocument["type"][]> = {
+    QUOTATION: ["PI", "CONTRACT"],
+    PI: ["CI", "PL", "CONTRACT", "CUSTOMS"],
+    CI: ["PL", "CUSTOMS", "SHIPPING"],
+    CONTRACT: ["PI", "CI"],
+    PL: ["CI", "CUSTOMS"],
+    CUSTOMS: ["CI", "PL"],
+    COO: ["CUSTOMS"],
+    SHIPPING: ["CI", "CUSTOMS"]
+  };
+  return map[type] || [];
+}
+
+const tradeDocumentImportFieldLabels: Record<string, string> = {
+  type: "单据类型", title: "单据标题", number: "单据编号", issueDate: "签发日期", buyer: "买方公司", buyerAddress: "买方地址", buyerContact: "买方联系人", seller: "卖方公司", sellerAddress: "卖方地址", currency: "币种", incoterm: "贸易条款", paymentTerm: "付款条款", shippingMethod: "运输方式", portLoading: "装运港", portDischarge: "目的港", validityDate: "有效期", bankInfo: "银行信息", notes: "备注"
+};
+
+function tradeDocumentImportPercent(value: number) {
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+}
+
+function importDocumentFieldValue(id: string) {
+  return qs<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`#${id}`)?.value || "";
+}
+
+function importDocumentDraftFromReview(analysis: TradeDocumentImportAnalysis): TradeDocumentImportDraft {
+  const draft = structuredClone(analysis.extractedDocument);
+  draft.customerId = importDocumentFieldValue("tradeImportCustomer");
+  draft.dealId = importDocumentFieldValue("tradeImportDeal");
+  const mapping: Array<[keyof TradeDocumentImportDraft, string]> = [
+    ["type", "tradeImportType"], ["title", "tradeImportTitle"], ["number", "tradeImportNumber"], ["issueDate", "tradeImportIssueDate"], ["buyer", "tradeImportBuyer"], ["buyerAddress", "tradeImportBuyerAddress"], ["buyerContact", "tradeImportBuyerContact"], ["seller", "tradeImportSeller"], ["sellerAddress", "tradeImportSellerAddress"], ["currency", "tradeImportCurrency"], ["incoterm", "tradeImportIncoterm"], ["paymentTerm", "tradeImportPayment"], ["shippingMethod", "tradeImportShipping"], ["portLoading", "tradeImportPortLoading"], ["portDischarge", "tradeImportPortDischarge"], ["validityDate", "tradeImportValidity"], ["bankInfo", "tradeImportBank"], ["notes", "tradeImportNotes"]
+  ];
+  mapping.forEach(([field, id]) => { (draft as unknown as Record<string, unknown>)[field] = importDocumentFieldValue(id); });
+  draft.items = qsa<HTMLElement>("[data-trade-import-item]").map((row) => ({
+    id: row.dataset.tradeImportItem || `import_item_${Date.now()}`,
+    imageUrl: row.dataset.importImageUrl || "",
+    product: qs<HTMLInputElement>("[data-import-field='product']", row)?.value.trim() || "",
+    model: qs<HTMLInputElement>("[data-import-field='model']", row)?.value.trim() || "",
+    material: qs<HTMLInputElement>("[data-import-field='material']", row)?.value.trim() || "",
+    finish: qs<HTMLInputElement>("[data-import-field='finish']", row)?.value.trim() || "",
+    hsCode: qs<HTMLInputElement>("[data-import-field='hsCode']", row)?.value.trim() || "",
+    quantity: Number(qs<HTMLInputElement>("[data-import-field='quantity']", row)?.value || 0) || 0,
+    unit: qs<HTMLInputElement>("[data-import-field='unit']", row)?.value.trim() || "PCS",
+    unitPrice: Number(qs<HTMLInputElement>("[data-import-field='unitPrice']", row)?.value || 0) || 0,
+    originCountry: qs<HTMLInputElement>("[data-import-field='originCountry']", row)?.value.trim() || "",
+    weightKg: Number(qs<HTMLInputElement>("[data-import-field='weightKg']", row)?.value || 0) || 0,
+    packageCount: Math.round(Number(qs<HTMLInputElement>("[data-import-field='packageCount']", row)?.value || 0) || 0)
+  }));
+  return draft;
+}
+
+function renderTradeDocumentImportItem(item: TradeDocumentItem, index: number) {
+  const imageUrl = item.imageUrl || "";
+  return `<div class="trade-document-import-item" data-trade-import-item="${escapeHtml(item.id || `import_item_${index + 1}`)}" data-import-image-url="${escapeHtml(imageUrl)}">
+    <div class="trade-document-import-item-image">${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(item.product || `商品 ${index + 1}`)}">` : `<span>无图片</span>`}</div>
+    <label data-import-size="product"><span>品名</span><input data-import-field="product" value="${escapeHtml(item.product)}" placeholder="必须填写"></label>
+    <label><span>型号</span><input data-import-field="model" value="${escapeHtml(item.model)}"></label>
+    <label><span>材质 Material</span><input data-import-field="material" value="${escapeHtml(item.material || "")}"></label>
+    <label><span>后处理 Finish</span><input data-import-field="finish" value="${escapeHtml(item.finish || "")}"></label>
+    <label><span>HS Code</span><input data-import-field="hsCode" value="${escapeHtml(item.hsCode)}"></label>
+    <label data-import-size="small"><span>数量</span><input type="number" min="0" step="any" data-import-field="quantity" value="${String(item.quantity || 0)}"></label>
+    <label data-import-size="small"><span>单位</span><input data-import-field="unit" value="${escapeHtml(item.unit || "PCS")}"></label>
+    <label><span>单价</span><input type="number" min="0" step="any" data-import-field="unitPrice" value="${String(item.unitPrice || 0)}"></label>
+    <label data-import-size="origin"><span>原产地</span><input data-import-field="originCountry" value="${escapeHtml(item.originCountry)}"></label>
+    <label><span>重量 kg</span><input type="number" min="0" step="any" data-import-field="weightKg" value="${String(item.weightKg || 0)}"></label>
+    <label><span>箱数</span><input type="number" min="0" step="1" data-import-field="packageCount" value="${String(item.packageCount || 0)}"></label>
+    <button type="button" data-trade-import-remove title="删除明细">×</button>
+  </div>`;
+}
+
+function renderTradeDocumentImportReview(analysis: TradeDocumentImportAnalysis) {
+  const draft = analysis.extractedDocument;
+  const evidence = analysis.fieldEvidence || [];
+  const warningHtml = analysis.warnings.length
+    ? analysis.warnings.map((warning) => `<div class="trade-document-import-warning">${escapeHtml(warning)}</div>`).join("")
+    : `<div class="trade-document-import-warning" style="border-color:#3b8c75;color:#28634f;background:#effaf5;">暂未发现结构性问题，确认前仍请核对原文件。</div>`;
+  const field = (id: string, label: string, value: string, type = "text", cls = "") => `<label class="${cls}"><span>${label}</span><input id="${id}" type="${type}" value="${escapeHtml(value || "")}"></label>`;
+  const textarea = (id: string, label: string, value: string, cls = "") => `<label class="${cls}"><span>${label}</span><textarea id="${id}">${escapeHtml(value || "")}</textarea></label>`;
+  const evidenceHtml = evidence.length
+    ? evidence.map((item) => `<div><span>${escapeHtml(tradeDocumentImportFieldLabels[item.field] || item.field)}</span><span>${escapeHtml(item.value)}</span><span>${tradeDocumentImportPercent(item.confidence)}</span></div>`).join("")
+    : `<p>没有逐字段证据，建议按原文件逐项核对。</p>`;
+  const typeOptions = ["PI", "CI", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING", "CUSTOMS"].map((type) => `<option value="${type}" ${draft.type === type ? "selected" : ""}>${type} · ${documentTypeLabel(type)}</option>`).join("");
+  const customerOptions = `<option value="">暂不关联客户</option>${state.customers.map((customer) => `<option value="${escapeHtml(customer.id)}" ${customer.id === draft.customerId ? "selected" : ""}>${escapeHtml(customerDocumentName(customer))}</option>`).join("")}`;
+  const availableDeals = state.deals.filter((deal) => !draft.customerId || deal.customerId === draft.customerId);
+  const dealOptions = `<option value="">暂不关联商机</option>${availableDeals.map((deal) => `<option value="${escapeHtml(deal.id)}" ${deal.id === draft.dealId ? "selected" : ""}>${escapeHtml(deal.title)} · ${escapeHtml(deal.stage)}</option>`).join("")}`;
+  openModal("导入分析 · 审核后生成单据", `<div class="trade-document-import-shell">
+    <div class="trade-document-import-summary"><div><b>${escapeHtml(analysis.sourceFileName)}</b><span>识别类型：${escapeHtml(draft.type)} · ${documentTypeLabel(draft.type)} · ${(analysis.sourceSize / 1024).toFixed(1)} KB</span></div><div class="trade-document-import-score"><span>识别可信度 ${tradeDocumentImportPercent(analysis.confidence)}</span><i style="--score:${tradeDocumentImportPercent(analysis.confidence)}"></i></div><span class="doc-status-badge">${analysis.status === "confirmed" ? "已生成" : "待审核"}</span></div>
+    <div class="trade-document-import-layout">
+      <aside class="trade-document-import-source"><div><h3>原文件与风险</h3><p>左侧只展示本团队受控存储的原文摘要；右侧修改的是待生成草稿。</p></div><div class="trade-document-import-warnings">${warningHtml}</div><div class="trade-document-import-evidence"><h3 style="margin-bottom:6px;">识别证据</h3>${evidenceHtml}<details style="margin-top:10px;"><summary style="cursor:pointer;color:var(--muted);font-size:10px;">查看原文摘要</summary><pre style="max-height:180px;overflow:auto;white-space:pre-wrap;color:var(--muted);font:10px/1.5 ui-monospace,monospace;">${escapeHtml(analysis.sourcePreview.join("\n"))}</pre></details></div></aside>
+      <section class="trade-document-import-review"><div class="trade-document-import-review-head"><div><h3>确认导入内容</h3><p style="margin:4px 0 0;color:var(--muted);font-size:10px;">修改后确认，将创建一份草稿单据；不会自动审批或覆盖原单据。</p></div><button class="btn" id="tradeImportOpenSourceButton" type="button">打开原文件</button></div>
+        <div class="trade-document-import-form"><label class="wide"><span>关联客户</span><select id="tradeImportCustomer">${customerOptions}</select></label><label class="wide"><span>关联商机</span><select id="tradeImportDeal">${dealOptions}</select></label><label><span>单据类型</span><select id="tradeImportType">${typeOptions}</select></label>${field("tradeImportTitle", "单据标题", draft.title, "text", "wide")}${field("tradeImportNumber", "单据编号", draft.number)}${field("tradeImportIssueDate", "签发日期", draft.issueDate, "date")}${field("tradeImportBuyer", "买方公司", draft.buyer)}${field("tradeImportBuyerContact", "买方联系人", draft.buyerContact)}${field("tradeImportSeller", "卖方公司", draft.seller)}${field("tradeImportCurrency", "币种", draft.currency)}${field("tradeImportIncoterm", "贸易条款", draft.incoterm)}${field("tradeImportShipping", "运输方式", draft.shippingMethod)}${field("tradeImportPortLoading", "装运港", draft.portLoading)}${field("tradeImportPortDischarge", "目的港", draft.portDischarge)}${field("tradeImportValidity", "有效期", draft.validityDate, "date")}${textarea("tradeImportBuyerAddress", "买方地址", draft.buyerAddress, "wide")}${textarea("tradeImportSellerAddress", "卖方地址", draft.sellerAddress, "wide")}${textarea("tradeImportPayment", "付款条款", draft.paymentTerm, "wide")}${textarea("tradeImportBank", "银行信息", draft.bankInfo, "wide")}${textarea("tradeImportNotes", "备注", draft.notes, "full")}</div>
+        <div class="trade-document-import-items-head"><h3>商品明细</h3><button class="btn" type="button" id="tradeImportAddItem">增加明细</button></div><div class="trade-document-import-items" id="tradeImportItems">${draft.items.map(renderTradeDocumentImportItem).join("")}</div><div class="trade-document-import-total"><span>明细计算合计</span><b id="tradeImportTotal">${formatDocumentMoney(draft.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0), draft.currency)}</b>${analysis.declaredTotal === undefined ? "" : `<span>原单合计 ${formatDocumentMoney(analysis.declaredTotal, draft.currency)}</span>`}</div>
+      </section>
+    </div>
+  </div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="tradeImportConfirmButton">确认并生成草稿单据</button>`, { closeOnBackdrop: false });
+  qs<HTMLElement>("#appModal .modal")?.classList.add("trade-document-import-modal");
+  qs<HTMLSelectElement>("#tradeImportCustomer")?.addEventListener("change", (event) => {
+    const customerId = (event.currentTarget as HTMLSelectElement).value;
+    const dealSelect = qs<HTMLSelectElement>("#tradeImportDeal");
+    if (dealSelect) dealSelect.innerHTML = `<option value="">暂不关联商机</option>${state.deals.filter((deal) => !customerId || deal.customerId === customerId).map((deal) => `<option value="${escapeHtml(deal.id)}">${escapeHtml(deal.title)} · ${escapeHtml(deal.stage)}</option>`).join("")}`;
+  });
+  const total = () => {
+    const items = qsa<HTMLElement>("[data-trade-import-item]");
+    const amount = items.reduce((sum, row) => sum + (Number(qs<HTMLInputElement>("[data-import-field='quantity']", row)?.value || 0) || 0) * (Number(qs<HTMLInputElement>("[data-import-field='unitPrice']", row)?.value || 0) || 0), 0);
+    const target = qs<HTMLElement>("#tradeImportTotal");
+    if (target) target.textContent = formatDocumentMoney(amount, importDocumentFieldValue("tradeImportCurrency") || "USD");
+  };
+  qsa<HTMLInputElement>("#tradeImportItems input").forEach((input) => input.addEventListener("input", total));
+  qsa<HTMLButtonElement>("[data-trade-import-remove]").forEach((button) => button.addEventListener("click", () => { button.closest<HTMLElement>("[data-trade-import-item]")?.remove(); total(); }));
+  qs<HTMLButtonElement>("#tradeImportAddItem")?.addEventListener("click", () => {
+    const box = qs<HTMLElement>("#tradeImportItems");
+    if (!box) return;
+    box.insertAdjacentHTML("beforeend", renderTradeDocumentImportItem({ id: `import_item_${Date.now()}`, product: "", model: "", hsCode: "", quantity: 1, unit: "PCS", unitPrice: 0, originCountry: "", weightKg: 0, packageCount: 0 }, box.children.length));
+    const row = box.lastElementChild;
+    qsa<HTMLInputElement>("input", row as HTMLElement).forEach((input) => input.addEventListener("input", total));
+    qs<HTMLButtonElement>("[data-trade-import-remove]", row as HTMLElement)?.addEventListener("click", (event) => { (event.currentTarget as HTMLButtonElement).closest<HTMLElement>("[data-trade-import-item]")?.remove(); total(); });
+  });
+  qs<HTMLButtonElement>("#tradeImportOpenSourceButton")?.addEventListener("click", () => window.open(`/api/trade-document-imports/${encodeURIComponent(analysis.id)}/source`, "_blank", "noopener,noreferrer"));
+  qs<HTMLButtonElement>("#tradeImportConfirmButton")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const next = importDocumentDraftFromReview(analysis);
+    const requiredFields: Array<[string, string, string]> = [
+      ["tradeImportTitle", "单据标题", next.title], ["tradeImportNumber", "单据编号", next.number],
+      ["tradeImportSeller", "卖方公司", next.seller]
+    ];
+    qsa<HTMLElement>("#tradeImportTitle, #tradeImportNumber, #tradeImportIssueDate, #tradeImportSeller, [data-import-field='product']").forEach((field) => field.style.borderColor = "");
+    const missing = requiredFields.find(([, , value]) => !value.trim());
+    if (missing) {
+      const field = qs<HTMLInputElement>(`#${missing[0]}`);
+      if (field) { field.style.borderColor = "#c94b4b"; field.focus(); }
+      toast(`${missing[1]}不能为空`, "error");
+      return;
+    }
+    if (!next.items.length) { toast("请至少保留一条商品明细", "error"); return; }
+    const invalidItemIndex = next.items.findIndex((item) => !item.product.trim());
+    if (invalidItemIndex >= 0) {
+      const field = qsa<HTMLInputElement>("[data-import-field='product']")[invalidItemIndex];
+      if (field) { field.style.borderColor = "#c94b4b"; field.focus(); }
+      toast(`第 ${invalidItemIndex + 1} 条商品名称不能为空`, "error");
+      return;
+    }
+    setButtonPending(button, true, "确认并生成草稿单据", "生成中");
+    try {
+      const result = await api<{ analysis: TradeDocumentImportAnalysis; document: TradeDocument }>(`/api/trade-document-imports/${encodeURIComponent(analysis.id)}/confirm`, { method: "POST", body: JSON.stringify({ document: next }) });
+      closeModal();
+      state.tradeDocuments = [result.document, ...state.tradeDocuments].slice(0, 9);
+      state.selectedDocumentId = result.document.id;
+      renderTradeDocuments(state.tradeDocuments);
+      toast("已生成草稿单据，可继续预览、打印或生成其它单据", "success");
+    } catch (error) { toast(error instanceof Error ? error.message : "导入确认失败", "error"); setButtonPending(button, false, "确认并生成草稿单据", "生成中"); }
+  });
+}
+
+function openTradeDocumentImport() {
+  openModal("导入单据并分析", `<div class="trade-document-import-upload"><div style="padding:22px;border:1px dashed #b8d2cc;border-radius:8px;background:#f7fbfa;text-align:center;"><h3 style="margin:0;color:var(--ink);font-size:16px;">选择一份已有单据</h3><p style="margin:7px 0 14px;color:var(--muted);font-size:11px;line-height:1.6;">支持 XLSX、XLS、CSV 和可提取文本的 PDF，单文件不超过 8 MB。扫描图片 PDF 会明确提示，不会猜测内容。</p><input id="tradeDocumentImportFile" type="file" accept=".xlsx,.xls,.csv,.pdf,application/pdf,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><div id="tradeDocumentImportFileMeta" style="margin-top:10px;color:var(--muted);font-size:10px;"></div></div><div style="display:grid;gap:7px;margin-top:12px;"><b style="font-size:12px;color:var(--ink);">闭环</b><span style="font-size:10px;color:var(--muted);">上传分析 → 人工校正 → 生成单据草稿 → 现有预览 / 打印 / 转单</span></div><div id="tradeDocumentRecentImports" style="display:grid;gap:6px;margin-top:10px;"><span style="color:var(--muted);font-size:10px;">正在读取最近分析...</span></div></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="tradeDocumentAnalyzeButton" disabled>开始分析</button>`);
+  const input = qs<HTMLInputElement>("#tradeDocumentImportFile");
+  const button = qs<HTMLButtonElement>("#tradeDocumentAnalyzeButton");
+  const meta = qs<HTMLElement>("#tradeDocumentImportFileMeta");
+  input?.addEventListener("change", () => { const file = input.files?.[0]; if (!file) return; if (file.size > 8 * 1024 * 1024) { toast("单据文件不能超过 8 MB", "error"); input.value = ""; return; } if (meta) meta.textContent = `${file.name} · ${(file.size / 1024).toFixed(1)} KB`; if (button) button.disabled = false; });
+  button?.addEventListener("click", async () => {
+    const file = input?.files?.[0];
+    if (!file) return;
+    setButtonPending(button, true, "开始分析", "解析中");
+    try {
+      const response = await fetch("/api/trade-document-imports/analyze", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream", "x-file-name": encodeURIComponent(file.name), "x-file-type": file.type || "application/octet-stream", ...(cookieValue("gj_csrf") ? { "x-csrf-token": cookieValue("gj_csrf") } : {}) }, body: await file.arrayBuffer() });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.message || "单据分析失败");
+      closeModal();
+      renderTradeDocumentImportReview(body.analysis);
+    } catch (error) { toast(error instanceof Error ? error.message : "单据分析失败", "error"); setButtonPending(button, false, "开始分析", "解析中"); }
+  });
+  void api<{ analyses: TradeDocumentImportAnalysis[] }>("/api/trade-document-imports").then(({ analyses }) => {
+    const box = qs<HTMLElement>("#tradeDocumentRecentImports");
+    if (!box) return;
+    box.innerHTML = analyses.length ? `<b style="font-size:11px;color:var(--ink);">最近分析</b>${analyses.slice(0, 5).map((item) => `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;"><button class="btn" type="button" data-reopen-trade-import="${escapeHtml(item.id)}" style="display:flex;justify-content:space-between;min-width:0;"><span style="overflow:hidden;text-overflow:ellipsis;">${escapeHtml(item.sourceFileName)}</span><small>${item.status === "confirmed" ? "已生成" : "待审核"}</small></button>${item.status === "needs_review" ? `<button class="btn" type="button" data-delete-trade-import="${escapeHtml(item.id)}" title="删除待审核分析">删除</button>` : ""}</div>`).join("")}` : `<span style="color:var(--muted);font-size:10px;">暂无分析记录</span>`;
+    qsa<HTMLButtonElement>("[data-reopen-trade-import]", box).forEach((recentButton) => recentButton.addEventListener("click", async () => {
+      try {
+        const result = await api<{ analysis: TradeDocumentImportAnalysis }>(`/api/trade-document-imports/${encodeURIComponent(recentButton.dataset.reopenTradeImport || "")}`);
+        closeModal();
+        renderTradeDocumentImportReview(result.analysis);
+      } catch (error) { toast(error instanceof Error ? error.message : "分析记录读取失败", "error"); }
+    }));
+    qsa<HTMLButtonElement>("[data-delete-trade-import]", box).forEach((deleteButton) => deleteButton.addEventListener("click", async () => {
+      try {
+        await api(`/api/trade-document-imports/${encodeURIComponent(deleteButton.dataset.deleteTradeImport || "")}`, { method: "DELETE" });
+        deleteButton.closest("div")?.remove();
+        toast("待审核分析已删除", "success");
+      } catch (error) { toast(error instanceof Error ? error.message : "分析删除失败", "error"); }
+    }));
+  }).catch(() => { const box = qs<HTMLElement>("#tradeDocumentRecentImports"); if (box) box.innerHTML = `<span style="color:var(--muted);font-size:10px;">最近分析暂时无法读取</span>`; });
+}
+
+function openDocumentConversion() {
+  const source = activeTradeDocument();
+  if (!source.id || source.id === "__new__") {
+    toast("请先保存当前单据，再生成其它单据", "error");
+    return;
+  }
+  const targets = documentConversionTargets(source.type);
+  if (!targets.length) {
+    toast("当前单据没有可转换的类型", "error");
+    return;
+  }
+  openModal("由当前单据生成", `<div class="document-convert-modal"><p>将复制客户、商机、条款和商品明细，生成一份独立草稿。原单据不会被修改。</p><div class="document-convert-options">${targets.map((type) => `<button class="document-convert-option" type="button" data-document-convert-type="${type}"><b>${type}</b><span>${documentTypeLabel(type)}</span></button>`).join("")}</div></div>`, `<button class="btn" data-modal-close>取消</button>`);
+  qsa<HTMLButtonElement>("[data-document-convert-type]").forEach((button) => button.addEventListener("click", async () => {
+    const targetType = button.dataset.documentConvertType || "";
+    button.disabled = true;
+    try {
+      const result = await api<{ document: TradeDocument }>(`/api/trade-documents/${source.id}/convert`, { method: "POST", body: JSON.stringify({ targetType }) });
+      closeModal();
+      state.tradeDocuments = [result.document, ...state.tradeDocuments].slice(0, 9);
+      state.selectedDocumentId = result.document.id;
+      renderTradeDocuments(state.tradeDocuments);
+      toast(`${documentTypeLabel(targetType)}草稿已生成`);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "单据转换失败", "error");
+      button.disabled = false;
+    }
+  }));
+}
+
+function openProductPicker() {
+  const products = state.products || [];
+  if (!products.length) {
+    toast("产品库暂无可选产品，请先维护产品", "error");
+    return;
+  }
+  const selected = new Set<string>(collectDocumentItems().map((item) => item.productId).filter((id): id is string => Boolean(id)));
+  openModal("选择产品明细", `<div class="document-product-picker"><input id="documentProductSearch" placeholder="搜索产品名称、型号或 HS Code"><div id="documentProductChoices">${renderDocumentProductChoices(products, selected)}</div></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="documentProductApply">加入已选明细</button>`);
+  const bindChoices = () => {
+    qsa<HTMLInputElement>("#documentProductChoices input[type=checkbox]").forEach((input) => input.addEventListener("change", () => {
+      if (input.checked) selected.add(input.value);
+      else selected.delete(input.value);
+    }));
+  };
+  bindChoices();
+  const search = qs<HTMLInputElement>("#documentProductSearch");
+  search?.addEventListener("input", () => {
+    const keyword = search.value.trim().toLowerCase();
+    const filtered = products.filter((product) => `${product.nameZh} ${product.nameEn} ${product.model} ${product.hsCode}`.toLowerCase().includes(keyword));
+    const box = qs<HTMLElement>("#documentProductChoices");
+    if (box) {
+      box.innerHTML = renderDocumentProductChoices(filtered, selected);
+      bindChoices();
+    }
+  });
+  qs<HTMLButtonElement>("#documentProductApply")?.addEventListener("click", () => {
+    const items = collectDocumentItems().filter((item) => item.product.trim() || item.productId);
+    const existingIds = new Set(items.map((item) => item.productId).filter(Boolean));
+    products.filter((product) => selected.has(product.id) && !existingIds.has(product.id)).forEach((product) => items.push({
+      id: `item_${Date.now()}_${product.id}`,
+      productId: product.id,
+      imageUrl: controlledDocumentImageUrl(product.imageUrl),
+      product: product.nameEn || product.nameZh,
+      model: product.model || "",
+      hsCode: product.hsCode || "",
+      quantity: 1,
+      unit: product.unit || "PCS",
+      unitPrice: product.price || 0,
+      originCountry: "China",
+      weightKg: product.packWeight || 0,
+      packageCount: 0
+    }));
+    renderDocumentItems(items);
+    renderDocumentPreview(collectDocumentDraft());
+    closeModal();
+    toast(`已加入 ${selected.size} 项产品`);
+  });
+}
+
+function renderDocumentProductChoices(products: Product[], selected: Set<string>) {
+  return products.length ? products.map((product) => `<label class="document-product-choice"><input type="checkbox" value="${escapeHtml(product.id)}" ${selected.has(product.id) ? "checked" : ""}><span><b>${escapeHtml(product.nameEn || product.nameZh)}</b><small>${escapeHtml([product.nameZh, product.model, product.hsCode, `${product.price || 0} ${product.currency || "USD"}`].filter(Boolean).join(" · "))}</small></span></label>`).join("") : `<p class="empty-cell">没有匹配产品</p>`;
+}
+
+function setDocumentWorkspaceMode(mode: "studio" | "history" | "defaults") {
+  const studio = qs<HTMLElement>("#documentStudioWorkspace");
+  const history = qs<HTMLElement>("#documentHistoryWorkspace");
+  const defaults = qs<HTMLElement>("#documentDefaultsWorkspace");
+  if (studio) studio.hidden = mode !== "studio";
+  if (history) history.hidden = mode !== "history";
+  if (defaults) defaults.hidden = mode !== "defaults";
+  if (mode === "history") {
+    populateDocumentHistoryFilters();
+    void loadDocumentHistory();
+  }
+  if (mode === "defaults") void loadDocumentDefaultsWorkspace();
+}
+
+function documentDefaultValue(id: string) {
+  return qs<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`#${id}`)?.value.trim() || "";
+}
+
+function collectDocumentDefaultProfile(): DocumentDefaultProfile {
+  const current = state.documentDefaultProfile;
+  return {
+    teamId: current?.teamId || "",
+    seller: documentDefaultValue("documentDefaultSeller"),
+    sellerAddress: documentDefaultValue("documentDefaultSellerAddress"),
+    sellerContact: documentDefaultValue("documentDefaultSellerContact"),
+    sellerPhone: documentDefaultValue("documentDefaultSellerPhone"),
+    sellerEmail: documentDefaultValue("documentDefaultSellerEmail"),
+    sellerWebsite: documentDefaultValue("documentDefaultSellerWebsite"),
+    sellerTaxNo: documentDefaultValue("documentDefaultSellerTaxNo"),
+    bankInfo: documentDefaultValue("documentDefaultBankInfo"),
+    currency: documentDefaultValue("documentDefaultCurrency") || "USD",
+    incoterm: documentDefaultValue("documentDefaultIncoterm") || "FOB",
+    paymentTerm: documentDefaultValue("documentDefaultPaymentTerm"),
+    shippingMethod: documentDefaultValue("documentDefaultShippingMethod") || "Sea freight",
+    portLoading: documentDefaultValue("documentDefaultPortLoading"),
+    validityDays: Number(documentDefaultValue("documentDefaultValidityDays") || 0),
+    notes: documentDefaultValue("documentDefaultNotes"),
+    language: (documentDefaultValue("documentDefaultLanguage") || "EN") as TradeDocument["language"],
+    templateStyle: (documentDefaultValue("documentDefaultTemplateStyle") || "indigo") as TradeDocument["templateStyle"],
+    letterheadId: documentDefaultValue("documentDefaultLetterhead"),
+    stampId: documentDefaultValue("documentDefaultStamp"),
+    signatureId: documentDefaultValue("documentDefaultSignature"),
+    includeProductImages: Boolean(qs<HTMLInputElement>("#documentDefaultProductImages")?.checked),
+    updatedBy: current?.updatedBy || "",
+    updatedAt: current?.updatedAt || ""
+  };
+}
+
+function renderDocumentDefaultsPreview(profile = collectDocumentDefaultProfile()) {
+  const box = qs<HTMLElement>("#documentDefaultsPreview");
+  if (!box) return;
+  const letterhead = state.documentAssets.letterheads.find((item) => item.id === profile.letterheadId);
+  const stamp = state.documentAssets.stamps.find((item) => item.id === profile.stampId);
+  const signature = state.documentAssets.signatures.find((item) => item.id === profile.signatureId);
+  const contact = [profile.sellerContact, profile.sellerPhone, profile.sellerEmail].filter(Boolean).join(" · ");
+  box.innerHTML = `<div class="document-default-preview-sheet"><header><div>${letterhead?.logoUrl ? `<img src="${escapeHtml(letterhead.logoUrl)}" alt="" style="width:74px;height:30px;object-fit:contain;object-position:left center;">` : ""}<b>${escapeHtml(profile.seller || letterhead?.companyName || "未配置公司名称")}</b><span>${escapeHtml(profile.sellerAddress || letterhead?.address || "公司地址将在此显示")}</span></div><small>${escapeHtml(profile.language)} · ${escapeHtml(profile.templateStyle)}</small></header><p>${escapeHtml(contact || "联系人、电话、邮箱")}${profile.sellerWebsite ? `<br>${escapeHtml(profile.sellerWebsite)}` : ""}${profile.sellerTaxNo ? `<br>Tax No. ${escapeHtml(profile.sellerTaxNo)}` : ""}</p><dl><div><dt>Currency</dt><dd>${escapeHtml(profile.currency)}</dd></div><div><dt>Incoterm</dt><dd>${escapeHtml(profile.incoterm)}</dd></div><div><dt>Shipping</dt><dd>${escapeHtml(profile.shippingMethod)}</dd></div><div><dt>Port</dt><dd>${escapeHtml(profile.portLoading || "-")}</dd></div></dl><p>${escapeHtml(profile.paymentTerm || "付款条款未配置")}</p><div class="document-default-preview-assets">${stamp ? `<img src="${escapeHtml(stamp.imageUrl)}" alt="印章">` : ""}${signature ? `<img data-signature src="${escapeHtml(signature.imageUrl)}" alt="签名">` : ""}${!stamp && !signature ? `<small>当前未选择印章与签名</small>` : ""}</div></div>`;
+}
+
+function fillDocumentDefaultsWorkspace(profile: DocumentDefaultProfile, assets: DocumentAssetsResponse) {
+  const values: Record<string, string> = {
+    documentDefaultSeller: profile.seller, documentDefaultSellerAddress: profile.sellerAddress, documentDefaultSellerContact: profile.sellerContact,
+    documentDefaultSellerPhone: profile.sellerPhone, documentDefaultSellerEmail: profile.sellerEmail, documentDefaultSellerWebsite: profile.sellerWebsite,
+    documentDefaultSellerTaxNo: profile.sellerTaxNo, documentDefaultBankInfo: profile.bankInfo, documentDefaultCurrency: profile.currency,
+    documentDefaultIncoterm: profile.incoterm, documentDefaultPaymentTerm: profile.paymentTerm, documentDefaultShippingMethod: profile.shippingMethod,
+    documentDefaultPortLoading: profile.portLoading, documentDefaultValidityDays: String(profile.validityDays || 0), documentDefaultNotes: profile.notes,
+    documentDefaultLanguage: profile.language, documentDefaultTemplateStyle: profile.templateStyle
+  };
+  Object.entries(values).forEach(([id, value]) => { const input = qs<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`#${id}`); if (input) input.value = value || ""; });
+  const options = <T extends { id: string; name: string; enabled: boolean }>(items: T[], selected: string, empty: string) => `<option value="">${empty}</option>${items.filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}`;
+  const letterhead = qs<HTMLSelectElement>("#documentDefaultLetterhead"); if (letterhead) letterhead.innerHTML = options(assets.letterheads, profile.letterheadId, "使用单据卖方资料");
+  const stamp = qs<HTMLSelectElement>("#documentDefaultStamp"); if (stamp) stamp.innerHTML = options(assets.stamps, profile.stampId, "默认不盖章");
+  const signature = qs<HTMLSelectElement>("#documentDefaultSignature"); if (signature) signature.innerHTML = options(assets.signatures, profile.signatureId, "默认不签名");
+  const productImages = qs<HTMLInputElement>("#documentDefaultProductImages"); if (productImages) productImages.checked = profile.includeProductImages;
+  const editable = state.documentDefaultsCanManage;
+  qsa<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("#documentDefaultsWorkspace input, #documentDefaultsWorkspace select, #documentDefaultsWorkspace textarea").forEach((field) => { field.disabled = !editable; });
+  const save = qs<HTMLButtonElement>("#documentDefaultsSaveButton"); if (save) save.hidden = !editable;
+  const manage = qs<HTMLButtonElement>("#documentDefaultsManageAssets"); if (manage) manage.hidden = !editable;
+  qsa<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("#documentDefaultsWorkspace input, #documentDefaultsWorkspace select, #documentDefaultsWorkspace textarea").forEach((field) => { field.oninput = () => renderDocumentDefaultsPreview(); field.onchange = () => renderDocumentDefaultsPreview(); });
+  renderDocumentDefaultsPreview(profile);
+}
+
+async function loadDocumentDefaultsWorkspace() {
+  try {
+    const [defaults, assets] = await Promise.all([api<{ profile: DocumentDefaultProfile; canManage: boolean }>("/api/document-defaults"), api<DocumentAssetsResponse>("/api/document-assets")]);
+    state.documentDefaultProfile = defaults.profile;
+    state.documentDefaultsCanManage = defaults.canManage;
+    state.documentAssets = assets;
+    fillDocumentDefaultsWorkspace(defaults.profile, assets);
+  } catch (error) { toast(error instanceof Error ? error.message : "默认配置加载失败", "error"); }
+}
+
+async function saveDocumentDefaults() {
+  const button = qs<HTMLButtonElement>("#documentDefaultsSaveButton");
+  if (!button || !state.documentDefaultsCanManage) return;
+  setButtonPending(button, true, "保存团队配置", "保存中");
+  try {
+    const profile = collectDocumentDefaultProfile();
+    const result = await api<{ profile: DocumentDefaultProfile }>("/api/document-defaults", { method: "PUT", body: JSON.stringify(profile) });
+    state.documentDefaultProfile = result.profile;
+    fillDocumentDefaultsWorkspace(result.profile, state.documentAssets);
+    toast("团队单据默认配置已保存");
+  } catch (error) { toast(error instanceof Error ? error.message : "默认配置保存失败", "error"); }
+  finally { setButtonPending(button, false, "保存团队配置", "保存中"); }
+}
+
+function populateDocumentHistoryFilters() {
+  const customer = qs<HTMLSelectElement>("#documentHistoryCustomer");
+  const deal = qs<HTMLSelectElement>("#documentHistoryDeal");
+  if (customer) {
+    const current = customer.value;
+    customer.innerHTML = `<option value="">全部客户</option>${state.customers.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.company)}</option>`).join("")}`;
+    customer.value = current;
+  }
+  if (deal) {
+    const current = deal.value;
+    deal.innerHTML = `<option value="">全部商机</option>${state.deals.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join("")}`;
+    deal.value = current;
+  }
+}
+
+function documentHistoryParams() {
+  const params = new URLSearchParams({ page: String(state.documentHistoryPage), pageSize: "20" });
+  const fields: Array<[string, string]> = [
+    ["q", qs<HTMLInputElement>("#documentHistoryKeyword")?.value.trim() || ""],
+    ["type", qs<HTMLSelectElement>("#documentHistoryType")?.value || ""],
+    ["status", qs<HTMLSelectElement>("#documentHistoryStatus")?.value || ""],
+    ["customerId", qs<HTMLSelectElement>("#documentHistoryCustomer")?.value || ""],
+    ["dealId", qs<HTMLSelectElement>("#documentHistoryDeal")?.value || ""],
+    ["from", qs<HTMLInputElement>("#documentHistoryFrom")?.value || ""],
+    ["to", qs<HTMLInputElement>("#documentHistoryTo")?.value || ""]
+  ];
+  fields.forEach(([key, value]) => { if (value) params.set(key, value); });
+  return params;
+}
+
+async function loadDocumentHistory() {
+  const rows = qs<HTMLElement>("#documentHistoryRows");
+  if (rows) rows.innerHTML = `<tr><td colspan="8" class="empty-cell">正在查询历史单据</td></tr>`;
+  try {
+    const result = await api<TradeDocumentHistoryResponse>(`/api/trade-documents/history?${documentHistoryParams().toString()}`);
+    state.documentHistoryPage = result.page;
+    state.documentHistoryPageCount = result.pageCount;
+    state.documentHistoryTotal = result.total;
+    renderDocumentHistory(result.documents);
+  } catch (error) {
+    if (rows) rows.innerHTML = `<tr><td colspan="8" class="empty-cell">${escapeHtml(error instanceof Error ? error.message : "历史单据加载失败")}</td></tr>`;
+  }
+}
+
+function renderDocumentHistory(documents: TradeDocument[]) {
+  const rows = qs<HTMLElement>("#documentHistoryRows");
+  const summary = qs<HTMLElement>("#documentHistorySummary");
+  const page = qs<HTMLElement>("#documentHistoryPageText");
+  const prev = qs<HTMLButtonElement>("#documentHistoryPrevButton");
+  const next = qs<HTMLButtonElement>("#documentHistoryNextButton");
+  if (summary) summary.textContent = `共 ${state.documentHistoryTotal} 份历史单据`;
+  if (page) page.textContent = `第 ${state.documentHistoryPage} / ${state.documentHistoryPageCount} 页`;
+  if (prev) prev.disabled = state.documentHistoryPage <= 1;
+  if (next) next.disabled = state.documentHistoryPage >= state.documentHistoryPageCount;
+  if (!rows) return;
+  rows.innerHTML = documents.length ? documents.map((document) => {
+    const customer = state.customers.find((item) => item.id === document.customerId);
+    const deal = state.deals.find((item) => item.id === document.dealId);
+    const amountText = ["PL", "COO", "SHIPPING", "CUSTOMS"].includes(document.type) ? "-" : formatDocumentMoney(documentTotal(document), document.currency);
+    return `<tr><td><div class="document-history-title"><b>${escapeHtml(document.title)}</b><span>${escapeHtml(document.number)} · v${document.revision || 1}</span>${document.derivedFromDocumentId ? `<small>由 ${escapeHtml(document.derivedFromType || "源单据")} 转换</small>` : ""}</div></td><td><div class="document-history-title"><b>${escapeHtml(customer?.company || document.buyer || "未关联客户")}</b><span>${escapeHtml(deal?.title || "未关联商机")}</span></div></td><td>${escapeHtml(documentTypeLabel(document.type))}</td><td>${escapeHtml(amountText)}</td><td>${badge(documentStatusText(document.status), document.status === "approved" || document.status === "exported" ? "green" : document.status === "rejected" ? "red" : document.status === "pending_approval" ? "amber" : "blue")}</td><td>${escapeHtml(document.issueDate || "-")}</td><td>${escapeHtml(formatDateTime(document.updatedAt))}</td><td><button class="btn" type="button" data-document-history-open="${escapeHtml(document.id)}">打开</button></td></tr>`;
+  }).join("") : `<tr><td colspan="8" class="empty-cell">没有符合条件的历史单据</td></tr>`;
+  qsa<HTMLButtonElement>("[data-document-history-open]", rows).forEach((button) => button.addEventListener("click", () => {
+    const document = documents.find((item) => item.id === button.dataset.documentHistoryOpen);
+    if (!document) return;
+    state.tradeDocuments = [document, ...state.tradeDocuments.filter((item) => item.id !== document.id)].slice(0, 9);
+    state.selectedDocumentId = document.id;
+    setDocumentWorkspaceMode("studio");
+    renderTradeDocuments(state.tradeDocuments);
+  }));
+}
+
+function resetDocumentHistoryFilters() {
+  ["documentHistoryKeyword", "documentHistoryFrom", "documentHistoryTo"].forEach((id) => { const input = qs<HTMLInputElement>(`#${id}`); if (input) input.value = ""; });
+  ["documentHistoryType", "documentHistoryStatus", "documentHistoryCustomer", "documentHistoryDeal"].forEach((id) => { const select = qs<HTMLSelectElement>(`#${id}`); if (select) select.value = ""; });
+  state.documentHistoryPage = 1;
+  void loadDocumentHistory();
+}
+
 function fillDocumentEditor(document: TradeDocument) {
   setDocumentType(document.type);
   renderDocumentWorkflow(document);
@@ -12202,6 +15850,11 @@ function fillDocumentEditor(document: TradeDocument) {
     docBuyerContactInput: document.buyerContact,
     docBuyerAddressInput: document.buyerAddress,
     docSellerInput: document.seller,
+    docSellerContactInput: document.sellerContact || "",
+    docSellerPhoneInput: document.sellerPhone || "",
+    docSellerEmailInput: document.sellerEmail || "",
+    docSellerWebsiteInput: document.sellerWebsite || "",
+    docSellerTaxNoInput: document.sellerTaxNo || "",
     docCurrencyInput: document.currency,
     docSellerAddressInput: document.sellerAddress,
     docIncotermInput: document.incoterm,
@@ -12263,7 +15916,7 @@ function applyDocumentCustomerDefaults(customerId: string) {
   const customer = state.customers.find((item) => item.id === customerId);
   if (!customer) return;
   const values: Record<string, string> = {
-    docBuyerInput: customer.billingName?.trim() || customer.company,
+    docBuyerInput: customerDocumentName(customer),
     docBuyerAddressInput: customer.billingAddress?.trim() || "",
     docBuyerContactInput: customer.documentContact?.trim() || customer.contact,
     docIncotermInput: customer.defaultIncoterm?.trim() || "FOB",
@@ -12283,16 +15936,29 @@ function updateActiveDocument(document: TradeDocument) {
   renderTradeDocuments(state.tradeDocuments);
 }
 
-async function submitDocumentApproval() {
+function submitDocumentApproval() {
   const document = activeTradeDocument();
   if (!document.id || document.id === "__new__") {
     toast("请先保存单据，再提交审批", "error");
     return;
   }
-  const note = window.prompt("审批说明（可选）", "请确认客户、付款条款和交期") || "";
-  const result = await api<{ document: TradeDocument }>(`/api/trade-documents/${document.id}/submit-approval`, { method: "POST", body: JSON.stringify({ note }) });
-  updateActiveDocument(result.document);
-  toast("单据已提交审批");
+  openModal("提交单据审批", `
+    <div class="form-field full"><label>审批说明</label><textarea id="documentApprovalSubmitNote" rows="4">请确认客户、付款条款和交期</textarea><small>说明将随单据版本进入审批记录。</small></div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="confirmDocumentApprovalSubmitButton">提交审批</button>`);
+  qs<HTMLButtonElement>("#confirmDocumentApprovalSubmitButton")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const note = qs<HTMLTextAreaElement>("#documentApprovalSubmitNote")?.value.trim() || "";
+    setButtonPending(button, true, "提交审批", "提交中");
+    try {
+      const result = await api<{ document: TradeDocument }>(`/api/trade-documents/${document.id}/submit-approval`, { method: "POST", body: JSON.stringify({ note }) });
+      closeModal();
+      updateActiveDocument(result.document);
+      toast("单据已提交审批");
+    } catch (error) {
+      setButtonPending(button, false, "提交审批", "提交中");
+      toast(error instanceof Error ? error.message : "提交审批失败", "error");
+    }
+  });
 }
 
 async function approveActiveDocument() {
@@ -12303,17 +15969,31 @@ async function approveActiveDocument() {
   toast("单据已审批通过");
 }
 
-async function rejectActiveDocument() {
+function rejectActiveDocument() {
   const document = activeTradeDocument();
   if (!document.id || document.status !== "pending_approval") return;
-  const note = window.prompt("请填写驳回原因", "请补充或确认付款条款")?.trim() || "";
-  if (!note) {
-    toast("驳回必须填写原因", "error");
-    return;
-  }
-  const result = await api<{ document: TradeDocument }>(`/api/trade-documents/${document.id}/reject`, { method: "POST", body: JSON.stringify({ note }) });
-  updateActiveDocument(result.document);
-  toast("单据已驳回，业务员可修改后重新提交");
+  openModal("驳回单据审批", `
+    <div class="form-field full"><label>驳回原因</label><textarea id="documentApprovalRejectNote" rows="4" placeholder="例如：请补充付款条款并确认交期"></textarea><small>业务员修改单据后可以重新提交审批。</small></div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn danger" id="confirmDocumentApprovalRejectButton">确认驳回</button>`);
+  qs<HTMLButtonElement>("#confirmDocumentApprovalRejectButton")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const note = qs<HTMLTextAreaElement>("#documentApprovalRejectNote")?.value.trim() || "";
+    if (!note) {
+      toast("驳回必须填写原因", "error");
+      qs<HTMLTextAreaElement>("#documentApprovalRejectNote")?.focus();
+      return;
+    }
+    setButtonPending(button, true, "确认驳回", "处理中");
+    try {
+      const result = await api<{ document: TradeDocument }>(`/api/trade-documents/${document.id}/reject`, { method: "POST", body: JSON.stringify({ note }) });
+      closeModal();
+      updateActiveDocument(result.document);
+      toast("单据已驳回，业务员可修改后重新提交");
+    } catch (error) {
+      setButtonPending(button, false, "确认驳回", "处理中");
+      toast(error instanceof Error ? error.message : "驳回审批失败", "error");
+    }
+  });
 }
 
 async function sendActiveDocument() {
@@ -12372,10 +16052,17 @@ function currentDocumentType(): "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "Q
 function renderDocumentItems(items: TradeDocumentItem[]) {
   const box = qs<HTMLElement>("#documentItemsEditor");
   if (!box) return;
-  box.innerHTML = items.map((item, index) => `
-    <div class="doc-item-grid" data-doc-item="${escapeHtml(item.id || `item_${index}`)}">
+  const productOptions = (selectedId = "") => `<option value="">手工填写</option>${state.products.map((product) => `<option value="${escapeHtml(product.id)}" ${product.id === selectedId ? "selected" : ""}>${escapeHtml(product.nameEn || product.nameZh)}${product.model ? ` · ${escapeHtml(product.model)}` : ""}</option>`).join("")}`;
+  box.innerHTML = items.map((item, index) => {
+    const imageUrl = controlledDocumentImageUrl(item.imageUrl);
+    return `
+    <div class="doc-item-grid" data-doc-item="${escapeHtml(item.id || `item_${index}`)}" data-product-id="${escapeHtml(item.productId || "")}" data-image-url="${escapeHtml(imageUrl)}">
+      <div class="doc-item-image">${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(item.product || `商品 ${index + 1}`)}">` : `<span>无图</span>`}</div>
+      <label data-doc-size="product-select"><span>产品库</span><select data-doc-product-select>${productOptions(item.productId || "")}</select></label>
       <label data-doc-size="name"><span>品名</span><input data-doc-field="product" value="${escapeHtml(item.product)}"></label>
       <label data-doc-size="model"><span>型号</span><input data-doc-field="model" value="${escapeHtml(item.model)}"></label>
+      <label data-doc-size="material"><span>材质 Material</span><input data-doc-field="material" value="${escapeHtml(item.material || "")}"></label>
+      <label data-doc-size="finish"><span>后处理 Finish</span><input data-doc-field="finish" value="${escapeHtml(item.finish || "")}"></label>
       <label data-doc-size="code"><span>HS Code</span><input data-doc-field="hsCode" value="${escapeHtml(item.hsCode)}"></label>
       <label data-doc-size="short"><span>数量</span><input data-doc-field="quantity" type="number" min="0" value="${item.quantity}"></label>
       <label data-doc-size="short"><span>单位</span><input data-doc-field="unit" value="${escapeHtml(item.unit)}"></label>
@@ -12384,8 +16071,33 @@ function renderDocumentItems(items: TradeDocumentItem[]) {
       <label data-doc-size="short"><span>重量kg</span><input data-doc-field="weightKg" type="number" min="0" step="0.01" value="${item.weightKg}"></label>
       <label data-doc-size="short"><span>包装</span><input data-doc-field="packageCount" type="number" min="0" value="${item.packageCount}"></label>
       <button class="doc-item-remove" type="button" title="删除明细">×</button>
-    </div>
-  `).join("");
+    </div>`;
+  }).join("");
+  qsa<HTMLSelectElement>("[data-doc-product-select]", box).forEach((select) => select.addEventListener("change", () => {
+    const row = select.closest<HTMLElement>(".doc-item-grid");
+    const product = state.products.find((item) => item.id === select.value);
+    if (!row) return;
+    row.dataset.productId = product?.id || "";
+    const imageUrl = controlledDocumentImageUrl(product?.imageUrl);
+    row.dataset.imageUrl = imageUrl;
+    const image = row.querySelector<HTMLElement>(".doc-item-image");
+    if (image) image.innerHTML = imageUrl
+      ? `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(product?.nameEn || product?.nameZh || "商品")}">`
+      : `<span>无图</span>`;
+    if (product) {
+      const set = (name: string, value: string | number) => {
+        const input = row.querySelector<HTMLInputElement>(`[data-doc-field="${name}"]`);
+        if (input) input.value = String(value ?? "");
+      };
+      set("product", product.nameEn || product.nameZh);
+      set("model", product.model || "");
+      set("hsCode", product.hsCode || "");
+      set("unit", product.unit || "PCS");
+      set("unitPrice", product.price || 0);
+      set("weightKg", product.packWeight || 0);
+    }
+    renderDocumentPreview(collectDocumentDraft());
+  }));
   qsa<HTMLInputElement>("[data-doc-field]", box).forEach((input) => input.addEventListener("input", () => renderDocumentPreview(collectDocumentDraft())));
   qsa<HTMLButtonElement>(".doc-item-remove", box).forEach((button) => {
     button.addEventListener("click", () => {
@@ -12402,8 +16114,12 @@ function collectDocumentItems(): TradeDocumentItem[] {
     const numberField = (name: string) => Number(row.querySelector<HTMLInputElement>(`[data-doc-field="${name}"]`)?.value || 0);
     return {
       id: row.dataset.docItem || `item_${index}`,
+      productId: row.dataset.productId || "",
+      imageUrl: row.dataset.imageUrl || "",
       product: field("product"),
       model: field("model"),
+      material: field("material"),
+      finish: field("finish"),
       hsCode: field("hsCode"),
       quantity: numberField("quantity"),
       unit: field("unit") || "PCS",
@@ -12422,6 +16138,8 @@ function collectDocumentDraft(): TradeDocument {
     customerId: qs<HTMLSelectElement>("#docCustomerInput")?.value || existing?.customerId || "",
     dealId: qs<HTMLSelectElement>("#docDealInput")?.value || existing?.dealId || "",
     revision: existing?.revision || 1,
+    derivedFromDocumentId: existing?.derivedFromDocumentId,
+    derivedFromType: existing?.derivedFromType,
     type: currentDocumentType(),
     title: qs<HTMLInputElement>("#docTitleInput")?.value.trim() || "未命名单据",
     number: qs<HTMLInputElement>("#docNumberInput")?.value.trim() || `DOC-${Date.now()}`,
@@ -12431,6 +16149,11 @@ function collectDocumentDraft(): TradeDocument {
     buyerContact: qs<HTMLInputElement>("#docBuyerContactInput")?.value.trim() || "",
     seller: qs<HTMLInputElement>("#docSellerInput")?.value.trim() || "",
     sellerAddress: qs<HTMLInputElement>("#docSellerAddressInput")?.value.trim() || "",
+    sellerContact: qs<HTMLInputElement>("#docSellerContactInput")?.value.trim() || "",
+    sellerPhone: qs<HTMLInputElement>("#docSellerPhoneInput")?.value.trim() || "",
+    sellerEmail: qs<HTMLInputElement>("#docSellerEmailInput")?.value.trim() || "",
+    sellerWebsite: qs<HTMLInputElement>("#docSellerWebsiteInput")?.value.trim() || "",
+    sellerTaxNo: qs<HTMLInputElement>("#docSellerTaxNoInput")?.value.trim() || "",
     currency: qs<HTMLSelectElement>("#docCurrencyInput")?.value || "USD",
     incoterm: qs<HTMLSelectElement>("#docIncotermInput")?.value || "FOB",
     paymentTerm: qs<HTMLInputElement>("#docPaymentInput")?.value.trim() || "",
@@ -12445,6 +16168,13 @@ function collectDocumentDraft(): TradeDocument {
     status: existing?.status || "draft",
     audits: existing?.audits || [],
     sendRecords: existing?.sendRecords || [],
+    letterheadId: existing?.letterheadId || "",
+    stampId: existing?.stampId || "",
+    signatureId: existing?.signatureId || "",
+    includeProductImages: existing?.includeProductImages || false,
+    letterheadSnapshot: existing?.letterheadSnapshot,
+    stampSnapshot: existing?.stampSnapshot,
+    signatureSnapshot: existing?.signatureSnapshot,
     updatedAt: new Date().toISOString(),
     items: collectDocumentItems()
   };
@@ -12507,6 +16237,8 @@ function renderDocumentPreview(document: TradeDocument) {
   const showPrices = !["PL", "COO", "SHIPPING"].includes(document.type);
   const showWeight = ["PL", "CI", "CUSTOMS", "COO", "SHIPPING"].includes(document.type);
   const showOrigin = ["CI", "COO", "CUSTOMS"].includes(document.type);
+  const showMaterial = document.items.some((item) => Boolean(item.material?.trim()));
+  const showFinish = document.items.some((item) => Boolean(item.finish?.trim()));
 
   let itemsTable = "";
   if (document.type === "SHIPPING") {
@@ -12544,6 +16276,8 @@ function renderDocumentPreview(document: TradeDocument) {
   // 通用商品明细表格
   if (document.type !== "SHIPPING" && document.type !== "COO") {
     let cols = `<th>#</th><th>${docLabel(document,"description")}</th><th>${docLabel(document,"model")}</th>`;
+    if (showMaterial) cols += `<th>Material</th>`;
+    if (showFinish) cols += `<th>Finish</th>`;
     if (document.type !== "CONTRACT") cols += `<th>${docLabel(document,"hsCode")}</th>`;
     cols += `<th>${docLabel(document,"qty")}</th>`;
     if (showWeight) cols += `<th>${docLabel(document,"weight")}</th><th>${docLabel(document,"pkgs")}</th>`;
@@ -12558,6 +16292,8 @@ function renderDocumentPreview(document: TradeDocument) {
           row += `<td style="padding:8px;text-align:center;">${index + 1}</td>`;
           row += `<td style="padding:8px;">${escapeHtml(item.product)}</td>`;
           row += `<td style="padding:8px;">${escapeHtml(item.model)}</td>`;
+          if (showMaterial) row += `<td style="padding:8px;">${escapeHtml(item.material || "")}</td>`;
+          if (showFinish) row += `<td style="padding:8px;">${escapeHtml(item.finish || "")}</td>`;
           if (document.type !== "CONTRACT") row += `<td style="padding:8px;">${escapeHtml(item.hsCode)}</td>`;
           row += `<td style="padding:8px;text-align:center;">${item.quantity} ${escapeHtml(item.unit)}</td>`;
           if (showWeight) row += `<td style="padding:8px;text-align:center;">${item.weightKg} kg</td><td style="padding:8px;text-align:center;">${item.packageCount}</td>`;
@@ -12663,6 +16399,15 @@ function renderCustomsDocumentPreview(document: TradeDocument, preview: HTMLElem
   const isRTL = lang === "AR";
   const theme = DOC_THEMES[document.templateStyle] || DOC_THEMES.indigo;
   const L = (k: string) => docLabel(document, k);
+  const showMaterial = document.items.some((item) => Boolean(item.material?.trim()));
+  const showFinish = document.items.some((item) => Boolean(item.finish?.trim()));
+  const itemGridColumns = [
+    "34px", "minmax(0,1.8fr)", "minmax(0,.9fr)",
+    ...(showMaterial ? ["minmax(0,.9fr)"] : []),
+    ...(showFinish ? ["minmax(0,.9fr)"] : []),
+    "minmax(0,1.05fr)", "minmax(0,.85fr)", "minmax(0,.9fr)",
+    "minmax(0,1fr)", "minmax(0,.8fr)", "minmax(0,.75fr)", "minmax(0,.65fr)"
+  ].join(" ");
 
   preview.className = `doc-paper customs-preview-modern ${document.templateStyle}`;
   preview.style.setProperty("--doc-primary", theme.primary);
@@ -12831,11 +16576,13 @@ function renderCustomsDocumentPreview(document: TradeDocument, preview: HTMLElem
         <h3 style="color:${theme.primary};">${L("goodsList")}</h3>
         <span class="items-count">${document.items.length} ${L("itemsUnit")}</span>
       </div>
-      <div class="customs-items-modern-table">
+      <div class="customs-items-modern-table" style="--customs-item-columns:${itemGridColumns};">
         <div class="table-header" style="background:${theme.primary};">
           <div class="th th-num">#</div>
           <div class="th th-product">${L("goodsName")}</div>
           <div class="th">${L("model")}</div>
+          ${showMaterial ? `<div class="th">Material</div>` : ""}
+          ${showFinish ? `<div class="th">Finish</div>` : ""}
           <div class="th">${L("hsCode")}</div>
           <div class="th th-qty">${L("qty")}</div>
           <div class="th th-price">${L("unitPrice")}</div>
@@ -12849,6 +16596,8 @@ function renderCustomsDocumentPreview(document: TradeDocument, preview: HTMLElem
             <div class="td td-num">${index + 1}</div>
             <div class="td td-product"><strong>${escapeHtml(item.product)}</strong></div>
             <div class="td">${escapeHtml(item.model)}</div>
+            ${showMaterial ? `<div class="td">${escapeHtml(item.material || "")}</div>` : ""}
+            ${showFinish ? `<div class="td">${escapeHtml(item.finish || "")}</div>` : ""}
             <div class="td"><code>${escapeHtml(item.hsCode)}</code></div>
             <div class="td td-qty">${item.quantity} <small>${escapeHtml(item.unit)}</small></div>
             <div class="td td-price">${formatDocumentTableMoney(item.unitPrice)}</div>
@@ -12955,7 +16704,7 @@ function applyDataSource(source: string) {
     const customer = state.customers.find((c) => c.id === deal.customerId);
     if (customer) {
       const vals: Record<string, string> = {
-        docBuyerInput: customer.billingName?.trim() || customer.company,
+        docBuyerInput: customerDocumentName(customer),
         docBuyerAddressInput: customer.billingAddress?.trim() || "",
         docBuyerContactInput: customer.documentContact?.trim() || customer.contact,
         docIncotermInput: customer.defaultIncoterm?.trim() || "FOB",
@@ -12971,7 +16720,7 @@ function applyDataSource(source: string) {
       draft.items = dealProducts.map((dp: any, i: number) => {
         const product = (state as any).products?.find((p: any) => p.id === dp.productId);
         return {
-          id: `item_${Date.now()}_${i}`, product: product?.name || dp.productName || "",
+          id: `item_${Date.now()}_${i}`, productId: product?.id || dp.productId || "", product: product?.name || dp.productName || "",
           model: product?.model || dp.model || "", hsCode: product?.hsCode || "",
           quantity: dp.quantity || 1, unit: dp.unit || product?.unit || "PCS",
           unitPrice: dp.unitPrice || product?.unitPrice || 0,
@@ -12988,19 +16737,7 @@ function applyDataSource(source: string) {
     applyDocumentCustomerDefaults(customerId || "");
     toast("已从客户填充单据信息");
   } else if (source === "product") {
-    const products = (state as any).products || [];
-    if (products.length) {
-      draft.items = products.slice(0, 5).map((p: any, i: number) => ({
-        id: `item_${Date.now()}_${i}`, product: p.name || "", model: p.model || "",
-        hsCode: p.hsCode || "", quantity: p.quantity || 1, unit: p.unit || "PCS",
-        unitPrice: p.unitPrice || 0, originCountry: p.originCountry || "China",
-        weightKg: p.weightKg || 0, packageCount: p.packageCount || 0
-      }));
-      renderDocumentItems(draft.items);
-      toast(`已从产品库填充 ${draft.items.length} 条明细`);
-    } else {
-      toast("产品库暂无数据", "error");
-    }
+    openProductPicker();
   }
   renderDocumentPreview(collectDocumentDraft());
   // 重置为手动
@@ -13167,21 +16904,34 @@ async function parseCustomerImportFile(file: File): Promise<CustomerImportRow[]>
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
   if (rows.length > 2000) throw new Error("客户导入单次最多支持 2000 行");
   return rows.map((row, index) => {
-    const company = String(rowValue(row, ["公司名", "客户", "客户名称", "公司", "客户公司", "company", "Company"])).trim();
+    const customerId = String(rowValue(row, ["客户ID", "客户 ID", "customerId", "Customer ID", "id", "ID"]) || "").trim();
+    const company = String(rowValue(row, ["公司简称", "公司名", "客户", "客户名称", "公司", "客户公司", "company", "Company"])).trim();
     const whatsappInput = String(rowValue(row, ["WhatsApp", "Whatsapp", "whatsapp", "WA号码", "WhatsApp号码"]) || "").trim();
     const whatsapp = whatsappInput ? normalizeWhatsAppPhone(whatsappInput) : "";
     if (whatsappInput && !whatsapp) throw new Error(`第 ${index + 2} 行 WhatsApp 号码无效，请填写含国家码的号码`);
+    const lifecycleText = String(rowValue(row, ["成交状态", "客户状态", "状态", "Lifecycle Status", "lifecycleStatus"]) || "").trim().toLowerCase();
+    const lifecycleStatus = ["已成交", "成交", "won", "closed won", "yes", "是"].includes(lifecycleText)
+      ? "won" as const
+      : ["未成交", "open", "active", "no", "否"].includes(lifecycleText)
+        ? "open" as const
+        : undefined;
+    if (lifecycleText && !lifecycleStatus) throw new Error(`第 ${index + 2} 行成交状态无效，请填写“已成交”或“未成交”`);
     return {
+      customerId,
       company,
+      companyFullName: String(rowValue(row, ["公司全名", "公司全称", "正式公司名", "法定公司名", "单据公司全名", "Company Full Name", "companyFullName", "legalName"]) || "").trim(),
       country: String(rowValue(row, ["国家", "市场", "country", "Country"]) || "未知").trim(),
       contact: String(rowValue(row, ["联系人", "联系人姓名", "contact", "Contact"]) || "待维护").trim(),
       whatsapp,
       stage: String(rowValue(row, ["阶段", "客户阶段", "stage", "Stage"]) || "询盘").trim(),
       amount: parseNumberCell(rowValue(row, ["预计金额", "金额", "商机金额", "amount", "Amount"])),
       health: Math.max(0, Math.min(100, Math.round(parseNumberCell(rowValue(row, ["健康度", "评分", "health", "Health"]), 70)))),
+      source: String(rowValue(row, ["客户来源", "来源", "获客渠道", "来源渠道", "Customer Source", "source", "Source"]) || "批量导入").trim(),
+      lifecycleStatus,
       nextReminder: String(rowValue(row, ["下一提醒", "提醒", "下次跟进", "nextReminder", "Next Reminder"]) || "待跟进").trim(),
       phone: String(rowValue(row, ["电话", "手机号", "联系电话", "Phone", "Tel", "phone", "Telephone"]) || "").trim(),
       email: String(rowValue(row, ["邮箱", "电子邮件", "Email", "email", "E-mail"]) || "").trim(),
+      contactRemark: String(rowValue(row, ["联系方式备注", "联系方式说明", "其它渠道", "其他渠道", "Contact Remark", "contactRemark", "contact_note"]) || "").trim(),
       website: String(rowValue(row, ["官网", "网站", "Website", "website", "URL", "主页"]) || "").trim(),
       wecomBound: false
     };
@@ -13231,7 +16981,9 @@ async function exportCustomers() {
   try {
     const result = await api<{ customers: Customer[]; job: ImportExportJob }>("/api/import-export/customers/export", { method: "POST" });
     const rows = result.customers.map((customer) => ({
-      公司名: customer.company,
+      客户ID: customer.id,
+      公司简称: customer.company,
+      公司全名: customerDocumentName(customer),
       国家: customer.country,
       联系人: customer.contact,
       WhatsApp: customer.whatsapp || customer.whatsappPhone || "",
@@ -13239,9 +16991,12 @@ async function exportCustomers() {
       活跃商机数: customer.activeDealCount || 0,
       在手商机额: customer.pipelineAmount || 0,
       健康度: customer.health,
+      客户来源: customer.source || "未登记",
+      成交状态: customer.hasWonDeal ? "已成交" : "未成交",
       下一提醒: customer.nextReminder,
       电话: customer.phone || "",
       邮箱: customer.email || "",
+      "联系方式备注（其它渠道）": customer.contactRemark || "",
       官网: customer.website || "",
       通讯接入: "待接入"
     }));
@@ -13258,7 +17013,7 @@ async function exportCustomers() {
 }
 
 function downloadCustomerTemplate() {
-  const worksheet = XLSX.utils.aoa_to_sheet([["公司名", "国家", "联系人", "电话", "邮箱", "官网", "阶段", "预计金额", "健康度", "下一提醒"]]);
+  const worksheet = XLSX.utils.aoa_to_sheet([["客户ID", "公司简称", "公司全名", "国家", "联系人", "电话", "邮箱", "联系方式备注（其它渠道）", "官网", "客户来源", "成交状态", "阶段", "预计金额", "健康度", "下一提醒"]]);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "客户导入模板");
   XLSX.writeFile(workbook, "GoodJob客户导入模板.xlsx");
@@ -13300,28 +17055,96 @@ async function syncWecomMessages() {
   toast(pending.length ? `已同步 ${pending.length} 条企微摘要` : "企微摘要已是最新");
 }
 
-function renderKnowledge(assets: KnowledgeAsset[]) {
-  const grid = qs<HTMLElement>("#knowledge .file-grid");
-  if (!grid) return;
-  grid.innerHTML = assets.length
-    ? assets.map((asset) => `<div class="file-card" data-asset-id="${escapeHtml(asset.id)}"><div class="file-icon">${escapeHtml(assetIcon(asset.category))}</div><b>${escapeHtml(asset.title)}</b><span>${escapeHtml(asset.category)} · ${asset.status === "published" ? "已发布" : "待审核"} · ${escapeHtml(asset.version)}</span><button class="btn" data-publish-asset>${asset.status === "published" ? "已发布" : "发布"}</button></div>`).join("")
-    : `<div class="todo-history-empty">暂无可见资料</div>`;
-  const total = qsa<HTMLElement>("#knowledge .dense-card b");
-  if (total[0]) total[0].textContent = String(assets.length);
-  if (total[1]) total[1].textContent = String(assets.filter((item) => item.status !== "published").length);
-  if (total[2]) total[2].textContent = "--";
-  if (total[3]) total[3].textContent = "--";
-  const notes = qsa<HTMLElement>("#knowledge .dense-card small");
-  if (notes[0]) notes[0].textContent = `${new Set(assets.map((item) => item.category).filter(Boolean)).size} 个类目`;
-  if (notes[1]) notes[1].textContent = "来自数据库状态";
-  if (notes[2]) notes[2].textContent = "当前接口未记录下载次数";
-  if (notes[3]) notes[3].textContent = "当前接口未定义覆盖基准";
-  qsa<HTMLButtonElement>("[data-publish-asset]", grid).forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      void publishAsset(button.closest<HTMLElement>(".file-card")?.dataset.assetId || "");
-    });
+let editingKnowledgeAssetId: string | null = null;
+
+function knowledgeAssetTypeText(type?: string) {
+  const labels: Record<string, string> = { pdf: "PDF", word: "Word", excel: "Excel", image: "图片", video: "视频", archive: "压缩", link: "网页", other: "文件" };
+  return labels[type || "other"] || "文件";
+}
+
+function knowledgeSourceText(type?: string) {
+  if (type === "baidu_share") return "百度网盘";
+  if (type === "external_url") return "外部链接";
+  return "待补链接";
+}
+
+function knowledgeStatusText(status: string) {
+  return status === "published" ? "已发布" : status === "review" ? "待审核" : "草稿";
+}
+
+function knowledgeAssetIcon(asset: KnowledgeAsset) {
+  return asset.sourceType === "baidu_share" ? "BD" : knowledgeAssetTypeText(asset.fileType).slice(0, 4).toUpperCase();
+}
+
+function knowledgeFilteredAssets(assets: KnowledgeAsset[]) {
+  const keyword = state.knowledgeSearch.trim().toLowerCase();
+  return assets.filter((asset) => {
+    const searchable = [asset.title, asset.category, asset.description, ...(asset.tags || [])].join(" ").toLowerCase();
+    return (!keyword || searchable.includes(keyword))
+      && (state.knowledgeCategoryFilter === "all" || asset.category === state.knowledgeCategoryFilter)
+      && (state.knowledgeSourceFilter === "all" || (asset.sourceType || "legacy") === state.knowledgeSourceFilter)
+      && (state.knowledgeStatusFilter === "all" || asset.status === state.knowledgeStatusFilter)
+      && (state.knowledgeTypeFilter === "all" || (asset.fileType || "other") === state.knowledgeTypeFilter);
   });
+}
+
+function renderKnowledge(assets: KnowledgeAsset[] = state.knowledgeAssets) {
+  const all = assets;
+  const filtered = knowledgeFilteredAssets(all);
+  if (!state.selectedKnowledgeAssetId && filtered[0]) state.selectedKnowledgeAssetId = filtered[0].id;
+  const metrics = qsa<HTMLElement>("#knowledgeMetrics b");
+  if (metrics[0]) metrics[0].textContent = String(all.length);
+  if (metrics[1]) metrics[1].textContent = String(all.filter((item) => item.status === "published").length);
+  if (metrics[2]) metrics[2].textContent = String(all.filter((item) => item.sourceType === "baidu_share").length);
+  if (metrics[3]) metrics[3].textContent = String(all.reduce((sum, item) => sum + (item.accessCount || 0), 0));
+
+  const categories = new Map<string, number>();
+  all.forEach((asset) => categories.set(asset.category || "未分类", (categories.get(asset.category || "未分类") || 0) + 1));
+  const categoryList = qs<HTMLElement>("#knowledgeCategoryList");
+  if (categoryList) {
+    const categoryRows = [["all", "全部资料", all.length], ...[...categories.entries()].sort(([left], [right]) => left.localeCompare(right, "zh-CN")).map(([category, count]) => [category, category, count] as [string, string, number])];
+    categoryList.innerHTML = categoryRows.map(([value, label, count]) => `<button type="button" class="${state.knowledgeCategoryFilter === value ? "active" : ""}" data-knowledge-category="${escapeHtml(value)}"><span>${escapeHtml(label)}</span><b>${count}</b></button>`).join("");
+    qsa<HTMLButtonElement>("[data-knowledge-category]", categoryList).forEach((button) => button.addEventListener("click", () => {
+      state.knowledgeCategoryFilter = button.dataset.knowledgeCategory || "all";
+      renderKnowledge();
+    }));
+  }
+  const categoryCount = qs<HTMLElement>("#knowledgeCategoryCount");
+  if (categoryCount) categoryCount.textContent = `${categories.size} 个`;
+
+  const list = qs<HTMLElement>("#knowledgeFileList");
+  if (list) {
+    list.innerHTML = filtered.length ? filtered.map((asset) => `<div class="file-table-row ${state.selectedKnowledgeAssetId === asset.id ? "selected" : ""}" data-knowledge-asset-id="${escapeHtml(asset.id)}">
+      <div class="file-table-primary"><i class="file-type-mark">${escapeHtml(knowledgeAssetIcon(asset))}</i><div><b>${escapeHtml(asset.title)}</b><span>${escapeHtml(asset.category || "未分类")} · ${escapeHtml(asset.version || "v1")} · ${escapeHtml(ownerName(asset.ownerId))}</span></div></div>
+      <div class="file-table-cell"><b>${escapeHtml(knowledgeSourceText(asset.sourceType))}</b><span>${escapeHtml(knowledgeAssetTypeText(asset.fileType))}</span></div>
+      <div class="file-table-cell"><span class="file-status ${asset.status === "published" ? "published" : ""}">${escapeHtml(knowledgeStatusText(asset.status))}</span></div>
+      <div class="file-table-cell"><b>${asset.accessCount || 0}</b><span>次访问</span></div>
+    </div>`).join("") : `<div class="file-center-empty">${all.length ? "没有符合筛选条件的资料" : "还没有资料，先添加一个 URL"}</div>`;
+    qsa<HTMLElement>("[data-knowledge-asset-id]", list).forEach((row) => row.addEventListener("click", () => {
+      state.selectedKnowledgeAssetId = row.dataset.knowledgeAssetId || null;
+      renderKnowledge();
+    }));
+  }
+  renderKnowledgeDetail(all.find((asset) => asset.id === state.selectedKnowledgeAssetId) || filtered[0] || null);
+}
+
+function renderKnowledgeDetail(asset: KnowledgeAsset | null) {
+  const panel = qs<HTMLElement>("#knowledgeDetail");
+  if (!panel) return;
+  if (!asset) {
+    panel.innerHTML = `<div class="file-detail-empty">选择一项资料查看详情</div>`;
+    return;
+  }
+  const canManage = hasIamCapability("training.manage");
+  panel.innerHTML = `<div class="file-detail-head"><div><span>${escapeHtml(knowledgeSourceText(asset.sourceType))} · ${escapeHtml(knowledgeAssetTypeText(asset.fileType))}</span><h2>${escapeHtml(asset.title)}</h2></div><span class="file-status ${asset.status === "published" ? "published" : ""}">${escapeHtml(knowledgeStatusText(asset.status))}</span></div>
+    <p class="file-detail-description">${escapeHtml(asset.description || "暂无资料说明")}</p>
+    <dl class="file-detail-facts"><div><dt>版本</dt><dd>${escapeHtml(asset.version || "v1")}</dd></div><div><dt>维护人</dt><dd>${escapeHtml(ownerName(asset.ownerId))}</dd></div><div><dt>访问次数</dt><dd>${asset.accessCount || 0}</dd></div><div><dt>最后更新</dt><dd>${escapeHtml(formatDateTime(asset.updatedAt || asset.createdAt || ""))}</dd></div>${asset.sourceType === "baidu_share" ? `<div><dt>提取码</dt><dd>${escapeHtml(asset.shareCode || "未设置")}</dd></div>` : ""}</dl>
+    <div class="file-detail-tags">${(asset.tags || []).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("") || "<span>暂无标签</span>"}</div>
+    <div class="file-detail-actions"><button class="btn primary" id="openKnowledgeAssetButton" type="button">打开资料</button>${canManage || asset.ownerId === state.user?.id ? `<button class="btn" id="editKnowledgeAssetButton" type="button">编辑</button><button class="btn" id="publishKnowledgeAssetButton" type="button" ${asset.status === "published" ? "disabled" : ""}>${asset.status === "published" ? "已发布" : "发布资料"}</button><button class="btn danger" id="deleteKnowledgeAssetButton" type="button">删除</button>` : ""}</div>`;
+  qs<HTMLButtonElement>("#openKnowledgeAssetButton")?.addEventListener("click", () => void openKnowledgeAsset(asset));
+  qs<HTMLButtonElement>("#editKnowledgeAssetButton")?.addEventListener("click", () => openKnowledgeModal(asset.id));
+  qs<HTMLButtonElement>("#publishKnowledgeAssetButton")?.addEventListener("click", () => void publishAsset(asset.id));
+  qs<HTMLButtonElement>("#deleteKnowledgeAssetButton")?.addEventListener("click", () => void deleteKnowledgeAsset(asset.id));
 }
 
 async function publishAsset(id: string) {
@@ -13341,43 +17164,95 @@ async function publishAsset(id: string) {
   }
 }
 
-function openKnowledgeModal() {
-  openModal("上传资料", `
+function openKnowledgeModal(assetId?: string) {
+  editingKnowledgeAssetId = assetId || null;
+  const asset = assetId ? state.knowledgeAssets.find((item) => item.id === assetId) : undefined;
+  openModal(asset ? "编辑资料" : "添加资料", `
     <div class="form-grid">
-      <div class="form-field full"><label>资料标题</label><input id="assetTitleInput" placeholder="请输入资料标题"></div>
-      <div class="form-field"><label>资料类目</label><select id="assetCategoryInput"><option>产品知识</option><option>认证资料</option><option>报价规则</option><option>销售 SOP</option></select></div>
-      <div class="form-field"><label>版本</label><input id="assetVersionInput" value="v1"></div>
+      <div class="form-field full"><label>资料标题</label><input id="assetTitleInput" value="${escapeHtml(asset?.title || "")}" placeholder="例如：LED 灯具参数手册"></div>
+      <div class="form-field"><label>资料类目</label><input id="assetCategoryInput" value="${escapeHtml(asset?.category || "产品知识")}" placeholder="产品知识 / 认证资料"></div>
+      <div class="form-field"><label>版本</label><input id="assetVersionInput" value="${escapeHtml(asset?.version || "v1")}"></div>
+      <div class="form-field full"><label>资料 URL</label><input id="assetSourceUrlInput" value="${escapeHtml(asset?.sourceUrl || "")}" placeholder="https://pan.baidu.com/s/... 或其他 HTTPS 地址"><div class="file-source-note">只保存链接，不在服务器下载文件。百度网盘分享链接可填写提取码。</div></div>
+      <div class="form-field"><label>百度提取码</label><input id="assetShareCodeInput" value="${escapeHtml(asset?.shareCode || "")}" maxlength="64" placeholder="百度链接可填写"></div>
+      <div class="form-field"><label>文件格式</label><select id="assetFileTypeInput">${["pdf","word","excel","image","video","archive","link","other"].map((type) => `<option value="${type}" ${asset?.fileType === type ? "selected" : ""}>${knowledgeAssetTypeText(type)}</option>`).join("")}</select></div>
+      <div class="form-field full"><label>资料说明</label><textarea id="assetDescriptionInput" rows="3" placeholder="说明适用产品、客户场景或版本变更">${escapeHtml(asset?.description || "")}</textarea></div>
+      <div class="form-field full"><label>标签</label><input id="assetTagsInput" value="${escapeHtml((asset?.tags || []).join(","))}" placeholder="产品参数, CE, 报价"></div>
     </div>
-  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveAssetButton">上传资料</button>`);
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveAssetButton">${asset ? "保存修改" : "保存资料"}</button>`);
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
   qs("#saveAssetButton")?.addEventListener("click", () => void saveAsset());
 }
 
 async function saveAsset() {
   const title = qs<HTMLInputElement>("#assetTitleInput")?.value.trim() || "";
-  if (!title) {
-    toast("请填写资料标题", "error");
+  const sourceUrl = qs<HTMLInputElement>("#assetSourceUrlInput")?.value.trim() || "";
+  if (!title || !sourceUrl) {
+    toast("资料标题和 URL 均为必填", "error");
     return;
   }
-  const result = await api<{ asset: KnowledgeAsset }>("/api/knowledge/assets", {
-    method: "POST",
-    body: JSON.stringify({
-      title,
-      category: qs<HTMLSelectElement>("#assetCategoryInput")?.value || "产品知识",
-      version: qs<HTMLInputElement>("#assetVersionInput")?.value || "v1"
-    })
-  });
-  state.knowledgeAssets.unshift(result.asset);
-  renderKnowledge(state.knowledgeAssets);
-  renderDashboardKnowledgePanels();
-  closeModal();
-  toast("资料已上传");
+  try {
+    const payload = { title, category: qs<HTMLInputElement>("#assetCategoryInput")?.value.trim() || "产品知识", version: qs<HTMLInputElement>("#assetVersionInput")?.value.trim() || "v1", sourceUrl, shareCode: qs<HTMLInputElement>("#assetShareCodeInput")?.value.trim() || "", fileType: qs<HTMLSelectElement>("#assetFileTypeInput")?.value || "other", description: qs<HTMLTextAreaElement>("#assetDescriptionInput")?.value.trim() || "", tags: (qs<HTMLInputElement>("#assetTagsInput")?.value || "").split(",").map((tag) => tag.trim()).filter(Boolean) };
+    const result = await api<{ asset: KnowledgeAsset }>(editingKnowledgeAssetId ? `/api/knowledge/assets/${editingKnowledgeAssetId}` : "/api/knowledge/assets", { method: editingKnowledgeAssetId ? "PATCH" : "POST", body: JSON.stringify(payload) });
+    if (editingKnowledgeAssetId) {
+      const target = state.knowledgeAssets.find((item) => item.id === editingKnowledgeAssetId);
+      if (target) Object.assign(target, result.asset);
+    } else state.knowledgeAssets.unshift(result.asset);
+    state.selectedKnowledgeAssetId = result.asset.id;
+    renderKnowledge();
+    renderDashboardKnowledgePanels();
+    editingKnowledgeAssetId = null;
+    closeModal();
+    toast("资料已保存");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "资料保存失败", "error");
+  }
 }
 
-function assetIcon(category: string) {
-  if (category.includes("报价")) return "XLS";
-  if (category.includes("认证")) return "DOC";
-  return "PDF";
+async function openKnowledgeAsset(asset: KnowledgeAsset) {
+  const popup = window.open("", "_blank");
+  if (popup) popup.opener = null;
+  try {
+    const result = await api<{ asset: KnowledgeAsset; access: { url: string; sourceType: string; shareCode: string } }>(`/api/knowledge/assets/${asset.id}/access`, { method: "POST", body: "{}" });
+    Object.assign(asset, result.asset);
+    renderKnowledge();
+    if (result.access.shareCode && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(result.access.shareCode).catch(() => undefined);
+      toast("资料已打开，提取码已复制");
+    } else toast("资料已打开");
+    if (popup) popup.location.href = result.access.url;
+    else window.open(result.access.url, "_blank", "noopener,noreferrer");
+  } catch (error) {
+    popup?.close();
+    toast(error instanceof Error ? error.message : "资料打开失败", "error");
+  }
+}
+
+async function deleteKnowledgeAsset(id: string) {
+  const asset = state.knowledgeAssets.find((item) => item.id === id);
+  if (!asset || !await confirmAction({ title: "删除资料", message: `确定删除「${asset.title}」吗？`, consequences: ["只删除 CRM 中的资料记录", "不会删除百度网盘或外部网站上的原文件"], confirmLabel: "删除资料", tone: "danger" })) return;
+  try {
+    await api(`/api/knowledge/assets/${id}`, { method: "DELETE", body: "{}" });
+    state.knowledgeAssets = state.knowledgeAssets.filter((item) => item.id !== id);
+    state.selectedKnowledgeAssetId = null;
+    renderKnowledge();
+    renderDashboardKnowledgePanels();
+    toast("资料记录已删除");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "资料删除失败", "error");
+  }
+}
+
+async function refreshKnowledgeAssets(showToast = false) {
+  try {
+    const result = await api<{ assets: KnowledgeAsset[] }>("/api/knowledge/assets");
+    state.knowledgeAssets = result.assets;
+    if (state.selectedKnowledgeAssetId && !result.assets.some((item) => item.id === state.selectedKnowledgeAssetId)) state.selectedKnowledgeAssetId = null;
+    renderKnowledge();
+    renderDashboardKnowledgePanels();
+    if (showToast) toast("文件中心已刷新");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "文件中心刷新失败", "error");
+  }
 }
 
 function examStatusText(status: string) {
@@ -13412,7 +17287,99 @@ function questionTypeText(question: ExamQuestion) {
   return question.questionType === "multiple" || correctIndexesForQuestion(question).length > 1 ? "多选" : "单选";
 }
 
+function formatExamDate(value?: string) {
+  if (!value) return "长期有效";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "--";
+}
+
+function examRuntimeText(exam: Exam) {
+  return ({ draft: "草稿", upcoming: "未开始", open: "进行中", expired: "已截止", closed: "已关闭" } as Record<string, string>)[exam.runtimeStatus || exam.status] || examStatusText(exam.status);
+}
+
+function examRuntimeTone(exam: Exam) {
+  return ({ draft: "", upcoming: "amber", open: "green", expired: "red", closed: "red" } as Record<string, string>)[exam.runtimeStatus || exam.status] || examStatusTone(exam.status);
+}
+
 function renderExams(exams: Exam[]) {
+  const root = qs<HTMLElement>("#examWorkspace");
+  if (!root) return;
+  const canManage = state.examCanManage;
+  if (!canManage) state.examWorkspaceMode = "mine";
+  const mode = state.examWorkspaceMode;
+  const activeExam = exams.find((item) => item.id === state.selectedExamId) || exams[0];
+  state.selectedExamId = activeExam?.id || null;
+  const tabs = canManage ? `<div class="exam-view-tabs" role="tablist"><button class="${mode === "manage" ? "active" : ""}" data-exam-mode="manage">考试管理</button><button class="${mode === "mine" ? "active" : ""}" data-exam-mode="mine">我的考试</button><button class="${mode === "results" ? "active" : ""}" data-exam-mode="results">成绩分析</button></div>` : "";
+  const actions = canManage && mode === "manage" ? `<button class="btn" data-exam-bank>题库维护</button><button class="btn primary" data-exam-create>创建考试</button>` : "";
+  root.innerHTML = `<div class="exam-workspace-head"><div><h1>${mode === "manage" ? "考试管理" : mode === "results" ? "成绩分析" : "我的考试"}</h1><span>${mode === "manage" ? "组卷、发布并跟踪团队考试" : mode === "results" ? "查看参考、通过与补考情况" : "查看分配给你的考试任务与成绩"}</span></div><div class="head-actions">${actions}</div></div>${tabs}<div id="examWorkspaceBody"></div>`;
+  if (mode === "manage") renderExamManagement(exams, state.examReport);
+  else if (mode === "results") renderExamResultsWorkspace(exams);
+  else renderMyExams(exams);
+  qsa<HTMLButtonElement>("[data-exam-mode]", root).forEach((button) => button.addEventListener("click", () => {
+    state.examWorkspaceMode = (button.dataset.examMode || "mine") as AppState["examWorkspaceMode"];
+    renderExams(state.exams);
+  }));
+  qs("[data-exam-bank]", root)?.addEventListener("click", () => void openQuestionBankPage());
+  qs("[data-exam-create]", root)?.addEventListener("click", () => void openExamCreateModal());
+}
+
+function renderExamManagement(exams: Exam[], report: ExamReport | null) {
+  const body = qs<HTMLElement>("#examWorkspaceBody");
+  if (!body) return;
+  const selected = exams.find((item) => item.id === state.selectedExamId) || exams[0];
+  body.innerHTML = `<div class="exam-metric-strip"><div><span>草稿</span><b>${exams.filter((item) => item.runtimeStatus === "draft").length}</b></div><div><span>进行中</span><b>${exams.filter((item) => item.runtimeStatus === "open").length}</b></div><div><span>累计参考</span><b>${report?.totalAttempts || 0}</b></div><div><span>平均通过率</span><b>${report?.totalAttempts ? Math.round(((report.passedAttempts || 0) / report.totalAttempts) * 100) : 0}%</b></div></div><div class="exam-ops-layout"><section class="panel exam-list-panel"><div class="exam-table-head"><span>考试</span><span>发布规则</span><span>参考进度</span><span>状态</span><span></span></div><div class="exam-table-body">${exams.length ? exams.map((exam) => `<article class="exam-table-row ${exam.id === selected?.id ? "selected" : ""}" data-manage-exam="${escapeHtml(exam.id)}"><div><b>${escapeHtml(exam.title)}</b><span>${escapeHtml(exam.category)} · ${exam.questionCount} 题 · ${exam.passScore || 80} 分及格</span></div><div><b>${exam.durationMinutes || 20} 分钟</b><span>${formatExamDate(exam.startAt)} 至 ${formatExamDate(exam.endAt)}</span></div><div><b>${exam.completedCount || 0} / ${exam.assignedCount || 0}</b><span>${exam.assignedCount ? Math.round(((exam.completedCount || 0) / exam.assignedCount) * 100) : 0}% 已参考</span></div><div>${badge(examRuntimeText(exam), examRuntimeTone(exam))}</div><button class="exam-row-more" title="查看考试">›</button></article>`).join("") : `<div class="empty-state"><b>还没有考试</b><span>从题库选择题目创建第一场考试。</span></div>`}</div></section><aside class="panel exam-inspector" id="examInspector"></aside></div>`;
+  qsa<HTMLElement>("[data-manage-exam]", body).forEach((row) => row.addEventListener("click", () => { state.selectedExamId = row.dataset.manageExam || null; renderExamManagement(state.exams, state.examReport); }));
+  renderExamInspector(selected);
+}
+
+function renderExamInspector(exam?: Exam) {
+  const panel = qs<HTMLElement>("#examInspector");
+  if (!panel) return;
+  if (!exam) return void (panel.innerHTML = `<div class="empty-state"><b>选择一场考试</b></div>`);
+  panel.innerHTML = `<div class="exam-inspector-head"><div><span>${escapeHtml(exam.category)}</span><h2>${escapeHtml(exam.title)}</h2></div>${badge(examRuntimeText(exam), examRuntimeTone(exam))}</div><p class="exam-instructions">${escapeHtml(exam.instructions || "尚未填写考试说明")}</p><dl class="exam-rule-grid"><div><dt>题量</dt><dd>${exam.questionCount} 题</dd></div><div><dt>时长</dt><dd>${exam.durationMinutes || 20} 分钟</dd></div><div><dt>及格线</dt><dd>${exam.passScore || 80} 分</dd></div><div><dt>作答次数</dt><dd>${exam.maxAttempts || 1} 次</dd></div></dl><div class="exam-inspector-actions">${exam.runtimeStatus === "draft" || exam.runtimeStatus === "upcoming" ? `<button class="btn primary" data-publish-exam>发布配置</button>` : ""}${exam.runtimeStatus === "open" || exam.runtimeStatus === "upcoming" ? `<button class="btn" data-close-exam>关闭考试</button>` : ""}<button class="btn" data-view-results>查看成绩</button><button class="btn danger" data-delete-exam>删除</button></div>`;
+  qs("[data-publish-exam]", panel)?.addEventListener("click", () => void publishExam(exam.id));
+  qs("[data-close-exam]", panel)?.addEventListener("click", () => void closeExam(exam.id));
+  qs("[data-view-results]", panel)?.addEventListener("click", () => { state.examWorkspaceMode = "results"; renderExams(state.exams); });
+  qs("[data-delete-exam]", panel)?.addEventListener("click", () => void deleteExam(exam.id));
+}
+
+function renderMyExams(exams: Exam[]) {
+  const body = qs<HTMLElement>("#examWorkspaceBody");
+  if (!body) return;
+  const mine = exams.filter((exam) => exam.assignment || !state.examCanManage);
+  const pending = mine.filter((exam) => exam.runtimeStatus === "open" && exam.assignment?.status !== "passed");
+  body.innerHTML = `<div class="exam-metric-strip candidate"><div><span>待完成</span><b>${pending.length}</b></div><div><span>进行中</span><b>${mine.filter((item) => item.assignment?.status === "in_progress").length}</b></div><div><span>已通过</span><b>${mine.filter((item) => item.assignment?.status === "passed").length}</b></div><div><span>个人最佳</span><b>${Math.max(0, ...mine.map((item) => item.bestScore || 0))}</b></div></div><section class="exam-candidate-section"><div class="exam-section-label"><h2>考试任务</h2><span>${pending.length} 场待处理</span></div><div class="exam-task-grid">${mine.length ? mine.map((exam) => {
+    const status = exam.assignment?.status;
+    const canStart = exam.runtimeStatus === "open" && status !== "passed" && (exam.attemptsUsed || 0) < (exam.maxAttempts || 1);
+    const hasResult = status === "passed" || (exam.attemptsUsed || 0) > 0;
+    const action = exam.inProgressAttemptId ? "继续考试" : canStart ? "开始考试" : hasResult ? "查看结果" : exam.runtimeStatus === "upcoming" ? "尚未开始" : "已结束";
+    return `<article class="exam-task-card"><div class="exam-task-top"><span>${escapeHtml(exam.category)}</span>${badge(status === "passed" ? "已通过" : examRuntimeText(exam), status === "passed" ? "green" : examRuntimeTone(exam))}</div><h3>${escapeHtml(exam.title)}</h3><p>${escapeHtml(exam.instructions || "请在规定时间内完成考试。")}</p><div class="exam-task-facts"><span>${exam.questionCount} 题</span><span>${exam.durationMinutes || 20} 分钟</span><span>${exam.passScore || 80} 分及格</span><span>剩余 ${Math.max(0, (exam.maxAttempts || 1) - (exam.attemptsUsed || 0))} 次</span></div><div class="exam-task-deadline"><span>${exam.runtimeStatus === "upcoming" ? "开始" : "截止"}</span><b>${formatExamDate(exam.runtimeStatus === "upcoming" ? exam.startAt : exam.endAt)}</b></div><button class="btn ${canStart || exam.inProgressAttemptId ? "primary" : ""}" data-candidate-exam="${escapeHtml(exam.id)}" data-result-only="${hasResult && !canStart && !exam.inProgressAttemptId ? "true" : "false"}" ${!canStart && !exam.inProgressAttemptId && !hasResult ? "disabled" : ""}>${action}</button></article>`;
+  }).join("") : `<div class="empty-state"><b>暂无考试任务</b><span>发布人指派考试后会显示在这里。</span></div>`}</div></section>`;
+  qsa<HTMLButtonElement>("[data-candidate-exam]", body).forEach((button) => button.addEventListener("click", () => button.dataset.resultOnly === "true" ? void openExamResult(button.dataset.candidateExam || "") : void openExamModal(button.dataset.candidateExam || "")));
+}
+
+function renderExamResultsWorkspace(exams: Exam[]) {
+  const body = qs<HTMLElement>("#examWorkspaceBody");
+  if (!body) return;
+  const selected = exams.find((item) => item.id === state.selectedExamId) || exams[0];
+  body.innerHTML = `<div class="exam-results-layout"><aside class="panel exam-result-exams">${exams.map((exam) => `<button class="${exam.id === selected?.id ? "active" : ""}" data-result-exam="${escapeHtml(exam.id)}"><span>${escapeHtml(exam.title)}</span><small>${exam.completedCount || 0}/${exam.assignedCount || 0} 已参考</small></button>`).join("")}</aside><section class="panel exam-result-detail" id="examResultDetail"><div class="exam-workspace-loading"><b>成绩加载中</b></div></section></div>`;
+  qsa<HTMLButtonElement>("[data-result-exam]", body).forEach((button) => button.addEventListener("click", () => { state.selectedExamId = button.dataset.resultExam || null; renderExamResultsWorkspace(state.exams); }));
+  if (selected) void loadExamResults(selected.id);
+}
+
+async function loadExamResults(id: string) {
+  const panel = qs<HTMLElement>("#examResultDetail");
+  if (!panel) return;
+  try {
+    const result = await api<{ exam: Exam; assignments: Array<ExamAssignment & { userName: string; attempts: ExamAttempt[] }> }>(`/api/exams/${id}/results`);
+    const passed = result.assignments.filter((item) => item.status === "passed").length;
+    panel.innerHTML = `<div class="exam-result-head"><div><span>${escapeHtml(result.exam.category)}</span><h2>${escapeHtml(result.exam.title)}</h2></div><div><b>${result.assignments.length ? Math.round((passed / result.assignments.length) * 100) : 0}%</b><span>通过率</span></div></div><div class="exam-result-table"><div class="exam-result-row head"><span>成员</span><span>状态</span><span>次数</span><span>最高分</span><span>最近提交</span></div>${result.assignments.length ? result.assignments.map((item) => `<div class="exam-result-row"><b>${escapeHtml(item.userName)}</b><span>${badge(item.status === "passed" ? "已通过" : item.status === "pending" ? "未参考" : item.status === "in_progress" ? "答题中" : "未通过", item.status === "passed" ? "green" : item.status === "failed" ? "red" : "")}</span><span>${item.attemptCount}</span><strong>${item.bestScore}</strong><span>${formatExamDate(item.attempts[0]?.submittedAt)}</span></div>`).join("") : `<div class="empty-state"><b>尚未指派考生</b></div>`}</div>`;
+  } catch (error) {
+    panel.innerHTML = `<div class="empty-state"><b>成绩加载失败</b><span>${escapeHtml(error instanceof Error ? error.message : "请稍后重试")}</span></div>`;
+  }
+}
+
+function renderExamsLegacy(exams: Exam[]) {
   const list = qs<HTMLElement>("#exam .exam-sidebar .category-list");
   if (!list) return;
   syncTrainingManagementUi();
@@ -13559,7 +17526,149 @@ function renderExamReport() {
   }
 }
 
+function examAnswersFromUi() {
+  const answers: Record<string, number | number[]> = {};
+  qsa<HTMLElement>("#appModal [data-question]").forEach((question) => {
+    const row = qs<HTMLElement>(".exam-answer-options", question);
+    const active = qsa<HTMLElement>("[data-option-index].active", question);
+    if (!active.length) return;
+    const selected = active.map((item) => Number(item.dataset.optionIndex || 0));
+    answers[question.dataset.question || ""] = row?.dataset.questionType === "multiple" ? selected : selected[0];
+  });
+  return answers;
+}
+
+function refreshExamTakingProgress() {
+  const questions = qsa<HTMLElement>("#appModal [data-question]");
+  const answered = questions.filter((item) => qsa("[data-option-index].active", item).length > 0).length;
+  const value = qs<HTMLElement>("#examAnsweredCount");
+  const fill = qs<HTMLElement>("#examAnswerProgress");
+  if (value) value.textContent = `${answered} / ${questions.length}`;
+  if (fill) fill.style.width = `${Math.round((answered / Math.max(questions.length, 1)) * 100)}%`;
+  questions.forEach((question, index) => qs<HTMLElement>(`[data-exam-nav="${CSS.escape(question.dataset.question || "")}"]`)?.classList.toggle("answered", qsa("[data-option-index].active", question).length > 0));
+}
+
 async function openExamModal(id: string) {
+  try {
+    const result = await api<{ exam: Exam; attempt: ExamAttempt; questions: ExamQuestion[]; resumed: boolean }>(`/api/exams/${id}/start`, { method: "POST", body: "{}" });
+    const answers = { ...result.attempt.answers };
+    openModal(result.exam.title, `<div class="exam-taking-shell"><header class="exam-taking-head"><div><span>${escapeHtml(result.exam.category)}</span><b>${result.questions.length} 题 · ${result.exam.passScore || 80} 分及格</b></div><div class="exam-save-state" id="examSaveState">${result.resumed ? "已恢复上次进度" : "答案自动保存"}</div><div class="exam-countdown"><span>剩余时间</span><b id="examCountdown">--:--</b></div></header><div class="exam-taking-layout"><aside class="exam-question-nav"><div><span>答题进度</span><b id="examAnsweredCount">0 / ${result.questions.length}</b></div><div class="exam-answer-track"><i id="examAnswerProgress"></i></div><div class="exam-nav-grid">${result.questions.map((question, index) => `<button data-exam-nav="${escapeHtml(question.id)}">${index + 1}</button>`).join("")}</div><small>答案变更后自动保存</small></aside><main class="exam-question-stage">${result.questions.map((question, index) => {
+      const selectedRaw = answers[question.id];
+      const selected = Array.isArray(selectedRaw) ? selectedRaw : selectedRaw == null ? [] : [selectedRaw];
+      const type = question.questionType || "single";
+      return `<section class="exam-live-question" data-question="${escapeHtml(question.id)}"><div class="exam-live-meta"><span>第 ${index + 1} 题 / 共 ${result.questions.length} 题</span>${badge(questionTypeText(question), type === "multiple" ? "amber" : "")}</div><h2>${escapeHtml(question.stem)}</h2><div class="exam-answer-options" data-question-type="${type}">${question.options.map((option, optionIndex) => `<button type="button" class="${selected.includes(optionIndex) ? "active" : ""}" data-option-index="${optionIndex}"><i>${String.fromCharCode(65 + optionIndex)}</i><span>${escapeHtml(option)}</span></button>`).join("")}</div></section>`;
+    }).join("")}</main></div></div>`, `<button class="btn" data-modal-close>暂时离开</button><button class="btn primary" id="submitExamButton">确认交卷</button>`, { closeOnBackdrop: false });
+    const modal = qs<HTMLElement>("#appModal .modal");
+    modal?.classList.add("exam-taking-modal");
+    const modalBody = qs<HTMLElement>("#appModal .modal-body");
+    if (modalBody) modalBody.scrollTop = 0;
+    let saveTimer: number | null = null;
+    const saveAnswers = async () => {
+      const saveState = qs<HTMLElement>("#examSaveState");
+      try {
+        if (saveState) saveState.textContent = "保存中";
+        await api(`/api/exam-attempts/${result.attempt.id}/answers`, { method: "PATCH", body: JSON.stringify({ answers: examAnswersFromUi() }) });
+        if (saveState) saveState.textContent = `已保存 ${new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}`;
+      } catch (error) {
+        if (saveState) saveState.textContent = "保存失败，请重试";
+        toast(error instanceof Error ? error.message : "答案保存失败", "error");
+      }
+    };
+    qsa<HTMLButtonElement>("#appModal .exam-answer-options [data-option-index]").forEach((option) => option.addEventListener("click", () => {
+      const row = option.closest<HTMLElement>(".exam-answer-options")!;
+      if (row.dataset.questionType === "multiple") option.classList.toggle("active");
+      else {
+        qsa<HTMLElement>("[data-option-index]", row).forEach((item) => item.classList.remove("active"));
+        option.classList.add("active");
+      }
+      if (modalBody) modalBody.scrollTop = 0;
+      refreshExamTakingProgress();
+      if (saveTimer) window.clearTimeout(saveTimer);
+      saveTimer = window.setTimeout(() => void saveAnswers(), 450);
+    }));
+    const questionStage = qs<HTMLElement>(".exam-question-stage");
+    qsa<HTMLButtonElement>("[data-exam-nav]").forEach((button) => button.addEventListener("click", () => {
+      const target = qs<HTMLElement>(`[data-question="${CSS.escape(button.dataset.examNav || "")}"]`);
+      if (target && questionStage) questionStage.scrollTo({ top: Math.max(0, target.offsetTop - 16), behavior: "smooth" });
+    }));
+    refreshExamTakingProgress();
+    if (examTimerHandle) window.clearInterval(examTimerHandle);
+    const updateTimer = () => {
+      const node = qs<HTMLElement>("#examCountdown");
+      if (!node) {
+        if (examTimerHandle) window.clearInterval(examTimerHandle);
+        examTimerHandle = null;
+        return;
+      }
+      const remaining = Math.max(0, new Date(result.attempt.expiresAt || "").getTime() - Date.now());
+      const minutes = Math.floor(remaining / 60_000);
+      const seconds = Math.floor((remaining % 60_000) / 1000);
+      node.textContent = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+      node.classList.toggle("urgent", remaining <= 5 * 60_000);
+      if (remaining <= 0) void submitExam(result.attempt.id, true);
+    };
+    updateTimer();
+    examTimerHandle = window.setInterval(updateTimer, 1000);
+    qs("#submitExamButton")?.addEventListener("click", () => void submitExam(result.attempt.id));
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "无法开始考试", "error");
+    if (/最大作答次数|已经交卷/.test(error instanceof Error ? error.message : "")) void openExamResult(id);
+  }
+}
+
+async function submitExam(attemptId: string, automatic = false) {
+  const answers = examAnswersFromUi();
+  const total = qsa<HTMLElement>("#appModal [data-question]").length;
+  const unanswered = Math.max(0, total - Object.keys(answers).length);
+  if (!automatic && !window.confirm(unanswered ? `还有 ${unanswered} 题未作答，仍要交卷吗？` : "确认提交试卷吗？提交后本次作答不能修改。")) return;
+  const button = qs<HTMLButtonElement>("#submitExamButton");
+  if (button) { button.disabled = true; button.textContent = automatic ? "超时交卷中" : "交卷中"; }
+  try {
+    const result = await api<{ attempt: ExamAttempt; exam: Exam; report: ExamReport; canReview: boolean }>(`/api/exam-attempts/${attemptId}/submit`, { method: "POST", body: JSON.stringify({ answers }) });
+    if (examTimerHandle) window.clearInterval(examTimerHandle);
+    examTimerHandle = null;
+    state.examReport = result.report;
+    await refreshExamData();
+    closeModal();
+    openExamScoreResult(result.attempt, result.exam, result.canReview);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "交卷失败", "error");
+    if (button) { button.disabled = false; button.textContent = "确认交卷"; }
+  }
+}
+
+function openExamScoreResult(attempt: ExamAttempt, exam: Exam, canReview: boolean) {
+  openModal("考试结果", `<div class="exam-score-result ${attempt.passed ? "passed" : "failed"}"><div class="exam-score-ring"><b>${attempt.score}</b><span>分</span></div><div><span>${attempt.passed ? "考试通过" : "暂未通过"}</span><h2>${escapeHtml(exam.title)}</h2><p>答对 ${attempt.correctCount} / ${attempt.totalQuestions} 题 · 及格线 ${exam.passScore || 80} 分</p>${canReview ? `<small>本场考试允许查看答案解析，可在“我的考试”中打开结果。</small>` : `<small>本场考试暂不开放标准答案与解析。</small>`}</div></div>`, `<button class="btn primary" data-modal-close>完成</button>`);
+}
+
+async function openExamResult(id: string) {
+  try {
+    const detail = await api<{ exam: Exam; questions: ExamQuestion[]; latestAttempt: ExamAttempt | null; canReview: boolean }>(`/api/exams/${id}/detail`);
+    if (!detail.latestAttempt || detail.latestAttempt.status === "in_progress") return void openExamModal(id);
+    const attempt = detail.latestAttempt;
+    openModal(`${detail.exam.title} · 考试结果`, `<div class="exam-review-summary"><div class="exam-score-ring"><b>${attempt.score}</b><span>分</span></div><div><h2>${attempt.passed ? "已通过" : "未通过"}</h2><p>答对 ${attempt.correctCount} / ${attempt.totalQuestions} 题 · ${formatExamDate(attempt.submittedAt)} 提交</p></div></div>${detail.canReview ? `<div class="exam-review-list">${detail.questions.map((question, index) => {
+      const raw = attempt.answers[question.id];
+      const selected = Array.isArray(raw) ? raw : raw == null ? [] : [raw];
+      return `<article><span>第 ${index + 1} 题</span><h3>${escapeHtml(question.stem)}</h3><p>你的答案：${selected.length ? selected.map((item) => String.fromCharCode(65 + item)).join("、") : "未作答"} · 正确答案：${correctIndexesForQuestion(question).map((item) => String.fromCharCode(65 + item)).join("、")}</p><small>${escapeHtml(question.explanation)}</small></article>`;
+    }).join("")}</div>` : `<div class="exam-review-locked"><b>答案解析暂未开放</b><span>发布人关闭考试或开启交卷后复盘后可查看。</span></div>`}`, `<button class="btn primary" data-modal-close>关闭</button>`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "结果加载失败", "error");
+  }
+}
+
+async function closeExam(id: string) {
+  const exam = state.exams.find((item) => item.id === id);
+  if (!exam || !await confirmAction({ title: "关闭考试", message: `关闭「${exam.title}」后将不再允许开考。`, consequences: ["进行中的作答将按已保存答案自动交卷", "成绩与指派记录会保留"], confirmLabel: "关闭考试", tone: "warning" })) return;
+  try {
+    await api(`/api/exams/${id}/close`, { method: "PATCH", body: "{}" });
+    await refreshExamData();
+    toast("考试已关闭");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "关闭考试失败", "error");
+  }
+}
+
+async function openExamModalLegacy(id: string) {
   const exam = state.exams.find((item) => item.id === id) || state.exams[0];
   if (!exam) return;
   const detail = await api<{ exam: Exam; questions: ExamQuestion[]; latestAttempt: ExamAttempt | null; report: ExamReport }>(`/api/exams/${exam.id}/detail`);
@@ -13590,10 +17699,10 @@ async function openExamModal(id: string) {
       option.classList.add("active");
     });
   });
-  qs("#submitExamButton")?.addEventListener("click", () => void submitExam(exam.id));
+  qs("#submitExamButton")?.addEventListener("click", () => void submitExamLegacy(exam.id));
 }
 
-async function submitExam(id: string) {
+async function submitExamLegacy(id: string) {
   const answers: Record<string, number | number[]> = {};
   qsa<HTMLElement>("#appModal [data-question]").forEach((question) => {
     const optionRow = qs<HTMLElement>(".option-row", question);
@@ -13619,11 +17728,63 @@ async function submitExam(id: string) {
   toast(`交卷成功：${result.attempt.score} 分，${result.attempt.passed ? "已通过" : "需补考"}`);
 }
 
+function examDateTimeInput(value?: string, fallbackHours = 0) {
+  const date = value ? new Date(value) : new Date(Date.now() + fallbackHours * 60 * 60 * 1000);
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
 async function publishExam(id: string) {
   const exam = state.exams.find((item) => item.id === id);
   if (!exam) return;
-  if (exam.status === "published" && !window.confirm("该考试已经发布，是否重新发布并刷新状态？")) return;
-  if (exam.status !== "published" && !window.confirm(`确认发布「${exam.title}」？发布后销售即可参加考试。`)) return;
+  const candidates = state.examCandidates;
+  openModal("发布考试", `<div class="exam-publish-layout"><section><div class="exam-publish-paper"><span>${escapeHtml(exam.category)}</span><h2>${escapeHtml(exam.title)}</h2><p>${exam.questionCount} 题 · ${exam.durationMinutes || 20} 分钟 · ${exam.passScore || 80} 分及格</p></div><div class="form-grid"><div class="form-field full"><label>考试说明</label><textarea id="examPublishInstructions" rows="3">${escapeHtml(exam.instructions || "请在规定时间内独立完成考试。")}</textarea></div><div class="form-field"><label>开始时间</label><input type="datetime-local" id="examPublishStart" value="${examDateTimeInput(exam.startAt)}"></div><div class="form-field"><label>截止时间</label><input type="datetime-local" id="examPublishEnd" value="${examDateTimeInput(exam.endAt, 168)}"></div><div class="form-field"><label>答题时长（分钟）</label><input type="number" min="1" max="240" id="examPublishDuration" value="${exam.durationMinutes || 20}"></div><div class="form-field"><label>及格分</label><input type="number" min="1" max="100" id="examPublishPass" value="${exam.passScore || 80}"></div><div class="form-field"><label>最多作答次数</label><input type="number" min="1" max="10" id="examPublishAttempts" value="${exam.maxAttempts || 1}"></div><label class="exam-review-toggle"><input type="checkbox" id="examPublishReview" ${exam.allowReview ? "checked" : ""}><span><b>交卷后开放答案解析</b><small>考试仍在进行时也会显示标准答案，请谨慎开启</small></span></label></div></section><aside class="exam-assignee-picker"><div><h3>选择考生</h3><button class="btn" type="button" id="examSelectAllCandidates">全选</button></div><span>发布时固定应考名单，后续新成员不会自动加入。</span><div>${candidates.length ? candidates.map((candidate) => `<label><input type="checkbox" data-exam-candidate="${escapeHtml(candidate.id)}" checked><i>${escapeHtml(candidate.avatar || candidate.name.slice(0, 2))}</i><span><b>${escapeHtml(candidate.name)}</b><small>${candidate.role === "manager" ? "经理" : candidate.role === "admin" ? "管理员" : "业务员"}</small></span></label>`).join("") : `<div class="empty-state"><b>没有可指派成员</b></div>`}</div></aside></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="confirmPublishExam" ${candidates.length ? "" : "disabled"}>确认发布</button>`);
+  qs("#examSelectAllCandidates")?.addEventListener("click", () => {
+    const boxes = qsa<HTMLInputElement>("[data-exam-candidate]");
+    const shouldCheck = boxes.some((item) => !item.checked);
+    boxes.forEach((item) => { item.checked = shouldCheck; });
+  });
+  qs<HTMLButtonElement>("#confirmPublishExam")?.addEventListener("click", async () => {
+    const button = qs<HTMLButtonElement>("#confirmPublishExam")!;
+    const assigneeIds = qsa<HTMLInputElement>("[data-exam-candidate]:checked").map((item) => item.dataset.examCandidate || "").filter(Boolean);
+    if (!assigneeIds.length) return void toast("请至少选择 1 名考生", "error");
+    const startValue = qs<HTMLInputElement>("#examPublishStart")?.value || "";
+    const endValue = qs<HTMLInputElement>("#examPublishEnd")?.value || "";
+    try {
+      button.disabled = true;
+      button.textContent = "发布中";
+      await api(`/api/exams/${id}/publish`, { method: "PATCH", body: JSON.stringify({
+        assigneeIds,
+        startAt: new Date(startValue).toISOString(),
+        endAt: new Date(endValue).toISOString(),
+        durationMinutes: Number(qs<HTMLInputElement>("#examPublishDuration")?.value || 20),
+        passScore: Number(qs<HTMLInputElement>("#examPublishPass")?.value || 80),
+        maxAttempts: Number(qs<HTMLInputElement>("#examPublishAttempts")?.value || 1),
+        allowReview: Boolean(qs<HTMLInputElement>("#examPublishReview")?.checked),
+        instructions: qs<HTMLTextAreaElement>("#examPublishInstructions")?.value.trim() || ""
+      }) });
+      closeModal();
+      await refreshExamData();
+      toast("考试已发布并完成考生指派");
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "确认发布";
+      toast(error instanceof Error ? error.message : "发布失败", "error");
+    }
+  });
+}
+
+async function publishExamLegacy(id: string) {
+  const exam = state.exams.find((item) => item.id === id);
+  if (!exam) return;
+  const republish = exam.status === "published";
+  if (!await confirmAction({
+    title: republish ? "重新发布考试" : "发布考试",
+    message: republish ? `「${exam.title}」已经发布，将重新发布并刷新状态。` : `将发布「${exam.title}」。`,
+    consequences: republish ? ["考试状态与参与入口会刷新", "已有考试成绩不会被清理"] : ["销售人员将可以参加考试", "发布后仍可更新并重新发布"],
+    confirmLabel: republish ? "重新发布" : "发布考试",
+    tone: "normal"
+  })) return;
   const publishButton = qs<HTMLButtonElement>(`#exam [data-exam-id="${CSS.escape(id)}"] [data-publish-exam]`);
   try {
     if (publishButton) {
@@ -13649,7 +17810,12 @@ async function publishExam(id: string) {
 async function deleteExam(id: string) {
   const exam = state.exams.find((item) => item.id === id);
   if (!exam) return;
-  if (!window.confirm(`确认删除「${exam.title}」？删除后会同步清理组卷关系和考试成绩记录。`)) return;
+  if (!await confirmAction({
+    title: "删除考试",
+    message: `将删除「${exam.title}」。`,
+    consequences: ["该考试的组卷关系会被清理", "已有考试成绩记录会同步删除"],
+    confirmLabel: "删除考试"
+  })) return;
   const deleteButton = qs<HTMLButtonElement>(`#exam [data-exam-id="${CSS.escape(id)}"] [data-delete-exam]`);
   try {
     if (deleteButton) {
@@ -13681,13 +17847,17 @@ async function bulkDeleteExams() {
     return;
   }
   const titles = state.exams.filter((exam) => ids.includes(exam.id)).map((exam) => exam.title);
-  if (!window.confirm(`确认批量删除 ${ids.length} 场考试？\n${titles.slice(0, 5).join("、")}${titles.length > 5 ? "等" : ""}\n删除后会同步清理组卷关系和考试成绩记录。`)) return;
+  if (!await confirmAction({
+    title: `批量删除 ${ids.length} 场考试`,
+    message: "这是一项不可恢复的批量操作。",
+    detail: `${titles.slice(0, 5).join("、")}${titles.length > 5 ? `等 ${ids.length} 场` : ""}`,
+    consequences: ["相关组卷关系会被清理", "已有考试成绩记录会同步删除"],
+    confirmLabel: `删除 ${ids.length} 场考试`,
+    verificationText: String(ids.length)
+  })) return;
   const button = qs<HTMLButtonElement>("#exam [data-bulk-delete-exams]");
   try {
-    if (button) {
-      button.disabled = true;
-      button.textContent = "删除中";
-    }
+    setButtonPending(button, true, "批量删除", `正在删除 ${ids.length} 场`);
     const result = await api<{ deleted: Exam[]; exams: Exam[]; report: ExamReport }>("/api/exams/bulk-delete", {
       method: "POST",
       body: JSON.stringify({ ids })
@@ -13702,10 +17872,7 @@ async function bulkDeleteExams() {
   } catch (error) {
     toast(error instanceof Error ? error.message : "批量删除考试失败", "error");
   } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = "批量删除";
-    }
+    setButtonPending(button, false, "批量删除", "删除中");
   }
 }
 
@@ -13751,16 +17918,16 @@ async function ensureExamQuestionsLoaded() {
 async function openExamCreateModal(category = "产品知识") {
   await ensureExamQuestionsLoaded();
   const categories = Array.from(new Set([...state.examQuestions.map((question) => question.category), category, "产品知识", "认证资料", "报价规则"]));
-  openModal("发布考试 · 勾选题目组卷", `
+  openModal("创建考试草稿", `
     <div class="form-grid exam-create-grid">
       <div class="form-field full"><label>考试名称</label><input id="examTitleInput" value="${escapeHtml(category)}新品知识抽考"></div>
       <div class="form-field"><label>类目</label><select id="examCategoryInput">${categories.map((item) => `<option ${item === category ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></div>
       <div class="form-field"><label>考试时长</label><input id="examDurationInput" type="number" value="20" min="5" max="180"></div>
       <div class="form-field"><label>及格分</label><input id="examPassInput" type="number" value="80" min="1" max="100"></div>
-      <div class="form-field"><label>适用对象</label><select id="examRoleInput"><option value="sales">销售必考</option><option value="manager">主管必考</option><option value="all">全员必考</option></select></div>
+      <div class="form-field full"><label>考试说明</label><textarea id="examInstructionsInput" rows="2">请在规定时间内独立完成考试。</textarea></div>
       <div class="form-field full"><label>从基础题库勾选试题</label><div class="exam-bank-toolbar"><span id="examCreateSelectionSummary">已选 0 题</span><button class="btn" type="button" id="selectCategoryQuestionsButton">选中当前类目</button></div><div class="exam-bank-list" id="examQuestionPicker"></div></div>
     </div>
-  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveExamButton">创建考试</button>`);
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveExamButton">保存草稿</button>`);
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
   renderExamQuestionPicker(category);
   qs<HTMLSelectElement>("#examCategoryInput")?.addEventListener("change", (event) => renderExamQuestionPicker((event.currentTarget as HTMLSelectElement).value));
@@ -13795,7 +17962,8 @@ async function saveExam(button?: HTMLButtonElement) {
         questionIds,
         durationMinutes: Number(qs<HTMLInputElement>("#examDurationInput")?.value || 20),
         passScore: Number(qs<HTMLInputElement>("#examPassInput")?.value || 80),
-        targetRole: qs<HTMLSelectElement>("#examRoleInput")?.value || "sales"
+        targetRole: "all",
+        instructions: qs<HTMLTextAreaElement>("#examInstructionsInput")?.value.trim() || ""
       })
     });
     state.exams.unshift(result.exam);
@@ -13803,13 +17971,13 @@ async function saveExam(button?: HTMLButtonElement) {
     state.examReport = result.report;
     await refreshExamData();
     closeModal();
-    toast(`考试已创建，已组卷 ${result.questions.length} 道题`);
+    toast(`考试草稿已保存，已组卷 ${result.questions.length} 道题`);
   } catch (error) {
     toast(error instanceof Error ? error.message : "创建考试失败", "error");
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "创建考试";
+      button.textContent = "保存草稿";
     }
   }
 }
@@ -14126,7 +18294,12 @@ async function exportQuestionBank() {
 
 async function deleteBankQuestion(id: string) {
   if (!id) return;
-  if (!window.confirm("确认删除这道题？相关考试中的引用也会同步移除。")) return;
+  if (!await confirmAction({
+    title: "删除题库题目",
+    message: "这道题将从题库中删除。",
+    consequences: ["相关考试中的题目引用会同步移除", "已有考试结构可能发生变化"],
+    confirmLabel: "删除题目"
+  })) return;
   try {
     const result = await api<{ question: ExamQuestion; report: ExamReport }>(`/api/exam-questions/${id}`, { method: "DELETE" });
     state.examQuestions = state.examQuestions.filter((question) => question.id !== result.question.id);
@@ -14166,9 +18339,12 @@ function openExamCategoryModal() {
 }
 
 async function refreshExamData() {
-  const result = await api<{ exams: Exam[]; report: ExamReport }>("/api/exams");
+  const result = await api<{ exams: Exam[]; report: ExamReport; canManage: boolean; candidates: ExamCandidate[] }>("/api/exams");
   state.exams = result.exams;
   state.examReport = result.report;
+  state.examCanManage = result.canManage;
+  state.examCandidates = result.candidates || [];
+  if (!state.examCanManage && state.examWorkspaceMode !== "mine") state.examWorkspaceMode = "mine";
   state.selectedExamId = state.selectedExamId || result.exams[0]?.id || null;
   renderExams(state.exams);
   renderDashboardKnowledgePanels();
@@ -14446,7 +18622,7 @@ function renderMysqlImport() {
 }
 
 async function refreshDatabaseMaintenance() {
-  const canManage = state.user && ["admin", "super_admin"].includes(state.user.role);
+  const canManage = hasIamCapability("database.maintain");
   if (!canManage) return;
   const badgeNode = qs<HTMLElement>("#databaseMaintenanceState");
   try {
@@ -14707,7 +18883,12 @@ async function downloadDatabaseBackup(id: string) {
 }
 
 async function removeDatabaseBackup(id: string) {
-  if (!window.confirm("确认删除这个服务器本地备份？删除后无法恢复。")) return;
+  if (!await confirmAction({
+    title: "删除服务器本地备份",
+    message: "该备份文件将从服务器永久删除。",
+    consequences: ["无法再使用此备份恢复数据库", "删除后无法撤销"],
+    confirmLabel: "永久删除备份"
+  })) return;
   try {
     await api(`/api/system/database-backups/jobs/${encodeURIComponent(id)}`, { method: "DELETE", headers: mysqlImportHeaders() });
     if (databaseCurrentJob?.id === id) databaseCurrentJob = null;
@@ -14731,10 +18912,410 @@ function downloadDatabaseLog() {
   window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
 
+const accessControlScopeText: Record<AccessControlScope, string> = {
+  none: "未授权",
+  self: "本人",
+  org_unit: "本组织",
+  org_subtree: "本组织及下级",
+  tenant: "当前公司",
+  public_pool: "客户公池",
+  platform: "平台"
+};
+
+function accessControlScopeBadge(scope: AccessControlScope) {
+  return `<span class="ac-scope-chip ${scope}">${accessControlScopeText[scope]}</span>`;
+}
+
+function activeAccessControlPage(): AccessControlPage {
+  return (qs<HTMLElement>(".iam-view.active")?.dataset.iamPage as AccessControlPage | undefined) || "members";
+}
+
+function activeAccessControlRoot() {
+  return qs<HTMLElement>(".iam-view.active .ac-root");
+}
+
+function accessControlLoading() {
+  const root = activeAccessControlRoot();
+  if (!root) return;
+  root.innerHTML = `<div class="ac-loading-shell" aria-label="正在加载组织与权限">
+    <div class="ac-loading-line wide"></div><div class="ac-loading-line"></div>
+    <div class="ac-loading-workbench"></div>
+  </div>`;
+}
+
+async function loadAccessControl(teamId = "") {
+  const activeView = qs<HTMLElement>(".iam-view.active")?.id || "member-management";
+  if (!state.user || !canAccessWorkspaceView(activeView, state.user)) return;
+  accessControlLoading();
+  try {
+    const queryParams = new URLSearchParams();
+    if (state.iamCapabilities?.source === "platform" && teamId) queryParams.set("teamId", teamId);
+    queryParams.set("page", activeAccessControlPage());
+    const query = `?${queryParams.toString()}`;
+    accessControlOverview = await api<AccessControlOverview>(`/api/access-control/overview${query}`);
+    if (activeAccessControlPage() === "audit" && accessControlOverview.company) {
+      const auditQuery = new URLSearchParams({ limit: "100" });
+      if (state.iamCapabilities?.source === "platform") auditQuery.set("tenantId", accessControlOverview.company.id);
+      accessControlAuditEvents = (await api<{ events: AccessAuditEvent[] }>(`/api/v1/access-audit-events?${auditQuery.toString()}`)).events;
+    }
+    if (!accessControlSelectedRoleId || !accessControlOverview.roles.some((role) => role.id === accessControlSelectedRoleId)) {
+      accessControlSelectedRoleId = accessControlOverview.roles[0]?.id || "";
+    }
+    if (!accessControlSelectedMemberId || !accessControlOverview.members.some((member) => member.id === accessControlSelectedMemberId)) {
+      accessControlSelectedMemberId = accessControlOverview.members[0]?.id || "";
+    }
+    renderAccessControl();
+  } catch (error) {
+    const root = activeAccessControlRoot();
+    if (root) root.innerHTML = `<div class="ac-empty"><div><h2>组织与权限加载失败</h2><p>${escapeHtml(error instanceof Error ? error.message : "请求失败")}</p><button class="btn" type="button" data-ac-retry>重新加载</button></div></div>`;
+    qs<HTMLButtonElement>("[data-ac-retry]", root || document)?.addEventListener("click", () => void loadAccessControl(teamId));
+  }
+}
+
+function accessControlCompanyOptions(overview: AccessControlOverview) {
+  if (state.iamCapabilities?.source !== "platform") return "";
+  return `<select class="ac-company-select" id="accessControlCompanySelect" aria-label="公司上下文">
+    <option value="">选择公司</option>
+    ${overview.companies.map((company) => `<option value="${escapeHtml(company.id)}" ${overview.company?.id === company.id ? "selected" : ""}>${escapeHtml(company.name)} · ${company.memberCount} 人</option>`).join("")}
+  </select>`;
+}
+
+function accessControlTenantBody(overview: AccessControlOverview) {
+  return state.iamCapabilities?.source === "platform" && overview.company ? { tenantId: overview.company.id } : {};
+}
+
+async function mutateAccessControl(operation: () => Promise<unknown>, success: string) {
+  try {
+    await operation();
+    if (state.user) await loadIamCapabilities(state.user);
+    await loadAccessControl(accessControlOverview?.company?.id || "");
+    closeModal();
+    toast(success);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "权限配置失败", "error");
+  }
+}
+
+function openAccessControlMemberEditor(overview: AccessControlOverview, memberId: string) {
+  const member = overview.members.find((item) => item.id === memberId);
+  if (!member) return;
+  const options = overview.organizationUnits.filter((unit) => unit.type !== "unassigned" && unit.status !== "disabled").map((unit) => `<option value="${escapeHtml(unit.id)}" ${unit.id === member.organizationUnitId ? "selected" : ""}>${escapeHtml(unit.name)}</option>`).join("");
+  openModal("编辑成员", `<div class="form-grid"><div class="form-field full"><label>成员</label><input value="${escapeHtml(member.name)} · ${escapeHtml(member.email)}" disabled></div><div class="form-field"><label>成员状态</label><select id="iamMemberStatus"><option value="active" ${member.status === "active" ? "selected" : ""}>启用</option><option value="suspended" ${member.status !== "active" ? "selected" : ""}>停用</option></select></div><div class="form-field"><label>所属组织</label><select id="iamMemberOrg">${options}</select></div></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveIamMember">保存</button>`);
+  qs("#saveIamMember")?.addEventListener("click", () => void mutateAccessControl(() => api(`/api/v1/members/${encodeURIComponent(member.id)}`, { method: "PATCH", body: JSON.stringify({ ...accessControlTenantBody(overview), status: qs<HTMLSelectElement>("#iamMemberStatus")?.value, organizationUnitId: qs<HTMLSelectElement>("#iamMemberOrg")?.value, reason: "成员目录调整" }) }), "成员设置已更新"));
+}
+
+function openAccessControlMemberCreator(overview: AccessControlOverview) {
+  openModal("新增成员", `<div class="form-grid"><div class="form-field"><label>姓名</label><input id="iamNewMemberName" maxlength="100"></div><div class="form-field"><label>邮箱</label><input id="iamNewMemberEmail" type="email" maxlength="180"></div><div class="form-field"><label>初始密码</label><input id="iamNewMemberPassword" type="password" minlength="8" autocomplete="new-password"></div><div class="form-field"><label>角色</label><select id="iamNewMemberRole">${overview.roles.filter((role) => role.status !== "disabled").map((role) => `<option value="${escapeHtml(role.id)}">${escapeHtml(role.name)}</option>`).join("")}</select></div></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveIamNewMember">创建成员</button>`);
+  qs("#saveIamNewMember")?.addEventListener("click", () => {
+    const name = qs<HTMLInputElement>("#iamNewMemberName")?.value.trim() || "";
+    const email = qs<HTMLInputElement>("#iamNewMemberEmail")?.value.trim() || "";
+    const password = qs<HTMLInputElement>("#iamNewMemberPassword")?.value || "";
+    if (!name || !email || password.length < 8) { toast("请填写姓名、邮箱和至少 8 位密码", "error"); return; }
+    void mutateAccessControl(() => api("/api/v1/members", { method: "POST", body: JSON.stringify({ ...accessControlTenantBody(overview), name, email, password, roleId: qs<HTMLSelectElement>("#iamNewMemberRole")?.value, reason: "新增成员" }) }), "成员已创建");
+  });
+}
+
+function openAccessControlOrganizationEditor(overview: AccessControlOverview, unitId = "") {
+  const unit = overview.organizationUnits.find((item) => item.id === unitId);
+  const parentOptions = overview.organizationUnits.filter((item) => item.id !== unitId && item.status !== "disabled" && item.type !== "unassigned").map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === unit?.parentId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("");
+  openModal(unit ? "编辑组织" : "新增组织", `<div class="form-grid"><div class="form-field full"><label>组织名称</label><input id="iamOrgName" maxlength="160" value="${escapeHtml(unit?.name || "")}"></div>${unit ? `<div class="form-field"><label>上级组织</label><select id="iamOrgParent">${parentOptions}</select></div><div class="form-field"><label>状态</label><select id="iamOrgStatus"><option value="active" ${unit.status !== "disabled" ? "selected" : ""}>启用</option><option value="disabled" ${unit.status === "disabled" ? "selected" : ""}>停用</option></select></div>` : `<div class="form-field"><label>上级组织</label><select id="iamOrgParent">${parentOptions}</select></div><div class="form-field"><label>组织编码</label><input id="iamOrgCode" maxlength="80" placeholder="例如 sales-east"></div>`}</div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveIamOrg">保存</button>`);
+  qs("#saveIamOrg")?.addEventListener("click", () => {
+    const name = qs<HTMLInputElement>("#iamOrgName")?.value.trim() || "";
+    if (!name) { toast("请填写组织名称", "error"); return; }
+    const path = unit ? `/api/v1/organization-units/${encodeURIComponent(unit.id)}` : "/api/v1/organization-units";
+    const body = unit ? { ...accessControlTenantBody(overview), name, parentId: qs<HTMLSelectElement>("#iamOrgParent")?.value, status: qs<HTMLSelectElement>("#iamOrgStatus")?.value, reason: "组织架构调整" } : { ...accessControlTenantBody(overview), name, parentId: qs<HTMLSelectElement>("#iamOrgParent")?.value, code: qs<HTMLInputElement>("#iamOrgCode")?.value.trim(), reason: "新增组织" };
+    void mutateAccessControl(() => api(path, { method: unit ? "PATCH" : "POST", body: JSON.stringify(body) }), unit ? "组织已更新" : "组织已创建");
+  });
+}
+
+function openAccessControlRoleCreator(overview: AccessControlOverview, cloneRoleId = "") {
+  const source = overview.roles.find((item) => item.id === cloneRoleId);
+  openModal(source ? "复制角色" : "新增角色", `<div class="form-grid"><div class="form-field full"><label>角色名称</label><input id="iamRoleName" maxlength="120" value="${escapeHtml(source ? `${source.name} 副本` : "")}"></div><div class="form-field full"><label>职责说明</label><textarea id="iamRoleDescription" maxlength="500">${escapeHtml(source?.description || source?.summary || "")}</textarea></div></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveIamRole">创建</button>`);
+  qs("#saveIamRole")?.addEventListener("click", () => {
+    const name = qs<HTMLInputElement>("#iamRoleName")?.value.trim() || ""; if (!name) { toast("请填写角色名称", "error"); return; }
+    const path = source ? `/api/v1/roles/${encodeURIComponent(source.id)}/clone` : "/api/v1/roles";
+    void mutateAccessControl(() => api(path, { method: "POST", body: JSON.stringify({ ...accessControlTenantBody(overview), name, description: qs<HTMLTextAreaElement>("#iamRoleDescription")?.value.trim(), reason: source ? "复制角色" : "新增角色" }) }), "角色已创建");
+  });
+}
+
+function renderAccessControlCompanyPicker(overview: AccessControlOverview) {
+  return `<div class="ac-workbench"><div class="ac-empty"><div><h2>选择公司上下文</h2><p>平台账号按公司独立查看组织和权限，数据不会跨公司合并。</p><div class="ac-company-grid">
+    ${overview.companies.map((company) => `<button class="ac-company-card" type="button" data-ac-company="${escapeHtml(company.id)}"><span><b>${escapeHtml(company.name)}</b><small>${escapeHtml(company.id)}</small></span><span class="ac-count">${company.memberCount}</span></button>`).join("") || `<div><b>暂无公司</b></div>`}
+  </div></div></div></div>`;
+}
+
+function accessControlMemberRows(members: AccessControlOverview["members"]) {
+  return members.map((member) => `<tr data-ac-member-open="${escapeHtml(member.id)}" data-ac-search-row="${escapeHtml(`${member.name} ${member.email} ${member.roleName} ${member.organizationUnitName}`.toLowerCase())}">
+    <td><div class="ac-member-cell"><span class="ac-avatar">${escapeHtml(member.avatar || member.name.slice(0, 2))}</span><span class="ac-member-copy"><b>${escapeHtml(member.name)}</b><small>${escapeHtml(member.email)}</small></span></div></td>
+    <td><span class="ac-role-chip ${member.roleCode}">${escapeHtml(member.roleName)}</span></td>
+    <td>${escapeHtml(member.organizationUnitName)}</td>
+    <td><span class="ac-status-chip ${member.status}">${member.status === "active" ? "启用" : "停用"}</span></td>
+  </tr>`).join("");
+}
+
+function renderAccessControlOrganization(overview: AccessControlOverview) {
+  const members = accessControlOrganizationFilter === "unassigned"
+    ? overview.members.filter((member) => !member.organizationUnitId)
+    : overview.members;
+  const companyUnit = overview.organizationUnits.find((unit) => unit.type === "company");
+  const unassignedUnit = overview.organizationUnits.find((unit) => unit.type === "unassigned");
+  return `<div class="ac-workbench ac-org-layout">
+    <aside class="ac-pane">
+      <div class="ac-pane-head"><h2>公司组织</h2><span>${overview.metrics?.organizationUnitCount || 0} 个节点</span></div>
+      <div class="ac-tree">
+        <button class="ac-tree-row ${accessControlOrganizationFilter === "all" ? "active" : ""}" type="button" data-ac-org-filter="all"><span class="ac-tree-mark">司</span><span class="ac-tree-copy"><b>${escapeHtml(companyUnit?.name || overview.company?.name || "当前公司")}</b><small>公司根组织</small></span><span class="ac-count">${companyUnit?.memberCount || 0}</span></button>
+        <button class="ac-tree-row child ${accessControlOrganizationFilter === "unassigned" ? "active" : ""}" type="button" data-ac-org-filter="unassigned"><span class="ac-tree-mark">未</span><span class="ac-tree-copy"><b>${escapeHtml(unassignedUnit?.name || "未分配组织")}</b><small>待建立成员关系</small></span><span class="ac-count">${unassignedUnit?.memberCount || 0}</span></button>
+        ${overview.organizationUnits.filter((unit) => unit.type !== "company" && unit.type !== "unassigned").map((unit) => `<div class="ac-tree-row child"><span class="ac-tree-mark">组</span><span class="ac-tree-copy"><b>${escapeHtml(unit.name)}</b><small>${escapeHtml(unit.code || "组织节点")}</small></span><span class="ac-count">${unit.memberCount}</span><button class="btn icon-only" type="button" data-ac-org-edit="${escapeHtml(unit.id)}" title="编辑组织">编辑</button></div>`).join("")}
+      </div>
+    </aside>
+    <section class="ac-pane">
+      <div class="ac-pane-head"><h2>成员目录</h2><div class="ac-head-actions"><label class="ac-search"><input id="accessControlOrganizationSearch" placeholder="搜索成员、邮箱或角色" autocomplete="off"></label><button class="btn primary" type="button" data-ac-org-add>新增组织</button></div></div>
+      <div class="ac-member-table-wrap"><table class="ac-member-table"><thead><tr><th style="width:42%">成员</th><th style="width:20%">当前角色</th><th style="width:23%">组织归属</th><th style="width:15%">状态</th></tr></thead><tbody id="accessControlOrganizationRows">${accessControlMemberRows(members) || `<tr><td colspan="4">暂无成员</td></tr>`}</tbody></table></div>
+    </section>
+    <aside class="ac-pane">
+      <div class="ac-pane-head"><h3>公司边界</h3><span class="ac-status-chip active">已隔离</span></div>
+      <div class="ac-overview-list">
+        <div class="ac-overview-row"><span>公司</span><b>${escapeHtml(overview.company?.name || "-")}</b></div>
+        <div class="ac-overview-row"><span>隔离范围</span><b>当前公司</b></div>
+        <div class="ac-overview-row"><span>成员</span><b>${overview.metrics?.memberCount || 0} 人</b></div>
+        <div class="ac-overview-row"><span>组织节点</span><b>${overview.metrics?.organizationUnitCount || 0} 个</b></div>
+        <div class="ac-overview-row"><span>未分配成员</span><b>${overview.metrics?.unassignedMemberCount || 0} 人</b></div>
+        <div class="ac-overview-row"><span>跨公司访问</span><b>默认拒绝</b></div>
+      </div>
+      <div class="ac-policy-note">租户边界使用当前公司的唯一标识；成员、角色和后续组织节点都限定在该边界内。</div>
+    </aside>
+  </div>`;
+}
+
+function renderAccessControlMemberManagement(overview: AccessControlOverview) {
+  return `<div class="ac-workbench">
+    <section class="ac-pane">
+      <div class="ac-pane-head"><div class="ac-pane-title"><h2>公司成员</h2><span>共 ${overview.members.length} 位</span></div><label class="ac-search"><input id="accessControlOrganizationSearch" placeholder="搜索姓名、邮箱或角色" autocomplete="off"></label></div>
+      <div class="ac-member-table-wrap"><table class="ac-member-table ac-member-directory-table"><thead><tr><th>成员</th><th>当前角色</th><th>所属组织</th><th>状态</th><th>操作</th></tr></thead><tbody id="accessControlOrganizationRows">${overview.members.map((member) => `<tr data-ac-search-row="${escapeHtml(`${member.name} ${member.email} ${member.roleName}`.toLowerCase())}"><td><div class="ac-member-cell"><span class="ac-avatar">${escapeHtml(member.avatar || member.name.slice(0, 2))}</span><span class="ac-member-copy"><b>${escapeHtml(member.name)}</b><small>${escapeHtml(member.email)}${member.employeeNo ? ` · ${escapeHtml(member.employeeNo)}` : ""}</small></span></div></td><td><span class="ac-role-chip ${member.roleCode}">${escapeHtml(member.roleName)}</span></td><td><span class="ac-cell-main">${escapeHtml(member.organizationUnitName)}</span></td><td><span class="ac-status-chip ${member.status}">${member.status === "active" ? "启用" : "停用"}</span></td><td><div class="ac-row-actions"><button class="btn" type="button" data-ac-member-edit="${escapeHtml(member.id)}">编辑资料</button><button class="btn" type="button" data-ac-member-open="${escapeHtml(member.id)}">分配权限</button></div></td></tr>`).join("") || `<tr><td colspan="5"><div class="ac-table-empty">暂无成员</div></td></tr>`}</tbody></table></div>
+    </section>
+  </div>`;
+}
+
+function renderAccessControlRoles(overview: AccessControlOverview) {
+  const selected = overview.roles.find((role) => role.id === accessControlSelectedRoleId) || overview.roles[0];
+  const grouped = new Map<string, AccessControlOverview["permissions"]>();
+  overview.permissions.forEach((permission) => grouped.set(permission.module, [...(grouped.get(permission.module) || []), permission]));
+  const body = [...grouped.entries()].map(([module, permissions]) => `<tr class="ac-module-row"><td colspan="2"><span>${escapeHtml(module)}</span><small>${permissions.length} 项</small></td></tr>${permissions.map((permission) => `<tr>
+    <td><span class="ac-permission-name"><b>${escapeHtml(permission.name)}</b><small>${escapeHtml(permission.code)}</small></span></td>
+    <td><select class="ac-scope-select" data-ac-role-scope="${escapeHtml(permission.code)}" aria-label="${escapeHtml(permission.name)}授权范围"><option value="none">未授权</option>${(permission.scopeModes || ["self", "org_unit", "org_subtree", "tenant", "public_pool"]).map((scope) => `<option value="${scope}" ${selected && permission.grants[selected.id] === scope ? "selected" : ""}>${accessControlScopeText[scope]}</option>`).join("")}</select></td>
+  </tr>`).join("")}`).join("");
+  return `<div class="ac-workbench ac-role-layout">
+    <aside class="ac-pane"><div class="ac-pane-head"><div class="ac-pane-title"><h2>角色</h2><span>${overview.roles.length} 个角色模板</span></div><button class="btn primary" type="button" data-ac-role-add>新增角色</button></div><div class="ac-role-list">
+      ${overview.roles.map((role) => `<button class="ac-role-item ${role.code} ${role.id === selected?.id ? "active" : ""}" type="button" data-ac-role="${escapeHtml(role.id)}"><span class="ac-role-symbol">${escapeHtml(role.name.slice(0, 1))}</span><span class="ac-role-copy"><b>${escapeHtml(role.name)}</b><small>${role.memberCount} 名成员 · ${role.permissionCount} 项权限</small></span><span class="ac-count">${role.moduleCount}</span></button>`).join("")}
+    </div></aside>
+    <section class="ac-pane">
+      <div class="ac-role-summary"><div class="ac-role-intro"><span class="ac-role-symbol ${selected?.code || ""}">${escapeHtml((selected?.name || "角").slice(0, 1))}</span><div><h2>${escapeHtml(selected?.name || "角色权限")}</h2><p>${escapeHtml(selected?.description || selected?.summary || "尚未填写角色职责说明")}</p><div class="ac-inline-actions"><button class="btn" type="button" data-ac-role-clone="${escapeHtml(selected?.id || "")}">复制角色</button>${selected && !selected.is_protected ? `<button class="btn danger" type="button" data-ac-role-disable="${escapeHtml(selected.id)}">停用角色</button>` : ""}</div></div></div><div class="ac-role-stats"><div class="ac-role-stat"><span>成员</span><b>${selected?.memberCount || 0}</b></div><div class="ac-role-stat"><span>已授权</span><b>${selected?.permissionCount || 0}</b></div><div class="ac-role-stat"><span>业务模块</span><b>${selected?.moduleCount || 0}</b></div></div></div>
+      <div class="ac-permission-toolbar"><div><h3>权限明细</h3><span>设置当前角色在各业务模块中的数据范围</span></div><button class="btn primary" type="button" data-ac-role-save="${escapeHtml(selected?.id || "")}">发布权限</button></div>
+      <div class="ac-permission-table-wrap"><table class="ac-permission-table"><thead><tr><th>权限项</th><th>授权范围</th></tr></thead><tbody>${body}</tbody></table></div>
+    </section>
+  </div>`;
+}
+
+function renderAccessControlMembers(overview: AccessControlOverview) {
+  const selected = overview.members.find((member) => member.id === accessControlSelectedMemberId) || overview.members[0];
+  const selectedRoleIds = selected ? (selected.roleIds?.length ? selected.roleIds : [selected.roleId]) : [];
+  const scopeRank: Record<AccessControlScope, number> = { none: 0, self: 1, org_unit: 2, org_subtree: 3, tenant: 4, public_pool: 5, platform: 6 };
+  const memberScope = (permission: AccessControlOverview["permissions"][number]) => {
+    const scopes = selectedRoleIds.map((roleId) => permission.grants[roleId] || "none");
+    scopes.push(...(selected?.temporaryGrants || []).filter((grant) => grant.permissionCode === permission.code).map((grant) => grant.scopeMode));
+    return scopes.sort((left, right) => scopeRank[right] - scopeRank[left])[0] || "none";
+  };
+  const effective = selected ? overview.permissions.filter((permission) => memberScope(permission) !== "none") : [];
+  return `<div class="ac-workbench ac-member-layout">
+    <aside class="ac-pane"><div class="ac-pane-head"><div class="ac-pane-title"><h2>选择成员</h2><span>${overview.members.length} 位公司成员</span></div><label class="ac-search"><input id="accessControlMemberSearch" placeholder="搜索成员" autocomplete="off"></label></div><div class="ac-member-list" id="accessControlMemberList">
+      ${overview.members.map((member) => `<button class="ac-member-item ${member.id === selected?.id ? "active" : ""}" type="button" data-ac-member="${escapeHtml(member.id)}" data-ac-search-row="${escapeHtml(`${member.name} ${member.email} ${member.roleName}`.toLowerCase())}"><span class="ac-avatar">${escapeHtml(member.avatar || member.name.slice(0, 2))}</span><span class="ac-member-copy"><b>${escapeHtml(member.name)}</b><small>${escapeHtml(member.roleName)} · ${escapeHtml(member.organizationUnitName)}</small></span><span class="ac-status-chip ${member.status}">${member.status === "active" ? "启用" : "停用"}</span></button>`).join("") || `<div class="ac-empty"><p>暂无成员</p></div>`}
+    </div></aside>
+    <section class="ac-pane">${selected ? `<div class="ac-member-detail">
+      <div class="ac-member-detail-head"><div class="ac-member-detail-person"><span class="ac-avatar">${escapeHtml(selected.avatar || selected.name.slice(0, 2))}</span><div><h2>${escapeHtml(selected.name)}</h2><p>${escapeHtml(selected.email)}</p></div></div><span class="ac-role-chip ${selected.roleCode}">${escapeHtml(selected.roleName)}</span></div>
+      <section class="ac-detail-section"><div class="ac-section-head"><div><h3>授权关系</h3><span>角色决定成员的基础权限</span></div><button class="btn primary" type="button" data-ac-member-role-save="${escapeHtml(selected.membershipId || selected.id)}">保存角色</button></div>
+      <div class="ac-assignment-chain"><div class="ac-chain-node"><span>公司</span><b>${escapeHtml(overview.company?.name || "-")}</b></div><div class="ac-chain-node"><span>所属组织</span><b>${escapeHtml(selected.organizationUnitName)}</b></div><div class="ac-chain-node ac-chain-role"><span>已分配角色</span><div class="ac-role-checks" id="iamMemberRoleIds">${overview.roles.filter((item) => item.status !== "disabled").map((item) => `<label><input type="checkbox" value="${escapeHtml(item.id)}" ${selectedRoleIds.includes(item.id) ? "checked" : ""}><span>${escapeHtml(item.name)}</span></label>`).join("")}</div></div></div></section>
+      <section class="ac-detail-section"><div class="ac-section-head"><div><h3>有效权限</h3><span>角色与临时授权合并后共 ${effective.length} 项</span></div></div>
+      <div class="ac-effective-grid">${effective.map((permission) => `<div class="ac-effective-row"><span><b>${escapeHtml(permission.name)}</b><small>${escapeHtml(permission.module)}</small></span>${accessControlScopeBadge(memberScope(permission))}</div>`).join("") || `<div class="ac-table-empty">当前成员没有有效权限</div>`}</div></section>
+      <section class="ac-detail-section"><div class="ac-section-head"><div><h3>临时授权</h3><span>到期后自动失效，不改变角色模板</span></div></div><div class="ac-grant-form"><div class="form-field"><label>权限</label><select id="iamGrantPermission">${overview.permissions.map((permission) => `<option value="${escapeHtml(permission.code)}">${escapeHtml(permission.name)}</option>`).join("")}</select></div><div class="form-field"><label>范围</label><select id="iamGrantScope"><option value="self">本人</option><option value="org_subtree">本组织及下级</option><option value="tenant">当前公司</option></select></div><div class="form-field"><label>截止时间</label><input id="iamGrantUntil" type="datetime-local"></div><div class="form-field"><label>授权原因</label><input id="iamGrantReason" value="临时业务授权"></div><button class="btn" type="button" data-ac-member-grant="${escapeHtml(selected.membershipId || selected.id)}">新增临时授权</button></div><div class="ac-grant-list">${(selected.temporaryGrants || []).map((grant) => `<div class="ac-effective-row"><span><b>${escapeHtml(grant.permissionCode)}</b><small>截止 ${escapeHtml(new Date(grant.validUntil).toLocaleString("zh-CN"))}</small></span><button class="btn danger" type="button" data-ac-grant-revoke="${escapeHtml(grant.id)}">撤销</button></div>`).join("")}</div></section>
+    </div>` : `<div class="ac-empty"><div><h2>暂无成员</h2></div></div>`}</section>
+  </div>`;
+}
+
+const accessControlAuditActionText: Record<string, string> = {
+  "member.create": "新增成员",
+  "member.update": "更新成员",
+  "organization.create": "新增组织",
+  "organization.update": "更新组织",
+  "organization.assign": "调整组织归属",
+  "role.create": "新增角色",
+  "role.clone": "复制角色",
+  "role.update": "更新角色",
+  "role.disable": "停用角色",
+  "role.permissions.replace": "发布角色权限",
+  "member.roles.replace": "调整成员角色",
+  "member.grants.create": "新增临时授权",
+  "member.grants.revoke": "撤销临时授权"
+};
+
+const accessControlAuditTargetText: Record<string, string> = {
+  tenant: "公司权限",
+  membership: "公司成员",
+  member: "公司成员",
+  organization: "组织节点",
+  role: "角色模板",
+  grant: "临时授权"
+};
+
+function renderAccessControlAudit(overview: AccessControlOverview) {
+  const highRiskCount = overview.permissions.filter((permission) => permission.riskLevel === "high" || permission.riskLevel === "critical").length;
+  return `<div class="ac-workbench ac-audit-layout">
+    <section class="ac-pane">
+      <div class="ac-pane-head"><div class="ac-pane-title"><h2>权限变更记录</h2><span>最近 100 条操作</span></div><span class="ac-audit-note">仅记录已提交的权限变更</span></div>
+      <div class="ac-member-table-wrap"><table class="ac-member-table ac-audit-table"><thead><tr><th>时间</th><th>操作者</th><th>变更对象</th><th>动作</th><th>结果</th></tr></thead><tbody>${accessControlAuditEvents.map((event) => { const actor = overview.members.find((member) => member.id === event.actorIdentityId); const createdAt = new Date(event.createdAt); return `<tr><td><time class="ac-audit-time"><b>${escapeHtml(createdAt.toLocaleDateString("zh-CN"))}</b><small>${escapeHtml(createdAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }))}</small></time></td><td><div class="ac-audit-actor"><span class="ac-avatar">${escapeHtml(actor?.avatar || actor?.name.slice(0, 2) || "管")}</span><span><b>${escapeHtml(actor?.name || "系统管理员")}</b><small>${escapeHtml(actor?.email || "管理员操作")}</small></span></div></td><td><span class="ac-audit-target"><b>${escapeHtml(accessControlAuditTargetText[event.targetType] || "权限对象")}</b><small>变更记录已留痕</small></span></td><td><span class="ac-audit-action"><b>${escapeHtml(accessControlAuditActionText[event.actionCode] || "权限配置变更")}</b><small>已提交</small></span></td><td><span class="ac-status-chip ${event.resultStatus === "success" ? "active" : "disabled"}">${event.resultStatus === "success" ? "成功" : "失败"}</span></td></tr>`; }).join("") || `<tr><td colspan="5"><div class="ac-table-empty">暂无权限变更记录</div></td></tr>`}</tbody></table></div>
+    </section>
+    <aside class="ac-pane">
+      <div class="ac-pane-head"><h3>授权基线</h3><span class="ac-status-chip active">运行中</span></div>
+      <div class="ac-overview-list">
+        <div class="ac-overview-row"><span>权限目录</span><b>${overview.foundation.permissionCount} 项</b></div>
+        <div class="ac-overview-row"><span>高风险权限</span><b>${highRiskCount} 项</b></div>
+        <div class="ac-overview-row"><span>公司边界</span><b>强制隔离</b></div>
+        <div class="ac-overview-row"><span>未授权请求</span><b>默认拒绝</b></div>
+        <div class="ac-overview-row"><span>基线版本</span><b>${escapeHtml(overview.foundation.schemaVersion)}</b></div>
+      </div>
+    </aside>
+  </div>`;
+}
+
+function openAccessControlGuide() {
+  openModal("权限管理使用说明", `<div class="ac-guide">
+    <section class="ac-guide-access"><span class="ac-guide-access-mark">权限</span><div><b>仅超级管理员和管理员可以设置</b><p>其他成员不会显示权限管理入口。管理员在所属公司范围内配置，实际可执行操作仍以当前账号获得的管理权限为准。</p></div></section>
+    <div class="ac-guide-heading"><h3>推荐配置顺序</h3><span>从组织边界到成员生效</span></div>
+    <ol class="ac-guide-steps">
+      <li><span class="ac-guide-step-no">01</span><div><b>建立组织架构</b><p>先维护部门或业务组，明确成员的数据归属边界。</p></div></li>
+      <li><span class="ac-guide-step-no">02</span><div><b>创建角色并配置权限</b><p>在角色管理中选择角色，逐项设置授权范围，检查无误后点击“发布权限”。</p></div></li>
+      <li><span class="ac-guide-step-no">03</span><div><b>维护公司成员</b><p>新增成员或调整成员状态、所属组织；停用成员前先确认其未负责关键业务。</p></div></li>
+      <li><span class="ac-guide-step-no">04</span><div><b>给成员分配角色</b><p>在成员授权中选择成员，勾选一个或多个角色并保存。临时授权必须填写原因和截止时间。</p></div></li>
+      <li><span class="ac-guide-step-no">05</span><div><b>通过审计复核</b><p>前往权限审计确认操作者、变更对象、动作和结果，保证关键调整可追溯。</p></div></li>
+    </ol>
+    <div class="ac-guide-heading"><h3>数据范围怎么选</h3><span>不同权限项提供的范围可能不同</span></div>
+    <div class="ac-guide-scopes"><div class="ac-guide-scope"><b>本人</b><span>仅处理成员本人负责的数据</span></div><div class="ac-guide-scope"><b>本组织及下级</b><span>适合经理和区域负责人</span></div><div class="ac-guide-scope"><b>当前公司</b><span>覆盖本公司全部业务数据</span></div><div class="ac-guide-scope"><b>公池</b><span>仅操作公司共享资源</span></div></div>
+    <p class="ac-guide-note">建议遵循最小权限原则：优先授予满足岗位需要的最小范围，临时需求使用有截止时间的临时授权。</p>
+  </div>`, `<button class="btn primary" type="button" data-modal-close>我知道了</button>`);
+  qs<HTMLElement>("#appModal .modal")?.classList.add("ac-guide-modal");
+  const description = qs<HTMLElement>("#modalDescription");
+  if (description) description.textContent = "管理员配置组织、角色和成员授权的操作指引";
+}
+
+function bindAccessControlInteractions(overview: AccessControlOverview) {
+  const root = activeAccessControlRoot();
+  if (!root) return;
+  const find = <T extends Element>(selector: string) => root.querySelector<T>(selector);
+  const findAll = <T extends Element>(selector: string) => [...root.querySelectorAll<T>(selector)];
+  find<HTMLSelectElement>("#accessControlCompanySelect")?.addEventListener("change", (event) => {
+    const teamId = (event.currentTarget as HTMLSelectElement).value;
+    accessControlOverview = null;
+    void loadAccessControl(teamId);
+  });
+  findAll<HTMLButtonElement>("[data-ac-company]").forEach((button) => button.addEventListener("click", () => void loadAccessControl(button.dataset.acCompany || "")));
+  find<HTMLButtonElement>("[data-ac-refresh]")?.addEventListener("click", () => void loadAccessControl(overview.company?.id || ""));
+  find<HTMLButtonElement>("[data-ac-guide]")?.addEventListener("click", openAccessControlGuide);
+  find<HTMLButtonElement>("[data-ac-add-member]")?.addEventListener("click", () => openAccessControlMemberCreator(overview));
+  find<HTMLButtonElement>("[data-ac-org-add]")?.addEventListener("click", () => openAccessControlOrganizationEditor(overview));
+  findAll<HTMLButtonElement>("[data-ac-org-edit]").forEach((button) => button.addEventListener("click", () => openAccessControlOrganizationEditor(overview, button.dataset.acOrgEdit || "")));
+  findAll<HTMLButtonElement>("[data-ac-member-edit]").forEach((button) => button.addEventListener("click", () => openAccessControlMemberEditor(overview, button.dataset.acMemberEdit || "")));
+  findAll<HTMLButtonElement>("[data-ac-org-filter]").forEach((button) => button.addEventListener("click", () => {
+    accessControlOrganizationFilter = button.dataset.acOrgFilter === "unassigned" ? "unassigned" : "all";
+    renderAccessControl();
+  }));
+  findAll<HTMLButtonElement>("[data-ac-role]").forEach((button) => button.addEventListener("click", () => {
+    accessControlSelectedRoleId = button.dataset.acRole || "";
+    renderAccessControl();
+  }));
+  find<HTMLButtonElement>("[data-ac-role-add]")?.addEventListener("click", () => openAccessControlRoleCreator(overview));
+  find<HTMLButtonElement>("[data-ac-role-clone]")?.addEventListener("click", (event) => openAccessControlRoleCreator(overview, (event.currentTarget as HTMLButtonElement).dataset.acRoleClone || ""));
+  find<HTMLButtonElement>("[data-ac-role-disable]")?.addEventListener("click", (event) => {
+    const roleId = (event.currentTarget as HTMLButtonElement).dataset.acRoleDisable || "";
+    void mutateAccessControl(() => api(`/api/v1/roles/${encodeURIComponent(roleId)}/disable`, { method: "POST", body: JSON.stringify({ ...accessControlTenantBody(overview), reason: "角色停用" }) }), "角色已停用");
+  });
+  find<HTMLButtonElement>("[data-ac-role-save]")?.addEventListener("click", (event) => {
+    const roleId = (event.currentTarget as HTMLButtonElement).dataset.acRoleSave || "";
+    const bindings = findAll<HTMLSelectElement>("[data-ac-role-scope]").flatMap((select) => select.value === "none" ? [] : [{ permissionCode: select.dataset.acRoleScope || "", scopeMode: select.value }]);
+    void mutateAccessControl(() => api(`/api/v1/roles/${encodeURIComponent(roleId)}/permissions`, { method: "PUT", body: JSON.stringify({ ...accessControlTenantBody(overview), bindings, reason: "角色权限发布" }) }), "角色权限已发布");
+  });
+  findAll<HTMLElement>("[data-ac-member-open]").forEach((row) => row.addEventListener("click", () => {
+    accessControlSelectedMemberId = row.dataset.acMemberOpen || "";
+    activateNavView("member-authorization", renderAccessControl);
+  }));
+  findAll<HTMLButtonElement>("[data-ac-member]").forEach((button) => button.addEventListener("click", () => {
+    accessControlSelectedMemberId = button.dataset.acMember || "";
+    renderAccessControl();
+  }));
+  find<HTMLButtonElement>("[data-ac-member-role-save]")?.addEventListener("click", (event) => {
+    const membershipId = (event.currentTarget as HTMLButtonElement).dataset.acMemberRoleSave || "";
+    const roleIds = findAll<HTMLInputElement>("#iamMemberRoleIds input:checked").map((input) => input.value);
+    if (!roleIds.length) { toast("至少保留一个角色", "error"); return; }
+    void mutateAccessControl(() => api(`/api/v1/members/${encodeURIComponent(membershipId)}/role-assignments`, { method: "PUT", body: JSON.stringify({ ...accessControlTenantBody(overview), roleIds, reason: "成员角色调整" }) }), "成员角色已更新");
+  });
+  find<HTMLButtonElement>("[data-ac-member-grant]")?.addEventListener("click", (event) => {
+    const membershipId = (event.currentTarget as HTMLButtonElement).dataset.acMemberGrant || "";
+    const raw = find<HTMLInputElement>("#iamGrantUntil")?.value || "";
+    if (!raw) { toast("请选择临时授权截止时间", "error"); return; }
+    void mutateAccessControl(() => api(`/api/v1/members/${encodeURIComponent(membershipId)}/temporary-grants`, { method: "POST", body: JSON.stringify({ ...accessControlTenantBody(overview), permissionCode: find<HTMLSelectElement>("#iamGrantPermission")?.value, scopeMode: find<HTMLSelectElement>("#iamGrantScope")?.value, validUntil: new Date(raw).toISOString(), reason: find<HTMLInputElement>("#iamGrantReason")?.value || "临时业务授权" }) }), "临时授权已生效");
+  });
+  findAll<HTMLButtonElement>("[data-ac-grant-revoke]").forEach((button) => button.addEventListener("click", () => {
+    void mutateAccessControl(() => api(`/api/v1/member-temporary-grants/${encodeURIComponent(button.dataset.acGrantRevoke || "")}`, { method: "DELETE", body: JSON.stringify(accessControlTenantBody(overview)) }), "临时授权已撤销");
+  }));
+  const bindSearch = (inputId: string, containerId: string) => {
+    find<HTMLInputElement>(`#${inputId}`)?.addEventListener("input", (event) => {
+      const value = (event.currentTarget as HTMLInputElement).value.trim().toLowerCase();
+      findAll<HTMLElement>(`#${containerId} [data-ac-search-row]`).forEach((row) => {
+        row.hidden = Boolean(value && !String(row.dataset.acSearchRow || "").includes(value));
+      });
+    });
+  };
+  bindSearch("accessControlOrganizationSearch", "accessControlOrganizationRows");
+  bindSearch("accessControlMemberSearch", "accessControlMemberList");
+}
+
+function renderAccessControl() {
+  const root = activeAccessControlRoot();
+  const overview = accessControlOverview;
+  if (!root || !overview) return;
+  const page = activeAccessControlPage();
+  const pageTitle: Record<AccessControlPage, string> = {
+    members: "成员管理",
+    organization: "组织架构",
+    roles: "角色管理",
+    authorization: "成员授权",
+    audit: "权限审计"
+  };
+  const body = !overview.company
+    ? renderAccessControlCompanyPicker(overview)
+    : page === "roles"
+      ? renderAccessControlRoles(overview)
+      : page === "authorization"
+        ? renderAccessControlMembers(overview)
+        : page === "organization"
+          ? renderAccessControlOrganization(overview)
+          : page === "audit"
+            ? renderAccessControlAudit(overview)
+            : renderAccessControlMemberManagement(overview);
+  root.innerHTML = `<div class="ac-shell">
+    <header class="ac-page-head"><div class="ac-title"><div class="ac-title-line"><h1>${pageTitle[page]}</h1><span class="ac-boundary-state">公司级隔离</span></div><p>${overview.company ? `当前公司：${escapeHtml(overview.company.name)}` : "平台公司目录"}</p></div><div class="ac-head-actions">${accessControlCompanyOptions(overview)}<button class="btn" type="button" data-ac-refresh>刷新</button>${page === "members" ? `<button class="btn primary" type="button" data-ac-add-member data-permission="member.manage" ${overview.company ? "" : "disabled"}>新增成员</button>` : ""}</div></header>
+    <div class="ac-tab-panel">${body}</div>
+    <button class="ac-guide-fab" type="button" data-ac-guide aria-label="权限使用说明" title="权限使用说明">?</button>
+  </div>`;
+  qsa<HTMLElement>("[data-permission]", root).forEach((node) => {
+    const permission = String(node.dataset.permission || "").trim();
+    if (permission && state.iamCapabilities) node.hidden = !hasIamCapability(permission);
+  });
+  bindAccessControlInteractions(overview);
+}
+
 async function renderAccounts(user: User) {
   const tbody = qs<HTMLElement>("#settings tbody");
   if (!tbody) return;
-  const canManage = user.role === "admin" || user.role === "super_admin";
+  const canManage = hasIamCapability("member.manage");
   const addButton = qsa<HTMLButtonElement>("#settings .page-head .btn").find((button) => button.textContent?.includes("新增账号"));
   if (addButton) {
     addButton.disabled = !canManage;
@@ -14751,18 +19332,21 @@ async function renderAccounts(user: User) {
   state.accounts = accounts;
   renderAccountMetrics(accounts, true);
   tbody.innerHTML = accounts.map((account) => {
-    const status = (account as User & { status?: string }).status === "disabled" ? "停用" : "启用";
-    const disableAllowed = canManageRoleInUi(account);
-    return `<tr data-account-id="${escapeHtml(account.id)}"><td><div class="company"><span class="avatar">${escapeHtml(account.avatar)}</span><div><b>${escapeHtml(account.name)}</b><span>${escapeHtml(account.email)}</span></div></div></td><td>${badge(roleLabel[account.role], account.role === "super_admin" ? "red" : account.role === "admin" ? "amber" : account.role === "manager" ? "green" : "")}</td><td>${accountBusinessScope(account.role)}</td><td>${accountPersonalScope(account.role)}</td><td>${badge(status, status === "停用" ? "gray" : "green")}</td><td><div class="inline-actions"><button class="btn" data-password-account ${canManageRoleInUi(account) ? "" : "disabled"}>设密码</button><button class="btn" data-disable-account ${disableAllowed ? "" : "disabled"}>${account.id === user.id ? "当前账号" : disableAllowed ? "停用" : "受保护"}</button><button class="btn danger" data-delete-account ${disableAllowed ? "" : "disabled"}>删除</button></div></td></tr>`;
+    const isDisabled = (account as User & { status?: string }).status === "disabled";
+    const status = isDisabled ? "停用" : "启用";
+    const canManageAccount = canManageRoleInUi(account);
+    const disableAllowed = canManageAccount && !isDisabled;
+    const disableLabel = account.id === user.id ? "当前账号" : isDisabled ? "已停用" : disableAllowed ? "停用" : "受保护";
+    return `<tr data-account-id="${escapeHtml(account.id)}"><td><div class="company"><span class="avatar">${escapeHtml(account.avatar)}</span><div><b>${escapeHtml(account.name)}</b><span>${escapeHtml(account.email)}</span></div></div></td><td>${badge(roleLabel[account.role], account.role === "super_admin" ? "red" : account.role === "admin" ? "amber" : account.role === "manager" ? "green" : "")}</td><td>${accountBusinessScope(account.role)}</td><td>${accountPersonalScope(account.role)}</td><td>${badge(status, isDisabled ? "gray" : "green")}</td><td><div class="inline-actions"><button class="btn" data-password-account ${canManageAccount ? "" : "disabled"}>设密码</button><button class="btn" data-disable-account ${disableAllowed ? "" : "disabled"}>${disableLabel}</button><button class="btn danger" data-delete-account ${canManageAccount ? "" : "disabled"}>删除</button></div></td></tr>`;
   }).join("");
   qsa<HTMLButtonElement>("[data-password-account]", tbody).forEach((button) => {
     button.addEventListener("click", () => openPasswordModal(button.closest<HTMLElement>("tr")?.dataset.accountId || ""));
   });
   qsa<HTMLButtonElement>("[data-disable-account]", tbody).forEach((button) => {
-    button.addEventListener("click", () => void disableAccount(button.closest<HTMLElement>("tr")?.dataset.accountId || ""));
+    button.addEventListener("click", () => void disableAccount(button.closest<HTMLElement>("tr")?.dataset.accountId || "", button));
   });
   qsa<HTMLButtonElement>("[data-delete-account]", tbody).forEach((button) => {
-    button.addEventListener("click", () => void deleteAccount(button.closest<HTMLElement>("tr")?.dataset.accountId || ""));
+    button.addEventListener("click", () => void deleteAccount(button.closest<HTMLElement>("tr")?.dataset.accountId || "", button));
   });
   void refreshMysqlImportStatus();
 }
@@ -14788,10 +19372,10 @@ function renderAccountMetrics(accounts: User[], canManage: boolean) {
 }
 
 function canManageRoleInUi(account: User) {
-  if (state.user?.role === "super_admin") return account.id !== state.user.id;
-  return state.user?.role === "admin"
+  return Boolean(state.user && hasIamCapability("member.manage")
+    && account.id !== state.user.id
     && account.teamId === state.user.teamId
-    && (account.role === "sales" || account.role === "manager");
+    && account.role !== "super_admin");
 }
 
 function accountBusinessScope(role: Role) {
@@ -14806,7 +19390,7 @@ function accountPersonalScope(_role: Role) {
 }
 
 function openAccountModal() {
-  if (!state.user || (state.user.role !== "admin" && state.user.role !== "super_admin")) {
+  if (!state.user || !hasIamCapability("member.manage")) {
     toast("只有管理员和超级管理员可以新增账号", "error");
     return;
   }
@@ -14832,7 +19416,7 @@ function openAccountModal() {
 }
 
 async function saveAccount() {
-  if (!state.user || (state.user.role !== "admin" && state.user.role !== "super_admin")) {
+  if (!state.user || !hasIamCapability("member.manage")) {
     toast("无账号管理权限", "error");
     return;
   }
@@ -14861,6 +19445,9 @@ async function saveAccount() {
   });
   state.accounts.unshift(result.account);
   await renderAccounts(state.user!);
+  if (accessControlViews.some((view) => qs<HTMLElement>(`#${view}`)?.classList.contains("active"))) {
+    await loadAccessControl(accessControlOverview?.company?.id || "");
+  }
   closeModal();
   toast("账号已新增");
 }
@@ -14898,7 +19485,7 @@ async function saveAccountPassword(id: string) {
   toast("密码已更新");
 }
 
-async function disableAccount(id: string) {
+async function disableAccount(id: string, button?: HTMLButtonElement) {
   if (!id || id === state.user?.id) {
     toast("当前登录账号不能停用", "error");
     return;
@@ -14908,12 +19495,31 @@ async function disableAccount(id: string) {
     toast("管理员不能停用超级管理员", "error");
     return;
   }
-  await api(`/api/accounts/${id}/disable`, { method: "PATCH" });
-  await renderAccounts(state.user!);
-  toast("账号已停用");
+  if (!account) {
+    toast("账号不存在", "error");
+    return;
+  }
+  if (!await confirmAction({
+    title: "停用成员账号",
+    message: "该成员会立即退出可登录账号范围。",
+    detail: `${account.name}（${account.email}）`,
+    detailLabel: "成员账号",
+    consequences: ["成员将无法继续登录", "账号和名下业务数据仍会保留"],
+    confirmLabel: "停用账号",
+    tone: "warning"
+  })) return;
+  setButtonPending(button || null, true, "停用", "停用中");
+  try {
+    await api(`/api/accounts/${id}/disable`, { method: "PATCH" });
+    await renderAccounts(state.user!);
+    toast("成员账号已停用");
+  } catch (error) {
+    setButtonPending(button || null, false, "停用", "停用中");
+    toast(error instanceof Error ? error.message : "停用账号失败", "error");
+  }
 }
 
-async function deleteAccount(id: string) {
+async function deleteAccount(id: string, button?: HTMLButtonElement) {
   if (!id || id === state.user?.id) {
     toast("当前登录账号不能删除", "error");
     return;
@@ -14923,10 +19529,25 @@ async function deleteAccount(id: string) {
     toast("无权删除该账号", "error");
     return;
   }
-  await api(`/api/accounts/${id}`, { method: "DELETE" });
-  state.accounts = state.accounts.filter((item) => item.id !== id);
-  await renderAccounts(state.user!);
-  toast("账号已删除");
+  if (!await confirmAction({
+    title: "删除成员账号",
+    message: "该成员将无法继续登录 GoodJob CRM。",
+    detail: `${account.name}（${account.email}）`,
+    detailLabel: "成员账号",
+    consequences: ["账号权限会立即失效", "该成员名下的业务数据不会随账号删除"],
+    confirmLabel: "删除账号",
+    tone: "danger"
+  })) return;
+  setButtonPending(button || null, true, "删除", "删除中");
+  try {
+    await api(`/api/accounts/${id}`, { method: "DELETE" });
+    state.accounts = state.accounts.filter((item) => item.id !== id);
+    await renderAccounts(state.user!);
+    toast("成员账号已删除");
+  } catch (error) {
+    setButtonPending(button || null, false, "删除", "删除中");
+    toast(error instanceof Error ? error.message : "删除账号失败", "error");
+  }
 }
 
 function renderOcr(job: OcrJob) {
@@ -14942,42 +19563,382 @@ function renderOcr(job: OcrJob) {
     country: "国家",
     city: "城市"
   };
-  const cards = qs<HTMLElement>("#tools .ocr-fields");
+  const cards = qs<HTMLElement>("#business-card .ocr-fields");
   if (!cards) return;
-  cards.innerHTML = Object.entries(mapping).map(([key, label]) => `<div class="field-card"><input type="checkbox" checked data-ocr-field="${escapeHtml(key)}"><div><label>${label}</label><input type="text" value="${escapeHtml(fields[key])}"></div></div>`).join("") +
-    `<div class="field-card"><input type="checkbox"><div><label>标签</label><input type="text" value=""></div></div>`;
-  const statusRows = qsa<HTMLElement>("#tools .sync-row");
+  cards.innerHTML = Object.entries(mapping).map(([key, label]) => `<div class="field-card"><input type="checkbox" checked data-ocr-field="${escapeHtml(key)}"><div><label>${label}</label><input type="text" value="${escapeHtml(fields[key])}"></div></div>`).join("");
+  const statusRows = qsa<HTMLElement>("#business-card .sync-row");
   const hasRecognizedFields = Object.values(fields).some((value) => String(value || "").trim());
-  if (statusRows[0]) statusRows[0].innerHTML = `<span>识别状态</span><b>${job.status === "synced" ? "已同步" : hasRecognizedFields ? "完成" : "等待名片"}</b>${badge(`${job.confidence}% 置信度`, job.confidence > 0 ? "green" : "")}`;
+  const effectiveStatus = !job.hasImage && !hasRecognizedFields ? "waiting" : job.status;
+  const statusLabel = effectiveStatus === "synced"
+    ? "已同步"
+    : effectiveStatus === "recognized"
+      ? "识别完成"
+      : effectiveStatus === "failed"
+        ? "识别失败"
+      : effectiveStatus === "uploaded"
+        ? "已加载，待识别"
+        : "等待名片";
+  if (statusRows[0]) statusRows[0].innerHTML = `<span>识别状态</span><b>${statusLabel}</b>${badge(job.confidence > 0 ? `${job.confidence}% 置信度` : "--", job.confidence > 0 ? "green" : "")}`;
   const currentTask = qs<HTMLElement>("#ocrCurrentTaskValue");
   const recognizedFields = qs<HTMLElement>("#ocrRecognizedFieldsValue");
   const confidence = qs<HTMLElement>("#ocrConfidenceValue");
   const syncState = qs<HTMLElement>("#ocrSyncStateValue");
-  if (currentTask) currentTask.textContent = hasRecognizedFields ? "已识别" : "待上传";
+  if (currentTask) currentTask.textContent = effectiveStatus === "synced" ? "已同步" : hasRecognizedFields ? "已识别" : job.hasImage ? "待识别" : "待上传";
   if (recognizedFields) recognizedFields.textContent = String(Object.values(fields).filter((value) => String(value || "").trim()).length);
   if (confidence) confidence.textContent = `${job.confidence}%`;
-  if (syncState) syncState.textContent = job.status === "synced" ? "已同步" : "未同步";
-  const card = qs<HTMLElement>("#tools .business-card");
+  if (syncState) syncState.textContent = effectiveStatus === "synced" ? "已同步" : "未同步";
+  const uploadBadge = qs<HTMLElement>("#ocrUploadBadge");
+  if (uploadBadge) uploadBadge.textContent = job.hasImage ? "名片已安全加载" : "等待加载名片";
+  const removeButton = qs<HTMLButtonElement>("#ocrRemoveButton");
+  if (removeButton) removeButton.hidden = !job.hasImage;
+  const recognizeButton = qs<HTMLButtonElement>("#ocrRecognizeButton");
+  if (recognizeButton) recognizeButton.disabled = ocrBusy || !job.hasImage;
+  const card = qs<HTMLElement>("#ocrPreviewCard");
   if (card) {
-    card.innerHTML = hasRecognizedFields
-      ? `<h2>${escapeHtml(fields.company || "未识别公司")}</h2><strong>${escapeHtml(fields.contact || "未识别联系人")}</strong><span>${escapeHtml(fields.title)}</span><span>${escapeHtml(fields.email)}</span><span>${fields.whatsapp ? `WhatsApp ${escapeHtml(fields.whatsapp)}` : ""}</span><span>${fields.wechat ? `WeChat ${escapeHtml(fields.wechat)}` : ""}</span><span>${escapeHtml([fields.city, fields.country].filter(Boolean).join(", "))}</span>`
-      : `<h2>等待名片识别</h2><p>上传名片后，识别结果将从数据库加载。</p>`;
+    const imageSource = ocrLocalPreviewUrl || (job.imageUrl ? `${job.imageUrl}?v=${ocrPreviewRevision}` : "");
+    card.innerHTML = imageSource
+      ? `<img src="${escapeHtml(imageSource)}" alt="已加载的名片图片">`
+      : `<div class="ocr-card-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7V5a2 2 0 0 1 2-2h2M16 3h2a2 2 0 0 1 2 2v2M20 17v2a2 2 0 0 1-2 2h-2M8 21H6a2 2 0 0 1-2-2v-2"/><rect x="7" y="8" width="10" height="8" rx="1"/></svg><h2>尚未加载名片</h2><p>支持 PNG、JPG、WebP，单张不超过 2 MB</p></div>`;
+  }
+  const hint = qs<HTMLElement>("#ocrRecognitionHint");
+  if (hint && !hint.classList.contains("error")) {
+    hint.textContent = (effectiveStatus === "recognized" || effectiveStatus === "synced") && hasRecognizedFields
+      ? "识别结果可人工修正，勾选需要同步的字段"
+      : job.hasImage
+        ? "可重新识别，或直接人工填写右侧字段"
+        : "图片将由当前账号配置的视觉模型识别";
+  }
+  const mappingRows = qsa<HTMLTableRowElement>("#business-card .matrix-grid .mini-table tbody tr").slice(0, 4);
+  const mappingStates = [
+    Boolean(fields.company?.trim()),
+    Boolean(fields.contact?.trim() || fields.title?.trim()),
+    Boolean(fields.email?.trim() || fields.phone?.trim() || fields.whatsapp?.trim() || fields.wechat?.trim()),
+    Boolean(fields.country?.trim() || fields.city?.trim())
+  ];
+  mappingRows.forEach((row, index) => {
+    const cell = row.lastElementChild as HTMLElement | null;
+    if (cell) cell.innerHTML = badge(mappingStates[index] ? "已识别" : "待补充", mappingStates[index] ? "green" : "");
+  });
+}
+
+function setOcrHint(message: string, error = false) {
+  const hint = qs<HTMLElement>("#ocrRecognitionHint");
+  if (!hint) return;
+  hint.textContent = message;
+  hint.classList.toggle("error", error);
+}
+
+function setOcrBusy(busy: boolean, phase: "upload" | "recognize" = "recognize") {
+  ocrBusy = busy;
+  const loadButton = qs<HTMLButtonElement>("#ocrLoadButton");
+  const recognizeButton = qs<HTMLButtonElement>("#ocrRecognizeButton");
+  const removeButton = qs<HTMLButtonElement>("#ocrRemoveButton");
+  const fileInput = qs<HTMLInputElement>("#ocrFileInput");
+  if (loadButton) {
+    loadButton.disabled = busy;
+    loadButton.textContent = busy && phase === "upload" ? "加载中" : "加载名片";
+  }
+  if (recognizeButton) {
+    recognizeButton.disabled = busy || !state.ocrJob?.hasImage;
+    recognizeButton.textContent = busy && phase === "recognize" ? "识别中" : "重新识别";
+  }
+  if (removeButton) removeButton.disabled = busy;
+  if (fileInput) fileInput.disabled = busy;
+}
+
+function fileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("名片图片读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function activeOcrJobId() {
+  return state.ocrJob?.id || "current";
+}
+
+function ocrBatchStatusLabel(job: OcrJob) {
+  if (job.status === "synced") return "已同步";
+  if (job.status === "recognized") return "识别完成";
+  if (job.status === "failed") return "失败";
+  if (job.status === "processing") return "识别中";
+  if (job.status === "uploaded") return "已上传";
+  if (job.status === "uploading") return "上传中";
+  return "排队中";
+}
+
+function renderOcrBatch() {
+  const total = ocrBatchJobs.length;
+  const completed = ocrBatchJobs.filter((job) => ["recognized", "synced", "failed"].includes(job.status)).length;
+  const failed = ocrBatchJobs.filter((job) => job.status === "failed").length;
+  const synced = ocrBatchJobs.filter((job) => job.status === "synced").length;
+  const setText = (id: string, value: string | number) => { const node = qs<HTMLElement>(id); if (node) node.textContent = String(value); };
+  setText("#ocrBatchTotal", total);
+  setText("#ocrBatchCompleted", completed);
+  setText("#ocrBatchFailed", failed);
+  setText("#ocrBatchSynced", synced);
+  const progress = qs<HTMLElement>("#ocrBatchProgressBar");
+  if (progress) progress.style.width = `${total ? Math.round(completed / total * 100) : 0}%`;
+  const retry = qs<HTMLButtonElement>("#ocrBatchRetryButton");
+  const sync = qs<HTMLButtonElement>("#ocrBatchSyncButton");
+  const clear = qs<HTMLButtonElement>("#ocrBatchClearButton");
+  if (retry) retry.disabled = ocrBatchRunning || !ocrBatchJobs.some((job) => job.status === "failed" && job.hasImage);
+  if (sync) sync.disabled = ocrBatchRunning || !ocrBatchJobs.some((job) => job.status === "recognized");
+  if (clear) clear.disabled = ocrBatchRunning || !total;
+  const list = qs<HTMLElement>("#ocrBatchList");
+  if (!list) return;
+  if (!ocrBatchJobs.length) {
+    list.innerHTML = `<div class="ocr-batch-empty">选择一个包含名片图片的文件夹开始批量处理</div>`;
+    return;
+  }
+  list.innerHTML = `<div class="ocr-batch-row ocr-batch-header"><span></span><span>文件</span><span>状态</span><span>识别结果</span><span>置信度</span><span>操作</span></div>` + ocrBatchJobs.map((job) => {
+    const fields = job.fields || {};
+    const company = fields.company || "未识别公司";
+    const contact = [fields.contact, fields.title].filter(Boolean).join(" · ") || job.errorMessage || "等待处理";
+    const stateClass = job.status === "failed" ? "failed" : job.status === "recognized" ? "recognized" : job.status === "synced" ? "synced" : ["processing", "uploading"].includes(job.status) ? "processing" : "";
+    const retryButton = job.status === "failed" && job.hasImage ? `<button class="btn" type="button" data-ocr-batch-retry="${escapeHtml(job.id)}">重试</button>` : "";
+    const syncButton = job.status === "recognized" ? `<button class="btn primary" type="button" data-ocr-batch-sync="${escapeHtml(job.id)}">同步</button>` : "";
+    return `<div class="ocr-batch-row">
+      <input type="checkbox" data-ocr-batch-select="${escapeHtml(job.id)}" ${job.status === "recognized" ? "checked" : ""} aria-label="选择 ${escapeHtml(job.sourceFileName || job.id)}">
+      <div class="ocr-batch-file" title="${escapeHtml(job.sourceFileName || job.id)}"><b>${escapeHtml(job.sourceFileName || job.id)}</b><small>${escapeHtml(job.batchId || "批量任务")}</small></div>
+      <span class="ocr-batch-state ${stateClass}">${ocrBatchStatusLabel(job)}</span>
+      <div class="ocr-batch-result" title="${escapeHtml(job.errorMessage || contact)}"><b>${escapeHtml(company)}</b><small>${escapeHtml(contact)}</small></div>
+      <span>${job.confidence ? `${job.confidence}%` : "--"}</span>
+      <div class="ocr-batch-actions"><button class="btn" type="button" data-ocr-batch-view="${escapeHtml(job.id)}">查看</button>${retryButton}${syncButton}</div>
+    </div>`;
+  }).join("");
+  qsa<HTMLButtonElement>("[data-ocr-batch-view]", list).forEach((button) => button.addEventListener("click", () => {
+    const job = ocrBatchJobs.find((item) => item.id === button.dataset.ocrBatchView);
+    if (!job) return;
+    state.ocrJob = job;
+    ocrLocalPreviewUrl = "";
+    ocrPreviewRevision += 1;
+    renderOcr(job);
+    qs<HTMLElement>("#ocrPreviewCard")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }));
+  qsa<HTMLButtonElement>("[data-ocr-batch-retry]", list).forEach((button) => button.addEventListener("click", () => void retryOcrBatchJob(button.dataset.ocrBatchRetry || "")));
+  qsa<HTMLButtonElement>("[data-ocr-batch-sync]", list).forEach((button) => button.addEventListener("click", () => void syncOcrBatchJob(button.dataset.ocrBatchSync || "")));
+}
+
+async function loadOcrBatch() {
+  try {
+    const result = await api<{ batchId: string; jobs: OcrJob[] }>("/api/tools/ocr/batches/current");
+    ocrBatchId = result.batchId || "";
+    ocrBatchJobs = result.jobs || [];
+    renderOcrBatch();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "批量任务加载失败", "error");
   }
 }
 
-async function recognizeOcr(overrides: Partial<Record<string, string>> = {}) {
-  const result = await api<{ job: OcrJob }>("/api/tools/ocr/jobs/ocr1/recognize", {
+async function processOcrBatchJob(job: OcrJob, file?: File) {
+  const update = (changes: Partial<OcrJob>) => {
+    const index = ocrBatchJobs.findIndex((item) => item.id === job.id);
+    if (index >= 0) ocrBatchJobs[index] = { ...ocrBatchJobs[index], ...changes };
+    renderOcrBatch();
+  };
+  try {
+    if (file) {
+      update({ status: "uploading", errorMessage: "" });
+      const image = await fileAsDataUrl(file);
+      const upload = await api<{ job: OcrJob }>(`/api/tools/ocr/jobs/${encodeURIComponent(job.id)}/image`, {
+        method: "POST",
+        body: JSON.stringify({ image, mime: file.type, fileName: file.webkitRelativePath || file.name })
+      });
+      update({ ...upload.job, status: "processing" });
+    } else {
+      update({ status: "processing", errorMessage: "" });
+    }
+    const result = await api<{ job: OcrJob }>(`/api/tools/ocr/jobs/${encodeURIComponent(job.id)}/recognize-image`, { method: "POST", body: "{}" });
+    update(result.job);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "名片识别失败";
+    update({ status: "failed", errorMessage: message });
+  }
+}
+
+async function startOcrBatch(files: File[]) {
+  if (ocrBatchRunning) return;
+  const allowed = new Set(["image/png", "image/jpeg", "image/webp"]);
+  const valid = files.filter((file) => allowed.has(file.type) && file.size > 0 && file.size <= 2 * 1024 * 1024).slice(0, 50);
+  if (!valid.length) { toast("文件夹中没有符合要求的名片图片", "error"); return; }
+  if (files.length > valid.length) toast(`已跳过 ${files.length - valid.length} 个非图片或超大文件`, "error");
+  ocrBatchRunning = true;
+  try {
+    const result = await api<{ batchId: string; jobs: OcrJob[] }>("/api/tools/ocr/batches", {
+      method: "POST",
+      body: JSON.stringify({ files: valid.map((file) => ({ name: (file.webkitRelativePath || file.name).slice(-255), size: file.size, mime: file.type })) })
+    });
+    ocrBatchId = result.batchId;
+    ocrBatchJobs = result.jobs || [];
+    renderOcrBatch();
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < ocrBatchJobs.length) {
+        const index = cursor++;
+        await processOcrBatchJob(ocrBatchJobs[index], valid[index]);
+      }
+    };
+    await Promise.all([worker(), worker()]);
+    toast(`批量识别完成：${ocrBatchJobs.filter((job) => job.status === "recognized").length} 张成功`, "success");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "批量识别启动失败", "error");
+  } finally {
+    ocrBatchRunning = false;
+    renderOcrBatch();
+  }
+}
+
+async function retryOcrBatchJob(id: string) {
+  const job = ocrBatchJobs.find((item) => item.id === id);
+  if (!job || !job.hasImage || ocrBatchRunning) return;
+  ocrBatchRunning = true;
+  try { await processOcrBatchJob(job); }
+  finally { ocrBatchRunning = false; renderOcrBatch(); }
+}
+
+async function syncOcrBatchJob(id: string) {
+  const job = ocrBatchJobs.find((item) => item.id === id);
+  if (!job || job.status !== "recognized") return;
+  try {
+    const result = await api<{ job: OcrJob }>(`/api/tools/ocr/jobs/${encodeURIComponent(id)}/sync-lead`, { method: "POST" });
+    Object.assign(job, result.job);
+    await reloadLeads();
+    renderOcrBatch();
+  } catch (error) { toast(error instanceof Error ? error.message : "同步线索失败", "error"); }
+}
+
+async function syncRecognizedOcrBatch() {
+  const jobs = ocrBatchJobs.filter((job) => job.status === "recognized");
+  if (!jobs.length) return;
+  ocrBatchRunning = true;
+  renderOcrBatch();
+  for (const job of jobs) await syncOcrBatchJob(job.id);
+  ocrBatchRunning = false;
+  renderOcrBatch();
+  toast(`已同步 ${jobs.filter((job) => job.status === "synced").length} 张名片`, "success");
+}
+
+async function retryFailedOcrBatch() {
+  const jobs = ocrBatchJobs.filter((job) => job.status === "failed" && job.hasImage);
+  if (!jobs.length) return;
+  ocrBatchRunning = true;
+  renderOcrBatch();
+  for (const job of jobs) await processOcrBatchJob(job);
+  ocrBatchRunning = false;
+  renderOcrBatch();
+}
+
+async function clearOcrBatch() {
+  if (!ocrBatchId || ocrBatchRunning) return;
+  if (!await confirmAction({ title: "清空批量识别", message: "确定清空当前批次吗？", consequences: ["批次记录和私有图片将被删除", "已经同步到线索的资料不会被删除"], confirmLabel: "清空批次", tone: "danger" })) return;
+  try {
+    await api(`/api/tools/ocr/batches/${encodeURIComponent(ocrBatchId)}`, { method: "DELETE" });
+    ocrBatchId = "";
+    ocrBatchJobs = [];
+    renderOcrBatch();
+    toast("批量识别批次已清空", "success");
+  } catch (error) { toast(error instanceof Error ? error.message : "清空批次失败", "error"); }
+}
+
+async function requestOcrImageRecognition() {
+  const result = await api<{ job: OcrJob }>(`/api/tools/ocr/jobs/${encodeURIComponent(activeOcrJobId())}/recognize-image`, {
     method: "POST",
-    body: JSON.stringify(overrides)
+    body: "{}"
   });
   state.ocrJob = result.job;
+  setOcrHint("识别结果可人工修正，勾选需要同步的字段");
   renderOcr(result.job);
-  toast("名片已识别");
+  return result.job;
+}
+
+async function loadOcrCard(file: File) {
+  const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
+  if (!allowedTypes.includes(file.type)) {
+    toast("只支持 PNG、JPG 或 WebP 名片图片", "error");
+    return;
+  }
+  if (!file.size || file.size > 2 * 1024 * 1024) {
+    toast("名片图片大小必须在 2 MB 以内", "error");
+    return;
+  }
+  setOcrBusy(true, "upload");
+  setOcrHint("正在安全加载名片图片");
+  if (ocrLocalPreviewUrl) URL.revokeObjectURL(ocrLocalPreviewUrl);
+  ocrLocalPreviewUrl = URL.createObjectURL(file);
+  let uploadCompleted = false;
+  try {
+    const image = await fileAsDataUrl(file);
+    const uploadResult = await api<{ job: OcrJob; message: string }>("/api/tools/ocr/jobs/current/image", {
+      method: "POST",
+      body: JSON.stringify({ image, mime: file.type, fileName: file.name })
+    });
+    uploadCompleted = true;
+    state.ocrJob = uploadResult.job;
+    ocrPreviewRevision += 1;
+    renderOcr(uploadResult.job);
+    setOcrBusy(true, "recognize");
+    setOcrHint("名片已加载，正在调用视觉模型识别");
+    await requestOcrImageRecognition();
+    toast("名片识别完成", "success");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "名片加载或识别失败";
+    if (!uploadCompleted) {
+      URL.revokeObjectURL(ocrLocalPreviewUrl);
+      ocrLocalPreviewUrl = "";
+      if (state.ocrJob) renderOcr(state.ocrJob);
+    }
+    setOcrHint(`${message}；可人工填写字段后同步`, true);
+    toast(message, "error");
+  } finally {
+    setOcrBusy(false);
+    const input = qs<HTMLInputElement>("#ocrFileInput");
+    if (input) input.value = "";
+  }
+}
+
+async function recognizeOcrImage() {
+  if (!state.ocrJob?.hasImage) {
+    toast("请先加载一张名片图片", "error");
+    return;
+  }
+  setOcrBusy(true, "recognize");
+  setOcrHint("正在重新识别名片");
+  try {
+    await requestOcrImageRecognition();
+    toast("名片重新识别完成", "success");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "名片识别失败";
+    setOcrHint(`${message}；可人工填写字段后同步`, true);
+    toast(message, "error");
+  } finally {
+    setOcrBusy(false);
+  }
+}
+
+async function removeOcrCard() {
+  if (!state.ocrJob?.hasImage || ocrBusy) return;
+  setOcrBusy(true, "upload");
+  try {
+    const result = await api<{ job: OcrJob }>(`/api/tools/ocr/jobs/${encodeURIComponent(activeOcrJobId())}/image`, { method: "DELETE" });
+    if (ocrLocalPreviewUrl) URL.revokeObjectURL(ocrLocalPreviewUrl);
+    ocrLocalPreviewUrl = "";
+    state.ocrJob = result.job;
+    setOcrHint("图片将由当前账号配置的视觉模型识别");
+    renderOcr(result.job);
+    toast("名片已移除");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "移除名片失败", "error");
+  } finally {
+    setOcrBusy(false);
+  }
 }
 
 function collectOcrFields() {
   const fields: Record<string, string> = {};
-  qsa<HTMLInputElement>("#tools .field-card input[data-ocr-field]").forEach((checkbox) => {
+  qsa<HTMLInputElement>("#business-card .field-card input[data-ocr-field]").forEach((checkbox) => {
     if (!checkbox.checked) return;
     const key = checkbox.dataset.ocrField;
     const input = checkbox.parentElement?.querySelector<HTMLInputElement>("input[type='text']");
@@ -15430,15 +20391,26 @@ function productThumbHtml(imageUrl: string): string {
 let currentProductVisibleIds: string[] = [];
 let currentShipmentVisibleIds: string[] = [];
 
+let productCategoryFilterValue = "";
+let productViewMode: "grid" | "list" = "grid";
+
+function productCategoryOptions() {
+  const categories = new Map<string, string>();
+  [...state.productCategories, ...state.products.map((product) => product.category)].forEach((value) => {
+    const name = String(value || "").trim().replace(/\s+/g, " ");
+    if (name) categories.set(name.toLocaleLowerCase(), name);
+  });
+  return [...categories.values()].sort((a, b) => a.localeCompare(b, "zh-CN"));
+}
+
 function renderProducts() {
   const all = state.products.slice();
   state.selectedProductIds = state.selectedProductIds.filter((id) => all.some((p) => p.id === id));
   const search = (qs<HTMLInputElement>("#productSearch")?.value || "").trim().toLowerCase();
-  const catFilter = qs<HTMLSelectElement>("#productCategoryFilter")?.value || "";
   const curFilter = qs<HTMLSelectElement>("#productCurrencyFilter")?.value || "";
 
   const filtered = all.filter((p) => {
-    if (catFilter && p.category !== catFilter) return false;
+    if (productCategoryFilterValue && p.category !== productCategoryFilterValue) return false;
     if (curFilter && p.currency !== curFilter) return false;
     if (search) {
       const hay = `${p.nameZh} ${p.nameEn} ${p.model} ${p.hsCode} ${p.category} ${(p.tags || []).join(" ")}`.toLowerCase();
@@ -15447,15 +20419,18 @@ function renderProducts() {
     return true;
   });
 
-  const categories = Array.from(new Set(all.map((p) => p.category).filter(Boolean))).sort();
-  const catSelect = qs<HTMLSelectElement>("#productCategoryFilter");
-  if (catSelect) {
-    const cur = catSelect.value;
-    catSelect.innerHTML = `<option value="">全部分类</option>` + categories.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
-    if (categories.includes(cur)) catSelect.value = cur;
+  const categories = productCategoryOptions();
+  const rail = qs<HTMLElement>("#productCategoryRail");
+  if (rail) {
+    rail.innerHTML = `<button class="pc-cat ${productCategoryFilterValue === "" ? "is-active" : ""}" data-cat="">全部 <i>${all.length}</i></button>` +
+      categories.map((c) => {
+        const n = all.filter((p) => p.category === c).length;
+        return `<button class="pc-cat ${productCategoryFilterValue === c ? "is-active" : ""}" data-cat="${escapeHtml(c)}">${escapeHtml(c)} <i>${n}</i></button>`;
+      }).join("");
+    rail.querySelectorAll<HTMLButtonElement>(".pc-cat").forEach((b) => {
+      b.addEventListener("click", () => { productCategoryFilterValue = b.dataset.cat || ""; renderProducts(); });
+    });
   }
-  const catList = qs<HTMLElement>("#productCategoryList");
-  if (catList) catList.innerHTML = categories.map((c) => `<option value="${escapeHtml(c)}"></option>`).join("");
 
   const currencies = Array.from(new Set(all.map((p) => p.currency).filter(Boolean))).sort();
   const curSelect = qs<HTMLSelectElement>("#productCurrencyFilter");
@@ -15465,34 +20440,33 @@ function renderProducts() {
     if (currencies.includes(cur)) curSelect.value = cur;
   }
 
-  const countEl = qs<HTMLElement>("#productCount");
-  if (countEl) countEl.textContent = String(all.length);
-  const catCountEl = qs<HTMLElement>("#productCategoryCount");
-  if (catCountEl) catCountEl.textContent = String(categories.length);
+  const catList = qs<HTMLElement>("#productCategoryList");
+  if (catList) catList.innerHTML = categories.map((c) => `<option value="${escapeHtml(c)}"></option>`).join("");
+
+  const countEl = qs<HTMLElement>("#productCount"); if (countEl) countEl.textContent = String(all.length);
+  const catCountEl = qs<HTMLElement>("#productCategoryCount"); if (catCountEl) catCountEl.textContent = String(categories.length);
   const spreadEl = qs<HTMLElement>("#productCurrencySpread");
   if (spreadEl) spreadEl.textContent = currencies.length ? currencies.slice(0, 3).join(" / ") + (currencies.length > 3 ? " …" : "") : "—";
+  const valueEl = qs<HTMLElement>("#productValueSum");
+  if (valueEl) {
+    // 以出现次数最多的币种为主币种，统计其货值合计（避免多币种时只统计到字典序首位的币种）
+    const freq: Record<string, number> = {};
+    for (const p of all) if (p.currency) freq[p.currency] = (freq[p.currency] || 0) + 1;
+    const primary = currencies.slice().sort((a, b) => (freq[b] || 0) - (freq[a] || 0))[0] || "";
+    const sum = all.filter((p) => p.currency === primary).reduce((a, p) => a + (Number(p.price) || 0), 0);
+    valueEl.textContent = primary ? `${formatNumber(sum)} ${primary}` : "—";
+  }
 
-  const tbody = qs<HTMLElement>("#productTableBody");
-  if (tbody) {
+  const grid = qs<HTMLElement>("#productGrid");
+  if (grid) {
     if (filtered.length) {
-      tbody.innerHTML = filtered.map((p) => `
-        <tr data-product-id="${escapeHtml(p.id)}">
-          <td class="col-check"><input type="checkbox" data-select-product ${state.selectedProductIds.includes(p.id) ? "checked" : ""} aria-label="选择 ${escapeHtml(p.nameZh)}"></td>
-          <td>${productThumbHtml(p.imageUrl)}</td>
-          <td><div class="product-name-zh">${escapeHtml(p.nameZh)}</div>${p.nameEn ? `<div class="product-name-en">${escapeHtml(p.nameEn)}</div>` : ""}</td>
-          <td>${escapeHtml(p.model) || "—"}</td>
-          <td>${p.category ? `<span class="badge cat">${escapeHtml(p.category)}</span>` : "—"}</td>
-          <td class="col-price"><span class="product-price">${formatNumber(p.price)}<small>${escapeHtml(p.currency)}</small></span></td>
-          <td class="product-time">${formatProductDate(p.updatedAt)}</td>
-          <td class="col-actions"><span class="row-actions">
-            <button class="btn btn-sm" data-product-edit="${escapeHtml(p.id)}">编辑</button>
-            <button class="btn btn-sm btn-ghost" data-product-duplicate="${escapeHtml(p.id)}">复制</button>
-          </span></td>
-        </tr>`).join("");
+      grid.className = `pc-grid ${productViewMode === "list" ? "is-list" : ""}`;
+      grid.innerHTML = filtered.map((p) => productCardHtml(p)).join("");
     } else if (all.length) {
-      tbody.innerHTML = `<tr><td colspan="9" class="empty-cell" style="text-align:center;color:var(--muted);padding:28px">未找到匹配的产品</td></tr>`;
+      grid.className = "pc-grid";
+      grid.innerHTML = `<div class="pc-noresult">未找到匹配的产品</div>`;
     } else {
-      tbody.innerHTML = "";
+      grid.innerHTML = "";
     }
   }
 
@@ -15506,10 +20480,10 @@ function renderProducts() {
   }
   updateProductSelectionUI();
 
-  if (tbody) {
-    qsa<HTMLInputElement>("[data-select-product]", tbody).forEach((checkbox) => {
+  if (grid) {
+    qsa<HTMLInputElement>("[data-select-product]", grid).forEach((checkbox) => {
       checkbox.addEventListener("change", () => {
-        const id = checkbox.closest<HTMLElement>("tr")?.dataset.productId || "";
+        const id = checkbox.closest<HTMLElement>("[data-product-id]")?.dataset.productId || "";
         if (!id) return;
         state.selectedProductIds = checkbox.checked
           ? Array.from(new Set([...state.selectedProductIds, id]))
@@ -15526,6 +20500,185 @@ function renderProducts() {
 
   const empty = qs<HTMLElement>("#productEmpty");
   if (empty) empty.hidden = all.length > 0;
+}
+
+function openProductCategoryManager() {
+  const categories = productCategoryOptions();
+  const rows = categories.map((category) => {
+    const count = state.products.filter((product) => product.category.toLocaleLowerCase() === category.toLocaleLowerCase()).length;
+    return `<div class="product-category-row">
+      <input value="${escapeHtml(category)}" maxlength="80" data-product-category-input="${escapeHtml(category)}" aria-label="分类名称 ${escapeHtml(category)}">
+      <small>${count} 个产品</small>
+      <button class="btn btn-sm" type="button" data-product-category-save="${escapeHtml(category)}">保存</button>
+      <button class="btn btn-sm danger" type="button" data-product-category-delete="${escapeHtml(category)}">删除</button>
+    </div>`;
+  }).join("");
+  openModal("产品分类管理", `
+    <div class="product-category-manager">
+      <div class="product-category-create">
+        <input id="productCategoryNewName" maxlength="80" placeholder="输入新分类名称" autocomplete="off">
+        <button class="btn primary" id="productCategoryCreateButton" type="button">新增分类</button>
+      </div>
+      <div class="product-category-list">${rows || `<div class="product-category-empty">暂无分类，可在上方创建第一个分类</div>`}</div>
+      <p class="product-category-note">重命名会同步更新该分类下的产品；删除分类只会清空产品的分类归属，不会删除产品。</p>
+    </div>
+  `, `<button class="btn primary" data-modal-close type="button">完成</button>`);
+  qs<HTMLButtonElement>("#productCategoryCreateButton")?.addEventListener("click", (event) => void createProductCategory(event.currentTarget as HTMLButtonElement));
+  qs<HTMLInputElement>("#productCategoryNewName")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") void createProductCategory(qs<HTMLButtonElement>("#productCategoryCreateButton")!);
+  });
+  qsa<HTMLButtonElement>("[data-product-category-save]").forEach((button) => {
+    button.addEventListener("click", () => void renameProductCategory(button));
+  });
+  qsa<HTMLButtonElement>("[data-product-category-delete]").forEach((button) => {
+    button.addEventListener("click", () => void deleteProductCategory(button.dataset.productCategoryDelete || ""));
+  });
+}
+
+async function createProductCategory(button: HTMLButtonElement) {
+  const name = qs<HTMLInputElement>("#productCategoryNewName")?.value.trim() || "";
+  if (!name) { toast("请输入分类名称", "error"); return; }
+  setButtonPending(button, true, "新增分类", "新增中");
+  try {
+    const result = await api<{ categories: string[] }>("/api/tools/product-categories", {
+      method: "POST",
+      body: JSON.stringify({ name })
+    });
+    state.productCategories = result.categories;
+    renderProducts();
+    openProductCategoryManager();
+    toast(`已新增分类「${name}」`, "success");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "新增分类失败", "error");
+    setButtonPending(button, false, "新增分类", "新增中");
+  }
+}
+
+async function renameProductCategory(button: HTMLButtonElement) {
+  const currentName = button.dataset.productCategorySave || "";
+  const input = qsa<HTMLInputElement>("[data-product-category-input]")
+    .find((item) => item.dataset.productCategoryInput === currentName);
+  const name = input?.value.trim() || "";
+  if (!name) { toast("分类名称不能为空", "error"); return; }
+  if (name === currentName) { toast("分类名称没有变化"); return; }
+  setButtonPending(button, true, "保存", "保存中");
+  try {
+    const result = await api<{ categories: string[]; products: Product[] }>("/api/tools/product-categories", {
+      method: "PATCH",
+      body: JSON.stringify({ currentName, name })
+    });
+    state.productCategories = result.categories;
+    state.products = result.products;
+    if (productCategoryFilterValue === currentName) productCategoryFilterValue = name;
+    renderProducts();
+    openProductCategoryManager();
+    toast(`分类已重命名为「${name}」`, "success");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "重命名分类失败", "error");
+    setButtonPending(button, false, "保存", "保存中");
+  }
+}
+
+async function deleteProductCategory(name: string) {
+  const count = state.products.filter((product) => product.category.toLocaleLowerCase() === name.toLocaleLowerCase()).length;
+  const confirmed = await confirmAction({
+    title: "删除产品分类",
+    message: `确定删除分类「${name}」吗？`,
+    consequences: [count ? `${count} 个产品将变为未分类` : "该分类将从分类列表移除", "产品资料不会被删除"],
+    confirmLabel: "删除分类",
+    tone: "warning"
+  });
+  if (!confirmed) { openProductCategoryManager(); return; }
+  try {
+    const result = await api<{ categories: string[]; products: Product[] }>(`/api/tools/product-categories/${encodeURIComponent(name)}`, { method: "DELETE" });
+    state.productCategories = result.categories;
+    state.products = result.products;
+    if (productCategoryFilterValue.toLocaleLowerCase() === name.toLocaleLowerCase()) productCategoryFilterValue = "";
+    renderProducts();
+    openProductCategoryManager();
+    toast(`已删除分类「${name}」`, "success");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "删除分类失败", "error");
+    openProductCategoryManager();
+  }
+}
+
+function productCardHtml(p: Product): string {
+  const selected = state.selectedProductIds.includes(p.id);
+  const tags = (p.tags || []).slice(0, 4).map((t) => `<span class="pc-tag">${escapeHtml(t)}</span>`).join("");
+  return `
+  <article class="pc-card" data-product-id="${escapeHtml(p.id)}">
+    <label class="pc-check"><input type="checkbox" data-select-product ${selected ? "checked" : ""} aria-label="选择 ${escapeHtml(p.nameZh)}"><span></span></label>
+    <div class="pc-thumb">${productThumbHtml(p.imageUrl)}</div>
+    <div class="pc-card-body">
+      <h3 class="pc-name">${escapeHtml(p.nameZh)}</h3>
+      ${p.nameEn ? `<p class="pc-name-en">${escapeHtml(p.nameEn)}</p>` : ""}
+      <div class="pc-meta">
+        ${p.model ? `<span class="pc-meta-item">${escapeHtml(p.model)}</span>` : ""}
+        ${p.category ? `<span class="pc-badge">${escapeHtml(p.category)}</span>` : ""}
+        ${p.hsCode ? `<span class="pc-hs">HS ${escapeHtml(p.hsCode)}</span>` : ""}
+      </div>
+      ${tags ? `<div class="pc-tags">${tags}</div>` : ""}
+      <div class="pc-card-foot">
+        <span class="pc-price">${formatNumber(p.price)}<small>${escapeHtml(p.currency)}</small></span>
+        <span class="pc-time">${formatProductDate(p.updatedAt)}</span>
+      </div>
+    </div>
+    <div class="pc-card-actions">
+      <button class="pc-iconbtn" data-product-edit="${escapeHtml(p.id)}" type="button">编辑</button>
+      <button class="pc-iconbtn ghost" data-product-duplicate="${escapeHtml(p.id)}" type="button">复制</button>
+    </div>
+  </article>`;
+}
+
+function openProductDrawer(p: Product) {
+  const drawer = qs<HTMLElement>("#productDrawer");
+  const inner = qs<HTMLElement>("#productDrawerInner");
+  const scrim = qs<HTMLElement>("#productScrim");
+  if (!drawer || !inner) return;
+  const tags = (p.tags || []).map((t) => `<span class="pc-tag">${escapeHtml(t)}</span>`).join("") || `<span class="pc-dim">无</span>`;
+  inner.innerHTML = `
+    <header class="pc-drawer-head">
+      <div>
+        <p class="pc-drawer-eyebrow">产品详情</p>
+        <h2>${escapeHtml(p.nameZh)}</h2>
+        ${p.nameEn ? `<p class="pc-drawer-en">${escapeHtml(p.nameEn)}</p>` : ""}
+      </div>
+      <button class="pc-drawer-close" id="productDrawerClose" type="button" aria-label="关闭">&times;</button>
+    </header>
+    <div class="pc-drawer-body">
+      <div class="pc-drawer-thumb">${productThumbHtml(p.imageUrl)}</div>
+      <dl class="pc-def">
+        <div><dt>型号 / 规格</dt><dd>${escapeHtml(p.model) || "—"}</dd></div>
+        <div><dt>分类</dt><dd>${escapeHtml(p.category) || "—"}</dd></div>
+        <div><dt>单位</dt><dd>${escapeHtml(p.unit) || "—"}</dd></div>
+        <div><dt>单价</dt><dd class="pc-mono">${formatNumber(p.price)} ${escapeHtml(p.currency)}</dd></div>
+        <div><dt>HS 编码</dt><dd class="pc-mono">${escapeHtml(p.hsCode) || "—"}</dd></div>
+        <div><dt>更新时间</dt><dd>${formatProductDate(p.updatedAt)}</dd></div>
+      </dl>
+      <div class="pc-drawer-sec"><h4>标签</h4><div class="pc-tags">${tags}</div></div>
+      ${p.descriptionZh ? `<div class="pc-drawer-sec"><h4>中文描述</h4><p class="pc-desc">${escapeHtml(p.descriptionZh)}</p></div>` : ""}
+      ${p.descriptionEn ? `<div class="pc-drawer-sec"><h4>英文描述</h4><p class="pc-desc">${escapeHtml(p.descriptionEn)}</p></div>` : ""}
+    </div>
+    <footer class="pc-drawer-foot">
+      <button class="btn btn-ghost danger" id="productDrawerDelete" type="button">删除</button>
+      <span class="pc-foot-spacer"></span>
+      <button class="btn btn-primary" id="productDrawerEdit" type="button">编辑产品</button>
+    </footer>`;
+  drawer.classList.add("is-open");
+  drawer.setAttribute("aria-hidden", "false");
+  if (scrim) scrim.hidden = false;
+  qs<HTMLElement>("#productDrawerClose")?.addEventListener("click", closeProductDrawer);
+  qs<HTMLElement>("#productDrawerEdit")?.addEventListener("click", () => { closeProductDrawer(); openProductModal(p); });
+  qs<HTMLElement>("#productDrawerDelete")?.addEventListener("click", () => { closeProductDrawer(); if (p.id) void deleteProduct(p.id); });
+  scrim?.addEventListener("click", closeProductDrawer, { once: true });
+}
+
+function closeProductDrawer() {
+  const drawer = qs<HTMLElement>("#productDrawer");
+  const scrim = qs<HTMLElement>("#productScrim");
+  if (drawer) { drawer.classList.remove("is-open"); drawer.setAttribute("aria-hidden", "true"); }
+  if (scrim) scrim.hidden = true;
 }
 
 function updateProductSelectionUI() {
@@ -15577,6 +20730,12 @@ async function saveProduct() {
   if (isNaN(price) || price < 0) { toast("单价需为非负数字", "error"); return; }
   const get = (sel: string) => (qs<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(sel)?.value || "").trim();
   const tags = get("#productTags").split(",").map((t) => t.trim()).filter(Boolean);
+  let imageUrl = get("#productImageUrl");
+  const imageFile = qs<HTMLInputElement>("#productImageFile")?.files?.[0];
+  if (imageFile) {
+    try { imageUrl = (await uploadDocumentImage(imageFile, "product")).imageUrl; }
+    catch (error) { toast(error instanceof Error ? error.message : "产品图片上传失败", "error"); return; }
+  }
   const payload = {
     id: editingProductId || undefined,
     nameZh,
@@ -15590,19 +20749,26 @@ async function saveProduct() {
     descriptionZh: get("#productDescriptionZh"),
     descriptionEn: get("#productDescriptionEn"),
     tags,
-    imageUrl: get("#productImageUrl")
+    imageUrl
   };
   const btn = qs<HTMLButtonElement>("#productSaveButton");
+  const wasEditing = Boolean(editingProductId);
   if (btn) { btn.disabled = true; btn.textContent = "保存中…"; }
   try {
-    const result = await api<{ product: Product; products: Product[] }>("/api/tools/products", {
+    const result = await api<{ product: Product; products: Product[]; categories: string[] }>("/api/tools/products", {
       method: "POST",
       body: JSON.stringify(payload)
     });
     state.products = result.products || [];
+    state.productCategories = result.categories || state.productCategories;
     closeProductModal();
     renderProducts();
-    toast(editingProductId ? "已更新产品" : "已新增产品", "ok");
+    toast(wasEditing ? "已更新产品" : "已新增产品", "ok");
+    void recordLog({
+      level: "success", category: "product", action: wasEditing ? "update_product" : "create_product",
+      message: `${wasEditing ? "更新" : "新增"}产品「${payload.nameZh}」`,
+      meta: { id: result.product?.id, nameZh: payload.nameZh, category: payload.category }
+    });
   } catch (err) {
     toast(err instanceof Error ? err.message : "保存失败", "error");
   } finally {
@@ -15612,13 +20778,20 @@ async function saveProduct() {
 
 async function deleteProduct(id: string) {
   const product = state.products.find((p) => p.id === id);
-  if (!confirm(`确认删除产品「${product?.nameZh || "未命名"}」？此操作不可撤销。`)) return;
+  if (!await confirmAction({
+    title: "删除产品",
+    message: `将删除产品「${product?.nameZh || "未命名"}」。`,
+    consequences: ["产品资料将从产品库移除", "此操作无法撤销"],
+    confirmLabel: "删除产品"
+  })) return;
   try {
-    const result = await api<{ products: Product[] }>(`/api/tools/products/${encodeURIComponent(id)}`, { method: "DELETE" });
+    const result = await api<{ products: Product[]; categories: string[] }>(`/api/tools/products/${encodeURIComponent(id)}`, { method: "DELETE" });
     state.products = result.products || state.products.filter((p) => p.id !== id);
+    state.productCategories = result.categories || state.productCategories;
     closeProductModal();
     renderProducts();
     toast("已删除产品", "ok");
+    void recordLog({ level: "warning", category: "product", action: "delete_product", message: `删除产品「${product?.nameZh || "未命名"}」`, meta: { id } });
   } catch (err) {
     toast(err instanceof Error ? err.message : "删除失败", "error");
   }
@@ -15631,23 +20804,33 @@ async function bulkDeleteProducts() {
     return;
   }
   const names = state.products.filter((p) => ids.includes(p.id)).map((p) => p.nameZh);
-  if (!window.confirm(`确认删除 ${ids.length} 个产品？\n${names.slice(0, 6).join("、")}${names.length > 6 ? "等" : ""}\n此操作不可撤销。`)) return;
+  if (!await confirmAction({
+    title: `批量删除 ${ids.length} 个产品`,
+    message: "产品将从产品库中永久移除。",
+    detail: `${names.slice(0, 6).join("、")}${names.length > 6 ? `等 ${ids.length} 个` : ""}`,
+    consequences: ["选中的产品资料会被删除", "此操作无法撤销"],
+    confirmLabel: `删除 ${ids.length} 个产品`,
+    verificationText: String(ids.length)
+  })) return;
   const button = qs<HTMLButtonElement>("#productBulkDelete");
   try {
-    if (button) { button.disabled = true; button.textContent = "删除中…"; }
+    setButtonPending(button, true, "删除", `正在删除 ${ids.length} 个`);
     let products = state.products;
     for (const id of ids) {
-      const result = await api<{ products: Product[] }>(`/api/tools/products/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const result = await api<{ products: Product[]; categories: string[] }>(`/api/tools/products/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (result.products) products = result.products;
+      if (result.categories) state.productCategories = result.categories;
     }
     state.products = products;
     state.selectedProductIds = [];
     renderProducts();
     toast(`已删除 ${ids.length} 个产品`, "ok");
+    void recordLog({ level: "warning", category: "product", action: "bulk_delete_product", message: `批量删除 ${ids.length} 个产品`, meta: { count: ids.length } });
   } catch (err) {
     toast(err instanceof Error ? err.message : "批量删除失败", "error");
   } finally {
-    if (button) { button.disabled = state.selectedProductIds.length === 0; button.textContent = "删除"; }
+    setButtonPending(button, false, "删除", "删除中");
+    if (button) button.disabled = state.selectedProductIds.length === 0;
   }
 }
 
@@ -15672,6 +20855,599 @@ const SHIPMENT_STATUS_LABEL: Record<string, string> = {
   delivered: "已签收",
   exception: "异常"
 };
+
+// ===== 全球发货航线地图 =====
+const GM_W = 1000, GM_H = 500;
+const GM_ORIGIN: [number, number] = [121.47, 31.23]; // 上海起运港
+const GM_STATUS_COLOR: Record<string, string> = {
+  draft: "#565d65",
+  shipped: "#6fb6f0",
+  in_transit: "#39b7a8",
+  delivered: "#7ee08c",
+  exception: "#ff5a47"
+};
+const GM_GRAD_ORIGIN = "#c8f23c";
+const GM_COUNTRY_COORDS: Record<string, [number, number]> = {
+  US: [-98, 39], GB: [-1.5, 52.5], DE: [13.4, 52.5], FR: [2.3, 48.8], NL: [5.3, 52.1],
+  ES: [-3.7, 40.4], IT: [12.5, 41.9], CA: [-106, 56], BR: [-47.9, -15.8], MX: [-99.1, 19.4],
+  JP: [139.7, 35.7], KR: [127, 37.5], AU: [149.1, -35.3], IN: [77.2, 28.6], AE: [54.4, 24.5],
+  SA: [46.7, 24.7], ZA: [28, -26.2], NG: [7.5, 9.1], EG: [31.2, 30], TR: [35, 39.9],
+  RU: [37.6, 55.7], VN: [105.8, 21], TH: [100.5, 13.7], ID: [106.8, -6.2], PL: [21, 52],
+  CL: [-70.6, -33.4], AR: [-58.4, -34.6], SE: [18, 59.3], SG: [103.8, 1.35], MY: [101.7, 3.1],
+  PT: [-9.1, 38.7], BE: [4.3, 50.8], AT: [16.4, 48.2], CH: [8.2, 47], DK: [12.6, 55.7]
+};
+const GM_COUNTRY_NAMES: Record<string, string> = {
+  US: "美国", GB: "英国", DE: "德国", FR: "法国", NL: "荷兰", ES: "西班牙", IT: "意大利",
+  CA: "加拿大", BR: "巴西", MX: "墨西哥", JP: "日本", KR: "韩国", AU: "澳大利亚", IN: "印度",
+  AE: "阿联酋", SA: "沙特", ZA: "南非", NG: "尼日利亚", EG: "埃及", TR: "土耳其", RU: "俄罗斯",
+  VN: "越南", TH: "泰国", ID: "印尼", PL: "波兰", CL: "智利", AR: "阿根廷", SE: "瑞典",
+  SG: "新加坡", MY: "马来西亚", PT: "葡萄牙", BE: "比利时", AT: "奥地利", CH: "瑞士", DK: "丹麦"
+};
+const GM_COUNTRY_ALIASES: Record<string, string[]> = {
+  US: ["美国", "usa", "united states", "united states of america", "america"],
+  GB: ["英国", "uk", "united kingdom", "great britain", "england"],
+  DE: ["德国", "germany", "deutschland"],
+  FR: ["法国", "france"],
+  NL: ["荷兰", "netherlands", "holland"],
+  ES: ["西班牙", "spain"],
+  IT: ["意大利", "italy"],
+  CA: ["加拿大", "canada"],
+  BR: ["巴西", "brazil"],
+  MX: ["墨西哥", "mexico"],
+  JP: ["日本", "japan"],
+  KR: ["韩国", "south korea", "republic of korea"],
+  AU: ["澳大利亚", "australia"],
+  IN: ["印度", "india"],
+  AE: ["阿联酋", "uae", "united arab emirates"],
+  SA: ["沙特", "沙特阿拉伯", "saudi arabia"],
+  ZA: ["南非", "south africa"],
+  NG: ["尼日利亚", "nigeria"],
+  EG: ["埃及", "egypt"],
+  TR: ["土耳其", "turkey", "türkiye"],
+  RU: ["俄罗斯", "russia"],
+  VN: ["越南", "vietnam"],
+  TH: ["泰国", "thailand"],
+  ID: ["印尼", "印度尼西亚", "indonesia"],
+  PL: ["波兰", "poland"],
+  CL: ["智利", "chile"],
+  AR: ["阿根廷", "argentina"],
+  SE: ["瑞典", "sweden"],
+  SG: ["新加坡", "singapore"],
+  MY: ["马来西亚", "malaysia"],
+  PT: ["葡萄牙", "portugal"],
+  BE: ["比利时", "belgium"],
+  AT: ["奥地利", "austria"],
+  CH: ["瑞士", "switzerland"],
+  DK: ["丹麦", "denmark"]
+};
+const GM_ISO3_TO_ISO2: Record<string, string> = {
+  USA: "US", GBR: "GB", DEU: "DE", FRA: "FR", NLD: "NL", ESP: "ES", ITA: "IT",
+  CAN: "CA", BRA: "BR", MEX: "MX", JPN: "JP", KOR: "KR", AUS: "AU", IND: "IN",
+  ARE: "AE", SAU: "SA", ZAF: "ZA", NGA: "NG", EGY: "EG", TUR: "TR", RUS: "RU",
+  VNM: "VN", THA: "TH", IDN: "ID", POL: "PL", CHL: "CL", ARG: "AR", SWE: "SE",
+  SGP: "SG", MYS: "MY", PRT: "PT", BEL: "BE", AUT: "AT", CHE: "CH", DNK: "DK"
+};
+
+function gmCountryCode(...values: unknown[]): string {
+  for (const raw of values) {
+    const value = String(raw || "").trim();
+    if (!value || value === "未知") continue;
+    const upper = value.toUpperCase();
+    if (GM_COUNTRY_COORDS[upper]) return upper;
+    if (GM_ISO3_TO_ISO2[upper]) return GM_ISO3_TO_ISO2[upper];
+    const lower = value.toLowerCase();
+    for (const [code, aliases] of Object.entries(GM_COUNTRY_ALIASES)) {
+      if (aliases.some((alias) => lower.includes(alias.toLowerCase()))) return code;
+    }
+  }
+  return "";
+}
+
+type GlobalRoute = Shipment & {
+  destinationCode: string;
+  routeSource: "shipment" | "document";
+  routeSourceLabel: string;
+  routeDocumentType?: string;
+};
+
+function buildGlobalRoutes(): { routes: GlobalRoute[]; unmappedCount: number } {
+  const customers = state.customers || [];
+  const deals = state.deals || [];
+  const shipments = state.shipments || [];
+  const documents = Array.from(new Map(
+    [...(state.tradeDocuments || []), ...(state.globalRouteDocuments || [])].map((document) => [document.id, document])
+  ).values());
+  const routes: GlobalRoute[] = [];
+  let unmappedCount = 0;
+  const documentRouteTypes = new Set(["SHIPPING", "PL", "CI", "CUSTOMS"]);
+  const normalize = (value: string) => value.trim().toLocaleLowerCase();
+  const findCustomer = (name: string, customerId = "") => customers.find((customer) =>
+    (customerId && customer.id === customerId)
+    || normalize(customer.company || "") === normalize(name)
+  );
+  const customerForShipment = (shipment: Shipment) => {
+    const deal = shipment.dealId ? deals.find((item) => item.id === shipment.dealId) : undefined;
+    return findCustomer(shipment.customerName, deal?.customerId || "");
+  };
+  const shipmentMatchesDocument = (shipment: Shipment, document: TradeDocument) => {
+    if (shipment.dealId && document.dealId && shipment.dealId === document.dealId) return true;
+    const shipmentRefs = [shipment.shipmentNo, shipment.trackingCode].map(normalize).filter(Boolean);
+    if (document.number && shipmentRefs.includes(normalize(document.number))) return true;
+    const customer = customerForShipment(shipment);
+    if (customer?.id && document.customerId && customer.id === document.customerId) return true;
+    return Boolean(shipment.customerName && document.buyer
+      && normalize(shipment.customerName) === normalize(document.buyer));
+  };
+  const relatedDocuments = (shipment: Shipment) => {
+    const direct = documents.filter((document) => shipmentMatchesDocument(shipment, document));
+    if (!direct.length) return direct;
+    const connectedIds = new Set(direct.map((document) => document.id));
+    let changed = true;
+    while (changed) {
+      changed = false;
+      documents.forEach((document) => {
+        if (connectedIds.has(document.id)) return;
+        if (document.derivedFromDocumentId && connectedIds.has(document.derivedFromDocumentId)) {
+          connectedIds.add(document.id);
+          changed = true;
+        }
+      });
+    }
+    return documents.filter((document) => connectedIds.has(document.id));
+  };
+  const preferredDestinationDocument = (related: TradeDocument[]) => [...related]
+    .filter((document) => document.portDischarge || document.buyerAddress)
+    .sort((left, right) => {
+      const priorities: Partial<Record<TradeDocument["type"], number>> = { SHIPPING: 0, PL: 1, CI: 2, CUSTOMS: 3 };
+      const priority = (document: TradeDocument) => priorities[document.type] ?? 9;
+      return priority(left) - priority(right) || (right.updatedAt || "").localeCompare(left.updatedAt || "");
+    })[0];
+
+  for (const shipment of shipments) {
+    const customer = customerForShipment(shipment);
+    const related = relatedDocuments(shipment);
+    const destinationDocument = preferredDestinationDocument(related);
+    const destinationCode = gmCountryCode(
+      shipment.destinationCountry,
+      shipment.destinationPort,
+      shipment.destinationAddress,
+      customer?.country,
+      destinationDocument?.portDischarge,
+      destinationDocument?.buyerAddress,
+      ...related.flatMap((document) => [document.portDischarge, document.buyerAddress]),
+      shipment.customerName,
+      shipment.dealTitle,
+      shipment.note
+    );
+    if (!destinationCode) {
+      unmappedCount++;
+      continue;
+    }
+    routes.push({
+      ...shipment,
+      destinationPort: shipment.destinationPort || destinationDocument?.portDischarge || customer?.defaultPortDischarge || "",
+      destinationAddress: shipment.destinationAddress || destinationDocument?.buyerAddress || customer?.billingAddress || "",
+      destinationCode,
+      routeSource: "shipment",
+      routeSourceLabel: destinationDocument ? `发货记录 · 地址取自${documentTypeLabel(destinationDocument.type)}` : "发货记录",
+      routeDocumentType: destinationDocument?.type
+    });
+  }
+
+  for (const document of documents) {
+    if (!documentRouteTypes.has(document.type) || document.status === "draft") continue;
+    const customer = findCustomer(document.buyer, document.customerId);
+    const destinationCode = gmCountryCode(document.portDischarge, document.buyerAddress, customer?.country, document.buyer);
+    const linkedShipment = shipments.find((shipment) => shipmentMatchesDocument(shipment, document));
+    const alreadyRepresented = routes.some((route) =>
+      (linkedShipment && route.id === linkedShipment.id)
+      || (document.dealId && route.dealId === document.dealId)
+      || (document.customerId && customer?.id && findCustomer(route.customerName)?.id === customer.id)
+      || (document.buyer && normalize(route.customerName) === normalize(document.buyer))
+    );
+    if (alreadyRepresented) continue;
+    if (!destinationCode) {
+      unmappedCount++;
+      continue;
+    }
+    routes.push({
+      id: `document-route:${document.id}`,
+      shipmentNo: document.number,
+      dealId: document.dealId,
+      dealTitle: document.title,
+      customerName: document.buyer,
+      courier: "",
+      trackingCode: "",
+      trackingImageUrl: "",
+      // 单据已审核或已导出不代表货物已经发出；没有发货记录时保持待发货。
+      status: "draft",
+      statusSource: "local",
+      shippedAt: document.issueDate,
+      estimatedArrival: "",
+      note: document.notes || "",
+      destinationPort: document.portDischarge || customer?.defaultPortDischarge || "",
+      destinationAddress: document.buyerAddress || customer?.billingAddress || "",
+      items: [],
+      ownerId: document.ownerId || state.user?.id || "",
+      teamId: document.teamId || state.user?.teamId || "",
+      updatedAt: document.updatedAt,
+      destinationCode,
+      routeSource: "document",
+      routeSourceLabel: `${documentTypeLabel(document.type)} · 待建立发货记录`,
+      routeDocumentType: document.type
+    });
+  }
+  return { routes, unmappedCount };
+}
+const GM_LAND_PATHS: string[] = [
+"M311.8,399.6 L315.4,401.3 L319.3,401.9 L318.1,403.3 L315.4,403.5 L314.0,402.5 L313.1,403.6 L310.7,404.5 L307.7,404.2 L305.7,403.3 L302.8,402.9 L299.3,401.4 L296.4,399.9 L292.6,396.8 L294.9,397.4 L298.8,399.2 L302.5,400.2 L303.9,398.9 L304.8,397.0 L307.4,395.9 L309.4,396.2 L310.4,397.5 L311.8,399.6Z",
+  "M337.4,391.9 L339.6,393.2 L338.8,394.2 L335.0,395.0 L333.8,394.0 L331.4,395.3 L330.0,394.0 L333.3,392.4 L335.7,393.1 L337.4,391.9Z",
+  "M695.2,388.1 L691.0,388.3 L690.9,386.8 L691.3,385.6 L691.5,385.1 L693.3,385.9 L695.9,386.3 L696.0,386.8 L695.2,388.1Z",
+  "M903.9,363.3 L906.6,364.3 L908.1,363.9 L910.2,363.4 L911.9,363.5 L912.1,366.8 L911.2,367.8 L910.9,370.0 L909.9,369.3 L908.0,371.2 L907.4,371.1 L905.7,371.0 L904.0,368.6 L903.6,366.8 L902.0,364.3 L902.1,363.1 L903.9,363.3Z",
+  "M980.6,363.7 L981.2,364.8 L983.2,363.7 L984.0,364.9 L984.0,366.0 L983.0,367.3 L981.2,369.4 L979.7,370.5 L980.8,371.8 L978.6,371.8 L976.3,372.9 L975.5,374.7 L973.9,377.5 L971.7,378.8 L970.4,379.6 L967.8,379.5 L966.0,378.6 L963.0,378.4 L962.5,377.4 L964.0,375.3 L967.5,372.6 L969.3,372.0 L971.3,371.0 L973.7,369.5 L975.3,368.1 L976.6,366.0 L977.6,365.3 L978.0,363.8 L980.0,362.5 L980.6,363.7Z",
+  "M985.0,350.4 L987.0,353.4 L987.1,351.5 L988.4,352.2 L988.8,354.3 L991.0,355.2 L992.9,355.4 L994.5,354.4 L995.9,354.7 L995.2,357.2 L994.4,358.8 L992.2,358.7 L991.5,359.6 L991.8,360.8 L991.3,361.3 L990.3,362.8 L988.9,364.7 L986.8,365.8 L986.3,365.1 L985.1,364.7 L986.7,362.4 L985.8,360.9 L982.8,359.7 L982.9,358.7 L984.9,357.8 L985.4,355.6 L985.3,353.8 L984.1,352.0 L984.2,351.5 L982.9,350.3 L980.7,347.9 L979.5,345.9 L980.6,345.7 L982.1,347.2 L984.2,348.0 L985.0,350.4Z",
+  "M964.2,311.6 L963.2,312.2 L961.6,311.5 L959.6,310.2 L957.9,308.7 L956.0,306.8 L955.6,305.8 L956.8,305.9 L958.4,306.8 L959.6,307.8 L960.5,308.6 L962.8,310.3 L964.2,311.6Z",
+  "M995.5,298.2 L996.4,299.0 L996.0,300.4 L994.3,300.8 L992.7,300.5 L992.5,299.2 L993.5,298.3 L994.8,298.6 L995.5,298.2Z",
+  "M0.0,296.0 L998.2,296.7 L996.5,297.3 L996.1,296.2 L997.5,295.7 L998.4,295.5 L0.0,294.6 L0.0,294.6 L0.6,294.5 L0.2,295.8 L0.0,296.0Z",
+  "M966.2,295.7 L965.3,296.1 L964.4,294.9 L964.5,294.1 L966.2,295.7Z",
+  "M964.2,291.5 L964.6,293.7 L963.9,293.4 L963.3,293.5 L962.9,292.8 L962.9,290.6 L964.2,291.5Z",
+  "M639.0,287.7 L639.5,291.0 L640.2,292.3 L639.9,293.6 L639.4,294.4 L638.5,292.8 L638.0,293.6 L638.5,295.7 L638.3,296.9 L637.5,297.5 L637.3,299.9 L636.2,303.1 L634.9,306.9 L633.1,312.2 L632.1,316.1 L630.8,319.3 L628.6,319.9 L626.1,321.1 L624.5,320.4 L622.3,319.4 L621.6,317.9 L621.4,315.5 L620.4,313.3 L620.1,311.3 L620.6,309.3 L621.9,308.8 L621.9,307.9 L623.3,305.8 L623.5,304.0 L622.9,302.7 L622.3,300.9 L622.1,298.4 L623.1,296.8 L623.5,295.0 L624.8,294.9 L626.4,294.4 L627.4,293.9 L628.6,293.8 L630.2,292.3 L632.5,290.5 L633.3,289.1 L633.0,288.0 L634.1,288.3 L635.7,286.4 L635.7,284.7 L636.7,283.4 L637.6,284.6 L638.4,285.8 L639.0,287.7Z",
+  "M898.8,288.2 L899.8,290.4 L901.6,289.4 L902.5,290.5 L903.8,291.6 L903.5,292.9 L904.1,295.2 L904.5,296.6 L905.2,297.0 L906.0,299.3 L905.7,300.8 L906.6,302.7 L909.6,304.1 L911.6,305.4 L913.5,306.6 L913.1,307.3 L914.7,309.1 L915.8,312.1 L916.9,311.5 L918.0,312.7 L918.7,312.2 L919.2,315.2 L921.1,316.9 L922.4,317.9 L924.6,320.2 L925.4,322.4 L925.4,324.0 L925.3,325.7 L926.6,328.1 L926.4,330.5 L925.9,331.8 L925.2,334.3 L925.2,335.9 L924.7,337.9 L923.5,340.4 L921.4,341.8 L920.4,343.9 L919.5,345.3 L918.6,347.7 L917.6,349.1 L916.9,351.2 L916.5,353.1 L916.7,354.0 L915.1,354.9 L912.0,355.0 L909.4,356.2 L908.1,357.2 L906.4,358.4 L904.1,357.2 L902.4,356.7 L902.9,355.3 L901.3,355.8 L898.9,357.8 L896.5,357.1 L894.9,356.6 L893.3,356.4 L890.7,355.6 L888.9,353.9 L888.3,351.8 L887.7,350.4 L886.3,349.3 L883.7,348.9 L884.6,347.6 L883.9,345.5 L882.5,347.4 L880.1,347.9 L881.5,346.4 L882.0,344.8 L883.0,343.4 L882.8,341.4 L880.5,343.8 L878.8,344.7 L877.7,346.9 L875.6,345.8 L875.7,344.3 L873.9,342.3 L872.5,341.2 L873.0,340.6 L869.4,338.9 L867.5,338.8 L864.8,337.5 L859.8,337.8 L856.2,338.7 L853.1,339.7 L850.4,339.5 L847.5,340.9 L845.1,341.6 L844.5,343.0 L843.5,344.1 L841.1,344.2 L839.4,344.5 L836.9,343.9 L834.9,344.3 L833.0,344.4 L831.4,345.9 L830.6,345.7 L829.2,346.5 L827.8,347.4 L825.8,347.3 L824.0,347.3 L821.0,345.5 L819.5,345.0 L819.6,343.4 L821.0,343.0 L821.4,342.4 L821.3,341.4 L821.7,339.5 L821.4,337.8 L819.9,335.0 L819.4,333.4 L819.6,331.8 L818.4,330.0 L818.4,329.2 L817.1,328.1 L816.8,325.9 L815.2,323.7 L814.8,322.5 L816.0,323.7 L815.1,321.2 L816.5,322.0 L817.3,323.1 L817.3,321.6 L815.9,319.4 L815.6,318.6 L815.0,317.7 L815.3,316.1 L815.8,315.4 L816.2,314.1 L815.9,312.4 L817.1,310.4 L817.3,312.5 L818.5,310.6 L820.7,309.7 L822.1,308.5 L824.2,307.5 L825.5,307.3 L826.2,307.6 L828.4,306.6 L830.1,306.3 L830.5,305.7 L831.3,305.4 L832.8,305.5 L835.7,304.7 L837.2,303.4 L837.9,302.0 L839.6,300.5 L839.7,299.4 L839.8,297.9 L841.7,295.6 L842.9,298.0 L844.1,297.4 L843.1,296.1 L843.9,294.8 L845.2,295.4 L845.5,293.2 L847.0,291.9 L847.7,290.8 L849.1,290.3 L849.1,289.5 L850.3,289.9 L850.4,289.2 L851.6,288.8 L853.0,288.4 L855.0,289.7 L856.6,291.3 L858.3,291.3 L860.1,291.6 L859.5,290.1 L860.8,287.8 L862.1,287.1 L861.6,286.4 L862.8,284.8 L864.5,283.8 L865.9,284.2 L868.3,283.7 L868.2,282.2 L866.2,281.3 L867.7,280.9 L869.5,281.6 L871.0,282.7 L873.3,283.4 L874.1,283.2 L875.8,284.0 L877.4,283.2 L878.5,283.5 L879.1,282.9 L880.4,284.3 L879.7,285.8 L878.6,286.9 L877.7,287.0 L878.0,288.1 L877.2,289.5 L876.2,290.9 L876.4,291.7 L878.6,293.2 L880.7,294.1 L882.2,295.0 L884.2,296.7 L885.0,296.7 L886.4,297.4 L886.8,298.3 L889.5,299.2 L891.3,298.2 L891.9,296.8 L892.4,295.5 L892.8,294.0 L893.6,291.8 L893.2,290.4 L893.4,289.6 L893.1,288.0 L893.5,286.0 L894.0,285.4 L893.6,284.5 L894.2,283.0 L894.8,281.5 L894.8,280.7 L895.9,279.6 L896.7,281.0 L896.8,282.7 L897.5,283.1 L897.7,284.2 L898.7,285.7 L898.9,287.2 L898.8,288.2Z",
+  "M950.3,279.1 L951.1,280.1 L949.2,280.1 L948.1,278.3 L949.8,279.0 L950.3,279.1Z",
+  "M835.3,278.4 L834.1,278.5 L830.5,276.5 L833.1,276.0 L834.5,276.8 L835.5,277.7 L835.3,278.4Z",
+  "M946.8,277.4 L945.7,277.5 L944.0,277.2 L943.4,276.8 L943.6,275.7 L945.4,276.1 L946.4,276.7 L946.8,277.4Z",
+  "M949.1,276.7 L948.7,277.2 L946.6,274.8 L946.1,273.1 L947.0,273.1 L948.0,275.3 L949.1,276.7Z",
+  "M845.7,278.2 L843.3,278.8 L842.9,278.4 L843.2,277.5 L844.4,275.8 L847.1,274.7 L847.5,274.0 L849.8,273.4 L851.8,273.3 L852.7,273.0 L853.7,273.3 L852.7,274.1 L849.8,275.3 L847.5,276.1 L845.7,278.2Z",
+  "M827.5,272.5 L828.5,273.2 L830.2,273.0 L830.9,274.2 L827.7,274.7 L825.8,275.1 L824.3,275.1 L825.2,273.5 L826.8,273.5 L827.5,272.5Z",
+  "M841.4,272.5 L841.0,274.0 L836.8,274.8 L833.1,274.5 L833.1,273.5 L835.3,272.9 L837.1,273.7 L838.9,273.5 L841.4,272.5Z",
+  "M944.1,273.2 L944.2,273.7 L942.0,272.5 L940.5,271.5 L939.5,270.6 L939.9,270.3 L941.2,271.0 L943.4,272.3 L944.1,273.2Z",
+  "M937.6,270.4 L937.0,270.6 L935.8,269.9 L934.7,268.8 L934.8,268.3 L936.5,269.5 L937.6,270.4Z",
+  "M801.7,268.8 L807.1,269.1 L807.7,268.0 L812.8,269.3 L813.8,271.1 L818.0,271.6 L821.4,273.3 L818.2,274.3 L815.2,273.2 L812.7,273.3 L809.8,273.1 L807.2,272.6 L804.0,271.5 L801.9,271.2 L800.8,271.6 L795.7,270.4 L795.2,269.2 L792.7,269.0 L794.6,266.4 L798.0,266.5 L800.2,267.6 L801.3,267.8 L801.7,268.8Z",
+  "M874.2,267.3 L872.8,269.2 L872.5,267.1 L873.0,266.1 L873.6,265.1 L874.2,265.9 L874.2,267.3Z",
+  "M933.0,268.9 L932.2,269.2 L931.0,268.2 L929.8,266.4 L929.2,264.3 L929.6,264.0 L929.9,264.8 L930.7,265.5 L932.1,267.2 L933.4,268.2 L933.0,268.9Z",
+  "M922.2,265.2 L920.7,265.4 L920.3,266.2 L918.8,266.9 L917.3,267.5 L915.9,267.5 L913.6,266.7 L912.0,266.0 L912.2,265.1 L914.7,265.5 L916.2,265.3 L916.7,264.0 L917.1,263.9 L917.3,265.4 L918.9,265.2 L919.7,264.2 L921.2,263.2 L920.9,261.6 L922.6,261.5 L923.2,262.0 L923.1,263.5 L922.2,265.2Z",
+  "M853.5,259.6 L852.4,260.5 L850.5,260.0 L850.0,258.8 L852.8,258.7 L853.5,259.6Z",
+  "M862.4,258.6 L863.4,260.7 L861.1,259.6 L858.8,259.3 L857.2,259.5 L855.3,259.4 L855.9,257.9 L859.4,257.8 L862.4,258.6Z",
+  "M925.4,262.5 L924.5,263.2 L924.0,261.6 L923.3,260.5 L922.1,259.6 L920.5,258.4 L918.5,257.6 L919.3,256.9 L920.8,257.7 L921.7,258.3 L922.9,259.0 L924.0,260.2 L925.1,261.1 L925.4,262.5Z",
+  "M872.6,253.2 L873.4,257.7 L876.3,259.4 L878.6,256.4 L881.8,254.7 L884.2,254.7 L886.6,255.7 L888.7,256.7 L891.7,257.2 L896.5,259.1 L901.6,260.7 L903.5,262.1 L905.1,263.5 L905.5,265.2 L910.1,266.9 L910.8,268.4 L908.2,268.7 L908.9,270.5 L911.3,272.3 L913.1,275.3 L914.7,275.2 L914.6,276.4 L916.8,276.9 L915.9,277.4 L918.9,278.6 L918.6,279.4 L916.7,279.6 L916.1,278.9 L913.7,278.6 L910.9,278.1 L908.7,276.4 L907.1,274.8 L905.7,272.4 L902.1,271.2 L899.7,272.0 L898.0,272.9 L898.4,275.0 L896.2,275.9 L894.6,275.4 L891.8,275.3 L889.3,273.0 L886.5,272.5 L885.8,273.3 L882.3,273.4 L883.4,271.1 L885.2,270.3 L884.5,267.3 L883.1,265.0 L877.7,262.6 L875.5,262.4 L871.3,259.8 L870.5,261.2 L869.4,261.4 L868.8,260.4 L868.8,259.2 L866.6,257.8 L869.6,256.8 L871.6,256.9 L871.4,256.2 L867.3,256.1 L866.2,254.5 L863.7,254.0 L862.6,252.6 L866.3,251.9 L867.7,251.0 L872.2,252.2 L872.6,253.2Z",
+  "M847.9,246.1 L845.7,248.8 L843.6,249.3 L840.9,248.8 L836.3,248.9 L833.8,249.3 L833.4,251.4 L835.9,253.9 L837.4,252.7 L842.6,251.7 L842.4,253.0 L841.2,252.6 L840.0,254.2 L837.5,255.3 L840.1,258.9 L839.6,259.8 L842.1,263.0 L842.1,264.8 L840.6,265.6 L839.5,264.7 L840.9,262.4 L838.2,263.5 L837.5,262.7 L837.8,261.6 L835.8,260.0 L836.0,257.3 L834.2,258.1 L834.4,261.4 L834.5,265.4 L832.8,265.8 L831.6,264.9 L832.4,262.4 L831.9,259.7 L830.8,259.7 L829.9,257.8 L831.1,256.0 L831.5,253.8 L832.8,249.6 L833.4,248.4 L835.8,246.4 L838.0,247.2 L841.5,247.6 L844.7,247.5 L847.4,245.4 L847.9,246.1Z",
+  "M857.5,246.9 L857.3,249.3 L855.9,249.0 L855.5,250.7 L856.6,252.2 L855.8,252.5 L854.7,250.7 L853.9,247.2 L854.4,245.0 L855.4,244.0 L855.6,245.5 L857.2,245.7 L857.5,246.9Z",
+  "M793.9,266.3 L790.9,266.3 L788.5,264.0 L785.0,261.7 L783.8,260.0 L781.7,257.8 L780.3,255.7 L778.2,251.8 L775.7,249.5 L774.9,247.1 L773.9,244.9 L771.4,243.2 L769.9,240.8 L767.8,239.3 L764.9,236.2 L764.7,234.8 L766.5,234.9 L770.8,235.4 L773.2,238.1 L775.4,240.0 L776.9,241.2 L779.6,244.2 L782.4,244.2 L784.7,246.1 L786.3,248.4 L788.4,249.7 L787.3,252.0 L788.9,252.9 L789.9,253.0 L790.4,254.9 L791.4,256.5 L793.4,256.7 L794.7,258.5 L794.0,262.0 L793.9,266.3Z",
+  "M827.4,244.9 L830.5,247.5 L827.3,247.8 L826.3,249.7 L826.4,252.2 L823.8,254.1 L823.7,256.9 L822.6,261.1 L822.2,260.2 L819.1,261.4 L818.0,259.7 L816.0,259.6 L814.6,258.7 L811.3,259.7 L810.3,258.3 L808.5,258.5 L806.2,258.2 L805.7,254.4 L804.4,253.7 L803.0,251.3 L802.6,248.8 L803.0,246.3 L804.6,244.4 L806.7,245.4 L808.8,244.9 L809.4,242.5 L810.5,242.0 L813.9,241.4 L815.9,239.2 L817.2,237.4 L818.3,236.4 L820.7,234.9 L822.8,232.9 L824.2,230.8 L825.4,230.8 L826.8,232.2 L826.9,233.4 L828.7,234.1 L831.1,235.0 L830.9,236.1 L829.0,236.2 L829.5,237.6 L827.4,238.5 L825.9,241.0 L827.9,243.6 L827.4,244.9Z",
+  "M851.0,226.6 L851.3,228.5 L851.5,230.0 L850.5,232.6 L849.5,229.7 L848.2,231.1 L849.1,233.2 L848.3,234.5 L845.1,232.9 L844.3,230.9 L845.1,229.6 L843.4,228.2 L842.5,229.4 L841.2,229.3 L839.1,230.8 L838.7,230.0 L839.8,227.7 L841.5,226.9 L843.0,225.9 L844.0,227.1 L846.1,226.3 L846.6,225.1 L848.5,225.0 L848.4,222.9 L850.6,224.2 L850.8,225.6 L851.0,226.6Z",
+  "M725.6,232.8 L723.2,233.4 L721.9,231.2 L721.4,227.2 L722.6,222.7 L724.6,224.3 L725.8,226.2 L727.2,229.1 L726.8,232.0 L725.6,232.8Z",
+  "M330.7,221.9 L328.4,222.2 L327.9,222.0 L328.7,221.2 L328.7,220.1 L330.3,219.7 L330.8,219.8 L330.7,221.9Z",
+  "M844.4,221.4 L843.4,222.4 L842.5,224.1 L841.7,224.9 L839.9,223.0 L840.5,222.3 L841.2,221.5 L841.5,219.8 L843.0,219.6 L842.6,221.5 L844.7,218.8 L844.4,221.4Z",
+  "M829.2,224.1 L825.5,226.8 L826.8,224.8 L828.8,223.1 L830.5,221.2 L832.0,218.4 L832.5,220.7 L830.6,222.2 L829.2,224.1Z",
+  "M838.6,217.0 L840.2,217.8 L842.0,217.8 L841.9,219.0 L840.7,220.2 L838.9,221.0 L838.8,219.7 L839.0,218.3 L838.6,217.0Z",
+  "M848.6,216.2 L849.4,219.3 L847.3,218.6 L847.3,219.5 L848.0,221.2 L846.7,221.9 L846.6,219.9 L845.7,219.7 L845.3,218.1 L846.9,218.3 L846.9,217.2 L845.2,215.1 L847.8,215.2 L848.6,216.2Z",
+  "M837.6,213.7 L836.8,216.1 L835.6,214.7 L834.2,212.6 L836.6,212.7 L837.6,213.7Z",
+  "M837.0,198.6 L838.7,199.4 L839.6,198.7 L839.8,199.4 L839.4,200.5 L840.3,202.5 L839.6,204.8 L837.9,205.7 L837.5,208.0 L838.1,210.2 L839.6,210.5 L840.8,210.2 L844.3,211.7 L844.0,213.2 L844.9,213.9 L844.7,215.2 L842.5,213.8 L841.5,212.4 L840.8,213.4 L839.0,211.7 L836.5,212.1 L835.1,211.5 L835.2,210.4 L836.1,209.6 L835.3,209.0 L834.9,210.0 L833.5,208.4 L833.1,207.2 L833.0,204.5 L834.1,205.5 L834.4,201.1 L835.3,198.6 L837.0,198.6Z",
+  "M317.8,199.4 L317.1,200.1 L315.0,200.0 L313.4,200.1 L313.2,199.0 L313.6,198.6 L315.9,198.6 L317.3,198.8 L317.8,199.4Z",
+  "M286.4,200.4 L285.5,200.8 L284.0,200.4 L282.4,199.4 L282.7,198.7 L283.9,198.5 L284.5,198.6 L286.4,198.9 L287.9,199.6 L288.3,200.3 L286.4,200.4Z",
+  "M298.4,194.8 L300.8,195.2 L301.1,194.8 L303.3,194.8 L305.0,195.5 L305.7,195.4 L306.2,196.4 L307.7,196.4 L307.6,197.2 L308.9,197.3 L310.2,198.3 L309.2,199.4 L307.9,198.8 L306.6,198.9 L305.7,198.8 L305.2,199.3 L304.1,199.5 L303.7,198.8 L302.8,199.2 L301.7,201.1 L301.0,200.7 L300.8,199.9 L299.0,199.4 L297.7,199.6 L296.0,199.4 L294.7,199.9 L293.2,199.0 L293.4,198.2 L296.0,198.5 L298.1,198.8 L299.1,198.1 L297.8,196.9 L297.8,195.9 L296.1,195.4 L296.7,194.7 L298.4,194.8Z",
+  "M806.5,198.1 L804.1,199.5 L801.8,198.6 L801.7,196.2 L803.1,194.9 L806.1,194.2 L807.7,194.2 L808.4,195.3 L807.1,196.5 L806.5,198.1Z",
+  "M67.9,197.0 L67.5,197.5 L66.8,197.1 L66.9,196.3 L66.5,195.3 L66.6,195.0 L67.1,194.5 L66.9,194.0 L67.1,193.7 L67.3,193.8 L68.3,194.2 L68.8,194.5 L69.3,194.8 L70.0,195.8 L69.9,196.0 L68.8,196.6 L67.9,197.0Z",
+  "M66.5,192.7 L65.5,192.9 L65.0,192.3 L64.7,192.0 L64.7,191.9 L65.0,191.6 L66.0,191.9 L66.7,192.3 L66.5,192.7Z",
+  "M64.6,191.2 L64.5,191.5 L63.0,191.4 L63.2,191.1 L64.6,191.2Z",
+  "M62.1,190.8 L61.9,190.9 L61.7,190.9 L60.8,190.8 L60.4,190.2 L60.3,190.1 L61.0,189.7 L61.3,189.9 L62.1,190.8Z",
+  "M57.4,188.9 L57.0,189.2 L56.1,188.7 L56.3,188.5 L56.7,188.2 L57.3,188.3 L57.4,188.9Z",
+  "M278.7,186.8 L279.8,187.8 L282.4,187.5 L283.4,188.1 L285.7,189.8 L287.4,191.1 L288.4,191.1 L290.0,191.6 L289.8,192.4 L291.9,192.5 L294.0,193.7 L293.6,194.3 L291.8,194.7 L289.9,194.8 L288.0,194.6 L284.0,194.8 L285.9,193.3 L284.7,192.6 L283.0,192.4 L282.0,191.6 L281.3,190.0 L279.8,190.1 L277.2,189.4 L276.3,188.8 L272.7,188.4 L271.8,187.8 L272.8,187.1 L270.1,187.0 L268.1,188.4 L266.9,188.5 L266.5,189.1 L265.1,189.4 L264.0,189.2 L265.4,188.3 L266.0,187.3 L267.3,186.7 L268.7,186.2 L270.8,185.9 L271.5,185.6 L273.9,185.8 L276.1,185.8 L278.7,186.8Z",
+  "M284.6,184.0 L283.9,184.1 L283.2,182.5 L282.2,181.7 L282.8,180.0 L283.6,180.1 L284.6,182.4 L284.6,184.0Z",
+  "M836.6,186.7 L835.4,189.0 L833.9,186.6 L833.6,184.6 L835.3,181.8 L837.5,179.7 L838.8,180.6 L838.3,182.2 L836.6,186.7Z",
+  "M283.8,176.2 L280.8,176.6 L280.6,175.6 L281.9,175.4 L283.8,175.4 L283.8,176.2Z",
+  "M286.1,176.1 L285.6,178.1 L285.1,177.8 L285.2,176.3 L283.9,175.2 L283.9,174.9 L286.1,176.1Z",
+  "M874.0,155.1 L874.3,156.1 L872.8,157.8 L871.6,156.9 L870.2,157.5 L869.5,159.2 L867.7,158.4 L867.7,157.0 L869.2,155.4 L870.8,155.7 L872.0,154.5 L874.0,155.1Z",
+  "M596.0,150.9 L594.2,152.1 L594.4,152.6 L594.5,152.8 L591.6,154.0 L590.2,153.6 L589.6,152.5 L590.9,152.4 L591.1,152.4 L591.5,151.7 L593.5,151.7 L596.0,150.9Z",
+  "M565.8,150.8 L567.4,151.8 L569.5,151.6 L571.6,151.8 L571.5,152.3 L573.0,151.9 L572.7,152.8 L568.7,153.0 L568.7,152.5 L565.3,152.0 L565.8,150.8Z",
+  "M543.1,143.8 L542.1,146.0 L542.5,146.9 L541.9,148.3 L539.8,147.2 L538.4,146.9 L534.5,145.5 L534.9,144.1 L538.2,144.3 L541.0,144.0 L543.1,143.8Z",
+  "M525.6,135.5 L527.2,137.5 L526.9,141.2 L525.6,141.0 L524.5,141.9 L523.4,141.2 L523.3,137.8 L522.7,136.2 L524.2,136.4 L525.6,135.5Z",
+  "M891.6,146.8 L890.6,149.0 L891.0,150.4 L889.6,152.4 L886.0,153.7 L881.2,153.9 L877.2,157.0 L875.3,156.0 L875.2,153.9 L870.4,154.5 L867.1,155.8 L863.8,155.9 L866.7,157.9 L864.8,162.6 L863.0,163.8 L861.7,162.7 L862.4,160.2 L860.6,159.4 L859.5,157.5 L862.1,156.7 L863.5,154.9 L866.3,153.5 L868.4,151.6 L873.9,150.7 L876.9,151.3 L879.8,146.4 L881.6,147.7 L885.7,144.9 L887.3,143.8 L889.0,140.4 L888.6,137.3 L889.7,135.6 L892.7,135.1 L894.2,138.9 L894.1,141.2 L891.6,144.0 L891.6,146.8Z",
+  "M526.6,132.9 L525.6,135.1 L524.4,134.5 L523.7,132.6 L524.3,131.6 L526.1,130.5 L526.6,132.9Z",
+  "M899.7,127.3 L901.7,127.9 L903.7,126.7 L904.3,129.8 L900.2,130.6 L897.7,133.3 L893.4,131.4 L891.8,134.5 L888.8,134.5 L888.4,131.8 L889.8,129.6 L892.7,129.5 L893.5,125.6 L894.4,123.5 L897.6,126.4 L899.7,127.3Z",
+  "M323.2,120.7 L325.2,121.1 L327.7,121.0 L326.4,122.1 L325.4,122.3 L321.8,121.1 L321.1,120.2 L322.2,119.3 L323.2,120.7Z",
+  "M328.3,113.6 L327.0,113.6 L323.4,112.8 L320.8,111.5 L321.7,111.2 L325.4,111.9 L328.2,113.1 L328.3,113.6Z",
+  "M156.9,115.3 L155.5,115.6 L151.0,114.4 L150.1,113.4 L147.6,112.4 L147.1,111.6 L144.3,111.1 L143.2,109.6 L143.5,109.0 L146.4,109.6 L148.1,110.0 L150.7,110.3 L151.6,111.3 L153.0,112.6 L155.8,113.7 L156.9,115.3Z",
+  "M344.1,109.2 L342.2,111.6 L344.0,110.7 L345.9,111.3 L344.9,112.3 L347.4,113.0 L348.7,112.3 L351.5,113.2 L350.6,115.2 L352.5,114.8 L352.9,116.2 L353.8,118.0 L352.6,120.4 L351.3,120.5 L349.5,120.0 L350.1,117.7 L349.3,117.4 L346.1,119.8 L344.5,119.7 L346.4,118.4 L343.7,117.7 L340.8,117.9 L335.4,117.8 L334.9,116.9 L336.7,116.0 L335.5,115.2 L337.8,113.5 L340.7,109.1 L342.4,107.5 L344.8,106.6 L346.1,106.7 L345.6,107.5 L344.1,109.2Z",
+  "M131.4,99.9 L134.0,99.7 L133.2,102.8 L135.6,105.1 L134.5,105.0 L132.8,103.8 L131.8,102.5 L130.4,101.6 L129.9,100.4 L130.1,99.5 L131.4,99.9Z",
+  "M899.0,109.0 L901.8,114.0 L897.7,113.0 L896.0,117.1 L898.7,119.9 L898.6,121.8 L896.5,120.2 L894.7,122.3 L894.2,120.0 L894.5,117.3 L894.2,114.3 L894.8,112.2 L894.9,108.5 L893.3,105.7 L893.6,101.9 L896.1,100.7 L895.0,99.4 L896.3,99.0 L897.0,100.8 L897.9,103.5 L897.9,106.2 L899.0,109.0Z",
+  "M481.1,104.8 L476.2,106.5 L472.3,106.1 L474.5,103.2 L473.1,100.3 L476.9,98.2 L479.0,96.9 L481.3,96.7 L484.3,98.5 L482.8,100.4 L483.2,102.4 L481.1,104.8Z",
+  "M535.2,95.5 L533.6,97.8 L530.7,96.2 L530.3,95.1 L534.4,94.1 L535.2,95.5Z",
+  "M75.0,91.3 L72.2,92.4 L70.8,91.7 L70.4,90.4 L72.9,89.4 L74.4,89.0 L76.2,89.2 L77.4,90.0 L75.0,91.3Z",
+  "M491.7,87.1 L488.7,90.1 L491.5,89.8 L494.6,89.8 L493.8,92.0 L491.3,94.5 L494.2,94.7 L496.9,98.3 L498.8,98.7 L500.5,101.9 L501.3,103.0 L504.7,103.5 L504.3,105.3 L502.9,106.1 L504.0,107.5 L501.5,109.0 L497.8,109.0 L493.1,109.7 L491.8,109.2 L490.0,110.5 L487.4,110.2 L485.4,111.2 L484.0,110.7 L488.0,107.7 L490.5,107.2 L486.2,106.7 L485.4,105.6 L488.3,104.7 L486.8,103.2 L487.3,101.4 L491.4,101.7 L491.8,100.0 L489.9,98.3 L486.5,97.8 L485.9,97.1 L486.9,95.8 L486.0,95.0 L484.5,96.4 L484.3,93.7 L482.9,92.3 L483.9,89.4 L486.1,87.1 L488.3,87.4 L491.7,87.1Z",
+  "M40.1,83.6 L38.4,84.0 L36.5,83.5 L34.9,82.7 L37.6,82.3 L39.8,82.5 L40.1,83.6Z",
+  "M279.8,77.3 L278.7,78.8 L277.5,78.6 L276.8,77.7 L276.9,77.5 L278.0,76.7 L279.1,76.8 L279.8,77.3Z",
+  "M272.5,75.8 L269.3,77.3 L267.3,77.3 L266.7,76.5 L268.8,75.2 L272.6,75.3 L272.5,75.8Z",
+  "M23.0,72.8 L24.7,73.4 L26.4,73.1 L28.7,73.8 L31.4,74.2 L31.2,74.5 L29.1,75.1 L27.0,74.5 L25.9,74.0 L23.5,74.1 L22.8,73.9 L23.0,72.8Z",
+  "M263.4,67.6 L264.0,68.8 L265.4,68.4 L267.0,69.1 L270.0,70.1 L273.2,71.0 L273.5,72.3 L275.5,72.1 L277.5,73.0 L275.0,73.9 L270.7,73.2 L269.1,71.9 L266.4,73.4 L262.4,74.9 L261.5,73.2 L257.7,73.5 L260.1,72.1 L260.5,69.9 L261.4,67.4 L263.4,67.6Z",
+  "M459.7,65.4 L459.1,67.2 L462.2,69.1 L458.6,71.2 L450.6,73.1 L448.2,73.6 L444.5,73.2 L436.8,72.3 L439.5,71.1 L433.5,69.7 L438.4,69.2 L438.3,68.4 L432.4,67.7 L434.3,65.9 L438.5,65.5 L442.8,67.4 L447.1,65.9 L450.6,66.7 L455.1,65.2 L459.7,65.4Z",
+  "M289.3,63.5 L286.1,63.6 L285.5,62.3 L286.6,60.7 L289.2,60.3 L291.4,61.1 L291.4,62.3 L291.1,62.7 L289.3,63.5Z",
+  "M0.0,58.4 L6.8,60.6 L14.1,63.3 L13.9,65.0 L15.7,65.7 L15.1,63.7 L22.6,64.1 L28.1,66.7 L25.3,67.9 L20.8,68.2 L20.7,70.9 L19.6,71.5 L17.0,71.4 L14.9,70.5 L11.2,69.7 L10.5,68.5 L7.7,68.0 L4.6,68.4 L3.1,67.4 L3.7,66.4 L0.3,67.0 L1.6,68.3 L0.0,69.5 L0.0,69.5 L1000.0,69.5 L996.4,70.7 L992.8,70.5 L995.3,72.0 L997.0,74.3 L998.2,75.0 L998.6,76.2 L997.9,76.9 L992.7,76.3 L984.9,78.4 L982.4,78.7 L978.2,80.7 L974.2,82.4 L973.1,83.7 L969.2,81.7 L961.9,83.9 L960.7,82.9 L958.0,84.1 L954.3,83.7 L953.4,85.5 L950.0,88.2 L950.1,89.3 L953.3,90.0 L952.9,94.0 L950.4,94.1 L949.2,96.4 L950.3,97.6 L945.5,99.0 L944.5,102.2 L940.4,102.9 L939.5,105.7 L935.5,108.3 L934.5,106.4 L933.3,102.3 L931.8,96.2 L933.1,92.3 L935.4,90.7 L935.6,89.4 L939.9,88.7 L944.9,85.2 L949.6,82.4 L954.6,80.2 L956.9,76.2 L953.5,76.5 L951.8,78.8 L944.8,81.8 L942.5,78.4 L935.3,79.4 L928.4,84.0 L930.7,85.7 L924.5,86.4 L920.2,86.7 L920.4,84.7 L916.1,84.3 L912.6,85.7 L904.1,85.2 L895.0,86.0 L886.0,91.4 L875.3,98.0 L879.7,98.3 L881.1,100.1 L883.8,100.7 L885.6,99.3 L888.6,99.5 L892.6,102.5 L892.7,104.9 L890.5,107.7 L890.3,111.0 L889.1,115.4 L884.9,119.4 L883.9,121.4 L880.2,124.6 L876.4,127.8 L874.6,129.5 L870.9,131.1 L869.2,131.1 L867.4,129.8 L863.7,131.8 L863.3,132.7 L862.2,132.6 L861.0,133.5 L860.2,134.4 L860.3,136.4 L858.9,137.0 L858.4,137.5 L857.3,138.4 L855.5,138.8 L854.3,139.6 L854.2,140.8 L853.8,141.1 L855.0,141.5 L856.5,142.7 L858.9,146.0 L859.6,147.8 L859.6,151.0 L858.6,152.5 L856.1,153.1 L853.8,154.2 L851.3,154.5 L851.0,153.0 L851.6,150.9 L850.3,148.0 L852.4,147.5 L850.5,145.1 L849.1,144.6 L848.8,145.1 L848.0,145.4 L847.9,144.8 L847.2,144.6 L846.4,144.1 L847.2,142.9 L847.8,142.6 L847.6,142.1 L848.3,140.6 L848.1,140.1 L846.5,139.8 L845.2,139.1 L841.3,139.9 L839.3,141.2 L836.3,142.0 L837.7,140.7 L837.2,139.6 L839.4,137.7 L837.9,136.3 L835.5,137.2 L832.3,139.2 L830.6,141.0 L827.9,141.1 L826.5,142.4 L827.9,144.3 L830.2,144.7 L830.3,146.0 L832.5,146.8 L835.6,144.8 L838.1,145.9 L839.9,146.0 L840.3,147.4 L836.4,148.2 L835.1,149.7 L832.4,151.1 L831.0,153.0 L834.0,154.6 L835.1,157.3 L836.7,159.8 L838.6,162.0 L838.6,164.0 L836.8,164.8 L837.5,166.3 L839.1,167.1 L838.7,169.4 L838.0,171.6 L836.5,171.8 L834.4,174.9 L832.2,178.5 L829.6,181.8 L825.8,184.4 L821.9,186.7 L818.8,187.0 L817.1,188.3 L816.1,187.4 L814.6,188.7 L810.7,190.1 L807.7,190.6 L806.8,193.5 L805.2,193.7 L804.5,191.6 L805.2,190.6 L801.4,189.7 L800.1,190.1 L796.4,192.5 L794.1,195.1 L793.5,197.1 L795.6,200.0 L798.2,203.6 L800.7,205.3 L802.4,207.6 L803.7,212.7 L803.3,217.6 L801.0,219.4 L797.8,221.2 L795.6,223.5 L792.1,226.1 L791.1,224.3 L791.9,222.4 L789.8,220.9 L787.5,220.5 L786.4,219.0 L785.0,216.1 L782.5,214.9 L780.1,214.9 L780.5,212.7 L778.0,212.8 L777.8,215.8 L776.3,219.9 L775.4,222.3 L775.6,224.3 L777.4,224.4 L778.6,227.0 L779.1,229.4 L780.6,231.0 L782.3,231.3 L783.7,232.7 L784.4,233.0 L786.0,234.7 L787.2,236.5 L787.3,238.4 L787.0,239.7 L787.3,240.6 L787.5,242.2 L788.5,243.0 L789.6,245.5 L789.5,246.4 L787.6,246.6 L784.9,244.5 L781.6,242.3 L781.3,240.9 L779.7,239.1 L779.3,236.8 L778.3,235.2 L778.6,233.2 L778.0,232.0 L776.9,231.0 L776.4,229.6 L775.0,228.0 L773.6,226.7 L773.2,228.3 L772.6,226.8 L772.9,225.1 L773.8,222.4 L773.5,220.3 L774.3,218.2 L773.4,216.6 L773.6,213.5 L772.5,212.1 L771.6,208.8 L771.1,205.3 L769.9,203.0 L768.1,204.4 L764.9,206.3 L763.4,206.1 L761.6,205.5 L762.6,202.0 L762.0,199.4 L759.8,196.2 L760.2,195.2 L758.5,194.8 L756.6,192.6 L755.8,191.1 L755.6,189.7 L755.1,188.4 L753.9,186.8 L751.4,186.7 L751.6,187.8 L750.8,189.3 L749.6,188.8 L749.2,189.3 L748.4,189.0 L747.3,188.7 L746.9,189.7 L745.0,189.7 L741.6,190.3 L741.8,192.4 L740.3,194.0 L736.3,195.9 L733.2,199.2 L731.1,200.9 L728.3,202.7 L728.3,204.0 L726.9,204.7 L724.4,205.7 L723.1,205.8 L722.3,208.0 L722.9,211.6 L723.0,213.9 L721.8,216.5 L721.8,221.2 L720.4,221.4 L719.1,223.5 L720.0,224.4 L717.4,225.2 L716.5,227.1 L715.4,227.9 L712.8,225.3 L711.5,221.4 L710.4,218.6 L709.4,217.3 L708.0,214.6 L707.3,211.1 L706.8,209.4 L704.3,205.6 L703.1,200.2 L702.3,196.6 L702.3,193.3 L701.7,190.7 L697.7,192.3 L695.7,192.0 L692.1,188.6 L693.5,187.6 L692.6,186.5 L689.4,184.2 L687.3,183.5 L686.5,181.5 L684.4,179.4 L679.2,179.9 L674.7,179.9 L670.8,180.3 L665.6,179.5 L662.6,178.9 L659.4,178.5 L658.3,175.1 L656.9,174.6 L654.8,175.1 L652.0,176.4 L648.6,175.5 L645.8,173.4 L643.1,172.6 L641.3,170.0 L639.2,166.3 L637.7,166.7 L635.9,165.8 L634.9,166.9 L633.3,166.7 L633.8,168.0 L633.6,168.6 L634.5,170.7 L635.6,173.1 L636.9,173.7 L637.4,174.7 L639.3,175.9 L639.5,177.0 L639.2,177.9 L639.6,178.9 L640.4,179.6 L640.7,180.6 L641.1,181.2 L641.0,179.2 L641.7,177.8 L642.5,177.5 L643.3,178.3 L643.4,180.0 L642.7,181.6 L643.3,182.7 L643.8,182.5 L643.9,183.3 L646.0,182.8 L648.3,182.9 L650.0,183.0 L651.9,181.1 L654.0,179.3 L655.8,177.6 L656.6,176.7 L656.9,176.9 L656.6,178.1 L656.3,178.6 L656.7,180.8 L657.9,182.7 L659.5,183.7 L661.5,184.0 L663.1,184.5 L664.4,186.1 L665.1,187.1 L666.1,187.4 L666.1,188.0 L665.1,189.7 L664.7,190.5 L663.5,191.4 L662.5,193.3 L661.2,193.1 L660.6,193.8 L660.2,195.2 L660.5,197.0 L660.3,197.4 L659.0,197.4 L657.2,198.4 L657.0,199.8 L656.3,200.3 L654.6,200.3 L653.5,201.0 L653.5,202.1 L652.2,202.9 L650.7,202.7 L648.8,203.6 L647.5,203.7 L645.5,204.5 L645.0,205.7 L644.9,206.7 L642.1,207.8 L637.7,209.1 L635.2,211.1 L634.0,211.3 L633.2,211.1 L631.5,212.2 L629.8,212.8 L627.4,212.9 L626.7,213.1 L626.1,213.8 L625.4,214.0 L625.0,214.7 L623.6,214.7 L622.7,215.0 L620.8,214.9 L620.1,213.3 L620.1,211.8 L619.7,210.9 L619.1,208.9 L618.3,207.7 L618.9,207.6 L618.6,206.3 L619.0,205.8 L618.8,204.6 L618.5,203.4 L617.6,202.6 L617.4,201.5 L616.0,200.5 L614.5,198.1 L613.7,195.9 L611.8,194.0 L610.6,193.5 L608.7,190.9 L608.4,188.9 L608.5,187.3 L606.9,184.2 L605.6,183.1 L604.1,182.5 L603.2,180.9 L603.4,180.3 L602.6,178.9 L601.8,178.3 L600.7,176.2 L599.0,174.0 L597.6,172.0 L596.2,172.1 L596.6,170.5 L596.8,169.6 L597.1,168.5 L597.0,168.1 L596.2,169.2 L595.6,171.3 L594.9,172.7 L594.2,173.2 L593.3,172.3 L592.0,171.1 L590.1,167.1 L589.8,167.3 L590.9,170.3 L592.6,173.1 L594.7,177.4 L595.8,178.9 L596.7,180.5 L599.1,183.5 L598.6,184.0 L598.7,185.8 L601.9,188.3 L602.4,188.9 L603.3,191.6 L602.7,192.1 L603.1,195.0 L604.1,198.3 L605.2,199.0 L606.7,200.0 L608.3,203.2 L609.1,205.8 L610.6,207.1 L614.4,209.7 L615.9,211.3 L617.4,212.9 L618.3,213.9 L619.7,214.7 L620.3,215.6 L620.2,216.7 L618.7,217.4 L619.8,218.2 L620.8,218.7 L621.3,219.8 L622.5,221.0 L623.9,221.0 L626.5,220.3 L629.6,220.0 L632.0,219.1 L633.4,218.9 L634.4,218.4 L636.0,218.3 L636.9,218.2 L638.1,217.8 L639.6,217.6 L640.9,216.6 L642.0,216.6 L642.0,217.4 L641.8,219.0 L641.8,220.4 L641.2,221.4 L640.4,224.5 L639.1,227.5 L637.4,231.1 L635.0,235.2 L632.6,238.3 L629.3,242.1 L626.6,244.3 L622.4,247.1 L619.8,249.2 L616.8,252.6 L616.1,254.0 L615.5,254.7 L613.6,255.8 L612.9,256.9 L611.8,257.1 L611.4,259.1 L610.6,260.2 L610.0,262.1 L608.9,263.0 L607.6,266.4 L607.8,268.0 L609.6,269.0 L609.6,269.7 L608.9,271.4 L609.0,272.2 L608.9,273.6 L609.8,275.3 L611.0,278.1 L612.0,278.7 L612.4,279.9 L612.3,282.7 L612.7,285.1 L612.8,289.4 L613.3,290.8 L612.4,292.8 L611.4,294.7 L609.6,296.4 L607.0,297.5 L603.9,298.9 L600.8,301.8 L599.7,302.3 L597.8,304.3 L596.6,305.0 L596.4,306.9 L597.7,309.0 L598.3,310.7 L598.3,311.5 L598.8,311.4 L598.7,314.1 L598.3,315.4 L598.9,315.9 L598.5,317.0 L597.3,318.0 L595.0,318.9 L591.7,320.4 L590.5,321.5 L590.7,322.6 L591.4,322.8 L591.2,324.3 L590.5,326.3 L590.2,328.6 L589.5,329.9 L587.6,331.3 L587.0,331.7 L585.8,333.1 L585.1,334.5 L583.5,336.5 L580.3,339.4 L578.4,341.0 L576.3,342.3 L573.4,343.4 L572.0,343.5 L571.6,344.3 L569.9,343.9 L568.5,344.4 L565.5,343.9 L563.9,344.2 L562.7,344.1 L559.8,345.2 L557.5,345.6 L555.8,346.7 L554.5,346.7 L553.3,345.7 L552.4,345.7 L551.2,344.4 L551.0,344.8 L550.7,344.1 L550.7,342.4 L549.8,340.6 L550.7,340.1 L550.6,338.0 L548.8,335.4 L547.4,333.0 L547.4,333.0 L545.4,329.4 L543.3,327.3 L542.3,325.3 L541.6,322.5 L541.0,320.5 L540.0,316.3 L540.0,312.9 L539.6,311.4 L538.5,310.3 L537.1,308.0 L535.6,304.6 L535.0,302.9 L532.8,300.2 L532.6,298.1 L532.3,296.3 L532.7,293.9 L533.7,291.3 L533.8,290.1 L534.7,287.6 L535.4,286.5 L537.0,284.7 L537.9,283.4 L538.2,281.4 L538.0,279.8 L537.2,278.8 L536.4,277.1 L535.8,275.5 L535.9,274.9 L536.8,273.8 L535.9,271.1 L535.4,269.2 L534.0,267.5 L534.2,266.9 L533.8,266.1 L533.1,264.0 L530.8,261.1 L528.0,258.2 L526.1,256.0 L524.4,253.1 L524.5,252.2 L525.1,251.3 L525.8,249.3 L526.4,247.2 L525.8,246.8 L526.8,243.7 L527.2,241.5 L526.1,239.6 L524.9,239.2 L524.3,237.9 L523.6,237.5 L523.6,236.7 L520.7,237.7 L519.7,237.6 L518.6,238.2 L516.4,238.2 L514.9,236.4 L514.0,234.4 L512.0,232.6 L509.9,232.6 L507.5,232.6 L505.2,232.9 L502.9,233.5 L498.6,235.2 L497.0,236.1 L494.5,236.9 L492.1,236.1 L490.8,236.2 L488.9,235.6 L487.1,235.6 L483.8,236.1 L481.9,236.9 L479.1,237.9 L478.6,237.9 L477.8,237.9 L475.0,236.6 L472.5,234.5 L470.1,232.9 L468.2,231.1 L467.5,230.9 L465.5,229.8 L464.0,228.3 L463.5,227.3 L463.2,225.3 L462.0,223.6 L460.9,222.5 L460.2,222.2 L459.5,221.6 L459.2,220.4 L458.8,219.8 L458.0,219.3 L456.5,218.2 L455.3,218.0 L454.7,217.2 L454.7,216.8 L453.9,216.2 L453.7,215.6 L453.2,213.5 L453.6,212.2 L452.4,210.1 L451.0,209.1 L452.3,208.6 L453.6,206.6 L454.3,205.2 L454.0,203.7 L454.8,202.3 L455.1,199.7 L454.8,197.0 L454.5,195.6 L454.8,194.2 L454.1,192.9 L452.6,191.7 L452.7,190.5 L452.9,189.2 L453.9,188.5 L454.8,187.0 L454.6,186.1 L455.6,184.1 L457.2,182.3 L458.1,181.9 L458.8,180.3 L458.9,178.8 L459.9,177.1 L461.7,176.1 L463.5,173.2 L464.9,172.1 L467.5,171.8 L469.7,169.9 L471.1,169.2 L473.4,166.9 L472.7,163.4 L473.8,161.0 L474.2,159.5 L476.0,157.7 L478.7,156.4 L480.8,155.2 L482.7,152.4 L483.5,150.7 L485.6,150.7 L487.2,151.9 L489.9,151.7 L492.8,152.3 L494.0,152.3 L496.6,150.8 L499.6,150.3 L501.4,149.2 L504.1,148.3 L508.8,147.8 L513.4,147.6 L514.8,148.0 L517.4,146.9 L520.4,146.9 L521.5,147.5 L523.4,147.4 L526.4,146.2 L528.4,146.6 L528.3,148.0 L530.6,147.0 L530.8,147.5 L529.4,148.9 L529.4,150.1 L530.4,150.8 L530.0,153.2 L528.2,154.6 L528.7,156.2 L530.2,156.2 L530.9,157.5 L531.9,158.0 L535.2,158.9 L536.3,158.7 L538.7,159.1 L542.3,160.4 L543.6,162.8 L546.1,163.4 L550.1,164.5 L553.0,165.9 L554.4,165.2 L555.7,163.9 L555.1,161.8 L555.9,160.4 L557.9,159.1 L559.8,158.8 L563.6,159.3 L564.5,160.6 L565.6,160.6 L566.5,161.1 L569.2,161.4 L569.9,162.3 L573.6,162.3 L576.3,163.0 L579.0,163.8 L580.3,164.3 L582.5,163.4 L583.6,162.6 L586.0,162.3 L588.0,162.7 L588.8,164.1 L589.4,163.2 L591.6,163.8 L593.8,164.0 L595.2,163.3 L596.0,162.4 L595.8,162.2 L596.5,160.9 L597.1,158.8 L597.5,158.1 L597.6,158.1 L598.6,155.8 L599.9,153.9 L600.0,153.8 L599.7,151.6 L600.4,150.5 L599.4,149.2 L600.4,148.2 L598.8,148.4 L596.4,147.8 L594.5,149.4 L590.3,149.7 L588.1,148.2 L585.1,148.1 L584.4,149.3 L582.5,149.6 L579.8,148.1 L576.8,148.2 L575.1,145.4 L573.1,143.9 L574.5,141.7 L572.7,140.4 L575.8,137.7 L580.1,137.6 L581.2,135.5 L586.5,135.9 L589.9,134.1 L593.1,133.3 L597.7,133.2 L602.5,135.2 L606.5,136.3 L609.8,135.8 L612.1,136.1 L615.4,134.6 L615.8,133.4 L615.1,131.5 L613.5,130.5 L612.0,130.2 L611.0,129.3 L607.4,127.0 L604.3,126.0 L601.9,124.3 L603.9,123.9 L606.2,121.6 L604.6,120.5 L608.7,119.3 L608.7,118.7 L606.2,119.2 L604.0,119.4 L602.1,120.3 L599.5,120.4 L597.1,121.5 L597.3,123.2 L598.6,123.9 L601.5,123.7 L600.9,124.7 L597.9,125.2 L594.1,126.8 L592.6,126.2 L593.2,124.9 L590.1,124.1 L590.6,123.6 L593.3,122.6 L592.5,122.0 L588.2,121.3 L588.0,120.3 L585.4,120.6 L584.4,122.1 L582.2,124.2 L582.3,124.9 L580.9,125.5 L580.1,125.2 L579.3,128.6 L577.9,129.7 L576.9,131.7 L577.8,133.3 L578.1,134.4 L580.5,135.3 L580.0,136.0 L576.7,136.1 L575.5,137.0 L573.2,138.5 L572.3,137.2 L572.4,136.6 L570.7,136.5 L569.2,136.3 L565.9,137.0 L567.8,138.5 L566.4,139.0 L564.8,139.0 L563.4,137.6 L562.9,138.2 L563.5,139.8 L564.9,141.1 L563.8,141.7 L565.4,143.0 L566.7,143.8 L566.8,145.4 L564.2,144.7 L565.0,146.1 L563.3,146.4 L564.3,148.8 L562.5,148.9 L560.2,147.7 L559.2,145.4 L558.7,143.6 L557.6,142.3 L556.2,140.7 L556.0,139.9 L555.5,139.7 L555.4,139.1 L553.9,138.2 L553.7,136.9 L553.9,135.0 L554.3,134.1 L553.8,133.7 L553.2,133.5 L552.4,132.6 L551.2,132.0 L548.6,131.0 L547.0,130.0 L544.5,129.1 L542.2,127.1 L542.7,126.9 L541.4,125.7 L541.4,124.8 L539.6,124.3 L538.8,125.5 L537.9,124.6 L538.0,123.7 L538.1,123.6 L538.7,123.4 L536.5,123.0 L534.2,123.9 L534.4,125.3 L534.1,126.1 L535.0,127.5 L537.6,128.9 L539.0,131.2 L542.1,133.5 L544.2,133.4 L544.9,134.1 L544.1,134.6 L546.6,135.6 L548.7,136.5 L551.0,137.9 L551.3,138.4 L550.8,139.4 L549.3,138.1 L546.9,137.7 L545.7,139.5 L547.7,140.5 L547.4,141.9 L546.2,142.1 L544.7,144.5 L543.6,144.7 L543.6,143.8 L544.1,142.4 L544.7,141.8 L543.7,140.2 L542.8,138.8 L541.7,138.4 L540.8,137.2 L539.1,136.7 L537.9,135.6 L535.8,135.4 L533.6,134.2 L531.1,132.3 L529.2,130.7 L528.3,128.0 L527.0,127.7 L524.7,126.8 L523.4,127.1 L521.8,128.4 L520.7,128.6 L518.1,130.2 L512.7,129.4 L508.6,130.3 L508.3,132.0 L508.4,133.6 L505.8,135.5 L502.3,136.1 L502.0,137.0 L500.3,138.5 L499.2,140.8 L500.3,142.4 L498.7,143.6 L498.1,145.4 L496.0,146.0 L494.0,148.1 L490.5,148.2 L487.9,148.1 L486.1,149.1 L485.1,150.1 L483.7,149.9 L482.7,149.0 L481.9,147.4 L479.3,146.9 L478.2,147.7 L476.7,147.3 L475.3,147.6 L475.7,145.4 L475.4,143.7 L474.2,143.4 L473.5,142.4 L473.8,140.6 L474.9,139.6 L475.1,138.4 L475.6,136.8 L475.6,135.6 L475.0,134.6 L474.9,133.7 L475.0,131.7 L473.9,130.5 L477.8,128.5 L481.2,129.0 L485.0,129.0 L487.9,129.4 L490.2,129.3 L494.7,129.4 L496.2,127.7 L496.7,122.2 L493.8,119.3 L491.8,117.9 L487.5,116.8 L487.2,114.8 L490.8,114.2 L495.5,114.9 L494.6,111.7 L497.3,112.9 L503.7,110.8 L504.6,108.5 L507.0,107.9 L509.2,107.4 L510.6,106.6 L513.1,102.5 L516.9,101.4 L519.2,101.4 L519.7,100.9 L522.0,100.7 L522.6,101.3 L524.4,99.9 L523.8,98.9 L523.7,97.3 L522.6,95.8 L522.5,92.9 L522.9,92.2 L523.7,91.4 L526.2,91.2 L527.2,90.4 L529.4,89.6 L529.3,91.1 L528.5,92.0 L528.8,92.8 L530.3,93.2 L529.6,94.2 L528.8,93.9 L526.8,95.9 L527.6,97.3 L527.6,98.3 L530.4,99.0 L530.4,100.0 L533.2,99.5 L534.8,98.7 L537.9,99.8 L539.2,100.7 L541.1,99.9 L545.5,98.6 L549.0,97.6 L551.7,98.1 L551.9,98.8 L554.6,98.8 L555.2,97.6 L559.1,96.7 L558.5,94.4 L558.6,92.3 L559.9,90.5 L562.6,89.6 L564.8,91.7 L567.0,91.6 L567.5,89.5 L567.9,87.8 L566.8,88.2 L565.1,87.2 L564.8,85.6 L568.3,84.8 L571.8,84.4 L574.9,84.9 L577.7,84.8 L580.9,83.3 L578.0,81.9 L572.9,82.2 L568.0,83.2 L563.5,83.8 L561.9,82.2 L559.2,81.3 L559.8,78.6 L558.5,76.1 L559.8,74.5 L562.3,72.7 L568.7,69.7 L570.5,69.1 L570.3,68.0 L566.4,66.6 L561.6,67.4 L558.9,69.4 L559.4,71.1 L554.9,73.3 L549.6,75.7 L547.6,79.6 L549.5,81.6 L552.2,83.1 L549.6,86.2 L546.7,86.9 L545.7,91.6 L544.1,94.2 L540.7,93.9 L539.2,96.1 L536.0,96.2 L535.1,93.6 L532.7,90.4 L530.6,86.5 L528.8,84.8 L523.3,88.0 L519.6,88.7 L515.7,87.3 L514.7,84.3 L513.9,77.9 L516.4,76.1 L523.8,73.7 L529.2,70.9 L534.3,67.0 L541.0,61.6 L545.7,59.5 L553.3,56.1 L559.4,54.8 L564.0,55.0 L568.2,52.7 L573.2,52.8 L578.2,52.3 L586.9,54.3 L583.3,55.0 L586.4,56.8 L589.3,55.8 L593.8,57.5 L601.4,58.2 L611.9,61.3 L614.1,62.6 L614.2,64.5 L611.2,65.9 L606.6,66.7 L594.2,64.6 L592.2,64.9 L596.7,66.9 L597.1,71.1 L600.6,71.9 L602.8,72.6 L603.2,71.3 L601.4,70.1 L603.3,69.0 L610.0,70.8 L612.3,70.1 L610.5,68.1 L616.9,65.3 L619.5,65.5 L622.1,66.5 L623.7,64.6 L621.4,62.9 L622.7,61.2 L620.7,59.5 L628.5,60.4 L630.1,62.0 L626.5,62.3 L626.6,63.9 L628.7,64.8 L633.0,64.2 L633.7,62.4 L639.5,61.1 L649.2,58.7 L651.3,58.9 L648.6,60.6 L652.0,60.8 L654.0,59.9 L659.2,59.8 L663.3,58.7 L666.5,60.3 L669.7,58.5 L666.7,56.9 L668.2,56.0 L676.4,56.8 L680.2,57.7 L690.3,60.9 L692.2,59.4 L689.3,57.9 L689.3,57.3 L685.9,57.1 L686.8,55.8 L685.3,53.6 L685.3,52.7 L690.4,50.2 L692.2,47.7 L694.3,47.1 L701.6,47.8 L702.2,49.4 L699.6,51.6 L701.3,52.5 L702.2,54.5 L701.6,58.3 L704.6,60.0 L703.4,61.8 L698.0,65.8 L701.2,66.2 L702.3,65.2 L705.3,64.5 L706.1,63.1 L708.5,61.8 L706.9,60.2 L708.2,58.4 L705.1,58.1 L704.4,56.6 L706.7,53.8 L703.1,51.5 L708.0,49.7 L707.4,47.7 L708.8,47.6 L710.2,49.2 L709.1,51.8 L712.1,52.4 L710.8,50.4 L715.5,49.3 L721.3,49.1 L726.4,50.7 L723.9,48.4 L723.6,45.4 L728.5,44.9 L735.2,45.0 L741.2,44.6 L738.9,43.2 L742.1,41.3 L745.3,41.3 L750.7,39.9 L758.1,39.5 L759.0,38.8 L766.3,38.5 L768.5,39.1 L774.8,37.6 L779.9,37.7 L780.7,36.5 L783.3,35.3 L789.9,34.2 L794.6,35.1 L790.8,35.8 L797.1,36.2 L797.9,37.6 L800.4,36.9 L808.5,36.9 L814.8,38.3 L817.0,39.3 L816.3,40.8 L813.3,41.6 L806.0,43.1 L803.9,43.9 L807.3,44.3 L811.4,45.0 L813.9,44.5 L815.4,46.3 L816.6,45.6 L821.0,45.1 L829.9,45.6 L830.6,46.9 L842.2,47.3 L842.4,45.2 L848.3,45.7 L852.7,45.7 L857.2,47.1 L858.5,48.9 L856.8,50.1 L860.3,52.2 L864.7,53.4 L867.4,50.5 L871.8,51.7 L876.6,51.0 L881.9,51.8 L884.0,51.0 L888.5,51.4 L886.5,48.8 L890.2,47.6 L915.3,49.4 L917.6,51.1 L924.9,53.2 L936.1,52.7 L941.7,53.1 L944.0,54.3 L943.6,56.3 L947.1,57.1 L950.8,56.5 L955.7,56.5 L960.9,57.0 L966.2,56.7 L971.0,59.2 L974.5,58.3 L972.2,56.5 L973.5,55.3 L982.3,56.1 L988.1,55.9 L996.1,57.2 L0.0,58.4Z",
+  "M636.4,135.3 L637.8,137.3 L639.1,137.4 L640.0,138.2 L637.7,138.4 L637.2,140.6 L636.7,141.5 L635.7,142.2 L635.8,143.6 L636.7,145.6 L639.3,146.2 L641.2,147.6 L645.2,148.1 L649.5,147.3 L649.8,146.7 L649.3,144.7 L649.7,141.8 L647.5,140.9 L648.2,139.0 L646.4,138.8 L647.0,136.5 L649.6,137.1 L652.0,136.2 L650.0,134.6 L649.2,133.0 L647.0,133.7 L646.7,135.7 L645.8,133.9 L645.7,133.3 L646.4,132.1 L645.8,131.1 L642.6,130.2 L641.4,127.7 L639.8,127.0 L639.7,126.1 L642.4,126.3 L642.5,124.3 L644.9,123.9 L647.3,124.3 L647.8,121.6 L647.3,119.9 L644.6,120.0 L642.2,119.3 L639.0,120.5 L636.4,121.1 L635.1,122.8 L632.4,123.2 L629.7,126.1 L632.2,128.7 L631.9,130.6 L635.0,133.9 L636.4,135.3Z",
+  "M234.3,58.0 L232.6,59.0 L228.8,58.2 L226.6,58.5 L222.8,57.2 L225.2,56.4 L227.2,55.2 L230.1,55.9 L231.8,56.4 L232.6,57.0 L234.3,58.0Z",
+  "M0.0,51.3 L1000.0,53.2 L996.9,53.4 L996.5,52.5 L0.0,51.3Z",
+  "M0.0,51.3 L0.4,51.2 L2.7,51.2 L6.7,52.0 L6.5,52.4 L3.6,53.1 L0.0,53.2 L0.0,51.3Z",
+  "M248.5,57.0 L248.5,59.8 L252.2,57.6 L255.5,59.4 L254.7,61.5 L257.4,63.3 L260.3,61.3 L262.3,58.9 L262.4,55.9 L266.4,56.1 L270.5,56.5 L274.2,57.9 L274.4,59.3 L272.3,60.7 L274.3,62.2 L273.9,63.6 L268.5,65.5 L264.6,66.0 L261.8,65.1 L260.9,66.5 L258.2,68.9 L257.4,70.1 L254.2,71.9 L250.2,72.1 L248.0,73.3 L247.9,75.1 L244.6,75.5 L241.2,77.7 L238.2,80.8 L237.1,83.0 L237.0,86.3 L241.1,86.7 L242.3,89.3 L243.6,91.4 L247.5,90.9 L252.7,92.1 L255.4,93.1 L257.4,94.4 L260.9,95.2 L263.9,96.4 L268.4,96.5 L271.5,96.8 L271.0,99.2 L271.9,102.0 L273.9,105.1 L278.0,107.8 L280.2,106.9 L281.7,104.0 L280.2,99.6 L278.3,98.1 L282.7,96.8 L285.8,94.9 L287.4,93.0 L287.2,91.1 L285.3,88.7 L281.9,86.7 L285.2,83.7 L284.0,81.2 L283.0,76.9 L285.0,76.2 L289.7,77.0 L292.6,77.3 L294.9,76.5 L297.5,77.5 L300.9,79.1 L301.7,80.2 L306.7,80.4 L306.6,82.7 L307.5,86.2 L310.1,86.7 L312.1,88.3 L316.1,86.8 L318.8,83.7 L320.6,82.4 L322.8,84.9 L326.4,88.4 L329.5,91.8 L328.3,93.5 L332.0,95.1 L334.5,96.7 L339.0,97.4 L340.7,98.3 L341.8,100.6 L344.0,101.0 L345.1,102.0 L345.3,105.1 L343.3,106.2 L341.3,107.2 L336.7,108.2 L333.2,110.4 L328.5,110.9 L322.6,110.3 L318.4,110.3 L315.6,110.5 L313.2,112.5 L309.7,113.7 L305.7,117.4 L302.5,119.9 L304.8,119.5 L309.3,115.8 L315.1,113.5 L319.3,113.2 L321.7,114.6 L319.1,116.5 L320.0,119.5 L320.9,121.6 L324.5,122.9 L329.1,122.5 L331.9,119.4 L332.1,121.4 L333.9,122.4 L330.4,124.3 L324.3,125.9 L321.5,127.0 L318.4,129.0 L316.3,128.8 L316.2,126.5 L321.0,124.2 L316.6,124.3 L313.5,124.6 L314.0,125.5 L311.0,126.9 L308.2,127.8 L305.2,128.7 L303.6,130.5 L303.3,130.9 L303.3,132.4 L304.2,133.9 L305.3,133.9 L305.0,132.9 L305.9,133.5 L305.7,134.3 L303.8,134.8 L302.4,134.7 L300.4,135.2 L299.2,135.4 L297.6,135.5 L295.3,136.3 L299.3,135.8 L300.2,136.3 L296.3,137.1 L294.5,137.1 L294.6,136.8 L293.7,137.6 L294.6,137.7 L294.0,139.7 L291.9,141.8 L291.7,141.1 L291.1,141.0 L290.2,140.3 L290.8,141.8 L291.4,142.3 L291.5,143.3 L290.6,144.4 L289.1,146.6 L288.8,146.5 L289.7,144.6 L288.2,143.6 L287.9,141.3 L287.4,142.5 L288.0,144.2 L286.2,143.8 L288.1,144.7 L288.2,147.3 L289.0,147.5 L289.3,148.5 L289.6,151.2 L287.9,153.3 L285.0,154.1 L283.2,155.8 L281.8,155.9 L280.4,157.0 L280.0,157.9 L276.9,159.7 L275.4,161.0 L274.1,162.7 L273.6,164.6 L274.1,166.6 L275.1,168.9 L276.3,170.9 L276.3,172.1 L277.6,175.3 L277.5,177.2 L277.4,178.3 L276.7,180.0 L275.9,180.3 L274.5,180.0 L274.1,178.8 L273.0,178.1 L271.6,175.8 L270.3,173.6 L269.8,172.5 L270.4,170.7 L269.6,169.2 L267.5,166.8 L266.4,166.4 L263.6,167.7 L263.1,167.5 L261.7,166.2 L260.0,165.6 L256.9,165.9 L254.4,165.6 L252.3,165.8 L251.1,166.2 L251.6,167.0 L251.6,168.1 L252.2,168.6 L251.6,169.0 L250.6,168.6 L249.6,169.1 L247.6,169.0 L245.5,167.6 L243.1,167.9 L241.0,167.3 L239.3,167.5 L237.0,168.1 L234.4,170.2 L231.7,171.4 L230.2,172.7 L229.5,173.9 L229.5,175.9 L229.6,177.2 L230.2,178.1 L230.2,178.1 L230.2,178.1 L229.1,180.6 L228.6,182.6 L228.4,186.3 L228.1,187.7 L228.6,189.2 L229.5,190.5 L230.0,192.7 L231.9,194.7 L232.5,196.3 L233.6,197.7 L236.6,198.4 L237.7,199.6 L240.1,198.8 L242.3,198.5 L244.3,198.0 L246.1,197.6 L247.9,196.4 L248.5,194.8 L248.7,192.5 L249.2,191.7 L251.1,190.9 L254.0,190.3 L256.5,190.4 L258.2,190.2 L258.9,190.7 L258.8,192.1 L257.3,193.7 L256.6,195.4 L257.1,195.9 L256.7,197.1 L256.0,199.3 L255.3,198.6 L254.7,198.6 L254.7,199.0 L255.3,199.0 L255.2,199.8 L254.8,201.0 L255.0,201.4 L254.7,202.4 L254.9,202.7 L254.6,204.1 L254.0,204.8 L253.5,204.9 L253.0,205.9 L253.9,206.4 L254.1,206.0 L254.9,206.3 L255.2,206.4 L255.8,205.9 L256.6,205.9 L256.9,206.1 L257.3,206.0 L258.6,206.2 L259.9,206.2 L260.8,205.9 L261.1,205.5 L262.0,205.7 L262.7,205.9 L263.4,205.8 L263.9,205.6 L265.2,206.0 L265.6,206.0 L266.5,206.5 L267.3,207.2 L268.3,207.6 L269.0,208.3 L268.8,208.6 L268.7,209.2 L268.9,210.2 L268.3,211.2 L268.0,212.3 L267.9,213.5 L268.1,214.3 L268.1,215.5 L267.7,215.8 L267.4,217.0 L267.6,217.7 L267.1,218.4 L267.2,219.2 L267.6,219.6 L268.3,221.1 L269.4,222.2 L270.7,223.4 L271.7,224.4 L271.6,225.0 L272.8,225.1 L273.0,224.9 L273.8,225.6 L275.1,225.4 L276.3,224.7 L278.0,224.1 L279.0,223.3 L280.5,223.5 L280.4,223.7 L281.9,223.8 L283.2,224.3 L284.1,225.1 L285.1,225.9 L286.6,226.0 L288.7,224.1 L289.8,223.8 L289.8,222.9 L290.3,220.5 L291.9,219.2 L293.7,219.2 L293.9,218.6 L296.1,218.8 L298.3,217.4 L299.3,216.8 L300.7,215.5 L301.7,215.6 L302.4,216.4 L301.9,217.3 L301.8,217.9 L300.1,218.3 L301.1,219.5 L301.0,221.0 L299.8,222.6 L300.8,224.8 L302.0,224.6 L302.7,222.6 L301.8,221.6 L301.7,219.5 L305.1,218.4 L304.7,217.1 L305.7,216.2 L306.7,218.2 L308.7,218.2 L310.5,219.8 L310.6,220.7 L313.1,220.7 L316.0,220.4 L317.6,221.7 L319.8,222.0 L321.3,221.1 L321.3,220.4 L324.8,220.3 L328.1,220.2 L325.8,221.1 L326.7,222.4 L328.9,222.6 L331.0,223.9 L331.5,226.2 L332.9,226.1 L334.0,226.8 L335.8,227.8 L337.5,229.6 L337.6,231.0 L338.7,231.1 L340.2,232.4 L341.3,233.4 L344.6,234.0 L344.9,233.5 L347.1,233.3 L350.1,234.0 L351.1,234.3 L353.1,235.0 L356.0,237.3 L356.5,238.5 L357.5,238.3 L358.1,239.9 L359.7,244.7 L361.2,245.2 L361.3,247.1 L359.2,249.4 L360.0,250.2 L364.9,250.7 L365.0,253.4 L367.2,251.6 L370.6,252.6 L375.3,254.3 L376.6,255.9 L376.2,257.5 L379.4,256.6 L384.8,258.1 L388.9,258.0 L393.1,260.3 L396.6,263.4 L398.7,264.2 L401.1,264.3 L402.1,265.2 L403.1,268.7 L403.5,270.4 L402.4,275.0 L401.0,276.8 L397.1,280.7 L395.3,283.8 L393.3,286.2 L392.6,286.3 L391.8,288.3 L392.0,293.5 L391.2,297.8 L390.9,299.6 L390.0,300.7 L389.6,304.4 L386.7,308.1 L386.3,310.9 L384.0,312.1 L383.4,313.8 L380.3,313.8 L376.0,314.9 L374.0,316.1 L370.9,316.9 L367.6,319.1 L365.3,321.9 L364.9,324.0 L365.3,325.5 L364.8,328.3 L364.2,329.7 L362.3,331.2 L359.2,336.1 L356.7,338.3 L354.8,339.6 L353.6,342.2 L351.7,343.8 L350.5,345.5 L347.4,347.1 L345.4,346.5 L343.8,346.8 L341.3,345.6 L339.4,345.7 L337.7,344.2 L337.5,345.6 L341.0,348.0 L340.7,349.9 L342.4,351.1 L342.3,352.5 L339.6,356.1 L335.5,357.6 L329.9,358.1 L326.8,357.9 L327.4,359.5 L326.9,361.6 L327.4,363.0 L325.7,364.0 L322.9,364.4 L320.2,363.3 L319.1,364.1 L319.5,366.8 L321.4,367.7 L322.9,366.8 L323.7,368.2 L321.2,369.1 L318.9,370.8 L318.5,373.6 L317.9,375.1 L315.3,375.1 L313.1,376.5 L312.3,378.6 L315.0,380.6 L317.7,381.2 L316.7,383.7 L313.4,385.3 L311.6,388.5 L309.1,389.6 L308.0,390.9 L308.8,393.8 L310.7,395.4 L309.5,395.3 L307.1,395.3 L305.7,395.9 L303.2,396.9 L302.8,399.5 L301.6,399.6 L298.5,398.7 L295.3,396.8 L291.8,395.2 L290.9,393.4 L291.7,391.8 L290.3,389.9 L290.0,385.2 L291.2,382.5 L294.1,380.4 L289.9,379.6 L292.5,377.1 L293.5,372.5 L296.6,373.5 L298.0,367.7 L296.1,367.0 L295.3,370.5 L293.5,370.1 L294.4,366.1 L295.3,361.0 L296.6,359.1 L295.8,356.3 L295.6,353.2 L296.8,353.1 L298.5,348.6 L300.4,344.2 L301.6,340.1 L300.9,335.9 L301.8,333.6 L301.4,330.2 L303.0,326.8 L303.5,321.4 L304.4,315.6 L305.3,309.4 L305.1,304.9 L304.5,301.0 L301.7,299.4 L301.5,298.2 L296.0,295.4 L291.0,292.4 L288.9,290.7 L287.7,288.4 L288.2,287.6 L285.8,284.0 L283.1,278.8 L280.5,273.3 L279.3,272.0 L278.4,270.0 L276.3,268.2 L274.3,267.0 L275.2,265.8 L273.9,263.2 L274.7,261.2 L276.9,259.5 L278.4,257.4 L277.8,256.2 L276.8,257.5 L275.1,256.2 L275.7,255.5 L275.2,252.9 L276.2,252.5 L276.7,250.8 L277.7,249.0 L277.5,247.9 L279.1,247.3 L281.0,246.2 L280.6,245.3 L281.6,245.1 L281.5,243.7 L282.1,242.7 L283.5,242.5 L284.7,240.8 L285.8,239.3 L284.7,238.6 L285.3,237.0 L284.6,234.5 L285.2,233.8 L284.8,231.4 L283.7,229.9 L282.7,229.1 L282.1,227.6 L282.8,226.9 L282.1,226.7 L281.6,225.8 L280.2,225.0 L279.0,225.2 L278.4,226.2 L277.3,226.9 L276.7,226.9 L276.4,227.5 L277.8,229.0 L277.0,229.4 L276.6,229.8 L275.3,229.9 L274.8,228.3 L274.5,228.8 L273.6,228.6 L273.0,227.5 L271.9,227.3 L271.1,227.0 L269.9,227.0 L269.9,227.6 L269.5,227.2 L268.0,226.5 L267.5,226.0 L267.8,225.5 L267.7,224.9 L266.9,224.2 L265.8,223.6 L264.9,223.3 L264.7,222.5 L264.0,222.0 L264.1,222.8 L263.6,223.5 L262.9,222.7 L262.1,222.4 L261.7,221.8 L261.7,221.0 L262.1,220.1 L261.3,219.7 L261.9,219.2 L261.0,218.3 L259.7,217.2 L259.0,216.3 L257.9,215.4 L256.5,214.1 L256.8,213.7 L257.2,214.1 L257.5,213.9 L257.0,213.1 L256.1,212.8 L255.8,213.5 L254.2,213.4 L253.2,213.2 L252.1,212.6 L250.5,212.4 L249.7,211.8 L248.3,211.4 L246.6,211.3 L245.3,210.8 L243.8,209.6 L240.7,206.6 L239.2,205.7 L237.0,205.0 L235.4,205.2 L233.2,206.2 L231.8,206.5 L229.8,205.8 L227.7,205.3 L225.1,204.0 L223.1,203.6 L219.9,202.3 L217.6,201.0 L216.9,200.2 L215.3,200.1 L212.5,199.2 L211.3,197.9 L208.4,196.3 L207.0,194.6 L206.3,193.2 L207.2,193.0 L206.9,192.2 L207.6,191.5 L207.6,190.5 L206.7,189.2 L206.4,188.1 L205.5,186.7 L203.0,184.0 L200.2,181.8 L198.9,180.1 L196.5,178.9 L196.0,178.3 L196.4,176.5 L195.0,175.9 L193.4,174.5 L192.7,172.6 L191.2,172.4 L189.6,170.9 L188.3,169.6 L188.1,168.7 L186.6,166.6 L185.7,164.5 L185.7,163.4 L183.7,162.3 L182.8,162.4 L181.2,161.7 L180.7,162.8 L181.2,164.1 L181.5,166.2 L182.4,167.4 L184.5,169.3 L184.9,169.9 L185.4,170.1 L185.7,171.1 L186.2,171.0 L186.8,172.8 L187.6,173.5 L188.2,174.5 L190.0,175.9 L190.9,178.5 L191.7,179.7 L192.5,181.0 L192.6,182.5 L194.0,182.6 L195.1,183.9 L196.1,185.1 L196.0,185.6 L194.9,186.6 L194.4,186.6 L193.6,184.9 L191.8,183.3 L189.8,182.0 L188.4,181.3 L188.5,179.2 L188.1,177.7 L186.7,176.9 L184.8,175.6 L184.5,176.0 L183.8,175.3 L182.0,174.6 L180.4,173.0 L180.6,172.8 L181.8,172.9 L182.8,171.9 L182.9,170.7 L180.7,168.7 L179.1,167.9 L178.1,166.2 L177.1,164.3 L175.8,162.1 L174.6,159.6 L174.2,158.2 L172.4,156.6 L171.1,156.3 L170.8,155.5 L169.2,155.3 L168.2,154.6 L165.6,154.3 L164.9,153.9 L164.6,152.3 L161.9,149.5 L159.6,145.7 L159.7,145.0 L158.5,144.1 L156.3,141.8 L155.9,139.5 L154.5,138.0 L155.1,135.7 L155.0,133.3 L154.1,131.2 L155.2,128.6 L155.8,123.5 L155.3,119.8 L154.5,117.4 L153.7,116.2 L154.0,115.6 L158.0,116.6 L159.5,119.2 L160.2,118.4 L159.7,116.2 L158.8,113.9 L158.4,113.9 L153.0,111.2 L151.0,110.0 L146.0,108.8 L144.5,106.3 L144.9,104.6 L141.3,103.5 L140.8,101.2 L137.5,99.2 L137.4,97.8 L135.9,96.7 L133.4,95.8 L132.6,93.4 L129.1,91.2 L127.6,88.5 L124.9,88.4 L120.5,88.3 L117.2,87.5 L111.5,84.6 L108.8,84.1 L104.0,83.1 L100.1,83.3 L94.7,82.1 L91.4,80.9 L88.3,81.5 L88.8,83.4 L87.3,83.6 L84.1,84.2 L81.6,85.1 L78.6,85.7 L78.2,84.0 L79.4,81.3 L82.4,80.5 L81.6,79.8 L78.1,81.3 L76.2,83.2 L72.2,85.1 L74.2,86.5 L71.6,88.5 L68.6,89.6 L65.8,90.5 L65.1,91.7 L60.8,93.2 L59.9,94.5 L56.7,95.6 L54.8,95.4 L52.2,96.2 L49.3,97.2 L47.0,98.1 L42.3,98.9 L41.8,98.4 L44.9,97.1 L47.6,96.3 L50.5,94.7 L54.0,94.4 L55.4,93.3 L59.2,91.6 L59.8,91.1 L61.9,90.1 L62.4,88.0 L63.8,86.3 L60.6,87.2 L59.7,86.7 L58.2,87.7 L56.4,86.3 L55.6,87.3 L54.6,85.9 L51.8,87.0 L50.1,87.0 L49.9,85.4 L50.4,84.3 L48.6,83.4 L45.0,83.9 L42.6,82.6 L40.7,81.9 L40.7,80.4 L38.6,79.2 L39.6,77.6 L41.9,76.0 L42.9,74.6 L45.1,74.4 L47.0,74.8 L49.3,73.5 L51.3,73.7 L53.4,72.9 L52.9,71.6 L51.3,71.1 L53.4,70.0 L51.7,70.1 L48.7,70.7 L47.9,71.3 L45.7,70.7 L41.8,71.0 L37.7,70.3 L36.5,69.2 L33.0,67.6 L36.9,66.4 L43.1,65.1 L45.4,65.1 L45.0,66.4 L50.9,66.3 L48.6,64.6 L45.2,63.6 L43.3,62.2 L40.6,61.0 L36.8,60.1 L38.3,58.7 L43.3,58.6 L46.8,57.3 L47.4,56.0 L50.3,54.6 L53.0,54.3 L58.2,53.1 L60.8,53.3 L65.1,51.8 L69.3,52.4 L71.3,53.6 L72.5,53.1 L77.2,53.2 L77.0,53.9 L81.3,54.4 L84.1,54.1 L90.0,55.0 L95.3,55.2 L97.4,55.6 L101.1,55.1 L105.4,56.0 L108.4,56.4 L113.6,57.0 L117.9,58.4 L120.8,58.6 L123.3,57.5 L126.6,56.6 L130.8,56.9 L134.9,55.7 L139.5,55.0 L141.4,56.2 L143.4,55.5 L144.1,54.2 L146.0,54.5 L150.7,57.0 L154.4,55.1 L154.8,57.2 L158.2,56.8 L159.2,56.0 L162.6,56.1 L166.8,57.3 L173.3,58.3 L177.2,58.8 L179.9,58.6 L183.6,60.0 L179.7,61.4 L184.7,62.0 L192.2,61.6 L194.6,61.2 L197.6,62.8 L200.6,61.4 L197.7,60.2 L199.5,59.3 L202.9,59.2 L205.1,58.9 L207.4,59.6 L210.2,61.1 L213.3,60.8 L218.2,62.1 L222.5,61.6 L226.5,61.7 L226.2,60.0 L228.7,59.5 L233.0,60.4 L233.0,63.1 L234.8,60.9 L237.0,60.9 L238.2,58.1 L235.3,56.4 L232.0,55.3 L232.2,52.2 L235.5,50.2 L239.2,50.7 L242.0,51.9 L245.8,55.0 L243.3,56.4 L248.5,57.0Z",
+  "M182.9,46.9 L181.5,48.2 L187.7,47.3 L191.5,48.7 L194.7,47.3 L197.2,48.2 L199.5,51.0 L200.9,49.8 L198.9,47.0 L201.3,46.6 L204.1,47.0 L207.2,48.1 L209.0,50.8 L209.8,52.8 L214.5,54.2 L219.5,55.5 L219.2,56.7 L214.6,56.9 L216.4,58.0 L215.5,59.0 L210.4,58.6 L205.7,57.8 L202.4,58.0 L197.2,58.9 L189.0,59.4 L185.2,59.6 L183.7,58.3 L179.9,57.6 L177.5,57.9 L174.1,55.7 L175.9,55.4 L180.2,54.9 L184.1,55.0 L187.7,54.5 L182.4,53.9 L176.4,54.1 L172.5,54.1 L171.0,53.0 L177.5,51.9 L173.2,52.0 L168.3,51.2 L170.7,49.1 L172.6,48.0 L180.0,46.4 L182.9,46.9Z",
+  "M209.7,46.1 L207.3,47.9 L202.9,45.9 L203.9,45.6 L207.6,45.4 L209.7,46.1Z",
+  "M287.9,46.9 L288.2,47.7 L285.2,47.6 L282.2,47.6 L279.2,47.9 L278.4,47.8 L275.3,46.3 L275.5,45.3 L276.8,45.1 L283.2,45.4 L287.9,46.9Z",
+  "M259.6,46.8 L261.7,48.5 L264.3,46.3 L271.3,45.1 L276.1,48.0 L275.7,49.8 L281.2,49.0 L283.8,47.9 L290.0,49.3 L293.8,50.6 L294.2,51.9 L299.3,51.2 L302.2,53.0 L308.9,54.1 L311.3,55.2 L314.0,57.8 L308.9,59.1 L315.4,60.9 L319.8,61.5 L323.8,64.1 L328.2,64.3 L327.3,66.2 L322.5,69.4 L319.0,68.3 L314.7,65.6 L311.1,65.9 L310.7,67.5 L313.6,69.1 L317.4,70.4 L318.6,71.2 L320.4,73.9 L319.4,75.9 L315.9,75.2 L308.9,72.9 L312.9,75.3 L315.8,77.0 L316.2,78.0 L308.7,76.9 L302.7,75.2 L299.3,73.9 L300.3,73.1 L296.2,71.7 L292.1,70.3 L292.2,71.1 L284.1,71.6 L281.8,70.6 L283.6,68.6 L288.8,68.5 L294.6,68.2 L293.6,67.2 L294.6,65.8 L298.2,63.1 L297.4,61.9 L296.4,60.9 L292.1,59.6 L286.5,58.6 L288.3,57.9 L285.3,56.2 L282.9,56.0 L280.7,55.1 L279.2,55.9 L274.2,56.3 L264.0,55.7 L258.2,54.8 L253.7,54.4 L251.4,53.4 L254.3,52.2 L250.3,52.2 L249.4,49.3 L251.6,46.9 L254.4,45.7 L261.6,45.0 L259.6,46.8Z",
+  "M221.2,44.9 L224.5,45.5 L229.5,45.1 L230.2,45.9 L227.6,47.2 L231.8,48.4 L231.3,50.9 L226.8,52.0 L224.1,51.8 L222.2,50.7 L215.3,48.6 L215.3,47.7 L221.0,48.0 L217.9,46.2 L221.2,44.9Z",
+  "M898.9,46.6 L894.7,46.7 L889.0,46.3 L888.5,46.2 L891.1,45.1 L894.6,44.8 L898.6,45.9 L898.9,46.6Z",
+  "M241.1,47.9 L238.1,49.9 L235.0,49.8 L233.2,47.4 L233.3,46.0 L234.7,44.8 L237.5,44.1 L243.3,44.2 L248.6,44.8 L244.4,47.3 L241.1,47.9Z",
+  "M165.4,51.7 L158.1,53.1 L156.6,51.8 L150.2,50.4 L151.1,49.5 L153.3,47.2 L155.7,45.3 L153.0,43.6 L162.4,43.2 L166.4,43.8 L173.5,43.9 L176.2,44.7 L179.1,45.9 L175.6,46.6 L168.8,48.6 L165.4,50.5 L165.4,51.7Z",
+  "M918.7,41.4 L915.5,42.5 L911.0,42.3 L905.9,41.2 L906.5,40.3 L911.7,40.7 L918.7,41.4Z",
+  "M240.0,41.7 L238.5,42.8 L234.4,42.6 L231.1,41.9 L232.5,40.6 L236.5,39.9 L239.0,40.8 L240.0,41.7Z",
+  "M903.0,40.1 L900.8,42.2 L890.6,42.1 L886.0,42.7 L880.5,40.9 L882.0,39.0 L885.6,38.5 L893.0,38.6 L903.0,40.1Z",
+  "M226.4,36.9 L228.5,38.2 L228.6,39.6 L227.3,41.7 L222.8,42.0 L219.8,41.5 L219.8,39.9 L215.3,40.1 L215.1,38.0 L218.1,38.0 L222.3,37.1 L226.2,37.3 L226.4,36.9Z",
+  "M199.4,38.3 L200.5,39.3 L203.0,38.9 L205.9,39.0 L206.4,40.3 L204.7,41.7 L195.3,42.1 L188.3,43.3 L184.0,43.4 L183.7,42.4 L189.5,41.2 L176.9,41.5 L173.0,41.0 L176.8,38.3 L179.4,37.6 L187.3,38.5 L192.2,40.1 L197.0,40.4 L193.1,37.7 L195.6,36.7 L198.5,37.0 L199.4,38.3Z",
+  "M659.8,53.6 L658.2,53.8 L649.1,53.4 L648.4,52.2 L643.3,51.5 L642.9,50.0 L645.8,49.4 L645.7,47.8 L651.2,45.5 L648.6,45.1 L655.3,42.7 L654.5,41.4 L660.7,40.0 L669.9,38.2 L679.2,37.7 L683.9,36.6 L689.3,36.3 L691.3,37.4 L689.4,38.2 L679.5,39.6 L671.1,40.9 L662.4,43.6 L658.3,46.3 L653.9,49.0 L654.5,51.3 L659.8,53.6Z",
+  "M237.0,35.8 L240.1,36.7 L245.5,36.7 L247.9,37.6 L247.3,38.7 L250.5,39.3 L252.3,40.0 L256.0,40.1 L260.1,40.3 L264.5,39.7 L270.1,39.5 L274.6,39.7 L277.6,40.7 L278.2,41.9 L276.5,42.6 L272.4,43.2 L268.8,42.9 L260.8,43.3 L255.1,43.4 L250.7,43.0 L243.3,42.1 L242.3,40.6 L242.0,39.2 L239.2,38.0 L233.4,37.7 L230.2,36.8 L231.3,35.7 L237.0,35.8Z",
+  "M177.2,34.3 L176.8,36.5 L174.7,37.4 L172.1,37.6 L166.9,38.7 L162.5,39.2 L158.7,38.6 L163.5,36.5 L169.2,34.7 L173.4,34.7 L177.2,34.3Z",
+  "M239.3,34.7 L238.1,34.7 L232.9,34.6 L232.1,33.8 L237.7,33.8 L239.7,34.3 L239.3,34.7Z",
+  "M193.9,34.2 L188.7,35.0 L184.6,34.1 L186.9,33.2 L190.9,32.9 L194.9,33.3 L193.9,34.2Z",
+  "M568.7,33.7 L562.5,34.9 L557.6,34.2 L559.5,33.5 L557.8,32.6 L563.6,32.1 L564.7,33.1 L568.7,33.7Z",
+  "M195.4,31.7 L192.0,32.2 L187.4,32.2 L187.4,31.8 L190.3,31.0 L191.8,31.1 L195.4,31.7Z",
+  "M233.8,33.2 L229.7,33.8 L227.4,33.1 L226.2,32.1 L226.0,30.9 L229.6,31.0 L231.2,31.2 L234.6,32.2 L233.8,33.2Z",
+  "M222.1,32.4 L223.1,33.6 L218.6,33.3 L214.0,32.4 L207.8,32.3 L210.5,31.5 L207.2,30.8 L207.0,29.7 L212.4,30.1 L219.9,31.1 L222.1,32.4Z",
+  "M791.9,32.5 L776.2,33.6 L781.3,29.9 L783.6,29.6 L785.7,29.8 L792.7,31.4 L791.9,32.5Z",
+  "M550.7,28.6 L559.8,30.7 L552.9,31.8 L551.3,33.8 L548.9,34.3 L547.6,36.6 L544.2,36.8 L538.2,35.1 L540.7,34.1 L536.6,33.3 L531.2,30.9 L529.0,28.7 L536.6,27.7 L538.1,28.7 L542.1,28.7 L543.1,27.7 L547.2,27.6 L550.7,28.6Z",
+  "M570.7,26.6 L576.1,27.6 L572.0,29.1 L564.0,29.4 L555.8,29.0 L555.3,28.2 L551.3,28.2 L548.2,26.9 L556.8,26.1 L560.9,26.8 L563.7,26.0 L570.7,26.6Z",
+  "M642.0,26.3 L638.3,26.6 L635.8,26.8 L635.4,27.3 L632.2,27.8 L629.2,27.1 L630.8,26.2 L624.6,26.1 L630.0,25.6 L634.2,25.6 L634.8,26.4 L636.4,25.7 L639.0,25.2 L643.1,25.8 L642.0,26.3Z",
+  "M777.6,30.9 L771.5,31.2 L763.8,30.4 L759.2,29.4 L757.1,27.4 L753.3,26.8 L760.5,24.9 L766.5,24.3 L771.9,25.7 L778.3,28.4 L777.6,30.9Z",
+  "M258.3,28.7 L261.6,29.6 L257.8,30.4 L252.7,32.5 L247.8,32.7 L242.0,32.4 L239.0,31.2 L239.1,30.2 L241.3,29.5 L236.2,29.5 L233.1,28.6 L231.4,27.3 L233.3,26.1 L235.2,25.3 L238.1,25.1 L236.8,24.4 L243.3,24.3 L246.9,25.8 L251.5,26.4 L256.1,26.9 L258.3,28.7Z",
+  "M309.7,19.1 L317.1,19.4 L323.1,19.7 L328.2,20.5 L328.1,21.2 L321.3,22.4 L314.6,23.0 L312.1,23.6 L318.1,23.6 L311.6,25.3 L307.0,26.1 L302.3,28.3 L296.5,28.8 L294.8,29.4 L286.4,29.7 L290.2,30.0 L288.3,30.5 L290.6,31.9 L287.9,32.8 L283.6,33.6 L282.3,34.7 L278.4,35.5 L278.8,36.2 L283.6,36.0 L283.6,36.7 L276.2,38.4 L269.0,37.6 L260.8,38.1 L256.7,37.7 L251.4,37.6 L251.1,36.2 L256.2,35.6 L254.8,33.6 L256.5,33.4 L264.0,34.6 L260.2,32.8 L255.7,32.3 L257.9,31.2 L262.8,30.6 L263.6,29.6 L259.7,28.5 L258.5,27.1 L266.1,27.2 L268.3,27.5 L272.6,26.5 L266.4,26.2 L256.7,26.3 L251.8,25.4 L249.4,24.3 L246.2,23.5 L245.6,22.5 L249.7,22.0 L253.0,21.9 L258.4,21.4 L262.5,20.4 L265.9,20.6 L268.9,21.3 L271.1,19.8 L274.7,19.4 L279.7,19.1 L288.2,19.0 L289.7,19.3 L297.7,18.8 L303.7,19.0 L309.7,19.1Z",
+  "M424.7,18.0 L442.1,20.2 L437.0,21.3 L426.3,21.4 L411.4,21.7 L412.8,22.2 L422.6,21.9 L431.0,22.8 L436.4,22.0 L438.7,23.0 L435.6,24.6 L442.7,23.5 L456.2,22.5 L464.5,23.0 L466.1,24.2 L454.8,26.2 L453.2,26.8 L444.3,27.3 L450.7,27.4 L447.5,29.4 L445.3,31.2 L445.4,34.3 L448.7,36.2 L444.3,36.3 L439.8,37.1 L444.9,38.6 L445.6,41.0 L442.6,41.2 L446.2,43.6 L440.0,43.8 L443.2,45.0 L442.3,45.9 L438.4,46.4 L434.5,46.4 L438.0,48.3 L438.1,49.5 L432.6,48.3 L431.1,49.1 L434.9,49.8 L438.5,51.5 L439.6,53.7 L434.6,54.2 L432.5,53.2 L429.0,51.6 L430.0,53.5 L426.8,54.9 L434.1,55.0 L437.9,55.2 L430.5,57.6 L422.9,59.8 L414.8,60.8 L411.7,60.8 L408.9,61.8 L405.0,64.8 L399.0,66.7 L397.1,66.8 L393.4,67.5 L389.4,68.2 L387.0,69.9 L387.0,71.8 L385.6,73.7 L381.1,75.9 L382.2,78.1 L380.9,80.3 L379.5,83.1 L375.6,83.2 L371.5,81.0 L365.9,80.9 L363.2,79.4 L361.4,76.7 L356.6,73.3 L355.2,71.4 L354.8,69.0 L350.9,66.4 L351.9,64.3 L350.1,63.4 L352.8,60.1 L357.0,59.1 L358.1,57.9 L358.7,55.8 L355.5,56.7 L354.0,57.2 L351.5,57.5 L348.1,56.6 L347.9,54.8 L349.0,53.3 L351.6,53.2 L357.3,54.0 L352.5,52.2 L350.0,51.3 L347.2,51.6 L344.9,51.0 L348.0,48.4 L346.3,47.3 L344.1,45.4 L340.8,42.5 L337.2,41.4 L337.3,40.2 L329.8,38.6 L323.9,38.4 L316.5,38.5 L309.7,38.7 L306.5,37.8 L301.7,36.1 L309.0,35.2 L314.5,35.1 L302.7,34.3 L296.4,33.2 L296.8,32.1 L307.3,30.8 L317.5,29.5 L318.5,28.5 L311.0,27.5 L313.5,26.3 L323.1,24.4 L327.1,24.1 L326.0,22.9 L332.6,22.1 L341.1,21.7 L349.6,21.7 L352.7,22.5 L360.0,21.0 L366.7,22.0 L370.6,22.3 L376.3,23.2 L369.7,21.7 L370.1,20.5 L379.4,18.8 L389.2,18.9 L392.7,17.9 L402.5,17.7 L424.7,18.0Z",
+];
+function gmProject(lon: number, lat: number): { x: number; y: number } {
+  return { x: (lon + 180) / 360 * GM_W, y: (90 - lat) / 180 * GM_H };
+}
+function gmContinentPaths(): string {
+  const base = GM_LAND_PATHS.map((d) => `<path class="gm-land" d="${d}" />`).join("");
+  const tex = GM_LAND_PATHS.map((d) => `<path class="gm-land-tex" d="${d}" />`).join("");
+  return base + tex;
+}
+function gmGraticule(): string {
+  let s = "";
+  for (let lon = -180; lon <= 180; lon += 10) {
+    const x = gmProject(lon, 0).x;
+    const major = lon % 30 === 0;
+    s += `<line class="${major ? "gm-graticule" : "gm-grat-fin"}" x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${GM_H}" />`;
+  }
+  for (let lat = -60; lat <= 60; lat += 10) {
+    const y = gmProject(0, lat).y;
+    const major = lat === 0;
+    const cls = major ? "gm-equator" : (lat % 30 === 0 ? "gm-graticule" : "gm-grat-fin");
+    s += `<line class="${cls}" x1="0" y1="${y.toFixed(1)}" x2="${GM_W}" y2="${y.toFixed(1)}" />`;
+  }
+  return s;
+}
+function gmArcPath(p1: { x: number; y: number }, p2: { x: number; y: number }): string {
+  const mx = (p1.x + p2.x) / 2;
+  const my = (p1.y + p2.y) / 2;
+  const dx = Math.abs(p2.x - p1.x);
+  const lift = Math.min(150, dx * 0.28 + 38);
+  return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} Q ${mx.toFixed(1)} ${(my - lift).toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+}
+let gmState: { couriers: Set<string>; timelineIdx: number; playing: boolean; timer: number } = { couriers: new Set(), timelineIdx: -1, playing: false, timer: 0 };
+function stopGmTimeline(): void {
+  if (gmState.timer) { clearInterval(gmState.timer); gmState.timer = 0; }
+  gmState.playing = false;
+}
+
+function renderGlobalMap(): void {
+  const root = qs<HTMLElement>("#global-map");
+  if (!root) return;
+  const globalRoutes = buildGlobalRoutes();
+  const shipments = globalRoutes.routes;
+  const unmappedCount = globalRoutes.unmappedCount;
+  const origin = gmProject(GM_ORIGIN[0], GM_ORIGIN[1]);
+  // 承运商筛选
+  const carriers = [...new Set(shipments.map((s) => s.courier).filter(Boolean))] as string[];
+  const isCouSelected = (c: string) => gmState.couriers.size === 0 || gmState.couriers.has(c);
+  // 时间轴排序（按发货日期）
+  const ordered = [...shipments].sort((a, b) => (a.shippedAt || "").localeCompare(b.shippedAt || ""));
+  const orderOf = new Map(ordered.map((s, i) => [s.id, i] as const));
+  const showAll = gmState.timelineIdx < 0;
+  const counts: Record<string, number> = {};
+  let arcs = "";
+  let nodes = "";
+  let ports = "";
+  const visible: { i: number; color: string }[] = [];
+  let gradDefs = "";
+  shipments.forEach((s, i) => {
+    if (!isCouSelected(s.courier)) return;
+    const oi = orderOf.get(s.id) ?? -1;
+    if (!showAll && oi > gmState.timelineIdx) return;
+    counts[s.status] = (counts[s.status] || 0) + 1;
+    const iso = s.destinationCode;
+    const coord = GM_COUNTRY_COORDS[iso];
+    if (!coord) return;
+    const dest = gmProject(coord[0], coord[1]);
+    const color = GM_STATUS_COLOR[s.status] || "#7c8794";
+    const delay = (i * 0.12).toFixed(2);
+    const anim = showAll ? `animation-delay:${delay}s` : "animation:none";
+    gradDefs += `<linearGradient id="gmGrad-${i}" gradientUnits="userSpaceOnUse" x1="${origin.x.toFixed(1)}" y1="${origin.y.toFixed(1)}" x2="${dest.x.toFixed(1)}" y2="${dest.y.toFixed(1)}"><stop offset="0" stop-color="${GM_GRAD_ORIGIN}"/><stop offset="1" stop-color="${color}" style="transition: stop-color .7s ease"/></linearGradient>`;
+    const d = gmArcPath(origin, dest);
+    const pdur = (2.6 + (i % 3) * 0.6).toFixed(2);
+    arcs += `<path class="gm-arc" data-idx="${i}" pathLength="1" style="${anim}" stroke="url(#gmGrad-${i})" d="${d}" />`;
+    arcs += `<g class="gm-particles" data-idx="${i}" style="color:${color}">
+      <circle class="gm-particle" r="2.4"><animateMotion dur="${pdur}s" repeatCount="indefinite" path="${d}" rotate="auto" /></circle>
+      <circle class="gm-particle" r="1.7"><animateMotion dur="${pdur}s" begin="${(-pdur / 2).toFixed(2)}s" repeatCount="indefinite" path="${d}" rotate="auto" /></circle>
+    </g>`;
+    nodes += `<circle class="gm-node gm-dot-dest" data-idx="${i}" cx="${dest.x.toFixed(1)}" cy="${dest.y.toFixed(1)}" r="3.4" style="color:${color}" />`;
+    nodes += `<circle class="gm-node gm-pulse" data-idx="${i}" cx="${dest.x.toFixed(1)}" cy="${dest.y.toFixed(1)}" r="3.4" style="color:${color}" />`;
+    const cname = GM_COUNTRY_NAMES[iso] || customerMapCountryLabel(iso) || iso;
+    const right = dest.x > GM_W - 96;
+    const lx = right ? dest.x - 7 : dest.x + 7;
+    ports += `<text class="gm-port-label" data-idx="${i}" x="${lx.toFixed(1)}" y="${(dest.y + 3.6).toFixed(1)}" text-anchor="${right ? "end" : "start"}">${escapeHtml(cname)}</text>`;
+    visible.push({ i, color });
+  });
+  const total = shipments.length;
+  const stat = (label: string, n: number) => `<div class="gm-stat"><b>${n}</b><span>${label}</span></div>`;
+  const chips = carriers.map((c) => `<button class="gm-chip ${isCouSelected(c) ? "is-on" : ""}" data-courier="${c}">${escapeHtml(COURIER_MAP[c]?.label || c)}</button>`).join("");
+  const tlDate = showAll ? "全部时间" : (ordered[gmState.timelineIdx]?.shippedAt || "—");
+  const unmappedHint = unmappedCount
+    ? `<div class="gm-unmapped-note">${unmappedCount} 条发货/运输单据暂未识别目的国家，已保留在业务数据中；补充目的港或买方地址后会自动显示。</div>`
+    : "";
+  const head = `
+    <div class="gm-head">
+      <div>
+        <p class="gm-eyebrow">Global Routes · 全球航线</p>
+        <h1 class="gm-title">全球<em>航线</em></h1>
+        <p class="gm-sub">地址优先读取发货记录，其次读取关联运输单据；颜色只采用真实发货状态，不再用单据审核状态代替物流状态。</p>
+        <div class="gm-chips">${chips || '<span class="gm-chip-hint">无承运商数据</span>'}</div>
+        <div class="gm-timeline">
+          <button class="gm-play" id="gmPlay" aria-label="播放时间轴">${gmState.playing ? "⏸" : "▶"}</button>
+          <input type="range" class="gm-scrb" id="gmScrub" min="0" max="${Math.max(0, ordered.length - 1)}" value="${showAll ? 0 : gmState.timelineIdx}" ${ordered.length <= 1 ? "disabled" : ""}>
+          <span class="gm-date">${escapeHtml(tlDate)}</span>
+          <button class="gm-all" id="gmAll">全部</button>
+        </div>
+      </div>
+      <div class="gm-stats">
+        ${stat("路线记录", total)}
+        ${stat("运输中", counts["in_transit"] || 0)}
+        ${stat("已签收", counts["delivered"] || 0)}
+        ${stat("异常", counts["exception"] || 0)}
+      </div>
+    </div>`;
+  if (!total) {
+    root.innerHTML = head + unmappedHint + `<div class="gm-empty">暂无可定位的全球航线，请补充发货记录或单据中的目的港、买方地址。</div>`;
+    return;
+  }
+  const legendItems = (["draft","shipped","in_transit","delivered","exception"] as const)
+    .map((st) => `<span><i style="background:${GM_STATUS_COLOR[st]}"></i>${SHIPMENT_STATUS_LABEL[st]}</span>`).join("");
+  const svg = `
+    <div class="gm-map-wrap">
+      <div class="gm-srcline"><i></i>起运港 · 上海</div>
+      <svg class="gm-map" viewBox="0 0 ${GM_W} ${GM_H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="全球发货航线地图">
+        <defs>
+          <radialGradient id="gmOcean" cx="50%" cy="40%" r="85%">
+            <stop offset="0%" stop-color="#13171c" />
+            <stop offset="55%" stop-color="#0f1216" />
+            <stop offset="100%" stop-color="#0a0c0f" />
+          </radialGradient>
+          <radialGradient id="gmAtmo" cx="50%" cy="45%" r="78%">
+            <stop offset="65%" stop-color="rgba(10,12,15,0)" />
+            <stop offset="100%" stop-color="rgba(10,12,15,.55)" />
+          </radialGradient>
+          <filter id="gmGlow" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="2.6" result="b" />
+            <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+          <linearGradient id="gmLandTex" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#171b21" />
+            <stop offset="50%" stop-color="#12151a" />
+            <stop offset="100%" stop-color="#0e1115" />
+          </linearGradient>
+          <pattern id="gmSpeckle" width="8" height="8" patternUnits="userSpaceOnUse">
+            <circle cx="2" cy="2" r="0.5" fill="rgba(200,242,60,.05)" />
+            <circle cx="5.5" cy="5.5" r="0.4" fill="rgba(200,242,60,.025)" />
+          </pattern>
+        ${gradDefs}
+        </defs>
+        <rect class="gm-ocean" x="0" y="0" width="${GM_W}" height="${GM_H}" fill="url(#gmOcean)" />
+        ${gmGraticule()}
+        ${gmContinentPaths()}
+        <rect class="gm-atmo" x="0" y="0" width="${GM_W}" height="${GM_H}" fill="url(#gmAtmo)" pointer-events="none" />
+        <g class="gm-arcs">${arcs}</g>
+        <g class="gm-nodes">${nodes}</g>
+        <g class="gm-ports">${ports}</g>
+        <g class="gm-origin">
+          <circle class="gm-orig-ring" cx="${origin.x.toFixed(1)}" cy="${origin.y.toFixed(1)}" r="11" />
+          <circle class="gm-dot-source" cx="${origin.x.toFixed(1)}" cy="${origin.y.toFixed(1)}" r="4" />
+          <circle class="gm-pulse" cx="${origin.x.toFixed(1)}" cy="${origin.y.toFixed(1)}" r="4" style="color:#c8f23c" fill="#c8f23c" />
+          <text class="gm-port-label gm-port-src" x="${origin.x.toFixed(1)}" y="${(origin.y - 14).toFixed(1)}" text-anchor="middle">上海 SHANGHAI</text>
+        </g>
+      </svg>
+      <div class="gm-legend">${legendItems}</div>
+      <div class="gm-tip" id="gmTip"></div>
+    </div>`;
+  // 复用式更新：结构未变（无承运商筛选、全时间轴）仅状态变化时，只更新颜色以触发平滑过渡
+  const existingMap = qs<SVGSVGElement>(".gm-map", root);
+  const structureSame = existingMap && existingMap.querySelectorAll(".gm-arc").length === visible.length && gmState.couriers.size === 0 && showAll;
+  if (structureSame && existingMap) {
+    visible.forEach(({ i, color }) => {
+      const grad = existingMap.querySelector(`#gmGrad-${i}`) as SVGElement | null;
+      if (grad) { const stops = grad.querySelectorAll("stop"); if (stops[1]) stops[1].setAttribute("stop-color", color); }
+      const pulseEl = existingMap.querySelector(`.gm-pulse[data-idx="${i}"]`) as SVGElement | null; if (pulseEl) pulseEl.style.color = color;
+      const dotEl = existingMap.querySelector(`.gm-dot-dest[data-idx="${i}"]`) as SVGElement | null; if (dotEl) dotEl.style.color = color;
+      const partEl = existingMap.querySelector(`.gm-particles[data-idx="${i}"]`) as SVGElement | null; if (partEl) partEl.style.color = color;
+    });
+    const statEls = qsa<HTMLElement>(".gm-stat b", root);
+    if (statEls.length >= 4) {
+      statEls[0].textContent = String(total);
+      statEls[1].textContent = String(counts["in_transit"] || 0);
+      statEls[2].textContent = String(counts["delivered"] || 0);
+      statEls[3].textContent = String(counts["exception"] || 0);
+    }
+    return;
+  }
+  root.innerHTML = head + unmappedHint + svg;
+  // 交互：承运商筛选
+  qsa<HTMLElement>(".gm-chip", root).forEach((chip) => chip.addEventListener("click", () => {
+    const c = chip.dataset.courier;
+    if (!c) return;
+    if (gmState.couriers.has(c)) gmState.couriers.delete(c); else gmState.couriers.add(c);
+    renderGlobalMap();
+  }));
+  // 交互：时间轴回放
+  qs<HTMLButtonElement>("#gmPlay")?.addEventListener("click", () => {
+    if (gmState.playing) { stopGmTimeline(); renderGlobalMap(); return; }
+    if (gmState.timelineIdx < 0 || gmState.timelineIdx >= ordered.length - 1) gmState.timelineIdx = 0;
+    gmState.playing = true;
+    gmState.timer = window.setInterval(() => {
+      if (!qs("#global-map")) { stopGmTimeline(); return; }
+      gmState.timelineIdx++;
+      if (gmState.timelineIdx >= ordered.length - 1) { gmState.timelineIdx = ordered.length - 1; stopGmTimeline(); }
+      renderGlobalMap();
+    }, 1100);
+    renderGlobalMap();
+  });
+  qs<HTMLInputElement>("#gmScrub")?.addEventListener("input", (e) => {
+    stopGmTimeline();
+    gmState.timelineIdx = Number((e.target as HTMLInputElement).value);
+    renderGlobalMap();
+  });
+  qs<HTMLButtonElement>("#gmAll")?.addEventListener("click", () => { stopGmTimeline(); gmState.timelineIdx = -1; renderGlobalMap(); });
+  const tip = qs<HTMLElement>("#gmTip");
+  const wrap = qs<HTMLElement>(".gm-map-wrap");
+  const arcEls = qsa<SVGElement>(".gm-arc, .gm-particles", root);
+  const showTip = (idx: number, clientX: number, clientY: number) => {
+    const s = shipments[idx]; if (!s || !tip || !wrap) return;
+    const iso = s.destinationCode;
+    const country = GM_COUNTRY_NAMES[iso] || customerMapCountryLabel(iso) || iso || "未知";
+    const courier = COURIER_MAP[s.courier]?.label || s.courier || "—";
+    tip.innerHTML = `<b>${escapeHtml(s.shipmentNo || s.dealTitle || "发货单")}</b>
+      <div class="gm-tip-row"><span>客户</span><em>${escapeHtml(s.customerName || "—")}</em></div>
+      <div class="gm-tip-row"><span>目的国</span><em>${escapeHtml(country)}</em></div>
+      ${s.destinationPort ? `<div class="gm-tip-row"><span>目的港</span><em>${escapeHtml(s.destinationPort)}</em></div>` : ""}
+      ${s.destinationAddress ? `<div class="gm-tip-row"><span>收货地址</span><em>${escapeHtml(s.destinationAddress)}</em></div>` : ""}
+      <div class="gm-tip-row"><span>状态</span><em>${escapeHtml(SHIPMENT_STATUS_LABEL[s.status] || s.status)}</em></div>
+      <div class="gm-tip-row"><span>承运</span><em>${escapeHtml(courier)}</em></div>
+      <div class="gm-tip-row"><span>来源</span><em>${escapeHtml(s.routeSourceLabel)}</em></div>`;
+    const rect = wrap.getBoundingClientRect();
+    let x = clientX - rect.left + 14;
+    let y = clientY - rect.top + 14;
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    if (x + tw > rect.width) x = rect.width - tw - 8;
+    if (y + th > rect.height) y = rect.height - th - 8;
+    tip.style.left = `${Math.max(8, x)}px`;
+    tip.style.top = `${Math.max(8, y)}px`;
+    tip.classList.add("is-on");
+  };
+  const hideTip = () => { tip?.classList.remove("is-on"); arcEls.forEach((a) => a.classList.remove("is-dim")); };
+  const focus = (idx: number) => { arcEls.forEach((a) => a.classList.toggle("is-dim", a.dataset.idx !== String(idx))); };
+  root.onmousemove = (e: MouseEvent) => {
+    const t = e.target as SVGElement;
+    const idxAttr = t?.dataset?.idx;
+    if (idxAttr == null) { hideTip(); return; }
+    const idx = Number(idxAttr);
+    focus(idx);
+    showTip(idx, e.clientX, e.clientY);
+  };
+  root.onmouseleave = hideTip;
+}
 
 let editingShipmentId: string | null = null;
 let pendingTrackingImage: string = "";
@@ -15703,14 +21479,431 @@ async function copyToClipboard(text: string) {
   }
 }
 
+// ===== 数字滚动动画工具 =====
+function animateCount(el: HTMLElement | null, to: number, dur = 900, fmt: (v: number) => string = (v) => String(v)): void {
+  if (!el) return;
+  const start = performance.now();
+  const step = (now: number) => {
+    const t = Math.min(1, (now - start) / dur);
+    const e = 1 - Math.pow(1 - t, 3);
+    el.textContent = fmt(Math.round(to * e));
+    if (t < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+// ===== 关系图谱（客户 ↔ 产品）=====
+function renderRelationGraph(): void {
+  const root = qs<HTMLElement>("#relation-graph");
+  if (!root) return;
+  const customers = state.customers || [];
+  const shipments = state.shipments || [];
+  type GNode = { id: string; label: string; kind: "customer" | "product"; sub: string; x: number; y: number; vx: number; vy: number };
+  const nodes: GNode[] = [];
+  const custMap = new Map<string, GNode>();
+  customers.forEach((c) => {
+    if (!c.company) return;
+    const n: GNode = { id: "c:" + c.id, label: c.company, kind: "customer", sub: c.country || "", x: 430 + (Math.random() - 0.5) * 240, y: 270 + (Math.random() - 0.5) * 240, vx: 0, vy: 0 };
+    nodes.push(n); custMap.set(c.company, n);
+  });
+  const prodNames = new Set<string>();
+  shipments.forEach((s) => ((s.items || []) as Array<{ productName?: string }>).forEach((it) => { if (it.productName) prodNames.add(it.productName); }));
+  const prodMap = new Map<string, GNode>();
+  let pi = 0;
+  prodNames.forEach((name) => {
+    const n: GNode = { id: "p:" + pi++, label: name, kind: "product", sub: "产品", x: 430 + (Math.random() - 0.5) * 240, y: 270 + (Math.random() - 0.5) * 240, vx: 0, vy: 0 };
+    nodes.push(n); prodMap.set(name, n);
+  });
+  type GEdge = { a: GNode; b: GNode; status: string };
+  const edges: GEdge[] = [];
+  shipments.forEach((s) => {
+    const a = custMap.get(s.customerName);
+    if (!a) return;
+    ((s.items || []) as Array<{ productName?: string }>).forEach((it) => {
+      const b = it.productName ? prodMap.get(it.productName) : undefined;
+      if (b) edges.push({ a, b, status: s.status });
+    });
+  });
+  // 力导向布局（同步迭代）
+  const W = 880, H = 560, cx = W / 2, cy = H / 2;
+  const kRep = 13000, kAttr = 0.014, rest = 135, grav = 0.02, damp = 0.82;
+  for (let iter = 0; iter < 360; iter++) {
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      let ax = (cx - n.x) * grav, ay = (cy - n.y) * grav;
+      for (let j = 0; j < nodes.length; j++) {
+        if (i === j) continue;
+        const m = nodes[j];
+        let dx = n.x - m.x, dy = n.y - m.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 < 1) { d2 = 1; dx = Math.random() - 0.5; dy = Math.random() - 0.5; }
+        const d = Math.sqrt(d2);
+        const f = kRep / d2;
+        ax += (dx / d) * f; ay += (dy / d) * f;
+      }
+      n.vx = (n.vx + ax) * damp; n.vy = (n.vy + ay) * damp;
+    }
+    edges.forEach((e) => {
+      const dx = e.b.x - e.a.x, dy = e.b.y - e.a.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const f = (d - rest) * kAttr;
+      const fx = (dx / d) * f, fy = (dy / d) * f;
+      e.a.vx += fx; e.a.vy += fy; e.b.vx -= fx; e.b.vy -= fy;
+    });
+    nodes.forEach((n) => {
+      n.x += n.vx; n.y += n.vy;
+      n.x = Math.max(36, Math.min(W - 36, n.x));
+      n.y = Math.max(36, Math.min(H - 36, n.y));
+    });
+  }
+  const head = `
+    <div class="rg-head">
+      <div>
+        <p class="rg-eyebrow">Relation Graph · 关系图谱</p>
+        <h1 class="rg-title">客户 × 产品 关系网络</h1>
+        <p class="rg-sub">节点为买家客户与在售产品，连线表示某票发货单中客户采购了该产品，颜色对应物流状态。悬停高亮关联。</p>
+      </div>
+      <div class="rg-stats">
+        <div class="rg-stat"><b>${nodes.filter((n) => n.kind === "customer").length}</b><span>客户节点</span></div>
+        <div class="rg-stat"><b>${nodes.filter((n) => n.kind === "product").length}</b><span>产品节点</span></div>
+        <div class="rg-stat"><b>${edges.length}</b><span>采购关联</span></div>
+      </div>
+    </div>`;
+  if (!nodes.length) {
+    root.innerHTML = head + `<div class="rg-empty">暂无客户或产品数据。</div>`;
+    return;
+  }
+  const edgeSvg = edges.map((e) => {
+    const color = GM_STATUS_COLOR[e.status] || "#64748b";
+    return `<line class="rg-edge" data-a="${e.a.id}" data-b="${e.b.id}" x1="${e.a.x.toFixed(1)}" y1="${e.a.y.toFixed(1)}" x2="${e.b.x.toFixed(1)}" y2="${e.b.y.toFixed(1)}" style="stroke:${color}" />`;
+  }).join("");
+  const nodeSvg = nodes.map((n) => {
+    const r = n.kind === "customer" ? 13 : 9;
+    const cls = n.kind === "customer" ? "rg-node rg-cust" : "rg-node rg-prod";
+    return `<g class="${cls}" data-id="${n.id}">
+        <circle class="rg-dot" cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${r}" />
+        <text class="rg-label" x="${n.x.toFixed(1)}" y="${(n.y + r + 13).toFixed(1)}" text-anchor="middle">${escapeHtml(n.label)}</text>
+      </g>`;
+  }).join("");
+  root.innerHTML = head + `
+    <div class="rg-canvas">
+      <svg class="rg-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="客户产品关系图谱">
+        <g class="rg-edges">${edgeSvg}</g>
+        <g class="rg-nodes">${nodeSvg}</g>
+      </svg>
+    </div>`;
+  const allNodes = qsa<SVGGElement>(".rg-node", root);
+  const allEdges = qsa<SVGLineElement>(".rg-edge", root);
+  const neighbors = (id: string): Set<string> => {
+    const set = new Set<string>([id]);
+    allEdges.forEach((ed) => {
+      const a = ed.dataset.a, b = ed.dataset.b;
+      if (a === id) set.add(b as string);
+      if (b === id) set.add(a as string);
+    });
+    return set;
+  };
+  allNodes.forEach((g) => {
+    g.addEventListener("mouseenter", () => {
+      const id = g.dataset.id || "";
+      const nb = neighbors(id);
+      allNodes.forEach((n) => n.classList.toggle("is-dim", !nb.has(n.dataset.id || "")));
+      allEdges.forEach((ed) => {
+        const on = nb.has(ed.dataset.a || "") && nb.has(ed.dataset.b || "");
+        ed.classList.toggle("is-on", on); ed.classList.toggle("is-dim", !on);
+      });
+    });
+    g.addEventListener("mouseleave", () => {
+      allNodes.forEach((n) => n.classList.remove("is-dim"));
+      allEdges.forEach((ed) => { ed.classList.remove("is-on"); ed.classList.remove("is-dim"); });
+    });
+  });
+}
+
+// ===== 业绩看板（数字滚动 + 环形进度）=====
+function renderKpiBoard(): void {
+  const root = qs<HTMLElement>("#kpi-board");
+  if (!root) return;
+  const customers = state.customers || [];
+  const shipments = state.shipments || [];
+  const products = state.products || [];
+  const totalShip = shipments.length;
+  const inTransit = shipments.filter((s) => s.status === "in_transit").length;
+  const delivered = shipments.filter((s) => s.status === "delivered").length;
+  const exception = shipments.filter((s) => s.status === "exception").length;
+  const donePct = totalShip ? Math.round((delivered / totalShip) * 100) : 0;
+  const excPct = totalShip ? Math.round((exception / totalShip) * 100) : 0;
+  const kpis = [
+    { label: "客户总数", value: customers.length, unit: "家", color: "var(--brand)" },
+    { label: "发货单数", value: totalShip, unit: "票", color: "#1f6f6b" },
+    { label: "运输中", value: inTransit, unit: "票", color: "#cf8a1c" },
+    { label: "产品 SKU", value: products.length, unit: "个", color: "#7c3aed" },
+  ];
+  const rings = [
+    { label: "已签收完成度", pct: donePct, color: "#16a34a" },
+    { label: "异常率", pct: excPct, color: "#dc2626" },
+  ];
+  const card = (k: typeof kpis[number], i: number) => `
+    <div class="kpi-card" style="--c:${k.color}">
+      <div class="kpi-num"><span id="kpiNum${i}">0</span><em>${k.unit}</em></div>
+      <div class="kpi-label">${k.label}</div>
+    </div>`;
+  const ringHtml = (r: typeof rings[number], i: number) => {
+    const rad = 42, C = 2 * Math.PI * rad;
+    return `<div class="kpi-ring" style="--c:${r.color}">
+        <div class="kpi-ring-chart">
+          <svg viewBox="0 0 110 110">
+            <circle class="kpi-ring-bg" cx="55" cy="55" r="${rad}"></circle>
+            <circle class="kpi-ring-fg" id="kpiRing${i}" cx="55" cy="55" r="${rad}" style="stroke-dasharray:${C.toFixed(1)};stroke-dashoffset:${C.toFixed(1)}"></circle>
+          </svg>
+          <div class="kpi-ring-center"><b id="kpiRingTxt${i}">0%</b></div>
+        </div>
+        <div class="kpi-ring-label">${r.label}</div>
+      </div>`;
+  };
+  root.innerHTML = `
+    <div class="kpi-head">
+      <div>
+        <p class="kpi-eyebrow">Performance Board · 业绩看板</p>
+        <h1 class="kpi-title">实时业绩看板</h1>
+        <p class="kpi-sub">关键指标以滚动数字呈现，环形展示签收完成度与异常率。</p>
+      </div>
+    </div>
+    <div class="kpi-grid">${kpis.map(card).join("")}</div>
+    <div class="kpi-rings">${rings.map(ringHtml).join("")}</div>`;
+  kpis.forEach((k, i) => animateCount(qs<HTMLElement>("#kpiNum" + i), k.value));
+  rings.forEach((r, i) => {
+    const rad = 42, C = 2 * Math.PI * rad;
+    const fg = qs<SVGCircleElement>("#kpiRing" + i);
+    if (fg) requestAnimationFrame(() => { fg.style.strokeDashoffset = (C * (1 - r.pct / 100)).toFixed(1); });
+    animateCount(qs<HTMLElement>("#kpiRingTxt" + i), r.pct, 900, (v) => v + "%");
+  });
+}
+
+let shipmentStatusFilterValue = "";
+const SHIP_STEPS: ShipmentStatus[] = ["draft", "shipped", "in_transit", "delivered"];
+
+// ---- 发货旅程图标系统（状态 / 快递 / 操作）----
+type ShipIconName = "draft" | "shipped" | "in_transit" | "delivered" | "exception" | "truck" | "edit" | "track" | "trash" | "copy" | "arrow" | "refresh";
+const SH_ICONS: Record<ShipIconName, string> = {
+  draft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>',
+  shipped: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>',
+  in_transit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1z"/><path d="M16 8h4l3 3v5h-7z"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="18.5" r="2"/></svg>',
+  delivered: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg>',
+  exception: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
+  truck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1z"/><path d="M16 8h4l3 3v5h-7z"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="18.5" r="2"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+  track: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+  arrow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.4L20 9M4 15l2.5 2.4A7 7 0 0 0 17.9 15"/></svg>'
+};
+function shIcon(name: ShipIconName): string { return SH_ICONS[name]; }
+
+// ---- 系统日志：类型 / 标签 / 图标 / 写入 ----
+type LogLevel = "info" | "success" | "warning" | "error";
+type LogCategory = "auth" | "product" | "shipment" | "system";
+interface LogEntry {
+  id: string;
+  level: LogLevel;
+  category: LogCategory;
+  action: string;
+  message: string;
+  actorId: string;
+  actorName: string;
+  meta: Record<string, unknown>;
+  createdAt: string;
+  ownerId: string;
+  teamId: string;
+}
+const LOG_LEVEL_LABEL: Record<LogLevel, string> = {
+  info: "信息", success: "成功", warning: "警告", error: "错误"
+};
+const LOG_CATEGORY_LABEL: Record<LogCategory, string> = {
+  auth: "认证", product: "产品", shipment: "发货", system: "系统"
+};
+const LOG_CATEGORY_ICON: Record<LogCategory, string> = {
+  auth: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+  product: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>',
+  shipment: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1z"/><path d="M16 8h4l3 3v5h-7z"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="18.5" r="2"/></svg>',
+  system: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>'
+};
+const LOG_LEVEL_ICON: Record<LogLevel, string> = {
+  info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>',
+  success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>',
+  warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
+  error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>'
+};
+
+async function recordLog(entry: {
+  level: LogLevel; category: LogCategory; action: string; message: string; meta?: Record<string, unknown>;
+}): Promise<void> {
+  if (!state.user) return;
+  const payload = {
+    level: entry.level,
+    category: entry.category,
+    action: entry.action,
+    message: entry.message,
+    actorId: state.user.id,
+    actorName: state.user.name,
+    meta: entry.meta || {},
+    createdAt: new Date().toISOString()
+  };
+  try {
+    await api<{ log: LogEntry }>("/api/tools/logs", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err) {
+    console.warn("记录系统日志失败:", err);
+  }
+}
+
+const COURIER_BRAND: Record<string, { c: string; m: string; t?: string }> = {
+  sf: { c: "#111111", m: "SF" }, yto: { c: "#2b6cb0", m: "YTO" }, zto: { c: "#e4002b", m: "ZTO" }, sto: { c: "#0a7d3f", m: "STO" },
+  yunda: { c: "#2b3a8c", m: "YD" }, jd: { c: "#e1251b", m: "JD" }, ems: { c: "#007a33", m: "EMS" },
+  dhl: { c: "#ffcc00", m: "DHL", t: "#d40511" }, fedex: { c: "#4d148c", m: "FX" }, ups: { c: "#644117", m: "UPS" }, tt: { c: "#1a73e8", m: "17" }
+};
+function courierBadge(key: string): string {
+  const b = COURIER_BRAND[key] || { c: "#6b7280", m: (key || "?").toUpperCase().slice(0, 3) };
+  const label = COURIER_MAP[key]?.label || key || "—";
+  return `<span class="sh-courier-mark" style="--c:${b.c};--ct:${b.t || "#ffffff"}">${shIcon("truck")}<span>${escapeHtml(label)}</span></span>`;
+}
+
+function stepperNodesHtml(s: Shipment): string {
+  if (s.status === "exception") {
+    return `<span class="sh-step exception is-current"><span class="sh-step-ico">${shIcon("exception")}</span><span class="sh-step-label">${SHIPMENT_STATUS_LABEL.exception}</span></span>`;
+  }
+  const step = SHIP_STEPS.indexOf(s.status);
+  return SHIP_STEPS.map((st, i) => {
+    const cls = i < step ? "done" : i === step ? "current" : "todo";
+    return `<span class="sh-step ${cls}"><span class="sh-step-ico">${shIcon(st as ShipIconName)}</span><span class="sh-step-label">${SHIPMENT_STATUS_LABEL[st]}</span></span>`;
+  }).join("");
+}
+
+function formatLogTime(iso: string): { rel: string; abs: string } {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return { rel: "—", abs: iso };
+  const diff = Date.now() - d.getTime();
+  const min = Math.floor(diff / 60000);
+  let rel: string;
+  if (min < 1) rel = "刚刚";
+  else if (min < 60) rel = `${min} 分钟前`;
+  else if (min < 1440) rel = `${Math.floor(min / 60)} 小时前`;
+  else rel = `${Math.floor(min / 1440)} 天前`;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const abs = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return { rel, abs };
+}
+function isSameDay(iso: string): boolean {
+  const d = new Date(iso);
+  const n = new Date();
+  return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+}
+let logLevelFilterValue = "";
+let logCategoryFilterValue = "";
+let logSearchValue = "";
+
+async function loadLogs(): Promise<void> {
+  const board = qs<HTMLElement>("#logBoard");
+  if (board) board.innerHTML = `<div class="lg-empty"><div class="lg-empty-icon">…</div><p>加载中…</p></div>`;
+  try {
+    const params = new URLSearchParams();
+    if (logLevelFilterValue) params.set("level", logLevelFilterValue);
+    if (logCategoryFilterValue) params.set("category", logCategoryFilterValue);
+    if (logSearchValue) params.set("keyword", logSearchValue);
+    const result = await api<{ logs: LogEntry[] }>(`/api/tools/logs?${params.toString()}`);
+    state.logs = result.logs || [];
+    renderLogs();
+  } catch (err) {
+    if (board) board.innerHTML = `<div class="lg-empty"><div class="lg-empty-icon">!</div><p>日志加载失败：${err instanceof Error ? err.message : "未知错误"}</p></div>`;
+  }
+}
+
+function renderLogs(): void {
+  const board = qs<HTMLElement>("#logBoard");
+  const empty = qs<HTMLElement>("#logEmpty");
+  if (!board) return;
+  const all = state.logs.slice();
+  const set = (id: string, v: string | number) => { const el = qs<HTMLElement>(id); if (el) el.textContent = String(v); };
+  set("#logCount", all.length);
+  set("#logToday", all.filter((l) => isSameDay(l.createdAt)).length);
+  set("#logWarn", all.filter((l) => l.level === "warning").length);
+  set("#logErr", all.filter((l) => l.level === "error").length);
+  if (!all.length) {
+    board.innerHTML = "";
+    if (empty) empty.hidden = false;
+    return;
+  }
+  if (empty) empty.hidden = true;
+  board.innerHTML = all.map(logRowHtml).join("");
+}
+
+function logRowHtml(l: LogEntry): string {
+  const t = formatLogTime(l.createdAt);
+  return `
+  <article class="lg-row" data-log-id="${escapeHtml(l.id)}">
+    <div class="lg-time"><b>${t.rel}</b>${t.abs}</div>
+    <div class="lg-ico lg-lv-${l.level}">${LOG_LEVEL_ICON[l.level]}</div>
+    <div class="lg-cat">${LOG_CATEGORY_ICON[l.category]}<span>${LOG_CATEGORY_LABEL[l.category]}</span></div>
+    <div class="lg-main">
+      <div class="lg-msg">${escapeHtml(l.message)}</div>
+      <div class="lg-meta"><span class="lg-tag">${escapeHtml(l.action)}</span><span>${escapeHtml(LOG_LEVEL_LABEL[l.level])}</span></div>
+    </div>
+    <div class="lg-actor"><b>${escapeHtml(l.actorName || "系统")}</b><span>${escapeHtml(l.category)}</span></div>
+  </article>`;
+}
+
+function openLogDrawer(l: LogEntry): void {
+  const drawer = qs<HTMLElement>("#logDrawer");
+  const inner = qs<HTMLElement>("#logDrawerInner");
+  const scrim = qs<HTMLElement>("#logScrim");
+  if (!drawer || !inner) return;
+  const t = formatLogTime(l.createdAt);
+  const metaJson = l.meta && Object.keys(l.meta).length
+    ? `<div class="lg-drawer-sec"><h4>附加信息 (meta)</h4><pre class="lg-json">${escapeHtml(JSON.stringify(l.meta, null, 2))}</pre></div>`
+    : "";
+  inner.innerHTML = `
+    <button class="lg-drawer-close" id="logDrawerClose" type="button" aria-label="关闭">&times;</button>
+    <div class="lg-row-head">
+      <div class="lg-ico lg-lv-${l.level}">${LOG_LEVEL_ICON[l.level]}</div>
+      <div>
+        <div class="lg-cat">${LOG_CATEGORY_ICON[l.category]}<span>${LOG_CATEGORY_LABEL[l.category]} · ${LOG_LEVEL_LABEL[l.level]}</span></div>
+        <h2>${escapeHtml(l.message)}</h2>
+      </div>
+    </div>
+    <div class="lg-drawer-sec"><h4>概览</h4>
+      <dl class="lg-def">
+        <div><dt>动作</dt><dd class="lg-mono">${escapeHtml(l.action)}</dd></div>
+        <div><dt>等级</dt><dd>${escapeHtml(LOG_LEVEL_LABEL[l.level])}</dd></div>
+        <div><dt>分类</dt><dd>${escapeHtml(LOG_CATEGORY_LABEL[l.category])}</dd></div>
+        <div><dt>操作人</dt><dd>${escapeHtml(l.actorName || "系统")}</dd></div>
+        <div><dt>操作人ID</dt><dd class="lg-mono">${escapeHtml(l.actorId)}</dd></div>
+        <div><dt>记录ID</dt><dd class="lg-mono">${escapeHtml(l.id)}</dd></div>
+        <div><dt>时间</dt><dd class="lg-mono">${t.abs}</dd></div>
+      </dl>
+    </div>
+    ${metaJson}`;
+  drawer.classList.add("is-open");
+  drawer.setAttribute("aria-hidden", "false");
+  if (scrim) scrim.hidden = false;
+  qs<HTMLElement>("#logDrawerClose")?.addEventListener("click", closeLogDrawer);
+  scrim?.addEventListener("click", closeLogDrawer, { once: true });
+}
+
+function closeLogDrawer(): void {
+  const drawer = qs<HTMLElement>("#logDrawer");
+  const scrim = qs<HTMLElement>("#logScrim");
+  drawer?.classList.remove("is-open");
+  drawer?.setAttribute("aria-hidden", "true");
+  if (scrim) scrim.hidden = true;
+}
+
 function renderShipments() {
   const all = state.shipments.slice();
   state.selectedShipmentIds = state.selectedShipmentIds.filter((id) => all.some((s) => s.id === id));
   const search = (qs<HTMLInputElement>("#shipmentSearch")?.value || "").trim().toLowerCase();
-  const statusFilter = qs<HTMLSelectElement>("#shipmentStatusFilter")?.value || "";
 
   const filtered = all.filter((s) => {
-    if (statusFilter && s.status !== statusFilter) return false;
+    if (shipmentStatusFilterValue && s.status !== shipmentStatusFilterValue) return false;
     if (search) {
       const hay = `${s.shipmentNo} ${s.trackingCode} ${s.customerName} ${s.dealTitle} ${COURIER_MAP[s.courier]?.label || ""}`.toLowerCase();
       if (!hay.includes(search)) return false;
@@ -15718,39 +21911,32 @@ function renderShipments() {
     return true;
   });
 
-  const countEl = qs<HTMLElement>("#shipmentCount");
-  if (countEl) countEl.textContent = String(all.length);
-  const transitEl = qs<HTMLElement>("#shipmentInTransit");
-  if (transitEl) transitEl.textContent = String(all.filter((s) => s.status === "shipped" || s.status === "in_transit").length);
-  const deliveredEl = qs<HTMLElement>("#shipmentDelivered");
-  if (deliveredEl) deliveredEl.textContent = String(all.filter((s) => s.status === "delivered").length);
+  const chips = qs<HTMLElement>("#shipmentStatusChips");
+  if (chips) {
+    const order: ShipmentStatus[] = ["draft", "shipped", "in_transit", "delivered", "exception"];
+    const counts: Record<string, number> = { all: all.length };
+    order.forEach((st) => { counts[st] = all.filter((s) => s.status === st).length; });
+    chips.innerHTML = `<button class="sh-chip ${shipmentStatusFilterValue === "" ? "is-active" : ""}" data-status="">全部 <i>${counts.all}</i></button>` +
+      order.map((st) => `<button class="sh-chip sh-chip-${st} ${shipmentStatusFilterValue === st ? "is-active" : ""}" data-status="${st}">${shIcon(st as ShipIconName)}<span>${SHIPMENT_STATUS_LABEL[st]}</span> <i>${counts[st]}</i></button>`).join("");
+    chips.querySelectorAll<HTMLButtonElement>(".sh-chip").forEach((b) => {
+      b.addEventListener("click", () => { shipmentStatusFilterValue = b.dataset.status || ""; renderShipments(); });
+    });
+  }
 
-  const tbody = qs<HTMLElement>("#shipmentTableBody");
-  if (tbody) {
+  const setCount = (id: string, v: number) => { const el = qs<HTMLElement>(id); if (el) el.textContent = String(v); };
+  setCount("#shipmentCount", all.length);
+  setCount("#shipmentInTransit", all.filter((s) => s.status === "shipped" || s.status === "in_transit").length);
+  setCount("#shipmentDelivered", all.filter((s) => s.status === "delivered").length);
+  setCount("#shipmentException", all.filter((s) => s.status === "exception").length);
+
+  const board = qs<HTMLElement>("#shipmentBoard");
+  if (board) {
     if (filtered.length) {
-      tbody.innerHTML = filtered.map((s) => {
-        const courier = COURIER_MAP[s.courier];
-        const dealText = [s.dealTitle, s.customerName].filter(Boolean).join(" · ") || "—";
-        const canTrack = !!s.trackingCode && !!courier;
-        return `
-        <tr data-shipment-id="${escapeHtml(s.id)}">
-          <td class="col-check"><input type="checkbox" data-select-shipment ${state.selectedShipmentIds.includes(s.id) ? "checked" : ""} aria-label="选择 ${escapeHtml(s.shipmentNo || "发货单")}"></td>
-          <td><b>${escapeHtml(s.shipmentNo || "—")}</b></td>
-          <td>${escapeHtml(dealText)}</td>
-          <td>${courier ? `<span class="badge cat">${escapeHtml(courier.label)}</span>` : "—"}</td>
-          <td>${s.trackingCode ? `<code>${escapeHtml(s.trackingCode)}</code>` : "<span style=\"color:var(--muted)\">未填</span>"}</td>
-          <td><span class="ship-status ${s.status}">${SHIPMENT_STATUS_LABEL[s.status] || s.status}</span></td>
-          <td class="col-actions"><span class="row-actions">
-            <button class="btn btn-sm" data-shipment-edit="${escapeHtml(s.id)}">编辑</button>
-            <button class="btn btn-sm btn-ghost${canTrack ? " ship-track-btn" : ""}" data-shipment-track="${escapeHtml(s.id)}" ${canTrack ? "" : "disabled title=\"需先填写运单号与快递公司\""}>查询</button>
-            <button class="btn btn-sm btn-ghost" data-shipment-delete="${escapeHtml(s.id)}">删除</button>
-          </span></td>
-        </tr>`;
-      }).join("");
+      board.innerHTML = filtered.map((s) => shipmentRowHtml(s)).join("");
     } else if (all.length) {
-      tbody.innerHTML = `<tr><td colspan="7" class="empty-cell" style="text-align:center;color:var(--muted);padding:28px">未找到匹配的发货单</td></tr>`;
+      board.innerHTML = `<div class="sh-noresult">未找到匹配的发货单</div>`;
     } else {
-      tbody.innerHTML = "";
+      board.innerHTML = "";
     }
   }
 
@@ -15764,10 +21950,10 @@ function renderShipments() {
   }
   updateShipmentSelectionUI();
 
-  if (tbody) {
-    qsa<HTMLInputElement>("[data-select-shipment]", tbody).forEach((checkbox) => {
+  if (board) {
+    qsa<HTMLInputElement>("[data-select-shipment]", board).forEach((checkbox) => {
       checkbox.addEventListener("change", () => {
-        const id = checkbox.closest<HTMLElement>("tr")?.dataset.shipmentId || "";
+        const id = checkbox.closest<HTMLElement>("[data-shipment-id]")?.dataset.shipmentId || "";
         if (!id) return;
         state.selectedShipmentIds = checkbox.checked
           ? Array.from(new Set([...state.selectedShipmentIds, id]))
@@ -15784,6 +21970,176 @@ function renderShipments() {
 
   const empty = qs<HTMLElement>("#shipmentEmpty");
   if (empty) empty.hidden = all.length > 0;
+}
+
+function shipmentRowHtml(s: Shipment): string {
+  const courier = COURIER_MAP[s.courier];
+  const canTrack = !!s.trackingCode && !!courier;
+  const dealText = [s.dealTitle, s.customerName].filter(Boolean).join(" · ") || "—";
+  const stepper = stepperNodesHtml(s);
+  const eta = s.estimatedArrival ? shipmentCountdown(s.estimatedArrival) : "—";
+  const itemCount = (s.items || []).length;
+  return `
+  <article class="sh-row" data-shipment-id="${escapeHtml(s.id)}">
+    <label class="sh-check"><input type="checkbox" data-select-shipment ${state.selectedShipmentIds.includes(s.id) ? "checked" : ""} aria-label="选择 ${escapeHtml(s.shipmentNo || "发货单")}"><span></span></label>
+    <div class="sh-row-main">
+      <div class="sh-row-head">
+        <b class="sh-no">${escapeHtml(s.shipmentNo || "—")}</b>
+        <span class="sh-status sh-status-${s.status}">${shIcon(s.status as ShipIconName)}<span>${SHIPMENT_STATUS_LABEL[s.status] || s.status}</span></span>
+        <span class="sh-deal">${escapeHtml(dealText)}</span>
+      </div>
+      <div class="sh-stepper">${stepper}</div>
+      <div class="sh-row-meta">
+        ${courier ? courierBadge(s.courier) : ""}
+        ${s.trackingCode ? `<span class="sh-track">${escapeHtml(s.trackingCode)}</span>` : `<span class="sh-dim">未填运单号</span>`}
+        ${itemCount ? `<span class="sh-items">${shIcon("copy")}<span>${itemCount} 项货物</span></span>` : ""}
+        <span class="sh-eta">${shIcon("arrow")}<span>预计到达 ${eta}</span></span>
+      </div>
+    </div>
+    <div class="sh-row-actions">
+      <button class="sh-btn" data-shipment-edit="${escapeHtml(s.id)}" type="button">${shIcon("edit")}<span>编辑</span></button>
+      <button class="sh-btn ghost ${canTrack ? "sh-track-btn" : ""}" data-shipment-track="${escapeHtml(s.id)}" type="button" ${canTrack ? "" : "disabled title=\"需先填写运单号与快递公司\""}>${shIcon("track")}<span>同步</span></button>
+      <button class="sh-btn ghost" data-shipment-delete="${escapeHtml(s.id)}" type="button">${shIcon("trash")}<span>删除</span></button>
+    </div>
+  </article>`;
+}
+
+function shipmentCountdown(eta: string): string {
+  const d = new Date(eta);
+  if (isNaN(d.getTime())) return eta;
+  const diff = d.getTime() - Date.now();
+  if (diff <= 0) return "已到达";
+  const days = Math.ceil(diff / 86400000);
+  return days <= 0 ? "今天" : `${days} 天后`;
+}
+
+function advanceButtonsHtml(s: Shipment): string {
+  const nextMap: Record<string, ShipmentStatus> = { draft: "shipped", shipped: "in_transit", in_transit: "delivered" };
+  const labels: Record<string, string> = { shipped: "标记已发货", in_transit: "标记运输中", delivered: "标记已签收" };
+  const btns: string[] = [];
+  const next = nextMap[s.status];
+  if (next) btns.push(`<button class="sh-advance-btn" data-advance="${next}" type="button">${shIcon(next as ShipIconName)}<span>${labels[next]}</span></button>`);
+  if (s.status !== "exception") btns.push(`<button class="sh-advance-btn danger" data-advance="exception" type="button">${shIcon("exception")}<span>标记异常</span></button>`);
+  if (s.status === "exception") btns.push(`<button class="sh-advance-btn" data-advance="in_transit" type="button">${shIcon("in_transit")}<span>恢复运输中</span></button>`);
+  return btns.join("");
+}
+
+function statusSourceBadge(s: Shipment): string {
+  if (s.statusSource === "carrier") return `<span class="sh-src-badge sh-src-carrier">官网同步</span>`;
+  if (s.status === "draft") return `<span class="sh-src-badge">手动录入</span>`;
+  return `<span class="sh-src-badge">手动状态</span>`;
+}
+
+function trackingTimelineHtml(s: Shipment): string {
+  const events = s.trackingEvents || [];
+  if (!events.length) {
+    const hint = s.trackingCode ? "，点「同步物流」拉取最新动态" : "，请先录入运单号";
+    return `<div class="sh-drawer-sec"><h4>物流轨迹</h4><p class="pc-desc sh-dim">暂无官网轨迹${hint}。</p></div>`;
+  }
+  const items = [...events]
+    .sort((a, b) => (a.time < b.time ? 1 : -1))
+    .map((e) => `
+      <li class="sh-tl-item sh-tl-${e.status}">
+        <span class="sh-tl-dot"></span>
+        <div class="sh-tl-body">
+          <p class="sh-tl-desc">${escapeHtml(e.description)}</p>
+          <p class="sh-tl-meta"><span>${escapeHtml(e.location)}</span><span>${formatSyncTime(e.time)}</span></p>
+        </div>
+      </li>`).join("");
+  const last = formatSyncTime(s.lastSyncedAt);
+  return `<div class="sh-drawer-sec"><h4>物流轨迹 <span class="sh-tl-src">· 官网同步 ${last}</span></h4><ul class="sh-timeline">${items}</ul></div>`;
+}
+
+function openShipmentDrawer(s: Shipment) {
+  const drawer = qs<HTMLElement>("#shipmentDrawer");
+  const inner = qs<HTMLElement>("#shipmentDrawerInner");
+  const scrim = qs<HTMLElement>("#shipmentScrim");
+  if (!drawer || !inner) return;
+  const courier = COURIER_MAP[s.courier];
+  const canTrack = !!s.trackingCode && !!courier;
+  const stepper = stepperNodesHtml(s);
+  const items = (s.items || []).map((it) => `<tr><td>${escapeHtml(it.productName || "—")}</td><td>${escapeHtml(it.model || "—")}</td><td>${escapeHtml(it.hsCode || "—")}</td><td>${it.quantity || 0} ${escapeHtml(it.unit || "")}</td><td>${it.netWeight || 0}/${it.grossWeight || 0}kg</td></tr>`).join("") || `<tr><td colspan="5" class="sh-dim">无货物明细</td></tr>`;
+  inner.innerHTML = `
+    <header class="sh-drawer-head">
+      <div>
+        <p class="sh-drawer-eyebrow">发货单详情</p>
+        <h2>${escapeHtml(s.shipmentNo || "发货单")}</h2>
+        <span class="sh-status sh-status-${s.status}">${shIcon(s.status as ShipIconName)}<span>${SHIPMENT_STATUS_LABEL[s.status] || s.status}</span></span>
+        ${statusSourceBadge(s)}
+      </div>
+      <button class="sh-drawer-close" id="shipmentDrawerClose" type="button" aria-label="关闭">&times;</button>
+    </header>
+    <div class="sh-drawer-body">
+      <div class="sh-stepper sh-stepper-lg">${stepper}</div>
+      <dl class="sh-def">
+        <div><dt>关联商机</dt><dd>${escapeHtml(s.dealTitle || "—")}</dd></div>
+        <div><dt>客户</dt><dd>${escapeHtml(s.customerName || "—")}</dd></div>
+        <div><dt>目的国家</dt><dd>${escapeHtml(s.destinationCountry || "—")}</dd></div>
+        <div><dt>目的港</dt><dd>${escapeHtml(s.destinationPort || "—")}</dd></div>
+        <div><dt>快递公司</dt><dd>${courier ? courierBadge(s.courier) : "—"}</dd></div>
+        <div><dt>运单号</dt><dd class="pc-mono">${escapeHtml(s.trackingCode || "—")}</dd></div>
+        <div><dt>发货日期</dt><dd>${formatShipmentDate(s.shippedAt)}</dd></div>
+        <div><dt>预计到达</dt><dd>${formatShipmentDate(s.estimatedArrival)}</dd></div>
+      </dl>
+      ${s.destinationAddress ? `<div class="sh-drawer-sec"><h4>收货地址</h4><p class="pc-desc">${escapeHtml(s.destinationAddress)}</p></div>` : ""}
+      ${s.trackingImageUrl ? `<div class="sh-drawer-sec"><h4>运单图片</h4><img class="sh-track-img" src="${s.trackingImageUrl.startsWith("http") ? s.trackingImageUrl : location.origin + s.trackingImageUrl}" alt="运单号图片"></div>` : ""}
+      <div class="sh-drawer-sec"><h4>货物明细</h4>
+        <table class="sh-items-table"><thead><tr><th>品名</th><th>型号</th><th>HS</th><th>数量</th><th>净重/毛重</th></tr></thead><tbody>${items}</tbody></table>
+      </div>
+      ${trackingTimelineHtml(s)}
+      ${s.note ? `<div class="sh-drawer-sec"><h4>备注</h4><p class="pc-desc">${escapeHtml(s.note)}</p></div>` : ""}
+    </div>
+    <footer class="sh-drawer-foot">
+      <div class="sh-advance">${advanceButtonsHtml(s)}</div>
+      <span class="sh-foot-spacer"></span>
+      ${courier && s.trackingCode ? `<button class="btn" id="shipmentDrawerSite" type="button">${shIcon("track")}<span>官网查询</span></button>` : ""}
+      ${s.trackingCode ? `<button class="btn btn-primary" id="shipmentDrawerTrack" type="button">${shIcon("refresh")}<span>同步物流</span></button>` : `<button class="btn btn-primary" id="shipmentDrawerTrack" type="button" disabled title="需先填写运单号">${shIcon("refresh")}<span>同步物流</span></button>`}
+      <button class="btn" id="shipmentDrawerLoad" type="button" title="将本单货物清单载入装箱计算">${shIcon("shipped")}<span>计算装柜</span></button>
+      <button class="btn" id="shipmentDrawerEdit" type="button">${shIcon("edit")}<span>编辑</span></button>
+    </footer>`;
+  drawer.classList.add("is-open");
+  drawer.setAttribute("aria-hidden", "false");
+  if (scrim) scrim.hidden = false;
+  qs<HTMLElement>("#shipmentDrawerClose")?.addEventListener("click", closeShipmentDrawer);
+  qs<HTMLElement>("#shipmentDrawerEdit")?.addEventListener("click", () => { closeShipmentDrawer(); openShipmentModal(s); });
+  qs<HTMLElement>("#shipmentDrawerTrack")?.addEventListener("click", () => void syncShipmentNow(s));
+  qs<HTMLElement>("#shipmentDrawerSite")?.addEventListener("click", () => openCarrierSite(s));
+  qs<HTMLElement>("#shipmentDrawerLoad")?.addEventListener("click", () => { closeShipmentDrawer(); void openContainerLoadForShipment(s); });
+  inner.querySelectorAll<HTMLButtonElement>("[data-advance]").forEach((b) => {
+    b.addEventListener("click", () => { const st = b.dataset.advance as ShipmentStatus; void updateShipmentStatus(s.id, st); });
+  });
+  scrim?.addEventListener("click", closeShipmentDrawer, { once: true });
+}
+
+function closeShipmentDrawer() {
+  const drawer = qs<HTMLElement>("#shipmentDrawer");
+  const scrim = qs<HTMLElement>("#shipmentScrim");
+  if (drawer) { drawer.classList.remove("is-open"); drawer.setAttribute("aria-hidden", "true"); }
+  if (scrim) scrim.hidden = true;
+}
+
+async function updateShipmentStatus(id: string, status: ShipmentStatus) {
+  const s = state.shipments.find((x) => x.id === id);
+  if (!s) return;
+  const payload = { ...s, id, status };
+  try {
+    const result = await api<{ shipment: Shipment; shipments: Shipment[] }>("/api/tools/shipments", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.shipments = result.shipments || state.shipments;
+    renderShipments();
+    const cur = state.shipments.find((x) => x.id === id);
+    if (cur && qs<HTMLElement>("#shipmentDrawer")?.classList.contains("is-open")) openShipmentDrawer(cur);
+    toast("状态已更新", "ok");
+    void recordLog({
+      level: "success", category: "shipment", action: "change_status",
+      message: `发货单「${s.shipmentNo || s.dealTitle}」状态变更为「${SHIPMENT_STATUS_LABEL[status]}」`,
+      meta: { id: s.id, status }
+    });
+  } catch (err) {
+    toast(err instanceof Error ? err.message : "更新失败", "error");
+  }
 }
 
 function updateShipmentSelectionUI() {
@@ -15879,6 +22235,43 @@ async function searchDeals(keyword: string) {
   }
 }
 
+function shipmentDestinationDefaults(dealId: string, customerName: string) {
+  const deal = dealId ? state.deals.find((item) => item.id === dealId) : undefined;
+  const customer = state.customers.find((item) =>
+    (deal?.customerId && item.id === deal.customerId)
+    || (customerName && item.company.trim().toLocaleLowerCase() === customerName.trim().toLocaleLowerCase())
+  );
+  const documents = Array.from(new Map(
+    [...(state.tradeDocuments || []), ...(state.globalRouteDocuments || [])].map((document) => [document.id, document])
+  ).values());
+  const related = documents.filter((document) =>
+    (dealId && document.dealId === dealId)
+    || (customer?.id && document.customerId === customer.id)
+    || (customerName && document.buyer.trim().toLocaleLowerCase() === customerName.trim().toLocaleLowerCase())
+  ).sort((left, right) => {
+    const priorities: Partial<Record<TradeDocument["type"], number>> = { SHIPPING: 0, PL: 1, CI: 2, CUSTOMS: 3 };
+    const priority = (document: TradeDocument) => priorities[document.type] ?? 9;
+    return priority(left) - priority(right) || (right.updatedAt || "").localeCompare(left.updatedAt || "");
+  });
+  const document = related.find((item) => item.portDischarge || item.buyerAddress);
+  return {
+    country: customer?.country === "未知" ? "" : customer?.country || "",
+    port: document?.portDischarge || customer?.defaultPortDischarge || "",
+    address: document?.buyerAddress || customer?.billingAddress || ""
+  };
+}
+
+function fillShipmentDestinationDefaults(dealId: string, customerName: string, overwrite = false) {
+  const defaults = shipmentDestinationDefaults(dealId, customerName);
+  const set = (selector: string, value: string) => {
+    const input = qs<HTMLInputElement | HTMLTextAreaElement>(selector);
+    if (input && value && (overwrite || !input.value.trim())) input.value = value;
+  };
+  set("#shipmentDestinationCountry", defaults.country);
+  set("#shipmentDestinationPort", defaults.port);
+  set("#shipmentDestinationAddress", defaults.address);
+}
+
 function selectDeal(id: string, title: string) {
   const idEl = qs<HTMLInputElement>("#shipmentDealId");
   const titleEl = qs<HTMLInputElement>("#shipmentDealSearch");
@@ -15893,6 +22286,7 @@ function selectDeal(id: string, title: string) {
     const customer = state.customers?.find((c) => c.id === deal.customerId);
     if (customer) customerEl.value = customer.company || "";
   }
+  fillShipmentDestinationDefaults(id, customerEl?.value || "", true);
   const results = qs<HTMLElement>("#shipmentDealResults");
   if (results) results.hidden = true;
 }
@@ -15918,6 +22312,10 @@ function openShipmentModal(shipment?: Shipment) {
   if (dealSearchEl) dealSearchEl.value = shipment?.dealTitle || "";
   if (customerEl) customerEl.value = shipment?.customerName || "";
   if (hint) { hint.textContent = shipment?.dealTitle ? `已关联：${shipment.dealTitle}` : "未选择"; hint.style.color = "var(--muted)"; }
+  const destinationDefaults = shipmentDestinationDefaults(shipment?.dealId || "", shipment?.customerName || "");
+  set("#shipmentDestinationCountry", shipment?.destinationCountry || destinationDefaults.country);
+  set("#shipmentDestinationPort", shipment?.destinationPort || destinationDefaults.port);
+  set("#shipmentDestinationAddress", shipment?.destinationAddress || destinationDefaults.address);
 
   pendingTrackingImage = "";
   pendingTrackingImageUrl = shipment?.trackingImageUrl || "";
@@ -15987,6 +22385,11 @@ async function runShipmentOcr() {
 }
 
 function trackShipment(shipment: Shipment) {
+  openCarrierSite(shipment);
+}
+
+/** 打开承运商官网查询页（保留原「查询」能力，作为二次核对入口） */
+function openCarrierSite(shipment: Shipment) {
   const courier = COURIER_MAP[shipment.courier];
   if (!courier || !shipment.trackingCode) {
     toast("请先填写快递公司与运单号", "error");
@@ -15995,7 +22398,81 @@ function trackShipment(shipment: Shipment) {
   void copyToClipboard(shipment.trackingCode);
   const url = courier.url.replace("{code}", encodeURIComponent(shipment.trackingCode));
   window.open(url, "_blank");
-  toast(`已复制运单号并打开${courier.label}查询页`, "ok");
+  toast(`已复制运单号并打开${courier.label}官网查询页`, "ok");
+}
+
+/** 单条同步：以承运商官网轨迹为准，回写状态与轨迹节点 */
+async function syncShipmentNow(shipment: Shipment) {
+  if (!shipment.trackingCode) {
+    toast("该单未录入运单号，无法同步官网", "error");
+    return;
+  }
+  if (shipment.status === "draft") {
+    toast("草稿状态无需同步，交运并录入运单号后即可同步", "info");
+    return;
+  }
+  try {
+    const result = await api<{ shipment: Shipment; shipments: Shipment[]; synced: boolean; reason?: string }>(
+      `/api/tools/shipments/${encodeURIComponent(shipment.id)}/sync`,
+      { method: "POST", body: "{}" }
+    );
+    state.shipments = result.shipments || state.shipments;
+    renderShipments();
+    const cur = state.shipments.find((x) => x.id === shipment.id);
+    if (cur && qs<HTMLElement>("#shipmentDrawer")?.classList.contains("is-open")) openShipmentDrawer(cur);
+    if (result.synced) {
+      const ev = (cur?.trackingEvents || []).length;
+      toast(`已同步官网轨迹：${SHIPMENT_STATUS_LABEL[cur?.status || "draft"]}（${ev} 个轨迹节点）`, "ok");
+      void recordLog({
+        level: "success", category: "shipment", action: "sync_tracking",
+        message: `发货单「${cur?.shipmentNo || cur?.dealTitle}」已按承运商官网同步，状态「${SHIPMENT_STATUS_LABEL[cur?.status || "draft"]}」`,
+        meta: { id: cur?.id, status: cur?.status }
+      });
+    } else {
+      toast(result.reason || "无需同步", "info");
+    }
+  } catch (err) {
+    toast(err instanceof Error ? err.message : "同步失败", "error");
+  }
+}
+
+/** 批量同步当前用户在途发货单（视图打开时自动调用） */
+async function syncAllShipments() {
+  try {
+    const result = await api<{ updated: number; total: number; shipments: Shipment[] }>(
+      "/api/tools/shipments/sync-all",
+      { method: "POST", body: "{}" }
+    );
+    if (result.shipments && result.shipments.length) state.shipments = result.shipments;
+    const active = qs<HTMLElement>(".view.active")?.id;
+    if (active === "shipments") renderShipments();
+    if (active === "global-map") renderGlobalMap();
+    if (result.updated > 0) {
+      toast(`已同步 ${result.updated} 张在途发货单的官网轨迹`, "ok");
+    }
+  } catch (err) {
+    // 同步失败不应阻断页面；静默
+    console.warn("syncAllShipments failed:", err);
+  }
+}
+
+async function syncGlobalRouteDocuments(): Promise<void> {
+  try {
+    const result = await api<TradeDocumentHistoryResponse>("/api/trade-documents/history?page=1&pageSize=50");
+    state.globalRouteDocuments = result.documents || [];
+    if (qs<HTMLElement>("#global-map.active")) renderGlobalMap();
+  } catch (err) {
+    // 历史单据读取失败时仍保留发货记录路线，不能阻断地图使用。
+    console.warn("syncGlobalRouteDocuments failed:", err);
+  }
+}
+
+function formatSyncTime(iso?: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 async function saveShipment() {
@@ -16013,6 +22490,9 @@ async function saveShipment() {
     dealId,
     dealTitle,
     customerName,
+    destinationCountry: get("#shipmentDestinationCountry"),
+    destinationPort: get("#shipmentDestinationPort"),
+    destinationAddress: get("#shipmentDestinationAddress"),
     courier: get("#shipmentCourier"),
     trackingCode,
     trackingImageUrl: pendingTrackingImageUrl,
@@ -16034,6 +22514,11 @@ async function saveShipment() {
     closeShipmentModal();
     renderShipments();
     toast(wasEditing ? "已更新发货单" : "已新增发货单", "ok");
+    void recordLog({
+      level: "success", category: "shipment", action: wasEditing ? "update_shipment" : "create_shipment",
+      message: `${wasEditing ? "更新" : "新增"}发货单「${payload.shipmentNo || payload.dealTitle}」`,
+      meta: { id: result.shipment?.id, shipmentNo: payload.shipmentNo, status: payload.status }
+    });
   } catch (err) {
     toast(err instanceof Error ? err.message : "保存失败", "error");
   } finally {
@@ -16043,13 +22528,19 @@ async function saveShipment() {
 
 async function deleteShipment(id: string) {
   const shipment = state.shipments.find((s) => s.id === id);
-  if (!confirm(`确认删除发货单「${shipment?.shipmentNo || shipment?.dealTitle || "未命名"}」？此操作不可撤销。`)) return;
+  if (!await confirmAction({
+    title: "删除发货单",
+    message: `将删除发货单「${shipment?.shipmentNo || shipment?.dealTitle || "未命名"}」。`,
+    consequences: ["发货状态和物流记录会被移除", "此操作无法撤销"],
+    confirmLabel: "删除发货单"
+  })) return;
   try {
     const result = await api<{ shipments: Shipment[] }>(`/api/tools/shipments/${encodeURIComponent(id)}`, { method: "DELETE" });
     state.shipments = result.shipments || state.shipments.filter((s) => s.id !== id);
     closeShipmentModal();
     renderShipments();
     toast("已删除发货单", "ok");
+    void recordLog({ level: "warning", category: "shipment", action: "delete_shipment", message: `删除发货单「${shipment?.shipmentNo || shipment?.dealTitle || "未命名"}」`, meta: { id } });
   } catch (err) {
     toast(err instanceof Error ? err.message : "删除失败", "error");
   }
@@ -16062,10 +22553,17 @@ async function bulkDeleteShipments() {
     return;
   }
   const names = state.shipments.filter((s) => ids.includes(s.id)).map((s) => s.shipmentNo || s.dealTitle);
-  if (!window.confirm(`确认删除 ${ids.length} 张发货单？\n${names.slice(0, 6).join("、")}${names.length > 6 ? "等" : ""}\n此操作不可撤销。`)) return;
+  if (!await confirmAction({
+    title: `批量删除 ${ids.length} 张发货单`,
+    message: "发货单及其物流记录将被永久移除。",
+    detail: `${names.slice(0, 6).join("、")}${names.length > 6 ? `等 ${ids.length} 张` : ""}`,
+    consequences: ["选中的发货状态与物流信息会被删除", "此操作无法撤销"],
+    confirmLabel: `删除 ${ids.length} 张发货单`,
+    verificationText: String(ids.length)
+  })) return;
   const button = qs<HTMLButtonElement>("#shipmentBulkDelete");
   try {
-    if (button) { button.disabled = true; button.textContent = "删除中…"; }
+    setButtonPending(button, true, "删除", `正在删除 ${ids.length} 张`);
     let shipments = state.shipments;
     for (const id of ids) {
       const result = await api<{ shipments: Shipment[] }>(`/api/tools/shipments/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -16078,7 +22576,8 @@ async function bulkDeleteShipments() {
   } catch (err) {
     toast(err instanceof Error ? err.message : "批量删除失败", "error");
   } finally {
-    if (button) { button.disabled = state.selectedShipmentIds.length === 0; button.textContent = "删除"; }
+    setButtonPending(button, false, "删除", "删除中");
+    if (button) button.disabled = state.selectedShipmentIds.length === 0;
   }
 }
 
@@ -16155,7 +22654,7 @@ function leadFinderDuplicateState(item: WebsiteOpportunity) {
   const domain = websiteDomain(item.website);
   const duplicatedCustomer = state.customers.find((customer) => {
     const sameCompany = customer.company.trim().toLowerCase() === item.company.trim().toLowerCase();
-    const docText = `${customer.billingName || ""} ${customer.documentContact || ""}`.toLowerCase();
+    const docText = `${customerDocumentName(customer)} ${customer.documentContact || ""}`.toLowerCase();
     return sameCompany || (domain && docText.includes(domain));
   });
   if (item.customerId || duplicatedCustomer) return { text: "已有客户", tone: "amber" };
@@ -16167,10 +22666,10 @@ function leadFinderFilteredRows(opportunities: WebsiteOpportunity[]) {
   return opportunities.filter((item) => {
     const duplicate = leadFinderDuplicateState(item);
     const score = leadFinderScore(item);
-    if (state.leadFinderFilter === "pending") return item.status !== "synced";
+    if (state.leadFinderFilter === "pending") return !item.shortlistedAt;
     if (state.leadFinderFilter === "high") return score >= 76;
     if (state.leadFinderFilter === "duplicate") return duplicate.text === "已有客户";
-    if (state.leadFinderFilter === "synced") return item.status === "synced";
+    if (state.leadFinderFilter === "shortlisted") return Boolean(item.shortlistedAt);
     return true;
   });
 }
@@ -16376,7 +22875,7 @@ function prospectStatusMeta(item: WebsiteOpportunity) {
 }
 
 function prospectJoinedTime(item: WebsiteOpportunity) {
-  const value = new Date(item.createdAt).getTime();
+  const value = new Date(item.shortlistedAt || item.createdAt).getTime();
   return Number.isFinite(value) ? value : null;
 }
 
@@ -16426,7 +22925,9 @@ function prospectFilteredRows() {
     synced: 3,
     excluded: 4
   };
-  return [...state.websiteOpportunities]
+  return state.websiteOpportunities
+    .filter((item) => Boolean(item.shortlistedAt))
+    .slice()
     .filter((item) => {
       const haystack = `${item.company} ${item.business} ${item.country} ${item.website} ${item.contact} ${item.contactInfo} ${item.description}`.toLowerCase();
       if (keyword && !haystack.includes(keyword)) return false;
@@ -16460,8 +22961,12 @@ function prospectFilteredRows() {
 }
 
 function selectedProspect() {
-  return state.websiteOpportunities.find((item) => item.id === state.selectedProspectId) || null;
+  return state.websiteOpportunities.find((item) =>
+    item.id === state.selectedProspectId && Boolean(item.shortlistedAt)
+  ) || null;
 }
+
+let prospectTechnicalAuditOpenId = "";
 
 function closeProspectMobileDetail() {
   prospectMobileDetailOpen = false;
@@ -16601,10 +23106,19 @@ function qualificationStep(
   return `<div class="prospect-qualification-step ${tone}"><span></span><div><b>${escapeHtml(label)}</b><small>${escapeHtml(stateText)}</small></div></div>`;
 }
 
+function qualificationSummaryItem(
+  label: string,
+  value: string,
+  detail: string,
+  tone: "passed" | "current" | "pending"
+) {
+  return `<div class="prospect-qualification-summary-item ${tone}"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b><small>${escapeHtml(detail)}</small></div>`;
+}
+
 function renderProspectQualificationPanel(item: WebsiteOpportunity) {
   const view = state.prospectQualifications[item.id];
   if (!view) {
-    return `<section class="prospect-qualification-panel"><div class="prospect-qualification-head"><div><b>正式资格审查</b><small>正在读取持久化资格事实</small></div>${badge("读取中", "gray")}</div></section>`;
+    return `<section class="prospect-qualification-panel" id="prospectQualificationPanel"><div class="prospect-qualification-head"><div><b>客户资格审核</b><small>正在读取持久化审核状态</small></div>${badge("读取中", "gray")}</div></section>`;
   }
   const qualification = view.qualification;
   const company = qualification?.companyVerification;
@@ -16638,33 +23152,127 @@ function renderProspectQualificationPanel(item: WebsiteOpportunity) {
     passed ? "passed" as const
       : view.nextStep === key ? "current" as const
         : view.blockers.length ? "blocked" as const : "pending" as const;
+  const nextStepLabels: Record<ProspectQualificationViewApi["nextStep"], string> = {
+    resolve_identity: "确认公司",
+    resolve_campaign: "补充搜索条件",
+    verify_company: "确认公司状态",
+    assess_icp: "确认客户匹配",
+    approve_icp: "确认匹配结果",
+    verify_channel: "确认联系方式",
+    evaluate_contactability: "检查联系条件",
+    approve_contactability: "允许跟进",
+    ready: "开始跟进"
+  };
+  const nextStepDescriptions: Record<ProspectQualificationViewApi["nextStep"], string> = {
+    resolve_identity: "确认公司名称与公开登记主体一致。",
+    resolve_campaign: "该候选缺少本次搜索目标，请先补充搜索条件。",
+    verify_company: "确认公司仍在正常经营，官网与登记信息一致。",
+    assess_icp: "判断该公司是否符合你的目标客户画像。",
+    approve_icp: "系统已形成匹配结果，请确认是否值得跟进。",
+    verify_channel: "核对邮箱、电话或官网表单来自公开可信来源。",
+    evaluate_contactability: "系统将自动检查退订、失效和重复联系风险。",
+    approve_contactability: "检查已完成，确认后即可转线索或发送开发信。",
+    ready: "检查已完成，可以转为线索或直接发送开发信。"
+  };
+  const nextStepReady = view.nextStep === "ready";
+  const companyReady = Boolean(identityResolved && companyPassed);
+  const currentGroup = ["resolve_identity", "verify_company"].includes(view.nextStep)
+    ? "company"
+    : ["assess_icp", "approve_icp"].includes(view.nextStep)
+      ? "fit"
+      : ["verify_channel", "evaluate_contactability", "approve_contactability"].includes(view.nextStep)
+        ? "contact"
+        : "";
   return `
-    <section class="prospect-qualification-panel">
+    <section class="prospect-qualification-panel" id="prospectQualificationPanel" data-next-step="${escapeHtml(view.nextStep)}">
       <div class="prospect-qualification-head">
-        <div><b>正式资格审查</b><small>${escapeHtml(view.campaign ? `${view.campaign.campaignName} · v${view.campaign.campaignVersion}` : "等待项目上下文")}</small></div>
-        ${badge(view.vqaQualified ? "VQA 已通过" : "VQA 未通过", view.vqaQualified ? "green" : "amber")}
+        <div><b>跟进前检查</b><small>系统保留审核依据，你只处理当前缺失项</small></div>
+        ${badge(nextStepReady ? "可以跟进" : "还需确认", nextStepReady ? "green" : "amber")}
       </div>
-      <div class="prospect-qualification-steps">
-        ${qualificationStep("1. 企业核验", !view.stageCurrency.company ? "企业资料已变化，需重新核验" : companyPassed ? `已核验，有效至 ${formatTime(company!.validUntil)}` : company ? qualificationReasonLabel(company.reasonCodes[0] || company.status) : "等待权威登记证据", stepTone(Boolean(companyPassed), "verify_company"))}
-        ${qualificationStep("2. ICP 评估", !view.stageCurrency.icp ? "ICP 输入已变化，需重新评估" : icpPassed ? `已批准 · ${assessment!.totalScore} 分` : assessment ? `${assessment.totalScore} 分 · ${assessment.reviewStatus === "pending_review" ? "等待批准" : assessment.result}` : "等待证据与维度评分", stepTone(Boolean(icpPassed), assessment ? "approve_icp" : "assess_icp"))}
-        ${qualificationStep("3. 渠道核验", !view.stageCurrency.channel ? "渠道资料已变化，需重新核验" : channelPassed ? `已验证 · ${verification!.providerCode}` : verification ? qualificationReasonLabel(`CONTACT_${verification.status.toUpperCase()}`) : "等待来源和有效期", stepTone(Boolean(channelPassed), "verify_channel"))}
-        ${qualificationStep("4. 可联系门禁", !view.stageCurrency.contactability ? "最终批准已失效，需重新评估" : contactabilityPassed ? `人工批准于 ${formatTime(view.approvedDecision!.approvedAt)}` : decision ? `${decision.status} · ${currentReasons.join("；") || "等待人工批准"}` : "等待系统评估", stepTone(contactabilityPassed, decision?.status === "eligible" ? "approve_contactability" : "evaluate_contactability"))}
+      <div class="prospect-qualification-summary">
+        ${qualificationSummaryItem("公司可信", companyReady ? "已确认" : currentGroup === "company" ? "现在确认" : "等待确认", companyReady ? "企业主体与经营状态有效" : "名称、官网和登记主体", companyReady ? "passed" : currentGroup === "company" ? "current" : "pending")}
+        ${qualificationSummaryItem("客户匹配", icpPassed ? "已确认" : currentGroup === "fit" ? "现在确认" : "等待确认", icpPassed ? `匹配评分 ${assessment!.totalScore} 分` : "产品、市场和客户类型", icpPassed ? "passed" : currentGroup === "fit" ? "current" : "pending")}
+        ${qualificationSummaryItem("联系方式", contactabilityPassed ? "允许联系" : channelPassed ? "已核对" : currentGroup === "contact" ? "现在确认" : "等待确认", contactabilityPassed && view.approvedChannel ? `${view.approvedChannel.channelType} · ${view.approvedChannel.value}` : "来源、有效性和退订风险", contactabilityPassed || channelPassed ? "passed" : currentGroup === "contact" ? "current" : "pending")}
       </div>
-      ${staleMessages.length ? `<div class="prospect-qualification-feedback is-blocked"><b>资料变更</b><span>${escapeHtml(staleMessages.join("；"))}</span></div>` : blockerText.length ? `<div class="prospect-qualification-feedback is-blocked"><b>当前阻断</b><span>${escapeHtml(blockerText.join("；"))}</span></div>` : currentReasons.length && !contactabilityPassed ? `<div class="prospect-qualification-feedback"><b>评估反馈</b><span>${escapeHtml(currentReasons.join("；"))}</span></div>` : ""}
-      ${view.approvedChannel ? `<div class="prospect-approved-channel"><span>已批准通道</span><b>${escapeHtml(view.approvedChannel.channelType)} · ${escapeHtml(view.approvedChannel.value)}</b></div>` : ""}
-      ${canWrite ? `<div class="prospect-qualification-actions">
-        ${identityResolved
-          ? `<button class="btn" type="button" id="prospectVerifyCompanyButton">${company ? "重新核验企业" : "核验企业"}</button>`
-          : `<button class="btn primary" type="button" id="prospectResolveIdentityButton">用权威 API 补充身份</button>`}
-        <button class="btn" type="button" id="prospectAssessIcpButton" ${companyPassed ? "" : "disabled"}>${assessment ? "重新评估 ICP" : "评估 ICP"}</button>
-        ${view.stageCurrency.icp && assessment?.result === "qualified" && assessment.reviewStatus === "pending_review" ? `<button class="btn primary" type="button" id="prospectApproveIcpButton">批准 ICP</button>` : ""}
-        <button class="btn" type="button" id="prospectVerifyChannelButton" ${icpPassed ? "" : "disabled"}>${verification ? "重新核验渠道" : "核验渠道"}</button>
-        ${channelPassed && !view.approvedDecision ? `<button class="btn" type="button" id="prospectEvaluateContactabilityButton">执行门禁评估</button>` : ""}
-        ${decision?.status === "eligible" ? `<button class="btn primary" type="button" id="prospectApproveContactabilityButton">批准可联系</button>` : ""}
-        <button class="btn danger" type="button" id="prospectSuppressButton">禁止联系</button>
-      </div>` : ""}
+      <div class="prospect-qualification-next ${nextStepReady ? "is-ready" : ""}">
+        <div><span>${nextStepReady ? "当前状态" : "现在只需"}</span><b>${escapeHtml(nextStepReady ? "可以开始跟进" : nextStepLabels[view.nextStep])}</b><small>${escapeHtml(nextStepDescriptions[view.nextStep])}</small></div>
+        ${view.nextStep === "resolve_campaign" ? "" : `<button class="btn primary" type="button" id="prospectQualificationPrimaryButton" data-qualification-step="${escapeHtml(view.nextStep)}">${escapeHtml(nextStepReady ? "开始跟进" : nextStepLabels[view.nextStep])}</button>`}
+      </div>
+      <details class="prospect-qualification-advanced">
+        <summary><span>审核依据与高级操作</span><small>${escapeHtml(view.campaign ? view.campaign.campaignName : "搜索条件待补充")}</small></summary>
+        <div class="prospect-qualification-steps">
+          ${qualificationStep("企业状态", !view.stageCurrency.company ? "资料变化，需重新确认" : companyPassed ? `有效至 ${formatTime(company!.validUntil)}` : company ? qualificationReasonLabel(company.reasonCodes[0] || company.status) : "等待登记依据", stepTone(Boolean(companyPassed), "verify_company"))}
+          ${qualificationStep("客户匹配", !view.stageCurrency.icp ? "资料变化，需重新判断" : icpPassed ? `已确认 · ${assessment!.totalScore} 分` : assessment ? `${assessment.totalScore} 分 · ${assessment.reviewStatus === "pending_review" ? "等待确认" : assessment.result}` : "等待匹配判断", stepTone(Boolean(icpPassed), assessment ? "approve_icp" : "assess_icp"))}
+          ${qualificationStep("联系渠道", !view.stageCurrency.channel ? "资料变化，需重新核对" : channelPassed ? `已核对 · ${verification!.providerCode}` : verification ? qualificationReasonLabel(`CONTACT_${verification.status.toUpperCase()}`) : "等待来源核对", stepTone(Boolean(channelPassed), "verify_channel"))}
+          ${qualificationStep("联系许可", !view.stageCurrency.contactability ? "需重新检查" : contactabilityPassed ? `已批准于 ${formatTime(view.approvedDecision!.approvedAt)}` : decision ? `${decision.status} · ${currentReasons.join("；") || "等待确认"}` : "等待系统检查", stepTone(contactabilityPassed, decision?.status === "eligible" ? "approve_contactability" : "evaluate_contactability"))}
+        </div>
+        ${staleMessages.length ? `<div class="prospect-qualification-feedback is-blocked"><b>资料变更</b><span>${escapeHtml(staleMessages.join("；"))}</span></div>` : blockerText.length ? `<div class="prospect-qualification-feedback is-blocked"><b>未完成原因</b><span>${escapeHtml(blockerText.join("；"))}</span></div>` : currentReasons.length && !contactabilityPassed ? `<div class="prospect-qualification-feedback"><b>检查结果</b><span>${escapeHtml(currentReasons.join("；"))}</span></div>` : ""}
+        ${canWrite ? `<div class="prospect-qualification-actions">
+          ${identityResolved
+            ? `<button class="btn" type="button" id="prospectVerifyCompanyButton">${company ? "重新确认公司" : "确认公司状态"}</button>`
+            : `<button class="btn" type="button" id="prospectResolveIdentityButton">确认公司主体</button>`}
+          <button class="btn" type="button" id="prospectAssessIcpButton" ${companyPassed ? "" : "disabled"}>${assessment ? "重新判断匹配" : "判断客户匹配"}</button>
+          ${view.stageCurrency.icp && assessment?.result === "qualified" && assessment.reviewStatus === "pending_review" ? `<button class="btn" type="button" id="prospectApproveIcpButton">确认匹配结果</button>` : ""}
+          <button class="btn" type="button" id="prospectVerifyChannelButton" ${icpPassed ? "" : "disabled"}>${verification ? "重新核对联系方式" : "核对联系方式"}</button>
+          ${channelPassed && !view.approvedDecision ? `<button class="btn" type="button" id="prospectEvaluateContactabilityButton">重新检查联系条件</button>` : ""}
+          ${decision?.status === "eligible" ? `<button class="btn" type="button" id="prospectApproveContactabilityButton">允许跟进</button>` : ""}
+          <button class="btn danger" type="button" id="prospectSuppressButton">不再跟进</button>
+        </div>` : ""}
+      </details>
     </section>
   `;
+}
+
+function focusProspectQualification(item: WebsiteOpportunity, step?: ProspectQualificationViewApi["nextStep"]) {
+  state.selectedProspectId = item.id;
+  if (step === "resolve_identity") prospectTechnicalAuditOpenId = item.id;
+  renderProspectList();
+  window.requestAnimationFrame(() => {
+    const detail = qs<HTMLElement>("#prospectDetail");
+    const audit = detail?.querySelector<HTMLDetailsElement>(".prospect-technical-audit");
+    if (step === "resolve_identity") audit?.setAttribute("open", "");
+    const panel = detail?.querySelector<HTMLElement>("#prospectQualificationPanel");
+    panel?.classList.add("is-attention");
+    panel?.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.setTimeout(() => panel?.classList.remove("is-attention"), 1600);
+  });
+}
+
+function openProspectQualificationStep(item: WebsiteOpportunity, step: ProspectQualificationViewApi["nextStep"]) {
+  if (step === "ready") {
+    const workspace = qs<HTMLDetailsElement>("#prospectMailWorkspace");
+    if (workspace) {
+      workspace.open = true;
+      workspace.scrollIntoView({ behavior: "smooth", block: "center" });
+      qs<HTMLButtonElement>("#prospectGenerateMailButton")?.focus();
+    }
+    toast("资格审核已通过，可以转为线索或继续编写开发信");
+    return;
+  }
+  if (step === "resolve_campaign") {
+    toast("请回到获客任务，为该候选补充获客项目后再继续审核", "error");
+    return;
+  }
+  if (step === "resolve_identity") {
+    void openProspectIdentityConfirmation(item);
+    return;
+  }
+  const actionIds: Partial<Record<Exclude<ProspectQualificationViewApi["nextStep"], "ready" | "resolve_campaign" | "resolve_identity">, string>> = {
+    verify_company: "prospectVerifyCompanyButton",
+    assess_icp: "prospectAssessIcpButton",
+    approve_icp: "prospectApproveIcpButton",
+    verify_channel: "prospectVerifyChannelButton",
+    evaluate_contactability: "prospectEvaluateContactabilityButton",
+    approve_contactability: "prospectApproveContactabilityButton"
+  };
+  const actionId = actionIds[step as keyof typeof actionIds];
+  const action = actionId ? qs<HTMLButtonElement>(`#${actionId}`) : null;
+  if (action && !action.disabled) {
+    action.click();
+    return;
+  }
+  focusProspectQualification(item, step);
+  toast("请先完成前置审核步骤，系统会在完成后开放此操作", "error");
 }
 
 async function mutateProspectQualification(
@@ -16846,6 +23454,9 @@ function bindProspectQualificationActions(
   item: WebsiteOpportunity
 ) {
   const view = state.prospectQualifications[item.id];
+  qs<HTMLButtonElement>("#prospectQualificationPrimaryButton", root)?.addEventListener("click", () => {
+    if (view) openProspectQualificationStep(item, view.nextStep);
+  });
   qs<HTMLButtonElement>("#prospectResolveIdentityButton", root)?.addEventListener("click", async () => {
     if (!prospectIdentityBootstrapViews.has(item.id)) {
       await loadProspectIdentityBootstrap(item, false);
@@ -16858,24 +23469,40 @@ function bindProspectQualificationActions(
   qs<HTMLButtonElement>("#prospectVerifyCompanyButton", root)?.addEventListener("click", () => openProspectCompanyQualification(item));
   qs<HTMLButtonElement>("#prospectAssessIcpButton", root)?.addEventListener("click", () => openProspectIcpQualification(item));
   qs<HTMLButtonElement>("#prospectVerifyChannelButton", root)?.addEventListener("click", () => openProspectChannelQualification(item));
-  qs<HTMLButtonElement>("#prospectApproveIcpButton", root)?.addEventListener("click", (event) => {
+  qs<HTMLButtonElement>("#prospectApproveIcpButton", root)?.addEventListener("click", async (event) => {
     const assessment = view?.qualification?.icpAssessments.at(-1);
-    if (!assessment || !window.confirm(`确认批准本次 ICP 评估（${assessment.totalScore} 分）？`)) return;
+    if (!assessment) return;
+    const actionButton = event.currentTarget as HTMLButtonElement;
+    if (!await confirmAction({
+      title: "批准 ICP 评估",
+      message: `本次评估得分为 ${assessment.totalScore} 分。`,
+      consequences: ["该评估会标记为已批准", "候选可继续进入后续渠道与合规门禁"],
+      confirmLabel: "批准评估",
+      tone: "normal"
+    })) return;
     void mutateProspectQualification(item, `/icp/${encodeURIComponent(assessment.id)}/approve`, {
       requestId: prospectRequestId("icp-approval")
-    }, event.currentTarget as HTMLButtonElement, "ICP 评估已批准");
+    }, actionButton, "ICP 评估已批准");
   });
   qs<HTMLButtonElement>("#prospectEvaluateContactabilityButton", root)?.addEventListener("click", (event) => {
     void mutateProspectQualification(item, "/contactability/evaluate", {
       requestId: prospectRequestId("contactability-evaluation")
     }, event.currentTarget as HTMLButtonElement, "门禁评估已完成");
   });
-  qs<HTMLButtonElement>("#prospectApproveContactabilityButton", root)?.addEventListener("click", (event) => {
+  qs<HTMLButtonElement>("#prospectApproveContactabilityButton", root)?.addEventListener("click", async (event) => {
     const decision = view?.qualification?.contactabilityDecisions.at(-1);
-    if (!decision || !window.confirm("确认该候选当前满足企业、ICP、渠道和合规门禁，并批准联系？")) return;
+    if (!decision) return;
+    const actionButton = event.currentTarget as HTMLButtonElement;
+    if (!await confirmAction({
+      title: "批准联系候选",
+      message: "候选已完成企业、ICP、渠道和合规门禁检查。",
+      consequences: ["候选会标记为允许联系", "之后可进入线索转化或正式触达流程"],
+      confirmLabel: "批准联系",
+      tone: "normal"
+    })) return;
     void mutateProspectQualification(item, `/contactability/${encodeURIComponent(decision.id)}/approve`, {
       requestId: prospectRequestId("contactability-approval")
-    }, event.currentTarget as HTMLButtonElement, "候选已通过 VQA，可进入线索或触达流程");
+    }, actionButton, "客户资格审核已通过，可进入线索或触达流程");
   });
   qs<HTMLButtonElement>("#prospectSuppressButton", root)?.addEventListener("click", () => openProspectSuppression(item));
 }
@@ -16989,6 +23616,86 @@ async function loadProspectIdentityBootstrap(item: WebsiteOpportunity, quiet = t
   }
 }
 
+async function openProspectIdentityConfirmation(item: WebsiteOpportunity) {
+  if (!prospectIdentityBootstrapViews.has(item.id)) {
+    await loadProspectIdentityBootstrap(item, false);
+  }
+  const view = prospectIdentityBootstrapViews.get(item.id);
+  if (!view) return;
+  const country = item.country.trim().toLocaleUpperCase("en-US");
+  const preferredId: ProspectIdentityAuthorityProvider = ["GB", "UK", "UNITED KINGDOM"].includes(country)
+    ? "companies_house"
+    : ["US", "USA", "UNITED STATES"].includes(country)
+      ? "sec_edgar"
+      : ["FR", "FRANCE", "法国"].includes(country)
+        ? "fr_company_search"
+        : "gleif";
+  const defaultProvider = view.providers.find((provider) =>
+    provider.id === preferredId && provider.runtime?.ready
+  ) || view.providers.find((provider) => provider.runtime?.ready)
+    || view.providers[0];
+  const options = view.providers.map((provider) => `
+    <option value="${escapeHtml(provider.id)}" ${provider.id === defaultProvider?.id ? "selected" : ""}>${escapeHtml(provider.name)}${provider.runtime?.ready ? "" : "（暂不可用）"}</option>`).join("");
+  openModal(`确认公司 · ${item.company}`, `
+    <div class="inline-alert"><b>只需确认一次</b><span>系统会通过官方企业登记接口核对公司主体，后续审核会自动沿用结果。</span></div>
+    <div class="form-grid" style="margin-top:12px">
+      <div class="form-field"><label>登记来源</label><select id="prospectIdentityModalProvider">${options}</select></div>
+      <div class="form-field"><label>公司注册号</label><input id="prospectIdentityModalRegistration" maxlength="80" placeholder="${escapeHtml(defaultProvider?.example || "填写公开注册号")}"></div>
+      <div class="form-field full"><small id="prospectIdentityModalHint">${escapeHtml(identityBootstrapProviderHint(defaultProvider))}</small></div>
+    </div>
+    <div class="prospect-company-discovery" id="prospectIdentityDiscoveryResults"><span>不知道注册号时，可让系统从所选官方来源按公司名查找。</span></div>
+    <div class="prospect-company-confirm-note"><b>注册号在哪里找</b><span>可从客户官网页脚、公司注册证书或当地官方企业查询结果中取得。系统不会用 AI 猜测注册号。</span></div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn" id="prospectIdentityModalDiscover">自动查找</button><button class="btn primary" id="prospectIdentityModalSubmit">确认公司</button>`);
+  const providerSelect = qs<HTMLSelectElement>("#prospectIdentityModalProvider");
+  const registrationInput = qs<HTMLInputElement>("#prospectIdentityModalRegistration");
+  const hint = qs<HTMLElement>("#prospectIdentityModalHint");
+  providerSelect?.addEventListener("change", () => {
+    const provider = view.providers.find((entry) => entry.id === providerSelect.value);
+    if (hint) hint.textContent = identityBootstrapProviderHint(provider);
+    if (registrationInput) registrationInput.placeholder = provider?.example || "填写公开注册号";
+  });
+  qs<HTMLButtonElement>("#prospectIdentityModalDiscover")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const resultsBox = qs<HTMLElement>("#prospectIdentityDiscoveryResults");
+    const providerId = (providerSelect?.value || "") as ProspectIdentityAuthorityProvider;
+    if (!providerId || !resultsBox) return;
+    button.disabled = true;
+    button.textContent = "查找中";
+    resultsBox.innerHTML = `<span>正在查询官方企业登记记录...</span>`;
+    try {
+      const result = await api<{
+        candidates: Array<{ company: string; country: string; registrationNumber: string; evidenceSummary: string }>;
+        provider: string;
+        query: string;
+      }>(`/api/prospect-list/${encodeURIComponent(item.id)}/identity-bootstrap/discover`, {
+        method: "POST",
+        body: JSON.stringify({ providerId })
+      });
+      resultsBox.innerHTML = result.candidates.length
+        ? `<div class="prospect-company-discovery-head"><b>请选择正确公司</b><span>${escapeHtml(result.provider)} 返回 ${result.candidates.length} 条</span></div>${result.candidates.map((candidate) => `<button type="button" data-identity-registration="${escapeHtml(candidate.registrationNumber)}"><b>${escapeHtml(candidate.company)}</b><span>${escapeHtml([candidate.country, candidate.registrationNumber].filter(Boolean).join(" · "))}</span><small>${escapeHtml(candidate.evidenceSummary || "官方登记记录")}</small></button>`).join("")}`
+        : `<div class="prospect-company-discovery-empty"><b>未找到匹配记录</b><span>可更换登记来源，或从客户资料中取得注册号后手工填写。</span></div>`;
+      resultsBox.querySelectorAll<HTMLButtonElement>("[data-identity-registration]").forEach((candidateButton) => {
+        candidateButton.addEventListener("click", () => {
+          if (registrationInput) registrationInput.value = candidateButton.dataset.identityRegistration || "";
+          resultsBox.querySelectorAll("button").forEach((node) => node.classList.toggle("selected", node === candidateButton));
+        });
+      });
+    } catch (error) {
+      resultsBox.innerHTML = `<div class="prospect-company-discovery-empty"><b>自动查找未完成</b><span>${escapeHtml(error instanceof Error ? error.message : "请稍后重试或手工填写")}</span></div>`;
+    } finally {
+      button.disabled = false;
+      button.textContent = "自动查找";
+    }
+  });
+  qs<HTMLButtonElement>("#prospectIdentityModalSubmit")?.addEventListener("click", (event) => {
+    void startProspectIdentityBootstrap(item, event.currentTarget as HTMLButtonElement, {
+      providerId: (providerSelect?.value || "") as ProspectIdentityAuthorityProvider,
+      registrationNumber: registrationInput?.value.trim() || ""
+    });
+  });
+  registrationInput?.focus();
+}
+
 function stopProspectIdentityBootstrapPolling() {
   if (prospectIdentityBootstrapPollTimer) window.clearTimeout(prospectIdentityBootstrapPollTimer);
   prospectIdentityBootstrapPollTimer = 0;
@@ -17043,9 +23750,16 @@ function pollProspectIdentityBootstrap(item: WebsiteOpportunity, attemptId: stri
   prospectIdentityBootstrapPollTimer = window.setTimeout(tick, 100);
 }
 
-async function startProspectIdentityBootstrap(item: WebsiteOpportunity, button: HTMLButtonElement) {
-  const providerId = qs<HTMLSelectElement>("#prospectIdentityProvider")?.value as ProspectIdentityAuthorityProvider | "";
-  const registrationNumber = qs<HTMLInputElement>("#prospectIdentityRegistration")?.value.trim() || "";
+async function startProspectIdentityBootstrap(
+  item: WebsiteOpportunity,
+  button: HTMLButtonElement,
+  input?: { providerId: ProspectIdentityAuthorityProvider | ""; registrationNumber: string }
+) {
+  const providerId = input?.providerId
+    || qs<HTMLSelectElement>("#prospectIdentityProvider")?.value as ProspectIdentityAuthorityProvider | "";
+  const registrationNumber = input?.registrationNumber
+    || qs<HTMLInputElement>("#prospectIdentityRegistration")?.value.trim()
+    || "";
   const view = prospectIdentityBootstrapViews.get(item.id);
   const provider = view?.providers.find((entry) => entry.id === providerId);
   if (!providerId || !registrationNumber) {
@@ -17075,6 +23789,7 @@ async function startProspectIdentityBootstrap(item: WebsiteOpportunity, button: 
     if (existing >= 0) item.identityBootstrapAttempts[existing] = result.attempt;
     else item.identityBootstrapAttempts.unshift(result.attempt);
     if (view) view.attempts = item.identityBootstrapAttempts;
+    closeModal();
     renderProspectDetail(item);
     if (result.taskStatus === "ended") toast("身份核验已结束，可在详情查看结果");
     else pollProspectIdentityBootstrap(item, result.attempt.id);
@@ -17105,6 +23820,7 @@ const WEBSITE_PROBE_STAGE_LABELS: Record<WebsiteProbeStage, string> = {
   robots: "robots 规则",
   head: "首页预检",
   body: "正文样本",
+  contact_page: "联系页",
   evidence: "最小证据",
   completed: "结束",
   failed: "结束"
@@ -17128,15 +23844,365 @@ function latestWebsiteProbe(item: WebsiteOpportunity) {
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
 }
 
-function renderWebsiteProbePanel(item: WebsiteOpportunity) {
+function latestWebsiteDiscovery(item: WebsiteOpportunity) {
+  return [...(item.websiteDiscoveryAttempts || [])]
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+}
+
+function latestContactEnrichment(item: WebsiteOpportunity) {
+  return [...(item.contactEnrichmentAttempts || [])]
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+}
+
+const WEBSITE_DISCOVERY_PROVIDER_IDS = new Set([
+  "ai_search",
+  "wikidata",
+  "brave",
+  "serper",
+  "serpapi",
+  "google_places"
+]);
+
+function renderWebsiteDiscoverySourceGuide() {
+  const providers = state.leadProviders.filter((provider) =>
+    WEBSITE_DISCOVERY_PROVIDER_IDS.has(provider.id)
+  );
+  if (!providers.length) return "";
+  const configurable = providers.find((provider) =>
+    provider.requiresKey && (!provider.ready || !provider.enabled)
+  );
+  return `
+    <div class="prospect-website-source-guide">
+      <div class="prospect-website-source-guide-head">
+        <div><b>可用的官网发现来源</b><span>免费兜底覆盖有限，配置搜索接口后会自动按顺序补查。</span></div>
+        ${configurable ? `<button class="btn" type="button" data-website-source-config="${escapeHtml(configurable.id)}">配置数据源</button>` : ""}
+      </div>
+      <div class="prospect-website-source-list">
+        ${providers.map((provider) => {
+          const ready = provider.ready && provider.enabled;
+          const isAiSearch = provider.id === "ai_search";
+          const stateText = isAiSearch
+            ? ready ? "模型已配置" : "待配置模型"
+            : provider.requiresKey
+            ? ready ? "已连接" : "待配置"
+            : "内置免费";
+          const note = isAiSearch
+            ? `${provider.costNote} 官网补全要求模型接口支持 Responses Web Search。`
+            : provider.costNote;
+          return `<div><b>${escapeHtml(provider.name)}</b><span>${escapeHtml(note)}</span><em class="${ready ? "is-ready" : ""}">${stateText}</em></div>`;
+        }).join("")}
+      </div>
+    </div>`;
+}
+
+function renderWebsiteDiscoveryPanel(item: WebsiteOpportunity) {
+  const attempt = latestWebsiteDiscovery(item);
+  if (!attempt) {
+    return `
+      <section class="prospect-probe-panel">
+        <div class="prospect-probe-head"><div><b>官网发现链路</b><small>来源官网 · 搜索 API · 域名校验</small></div>${badge("等待处理", "gray")}</div>
+        <p class="prospect-probe-summary">候选完成清洗后，系统会先确认官网，再进入国外官网联系方式验证。</p>
+      </section>`;
+  }
+  const successful = attempt.outcome === "source_provided" || attempt.outcome === "discovered";
+  const outcomeLabel = attempt.outcome === "source_provided"
+    ? "来源自带"
+    : attempt.outcome === "discovered"
+      ? "搜索确认"
+      : attempt.outcome === "not_found"
+        ? "未确认"
+        : attempt.outcome === "provider_unavailable"
+          ? "缺少搜索源"
+          : "搜索失败";
+  const candidates = attempt.candidates.length
+    ? `<div class="prospect-probe-detail"><b>候选域名</b><span>${attempt.candidates.map((candidate) => `${escapeHtml(candidate.website)}（${candidate.score} 分）`).join("；")}</span></div>`
+    : "";
+  return `
+    <section class="prospect-probe-panel">
+      <div class="prospect-probe-head"><div><b>官网发现链路</b><small>${escapeHtml(attempt.providerId || "原始数据源")} · 名称与域名校验</small></div>${badge(outcomeLabel, successful ? "green" : "amber")}</div>
+      <div class="prospect-probe-result ${successful ? "has-evidence" : "is-neutral"}">
+        <b>${escapeHtml(attempt.selectedWebsite || "未取得可信官网")}</b>
+        <span>${escapeHtml(attempt.reason)}</span>
+      </div>
+      ${candidates}
+      ${successful ? "" : renderWebsiteDiscoverySourceGuide()}
+      <div class="prospect-probe-timeline">
+        ${attempt.events.map((entry) => `<div class="prospect-probe-event ${escapeHtml(entry.status)}"><span></span><div><b>${escapeHtml(entry.stage)}</b><small>${escapeHtml(entry.message)}</small></div><time>${formatTime(entry.createdAt)}</time></div>`).join("")}
+      </div>
+    </section>`;
+}
+
+function websiteProbePolicyBlockReason(item: WebsiteOpportunity) {
+  const country = String(item.country || "")
+    .normalize("NFKC")
+    .trim()
+    .toLocaleLowerCase("en-US")
+    .replace(/[.\s_()\-]+/gu, "");
+  const blockedCountries = new Set([
+    "", "unknown", "未知", "待维护", "na", "n/a",
+    "cn", "chn", "china", "中国", "中国大陆", "mainlandchina",
+    "hk", "hkg", "hongkong", "香港", "中国香港",
+    "mo", "mac", "macao", "macau", "澳门", "中国澳门",
+    "tw", "twn", "taiwan", "台湾", "中国台湾"
+  ]);
+  if (blockedCountries.has(country)) {
+    return country
+      ? "按安全策略，中国、港澳台网站不执行自动读取"
+      : "国家信息不明确，安全策略不会自动访问官网";
+  }
+  try {
+    const hostname = new URL(item.website).hostname.toLocaleLowerCase("en-US");
+    if (/\.(?:cn|中国|hk|mo|tw)$/iu.test(hostname)) {
+      return "该官网域名属于中国或港澳台范围，系统不会自动访问";
+    }
+  } catch {
+    return "官网地址无效，无法进入安全验证队列";
+  }
+  return "";
+}
+
+function candidateContactFieldIsTrusted(item: WebsiteOpportunity, field: "contact" | "contactInfo") {
+  if (!["ai_search", "openai_web_search"].includes(item.source || "")) return true;
+  return (item.sourceEvidence || []).some((evidence) =>
+    evidence.matchedFields.includes(field)
+    && ["official", "corroborated"].includes(evidence.fieldAuthority?.[field] || "")
+  );
+}
+
+function websiteContactDisplay(item: WebsiteOpportunity) {
+  const recommended = latestContactEnrichment(item)?.recommendedContact;
+  if (recommended?.channelValue) {
+    return {
+      value: recommended.channelValue,
+      detail: `${recommended.sourceLabel} · ${recommended.reason}`,
+      tone: "ready"
+    };
+  }
+  const extracted = (item.extractedContacts || []).flatMap((contact) => [
+    ...contact.emails,
+    ...contact.phones,
+    ...contact.whatsapp
+  ]).find(Boolean) || "";
+  const value = (candidateContactFieldIsTrusted(item, "contactInfo")
+    ? item.contactInfo?.trim()
+    : "") || extracted;
+  if (value) {
+    return {
+      value,
+      detail: item.contact?.trim() || "官网公开联系方式，触达前请人工确认",
+      tone: "ready"
+    };
+  }
+  if (!item.website?.trim()) {
+    const discovery = latestWebsiteDiscovery(item);
+    return {
+      value: "官网待补",
+      detail: discovery?.reason || "官网发现阶段尚未完成",
+      tone: discovery?.status === "failed" ? "blocked" : "empty"
+    };
+  }
+  if (!/^https:\/\//iu.test(item.website)) {
+    return { value: "官网地址待维护", detail: "自动验证仅接受 HTTPS 官网", tone: "empty" };
+  }
+  const policyBlockReason = websiteProbePolicyBlockReason(item);
+  if (policyBlockReason) {
+    return { value: "不自动访问", detail: policyBlockReason, tone: "blocked" };
+  }
+  const attempt = latestWebsiteProbe(item);
+  if (!attempt) {
+    return { value: "等待后台补全", detail: "后台会按低频队列自动验证", tone: "pending" };
+  }
+  if (attempt.status === "queued") {
+    return { value: "等待后台补全", detail: "官网验证任务已排队", tone: "pending" };
+  }
+  if (attempt.status === "running") {
+    const stage = attempt.events.at(-1)?.stage;
+    return {
+      value: "官网补全中",
+      detail: stage ? `当前阶段：${WEBSITE_PROBE_STAGE_LABELS[stage]}` : "正在受控读取官网公开信息",
+      tone: "running"
+    };
+  }
+  if (["unreachable", "rate_limited", "circuit_open"].includes(attempt.outcome)) {
+    return {
+      value: "官网暂不可达",
+      detail: attempt.failureMessage || WEBSITE_PROBE_OUTCOME_LABELS[attempt.outcome],
+      tone: "blocked"
+    };
+  }
+  if (attempt.outcome === "robots_denied") {
+    return { value: "站点不允许自动验证", detail: "可人工打开官网核对", tone: "blocked" };
+  }
+  if (attempt.outcome === "policy_blocked") {
+    return { value: "访问策略未通过", detail: attempt.failureMessage || "需人工核对官网", tone: "blocked" };
+  }
+  return {
+    value: "官网未公开联系方式",
+    detail: "已完成验证，可从右侧报告查看过程",
+    tone: "empty"
+  };
+}
+
+function websiteContactPersonDisplay(item: WebsiteOpportunity) {
+  const recommended = latestContactEnrichment(item)?.recommendedContact;
+  if (recommended?.contactName
+    && !/^(?:待维护|待确认|未知|-|—)$/u.test(recommended.contactName)) {
+    return {
+      value: recommended.contactName,
+      detail: recommended.contactTitle || `${recommended.sourceLabel}公开联系人`,
+      tone: "ready"
+    };
+  }
+  const explicit = item.contact?.trim() || "";
+  const matchedExtracted = (item.extractedContacts || []).find((contact) =>
+    contact.kind === "person" && contact.name.trim() === explicit
+  );
+  const extracted = (item.extractedContacts || []).find((contact) =>
+    contact.kind === "person"
+    && contact.name.trim().split(/\s+/u).length >= 2
+  );
+  const extractedExplicitLooksLikeName = !matchedExtracted
+    || explicit.split(/\s+/u).length >= 2;
+  const explicitTrusted = candidateContactFieldIsTrusted(item, "contact")
+    || Boolean(matchedExtracted);
+  if (explicitTrusted
+    && explicit
+    && !/^(?:待维护|待确认|未知|-|—)$/u.test(explicit)
+    && extractedExplicitLooksLikeName) {
+    return {
+      value: explicit,
+      detail: extracted?.title || "联系人职务待补",
+      tone: "ready"
+    };
+  }
+  if (extracted) {
+    return {
+      value: extracted.name,
+      detail: extracted.title || "官网公开联系人，待人工确认",
+      tone: "ready"
+    };
+  }
+  const attempt = latestWebsiteProbe(item);
+  if (attempt?.status === "queued" || attempt?.status === "running") {
+    return { value: "联系人补全中", detail: "正在核对国外官网公开信息", tone: "pending" };
+  }
+  return { value: "联系人待补", detail: "公开来源未提供联系人姓名", tone: "empty" };
+}
+
+function prospectLookupDiagnosis(item: WebsiteOpportunity) {
+  const person = websiteContactPersonDisplay(item);
+  const channel = websiteContactDisplay(item);
+  const attempt = latestWebsiteProbe(item);
+  const personReady = person.tone === "ready";
+  const channelReady = channel.tone === "ready";
+  const pending = [person.tone, channel.tone].some((tone) => ["pending", "running"].includes(tone));
+  if (personReady && channelReady) return null;
+
+  const reasons: string[] = [];
+  const suggestions: string[] = [];
+  if (!item.website?.trim()) {
+    const discovery = latestWebsiteDiscovery(item);
+    reasons.push(discovery?.reason || "候选来源没有提供企业官网，官网发现阶段尚未完成。");
+    suggestions.push(discovery?.outcome === "provider_unavailable"
+      ? "系统会先尝试 OpenAI 原生联网和免费 Wikidata；仍未找到时可配置 Brave Search、Serper、SerpApi 或 Google Places。"
+      : "可查看官网发现链路中的候选域名和可信评分，或人工补充官网。");
+  } else if (!/^https:\/\//iu.test(item.website)) {
+    reasons.push("当前网址不是 HTTPS 官网，不符合自动验证的安全要求。");
+    suggestions.push("人工确认官网地址并改为正确的 HTTPS 链接后重试。");
+  } else if (websiteProbePolicyBlockReason(item)) {
+    reasons.push(websiteProbePolicyBlockReason(item));
+    suggestions.push("仅可由业务员人工打开官网核对，系统不会绕过国家与域名限制。");
+  } else if (!attempt) {
+    reasons.push("候选已经进入后台补全范围，但尚未产生官网核验记录。");
+    suggestions.push("可等待后台队列，或在报告下方手动启动一次官网验证。");
+  } else if (attempt.status === "queued") {
+    reasons.push("官网验证任务已排队，当前还没有开始访问官网。");
+    suggestions.push("无需重复提交；任务执行后结果会自动更新。");
+  } else if (attempt.status === "running") {
+    const stage = attempt.events.at(-1)?.stage;
+    reasons.push(stage
+      ? `官网仍在验证，当前进行到“${WEBSITE_PROBE_STAGE_LABELS[stage]}”。`
+      : "官网仍在受控低频验证中，当前不是最终结果。");
+    suggestions.push("等待当前任务结束，页面会自动刷新联系人和联系方式。");
+  } else {
+    reasons.push(WEBSITE_PROBE_OUTCOME_LABELS[attempt.outcome]);
+    if (attempt.failureMessage) reasons.push(attempt.failureMessage);
+    if (["unreachable", "rate_limited", "circuit_open"].includes(attempt.outcome)) {
+      suggestions.push("网站可能临时不可用，可稍后重新验证一次。");
+    } else if (["robots_denied", "policy_blocked"].includes(attempt.outcome)) {
+      suggestions.push("系统不会绕过网站规则，请由业务员人工打开官网核对。");
+    } else {
+      suggestions.push("可人工查看官网联系页，或从原始公开来源补充业务联系人。");
+    }
+  }
+  if (!personReady && channelReady) {
+    reasons.push("已找到公司级联系渠道，但公开页面没有可可靠识别的联系人姓名和职务。");
+    suggestions.push("可先使用公司级渠道触达，并在首封邮件中确认具体对接人。");
+  } else if (personReady && !channelReady) {
+    reasons.push("已识别联系人姓名，但公开页面没有与其对应的可用邮箱、电话或 WhatsApp。");
+    suggestions.push("请勿猜测邮箱，可通过官网表单或公司总机确认联系渠道。");
+  }
+  return {
+    pending,
+    title: pending
+      ? "联系方式仍在查询，不是最终结果"
+      : !personReady && !channelReady
+        ? "本次未找到联系人和联系方式"
+        : !personReady
+          ? "未找到可确认的联系人姓名"
+          : "未找到可用联系方式",
+    summary: pending
+      ? "系统会在后台任务结束后自动更新，无需停留等待。"
+      : "这不代表企业不存在，只表示当前授权来源和受控官网范围内没有取得足够信息。",
+    reasons: [...new Set(reasons)],
+    suggestions: [...new Set(suggestions)],
+    attempt
+  };
+}
+
+function renderProspectLookupDiagnosis(item: WebsiteOpportunity) {
+  const diagnosis = prospectLookupDiagnosis(item);
+  if (!diagnosis) return "";
+  const latestEvent = diagnosis.attempt?.events.at(-1);
+  return `
+    <section class="lead-lookup-diagnosis ${diagnosis.pending ? "is-pending" : ""}" id="leadFinderLookupDiagnosis" tabindex="-1">
+      <div class="lead-lookup-diagnosis-head">
+        <div><b>${escapeHtml(diagnosis.title)}</b><span>${escapeHtml(diagnosis.summary)}</span></div>
+        ${badge(diagnosis.pending ? "查询中" : "未找到", diagnosis.pending ? "blue" : "amber")}
+      </div>
+      <div><b>原因</b><ul>${diagnosis.reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div>
+      <div><b>下一步</b><ul>${diagnosis.suggestions.map((suggestion) => `<li>${escapeHtml(suggestion)}</li>`).join("")}</ul></div>
+      <div class="lead-lookup-diagnosis-facts">
+        <span>来源：${escapeHtml(item.sourceLabel || item.source || "人工登记")}</span>
+        <span>官网验证：${escapeHtml(diagnosis.attempt ? WEBSITE_PROBE_OUTCOME_LABELS[diagnosis.attempt.outcome] : "尚未执行")}</span>
+        <span>最后阶段：${escapeHtml(latestEvent ? WEBSITE_PROBE_STAGE_LABELS[latestEvent.stage] : "无记录")}</span>
+      </div>
+    </section>`;
+}
+
+function leadFinderLookupValue(
+  item: WebsiteOpportunity,
+  display: { value: string; detail: string; tone: string },
+  label: string
+) {
+  if (display.tone === "ready") {
+    return `<b class="is-ready" title="${escapeHtml(display.detail)}">${escapeHtml(display.value)}</b>`;
+  }
+  return `<button class="lead-lookup-status is-${escapeHtml(display.tone)}" type="button" data-lead-lookup-reason="${escapeHtml(item.id)}" title="${escapeHtml(display.detail)}" aria-label="${escapeHtml(label)}：${escapeHtml(display.value)}，查看原因"><b>${escapeHtml(display.value)}</b><small>查看原因</small></button>`;
+}
+
+function renderWebsiteProbePanel(
+  item: WebsiteOpportunity,
+  buttonId = "prospectWebsiteProbeButton"
+) {
   const attempt = latestWebsiteProbe(item);
   const canStart = item.ownerId === state.user?.id && /^https:\/\//iu.test(item.website);
   if (!attempt) {
     return `
       <section class="prospect-probe-panel">
-        <div class="prospect-probe-head"><div><b>官网低频验证</b><small>受控访问 · 单次首页</small></div>${badge("尚未执行", "gray")}</div>
-        <p class="prospect-probe-summary">只读取 robots.txt 和官网首页，最多 64 KiB；可回填与官网同域的公开业务邮箱，不跟链接、不保存网页原文或电话。</p>
-        ${canStart ? `<button class="btn" type="button" id="prospectWebsiteProbeButton">验证官网并查找公开邮箱</button>` : ""}
+        <div class="prospect-probe-head"><div><b>国外官网低频验证</b><small>仅国外网站 · 首页 + 单个同域联系页</small></div>${badge("尚未执行", "gray")}</div>
+        <p class="prospect-probe-summary">仅允许国外候选的非中国、港澳台官网；只读取 robots.txt、官网首页和一个同域联系页，不继续跟踪链接、不下载文件、不保存网页原文。</p>
+        ${canStart ? `<button class="btn" type="button" id="${buttonId}">验证官网并查找公开联系方式</button>` : ""}
       </section>`;
   }
   const terminal = attempt.status === "completed" || attempt.status === "failed";
@@ -17163,8 +24229,150 @@ function renderWebsiteProbePanel(item: WebsiteOpportunity) {
       </div>
       ${attempt.failureMessage ? `<div class="prospect-probe-detail"><b>详细结果</b><span>${escapeHtml(attempt.failureMessage)}</span></div>` : ""}
       <div class="prospect-probe-foot"><span>robots：${escapeHtml(attempt.robotsDecision)}</span><span>响应：${attempt.httpStatus || "-"}</span><span>正文：${attempt.responseBytes} B</span><span>跳转：${attempt.redirected ? "1 次" : "无"}</span></div>
-      ${canStart && terminal ? `<button class="btn" type="button" id="prospectWebsiteProbeButton">重新验证官网邮箱</button>` : ""}
+      ${canStart && terminal ? `<button class="btn" type="button" id="${buttonId}">重新验证官网联系方式</button>` : ""}
     </section>`;
+}
+
+function renderExtractedContactsPanel(item: WebsiteOpportunity) {
+  const contacts = item.extractedContacts || [];
+  const attempt = latestContactEnrichment(item);
+  const running = attempt?.status === "queued" || attempt?.status === "running";
+  const attemptStartedAt = new Date(attempt?.startedAt || attempt?.createdAt || 0).getTime();
+  const recoverable = Boolean(
+    running
+    && Number.isFinite(attemptStartedAt)
+    && Date.now() - attemptStartedAt > 60_000
+    && !(item.websiteProbeAttempts || []).some((probe) =>
+      new Date(probe.createdAt).getTime() >= attemptStartedAt
+      && (probe.status === "queued" || probe.status === "running")
+    )
+  );
+  const legacyContact = contacts.find((contact) =>
+    contact.emails[0] || contact.whatsapp[0] || contact.phones[0]
+  );
+  const legacyChannel = legacyContact?.emails[0]
+    ? { type: "email" as const, value: legacyContact.emails[0] }
+    : legacyContact?.whatsapp[0]
+      ? { type: "whatsapp" as const, value: legacyContact.whatsapp[0] }
+      : legacyContact?.phones[0]
+        ? { type: "phone" as const, value: legacyContact.phones[0] }
+        : null;
+  const recommendation = attempt?.recommendedContact || (legacyContact && legacyChannel ? {
+    contactName: legacyContact.name,
+    contactTitle: legacyContact.title,
+    channelType: legacyChannel.type,
+    channelValue: legacyChannel.value,
+    sourceId: legacyContact.source,
+    sourceLabel: legacyContact.sourceLabel || (legacyContact.source === "website_probe" ? "境外企业官网" : legacyContact.source),
+    confidence: legacyContact.confidence ?? (legacyContact.source === "website_probe" ? 82 : 65),
+    verificationStatus: legacyContact.verificationStatus || (legacyContact.source === "website_probe" ? "source_confirmed" : "unverified"),
+    reason: legacyContact.source === "website_probe"
+      ? "来自企业官网公开页面"
+      : "来自既有公开来源记录"
+  } : null);
+  const statusText = running
+    ? "多方查询中"
+    : recommendation
+      ? "已找到"
+      : attempt
+        ? "已查完"
+        : "待查询";
+  const statusTone = running ? "blue" : recommendation ? "green" : "gray";
+  const verificationLabel = (status: string) => status === "verified"
+    ? "已核验"
+    : status === "source_confirmed"
+      ? "来源确认"
+      : status === "syntax_valid"
+        ? "格式有效"
+        : "待人工确认";
+  const sourceState = (source: NonNullable<WebsiteOpportunity["contactEnrichmentAttempts"]>[number]["sources"][number]) => {
+    if (source.status === "queued" || source.status === "running") return { text: "查询中", cls: "is-running" };
+    if (source.outcome === "contact_found") return { text: `找到 ${source.contactCount}`, cls: "is-found" };
+    if (source.outcome === "not_configured") return { text: "未配置", cls: "is-muted" };
+    if (source.status === "blocked") return { text: "策略阻止", cls: "is-blocked" };
+    if (source.status === "failed") return { text: "查询失败", cls: "is-blocked" };
+    return { text: "未找到", cls: "is-muted" };
+  };
+  const channelLine = (c: { emails: string[]; phones: string[]; whatsapp: string[] }) => {
+    const parts: string[] = [];
+    if (c.emails.length) parts.push(`<span class="pe-tag">邮箱 ${escapeHtml(c.emails.join(", "))}</span>`);
+    if (c.phones.length) parts.push(`<span class="pe-tag">电话 ${escapeHtml(c.phones.join(", "))}</span>`);
+    if (c.whatsapp.length) parts.push(`<span class="pe-tag">WhatsApp ${escapeHtml(c.whatsapp.join(", "))}</span>`);
+    return parts.join(" ") || `<span class="pe-tag">无渠道</span>`;
+  };
+  return `
+    <section class="prospect-contact-hub">
+      <div class="prospect-contact-hub-head">
+        <div><b>联系人获取</b><small>公开来源 · 联系人接口 · 境外企业官网</small></div>
+        ${badge(statusText, statusTone)}
+      </div>
+      ${recommendation ? `
+        <div class="prospect-contact-recommendation">
+          <div><span>推荐联系</span><b>${escapeHtml(recommendation.channelValue)}</b><small>${escapeHtml([recommendation.contactName, recommendation.contactTitle].filter(Boolean).join(" · ") || "公司公开渠道")}</small></div>
+          <div class="prospect-contact-trust"><strong>${Math.round(recommendation.confidence)}%</strong><span>${escapeHtml(verificationLabel(recommendation.verificationStatus))}</span></div>
+          <p>${escapeHtml(recommendation.sourceLabel)} · ${escapeHtml(recommendation.reason)}</p>
+        </div>`
+        : `<div class="prospect-contact-empty"><b>${running ? "正在多方查找联系方式" : "当前来源尚未取得可用联系方式"}</b><span>${escapeHtml(attempt?.summary || "开始后会在后台查询，无需停留等待。")}</span></div>`}
+      ${attempt?.sources.length ? `<div class="prospect-contact-sources">
+        ${attempt.sources.map((source) => {
+          const state = sourceState(source);
+          const retryAt = source.retryAfterAt ? new Date(source.retryAfterAt) : null;
+          const retryHint = retryAt && !Number.isNaN(retryAt.getTime())
+            ? ` · ${retryAt.toLocaleString("zh-CN", { hour12: false })} 后可重试`
+            : source.retryable ? " · 可稍后重试" : "";
+          return `<div><span class="prospect-contact-source-mark ${state.cls}"></span><p><b>${escapeHtml(source.sourceLabel)}</b><small>${escapeHtml(source.message + retryHint)}</small></p><em class="${state.cls}">${escapeHtml(state.text)}</em></div>`;
+        }).join("")}
+      </div>` : ""}
+      <div class="prospect-contact-actions">
+        ${item.ownerId === state.user?.id ? `<button class="btn" type="button" id="prospectContactEnrichmentButton" ${running && !recoverable ? "disabled" : ""}>${recoverable ? "恢复查询" : running ? "查询进行中" : attempt ? "继续查找联系人" : "开始查找联系人"}</button>` : ""}
+        <span>AI 仅用于发现候选官网，不生成邮箱或电话</span>
+      </div>
+      ${contacts.length ? `<details class="prospect-contact-evidence"><summary>查看 ${contacts.length} 条来源证据</summary>
+        <div class="prospect-extracted-list">
+          ${contacts.map((c) => `
+            <div class="prospect-extracted-row ${c.kind === "person" ? "is-person" : "is-company"}">
+              <div class="prospect-extracted-head">
+                <b>${escapeHtml(c.name || (c.kind === "person" ? "联系人" : "公司公开联系"))}</b>
+                <span class="prospect-extracted-kind">${escapeHtml(c.sourceLabel || (c.source === "website_probe" ? "境外企业官网" : c.source))} · ${escapeHtml(verificationLabel(c.verificationStatus || (c.source === "website_probe" ? "source_confirmed" : "unverified")))}</span>
+              </div>
+              ${c.title ? `<div class="prospect-extracted-title">${escapeHtml(c.title)}</div>` : ""}
+              <div class="prospect-extracted-channels">${channelLine(c)}</div>
+              <div class="prospect-extracted-meta"><span>可信度 ${Math.round(c.confidence ?? (c.source === "website_probe" ? 82 : 65))}%</span><span>${(c.corroboratedSources || []).length > 1 ? `${c.corroboratedSources!.length} 个来源交叉确认` : "单一来源"}</span>${c.evidenceUrl ? `<a class="prospect-extracted-src" href="${escapeHtml(c.evidenceUrl)}" target="_blank" rel="noopener">查看证据</a>` : ""}</div>
+            </div>`).join("")}
+        </div>
+      </details>` : ""}
+    </section>`;
+}
+
+async function startContactEnrichment(item: WebsiteOpportunity, button?: HTMLButtonElement) {
+  if (button) {
+    button.disabled = true;
+    button.textContent = "正在启动";
+  }
+  try {
+    const result = await api<{
+      attempt: NonNullable<WebsiteOpportunity["contactEnrichmentAttempts"]>[number] | null;
+      opportunity: WebsiteOpportunity;
+      replayed: boolean;
+    }>(`/api/prospect-list/${encodeURIComponent(item.id)}/contact-enrichment`, {
+      method: "POST",
+      body: JSON.stringify({ force: true })
+    });
+    Object.assign(item, result.opportunity);
+    renderProspectDetail(item);
+    renderLeadFinder(state.websiteOpportunities);
+    if (qs<HTMLElement>("#leadFinderVerificationDrawer")?.classList.contains("open")) {
+      renderLeadFinderDetail(item);
+    }
+    scheduleWebsiteProbeRefresh();
+    toast(result.replayed ? "联系人查询已经在进行" : "已开始多来源联系人查询");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "联系人查询启动失败", "error");
+    if (button) {
+      button.disabled = false;
+      button.textContent = "继续查找联系人";
+    }
+  }
 }
 
 async function refreshWebsiteProbe(
@@ -17177,7 +24385,9 @@ async function refreshWebsiteProbe(
     opportunity: WebsiteOpportunity;
   }>(`/api/prospect-list/${encodeURIComponent(item.id)}/website-probe/${encodeURIComponent(attemptId)}`);
   Object.assign(item, result.opportunity);
-  if (state.selectedProspectId === item.id) renderProspectDetail(item);
+  renderWebsiteOpportunities(state.websiteOpportunities);
+  renderLeadFinder(state.websiteOpportunities);
+  renderProspectList();
   return result;
 }
 
@@ -17237,6 +24447,7 @@ async function startWebsiteProbe(item: WebsiteOpportunity, button?: HTMLButtonEl
     });
     Object.assign(item, result.opportunity);
     renderProspectDetail(item);
+    renderLeadFinder(state.websiteOpportunities);
     const terminal = result.attempt.status === "completed" || result.attempt.status === "failed";
     if (terminal) {
       toast("官网验证已结束，可在详情查看结果");
@@ -17255,6 +24466,7 @@ async function startWebsiteProbe(item: WebsiteOpportunity, button?: HTMLButtonEl
 function renderProspectDetail(item?: WebsiteOpportunity | null) {
   const box = qs<HTMLElement>("#prospectDetail");
   const sender = qs<HTMLElement>("#prospectSenderStatus");
+  const mailWorkspace = qs<HTMLDetailsElement>("#prospectMailWorkspace");
   if (sender) {
     sender.innerHTML = state.user?.outboundEmail
       ? `当前发件人：${escapeHtml(state.user.emailSenderName || state.user.name)} &lt;${escapeHtml(state.user.outboundEmail)}&gt;`
@@ -17263,6 +24475,10 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
   if (!box) return;
   if (!item) {
     box.innerHTML = `<div class="empty-cell">未选择线索</div>`;
+    if (mailWorkspace) {
+      mailWorkspace.open = false;
+      delete mailWorkspace.dataset.prospectId;
+    }
     renderProspectMailPreview();
     return;
   }
@@ -17279,17 +24495,31 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
   const dnc = qualification?.blockers.includes("PROSPECT_DO_NOT_CONTACT");
   const readonly = item.status === "synced" ? "disabled" : "";
   const procurementContext = state.procurementContexts[item.id];
+  const contactPerson = websiteContactPersonDisplay(item);
+  const contactDisplay = websiteContactDisplay(item);
+  const companyReview = item.verificationReport?.level && item.verificationReport.level !== "L0"
+    ? item.verificationReport.levelLabel
+    : item.website
+      ? "公司与官网待确认"
+      : "公司官网待补";
+  const fitReview = item.scorecard?.icpMatch.status === "verified"
+    ? `匹配 ${item.scorecard.icpMatch.score} 分`
+    : item.business || "业务方向待确认";
   box.innerHTML = `
     <div class="prospect-detail-hero">
       ${badge(status.label, status.tone)} ${badge(`行动优先 ${score}`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} ${badge(duplicate.text, duplicate.tone)}
       <h2>${escapeHtml(item.company)}</h2>
       <p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(item.business || "业务待维护")} · ${escapeHtml(websiteDomain(item.website || ""))}</p>
-      <p>加入候选池：${escapeHtml(formatProspectJoinedAt(item.createdAt))}</p>
+      <p>加入搜客清单：${escapeHtml(formatProspectJoinedAt(item.shortlistedAt || item.createdAt))}</p>
     </div>
-    ${renderProspectScorecard(item)}
-    ${renderProspectIdentityBootstrapPanel(item)}
-    ${renderProspectQualificationPanel(item)}
-    ${renderWebsiteProbePanel(item)}
+    <section class="prospect-business-review">
+      <div class="prospect-business-review-head"><div><b>业务核验</b><small>公司、联系人、跟进价值</small></div>${badge(qualification?.vqaQualified ? "可转线索" : "待资格审核", qualification?.vqaQualified ? "green" : "amber")}</div>
+      <div class="prospect-business-review-grid">
+        <div><span>公司信息</span><b>${escapeHtml(companyReview)}</b><small>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website) || "官网待补")}</small></div>
+        <div><span>联系人</span><b>${escapeHtml(contactPerson.value)}</b><small title="${escapeHtml(contactDisplay.detail)}">${escapeHtml(contactDisplay.value)}</small></div>
+        <div><span>是否值得跟进</span><b>${escapeHtml(fitReview)}</b><small>行动优先 ${score} 分</small></div>
+      </div>
+    </section>
     <div class="prospect-field-grid">
       <div class="form-field"><label>公司</label><input id="prospectEditCompany" value="${escapeHtml(item.company)}" ${readonly}></div>
       <div class="form-field"><label>官网</label><input id="prospectEditWebsite" value="${escapeHtml(item.website)}" ${readonly}></div>
@@ -17306,12 +24536,22 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
       <div class="form-field" style="grid-column:1/-1"><label>核验说明</label><textarea id="prospectEditDescription" ${readonly}>${escapeHtml(item.description || "")}</textarea></div>
       ${item.excludedReason ? `<div class="prospect-field" style="grid-column:1/-1"><span>排除原因</span><b>${escapeHtml(item.excludedReason)}</b></div>` : ""}
     </div>
+    ${renderProspectQualificationPanel(item)}
+    ${renderExtractedContactsPanel(item)}
+    <details class="prospect-technical-audit" ${prospectTechnicalAuditOpenId === item.id ? "open" : ""}>
+      <summary><span>技术核验记录</span><small>企业身份、资格门禁、官网证据</small></summary>
+      <div class="prospect-technical-audit-body">
+        ${renderProspectScorecard(item)}
+        ${renderProspectIdentityBootstrapPanel(item)}
+        ${renderWebsiteProbePanel(item)}
+      </div>
+    </details>
     <div class="inline-alert"><b>下一步</b><span>${escapeHtml(status.action)}</span></div>
     ${renderProcurementContextPanel(procurementContext, item)}
     <div class="prospect-action-row">
       ${item.status !== "synced" ? `<button class="btn" id="prospectSaveButton">保存候选资料</button>` : ""}
       ${item.status === "excluded" && !dnc ? `<button class="btn" id="prospectRestoreButton">恢复待核验</button>` : ""}
-      ${qualification?.vqaQualified && item.status !== "synced" ? `<button class="btn primary" id="prospectDetailSyncButton">加入线索</button>` : ""}
+      ${qualification?.vqaQualified && item.status !== "synced" ? `<button class="btn primary" id="prospectDetailSyncButton">保留并转为线索</button>` : ""}
       ${item.status === "synced" && item.leadId ? `<button class="btn primary" id="prospectViewLeadButton">查看线索</button>` : ""}
       ${canWriteOutreach && canContact ? `<button class="btn" id="prospectTouchpointButton">补录历史触达</button><button class="btn" id="prospectReplyButton">记录回复</button>` : ""}
       ${item.lastTouchpointAt ? `<button class="btn" id="prospectTouchpointHistoryButton">查看记录</button>` : ""}
@@ -17326,8 +24566,12 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
   qs<HTMLButtonElement>("#prospectTouchpointButton", box)?.addEventListener("click", () => openProspectTouchpointModal(item));
   qs<HTMLButtonElement>("#prospectReplyButton", box)?.addEventListener("click", () => openProspectReplyModal(item));
   qs<HTMLButtonElement>("#prospectTouchpointHistoryButton", box)?.addEventListener("click", () => void openProspectTouchpointHistory(item));
+  qs<HTMLDetailsElement>(".prospect-technical-audit", box)?.addEventListener("toggle", (event) => {
+    prospectTechnicalAuditOpenId = (event.currentTarget as HTMLDetailsElement).open ? item.id : "";
+  });
   bindProspectIdentityBootstrapActions(box, item);
   bindProspectQualificationActions(box, item);
+  qs<HTMLButtonElement>("#prospectContactEnrichmentButton", box)?.addEventListener("click", (event) => void startContactEnrichment(item, event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectWebsiteProbeButton", box)?.addEventListener("click", (event) => void startWebsiteProbe(item, event.currentTarget as HTMLButtonElement));
   bindProcurementContextActions(box, item, procurementContext);
   if (!procurementContext) void loadProspectProcurementContext(item);
@@ -17342,8 +24586,10 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
   if (identityAttempt?.taskStatus === "running") {
     pollProspectIdentityBootstrap(item, identityAttempt.id);
   }
-  const mailWorkspace = qs<HTMLDetailsElement>("#prospectMailWorkspace");
-  if (mailWorkspace) mailWorkspace.open = canContact && Boolean(item.lastDevelopmentEmailAt);
+  if (mailWorkspace && mailWorkspace.dataset.prospectId !== item.id) {
+    mailWorkspace.open = Boolean(item.lastDevelopmentEmailAt);
+    mailWorkspace.dataset.prospectId = item.id;
+  }
   const approvedEmail = qualification?.approvedChannel?.channelType === "email"
     ? qualification.approvedChannel.value
     : "";
@@ -17353,7 +24599,7 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
     mailTo.readOnly = Boolean(approvedEmail);
     mailTo.placeholder = approvedEmail
       ? "已锁定人工批准邮箱"
-      : "通过 VQA 后自动锁定批准邮箱";
+      : "通过客户资格审核后自动锁定批准邮箱";
   }
   renderProspectMailPreview();
 }
@@ -17408,13 +24654,13 @@ function renderProspectList() {
   const contacted = qs<HTMLElement>("#prospectContactedCount");
   const synced = qs<HTMLElement>("#prospectSyncedCount");
   const excluded = qs<HTMLElement>("#prospectExcludedCount");
-  const all = state.websiteOpportunities;
+  const all = state.websiteOpportunities.filter((item) => Boolean(item.shortlistedAt));
   const filtered = prospectFilteredRows();
   const pageCount = Math.max(1, Math.ceil(filtered.length / PROSPECT_PAGE_SIZE));
   state.prospectPage = Math.min(Math.max(1, state.prospectPage), pageCount);
   const pageRows = filtered.slice((state.prospectPage - 1) * PROSPECT_PAGE_SIZE, state.prospectPage * PROSPECT_PAGE_SIZE);
   state.selectedProspectIds = state.selectedProspectIds.filter((id) => all.some((item) => item.id === id));
-  if (!state.selectedProspectId || !all.some((item) => item.id === state.selectedProspectId)) state.selectedProspectId = pageRows[0]?.id || filtered[0]?.id || all[0]?.id || null;
+  if (!state.selectedProspectId || !all.some((item) => item.id === state.selectedProspectId)) state.selectedProspectId = pageRows[0]?.id || filtered[0]?.id || null;
   if (total) total.textContent = filtered.length === all.length ? `${all.length} 条候选` : `${filtered.length} 条显示 · ${all.length} 条总计`;
   if (preview) preview.textContent = String(all.filter((item) => item.status === "preview").length);
   if (contactable) contactable.textContent = String(all.filter((item) => item.status === "contactable").length);
@@ -17471,11 +24717,11 @@ function renderProspectList() {
             <small>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website || ""))}</small>
             <div class="prospect-meta-row">${badge(status.label, status.tone)}${item.lastDevelopmentEmailAt ? badge("已发开发信", "green") : ""}</div>
             <span class="prospect-next-action">下一步：${escapeHtml(status.action)}</span>
-            <div class="prospect-joined-at"><span>加入候选池</span><time datetime="${escapeHtml(item.createdAt)}" title="${escapeHtml(formatProspectJoinedAt(item.createdAt))}">${escapeHtml(formatProspectJoinedAt(item.createdAt))}</time></div>
+            <div class="prospect-joined-at"><span>加入搜客清单</span><time datetime="${escapeHtml(item.shortlistedAt || item.createdAt)}" title="${escapeHtml(formatProspectJoinedAt(item.shortlistedAt || item.createdAt))}">${escapeHtml(formatProspectJoinedAt(item.shortlistedAt || item.createdAt))}</time></div>
           </div>
         </article>
       `;
-    }).join("") : `<div class="empty-cell">暂无匹配线索。请调整筛选，或去自动获客生成新结果。</div>`;
+    }).join("") : `<div class="empty-cell">搜客清单暂无匹配记录。请从当前搜索结果中勾选候选加入。</div>`;
     qsa<HTMLInputElement>("[data-prospect-select]", rows).forEach((input) => {
       input.addEventListener("change", () => {
         const id = input.dataset.prospectSelect || "";
@@ -17538,7 +24784,10 @@ async function syncProspects(ids: string[], button?: HTMLButtonElement) {
     !state.prospectQualifications[item.id]?.vqaQualified
   );
   if (notVqa.length) {
-    toast(`有 ${notVqa.length} 条候选未通过 VQA，请先完成四步资格审查`, "error");
+    const first = notVqa[0];
+    const view = state.prospectQualifications[first.id];
+    focusProspectQualification(first, view?.nextStep);
+    toast(`有 ${notVqa.length} 条候选未完成客户资格审核，已打开第一条待办`, "error");
     return;
   }
   const invalid = state.websiteOpportunities.filter((item) => ids.includes(item.id) && !["preview", "contactable", "contacted"].includes(item.status));
@@ -17602,7 +24851,7 @@ function requestProspectExclusion(ids: string[], button?: HTMLButtonElement) {
 }
 
 async function updateProspectBatch(
-  action: "exclude" | "restore" | "assign",
+  action: "shortlist" | "exclude" | "restore" | "assign",
   ids: string[],
   button?: HTMLButtonElement,
   reason = ""
@@ -17638,7 +24887,7 @@ async function updateProspectBatch(
     });
     state.selectedProspectIds = state.selectedProspectIds.filter((id) => !ids.includes(id));
     renderProspectList();
-    toast(action === "exclude" ? "已排除所选候选" : action === "restore" ? "已恢复为待核验" : "已完成分配");
+    toast(action === "shortlist" ? "已加入搜客清单" : action === "exclude" ? "已排除所选候选" : action === "restore" ? "已恢复为待核验" : "已完成分配");
   } catch (error) {
     toast(error instanceof Error ? error.message : "批量处理失败", "error");
   } finally {
@@ -17884,7 +25133,8 @@ async function sendProspectDevelopmentEmail(button?: HTMLButtonElement) {
     || await loadProspectQualification(item, false);
   if (!qualification?.vqaQualified
     || qualification.approvedChannel?.channelType !== "email") {
-    toast("请先完成 VQA，并批准邮件通道", "error");
+    focusProspectQualification(item, qualification?.nextStep);
+    toast("已为你打开当前缺失的客户资格审核步骤，完成并批准邮件通道后即可发送", "error");
     return;
   }
   if (!state.user?.outboundEmail) {
@@ -17900,7 +25150,7 @@ async function sendProspectDevelopmentEmail(button?: HTMLButtonElement) {
   }
   if (to.toLocaleLowerCase("en-US")
     !== qualification.approvedChannel.value.toLocaleLowerCase("en-US")) {
-    toast("收件邮箱必须与 VQA 批准邮箱一致", "error");
+    toast("收件邮箱必须与客户资格审核批准的邮箱一致", "error");
     return;
   }
   if (button) {
@@ -18399,6 +25649,15 @@ function primaryLeadFinderLiveJob() {
   return active || leadFinderJobs[0] || null;
 }
 
+function currentLeadFinderResultJob() {
+  return leadFinderJobs[0] || null;
+}
+
+function currentLeadFinderResults(opportunities = state.websiteOpportunities) {
+  const ids = new Set(currentLeadFinderResultJob()?.resultIds || []);
+  return opportunities.filter((item) => ids.has(item.id));
+}
+
 function leadFinderLiveStage(job: LeadFinderJob) {
   const phases = job.processPhases || [];
   const current = phases.find((phase) => phase.status === "running")
@@ -18423,6 +25682,79 @@ function leadFinderLiveElapsed(job: LeadFinderJob) {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   return `${hours ? `${hours} 小时 ` : ""}${minutes} 分钟`;
+}
+
+function leadFinderWaitElapsed(value?: string) {
+  const startedAt = new Date(value || "").getTime();
+  if (!Number.isFinite(startedAt)) return "";
+  const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes} 分 ${seconds % 60} 秒` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+}
+
+function leadFinderSourceWaitText(source: LeadFinderSourceStat, job: LeadFinderJob) {
+  const status = source.status || "queued";
+  const candidateCount = Math.max(source.candidateCount || 0, job.resultIds?.length || 0);
+  const waited = leadFinderWaitElapsed(source.updatedAt || source.createdAt || job.createdAt);
+  const waitSuffix = waited ? ` · 已等待 ${waited}` : "";
+  if (status === "retry_scheduled") {
+    return source.id === "ai_search"
+      ? `模型服务限流或临时失败，等待自动重试${waitSuffix}`
+      : `来源暂时不可用，等待自动重试${waitSuffix}`;
+  }
+  if (["queued", "pause_requested"].includes(status)) {
+    return source.id === "ai_search"
+      ? "AI 搜索正在等待空闲执行通道"
+      : "正在等待空闲执行通道";
+  }
+  if (status === "running") {
+    if (source.id === "ai_search") {
+      return candidateCount
+        ? `已有 ${candidateCount} 个候选先展示，AI 模型仍在补充${waitSuffix}`
+        : `AI 模型正在生成候选${waitSuffix}`;
+    }
+    return candidateCount
+      ? `已有 ${candidateCount} 个候选先展示，仍在等待该来源补充${waitSuffix}`
+      : `正在等待来源返回${waitSuffix}`;
+  }
+  if (status === "failed") return source.error || "来源执行失败，可在失败报文中查看原因";
+  return "";
+}
+
+function leadFinderWaitState(job: LeadFinderJob) {
+  if (isLeadFinderJobTerminal(job) || job.status === "paused") return null;
+  const planningEvent = [...(job.liveEvents || [])].reverse().find((event) =>
+    ["mission.ai_planning_started", "mission.ai_planning_completed", "mission.ai_planning_fallback"].includes(event.type)
+  );
+  if (planningEvent?.type === "mission.ai_planning_started") {
+    const waited = leadFinderWaitElapsed(planningEvent.occurredAt);
+    return {
+      tone: "is-ai",
+      title: job.resultIds?.length ? `已先展示 ${job.resultIds.length} 个候选，AI 正在规划下一轮` : "AI 正在规划下一轮搜索",
+      detail: `${waited ? `AI 规划已等待 ${waited}；` : ""}其他来源结果和已入池客户会继续实时展示`
+    };
+  }
+  const activeSources = (job.sourceStats || []).filter((source) =>
+    ["queued", "running", "retry_scheduled", "pause_requested"].includes(source.status || "queued")
+  );
+  const aiSource = activeSources.find((source) => source.id === "ai_search");
+  const source = aiSource || activeSources.find((item) => item.status === "retry_scheduled") || activeSources[0];
+  if (!source) {
+    return {
+      tone: "is-queued",
+      title: "正在分配搜索执行通道",
+      detail: "任务不会阻塞页面，来源结果会在保存后立即出现"
+    };
+  }
+  const detail = leadFinderSourceWaitText(source, job);
+  return {
+    tone: source.status === "retry_scheduled" ? "is-retry" : source.id === "ai_search" ? "is-ai" : "is-source",
+    title: source.id === "ai_search"
+      ? source.status === "queued" ? "AI 搜索正在排队" : source.status === "retry_scheduled" ? "AI 搜索准备重试" : "AI 模型响应中"
+      : source.status === "retry_scheduled" ? `${source.name} 准备重试` : `等待 ${source.name} 返回`,
+    detail
+  };
 }
 
 function leadFinderLiveTransportLabel(job: LeadFinderJob) {
@@ -18887,6 +26219,7 @@ function renderLeadFinderLiveOverview() {
     ["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled", "success", "success_empty"].includes(source.status || "")
   ).length;
   const stage = leadFinderLiveStage(job);
+  const waitState = leadFinderWaitState(job);
   const progress = Math.max(0, Math.min(100, Number(job.progress) || 0));
   const transport = leadFinderLiveTransportLabel(job);
   const allLogs = leadTaskDetailLogs(job);
@@ -18947,6 +26280,7 @@ function renderLeadFinderLiveOverview() {
           <div class="lead-live-bubble">
             <div class="lead-live-message-meta"><b>${terminal ? "任务已结束" : escapeHtml(stage.name)}</b>${terminal ? "" : `<span>${progress}%</span>`}</div>
             ${terminal ? "" : `<p>${escapeHtml(stage.result || "等待事实回传")}</p>`}
+            ${waitState ? `<div class="lead-live-wait-reason ${escapeHtml(waitState.tone)}" role="status"><i aria-hidden="true"></i><span><b>${escapeHtml(waitState.title)}</b><small>${escapeHtml(waitState.detail)}</small></span></div>` : ""}
             ${terminal ? `<span class="lead-live-terminal-progress" role="progressbar" aria-label="${escapeHtml(job.title)}执行进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"></span>` : `<div class="lead-live-progress" role="progressbar" aria-label="${escapeHtml(job.title)}执行进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}">
               <div class="lead-live-progress-track"><i style="--p:${progress}%"></i></div>
             </div>`}
@@ -19094,7 +26428,12 @@ function renderLeadFinderResultView() {
   candidateView.hidden = cleaning;
   cleaningView.hidden = !cleaning;
   if (bulkbar) bulkbar.hidden = cleaning;
-  if (scope) scope.textContent = cleaning ? "逐条追溯当前任务的管线处置" : "候选入池后自动更新";
+  const currentJob = currentLeadFinderResultJob();
+  if (scope) scope.textContent = cleaning
+    ? "逐条追溯当前任务的管线处置"
+    : currentJob
+      ? `当前搜索 · ${currentJob.title}`
+      : "启动搜索后，这里只显示本次结果";
   qsa<HTMLButtonElement>("[data-lead-result-view]").forEach((button) => {
     const active = button.dataset.leadResultView === leadFinderResultView;
     button.classList.toggle("active", active);
@@ -19406,6 +26745,7 @@ function renderLeadTaskSources(job: LeadFinderJob) {
     const current = leadTaskDetailSourceStep(source.status);
     const terminal = current === 5;
     const returned = source.rawCount ?? source.count;
+    const waitText = leadFinderSourceWaitText(source, job);
     const resultText = returned === undefined
       ? "等待来源返回"
       : returned === 0
@@ -19418,6 +26758,7 @@ function renderLeadTaskSources(job: LeadFinderJob) {
         <div class="task-run-source-result">
           <span class="task-run-source-status">${escapeHtml(source.statusLabel || "等待执行")}</span>
           <span class="task-run-source-count">${escapeHtml(resultText)}</span>
+          ${waitText ? `<span class="task-run-source-wait ${source.id === "ai_search" ? "is-ai" : ""}">${escapeHtml(waitText)}</span>` : ""}
           ${source.failure ? `<button type="button" data-lead-source-failure="${escapeHtml(source.id)}">查看失败报文</button>` : ""}
         </div>
         <time class="task-run-source-time">${escapeHtml(leadTaskDetailTime(source.updatedAt || source.createdAt))}</time>
@@ -19467,6 +26808,54 @@ function openLeadTaskFailureReport(job: LeadFinderJob, sourceId: string) {
     attempts: source.attempts || [],
     requests: source.requests || []
   }, null, 2);
+  if (!dialog.open) dialog.showModal();
+}
+
+function leadFinderNoResultReasons(job: LeadFinderJob) {
+  const reasons: string[] = [];
+  (job.sourceStats || []).forEach((source) => {
+    const returned = source.rawCount ?? source.count;
+    const candidateCount = source.candidateCount || 0;
+    if (source.status === "failed" || source.failure) {
+      reasons.push(`${source.name}：${source.error || source.failure?.errorMessage || "来源执行失败，未返回可用记录"}`);
+    } else if ((returned || 0) > 0 && candidateCount === 0) {
+      reasons.push(`${source.name}：返回 ${returned} 条原始记录，但清洗后没有形成新候选。`);
+    } else if (["succeeded_empty", "success_empty"].includes(source.status || "") || returned === 0) {
+      reasons.push(`${source.name}：本次没有返回匹配当前条件的记录。`);
+    }
+  });
+  (job.cleaningReport?.reasons || []).filter((reason) => reason.count > 0).forEach((reason) => {
+    reasons.push(`清洗规则“${reason.label}”处理 ${reason.count} 条。`);
+  });
+  (job.processPhases || []).filter((phase) => ["failed", "blocked", "partial"].includes(phase.status)).forEach((phase) => {
+    reasons.push(`${phase.name}：${phase.result}`);
+  });
+  if (job.status === "cancelled") reasons.push("任务在完成全部来源前被取消。");
+  if (!reasons.length) reasons.push("已启用来源没有返回可识别的新企业，或返回内容与历史企业重复。 ");
+  return [...new Set(reasons)];
+}
+
+function openLeadFinderNoResultReport(job: LeadFinderJob) {
+  const dialog = qs<HTMLDialogElement>("#leadTaskFailureDialog");
+  const title = qs<HTMLElement>("#leadTaskFailureTitle");
+  const summary = qs<HTMLElement>("#leadTaskFailureSummary");
+  const body = qs<HTMLElement>("#leadTaskFailureBody");
+  if (!dialog || !title || !summary || !body) return;
+  const reasons = leadFinderNoResultReasons(job);
+  title.textContent = "本次未找到候选的原因";
+  summary.textContent = `${job.title} · ${leadTaskDetailTime(job.createdAt)}`;
+  body.textContent = [
+    "本次结果",
+    "没有形成可加入搜客清单的新候选。",
+    "",
+    "系统记录到的原因",
+    ...reasons.map((reason, index) => `${index + 1}. ${reason}`),
+    "",
+    "建议下一步",
+    "1. 放宽一个条件，例如市场、客户类型或排除词，不要同时大范围改动。",
+    "2. 查看清洗去除记录，确认结果是否因历史重复或 ICP 条件被过滤。",
+    "3. 来源失败时可稍后重试；系统不会通过绕过网站规则的方式补数据。"
+  ].join("\n");
   if (!dialog.open) dialog.showModal();
 }
 
@@ -19524,7 +26913,7 @@ function renderLeadTaskCleaningReport(job: LeadFinderJob) {
     state.leadProviders.find((item) => item.id === code)?.name || code;
   const pendingCandidates = job.pendingCandidates || [];
   const selectedPending = new Set(job.selectedPendingHitIds || []);
-  summary.textContent = `${report.summary.processedCount}/${report.summary.pipelineHitCount} 已处理 · ${report.summary.candidateCount} 条入池${job.superSearchMissionId && job.pendingCandidatesLoaded ? ` · 全任务待决定 ${pendingCandidates.length}` : ""}`;
+  summary.textContent = `${report.summary.processedCount}/${report.summary.pipelineHitCount} 已处理 · ${report.summary.candidateCount} 条入池 · 官网 ${report.summary.websiteResolvedCount || 0}/${report.summary.candidateCount}${job.superSearchMissionId && job.pendingCandidatesLoaded ? ` · 全任务待决定 ${pendingCandidates.length}` : ""}`;
   const showImportButton = Boolean(
     job.backendRunId
     && (pendingCandidates.length > 0 || (!job.pendingCandidatesLoaded && report.summary.pendingCount > 0))
@@ -19574,7 +26963,7 @@ function renderLeadTaskCleaningReport(job: LeadFinderJob) {
       <td><b>${escapeHtml(providerName(record.providerCode))}</b><span title="${escapeHtml(record.hitId)}">${escapeHtml(record.hitId.slice(-12))}</span></td>
       <td><span class="task-run-clean-outcome is-${escapeHtml(record.outcome)}">${escapeHtml(outcomeLabels[record.outcome])}</span></td>
       <td><b>${escapeHtml(record.reason)}</b><span>${escapeHtml(record.reasonCode)}</span></td>
-      <td><b>${escapeHtml(record.candidateName || "未进入候选池")}</b><span>${escapeHtml(record.candidateId ? record.candidateId.slice(-16) : "无候选记录")}</span></td>
+      <td><b>${escapeHtml(record.candidateName || "未进入候选池")}</b><span>${escapeHtml(record.website || record.websiteReason || (record.candidateId ? "官网发现待处理" : "无候选记录"))}${record.websiteProvider ? ` · ${escapeHtml(record.websiteProvider)}` : ""}</span></td>
       <td>${escapeHtml(leadTaskDetailTime(record.processedAt))}</td>
     </tr>
   `).join("");
@@ -19642,7 +27031,7 @@ function renderLeadTaskCandidates(job: LeadFinderJob) {
   job.selectedResultIds = [...selected];
   summary.textContent = `${available.length} 条可选 · 已选 ${selected.size} 条`;
   syncButton.disabled = selected.size === 0;
-  syncButton.textContent = selected.size ? `加入线索（${selected.size}）` : "加入线索";
+  syncButton.textContent = selected.size ? `加入搜客清单（${selected.size}）` : "加入搜客清单";
   selectAll.disabled = available.length === 0;
   selectAll.checked = available.length > 0 && selected.size === available.length;
   selectAll.indeterminate = selected.size > 0 && selected.size < available.length;
@@ -19658,7 +27047,12 @@ function renderLeadTaskCandidates(job: LeadFinderJob) {
   };
   if (!candidates.length) {
     const missingCount = job.resultIds?.length || 0;
-    box.innerHTML = `<div class="task-run-insight-empty">${missingCount ? "正在读取本任务候选资料。" : leadTaskJobIsLive(job) ? "任务仍在搜索和清洗，形成候选后会显示在这里。" : "本任务未形成可加入线索的候选。"}</div>`;
+    box.innerHTML = `<div class="task-run-insight-empty">${missingCount
+      ? "正在读取本任务候选资料。"
+      : leadTaskJobIsLive(job)
+        ? "任务仍在搜索和清洗，形成候选后会显示在这里。"
+        : `本任务未形成可加入搜客清单的候选。<br><button class="lead-no-result-action" type="button" data-task-empty-report>查看未找到原因</button>`}</div>`;
+    qs<HTMLButtonElement>("[data-task-empty-report]", box)?.addEventListener("click", () => openLeadFinderNoResultReport(job));
     return;
   }
   box.innerHTML = `<div class="task-run-candidate-list">${candidates.map((item) => {
@@ -19666,18 +27060,22 @@ function renderLeadTaskCandidates(job: LeadFinderJob) {
     const duplicate = leadFinderDuplicateState(item);
     const status = prospectStatusMeta(item);
     const stateText = selectable
-      ? "可加入线索"
-      : item.status === "synced"
-        ? "已加入线索"
+      ? "可加入搜客清单"
+      : item.shortlistedAt
+        ? "已在搜客清单"
+        : item.status === "synced"
+          ? "已加入线索"
         : duplicate.text !== "新候选"
           ? duplicate.text
           : status.label;
+    const contactPerson = websiteContactPersonDisplay(item);
+    const contactDisplay = websiteContactDisplay(item);
     return `
       <label class="task-run-candidate-row ${selectable ? "" : "is-disabled"}">
         <input type="checkbox" data-task-candidate-id="${escapeHtml(item.id)}" ${selected.has(item.id) ? "checked" : ""} ${selectable ? "" : "disabled"} aria-label="选择 ${escapeHtml(item.company)}">
         <div><b>${escapeHtml(item.company || "公司待确认")}</b><span>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website) || "官网待补充")}</span></div>
         <div><b>${escapeHtml(item.sourceLabel || state.leadProviders.find((provider) => provider.id === item.source)?.name || item.source || "来源待确认")}</b><span>${escapeHtml(item.business || "业务待核验")}</span></div>
-        <div><b>${escapeHtml(item.contactInfo || "暂无联系方式")}</b><span>${escapeHtml(item.contact || "联系人待确认")}</span></div>
+        <div><b>${escapeHtml(contactPerson.value)}</b><span>${escapeHtml(contactDisplay.value)}</span></div>
         <strong class="task-run-candidate-score">${leadFinderScore(item)} 分</strong>
         <em class="task-run-candidate-state ${selectable ? "" : "is-disabled"}">${escapeHtml(stateText)}</em>
       </label>
@@ -19699,7 +27097,7 @@ function renderLeadTaskCandidates(job: LeadFinderJob) {
 async function syncSelectedLeadTaskCandidates(job: LeadFinderJob, button: HTMLButtonElement) {
   const selectedIds = [...new Set(job.selectedResultIds || [])];
   if (!selectedIds.length) return;
-  const completed = await syncLeadFinderRows(button, selectedIds);
+  const completed = await shortlistLeadFinderRows(button, selectedIds, job.backendRunId || job.id);
   if (!completed) return;
   job.selectedResultIds = [];
   renderLeadTaskCandidates(job);
@@ -19847,7 +27245,7 @@ function renderLeadTaskAcceptance(job: LeadFinderJob) {
       : "0";
   box.innerHTML = `
     <div class="task-acceptance-result is-${escapeHtml(acceptance.outcome)}"><span>验收结论</span><b>${escapeHtml(labels[acceptance.outcome])}</b></div>
-    <div><span>来源返回 / 候选池 / RRQ / VQA · 深挖研究就绪</span><b>${acceptance.sourceReturnedCount || 0} / ${acceptance.candidateCount} / ${acceptance.reviewReadyCount || 0} / ${acceptance.vqaCount} · ${acceptance.researchReadyCount || 0}${acceptance.targetCandidateCount ? ` / 候选目标 ${acceptance.targetCandidateCount}` : acceptance.targetVqaCount ? ` / VQA 目标 ${acceptance.targetVqaCount}` : ""}</b></div>
+    <div><span>来源返回 / 候选池 / 待审核 / 审核通过 · 深挖研究就绪</span><b>${acceptance.sourceReturnedCount || 0} / ${acceptance.candidateCount} / ${acceptance.reviewReadyCount || 0} / ${acceptance.vqaCount} · ${acceptance.researchReadyCount || 0}${acceptance.targetCandidateCount ? ` / 候选目标 ${acceptance.targetCandidateCount}` : acceptance.targetVqaCount ? ` / 审核目标 ${acceptance.targetVqaCount}` : ""}</b></div>
     <div><span>来源成功 / 失败 / 跳过</span><b>${acceptance.sourceSuccessCount} / ${acceptance.sourceFailureCount} / ${acceptance.sourceSkippedCount}</b></div>
     <div><span>实际费用</span><b>${escapeHtml(costs)}${acceptance.costUnknownCount ? ` · ${acceptance.costUnknownCount} 笔未知` : ""}</b></div>
     <div class="task-acceptance-wide"><span>结束原因</span><b>${escapeHtml(acceptance.stopReason || (acceptance.outcome === "running" ? "任务仍在执行" : "执行器已结束"))}</b></div>
@@ -20225,7 +27623,7 @@ function createLeadFinderJob(status: LeadFinderJob["status"] = "running") {
     detailLines: buildLeadFinderJobDetails()
   };
   leadFinderJobs = [job, ...leadFinderJobs].slice(0, 6);
-  renderLeadFinderJobs();
+  renderLeadFinder(state.websiteOpportunities);
   return job;
 }
 
@@ -20584,6 +27982,12 @@ function leadTaskLiveEventLog(event: ProspectLiveEventApiRecord): LeadTaskStream
     result = `${Number(event.metrics.relationCount || 0)} 条关系`;
   } else if (event.type.startsWith("mission.deep_")) {
     result = event.type.endsWith("completed") ? "已归档" : "研究中";
+  } else if (event.type === "mission.ai_planning_started") {
+    result = "规划中";
+  } else if (event.type === "mission.ai_planning_completed") {
+    result = "已完成";
+  } else if (event.type === "mission.ai_planning_fallback") {
+    result = "规则已接管";
   }
   const failed = Boolean(event.failureCode)
     || ["failed", "rejected", "request_outcome_unknown"].includes(event.status);
@@ -20617,6 +28021,15 @@ function stopLeadTaskEventStream(enablePolling = true) {
 
 function scheduleLeadTaskEventRefresh(event: ProspectLiveEventApiRecord) {
   const job = leadFinderJobs.find((item) => item.backendRunId === event.runId);
+  if (["page.persisted", "candidate.persisted", "candidate.rejected"].includes(event.type)) {
+    leadFinderOpportunityRefreshPending = true;
+  }
+  if (job && event.type === "candidate.persisted" && event.entityType === "candidate" && event.entityId) {
+    job.resultIds = [...new Set([...(job.resultIds || []), event.entityId])];
+    job.resultCount = Math.max(job.resultCount, job.resultIds.length);
+    if (job.incrementalStats) job.incrementalStats.newCount = Math.max(job.incrementalStats.newCount, job.resultIds.length);
+    if (job.cleaningReport) job.cleaningReport.summary.candidateCount = Math.max(job.cleaningReport.summary.candidateCount, job.resultIds.length);
+  }
   if (job && event.progress !== null) job.progress = event.progress;
   if (job && activeLeadFinderJobId === job.id) {
     renderLeadTaskStream(job);
@@ -20628,10 +28041,12 @@ function scheduleLeadTaskEventRefresh(event: ProspectLiveEventApiRecord) {
   if (leadFinderStreamRefreshTimer) return;
   leadFinderStreamRefreshTimer = window.setTimeout(() => {
     leadFinderStreamRefreshTimer = 0;
-    void loadProspectRuns(true);
-    if (["page.persisted", "candidate.persisted", "candidate.rejected"].includes(event.type)) {
-      void refreshLeadFinderOpportunities();
-    }
+    const refreshOpportunities = leadFinderOpportunityRefreshPending;
+    leadFinderOpportunityRefreshPending = false;
+    void (async () => {
+      await loadProspectRuns(true);
+      if (refreshOpportunities) await refreshLeadFinderOpportunities();
+    })();
   }, 350);
 }
 
@@ -20773,10 +28188,74 @@ async function refreshLeadFinderOpportunities() {
   const result = await api<{ opportunities: WebsiteOpportunity[] }>(
     "/api/tools/website-opportunities"
   );
-  state.websiteOpportunities = result.opportunities || [];
+  const selectedIds = new Set(state.websiteOpportunities
+    .filter((item) => item.selected)
+    .map((item) => item.id));
+  state.websiteOpportunities = (result.opportunities || []).map((item) => ({
+    ...item,
+    selected: selectedIds.has(item.id)
+  }));
   renderWebsiteOpportunities(state.websiteOpportunities);
   renderLeadFinder(state.websiteOpportunities);
   renderProspectList();
+  renderLeadFinderJobs();
+  if (activeLeadFinderJobId && qs<HTMLElement>(".view.active")?.id === "lead-task-detail") {
+    renderLeadTaskDetail();
+  }
+  if (prospectRadarActiveJobId === "prospect-pool" && prospectRadarController) {
+    const model = buildProspectPoolRadarModel();
+    renderProspectPoolRadarMetrics(model);
+    prospectRadarController.update(model);
+  } else if (prospectRadarActiveJobId) {
+    const activeJob = leadFinderJobs.find((item) => item.id === prospectRadarActiveJobId);
+    if (activeJob) syncProspectRadar(activeJob);
+  }
+  scheduleWebsiteProbeRefresh();
+}
+
+function scheduleWebsiteProbeRefresh(windowMs = 5 * 60 * 1000) {
+  const active = state.websiteOpportunities.some((item) =>
+    (item.contactEnrichmentAttempts || []).some((attempt) =>
+      attempt.status === "queued" || attempt.status === "running"
+    )
+    ||
+    (item.websiteProbeAttempts || []).some((attempt) =>
+      attempt.status === "queued" || attempt.status === "running"
+    )
+    || Boolean(
+      !item.contactInfo?.trim()
+      && /^https:\/\//iu.test(item.website || "")
+      && !websiteProbePolicyBlockReason(item)
+      && !(item.websiteProbeAttempts || []).length
+    )
+  );
+  if (!active) {
+    if (websiteProbeRefreshTimer) window.clearTimeout(websiteProbeRefreshTimer);
+    websiteProbeRefreshTimer = 0;
+    websiteProbeRefreshDeadline = 0;
+    return;
+  }
+  if (!websiteProbeRefreshDeadline) {
+    websiteProbeRefreshDeadline = Date.now() + windowMs;
+  }
+  if (Date.now() > websiteProbeRefreshDeadline) {
+    websiteProbeRefreshDeadline = 0;
+    return;
+  }
+  if (websiteProbeRefreshTimer) return;
+  websiteProbeRefreshTimer = window.setTimeout(async () => {
+    websiteProbeRefreshTimer = 0;
+    if (!state.user || Date.now() > websiteProbeRefreshDeadline) {
+      websiteProbeRefreshDeadline = 0;
+      return;
+    }
+    try {
+      await refreshLeadFinderOpportunities();
+    } catch {
+      // Keep the short refresh window alive across a transient API failure.
+    }
+    scheduleWebsiteProbeRefresh();
+  }, 1_500);
 }
 
 async function loadProspectRuns(quiet = false) {
@@ -20809,8 +28288,8 @@ async function loadProspectRuns(quiet = false) {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, 6);
     if ([...backendJobs, ...superJobs].some((job) =>
-      ["done", "partial", "failed"].includes(job.status)
-      && Boolean(job.resultIds?.length)
+      ["running", "done", "partial", "failed"].includes(job.status)
+      || Boolean(job.resultIds?.length)
     )) {
       await refreshLeadFinderOpportunities();
     }
@@ -20820,7 +28299,7 @@ async function loadProspectRuns(quiet = false) {
     syncLeadFinderRunPolling();
     syncLeadFinderLiveTransport();
   } catch (error) {
-    if (!quiet && state.user?.role !== "super_admin") {
+    if (!quiet && state.iamCapabilities?.source !== "platform") {
       toast(error instanceof Error ? `获客任务加载失败：${error.message}` : "获客任务加载失败", "error");
     }
     stopLeadFinderRunPolling();
@@ -20895,14 +28374,14 @@ async function loadProspectSchedules(quiet = false) {
   } catch (error) {
     state.prospectSchedules = [];
     renderProspectSchedules();
-    if (!quiet && state.user.role !== "super_admin") {
+    if (!quiet && state.iamCapabilities?.source !== "platform") {
       toast(error instanceof Error ? error.message : "定期搜索计划加载失败", "error");
     }
   }
 }
 
 function canReviewOrganizationIdentityConflicts() {
-  return state.user?.role === "manager" || state.user?.role === "admin";
+  return hasIamCapability("prospect.execute");
 }
 
 function organizationIdentityConflictTypeLabel(
@@ -21095,7 +28574,12 @@ async function mutateProspectSchedule(
   action: "pause" | "resume" | "delete",
   button: HTMLButtonElement
 ) {
-  if (action === "delete" && !window.confirm("确认删除这个定期搜索计划？已产生的搜客任务不会被删除。")) return;
+  if (action === "delete" && !await confirmAction({
+    title: "删除定期搜索计划",
+    message: "该计划将停止后续自动搜客。",
+    consequences: ["定期执行配置会被删除", "已产生的搜客任务和结果会保留"],
+    confirmLabel: "删除计划"
+  })) return;
   button.disabled = true;
   try {
     const path = action === "delete"
@@ -21147,7 +28631,7 @@ function renderLeadFinderSearchLinks() {
 
 function collectLeadFinderRows() {
   qsa<HTMLTableRowElement>("#leadFinderResultRows tr[data-lead-id]").forEach(syncLeadRowFields);
-  return state.websiteOpportunities
+  return currentLeadFinderResults()
     .filter((item) => item.selected)
     .map((item) => ({
       id: item.id,
@@ -21213,7 +28697,7 @@ function leadFinderScoreSummary(item: WebsiteOpportunity) {
   return `
     <div class="lead-score-summary">
       <div class="lead-score-values">${values.map(([short, label, value]) => `<span title="${escapeHtml(label)}">${short}<b>${value}</b></span>`).join("")}</div>
-      ${badge(scorecard.vqa.qualified ? "VQA 通过" : "待资格审查", scorecard.vqa.qualified ? "green" : "amber")}
+      ${badge(scorecard.vqa.qualified ? "资格审核通过" : "待资格审核", scorecard.vqa.qualified ? "green" : "amber")}
       ${reasons.length ? `<small>${escapeHtml(reasons.join("；"))}</small>` : ""}
     </div>
   `;
@@ -21235,7 +28719,7 @@ function renderProspectScorecard(item: WebsiteOpportunity) {
     : "企业、ICP、有效渠道、合规与人工批准均已通过。";
   return `
     <section class="prospect-scorecard">
-      <div class="prospect-scorecard-head"><b>搜索验证评分</b>${badge(scorecard.vqa.qualified ? "VQA 已通过" : "VQA 未通过", scorecard.vqa.qualified ? "green" : "amber")}</div>
+      <div class="prospect-scorecard-head"><b>搜索验证评分</b>${badge(scorecard.vqa.qualified ? "资格审核已通过" : "资格审核未通过", scorecard.vqa.qualified ? "green" : "amber")}</div>
       <div class="prospect-score-grid">${rows.map(([label, entry]) => `
         <div><span>${label}</span><b>${entry.score}</b><i style="--p:${entry.score}%"></i><small>${entry.status === "verified" ? "已验证" : entry.status === "blocked" ? "受阻" : entry.status === "partial" ? "待补证" : "未验证"}</small></div>
       `).join("")}</div>
@@ -21264,6 +28748,15 @@ function openLeadFinderVerificationDrawer(item: WebsiteOpportunity) {
   document.body.classList.add("lead-verification-drawer-open");
 }
 
+function openLeadFinderLookupReason(item: WebsiteOpportunity) {
+  openLeadFinderVerificationDrawer(item);
+  requestAnimationFrame(() => {
+    const diagnosis = qs<HTMLElement>("#leadFinderLookupDiagnosis");
+    diagnosis?.scrollIntoView({ behavior: "smooth", block: "start" });
+    diagnosis?.focus({ preventScroll: true });
+  });
+}
+
 function renderLeadFinderDetail(item?: WebsiteOpportunity) {
   const box = qs<HTMLElement>("#leadFinderDetail");
   if (!box) return;
@@ -21279,6 +28772,11 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
   const status = prospectStatusMeta(item);
   const evidence = item.sourceEvidence || [];
   const report = item.verificationReport;
+  const websiteProbe = latestWebsiteProbe(item);
+  const contactDisplay = websiteContactDisplay(item);
+  const controlledWebsiteAccess = Boolean(
+    websiteProbe || report?.accessMode === "controlled_probe"
+  );
   const readonly = item.status === "synced" ? "disabled" : "";
   const reportChecks = report?.checks?.length
     ? report.checks.map((entry) => {
@@ -21311,7 +28809,7 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
     : `
       <div class="lead-evidence-row">
         <div><b>${escapeHtml(item.sourceLabel || item.source || "链接登记")}</b><small>当前候选暂无结构化 Provider 证据</small></div>
-        <p>系统未访问企业网页。请由业务员人工打开参考链接，核对企业主体、业务范围和联系方式。</p>
+        <p>${websiteProbe ? "系统已按受控低频策略验证官网；执行过程与结果见下方官网验证日志。" : "系统尚未验证企业网页。请等待后台补全或由业务员人工核对企业主体、业务范围和联系方式。"}</p>
         ${item.website ? `<a href="${escapeHtml(normalizeWebsiteLink(item.website))}" target="_blank" rel="noreferrer">人工打开参考链接</a>` : ""}
       </div>
     `;
@@ -21324,20 +28822,24 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
       </div>
       <button class="btn icon-only" id="leadFinderVerificationClose" type="button" title="关闭">×</button>
     </div>
+    ${renderProspectLookupDiagnosis(item)}
     <section class="lead-report-summary">
       <div class="lead-report-level">
         ${badge(report?.level || "L0", verificationLevelTone(report?.level))}
         <div><b>${escapeHtml(report?.levelLabel || "报告待生成")}</b><small>${escapeHtml(report?.generatedAt ? `生成于 ${formatTime(report.generatedAt)}` : "刷新后生成")}</small></div>
       </div>
-      ${badge(report?.accessMode === "controlled_probe" ? "受控官网验证" : "零网页访问", report?.accessMode === "controlled_probe" ? "amber" : "green")}
+      ${badge(controlledWebsiteAccess ? "受控官网验证" : "尚未访问官网", controlledWebsiteAccess ? "amber" : "green")}
       <p>${escapeHtml(report?.conclusion || "当前仅展示候选资料，企业真实性和联系方式需要人工确认。")}</p>
-      <div class="lead-report-policy"><b>安全边界</b><span>系统未访问、下载、解析或探测企业网页。官网仅作为人工打开的参考链接保存。</span></div>
+      <div class="lead-report-policy"><b>安全边界</b><span>${controlledWebsiteAccess ? "仅对国外 HTTPS 官网执行受控低频验证：读取 robots.txt、首页和最多一个同域联系页，不下载文件、不保存网页原文。" : "官网尚未进入受控验证；当前仅保存为人工核对链接。"}</span></div>
     </section>
     ${renderProspectScorecard(item)}
+    ${renderExtractedContactsPanel(item)}
     <section class="lead-report-checks">
       <div class="lead-evidence-head"><span>校验检查</span><b>${report?.checks?.length || 0} 项</b></div>
       ${reportChecks}
     </section>
+    ${renderWebsiteDiscoveryPanel(item)}
+    ${renderWebsiteProbePanel(item, "leadFinderWebsiteProbeButton")}
     <div class="lead-profile-head">
       <div><h3>人工核验资料</h3><p>人工修正会保存到当前团队候选记录</p></div>
       <div class="lead-profile-score" title="行动优先级">${score}</div>
@@ -21353,7 +28855,7 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
     </div>
     <div class="lead-detail-stack">
       <div class="lead-detail-card"><span>ICP 判断</span><b>${item.scorecard?.icpMatch.status === "verified" ? `已通过正式 ICP 评估（${item.scorecard.icpMatch.score}）` : `未通过正式 ICP 门禁（${item.scorecard?.icpMatch.score || 0}）`}</b></div>
-      <div class="lead-detail-card"><span>联系方式</span><b>${escapeHtml(item.contactInfo || item.contact || "待补齐")}</b></div>
+      <div class="lead-detail-card"><span>联系方式</span><b title="${escapeHtml(contactDisplay.detail)}">${escapeHtml(contactDisplay.value)}</b></div>
       <div class="lead-detail-card"><span>来源与外部编号</span><b>${escapeHtml(item.sourceLabel || item.source || "链接登记")} · ${escapeHtml(externalId)} · ${evidence.length || 1} 个核验入口</b></div>
       <div class="lead-detail-card"><span>重复与归属</span><b>${badge(duplicate.text, duplicate.tone)} ${escapeHtml(owner)}</b></div>
       <div class="lead-detail-card"><span>行动优先级</span><b>${badge(item.parseMode === "reference" ? "链接登记" : item.parseMode === "ai" ? "AI辅助" : "规则归纳", item.parseMode === "ai" ? "green" : "")} ${badge(`${score}分`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} · AI 结论不作为事实门禁</b></div>
@@ -21365,25 +28867,33 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
     </div>
     <div class="lead-detail-actions">
       ${item.status !== "synced" ? `<button class="btn" id="leadFinderDetailSaveButton">保存核验资料</button>` : ""}
-      ${item.status !== "synced" && !item.scorecard?.vqa.qualified ? `<button class="btn primary" id="leadFinderDetailQualificationButton">进入资格审查</button>` : ""}
-      ${item.scorecard?.vqa.qualified && ["preview", "contactable", "contacted"].includes(item.status) ? `<button class="btn primary" id="leadFinderDetailSyncButton">加入线索</button>` : ""}
+      ${canSelectLeadFinderItem(item) ? `<button class="btn primary" id="leadFinderDetailShortlistButton">加入搜客清单</button>` : ""}
+      ${item.shortlistedAt && item.status !== "synced" ? `<button class="btn primary" id="leadFinderDetailOpenShortlistButton">去搜客清单</button>` : ""}
       ${item.status === "synced" && item.leadId ? `<button class="btn primary" id="leadFinderDetailOpenLeadButton">查看线索</button>` : ""}
     </div>
   `;
   qs<HTMLButtonElement>("#leadFinderVerificationClose", box)?.addEventListener("click", closeLeadFinderVerificationDrawer);
+  qsa<HTMLButtonElement>("[data-website-source-config]", box).forEach((button) => {
+    button.addEventListener("click", () => openLeadSourceCenter(button.dataset.websiteSourceConfig || ""));
+  });
+  qs<HTMLButtonElement>("#leadFinderWebsiteProbeButton", box)?.addEventListener("click", (event) => {
+    void startWebsiteProbe(item, event.currentTarget as HTMLButtonElement);
+  });
+  qs<HTMLButtonElement>("#prospectContactEnrichmentButton", box)?.addEventListener("click", (event) => {
+    void startContactEnrichment(item, event.currentTarget as HTMLButtonElement);
+  });
   qs<HTMLButtonElement>("#leadFinderDetailSaveButton", box)?.addEventListener("click", (event) => {
     void saveLeadFinderVerification(item, event.currentTarget as HTMLButtonElement);
   });
-  qs<HTMLButtonElement>("#leadFinderDetailQualificationButton", box)?.addEventListener("click", () => {
+  qs<HTMLButtonElement>("#leadFinderDetailShortlistButton", box)?.addEventListener("click", (event) => {
+    void shortlistLeadFinderRows(event.currentTarget as HTMLButtonElement, [item.id]);
+  });
+  qs<HTMLButtonElement>("#leadFinderDetailOpenShortlistButton", box)?.addEventListener("click", () => {
     closeLeadFinderVerificationDrawer();
     state.selectedProspectId = item.id;
     activateNavView("prospect-list", () => {
       renderProspectList();
-      void loadProspectQualification(item, false, true);
     });
-  });
-  qs<HTMLButtonElement>("#leadFinderDetailSyncButton", box)?.addEventListener("click", (event) => {
-    void syncProspects([item.id], event.currentTarget as HTMLButtonElement);
   });
   qs<HTMLButtonElement>("#leadFinderDetailOpenLeadButton", box)?.addEventListener("click", () => {
     void openProspectLead(item);
@@ -21658,7 +29168,7 @@ function bindLeadSourceCards() {
   if (!modal) return;
   qsa<HTMLButtonElement>("[data-ls-save]", modal).forEach((button) => button.addEventListener("click", () => void saveLeadSourceConfig(button.dataset.lsSave || "", button)));
   qsa<HTMLButtonElement>("[data-ls-test]", modal).forEach((button) => button.addEventListener("click", () => void testLeadSourceConfig(button.dataset.lsTest || "", button)));
-  qsa<HTMLButtonElement>("[data-ls-delete]", modal).forEach((button) => button.addEventListener("click", () => void deleteLeadSourceConfig(button.dataset.lsDelete || "", button)));
+  qsa<HTMLButtonElement>("[data-ls-delete]", modal).forEach((button) => button.addEventListener("click", () => void deleteLeadSourceConfig(button.dataset.lsDelete || "")));
   qsa<HTMLButtonElement>("[data-ls-import]", modal).forEach((button) => {
     button.addEventListener("click", () => {
       const provider = state.leadProviders.find((item) => item.id === button.dataset.lsImport);
@@ -21790,18 +29300,31 @@ async function testLeadSourceConfig(providerId: string, button?: HTMLButtonEleme
   }
 }
 
-async function deleteLeadSourceConfig(providerId: string, button?: HTMLButtonElement) {
+async function deleteLeadSourceConfig(providerId: string) {
   if (!providerId) return;
-  if (button) { button.disabled = true; button.textContent = "清除中"; }
+  const provider = state.leadProviders.find((item) => item.id === providerId);
+  const confirmed = await confirmAction({
+    title: "清除数据源密钥",
+    message: "清除后，该数据源将停止执行需要认证的搜索任务。",
+    detail: provider?.name || providerId,
+    detailLabel: "数据源",
+    consequences: ["已保存的 API Key 会被移除", "历史搜索结果与运行记录会保留", "重新配置密钥后可以恢复使用"],
+    confirmLabel: "清除密钥",
+    tone: "warning"
+  });
+  if (!confirmed) {
+    openLeadSourceCenter(providerId);
+    return;
+  }
   try {
     const result = await api<{ providers: LeadProviderStatus[] }>(`/api/lead-finder/source-config/${encodeURIComponent(providerId)}`, { method: "DELETE" });
     state.selectedLeadSources = state.selectedLeadSources.filter((item) => item !== providerId);
     refreshLeadSourceCenter(result.providers);
+    openLeadSourceCenter(providerId);
     toast("已清除该数据源的 API Key");
   } catch (error) {
+    openLeadSourceCenter(providerId);
     toast(error instanceof Error ? error.message : "清除失败", "error");
-  } finally {
-    if (button) { button.disabled = false; button.textContent = "清除"; }
   }
 }
 
@@ -21829,9 +29352,10 @@ function leadSourceTag(item: WebsiteOpportunity) {
 }
 
 const leadFinderPageSize = 10;
+let leadFinderRenderedJobId = "";
 
 function updateLeadFinderSelectionCount() {
-  const count = state.websiteOpportunities.filter((item) => item.selected).length;
+  const count = currentLeadFinderResults().filter((item) => item.selected).length;
   const label = qs<HTMLElement>("#leadFinderSelectedCount");
   const bar = qs<HTMLElement>("#leadFinderBulkbar");
   const syncButton = qs<HTMLButtonElement>("#leadFinderSyncButton");
@@ -21841,7 +29365,7 @@ function updateLeadFinderSelectionCount() {
 }
 
 function canSelectLeadFinderItem(item: WebsiteOpportunity) {
-  return Boolean(item.scorecard?.vqa.qualified)
+  return !item.shortlistedAt
     && ["preview", "contactable", "contacted"].includes(item.status)
     && leadFinderDuplicateState(item).text === "新候选";
 }
@@ -21865,6 +29389,11 @@ function leadFinderMobileCard(item: WebsiteOpportunity) {
   const duplicate = leadFinderDuplicateState(item);
   const disabled = !canSelectLeadFinderItem(item);
   const status = prospectStatusMeta(item);
+  const contactDisplay = websiteContactDisplay(item);
+  const contactPerson = websiteContactPersonDisplay(item);
+  const displayStatus = item.shortlistedAt
+    ? { label: "已入搜客清单", tone: "green" }
+    : status;
   return `
     <article class="lead-mobile-card ${item.selected ? "is-checked" : ""}" data-lead-mobile-id="${escapeHtml(item.id)}" aria-selected="${item.selected ? "true" : "false"}">
       <div class="lead-mobile-card-head">
@@ -21872,8 +29401,11 @@ function leadFinderMobileCard(item: WebsiteOpportunity) {
         <div><h3><button type="button" class="lead-company-link" data-lead-company-open="${escapeHtml(item.id)}">${escapeHtml(item.company)}</button></h3><p>${escapeHtml(websiteDomain(item.website) || "官网待补")} / ${escapeHtml(item.country || "国家待确认")}</p></div>
         <span class="lead-mobile-score"><b>${score}</b><small>综合分</small></span>
       </div>
-      <div class="lead-mobile-contact"><span>${escapeHtml(item.business || "业务待维护")}</span><b>${escapeHtml(item.contactInfo || item.contact || "联系方式待补齐")}</b></div>
-      <div class="lead-mobile-meta">${leadSourceTag(item)}<span>${escapeHtml(status.label)}</span><span>${escapeHtml(duplicate.text)}</span></div>
+      <div class="lead-mobile-contact">
+        <div><span>联系人</span>${leadFinderLookupValue(item, contactPerson, "联系人")}</div>
+        <div><span>联系方式</span>${leadFinderLookupValue(item, contactDisplay, "联系方式")}</div>
+      </div>
+      <div class="lead-mobile-meta">${leadSourceTag(item)}<span>${escapeHtml(displayStatus.label)}</span><span>${escapeHtml(duplicate.text)}</span></div>
     </article>
   `;
 }
@@ -21888,6 +29420,15 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
   const aiSub = qs<HTMLElement>("#leadFinderAiSub");
   const aiBadge = qs<HTMLElement>("#leadFinderAiBadge");
   const sourceAiBadge = qs<HTMLElement>("#leadFinderSourceAiBadge");
+  const resultJob = currentLeadFinderResultJob();
+  const resultJobId = resultJob?.id || "";
+  if (leadFinderRenderedJobId !== resultJobId) {
+    state.websiteOpportunities.forEach((item) => { item.selected = false; });
+    state.leadFinderPage = 1;
+    state.selectedLeadFinderId = null;
+    leadFinderRenderedJobId = resultJobId;
+  }
+  opportunities = currentLeadFinderResults(opportunities);
   opportunities.forEach((item) => {
     if (item.selected && !canSelectLeadFinderItem(item)) item.selected = false;
   });
@@ -21911,8 +29452,8 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
     state.selectedLeadFinderId = sortedAll[0]?.id || null;
   }
   if (total) total.textContent = String(sortedAll.length);
-  if (pending) pending.textContent = String(sortedAll.filter((item) => item.status !== "synced").length);
-  if (synced) synced.textContent = String(sortedAll.filter((item) => item.status === "synced").length);
+  if (pending) pending.textContent = String(sortedAll.filter((item) => !item.shortlistedAt).length);
+  if (synced) synced.textContent = String(sortedAll.filter((item) => Boolean(item.shortlistedAt)).length);
   if (aiState) aiState.textContent = ready ? "AI" : "规则";
   if (aiSub) aiSub.textContent = ready ? `${state.aiConfig?.model || "已配置"} 可用于授权来源归纳` : "未启用 AI 时使用授权来源字段归纳";
   [aiBadge, sourceAiBadge].forEach((node) => {
@@ -21926,14 +29467,29 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
   qsa<HTMLButtonElement>("[data-lead-filter]").forEach((button) => {
     button.classList.toggle("active", button.dataset.leadFilter === state.leadFinderFilter);
   });
+  const emptyResult = sortedAll.length
+    ? `<div>当前筛选条件下没有候选。</div>`
+    : resultJob && leadTaskJobIsLive(resultJob)
+      ? `<div>本次搜索仍在进行，候选形成后会自动显示。</div>`
+      : resultJob
+        ? `<div><b>本次未找到可入池候选</b><br><span>可能是来源无返回、历史重复或清洗规则过滤。</span><br><button class="lead-no-result-action" type="button" data-lead-empty-report>查看原因详情</button></div>`
+        : `<div>暂无候选客户，请先开始一次搜索。</div>`;
   rows.innerHTML = pageRows.length ? pageRows.map((item) => {
     const score = leadFinderScore(item);
     const duplicate = leadFinderDuplicateState(item);
     const disabled = !canSelectLeadFinderItem(item);
     const status = prospectStatusMeta(item);
-    const qualificationText = item.scorecard?.vqa.qualified ? "VQA 已通过" : item.scorecard ? "待资格审查" : "评分待刷新";
-    const qualificationReason = item.scorecard?.vqa.reasonCodes.map((code) => prospectScoreReason(code)).join("；") || qualificationText;
+    const displayStatus = item.shortlistedAt
+      ? { label: "已入搜客清单", tone: "green" }
+      : status;
+    const verificationText = item.verificationReport?.level && item.verificationReport.level !== "L0"
+      ? item.verificationReport.levelLabel
+      : item.websiteProbeAttempts?.some((attempt) => attempt.status === "running" || attempt.status === "queued")
+        ? "自动补全中"
+        : "待业务核对";
     const parseMode = item.parseMode === "reference" ? "链接导入" : item.parseMode === "ai" ? "AI 归纳" : "规则归纳";
+    const contactDisplay = websiteContactDisplay(item);
+    const contactPerson = websiteContactPersonDisplay(item);
     return `
       <tr data-lead-id="${escapeHtml(item.id)}" class="${item.selected ? "is-checked" : ""}" aria-selected="${item.selected ? "true" : "false"}">
         <td class="lead-candidate-pick"><input type="checkbox" data-lead-select data-lead-select-id="${escapeHtml(item.id)}" ${item.selected ? "checked" : ""} ${disabled ? "disabled" : ""} aria-label="选择 ${escapeHtml(item.company)}"></td>
@@ -21951,14 +29507,14 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
           <input type="hidden" data-lead-field="country" value="${escapeHtml(item.country)}">
         </td>
         <td class="lead-candidate-hidden-column"></td>
-        <td class="lead-candidate-hidden-column"><input type="hidden" data-lead-field="contact" value="${escapeHtml(item.contact)}"></td>
-        <td><div class="lead-candidate-contact"><b title="${escapeHtml(item.contactInfo || "联系方式待补齐")}">${escapeHtml(item.contactInfo || "联系方式待补齐")}</b><span>${escapeHtml(item.contact || "联系人待确认")}</span></div><input type="hidden" data-lead-field="contactInfo" value="${escapeHtml(item.contactInfo)}"></td>
-        <td><div class="lead-candidate-score"><strong>${score}</strong><span>综合评分</span><small class="${item.scorecard?.vqa.qualified ? "is-qualified" : ""}" title="${escapeHtml(qualificationReason)}">${escapeHtml(qualificationText)}</small></div></td>
-        <td><div class="lead-candidate-state"><b class="is-${escapeHtml(status.tone || "neutral")}">${escapeHtml(status.label)}</b><span>${escapeHtml(duplicate.text)}</span></div></td>
+        <td><div class="lead-candidate-contact">${leadFinderLookupValue(item, contactPerson, "联系人")}<span>${escapeHtml(contactPerson.detail)}</span></div><input type="hidden" data-lead-field="contact" value="${escapeHtml(item.contact)}"></td>
+        <td><div class="lead-candidate-contact">${leadFinderLookupValue(item, contactDisplay, "联系方式")}<span>${escapeHtml(contactDisplay.detail)}</span></div><input type="hidden" data-lead-field="contactInfo" value="${escapeHtml(item.contactInfo)}"></td>
+        <td><div class="lead-candidate-score"><strong>${score}</strong><span>综合评分</span><small>${escapeHtml(verificationText)}</small></div></td>
+        <td><div class="lead-candidate-state"><b class="is-${escapeHtml(displayStatus.tone || "neutral")}">${escapeHtml(displayStatus.label)}</b><span>${escapeHtml(duplicate.text)}</span></div></td>
       </tr>
     `;
-  }).join("") : `<tr><td colspan="9" class="empty-cell">暂无候选客户</td></tr>`;
-  if (mobileRows) mobileRows.innerHTML = pageRows.length ? pageRows.map(leadFinderMobileCard).join("") : `<div class="empty-cell">暂无匹配候选。</div>`;
+  }).join("") : `<tr><td colspan="9" class="empty-cell">${emptyResult}</td></tr>`;
+  if (mobileRows) mobileRows.innerHTML = pageRows.length ? pageRows.map(leadFinderMobileCard).join("") : `<div class="empty-cell">${emptyResult}</div>`;
   const pageSummary = qs<HTMLElement>("#leadFinderPageSummary");
   const pageNumber = qs<HTMLElement>("#leadFinderPageNumber");
   const prev = qs<HTMLButtonElement>("#leadFinderPrevPage");
@@ -21982,6 +29538,17 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
         row.id === button.dataset.leadCompanyOpen
       );
       if (item) openLeadFinderVerificationDrawer(item);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-lead-lookup-reason]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = state.websiteOpportunities.find((row) => row.id === button.dataset.leadLookupReason);
+      if (item) openLeadFinderLookupReason(item);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-lead-empty-report]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (resultJob) openLeadFinderNoResultReport(resultJob);
     });
   });
   updateLeadFinderSelectionCount();
@@ -22230,10 +29797,18 @@ async function runLeadFinder(button?: HTMLButtonElement) {
       return;
     }
     if (billed.length) {
-      const lines = billed.map((p) => p.tier === "ai"
-        ? `· ${p.name}：消耗你配置的 AI 模型 token`
-        : `· ${p.name}：约 ${Math.min(limit, 15)} 次调用${p.usage ? `（${p.usage}）` : ""}`).join("\n");
-      if (!window.confirm(`本次将使用计费数据源：\n${lines}\n\n确认开始搜客吗？`)) return;
+      const billingSummary = billed.map((p) => p.tier === "ai"
+        ? `${p.name}：消耗你配置的 AI 模型 token`
+        : `${p.name}：约 ${Math.min(limit, 15)} 次调用${p.usage ? `（${p.usage}）` : ""}`).join("；");
+      if (!await confirmAction({
+        title: "确认使用计费数据源",
+        message: "本次搜客会调用可能产生费用的数据源。",
+        detail: billingSummary,
+        detailLabel: "计费来源",
+        consequences: ["第三方 API 或 AI 模型可能产生实际费用", "具体费用以对应服务商账单为准", "任务创建后可在运行记录中查看调用情况"],
+        confirmLabel: "确认并开始",
+        tone: "warning"
+      })) return;
     }
     if (scheduleEnabled
       && billed.length
@@ -22292,7 +29867,7 @@ async function runLeadFinder(button?: HTMLButtonElement) {
       leadFinderJobs = [backendJob, ...leadFinderJobs.filter((item) => item.backendRunId !== backendJob.backendRunId)]
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
         .slice(0, 6);
-      renderLeadFinderJobs();
+      renderLeadFinder(state.websiteOpportunities);
       if (result.schedule) {
         state.prospectSchedules = [
           result.schedule,
@@ -22339,91 +29914,48 @@ async function runLeadFinder(button?: HTMLButtonElement) {
   }
 }
 
-async function syncLeadFinderRows(button?: HTMLButtonElement, explicitIds?: string[]) {
-  const explicitIdSet = explicitIds ? new Set(explicitIds) : null;
-  const explicitItems = explicitIdSet
-    ? state.websiteOpportunities.filter((item) => explicitIdSet.has(item.id))
-    : [];
-  const opportunities = explicitIdSet
-    ? explicitItems.map((item) => ({
-        id: item.id,
-        company: item.company,
-        business: item.business,
-        country: item.country,
-        website: item.website,
-        contact: item.contact,
-        contactInfo: item.contactInfo,
-        description: item.description,
-        source: item.source,
-        sourceLabel: item.sourceLabel
-      })).filter((item) => item.company && item.website)
-    : collectLeadFinderRows();
-  if (!opportunities.length) {
-    toast("请先勾选需要加入线索的候选", "error");
-    return false;
-  }
-  const selectedItems = state.websiteOpportunities.filter((item) => opportunities.some((row) => row.id === item.id));
-  await Promise.all(selectedItems.map((item) =>
-    loadProspectQualification(item, true, true)
-  ));
-  const notVqa = selectedItems.filter((item) =>
-    !state.prospectQualifications[item.id]?.vqaQualified
+async function shortlistLeadFinderRows(
+  button?: HTMLButtonElement,
+  explicitIds?: string[],
+  sourceRunId?: string
+) {
+  const ids = explicitIds?.length
+    ? [...new Set(explicitIds)]
+    : collectLeadFinderRows().map((item) => item.id);
+  const selectedItems = state.websiteOpportunities.filter((item) =>
+    ids.includes(item.id) && canSelectLeadFinderItem(item)
   );
-  if (notVqa.length) {
-    const first = notVqa[0]!;
-    state.selectedProspectId = first.id;
-    toast(`有 ${notVqa.length} 条候选未通过当前 VQA，已转到资格审查`, "error");
-    activateNavView("prospect-list", () => renderProspectList());
+  if (!selectedItems.length) {
+    toast("请先勾选需要加入搜客清单的候选", "error");
     return false;
   }
-  const duplicates = selectedItems.filter((item) => leadFinderDuplicateState(item).text !== "新候选");
-  const missingContact = selectedItems.filter((item) => !item.contactInfo.trim()).length;
-  const pendingReview = selectedItems.filter((item) => item.status === "preview").length;
-  if (duplicates.length) {
-    toast("所选候选包含已有客户或已入线索记录，请先取消选择", "error");
-    return false;
-  }
-  const owner = state.user?.name || "当前账号";
-  const sourceSummary = [...new Set(selectedItems.map((item) => item.sourceLabel || item.source || "链接登记"))].join("、");
-  if (!window.confirm([
-    `确认将 ${opportunities.length} 条候选加入线索中心？`,
-    `来源：${sourceSummary}`,
-    `归属人：${owner}`,
-    `重复预检：未发现已知客户或已入线索记录`,
-    `缺少联系方式：${missingContact} 条`,
-    `待补充核验：${pendingReview} 条`,
-    "加入后再创建首个正式跟进待办。"
-  ].join("\n"))) return false;
-  const originalText = button?.textContent || "加入线索";
+  const originalText = button?.textContent || "加入搜客清单";
   if (button) {
     button.disabled = true;
     button.textContent = "加入中";
   }
   try {
-    const result = await api<{ created: LeadSyncResult[] }>("/api/tools/website-scrape/sync-opportunities", {
-      method: "POST",
+    const result = await api<{ opportunities: WebsiteOpportunity[] }>("/api/prospect-list/batch", {
+      method: "PATCH",
       body: JSON.stringify({
-        requestId: prospectRequestId("lead-conversion"),
-        opportunities
+        ids: selectedItems.map((item) => item.id),
+        action: "shortlist",
+        sourceRunId: sourceRunId || currentLeadFinderResultJob()?.backendRunId || currentLeadFinderResultJob()?.id,
+        requestId: prospectRequestId("prospect-shortlist"),
+        effectiveAt: new Date().toISOString()
       })
     });
-    result.created.forEach((item) => {
-      if (!state.leads.some((lead) => lead.id === item.lead.id)) state.leads.unshift(item.lead);
-      const existing = state.websiteOpportunities.find((row) => row.id === item.opportunity.id || row.website === item.opportunity.website);
-      if (existing) Object.assign(existing, item.opportunity);
-      else state.websiteOpportunities.unshift(item.opportunity);
+    result.opportunities.forEach((updated) => {
+      const existing = state.websiteOpportunities.find((item) => item.id === updated.id);
+      if (existing) Object.assign(existing, updated, { selected: false });
     });
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
-    renderLeads();
-    requestDashboardRefresh();
-    const duplicateCount = result.created.filter((item) => item.duplicate).length;
-    const createdCount = result.created.length - duplicateCount;
-    toast(`线索处理完成：新建 ${createdCount} 条，重复 ${duplicateCount} 条`);
+    toast(`已将 ${result.opportunities.length} 条候选加入搜客清单`);
     return true;
   } catch (error) {
-    toast(`加入线索失败：${error instanceof Error ? error.message : "请检查网络后重试"}`, "error");
+    toast(`加入搜客清单失败：${error instanceof Error ? error.message : "请检查网络后重试"}`, "error");
     return false;
   } finally {
     if (button) {
@@ -22481,7 +30013,7 @@ async function createLeadFinderTodos(button?: HTMLButtonElement) {
 
 function exportLeadFinderRows() {
   const rows = collectLeadFinderRows();
-  const source = rows.length ? rows : state.websiteOpportunities;
+  const source = rows.length ? rows : currentLeadFinderResults();
   if (!source.length) {
     toast("暂无搜客结果可导出", "error");
     return;
@@ -22892,7 +30424,7 @@ function openPlanTaskModal(task?: PlanTask) {
     .map((lead) => `<option value="${escapeHtml(lead.id)}" ${task?.leadId === lead.id ? "selected" : ""}>${escapeHtml(lead.company)} · ${escapeHtml(lead.contact || "待维护")}</option>`)
     .join("");
   const customerOptions = state.customers
-    .map((customer) => `<option value="${escapeHtml(customer.id)}" ${task?.customerId === customer.id ? "selected" : ""}>${escapeHtml(customer.company)}</option>`)
+    .map((customer) => `<option value="${escapeHtml(customer.id)}" ${task?.customerId === customer.id ? "selected" : ""}>${escapeHtml(customer.company)}${customer.country ? ` · ${escapeHtml(customer.country)}` : ""}</option>`)
     .join("");
   openModal(editing ? "编辑计划任务" : "新增计划任务", `
     <div class="form-grid">
@@ -23177,7 +30709,12 @@ async function savePlanTemplate() {
 }
 
 async function deletePlanTemplate(id: string) {
-  if (!id || !window.confirm("确认删除这条模板？已生成的计划任务不会被删除。")) return;
+  if (!id || !await confirmAction({
+    title: "删除计划模板",
+    message: "该模板将无法再用于创建计划任务。",
+    consequences: ["模板配置会被删除", "已生成的计划任务不会受影响"],
+    confirmLabel: "删除模板"
+  })) return;
   await api(`/api/plan-templates/${id}`, { method: "DELETE" });
   state.planTemplates = state.planTemplates.filter((item) => item.id !== id);
   renderPlanTemplates(state.planTemplates);
@@ -23218,7 +30755,12 @@ async function createPlanTaskFromTemplate(id: string, button?: HTMLButtonElement
 }
 
 async function deletePlanTask(id: string) {
-  if (!id || !window.confirm("确认删除这条计划任务？")) return;
+  if (!id || !await confirmAction({
+    title: "删除计划任务",
+    message: "这条计划任务将从计划清单中删除。",
+    consequences: ["任务状态与备注会被移除", "已经推送到待办的事项不会自动删除"],
+    confirmLabel: "删除任务"
+  })) return;
   await api(`/api/plan-tasks/${id}`, { method: "DELETE" });
   state.planTasks = state.planTasks.filter((task) => task.id !== id);
   state.selectedPlanTaskIds = state.selectedPlanTaskIds.filter((taskId) => taskId !== id);
@@ -23342,24 +30884,26 @@ function openCustomerModal(customer?: Customer) {
   const selectedGrade = customer ? customerGradeValue(customer) : "C";
   openModal(editing ? "编辑客户" : "新增客户", `
     <div class="form-grid">
-      <div class="form-field full"><label>公司名</label><input id="customerCompanyInput" placeholder="请输入客户公司名称" value="${escapeHtml(customer?.company || "")}"></div>
+      <div class="form-field full"><label>客户简称</label><input id="customerCompanyInput" placeholder="例如：Nordic Tools" value="${escapeHtml(customer?.company || "")}"><small class="form-hint">工作台、商机和跟进中使用的短名称</small></div>
       <div class="form-field"><label>联系人</label><input id="customerContactInput" value="${escapeHtml(customer?.contact || "")}"></div>
       <div class="form-field"><label>国家</label><input id="customerCountryInput" value="${escapeHtml(customer?.country || "")}"></div>
+      <div class="form-field full"><label>公司全名（单据 / 资料）</label><input id="customerCompanyFullNameInput" maxlength="200" value="${escapeHtml(customerDocumentName(customer || { company: "" } as Customer))}" placeholder="例如：Nordic Tools International Trading Co., Ltd."><small class="form-hint">报价、合同、发票、装箱单、报关资料优先使用此名称</small></div>
+      <div class="form-field full"><label>客户来源</label><input id="customerSourceInput" list="customerSourceOptions" maxlength="120" value="${escapeHtml(customer?.source || (editing ? "" : "手动新增"))}" placeholder="例如 官网询盘、展会、转介绍、Alibaba、LinkedIn"><datalist id="customerSourceOptions"><option value="手动新增"></option><option value="官网询盘"></option><option value="展会"></option><option value="转介绍"></option><option value="Alibaba"></option><option value="LinkedIn"></option><option value="WhatsApp"></option><option value="批量导入"></option><option value="智能获客"></option></datalist></div>
       <div class="form-field full"><label>WhatsApp</label><input id="customerWhatsappInput" inputmode="tel" value="${escapeHtml(customer?.whatsapp || customer?.whatsappPhone || "")}" placeholder="例如 +49123456789（含国家码）"></div>
       <div class="form-field"><label>电话</label><input id="customerPhoneInput" inputmode="tel" value="${escapeHtml(customer?.phone || "")}" placeholder="公司电话或联系人电话"></div>
       <div class="form-field"><label>邮箱</label><input id="customerEmailInput" type="email" value="${escapeHtml(customer?.email || "")}" placeholder="例如 sales@example.com"></div>
+      <div class="form-field full"><label>联系方式备注 / 其它渠道</label><textarea id="customerContactRemarkInput" rows="2" maxlength="500" placeholder="例如：LinkedIn / 微信 / Telegram / 展会名片；可分行记录多个渠道">${escapeHtml(customer?.contactRemark || "")}</textarea></div>
       <div class="form-field full"><label>官网</label><input id="customerWebsiteInput" value="${escapeHtml(customer?.website || "")}" placeholder="例如 https://example.com"></div>
       <label class="form-field"><span>客户分级</span><select id="customerGradeInput"><option value="A" ${selectedGrade === "A" ? "selected" : ""}>A · 核心客户</option><option value="B" ${selectedGrade === "B" ? "selected" : ""}>B · 重点客户</option><option value="C" ${selectedGrade === "C" ? "selected" : ""}>C · 常规客户</option><option value="D" ${selectedGrade === "D" ? "selected" : ""}>D · 低优先级</option></select></label>
       <div class="form-field"><label>健康度（人工评分）</label><input id="customerHealthInput" type="number" min="0" max="100" value="${customer?.health ?? 72}"></div>
       <div class="form-field"><label>下一提醒</label><input id="customerReminderInput" value="${escapeHtml(customer?.nextReminder || "")}"></div>
-      <div class="form-field full"><label>单据抬头</label><input id="customerBillingNameInput" value="${escapeHtml(customer?.billingName || customer?.company || "")}" placeholder="用于对外单据的英文/正式公司名"></div>
       <div class="form-field full"><label>账单地址</label><input id="customerBillingAddressInput" value="${escapeHtml(customer?.billingAddress || "")}" placeholder="公司地址、城市、国家"></div>
       <div class="form-field full"><label>单据联系人</label><input id="customerDocumentContactInput" value="${escapeHtml(customer?.documentContact || customer?.contact || "")}" placeholder="联系人 / 邮箱 / 电话"></div>
       <div class="form-field"><label>默认目的港</label><input id="customerPortDischargeInput" value="${escapeHtml(customer?.defaultPortDischarge || "")}" placeholder="例如 Hamburg"></div>
       <div class="form-field"><label>默认贸易条款</label><input id="customerIncotermInput" value="${escapeHtml(customer?.defaultIncoterm || "")}" placeholder="例如 FOB、CIF、DAP"></div>
       <div class="form-field full"><label>默认付款条款</label><input id="customerPaymentTermInput" value="${escapeHtml(customer?.defaultPaymentTerm || "")}"></div>
     </div>
-  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCustomerButton" data-editing-id="${escapeHtml(customer?.id || "")}">${editing ? "保存修改" : "保存客户"}</button>`);
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCustomerButton" data-editing-id="${escapeHtml(customer?.id || "")}">${editing ? "保存修改" : "保存客户"}</button>`, { closeOnBackdrop: false });
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
   qs("#saveCustomerButton")?.addEventListener("click", () => void saveCustomer());
   qs<HTMLInputElement>("#customerCompanyInput")?.focus();
@@ -23382,16 +30926,19 @@ async function saveCustomer() {
   }
   const payload = {
     company,
+    companyFullName: qs<HTMLInputElement>("#customerCompanyFullNameInput")?.value.trim() || company,
     contact: qs<HTMLInputElement>("#customerContactInput")?.value || "待维护",
     country: qs<HTMLInputElement>("#customerCountryInput")?.value || "未知",
     whatsapp,
+    source: qs<HTMLInputElement>("#customerSourceInput")?.value.trim() || (editingId ? "" : "手动新增"),
     phone: qs<HTMLInputElement>("#customerPhoneInput")?.value.trim() || "",
     email: qs<HTMLInputElement>("#customerEmailInput")?.value.trim() || "",
+    contactRemark: qs<HTMLTextAreaElement>("#customerContactRemarkInput")?.value.trim() || "",
     website: qs<HTMLInputElement>("#customerWebsiteInput")?.value.trim() || "",
     grade: (qs<HTMLSelectElement>("#customerGradeInput")?.value || "C") as "A" | "B" | "C" | "D",
     health: Math.max(0, Math.min(100, Number(qs<HTMLInputElement>("#customerHealthInput")?.value || 72))),
     nextReminder: qs<HTMLInputElement>("#customerReminderInput")?.value || "明天 10:00",
-    billingName: qs<HTMLInputElement>("#customerBillingNameInput")?.value.trim() || company,
+    billingName: qs<HTMLInputElement>("#customerCompanyFullNameInput")?.value.trim() || company,
     billingAddress: qs<HTMLInputElement>("#customerBillingAddressInput")?.value.trim() || "",
     documentContact: qs<HTMLInputElement>("#customerDocumentContactInput")?.value.trim() || qs<HTMLInputElement>("#customerContactInput")?.value || "待维护",
     defaultPortDischarge: qs<HTMLInputElement>("#customerPortDischargeInput")?.value.trim() || "",
@@ -23429,13 +30976,17 @@ async function bulkDeleteCustomers() {
     return;
   }
   const names = state.customers.filter((customer) => ids.includes(customer.id)).map((customer) => customer.company);
-  if (!window.confirm(`确认批量删除 ${ids.length} 个客户？\n${names.slice(0, 6).join("、")}${names.length > 6 ? "等" : ""}\n关联商机和待办会同步清理。`)) return;
+  if (!await confirmAction({
+    title: `批量删除 ${ids.length} 个客户`,
+    message: "客户及其关联业务数据将被永久删除。",
+    detail: `${names.slice(0, 6).join("、")}${names.length > 6 ? `等 ${ids.length} 个` : ""}`,
+    consequences: ["客户资料和跟进记录会被删除", "关联商机和待办会同步清理", "此操作无法撤销"],
+    confirmLabel: `删除 ${ids.length} 个客户`,
+    verificationText: String(ids.length)
+  })) return;
   const button = qs<HTMLButtonElement>("#customers [data-bulk-delete-customers]");
   try {
-    if (button) {
-      button.disabled = true;
-      button.textContent = "删除中";
-    }
+    setButtonPending(button, true, "批量删除", `正在删除 ${ids.length} 个`);
     const result = await api<{ deleted: Customer[]; customers: Customer[] }>("/api/customers/bulk-delete", {
       method: "POST",
       body: JSON.stringify({ ids })
@@ -23449,10 +31000,7 @@ async function bulkDeleteCustomers() {
   } catch (error) {
     toast(error instanceof Error ? error.message : "批量删除客户失败", "error");
   } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = "批量删除";
-    }
+    setButtonPending(button, false, "批量删除", "删除中");
   }
 }
 
@@ -23502,21 +31050,29 @@ async function saveCustomerFollow(customerId: string) {
 }
 
 async function syncOcrLead(button: HTMLButtonElement) {
-  button.disabled = true;
-  button.textContent = "同步中";
+  const fields = collectOcrFields();
+  if (!fields.company?.trim()) {
+    toast("请先确认公司名，再同步到线索", "error");
+    return;
+  }
+  const syncButtons = qsa<HTMLButtonElement>("#ocrSyncTopButton, #ocrSyncButton");
+  syncButtons.forEach((item) => { item.disabled = true; item.textContent = "同步中"; });
   try {
-    await api("/api/tools/ocr/jobs/ocr1/recognize", {
+    await api(`/api/tools/ocr/jobs/${encodeURIComponent(activeOcrJobId())}/recognize`, {
       method: "POST",
-      body: JSON.stringify(collectOcrFields())
+      body: JSON.stringify(fields)
     });
-    await api("/api/tools/ocr/jobs/ocr1/sync-lead", { method: "POST" });
+    const result = await api<{ job: OcrJob }>(`/api/tools/ocr/jobs/${encodeURIComponent(activeOcrJobId())}/sync-lead`, { method: "POST" });
+    state.ocrJob = result.job;
     await reloadLeads();
-    button.textContent = "已同步";
-    qsa<HTMLElement>("#tools .sync-row").at(2)!.innerHTML = `<span>目标模块</span><b>线索池 / 欧洲组</b>${badge("已同步", "green")}`;
+    renderOcr(result.job);
+    syncButtons.forEach((item) => { item.textContent = "已同步"; });
+    const targetRow = qsa<HTMLElement>("#business-card .sync-row").at(2);
+    if (targetRow) targetRow.innerHTML = `<span>目标模块</span><b>线索中心 / 当前账号范围</b>${badge("已同步", "green")}`;
     toast("OCR 线索已同步");
   } catch (error) {
-    button.disabled = false;
-    button.textContent = error instanceof Error ? error.message : "同步失败";
+    syncButtons.forEach((item) => { item.disabled = false; item.textContent = item === button ? "重新同步" : item.id === "ocrSyncTopButton" ? "同步到线索" : "确认同步"; });
+    toast(error instanceof Error ? error.message : "同步失败", "error");
   }
 }
 
@@ -23978,6 +31534,193 @@ async function saveDailyReport(button: HTMLButtonElement) {
   }
 }
 
+// ===== 日报自动生成（基于系统操作日志与业务数据） =====
+interface DailyDraft {
+  date: string;
+  total: number;
+  logins: number;
+  productCreated: number; productUpdated: number; productDeleted: number;
+  shipmentCreated: number; shipmentUpdated: number; shipmentDeleted: number; shipmentStatus: number;
+  warnings: number; errors: number; exceptions: number;
+  completedWork: string; customerProgress: string; results: string; risks: string; nextPlan: string; supportNeeded: string;
+  attentionHtml: string; breakdownHtml: string; markdown: string;
+}
+
+let dailyAutoDate = "";
+
+function metaVal(meta: Record<string, unknown> | undefined, key: string): string {
+  const v = meta ? meta[key] : undefined;
+  return v === undefined || v === null ? "" : String(v);
+}
+
+function nl2br(text: string): string {
+  return escapeHtml(text).replace(/\n/g, "<br>");
+}
+
+function buildDailyDraft(dateStr: string): DailyDraft {
+  const logs = (state.logs || []).filter((l) => (l.createdAt || "").slice(0, 10) === dateStr);
+  const byCat: Record<string, number> = {};
+  let logins = 0, productCreated = 0, productUpdated = 0, productDeleted = 0;
+  let shipmentCreated = 0, shipmentUpdated = 0, shipmentDeleted = 0, shipmentStatus = 0;
+  let warnings = 0, errors = 0;
+  const productNames: string[] = [];
+  const shipmentRefs: string[] = [];
+  const actors = new Set<string>();
+  for (const l of logs) {
+    byCat[l.category] = (byCat[l.category] || 0) + 1;
+    if (l.actorName) actors.add(l.actorName);
+    if (l.level === "warning") warnings++;
+    if (l.level === "error") errors++;
+    switch (l.action) {
+      case "login": logins++; break;
+      case "create_product": { productCreated++; const n = metaVal(l.meta, "nameZh"); if (n) productNames.push(n); } break;
+      case "update_product": productUpdated++; break;
+      case "delete_product":
+      case "bulk_delete_product": productDeleted++; break;
+      case "create_shipment": { shipmentCreated++; const no = metaVal(l.meta, "shipmentNo"); if (no) shipmentRefs.push(no); } break;
+      case "update_shipment": shipmentUpdated++; break;
+      case "delete_shipment": shipmentDeleted++; break;
+      case "change_status": { shipmentStatus++; const no = metaVal(l.meta, "shipmentNo"); if (no) shipmentRefs.push(no); } break;
+      default: break;
+    }
+  }
+  const exceptions = (state.shipments || []).filter((s) => s.status === "exception");
+  const inTransit = (state.shipments || []).filter((s) => s.status === "in_transit" || s.status === "shipped").length;
+  const uniqueRefs = Array.from(new Set(shipmentRefs));
+  const actorText = actors.size ? `（${Array.from(actors).join("、")}）` : "";
+
+  const completed: string[] = [];
+  if (logins) completed.push(`系统登录 ${logins} 次${actorText}`);
+  if (productCreated) completed.push(`新增产品 ${productCreated} 个${productNames.length ? `：${productNames.join("、")}` : ""}`);
+  if (productUpdated) completed.push(`更新产品 ${productUpdated} 个`);
+  if (productDeleted) completed.push(`删除产品 ${productDeleted} 个`);
+  if (shipmentCreated) completed.push(`新增发货单 ${shipmentCreated} 个${uniqueRefs.length ? `（${uniqueRefs.slice(0, 3).join("、")}${uniqueRefs.length > 3 ? " 等" : ""}）` : ""}`);
+  if (shipmentUpdated) completed.push(`更新发货单 ${shipmentUpdated} 个`);
+  if (shipmentStatus) completed.push(`完成状态流转 ${shipmentStatus} 次`);
+  if (shipmentDeleted) completed.push(`删除发货单 ${shipmentDeleted} 个`);
+  if (warnings) completed.push(`产生 ${warnings} 条警告`);
+  if (errors) completed.push(`产生 ${errors} 条错误`);
+  if (!completed.length) completed.push("今日暂无系统操作记录");
+  const completedWork = completed.map((c) => `· ${c}`).join("\n");
+
+  const custLines = logs.filter((l) => l.category === "shipment").map((l) => `· ${l.message}`);
+  const customerProgress = custLines.length ? custLines.join("\n") : "· 今日无发货相关客户进展";
+
+  const results = [
+    `新增产品 ${productCreated} 个，更新 ${productUpdated} 个`,
+    `新增发货单 ${shipmentCreated} 个，状态流转 ${shipmentStatus} 次`,
+    `当前在途发货 ${inTransit} 单，异常发货 ${exceptions.length} 单`,
+    `今日系统操作合计 ${logs.length} 条（登录 ${logins} 次）`
+  ].map((c) => `· ${c}`).join("\n");
+
+  const riskLines: string[] = [];
+  if (exceptions.length) riskLines.push(`· ${exceptions.length} 个发货单处于异常状态，需核实运单号与物流：${exceptions.map((e) => e.shipmentNo || e.dealTitle || e.id).join("、")}`);
+  const warnLogs = logs.filter((l) => l.level === "warning" || l.level === "error");
+  if (warnLogs.length) riskLines.push(`· ${warnLogs.length} 条警告/错误日志待关注`);
+  if (!riskLines.length) riskLines.push("· 暂无重大风险");
+  const risks = riskLines.join("\n");
+
+  const nextPlan = [
+    exceptions.length ? `跟进 ${exceptions.length} 个异常发货单，核实运单与物流状态` : "",
+    `推进 ${inTransit} 个运输中/已发货单，预计到达前主动同步客户`,
+    `梳理今日新增询盘与商机，安排次日跟进`,
+    `对今日新增产品更新目录与报价资料`
+  ].filter(Boolean).map((c) => `· ${c}`).join("\n");
+
+  const supportNeeded = errors ? `· ${errors} 个系统错误待技术排查` : "· 暂无需要协助事项";
+
+  const attItems: string[] = [];
+  exceptions.forEach((e) => {
+    attItems.push(`<div class="dy-att-item dy-att-ex"><span class="dy-att-ico">${LOG_LEVEL_ICON.error}</span><div><b>${escapeHtml(e.shipmentNo || e.dealTitle || "发货单")}</b><span>异常 · ${escapeHtml(e.customerName || "")}</span></div></div>`);
+  });
+  warnLogs.forEach((l) => {
+    attItems.push(`<div class="dy-att-item dy-att-warn"><span class="dy-att-ico">${LOG_LEVEL_ICON[l.level]}</span><div><b>${escapeHtml(l.message)}</b><span>${LOG_CATEGORY_LABEL[l.category]} · ${escapeHtml(l.actorName || "")}</span></div></div>`);
+  });
+  const attentionHtml = attItems.length ? attItems.join("") : `<div class="dy-att-empty">暂无需要关注的事项</div>`;
+
+  const cats: LogCategory[] = ["auth", "product", "shipment", "system"];
+  const maxCat = Math.max(1, ...cats.map((c) => byCat[c] || 0));
+  const breakdownHtml = cats.map((c) => {
+    const v = byCat[c] || 0;
+    const pct = v ? Math.round((v / maxCat) * 100) : 0;
+    return `<div class="dy-bar"><span class="dy-bar-label">${LOG_CATEGORY_LABEL[c]}</span><span class="dy-bar-track"><i style="width:${pct}%"></i></span><span class="dy-bar-val">${v}</span></div>`;
+  }).join("");
+
+  const markdown = `# GoodJob CRM 每日经营日报（${dateStr}）
+
+## 今日完成工作
+${completedWork}
+
+## 重点客户进展
+${customerProgress}
+
+## 结果与数据
+${results}
+
+## 风险与阻塞
+${risks}
+
+## 下一步计划
+${nextPlan}
+
+## 需要协助
+${supportNeeded}
+
+---
+> 本报告由系统根据操作日志与业务数据自动生成。
+`;
+
+  return {
+    date: dateStr, total: logs.length, logins,
+    productCreated, productUpdated, productDeleted,
+    shipmentCreated, shipmentUpdated, shipmentDeleted, shipmentStatus,
+    warnings, errors, exceptions: exceptions.length,
+    completedWork, customerProgress, results, risks, nextPlan, supportNeeded,
+    attentionHtml, breakdownHtml, markdown
+  };
+}
+
+function renderDailyAuto(): void {
+  const root = qs<HTMLElement>("#dailyAuto");
+  if (!root) return;
+  const dateInput = qs<HTMLInputElement>("#dailyAutoDate");
+  if (dateInput && !dateInput.value) dateInput.value = dailyAutoDate || localDateValue();
+  if (dateInput && dateInput.value) dailyAutoDate = dateInput.value;
+  const dateStr = dailyAutoDate || localDateValue();
+  const draft = buildDailyDraft(dateStr);
+  const set = (id: string, html: string) => { const el = qs<HTMLElement>(id); if (el) el.innerHTML = html; };
+  set("#dailyAutoStats", [
+    ["总操作", draft.total], ["新增产品", draft.productCreated + draft.productUpdated],
+    ["发货动态", draft.shipmentCreated + draft.shipmentUpdated + draft.shipmentStatus],
+    ["状态流转", draft.shipmentStatus], ["异常/警告", draft.warnings + draft.errors + draft.exceptions],
+    ["登录次数", draft.logins]
+  ].map(([k, v]) => `<div class="dy-stat"><b>${v}</b><span>${k}</span></div>`).join(""));
+  set("#dailyAutoPreview", `
+    <div class="dy-sec"><h4>今日完成工作</h4><div class="dy-prose">${nl2br(draft.completedWork)}</div></div>
+    <div class="dy-sec"><h4>重点客户进展</h4><div class="dy-prose">${nl2br(draft.customerProgress)}</div></div>
+    <div class="dy-sec"><h4>结果与数据</h4><div class="dy-prose">${nl2br(draft.results)}</div></div>
+    <div class="dy-sec dy-sec-risk"><h4>风险与阻塞</h4><div class="dy-prose">${nl2br(draft.risks)}</div></div>
+    <div class="dy-sec"><h4>下一步计划</h4><div class="dy-prose">${nl2br(draft.nextPlan)}</div></div>
+  `);
+  set("#dailyAutoAttention", draft.attentionHtml);
+  set("#dailyAutoBreakdown", draft.breakdownHtml);
+}
+
+function fillDailyReportFromDraft(): void {
+  const draft = buildDailyDraft(dailyAutoDate || localDateValue());
+  openDailyReportModal();
+  window.setTimeout(() => {
+    const setVal = (sel: string, v: string) => { const el = qs<HTMLTextAreaElement>(sel); if (el) el.value = v; };
+    setVal("#dailyReportCompletedInput", draft.completedWork);
+    setVal("#dailyReportCustomerInput", draft.customerProgress);
+    setVal("#dailyReportResultsInput", draft.results);
+    setVal("#dailyReportRisksInput", draft.risks);
+    setVal("#dailyReportNextPlanInput", draft.nextPlan);
+    setVal("#dailyReportSupportInput", draft.supportNeeded);
+  }, 0);
+  toast("已自动生成并填入日报，请检查后提交", "ok");
+}
+
 async function submitDailyReportComment(reportId: string, parentId: string, content: string, button?: HTMLButtonElement) {
   if (!content) {
     toast("请输入评论内容", "error");
@@ -24021,6 +31764,12 @@ function openDailyReportReplyModal(report: DailyReport, comment: DailyReportComm
 
 function internalMessageActionLabel(message: InternalMessage) {
   if (message.relatedType === "daily_report" && message.relatedId) return "查看日报";
+  if (message.relatedType === "email_return" && message.relatedId) return "查看邮件回流";
+  if (message.relatedType === "integration_approval") return "处理审批";
+  if (message.relatedType === "integration_call") return "查看运行记录";
+  if (message.relatedType === "integration_connection") return "查看连接";
+  if (message.relatedType === "integration_event") return "查看事件";
+  if (message.relatedType === "integration_connector") return "查看连接器审核";
   return "查看消息";
 }
 
@@ -24056,6 +31805,22 @@ function navigateFromInternalMessage(message: InternalMessage) {
     activateNavView("daily-reports");
     return;
   }
+  if (message.relatedType === "email_return" && message.relatedId) {
+    activateNavView("email-return-flow");
+    void openEmailReturnDetail(message.relatedId);
+    return;
+  }
+  if (["integration_approval", "integration_call", "integration_connection", "integration_event", "integration_connector"].includes(message.relatedType)) {
+    activateNavView("integration-center");
+    void integrationCenterController?.refresh(false).finally(() => {
+      const tab = message.relatedType === "integration_approval" ? "approvals"
+        : message.relatedType === "integration_connection" ? "connected"
+          : message.relatedType === "integration_event" ? "events"
+            : message.relatedType === "integration_connector" ? "connector-reviews" : "activity";
+      qs<HTMLButtonElement>(`#integration-center [data-integration-tab="${tab}"]`)?.click();
+    });
+    return;
+  }
   showInternalMessage(message);
 }
 
@@ -24082,13 +31847,19 @@ function renderInbox() {
         </span>
       </button>
     `;
-  }).join("") : `<div class="notification-center-empty"><b>暂无消息通知</b><span>日报提交、评论和回复提醒会出现在这里。</span></div>`;
+  }).join("") : `<div class="notification-center-empty"><span class="notification-empty-icon" aria-hidden="true">✓</span><b>消息已全部处理</b><span>每日跟进待办、客户风险和系统提醒会集中显示在这里。</span></div>`;
   qsa<HTMLButtonElement>("[data-internal-message-id]", list).forEach((button) => {
     button.addEventListener("click", () => void openInternalMessage(button.dataset.internalMessageId || ""));
   });
 }
 
 async function refreshInternalMessages(showToast = false) {
+  const list = qs<HTMLElement>("#inboxMessageList");
+  const refreshButton = qs<HTMLButtonElement>("#inboxRefreshButton");
+  if (!state.internalMessages.length && list) {
+    list.innerHTML = `<div class="notification-skeleton" role="status" aria-label="正在加载消息通知">${Array.from({ length: 4 }, () => `<div class="notification-skeleton-row"><i></i><span><b></b><small></small><small></small></span><em></em></div>`).join("")}</div>`;
+  }
+  if (showToast) setButtonPending(refreshButton, true, "刷新", "正在刷新");
   try {
     const messages = await api<{ messages: InternalMessage[]; unreadCount: number }>("/api/internal-messages?box=inbox");
     state.internalMessages = messages.messages;
@@ -24096,7 +31867,13 @@ async function refreshInternalMessages(showToast = false) {
     renderInbox();
     if (showToast) toast("消息通知已刷新");
   } catch (error) {
+    if (!state.internalMessages.length && list) {
+      list.innerHTML = `<div class="notification-center-error" role="alert"><span class="notification-error-icon" aria-hidden="true">!</span><b>消息暂时无法加载</b><span>${escapeHtml(error instanceof Error ? error.message : "请检查网络后重试")}</span><button class="btn" id="inboxInlineRetryButton" type="button">重新加载</button></div>`;
+      qs<HTMLButtonElement>("#inboxInlineRetryButton")?.addEventListener("click", () => void refreshInternalMessages(false));
+    }
     toast(error instanceof Error ? error.message : "消息通知加载失败", "error");
+  } finally {
+    if (showToast) setButtonPending(refreshButton, false, "刷新", "正在刷新");
   }
 }
 
@@ -24116,8 +31893,21 @@ async function openInternalMessage(id: string) {
   navigateFromInternalMessage(message);
 }
 
+function installIntegrationCenterInteractions() {
+  integrationCenterController = mountIntegrationCenter({
+    request: api,
+    toast,
+    openModal,
+    closeModal,
+    hasPermission: hasIamCapability,
+    permissionScopes: (permissionCode) => state.iamCapabilities?.permissions[permissionCode] || []
+  });
+}
+
 function installEvents() {
   ensureUiLayer();
+  installIntegrationCenterInteractions();
+  setupApprovalEvents();
   qs<HTMLButtonElement>("#prospectRadarCloseButton")?.addEventListener("click", closeProspectRadar);
   qs<HTMLButtonElement>("#prospectRadarPlayButton")?.addEventListener("click", (event) => {
     const button = event.currentTarget as HTMLButtonElement;
@@ -24165,8 +31955,34 @@ function installEvents() {
     const password = qs<HTMLInputElement>("#loginPassword")?.value || "";
     void loginWithPassword(email, password).catch((error) => toast(error instanceof Error ? error.message : "登录失败", "error"));
   }, true);
+  qsa<HTMLButtonElement>("#loginDemoAccounts [data-demo-email]").forEach((button) => {
+    const fillDemoAccount = () => {
+      const email = button.dataset.demoEmail || "";
+      const emailInput = qs<HTMLInputElement>("#loginEmail");
+      const passwordInput = qs<HTMLInputElement>("#loginPassword");
+      if (emailInput) emailInput.value = email;
+      if (passwordInput) passwordInput.value = DEMO_ACCOUNT_PASSWORD;
+      qsa<HTMLButtonElement>("#loginDemoAccounts [data-demo-email]")
+        .forEach((item) => item.classList.toggle("is-filled", item === button));
+      return email;
+    };
+    button.addEventListener("click", () => {
+      fillDemoAccount();
+    });
+    button.addEventListener("dblclick", () => {
+      const email = fillDemoAccount();
+      void loginWithPassword(email, DEMO_ACCOUNT_PASSWORD)
+        .catch((error) => toast(error instanceof Error ? error.message : "登录失败", "error"));
+    });
+  });
   qs<HTMLButtonElement>("#logoutButton")?.addEventListener("click", async () => {
-    if (memoDirty && !window.confirm("当前备忘仍仅保存在本机。退出将清除此账号的本机草稿，确认退出？")) return;
+    if (memoDirty && !await confirmAction({
+      title: "退出并清除本机草稿",
+      message: "当前备忘仍仅保存在本机，尚未同步到服务器。",
+      consequences: ["退出后会清除此账号的本机备忘草稿", "服务器上已经保存的备忘不会受影响"],
+      confirmLabel: "清除草稿并退出",
+      tone: "danger"
+    })) return;
     clearCurrentUserMemoDrafts();
     await api("/api/auth/logout", { method: "POST" }).catch(() => null);
     localStorage.removeItem(storage.user);
@@ -24176,6 +31992,9 @@ function installEvents() {
   });
   qs<HTMLButtonElement>("#profileEntryButton")?.addEventListener("click", () => activateNavView("profile", () => renderProfile()));
   qs<HTMLButtonElement>("#profileSaveButton")?.addEventListener("click", (event) => void saveProfileEmailBinding(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#profileClearImapButton")?.addEventListener("click", (event) => void clearProfileImapPassword(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#profileTestImapButton")?.addEventListener("click", (event) => void testProfileImap(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#profileDomainAuthButton")?.addEventListener("click", (event) => void checkProfileEmailDomain(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#companyProfileSaveButton")?.addEventListener("click", () => void saveCompanyProfile());
   qs<HTMLButtonElement>("#mysqlImportPicker")?.addEventListener("click", () => qs<HTMLInputElement>("#mysqlImportFile")?.click());
   qs<HTMLInputElement>("#mysqlImportFile")?.addEventListener("change", (event) => {
@@ -24214,10 +32033,11 @@ function installEvents() {
   });
   qs<HTMLButtonElement>("#profileOpenProspectsButton")?.addEventListener("click", () => activateNavView("prospect-list", renderProspectList));
   qs<HTMLButtonElement>("#profileOpenSettingsButton")?.addEventListener("click", () => {
-    if (state.user && ["admin", "super_admin"].includes(state.user.role)) activateNavView("settings");
-    else toast("账号管理仅管理员和超级管理员可进入", "error");
+    if (hasIamCapability("system.settings.manage")) activateNavView("settings");
+    else toast("当前角色没有公司设置权限", "error");
   });
   qs<HTMLButtonElement>("#agentSkillsRefreshButton")?.addEventListener("click", () => void loadAgentSkills());
+  qs<HTMLButtonElement>("#agentSkillAddButton")?.addEventListener("click", () => openSkillResourceModal());
   qs<HTMLButtonElement>("#agentTuningInspectButton")?.addEventListener("click", () => void inspectAgentTuning());
   qs<HTMLInputElement>("#agentTuningGoalInput")?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
@@ -24228,6 +32048,19 @@ function installEvents() {
     agentSkillQuery = (event.currentTarget as HTMLInputElement).value.trim();
     renderAgentSkillList();
   });
+  qs<HTMLSelectElement>("#agentSkillsCategoryFilter")?.addEventListener("change", (event) => {
+    agentSkillCategoryFilter = (event.currentTarget as HTMLSelectElement).value;
+    renderAgentSkillList();
+  });
+  qs<HTMLSelectElement>("#agentSkillsStatusFilter")?.addEventListener("change", (event) => {
+    agentSkillStatusFilter = (event.currentTarget as HTMLSelectElement).value;
+    renderAgentSkillList();
+  });
+  qs<HTMLSelectElement>("#agentSkillsSourceFilter")?.addEventListener("change", (event) => {
+    agentSkillSourceFilter = (event.currentTarget as HTMLSelectElement).value;
+    renderAgentSkillList();
+  });
+  qs<HTMLElement>("#agentSkillDrawerBackdrop")?.addEventListener("click", closeAgentSkillDetail);
   qsa<HTMLElement>(".todo-chip").forEach((chip) => {
     chip.addEventListener("click", () => {
       state.todoFilter = (chip.dataset.todoFilter || "today") as AppState["todoFilter"];
@@ -24275,27 +32108,41 @@ function installEvents() {
   qsa<HTMLButtonElement>("#customers .page-head .btn.primary").forEach((button) => {
     if (button.textContent?.includes("新增客户")) button.addEventListener("click", () => openCustomerModal());
   });
-  qsa<HTMLButtonElement>("[data-customer-view-mode]", qs("#customers")!).forEach((button) => {
-    button.addEventListener("click", () => {
-      state.customerViewMode = button.dataset.customerViewMode === "map" ? "map" : "list";
-      renderCustomers(state.customers);
-    });
+  qs<HTMLSelectElement>("#customerViewModeSelect")?.addEventListener("change", (event) => {
+    state.customerViewMode = (event.currentTarget as HTMLSelectElement).value as "list" | "map" | "board";
+    renderCustomers(state.customers);
   });
   qs<HTMLInputElement>("#customerSearchInput")?.addEventListener("input", (event) => {
     state.customerSearch = (event.currentTarget as HTMLInputElement).value;
+    state.customerPage = 1;
     renderCustomers(state.customers);
   });
   qs<HTMLSelectElement>("#customerQueueFilter")?.addEventListener("change", (event) => {
     state.customerQueueFilter = (event.currentTarget as HTMLSelectElement).value as AppState["customerQueueFilter"];
+    state.customerPage = 1;
     renderCustomers(state.customers);
   });
   qs<HTMLButtonElement>("#customerFilterReset")?.addEventListener("click", () => {
     state.customerSearch = "";
     state.customerQueueFilter = "all";
+    state.customerPage = 1;
     const search = qs<HTMLInputElement>("#customerSearchInput");
     const filter = qs<HTMLSelectElement>("#customerQueueFilter");
     if (search) search.value = "";
     if (filter) filter.value = "all";
+    renderCustomers(state.customers);
+  });
+  qs<HTMLSelectElement>("#customerPageSize")?.addEventListener("change", (event) => {
+    state.customerPageSize = Number((event.currentTarget as HTMLSelectElement).value) as AppState["customerPageSize"];
+    state.customerPage = 1;
+    renderCustomers(state.customers);
+  });
+  qs<HTMLButtonElement>("#customerPrevPage")?.addEventListener("click", () => {
+    state.customerPage = Math.max(1, state.customerPage - 1);
+    renderCustomers(state.customers);
+  });
+  qs<HTMLButtonElement>("#customerNextPage")?.addEventListener("click", () => {
+    state.customerPage += 1;
     renderCustomers(state.customers);
   });
   qs<HTMLInputElement>("#customerPoolSearch")?.addEventListener("input", (event) => {
@@ -24398,20 +32245,45 @@ function installEvents() {
     state.selectedDailyReportId = null;
     void refreshDailyReports(false);
   });
+  // 日报自动生成面板
+  qs<HTMLInputElement>("#dailyAutoDate")?.addEventListener("change", (event) => {
+    dailyAutoDate = (event.currentTarget as HTMLInputElement).value;
+    renderDailyAuto();
+  });
+  qs<HTMLButtonElement>("#dailyAutoGenButton")?.addEventListener("click", () => {
+    dailyAutoDate = qs<HTMLInputElement>("#dailyAutoDate")?.value || localDateValue();
+    renderDailyAuto();
+    toast("已重新生成今日日报", "ok");
+  });
+  qs<HTMLButtonElement>("#dailyAutoCopy")?.addEventListener("click", () => {
+    const draft = buildDailyDraft(dailyAutoDate || localDateValue());
+    const done = () => toast("已复制 Markdown 到剪贴板", "ok");
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(draft.markdown).then(done, () => toast("复制失败", "error"));
+    } else {
+      toast("当前环境不支持剪贴板", "error");
+    }
+  });
+  qs<HTMLButtonElement>("#dailyAutoFill")?.addEventListener("click", fillDailyReportFromDraft);
   qs<HTMLButtonElement>("#inboxRefreshButton")?.addEventListener("click", () => void refreshInternalMessages(true));
   qs<HTMLButtonElement>("#notificationBellButton")?.addEventListener("click", () => {
     activateNavView("inbox");
   });
-  qsa<HTMLButtonElement>("#knowledge .page-head .btn, #knowledge .section-head .btn").forEach((button) => {
-    if (button.textContent?.includes("上传资料")) button.addEventListener("click", openKnowledgeModal);
-    if (button.textContent?.includes("新建类目")) button.addEventListener("click", () => toast("资料类目已新增：新品资料"));
-    if (button.textContent?.includes("批量发布")) button.addEventListener("click", async () => {
-      const pending = state.knowledgeAssets.filter((asset) => asset.status !== "published");
-      for (const asset of pending) await publishAsset(asset.id);
-      if (!pending.length) toast("没有待发布资料");
-    });
-    if (button.textContent?.includes("调整排序")) button.addEventListener("click", () => toast("资料类目排序已保存"));
+  qs<HTMLButtonElement>("#knowledgeAddButton")?.addEventListener("click", () => openKnowledgeModal());
+  qs<HTMLButtonElement>("#knowledgeRefreshButton")?.addEventListener("click", () => void refreshKnowledgeAssets(true));
+  qs<HTMLInputElement>("#knowledgeSearchInput")?.addEventListener("input", (event) => {
+    state.knowledgeSearch = (event.currentTarget as HTMLInputElement).value;
+    renderKnowledge();
   });
+  const knowledgeFilters: Array<[string, keyof Pick<AppState, "knowledgeSourceFilter" | "knowledgeStatusFilter" | "knowledgeTypeFilter">]> = [
+    ["#knowledgeSourceFilter", "knowledgeSourceFilter"],
+    ["#knowledgeStatusFilter", "knowledgeStatusFilter"],
+    ["#knowledgeTypeFilter", "knowledgeTypeFilter"]
+  ];
+  knowledgeFilters.forEach(([selector, field]) => qs<HTMLSelectElement>(selector)?.addEventListener("change", (event) => {
+    state[field] = (event.currentTarget as HTMLSelectElement).value;
+    renderKnowledge();
+  }));
   qsa<HTMLButtonElement>("#exam .page-head .btn").forEach((button) => {
     if (button.textContent?.includes("发布考试")) button.addEventListener("click", () => openExamCreateModal());
     if (button.textContent?.includes("题库维护")) button.addEventListener("click", () => void openQuestionBankPage());
@@ -24466,19 +32338,23 @@ function installEvents() {
     const view = qs<HTMLElement>(".view.active")?.id;
     if (view === "customers") openCustomerModal();
   });
-  qs<HTMLButtonElement>("#topImportButton")?.addEventListener("click", () => {
-    const view = qs<HTMLElement>(".view.active")?.id;
-    if (view === "customers") activateNavView("imports", () => qs<HTMLInputElement>("#customerImportInput")?.click());
+  qs<HTMLButtonElement>("#customerImportButton")?.addEventListener("click", () => {
+    activateNavView("imports", () => qs<HTMLInputElement>("#customerImportInput")?.click());
   });
-  qs<HTMLButtonElement>("#topExportButton")?.addEventListener("click", () => {
-    const view = qs<HTMLElement>(".view.active")?.id;
-    if (view === "customers") activateNavView("imports", () => void exportCustomers());
+  qs<HTMLButtonElement>("#customerExportButton")?.addEventListener("click", () => {
+    activateNavView("imports", () => void exportCustomers());
   });
   qsa<HTMLButtonElement>("[data-top-view]").forEach((button) => {
     button.addEventListener("click", () => activateNavView(button.dataset.topView || "dashboard"));
   });
   qsa<HTMLButtonElement>(".sidebar button[data-view]").forEach((button) => {
-    button.addEventListener("click", () => activateNavView(button.dataset.view || "dashboard"));
+    button.addEventListener("click", () => {
+      if (button.dataset.view === "customers") {
+        state.customerOutcomeFilter = button.dataset.customerOutcome === "won" ? "won" : "open";
+        state.customerPage = 1;
+      }
+      activateNavView(button.dataset.view || "dashboard");
+    });
   });
   qs<HTMLButtonElement>("#leadNewButton")?.addEventListener("click", () => {
     qs<HTMLElement>("#leadCreateForm")?.classList.toggle("is-hidden");
@@ -24595,6 +32471,7 @@ function installEvents() {
   // ===== 产品维护事件绑定 =====
   qs<HTMLButtonElement>("#productAddButton")?.addEventListener("click", () => openProductModal());
   qs<HTMLButtonElement>("#productEmptyAdd")?.addEventListener("click", () => openProductModal());
+  qs<HTMLButtonElement>("#productCategoryManageButton")?.addEventListener("click", openProductCategoryManager);
   qs<HTMLButtonElement>("#productBulkDelete")?.addEventListener("click", () => void bulkDeleteProducts());
   qs<HTMLInputElement>("#productSelectAll")?.addEventListener("change", (event) => {
     const checked = (event.currentTarget as HTMLInputElement).checked;
@@ -24607,26 +32484,35 @@ function installEvents() {
   qs<HTMLButtonElement>("#productCancelButton")?.addEventListener("click", closeProductModal);
   qs<HTMLButtonElement>("#productSaveButton")?.addEventListener("click", () => void saveProduct());
   qs<HTMLButtonElement>("#productDeleteButton")?.addEventListener("click", () => { if (editingProductId) void deleteProduct(editingProductId); });
-  qs<HTMLElement>("#productModal")?.addEventListener("click", (event) => { if (event.target === qs<HTMLElement>("#productModal")) closeProductModal(); });
   qs<HTMLInputElement>("#productSearch")?.addEventListener("input", renderProducts);
-  qs<HTMLSelectElement>("#productCategoryFilter")?.addEventListener("change", renderProducts);
   qs<HTMLSelectElement>("#productCurrencyFilter")?.addEventListener("change", renderProducts);
-  qs<HTMLElement>("#productTableBody")?.addEventListener("click", (event) => {
+  qs<HTMLButtonElement>("#productViewGrid")?.addEventListener("click", () => { productViewMode = "grid"; qs<HTMLElement>("#productViewGrid")?.classList.add("is-active"); qs<HTMLElement>("#productViewList")?.classList.remove("is-active"); renderProducts(); });
+  qs<HTMLButtonElement>("#productViewList")?.addEventListener("click", () => { productViewMode = "list"; qs<HTMLElement>("#productViewList")?.classList.add("is-active"); qs<HTMLElement>("#productViewGrid")?.classList.remove("is-active"); renderProducts(); });
+  qs<HTMLElement>("#productGrid")?.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
-    const editId = target.getAttribute("data-product-edit");
-    const dupId = target.getAttribute("data-product-duplicate");
-    if (editId) {
-      const product = state.products.find((p) => p.id === editId);
+    const editEl = target.closest<HTMLElement>("[data-product-edit]");
+    const dupEl = target.closest<HTMLElement>("[data-product-duplicate]");
+    if (editEl) {
+      const product = state.products.find((p) => p.id === editEl.dataset.productEdit);
       if (product) openProductModal(product);
-    } else if (dupId) {
-      const product = state.products.find((p) => p.id === dupId);
+      return;
+    }
+    if (dupEl) {
+      const product = state.products.find((p) => p.id === dupEl.dataset.productDuplicate);
       if (product) openProductModal({ ...product, id: `prod_${state.user?.id || ""}_${Date.now()}`, nameZh: `${product.nameZh} (副本)`, updatedAt: new Date().toISOString() });
+      return;
+    }
+    const card = target.closest<HTMLElement>(".pc-card");
+    if (card && !target.closest("button") && !target.closest("input")) {
+      const product = state.products.find((p) => p.id === card.dataset.productId);
+      if (product) openProductDrawer(product);
     }
   });
   // ===== 发货跟踪事件绑定 =====
   qs<HTMLButtonElement>("#shipmentAddButton")?.addEventListener("click", () => openShipmentModal());
   qs<HTMLButtonElement>("#shipmentEmptyAdd")?.addEventListener("click", () => openShipmentModal());
   qs<HTMLButtonElement>("#shipmentBulkDelete")?.addEventListener("click", () => void bulkDeleteShipments());
+  qs<HTMLButtonElement>("#shipmentSyncAll")?.addEventListener("click", () => void syncAllShipments());
   qs<HTMLInputElement>("#shipmentSelectAll")?.addEventListener("change", (event) => {
     const checked = (event.currentTarget as HTMLInputElement).checked;
     state.selectedShipmentIds = checked
@@ -24638,9 +32524,49 @@ function installEvents() {
   qs<HTMLButtonElement>("#shipmentCancelButton")?.addEventListener("click", closeShipmentModal);
   qs<HTMLButtonElement>("#shipmentSaveButton")?.addEventListener("click", () => void saveShipment());
   qs<HTMLButtonElement>("#shipmentDeleteButton")?.addEventListener("click", () => { if (editingShipmentId) void deleteShipment(editingShipmentId); });
-  qs<HTMLElement>("#shipmentModal")?.addEventListener("click", (event) => { if (event.target === qs<HTMLElement>("#shipmentModal")) closeShipmentModal(); });
   qs<HTMLInputElement>("#shipmentSearch")?.addEventListener("input", renderShipments);
-  qs<HTMLSelectElement>("#shipmentStatusFilter")?.addEventListener("change", renderShipments);
+
+  // 系统日志：筛选 / 搜索 / 刷新 / 导出 / 详情
+  qs<HTMLElement>("#logLevelChips")?.addEventListener("click", (event) => {
+    const btn = (event.target as HTMLElement).closest<HTMLButtonElement>(".lg-chip");
+    if (!btn) return;
+    logLevelFilterValue = btn.dataset.level || "";
+    qsa<HTMLElement>("#logLevelChips .lg-chip").forEach((c) => c.classList.toggle("is-active", c === btn));
+    void loadLogs();
+  });
+  qs<HTMLElement>("#logCategoryChips")?.addEventListener("click", (event) => {
+    const btn = (event.target as HTMLElement).closest<HTMLButtonElement>(".lg-chip");
+    if (!btn) return;
+    logCategoryFilterValue = btn.dataset.category || "";
+    qsa<HTMLElement>("#logCategoryChips .lg-chip").forEach((c) => c.classList.toggle("is-active", c === btn));
+    void loadLogs();
+  });
+  let logSearchTimer = 0;
+  qs<HTMLInputElement>("#logSearch")?.addEventListener("input", (event) => {
+    const kw = (event.currentTarget as HTMLInputElement).value.trim();
+    if (logSearchTimer) window.clearTimeout(logSearchTimer);
+    logSearchTimer = window.setTimeout(() => { logSearchValue = kw; void loadLogs(); }, 250);
+  });
+  qs<HTMLButtonElement>("#logRefresh")?.addEventListener("click", () => void loadLogs());
+  qs<HTMLButtonElement>("#logExport")?.addEventListener("click", () => {
+    const data = JSON.stringify(state.logs, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `system-logs-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast("已导出日志", "ok");
+  });
+  qs<HTMLElement>("#logBoard")?.addEventListener("click", (event) => {
+    const row = (event.target as HTMLElement).closest<HTMLElement>(".lg-row");
+    if (!row) return;
+    const id = row.dataset.logId;
+    const log = state.logs.find((l) => l.id === id);
+    if (log) openLogDrawer(log);
+  });
+
   qs<HTMLInputElement>("#shipmentDealSearch")?.addEventListener("input", (event) => {
     const kw = (event.currentTarget as HTMLInputElement).value;
     const idEl = qs<HTMLInputElement>("#shipmentDealId");
@@ -24669,19 +32595,26 @@ function installEvents() {
     if (ocrHint) ocrHint.textContent = "";
   });
   qs<HTMLButtonElement>("#shipmentItemAdd")?.addEventListener("click", () => addShipmentItemRow());
-  qs<HTMLElement>("#shipmentTableBody")?.addEventListener("click", (event) => {
+  qs<HTMLElement>("#shipmentBoard")?.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
-    const editId = target.getAttribute("data-shipment-edit");
-    const trackId = target.getAttribute("data-shipment-track");
-    const delId = target.getAttribute("data-shipment-delete");
-    if (editId) {
-      const shipment = state.shipments.find((s) => s.id === editId);
+    const editEl = target.closest<HTMLElement>("[data-shipment-edit]");
+    const trackEl = target.closest<HTMLElement>("[data-shipment-track]");
+    const delEl = target.closest<HTMLElement>("[data-shipment-delete]");
+    if (editEl) {
+      const shipment = state.shipments.find((s) => s.id === editEl.dataset.shipmentEdit);
       if (shipment) openShipmentModal(shipment);
-    } else if (trackId) {
-      const shipment = state.shipments.find((s) => s.id === trackId);
-      if (shipment) trackShipment(shipment);
-    } else if (delId) {
-      void deleteShipment(delId);
+      return;
+    }
+    if (trackEl) {
+      const shipment = state.shipments.find((s) => s.id === trackEl.dataset.shipmentTrack);
+      if (shipment) void syncShipmentNow(shipment);
+      return;
+    }
+    if (delEl) { void deleteShipment(delEl.dataset.shipmentDelete || ""); return; }
+    const row = target.closest<HTMLElement>(".sh-row");
+    if (row && !target.closest("button") && !target.closest("input")) {
+      const shipment = state.shipments.find((s) => s.id === row.dataset.shipmentId);
+      if (shipment) openShipmentDrawer(shipment);
     }
   });
   qs<HTMLElement>("#leadFinderLiveOverview")?.addEventListener("click", (event) => {
@@ -24718,10 +32651,10 @@ function installEvents() {
     }
     recurringLine?.classList.toggle("is-disabled", !enabled);
   });
-  qs<HTMLButtonElement>("#leadFinderSyncButton")?.addEventListener("click", (event) => void syncLeadFinderRows(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#leadFinderSyncButton")?.addEventListener("click", (event) => void shortlistLeadFinderRows(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderTodoButton")?.addEventListener("click", (event) => void createLeadFinderTodos(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderExportButton")?.addEventListener("click", exportLeadFinderRows);
-  qs<HTMLButtonElement>("#leadFinderSyncButtonSide")?.addEventListener("click", (event) => void syncLeadFinderRows(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#leadFinderSyncButtonSide")?.addEventListener("click", (event) => void shortlistLeadFinderRows(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderTodoButtonSide")?.addEventListener("click", (event) => void createLeadFinderTodos(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderExportButtonSide")?.addEventListener("click", exportLeadFinderRows);
   qs<HTMLButtonElement>("#leadFinderAiConfigButtonSide")?.addEventListener("click", () => activateNavView("ai-config", () => {
@@ -24851,20 +32784,100 @@ function installEvents() {
     activateNavView(nextView);
     input.value = "";
   });
-  qsa<HTMLButtonElement>("#tools .page-head .btn, #tools .section-head .btn").forEach((button) => {
-    if (button.textContent?.includes("加载名片")) button.addEventListener("click", () => toast("请接入上传或 OCR 服务后加载名片", "error"));
-    if (button.textContent?.includes("重新识别")) button.addEventListener("click", () => void recognizeOcr());
-    if (button.textContent?.includes("工具配置")) button.addEventListener("click", () => toast("OCR 字段映射配置已保存"));
+  qs<HTMLButtonElement>("#ocrLoadButton")?.addEventListener("click", () => qs<HTMLInputElement>("#ocrFileInput")?.click());
+  qs<HTMLInputElement>("#ocrFileInput")?.addEventListener("change", (event) => {
+    const file = (event.currentTarget as HTMLInputElement).files?.[0];
+    if (file) void loadOcrCard(file);
   });
+  qs<HTMLButtonElement>("#ocrRecognizeButton")?.addEventListener("click", () => void recognizeOcrImage());
+  qs<HTMLButtonElement>("#ocrRemoveButton")?.addEventListener("click", () => void removeOcrCard());
+  qs<HTMLButtonElement>("#ocrConfigButton")?.addEventListener("click", () => activateNavView("ai-config"));
   qs<HTMLButtonElement>("#websiteReferenceRegisterButton")?.addEventListener("click", (event) => {
     void registerWebsiteReferences(event.currentTarget as HTMLButtonElement);
   });
   qs<HTMLButtonElement>("#websiteReferenceSyncButton")?.addEventListener("click", (event) => {
     void openWebsiteQualification(event.currentTarget as HTMLButtonElement);
   });
+  qsa<HTMLElement>("#toolCards .tool-card").forEach((card) => {
+    card.addEventListener("click", () => {
+      const target = card.dataset.toolView || "dashboard";
+      if (target === "ai-research") activateNavView("ai-research", renderBackgroundResearch);
+      else activateNavView(target);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-tool-back]").forEach((button) => {
+    button.addEventListener("click", () => activateNavView("tools"));
+  });
   qs<HTMLButtonElement>("#newDocumentButton")?.addEventListener("click", openNewDocument);
+  qs<HTMLButtonElement>("#documentImportButton")?.addEventListener("click", openTradeDocumentImport);
+  qs<HTMLButtonElement>("#documentDefaultsViewButton")?.addEventListener("click", () => setDocumentWorkspaceMode("defaults"));
+  qs<HTMLButtonElement>("#documentDefaultsBackButton")?.addEventListener("click", () => setDocumentWorkspaceMode("studio"));
+  qs<HTMLButtonElement>("#documentDefaultsSaveButton")?.addEventListener("click", () => void saveDocumentDefaults());
+  qs<HTMLButtonElement>("#documentDefaultsManageAssets")?.addEventListener("click", () => openDocumentAssetManager(state.documentAssets));
+  qs<HTMLButtonElement>("#documentHistoryViewButton")?.addEventListener("click", () => setDocumentWorkspaceMode("history"));
+  qs<HTMLButtonElement>("#documentHistoryBackButton")?.addEventListener("click", () => setDocumentWorkspaceMode("studio"));
+  qs<HTMLButtonElement>("#documentConvertButton")?.addEventListener("click", openDocumentConversion);
+  qs<HTMLButtonElement>("#selectDocumentProductsButton")?.addEventListener("click", openProductPicker);
+  qs<HTMLButtonElement>("#documentHistorySearchButton")?.addEventListener("click", () => { state.documentHistoryPage = 1; void loadDocumentHistory(); });
+  qs<HTMLButtonElement>("#documentHistoryResetButton")?.addEventListener("click", resetDocumentHistoryFilters);
+  qs<HTMLButtonElement>("#documentHistoryPrevButton")?.addEventListener("click", () => { state.documentHistoryPage = Math.max(1, state.documentHistoryPage - 1); void loadDocumentHistory(); });
+  qs<HTMLButtonElement>("#documentHistoryNextButton")?.addEventListener("click", () => { state.documentHistoryPage = Math.min(state.documentHistoryPageCount, state.documentHistoryPage + 1); void loadDocumentHistory(); });
+  qs<HTMLInputElement>("#documentHistoryKeyword")?.addEventListener("keydown", (event) => { if (event.key === "Enter") { state.documentHistoryPage = 1; void loadDocumentHistory(); } });
   qs<HTMLButtonElement>("#saveDocumentButton")?.addEventListener("click", () => void saveTradeDocument());
   qs<HTMLButtonElement>("#exportDocumentPdfButton")?.addEventListener("click", () => void exportTradeDocumentPdf());
+
+  const planetBtn = qs<HTMLButtonElement>("#planetViewButton");
+  if (planetBtn && !planetBtn.dataset.planetBound) {
+    planetBtn.dataset.planetBound = "1";
+    let planetHandle: { unmount: () => void } | null = null;
+    let planetMode = false;
+    function exitPlanet() {
+      planetMode = false;
+      const studio = qs<HTMLElement>("#documentStudioWorkspace");
+      const history = qs<HTMLElement>("#documentHistoryWorkspace");
+      const planetView = qs<HTMLElement>("#planet-view");
+      if (studio) studio.hidden = false;
+      if (history) history.hidden = true;
+      if (planetView) planetView.hidden = true;
+      planetBtn!.textContent = "星球视图";
+      if (planetHandle) { planetHandle.unmount(); planetHandle = null; }
+    }
+    qs<HTMLButtonElement>("#planetCloseButton")?.addEventListener("click", exitPlanet);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && planetMode) exitPlanet();
+    });
+    planetBtn.addEventListener("click", () => {
+      const studio = qs<HTMLElement>("#documentStudioWorkspace");
+      const history = qs<HTMLElement>("#documentHistoryWorkspace");
+      const planetView = qs<HTMLElement>("#planet-view");
+      if (!studio || !planetView) return;
+      if (!planetMode) {
+        if (history) history.hidden = true;
+        studio.hidden = true;
+        planetView.hidden = false;
+        planetMode = true;
+        planetBtn!.textContent = "返回列表";
+        void import("./planet").then((mod) => {
+          if (!planetMode || planetView.hidden) return;
+          planetHandle = mod.mountPlanet(planetView, {
+            customers: state.customers,
+            documents: state.tradeDocuments,
+            onSelectDocument: (docId: string) => {
+              exitPlanet();
+              state.selectedDocumentId = docId;
+              renderTradeDocuments(state.tradeDocuments);
+              qs<HTMLElement>(`[data-document-id="${CSS.escape(docId)}"]`)?.scrollIntoView({ block: "center" });
+            }
+          });
+        }).catch(() => {
+          exitPlanet();
+          toast("星球视图加载失败，请稍后重试", "error");
+        });
+      } else {
+        exitPlanet();
+      }
+    });
+  }
   qs<HTMLButtonElement>("#documentSubmitApprovalButton")?.addEventListener("click", () => void submitDocumentApproval());
   qs<HTMLButtonElement>("#documentApproveButton")?.addEventListener("click", () => void approveActiveDocument());
   qs<HTMLButtonElement>("#documentRejectButton")?.addEventListener("click", () => void rejectActiveDocument());
@@ -24932,10 +32945,8 @@ function installEvents() {
     input.addEventListener("input", () => renderDocumentPreview(collectDocumentDraft()));
     input.addEventListener("change", () => renderDocumentPreview(collectDocumentDraft()));
   });
-  qsa<HTMLButtonElement>("#tools .btn.primary").forEach((button) => {
-    if (button.id !== "websiteReferenceSyncButton" && button.textContent?.includes("同步")) {
-      button.addEventListener("click", () => void syncOcrLead(button));
-    }
+  qsa<HTMLButtonElement>("#ocrSyncTopButton, #ocrSyncButton").forEach((button) => {
+    button.addEventListener("click", () => void syncOcrLead(button));
   });
   qsa<HTMLButtonElement>("#competitors .page-head .btn").forEach((button) => {
     if (button.textContent?.includes("新增竞争公司")) button.addEventListener("click", openCompetitorModal);
@@ -24948,10 +32959,39 @@ function installEvents() {
   });
   qs<HTMLButtonElement>("#casePublishButton")?.addEventListener("click", () => void publishSelectedCase());
   qsa<HTMLButtonElement>("#problems .page-head .btn").forEach((button) => {
-    if (button.textContent?.includes("新增问题")) button.addEventListener("click", openProblemModal);
+    if (button.textContent?.includes("新增问题")) button.addEventListener("click", () => openProblemModal());
     if (button.textContent?.includes("导出复盘")) button.addEventListener("click", () => toast("问题复盘已生成导出任务"));
   });
-  qs<HTMLButtonElement>("#problemStatusButton")?.addEventListener("click", () => void advanceProblemStatus());
+  qs<HTMLInputElement>("#problemSearchInput")?.addEventListener("input", (event) => {
+    state.problemSearch = (event.currentTarget as HTMLInputElement).value;
+    renderProblems(state.problems);
+  });
+  qs<HTMLSelectElement>("#problemStatusFilter")?.addEventListener("change", (event) => {
+    state.problemStatusFilter = (event.currentTarget as HTMLSelectElement).value as AppState["problemStatusFilter"];
+    renderProblems(state.problems);
+  });
+  qs<HTMLSelectElement>("#problemSeverityFilter")?.addEventListener("change", (event) => {
+    state.problemSeverityFilter = (event.currentTarget as HTMLSelectElement).value as AppState["problemSeverityFilter"];
+    renderProblems(state.problems);
+  });
+  qs<HTMLSelectElement>("#problemCategoryFilter")?.addEventListener("change", (event) => {
+    state.problemCategoryFilter = (event.currentTarget as HTMLSelectElement).value;
+    renderProblems(state.problems);
+  });
+  qs<HTMLButtonElement>("#problemResetFiltersButton")?.addEventListener("click", () => {
+    state.problemSearch = "";
+    state.problemStatusFilter = "all";
+    state.problemSeverityFilter = "all";
+    state.problemCategoryFilter = "all";
+    const search = qs<HTMLInputElement>("#problemSearchInput");
+    const status = qs<HTMLSelectElement>("#problemStatusFilter");
+    const severity = qs<HTMLSelectElement>("#problemSeverityFilter");
+    if (search) search.value = "";
+    if (status) status.value = "all";
+    if (severity) severity.value = "all";
+    renderProblems(state.problems);
+  });
+  qs("#problemDrawerBackdrop")?.addEventListener("click", closeProblemDrawer);
   qs<HTMLButtonElement>("#memoNewButton")?.addEventListener("click", openMemoModal);
   qs<HTMLInputElement>("#memoSearchInput")?.addEventListener("input", (event) => {
     state.memoSearch = (event.currentTarget as HTMLInputElement).value;
@@ -24996,11 +33036,8 @@ function installEvents() {
     if (memo) void patchSelectedMemo({ archived: !memo.archived });
   });
   qs<HTMLButtonElement>("#memoDeleteButton")?.addEventListener("click", () => void deleteSelectedMemo());
-  qsa<HTMLButtonElement>("#settings .page-head .btn").forEach((button) => {
-    if (button.textContent?.includes("新增账号")) button.addEventListener("click", openAccountModal);
-    if (button.textContent?.includes("权限模板")) button.addEventListener("click", () => toast("权限模板已应用"));
-    if (button.textContent?.includes("保存设置")) button.addEventListener("click", () => toast("账号与权限设置已保存"));
-  });
+  const systemSettingsSaveButton = qs<HTMLButtonElement>("#systemSettingsSaveButton");
+  systemSettingsSaveButton?.addEventListener("click", () => void saveTeamSystemSettings(systemSettingsSaveButton));
 }
 
 function rememberWorkspaceTab(view: string) {
@@ -25058,7 +33095,1346 @@ function rememberedWorkspaceView(user = state.user) {
   return view;
 }
 
+/* ===================== 主题换肤 (Theme / Skin) ===================== */
+type ThemeColors = { brand: string; brandStrong: string; brand2: string; brandTint: string; nav: string; ring: string };
+
+const THEME_PRESETS: { id: string; name: string; desc: string; colors: string[] }[] = [
+  { id: "ocean",   name: "青绿 Ocean",   desc: "海洋 · 外贸本色", colors: ["#0f766e", "#0b5d57", "#e7f6f3", "#0c2b27"] },
+  { id: "indigo",  name: "靛蓝 Indigo",  desc: "理性 · 商务沉稳", colors: ["#4f46e5", "#3730a3", "#eef0ff", "#151a35"] },
+  { id: "amber",   name: "琥珀 Amber",   desc: "暖金 · 高级质感", colors: ["#b45309", "#8a3e0b", "#fbf1dd", "#271708"] },
+  { id: "rose",    name: "玫红 Rose",    desc: "活力 · 现代醒目", colors: ["#be123c", "#9f1239", "#fdecee", "#2b0e17"] },
+  { id: "slate",   name: "石墨 Slate",   desc: "中性 · 极简专业", colors: ["#334155", "#1e293b", "#eef2f6", "#0f172a"] },
+  { id: "emerald", name: "翠绿 Emerald", desc: "自然 · 生机清新", colors: ["#047857", "#065f46", "#e7f8f1", "#072a20"] },
+  { id: "violet",  name: "紫罗兰 Violet", desc: "优雅 · 神秘高贵", colors: ["#7c3aed", "#6d28d9", "#f3eefe", "#1b1233"] },
+  { id: "azure",   name: "天青 Azure",   desc: "清爽 · 科技蓝调", colors: ["#1d6fb8", "#15578f", "#e8f3fb", "#0b1f33"] },
+  { id: "coral",   name: "珊瑚 Coral",   desc: "热情 · 珊瑚暖调", colors: ["#e11d48", "#be123c", "#fdeaee", "#2a0a16"] },
+  { id: "midnight",name: "午夜 Midnight",desc: "深邃 · 夜空静谧", colors: ["#1e3a8a", "#172554", "#e8edfb", "#0b1430"] },
+  { id: "forest",  name: "森绿 Forest",  desc: "沉稳 · 森林绿意", colors: ["#166534", "#14532d", "#e7f6ec", "#072a18"] },
+  { id: "magenta", name: "品红 Magenta", desc: "魅惑 · 潮流粉紫", colors: ["#c026d3", "#86198f", "#f9eafc", "#2a0b2e"] },
+  { id: "sky",     name: "晴空 Sky",     desc: "明朗 · 天际蔚蓝", colors: ["#0369a1", "#075985", "#e6f3fa", "#07273a"] },
+];
+const THEME_STORAGE_KEY = "gj-theme";
+
+function getStoredTheme(): string {
+  try { return localStorage.getItem(THEME_STORAGE_KEY) || ""; } catch { return ""; }
+}
+function getInitialTheme(): string {
+  return state.user?.theme || getStoredTheme() || "ocean";
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const n = parseInt(full, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+function rgbToHex(r: number, g: number, b: number): string {
+  const c = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
+  return `#${c(r)}${c(g)}${c(b)}`;
+}
+function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0; const l = (max + min) / 2; const d = max - min;
+  if (d) { s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) { case r: h = (g - b) / d + (g < b ? 6 : 0); break; case g: h = (b - r) / d + 2; break; default: h = (r - g) / d + 4; } h /= 6; }
+  return { h: h * 360, s, l };
+}
+function hslToRgb(h: number, s: number, l: number): { r: number; g: number; b: number } {
+  h /= 360;
+  const f = (p: number, q: number, t: number) => { if (t < 0) t += 1; if (t > 1) t -= 1; if (t < 1 / 6) return p + (q - p) * 6 * t; if (t < 1 / 2) return q; if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6; return p; };
+  let r: number, g: number, b: number;
+  if (!s) { r = g = b = l; } else { const q = l < 0.5 ? l * (1 + s) : l + s - l * s; const p = l * 2 - q; r = f(p, q, h + 1 / 3); g = f(p, q, h); b = f(p, q, h - 1 / 3); }
+  return { r: r * 255, g: g * 255, b: b * 255 };
+}
+function relLuminance(hex: string): number {
+  const { r, g, b } = hexToRgb(hex);
+  const a = (v: number) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+  return 0.2126 * a(r) + 0.7152 * a(g) + 0.0722 * a(b);
+}
+function contrastRatio(fg: string, bg: string): number {
+  const L1 = relLuminance(fg), L2 = relLuminance(bg);
+  const hi = Math.max(L1, L2), lo = Math.min(L1, L2);
+  return (hi + 0.05) / (lo + 0.05);
+}
+function clamp(v: number, min: number, max: number): number { return Math.max(min, Math.min(max, v)); }
+
+function deriveThemeColors(hexInput: string): ThemeColors {
+  const hex = /^#[0-9a-fA-F]{6}$/.test(hexInput) ? hexInput : "#0f766e";
+  const { r, g, b } = hexToRgb(hex);
+  let { h, s, l } = rgbToHsl(r, g, b);
+  let brandL = l, guard = 0;
+  while (contrastRatio("#ffffff", rgbToHex(hslToRgb(h, s, brandL).r, hslToRgb(h, s, brandL).g, hslToRgb(h, s, brandL).b)) < 4.5 && guard < 24) {
+    brandL = Math.max(0.12, brandL - 0.03); guard++;
+  }
+  const br = hslToRgb(h, s, brandL);
+  const brand = rgbToHex(br.r, br.g, br.b);
+  const st = hslToRgb(h, clamp(s + 0.04, 0.3, 1), Math.max(brandL - 0.10, 0.12));
+  const brandStrong = rgbToHex(st.r, st.g, st.b);
+  const t2 = hslToRgb(h, s, Math.max(brandL - 0.04, 0.14));
+  const brand2 = rgbToHex(t2.r, t2.g, t2.b);
+  const tt = hslToRgb(h, Math.min(s, 0.5), Math.min(brandL + 0.42, 0.94));
+  const brandTint = rgbToHex(tt.r, tt.g, tt.b);
+  const nv = hslToRgb(h, Math.min(s + 0.08, 1), Math.max(brandL - 0.30, 0.06));
+  const nav = rgbToHex(nv.r, nv.g, nv.b);
+  const ring = `rgba(${r}, ${g}, ${b}, .18)`;
+  return { brand, brandStrong, brand2, brandTint, nav, ring };
+}
+
+function applyTheme(theme: string): void {
+  const root = document.documentElement;
+  ["--brand", "--brand-strong", "--brand-2", "--brand-tint", "--nav", "--brand-ring"].forEach((v) => root.style.removeProperty(v));
+  if (theme.startsWith("custom:")) {
+    const hex = theme.slice(7);
+    const c = deriveThemeColors(hex);
+    root.dataset.theme = "custom";
+    root.style.setProperty("--brand", c.brand);
+    root.style.setProperty("--brand-strong", c.brandStrong);
+    root.style.setProperty("--brand-2", c.brand2);
+    root.style.setProperty("--brand-tint", c.brandTint);
+    root.style.setProperty("--nav", c.nav);
+    root.style.setProperty("--brand-ring", c.ring);
+  } else {
+    root.dataset.theme = theme || "ocean";
+  }
+}
+
+async function saveTheme(theme: string): Promise<void> {
+  try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch { /* ignore */ }
+  try {
+    await api<{ theme: string }>("/api/profile/theme", { method: "PATCH", body: JSON.stringify({ theme }) });
+  } catch (e) {
+    toast("主题已在本地保存，但同步到账号失败", "error");
+  }
+  if (state.user) state.user.theme = theme;
+}
+
+let themeCurrentSelection = getInitialTheme();
+function setThemeStatus(msg: string, kind: "preview" | "saved"): void {
+  const el = qs<HTMLElement>("#themeStatus");
+  if (!el) return;
+  el.textContent = msg;
+  el.className = `th-status th-status-${kind}`;
+}
+
+// 独立换肤界面：点预设/取色器仅预览，点「保存主题」才写入账号
+function renderThemeView(): void {
+  const wrap = qs<HTMLElement>("#themePresets");
+  if (!wrap) return;
+  const active = getInitialTheme();
+  wrap.innerHTML = THEME_PRESETS.map((t) => `
+    <button type="button" class="th-preset ${active === t.id ? "is-active" : ""}" data-theme-pick="${t.id}" title="${t.name}">
+      <span class="th-preset-swatches">
+        <i style="background:${t.colors[0]}"></i>
+        <i style="background:${t.colors[1]}"></i>
+        <i style="background:${t.colors[2]}"></i>
+        <i style="background:${t.colors[3]}"></i>
+      </span>
+      <span class="th-preset-meta">
+        <b>${t.name}</b>
+        <small>${t.desc}</small>
+      </span>
+    </button>`).join("");
+  qsa<HTMLButtonElement>("[data-theme-pick]", wrap).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.themePick!;
+      themeCurrentSelection = id;
+      applyTheme(id);
+      qsa(".th-preset", wrap).forEach((n) => n.classList.toggle("is-active", n === btn));
+      setThemeStatus(`已预览「${THEME_PRESETS.find((t) => t.id === id)?.name}」，点「保存主题」生效`, "preview");
+    });
+  });
+  const picker = qs<HTMLInputElement>("#themeCustomColor");
+  const hexLabel = qs<HTMLElement>("#themeCustomHex");
+  const hint = qs<HTMLElement>("#themeCustomHint");
+  if (picker) {
+    picker.addEventListener("input", () => {
+      const hex = picker.value;
+      if (hexLabel) hexLabel.textContent = hex.toUpperCase();
+      themeCurrentSelection = `custom:${hex}`;
+      applyTheme(themeCurrentSelection);
+      const ok = contrastRatio("#ffffff", hex) >= 4.5;
+      if (hint) hint.textContent = ok ? "白字对比度达标，可直接使用" : "该颜色偏浅，已自动加深以满足可读标准";
+      qsa(".th-preset", wrap).forEach((n) => n.classList.remove("is-active"));
+      setThemeStatus("自定义预览中，点「保存主题」生效", "preview");
+    });
+  }
+  const saveBtn = qs<HTMLButtonElement>("#themeSave");
+  if (saveBtn) saveBtn.onclick = async () => {
+    await saveTheme(themeCurrentSelection);
+    setThemeStatus("主题已保存并同步到账号", "saved");
+    toast("主题已保存", "success");
+  };
+  const resetBtn = qs<HTMLButtonElement>("#themeReset");
+  if (resetBtn) resetBtn.onclick = () => {
+    themeCurrentSelection = "ocean";
+    applyTheme("ocean");
+    qsa(".th-preset", wrap).forEach((n) => n.classList.toggle("is-active", (n as HTMLElement).dataset.themePick === "ocean"));
+    setThemeStatus("已恢复默认主题，点「保存主题」生效", "preview");
+  };
+}
+
+
+// ===== 装箱计算 (Container Load Calculator) =====
+let clScene: any = null;
+let clThree: any = null;
+const CL_DRAW_CAP = 3000;
+
+// 产品库带入尺寸：缓存 + 选择器
+let clProducts: any[] = [];
+let clProductsLoaded = false;
+let clSinglePid = "";
+// 从发货单带入的装柜预设（打开装箱计算时消费）
+interface ClShipmentPreset { name: string; rows: { name: string; lCm: number; wCm: number; hCm: number; unitW: number; shape: string; qtyTarget: number }[]; }
+let clShipmentPreset: ClShipmentPreset | null = null;
+
+function clProductOptionsHtml(selId?: string): string {
+  const opts = clProducts.map((p) => {
+    const dim = p.packLength && p.packWidth && p.packHeight ? ` ${p.packLength}×${p.packWidth}×${p.packHeight}cm` : "";
+    const w = p.packWeight != null ? ` / ${p.packWeight}kg` : "";
+    const label = `${(p.nameZh || p.nameEn || "未命名")}${dim}${w}`.slice(0, 64);
+    return `<option value="${p.id}"${p.id === selId ? " selected" : ""}>${label}</option>`;
+  }).join("");
+  return `<option value="">从产品库选择…</option>` + opts;
+}
+
+async function clEnsureProducts(force = false): Promise<void> {
+  if (clProductsLoaded && !force) return;
+  try {
+    const data = await api<{ products: any[] }>("/api/tools/products");
+    clProducts = (data.products || []).filter(
+      (p) => p.packLength || p.packWidth || p.packHeight || p.packWeight != null
+    );
+    clProductsLoaded = true;
+    clRefreshProductPickers();
+  } catch (e) {
+    // 产品库不可用时仍允许手动输入，不阻断装柜计算
+  }
+}
+
+function clRefreshProductPickers() {
+  const sp = qs<HTMLSelectElement>("#clProductPick");
+  if (sp) sp.innerHTML = clProductOptionsHtml(clSinglePid);
+  document.querySelectorAll(".cl-m-pick").forEach((sel) => {
+    const s = sel as HTMLSelectElement;
+    s.innerHTML = clProductOptionsHtml(s.dataset.pid || "");
+  });
+}
+
+function clApplyProductToSingle(p: any) {
+  if (!p) return;
+  const setVal = (id: string, v: string) => {
+    const el = qs<HTMLInputElement>("#" + id);
+    if (el) {
+      el.value = v;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  };
+  if (p.packLength) setVal("clL", String(p.packLength));
+  if (p.packWidth) setVal("clW", String(p.packWidth));
+  if (p.packHeight) setVal("clH", String(p.packHeight));
+  if (p.packWeight != null) setVal("clUnitW", String(p.packWeight));
+}
+
+function clApplyProductToRow(row: HTMLElement, p: any) {
+  if (!p) return;
+  const set = (sel: string, v: string) => {
+    const el = row.querySelector(sel) as HTMLInputElement;
+    if (el) {
+      el.value = v;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  };
+  if (p.packLength) set(".cl-m-l", String(p.packLength));
+  if (p.packWidth) set(".cl-m-w", String(p.packWidth));
+  if (p.packHeight) set(".cl-m-h", String(p.packHeight));
+  if (p.packWeight != null) set(".cl-m-wt", String(p.packWeight));
+  if (p.nameZh) set(".cl-m-name", p.nameZh);
+}
+
+interface ClContainer { id: string; name: string; L: number; W: number; H: number; payloadKg: number; }
+const CL_CONTAINERS: ClContainer[] = [
+  { id: "20gp", name: "20尺普柜 20GP", L: 5.90, W: 2.35, H: 2.39, payloadKg: 28200 },
+  { id: "40gp", name: "40尺普柜 40GP", L: 12.03, W: 2.35, H: 2.39, payloadKg: 26600 },
+  { id: "40hc", name: "40尺高柜 40HC/HQ", L: 12.03, W: 2.35, H: 2.70, payloadKg: 26500 },
+  { id: "45hc", name: "45尺高柜 45HC", L: 13.56, W: 2.35, H: 2.70, payloadKg: 27800 }
+];
+
+function clCompute(c: ClContainer, g: { l: number; w: number; h: number }, allowRot: boolean, shape: "box" | "drum" | "bag" = "box") {
+  let best: any;
+  if (shape === "drum") {
+    // 圆桶：直径取长/宽较大者，按 d×d×h 网格码放；圆柱旋转对称，忽略 allowRot
+    const d = Math.max(g.l, g.w);
+    const oh = g.h;
+    const nx = Math.floor(c.L / d), ny = Math.floor(c.W / d), nz = Math.floor(c.H / oh);
+    const count = nx * ny * nz;
+    best = { count, ol: d, ow: d, oh, nx, ny, nz, d, isCyl: true };
+  } else {
+    const dims = [g.l, g.w, g.h];
+    const perms = allowRot
+      ? [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]
+      : [[0, 1, 2]];
+    best = { count: 0, ol: 0, ow: 0, oh: 0, nx: 0, ny: 0, nz: 0 };
+    for (const p of perms) {
+      const ol = dims[p[0]], ow = dims[p[1]], oh = dims[p[2]];
+      if (!(ol > 0 && ow > 0 && oh > 0)) continue;
+      const nx = Math.floor(c.L / ol), ny = Math.floor(c.W / ow), nz = Math.floor(c.H / oh);
+      const count = nx * ny * nz;
+      if (count > best.count) best = { count, ol, ow, oh, nx, ny, nz };
+    }
+  }
+  const goodVol = best.ol * best.ow * best.oh;
+  const contVol = c.L * c.W * c.H;
+  const util = contVol > 0 ? (best.count * goodVol) / contVol : 0;
+  // 货物整齐码放时（从一角起始）的货块尺寸与重心（相对集装箱中心，单位 m）
+  const bx = best.nx * best.ol, by = best.nz * best.oh, bz = best.ny * best.ow;
+  const cgx = -c.L / 2 + bx / 2;   // 前后（箱长方向）重心偏移
+  const cgy = -c.H / 2 + by / 2;   // 上下（箱高方向）重心高度
+  const cgz = -c.W / 2 + bz / 2;   // 左右（箱宽方向）重心偏移
+  // 形状实际填充系数（估算：含货物间隙、加固、不规则形态的必然空隙）
+  const fillFactor: Record<string, number> = { box: 0.90, drum: 0.70, bag: 0.64 };
+  const ff = fillFactor[shape] || 0.85;
+  const actualUtil = util * ff;
+  // 边角余隙（米）
+  const gapL = c.L - bx, gapW = c.W - bz, gapH = c.H - by;
+  return { ...best, goodVol, contVol, util, bx, by, bz, cgx, cgy, cgz, shape, isCyl: !!best.isCyl, d: best.d, actualUtil, fillFactor: ff, gapL, gapW, gapH };
+}
+
+async function clEnsureThree() {
+  if (clThree) return clThree;
+  const THREE = await import("three");
+  const mod = await import("three/addons/controls/OrbitControls.js");
+  clThree = { THREE, OrbitControls: mod.OrbitControls };
+  return clThree;
+}
+
+// 装箱 3D 配色：黑白红高级色感。多 SKU 各取一色（白/灰/炭/红系），
+// 单品用「白→暖灰」竖向渐变；箱体边线统一近黑描边，集装箱外框用朱红锚定主题。
+const CL_BOX_PALETTE = [
+  0xf2efe9, // 象牙白
+  0xc23a32, // 朱红
+  0xd6d0c8, // 浅暖灰
+  0x2c2f36, // 炭黑
+  0xe2a7a0, // 柔红
+  0x9c968d, // 中灰
+  0x9e2b25, // 深红
+  0xb7b1a6  // 灰褐
+];
+
+// 由每个货块的变换矩阵与面颜色，构建「合并后的逐箱体边线」。
+// 边线颜色 = 面色加深（×0.34），在 colored 面上形成清晰锐利、互不粘连的描边，
+// 配合各块之间 0.02m 的间隙，使相邻小箱体边界一眼可辨。
+function clMakeBoxEdges(
+  geo: any,
+  matrices: any[],
+  colors: any[]
+): any {
+  const { THREE } = clThree;
+  const edgeSrc = new THREE.EdgesGeometry(geo, 1);
+  const posAttr = edgeSrc.attributes.position;
+  const positions: number[] = [];
+  const colorArr: number[] = [];
+  const ec = new THREE.Color();
+  const tmp = new THREE.Vector3();
+  const EDGE_DARK = new THREE.Color(0x14161a);
+  for (let i = 0; i < matrices.length; i++) {
+    ec.copy(colors[i]).lerp(EDGE_DARK, 0.72);
+    const m = matrices[i];
+    for (let v = 0; v < posAttr.count; v++) {
+      tmp.set(posAttr.getX(v), posAttr.getY(v), posAttr.getZ(v)).applyMatrix4(m);
+      positions.push(tmp.x, tmp.y, tmp.z);
+      colorArr.push(ec.r, ec.g, ec.b);
+    }
+  }
+  edgeSrc.dispose();
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  g.setAttribute("color", new THREE.Float32BufferAttribute(colorArr, 3));
+  const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.96 });
+  const seg = new THREE.LineSegments(g, mat);
+  seg.frustumCulled = false;
+  return seg;
+}
+
+function clClear3D() {
+  if (!clScene) return;
+  for (const m of clScene.containerMeshes) {
+    clScene.scene.remove(m);
+    m.geometry?.dispose?.();
+    m.material?.dispose?.();
+  }
+  clScene.containerMeshes = [];
+  if (clScene.instanced) {
+    clScene.scene.remove(clScene.instanced);
+    clScene.instanced.geometry?.dispose?.();
+    clScene.instanced.material?.dispose?.();
+    clScene.instanced = null;
+  }
+}
+
+function clInitScene(wrap: HTMLElement) {
+  const { THREE, OrbitControls } = clThree;
+  const w = wrap.clientWidth || 800, h = wrap.clientHeight || 460;
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(w, h);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  wrap.appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, w / h, 0.05, 2000);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.autoRotateSpeed = 1.4;
+  // 黑白红主题下的精致打光：低环境光保留塑形 + 半球光做柔和过渡 + 主光塑形 + 背后轮廓光
+  scene.add(new THREE.AmbientLight(0xffffff, 0.32));
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x3a3a3a, 0.55);
+  scene.add(hemi);
+  const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+  dir.position.set(1, 1.5, 1);
+  scene.add(dir);
+  const dir2 = new THREE.DirectionalLight(0xffffff, 0.32);
+  dir2.position.set(-1, 0.6, -0.8);
+  scene.add(dir2);
+  clScene = { renderer, scene, camera, controls, wrap, raf: 0, ro: null, instanced: null, containerMeshes: [], dims: { L: 1, W: 1, H: 1 }, framed: false };
+  const animate = () => {
+    clScene.raf = requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  };
+  animate();
+  const ro = new ResizeObserver(() => {
+    const nw = wrap.clientWidth, nh = wrap.clientHeight;
+    if (nw > 0 && nh > 0) {
+      camera.aspect = nw / nh;
+      camera.updateProjectionMatrix();
+      renderer.setSize(nw, nh);
+    }
+  });
+  ro.observe(wrap);
+  clScene.ro = ro;
+}
+
+function clResetView() {
+  if (!clScene) return;
+  const { L, W, H } = clScene.dims;
+  const maxD = Math.max(L, W, H);
+  clScene.camera.position.set(L * 0.55 + 1.5, H * 0.95 + maxD * 0.15, W * 1.3 + L * 0.35 + 2.5);
+  clScene.controls.target.set(0, 0, 0);
+  clScene.controls.update();
+}
+
+function clBuild3D(c: ClContainer, r: any) {
+  if (!clScene) return;
+  const { THREE } = clThree;
+  clClear3D();
+  const L = c.L, W = c.W, H = c.H;
+  clScene.dims = { L, W, H };
+  const boxGeo = new THREE.BoxGeometry(L, H, W);
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(boxGeo), new THREE.LineBasicMaterial({ color: 0xc23a32 }));
+  const faces = new THREE.Mesh(boxGeo, new THREE.MeshStandardMaterial({ color: 0xe9e4dd, transparent: true, opacity: 0.045, side: THREE.DoubleSide, depthWrite: false }));
+  clScene.scene.add(edges);
+  clScene.scene.add(faces);
+  clScene.containerMeshes = [edges, faces];
+  const total = r.count;
+  const drawn = Math.min(total, CL_DRAW_CAP);
+  if (drawn > 0) {
+    const gap = r.isCyl ? 0 : 0.02;
+    const geo = r.isCyl
+      ? new THREE.CylinderGeometry(r.d / 2 * 0.98, r.d / 2 * 0.98, Math.max(r.oh - gap, 0.01), 20)
+      : new THREE.BoxGeometry(Math.max(r.ol - gap, 0.01), Math.max(r.oh - gap, 0.01), Math.max(r.ow - gap, 0.01));
+    const mat = new THREE.MeshPhysicalMaterial({ roughness: 0.5, metalness: 0.0, clearcoat: 0.28, clearcoatRoughness: 0.45 });
+    const inst = new THREE.InstancedMesh(geo, mat, drawn);
+    inst.frustumCulled = false;
+    const dummy = new THREE.Object3D();
+    const col = new THREE.Color();
+    const matrices: any[] = [];
+    const colors: any[] = [];
+    let idx = 0;
+    for (let ix = 0; ix < r.nx; ix++) {
+      for (let iy = 0; iy < r.ny; iy++) {
+        for (let iz = 0; iz < r.nz; iz++) {
+          if (idx >= drawn) break;
+          const stepX = r.isCyl ? r.d : r.ol;
+          const stepZ = r.isCyl ? r.d : r.ow;
+          const x = -L / 2 + stepX / 2 + ix * stepX;
+          const z = -W / 2 + stepZ / 2 + iy * stepZ;
+          const y = -H / 2 + r.oh / 2 + iz * r.oh;
+          dummy.position.set(x, y, z);
+          dummy.updateMatrix();
+          inst.setMatrixAt(idx, dummy.matrix);
+          matrices.push(dummy.matrix.clone());
+          const t = (r.nz > 1) ? (iz / (r.nz - 1)) : 0;
+          col.set(0xf2efe9).lerp(new THREE.Color(0xc9c3ba), t);
+          colors.push(col.clone());
+          inst.setColorAt(idx, col);
+          idx++;
+        }
+      }
+    }
+    inst.count = idx;
+    inst.instanceMatrix.needsUpdate = true;
+    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+    clScene.scene.add(inst);
+    clScene.instanced = inst;
+    // 逐箱体边线：色深于面，描边清晰、各块互不粘连
+    if (matrices.length) {
+      const edges = clMakeBoxEdges(geo, matrices, colors);
+      clScene.scene.add(edges);
+      clScene.containerMeshes.push(edges);
+    }
+  }
+  // 货物重心标记（赤铜球，位于货块几何中心）
+  if (total > 0) {
+    const cgR = Math.max(Math.min(L, W, H) * 0.02, 0.06);
+    const cgGeo = new THREE.SphereGeometry(cgR, 18, 18);
+    const cgMat = new THREE.MeshStandardMaterial({ color: 0xc23a32, emissive: 0xc23a32, emissiveIntensity: 0.5, roughness: 0.45, metalness: 0.05 });
+    const cgMesh = new THREE.Mesh(cgGeo, cgMat);
+    cgMesh.position.set(r.cgx, r.cgy, r.cgz);
+    clScene.scene.add(cgMesh);
+    clScene.containerMeshes.push(cgMesh);
+  }
+  if (!clScene.framed) {
+    clResetView();
+    clScene.framed = true;
+  }
+}
+
+// ===== 多 SKU 混合装载 =====
+interface MultiItem { name?: string; shape: string; lCm: number; wCm: number; hCm: number; unitW: number; qtyTarget?: number; }
+interface MultiSkuResult { item: MultiItem; r: any; actualQty: number; maxN: number; }
+interface MultiResult { items: MultiSkuResult[]; totalCount: number; totalWeight: number; totalVolUtil: number; weightUtil: number; safeMargin: boolean; }
+
+function clMulticompute(c: ClContainer, items: MultiItem[]): MultiResult {
+  const contVol = c.L * c.W * c.H;
+  const safeVol = contVol * 0.92;
+  const computed = items.map(item => {
+    const r = clCompute(c, { l: item.lCm / 100, w: item.wCm / 100, h: item.hCm / 100 }, true, (item.shape || "box") as "box" | "drum" | "bag");
+    return { item, r, maxN: r.count };
+  });
+  let usedVol = 0, usedW = 0;
+  const results: MultiSkuResult[] = computed.map(({ item, r, maxN }) => {
+    let actualQty = 0;
+    if (item.qtyTarget && item.qtyTarget > 0) {
+      actualQty = Math.min(item.qtyTarget, maxN);
+      usedVol += actualQty * r.goodVol;
+      usedW += actualQty * item.unitW;
+    }
+    return { item, r, actualQty, maxN };
+  });
+  const autoItems = results.filter(x => x.actualQty === 0);
+  if (autoItems.length > 0 && usedVol < safeVol) {
+    const remVol = Math.max(safeVol - usedVol, 0);
+    const totalAutoMaxVol = autoItems.reduce((s, x) => s + x.maxN * x.r.goodVol, 0);
+    for (const ai of autoItems) {
+      const share = totalAutoMaxVol > 0 ? (ai.maxN * ai.r.goodVol) / totalAutoMaxVol : 1 / autoItems.length;
+      let extra = Math.floor((remVol * share) / ai.r.goodVol);
+      extra = Math.min(extra, ai.maxN);
+      ai.actualQty = extra;
+      usedVol += extra * ai.r.goodVol;
+      usedW += extra * ai.item.unitW;
+    }
+  }
+  if (usedW > c.payloadKg) {
+    const ratio = c.payloadKg / usedW;
+    for (const ri of results) {
+      if (!ri.item.qtyTarget || ri.item.qtyTarget <= 0) ri.actualQty = Math.floor(ri.actualQty * ratio);
+    }
+    usedW = results.reduce((s, r) => s + r.actualQty * r.item.unitW, 0);
+    usedVol = results.reduce((s, r) => s + r.actualQty * r.r.goodVol, 0);
+  }
+  const totalCount = results.reduce((s, r) => s + r.actualQty, 0);
+  const totalWeight = usedW;
+  const totalVolUtil = contVol > 0 ? usedVol / contVol : 0;
+  const weightUtil = c.payloadKg > 0 ? totalWeight / c.payloadKg : 0;
+  return { items: results, totalCount, totalWeight, totalVolUtil, weightUtil, safeMargin: totalWeight <= c.payloadKg && usedVol <= contVol };
+}
+
+function clBuild3DMulti(c: ClContainer, multiRes: MultiResult) {
+  if (!clScene) return;
+  const { THREE } = clThree;
+  clClear3D();
+  const L = c.L, W = c.W, H = c.H;
+  clScene.dims = { L, W, H };
+  const boxGeo = new THREE.BoxGeometry(L, H, W);
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(boxGeo), new THREE.LineBasicMaterial({ color: 0xc23a32 }));
+  const faces = new THREE.Mesh(boxGeo, new THREE.MeshStandardMaterial({ color: 0xe9e4dd, transparent: true, opacity: 0.045, side: THREE.DoubleSide, depthWrite: false }));
+  clScene.scene.add(edges); clScene.scene.add(faces);
+  clScene.containerMeshes = [edges, faces];
+  const totalVol = multiRes.items.reduce((s, it) => s + it.actualQty * it.r.goodVol, 0);
+  if (totalVol <= 0 || L <= 0) { clResetView(); clScene.framed = true; return; }
+  let xOffset = -L / 2;
+  const dummy = new THREE.Object3D(), col = new THREE.Color();
+  for (let idx = 0; idx < multiRes.items.length; idx++) {
+    const it = multiRes.items[idx];
+    if (it.actualQty <= 0) continue;
+    const r = it.r, drawn = Math.min(it.actualQty, CL_DRAW_CAP);
+    const segL = L * (it.actualQty * r.goodVol) / totalVol;
+    const gap = r.isCyl ? 0 : 0.02;
+    const geo = r.isCyl
+      ? new THREE.CylinderGeometry(r.d / 2 * 0.98, r.d / 2 * 0.98, Math.max(r.oh - gap, 0.01), 20)
+      : new THREE.BoxGeometry(Math.max(r.ol - gap, 0.01), Math.max(r.oh - gap, 0.01), Math.max(r.ow - gap, 0.01));
+    const baseColor = new THREE.Color(CL_BOX_PALETTE[idx % CL_BOX_PALETTE.length]);
+    const mat = new THREE.MeshPhysicalMaterial({ roughness: 0.5, metalness: 0.0, clearcoat: 0.28, clearcoatRoughness: 0.45 });
+    const inst = new THREE.InstancedMesh(geo, mat, drawn);
+    inst.frustumCulled = false;
+    const stepX = r.isCyl ? r.d : r.ol, stepZ = r.isCyl ? r.d : r.ow;
+    const matrices: any[] = [];
+    const colors: any[] = [];
+    let iIdx = 0;
+    for (let ix = 0; ix < r.nx; ix++) {
+      const x = xOffset + stepX / 2 + ix * stepX;
+      if (x + stepX / 2 > xOffset + segL + 0.001) break;
+      for (let iy = 0; iy < r.ny; iy++) {
+        for (let iz = 0; iz < r.nz; iz++) {
+          if (iIdx >= drawn) break;
+          const z = -W / 2 + stepZ / 2 + iy * stepZ, y = -H / 2 + r.oh / 2 + iz * r.oh;
+          dummy.position.set(x, y, z); dummy.updateMatrix();
+          inst.setMatrixAt(iIdx, dummy.matrix);
+          matrices.push(dummy.matrix.clone());
+          col.copy(baseColor);
+          if (r.nz > 1) col.offsetHSL(0, 0, -(iz / (r.nz - 1)) * 0.06);
+          colors.push(col.clone());
+          inst.setColorAt(iIdx, col); iIdx++;
+        }
+      }
+    }
+    inst.count = iIdx; inst.instanceMatrix.needsUpdate = true;
+    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+    clScene.scene.add(inst); clScene.containerMeshes.push(inst);
+    // 逐箱体边线
+    if (matrices.length) {
+      const edges = clMakeBoxEdges(geo, matrices, colors);
+      clScene.scene.add(edges);
+      clScene.containerMeshes.push(edges);
+    }
+    xOffset += segL;
+  }
+  if (!clScene.framed) { clResetView(); clScene.framed = true; }
+}
+
+function renderMultiCompute(c: ClContainer) {
+  const rowsEl = qs<HTMLElement>("#clMultiRows"); if (!rowsEl) return;
+  const rowEls = rowsEl.querySelectorAll(".cl-multi-row");
+  const items: MultiItem[] = [];
+  rowEls.forEach(row => {
+    const shape = (row.querySelector(".cl-m-shape") as HTMLSelectElement)?.value || "box";
+    const l = parseFloat((row.querySelector(".cl-m-l") as HTMLInputElement)?.value || "0");
+    const w = parseFloat((row.querySelector(".cl-m-w") as HTMLInputElement)?.value || "0");
+    const h = parseFloat((row.querySelector(".cl-m-h") as HTMLInputElement)?.value || "0");
+    const wt = parseFloat((row.querySelector(".cl-m-wt") as HTMLInputElement)?.value || "0");
+    const name = (row.querySelector(".cl-m-name") as HTMLInputElement)?.value?.trim() || "";
+    const qtyRaw = (row.querySelector(".cl-m-qty") as HTMLInputElement)?.value;
+    const qty = qtyRaw ? parseFloat(qtyRaw) : undefined;
+    if (l > 0 && w > 0 && h > 0) items.push({ name, shape, lCm: l, wCm: w, hCm: h, unitW: wt, qtyTarget: qty });
+  });
+  const resEl = qs<HTMLElement>("#clMultiResult"); if (!resEl) return;
+  if (items.length === 0) { resEl.innerHTML = `<div class="cl-layout"><span class="cl-tag">提示</span>请添加至少一种货物（填写长×宽×高）。</div>`; clClear3D(); return; }
+  const res = clMulticompute(c, items);
+  let html = `<div style="display:flex;gap:16px;margin-bottom:14px;flex-wrap:wrap;">
+    <div><b style="font-size:24px;color:var(--brand)">${res.totalCount}</b><span style="font-size:12px;color:var(--muted)">件 · 总计</span></div>
+    <div><b style="font-size:18px">${(res.totalWeight / 1000).toFixed(2)} t</b><span style="font-size:11px;color:var(--muted)">总重</span></div>
+    <div><b style="font-size:18px">${(res.totalVolUtil * 100).toFixed(1)}%</b><span style="font-size:11px;color:var(--muted)">体积利用率</span></div>
+    <div><b style="font-size:18px">${(res.weightUtil * 100).toFixed(1)}%</b><span style="font-size:11px;color:var(--muted)">载重利用率</span></div>
+  </div><table class="cl-sku-table">
+  <thead><tr><th>货物</th><th>形状</th><th>尺寸(cm)</th><th>单件重(kg)</th><th>件数</th><th>小计重(t)</th></tr></thead><tbody>`;
+  for (const it of res.items) {
+    if (it.actualQty === 0) continue;
+    const sn = it.item.shape === "drum" ? "圆桶" : it.item.shape === "bag" ? "袋装" : "长方体";
+    html += `<tr><td>${it.item.name || "—"}</td><td>${sn}</td><td>${it.item.lCm}×${it.item.wCm}×${it.item.hCm}</td><td>${it.item.unitW}</td><td><b>${it.actualQty}</b></td><td>${(it.actualQty * it.item.unitW / 1000).toFixed(2)}</td></tr>`;
+  }
+  html += `<tr class="cl-sku-total"><td colspan="4"><b>合计</b></td><td><b>${res.totalCount}</b></td><td><b>${(res.totalWeight / 1000).toFixed(2)}</b></td></tr></tbody></table>`;
+  if (!res.safeMargin) html += `<div style="margin-top:10px;padding:10px;border-radius:10px;background:#fdf2ef;border:1px solid #e8806e;color:#c0392b;font-size:12.5px;">⚠ 总重 ${(res.totalWeight / 1000).toFixed(2)}t 已超过限重 ${(c.payloadKg / 1000).toFixed(1)}t，请减少数量或换更大柜型。</div>`;
+  html += `<div class="cl-note" style="margin-top:10px;">* 混合装载采用启发式估算（体积比分配剩余空间），实际以现场装柜为准。建议对称分区码放以降低偏载风险。</div>`;
+  resEl.innerHTML = html;
+  clBuild3DMulti(c, res);
+}
+
+function addMultiRow(idx: number, preset?: Partial<MultiItem>) {
+  const container = qs<HTMLElement>("#clMultiRows"); if (!container) return;
+  const row = document.createElement("div"); row.className = "cl-multi-row"; row.dataset.index = String(idx);
+  row.innerHTML = `<button class="cl-rm-row" type="button">×</button><div class="cl-multi-fields">
+    <div class="cl-field"><label>名称</label><input type="text" placeholder="可选" class="cl-m-name" value="${preset?.name || ""}"></div>
+    <div class="cl-field cl-field-grow"><label>从产品库</label><select class="cl-m-pick" data-pid="">${clProductOptionsHtml()}</select></div>
+    <div class="cl-field"><label>形状</label><select class="cl-m-shape"><option value="box"${preset?.shape === "box" ? " selected" : ""}>长方体</option><option value="drum"${preset?.shape === "drum" ? " selected" : ""}>圆桶</option><option value="bag"${preset?.shape === "bag" ? " selected" : ""}>袋装</option></select></div>
+    <div class="cl-field"><label>长(cm)</label><input type="number" min="1" step="1" value="${preset?.lCm || 60}" class="cl-m-l"></div>
+    <div class="cl-field"><label>宽(cm)</label><input type="number" min="1" step="1" value="${preset?.wCm || 40}" class="cl-m-w"></div>
+    <div class="cl-field"><label>高(cm)</label><input type="number" min="1" step="1" value="${preset?.hCm || 30}" class="cl-m-h"></div>
+    <div class="cl-field"><label>重(kg)</label><input type="number" min="0" step="0.5" value="${preset?.unitW || 25}" class="cl-m-wt"></div>
+    <div class="cl-field"><label>数量</label><input type="number" min="0" step="1" placeholder="尽量多" class="cl-m-qty" value="${preset?.qtyTarget ? preset.qtyTarget : ""}"></div>
+  </div>`;
+  container.appendChild(row);
+  row.querySelectorAll("input,select").forEach(inp => inp.addEventListener("input", () => clComputeAndRender()));
+  row.querySelector(".cl-m-pick")?.addEventListener("change", (e) => {
+    const sel = e.target as HTMLSelectElement;
+    row.dataset.pid = sel.value;
+    const p = clProducts.find((x) => x.id === sel.value);
+    clApplyProductToRow(row, p);
+    clComputeAndRender();
+  });
+  row.querySelector(".cl-rm-row")?.addEventListener("click", () => { row.remove(); clComputeAndRender(); });
+}
+
+function clComputeAndRender() {
+  const root = qs<HTMLElement>("#container-load");
+  if (!root) return;
+  const sel = qs<HTMLSelectElement>("#clContainer");
+  const c = CL_CONTAINERS.find((x) => x.id === sel?.value) || CL_CONTAINERS[2];
+  const mode = (document.querySelector('input[name="clMode"]:checked') as HTMLInputElement)?.value || "single";
+  if (mode === "multi") { renderMultiCompute(c); return; }
+  const lCm = parseFloat(qs<HTMLInputElement>("#clL")?.value || "0") / 100;
+  const wCm = parseFloat(qs<HTMLInputElement>("#clW")?.value || "0") / 100;
+  const hCm = parseFloat(qs<HTMLInputElement>("#clH")?.value || "0") / 100;
+  const allowRot = !!qs<HTMLInputElement>("#clRot")?.checked;
+  const shape = (qs<HTMLSelectElement>("#clShape")?.value || "box") as "box" | "drum" | "bag";
+  const unitW = parseFloat(qs<HTMLInputElement>("#clUnitW")?.value || "0");
+  const hint = qs<HTMLElement>("#clPresetHint");
+  if (hint) hint.innerHTML = `内部净尺寸 <b>${c.L.toFixed(2)} × ${c.W.toFixed(2)} × ${c.H.toFixed(2)} m</b> · 容积 <b>${(c.L * c.W * c.H).toFixed(1)} m³</b> · 最大载货重 <b>${(c.payloadKg / 1000).toFixed(1)} t</b>`;
+  const set = (id: string, v: string) => { const el = qs<HTMLElement>("#" + id); if (el) el.textContent = v; };
+  const resetW = () => {
+    set("clTotalW", "—"); set("clWeightPct", "—");
+    const wb = qs<HTMLElement>("#clWeightBlock"); wb?.classList.remove("is-over", "is-ok");
+    qs<HTMLElement>("#clWeightBar")?.style.setProperty("width", "0%");
+    const b = qs<HTMLElement>("#clWeightBadge"); if (b) { b.className = "cl-badge is-idle"; b.textContent = "未输入单件重量"; }
+  };
+  const resetB = () => {
+    set("clCgLong", "—"); set("clCgLat", "—"); set("clCgHeight", "—"); set("clCgHeightPct", "—");
+    const bb = qs<HTMLElement>("#clBalanceBadge"); if (bb) { bb.className = "cl-badge is-idle"; bb.textContent = "—"; }
+    set("clBalanceDetail", "请输入货物尺寸以评估配重。");
+  };
+  const resetA = () => {
+    set("clActualUtil", "—"); set("clActualTheo", "—"); set("clGapTop", "—"); set("clGapLen", "—"); set("clGapWid", "—");
+    const ab = qs<HTMLElement>("#clActualBlock"); ab?.classList.remove("is-ok", "is-warn");
+    qs<HTMLElement>("#clActualBar")?.style.setProperty("width", "0%");
+    const ab2 = qs<HTMLElement>("#clActualBadge"); if (ab2) { ab2.className = "cl-badge is-idle"; ab2.textContent = "—"; }
+    set("clActualDetail", "请输入货物尺寸以评估实际可用利用率。");
+  };
+  if (!(lCm > 0 && wCm > 0 && hCm > 0)) {
+    set("clCount", "0");
+    set("clUtil", "0%");
+    set("clOrient", "—");
+    set("clContVol", (c.L * c.W * c.H).toFixed(1) + " m³");
+    const layout = qs<HTMLElement>("#clLayout");
+    if (layout) layout.innerHTML = `<span class="cl-tag">提示</span>请输入大于 0 的货物尺寸（厘米）。`;
+    resetW(); resetB(); resetA();
+    clClear3D();
+    return;
+  }
+  const r = clCompute(c, { l: lCm, w: wCm, h: hCm }, allowRot, shape);
+  set("clCount", String(r.count));
+  set("clUtil", (r.util * 100).toFixed(1) + "%");
+  set("clOrient", `${Math.round(r.ol * 100)}×${Math.round(r.ow * 100)}×${Math.round(r.oh * 100)}cm`);
+  set("clContVol", r.contVol.toFixed(1) + " m³");
+  // 实际可用利用率（形状修正 + 边角余隙 + 摆放建议）
+  const shapeName = r.shape === "drum" ? "圆桶/圆柱" : r.shape === "bag" ? "袋装/不规则" : "长方体";
+  const aWarn = r.actualUtil < 0.55;
+  const ab = qs<HTMLElement>("#clActualBlock");
+  ab?.classList.toggle("is-warn", aWarn);
+  ab?.classList.toggle("is-ok", !aWarn);
+  set("clActualUtil", (r.actualUtil * 100).toFixed(1) + "%");
+  set("clActualTheo", (r.util * 100).toFixed(1) + "%");
+  set("clGapTop", (r.gapH * 100).toFixed(0) + " cm");
+  set("clGapLen", (r.gapL * 100).toFixed(0) + " cm");
+  set("clGapWid", (r.gapW * 100).toFixed(0) + " cm");
+  qs<HTMLElement>("#clActualBar")?.style.setProperty("width", Math.min(r.actualUtil, 1) * 100 + "%");
+  const ab2 = qs<HTMLElement>("#clActualBadge");
+  if (ab2) { ab2.className = "cl-badge " + (aWarn ? "is-warn" : "is-ok"); ab2.textContent = shapeName; }
+  const tips: string[] = [];
+  const gTop = r.gapH * 100, gLen = r.gapL * 100, gWid = r.gapW * 100;
+  if (gTop > 8) tips.push(`顶部留 ${gTop.toFixed(0)}cm 空隙，可叠放一层扁平货物或填充缓冲材料`);
+  else if (gTop > 2) tips.push(`顶部余 ${gTop.toFixed(0)}cm，码放较紧凑`);
+  if (gLen > 8 || gWid > 8) tips.push(`边角余 ${gLen.toFixed(0)}×${gWid.toFixed(0)}cm，建议错位堆码（半件错位）利用边角空隙`);
+  tips.push(`「${shapeName}」实际填充系数约 ${(r.fillFactor * 100).toFixed(0)}%，已计入货物间隙、加固与不规则形态必然空隙`);
+  set("clActualDetail", tips.join("；") + "。");
+  const layout = qs<HTMLElement>("#clLayout");
+  if (layout) {
+    layout.innerHTML =
+      `<span class="cl-tag">推荐堆放</span>按 <b>${Math.round(r.ol * 100)}×${Math.round(r.ow * 100)}×${Math.round(r.oh * 100)} cm</b> 方向整齐码放：` +
+      `沿箱长排 <b>${r.nx}</b> 件 · 沿箱宽排 <b>${r.ny}</b> 列 · 沿箱高堆 <b>${r.nz}</b> 层，共计 <b>${r.count}</b> 件。` +
+      (r.count > CL_DRAW_CAP ? `<br><span style="color:var(--muted)">（3D 示意显示前 ${CL_DRAW_CAP} 件，实际依此规律排布）</span>` : ``);
+  }
+  // 重量校验（集装箱限重）
+  if (unitW > 0) {
+    const totalW = r.count * unitW;
+    const weightUtil = totalW / c.payloadKg;
+    const over = totalW > c.payloadKg;
+    const wb = qs<HTMLElement>("#clWeightBlock");
+    wb?.classList.toggle("is-over", over);
+    wb?.classList.toggle("is-ok", !over);
+    set("clTotalW", (totalW / 1000).toFixed(2) + " t");
+    set("clWeightPct", (weightUtil * 100).toFixed(1) + "%");
+    qs<HTMLElement>("#clWeightBar")?.style.setProperty("width", Math.min(weightUtil, 1) * 100 + "%");
+    const b = qs<HTMLElement>("#clWeightBadge");
+    if (b) {
+      if (over) { b.className = "cl-badge is-over"; b.textContent = `超重 +${((totalW - c.payloadKg) / 1000).toFixed(2)} t`; }
+      else { b.className = "cl-badge is-ok"; b.textContent = "未超限重"; }
+    }
+  } else { resetW(); }
+  // 配重校验（重心 / 偏载）
+  const offLong = c.L > 0 ? Math.abs(r.cgx) / (c.L / 2) : 0; // 前后偏载比例 0..1
+  const offLat = c.W > 0 ? Math.abs(r.cgz) / (c.W / 2) : 0;  // 左右偏载比例 0..1
+  const cgH = c.H > 0 ? r.cgy / (c.H / 2) : 0;               // 重心高度比例 -1..1
+  set("clCgLong", (offLong * 100).toFixed(0) + "%");
+  set("clCgLat", (offLat * 100).toFixed(0) + "%");
+  set("clCgHeight", (Math.abs(r.cgy) < 0.005 ? 0 : r.cgy).toFixed(2) + " m");
+  set("clCgHeightPct", (cgH * 100).toFixed(0) + "%");
+  const bb = qs<HTMLElement>("#clBalanceBadge");
+  const warns: string[] = [];
+  let severe = false, mild = false;
+  if (offLong > 0.45) { severe = true; warns.push(`前后偏载明显（重心偏离箱长中心 ${(offLong * 100).toFixed(0)}%），建议沿箱长方向居中摆放或加配重`); }
+  else if (offLong > 0.20) { mild = true; warns.push(`前后略有偏载（重心偏离箱长中心 ${(offLong * 100).toFixed(0)}%），建议沿箱长方向居中`); }
+  if (offLat > 0.45) { severe = true; warns.push(`左右偏载明显（重心偏离箱宽中心 ${(offLat * 100).toFixed(0)}%），建议对称码放`); }
+  else if (offLat > 0.20) { mild = true; warns.push(`左右略有偏载（重心偏离箱宽中心 ${(offLat * 100).toFixed(0)}%），建议沿箱宽对称`); }
+  if (cgH > 0.45) { severe = true; warns.push(`重心偏高（位于箱高 ${(cgH * 100).toFixed(0)}% 处），运输与堆叠稳定性下降，建议压低重心`); }
+  let balClass = "is-ok", balText = "均衡";
+  if (severe) { balClass = "is-over"; balText = "偏载风险"; }
+  else if (mild || warns.length > 0) { balClass = "is-warn"; balText = "需注意"; }
+  if (bb) { bb.className = "cl-badge " + balClass; bb.textContent = balText; }
+  set("clBalanceDetail", warns.length
+    ? warns.join("；") + "。"
+    : "货物重心位于集装箱中心附近，偏载风险低。实际装柜将货块在箱长、箱宽方向居中，可进一步将偏载降至接近 0。");
+  clBuild3D(c, r);
+}
+
+function disposeContainerLoad() {
+  if (!clScene) return;
+  cancelAnimationFrame(clScene.raf);
+  clScene.ro?.disconnect?.();
+  clScene.controls?.dispose?.();
+  clClear3D();
+  clScene.renderer?.dispose?.();
+  clScene.renderer?.domElement?.remove?.();
+  clScene = null;
+}
+
+// 从发货单一键装入货物清单到装箱计算（多SKU混装）
+async function openContainerLoadForShipment(s: Shipment) {
+  await clEnsureProducts();
+  const rows = (s.items || []).map((it: any) => {
+    const name = it.productName || "货物";
+    const p = clProducts.find((x: any) => x.nameZh === name || x.name === name);
+    const lCm = p?.packLength || 50;
+    const wCm = p?.packWidth || 40;
+    const hCm = p?.packHeight || 30;
+    const unitW = p?.packWeight || (Number(it.grossWeight) || 10);
+    const qtyTarget = Number(it.quantity) || 0;
+    return { name, lCm, wCm, hCm, unitW, shape: "box", qtyTarget };
+  }).filter((r: any) => r.lCm > 0);
+  clShipmentPreset = { name: s.shipmentNo || "发货单", rows };
+  activateNavView("container-load");
+  toast(`已载入发货单 ${s.shipmentNo || ""} 的货物清单到装箱计算`, "success");
+}
+
+function renderContainerLoad() {
+  if (clScene) disposeContainerLoad();
+  const root = qs<HTMLElement>("#container-load");
+  if (!root) return;
+  const opts = CL_CONTAINERS.map((c) => `<option value="${c.id}"${c.id === "40hc" ? " selected" : ""}>${c.name}</option>`).join("");
+  root.innerHTML = `
+    <div class="cl-wrap">
+      <div class="view-head">
+        <div class="view-head-text"><h2>装箱计算</h2></div>
+        <p class="view-sub">选择集装箱、输入货物尺寸与单件重量，自动估算最大装载量，校验集装箱限重与配重（重心偏载），并生成可拖拽旋转的 3D 堆放演示。</p>
+      </div>
+      <div class="cl-mode-row" style="margin-bottom:16px;display:flex;gap:20px;align-items:center;font-size:14px;">
+        <span style="font-weight:700;color:var(--ink)">装载模式：</span>
+        <label class="cl-check"><input type="radio" name="clMode" value="single" checked> 单品装柜（一种货物）</label>
+        <label class="cl-check"><input type="radio" name="clMode" value="multi"> 多 SKU 混装（多种货物）</label>
+      </div>
+      <div id="clSinglePanel">
+      <div class="cl-grid">
+        <section class="cl-inputs">
+          <h3 class="cl-h">① 选择集装箱</h3>
+          <div class="cl-field"><label>集装箱类型</label><select id="clContainer" class="cl-select">${opts}</select></div>
+          <div class="cl-presets" id="clPresetHint"></div>
+          <div class="cl-field cl-field-grow" style="margin-bottom:4px">
+            <label>从产品库带入（自动填尺寸 + 单件重量）</label>
+            <select id="clProductPick" class="cl-select">${clProductOptionsHtml()}</select>
+          </div>
+          <h3 class="cl-h">② 货物尺寸（厘米）</h3>
+          <div class="cl-row">
+            <div class="cl-field"><label>长</label><input id="clL" type="number" min="1" step="1" value="60"></div>
+            <div class="cl-field"><label>宽</label><input id="clW" type="number" min="1" step="1" value="40"></div>
+            <div class="cl-field"><label>高</label><input id="clH" type="number" min="1" step="1" value="30"></div>
+          </div>
+          <label class="cl-check"><input id="clRot" type="checkbox" checked> 允许货物旋转（6 种朝向择优）</label>
+          <div class="cl-field cl-field-grow" style="margin-top:12px">
+            <label>货物形状</label>
+            <select id="clShape" class="cl-select">
+              <option value="box" selected>长方体（纸箱/木箱/托盘）</option>
+              <option value="drum">圆桶（圆柱/油桶/化工桶）</option>
+              <option value="bag">袋装（编织袋/软包/不规则）</option>
+            </select>
+          </div>
+          <h3 class="cl-h">③ 货物重量（千克）</h3>
+          <div class="cl-row">
+            <div class="cl-field cl-field-grow"><label>单件重量</label><input id="clUnitW" type="number" min="0" step="0.5" value="25"><span class="cl-suffix">kg / 件</span></div>
+          </div>
+        </section>
+        <section class="cl-result">
+          <div class="cl-big"><span id="clCount">0</span><small>件 · 最大装载量（理论）</small></div>
+          <div class="cl-metrics">
+            <div><b id="clUtil">0%</b><span>体积利用率</span></div>
+            <div><b id="clOrient">—</b><span>推荐码放方向</span></div>
+            <div><b id="clContVol">—</b><span>集装箱容积</span></div>
+          </div>
+
+          <div class="cl-check-block" id="clActualBlock">
+            <div class="cl-check-head"><span class="cl-check-title">④ 实际可用利用率 · 形状修正</span><span class="cl-badge is-idle" id="clActualBadge">—</span></div>
+            <div class="cl-check-row">
+              <div class="cl-check-kv"><span>实际利用率</span><b id="clActualUtil">—</b></div>
+              <div class="cl-check-kv"><span>理论利用率</span><b id="clActualTheo">—</b></div>
+            </div>
+            <div class="cl-bar"><i id="clActualBar" style="width:0%"></i></div>
+            <div class="cl-balance-grid">
+              <div class="cl-check-kv"><span>顶部余隙</span><b id="clGapTop">—</b></div>
+              <div class="cl-check-kv"><span>箱长余隙</span><b id="clGapLen">—</b></div>
+              <div class="cl-check-kv"><span>箱宽余隙</span><b id="clGapWid">—</b></div>
+            </div>
+            <div class="cl-balance-detail" id="clActualDetail">请输入货物尺寸以评估实际可用利用率。</div>
+          </div>
+
+          <div class="cl-check-block" id="clWeightBlock">
+            <div class="cl-check-head"><span class="cl-check-title">⑤ 重量校验 · 集装箱限重</span><span class="cl-badge is-idle" id="clWeightBadge">未输入单件重量</span></div>
+            <div class="cl-check-row">
+              <div class="cl-check-kv"><span>货物总重</span><b id="clTotalW">—</b></div>
+              <div class="cl-check-kv"><span>限重利用率</span><b id="clWeightPct">—</b></div>
+            </div>
+            <div class="cl-bar"><i id="clWeightBar" style="width:0%"></i></div>
+          </div>
+
+          <div class="cl-check-block" id="clBalanceBlock">
+            <div class="cl-check-head"><span class="cl-check-title">⑥ 配重校验 · 重心偏载</span><span class="cl-badge is-idle" id="clBalanceBadge">—</span></div>
+            <div class="cl-balance-grid">
+              <div class="cl-check-kv"><span>前后偏移</span><b id="clCgLong">—</b></div>
+              <div class="cl-check-kv"><span>左右偏移</span><b id="clCgLat">—</b></div>
+              <div class="cl-check-kv"><span>重心高度</span><b id="clCgHeight">—</b></div>
+            </div>
+            <div class="cl-balance-detail" id="clBalanceDetail">请输入货物尺寸以评估配重。</div>
+          </div>
+
+          <div class="cl-layout" id="clLayout"></div>
+          <div class="cl-note">* 理论最大值按同向整齐码放估算，实际装柜需留约 10–15% 安全余量（间隙、加固、不规则形状）。重量以「单件重量×件数」核对集装箱最大载货重；配重按贴角码放估算重心，实际居中摆放可显著降低偏载。</div>
+        </section>
+      </div>
+      </div>
+      <div id="clMultiPanel" style="display:none">
+        <section class="cl-inputs">
+          <h3 class="cl-h">多 SKU 货物清单</h3>
+          <div id="clMultiRows"></div>
+          <div style="margin-top:10px;display:flex;gap:10px;align-items:center;">
+            <button class="btn btn-ghost" id="clAddRow" type="button">＋ 添加货物</button>
+            <span style="font-size:12px;color:var(--muted)">每种货物独立设置尺寸、形状与目标数量（留空=尽量多装）</span>
+          </div>
+        </section>
+        <section class="cl-result" id="clMultiResult">
+          <!-- 混合结果由 JS 渲染 -->
+        </section>
+      </div>
+      <section class="cl-stage-card">
+        <div class="cl-stage-head">
+          <h3 class="cl-h">⑦ 3D 堆放演示</h3>
+          <div class="cl-stage-tools">
+            <label class="cl-check"><input id="clAuto" type="checkbox"> 自动旋转</label>
+            <button class="btn btn-ghost" id="clExport" type="button">导出装载方案</button>
+            <button class="btn btn-ghost" id="clReset" type="button">复位视角</button>
+          </div>
+        </div>
+        <div class="cl-canvas" id="clCanvas"></div>
+        <div class="cl-stage-hint">左键拖拽旋转 · 滚轮缩放 · 右键平移 · <span class="cl-cg-dot"></span>赤铜球 = 货物重心</div>
+      </section>
+    </div>`;
+  const recompute = () => clComputeAndRender();
+  ["clContainer", "clL", "clW", "clH", "clUnitW"].forEach((id) => qs<HTMLElement>("#" + id)?.addEventListener("input", recompute));
+  qs<HTMLElement>("#clRot")?.addEventListener("change", recompute);
+  qs<HTMLElement>("#clShape")?.addEventListener("change", recompute);
+  qs<HTMLElement>("#clProductPick")?.addEventListener("change", (e) => {
+    const id = (e.target as HTMLSelectElement).value;
+    clSinglePid = id;
+    const p = clProducts.find((x) => x.id === id);
+    clApplyProductToSingle(p);
+    clComputeAndRender();
+  });
+  qs<HTMLElement>("#clReset")?.addEventListener("click", () => clResetView());
+  qs<HTMLElement>("#clExport")?.addEventListener("click", () => exportContainerLoad());
+  qs<HTMLInputElement>("#clAuto")?.addEventListener("change", (e) => {
+    if (clScene) clScene.controls.autoRotate = (e.target as HTMLInputElement).checked;
+  });
+  // 装载模式切换
+  document.querySelectorAll('input[name="clMode"]').forEach(el => el.addEventListener("change", () => {
+    const sp = qs<HTMLElement>("#clSinglePanel"), mp = qs<HTMLElement>("#clMultiPanel");
+    if (sp && mp) { sp.style.display = (el as HTMLInputElement).value === "single" ? "" : "none"; mp.style.display = (el as HTMLInputElement).value === "multi" ? "" : "none"; }
+    clComputeAndRender();
+  }));
+  // 多 SKU 行管理
+  qs<HTMLElement>("#clAddRow")?.addEventListener("click", () => {
+    const container = qs<HTMLElement>("#clMultiRows");
+    addMultiRow(container ? container.children.length : 0);
+    clComputeAndRender();
+  });
+  // 初始化：优先消费发货单预设，否则放两条示例货物
+  if (clShipmentPreset && clShipmentPreset.rows.length) {
+    const mr = document.querySelector('input[name="clMode"][value="multi"]') as HTMLInputElement | null;
+    if (mr) { mr.checked = true; mr.dispatchEvent(new Event("change", { bubbles: true })); }
+    const cont = qs<HTMLElement>("#clMultiRows");
+    if (cont) cont.innerHTML = "";
+    clShipmentPreset.rows.forEach((r, i) => addMultiRow(i, { name: r.name, lCm: r.lCm, wCm: r.wCm, hCm: r.hCm, unitW: r.unitW, shape: r.shape, qtyTarget: r.qtyTarget }));
+    clShipmentPreset = null;
+  } else {
+    addMultiRow(0, { name: "蓝牙音箱", lCm: 80, wCm: 60, hCm: 50, unitW: 12.5, shape: "box" });
+    addMultiRow(1, { name: "太阳能路灯", lCm: 120, wCm: 100, hCm: 40, unitW: 42, shape: "box" });
+  }
+  // 拉取产品库（带包装尺寸），自动填充选择器
+  void clEnsureProducts();
+  clComputeAndRender();
+  const wrap = qs<HTMLElement>("#clCanvas");
+  if (wrap) {
+    clEnsureThree().then(() => {
+      if (!qs<HTMLElement>("#clCanvas")) return;
+      clInitScene(wrap);
+      clComputeAndRender();
+    }).catch((err) => console.error("three load failed", err));
+  }
+}
+
+// 导出 / 打印装载方案：汇总当前计算结果为一份可分享的装柜方案
+function exportContainerLoad() {
+  const g = (id: string) => qs<HTMLElement>("#" + id);
+  const txt = (id: string) => g(id)?.textContent?.trim() || "—";
+  const val = (id: string) => ((g(id) as HTMLInputElement | HTMLSelectElement)?.value || "").trim() || "—";
+  const mode = (document.querySelector('input[name="clMode"]:checked') as HTMLInputElement)?.value || "single";
+  const c = CL_CONTAINERS.find((x) => x.id === (g("clContainer") as HTMLSelectElement)?.value) || CL_CONTAINERS[2];
+  const now = new Date();
+  const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  const user = (window as any).state?.user?.name || (window as any).state?.user?.email || "操作员";
+
+  let cargoHtml = "";
+  let sectionTitle = "";
+  if (mode === "single") {
+    sectionTitle = "单品装柜方案";
+    const shapeName = (g("clShape") as HTMLSelectElement)?.value === "drum" ? "圆桶" : (g("clShape") as HTMLSelectElement)?.value === "bag" ? "袋装" : "长方体";
+    const pName = clSinglePid ? (clProducts.find((x) => x.id === clSinglePid)?.nameZh || "自定义货物") : "自定义货物";
+    cargoHtml = `
+      <table class="xp-tbl">
+        <tr><th>货物名称</th><td>${escHtml(pName)}</td><th>货物形状</th><td>${shapeName}</td></tr>
+        <tr><th>单件尺寸</th><td>${val("clL")} × ${val("clW")} × ${val("clH")} cm</td><th>单件重量</th><td>${val("clUnitW")} kg</td></tr>
+        <tr><th>最大装载量</th><td><b>${txt("clCount")}</b> 件</td><th>推荐码放</th><td>${txt("clOrient")}</td></tr>
+        <tr><th>体积利用率</th><td>${txt("clUtil")}</td><th>集装箱容积</th><td>${txt("clContVol")}</td></tr>
+        <tr><th>实际可用利用率</th><td>${txt("clActualUtil")} <span class="xm">（理论 ${txt("clActualTheo")}）</span></td><th>状态</th><td>${badgeText("clActualBadge")}</td></tr>
+        <tr><th>顶部 / 长 / 宽 余隙</th><td colspan="3">${txt("clGapTop")} / ${txt("clGapLen")} / ${txt("clGapWid")}</td></tr>
+      </table>`;
+  } else {
+    sectionTitle = "多 SKU 混装方案";
+    const rows = [...document.querySelectorAll("#clMultiRows .cl-multi-row")].map((row) => {
+      const q = (s: string) => (row.querySelector(s) as HTMLInputElement)?.value || "—";
+      const shape = (row.querySelector(".cl-m-shape") as HTMLSelectElement)?.value;
+      const shapeName = shape === "drum" ? "圆桶" : shape === "bag" ? "袋装" : "长方体";
+      const name = q(".cl-m-name") || "未命名";
+      return `<tr><td>${escHtml(name)}</td><td>${shapeName}</td><td>${q(".cl-m-l")}×${q(".cl-m-w")}×${q(".cl-m-h")} cm</td><td>${q(".cl-m-wt")} kg</td></tr>`;
+    }).join("");
+    const summary = g("clMultiResult")?.innerHTML || "";
+    cargoHtml = `
+      <table class="xp-tbl">
+        <tr><th style="width:22%">货物</th><th style="width:14%">形状</th><th style="width:34%">单件尺寸</th><th style="width:18%">单件重</th></tr>
+        ${rows}
+      </table>
+      <div class="xp-summary">${summary}</div>`;
+  }
+
+  // 3D 缩略图
+  let snap = "";
+  try {
+    const cv = clScene?.renderer?.domElement as HTMLCanvasElement | undefined;
+    if (cv && cv.toDataURL) {
+      const url = cv.toDataURL("image/png");
+      if (url && url.length > 200) snap = `<div class="xp-3d"><img src="${url}" alt="3D 堆放演示"></div>`;
+    }
+  } catch (_) { /* ignore */ }
+
+  const doc = `<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>装箱计算装载方案</title>
+  <style>
+    *{box-sizing:border-box} body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:#16223b;margin:0;padding:32px;background:#fff}
+    .xp-head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #cf8a1c;padding-bottom:14px;margin-bottom:20px}
+    .xp-title{font-size:24px;font-weight:800;margin:0} .xp-sub{font-size:13px;color:#5b6678;margin-top:6px}
+    .xp-meta{font-size:12px;color:#5b6678;text-align:right;line-height:1.7}
+    .xp-h{font-size:15px;font-weight:700;margin:22px 0 10px;color:#16223b;border-left:4px solid #1f6f6b;padding-left:8px}
+    .xp-tbl{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:6px}
+    .xp-tbl th,.xp-tbl td{border:1px solid #e4e0d6;padding:8px 10px;text-align:left;vertical-align:top}
+    .xp-tbl th{background:#f7f4ed;font-weight:600;width:18%;white-space:nowrap}
+    .xp-tbl b{color:#1f6f6b;font-size:15px}
+    .xm{color:#8a96a6;font-size:12px}
+    .xp-summary{font-size:13px;background:#f7f4ed;border:1px solid #e4e0d6;border-radius:8px;padding:12px;margin-top:10px}
+    .xp-badge{display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;background:#dcf3e6;color:#0f7a4f}
+    .xp-badge.warn{background:#fbe0d8;color:#c0392b}
+    .xp-3d{margin-top:16px} .xp-3d img{width:100%;max-width:720px;border:1px solid #e4e0d6;border-radius:8px}
+    .xp-foot{margin-top:24px;border-top:1px dashed #cfc7b6;padding-top:10px;font-size:11px;color:#8a96a6}
+    @media print{body{padding:16px}.xp-foot{position:fixed;bottom:8px;width:100%}}
+  </style></head><body>
+    <div class="xp-head">
+      <div><h1 class="xp-title">装箱计算 · 装载方案</h1><div class="xp-sub">${sectionTitle} · 生成于 ${stamp}</div></div>
+      <div class="xp-meta">集装箱：${escHtml(c.name)}<br>净尺寸：${c.L.toFixed(2)}×${c.W.toFixed(2)}×${c.H.toFixed(2)} m<br>最大载货重：${(c.payloadKg / 1000).toFixed(1)} t<br>制单人：${escHtml(user)}</div>
+    </div>
+    <div class="xp-h">货物与装载量</div>
+    ${cargoHtml}
+    <div class="xp-h">校验摘要</div>
+    <table class="xp-tbl">
+      <tr><th>重量校验 · 限重</th><td>${txt("clTotalW")} / 限重利用率 ${txt("clWeightPct")} <span class="xp-badge ${weightWarn()}">${badgeText("clWeightBadge")}</span></td></tr>
+      <tr><th>配重校验 · 偏载</th><td>前后偏移 ${txt("clCgLong")} · 左右偏移 ${txt("clCgLat")} · 重心高度 ${txt("clCgHeight")} <span class="xp-badge ${balanceWarn()}">${badgeText("clBalanceBadge")}</span></td></tr>
+    </table>
+    ${snap}
+    <div class="xp-foot">本方案由 GoodJob CRM 装箱计算模块生成，理论最大值按同向整齐码放估算，实际装柜请预留 10–15% 安全余量（间隙、加固、不规则形状）。重量以「单件重量×件数」核对集装箱最大载货重；配重按贴角码放估算重心。</div>
+  </body></html>`;
+
+  const w = window.open("", "_blank", "width=900,height=1000");
+  if (!w) { toast("导出被浏览器拦截，请允许弹出窗口后重试", "error"); return; }
+  w.document.open(); w.document.write(doc); w.document.close();
+  setTimeout(() => { try { w.focus(); w.print(); } catch (_) {} }, 500);
+}
+
+function badgeText(id: string) {
+  const t = qs<HTMLElement>("#" + id)?.textContent?.trim();
+  return t ? escHtml(t) : "—";
+}
+function weightWarn() { return (qs<HTMLElement>("#clWeightBadge")?.className || "").includes("is-over") ? "warn" : ""; }
+function balanceWarn() { return (qs<HTMLElement>("#clBalanceBadge")?.className || "").includes("is-warn") ? "warn" : ""; }
+function escHtml(s: string) { return String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string)); }
+
+interface EmailReturnFlowLog {
+  id: string;
+  messageId: string;
+  entityType: string;
+  entityId: string;
+  entityName?: string;
+  to: string;
+  subject: string;
+  source: string;
+  sentAt: string;
+  openCount: number;
+  clickCount: number;
+  firstOpenedAt?: string;
+  lastOpenedAt?: string;
+  lastClickedAt?: string;
+  lastClickedUrl?: string;
+  repliedAt?: string;
+  bouncedAt?: string;
+  createdAt: string;
+}
+
+interface EmailReturnFlowTouchpoint {
+  id: string;
+  messageId?: string;
+  eventType?: string;
+  direction?: string;
+  channel?: string;
+  occurredAt?: string;
+  subject?: string;
+  content?: string;
+  replyClassification?: string;
+}
+
+const EMAIL_RETURN_EVENT_META: Record<string, { label: string; cls: string; icon: string }> = {
+  send: { label: "发送", cls: "neutral", icon: "➤" },
+  open: { label: "打开信号", cls: "green", icon: "👁" },
+  click: { label: "点击信号", cls: "aqua", icon: "🔗" },
+  reply: { label: "回复", cls: "green", icon: "↩" },
+  bounce: { label: "退信", cls: "red", icon: "⚠" }
+};
+
+let emailReturnFlowFilter = "all";
+
+function emailReturnFlowStatusBadges(log: EmailReturnFlowLog): string {
+  const parts: string[] = [];
+  if (log.bouncedAt) parts.push(`<span class="rf-pill rf-pill--bounce">退信</span>`);
+  if (log.repliedAt) parts.push(`<span class="rf-pill rf-pill--reply">已回复</span>`);
+  if (log.openCount > 0) parts.push(`<span class="rf-pill rf-pill--open" title="邮件客户端可能代为加载图片，仅作为追踪信号">打开信号 ${log.openCount}</span>`);
+  if (log.clickCount > 0) parts.push(`<span class="rf-pill rf-pill--click" title="邮件安全扫描器可能访问链接，仅作为追踪信号">点击信号 ${log.clickCount}</span>`);
+  if (!parts.length) parts.push(`<span class="rf-pill rf-pill--sent">已发送</span>`);
+  return parts.join(" ");
+}
+
+async function renderEmailReturnFlow() {
+  const box = qs<HTMLElement>("#emailReturnFlowPage");
+  if (!box) return;
+  try {
+    const profile = await api<{ user: User }>("/api/profile");
+    updateStoredUser(profile.user);
+  } catch {
+    /* 发送台账仍可独立加载，资料状态沿用当前会话缓存。 */
+  }
+  box.className = "deck";
+  const user = state.user;
+  const syncState = !user?.inboundSyncEnabled
+    ? "off"
+    : user.lastInboundSyncStatus === "error"
+      ? "error"
+      : user.lastInboundSyncAt
+        ? "ok"
+        : "pending";
+  const syncText =
+    syncState === "error" ? "收信监听异常"
+      : syncState === "ok" ? `收信已同步 · ${formatTime(user!.lastInboundSyncAt!)}`
+      : syncState === "pending" ? "收信监听待首次同步"
+      : "收信监听未开启";
+  const syncBadge = `<span class="deck-sync ${syncState === "ok" ? "is-ok" : syncState === "error" ? "is-error" : "is-warn"}"><span class="dot"></span>${syncText}</span>`;
+  box.innerHTML = `
+    <div class="deck-top">
+      <div class="deck-crumb">Outbound Intelligence · <b>回流</b></div>
+      <div class="deck-live">● 收信监听 <b>${escapeHtml(syncText)}</b></div>
+    </div>
+    <header class="deck-hero">
+      <div>
+        <div class="deck-kicker">开发信 · 回流分析</div>
+        <h1>开发信<br/><em>回流</em></h1>
+        <div class="deck-sub">打开、点击、回信、退信——一封邮件的完整生命周期，压进一屏。</div>
+      </div>
+      <div class="deck-actions">${syncBadge}${user?.inboundSyncEnabled ? `<button class="deck-btn" id="emailReturnSync">立即同步</button>` : ""}<button class="deck-btn" id="emailReturnRefresh">↻ 刷新</button></div>
+    </header>
+    <div class="deck-ticker"><div class="deck-run" id="deckTicker"></div></div>
+    <section class="deck-kpis" id="emailReturnStats"><div class="deck-loading"><i></i>加载中…</div></section>
+    <div class="deck-toolbar">
+      <select id="emailReturnFilter" aria-label="按业务对象筛选">
+        <option value="all">全部对象</option>
+        <option value="prospect_candidate">搜客候选</option>
+        <option value="lead">线索</option>
+        <option value="customer">客户</option>
+      </select>
+      <span class="deck-count" id="emailReturnCount"></span>
+    </div>
+    <div class="deck-list" id="emailReturnList"><div class="deck-loading"><i></i>正在加载发送记录…</div></div>
+  `;
+  qs<HTMLButtonElement>("#emailReturnRefresh", box)?.addEventListener("click", () => void renderEmailReturnFlow());
+  qs<HTMLButtonElement>("#emailReturnSync", box)?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    setButtonPending(button, true, "立即同步", "同步中");
+    try {
+      const result = await api<{ user: User; summary: { scanned: number; matched: number } }>("/api/profile/inbound-mail/sync", { method: "POST" });
+      updateStoredUser(result.user);
+      toast(`收信同步完成：扫描 ${result.summary.scanned} 封，匹配 ${result.summary.matched} 封`);
+      await renderEmailReturnFlow();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "收信同步失败", "error");
+      setButtonPending(button, false, "立即同步", "同步中");
+    }
+  });
+  const filter = qs<HTMLSelectElement>("#emailReturnFilter", box);
+  if (filter) {
+    filter.value = emailReturnFlowFilter;
+    filter.addEventListener("change", () => {
+      emailReturnFlowFilter = filter.value;
+      void loadEmailReturnLogs(box);
+    });
+  }
+  await loadEmailReturnLogs(box);
+}
+
+async function loadEmailReturnLogs(box: HTMLElement) {
+  const list = qs<HTMLElement>("#emailReturnList", box);
+  const stats = qs<HTMLElement>("#emailReturnStats", box);
+  const count = qs<HTMLElement>("#emailReturnCount", box);
+  if (!list) return;
+  try {
+    const qsParam = emailReturnFlowFilter && emailReturnFlowFilter !== "all" ? `?entityType=${encodeURIComponent(emailReturnFlowFilter)}` : "";
+    const result = await api<{ logs: EmailReturnFlowLog[]; total: number }>(`/api/outbound-emails${qsParam}`);
+    const logs = result.logs || [];
+    const opened = logs.filter((l) => (l.openCount || 0) > 0).length;
+    const clicked = logs.filter((l) => (l.clickCount || 0) > 0).length;
+    const replied = logs.filter((l) => l.repliedAt).length;
+    const bounced = logs.filter((l) => l.bouncedAt).length;
+    if (stats) {
+      stats.innerHTML = `
+        <div class="deck-kpi"><div class="lab">已发送</div><div class="v">${logs.length}</div></div>
+        <div class="deck-kpi"><div class="lab">打开信号</div><div class="v open">${opened}</div></div>
+        <div class="deck-kpi"><div class="lab">点击信号</div><div class="v click">${clicked}</div></div>
+        <div class="deck-kpi"><div class="lab">回复</div><div class="v reply">${replied}</div></div>
+        <div class="deck-kpi"><div class="lab">退信</div><div class="v bounce">${bounced}</div></div>`;
+      const deckTicker = qs<HTMLElement>("#deckTicker", box);
+      if (deckTicker) {
+        const labelOf = (l: EmailReturnFlowLog) =>
+          l.bouncedAt ? "退信" : l.repliedAt ? "已回信" : (l.openCount || 0) > 0 ? "已打开" : (l.clickCount || 0) > 0 ? "已点击" : "已发送";
+        const items = logs.length
+          ? logs.map((l) => `<span><b>${escapeHtml(l.entityName || l.to || "—")}</b> ${labelOf(l)}</span>`)
+          : Array.from({ length: 4 }, () => `<span>等待数据 · 去「开发信」发一封，这里会出现回流状态</span>`);
+        const seq = items.join("");
+        deckTicker.classList.toggle("is-static", !logs.length);
+        deckTicker.innerHTML = logs.length ? seq + seq : seq;
+      }
+    }
+    if (count) count.textContent = `共 ${result.total} 条记录`;
+    if (!logs.length) {
+      list.innerHTML = `<div class="deck-empty"><b>还没有开发信回流数据</b>去「搜客清单」或「开发信」给客户发一封，这里就会出现它的打开 / 点击 / 回信 / 退信状态。</div>`;
+      return;
+    }
+      list.innerHTML = `
+      <table>
+        <thead><tr><th>收件人 / 对象</th><th>主题</th><th>发送时间</th><th>回流状态</th><th></th></tr></thead>
+        <tbody>
+          ${logs.map((log) => {
+            const ini = escapeHtml((log.entityName || log.to || "?").trim().slice(0, 2));
+            return `
+            <tr data-message-id="${escapeHtml(log.messageId)}" class="email-return-row">
+              <td><span class="deck-avatar">${ini}</span><span class="deck-name">${escapeHtml(log.entityName || log.to || "—")}</span>${log.entityName && log.to ? `<span class="deck-email">${escapeHtml(log.to)}</span>` : ""}</td>
+              <td><span class="deck-subject">${escapeHtml(log.subject || "（无主题）")}</span></td>
+              <td><span class="deck-time">${escapeHtml(formatTime(log.sentAt))}</span></td>
+              <td>${emailReturnFlowStatusBadges(log).replace(/rf-pill/g, "deck-pill")}</td>
+              <td><button class="deck-detail" data-detail="${escapeHtml(log.messageId)}">时间线</button></td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>`;
+    qsa<HTMLButtonElement>("[data-detail]", list).forEach((button) => {
+      button.addEventListener("click", () => void openEmailReturnDetail(button.dataset.detail || ""));
+    });
+    qsa<HTMLElement>(".email-return-row", list).forEach((row) => {
+      row.addEventListener("click", (event) => {
+        if ((event.target as HTMLElement).closest("button")) return;
+        const id = row.dataset.messageId || "";
+        if (id) void openEmailReturnDetail(id);
+      });
+    });
+  } catch (error) {
+    if (list) list.innerHTML = `<div class="email-return-empty">加载失败：${escapeHtml(error instanceof Error ? error.message : "未知错误")}</div>`;
+  }
+}
+
+async function openEmailReturnDetail(messageId: string) {
+  if (!messageId) return;
+  openModal("开发信回流时间线", `<div class="email-return-detail-loading"><i></i>加载中…</div>`, `<button class="btn" data-modal-close>关闭</button>`);
+  try {
+    const result = await api<{ log: EmailReturnFlowLog; touchpoints: EmailReturnFlowTouchpoint[] }>(`/api/outbound-emails/${encodeURIComponent(messageId)}`);
+    const log = result.log;
+    const meta = EMAIL_RETURN_EVENT_META;
+    const timeline = result.touchpoints.length
+      ? `<ul class="email-return-timeline">${result.touchpoints.map((tp) => {
+        const m = meta[tp.eventType || "send"] || meta.send;
+        const time = tp.occurredAt ? formatTime(tp.occurredAt) : "";
+        const extra = tp.eventType === "click" && tp.content
+          ? `<small>链接：${escapeHtml(tp.content)}</small>`
+          : tp.subject
+            ? `<small>${escapeHtml(tp.subject)}</small>`
+            : tp.content
+              ? `<small>${escapeHtml(tp.content)}</small>`
+              : "";
+        return `<li class="ert-${m.cls}"><span class="ert-icon">${m.icon}</span><div><b>${m.label}</b> <span class="ert-time">${escapeHtml(time)}</span>${extra ? `<div>${extra}</div>` : ""}</div></li>`;
+      }).join("")}</ul>`
+      : `<div class="email-return-empty">暂无回流事件。打开/点击需邮件在公网送达并加载追踪像素；回信/退信需开启 IMAP 收信监听。</div>`;
+    const body = `
+      <div class="email-return-detail-head">
+        <div><span>收件人</span><b>${escapeHtml(log.entityName || log.to || "—")}</b></div>
+        <div><span>主题</span><b>${escapeHtml(log.subject || "（无主题）")}</b></div>
+        <div><span>发送</span><b>${escapeHtml(formatTime(log.sentAt))}</b></div>
+      </div>
+      <div class="email-return-detail-status">${emailReturnFlowStatusBadges(log)}</div>
+      ${timeline}`;
+    openModal(`开发信回流 · ${log.entityName || log.to || "详情"}`, body, `<button class="btn" data-modal-close>关闭</button>`);
+  } catch (error) {
+    openModal("开发信回流时间线", `<div class="email-return-empty">加载失败：${escapeHtml(error instanceof Error ? error.message : "未知错误")}</div>`, `<button class="btn" data-modal-close>关闭</button>`);
+  }
+}
+
 function activateNavView(view: string, after?: () => void) {
+  if (view === "access-control") view = "member-management";
   if (!qs<HTMLElement>(`#${CSS.escape(view)}`)) view = "dashboard";
   if (!canAccessWorkspaceView(view)) {
     toast("当前账号无权访问系统设置", "error");
@@ -25066,6 +34442,8 @@ function activateNavView(view: string, after?: () => void) {
     after = undefined;
   }
   const activeView = qs<HTMLElement>(".view.active")?.id;
+  if (activeView === "global-map") stopGmTimeline();
+  if (activeView === "container-load") disposeContainerLoad();
   if (["lead-finder", "lead-task-detail"].includes(activeView || "") && !["lead-finder", "lead-task-detail"].includes(view)) {
     stopLeadTaskEventStream(false);
   }
@@ -25082,13 +34460,26 @@ function activateNavView(view: string, after?: () => void) {
   if (view !== "lead-finder") closeLeadFinderVerificationDrawer();
   rememberWorkspaceTab(view);
   sessionStorage.setItem(workspaceViewStorageKey(), view);
-  qsa<HTMLElement>(".sidebar button[data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
+  qsa<HTMLElement>(".sidebar button[data-view]").forEach((button) => {
+    const customerOutcome = button.dataset.customerOutcome;
+    const active = button.dataset.view === view
+      && (view !== "customers" || customerOutcome === state.customerOutcomeFilter);
+    button.classList.toggle("active", active);
+  });
+  if (view === "business-card" || view === "website-verify") {
+    qsa<HTMLElement>('.sidebar button[data-view="tools"]').forEach((button) => button.classList.add("active"));
+  }
   openSecondaryDropdownForView(view);
   qsa<HTMLElement>(".view").forEach((node) => node.classList.toggle("active", node.id === view));
+  const legacyWorkspace = qs<HTMLElement>("main.main > .workspace");
+  if (legacyWorkspace) legacyWorkspace.hidden = !legacyWorkspace.querySelector(":scope > .view.active");
   document.body.classList.toggle("is-whatsapp-view", view === "whatsapp");
   syncLeadTaskDetailClock(view === "lead-task-detail");
   syncWhatsAppRefresh(false);
   renderTopbarForView(view);
+  if (view === "customers") {
+    renderCustomers(state.customers);
+  }
   if (view === "reports") {
     void refreshExecutiveReport();
   }
@@ -25097,9 +34488,16 @@ function activateNavView(view: string, after?: () => void) {
   }
   if (view === "daily-reports") {
     void refreshDailyReports(false);
+    void loadLogs().then(() => renderDailyAuto()).catch(() => renderDailyAuto());
+  }
+  if (view === "settings") {
+    void loadTeamSystemSettings().catch((error) => toast(error instanceof Error ? error.message : "系统设置加载失败", "error"));
   }
   if (view === "inbox") {
     void refreshInternalMessages(false);
+  }
+  if (view === "integration-center") {
+    void integrationCenterController?.refresh(false);
   }
   if (view === "dashboard") requestDashboardRefresh();
   if (view === "lead-finder") {
@@ -25117,6 +34515,27 @@ function activateNavView(view: string, after?: () => void) {
   }
   if (view === "shipments") {
     renderShipments();
+    void syncAllShipments();
+  }
+  if (view === "global-map") {
+    renderGlobalMap();
+    void syncGlobalRouteDocuments();
+    void syncAllShipments();
+  }
+  if (view === "relation-graph") {
+    renderRelationGraph();
+  }
+  if (view === "kpi-board") {
+    renderKpiBoard();
+  }
+  if (view === "logs") {
+    void loadLogs();
+  }
+  if (view === "theme") {
+    renderThemeView();
+  }
+  if (view === "container-load") {
+    renderContainerLoad();
   }
   if (view === "ai-agent") {
     renderAgent(state.agentRun);
@@ -25132,6 +34551,24 @@ function activateNavView(view: string, after?: () => void) {
   if (view === "database-maintenance") {
     void refreshDatabaseMaintenance();
   }
+  if (isAccessControlView(view)) {
+    void loadAccessControl();
+  }
+  if (view === "platform-operations") {
+    void refreshPlatformOperations();
+  }
+  if (view === "approval-center") {
+    void refreshApprovalCenter();
+  }
+  if (view === "approval-workflows") {
+    void refreshApprovalWorkflows();
+  }
+  if (view === "whatsapp") {
+    void ensureInstantCommunicationLoaded();
+  }
+  if (view === "email-return-flow") {
+    void renderEmailReturnFlow();
+  }
   window.scrollTo({ top: 0, behavior: "smooth" });
   after?.();
 }
@@ -25140,20 +34577,24 @@ function renderTopbarForView(view: string) {
   const searchWrap = qs<HTMLElement>("#topSearchWrap");
   const searchInput = qs<HTMLInputElement>("#topSearchInput");
   const context = qs<HTMLElement>("#topActionContext");
-  const importButton = qs<HTMLButtonElement>("#topImportButton");
-  const exportButton = qs<HTMLButtonElement>("#topExportButton");
   const primaryButton = qs<HTMLButtonElement>("#topPrimaryAction");
   const primaryText = primaryButton?.querySelector("span");
   const isCustomerView = view === "customers";
+
+  if (view === "platform-operations") {
+    searchWrap?.classList.add("is-hidden");
+    context?.classList.add("is-hidden");
+    if (primaryButton) primaryButton.hidden = true;
+    renderOpenWorkspaceTabs(view);
+    return;
+  }
 
   searchWrap?.classList.remove("is-hidden");
   context?.classList.toggle("is-hidden", !isCustomerView);
   if (searchInput) {
     searchInput.placeholder = isCustomerView ? "搜索客户、联系人、国家或产品" : "全局搜索 / 输入模块名后回车跳转";
   }
-  if (importButton) importButton.hidden = !isCustomerView;
-  if (exportButton) exportButton.hidden = !isCustomerView;
-  if (primaryButton) primaryButton.hidden = !isCustomerView;
+  if (primaryButton) primaryButton.hidden = !isCustomerView || Boolean(state.iamCapabilities && !hasIamCapability("customer.create"));
   if (primaryText && isCustomerView) primaryText.textContent = "新增客户";
   renderOpenWorkspaceTabs(view);
   renderTopbarStats();
@@ -25161,11 +34602,8 @@ function renderTopbarForView(view: string) {
 
 function renderTopbarStats() {
   const todoCount = activeTodos(state.todos).filter((todo) => !todo.done).length;
-  const reminderCount = state.todos.filter((todo) => todo.reminderRuleId && !todo.done).length;
   const todoNode = qs<HTMLElement>("#topTodoCount");
-  const reminderNode = qs<HTMLElement>("#topReminderCount");
   if (todoNode) todoNode.textContent = String(todoCount);
-  if (reminderNode) reminderNode.textContent = String(reminderCount);
 }
 
 async function loadProductConfig() {
@@ -25200,6 +34638,11 @@ function resolveTopbarSearchView(rawValue: string) {
     ["prospect", "prospect-list"],
     ["ai agent", "ai-agent"],
     ["智能体", "ai-agent"],
+    ["集成中心", "integration-center"],
+    ["集成", "integration-center"],
+    ["连接器", "integration-center"],
+    ["mcp", "integration-center"],
+    ["integration", "integration-center"],
     ["ai", "ai-config"],
     ["gpt", "ai-config"],
     ["模型", "ai-config"],
@@ -25211,6 +34654,11 @@ function resolveTopbarSearchView(rawValue: string) {
     ["个人设置", "profile"],
     ["邮箱", "profile"],
     ["profile", "profile"],
+    ["开发信回流", "email-return-flow"],
+    ["回流", "email-return-flow"],
+    ["邮件追踪", "email-return-flow"],
+    ["回信", "email-return-flow"],
+    ["退信", "email-return-flow"],
     ["客户公池", "customer-pool"],
     ["公池", "customer-pool"],
     ["客户", "customers"],
@@ -25261,6 +34709,14 @@ function resolveTopbarSearchView(rawValue: string) {
     ["problem", "problems"],
     ["备忘", "memos"],
     ["memo", "memos"],
+    ["成员管理", "member-management"],
+    ["组织权限", "organization-structure"],
+    ["组织架构", "organization-structure"],
+    ["权限管理", "role-management"],
+    ["角色管理", "role-management"],
+    ["成员授权", "member-authorization"],
+    ["权限审计", "permission-audit"],
+    ["organization", "organization-structure"],
     ["设置", "settings"],
     ["account", "settings"]
   ];
@@ -25287,7 +34743,7 @@ async function restoreSession() {
   } catch (error) {
     toast(error instanceof Error ? `数据加载失败：${error.message}` : "数据加载失败，请稍后重试", "error");
   }
-  activateNavView(rememberedWorkspaceView(user));
+  activateNavView(state.iamCapabilities?.source === "platform" ? "platform-operations" : rememberedWorkspaceView(user));
 }
 
 void loadProductConfig();

@@ -11,7 +11,8 @@ import {
   Sparkles,
   UserPlus,
   Users,
-  Zap
+  Zap,
+  FileUp
 } from "lucide-react";
 import type { Contact } from "@shared/types";
 import { api } from "../api";
@@ -28,7 +29,8 @@ const originLabels: Record<Contact["origin"], string> = {
   whatsapp_sync: "WhatsApp 同步",
   inbound_message: "客户来信",
   manual: "手动添加",
-  crm_import: "CRM 导入"
+  crm_import: "CRM 导入",
+  history_import: "聊天导入"
 };
 
 type ContactAccountOption = { id: string; name: string; provider: string; status: string };
@@ -44,6 +46,7 @@ export function ContactsPage({ selectedAccountId, onSelectAccount, onOpenConvers
   const [origin, setOrigin] = useState<Contact["origin"] | "all">("all");
   const [showManualAdd, setShowManualAdd] = useState(false);
   const [showCrmImport, setShowCrmImport] = useState(false);
+  const [showHistoryImport, setShowHistoryImport] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const contactsQuery = useQuery({
@@ -118,6 +121,9 @@ export function ContactsPage({ selectedAccountId, onSelectAccount, onOpenConvers
           </button>
           <button className="button secondary" disabled={provisionableAccounts.length === 0 || !crmQuery.data?.length} onClick={() => setShowCrmImport(true)}>
             <ArrowDownToLine size={16} /> 从 CRM 导入
+          </button>
+          <button className="button secondary" disabled={accountsQuery.data?.length === 0} onClick={() => setShowHistoryImport(true)}>
+            <FileUp size={16} /> 导入聊天记录
           </button>
           <button className="button primary" disabled={provisionableAccounts.length === 0} onClick={() => setShowManualAdd(true)}>
             <UserPlus size={16} /> 手动添加
@@ -225,8 +231,79 @@ export function ContactsPage({ selectedAccountId, onSelectAccount, onOpenConvers
           }}
         />
       )}
+      {showHistoryImport && selectedAccountId && (
+        <HistoryImportModal
+          accounts={accountsQuery.data ?? []}
+          defaultAccountId={selectedAccountId}
+          onClose={() => setShowHistoryImport(false)}
+          onImported={(result) => {
+            setShowHistoryImport(false);
+            setError(null);
+            setFeedback(`聊天记录导入完成：新增 ${result.imported} 条，跳过重复 ${result.duplicates} 条。`);
+            onSelectAccount(result.contact.accountId);
+            void queryClient.invalidateQueries({ queryKey: ["contacts"] });
+            void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+            onOpenConversation(result.contact.accountId, result.conversation.id);
+          }}
+        />
+      )}
     </div>
   );
+}
+
+function HistoryImportModal({
+  accounts,
+  defaultAccountId,
+  onClose,
+  onImported
+}: {
+  accounts: ContactAccountOption[];
+  defaultAccountId: string;
+  onClose(): void;
+  onImported(result: Awaited<ReturnType<typeof api.importWhatsAppHistory>>): void;
+}) {
+  const [content, setContent] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [dateOrder, setDateOrder] = useState<"dmy" | "mdy">("dmy");
+  const [customerSender, setCustomerSender] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const preview = useMutation({
+    mutationFn: api.previewWhatsAppHistory,
+    onSuccess: (result) => { setError(null); setCustomerSender(result.participants[0] ?? ""); },
+    onError: (reason) => setError(reason.message)
+  });
+  const importHistory = useMutation({ mutationFn: api.importWhatsAppHistory, onSuccess: onImported, onError: (reason) => setError(reason.message) });
+  const selectFile = async (file?: File) => {
+    setError(null);
+    preview.reset();
+    if (!file) { setContent(""); setFileName(""); return; }
+    if (!file.name.toLowerCase().endsWith(".txt")) { setError("请选择 WhatsApp 导出的 .txt 文件。"); return; }
+    if (file.size > 1_500_000) { setError("聊天文件不能超过 1.5 MB，请拆分后导入。"); return; }
+    const nextContent = await file.text();
+    setContent(nextContent);
+    setFileName(file.name);
+    preview.mutate({ content: nextContent, dateOrder });
+  };
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    importHistory.mutate({
+      accountId: String(form.get("accountId")),
+      phone: String(form.get("phone")),
+      displayName: String(form.get("displayName")),
+      customerSender,
+      content,
+      dateOrder
+    });
+  };
+  return <Modal title="导入 WhatsApp 聊天记录" width="620px" onClose={onClose}><form className="form-stack" onSubmit={submit}>
+    <div className="notice subtle-notice"><FileUp size={16} /><span>使用 WhatsApp“导出聊天”生成的文本文件。导入只写入历史记录，不会向客户发送消息；重复文件会自动去重。</span></div>
+    <div className="form-grid two"><label><span>日期格式</span><select value={dateOrder} onChange={(event) => { const next = event.target.value as "dmy" | "mdy"; setDateOrder(next); if (content) preview.mutate({ content, dateOrder: next }); }}><option value="dmy">日/月/年</option><option value="mdy">月/日/年</option></select></label><label><span>聊天文件</span><input type="file" accept=".txt,text/plain" onChange={(event) => void selectFile(event.target.files?.[0])} /><small>{fileName || "最大 1.5 MB"}</small></label></div>
+    {preview.isPending && <div className="history-import-loading"><Spinner /> 正在解析聊天记录</div>}
+    {preview.data && <><div className="history-preview-summary"><span><strong>{preview.data.messageCount}</strong> 条消息</span><span><strong>{preview.data.participants.length}</strong> 位参与者</span><span>{preview.data.firstMessageAt ? new Date(preview.data.firstMessageAt).toLocaleDateString("zh-CN") : "-"} 至 {preview.data.lastMessageAt ? new Date(preview.data.lastMessageAt).toLocaleDateString("zh-CN") : "-"}</span></div><div className="form-grid two"><label><span>导入到账号</span><select name="accountId" defaultValue={defaultAccountId}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label><label><span>客户在记录中的名称</span><select value={customerSender} onChange={(event) => setCustomerSender(event.target.value)}>{preview.data.participants.map((participant) => <option key={participant} value={participant}>{participant}</option>)}</select></label><label><span>CRM 显示名称</span><input name="displayName" required defaultValue={customerSender} placeholder="例如 Maria Garcia" /></label><label><span>客户 WhatsApp 号码</span><input name="phone" required placeholder="例如 +491234567890" /></label></div><div className="history-sample"><strong>解析预览</strong>{preview.data.sample.slice(0, 3).map((message, index) => <div key={`${message.occurredAt}-${index}`}><span>{message.sender}</span><time>{new Date(message.occurredAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</time><p>{message.body}</p></div>)}</div></>}
+    {error && <div className="form-error">{error}</div>}
+    <div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>取消</button><button className="button primary" disabled={!preview.data || !customerSender || importHistory.isPending}>{importHistory.isPending ? <Spinner /> : <FileUp size={16} />} 确认导入</button></div>
+  </form></Modal>;
 }
 
 function CrmImportModal({
@@ -251,11 +328,13 @@ function CrmImportModal({
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    importContact.mutate({ crmContactId: String(form.get("crmContactId")), accountId: String(form.get("accountId")) });
+    const crmContactId = String(form.get("crmContactId"));
+    const selected = crmContacts.find((contact) => contact.id === crmContactId);
+    importContact.mutate({ crmContactId, accountId: String(form.get("accountId")), externalContact: selected ? { id: selected.id, name: selected.name, phone: selected.phone } : undefined });
   };
 
   return (
-    <Modal title="从 CRM Sandbox 导入联系人" onClose={onClose}>
+    <Modal title="从 GoodJob CRM 导入联系人" onClose={onClose}>
       <form className="form-stack" onSubmit={submit}>
         <label><span>CRM 联系人</span><select name="crmContactId" required>{crmContacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.name} · {contact.phone}</option>)}</select></label>
         <label><span>目标 WhatsApp 账号</span><select name="accountId" defaultValue={initialAccountId} disabled={eligibleAccounts.length === 0}>{accounts.map((account) => <option key={account.id} value={account.id} disabled={!canProvisionContact(account)}>{account.name} · {account.provider} · {canProvisionContact(account) ? account.status === "connected" ? "在线" : "可先建档" : "需先连接"}</option>)}</select></label>

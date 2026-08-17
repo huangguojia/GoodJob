@@ -1,7 +1,4 @@
-import {
-  AI_MODEL_TIMEOUT_MS,
-  aiGenerateLeads
-} from "./ai-model-runtime.js";
+import { aiGenerateLeads } from "./ai-model-runtime.js";
 import {
   defineProvider,
   type LeadQuery
@@ -9,6 +6,13 @@ import {
 import type { AiModelConfig } from "./types.js";
 
 export const AI_SEARCH_ADAPTER_VERSION = "ai-search-control-v1";
+
+export function aiSearchTimeoutMs() {
+  const configured = Number(process.env.AI_SEARCH_TIMEOUT_MS || 75_000);
+  return Number.isFinite(configured)
+    ? Math.max(20_000, Math.min(90_000, configured))
+    : 75_000;
+}
 
 export function createAiSearchProvider(config: AiModelConfig) {
   const base = new URL(config.baseUrl);
@@ -33,7 +37,7 @@ export function createAiSearchProvider(config: AiModelConfig) {
       allowedHosts: [base.hostname.toLocaleLowerCase()],
       allowedPathPrefixes: [basePath],
       allowedMethods: ["POST"],
-      timeoutMs: AI_MODEL_TIMEOUT_MS,
+      timeoutMs: aiSearchTimeoutMs(),
       maxResponseBytes: 2 * 1024 * 1024
     },
     async search({ query }, credential, tools) {
@@ -49,7 +53,8 @@ export function createAiSearchProvider(config: AiModelConfig) {
       const records = await aiGenerateLeads(
         legacyQuery,
         { ...config, apiKey: credential.apiKey },
-        (url, init) => tools.http.fetch(url, init)
+        (url, init) => tools.http.fetch(url, init),
+        aiSearchTimeoutMs()
       );
       return {
         records,

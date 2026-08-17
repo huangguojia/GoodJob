@@ -3,13 +3,18 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Bot,
+  CalendarClock,
   Check,
   CheckCheck,
+  CheckCircle2,
   CircleAlert,
+  ClipboardPlus,
   ContactRound,
   Download,
+  EyeOff,
   File as FileIcon,
   FileText,
+  History,
   Image as ImageIcon,
   Languages,
   MessageCirclePlus,
@@ -18,17 +23,19 @@ import {
   PanelRight,
   Paperclip,
   Plus,
+  RotateCcw,
   Search,
   Send,
   Settings,
   Sparkles,
+  PhoneCall,
   Undo2,
   UserPlus,
   Video,
   X
 } from "lucide-react";
-import type { ChannelAccount, ChatMessage, Conversation } from "@shared/types";
-import { api } from "../api";
+import type { ChannelAccount, ChatMessage, Conversation, ConversationAnalysis, ConversationFollowUp } from "@shared/types";
+import { api, type ConversationIntelligenceSnapshot, type CrmCustomerSnapshot, type CrmTodoSnapshot } from "../api";
 import { queryKeys, useAccounts, useCapabilities } from "../data";
 import { EmptyState, Modal, Spinner, StatusBadge } from "../components/ui";
 
@@ -38,6 +45,16 @@ interface Props {
   onRequestedConversationHandled?(): void;
   onSelectAccount(id: string): void;
   onManageAccounts(): void;
+}
+
+function formatDueAt(value: string): string {
+  if (!value) return "未安排时间";
+  const due = new Date(value);
+  if (Number.isNaN(due.getTime())) return value;
+  const delta = due.getTime() - Date.now();
+  const hours = Math.ceil(Math.abs(delta) / 3_600_000);
+  const relative = delta < 0 ? `已逾期 ${hours} 小时` : hours < 24 ? `${hours} 小时内` : `${Math.ceil(hours / 24)} 天内`;
+  return `${relative} · ${due.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`;
 }
 
 export function WorkspacePage({ selectedAccountId, requestedConversationId, onRequestedConversationHandled, onSelectAccount, onManageAccounts }: Props) {
@@ -64,7 +81,14 @@ export function WorkspacePage({ selectedAccountId, requestedConversationId, onRe
     enabled: Boolean(selectedConversationId),
     refetchInterval: 15_000
   });
+  const intelligenceQuery = useQuery({
+    queryKey: queryKeys.intelligence(selectedConversationId),
+    queryFn: () => api.conversationIntelligence(selectedConversationId!),
+    enabled: Boolean(selectedConversationId)
+  });
   const contactsQuery = useQuery({ queryKey: queryKeys.contacts(selectedAccountId), queryFn: () => api.contacts(selectedAccountId), enabled: Boolean(selectedAccountId) });
+  const crmCustomersQuery = useQuery({ queryKey: queryKeys.crmCustomers, queryFn: api.crmCustomers, enabled: Boolean(selectedConversationId), staleTime: 30_000 });
+  const crmTodosQuery = useQuery({ queryKey: queryKeys.crmTodos, queryFn: api.crmTodos, enabled: Boolean(selectedConversationId), staleTime: 15_000 });
 
   useEffect(() => {
     const conversations = conversationsQuery.data ?? [];
@@ -93,6 +117,8 @@ export function WorkspacePage({ selectedAccountId, requestedConversationId, onRe
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const selectedConversation = conversationsQuery.data?.find((item) => item.id === selectedConversationId);
   const selectedContact = contactsQuery.data?.find((item) => item.id === selectedConversation?.contactId);
+  const crmCustomer = crmCustomersQuery.data?.find((item) => item.id === selectedContact?.crmContactId || item.whatsapp === selectedConversation?.contactPhone);
+  const customerTodos = crmTodosQuery.data?.filter((item) => !item.done && (item.customerId === crmCustomer?.id || (!item.customerId && crmCustomer && item.related?.includes(crmCustomer.company)))).sort((left, right) => left.dueAt.localeCompare(right.dueAt)).slice(0, 4) ?? [];
   const filteredConversations = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return (conversationsQuery.data ?? []).filter(
@@ -105,6 +131,33 @@ export function WorkspacePage({ selectedAccountId, requestedConversationId, onRe
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["contacts"] });
       void queryClient.invalidateQueries({ queryKey: queryKeys.crmContacts });
+    }
+  });
+  const analyzeConversation = useMutation({
+    mutationFn: () => api.analyzeConversation(selectedConversationId!),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.intelligence(selectedConversationId) })
+  });
+  const updateFollowup = useMutation({
+    mutationFn: async ({ id, status, crmTodoId }: { id: string; status: ConversationFollowUp["status"]; crmTodoId?: string }) => {
+      if (status === "completed" && crmTodoId) await api.completeCrmTodo(crmTodoId);
+      return api.updateFollowup(id, status);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.intelligence(selectedConversationId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.crmTodos });
+    }
+  });
+  const createGoodJobTodo = useMutation({
+    mutationFn: (followup: ConversationFollowUp) => api.createGoodJobTodo({
+      title: followup.title,
+      priority: followup.priority,
+      dueAt: followup.dueAt,
+      related: `WhatsApp ${selectedConversation?.contactPhone ?? ""}：${followup.reason}`,
+      customerId: crmCustomer?.id,
+      triggerKey: crmCustomer ? `whatsapp-insight:${crmCustomer.id}:${followup.id}` : undefined
+    }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.crmTodos });
     }
   });
 
@@ -132,7 +185,7 @@ export function WorkspacePage({ selectedAccountId, requestedConversationId, onRe
               description={hasDemoAccount ? "同步联系人或使用 Demo 入站消息开始测试。" : "同步联系人或从联系人页发起消息后，会话将显示在这里。"}
             />
           ) : filteredConversations.map((conversation) => (
-            <ConversationRow key={conversation.id} conversation={conversation} selected={conversation.id === selectedConversationId} onClick={() => { setSelectedConversationId(conversation.id); setMobileListOpen(false); }} />
+            <ConversationRow key={conversation.id} conversation={conversation} selected={conversation.id === selectedConversationId} onClick={() => { setSelectedConversationId(conversation.id); setMobileListOpen(false); setInspectorOpen(true); }} />
           ))}
         </div>
       </aside>
@@ -190,7 +243,21 @@ export function WorkspacePage({ selectedAccountId, requestedConversationId, onRe
           creatingCrm={createCrm.isPending}
           autoTranslate={preferenceQuery.data?.autoTranslate ?? false}
           targetLanguage={preferenceQuery.data?.targetLanguage ?? "zh-CN"}
+          intelligence={intelligenceQuery.data}
+          messages={messagesQuery.data ?? []}
+          analyzing={analyzeConversation.isPending}
+          onAnalyze={() => analyzeConversation.mutate()}
+          onUpdateFollowup={(id, status, crmTodoId) => updateFollowup.mutate({ id, status, crmTodoId })}
+          followupUpdateError={updateFollowup.error?.message}
+          creatingGoodJobTodo={createGoodJobTodo.isPending}
+          onCreateGoodJobTodo={(followup) => createGoodJobTodo.mutate(followup)}
           onCreateCrm={() => selectedContact && createCrm.mutate(selectedContact.id)}
+          crmCustomer={crmCustomer}
+          customerTodos={customerTodos}
+          onRefreshCrm={() => {
+            void queryClient.invalidateQueries({ queryKey: queryKeys.crmCustomers });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.crmTodos });
+          }}
           onClose={() => setInspectorOpen(false)}
         />
       </aside>
@@ -208,7 +275,18 @@ function InspectorContent({
   creatingCrm,
   autoTranslate,
   targetLanguage,
+  intelligence,
+  messages,
+  analyzing,
+  onAnalyze,
+  onUpdateFollowup,
+  followupUpdateError,
+  creatingGoodJobTodo,
+  onCreateGoodJobTodo,
   onCreateCrm,
+  crmCustomer,
+  customerTodos,
+  onRefreshCrm,
   onClose
 }: {
   conversation?: Conversation;
@@ -218,9 +296,69 @@ function InspectorContent({
   creatingCrm: boolean;
   autoTranslate: boolean;
   targetLanguage: string;
+  intelligence?: ConversationIntelligenceSnapshot;
+  messages: ChatMessage[];
+  analyzing: boolean;
+  onAnalyze(): void;
+  onUpdateFollowup(id: string, status: ConversationFollowUp["status"], crmTodoId?: string): void;
+  followupUpdateError?: string;
+  creatingGoodJobTodo: boolean;
+  onCreateGoodJobTodo(followup: ConversationFollowUp): void;
   onCreateCrm(): void;
+  crmCustomer?: CrmCustomerSnapshot;
+  customerTodos: CrmTodoSnapshot[];
+  onRefreshCrm(): void;
   onClose(): void;
 }) {
+  const queryClient = useQueryClient();
+  const [showActivityForm, setShowActivityForm] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [evidenceTrait, setEvidenceTrait] = useState<ConversationAnalysis["traits"][number] | null>(null);
+  useEffect(() => {
+    setEvidenceTrait(null);
+    setFeedback(null);
+  }, [conversation?.id]);
+  const addActivity = useMutation({
+    mutationFn: (input: { type: "call" | "email" | "whatsapp" | "wechat" | "meeting" | "note"; content: string; nextReminder?: string }) => api.createCustomerActivity(crmCustomer!.id, input),
+    onSuccess: () => {
+      setShowActivityForm(false);
+      setFeedback("客户互动和下一次跟进已写入 CRM。");
+      onRefreshCrm();
+    }
+  });
+  const saveTraitFeedback = useMutation({
+    mutationFn: ({ trait, verdict }: { trait: ConversationAnalysis["traits"][number]; verdict: "confirmed" | "rejected" }) =>
+      api.saveTraitFeedback(conversation!.id, { traitKey: trait.key, traitLabel: trait.label, verdict }),
+    onSuccess: (result, variables) => {
+      queryClient.setQueryData(queryKeys.intelligence(conversation?.id), result);
+      setEvidenceTrait(null);
+      setFeedback(variables.verdict === "confirmed" ? `“${variables.trait.label}”已确认，后续分析会保留这项判断。` : `“${variables.trait.label}”已忽略，关联的待跟进建议已同步撤下。`);
+    }
+  });
+  const restoreTraitFeedback = useMutation({
+    mutationFn: (traitKey: string) => api.deleteTraitFeedback(conversation!.id, traitKey),
+    onSuccess: (result) => {
+      queryClient.setQueryData(queryKeys.intelligence(conversation?.id), result);
+      setFeedback("已恢复该特点，系统已根据原始聊天证据重新生成分析。");
+    }
+  });
+  const submitActivity = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    addActivity.mutate({
+      type: String(form.get("type")) as "call" | "email" | "whatsapp" | "wechat" | "meeting" | "note",
+      content: String(form.get("content")),
+      nextReminder: String(form.get("nextReminder"))
+    });
+  };
+  const intelligenceFollowups = Array.isArray(intelligence?.followups) ? intelligence.followups : [];
+  const intelligenceFeedback = Array.isArray(intelligence?.feedback) ? intelligence.feedback : [];
+  const pendingFollowups = intelligenceFollowups.filter((item) => item.status === "pending");
+  const recentActivities = crmCustomer?.activities?.slice(0, 4) ?? [];
+  const confirmedTraitKeys = new Set(intelligenceFeedback.filter((item) => item.verdict === "confirmed").map((item) => item.traitKey));
+  const rejectedTraits = intelligenceFeedback.filter((item) => item.verdict === "rejected");
+  const evidenceFeedback = evidenceTrait ? intelligenceFeedback.find((item) => item.traitKey === evidenceTrait.key) : undefined;
+  const todoForFollowup = (followup: ConversationFollowUp) => customerTodos.find((todo) => todo.triggerKey === `whatsapp-insight:${crmCustomer?.id}:${followup.id}` || (todo.title === followup.title && (todo.related || "").includes("WhatsApp")));
   return (
     <>
       <div className="inspector-drawer-header">
@@ -229,12 +367,39 @@ function InspectorContent({
       </div>
       {conversation && account ? (
         <>
-          <div className="inspector-profile"><span className="avatar large">{conversation.contactName.slice(0, 2)}</span><h3>{conversation.contactName}</h3><span>{conversation.contactPhone}</span></div>
-          <div className="inspector-section"><h4>CRM Sandbox</h4>{crmContactId ? <div className="linked-state"><Check size={16} /><span><strong>已关联联系人</strong><small>ID {crmContactId.slice(0, 8)}</small></span></div> : <button className="button secondary full" disabled={!canCreateCrm || creatingCrm} onClick={onCreateCrm}>{creatingCrm ? <Spinner /> : <UserPlus size={16} />} 创建并关联联系人</button>}</div>
+          <div className="inspector-profile"><span className="avatar large">{conversation.contactName.slice(0, 2)}</span><h3>{conversation.contactName}</h3><span>{conversation.contactPhone}</span>{crmCustomer && <div className="profile-chips"><span>{crmCustomer.grade || "C"} 级客户</span><span>{crmCustomer.pipelineStage || crmCustomer.stage || "待识别阶段"}</span></div>}</div>
+          <div className="customer-command-card">
+            <div><span>现在最重要</span><strong>{intelligence?.analysis?.nextAction || customerTodos[0]?.title || "先生成客户分析，确认下一步行动"}</strong></div>
+            <span className={`urgency-pill ${intelligence?.analysis?.riskLevel === "high" ? "is-high" : ""}`}>{intelligence?.analysis?.riskLevel === "high" ? "高风险" : pendingFollowups.length ? `${pendingFollowups.length} 项待跟进` : "节奏正常"}</span>
+          </div>
+          {feedback && <div className="inspector-feedback" role="status"><Check size={14} />{feedback}</div>}
+          <div className="inspector-section crm-overview-section">
+            <div className="section-action-title"><h4>CRM 客户概览</h4>{crmCustomer && <button className="button compact" onClick={() => setShowActivityForm((value) => !value)}><Plus size={14} /> 记录互动</button>}</div>
+            {crmCustomer ? <>
+              <div className="crm-metric-grid"><div><span>健康度</span><strong>{crmCustomer.health ?? "--"}<small>/100</small></strong></div><div><span>活跃商机</span><strong>{crmCustomer.activeDealCount ?? 0}<small> 个</small></strong></div><div><span>管道金额</span><strong>${Math.round((crmCustomer.pipelineAmount ?? 0) / 1000)}k</strong></div></div>
+              <dl className="detail-list compact-details"><div><dt>公司</dt><dd>{crmCustomer.company}</dd></div><div><dt>负责人</dt><dd>{crmCustomer.ownerName || "未分配"}</dd></div><div><dt>下一提醒</dt><dd>{crmCustomer.nextReminder || "尚未安排"}</dd></div></dl>
+              {showActivityForm && <form className="activity-quick-form" onSubmit={submitActivity}><div className="form-grid two"><label><span>互动类型</span><select name="type" defaultValue="meeting"><option value="meeting">会议</option><option value="call">电话</option><option value="whatsapp">WhatsApp</option><option value="email">邮件</option><option value="note">备注</option></select></label><label><span>下次跟进</span><input name="nextReminder" type="datetime-local" /></label></div><label><span>结果与约定</span><textarea name="content" required rows={3} placeholder="例如：客户确认周四 15:00 评审报价，需提前发送规格对照表。" /></label><div className="activity-form-actions"><button type="button" className="button compact secondary" onClick={() => setShowActivityForm(false)}>取消</button><button className="button compact primary" disabled={addActivity.isPending}>{addActivity.isPending ? <Spinner /> : <Check size={14} />} 保存到 CRM</button></div>{addActivity.error && <span className="error-text">{addActivity.error.message}</span>}</form>}
+            </> : crmContactId ? <div className="analysis-empty"><span>联系人已关联，但当前账号无权读取该 CRM 客户详情。</span></div> : <button className="button secondary full" disabled={!canCreateCrm || creatingCrm} onClick={onCreateCrm}>{creatingCrm ? <Spinner /> : <UserPlus size={16} />} 创建并关联 CRM 客户</button>}
+          </div>
+          <div className="inspector-section intelligence-section">
+            <div className="section-action-title"><h4>客户特点与决策信号</h4><button className="icon-button" title="重新分析客户" onClick={onAnalyze} disabled={analyzing}>{analyzing ? <Spinner /> : <Sparkles size={15} />}</button></div>
+            {intelligence?.analysis ? <>
+              <p className="analysis-summary">{intelligence.analysis.summary}</p>
+              <div className={`analysis-engine ${intelligence.analysis.engine}`}><Sparkles size={12} /><span>{intelligence.analysis.engine === "ai" ? `AI 深度分析 · ${intelligence.analysis.model ?? "已配置模型"}` : "规则识别"}</span><small>{intelligence.analysis.promptVersion}</small></div>
+              {intelligence.analysis.error && <div className="analysis-warning"><CircleAlert size={13} />{intelligence.analysis.error}</div>}
+              <div className="analysis-metrics"><span>意向 <strong>{intelligence.analysis.buyingIntent === "high" ? "高" : intelligence.analysis.buyingIntent === "medium" ? "中" : "低"}</strong></span><span>风险 <strong>{intelligence.analysis.riskLevel === "high" ? "高" : intelligence.analysis.riskLevel === "medium" ? "中" : "低"}</strong></span></div>
+              {intelligence.analysis.traits.length > 0 && <div className="trait-list rich-traits">{intelligence.analysis.traits.map((trait) => <button className={`trait-evidence${confirmedTraitKeys.has(trait.key) ? " is-confirmed" : ""}`} type="button" key={trait.key} title={`查看 ${trait.evidenceMessageIds.length} 条证据`} onClick={() => { saveTraitFeedback.reset(); setEvidenceTrait(trait); }}><div className="trait-title"><strong>{trait.label}</strong>{confirmedTraitKeys.has(trait.key) && <em><CheckCircle2 size={11} />已确认</em>}</div><small>{trait.value} · {Math.round(trait.confidence * 100)}% 可信 · 查看证据</small></button>)}</div>}
+              {rejectedTraits.length > 0 && <div className="ignored-traits"><div className="ignored-traits-title"><span><EyeOff size={13} />已忽略特点</span><small>不会参与分析和待办生成</small></div>{rejectedTraits.map((item) => <div className="ignored-trait" key={item.traitKey}><span><strong>{item.traitLabel}</strong><small>{new Date(item.updatedAt).toLocaleDateString("zh-CN")} 校准</small></span><button className="button compact secondary" type="button" disabled={restoreTraitFeedback.isPending} onClick={() => restoreTraitFeedback.mutate(item.traitKey)}>{restoreTraitFeedback.isPending && restoreTraitFeedback.variables === item.traitKey ? <Spinner /> : <RotateCcw size={13} />}恢复</button></div>)}{restoreTraitFeedback.error && <span className="error-text">{restoreTraitFeedback.error.message}</span>}</div>}
+              {intelligence.analysis.keyPoints.length > 0 && <div className="key-point-list">{intelligence.analysis.keyPoints.slice(0, 4).map((point) => <span key={point}><Check size={12} />{point}</span>)}</div>}
+            </> : <div className="analysis-empty"><span>尚未生成分析，系统会基于会话证据提取客户特征和跟进项。</span><button className="button secondary full" onClick={onAnalyze} disabled={analyzing}>{analyzing ? <Spinner /> : <Sparkles size={15} />} 生成客户分析</button></div>}
+          </div>
+          <div className="inspector-section"><div className="section-action-title"><h4>跟进与待办</h4><span className="section-count">{pendingFollowups.length + customerTodos.filter((todo) => !pendingFollowups.some((item) => todoForFollowup(item)?.id === todo.id)).length}</span></div>{followupUpdateError && <div className="form-error">{followupUpdateError}</div>}<div className="followup-list advanced-list">{pendingFollowups.map((item) => { const linkedTodo = todoForFollowup(item); return <div className={`followup-item${linkedTodo ? " crm-todo" : ""}`} key={item.id}><span className={`priority-line priority-${item.priority}`} /><span><strong>{item.title}</strong><small>{formatDueAt(item.dueAt)} · {linkedTodo ? "已进入 GoodJob 待办" : item.reason}</small></span><button className="button compact" title="创建 GoodJob 待办" onClick={() => onCreateGoodJobTodo(item)} disabled={creatingGoodJobTodo || Boolean(linkedTodo)}><ClipboardPlus size={14} /> {linkedTodo ? "已加入待办" : "转待办"}</button><button className="icon-button" title="标记完成" onClick={() => onUpdateFollowup(item.id, "completed", linkedTodo?.id)}><Check size={14} /></button></div>; })}{customerTodos.filter((todo) => !pendingFollowups.some((item) => todoForFollowup(item)?.id === todo.id)).map((todo) => <div className="followup-item crm-todo" key={todo.id}><CalendarClock size={15} /><span><strong>{todo.title}</strong><small>{formatDueAt(todo.dueAt)} · 已进入 GoodJob 待办</small></span></div>)}{pendingFollowups.length + customerTodos.filter((todo) => !pendingFollowups.some((item) => todoForFollowup(item)?.id === todo.id)).length === 0 && <div className="analysis-empty"><span>目前没有未完成事项。新消息分析后，建议会在这里出现。</span></div>}</div></div>
+          <div className="inspector-section"><div className="section-action-title"><h4>最近互动与会议</h4><History size={15} /></div><div className="activity-timeline">{recentActivities.map((activity) => <div key={activity.id} className="timeline-item"><span>{activity.type === "meeting" ? <CalendarClock size={14} /> : <PhoneCall size={14} />}</span><div><strong>{activity.type === "meeting" ? "会议" : activity.type === "call" ? "电话" : activity.type === "whatsapp" ? "WhatsApp" : activity.type === "email" ? "邮件" : "客户记录"}</strong><small>{new Date(activity.createdAt).toLocaleString("zh-CN")}{activity.operatorName ? ` · ${activity.operatorName}` : ""}</small><p>{activity.content}</p>{activity.nextReminder && <em>下次：{activity.nextReminder}</em>}</div></div>)}{recentActivities.length === 0 && <div className="analysis-empty"><span>尚无互动记录。会议、电话和约定会按时间沉淀在这里。</span></div>}</div></div>
           <div className="inspector-section"><h4>渠道身份</h4><dl className="detail-list"><div><dt>账号</dt><dd>{account.name}</dd></div><div><dt>Provider</dt><dd>{account.provider}</dd></div><div><dt>用途</dt><dd>{account.purposeLabel || "未设置"}</dd></div><div><dt>状态</dt><dd><StatusBadge status={account.status} /></dd></div></dl></div>
           <div className="inspector-section"><h4>翻译策略</h4><div className="linked-state neutral"><Bot size={16} /><span><strong>{autoTranslate ? "自动翻译已开启" : "按需手动翻译"}</strong><small>目标语言 {targetLanguage}</small></span></div></div>
         </>
       ) : <EmptyState icon={<ContactRound size={22} />} title="客户详情" description="选择会话后显示渠道身份与 CRM 关联。" />}
+      {evidenceTrait && <Modal title={`${evidenceTrait.label}的证据`} width="560px" onClose={() => setEvidenceTrait(null)}><div className={`evidence-modal-intro${evidenceFeedback?.verdict === "confirmed" ? " is-confirmed" : ""}`}><strong>{evidenceTrait.value}</strong><span>可信度 {Math.round(evidenceTrait.confidence * 100)}%，来自 {evidenceTrait.evidenceMessageIds.length} 条客户消息。</span>{evidenceFeedback?.verdict === "confirmed" && <em><CheckCircle2 size={13} />团队已确认这项判断</em>}</div><div className="evidence-message-list">{messages.filter((message) => evidenceTrait.evidenceMessageIds.includes(message.id)).map((message) => <article key={message.id} className="evidence-message"><div><span>{message.direction === "inbound" ? "客户" : "团队"}</span><time>{new Date(message.occurredAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</time></div><p>{message.body}</p></article>)}{messages.filter((message) => evidenceTrait.evidenceMessageIds.includes(message.id)).length === 0 && <div className="analysis-empty"><span>原始消息暂未加载，请稍后重试。</span></div>}</div>{saveTraitFeedback.error && <div className="form-error">{saveTraitFeedback.error.message}</div>}<div className="evidence-feedback-note">人工校准会影响后续定时分析、跟进建议和每日待办。</div><div className="modal-actions evidence-actions"><button type="button" className="button secondary" disabled={saveTraitFeedback.isPending} onClick={() => setEvidenceTrait(null)}>关闭</button><button type="button" className="button danger" disabled={saveTraitFeedback.isPending} onClick={() => saveTraitFeedback.mutate({ trait: evidenceTrait, verdict: "rejected" })}>{saveTraitFeedback.isPending && saveTraitFeedback.variables?.verdict === "rejected" ? <Spinner /> : <EyeOff size={15} />}忽略此特点</button><button type="button" className="button primary" disabled={saveTraitFeedback.isPending || evidenceFeedback?.verdict === "confirmed"} onClick={() => saveTraitFeedback.mutate({ trait: evidenceTrait, verdict: "confirmed" })}>{saveTraitFeedback.isPending && saveTraitFeedback.variables?.verdict === "confirmed" ? <Spinner /> : <CheckCircle2 size={15} />}{evidenceFeedback?.verdict === "confirmed" ? "已确认" : "结论正确"}</button></div></Modal>}
     </>
   );
 }

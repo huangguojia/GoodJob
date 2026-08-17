@@ -17,11 +17,13 @@ export interface AppConfig {
   seedDemo: boolean;
   enableDemoProvider?: boolean;
   autoMigrate?: boolean;
+  officialOnly?: boolean;
   allowPrivateAiEndpoints: boolean;
   baileysProxyUrl?: string;
   mediaStoragePath?: string;
   metaGraphBaseUrl?: string;
   crmJwtSecret?: string;
+  crmBaseUrl?: string;
 }
 
 function parseEnum<const Values extends readonly string[]>(
@@ -133,6 +135,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   const seedDemo = parseBoolean("SEED_DEMO", environment.SEED_DEMO, false);
   const enableDemoProvider = parseBoolean("ALLOW_DEMO_PROVIDER", environment.ALLOW_DEMO_PROVIDER, false);
   const autoMigrate = parseBoolean("AUTO_MIGRATE", environment.AUTO_MIGRATE, nodeEnv !== "production");
+  const officialOnly = parseBoolean(
+    "WHATSAPP_OFFICIAL_ONLY",
+    environment.WHATSAPP_OFFICIAL_ONLY,
+    nodeEnv === "production"
+  );
   const metaGraphBaseUrl = parseMetaGraphBaseUrl(environment.META_GRAPH_BASE_URL);
 
   if ((databaseClient === "postgres" || databaseClient === "mysql") && !databaseUrl) {
@@ -147,6 +154,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     if (seedDemo) throw new Error("SEED_DEMO must be false in production");
     if (enableDemoProvider) throw new Error("ALLOW_DEMO_PROVIDER must be false in production");
     if (autoMigrate) throw new Error("AUTO_MIGRATE must be false in production");
+    if (!officialOnly) throw new Error("WHATSAPP_OFFICIAL_ONLY must be true in production");
     if (metaGraphBaseUrl && metaGraphBaseUrl !== "https://graph.facebook.com") {
       throw new Error("META_GRAPH_BASE_URL must use https://graph.facebook.com in production");
     }
@@ -167,6 +175,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     seedDemo,
     enableDemoProvider,
     autoMigrate,
+    officialOnly,
     allowPrivateAiEndpoints: parseBoolean(
       "ALLOW_PRIVATE_AI_ENDPOINTS",
       environment.ALLOW_PRIVATE_AI_ENDPOINTS,
@@ -175,6 +184,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     baileysProxyUrl: parseBaileysProxyUrl(environment.BAILEYS_PROXY_URL),
     mediaStoragePath: path.resolve(process.cwd(), environment.MEDIA_STORAGE_PATH?.trim() || ".data/media"),
     metaGraphBaseUrl,
-    crmJwtSecret: environment.CRM_JWT_SECRET?.trim() || environment.JWT_SECRET?.trim()
+    crmJwtSecret: environment.CRM_JWT_SECRET?.trim() || environment.JWT_SECRET?.trim(),
+    crmBaseUrl: (environment.CRM_BASE_URL?.trim() || "http://127.0.0.1:4188").replace(/\/+$/u, "")
   };
 }

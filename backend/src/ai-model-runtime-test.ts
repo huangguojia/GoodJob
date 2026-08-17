@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import {
   aiGenerateLeads,
   callAiModel,
+  callAiModelWithWebSearch,
   extractJsonObject,
   readAiJson
 } from "./ai-model-runtime.js";
 import {
   AI_SEARCH_ADAPTER_VERSION,
+  aiSearchTimeoutMs,
   createAiSearchProvider
 } from "./ai-search-provider.js";
 import {
@@ -17,6 +19,21 @@ import { setProviderHttpTestTransport } from "./provider-http-client.js";
 import { executeProviderSearch } from "./provider-runtime.js";
 import { providerSnapshotVersionsMatch } from "./prospect-provider-dispatcher.js";
 import type { AiModelConfig, ProviderCatalogItem } from "./types.js";
+
+const originalAiSearchTimeout = process.env.AI_SEARCH_TIMEOUT_MS;
+delete process.env.AI_SEARCH_TIMEOUT_MS;
+assert.equal(aiSearchTimeoutMs(), 75_000);
+process.env.AI_SEARCH_TIMEOUT_MS = "5000";
+assert.equal(aiSearchTimeoutMs(), 20_000);
+process.env.AI_SEARCH_TIMEOUT_MS = "120000";
+assert.equal(aiSearchTimeoutMs(), 90_000);
+process.env.AI_SEARCH_TIMEOUT_MS = "invalid";
+assert.equal(aiSearchTimeoutMs(), 75_000);
+if (originalAiSearchTimeout === undefined) {
+  delete process.env.AI_SEARCH_TIMEOUT_MS;
+} else {
+  process.env.AI_SEARCH_TIMEOUT_MS = originalAiSearchTimeout;
+}
 
 assert.deepEqual(
   extractJsonObject('{"done":true,"steps":[]}\n补充说明：任务规划完成。'),
@@ -189,6 +206,39 @@ await callAiModel(
 assert.equal(reasoningBodies.length, 1);
 assert.equal("temperature" in reasoningBodies[0]!, false);
 
+let webSearchRequest: Record<string, unknown> = {};
+const webSearchResult = await callAiModelWithWebSearch(
+  config({ baseUrl: "https://model.example/v1" }),
+  "research Example Company",
+  4_000,
+  async (url, init) => {
+    assert.equal(url, "https://model.example/v1/responses");
+    webSearchRequest = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+    return new Response(JSON.stringify({
+      output: [
+        { type: "web_search_call", action: { query: "Example Company official profile" } },
+        {
+          type: "message",
+          content: [{
+            type: "output_text",
+            text: "{\"summary\":\"Verified company\"}",
+            annotations: [
+              { type: "url_citation", title: "Official profile", url: "https://example.com/company", start_index: 0, end_index: 20 },
+              { type: "url_citation", title: "Duplicate", url: "https://example.com/company", start_index: 0, end_index: 20 },
+              { type: "url_citation", title: "Unsafe", url: "http://unsafe.example/company", start_index: 0, end_index: 20 }
+            ]
+          }]
+        }
+      ]
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }
+);
+assert.equal((webSearchRequest.tools as Array<{ type?: string }>)[0]?.type, "web_search");
+assert.equal(webSearchResult.usedSearch, true);
+assert.deepEqual(webSearchResult.queries, ["Example Company official profile"]);
+assert.deepEqual(webSearchResult.citations.map((item) => item.url), ["https://example.com/company"]);
+assert.match(webSearchResult.content, /Verified company/u);
+
 const runtimeProvider = createAiSearchProvider(config());
 assert.equal(runtimeProvider.adapterVersion, AI_SEARCH_ADAPTER_VERSION);
 assert.equal(runtimeProvider.contractVersion, "1.0");
@@ -324,6 +374,7 @@ console.log(JSON.stringify({
   actualReasonPreserved: true,
   sensitiveDetailRedacted: true,
   compatibilityRetry: true,
+  nativeWebSearchParsed: true,
   reasoningModelCompatibility: true,
   fullEndpointCompatibility: true,
   providerRuntimeReasonPreserved: true,

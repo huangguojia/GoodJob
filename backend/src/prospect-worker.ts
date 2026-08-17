@@ -8,6 +8,14 @@ import {
   type ProspectCandidatePipelineFilter
 } from "./prospect-candidate-pipeline.js";
 import type { ProspectProviderRawPolicy } from "./prospect-source-raw.js";
+import {
+  queueWebsiteProbe,
+  websiteProbeAutoEnrichmentEligible
+} from "./website-probe.js";
+import {
+  discoverProspectWebsite,
+  type ProspectWebsiteDiscoverySearch
+} from "./prospect-website-discovery.js";
 import type { CrmStore } from "./store.js";
 
 export interface ProspectWorkerOptions {
@@ -21,6 +29,8 @@ export interface ProspectWorkerOptions {
   pollMs?: number;
   leaseMs?: number;
   deadlineMs?: number;
+  concurrency?: number;
+  websiteDiscoverySearch?: ProspectWebsiteDiscoverySearch;
   onStateChanged?: () => Promise<void> | void;
 }
 
@@ -59,11 +69,16 @@ export class ProspectWorker {
   private readonly candidatePipeline: ProspectCandidatePipeline;
   private readonly pollMs: number;
   private readonly heartbeatMs: number;
+  private readonly concurrency: number;
+  private readonly contactEnrichmentScanMs: number;
   private readonly onStateChanged?: () => Promise<void> | void;
+  private readonly websiteDiscoverySearch?: ProspectWebsiteDiscoverySearch;
   private running = false;
-  private loopPromise: Promise<void> | null = null;
-  private wakeTimer: NodeJS.Timeout | null = null;
-  private wake: (() => void) | null = null;
+  private loopPromises: Promise<void>[] = [];
+  private readonly sleepers = new Set<() => void>();
+  private settlementRecovery: Promise<number> | null = null;
+  private contactEnrichmentScan: Promise<number> | null = null;
+  private nextContactEnrichmentScanAt = 0;
 
   constructor(options: ProspectWorkerOptions) {
     const leaseMs = positiveInteger(options.leaseMs, 30_000);
@@ -75,8 +90,17 @@ export class ProspectWorker {
     this.store = options.store;
     this.dispatcher = options.dispatcher;
     this.pollMs = Math.max(100, positiveInteger(options.pollMs, 1_000));
+    this.concurrency = Math.max(1, Math.min(
+      8,
+      positiveInteger(options.concurrency, 3)
+    ));
+    this.contactEnrichmentScanMs = Math.max(5_000, Math.min(
+      5 * 60_000,
+      positiveInteger(process.env.WEBSITE_PROBE_AUTO_SCAN_MS, 30_000)
+    ));
     this.heartbeatMs = Math.max(500, Math.trunc(leaseMs / 3));
     this.onStateChanged = options.onStateChanged;
+    this.websiteDiscoverySearch = options.websiteDiscoverySearch;
     this.kernel = new ProspectExecutionKernel({
       store: options.store,
       workerId: options.workerId?.trim()
@@ -110,7 +134,10 @@ export class ProspectWorker {
       await this.settlePendingResponses();
       await this.processCandidates();
       await this.kernel.recoverExpiredLeases();
-      this.loopPromise = this.runLoop();
+      this.loopPromises = Array.from(
+        { length: this.concurrency },
+        () => this.runLoop()
+      );
     } catch (error) {
       this.running = false;
       throw error;
@@ -119,31 +146,42 @@ export class ProspectWorker {
 
   async stop() {
     this.running = false;
-    this.wake?.();
-    await this.loopPromise;
-    this.loopPromise = null;
+    this.wakeNow();
+    await Promise.all(this.loopPromises);
+    this.loopPromises = [];
   }
 
   wakeNow() {
-    this.wake?.();
+    for (const wake of [...this.sleepers]) wake();
   }
 
   private async sleep() {
     if (!this.running) return;
     await new Promise<void>((resolve) => {
       let settled = false;
+      let timer: NodeJS.Timeout | null = null;
       const wake = () => {
         if (settled) return;
         settled = true;
-        if (this.wakeTimer) clearTimeout(this.wakeTimer);
-        this.wakeTimer = null;
-        this.wake = null;
+        if (timer) clearTimeout(timer);
+        this.sleepers.delete(wake);
         resolve();
       };
-      this.wake = wake;
-      this.wakeTimer = setTimeout(wake, this.pollMs);
+      this.sleepers.add(wake);
+      timer = setTimeout(wake, this.pollMs);
       if (!this.running) wake();
     });
+  }
+
+  private settlePendingResponsesCoordinated() {
+    if (this.settlementRecovery) return this.settlementRecovery;
+    const recovery = this.settlePendingResponses().finally(() => {
+      if (this.settlementRecovery === recovery) {
+        this.settlementRecovery = null;
+      }
+    });
+    this.settlementRecovery = recovery;
+    return recovery;
   }
 
   private async settlePendingResponses() {
@@ -185,10 +223,13 @@ export class ProspectWorker {
   }
 
   private async executeOne() {
-    if (await this.settlePendingResponses()) return true;
+    if (await this.settlePendingResponsesCoordinated()) return true;
     await this.kernel.recoverExpiredLeases();
     const claim = await this.kernel.claimNext();
-    if (!claim) return false;
+    if (!claim) {
+      if (await this.discoverMissingWebsites({})) return true;
+      return (await this.queueMissingContactEnrichmentCoordinated({})) > 0;
+    }
     try {
       const prepared = await this.kernel.prepareProviderRequest({
         leaseId: claim.lease.id,
@@ -214,13 +255,26 @@ export class ProspectWorker {
         clearInterval(heartbeat);
       }
       if (response.kind === "throttled") return true;
-      await this.kernel.settlePersistedProviderResponse({
-        teamId: response.ledger.teamId,
-        ownerId: response.ledger.ownerId,
-        runId: response.ledger.runId,
-        ledgerId: response.ledger.id,
-        expectedResponseHash: response.ledger.responseHash
-      });
+      try {
+        await this.kernel.settlePersistedProviderResponse({
+          teamId: response.ledger.teamId,
+          ownerId: response.ledger.ownerId,
+          runId: response.ledger.runId,
+          ledgerId: response.ledger.id,
+          expectedResponseHash: response.ledger.responseHash
+        });
+      } catch (error) {
+        await this.settlePendingResponsesCoordinated();
+        const settled = this.store.prospectProviderRequestLedgers.find((item) =>
+          item.id === response.ledger.id
+          && item.teamId === response.ledger.teamId
+          && item.ownerId === response.ledger.ownerId
+          && item.runId === response.ledger.runId
+          && item.status === "settled"
+          && item.responseHash === response.ledger.responseHash
+        );
+        if (!settled) throw error;
+      }
       await this.processCandidates({
         teamId: response.ledger.teamId,
         ownerId: response.ledger.ownerId,
@@ -269,6 +323,10 @@ export class ProspectWorker {
     return this.candidatePipeline.pendingCandidates(filter);
   }
 
+  async requestCancel(runId: string) {
+    return await this.kernel.requestCancel(runId);
+  }
+
   private logFailure(
     event: string,
     ids: Record<string, string>,
@@ -298,6 +356,8 @@ export class ProspectWorker {
           ledgerId: failure.ledgerId
         }, { code: failure.code });
       }
+      await this.discoverMissingWebsites(filter);
+      await this.queueMissingContactEnrichmentCoordinated(filter);
       return result;
     } catch (error) {
       this.logFailure("candidate_pipeline_cycle_failed", {
@@ -306,5 +366,186 @@ export class ProspectWorker {
       }, error);
       return null;
     }
+  }
+
+  private async discoverMissingWebsites(
+    filter: ProspectCandidatePipelineFilter
+  ) {
+    if (process.env.PROSPECT_WEBSITE_DISCOVERY === "false") return 0;
+    const limit = Math.max(1, Math.min(20, positiveInteger(
+      process.env.PROSPECT_WEBSITE_DISCOVERY_MAX_PER_CYCLE,
+      12
+    )));
+    const pairs = (this.store.prospectCandidateProcessingStates || [])
+      .filter((state) =>
+        state.status === "completed"
+        && Boolean(state.candidateId)
+        && this.store.prospectSearchRuns.some((run) =>
+          run.id === state.runId
+          && run.teamId === state.teamId
+          && (
+            ["queued", "running", "paused", "cancel_requested"].includes(run.status)
+            || Date.now() - new Date(run.updatedAt).getTime() < 6 * 60 * 60 * 1000
+          )
+        )
+        && (!filter.runId || state.runId === filter.runId)
+        && (!filter.teamId || state.teamId === filter.teamId)
+        && (!filter.ownerId || state.ownerId === filter.ownerId)
+      )
+      .map((state) => ({ candidateId: state.candidateId!, runId: state.runId }));
+    const selectedPairs: Array<{ candidateId: string; runId: string }> = [];
+    const seen = new Set<string>();
+    for (const pair of pairs) {
+      const key = `${pair.runId}:${pair.candidateId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const candidate = this.store.websiteOpportunities.find((item) =>
+        item.id === pair.candidateId
+      );
+      if (!candidate) continue;
+      const existingAttempt = (candidate.websiteDiscoveryAttempts || []).find((attempt) =>
+        attempt.runId === pair.runId
+      );
+      const retryLegacyMissingProvider = Boolean(
+        existingAttempt
+        && existingAttempt.outcome === "provider_unavailable"
+        && !existingAttempt.providerId
+      );
+      if (existingAttempt && !retryLegacyMissingProvider) continue;
+      selectedPairs.push(pair);
+      if (selectedPairs.length >= limit) break;
+    }
+    let completed = 0;
+    for (const pair of selectedPairs) {
+      const candidate = this.store.websiteOpportunities.find((item) =>
+        item.id === pair.candidateId
+      );
+      if (!candidate) continue;
+      await discoverProspectWebsite({
+        candidate,
+        runId: pair.runId,
+        retryExisting: Boolean(
+          candidate.websiteDiscoveryAttempts?.find((attempt) =>
+            attempt.runId === pair.runId
+            && attempt.outcome === "provider_unavailable"
+            && !attempt.providerId
+          )
+        ),
+        search: this.websiteDiscoverySearch,
+        persist: async (changedCandidate) => {
+          if (this.store.persistProspectCandidates) {
+            await this.store.persistProspectCandidates([changedCandidate.id]);
+          } else {
+            await this.store.persist();
+          }
+        }
+      });
+      completed += 1;
+    }
+    return completed;
+  }
+
+  private async queueMissingContactEnrichment(
+    filter: ProspectCandidatePipelineFilter
+  ) {
+    if (process.env.WEBSITE_PROBE_AUTO_ENRICH === "false") return 0;
+    const limit = Math.max(1, Math.min(30, positiveInteger(
+      process.env.WEBSITE_PROBE_AUTO_MAX_PER_CYCLE,
+      20
+    )));
+    const runCandidateIds = filter.runId
+      ? new Set(
+          (this.store.prospectCandidateProcessingStates || [])
+            .filter((state) =>
+              state.runId === filter.runId
+              && (!filter.teamId || state.teamId === filter.teamId)
+              && (!filter.ownerId || state.ownerId === filter.ownerId)
+              && state.status === "completed"
+              && Boolean(state.candidateId)
+            )
+            .map((state) => state.candidateId!)
+        )
+      : null;
+    if (runCandidateIds && !runCandidateIds.size) return 0;
+    const eligibleCandidates = this.store.websiteOpportunities
+      .filter((candidate) =>
+        (!runCandidateIds || runCandidateIds.has(candidate.id))
+        && (!filter.teamId || candidate.teamId === filter.teamId)
+        && (!filter.ownerId || candidate.ownerId === filter.ownerId)
+        && ["preview", "contactable", "contacted"].includes(candidate.status)
+        && websiteProbeAutoEnrichmentEligible(candidate)
+      )
+      .sort((left, right) => {
+        const leftAttempted = left.websiteProbeAttempts?.length ? 1 : 0;
+        const rightAttempted = right.websiteProbeAttempts?.length ? 1 : 0;
+        return leftAttempted - rightAttempted
+          || left.createdAt.localeCompare(right.createdAt);
+      });
+    const selectedDomains = new Set<string>();
+    const candidateIds: string[] = [];
+    for (const candidate of eligibleCandidates) {
+      let domain = candidate.id;
+      try {
+        domain = new URL(candidate.website).hostname
+          .replace(/^www\./iu, "")
+          .toLocaleLowerCase("en-US");
+      } catch {
+        // Eligibility performs the authoritative URL validation.
+      }
+      if (selectedDomains.has(domain)) continue;
+      selectedDomains.add(domain);
+      candidateIds.push(candidate.id);
+      if (candidateIds.length >= limit) break;
+    }
+    let queued = 0;
+    for (const candidateId of candidateIds) {
+      try {
+        // Candidate persistence may replace every in-memory object. Always
+        // resolve the current object again before adding the next task.
+        const candidate = this.store.websiteOpportunities.find((item) =>
+          item.id === candidateId
+        );
+        if (!candidate || !websiteProbeAutoEnrichmentEligible(candidate)) continue;
+        await queueWebsiteProbe(
+          this.store,
+          candidate,
+          candidate.ownerId,
+          async (changedCandidate) => {
+            if (this.store.persistProspectCandidates) {
+              await this.store.persistProspectCandidates([changedCandidate.id]);
+            } else {
+              await this.store.persist();
+            }
+          }
+        );
+        queued += 1;
+      } catch (error) {
+        this.logFailure("website_contact_enrichment_skipped", {
+          candidateId,
+          runId: filter.runId || ""
+        }, error);
+      }
+    }
+    return queued;
+  }
+
+  private queueMissingContactEnrichmentCoordinated(
+    filter: ProspectCandidatePipelineFilter
+  ) {
+    if (this.contactEnrichmentScan) return this.contactEnrichmentScan;
+    const now = Date.now();
+    if (!filter.runId && now < this.nextContactEnrichmentScanAt) {
+      return Promise.resolve(0);
+    }
+    if (!filter.runId) {
+      this.nextContactEnrichmentScanAt = now + this.contactEnrichmentScanMs;
+    }
+    const scan = this.queueMissingContactEnrichment(filter).finally(() => {
+      if (this.contactEnrichmentScan === scan) {
+        this.contactEnrichmentScan = null;
+      }
+    });
+    this.contactEnrichmentScan = scan;
+    return scan;
   }
 }

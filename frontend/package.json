@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5188",
     "build": "tsc -b && vite build",
-    "test": "tsx src/self-test.ts",
+    "test": "tsx src/self-test.ts && tsx src/integrations/integration-api-test.ts",
     "test:mysql-import": "tsx src/mysql-dump-import-test.ts",
     "test:e2e": "playwright test"
   },
@@ -19,7 +19,7 @@
     "globe.gl": "^2.46.1",
     "html2canvas": "^1.4.1",
     "i18n-iso-countries": "^7.14.0",
-    "jspdf": "^2.5.2",
+    "jspdf": "4.2.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "topojson-client": "^3.1.0",
@@ -34,6 +34,7 @@
     "@types/pngjs": "^6.0.5",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
+    "@types/three": "^0.179.0",
     "@types/topojson-client": "^3.1.5",
     "pngjs": "^7.0.0",
     "tsx": "^4.19.2",

@@ -13,7 +13,21 @@ export function generateCustomsDocumentFromDeal(
   const dateShort = date.replace(/-/g, "");
   const sourceItems = tradeDocument?.items?.length
     ? tradeDocument.items
-    : [{
+    : deal.items?.length
+      ? deal.items.map((item, index) => ({
+        id: item.id || `customs_item_${Date.now()}_${index + 1}`,
+        productId: item.productId || "",
+        product: item.product,
+        model: item.model || "",
+        hsCode: "",
+        quantity: item.quantity,
+        unit: "PCS",
+        unitPrice: item.unitPrice,
+        originCountry: "中国",
+        weightKg: 0,
+        packageCount: 0
+      }))
+      : [{
         id: `customs_item_${Date.now()}`,
         product: deal.product || deal.title,
         model: "",
@@ -40,7 +54,7 @@ export function generateCustomsDocumentFromDeal(
     shipperTaxNo: "",
 
     // 收货人信息（买方/进口方）
-    consignee: customer.billingName || customer.company,
+    consignee: customer.companyFullName || customer.billingName || customer.company,
     consigneeAddress: customer.billingAddress || "",
 
     // 生产销售单位

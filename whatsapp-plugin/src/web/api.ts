@@ -2,8 +2,12 @@ import type {
   AiProviderProfile,
   ChannelAccount,
   ChatMessage,
+  CommercialReadiness,
   Contact,
   Conversation,
+  ConversationAnalysis,
+  ConversationFollowUp,
+  ConversationTraitFeedback,
   CrmSandboxContact,
   HealthStatus,
   MediaRetentionPolicy,
@@ -12,6 +16,7 @@ import type {
   Translation,
   TranslationPreference
 } from "@shared/types";
+import type { AutomationDelivery, AutomationRun, AutomationRunResult, AutomationSettings } from "@shared/types";
 
 export type IntegrationStrategy = "free_first" | "official_first" | "hybrid";
 
@@ -58,6 +63,69 @@ export interface MetaAccountConfiguration {
   updatedAt?: string;
 }
 
+export interface CrmCustomerActivitySnapshot {
+  id: string;
+  type: string;
+  content: string;
+  operatorName?: string;
+  nextReminder?: string;
+  createdAt: string;
+}
+
+export interface ConversationIntelligenceSnapshot {
+  analysis: ConversationAnalysis | null;
+  followups: ConversationFollowUp[];
+  feedback: ConversationTraitFeedback[];
+}
+
+export interface CrmCustomerSnapshot {
+  id: string;
+  company: string;
+  contact: string;
+  country?: string;
+  whatsapp?: string;
+  stage?: string;
+  amount?: number;
+  health?: number;
+  grade?: string;
+  ownerName?: string;
+  pipelineStage?: string;
+  pipelineAmount?: number;
+  activeDealCount?: number;
+  nextReminder?: string;
+  lastActivityAt?: string;
+  activities?: CrmCustomerActivitySnapshot[];
+}
+
+export interface CrmTodoSnapshot {
+  id: string;
+  title: string;
+  priority: "high" | "medium" | "normal";
+  dueAt: string;
+  related?: string;
+  customerId?: string;
+  triggerKey?: string;
+  done: boolean;
+}
+
+export interface WhatsAppHistoryPreview {
+  messageCount: number;
+  skippedLines: number;
+  participants: string[];
+  firstMessageAt: string | null;
+  lastMessageAt: string | null;
+  sample: Array<{ occurredAt: string; sender: string; body: string }>;
+}
+
+export interface WhatsAppHistoryImportResult {
+  contact: Contact;
+  conversation: Conversation;
+  imported: number;
+  duplicates: number;
+  parsed: number;
+  analysis: ConversationAnalysis;
+}
+
 const pluginBasePath = import.meta.env.BASE_URL.replace(/\/$/u, "");
 
 class ApiClient {
@@ -79,6 +147,7 @@ class ApiClient {
 
   health = () => this.request<HealthStatus>("/health");
   capabilities = () => this.request<RuntimeCapabilities>("/v1/capabilities");
+  commercialReadiness = () => this.request<CommercialReadiness>("/v1/commercial-readiness");
   accounts = () => this.request<ChannelAccount[]>("/v1/accounts");
   createAccount = (input: object) =>
     this.request<ChannelAccount>("/v1/accounts", { method: "POST", body: JSON.stringify(input) });
@@ -99,6 +168,41 @@ class ApiClient {
   conversations = (accountId?: string) =>
     this.request<Conversation[]>(`/v1/conversations${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`);
   messages = (conversationId: string) => this.request<ChatMessage[]>(`/v1/conversations/${conversationId}/messages`);
+  conversationIntelligence = async (conversationId: string): Promise<ConversationIntelligenceSnapshot> => {
+    const snapshot = await this.request<Partial<ConversationIntelligenceSnapshot>>(`/v1/conversations/${conversationId}/intelligence`);
+    return {
+      analysis: snapshot.analysis ?? null,
+      followups: Array.isArray(snapshot.followups) ? snapshot.followups : [],
+      feedback: Array.isArray(snapshot.feedback) ? snapshot.feedback : []
+    };
+  };
+  analyzeConversation = (conversationId: string) => this.request<{ analysis: ConversationAnalysis; followups: ConversationFollowUp[] }>(`/v1/conversations/${conversationId}/intelligence/analyze`, { method: "POST" });
+  saveTraitFeedback = (conversationId: string, input: { traitKey: string; traitLabel: string; verdict: ConversationTraitFeedback["verdict"]; correctionText?: string }) =>
+    this.request<ConversationIntelligenceSnapshot>(`/v1/conversations/${conversationId}/intelligence/feedback`, { method: "PUT", body: JSON.stringify(input) });
+  deleteTraitFeedback = (conversationId: string, traitKey: string) =>
+    this.request<ConversationIntelligenceSnapshot>(`/v1/conversations/${conversationId}/intelligence/feedback/${encodeURIComponent(traitKey)}`, { method: "DELETE" });
+  updateFollowup = (id: string, status: ConversationFollowUp["status"]) => this.request<ConversationFollowUp>(`/v1/followups/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
+  completeCrmTodo = async (id: string): Promise<CrmTodoSnapshot> => {
+    const response = await fetch(`/api/todos/${encodeURIComponent(id)}/complete`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ completionResult: "已从即刻沟通客户跟进面板完成" })
+    });
+    const payload = (await response.json().catch(() => ({}))) as { todo?: CrmTodoSnapshot; message?: string };
+    if (!response.ok || !payload.todo) throw new Error(payload.message ?? `GoodJob 待办完成失败 (${response.status})`);
+    return payload.todo;
+  };
+  createGoodJobTodo = async (input: { title: string; priority: ConversationFollowUp["priority"]; dueAt: string; related: string; customerId?: string; triggerKey?: string }): Promise<unknown> => {
+    const response = await fetch("/api/todos", {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...input, type: "customer" })
+    });
+    if (!response.ok) throw new Error(((await response.json().catch(() => ({}))) as { message?: string }).message ?? `GoodJob 待办创建失败 (${response.status})`);
+    return response.json();
+  };
   sendMessage = (conversationId: string, input: { accountId: string; clientMessageId: string; body: string }) =>
     this.request<ChatMessage>(`/v1/conversations/${conversationId}/messages`, {
       method: "POST",
@@ -161,6 +265,13 @@ class ApiClient {
     this.request<void>(`/v1/ai/providers/${id}`, { method: "DELETE" });
 
   integrationPreference = () => this.request<IntegrationPreference>("/v1/integration/preference");
+  automationSettings = () => this.request<AutomationSettings>("/v1/automation/settings");
+  updateAutomationSettings = (input: Pick<AutomationSettings, "analysisIntervalHours" | "intelligenceMode" | "intelligenceProviderId" | "dailyTodoHour" | "dailyTodoMinute" | "timezone" | "enabled">) => this.request<AutomationSettings>("/v1/automation/settings", { method: "PUT", body: JSON.stringify(input) });
+  runAutomation = () => this.request<AutomationRunResult>("/v1/automation/run", { method: "POST" });
+  automationRuns = (limit = 12) => this.request<AutomationRun[]>(`/v1/automation/runs?limit=${limit}`);
+  automationDeliveries = (limit = 30) => this.request<AutomationDelivery[]>(`/v1/automation/deliveries?limit=${limit}`);
+  previewWhatsAppHistory = (input: { content: string; dateOrder: "dmy" | "mdy" }) => this.request<WhatsAppHistoryPreview>("/v1/imports/whatsapp-text/preview", { method: "POST", body: JSON.stringify(input) });
+  importWhatsAppHistory = (input: { accountId: string; phone: string; displayName: string; customerSender: string; content: string; dateOrder: "dmy" | "mdy" }) => this.request<WhatsAppHistoryImportResult>("/v1/imports/whatsapp-text", { method: "POST", body: JSON.stringify(input) });
   updateIntegrationPreference = (input: Pick<IntegrationPreference, "strategy" | "defaultProvider">) =>
     this.request<IntegrationPreference>("/v1/integration/preference", { method: "PUT", body: JSON.stringify(input) });
   metaApps = () => this.request<MetaAppConfig[]>("/v1/meta/apps");
@@ -186,11 +297,46 @@ class ApiClient {
       { method: "POST", body: JSON.stringify({ leadType, region }) }
     );
 
-  crmContacts = () => this.request<CrmSandboxContact[]>("/v1/crm/contacts");
-  importCrmContact = ({ crmContactId, accountId }: { crmContactId: string; accountId: string }) =>
+  crmContacts = async (): Promise<CrmSandboxContact[]> => {
+    try {
+      const response = await fetch("/api/customers", { credentials: "include" });
+      if (response.ok) {
+        const payload = (await response.json()) as { customers?: Array<{ id: string; company: string; contact?: string; whatsapp?: string; createdAt?: string }> };
+        return (payload.customers ?? [])
+          .map((customer) => ({ id: customer.id, phone: customer.whatsapp ?? "", name: customer.contact || customer.company, source: "goodjob_crm", sourceContactId: customer.id, createdAt: customer.createdAt ?? new Date().toISOString() }))
+          .filter((customer) => /^\+[1-9]\d{7,14}$/u.test(customer.phone));
+      }
+    } catch {
+      // Standalone desktop mode may not have the parent CRM API.
+    }
+    return this.request<CrmSandboxContact[]>("/v1/crm/contacts");
+  };
+  crmCustomers = async (): Promise<CrmCustomerSnapshot[]> => {
+    const response = await fetch("/api/customers", { credentials: "include" });
+    if (!response.ok) throw new Error(`读取 CRM 客户失败 (${response.status})`);
+    const payload = (await response.json()) as { customers?: CrmCustomerSnapshot[] };
+    return payload.customers ?? [];
+  };
+  crmTodos = async (): Promise<CrmTodoSnapshot[]> => {
+    const response = await fetch("/api/todos", { credentials: "include" });
+    if (!response.ok) throw new Error(`读取 CRM 待办失败 (${response.status})`);
+    const payload = (await response.json()) as { todos?: CrmTodoSnapshot[] };
+    return payload.todos ?? [];
+  };
+  createCustomerActivity = (customerId: string, input: { type: "call" | "email" | "whatsapp" | "wechat" | "meeting" | "note"; content: string; nextReminder?: string }) =>
+    fetch(`/api/customers/${encodeURIComponent(customerId)}/activities`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input)
+    }).then(async (response) => {
+      if (!response.ok) throw new Error(((await response.json().catch(() => ({}))) as { message?: string }).message ?? `记录客户互动失败 (${response.status})`);
+      return response.json() as Promise<{ activity: CrmCustomerActivitySnapshot }>;
+    });
+  importCrmContact = ({ crmContactId, accountId, externalContact }: { crmContactId: string; accountId: string; externalContact?: { id: string; name: string; phone: string } }) =>
     this.request<{ contact: Contact; conversation: Conversation; crmContact: CrmSandboxContact }>(`/v1/crm/contacts/${crmContactId}/import`, {
       method: "POST",
-      body: JSON.stringify({ accountId })
+      body: JSON.stringify({ accountId, externalContact })
     });
   createCrmContact = (contactId: string) =>
     this.request<CrmSandboxContact>(`/v1/contacts/${contactId}/crm-create`, { method: "POST" });

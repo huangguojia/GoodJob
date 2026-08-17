@@ -6,7 +6,7 @@
   "summary": "页面跳转应根据用户想完成的业务动作选择用途最匹配的页面，而不是要求用户准确说出菜单名称。",
   "content": "Agent 应先理解用户要完成的工作，再选择唯一页面。写 PI、CI、商业发票、形式发票、装箱单、报关资料或其他贸易单据进入 documents 单据平台；写开发信、冷邮件或客户开发邮件进入 development-email；查看商机、销售管道、报价阶段、赢单或丢单进入 pipeline；找采购商、搜索企业或启动获客进入 lead-finder；查看搜客结果和候选企业进入 prospect-list；客户档案进入 customers，线索进入 leads，公池释放与领取进入 customer-pool；客户聊天和 WhatsApp 进入 whatsapp；模型与 API Key 进入 ai-config。不得把未知页面静默改成工作台。无法形成可信匹配时应询问用户，而不是猜测。",
   "keywords": ["页面跳转", "意图匹配", "单据平台", "PI", "CI", "装箱单", "报关资料", "开发信", "商机", "搜客", "页面能力"],
-  "roles": ["sales", "manager", "admin", "super_admin"],
+  "permissionCodes": ["agent.use"],
   "toolRefs": ["ui.navigate", "ui.open_customer", "ui.open_lead", "ui.open_development_email", "ui.open_communication"],
   "successCriteria": ["按业务动作选择用途最接近的页面", "使用真实页面 ID", "跳转后页面与用户目标一致", "低匹配度时不静默跳工作台"],
   "failureCases": ["要求用户逐字说出菜单名称", "把单据误判为开发信或工作台", "模型返回 deals 后跳回工作台", "未知页面仍报告跳转成功"],

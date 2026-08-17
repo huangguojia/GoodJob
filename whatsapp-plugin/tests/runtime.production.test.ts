@@ -21,6 +21,7 @@ describe("production runtime boundaries", () => {
       seedDemo: false,
       enableDemoProvider: false,
       autoMigrate: true,
+      officialOnly: true,
       allowPrivateAiEndpoints: false
     });
   }, 30_000);
@@ -42,8 +43,28 @@ describe("production runtime boundaries", () => {
     const capabilities = await request(runtime.app).get("/api/v1/capabilities").expect(200);
     expect(capabilities.body).toEqual({
       demoProviderEnabled: false,
-      providers: { demo: false, baileys: true, meta: true }
+      officialOnly: true,
+      providers: { demo: false, baileys: false, meta: true }
     });
+  });
+
+  it("enforces the official-channel boundary in routes and provider dispatch", async () => {
+    const account = await request(runtime.app)
+      .post("/api/v1/accounts")
+      .send({ name: "Blocked Baileys", provider: "baileys", riskAccepted: true })
+      .expect(403);
+    expect(account.body).toMatchObject({ code: "UNOFFICIAL_PROVIDER_DISABLED" });
+
+    const preference = await request(runtime.app)
+      .put("/api/v1/integration/preference")
+      .send({ strategy: "free_first", defaultProvider: "baileys" })
+      .expect(403);
+    expect(preference.body).toMatchObject({ code: "UNOFFICIAL_PROVIDER_DISABLED" });
+
+    const residual = await runtime.repository.createAccount({ name: "Residual Baileys", provider: "baileys" });
+    const connect = await request(runtime.app).post(`/api/v1/accounts/${residual.id}/connect`).expect(403);
+    expect(connect.body).toMatchObject({ code: "UNOFFICIAL_PROVIDER_DISABLED" });
+    await request(runtime.app).delete(`/api/v1/accounts/${residual.id}`).expect(204);
   });
 
   it("rejects Demo account creation and does not mount the Demo inbound route", async () => {

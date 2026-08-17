@@ -12,6 +12,7 @@ import {
   pauseQueuedProspectRunsForCampaign
 } from "./prospect-run-guards.js";
 import { ProspectRunQueueBridgeIntegrityError } from "./prospect-run-queue-bridge.js";
+import { canSeeOwner, hasIamPermission, isPlatformIdentity } from "./auth.js";
 import type { CrmStore, PersistedStoreMutation } from "./store.js";
 import type {
   ProspectCampaign,
@@ -137,7 +138,7 @@ function publicEvent(event: ProspectCampaignEvent) {
 }
 
 function assertCampaignCrudRole(user: SessionUser) {
-  if (user.role === "super_admin") {
+  if (isPlatformIdentity(user)) {
     throw new ProspectCampaignRequestError(
       403,
       "CAMPAIGN_CRUD_FORBIDDEN",
@@ -147,11 +148,7 @@ function assertCampaignCrudRole(user: SessionUser) {
 }
 
 function canReadCampaign(user: SessionUser, campaign: ProspectCampaign) {
-  if (user.role === "super_admin") return false;
-  if (user.role === "manager" || user.role === "admin") {
-    return user.teamId === campaign.teamId;
-  }
-  return user.teamId === campaign.teamId && user.id === campaign.ownerId;
+  return canSeeOwner(user, campaign.ownerId, campaign.teamId);
 }
 
 function findVisibleCampaign(
@@ -195,7 +192,7 @@ function resolveOwner(
   requestedOwnerId?: string
 ): User {
   const ownerId = requestedOwnerId || user.id;
-  if (ownerId !== user.id && user.role !== "manager" && user.role !== "admin") {
+  if (ownerId !== user.id && !hasIamPermission(user, "lead.assign")) {
     throw new ProspectCampaignRequestError(
       403,
       "CAMPAIGN_OWNER_FORBIDDEN",
@@ -206,7 +203,7 @@ function resolveOwner(
     item.id === ownerId
     && item.teamId === user.teamId
     && item.status === "active"
-    && item.role !== "super_admin"
+    && item.teamId !== "all"
   );
   if (!owner) {
     throw new ProspectCampaignRequestError(
@@ -488,8 +485,7 @@ export async function updateProspectCampaign(input: {
       );
     }
     if (nextOwner.id !== campaign.ownerId
-      && input.user.role !== "manager"
-      && input.user.role !== "admin") {
+      && !hasIamPermission(input.user, "lead.assign")) {
       throw new ProspectCampaignRequestError(
         403,
         "CAMPAIGN_OWNER_FORBIDDEN",
@@ -905,7 +901,7 @@ export function resolveMarketCampaignReference(input: {
   if (!campaign
     || campaign.teamId !== input.user.teamId
     || campaign.ownerId !== input.user.id
-    || input.user.role === "super_admin") {
+    || isPlatformIdentity(input.user)) {
     throw new ProspectCampaignRequestError(
       404,
       "CAMPAIGN_NOT_FOUND",

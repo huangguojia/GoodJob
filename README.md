@@ -3,7 +3,7 @@
 ## WhatsApp 集成
 
 CRM 的 `WhatsApp` 页面加载仓库内的独立服务 `whatsapp-plugin/`。该目录从已验收的
-`桌面/GoodJob/CRM系统对接` 迁入，保留 Baileys/Meta Provider、PGlite/PostgreSQL、
+`桌面/GoodJob/CRM系统对接` 迁入，保留 Baileys/Meta Provider、PGlite/MySQL、
 AES-256-GCM AuthState、Socket.IO、AI 翻译、测试和部署文档，不使用 CRM 原有的
 `whatsapp-web.js` 页面作为聊天入口。
 
@@ -20,7 +20,7 @@ npm run dev
 根目录的 `build` 和 `test` 会同时验证 CRM 与 WhatsApp 插件。
 
 本机迁移数据位于 `whatsapp-plugin/.data/`，其中数据库和 `dev-master.key` 必须成对备份，
-不得提交；生产环境必须按 `whatsapp-plugin/docs/PRODUCTION_DEPLOYMENT.md` 改用 PostgreSQL、
+不得提交；生产环境必须按 `whatsapp-plugin/docs/PRODUCTION_DEPLOYMENT.md` 与 CRM 共用 MySQL、
 固定 `SESSION_MASTER_KEY`，并在 CRM 鉴权网关后发布。当前插件是单租户、单实例、私网部署边界。
 
 第三方组件归属见 `whatsapp-plugin/THIRD_PARTY_NOTICES.md`。
@@ -324,6 +324,59 @@ PROSPECT_QUEUE_SYNC_MS=5000
 执行内核的 Run、任务、租约、Ledger 和原始来源状态通过独立 MySQL 事务通道写入；每次事务先回读数据库权威状态，并使用 `PROSPECT_EXECUTION_DB_LOCK_TIMEOUT_MS` 控制数据库互斥锁等待上限。候选清洗结果通过另一条独立事务通道写入，每次先回读最新网站候选，并使用 `PROSPECT_CANDIDATE_DB_LOCK_TIMEOUT_MS` 控制互斥锁等待上限；该通道只写 `website_opportunities`，不会改动线索、客户、商机或待办。启用 Redis 后，BullMQ 只负责即时唤醒、延迟重试信号和死信镜像，Redis 不保存团队、业务员、查询条件、密钥或 Provider 原始数据。MySQL 仍是唯一业务事实来源；Redis 临时不可用时自动回退到原有轮询。只有要求 Redis 不可用就禁止启动时，才设置 `PROSPECT_QUEUE_REQUIRED=true`。
 
 当前生产 Store 仍保持单后端实例约束：候选清洗管道、全局 Provider 限流和独立 Worker 生命周期尚未全部改造成跨进程原子路径，不能仅靠开启 Redis 或 MySQL 执行事务通道横向启动多个 API/Worker 进程。
+
+### 外部工具集成（Stage 1-8）
+
+集成中心默认关闭。启用只读 MCP 控制面时，API 与独立 Integration Worker 必须连接同一个 MySQL、Redis，并使用完全相同的凭据加密密钥：
+
+```bash
+INTEGRATION_ENABLED=true
+INTEGRATION_WORKER_ENABLED=true
+INTEGRATION_CREDENTIAL_KEY=请生成至少32位且独立保存的随机密钥
+REDIS_URL=redis://127.0.0.1:6379/0
+DATABASE_URL=mysql://用户名:密码@127.0.0.1:3306/goodjob_crm
+INTEGRATION_AGENT_CALL_TIMEOUT_MS=30000
+# OAuth 连接器启用时填写 CRM API 的公网 HTTPS 地址
+INTEGRATION_OAUTH_CALLBACK_BASE_URL=https://api.example.com
+INTEGRATION_WEBHOOK_BASE_URL=https://api.example.com
+# 授权结束后返回集成中心的公网 HTTPS 地址
+INTEGRATION_OAUTH_SUCCESS_REDIRECT_URL=https://crm.example.com/
+# Microsoft 365 官方连接器；Tenant ID 也可以填写 Azure 租户 GUID
+INTEGRATION_MICROSOFT_CLIENT_ID=Azure_应用_Client_ID
+INTEGRATION_MICROSOFT_TENANT_ID=organizations
+# 生产机建议配置，值只保存在服务器环境变量中
+INTEGRATION_OAUTH_MICROSOFT_CLIENT_SECRET=Azure_应用_Client_Secret
+# Google Workspace 官方连接器
+INTEGRATION_GOOGLE_CLIENT_ID=Google_Cloud_OAuth_Client_ID
+INTEGRATION_OAUTH_GOOGLE_CLIENT_SECRET=Google_Cloud_OAuth_Client_Secret
+# ERPNext 固定实例地址；API Key/Secret 不写入环境文件，在集成中心按连接录入
+INTEGRATION_ERPNEXT_BASE_URL=https://erp.example.com/
+```
+
+先启动 CRM API，再单独启动 Worker：
+
+```bash
+npm run start:mysql --workspace backend
+npm run start --workspace integration-worker
+```
+
+开发环境可设置 `INTEGRATION_FAKE_MCP_URL=http://127.0.0.1:<端口>/mcp` 验证连接、发现、审核、授权和只读调用闭环。生产环境不会注册 Fake MCP，也不接受用户输入任意 MCP URL；正式连接器必须由服务端目录预置 HTTPS 地址和主机白名单。
+
+Stage 2 OAuth 连接器使用 metadata discovery、256 bit state/nonce、PKCE S256 和一次性回调事务。授权码、PKCE verifier、access token 与 refresh token 不返回浏览器，全部以 AES-GCM 密文保存在 MySQL；Worker 每 5 分钟扫描 24 小时内到期的凭据，通过 MySQL 分布式锁刷新。`invalid_grant` 会立即把连接切换为“需重新授权”，解绑时优先调用授权服务器的 revocation endpoint。OAuth callback 必须由反向代理公开转发到 `/api/integrations/oauth/callback/:connectorCode`，该路由不要求 CRM 登录，但会校验一次性 state、connector、issuer、resource 和固定 redirect URI，并禁止 iframe 嵌入。
+
+Stage 3 支持 R3-R5 写入工具。管理员审核时必须配置允许角色、字段白名单、数据分类、审批策略和完成证据；secret 字段及嵌套 secret 永远禁止外发。R4-R5 或 `always` 策略会先创建 10 分钟有效的冻结参数审批，批准操作以 MySQL 事务单次消费，重复批准不会重复入队。远端返回必须满足 `created_object_id`、`external_receipt_id`、`state_transition`、`read_after_write_match`、`delivery_acceptance` 或 `file_artifact` 中已声明的证据。写请求发出后发生网络中断时不会盲目重试，而是进入 `unknown_outcome`，由经理或管理员填写外部回执进行人工对账。审批、过期、授权失效和待对账状态会进入现有站内信铃铛。
+
+Stage 4 提供 Microsoft 365 Outlook 邮箱和日历闭环。Azure 应用需要配置委托权限 `User.Read`、`Mail.Read`、`Mail.ReadWrite`、`Mail.Send`、`Calendars.ReadWrite` 和 `offline_access`，并将 Web 重定向 URI 精确设置为 `https://你的CRM域名/api/integrations/oauth/callback/microsoft-365`。回调基础地址只填写域名，不附加 `/api` 路径。邮件发送、会议创建和会议更新均使用冻结参数审批；CRM 客户 ID 只用于本地关联，不发送给 Microsoft Graph。Stage 5 已加入 Microsoft Graph 实时订阅、Webhook 去重、死信和回放，生产发布前仍必须使用真实租户完成端到端验收。
+
+Stage 7 提供 Google Workspace Gmail 与 Google Calendar 官方连接器。Google Cloud OAuth Web 应用必须启用 Gmail API 和 Google Calendar API，并将重定向 URI精确设置为 `https://你的CRM域名/api/integrations/oauth/callback/google-workspace`。授权范围包括 Gmail 读取、草稿与发送，以及日历事件和忙闲查询；发送邮件、创建会议和更新会议沿用 R4 冻结参数审批与 CRM 客户回写。涉及 Gmail 敏感/受限范围时，公测前还需按 Google 要求完成 OAuth consent screen、测试用户或应用验证。依赖 Google Cloud Pub/Sub 的 Gmail 实时推送仍需单独配置，Client ID 与 Client Secret 未同时配置时目录会保持规划态。
+
+Stage 8 增加 ERPNext、EasyPost 国际物流和 Google Drive 贸易单据三个官方连接器。ERPNext 仅调用 `INTEGRATION_ERPNEXT_BASE_URL` 指向实例的 Frappe REST API；EasyPost 仅调用 `api.easypost.com/v2`，不会抓取承运商网站；二者的 API 凭据在连接弹窗录入，以 `teamId + ownerId + connectionId` 作为 AES-GCM 绑定后保存，接口和日志不回显。Google Drive 使用最小化的 `drive.file` Scope，只管理 GoodJob CRM 创建的文件；Google Cloud 项目需启用 Drive API，并额外登记重定向 URI `https://你的CRM域名/api/integrations/oauth/callback/google-drive-trade-docs`。报价/订单创建、物流跟踪创建、文件上传和对外共享沿用现有审批、参数冻结、完成证据与未知结果人工对账。正式发布前仍需分别使用企业自己的 ERPNext、EasyPost 和 Google Workspace 账号完成真实实例验收。
+
+Stage 9 增加企业微信官方 API 连接器。管理员在集成中心创建团队连接时录入 `CorpID`、自建应用 `Secret`、`AgentId` 和“客户联系 Secret”；四项凭据按连接加密保存，换密钥后旧 access token 会失效，access token 只在 Integration Worker 内存中短期缓存。连接器只访问 `qyapi.weixin.qq.com` 的固定官方接口，提供部门、成员、外部联系人编号、外部联系人详情和应用文本通知 5 个工具，不访问企业或客户网页。成员列表默认不返回手机号和邮箱；应用通知禁止 `@all`，最多 100 名明确成员，启用 30 分钟重复消息检查，并经过 R4 冻结参数审批。部署前需在企业微信管理后台创建自建应用、配置可见范围和服务器可信 IP，并从“客户联系 API”页面获取独立 Secret；正式开放前仍需使用真实企业完成最小权限、成员读取、客户读取、消息回执、换密钥和解绑验收。
+
+开发环境可额外设置 `INTEGRATION_FAKE_OAUTH_MCP_URL`、`INTEGRATION_FAKE_OAUTH_CLIENT_ID`、`INTEGRATION_FAKE_OAUTH_APPROVED_HOSTS` 和 `INTEGRATION_FAKE_OAUTH_SCOPES` 注册 OAuth 测试连接器；这些配置在生产环境不会生效。
+
+Stage 1 只开放 R0-R2 只读工具。Agent 只能通过管理员审核后的稳定别名调用，成功结果必须携带 `source` 和 `observedAt`；Redis 队列只传调用 ID，输入与结果以 AES-GCM 密文保存在 MySQL。
 
 生产环境还必须配置至少 32 位的独立密钥：
 

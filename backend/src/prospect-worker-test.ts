@@ -16,6 +16,7 @@ import {
   recordProspectCoverage
 } from "./prospect-coverage-memory.js";
 import {
+  prospectRunDiagnostics,
   prospectRunExecutionSnapshotHash
 } from "./prospect-runs.js";
 import { ProspectCandidatePipeline } from "./prospect-candidate-pipeline.js";
@@ -39,6 +40,8 @@ const gleifCode = "gleif";
 const aiSearchCode = "ai_search";
 const adapterVersion = "worker-stage-v1";
 const catalogVersion = "worker-policy-v1";
+let activeSuccessSearches = 0;
+let maxConcurrentSuccessSearches = 0;
 
 function testUser(id: string, teamId: string): User {
   return {
@@ -269,21 +272,31 @@ const successProvider = defineProvider({
   },
   async search(_request, _credential, tools) {
     assert.ok(tools.http);
-    return {
-      records: [{
-        company: "Worker Verified Company",
-        officialWebsite: "https://example.com/company",
-        country: "DE",
-        business: "Industrial lighting importer",
-        description: "Stage-level background execution fixture",
-        providerRecordId: `worker-record-${randomUUID()}`,
-        sourceUrl: "https://example.com/company/profile",
-        recordType: "identity_evidence",
-        evidenceSummary: "Verified provider fixture",
-        matchedFields: ["company", "country"]
-      }],
-      exhausted: true
-    };
+    activeSuccessSearches += 1;
+    maxConcurrentSuccessSearches = Math.max(
+      maxConcurrentSuccessSearches,
+      activeSuccessSearches
+    );
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return {
+        records: [{
+          company: "Worker Verified Company",
+          officialWebsite: "https://example.com/company",
+          country: "DE",
+          business: "Industrial lighting importer",
+          description: "Stage-level background execution fixture",
+          providerRecordId: `worker-record-${randomUUID()}`,
+          sourceUrl: "https://example.com/company/profile",
+          recordType: "identity_evidence",
+          evidenceSummary: "Verified provider fixture",
+          matchedFields: ["company", "country"]
+        }],
+        exhausted: true
+      };
+    } finally {
+      activeSuccessSearches -= 1;
+    }
   },
   async health() {
     return { ok: true, message: "ok" };
@@ -476,7 +489,8 @@ const worker = new ProspectWorker({
   organizationIdentitySecret,
   prospectCoverageSecret,
   workerId: "worker-stage-test",
-  pollMs: 5_000
+  pollMs: 5_000,
+  concurrency: 3
 });
 
 try {
@@ -493,6 +507,10 @@ try {
   assert.equal(teamARepeatRun.status, "succeeded");
   assert.equal(teamAMissingAiRun.status, "failed");
   assert.equal(dispatchScopes.length, 6);
+  assert.ok(
+    maxConcurrentSuccessSearches >= 2,
+    "slow provider requests from different runs should execute concurrently"
+  );
   const missingAiAttempt = store.prospectExecutionAttempts.find((item) =>
     item.runId === teamAMissingAiRun.id
     && item.providerCode === aiSearchCode
@@ -636,6 +654,32 @@ try {
       .sort(),
     ["duplicate", "net_new"]
   );
+  const gleifProcessingStates = store.prospectCandidateProcessingStates?.filter((item) =>
+    item.teamId === ownerA.teamId
+    && item.ownerId === ownerA.id
+    && item.sourceRecordId === "5493001KJTIIGC8Y1R12"
+  ) || [];
+  assert.equal(gleifProcessingStates.length, 2);
+  assert.equal(gleifProcessingStates.filter((item) => Boolean(item.candidateId)).length, 1);
+  assert.equal(
+    gleifProcessingStates.find((item) => !item.candidateId)?.failureCode,
+    "NO_MATERIAL_CHANGE"
+  );
+  const duplicateProcessingState = gleifProcessingStates.find((item) => !item.candidateId)!;
+  const duplicateRun = store.prospectSearchRuns.find((item) =>
+    item.id === duplicateProcessingState.runId
+  )!;
+  const duplicateDiagnostics = prospectRunDiagnostics(store, duplicateRun);
+  assert.equal(duplicateDiagnostics.cleaningReport.summary.suppressedCount, 1);
+  assert.ok(duplicateDiagnostics.cleaningReport.records.some((item) =>
+    item.hitId === duplicateProcessingState.hitId
+    && item.outcome === "suppressed"
+    && item.reasonCode === "NO_MATERIAL_CHANGE"
+    && !item.candidateId
+  ));
+  assert.ok(duplicateDiagnostics.cleaningReport.reasons.some((item) =>
+    item.code === "NO_MATERIAL_CHANGE" && item.label.includes("不重复入池")
+  ));
   assert.equal(
     store.websiteOpportunities.filter((item) =>
       item.teamId === ownerA.teamId

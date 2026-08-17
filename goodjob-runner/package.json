@@ -1,0 +1,27 @@
+{
+  "name": "@goodjob/local-runner",
+  "version": "0.1.0",
+  "description": "GoodJob CRM local execution bridge",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "goodjob-runner": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cli.js start",
+    "test": "NODE_ENV=test tsx src/runner-test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "@playwright/mcp": "^0.0.79"
+  }
+}

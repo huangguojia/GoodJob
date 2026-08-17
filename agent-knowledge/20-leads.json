@@ -6,7 +6,7 @@
   "summary": "线索是尚未进入客户库的潜在对象，可补全、跟进、背调并转化为客户。",
   "content": "新增线索至少需要公司名称。线索与客户是不同实体，打开页面、背调、开发信和转化时必须使用正确 entityType 和真实 leadId。转化前应保留来源、联系人和跟进事实；删除线索进入回收逻辑，不应通过未知接口永久清除。",
   "keywords": ["线索", "潜客", "转客户", "线索详情", "回收站", "来源"],
-  "roles": ["sales", "manager", "admin", "super_admin"],
+  "permissionCodes": ["lead.read"],
   "toolRefs": ["crm.search_leads", "ui.open_lead", "research.run_background", "ui.open_development_email"],
   "successCriteria": ["区分 leadId 和 customerId", "转化后读取客户结果", "保留线索来源"],
   "failureCases": ["把线索 ID 当客户 ID", "未核验转化结果", "编造联系方式"],

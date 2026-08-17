@@ -33,7 +33,12 @@ import {
   transitionProspectSuperSearch
 } from "./prospect-super-search.js";
 import { getStore } from "./store.js";
-import type { ProspectExecutionAttempt, Role, User } from "./types.js";
+import type {
+  ProspectExecutionAttempt,
+  ProspectExecutionLease,
+  Role,
+  User
+} from "./types.js";
 
 function testUser(id: string, teamId: string, role: Role): User {
   return {
@@ -68,6 +73,7 @@ const original = {
   rounds: [...store.prospectSuperSearchRounds],
   events: [...store.prospectSuperSearchEvents],
   executionAttempts: [...store.prospectExecutionAttempts],
+  executionLeases: [...store.prospectExecutionLeases],
   persist: store.persist,
   persistMutation: store.persistMutation,
   persistProspectExecutionMutation: store.persistProspectExecutionMutation
@@ -658,6 +664,81 @@ try {
     requestId: "standard-search-without-ai-cancel"
   });
 
+  const stalledResult = await createProspectSuperSearch({
+    store,
+    user: publicUser(owner),
+    body: {
+      strategyId: strategy.id,
+      targetCandidateCount: 20,
+      maxDurationMinutes: 60,
+      depth: "balanced",
+      costLimit: 0,
+      currency: "",
+      aiMode: "off",
+      webSearchMode: "off",
+      mapSearchMode: "off",
+      aiDiscoveryMode: "off"
+    }
+  });
+  const stalledMission = store.prospectSuperSearchMissions.find((item) =>
+    item.id === stalledResult.mission.id
+  )!;
+  const stalledRun = store.prospectSearchRuns.find((item) =>
+    item.id === stalledMission.currentRunId
+  )!;
+  const oldProgressAt = new Date(Date.now() - 3 * 60_000).toISOString();
+  stalledMission.deadlineAt = new Date(Date.now() + 60 * 60_000).toISOString();
+  stalledRun.updatedAt = oldProgressAt;
+  const stalledShard = store.prospectRunShards.find((item) =>
+    item.runId === stalledRun.id
+  )!;
+  stalledShard.updatedAt = oldProgressAt;
+  const stalledJobId = store.prospectRunQueueChildBindings.find((item) =>
+    item.runId === stalledRun.id && item.shardId === stalledShard.id
+  )!.jobId;
+  const heartbeatOnlyLease: ProspectExecutionLease = {
+    id: "lease-super-search-heartbeat-only",
+    teamId: stalledRun.teamId,
+    ownerId: stalledRun.ownerId,
+    runId: stalledRun.id,
+    shardId: stalledShard.id,
+    jobId: stalledJobId,
+    kernelEpoch: 1,
+    runEpoch: stalledRun.executionEpoch,
+    fenceToken: 1,
+    claimTokenHmac: "a".repeat(64),
+    workerId: "heartbeat-only-test",
+    status: "active",
+    claimedAt: oldProgressAt,
+    heartbeatAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 30_000).toISOString(),
+    deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+    requestStartedAt: oldProgressAt,
+    releasedAt: "",
+    releaseReason: "",
+    version: 2
+  };
+  store.prospectExecutionLeases.push(heartbeatOnlyLease);
+  const originalStallMs = process.env.PROSPECT_SUPER_SEARCH_STALL_MS;
+  process.env.PROSPECT_SUPER_SEARCH_STALL_MS = "120000";
+  let cancelledRunId = "";
+  const stalledRunner = new ProspectSuperSearchRunner(store, {
+    onRunStalled: async (runId) => {
+      cancelledRunId = runId;
+      stalledRun.status = "cancelled";
+      stalledRun.updatedAt = new Date().toISOString();
+    }
+  });
+  await stalledRunner.tick();
+  if (originalStallMs === undefined) {
+    delete process.env.PROSPECT_SUPER_SEARCH_STALL_MS;
+  } else {
+    process.env.PROSPECT_SUPER_SEARCH_STALL_MS = originalStallMs;
+  }
+  assert.equal(cancelledRunId, stalledRun.id);
+  assert.equal(stalledMission.status, "failed");
+  assert.match(stalledMission.stopReason, /长时间无进展/u);
+
   completed.mission.currentRound = 2;
   completed.mission.maxRounds = 8;
   completed.mission.candidateCount = 0;
@@ -685,6 +766,7 @@ try {
     lowYieldConvergence: true,
     roundPlansUnique: true,
     standardSearchWithoutAi: true,
+    stalledRunCancelled: true,
     singleSourceFailureDegraded: true
   }, null, 2));
 } finally {
@@ -705,6 +787,7 @@ try {
   store.prospectSuperSearchRounds.splice(0, store.prospectSuperSearchRounds.length, ...original.rounds);
   store.prospectSuperSearchEvents.splice(0, store.prospectSuperSearchEvents.length, ...original.events);
   store.prospectExecutionAttempts.splice(0, store.prospectExecutionAttempts.length, ...original.executionAttempts);
+  store.prospectExecutionLeases.splice(0, store.prospectExecutionLeases.length, ...original.executionLeases);
   store.persist = original.persist;
   store.persistMutation = original.persistMutation;
   store.persistProspectExecutionMutation = original.persistProspectExecutionMutation;

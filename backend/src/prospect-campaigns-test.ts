@@ -130,7 +130,7 @@ try {
     token: token(superAdmin)
   });
   assert.equal(superList.response.status, 403);
-  assert.equal(superList.json.errorCode, "CAMPAIGN_CRUD_FORBIDDEN");
+  assert.equal(superList.json.permissionCode, "prospect.read");
 
   const ownerInjection = await request({
     path: "/api/prospect-campaigns",

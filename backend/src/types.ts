@@ -114,6 +114,7 @@ export interface AgentKnowledgeDocument {
   content: string;
   keywords: string[];
   roles: Role[];
+  permissionCodes: string[];
   toolRefs: string[];
   successCriteria: string[];
   failureCases: string[];
@@ -305,10 +306,24 @@ export interface User {
   smtpUser?: string;
   smtpPassword?: string;
   hasSmtpPassword?: boolean;
+  imapHost?: string;
+  imapPort?: number;
+  imapSecure?: boolean;
+  imapUser?: string;
+  imapPassword?: string;
+  hasImapPassword?: boolean;
+  mailCredentialMigrationRequired?: boolean;
+  inboundSyncEnabled?: boolean;
+  lastInboundSyncAt?: string;
+  lastInboundSyncStatus?: "ok" | "error" | "";
+  lastInboundSyncError?: string;
+  lastInboundUid?: number;
+  inboundUidValidity?: string;
   lastDevelopmentEmailAt?: string;
   lastDevelopmentEmailTo?: string;
   lastDevelopmentEmailSubject?: string;
   reportNote?: string;
+  theme?: string;
 }
 
 export interface SessionUser {
@@ -316,6 +331,14 @@ export interface SessionUser {
   name: string;
   email: string;
   role: Role;
+  iamPermissions?: Record<string, Array<"self" | "org_unit" | "org_subtree" | "tenant" | "public_pool">>;
+  iamRoleNames?: string[];
+  iamSource?: "iam" | "legacy_compatibility" | "platform";
+  iamDataScope?: {
+    permissionCode: string;
+    tenantWide: boolean;
+    ownerIds: string[];
+  };
   teamId: string;
   avatar: string;
   authVersion: number;
@@ -327,6 +350,17 @@ export interface SessionUser {
   smtpSecure?: boolean;
   smtpUser?: string;
   hasSmtpPassword?: boolean;
+  imapHost?: string;
+  imapPort?: number;
+  imapSecure?: boolean;
+  imapUser?: string;
+  hasImapPassword?: boolean;
+  inboundSyncEnabled?: boolean;
+  lastInboundSyncAt?: string;
+  lastInboundSyncStatus?: "ok" | "error" | "";
+  lastInboundSyncError?: string;
+  lastInboundUid?: number;
+  inboundUidValidity?: string;
   lastDevelopmentEmailAt?: string;
   lastDevelopmentEmailTo?: string;
   lastDevelopmentEmailSubject?: string;
@@ -344,7 +378,145 @@ export interface CompanyProfile {
   updatedAt: string;
 }
 
+export type DocumentAssetPlacementHorizontal = "template" | "left" | "center" | "right";
+export type DocumentAssetPlacementVertical = "template" | "top" | "middle" | "bottom";
+
+export interface DocumentAssetPlacement {
+  horizontal: DocumentAssetPlacementHorizontal;
+  vertical: DocumentAssetPlacementVertical;
+  offsetX: number;
+  offsetY: number;
+  scale: number;
+}
+
+export const defaultDocumentAssetPlacement: DocumentAssetPlacement = {
+  horizontal: "template",
+  vertical: "template",
+  offsetX: 0,
+  offsetY: 0,
+  scale: 100
+};
+
+export function normalizeDocumentAssetPlacement(value: unknown): DocumentAssetPlacement {
+  const parsed = typeof value === "string" ? (() => { try { return JSON.parse(value) as unknown; } catch { return {}; } })() : value;
+  const source = parsed && typeof parsed === "object" ? parsed as Partial<DocumentAssetPlacement> : {};
+  const horizontal = ["template", "left", "center", "right"].includes(String(source.horizontal))
+    ? source.horizontal as DocumentAssetPlacementHorizontal
+    : defaultDocumentAssetPlacement.horizontal;
+  const vertical = ["template", "top", "middle", "bottom"].includes(String(source.vertical))
+    ? source.vertical as DocumentAssetPlacementVertical
+    : defaultDocumentAssetPlacement.vertical;
+  const offsetX = Math.max(-200, Math.min(200, Number.isFinite(Number(source.offsetX)) ? Math.round(Number(source.offsetX)) : 0));
+  const offsetY = Math.max(-200, Math.min(200, Number.isFinite(Number(source.offsetY)) ? Math.round(Number(source.offsetY)) : 0));
+  const scale = Math.max(50, Math.min(150, Number.isFinite(Number(source.scale)) ? Math.round(Number(source.scale)) : 100));
+  return { horizontal, vertical, offsetX, offsetY, scale };
+}
+
+export interface DocumentLetterhead {
+  id: string;
+  teamId: string;
+  name: string;
+  companyName: string;
+  address: string;
+  phone: string;
+  email: string;
+  website: string;
+  bankInfo: string;
+  logoUrl: string;
+  logoPlacement?: DocumentAssetPlacement;
+  isDefault: boolean;
+  enabled: boolean;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+export interface DocumentStamp {
+  id: string;
+  teamId: string;
+  name: string;
+  imageUrl: string;
+  placement?: DocumentAssetPlacement;
+  isDefault: boolean;
+  enabled: boolean;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+export interface DocumentSignature {
+  id: string;
+  teamId: string;
+  name: string;
+  signerName: string;
+  signerTitle: string;
+  imageUrl: string;
+  isDefault: boolean;
+  enabled: boolean;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+export interface DocumentLetterheadSnapshot {
+  name: string;
+  companyName: string;
+  address: string;
+  phone: string;
+  email: string;
+  website: string;
+  bankInfo: string;
+  logoUrl: string;
+  logoPlacement?: DocumentAssetPlacement;
+}
+
+export interface DocumentStampSnapshot {
+  name: string;
+  imageUrl: string;
+  placement?: DocumentAssetPlacement;
+}
+
+export interface DocumentSignatureSnapshot {
+  name: string;
+  signerName: string;
+  signerTitle: string;
+  imageUrl: string;
+}
+
+export interface DocumentDefaultProfile {
+  teamId: string;
+  seller: string;
+  sellerAddress: string;
+  sellerContact: string;
+  sellerPhone: string;
+  sellerEmail: string;
+  sellerWebsite: string;
+  sellerTaxNo: string;
+  bankInfo: string;
+  currency: string;
+  incoterm: string;
+  paymentTerm: string;
+  shippingMethod: string;
+  portLoading: string;
+  validityDays: number;
+  notes: string;
+  language: TradeDocument["language"];
+  templateStyle: TradeDocument["templateStyle"];
+  letterheadId: string;
+  stampId: string;
+  signatureId: string;
+  includeProductImages: boolean;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+export interface TeamSystemSettings {
+  teamId: string;
+  requireDocumentExcelApproval: boolean;
+  productCategories?: string[];
+  updatedBy: string;
+  updatedAt: string;
+}
+
 export type CustomerGrade = "A" | "B" | "C" | "D";
+export type CustomerLifecycleStatus = "open" | "won";
 
 export interface Customer {
   id: string;
@@ -357,12 +529,18 @@ export interface Customer {
   stage: string;
   amount: number;
   health: number;
+  source?: string;
   grade?: CustomerGrade;
+  lifecycleStatus?: CustomerLifecycleStatus;
+  wonAt?: string;
+  wonByDealId?: string;
   nextReminder: string;
   wecomBound: boolean;
   billingName: string;
+  companyFullName?: string;
   billingAddress: string;
   documentContact: string;
+  contactRemark?: string;
   phone?: string;
   email?: string;
   website?: string;
@@ -399,6 +577,10 @@ export interface CustomerOwnershipMutationInput {
   reason?: string;
   expectedVersion?: number;
   occurredAt: string;
+  authorization?: {
+    canRelease: boolean;
+    canClaim: boolean;
+  };
 }
 
 export interface CustomerOwnershipMutationResult {
@@ -663,18 +845,59 @@ export interface KnowledgeAsset {
   ownerId: string;
   teamId?: string;
   version: string;
+  sourceType?: "external_url" | "baidu_share" | "legacy";
+  sourceUrl?: string;
+  shareCode?: string;
+  fileType?: "pdf" | "word" | "excel" | "image" | "video" | "archive" | "link" | "other";
+  description?: string;
+  tags?: string[];
+  accessCount?: number;
+  lastAccessedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface SkillResource {
+  id: string;
+  name: string;
+  category: string;
+  version: string;
+  summary: string;
+  usageGuide: string;
+  trainingGuide: string;
+  optimizationAdvice: string;
+  acquisitionInstructions: string;
+  downloadUrl: string;
+  extractionCode: string;
+  tags: string[];
+  author: string;
+  license: string;
+  status: "draft" | "published" | "archived";
+  ownerId: string;
+  teamId: string;
+  accessCount: number;
+  lastAccessedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Exam {
   id: string;
   title: string;
   category: string;
-  status: "published" | "draft" | "scheduled";
+  status: "published" | "draft" | "scheduled" | "closed";
   passRate: number;
   questionCount: number;
   durationMinutes?: number;
   passScore?: number;
   targetRole?: "all" | "sales" | "manager";
+  instructions?: string;
+  startAt?: string;
+  endAt?: string;
+  maxAttempts?: number;
+  allowReview?: boolean;
+  publishedAt?: string;
+  closedAt?: string;
   ownerId?: string;
   teamId?: string;
   updatedAt?: string;
@@ -703,6 +926,32 @@ export interface ExamQuestionLink {
   sortOrder: number;
 }
 
+export interface ExamAssignment {
+  id: string;
+  examId: string;
+  userId: string;
+  assignedById: string;
+  teamId: string;
+  status: "pending" | "in_progress" | "submitted" | "passed" | "failed";
+  attemptCount: number;
+  bestScore: number;
+  latestAttemptId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ExamSnapshot {
+  examId: string;
+  questions: ExamQuestion[];
+  rules: {
+    durationMinutes: number;
+    passScore: number;
+    maxAttempts: number;
+    allowReview: boolean;
+  };
+  createdAt: string;
+}
+
 export interface ExamAttempt {
   id: string;
   examId: string;
@@ -712,14 +961,22 @@ export interface ExamAttempt {
   answers: Record<string, number | number[]>;
   correctCount: number;
   totalQuestions: number;
+  status?: "in_progress" | "submitted" | "auto_submitted";
+  startedAt?: string;
+  expiresAt?: string;
+  updatedAt?: string;
   submittedAt: string;
 }
 
 export interface OcrJob {
   id: string;
-  status: "recognized" | "synced";
+  status: "waiting" | "uploaded" | "recognized" | "synced" | "failed";
   confidence: number;
   fields: Record<string, string>;
+  batchId?: string;
+  sourceFileName?: string;
+  errorMessage?: string;
+  createdAt?: string;
   ownerId: string;
   teamId: string;
 }
@@ -755,6 +1012,7 @@ export interface ProspectTouchpoint {
   tenantProspectId?: string;
   organizationId?: string;
   leadId?: string;
+  customerId?: string;
   channel: ProspectOutreachChannel;
   direction: ProspectTouchpointDirection;
   contactValue: string;
@@ -763,6 +1021,48 @@ export interface ProspectTouchpoint {
   replyClassification?: ProspectReplyClassification;
   requestId: string;
   occurredAt: string;
+  createdAt: string;
+  messageId?: string;
+  eventType?: ProspectTouchpointEventType;
+}
+
+export type ProspectTouchpointEventType = "send" | "open" | "click" | "reply" | "bounce";
+
+export type OutboundEmailEntityType =
+  | "prospect_candidate"
+  | "lead"
+  | "customer"
+  | "unknown";
+
+/**
+ * 开发信发送台账：以 Message-ID 为主键把"发出去的每一封邮件"登记下来，
+ * 供打开/点击追踪端点与 IMAP 回信监听反向定位业务对象，形成回流闭环。
+ */
+export interface OutboundEmailLog {
+  id: string;
+  teamId: string;
+  ownerId: string;
+  messageId: string;
+  entityType: OutboundEmailEntityType;
+  entityId: string;
+  to: string;
+  subject: string;
+  source: string;
+  sequenceId?: string;
+  executionId?: string;
+  requestId?: string;
+  payloadHash?: string;
+  dispatchStatus?: "pending" | "sent" | "uncertain";
+  dispatchError?: string;
+  sentAt: string;
+  openCount?: number;
+  clickCount?: number;
+  firstOpenedAt?: string;
+  lastOpenedAt?: string;
+  lastClickedAt?: string;
+  lastClickedUrl?: string;
+  repliedAt?: string;
+  bouncedAt?: string;
   createdAt: string;
 }
 
@@ -1032,6 +1332,8 @@ export interface WebsiteProbeEvidence {
   addressCountry: string;
   businessCategory: string;
   publicContactEmail: string;
+  publicContactPhones?: string[];
+  publicContactNames?: Array<{ name: string; title: string }>;
   sourceUrl: string;
   payloadHash: string;
   observedAt: string;
@@ -1046,7 +1348,11 @@ export interface WebsiteProbeAttempt {
   sourceUrl: string;
   purpose: "company_evidence_enrichment";
   accessMode: "controlled_probe";
-  policyVersion: "website-probe-policy-v1" | "website-probe-policy-v2" | "website-probe-policy-v3";
+  policyVersion:
+    | "website-probe-policy-v1"
+    | "website-probe-policy-v2"
+    | "website-probe-policy-v3"
+    | "website-probe-policy-v4-foreign-only";
   status: "queued" | "running" | "completed" | "failed";
   outcome:
     | "pending"
@@ -1121,6 +1427,138 @@ export interface ProspectScorecard {
   };
 }
 
+export type ProspectContactEvidenceSourceKind =
+  | "source_record"
+  | "contact_provider"
+  | "official_website"
+  | "manual";
+
+export type ProspectContactEvidenceVerification =
+  | "verified"
+  | "source_confirmed"
+  | "syntax_valid"
+  | "unverified";
+
+// 多来源联系人快照与既有 contactInfo 字符串并存，不自动越过人工触达审核。
+export interface ExtractedWebsiteContact {
+  kind: "company" | "person";
+  name: string;
+  title: string;
+  emails: string[];
+  phones: string[];
+  whatsapp: string[];
+  source: string;
+  sourceLabel?: string;
+  sourceKind?: ProspectContactEvidenceSourceKind;
+  confidence?: number;
+  verificationStatus?: ProspectContactEvidenceVerification;
+  observedAt?: string;
+  reasonCodes?: string[];
+  corroboratedSources?: Array<{
+    sourceId: string;
+    sourceLabel: string;
+    evidenceUrl: string;
+  }>;
+  evidenceUrl: string;
+}
+
+export type ProspectContactEnrichmentSourceStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "blocked"
+  | "skipped";
+
+export interface ProspectContactEnrichmentSourceResult {
+  id: string;
+  sourceId: string;
+  sourceLabel: string;
+  sourceKind: ProspectContactEvidenceSourceKind;
+  status: ProspectContactEnrichmentSourceStatus;
+  outcome:
+    | "pending"
+    | "contact_found"
+    | "no_contact"
+    | "not_configured"
+    | "policy_blocked"
+    | "provider_failed";
+  contactCount: number;
+  message: string;
+  errorCode?: string;
+  retryable?: boolean;
+  retryAfterAt?: string | null;
+  startedAt: string;
+  completedAt: string;
+}
+
+export interface ProspectContactRecommendation {
+  contactName: string;
+  contactTitle: string;
+  channelType: "email" | "phone" | "whatsapp";
+  channelValue: string;
+  sourceId: string;
+  sourceLabel: string;
+  confidence: number;
+  verificationStatus: ProspectContactEvidenceVerification;
+  reason: string;
+}
+
+export interface ProspectContactEnrichmentAttempt {
+  id: string;
+  runId: string;
+  candidateId: string;
+  teamId: string;
+  ownerId: string;
+  status: "queued" | "running" | "completed" | "partial" | "failed";
+  sources: ProspectContactEnrichmentSourceResult[];
+  recommendedContact: ProspectContactRecommendation | null;
+  contactCount: number;
+  summary: string;
+  createdAt: string;
+  startedAt: string;
+  completedAt: string;
+}
+
+export interface ProspectWebsiteDiscoveryCandidate {
+  website: string;
+  title: string;
+  score: number;
+  reasons: string[];
+}
+
+export interface ProspectWebsiteDiscoveryEvent {
+  id: string;
+  stage: "queued" | "source" | "search" | "ranking" | "completed" | "failed";
+  status: "started" | "completed" | "failed";
+  message: string;
+  createdAt: string;
+}
+
+export interface ProspectWebsiteDiscoveryAttempt {
+  id: string;
+  runId: string;
+  candidateId: string;
+  teamId: string;
+  ownerId: string;
+  providerId: string;
+  status: "completed" | "failed";
+  outcome:
+    | "source_provided"
+    | "discovered"
+    | "not_found"
+    | "provider_unavailable"
+    | "provider_failed";
+  query: string;
+  selectedWebsite: string;
+  reasonCode: string;
+  reason: string;
+  candidates: ProspectWebsiteDiscoveryCandidate[];
+  events: ProspectWebsiteDiscoveryEvent[];
+  createdAt: string;
+  completedAt: string;
+}
+
 export interface WebsiteOpportunity {
   id: string;
   company: string;
@@ -1150,6 +1588,9 @@ export interface WebsiteOpportunity {
   verifiedAt?: string;
   statusChangedAt?: string;
   excludedReason?: string;
+  shortlistedAt?: string;
+  shortlistedBy?: string;
+  shortlistSourceRunId?: string;
   tenantProspectId?: string;
   organizationId?: string;
   coverageClassification?: ProspectCoverageClassification;
@@ -1160,9 +1601,16 @@ export interface WebsiteOpportunity {
   lastReplyClassification?: ProspectReplyClassification;
   nextFollowAt?: string;
   outreachState?: ProspectOutreachState;
+  lastOpenedAt?: string;
+  lastClickedAt?: string;
+  openCount?: number;
+  clickCount?: number;
   invalidContactChannels?: ProspectOutreachChannel[];
   websiteProbeAttempts?: WebsiteProbeAttempt[];
+  websiteDiscoveryAttempts?: ProspectWebsiteDiscoveryAttempt[];
   identityBootstrapAttempts?: ProspectIdentityBootstrapAttempt[];
+  extractedContacts?: ExtractedWebsiteContact[];
+  contactEnrichmentAttempts?: ProspectContactEnrichmentAttempt[];
 }
 
 export type LeadSourceTier = "free" | "byok_free" | "paid";
@@ -1787,6 +2235,7 @@ export interface ProspectSuperSearchEvent {
   ownerId: string;
   sequence: number;
   type: "created" | "round_started" | "round_completed" | "paused" | "resumed" | "cancelled" | "completed" | "failed"
+    | "ai_planning_started" | "ai_planning_completed" | "ai_planning_fallback"
     | "deep_mining_started" | "deep_query_started" | "deep_evidence_found"
     | "deep_relation_found" | "deep_probe_queued" | "deep_probe_completed"
     | "deep_candidate_converged" | "deep_mining_completed";
@@ -3162,6 +3611,10 @@ export interface Product {
   descriptionZh: string;
   descriptionEn: string;
   tags: string[];
+  packLength?: number;
+  packWidth?: number;
+  packHeight?: number;
+  packWeight?: number;
   imageUrl: string;
   ownerId: string;
   teamId: string;
@@ -3192,10 +3645,22 @@ export interface Shipment {
   dealId: string;
   dealTitle: string;
   customerName: string;
+  /** 运输单自身的目的地信息；地图和物流视图优先使用这些字段。 */
+  destinationCountry?: string;
+  destinationPort?: string;
+  destinationAddress?: string;
   courier: string;
   trackingCode: string;
   trackingImageUrl: string;
   status: ShipmentStatus;
+  /** 状态来源：草稿/本地手填为 local；交运后由承运商官网同步为 carrier */
+  statusSource: "local" | "carrier";
+  /** 最近一次物流同步时间(ISO) */
+  lastSyncedAt?: string;
+  /** 同步错误信息(无轨迹/官网异常等) */
+  syncError?: string;
+  /** 官网轨迹节点(承运商返回) */
+  trackingEvents?: TrackingEvent[];
   shippedAt: string;
   estimatedArrival: string;
   note: string;
@@ -3203,6 +3668,40 @@ export interface Shipment {
   ownerId: string;
   teamId: string;
   updatedAt: string;
+}
+
+export interface TrackingEvent {
+  id: string;
+  time: string;
+  status: ShipmentStatus;
+  location: string;
+  description: string;
+}
+
+export type LogLevel = "info" | "success" | "warning" | "error";
+export type LogCategory = "auth" | "product" | "shipment" | "system";
+
+export interface LogEntry {
+  id: string;
+  level: LogLevel;
+  category: LogCategory;
+  action: string;
+  message: string;
+  actorId: string;
+  actorName: string;
+  meta: Record<string, unknown>;
+  createdAt: string;
+  ownerId: string;
+  teamId: string;
+}
+
+export interface DealItem {
+  id: string;
+  productId?: string;
+  product: string;
+  model?: string;
+  quantity: number;
+  unitPrice: number;
 }
 
 export interface Deal {
@@ -3213,6 +3712,7 @@ export interface Deal {
   product: string;
   quantity: number;
   unitPrice: number;
+  items?: DealItem[];
   amount: number;
   currency: string;
   amountType: "estimate" | "quoted" | "won";
@@ -3283,8 +3783,12 @@ export interface ImportExportJob {
 
 export interface TradeDocumentItem {
   id: string;
+  productId?: string;
+  imageUrl?: string;
   product: string;
   model: string;
+  material?: string;
+  finish?: string;
   hsCode: string;
   quantity: number;
   unit: string;
@@ -3298,6 +3802,65 @@ export interface TradeDocumentItem {
   exportBenefit?: string;
   inspectionCode?: string;
   productEnglish?: string;
+}
+
+export interface TradeDocumentImportEvidence {
+  field: string;
+  value: string;
+  source: string;
+  confidence: number;
+}
+
+export interface TradeDocumentImportDraft {
+  customerId: string;
+  dealId: string;
+  type: TradeDocument["type"];
+  title: string;
+  number: string;
+  issueDate: string;
+  buyer: string;
+  buyerAddress: string;
+  buyerContact: string;
+  seller: string;
+  sellerAddress: string;
+  currency: string;
+  incoterm: string;
+  paymentTerm: string;
+  shippingMethod: string;
+  portLoading: string;
+  portDischarge: string;
+  validityDate: string;
+  bankInfo: string;
+  notes: string;
+  language: TradeDocument["language"];
+  templateStyle: TradeDocument["templateStyle"];
+  items: TradeDocumentItem[];
+}
+
+export interface TradeDocumentImportAnalysis {
+  id: string;
+  sourceFileName: string;
+  sourceMime: string;
+  sourceStorageKey: string;
+  sourceSha256: string;
+  sourceSize: number;
+  status: "needs_review" | "confirmed" | "failed";
+  detectedType: TradeDocument["type"];
+  confidence: number;
+  extractedDocument: TradeDocumentImportDraft;
+  fieldEvidence: TradeDocumentImportEvidence[];
+  warnings: string[];
+  sourcePreview: string[];
+  calculatedTotal: number;
+  declaredTotal?: number;
+  totalDifference?: number;
+  createdDocumentId?: string;
+  confirmedBy?: string;
+  confirmedAt?: string;
+  ownerId: string;
+  teamId: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface CustomsDocument {
@@ -3371,6 +3934,11 @@ export interface TradeDocument {
   customerId: string;
   dealId: string;
   revision: number;
+  derivedFromDocumentId?: string;
+  derivedFromType?: TradeDocument["type"];
+  importAnalysisId?: string;
+  importSourceFileName?: string;
+  importSourceSha256?: string;
   type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING";
   title: string;
   number: string;
@@ -3380,6 +3948,11 @@ export interface TradeDocument {
   buyerContact: string;
   seller: string;
   sellerAddress: string;
+  sellerContact?: string;
+  sellerPhone?: string;
+  sellerEmail?: string;
+  sellerWebsite?: string;
+  sellerTaxNo?: string;
   currency: string;
   incoterm: string;
   paymentTerm: string;
@@ -3397,6 +3970,13 @@ export interface TradeDocument {
   approvedBy?: string;
   audits: TradeDocumentAudit[];
   sendRecords: TradeDocumentSendRecord[];
+  letterheadId?: string;
+  stampId?: string;
+  signatureId?: string;
+  includeProductImages?: boolean;
+  letterheadSnapshot?: DocumentLetterheadSnapshot;
+  stampSnapshot?: DocumentStampSnapshot;
+  signatureSnapshot?: DocumentSignatureSnapshot;
   ownerId: string;
   teamId: string;
   updatedAt: string;
@@ -3414,6 +3994,47 @@ export interface WecomMessage {
   status: "archived" | "pending";
 }
 
+export type WecomCommandEndpointStatus = "active" | "disabled";
+
+export interface WecomCommandEndpoint {
+  id: string;
+  connectionId: string;
+  callbackPublicId: string;
+  teamId: string;
+  ownerId: string;
+  corpId: string;
+  callbackTokenEncrypted: string;
+  encodingAesKeyEncrypted: string;
+  status: WecomCommandEndpointStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type WecomMemberBindingStatus = "active" | "revoked";
+
+export interface WecomMemberBinding {
+  id: string;
+  connectionId: string;
+  teamId: string;
+  wecomUserId: string;
+  crmUserId: string;
+  status: WecomMemberBindingStatus;
+  verifiedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WecomCommandReceipt {
+  id: string;
+  endpointId: string;
+  connectionId: string;
+  teamId: string;
+  messageKey: string;
+  wecomUserId: string;
+  responseHash: string;
+  receivedAt: string;
+}
+
 export interface ProblemItem {
   id: string;
   title: string;
@@ -3428,6 +4049,7 @@ export interface ProblemItem {
   nextAction: string;
   dueAt: string;
   createdAt: string;
+  resolvedAt?: string;
 }
 
 export interface Memo {
@@ -3642,8 +4264,9 @@ export interface InternalMessage {
   type: "system" | "manual";
   subject: string;
   content: string;
-  relatedType: "daily_report" | "message" | "";
+  relatedType: "daily_report" | "message" | "email_return" | "integration_approval" | "integration_call" | "integration_connection" | "integration_event" | "integration_connector" | "";
   relatedId: string;
+  idempotencyKey?: string;
   readAt: string;
   createdAt: string;
   updatedAt: string;

@@ -220,6 +220,13 @@ function createMysqlPool(databaseUrl: string): MysqlPool {
     charset: "utf8mb4",
     timezone: "Z",
     dateStrings: true,
+    typeCast: (field, next) => {
+      if (field.type === "DATETIME" || field.type === "TIMESTAMP") {
+        const value = field.string();
+        return value ? new Date(`${value.replace(" ", "T")}Z`).toISOString() : null;
+      }
+      return next();
+    },
     supportBigNumbers: true,
     bigNumberStrings: true,
     ssl: sslMode && sslMode !== "DISABLED" ? {} : undefined

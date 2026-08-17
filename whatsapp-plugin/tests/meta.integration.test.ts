@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
@@ -260,9 +260,27 @@ describe("Meta Cloud API integration", () => {
       .expect(403);
 
     const payload = inboundPayload({ from: "15550001111", messageId: "wamid.in.1", body: "Can you send a quote?" });
+    const inboxBefore = await runtime.database.query<{ count: number | string }>(
+      "SELECT COUNT(*) AS count FROM meta_webhook_events WHERE app_config_id=$1",
+      [metaApp.id]
+    );
     await signedWebhook(payload, "wrong-signing-secret").then((response) => expect(response.status).toBe(401));
+    const inboxAfterInvalidSignature = await runtime.database.query<{ count: number | string }>(
+      "SELECT COUNT(*) AS count FROM meta_webhook_events WHERE app_config_id=$1",
+      [metaApp.id]
+    );
+    expect(Number(inboxAfterInvalidSignature.rows[0].count)).toBe(Number(inboxBefore.rows[0].count));
     const duplicateResponses = await Promise.all([signedWebhook(payload), signedWebhook(payload)]);
     expect(duplicateResponses.map((response) => response.status)).toEqual([200, 200]);
+
+    const inbox = await runtime.database.query<{ status: string; attempts: number | string }>(
+      `SELECT status,attempts FROM meta_webhook_events
+       WHERE app_config_id=$1 AND event_hash=$2`,
+      [metaApp.id, createHash("sha256").update(JSON.stringify(payload)).digest("hex")]
+    );
+    expect(inbox.rows).toHaveLength(1);
+    expect(inbox.rows[0]).toMatchObject({ status: "processed" });
+    expect(Number(inbox.rows[0].attempts)).toBe(1);
 
     const contacts = (await request(runtime.app).get(`/api/v1/contacts?accountId=${metaAccount.id}`).expect(200)).body as Contact[];
     expect(contacts.filter((contact) => contact.phone === "+15550001111")).toHaveLength(1);
@@ -279,6 +297,110 @@ describe("Meta Cloud API integration", () => {
       await request(runtime.app).get(`/api/v1/conversations/${conversation.id}/messages`).expect(200)
     ).body as ChatMessage[];
     expect(messages.filter((message) => message.providerMessageId === "wamid.in.1")).toHaveLength(1);
+  });
+
+  it("recovers a persisted Meta webhook event without duplicating its message", async () => {
+    const payload = inboundPayload({
+      from: "15550005555",
+      messageId: "wamid.in.recovery",
+      body: "Please remind me about the revised quote"
+    });
+    await signedWebhook(payload).then((response) => expect(response.status).toBe(200));
+    const eventHash = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+    const event = await runtime.database.query<{ id: string; attempts: number | string }>(
+      "SELECT id,attempts FROM meta_webhook_events WHERE app_config_id=$1 AND event_hash=$2",
+      [metaApp.id, eventHash]
+    );
+    expect(event.rows).toHaveLength(1);
+    await runtime.database.query(
+      `UPDATE meta_webhook_events
+       SET status='pending',processing_started_at=NULL,processed_at=NULL,updated_at=$2 WHERE id=$1`,
+      [event.rows[0].id, new Date().toISOString()]
+    );
+
+    expect(await runtime.providers.meta.recoverPendingWebhookEvents()).toEqual({ processed: 1, failed: 0 });
+    const recovered = await runtime.database.query<{ status: string; attempts: number | string; processed_at: string | null }>(
+      "SELECT status,attempts,processed_at FROM meta_webhook_events WHERE id=$1",
+      [event.rows[0].id]
+    );
+    expect(recovered.rows[0].status).toBe("processed");
+    expect(Number(recovered.rows[0].attempts)).toBe(Number(event.rows[0].attempts) + 1);
+    expect(recovered.rows[0].processed_at).not.toBeNull();
+
+    const stored = await runtime.database.query<{ count: number | string }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE account_id=$1 AND provider_message_id=$2",
+      [metaAccount.id, "wamid.in.recovery"]
+    );
+    expect(Number(stored.rows[0].count)).toBe(1);
+  });
+
+  it("extracts evidence-backed customer traits and creates actionable follow-ups", async () => {
+    const payload = inboundPayload({
+      from: "15550006666",
+      messageId: "wamid.in.intelligence",
+      body: "We need 500 units. Please send your price and lead time."
+    });
+    await signedWebhook(payload).then((response) => expect(response.status).toBe(200));
+    const conversations = (await request(runtime.app).get(`/api/v1/conversations?accountId=${metaAccount.id}`).expect(200)).body as Conversation[];
+    const conversation = conversations.find((item) => item.contactPhone === "+15550006666");
+    expect(conversation).toBeDefined();
+
+    const generated = await request(runtime.app)
+      .post(`/api/v1/conversations/${conversation!.id}/intelligence/analyze`)
+      .expect(200);
+    expect(generated.body.analysis).toMatchObject({ buyingIntent: "high", riskLevel: "medium" });
+    expect(generated.body.analysis.traits).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "quote", evidenceMessageIds: [expect.any(String)] }),
+      expect.objectContaining({ key: "quantity" })
+    ]));
+    expect(generated.body.followups).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "准备并发送报价", status: "pending" })
+    ]));
+
+    const quoteFollowup = generated.body.followups.find((item: { sourceKey: string }) => item.sourceKey.startsWith("quote:"));
+    expect(quoteFollowup).toBeDefined();
+
+    const rejected = await request(runtime.app)
+      .put(`/api/v1/conversations/${conversation!.id}/intelligence/feedback`)
+      .send({ traitKey: "quote", traitLabel: "价格敏感", verdict: "rejected" })
+      .expect(200);
+    expect(rejected.body.analysis.traits).not.toEqual(expect.arrayContaining([expect.objectContaining({ key: "quote" })]));
+    expect(rejected.body.feedback).toEqual(expect.arrayContaining([expect.objectContaining({ traitKey: "quote", verdict: "rejected" })]));
+    expect(rejected.body.followups.find((item: { id: string }) => item.id === quoteFollowup.id).status).toBe("dismissed");
+
+    const restored = await request(runtime.app)
+      .delete(`/api/v1/conversations/${conversation!.id}/intelligence/feedback/quote`)
+      .expect(200);
+    expect(restored.body.analysis.traits).toEqual(expect.arrayContaining([expect.objectContaining({ key: "quote" })]));
+    expect(restored.body.feedback).not.toEqual(expect.arrayContaining([expect.objectContaining({ traitKey: "quote" })]));
+    expect(restored.body.followups.find((item: { id: string }) => item.id === quoteFollowup.id).status).toBe("pending");
+
+    const followupId = quoteFollowup.id as string;
+    await request(runtime.app).patch(`/api/v1/followups/${followupId}`).send({ status: "completed" }).expect(200);
+    const current = await request(runtime.app).get(`/api/v1/conversations/${conversation!.id}/intelligence`).expect(200);
+    expect(current.body.followups.find((item: { id: string }) => item.id === followupId).status).toBe("completed");
+  });
+
+  it("archives non-text Meta message types instead of silently dropping them", async () => {
+    const payload = {
+      object: "whatsapp_business_account",
+      entry: [{ id: wabaId, changes: [{ field: "messages", value: {
+        metadata: { phone_number_id: phoneNumberId },
+        contacts: [{ wa_id: "15550007777", profile: { name: "Media Buyer" } }],
+        messages: [
+          { from: "15550007777", id: "wamid.image.1", type: "image", image: { id: "media-1", caption: "报价参考图" } },
+          { from: "15550007777", id: "wamid.location.1", type: "location", location: { latitude: 31.23, longitude: 121.47, name: "Shanghai" } }
+        ]
+      } }] }]
+    };
+    await signedWebhook(payload).then((response) => expect(response.status).toBe(200));
+    const conversations = (await request(runtime.app).get(`/api/v1/conversations?accountId=${metaAccount.id}`).expect(200)).body as Conversation[];
+    const conversation = conversations.find((item) => item.contactPhone === "+15550007777")!;
+    const messages = (await request(runtime.app).get(`/api/v1/conversations/${conversation.id}/messages`).expect(200)).body as ChatMessage[];
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ providerMessageId: "wamid.image.1", messageType: "image", body: "报价参考图" }),
+      expect.objectContaining({ providerMessageId: "wamid.location.1", messageType: "system", body: expect.stringContaining("Shanghai") })
+    ]));
   });
 
   it("enforces the 24-hour gate and deduplicates concurrent client message IDs", async () => {

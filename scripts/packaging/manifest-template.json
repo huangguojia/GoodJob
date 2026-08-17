@@ -1,0 +1,11 @@
+{
+  "latestVersion": "0.1.0",
+  "minimumVersion": "0.1.0",
+  "releases": {
+    "0.1.0": {
+      "date": "2026-08-01",
+      "changelog": "GoodJob CRM 初始版本\n\n功能特性：\n- 完整外贸 CRM 管理（客户、商机、产品）\n- 8 种外贸单证系统（PI/CI/PL/合同/报价单/原产地/装运通知/报关资料）\n- 5 种语言支持（EN/ES/RU/AR/ZH）\n- 8 种主题风格\n- 报关资料 Excel 导出\n- AI 智能助手\n- 系统自动更新",
+      "credits": "<div style='text-align:center;margin-bottom:16px;'><div style='font-size:18px;font-weight:600;color:#3157d5;margin-bottom:4px;'>GoodJob CRM</div><div style='font-size:12px;color:#999;'>外贸客户关系管理系统</div></div><p>感谢使用 GoodJob CRM，即将开始更新。</p><div style='background:#f5f7fa;border-radius:8px;padding:12px 16px;margin:12px 0;'><div style='font-weight:600;margin-bottom:8px;'>开源依赖</div><div style='font-size:12px;line-height:2;color:#666;'>Node.js · Express · TypeScript · Zod · MySQL2<br>Vite · xlsx (SheetJS)</div></div><p style='font-size:12px;color:#999;'>点击确认并继续更新表示您已知悉并同意开始更新。</p>"
+    }
+  }
+}

@@ -135,7 +135,7 @@ try {
     user: superAdmin
   });
   assert.equal(superList.response.status, 403);
-  assert.equal(superList.json.errorCode, "STRATEGY_CRUD_FORBIDDEN");
+  assert.equal(superList.json.permissionCode, "prospect.read");
 
   const otherSalesList = await request({
     path: `/api/prospect-campaigns/${campaignId}/strategies`,

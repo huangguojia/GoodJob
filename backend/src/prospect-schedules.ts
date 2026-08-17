@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { publicUser } from "./auth.js";
+import { canSeeOwner, isPlatformIdentity, publicUser } from "./auth.js";
 import { prospectStrategyEtag } from "./prospect-strategies.js";
 import type { CrmStore, PersistedStoreMutation } from "./store.js";
 import type {
@@ -53,7 +53,7 @@ export function prospectScheduleEtag(
 }
 
 function assertScheduleRole(user: SessionUser) {
-  if (user.role === "super_admin") {
+  if (isPlatformIdentity(user)) {
     throw new ProspectScheduleRequestError(
       403,
       "SCHEDULE_ACCESS_FORBIDDEN",
@@ -121,10 +121,7 @@ function publicSchedule(store: CrmStore, schedule: ProspectSchedule) {
 }
 
 function canRead(user: SessionUser, schedule: ProspectSchedule) {
-  if (user.role === "manager" || user.role === "admin") {
-    return user.teamId === schedule.teamId;
-  }
-  return user.teamId === schedule.teamId && user.id === schedule.ownerId;
+  return canSeeOwner(user, schedule.ownerId, schedule.teamId);
 }
 
 function findVisibleSchedule(

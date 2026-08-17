@@ -6,6 +6,7 @@ import zhLocale from "i18n-iso-countries/langs/zh.json";
 import { feature } from "topojson-client";
 import type { Feature, FeatureCollection, MultiPolygon, Polygon } from "geojson";
 import type { GeometryCollection, Topology } from "topojson-specification";
+import type { MeshPhongMaterial } from "three";
 import countriesTopology from "world-atlas/countries-110m.json";
 
 export interface CustomerMapRecord {
@@ -233,7 +234,7 @@ export function createCustomerMap(options: CustomerMapOptions): CustomerMapContr
       if (country) selectCountry(country);
     });
 
-  const globeMaterial = globe.globeMaterial();
+  const globeMaterial = globe.globeMaterial() as MeshPhongMaterial;
   globeMaterial.color.set("#b6d1d9");
   globeMaterial.emissive.set("#8daeb8");
   globeMaterial.emissiveIntensity = 0.22;

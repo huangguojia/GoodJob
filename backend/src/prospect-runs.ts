@@ -24,6 +24,7 @@ import {
 } from "./prospect-strategies.js";
 import { validateProspectSearchQueryPlan } from "./prospect-search-planner.js";
 import { prospectCandidateQualificationCounts } from "./prospect-scorecard.js";
+import { canSeeOwner, hasIamScope, isPlatformIdentity } from "./auth.js";
 import type { CrmStore, PersistedStoreMutation } from "./store.js";
 import type {
   ProspectCampaign,
@@ -213,7 +214,7 @@ function createRequestHash(input: {
 }
 
 function assertRunRole(user: SessionUser) {
-  if (user.role === "super_admin") {
+  if (isPlatformIdentity(user)) {
     throw new ProspectRunRequestError(
       403,
       "RUN_ACCESS_FORBIDDEN",
@@ -223,11 +224,7 @@ function assertRunRole(user: SessionUser) {
 }
 
 function canReadCampaign(user: SessionUser, campaign: ProspectCampaign) {
-  if (user.role === "super_admin") return false;
-  if (user.role === "manager" || user.role === "admin") {
-    return user.teamId === campaign.teamId;
-  }
-  return user.teamId === campaign.teamId && user.id === campaign.ownerId;
+  return canSeeOwner(user, campaign.ownerId, campaign.teamId);
 }
 
 function visibleCampaign(
@@ -581,6 +578,13 @@ function cleaningReasonLabel(code: string) {
     REVIEW_DATE_REACHED: "已有企业达到复核时间，已重新进入核验队列",
     EXCLUSION_EXPIRED_REQUIRES_REVIEW: "原排除规则已到期，已重新进入复核",
     NO_MATERIAL_CHANGE: "已有企业且没有新增有效证据，不重复入池",
+    HISTORICAL_DUPLICATE_NO_CHANGE: "历史候选已存在，本次没有新增官网、联系方式或高可信证据",
+    WEBSITE_SOURCE_PROVIDED: "数据源直接提供了官网",
+    WEBSITE_DISCOVERED_CONFIRMED: "搜索 API 找到并确认了可信官网",
+    WEBSITE_SEARCH_PROVIDER_UNAVAILABLE: "OpenAI 联网与免费 Wikidata 均未取得官网，且未配置其他官网搜索接口",
+    WEBSITE_SEARCH_PROVIDER_FAILED: "官网搜索 API 执行失败",
+    WEBSITE_CANDIDATE_LOW_CONFIDENCE: "找到候选域名，但名称与域名匹配度不足",
+    WEBSITE_NOT_FOUND: "搜索 API 没有返回可确认的官网",
     IDENTITY_OR_SOURCE_MATCH: "来源记录、官网域名与国家或企业身份命中已有候选，证据已合并",
     COVERAGE_SUPPRESSED: "已命中团队重复、排除或勿联系规则，不重复进入候选池",
     CANDIDATE_ACCEPTED: "候选通过字段校验与身份归一，已进入候选池",
@@ -623,19 +627,40 @@ function prospectCleaningReport(
   const candidateIds = new Set(candidateReferences.map((item) => item.candidateId!));
   const mergedCount = Math.max(0, candidateReferences.length - candidateIds.size);
   const pendingCount = Math.max(0, rawHits.length - processing.length);
+  const discoveryAttempts = [...candidateIds]
+    .flatMap((id) => candidateById.get(id)?.websiteDiscoveryAttempts || [])
+    .filter((item) => item.runId === run.id);
+  const websiteResolvedCount = discoveryAttempts.filter((item) =>
+    item.outcome === "source_provided" || item.outcome === "discovered"
+  ).length;
+  const websiteDiscoveredCount = discoveryAttempts.filter((item) =>
+    item.outcome === "discovered"
+  ).length;
+  const websiteDiscoveryFailedCount = discoveryAttempts.filter((item) =>
+    ["not_found", "provider_unavailable", "provider_failed"].includes(item.outcome)
+  ).length;
+  const websiteDiscoveryPendingCount = Math.max(
+    0,
+    candidateIds.size - discoveryAttempts.length
+  );
   const reasonCounts = new Map<string, number>();
   const addReason = (code: string, count = 1) => {
     if (count > 0) reasonCounts.set(code, (reasonCounts.get(code) || 0) + count);
   };
   addReason("PROVIDER_INVALID_RECORD", providerInvalidCount);
   addReason("PROVIDER_DUPLICATE_RECORD", providerDuplicateCount);
+  for (const attempt of discoveryAttempts) {
+    if (!["source_provided", "discovered"].includes(attempt.outcome)) {
+      addReason(attempt.reasonCode || "WEBSITE_NOT_FOUND");
+    }
+  }
   for (const item of processing) {
     if (item.status === "rejected") {
       addReason(item.failureCode || "CANDIDATE_PAYLOAD_INVALID");
       continue;
     }
     const coverage = coverageByHit.get(item.hitId);
-    if (!item.candidateId) addReason(coverage?.reasonCode || "COVERAGE_SUPPRESSED");
+    if (!item.candidateId) addReason(item.failureCode || coverage?.reasonCode || "COVERAGE_SUPPRESSED");
     else if (coverage?.classification === "duplicate" || coverage?.classification === "new_intelligence") {
       addReason(coverage.reasonCode || "IDENTITY_OR_SOURCE_MATCH");
     }
@@ -649,6 +674,9 @@ function prospectCleaningReport(
       const providerCode = ledger?.providerCode || (hit ? shardById.get(hit.shardId)?.providerCode : "") || "unknown";
       const coverage = coverageByHit.get(item.hitId);
       const candidate = item.candidateId ? candidateById.get(item.candidateId) : undefined;
+      const websiteDiscovery = candidate?.websiteDiscoveryAttempts?.find((attempt) =>
+        attempt.runId === run.id
+      );
       let outcome: "accepted" | "merged" | "suppressed" | "rejected";
       let reasonCode: string;
       if (item.status === "rejected") {
@@ -656,7 +684,7 @@ function prospectCleaningReport(
         reasonCode = item.failureCode || "CANDIDATE_PAYLOAD_INVALID";
       } else if (!item.candidateId) {
         outcome = "suppressed";
-        reasonCode = coverage?.reasonCode || "COVERAGE_SUPPRESSED";
+        reasonCode = item.failureCode || coverage?.reasonCode || "COVERAGE_SUPPRESSED";
       } else if (coverage?.classification === "duplicate"
         || coverage?.classification === "new_intelligence"
         || seenCandidateIds.has(item.candidateId)) {
@@ -679,6 +707,11 @@ function prospectCleaningReport(
         reason: cleaningReasonLabel(reasonCode),
         candidateId: item.candidateId || "",
         candidateName: candidate?.company || "",
+        website: websiteDiscovery?.selectedWebsite || candidate?.website || "",
+        websiteOutcome: websiteDiscovery?.outcome || (candidate ? "pending" : "not_applicable"),
+        websiteReasonCode: websiteDiscovery?.reasonCode || "",
+        websiteReason: websiteDiscovery?.reason || (candidate ? "等待官网发现阶段" : ""),
+        websiteProvider: websiteDiscovery?.providerId || "",
         processedAt: item.processedAt
       };
     });
@@ -697,6 +730,11 @@ function prospectCleaningReport(
       reason: cleaningReasonLabel("PENDING_CLEANING"),
       candidateId: "",
       candidateName: "",
+      website: "",
+      websiteOutcome: "not_applicable",
+      websiteReasonCode: "",
+      websiteReason: "等待候选清洗完成",
+      websiteProvider: "",
       processedAt: hit.fetchedAt || hit.createdAt
     }));
   const records = [...processedRecords, ...pendingRecords]
@@ -713,13 +751,18 @@ function prospectCleaningReport(
       rejectedCount,
       suppressedCount,
       mergedCount,
-      candidateCount: candidateIds.size
+      candidateCount: candidateIds.size,
+      websiteResolvedCount,
+      websiteDiscoveredCount,
+      websiteDiscoveryFailedCount,
+      websiteDiscoveryPendingCount
     },
     stages: [
       { id: "provider_normalize", name: "来源解析", input: providerRawCount, output: rawHits.length, removed: providerInvalidCount + providerDuplicateCount, result: `无效 ${providerInvalidCount}，来源内重复 ${providerDuplicateCount}` },
       { id: "payload_validate", name: "字段校验", input: rawHits.length, output: Math.max(0, processing.length - rejectedCount), removed: rejectedCount, result: `拒绝 ${rejectedCount}，待处理 ${pendingCount}` },
       { id: "identity_merge", name: "身份归一", input: candidateReferences.length, output: candidateIds.size, removed: mergedCount, result: `归并 ${mergedCount} 条到已有候选` },
-      { id: "coverage_route", name: "覆盖分流", input: processing.length, output: candidateIds.size, removed: suppressedCount, result: `重复、排除或勿联系分流 ${suppressedCount} 条` }
+      { id: "coverage_route", name: "覆盖分流", input: processing.length, output: candidateIds.size, removed: suppressedCount, result: `重复、排除或勿联系分流 ${suppressedCount} 条` },
+      { id: "website_discovery", name: "官网发现", input: candidateIds.size, output: websiteResolvedCount, removed: websiteDiscoveryFailedCount, result: `来源自带 ${websiteResolvedCount - websiteDiscoveredCount}，搜索确认 ${websiteDiscoveredCount}，未确认 ${websiteDiscoveryFailedCount}，待处理 ${websiteDiscoveryPendingCount}` }
     ],
     reasons: [...reasonCounts.entries()]
       .map(([code, count]) => ({ code, label: cleaningReasonLabel(code), count }))
@@ -1094,7 +1137,7 @@ function teamDuplicateAssociation(
   strategy: ProspectStrategy,
   ownerId: string
 ) {
-  if (user.role !== "manager" && user.role !== "admin") return null;
+  if (!hasIamScope(user, "prospect.read", ["org_unit", "org_subtree", "tenant"])) return null;
   const duplicate = store.prospectSearchRuns.find((run) =>
     run.teamId === strategy.teamId
     && run.ownerId !== ownerId

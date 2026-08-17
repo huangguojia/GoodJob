@@ -43,6 +43,7 @@ export function canReleaseCustomer(
   customer: Customer,
   input: CustomerOwnershipMutationInput
 ) {
+  if (input.authorization) return input.authorization.canRelease;
   if (input.actorRole === "sales") {
     return customer.ownerId === input.actorId
       && customer.teamId === input.actorTeamId;
@@ -93,7 +94,10 @@ export function assertCustomerOwnershipMutation(
   if (customer.teamId !== input.actorTeamId) {
     fail("CUSTOMER_POOL_FORBIDDEN", "不能领取其他团队的公池客户", 403);
   }
-  if (!["sales", "manager", "admin"].includes(input.actorRole)) {
+  if (input.authorization && !input.authorization.canClaim) {
+    fail("CUSTOMER_POOL_FORBIDDEN", "当前账号不能领取公池客户", 403);
+  }
+  if (!input.authorization && !["sales", "manager", "admin"].includes(input.actorRole)) {
     fail("CUSTOMER_POOL_FORBIDDEN", "当前账号不能领取公池客户", 403);
   }
   if (!isPublicCustomer(customer)) {

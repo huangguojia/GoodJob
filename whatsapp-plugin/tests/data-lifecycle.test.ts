@@ -71,7 +71,7 @@ describe("database lifecycle", () => {
       provider_id: string | null;
     }>("SELECT auto_translate,provider_id FROM translation_preferences WHERE id='default'");
 
-    expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5]);
+    expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     expect(Number(accounts.rows[0].count)).toBe(0);
     expect(Number(mocks.rows[0].count)).toBe(0);
     expect(preference.rows[0]).toMatchObject({ auto_translate: 0, provider_id: null });

@@ -1,5 +1,5 @@
 import { createDefaultProviderCatalog } from "./provider-catalog.js";
-import type { AcquisitionOutcomeFeedback, AgentJob, AgentJobIdempotencyAlias, AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerActivity, CustomerIntelligenceSuggestion, DailyReport, DailyReportComment, Deal, DealEvent, DealRecommendation, Exam, ExamAttempt, ExamQuestion, ExamQuestionLink, ImportExportJob, InternalMessage, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, MarketOpportunityBatch, MarketOpportunityCalculationEvent, MarketOpportunitySnapshot, MarketTradeObservation, Memo, MonthlySalesRecord, OcrJob, Organization, OrganizationAcceptedIdentifier, OrganizationAliasFact, OrganizationCanonicalMapping, OrganizationIdentityClaim, OrganizationIdentityConflict, OrganizationIdentityConflictReview, OrganizationIdentityEvent, OrganizationIdentityResolution, OrganizationRelationFact, OrganizationSourceBinding, PlanTask, PlanTemplate, ProblemItem, ProcurementSignal, ProspectCampaign, ProspectCampaignEvent, ProspectCampaignVersion, ProspectCoverageEvent, ProspectExecutionAttempt, ProspectExecutionCheckpoint, ProspectExecutionEvent, ProspectExecutionKernelState, ProspectExecutionLease, ProspectExecutionPage, ProspectExecutionThrottleBucket, ProspectProviderRequestAccountingEvidence, ProspectProviderRequestAttemptBinding, ProspectProviderRequestDispatch, ProspectProviderRequestEvent, ProspectProviderRequestLedger, ProspectRunEvent, ProspectRunQueueChildBinding, ProspectRunQueueParentBinding, ProspectRunShard, ProspectSchedule, ProspectSearchRun, ProspectSourceRawBatch, ProspectSourceRawHit, ProspectSourceRawRecord, ProspectStrategy, ProspectStrategyEvent, ProspectStrategySourcePosition, ProspectStrategySuggestion, ProspectSuperSearchEvent, ProspectSuperSearchMission, ProspectSuperSearchRound, ProspectTouchpoint, ProviderCatalogItem, ProviderConnection, ProviderRequestLog, ProviderResponseCache, Reminder, SalesRecordAudit, TenantProspect, Todo, TradeDocument, User, WecomMessage, WebsiteOpportunity, WhatsAppMessage, WhatsAppBinding } from "./types.js";
+import type { AcquisitionOutcomeFeedback, AgentJob, AgentJobIdempotencyAlias, AiModelConfig, CaseStudy, CommissionCalculation, CommissionExport, CommissionItem, CommissionProduct, CommissionRule, Competitor, Customer, CustomerActivity, CustomerIntelligenceSuggestion, DailyReport, DailyReportComment, Deal, DealEvent, DealRecommendation, Exam, ExamAssignment, ExamAttempt, ExamQuestion, ExamQuestionLink, ExamSnapshot, ImportExportJob, InternalMessage, KnowledgeAsset, Lead, LeadActivity, LeadSourceConfig, LeadSourceEvent, MarketOpportunityBatch, MarketOpportunityCalculationEvent, MarketOpportunitySnapshot, MarketTradeObservation, Memo, MonthlySalesRecord, OcrJob, Organization, OutboundEmailLog, OrganizationAcceptedIdentifier, OrganizationAliasFact, OrganizationCanonicalMapping, OrganizationIdentityClaim, OrganizationIdentityConflict, OrganizationIdentityConflictReview, OrganizationIdentityEvent, OrganizationIdentityResolution, OrganizationRelationFact, OrganizationSourceBinding, PlanTask, PlanTemplate, ProblemItem, ProcurementSignal, ProspectCampaign, ProspectCampaignEvent, ProspectCampaignVersion, ProspectCoverageEvent, ProspectExecutionAttempt, ProspectExecutionCheckpoint, ProspectExecutionEvent, ProspectExecutionKernelState, ProspectExecutionLease, ProspectExecutionPage, ProspectExecutionThrottleBucket, ProspectProviderRequestAccountingEvidence, ProspectProviderRequestAttemptBinding, ProspectProviderRequestDispatch, ProspectProviderRequestEvent, ProspectProviderRequestLedger, ProspectRunEvent, ProspectRunQueueChildBinding, ProspectRunQueueParentBinding, ProspectRunShard, ProspectSchedule, ProspectSearchRun, ProspectSourceRawBatch, ProspectSourceRawHit, ProspectSourceRawRecord, ProspectStrategy, ProspectStrategyEvent, ProspectStrategySourcePosition, ProspectStrategySuggestion, ProspectSuperSearchEvent, ProspectSuperSearchMission, ProspectSuperSearchRound, ProspectTouchpoint, ProviderCatalogItem, ProviderConnection, ProviderRequestLog, ProviderResponseCache, Reminder, SalesRecordAudit, SkillResource, TenantProspect, Todo, TradeDocument, User, WecomCommandEndpoint, WecomCommandReceipt, WecomMemberBinding, WecomMessage, WebsiteOpportunity, WhatsAppMessage, WhatsAppBinding } from "./types.js";
 import type {
   CompanyVerificationSnapshot,
   ProspectCandidateQualificationCheckpoint,
@@ -13,7 +13,7 @@ import type {
   ProspectIcpPolicySnapshot,
   ProspectSuppressionEvent
 } from "./types.js";
-import type { CompanyProfile } from "./types.js";
+import type { CompanyProfile, DocumentLetterhead, DocumentStamp } from "./types.js";
 
 export const providerCatalog: ProviderCatalogItem[] = createDefaultProviderCatalog();
 export const providerConnections: ProviderConnection[] = [];
@@ -82,6 +82,7 @@ export const prospectSuppressionEvents: ProspectSuppressionEvent[] = [];
 export const prospectContactabilityDecisions:
   ProspectContactabilityDecision[] = [];
 export const prospectTouchpoints: ProspectTouchpoint[] = [];
+export const outboundEmailLogs: OutboundEmailLog[] = [];
 export const procurementSignals: ProcurementSignal[] = [];
 export const dealRecommendations: DealRecommendation[] = [];
 export const customerIntelligenceSuggestions:
@@ -94,7 +95,12 @@ export const prospectExecutionThrottleBuckets: ProspectExecutionThrottleBucket[]
 export const dailyReports: DailyReport[] = [];
 export const dailyReportComments: DailyReportComment[] = [];
 export const internalMessages: InternalMessage[] = [];
+export const wecomCommandEndpoints: WecomCommandEndpoint[] = [];
+export const wecomMemberBindings: WecomMemberBinding[] = [];
+export const wecomCommandReceipts: WecomCommandReceipt[] = [];
 export const companyProfiles: CompanyProfile[] = [];
+export const documentLetterheads: DocumentLetterhead[] = [];
+export const documentStamps: DocumentStamp[] = [];
 
 export const users: User[] = [
   { id: "u_sales_shirley", name: "Shirley", email: "shirley@goodjob.com", password: "goodjob123", role: "sales", teamId: "europe", avatar: "SH", status: "active", authVersion: 1, outboundEmail: "", emailSenderName: "Shirley", emailSignature: "Best regards,\\nShirley\\nGoodJob Sales Team" },
@@ -109,7 +115,7 @@ export const customers: Customer[] = [
   { id: "c2", company: "Atlas Home Inc", country: "美国", contact: "Daniel", ownerId: "u_sales_shirley", teamId: "europe", stage: "样品", amount: 22000, health: 82, grade: "B", nextReminder: "今天 16:00", wecomBound: false, billingName: "Atlas Home Inc", billingAddress: "Seattle, WA, United States", documentContact: "Daniel / sourcing@atlas-home.example", defaultPortDischarge: "Seattle", defaultIncoterm: "CIF Destination Port", defaultPaymentTerm: "50% T/T deposit, 50% before shipment" },
   { id: "c3", company: "Kanto Retail", country: "日本", contact: "Sato", ownerId: "u_sales_mia", teamId: "europe", stage: "谈判", amount: 48000, health: 90, grade: "A", nextReminder: "明天 09:30", wecomBound: false, billingName: "Kanto Retail Co., Ltd.", billingAddress: "Tokyo, Japan", documentContact: "Sato / purchasing@kanto-retail.example", defaultPortDischarge: "Yokohama", defaultIncoterm: "FOB", defaultPaymentTerm: "T/T before shipment" },
   { id: "c4", company: "Al Noor Trading", country: "阿联酋", contact: "Hassan", ownerId: "u_sales_mia", teamId: "europe", stage: "已报价", amount: 18000, health: 45, grade: "D", nextReminder: "今天 10:30", wecomBound: false, billingName: "Al Noor Trading LLC", billingAddress: "Dubai, United Arab Emirates", documentContact: "Hassan / import@alnoor.example", defaultPortDischarge: "Jebel Ali", defaultIncoterm: "CIF Destination Port", defaultPaymentTerm: "30% deposit, balance before shipment" },
-  { id: "c5", company: "Evergreen GmbH", country: "德国", contact: "Anna", ownerId: "u_sales_shirley", teamId: "europe", stage: "成交", amount: 57000, health: 95, grade: "A", nextReminder: "7 天后复购", wecomBound: false, billingName: "Evergreen GmbH", billingAddress: "Hamburg, Germany", documentContact: "Anna / orders@evergreen.example", defaultPortDischarge: "Hamburg", defaultIncoterm: "FOB", defaultPaymentTerm: "30% T/T deposit, 70% before shipment" }
+  { id: "c5", company: "Evergreen GmbH", country: "德国", contact: "Anna", ownerId: "u_sales_shirley", teamId: "europe", stage: "成交", amount: 57000, health: 95, grade: "A", lifecycleStatus: "won", wonAt: "2026-07-10T05:30:00.000Z", wonByDealId: "d5", nextReminder: "7 天后复购", wecomBound: false, billingName: "Evergreen GmbH", billingAddress: "Hamburg, Germany", documentContact: "Anna / orders@evergreen.example", defaultPortDischarge: "Hamburg", defaultIncoterm: "FOB", defaultPaymentTerm: "30% T/T deposit, 70% before shipment" }
 ];
 
 export const customerActivities: CustomerActivity[] = [
@@ -225,6 +231,8 @@ export const knowledgeAssets: KnowledgeAsset[] = [
   { id: "k3", title: "CE 证书客户解释话术", category: "认证资料", status: "published", ownerId: "u_sales_shirley", version: "v1" }
 ];
 
+export const skillResources: SkillResource[] = [];
+
 export const exams: Exam[] = [
   { id: "e1", title: "LED 灯具基础", category: "产品知识", status: "published", passRate: 72, questionCount: 4, durationMinutes: 25, passScore: 80, targetRole: "sales", updatedAt: "2026-06-27T09:00:00.000Z" },
   { id: "e2", title: "认证资料专项", category: "认证资料", status: "draft", passRate: 64, questionCount: 3, durationMinutes: 20, passScore: 85, targetRole: "sales", updatedAt: "2026-06-27T09:10:00.000Z" },
@@ -257,6 +265,10 @@ export const examQuestionLinks: ExamQuestionLink[] = [
   { examId: "e3", questionId: "q10", sortOrder: 3 }
 ];
 
+export const examAssignments: ExamAssignment[] = [];
+
+export const examSnapshots: ExamSnapshot[] = [];
+
 export const examAttempts: ExamAttempt[] = [
   { id: "ea_seed_1", examId: "e1", userId: "u_sales_shirley", score: 75, passed: false, answers: { q1: 1, q2: 1, q3: 2, q4: 1 }, correctCount: 3, totalQuestions: 4, submittedAt: "2026-06-26T15:20:00.000Z" },
   { id: "ea_seed_2", examId: "e1", userId: "u_sales_mia", score: 100, passed: true, answers: { q1: 1, q2: 1, q3: 0, q4: 1 }, correctCount: 4, totalQuestions: 4, submittedAt: "2026-06-26T16:10:00.000Z" },
@@ -266,7 +278,7 @@ export const examAttempts: ExamAttempt[] = [
 export const ocrJobs: OcrJob[] = [
   {
     id: "ocr1",
-    status: "recognized",
+    status: "waiting",
     confidence: 0,
     ownerId: "u_sales_shirley",
     teamId: "europe",
@@ -620,7 +632,8 @@ export const problems: ProblemItem[] = [
     solution: "补发对应型号 CE 证书、测试报告摘要和新版交期承诺，并在邮件中拆分技术资料与商务确认。",
     nextAction: "今天 16:00 前发送资料包，明天上午企微二次确认。",
     dueAt: "今天 16:00",
-    createdAt: "2026-06-27T08:20:00.000Z"
+    createdAt: "2026-06-27T08:20:00.000Z",
+    resolvedAt: ""
   },
   {
     id: "p2",
@@ -635,7 +648,8 @@ export const problems: ProblemItem[] = [
     solution: "资料库只保留 V3 模板，企微群推送替换通知，并让考试系统加入报价模板题。",
     nextAction: "Mia 今日完成模板替换，Alex 明日晨会抽查。",
     dueAt: "明天 10:00",
-    createdAt: "2026-06-27T07:45:00.000Z"
+    createdAt: "2026-06-27T07:45:00.000Z",
+    resolvedAt: ""
   },
   {
     id: "p3",
@@ -650,7 +664,8 @@ export const problems: ProblemItem[] = [
     solution: "增加国家白名单校验和人工确认提示，低置信度字段默认不勾选。",
     nextAction: "已更新字段映射，下周复盘识别准确率。",
     dueAt: "已完成",
-    createdAt: "2026-06-26T10:30:00.000Z"
+    createdAt: "2026-06-26T10:30:00.000Z",
+    resolvedAt: "2026-06-27T03:20:00.000Z"
   }
 ];
 

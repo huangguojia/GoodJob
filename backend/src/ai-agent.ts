@@ -26,6 +26,7 @@ import {
 } from "./agent-skills.js";
 import { listAgentMemories, proposeAgentMemory, retrieveRelevantAgentMemories, setAgentMemoryStatus } from "./agent-memory.js";
 import { assertAgentApiToolRisk, classifyAgentApiRequest } from "./agent-api-policy.js";
+import { canSeeOwner, hasIamPermission } from "./auth.js";
 import { compileAgentKnowledgeEnvelope, createAgentKnowledgeDraft } from "./agent-knowledge.js";
 import {
   agentTurnDecisionModelSchema,
@@ -36,9 +37,10 @@ import {
   type AgentTurnDecision
 } from "./agent-turn-decision.js";
 import type { CrmStore } from "./store.js";
-import type { AgentMissionCheckpointRecord, AgentRunEventRecord, AgentRunRecord, AgentRunStatus, AgentRunStepRecord, AiModelConfig, Customer, CustomerActivity, Lead, Todo, User } from "./types.js";
+import type { AgentMissionCheckpointRecord, AgentRunEventRecord, AgentRunRecord, AgentRunStatus, AgentRunStepRecord, AiModelConfig, Customer, CustomerActivity, Lead, SessionUser, Todo, User } from "./types.js";
 
-export type AgentActor = Pick<User, "id" | "teamId" | "role">;
+export type AgentActor = Pick<User, "id" | "teamId" | "role"> & Partial<Pick<SessionUser,
+  "iamPermissions" | "iamRoleNames" | "iamSource" | "iamDataScope">>;
 
 export type AgentRisk = "read" | "draft" | "write" | "external";
 export type AgentStepStatus = "ready" | "needs_confirmation" | "queued" | "running" | "done" | "failed" | "skipped";
@@ -63,6 +65,8 @@ export interface AgentExecutionRuntime {
   getCommunicationInbox?: (user: AgentActor, input: Record<string, unknown>) => Promise<Record<string, unknown>>;
   listCrmApiCatalog?: (user: AgentActor, input: Record<string, unknown>) => Promise<Record<string, unknown>>;
   requestCrmApi?: (user: AgentActor, input: Record<string, unknown>, tool: "api.read" | "api.write" | "api.external", executionId: string) => Promise<Record<string, unknown>>;
+  listIntegrationTools?: (user: AgentActor) => Promise<Record<string, unknown>>;
+  requestIntegrationRead?: (user: AgentActor, input: Record<string, unknown>, executionId: string) => Promise<Record<string, unknown>>;
 }
 
 export interface AgentPlanContext {
@@ -175,7 +179,9 @@ const TOOL_RISKS: Record<string, AgentRisk> = {
   "api.catalog": "read",
   "api.read": "read",
   "api.write": "write",
-  "api.external": "external"
+  "api.external": "external",
+  "integration.catalog": "read",
+  "integration.read": "read"
 };
 
 const TOOL_GUIDANCE: Record<string, string> = {
@@ -222,7 +228,9 @@ const TOOL_GUIDANCE: Record<string, string> = {
   "api.catalog": "检索当前 Agent 可调用的真实 CRM 操作契约，返回 requestSchema、authorizationPolicy、completionEvidence、refreshView 和 executable。支持分页。账号、登录、个人资料、密钥和个人通讯绑定接口不会返回。input: {query?, method?, offset?, limit?}",
   "api.read": "调用目录中 executable=true 的只读业务接口。只能使用 GET，input: {method:'GET', path:'/api/...', query?:{}, headers?:{}}",
   "api.write": "调用目录中 executable=true 的 CRM 新增、修改或删除接口。严格按 requestSchema 生成 body，并按 authorizationPolicy 确认。input: {method:'POST|PUT|PATCH|DELETE', path:'/api/...', query?:{}, headers?:{'If-Match'?:string,'Idempotency-Key'?:string}, body?:{}}",
-  "api.external": "调用会向客户发送、访问外部来源或产生外部副作用的接口。必须冻结 method/path/headers/body 后确认，并核验 completionEvidence。input 同 api.write"
+  "api.external": "调用会向客户发送、访问外部来源或产生外部副作用的接口。必须冻结 method/path/headers/body 后确认，并核验 completionEvidence。input 同 api.write",
+  "integration.catalog": "列出当前账号经管理员审核并授权的外部只读工具稳定别名、输入 Schema 和证据要求，input: {}",
+  "integration.read": "通过已审核的稳定别名调用外部只读工具，input: {stableAlias,input:{...}}。必须先从 integration.catalog 取得别名和 Schema；成功结果必须包含 source 和 observedAt"
 };
 
 const CORE_AGENT_TOOL_REFS = [
@@ -230,7 +238,9 @@ const CORE_AGENT_TOOL_REFS = [
   "api.catalog",
   "api.read",
   "api.write",
-  "api.external"
+  "api.external",
+  "integration.catalog",
+  "integration.read"
 ];
 
 function skillAwareToolGuidance(goal: string, activeView = "", goalSpec?: AgentGoalSpec) {
@@ -283,16 +293,11 @@ function signStep(runId: string, stepId: string, tool: string, input: Record<str
 }
 
 function visibleCustomer(user: AgentActor, customer: Customer) {
-  if (customer.teamId !== user.teamId && user.role !== "super_admin") return false;
-  return user.role === "super_admin"
-    || user.role === "admin"
-    || user.role === "manager"
-    || customer.ownerId === user.id;
+  return hasIamPermission(user, "customer.read") && canSeeOwner(user, customer.ownerId, customer.teamId);
 }
 
 function writableCustomer(user: AgentActor, customer: Customer) {
-  return visibleCustomer(user, customer)
-    && (user.role === "super_admin" || user.role === "admin" || customer.ownerId === user.id);
+  return hasIamPermission(user, "customer.update") && canSeeOwner(user, customer.ownerId, customer.teamId);
 }
 
 function visibleCustomers(store: CrmStore, user: AgentActor) {
@@ -300,11 +305,7 @@ function visibleCustomers(store: CrmStore, user: AgentActor) {
 }
 
 function visibleLead(user: AgentActor, lead: Lead) {
-  if (lead.teamId !== user.teamId && user.role !== "super_admin") return false;
-  return user.role === "super_admin"
-    || user.role === "admin"
-    || user.role === "manager"
-    || lead.ownerId === user.id;
+  return hasIamPermission(user, "lead.read") && canSeeOwner(user, lead.ownerId, lead.teamId);
 }
 
 function visibleLeads(store: CrmStore, user: AgentActor) {
@@ -433,7 +434,7 @@ export function normalizeAgentNavigationView(value: unknown) {
     problems: "problems",
     "import-export": "imports",
     configuration: "settings",
-    research: "ai-research"
+    research: "ai-research",
   };
   const normalized = aliases[requested] || requested;
   return AGENT_NAVIGATION_VIEWS.has(normalized) ? normalized : "";
@@ -559,7 +560,7 @@ function hasDelegatedCustomerCreateFallback(goal: string, intent: DeterministicB
 }
 
 function canAgentApproveTradeDocuments(user: AgentActor) {
-  return ["manager", "admin", "super_admin"].includes(user.role);
+  return hasIamPermission(user, "document.approve");
 }
 
 function extractBusinessValue(goal: string, patterns: RegExp[]) {
@@ -798,6 +799,15 @@ function fallbackSteps(goal: string, context: AgentPlanContext = {}): Array<z.in
   const current = normalizedContext(context);
   const entityType = current.selectedLeadId ? "lead" : "customer";
   const entityId = current.selectedLeadId || current.selectedCustomerId;
+  const explicitIntegration = goal.match(/^\s*(?:MCP|外部工具)\s+([a-z][a-z0-9._:-]{2,119})(?:\s+([\s\S]+))?\s*$/iu);
+  if (explicitIntegration?.[1]) {
+    try {
+      const input = explicitIntegration[2]?.trim() ? JSON.parse(explicitIntegration[2]) as Record<string, unknown> : {};
+      return [{ tool: "integration.read", title: `调用外部只读工具 ${explicitIntegration[1]}`, input: { stableAlias: explicitIntegration[1], input } }];
+    } catch {
+      return [{ tool: "integration.catalog", title: "读取已授权外部工具目录", input: {} }];
+    }
+  }
   const explicitApi = goal.match(/^\s*(GET|POST|PUT|PATCH|DELETE)\s+(\/api\/[A-Za-z0-9_./:-]+)(?:\s+([\s\S]+))?\s*$/iu);
   if (explicitApi?.[1] && explicitApi[2]) {
     try {
@@ -833,6 +843,9 @@ function fallbackSteps(goal: string, context: AgentPlanContext = {}): Array<z.in
   }
   if (/(记住|记下来|以后都|我的偏好)/u.test(lower)) {
     return [{ tool: "memory.propose", title: "保存为待确认的个人业务记忆", input: { type: "user_preference", scope: "personal", title: goal.slice(0, 80), content: goal.slice(0, 500), sourceType: "agent", sourceId: "conversation", confidence: 80 } }];
+  }
+  if (/(mcp|外部工具|集成工具)/iu.test(lower)) {
+    return [{ tool: "integration.catalog", title: "读取已授权外部工具目录", input: {} }];
   }
   if (/(接口|api)/iu.test(lower)) {
     const query = /(客户)/u.test(lower) ? "customers"
@@ -2190,7 +2203,7 @@ export async function createAgentPlan(
 
 function requireRun(store: CrmStore, runId: string, user: AgentActor, allowExpired = false) {
   const run = hydrateAgentRun(store, runId);
-  if (!run || run.ownerId !== user.id || (user.role !== "super_admin" && run.teamId !== user.teamId)) {
+  if (!run || run.ownerId !== user.id || run.teamId !== user.teamId) {
     throw new Error("Agent 运行不存在");
   }
   if (!allowExpired && new Date(run.expiresAt).getTime() <= Date.now()) throw new Error("Agent 运行已过期，请重新生成计划");
@@ -2209,6 +2222,16 @@ async function executeStep(
   runtime: AgentExecutionRuntime = {}
 ) {
   const input = step.input;
+  if (step.tool === "integration.catalog") {
+    if (!runtime.listIntegrationTools) throw new Error("外部工具目录尚未连接");
+    return await runtime.listIntegrationTools(user);
+  }
+  if (step.tool === "integration.read") {
+    if (!asText(input.stableAlias)) throw new Error("外部工具调用缺少稳定别名");
+    if (!input.input || typeof input.input !== "object" || Array.isArray(input.input)) throw new Error("外部工具调用参数必须是对象");
+    if (!runtime.requestIntegrationRead) throw new Error("外部工具安全执行网关尚未连接");
+    return await runtime.requestIntegrationRead(user, input, step.id);
+  }
   if (step.tool === "api.catalog") {
     if (!runtime.listCrmApiCatalog) throw new Error("CRM API 目录尚未连接");
     return await runtime.listCrmApiCatalog(user, input);
@@ -2223,7 +2246,7 @@ async function executeStep(
   if (step.tool === "ui.navigate") {
     const view = normalizeAgentNavigationView(input.view);
     if (!view) throw new Error("Agent 返回了未知页面，请重新说明要打开的 CRM 模块");
-    if (view === "settings" && user.role === "sales") throw new Error("当前账号无权访问系统设置");
+    if (view === "settings" && !hasIamPermission(user, "system.settings.manage")) throw new Error("当前账号无权访问系统设置");
     const route = AGENT_NAVIGATION_CATALOG.find((item) => item.view === view);
     const matchScore = Math.max(0, Math.min(100, Number(input.matchScore || 0)));
     return {
@@ -2396,6 +2419,7 @@ async function executeStep(
     const action = step.tool === "maintenance.pause_watch" ? "pause" : step.tool === "maintenance.resume_watch" ? "resume" : "cancel";
     return await runtime.controlCustomerMaintenanceWatch(user, input, action);
   }
+
   if (step.tool === "research.run_background") {
     if (!runtime.runBackgroundResearch) throw new Error("AI 背调执行器尚未启动");
     return await runtime.runBackgroundResearch(user, input);
@@ -3251,7 +3275,7 @@ export function getAgentRun(store: CrmStore, runId: string, user: AgentActor) {
 export function listAgentRuns(store: CrmStore, user: AgentActor, limit = 20, conversationId = "") {
   return store.agentRuns
     .filter((item) => item.ownerId === user.id
-      && (user.role === "super_admin" || item.teamId === user.teamId)
+      && item.teamId === user.teamId
       && (!conversationId || item.conversationId === conversationId))
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .slice(0, Math.max(1, Math.min(100, limit)))
@@ -3262,7 +3286,7 @@ export function listAgentRuns(store: CrmStore, user: AgentActor, limit = 20, con
 export function listAgentMissionCheckpoints(store: CrmStore, user: AgentActor, runId: string, limit = 30) {
   requireRun(store, runId, user, true);
   return store.agentMissionCheckpoints
-    .filter((item) => item.runId === runId && item.ownerId === user.id && (user.role === "super_admin" || item.teamId === user.teamId))
+    .filter((item) => item.runId === runId && item.ownerId === user.id && item.teamId === user.teamId)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .slice(0, Math.max(1, Math.min(80, limit)))
     .map((item) => ({
@@ -3282,7 +3306,7 @@ export async function restoreAgentMissionCheckpoint(store: CrmStore, user: Agent
   const checkpoint = store.agentMissionCheckpoints.find((item) => item.id === checkpointId
     && item.runId === runId
     && item.ownerId === user.id
-    && (user.role === "super_admin" || item.teamId === user.teamId));
+    && item.teamId === user.teamId);
   if (!checkpoint) throw new Error("Mission 检查点不存在或无权访问");
   if (current.steps.some((item) => item.risk === "external" && ["queued", "running", "done"].includes(item.status))) {
     throw new Error("Mission 已存在外部动作，禁止回退以避免重复发送");
@@ -3337,7 +3361,7 @@ export async function restoreAgentMissionCheckpoint(store: CrmStore, user: Agent
 
 export function listAgentConversations(store: CrmStore, user: AgentActor, limit = 30) {
   const groups = new Map<string, AgentRunRecord[]>();
-  for (const item of store.agentRuns.filter((run) => run.ownerId === user.id && (user.role === "super_admin" || run.teamId === user.teamId))) {
+  for (const item of store.agentRuns.filter((run) => run.ownerId === user.id && run.teamId === user.teamId)) {
     const conversationId = item.conversationId || `legacy_${item.id}`;
     const group = groups.get(conversationId) || [];
     group.push(item);

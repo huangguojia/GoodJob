@@ -178,10 +178,13 @@ export function deterministicAgentTurnDecision(
   } else if (/^\s*GET\s+\/api\//iu.test(message)) {
     speechAct = "query_data";
     reason = "本轮明确要求读取 API 数据";
+  } else if (/^\s*(?:MCP|外部工具)\s+[a-z][a-z0-9._:-]{2,119}/iu.test(message)) {
+    speechAct = "query_data";
+    reason = "本轮明确要求调用已授权外部只读工具";
   } else if (actionRequest || (/^\s*(?:GET|POST|PUT|PATCH|DELETE)\s+\/api\//iu.test(message) && !/^\s*GET/iu.test(message))) {
     speechAct = "execute";
     reason = "本轮明确要求系统执行操作";
-  } else if (/(?:查询|查一下|看看|查看|读取|检查|分析|列出|有哪些|多少|当前|最近|只读).{0,30}(?:客户|线索|商机|待办|数据|记录|情况|进度|快照|消息|会话|Communication|WhatsApp|邮件|单据|报表)/iu.test(message)) {
+  } else if (/(?:查询|查一下|看看|查看|读取|检查|分析|列出|有哪些|多少|当前|最近|只读).{0,30}(?:客户|线索|商机|待办|数据|记录|情况|进度|快照|消息|会话|Communication|WhatsApp|邮件|单据|报表|MCP|外部工具|集成工具)/iu.test(message)) {
     speechAct = "query_data";
     reason = "本轮要求读取真实业务数据";
   } else {

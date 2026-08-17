@@ -46,6 +46,25 @@ async function countDemoRows(database: Database): Promise<Omit<DemoSeedReport, "
 }
 
 export async function seed(database: Database, _repository: Repository, _config: AppConfig): Promise<void> {
+  const timestamp = databaseTimestamp(new Date());
+  await database.query(
+    database.kind === "mysql"
+      ? `INSERT IGNORE INTO integration_preferences(id,strategy,default_provider,updated_at)
+         VALUES('default','free_first','baileys',$1)`
+      : `INSERT INTO integration_preferences(id,strategy,default_provider,updated_at)
+         VALUES('default','free_first','baileys',$1)
+         ON CONFLICT(id) DO NOTHING`,
+    [timestamp]
+  );
+  await database.query(
+    database.kind === "mysql"
+      ? `INSERT IGNORE INTO media_retention_settings(id,mode,retention_days,updated_at)
+         VALUES('default','immediate',0,$1)`
+      : `INSERT INTO media_retention_settings(id,mode,retention_days,updated_at)
+         VALUES('default','immediate',0,$1)
+         ON CONFLICT(id) DO NOTHING`,
+    [timestamp]
+  );
   await database.query(
     database.kind === "mysql"
       ? `INSERT IGNORE INTO translation_preferences(id,auto_translate,target_language,provider_id,crm_auto_create,updated_at)
@@ -53,7 +72,7 @@ export async function seed(database: Database, _repository: Repository, _config:
       : `INSERT INTO translation_preferences(id,auto_translate,target_language,provider_id,crm_auto_create,updated_at)
          VALUES('default',0,'zh-CN',NULL,0,$1)
          ON CONFLICT(id) DO NOTHING`,
-    [databaseTimestamp(new Date())]
+    [timestamp]
   );
 }
 

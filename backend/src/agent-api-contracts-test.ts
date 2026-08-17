@@ -85,6 +85,16 @@ assert.throws(() => assertAgentOperationInput(shipmentUpsert, {
   items: [{ productName: "Pressure gauge", teamId: "forged" }]
 }), /不在接口契约/u);
 
+for (const path of ["/api/tools/shipments/shipment_1/sync", "/api/tools/shipments/sync-all"]) {
+  const risk = classifyAgentApiRequest("POST", path);
+  const contractPath = path.endsWith("/sync-all") ? path : "/api/tools/shipments/{id}/sync";
+  const contract = agentApiOperationContract("POST", contractPath, undefined, risk === "draft" ? "read" : risk);
+  assert.equal(risk, "external");
+  assert.equal(contract.authorizationPolicy, "frozen_payload_confirmation");
+  assert.doesNotThrow(() => assertAgentOperationInput(contract, {}));
+  assert.throws(() => assertAgentOperationInput(contract, { teamId: "forged" }), /不在接口契约/u);
+}
+
 const shipmentOcrRisk = classifyAgentApiRequest("POST", "/api/tools/shipments/ocr");
 const shipmentOcr = agentApiOperationContract(
   "POST",

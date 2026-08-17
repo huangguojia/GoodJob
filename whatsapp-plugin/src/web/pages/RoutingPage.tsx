@@ -14,7 +14,7 @@ import {
 import type { RoutingResolution, RoutingRule } from "@shared/types";
 import { api } from "../api";
 import { queryKeys, useAccounts } from "../data";
-import { EmptyState, Spinner, StatusBadge } from "../components/ui";
+import { ConfirmModal, EmptyState, SkeletonRows, Spinner, StatusBadge } from "../components/ui";
 
 interface RoutingRuleInput {
   name: string;
@@ -43,6 +43,7 @@ export function RoutingPage() {
   const accountsQuery = useAccounts();
   const rulesQuery = useQuery({ queryKey: queryKeys.routingRules, queryFn: api.routingRules });
   const [editingRule, setEditingRule] = useState<RoutingRule | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<RoutingRule | null>(null);
   const [testResult, setTestResult] = useState<RoutingResolution>();
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +66,7 @@ export function RoutingPage() {
       setError(null);
       setFeedback("路由规则已删除，旧账号现在可以继续停用或删除。");
       setEditingRule(null);
+      setDeleteCandidate(null);
       void queryClient.invalidateQueries({ queryKey: queryKeys.routingRules });
     },
     onError: (reason) => setError(reason.message)
@@ -106,7 +108,11 @@ export function RoutingPage() {
       <div className="routing-layout">
         <section className="settings-section">
           <header><Route size={18} /><div><h2>路由规则</h2><p>优先级数值越小越先匹配；已有会话不会因规则变更静默换号。</p></div></header>
-          {(rulesQuery.data?.length ?? 0) === 0 ? (
+          {rulesQuery.isLoading ? (
+            <SkeletonRows rows={3} />
+          ) : rulesQuery.isError ? (
+            <div className="empty-inline"><span>路由规则加载失败</span><button className="button secondary compact" onClick={() => void rulesQuery.refetch()}>重新加载</button></div>
+          ) : (rulesQuery.data?.length ?? 0) === 0 ? (
             <EmptyState icon={<Network size={22} />} title="暂无路由规则" description="在右侧创建第一条规则。" />
           ) : (
             <div className="rule-list">
@@ -118,7 +124,7 @@ export function RoutingPage() {
                   <span className={rule.enabled ? "linked-pill" : "provider-label"}>{rule.enabled ? <><CheckCircle2 size={13} /> 启用</> : "停用"}</span>
                   <div className="row-actions rule-actions">
                     <button className="icon-button" title="编辑路由规则" onClick={() => setEditingRule(rule)}><Pencil size={15} /></button>
-                    <button className="icon-button danger" title="删除路由规则" disabled={remove.isPending} onClick={() => window.confirm(`确认删除路由规则“${rule.name}”？`) && remove.mutate(rule.id)}><Trash2 size={15} /></button>
+                    <button className="icon-button danger" title="删除路由规则" aria-label={`删除路由规则 ${rule.name}`} disabled={remove.isPending} onClick={() => { remove.reset(); setDeleteCandidate(rule); }}><Trash2 size={15} /></button>
                   </div>
                 </div>
               ))}
@@ -168,6 +174,15 @@ export function RoutingPage() {
           </div>
         )}
       </section>
+      {deleteCandidate && <ConfirmModal
+        title="删除路由规则"
+        message={`将删除路由规则“${deleteCandidate.name}”。`}
+        consequences={["新建会话将不再使用这条匹配规则", "已有会话的账号绑定不会改变"]}
+        confirmLabel="删除规则"
+        pending={remove.isPending}
+        onClose={() => setDeleteCandidate(null)}
+        onConfirm={() => remove.mutate(deleteCandidate.id)}
+      />}
     </div>
   );
 }

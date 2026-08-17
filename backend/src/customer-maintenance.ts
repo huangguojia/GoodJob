@@ -21,7 +21,7 @@ const watchInputSchema = z.object({
 
 function canAccess(watch: CustomerMaintenanceWatch, user: AgentActor) {
   return watch.ownerId === user.id
-    && (user.role === "super_admin" || watch.teamId === user.teamId);
+    && watch.teamId === user.teamId;
 }
 
 function localMinuteText(date = new Date()) {
@@ -49,6 +49,7 @@ function appendMissionEvent(store: CrmStore, watch: CustomerMaintenanceWatch, me
 export function scanCustomerMaintenance(store: CrmStore, watch: CustomerMaintenanceWatch, now = new Date()) {
   const inactivityBoundary = now.getTime() - watch.rules.inactivityDays * 86_400_000;
   const findings: CustomerMaintenanceFinding[] = [];
+  const owner = store.users.find((item) => item.id === watch.ownerId && item.teamId === watch.teamId);
   for (const customer of store.customers.filter((item) =>
     item.ownerId === watch.ownerId
     && item.teamId === watch.teamId

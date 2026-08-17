@@ -303,8 +303,8 @@ export async function migratePostgresToMysql(options: MigrationOptions): Promise
     await prepareMysqlCommunicationTarget(target);
     await source.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
     const sourceVersions = await source.query<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version");
-    if (sourceVersions.rows.map((row) => Number(row.version)).join(",") !== "1,2,3,4,5") {
-      throw new Error("PostgreSQL source is not on Communication schema versions 1 through 5");
+    if (sourceVersions.rows.map((row) => Number(row.version)).join(",") !== "1,2,3,4,5,6,7") {
+      throw new Error("PostgreSQL source is not on Communication schema versions 1 through 7");
     }
 
     const sourceReader: CommunicationSourceReader = {

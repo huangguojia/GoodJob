@@ -1,4 +1,4 @@
-import { app } from "./server.js";
+import { app, setBusinessCardRecognizerForTest } from "./server.js";
 import { decryptAgentJobPayload } from "./agent-job-security.js";
 import { cancelAgentJob, completeAgentJob, enqueueAgentJob, failAgentJob, retryAgentJob, startAgentJob } from "./agent-jobs.js";
 import { decryptProviderConfiguration } from "./credential-security.js";
@@ -333,26 +333,94 @@ try {
   if (!managerTodosAfterBoundaryDelete.json.todos.some((todo: { id: string }) => todo.id === managerBoundaryTodo.json.todo.id)) throw new Error("customer delete must not remove manager personal todo");
   if (salesTodosAfterBoundaryDelete.json.todos.some((todo: { id: string }) => todo.id === salesBoundaryTodo.json.todo.id)) throw new Error("customer delete should remove current user's related todo");
 
-  const recognizedOcr = await request("/api/tools/ocr/jobs/ocr1/recognize", {
+  const invalidOcrImage = await request("/api/tools/ocr/jobs/current/image", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({
-      confidence: 92,
-      company: "Example Lighting GmbH",
-      contact: "Alex Buyer",
-      email: "buyer@example-lighting.example",
-      country: "德国"
+      image: "data:image/png;base64,bm90LWEtcmVhbC1wbmc=",
+      mime: "image/png",
+      fileName: "fake.png"
     })
   });
-  if (!recognizedOcr.response.ok) throw new Error("ocr recognize failed");
-  const ocr = await request("/api/tools/ocr/jobs/ocr1/sync-lead", {
+  if (invalidOcrImage.response.status !== 400) throw new Error("fake ocr image must be rejected");
+
+  const validPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+  const uploadedOcr = await request("/api/tools/ocr/jobs/current/image", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({
+      image: `data:image/png;base64,${validPng}`,
+      mime: "image/png",
+      fileName: "business-card.png"
+    })
+  });
+  if (!uploadedOcr.response.ok
+    || uploadedOcr.json.job.status !== "uploaded"
+    || !uploadedOcr.json.job.hasImage) {
+    throw new Error("ocr image upload failed");
+  }
+  const privateOcrImage = await fetch(`${baseUrl}/api/tools/ocr/jobs/current/image`, {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!privateOcrImage.ok || privateOcrImage.headers.get("content-type") !== "image/png") {
+    throw new Error("ocr private image read failed");
+  }
+  const anonymousOcrImage = await fetch(`${baseUrl}/api/tools/ocr/jobs/current/image`);
+  if (anonymousOcrImage.status !== 401) throw new Error("ocr image must require authentication");
+  const crossOwnerOcrImage = await fetch(`${baseUrl}/api/tools/ocr/jobs/${encodeURIComponent(uploadedOcr.json.job.id)}/image`, {
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (crossOwnerOcrImage.status !== 404) throw new Error("ocr image must be personal isolated");
+  const missingVisionConfig = await request("/api/tools/ocr/jobs/current/recognize-image", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: "{}"
+  });
+  if (missingVisionConfig.response.status !== 422
+    || !String(missingVisionConfig.json.message || "").includes("视觉模型")) {
+    throw new Error("ocr missing vision config must be explicit");
+  }
+
+  const ocrAiConfig = getStore().aiModelConfigs.find((item) => item.ownerId === "u_sales_shirley");
+  if (!ocrAiConfig) throw new Error("ocr ai config fixture missing");
+  const originalOcrConfig = { enabled: ocrAiConfig.enabled, apiKey: ocrAiConfig.apiKey };
+  ocrAiConfig.enabled = true;
+  ocrAiConfig.apiKey = "ocr-self-test-key";
+  setBusinessCardRecognizerForTest(async () => ({
+    confidence: 92,
+    fields: {
+      company: "Example Lighting GmbH",
+      contact: "Alex Buyer",
+      title: "Purchasing Manager",
+      email: "buyer@example-lighting.example",
+      whatsapp: "+49 123 456",
+      wechat: "",
+      phone: "+49 123 456",
+      country: "德国",
+      city: "Hamburg"
+    }
+  }));
+  const recognizedOcr = await request("/api/tools/ocr/jobs/current/recognize-image", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: "{}"
+  });
+  setBusinessCardRecognizerForTest(null);
+  ocrAiConfig.enabled = originalOcrConfig.enabled;
+  ocrAiConfig.apiKey = originalOcrConfig.apiKey;
+  if (!recognizedOcr.response.ok
+    || recognizedOcr.json.job.fields.company !== "Example Lighting GmbH"
+    || recognizedOcr.json.job.confidence !== 92) {
+    throw new Error("ocr image recognition failed");
+  }
+  const ocr = await request("/api/tools/ocr/jobs/current/sync-lead", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` }
   });
   if (!ocr.response.ok || ocr.json.lead.company !== "Example Lighting GmbH") {
     throw new Error("ocr sync failed");
   }
-  const ocrRepeat = await request("/api/tools/ocr/jobs/ocr1/sync-lead", {
+  const ocrRepeat = await request("/api/tools/ocr/jobs/current/sync-lead", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` }
   });
@@ -373,6 +441,15 @@ try {
     body: JSON.stringify({ confidence: 101, company: "x".repeat(201), unexpected: "must be rejected" })
   });
   if (invalidOcr.response.status !== 400) throw new Error("ocr recognition input must be bounded");
+  const removedOcr = await request("/api/tools/ocr/jobs/current/image", {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!removedOcr.response.ok
+    || removedOcr.json.job.hasImage
+    || removedOcr.json.job.status !== "waiting") {
+    throw new Error("ocr image remove failed");
+  }
 
   const aiConfig = await request("/api/tools/ai-config", {
     method: "POST",
@@ -597,9 +674,23 @@ try {
   const convertedLeadDelete = await request(`/api/leads/${externalLeadFirst.json.lead.id}`, {
     method: "DELETE",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ reason: "已转客户线索不应允许删除" })
+    body: JSON.stringify({ reason: "已完成转化，清理线索工作区" })
   });
-  if (convertedLeadDelete.response.status !== 400) throw new Error("converted lead must not be deleted");
+  if (!convertedLeadDelete.response.ok || !convertedLeadDelete.json.lead?.deletedAt) {
+    throw new Error("converted lead should move to trash");
+  }
+  const convertedCustomerAfterLeadDelete = getStore().customers.find((customer) => customer.id === matchingCustomer.json.customer.id);
+  const convertedDealAfterLeadDelete = getStore().deals.find((deal) => deal.id === existingConversion.json.deal.id);
+  if (!convertedCustomerAfterLeadDelete || !convertedDealAfterLeadDelete) {
+    throw new Error("deleting a converted lead must preserve customer and deal");
+  }
+  const convertedLeadPermanentDelete = await request(`/api/leads/${externalLeadFirst.json.lead.id}/permanent`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (convertedLeadPermanentDelete.response.status !== 400) {
+    throw new Error("converted lead source record must not be permanently deleted");
+  }
 
   const customerOnlyLead = await request("/api/leads", {
     method: "POST",
@@ -1425,7 +1516,7 @@ try {
       || unavailableHunterStat?.errorCode !== "PROVIDER_CONNECTION_INVALID"
       || unavailableHunterStat?.retryable !== false
       || !unavailableHunterLog) {
-      throw new Error("unavailable selected provider must return structured feedback and an audit record");
+      throw new Error("unavailable selected contact provider must return structured feedback and an audit record");
     }
 
     const unavailableAiSearch = await request("/api/lead-finder/search", {
@@ -1575,23 +1666,37 @@ try {
       throw new Error("provider search evidence and logging contract failed");
     }
 
+    if (enterpriseWebsiteRequestsDuringProviderSearch > 12) {
+      throw new Error("automatic foreign website contact verification must remain low frequency");
+    }
     hunterRateLimited = true;
-    const rateLimitedProviderSearch = await runProviderSearch();
-    const hunterRateLimitStat = rateLimitedProviderSearch.json.sourceStats
-      ?.find((item: { id?: string }) => item.id === "hunter");
-    if (!rateLimitedProviderSearch.response.ok
-      || hunterRateLimitStat?.errorCode !== "PROVIDER_RATE_LIMITED"
-      || hunterRateLimitStat?.retryable !== true
-      || !hunterRateLimitStat?.retryAfterAt) {
-      throw new Error("provider rate limit feedback must include retry timing");
+    const previousContactAttemptId = getStore().websiteOpportunities
+      .find((item) => item.id === firstProviderOpportunity.id)
+      ?.contactEnrichmentAttempts?.[0]?.id;
+    const rateLimitedProviderSearch = await request(`/api/prospect-list/${firstProviderOpportunity.id}/contact-enrichment`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${salesToken}` },
+      body: JSON.stringify({ force: true })
+    });
+    const rateLimitDeadline = Date.now() + 2_000;
+    let hunterRateLimitSource;
+    do {
+      const candidate = getStore().websiteOpportunities.find((item) => item.id === firstProviderOpportunity.id);
+      const attempt = candidate?.contactEnrichmentAttempts?.find((item) => item.id !== previousContactAttemptId);
+      hunterRateLimitSource = attempt?.sources.find((source) => source.sourceId === "hunter");
+      if (hunterRateLimitSource?.status === "failed") break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } while (Date.now() < rateLimitDeadline);
+    if (rateLimitedProviderSearch.response.status !== 202
+      || hunterRateLimitSource?.errorCode !== "PROVIDER_RATE_LIMITED"
+      || hunterRateLimitSource?.retryable !== true
+      || !hunterRateLimitSource?.retryAfterAt) {
+      throw new Error("background contact provider rate limit feedback must include retry timing");
     }
     hunterRateLimited = false;
   } finally {
     setProviderHttpTestTransport(null);
     globalThis.fetch = originalFetch;
-  }
-  if (enterpriseWebsiteRequestsDuringProviderSearch !== 0) {
-    throw new Error("provider search must make zero enterprise webpage requests");
   }
   await qualifyCandidateForSelfTest(providerOpportunity.id);
   const providerLeadSync = await request("/api/tools/website-scrape/sync-opportunities", {
@@ -1626,9 +1731,16 @@ try {
   const shirleyProviderLogs = await request(`/api/lead-finder/provider-request-logs?runId=${providerSearch.json.runId}&limit=20`, {
     headers: { authorization: `Bearer ${salesToken}` }
   });
-  const loggedRequests = shirleyProviderLogs.json.logs || [];
+  const loggedRequests = (shirleyProviderLogs.json.logs || []).filter((item: any) => item.endpointCode === "search");
+  const hunterProviderLogs = await request("/api/lead-finder/provider-request-logs?provider=hunter&limit=20", {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  const hunterLoggedRequest = (hunterProviderLogs.json.logs || []).find((item: any) =>
+    item.providerId === "hunter" && item.endpointCode === "enrich" && item.httpStatus === 200
+  );
   if (!shirleyProviderLogs.response.ok
-    || loggedRequests.length !== 2
+    || !hunterProviderLogs.response.ok
+    || loggedRequests.length < 1
     || !loggedRequests.every((item: any) =>
       item.runId === providerSearch.json.runId
       && item.ownerId === "u_sales_shirley"
@@ -1641,7 +1753,7 @@ try {
       && item.responseSize > 0
     )
     || !loggedRequests.some((item: any) => item.providerId === "serper" && item.endpointCode === "search")
-    || !loggedRequests.some((item: any) => item.providerId === "hunter" && item.endpointCode === "enrich")) {
+    || !hunterLoggedRequest) {
     throw new Error("provider request logs are incomplete");
   }
   const connectionTestLogs = await request("/api/lead-finder/provider-request-logs?provider=serper&limit=20", {
@@ -1993,14 +2105,14 @@ try {
     headers: { authorization: `Bearer ${managerToken}` },
     body: JSON.stringify({ customerId: "c1", title: "自动化新增商机", product: "自动化LED 工程灯", quantity: 10, unitPrice: 1200, currency: "USD", nextAction: "确认采购清单", nextActionAt: "2026-07-12", expectedCloseAt: "2026-08-15" })
   });
-  if (!newDeal.response.ok || newDeal.json.deal.title !== "自动化新增商机" || newDeal.json.deal.amount !== 12000) throw new Error("deal create failed");
+  if (!newDeal.response.ok || newDeal.json.deal?.title !== "自动化新增商机" || newDeal.json.deal?.amount !== 12000) throw new Error(`deal create failed: ${newDeal.response.status} ${JSON.stringify(newDeal.json)}`);
 
   const editedDeal = await request(`/api/deals/${newDeal.json.deal.id}`, {
     method: "PATCH",
     headers: { authorization: `Bearer ${managerToken}` },
-    body: JSON.stringify({ customerId: "c1", title: "自动化编辑商机", product: "自动化智能家居产品", quantity: 12, unitPrice: 900, currency: "USD", nextAction: "发送修订报价", nextActionAt: "2026-07-13", expectedCloseAt: "2026-08-15" })
+    body: JSON.stringify({ customerId: "c1", title: "自动化编辑商机", product: "自动化智能家居产品、配套控制器", quantity: 17, unitPrice: 0, items: [{ id: "deal_test_item_1", product: "自动化智能家居产品", model: "GJ-A", quantity: 12, unitPrice: 900 }, { id: "deal_test_item_2", product: "配套控制器", model: "CTRL-1", quantity: 5, unitPrice: 100 }], currency: "USD", nextAction: "发送修订报价", nextActionAt: "2026-07-13", expectedCloseAt: "2026-08-15" })
   });
-  if (!editedDeal.response.ok || editedDeal.json.deal.product !== "自动化智能家居产品" || editedDeal.json.deal.amount !== 10800) throw new Error("deal edit failed");
+  if (!editedDeal.response.ok || editedDeal.json.deal.items?.length !== 2 || editedDeal.json.deal.amount !== 11300) throw new Error("multi-product deal edit failed");
 
   const crossDealEdit = await request(`/api/deals/${newDeal.json.deal.id}`, {
     method: "PATCH",
@@ -2033,6 +2145,9 @@ try {
     if (!wonDeal.response.ok) throw new Error(`deal stage failed: ${targetStage}`);
   }
   if (!wonDeal.response.ok || wonDeal.json.deal.stage !== "成交") throw new Error("deal won stage failed");
+  if (wonDeal.json.customer?.lifecycleStatus !== "won" || wonDeal.json.customer?.hasWonDeal !== true || wonDeal.json.customer?.wonByDealId !== newDeal.json.deal.id) {
+    throw new Error("won deal must persistently convert its customer to won");
+  }
   const lostAfterWon = await request(`/api/deals/${newDeal.json.deal.id}/stage`, {
     method: "PATCH",
     headers: { authorization: `Bearer ${managerToken}` },
@@ -2454,7 +2569,7 @@ try {
     method: "POST",
     headers: { authorization: `Bearer ${managerToken}` }
   });
-  if (managerReminderRun.response.status !== 403) throw new Error("manager must not execute salesperson personal reminder rule");
+  if (managerReminderRun.response.status !== 404) throw new Error("manager must not execute salesperson personal reminder rule");
   const reminderRunAgain = await request(`/api/reminders/${reminder.json.reminder.id}/run`, {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` }
@@ -2488,12 +2603,19 @@ try {
   });
   if (!reminderToggle.response.ok || reminderToggle.json.reminder.enabled !== false || reminderToggle.json.reminder.status !== "disabled") throw new Error("reminder toggle failed");
 
+  const todoTriggerKey = `self-test:todo-idempotency:${Date.now()}`;
   const todo = await request("/api/todos", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ title: "可撤回待办", type: "other", priority: "normal", dueAt: "现在", related: "自测" })
+    body: JSON.stringify({ title: "可撤回待办", type: "other", priority: "normal", dueAt: "现在", related: "自测", triggerKey: todoTriggerKey })
   });
   if (!todo.response.ok || todo.json.todo.done !== false) throw new Error("todo create failed");
+  const duplicateTodo = await request("/api/todos", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ title: "不应重复创建", type: "other", priority: "high", triggerKey: todoTriggerKey })
+  });
+  if (!duplicateTodo.response.ok || duplicateTodo.json.todo.id !== todo.json.todo.id || duplicateTodo.json.deduplicated !== true) throw new Error("todo idempotent create failed");
 
   const todoDone = await request(`/api/todos/${todo.json.todo.id}`, {
     method: "PATCH",
@@ -2550,21 +2672,33 @@ try {
     headers: { authorization: `Bearer ${managerToken}` },
     body: JSON.stringify({
       title: "自动化问题清单",
-      category: "报价跟进",
       severity: "high",
       rootCause: "客户审批缺少资料",
       solution: "补齐证书并二次确认",
       nextAction: "今天完成复盘"
     })
   });
-  if (!problem.response.ok || problem.json.problem.title !== "自动化问题清单") throw new Error("problem create failed");
+  if (!problem.response.ok || problem.json.problem.title !== "自动化问题清单" || problem.json.problem.category !== "其它") throw new Error("problem create or default category failed");
+
+  const editedProblem = await request(`/api/problems/${problem.json.problem.id}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({ title: "自动化问题清单（已编辑）", solution: "补齐证书、更新报价并二次确认" })
+  });
+  if (!editedProblem.response.ok || editedProblem.json.problem.title !== "自动化问题清单（已编辑）") throw new Error("problem edit failed");
 
   const resolvedProblem = await request(`/api/problems/${problem.json.problem.id}/status`, {
     method: "PATCH",
     headers: { authorization: `Bearer ${managerToken}` },
     body: JSON.stringify({ status: "resolved" })
   });
-  if (!resolvedProblem.response.ok || resolvedProblem.json.problem.status !== "resolved") throw new Error("problem status failed");
+  if (!resolvedProblem.response.ok || resolvedProblem.json.problem.status !== "resolved" || !resolvedProblem.json.problem.resolvedAt) throw new Error("problem status or resolved time failed");
+
+  const deletedProblem = await request(`/api/problems/${problem.json.problem.id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${managerToken}` }
+  });
+  if (!deletedProblem.response.ok || deletedProblem.json.ok !== true) throw new Error("problem delete failed");
 
   const memo = await request("/api/memos", {
     method: "POST",
@@ -2674,7 +2808,7 @@ try {
     body: JSON.stringify({
       fileName: "self-test-customers.xlsx",
       rows: [
-        { company: `自动化导入客户-${Date.now()}`, country: "德国", contact: "Import Buyer", whatsapp: "+4915212345678", stage: "询盘", amount: 19000, health: 76, nextReminder: "明天 10:00", wecomBound: true },
+        { company: `自动化导入客户-${Date.now()}`, companyFullName: "Automation Import Customer GmbH", country: "德国", contact: "Import Buyer", whatsapp: "+4915212345678", source: "展会名片", lifecycleStatus: "won", stage: "询盘", amount: 19000, health: 76, nextReminder: "明天 10:00", wecomBound: true },
         { company: "Nordic Tools AB", country: "瑞典", contact: "Emma Import", stage: "已报价", amount: 36000, health: 68, nextReminder: "今天 18:00", wecomBound: true }
       ]
     })
@@ -2686,6 +2820,8 @@ try {
   });
   if (!customerExport.response.ok || !Array.isArray(customerExport.json.customers) || customerExport.json.customers.length < 1) throw new Error("customer export failed");
   if (!customerExport.json.customers.some((customer: { whatsapp?: string }) => customer.whatsapp === "+4915212345678")) throw new Error("customer WhatsApp import/export failed");
+  if (!customerExport.json.customers.some((customer: { whatsapp?: string; lifecycleStatus?: string; hasWonDeal?: boolean; wonDealCount?: number }) => customer.whatsapp === "+4915212345678" && customer.lifecycleStatus === "won" && customer.hasWonDeal === true && customer.wonDealCount === 0)) throw new Error("imported won customer must not depend on a deal");
+  if (!customerExport.json.customers.some((customer: { whatsapp?: string; source?: string; companyFullName?: string; id?: string }) => customer.whatsapp === "+4915212345678" && customer.source === "展会名片" && customer.companyFullName === "Automation Import Customer GmbH" && customer.id)) throw new Error("customer source/name/id import/export failed");
 
   const oversizedTradeDocument = await request("/api/trade-documents", {
     method: "POST",
@@ -2738,6 +2874,22 @@ try {
     headers: { authorization: `Bearer ${salesToken}` }
   });
   if (!tradeDocuments.response.ok || !tradeDocuments.json.documents.some((item: { id: string }) => item.id === tradeDocument.json.document.id)) throw new Error("trade document list failed");
+  if (tradeDocuments.json.documents.length > 9) throw new Error("trade document workspace must show at most 9 documents");
+
+  const convertedTradeDocument = await request(`/api/trade-documents/${tradeDocument.json.document.id}/convert`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ targetType: "PL" })
+  });
+  if (!convertedTradeDocument.response.ok || convertedTradeDocument.json.document?.type !== "PL" || convertedTradeDocument.json.document?.status !== "draft" || convertedTradeDocument.json.document?.derivedFromDocumentId !== tradeDocument.json.document.id) {
+    throw new Error("trade document conversion failed");
+  }
+  const tradeDocumentHistory = await request(`/api/trade-documents/history?q=${encodeURIComponent(tradeDocument.json.document.number)}&pageSize=10`, {
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!tradeDocumentHistory.response.ok || tradeDocumentHistory.json.total < 1 || !tradeDocumentHistory.json.documents.some((item: { id: string }) => item.id === tradeDocument.json.document.id) || tradeDocumentHistory.json.documents.length > 10) {
+    throw new Error("trade document history query failed");
+  }
 
   const tradeDocumentSubmit = await request(`/api/trade-documents/${tradeDocument.json.document.id}/submit-approval`, {
     method: "POST",
@@ -2942,14 +3094,14 @@ try {
 
   const account = await request("/api/accounts", {
     method: "POST",
-    headers: { authorization: `Bearer ${superAdminToken}` },
+    headers: { authorization: `Bearer ${adminToken}` },
     body: JSON.stringify({ name: "Auto Sales", email: `auto.${Date.now()}@goodjob.com`, password: "start123", role: "sales", teamId: "europe" })
   });
   if (!account.response.ok || account.json.account.name !== "Auto Sales") throw new Error("account create failed");
 
   const passwordChanged = await request(`/api/accounts/${account.json.account.id}/password`, {
     method: "PATCH",
-    headers: { authorization: `Bearer ${superAdminToken}` },
+    headers: { authorization: `Bearer ${adminToken}` },
     body: JSON.stringify({ password: "changed123" })
   });
   if (!passwordChanged.response.ok) throw new Error("account password update failed");
@@ -2961,13 +3113,13 @@ try {
 
   const disabled = await request(`/api/accounts/${account.json.account.id}/disable`, {
     method: "PATCH",
-    headers: { authorization: `Bearer ${superAdminToken}` }
+    headers: { authorization: `Bearer ${adminToken}` }
   });
   if (!disabled.response.ok) throw new Error("account disable failed");
 
   const deleted = await request(`/api/accounts/${account.json.account.id}`, {
     method: "DELETE",
-    headers: { authorization: `Bearer ${superAdminToken}` }
+    headers: { authorization: `Bearer ${adminToken}` }
   });
   if (!deleted.response.ok || deleted.json.ok !== true) throw new Error("account delete failed");
   const loginDeleted = await request("/api/auth/login", {

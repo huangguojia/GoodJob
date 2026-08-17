@@ -3,12 +3,14 @@ import { load } from "cheerio";
 import robotsParser from "robots-parser";
 import { getDomain } from "tldts";
 import { ProviderContractError } from "./provider-contract.js";
+import { mergeProspectContactEvidence } from "./prospect-contact-enrichment.js";
 import {
   createProviderHttpClient,
   resolveProviderPublicAddresses
 } from "./provider-http-client.js";
 import type { CrmStore } from "./store.js";
 import type {
+  ExtractedWebsiteContact,
   WebsiteOpportunity,
   WebsiteProbeAttempt,
   WebsiteProbeEvidence,
@@ -16,11 +18,15 @@ import type {
   WebsiteProbeStage
 } from "./types.js";
 
-const POLICY_VERSION = "website-probe-policy-v3" as const;
+const POLICY_VERSION = "website-probe-policy-v4-foreign-only" as const;
 const USER_AGENT = "GoodJobCRM-WebsiteProbe/1.0";
-const MAX_RESPONSE_BYTES = 64 * 1024;
+const MAX_RESPONSE_BYTES = Math.max(
+  64 * 1024,
+  Math.min(512 * 1024, Number(process.env.WEBSITE_PROBE_MAX_RESPONSE_BYTES) || 256 * 1024)
+);
 const CACHE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const CIRCUIT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const TRANSIENT_RETRY_WINDOW_MS = 5 * 60 * 1000;
 const domainQueues = new Map<string, Promise<void>>();
 const scheduledAttemptIds = new Set<string>();
 const teamNextAllowedAt = new Map<string, number>();
@@ -34,6 +40,7 @@ export class WebsiteProbeError extends Error {
     public readonly code:
       | "WEBSITE_PROBE_DISABLED"
       | "WEBSITE_PROBE_NOT_OWNED"
+      | "WEBSITE_PROBE_COUNTRY_BLOCKED"
       | "WEBSITE_PROBE_URL_INVALID"
       | "WEBSITE_PROBE_ATTEMPT_NOT_FOUND",
     message: string,
@@ -60,6 +67,62 @@ function nowIso() {
 
 function candidateById(store: CrmStore, candidateId: string) {
   return store.websiteOpportunities.find((item) => item.id === candidateId);
+}
+
+function normalizedCountry(value: string) {
+  return value
+    .normalize("NFKC")
+    .trim()
+    .toLocaleLowerCase("en-US")
+    .replace(/[.\s_()\-]+/gu, "");
+}
+
+function isChinaRestrictedCountry(value: string) {
+  return new Set([
+    "cn",
+    "china",
+    "中国",
+    "中国大陆",
+    "中华人民共和国",
+    "mainlandchina",
+    "hk",
+    "hongkong",
+    "hongkongsar",
+    "香港",
+    "中国香港",
+    "香港特别行政区",
+    "mo",
+    "macau",
+    "macao",
+    "澳门",
+    "中国澳门",
+    "澳门特别行政区",
+    "tw",
+    "taiwan",
+    "台湾",
+    "中国台湾",
+    "unknown",
+    "未知",
+    "未识别",
+    "待补充",
+    "待维护",
+    "n/a",
+    "na"
+  ]).has(normalizedCountry(value));
+}
+
+function isChinaRestrictedDomain(hostname: string) {
+  const normalized = hostname.toLocaleLowerCase("en-US").replace(/\.$/u, "");
+  return normalized.endsWith(".cn")
+    || normalized.endsWith(".hk")
+    || normalized.endsWith(".mo")
+    || normalized.endsWith(".tw")
+    || normalized.endsWith(".中国")
+    || normalized.endsWith(".公司")
+    || normalized.endsWith(".网络")
+    || normalized.endsWith(".xn--fiqs8s")
+    || normalized.endsWith(".xn--55qx5d")
+    || normalized.endsWith(".xn--io0a7i");
 }
 
 function attemptById(
@@ -94,6 +157,20 @@ function canonicalTarget(candidate: WebsiteOpportunity) {
       400
     );
   }
+  if (!candidate.country?.trim() || isChinaRestrictedCountry(candidate.country)) {
+    throw new WebsiteProbeError(
+      "WEBSITE_PROBE_COUNTRY_BLOCKED",
+      "中国及国家不明的候选禁止自动读取官网联系方式",
+      403
+    );
+  }
+  if (isChinaRestrictedDomain(url.hostname)) {
+    throw new WebsiteProbeError(
+      "WEBSITE_PROBE_COUNTRY_BLOCKED",
+      "中国域名禁止自动读取官网联系方式",
+      403
+    );
+  }
   const domain = getDomain(url.hostname, { allowPrivateDomains: false });
   if (!domain) {
     throw new WebsiteProbeError(
@@ -103,12 +180,42 @@ function canonicalTarget(candidate: WebsiteOpportunity) {
     );
   }
   const hostname = url.hostname.toLocaleLowerCase("en-US");
+  url.hash = "";
+  url.search = "";
+  const targetPath = url.pathname || "/";
   return {
     domain: domain.toLocaleLowerCase("en-US"),
     hostname,
-    homeUrl: `https://${hostname}/`,
+    homeUrl: `https://${hostname}${targetPath}`,
+    homePath: targetPath,
     robotsUrl: `https://${hostname}/robots.txt`
   };
+}
+
+export function websiteProbeAutoEnrichmentEligible(
+  candidate: WebsiteOpportunity,
+  at = Date.now()
+) {
+  if (candidate.contactInfo?.trim()
+    || (candidate.extractedContacts || []).some((contact) =>
+      contact.emails.length || contact.phones.length || contact.whatsapp.length
+    )) return false;
+  try {
+    canonicalTarget(candidate);
+  } catch {
+    return false;
+  }
+  return !(candidate.websiteProbeAttempts || []).some((attempt) => {
+    if (["queued", "running"].includes(attempt.status)) return true;
+    const completedAt = new Date(
+      attempt.completedAt || attempt.createdAt
+    ).getTime();
+    if (!Number.isFinite(completedAt)) return false;
+    const cooldown = ["unreachable", "rate_limited"].includes(attempt.outcome)
+      ? TRANSIENT_RETRY_WINDOW_MS
+      : CACHE_WINDOW_MS;
+    return at - completedAt < cooldown;
+  });
 }
 
 function appendEvent(
@@ -203,13 +310,17 @@ function alternateHost(hostname: string, domain: string) {
 function networkPolicy(hostname: string, domain: string, extraPaths: string[] = []) {
   const alternate = alternateHost(hostname, domain);
   return {
-    allowedHosts: [hostname],
+    allowedHosts: [hostname, ...(alternate ? [alternate] : [])],
     redirectHosts: alternate ? [alternate] : [],
+    // Foreign corporate sites commonly redirect / to a locale path such as /en-US/.
+    // This applies only to the single validated redirect, never to the initial URL.
+    redirectPathPrefixes: ["/"],
     allowedPaths: ["/", "/robots.txt", ...extraPaths],
     allowedPathPrefixes: [],
     allowedMethods: ["GET", "HEAD"] as Array<"GET" | "HEAD">,
     maxRedirects: 1,
     maxResponseBytes: MAX_RESPONSE_BYTES,
+    truncateResponse: true,
     timeoutMs: Math.max(
       2_000,
       Math.min(30_000, Number(process.env.WEBSITE_PROBE_TIMEOUT_MS || 18_000))
@@ -236,11 +347,13 @@ async function waitForTeamBudget(teamId: string) {
     0,
     Math.min(60_000, Number(process.env.WEBSITE_PROBE_TEAM_INTERVAL_MS || 3_000))
   );
-  const waitMs = Math.max(0, (teamNextAllowedAt.get(teamId) || 0) - Date.now());
+  const now = Date.now();
+  const reservedAt = Math.max(now, teamNextAllowedAt.get(teamId) || 0);
+  teamNextAllowedAt.set(teamId, reservedAt + intervalMs);
+  const waitMs = Math.max(0, reservedAt - now);
   if (waitMs) {
     await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
-  teamNextAllowedAt.set(teamId, Date.now() + intervalMs);
 }
 
 async function fetchWithOneTransientRetry(
@@ -300,6 +413,15 @@ function countryValue(value: unknown) {
 }
 
 function publicSameDomainEmail(value: unknown, domain: string) {
+  const candidate = normalizedPublicEmail(value);
+  if (!candidate) return "";
+  const hostname = candidate.split("@")[1] || "";
+  const emailDomain = getDomain(hostname, { allowPrivateDomains: false })
+    ?.toLocaleLowerCase("en-US") || "";
+  return emailDomain === domain ? candidate : "";
+}
+
+function normalizedPublicEmail(value: unknown) {
   if (typeof value !== "string") return "";
   let decoded = value;
   try {
@@ -315,12 +437,27 @@ function publicSameDomainEmail(value: unknown, domain: string) {
     .toLocaleLowerCase("en-US") || "";
   if (!candidate || candidate.length > 254) return "";
   const [localPart, hostname] = candidate.split("@");
-  if (!localPart || !hostname || /^(?:no-?reply|do-?not-?reply)$/iu.test(localPart)) {
+  if (!localPart
+    || !hostname
+    || /^(?:no-?reply|do-?not-?reply|mailer-daemon|postmaster)$/iu.test(localPart)) {
     return "";
   }
   const emailDomain = getDomain(hostname, { allowPrivateDomains: false })
     ?.toLocaleLowerCase("en-US") || "";
-  return emailDomain === domain ? candidate : "";
+  return emailDomain ? candidate : "";
+}
+
+function decodeCloudflareEmail(value: string) {
+  if (!/^[a-f0-9]{4,}$/iu.test(value) || value.length % 2 !== 0) return "";
+  const key = Number.parseInt(value.slice(0, 2), 16);
+  if (!Number.isFinite(key)) return "";
+  let decoded = "";
+  for (let index = 2; index < value.length; index += 2) {
+    const byte = Number.parseInt(value.slice(index, index + 2), 16);
+    if (!Number.isFinite(byte)) return "";
+    decoded += String.fromCharCode(byte ^ key);
+  }
+  return decoded;
 }
 
 function publicContactEmail(
@@ -329,26 +466,43 @@ function publicContactEmail(
   domain: string
 ) {
   const $ = load(html, { xmlMode: false });
-  const values: string[] = [];
+  const explicitValues: string[] = [];
+  const visibleValues: string[] = [];
   nodes.forEach((node) => {
     const emails = Array.isArray(node.email) ? node.email : [node.email];
     emails.forEach((email) => {
-      if (typeof email === "string") values.push(email);
+      if (typeof email === "string") explicitValues.push(email);
     });
   });
   $("a[href]").each((_index, element) => {
     const href = $(element).attr("href") || "";
-    if (/^mailto:/iu.test(href)) values.push(href);
+    if (/^mailto:/iu.test(href)) explicitValues.push(href);
   });
-  values.push(...($("body").text().match(
-    /[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,63}/giu
-  ) || []));
+  $("[data-cfemail]").each((_index, element) => {
+    const decoded = decodeCloudflareEmail($(element).attr("data-cfemail") || "");
+    if (decoded) explicitValues.push(decoded);
+  });
+  const visibleText = $("body").text();
+  if (visibleText.includes("@")) {
+    visibleValues.push(...(visibleText.match(
+      /[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,63}/giu
+    ) || []));
+  }
+  const obfuscatedText = visibleText
+    .replace(/\s*(?:\[at\]|\(at\))\s*/giu, "@")
+    .replace(/\s*(?:\[dot\]|\(dot\))\s*/giu, ".");
+  if (obfuscatedText.includes("@")) {
+    visibleValues.push(...(obfuscatedText
+      .match(/[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,63}/giu) || []));
+  }
   const preferredLocalParts = [
     "sales", "info", "contact", "hello", "export", "business", "office", "support"
   ];
-  return [...new Set(values
-    .map((value) => publicSameDomainEmail(value, domain))
-    .filter(Boolean))]
+  const values = [
+    ...explicitValues.map(normalizedPublicEmail),
+    ...visibleValues.map((value) => publicSameDomainEmail(value, domain))
+  ];
+  return [...new Set(values.filter(Boolean))]
     .sort((left, right) => {
       const leftRank = preferredLocalParts.indexOf(left.split("@")[0] || "");
       const rightRank = preferredLocalParts.indexOf(right.split("@")[0] || "");
@@ -358,7 +512,148 @@ function publicContactEmail(
     })[0] || "";
 }
 
-const contactPathPattern = /(?:^|\/)(?:contact(?:-us)?|kontakt|impressum|contacto|contatti|about)(?:\/|$)/iu;
+const contactPathPattern = /(?:^|\/)(?:contact(?:-us)?|kontakt|impressum|contacto|contatti|nous-contacter|support|customer-service|sales|about|team)(?:\/|$)/iu;
+
+// ---------- 新增：电话与联系人抽取（叠加在既有公司邮箱抽取之上，不改原逻辑） ----------
+
+function normalizePhone(raw: string, minimumDigits = 8): string {
+  const trimmed = raw.trim();
+  const digits = trimmed.replace(/\D/gu, "");
+  if (digits.length < minimumDigits || digits.length > 15) return "";
+  if (/^(?:19|20)\d{6}$/u.test(digits)) {
+    const year = Number(digits.slice(0, 4));
+    const month = Number(digits.slice(4, 6));
+    const day = Number(digits.slice(6, 8));
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() === year
+      && date.getUTCMonth() === month - 1
+      && date.getUTCDate() === day) return "";
+  }
+  if (/^(\d)\1{7,}$/u.test(digits)) return "";
+  return `${trimmed.startsWith("+") ? "+" : ""}${digits}`;
+}
+
+// 从 tel: 链接、JSON-LD 与带明确电话标签的正文中抽取电话号码。
+// 正文无国际区号时必须有电话语境，避免把日期、订单号和产品编号当成电话。
+function publicContactPhones(
+  html: string,
+  nodes: Array<Record<string, unknown>>
+): string[] {
+  const $ = load(html, { xmlMode: false });
+  const values: string[] = [];
+  const push = (value: unknown, minimumDigits = 8) => {
+    if (typeof value !== "string") return;
+    const phone = normalizePhone(value, minimumDigits);
+    if (phone) values.push(phone);
+  };
+  nodes.forEach((node) => {
+    const phones = Array.isArray(node.telephone) ? node.telephone : [node.telephone];
+    phones.forEach((phone) => push(phone));
+    const contactPoints = Array.isArray(node.contactPoint)
+      ? node.contactPoint
+      : [node.contactPoint];
+    contactPoints.forEach((point) => {
+      if (!point || typeof point !== "object") return;
+      const telephone = (point as Record<string, unknown>).telephone;
+      (Array.isArray(telephone) ? telephone : [telephone]).forEach((phone) => push(phone));
+    });
+  });
+  $("a[href]").each((_index, element) => {
+    const href = ($(element).attr("href") || "").trim();
+    if (/^tel:/iu.test(href)) {
+      push(href.replace(/^tel:/iu, "").split("?")[0] || "");
+    }
+  });
+  const bodyText = $("body").text();
+  const phonePattern = /(?:\+?\d[\d\s\-().]{6,}\d)/gu;
+  let match: RegExpExecArray | null;
+  while ((match = phonePattern.exec(bodyText)) !== null) {
+    const raw = match[0];
+    const international = raw.trim().startsWith("+");
+    const num = normalizePhone(raw, 9);
+    const prefix = bodyText.slice(Math.max(0, match.index - 48), match.index);
+    const labeled = /(?:phone|telephone|tel\.?|call|mobile|fax|whats\s*app|hotline|contact(?:\s+us)?|sales\s+office)[\s:：#.,\-()]*$/iu.test(prefix);
+    if (num && (international || (labeled && /[\s\-().]/u.test(raw)))) {
+      values.push(num);
+    }
+  }
+  return [...new Set(values)].slice(0, 12);
+}
+
+const CONTACT_TITLE_ALT = "manager|director|ceo|cto|cfo|coo|founder|co-founder|president|owner|head of|lead|officer|representative|sales|purchasing|procurement|export|import|marketing|buyer|chief|vice president|chairman|general manager";
+
+// 从正文抽取"姓名 — 职务"形式的联系人（决策人/对接人），保守启发式，最多 6 条。
+function publicContactPersons(html: string): Array<{ name: string; title: string }> {
+  const $ = load(html, { xmlMode: false });
+  const results: Array<{ name: string; title: string }> = [];
+  const seen = new Set<string>();
+  const pushIfNew = (name: string, title: string) => {
+    const cleanedName = normalizedText(name, 80);
+    const cleanedTitle = normalizedText(title, 80);
+    const key = `${cleanedName}|${cleanedTitle}`;
+    if (!cleanedName || seen.has(key) || results.length >= 6) return;
+    seen.add(key);
+    results.push({ name: cleanedName, title: cleanedTitle });
+  };
+  const text = $("body").text().slice(0, 50_000);
+  const pairPattern = new RegExp(
+    `([A-Z][a-z]+(?:\\s[A-Z][a-z]+){1,2})\\s*(?:[\\u2013\\u2014:,\\-]|\\s[-\\u2013\\u2014]\\s)\\s*([^,;\\n]{2,90})`,
+    "gu"
+  );
+  let m: RegExpExecArray | null;
+  while ((m = pairPattern.exec(text)) !== null) {
+    if (new RegExp(`(?:${CONTACT_TITLE_ALT})`, "iu").test(m[2] || "")) {
+      pushIfNew(m[1], m[2]);
+    }
+  }
+  return results;
+}
+
+export function buildExtractedContacts(
+  evidence: WebsiteProbeEvidence,
+  domain: string
+): ExtractedWebsiteContact[] {
+  const out: ExtractedWebsiteContact[] = [];
+  const emails = evidence.publicContactEmail ? [evidence.publicContactEmail] : [];
+  const phones = evidence.publicContactPhones || [];
+  if (emails.length || phones.length) {
+    out.push({
+      kind: "company",
+      name: evidence.organizationName || evidence.legalName || domain,
+      title: "公司公开联系",
+      emails,
+      phones,
+      whatsapp: [],
+      source: "website_probe",
+      sourceLabel: "境外企业官网",
+      sourceKind: "official_website",
+      confidence: 82,
+      verificationStatus: "source_confirmed",
+      observedAt: evidence.observedAt,
+      reasonCodes: ["OFFICIAL_WEBSITE_PUBLIC_CHANNEL"],
+      evidenceUrl: evidence.sourceUrl
+    });
+  }
+  for (const person of evidence.publicContactNames || []) {
+    out.push({
+      kind: "person",
+      name: person.name,
+      title: person.title,
+      emails: [],
+      phones: [],
+      whatsapp: [],
+      source: "website_probe",
+      sourceLabel: "境外企业官网",
+      sourceKind: "official_website",
+      confidence: 68,
+      verificationStatus: "source_confirmed",
+      observedAt: evidence.observedAt,
+      reasonCodes: ["OFFICIAL_WEBSITE_PUBLIC_PERSON"],
+      evidenceUrl: evidence.sourceUrl
+    });
+  }
+  return out;
+}
 
 function contactPageUrl(
   html: string,
@@ -368,6 +663,8 @@ function contactPageUrl(
 ) {
   const $ = load(html, { xmlMode: false });
   const candidates: Array<{ url: string; rank: number }> = [];
+  const alternate = alternateHost(hostname, domain);
+  const approvedHosts = new Set([hostname, ...(alternate ? [alternate] : [])]);
   $("a[href]").each((_index, element) => {
     const href = ($(element).attr("href") || "").trim();
     if (!href || /^(?:mailto|tel|javascript):/iu.test(href)) return;
@@ -377,16 +674,20 @@ function contactPageUrl(
         ?.toLocaleLowerCase("en-US") || "";
       if (url.protocol !== "https:"
         || targetDomain !== domain
-        || url.hostname.toLocaleLowerCase("en-US") !== hostname
+        || !approvedHosts.has(url.hostname.toLocaleLowerCase("en-US"))
         || url.pathname === "/") return;
       const anchorText = normalizedText($(element).text(), 100);
       if (!contactPathPattern.test(url.pathname)
-        && !/contact|kontakt|impressum|contacto|contatti|about|联系|关于/iu.test(anchorText)) return;
+        && !/contact|kontakt|impressum|contacto|contatti|nous contacter|support|customer service|get in touch|sales|about|team|联系|关于/iu.test(anchorText)) return;
       url.hash = "";
       url.search = "";
       candidates.push({
         url: url.toString(),
-        rank: /contact|kontakt|contacto|contatti|联系/iu.test(`${url.pathname} ${anchorText}`) ? 0 : 1
+        rank: /contact|kontakt|contacto|contatti|nous-contacter|nous contacter|联系/iu.test(`${url.pathname} ${anchorText}`)
+          ? 0
+          : /support|customer-service|customer service|get in touch|sales/iu.test(`${url.pathname} ${anchorText}`)
+            ? 1
+            : 2
       });
     } catch {
       // Invalid and cross-origin links are ignored.
@@ -409,13 +710,38 @@ function mergePageEvidence(
     addressCountry: home.addressCountry || contact.addressCountry,
     businessCategory: home.businessCategory || contact.businessCategory,
     publicContactEmail: contact.publicContactEmail || home.publicContactEmail,
-    sourceUrl: contact.publicContactEmail ? contact.sourceUrl : home.sourceUrl,
+    publicContactPhones: [
+      ...new Set([...(contact.publicContactPhones || []), ...(home.publicContactPhones || [])])
+    ],
+    publicContactNames: dedupeContactNames([
+      ...(contact.publicContactNames || []),
+      ...(home.publicContactNames || [])
+    ]),
+    sourceUrl: contact.publicContactEmail
+      || contact.publicContactPhones?.length
+      || contact.publicContactNames?.length
+      ? contact.sourceUrl
+      : home.sourceUrl,
     observedAt: contact.observedAt > home.observedAt ? contact.observedAt : home.observedAt
   };
   return { ...facts, payloadHash: sha256(JSON.stringify(facts)) };
 }
 
-function extractEvidence(
+function dedupeContactNames(
+  items: Array<{ name: string; title: string }>
+): Array<{ name: string; title: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ name: string; title: string }> = [];
+  for (const item of items) {
+    const key = `${item.name}|${item.title}`;
+    if (seen.has(key) || out.length >= 8) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+export function extractEvidence(
   html: string,
   sourceUrl: string,
   domain: string,
@@ -446,6 +772,8 @@ function extractEvidence(
     240
   );
   const contactEmail = publicContactEmail(html, nodes, domain);
+  const contactPhones = publicContactPhones(html, nodes);
+  const contactNames = publicContactPersons(html);
   const facts = {
     canonicalDomain: domain,
     pageTitle,
@@ -455,6 +783,8 @@ function extractEvidence(
     addressCountry,
     businessCategory,
     publicContactEmail: contactEmail,
+    publicContactPhones: contactPhones,
+    publicContactNames: contactNames,
     sourceUrl,
     observedAt
   };
@@ -501,7 +831,11 @@ async function executeAttempt(
   target: ReturnType<typeof canonicalTarget>,
   persist: PersistCandidate
 ) {
-  const policy = networkPolicy(target.hostname, target.domain);
+  const policy = networkPolicy(
+    target.hostname,
+    target.domain,
+    target.homePath === "/" ? [] : [target.homePath]
+  );
   try {
     await waitForTeamBudget(candidateById(store, candidateId)!.teamId);
     await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
@@ -622,8 +956,7 @@ async function executeAttempt(
     const headType = (headResponse.headers.get("content-type") || "")
       .split(";")[0]!.trim().toLocaleLowerCase("en-US");
     const declaredLength = Number(headResponse.headers.get("content-length") || 0);
-    if (declaredLength > MAX_RESPONSE_BYTES
-      || (headType && !["text/html", "text/plain"].includes(headType))) {
+    if (headType && !["text/html", "text/plain"].includes(headType)) {
       await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
         attempt.httpStatus = headResponse.status;
         appendEvent(attempt, "head", "completed", "首页内容不符合最小取证策略，已停止读取正文", {
@@ -647,6 +980,7 @@ async function executeAttempt(
         httpStatus: headResponse.status,
         contentType: headType || "unknown",
         declaredBytes: declaredLength,
+        sampleWillBeTruncated: declaredLength > MAX_RESPONSE_BYTES,
         redirected: attempt.redirected
       });
       appendEvent(attempt, "body", "started", `正在读取首页正文样本（上限 ${(MAX_RESPONSE_BYTES / 1024).toFixed(0)} KiB）`);
@@ -692,6 +1026,7 @@ async function executeAttempt(
     }
     const html = await bodyResponse.text();
     const responseBytes = Buffer.byteLength(html);
+    const bodyTruncated = bodyResponse.headers.get("x-goodjob-response-truncated") === "true";
     const observedAt = nowIso();
     const homeEvidence = extractEvidence(
       html,
@@ -740,6 +1075,7 @@ async function executeAttempt(
           if (contactResponse.ok && (!contactType || ["text/html", "text/plain"].includes(contactType))) {
             const contactHtml = await contactResponse.text();
             contactBytes = Buffer.byteLength(contactHtml);
+            const contactTruncated = contactResponse.headers.get("x-goodjob-response-truncated") === "true";
             contactEvidence = extractEvidence(
               contactHtml,
               contactResponse.url || selectedContactUrl,
@@ -750,6 +1086,7 @@ async function executeAttempt(
               appendEvent(attempt, "contact_page", "completed", "同域联系页样本读取完成，原文不会保存", {
                 httpStatus: contactResponse.status,
                 responseBytes: contactBytes,
+                truncated: contactTruncated,
                 publicContactEmail: Boolean(contactEvidence?.publicContactEmail)
               });
             });
@@ -778,10 +1115,24 @@ async function executeAttempt(
       || evidence.businessCategory
     );
     const hasUsableEvidence = hasOrganizationEvidence
-      || Boolean(evidence.publicContactEmail);
+      || Boolean(evidence.publicContactEmail)
+      || Boolean(evidence.publicContactPhones?.length);
     const candidate = candidateById(store, candidateId);
-    if (candidate && !candidate.contactInfo && evidence.publicContactEmail) {
-      candidate.contactInfo = evidence.publicContactEmail;
+    const primaryContact = evidence.publicContactEmail
+      || evidence.publicContactPhones?.[0]
+      || "";
+    if (candidate && !candidate.contactInfo && primaryContact) {
+      candidate.contactInfo = primaryContact;
+    }
+    if (candidate) {
+      const built = buildExtractedContacts(evidence, target.domain);
+      if (built.length) {
+        candidate.extractedContacts = mergeProspectContactEvidence(candidate.extractedContacts || [], built);
+        const person = built.find((contact) => contact.kind === "person" && contact.name);
+        if (person && (!candidate.contact?.trim() || /^(?:待维护|待确认|未知|-|—)$/u.test(candidate.contact.trim()))) {
+          candidate.contact = person.name;
+        }
+      }
     }
     await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
       attempt.httpStatus = bodyResponse.status;
@@ -792,16 +1143,18 @@ async function executeAttempt(
         httpStatus: bodyResponse.status,
         responseBytes: responseBytes + contactBytes,
         contentType: bodyType || "unknown",
+        truncated: bodyTruncated,
         redirected: attempt.redirected
       });
       attempt.evidence = evidence;
       appendEvent(attempt, "evidence", "completed", hasUsableEvidence
-        ? "已提取官网公开业务邮箱或组织级弱证据"
-        : "未发现可用的公开业务邮箱或组织级结构化证据", {
+        ? "已提取官网公开联系方式或组织级弱证据"
+        : "未发现可用的公开联系方式或组织级结构化证据", {
         organizationName: Boolean(evidence.organizationName || evidence.legalName),
         country: Boolean(evidence.addressCountry),
         businessCategory: Boolean(evidence.businessCategory),
         publicContactEmail: Boolean(evidence.publicContactEmail),
+        publicContactPhoneCount: evidence.publicContactPhones?.length || 0,
         language: Boolean(evidence.language)
       });
     });
@@ -811,7 +1164,7 @@ async function executeAttempt(
       stage: "completed",
       message: hasUsableEvidence
         ? "官网验证已结束：首页和联系页公开证据已归档，组织事实仍需交叉验证"
-        : "官网验证已结束：未取得公开邮箱或组织级证据，候选评分保持不变"
+        : "官网验证已结束：未取得公开联系方式或组织级证据，候选评分保持不变"
     });
   } catch (error) {
     const current = attemptById(store, candidateId, attemptId);
@@ -960,8 +1313,21 @@ export async function queueWebsiteProbe(
     attempt.responseBytes = 0;
     attempt.redirected = cached.redirected;
     attempt.evidence = cached.evidence ? structuredClone(cached.evidence) : null;
-    if (!candidate.contactInfo && attempt.evidence?.publicContactEmail) {
-      candidate.contactInfo = attempt.evidence.publicContactEmail;
+    const cachedPrimaryContact = attempt.evidence?.publicContactEmail
+      || attempt.evidence?.publicContactPhones?.[0]
+      || "";
+    if (!candidate.contactInfo && cachedPrimaryContact) {
+      candidate.contactInfo = cachedPrimaryContact;
+    }
+    if (attempt.evidence) {
+      const built = buildExtractedContacts(attempt.evidence, target.domain);
+      if (built.length) {
+        candidate.extractedContacts = mergeProspectContactEvidence(candidate.extractedContacts || [], built);
+        const person = built.find((contact) => contact.kind === "person" && contact.name);
+        if (person && (!candidate.contact?.trim() || /^(?:待维护|待确认|未知|-|—)$/u.test(candidate.contact.trim()))) {
+          candidate.contact = person.name;
+        }
+      }
     }
     attempt.startedAt = createdAt;
     attempt.completedAt = createdAt;
@@ -1018,6 +1384,8 @@ export function websiteProbeDetail(
 export function websiteProbeCapability() {
   return {
     enabled: featureEnabled(),
+    foreignOnly: true,
+    countryPolicy: "仅允许已标记为国外且非中国、港澳台地区的候选官网",
     policyVersion: POLICY_VERSION,
     defaultOff: false,
     accessMode: "controlled_probe" as const,

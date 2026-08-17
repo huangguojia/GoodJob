@@ -6,6 +6,7 @@ import { DomainError } from "../errors.js";
 import { RealtimeHub } from "../realtime.js";
 import { EncryptionService } from "../security/encryption.js";
 import { TranslationService, detectLanguage } from "../services/translation.js";
+import { ConversationIntelligenceService } from "../services/conversation-intelligence.js";
 import type { ChannelProvider, SendMessageCommand, SendTemplateMessageCommand } from "./types.js";
 
 const META_SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -19,6 +20,19 @@ interface MetaWebhookValue {
     timestamp?: string;
     type?: string;
     text?: { body?: string };
+    image?: { id?: string; caption?: string; mime_type?: string; sha256?: string };
+    video?: { id?: string; caption?: string; mime_type?: string; sha256?: string };
+    audio?: { id?: string; mime_type?: string; voice?: boolean };
+    document?: { id?: string; caption?: string; filename?: string; mime_type?: string; sha256?: string };
+    sticker?: { id?: string; mime_type?: string; animated?: boolean };
+    location?: { latitude?: number; longitude?: number; name?: string; address?: string };
+    contacts?: Array<{ name?: { formatted_name?: string }; phones?: Array<{ phone?: string; wa_id?: string }> }>;
+    interactive?: { type?: string; button_reply?: { id?: string; title?: string }; list_reply?: { id?: string; title?: string; description?: string } };
+    button?: { text?: string; payload?: string };
+    reaction?: { message_id?: string; emoji?: string };
+    order?: { catalog_id?: string; product_items?: Array<{ product_retailer_id?: string; quantity?: string; item_price?: string; currency?: string }> };
+    referral?: { source_url?: string; source_type?: string; headline?: string; body?: string };
+    errors?: Array<{ code?: number; title?: string; message?: string }>;
   }>;
   statuses?: Array<{ id?: string; status?: string; timestamp?: string }>;
 }
@@ -58,6 +72,37 @@ function metaStatus(value: string | undefined): MessageStatus | null {
   return null;
 }
 
+function inboundMessageContent(item: NonNullable<MetaWebhookValue["messages"]>[number]): {
+  body: string;
+  messageType: ChatMessage["messageType"];
+} {
+  if (item.type === "text") return { body: item.text?.body?.trim() || "[空文本消息]", messageType: "text" };
+  if (item.type === "image") return { body: item.image?.caption?.trim() || "[图片]", messageType: "image" };
+  if (item.type === "video") return { body: item.video?.caption?.trim() || "[视频]", messageType: "video" };
+  if (item.type === "audio") return { body: item.audio?.voice ? "[语音消息]" : "[音频]", messageType: "audio" };
+  if (item.type === "document") return { body: item.document?.caption?.trim() || `[文档] ${item.document?.filename || "未命名文件"}`, messageType: "file" };
+  if (item.type === "sticker") return { body: item.sticker?.animated ? "[动态贴纸]" : "[贴纸]", messageType: "image" };
+  if (item.type === "location") {
+    const location = item.location;
+    return { body: `[位置] ${[location?.name, location?.address, location?.latitude, location?.longitude].filter((value) => value !== undefined && value !== "").join(" · ")}`, messageType: "system" };
+  }
+  if (item.type === "contacts") {
+    const names = item.contacts?.map((contact) => contact.name?.formatted_name).filter(Boolean).join("、");
+    return { body: `[联系人] ${names || "未命名联系人"}`, messageType: "system" };
+  }
+  if (item.type === "interactive") {
+    const reply = item.interactive?.button_reply ?? item.interactive?.list_reply;
+    return { body: `[交互回复] ${reply?.title || reply?.id || "未知选项"}`, messageType: "text" };
+  }
+  if (item.type === "button") return { body: `[按钮回复] ${item.button?.text || item.button?.payload || "未知按钮"}`, messageType: "text" };
+  if (item.type === "reaction") return { body: `[回应 ${item.reaction?.message_id || ""}] ${item.reaction?.emoji || "已移除"}`, messageType: "system" };
+  if (item.type === "order") return { body: `[订单] ${item.order?.product_items?.length ?? 0} 个商品`, messageType: "system" };
+  if (item.type === "unsupported" || item.errors?.length) {
+    return { body: `[Meta 不支持的消息] ${item.errors?.map((error) => error.title || error.message || error.code).filter(Boolean).join("；") || "请在手机端查看"}`, messageType: "system" };
+  }
+  return { body: `[${item.type || "未知"}消息]`, messageType: "system" };
+}
+
 export class MetaProvider implements ChannelProvider {
   private readonly connected = new Set<string>();
   private readonly connectionEpochs = new Map<string, number>();
@@ -69,7 +114,8 @@ export class MetaProvider implements ChannelProvider {
     private readonly encryption: EncryptionService,
     private readonly realtime: RealtimeHub,
     private readonly translation: TranslationService,
-    config: AppConfig
+    config: AppConfig,
+    private readonly intelligence?: ConversationIntelligenceService
   ) {
     this.graphBaseUrl = (config.metaGraphBaseUrl ?? "https://graph.facebook.com").replace(/\/+$/u, "");
   }
@@ -377,14 +423,69 @@ export class MetaProvider implements ChannelProvider {
     } catch {
       throw new DomainError("META_WEBHOOK_INVALID_JSON", 400, "Invalid Meta webhook JSON");
     }
+    const event = await this.repository.createMetaWebhookEvent({
+      appConfigId: app.id,
+      eventHash: createHash("sha256").update(rawBody).digest("hex"),
+      payloadCipher: this.encryption.encrypt(rawBody.toString("utf8"))
+    });
+    const claimed = await this.repository.claimMetaWebhookEvent(event.id, {
+      maxAttempts: 8,
+      staleBefore: new Date(Date.now() - 5 * 60 * 1_000).toISOString()
+    });
+    if (!claimed) return;
+
+    try {
+      await this.processWebhookPayload(payload, app.id);
+      await this.repository.markMetaWebhookEventProcessed(claimed.id);
+    } catch (error) {
+      await this.repository.markMetaWebhookEventFailed(
+        claimed.id,
+        error instanceof Error ? error.message : "Meta webhook processing failed"
+      );
+      throw error;
+    }
+  }
+
+  async recoverPendingWebhookEvents(): Promise<{ processed: number; failed: number }> {
+    let processed = 0;
+    let failed = 0;
+    const candidates = await this.repository.listRecoverableMetaWebhookEvents({
+      maxAttempts: 8,
+      staleBefore: new Date(Date.now() - 5 * 60 * 1_000).toISOString(),
+      limit: 100
+    });
+    for (const event of candidates) {
+      const claimed = await this.repository.claimMetaWebhookEvent(event.id, {
+        maxAttempts: 8,
+        staleBefore: new Date(Date.now() - 5 * 60 * 1_000).toISOString()
+      });
+      if (!claimed) continue;
+      try {
+        const rawBody = this.encryption.decrypt(claimed.payloadCipher);
+        const payload = JSON.parse(rawBody) as MetaWebhookPayload;
+        await this.processWebhookPayload(payload, claimed.appConfigId);
+        await this.repository.markMetaWebhookEventProcessed(claimed.id);
+        processed += 1;
+      } catch (error) {
+        await this.repository.markMetaWebhookEventFailed(
+          claimed.id,
+          error instanceof Error ? error.message : "Meta webhook recovery failed"
+        );
+        failed += 1;
+      }
+    }
+    return { processed, failed };
+  }
+
+  private async processWebhookPayload(payload: MetaWebhookPayload, appConfigId: string): Promise<void> {
     if (payload.object !== "whatsapp_business_account") return;
 
     for (const entry of payload.entry ?? []) {
       for (const change of entry.changes ?? []) {
         if (change.field !== "messages" || !change.value?.metadata?.phone_number_id) continue;
         const credential = await this.repository.getMetaCredentialByPhoneNumberId(change.value.metadata.phone_number_id);
-        if (!credential || credential.appConfigId !== app.id || (entry.id && entry.id !== credential.wabaId)) {
-          await this.repository.audit("meta.webhook.orphan", "meta_app", app.id, "ignored", {
+        if (!credential || credential.appConfigId !== appConfigId || (entry.id && entry.id !== credential.wabaId)) {
+          await this.repository.audit("meta.webhook.orphan", "meta_app", appConfigId, "ignored", {
             phoneNumberId: change.value.metadata.phone_number_id
           });
           continue;
@@ -406,7 +507,7 @@ export class MetaProvider implements ChannelProvider {
 
   private async processInboundMessages(accountId: string, value: MetaWebhookValue): Promise<void> {
     for (const item of value.messages ?? []) {
-      if (!item.id || item.type !== "text" || !item.text?.body || !item.from) continue;
+      if (!item.id || !item.from) continue;
       const phone = `+${item.from}`;
       if (!isE164PhoneNumber(phone)) continue;
       const existing = await this.repository.findMessageByIdempotency(accountId, item.id);
@@ -425,14 +526,16 @@ export class MetaProvider implements ChannelProvider {
         contactId: contact.id,
         providerConversationId: item.from
       });
+      const content = inboundMessageContent(item);
       const message = await this.repository.createMessage({
         accountId,
         conversationId: conversation.id,
         providerMessageId: item.id,
         direction: "inbound",
-        body: item.text.body,
+        messageType: content.messageType,
+        body: content.body,
         status: "delivered",
-        sourceLanguage: detectLanguage(item.text.body),
+        sourceLanguage: content.messageType === "text" ? detectLanguage(content.body) : null,
         occurredAt: webhookTimestamp(item.timestamp)
       });
       this.realtime.publish("contact.upserted", accountId, contact);
@@ -448,6 +551,7 @@ export class MetaProvider implements ChannelProvider {
       void this.translation.processIncoming(message).catch(() => {
         this.publishTranslationFailure(accountId);
       });
+      void this.intelligence?.analyzeConversation(conversation.id).catch(() => undefined);
     }
   }
 

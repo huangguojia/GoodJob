@@ -315,7 +315,7 @@ try {
     user: superAdmin
   });
   assert.equal(superList.response.status, 403);
-  assert.equal(superList.json.errorCode, "RUN_ACCESS_FORBIDDEN");
+  assert.equal(superList.json.permissionCode, "prospect.read");
 
   const otherSalesCreate = await request({
     path: createPath,
@@ -606,7 +606,8 @@ try {
     updatedAt: "2026-07-22T12:01:00.000Z"
   });
   const cleaningDiagnostics = prospectRunDiagnostics(store, createdRun).cleaningReport;
-  assert.equal(cleaningDiagnostics.stages.length, 4);
+  assert.equal(cleaningDiagnostics.stages.length, 5);
+  assert.equal(cleaningDiagnostics.stages.at(-1)?.id, "website_discovery");
   assert.equal(cleaningDiagnostics.summary.rejectedCount, 1);
   assert.equal(cleaningDiagnostics.records[0]?.outcome, "rejected");
   assert.equal(cleaningDiagnostics.records[0]?.reasonCode, "CANDIDATE_PAYLOAD_INVALID");

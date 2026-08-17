@@ -19,6 +19,7 @@ Evolution API 的服务端代码。
 | `whatsapp-web.js` / Pedro Lopez | 1.34.7 | Apache-2.0 | CRM 后端的旧 Web 客户端通道 |
 | Meta Graph API | 外部服务 | Meta 平台条款 | WhatsApp Cloud API 官方通道 |
 | PGlite | 0.5.4 | Apache-2.0 | 本机嵌入式 PostgreSQL |
+| mysql2 | 3.22.5 | MIT | 生产 MySQL 连接池、参数化查询与事务 |
 | Socket.IO | 4.8.3 | MIT | 实时事件 |
 | React | 18.3.1 | MIT | 插件前端 |
 | TanStack Query | 5.101.2 | MIT | 前端数据同步 |

@@ -6,6 +6,7 @@ import { decryptProviderConfiguration } from "./credential-security.js";
 import { getProvider } from "./lead-providers.js";
 import { assertProviderOperationPolicy } from "./provider-runtime.js";
 import { activeProspectRunsForStrategy } from "./prospect-run-guards.js";
+import { canSeeOwner, isPlatformIdentity } from "./auth.js";
 import type { CrmStore, PersistedStoreMutation } from "./store.js";
 import type {
   ProspectCampaign,
@@ -321,7 +322,7 @@ function publicStrategyEvent(event: ProspectStrategyEvent) {
 }
 
 function assertStrategyRole(user: SessionUser) {
-  if (user.role === "super_admin") {
+  if (isPlatformIdentity(user)) {
     throw new ProspectStrategyRequestError(
       403,
       "STRATEGY_CRUD_FORBIDDEN",
@@ -331,11 +332,7 @@ function assertStrategyRole(user: SessionUser) {
 }
 
 function canReadCampaign(user: SessionUser, campaign: ProspectCampaign) {
-  if (user.role === "super_admin") return false;
-  if (user.role === "manager" || user.role === "admin") {
-    return user.teamId === campaign.teamId;
-  }
-  return user.teamId === campaign.teamId && user.id === campaign.ownerId;
+  return canSeeOwner(user, campaign.ownerId, campaign.teamId);
 }
 
 function findVisibleCampaign(

@@ -262,7 +262,7 @@ export function AccessSettingsPage({ selectedAccountId, onManageAccounts }: Prop
       <div className="page-heading">
         <div>
           <span className="eyebrow">CHANNEL ACCESS</span>
-          <h1>Communication 接入设置</h1>
+          <h1>即刻沟通接入设置</h1>
           <p>管理免费非官方通道、Meta 官方 API 与多账号混合运行策略。</p>
         </div>
         <div className="heading-actions">

@@ -262,6 +262,124 @@ export async function callAiModel(
   }
 }
 
+export interface AiWebSearchCitation {
+  title: string;
+  url: string;
+  startIndex: number;
+  endIndex: number;
+}
+
+export interface AiWebSearchResult {
+  content: string;
+  citations: AiWebSearchCitation[];
+  queries: string[];
+  usedSearch: boolean;
+}
+
+export async function callAiModelWithWebSearch(
+  config: AiModelConfig,
+  prompt: string,
+  maxInputChars = 12_000,
+  fetcher?: (url: string, init?: RequestInit) => Promise<globalThis.Response>,
+  timeoutMs = 90_000
+): Promise<AiWebSearchResult> {
+  if ((config.protocol || "openai-compatible") !== "openai-compatible") {
+    throw new ProviderContractError({
+      code: "PROVIDER_POLICY_BLOCKED",
+      retryable: false,
+      retryAfterAt: null,
+      publicMessage: "当前模型协议尚不支持原生 Web Search",
+      httpStatus: null,
+      phase: "search"
+    });
+  }
+  const endpointBase = config.baseUrl.replace(/\/+$/, "");
+  const endpoint = modelEndpoint(endpointBase, "/responses");
+  const secureClient = fetcher ? null : createAiHttpClient(endpointBase);
+  const request = fetcher || ((url: string, init?: RequestInit) => secureClient!.fetch(url, init));
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.max(1_000, Math.min(AI_MODEL_TIMEOUT_MS, timeoutMs)));
+  try {
+    const response = await request(endpoint, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${config.apiKey}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: config.model,
+        input: [
+          {
+            role: "system",
+            content: [{
+              type: "input_text",
+              text: "你是企业尽调分析师。必须使用 Web Search 获取公开网络信息，只引用搜索工具返回的来源；无法确认的事实必须标记为待核实。"
+            }]
+          },
+          {
+            role: "user",
+            content: [{ type: "input_text", text: prompt.slice(0, maxInputChars) }]
+          }
+        ],
+        tools: [{ type: "web_search" }],
+        tool_choice: "auto"
+      })
+    });
+    const data = await readAiJson<{
+      output_text?: string;
+      output?: Array<{
+        type?: string;
+        action?: { query?: string };
+        content?: Array<{
+          type?: string;
+          text?: string;
+          annotations?: Array<{
+            type?: string;
+            title?: string;
+            url?: string;
+            start_index?: number;
+            end_index?: number;
+          }>;
+        }>;
+      }>;
+    }>(response);
+    const output = data.output || [];
+    const textParts = output
+      .filter((item) => item.type === "message")
+      .flatMap((item) => item.content || [])
+      .filter((item) => item.type === "output_text" && typeof item.text === "string");
+    const content = (data.output_text || textParts.map((item) => item.text || "").join("\n")).trim();
+    const seenUrls = new Set<string>();
+    const citations = textParts.flatMap((item) => item.annotations || []).flatMap((annotation) => {
+      if (annotation.type !== "url_citation" || !annotation.url || seenUrls.has(annotation.url)) return [];
+      let url: URL;
+      try {
+        url = new URL(annotation.url);
+      } catch {
+        return [];
+      }
+      if (url.protocol !== "https:" || url.username || url.password) return [];
+      seenUrls.add(url.toString());
+      return [{
+        title: String(annotation.title || url.hostname).trim().slice(0, 200),
+        url: url.toString(),
+        startIndex: Number(annotation.start_index || 0),
+        endIndex: Number(annotation.end_index || 0)
+      }];
+    });
+    const queries = [...new Set(output
+      .filter((item) => item.type === "web_search_call")
+      .map((item) => String(item.action?.query || "").trim())
+      .filter(Boolean))];
+    const usedSearch = output.some((item) => item.type === "web_search_call");
+    if (!content) throw aiResponseInvalid("联网模型没有返回可用内容");
+    return { content, citations, queries, usedSearch };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function aiHttpErrorMessage(status: number) {
   if ([401, 403].includes(status)) {
     return "模型认证失败，请检查 API Key 和账号权限";
@@ -355,7 +473,8 @@ export async function aiGenerateLeads(
   fetcher?: (
     url: string,
     init?: RequestInit
-  ) => Promise<globalThis.Response>
+  ) => Promise<globalThis.Response>,
+  timeoutMs = AI_MODEL_TIMEOUT_MS
 ): Promise<RawLead[]> {
   const count = Math.min(query.limit, 12);
   const prompt = [
@@ -371,7 +490,13 @@ export async function aiGenerateLeads(
     `获客目标：${query.goal || "未指定"}`,
     `排除：${query.excludeKeywords || "无"}`
   ].join("\n");
-  const content = await callAiModel(config, prompt, 4_000, fetcher);
+  const content = await callAiModel(
+    config,
+    prompt,
+    4_000,
+    fetcher,
+    timeoutMs
+  );
   let parsed: { companies?: unknown };
   try {
     parsed = extractJsonObject(content) as { companies?: unknown };

@@ -20,7 +20,7 @@ import {
 import type { ChannelAccount, ProviderKind } from "@shared/types";
 import { api } from "../api";
 import { queryKeys, useAccounts, useCapabilities, useIntegrationPreference } from "../data";
-import { EmptyState, Modal, Spinner, StatusBadge } from "../components/ui";
+import { ConfirmModal, EmptyState, Modal, SkeletonRows, Spinner, StatusBadge } from "../components/ui";
 
 interface Props {
   selectedAccountId?: string;
@@ -36,6 +36,7 @@ export function AccountsPage({ selectedAccountId, onSelectAccount, onOpenWorkspa
   const integrationPreferenceQuery = useIntegrationPreference();
   const mediaRetentionQuery = useQuery({ queryKey: queryKeys.mediaRetention, queryFn: api.mediaRetention });
   const [showCreate, setShowCreate] = useState(false);
+  const [deleteCandidate, setDeleteCandidate] = useState<ChannelAccount | null>(null);
   const [qrAccountId, setQrAccountId] = useState<string | null>(null);
   const [dismissedQrAccountId, setDismissedQrAccountId] = useState<string | null>(null);
   const [loginSuccess, setLoginSuccess] = useState<string | null>(null);
@@ -84,7 +85,12 @@ export function AccountsPage({ selectedAccountId, onSelectAccount, onOpenWorkspa
   });
   const remove = useMutation({
     mutationFn: api.deleteAccount,
-    onSuccess: refresh,
+    onSuccess: () => {
+      setDeleteCandidate(null);
+      setError(null);
+      setLoginSuccess("账号及其本机测试数据已删除。");
+      refresh();
+    },
     onError: (reason) => setError(reason.message)
   });
   const saveMediaRetention = useMutation({
@@ -180,7 +186,7 @@ export function AccountsPage({ selectedAccountId, onSelectAccount, onOpenWorkspa
       <div className="page-heading">
         <div>
           <span className="eyebrow">CHANNEL ACCOUNTS</span>
-          <h1>Communication 账号</h1>
+          <h1>即刻沟通账号</h1>
           <p>每个账号独立保存会话、联系人、权限和连接状态。</p>
         </div>
         <div className="heading-actions">
@@ -212,7 +218,7 @@ export function AccountsPage({ selectedAccountId, onSelectAccount, onOpenWorkspa
       {error && <div className="notice error-notice"><AlertTriangle size={18} /><span>{error}</span><button onClick={() => setError(null)}>关闭</button></div>}
 
       {accountsQuery.isLoading ? (
-        <div className="center-loading"><Spinner /> 正在读取账号池</div>
+        <div className="account-table-wrap skeleton-table"><SkeletonRows rows={4} /></div>
       ) : accounts.length === 0 ? (
         <EmptyState
           icon={<Smartphone size={24} />}
@@ -256,7 +262,7 @@ export function AccountsPage({ selectedAccountId, onSelectAccount, onOpenWorkspa
                       {!(account.provider === "demo" && !capabilitiesQuery.data?.demoProviderEnabled) && account.status === "waiting_qr" && account.qrDataUrl && <button className="button compact" onClick={() => openQr(account.id)}><QrCode size={15} /> 扫码</button>}
                       {!(account.provider === "demo" && !capabilitiesQuery.data?.demoProviderEnabled) && account.status === "connected" && <button className="icon-button" title="打开会话" onClick={() => { onSelectAccount(account.id); onOpenWorkspace(); }}><MessageSquareText size={17} /></button>}
                       {!["unconfigured", "logged_out"].includes(account.status) && <button className="icon-button" title={account.provider === "meta" ? "停用本地连接" : "退出登录"} onClick={() => logout.mutate(account.id)}><LogOut size={17} /></button>}
-                      <button className="icon-button danger" title="删除账号" onClick={() => window.confirm(`确认删除账号“${account.name}”及本机测试数据？`) && remove.mutate(account.id)}><Trash2 size={17} /></button>
+                      <button className="icon-button danger" title="删除账号" aria-label={`删除账号 ${account.name}`} disabled={remove.isPending} onClick={() => { remove.reset(); setDeleteCandidate(account); }}><Trash2 size={17} /></button>
                     </div>
                   </td>
                 </tr>
@@ -274,6 +280,15 @@ export function AccountsPage({ selectedAccountId, onSelectAccount, onOpenWorkspa
         else if (account.provider === "meta") onOpenAccessSettings();
         else refresh();
       }} />}
+      {deleteCandidate && <ConfirmModal
+        title="删除即刻沟通账号"
+        message={`将删除账号“${deleteCandidate.name}”及保存在本机的测试数据。`}
+        consequences={["本机账号配置和授权信息会被移除", "本机会话、消息和附件记录会被清理", "WhatsApp 或 Meta 平台上的原始数据不会受影响"]}
+        confirmLabel="删除账号"
+        pending={remove.isPending}
+        onClose={() => setDeleteCandidate(null)}
+        onConfirm={() => remove.mutate(deleteCandidate.id)}
+      />}
       {qrAccount && (
         <Modal title={`登录 ${qrAccount.name}`} onClose={closeQr} width="420px">
           <div className="qr-login">

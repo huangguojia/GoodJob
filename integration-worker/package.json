@@ -1,0 +1,28 @@
+{
+  "name": "goodjob-crm-integration-worker",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "test": "NODE_ENV=test tsx src/runtime-config-test.ts && NODE_ENV=test tsx tests/native-mcp-client-test.ts && NODE_ENV=test tsx tests/connector-driver-compliance-test.ts && NODE_ENV=test tsx tests/connector-failure-boundaries-test.ts && NODE_ENV=test tsx tests/oauth-client-test.ts && NODE_ENV=test tsx tests/integration-execution-test.ts && NODE_ENV=test tsx tests/microsoft-graph-connector-driver-test.ts && NODE_ENV=test tsx tests/google-workspace-connector-driver-test.ts && NODE_ENV=test tsx tests/second-batch-connectors-test.ts && NODE_ENV=test tsx tests/wecom-connector-driver-test.ts && NODE_ENV=test tsx tests/integration-webhook-event-test.ts && NODE_ENV=test tsx tests/integration-webhook-lease-test.ts"
+  },
+  "dependencies": {
+    "@goodjob/integration-connector-sdk": "0.1.0",
+    "@modelcontextprotocol/client": "2.0.0",
+    "ajv": "8.20.0",
+    "bullmq": "5.80.3",
+    "mysql2": "3.22.5",
+    "zod": "4.2.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

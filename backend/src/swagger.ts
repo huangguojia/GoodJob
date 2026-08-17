@@ -1,6 +1,6 @@
 import type { Application, NextFunction, Request, Response } from "express";
 import swaggerUi from "swagger-ui-express";
-import { requireAuth } from "./auth.js";
+import { hasIamPermission, requireAuth } from "./auth.js";
 
 type HttpMethod = "get" | "post" | "put" | "patch" | "delete";
 
@@ -23,6 +23,8 @@ const tagRules = [
   ["/api/auth", "认证"],
   ["/api/profile", "个人设置"],
   ["/api/accounts", "账号管理"],
+  ["/api/access-control", "组织与权限"],
+  ["/api/integrations", "外部工具集成"],
   ["/api/customers", "客户"],
   ["/api/leads", "线索"],
   ["/api/deals", "商机"],
@@ -47,6 +49,7 @@ const tagRules = [
   ["/api/prospect-schedules", "定时获客"],
   ["/api/prospect-runs", "搜索运行"],
   ["/api/prospect-agent-jobs", "智能获客任务"],
+  ["/api/v1/approval-", "审批中心"],
   ["/api/organization-identity-conflicts", "企业身份复核"],
   ["/api/organization-relations", "企业主数据"],
   ["/api/organizations", "企业主数据"],
@@ -77,6 +80,14 @@ function pathParameters(path: string, method: HttpMethod) {
       : {}),
     schema: { type: "string" }
   }));
+  if (path === "/api/wecom/commands/:callbackPublicId") {
+    parameters.push(
+      { name: "msg_signature", in: "query", required: true, schema: { type: "string", minLength: 40, maxLength: 80 } },
+      { name: "timestamp", in: "query", required: true, schema: { type: "string", pattern: "^\\d{1,20}$" } },
+      { name: "nonce", in: "query", required: true, schema: { type: "string", minLength: 1, maxLength: 128 } },
+      ...(method === "get" ? [{ name: "echostr", in: "query", required: true, schema: { type: "string", minLength: 1, maxLength: 2000 } }] : [])
+    );
+  }
   if (path === "/api/prospect-campaigns/:id/market-analysis-runs") {
     parameters.push({
       name: "Idempotency-Key",
@@ -103,6 +114,22 @@ function pathParameters(path: string, method: HttpMethod) {
         maxLength: 200,
         pattern: "^[A-Za-z0-9._:-]+$"
       }
+    });
+  }
+  if (path === "/api/v1/approval-instances" && method === "get") {
+    parameters.push({
+      name: "status",
+      in: "query",
+      description: "按审批实例状态筛选。",
+      schema: { type: "string", enum: ["draft", "running", "approved", "rejected", "withdrawn", "cancelled", "failed"] }
+    });
+  }
+  if (path === "/api/v1/approval-tasks" && method === "get") {
+    parameters.push({
+      name: "status",
+      in: "query",
+      description: "按审批任务状态筛选。",
+      schema: { type: "string", enum: ["pending", "approved", "rejected", "transferred", "cancelled", "expired"] }
     });
   }
   if (path === "/api/prospects/:id/convert-to-lead") {
@@ -387,12 +414,25 @@ function operationId(method: HttpMethod, path: string) {
 
 function securityFor(method: HttpMethod, path: string) {
   if (path === "/api/health" || path === "/api/auth/login" || path === "/api/auth/logout") return [];
+  if (path === "/api/integrations/oauth/callback/:connectorCode") return [];
+  if (path === "/api/integrations/webhooks/:connectorCode/:connectionPublicId") return [];
+  if (path === "/api/wecom/commands/:callbackPublicId") return [];
   if (path === "/api/whatsapp/webhook/twilio") return [{ twilioSignature: [] }];
   if (method === "get") return [{ bearerAuth: [] }, { cookieAuth: [] }];
   return [{ bearerAuth: [] }, { cookieAuth: [], csrfToken: [] }];
 }
 
 function requestBodyFor(method: HttpMethod, path: string) {
+  if (method === "post" && path === "/api/wecom/commands/:callbackPublicId") {
+    return {
+      required: true,
+      content: {
+        "application/xml": {
+          schema: { type: "string", description: "企业微信加密 XML 回调正文；服务端会先验签，再使用 EncodingAESKey 解密。" }
+        }
+      }
+    };
+  }
   if (method === "get" || method === "delete") return undefined;
   const schema = path === "/api/auth/login"
     ? {
@@ -402,6 +442,240 @@ function requestBodyFor(method: HttpMethod, path: string) {
           email: { type: "string", format: "email", description: "CRM 登录邮箱" },
           password: { type: "string", format: "password", description: "CRM 登录密码" }
         },
+          additionalProperties: false
+        }
+    : method === "post" && path === "/api/wecom-command/endpoints"
+      ? {
+          type: "object",
+          required: ["connectionId", "corpId", "callbackToken", "encodingAesKey"],
+          properties: {
+            connectionId: { type: "string", minLength: 1, maxLength: 100 },
+            teamId: { type: "string", maxLength: 64, description: "仅超级管理员代团队配置时可用。" },
+            corpId: { type: "string", pattern: "^[A-Za-z0-9_-]{3,100}$" },
+            callbackToken: { type: "string", minLength: 1, maxLength: 128, format: "password", writeOnly: true },
+            encodingAesKey: { type: "string", pattern: "^[A-Za-z0-9]{43}$", format: "password", writeOnly: true }
+          },
+          additionalProperties: false
+        }
+    : path === "/api/v1/approval-workflows"
+      ? {
+          type: "object",
+          required: ["code", "name", "businessType", "nodes"],
+          properties: {
+            code: { type: "string", minLength: 2, maxLength: 80 },
+            name: { type: "string", minLength: 2, maxLength: 160 },
+            businessType: { type: "string", enum: ["quote", "discount", "customer_transfer", "export", "commission", "custom"] },
+            allowParallel: { type: "boolean", default: false },
+            triggerConfig: { type: "object", additionalProperties: true },
+            formSchema: { type: "object", additionalProperties: true },
+            nodes: {
+              type: "array", minItems: 1, maxItems: 12,
+              items: {
+                type: "object", required: ["name", "approverStrategy"], additionalProperties: false,
+                properties: {
+                  id: { type: "string", maxLength: 90 },
+                  name: { type: "string", minLength: 1, maxLength: 120 },
+                  approverStrategy: { type: "string", enum: ["specific_member", "role_in_tenant", "requester_manager", "permission_holder"] },
+                  approverConfig: { type: "object", additionalProperties: true },
+                  approvalMode: { type: "string", enum: ["single", "all", "any"], default: "single" }
+                }
+              }
+            }
+          },
+          additionalProperties: false
+        }
+    : path === "/api/v1/approval-instances"
+      ? {
+          type: "object",
+          required: ["workflowId", "title", "idempotencyKey"],
+          properties: {
+            workflowId: { type: "string", minLength: 1, maxLength: 90 },
+            businessId: { type: "string", maxLength: 120, default: "" },
+            title: { type: "string", minLength: 2, maxLength: 220 },
+            summary: { type: "string", maxLength: 500, default: "" },
+            formData: { type: "object", additionalProperties: true },
+            businessSnapshot: { type: "object", additionalProperties: true },
+            comment: { type: "string", maxLength: 1000, default: "" },
+            idempotencyKey: { type: "string", minLength: 8, maxLength: 160 }
+          },
+          additionalProperties: false
+        }
+    : (path === "/api/v1/approval-instances/:id/withdraw"
+      || path === "/api/v1/approval-instances/:id/remind"
+      || path === "/api/v1/approval-tasks/:id/comment")
+      ? {
+          type: "object", required: ["idempotencyKey"], additionalProperties: false,
+          properties: {
+            comment: { type: "string", maxLength: 1000, default: "" },
+            idempotencyKey: { type: "string", minLength: 8, maxLength: 160 }
+          }
+        }
+    : path === "/api/v1/approval-tasks/:id/:decision"
+      ? {
+          type: "object", required: ["idempotencyKey"], additionalProperties: false,
+          properties: {
+            version: { type: "integer", minimum: 1 },
+            comment: { type: "string", maxLength: 1000, default: "" },
+            idempotencyKey: { type: "string", minLength: 8, maxLength: 160 }
+          }
+        }
+    : (path === "/api/v1/approval-tasks/:id/transfer"
+      || path === "/api/v1/approval-tasks/:id/add-approver")
+      ? {
+          type: "object", required: ["membershipId", "idempotencyKey"], additionalProperties: false,
+          properties: {
+            membershipId: { type: "string", minLength: 1, maxLength: 90 },
+            comment: { type: "string", maxLength: 1000, default: "" },
+            idempotencyKey: { type: "string", minLength: 8, maxLength: 160 }
+          }
+        }
+    : method === "post" && path === "/api/wecom-command/bindings"
+      ? {
+          type: "object",
+          required: ["connectionId", "wecomUserId", "crmUserId"],
+          properties: {
+            connectionId: { type: "string", minLength: 1, maxLength: 100 },
+            teamId: { type: "string", maxLength: 64, description: "仅超级管理员代团队绑定时可用。" },
+            wecomUserId: { type: "string", minLength: 1, maxLength: 128 },
+            crmUserId: { type: "string", minLength: 1, maxLength: 64 }
+          },
+          additionalProperties: false
+        }
+    : method === "post" && path === "/api/integrations/connections"
+      ? {
+          type: "object",
+          required: ["connectorId", "scope"],
+          properties: {
+            connectorId: { type: "string", maxLength: 64, description: "服务端目录中的连接器 ID，不接受自定义 URL。" },
+            scope: { type: "string", enum: ["personal", "team", "platform"] },
+            displayName: { type: "string", maxLength: 160 },
+            credentials: {
+              type: "object", maxProperties: 8, writeOnly: true,
+              additionalProperties: { type: "string", maxLength: 2000, format: "password" },
+              description: "仅 api_token 连接器需要；字段由目录 credentialFields 决定，值加密保存且不会回显。"
+            }
+          },
+          additionalProperties: false
+        }
+    : method === "post" && path === "/api/integrations/connections/:id/credentials"
+      ? {
+          type: "object", required: ["credentials"], additionalProperties: false,
+          properties: {
+            credentials: {
+              type: "object", minProperties: 1, maxProperties: 8, writeOnly: true,
+              additionalProperties: { type: "string", maxLength: 2000, format: "password" },
+              description: "替换当前连接的加密 API 凭据；只允许处于需重新授权状态的连接。"
+            }
+          }
+        }
+    : method === "post" && path === "/api/integrations/connectors/private"
+      ? {
+          type: "object",
+          required: ["name", "code", "manifest"],
+          properties: {
+            name: { type: "string", minLength: 1, maxLength: 160 },
+            code: { type: "string", minLength: 3, maxLength: 100, pattern: "^[a-z][a-z0-9-]+$" },
+            version: { type: "string", minLength: 1, maxLength: 40, default: "1.0.0" },
+            description: { type: "string", maxLength: 1000 },
+            teamId: { type: "string", maxLength: 64, description: "仅超级管理员代团队提交时可用。" },
+            manifest: {
+              type: "object",
+              required: ["schemaVersion", "stage", "driver", "endpoint", "approvedHosts", "allowedPorts", "authentication"],
+              properties: {
+                schemaVersion: { type: "string", enum: ["1.0"] },
+                stage: { type: "string", enum: ["available"] },
+                driver: { type: "string", enum: ["native_mcp"] },
+                endpoint: { type: "string", format: "uri", description: "生产环境必须使用 HTTPS，且主机和端口必须进入白名单。" },
+                approvedHosts: { type: "array", minItems: 1, maxItems: 20, items: { type: "string", maxLength: 253 } },
+                allowedPorts: { type: "array", minItems: 1, maxItems: 10, items: { type: "integer", minimum: 1, maximum: 65535 } },
+                authentication: { type: "string", enum: ["none", "oauth2"] },
+                oauth: {
+                  type: "object",
+                  properties: {
+                    clientId: { type: "string", maxLength: 300, description: "OAuth 公共客户端标识。" },
+                    clientSecretEnv: { type: "string", pattern: "^INTEGRATION_[A-Z0-9_]+$", description: "仅允许环境变量引用，禁止提交明文密钥。" },
+                    scopes: { type: "array", minItems: 1, maxItems: 50, items: { type: "string", maxLength: 200 } }
+                  },
+                  additionalProperties: false
+                },
+                maxTools: { type: "integer", minimum: 1, maximum: 200, default: 200 }
+              },
+              additionalProperties: false
+            }
+          },
+          additionalProperties: false
+        }
+    : method === "post" && path === "/api/integrations/connectors/:id/review"
+      ? {
+          type: "object",
+          required: ["decision"],
+          properties: {
+            decision: { type: "string", enum: ["approved", "rejected"] },
+            note: { type: "string", maxLength: 1000 }
+          },
+          additionalProperties: false
+        }
+    : method === "post" && path === "/api/integrations/tools/:id/approve"
+      ? {
+          type: "object",
+          required: ["stableAlias", "riskLevel", "permissionCode"],
+          properties: {
+            stableAlias: { type: "string", minLength: 3, maxLength: 120, pattern: "^[a-z][a-z0-9._:-]+$" },
+            riskLevel: { type: "integer", minimum: 0, maximum: 5, description: "R0-R2 只读，R3-R5 写入；R4-R5 强制审批。" },
+            permissionCode: { type: "string", minLength: 2, maxLength: 80 },
+            fieldAllowlist: { type: "array", maxItems: 100, items: { type: "string", maxLength: 100 } },
+            dailyCallLimit: { type: "integer", minimum: 1, maximum: 10000, default: 100 },
+            allowedDataClasses: { type: "array", items: { type: "string", enum: ["public", "business", "personal", "sensitive"] } },
+            approvalPolicy: { type: "string", enum: ["risk_based", "always"] },
+            completionEvidence: { type: "array", items: { type: "string", enum: ["created_object_id", "external_receipt_id", "state_transition", "read_after_write_match", "delivery_acceptance", "file_artifact"] } }
+          },
+          additionalProperties: false
+        }
+    : method === "post" && path === "/api/integrations/tools/:id/reject"
+      ? {
+          type: "object",
+          properties: { note: { type: "string", maxLength: 500 } },
+          additionalProperties: false
+        }
+    : method === "post" && path === "/api/integrations/connections/:id/confirm"
+      ? {
+          type: "object",
+          properties: { transactionId: { type: "string", maxLength: 64 } },
+          additionalProperties: false
+        }
+    : method === "post" && path === "/api/integrations/events/:id/link-customer"
+      ? {
+          type: "object",
+          required: ["customerId"],
+          properties: {
+            customerId: {
+              type: "string",
+              minLength: 1,
+              maxLength: 64,
+              description: "当前账号可见的 CRM 客户 ID；业务员限本人客户，经理和管理员限本团队客户。"
+            }
+          },
+          additionalProperties: false
+        }
+    : method === "post" && [
+        "/api/integrations/microsoft/mail/send",
+        "/api/integrations/google/mail/send"
+      ].includes(path)
+      ? {
+          type: "object",
+          required: ["customerId", "to", "subject", "body"],
+          properties: {
+            customerId: { type: "string", minLength: 1, maxLength: 64, description: "仅作 CRM 内部关联，不发送给外部邮箱服务。" },
+            to: { type: "array", minItems: 1, maxItems: 50, items: { type: "string", format: "email" } },
+            cc: { type: "array", maxItems: 50, items: { type: "string", format: "email" } },
+            subject: { type: "string", minLength: 1, maxLength: 255 },
+            body: { type: "string", minLength: 1, maxLength: 50000 },
+            bodyType: { type: "string", enum: ["text", "html"] },
+            attachments: { type: "array", maxItems: 5, items: { type: "object", additionalProperties: false } },
+            conversationId: { type: "string", maxLength: 500 },
+            ...(path === "/api/integrations/google/mail/send" ? { inReplyTo: { type: "string", maxLength: 998 } } : {}),
+            nextFollowAt: { type: "string", maxLength: 100 }
+          },
           additionalProperties: false
         }
     : method === "post"
@@ -803,7 +1077,24 @@ function requestBodyFor(method: HttpMethod, path: string) {
       || path.startsWith("/api/prospect-runs")
       || path === "/api/organization-identity-conflicts/:id/review"
       || path === "/api/organizations/:id/aliases"
-      || path === "/api/organization-relations",
+      || path === "/api/organization-relations"
+      || path === "/api/integrations/connections"
+      || path === "/api/wecom-command/endpoints"
+      || path === "/api/wecom-command/bindings"
+      || path === "/api/integrations/connectors/private"
+      || path === "/api/integrations/connectors/:id/review"
+      || path === "/api/integrations/tools/:id/approve"
+      || path === "/api/integrations/tools/:id/reject"
+      || path === "/api/integrations/microsoft/mail/send"
+      || path === "/api/integrations/google/mail/send"
+      || path === "/api/v1/approval-workflows"
+      || path === "/api/v1/approval-instances"
+      || path === "/api/v1/approval-instances/:id/withdraw"
+      || path === "/api/v1/approval-instances/:id/remind"
+      || path === "/api/v1/approval-tasks/:id/:decision"
+      || path === "/api/v1/approval-tasks/:id/transfer"
+      || path === "/api/v1/approval-tasks/:id/add-approver"
+      || path === "/api/v1/approval-tasks/:id/comment",
     content: {
       "application/json": { schema }
     }
@@ -812,7 +1103,7 @@ function requestBodyFor(method: HttpMethod, path: string) {
 
 function registeredApiRoutes(app: Application) {
   const stack: ExpressRouteLayer[] = (app as Application & { _router?: { stack?: ExpressRouteLayer[] } })._router?.stack || [];
-  return stack.flatMap((layer): Array<{ method: HttpMethod; path: string }> => {
+  const discovered = stack.flatMap((layer): Array<{ method: HttpMethod; path: string }> => {
     const path = layer.route?.path;
     if (typeof path !== "string" || !path.startsWith("/api/") || path.startsWith("/api/docs")) return [];
     return Object.entries(layer.route?.methods || {})
@@ -821,6 +1112,60 @@ function registeredApiRoutes(app: Application) {
       .filter((method): method is HttpMethod => method in methodLabels)
       .map((method) => ({ method, path }));
   });
+  const integrationRoutes: Array<{ method: HttpMethod; path: string }> = [
+    { method: "get", path: "/api/integrations/catalog" },
+    { method: "post", path: "/api/integrations/connectors/private" },
+    { method: "get", path: "/api/integrations/connectors/reviews" },
+    { method: "post", path: "/api/integrations/connectors/:id/review" },
+    { method: "get", path: "/api/integrations/connections" },
+    { method: "post", path: "/api/integrations/connections" },
+    { method: "get", path: "/api/integrations/connections/:id" },
+    { method: "post", path: "/api/integrations/connections/:id/auth/start" },
+    { method: "get", path: "/api/integrations/auth/transactions/:id" },
+    { method: "get", path: "/api/integrations/oauth/callback/:connectorCode" },
+    { method: "get", path: "/api/integrations/webhooks/:connectorCode/:connectionPublicId" },
+    { method: "post", path: "/api/integrations/webhooks/:connectorCode/:connectionPublicId" },
+    { method: "post", path: "/api/integrations/connections/:id/confirm" },
+    { method: "post", path: "/api/integrations/connections/:id/reauthorize" },
+    { method: "post", path: "/api/integrations/connections/:id/credentials" },
+    { method: "post", path: "/api/integrations/connections/:id/refresh-tools" },
+    { method: "post", path: "/api/integrations/connections/:id/pause" },
+    { method: "post", path: "/api/integrations/connections/:id/resume" },
+    { method: "post", path: "/api/integrations/connections/:id/disconnect" },
+    { method: "get", path: "/api/integrations/tools" },
+    { method: "post", path: "/api/integrations/tools/:id/approve" },
+    { method: "post", path: "/api/integrations/tools/:id/reject" },
+    { method: "post", path: "/api/integrations/tools/:id/test" },
+    { method: "get", path: "/api/integrations/approvals" },
+    { method: "get", path: "/api/integrations/approvals/:id" },
+    { method: "post", path: "/api/integrations/approvals/:id/approve" },
+    { method: "post", path: "/api/integrations/approvals/:id/reject" },
+    { method: "get", path: "/api/integrations/calls" },
+    { method: "get", path: "/api/integrations/usage" },
+    { method: "get", path: "/api/integrations/calls/:id" },
+    { method: "post", path: "/api/integrations/calls/:id/reconcile" },
+    { method: "get", path: "/api/integrations/events" },
+    { method: "post", path: "/api/integrations/events/:id/replay" },
+    { method: "post", path: "/api/integrations/events/:id/link-customer" },
+    { method: "get", path: "/api/integrations/microsoft/mail/messages" },
+    { method: "get", path: "/api/integrations/microsoft/mail/messages/:messageId" },
+    { method: "post", path: "/api/integrations/microsoft/mail/send" },
+    { method: "get", path: "/api/integrations/microsoft/calendar/events" },
+    { method: "post", path: "/api/integrations/microsoft/calendar/availability" },
+    { method: "post", path: "/api/integrations/microsoft/calendar/events" },
+    { method: "patch", path: "/api/integrations/microsoft/calendar/events/:eventId" },
+    { method: "get", path: "/api/integrations/microsoft/business-calls/:id" },
+    { method: "get", path: "/api/integrations/google/mail/messages" },
+    { method: "get", path: "/api/integrations/google/mail/messages/:messageId" },
+    { method: "post", path: "/api/integrations/google/mail/send" },
+    { method: "get", path: "/api/integrations/google/calendar/events" },
+    { method: "post", path: "/api/integrations/google/calendar/availability" },
+    { method: "post", path: "/api/integrations/google/calendar/events" },
+    { method: "patch", path: "/api/integrations/google/calendar/events/:eventId" },
+    { method: "get", path: "/api/integrations/google/business-calls/:id" }
+  ];
+  const unique = new Map([...discovered, ...integrationRoutes].map((route) => [`${route.method}:${route.path}`, route]));
+  return [...unique.values()];
 }
 
 const publicAgentJobSchema = {
@@ -1664,6 +2009,38 @@ function responsesFor(method: HttpMethod, path: string) {
     "403": { $ref: "#/components/responses/Forbidden" },
     "404": { $ref: "#/components/responses/NotFound" }
   };
+  if (path === "/api/v1/approval-workflows" && method === "post") {
+    responses["201"] = { description: "审批流程草稿已创建" };
+  }
+  if (path === "/api/v1/approval-instances" && method === "post") {
+    responses["201"] = { description: "审批实例已提交并生成首个审批任务" };
+  }
+  if (path.startsWith("/api/integrations")) {
+    responses["409"] = { description: "连接状态、工具 Schema 或审核状态冲突" };
+    responses["503"] = { description: "集成服务未启用或执行队列不可用" };
+    if (method === "post" && (path === "/api/integrations/connections"
+      || path === "/api/integrations/connectors/private"
+      || path.endsWith("/auth/start") || path.endsWith("/confirm") || path.endsWith("/reauthorize")
+      || path.endsWith("/refresh-tools") || path.endsWith("/test") || path.endsWith("/approve")
+      || path === "/api/integrations/microsoft/mail/send"
+      || path === "/api/integrations/microsoft/calendar/events"
+      || path === "/api/integrations/google/mail/send"
+      || path === "/api/integrations/google/calendar/events")) {
+      responses["202"] = { description: "任务已进入独立 Integration Worker 队列" };
+    }
+    if (method === "post" && path === "/api/integrations/webhooks/:connectorCode/:connectionPublicId") {
+      responses["202"] = { description: "Webhook 已验签、去重并进入事件队列" };
+    }
+    if (method === "post" && path === "/api/integrations/events/:id/replay") {
+      responses["202"] = { description: "死信事件已重新放回 Webhook 队列" };
+    }
+    if (method === "patch" && [
+      "/api/integrations/microsoft/calendar/events/:eventId",
+      "/api/integrations/google/calendar/events/:eventId"
+    ].includes(path)) {
+      responses["202"] = { description: "会议更新已冻结参数并等待安全执行" };
+    }
+  }
   const campaignMutation = method !== "get" && (
     path === "/api/prospect-campaigns/:id"
     || path === "/api/prospect-campaigns/:id/versions"
@@ -2735,8 +3112,8 @@ export function createOpenApiDocument(app: Application) {
 
 function requireApiDocsAdmin(req: Request, res: Response, next: NextFunction) {
   requireAuth(req, res, () => {
-    if (req.user?.role !== "admin" && req.user?.role !== "super_admin") {
-      res.status(403).json({ message: "只有管理员和超级管理员可以访问 API 调试文档" });
+    if (!hasIamPermission(req.user, "system.settings.manage")) {
+      res.status(403).json({ message: "当前账号没有访问 API 调试文档的权限", permissionCode: "system.settings.manage" });
       return;
     }
     res.setHeader("Cache-Control", "no-store");

@@ -86,11 +86,14 @@ export interface ProviderCredential {
 export interface ProviderNetworkPolicy {
   allowedHosts: string[];
   allowedPathPrefixes: string[];
+  /** Paths allowed only after a validated redirect from an initial allowlisted URL. */
+  redirectPathPrefixes?: string[];
   allowedPaths?: string[];
   allowedMethods: Array<"GET" | "HEAD" | "POST">;
   redirectHosts?: string[];
   maxRedirects?: number;
   maxResponseBytes?: number;
+  truncateResponse?: boolean;
   timeoutMs?: number;
 }
 

@@ -268,6 +268,170 @@ const migrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS meta_app_configs_owner_idx ON meta_app_configs(owner_user_id);
       CREATE INDEX IF NOT EXISTS routing_rules_owner_idx ON routing_rules(owner_user_id);
     `
+  },
+  {
+    version: 6,
+    name: "durable_meta_webhook_inbox",
+    sql: `
+      CREATE TABLE IF NOT EXISTS meta_webhook_events (
+        id text PRIMARY KEY,
+        app_config_id text NOT NULL REFERENCES meta_app_configs(id) ON DELETE CASCADE,
+        event_hash text NOT NULL,
+        payload_cipher text NOT NULL,
+        status text NOT NULL CHECK (status IN ('pending','processing','processed','failed')),
+        attempts integer NOT NULL DEFAULT 0,
+        last_error text,
+        received_at timestamptz NOT NULL,
+        processing_started_at timestamptz,
+        processed_at timestamptz,
+        updated_at timestamptz NOT NULL,
+        UNIQUE (app_config_id, event_hash)
+      );
+      CREATE INDEX IF NOT EXISTS meta_webhook_events_recovery_idx
+        ON meta_webhook_events(status, received_at);
+    `
+  },
+  {
+    version: 7,
+    name: "conversation_intelligence_and_followups",
+    sql: `
+      CREATE TABLE IF NOT EXISTS conversation_analyses (
+        id text PRIMARY KEY,
+        conversation_id text NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        account_id text NOT NULL REFERENCES channel_accounts(id) ON DELETE CASCADE,
+        status text NOT NULL CHECK (status IN ('ready','failed')),
+        summary text NOT NULL,
+        key_points_json text NOT NULL DEFAULT '[]',
+        traits_json text NOT NULL DEFAULT '[]',
+        buying_intent text NOT NULL,
+        risk_level text NOT NULL,
+        next_action text NOT NULL,
+        source_message_count integer NOT NULL DEFAULT 0,
+        error text,
+        generated_at timestamptz NOT NULL,
+        updated_at timestamptz NOT NULL,
+        UNIQUE (conversation_id)
+      );
+      CREATE INDEX IF NOT EXISTS conversation_analyses_account_idx
+        ON conversation_analyses(account_id, updated_at);
+
+      CREATE TABLE IF NOT EXISTS conversation_followups (
+        id text PRIMARY KEY,
+        conversation_id text NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        analysis_id text NOT NULL REFERENCES conversation_analyses(id) ON DELETE CASCADE,
+        source_key text NOT NULL,
+        title text NOT NULL,
+        reason text NOT NULL,
+        priority text NOT NULL,
+        due_at timestamptz NOT NULL,
+        status text NOT NULL CHECK (status IN ('pending','completed','dismissed')),
+        evidence_message_ids_json text NOT NULL DEFAULT '[]',
+        created_at timestamptz NOT NULL,
+        updated_at timestamptz NOT NULL,
+        UNIQUE (conversation_id, source_key)
+      );
+      CREATE INDEX IF NOT EXISTS conversation_followups_status_idx
+        ON conversation_followups(status, due_at);
+    `
+  },
+  {
+    version: 8,
+    name: "automation_rhythm_center",
+    sql: `
+      CREATE TABLE IF NOT EXISTS automation_settings (
+        id text PRIMARY KEY,
+        analysis_interval_hours integer NOT NULL DEFAULT 6,
+        daily_todo_hour integer NOT NULL DEFAULT 9,
+        daily_todo_minute integer NOT NULL DEFAULT 0,
+        timezone text NOT NULL DEFAULT 'Asia/Shanghai',
+        enabled integer NOT NULL DEFAULT 1,
+        last_analysis_at timestamptz,
+        next_analysis_at timestamptz,
+        last_daily_todo_at timestamptz,
+        next_daily_todo_at timestamptz,
+        last_run_status text NOT NULL DEFAULT 'idle',
+        last_run_summary text NOT NULL DEFAULT '',
+        updated_at timestamptz NOT NULL,
+        owner_user_id text UNIQUE
+      );
+      CREATE TABLE IF NOT EXISTS automation_deliveries (
+        id text PRIMARY KEY,
+        owner_user_id text NOT NULL,
+        followup_id text NOT NULL,
+        run_date date NOT NULL,
+        delivery_type text NOT NULL,
+        created_at timestamptz NOT NULL,
+        UNIQUE(owner_user_id, followup_id, run_date, delivery_type)
+      );
+    `
+  },
+  {
+    version: 9,
+    name: "automation_run_history",
+    sql: `
+      CREATE TABLE IF NOT EXISTS automation_runs (
+        id text PRIMARY KEY,
+        owner_user_id text,
+        trigger text NOT NULL CHECK (trigger IN ('scheduled','manual')),
+        status text NOT NULL CHECK (status IN ('running','success','failed')),
+        total_conversations integer NOT NULL DEFAULT 0,
+        processed_conversations integer NOT NULL DEFAULT 0,
+        analysis_updated integer NOT NULL DEFAULT 0,
+        todos_created integer NOT NULL DEFAULT 0,
+        notifications_sent integer NOT NULL DEFAULT 0,
+        skipped integer NOT NULL DEFAULT 0,
+        current_conversation text,
+        error text,
+        started_at timestamptz NOT NULL,
+        finished_at timestamptz,
+        updated_at timestamptz NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS automation_runs_owner_started_idx ON automation_runs(owner_user_id, started_at DESC);
+    `
+  },
+  {
+    version: 10,
+    name: "conversation_trait_feedback",
+    sql: `
+      CREATE TABLE IF NOT EXISTS conversation_trait_feedback (
+        id text PRIMARY KEY,
+        conversation_id text NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        trait_key text NOT NULL,
+        trait_label text NOT NULL,
+        verdict text NOT NULL CHECK (verdict IN ('confirmed','rejected')),
+        correction_text text,
+        actor_user_id text NOT NULL,
+        created_at timestamptz NOT NULL,
+        updated_at timestamptz NOT NULL,
+        UNIQUE(conversation_id, trait_key)
+      );
+      CREATE INDEX IF NOT EXISTS conversation_trait_feedback_conversation_idx ON conversation_trait_feedback(conversation_id, updated_at DESC);
+    `
+  },
+  {
+    version: 11,
+    name: "commercial_intelligence",
+    sql: `
+      ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS intelligence_mode text NOT NULL DEFAULT 'rules';
+      ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS intelligence_provider_id text;
+      ALTER TABLE conversation_analyses ADD COLUMN IF NOT EXISTS engine text NOT NULL DEFAULT 'rules';
+      ALTER TABLE conversation_analyses ADD COLUMN IF NOT EXISTS model text;
+      ALTER TABLE conversation_analyses ADD COLUMN IF NOT EXISTS prompt_version text NOT NULL DEFAULT 'rules-v1';
+    `
+  },
+  {
+    version: 12,
+    name: "automation_delivery_tracking",
+    sql: `
+      ALTER TABLE automation_deliveries ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'success';
+      ALTER TABLE automation_deliveries ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 1;
+      ALTER TABLE automation_deliveries ADD COLUMN IF NOT EXISTS external_id text;
+      ALTER TABLE automation_deliveries ADD COLUMN IF NOT EXISTS last_error text;
+      ALTER TABLE automation_deliveries ADD COLUMN IF NOT EXISTS next_retry_at timestamptz;
+      ALTER TABLE automation_deliveries ADD COLUMN IF NOT EXISTS updated_at timestamptz;
+      UPDATE automation_deliveries SET updated_at=created_at WHERE updated_at IS NULL;
+      CREATE INDEX IF NOT EXISTS automation_deliveries_status_idx ON automation_deliveries(owner_user_id,status,next_retry_at);
+    `
   }
 ];
 

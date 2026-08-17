@@ -17,11 +17,13 @@
     "start": "node dist-server/server/index.js",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "vitest run",
+    "test:release": "npm run typecheck && npm run build && npm test -- --run",
     "test:watch": "vitest",
     "db:migrate": "tsx src/server/scripts/migrate.ts",
     "db:migrate:postgres-to-mysql": "tsx src/server/scripts/migrate-postgres-to-mysql.ts",
     "db:init": "tsx src/server/scripts/seed.ts",
     "db:seed-demo": "tsx src/server/scripts/seed-demo.ts",
+    "db:seed-ux-scenario": "tsx src/server/scripts/seed-ux-scenario.ts",
     "db:cleanup-demo": "tsx src/server/scripts/cleanup-demo.ts"
   },
   "dependencies": {
@@ -33,6 +35,7 @@
     "express": "5.2.1",
     "helmet": "8.1.0",
     "https-proxy-agent": "9.1.0",
+    "jsonwebtoken": "^9.0.2",
     "lucide-react": "0.468.0",
     "mysql2": "3.22.5",
     "pg": "8.16.3",
@@ -42,12 +45,13 @@
     "react-dom": "18.3.1",
     "socket.io": "4.8.3",
     "socket.io-client": "4.8.3",
-    "undici": "6.27.0",
+    "undici": "6.28.0",
     "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/cors": "2.8.19",
     "@types/express": "5.0.6",
+    "@types/jsonwebtoken": "^9.0.6",
     "@types/node": "22.19.8",
     "@types/pg": "8.15.6",
     "@types/qrcode": "1.5.6",

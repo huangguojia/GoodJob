@@ -80,7 +80,7 @@ export async function callGovernedAgentModel(input: {
 }
 
 export function agentModelMetrics(store: CrmStore, actor: AgentActor) {
-  const calls = store.agentModelCalls.filter((item) => item.ownerId === actor.id && (actor.role === "super_admin" || item.teamId === actor.teamId));
+  const calls = store.agentModelCalls.filter((item) => item.ownerId === actor.id && item.teamId === actor.teamId);
   const dayBoundary = Date.now() - 86_400_000;
   const recent = calls.filter((item) => new Date(item.createdAt).getTime() >= dayBoundary);
   const success = recent.filter((item) => item.success);
@@ -91,7 +91,7 @@ export function agentModelMetrics(store: CrmStore, actor: AgentActor) {
     budgets: { dailyUsd: positiveNumber(process.env.AGENT_DAILY_BUDGET_USD, 10), missionUsd: positiveNumber(process.env.AGENT_MISSION_BUDGET_USD, 2) },
     routes: { planning: routeValue("planning") || "当前主模型", evaluation: routeValue("evaluation") || "当前主模型", fallbackEnabled: true },
     recentCalls: recent.slice(0, 30),
-    evaluations: store.agentEvaluationRuns.filter((item) => item.ownerId === actor.id && (actor.role === "super_admin" || item.teamId === actor.teamId)).slice(0, 10)
+    evaluations: store.agentEvaluationRuns.filter((item) => item.ownerId === actor.id && item.teamId === actor.teamId).slice(0, 10)
   };
 }
 

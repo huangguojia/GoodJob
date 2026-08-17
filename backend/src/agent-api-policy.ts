@@ -26,9 +26,13 @@ const deniedPatterns: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /^\/api\/prospect-list\/assignees$/u, reason: "账号分配目录不向 Agent 开放" },
   { pattern: /^\/api\/whatsapp\/binding(?:\/|$)/u, reason: "个人 Communication 账号绑定配置不向 Agent 开放" },
   { pattern: /^\/api\/whatsapp\/webhook(?:\/|$)/u, reason: "外部 webhook 接收接口不向 Agent 开放" },
+  { pattern: /^\/api\/tools\/logs(?:\/|$)/u, reason: "系统审计日志不能由 Agent 直接读取或伪造" },
+  { pattern: /^\/api\/integrations(?:\/|$)/u, reason: "集成控制面和远程工具调用必须经过专用执行网关" },
   { pattern: /^\/api\/docs(?:\/|$)/u, reason: "部署调试文档不属于业务接口" },
   { pattern: /^\/api\/agent\/(?:plan|execute|runs|conversations|missions)(?:\/|$)/u, reason: "Agent 不能递归调用自身控制面" },
-  { pattern: /^\/api\/agent\/api(?:\/|$)/u, reason: "Agent 不能递归调用通用 API 网关" }
+  { pattern: /^\/api\/agent\/api(?:\/|$)/u, reason: "Agent 不能递归调用通用 API 网关" },
+  { pattern: /^\/api\/v1\//u, reason: "IAM、组织和审批控制面只能由人工用户配置和确认" },
+  { pattern: /^\/api\/platform\/v1\//u, reason: "平台运维和支持访问控制面不向租户 Agent 开放" }
 ];
 
 const externalPatterns = [
@@ -46,6 +50,8 @@ const externalPatterns = [
   /^\/api\/lead-finder\/source-config\/test$/u,
   /^\/api\/tools\/website-scrape\/preview$/u,
   /^\/api\/tools\/shipments\/ocr$/u,
+  /^\/api\/tools\/shipments\/[^/]+\/sync$/u,
+  /^\/api\/tools\/shipments\/sync-all$/u,
   /^\/api\/prospect-list\/[^/]+\/identity-bootstrap$/u,
   /^\/api\/prospect-strategies\/[^/]+\/runs$/u,
   /^\/api\/prospect-campaigns\/[^/]+\/market-analysis-runs$/u

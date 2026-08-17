@@ -12,7 +12,8 @@ export class ProviderManager {
     readonly demo: DemoProvider,
     readonly baileys: BaileysProvider,
     readonly meta: MetaProvider,
-    private readonly demoProviderEnabled = true
+    private readonly demoProviderEnabled = true,
+    private readonly officialOnly = false
   ) {}
 
   async connect(accountId: string): Promise<void> {
@@ -36,6 +37,9 @@ export class ProviderManager {
     if (account.provider !== "baileys") {
       throw new DomainError("MEDIA_PROVIDER_UNSUPPORTED", 409, "媒体附件当前仅支持 Baileys 免费通道");
     }
+    if (this.officialOnly) {
+      throw new DomainError("UNOFFICIAL_PROVIDER_DISABLED", 403, "Baileys is disabled in this runtime");
+    }
     return this.baileys.sendMedia(command);
   }
 
@@ -44,6 +48,9 @@ export class ProviderManager {
     if (!account) throw new DomainError("ACCOUNT_NOT_FOUND", 404, "Account not found");
     if (account.provider !== "baileys") {
       throw new DomainError("REVOKE_PROVIDER_UNSUPPORTED", 409, "消息撤回当前仅支持 Baileys 免费通道");
+    }
+    if (this.officialOnly) {
+      throw new DomainError("UNOFFICIAL_PROVIDER_DISABLED", 403, "Baileys is disabled in this runtime");
     }
     return this.baileys.revokeMessage(accountId, messageId);
   }
@@ -82,6 +89,13 @@ export class ProviderManager {
     if (!account) throw new Error("Account not found");
     if (account.provider === "demo" && !this.demoProviderEnabled && !allowDisabledDemo) {
       throw new DomainError("DEMO_PROVIDER_DISABLED", 403, "Demo Provider is disabled in this environment");
+    }
+    if (account.provider === "baileys" && this.officialOnly) {
+      throw new DomainError(
+        "UNOFFICIAL_PROVIDER_DISABLED",
+        403,
+        "Baileys is disabled because this runtime accepts official WhatsApp channels only"
+      );
     }
     return this.forProvider(account.provider);
   }

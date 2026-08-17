@@ -4,6 +4,14 @@ import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } fr
 import { promisify } from "node:util";
 import { getStore } from "./store.js";
 import type { SessionUser } from "./types.js";
+import { legacyPermissionScope } from "./iam/iam-foundation.js";
+
+export {
+  assertObjectScope,
+  authorize,
+  rejectClientScopeSelectors,
+  resolveDataScope
+} from "./authorization.js";
 
 const scrypt = promisify(scryptCallback);
 const TOKEN_ISSUER = "goodjob-crm";
@@ -12,6 +20,9 @@ const TOKEN_TTL_SECONDS = 8 * 60 * 60;
 const EPHEMERAL_DEVELOPMENT_SECRET = randomBytes(48).toString("base64url");
 export const AUTH_COOKIE_NAME = "gj_session";
 export const CSRF_COOKIE_NAME = "gj_csrf";
+
+export type IamActor = Pick<SessionUser, "id" | "teamId" | "role"> & Partial<Pick<SessionUser,
+  "iamPermissions" | "iamRoleNames" | "iamSource" | "iamDataScope">>;
 
 function jwtSecret() {
   const configured = process.env.JWT_SECRET?.trim();
@@ -27,6 +38,9 @@ function jwtSecret() {
 
 export function validateAuthSecurity() {
   jwtSecret();
+  if (process.env.NODE_ENV === "production" && (process.env.PLATFORM_MFA_ENCRYPTION_KEY?.trim().length || 0) < 32) {
+    throw new Error("生产环境必须配置至少 32 个字符的 PLATFORM_MFA_ENCRYPTION_KEY");
+  }
 }
 
 function secureCookies() {
@@ -39,6 +53,8 @@ interface TokenClaims {
   sub: string;
   ver: number;
   jti?: string;
+  purpose?: string;
+  mfa?: boolean;
 }
 
 declare global {
@@ -66,15 +82,26 @@ export function publicUser(user: ReturnType<typeof getStore>["users"][number]): 
     smtpSecure: user.smtpSecure ?? true,
     smtpUser: user.smtpUser || "",
     hasSmtpPassword: Boolean(user.smtpPassword),
+    imapHost: user.imapHost || "",
+    imapPort: user.imapPort || 993,
+    imapSecure: user.imapSecure ?? true,
+    imapUser: user.imapUser || "",
+    hasImapPassword: Boolean(user.imapPassword),
+    inboundSyncEnabled: Boolean(user.inboundSyncEnabled),
+    lastInboundSyncAt: user.lastInboundSyncAt || "",
+    lastInboundSyncStatus: user.lastInboundSyncStatus || undefined,
+    lastInboundSyncError: user.lastInboundSyncError || "",
+    lastInboundUid: user.lastInboundUid || 0,
+    inboundUidValidity: user.inboundUidValidity || "",
     lastDevelopmentEmailAt: user.lastDevelopmentEmailAt || "",
     lastDevelopmentEmailTo: user.lastDevelopmentEmailTo || "",
     lastDevelopmentEmailSubject: user.lastDevelopmentEmailSubject || ""
   };
 }
 
-export function signToken(user: SessionUser): string {
+export function signToken(user: SessionUser, context: { mfaVerified?: boolean } = {}): string {
   return jwt.sign(
-    { ver: user.authVersion },
+    { ver: user.authVersion, mfa: context.mfaVerified === true },
     jwtSecret(),
     {
       subject: user.id,
@@ -85,6 +112,22 @@ export function signToken(user: SessionUser): string {
       algorithm: "HS256"
     }
   );
+}
+
+export function signMfaSetupToken(user: SessionUser): string {
+  return jwt.sign(
+    { ver: user.authVersion, purpose: "platform_mfa_setup" },
+    jwtSecret(),
+    { subject: user.id, issuer: TOKEN_ISSUER, audience: TOKEN_AUDIENCE, expiresIn: 10 * 60, algorithm: "HS256" }
+  );
+}
+
+export function verifyMfaSetupToken(token: string) {
+  try {
+    const claims = jwt.verify(token, jwtSecret(), { issuer: TOKEN_ISSUER, audience: TOKEN_AUDIENCE, algorithms: ["HS256"] }) as TokenClaims;
+    if (claims.purpose !== "platform_mfa_setup" || !claims.sub) return null;
+    return { userId: claims.sub, authVersion: Number(claims.ver || 1) };
+  } catch { return null; }
 }
 
 function parseCookies(header = "") {
@@ -108,38 +151,93 @@ function requestToken(req: Request) {
   return { token, source: "cookie" as const };
 }
 
-export function requireAuth(req: Request, res: Response, next: NextFunction) {
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const { token, source } = requestToken(req);
   if (!token) {
     res.status(401).json({ message: "未登录" });
     return;
   }
+  let claims: TokenClaims;
   try {
-    const claims = jwt.verify(token, jwtSecret(), {
+    claims = jwt.verify(token, jwtSecret(), {
       issuer: TOKEN_ISSUER,
       audience: TOKEN_AUDIENCE,
       algorithms: ["HS256"]
     }) as TokenClaims;
-    const user = getStore().users.find((item) => item.id === claims.sub);
-    if (!user || user.status !== "active" || Number(user.authVersion || 1) !== Number(claims.ver || 1)) {
-      res.status(401).json({ message: "登录状态已失效，请重新登录" });
+  } catch {
+    res.status(401).json({ message: "登录已过期" });
+    return;
+  }
+  if (claims.purpose) {
+    res.status(401).json({ message: "该临时凭证不能用于访问系统" });
+    return;
+  }
+  const user = getStore().users.find((item) => item.id === claims.sub);
+  if (!user || user.status !== "active" || Number(user.authVersion || 1) !== Number(claims.ver || 1)) {
+    res.status(401).json({ message: "登录状态已失效，请重新登录" });
+    return;
+  }
+  const resolvedDataScope = req.user?.id === user.id ? req.user.iamDataScope : undefined;
+  req.user = publicUser(user);
+  req.user.iamDataScope = resolvedDataScope;
+  try {
+    const iamSession = await getStore().validateIamSession?.(req.user);
+    if (iamSession && !iamSession.valid) {
+      res.status(403).json({ message: iamSession.message || "当前成员身份已失效" });
       return;
     }
-    req.user = publicUser(user);
-    if (source === "cookie" && !["GET", "HEAD", "OPTIONS"].includes(req.method)) {
-      const cookies = parseCookies(req.headers.cookie);
-      const csrfCookie = cookies[CSRF_COOKIE_NAME] || "";
-      const csrfHeader = String(req.headers["x-csrf-token"] || "");
-      if (!csrfCookie || !csrfHeader || csrfCookie.length !== csrfHeader.length
-        || !timingSafeEqual(Buffer.from(csrfCookie), Buffer.from(csrfHeader))) {
-        res.status(403).json({ message: "安全校验失败，请刷新页面后重试" });
+    const snapshot = await getStore().getIamCapabilitySnapshot?.(req.user);
+    if (snapshot) {
+      req.user.iamPermissions = snapshot.permissions;
+      req.user.iamRoleNames = snapshot.roleNames;
+      req.user.iamSource = snapshot.source;
+    }
+    if (req.user.iamSource === "platform" && getStore().platformMfa) {
+      const mfa = await getStore().platformMfa!.status(req.user);
+      if (mfa.required && claims.mfa !== true) {
+        res.status(401).json({ message: "平台运维会话需要完成 MFA 验证" });
         return;
       }
     }
-    next();
   } catch {
-    res.status(401).json({ message: "登录已过期" });
+    res.status(503).json({ message: "身份状态校验暂不可用，请稍后重试" });
+    return;
   }
+  if (source === "cookie" && !["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+    const cookies = parseCookies(req.headers.cookie);
+    const csrfCookie = cookies[CSRF_COOKIE_NAME] || "";
+    const csrfHeader = String(req.headers["x-csrf-token"] || "");
+    if (!csrfCookie || !csrfHeader || csrfCookie.length !== csrfHeader.length
+      || !timingSafeEqual(Buffer.from(csrfCookie), Buffer.from(csrfHeader))) {
+      res.status(403).json({ message: "安全校验失败，请刷新页面后重试" });
+      return;
+    }
+  }
+  next();
+}
+
+export function hasIamPermission(user: IamActor | undefined, permissionCode: string) {
+  if (!user) return false;
+  if (user.iamPermissions) return Boolean(user.iamPermissions[permissionCode]?.length);
+  if (user.role === "super_admin") return false;
+  return Boolean(legacyPermissionScope(user.role, permissionCode));
+}
+
+export function hasIamScope(
+  user: IamActor | undefined,
+  permissionCode: string,
+  acceptedScopes: Array<"self" | "org_unit" | "org_subtree" | "tenant" | "public_pool">
+) {
+  if (!user) return false;
+  const scopes = user.iamPermissions?.[permissionCode];
+  if (scopes) return scopes.some((scope) => acceptedScopes.includes(scope));
+  if (user.iamPermissions || user.role === "super_admin") return false;
+  const legacyScope = legacyPermissionScope(user.role, permissionCode);
+  return Boolean(legacyScope && acceptedScopes.includes(legacyScope));
+}
+
+export function isPlatformIdentity(user: IamActor | undefined) {
+  return user?.iamSource === "platform" || (!user?.iamSource && user?.role === "super_admin");
 }
 
 export function createCsrfToken() {
@@ -188,7 +286,13 @@ export function csrfCookieOptions() {
   };
 }
 
-export function canSeeOwner(user: SessionUser, ownerId: string, teamId: string) {
+export function canSeeOwner(user: IamActor, ownerId: string, teamId: string) {
+  if (user.iamDataScope) {
+    return teamId === user.teamId
+      && (user.iamDataScope.tenantWide || user.iamDataScope.ownerIds.includes(ownerId));
+  }
+  if (isPlatformIdentity(user)) return false;
+  if (user.iamPermissions) return false;
   if (user.role === "super_admin") return true;
   if (user.role === "admin" || user.role === "manager") return user.teamId === teamId;
   return user.id === ownerId;
@@ -203,17 +307,18 @@ export function canSeePersonalData(user: SessionUser, ownerId: string) {
 }
 
 export function canManageAccounts(user?: SessionUser) {
-  return user?.role === "admin" || user?.role === "super_admin";
+  return hasIamPermission(user, "member.manage");
 }
 
 export function canManageRole(operator: SessionUser, targetRole: string) {
-  if (operator.role === "super_admin") return true;
-  if (operator.role !== "admin") return false;
-  return targetRole === "sales" || targetRole === "manager";
+  return hasIamPermission(operator, "member.manage")
+    && !isPlatformIdentity(operator)
+    && ["sales", "manager"].includes(targetRole);
 }
 
 export function canManageAccount(operator: SessionUser, target: SessionUser) {
-  if (operator.role === "super_admin") return true;
-  if (operator.role !== "admin") return false;
-  return target.teamId === operator.teamId && (target.role === "sales" || target.role === "manager");
+  return hasIamPermission(operator, "member.manage")
+    && !isPlatformIdentity(operator)
+    && target.teamId === operator.teamId
+    && target.role !== "super_admin";
 }
