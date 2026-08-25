@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GoodJob 工作台原型</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.34.1/dist/tabler-icons.min.css">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="shell" id="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <button class="brand-mark" type="button" aria-label="GoodJob 工作台"><span>G</span><span>J</span></button>
+        <div class="brand-name"><strong>GoodJob</strong><span>Global Growth OS</span></div>
+        <button class="icon-btn sidebar-close" id="sidebarToggle" type="button" aria-label="收起导航"><i class="ti ti-layout-sidebar-left-collapse"></i></button>
+      </div>
+
+      <nav class="main-nav" aria-label="主导航">
+        <p class="nav-label">经营</p>
+        <button class="nav-item active" type="button"><i class="ti ti-layout-dashboard"></i><span>工作台</span><small>今日</small></button>
+        <button class="nav-item" type="button"><i class="ti ti-search"></i><span>自动获客</span><small>3</small></button>
+        <button class="nav-item" type="button"><i class="ti ti-list-search"></i><span>搜客清单</span><small>28</small></button>
+        <button class="nav-item" type="button"><i class="ti ti-focus-2"></i><span>线索</span></button>
+        <button class="nav-item" type="button"><i class="ti ti-users"></i><span>客户</span></button>
+        <button class="nav-item" type="button"><i class="ti ti-briefcase"></i><span>商机</span><small>5</small></button>
+        <button class="nav-item" type="button"><i class="ti ti-building-warehouse"></i><span>客户公池</span></button>
+        <button class="nav-item" type="button"><i class="ti ti-messages"></i><span>Communication</span><small class="unread">6</small></button>
+        <button class="nav-item agent" type="button"><i class="ti ti-sparkles"></i><span>小K Agent</span></button>
+
+        <p class="nav-label nav-label-secondary">工具</p>
+        <button class="nav-item" type="button"><i class="ti ti-file-invoice"></i><span>单据平台</span></button>
+        <button class="nav-item" type="button"><i class="ti ti-chart-histogram"></i><span>经营报表</span></button>
+        <button class="nav-item" type="button"><i class="ti ti-adjustments-horizontal"></i><span>系统设置</span></button>
+      </nav>
+
+      <div class="sidebar-account">
+        <div class="avatar">AD</div>
+        <div><strong>Admin</strong><span>超级管理员</span></div>
+        <button class="icon-btn" type="button" aria-label="账户菜单"><i class="ti ti-dots"></i></button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="crumb"><span>GoodJob</span><i class="ti ti-chevron-right"></i><strong>工作台</strong></div>
+        <button class="global-search" id="globalSearch" type="button"><i class="ti ti-search"></i><span>搜索客户、商机、单据或页面</span><kbd>⌘ K</kbd></button>
+        <div class="top-actions">
+          <button class="icon-btn light" type="button" aria-label="帮助"><i class="ti ti-help-circle"></i></button>
+          <button class="icon-btn light notification" type="button" aria-label="通知"><i class="ti ti-bell"></i><b>4</b></button>
+          <button class="account-chip" type="button"><span class="avatar">AD</span><span><b>Admin</b><small>管理员</small></span><i class="ti ti-chevron-down"></i></button>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <section class="page-header">
+          <div>
+            <h1>经营工作台</h1>
+            <p>把今天的客户动作、商机风险和获客结果放在同一张经营视图里。</p>
+          </div>
+          <div class="header-actions">
+            <div class="period-switch" role="group" aria-label="统计周期">
+              <button type="button" class="active" data-period="today">今日</button>
+              <button type="button" data-period="week">本周</button>
+              <button type="button" data-period="month">本月</button>
+            </div>
+            <button class="btn secondary" id="meetingMode" type="button"><i class="ti ti-presentation"></i>晨会模式</button>
+            <button class="btn primary" id="newTask" type="button"><i class="ti ti-plus"></i>新增待办</button>
+          </div>
+        </section>
+
+        <section class="overview-grid">
+          <article class="daily-brief panel enter" style="--delay:0ms">
+            <div class="brief-top">
+              <span class="brief-label">今日经营判断</span>
+              <span class="updated"><i class="ti ti-refresh"></i>18:35 更新</span>
+            </div>
+            <h2>今天有 2 个临近成交节点，需要在报价有效期前完成确认。</h2>
+            <p>先确认 Kanto Retail 的付款条件，再同步 Nordic Tools 的替代交期方案。</p>
+            <div class="brief-reasons">
+              <div><i class="ti ti-bolt"></i><span><b>业务影响</b>两笔商机占本月加权金额的 46%</span></div>
+              <div><i class="ti ti-clock-hour-4"></i><span><b>时间窗口</b>报价与交期承诺将在 48 小时内到期</span></div>
+            </div>
+            <div class="brief-actions">
+              <button class="btn primary" type="button" data-toast="已打开重点商机"><i class="ti ti-arrow-up-right"></i>查看重点商机</button>
+              <button class="btn secondary" type="button" data-toast="小K 已接收推进任务"><i class="ti ti-sparkles"></i>交给小K</button>
+            </div>
+          </article>
+
+          <article class="forecast panel enter" style="--delay:70ms">
+            <div class="forecast-head">
+              <div><span>预计成交</span><strong id="forecastValue">$112k</strong></div>
+              <span class="trend"><i class="ti ti-trending-up"></i><b id="forecastGrowth">18.6%</b></span>
+            </div>
+            <div id="forecastChart" class="forecast-chart" aria-label="预计成交趋势图"></div>
+            <div class="forecast-foot"><span>目标 $160k</span><span>当前完成 70%</span></div>
+          </article>
+        </section>
+
+        <section class="metric-band enter" style="--delay:120ms" aria-label="关键经营指标">
+          <article><span>高风险商机</span><strong class="danger" id="riskMetric">$54k</strong><small>2 笔超过停留阈值</small></article>
+          <article><span>今日待办</span><strong id="taskMetric">12</strong><small>3 项需在中午前处理</small></article>
+          <article><span>新增线索</span><strong id="leadMetric">28</strong><small>11 条来自超级搜索</small></article>
+          <article><span>有效沟通</span><strong class="success" id="contactMetric">17</strong><small>WhatsApp 与邮件合计</small></article>
+        </section>
+
+        <section class="operations-grid">
+          <article class="priority panel enter" style="--delay:170ms">
+            <header class="panel-head">
+              <div><h2>推进优先级</h2><p>根据金额、阶段、停留时间和下一步动作排序</p></div>
+              <button class="text-btn" type="button" data-toast="已进入完整优先级队列">查看全部<i class="ti ti-arrow-right"></i></button>
+            </header>
+            <div class="priority-list" id="priorityList">
+              <button class="priority-row" type="button" data-priority="71">
+                <span class="priority-rank">01</span>
+                <span class="company-avatar blue">NT</span>
+                <span class="priority-copy"><b>Nordic Tools 年度采购</b><small>二次确认报价，等待替代交期方案</small></span>
+                <span class="deal-value"><b>$36k</b><small>已报价</small></span>
+                <span class="due danger">逾期 2 天</span>
+                <span class="score">71</span>
+              </button>
+              <button class="priority-row" type="button" data-priority="65">
+                <span class="priority-rank">02</span>
+                <span class="company-avatar ink">KR</span>
+                <span class="priority-copy"><b>Kanto Retail 付款条款谈判</b><small>主管参与账期谈判，等待最终条件</small></span>
+                <span class="deal-value"><b>$48k</b><small>谈判中</small></span>
+                <span class="due">今天 14:30</span>
+                <span class="score">65</span>
+              </button>
+              <button class="priority-row" type="button" data-priority="51">
+                <span class="priority-rank">03</span>
+                <span class="company-avatar green">AN</span>
+                <span class="priority-copy"><b>Al Noor Trading 风险资料</b><small>补齐汇率报价并同步业务主管</small></span>
+                <span class="deal-value"><b>$18k</b><small>已报价</small></span>
+                <span class="due">今天 16:00</span>
+                <span class="score">51</span>
+              </button>
+            </div>
+          </article>
+
+          <article class="funnel panel enter" style="--delay:220ms">
+            <header class="panel-head compact">
+              <div><h2>线索漏斗</h2><p>从进入系统到创建商机</p></div>
+              <span class="live-state"><i></i>实时</span>
+            </header>
+            <div id="funnelChart" class="funnel-chart" aria-label="线索转化漏斗图"></div>
+            <div class="funnel-summary">
+              <span><b>4</b>进入系统</span>
+              <span><b>2</b>有效线索</span>
+              <span><b>0</b>已建商机</span>
+            </div>
+          </article>
+        </section>
+
+        <section class="lower-grid">
+          <article class="task-board panel enter" style="--delay:270ms">
+            <header class="panel-head">
+              <div><h2>今日行动</h2><p><span id="doneCount">1</span> / 4 已完成</p></div>
+              <button class="btn secondary small" type="button" id="addQuickTask"><i class="ti ti-plus"></i>快速新增</button>
+            </header>
+            <div class="task-progress"><i id="taskProgress"></i></div>
+            <div class="task-list" id="taskList">
+              <label class="task-row done"><input type="checkbox" checked><span class="check"><i class="ti ti-check"></i></span><span><b>复核 Nordic Tools 报价明细</b><small>已于 09:12 完成</small></span><time>09:00</time></label>
+              <label class="task-row"><input type="checkbox"><span class="check"><i class="ti ti-check"></i></span><span><b>确认 Kanto Retail 付款条件</b><small>关联商机 $48k</small></span><time>14:30</time></label>
+              <label class="task-row"><input type="checkbox"><span class="check"><i class="ti ti-check"></i></span><span><b>向 Alpine Technik 获取样品反馈</b><small>客户已签收 3 天</small></span><time>16:00</time></label>
+              <label class="task-row"><input type="checkbox"><span class="check"><i class="ti ti-check"></i></span><span><b>审核超级搜索新增线索</b><small>11 条具备可验证联系方式</small></span><time>17:30</time></label>
+            </div>
+          </article>
+
+          <article class="pipeline panel enter" style="--delay:320ms">
+            <header class="panel-head compact">
+              <div><h2>管道健康度</h2><p>本团队业务</p></div>
+              <strong>$130k</strong>
+            </header>
+            <div class="pipeline-stages">
+              <button type="button" style="--value:23%;--tone:#6d86d8"><span>询盘</span><b>0</b><i></i><small>$0k</small></button>
+              <button type="button" style="--value:34%;--tone:#5a75cb"><span>已联系</span><b>0</b><i></i><small>$0k</small></button>
+              <button type="button" style="--value:82%;--tone:#3155b9"><span>已报价</span><b>2</b><i></i><small>$54k</small></button>
+              <button type="button" style="--value:55%;--tone:#26877a"><span>样品</span><b>1</b><i></i><small>$22k</small></button>
+              <button type="button" style="--value:67%;--tone:#162033"><span>谈判</span><b>1</b><i></i><small>$48k</small></button>
+            </div>
+          </article>
+
+          <article class="activity panel enter" style="--delay:370ms">
+            <header class="panel-head compact"><div><h2>实时动态</h2><p>最近 2 小时</p></div><button class="icon-btn light" type="button" aria-label="刷新动态"><i class="ti ti-refresh"></i></button></header>
+            <div class="activity-list">
+              <div><span class="activity-icon"><i class="ti ti-message-circle"></i></span><p><b>Kanto Retail</b> 回复了 WhatsApp 消息<time>6 分钟前</time></p></div>
+              <div><span class="activity-icon"><i class="ti ti-building"></i></span><p>超级搜索发现 <b>11 家</b> 可联系企业<time>18 分钟前</time></p></div>
+              <div><span class="activity-icon"><i class="ti ti-file-invoice"></i></span><p><b>PI-2026-0718</b> 已被客户打开<time>43 分钟前</time></p></div>
+              <div><span class="activity-icon"><i class="ti ti-user-plus"></i></span><p>Maria 新增了客户 <b>Solis Energia</b><time>1 小时前</time></p></div>
+            </div>
+          </article>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <dialog class="command-dialog" id="commandDialog">
+    <div class="command-input"><i class="ti ti-search"></i><input id="commandInput" placeholder="搜索页面、客户或动作"><kbd>ESC</kbd></div>
+    <div class="command-list">
+      <button type="button" data-toast="正在打开 Kanto Retail"><span class="command-icon"><i class="ti ti-building"></i></span><span><b>Kanto Retail</b><small>客户 · 日本 · A级</small></span><kbd>↵</kbd></button>
+      <button type="button" data-toast="正在打开商机管道"><span class="command-icon"><i class="ti ti-briefcase"></i></span><span><b>商机管道</b><small>查看 5 个阶段的商机</small></span><kbd>G O</kbd></button>
+      <button type="button" data-toast="正在打开小K Agent"><span class="command-icon"><i class="ti ti-sparkles"></i></span><span><b>小K Agent</b><small>发起跨模块业务任务</small></span><kbd>G A</kbd></button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast"><i class="ti ti-circle-check"></i><span></span></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/echarts@6.0.0/dist/echarts.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -4,6 +4,7 @@ import { setProviderHttpTestTransport } from "./provider-http-client.js";
 import { getStore, type CrmStore } from "./store.js";
 import type { WebsiteOpportunity, WebsiteProbeAttempt } from "./types.js";
 import {
+  expireStaleWebsiteProbeAttempts,
   extractEvidence,
   queueWebsiteProbe,
   resumeWebsiteProbeAttempt,
@@ -63,14 +64,16 @@ async function waitForTerminal(
 
 async function queueAndWait(
   store: CrmStore,
-  prospect: WebsiteOpportunity
+  prospect: WebsiteOpportunity,
+  options: Parameters<typeof queueWebsiteProbe>[4] = {}
 ) {
   store.websiteOpportunities.push(prospect);
   const result = await queueWebsiteProbe(
     store,
     prospect,
     prospect.ownerId,
-    async () => undefined
+    async () => undefined,
+    options
   );
   return await waitForTerminal(prospect, result.attempt.id);
 }
@@ -220,6 +223,50 @@ async function main() {
     assert.ok(requests.some((item) => item.url === "https://contact-page-example.com/products/pumps"));
     assert.doesNotMatch(JSON.stringify(contactAttempt), /contact-private-marker/u);
 
+    let aiPageCount = 0;
+    const aiCandidate = candidate("ai-contact", "https://ai-contact-example.com/");
+    aiCandidate.contact = "待维护";
+    aiCandidate.contactInfo = "";
+    const aiAttempt = await queueAndWait(store, aiCandidate, {
+      extractPublicContacts: async ({ pages }) => {
+        aiPageCount = pages.length;
+        return [{
+          kind: "person",
+          name: "Morgan Lee",
+          title: "Export Director",
+          emails: ["morgan@ai-contact-example.com"],
+          phones: [],
+          whatsapp: [],
+          source: "website_probe",
+          sourceLabel: "Foreign company website · AI-assisted extraction",
+          sourceKind: "official_website",
+          confidence: 78,
+          verificationStatus: "source_confirmed",
+          observedAt: new Date().toISOString(),
+          reasonCodes: ["AI_STRUCTURED_PUBLIC_PAGE", "EXACT_SOURCE_TEXT_MATCH"],
+          evidenceUrl: "https://ai-contact-example.com/"
+        }];
+      }
+    });
+    assert.equal(aiPageCount, 2, "AI 只能收到首页和一个同域联系页");
+    assert.equal(aiCandidate.contact, "Morgan Lee");
+    assert.equal(aiCandidate.contactInfo, "morgan@ai-contact-example.com");
+    assert.equal(aiAttempt.evidence?.aiStructuredContacts?.length, 1);
+    assert.ok(aiAttempt.events.some((item) => item.stage === "ai_extract" && item.status === "completed"));
+
+    const fallbackCandidate = candidate("ai-fallback", "https://ai-fallback-example.com/");
+    fallbackCandidate.contactInfo = "";
+    const fallbackAttempt = await queueAndWait(store, fallbackCandidate, {
+      extractPublicContacts: async () => {
+        throw new Error("simulated AI timeout");
+      }
+    });
+    assert.equal(fallbackCandidate.contactInfo, "export@contact-page-example.com");
+    assert.ok(fallbackAttempt.events.some((item) =>
+      item.stage === "ai_extract" && item.status === "failed"
+    ));
+    assert.equal(fallbackAttempt.outcome, "evidence_found");
+
     const explicitExternalEmail = extractEvidence(
       '<html><body><a href="mailto:export.team@gmail.com">Email export sales</a></body></html>',
       "https://foreign-email-example.com/",
@@ -268,13 +315,14 @@ async function main() {
       if (url.endsWith("/robots.txt")) {
         return new Response("User-agent: *\nAllow: /\n", { status: 200 });
       }
-      if (new URL(url).pathname === "/" && init.method === "HEAD") {
+      const parsed = new URL(url);
+      if (parsed.pathname === "/" && parsed.hostname.startsWith("www.")) {
         return new Response(null, {
           status: 302,
-          headers: { location: "https://locale-redirect-example.com/en-US/" }
+          headers: { location: "https://locale-redirect-example.com/" }
         });
       }
-      if (new URL(url).pathname === "/" && init.method === "GET") {
+      if (parsed.pathname === "/") {
         return new Response(null, {
           status: 302,
           headers: { location: "https://locale-redirect-example.com/en-US/" }
@@ -290,13 +338,66 @@ async function main() {
     });
     const localeRedirectCandidate = candidate(
       "locale-redirect",
-      "https://locale-redirect-example.com/"
+      "https://www.locale-redirect-example.com/"
     );
     localeRedirectCandidate.contactInfo = "";
     const localeRedirectAttempt = await queueAndWait(store, localeRedirectCandidate);
     assert.equal(localeRedirectAttempt.outcome, "evidence_found");
     assert.equal(localeRedirectCandidate.contactInfo, "sales@locale-redirect-example.com");
     assert.ok(requests.some((item) => item.url.endsWith("/en-US/")));
+    assert.ok(requests.some((item) => item.url === "https://locale-redirect-example.com/"));
+
+    requests = [];
+    setProviderHttpTestTransport(async (url, init) => {
+      requests.push({ url, method: String(init.method || "GET") });
+      const parsed = new URL(url);
+      if (parsed.pathname === "/robots.txt") {
+        return new Response("User-agent: *\nAllow: /\n", { status: 200 });
+      }
+      if (parsed.pathname === "/legacy-contact") {
+        return new Response(null, { status: 404, headers: { "content-type": "text/html" } });
+      }
+      if (init.method === "HEAD") {
+        return new Response(null, { status: 404, headers: { "content-type": "text/html" } });
+      }
+      return new Response("<html><body><a href=\"mailto:sales@head-fallback-example.com\">Sales</a></body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    });
+    const headFallbackCandidate = candidate(
+      "head-fallback",
+      "https://head-fallback-example.com/legacy-contact"
+    );
+    headFallbackCandidate.contactInfo = "";
+    const headFallbackAttempt = await queueAndWait(store, headFallbackCandidate);
+    assert.equal(headFallbackAttempt.outcome, "evidence_found", "HEAD 404 不得再误判整站不可达");
+    assert.equal(headFallbackCandidate.website, "https://head-fallback-example.com/");
+    assert.equal(headFallbackCandidate.contactInfo, "sales@head-fallback-example.com");
+    assert.ok(headFallbackAttempt.events.some((item) =>
+      item.stage === "head" && item.status === "skipped"
+    ));
+    assert.ok(headFallbackAttempt.events.some((item) =>
+      item.stage === "body" && item.message.includes("same-domain homepage")
+    ));
+
+    requests = [];
+    setProviderHttpTestTransport(async (url, init) => {
+      requests.push({ url, method: String(init.method || "GET") });
+      if (url.endsWith("/robots.txt")) {
+        return new Response("User-agent: *\nAllow: /\n", { status: 200 });
+      }
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://new-brand-example.com/" }
+      });
+    });
+    const migratedDomainAttempt = await queueAndWait(
+      store,
+      candidate("migrated-domain", "https://old-brand-example.com/")
+    );
+    assert.equal(migratedDomainAttempt.outcome, "policy_blocked");
+    assert.match(migratedDomainAttempt.failureMessage, /new-brand-example\.com/u);
 
     requests = [];
     setProviderHttpTestTransport(async (url, init) => {
@@ -352,6 +453,27 @@ async function main() {
       async () => undefined
     ), false);
 
+    const staleCandidate = candidate("stale", "https://stale-example.com/");
+    const staleCreatedAt = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    staleCandidate.websiteProbeAttempts = [{
+      ...structuredClone(recoveredAttempt),
+      id: "wpa_stale_test",
+      candidateId: staleCandidate.id,
+      domain: "stale-example.com",
+      sourceUrl: staleCandidate.website,
+      status: "running",
+      outcome: "pending",
+      events: [],
+      completedAt: "",
+      failureCode: "",
+      failureMessage: "",
+      startedAt: staleCreatedAt,
+      createdAt: staleCreatedAt
+    }];
+    assert.equal(expireStaleWebsiteProbeAttempts(staleCandidate, Date.now(), 10 * 60 * 1000), true);
+    assert.equal(staleCandidate.websiteProbeAttempts[0]!.outcome, "interrupted");
+    assert.equal(staleCandidate.websiteProbeAttempts[0]!.failureCode, "WEBSITE_PROBE_INTERRUPTED");
+
     requests = [];
     setProviderHttpTestTransport(async (url, init) => {
       requests.push({ url, method: String(init.method || "GET") });
@@ -381,13 +503,19 @@ async function main() {
         headers: { "content-type": "text/plain" }
       });
     });
+    let deniedAiCalls = 0;
     const deniedAttempt = await queueAndWait(
       store,
-      candidate("robots-denied", "https://robots-denied-example.com/")
+      candidate("robots-denied", "https://robots-denied-example.com/"),
+      { extractPublicContacts: async () => {
+        deniedAiCalls += 1;
+        return [];
+      } }
     );
     assert.equal(deniedAttempt.status, "completed");
     assert.equal(deniedAttempt.outcome, "robots_denied");
     assert.equal(deniedAttempt.evidence, null);
+    assert.equal(deniedAiCalls, 0, "robots 禁止时不得把页面内容发送给 AI");
     assert.equal(requests.length, 1);
 
     requests = [];
@@ -440,9 +568,39 @@ async function main() {
     );
 
     requests = [];
+    setProviderHttpTestTransport(async () => {
+      throw new Error("certificate has expired");
+    });
+    const certificateAttempt = await queueAndWait(
+      store,
+      candidate("certificate-error", "https://certificate-error-example.com/")
+    );
+    assert.equal(certificateAttempt.outcome, "unreachable");
+    assert.equal(certificateAttempt.failureCode, "TLS_CERTIFICATE_INVALID");
+    assert.match(certificateAttempt.failureMessage, /certificate/iu);
+
+    requests = [];
     setProviderHttpTestTransport(async (url, init) => {
       requests.push({ url, method: String(init.method || "GET") });
-      throw new Error("simulated transient network failure");
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      return new Response("", { status: 404, headers: { "content-type": "text/html" } });
+    });
+    const invalidPathAttempts: WebsiteProbeAttempt[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      invalidPathAttempts.push(await queueAndWait(
+        store,
+        candidate(`invalid-path-${index}`, "https://invalid-path-example.com/")
+      ));
+    }
+    assert.ok(invalidPathAttempts.every((item) =>
+      item.outcome === "unreachable" && item.failureCode === "HTTP_404"
+    ));
+    assert.equal(requests.length, 12, "确定性的 404 不得触发瞬时故障熔断");
+
+    requests = [];
+    setProviderHttpTestTransport(async (url, init) => {
+      requests.push({ url, method: String(init.method || "GET") });
+      throw new Error("Provider request timeout");
     });
     const transientAttempts: WebsiteProbeAttempt[] = [];
     for (let index = 0; index < 3; index += 1) {

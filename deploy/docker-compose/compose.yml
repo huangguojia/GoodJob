@@ -68,7 +68,7 @@ services:
       - no-new-privileges:true
 
   backend-migrate:
-    image: goodjobcrm-backend:${GOODJOB_RELEASE_ID}
+    image: ${GOODJOB_BACKEND_IMAGE:-goodjobcrm-backend}:${GOODJOB_RELEASE_ID}
     build:
       context: ../..
       dockerfile: deploy/docker-compose/Dockerfile.backend
@@ -133,7 +133,7 @@ services:
       - no-new-privileges:true
 
   communication-migrate:
-    image: goodjobcrm-communication:${GOODJOB_RELEASE_ID}
+    image: ${GOODJOB_COMMUNICATION_IMAGE:-goodjobcrm-communication}:${GOODJOB_RELEASE_ID}
     build:
       context: ../..
       dockerfile: deploy/docker-compose/Dockerfile.communication
@@ -177,7 +177,7 @@ services:
       - no-new-privileges:true
 
   backend:
-    image: goodjobcrm-backend:${GOODJOB_RELEASE_ID}
+    image: ${GOODJOB_BACKEND_IMAGE:-goodjobcrm-backend}:${GOODJOB_RELEASE_ID}
     restart: unless-stopped
     environment: *backend_environment
     secrets: *backend_secrets
@@ -204,7 +204,7 @@ services:
       - no-new-privileges:true
 
   communication:
-    image: goodjobcrm-communication:${GOODJOB_RELEASE_ID}
+    image: ${GOODJOB_COMMUNICATION_IMAGE:-goodjobcrm-communication}:${GOODJOB_RELEASE_ID}
     restart: unless-stopped
     environment: *communication_environment
     secrets:
@@ -232,7 +232,7 @@ services:
       - no-new-privileges:true
 
   gateway:
-    image: goodjobcrm-gateway:${GOODJOB_RELEASE_ID}
+    image: ${GOODJOB_GATEWAY_IMAGE:-goodjobcrm-gateway}:${GOODJOB_RELEASE_ID}
     build:
       context: ../..
       dockerfile: deploy/docker-compose/Dockerfile.gateway

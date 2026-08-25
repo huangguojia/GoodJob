@@ -10,6 +10,10 @@ import {
 } from "./provider-http-client.js";
 import type { CrmStore } from "./store.js";
 import type {
+  WebsiteContactAiExtractor,
+  WebsiteContactAiPage
+} from "./website-contact-ai.js";
+import type {
   ExtractedWebsiteContact,
   WebsiteOpportunity,
   WebsiteProbeAttempt,
@@ -18,7 +22,7 @@ import type {
   WebsiteProbeStage
 } from "./types.js";
 
-const POLICY_VERSION = "website-probe-policy-v4-foreign-only" as const;
+const POLICY_VERSION = "website-probe-policy-v5-foreign-only" as const;
 const USER_AGENT = "GoodJobCRM-WebsiteProbe/1.0";
 const MAX_RESPONSE_BYTES = Math.max(
   64 * 1024,
@@ -27,6 +31,7 @@ const MAX_RESPONSE_BYTES = Math.max(
 const CACHE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const CIRCUIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const TRANSIENT_RETRY_WINDOW_MS = 5 * 60 * 1000;
+const DEFAULT_STALE_ATTEMPT_MS = 10 * 60 * 1000;
 const domainQueues = new Map<string, Promise<void>>();
 const scheduledAttemptIds = new Set<string>();
 const teamNextAllowedAt = new Map<string, number>();
@@ -52,6 +57,10 @@ export class WebsiteProbeError extends Error {
 }
 
 type PersistCandidate = (candidate: WebsiteOpportunity) => Promise<void>;
+
+interface WebsiteProbeOptions {
+  extractPublicContacts?: WebsiteContactAiExtractor;
+}
 
 function featureEnabled() {
   return process.env.WEBSITE_PROBE_ENABLED !== "false";
@@ -142,7 +151,7 @@ function canonicalTarget(candidate: WebsiteOpportunity) {
   } catch {
     throw new WebsiteProbeError(
       "WEBSITE_PROBE_URL_INVALID",
-      "候选官网必须是完整的 HTTPS 地址",
+      "The company website must be a complete HTTPS address",
       400
     );
   }
@@ -153,21 +162,21 @@ function canonicalTarget(candidate: WebsiteOpportunity) {
     || url.hostname.includes("%")) {
     throw new WebsiteProbeError(
       "WEBSITE_PROBE_URL_INVALID",
-      "官网探针只允许不含凭据的 HTTPS 标准端口",
+      "Website review accepts credential-free HTTPS on the standard port only",
       400
     );
   }
   if (!candidate.country?.trim() || isChinaRestrictedCountry(candidate.country)) {
     throw new WebsiteProbeError(
       "WEBSITE_PROBE_COUNTRY_BLOCKED",
-      "中国及国家不明的候选禁止自动读取官网联系方式",
+      "Automated contact review is unavailable for China or unidentified countries",
       403
     );
   }
   if (isChinaRestrictedDomain(url.hostname)) {
     throw new WebsiteProbeError(
       "WEBSITE_PROBE_COUNTRY_BLOCKED",
-      "中国域名禁止自动读取官网联系方式",
+      "Automated contact review is unavailable for Chinese domains",
       403
     );
   }
@@ -175,7 +184,7 @@ function canonicalTarget(candidate: WebsiteOpportunity) {
   if (!domain) {
     throw new WebsiteProbeError(
       "WEBSITE_PROBE_URL_INVALID",
-      "官网域名不是可注册的公网域名",
+      "The website domain is not a registered public domain",
       400
     );
   }
@@ -211,11 +220,41 @@ export function websiteProbeAutoEnrichmentEligible(
       attempt.completedAt || attempt.createdAt
     ).getTime();
     if (!Number.isFinite(completedAt)) return false;
-    const cooldown = ["unreachable", "rate_limited"].includes(attempt.outcome)
+    const cooldown = ["unreachable", "rate_limited", "circuit_open", "interrupted"].includes(attempt.outcome)
       ? TRANSIENT_RETRY_WINDOW_MS
       : CACHE_WINDOW_MS;
     return at - completedAt < cooldown;
   });
+}
+
+export function expireStaleWebsiteProbeAttempts(
+  candidate: WebsiteOpportunity,
+  at = Date.now(),
+  staleMs = Math.max(
+    2 * 60 * 1000,
+    Math.min(60 * 60 * 1000, Number(process.env.WEBSITE_PROBE_STALE_MS || DEFAULT_STALE_ATTEMPT_MS))
+  )
+) {
+  let changed = false;
+  for (const attempt of candidate.websiteProbeAttempts || []) {
+    if (!["queued", "running"].includes(attempt.status)) continue;
+    const lastProgressAt = attempt.events.at(-1)?.createdAt
+      || attempt.startedAt
+      || attempt.createdAt;
+    const lastProgressTime = new Date(lastProgressAt).getTime();
+    if (!Number.isFinite(lastProgressTime) || at - lastProgressTime < staleMs) continue;
+    attempt.status = "failed";
+    attempt.outcome = "interrupted";
+    attempt.failureCode = "WEBSITE_PROBE_INTERRUPTED";
+    attempt.failureMessage = "The background service restarted or the task made no progress; no site availability conclusion was formed";
+    attempt.completedAt = new Date(at).toISOString();
+    appendEvent(attempt, "failed", "failed", "Website review interrupted. You can start it again.", {
+      interrupted: true,
+      staleMinutes: Math.max(1, Math.round((at - lastProgressTime) / 60_000))
+    });
+    changed = true;
+  }
+  return changed;
 }
 
 function appendEvent(
@@ -250,7 +289,7 @@ async function mutateAttempt(
   if (!candidate || !attempt) {
     throw new WebsiteProbeError(
       "WEBSITE_PROBE_ATTEMPT_NOT_FOUND",
-      "官网探针任务不存在或已失效",
+      "The website review task does not exist or is no longer valid",
       404
     );
   }
@@ -296,9 +335,16 @@ function circuitOpen(
         < CIRCUIT_WINDOW_MS
     )
     .slice(0, 3);
-  return recent.length === 3 && recent.every((item) =>
-    item.outcome === "unreachable" || item.outcome === "rate_limited"
-  );
+  return recent.length === 3 && recent.every((item) => {
+    if (item.outcome === "rate_limited") return true;
+    if (item.outcome !== "unreachable") return false;
+    if (/^HTTP_5\d\d$/u.test(item.failureCode)) return true;
+    if (["NETWORK_TIMEOUT", "DNS_TEMPORARY", "CONNECTION_RESET"].includes(item.failureCode)) {
+      return true;
+    }
+    return item.failureCode === "NETWORK_ERROR"
+      && /timeout|timed out|ECONNRESET|EAI_AGAIN/iu.test(item.failureMessage);
+  });
 }
 
 function alternateHost(hostname: string, domain: string) {
@@ -313,12 +359,12 @@ function networkPolicy(hostname: string, domain: string, extraPaths: string[] = 
     allowedHosts: [hostname, ...(alternate ? [alternate] : [])],
     redirectHosts: alternate ? [alternate] : [],
     // Foreign corporate sites commonly redirect / to a locale path such as /en-US/.
-    // This applies only to the single validated redirect, never to the initial URL.
+    // Redirects remain limited to the validated apex/www pair and HTTPS paths.
     redirectPathPrefixes: ["/"],
     allowedPaths: ["/", "/robots.txt", ...extraPaths],
     allowedPathPrefixes: [],
     allowedMethods: ["GET", "HEAD"] as Array<"GET" | "HEAD">,
-    maxRedirects: 1,
+    maxRedirects: 3,
     maxResponseBytes: MAX_RESPONSE_BYTES,
     truncateResponse: true,
     timeoutMs: Math.max(
@@ -380,6 +426,38 @@ function responseFailure(response: Response) {
     outcome: "unreachable" as const,
     code: `HTTP_${response.status || 0}`
   };
+}
+
+function responseFailureMessage(response: Response, stage: "robots" | "head" | "body") {
+  const target = stage === "robots" ? "Access policy" : "Website address";
+  if (response.status === 404) return `${target} returned 404; the source link may no longer be valid`;
+  if ([401, 403, 406].includes(response.status)) return `${target} declined the request (HTTP ${response.status})`;
+  if (response.status === 429) return `${target} reached its request rate limit (HTTP 429)`;
+  if (response.status >= 500) return `${target} is temporarily unavailable (HTTP ${response.status})`;
+  return `${target} returned HTTP ${response.status || 0}`;
+}
+
+function networkFailure(error: unknown) {
+  const raw = error instanceof Error ? error.message : "Network request failed";
+  if (/timeout|timed out/iu.test(raw)) {
+    return { code: "NETWORK_TIMEOUT", message: "The website connection or response timed out. Please try again later." };
+  }
+  if (/ENOTFOUND/iu.test(raw)) {
+    return { code: "DNS_NOT_FOUND", message: "The website domain could not be resolved. It may be invalid or not active yet." };
+  }
+  if (/EAI_AGAIN/iu.test(raw)) {
+    return { code: "DNS_TEMPORARY", message: "The domain lookup was temporarily unavailable. Please try again later." };
+  }
+  if (/certificate|CERT_|self signed|unable to verify/iu.test(raw)) {
+    return { code: "TLS_CERTIFICATE_INVALID", message: "The website HTTPS certificate is invalid, expired, or untrusted." };
+  }
+  if (/ECONNREFUSED/iu.test(raw)) {
+    return { code: "CONNECTION_REFUSED", message: "The website server declined the HTTPS connection." };
+  }
+  if (/ECONNRESET|socket hang up/iu.test(raw)) {
+    return { code: "CONNECTION_RESET", message: "The website connection was interrupted. Please try again later." };
+  }
+  return { code: "NETWORK_ERROR", message: raw.slice(0, 500) };
 }
 
 function normalizedText(value: unknown, max = 240) {
@@ -620,12 +698,12 @@ export function buildExtractedContacts(
     out.push({
       kind: "company",
       name: evidence.organizationName || evidence.legalName || domain,
-      title: "公司公开联系",
+      title: "Public company contact",
       emails,
       phones,
       whatsapp: [],
       source: "website_probe",
-      sourceLabel: "境外企业官网",
+      sourceLabel: "Foreign company website",
       sourceKind: "official_website",
       confidence: 82,
       verificationStatus: "source_confirmed",
@@ -643,7 +721,7 @@ export function buildExtractedContacts(
       phones: [],
       whatsapp: [],
       source: "website_probe",
-      sourceLabel: "境外企业官网",
+      sourceLabel: "Foreign company website",
       sourceKind: "official_website",
       confidence: 68,
       verificationStatus: "source_confirmed",
@@ -652,7 +730,7 @@ export function buildExtractedContacts(
       evidenceUrl: evidence.sourceUrl
     });
   }
-  return out;
+  return mergeProspectContactEvidence(out, evidence.aiStructuredContacts || []);
 }
 
 function contactPageUrl(
@@ -829,7 +907,8 @@ async function executeAttempt(
   candidateId: string,
   attemptId: string,
   target: ReturnType<typeof canonicalTarget>,
-  persist: PersistCandidate
+  persist: PersistCandidate,
+  options: WebsiteProbeOptions
 ) {
   const policy = networkPolicy(
     target.hostname,
@@ -841,21 +920,21 @@ async function executeAttempt(
     await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
       attempt.status = "running";
       attempt.startedAt = nowIso();
-      appendEvent(attempt, "dns", "started", "正在校验官网域名的全部 DNS 地址");
+      appendEvent(attempt, "dns", "started", "Checking all public DNS addresses for the website domain");
     });
     const addresses = await resolveProviderPublicAddresses(target.hostname);
     await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
-      appendEvent(attempt, "dns", "completed", "DNS 公网检查通过，请求将由安全客户端固定公网地址", {
+      appendEvent(attempt, "dns", "completed", "Public DNS check passed. Requests will use a fixed public address through the secure client.", {
         addressCount: addresses.length,
         allPublic: true
       });
-      appendEvent(attempt, "robots", "started", "正在读取 robots.txt 访问规则");
+      appendEvent(attempt, "robots", "started", "Checking the website access policy");
     });
 
     const robotsResponse = await fetchWithOneTransientRetry(
       () => controlledFetch(target.robotsUrl, "GET", policy),
       async (reason) => mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
-        appendEvent(attempt, "robots", "started", "robots.txt 瞬时失败，正在进行唯一一次重试", {
+        appendEvent(attempt, "robots", "started", "The access policy check had a transient failure. Retrying once.", {
           retry: 1,
           reason
         });
@@ -865,7 +944,7 @@ async function executeAttempt(
       await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
         attempt.robotsDecision = "denied";
         attempt.httpStatus = robotsResponse.status;
-        appendEvent(attempt, "robots", "completed", "robots.txt 或站点策略拒绝自动访问，探针停止", {
+        appendEvent(attempt, "robots", "completed", "The website access policy declined the request. Review stopped.", {
           allowed: false,
           httpStatus: robotsResponse.status
         });
@@ -874,7 +953,7 @@ async function executeAttempt(
         status: "completed",
         outcome: "robots_denied",
         stage: "completed",
-        message: "官网验证已结束：站点策略不允许访问，候选评分保持不变"
+        message: "Website review completed: the site access policy declined the request. Candidate scores were not changed."
       });
       return;
     }
@@ -883,7 +962,7 @@ async function executeAttempt(
       await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
         attempt.robotsDecision = "unavailable";
         attempt.httpStatus = robotsResponse.status;
-        appendEvent(attempt, "robots", "failed", "robots.txt 暂时不可用，未继续访问首页", {
+        appendEvent(attempt, "robots", "failed", "The access policy endpoint is temporarily unavailable. The homepage was not reviewed.", {
           httpStatus: robotsResponse.status
         });
       });
@@ -891,9 +970,9 @@ async function executeAttempt(
         status: "failed",
         outcome: failure.outcome,
         stage: "failed",
-        message: "官网验证已结束：站点暂时不可达，候选评分保持不变",
+        message: "Website review completed: the site is temporarily unavailable. Candidate scores were not changed.",
         failureCode: failure.code,
-        failureMessage: "robots.txt 暂时不可用"
+        failureMessage: "The access policy endpoint is temporarily unavailable"
       });
       return;
     }
@@ -907,8 +986,8 @@ async function executeAttempt(
     await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
       attempt.robotsDecision = robotsAllowed ? "allowed" : "denied";
       appendEvent(attempt, "robots", "completed", robotsAllowed
-        ? "robots.txt 允许访问官网首页"
-        : "robots.txt 禁止访问官网首页，探针停止", {
+        ? "The access policy allows homepage review"
+        : "The access policy does not allow homepage review. Review stopped.", {
         allowed: robotsAllowed,
         httpStatus: robotsResponse.status
       });
@@ -918,28 +997,28 @@ async function executeAttempt(
         status: "completed",
         outcome: "robots_denied",
         stage: "completed",
-        message: "官网验证已结束：robots.txt 禁止访问，候选评分保持不变"
+        message: "Website review completed: the access policy does not allow review. Candidate scores were not changed."
       });
       return;
     }
 
     await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
-      appendEvent(attempt, "head", "started", "正在检查官网首页状态、类型和大小");
+      appendEvent(attempt, "head", "started", "Checking homepage status, content type, and size");
     });
     const headResponse = await fetchWithOneTransientRetry(
       () => controlledFetch(target.homeUrl, "HEAD", policy),
       async (reason) => mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
-        appendEvent(attempt, "head", "started", "首页预检瞬时失败，正在进行唯一一次重试", {
+        appendEvent(attempt, "head", "started", "The homepage pre-check had a transient failure. Retrying once.", {
           retry: 1,
           reason
         });
       })
     );
-    if (!headResponse.ok && ![405, 501].includes(headResponse.status)) {
+    if (headResponse.status === 429 || headResponse.status >= 500) {
       const failure = responseFailure(headResponse);
       await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
         attempt.httpStatus = headResponse.status;
-        appendEvent(attempt, "head", "failed", "官网首页状态检查未通过", {
+        appendEvent(attempt, "head", "failed", "The homepage pre-check did not pass", {
           httpStatus: headResponse.status
         });
       });
@@ -947,19 +1026,20 @@ async function executeAttempt(
         status: "failed",
         outcome: failure.outcome,
         stage: "failed",
-        message: "官网验证已结束：首页不可达，候选评分保持不变",
+        message: "Website review completed: the homepage pre-check temporarily failed. Candidate scores were not changed.",
         failureCode: failure.code,
-        failureMessage: "官网首页状态检查未通过"
+        failureMessage: responseFailureMessage(headResponse, "head")
       });
       return;
     }
-    const headType = (headResponse.headers.get("content-type") || "")
+    const headUsable = headResponse.ok;
+    const headType = ((headUsable ? headResponse.headers.get("content-type") : "") || "")
       .split(";")[0]!.trim().toLocaleLowerCase("en-US");
     const declaredLength = Number(headResponse.headers.get("content-length") || 0);
-    if (headType && !["text/html", "text/plain"].includes(headType)) {
+    if (headUsable && headType && !["text/html", "text/plain"].includes(headType)) {
       await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
         attempt.httpStatus = headResponse.status;
-        appendEvent(attempt, "head", "completed", "首页内容不符合最小取证策略，已停止读取正文", {
+        appendEvent(attempt, "head", "completed", "The homepage content is outside the minimum evidence scope. Content review stopped.", {
           httpStatus: headResponse.status,
           contentType: headType || "unknown",
           declaredBytes: declaredLength
@@ -969,37 +1049,70 @@ async function executeAttempt(
         status: "completed",
         outcome: "no_evidence",
         stage: "completed",
-        message: "官网验证已结束：未读取不符合策略的正文，候选评分保持不变"
+        message: "Website review completed: content outside the evidence scope was not reviewed. Candidate scores were not changed."
       });
       return;
     }
     await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
       attempt.httpStatus = headResponse.status;
       attempt.redirected = Boolean(headResponse.url && headResponse.url !== target.homeUrl);
-      appendEvent(attempt, "head", "completed", "首页状态和内容类型检查通过", {
+      appendEvent(attempt, "head", headUsable ? "completed" : "skipped", headUsable
+        ? "Homepage status and content type check passed"
+        : `The site does not support the HEAD pre-check (HTTP ${headResponse.status}). Continuing with a limited GET review.`, {
         httpStatus: headResponse.status,
         contentType: headType || "unknown",
         declaredBytes: declaredLength,
         sampleWillBeTruncated: declaredLength > MAX_RESPONSE_BYTES,
         redirected: attempt.redirected
       });
-      appendEvent(attempt, "body", "started", `正在读取首页正文样本（上限 ${(MAX_RESPONSE_BYTES / 1024).toFixed(0)} KiB）`);
+      appendEvent(attempt, "body", "started", `Reviewing a homepage content sample (limit ${(MAX_RESPONSE_BYTES / 1024).toFixed(0)} KiB)`);
     });
 
-    const bodyResponse = await fetchWithOneTransientRetry(
+    let bodyResponse = await fetchWithOneTransientRetry(
       () => controlledFetch(target.homeUrl, "GET", policy),
       async (reason) => mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
-        appendEvent(attempt, "body", "started", "正文读取瞬时失败，正在进行唯一一次重试", {
+        appendEvent(attempt, "body", "started", "The homepage content request had a transient failure. Retrying once.", {
           retry: 1,
           reason
         });
       })
     );
+    if (bodyResponse.status === 404 && target.homePath !== "/") {
+      const rootUrl = `https://${target.hostname}/`;
+      const rootAllowed = robotsRules?.isAllowed(rootUrl, USER_AGENT) !== false;
+      if (rootAllowed) {
+        await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
+          appendEvent(attempt, "body", "skipped", "The source path returned 404. Falling back to the same-domain homepage.", {
+            originalPath: target.homePath,
+            fallbackPath: "/"
+          });
+        });
+        bodyResponse = await fetchWithOneTransientRetry(
+          () => controlledFetch(rootUrl, "GET", policy),
+          async (reason) => mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
+            appendEvent(attempt, "body", "started", "The same-domain homepage request had a transient failure. Retrying once.", {
+              retry: 1,
+              reason
+            });
+          })
+        );
+        if (bodyResponse.ok) {
+          const currentCandidate = candidateById(store, candidateId);
+          if (currentCandidate) currentCandidate.website = bodyResponse.url || rootUrl;
+          await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
+            attempt.sourceUrl = bodyResponse.url || rootUrl;
+            appendEvent(attempt, "body", "completed", "The invalid path was replaced with the same-domain homepage. The website address was corrected.", {
+              correctedWebsite: attempt.sourceUrl
+            });
+          });
+        }
+      }
+    }
     if (!bodyResponse.ok) {
       const failure = responseFailure(bodyResponse);
       await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
         attempt.httpStatus = bodyResponse.status;
-        appendEvent(attempt, "body", "failed", "官网正文读取失败", {
+        appendEvent(attempt, "body", "failed", "The homepage content could not be reviewed", {
           httpStatus: bodyResponse.status
         });
       });
@@ -1007,9 +1120,9 @@ async function executeAttempt(
         status: "failed",
         outcome: failure.outcome,
         stage: "failed",
-        message: "官网验证已结束：正文不可达，候选评分保持不变",
+        message: "Website review completed: the current website address could not be reviewed. Candidate scores were not changed.",
         failureCode: failure.code,
-        failureMessage: "官网正文读取失败"
+        failureMessage: responseFailureMessage(bodyResponse, "body")
       });
       return;
     }
@@ -1020,7 +1133,7 @@ async function executeAttempt(
         status: "completed",
         outcome: "no_evidence",
         stage: "completed",
-        message: "官网验证已结束：正文类型不符合取证策略，候选评分保持不变"
+        message: "Website review completed: the content type is outside the evidence scope. Candidate scores were not changed."
       });
       return;
     }
@@ -1041,20 +1154,21 @@ async function executeAttempt(
       target.domain
     );
     let contactEvidence: WebsiteProbeEvidence | null = null;
+    let contactHtmlForAi = "";
     let contactBytes = 0;
     if (selectedContactUrl) {
       const contactPath = new URL(selectedContactUrl).pathname;
       const contactAllowed = robotsRules?.isAllowed(selectedContactUrl, USER_AGENT) !== false;
       if (!contactAllowed) {
         await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
-          appendEvent(attempt, "contact_page", "skipped", "robots.txt 禁止访问首页发现的联系页", {
+          appendEvent(attempt, "contact_page", "skipped", "The access policy does not allow review of the contact page found on the homepage", {
             path: contactPath,
             allowed: false
           });
         });
       } else {
         await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
-          appendEvent(attempt, "contact_page", "started", "正在读取首页发现的同域联系页样本", {
+          appendEvent(attempt, "contact_page", "started", "Reviewing a same-domain contact page sample found on the homepage", {
             path: contactPath,
             maxResponseBytes: MAX_RESPONSE_BYTES
           });
@@ -1067,13 +1181,14 @@ async function executeAttempt(
               networkPolicy(target.hostname, target.domain, [contactPath])
             ),
             async (reason) => mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
-              appendEvent(attempt, "contact_page", "started", "联系页瞬时失败，正在进行唯一一次重试", { retry: 1, reason });
+              appendEvent(attempt, "contact_page", "started", "The contact page request had a transient failure. Retrying once.", { retry: 1, reason });
             })
           );
           const contactType = (contactResponse.headers.get("content-type") || "")
             .split(";")[0]!.trim().toLocaleLowerCase("en-US");
           if (contactResponse.ok && (!contactType || ["text/html", "text/plain"].includes(contactType))) {
             const contactHtml = await contactResponse.text();
+            contactHtmlForAi = contactHtml;
             contactBytes = Buffer.byteLength(contactHtml);
             const contactTruncated = contactResponse.headers.get("x-goodjob-response-truncated") === "true";
             contactEvidence = extractEvidence(
@@ -1083,7 +1198,7 @@ async function executeAttempt(
               nowIso()
             );
             await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
-              appendEvent(attempt, "contact_page", "completed", "同域联系页样本读取完成，原文不会保存", {
+              appendEvent(attempt, "contact_page", "completed", "The same-domain contact page sample was reviewed. Source text was not retained.", {
                 httpStatus: contactResponse.status,
                 responseBytes: contactBytes,
                 truncated: contactTruncated,
@@ -1092,7 +1207,7 @@ async function executeAttempt(
             });
           } else {
             await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
-              appendEvent(attempt, "contact_page", "skipped", "联系页响应不符合最小取证策略", {
+              appendEvent(attempt, "contact_page", "skipped", "The contact page response is outside the minimum evidence scope", {
                 httpStatus: contactResponse.status,
                 contentType: contactType || "unknown"
               });
@@ -1100,7 +1215,7 @@ async function executeAttempt(
           }
         } catch (error) {
           await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
-            appendEvent(attempt, "contact_page", "failed", "联系页访问失败，首页证据仍会正常归档", {
+            appendEvent(attempt, "contact_page", "failed", "The contact page could not be reviewed. Homepage evidence is still retained.", {
               reason: error instanceof Error ? error.message.slice(0, 200) : "NETWORK_ERROR"
             });
           });
@@ -1108,24 +1223,78 @@ async function executeAttempt(
       }
     }
     const evidence = mergePageEvidence(homeEvidence, contactEvidence);
+    if (options.extractPublicContacts) {
+      await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
+        appendEvent(attempt, "ai_extract", "started", "AI is organizing public contact details found on the reviewed pages. It will not generate or guess data.");
+      });
+      const pages: WebsiteContactAiPage[] = [{
+        sourceUrl: bodyResponse.url || target.homeUrl,
+        html
+      }];
+      if (contactEvidence && selectedContactUrl) {
+        pages.push({ sourceUrl: contactEvidence.sourceUrl || selectedContactUrl, html: contactHtmlForAi });
+      }
+      try {
+        const aiContacts = await options.extractPublicContacts({
+          domain: target.domain,
+          pages
+        });
+        evidence.aiStructuredContacts = aiContacts;
+        evidence.payloadHash = sha256(JSON.stringify({
+          ...evidence,
+          payloadHash: undefined
+        }));
+        await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
+          appendEvent(attempt, "ai_extract", "completed", aiContacts.length
+            ? `AI organized ${aiContacts.length} public contact record(s) from the reviewed pages`
+            : "AI found no new verifiable contact details on the reviewed pages", {
+            contactCount: aiContacts.length,
+            generatedContacts: false,
+            exactSourceValidation: true
+          });
+        });
+      } catch (error) {
+        await mutateAttempt(store, candidateId, attemptId, persist, (attempt) => {
+          appendEvent(attempt, "ai_extract", "failed", "AI organization was incomplete. Rule-based results were retained.", {
+            fallback: "rule_extraction",
+            reason: error instanceof Error ? error.message.slice(0, 200) : "AI_PARSE_FAILED"
+          });
+        });
+      }
+    }
     const hasOrganizationEvidence = Boolean(
       evidence.organizationName
       || evidence.legalName
       || evidence.addressCountry
       || evidence.businessCategory
     );
+    const builtContacts = buildExtractedContacts(evidence, target.domain);
     const hasUsableEvidence = hasOrganizationEvidence
       || Boolean(evidence.publicContactEmail)
-      || Boolean(evidence.publicContactPhones?.length);
+      || Boolean(evidence.publicContactPhones?.length)
+      || builtContacts.some((contact) => contact.emails.length || contact.phones.length || contact.whatsapp.length);
     const candidate = candidateById(store, candidateId);
-    const primaryContact = evidence.publicContactEmail
-      || evidence.publicContactPhones?.[0]
+    const primaryEvidenceContact = builtContacts.find((contact) =>
+      contact.kind === "person"
+      && (contact.emails.length || contact.phones.length || contact.whatsapp.length)
+    ) || builtContacts.find((contact) =>
+      contact.emails.length || contact.phones.length || contact.whatsapp.length
+    );
+    const primaryContact = primaryEvidenceContact ? [
+      ...primaryEvidenceContact.emails,
+      ...primaryEvidenceContact.phones,
+      ...primaryEvidenceContact.whatsapp
+    ][0] : builtContacts.flatMap((contact) => [
+      ...contact.emails,
+      ...contact.phones,
+      ...contact.whatsapp
+    ])[0]
       || "";
     if (candidate && !candidate.contactInfo && primaryContact) {
       candidate.contactInfo = primaryContact;
     }
     if (candidate) {
-      const built = buildExtractedContacts(evidence, target.domain);
+      const built = builtContacts;
       if (built.length) {
         candidate.extractedContacts = mergeProspectContactEvidence(candidate.extractedContacts || [], built);
         const person = built.find((contact) => contact.kind === "person" && contact.name);
@@ -1139,7 +1308,7 @@ async function executeAttempt(
       attempt.responseBytes = responseBytes + contactBytes;
       attempt.redirected = attempt.redirected
         || Boolean(bodyResponse.url && bodyResponse.url !== target.homeUrl);
-      appendEvent(attempt, "body", "completed", "首页正文样本读取完成，原文不会保存", {
+      appendEvent(attempt, "body", "completed", "The homepage content sample was reviewed. Source text was not retained.", {
         httpStatus: bodyResponse.status,
         responseBytes: responseBytes + contactBytes,
         contentType: bodyType || "unknown",
@@ -1148,8 +1317,8 @@ async function executeAttempt(
       });
       attempt.evidence = evidence;
       appendEvent(attempt, "evidence", "completed", hasUsableEvidence
-        ? "已提取官网公开联系方式或组织级弱证据"
-        : "未发现可用的公开联系方式或组织级结构化证据", {
+        ? "Public contact details or organization-level supporting evidence was identified"
+        : "No usable public contact details or structured organization evidence was identified", {
         organizationName: Boolean(evidence.organizationName || evidence.legalName),
         country: Boolean(evidence.addressCountry),
         businessCategory: Boolean(evidence.businessCategory),
@@ -1163,23 +1332,26 @@ async function executeAttempt(
       outcome: hasUsableEvidence ? "evidence_found" : "no_evidence",
       stage: "completed",
       message: hasUsableEvidence
-        ? "官网验证已结束：首页和联系页公开证据已归档，组织事实仍需交叉验证"
-        : "官网验证已结束：未取得公开联系方式或组织级证据，候选评分保持不变"
+        ? "Website review completed: public evidence from the homepage and contact page was recorded. Organization facts still require cross-checking."
+        : "Website review completed: no public contact details or organization-level evidence was identified. Candidate scores were not changed."
     });
   } catch (error) {
     const current = attemptById(store, candidateId, attemptId);
     if (current && !["completed", "failed"].includes(current.status)) {
       const policyBlocked = error instanceof ProviderContractError
         && error.code === "PROVIDER_POLICY_BLOCKED";
+      const failure = networkFailure(error);
       await finishAttempt(store, candidateId, attemptId, persist, {
         status: "failed",
         outcome: policyBlocked ? "policy_blocked" : "unreachable",
         stage: "failed",
         message: policyBlocked
-          ? "官网验证已结束：安全策略阻止访问，候选评分保持不变"
-          : "官网验证已结束：网络访问失败，候选评分保持不变",
-        failureCode: policyBlocked ? error.code : "NETWORK_ERROR",
-        failureMessage: error instanceof Error ? error.message.slice(0, 500) : "网络访问失败"
+          ? "Website review completed: the security policy blocked the request. Candidate scores were not changed."
+          : "Website review completed: the network request failed. Candidate scores were not changed.",
+        failureCode: policyBlocked ? error.code : failure.code,
+        failureMessage: policyBlocked
+          ? (error instanceof Error ? error.message.slice(0, 500) : "The security policy blocked the request")
+          : failure.message
       });
     }
   }
@@ -1190,7 +1362,8 @@ function scheduleAttemptWork(
   candidate: WebsiteOpportunity,
   attempt: WebsiteProbeAttempt,
   target: ReturnType<typeof canonicalTarget>,
-  persist: PersistCandidate
+  persist: PersistCandidate,
+  options: WebsiteProbeOptions
 ) {
   if (scheduledAttemptIds.has(attempt.id)) return false;
   scheduledAttemptIds.add(attempt.id);
@@ -1203,7 +1376,8 @@ function scheduleAttemptWork(
       candidate.id,
       attempt.id,
       target,
-      persist
+      persist,
+      options
     ))
     .finally(() => {
       scheduledAttemptIds.delete(attempt.id);
@@ -1219,7 +1393,8 @@ export async function resumeWebsiteProbeAttempt(
   candidate: WebsiteOpportunity,
   attempt: WebsiteProbeAttempt,
   actorId: string,
-  persist: PersistCandidate
+  persist: PersistCandidate,
+  options: WebsiteProbeOptions = {}
 ) {
   if (["completed", "failed"].includes(attempt.status)) return false;
   if (candidate.ownerId !== actorId
@@ -1228,7 +1403,7 @@ export async function resumeWebsiteProbeAttempt(
     || attempt.ownerId !== candidate.ownerId) {
     throw new WebsiteProbeError(
       "WEBSITE_PROBE_NOT_OWNED",
-      "官网探针恢复任务与候选隔离范围不一致",
+      "The website review task does not match the candidate's access scope",
       403
     );
   }
@@ -1236,30 +1411,31 @@ export async function resumeWebsiteProbeAttempt(
   if (target.domain !== attempt.domain) {
     throw new WebsiteProbeError(
       "WEBSITE_PROBE_URL_INVALID",
-      "候选官网已变化，不能恢复旧域名的验证任务",
+      "The candidate website changed; the previous domain review cannot be resumed",
       409
     );
   }
-  return scheduleAttemptWork(store, candidate, attempt, target, persist);
+  return scheduleAttemptWork(store, candidate, attempt, target, persist, options);
 }
 
 export async function queueWebsiteProbe(
   store: CrmStore,
   candidate: WebsiteOpportunity,
   actorId: string,
-  persist: PersistCandidate
+  persist: PersistCandidate,
+  options: WebsiteProbeOptions = {}
 ) {
   if (!featureEnabled()) {
     throw new WebsiteProbeError(
       "WEBSITE_PROBE_DISABLED",
-      "官网低频验证已由管理员关闭",
+      "Website review is disabled by the administrator",
       503
     );
   }
   if (candidate.ownerId !== actorId) {
     throw new WebsiteProbeError(
       "WEBSITE_PROBE_NOT_OWNED",
-      "只有候选归属业务员可以发起官网低频验证",
+      "Only the assigned owner can start website review",
       403
     );
   }
@@ -1289,11 +1465,11 @@ export async function queueWebsiteProbe(
     completedAt: "",
     createdAt
   };
-  appendEvent(attempt, "queued", "completed", "官网低频验证已排队", {
+  appendEvent(attempt, "queued", "completed", "Website review has been queued", {
     domain: target.domain,
     maxBodyBytes: MAX_RESPONSE_BYTES,
     cacheHours: 24,
-    maxRedirects: 1,
+    maxRedirects: 3,
     maxContactPages: 1
   });
   candidate.websiteProbeAttempts ||= [];
@@ -1331,7 +1507,7 @@ export async function queueWebsiteProbe(
     }
     attempt.startedAt = createdAt;
     attempt.completedAt = createdAt;
-    appendEvent(attempt, "completed", "completed", "已复用团队 24 小时内的同域验证结果，未再次访问官网", {
+    appendEvent(attempt, "completed", "completed", "A same-domain result from the last 24 hours was reused. No additional request was made.", {
       cachedAttemptId: cached.id,
       networkAccess: false,
       outcome: cached.outcome
@@ -1343,10 +1519,10 @@ export async function queueWebsiteProbe(
     attempt.status = "failed";
     attempt.outcome = "circuit_open";
     attempt.failureCode = "DOMAIN_CIRCUIT_OPEN";
-    attempt.failureMessage = "同域最近三次瞬时访问失败，24 小时熔断已开启";
+    attempt.failureMessage = "Three recent transient failures were recorded for this domain. A 24-hour verification pause is active.";
     attempt.startedAt = createdAt;
     attempt.completedAt = createdAt;
-    appendEvent(attempt, "failed", "failed", "官网验证已结束：同域连续失败已熔断，未发起网络访问", {
+    appendEvent(attempt, "failed", "failed", "Website review ended: repeated same-domain failures triggered a pause. No network request was made.", {
       networkAccess: false,
       priorTransientFailures: 3
     });
@@ -1355,7 +1531,7 @@ export async function queueWebsiteProbe(
   }
 
   await persist(candidate);
-  scheduleAttemptWork(store, candidate, attempt, target, persist);
+  scheduleAttemptWork(store, candidate, attempt, target, persist, options);
   return { attempt, replayed: false };
 }
 
@@ -1370,7 +1546,7 @@ export function websiteProbeDetail(
   if (!attempt) {
     throw new WebsiteProbeError(
       "WEBSITE_PROBE_ATTEMPT_NOT_FOUND",
-      "该候选还没有官网验证记录",
+      "This candidate has no website review record",
       404
     );
   }
@@ -1385,7 +1561,7 @@ export function websiteProbeCapability() {
   return {
     enabled: featureEnabled(),
     foreignOnly: true,
-    countryPolicy: "仅允许已标记为国外且非中国、港澳台地区的候选官网",
+    countryPolicy: "Only candidates marked as outside China, Hong Kong, Macao, and Taiwan are eligible",
     policyVersion: POLICY_VERSION,
     defaultOff: false,
     accessMode: "controlled_probe" as const,

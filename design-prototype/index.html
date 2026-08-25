@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GoodJob CRM Redesign</title>
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles-v2.css">
+</head>
+<body>
+  <div class="app-shell" id="appShell">
+    <aside class="sidebar" aria-label="主导航">
+      <div class="brand-row">
+        <button class="brand-mark" type="button" data-view="dashboard" aria-label="进入工作台"><span>G</span><span>J</span></button>
+        <div class="brand-copy"><strong>GoodJob</strong><span>Global Growth Intelligence</span></div>
+        <button class="icon-button sidebar-toggle" id="sidebarToggle" type="button" title="收起导航"><i data-lucide="panel-left-close"></i></button>
+      </div>
+
+      <nav class="nav-scroll">
+        <div class="nav-label">经营</div>
+        <button class="nav-item active" type="button" data-view="dashboard" title="工作台"><i data-lucide="layout-dashboard"></i><span>工作台</span><em>今日</em></button>
+        <button class="nav-item" type="button" data-view="lead-finder" title="自动获客"><i data-lucide="search"></i><span>自动获客</span><em>3</em></button>
+        <button class="nav-item" type="button" data-view="prospect-list" title="搜客清单"><i data-lucide="list-filter"></i><span>搜客清单</span><em>28</em></button>
+        <button class="nav-item" type="button" data-view="leads" title="线索"><i data-lucide="scan-search"></i><span>线索</span></button>
+        <button class="nav-item" type="button" data-view="customers" title="客户"><i data-lucide="users-round"></i><span>客户</span></button>
+        <button class="nav-item" type="button" data-view="pipeline" title="商机"><i data-lucide="handshake"></i><span>商机</span><em>5</em></button>
+        <button class="nav-item" type="button" data-view="customer-pool" title="客户公池"><i data-lucide="archive"></i><span>客户公池</span></button>
+        <button class="nav-item" type="button" data-view="communication" title="Communication"><i data-lucide="messages-square"></i><span>Communication</span><em class="unread">6</em></button>
+        <button class="nav-item agent-nav" type="button" data-view="agent" title="小K Agent"><i data-lucide="sparkles"></i><span>小K Agent</span></button>
+
+        <details class="nav-group" open>
+          <summary><i data-lucide="briefcase-business"></i><span>业务工具</span><i data-lucide="chevron-down" class="chevron"></i></summary>
+          <div class="nav-sublist">
+            <button type="button" data-view="documents">单据平台</button>
+            <button type="button" data-view="reports">经营报表</button>
+            <button type="button" data-view="reminders">跟进提醒</button>
+            <button type="button" data-view="memos">备忘录</button>
+          </div>
+        </details>
+
+        <details class="nav-group">
+          <summary><i data-lucide="graduation-cap"></i><span>团队成长</span><i data-lucide="chevron-down" class="chevron"></i></summary>
+          <div class="nav-sublist">
+            <button type="button" data-view="training">销售训练</button>
+            <button type="button" data-view="knowledge">资料维护</button>
+            <button type="button" data-view="exam">在线考试</button>
+            <button type="button" data-view="daily-reports">团队日报</button>
+          </div>
+        </details>
+
+        <details class="nav-group">
+          <summary><i data-lucide="settings-2"></i><span>系统管理</span><i data-lucide="chevron-down" class="chevron"></i></summary>
+          <div class="nav-sublist">
+            <button type="button" data-view="imports">导入导出</button>
+            <button type="button" data-view="skills">Agent Skills</button>
+            <button type="button" data-view="settings">系统设置</button>
+          </div>
+        </details>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="avatar">AD</div>
+        <div><strong>Admin</strong><span>超级管理员</span></div>
+        <button class="icon-button" type="button" title="账号菜单"><i data-lucide="ellipsis"></i></button>
+      </div>
+    </aside>
+
+    <main class="app-main">
+      <header class="topbar">
+        <div class="breadcrumbs"><span>GoodJob</span><i data-lucide="chevron-right"></i><strong id="breadcrumbTitle">工作台</strong></div>
+        <button class="command-search" id="commandSearch" type="button"><i data-lucide="search"></i><span>搜索客户、商机或页面</span><kbd>⌘ K</kbd></button>
+        <div class="top-actions">
+          <button class="icon-button" type="button" title="帮助"><i data-lucide="circle-help"></i></button>
+          <button class="icon-button notification-button" type="button" title="消息"><i data-lucide="bell"></i><span>4</span></button>
+          <div class="system-status"><i></i><span>系统正常</span></div>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <section class="page-head">
+          <div>
+            <h1 id="pageTitle">经营工作台</h1>
+            <p id="pageSubtitle">聚焦今天最值得推进的客户与商机。</p>
+          </div>
+          <div class="page-actions" id="pageActions"></div>
+        </section>
+        <section class="view-stage" id="viewStage" aria-live="polite"></section>
+      </div>
+    </main>
+  </div>
+
+  <dialog class="command-dialog" id="commandDialog">
+    <div class="command-input"><i data-lucide="search"></i><input id="commandInput" placeholder="输入页面、客户或动作"><kbd>ESC</kbd></div>
+    <div class="command-results">
+      <button type="button" data-command-view="customers"><i data-lucide="users-round"></i><span><b>客户</b><small>查看客户列表与全景</small></span><kbd>G C</kbd></button>
+      <button type="button" data-command-view="pipeline"><i data-lucide="handshake"></i><span><b>商机</b><small>进入商机管道</small></span><kbd>G O</kbd></button>
+      <button type="button" data-command-view="agent"><i data-lucide="sparkles"></i><span><b>小K Agent</b><small>开始新的执行任务</small></span><kbd>G A</kbd></button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast"><i data-lucide="circle-check"></i><span></span></div>
+
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

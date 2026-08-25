@@ -177,12 +177,12 @@ export function buildProspectVerificationReport(
   const checks: ProspectVerificationCheck[] = [
     check(
       "crawler_free_policy",
-      "网页访问策略",
+      "官网资料核验策略",
       "passed",
       controlledProbe
-        ? `已按 ${latestProbe!.policyVersion} 对规范官网执行受控低频验证；仅访问 robots.txt、首页和最多一个由首页发现的同域联系页，不下载文件或保存网页原文。`
-        : "系统尚未访问、下载、解析或探测企业网页，仅保存链接和授权数据源返回字段。",
-      controlledProbe ? "受控官网验证策略" : "系统安全策略",
+        ? `已按 ${latestProbe!.policyVersion} 对规范官网完成公开资料核验；仅用于核对企业信息和公开业务联系方式，不处理受限内容或保存原始页面内容。`
+        : "官网公开资料尚待补全，当前仅保存链接和授权数据源返回字段。",
+      controlledProbe ? "官网公开资料核验策略" : "系统安全策略",
       generatedAt
     ),
     check(

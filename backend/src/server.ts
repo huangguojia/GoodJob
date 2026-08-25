@@ -10,7 +10,10 @@ import path from "node:path";
 import nodemailer from "nodemailer";
 import QRCode from "qrcode";
 import { z } from "zod";
+import { exportAdvancedDocumentTemplate, listAdvancedDocumentTemplates } from "./advanced-document-templates.js";
+import { ExcelPreviewUnavailableError, excelBufferSha256, renderExcelBufferToPdf } from "./excel-preview.js";
 import { createTradeDocumentImportAnalysis, parseTradeDocumentImport, TRADE_DOCUMENT_IMPORT_MAX_BYTES, tradeDocumentImportSha256 } from "./trade-document-import.js";
+import { applyTradeDocumentRecognitionTemplate, buildTradeDocumentRecognitionTemplate, matchTradeDocumentRecognitionTemplate } from "./trade-document-recognition-template.js";
 import { once } from "node:events";
 import { resolveTxt } from "node:dns/promises";
 import { AUTH_COOKIE_NAME, CSRF_COOKIE_NAME, canManageAccount, canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, canSeeTeam, createCsrfToken, csrfCookieOptions, hasIamPermission, hasIamScope, hashPassword, isPlatformIdentity, publicUser, requireAuth, sessionCookieOptions, signMfaSetupToken, signToken, validateAuthSecurity, verifyMfaSetupToken, verifyPassword } from "./auth.js";
@@ -20,13 +23,24 @@ import {
   recognizeBusinessCard,
   type BusinessCardRecognition
 } from "./business-card-ocr.js";
+import { isTradeDocumentOcrMime, recognizeConfiguredTradeDocument, recognizeTradeDocument, type TradeDocumentOcrProvider, type TradeDocumentOcrProviderConfig } from "./trade-document-ocr.js";
 import { getTrackingProvider, isSyncable, buildTrackingUpdate } from "./tracking-provider.js";
 import {
   callAiModel,
   callAiModelWithWebSearch,
   extractJsonObject
 } from "./ai-model-runtime.js";
+import {
+  aiLeadFinderReadiness,
+  aiWebSearchPolicy,
+  webSearchFailureSuggestion
+} from "./ai-web-search-policy.js";
+import {
+  extractWebsitePublicContactsWithAi,
+  type WebsiteContactAiExtractor
+} from "./website-contact-ai.js";
 import { createAiSearchProvider } from "./ai-search-provider.js";
+import { aiWebsiteCitationsToProviderRecords } from "./prospect-ai-website-discovery.js";
 import { compileAgentGoalSpec } from "./agent-goal.js";
 import { resolveAgentMissionRoute } from "./agent-turn-decision.js";
 import { validateAgentJobSecurity } from "./agent-job-security.js";
@@ -95,6 +109,25 @@ import {
   type AgentOperationContract
 } from "./agent-api-contracts.js";
 import {
+  activateSalesPlaybook,
+  createSalesDistillation,
+  listDistillationSources,
+  listSalesDistillations,
+  listSalesPlaybookActivations,
+  pauseSalesPlaybook,
+  publishSalesDistillation
+} from "./sales-distillation.js";
+import {
+  SalesTrainingRunner,
+  controlSalesTrainingRun,
+  createSalesTrainingRun,
+  getSalesTrainingRun,
+  listSalesTrainingRuns,
+  publishSalesTrainingRun,
+  retrainSalesTrainingRun,
+  updateSalesTrainingSample
+} from "./sales-training.js";
+import {
   OutreachSequenceRunner,
   controlOutreachSequence,
   createOutreachSequence,
@@ -126,6 +159,7 @@ import { IntegrationControlPlaneService } from "./integrations/integration-servi
 import {
   getIntegrationControlPlaneService,
   getIntegrationRepository,
+  getLocalRunnerService,
   setIntegrationControlPlaneService
 } from "./integrations/integration-runtime.js";
 import { decryptIntegrationValue, encryptIntegrationValue } from "./integrations/integration-credential-vault.js";
@@ -204,12 +238,16 @@ import {
 } from "./prospect-super-search.js";
 import { ProspectWorkerService } from "./prospect-worker-service.js";
 import {
+  contactChannelsFromText,
   contactEnrichmentSource,
   createContactEnrichmentAttempt,
+  expireContactEnrichmentAttempt,
   mergeProspectContactEvidence,
+  mergeWebsiteProbeCandidateProgress,
   providerContactEvidence,
   refreshContactEnrichmentAttempt
 } from "./prospect-contact-enrichment.js";
+import { discoverProspectWebsite } from "./prospect-website-discovery.js";
 import { loadLocalEnv } from "./runtime-env.js";
 import { createOpenApiDocument, registerSwagger } from "./swagger.js";
 import { agentApiRequestSchema, assertAgentApiToolRisk, classifyAgentApiRequest, deniedAgentApiReason, normalizeAgentApiPath, redactAgentApiData, routeTemplateMatches } from "./agent-api-policy.js";
@@ -317,6 +355,7 @@ import {
 import { InboundMailWatcher } from "./inbound-mail-watcher.js";
 import { recordCrmEmailTouchpoint } from "./email-touchpoints.js";
 import {
+  expireStaleWebsiteProbeAttempts,
   queueWebsiteProbe,
   websiteProbeAutoEnrichmentEligible,
   websiteProbeCapability,
@@ -422,7 +461,7 @@ import {
 } from "./prospect-verification.js";
 import { refreshProspectScorecard } from "./prospect-scorecard.js";
 import { normalizeDocumentAssetPlacement } from "./types.js";
-import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, CustomerIntelligenceFieldKey, Deal, DealEvent, DocumentLetterhead, DocumentSignature, DocumentStamp, Exam, ExamAssignment, ExamAttempt, ExamQuestion, Lead, LeadSourceEvent, LeadSourceType, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProspectTouchpoint, ProspectIdentityBootstrapAttempt, ProspectOutreachChannel, ProviderCatalogItem, ProviderConnection, ProviderEvidenceSnapshot, SalesRecordAudit, SessionUser, Todo, TradeDocument, TradeDocumentAudit, TradeDocumentImportAnalysis, TradeDocumentSendRecord, WecomCommandEndpoint, WecomCommandReceipt, WecomMemberBinding, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, CustomerIntelligenceFieldKey, Deal, DealEvent, DocumentLetterhead, DocumentSignature, DocumentStamp, Exam, ExamAssignment, ExamAttempt, ExamQuestion, ExtractedWebsiteContact, Lead, LeadSourceEvent, LeadSourceType, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProspectTouchpoint, ProspectIdentityBootstrapAttempt, ProspectOutreachChannel, ProviderCatalogItem, ProviderConnection, ProviderEvidenceSnapshot, QuoteHistoryItem, QuoteHistoryRecord, SalesRecordAudit, SessionUser, Todo, TradeDocument, TradeDocumentAudit, TradeDocumentImportAnalysis, TradeDocumentSendRecord, WecomCommandEndpoint, WecomCommandReceipt, WecomMemberBinding, WebsiteOpportunity } from "./types.js";
 import type { CompanyProfile, DocumentDefaultProfile, LogEntry, Product, Shipment, ShipmentItem, TeamSystemSettings } from "./types.js";
 import { recognizeTrackingCode } from "./shipment-ocr.js";
 
@@ -634,11 +673,12 @@ app.use("/api/dashboard", requireAuth, asyncRoute(async (req, res, next) => {
 app.use(["/api/problems", "/api/competitors", "/api/case-studies", "/api/memos", "/api/plan-tasks", "/api/plan-templates"], requireAuth, asyncRoute(async (req, res, next) => {
   await enforceIamTenantPermission(req, res, next, req.method === "GET" ? "workspace.dashboard.read" : "workspace.dashboard.manage");
 }));
-app.use(["/api/trade-documents", "/api/trade-document-imports", "/api/document-assets", "/api/document-defaults"], requireAuth, asyncRoute(async (req, res, next) => {
+app.use(["/api/trade-documents", "/api/trade-document-imports", "/api/trade-document-templates", "/api/trade-document-recognition-templates", "/api/document-assets", "/api/document-defaults", "/api/quote-history"], requireAuth, asyncRoute(async (req, res, next) => {
+  const previewOnly = req.method === "POST" && req.path.endsWith("/preview-xlsx");
   const managingAssets = req.originalUrl.startsWith("/api/document-assets") && req.method !== "GET";
   const managingDefaults = req.originalUrl.startsWith("/api/document-defaults") && req.method !== "GET";
   const uploadingProductImage = req.originalUrl.startsWith("/api/document-assets/upload") && req.body?.kind === "product";
-  await enforceIamTenantPermission(req, res, next, uploadingProductImage ? "product.manage" : managingAssets || managingDefaults ? "system.settings.manage" : req.method === "GET" ? "document.read" : "document.manage");
+  await enforceIamTenantPermission(req, res, next, uploadingProductImage ? "product.manage" : managingAssets || managingDefaults ? "system.settings.manage" : req.method === "GET" || previewOnly ? "document.read" : "document.manage");
 }));
 app.use(["/api/tools/products", "/api/tools/product-categories"], requireAuth, asyncRoute(async (req, res, next) => {
   await enforceIamTenantPermission(req, res, next, req.method === "GET" ? "product.read" : "product.manage");
@@ -688,6 +728,11 @@ app.use([
   await enforceIamTenantPermission(req, res, next, readOnly ? "communication.read" : "communication.send");
 }));
 app.use("/api/agent", requireAuth, asyncRoute(async (req, res, next) => {
+  if (req.path.includes("sales-training") || req.path.includes("sales-distillation")) {
+    const personalPlaybookAction = req.path.endsWith("/activate") || req.path.includes("/activations/");
+    await enforceIamTenantPermission(req, res, next, req.method === "GET" || personalPlaybookAction ? "training.read" : "training.manage");
+    return;
+  }
   const manage = req.method !== "GET" && (req.path.includes("knowledge") || req.path.includes("triggers") || req.path.includes("governance"));
   await enforceIamTenantPermission(req, res, next, manage ? "agent.manage" : "agent.use");
 }));
@@ -1420,7 +1465,7 @@ function createInternalNotification(input: {
   teamId: string;
   subject: string;
   content: string;
-  relatedType?: "daily_report" | "message" | "";
+  relatedType?: "daily_report" | "message" | "quote_history" | "";
   relatedId?: string;
   threadId?: string;
 }) {
@@ -2681,6 +2726,40 @@ app.get("/api/profile", requireAuth, (req, res) => {
   res.json({ user: accountUser(user) });
 });
 
+app.patch("/api/profile/password", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    currentPassword: z.string().min(1).max(128),
+    newPassword: z.string().min(8).max(128),
+    confirmPassword: z.string().min(8).max(128)
+  });
+  const body = schema.parse(req.body);
+  if (body.newPassword !== body.confirmPassword) {
+    res.status(400).json({ message: "两次输入的新密码不一致" });
+    return;
+  }
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.user!.id);
+  if (!user) {
+    res.status(404).json({ message: "账号不存在" });
+    return;
+  }
+  const currentPasswordCheck = await verifyPassword(user.password, body.currentPassword);
+  if (!currentPasswordCheck.valid) {
+    res.status(400).json({ message: "当前密码错误" });
+    return;
+  }
+  const samePasswordCheck = await verifyPassword(user.password, body.newPassword);
+  if (samePasswordCheck.valid) {
+    res.status(400).json({ message: "新密码不能与当前密码相同" });
+    return;
+  }
+  user.password = await hashPassword(body.newPassword);
+  user.authVersion = (user.authVersion || 1) + 1;
+  await store.persist();
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ requiresRelogin: true, message: "密码已修改，请重新登录" });
+}));
+
 app.patch("/api/profile/email-binding", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
     outboundEmail: z.string().max(180).default(""),
@@ -2734,7 +2813,7 @@ app.patch("/api/profile/email-binding", requireAuth, asyncRoute(async (req, res)
 }));
 
 app.patch("/api/profile/theme", requireAuth, asyncRoute(async (req, res) => {
-  const schema = z.object({ theme: z.string().max(48).default("ocean") });
+  const schema = z.object({ theme: z.string().max(48).default("rose") });
   const { theme } = schema.parse(req.body);
   const store = getStore();
   const user = store.users.find((item) => item.id === req.user!.id);
@@ -4858,7 +4937,7 @@ function backgroundResearchSources(
       observedAt: evidence.fetchedAt || candidate.createdAt
     }));
     (candidate.websiteProbeAttempts || []).filter((attempt) => attempt.evidence).slice(0, 1).forEach((attempt) => rows.push({
-      title: "官网低频验证",
+      title: "官网公开资料核验",
       url: attempt.evidence!.sourceUrl || attempt.sourceUrl,
       observedAt: attempt.evidence!.observedAt || attempt.completedAt,
       detail: [
@@ -4979,7 +5058,7 @@ async function ensureBackgroundResearchWebsiteProbe(
   if (latest?.evidence) {
     return {
       providerId: "controlled_website",
-      providerName: "官网低频验证",
+      providerName: "官网公开资料核验",
       status: "matched",
       matchCount: 1,
       message: "已复用官网公开信息验证结果"
@@ -4988,7 +5067,7 @@ async function ensureBackgroundResearchWebsiteProbe(
   if (latest && ["queued", "running"].includes(latest.status)) {
     return {
       providerId: "controlled_website",
-      providerName: "官网低频验证",
+      providerName: "官网公开资料核验",
       status: "skipped",
       matchCount: 0,
       message: "官网验证正在后台执行"
@@ -4998,18 +5077,18 @@ async function ensureBackgroundResearchWebsiteProbe(
   try {
     await queueWebsiteProbe(getStore(), candidate, user.id, async (current) => {
       await persistCandidateChanges(getStore(), [current], false);
-    });
+    }, { extractPublicContacts: websiteContactAiExtractor(user) });
     return {
       providerId: "controlled_website",
-      providerName: "官网低频验证",
+      providerName: "官网公开资料核验",
       status: "skipped",
       matchCount: 0,
-      message: "已进入受控低频验证队列，完成后重新背调即可复用结果"
+      message: "已进入官网公开资料核验队列，完成后重新背调即可复用结果"
     };
   } catch (error) {
     return {
       providerId: "controlled_website",
-      providerName: "官网低频验证",
+      providerName: "官网公开资料核验",
       status: error instanceof WebsiteProbeError && error.code === "WEBSITE_PROBE_COUNTRY_BLOCKED" ? "skipped" : "failed",
       matchCount: 0,
       message: error instanceof Error ? error.message : "官网验证未能启动"
@@ -5288,6 +5367,7 @@ function defaultTeamSystemSettings(teamId: string): TeamSystemSettings {
     teamId,
     requireDocumentExcelApproval: false,
     productCategories: [],
+    ocrProviderConfigEncrypted: "",
     updatedBy: "",
     updatedAt: ""
   };
@@ -5300,9 +5380,49 @@ function teamSystemSettingsForTeam(teamId: string) {
   return settings;
 }
 
+function ocrProviderCredentialContext(teamId: string) {
+  return { id: `ocr_team_${teamId}`, providerId: "trade-document-ocr", ownerId: teamId, teamId };
+}
+
+function defaultTradeDocumentOcrProvider(): TradeDocumentOcrProviderConfig {
+  return { provider: "none", enabled: false, apiKey: "", secretKey: "", model: "", baseUrl: "" };
+}
+
+function tradeDocumentOcrProviderForTeam(teamId: string) {
+  const settings = teamSystemSettingsForTeam(teamId);
+  if (!settings.ocrProviderConfigEncrypted) return defaultTradeDocumentOcrProvider();
+  try {
+    const decrypted = decryptProviderConfiguration(ocrProviderCredentialContext(teamId), settings.ocrProviderConfigEncrypted);
+    const value = JSON.parse(decrypted.apiKey) as Partial<TradeDocumentOcrProviderConfig>;
+    const provider = value.provider === "baidu" || value.provider === "siliconflow" ? value.provider : "none";
+    return {
+      provider,
+      enabled: Boolean(value.enabled) && provider !== "none",
+      apiKey: typeof value.apiKey === "string" ? value.apiKey : "",
+      secretKey: typeof value.secretKey === "string" ? value.secretKey : "",
+      model: typeof value.model === "string" ? value.model : "",
+      baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : ""
+    } satisfies TradeDocumentOcrProviderConfig;
+  } catch {
+    return defaultTradeDocumentOcrProvider();
+  }
+}
+
+function publicTradeDocumentOcrProvider(config: TradeDocumentOcrProviderConfig) {
+  return {
+    provider: config.provider,
+    enabled: config.enabled,
+    hasApiKey: Boolean(config.apiKey),
+    hasSecretKey: Boolean(config.secretKey),
+    model: config.model,
+    baseUrl: config.baseUrl
+  };
+}
+
 app.get("/api/system-settings", requireAuth, (req, res) => {
   res.json({
     settings: teamSystemSettingsForTeam(req.user!.teamId),
+    ocr: publicTradeDocumentOcrProvider(tradeDocumentOcrProviderForTeam(req.user!.teamId)),
     canManage: hasIamPermission(req.user!, "system.settings.manage")
   });
 });
@@ -5319,6 +5439,7 @@ app.put("/api/system-settings", requireAuth, asyncRoute(async (req, res) => {
     teamId: req.user!.teamId,
     requireDocumentExcelApproval: body.requireDocumentExcelApproval,
     productCategories: current?.productCategories || [],
+    ocrProviderConfigEncrypted: current?.ocrProviderConfigEncrypted || "",
     updatedBy: req.user!.id,
     updatedAt: new Date().toISOString()
   };
@@ -5326,6 +5447,49 @@ app.put("/api/system-settings", requireAuth, asyncRoute(async (req, res) => {
   else store.teamSystemSettings.push(settings);
   await store.persist();
   res.json({ settings, canManage: true });
+}));
+
+app.put("/api/system-settings/ocr", requireAuth, asyncRoute(async (req, res) => {
+  if (!hasIamPermission(req.user!, "system.settings.manage")) {
+    res.status(403).json({ message: "当前账号没有系统设置权限" });
+    return;
+  }
+  const body = z.object({
+    provider: z.enum(["none", "baidu", "siliconflow"]).default("none"),
+    enabled: z.boolean().default(false),
+    apiKey: z.string().max(400).optional().default(""),
+    secretKey: z.string().max(400).optional().default(""),
+    model: z.string().max(160).optional().default(""),
+    baseUrl: z.string().max(255).optional().default("")
+  }).parse(req.body);
+  const current = tradeDocumentOcrProviderForTeam(req.user!.teamId);
+  const apiKey = body.apiKey && !body.apiKey.includes("****") ? body.apiKey : current.apiKey;
+  const secretKey = body.secretKey && !body.secretKey.includes("****") ? body.secretKey : current.secretKey;
+  const model = body.model || (body.provider === "siliconflow" ? "Qwen/Qwen2.5-VL-32B-Instruct" : "");
+  if (body.enabled && body.provider === "baidu" && (!apiKey || !secretKey)) {
+    res.status(400).json({ message: "启用百度 OCR 前，需要同时填写 API Key 和 Secret Key" });
+    return;
+  }
+  if (body.enabled && body.provider === "siliconflow" && !apiKey) {
+    res.status(400).json({ message: "启用硅基流动 OCR 前，需要填写 API Key" });
+    return;
+  }
+  const next: TradeDocumentOcrProviderConfig = {
+    provider: body.provider as TradeDocumentOcrProvider,
+    enabled: body.enabled && body.provider !== "none",
+    apiKey,
+    secretKey,
+    model,
+    baseUrl: body.provider === "siliconflow" ? "https://api.siliconflow.cn/v1" : ""
+  };
+  const store = getStore();
+  const settings = teamSystemSettingsForTeam(req.user!.teamId);
+  settings.ocrProviderConfigEncrypted = encryptProviderConfiguration(ocrProviderCredentialContext(req.user!.teamId), { apiKey: JSON.stringify(next), baseUrl: "" });
+  settings.updatedBy = req.user!.id;
+  settings.updatedAt = new Date().toISOString();
+  if (!store.teamSystemSettings.some((item) => item.teamId === settings.teamId)) store.teamSystemSettings.push(settings);
+  await store.persist();
+  res.json({ ocr: publicTradeDocumentOcrProvider(next), canManage: true });
 }));
 
 app.get("/api/company-profile", requireAuth, (req, res) => {
@@ -7359,6 +7523,147 @@ function createDealEvent(input: Omit<DealEvent, "id" | "createdAt"> & { createdA
   };
   store.dealEvents.unshift(event);
   return event;
+}
+
+function quoteHistoryItems(document: TradeDocument): QuoteHistoryItem[] {
+  return document.items.map((item) => ({
+    productId: item.productId || "",
+    product: item.product.trim(),
+    model: item.model?.trim() || "",
+    quantity: Number(item.quantity || 0),
+    unit: item.unit?.trim() || "PCS",
+    unitPrice: Math.round(Number(item.unitPrice || 0) * 100) / 100,
+    lineTotal: Math.round(Number(item.quantity || 0) * Number(item.unitPrice || 0) * 100) / 100
+  }));
+}
+
+function quoteItemKey(item: { productId?: string; product: string; model?: string }) {
+  const normalize = (value: string) => value.trim().toLocaleLowerCase().replace(/[\s_-]+/gu, " ");
+  return item.productId || `${normalize(item.product)}|${normalize(item.model || "")}`;
+}
+
+function quotePricingFingerprint(document: TradeDocument, items = quoteHistoryItems(document)) {
+  return createHash("sha256").update(JSON.stringify({
+    type: document.type,
+    currency: document.currency.toUpperCase(),
+    items: items.map((item) => ({ productId: item.productId, product: item.product, model: item.model, quantity: item.quantity, unit: item.unit, unitPrice: item.unitPrice }))
+  })).digest("hex");
+}
+
+function quotePricingChanges(previous: QuoteHistoryRecord | undefined, document: TradeDocument, currentItems: QuoteHistoryItem[]) {
+  if (!previous) return [`首次记录报价，共 ${currentItems.length} 项，合计 ${document.currency} ${currentItems.reduce((sum, item) => sum + item.lineTotal, 0).toFixed(2)}`];
+  const changes: string[] = [];
+  if (previous.currency !== document.currency) changes.push(`币种：${previous.currency} → ${document.currency}`);
+  const previousItems = new Map(previous.items.map((item) => [quoteItemKey(item), item]));
+  const currentMap = new Map(currentItems.map((item) => [quoteItemKey(item), item]));
+  currentItems.forEach((item) => {
+    const old = previousItems.get(quoteItemKey(item));
+    const label = [item.product, item.model].filter(Boolean).join(" / ");
+    if (!old) changes.push(`新增 ${label}：${item.quantity} ${item.unit} × ${document.currency} ${item.unitPrice.toFixed(2)}`);
+    else {
+      if (old.quantity !== item.quantity) changes.push(`${label} 数量：${old.quantity} → ${item.quantity} ${item.unit}`);
+      if (old.unitPrice !== item.unitPrice || previous.currency !== document.currency) changes.push(`${label} 单价：${previous.currency} ${old.unitPrice.toFixed(2)} → ${document.currency} ${item.unitPrice.toFixed(2)}`);
+    }
+  });
+  previous.items.forEach((item) => {
+    if (!currentMap.has(quoteItemKey(item))) changes.push(`移除 ${[item.product, item.model].filter(Boolean).join(" / ")}`);
+  });
+  const total = currentItems.reduce((sum, item) => sum + item.lineTotal, 0);
+  if (previous.totalAmount !== total || previous.currency !== document.currency) {
+    changes.push(`报价合计：${previous.currency} ${previous.totalAmount.toFixed(2)} → ${document.currency} ${total.toFixed(2)}`);
+  }
+  return changes;
+}
+
+function syncDealPricingFromDocument(document: TradeDocument, user: SessionUser) {
+  if (!document.dealId || !["PI", "QUOTATION"].includes(document.type)) return null;
+  const store = getStore();
+  const deal = store.deals.find((item) => item.id === document.dealId && item.teamId === document.teamId);
+  if (!deal) return null;
+  const customer = store.customers.find((item) => item.id === deal.customerId && item.teamId === deal.teamId);
+  const items = quoteHistoryItems(document);
+  const fingerprint = quotePricingFingerprint(document, items);
+  const previous = store.quoteHistory
+    .filter((item) => item.dealId === deal.id)
+    .sort((left, right) => right.quotedAt.localeCompare(left.quotedAt))[0];
+  const existingRecord = store.quoteHistory.find((item) => item.documentId === document.id && item.fingerprint === fingerprint);
+  const changes = quotePricingChanges(previous, document, items);
+  const beforeFingerprint = createHash("sha256").update(JSON.stringify({
+    currency: deal.currency,
+    items: (deal.items || []).map((item) => ({ productId: item.productId || "", product: item.product, model: item.model || "", quantity: item.quantity, unitPrice: item.unitPrice }))
+  })).digest("hex");
+  const nextDealItems = items.map((item, index) => {
+    const current = (deal.items || []).find((entry) => quoteItemKey(entry) === quoteItemKey(item));
+    return { id: current?.id || `deal_item_quote_${Date.now()}_${index + 1}`, productId: item.productId, product: item.product, model: item.model, quantity: item.quantity, unitPrice: item.unitPrice };
+  });
+  deal.items = nextDealItems;
+  deal.product = dealProductSummary(nextDealItems);
+  deal.quantity = nextDealItems.reduce((sum, item) => sum + item.quantity, 0);
+  deal.unitPrice = nextDealItems.length === 1 ? nextDealItems[0].unitPrice : 0;
+  deal.amount = Math.round(items.reduce((sum, item) => sum + item.lineTotal, 0) * 100) / 100;
+  deal.currency = document.currency.toUpperCase();
+  if (deal.stage !== "成交") deal.amountType = "quoted";
+  const afterFingerprint = createHash("sha256").update(JSON.stringify({
+    currency: deal.currency,
+    items: nextDealItems.map((item) => ({ productId: item.productId || "", product: item.product, model: item.model || "", quantity: item.quantity, unitPrice: item.unitPrice }))
+  })).digest("hex");
+  const dealChanged = beforeFingerprint !== afterFingerprint;
+  let history = existingRecord;
+  if (!history) {
+    const now = new Date().toISOString();
+    history = {
+      id: `qh_${randomUUID()}`,
+      dealId: deal.id,
+      customerId: deal.customerId,
+      documentId: document.id,
+      documentType: document.type as "PI" | "QUOTATION",
+      documentNumber: document.number,
+      documentRevision: document.revision || 1,
+      issueDate: document.issueDate,
+      customerName: customer?.companyFullName || customer?.billingName || customer?.company || document.buyer,
+      dealTitle: deal.title,
+      dealStage: deal.stage,
+      currency: deal.currency,
+      totalAmount: deal.amount,
+      items,
+      changes,
+      fingerprint,
+      operatorId: user.id,
+      operatorName: user.name,
+      ownerId: deal.ownerId,
+      teamId: deal.teamId,
+      quotedAt: now
+    };
+    store.quoteHistory.unshift(history);
+  }
+  if (dealChanged || !existingRecord) {
+    const eventChanges = changes.length ? changes.slice(0, 8).join("；") : `报价明细同步为 ${deal.currency} ${deal.amount.toFixed(2)}`;
+    createDealEvent({
+      dealId: deal.id,
+      type: "quote",
+      content: `${document.type === "PI" ? "PI" : "报价单"} ${document.number} 同步商机：${eventChanges}`,
+      operatorId: user.id,
+      fromStage: deal.stage,
+      toStage: deal.stage,
+      nextAction: deal.nextAction,
+      nextActionAt: deal.nextActionAt,
+      relatedDocumentId: document.id
+    });
+    appendDocumentAudit(document, "dealPricingSync", previous ? `${previous.currency} ${previous.totalAmount.toFixed(2)}` : "", `${deal.currency} ${deal.amount.toFixed(2)}；${changes.join("；")}`, user);
+  }
+  if (!existingRecord && deal.ownerId !== user.id) {
+    createInternalNotification({
+      senderId: user.id,
+      recipientId: deal.ownerId,
+      teamId: deal.teamId,
+      subject: `商机报价已更新：${deal.title}`,
+      content: `${user.name} 通过 ${document.type} ${document.number} 更新了 ${items.length} 项产品，当前报价 ${deal.currency} ${deal.amount.toFixed(2)}。${changes.slice(0, 3).join("；")}`,
+      relatedType: "quote_history",
+      relatedId: history.id,
+      threadId: `quote_${deal.id}`
+    });
+  }
+  return { deal, history, changes, changed: dealChanged || !existingRecord };
 }
 
 function dealEventTypeForStage(stage: Deal["stage"]): DealEvent["type"] {
@@ -10229,6 +10534,7 @@ app.post("/api/import-export/customers/export", requireAuth, asyncRoute(async (_
 
 const documentItemSchema = z.object({
   id: z.string().max(64).optional().default(""),
+  lineType: z.enum(["product", "shipping_cost"]).optional().default("product"),
   productId: z.string().max(64).optional().default(""),
   imageUrl: z.string().trim().max(512).optional().default("").refine((value) => !value || /^\/uploads\/[A-Za-z0-9._-]+\.(?:png|jpe?g)$/iu.test(value), "商品图片必须来自本系统"),
   product: z.string().min(1).max(500),
@@ -10258,6 +10564,7 @@ const documentBodySchema = z.object({
   buyerAddress: z.string().max(4_000).optional().default(""),
   buyerContact: z.string().max(200).optional().default(""),
   seller: z.string().max(200).optional().default(""),
+  brandMarkText: z.string().trim().max(8).optional(),
   sellerAddress: z.string().max(4_000).optional().default(""),
   sellerContact: z.string().max(200).optional().default(""),
   sellerPhone: z.string().max(120).optional().default(""),
@@ -10274,7 +10581,7 @@ const documentBodySchema = z.object({
   bankInfo: z.string().max(8_000).optional().default(""),
   notes: z.string().max(8_000).optional().default(""),
   language: z.enum(["EN", "ES", "RU", "AR", "ZH"]).optional().default("EN"),
-  templateStyle: z.enum(["executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber"]).default("indigo"),
+  templateStyle: z.enum(["executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber"]).default("rose"),
   status: z.enum(["draft", "ready", "pending_approval", "approved", "rejected", "exported"]).optional().default("draft"),
   approvalNote: z.string().max(2_000).optional().default(""),
   approvedAt: z.string().max(100).optional(),
@@ -10297,6 +10604,8 @@ function documentLetterheadSnapshot(asset: DocumentLetterhead) {
     email: asset.email,
     website: asset.website,
     bankInfo: asset.bankInfo,
+    contact: asset.contact || "",
+    taxNo: asset.taxNo || "",
     logoUrl: documentAssetUrlForLocalFile(asset.logoUrl),
     logoPlacement: normalizeDocumentAssetPlacement(asset.logoPlacement)
   };
@@ -10322,7 +10631,7 @@ function applyDocumentAssetSelection(document: TradeDocument, user: SessionUser,
       document.letterheadSnapshot = previous.letterheadSnapshot;
     } else {
       const asset = store.documentLetterheads.find((item) => item.id === document.letterheadId && item.teamId === user.teamId && item.enabled);
-      if (!asset) throw new Error("所选抬头不存在、已停用或不属于当前团队");
+      if (!asset) throw new Error("所选卖方公司不存在、已停用或不属于当前团队");
       document.letterheadSnapshot = documentLetterheadSnapshot(asset);
     }
   } else {
@@ -10364,6 +10673,7 @@ function normalizeDocument(body: z.infer<typeof documentBodySchema>, user: Sessi
     : (body.status === "ready" ? "ready" : "draft");
   return applyDocumentAssetSelection({
     ...body,
+    brandMarkText: body.brandMarkText ?? existing?.brandMarkText ?? "",
     id: existing?.id || `td_${Date.now()}`,
     customerId: body.customerId || existing?.customerId || "",
     dealId: body.dealId || existing?.dealId || "",
@@ -10412,11 +10722,55 @@ function documentBusinessDefaults(customer?: Customer, deal?: Deal) {
   };
 }
 
+function sellerProfileMatchScore(
+  profile: DocumentLetterhead,
+  customer: Customer | undefined,
+  currency: string,
+  documentType: TradeDocument["type"]
+) {
+  if (!profile.enabled) return -1;
+  const normalize = (value: string) => value.trim().toLocaleLowerCase();
+  const country = normalize(customer?.country || "");
+  const countries = (profile.matchCountries || []).map(normalize).filter(Boolean);
+  const currencies = (profile.matchCurrencies || []).map((value) => value.trim().toUpperCase()).filter(Boolean);
+  const types = profile.matchDocumentTypes || [];
+  if (countries.length && !countries.includes(country)) return -1;
+  if (currencies.length && !currencies.includes(currency.trim().toUpperCase())) return -1;
+  if (types.length && !types.includes(documentType)) return -1;
+  return (countries.length ? 1000 : 0)
+    + (currencies.length ? 200 : 0)
+    + (types.length ? 50 : 0)
+    + Math.max(0, Math.min(100, profile.matchPriority || 0))
+    + (profile.isDefault ? 1 : 0);
+}
+
+function matchedSellerProfile(
+  user: SessionUser,
+  customer: Customer | undefined,
+  currency: string,
+  documentType: TradeDocument["type"],
+  explicitId = "",
+  sellerName = ""
+) {
+  const available = getStore().documentLetterheads.filter((item) => item.teamId === user.teamId && item.enabled);
+  if (explicitId) return available.find((item) => item.id === explicitId);
+  const normalizedSeller = sellerName.trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  if (normalizedSeller) {
+    const namedProfile = available.find((item) => item.companyName.trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "") === normalizedSeller);
+    if (namedProfile) return namedProfile;
+  }
+  return available
+    .map((item) => ({ item, score: sellerProfileMatchScore(item, customer, currency, documentType) }))
+    .filter((entry) => entry.score >= 0)
+    .sort((left, right) => right.score - left.score || right.item.updatedAt.localeCompare(left.item.updatedAt))[0]?.item;
+}
+
 function defaultDocumentProfile(teamId: string): DocumentDefaultProfile {
   const now = new Date().toISOString();
   return {
     teamId,
     seller: "",
+    brandMarkText: "",
     sellerAddress: "",
     sellerContact: "",
     sellerPhone: "",
@@ -10432,7 +10786,7 @@ function defaultDocumentProfile(teamId: string): DocumentDefaultProfile {
     validityDays: 0,
     notes: "",
     language: "EN",
-    templateStyle: "indigo",
+    templateStyle: "rose",
     letterheadId: "",
     stampId: "",
     signatureId: "",
@@ -10445,7 +10799,7 @@ function defaultDocumentProfile(teamId: string): DocumentDefaultProfile {
 function documentDefaultProfileForTeam(teamId: string) {
   const store = getStore();
   const saved = store.documentDefaultProfiles.find((item) => item.teamId === teamId);
-  if (saved) return saved;
+  if (saved) return { ...saved, brandMarkText: saved.brandMarkText || "" };
   const company = store.companyProfiles.find((item) => item.teamId === teamId);
   const letterhead = store.documentLetterheads.find((item) => item.teamId === teamId && item.enabled && item.isDefault)
     || store.documentLetterheads.find((item) => item.teamId === teamId && item.enabled);
@@ -10456,13 +10810,15 @@ function documentDefaultProfileForTeam(teamId: string) {
     ...profile,
     seller: letterhead?.companyName || company?.companyName || "",
     sellerAddress: letterhead?.address || company?.address || "",
+    sellerContact: letterhead?.contact || "",
     sellerPhone: letterhead?.phone || company?.phone || "",
     sellerEmail: letterhead?.email || company?.email || "",
     sellerWebsite: letterhead?.website || company?.website || "",
+    sellerTaxNo: letterhead?.taxNo || "",
     bankInfo: letterhead?.bankInfo || "",
     letterheadId: letterhead?.id || "",
-    stampId: stamp?.id || "",
-    signatureId: signature?.id || ""
+    stampId: letterhead?.stampId || stamp?.id || "",
+    signatureId: letterhead?.signatureId || signature?.id || ""
   };
 }
 
@@ -10487,6 +10843,8 @@ function applyDocumentCreationDefaults(
 ) {
   const profile = documentDefaultProfileForTeam(user.teamId);
   const customerDefaults = documentBusinessDefaults(customer, deal);
+  const resolvedCurrency = String(body.currency || deal?.currency || profile.currency || "USD").toUpperCase();
+  const sellerProfile = matchedSellerProfile(user, customer, resolvedCurrency, body.type, body.letterheadId || "", body.seller || "");
   const sourceOwns = (field: string, value: unknown) => nonEmpty(value) && (!sourceFields || sourceFields.has(field));
   const choose = (field: string, sourceValue: unknown, customerValue: unknown, profileValue: unknown, systemValue = "") => {
     if (sourceOwns(field, sourceValue)) return sourceValue;
@@ -10500,13 +10858,14 @@ function applyDocumentCreationDefaults(
     buyer: choose("buyer", body.buyer, customerDefaults.buyer, "") as string,
     buyerAddress: choose("buyerAddress", body.buyerAddress, customerDefaults.buyerAddress, "") as string,
     buyerContact: choose("buyerContact", body.buyerContact, customerDefaults.buyerContact, "") as string,
-    seller: choose("seller", body.seller, "", profile.seller) as string,
-    sellerAddress: choose("sellerAddress", body.sellerAddress, "", profile.sellerAddress) as string,
-    sellerContact: choose("sellerContact", body.sellerContact, "", profile.sellerContact) as string,
-    sellerPhone: choose("sellerPhone", body.sellerPhone, "", profile.sellerPhone) as string,
-    sellerEmail: choose("sellerEmail", body.sellerEmail, "", profile.sellerEmail) as string,
-    sellerWebsite: choose("sellerWebsite", body.sellerWebsite, "", profile.sellerWebsite) as string,
-    sellerTaxNo: choose("sellerTaxNo", body.sellerTaxNo, "", profile.sellerTaxNo) as string,
+    seller: choose("seller", body.seller, "", sellerProfile?.companyName || profile.seller) as string,
+    brandMarkText: choose("brandMarkText", body.brandMarkText, "", profile.brandMarkText || "") as string,
+    sellerAddress: choose("sellerAddress", body.sellerAddress, "", sellerProfile?.address || profile.sellerAddress) as string,
+    sellerContact: choose("sellerContact", body.sellerContact, "", sellerProfile?.contact || profile.sellerContact) as string,
+    sellerPhone: choose("sellerPhone", body.sellerPhone, "", sellerProfile?.phone || profile.sellerPhone) as string,
+    sellerEmail: choose("sellerEmail", body.sellerEmail, "", sellerProfile?.email || profile.sellerEmail) as string,
+    sellerWebsite: choose("sellerWebsite", body.sellerWebsite, "", sellerProfile?.website || profile.sellerWebsite) as string,
+    sellerTaxNo: choose("sellerTaxNo", body.sellerTaxNo, "", sellerProfile?.taxNo || profile.sellerTaxNo) as string,
     currency: choose("currency", body.currency, customerDefaults.currency, profile.currency, "USD") as string,
     incoterm: choose("incoterm", body.incoterm, customerDefaults.incoterm, profile.incoterm, "FOB") as string,
     paymentTerm: choose("paymentTerm", body.paymentTerm, customerDefaults.paymentTerm, profile.paymentTerm) as string,
@@ -10514,17 +10873,71 @@ function applyDocumentCreationDefaults(
     portLoading: choose("portLoading", body.portLoading, "", profile.portLoading) as string,
     portDischarge: choose("portDischarge", body.portDischarge, customerDefaults.portDischarge, "") as string,
     validityDate: choose("validityDate", body.validityDate, "", validityDateFromDays(issueDate, profile.validityDays)) as string,
-    bankInfo: choose("bankInfo", body.bankInfo, "", profile.bankInfo) as string,
+    bankInfo: choose("bankInfo", body.bankInfo, "", sellerProfile?.bankInfo || profile.bankInfo) as string,
     notes: choose("notes", body.notes, "", profile.notes) as string,
     language: choose("language", body.language, "", profile.language, "EN") as TradeDocument["language"],
-    templateStyle: choose("templateStyle", body.templateStyle, "", profile.templateStyle, "indigo") as TradeDocument["templateStyle"],
-    letterheadId: choose("letterheadId", body.letterheadId, "", profile.letterheadId) as string,
-    stampId: choose("stampId", body.stampId, "", profile.stampId) as string,
-    signatureId: choose("signatureId", body.signatureId, "", profile.signatureId) as string,
+    templateStyle: choose("templateStyle", body.templateStyle, "", profile.templateStyle, "rose") as TradeDocument["templateStyle"],
+    letterheadId: choose("letterheadId", body.letterheadId, "", sellerProfile?.id || profile.letterheadId) as string,
+    stampId: choose("stampId", body.stampId, "", sellerProfile?.stampId || profile.stampId) as string,
+    signatureId: choose("signatureId", body.signatureId, "", sellerProfile?.signatureId || profile.signatureId) as string,
     includeProductImages: sourceOwns("includeProductImages", body.includeProductImages) ? body.includeProductImages : profile.includeProductImages
   };
 }
 
+function documentTypeLabelForApi(type: TradeDocument["type"]) {
+  return ({
+    PI: "形式发票", CI: "商业发票", CUSTOMS: "报关资料", PL: "装箱单",
+    CONTRACT: "合同", QUOTATION: "报价单", COO: "原产地证", SHIPPING: "装运通知"
+  } as Record<TradeDocument["type"], string>)[type] || type;
+}
+
+async function readLocalAdvancedDocumentImage(value: string) {
+  const imageUrl = documentAssetUrlForLocalFile(value);
+  if (!imageUrl) return undefined;
+  const filePath = path.join(uploadsDir, path.basename(imageUrl));
+  const data = await readFile(filePath).catch(() => null);
+  if (!data) return undefined;
+  const png = data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const jpeg = data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
+  if (!png && !jpeg) return undefined;
+  return { data: new Uint8Array(data), extension: png ? "png" as const : "jpg" as const };
+}
+
+async function advancedDocumentAssets(document: TradeDocument, user: SessionUser) {
+  const store = getStore();
+  const productImages: Record<string, Awaited<ReturnType<typeof readLocalAdvancedDocumentImage>>> = {};
+  if (document.includeProductImages) {
+    for (const [index, item] of document.items.entries()) {
+      const imageKey = item.id || item.productId || `item-${index + 1}`;
+      if (productImages[imageKey]) continue;
+      let imageUrl = documentAssetUrlForLocalFile(item.imageUrl || "");
+      if (!imageUrl && item.productId) {
+        const product = store.products.find((candidate) => candidate.id === item.productId && candidate.teamId === document.teamId && canSeeOwner(user, candidate.ownerId, candidate.teamId));
+        imageUrl = documentAssetUrlForLocalFile(product?.imageUrl || "");
+      }
+      if (!imageUrl) {
+        const normalized = (value: string) => value.trim().toLowerCase().replace(/[\s_-]+/gu, " ");
+        const itemNames = [normalized(item.model || ""), normalized(item.product || "")].filter((value) => value.length >= 3);
+        const product = store.products.find((candidate) => candidate.teamId === document.teamId
+          && canSeeOwner(user, candidate.ownerId, candidate.teamId)
+          && Boolean(documentAssetUrlForLocalFile(candidate.imageUrl || ""))
+          && [candidate.model, candidate.nameEn, candidate.nameZh].some((value) => itemNames.includes(normalized(value || ""))));
+        imageUrl = documentAssetUrlForLocalFile(product?.imageUrl || "");
+      }
+      if (!imageUrl) continue;
+      productImages[imageKey] = await readLocalAdvancedDocumentImage(imageUrl);
+    }
+  }
+  const compactProductImages = Object.fromEntries(Object.entries(productImages).filter((entry): entry is [string, NonNullable<typeof entry[1]>] => Boolean(entry[1])));
+  return {
+    logo: document.letterheadSnapshot?.logoUrl ? await readLocalAdvancedDocumentImage(document.letterheadSnapshot.logoUrl) : undefined,
+    logoPlacement: normalizeDocumentAssetPlacement(document.letterheadSnapshot?.logoPlacement),
+    stamp: document.stampSnapshot?.imageUrl ? await readLocalAdvancedDocumentImage(document.stampSnapshot.imageUrl) : undefined,
+    stampPlacement: normalizeDocumentAssetPlacement(document.stampSnapshot?.placement),
+    signature: document.signatureSnapshot?.imageUrl ? await readLocalAdvancedDocumentImage(document.signatureSnapshot.imageUrl) : undefined,
+    productImages: compactProductImages
+  };
+}
 
 async function persistImportedItemImages(
   parsed: Awaited<ReturnType<typeof parseTradeDocumentImport>>,
@@ -10626,6 +11039,20 @@ async function restoreLegacyImportedDocumentImages(user: SessionUser) {
   return recovery;
 }
 
+function documentForAdvancedExcel(document: TradeDocument) {
+  if (!document.letterheadSnapshot) return document;
+  return {
+    ...document,
+    seller: document.letterheadSnapshot.companyName,
+    sellerAddress: document.letterheadSnapshot.address,
+    sellerContact: document.letterheadSnapshot.contact,
+    sellerPhone: document.letterheadSnapshot.phone,
+    sellerEmail: document.letterheadSnapshot.email,
+    sellerWebsite: document.letterheadSnapshot.website,
+    sellerTaxNo: document.letterheadSnapshot.taxNo,
+    bankInfo: document.letterheadSnapshot.bankInfo
+  };
+}
 
 function publicTradeDocumentImportAnalysis(analysis: TradeDocumentImportAnalysis) {
   const { sourceStorageKey: _sourceStorageKey, ...publicAnalysis } = analysis;
@@ -10634,6 +11061,22 @@ function publicTradeDocumentImportAnalysis(analysis: TradeDocumentImportAnalysis
 
 function visibleTradeDocumentImportAnalysis(id: string, user: SessionUser) {
   return getStore().tradeDocumentImportAnalyses.find((item) => item.id === id && canSeeOwner(user, item.ownerId, item.teamId));
+}
+
+function applyActiveTradeDocumentRecognitionTemplate(
+  parsed: Awaited<ReturnType<typeof parseTradeDocumentImport>>,
+  user: SessionUser,
+  sourceKind: "import" | "ocr"
+) {
+  const match = matchTradeDocumentRecognitionTemplate({
+    templates: getStore().tradeDocumentRecognitionTemplates,
+    teamId: user.teamId,
+    sourceKind,
+    parsed
+  });
+  if (!match) return { parsed, recognitionTemplate: undefined };
+  const applied = applyTradeDocumentRecognitionTemplate(parsed, match.template, match.score);
+  return { parsed: applied.parsed, recognitionTemplate: applied.snapshot };
 }
 
 app.get("/api/trade-document-imports", requireAuth, (req, res) => {
@@ -10653,6 +11096,114 @@ app.get("/api/trade-document-imports/:id", requireAuth, (req, res) => {
   }
   res.json({ analysis: publicTradeDocumentImportAnalysis(analysis) });
 });
+
+app.get("/api/trade-document-recognition-templates", requireAuth, (req, res) => {
+  const includeArchived = req.query.includeArchived === "true";
+  const templates = getStore().tradeDocumentRecognitionTemplates
+    .filter((item) => item.teamId === req.user!.teamId && (includeArchived || item.status === "active"))
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  res.json({ templates });
+});
+
+const recognitionTemplateBodySchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  familyId: z.string().trim().max(64).optional(),
+  document: documentBodySchema
+});
+
+app.post("/api/trade-document-imports/:id/recognition-template", requireAuth, asyncRoute(async (req, res) => {
+  const analysis = visibleTradeDocumentImportAnalysis(req.params.id, req.user!);
+  if (!analysis) {
+    res.status(404).json({ message: "导入分析不存在或无权访问" });
+    return;
+  }
+  const body = recognitionTemplateBodySchema.parse(req.body);
+  const store = getStore();
+  const sourceKind = analysis.sourceMime.startsWith("image/") ? "ocr" : analysis.recognitionSource || "import";
+  const normalizedName = body.name.trim().toLowerCase();
+  const requestedFamily = body.familyId
+    ? store.tradeDocumentRecognitionTemplates.find((item) => item.id === body.familyId || item.familyId === body.familyId)
+    : store.tradeDocumentRecognitionTemplates.find((item) => item.teamId === req.user!.teamId
+      && item.documentType === body.document.type
+      && item.sourceKind === sourceKind
+      && item.name.trim().toLowerCase() === normalizedName);
+  if (requestedFamily && requestedFamily.teamId !== req.user!.teamId) {
+    res.status(404).json({ message: "识别模板不存在或无权访问" });
+    return;
+  }
+  const familyId = requestedFamily?.familyId || `tdrtf_${randomUUID()}`;
+  const familyVersions = store.tradeDocumentRecognitionTemplates.filter((item) => item.teamId === req.user!.teamId && item.familyId === familyId);
+  const activeFamilyCount = new Set(store.tradeDocumentRecognitionTemplates
+    .filter((item) => item.teamId === req.user!.teamId && item.status === "active" && item.documentType === body.document.type && item.sourceKind === sourceKind)
+    .map((item) => item.familyId)).size;
+  if (!familyVersions.length && activeFamilyCount >= 30) {
+    res.status(409).json({ message: "当前类型已有 30 个启用模板，请先归档不再使用的模板" });
+    return;
+  }
+  const now = new Date().toISOString();
+  const template = buildTradeDocumentRecognitionTemplate({
+    analysis,
+    corrected: body.document,
+    id: `tdrt_${randomUUID()}`,
+    familyId,
+    version: Math.max(0, ...familyVersions.map((item) => item.version)) + 1,
+    name: body.name,
+    sourceKind,
+    userId: req.user!.id,
+    teamId: req.user!.teamId,
+    now
+  });
+  if (template.fingerprint.anchors.length < 2) {
+    res.status(422).json({ message: "当前原文可学习的稳定标签不足，请保留至少两个清晰字段标签或商品表头后重试" });
+    return;
+  }
+  familyVersions.filter((item) => item.status === "active").forEach((item) => {
+    item.status = "archived";
+    item.archivedAt = now;
+  });
+  store.tradeDocumentRecognitionTemplates.unshift(template);
+  analysis.recognitionTemplate = { templateId: template.id, familyId, name: template.name, version: template.version, matchScore: 1, matchedAt: now };
+  analysis.updatedAt = now;
+  await store.persist();
+  res.status(201).json({ template, archivedVersions: familyVersions.filter((item) => item.status === "archived").map((item) => item.id) });
+}));
+
+function editableRecognitionTemplate(id: string, user: SessionUser) {
+  const template = getStore().tradeDocumentRecognitionTemplates.find((item) => item.id === id && item.teamId === user.teamId);
+  if (!template) return null;
+  if (template.createdBy !== user.id && !hasIamPermission(user, "system.settings.manage")) return null;
+  return template;
+}
+
+app.post("/api/trade-document-recognition-templates/:id/archive", requireAuth, asyncRoute(async (req, res) => {
+  const template = editableRecognitionTemplate(req.params.id, req.user!);
+  if (!template) {
+    res.status(404).json({ message: "识别模板不存在、无权管理或已被隔离" });
+    return;
+  }
+  if (template.status === "active") {
+    template.status = "archived";
+    template.archivedAt = new Date().toISOString();
+    await getStore().persist();
+  }
+  res.json({ template });
+}));
+
+app.post("/api/trade-document-recognition-templates/:id/restore", requireAuth, asyncRoute(async (req, res) => {
+  const source = editableRecognitionTemplate(req.params.id, req.user!);
+  if (!source) {
+    res.status(404).json({ message: "识别模板不存在、无权管理或已被隔离" });
+    return;
+  }
+  const store = getStore();
+  const family = store.tradeDocumentRecognitionTemplates.filter((item) => item.teamId === req.user!.teamId && item.familyId === source.familyId);
+  const now = new Date().toISOString();
+  family.filter((item) => item.status === "active").forEach((item) => { item.status = "archived"; item.archivedAt = now; });
+  const restored = { ...structuredClone(source), id: `tdrt_${randomUUID()}`, version: Math.max(...family.map((item) => item.version)) + 1, status: "active" as const, createdBy: req.user!.id, createdAt: now, archivedAt: undefined };
+  store.tradeDocumentRecognitionTemplates.unshift(restored);
+  await store.persist();
+  res.status(201).json({ template: restored });
+}));
 
 app.get("/api/trade-document-imports/:id/source", requireAuth, asyncRoute(async (req, res) => {
   const analysis = visibleTradeDocumentImportAnalysis(req.params.id, req.user!);
@@ -10714,6 +11265,8 @@ app.post("/api/trade-document-imports/analyze", requireAuth, express.raw({ type:
     res.status(422).json({ message: error instanceof Error ? error.message : "单据解析失败" });
     return;
   }
+  const recognized = applyActiveTradeDocumentRecognitionTemplate(parsed, req.user!, "import");
+  parsed = recognized.parsed;
   const sha256 = tradeDocumentImportSha256(buffer);
   const duplicate = getStore().tradeDocumentImportAnalyses.find((item) => item.teamId === req.user!.teamId && item.sourceSha256 === sha256);
   if (duplicate) {
@@ -10732,6 +11285,8 @@ app.post("/api/trade-document-imports/analyze", requireAuth, express.raw({ type:
       duplicate.calculatedTotal = parsed.calculatedTotal;
       duplicate.declaredTotal = parsed.declaredTotal;
       duplicate.totalDifference = parsed.declaredTotal === undefined ? undefined : parsed.declaredTotal - parsed.calculatedTotal;
+      duplicate.recognitionSource = "import";
+      duplicate.recognitionTemplate = recognized.recognitionTemplate;
       duplicate.updatedAt = new Date().toISOString();
       await getStore().persist();
     }
@@ -10753,10 +11308,102 @@ app.post("/api/trade-document-imports/analyze", requireAuth, express.raw({ type:
     sourceSize: buffer.length,
     ownerId: req.user!.id,
     teamId: req.user!.teamId,
-    parsed
+    parsed,
+    recognitionSource: "import",
+    recognitionTemplate: recognized.recognitionTemplate
   });
   getStore().tradeDocumentImportAnalyses.unshift(analysis);
   await getStore().persist();
+  res.status(201).json({ analysis: publicTradeDocumentImportAnalysis(analysis), duplicate: false });
+}));
+
+app.post("/api/trade-document-imports/analyze-ocr", requireAuth, asyncRoute(async (req, res) => {
+  const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
+  const dataUrl = typeof body.image === "string" ? body.image.trim() : "";
+  const requestedMime = typeof body.mime === "string" ? body.mime.trim().toLowerCase() : "";
+  const fileName = path.basename(typeof body.fileName === "string" ? body.fileName : "单据图片").replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, 255) || "单据图片";
+  const dataMatch = dataUrl.match(/^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\s]+)$/u);
+  const mime = dataMatch?.[1] || requestedMime;
+  const base64 = dataMatch?.[2]?.replace(/\s+/gu, "") || "";
+  if (!dataMatch || !isTradeDocumentOcrMime(mime) || !base64 || base64.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(base64)) {
+    res.status(400).json({ message: "请上传 PNG、JPG/JPEG 或 WEBP 格式的单据图片" });
+    return;
+  }
+  const buffer = Buffer.from(base64, "base64");
+  if (!buffer.length) {
+    res.status(400).json({ message: "图片内容为空，请重新选择文件" });
+    return;
+  }
+  if (buffer.length > TRADE_DOCUMENT_IMPORT_MAX_BYTES) {
+    res.status(413).json({ message: "单据图片不能超过 8 MB，请压缩图片后重试" });
+    return;
+  }
+  const validSignature = (mime === "image/png" && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
+    || (mime === "image/jpeg" && buffer.subarray(0, 2).equals(Buffer.from([255, 216])))
+    || (mime === "image/webp" && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP");
+  if (!validSignature) {
+    res.status(400).json({ message: "图片内容与声明格式不一致，请重新导出或选择原始图片" });
+    return;
+  }
+  const config = getAiConfig(req.user!);
+  const ocrProvider = tradeDocumentOcrProviderForTeam(req.user!.teamId);
+  let parsed: Awaited<ReturnType<typeof recognizeTradeDocument>>;
+  try {
+    parsed = await recognizeConfiguredTradeDocument({ dataUrl, mime, fileName, provider: ocrProvider, aiConfig: config });
+  } catch (error) {
+    res.status(422).json({ message: error instanceof Error ? error.message : "单据图片识别失败", suggestion: "请确认模型支持视觉输入、图片清晰且配置可用" });
+    return;
+  }
+  const recognized = applyActiveTradeDocumentRecognitionTemplate(parsed, req.user!, "ocr");
+  parsed = recognized.parsed;
+  const sha256 = tradeDocumentImportSha256(buffer);
+  const store = getStore();
+  const duplicate = store.tradeDocumentImportAnalyses.find((item) => item.teamId === req.user!.teamId && item.sourceSha256 === sha256);
+  if (duplicate) {
+    if (!canSeeOwner(req.user!, duplicate.ownerId, duplicate.teamId)) {
+      res.status(409).json({ message: "该图片已由团队其他成员导入，请联系有权限的负责人" });
+      return;
+    }
+    if (duplicate.status === "confirmed" && duplicate.createdDocumentId) {
+      res.json({ analysis: publicTradeDocumentImportAnalysis(duplicate), duplicate: true });
+      return;
+    }
+    duplicate.detectedType = parsed.draft.type;
+    duplicate.confidence = parsed.confidence;
+    duplicate.extractedDocument = parsed.draft;
+    duplicate.fieldEvidence = parsed.evidence;
+    duplicate.warnings = parsed.warnings;
+    duplicate.sourcePreview = parsed.preview;
+    duplicate.calculatedTotal = parsed.calculatedTotal;
+    duplicate.declaredTotal = parsed.declaredTotal;
+    duplicate.totalDifference = parsed.declaredTotal === undefined ? undefined : parsed.declaredTotal - parsed.calculatedTotal;
+    duplicate.recognitionSource = "ocr";
+    duplicate.recognitionTemplate = recognized.recognitionTemplate;
+    duplicate.updatedAt = new Date().toISOString();
+    await store.persist();
+    res.json({ analysis: publicTradeDocumentImportAnalysis(duplicate), duplicate: true });
+    return;
+  }
+  const id = `tdia_ocr_${randomUUID()}`;
+  const extension = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
+  const storageKey = `${id}.${extension}`;
+  await mkdir(tradeDocumentImportsDir, { recursive: true });
+  await writeFile(path.join(tradeDocumentImportsDir, storageKey), buffer, { flag: "wx" });
+  const analysis = createTradeDocumentImportAnalysis({
+    id,
+    fileName,
+    mime,
+    storageKey,
+    sha256,
+    sourceSize: buffer.length,
+    ownerId: req.user!.id,
+    teamId: req.user!.teamId,
+    parsed,
+    recognitionSource: "ocr",
+    recognitionTemplate: recognized.recognitionTemplate
+  });
+  store.tradeDocumentImportAnalyses.unshift(analysis);
+  await store.persist();
   res.status(201).json({ analysis: publicTradeDocumentImportAnalysis(analysis), duplicate: false });
 }));
 
@@ -10873,8 +11520,9 @@ app.post("/api/trade-document-imports/:id/confirm", requireAuth, asyncRoute(asyn
       relatedDocumentId: document.id
     });
   }
+  const dealSync = syncDealPricingFromDocument(document, req.user!);
   await store.persist();
-  res.status(201).json({ analysis: publicTradeDocumentImportAnalysis(analysis), document, duplicate: false });
+  res.status(201).json({ analysis: publicTradeDocumentImportAnalysis(analysis), document, dealSync, duplicate: false });
 }));
 
 app.get("/api/trade-documents", requireAuth, asyncRoute(async (req, res) => {
@@ -10887,6 +11535,9 @@ app.get("/api/trade-documents", requireAuth, asyncRoute(async (req, res) => {
   res.json({ documents });
 }));
 
+app.get("/api/trade-document-templates", requireAuth, (req, res) => {
+  res.json({ templates: listAdvancedDocumentTemplates() });
+});
 
 const documentLetterheadSchema = z.object({
   id: z.string().trim().max(64).optional(),
@@ -10897,6 +11548,8 @@ const documentLetterheadSchema = z.object({
   email: z.string().trim().max(180).default(""),
   website: z.string().trim().max(500).default(""),
   bankInfo: z.string().trim().max(8_000).default(""),
+  contact: z.string().trim().max(200).default(""),
+  taxNo: z.string().trim().max(160).default(""),
   logoUrl: z.string().trim().max(512).default(""),
   logoPlacement: z.object({
     horizontal: z.enum(["template", "left", "center", "right"]).default("template"),
@@ -10905,6 +11558,12 @@ const documentLetterheadSchema = z.object({
     offsetY: z.coerce.number().int().min(-200).max(200).default(0),
     scale: z.coerce.number().int().min(50).max(150).default(100)
   }).optional(),
+  matchCountries: z.array(z.string().trim().min(1).max(120)).max(50).default([]),
+  matchCurrencies: z.array(z.string().trim().regex(/^[A-Z]{3}$/)).max(20).default([]),
+  matchDocumentTypes: z.array(z.enum(["PI", "CI", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING"])).max(8).default([]),
+  matchPriority: z.coerce.number().int().min(0).max(100).default(0),
+  stampId: z.string().trim().max(64).default(""),
+  signatureId: z.string().trim().max(64).default(""),
   isDefault: z.boolean().default(false),
   enabled: z.boolean().default(true)
 });
@@ -10936,6 +11595,7 @@ const documentSignatureSchema = z.object({
 
 const documentDefaultProfileSchema = z.object({
   seller: z.string().trim().max(240).default(""),
+  brandMarkText: z.string().trim().max(8).default(""),
   sellerAddress: z.string().trim().max(4_000).default(""),
   sellerContact: z.string().trim().max(200).default(""),
   sellerPhone: z.string().trim().max(120).default(""),
@@ -10951,7 +11611,7 @@ const documentDefaultProfileSchema = z.object({
   validityDays: z.coerce.number().int().min(0).max(365).default(0),
   notes: z.string().trim().max(8_000).default(""),
   language: z.enum(["EN", "ES", "RU", "AR", "ZH"]).default("EN"),
-  templateStyle: z.enum(["executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber"]).default("indigo"),
+  templateStyle: z.enum(["executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber"]).default("rose"),
   letterheadId: z.string().trim().max(64).default(""),
   stampId: z.string().trim().max(64).default(""),
   signatureId: z.string().trim().max(64).default(""),
@@ -10986,7 +11646,7 @@ app.put("/api/document-defaults", requireAuth, asyncRoute(async (req, res) => {
   if (!assetAvailable(store.documentLetterheads, body.letterheadId)
     || !assetAvailable(store.documentStamps, body.stampId)
     || !assetAvailable(store.documentSignatures, body.signatureId)) {
-    res.status(400).json({ message: "默认抬头、印章或签名不存在、已停用或不属于当前团队" });
+    res.status(400).json({ message: "默认卖方公司、印章或签名不存在、已停用或不属于当前团队" });
     return;
   }
   const profile: DocumentDefaultProfile = {
@@ -11007,12 +11667,17 @@ app.post("/api/document-assets/letterheads", requireAuth, asyncRoute(async (req,
   const store = getStore();
   const existing = body.id ? store.documentLetterheads.find((item) => item.id === body.id && item.teamId === req.user!.teamId) : undefined;
   if (body.id && !existing) {
-    res.status(404).json({ message: "抬头不存在或不属于当前团队" });
+    res.status(404).json({ message: "卖方公司不存在或不属于当前团队" });
     return;
   }
   const logoUrl = body.logoUrl ? documentAssetUrlForLocalFile(body.logoUrl) : "";
   if (body.logoUrl && !logoUrl) {
-    res.status(400).json({ message: "抬头 Logo 必须先上传到本系统" });
+    res.status(400).json({ message: "卖方公司 Logo 必须先上传到本系统" });
+    return;
+  }
+  const linkedAssetAvailable = (items: Array<{ id: string; teamId: string; enabled: boolean }>, id: string) => !id || items.some((item) => item.id === id && item.teamId === req.user!.teamId && item.enabled);
+  if (!linkedAssetAvailable(store.documentStamps, body.stampId) || !linkedAssetAvailable(store.documentSignatures, body.signatureId)) {
+    res.status(400).json({ message: "卖方公司的默认印章或签名不存在、已停用或不属于当前团队" });
     return;
   }
   if (body.isDefault) store.documentLetterheads.filter((item) => item.teamId === req.user!.teamId).forEach((item) => { item.isDefault = false; });
@@ -11035,7 +11700,7 @@ app.delete("/api/document-assets/letterheads/:id", requireAuth, asyncRoute(async
   const store = getStore();
   const index = store.documentLetterheads.findIndex((item) => item.id === req.params.id && item.teamId === req.user!.teamId);
   if (index < 0) {
-    res.status(404).json({ message: "抬头不存在或不属于当前团队" });
+    res.status(404).json({ message: "卖方公司不存在或不属于当前团队" });
     return;
   }
   if (store.tradeDocuments.some((item) => item.teamId === req.user!.teamId && item.letterheadId === req.params.id)) {
@@ -11176,6 +11841,170 @@ app.get("/api/trade-documents/history", requireAuth, asyncRoute(async (req, res)
   res.json({ documents: visible.slice((safePage - 1) * pageSize, safePage * pageSize), total, page: safePage, pageSize, pageCount });
 }));
 
+app.get("/api/quote-history", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const mode = String(req.query.mode || "records").trim() === "product" ? "product" : "records";
+  const query = String(req.query.q || "").trim().toLowerCase();
+  const customerId = String(req.query.customerId || "").trim();
+  const customerSearch = String(req.query.customerSearch || "").trim().toLowerCase();
+  const dealId = String(req.query.dealId || "").trim();
+  const dealSearch = String(req.query.dealSearch || "").trim().toLowerCase();
+  const product = String(req.query.product || "").trim().toLowerCase();
+  const country = String(req.query.country || "").trim().toLowerCase();
+  const documentType = String(req.query.documentType || "").trim();
+  const currency = String(req.query.currency || "").trim().toUpperCase();
+  const from = String(req.query.from || "").trim();
+  const to = String(req.query.to || "").trim();
+  const recordId = String(req.query.recordId || "").trim();
+  const page = Math.max(1, Number.parseInt(String(req.query.page || "1"), 10) || 1);
+  const pageSize = Math.min(50, Math.max(10, Number.parseInt(String(req.query.pageSize || "20"), 10) || 20));
+  const visible = store.quoteHistory
+    .filter((record) => canSeeOwner(req.user!, record.ownerId, record.teamId))
+    .filter((record) => !recordId || record.id === recordId)
+    .filter((record) => !customerId || record.customerId === customerId)
+    .filter((record) => !customerSearch || record.customerName.toLowerCase().includes(customerSearch))
+    .filter((record) => !country || (store.customers.find((customer) => customer.id === record.customerId)?.country || "").trim().toLowerCase().includes(country))
+    .filter((record) => !dealId || record.dealId === dealId)
+    .filter((record) => !dealSearch || dealSearch.split(/\s*[·|/]\s*/u).filter(Boolean).every((term) => [record.dealTitle, record.customerName].join(" ").toLowerCase().includes(term)))
+    .filter((record) => !documentType || record.documentType === documentType)
+    .filter((record) => !currency || record.currency === currency)
+    .filter((record) => !from || record.quotedAt.slice(0, 10) >= from)
+    .filter((record) => !to || record.quotedAt.slice(0, 10) <= to)
+    .filter((record) => !product || record.items.some((item) =>
+      [item.product, item.model, item.productId].join(" ").toLowerCase().includes(product)))
+    .filter((record) => {
+      if (!query) return true;
+      return [record.customerName, record.dealTitle, record.documentNumber, record.operatorName,
+        ...record.items.flatMap((item) => [item.product, item.model])]
+        .join(" ").toLowerCase().includes(query);
+    })
+    .sort((left, right) => right.quotedAt.localeCompare(left.quotedAt));
+  const total = visible.length;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const totals = visible.reduce<Record<string, number>>((summary, record) => {
+    summary[record.currency] = Math.round(((summary[record.currency] || 0) + record.totalAmount) * 100) / 100;
+    return summary;
+  }, {});
+  const productAnalysis = mode === "product" ? (() => {
+    type ProductQuoteGroup = {
+      productId: string;
+      product: string;
+      model: string;
+      country: string;
+      currency: string;
+      prices: number[];
+      recordIds: Set<string>;
+      latest?: { quotedAt: string; unitPrice: number; customerName: string; documentNumber: string };
+    };
+    type PriceRangeGroup = {
+      country?: string;
+      currency: string;
+      prices: number[];
+      recordIds: Set<string>;
+      countries: Set<string>;
+      latest?: { quotedAt: string; unitPrice: number };
+    };
+    const groups = new Map<string, ProductQuoteGroup>();
+    const overallGroups = new Map<string, PriceRangeGroup>();
+    const countryGroups = new Map<string, PriceRangeGroup>();
+    visible.forEach((record) => {
+      const country = store.customers.find((customer) => customer.id === record.customerId)?.country?.trim() || "未填写国家";
+      record.items.forEach((item) => {
+        const itemText = [item.product, item.model, item.productId].join(" ").toLowerCase();
+        if (product && !itemText.includes(product)) return;
+        const key = `${quoteItemKey(item)}|${country}|${record.currency}`;
+        const group = groups.get(key) || {
+          productId: item.productId,
+          product: item.product,
+          model: item.model,
+          country,
+          currency: record.currency,
+          prices: [],
+          recordIds: new Set<string>()
+        };
+        group.prices.push(item.unitPrice);
+        group.recordIds.add(record.id);
+        if (!group.latest || record.quotedAt > group.latest.quotedAt) {
+          group.latest = { quotedAt: record.quotedAt, unitPrice: item.unitPrice, customerName: record.customerName, documentNumber: record.documentNumber };
+        }
+        groups.set(key, group);
+        const updateRange = (map: Map<string, PriceRangeGroup>, rangeKey: string, range: PriceRangeGroup) => {
+          range.prices.push(item.unitPrice);
+          range.recordIds.add(record.id);
+          range.countries.add(country);
+          if (!range.latest || record.quotedAt > range.latest.quotedAt) range.latest = { quotedAt: record.quotedAt, unitPrice: item.unitPrice };
+          map.set(rangeKey, range);
+        };
+        updateRange(overallGroups, record.currency, overallGroups.get(record.currency) || { currency: record.currency, prices: [], recordIds: new Set<string>(), countries: new Set<string>() });
+        const countryKey = `${country}|${record.currency}`;
+        updateRange(countryGroups, countryKey, countryGroups.get(countryKey) || { country, currency: record.currency, prices: [], recordIds: new Set<string>(), countries: new Set<string>() });
+      });
+    });
+    const rangeRows = (source: Map<string, PriceRangeGroup>) => [...source.values()].map((group) => ({
+      country: group.country || "",
+      currency: group.currency,
+      quoteCount: group.recordIds.size,
+      countryCount: group.countries.size,
+      minUnitPrice: Math.min(...group.prices),
+      maxUnitPrice: Math.max(...group.prices),
+      averageUnitPrice: Math.round((group.prices.reduce((sum, price) => sum + price, 0) / group.prices.length) * 100) / 100,
+      latestUnitPrice: group.latest?.unitPrice || 0,
+      latestQuotedAt: group.latest?.quotedAt || ""
+    })).sort((left, right) => `${left.country}${left.currency}`.localeCompare(`${right.country}${right.currency}`));
+    const rows = [...groups.values()].map((group) => {
+      const minUnitPrice = Math.min(...group.prices);
+      const maxUnitPrice = Math.max(...group.prices);
+      const averageUnitPrice = Math.round((group.prices.reduce((sum, price) => sum + price, 0) / group.prices.length) * 100) / 100;
+      return {
+        productId: group.productId,
+        product: group.product,
+        model: group.model,
+        country: group.country,
+        currency: group.currency,
+        quoteCount: group.recordIds.size,
+        minUnitPrice,
+        maxUnitPrice,
+        averageUnitPrice,
+        latestUnitPrice: group.latest?.unitPrice || 0,
+        latestQuotedAt: group.latest?.quotedAt || "",
+        latestCustomerName: group.latest?.customerName || "",
+        latestDocumentNumber: group.latest?.documentNumber || "",
+        recordIds: [...group.recordIds]
+      };
+    }).sort((left, right) => `${left.product}${left.model}${left.country}${left.currency}`.localeCompare(`${right.product}${right.model}${right.country}${right.currency}`));
+    const detailRecords = visible.filter((record) => record.items.some((item) => {
+      const itemText = [item.product, item.model, item.productId].join(" ").toLowerCase();
+      return !product || itemText.includes(product);
+    })).slice(0, 200);
+    return { rows, overall: rangeRows(overallGroups), countryRanges: rangeRows(countryGroups), detailRecords, totalRecords: visible.length };
+  })() : undefined;
+  res.json({
+    records: visible.slice((safePage - 1) * pageSize, safePage * pageSize),
+    total,
+    page: safePage,
+    pageSize,
+    pageCount,
+    summary: {
+      recordCount: total,
+      customerCount: new Set(visible.map((record) => record.customerId)).size,
+      dealCount: new Set(visible.map((record) => record.dealId)).size,
+      productCount: new Set(visible.flatMap((record) => record.items.map((item) => quoteItemKey(item)))).size,
+      totals
+    },
+    productAnalysis
+  });
+}));
+
+app.get("/api/quote-history/:id", requireAuth, asyncRoute(async (req, res) => {
+  const record = getStore().quoteHistory.find((item) => item.id === req.params.id && canSeeOwner(req.user!, item.ownerId, item.teamId));
+  if (!record) {
+    res.status(404).json({ message: "报价记录不存在或无权访问" });
+    return;
+  }
+  res.json({ record });
+}));
+
 app.post("/api/trade-documents", requireAuth, asyncRoute(async (req, res) => {
   const body = documentBodySchema.parse(req.body);
   const store = getStore();
@@ -11217,8 +12046,9 @@ app.post("/api/trade-documents", requireAuth, asyncRoute(async (req, res) => {
       relatedDocumentId: document.id
     });
   }
+  const dealSync = syncDealPricingFromDocument(document, req.user!);
   await store.persist();
-  res.json({ document });
+  res.json({ document, dealSync });
 }));
 
 app.patch("/api/trade-documents/:id", requireAuth, asyncRoute(async (req, res) => {
@@ -11251,8 +12081,9 @@ app.patch("/api/trade-documents/:id", requireAuth, asyncRoute(async (req, res) =
   ] as const;
   auditFields.forEach((field) => appendDocumentAudit(document, field, existing[field], document[field], req.user!));
   store.tradeDocuments[index] = document;
+  const dealSync = syncDealPricingFromDocument(document, req.user!);
   await store.persist();
-  res.json({ document });
+  res.json({ document, dealSync });
 }));
 
 app.post("/api/trade-documents/:id/revision", requireAuth, asyncRoute(async (req, res) => {
@@ -11330,6 +12161,47 @@ app.post("/api/trade-documents/:id/convert", requireAuth, asyncRoute(async (req,
   res.json({ document });
 }));
 
+app.patch("/api/trade-documents/:id/excel-options", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    letterheadId: z.string().trim().max(64).optional().default(""),
+    stampId: z.string().trim().max(64).optional().default(""),
+    signatureId: z.string().trim().max(64).optional().default(""),
+    includeProductImages: z.boolean().optional().default(false)
+  }).parse(req.body);
+  const store = getStore();
+  const document = store.tradeDocuments.find((item) => item.id === req.params.id);
+  if (!document || !canSeeOwner(req.user!, document.ownerId, document.teamId)) {
+    res.status(404).json({ message: "单据不存在" });
+    return;
+  }
+  const changed = (document.letterheadId || "") !== body.letterheadId
+    || (document.stampId || "") !== body.stampId
+    || (document.signatureId || "") !== body.signatureId
+    || Boolean(document.includeProductImages) !== body.includeProductImages;
+  if (changed && ["approved", "exported"].includes(document.status)) {
+    res.status(409).json({ message: "已审批或已导出的单据不能更换抬头、印章、签名或图片设置，请先另存新版本" });
+    return;
+  }
+  const oldSelection = `${document.letterheadId || ""}|${document.stampId || ""}|${document.signatureId || ""}|${Boolean(document.includeProductImages)}`;
+  const candidate: TradeDocument = {
+    ...document,
+    letterheadId: body.letterheadId || undefined,
+    stampId: body.stampId || undefined,
+    signatureId: body.signatureId || undefined,
+    includeProductImages: body.includeProductImages
+  };
+  try {
+    applyDocumentAssetSelection(candidate, req.user!, document);
+  } catch (error) {
+    res.status(400).json({ message: error instanceof Error ? error.message : "Excel 选项无效" });
+    return;
+  }
+  Object.assign(document, candidate);
+  document.updatedAt = new Date().toISOString();
+  appendDocumentAudit(document, "excelOptions", oldSelection, `${document.letterheadId || ""}|${document.stampId || ""}|${document.signatureId || ""}|${Boolean(document.includeProductImages)}`, req.user!);
+  await store.persist();
+  res.json({ document });
+}));
 
 app.post("/api/trade-documents/:id/submit-approval", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
@@ -11455,6 +12327,10 @@ app.post("/api/trade-documents/:id/export", requireAuth, asyncRoute(async (req, 
   document.status = "exported";
   document.updatedAt = new Date().toISOString();
   appendDocumentAudit(document, "status", oldStatus, document.status, req.user!);
+  const exportedAt = new Date().toISOString();
+  const fingerprint = quotePricingFingerprint(document);
+  const quoteRecord = store.quoteHistory.find((item) => item.documentId === document.id && item.fingerprint === fingerprint);
+  if (quoteRecord) quoteRecord.exportedAt = exportedAt;
   const job = {
     id: `io_document_export_${Date.now()}`,
     name: `${document.type} 单据 PDF 导出：${document.number}`,
@@ -11469,6 +12345,92 @@ app.post("/api/trade-documents/:id/export", requireAuth, asyncRoute(async (req, 
   res.json({ document, job, fileName: `${document.number}-${document.type}.pdf` });
 }));
 
+app.post("/api/trade-documents/:id/export-xlsx", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const document = store.tradeDocuments.find((item) => item.id === req.params.id);
+  if (!document || !canSeeOwner(req.user!, document.ownerId, document.teamId)) {
+    res.status(404).json({ message: "单据不存在" });
+    return;
+  }
+  const settings = teamSystemSettingsForTeam(document.teamId);
+  if (settings.requireDocumentExcelApproval && !["approved", "exported"].includes(document.status)) {
+    res.status(409).json({ message: "当前团队已开启正式 Excel 导出审批，请先完成审批" });
+    return;
+  }
+  const templateId = String(req.body?.templateId || "").trim();
+  const template = listAdvancedDocumentTemplates().find((item) => item.id === templateId);
+  if (!template) {
+    res.status(400).json({ message: "请选择有效的 Excel 模板" });
+    return;
+  }
+  if (!template.recommendedTypes.includes(document.type)) {
+    res.status(400).json({ message: `${template.name} 不支持当前 ${documentTypeLabelForApi(document.type)} 单据` });
+    return;
+  }
+  try {
+    const result = await exportAdvancedDocumentTemplate(templateId, documentForAdvancedExcel(document), await advancedDocumentAssets(document, req.user!));
+    const oldStatus = document.status;
+    document.status = "exported";
+    document.updatedAt = new Date().toISOString();
+    appendDocumentAudit(document, "status", oldStatus, document.status, req.user!);
+    const exportedAt = new Date().toISOString();
+    const fingerprint = quotePricingFingerprint(document);
+    const quoteRecord = store.quoteHistory.find((item) => item.documentId === document.id && item.fingerprint === fingerprint);
+    if (quoteRecord) quoteRecord.exportedAt = exportedAt;
+    const job = {
+      id: `io_document_xlsx_${Date.now()}`,
+      name: `${document.type} 单据 Excel 导出：${document.number}`,
+      type: "export" as const,
+      rows: document.items.length,
+      status: "done" as const,
+      operatorId: req.user!.id,
+      createdAt: currentMinuteText()
+    };
+    store.importExportJobs.unshift(job);
+    await store.persist();
+    const fileName = `${document.number}-${result.template.fileName}`.replace(/[\\/:*?"<>|]/g, "-");
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-GoodJob-Excel-SHA256", excelBufferSha256(result.buffer));
+    res.send(result.buffer);
+  } catch (error) {
+    res.status(400).json({ message: error instanceof Error ? error.message : "高级 Excel 导出失败" });
+  }
+}));
+
+app.post("/api/trade-documents/:id/preview-xlsx", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const document = store.tradeDocuments.find((item) => item.id === req.params.id);
+  if (!document || !canSeeOwner(req.user!, document.ownerId, document.teamId)) {
+    res.status(404).json({ message: "单据不存在" });
+    return;
+  }
+  const templateId = String(req.body?.templateId || "").trim();
+  const template = listAdvancedDocumentTemplates().find((item) => item.id === templateId);
+  if (!template) {
+    res.status(400).json({ message: "请选择有效的 Excel 模板" });
+    return;
+  }
+  if (!template.recommendedTypes.includes(document.type)) {
+    res.status(400).json({ message: `${template.name} 不支持当前 ${documentTypeLabelForApi(document.type)} 单据` });
+    return;
+  }
+  try {
+    const result = await exportAdvancedDocumentTemplate(templateId, documentForAdvancedExcel(document), await advancedDocumentAssets(document, req.user!));
+    const pdf = await renderExcelBufferToPdf(result.buffer);
+    const previewName = `${document.number}-${result.template.fileName.replace(/\.xlsx$/i, "")}-preview.pdf`.replace(/[\\/:*?"<>|]/g, "-");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(previewName)}"; filename*=UTF-8''${encodeURIComponent(previewName)}`);
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-GoodJob-Excel-SHA256", excelBufferSha256(result.buffer));
+    res.send(pdf);
+  } catch (error) {
+    res.status(error instanceof ExcelPreviewUnavailableError ? 503 : 400).json({
+      message: error instanceof Error ? error.message : "Excel 预览失败"
+    });
+  }
+}));
 
 // 报关资料生成API
 app.post("/api/deals/:dealId/generate-customs", requireAuth, asyncRoute(async (req, res) => {
@@ -11934,6 +12896,14 @@ app.post("/api/organization-relations", requireAuth, asyncRoute(async (req, res)
 app.get("/api/tools/website-opportunities", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
   await store.reloadProspectCandidates?.();
+  const expiredCandidates = store.websiteOpportunities.filter((item) => {
+    if (!canSeeOwner(req.user!, item.ownerId, item.teamId)) return false;
+    const attempt = item.contactEnrichmentAttempts?.[0];
+    return attempt ? expireContactEnrichmentAttempt(item, attempt) : false;
+  });
+  if (expiredCandidates.length) {
+    await persistCandidateChanges(store, expiredCandidates, false);
+  }
   const scoped = store.websiteOpportunities
     .filter((item) =>
       canSeeOwner(req.user!, item.ownerId, item.teamId)
@@ -12032,6 +13002,10 @@ app.get("/api/prospect-list/:id/contact-enrichment", requireAuth, asyncRoute(asy
   if (!candidate) {
     res.status(404).json({ message: "搜客候选不存在或无权访问" });
     return;
+  }
+  const latestAttempt = candidate.contactEnrichmentAttempts?.[0];
+  if (latestAttempt && expireContactEnrichmentAttempt(candidate, latestAttempt)) {
+    await persistCandidateChanges(store, [candidate], false);
   }
   res.setHeader("Cache-Control", "no-store");
   res.json({
@@ -12495,7 +13469,8 @@ app.post("/api/prospect-list/:id/website-probe", requireAuth, asyncRoute(async (
       req.user!.id,
       async (current) => {
         await persistCandidateChanges(store, [current], false);
-      }
+      },
+      { extractPublicContacts: websiteContactAiExtractor(req.user!) }
     );
     res.setHeader("Cache-Control", "no-store");
     res.status(result.replayed ? 200 : 202).json({
@@ -12919,6 +13894,21 @@ app.patch("/api/prospect-list/batch", requireAuth, asyncRoute(async (req, res) =
     throw error;
   }
   await persistCandidateChanges(store, opportunities, false);
+  if (body.action === "shortlist") {
+    for (const item of opportunities.filter((candidate) => candidate.ownerId === req.user!.id)) {
+      const activeAttempt = item.contactEnrichmentAttempts?.some((attempt) =>
+        attempt.status === "queued" || attempt.status === "running"
+      );
+      if (!activeAttempt) {
+        void scheduleContactEnrichment(
+          req.user!,
+          item.id,
+          `contact_auto_shortlist_${randomUUID()}`,
+          false
+        );
+      }
+    }
+  }
   res.json({ opportunities });
 }));
 
@@ -13989,6 +14979,7 @@ let activeAgentBackgroundRunner: AgentBackgroundRunner | null = null;
 let activeOutreachSequenceRunner: OutreachSequenceRunner | null = null;
 let activeCustomerMaintenanceRunner: CustomerMaintenanceRunner | null = null;
 let activeAgentTriggerRunner: AgentTriggerRunner | null = null;
+let activeSalesTrainingRunner: SalesTrainingRunner | null = null;
 let activeInboundMailWatcher: InboundMailWatcher | null = null;
 
 app.get("/api/agent/catalog", requireAuth, (_req, res) => {
@@ -14019,6 +15010,90 @@ app.post("/api/agent/customer-maintenance/:id/:action", requireAuth, asyncRoute(
   res.json({ watch });
 }));
 
+app.get("/api/agent/sales-distillation/sources", requireAuth, (req, res) => {
+  res.json({ sources: listDistillationSources(getStore(), req.user!) });
+});
+
+app.get("/api/agent/sales-training", requireAuth, (req, res) => {
+  res.json({ runs: listSalesTrainingRuns(getStore(), req.user!) });
+});
+
+app.get("/api/agent/sales-training/:id", requireAuth, (req, res) => {
+  res.json({ run: getSalesTrainingRun(getStore(), req.user!, req.params.id) });
+});
+
+app.post("/api/agent/sales-training", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ sourceUserId: z.string().min(1).max(100), periodDays: z.coerce.number().int().min(7).max(365).optional().default(90) }).parse(req.body || {});
+  const run = await createSalesTrainingRun(getStore(), req.user!, body.sourceUserId, body.periodDays);
+  void activeSalesTrainingRunner?.synchronize();
+  res.status(201).json({ run });
+}));
+
+app.post("/api/agent/sales-training/:id/:action", requireAuth, asyncRoute(async (req, res, next) => {
+  const parsed = z.enum(["pause", "resume", "cancel", "retrain", "publish"]).safeParse(req.params.action);
+  if (!parsed.success) return next();
+  try {
+    if (parsed.data === "retrain") {
+      const run = await retrainSalesTrainingRun(getStore(), req.user!, req.params.id);
+      void activeSalesTrainingRunner?.synchronize();
+      res.status(201).json({ run });
+      return;
+    }
+    if (parsed.data === "publish") {
+      const result = await publishSalesTrainingRun(getStore(), req.user!, req.params.id);
+      res.json(result);
+      return;
+    }
+    const run = await controlSalesTrainingRun(getStore(), req.user!, req.params.id, parsed.data);
+    if (parsed.data === "resume") void activeSalesTrainingRunner?.synchronize();
+    res.json({ run });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "销售训练操作失败";
+    res.status(/无权|主管|管理员/u.test(message) ? 403 : 400).json({ message });
+  }
+}));
+
+app.patch("/api/agent/sales-training/:id/samples/:sampleId", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ label: z.enum(["positive", "negative", "neutral"]).optional(), included: z.boolean().optional(), managerNote: z.string().max(500).optional() }).parse(req.body || {});
+  const run = await updateSalesTrainingSample(getStore(), req.user!, req.params.id, req.params.sampleId, body);
+  res.json({ run });
+}));
+
+app.get("/api/agent/sales-distillation", requireAuth, (req, res) => {
+  res.json({
+    distillations: listSalesDistillations(getStore(), req.user!),
+    activations: listSalesPlaybookActivations(getStore(), req.user!)
+  });
+});
+
+app.post("/api/agent/sales-distillation", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    sourceUserId: z.string().min(1).max(100),
+    periodDays: z.coerce.number().int().min(7).max(365).optional().default(90)
+  }).parse(req.body || {});
+  const distillation = await createSalesDistillation(getStore(), req.user!, body.sourceUserId, body.periodDays);
+  res.status(201).json({ distillation });
+}));
+
+app.post("/api/agent/sales-distillation/:id/publish", requireAuth, asyncRoute(async (req, res) => {
+  try {
+    const distillation = await publishSalesDistillation(getStore(), req.user!, req.params.id);
+    res.json({ distillation });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "发布蒸馏打法失败";
+    res.status(/无权|需要主管|不存在/u.test(message) ? 403 : 400).json({ message });
+  }
+}));
+
+app.post("/api/agent/sales-distillation/:id/activate", requireAuth, asyncRoute(async (req, res) => {
+  const activation = await activateSalesPlaybook(getStore(), req.user!, req.params.id);
+  res.json({ activation, activations: listSalesPlaybookActivations(getStore(), req.user!) });
+}));
+
+app.post("/api/agent/sales-distillation/activations/:id/pause", requireAuth, asyncRoute(async (req, res) => {
+  const activation = await pauseSalesPlaybook(getStore(), req.user!, req.params.id);
+  res.json({ activation, activations: listSalesPlaybookActivations(getStore(), req.user!) });
+}));
 
 const agentPlanRequestSchema = z.object({
   goal: z.string().trim().min(2).max(2_000),
@@ -14585,6 +15660,17 @@ app.post("/api/tools/ai-config", requireAuth, asyncRoute(async (req, res) => {
     lastTestAt: existing?.lastTestAt,
     lastTestStatus: existing?.lastTestStatus || "untested",
     lastTestMessage: existing?.lastTestMessage || "",
+    webSearchStatus: existing
+      && existing.provider === body.provider
+      && existing.protocol === body.protocol
+      && existing.baseUrl === baseUrl
+      && existing.model === body.model
+      && existing.apiKey === apiKey
+      ? existing.webSearchStatus || "untested"
+      : "untested",
+    webSearchTestAt: existing?.webSearchTestAt,
+    webSearchTestMessage: existing?.webSearchTestMessage || "",
+    webSearchCitationCount: existing?.webSearchCitationCount || 0,
     ownerId: req.user!.id,
     teamId: req.user!.teamId,
     updatedAt: new Date().toISOString()
@@ -15153,9 +16239,14 @@ app.post("/api/tools/ai-config/test", requireAuth, asyncRoute(async (req, res) =
     return;
   }
   const result = await testAiConfig(config);
-  config.lastTestAt = new Date().toISOString();
+  const testedAt = new Date().toISOString();
+  config.lastTestAt = testedAt;
   config.lastTestStatus = result.ok ? "passed" : "failed";
   config.lastTestMessage = result.message;
+  config.webSearchStatus = result.webSearchStatus;
+  config.webSearchTestAt = testedAt;
+  config.webSearchTestMessage = result.webSearchMessage;
+  config.webSearchCitationCount = result.webSearchCitationCount;
   config.updatedAt = new Date().toISOString();
   await getStore().persist();
   res.json({ ok: result.ok, message: result.message, config: publicAiConfig(config), configs: getAiConfigs(req.user!).map(publicAiConfig) });
@@ -15345,6 +16436,149 @@ function getProviderConnection(user: SessionUser, providerId: string): ProviderC
   );
 }
 
+const contactResearchResultSchema = z.object({
+  contacts: z.array(z.object({
+    name: z.string().trim().max(160).optional().default(""),
+    title: z.string().trim().max(160).optional().default(""),
+    channel: z.string().trim().max(40).optional().default(""),
+    value: z.string().trim().max(320),
+    sourceUrl: z.string().trim().url().max(1200),
+    sourceQuote: z.string().trim().max(1200)
+  }).passthrough()).max(20).default([]),
+  noResultReason: z.string().trim().max(1000).optional().default("")
+}).passthrough();
+
+function normalizedResearchUrl(value: string) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    return url.toString().replace(/\/$/u, "");
+  } catch {
+    return "";
+  }
+}
+
+function contactValueInEvidence(value: string, quote: string) {
+  if (value.includes("@")) return quote.toLocaleLowerCase("en-US").includes(value.toLocaleLowerCase("en-US"));
+  const valueDigits = value.replace(/\D/gu, "");
+  const quoteDigits = quote.replace(/\D/gu, "");
+  return valueDigits.length >= 7 && quoteDigits.includes(valueDigits);
+}
+
+function researchContactEvidence(input: {
+  company: string;
+  payload: unknown;
+  sourceId: string;
+  sourceLabel: string;
+  sourceKind: "web_search" | "local_runner";
+  allowedUrls?: string[];
+}) {
+  const parsed = contactResearchResultSchema.parse(input.payload);
+  const allowedUrls = input.allowedUrls?.map(normalizedResearchUrl).filter(Boolean);
+  const contacts: ExtractedWebsiteContact[] = [];
+  for (const item of parsed.contacts) {
+    const sourceUrl = normalizedResearchUrl(item.sourceUrl);
+    if (!sourceUrl || !nativeResearchCitationAllowed(sourceUrl)) continue;
+    if (allowedUrls?.length && !allowedUrls.includes(sourceUrl)) continue;
+    if (!contactValueInEvidence(item.value, item.sourceQuote)) continue;
+    const channels = contactChannelsFromText(item.value);
+    const whatsapp = /whatsapp/iu.test(item.channel) ? channels.phones : [];
+    const phones = whatsapp.length ? [] : channels.phones;
+    if (!channels.emails.length && !phones.length && !whatsapp.length) continue;
+    contacts.push({
+      kind: item.name ? "person" : "company",
+      name: item.name || input.company,
+      title: item.title || (item.name ? "公开联系人" : "公司公开联系"),
+      emails: channels.emails,
+      phones,
+      whatsapp,
+      source: input.sourceId,
+      sourceLabel: input.sourceLabel,
+      sourceKind: input.sourceKind,
+      confidence: input.sourceKind === "web_search" ? 72 : 64,
+      verificationStatus: "syntax_valid",
+      observedAt: new Date().toISOString(),
+      reasonCodes: [input.sourceKind === "web_search"
+        ? "CONTACT_NATIVE_WEB_SEARCH_CITED"
+        : "CONTACT_RUNNER_RESEARCH_CITED"],
+      evidenceExcerpt: item.sourceQuote,
+      corroboratedSources: [{
+        sourceId: input.sourceId,
+        sourceLabel: input.sourceLabel,
+        evidenceUrl: sourceUrl
+      }],
+      evidenceUrl: sourceUrl
+    });
+  }
+  return { contacts, noResultReason: parsed.noResultReason };
+}
+
+function contactResearchPrompt(candidate: WebsiteOpportunity) {
+  return [
+    `Research public business contact details for: ${candidate.company}`,
+    `Country or region: ${candidate.country || "unknown"}`,
+    `Known official website: ${candidate.website || "not confirmed"}`,
+    `Business: ${candidate.business || "unknown"}`,
+    "Use public web search and cite the exact HTTPS page where every email, telephone or WhatsApp number appears.",
+    "Only research companies outside China, Hong Kong, Macau and Taiwan. Do not use .cn, .hk, .mo or .tw websites.",
+    "Do not log in, bypass CAPTCHA, automatically collect content from social networks, download files or invent likely email patterns.",
+    "Prefer the official company website, official business directory API results and regulator or chamber pages.",
+    "Return only one JSON object with this shape:",
+    '{"contacts":[{"name":"","title":"","channel":"email|phone|whatsapp","value":"","sourceUrl":"https://...","sourceQuote":"exact text containing the contact value"}],"noResultReason":""}',
+    "If no contact value has an exact source quote and URL, return an empty contacts array and explain why."
+  ].join("\n");
+}
+
+function contactSearchAdjustment(errorCode = "", message = "") {
+  const value = `${errorCode} ${message}`;
+  if (/401|403|auth|key|认证|密钥/iu.test(value)) return "请在 AI 配置中检查 API Key、账号权限和 Base URL 后重新测试连接。";
+  if (/429|quota|rate|额度|限流/iu.test(value)) return "请检查模型额度或稍后重试；批量查询时建议减少单次客户数量。";
+  if (/timeout|timed|超时|network|fetch|连接/iu.test(value)) return "请检查网络和模型服务状态，适当降低批量数量后重试。";
+  if (/web search|工具|tool/iu.test(value)) return "当前模型可能不支持 Web Search，请改用支持 Responses API 联网工具的 OpenAI 模型。";
+  return "请检查 AI 模型配置和联网能力；失败不会阻塞官网及 Runner 继续补漏。";
+}
+
+async function contactRunnerPlan(user: SessionUser) {
+  const service = getLocalRunnerService();
+  if (!service) return {
+    configured: false,
+    message: "当前数据库运行模式未启用本地 Runner 服务",
+    suggestion: "部署 MySQL 版集成服务后，在集成中心配对 Good Job Runner。",
+    service: null,
+    runner: null
+  };
+  try {
+    const runners = await service.runners(user);
+    const runner = runners.find((item) =>
+      item.online
+      && item.capabilities.includes("codex")
+      && item.capabilities.includes("browser")
+      && item.workspaces.length
+    ) || null;
+    return runner ? {
+      configured: true,
+      message: `等待 ${runner.displayName} 执行深度补漏`,
+      suggestion: "",
+      service,
+      runner
+    } : {
+      configured: false,
+      message: "没有同时具备 Codex 与独立浏览器能力的在线 Runner",
+      suggestion: "请在集成中心启动并配对 Good Job Runner，确认 Codex CLI 和独立浏览器均显示在线。",
+      service,
+      runner: null
+    };
+  } catch (error) {
+    return {
+      configured: false,
+      message: error instanceof Error ? `Runner 状态读取失败：${error.message}` : "Runner 状态读取失败",
+      suggestion: "请检查集成中心和 Runner 服务连接。",
+      service,
+      runner: null
+    };
+  }
+}
+
 const activeContactEnrichmentRuns = new Map<string, Promise<void>>();
 
 function contactEnrichmentProviders(user: SessionUser) {
@@ -15383,12 +16617,16 @@ function websiteContactSourceProgress(
   if (probe.status === "queued" || probe.status === "running") {
     source.status = probe.status;
     source.outcome = "pending";
-    source.message = probe.events.at(-1)?.message || "境外官网正在受控低频验证";
+    source.message = probe.events.at(-1)?.message || "正在核验境外官网公开资料";
   } else {
     source.completedAt = probe.completedAt || new Date().toISOString();
     if (["policy_blocked", "robots_denied"].includes(probe.outcome)) {
       source.status = "blocked";
       source.outcome = "policy_blocked";
+    } else if (probe.outcome === "interrupted") {
+      source.status = "failed";
+      source.outcome = "timed_out";
+      source.suggestion = "后台任务已中断，可点击继续查找联系人重新执行；这不代表官网不可访问。";
     } else if (["unreachable", "rate_limited", "circuit_open"].includes(probe.outcome)) {
       source.status = "failed";
       source.outcome = "provider_failed";
@@ -15403,6 +16641,280 @@ function websiteContactSourceProgress(
         : "官网验证结束，未取得可用联系方式");
   }
   refreshContactEnrichmentAttempt(candidate, attempt);
+}
+
+function contactAttemptContext(candidateId: string, attemptId: string) {
+  const store = getStore();
+  const candidate = store.websiteOpportunities.find((item) => item.id === candidateId);
+  const attempt = candidate?.contactEnrichmentAttempts?.find((item) => item.id === attemptId);
+  return candidate && attempt ? { store, candidate, attempt } : null;
+}
+
+async function persistContactAttempt(candidate: WebsiteOpportunity, attempt: NonNullable<WebsiteOpportunity["contactEnrichmentAttempts"]>[number]) {
+  refreshContactEnrichmentAttempt(candidate, attempt);
+  await persistCandidateChanges(getStore(), [candidate], false);
+}
+
+async function executeNativeContactResearch(
+  user: SessionUser,
+  candidateId: string,
+  attemptId: string,
+  config: AiModelConfig
+) {
+  let context = contactAttemptContext(candidateId, attemptId);
+  let source = context && contactEnrichmentSource(context.attempt, "native_web_search");
+  if (!context || !source || source.status === "skipped") return;
+  const startedAt = new Date().toISOString();
+  source.status = "running";
+  source.startedAt = startedAt;
+  source.message = "正在通过模型原生 Web Search 查询公开联系方式和引用页面";
+  await persistContactAttempt(context.candidate, context.attempt);
+  try {
+    const current = contactAttemptContext(candidateId, attemptId);
+    if (!current) return;
+    const result = await callAiModelWithWebSearch(
+      config,
+      contactResearchPrompt(current.candidate),
+      10_000,
+      undefined,
+      50_000
+    );
+    context = contactAttemptContext(candidateId, attemptId);
+    source = context && contactEnrichmentSource(context.attempt, "native_web_search");
+    if (!context || !source) return;
+    source.completedAt = new Date().toISOString();
+    source.evidenceUrls = result.citations
+      .map((item) => item.url)
+      .filter(nativeResearchCitationAllowed)
+      .slice(0, 10);
+    if (!result.usedSearch) {
+      source.status = "failed";
+      source.outcome = "provider_failed";
+      source.errorCode = "WEB_SEARCH_TOOL_NOT_USED";
+      source.message = "模型返回了文本，但没有执行 Web Search 工具，结果未采信";
+      source.suggestion = "请改用支持 OpenAI Responses API Web Search 的模型，并在 AI 配置中重新测试。";
+    } else if (!source.evidenceUrls.length) {
+      source.status = "completed";
+      source.outcome = "no_contact";
+      source.message = "联网搜索已完成，但没有返回符合境外策略的 HTTPS 引用";
+      source.suggestion = "请确认公司名称、国家和官网是否准确，或启用 Runner 深度补漏。";
+    } else {
+      const parsed = researchContactEvidence({
+        company: context.candidate.company,
+        payload: extractJsonObject(result.content),
+        sourceId: "native_web_search",
+        sourceLabel: config.name || "AI 联网搜索",
+        sourceKind: "web_search",
+        allowedUrls: source.evidenceUrls
+      });
+      context.candidate.extractedContacts = mergeProspectContactEvidence(
+        context.candidate.extractedContacts || [],
+        parsed.contacts
+      );
+      const preferred = parsed.contacts[0];
+      if (preferred && !context.candidate.contactInfo) {
+        context.candidate.contactInfo = preferred.emails[0] || preferred.whatsapp[0] || preferred.phones[0] || "";
+      }
+      if (preferred?.kind === "person" && (!context.candidate.contact || context.candidate.contact === "待维护")) {
+        context.candidate.contact = preferred.name;
+      }
+      source.status = "completed";
+      source.outcome = parsed.contacts.length ? "contact_found" : "no_contact";
+      source.contactCount = parsed.contacts.length;
+      source.message = parsed.contacts.length
+        ? `联网搜索取得 ${parsed.contacts.length} 条带引用的联系方式`
+        : parsed.noResultReason || "联网搜索有引用，但没有联系方式同时具备原文和来源网址";
+      source.suggestion = parsed.contacts.length
+        ? ""
+        : "请核对公司名称和国家；系统将继续验证官网，并在可用时交给 Runner 深度补漏。";
+    }
+    await persistContactAttempt(context.candidate, context.attempt);
+  } catch (error) {
+    context = contactAttemptContext(candidateId, attemptId);
+    source = context && contactEnrichmentSource(context.attempt, "native_web_search");
+    if (!context || !source) return;
+    const failure = providerErrorFromUnknown(error, "search");
+    source.status = "failed";
+    source.outcome = /timeout|abort/iu.test(`${failure.code} ${failure.publicMessage}`) ? "timed_out" : "provider_failed";
+    source.completedAt = new Date().toISOString();
+    source.errorCode = failure.code;
+    source.retryable = failure.retryable;
+    source.retryAfterAt = failure.retryAfterAt;
+    source.message = failure.publicMessage;
+    source.suggestion = contactSearchAdjustment(failure.code, failure.publicMessage);
+    await persistContactAttempt(context.candidate, context.attempt);
+  }
+}
+
+async function ensureContactResearchWebsite(
+  user: SessionUser,
+  candidateId: string,
+  attemptId: string,
+  config: AiModelConfig | null
+) {
+  let context = contactAttemptContext(candidateId, attemptId);
+  if (!context || /^https:\/\//iu.test(context.candidate.website || "")) return;
+  const source = contactEnrichmentSource(context.attempt, "website_probe");
+  if (source) {
+    source.status = "running";
+    source.startedAt ||= new Date().toISOString();
+    source.message = config
+      ? "候选缺少可信官网，正在通过联网搜索确认官网"
+      : "候选缺少可信官网，且没有配置可用的联网搜索模型";
+    await persistContactAttempt(context.candidate, context.attempt);
+  }
+  context = contactAttemptContext(candidateId, attemptId);
+  if (!context) return;
+  await discoverProspectWebsite({
+    candidate: context.candidate,
+    runId: `${context.attempt.runId}:contact-website`,
+    search: config ? async ({ candidate, runId }) => {
+      try {
+        const result = await callAiModelWithWebSearch(config, [
+          `Find the official website for ${candidate.company}.`,
+          `Country or region: ${candidate.country || "unknown"}.`,
+          "Cite only the company's own official HTTPS website. Do not cite directories, social networks or marketplaces.",
+          "Do not use China, Hong Kong, Macau or Taiwan websites. If uncertain, return no website."
+        ].join("\n"), 4_000, undefined, 40_000);
+        return {
+          providerId: "openai_web_search",
+          records: result.usedSearch
+            ? aiWebsiteCitationsToProviderRecords(candidate, result.citations.filter((item) => nativeResearchCitationAllowed(item.url)))
+            : [],
+          ...(!result.usedSearch ? {
+            errorCode: "WEBSITE_WEB_SEARCH_TOOL_NOT_USED",
+            errorMessage: "模型未执行 Web Search 工具"
+          } : {})
+        };
+      } catch (error) {
+        const failure = providerErrorFromUnknown(error, "search");
+        return { providerId: "openai_web_search", records: [], errorCode: failure.code, errorMessage: failure.publicMessage };
+      }
+    } : undefined,
+    persist: async (candidate) => persistCandidateChanges(getStore(), [candidate], false)
+  });
+}
+
+async function executeRunnerContactResearch(
+  user: SessionUser,
+  candidateId: string,
+  attemptId: string,
+  plan: Awaited<ReturnType<typeof contactRunnerPlan>>
+) {
+  let context = contactAttemptContext(candidateId, attemptId);
+  let source = context && contactEnrichmentSource(context.attempt, "codex_runner");
+  if (!context || !source || !plan.configured || !plan.service || !plan.runner) return;
+  refreshContactEnrichmentAttempt(context.candidate, context.attempt);
+  if (context.attempt.recommendedContact) {
+    source.status = "skipped";
+    source.outcome = "not_needed";
+    source.completedAt = new Date().toISOString();
+    source.message = "前序来源已取得可用联系方式，无需启动 Runner";
+    source.suggestion = "";
+    await persistContactAttempt(context.candidate, context.attempt);
+    return;
+  }
+  source.status = "running";
+  source.startedAt = new Date().toISOString();
+  source.message = `正在由 ${plan.runner.displayName} 调用 Codex CLI 深度查询`;
+  await persistContactAttempt(context.candidate, context.attempt);
+  try {
+    context = contactAttemptContext(candidateId, attemptId);
+    if (!context) return;
+    const task = await plan.service.createTask(user, {
+      runnerId: plan.runner.id,
+      prompt: contactResearchPrompt(context.candidate),
+      workspace: plan.runner.workspaces[0],
+      executionMode: "read_only",
+      timeoutSeconds: 75
+    });
+    context = contactAttemptContext(candidateId, attemptId);
+    source = context && contactEnrichmentSource(context.attempt, "codex_runner");
+    if (!context || !source) return;
+    source.taskId = task.id;
+    source.message = `Runner 任务 ${task.id} 已排队，等待 Codex CLI 返回带来源的联系方式`;
+    await persistContactAttempt(context.candidate, context.attempt);
+    const deadline = Math.min(
+      Date.now() + 80_000,
+      Date.parse(context.attempt.deadlineAt || new Date(Date.now() + 80_000).toISOString())
+    );
+    let completed: Awaited<ReturnType<typeof plan.service.task>> | null = null;
+    while (Date.now() < deadline) {
+      const current = await plan.service.task(user, task.id);
+      if (["succeeded", "failed", "cancelled"].includes(current.task.status)) {
+        completed = current;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
+    if (!completed) {
+      await plan.service.cancel(user, task.id).catch(() => undefined);
+      context = contactAttemptContext(candidateId, attemptId);
+      source = context && contactEnrichmentSource(context.attempt, "codex_runner");
+      if (!context || !source) return;
+      source.status = "failed";
+      source.outcome = "timed_out";
+      source.completedAt = new Date().toISOString();
+      source.errorCode = "CODEX_RUNNER_TIMEOUT";
+      source.retryable = true;
+      source.message = "Codex Runner 超过 80 秒仍未返回，系统已停止等待";
+      source.suggestion = "请在集成中心检查 Runner 执行记录、Codex 登录状态和浏览器连接，恢复后再继续查询。";
+      await persistContactAttempt(context.candidate, context.attempt);
+      return;
+    }
+    context = contactAttemptContext(candidateId, attemptId);
+    source = context && contactEnrichmentSource(context.attempt, "codex_runner");
+    if (!context || !source) return;
+    source.completedAt = new Date().toISOString();
+    if (completed.task.status !== "succeeded") {
+      source.status = "failed";
+      source.outcome = "provider_failed";
+      source.errorCode = completed.task.status === "cancelled" ? "CODEX_RUNNER_CANCELLED" : "CODEX_RUNNER_FAILED";
+      source.message = completed.task.errorMessage || `Runner 任务${completed.task.status === "cancelled" ? "已取消" : "执行失败"}`;
+      source.suggestion = "请在集成中心查看任务过程；检查 Codex CLI、网络和独立浏览器后重试。";
+    } else {
+      const parsed = researchContactEvidence({
+        company: context.candidate.company,
+        payload: extractJsonObject(completed.task.resultText),
+        sourceId: "codex_runner",
+        sourceLabel: `Codex Runner · ${plan.runner.displayName}`,
+        sourceKind: "local_runner"
+      });
+      context.candidate.extractedContacts = mergeProspectContactEvidence(
+        context.candidate.extractedContacts || [],
+        parsed.contacts
+      );
+      const preferred = parsed.contacts[0];
+      if (preferred && !context.candidate.contactInfo) {
+        context.candidate.contactInfo = preferred.emails[0] || preferred.whatsapp[0] || preferred.phones[0] || "";
+      }
+      if (preferred?.kind === "person" && (!context.candidate.contact || context.candidate.contact === "待维护")) {
+        context.candidate.contact = preferred.name;
+      }
+      source.status = "completed";
+      source.outcome = parsed.contacts.length ? "contact_found" : "no_contact";
+      source.contactCount = parsed.contacts.length;
+      source.evidenceUrls = [...new Set(parsed.contacts.map((item) => item.evidenceUrl))];
+      source.message = parsed.contacts.length
+        ? `Codex Runner 取得 ${parsed.contacts.length} 条带原文证据的联系方式`
+        : parsed.noResultReason || "Runner 已完成检索，但没有找到同时具备原文和来源网址的联系方式";
+      source.suggestion = parsed.contacts.length
+        ? ""
+        : "请核对企业名称、国家和官网；也可以配置联系人 API 后重新查询。";
+    }
+    await persistContactAttempt(context.candidate, context.attempt);
+  } catch (error) {
+    context = contactAttemptContext(candidateId, attemptId);
+    source = context && contactEnrichmentSource(context.attempt, "codex_runner");
+    if (!context || !source) return;
+    source.status = "failed";
+    source.outcome = "provider_failed";
+    source.completedAt = new Date().toISOString();
+    source.errorCode = "CODEX_RUNNER_RESULT_INVALID";
+    source.message = error instanceof Error ? error.message : "Runner 返回结果无法解析";
+    source.suggestion = "请在集成中心检查 Runner 最终回复是否为规定 JSON，并确认每条联系方式都包含来源网址和原文。";
+    await persistContactAttempt(context.candidate, context.attempt);
+  }
 }
 
 async function executeContactEnrichment(
@@ -15421,6 +16933,15 @@ async function executeContactEnrichment(
   const current = candidate.contactEnrichmentAttempts?.[0];
   if (!force && current && ["queued", "running"].includes(current.status)) return;
   const providers = contactEnrichmentProviders(user);
+  const webSearchConfig = getAiConfig(user, "leadFinder");
+  const webSearchPolicy = webSearchConfig ? aiWebSearchPolicy(webSearchConfig) : null;
+  const webSearchReady = Boolean(
+    webSearchConfig?.enabled
+    && webSearchConfig.apiKey
+    && webSearchConfig.useLeadFinder
+    && webSearchPolicy?.ready
+  );
+  const countryBlocked = nativeResearchCountryBlocked(candidate.country || "");
   const attempt = createContactEnrichmentAttempt({
     candidate,
     runId,
@@ -15429,8 +16950,45 @@ async function executeContactEnrichment(
       label: item.provider.name,
       configured: item.configured
     })),
-    includeWebsite: true
+    includeWebsite: true,
+    webSearch: {
+      configured: webSearchReady && !countryBlocked,
+      label: webSearchConfig?.name || "AI 联网搜索",
+      message: countryBlocked
+        ? "按合规策略，中国及相关地区不执行自动联网联系人查询"
+        : webSearchReady
+          ? "等待模型原生 Web Search 查询公开联系方式"
+          : webSearchPolicy?.message || "未配置支持 Web Search 的 OpenAI 模型",
+      suggestion: countryBlocked
+        ? "中国及相关地区请使用已授权的正式数据接口或人工录入。"
+        : webSearchReady
+          ? ""
+          : webSearchPolicy
+            ? webSearchFailureSuggestion(webSearchPolicy)
+            : "请在 AI 配置中保存并测试支持 Responses API Web Search 的 OpenAI 模型。"
+    },
+    runner: {
+      configured: !countryBlocked,
+      label: "Codex Runner 深度补漏",
+      message: countryBlocked ? "按合规策略不执行 Runner 联网研究" : "正在检查在线 Runner 与 Codex CLI 能力",
+      suggestion: countryBlocked
+        ? "中国及相关地区不使用自动网页研究，请改用正式授权接口。"
+        : "若未检测到在线设备，系统会给出明确配置入口且不会阻塞其他来源。"
+    },
+    deadlineMs: 3 * 60_000
   });
+  if (countryBlocked) {
+    for (const sourceId of ["native_web_search", "website_probe", "codex_runner"]) {
+      const source = contactEnrichmentSource(attempt, sourceId);
+      if (!source) continue;
+      source.status = "blocked";
+      source.outcome = "policy_blocked";
+      source.completedAt = new Date().toISOString();
+      source.errorCode = "CONTACT_RESEARCH_REGION_BLOCKED";
+      source.message = "按合规策略，中国及相关地区不执行自动网页联系人研究";
+      source.suggestion = "请使用已授权的正式联系人接口或人工录入，并保留数据来源。";
+    }
+  }
   attempt.status = "running";
   attempt.startedAt = new Date().toISOString();
   for (const source of attempt.sources) {
@@ -15440,6 +16998,25 @@ async function executeContactEnrichment(
     }
   }
   await persistCandidateChanges(store, [candidate], false);
+
+  const runnerPlan = await contactRunnerPlan(user);
+  const runnerContext = contactAttemptContext(candidateId, attempt.id);
+  const runnerSource = runnerContext
+    ? contactEnrichmentSource(runnerContext.attempt, "codex_runner")
+    : null;
+  if (runnerContext && runnerSource && !countryBlocked) {
+    runnerSource.sourceLabel = runnerPlan.runner
+      ? `Codex Runner · ${runnerPlan.runner.displayName}`
+      : "Codex Runner 深度补漏";
+    runnerSource.message = runnerPlan.message;
+    runnerSource.suggestion = runnerPlan.suggestion;
+    if (!runnerPlan.configured) {
+      runnerSource.status = "skipped";
+      runnerSource.outcome = "not_configured";
+      runnerSource.completedAt = new Date().toISOString();
+    }
+    await persistContactAttempt(runnerContext.candidate, runnerContext.attempt);
+  }
 
   const configuredProviders = providers.filter((item) => item.configured);
   const providerResults = await Promise.all(configuredProviders.map(async (item, index) => {
@@ -15480,11 +17057,14 @@ async function executeContactEnrichment(
     source.completedAt = new Date().toISOString();
     if (result.error) {
       source.status = "failed";
-      source.outcome = "provider_failed";
+      source.outcome = /timeout|abort/iu.test(`${result.error.code} ${result.error.publicMessage}`)
+        ? "timed_out"
+        : "provider_failed";
       source.message = result.error.publicMessage;
       source.errorCode = result.error.code;
       source.retryable = result.error.retryable;
       source.retryAfterAt = result.error.retryAfterAt;
+      source.suggestion = contactSearchAdjustment(result.error.code, result.error.publicMessage);
       continue;
     }
     const enriched = result.enriched;
@@ -15520,9 +17100,24 @@ async function executeContactEnrichment(
     source.message = contacts.length
       ? `联系人接口取得 ${contacts.length} 条结果`
       : "联系人接口未返回可用联系方式";
+    source.suggestion = contacts.length
+      ? ""
+      : "请检查候选官网域名是否准确，或在集成中心增加其他联系人接口。";
   }
   refreshContactEnrichmentAttempt(latestCandidate, latestAttempt);
   await persistCandidateChanges(store, [latestCandidate], false);
+
+  if (webSearchReady && webSearchConfig && !countryBlocked) {
+    await executeNativeContactResearch(user, candidateId, attempt.id, webSearchConfig);
+  }
+  if (!countryBlocked) {
+    await ensureContactResearchWebsite(
+      user,
+      candidateId,
+      attempt.id,
+      webSearchReady ? webSearchConfig : null
+    );
+  }
 
   // MySQL 持久化会用权威快照替换内存对象；进入官网队列前必须重新取当前引用。
   const websiteCandidate = store.websiteOpportunities.find((item) =>
@@ -15535,9 +17130,28 @@ async function executeContactEnrichment(
     ? contactEnrichmentSource(websiteAttempt, "website_probe")
     : undefined;
   if (!websiteCandidate || !websiteAttempt || !websiteSource) return;
+  if (countryBlocked) {
+    refreshContactEnrichmentAttempt(websiteCandidate, websiteAttempt);
+    await persistCandidateChanges(store, [websiteCandidate], false);
+    return;
+  }
+  if (!/^https:\/\//iu.test(websiteCandidate.website || "")) {
+    const discovery = websiteCandidate.websiteDiscoveryAttempts?.[0];
+    websiteSource.status = "blocked";
+    websiteSource.outcome = "policy_blocked";
+    websiteSource.completedAt = new Date().toISOString();
+    websiteSource.errorCode = discovery?.reasonCode || "CONTACT_WEBSITE_MISSING";
+    websiteSource.message = discovery?.reason || "没有可信官网，无法继续核验公开联系方式";
+    websiteSource.suggestion = webSearchReady
+      ? "请核对企业名称和国家；当前官网候选未通过名称与域名校验。"
+      : "请配置支持 Web Search 的模型或正式搜索 API，也可以人工补充可信官网后继续查询。";
+    await persistContactAttempt(websiteCandidate, websiteAttempt);
+    await executeRunnerContactResearch(user, candidateId, attempt.id, runnerPlan);
+    return;
+  }
   websiteSource.status = "running";
   websiteSource.startedAt = new Date().toISOString();
-  websiteSource.message = "正在进入境外官网受控验证队列";
+  websiteSource.message = "正在进入境外官网公开资料核验队列";
   refreshContactEnrichmentAttempt(websiteCandidate, websiteAttempt);
   await persistCandidateChanges(store, [websiteCandidate], false);
   const queuedCandidate = store.websiteOpportunities.find((item) =>
@@ -15550,9 +17164,15 @@ async function executeContactEnrichment(
       queuedCandidate,
       user.id,
       async (changedCandidate) => {
-        websiteContactSourceProgress(changedCandidate, websiteAttempt.id);
-        await persistCandidateChanges(store, [changedCandidate], false);
-      }
+        const latestCandidate = store.websiteOpportunities.find((item) =>
+          item.id === candidateId && item.teamId === user.teamId && item.ownerId === user.id
+        );
+        if (!latestCandidate) return;
+        mergeWebsiteProbeCandidateProgress(latestCandidate, changedCandidate);
+        websiteContactSourceProgress(latestCandidate, websiteAttempt.id);
+        await persistCandidateChanges(store, [latestCandidate], false);
+      },
+      { extractPublicContacts: websiteContactAiExtractor(user) }
     );
     if (["completed", "failed"].includes(queued.attempt.status)) {
       const completedCandidate = store.websiteOpportunities.find((item) =>
@@ -15582,9 +17202,28 @@ async function executeContactEnrichment(
     failedSource.message = error instanceof Error
       ? error.message
       : "境外官网验证未能启动";
+    failedSource.errorCode = error instanceof WebsiteProbeError
+      ? error.code
+      : "CONTACT_WEBSITE_PROBE_FAILED";
+    failedSource.suggestion = error instanceof WebsiteProbeError
+      ? "请检查官网是否属于境外 HTTPS 站点并允许公开资料核验；系统不会处理受限内容。"
+      : "请检查网络、官网地址和后台验证服务后重试。";
     refreshContactEnrichmentAttempt(failedCandidate, failedAttempt);
     await persistCandidateChanges(store, [failedCandidate], false);
   }
+
+  for (let index = 0; index < 10; index += 1) {
+    const currentContext = contactAttemptContext(candidateId, attempt.id);
+    const currentWebsiteSource = currentContext
+      ? contactEnrichmentSource(currentContext.attempt, "website_probe")
+      : null;
+    if (!currentContext
+      || currentContext.attempt.recommendedContact
+      || !currentWebsiteSource
+      || !["queued", "running"].includes(currentWebsiteSource.status)) break;
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+  }
+  await executeRunnerContactResearch(user, candidateId, attempt.id, runnerPlan);
 }
 
 function scheduleContactEnrichment(
@@ -16089,7 +17728,14 @@ function aiSearchStatus(user: SessionUser) {
     item.enabled && Boolean(item.apiKey)
   );
   const config = getAiConfig(user, "leadFinder");
-  const ready = Boolean(config?.enabled && config?.apiKey && config?.useLeadFinder);
+  const externalWebsiteProviders = LEAD_PROVIDERS
+    .filter((provider) => ["brave", "serper", "serpapi", "google_places"].includes(provider.id))
+    .map((provider) => providerStatusFor(user, provider))
+    .filter((status) => status.ready && status.enabled);
+  const readiness = config
+    ? aiLeadFinderReadiness(config, externalWebsiteProviders.length > 0)
+    : null;
+  const ready = Boolean(readiness?.ready);
   const catalog = providerCatalogByCode("ai_search");
   const enabled = ready && catalog?.status === "active";
   const licensePolicy = catalog?.licensePolicy || {};
@@ -16113,13 +17759,12 @@ function aiSearchStatus(user: SessionUser) {
     hasApiKey: Boolean(configured),
     ready,
     enabled,
-    lastTestStatus: ready ? "passed" : "untested",
-    lastTestMessage: ready
-      ? `当前模型：${config?.model || "已配置"}`
-      : configured
+    lastTestStatus: ready ? "passed" : config?.lastTestStatus || "untested",
+    lastTestMessage: readiness?.message
+      || (configured
         ? `模型已配置：${configured.model || configured.name}，请启用“自动获客”用途`
-        : "请先在「AI 模型配置」保存并启用模型",
-    lastTestAt: config?.lastTestAt || "",
+        : "请先在「AI 模型配置」保存并启用模型"),
+    lastTestAt: config?.webSearchTestAt || config?.lastTestAt || "",
     usage: ""
   };
 }
@@ -17940,7 +19585,7 @@ app.post("/api/lead-finder/search", requireAuth, asyncRoute(async (req, res) => 
         retryable: false,
         retryAfterAt: null
       });
-    } else if (aiSearchConfig?.enabled && aiSearchConfig.apiKey && aiSearchConfig.useLeadFinder) {
+    } else if (aiSearchConfig?.enabled && aiSearchConfig.apiKey && aiSearchConfig.useLeadFinder && aiSearchStatus(user).ready) {
       try {
         const provider = createAiSearchProvider(aiSearchConfig);
         const result = await executeProviderSearch({
@@ -17998,18 +19643,26 @@ app.post("/api/lead-finder/search", requireAuth, asyncRoute(async (req, res) => 
         });
       }
     } else {
-      recordProviderPreflightFailure(user, runId, "ai_search", "PROVIDER_CONNECTION_INVALID", "search_preflight");
+      const providerStatus = aiSearchStatus(user);
+      const policy = aiSearchConfig ? aiWebSearchPolicy(aiSearchConfig) : null;
+      const errorCode: ProviderErrorCode = !aiSearchConfig || !aiSearchConfig.apiKey || !aiSearchConfig.enabled || !aiSearchConfig.useLeadFinder
+        ? "PROVIDER_CONNECTION_INVALID"
+        : policy?.reasonCode || "AI_WEB_SEARCH_NOT_TESTED";
+      const errorMessage = !aiSearchConfig || !aiSearchConfig.apiKey || !aiSearchConfig.enabled || !aiSearchConfig.useLeadFinder
+        ? "请先启用可用于自动获客的 AI 模型"
+        : providerStatus.lastTestMessage || `${policy?.message || "官网联网能力尚未验证"} ${policy ? webSearchFailureSuggestion(policy) : ""}`.trim();
+      recordProviderPreflightFailure(user, runId, "ai_search", errorCode, "search_preflight");
       sourceStats.push({
         id: "ai_search",
         name: catalog.name || "AI 搜索",
         count: 0,
         status: "failed",
-        error: "请先启用可用于自动获客的 AI 模型",
-        errorCode: "PROVIDER_CONNECTION_INVALID",
+        error: errorMessage,
+        errorCode,
         retryable: false,
         retryAfterAt: null
       });
-      skipped.push("AI 搜索（未启用模型）");
+      skipped.push(`AI 搜索（${errorMessage}）`);
     }
   }
 
@@ -18130,7 +19783,7 @@ app.post("/api/tools/website-scrape/preview", requireAuth, asyncRoute(async (req
   const body = schema.parse(req.body);
   if (body.useAi) {
     res.status(400).json({
-      message: "官网链接登记不支持 AI 网页解析；系统只保存链接，不访问企业网页"
+      message: "官网链接登记仅保存链接；公开资料将在后续核验流程中补全"
     });
     return;
   }
@@ -18949,6 +20602,12 @@ function getAiConfig(user: SessionUser, useCase?: AiUseCase) {
     || null;
 }
 
+function websiteContactAiExtractor(user: SessionUser): WebsiteContactAiExtractor | undefined {
+  const config = getAiConfig(user, "websiteParse");
+  if (!config?.enabled || !config.apiKey || !config.baseUrl || !config.model) return undefined;
+  return (input) => extractWebsitePublicContactsWithAi(config, input);
+}
+
 function publicAiConfig(config: AiModelConfig) {
   return {
     id: config.id,
@@ -18969,6 +20628,10 @@ function publicAiConfig(config: AiModelConfig) {
     lastTestAt: config.lastTestAt || "",
     lastTestStatus: config.lastTestStatus || "untested",
     lastTestMessage: config.lastTestMessage || "",
+    webSearchStatus: config.webSearchStatus || "untested",
+    webSearchTestAt: config.webSearchTestAt || "",
+    webSearchTestMessage: config.webSearchTestMessage || "",
+    webSearchCitationCount: config.webSearchCitationCount || 0,
     ownerId: config.ownerId,
     teamId: config.teamId,
     updatedAt: config.updatedAt
@@ -18976,18 +20639,86 @@ function publicAiConfig(config: AiModelConfig) {
 }
 
 async function testAiConfig(config: AiModelConfig) {
+  let ordinaryMessage = "";
   try {
     const content = await callAiModel(config, "只返回 JSON：{\"ok\":true}", 1200);
     const ok = /ok|true/i.test(content);
-    return {
-      ok,
-      message: ok ? `${providerLabel(config.provider)} 连接测试通过` : "模型已响应，但返回内容不符合测试格式"
-    };
+    ordinaryMessage = ok
+      ? `${providerLabel(config.provider)} 普通 AI 调用通过`
+      : "模型已响应，但返回内容不符合测试格式";
+    if (!ok) {
+      return {
+        ok: false,
+        message: ordinaryMessage,
+        webSearchStatus: "failed" as const,
+        webSearchMessage: "普通 AI 调用未通过，尚未执行 Web Search 测试。",
+        webSearchCitationCount: 0
+      };
+    }
   } catch (error) {
     const failure = providerErrorFromUnknown(error, "search");
     return {
       ok: false,
-      message: `AI 连接失败：${failure.publicMessage}`
+      message: `AI 连接失败：${failure.publicMessage}`,
+      webSearchStatus: "failed" as const,
+      webSearchMessage: "普通 AI 调用失败，尚未执行 Web Search 测试。",
+      webSearchCitationCount: 0
+    };
+  }
+  if (!config.useLeadFinder) {
+    return {
+      ok: true,
+      message: `${ordinaryMessage}；当前未启用自动获客，未要求 Web Search。`,
+      webSearchStatus: "untested" as const,
+      webSearchMessage: "当前配置未勾选自动获客，因此未执行官网联网测试。",
+      webSearchCitationCount: 0
+    };
+  }
+  const policy = aiWebSearchPolicy(config);
+  if (!policy.supported) {
+    return {
+      ok: true,
+      message: `${ordinaryMessage}；当前模型不支持 OpenAI Web Search。自动搜客时请配置 Brave、Serper、SerpApi 或 Google Places，官网将由搜索 API 补查，模型猜测的网址不会保存。`,
+      webSearchStatus: "unsupported" as const,
+      webSearchMessage: "当前模型不支持原生 Web Search；配置官网搜索 API 后仍可用于生成企业候选。",
+      webSearchCitationCount: 0
+    };
+  }
+  try {
+    const webResult = await callAiModelWithWebSearch(
+      config,
+      "搜索 OpenAI 官方网站，并只返回一句简短确认；必须实际执行 Web Search 并返回引用。",
+      1_200,
+      undefined,
+      45_000
+    );
+    if (!webResult.usedSearch || !webResult.citations.length) {
+      const message = "普通 AI 调用通过，但模型没有返回 Web Search 引用，无法用于确认官网。请检查 Responses API Web Search 权限或更换配置。";
+      return {
+        ok: false,
+        message,
+        webSearchStatus: "failed" as const,
+        webSearchMessage: message,
+        webSearchCitationCount: webResult.citations.length
+      };
+    }
+    const message = `${ordinaryMessage}；Web Search 已启用，返回 ${webResult.citations.length} 条引用，可用于官网发现。`;
+    return {
+      ok: true,
+      message,
+      webSearchStatus: "passed" as const,
+      webSearchMessage: message,
+      webSearchCitationCount: webResult.citations.length
+    };
+  } catch (error) {
+    const failure = providerErrorFromUnknown(error, "search");
+    const message = `${ordinaryMessage}，但 Web Search 测试失败：${failure.publicMessage}。自动搜客不会采信模型猜测的官网。`;
+    return {
+      ok: false,
+      message,
+      webSearchStatus: "failed" as const,
+      webSearchMessage: message,
+      webSearchCitationCount: 0
     };
   }
 }
@@ -19033,7 +20764,7 @@ function parseWebsiteOpportunity(
     website,
     contact: "待人工核实",
     contactInfo: "",
-    description: "仅登记链接，系统未访问网页。",
+    description: "仅登记官网链接，公开资料尚待补全。",
     ownerId: user.id,
     teamId: user.teamId,
     status: "preview",
@@ -19388,6 +21119,15 @@ async function startServer() {
     }
   }
   const store = getStore();
+  const interruptedWebsiteCandidates = store.websiteOpportunities.filter((candidate) =>
+    expireStaleWebsiteProbeAttempts(candidate)
+  );
+  if (interruptedWebsiteCandidates.length) {
+    const ids = interruptedWebsiteCandidates.map((candidate) => candidate.id);
+    if (store.persistProspectCandidates) await store.persistProspectCandidates(ids);
+    else await store.persist();
+    console.log(`GoodJob CRM recovered ${ids.length} interrupted website probe tasks`);
+  }
   const agentBackgroundRunner = new AgentBackgroundRunner(
     store,
     agentExecutionRuntime,
@@ -19547,7 +21287,28 @@ async function startServer() {
     process.exit(1);
     return;
   }
-
+  const salesTrainingRunner = new SalesTrainingRunner(store, Number(process.env.SALES_TRAINING_POLL_MS || 1_200));
+  try {
+    await salesTrainingRunner.start();
+    activeSalesTrainingRunner = salesTrainingRunner;
+  } catch (error) {
+    activeAgentTriggerRunner = null;
+    await agentTriggerRunner.stop();
+    activeCustomerMaintenanceRunner = null;
+    await customerMaintenanceRunner.stop();
+    activeOutreachSequenceRunner = null;
+    await outreachSequenceRunner.stop();
+    superSearchRunner.stop();
+    await prospectScheduler?.stop();
+    activeProspectWorkerService = null;
+    await prospectWorkerService?.stop();
+    activeAgentBackgroundRunner = null;
+    await agentBackgroundRunner.stop();
+    await store.close?.();
+    console.error(`GoodJob CRM sales training runner startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+    return;
+  }
   // ── 开发信回流感知：IMAP 轮询监听回信/退信（按开关启用）────────────
   if (process.env.INBOUND_MAIL_ENABLED === "true") {
     const inboundMailWatcher = new InboundMailWatcher(store, {
@@ -19616,6 +21377,8 @@ async function startServer() {
     try {
       activeInboundMailWatcher?.stop();
       activeInboundMailWatcher = null;
+      activeSalesTrainingRunner = null;
+      salesTrainingRunner.stop();
       activeAgentTriggerRunner = null;
       await agentTriggerRunner.stop();
       activeCustomerMaintenanceRunner = null;

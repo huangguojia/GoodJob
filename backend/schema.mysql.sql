@@ -55,8 +55,16 @@ CREATE TABLE document_letterheads (
   email VARCHAR(180) DEFAULT '',
   website VARCHAR(500) DEFAULT '',
   bank_info TEXT,
+  seller_contact VARCHAR(200) DEFAULT '',
+  tax_no VARCHAR(160) DEFAULT '',
   logo_url VARCHAR(512) DEFAULT '',
   logo_placement_json JSON,
+  match_countries_json JSON,
+  match_currencies_json JSON,
+  match_document_types_json JSON,
+  match_priority INT NOT NULL DEFAULT 0,
+  stamp_id VARCHAR(64) DEFAULT '',
+  signature_id VARCHAR(64) DEFAULT '',
   is_default BOOLEAN NOT NULL DEFAULT FALSE,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   updated_by VARCHAR(64) DEFAULT '',
@@ -94,6 +102,7 @@ CREATE TABLE document_signatures (
 CREATE TABLE document_default_profiles (
   team_id VARCHAR(64) PRIMARY KEY,
   seller VARCHAR(240) DEFAULT '',
+  brand_mark_text VARCHAR(32) DEFAULT '',
   seller_address TEXT,
   seller_contact VARCHAR(200) DEFAULT '',
   seller_phone VARCHAR(120) DEFAULT '',
@@ -109,7 +118,7 @@ CREATE TABLE document_default_profiles (
   validity_days INT NOT NULL DEFAULT 0,
   notes TEXT,
   language VARCHAR(8) DEFAULT 'EN',
-  template_style VARCHAR(40) DEFAULT 'indigo',
+  template_style VARCHAR(40) DEFAULT 'rose',
   letterhead_id VARCHAR(64) DEFAULT '',
   stamp_id VARCHAR(64) DEFAULT '',
   signature_id VARCHAR(64) DEFAULT '',
@@ -572,7 +581,8 @@ CREATE TABLE website_opportunities (
   excluded_reason VARCHAR(255) DEFAULT '',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_website_opps_owner(owner_id),
-  INDEX idx_website_opps_team(team_id)
+  INDEX idx_website_opps_team(team_id),
+  INDEX idx_website_opps_created(created_at)
 );
 
 CREATE TABLE ai_model_configs (
@@ -593,6 +603,10 @@ CREATE TABLE ai_model_configs (
   last_test_at DATETIME NULL,
   last_test_status VARCHAR(20) DEFAULT 'untested',
   last_test_message VARCHAR(255) DEFAULT '',
+  web_search_status VARCHAR(20) DEFAULT 'untested',
+  web_search_test_at DATETIME NULL,
+  web_search_test_message VARCHAR(500) DEFAULT '',
+  web_search_citation_count INT DEFAULT 0,
   owner_id VARCHAR(64) NOT NULL,
   team_id VARCHAR(64) NOT NULL,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -802,6 +816,7 @@ CREATE TABLE trade_documents (
   buyer_address TEXT,
   buyer_contact VARCHAR(200),
   seller VARCHAR(200),
+  brand_mark_text VARCHAR(32) DEFAULT '',
   seller_address TEXT,
   seller_contact VARCHAR(200) DEFAULT '',
   seller_phone VARCHAR(120) DEFAULT '',
@@ -843,6 +858,35 @@ CREATE TABLE trade_documents (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_trade_documents_owner(owner_id),
   INDEX idx_trade_documents_team(team_id)
+);
+
+CREATE TABLE quote_history (
+  id VARCHAR(64) PRIMARY KEY,
+  deal_id VARCHAR(64) NOT NULL,
+  customer_id VARCHAR(64) NOT NULL,
+  document_id VARCHAR(64) NOT NULL,
+  document_type VARCHAR(20) NOT NULL,
+  document_number VARCHAR(80) NOT NULL,
+  document_revision INT NOT NULL DEFAULT 1,
+  issue_date VARCHAR(40) DEFAULT '',
+  customer_name VARCHAR(240) DEFAULT '',
+  deal_title VARCHAR(255) DEFAULT '',
+  deal_stage VARCHAR(40) DEFAULT '',
+  currency VARCHAR(12) NOT NULL,
+  total_amount DECIMAL(16,2) NOT NULL DEFAULT 0,
+  items_json JSON NOT NULL,
+  changes_json JSON NOT NULL,
+  fingerprint CHAR(64) NOT NULL,
+  operator_id VARCHAR(64) NOT NULL,
+  operator_name VARCHAR(160) DEFAULT '',
+  owner_id VARCHAR(64) NOT NULL,
+  team_id VARCHAR(64) NOT NULL,
+  quoted_at DATETIME(3) NOT NULL,
+  exported_at DATETIME(3) NULL,
+  UNIQUE KEY uk_quote_history_document_fingerprint(document_id, fingerprint),
+  INDEX idx_quote_history_scope(team_id, owner_id, quoted_at),
+  INDEX idx_quote_history_deal(deal_id, quoted_at),
+  INDEX idx_quote_history_customer(customer_id, quoted_at)
 );
 
 CREATE TABLE trade_document_import_analyses (

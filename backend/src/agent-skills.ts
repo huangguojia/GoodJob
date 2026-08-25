@@ -111,6 +111,7 @@ function goalDomainMatchesSkill(skill: AgentSkill, goalSpec?: AgentGoalSpec) {
     communication: ["whatsapp", "communication"],
     research: ["ai-research", "customers", "leads"],
     maintenance: ["customers", "maintenance"],
+    "sales-training": ["sales-distillation", "sales-training"],
     knowledge: ["knowledge", "agent-skills"]
   };
   const expected = aliases[goalSpec.primaryDomain] || [goalSpec.primaryDomain];

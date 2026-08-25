@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>自动获客 · 重设计预览</title>
+<style>
+  :root {
+    --canvas: #eef1f7;
+    --surface: #ffffff;
+    --surface-2: #f7f9fc;
+    --ink: #0f172a;
+    --copy: #334155;
+    --muted: #64748b;
+    --faint: #94a3b8;
+    --line: #e6eaf1;
+    --line-strong: #d6dde8;
+
+    --brand: #4f46e5;
+    --brand-2: #7c3aed;
+    --brand-hover: #4338ca;
+    --brand-soft: #eef2ff;
+    --brand-soft-2: #f5f3ff;
+
+    --success: #0ea371;
+    --success-soft: #ecfdf5;
+    --warning: #d97706;
+    --warning-soft: #fffbeb;
+    --danger: #e11d48;
+    --danger-soft: #fff1f3;
+    --info: #0ea5e9;
+    --info-soft: #f0f9ff;
+
+    --shadow-sm: 0 1px 2px rgba(15,23,42,.06);
+    --shadow: 0 10px 30px rgba(37,52,82,.10);
+    --shadow-lg: 0 24px 70px rgba(37,52,82,.14);
+    --radius: 16px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+
+  body {
+    min-height: 100vh;
+    padding: 40px 20px;
+    color: var(--ink);
+    background:
+      radial-gradient(1200px 500px at 12% -8%, #e7ecff 0%, rgba(231,236,255,0) 60%),
+      radial-gradient(1000px 460px at 96% 0%, #f3e9ff 0%, rgba(243,233,255,0) 55%),
+      var(--canvas);
+    font-family: "SF Pro Text", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page-head { max-width: 1080px; margin: 0 auto 22px; padding: 0 4px; }
+  .page-head h1 { margin: 0; font-size: 26px; font-weight: 760; letter-spacing: -.01em; }
+  .page-head p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+
+  /* ---------- launch bar (启动任务) ---------- */
+  .launch-bar {
+    max-width: 1080px;
+    margin: 0 auto 18px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 16px 18px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+  .launch-bar .hint { color: var(--muted); font-size: 12.5px; margin-right: auto; }
+  .launch-bar .hint b { color: var(--ink); font-weight: 680; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 0 16px;
+    border: 1px solid var(--line-strong);
+    border-radius: 11px;
+    background: var(--surface);
+    color: var(--copy);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 650;
+    cursor: pointer;
+    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease, color .18s ease;
+  }
+  .btn:hover { transform: translateY(-1px); border-color: #b9c4dc; box-shadow: var(--shadow-sm); }
+  .btn:active { transform: translateY(0); }
+  .btn svg { width: 16px; height: 16px; }
+
+  .btn.primary {
+    border-color: transparent;
+    color: #fff;
+    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
+    box-shadow: 0 8px 20px rgba(79,70,229,.32);
+  }
+  .btn.primary:hover { box-shadow: 0 12px 26px rgba(79,70,229,.42); border-color: transparent; }
+  .btn.primary svg { width: 15px; height: 15px; }
+
+  /* segmented search-mode toggle */
+  .seg {
+    display: inline-flex;
+    padding: 3px;
+    gap: 3px;
+    border: 1px solid var(--line-strong);
+    border-radius: 12px;
+    background: var(--surface-2);
+  }
+  .seg button {
+    min-height: 32px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 640;
+    cursor: pointer;
+    transition: all .18s ease;
+  }
+  .seg button:hover { color: var(--brand); }
+  .seg button.active {
+    color: var(--brand);
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* ---------- chat (对话框 + 固定高度) ---------- */
+  .lf-chat {
+    max-width: 1080px;
+    margin: 0 auto;
+    height: 560px;                 /* 固定高度 */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .lf-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 22px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #fbfcff 0%, #ffffff 100%);
+  }
+  .lf-head .ava {
+    display: grid;
+    place-items: center;
+    width: 38px; height: 38px;
+    border-radius: 11px;
+    color: #fff;
+    background: linear-gradient(135deg, var(--brand), var(--brand-2));
+    font-size: 12px; font-weight: 760;
+    box-shadow: 0 6px 14px rgba(79,70,229,.30);
+  }
+  .lf-head .who b { display: block; font-size: 14px; font-weight: 720; }
+  .lf-head .who small { color: var(--muted); font-size: 11.5px; }
+  .lf-status {
+    margin-left: auto;
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    background: var(--success-soft);
+    color: var(--success);
+    font-size: 11.5px; font-weight: 680;
+  }
+  .lf-status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 4px rgba(14,163,113,.16); }
+  .lf-status.live { background: var(--brand-soft); color: var(--brand); }
+  .lf-status.live .dot { background: var(--brand); box-shadow: 0 0 0 4px rgba(79,70,229,.16); animation: pulse 1.3s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+
+  .lf-thread {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 26px clamp(20px, 5vw, 64px) 30px;
+    background:
+      radial-gradient(900px 360px at 50% -10%, #f6f8ff 0%, rgba(246,248,255,0) 60%),
+      var(--surface-2);
+    scroll-behavior: smooth;
+  }
+
+  .msg { display: grid; grid-template-columns: 34px minmax(0,1fr); gap: 12px; align-items: start; margin-bottom: 22px; }
+  .msg .ava {
+    width: 34px; height: 34px; border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 760; color: #fff;
+    background: var(--ink);
+  }
+  .msg.user { grid-template-columns: minmax(0,1fr) 34px; width: min(82%, 720px); margin-left: auto; }
+  .msg.user .ava { grid-column: 2; color: var(--brand); background: var(--brand-soft); }
+  .msg.user .bubble { grid-column: 1; grid-row: 1; justify-self: end; }
+
+  .bubble { min-width: 0; max-width: 860px; }
+  .meta { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 6px; }
+  .meta b { font-size: 13px; font-weight: 720; color: var(--ink); }
+  .meta time { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+  .msg.user .bubble {
+    padding: 13px 16px;
+    border-radius: 16px 5px 16px 16px;
+    color: #fff;
+    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
+    box-shadow: 0 10px 22px rgba(79,70,229,.28);
+    font-size: 13.5px; line-height: 1.6;
+  }
+  .msg.assistant .bubble {
+    padding: 16px 18px;
+    border: 1px solid var(--line);
+    border-radius: 5px 16px 16px;
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+  }
+  .msg.assistant .bubble p { margin: 0 0 12px; color: var(--copy); font-size: 13.5px; line-height: 1.65; }
+
+  .progress { height: 7px; margin-top: 10px; overflow: hidden; border-radius: 999px; background: #e9edf4; }
+  .progress i { display: block; height: 100%; width: var(--p,0%); border-radius: inherit; background: linear-gradient(90deg, var(--brand), var(--brand-2)); transition: width .4s cubic-bezier(.16,1,.3,1); }
+
+  .facts { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 12px; font-size: 11.5px; color: var(--muted); }
+  .facts b { color: var(--ink); font-size: 13px; margin-right: 4px; font-variant-numeric: tabular-nums; }
+
+  /* event card — colored by tone, NOT a chain */
+  .msg.event .bubble {
+    display: grid;
+    grid-template-columns: minmax(0,1fr) auto;
+    gap: 4px 18px;
+    align-items: center;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--ac, var(--faint));
+    border-radius: 12px;
+    background: var(--surface);
+  }
+  .msg.event .meta { grid-column: 1 / -1; justify-content: flex-start; margin-bottom: 2px; }
+  .msg.event .ava { color: var(--ac, var(--muted)); border: 1px solid var(--ac, var(--line-strong)); background: var(--ac-soft, var(--surface)); }
+  .msg.event p { grid-column: 1; margin: 0; }
+  .msg.event p strong { display: block; color: var(--ink); font-size: 13px; font-weight: 680; line-height: 1.5; }
+  .msg.event p span { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+  .msg.event em { align-self: center; font-style: normal; font-size: 11.5px; font-weight: 700; white-space: nowrap; color: var(--ac, var(--muted)); }
+  .msg.event.is-live { --ac: var(--brand); --ac-soft: var(--brand-soft); }
+  .msg.event.is-gain { --ac: var(--success); --ac-soft: var(--success-soft); }
+  .msg.event.is-review { --ac: var(--warning); --ac-soft: var(--warning-soft); }
+  .msg.event.is-failed { --ac: var(--danger); --ac-soft: var(--danger-soft); }
+
+  /* discovery cards */
+  .msg.discovery .bubble { width: min(100%, 860px); padding: 0; border: 0; background: transparent; box-shadow: none; }
+  .disc-head { margin: 4px 0 10px; font-size: 13px; font-weight: 700; color: var(--ink); }
+  .disc-grid { display: grid; gap: 10px; }
+  .disc {
+    display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 16px;
+    width: 100%; text-align: left;
+    padding: 13px 15px;
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+    cursor: pointer;
+    transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+  }
+  .disc:hover { transform: translateY(-2px); border-color: #c3ccdd; box-shadow: var(--shadow); }
+  .disc b { display: block; font-size: 13.5px; font-weight: 700; color: var(--ink); }
+  .disc small { display: block; margin-top: 3px; color: var(--muted); font-size: 11.5px; }
+  .disc em { font-style: normal; font-weight: 760; color: var(--brand); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+  /* typing indicator */
+  .typing { display: inline-flex; gap: 5px; padding: 4px 2px; }
+  .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); animation: blink 1.2s infinite ease-in-out; }
+  .typing i:nth-child(2) { animation-delay: .2s; }
+  .typing i:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%,80%,100% { opacity: .3; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+
+  /* ---------- composer (输入条) ---------- */
+  .lf-composer {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: minmax(0,1fr) auto;
+    gap: 10px;
+    align-items: end;
+    padding: 14px 16px;
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+  }
+  .lf-input-wrap {
+    display: grid;
+    gap: 8px;
+    padding: 10px 14px;
+    border: 1px solid var(--line-strong);
+    border-radius: 14px;
+    background: var(--surface-2);
+    transition: border-color .2s ease, box-shadow .2s ease;
+  }
+  .lf-input-wrap:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); background: var(--surface); }
+  .lf-input-wrap textarea {
+    width: 100%;
+    border: 0; outline: 0; resize: none;
+    background: transparent;
+    color: var(--ink);
+    font: inherit; font-size: 13.5px; line-height: 1.55;
+    min-height: 22px; max-height: 120px;
+  }
+  .lf-input-wrap textarea::placeholder { color: var(--faint); }
+  .lf-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .lf-chip {
+    padding: 4px 10px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 11.5px; font-weight: 600;
+    cursor: pointer;
+    transition: all .16s ease;
+  }
+  .lf-chip:hover { color: var(--brand); border-color: #b9c4dc; background: var(--brand-soft); }
+  .lf-send {
+    display: inline-flex; align-items: center; gap: 8px;
+    min-height: 46px; padding: 0 20px;
+    border: 0; border-radius: 14px;
+    color: #fff; cursor: pointer;
+    font: inherit; font-size: 14px; font-weight: 700;
+    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
+    box-shadow: 0 10px 22px rgba(79,70,229,.34);
+    transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
+  }
+  .lf-send:hover { transform: translateY(-1px); box-shadow: 0 14px 28px rgba(79,70,229,.44); }
+  .lf-send:active { transform: translateY(0); }
+  .lf-send:disabled { filter: grayscale(.4) opacity(.6); cursor: default; box-shadow: none; transform: none; }
+  .lf-send svg { width: 16px; height: 16px; }
+
+  .foot-note { max-width: 1080px; margin: 14px auto 0; padding: 0 6px; color: var(--faint); font-size: 11.5px; }
+</style>
+</head>
+<body>
+  <div class="page-head">
+    <h1>自动获客</h1>
+    <p>搜客、验证与清洗实时协作 · 对话框式即时反馈（重设计预览）</p>
+  </div>
+
+  <div class="launch-bar">
+    <span class="hint">选择搜索模式后，在下方对话框里直接描述你要的客户，<b>回车即开始搜索</b>。</span>
+    <div class="seg" id="modeSeg">
+      <button class="active" data-mode="standard">标准搜索</button>
+      <button data-mode="super">超级搜索</button>
+    </div>
+    <button class="btn" id="configBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      配置数据源
+    </button>
+    <button class="btn primary" id="newTaskBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+      新建搜客任务
+    </button>
+  </div>
+
+  <section class="lf-chat" id="chat">
+    <header class="lf-head">
+      <div class="ava">AI</div>
+      <div class="who">
+        <b>搜客助手</b>
+        <small>从一份客户简报开始</small>
+      </div>
+      <span class="lf-status" id="status"><span class="dot"></span><span id="statusText">待命</span></span>
+    </header>
+
+    <div class="lf-thread" id="thread">
+      <!-- messages injected here -->
+    </div>
+
+    <div class="lf-composer">
+      <div class="lf-input-wrap">
+        <textarea id="prompt" rows="1" placeholder="描述你想找的客户，例如：优先寻找有水处理项目经验的德国分销商…"></textarea>
+        <div class="lf-chips" id="chips">
+          <button class="lf-chip">德国水处理分销商</button>
+          <button class="lf-chip">东南亚 OEM 设备厂</button>
+          <button class="lf-chip">欧洲系统集成商</button>
+          <button class="lf-chip">北美 MRO 服务商</button>
+        </div>
+      </div>
+      <button class="lf-send" id="send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+        开始搜索
+      </button>
+    </div>
+  </section>
+
+  <p class="foot-note">预览为自包含模拟：输入即出用户气泡（即时反馈），随后助理气泡流式逐条打印事实，全程固定高度、内部滚动。配色与启动按钮为本方案目标样式。</p>
+
+<script>
+  const thread = document.getElementById('thread');
+  const prompt = document.getElementById('prompt');
+  const send = document.getElementById('send');
+  const status = document.getElementById('status');
+  const statusText = document.getElementById('statusText');
+  const chips = document.getElementById('chips');
+  const modeSeg = document.getElementById('modeSeg');
+
+  let running = false;
+
+  function now() {
+    return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+  function scrollDown() { thread.scrollTop = thread.scrollHeight; }
+  function setStatus(state, text) {
+    status.className = 'lf-status' + (state === 'live' ? ' live' : '');
+    statusText.textContent = text;
+  }
+  function el(html) {
+    const t = document.createElement('template');
+    t.innerHTML = html.trim();
+    return t.content.firstChild;
+  }
+  function userMsg(text) {
+    const m = el(`<div class="msg user"><div class="ava">你</div><div class="bubble">${text}</div></div>`);
+    thread.appendChild(m); scrollDown();
+  }
+  function assistantMsg() {
+    const m = el(`<div class="msg assistant"><div class="ava">AI</div><div class="bubble"><div class="meta"><b>智能检索中</b><time>${now()}</time></div><p>正在解析你的搜索意图…</p><div class="progress"><i style="--p:6%"></i></div><div class="facts"><span><b>0</b>来源结束</span><span><b>0</b>原始命中</span><span><b>0</b>清洗去除</span><span><b>0</b>候选入池</span></div></div></div>`);
+    thread.appendChild(m); scrollDown();
+    return m;
+  }
+  function eventMsg(tone, src, title, detail, result) {
+    const m = el(`<div class="msg event is-${tone}"><div class="ava">${src.slice(0,1)}</div><div class="bubble"><div class="meta"><b>${src}</b><time>${now()}</time></div><p><strong>${title}</strong><span>${detail}</span></p><em>${result}</em></div></div>`);
+    thread.appendChild(m); scrollDown();
+  }
+  function typingMsg() {
+    const m = el(`<div class="msg assistant" id="typing"><div class="ava">AI</div><div class="bubble"><div class="typing"><i></i><i></i><i></i></div></div></div>`);
+    thread.appendChild(m); scrollDown();
+    return m;
+  }
+  function discoveryMsg(items) {
+    const cards = items.map(it => `<button class="disc"><span><b>${it.name}</b><small>${it.meta}</small></span><em>${it.score} 分</em></button>`).join('');
+    const m = el(`<div class="msg discovery"><div class="ava">客</div><div class="bubble"><div class="disc-head">新候选已进入池（${items.length}）</div><div class="disc-grid">${cards}</div></div></div>`);
+    thread.appendChild(m); scrollDown();
+  }
+  function updateAssistantProgress(m, p, facts) {
+    m.querySelector('.progress i').style.setProperty('--p', p + '%');
+    const f = m.querySelector('.facts');
+    if (f) f.innerHTML = facts.map(x => `<span><b>${x.n}</b>${x.t}</span>`).join('');
+  }
+
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+
+  async function runSearch(text) {
+    if (running) return;
+    running = true;
+    send.disabled = true;
+    userMsg(text);
+    setStatus('live', '检索中');
+    const t = typingMsg();
+    await wait(700);
+    t.remove();
+    const a = assistantMsg();
+    setStatus('live', '连接实时事件');
+    await wait(650);
+    eventMsg('live', '任务调度', '搜索任务已建立', '已选择 Google/Web · Alibaba RFQ · Europages 三个来源', '进行中');
+    updateAssistantProgress(a, 18, [{n:1,t:'来源结束'},{n:0,t:'原始命中'},{n:0,t:'清洗去除'},{n:0,t:'候选入池'}]);
+    await wait(800);
+    eventMsg('gain', 'Google/Web', '来源返回原始命中', '关键词匹配完成，初步抓取企业主页与联系人', '42 条');
+    updateAssistantProgress(a, 34, [{n:1,t:'来源结束'},{n:42,t:'原始命中'},{n:0,t:'清洗去除'},{n:0,t:'候选入池'}]);
+    await wait(850);
+    eventMsg('live', '清洗管线', '验证与去重进行中', '正在比对域名、邮箱与工商信息', '运行');
+    updateAssistantProgress(a, 55, [{n:2,t:'来源结束'},{n:42,t:'原始命中'},{n:9,t:'清洗去除'},{n:0,t:'候选入池'}]);
+    await wait(850);
+    eventMsg('review', '质量复核', '7 条进入人工复核', 'RRQ：高匹配但缺联系方式，待人工补齐', '待复核');
+    updateAssistantProgress(a, 76, [{n:3,t:'来源结束'},{n:42,t:'原始命中'},{n:14,t:'清洗去除'},{n:0,t:'候选入池'}]);
+    await wait(850);
+    eventMsg('gain', 'Europages', '候选入池完成', '已通过清洗并写入搜客清单', '28 条');
+    updateAssistantProgress(a, 92, [{n:3,t:'来源结束'},{n:42,t:'原始命中'},{n:14,t:'清洗去除'},{n:28,t:'候选入池'}]);
+    await wait(600);
+    discoveryMsg([
+      { name: 'AquaTech Vertrieb GmbH', meta: '德国 · 水处理分销 · 员工 120+', score: 92 },
+      { name: 'RheinFlow Systems', meta: '德国 · 系统集成商 · 政府项目经验', score: 88 },
+      { name: 'NordWasser Handel', meta: '德国 · 分销商 · 年采购 €4M+', score: 85 }
+    ]);
+    updateAssistantProgress(a, 100, [{n:3,t:'来源结束'},{n:42,t:'原始命中'},{n:14,t:'清洗去除'},{n:28,t:'候选入池'}]);
+    setStatus('', '已完成');
+    running = false;
+    send.disabled = false;
+  }
+
+  // composer behavior
+  function submit() {
+    const v = prompt.value.trim();
+    if (!v) return;
+    runSearch(v);
+    prompt.value = '';
+    prompt.style.height = 'auto';
+  }
+  send.addEventListener('click', submit);
+  prompt.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+  });
+  prompt.addEventListener('input', () => {
+    prompt.style.height = 'auto';
+    prompt.style.height = Math.min(120, prompt.scrollHeight) + 'px';
+  });
+  chips.addEventListener('click', (e) => {
+    const b = e.target.closest('.lf-chip');
+    if (!b) return;
+    prompt.value = b.textContent;
+    prompt.focus();
+  });
+  modeSeg.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    modeSeg.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+  });
+
+  // empty-state welcome
+  thread.appendChild(el(`
+    <div class="msg assistant">
+      <div class="ava">AI</div>
+      <div class="bubble">
+        <div class="meta"><b>搜客助手</b><time>${now()}</time></div>
+        <p>告诉我你想开发的市场和客户画像，我会实时检索、验证、清洗，并把候选一条条送到你面前。下面挑一个试试，或直接输入。</p>
+      </div>
+    </div>`));
+  scrollDown();
+</script>
+</body>
+</html>

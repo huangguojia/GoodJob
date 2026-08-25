@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { domainToASCII } from "node:url";
 import { z } from "zod";
 import { decryptProviderConfiguration } from "./credential-security.js";
+import { aiLeadFinderReadiness } from "./ai-web-search-policy.js";
 import { getProvider } from "./lead-providers.js";
 import { assertProviderOperationPolicy } from "./provider-runtime.js";
 import { activeProspectRunsForStrategy } from "./prospect-run-guards.js";
@@ -952,19 +953,27 @@ function providerReadinessIssues(
     );
     if (!catalog) continue;
     if (plan.providerId === "ai_search") {
+      const externalWebsiteSearchReady = store.providerConnections.some((item) =>
+        item.ownerId === strategy.ownerId
+        && item.teamId === strategy.teamId
+        && item.scope === "personal"
+        && item.status === "active"
+        && ["brave", "serper", "serpapi", "google_places"].includes(item.providerId)
+      );
       const ready = store.aiModelConfigs.some((item) =>
         item.ownerId === strategy.ownerId
         && item.teamId === strategy.teamId
         && item.enabled
         && item.useLeadFinder
         && Boolean(item.apiKey)
+        && aiLeadFinderReadiness(item, externalWebsiteSearchReady).ready
       );
       if (!ready) {
         issues.push({
           code: "AI_PROVIDER_NOT_READY",
           field: "providerPlan",
           providerId: plan.providerId,
-          message: "AI 搜索尚未配置可用于自动获客的启用模型"
+          message: "AI 搜索需要测试通过的 OpenAI Web Search，或普通 AI 模型加已配置的官网搜索 API"
         });
       }
       continue;

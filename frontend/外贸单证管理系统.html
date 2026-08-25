@@ -1,0 +1,1605 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>外贸单证管理系统 — Trade Document Manager</title>
+<style>
+/* ===== Design System ===== */
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", monospace;
+  --font-serif: Georgia, "Noto Serif", serif;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --radius-lg: 14px;
+  --shadow-sm: 0 1px 2px rgba(20,32,60,.06);
+  --shadow-md: 0 2px 8px rgba(20,32,60,.08), 0 1px 3px rgba(20,32,60,.06);
+  --shadow-lg: 0 8px 28px rgba(20,32,60,.10), 0 2px 6px rgba(20,32,60,.06);
+  --transition: .18s cubic-bezier(.4,0,.2,1);
+}
+/* Theme: Indigo (default) */
+:root, [data-theme="indigo"] {
+  --brand: #3157d5; --brand-strong: #2747c0; --brand-2: #6f4bd8;
+  --brand-tint: #eaf0ff; --brand-ring: rgba(49,87,213,.16);
+  --bg: #f4f6fb; --surface: #fff; --surface-2: #f7f9fd; --surface-3: #eef2f8;
+  --ink: #131a2a; --text: #2a3445; --muted: #6b7689; --border: #dde3ed; --border-strong: #c7d0de;
+  --green: #1a9e63; --green-tint: #e7f6ee; --amber: #c47d12; --amber-tint: #fbf1dc;
+  --rose: #d8453f; --rose-tint: #fdeceb; --violet: #6f4bd8;
+}
+[data-theme="emerald"] {
+  --brand: #0d9f6e; --brand-strong: #087f54; --brand-2: #059669;
+  --brand-tint: #ecfdf5; --brand-ring: rgba(13,159,110,.16);
+  --bg: #f3f7f5; --surface: #fff; --surface-2: #f7faf8; --surface-3: #ecf3ef;
+  --ink: #0f1f1a; --text: #1f3833; --muted: #6b8580; --border: #d5e2dc; --border-strong: #b8ccc3;
+  --green: #0d9f6e; --green-tint: #ecfdf5; --amber: #c47d12; --amber-tint: #fbf1dc;
+  --rose: #d8453f; --rose-tint: #fdeceb; --violet: #6f4bd8;
+}
+[data-theme="rose"] {
+  --brand: #e11d48; --brand-strong: #be123c; --brand-2: #f43f5e;
+  --brand-tint: #fff1f3; --brand-ring: rgba(225,29,72,.16);
+  --bg: #faf5f6; --surface: #fff; --surface-2: #fdf7f8; --surface-3: #f8edf0;
+  --ink: #1f0d12; --text: #3a1f28; --muted: #8a6873; --border: #f0dce0; --border-strong: #e0c3ca;
+  --green: #1a9e63; --green-tint: #e7f6ee; --amber: #c47d12; --amber-tint: #fbf1dc;
+  --rose: #e11d48; --rose-tint: #fff1f3; --violet: #6f4bd8;
+}
+[data-theme="slate"] {
+  --brand: #475569; --brand-strong: #334155; --brand-2: #64748b;
+  --brand-tint: #f1f5f9; --brand-ring: rgba(71,85,105,.16);
+  --bg: #f4f6f8; --surface: #fff; --surface-2: #f8fafc; --surface-3: #eef2f6;
+  --ink: #0f172a; --text: #1e293b; --muted: #64748b; --border: #dde4ec; --border-strong: #cbd5e1;
+  --green: #1a9e63; --green-tint: #e7f6ee; --amber: #c47d12; --amber-tint: #fbf1dc;
+  --rose: #d8453f; --rose-tint: #fdeceb; --violet: #6f4bd8;
+}
+[data-theme="amber"] {
+  --brand: #d97706; --brand-strong: #b45309; --brand-2: #f59e0b;
+  --brand-tint: #fffbeb; --brand-ring: rgba(217,119,6,.16);
+  --bg: #faf8f4; --surface: #fff; --surface-2: #fdfbf7; --surface-3: #f5f0e6;
+  --ink: #1c1407; --text: #3d2e14; --muted: #8a7b66; --border: #ede4d4; --border-strong: #dccfb5;
+  --green: #1a9e63; --green-tint: #e7f6ee; --amber: #d97706; --amber-tint: #fffbeb;
+  --rose: #d8453f; --rose-tint: #fdeceb; --violet: #6f4bd8;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: var(--font-sans); font-size: 14px; line-height: 1.5;
+  transition: background var(--transition), color var(--transition);
+}
+
+/* ===== App Shell ===== */
+.app-shell { display: grid; grid-template-columns: 240px 1fr; height: 100vh; }
+
+/* ===== Sidebar ===== */
+.sidebar {
+  background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden;
+  transition: background var(--transition), border-color var(--transition);
+}
+.sidebar-header { padding: 18px 20px 14px; border-bottom: 1px solid var(--border); }
+.sidebar-header .logo { display: flex; align-items: center; gap: 10px; }
+.sidebar-header .logo-icon {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: var(--brand); display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 800; font-size: 14px; flex-shrink: 0;
+  box-shadow: 0 2px 8px var(--brand-ring);
+}
+.sidebar-header .logo-text { font-size: 14px; font-weight: 700; color: var(--ink); line-height: 1.3; }
+.sidebar-header .logo-text .sub { font-size: 10px; font-weight: 600; color: var(--muted); }
+
+.sidebar-nav { flex: 1; overflow-y: auto; padding: 10px 8px; }
+.sidebar-nav::-webkit-scrollbar { width: 4px; }
+.sidebar-nav::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+.nav-section { margin-bottom: 16px; }
+.nav-section-title {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;
+  color: var(--muted); padding: 8px 12px 4px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 600;
+  color: var(--text); transition: all var(--transition); position: relative;
+}
+.nav-item:hover { background: var(--surface-3); }
+.nav-item.active { background: var(--brand-tint); color: var(--brand); }
+.nav-item .nav-icon { width: 18px; text-align: center; flex-shrink: 0; font-size: 15px; }
+.nav-item .nav-badge {
+  margin-left: auto; font-size: 10px; font-weight: 700; padding: 2px 6px;
+  border-radius: 10px; background: var(--surface-3); color: var(--muted);
+}
+.nav-item.active .nav-badge { background: var(--brand); color: #fff; }
+
+.sidebar-footer { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+.theme-picker { display: flex; gap: 5px; }
+.theme-dot { width: 18px; height: 18px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: all var(--transition); }
+.theme-dot.active { border-color: var(--ink); transform: scale(1.15); }
+
+/* ===== Main Area ===== */
+.main { display: flex; flex-direction: column; overflow: hidden; }
+.topbar {
+  height: 56px; border-bottom: 1px solid var(--border); background: var(--surface);
+  display: flex; align-items: center; padding: 0 24px; gap: 16px; flex-shrink: 0;
+  transition: all var(--transition);
+}
+.topbar-title { font-size: 16px; font-weight: 700; color: var(--ink); }
+.topbar-spacer { flex: 1; }
+.topbar-search {
+  width: 280px; padding: 7px 12px 7px 34px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font-size: 13px; background: var(--surface-2) var(--surface-2);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236b7689' stroke-width='2.5' stroke-linecap='round'%3C%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: 10px center; color: var(--text);
+  transition: all var(--transition);
+}
+.topbar-search:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); background-color: var(--surface); }
+
+.seg { display: flex; background: var(--surface-3); border-radius: var(--radius-sm); padding: 2px; gap: 2px; }
+.seg button { border: none; background: transparent; padding: 5px 10px; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; border-radius: 4px; transition: all var(--transition); font-family: inherit; }
+.seg button:hover { color: var(--text); }
+.seg button.active { background: var(--surface); color: var(--brand); box-shadow: var(--shadow-sm); }
+
+.content-area { flex: 1; overflow: hidden; position: relative; }
+.view { position: absolute; inset: 0; overflow-y: auto; padding: 24px; }
+.view::-webkit-scrollbar { width: 6px; }
+.view::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+
+/* ===== Dashboard ===== */
+.stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+.stat-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 18px 20px; transition: all var(--transition);
+}
+.stat-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.stat-card .stat-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
+.stat-card .stat-value { font-size: 28px; font-weight: 800; color: var(--ink); margin: 4px 0; font-variant-numeric: tabular-nums; }
+.stat-card .stat-trend { font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 4px; }
+.stat-trend.up { color: var(--green); }
+.stat-trend.down { color: var(--rose); }
+
+.doc-type-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; margin-bottom: 24px; }
+.doc-type-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 18px; cursor: pointer; transition: all var(--transition); position: relative; overflow: hidden;
+}
+.doc-type-card:hover { border-color: var(--brand); box-shadow: 0 4px 16px var(--brand-ring); transform: translateY(-2px); }
+.doc-type-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: var(--brand); opacity: 0; transition: opacity var(--transition);
+}
+.doc-type-card:hover::before { opacity: 1; }
+.doc-type-card .dt-icon { font-size: 28px; margin-bottom: 10px; line-height: 1; }
+.doc-type-card .dt-name { font-size: 14px; font-weight: 700; color: var(--ink); }
+.doc-type-card .dt-desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.doc-type-card .dt-count { font-size: 11px; font-weight: 700; color: var(--brand); margin-top: 8px; }
+
+.recent-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.recent-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; }
+.recent-header h3 { font-size: 14px; font-weight: 700; color: var(--ink); }
+.recent-table { width: 100%; }
+.recent-table th { text-align: left; padding: 10px 16px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); border-bottom: 1px solid var(--border); }
+.recent-table td { padding: 10px 16px; font-size: 13px; border-bottom: 1px solid var(--surface-3); }
+.recent-table tr:last-child td { border-bottom: none; }
+.recent-table tr:hover { background: var(--surface-2); }
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+.badge-draft { background: var(--surface-3); color: var(--muted); }
+.badge-sent { background: var(--brand-tint); color: var(--brand); }
+.badge-viewed { background: var(--amber-tint); color: var(--amber); }
+.badge-accepted { background: var(--green-tint); color: var(--green); }
+.badge-archived { background: var(--surface-3); color: var(--muted); }
+
+/* ===== Editor ===== */
+.editor-layout { display: grid; grid-template-columns: 360px 1fr; height: 100%; gap: 0; }
+.editor-config { background: var(--surface); border-right: 1px solid var(--border); overflow-y: auto; padding: 18px 20px 80px; }
+.editor-config::-webkit-scrollbar { width: 5px; }
+.editor-config::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+.editor-preview { overflow: auto; padding: 28px; background: var(--bg); display: flex; justify-content: center; }
+.editor-preview::-webkit-scrollbar { width: 6px; }
+.editor-preview::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+
+.config-section { margin-bottom: 20px; }
+.config-section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); margin-bottom: 10px; }
+.field { margin-bottom: 10px; }
+.field label { display: block; font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.field input, .field select, .field textarea {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 13px; font-family: inherit; color: var(--text); background: var(--surface);
+  transition: all var(--transition);
+}
+.field input:focus, .field select:focus, .field textarea:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); }
+.field-row { display: flex; gap: 10px; }
+.field-row .field { flex: 1; }
+
+.data-source-list { display: flex; flex-direction: column; gap: 6px; }
+.data-source-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); cursor: pointer; transition: all var(--transition); font-size: 13px;
+}
+.data-source-item:hover { border-color: var(--brand); background: var(--brand-tint); }
+.data-source-item.selected { border-color: var(--brand); background: var(--brand-tint); }
+.data-source-item .ds-icon { font-size: 18px; }
+.data-source-item .ds-info { flex: 1; }
+.data-source-item .ds-name { font-weight: 600; color: var(--ink); }
+.data-source-item .ds-meta { font-size: 11px; color: var(--muted); }
+
+.items-edit-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.items-edit-table th { text-align: left; font-weight: 600; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; padding: 6px 4px; border-bottom: 1px solid var(--border); }
+.items-edit-table td { padding: 4px; }
+.items-edit-table tr { border-bottom: 1px solid var(--surface-3); }
+.items-edit-table input { width: 100%; border: 1px solid transparent; background: transparent; padding: 5px 6px; font-size: 12px; font-family: inherit; color: var(--text); border-radius: 4px; transition: all .12s; }
+.items-edit-table input:hover { border-color: var(--border); background: var(--surface-2); }
+.items-edit-table input:focus { outline: none; border-color: var(--brand); background: var(--surface); box-shadow: 0 0 0 2px var(--brand-ring); }
+.items-edit-table input[type="number"] { font-variant-numeric: tabular-nums; text-align: right; }
+.btn-del-row { border: none; background: transparent; color: var(--muted); cursor: pointer; padding: 4px; border-radius: 4px; font-size: 14px; }
+.btn-del-row:hover { color: var(--rose); background: var(--rose-tint); }
+.btn-add-row { width: 100%; border: 1px dashed var(--border-strong); background: var(--surface-2); color: var(--muted); padding: 7px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 600; cursor: pointer; margin-top: 8px; transition: all var(--transition); font-family: inherit; }
+.btn-add-row:hover { color: var(--brand); border-color: var(--brand); background: var(--brand-tint); }
+
+.config-totals { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.total-row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; color: var(--muted); }
+.total-row.grand { font-size: 14px; font-weight: 700; color: var(--ink); margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
+.total-row .val { font-variant-numeric: tabular-nums; }
+
+.editor-actions { position: absolute; bottom: 0; right: 0; left: 360px; background: var(--surface); border-top: 1px solid var(--border); padding: 10px 24px; display: flex; align-items: center; gap: 10px; z-index: 20; box-shadow: 0 -2px 12px rgba(20,32,60,.04); }
+.btn { border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: 8px 14px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; cursor: pointer; transition: all var(--transition); display: inline-flex; align-items: center; gap: 6px; font-family: inherit; }
+.btn:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.btn-primary { background: var(--brand); border-color: var(--brand); color: #fff; box-shadow: 0 1px 2px rgba(20,32,60,.12), 0 4px 12px var(--brand-ring); }
+.btn-primary:hover { background: var(--brand-strong); }
+.btn svg { width: 14px; height: 14px; }
+
+/* ===== Document Preview ===== */
+.doc-paper {
+  width: 780px; min-height: 1100px; background: #fff; padding: 48px 52px;
+  box-shadow: var(--shadow-lg); border-radius: 2px; font-size: 13px; color: #1a2332; line-height: 1.55;
+  transition: direction .2s; flex-shrink: 0;
+}
+.doc-paper[dir="rtl"] { text-align: right; font-size: 14px; }
+.doc-letterhead { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 20px; border-bottom: 2px solid var(--brand); margin-bottom: 28px; }
+.doc-paper[dir="rtl"] .doc-letterhead { flex-direction: row-reverse; }
+.doc-seller .seller-name { font-size: 20px; font-weight: 800; color: var(--brand); letter-spacing: -0.3px; margin-bottom: 4px; }
+.doc-seller .seller-info { font-size: 11px; color: #5a6577; line-height: 1.5; }
+.doc-title-block { text-align: right; }
+.doc-paper[dir="rtl"] .doc-title-block { text-align: left; }
+.doc-title-block .doc-title { font-size: 22px; font-weight: 800; color: #131a2a; text-transform: uppercase; letter-spacing: 0.5px; }
+.doc-title-block .doc-number { font-size: 12px; color: #5a6577; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.doc-parties { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-bottom: 28px; }
+.doc-paper[dir="rtl"] .doc-parties { direction: rtl; }
+.party-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--brand); margin-bottom: 6px; }
+.party-name { font-size: 14px; font-weight: 700; color: #131a2a; margin-bottom: 2px; }
+.party-detail { font-size: 11px; color: #5a6577; line-height: 1.55; }
+.doc-meta { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0; margin-bottom: 24px; border: 1px solid #e0e5ee; border-radius: 6px; overflow: hidden; }
+.doc-meta-item { padding: 10px 14px; border-right: 1px solid #e0e5ee; }
+.doc-meta-item:last-child { border-right: none; }
+.doc-paper[dir="rtl"] .doc-meta-item { border-right: none; border-left: 1px solid #e0e5ee; }
+.doc-paper[dir="rtl"] .doc-meta-item:last-child { border-left: none; }
+.doc-meta-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #8893a4; margin-bottom: 2px; }
+.doc-meta-value { font-size: 12px; font-weight: 600; color: #131a2a; font-variant-numeric: tabular-nums; }
+.doc-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+.doc-table thead th { background: color-mix(in srgb, var(--brand) 8%, #fff); color: #3a4658; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; padding: 9px 10px; text-align: left; border-bottom: 2px solid var(--brand); }
+.doc-paper[dir="rtl"] .doc-table thead th { text-align: right; }
+.doc-table thead th.num { text-align: right; }
+.doc-paper[dir="rtl"] .doc-table thead th.num { text-align: left; }
+.doc-table tbody td { padding: 9px 10px; border-bottom: 1px solid #e8edf4; font-size: 12px; color: #2a3445; vertical-align: top; }
+.doc-table tbody td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.doc-paper[dir="rtl"] .doc-table tbody td.num { text-align: left; }
+.doc-table tbody td.item-no { color: #8893a4; font-weight: 600; width: 32px; }
+.doc-table .product-name { font-weight: 600; color: #131a2a; }
+.doc-totals-area { display: flex; justify-content: flex-end; margin-bottom: 24px; }
+.doc-paper[dir="rtl"] .doc-totals-area { justify-content: flex-start; }
+.doc-totals { width: 280px; }
+.doc-total-line { display: flex; justify-content: space-between; padding: 5px 0; font-size: 12px; color: #5a6577; }
+.doc-total-line.grand { font-size: 15px; font-weight: 800; color: #131a2a; padding: 10px 0 6px; margin-top: 4px; border-top: 2px solid var(--brand); font-variant-numeric: tabular-nums; }
+.doc-total-line .val { font-variant-numeric: tabular-nums; font-weight: 600; color: #131a2a; }
+.doc-total-line.grand .val { font-size: 17px; color: var(--brand); }
+.amount-in-words { background: #f7f9fd; border: 1px solid #e0e5ee; border-radius: 6px; padding: 10px 14px; margin-bottom: 24px; font-size: 11px; color: #5a6577; }
+.amount-in-words strong { color: #131a2a; }
+.doc-terms { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 28px; padding-top: 16px; border-top: 1px solid #e0e5ee; }
+.doc-paper[dir="rtl"] .doc-terms { direction: rtl; }
+.term-block .term-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--brand); margin-bottom: 4px; }
+.term-block .term-value { font-size: 11px; color: #3a4658; line-height: 1.55; }
+.doc-bank { background: color-mix(in srgb, var(--brand) 4%, #fff); border: 1px solid color-mix(in srgb, var(--brand) 20%, #fff); border-radius: 6px; padding: 14px 16px; margin-bottom: 28px; }
+.doc-bank .bank-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--brand); margin-bottom: 8px; }
+.doc-bank-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; font-size: 11px; color: #3a4658; }
+.doc-bank-grid .bk-label { color: #7a8499; }
+.doc-bank-grid .bk-val { font-weight: 600; color: #131a2a; }
+.doc-signature { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 32px; padding-top: 16px; border-top: 1px solid #e0e5ee; }
+.doc-paper[dir="rtl"] .doc-signature { direction: rtl; }
+.sig-block { text-align: center; }
+.sig-block .sig-line { width: 200px; border-top: 1px solid #3a4658; padding-top: 4px; font-size: 11px; color: #5a6577; }
+.sig-stamp { width: 90px; height: 90px; border: 2px solid var(--brand); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--brand); font-size: 9px; font-weight: 800; text-align: center; opacity: 0.7; transform: rotate(-8deg); line-height: 1.2; }
+
+/* Contract specific */
+.contract-body { font-size: 12px; color: #2a3445; line-height: 1.7; }
+.contract-clause { margin-bottom: 14px; }
+.contract-clause .clause-title { font-weight: 700; color: #131a2a; margin-bottom: 4px; font-size: 12px; }
+.contract-clause .clause-body { font-size: 11px; color: #5a6577; }
+
+/* Shipping Advice specific */
+.ship-advice-body { font-size: 12px; color: #2a3445; line-height: 1.8; margin-bottom: 20px; }
+.ship-advice-body p { margin-bottom: 10px; }
+
+/* COO specific */
+.coo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+.coo-box { border: 1px solid #e0e5ee; border-radius: 6px; padding: 14px; }
+.coo-box .coo-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--brand); margin-bottom: 6px; }
+.coo-box .coo-value { font-size: 12px; color: #2a3445; }
+
+/* ===== Self Test Panel ===== */
+.test-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; max-width: 800px; }
+.test-panel-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+.test-panel-header h3 { font-size: 14px; font-weight: 700; color: var(--ink); }
+.test-results { padding: 8px 0; }
+.test-item { display: flex; align-items: center; gap: 10px; padding: 10px 20px; font-size: 13px; border-bottom: 1px solid var(--surface-3); }
+.test-item:last-child { border-bottom: none; }
+.test-icon { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+.test-icon.pass { background: var(--green-tint); color: var(--green); }
+.test-icon.fail { background: var(--rose-tint); color: var(--rose); }
+.test-icon.pending { background: var(--surface-3); color: var(--muted); }
+.test-name { flex: 1; font-weight: 600; color: var(--text); }
+.test-detail { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.empty-state { text-align: center; padding: 80px 20px; color: var(--muted); }
+.empty-state .empty-icon { font-size: 48px; margin-bottom: 12px; }
+.empty-state h3 { font-size: 16px; font-weight: 700; color: var(--ink); margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<div class="app-shell" data-theme="indigo">
+  <!-- ===== Sidebar ===== -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <div class="logo-icon">TD</div>
+        <div class="logo-text">单证中心<span class="sub">Trade Document Hub</span></div>
+      </div>
+    </div>
+    <nav class="sidebar-nav" id="sidebarNav"></nav>
+    <div class="sidebar-footer">
+      <span style="font-size: 11px; color: var(--muted); font-weight: 600;">主题</span>
+      <div class="theme-picker" id="themePicker"></div>
+    </div>
+  </aside>
+
+  <!-- ===== Main ===== -->
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-title" id="topbarTitle">仪表盘</div>
+      <div class="topbar-spacer"></div>
+      <input type="text" class="topbar-search" placeholder="搜索单证编号、客户..." id="searchInput">
+      <div class="seg" id="langSeg">
+        <button class="active" data-lang="zh">中文</button>
+        <button data-lang="en">EN</button>
+        <button data-lang="es">ES</button>
+        <button data-lang="ru">RU</button>
+        <button data-lang="ar">عربي</button>
+      </div>
+      <button class="btn btn-primary" id="btnNew" style="display:none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        新建单证
+      </button>
+    </div>
+    <div class="content-area">
+      <!-- Dashboard view -->
+      <div class="view" id="view-dashboard"></div>
+      <!-- List view -->
+      <div class="view" id="view-list" style="display:none;"></div>
+      <!-- Editor view -->
+      <div class="view" id="view-editor" style="display:none; padding:0;"></div>
+      <!-- Test view -->
+      <div class="view" id="view-test" style="display:none;"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== Document Type Definitions =====
+const DOC_TYPES = {
+  pi: { icon: '📋', zh: '形式发票', en: 'Proforma Invoice', desc_zh: '报价用形式发票', desc_en: 'Quotation PI', hasPrice: true, hasBank: true, hasTerms: true },
+  ci: { icon: '🧾', zh: '商业发票', en: 'Commercial Invoice', desc_zh: '清关用正式发票', desc_en: 'Customs CI', hasPrice: true, hasBank: true, hasTerms: true },
+  pl: { icon: '📦', zh: '装箱单', en: 'Packing List', desc_zh: '装箱明细清单', desc_en: 'Packing details', hasPrice: false, hasBank: false, hasTerms: false, hasWeight: true },
+  contract: { icon: '📝', zh: '销售合同', en: 'Sales Contract', desc_zh: '正式销售合同', desc_en: 'Sales contract', hasPrice: true, hasBank: true, hasTerms: true, isContract: true },
+  quotation: { icon: '💹', zh: '报价单', en: 'Quotation', desc_zh: '产品报价单', desc_en: 'Product quote', hasPrice: true, hasBank: false, hasTerms: true },
+  coo: { icon: '🌍', zh: '原产地证', en: 'Certificate of Origin', desc_zh: '产地证明文件', desc_en: 'Origin certificate', hasPrice: false, hasBank: false, hasTerms: false, isCOO: true },
+  shipping: { icon: '🚢', zh: '装运通知', en: 'Shipping Advice', desc_zh: '装运通知函', desc_en: 'Shipping notice', hasPrice: false, hasBank: false, hasTerms: false, isShipping: true },
+};
+
+// ===== i18n =====
+const I18N = {
+  zh: {
+    dashboard: '仪表盘', allDocs: '全部单证', selfTest: '自测面板',
+    total: '单证总数', sent: '已发送', draft: '草稿', accepted: '已接受',
+    recentDocs: '最近单证', docNumber: '编号', type: '类型', customer: '客户',
+    amount: '金额', status: '状态', date: '日期', actions: '操作',
+    newDoc: '新建单证', selectType: '选择单证类型', selectSource: '选择数据源',
+    dataSource: '数据源', language: '语言', currency: '币种', incoterms: '贸易术语',
+    paymentTerms: '付款条款', validity: '有效期(天)', deliveryTime: '交货期', port: '港口',
+    lineItems: '行项目', buyerInfo: '买方信息', sellerInfo: '卖方信息',
+    productName: '产品名称', model: '型号', qty: '数量', unitPrice: '单价', discount: '折扣%',
+    addRow: '添加行项目', subtotal: '小计', discountTotal: '折扣', grandTotal: '合计',
+    generatePdf: '生成 PDF', sendWa: '发送 WhatsApp', saveDraft: '存草稿', back: '返回',
+    deal: '商机', product: '产品', customer: '客户', manual: '手动输入',
+    sayTotal: '大写金额：', inc_EXW: 'EXW — 工厂交货', inc_FOB: 'FOB — 船上交货',
+    inc_CIF: 'CIF — 成本+保险+运费', inc_DAP: 'DAP — 目的地交货',
+    pay_tt30: '电汇 30% 预付，70% 装船前付清', pay_tt50: '电汇 50% 预付，50% 装船前付清',
+    pay_tt100: '电汇 100% 预付', pay_lc: '即期信用证', pay_oa30: '赊销 30 天',
+    to: '收货方', from: '发货方', validUntil: '有效期至', attn: '联系人：',
+    bankDetails: '银行信息', bank: '开户行', acctName: '户名', acctNo: '账号', swift: 'SWIFT代码',
+    signature: '授权签字及公司盖章', days: '天', searchPlaceholder: '搜索单证编号、客户...',
+    noDocs: '暂无单证', noDocsHint: '点击「新建单证」创建第一个文档',
+    runTest: '运行测试', testResults: '测试结果', allTestsPassed: '全部测试通过',
+    validSuffix: '天',
+  },
+  en: {
+    dashboard: 'Dashboard', allDocs: 'All Documents', selfTest: 'Self-Test',
+    total: 'Total Docs', sent: 'Sent', draft: 'Drafts', accepted: 'Accepted',
+    recentDocs: 'Recent Documents', docNumber: 'Number', type: 'Type', customer: 'Customer',
+    amount: 'Amount', status: 'Status', date: 'Date', actions: 'Actions',
+    newDoc: 'New Document', selectType: 'Select Document Type', selectSource: 'Select Data Source',
+    dataSource: 'Data Source', language: 'Language', currency: 'Currency', incoterms: 'Incoterms',
+    paymentTerms: 'Payment Terms', validity: 'Validity (days)', deliveryTime: 'Delivery Time', port: 'Port',
+    lineItems: 'Line Items', buyerInfo: 'Buyer Info', sellerInfo: 'Seller Info',
+    productName: 'Product Name', model: 'Model', qty: 'Qty', unitPrice: 'Unit Price', discount: 'Disc.%',
+    addRow: 'Add Row', subtotal: 'Subtotal', discountTotal: 'Discount', grandTotal: 'Grand Total',
+    generatePdf: 'Generate PDF', sendWa: 'Send WhatsApp', saveDraft: 'Save Draft', back: 'Back',
+    deal: 'Deal', product: 'Product', customer: 'Customer', manual: 'Manual',
+    sayTotal: 'Say total:', inc_EXW: 'EXW — Ex Works', inc_FOB: 'FOB — Free on Board',
+    inc_CIF: 'CIF — Cost, Insurance & Freight', inc_DAP: 'DAP — Delivered at Place',
+    pay_tt30: 'T/T 30% deposit, 70% before shipment', pay_tt50: 'T/T 50% deposit, 50% before shipment',
+    pay_tt100: 'T/T 100% in advance', pay_lc: 'L/C at sight', pay_oa30: 'O/A 30 days',
+    to: 'TO', from: 'FROM', validUntil: 'Valid Until', attn: 'Attn:',
+    bankDetails: 'Bank Details', bank: 'Bank', acctName: 'Account Name', acctNo: 'Account No.', swift: 'SWIFT',
+    signature: 'Authorized Signature & Company Stamp', days: 'days', searchPlaceholder: 'Search doc number, customer...',
+    noDocs: 'No documents yet', noDocsHint: 'Click "New Document" to create your first one',
+    runTest: 'Run Tests', testResults: 'Test Results', allTestsPassed: 'All tests passed',
+    validSuffix: 'days',
+  },
+  es: {
+    dashboard: 'Panel', allDocs: 'Todos', selfTest: 'Auto-prueba',
+    total: 'Total', sent: 'Enviados', draft: 'Borradores', accepted: 'Aceptados',
+    recentDocs: 'Documentos Recientes', docNumber: 'Número', type: 'Tipo', customer: 'Cliente',
+    amount: 'Importe', status: 'Estado', date: 'Fecha', actions: 'Acciones',
+    newDoc: 'Nuevo Documento', selectType: 'Seleccionar Tipo', selectSource: 'Seleccionar Origen',
+    dataSource: 'Origen de Datos', language: 'Idioma', currency: 'Moneda', incoterms: 'Incoterms',
+    paymentTerms: 'Pago', validity: 'Validez (días)', deliveryTime: 'Entrega', port: 'Puerto',
+    lineItems: 'Artículos', buyerInfo: 'Comprador', sellerInfo: 'Vendedor',
+    productName: 'Producto', model: 'Modelo', qty: 'Cant.', unitPrice: 'Precio', discount: 'Desc.%',
+    addRow: 'Añadir Fila', subtotal: 'Subtotal', discountTotal: 'Descuento', grandTotal: 'Total',
+    generatePdf: 'Generar PDF', sendWa: 'Enviar WhatsApp', saveDraft: 'Guardar Borrador', back: 'Volver',
+    deal: 'Oferta', product: 'Producto', customer: 'Cliente', manual: 'Manual',
+    sayTotal: 'Total en palabras:', inc_EXW: 'EXW — En Fábrica', inc_FOB: 'FOB — Libre a Bordo',
+    inc_CIF: 'CIF — Coste, Seguro y Flete', inc_DAP: 'DAP — Entregado en Lugar',
+    pay_tt30: 'T/T 30% depósito, 70% antes del envío', pay_tt50: 'T/T 50% depósito, 50% antes del envío',
+    pay_tt100: 'T/T 100% por adelantado', pay_lc: 'L/C a la vista', pay_oa30: 'O/A 30 días',
+    to: 'PARA', from: 'DE', validUntil: 'Válido Hasta', attn: 'Attn:',
+    bankDetails: 'Datos Bancarios', bank: 'Banco', acctName: 'Titular', acctNo: 'Nº Cuenta', swift: 'SWIFT',
+    signature: 'Firma Autorizada y Sello', days: 'días', searchPlaceholder: 'Buscar número, cliente...',
+    noDocs: 'Sin documentos', noDocsHint: 'Haga clic en "Nuevo Documento" para crear el primero',
+    runTest: 'Ejecutar Pruebas', testResults: 'Resultados', allTestsPassed: 'Todas las pruebas pasaron',
+    validSuffix: 'días',
+  },
+  ru: {
+    dashboard: 'Панель', allDocs: 'Все документы', selfTest: 'Самотест',
+    total: 'Всего', sent: 'Отправлено', draft: 'Черновики', accepted: 'Принято',
+    recentDocs: 'Недавние документы', docNumber: 'Номер', type: 'Тип', customer: 'Клиент',
+    amount: 'Сумма', status: 'Статус', date: 'Дата', actions: 'Действия',
+    newDoc: 'Новый документ', selectType: 'Выбрать тип', selectSource: 'Выбрать источник',
+    dataSource: 'Источник данных', language: 'Язык', currency: 'Валюта', incoterms: 'Инкотермс',
+    paymentTerms: 'Условия оплаты', validity: 'Срок (дней)', deliveryTime: 'Срок поставки', port: 'Порт',
+    lineItems: 'Позиции', buyerInfo: 'Покупатель', sellerInfo: 'Продавец',
+    productName: 'Товар', model: 'Модель', qty: 'Кол-во', unitPrice: 'Цена', discount: 'Скидка%',
+    addRow: 'Добавить строку', subtotal: 'Итого', discountTotal: 'Скидка', grandTotal: 'Всего',
+    generatePdf: 'Создать PDF', sendWa: 'Отправить WhatsApp', saveDraft: 'Сохранить черновик', back: 'Назад',
+    deal: 'Сделка', product: 'Товар', customer: 'Клиент', manual: 'Вручную',
+    sayTotal: 'Сумма прописью:', inc_EXW: 'EXW — Франко-завод', inc_FOB: 'FOB — Свободно на борту',
+    inc_CIF: 'CIF — Стоимость, страхование и фрахт', inc_DAP: 'DAP — Поставка до места',
+    pay_tt30: 'T/T 30% аванс, 70% перед отгрузкой', pay_tt50: 'T/T 50% аванс, 50% перед отгрузкой',
+    pay_tt100: 'T/T 100% предоплата', pay_lc: 'Аккредитив по предъявлении', pay_oa30: 'Отсрочка 30 дней',
+    to: 'КОМУ', from: 'ОТ', validUntil: 'Действительно до', attn: 'Внимание:',
+    bankDetails: 'Банковские реквизиты', bank: 'Банк', acctName: 'Получатель', acctNo: '№ счета', swift: 'SWIFT',
+    signature: 'Авторизированная подпись и печать', days: 'дней', searchPlaceholder: 'Поиск по номеру, клиенту...',
+    noDocs: 'Нет документов', noDocsHint: 'Нажмите «Новый документ» для создания',
+    runTest: 'Запустить тесты', testResults: 'Результаты', allTestsPassed: 'Все тесты пройдены',
+    validSuffix: 'дней',
+  },
+  ar: {
+    dashboard: 'لوحة التحكم', allDocs: 'كل المستندات', selfTest: 'اختبار ذاتي',
+    total: 'الإجمالي', sent: 'مرسل', draft: 'مسودات', accepted: 'مقبول',
+    recentDocs: 'المستندات الأخيرة', docNumber: 'الرقم', type: 'النوع', customer: 'العميل',
+    amount: 'المبلغ', status: 'الحالة', date: 'التاريخ', actions: 'إجراءات',
+    newDoc: 'مستند جديد', selectType: 'اختر النوع', selectSource: 'اختر المصدر',
+    dataSource: 'مصدر البيانات', language: 'اللغة', currency: 'العملة', incoterms: 'شروط التسليم',
+    paymentTerms: 'شروط الدفع', validity: 'الصلاحية (يوم)', deliveryTime: 'مدة التسليم', port: 'الميناء',
+    lineItems: 'البنود', buyerInfo: 'المشتري', sellerInfo: 'البائع',
+    productName: 'المنتج', model: 'الموديل', qty: 'الكمية', unitPrice: 'السعر', discount: 'خصم%',
+    addRow: 'إضافة صف', subtotal: 'المجموع الفرعي', discountTotal: 'الخصم', grandTotal: 'المجموع الكلي',
+    generatePdf: 'إنشاء PDF', sendWa: 'إرسال WhatsApp', saveDraft: 'حفظ مسودة', back: 'رجوع',
+    deal: 'صفقة', product: 'منتج', customer: 'عميل', manual: 'يدوي',
+    sayTotal: 'المجموع بالكلمات:', inc_EXW: 'EXW — تسليم المصنع', inc_FOB: 'FOB — على ظهر السفينة',
+    inc_CIF: 'CIF — التكلفة والتأمين والشحن', inc_DAP: 'DAP — التسليم في المكان',
+    pay_tt30: 'تحويل 30% مقدماً، 70% قبل الشحن', pay_tt50: 'تحويل 50% مقدماً، 50% قبل الشحن',
+    pay_tt100: 'تحويل 100% مقدماً', pay_lc: 'اعتماد مستندي عند الاطلاع', pay_oa30: 'آجل 30 يوماً',
+    to: 'إلى', from: 'من', validUntil: 'صالح حتى', attn: 'المعني:',
+    bankDetails: 'التفاصيل المصرفية', bank: 'البنك', acctName: 'اسم الحساب', acctNo: 'رقم الحساب', swift: 'سويفت',
+    signature: 'التوقيع المعتمد وختم الشركة', days: 'يوم', searchPlaceholder: 'بحث بالرقم أو العميل...',
+    noDocs: 'لا توجد مستندات', noDocsHint: 'انقر على «مستند جديد» لإنشاء أول مستند',
+    runTest: 'تشغيل الاختبارات', testResults: 'النتائج', allTestsPassed: 'جميع الاختبارات نجحت',
+    validSuffix: 'يوم',
+  }
+};
+
+const CUR_SYMBOLS = { USD: '$', EUR: '€', CNY: '¥', GBP: '£' };
+const CUR_LOCALES = { USD: 'en-US', EUR: 'de-DE', CNY: 'zh-CN', GBP: 'en-GB' };
+const THEMES = [
+  { id: 'indigo', color: '#3157d5' },
+  { id: 'emerald', color: '#0d9f6e' },
+  { id: 'rose', color: '#e11d48' },
+  { id: 'slate', color: '#475569' },
+  { id: 'amber', color: '#d97706' },
+];
+
+// ===== Mock Data Sources =====
+const DATA_SOURCES = {
+  deals: [
+    { id: 'deal_001', title: 'LED Flood Light — Al-Rashid Trading', customer: 'Al-Rashid Trading Co.', customerId: 'cus_001', amount: 13537.50, currency: 'USD',
+      items: [
+        { desc: 'Industrial LED Flood Light 200W', model: 'GJ-FL-200W', hs: '9405.42', qty: 500, unit: 'PCS', price: 28.50, disc: 5, weight: 2.5, pkg: 10 },
+        { desc: 'Smart Street Light Controller', model: 'GJ-SC-01', hs: '8537.10', qty: 200, unit: 'PCS', price: 45.00, disc: 0, weight: 0.8, pkg: 5 },
+        { desc: 'Solar Panel Mono 450W', model: 'GJ-PV-450M', hs: '8541.43', qty: 120, unit: 'PCS', price: 112.00, disc: 8, weight: 23.0, pkg: 2 },
+      ]
+    },
+    { id: 'deal_002', title: 'Power Tools — Moscow Hardware', customer: 'Moscow Hardware LLC', customerId: 'cus_002', amount: 28900.00, currency: 'EUR',
+      items: [
+        { desc: 'Cordless Impact Drill 20V', model: 'GJ-ID-20V', hs: '8467.21', qty: 800, unit: 'PCS', price: 22.00, disc: 10, weight: 1.8, pkg: 10 },
+        { desc: 'Rotary Hammer SDS-Plus', model: 'GJ-RH-26', hs: '8467.21', qty: 300, unit: 'PCS', price: 45.00, disc: 5, weight: 3.5, pkg: 4 },
+      ]
+    },
+    { id: 'deal_003', title: 'Kitchen Appliances — Madrid Home', customer: 'Madrid Home Solutions', customerId: 'cus_003', amount: 15600.00, currency: 'USD',
+      items: [
+        { desc: 'Stainless Steel Cookware Set 10pc', model: 'GJ-CW-10', hs: '7615.10', qty: 600, unit: 'SET', price: 18.00, disc: 0, weight: 4.2, pkg: 6 },
+        { desc: 'Electric Kettle 1.7L', model: 'GJ-EK-17', hs: '8516.71', qty: 1000, unit: 'PCS', price: 7.50, disc: 15, weight: 0.9, pkg: 12 },
+      ]
+    },
+  ],
+  products: [
+    { desc: 'Industrial LED Flood Light 200W', model: 'GJ-FL-200W', hs: '9405.42', unit: 'PCS', price: 28.50, weight: 2.5, pkg: 10 },
+    { desc: 'Smart Street Light Controller', model: 'GJ-SC-01', hs: '8537.10', unit: 'PCS', price: 45.00, weight: 0.8, pkg: 5 },
+    { desc: 'Solar Panel Mono 450W', model: 'GJ-PV-450M', hs: '8541.43', unit: 'PCS', price: 112.00, weight: 23.0, pkg: 2 },
+    { desc: 'Cordless Impact Drill 20V', model: 'GJ-ID-20V', hs: '8467.21', unit: 'PCS', price: 22.00, weight: 1.8, pkg: 10 },
+    { desc: 'Rotary Hammer SDS-Plus', model: 'GJ-RH-26', hs: '8467.21', unit: 'PCS', price: 45.00, weight: 3.5, pkg: 4 },
+    { desc: 'Stainless Steel Cookware Set 10pc', model: 'GJ-CW-10', hs: '7615.10', unit: 'SET', price: 18.00, weight: 4.2, pkg: 6 },
+  ],
+  customers: [
+    { id: 'cus_001', name: 'Al-Rashid Trading Co., Ltd.', addr: 'King Fahd Road, Olaya District, Riyadh 12244, Saudi Arabia', contact: 'Mr. Ahmed Al-Rashid', whatsapp: '+966 50 123 4567' },
+    { id: 'cus_002', name: 'Moscow Hardware LLC', addr: 'Tverskaya St. 12, Moscow 125009, Russia', contact: 'Ms. Elena Petrova', whatsapp: '+7 495 123 4567' },
+    { id: 'cus_003', name: 'Madrid Home Solutions SL', addr: 'Calle Gran Via 45, Madrid 28013, Spain', contact: 'Mr. Carlos Rodriguez', whatsapp: '+34 91 123 4567' },
+  ]
+};
+
+// ===== State =====
+const state = {
+  view: 'dashboard',
+  lang: 'zh',
+  theme: 'indigo',
+  docType: 'pi',
+  docs: [
+    { id: 'd1', number: 'PI-2026-0847', type: 'pi', customer: 'Al-Rashid Trading Co.', amount: 13537.50, currency: 'USD', status: 'sent', date: '2026-07-28', lang: 'en', inc: 'FOB', cur: 'USD' },
+    { id: 'd2', number: 'CI-2026-0312', type: 'ci', customer: 'Moscow Hardware LLC', amount: 28900.00, currency: 'EUR', status: 'accepted', date: '2026-07-25', lang: 'ru', inc: 'CIF', cur: 'EUR' },
+    { id: 'd3', number: 'PL-2026-0518', type: 'pl', customer: 'Madrid Home Solutions SL', amount: 0, currency: 'USD', status: 'draft', date: '2026-07-30', lang: 'es', inc: 'EXW', cur: 'USD' },
+    { id: 'd4', number: 'QT-2026-0201', type: 'quotation', customer: 'Al-Rashid Trading Co.', amount: 8420.00, currency: 'USD', status: 'viewed', date: '2026-07-20', lang: 'en', inc: 'DAP', cur: 'USD' },
+  ],
+  editor: {
+    docType: 'pi',
+    lang: 'en',
+    cur: 'USD',
+    inc: 'FOB',
+    port: 'Shenzhen, China',
+    paymentTerms: 'tt30',
+    deliveryTime: '15-20 days after deposit',
+    validityDays: 30,
+    piNumber: '',
+    piDate: new Date().toISOString().slice(0,10),
+    sourceType: 'manual',
+    sourceId: '',
+    buyerName: '',
+    buyerAddr: '',
+    buyerContact: '',
+    buyerWa: '',
+    items: [],
+  }
+};
+
+function L(key) { return (I18N[state.lang] || I18N.en)[key] || key; }
+function fmtMoney(amount, cur) { return new Intl.NumberFormat(CUR_LOCALES[cur]||'en-US', { style:'currency', currency:cur, minimumFractionDigits:2, maximumFractionDigits:2 }).format(amount); }
+function fmtNum(n, cur) { return new Intl.NumberFormat(CUR_LOCALES[cur]||'en-US', { minimumFractionDigits:2, maximumFractionDigits:2 }).format(n); }
+function addDays(s, d) { const dt = new Date(s); dt.setDate(dt.getDate()+Number(d)); return dt.toISOString().slice(0,10); }
+function calcItem(it) { const g = it.qty*it.price; const d = g*(it.disc/100); return { gross:g, discAmt:d, net:g-d }; }
+function calcTotals() { let sub=0,dis=0; state.editor.items.forEach(it=>{const c=calcItem(it);sub+=c.gross;dis+=c.discAmt;}); return { subtotal:sub, discount:dis, grand:sub-dis }; }
+function amountToWords(amt, cur) { const cn={USD:'US Dollars',EUR:'Euros',CNY:'Chinese Yuan',GBP:'British Pounds'}; const i=Math.floor(amt); const d=Math.round((amt-i)*100); let r=`${cn[cur]} ${i.toLocaleString()}`; if(d>0)r+=` and ${d}/100`; return r+' only'; }
+
+// ===== Renderers =====
+function renderSidebar() {
+  const nav = document.getElementById('sidebarNav');
+  const counts = {};
+  Object.keys(DOC_TYPES).forEach(t => counts[t] = state.docs.filter(d => d.type === t).length);
+  nav.innerHTML = `
+    <div class="nav-section">
+      <div class="nav-section-title">${L('dashboard')}</div>
+      <div class="nav-item ${state.view==='dashboard'?'active':''}" data-view="dashboard">
+        <span class="nav-icon">📊</span> ${L('dashboard')}
+      </div>
+      <div class="nav-item ${state.view==='list'?'active':''}" data-view="list">
+        <span class="nav-icon">📄</span> ${L('allDocs')}
+        <span class="nav-badge">${state.docs.length}</span>
+      </div>
+    </div>
+    <div class="nav-section">
+      <div class="nav-section-title">${L('selectType')}</div>
+      ${Object.entries(DOC_TYPES).map(([key, dt]) => `
+        <div class="nav-item ${state.view==='list'&&state.docType===key?'active':''}" data-view="list" data-doctype="${key}">
+          <span class="nav-icon">${dt.icon}</span> ${state.lang==='zh'?dt.zh:dt.en}
+          <span class="nav-badge">${counts[key]||0}</span>
+        </div>
+      `).join('')}
+    </div>
+    <div class="nav-section">
+      <div class="nav-section-title">系统</div>
+      <div class="nav-item ${state.view==='test'?'active':''}" data-view="test">
+        <span class="nav-icon">🧪</span> ${L('selfTest')}
+      </div>
+    </div>
+  `;
+  nav.querySelectorAll('.nav-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const v = el.dataset.view;
+      if (el.dataset.doctype) { state.docType = el.dataset.doctype; }
+      switchView(v);
+    });
+  });
+}
+
+function renderThemePicker() {
+  const picker = document.getElementById('themePicker');
+  picker.innerHTML = THEMES.map(t => `<div class="theme-dot ${state.theme===t.id?'active':''}" data-theme="${t.id}" style="background:${t.color}"></div>`).join('');
+  picker.querySelectorAll('.theme-dot').forEach(d => {
+    d.addEventListener('click', () => {
+      state.theme = d.dataset.theme;
+      document.querySelector('.app-shell').dataset.theme = state.theme;
+      renderThemePicker();
+      if (state.view === 'editor') renderEditor();
+    });
+  });
+}
+
+function renderTopbar() {
+  const titles = { dashboard: L('dashboard'), list: L('allDocs'), editor: DOC_TYPES[state.editor.docType][state.lang==='zh'?'zh':'en'], test: L('selfTest') };
+  document.getElementById('topbarTitle').textContent = titles[state.view] || '';
+  document.getElementById('btnNew').style.display = state.view === 'list' || state.view === 'dashboard' ? '' : 'none';
+}
+
+function switchView(v) {
+  state.view = v;
+  ['dashboard','list','editor','test'].forEach(id => {
+    document.getElementById('view-'+id).style.display = id === v ? '' : 'none';
+  });
+  renderTopbar();
+  renderSidebar();
+  if (v === 'dashboard') renderDashboard();
+  else if (v === 'list') renderList();
+  else if (v === 'editor') renderEditor();
+  else if (v === 'test') renderTest();
+}
+
+// ===== Dashboard =====
+function renderDashboard() {
+  const total = state.docs.length;
+  const sent = state.docs.filter(d => d.status === 'sent').length;
+  const draft = state.docs.filter(d => d.status === 'draft').length;
+  const accepted = state.docs.filter(d => d.status === 'accepted').length;
+  const view = document.getElementById('view-dashboard');
+  view.innerHTML = `
+    <div class="stats-row">
+      <div class="stat-card"><div class="stat-label">${L('total')}</div><div class="stat-value">${total}</div><div class="stat-trend up">↑ 12% vs 上月</div></div>
+      <div class="stat-card"><div class="stat-label">${L('draft')}</div><div class="stat-value">${draft}</div><div class="stat-trend">待处理</div></div>
+      <div class="stat-card"><div class="stat-label">${L('sent')}</div><div class="stat-value">${sent}</div><div class="stat-trend up">↑ 8% vs 上月</div></div>
+      <div class="stat-card"><div class="stat-label">${L('accepted')}</div><div class="stat-value">${accepted}</div><div class="stat-trend up">↑ 15% 转化率</div></div>
+    </div>
+    <div class="config-section-title">${L('selectType')}</div>
+    <div class="doc-type-grid">
+      ${Object.entries(DOC_TYPES).map(([key, dt]) => `
+        <div class="doc-type-card" data-doctype="${key}">
+          <div class="dt-icon">${dt.icon}</div>
+          <div class="dt-name">${state.lang==='zh'?dt.zh:dt.en}</div>
+          <div class="dt-desc">${state.lang==='zh'?dt.desc_zh:dt.desc_en}</div>
+          <div class="dt-count">${state.docs.filter(d=>d.type===key).length} 份</div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="recent-section">
+      <div class="recent-header"><h3>${L('recentDocs')}</h3></div>
+      <table class="recent-table">
+        <thead><tr>
+          <th>${L('docNumber')}</th><th>${L('type')}</th><th>${L('customer')}</th>
+          <th style="text-align:right">${L('amount')}</th><th>${L('status')}</th><th>${L('date')}</th>
+        </tr></thead>
+        <tbody>
+          ${state.docs.map(d => `
+            <tr style="cursor:pointer" data-doc="${d.id}">
+              <td style="font-weight:600;color:var(--ink)">${d.number}</td>
+              <td>${DOC_TYPES[d.type].icon} ${state.lang==='zh'?DOC_TYPES[d.type].zh:DOC_TYPES[d.type].en}</td>
+              <td>${d.customer}</td>
+              <td style="text-align:right;font-variant-numeric:tabular-nums">${d.amount>0?fmtMoney(d.amount,d.currency):'—'}</td>
+              <td><span class="badge badge-${d.status}">${d.status}</span></td>
+              <td style="color:var(--muted)">${d.date}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+  view.querySelectorAll('.doc-type-card').forEach(c => {
+    c.addEventListener('click', () => { openEditor(c.dataset.doctype); });
+  });
+  view.querySelectorAll('tr[data-doc]').forEach(r => {
+    r.addEventListener('click', () => { const d = state.docs.find(x=>x.id===r.dataset.doc); if(d) openEditor(d.type, d); });
+  });
+}
+
+// ===== List View =====
+function renderList() {
+  const view = document.getElementById('view-list');
+  const filtered = state.docs.filter(d => state.docType === 'all' || d.type === state.docType || !state.docType);
+  if (filtered.length === 0 && state.docType !== 'all') {
+    view.innerHTML = `<div class="empty-state"><div class="empty-icon">📄</div><h3>${L('noDocs')}</h3><p>${L('noDocsHint')}</p></div>`;
+    return;
+  }
+  view.innerHTML = `
+    <div class="recent-section">
+      <div class="recent-header"><h3>${L('allDocs')} (${filtered.length})</h3></div>
+      <table class="recent-table" style="width:100%">
+        <thead><tr>
+          <th>${L('docNumber')}</th><th>${L('type')}</th><th>${L('customer')}</th>
+          <th style="text-align:right">${L('amount')}</th><th>${L('status')}</th><th>${L('date')}</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${filtered.map(d => `
+            <tr>
+              <td style="font-weight:600;color:var(--ink)">${d.number}</td>
+              <td>${DOC_TYPES[d.type].icon} ${state.lang==='zh'?DOC_TYPES[d.type].zh:DOC_TYPES[d.type].en}</td>
+              <td>${d.customer}</td>
+              <td style="text-align:right;font-variant-numeric:tabular-nums">${d.amount>0?fmtMoney(d.amount,d.currency):'—'}</td>
+              <td><span class="badge badge-${d.status}">${d.status}</span></td>
+              <td style="color:var(--muted)">${d.date}</td>
+              <td><button class="btn" style="padding:4px 10px;font-size:12px" data-edit="${d.id}">编辑</button></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+  view.querySelectorAll('[data-edit]').forEach(b => {
+    b.addEventListener('click', () => { const d = state.docs.find(x=>x.id===b.dataset.edit); if(d) openEditor(d.type, d); });
+  });
+}
+
+// ===== Editor =====
+function openEditor(docType, existingDoc) {
+  state.editor.docType = docType;
+  const dt = DOC_TYPES[docType];
+  const prefix = { pi:'PI', ci:'CI', pl:'PL', contract:'SC', quotation:'QT', coo:'COO', shipping:'SA' }[docType] || 'DOC';
+  state.editor.piNumber = existingDoc ? existingDoc.number : `${prefix}-2026-${String(Math.floor(Math.random()*9000)+1000)}`;
+  state.editor.piDate = existingDoc ? existingDoc.date : new Date().toISOString().slice(0,10);
+  state.editor.lang = existingDoc ? existingDoc.lang : (state.lang === 'zh' ? 'en' : state.lang);
+  state.editor.cur = existingDoc ? existingDoc.currency : 'USD';
+  state.editor.inc = existingDoc ? existingDoc.inc : 'FOB';
+  if (existingDoc) {
+    state.editor.buyerName = existingDoc.customer || '';
+  }
+  // Default items if no source
+  if (state.editor.items.length === 0 && !existingDoc) {
+    state.editor.items = [{ desc:'', model:'', hs:'', qty:1, unit:'PCS', price:0, disc:0, weight:0, pkg:1 }];
+  }
+  switchView('editor');
+}
+
+function renderEditor() {
+  const e = state.editor;
+  const dt = DOC_TYPES[e.docType];
+  const view = document.getElementById('view-editor');
+  view.innerHTML = `
+    <div class="editor-layout">
+      <div class="editor-config" id="editorConfig"></div>
+      <div class="editor-preview" id="editorPreview"></div>
+    </div>
+    <div class="editor-actions">
+      <button class="btn" id="btnBack">${L('back')}</button>
+      <button class="btn" id="btnDraft">${L('saveDraft')}</button>
+      <button class="btn" id="btnWa2">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+        ${L('sendWa')}
+      </button>
+      <button class="btn btn-primary" id="btnPdf2">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        ${L('generatePdf')}
+      </button>
+      <div style="margin-left:auto;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px">
+        <span style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span>
+        ${L('dashboard') === '仪表盘' ? '实时预览中' : 'Live preview'}
+      </div>
+    </div>
+  `;
+  renderEditorConfig();
+  renderEditorPreview();
+  document.getElementById('btnBack').addEventListener('click', () => switchView('dashboard'));
+  document.getElementById('btnDraft').addEventListener('click', () => {
+    saveDocToState();
+    const old = document.getElementById('btnDraft').textContent;
+    document.getElementById('btnDraft').textContent = '✓ ' + (state.lang==='zh'?'已保存':'Saved');
+    setTimeout(() => { document.getElementById('btnDraft').textContent = old; }, 1500);
+  });
+  document.getElementById('btnPdf2').addEventListener('click', () => window.print());
+  document.getElementById('btnWa2').addEventListener('click', sendWhatsApp);
+}
+
+function renderEditorConfig() {
+  const e = state.editor;
+  const dt = DOC_TYPES[e.docType];
+  const cfg = document.getElementById('editorConfig');
+  cfg.innerHTML = `
+    <div class="config-section">
+      <div class="config-section-title">${dt.icon} ${state.lang==='zh'?dt.zh:dt.en}</div>
+    </div>
+    <div class="config-section">
+      <div class="config-section-title">${L('dataSource')}</div>
+      <div class="data-source-list">
+        <div class="data-source-item ${e.sourceType==='deal'?'selected':''}" data-source="deal">
+          <span class="ds-icon">💼</span><div class="ds-info"><div class="ds-name">${L('deal')}</div><div class="ds-meta">${DATA_SOURCES.deals.length} 个商机</div></div>
+        </div>
+        <div class="data-source-item ${e.sourceType==='product'?'selected':''}" data-source="product">
+          <span class="ds-icon">🏭</span><div class="ds-info"><div class="ds-name">${L('product')}</div><div class="ds-meta">${DATA_SOURCES.products.length} 个产品</div></div>
+        </div>
+        <div class="data-source-item ${e.sourceType==='customer'?'selected':''}" data-source="customer">
+          <span class="ds-icon">👤</span><div class="ds-info"><div class="ds-name">${L('customer')}</div><div class="ds-meta">${DATA_SOURCES.customers.length} 个客户</div></div>
+        </div>
+        <div class="data-source-item ${e.sourceType==='manual'?'selected':''}" data-source="manual">
+          <span class="ds-icon">✏️</span><div class="ds-info"><div class="ds-name">${L('manual')}</div><div class="ds-meta">空白开始</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="config-section">
+      <div class="config-section-title">${L('language')} / ${L('currency')}</div>
+      <div class="seg" id="edLangSeg">
+        <button class="${e.lang==='en'?'active':''}" data-lang="en">EN</button>
+        <button class="${e.lang==='es'?'active':''}" data-lang="es">ES</button>
+        <button class="${e.lang==='ru'?'active':''}" data-lang="ru">RU</button>
+        <button class="${e.lang==='ar'?'active':''}" data-lang="ar">عربي</button>
+        <button class="${e.lang==='zh'?'active':''}" data-lang="zh">中文</button>
+      </div>
+      <div style="height:8px"></div>
+      <div class="seg" id="edCurSeg">
+        <button class="${e.cur==='USD'?'active':''}" data-cur="USD">USD $</button>
+        <button class="${e.cur==='EUR'?'active':''}" data-cur="EUR">EUR €</button>
+        <button class="${e.cur==='CNY'?'active':''}" data-cur="CNY">CNY ¥</button>
+        <button class="${e.cur==='GBP'?'active':''}" data-cur="GBP">GBP £</button>
+      </div>
+    </div>
+    <div class="config-section">
+      <div class="config-section-title">${L('newDoc')}</div>
+      <div class="field-row">
+        <div class="field"><label>编号</label><input type="text" id="edNumber" value="${e.piNumber}"></div>
+        <div class="field"><label>${L('date')}</label><input type="date" id="edDate" value="${e.piDate}"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>${L('validity')}</label>
+          <select id="edValidity">
+            <option value="15" ${e.validityDays==15?'selected':''}>15 ${L('days')}</option>
+            <option value="30" ${e.validityDays==30?'selected':''}>30 ${L('days')}</option>
+            <option value="60" ${e.validityDays==60?'selected':''}>60 ${L('days')}</option>
+            <option value="90" ${e.validityDays==90?'selected':''}>90 ${L('days')}</option>
+          </select>
+        </div>
+        <div class="field"><label>${L('deliveryTime')}</label><input type="text" id="edDeliv" value="${e.deliveryTime}"></div>
+      </div>
+    </div>
+    <div class="config-section">
+      <div class="config-section-title">${L('incoterms')}</div>
+      <div class="seg" id="edIncSeg">
+        <button class="${e.inc==='EXW'?'active':''}" data-inc="EXW">EXW</button>
+        <button class="${e.inc==='FOB'?'active':''}" data-inc="FOB">FOB</button>
+        <button class="${e.inc==='CIF'?'active':''}" data-inc="CIF">CIF</button>
+        <button class="${e.inc==='DAP'?'active':''}" data-inc="DAP">DAP</button>
+      </div>
+      <div class="field" style="margin-top:8px"><label>${L('port')}</label><input type="text" id="edPort" value="${e.port}"></div>
+    </div>
+    <div class="config-section">
+      <div class="config-section-title">${L('paymentTerms')}</div>
+      <select id="edPay" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;color:var(--text);background:var(--surface)">
+        <option value="tt30" ${e.paymentTerms==='tt30'?'selected':''}>${L('pay_tt30')}</option>
+        <option value="tt50" ${e.paymentTerms==='tt50'?'selected':''}>${L('pay_tt50')}</option>
+        <option value="tt100" ${e.paymentTerms==='tt100'?'selected':''}>${L('pay_tt100')}</option>
+        <option value="lc" ${e.paymentTerms==='lc'?'selected':''}>${L('pay_lc')}</option>
+        <option value="oa30" ${e.paymentTerms==='oa30'?'selected':''}>${L('pay_oa30')}</option>
+      </select>
+    </div>
+    <div class="config-section">
+      <div class="config-section-title">${L('lineItems')}</div>
+      <table class="items-edit-table">
+        <thead><tr>
+          <th>${L('productName')}</th>
+          <th style="width:48px">${L('qty')}</th>
+          <th style="width:68px">${L('unitPrice')}</th>
+          ${dt.hasPrice?`<th style="width:42px">${L('discount')}</th>`:''}
+          ${dt.hasWeight?`<th style="width:52px">重量</th><th style="width:42px">件</th>`:''}
+          <th style="width:24px"></th>
+        </tr></thead>
+        <tbody id="edItemsBody"></tbody>
+      </table>
+      <button class="btn-add-row" id="edAddRow">+ ${L('addRow')}</button>
+      ${dt.hasPrice ? `
+      <div class="config-totals">
+        <div class="total-row"><span>${L('subtotal')}</span><span class="val" id="edSubtotal">—</span></div>
+        <div class="total-row"><span>${L('discountTotal')}</span><span class="val" id="edDiscount">—</span></div>
+        <div class="total-row grand"><span>${L('grandTotal')}</span><span class="val" id="edGrand">—</span></div>
+      </div>` : dt.hasWeight ? `
+      <div class="config-totals">
+        <div class="total-row"><span>总重量 (kg)</span><span class="val" id="edTotalWeight">—</span></div>
+        <div class="total-row"><span>总件数</span><span class="val" id="edTotalPkg">—</span></div>
+      </div>` : ''}
+    </div>
+    <div class="config-section">
+      <div class="config-section-title">${L('buyerInfo')}</div>
+      <div class="field"><label>${L('customer')}</label><input type="text" id="edBuyerName" value="${e.buyerName}"></div>
+      <div class="field"><label>${L('to')} — Address</label><textarea id="edBuyerAddr" rows="2">${e.buyerAddr}</textarea></div>
+      <div class="field-row">
+        <div class="field"><label>${L('attn')}</label><input type="text" id="edBuyerContact" value="${e.buyerContact}"></div>
+        <div class="field"><label>WhatsApp</label><input type="text" id="edBuyerWa" value="${e.buyerWa}"></div>
+      </div>
+    </div>
+  `;
+  bindEditorConfig();
+  renderEditorItems();
+  updateConfigTotals();
+}
+
+function bindEditorConfig() {
+  const e = state.editor;
+  const cfg = document.getElementById('editorConfig');
+
+  cfg.querySelectorAll('[data-source]').forEach(el => {
+    el.addEventListener('click', () => {
+      e.sourceType = el.dataset.source;
+      applyDataSource(el.dataset.source);
+      renderEditorConfig();
+      renderEditorPreview();
+    });
+  });
+
+  cfg.querySelector('#edLangSeg').addEventListener('click', ev => {
+    if (ev.target.tagName==='BUTTON') { e.lang = ev.target.dataset.lang; renderEditorConfig(); renderEditorPreview(); }
+  });
+  cfg.querySelector('#edCurSeg').addEventListener('click', ev => {
+    if (ev.target.tagName==='BUTTON') { e.cur = ev.target.dataset.cur; renderEditorConfig(); renderEditorPreview(); }
+  });
+  cfg.querySelector('#edIncSeg').addEventListener('click', ev => {
+    if (ev.target.tagName==='BUTTON') { e.inc = ev.target.dataset.inc; renderEditorConfig(); renderEditorPreview(); }
+  });
+
+  const bind = (id, key, isSelect) => {
+    const el = cfg.querySelector('#'+id);
+    if (el) el.addEventListener('input', ev => { e[key] = isSelect ? ev.target.value : ev.target.value; renderEditorPreview(); });
+  };
+  cfg.querySelector('#edNumber').addEventListener('input', ev => { e.piNumber = ev.target.value; renderEditorPreview(); });
+  cfg.querySelector('#edDate').addEventListener('input', ev => { e.piDate = ev.target.value; renderEditorPreview(); });
+  cfg.querySelector('#edValidity').addEventListener('change', ev => { e.validityDays = +ev.target.value; renderEditorPreview(); });
+  cfg.querySelector('#edDeliv').addEventListener('input', ev => { e.deliveryTime = ev.target.value; renderEditorPreview(); });
+  cfg.querySelector('#edPort').addEventListener('input', ev => { e.port = ev.target.value; renderEditorPreview(); });
+  cfg.querySelector('#edPay').addEventListener('change', ev => { e.paymentTerms = ev.target.value; renderEditorPreview(); });
+  cfg.querySelector('#edBuyerName').addEventListener('input', ev => { e.buyerName = ev.target.value; renderEditorPreview(); });
+  cfg.querySelector('#edBuyerAddr').addEventListener('input', ev => { e.buyerAddr = ev.target.value; renderEditorPreview(); });
+  cfg.querySelector('#edBuyerContact').addEventListener('input', ev => { e.buyerContact = ev.target.value; renderEditorPreview(); });
+  cfg.querySelector('#edBuyerWa').addEventListener('input', ev => { e.buyerWa = ev.target.value; renderEditorPreview(); });
+
+  cfg.querySelector('#edAddRow').addEventListener('click', () => {
+    e.items.push({ desc:'', model:'', hs:'', qty:1, unit:'PCS', price:0, disc:0, weight:0, pkg:1 });
+    renderEditorItems();
+    renderEditorPreview();
+  });
+}
+
+function renderEditorItems() {
+  const e = state.editor;
+  const dt = DOC_TYPES[e.docType];
+  const tbody = document.getElementById('edItemsBody');
+  if (!tbody) return;
+  tbody.innerHTML = e.items.map((it, i) => `
+    <tr data-idx="${i}">
+      <td>
+        <input type="text" class="it-desc" value="${it.desc}" placeholder="${L('productName')}">
+        <input type="text" class="it-model" value="${it.model}" placeholder="${L('model')}" style="margin-top:2px;font-size:11px;color:var(--muted)">
+      </td>
+      <td><input type="number" class="it-qty" value="${it.qty}" min="0" style="text-align:right"></td>
+      ${dt.hasPrice ? `<td><input type="number" class="it-price" value="${it.price}" min="0" step="0.01" style="text-align:right"></td>
+                       <td><input type="number" class="it-disc" value="${it.disc}" min="0" max="100" step="1" style="text-align:right"></td>` : ''}
+      ${dt.hasWeight ? `<td><input type="number" class="it-weight" value="${it.weight||0}" min="0" step="0.1" style="text-align:right"></td>
+                        <td><input type="number" class="it-pkg" value="${it.pkg||1}" min="1" style="text-align:right"></td>` : ''}
+      <td><button class="btn-del-row" data-idx="${i}">&times;</button></td>
+    </tr>
+  `).join('');
+
+  tbody.querySelectorAll('tr').forEach(row => {
+    const idx = +row.dataset.idx;
+    const bind = (cls, key, isNum) => {
+      const el = row.querySelector('.'+cls);
+      if (el) el.addEventListener('input', ev => {
+        e.items[idx][key] = isNum ? (+ev.target.value || 0) : ev.target.value;
+        updateConfigTotals();
+        renderEditorPreview();
+      });
+    };
+    bind('it-desc','desc'); bind('it-model','model');
+    bind('it-qty','qty',true);
+    if (dt.hasPrice) { bind('it-price','price',true); bind('it-disc','disc',true); }
+    if (dt.hasWeight) { bind('it-weight','weight',true); bind('it-pkg','pkg',true); }
+  });
+  tbody.querySelectorAll('.btn-del-row').forEach(btn => {
+    btn.addEventListener('click', () => {
+      e.items.splice(+btn.dataset.idx, 1);
+      renderEditorItems();
+      updateConfigTotals();
+      renderEditorPreview();
+    });
+  });
+}
+
+function updateConfigTotals() {
+  const e = state.editor;
+  const dt = DOC_TYPES[e.docType];
+  if (dt.hasPrice) {
+    const t = calcTotals();
+    const sub = document.getElementById('edSubtotal');
+    if (sub) sub.textContent = fmtMoney(t.subtotal, e.cur);
+    const dis = document.getElementById('edDiscount');
+    if (dis) dis.textContent = fmtMoney(t.discount, e.cur);
+    const grand = document.getElementById('edGrand');
+    if (grand) grand.textContent = fmtMoney(t.grand, e.cur);
+  }
+  if (dt.hasWeight) {
+    let tw = 0, tp = 0;
+    e.items.forEach(it => { tw += (it.weight||0) * it.qty; tp += (it.pkg||0) * Math.ceil(it.qty / (it.pkg||1)); });
+    // simpler: just sum weight*qty and pkg count
+    tw = e.items.reduce((s, it) => s + (it.weight||0) * it.qty, 0);
+    tp = e.items.reduce((s, it) => s + (it.pkg||0), 0);
+    const wEl = document.getElementById('edTotalWeight');
+    if (wEl) wEl.textContent = fmtNum(tw, e.cur) + ' kg';
+    const pEl = document.getElementById('edTotalPkg');
+    if (pEl) pEl.textContent = tp + ' CTN';
+  }
+}
+
+function applyDataSource(sourceType) {
+  const e = state.editor;
+  if (sourceType === 'deal') {
+    const deal = DATA_SOURCES.deals[0];
+    e.items = deal.items.map(it => ({...it}));
+    e.cur = deal.currency;
+    e.buyerName = deal.customer;
+    const cust = DATA_SOURCES.customers.find(c => c.id === deal.customerId);
+    if (cust) { e.buyerAddr = cust.addr; e.buyerContact = cust.contact; e.buyerWa = cust.whatsapp; }
+  } else if (sourceType === 'product') {
+    e.items = DATA_SOURCES.products.slice(0, 3).map(p => ({ desc:p.desc, model:p.model, hs:p.hs, qty:100, unit:p.unit, price:p.price, disc:0, weight:p.weight, pkg:p.pkg }));
+  } else if (sourceType === 'customer') {
+    const cust = DATA_SOURCES.customers[0];
+    e.buyerName = cust.name; e.buyerAddr = cust.addr; e.buyerContact = cust.contact; e.buyerWa = cust.whatsapp;
+  } else {
+    e.items = [{ desc:'', model:'', hs:'', qty:1, unit:'PCS', price:0, disc:0, weight:0, pkg:1 }];
+    e.buyerName = ''; e.buyerAddr = ''; e.buyerContact = ''; e.buyerWa = '';
+  }
+}
+
+function renderEditorPreview() {
+  const e = state.editor;
+  const dt = DOC_TYPES[e.docType];
+  const preview = document.getElementById('editorPreview');
+  if (!preview) return;
+
+  const isRTL = e.lang === 'ar';
+  const ll = I18N[e.lang] || I18N.en;
+
+  let html = `<div class="doc-paper" dir="${isRTL?'rtl':'ltr'}">`;
+
+  // Letterhead
+  html += `<div class="doc-letterhead">
+    <div class="doc-seller">
+      <div class="seller-name">GoodJob Industrial Co., Ltd.</div>
+      <div class="seller-info">Room 1205, Innovation Tower, Shenzhen, China 518052<br>Tel: +86 755 8888 9999 · Email: sales@goodjob.com<br>WhatsApp: +86 138 0013 8000 · www.goodjob.com</div>
+    </div>
+    <div class="doc-title-block">
+      <div class="doc-title">${getDocTitle(e.docType, e.lang)}</div>
+      <div class="doc-number">${e.piNumber}</div>
+    </div>
+  </div>`;
+
+  if (dt.isContract) {
+    html += renderContractBody(e, ll);
+  } else if (dt.isCOO) {
+    html += renderCOOBody(e, ll);
+  } else if (dt.isShipping) {
+    html += renderShippingBody(e, ll);
+  } else {
+    // Standard invoice/PI/PL/Quotation layout
+    // Parties
+    html += `<div class="doc-parties">
+      <div>
+        <div class="party-label">${ll.to}</div>
+        <div class="party-name">${e.buyerName || '—'}</div>
+        <div class="party-detail">${e.buyerAddr || ''}</div>
+        ${e.buyerContact ? `<div class="party-detail">${ll.attn} ${e.buyerContact}</div>` : ''}
+      </div>
+      <div>
+        <div class="party-label">${ll.from}</div>
+        <div class="party-name">GoodJob Industrial Co., Ltd.</div>
+        <div class="party-detail">Room 1205, Innovation Tower, Shenzhen<br>China 518052</div>
+      </div>
+    </div>`;
+
+    // Meta
+    html += `<div class="doc-meta">
+      <div class="doc-meta-item"><div class="doc-meta-label">${ll.date}</div><div class="doc-meta-value">${e.piDate}</div></div>
+      <div class="doc-meta-item"><div class="doc-meta-label">${ll.validUntil}</div><div class="doc-meta-value">${addDays(e.piDate, e.validityDays)}</div></div>
+      <div class="doc-meta-item"><div class="doc-meta-label">${ll.currency}</div><div class="doc-meta-value">${e.cur}</div></div>
+    </div>`;
+
+    // Items table
+    html += `<table class="doc-table"><thead><tr>`;
+    html += `<th class="num">${getTH('no', e.lang)}</th>`;
+    html += `<th>${getTH('desc', e.lang)}</th>`;
+    html += `<th>${getTH('model', e.lang)}</th>`;
+    if (dt.hasPrice) html += `<th>${getTH('hs', e.lang)}</th>`;
+    html += `<th class="num">${getTH('qty', e.lang)}</th>`;
+    html += `<th>${getTH('unit', e.lang)}</th>`;
+    if (dt.hasWeight) { html += `<th class="num">N.W.(kg)</th><th class="num">G.W.(kg)</th><th class="num">CTN</th>`; }
+    if (dt.hasPrice) {
+      html += `<th class="num">${getTH('price', e.lang)}</th>`;
+      html += `<th class="num">${getTH('amount', e.lang)}</th>`;
+    }
+    html += `</tr></thead><tbody>`;
+    e.items.forEach((it, i) => {
+      const c = calcItem(it);
+      html += `<tr>
+        <td class="num item-no">${i+1}</td>
+        <td><div class="product-name">${it.desc || '—'}</div></td>
+        <td>${it.model || '—'}</td>`;
+      if (dt.hasPrice) html += `<td class="num">${it.hs || '—'}</td>`;
+      html += `<td class="num">${fmtNum(it.qty, e.cur)}</td><td>${it.unit}</td>`;
+      if (dt.hasWeight) {
+        const nw = (it.weight||0) * it.qty;
+        const gw = nw * 1.05;
+        html += `<td class="num">${fmtNum(nw, e.cur)}</td><td class="num">${fmtNum(gw, e.cur)}</td><td class="num">${it.pkg||1}</td>`;
+      }
+      if (dt.hasPrice) {
+        html += `<td class="num">${fmtMoney(it.price, e.cur)}</td>`;
+        html += `<td class="num" style="font-weight:700;color:#131a2a">${fmtMoney(c.net, e.cur)}</td>`;
+      }
+      html += `</tr>`;
+    });
+    html += `</tbody></table>`;
+
+    // Totals
+    if (dt.hasPrice) {
+      const t = calcTotals();
+      html += `<div class="doc-totals-area"><div class="doc-totals">
+        <div class="doc-total-line"><span>${ll.subtotal}</span><span class="val">${fmtMoney(t.subtotal, e.cur)}</span></div>
+        <div class="doc-total-line"><span>${ll.discountTotal}</span><span class="val">${fmtMoney(t.discount, e.cur)}</span></div>
+        <div class="doc-total-line grand"><span>${ll.grandTotal}</span><span class="val">${fmtMoney(t.grand, e.cur)}</span></div>
+      </div></div>`;
+      html += `<div class="amount-in-words"><strong>${ll.sayTotal}</strong> ${amountToWords(calcTotals().grand, e.cur)}</div>`;
+    } else if (dt.hasWeight) {
+      const tw = e.items.reduce((s,it)=>s+(it.weight||0)*it.qty, 0);
+      const tp = e.items.reduce((s,it)=>s+(it.pkg||0), 0);
+      html += `<div class="doc-totals-area"><div class="doc-totals">
+        <div class="doc-total-line"><span>Total N.W.</span><span class="val">${fmtNum(tw, e.cur)} kg</span></div>
+        <div class="doc-total-line"><span>Total G.W.</span><span class="val">${fmtNum(tw*1.05, e.cur)} kg</span></div>
+        <div class="doc-total-line grand"><span>Total CTN</span><span class="val">${tp}</span></div>
+      </div></div>`;
+    }
+
+    // Terms
+    if (dt.hasTerms) {
+      html += `<div class="doc-terms">
+        <div class="term-block"><div class="term-label">${ll.incoterms}</div><div class="term-value">${ll['inc_'+e.inc]} (${e.port})</div></div>
+        <div class="term-block"><div class="term-label">${ll.paymentTerms}</div><div class="term-value">${ll['pay_'+e.paymentTerms]}</div></div>
+        <div class="term-block"><div class="term-label">${ll.deliveryTime}</div><div class="term-value">${e.deliveryTime}</div></div>
+        <div class="term-block"><div class="term-label">${ll.port}</div><div class="term-value">${e.port}</div></div>
+      </div>`;
+    }
+
+    // Bank
+    if (dt.hasBank) {
+      html += `<div class="doc-bank">
+        <div class="bank-title">${ll.bankDetails}</div>
+        <div class="doc-bank-grid">
+          <span class="bk-label">${ll.bank}</span><span class="bk-val">Bank of China, Shenzhen Branch</span>
+          <span class="bk-label">${ll.acctName}</span><span class="bk-val">GoodJob Industrial Co., Ltd.</span>
+          <span class="bk-label">${ll.acctNo}</span><span class="bk-val">4123 4567 8901 2345</span>
+          <span class="bk-label">${ll.swift}</span><span class="bk-val">BKCHCNBJ45A</span>
+        </div>
+      </div>`;
+    }
+
+    // Signature
+    html += `<div class="doc-signature">
+      <div class="sig-block"><div class="sig-line">${ll.signature}</div></div>
+      <div class="sig-stamp">GOODJOB<br>INDUSTRIAL<br>Co., Ltd.</div>
+    </div>`;
+  }
+
+  html += `</div>`;
+  preview.innerHTML = html;
+}
+
+function getDocTitle(type, lang) {
+  const titles = {
+    pi: { en:'PROFORMA INVOICE', es:'FACTURA PROFORMA', ru:'ПРОФОРМА-СЧЕТ', ar:'فاتورة مبدئية', zh:'形式发票' },
+    ci: { en:'COMMERCIAL INVOICE', es:'FACTURA COMERCIAL', ru:'КОММЕРЧЕСКИЙ СЧЕТ', ar:'فاتورة تجارية', zh:'商业发票' },
+    pl: { en:'PACKING LIST', es:'LISTA DE EMBALAJE', ru:'УПАКОВОЧНЫЙ ЛИСТ', ar:'قائمة التعبئة', zh:'装箱单' },
+    contract: { en:'SALES CONTRACT', es:'CONTRATO DE VENTA', ru:'ДОГОВОР КУПЛИ-ПРОДАЖИ', ar:'عقد بيع', zh:'销售合同' },
+    quotation: { en:'QUOTATION', es:'COTIZACIÓN', ru:'КОТИРОВКА', ar:'عرض سعر', zh:'报价单' },
+    coo: { en:'CERTIFICATE OF ORIGIN', es:'CERTIFICADO DE ORIGEN', ru:'СЕРТИФИКАТ ПРОИСХОЖДЕНИЯ', ar:'شهادة المنشأ', zh:'原产地证' },
+    shipping: { en:'SHIPPING ADVICE', es:'AVISO DE ENVÍO', ru:'ИЗВЕЩЕНИЕ ОБ ОТГРУЗКЕ', ar:'إشعار شحن', zh:'装运通知' },
+  };
+  return (titles[type] && titles[type][lang]) || titles[type].en;
+}
+
+function getTH(key, lang) {
+  const ths = {
+    no: { en:'No.', es:'Nº', ru:'№', ar:'م', zh:'序号' },
+    desc: { en:'Product Description', es:'Descripción', ru:'Описание', ar:'وصف المنتج', zh:'产品描述' },
+    model: { en:'Model', es:'Modelo', ru:'Модель', ar:'الموديل', zh:'型号' },
+    hs: { en:'HS Code', es:'Código HS', ru:'Код ТН ВЭД', ar:'رمز HS', zh:'海关编码' },
+    qty: { en:'Qty', es:'Cant.', ru:'Кол-во', ar:'الكمية', zh:'数量' },
+    unit: { en:'Unit', es:'Unidad', ru:'Ед.', ar:'الوحدة', zh:'单位' },
+    price: { en:'Unit Price', es:'Precio Unit.', ru:'Цена', ar:'سعر الوحدة', zh:'单价' },
+    amount: { en:'Amount', es:'Importe', ru:'Сумма', ar:'المبلغ', zh:'金额' },
+  };
+  return (ths[key] && ths[key][lang]) || ths[key].en;
+}
+
+function renderContractBody(e, ll) {
+  const t = calcTotals();
+  return `
+    <div class="doc-parties">
+      <div>
+        <div class="party-label">${ll.to} (Buyer)</div>
+        <div class="party-name">${e.buyerName || '—'}</div>
+        <div class="party-detail">${e.buyerAddr || ''}</div>
+      </div>
+      <div>
+        <div class="party-label">${ll.from} (Seller)</div>
+        <div class="party-name">GoodJob Industrial Co., Ltd.</div>
+        <div class="party-detail">Room 1205, Innovation Tower, Shenzhen, China 518052</div>
+      </div>
+    </div>
+    <div class="doc-meta">
+      <div class="doc-meta-item"><div class="doc-meta-label">${ll.date}</div><div class="doc-meta-value">${e.piDate}</div></div>
+      <div class="doc-meta-item"><div class="doc-meta-label">CONTRACT NO.</div><div class="doc-meta-value">${e.piNumber}</div></div>
+      <div class="doc-meta-item"><div class="doc-meta-label">${ll.currency}</div><div class="doc-meta-value">${e.cur}</div></div>
+    </div>
+    <div class="contract-body">
+      <p style="margin-bottom:14px;font-size:12px;color:#5a6577">This Sales Contract is entered into by and between the Seller and the Buyer on the terms and conditions set forth below:</p>
+      <div class="contract-clause">
+        <div class="clause-title">1. ${ll.incoterms}</div>
+        <div class="clause-body">${ll['inc_'+e.inc]} — ${e.port}</div>
+      </div>
+      <div class="contract-clause">
+        <div class="clause-title">2. ${ll.paymentTerms}</div>
+        <div class="clause-body">${ll['pay_'+e.paymentTerms]}</div>
+      </div>
+      <div class="contract-clause">
+        <div class="clause-title">3. ${ll.deliveryTime}</div>
+        <div class="clause-body">${e.deliveryTime}</div>
+      </div>
+      <div class="contract-clause">
+        <div class="clause-title">4. Products & Pricing</div>
+      </div>
+    </div>
+    <table class="doc-table"><thead><tr>
+      <th class="num">${getTH('no', e.lang)}</th><th>${getTH('desc', e.lang)}</th><th>${getTH('model', e.lang)}</th>
+      <th class="num">${getTH('qty', e.lang)}</th><th>${getTH('unit', e.lang)}</th>
+      <th class="num">${getTH('price', e.lang)}</th><th class="num">${getTH('amount', e.lang)}</th>
+    </tr></thead><tbody>
+      ${e.items.map((it,i)=>{const c=calcItem(it);return `<tr><td class="num item-no">${i+1}</td><td><div class="product-name">${it.desc||'—'}</div></td><td>${it.model||'—'}</td><td class="num">${fmtNum(it.qty,e.cur)}</td><td>${it.unit}</td><td class="num">${fmtMoney(it.price,e.cur)}</td><td class="num" style="font-weight:700">${fmtMoney(c.net,e.cur)}</td></tr>`}).join('')}
+    </tbody></table>
+    <div class="doc-totals-area"><div class="doc-totals">
+      <div class="doc-total-line"><span>${ll.subtotal}</span><span class="val">${fmtMoney(t.subtotal, e.cur)}</span></div>
+      <div class="doc-total-line"><span>${ll.discountTotal}</span><span class="val">${fmtMoney(t.discount, e.cur)}</span></div>
+      <div class="doc-total-line grand"><span>${ll.grandTotal}</span><span class="val">${fmtMoney(t.grand, e.cur)}</span></div>
+    </div></div>
+    <div class="amount-in-words"><strong>${ll.sayTotal}</strong> ${amountToWords(t.grand, e.cur)}</div>
+    <div class="doc-bank">
+      <div class="bank-title">${ll.bankDetails}</div>
+      <div class="doc-bank-grid">
+        <span class="bk-label">${ll.bank}</span><span class="bk-val">Bank of China, Shenzhen Branch</span>
+        <span class="bk-label">${ll.acctName}</span><span class="bk-val">GoodJob Industrial Co., Ltd.</span>
+        <span class="bk-label">${ll.acctNo}</span><span class="bk-val">4123 4567 8901 2345</span>
+        <span class="bk-label">${ll.swift}</span><span class="bk-val">BKCHCNBJ45A</span>
+      </div>
+    </div>
+    <div class="doc-signature">
+      <div class="sig-block"><div class="sig-line">Seller: ${ll.signature}</div></div>
+      <div class="sig-block"><div class="sig-line">Buyer: ${ll.signature}</div></div>
+    </div>
+  `;
+}
+
+function renderCOOBody(e, ll) {
+  return `
+    <div class="doc-parties">
+      <div>
+        <div class="party-label">Shipper / Consignor</div>
+        <div class="party-name">GoodJob Industrial Co., Ltd.</div>
+        <div class="party-detail">Room 1205, Innovation Tower, Shenzhen, China 518052</div>
+      </div>
+      <div>
+        <div class="party-label">Consignee</div>
+        <div class="party-name">${e.buyerName || '—'}</div>
+        <div class="party-detail">${e.buyerAddr || ''}</div>
+      </div>
+    </div>
+    <div class="doc-meta">
+      <div class="doc-meta-item"><div class="doc-meta-label">${ll.date}</div><div class="doc-meta-value">${e.piDate}</div></div>
+      <div class="doc-meta-item"><div class="doc-meta-label">CERTIFICATE NO.</div><div class="doc-meta-value">${e.piNumber}</div></div>
+      <div class="doc-meta-item"><div class="doc-meta-label">COUNTRY OF ORIGIN</div><div class="doc-meta-value">CHINA</div></div>
+    </div>
+    <table class="doc-table"><thead><tr>
+      <th class="num">${getTH('no', e.lang)}</th>
+      <th>${getTH('desc', e.lang)}</th>
+      <th>${getTH('model', e.lang)}</th>
+      <th>${getTH('hs', e.lang)}</th>
+      <th class="num">${getTH('qty', e.lang)}</th>
+    </tr></thead><tbody>
+      ${e.items.map((it,i)=>`<tr><td class="num item-no">${i+1}</td><td><div class="product-name">${it.desc||'—'}</div></td><td>${it.model||'—'}</td><td>${it.hs||'—'}</td><td class="num">${fmtNum(it.qty,e.cur)}</td></tr>`).join('')}
+    </tbody></table>
+    <div class="coo-grid">
+      <div class="coo-box"><div class="coo-label">Manufacturer</div><div class="coo-value">GoodJob Industrial Co., Ltd.<br>Shenzhen, China</div></div>
+      <div class="coo-box"><div class="coo-label">Transport Mode</div><div class="coo-value">Sea Freight</div></div>
+      <div class="coo-box"><div class="coo-label">Port of Loading</div><div class="coo-value">${e.port}</div></div>
+      <div class="coo-box"><div class="coo-label">Destination</div><div class="coo-value">${e.buyerName || '—'}</div></div>
+    </div>
+    <p style="font-size:11px;color:#5a6577;margin-bottom:20px;line-height:1.7">
+      This is to certify that the goods described above originate in the People's Republic of China.<br><br>
+      This certificate is issued for the purposes of preferential tariff treatment under the applicable trade agreement.
+    </p>
+    <div class="doc-signature">
+      <div class="sig-block"><div class="sig-line">${ll.signature}</div></div>
+      <div class="sig-stamp">GOODJOB<br>INDUSTRIAL<br>Co., Ltd.</div>
+    </div>
+  `;
+}
+
+function renderShippingBody(e, ll) {
+  return `
+    <div class="doc-parties">
+      <div>
+        <div class="party-label">From (Shipper)</div>
+        <div class="party-name">GoodJob Industrial Co., Ltd.</div>
+        <div class="party-detail">Room 1205, Innovation Tower, Shenzhen, China 518052</div>
+      </div>
+      <div>
+        <div class="party-label">${ll.to} (Consignee)</div>
+        <div class="party-name">${e.buyerName || '—'}</div>
+        <div class="party-detail">${e.buyerAddr || ''}</div>
+      </div>
+    </div>
+    <div class="doc-meta">
+      <div class="doc-meta-item"><div class="doc-meta-label">${ll.date}</div><div class="doc-meta-value">${e.piDate}</div></div>
+      <div class="doc-meta-item"><div class="doc-meta-label">ADVICE NO.</div><div class="doc-meta-value">${e.piNumber}</div></div>
+      <div class="doc-meta-item"><div class="doc-meta-label">PI REF.</div><div class="doc-meta-value">${e.piNumber}</div></div>
+    </div>
+    <div class="ship-advice-body">
+      <p>Dear ${e.buyerName || 'Customer'},</p>
+      <p>We are pleased to inform you that your goods have been shipped as per the details below. Please find the shipping information for your reference and customs clearance preparation.</p>
+    </div>
+    <div class="coo-grid">
+      <div class="coo-box"><div class="coo-label">Vessel / Voyage</div><div class="coo-value">MSC GULSUN · 0245E</div></div>
+      <div class="coo-box"><div class="coo-label">B/L No.</div><div class="coo-value">MSCLU1234567890</div></div>
+      <div class="coo-box"><div class="coo-label">Port of Loading</div><div class="coo-value">${e.port}</div></div>
+      <div class="coo-box"><div class="coo-label">Port of Discharge</div><div class="coo-value">${e.buyerName ? 'Destination Port' : '—'}</div></div>
+      <div class="coo-box"><div class="coo-label">ETD</div><div class="coo-value">${addDays(e.piDate, 3)}</div></div>
+      <div class="coo-box"><div class="coo-label">ETA</div><div class="coo-value">${addDays(e.piDate, 25)}</div></div>
+      <div class="coo-box"><div class="coo-label">Container No.</div><div class="coo-value">MSCU 1234567</div></div>
+      <div class="coo-box"><div class="coo-label">Incoterms</div><div class="coo-value">${ll['inc_'+e.inc]}</div></div>
+    </div>
+    <table class="doc-table"><thead><tr>
+      <th class="num">${getTH('no', e.lang)}</th><th>${getTH('desc', e.lang)}</th>
+      <th class="num">${getTH('qty', e.lang)}</th><th>CTN</th><th class="num">G.W.(kg)</th>
+    </tr></thead><tbody>
+      ${e.items.map((it,i)=>{const gw=(it.weight||0)*it.qty*1.05;return `<tr><td class="num item-no">${i+1}</td><td><div class="product-name">${it.desc||'—'}</div></td><td class="num">${fmtNum(it.qty,e.cur)}</td><td>${it.unit}</td><td class="num">${fmtNum(gw,e.cur)}</td></tr>`}).join('')}
+    </tbody></table>
+    <div class="doc-signature">
+      <div class="sig-block"><div class="sig-line">${ll.signature}</div></div>
+      <div class="sig-stamp">GOODJOB<br>INDUSTRIAL<br>Co., Ltd.</div>
+    </div>
+  `;
+}
+
+function saveDocToState() {
+  const e = state.editor;
+  const t = calcTotals();
+  const existing = state.docs.find(d => d.number === e.piNumber);
+  const docData = {
+    number: e.piNumber, type: e.docType, customer: e.buyerName,
+    amount: t.grand, currency: e.cur, status: 'draft', date: e.piDate,
+    lang: e.lang, inc: e.inc, cur: e.cur
+  };
+  if (existing) { Object.assign(existing, docData); }
+  else { state.docs.push({ id: 'd'+Date.now(), ...docData }); }
+  renderSidebar();
+}
+
+function sendWhatsApp() {
+  const e = state.editor;
+  const phone = e.buyerWa.replace(/[^0-9]/g, '');
+  const t = calcTotals();
+  const msg = `${getDocTitle(e.docType, e.lang)}: ${e.piNumber}\n${L('grandTotal')}: ${fmtMoney(t.grand, e.cur)}\n${L('incoterms')}: ${L('inc_'+e.inc)}`;
+  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
+}
+
+// ===== Self-Test =====
+const TESTS = [
+  { name: 'PI 形式发票渲染', fn: () => { state.editor.docType='pi'; state.editor.items=DATA_SOURCES.deals[0].items.map(i=>({...i})); const h=renderEditorPreviewStr(); return h.includes('PROFORMA')||h.includes('形式发票')||h.includes('PI-'); } },
+  { name: 'CI 商业发票渲染', fn: () => { state.editor.docType='ci'; const h=renderEditorPreviewStr(); return h.includes('COMMERCIAL')||h.includes('商业发票'); } },
+  { name: 'PL 装箱单渲染 (无价格有重量)', fn: () => { state.editor.docType='pl'; const h=renderEditorPreviewStr(); return h.includes('PACKING')||h.includes('装箱单'); } },
+  { name: 'Sales Contract 合同渲染', fn: () => { state.editor.docType='contract'; const h=renderEditorPreviewStr(); return h.includes('CONTRACT')||h.includes('合同'); } },
+  { name: 'Quotation 报价单渲染', fn: () => { state.editor.docType='quotation'; const h=renderEditorPreviewStr(); return h.includes('QUOTATION')||h.includes('报价单'); } },
+  { name: 'Certificate of Origin 原产地证渲染', fn: () => { state.editor.docType='coo'; const h=renderEditorPreviewStr(); return h.includes('ORIGIN')||h.includes('原产地'); } },
+  { name: 'Shipping Advice 装运通知渲染', fn: () => { state.editor.docType='shipping'; const h=renderEditorPreviewStr(); return h.includes('SHIPPING')||h.includes('装运通知'); } },
+  { name: 'EN → ES 语言切换', fn: () => { state.editor.lang='es'; const h=renderEditorPreviewStr(); return h.includes('FACTURA'); } },
+  { name: 'EN → RU 语言切换', fn: () => { state.editor.lang='ru'; const h=renderEditorPreviewStr(); return h.includes('СЧЕТ'); } },
+  { name: 'EN → AR 语言切换 + RTL', fn: () => { state.editor.lang='ar'; const h=renderEditorPreviewStr(); return h.includes('rtl') && h.includes('فاتورة'); } },
+  { name: 'EN → ZH 中文切换', fn: () => { state.editor.lang='zh'; const h=renderEditorPreviewStr(); return h.includes('发票')||h.includes('合同')||h.includes('装箱'); } },
+  { name: 'USD → EUR 币种切换', fn: () => { state.editor.lang='en'; state.editor.cur='EUR'; state.editor.docType='pi'; const h=renderEditorPreviewStr(); return h.includes('€'); } },
+  { name: 'USD → CNY 币种切换', fn: () => { state.editor.cur='CNY'; const h=renderEditorPreviewStr(); return h.includes('¥'); } },
+  { name: 'Incoterms EXW 切换', fn: () => { state.editor.inc='EXW'; const h=renderEditorPreviewStr(); return h.includes('EXW'); } },
+  { name: 'Incoterms CIF 切换', fn: () => { state.editor.inc='CIF'; const h=renderEditorPreviewStr(); return h.includes('CIF'); } },
+  { name: 'Incoterms DAP 切换', fn: () => { state.editor.inc='DAP'; const h=renderEditorPreviewStr(); return h.includes('DAP'); } },
+  { name: '数据源: 商机填充', fn: () => { applyDataSource('deal'); return state.editor.items.length >= 2 && state.editor.buyerName.length > 0; } },
+  { name: '数据源: 产品填充', fn: () => { applyDataSource('product'); return state.editor.items.length >= 3; } },
+  { name: '数据源: 客户填充', fn: () => { applyDataSource('customer'); return state.editor.buyerName.length > 0 && state.editor.buyerAddr.length > 0; } },
+  { name: '数据源: 手动清空', fn: () => { applyDataSource('manual'); return state.editor.items.length === 1 && state.editor.buyerName === ''; } },
+  { name: '金额计算: 小计/折扣/合计', fn: () => { applyDataSource('deal'); const t=calcTotals(); return t.subtotal > 0 && t.grand < t.subtotal && t.grand > 0; } },
+  { name: '装箱单重量计算', fn: () => { state.editor.docType='pl'; applyDataSource('deal'); const w=state.editor.items.reduce((s,it)=>s+(it.weight||0)*it.qty,0); return w > 0; } },
+  { name: '主题: Indigo', fn: () => { state.theme='indigo'; document.querySelector('.app-shell').dataset.theme='indigo'; return getComputedStyle(document.documentElement).getPropertyValue('--brand').trim().includes('3157d5'); } },
+  { name: '主题: Emerald', fn: () => { state.theme='emerald'; document.querySelector('.app-shell').dataset.theme='emerald'; return getComputedStyle(document.documentElement).getPropertyValue('--brand').trim().includes('0d9f6e'); } },
+  { name: '主题: Rose', fn: () => { state.theme='rose'; document.querySelector('.app-shell').dataset.theme='rose'; return getComputedStyle(document.documentElement).getPropertyValue('--brand').trim().includes('e11d48'); } },
+  { name: '主题: Slate', fn: () => { state.theme='slate'; document.querySelector('.app-shell').dataset.theme='slate'; return getComputedStyle(document.documentElement).getPropertyValue('--brand').trim().includes('475569'); } },
+  { name: '主题: Amber', fn: () => { state.theme='amber'; document.querySelector('.app-shell').dataset.theme='amber'; return getComputedStyle(document.documentElement).getPropertyValue('--brand').trim().includes('d97706'); } },
+  { name: '阿拉伯语 RTL 方向属性', fn: () => { state.editor.lang='ar'; state.editor.docType='pi'; const h=renderEditorPreviewStr(); return h.includes('dir="rtl"'); } },
+];
+
+function renderEditorPreviewStr() {
+  // Build preview HTML string without DOM injection (for testing)
+  const e = state.editor;
+  const dt = DOC_TYPES[e.docType];
+  const isRTL = e.lang === 'ar';
+  let html = `dir="${isRTL?'rtl':'ltr'}'`;
+  html += getDocTitle(e.docType, e.lang);
+  if (dt.hasPrice) {
+    const t = calcTotals();
+    html += fmtMoney(t.grand, e.cur);
+    html += fmtMoney(t.subtotal, e.cur);
+  }
+  e.items.forEach(it => { html += it.desc + it.model; });
+  return html;
+}
+
+function renderTest() {
+  const view = document.getElementById('view-test');
+  view.innerHTML = `
+    <div style="max-width:800px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+        <h2 style="font-size:18px;font-weight:700;color:var(--ink)">🧪 ${L('selfTest')}</h2>
+        <button class="btn btn-primary" id="btnRunTest">${L('runTest')}</button>
+      </div>
+      <div class="test-panel">
+        <div class="test-panel-header"><h3>${L('testResults')}</h3><span style="margin-left:auto;font-size:13px;color:var(--muted)" id="testSummary">— / ${TESTS.length}</span></div>
+        <div class="test-results" id="testResults">
+          ${TESTS.map((t,i) => `<div class="test-item" data-idx="${i}"><div class="test-icon pending">?</div><span class="test-name">${t.name}</span><span class="test-detail">—</span></div>`).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById('btnRunTest').addEventListener('click', runTests);
+  // Auto-run
+  setTimeout(runTests, 300);
+}
+
+function runTests() {
+  // Reset
+  document.querySelectorAll('.test-item').forEach(el => {
+    el.querySelector('.test-icon').className = 'test-icon pending';
+    el.querySelector('.test-icon').textContent = '?';
+    el.querySelector('.test-detail').textContent = '...';
+  });
+
+  let passed = 0;
+  // Save original state
+  const origEditor = JSON.parse(JSON.stringify(state.editor));
+  const origTheme = state.theme;
+
+  TESTS.forEach((test, i) => {
+    try {
+      // Reset to baseline for each test
+      state.editor.docType = 'pi';
+      state.editor.lang = 'en';
+      state.editor.cur = 'USD';
+      state.editor.inc = 'FOB';
+      state.editor.items = DATA_SOURCES.deals[0].items.map(it => ({...it}));
+      state.editor.buyerName = 'Al-Rashid Trading Co., Ltd.';
+      state.editor.buyerAddr = 'Riyadh, Saudi Arabia';
+      state.editor.buyerContact = 'Mr. Ahmed';
+      state.editor.buyerWa = '+966501234567';
+
+      const result = test.fn();
+      const el = document.querySelector(`.test-item[data-idx="${i}"]`);
+      if (result) {
+        el.querySelector('.test-icon').className = 'test-icon pass';
+        el.querySelector('.test-icon').textContent = '✓';
+        el.querySelector('.test-detail').textContent = 'PASS';
+        passed++;
+      } else {
+        el.querySelector('.test-icon').className = 'test-icon fail';
+        el.querySelector('.test-icon').textContent = '✗';
+        el.querySelector('.test-detail').textContent = 'FAIL';
+      }
+    } catch (err) {
+      const el = document.querySelector(`.test-item[data-idx="${i}"]`);
+      el.querySelector('.test-icon').className = 'test-icon fail';
+      el.querySelector('.test-icon').textContent = '✗';
+      el.querySelector('.test-detail').textContent = 'ERROR: ' + (err.message || '').slice(0, 40);
+    }
+  });
+
+  document.getElementById('testSummary').textContent = `${passed} / ${TESTS.length}`;
+
+  // Restore
+  state.editor = origEditor;
+  state.theme = origTheme;
+  document.querySelector('.app-shell').dataset.theme = origTheme;
+  renderThemePicker();
+}
+
+// ===== Init =====
+function init() {
+  renderSidebar();
+  renderThemePicker();
+  renderTopbar();
+
+  // Topbar language switch
+  document.getElementById('langSeg').addEventListener('click', e => {
+    if (e.target.tagName === 'BUTTON') {
+      document.querySelectorAll('#langSeg button').forEach(b => b.classList.remove('active'));
+      e.target.classList.add('active');
+      state.lang = e.target.dataset.lang;
+      document.documentElement.lang = state.lang;
+      renderSidebar();
+      renderTopbar();
+      if (state.view === 'dashboard') renderDashboard();
+      else if (state.view === 'list') renderList();
+    }
+  });
+
+  document.getElementById('btnNew').addEventListener('click', () => openEditor('pi'));
+  document.getElementById('searchInput').addEventListener('input', e => {
+    // Filter dashboard table
+    const q = e.target.value.toLowerCase();
+    document.querySelectorAll('.recent-table tbody tr').forEach(r => {
+      const txt = r.textContent.toLowerCase();
+      r.style.display = txt.includes(q) ? '' : 'none';
+    });
+  });
+
+  switchView('dashboard');
+}
+
+init();
+</script>
+</body>
+</html>

@@ -99,7 +99,7 @@ export interface AgentMemoryRecord {
 export type AgentKnowledgeKind = "system" | "module" | "workflow" | "policy" | "field" | "playbook" | "failure_case";
 export type AgentKnowledgeScope = "system" | "team" | "company";
 export type AgentKnowledgeStatus = "draft" | "review" | "published" | "archived";
-export type AgentKnowledgeSourceType = "system_file" | "manual" | "agent_feedback";
+export type AgentKnowledgeSourceType = "system_file" | "manual" | "agent_feedback" | "distillation";
 export type AgentKnowledgeTrustLevel = "system" | "reviewed" | "candidate";
 
 export interface AgentKnowledgeDocument {
@@ -261,6 +261,9 @@ export interface CustomerMaintenanceFinding {
   reason: string;
   priority: "high" | "medium" | "normal";
   triggerKey: string;
+  playbookActivationId?: string;
+  playbookName?: string;
+  playbookAction?: string;
 }
 
 export interface CustomerMaintenanceWatch {
@@ -286,6 +289,142 @@ export interface CustomerMaintenanceWatch {
   updatedAt: string;
 }
 
+export type SalesDistillationStatus = "draft" | "published";
+
+export interface SalesDistillationMetrics {
+  customerCount: number;
+  leadCount: number;
+  activeDealCount: number;
+  wonDealCount: number;
+  wonAmount: number;
+  followupCount: number;
+  completedTodoCount: number;
+  reportCount: number;
+}
+
+export interface SalesDistillationPlaybookItem {
+  stage: string;
+  action: string;
+  evidence: string;
+}
+
+export interface SalesDistillation {
+  id: string;
+  sourceUserId: string;
+  sourceUserName: string;
+  teamId: string;
+  periodDays: number;
+  metrics: SalesDistillationMetrics;
+  patterns: string[];
+  playbook: SalesDistillationPlaybookItem[];
+  coachingActions: string[];
+  modelLabel: string;
+  status: SalesDistillationStatus;
+  createdBy: string;
+  createdAt: string;
+  publishedBy?: string;
+  publishedAt?: string;
+  trainingRunId?: string;
+  version?: number;
+  maturity?: SalesTrainingMaturity;
+  evaluationScore?: number;
+  sampleCount?: number;
+}
+
+export type SalesTrainingStatus = "queued" | "collecting" | "cleaning" | "labeling" | "training" | "evaluating" | "awaiting_review" | "published" | "paused" | "failed" | "cancelled";
+export type SalesTrainingMaturity = "observation" | "trial" | "production" | "stable";
+export type SalesTrainingSampleLabel = "positive" | "negative" | "neutral";
+
+export interface SalesTrainingSample {
+  id: string;
+  entityType: "customer" | "lead" | "deal";
+  entityId: string;
+  title: string;
+  market: string;
+  stage: string;
+  outcome: string;
+  label: SalesTrainingSampleLabel;
+  included: boolean;
+  activityCount: number;
+  todoCount: number;
+  evidenceIds: string[];
+  summary: string;
+  managerNote: string;
+}
+
+export interface SalesTrainingRound {
+  id: string;
+  index: number;
+  name: string;
+  status: "pending" | "running" | "completed" | "failed";
+  summary: string;
+  startedAt: string;
+  completedAt: string;
+}
+
+export interface SalesTrainingEvaluation {
+  coverage: number;
+  balance: number;
+  traceability: number;
+  strategy: number;
+  safety: number;
+  overall: number;
+  passed: boolean;
+  blockers: string[];
+}
+
+export interface SalesTrainingEvent {
+  id: string;
+  stage: SalesTrainingStatus;
+  message: string;
+  createdAt: string;
+}
+
+export interface SalesTrainingRun {
+  id: string;
+  sourceUserId: string;
+  sourceUserName: string;
+  teamId: string;
+  createdBy: string;
+  parentRunId: string;
+  version: number;
+  periodDays: number;
+  status: SalesTrainingStatus;
+  resumeStatus: SalesTrainingStatus;
+  progress: number;
+  currentAction: string;
+  maturity: SalesTrainingMaturity;
+  metrics: SalesDistillationMetrics;
+  sampleStats: { source: number; valid: number; rejected: number; positive: number; negative: number; neutral: number; holdout: number };
+  samples: SalesTrainingSample[];
+  rounds: SalesTrainingRound[];
+  events: SalesTrainingEvent[];
+  patterns: string[];
+  playbook: SalesDistillationPlaybookItem[];
+  coachingActions: string[];
+  evaluation: SalesTrainingEvaluation;
+  modelLabel: string;
+  candidateDistillationId: string;
+  error: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string;
+  publishedAt: string;
+}
+
+export interface SalesPlaybookActivation {
+  id: string;
+  distillationId: string;
+  ownerId: string;
+  teamId: string;
+  status: "active" | "paused";
+  applicationCount: number;
+  taskCount: number;
+  lastUsedAt: string;
+  activatedBy: string;
+  activatedAt: string;
+  updatedAt: string;
+}
 
 export interface User {
   id: string;
@@ -422,8 +561,16 @@ export interface DocumentLetterhead {
   email: string;
   website: string;
   bankInfo: string;
+  contact: string;
+  taxNo: string;
   logoUrl: string;
   logoPlacement?: DocumentAssetPlacement;
+  matchCountries: string[];
+  matchCurrencies: string[];
+  matchDocumentTypes: TradeDocument["type"][];
+  matchPriority: number;
+  stampId: string;
+  signatureId: string;
   isDefault: boolean;
   enabled: boolean;
   updatedBy: string;
@@ -463,6 +610,8 @@ export interface DocumentLetterheadSnapshot {
   email: string;
   website: string;
   bankInfo: string;
+  contact: string;
+  taxNo: string;
   logoUrl: string;
   logoPlacement?: DocumentAssetPlacement;
 }
@@ -483,6 +632,7 @@ export interface DocumentSignatureSnapshot {
 export interface DocumentDefaultProfile {
   teamId: string;
   seller: string;
+  brandMarkText: string;
   sellerAddress: string;
   sellerContact: string;
   sellerPhone: string;
@@ -511,6 +661,7 @@ export interface TeamSystemSettings {
   teamId: string;
   requireDocumentExcelApproval: boolean;
   productCategories?: string[];
+  ocrProviderConfigEncrypted?: string;
   updatedBy: string;
   updatedAt: string;
 }
@@ -1309,6 +1460,7 @@ export type WebsiteProbeStage =
   | "head"
   | "body"
   | "contact_page"
+  | "ai_extract"
   | "evidence"
   | "completed"
   | "failed";
@@ -1334,6 +1486,7 @@ export interface WebsiteProbeEvidence {
   publicContactEmail: string;
   publicContactPhones?: string[];
   publicContactNames?: Array<{ name: string; title: string }>;
+  aiStructuredContacts?: ExtractedWebsiteContact[];
   sourceUrl: string;
   payloadHash: string;
   observedAt: string;
@@ -1352,7 +1505,8 @@ export interface WebsiteProbeAttempt {
     | "website-probe-policy-v1"
     | "website-probe-policy-v2"
     | "website-probe-policy-v3"
-    | "website-probe-policy-v4-foreign-only";
+    | "website-probe-policy-v4-foreign-only"
+    | "website-probe-policy-v5-foreign-only";
   status: "queued" | "running" | "completed" | "failed";
   outcome:
     | "pending"
@@ -1362,7 +1516,8 @@ export interface WebsiteProbeAttempt {
     | "unreachable"
     | "policy_blocked"
     | "rate_limited"
-    | "circuit_open";
+    | "circuit_open"
+    | "interrupted";
   robotsDecision: "pending" | "allowed" | "denied" | "unavailable";
   httpStatus: number;
   responseBytes: number;
@@ -1430,7 +1585,9 @@ export interface ProspectScorecard {
 export type ProspectContactEvidenceSourceKind =
   | "source_record"
   | "contact_provider"
+  | "web_search"
   | "official_website"
+  | "local_runner"
   | "manual";
 
 export type ProspectContactEvidenceVerification =
@@ -1454,6 +1611,7 @@ export interface ExtractedWebsiteContact {
   verificationStatus?: ProspectContactEvidenceVerification;
   observedAt?: string;
   reasonCodes?: string[];
+  evidenceExcerpt?: string;
   corroboratedSources?: Array<{
     sourceId: string;
     sourceLabel: string;
@@ -1480,14 +1638,19 @@ export interface ProspectContactEnrichmentSourceResult {
     | "pending"
     | "contact_found"
     | "no_contact"
+    | "not_needed"
     | "not_configured"
     | "policy_blocked"
+    | "timed_out"
     | "provider_failed";
   contactCount: number;
   message: string;
   errorCode?: string;
   retryable?: boolean;
   retryAfterAt?: string | null;
+  suggestion?: string;
+  taskId?: string;
+  evidenceUrls?: string[];
   startedAt: string;
   completedAt: string;
 }
@@ -1515,6 +1678,8 @@ export interface ProspectContactEnrichmentAttempt {
   recommendedContact: ProspectContactRecommendation | null;
   contactCount: number;
   summary: string;
+  deadlineAt?: string;
+  lastProgressAt?: string;
   createdAt: string;
   startedAt: string;
   completedAt: string;
@@ -3593,6 +3758,10 @@ export interface AiModelConfig {
   lastTestAt?: string;
   lastTestStatus?: "untested" | "passed" | "failed";
   lastTestMessage?: string;
+  webSearchStatus?: "untested" | "passed" | "failed" | "unsupported";
+  webSearchTestAt?: string;
+  webSearchTestMessage?: string;
+  webSearchCitationCount?: number;
   ownerId: string;
   teamId: string;
   updatedAt: string;
@@ -3746,6 +3915,41 @@ export interface DealEvent {
   createdAt: string;
 }
 
+export interface QuoteHistoryItem {
+  productId: string;
+  product: string;
+  model: string;
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+  lineTotal: number;
+}
+
+export interface QuoteHistoryRecord {
+  id: string;
+  dealId: string;
+  customerId: string;
+  documentId: string;
+  documentType: "PI" | "QUOTATION";
+  documentNumber: string;
+  documentRevision: number;
+  issueDate: string;
+  customerName: string;
+  dealTitle: string;
+  dealStage: Deal["stage"];
+  currency: string;
+  totalAmount: number;
+  items: QuoteHistoryItem[];
+  changes: string[];
+  fingerprint: string;
+  operatorId: string;
+  operatorName: string;
+  ownerId: string;
+  teamId: string;
+  quotedAt: string;
+  exportedAt?: string;
+}
+
 export interface Reminder {
   id: string;
   title: string;
@@ -3783,6 +3987,7 @@ export interface ImportExportJob {
 
 export interface TradeDocumentItem {
   id: string;
+  lineType?: "product" | "shipping_cost";
   productId?: string;
   imageUrl?: string;
   product: string;
@@ -3809,6 +4014,43 @@ export interface TradeDocumentImportEvidence {
   value: string;
   source: string;
   confidence: number;
+}
+
+export type TradeDocumentRecognitionSource = "import" | "ocr";
+
+export interface TradeDocumentRecognitionFieldRule {
+  field: Exclude<keyof TradeDocumentImportDraft, "items" | "type" | "language" | "templateStyle" | "customerId" | "dealId" | "title">;
+  labels: string[];
+}
+
+export interface TradeDocumentRecognitionTemplate {
+  id: string;
+  familyId: string;
+  version: number;
+  name: string;
+  documentType: TradeDocument["type"];
+  sourceKind: TradeDocumentRecognitionSource;
+  status: "active" | "archived";
+  fingerprint: {
+    anchors: string[];
+    sellerHint?: string;
+  };
+  fieldRules: TradeDocumentRecognitionFieldRule[];
+  itemColumnRules: Partial<Record<"product" | "model" | "material" | "finish" | "hsCode" | "quantity" | "unit" | "unitPrice" | "amount" | "originCountry" | "weightKg" | "packageCount", string[]>>;
+  sampleAnalysisId: string;
+  createdBy: string;
+  teamId: string;
+  createdAt: string;
+  archivedAt?: string;
+}
+
+export interface TradeDocumentRecognitionTemplateSnapshot {
+  templateId: string;
+  familyId: string;
+  name: string;
+  version: number;
+  matchScore: number;
+  matchedAt: string;
 }
 
 export interface TradeDocumentImportDraft {
@@ -3854,6 +4096,8 @@ export interface TradeDocumentImportAnalysis {
   calculatedTotal: number;
   declaredTotal?: number;
   totalDifference?: number;
+  recognitionSource?: TradeDocumentRecognitionSource;
+  recognitionTemplate?: TradeDocumentRecognitionTemplateSnapshot;
   createdDocumentId?: string;
   confirmedBy?: string;
   confirmedAt?: string;
@@ -3947,6 +4191,7 @@ export interface TradeDocument {
   buyerAddress: string;
   buyerContact: string;
   seller: string;
+  brandMarkText?: string;
   sellerAddress: string;
   sellerContact?: string;
   sellerPhone?: string;
@@ -4264,7 +4509,7 @@ export interface InternalMessage {
   type: "system" | "manual";
   subject: string;
   content: string;
-  relatedType: "daily_report" | "message" | "email_return" | "integration_approval" | "integration_call" | "integration_connection" | "integration_event" | "integration_connector" | "";
+  relatedType: "daily_report" | "message" | "email_return" | "quote_history" | "integration_approval" | "integration_call" | "integration_connection" | "integration_event" | "integration_connector" | "";
   relatedId: string;
   idempotencyKey?: string;
   readAt: string;

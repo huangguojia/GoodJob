@@ -15,14 +15,14 @@
       --muted: #6a7975;
       --line: #e1e8e6;
       --line-soft: #eef3f2;
-      --nav: #0f1f1d;
-      --nav-soft: #19302d;
+      --nav: #2b0e17;
+      --nav-soft: #411522;
 
-      --brand: #0f766e;
-      --brand-strong: #0b5d57;
-      --brand-2: #115e59;
-      --brand-tint: #e3f3f0;
-      --brand-ring: rgba(15, 118, 110, .18);
+      --brand: #be123c;
+      --brand-strong: #9f1239;
+      --brand-2: #db2777;
+      --brand-tint: #fdecee;
+      --brand-ring: rgba(190, 18, 60, .18);
 
       --aqua: #0e7490;
       --green: #15803d;
@@ -2866,7 +2866,8 @@
 
     #documentStudioWorkspace[hidden],
     #documentDefaultsWorkspace[hidden],
-    #documentHistoryWorkspace[hidden] { display: none; }
+    #documentHistoryWorkspace[hidden],
+    #quoteHistoryWorkspace[hidden] { display: none; }
     .document-defaults-workspace { display: grid; gap: 12px; }
     .document-defaults-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 18px; border: 1px solid var(--line-soft); border-left: 4px solid var(--brand); border-radius: 8px; background: var(--surface); }
     .document-defaults-head > div:first-child { min-width: 0; }
@@ -2892,6 +2893,16 @@
     .document-defaults-grid label > span, .document-default-assets-selects label > span { color: var(--muted); font-size: 10px; font-weight: 700; }
     .document-defaults-grid input, .document-defaults-grid select, .document-defaults-grid textarea, .document-default-assets-selects select { width: 100%; min-width: 0; }
     .document-default-assets-selects { display: grid; gap: 10px; }
+    .document-seller-profile-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; }
+    .document-seller-profile-card { display: grid; gap: 6px; padding: 11px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--surface-soft); }
+    .document-seller-profile-card header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .document-seller-profile-card b { color: var(--ink); font-size: 12px; }
+    .document-seller-profile-card small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+    .document-seller-profile-card em { color: var(--brand); font-size: 9px; font-style: normal; font-weight: 700; }
+    #docSellerMatchHint { color: var(--brand); font-size: 9px; line-height: 1.4; }
+    .seller-match-rules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .seller-document-types { display: flex; flex-wrap: wrap; gap: 7px 12px; }
+    .seller-document-types label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
     .document-default-toggle { grid-template-columns: auto minmax(0, 1fr); align-items: center; padding: 9px 10px; border: 1px solid var(--line-soft); border-radius: 7px; background: #f8faf9; cursor: pointer; }
     .document-default-toggle > span { display: grid; gap: 2px; }
     .document-default-toggle b { color: var(--ink); font-size: 11px; }
@@ -2910,11 +2921,13 @@
     .document-default-preview-assets { display: flex; align-items: end; gap: 10px; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line-soft); }
     .document-default-preview-assets img { width: 62px; height: 38px; object-fit: contain; }
     .document-default-preview-assets img[data-signature] { width: 90px; height: 34px; }
-    .document-history-workspace { display: grid; gap: 12px; }
+    .document-history-workspace, .quote-history-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
     .document-history-head, .document-history-summary, .document-history-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .document-history-head { padding: 14px 16px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface); }
     .document-history-head h2 { margin: 0; font-size: 18px; }
     .document-history-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .quote-history-mode-switch { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+    .quote-history-mode-switch .btn.active { color: var(--brand); border-color: rgba(190,24,93,.38); background: rgba(190,24,93,.08); }
     .document-history-filters { display: grid; grid-template-columns: minmax(220px, 1.6fr) repeat(6, minmax(100px, 1fr)) auto auto; gap: 9px; align-items: end; padding: 14px; background: #f8fafb; }
     .document-history-filters label { display: grid; gap: 4px; min-width: 0; }
     .document-history-filters label > span { color: var(--muted); font-size: 11px; font-weight: 700; }
@@ -2924,6 +2937,38 @@
     .document-history-title span, .document-history-title small { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
     .document-history-results { padding: 12px; }
     .document-history-pagination { justify-content: center; padding-top: 12px; }
+    #quoteHistoryWorkspace { min-width: 0; }
+    .quote-history-filters { width: 100%; min-width: 0; box-sizing: border-box; grid-template-columns: minmax(210px, 1.5fr) repeat(7, minmax(100px, 1fr)) auto auto; }
+    .quote-history-summary b { color: var(--brand); font-size: 16px; }
+    .quote-history-summary span { margin-left: 10px; color: var(--muted); font-size: 11px; }
+    .quote-product-analysis-panel { min-width: 0; }
+    .quote-product-analysis-panel .table-wrap { overflow-x: auto; }
+    .quote-product-analysis-panel table { min-width: 920px; }
+    .quote-history-product-overview { display: grid; grid-template-columns: minmax(260px, .9fr) minmax(0, 1.5fr); gap: 10px; margin: 0 0 12px; }
+    .quote-analysis-overall, .quote-analysis-countries { display: grid; gap: 8px; min-width: 0; padding: 12px 14px; border: 1px solid var(--line-soft); border-radius: 7px; background: #fbfdfc; }
+    .quote-analysis-overall > span, .quote-analysis-countries > span { color: var(--muted); font-size: 11px; font-weight: 700; }
+    .quote-analysis-overall > div { display: grid; gap: 3px; }
+    .quote-analysis-overall b { color: var(--brand); font-size: 19px; }
+    .quote-analysis-overall small, .quote-analysis-countries small { color: var(--muted); font-size: 10px; }
+    .quote-analysis-countries { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); align-content: start; }
+    .quote-analysis-countries > span { grid-column: 1 / -1; }
+    .quote-analysis-countries > div { display: grid; gap: 3px; min-width: 0; padding: 8px 9px; border-left: 2px solid rgba(190,24,93,.35); background: #fff; }
+    .quote-analysis-countries strong { color: var(--ink); font-size: 13px; white-space: nowrap; }
+    .quote-history-product, .quote-history-change { display: grid; gap: 3px; max-width: 260px; }
+    .quote-history-product b, .quote-history-change b { color: var(--ink); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+    .quote-history-product span, .quote-history-change span { color: var(--muted); font-size: 10px; }
+    .quote-history-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 2px 0 16px; border-bottom: 1px solid var(--line-soft); }
+    .quote-history-detail-head span, .quote-history-detail-head p { color: var(--muted); font-size: 11px; }
+    .quote-history-detail-head h2 { margin: 4px 0; color: var(--ink); font-size: 18px; }
+    .quote-history-detail-head p { margin: 0; }
+    .quote-history-detail-head strong { color: var(--brand); font-size: 20px; white-space: nowrap; }
+    .quote-history-change-list { display: grid; gap: 7px; padding: 14px 0; }
+    .quote-history-change-list div { display: grid; grid-template-columns: 7px minmax(0, 1fr); gap: 9px; align-items: start; color: var(--ink); font-size: 12px; line-height: 1.55; }
+    .quote-history-change-list i { width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 4px rgba(190,24,93,.09); }
+    .quote-history-detail-table { max-height: 330px; border: 1px solid var(--line-soft); border-radius: 7px; }
+    .quote-history-detail-foot { display: flex; justify-content: space-between; gap: 10px; margin-top: 12px; color: var(--muted); font-size: 10px; }
+    @media (max-width: 1100px) { .quote-history-filters { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+    @media (max-width: 650px) { .quote-history-filters { grid-template-columns: 1fr 1fr; } .quote-history-detail-head, .quote-history-detail-foot { display: grid; } .quote-history-mode-switch { justify-content: flex-start; } .quote-history-product-overview { grid-template-columns: 1fr; } }
     .document-convert-modal p { margin: 0 0 12px; color: var(--muted); font-size: 13px; line-height: 1.6; }
     .modal.trade-document-import-modal { width: min(1240px, calc(100vw - 36px)); height: min(900px, calc(100dvh - 32px)); max-height: none; }
     .trade-document-import-modal .modal-body { padding: 0; overflow: hidden; background: #f4f7f7; }
@@ -2950,6 +2995,26 @@
     .trade-document-import-evidence span:last-child { color: #0f766e; text-align: right; }
     .trade-document-import-review { min-width: 0; min-height: 0; padding: 16px; overflow: auto; background: #fff; }
     .trade-document-import-review-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .trade-recognition-template-bar { display: grid; grid-template-columns: minmax(170px, 1fr) minmax(180px, .8fr) auto auto; gap: 8px; align-items: end; margin-bottom: 12px; padding: 10px 11px; border: 1px solid #d9e6e2; border-radius: 7px; background: #f7fbfa; }
+    .trade-recognition-template-bar > div, .trade-recognition-template-bar label { display: grid; gap: 3px; min-width: 0; }
+    .trade-recognition-template-bar span, .trade-recognition-template-bar small { color: var(--muted); font-size: 9px; line-height: 1.4; }
+    .trade-recognition-template-bar b { overflow: hidden; color: #0f766e; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .trade-recognition-template-bar input { width: 100%; min-width: 0; height: 32px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: #fff; font-size: 11px; }
+    .trade-recognition-template-library { margin: -4px 0 12px; padding: 11px; border: 1px solid #dce7e4; border-radius: 7px; background: #fff; box-shadow: 0 8px 24px rgba(21, 57, 49, .07); }
+    .trade-recognition-template-library-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+    .trade-recognition-template-library-head > div { display: grid; gap: 2px; }
+    .trade-recognition-template-library-head b, .trade-recognition-template-group h4 { margin: 0; color: var(--ink); font-size: 11px; }
+    .trade-recognition-template-library-head span, .trade-recognition-template-row span, .trade-recognition-template-group p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
+    .trade-recognition-template-library-head button { border: 0; color: var(--muted); background: transparent; font-size: 18px; cursor: pointer; }
+    .trade-recognition-template-group { display: grid; gap: 6px; margin-top: 8px; }
+    .trade-recognition-template-group summary { color: var(--ink); font-size: 10px; font-weight: 700; cursor: pointer; }
+    .trade-recognition-template-group h4 span, .trade-recognition-template-group summary span { color: var(--brand); }
+    .trade-recognition-template-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 7px 0; border-top: 1px solid #edf2f0; }
+    .trade-recognition-template-row > div { display: grid; gap: 2px; min-width: 0; }
+    .trade-recognition-template-row b { overflow: hidden; color: var(--ink); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .trade-recognition-template-row small { color: var(--brand); }
+    .trade-recognition-template-loading { color: var(--muted); font-size: 10px; }
+    .trade-recognition-template-loading.is-error { color: #a33737; }
     .trade-document-import-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
     .trade-document-import-form label, .trade-document-import-items label { display: grid; gap: 4px; min-width: 0; }
     .trade-document-import-form label.wide { grid-column: span 2; }
@@ -2969,7 +3034,7 @@
     .trade-document-import-item button { height: 32px; border: 1px solid #e5c8c8; border-radius: 6px; color: #a33737; background: #fff; cursor: pointer; }
     .trade-document-import-total { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 10px; color: var(--muted); font-size: 11px; }
     .trade-document-import-total b { color: var(--ink); font-size: 14px; }
-    @media (max-width: 850px) { .modal.trade-document-import-modal { width: 100%; height: calc(100dvh - 16px); } .trade-document-import-layout { grid-template-columns: 1fr; grid-template-rows: 240px minmax(0, 1fr); } .trade-document-import-source { border-right: 0; border-bottom: 1px solid #dbe5e3; } .trade-document-import-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } .trade-document-import-form label.wide, .trade-document-import-form label.full { grid-column: 1 / -1; } }
+    @media (max-width: 850px) { .modal.trade-document-import-modal { width: 100%; height: calc(100dvh - 16px); } .trade-document-import-layout { grid-template-columns: 1fr; grid-template-rows: 240px minmax(0, 1fr); } .trade-document-import-source { border-right: 0; border-bottom: 1px solid #dbe5e3; } .trade-document-import-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } .trade-document-import-form label.wide, .trade-document-import-form label.full { grid-column: 1 / -1; } .trade-recognition-template-bar { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 560px) { .trade-document-import-summary { grid-template-columns: 1fr; gap: 8px; } .trade-document-import-form { grid-template-columns: 1fr; } .trade-document-import-form label.wide, .trade-document-import-form label.full { grid-column: auto; } .trade-document-import-item { grid-template-columns: 1fr 1fr; } .trade-document-import-item-image { grid-column: 1 / -1; width: 64px; } .trade-document-import-item label, .trade-document-import-item label[data-import-size] { grid-column: auto; } .trade-document-import-item label[data-import-size="product"], .trade-document-import-item label[data-import-size="origin"] { grid-column: 1 / -1; } }
     .document-convert-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
     .document-convert-option { display: grid; gap: 5px; padding: 14px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); cursor: pointer; text-align: left; }
@@ -2982,6 +3047,45 @@
     .document-product-choice:hover { border-color: var(--brand); background: var(--brand-tint); }
     .document-product-choice span { display: grid; gap: 3px; min-width: 0; }
     .document-product-choice small { color: var(--muted); overflow-wrap: anywhere; }
+
+    .modal.advanced-excel-modal { width: min(1080px, calc(100vw - 40px)); max-height: min(88vh, 860px); }
+    .advanced-excel-modal .modal-body { padding: 18px; overflow: hidden; }
+    .advanced-excel-panel { display: grid; width: 100%; min-width: 0; min-height: 0; gap: 14px; }
+    .advanced-excel-intro { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid rgba(15,118,110,.18); border-radius: 8px; background: linear-gradient(120deg, #f0faf7, #f8fbfc); }
+    .advanced-excel-intro div { display: grid; gap: 3px; min-width: 0; }
+    .advanced-excel-intro b { color: var(--ink); overflow-wrap: anywhere; }
+    .advanced-excel-intro span, .advanced-excel-intro strong { color: var(--muted); font-size: 11px; }
+    .advanced-excel-intro strong { white-space: nowrap; }
+    .advanced-excel-config { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, .8fr) minmax(0, .8fr) minmax(190px, .9fr) auto; align-items: end; gap: 10px; padding: 12px; border: 1px solid var(--line-soft); border-radius: 8px; background: #fbfcfc; }
+    .advanced-excel-config > label { display: grid; gap: 5px; min-width: 0; }
+    .advanced-excel-config > label > span { color: var(--muted); font-size: 10px; font-weight: 750; }
+    .advanced-excel-config select { width: 100%; min-height: 36px; border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; color: var(--ink); background: var(--surface); }
+    .advanced-excel-image-toggle { grid-template-columns: auto minmax(0, 1fr); align-items: center; min-height: 36px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); cursor: pointer; }
+    .advanced-excel-image-toggle > span { display: grid; gap: 1px; }
+    .advanced-excel-image-toggle b { color: var(--ink); font-size: 11px; }
+    .advanced-excel-image-toggle small { color: var(--muted); font-size: 9px; line-height: 1.3; }
+    .advanced-excel-capabilities { color: #0f766e; font-size: 10px; font-weight: 700; }
+    .advanced-excel-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .advanced-excel-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; max-height: min(590px, calc(88vh - 220px)); overflow-x: hidden; overflow-y: auto; padding: 2px 4px 2px 2px; }
+    .advanced-excel-card { display: grid; grid-template-rows: auto auto minmax(52px, auto) auto minmax(30px, auto) auto; align-content: start; gap: 8px; min-width: 0; padding: 15px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface); }
+    .advanced-excel-card.is-supported { border-color: rgba(15,118,110,.32); box-shadow: 0 5px 15px rgba(15,118,110,.06); }
+    .advanced-excel-card-head { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 10px; }
+    .advanced-excel-category { color: var(--brand); font-weight: 750; }
+    .advanced-excel-card h3 { margin: 0; color: var(--ink); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+    .advanced-excel-card p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+    .advanced-excel-types { display: flex; flex-wrap: wrap; gap: 5px; }
+    .advanced-excel-types span { padding: 3px 6px; border-radius: 4px; color: #31645d; background: #e9f6f2; font-size: 10px; }
+    .advanced-excel-types span.is-current { color: #fff; background: #3157d5; font-weight: 750; box-shadow: 0 0 0 1px rgba(49,87,213,.16); }
+    .advanced-excel-warning { min-height: 30px; color: #8a6b2e; font-size: 10px; line-height: 1.5; }
+    .advanced-excel-actions { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 8px; }
+    .advanced-excel-card .btn { width: 100%; min-height: 34px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .modal.excel-preview-modal { width: min(1180px, calc(100vw - 32px)); height: min(900px, calc(100dvh - 32px)); }
+    .excel-preview-modal .modal-body { display: flex; min-height: 0; padding: 0; overflow: hidden; background: #eef2f5; }
+    .excel-preview-shell { display: grid; width: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
+    .excel-preview-meta { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 16px; border-bottom: 1px solid #d9e1e7; background: var(--surface); }
+    .excel-preview-meta b { color: var(--ink); font-size: 12px; }
+    .excel-preview-meta span { color: var(--muted); font-size: 10px; }
+    .excel-preview-frame { width: 100%; height: 100%; min-height: 500px; border: 0; background: #fff; }
     .document-asset-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
     .document-asset-columns > section { min-width: 0; }
     .document-asset-list { display: grid; gap: 8px; }
@@ -3016,7 +3120,8 @@
     .document-placement-numbers span, .document-placement-scale > span { color: var(--muted); font-size: 10px; }
     .document-placement-numbers input { width: 100%; min-height: 31px; }
     .document-placement-scale input { width: 100%; accent-color: var(--brand); }
-    @media (max-width: 680px) { .document-asset-columns { grid-template-columns: 1fr; max-height: none; overflow: visible; padding: 0; } .document-asset-placement-body { grid-template-columns: 1fr; } }
+    @media (max-width: 900px) { .advanced-excel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .advanced-excel-config { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 680px) { .modal.advanced-excel-modal { width: 100%; max-height: calc(100dvh - 24px); } .advanced-excel-modal .modal-body { padding: 14px; overflow: auto; } .advanced-excel-grid, .advanced-excel-config, .document-asset-columns { grid-template-columns: 1fr; max-height: none; overflow: visible; padding: 0; } .advanced-excel-config { padding: 10px; } .advanced-excel-intro, .excel-preview-meta { align-items: flex-start; flex-direction: column; } .modal.excel-preview-modal { width: 100%; height: calc(100dvh - 16px); } .excel-preview-frame { min-height: 420px; } .document-asset-placement-body { grid-template-columns: 1fr; } }
 
     .doc-editor {
       padding: 14px;
@@ -3476,7 +3581,19 @@
       background: var(--doc-primary, linear-gradient(135deg, #0f766e, #1aa7a1));
       font-weight: 900;
       font-size: 15px;
+      line-height: 1;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      text-align: center;
+      padding: 3px;
     }
+
+    .doc-logo-mark.is-medium { font-size: 11px; }
+    .doc-logo-mark.is-long { font-size: 8px; }
+
+    .document-default-preview-sheet header .document-default-preview-brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .document-default-preview-mark { width: 30px; height: 30px; display: grid; place-items: center; flex: 0 0 30px; border-radius: 7px; background: var(--brand); color: #fff; font-size: 9px; font-weight: 900; line-height: 1; text-align: center; overflow: hidden; overflow-wrap: anywhere; padding: 2px; }
+    .document-default-preview-brand > div { min-width: 0; }
 
     .doc-letterhead b {
       display: block;
@@ -3714,11 +3831,12 @@
 
       html,
       body {
-        width: 210mm !important;
-        height: 297mm !important;
+        width: auto !important;
+        min-height: 100% !important;
+        height: auto !important;
         margin: 0 !important;
         padding: 0 !important;
-        overflow: hidden !important;
+        overflow: visible !important;
         background: var(--surface-2) !important;
       }
 
@@ -3729,19 +3847,33 @@
       .print-only-document.doc-paper {
         display: block !important;
         width: 210mm !important;
-        height: 297mm !important;
-        min-height: 0 !important;
-        max-height: 297mm !important;
+        height: auto !important;
+        min-height: 297mm !important;
+        max-height: none !important;
         margin: 0 !important;
         padding: 9mm 10mm !important;
         border: 0 !important;
         border-radius: 0 !important;
         box-shadow: none !important;
-        overflow: hidden !important;
+        overflow: visible !important;
         color: #111827 !important;
         background: var(--surface-2) !important;
         font-size: 9px !important;
         line-height: 1.25 !important;
+      }
+
+      .print-only-document table,
+      .print-only-document .doc-block,
+      .print-only-document .doc-term,
+      .print-only-document .doc-sign,
+      .print-only-document .doc-quote-terms {
+        break-inside: avoid !important;
+        page-break-inside: avoid !important;
+      }
+
+      .print-only-document tr {
+        break-inside: avoid !important;
+        page-break-inside: avoid !important;
       }
 
       .print-only-document .doc-print-head {
@@ -3756,6 +3888,9 @@
         border-radius: 2mm !important;
         font-size: 10px !important;
       }
+
+      .print-only-document .doc-logo-mark.is-medium { font-size: 7px !important; }
+      .print-only-document .doc-logo-mark.is-long { font-size: 5px !important; }
 
       .print-only-document .doc-letterhead {
         grid-template-columns: 9mm minmax(0, 1fr) !important;
@@ -6591,6 +6726,27 @@
       line-height: 1.55;
     }
 
+    .ai-web-search-status {
+      margin-top: 10px;
+      padding: 8px 10px;
+      border: 1px solid #e4ebf6;
+      border-radius: 7px;
+      color: #64748b;
+      background: #f8fafc;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .ai-web-search-status.is-ready {
+      color: #0f766e;
+      border-color: rgba(15,118,110,.25);
+      background: rgba(15,118,110,.07);
+    }
+    .ai-web-search-status.is-blocked {
+      color: #a13d3d;
+      border-color: rgba(177,72,72,.25);
+      background: rgba(177,72,72,.06);
+    }
+
     .ai-result-card { margin-top: 14px; }
     .ai-result-card .ai-status-hero { margin: 0; }
 
@@ -7690,6 +7846,27 @@
       line-height: 1.4;
     }
 
+    .prospect-contact-sources .prospect-contact-source-advice {
+      margin-top: 4px;
+      color: #9a5b07;
+      line-height: 1.55;
+    }
+
+    .prospect-contact-source-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 5px;
+    }
+
+    .prospect-contact-source-links a {
+      color: #2f6fb0;
+      font-size: 9px;
+      text-decoration: none;
+    }
+
+    .prospect-contact-source-links a:hover { text-decoration: underline; }
+
     .prospect-contact-sources em {
       font-size: 9px;
       font-style: normal;
@@ -7725,11 +7902,88 @@
       margin-top: 10px;
     }
 
+    .prospect-contact-enrichment-button {
+      min-width: 104px;
+      min-height: 36px;
+      height: auto;
+      padding: 8px 16px;
+      line-height: 1.35;
+      white-space: nowrap;
+      overflow: visible;
+      flex: 0 0 auto;
+    }
+
     .prospect-contact-actions span {
       color: #7a8796;
       font-size: 9px;
       text-align: right;
     }
+
+    .prospect-contact-quick-row {
+      display: flex;
+      align-items: center;
+      min-height: 28px;
+    }
+
+    .prospect-contact-quick {
+      height: 28px;
+      padding: 0 10px;
+      border: 1px solid #b9c9df;
+      border-radius: 6px;
+      color: #285c92;
+      background: #f4f8fd;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .prospect-contact-quick:hover:not(:disabled) {
+      border-color: #6f9aca;
+      background: #eaf2fb;
+    }
+
+    .prospect-contact-quick:disabled {
+      color: #77869a;
+      cursor: wait;
+      opacity: .72;
+    }
+
+    .prospect-contact-ready {
+      display: block;
+      max-width: 100%;
+      overflow: hidden;
+      color: #147456;
+      font-size: 10px;
+      font-weight: 700;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .prospect-outreach-gate {
+      margin: 12px 0;
+      border-top: 1px solid #dfe6ef;
+      border-bottom: 1px solid #dfe6ef;
+      background: #fff;
+    }
+
+    .prospect-outreach-gate > summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 2px 12px;
+      align-items: center;
+      min-height: 54px;
+      padding: 9px 2px;
+      color: #243247;
+      cursor: pointer;
+      list-style: none;
+    }
+
+    .prospect-outreach-gate > summary::-webkit-details-marker { display: none; }
+    .prospect-outreach-gate > summary > span { font-size: 12px; font-weight: 800; }
+    .prospect-outreach-gate > summary > small { grid-column: 1; color: #758297; font-size: 10px; }
+    .prospect-outreach-gate > summary > .badge { grid-column: 2; grid-row: 1 / span 2; }
+    .prospect-outreach-gate-body { padding: 0 0 12px; }
+    .prospect-outreach-gate .prospect-qualification-panel { margin: 0; border: 0; padding: 8px 0 0; box-shadow: none; }
 
     .prospect-contact-evidence {
       margin-top: 10px;
@@ -7818,10 +8072,22 @@
       font-size: 9px;
     }
 
+    .prospect-contact-evidence-quote {
+      margin: 7px 0 0;
+      padding: 6px 8px;
+      border-left: 2px solid #9fb7d2;
+      color: #59697a;
+      background: #f7f9fb;
+      font-size: 9px;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+
     @media (max-width: 760px) {
       .prospect-contact-sources { grid-template-columns: 1fr; }
       .prospect-contact-actions { align-items: flex-start; flex-direction: column; }
       .prospect-contact-actions span { text-align: left; }
+      .prospect-contact-enrichment-button { width: 100%; }
     }
 
     .prospect-probe-timeline {
@@ -17102,6 +17368,37 @@
       grid-column: 1 / -1;
     }
 
+    .profile-password-panel {
+      border-color: #ead9df;
+      background: linear-gradient(135deg, #fff 0%, #fff9fb 100%);
+    }
+
+    .profile-password-form {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .profile-password-actions {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-top: 2px;
+    }
+
+    .profile-password-actions small {
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .profile-password-actions .btn {
+      flex: 0 0 auto;
+    }
+
     .email-status-box {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -18611,10 +18908,15 @@
     .task-run-stream {
       height: 438px;
       overflow: auto;
+      display: flex;
+      flex-direction: column;
       overscroll-behavior: contain;
       scroll-behavior: smooth;
+      scrollbar-gutter: stable;
       background: var(--surface);
     }
+
+    .task-run-stream > .task-run-log:first-child { margin-top: auto; }
 
     .task-run-stream.is-verbose {
       background: var(--surface-2);
@@ -18812,6 +19114,7 @@
     .task-run-source-count { color: #7d899a; font-size: 9px; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .task-run-source-wait { max-width: 320px; color: #64748b; font-size: 9px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
     .task-run-source-wait.is-ai { color: #5962b5; }
+    .task-run-source-wait.is-timeout { color: #b42318; }
     .task-run-source-result { display: grid; justify-items: start; gap: 4px; }
     .task-run-source-result button { min-height: 25px; padding: 0 8px; border: 1px solid #efc7c7; border-radius: 5px; color: #a33b3b; background: #fffafa; font-size: 9px; font-weight: 800; cursor: pointer; }
     .task-run-source-result button:hover { border-color: #d98989; background: var(--rose-tint); }
@@ -19217,6 +19520,7 @@
       .focus-metrics,
       .profile-hero-metrics,
       .profile-form-grid,
+      .profile-password-form,
       .profile-setting-grid,
       .quality-grid,
       .dense-grid,
@@ -20576,6 +20880,12 @@
             box-shadow: 0 20px 60px rgba(37, 52, 82, .08);
           }
 
+          #lead-finder .lead-live-overview:has(.lead-live-console) {
+            height: clamp(420px, 58vh, 620px);
+            min-height: 420px;
+            max-height: none;
+          }
+
           #lead-finder .lead-live-empty {
             display: grid;
             flex: 0 0 auto;
@@ -20632,7 +20942,7 @@
           #lead-finder .lead-live-empty h2 { margin: 6px 0 6px; color: var(--lf-ink); font-size: clamp(20px, 2vw, 26px); font-weight: 700; line-height: 1.25; }
           #lead-finder .lead-live-empty p { max-width: 520px; color: var(--lf-muted); font-size: 13px; line-height: 1.6; }
 
-          #lead-finder .lead-live-console { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+          #lead-finder .lead-live-console { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
           #lead-finder .lead-live-console-head {
             display: grid;
@@ -20706,11 +21016,37 @@
             flex: 1 1 auto;
             min-height: 0;
             overflow-y: auto;
-            display: grid;
+            display: flex;
+            flex-direction: column;
             gap: 22px;
             padding: 24px clamp(18px, 4vw, 48px) 28px;
             background: var(--lf-surface);
+            overscroll-behavior: contain;
+            scroll-behavior: smooth;
+            scrollbar-gutter: stable;
           }
+
+          #lead-finder .lead-live-thread > :first-child { margin-top: auto; }
+
+          #lead-finder .lead-live-jump-latest {
+            position: absolute;
+            right: 22px;
+            bottom: 17px;
+            z-index: 4;
+            min-height: 30px;
+            padding: 0 12px;
+            border: 1px solid #bec9df;
+            border-radius: 15px;
+            color: var(--lf-accent);
+            background: rgba(255, 255, 255, .96);
+            box-shadow: 0 8px 22px rgba(37, 52, 82, .15);
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+          }
+
+          #lead-finder .lead-live-jump-latest:hover { border-color: var(--lf-accent); }
+          #lead-finder .lead-live-jump-latest[hidden] { display: none; }
 
           #lead-finder .lead-live-message + .lead-live-message { margin-top: 6px; }
           #lead-finder .lead-live-message.is-request + .lead-live-message:not(.is-request),
@@ -20848,16 +21184,12 @@
           #lead-finder .lead-live-progress-track { height: 2px; overflow: hidden; border-radius: 0; background: #dbe2ef; }
           #lead-finder .lead-live-progress-track i { display: block; width: var(--p); height: 100%; border-radius: 0; background: var(--lf-accent); transition: width .35s cubic-bezier(.16, 1, .3, 1); }
 
-          /* 流式打印动效（纯显示层，不改动后台逻辑） */
-          #lead-finder .lead-live-bubble .lf-stream-char { opacity: 0; transition: opacity .14s linear; }
-          #lead-finder .lead-live-bubble p.lf-stream-on .lf-stream-char { opacity: 1; }
           #lead-finder .lead-live-message.is-assistant.is-active .lead-live-bubble p::after {
             content: '▋'; display: inline-block; margin-left: 2px; color: var(--lf-accent);
             font-weight: 700; vertical-align: -1px; animation: lf-caret 1s steps(1, end) infinite;
           }
           @keyframes lf-caret { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
           #lead-finder .lead-live-message.is-event { transition: opacity .45s ease, transform .45s cubic-bezier(.16, 1, .3, 1); }
-          #lead-finder .lead-live-message.is-event.lf-print-hidden { opacity: 0; transform: translateY(10px); }
 
           #lead-finder .lead-live-facts {
             display: flex;
@@ -20983,6 +21315,39 @@
 
           #lead-finder .lead-live-message.is-discovery .lead-live-avatar { color: var(--lf-accent); border-color: #c5d6f7; background: var(--lf-accent-soft); }
           #lead-finder .lead-live-message.is-discovery .lead-live-bubble { width: min(100%, 920px); }
+
+          #lead-finder .lead-live-stream-tail {
+            display: grid;
+            grid-template-columns: 10px minmax(0, 1fr);
+            align-items: center;
+            gap: 10px;
+            min-height: 38px;
+            margin-left: 50px;
+            padding: 8px 0 0;
+            border-top: 1px solid var(--lf-line);
+          }
+
+          #lead-finder .lead-live-stream-tail > i {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--lf-accent);
+            box-shadow: 0 0 0 0 rgba(79, 70, 229, .28);
+            animation: lead-live-tail-pulse 1.6s ease-out infinite;
+          }
+
+          #lead-finder .lead-live-stream-tail span,
+          #lead-finder .lead-live-stream-tail b,
+          #lead-finder .lead-live-stream-tail small { display: block; min-width: 0; }
+          #lead-finder .lead-live-stream-tail b { color: var(--lf-copy); font-size: 11px; line-height: 1.45; }
+          #lead-finder .lead-live-stream-tail small { margin-top: 1px; color: var(--lf-muted); font-size: 10px; line-height: 1.45; }
+
+          @keyframes lead-live-tail-pulse {
+            0% { box-shadow: 0 0 0 0 rgba(79, 70, 229, .3); opacity: 1; }
+            70% { box-shadow: 0 0 0 7px rgba(79, 70, 229, 0); opacity: .72; }
+            100% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); opacity: 1; }
+          }
+
           #lead-finder .lead-live-discoveries { margin-top: 4px; border-top: 1px solid var(--lf-line); }
           #lead-finder .lead-live-discoveries button {
             display: grid;
@@ -21314,6 +21679,35 @@
           #lead-finder .lead-result-view-tabs button { padding: 0 2px; color: var(--lf-muted); font-size: 13px; font-weight: 620; }
           #lead-finder .lead-result-view-tabs button.active { color: var(--lf-accent); }
           #lead-finder .lead-result-view-tabs button.active::after { height: 2px; background: var(--lf-accent); }
+
+          #lead-finder .lead-result-reconciliation {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+            margin: 0 0 14px;
+            padding: 12px 14px;
+            border: 1px solid rgba(217, 119, 6, .22);
+            border-left: 3px solid #d97706;
+            border-radius: 8px;
+            background: #fffbeb;
+          }
+          #lead-finder .lead-result-reconciliation[hidden] { display: none; }
+          #lead-finder .lead-result-reconciliation div { display: grid; gap: 2px; min-width: 0; }
+          #lead-finder .lead-result-reconciliation b { color: var(--lf-ink); font-size: 13px; font-weight: 680; line-height: 20px; }
+          #lead-finder .lead-result-reconciliation span { color: var(--lf-muted); font-size: 12px; line-height: 19px; }
+          #lead-finder .lead-result-reconciliation button {
+            flex: 0 0 auto;
+            padding: 0;
+            border: 0;
+            color: #9a5b07;
+            background: transparent;
+            font-size: 12px;
+            font-weight: 650;
+            line-height: 28px;
+            cursor: pointer;
+          }
+          #lead-finder .lead-result-reconciliation button:hover { color: #713f12; text-decoration: underline; }
 
           #lead-finder .lead-filter-tabs,
           #lead-finder .lead-cleaning-filters { gap: 20px; padding-bottom: 15px; border-bottom: 1px solid var(--lf-line); }
@@ -21661,6 +22055,7 @@
             transition: border-color .16s ease, box-shadow .16s ease;
           }
           #lead-finder .lead-cleaning-row:hover { border-color: var(--lf-line-strong); box-shadow: 0 8px 22px rgba(15, 23, 42, .08); }
+          #lead-finder .lead-cleaning-row.is-source-summary { border-style: dashed; background: #fffdf7; }
           #lead-finder .lead-cleaning-source { grid-column: 1; }
           #lead-finder .lead-cleaning-record { grid-column: 2; }
           #lead-finder .lead-cleaning-outcome { grid-column: 3; justify-self: end; }
@@ -21737,6 +22132,7 @@
             #lead-finder .prospect-page-head h1 { font-size: 21px; }
             #lead-finder .prospect-page-head p { display: none; }
             #lead-finder .lead-live-overview { min-height: 0; border-radius: 13px; }
+            #lead-finder .lead-live-overview:has(.lead-live-console) { height: min(66dvh, 540px); min-height: 360px; }
             #lead-finder .lead-live-empty { grid-template-columns: 36px minmax(0, 1fr); min-height: 200px; padding: 20px 16px; }
             #lead-finder .lead-live-empty-mark { width: 36px; height: 36px; }
             #lead-finder .lead-live-empty h2 { font-size: 22px; }
@@ -21754,6 +22150,8 @@
             #lead-finder .lead-live-facts { gap: 6px 14px; }
             #lead-finder .lead-live-message.is-event .lead-live-bubble { grid-template-columns: 1fr; }
             #lead-finder .lead-live-message.is-event em { margin-top: 3px; }
+            #lead-finder .lead-live-stream-tail { margin-left: 42px; }
+            #lead-finder .lead-live-jump-latest { right: 14px; bottom: 13px; }
             #lead-finder .lead-live-discoveries button { grid-template-columns: minmax(0, 1fr); gap: 2px; }
             #lead-finder .lead-live-discoveries button em { max-width: 100%; }
             #lead-finder .lead-workbench { gap: 28px; margin-top: 28px; }
@@ -21768,6 +22166,8 @@
             #lead-finder .lead-job-list { max-height: none; overflow: visible; }
             #lead-finder .lead-job-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
             #lead-finder .lead-result-layout { margin-top: 36px; }
+            #lead-finder .lead-result-reconciliation { align-items: flex-start; }
+            #lead-finder .lead-result-reconciliation button { line-height: 20px; }
             #lead-finder .lead-filter-tabs,
             #lead-finder .lead-cleaning-filters { flex-wrap: nowrap; gap: 20px; overflow-x: auto; }
             #lead-finder .lead-filter-tabs button,
@@ -22912,6 +23312,9 @@ body.platform-mode .topbar { background:#111820; color:#f6f8fb; border-bottom-co
 body.platform-mode .topbar .command,
 body.platform-mode #topActionContext,
 body.platform-mode #topPrimaryAction,
+body.platform-mode #topOpenTabs,
+body.platform-mode .top-status,
+body.platform-mode #notificationBellButton,
 body.platform-mode .workspace-tabs { display:none !important; }
 .platform-page { min-height:calc(100vh - 62px); background:#f4f6f8; color:#18212a; }
 .platform-head { padding:28px 34px 22px; background:#111820; color:#f7f9fb; border-top:1px solid rgba(255,255,255,.06); }
@@ -22920,6 +23323,8 @@ body.platform-mode .workspace-tabs { display:none !important; }
 .platform-head p { margin:0; color:#aeb9c4; font-size:13px; }
 .platform-environment { display:flex; align-items:center; gap:8px; color:#cdd6de; font-size:12px; }
 .platform-environment i { width:8px; height:8px; border-radius:50%; background:#38b982; box-shadow:0 0 0 4px rgba(56,185,130,.12); }
+.platform-account-notice { display:flex; align-items:center; gap:10px; max-width:520px; margin-top:16px; padding:10px 12px; border:1px solid rgba(255,255,255,.12); border-radius:6px; color:#d9e0e6; background:rgba(255,255,255,.05); font-size:12px; line-height:1.5; }
+.platform-account-notice b { flex:0 0 auto; color:#74d6b0; font-size:11px; }
 .platform-tabs { display:flex; max-width:1540px; margin:20px auto 0; gap:6px; overflow:auto; }
 .platform-tabs button { height:34px; padding:0 13px; color:#9eabb7; background:transparent; border:1px solid transparent; border-radius:6px; cursor:pointer; white-space:nowrap; }
 .platform-tabs button:hover { color:#fff; background:#1b2530; }
@@ -23336,6 +23741,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
         <details class="nav-section" aria-label="知识协作">
           <summary class="nav-section-title"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/><path d="M8 7h8"/><path d="M8 11h6"/></svg><span>知识协作</span><i class="nav-chevron"></i></summary>
           <div class="nav-secondary-grid">
+            <button class="nav-secondary-button" data-view="sales-distillation" title="销售能力训练"><span>销售训练</span></button>
             <button class="nav-secondary-button" data-view="knowledge" title="资料维护"><span>资料维护</span></button>
             <button class="nav-secondary-button" data-view="exam" title="在线考试"><span>在线考试</span></button>
             <button class="nav-secondary-button" data-view="wecom" title="企业微信"><span>企业微信</span></button>
@@ -23763,7 +24169,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 </div>
                 <div class="lead-advanced-actions">
                   <label class="ai-toggle-line"><input id="leadFinderUseAiInput" type="checkbox" checked>使用 AI 归纳与评分<span class="badge lf-tag-source">必选 · 未配置无法搜索</span></label>
-                  <div id="leadFinderAiRequiredHint" class="lead-ai-required-hint" hidden>⚠️ 请先在「AI 配置」中配置并启用 AI 模型（含 API Key 且勾选自动获客），否则无法启动搜客。</div>
+                  <div id="leadFinderAiRequiredHint" class="lead-ai-required-hint" hidden>自动搜客需要：测试通过的 OpenAI Web Search，或普通 AI 模型加已配置的官网搜索 API。模型猜测的网址不会保存。</div>
                   <button class="btn" id="leadSourceCenterButton" type="button">数据源中心</button>
                   <button class="btn" id="leadFinderAiConfigButton" type="button">AI配置</button>
                   <button class="btn" id="leadFinderExportButton" type="button" data-permission="prospect.read">导出Excel</button>
@@ -23816,6 +24222,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 <button type="button" role="tab" aria-selected="false" data-lead-result-view="cleaning">清洗去除 <span id="leadFinderCleaningCount">0</span></button>
               </div>
               <div id="leadFinderCandidateView">
+              <div class="lead-result-reconciliation" id="leadFinderResultReconciliation" hidden></div>
               <div class="lead-filter-tabs">
                 <button class="active" data-lead-filter="all">全部</button>
                 <button data-lead-filter="pending">待确认</button>
@@ -23985,12 +24392,12 @@ body.platform-mode .workspace-tabs { display:none !important; }
 
         <div class="view" id="prospect-list">
           <div class="page-head prospect-page-head">
-            <div><h1>搜客清单</h1><p>确认公司、联系人和跟进价值，再转入线索中心</p></div>
+            <div><h1>搜客清单</h1><p>先获取公开联系方式，需要转线索或联系客户时再完成检查</p></div>
             <div class="head-actions"><button class="btn" id="prospectOpenFinderButton">去自动获客</button><button class="btn" id="prospectRefreshButton">刷新清单</button></div>
           </div>
 
           <div class="lead-command-strip">
-            <div class="lead-command-item"><span>待核验</span><b id="prospectPreviewCount">0</b></div>
+            <div class="lead-command-item"><span>待处理</span><b id="prospectPreviewCount">0</b></div>
             <div class="lead-command-item"><span>可联系</span><b id="prospectContactableCount">0</b></div>
             <div class="lead-command-item"><span>已联系</span><b id="prospectContactedCount">0</b></div>
             <div class="lead-command-item"><span>已入线索</span><b id="prospectSyncedCount">0</b></div>
@@ -24024,7 +24431,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
               </div>
               <div class="prospect-tabs">
                 <button class="active" data-prospect-filter="all">全部</button>
-                <button data-prospect-filter="preview">待核验</button>
+                <button data-prospect-filter="preview">待处理</button>
                 <button data-prospect-filter="contactable">可联系</button>
                 <button data-prospect-filter="contacted">已联系</button>
                 <button data-prospect-filter="synced">已入线索</button>
@@ -24033,6 +24440,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
               <div class="prospect-bulkbar">
                 <label><input id="prospectSelectPage" type="checkbox">本页全选</label>
                 <span id="prospectSelectedCount">已选 0 条</span>
+                <button class="btn" id="prospectEnrichContactsButton" data-permission="prospect.execute">批量查联系方式</button>
                 <button class="btn" id="prospectExcludeButton" data-permission="prospect.execute">排除</button>
                 <button class="btn primary" id="prospectSyncButton" data-permission="prospect.execute">批量转为线索</button>
                 <select id="prospectAssigneeSelect" hidden aria-label="选择业务员"><option value="">选择业务员</option></select>
@@ -24084,6 +24492,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
               <details class="agent-more-tools">
                 <summary>常用任务与能力</summary>
                 <div class="agent-model-state" id="agentModelStatus"><span class="badge amber">基础执行</span><span>正在读取模型状态</span></div>
+                <button class="agent-playbook-state" id="agentPlaybookStatus" type="button"><span>销售打法</span><b>尚未应用</b><small></small></button>
                 <button class="agent-memory-state" id="agentMemoryStatus" type="button"><span>业务记忆</span><b>尚无已启用记忆</b><small></small></button>
                 <button class="agent-memory-state" id="agentKnowledgeStatus" type="button"><span>系统知识</span><b>正在载入</b><small></small></button>
                 <button class="agent-memory-state" id="agentTriggerStatus" type="button"><span>自动触发</span><b>尚未创建规则</b><small></small></button>
@@ -24799,6 +25208,142 @@ body.platform-mode .workspace-tabs { display:none !important; }
           </style>
         </div>
 
+        <div class="view" id="sales-distillation">
+          <div class="page-head sales-distillation-head">
+            <div><h1>销售能力训练</h1></div>
+            <div class="head-actions"><button class="btn" id="salesDistillationRefreshButton" type="button">刷新</button><button class="btn primary" id="salesDistillationButton" type="button">开始训练</button></div>
+          </div>
+          <section class="sales-distillation-toolbar">
+            <div class="sales-distillation-select"><label for="salesDistillationSource">训练对象</label><select id="salesDistillationSource"><option>正在读取业务员...</option></select></div>
+            <div class="sales-distillation-select"><label for="salesDistillationPeriod">样本周期</label><select id="salesDistillationPeriod"><option value="30">近 30 天</option><option value="90" selected>近 90 天</option><option value="180">近 180 天</option><option value="365">近一年</option></select></div>
+            <div class="sales-distillation-toolbar-note"><span class="sales-live-dot"></span><div><b>训练工作器已就绪</b><small>任务在后台分阶段运行</small></div></div>
+          </section>
+          <section class="sales-training-workspace">
+            <aside class="sales-training-queue"><header><b>训练任务</b><span id="salesTrainingQueueCount">0</span></header><div id="salesTrainingQueue"><div class="sales-training-empty">暂无训练任务</div></div></aside>
+            <main class="sales-training-main" id="salesTrainingDetail"><div class="sales-training-welcome"><span>AI</span><div><h2>暂无训练任务</h2></div></div></main>
+            <aside class="sales-training-quality" id="salesTrainingQuality"><div class="sales-training-quality-empty">暂无训练质量</div></aside>
+          </section>
+          <div class="sales-training-published-head"><div><h2>已发布能力</h2></div></div>
+          <section id="salesDistillationCards" class="sales-distillation-cards"><div class="sales-distillation-empty"><div class="sales-distillation-empty-icon">◎</div><h3>暂无已发布能力</h3></div></section>
+          <style>
+            #sales-distillation { --sales-ink: #17233d; --sales-muted: #728099; --sales-line: #e4eaf3; }
+            #sales-distillation .sales-distillation-head { align-items: flex-start; }
+            #sales-distillation .sales-distillation-toolbar { display: flex; align-items: flex-end; gap: 18px; margin-bottom: 18px; padding: 15px 18px; border: 1px solid var(--sales-line); border-radius: 10px; background: rgba(255,255,255,.82); box-shadow: 0 8px 24px rgba(27,39,68,.05); }
+            #sales-distillation .sales-distillation-select { display: grid; gap: 6px; min-width: 220px; }
+            #sales-distillation .sales-distillation-select label { color: var(--sales-muted); font-size: 11px; font-weight: 800; }
+            #sales-distillation .sales-distillation-select select { height: 38px; min-width: 220px; padding: 0 12px; border: 1px solid #d5deeb; border-radius: 7px; color: var(--sales-ink); background: var(--surface); outline: 0; }
+            #sales-distillation .sales-distillation-toolbar-note { display: flex; align-items: center; gap: 9px; min-height: 38px; margin-left: auto; color: var(--sales-ink); }
+            #sales-distillation .sales-distillation-toolbar-note b, #sales-distillation .sales-distillation-toolbar-note small { display: block; }
+            #sales-distillation .sales-distillation-toolbar-note b { font-size: 12px; }
+            #sales-distillation .sales-distillation-toolbar-note small { margin-top: 3px; color: var(--sales-muted); font-size: 11px; }
+            #sales-distillation .sales-live-dot { width: 9px; height: 9px; border-radius: 50%; background: #23b47e; box-shadow: 0 0 0 4px rgba(35,180,126,.13); }
+            #sales-distillation .sales-distillation-cards { display: grid; gap: 16px; }
+            #sales-distillation .sales-distillation-card { overflow: hidden; border: 1px solid var(--sales-line); border-radius: 10px; background: var(--surface); box-shadow: 0 12px 28px rgba(27,39,68,.06); }
+            #sales-distillation .sales-card-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 20px 15px; border-bottom: 1px solid #edf1f7; }
+            #sales-distillation .sales-person { display: flex; align-items: center; gap: 11px; min-width: 0; }
+            #sales-distillation .sales-person-avatar { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; color: #fff; background: linear-gradient(135deg,#0f766e,#115e59); font-size: 16px; font-weight: 900; }
+            #sales-distillation .sales-person h3 { margin: 0; color: var(--sales-ink); font-size: 16px; }
+            #sales-distillation .sales-person p { margin: 4px 0 0; color: var(--sales-muted); font-size: 11px; }
+            #sales-distillation .sales-card-meta { display: grid; justify-items: end; gap: 6px; }
+            #sales-distillation .sales-card-meta small { color: var(--sales-muted); font-size: 10px; }
+            #sales-distillation .sales-metric-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 1px; background: #edf1f7; border-bottom: 1px solid #edf1f7; }
+            #sales-distillation .sales-metric { min-height: 72px; padding: 13px 14px; background: #fbfcfe; }
+            #sales-distillation .sales-metric span { display: block; color: var(--sales-muted); font-size: 10px; }
+            #sales-distillation .sales-metric b { display: block; margin-top: 8px; color: var(--sales-ink); font-size: 18px; font-variant-numeric: tabular-nums; }
+            #sales-distillation .sales-card-columns { display: grid; grid-template-columns: 1fr 1.25fr 1fr; gap: 0; }
+            #sales-distillation .sales-card-columns > section { min-width: 0; padding: 18px 20px; border-right: 1px solid #edf1f7; }
+            #sales-distillation .sales-card-columns > section:last-child { border-right: 0; }
+            #sales-distillation .sales-section-title { display: flex; align-items: center; gap: 8px; margin-bottom: 11px; }
+            #sales-distillation .sales-section-title span { color: #0f766e; font-size: 10px; font-weight: 900; }
+            #sales-distillation .sales-section-title h4 { margin: 0; color: var(--sales-ink); font-size: 13px; }
+            #sales-distillation .sales-card-columns ul, #sales-distillation .sales-card-columns ol { margin: 0; padding-left: 18px; color: #40506c; font-size: 12px; line-height: 1.7; }
+            #sales-distillation .sales-card-columns li + li { margin-top: 7px; }
+            #sales-distillation .sales-playbook { display: grid; gap: 10px; }
+            #sales-distillation .sales-playbook-row { padding-left: 10px; border-left: 2px solid #dce5ff; }
+            #sales-distillation .sales-playbook-row b { display: block; color: #0f766e; font-size: 11px; }
+            #sales-distillation .sales-playbook-row p { margin: 3px 0 2px; color: #40506c; font-size: 12px; line-height: 1.55; }
+            #sales-distillation .sales-playbook-row small { color: var(--sales-muted); font-size: 10px; }
+            #sales-distillation .sales-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; border-top: 1px solid #edf1f7; color: var(--sales-muted); font-size: 10px; }
+            #sales-distillation .sales-playbook-usage { display: grid; gap: 3px; }
+            #sales-distillation .sales-playbook-usage b { color: #718097; font-size: 11px; }
+            #sales-distillation .sales-playbook-usage.active b { color: #16815f; }
+            #sales-distillation .sales-playbook-usage small { color: var(--sales-muted); font-size: 10px; }
+            #sales-distillation .sales-distillation-empty { display: grid; justify-items: center; gap: 8px; padding: 74px 20px; border: 1px dashed #ccd7e7; border-radius: 10px; background: rgba(255,255,255,.68); text-align: center; }
+            #sales-distillation .sales-distillation-empty-icon { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 50%; color: #0f766e; background: var(--brand-tint); font-size: 26px; }
+            #sales-distillation .sales-distillation-empty h3 { margin: 4px 0 0; color: var(--sales-ink); font-size: 16px; }
+            #sales-distillation .sales-distillation-empty p { margin: 0; color: var(--sales-muted); font-size: 12px; }
+            #sales-distillation .sales-training-workspace { display: grid; grid-template-columns: 230px minmax(480px,1fr) 280px; min-height: 610px; overflow: hidden; border: 1px solid var(--sales-line); border-radius: 8px; background: var(--surface); box-shadow: 0 10px 28px rgba(27,39,68,.05); }
+            #sales-distillation .sales-training-queue { min-width: 0; padding: 14px 10px; border-right: 1px solid var(--sales-line); background: var(--surface-2); }
+            #sales-distillation .sales-training-queue > header { display: flex; align-items: center; justify-content: space-between; padding: 0 6px 10px; color: var(--sales-ink); font-size: 11px; }
+            #sales-distillation .sales-training-queue > header span { color: #7c899c; font-size: 9px; }
+            #sales-distillation #salesTrainingQueue { display: grid; gap: 5px; }
+            #sales-distillation .sales-training-queue-item { width: 100%; min-width: 0; padding: 10px; border: 1px solid transparent; border-radius: 7px; color: #34435b; background: transparent; text-align: left; cursor: pointer; }
+            #sales-distillation .sales-training-queue-item:hover, #sales-distillation .sales-training-queue-item.active { border-color: #d7e0ee; background: var(--surface); }
+            #sales-distillation .sales-training-queue-item div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+            #sales-distillation .sales-training-queue-item b, #sales-distillation .sales-training-queue-item small { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            #sales-distillation .sales-training-queue-item b { font-size: 11px; }
+            #sales-distillation .sales-training-queue-item small { margin-top: 5px; color: #8290a3; font-size: 9px; }
+            #sales-distillation .sales-training-queue-item i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #9ea9b8; }
+            #sales-distillation .sales-training-queue-item.running i { background: #0f766e; box-shadow: 0 0 0 4px rgba(15,118,110,.1); }
+            #sales-distillation .sales-training-queue-item.review i { background: #d99518; }
+            #sales-distillation .sales-training-queue-item.published i { background: #1ca876; }
+            #sales-distillation .sales-training-main { min-width: 0; padding: 18px; }
+            #sales-distillation .sales-training-welcome { min-height: 570px; display: flex; align-items: center; justify-content: center; gap: 12px; color: var(--sales-ink); }
+            #sales-distillation .sales-training-welcome > span { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 8px; color: #fff; background: #0f766e; font-size: 11px; font-weight: 900; }
+            #sales-distillation .sales-training-welcome h2 { margin: 0; font-size: 17px; }
+            #sales-distillation .sales-training-welcome p { max-width: 420px; margin: 5px 0 0; color: var(--sales-muted); font-size: 11px; line-height: 1.55; }
+            #sales-distillation .sales-training-run-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid #e9edf3; }
+            #sales-distillation .sales-training-run-head h2 { margin: 0; color: var(--sales-ink); font-size: 17px; }
+            #sales-distillation .sales-training-run-head p { margin: 5px 0 0; color: var(--sales-muted); font-size: 10px; }
+            #sales-distillation .sales-training-progress { margin: 16px 0; }
+            #sales-distillation .sales-training-progress > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #4b5a72; font-size: 10px; }
+            #sales-distillation .sales-training-progress strong { color: #0f766e; font-size: 13px; }
+            #sales-distillation .sales-training-progress > span { display: block; height: 6px; margin-top: 8px; overflow: hidden; border-radius: 3px; background: #e4e9f2; }
+            #sales-distillation .sales-training-progress > span i { display: block; height: 100%; border-radius: inherit; background: #0f766e; transition: width .3s ease; }
+            #sales-distillation .sales-training-stages { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 6px; margin-bottom: 17px; }
+            #sales-distillation .sales-training-stage { min-width: 0; padding: 8px; border: 1px solid #e2e7ef; border-radius: 6px; background: #fafbfd; }
+            #sales-distillation .sales-training-stage b, #sales-distillation .sales-training-stage small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            #sales-distillation .sales-training-stage b { color: #44536a; font-size: 9px; }
+            #sales-distillation .sales-training-stage small { margin-top: 4px; color: #8a95a6; font-size: 8px; }
+            #sales-distillation .sales-training-stage.completed { border-color: #cde8dc; background: #f6fbf8; }
+            #sales-distillation .sales-training-stage.running { border-color: #cbd8f5; background: #f5f8ff; }
+            #sales-distillation .sales-training-section-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 16px 0 8px; }
+            #sales-distillation .sales-training-section-title h3 { margin: 0; color: var(--sales-ink); font-size: 12px; }
+            #sales-distillation .sales-training-section-title span { color: #8491a3; font-size: 9px; }
+            #sales-distillation .sales-training-events { max-height: 210px; overflow-y: auto; border-top: 1px solid #e7ebf2; }
+            #sales-distillation .sales-training-event { display: grid; grid-template-columns: 70px minmax(0,1fr) auto; gap: 8px; padding: 8px 2px; border-bottom: 1px solid #edf1f5; color: #46556d; font-size: 9px; }
+            #sales-distillation .sales-training-event b { color: #0f766e; font-size: 8px; }
+            #sales-distillation .sales-training-event time { color: #97a1b0; font-size: 8px; }
+            #sales-distillation .sales-training-samples { display: grid; gap: 5px; }
+            #sales-distillation .sales-training-sample { display: grid; grid-template-columns: 18px minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 8px; border: 1px solid #e2e7ef; border-radius: 6px; background: var(--surface); }
+            #sales-distillation .sales-training-sample input { width: 14px; height: 14px; }
+            #sales-distillation .sales-training-sample b, #sales-distillation .sales-training-sample small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            #sales-distillation .sales-training-sample b { color: #35445c; font-size: 10px; }
+            #sales-distillation .sales-training-sample small { margin-top: 3px; color: #8692a4; font-size: 8px; }
+            #sales-distillation .sales-training-sample select { height: 26px; padding: 0 5px; border: 1px solid #d8e0eb; border-radius: 5px; color: #536178; background: var(--surface); font-size: 9px; }
+            #sales-distillation .sales-training-quality { min-width: 0; padding: 16px 14px; overflow-y: auto; border-left: 1px solid var(--sales-line); background: #fbfcfe; }
+            #sales-distillation .sales-training-quality-empty, #sales-distillation .sales-training-empty { padding: 18px 8px; color: #8b96a7; font-size: 9px; text-align: center; }
+            #sales-distillation .sales-quality-head { padding-bottom: 12px; border-bottom: 1px solid #e7ebf2; }
+            #sales-distillation .sales-quality-head span, #sales-distillation .sales-quality-head b { display: block; }
+            #sales-distillation .sales-quality-head span { color: #7c899b; font-size: 9px; }
+            #sales-distillation .sales-quality-head b { margin-top: 5px; color: var(--sales-ink); font-size: 18px; }
+            #sales-distillation .sales-quality-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px; margin: 12px 0; }
+            #sales-distillation .sales-quality-metric { padding: 9px; border: 1px solid #e2e7ef; border-radius: 6px; background: var(--surface); }
+            #sales-distillation .sales-quality-metric span, #sales-distillation .sales-quality-metric b { display: block; }
+            #sales-distillation .sales-quality-metric span { color: #8290a3; font-size: 8px; }
+            #sales-distillation .sales-quality-metric b { margin-top: 4px; color: #2f3e56; font-size: 13px; }
+            #sales-distillation .sales-evaluation-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; padding: 7px 0; border-bottom: 1px solid #e9edf3; color: #65738a; font-size: 9px; }
+            #sales-distillation .sales-evaluation-row b { color: #31415a; }
+            #sales-distillation .sales-training-blocker { margin-top: 7px; padding: 8px; border-left: 2px solid #d99518; color: #7b5b1b; background: #fffaf0; font-size: 9px; line-height: 1.45; }
+            #sales-distillation .sales-training-quality .btn { width: 100%; margin-top: 8px; }
+            #sales-distillation .sales-training-published-head { margin: 22px 0 10px; }
+            #sales-distillation .sales-training-published-head h2 { margin: 0; color: var(--sales-ink); font-size: 15px; }
+            #sales-distillation .sales-training-published-head p { margin: 4px 0 0; color: var(--sales-muted); font-size: 10px; }
+            @media (max-width: 1366px) { #sales-distillation .sales-training-workspace { grid-template-columns: 190px minmax(430px,1fr) 250px; } }
+            @media (max-width: 1080px) { #sales-distillation .sales-metric-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } #sales-distillation .sales-card-columns { grid-template-columns: 1fr 1fr; } #sales-distillation .sales-card-columns > section:last-child { grid-column: 1 / -1; border-top: 1px solid #edf1f7; } }
+            @media (max-width: 720px) { #sales-distillation .sales-distillation-toolbar { align-items: stretch; flex-direction: column; } #sales-distillation .sales-distillation-select, #sales-distillation .sales-distillation-select select { min-width: 0; width: 100%; } #sales-distillation .sales-distillation-toolbar-note { margin-left: 0; } #sales-distillation .sales-card-head { align-items: flex-start; flex-direction: column; } #sales-distillation .sales-card-meta { justify-items: start; } #sales-distillation .sales-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } #sales-distillation .sales-card-columns { grid-template-columns: 1fr; } #sales-distillation .sales-card-columns > section { border-right: 0; border-bottom: 1px solid #edf1f7; } #sales-distillation .sales-card-columns > section:last-child { border-bottom: 0; } #sales-distillation .sales-card-foot { align-items: flex-start; flex-direction: column; } }
+          </style>
+        </div>
 
         <div class="view" id="ai-config">
           <div class="dense-grid">
@@ -24811,17 +25356,18 @@ body.platform-mode .workspace-tabs { display:none !important; }
           <div class="ai-studio-grid">
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><circle cx="12" cy="12" r="4"/></svg></span><div><h2>供应商预设</h2></div></div></div>
-              <p class="ai-provider-hint">标记 <b>免费</b> 的供应商均可零门槛或极低费用获取 API Key。点击卡片自动带入默认参数，点击「去官网申请免费 Key ›」前往对应平台自助开通。</p>
+              <p class="ai-provider-hint">标记 <b>免费</b> 的模型可用于评分、文案和企业候选生成。自动获客确认官网时，OpenAI 模型必须通过 Web Search 测试；其它模型还需配置 Brave、Serper、SerpApi 或 Google Places。</p>
               <div class="ai-free-fallback" id="aiFreeFallback">
                 <div class="ai-free-fallback-head">
                   <span class="ai-free-tag">免费兜底</span>
-                  <b>推荐兜底模型：智谱 GLM-4-Flash-250414（官方永久免费）</b>
+                  <b>普通 AI 免费方案：智谱 GLM-4-Flash-250414</b>
                 </div>
-                <p class="ai-free-fallback-sub">无需信用卡、无需付费，注册即送免费调用额度；下表「硅基流动」为新用户赠 2000 万 Tokens 的备选免费源。三步即可在自动获客中启用：</p>
+                <p class="ai-free-fallback-sub">适合线索评分、开发信和企业候选生成，但本身不能联网确认官网。用于自动获客时，需再配置一个官网搜索 API：</p>
                 <ol class="ai-free-steps">
                   <li>访问 <a href="https://open.bigmodel.cn/user/register" target="_blank" rel="noopener">智谱官方注册页</a>，用手机号 / 邮箱完成注册（实名认证，免费）。</li>
                   <li>进入 <a href="https://open.bigmodel.cn/usercenter/apikeys" target="_blank" rel="noopener">API 密钥中心</a>，新建一个 Key 并复制保存。</li>
-                  <li>点击下方「智谱 GLM」卡片 → 粘贴 Key → 启用状态选「启用 AI 能力」→ 勾选「自动获客」→ 点「保存配置」即可。</li>
+                  <li>点击下方「智谱 GLM」卡片，粘贴 Key、启用配置并测试普通 AI 连接。</li>
+                  <li>在数据源中心配置 Brave、Serper、SerpApi 或 Google Places，系统再允许启动自动获客。</li>
                 </ol>
                 <p class="ai-free-note">备选免费源：<a href="https://siliconflow.cn/" target="_blank" rel="noopener">硅基流动 SiliconFlow</a>（新用户赠 2000 万 Tokens 免费额度，含 DeepSeek / Qwen / GLM 免费模型，同样 OpenAI 兼容，已加入下方卡片）。</p>
               </div>
@@ -24917,6 +25463,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
                   <span class="badge" id="gptConnectionBadge">未测试</span>
                   <h3 id="gptConnectionTitle">等待配置 API Key</h3>
                   <p id="gptConnectionText"></p>
+                  <div class="ai-web-search-status is-pending" id="gptWebSearchStatus">官网发现：自动搜客需要先测试 Web Search</div>
                 </section>
               </section>
 
@@ -26081,7 +26628,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
         <div class="view" id="documents">
           <div class="page-head">
             <div><h1>单据生成平台</h1></div>
-            <div class="head-actions"><button class="btn" id="documentDefaultsViewButton">默认配置</button><button class="btn" id="documentHistoryViewButton">历史单据</button><button class="btn" id="documentImportButton">导入分析</button><button class="btn" id="newDocumentButton">新建单据</button><button class="btn" id="saveDocumentButton">保存配置</button><button class="btn primary" id="exportDocumentPdfButton">导出 PDF</button><button class="btn" id="planetViewButton">星球视图</button></div>
+            <div class="head-actions"><button class="btn" id="documentDefaultsViewButton">默认配置</button><button class="btn" id="documentHistoryViewButton">历史单据</button><button class="btn" id="quoteHistoryViewButton">报价历史</button><button class="btn" id="documentImportButton">导入分析</button><button class="btn" id="documentOcrButton">OCR识别</button><button class="btn" id="newDocumentButton">新建单据</button><button class="btn" id="saveDocumentButton">保存配置</button><button class="btn" id="advancedExcelButton">高级 Excel</button><button class="btn primary" id="exportDocumentPdfButton">导出 PDF</button><button class="btn" id="planetViewButton">星球视图</button></div>
           </div>
           <div class="planet-view" id="planet-view" hidden>
             <button class="planet-close-button" id="planetCloseButton" type="button" aria-label="关闭单证星球">← 返回单据</button>
@@ -26127,7 +26674,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
               </div>
               <div class="doc-style-bar">
                 <label><span>语言</span><select id="docLanguageInput"><option value="EN">English</option><option value="ES">Español</option><option value="RU">Русский</option><option value="AR">العربية</option><option value="ZH">中文</option></select></label>
-                <label><span>主题</span><select id="docThemeInput"><option value="indigo">Indigo</option><option value="emerald">Emerald</option><option value="rose">Rose</option><option value="slate">Slate</option><option value="amber">Amber</option><option value="executive">Executive</option><option value="classic">Classic</option><option value="compact">Compact</option></select></label>
+                <label><span>主题</span><select id="docThemeInput"><option value="rose">Rose</option><option value="indigo">Indigo</option><option value="emerald">Emerald</option><option value="slate">Slate</option><option value="amber">Amber</option><option value="executive">Executive</option><option value="classic">Classic</option><option value="compact">Compact</option></select></label>
                 <div id="docThemeSwatches" style="display:flex;gap:6px;"></div>
               </div>
               <details class="doc-history-panel">
@@ -26138,11 +26685,15 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 <label><span>单据标题</span><input id="docTitleInput"></label>
                 <label><span>单据编号</span><input id="docNumberInput"></label>
                 <label><span>签发日期</span><input id="docIssueDateInput" type="date"></label>
-                <label><span>模板风格</span><select id="docTemplateInput"><option value="indigo">Indigo 深靛蓝</option><option value="emerald">Emerald 翡翠绿</option><option value="rose">Rose 玫红</option><option value="slate">Slate 石板灰</option><option value="amber">Amber 琥珀金</option><option value="executive">Executive 高级汇报风</option><option value="classic">Classic 经典贸易风</option><option value="compact">Compact 紧凑清关风</option></select></label>
+                <label><span>模板风格</span><select id="docTemplateInput"><option value="rose">Rose 玫红</option><option value="indigo">Indigo 深靛蓝</option><option value="emerald">Emerald 翡翠绿</option><option value="slate">Slate 石板灰</option><option value="amber">Amber 琥珀金</option><option value="executive">Executive 高级汇报风</option><option value="classic">Classic 经典贸易风</option><option value="compact">Compact 紧凑清关风</option></select></label>
                 <label><span>买方公司</span><input id="docBuyerInput"></label>
                 <label><span>买方联系人</span><input id="docBuyerContactInput"></label>
                 <label class="wide"><span>买方地址</span><input id="docBuyerAddressInput"></label>
+                <label><span>卖方公司档案</span><select id="docSellerProfileInput"><option value="">使用默认卖方资料</option></select><small id="docSellerMatchHint"></small></label>
                 <label><span>卖方公司</span><input id="docSellerInput"></label>
+                <label><span>色块文字</span><input id="docBrandMarkTextInput" maxlength="8" placeholder="留空自动取公司简称"><small>单据左上色块内容，最多 8 个字符</small></label>
+                <label><span id="docShippingCostLabel">Shipping Cost</span><input id="docShippingCostInput" type="number" min="0" step="0.01" placeholder="0"><small>填写后自动加入单据明细，留空不生成</small></label>
+                <input id="docStampIdInput" type="hidden"><input id="docSignatureIdInput" type="hidden">
                 <label><span>币种</span><select id="docCurrencyInput"><option>USD</option><option>EUR</option><option>CNY</option><option>GBP</option></select></label>
                 <label class="wide"><span>卖方地址</span><input id="docSellerAddressInput"></label>
                 <label><span>卖方联系人</span><input id="docSellerContactInput"></label>
@@ -26178,8 +26729,9 @@ body.platform-mode .workspace-tabs { display:none !important; }
             <div class="document-defaults-priority"><b>自动带入顺序</b><span>来源数据</span><i></i><span>团队默认配置</span><i></i><span>系统基础默认值</span><small>配置变更不会覆盖历史单据</small></div>
             <div class="document-defaults-layout">
               <main class="document-defaults-form">
-                <section><div class="document-defaults-section-head"><div><b>公司输出资料</b><span>用于卖方、出口方和签署信息</span></div></div><div class="document-defaults-grid">
-                  <label class="wide"><span>公司抬头名称</span><input id="documentDefaultSeller"></label><label class="wide"><span>公司地址</span><input id="documentDefaultSellerAddress"></label>
+                <section><div class="document-defaults-section-head"><div><b>卖方公司档案</b><span>维护多个签约主体，并按客户国家、币种和单据类型自动匹配</span></div><button class="btn" id="documentSellerProfilesManage" data-permission="system.settings.manage">管理卖方公司</button></div><div class="document-seller-profile-list" id="documentSellerProfilesList"></div></section>
+                <section><div class="document-defaults-section-head"><div><b>兜底卖方资料</b><span>没有任何卖方公司规则命中时使用</span></div></div><div class="document-defaults-grid">
+                  <label class="wide"><span>公司抬头名称</span><input id="documentDefaultSeller"></label><label><span>默认色块文字</span><input id="documentDefaultBrandMarkText" maxlength="8" placeholder="留空自动取公司简称"><small>用于新建单据左上色块</small></label><label class="wide"><span>公司地址</span><input id="documentDefaultSellerAddress"></label>
                   <label><span>联系人</span><input id="documentDefaultSellerContact"></label><label><span>电话</span><input id="documentDefaultSellerPhone"></label><label><span>邮箱</span><input id="documentDefaultSellerEmail" type="email"></label><label><span>网址</span><input id="documentDefaultSellerWebsite"></label>
                   <label class="wide"><span>税号 / 注册号</span><input id="documentDefaultSellerTaxNo"></label><label class="wide"><span>银行信息</span><textarea id="documentDefaultBankInfo" rows="4"></textarea></label>
                 </div></section>
@@ -26187,13 +26739,13 @@ body.platform-mode .workspace-tabs { display:none !important; }
                   <label><span>币种</span><select id="documentDefaultCurrency"><option>USD</option><option>EUR</option><option>CNY</option><option>GBP</option></select></label><label><span>贸易条款</span><select id="documentDefaultIncoterm"><option>FOB</option><option>EXW</option><option>CIF</option><option>DAP</option><option>FCA</option></select></label>
                   <label><span>运输方式</span><select id="documentDefaultShippingMethod"><option>Sea freight</option><option>Air freight</option><option>Express</option><option>Rail freight</option></select></label><label><span>装运港</span><input id="documentDefaultPortLoading"></label>
                   <label class="wide"><span>付款条款</span><input id="documentDefaultPaymentTerm"></label><label><span>默认有效天数</span><input id="documentDefaultValidityDays" type="number" min="0" max="365"></label>
-                  <label><span>语言</span><select id="documentDefaultLanguage"><option value="EN">English</option><option value="ES">Español</option><option value="RU">Русский</option><option value="AR">العربية</option><option value="ZH">中文</option></select></label><label><span>页面主题</span><select id="documentDefaultTemplateStyle"><option value="indigo">Indigo</option><option value="emerald">Emerald</option><option value="rose">Rose</option><option value="slate">Slate</option><option value="amber">Amber</option><option value="executive">Executive</option><option value="classic">Classic</option><option value="compact">Compact</option></select></label>
+                  <label><span>语言</span><select id="documentDefaultLanguage"><option value="EN">English</option><option value="ES">Español</option><option value="RU">Русский</option><option value="AR">العربية</option><option value="ZH">中文</option></select></label><label><span>页面主题</span><select id="documentDefaultTemplateStyle"><option value="rose">Rose</option><option value="indigo">Indigo</option><option value="emerald">Emerald</option><option value="slate">Slate</option><option value="amber">Amber</option><option value="executive">Executive</option><option value="classic">Classic</option><option value="compact">Compact</option></select></label>
                   <label class="full"><span>默认备注</span><textarea id="documentDefaultNotes" rows="3"></textarea></label>
                 </div></section>
               </main>
               <aside class="document-defaults-side">
                 <section><div class="document-defaults-section-head"><div><b>输出资产</b><span>选择默认使用的品牌资料</span></div><button class="btn" id="documentDefaultsManageAssets" data-permission="system.settings.manage">管理资产</button></div><div class="document-default-assets-selects">
-                  <label><span>默认抬头</span><select id="documentDefaultLetterhead"></select></label><label><span>默认印章</span><select id="documentDefaultStamp"></select></label><label><span>默认签名</span><select id="documentDefaultSignature"></select></label>
+                  <label><span>默认卖方公司</span><select id="documentDefaultLetterhead"></select></label><label><span>默认印章</span><select id="documentDefaultStamp"></select></label><label><span>默认签名</span><select id="documentDefaultSignature"></select></label>
                   <label class="document-default-toggle"><input id="documentDefaultProductImages" type="checkbox"><span><b>默认带产品示例图</b><small>只读取产品库已上传图片</small></span></label>
                 </div></section>
                 <section class="document-default-preview"><div class="document-defaults-section-head"><div><b>带入预览</b><span>展示下一份新建单据的固定资料</span></div></div><div id="documentDefaultsPreview"></div></section>
@@ -26220,6 +26772,35 @@ body.platform-mode .workspace-tabs { display:none !important; }
               <div class="document-history-summary"><span id="documentHistorySummary">正在加载</span></div>
               <div class="table-wrap"><table><thead><tr><th>单据</th><th>客户 / 商机</th><th>类型</th><th>金额</th><th>状态</th><th>签发日期</th><th>更新时间</th><th></th></tr></thead><tbody id="documentHistoryRows"><tr><td colspan="8" class="empty-cell">正在加载历史单据</td></tr></tbody></table></div>
               <div class="document-history-pagination"><button class="btn" id="documentHistoryPrevButton">上一页</button><span id="documentHistoryPageText">第 1 页</span><button class="btn" id="documentHistoryNextButton">下一页</button></div>
+            </div>
+          </section>
+          <section class="quote-history-workspace" id="quoteHistoryWorkspace" hidden>
+            <div class="document-history-head">
+              <div><h2>报价历史</h2><p>按单据查看每次报价变化，或切换到单款产品分析，快速判断不同国家的历史报价区间。</p></div>
+              <div class="quote-history-mode-switch" role="tablist" aria-label="报价历史模式"><button class="btn active" id="quoteHistoryRecordsModeButton" type="button" role="tab" aria-selected="true">报价明细</button><button class="btn" id="quoteHistoryProductModeButton" type="button" role="tab" aria-selected="false">单款产品分析</button><button class="btn" id="quoteHistoryBackButton">返回工作台</button></div>
+            </div>
+            <div class="panel document-history-filters quote-history-filters">
+              <label class="document-history-search"><span>关键词</span><input id="quoteHistoryKeyword" placeholder="客户、订单、单据号或操作人"></label>
+              <label><span>客户</span><input id="quoteHistoryCustomer" list="quoteHistoryCustomerOptions" autocomplete="off" placeholder="输入客户名称"><datalist id="quoteHistoryCustomerOptions"></datalist></label>
+              <label><span>商机 / 订单</span><input id="quoteHistoryDeal" list="quoteHistoryDealOptions" autocomplete="off" placeholder="输入商机或订单"><datalist id="quoteHistoryDealOptions"></datalist></label>
+              <label><span>国家</span><input id="quoteHistoryCountry" list="quoteHistoryCountryOptions" autocomplete="off" placeholder="输入国家"><datalist id="quoteHistoryCountryOptions"></datalist></label>
+              <label><span id="quoteHistoryProductLabel">产品 / 型号</span><input id="quoteHistoryProduct" placeholder="产品或型号"></label>
+              <label><span>单据类型</span><select id="quoteHistoryDocumentType"><option value="">全部类型</option><option value="QUOTATION">报价单</option><option value="PI">PI</option></select></label>
+              <label><span>币种</span><select id="quoteHistoryCurrency"><option value="">全部币种</option><option>USD</option><option>EUR</option><option>CNY</option><option>GBP</option></select></label>
+              <label><span>开始日期</span><input id="quoteHistoryFrom" type="date"></label>
+              <label><span>结束日期</span><input id="quoteHistoryTo" type="date"></label>
+              <button class="btn primary" id="quoteHistorySearchButton">查询</button>
+              <button class="btn" id="quoteHistoryResetButton">重置</button>
+            </div>
+            <div class="panel document-history-results" id="quoteHistoryRecordsPanel">
+              <div class="document-history-summary quote-history-summary" id="quoteHistorySummary">正在加载报价历史</div>
+              <div class="table-wrap"><table><thead><tr><th>报价时间</th><th>客户 / 商机</th><th>来源单据</th><th>产品</th><th>报价总额</th><th>操作人</th><th>变化摘要</th><th></th></tr></thead><tbody id="quoteHistoryRows"><tr><td colspan="8" class="empty-cell">正在加载报价历史</td></tr></tbody></table></div>
+              <div class="document-history-pagination"><button class="btn" id="quoteHistoryPrevButton">上一页</button><span id="quoteHistoryPageText">第 1 页</span><button class="btn" id="quoteHistoryNextButton">下一页</button></div>
+            </div>
+            <div class="panel document-history-results quote-product-analysis-panel" id="quoteHistoryProductPanel" hidden>
+              <div class="document-history-summary quote-history-summary" id="quoteHistoryProductSummary">正在分析单款产品报价</div>
+              <div class="quote-history-product-overview" id="quoteHistoryProductOverview"><div class="quote-analysis-overall"><span>当前筛选结果 · 整体报价范围</span><strong>正在计算</strong></div><div class="quote-analysis-countries"><span>不同国家报价范围</span><strong>正在计算</strong></div></div>
+              <div class="table-wrap"><table><thead><tr><th>产品 / 型号</th><th>国家</th><th>币种</th><th>报价次数</th><th>最低单价</th><th>最高单价</th><th>平均单价</th><th>最近报价</th><th></th></tr></thead><tbody id="quoteHistoryProductRows"><tr><td colspan="9" class="empty-cell">请输入产品名或型号，再查询单款产品的历史报价范围</td></tr></tbody></table></div>
             </div>
           </section>
         </div>
@@ -26951,6 +27532,16 @@ body.platform-mode .workspace-tabs { display:none !important; }
               </div>
             </section>
 
+            <section class="panel section profile-password-panel">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V8a5 5 0 0 1 10 0v3"/><path d="M12 15v3"/></svg></span><div><h2>登录安全</h2><small>修改当前账号的登录密码，修改成功后需要重新登录。</small></div></div></div>
+              <div class="profile-password-form">
+                <div class="form-field"><label for="profileCurrentPassword">当前密码</label><input id="profileCurrentPassword" type="password" autocomplete="current-password" placeholder="输入当前登录密码"></div>
+                <div class="form-field"><label for="profileNewPassword">新密码</label><input id="profileNewPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="至少 8 位"></div>
+                <div class="form-field"><label for="profileConfirmPassword">确认新密码</label><input id="profileConfirmPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="再次输入新密码"></div>
+                <div class="profile-password-actions"><small>密码长度为 8 至 128 位。保存后，旧密码和当前登录会话都会失效。</small><button class="btn primary" id="profileChangePasswordButton" type="button">修改登录密码</button></div>
+              </div>
+            </section>
+
             <section class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span><div><h2>收信监听（开发信回流）</h2><small>开启后自动轮询收件箱，识别客户回信与退信，回流到触达记录</small></div></div></div>
               <div class="profile-form-grid" style="margin-top:12px">
@@ -27053,7 +27644,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
           <div class="view" id="platform-operations">
             <div class="platform-page">
               <header class="platform-head">
-                <div class="platform-head-row"><div><h1>GoodJob 平台运维</h1><p>公司生命周期、支持访问与系统安全运行</p></div><div class="platform-environment"><i></i><span>生产控制域</span></div></div>
+                <div class="platform-head-row"><div><h1>GoodJob 平台运维</h1><p>公司生命周期、支持访问与系统安全运行</p><div class="platform-account-notice"><b>运维专用账号</b><span>当前账号仅用于平台运维。业务模块，请登录其他账号。</span></div></div><div class="platform-environment"><i></i><span>生产控制域</span></div></div>
                 <nav class="platform-tabs" id="platformTabs" aria-label="平台运维模块">
                   <button type="button" class="active" data-platform-tab="overview">平台概览</button>
                   <button type="button" data-platform-tab="tenants">公司管理</button>
@@ -27092,6 +27683,18 @@ body.platform-mode .workspace-tabs { display:none !important; }
               <p class="system-setting-help">关闭时，已保存的单据可直接预览和导出；开启后，只有正式 Excel 导出需要审批，预览始终可用。</p>
             </div>
           </div>
+
+          <section class="panel section" id="tradeDocumentOcrSettingsSection">
+            <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M7 9h10M7 13h6"/></svg></span><div><h2>单据 OCR 来源</h2><p class="section-subtitle">已申请免费 OCR 时优先使用；未配置或外部服务失败，自动回落当前 AI 视觉模型。</p></div></div><div class="head-actions"><span class="badge amber" id="tradeDocumentOcrProviderStatus">未启用，使用 AI 视觉模型</span><button class="btn primary" id="tradeDocumentOcrSaveButton">保存 OCR 配置</button></div></div>
+            <div class="company-profile-form" style="margin-top:14px;">
+              <label><span>识别来源</span><select id="tradeDocumentOcrProvider"><option value="none">仅使用 AI 视觉模型</option><option value="baidu">百度 OCR 文字预处理</option><option value="siliconflow">硅基流动视觉模型</option></select></label>
+              <label class="system-setting-switch" style="display:flex;align-items:center;gap:9px;padding-top:22px;"><input id="tradeDocumentOcrEnabled" type="checkbox"><i></i><span>启用外部 OCR 优先</span></label>
+              <label><span>API Key</span><input id="tradeDocumentOcrApiKey" type="password" autocomplete="off" placeholder="填写已申请的 API Key"></label>
+              <label><span>Secret Key（仅百度）</span><input id="tradeDocumentOcrSecretKey" type="password" autocomplete="off" placeholder="百度 OCR Secret Key"></label>
+              <label class="wide"><span>硅基流动模型（仅硅基流动）</span><input id="tradeDocumentOcrModel" placeholder="Qwen/Qwen2.5-VL-32B-Instruct"></label>
+            </div>
+            <p class="system-setting-help">百度 OCR 负责低成本文字识别，识别结构不足时会自动交给 AI 视觉模型复核；硅基流动直接作为视觉识别模型。API Key 只写入服务器加密凭据，不会返回明文。</p>
+          </section>
 
           <!-- 系统更新区域 -->
           <section class="panel section" id="systemUpdateSection" style="margin-top:24px;">
@@ -27728,91 +28331,5 @@ body.platform-mode .workspace-tabs { display:none !important; }
     renderTopbarForView("dashboard");
   </script>
   <script type="module" src="/src/prototype-api.ts"></script>
-  <script>
-    /* 自动获客 · 进度框滚动交互（纯视图层，不改动后台逻辑）
-       - 进度框高度占满一屏（见 #lead-finder .lead-live-overview）
-       - 流式刷新有新内容时，若用户未手动滚动，自动滚到最底
-       - 用户一旦滚动滚轮/触摸，暂停自动滚动
-       - 仅当用户滚回底部（接近最底）时，恢复自动滚动 */
-    (function () {
-      var overview = document.getElementById('leadFinderLiveOverview');
-      if (!overview) return;
-      var stick = true;            // 是否保持在底部（自动滚动开启）
-      var programmatic = false;    // 本次 scroll 是否由程序自动滚动引发
-      function thread() { return overview.querySelector('.lead-live-thread'); }
-      function atBottom(el) {
-        return !!el && (el.scrollHeight - el.scrollTop - el.clientHeight) < 48;
-      }
-      // 捕获阶段监听，能感知内部 .lead-live-thread 的滚动（scroll 不冒泡）
-      overview.addEventListener('scroll', function () {
-        if (programmatic) { programmatic = false; return; } // 忽略程序自动滚动
-        stick = atBottom(thread()); // 用户滚动：到底=true 恢复，离开=false 暂停
-      }, true);
-      // 用户主动滚动 -> 暂停自动滚动
-      overview.addEventListener('wheel', function () { stick = false; }, true);
-      overview.addEventListener('touchmove', function () { stick = false; }, true);
-      function toBottom() {
-        if (!stick) return;
-        var el = thread();
-        if (!el) return;
-        programmatic = true;
-        el.scrollTop = el.scrollHeight;
-      }
-      // 监听进度框内容变化（每次刷新/新事件），有新内容且 stick 时滚到底
-      var mo = new MutationObserver(function () { requestAnimationFrame(toBottom); });
-      mo.observe(overview, { childList: true, subtree: true, characterData: true });
-      toBottom();
-    })();
-
-    /* 自动获客 · 流式打印动效（纯显示层，不改动后台逻辑）
-       - 监听对话框内容变化，对 AI 回复文本做逐字显现
-       - 对事件卡片做顺序打印入场
-       - 用文本指纹缓存，避免刷新重绘时重复播放打字 */
-    (function () {
-      var root = document.getElementById('leadFinderLiveOverview');
-      if (!root) return;
-      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-      var seen = Object.create(null);
-      function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-      function streamP(p) {
-        if (p.dataset.lfStreamed) return;
-        var raw = p.textContent;
-        if (!raw || !raw.trim()) { p.dataset.lfStreamed = '1'; return; }
-        if (p.querySelector('*')) { p.dataset.lfStreamed = '1'; return; } // 含标签不处理
-        if (raw.length > 240) { p.dataset.lfStreamed = '1'; return; }     // 过长直接显示
-        if (seen[raw]) { p.dataset.lfStreamed = '1'; return; }
-        seen[raw] = true;
-        p.dataset.lfStreamed = '1';
-        var chars = Array.from(raw), html = '';
-        for (var i = 0; i < chars.length; i++) {
-          var c = chars[i] === ' ' ? ' ' : esc(chars[i]);
-          html += '<span class="lf-stream-char" style="transition-delay:' + (i * 16) + 'ms">' + c + '</span>';
-        }
-        p.innerHTML = html;
-        requestAnimationFrame(function () { p.classList.add('lf-stream-on'); });
-      }
-      function scan() {
-        var thread = root.querySelector('.lead-live-thread');
-        if (!thread) return;
-        var ps = thread.querySelectorAll('.lead-live-message.is-assistant p');
-        for (var i = 0; i < ps.length; i++) streamP(ps[i]);
-        var events = thread.querySelectorAll('.lead-live-message.is-event');
-        var order = 0;
-        for (var j = 0; j < events.length; j++) {
-          var ev = events[j], etext = ev.textContent;
-          if (ev.dataset.lfStaggered || seen[etext]) { ev.dataset.lfStaggered = '1'; continue; }
-          seen[etext] = true; ev.dataset.lfStaggered = '1';
-          ev.classList.add('lf-print-hidden');
-          ev.style.transitionDelay = (order * 90) + 'ms'; order++;
-          (function (node) {
-            requestAnimationFrame(function () { requestAnimationFrame(function () { node.classList.remove('lf-print-hidden'); }); });
-          })(ev);
-        }
-      }
-      var mo2 = new MutationObserver(function () { scan(); });
-      mo2.observe(root, { childList: true, subtree: true, characterData: true });
-      scan();
-    })();
-  </script>
 </body>
 </html>

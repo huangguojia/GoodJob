@@ -58,6 +58,13 @@ if [[ ! -f "$APP_ROOT/shared/deploy.env" ]]; then
   (cd "$SOURCE_ROOT" && "$DEPLOY_DIR/configure.sh")
 fi
 
+if [[ -f "$APP_ROOT/shared/deploy.env" ]] && grep -q '^GOODJOB_IMAGE_MODE=registry$' "$APP_ROOT/shared/deploy.env"; then
+  release="${GOODJOB_RELEASE_ID:-${1:-}}"
+  [[ -n "$release" ]] || die "当前为 registry 模式，请使用 ./update-registry.sh 固定版本号"
+  log "检测到 registry 模式，跳过本地构建；请使用 ./update-registry.sh $release"
+  exec "$DEPLOY_DIR/update-registry.sh" "$release"
+fi
+
 version="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SOURCE_ROOT/frontend/public/product-config.json" | head -n 1)"
 [[ -n "$version" ]] || version="source"
 release="${version}-$(date +%Y%m%d%H%M%S)"

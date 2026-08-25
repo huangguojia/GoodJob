@@ -1,5 +1,10 @@
 import { createAiHttpClient } from "./ai-http-security.js";
 import {
+  aiWebSearchPolicy,
+  isOpenAiModelConfig,
+  webSearchFailureSuggestion
+} from "./ai-web-search-policy.js";
+import {
   ProviderContractError,
   providerHttpStatusError,
   type LeadQuery,
@@ -490,13 +495,54 @@ export async function aiGenerateLeads(
     `获客目标：${query.goal || "未指定"}`,
     `排除：${query.excludeKeywords || "无"}`
   ].join("\n");
-  const content = await callAiModel(
-    config,
-    prompt,
-    4_000,
-    fetcher,
-    timeoutMs
-  );
+  const requiresWebSearch = isOpenAiModelConfig(config);
+  let content = "";
+  let citedWebsites: string[] = [];
+  if (requiresWebSearch) {
+    const policy = aiWebSearchPolicy(config);
+    if (!policy.ready) {
+      throw new ProviderContractError({
+        code: policy.reasonCode,
+        retryable: false,
+        retryAfterAt: null,
+        publicMessage: `${policy.message}${webSearchFailureSuggestion(policy)}`,
+        httpStatus: null,
+        phase: "search"
+      });
+    }
+    const webResult = await callAiModelWithWebSearch(
+      config,
+      [
+        prompt,
+        "必须先使用 Web Search，再生成候选公司。",
+        "officialWebsite 只能填写搜索引用中出现的企业官网 URL；没有对应引用就留空。",
+        "不要把目录、社交平台、新闻、百科或经销商页面当作企业官网。"
+      ].join("\n"),
+      4_000,
+      fetcher,
+      timeoutMs
+    );
+    if (!webResult.usedSearch || !webResult.citations.length) {
+      throw new ProviderContractError({
+        code: "AI_WEB_SEARCH_NO_CITATION",
+        retryable: false,
+        retryAfterAt: null,
+        publicMessage: "OpenAI 模型未返回 Web Search 引用，无法确认官网；请检查 Responses API Web Search 权限或更换配置。",
+        httpStatus: null,
+        phase: "search"
+      });
+    }
+    content = webResult.content;
+    citedWebsites = webResult.citations.map((item) => item.url);
+  } else {
+    content = await callAiModel(
+      config,
+      prompt,
+      4_000,
+      fetcher,
+      timeoutMs
+    );
+  }
   let parsed: { companies?: unknown };
   try {
     parsed = extractJsonObject(content) as { companies?: unknown };
@@ -513,7 +559,26 @@ export async function aiGenerateLeads(
       const firstCountry =
         query.countries.split(/,|，/)[0]?.trim() || "未知";
       const detail = String(item.description || "").trim();
-      const officialWebsite = String(item.website || "").trim();
+      const proposedWebsite = String(item.website || item.officialWebsite || "").trim();
+      let officialWebsite = "";
+      if (proposedWebsite && citedWebsites.length) {
+        try {
+          const proposed = new URL(proposedWebsite);
+          const match = citedWebsites.find((cited) => {
+            try {
+              return new URL(cited).origin === proposed.origin;
+            } catch {
+              return false;
+            }
+          });
+          officialWebsite = match || "";
+        } catch {
+          officialWebsite = "";
+        }
+      }
+      const unverifiedWebsiteNote = proposedWebsite && !officialWebsite
+        ? `AI 提供候选官网（未被 Web Search 引用确认）：${proposedWebsite}`
+        : "";
       return {
         company: String(item.company || "").trim(),
         officialWebsite,
@@ -526,14 +591,19 @@ export async function aiGenerateLeads(
         ).trim(),
         contact: "待维护",
         contactInfo: "",
-        description: detail
-          ? `${detail}（AI 生成，待核实）`
-          : "AI 生成候选，待核实。",
+        description: [
+          detail ? `${detail}（AI 生成，待核实）` : "AI 生成候选，待核实。",
+          unverifiedWebsiteNote
+        ].filter(Boolean).join("；"),
         confidence: 58,
         sourceUrl: "",
         recordType: "assisted_suggestion",
-        evidenceSummary:
-          `${detail || "AI 生成候选"}；尚未完成外部事实核验。`,
+        evidenceSummary: [
+          detail || "AI 生成候选",
+          officialWebsite
+            ? "官网来自 Web Search 引用，并仍需名称与域名评分确认"
+            : "尚未完成官网引用核验"
+        ].join("；"),
         matchedFields: [
           "company",
           ...(officialWebsite ? ["officialWebsite"] : []),

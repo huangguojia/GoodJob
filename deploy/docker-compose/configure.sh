@@ -76,7 +76,10 @@ PROSPECT_SOURCE_RAW_ENVELOPE_SECRET=$(generate_hex)
 PROSPECT_COVERAGE_MASTER_SECRET=$(generate_hex)
 MYSQL_DATA_IMPORT_TOKEN=$(generate_hex)
 EOF
-chmod 0600 "$SECRETS_DIR"/*
+# Official Node images run as uid/gid 1000. Keep secrets root-owned while
+# granting the application containers group-read access to bind-mounted files.
+chown 0:1000 "$SECRETS_DIR"/*
+chmod 0640 "$SECRETS_DIR"/*
 
 cat > "$ENV_FILE" <<EOF
 COMPOSE_PROJECT_NAME=goodjobcrm
@@ -86,6 +89,10 @@ PUBLIC_SCHEME=$PUBLIC_SCHEME
 PUBLIC_ORIGIN=$PUBLIC_SCHEME://$DOMAIN
 SESSION_COOKIE_SECURE=$SESSION_COOKIE_SECURE
 GOODJOB_HTTP_PORT=4188
+GOODJOB_IMAGE_MODE=registry
+GOODJOB_BACKEND_IMAGE=crpi-f1g4pi9vyexdaer5.cn-hongkong.personal.cr.aliyuncs.com/kevin_goodjobcrm/backend
+GOODJOB_GATEWAY_IMAGE=crpi-f1g4pi9vyexdaer5.cn-hongkong.personal.cr.aliyuncs.com/kevin_goodjobcrm/gateway
+GOODJOB_COMMUNICATION_IMAGE=crpi-f1g4pi9vyexdaer5.cn-hongkong.personal.cr.aliyuncs.com/kevin_goodjobcrm/communication
 INITIAL_ADMIN_EMAIL=$INITIAL_ADMIN_EMAIL
 INITIAL_ADMIN_NAME=$INITIAL_ADMIN_NAME
 MYSQL_DATABASE=goodjob_crm_prod

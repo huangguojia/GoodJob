@@ -344,6 +344,69 @@ await assert.rejects(
     && (error as { code?: unknown }).code === "AI_MODEL_RESPONSE_INVALID"
 );
 
+const leadQuery = {
+  goal: "find distributors",
+  productKeywords: "industrial lighting",
+  countries: "United States",
+  industry: "lighting",
+  customerType: "distributor",
+  excludeKeywords: "",
+  limit: 2
+};
+await assert.rejects(
+  aiGenerateLeads(
+    leadQuery,
+    config({ provider: "openai", model: "gpt-5.5", webSearchStatus: "untested" }),
+    async () => new Response(JSON.stringify({ choices: [{ message: { content: "unused" } }] }), { status: 200 })
+  ),
+  (error: unknown) => error instanceof Error
+    && "code" in error
+    && (error as { code?: unknown }).code === "AI_WEB_SEARCH_NOT_TESTED"
+);
+
+const verifiedLeads = await aiGenerateLeads(
+  leadQuery,
+  config({ provider: "openai", model: "gpt-5.5", baseUrl: "https://model.example/v1", webSearchStatus: "passed" }),
+  async (url) => {
+    assert.equal(url, "https://model.example/v1/responses");
+    return new Response(JSON.stringify({
+      output: [
+        { type: "web_search_call", action: { query: "industrial lighting distributors United States" } },
+        {
+          type: "message",
+          content: [{
+            type: "output_text",
+            text: JSON.stringify({ companies: [
+              { company: "Example Lighting", website: "https://example.com/company", country: "United States", business: "Distributor" },
+              { company: "Uncited Lighting", website: "https://uncited.example", country: "United States", business: "Distributor" }
+            ] }),
+            annotations: [{ type: "url_citation", title: "Example official", url: "https://example.com/company" }]
+          }]
+        }
+      ]
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }
+);
+assert.equal(verifiedLeads.length, 2);
+assert.equal(verifiedLeads[0]?.officialWebsite, "https://example.com/company");
+assert.equal(verifiedLeads[1]?.officialWebsite, "");
+assert.match(verifiedLeads[1]?.description || "", /未被 Web Search 引用确认/u);
+
+const ordinaryModelLeads = await aiGenerateLeads(
+  leadQuery,
+  config({ provider: "deepseek", model: "deepseek-chat", lastTestStatus: "passed", webSearchStatus: "unsupported" }),
+  async () => new Response(JSON.stringify({
+    choices: [{ message: { content: JSON.stringify({ companies: [{
+      company: "Ordinary Model Candidate",
+      website: "https://model-guessed.example",
+      country: "United States",
+      business: "Distributor"
+    }] }) } }]
+  }), { status: 200, headers: { "content-type": "application/json" } })
+);
+assert.equal(ordinaryModelLeads[0]?.officialWebsite, "");
+assert.match(ordinaryModelLeads[0]?.description || "", /未被 Web Search 引用确认/u);
+
 await assert.rejects(
   readAiJson(new Response("<html>Bad gateway</html>", {
     status: 400,

@@ -6,7 +6,7 @@ source "$SCRIPT_DIR/lib.sh"
 load_env
 "$SCRIPT_DIR/preflight.sh"
 
-if [[ ! -f "$PACKAGE_ROOT/backend/dist/server.js" || "${GOODJOB_BUILD_BEFORE_INSTALL:-false}" == "true" ]]; then
+if [[ "$(image_mode)" == "local" && ( ! -f "$PACKAGE_ROOT/backend/dist/server.js" || "${GOODJOB_BUILD_BEFORE_INSTALL:-false}" == "true" ) ]]; then
   log "未检测到可用生产构建，使用 Node.js Docker 构建器生成构建产物"
   "$SCRIPT_DIR/build-in-docker.sh"
 fi
@@ -60,8 +60,13 @@ if [[ -n "$current_release" ]]; then
   "$SCRIPT_DIR/backup.sh"
 fi
 
-log "构建 GoodJob $new_release 镜像（不会重启 Docker daemon）"
-COMPOSE_PARALLEL_LIMIT=1 compose --profile tools build backend-migrate communication-migrate gateway
+if [[ "$(image_mode)" == "registry" ]]; then
+  log "拉取 GoodJob $new_release ACR 镜像（服务器不在本地编译）"
+  compose pull backend-migrate communication-migrate backend communication gateway
+else
+  log "构建 GoodJob $new_release 本地镜像（不会重启 Docker daemon）"
+  COMPOSE_PARALLEL_LIMIT=1 compose --profile tools build backend-migrate communication-migrate gateway
+fi
 
 legacy_postgres_volume=false
 if docker volume inspect goodjobcrm_postgres_data >/dev/null 2>&1; then
@@ -125,7 +130,8 @@ rm -f "$STATE_DIR/install-intent"
 chmod 0600 "$STATE_DIR"/*
 
 log "清理旧应用镜像，仅保留当前版和上一版"
-for repository in goodjobcrm-backend goodjobcrm-communication goodjobcrm-gateway; do
+for service in backend communication gateway; do
+  repository="$(image_repository "$service")"
   while IFS= read -r image_ref; do
     [[ -n "$image_ref" ]] || continue
     image_tag="${image_ref##*:}"

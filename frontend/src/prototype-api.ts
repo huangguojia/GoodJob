@@ -49,6 +49,7 @@ let prospectRadarActiveJobId = "";
 let prospectRadarLoading = false;
 let integrationCenterController: IntegrationCenterController | null = null;
 let examTimerHandle: number | null = null;
+let advancedExcelEditReturnTemplateId = "";
 const DASHBOARD_LIVE_REFRESH_MS = 10_000;
 
 interface User {
@@ -407,6 +408,95 @@ interface BackgroundResearch {
   completedAt: string;
 }
 
+interface SalesDistillationMetrics {
+  customerCount: number;
+  leadCount: number;
+  activeDealCount: number;
+  wonDealCount: number;
+  wonAmount: number;
+  followupCount: number;
+  completedTodoCount: number;
+  reportCount: number;
+}
+
+interface SalesDistillation {
+  id: string;
+  sourceUserId: string;
+  sourceUserName: string;
+  teamId: string;
+  periodDays: number;
+  metrics: SalesDistillationMetrics;
+  patterns: string[];
+  playbook: Array<{ stage: string; action: string; evidence: string }>;
+  coachingActions: string[];
+  modelLabel: string;
+  status: "draft" | "published";
+  createdBy: string;
+  createdAt: string;
+  publishedBy?: string;
+  publishedAt?: string;
+  trainingRunId?: string;
+  version?: number;
+  maturity?: SalesTrainingMaturity;
+  evaluationScore?: number;
+  sampleCount?: number;
+}
+
+type SalesTrainingStatus = "queued" | "collecting" | "cleaning" | "labeling" | "training" | "evaluating" | "awaiting_review" | "published" | "paused" | "failed" | "cancelled";
+type SalesTrainingMaturity = "observation" | "trial" | "production" | "stable";
+type SalesTrainingSampleLabel = "positive" | "negative" | "neutral";
+interface SalesTrainingRun {
+  id: string;
+  sourceUserId: string;
+  sourceUserName: string;
+  teamId: string;
+  createdBy: string;
+  parentRunId: string;
+  version: number;
+  periodDays: number;
+  status: SalesTrainingStatus;
+  resumeStatus: SalesTrainingStatus;
+  progress: number;
+  currentAction: string;
+  maturity: SalesTrainingMaturity;
+  metrics: SalesDistillationMetrics;
+  sampleStats: { source: number; valid: number; rejected: number; positive: number; negative: number; neutral: number; holdout: number };
+  samples: Array<{ id: string; entityType: "customer" | "lead" | "deal"; entityId: string; title: string; market: string; stage: string; outcome: string; label: SalesTrainingSampleLabel; included: boolean; activityCount: number; todoCount: number; evidenceIds: string[]; summary: string; managerNote: string }>;
+  rounds: Array<{ id: string; index: number; name: string; status: "pending" | "running" | "completed" | "failed"; summary: string; startedAt: string; completedAt: string }>;
+  events: Array<{ id: string; stage: SalesTrainingStatus; message: string; createdAt: string }>;
+  patterns: string[];
+  playbook: Array<{ stage: string; action: string; evidence: string }>;
+  coachingActions: string[];
+  evaluation: { coverage: number; balance: number; traceability: number; strategy: number; safety: number; overall: number; passed: boolean; blockers: string[] };
+  modelLabel: string;
+  candidateDistillationId: string;
+  error: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string;
+  publishedAt: string;
+}
+
+interface SalesPlaybookActivation {
+  id: string;
+  distillationId: string;
+  ownerId: string;
+  teamId: string;
+  status: "active" | "paused";
+  applicationCount: number;
+  taskCount: number;
+  lastUsedAt: string;
+  activatedAt: string;
+  updatedAt: string;
+}
+
+interface SalesDistillationSource {
+  id: string;
+  name: string;
+  role: Role;
+  teamId: string;
+}
+
 interface CompanyProfile {
   teamId: string;
   companyName: string;
@@ -424,6 +514,15 @@ interface TeamSystemSettings {
   requireDocumentExcelApproval: boolean;
   updatedBy: string;
   updatedAt: string;
+}
+
+interface TradeDocumentOcrProviderConfig {
+  provider: "none" | "baidu" | "siliconflow";
+  enabled: boolean;
+  hasApiKey: boolean;
+  hasSecretKey: boolean;
+  model: string;
+  baseUrl: string;
 }
 
 interface DevelopmentEmailDraft {
@@ -579,6 +678,7 @@ interface ImportExportJob {
 
 interface TradeDocumentItem {
   id: string;
+  lineType?: "product" | "shipping_cost";
   productId?: string;
   imageUrl?: string;
   product: string;
@@ -648,11 +748,33 @@ interface TradeDocumentImportAnalysis {
   calculatedTotal: number;
   declaredTotal?: number;
   totalDifference?: number;
+  recognitionSource?: "import" | "ocr";
+  recognitionTemplate?: {
+    templateId: string;
+    familyId: string;
+    name: string;
+    version: number;
+    matchScore: number;
+    matchedAt: string;
+  };
   createdDocumentId?: string;
   confirmedBy?: string;
   confirmedAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+interface TradeDocumentRecognitionTemplate {
+  id: string;
+  familyId: string;
+  version: number;
+  name: string;
+  documentType: TradeDocument["type"];
+  sourceKind: "import" | "ocr";
+  status: "active" | "archived";
+  createdBy: string;
+  createdAt: string;
+  archivedAt?: string;
 }
 
 interface CustomsDocument {
@@ -737,6 +859,7 @@ interface TradeDocument {
   buyerAddress: string;
   buyerContact: string;
   seller: string;
+  brandMarkText?: string;
   sellerAddress: string;
   sellerContact?: string;
   sellerPhone?: string;
@@ -781,6 +904,8 @@ interface DocumentLetterheadSnapshot {
   email: string;
   website: string;
   bankInfo: string;
+  contact: string;
+  taxNo: string;
   logoUrl: string;
   logoPlacement?: DocumentAssetPlacement;
 }
@@ -809,6 +934,12 @@ interface DocumentSignatureSnapshot {
 interface DocumentLetterhead extends DocumentLetterheadSnapshot {
   id: string;
   teamId: string;
+  matchCountries: string[];
+  matchCurrencies: string[];
+  matchDocumentTypes: TradeDocument["type"][];
+  matchPriority: number;
+  stampId: string;
+  signatureId: string;
   isDefault: boolean;
   enabled: boolean;
   updatedBy: string;
@@ -836,6 +967,7 @@ interface DocumentSignature extends DocumentSignatureSnapshot {
 interface DocumentDefaultProfile {
   teamId: string;
   seller: string;
+  brandMarkText: string;
   sellerAddress: string;
   sellerContact: string;
   sellerPhone: string;
@@ -873,6 +1005,89 @@ interface TradeDocumentHistoryResponse {
   page: number;
   pageSize: number;
   pageCount: number;
+}
+
+interface QuoteHistoryItem {
+  productId: string;
+  product: string;
+  model: string;
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+  lineTotal: number;
+}
+
+interface QuoteHistoryRecord {
+  id: string;
+  dealId: string;
+  customerId: string;
+  documentId: string;
+  documentType: "PI" | "QUOTATION";
+  documentNumber: string;
+  documentRevision: number;
+  issueDate: string;
+  customerName: string;
+  dealTitle: string;
+  dealStage: string;
+  currency: string;
+  totalAmount: number;
+  items: QuoteHistoryItem[];
+  changes: string[];
+  operatorId: string;
+  operatorName: string;
+  quotedAt: string;
+  exportedAt?: string;
+}
+
+interface QuoteHistoryResponse {
+  records: QuoteHistoryRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  summary: {
+    recordCount: number;
+    customerCount: number;
+    dealCount: number;
+    productCount: number;
+    totals: Record<string, number>;
+  };
+  productAnalysis?: {
+    rows: QuoteProductAnalysisRow[];
+    overall: QuoteProductRangeRow[];
+    countryRanges: QuoteProductRangeRow[];
+    detailRecords: QuoteHistoryRecord[];
+    totalRecords: number;
+  };
+}
+
+interface QuoteProductRangeRow {
+  country: string;
+  currency: string;
+  quoteCount: number;
+  countryCount: number;
+  minUnitPrice: number;
+  maxUnitPrice: number;
+  averageUnitPrice: number;
+  latestUnitPrice: number;
+  latestQuotedAt: string;
+}
+
+interface QuoteProductAnalysisRow {
+  productId: string;
+  product: string;
+  model: string;
+  country: string;
+  currency: string;
+  quoteCount: number;
+  minUnitPrice: number;
+  maxUnitPrice: number;
+  averageUnitPrice: number;
+  latestUnitPrice: number;
+  latestQuotedAt: string;
+  latestCustomerName: string;
+  latestDocumentNumber: string;
+  recordIds: string[];
 }
 
 type CommissionRuleType = "rate" | "fixed" | "tier" | "gross_profit" | "none";
@@ -1190,7 +1405,7 @@ interface InternalMessage {
   type: "system" | "manual";
   subject: string;
   content: string;
-  relatedType: "daily_report" | "message" | "email_return" | "integration_approval" | "integration_call" | "integration_connection" | "integration_event" | "integration_connector" | "";
+  relatedType: "daily_report" | "message" | "email_return" | "quote_history" | "integration_approval" | "integration_call" | "integration_connection" | "integration_event" | "integration_connector" | "";
   relatedId: string;
   readAt: string;
   createdAt: string;
@@ -1339,7 +1554,7 @@ interface ProspectStrategySuggestion {
   createdAt: string;
 }
 
-type WebsiteProbeStage = "queued" | "dns" | "robots" | "head" | "body" | "contact_page" | "evidence" | "completed" | "failed";
+type WebsiteProbeStage = "queued" | "dns" | "robots" | "head" | "body" | "contact_page" | "ai_extract" | "evidence" | "completed" | "failed";
 
 interface WebsiteProbeEvent {
   id: string;
@@ -1360,7 +1575,7 @@ interface WebsiteProbeAttempt {
   accessMode: "controlled_probe";
   policyVersion: "website-probe-policy-v1" | "website-probe-policy-v2" | "website-probe-policy-v3" | "website-probe-policy-v4-foreign-only";
   status: "queued" | "running" | "completed" | "failed";
-  outcome: "pending" | "evidence_found" | "no_evidence" | "robots_denied" | "unreachable" | "policy_blocked" | "rate_limited" | "circuit_open";
+  outcome: "pending" | "evidence_found" | "no_evidence" | "robots_denied" | "unreachable" | "policy_blocked" | "rate_limited" | "circuit_open" | "interrupted";
   robotsDecision: "pending" | "allowed" | "denied" | "unavailable";
   httpStatus: number;
   responseBytes: number;
@@ -1577,11 +1792,12 @@ interface WebsiteOpportunity {
     whatsapp: string[];
     source: string;
     sourceLabel?: string;
-    sourceKind?: "source_record" | "contact_provider" | "official_website" | "manual";
+    sourceKind?: "source_record" | "contact_provider" | "web_search" | "official_website" | "local_runner" | "manual";
     confidence?: number;
     verificationStatus?: "verified" | "source_confirmed" | "syntax_valid" | "unverified";
     observedAt?: string;
     reasonCodes?: string[];
+    evidenceExcerpt?: string;
     corroboratedSources?: Array<{ sourceId: string; sourceLabel: string; evidenceUrl: string }>;
     evidenceUrl: string;
   }>;
@@ -1593,14 +1809,17 @@ interface WebsiteOpportunity {
       id: string;
       sourceId: string;
       sourceLabel: string;
-      sourceKind: "source_record" | "contact_provider" | "official_website" | "manual";
+      sourceKind: "source_record" | "contact_provider" | "web_search" | "official_website" | "local_runner" | "manual";
       status: "queued" | "running" | "completed" | "failed" | "blocked" | "skipped";
-      outcome: "pending" | "contact_found" | "no_contact" | "not_configured" | "policy_blocked" | "provider_failed";
+      outcome: "pending" | "contact_found" | "no_contact" | "not_needed" | "not_configured" | "policy_blocked" | "timed_out" | "provider_failed";
       contactCount: number;
       message: string;
       errorCode?: string;
       retryable?: boolean;
       retryAfterAt?: string | null;
+      suggestion?: string;
+      taskId?: string;
+      evidenceUrls?: string[];
       startedAt: string;
       completedAt: string;
     }>;
@@ -1617,6 +1836,8 @@ interface WebsiteOpportunity {
     };
     contactCount: number;
     summary: string;
+    deadlineAt?: string;
+    lastProgressAt?: string;
     createdAt: string;
     startedAt: string;
     completedAt: string;
@@ -2304,6 +2525,10 @@ interface AiModelConfig {
   lastTestAt?: string;
   lastTestStatus?: "untested" | "passed" | "failed";
   lastTestMessage?: string;
+  webSearchStatus?: "untested" | "passed" | "failed" | "unsupported";
+  webSearchTestAt?: string;
+  webSearchTestMessage?: string;
+  webSearchCitationCount?: number;
   updatedAt: string;
 }
 
@@ -2740,7 +2965,7 @@ interface AgentKnowledgeDocument {
   toolRefs: string[];
   successCriteria: string[];
   failureCases: string[];
-  sourceType: "system_file" | "manual" | "agent_feedback";
+  sourceType: "system_file" | "manual" | "agent_feedback" | "distillation";
   sourceId: string;
   status: AgentKnowledgeStatus;
   trustLevel: "system" | "reviewed" | "candidate";
@@ -2761,6 +2986,7 @@ interface AgentKnowledgeOverview {
   managedCount: number;
   publishedCount: number;
   reviewCount: number;
+  distillationCount: number;
   modules: string[];
   loadedAt: string;
   directory: string;
@@ -3115,6 +3341,12 @@ interface AppState {
   documentHistoryPage: number;
   documentHistoryPageCount: number;
   documentHistoryTotal: number;
+  quoteHistoryPage: number;
+  quoteHistoryPageCount: number;
+  quoteHistoryTotal: number;
+  quoteHistoryMode: "records" | "product";
+  quoteProductAnalysis: QuoteHistoryResponse["productAnalysis"];
+  quoteHistoryFocusId: string;
   wecomMessages: WecomMessage[];
   dailyReports: DailyReport[];
   dailyReportOwners: CollaborationUser[];
@@ -3155,6 +3387,11 @@ interface AppState {
   outreachSequences: OutreachSequence[];
   customerMaintenanceWatches: CustomerMaintenanceWatch[];
   agentLoading: boolean;
+  salesDistillations: SalesDistillation[];
+  salesPlaybookActivations: SalesPlaybookActivation[];
+  salesDistillationSources: SalesDistillationSource[];
+  salesDistillationLoading: boolean;
+  salesTrainingRuns: SalesTrainingRun[];
   aiConfig: AiModelConfig | null;
   aiConfigs: AiModelConfig[];
   selectedAiConfigId: string | null;
@@ -3300,6 +3537,12 @@ const state: AppState = {
   documentHistoryPage: 1,
   documentHistoryPageCount: 1,
   documentHistoryTotal: 0,
+  quoteHistoryPage: 1,
+  quoteHistoryPageCount: 1,
+  quoteHistoryTotal: 0,
+  quoteHistoryMode: "records",
+  quoteProductAnalysis: undefined,
+  quoteHistoryFocusId: "",
   wecomMessages: [],
   dailyReports: [],
   dailyReportOwners: [],
@@ -3340,6 +3583,11 @@ const state: AppState = {
   outreachSequences: [],
   customerMaintenanceWatches: [],
   agentLoading: false,
+  salesDistillations: [],
+  salesPlaybookActivations: [],
+  salesDistillationSources: [],
+  salesDistillationLoading: false,
+  salesTrainingRuns: [],
   aiConfig: null,
   aiConfigs: [],
   selectedAiConfigId: null,
@@ -3470,6 +3718,7 @@ interface LeadAiParsed {
   exclusions: string[];
 }
 let leadAiParsed: LeadAiParsed | null = null;
+let leadAiParseLastError = "";
 let leadAiParseInFlight: Promise<boolean> | null = null;
 let leadSuperPreviewTimer = 0;
 let activeLeadFinderJobId: string | null = null;
@@ -3499,6 +3748,7 @@ const developmentEmailScenarioDrafts = new Map<DevelopmentEmailScenario, Pick<De
 let developmentEmailNextFollowAt = "";
 let companyProfileCanManage = false;
 let teamSystemSettings: TeamSystemSettings = { teamId: "", requireDocumentExcelApproval: false, updatedBy: "", updatedAt: "" };
+let tradeDocumentOcrProvider: TradeDocumentOcrProviderConfig = { provider: "none", enabled: false, hasApiKey: false, hasSecretKey: false, model: "", baseUrl: "" };
 let teamSystemSettingsCanManage = false;
 let whatsappRefreshTimer = 0;
 let agentRunPollTimer = 0;
@@ -3517,6 +3767,8 @@ let agentSkillQuery = "";
 let agentSkillCategoryFilter = "all";
 let agentSkillStatusFilter = "all";
 let agentSkillSourceFilter = "all";
+let selectedSalesTrainingRunId = "";
+let salesTrainingPollTimer = 0;
 let whatsappRefreshing = false;
 let openWorkspaceTabs = ["dashboard"];
 let workspaceTabHistory = ["dashboard"];
@@ -3559,6 +3811,7 @@ const viewLabels: Record<string, string> = {
   "integration-center": "集成中心",
   "approval-center": "审批中心",
   "approval-workflows": "审批设置",
+  "sales-distillation": "销售训练",
   leads: "线索",
   customers: "客户",
   "customer-pool": "客户公池",
@@ -3776,6 +4029,20 @@ function escapeHtml(value: string | number | undefined) {
     const map: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
     return map[char];
   });
+}
+
+function leadFinderDisplayText(value: string | undefined) {
+  return String(value || "")
+    .replace(/爬取境外官网/gu, "核验境外官网公开资料")
+    .replace(/(?:受控)?低频(?:官网)?验证/gu, "官网公开资料核验")
+    .replace(/官网(?:爬取|抓取|探针)/gu, "官网公开资料核验")
+    .replace(/爬虫|爬取|抓取|抓官网/gu, "公开资料核验")
+    .replace(/robots\.txt/giu, "网站公开访问规则")
+    .replace(/探针/gu, "资料核验")
+    .replace(/低频/gu, "")
+    .replace(/\b(?:web\s*)?crawlers?\b/giu, "public information service")
+    .replace(/\b(?:web\s*)?scrap(?:e|es|ed|ing)\b/giu, "review public information")
+    .replace(/\bspiders?\b/giu, "public information service");
 }
 
 function agentRiskLabel(risk: AgentRisk) {
@@ -4141,7 +4408,7 @@ function agentMemoryScopeLabel(scope: AgentMemory["scope"]) {
 }
 
 function agentMemorySourceLabel(source: AgentMemory["sourceType"]) {
-  return ({ crm: "CRM 事实", manual: "手动维护", agent: "Agent 建议", playbook: "团队打法" } as Record<AgentMemory["sourceType"], string>)[source];
+  return ({ crm: "CRM 事实", manual: "手动维护", agent: "Agent 建议", playbook: "蒸馏打法" } as Record<AgentMemory["sourceType"], string>)[source];
 }
 
 function renderAgentMemoryStatus() {
@@ -4286,7 +4553,7 @@ function renderAgentKnowledgeStatus() {
   const button = qs<HTMLButtonElement>("#agentKnowledgeStatus");
   const overview = state.agentKnowledgeOverview;
   if (!button || !overview) return;
-  button.innerHTML = `<span>学习中心</span><b>${overview.systemCount + overview.publishedCount} 条有效知识</b><small>${overview.reviewCount ? `${overview.reviewCount} 条待审核` : `${overview.modules.length} 个业务模块`}</small>`;
+  button.innerHTML = `<span>学习中心</span><b>${overview.systemCount + overview.publishedCount + overview.distillationCount} 条有效知识</b><small>${overview.reviewCount ? `${overview.reviewCount} 条待审核` : `${overview.modules.length} 个业务模块`}</small>`;
 }
 
 async function loadAgentKnowledge(showError = true) {
@@ -4680,8 +4947,8 @@ function agentKnowledgeCenterBody() {
     .filter((item) => agentKnowledgeModule === "all" || item.module === agentKnowledgeModule)
     .filter((item) => !agentKnowledgeQuery || `${item.title} ${item.summary} ${item.content} ${item.keywords.join(" ")}`.toLowerCase().includes(agentKnowledgeQuery.toLowerCase()));
   const rows = filtered.map((item) => {
-    const source = item.sourceType === "system_file" ? "系统版本" : item.sourceType === "agent_feedback" ? "执行经验" : "团队维护";
-    const action = item.sourceType === "system_file"
+    const source = item.sourceType === "system_file" ? "系统版本" : item.sourceType === "distillation" ? "蒸馏打法" : item.sourceType === "agent_feedback" ? "执行经验" : "团队维护";
+    const action = item.sourceType === "system_file" || item.sourceType === "distillation"
       ? ""
       : item.status === "draft"
         ? `<button class="btn" data-agent-knowledge-action="submit" data-agent-knowledge-id="${escapeHtml(item.id)}">提交审核</button>`
@@ -4698,7 +4965,7 @@ function agentKnowledgeCenterBody() {
       <div><span>系统知识</span><b>${overview.systemCount}</b></div>
       <div><span>团队发布</span><b>${overview.publishedCount}</b></div>
       <div><span>待审核</span><b>${overview.reviewCount}</b></div>
-      <div><span>知识总量</span><b>${overview.systemCount + overview.managedCount}</b></div>
+      <div><span>蒸馏打法</span><b>${overview.distillationCount}</b></div>
     </div>
     <div class="agent-knowledge-toolbar">
       <input id="agentKnowledgeQuery" value="${escapeHtml(agentKnowledgeQuery)}" placeholder="搜索知识、流程或失败案例">
@@ -5250,6 +5517,16 @@ function renderAgent(run = state.agentRun) {
       ? `<span class="badge green">模型已启用</span><span>${escapeHtml(modelConfig.name || modelConfig.model || "当前模型")}</span>`
       : `<span class="badge amber">基础执行</span><span>常用任务可用</span>`;
   }
+  const playbookStatus = qs<HTMLButtonElement>("#agentPlaybookStatus");
+  if (playbookStatus) {
+    const activation = state.salesPlaybookActivations.find((item) => item.status === "active");
+    const distillation = activation ? state.salesDistillations.find((item) => item.id === activation.distillationId) : undefined;
+    playbookStatus.classList.toggle("active", Boolean(activation && distillation));
+    playbookStatus.innerHTML = activation && distillation
+      ? `<span>当前销售能力</span><b>${escapeHtml(distillation.sourceUserName)}${distillation.version ? ` · V${distillation.version}` : ""}</b><small>${distillation.maturity ? salesTrainingMaturityLabel(distillation.maturity) : "历史能力"} · 应用 ${activation.applicationCount} 次 · 待办 ${activation.taskCount} 个</small>`
+      : `<span>当前销售能力</span><b>尚未应用</b><small></small>`;
+    playbookStatus.onclick = () => activateNavView("sales-distillation", () => void loadSalesDistillationWorkspace());
+  }
   const expired = Boolean(run && new Date(run.expiresAt).getTime() <= Date.now());
   const runStatus = qs<HTMLElement>("#agentRunStatus");
   if (runStatus) {
@@ -5378,18 +5655,281 @@ function renderAgent(run = state.agentRun) {
   syncAgentRunPolling(run);
 }
 
+function salesDistillationMetricLabel(key: keyof SalesDistillationMetrics) {
+  return ({
+    customerCount: "客户",
+    leadCount: "有效线索",
+    activeDealCount: "活跃商机",
+    wonDealCount: "成交商机",
+    wonAmount: "成交金额",
+    followupCount: "跟进记录",
+    completedTodoCount: "完成待办",
+    reportCount: "日报"
+  } as Record<keyof SalesDistillationMetrics, string>)[key];
+}
+
+function salesTrainingStatusLabel(status: SalesTrainingStatus) {
+  return ({ queued: "等待训练", collecting: "采集样本", cleaning: "清洗证据", labeling: "结果标注", training: "策略训练", evaluating: "离线评测", awaiting_review: "等待审核", published: "已发布", paused: "已暂停", failed: "训练失败", cancelled: "已取消" } as Record<SalesTrainingStatus, string>)[status];
+}
+
+function salesTrainingMaturityLabel(maturity: SalesTrainingMaturity) {
+  return ({ observation: "观察级", trial: "试用级", production: "生产级", stable: "稳定级" } as Record<SalesTrainingMaturity, string>)[maturity];
+}
+
+function renderSalesTrainingWorkspace() {
+  const queue = qs<HTMLElement>("#salesTrainingQueue");
+  const count = qs<HTMLElement>("#salesTrainingQueueCount");
+  const detail = qs<HTMLElement>("#salesTrainingDetail");
+  const quality = qs<HTMLElement>("#salesTrainingQuality");
+  if (!queue || !detail || !quality) return;
+  if (count) count.textContent = String(state.salesTrainingRuns.length);
+  if (!selectedSalesTrainingRunId || !state.salesTrainingRuns.some((item) => item.id === selectedSalesTrainingRunId)) selectedSalesTrainingRunId = state.salesTrainingRuns[0]?.id || "";
+  queue.innerHTML = state.salesTrainingRuns.length
+    ? state.salesTrainingRuns.map((item) => {
+        const tone = ["queued", "collecting", "cleaning", "labeling", "training", "evaluating"].includes(item.status) ? "running" : item.status === "awaiting_review" ? "review" : item.status === "published" ? "published" : "";
+        return `<button class="sales-training-queue-item ${tone}${item.id === selectedSalesTrainingRunId ? " active" : ""}" type="button" data-sales-training-run="${escapeHtml(item.id)}"><div><b>${escapeHtml(item.sourceUserName)} · V${item.version}</b><i></i></div><small>${escapeHtml(salesTrainingStatusLabel(item.status))} · ${item.progress}%</small></button>`;
+      }).join("")
+    : `<div class="sales-training-empty">暂无训练任务</div>`;
+  qsa<HTMLButtonElement>("[data-sales-training-run]", queue).forEach((button) => button.addEventListener("click", () => { selectedSalesTrainingRunId = button.dataset.salesTrainingRun || ""; renderSalesTrainingWorkspace(); }));
+  const run = state.salesTrainingRuns.find((item) => item.id === selectedSalesTrainingRunId);
+  if (!run) {
+    detail.innerHTML = `<div class="sales-training-welcome"><span>AI</span><div><h2>暂无训练任务</h2></div></div>`;
+    quality.innerHTML = `<div class="sales-training-quality-empty">暂无训练质量</div>`;
+    return;
+  }
+  const active = ["queued", "collecting", "cleaning", "labeling", "training", "evaluating"].includes(run.status);
+  const canReviewSamples = ["awaiting_review", "paused", "failed"].includes(run.status);
+  const stageNames = ["样本采集", "证据清洗", "结果标注", "策略训练", "离线评测"];
+  const stageCards = stageNames.map((name, index) => {
+    const round = run.rounds.find((item) => item.index === index + 1);
+    const status = round?.status || "pending";
+    return `<div class="sales-training-stage ${status}"><b>${escapeHtml(name)}</b><small>${escapeHtml(round?.summary || (status === "running" ? "正在运行" : "等待开始"))}</small></div>`;
+  }).join("");
+  const controls = active
+    ? `<button class="btn" type="button" data-sales-training-control="pause">暂停</button><button class="btn" type="button" data-sales-training-control="cancel">取消</button>`
+    : ["paused", "failed"].includes(run.status)
+      ? `<button class="btn primary" type="button" data-sales-training-control="resume">继续训练</button><button class="btn" type="button" data-sales-training-control="cancel">取消</button>`
+      : "";
+  detail.innerHTML = `<div class="sales-training-run-head"><div><h2>${escapeHtml(run.sourceUserName)} 销售能力训练</h2><p>第 ${run.version} 版 · 近 ${run.periodDays} 天 · ${escapeHtml(run.modelLabel)}</p></div><div class="head-actions">${controls}</div></div>
+    <div class="sales-training-progress"><div><span>${escapeHtml(run.currentAction || salesTrainingStatusLabel(run.status))}</span><strong>${run.progress}%</strong></div><span><i style="width:${Math.max(0, Math.min(100, run.progress))}%"></i></span></div>
+    <div class="sales-training-stages">${stageCards}</div>
+    <div class="sales-training-section-title"><h3>训练动态</h3><span>${run.events.length} 条</span></div>
+    <div class="sales-training-events">${[...run.events].reverse().slice(0, 30).map((item) => `<div class="sales-training-event"><b>${escapeHtml(salesTrainingStatusLabel(item.stage))}</b><span>${escapeHtml(item.message)}</span><time>${new Date(item.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div>`).join("")}</div>
+    <div class="sales-training-section-title"><h3>训练样本</h3><span>有效 ${run.sampleStats.valid} · 淘汰 ${run.sampleStats.rejected}</span></div>
+    <div class="sales-training-samples">${run.samples.length ? run.samples.slice(0, 12).map((sample) => `<div class="sales-training-sample"><input type="checkbox" data-sales-training-sample-include="${escapeHtml(sample.id)}" ${sample.included ? "checked" : ""} ${canReviewSamples ? "" : "disabled"}><div><b>${escapeHtml(sample.title)}</b><small>${escapeHtml(sample.summary)}</small></div><select data-sales-training-sample-label="${escapeHtml(sample.id)}" ${canReviewSamples ? "" : "disabled"}><option value="positive" ${sample.label === "positive" ? "selected" : ""}>正向</option><option value="negative" ${sample.label === "negative" ? "selected" : ""}>负向</option><option value="neutral" ${sample.label === "neutral" ? "selected" : ""}>中性</option></select></div>`).join("") : `<div class="sales-training-empty">暂无训练样本</div>`}</div>`;
+  qsa<HTMLButtonElement>("[data-sales-training-control]", detail).forEach((button) => button.addEventListener("click", () => void controlSalesTrainingFromUi(button.dataset.salesTrainingControl as "pause" | "resume" | "cancel")));
+  qsa<HTMLInputElement>("[data-sales-training-sample-include]", detail).forEach((input) => input.addEventListener("change", () => void updateSalesTrainingSampleFromUi(input.dataset.salesTrainingSampleInclude || "", { included: input.checked })));
+  qsa<HTMLSelectElement>("[data-sales-training-sample-label]", detail).forEach((select) => select.addEventListener("change", () => void updateSalesTrainingSampleFromUi(select.dataset.salesTrainingSampleLabel || "", { label: select.value as SalesTrainingSampleLabel })));
+  const evaluationRows = [["覆盖度", run.evaluation.coverage], ["样本平衡", run.evaluation.balance], ["证据追溯", run.evaluation.traceability], ["策略完整", run.evaluation.strategy], ["安全性", run.evaluation.safety]] as Array<[string, number]>;
+  const canPublish = Boolean(hasIamCapability("training.manage") && run.status === "awaiting_review" && run.evaluation.passed);
+  quality.innerHTML = `<div class="sales-quality-head"><span>训练成熟度</span><b>${escapeHtml(salesTrainingMaturityLabel(run.maturity))}</b></div>
+    <div class="sales-quality-grid"><div class="sales-quality-metric"><span>有效样本</span><b>${run.sampleStats.valid}</b></div><div class="sales-quality-metric"><span>淘汰样本</span><b>${run.sampleStats.rejected}</b></div><div class="sales-quality-metric"><span>正向 / 负向</span><b>${run.sampleStats.positive} / ${run.sampleStats.negative}</b></div><div class="sales-quality-metric"><span>留出评测</span><b>${run.sampleStats.holdout}</b></div></div>
+    <div class="sales-training-section-title"><h3>离线评测</h3><span>${run.evaluation.overall} 分</span></div>${evaluationRows.map(([label, value]) => `<div class="sales-evaluation-row"><span>${label}</span><b>${value}</b></div>`).join("")}
+    ${run.evaluation.blockers.map((item) => `<div class="sales-training-blocker">${escapeHtml(item)}</div>`).join("")}
+    ${canPublish ? `<button class="btn primary" type="button" id="salesTrainingPublishButton">审核并发布能力</button>` : ""}
+    ${["awaiting_review", "published", "failed", "cancelled"].includes(run.status) ? `<button class="btn" type="button" id="salesTrainingRetrainButton">创建下一训练版本</button>` : ""}`;
+  qs<HTMLButtonElement>("#salesTrainingPublishButton", quality)?.addEventListener("click", () => void publishSalesTrainingFromUi());
+  qs<HTMLButtonElement>("#salesTrainingRetrainButton", quality)?.addEventListener("click", () => void retrainSalesTrainingFromUi());
+}
+
+function renderSalesDistillation() {
+  const sourceSelect = qs<HTMLSelectElement>("#salesDistillationSource");
+  const periodSelect = qs<HTMLSelectElement>("#salesDistillationPeriod");
+  const list = qs<HTMLElement>("#salesDistillationCards");
+  if (!sourceSelect || !periodSelect || !list) return;
+  const selectedSource = sourceSelect.value || state.user?.id || "";
+  sourceSelect.innerHTML = state.salesDistillationSources.map((source) => `<option value="${escapeHtml(source.id)}">${escapeHtml(source.name)} · ${escapeHtml(roleLabel[source.role])}</option>`).join("");
+  sourceSelect.value = state.salesDistillationSources.some((source) => source.id === selectedSource) ? selectedSource : state.salesDistillationSources[0]?.id || "";
+  renderSalesTrainingWorkspace();
+  const canPublish = hasIamCapability("training.manage");
+  const published = state.salesDistillations.filter((item) => item.status === "published");
+  if (!published.length) {
+    list.innerHTML = `<div class="sales-distillation-empty"><div class="sales-distillation-empty-icon">◎</div><h3>暂无已发布能力</h3></div>`;
+    return;
+  }
+  list.innerHTML = published.map((item) => {
+    const metrics = Object.entries(item.metrics) as Array<[keyof SalesDistillationMetrics, number]>;
+    const activation = state.salesPlaybookActivations.find((entry) => entry.distillationId === item.id);
+    const active = activation?.status === "active";
+    const statusText = item.version ? `能力 V${item.version}` : "历史打法";
+    const publishButton = canPublish && item.status !== "published" ? `<button class="btn primary" type="button" data-sales-distillation-publish="${escapeHtml(item.id)}">发布团队打法</button>` : "";
+    const applyButton = item.status === "published"
+      ? active
+        ? `<button class="btn" type="button" data-sales-playbook-pause="${escapeHtml(activation.id)}">停用当前打法</button>`
+        : `<button class="btn primary" type="button" data-sales-playbook-activate="${escapeHtml(item.id)}">应用到我的 Agent</button>`
+      : "";
+    const usage = activation
+      ? `<span class="sales-playbook-usage ${active ? "active" : ""}"><b>${active ? "正在应用" : "已停用"}</b><small>应用 ${activation.applicationCount} 次 · 生成待办 ${activation.taskCount} 个${activation.lastUsedAt ? ` · 最近 ${escapeHtml(formatDateTime(activation.lastUsedAt))}` : ""}</small></span>`
+      : `<span></span>`;
+    return `<article class="sales-distillation-card">
+      <header class="sales-card-head"><div class="sales-person"><span class="sales-person-avatar">${escapeHtml(item.sourceUserName.slice(0, 1))}</span><div><h3>${escapeHtml(item.sourceUserName)}</h3><p>${escapeHtml(roleLabel[state.salesDistillationSources.find((source) => source.id === item.sourceUserId)?.role || "sales"])} · ${escapeHtml(item.maturity ? salesTrainingMaturityLabel(item.maturity) : "历史能力")} · ${item.sampleCount || 0} 个样本</p></div></div><div class="sales-card-meta"><span class="badge ${active ? "blue" : "green"}">${active ? "当前能力" : statusText}</span><small>评测 ${item.evaluationScore || "-"} · ${escapeHtml(item.modelLabel)} · ${new Date(item.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</small></div></header>
+      <div class="sales-metric-grid">${metrics.map(([key, value]) => `<div class="sales-metric"><span>${salesDistillationMetricLabel(key)}</span><b>${key === "wonAmount" ? amount(Number(value)) : Number(value).toLocaleString("zh-CN")}</b></div>`).join("")}</div>
+      <div class="sales-card-columns"><section><div class="sales-section-title"><span>01</span><h4>优势模式</h4></div><ul>${item.patterns.map((pattern) => `<li>${escapeHtml(pattern)}</li>`).join("")}</ul></section><section><div class="sales-section-title"><span>02</span><h4>可复制打法</h4></div><div class="sales-playbook">${item.playbook.map((step) => `<div class="sales-playbook-row"><b>${escapeHtml(step.stage)}</b><p>${escapeHtml(step.action)}</p><small>依据：${escapeHtml(step.evidence)}</small></div>`).join("")}</div></section><section><div class="sales-section-title"><span>03</span><h4>下一步训练</h4></div><ol>${item.coachingActions.map((action) => `<li>${escapeHtml(action)}</li>`).join("")}</ol></section></div>
+      <footer class="sales-card-foot">${usage}<div class="head-actions">${publishButton}${applyButton}</div></footer>
+    </article>`;
+  }).join("");
+  qsa<HTMLButtonElement>("[data-sales-distillation-publish]", list).forEach((button) => button.addEventListener("click", () => void publishSalesDistillationFromUi(button.dataset.salesDistillationPublish || "", button)));
+  qsa<HTMLButtonElement>("[data-sales-playbook-activate]", list).forEach((button) => button.addEventListener("click", () => void activateSalesPlaybookFromUi(button.dataset.salesPlaybookActivate || "", button)));
+  qsa<HTMLButtonElement>("[data-sales-playbook-pause]", list).forEach((button) => button.addEventListener("click", () => void pauseSalesPlaybookFromUi(button.dataset.salesPlaybookPause || "", button)));
+}
+
+async function loadSalesDistillationWorkspace() {
+  try {
+    const [sources, distillations, training] = await Promise.all([
+      api<{ sources: SalesDistillationSource[] }>("/api/agent/sales-distillation/sources"),
+      api<{ distillations: SalesDistillation[]; activations: SalesPlaybookActivation[] }>("/api/agent/sales-distillation"),
+      api<{ runs: SalesTrainingRun[] }>("/api/agent/sales-training")
+    ]);
+    state.salesDistillationSources = sources.sources || [];
+    state.salesDistillations = distillations.distillations || [];
+    state.salesPlaybookActivations = distillations.activations || [];
+    state.salesTrainingRuns = training.runs || [];
+    renderSalesDistillation();
+    syncSalesTrainingPolling();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "销售训练中心加载失败", "error");
+  }
+}
+
+function syncSalesTrainingPolling() {
+  const active = state.salesTrainingRuns.some((item) => ["queued", "collecting", "cleaning", "labeling", "training", "evaluating"].includes(item.status));
+  if (!active) {
+    if (salesTrainingPollTimer) window.clearInterval(salesTrainingPollTimer);
+    salesTrainingPollTimer = 0;
+    return;
+  }
+  if (!salesTrainingPollTimer) salesTrainingPollTimer = window.setInterval(() => {
+    if (qs<HTMLElement>("#sales-distillation")?.classList.contains("active")) void loadSalesDistillationWorkspace();
+  }, 1_500);
+}
+
+async function createSalesDistillationFromUi(button: HTMLButtonElement) {
+  const sourceUserId = qs<HTMLSelectElement>("#salesDistillationSource")?.value || state.user?.id || "";
+  const periodDays = Number(qs<HTMLSelectElement>("#salesDistillationPeriod")?.value || 90);
+  if (!sourceUserId) {
+    toast("当前账号没有可训练的业务员数据", "error");
+    return;
+  }
+  state.salesDistillationLoading = true;
+  button.disabled = true;
+  button.textContent = "正在创建";
+  try {
+    const result = await api<{ run: SalesTrainingRun }>("/api/agent/sales-training", { method: "POST", body: JSON.stringify({ sourceUserId, periodDays }) });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    selectedSalesTrainingRunId = result.run.id;
+    renderSalesDistillation();
+    syncSalesTrainingPolling();
+    toast(`${result.run.sourceUserName} 的训练任务已启动`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "创建训练任务失败", "error");
+  } finally {
+    state.salesDistillationLoading = false;
+    button.disabled = false;
+    button.textContent = "开始训练";
+  }
+}
+
+async function controlSalesTrainingFromUi(action: "pause" | "resume" | "cancel") {
+  if (!selectedSalesTrainingRunId) return;
+  try {
+    const result = await api<{ run: SalesTrainingRun }>(`/api/agent/sales-training/${encodeURIComponent(selectedSalesTrainingRunId)}/${action}`, { method: "POST" });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    renderSalesDistillation();
+    syncSalesTrainingPolling();
+    toast(action === "pause" ? "训练已暂停" : action === "resume" ? "训练已继续" : "训练已取消");
+  } catch (error) { toast(error instanceof Error ? error.message : "训练控制失败", "error"); }
+}
+
+async function updateSalesTrainingSampleFromUi(sampleId: string, body: { label?: SalesTrainingSampleLabel; included?: boolean }) {
+  if (!selectedSalesTrainingRunId || !sampleId) return;
+  try {
+    const result = await api<{ run: SalesTrainingRun }>(`/api/agent/sales-training/${encodeURIComponent(selectedSalesTrainingRunId)}/samples/${encodeURIComponent(sampleId)}`, { method: "PATCH", body: JSON.stringify(body) });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    renderSalesDistillation();
+  } catch (error) { toast(error instanceof Error ? error.message : "样本复核失败", "error"); }
+}
+
+async function publishSalesTrainingFromUi() {
+  if (!selectedSalesTrainingRunId) return;
+  try {
+    const result = await api<{ run: SalesTrainingRun; distillation: SalesDistillation }>(`/api/agent/sales-training/${encodeURIComponent(selectedSalesTrainingRunId)}/publish`, { method: "POST" });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    state.salesDistillations = [result.distillation, ...state.salesDistillations.filter((item) => item.id !== result.distillation.id)];
+    renderSalesDistillation();
+    toast(`${result.run.sourceUserName} 的第 ${result.run.version} 版能力已发布`);
+  } catch (error) { toast(error instanceof Error ? error.message : "能力发布失败", "error"); }
+}
+
+async function retrainSalesTrainingFromUi() {
+  if (!selectedSalesTrainingRunId) return;
+  try {
+    const result = await api<{ run: SalesTrainingRun }>(`/api/agent/sales-training/${encodeURIComponent(selectedSalesTrainingRunId)}/retrain`, { method: "POST" });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    selectedSalesTrainingRunId = result.run.id;
+    renderSalesDistillation();
+    syncSalesTrainingPolling();
+    toast(`第 ${result.run.version} 版训练已启动`);
+  } catch (error) { toast(error instanceof Error ? error.message : "创建再训练版本失败", "error"); }
+}
+
+async function publishSalesDistillationFromUi(id: string, button: HTMLButtonElement) {
+  if (!id) return;
+  button.disabled = true;
+  try {
+    const result = await api<{ distillation: SalesDistillation }>(`/api/agent/sales-distillation/${encodeURIComponent(id)}/publish`, { method: "POST" });
+    state.salesDistillations = state.salesDistillations.map((item) => item.id === id ? result.distillation : item);
+    renderSalesDistillation();
+    toast("已发布为团队可复用打法");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "发布失败", "error");
+    button.disabled = false;
+  }
+}
+
+async function activateSalesPlaybookFromUi(id: string, button: HTMLButtonElement) {
+  if (!id) return;
+  button.disabled = true;
+  try {
+    const result = await api<{ activation: SalesPlaybookActivation; activations: SalesPlaybookActivation[] }>(`/api/agent/sales-distillation/${encodeURIComponent(id)}/activate`, { method: "POST" });
+    state.salesPlaybookActivations = result.activations || [result.activation];
+    renderSalesDistillation();
+    renderAgent(state.agentRun);
+    toast("已应用到你的 Agent 和客户守护");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "应用打法失败", "error");
+    button.disabled = false;
+  }
+}
+
+async function pauseSalesPlaybookFromUi(id: string, button: HTMLButtonElement) {
+  if (!id) return;
+  button.disabled = true;
+  try {
+    const result = await api<{ activation: SalesPlaybookActivation; activations: SalesPlaybookActivation[] }>(`/api/agent/sales-distillation/activations/${encodeURIComponent(id)}/pause`, { method: "POST" });
+    state.salesPlaybookActivations = result.activations || [result.activation];
+    renderSalesDistillation();
+    renderAgent(state.agentRun);
+    toast("当前蒸馏打法已停用");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "停用打法失败", "error");
+    button.disabled = false;
+  }
+}
 
 async function loadAgentRuns() {
   try {
     const conversationId = ensureAgentConversationId();
-    const [result, sequenceResult, maintenanceResult] = await Promise.all([
+    const [result, sequenceResult, maintenanceResult, playbookResult] = await Promise.all([
       api<{ runs: AgentRun[] }>(`/api/agent/runs?limit=50&conversationId=${encodeURIComponent(conversationId)}`),
       api<{ sequences: OutreachSequence[] }>("/api/agent/outreach-sequences?limit=20"),
-      api<{ watches: CustomerMaintenanceWatch[] }>("/api/agent/customer-maintenance?limit=20")
+      api<{ watches: CustomerMaintenanceWatch[] }>("/api/agent/customer-maintenance?limit=20"),
+      api<{ distillations: SalesDistillation[]; activations: SalesPlaybookActivation[] }>("/api/agent/sales-distillation")
     ]);
     state.agentRuns = result.runs;
     state.outreachSequences = sequenceResult.sequences;
     state.customerMaintenanceWatches = maintenanceResult.watches;
+    state.salesDistillations = playbookResult.distillations || [];
+    state.salesPlaybookActivations = playbookResult.activations || [];
     state.agentRun = result.runs[0] || null;
     state.agentMissionCheckpoints = [];
     state.agentCheckpointRunId = "";
@@ -5436,14 +5976,17 @@ async function loadAgentRun(runId: string) {
 async function refreshAgentRun(runId: string, quiet: boolean) {
   if (!runId || (!quiet && state.agentLoading)) return;
   try {
-    const [result, sequenceResult, maintenanceResult] = await Promise.all([
+    const [result, sequenceResult, maintenanceResult, playbookResult] = await Promise.all([
       api<{ run: AgentRun }>(`/api/agent/runs/${encodeURIComponent(runId)}`),
       api<{ sequences: OutreachSequence[] }>("/api/agent/outreach-sequences?limit=20"),
-      api<{ watches: CustomerMaintenanceWatch[] }>("/api/agent/customer-maintenance?limit=20")
+      api<{ watches: CustomerMaintenanceWatch[] }>("/api/agent/customer-maintenance?limit=20"),
+      api<{ distillations: SalesDistillation[]; activations: SalesPlaybookActivation[] }>("/api/agent/sales-distillation")
     ]);
     state.agentRun = result.run;
     state.outreachSequences = sequenceResult.sequences;
     state.customerMaintenanceWatches = maintenanceResult.watches;
+    state.salesDistillations = playbookResult.distillations || [];
+    state.salesPlaybookActivations = playbookResult.activations || [];
     state.agentRuns = [result.run, ...state.agentRuns.filter((item) => item.id !== result.run.id)];
     renderAgent(result.run);
     void loadAgentCheckpoints(result.run.id);
@@ -5719,7 +6262,7 @@ function openModal(title: string, body: string, foot: string, options: ModalOpti
   document.body.style.overflow = "hidden";
   modalRoot.setAttribute("role", "dialog");
   modalRoot.removeAttribute("aria-describedby");
-  qs<HTMLElement>("#appModal .modal")?.classList.remove("customs-workspace-modal", "agent-memory-modal", "agent-knowledge-modal", "confirm-modal", "trade-document-import-modal", "document-asset-editor-modal", "deal-editor-modal", "ac-guide-modal");
+  qs<HTMLElement>("#appModal .modal")?.classList.remove("customs-workspace-modal", "agent-memory-modal", "agent-knowledge-modal", "confirm-modal", "advanced-excel-modal", "excel-preview-modal", "trade-document-import-modal", "document-asset-editor-modal", "deal-editor-modal", "ac-guide-modal");
   qs("#modalTitle")!.textContent = title;
   qs<HTMLElement>("#modalDescription")!.textContent = title.includes("删除") || title.includes("停用") ? "此操作可能影响现有业务数据" : "填写信息后保存，随时可以关闭此窗口";
   qs("#modalBody")!.innerHTML = body;
@@ -5980,6 +6523,7 @@ const viewPermissionRequirements: Record<string, string> = {
   knowledge: "training.read",
   exam: "training.read",
   "question-bank": "training.manage",
+  "sales-distillation": "training.read",
   products: "product.read",
   shipments: "shipment.read",
   "member-management": "member.read",
@@ -5996,16 +6540,15 @@ function hasIamCapability(permissionCode: string) {
   return Boolean(state.iamCapabilities?.permissions[permissionCode]?.length);
 }
 
+function isPlatformOperator(user = state.user) {
+  return Boolean(user && (user.role === "super_admin" || state.iamCapabilities?.source === "platform" || user.iamSource === "platform"));
+}
+
 function canAccessWorkspaceView(view: string, user = state.user) {
   if (!user) return false;
-  if (state.iamCapabilities?.source === "platform") {
-    if (isAccessControlView(view) && user.role === "super_admin") {
-      return view === "permission-audit"
-        ? hasIamCapability("platform.audit.read") && hasIamCapability("platform.tenant.metadata.read")
-        : hasIamCapability("platform.tenant.metadata.read");
-    }
-    return (view === "platform-operations" && hasIamCapability("platform.dashboard.read"))
-      || (view === "integration-center" && hasIamCapability("platform.integration.connector.review"));
+  if (isPlatformOperator(user)) {
+    return view === "platform-operations"
+      && (!state.iamCapabilities || hasIamCapability("platform.dashboard.read"));
   }
   if (isAccessControlView(view) && !isSystemAdministrator(user)) return false;
   const requiredPermission = viewPermissionRequirements[view];
@@ -6016,7 +6559,7 @@ function canAccessWorkspaceView(view: string, user = state.user) {
 }
 
 function syncWorkspaceAccess(user = state.user) {
-  document.body.classList.toggle("platform-mode", state.iamCapabilities?.source === "platform");
+  document.body.classList.toggle("platform-mode", isPlatformOperator(user));
   qsa<HTMLElement>("[data-admin-only]").forEach((node) => {
     node.hidden = !isSystemAdministrator(user);
   });
@@ -6038,7 +6581,7 @@ function syncWorkspaceAccess(user = state.user) {
   openWorkspaceTabs = openWorkspaceTabs.filter((view) => !restrictedViews.has(view));
   workspaceTabHistory = workspaceTabHistory.filter((view) => !restrictedViews.has(view));
   const activeRestrictedView = [...restrictedViews].find((view) => qs<HTMLElement>(`#${CSS.escape(view)}`)?.classList.contains("active"));
-  if (activeRestrictedView) activateNavView("dashboard");
+  if (activeRestrictedView) activateNavView(isPlatformOperator(user) ? "platform-operations" : "dashboard");
 }
 
 function syncTrainingManagementUi(user = state.user) {
@@ -6243,6 +6786,42 @@ async function saveProfileEmailBinding(button?: HTMLButtonElement, clearSmtpPass
       button.disabled = false;
       button.textContent = idleText;
     }
+  }
+}
+
+async function changeProfilePassword(button?: HTMLButtonElement) {
+  const currentPassword = qs<HTMLInputElement>("#profileCurrentPassword")?.value || "";
+  const newPassword = qs<HTMLInputElement>("#profileNewPassword")?.value || "";
+  const confirmPassword = qs<HTMLInputElement>("#profileConfirmPassword")?.value || "";
+  if (!currentPassword) {
+    toast("请输入当前密码", "error");
+    return;
+  }
+  if (newPassword.length < 8 || newPassword.length > 128) {
+    toast("新密码长度需要为 8 至 128 位", "error");
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    toast("两次输入的新密码不一致", "error");
+    return;
+  }
+  if (button) setButtonPending(button, true, "修改登录密码", "保存中");
+  try {
+    await api<{ requiresRelogin: boolean; message: string }>("/api/profile/password", {
+      method: "PATCH",
+      body: JSON.stringify({ currentPassword, newPassword, confirmPassword })
+    });
+    ["#profileCurrentPassword", "#profileNewPassword", "#profileConfirmPassword"].forEach((selector) => setFieldValue(selector, ""));
+    setFieldValue("#loginPassword", "");
+    localStorage.removeItem(storage.user);
+    state.user = null;
+    state.iamCapabilities = null;
+    document.body.classList.remove("is-authenticated");
+    toast("密码已修改，请使用新密码重新登录", "success");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "密码修改失败", "error");
+  } finally {
+    if (button) setButtonPending(button, false, "修改登录密码", "保存中");
   }
 }
 
@@ -10548,14 +11127,52 @@ function renderTeamSystemSettings() {
     status.className = `badge ${teamSystemSettings.requireDocumentExcelApproval ? "amber" : "green"}`;
     status.textContent = teamSystemSettings.requireDocumentExcelApproval ? "已开启" : "默认关闭";
   }
+  const provider = qs<HTMLSelectElement>("#tradeDocumentOcrProvider");
+  const apiKey = qs<HTMLInputElement>("#tradeDocumentOcrApiKey");
+  const secretKey = qs<HTMLInputElement>("#tradeDocumentOcrSecretKey");
+  const model = qs<HTMLInputElement>("#tradeDocumentOcrModel");
+  const enabled = qs<HTMLInputElement>("#tradeDocumentOcrEnabled");
+  const providerStatus = qs<HTMLElement>("#tradeDocumentOcrProviderStatus");
+  if (provider) provider.value = tradeDocumentOcrProvider.provider;
+  if (apiKey) apiKey.placeholder = tradeDocumentOcrProvider.hasApiKey ? "已配置，留空保持不变" : "填写已申请的 API Key";
+  if (secretKey) { secretKey.placeholder = tradeDocumentOcrProvider.hasSecretKey ? "已配置，留空保持不变" : "百度 OCR Secret Key"; secretKey.closest("label")?.toggleAttribute("hidden", tradeDocumentOcrProvider.provider !== "baidu"); }
+  if (model) { model.value = tradeDocumentOcrProvider.model || "Qwen/Qwen2.5-VL-32B-Instruct"; model.closest("label")?.toggleAttribute("hidden", tradeDocumentOcrProvider.provider !== "siliconflow"); }
+  if (enabled) enabled.checked = tradeDocumentOcrProvider.enabled;
+  if (providerStatus) {
+    providerStatus.className = `badge ${tradeDocumentOcrProvider.enabled ? "green" : "amber"}`;
+    providerStatus.textContent = tradeDocumentOcrProvider.enabled ? `已启用：${tradeDocumentOcrProvider.provider === "baidu" ? "百度 OCR" : "硅基流动视觉"}` : "未启用，使用 AI 视觉模型";
+  }
 }
 
 async function loadTeamSystemSettings() {
-  const result = await api<{ settings: TeamSystemSettings; canManage: boolean }>("/api/system-settings");
+  const result = await api<{ settings: TeamSystemSettings; ocr: TradeDocumentOcrProviderConfig; canManage: boolean }>("/api/system-settings");
   teamSystemSettings = result.settings;
+  tradeDocumentOcrProvider = result.ocr;
   teamSystemSettingsCanManage = result.canManage;
   renderTeamSystemSettings();
   return result.settings;
+}
+
+async function saveTradeDocumentOcrProvider(button?: HTMLButtonElement) {
+  if (!teamSystemSettingsCanManage) return;
+  const provider = qs<HTMLSelectElement>("#tradeDocumentOcrProvider")?.value || "none";
+  const enabled = Boolean(qs<HTMLInputElement>("#tradeDocumentOcrEnabled")?.checked);
+  const apiKey = qs<HTMLInputElement>("#tradeDocumentOcrApiKey")?.value || "";
+  const secretKey = qs<HTMLInputElement>("#tradeDocumentOcrSecretKey")?.value || "";
+  const model = qs<HTMLInputElement>("#tradeDocumentOcrModel")?.value.trim() || "";
+  try {
+    if (button) setButtonPending(button, true, "保存 OCR 配置", "保存中");
+    const result = await api<{ ocr: TradeDocumentOcrProviderConfig }>("/api/system-settings/ocr", { method: "PUT", body: JSON.stringify({ provider, enabled, apiKey, secretKey, model }) });
+    tradeDocumentOcrProvider = result.ocr;
+    if (qs<HTMLInputElement>("#tradeDocumentOcrApiKey")) qs<HTMLInputElement>("#tradeDocumentOcrApiKey")!.value = "";
+    if (qs<HTMLInputElement>("#tradeDocumentOcrSecretKey")) qs<HTMLInputElement>("#tradeDocumentOcrSecretKey")!.value = "";
+    renderTeamSystemSettings();
+    toast(tradeDocumentOcrProvider.enabled ? "外部 OCR 已启用，识别时优先使用" : "外部 OCR 已关闭，将使用原 AI 视觉模型", "success");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "OCR 配置保存失败", "error");
+  } finally {
+    if (button) setButtonPending(button, false, "保存 OCR 配置", "保存中");
+  }
 }
 
 async function saveTeamSystemSettings(button?: HTMLButtonElement) {
@@ -11677,6 +12294,7 @@ function renderPipeline(deals: Deal[]) {
           <button class="btn primary deal-primary-action" data-move-deal>${dealPrimaryAction(deal.stage)}</button>
           <div class="deal-secondary-actions">
             <button type="button" class="btn" data-record-deal>记录进展</button>
+            ${deal.stage === "已联系" ? `<button type="button" class="btn" data-generate-deal-quotation>生成报价单</button>` : ""}
             ${["已报价", "样品", "谈判"].includes(deal.stage) ? `<button type="button" class="btn" data-print-deal-document>生成 PI</button>` : ""}
             ${["已报价", "样品", "谈判", "成交"].includes(deal.stage) ? `<button type="button" class="btn" data-generate-customs>生成报关资料</button>` : ""}
             <button type="button" class="btn danger" data-lost-deal>标记丢单</button>
@@ -11701,6 +12319,9 @@ function renderPipeline(deals: Deal[]) {
   });
   qsa<HTMLButtonElement>("[data-print-deal-document]", strip).forEach((button) => {
     button.addEventListener("click", () => void printDealDocument(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
+  });
+  qsa<HTMLButtonElement>("[data-generate-deal-quotation]", strip).forEach((button) => {
+    button.addEventListener("click", () => void printDealDocument(button.closest<HTMLElement>(".deal")?.dataset.dealId || "", "QUOTATION"));
   });
   qsa<HTMLButtonElement>("[data-generate-customs]", strip).forEach((button) => {
     button.addEventListener("click", () => void generateCustomsDocument(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
@@ -11757,8 +12378,66 @@ function controlledDocumentImageUrl(value: string | undefined) {
   return /^\/uploads\/[A-Za-z0-9._-]+\.(?:png|jpe?g)$/i.test(imageUrl) ? imageUrl : "";
 }
 
-function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
-  const type: "PI" | "CI" = deal.stage === "成交" ? "CI" : "PI";
+function sellerProfileMatchScore(profile: DocumentLetterhead, customer: Customer | undefined, currency: string, type: TradeDocument["type"]) {
+  if (!profile.enabled) return -1;
+  const normalize = (value: string) => value.trim().toLocaleLowerCase();
+  const country = normalize(customer?.country || "");
+  const countries = (profile.matchCountries || []).map(normalize).filter(Boolean);
+  const currencies = (profile.matchCurrencies || []).map((value) => value.trim().toUpperCase()).filter(Boolean);
+  const documentTypes = profile.matchDocumentTypes || [];
+  if (countries.length && !countries.includes(country)) return -1;
+  if (currencies.length && !currencies.includes(currency.trim().toUpperCase())) return -1;
+  if (documentTypes.length && !documentTypes.includes(type)) return -1;
+  return (countries.length ? 1000 : 0)
+    + (currencies.length ? 200 : 0)
+    + (documentTypes.length ? 50 : 0)
+    + Math.max(0, Math.min(100, profile.matchPriority || 0))
+    + (profile.isDefault ? 1 : 0);
+}
+
+function matchedSellerProfile(customer: Customer | undefined, currency: string, type: TradeDocument["type"], explicitId = "", sellerName = "") {
+  const available = state.documentAssets.letterheads.filter((item) => item.enabled);
+  if (explicitId) return available.find((item) => item.id === explicitId);
+  const normalizedSeller = sellerName.trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  if (normalizedSeller) {
+    const namedProfile = available.find((item) => item.companyName.trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "") === normalizedSeller);
+    if (namedProfile) return namedProfile;
+  }
+  return available
+    .map((item) => ({ item, score: sellerProfileMatchScore(item, customer, currency, type) }))
+    .filter((entry) => entry.score >= 0)
+    .sort((left, right) => right.score - left.score || right.item.updatedAt.localeCompare(left.item.updatedAt))[0]?.item;
+}
+
+function sellerProfileDocumentDefaults(profile: DocumentLetterhead | undefined): Partial<TradeDocument> {
+  if (!profile) return {};
+  return {
+    seller: profile.companyName,
+    sellerAddress: profile.address,
+    sellerContact: profile.contact || "",
+    sellerPhone: profile.phone,
+    sellerEmail: profile.email,
+    sellerWebsite: profile.website,
+    sellerTaxNo: profile.taxNo || "",
+    bankInfo: profile.bankInfo,
+    letterheadId: profile.id,
+    stampId: profile.stampId || "",
+    signatureId: profile.signatureId || ""
+  };
+}
+
+function sellerProfileMatchReason(profile: DocumentLetterhead, customer: Customer | undefined, currency: string, type: TradeDocument["type"]) {
+  const reasons = [
+    profile.matchCountries?.length && customer?.country ? `国家 ${customer.country}` : "",
+    profile.matchCurrencies?.length ? `币种 ${currency}` : "",
+    profile.matchDocumentTypes?.length ? `单据 ${documentTypeLabel(type)}` : "",
+    profile.isDefault ? "默认公司" : ""
+  ].filter(Boolean);
+  return reasons.join(" · ") || "通用匹配";
+}
+
+function tradeDocumentFromDeal(deal: Deal, customer: Customer, requestedType?: TradeDocument["type"]): TradeDocument {
+  const type: TradeDocument["type"] = requestedType || (deal.stage === "成交" ? "CI" : "PI");
   const date = todayDateInput();
   const product = dealProductsText(deal) || deal.title;
   const documentItems = dealItemsOf(deal).map((dealItem, index) => {
@@ -11781,8 +12460,10 @@ function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
     };
   });
   const defaults = defaultTradeDocument(type);
+  const sellerProfile = matchedSellerProfile(customer, deal.currency || defaults.currency, type);
   return {
     ...defaults,
+    ...sellerProfileDocumentDefaults(sellerProfile),
     id: "__new__",
     customerId: customer.id,
     dealId: deal.id,
@@ -11807,7 +12488,7 @@ function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
   };
 }
 
-async function printDealDocument(id: string) {
+async function printDealDocument(id: string, requestedType?: TradeDocument["type"]) {
   const deal = state.deals.find((item) => item.id === id);
   if (!deal) return;
   const customer = state.customers.find((item) => item.id === deal.customerId);
@@ -11815,12 +12496,13 @@ async function printDealDocument(id: string) {
     toast("请先给商机关联客户，再一键打印", "error");
     return;
   }
-  const draft = tradeDocumentFromDeal(deal, customer);
+  const draft = tradeDocumentFromDeal(deal, customer, requestedType);
   state.selectedDocumentId = "__new__";
   activateNavView("documents");
   fillDocumentEditor(draft);
   qsa<HTMLElement>(".doc-list-card").forEach((card) => card.classList.remove("active"));
-  toast("已按客户与商机资料生成 PI 草稿，请补齐卖方和结算资料后保存");
+  const label = requestedType === "QUOTATION" ? "报价单" : draft.type;
+  toast(`已按客户与商机资料生成${label}草稿，请补齐卖方和结算资料后保存`);
 }
 
 async function generateCustomsDocument(id: string) {
@@ -12671,6 +13353,8 @@ function renderDealDrawer(id: string) {
     <div id="dealWinGauge"><div style="padding:12px;text-align:center;color:var(--muted);font-size:12px;">AI 赢率分析中...</div></div>
     <div class="deal-detail-actions">
       ${closed ? "" : `<button class="btn primary" id="drawerAdvanceDealButton">${dealPrimaryAction(deal.stage)}</button><button class="btn" id="drawerRecordDealButton">记录进展</button><button class="btn" id="drawerEditDealButton">编辑</button>`}
+      <button class="btn" id="drawerQuoteHistoryButton">报价历史</button>
+      ${deal.stage === "已联系" ? `<button class="btn" id="drawerGenerateQuotationButton">生成报价单</button>` : ""}
       ${["已报价", "样品", "谈判", "成交"].includes(deal.stage) ? `<button class="btn" id="drawerPrintDealButton">${deal.stage === "成交" ? "生成 CI" : "生成 PI"}</button>` : ""}
       ${["已报价", "样品", "谈判", "成交"].includes(deal.stage) ? `<button class="btn" id="drawerGenerateCustomsButton">生成报关资料</button>` : ""}
       ${deal.stage === "成交" && !deal.archivedAt ? `<button class="btn" id="drawerArchiveDealButton">归档成交</button>` : ""}
@@ -12687,6 +13371,8 @@ function renderDealDrawer(id: string) {
   qs("#drawerAdvanceDealButton", drawer)?.addEventListener("click", () => openDealStageModal(deal.id));
   qs("#drawerRecordDealButton", drawer)?.addEventListener("click", () => openDealEventModal(deal.id));
   qs("#drawerEditDealButton", drawer)?.addEventListener("click", () => openDealModal(deal));
+  qs("#drawerQuoteHistoryButton", drawer)?.addEventListener("click", () => openQuoteHistoryForDeal(deal.id));
+  qs("#drawerGenerateQuotationButton", drawer)?.addEventListener("click", () => void printDealDocument(deal.id, "QUOTATION"));
   qs("#drawerPrintDealButton", drawer)?.addEventListener("click", () => void printDealDocument(deal.id));
   qs("#drawerGenerateCustomsButton", drawer)?.addEventListener("click", () => void generateCustomsDocument(deal.id));
   qs("#drawerArchiveDealButton", drawer)?.addEventListener("click", () => void archiveDeal(deal.id));
@@ -15082,6 +15768,7 @@ function defaultTradeDocument(type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" 
     SHIPPING: "新建装运通知 Shipping Advice"
   };
   const profile = state.documentDefaultProfile;
+  const sellerProfile = matchedSellerProfile(undefined, profile?.currency || "USD", type);
   const validityDate = profile?.validityDays ? new Date(Date.now() + profile.validityDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) : "";
   const baseDoc = {
     id: "__new__",
@@ -15093,13 +15780,14 @@ function defaultTradeDocument(type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" 
     buyer: "",
     buyerAddress: "",
     buyerContact: "",
-    seller: profile?.seller || "",
-    sellerAddress: profile?.sellerAddress || "",
-    sellerContact: profile?.sellerContact || "",
-    sellerPhone: profile?.sellerPhone || "",
-    sellerEmail: profile?.sellerEmail || "",
-    sellerWebsite: profile?.sellerWebsite || "",
-    sellerTaxNo: profile?.sellerTaxNo || "",
+    seller: sellerProfile?.companyName || profile?.seller || "",
+    brandMarkText: profile?.brandMarkText || "",
+    sellerAddress: sellerProfile?.address || profile?.sellerAddress || "",
+    sellerContact: sellerProfile?.contact || profile?.sellerContact || "",
+    sellerPhone: sellerProfile?.phone || profile?.sellerPhone || "",
+    sellerEmail: sellerProfile?.email || profile?.sellerEmail || "",
+    sellerWebsite: sellerProfile?.website || profile?.sellerWebsite || "",
+    sellerTaxNo: sellerProfile?.taxNo || profile?.sellerTaxNo || "",
     currency: profile?.currency || "USD",
     incoterm: profile?.incoterm || "FOB",
     paymentTerm: profile?.paymentTerm || "",
@@ -15107,16 +15795,16 @@ function defaultTradeDocument(type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" 
     portLoading: profile?.portLoading || "",
     portDischarge: "",
     validityDate,
-    bankInfo: profile?.bankInfo || "",
+    bankInfo: sellerProfile?.bankInfo || profile?.bankInfo || "",
     notes: profile?.notes || "",
     language: profile?.language || "EN" as const,
-    templateStyle: profile?.templateStyle || "indigo" as const,
+    templateStyle: profile?.templateStyle || "rose" as const,
     status: "draft" as const,
     audits: [] as TradeDocumentAudit[],
     sendRecords: [] as TradeDocumentSendRecord[],
-    letterheadId: profile?.letterheadId || "",
-    stampId: profile?.stampId || "",
-    signatureId: profile?.signatureId || "",
+    letterheadId: sellerProfile?.id || profile?.letterheadId || "",
+    stampId: sellerProfile?.stampId || profile?.stampId || "",
+    signatureId: sellerProfile?.signatureId || profile?.signatureId || "",
     includeProductImages: profile?.includeProductImages || false,
     updatedAt: new Date().toISOString(),
     items: [
@@ -15167,6 +15855,26 @@ function documentTypeLabel(type: string) {
   return ({ PI: "形式发票", CI: "商业发票", CUSTOMS: "报关资料", PL: "装箱单", CONTRACT: "销售合同", QUOTATION: "报价单", COO: "原产地证", SHIPPING: "装运通知" } as Record<string, string>)[type] || type;
 }
 
+interface AdvancedDocumentTemplate {
+  id: string;
+  name: string;
+  category: "sales" | "shipping" | "procurement";
+  description: string;
+  fileName: string;
+  recommendedTypes: TradeDocument["type"][];
+  maxItems: number;
+  dynamicItems?: boolean;
+  compatibility: "full" | "partial";
+  warnings: string[];
+  assetCapabilities: Array<"letterhead" | "productImages" | "stamp" | "signature">;
+}
+
+const advancedDocumentCategoryLabels: Record<AdvancedDocumentTemplate["category"], string> = {
+  sales: "销售单据",
+  shipping: "物流单据",
+  procurement: "采购协同"
+};
+
 async function uploadDocumentImage(file: File, kind: "letterhead-logo" | "stamp" | "signature" | "product") {
   if (!["image/png", "image/jpeg"].includes(file.type)) throw new Error("只支持 PNG 或 JPEG 图片");
   if (file.size > 2 * 1024 * 1024) throw new Error("图片不能超过 2 MB");
@@ -15201,7 +15909,7 @@ function documentAssetPlacementFields(prefix: string, title: string, placement?:
     ["left-bottom", "左下"], ["center-bottom", "下中"], ["right-bottom", "右下"]
   ];
   return `<div class="document-asset-placement" data-placement-root="${prefix}">
-    <div class="document-asset-placement-head"><div><b>${escapeHtml(title)}位置与大小</b><small>默认跟随单据模板安全区域</small></div><button type="button" class="btn" data-placement-reset="${prefix}">恢复模板默认</button></div>
+    <div class="document-asset-placement-head"><div><b>${escapeHtml(title)}位置与大小</b><small>默认跟随 Excel 模板安全区域</small></div><button type="button" class="btn" data-placement-reset="${prefix}">恢复模板默认</button></div>
     <div class="document-asset-placement-body">
       <div class="document-asset-placement-preview" data-placement-preview="${prefix}"><span>模板放置区</span>${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="" data-placement-preview-image="${prefix}">` : `<i>未上传图片</i>`}</div>
       <div class="document-asset-placement-controls">
@@ -15295,25 +16003,42 @@ function bindDocumentAssetPlacement(prefix: string, fileInputSelector: string) {
   update();
 }
 
+function sellerProfileRuleText(profile: DocumentLetterhead) {
+  const parts = [
+    profile.matchCountries?.length ? `国家：${profile.matchCountries.join("、")}` : "",
+    profile.matchCurrencies?.length ? `币种：${profile.matchCurrencies.join("、")}` : "",
+    profile.matchDocumentTypes?.length ? `单据：${profile.matchDocumentTypes.map(documentTypeLabel).join("、")}` : ""
+  ].filter(Boolean);
+  return parts.join(" · ") || "通用规则";
+}
+
+function sellerRuleList(value: string, upperCase = false) {
+  return [...new Set(value.split(/[,，;；\n]/u).map((item) => upperCase ? item.trim().toUpperCase() : item.trim()).filter(Boolean))];
+}
+
 function documentAssetList(assets: DocumentAssetsResponse) {
   return `<div class="document-asset-columns">
-    <section><div class="section-title"><h3>抬头</h3><button class="btn" type="button" id="documentAssetAddLetterhead">新增抬头</button></div><div class="document-asset-list">${assets.letterheads.length ? assets.letterheads.map((item) => `<article><div>${item.logoUrl ? `<img src="${escapeHtml(item.logoUrl)}" alt="">` : `<span class="document-asset-placeholder">抬头</span>`}<p><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.companyName)}${item.isDefault ? " · 默认" : ""}${item.enabled ? "" : " · 已停用"}</small></p></div><button class="btn" data-edit-letterhead="${escapeHtml(item.id)}">编辑</button></article>`).join("") : `<p class="empty-cell">尚未维护抬头</p>`}</div></section>
+    <section><div class="section-title"><h3>卖方公司</h3><button class="btn" type="button" id="documentAssetAddLetterhead">新增卖方公司</button></div><div class="document-asset-list">${assets.letterheads.length ? assets.letterheads.map((item) => `<article><div>${item.logoUrl ? `<img src="${escapeHtml(item.logoUrl)}" alt="">` : `<span class="document-asset-placeholder">卖方</span>`}<p><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.companyName)}${item.isDefault ? " · 默认" : ""}${item.enabled ? "" : " · 已停用"}</small><small>${escapeHtml(sellerProfileRuleText(item))}</small></p></div><button class="btn" data-edit-letterhead="${escapeHtml(item.id)}">编辑</button></article>`).join("") : `<p class="empty-cell">尚未维护卖方公司</p>`}</div></section>
     <section><div class="section-title"><h3>印章</h3><button class="btn" type="button" id="documentAssetAddStamp">新增印章</button></div><div class="document-asset-list">${assets.stamps.length ? assets.stamps.map((item) => `<article><div><img src="${escapeHtml(item.imageUrl)}" alt=""><p><b>${escapeHtml(item.name)}</b><small>${item.isDefault ? "默认印章" : "可选印章"}${item.enabled ? "" : " · 已停用"}</small></p></div><button class="btn" data-edit-stamp="${escapeHtml(item.id)}">编辑</button></article>`).join("") : `<p class="empty-cell">尚未维护印章</p>`}</div></section>
     <section><div class="section-title"><h3>签名</h3><button class="btn" type="button" id="documentAssetAddSignature">新增签名</button></div><div class="document-asset-list">${assets.signatures.length ? assets.signatures.map((item) => `<article><div><img src="${escapeHtml(item.imageUrl)}" alt=""><p><b>${escapeHtml(item.name)}</b><small>${escapeHtml([item.signerName, item.signerTitle].filter(Boolean).join(" · "))}${item.isDefault ? " · 默认" : ""}${item.enabled ? "" : " · 已停用"}</small></p></div><button class="btn" data-edit-signature="${escapeHtml(item.id)}">编辑</button></article>`).join("") : `<p class="empty-cell">尚未维护签名</p>`}</div></section>
   </div>`;
 }
 
 function openDocumentAssetManager(assets: DocumentAssetsResponse) {
-  openModal("单据品牌资产", documentAssetList(assets), `<button class="btn" data-modal-close>关闭</button>`);
+  openModal("卖方公司与单据资产", documentAssetList(assets), `<button class="btn" data-modal-close>关闭</button>`);
   const refresh = async () => {
     const next = await api<DocumentAssetsResponse>("/api/document-assets");
     state.documentAssets = next;
+    renderSellerProfilesInDefaults(next);
     openDocumentAssetManager(next);
   };
   const openLetterhead = (asset?: DocumentLetterhead) => {
-    openModal(asset ? "编辑抬头" : "新增抬头", `<div class="form-grid document-asset-form">
-      <div class="form-field"><label>抬头名称</label><input id="assetLetterheadName" value="${escapeHtml(asset?.name || "")}" placeholder="如：香港公司抬头"></div>
+    const documentTypes: TradeDocument["type"][] = ["PI", "CI", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING", "CUSTOMS"];
+    openModal(asset ? "编辑卖方公司" : "新增卖方公司", `<div class="form-grid document-asset-form">
+      <div class="form-field"><label>档案名称</label><input id="assetLetterheadName" value="${escapeHtml(asset?.name || "")}" placeholder="如：香港签约主体"></div>
       <div class="form-field"><label>公司英文全称</label><input id="assetLetterheadCompany" value="${escapeHtml(asset?.companyName || "")}"></div>
+      <div class="form-field"><label>卖方联系人</label><input id="assetLetterheadContact" value="${escapeHtml(asset?.contact || "")}"></div>
+      <div class="form-field"><label>税号 / 注册号</label><input id="assetLetterheadTaxNo" value="${escapeHtml(asset?.taxNo || "")}"></div>
       <div class="form-field full"><label>英文地址</label><textarea id="assetLetterheadAddress">${escapeHtml(asset?.address || "")}</textarea></div>
       <div class="form-field"><label>电话</label><input id="assetLetterheadPhone" value="${escapeHtml(asset?.phone || "")}"></div>
       <div class="form-field"><label>邮箱</label><input id="assetLetterheadEmail" value="${escapeHtml(asset?.email || "")}"></div>
@@ -15321,23 +16046,28 @@ function openDocumentAssetManager(assets: DocumentAssetsResponse) {
       <div class="form-field"><label>Logo</label><input id="assetLetterheadLogo" type="file" accept="image/png,image/jpeg"><input id="assetLetterheadLogoUrl" type="hidden" value="${escapeHtml(asset?.logoUrl || "")}"></div>
       <div class="form-field full">${documentAssetPlacementFields("assetLetterhead", "Logo ", asset?.logoPlacement, asset?.logoUrl)}</div>
       <div class="form-field full"><label>银行资料</label><textarea id="assetLetterheadBank">${escapeHtml(asset?.bankInfo || "")}</textarea></div>
-      <label class="check-row"><input id="assetLetterheadDefault" type="checkbox" ${asset?.isDefault ? "checked" : ""}>设为默认抬头</label>
+      <div class="form-field full seller-match-rules"><label><span>适用客户国家</span><input id="assetLetterheadCountries" value="${escapeHtml((asset?.matchCountries || []).join(", "))}" placeholder="美国, 德国；留空表示不限"></label><label><span>适用币种</span><input id="assetLetterheadCurrencies" value="${escapeHtml((asset?.matchCurrencies || []).join(", "))}" placeholder="USD, EUR；留空表示不限"></label><label><span>匹配优先级</span><input id="assetLetterheadPriority" type="number" min="0" max="100" value="${asset?.matchPriority || 0}"></label></div>
+      <div class="form-field full"><label>适用单据类型</label><div class="seller-document-types">${documentTypes.map((type) => `<label><input type="checkbox" data-seller-document-type="${type}" ${(asset?.matchDocumentTypes || []).includes(type) ? "checked" : ""}>${escapeHtml(documentTypeLabel(type))}</label>`).join("")}</div><small>全部不选表示适用于所有单据</small></div>
+      <div class="form-field"><label>该公司默认印章</label><select id="assetLetterheadStamp"><option value="">不指定</option>${assets.stamps.filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === asset?.stampId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div>
+      <div class="form-field"><label>该公司默认签名</label><select id="assetLetterheadSignature"><option value="">不指定</option>${assets.signatures.filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === asset?.signatureId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div>
+      <label class="check-row"><input id="assetLetterheadDefault" type="checkbox" ${asset?.isDefault ? "checked" : ""}>设为默认卖方公司</label>
       <label class="check-row"><input id="assetLetterheadEnabled" type="checkbox" ${asset?.enabled === false ? "" : "checked"}>启用</label>
-    </div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDocumentLetterhead">保存抬头</button>`);
+    </div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDocumentLetterhead">保存卖方公司</button>`);
     qs<HTMLElement>("#appModal .modal")?.classList.add("document-asset-editor-modal");
     qs<HTMLButtonElement>("#saveDocumentLetterhead")?.addEventListener("click", async (event) => {
       const button = event.currentTarget as HTMLButtonElement;
-      setButtonPending(button, true, "保存抬头", "保存中");
+      setButtonPending(button, true, "保存卖方公司", "保存中");
       try {
         const file = qs<HTMLInputElement>("#assetLetterheadLogo")?.files?.[0];
         const logoUrl = file ? (await uploadDocumentImage(file, "letterhead-logo")).imageUrl : qs<HTMLInputElement>("#assetLetterheadLogoUrl")?.value || "";
         await api("/api/document-assets/letterheads", { method: "POST", body: JSON.stringify({
           id: asset?.id, name: qs<HTMLInputElement>("#assetLetterheadName")?.value.trim(), companyName: qs<HTMLInputElement>("#assetLetterheadCompany")?.value.trim(),
-          address: qs<HTMLTextAreaElement>("#assetLetterheadAddress")?.value.trim(), phone: qs<HTMLInputElement>("#assetLetterheadPhone")?.value.trim(), email: qs<HTMLInputElement>("#assetLetterheadEmail")?.value.trim(), website: qs<HTMLInputElement>("#assetLetterheadWebsite")?.value.trim(), bankInfo: qs<HTMLTextAreaElement>("#assetLetterheadBank")?.value.trim(), logoUrl, logoPlacement: readDocumentAssetPlacement("assetLetterhead"),
+          address: qs<HTMLTextAreaElement>("#assetLetterheadAddress")?.value.trim(), contact: qs<HTMLInputElement>("#assetLetterheadContact")?.value.trim(), taxNo: qs<HTMLInputElement>("#assetLetterheadTaxNo")?.value.trim(), phone: qs<HTMLInputElement>("#assetLetterheadPhone")?.value.trim(), email: qs<HTMLInputElement>("#assetLetterheadEmail")?.value.trim(), website: qs<HTMLInputElement>("#assetLetterheadWebsite")?.value.trim(), bankInfo: qs<HTMLTextAreaElement>("#assetLetterheadBank")?.value.trim(), logoUrl, logoPlacement: readDocumentAssetPlacement("assetLetterhead"),
+          matchCountries: sellerRuleList(qs<HTMLInputElement>("#assetLetterheadCountries")?.value || ""), matchCurrencies: sellerRuleList(qs<HTMLInputElement>("#assetLetterheadCurrencies")?.value || "", true), matchDocumentTypes: qsa<HTMLInputElement>("[data-seller-document-type]:checked").map((input) => input.dataset.sellerDocumentType).filter((type): type is TradeDocument["type"] => Boolean(type)), matchPriority: Number(qs<HTMLInputElement>("#assetLetterheadPriority")?.value || 0), stampId: qs<HTMLSelectElement>("#assetLetterheadStamp")?.value || "", signatureId: qs<HTMLSelectElement>("#assetLetterheadSignature")?.value || "",
           isDefault: Boolean(qs<HTMLInputElement>("#assetLetterheadDefault")?.checked), enabled: Boolean(qs<HTMLInputElement>("#assetLetterheadEnabled")?.checked)
         }) });
         await refresh();
-      } catch (error) { toast(error instanceof Error ? error.message : "抬头保存失败", "error"); setButtonPending(button, false, "保存抬头", "保存中"); }
+      } catch (error) { toast(error instanceof Error ? error.message : "卖方公司保存失败", "error"); setButtonPending(button, false, "保存卖方公司", "保存中"); }
     });
     bindDocumentAssetPlacement("assetLetterhead", "#assetLetterheadLogo");
   };
@@ -15377,6 +16107,167 @@ function openDocumentAssetManager(assets: DocumentAssetsResponse) {
   qsa<HTMLButtonElement>("[data-edit-signature]").forEach((button) => button.addEventListener("click", () => openSignature(assets.signatures.find((item) => item.id === button.dataset.editSignature))));
 }
 
+async function openAdvancedExcelPanel() {
+  let current = activeTradeDocument();
+  if (!current.id || current.id === "__new__") {
+    toast("请先保存当前单据，再使用高级 Excel", "error");
+    return;
+  }
+  const editorType = currentDocumentType();
+  if (current.type !== editorType) {
+    const saved = await saveTradeDocument();
+    if (!saved) return;
+    current = saved;
+  }
+  let templates: AdvancedDocumentTemplate[] = [];
+  let assets: DocumentAssetsResponse = { letterheads: [], stamps: [], signatures: [], canManage: false };
+  try {
+    const [templateResult, settings, assetResult] = await Promise.all([
+      api<{ templates: AdvancedDocumentTemplate[] }>("/api/trade-document-templates"),
+      loadTeamSystemSettings(),
+      api<DocumentAssetsResponse>("/api/document-assets")
+    ]);
+    templates = templateResult.templates || [];
+    teamSystemSettings = settings;
+    assets = assetResult;
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "模板列表加载失败", "error");
+    return;
+  }
+  const available = templates.filter((template) => template.recommendedTypes.includes(current.type));
+  const selectedLetterheadId = current.letterheadId || assets.letterheads.find((item) => item.enabled && item.isDefault)?.id || "";
+  const cards = templates.map((template) => {
+    const supported = template.recommendedTypes.includes(current.type);
+    const overCapacity = !template.dynamicItems && current.items.length > template.maxItems;
+    const disabled = !supported || overCapacity;
+    const reasons = !supported ? `适用于：${template.recommendedTypes.map(documentTypeLabel).join("、")}` : overCapacity ? `当前 ${current.items.length} 项，超过模板上限 ${template.maxItems} 项` : "可用于当前单据";
+    const capabilities = [
+      template.assetCapabilities.includes("letterhead") ? "抬头" : "",
+      template.assetCapabilities.includes("productImages") ? "产品图" : "",
+      template.assetCapabilities.includes("stamp") ? "盖章" : ""
+      ,template.assetCapabilities.includes("signature") ? "签名" : ""
+    ].filter(Boolean).join(" · ");
+    return `<article class="advanced-excel-card${supported ? " is-supported" : ""}">
+      <div class="advanced-excel-card-head"><span class="advanced-excel-category">${escapeHtml(advancedDocumentCategoryLabels[template.category])}</span><span class="advanced-excel-capacity">${template.dynamicItems ? "明细自动扩展" : `最多 ${template.maxItems} 项`}</span></div>
+      <h3>${escapeHtml(template.name)}</h3><p>${escapeHtml(template.description)}</p>
+      <div class="advanced-excel-types">${template.recommendedTypes.map((type) => `<span class="${type === current.type ? "is-current" : ""}">${escapeHtml(documentTypeLabel(type))}${type === current.type ? " · 当前" : ""}</span>`).join("")}</div>
+      <div class="advanced-excel-capabilities">${escapeHtml(capabilities || "仅数据填充")}</div>
+      <div class="advanced-excel-warning">${escapeHtml(template.warnings[0] || "保留原模板版式")}</div>
+      <div class="advanced-excel-actions">
+        <button class="btn" type="button" data-advanced-excel-preview="${escapeHtml(template.id)}" ${disabled ? "disabled" : ""}>预览</button>
+        <button class="btn${disabled ? "" : " primary"}" type="button" data-advanced-excel-template="${escapeHtml(template.id)}" ${disabled ? "disabled" : ""}>${disabled ? escapeHtml(reasons) : "导出 Excel"}</button>
+      </div>
+    </article>`;
+  }).join("");
+  openModal("高级 Excel 模式", `<div class="advanced-excel-panel">
+    <div class="advanced-excel-intro"><div><b>${escapeHtml(current.title)}</b><span>${escapeHtml(current.number)} · ${escapeHtml(documentTypeLabel(current.type))}</span></div><strong>${current.items.length} 项明细</strong></div>
+    <section class="advanced-excel-config">
+      <label><span>本次抬头</span><select id="advancedExcelLetterhead"><option value="">使用单据当前卖方资料</option>${assets.letterheads.filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === selectedLetterheadId ? "selected" : ""}>${escapeHtml(item.name)} · ${escapeHtml(item.companyName)}</option>`).join("")}</select></label>
+      <label><span>盖章</span><select id="advancedExcelStamp"><option value="">不盖章</option>${assets.stamps.filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === current.stampId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
+      <label><span>签名</span><select id="advancedExcelSignature"><option value="">不签名</option>${assets.signatures.filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === current.signatureId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
+      <label class="advanced-excel-image-toggle"><input id="advancedExcelProductImages" type="checkbox" ${current.includeProductImages ? "checked" : ""}><span><b>输出产品示例图</b><small>仅嵌入已上传到本系统的产品图</small></span></label>
+      ${assets.canManage ? `<button class="btn" type="button" id="advancedExcelManageAssets">管理品牌资产</button>` : ""}
+    </section>
+    <p class="advanced-excel-note">直接套用 Excel 模板，保留原有工作表、合并单元格、边框、打印区域和公式。印章默认不输出；预览与正式导出使用同一份已保存配置。${teamSystemSettings.requireDocumentExcelApproval ? "预览无需审批；当前团队的正式导出需审批通过。" : "当前团队未启用正式导出审批，保存后即可预览和导出。"}</p>
+    <div class="advanced-excel-grid">${cards || `<div class="empty-cell">暂无可用模板</div>`}</div>
+  </div>`, `<button class="btn" data-modal-close>关闭</button>`);
+  qs<HTMLElement>("#appModal .modal")?.classList.add("advanced-excel-modal");
+  const prepare = async () => {
+    const result = await api<{ document: TradeDocument }>(`/api/trade-documents/${encodeURIComponent(current.id)}/excel-options`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        letterheadId: qs<HTMLSelectElement>("#advancedExcelLetterhead")?.value || "",
+        stampId: qs<HTMLSelectElement>("#advancedExcelStamp")?.value || "",
+        signatureId: qs<HTMLSelectElement>("#advancedExcelSignature")?.value || "",
+        includeProductImages: Boolean(qs<HTMLInputElement>("#advancedExcelProductImages")?.checked)
+      })
+    });
+    updateActiveDocument(result.document);
+    return result.document;
+  };
+  qsa<HTMLButtonElement>("[data-advanced-excel-preview]").forEach((button) => button.addEventListener("click", async () => {
+    try { await previewAdvancedExcel(await prepare(), button.dataset.advancedExcelPreview || "", button); }
+    catch (error) { toast(error instanceof Error ? error.message : "Excel 配置保存失败", "error"); }
+  }));
+  qsa<HTMLButtonElement>("[data-advanced-excel-template]").forEach((button) => button.addEventListener("click", async () => {
+    try { await downloadAdvancedExcel(await prepare(), button.dataset.advancedExcelTemplate || "", button); }
+    catch (error) { toast(error instanceof Error ? error.message : "Excel 配置保存失败", "error"); }
+  }));
+  qs<HTMLButtonElement>("#advancedExcelManageAssets")?.addEventListener("click", () => openDocumentAssetManager(assets));
+  if (!available.length) toast("当前单据类型暂无匹配模板，请查看支持类型", "info");
+}
+
+async function previewAdvancedExcel(tradeDocument: TradeDocument, templateId: string, button: HTMLButtonElement) {
+  if (!templateId) return;
+  setButtonPending(button, true, "预览", "生成中");
+  try {
+    const response = await fetch(`/api/trade-documents/${encodeURIComponent(tradeDocument.id)}/preview-xlsx`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", ...(cookieValue("gj_csrf") ? { "x-csrf-token": cookieValue("gj_csrf") } : {}) },
+      body: JSON.stringify({ templateId })
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ message: "Excel 预览失败" }));
+      throw new Error(body.message || "Excel 预览失败");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    openModal("Excel 单据预览", `<div class="excel-preview-shell"><div class="excel-preview-meta"><div><b>${escapeHtml(tradeDocument.title)}</b><span>${escapeHtml(tradeDocument.number)} · ${escapeHtml(documentTypeLabel(tradeDocument.type))}</span></div><span>预览由最终 Excel 生成，修改后将重新生成</span></div><iframe class="excel-preview-frame" src="${escapeHtml(url)}" title="${escapeHtml(tradeDocument.number)} Excel 预览"></iframe></div>`, `<button class="btn" type="button" id="excelPreviewEditDocument">修改单据数据</button><button class="btn" type="button" id="excelPreviewRefresh">重新生成预览</button><button class="btn primary" type="button" id="excelPreviewDownload">导出 Excel</button><button class="btn" data-modal-close>关闭预览</button>`);
+    qs<HTMLElement>("#appModal .modal")?.classList.add("excel-preview-modal");
+    modalDismissHandler = () => URL.revokeObjectURL(url);
+    qs<HTMLButtonElement>("#excelPreviewEditDocument")?.addEventListener("click", () => {
+      advancedExcelEditReturnTemplateId = templateId;
+      closeModal();
+      state.selectedDocumentId = tradeDocument.id;
+      renderTradeDocuments(state.tradeDocuments);
+      qs<HTMLElement>("#documentStudioWorkspace")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      window.setTimeout(() => qs<HTMLInputElement>("#docTitleInput")?.focus(), 200);
+      toast("修改后点击“保存配置”，系统会自动重新生成 Excel 预览", "info");
+    });
+    qs<HTMLButtonElement>("#excelPreviewRefresh")?.addEventListener("click", (event) => {
+      void previewAdvancedExcel(activeTradeDocument(), templateId, event.currentTarget as HTMLButtonElement);
+    });
+    qs<HTMLButtonElement>("#excelPreviewDownload")?.addEventListener("click", (event) => {
+      void downloadAdvancedExcel(activeTradeDocument(), templateId, event.currentTarget as HTMLButtonElement);
+    });
+  } catch (error) {
+    setButtonPending(button, false, "预览", "生成中");
+    toast(error instanceof Error ? error.message : "Excel 预览失败", "error");
+  }
+}
+
+async function downloadAdvancedExcel(tradeDocument: TradeDocument, templateId: string, button: HTMLButtonElement) {
+  if (!templateId) return;
+  setButtonPending(button, true, "导出 Excel", "生成中");
+  try {
+    const response = await fetch(`/api/trade-documents/${encodeURIComponent(tradeDocument.id)}/export-xlsx`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", ...(cookieValue("gj_csrf") ? { "x-csrf-token": cookieValue("gj_csrf") } : {}) },
+      body: JSON.stringify({ templateId })
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ message: "Excel 导出失败" }));
+      throw new Error(body.message || "Excel 导出失败");
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("content-disposition") || "";
+    const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const fileName = encoded ? decodeURIComponent(encoded) : `${tradeDocument.number}.xlsx`;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    link.click();
+    URL.revokeObjectURL(url);
+    closeModal();
+    toast("高级 Excel 已下载", "success");
+  } catch (error) {
+    setButtonPending(button, false, "导出 Excel", "生成中");
+    toast(error instanceof Error ? error.message : "高级 Excel 导出失败", "error");
+  }
+}
 
 function documentConversionTargets(type: TradeDocument["type"]) {
   const map: Record<TradeDocument["type"], TradeDocument["type"][]> = {
@@ -15449,6 +16340,40 @@ function renderTradeDocumentImportItem(item: TradeDocumentItem, index: number) {
   </div>`;
 }
 
+async function renderTradeDocumentRecognitionTemplateLibrary() {
+  const target = qs<HTMLElement>("#tradeRecognitionTemplateLibrary");
+  if (!target) return;
+  target.hidden = false;
+  target.innerHTML = `<span class="trade-recognition-template-loading">正在读取本团队模板...</span>`;
+  try {
+    const result = await api<{ templates: TradeDocumentRecognitionTemplate[] }>("/api/trade-document-recognition-templates?includeArchived=true");
+    const active = result.templates.filter((item) => item.status === "active");
+    const archived = result.templates.filter((item) => item.status === "archived");
+    const row = (item: TradeDocumentRecognitionTemplate) => `<div class="trade-recognition-template-row">
+      <div><b>${escapeHtml(item.name)} <small>V${item.version}</small></b><span>${documentTypeLabel(item.documentType)} · ${item.sourceKind === "ocr" ? "图片 OCR" : "文件导入"} · ${item.status === "active" ? "当前启用" : "历史归档"}</span></div>
+      <button class="btn" type="button" data-recognition-template-action="${item.status === "active" ? "archive" : "restore"}" data-recognition-template-id="${escapeHtml(item.id)}">${item.status === "active" ? "归档" : "恢复为新版本"}</button>
+    </div>`;
+    target.innerHTML = `<div class="trade-recognition-template-library-head"><div><b>识别模板库</b><span>识别时只读取启用版本，归档版本仅供审计和恢复。</span></div><button type="button" title="收起模板库" data-close-recognition-library>×</button></div>
+      <div class="trade-recognition-template-group"><h4>启用中 <span>${active.length}</span></h4>${active.length ? active.map(row).join("") : "<p>暂无启用模板，当前识别继续使用通用规则。</p>"}</div>
+      <details class="trade-recognition-template-group"><summary>历史归档 <span>${archived.length}</span></summary>${archived.length ? archived.map(row).join("") : "<p>暂无归档版本。</p>"}</details>`;
+    qs<HTMLButtonElement>("[data-close-recognition-library]", target)?.addEventListener("click", () => { target.hidden = true; });
+    qsa<HTMLButtonElement>("[data-recognition-template-action]", target).forEach((button) => button.addEventListener("click", async () => {
+      const action = button.dataset.recognitionTemplateAction || "archive";
+      setButtonPending(button, true, action === "archive" ? "归档" : "恢复为新版本", "处理中");
+      try {
+        await api(`/api/trade-document-recognition-templates/${encodeURIComponent(button.dataset.recognitionTemplateId || "")}/${action}`, { method: "POST" });
+        toast(action === "archive" ? "模板已归档，后续识别不再匹配该版本" : "已恢复为新的启用版本", "success");
+        await renderTradeDocumentRecognitionTemplateLibrary();
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "模板操作失败", "error");
+        setButtonPending(button, false, action === "archive" ? "归档" : "恢复为新版本", "处理中");
+      }
+    }));
+  } catch (error) {
+    target.innerHTML = `<span class="trade-recognition-template-loading is-error">${escapeHtml(error instanceof Error ? error.message : "模板库读取失败")}</span>`;
+  }
+}
+
 function renderTradeDocumentImportReview(analysis: TradeDocumentImportAnalysis) {
   const draft = analysis.extractedDocument;
   const evidence = analysis.fieldEvidence || [];
@@ -15464,11 +16389,15 @@ function renderTradeDocumentImportReview(analysis: TradeDocumentImportAnalysis) 
   const customerOptions = `<option value="">暂不关联客户</option>${state.customers.map((customer) => `<option value="${escapeHtml(customer.id)}" ${customer.id === draft.customerId ? "selected" : ""}>${escapeHtml(customerDocumentName(customer))}</option>`).join("")}`;
   const availableDeals = state.deals.filter((deal) => !draft.customerId || deal.customerId === draft.customerId);
   const dealOptions = `<option value="">暂不关联商机</option>${availableDeals.map((deal) => `<option value="${escapeHtml(deal.id)}" ${deal.id === draft.dealId ? "selected" : ""}>${escapeHtml(deal.title)} · ${escapeHtml(deal.stage)}</option>`).join("")}`;
+  const recognitionLabel = analysis.recognitionTemplate ? `${analysis.recognitionTemplate.name} V${analysis.recognitionTemplate.version}` : "通用识别";
+  const suggestedTemplateName = `${draft.seller || draft.buyer || analysis.sourceFileName.replace(/\.[^.]+$/u, "")} ${documentTypeLabel(draft.type)}`.trim().slice(0, 120);
   openModal("导入分析 · 审核后生成单据", `<div class="trade-document-import-shell">
     <div class="trade-document-import-summary"><div><b>${escapeHtml(analysis.sourceFileName)}</b><span>识别类型：${escapeHtml(draft.type)} · ${documentTypeLabel(draft.type)} · ${(analysis.sourceSize / 1024).toFixed(1)} KB</span></div><div class="trade-document-import-score"><span>识别可信度 ${tradeDocumentImportPercent(analysis.confidence)}</span><i style="--score:${tradeDocumentImportPercent(analysis.confidence)}"></i></div><span class="doc-status-badge">${analysis.status === "confirmed" ? "已生成" : "待审核"}</span></div>
     <div class="trade-document-import-layout">
       <aside class="trade-document-import-source"><div><h3>原文件与风险</h3><p>左侧只展示本团队受控存储的原文摘要；右侧修改的是待生成草稿。</p></div><div class="trade-document-import-warnings">${warningHtml}</div><div class="trade-document-import-evidence"><h3 style="margin-bottom:6px;">识别证据</h3>${evidenceHtml}<details style="margin-top:10px;"><summary style="cursor:pointer;color:var(--muted);font-size:10px;">查看原文摘要</summary><pre style="max-height:180px;overflow:auto;white-space:pre-wrap;color:var(--muted);font:10px/1.5 ui-monospace,monospace;">${escapeHtml(analysis.sourcePreview.join("\n"))}</pre></details></div></aside>
       <section class="trade-document-import-review"><div class="trade-document-import-review-head"><div><h3>确认导入内容</h3><p style="margin:4px 0 0;color:var(--muted);font-size:10px;">修改后确认，将创建一份草稿单据；不会自动审批或覆盖原单据。</p></div><button class="btn" id="tradeImportOpenSourceButton" type="button">打开原文件</button></div>
+        <div class="trade-recognition-template-bar"><div><span>本次规则</span><b id="tradeRecognitionTemplateState">${escapeHtml(recognitionLabel)}</b><small>${analysis.recognitionTemplate ? `匹配度 ${tradeDocumentImportPercent(analysis.recognitionTemplate.matchScore)}，历史单据不会重新识别` : "未命中模板，继续使用现有通用识别"}</small></div><label><span>模板名称</span><input id="tradeRecognitionTemplateName" value="${escapeHtml(analysis.recognitionTemplate?.name || suggestedTemplateName)}" maxlength="120"></label><button class="btn" type="button" id="tradeRecognitionTemplateSave">${analysis.recognitionTemplate ? "更新模板" : "保存为模板"}</button><button class="btn" type="button" id="tradeRecognitionTemplateLibraryButton">模板库</button></div>
+        <div class="trade-recognition-template-library" id="tradeRecognitionTemplateLibrary" hidden></div>
         <div class="trade-document-import-form"><label class="wide"><span>关联客户</span><select id="tradeImportCustomer">${customerOptions}</select></label><label class="wide"><span>关联商机</span><select id="tradeImportDeal">${dealOptions}</select></label><label><span>单据类型</span><select id="tradeImportType">${typeOptions}</select></label>${field("tradeImportTitle", "单据标题", draft.title, "text", "wide")}${field("tradeImportNumber", "单据编号", draft.number)}${field("tradeImportIssueDate", "签发日期", draft.issueDate, "date")}${field("tradeImportBuyer", "买方公司", draft.buyer)}${field("tradeImportBuyerContact", "买方联系人", draft.buyerContact)}${field("tradeImportSeller", "卖方公司", draft.seller)}${field("tradeImportCurrency", "币种", draft.currency)}${field("tradeImportIncoterm", "贸易条款", draft.incoterm)}${field("tradeImportShipping", "运输方式", draft.shippingMethod)}${field("tradeImportPortLoading", "装运港", draft.portLoading)}${field("tradeImportPortDischarge", "目的港", draft.portDischarge)}${field("tradeImportValidity", "有效期", draft.validityDate, "date")}${textarea("tradeImportBuyerAddress", "买方地址", draft.buyerAddress, "wide")}${textarea("tradeImportSellerAddress", "卖方地址", draft.sellerAddress, "wide")}${textarea("tradeImportPayment", "付款条款", draft.paymentTerm, "wide")}${textarea("tradeImportBank", "银行信息", draft.bankInfo, "wide")}${textarea("tradeImportNotes", "备注", draft.notes, "full")}</div>
         <div class="trade-document-import-items-head"><h3>商品明细</h3><button class="btn" type="button" id="tradeImportAddItem">增加明细</button></div><div class="trade-document-import-items" id="tradeImportItems">${draft.items.map(renderTradeDocumentImportItem).join("")}</div><div class="trade-document-import-total"><span>明细计算合计</span><b id="tradeImportTotal">${formatDocumentMoney(draft.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0), draft.currency)}</b>${analysis.declaredTotal === undefined ? "" : `<span>原单合计 ${formatDocumentMoney(analysis.declaredTotal, draft.currency)}</span>`}</div>
       </section>
@@ -15497,11 +16426,34 @@ function renderTradeDocumentImportReview(analysis: TradeDocumentImportAnalysis) 
     qs<HTMLButtonElement>("[data-trade-import-remove]", row as HTMLElement)?.addEventListener("click", (event) => { (event.currentTarget as HTMLButtonElement).closest<HTMLElement>("[data-trade-import-item]")?.remove(); total(); });
   });
   qs<HTMLButtonElement>("#tradeImportOpenSourceButton")?.addEventListener("click", () => window.open(`/api/trade-document-imports/${encodeURIComponent(analysis.id)}/source`, "_blank", "noopener,noreferrer"));
+  qs<HTMLButtonElement>("#tradeRecognitionTemplateLibraryButton")?.addEventListener("click", () => { void renderTradeDocumentRecognitionTemplateLibrary(); });
+  qs<HTMLButtonElement>("#tradeRecognitionTemplateSave")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const name = qs<HTMLInputElement>("#tradeRecognitionTemplateName")?.value.trim() || "";
+    if (!name) { toast("请填写模板名称", "error"); qs<HTMLInputElement>("#tradeRecognitionTemplateName")?.focus(); return; }
+    setButtonPending(button, true, analysis.recognitionTemplate ? "更新模板" : "保存为模板", "保存中");
+    try {
+      const result = await api<{ template: TradeDocumentRecognitionTemplate }>(`/api/trade-document-imports/${encodeURIComponent(analysis.id)}/recognition-template`, {
+        method: "POST",
+        body: JSON.stringify({ name, familyId: analysis.recognitionTemplate?.familyId, document: importDocumentDraftFromReview(analysis) })
+      });
+      analysis.recognitionTemplate = { templateId: result.template.id, familyId: result.template.familyId, name: result.template.name, version: result.template.version, matchScore: 1, matchedAt: new Date().toISOString() };
+      const stateLabel = qs<HTMLElement>("#tradeRecognitionTemplateState");
+      if (stateLabel) stateLabel.textContent = `${result.template.name} V${result.template.version}`;
+      button.textContent = "更新模板";
+      button.disabled = false;
+      toast(`识别模板已保存为 V${result.template.version}，旧版本已自动归档`, "success");
+      if (!qs<HTMLElement>("#tradeRecognitionTemplateLibrary")?.hidden) await renderTradeDocumentRecognitionTemplateLibrary();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "识别模板保存失败", "error");
+      setButtonPending(button, false, analysis.recognitionTemplate ? "更新模板" : "保存为模板", "保存中");
+    }
+  });
   qs<HTMLButtonElement>("#tradeImportConfirmButton")?.addEventListener("click", async (event) => {
     const button = event.currentTarget as HTMLButtonElement;
     const next = importDocumentDraftFromReview(analysis);
     const requiredFields: Array<[string, string, string]> = [
-      ["tradeImportTitle", "单据标题", next.title], ["tradeImportNumber", "单据编号", next.number],
+      ["tradeImportTitle", "单据标题", next.title], ["tradeImportNumber", "单据编号", next.number], ["tradeImportIssueDate", "签发日期", next.issueDate],
       ["tradeImportSeller", "卖方公司", next.seller]
     ];
     qsa<HTMLElement>("#tradeImportTitle, #tradeImportNumber, #tradeImportIssueDate, #tradeImportSeller, [data-import-field='product']").forEach((field) => field.style.borderColor = "");
@@ -15569,6 +16521,71 @@ function openTradeDocumentImport() {
       } catch (error) { toast(error instanceof Error ? error.message : "分析删除失败", "error"); }
     }));
   }).catch(() => { const box = qs<HTMLElement>("#tradeDocumentRecentImports"); if (box) box.innerHTML = `<span style="color:var(--muted);font-size:10px;">最近分析暂时无法读取</span>`; });
+}
+
+async function tradeDocumentOcrDataUrl(file: File) {
+  const supported = ["image/png", "image/jpeg", "image/webp"];
+  if (!supported.includes(file.type)) throw new Error("请选择 PNG、JPG/JPEG 或 WEBP 图片");
+  const raw = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.readAsDataURL(file);
+  });
+  if (raw.length <= 2_700_000) return { dataUrl: raw, mime: file.type };
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => reject(new Error("图片无法解码，请换用常见格式的原图"));
+    element.src = raw;
+  });
+  const maxSide = 2_200;
+  const scale = Math.min(1, maxSide / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+  canvas.height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("当前浏览器无法处理图片，请更换浏览器后重试");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const compressed = canvas.toDataURL("image/jpeg", 0.82);
+  if (compressed.length > 2_900_000) throw new Error("图片压缩后仍过大，请裁剪到单据主体后重试");
+  return { dataUrl: compressed, mime: "image/jpeg" };
+}
+
+function openTradeDocumentOcr() {
+  const providerHint = tradeDocumentOcrProvider.enabled
+    ? (tradeDocumentOcrProvider.provider === "baidu" ? "已配置百度 OCR 优先识别，结构不足时自动由 AI 复核" : "已配置硅基流动视觉模型优先识别")
+    : "当前使用已启用的 AI 视觉模型";
+  openModal("OCR识别单据", `<div class="trade-document-ocr-upload"><div style="padding:24px 20px;border:1px dashed #b8d2cc;border-radius:10px;background:#f7fbfa;text-align:center;"><div style="display:grid;place-items:center;width:44px;height:44px;margin:0 auto 10px;border-radius:12px;color:#0f766e;background:#e4f5ef;font-size:20px;">◎</div><h3 style="margin:0;color:var(--ink);font-size:16px;">上传单据照片</h3><p style="margin:8px auto 15px;max-width:440px;color:var(--muted);font-size:11px;line-height:1.7;">适用于清晰、正向的 PI、报价单、商业发票、装箱单等图片。识别结果只生成待审核草稿，不会直接覆盖或提交正式单据。</p><input id="tradeDocumentOcrFile" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"><div id="tradeDocumentOcrMeta" style="min-height:18px;margin-top:10px;color:var(--muted);font-size:10px;"></div></div><div style="display:grid;gap:7px;margin-top:14px;padding:11px 12px;border:1px solid #e2ece9;border-radius:8px;background:#fbfdfc;"><b style="font-size:11px;color:var(--ink);">识别链路</b><span style="font-size:10px;color:var(--muted);line-height:1.6;">图片质量检查 → OCR/视觉识别 → 字段置信度与风险提示 → 人工审核 → 生成单据草稿</span><span style="font-size:10px;color:#8b641f;line-height:1.6;">${providerHint}；图片中的模糊、遮挡、反光和手写内容可能需要人工修正。</span></div><button class="btn" type="button" id="tradeDocumentOcrConfigButton" style="margin-top:12px;">配置 OCR 来源</button></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="tradeDocumentOcrStartButton" disabled>开始识别</button>`, { closeOnBackdrop: false });
+  const input = qs<HTMLInputElement>("#tradeDocumentOcrFile");
+  const start = qs<HTMLButtonElement>("#tradeDocumentOcrStartButton");
+  const meta = qs<HTMLElement>("#tradeDocumentOcrMeta");
+  input?.addEventListener("change", () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    if (!/^image\/(?:png|jpeg|webp)$/u.test(file.type)) { toast("请选择 PNG、JPG/JPEG 或 WEBP 图片", "error"); input.value = ""; return; }
+    if (meta) meta.textContent = `${file.name} · ${(file.size / 1024).toFixed(1)} KB（过大图片会在浏览器内压缩）`;
+    if (start) start.disabled = false;
+  });
+  qs<HTMLButtonElement>("#tradeDocumentOcrConfigButton")?.addEventListener("click", () => { closeModal(); activateNavView("ai-config"); });
+  start?.addEventListener("click", async () => {
+    const file = input?.files?.[0];
+    if (!file) return;
+    setButtonPending(start, true, "开始识别", "正在识别");
+    if (meta) meta.textContent = "正在检查图片并提交视觉模型，请保持页面打开…";
+    try {
+      const prepared = await tradeDocumentOcrDataUrl(file);
+      const result = await api<{ analysis: TradeDocumentImportAnalysis; duplicate: boolean }>("/api/trade-document-imports/analyze-ocr", { method: "POST", body: JSON.stringify({ image: prepared.dataUrl, mime: prepared.mime, fileName: file.name }) });
+      closeModal();
+      renderTradeDocumentImportReview(result.analysis);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "单据图片识别失败", "error");
+      if (meta) meta.textContent = "识别未完成，请根据提示调整图片或 AI 配置后重试。";
+      setButtonPending(start, false, "开始识别", "正在识别");
+    }
+  });
 }
 
 function openDocumentConversion() {
@@ -15653,16 +16670,22 @@ function renderDocumentProductChoices(products: Product[], selected: Set<string>
   return products.length ? products.map((product) => `<label class="document-product-choice"><input type="checkbox" value="${escapeHtml(product.id)}" ${selected.has(product.id) ? "checked" : ""}><span><b>${escapeHtml(product.nameEn || product.nameZh)}</b><small>${escapeHtml([product.nameZh, product.model, product.hsCode, `${product.price || 0} ${product.currency || "USD"}`].filter(Boolean).join(" · "))}</small></span></label>`).join("") : `<p class="empty-cell">没有匹配产品</p>`;
 }
 
-function setDocumentWorkspaceMode(mode: "studio" | "history" | "defaults") {
+function setDocumentWorkspaceMode(mode: "studio" | "history" | "quote-history" | "defaults") {
   const studio = qs<HTMLElement>("#documentStudioWorkspace");
   const history = qs<HTMLElement>("#documentHistoryWorkspace");
+  const quoteHistory = qs<HTMLElement>("#quoteHistoryWorkspace");
   const defaults = qs<HTMLElement>("#documentDefaultsWorkspace");
   if (studio) studio.hidden = mode !== "studio";
   if (history) history.hidden = mode !== "history";
+  if (quoteHistory) quoteHistory.hidden = mode !== "quote-history";
   if (defaults) defaults.hidden = mode !== "defaults";
   if (mode === "history") {
     populateDocumentHistoryFilters();
     void loadDocumentHistory();
+  }
+  if (mode === "quote-history") {
+    populateQuoteHistoryFilters();
+    void loadQuoteHistory();
   }
   if (mode === "defaults") void loadDocumentDefaultsWorkspace();
 }
@@ -15676,6 +16699,7 @@ function collectDocumentDefaultProfile(): DocumentDefaultProfile {
   return {
     teamId: current?.teamId || "",
     seller: documentDefaultValue("documentDefaultSeller"),
+    brandMarkText: documentDefaultValue("documentDefaultBrandMarkText"),
     sellerAddress: documentDefaultValue("documentDefaultSellerAddress"),
     sellerContact: documentDefaultValue("documentDefaultSellerContact"),
     sellerPhone: documentDefaultValue("documentDefaultSellerPhone"),
@@ -15691,7 +16715,7 @@ function collectDocumentDefaultProfile(): DocumentDefaultProfile {
     validityDays: Number(documentDefaultValue("documentDefaultValidityDays") || 0),
     notes: documentDefaultValue("documentDefaultNotes"),
     language: (documentDefaultValue("documentDefaultLanguage") || "EN") as TradeDocument["language"],
-    templateStyle: (documentDefaultValue("documentDefaultTemplateStyle") || "indigo") as TradeDocument["templateStyle"],
+    templateStyle: (documentDefaultValue("documentDefaultTemplateStyle") || "rose") as TradeDocument["templateStyle"],
     letterheadId: documentDefaultValue("documentDefaultLetterhead"),
     stampId: documentDefaultValue("documentDefaultStamp"),
     signatureId: documentDefaultValue("documentDefaultSignature"),
@@ -15708,12 +16732,30 @@ function renderDocumentDefaultsPreview(profile = collectDocumentDefaultProfile()
   const stamp = state.documentAssets.stamps.find((item) => item.id === profile.stampId);
   const signature = state.documentAssets.signatures.find((item) => item.id === profile.signatureId);
   const contact = [profile.sellerContact, profile.sellerPhone, profile.sellerEmail].filter(Boolean).join(" · ");
-  box.innerHTML = `<div class="document-default-preview-sheet"><header><div>${letterhead?.logoUrl ? `<img src="${escapeHtml(letterhead.logoUrl)}" alt="" style="width:74px;height:30px;object-fit:contain;object-position:left center;">` : ""}<b>${escapeHtml(profile.seller || letterhead?.companyName || "未配置公司名称")}</b><span>${escapeHtml(profile.sellerAddress || letterhead?.address || "公司地址将在此显示")}</span></div><small>${escapeHtml(profile.language)} · ${escapeHtml(profile.templateStyle)}</small></header><p>${escapeHtml(contact || "联系人、电话、邮箱")}${profile.sellerWebsite ? `<br>${escapeHtml(profile.sellerWebsite)}` : ""}${profile.sellerTaxNo ? `<br>Tax No. ${escapeHtml(profile.sellerTaxNo)}` : ""}</p><dl><div><dt>Currency</dt><dd>${escapeHtml(profile.currency)}</dd></div><div><dt>Incoterm</dt><dd>${escapeHtml(profile.incoterm)}</dd></div><div><dt>Shipping</dt><dd>${escapeHtml(profile.shippingMethod)}</dd></div><div><dt>Port</dt><dd>${escapeHtml(profile.portLoading || "-")}</dd></div></dl><p>${escapeHtml(profile.paymentTerm || "付款条款未配置")}</p><div class="document-default-preview-assets">${stamp ? `<img src="${escapeHtml(stamp.imageUrl)}" alt="印章">` : ""}${signature ? `<img data-signature src="${escapeHtml(signature.imageUrl)}" alt="签名">` : ""}${!stamp && !signature ? `<small>当前未选择印章与签名</small>` : ""}</div></div>`;
+  const fallbackMark = [...(profile.seller || letterhead?.companyName || "GJ").trim()].slice(0, 2).join("").toUpperCase() || "GJ";
+  const mark = [...(profile.brandMarkText || "").trim()].slice(0, 8).join("").toUpperCase() || fallbackMark;
+  box.innerHTML = `<div class="document-default-preview-sheet"><header><div class="document-default-preview-brand"><span class="document-default-preview-mark">${escapeHtml(mark)}</span><div>${letterhead?.logoUrl ? `<img src="${escapeHtml(letterhead.logoUrl)}" alt="" style="width:74px;height:30px;object-fit:contain;object-position:left center;">` : ""}<b>${escapeHtml(profile.seller || letterhead?.companyName || "未配置公司名称")}</b><span>${escapeHtml(profile.sellerAddress || letterhead?.address || "公司地址将在此显示")}</span></div></div><small>${escapeHtml(profile.language)} · ${escapeHtml(profile.templateStyle)}</small></header><p>${escapeHtml(contact || "联系人、电话、邮箱")}${profile.sellerWebsite ? `<br>${escapeHtml(profile.sellerWebsite)}` : ""}${profile.sellerTaxNo ? `<br>Tax No. ${escapeHtml(profile.sellerTaxNo)}` : ""}</p><dl><div><dt>Currency</dt><dd>${escapeHtml(profile.currency)}</dd></div><div><dt>Incoterm</dt><dd>${escapeHtml(profile.incoterm)}</dd></div><div><dt>Shipping</dt><dd>${escapeHtml(profile.shippingMethod)}</dd></div><div><dt>Port</dt><dd>${escapeHtml(profile.portLoading || "-")}</dd></div></dl><p>${escapeHtml(profile.paymentTerm || "付款条款未配置")}</p><div class="document-default-preview-assets">${stamp ? `<img src="${escapeHtml(stamp.imageUrl)}" alt="印章">` : ""}${signature ? `<img data-signature src="${escapeHtml(signature.imageUrl)}" alt="签名">` : ""}${!stamp && !signature ? `<small>当前未选择印章与签名</small>` : ""}</div></div>`;
+}
+
+function renderSellerProfilesInDefaults(assets = state.documentAssets) {
+  const box = qs<HTMLElement>("#documentSellerProfilesList");
+  if (!box) return;
+  const profiles = [...assets.letterheads].sort((left, right) => Number(right.isDefault) - Number(left.isDefault) || Number(right.enabled) - Number(left.enabled) || (right.matchPriority || 0) - (left.matchPriority || 0));
+  box.innerHTML = profiles.length ? profiles.map((profile) => {
+    const stamp = assets.stamps.find((item) => item.id === profile.stampId);
+    const signature = assets.signatures.find((item) => item.id === profile.signatureId);
+    const assetsText = [stamp ? `印章：${stamp.name}` : "", signature ? `签名：${signature.name}` : ""].filter(Boolean).join(" · ");
+    return `<article class="document-seller-profile-card${profile.enabled ? "" : " is-disabled"}">
+      <header><div><b>${escapeHtml(profile.name)}</b><small>${escapeHtml(profile.companyName)}</small></div>${profile.isDefault ? `<em>默认公司</em>` : profile.enabled ? `<em>已启用</em>` : `<em>已停用</em>`}</header>
+      <small>${escapeHtml(sellerProfileRuleText(profile))}</small>
+      <small>${escapeHtml(assetsText || "使用团队默认印章与签名")} · 优先级 ${profile.matchPriority || 0}</small>
+    </article>`;
+  }).join("") : `<p class="empty-cell">尚未配置卖方公司。新建单据将使用下方兜底资料。</p>`;
 }
 
 function fillDocumentDefaultsWorkspace(profile: DocumentDefaultProfile, assets: DocumentAssetsResponse) {
   const values: Record<string, string> = {
-    documentDefaultSeller: profile.seller, documentDefaultSellerAddress: profile.sellerAddress, documentDefaultSellerContact: profile.sellerContact,
+    documentDefaultSeller: profile.seller, documentDefaultBrandMarkText: profile.brandMarkText || "", documentDefaultSellerAddress: profile.sellerAddress, documentDefaultSellerContact: profile.sellerContact,
     documentDefaultSellerPhone: profile.sellerPhone, documentDefaultSellerEmail: profile.sellerEmail, documentDefaultSellerWebsite: profile.sellerWebsite,
     documentDefaultSellerTaxNo: profile.sellerTaxNo, documentDefaultBankInfo: profile.bankInfo, documentDefaultCurrency: profile.currency,
     documentDefaultIncoterm: profile.incoterm, documentDefaultPaymentTerm: profile.paymentTerm, documentDefaultShippingMethod: profile.shippingMethod,
@@ -15730,7 +16772,9 @@ function fillDocumentDefaultsWorkspace(profile: DocumentDefaultProfile, assets: 
   qsa<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("#documentDefaultsWorkspace input, #documentDefaultsWorkspace select, #documentDefaultsWorkspace textarea").forEach((field) => { field.disabled = !editable; });
   const save = qs<HTMLButtonElement>("#documentDefaultsSaveButton"); if (save) save.hidden = !editable;
   const manage = qs<HTMLButtonElement>("#documentDefaultsManageAssets"); if (manage) manage.hidden = !editable;
+  const manageSellers = qs<HTMLButtonElement>("#documentSellerProfilesManage"); if (manageSellers) manageSellers.hidden = !editable;
   qsa<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("#documentDefaultsWorkspace input, #documentDefaultsWorkspace select, #documentDefaultsWorkspace textarea").forEach((field) => { field.oninput = () => renderDocumentDefaultsPreview(); field.onchange = () => renderDocumentDefaultsPreview(); });
+  renderSellerProfilesInDefaults(assets);
   renderDocumentDefaultsPreview(profile);
 }
 
@@ -15836,6 +16880,244 @@ function resetDocumentHistoryFilters() {
   void loadDocumentHistory();
 }
 
+function populateQuoteHistoryFilters() {
+  const customerOptions = qs<HTMLDataListElement>("#quoteHistoryCustomerOptions");
+  const dealOptions = qs<HTMLDataListElement>("#quoteHistoryDealOptions");
+  const countryOptions = qs<HTMLDataListElement>("#quoteHistoryCountryOptions");
+  if (customerOptions) customerOptions.innerHTML = state.customers.map((item) => `<option value="${escapeHtml(quoteHistoryCustomerLabel(item))}">${escapeHtml(item.company)}</option>`).join("");
+  if (dealOptions) dealOptions.innerHTML = quoteHistoryDeals().map((item) => `<option value="${escapeHtml(quoteHistoryDealLabel(item))}">${escapeHtml(item.title)}</option>`).join("");
+  if (countryOptions) {
+    const countries = [...new Set(state.customers.map((item) => item.country.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right));
+    countryOptions.innerHTML = countries.map((item) => `<option value="${escapeHtml(item)}"></option>`).join("");
+  }
+}
+
+function quoteHistoryDeals() {
+  return [...state.deals, ...state.closedDeals].filter((item, index, list) => list.findIndex((entry) => entry.id === item.id) === index);
+}
+
+function quoteHistoryCustomerLabel(customer: Customer) {
+  return [customer.company, customer.country].filter(Boolean).join(" · ");
+}
+
+function quoteHistoryDealLabel(deal: Deal) {
+  const customer = state.customers.find((item) => item.id === deal.customerId);
+  return [deal.title, customer?.company].filter(Boolean).join(" · ");
+}
+
+function quoteHistoryParams() {
+  const params = new URLSearchParams({ page: String(state.quoteHistoryPage), pageSize: "20", mode: state.quoteHistoryMode });
+  const customerText = qs<HTMLInputElement>("#quoteHistoryCustomer")?.value.trim() || "";
+  const dealText = qs<HTMLInputElement>("#quoteHistoryDeal")?.value.trim() || "";
+  const customer = state.customers.find((item) => quoteHistoryCustomerLabel(item) === customerText || item.company === customerText);
+  const deal = quoteHistoryDeals().find((item) => quoteHistoryDealLabel(item) === dealText || item.title === dealText);
+  const fields: Array<[string, string]> = [
+    ["q", qs<HTMLInputElement>("#quoteHistoryKeyword")?.value.trim() || ""],
+    ["customerId", customer?.id || ""],
+    ["customerSearch", customer ? "" : customerText],
+    ["dealId", deal?.id || ""],
+    ["dealSearch", deal ? "" : dealText],
+    ["country", qs<HTMLInputElement>("#quoteHistoryCountry")?.value.trim() || ""],
+    ["product", qs<HTMLInputElement>("#quoteHistoryProduct")?.value.trim() || ""],
+    ["documentType", qs<HTMLSelectElement>("#quoteHistoryDocumentType")?.value || ""],
+    ["currency", qs<HTMLSelectElement>("#quoteHistoryCurrency")?.value || ""],
+    ["from", qs<HTMLInputElement>("#quoteHistoryFrom")?.value || ""],
+    ["to", qs<HTMLInputElement>("#quoteHistoryTo")?.value || ""],
+    ["recordId", state.quoteHistoryFocusId]
+  ];
+  fields.forEach(([key, value]) => { if (value) params.set(key, value); });
+  return params;
+}
+
+function setQuoteHistoryMode(mode: "records" | "product", reload = true) {
+  state.quoteHistoryMode = mode;
+  const recordsButton = qs<HTMLButtonElement>("#quoteHistoryRecordsModeButton");
+  const productButton = qs<HTMLButtonElement>("#quoteHistoryProductModeButton");
+  if (recordsButton) {
+    recordsButton.classList.toggle("active", mode === "records");
+    recordsButton.setAttribute("aria-selected", String(mode === "records"));
+  }
+  if (productButton) {
+    productButton.classList.toggle("active", mode === "product");
+    productButton.setAttribute("aria-selected", String(mode === "product"));
+  }
+  const label = qs<HTMLElement>("#quoteHistoryProductLabel");
+  if (label) label.textContent = mode === "product" ? "单款产品 / 型号" : "产品 / 型号";
+  const input = qs<HTMLInputElement>("#quoteHistoryProduct");
+  if (input) input.placeholder = mode === "product" ? "输入产品名或型号，查看报价范围" : "产品或型号";
+  if (reload) {
+    state.quoteHistoryPage = 1;
+    void loadQuoteHistory();
+  }
+}
+
+function quoteHistoryProductSummary(record: QuoteHistoryRecord) {
+  const names = record.items.slice(0, 2).map((item) => [item.product, item.model].filter(Boolean).join(" / "));
+  return `${names.join("、")}${record.items.length > 2 ? ` 等 ${record.items.length} 项` : ""}`;
+}
+
+function openQuoteHistoryDetail(record: QuoteHistoryRecord) {
+  openModal("报价变化详情", `
+    <div class="quote-history-detail-head">
+      <div><span>${record.documentType === "PI" ? "PI" : "报价单"} · ${escapeHtml(record.documentNumber)} · v${record.documentRevision}</span><h2>${escapeHtml(record.customerName)}</h2><p>${escapeHtml(record.dealTitle)} · ${escapeHtml(formatDateTime(record.quotedAt))} · ${escapeHtml(record.operatorName)}</p></div>
+      <strong>${escapeHtml(formatDocumentMoney(record.totalAmount, record.currency))}</strong>
+    </div>
+    <div class="quote-history-change-list">${record.changes.map((change) => `<div><i></i><span>${escapeHtml(change)}</span></div>`).join("")}</div>
+    <div class="table-wrap quote-history-detail-table"><table><thead><tr><th>产品</th><th>型号</th><th>数量</th><th>单价</th><th>小计</th></tr></thead><tbody>${record.items.map((item) => `<tr><td>${escapeHtml(item.product)}</td><td>${escapeHtml(item.model || "-")}</td><td>${item.quantity} ${escapeHtml(item.unit)}</td><td>${escapeHtml(formatDocumentMoney(item.unitPrice, record.currency))}</td><td><b>${escapeHtml(formatDocumentMoney(item.lineTotal, record.currency))}</b></td></tr>`).join("")}</tbody></table></div>
+    <div class="quote-history-detail-foot"><span>${record.exportedAt ? `已于 ${escapeHtml(formatDateTime(record.exportedAt))} 正式导出` : "尚未正式导出"}</span><span>成交后仍永久保留此报价快照</span></div>
+  `, `<button class="btn" id="quoteHistoryOpenDocument">打开原单据</button><button class="btn primary" data-modal-close>关闭</button>`);
+  qs<HTMLButtonElement>("#quoteHistoryOpenDocument")?.addEventListener("click", () => {
+    closeModal();
+    const existing = state.tradeDocuments.find((item) => item.id === record.documentId);
+    if (existing) {
+      state.selectedDocumentId = existing.id;
+      setDocumentWorkspaceMode("studio");
+      renderTradeDocuments(state.tradeDocuments);
+      return;
+    }
+    toast("原单据不在最近列表，可在历史单据中按编号查询");
+    const keyword = qs<HTMLInputElement>("#documentHistoryKeyword");
+    if (keyword) keyword.value = record.documentNumber;
+    setDocumentWorkspaceMode("history");
+  });
+}
+
+function openQuoteProductAnalysisDetail(row: QuoteProductAnalysisRow) {
+  const records = (state.quoteProductAnalysis?.detailRecords || []).filter((record) => row.recordIds.includes(record.id));
+  const itemMatches = (item: QuoteHistoryItem) => row.productId
+    ? item.productId === row.productId
+    : item.product.trim().toLowerCase() === row.product.trim().toLowerCase() && item.model.trim().toLowerCase() === row.model.trim().toLowerCase();
+  openModal("单款产品报价明细", `
+    <div class="quote-history-detail-head">
+      <div><span>产品分析 · ${escapeHtml(row.country)} · ${escapeHtml(row.currency)}</span><h2>${escapeHtml([row.product, row.model].filter(Boolean).join(" / "))}</h2><p>共 ${row.quoteCount} 次报价 · 最近客户 ${escapeHtml(row.latestCustomerName || "未填写")}</p></div>
+      <strong>${escapeHtml(formatDocumentMoney(row.minUnitPrice, row.currency))} - ${escapeHtml(formatDocumentMoney(row.maxUnitPrice, row.currency))}</strong>
+    </div>
+    <div class="quote-history-change-list"><div><i></i><span>平均单价：${escapeHtml(formatDocumentMoney(row.averageUnitPrice, row.currency))} · 最近单价：${escapeHtml(formatDocumentMoney(row.latestUnitPrice, row.currency))}</span></div><div><i></i><span>报价范围按 ${escapeHtml(row.country)} / ${escapeHtml(row.currency)} 单独统计，未混合不同国家或币种。</span></div></div>
+    <div class="table-wrap quote-history-detail-table"><table><thead><tr><th>报价时间</th><th>客户 / 商机</th><th>单据</th><th>数量</th><th>单价</th><th>小计</th><th></th></tr></thead><tbody>${records.length ? records.map((record) => {
+      const item = record.items.find(itemMatches);
+      if (!item) return "";
+      return `<tr><td>${escapeHtml(formatDateTime(record.quotedAt))}</td><td><div class="document-history-title"><b>${escapeHtml(record.customerName)}</b><span>${escapeHtml(record.dealTitle)}</span></div></td><td>${escapeHtml(record.documentNumber)}</td><td>${item.quantity} ${escapeHtml(item.unit)}</td><td>${escapeHtml(formatDocumentMoney(item.unitPrice, record.currency))}</td><td>${escapeHtml(formatDocumentMoney(item.lineTotal, record.currency))}</td><td><button class="btn" type="button" data-product-analysis-record="${escapeHtml(record.id)}">查看</button></td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="empty-cell">暂无可展开的报价明细</td></tr>`}</tbody></table></div>
+    <div class="quote-history-detail-foot"><span>最近报价：${escapeHtml(row.latestQuotedAt ? formatDateTime(row.latestQuotedAt) : "-")}</span><span>单据号：${escapeHtml(row.latestDocumentNumber || "-")}</span></div>
+  `, `<button class="btn primary" data-modal-close>关闭</button>`);
+  qsa<HTMLButtonElement>("[data-product-analysis-record]").forEach((button) => button.addEventListener("click", () => {
+    const record = records.find((item) => item.id === button.dataset.productAnalysisRecord);
+    if (!record) return;
+    closeModal();
+    openQuoteHistoryDetail(record);
+  }));
+}
+
+async function loadQuoteHistory() {
+  const rows = qs<HTMLElement>("#quoteHistoryRows");
+  const productRows = qs<HTMLElement>("#quoteHistoryProductRows");
+  if (rows) rows.innerHTML = `<tr><td colspan="8" class="empty-cell">正在查询报价历史</td></tr>`;
+  if (productRows) productRows.innerHTML = `<tr><td colspan="9" class="empty-cell">正在分析单款产品报价</td></tr>`;
+  try {
+    const result = await api<QuoteHistoryResponse>(`/api/quote-history?${quoteHistoryParams().toString()}`);
+    state.quoteHistoryPage = result.page;
+    state.quoteHistoryPageCount = result.pageCount;
+    state.quoteHistoryTotal = result.total;
+    state.quoteProductAnalysis = result.productAnalysis;
+    renderQuoteHistory(result);
+    if (state.quoteHistoryFocusId && result.records[0]) {
+      const record = result.records[0];
+      state.quoteHistoryFocusId = "";
+      openQuoteHistoryDetail(record);
+    }
+  } catch (error) {
+    const message = escapeHtml(error instanceof Error ? error.message : "报价历史加载失败");
+    if (rows) rows.innerHTML = `<tr><td colspan="8" class="empty-cell">${message}</td></tr>`;
+    if (productRows) productRows.innerHTML = `<tr><td colspan="9" class="empty-cell">${message}</td></tr>`;
+  }
+}
+
+function renderQuoteHistory(result: QuoteHistoryResponse) {
+  const recordsPanel = qs<HTMLElement>("#quoteHistoryRecordsPanel");
+  const productPanel = qs<HTMLElement>("#quoteHistoryProductPanel");
+  if (recordsPanel) recordsPanel.hidden = state.quoteHistoryMode !== "records";
+  if (productPanel) productPanel.hidden = state.quoteHistoryMode !== "product";
+  if (state.quoteHistoryMode === "product") {
+    renderQuoteProductAnalysis(result.productAnalysis);
+    return;
+  }
+  const rows = qs<HTMLElement>("#quoteHistoryRows");
+  const summary = qs<HTMLElement>("#quoteHistorySummary");
+  const page = qs<HTMLElement>("#quoteHistoryPageText");
+  const prev = qs<HTMLButtonElement>("#quoteHistoryPrevButton");
+  const next = qs<HTMLButtonElement>("#quoteHistoryNextButton");
+  const totals = Object.entries(result.summary.totals).map(([currency, amount]) => formatDocumentMoney(amount, currency)).join(" · ");
+  if (summary) summary.innerHTML = `<b>${result.summary.recordCount}</b> 次报价 · ${result.summary.customerCount} 个客户 · ${result.summary.dealCount} 个商机 · ${result.summary.productCount} 个产品${totals ? `<span>历史报价累计（含版本）${escapeHtml(totals)}</span>` : ""}`;
+  if (page) page.textContent = `第 ${state.quoteHistoryPage} / ${state.quoteHistoryPageCount} 页`;
+  if (prev) prev.disabled = state.quoteHistoryPage <= 1;
+  if (next) next.disabled = state.quoteHistoryPage >= state.quoteHistoryPageCount;
+  if (!rows) return;
+  rows.innerHTML = result.records.length ? result.records.map((record) => `<tr>
+    <td><div class="document-history-title"><b>${escapeHtml(formatDateTime(record.quotedAt))}</b><span>${record.exportedAt ? "已正式导出" : "已保存"}</span></div></td>
+    <td><div class="document-history-title"><b>${escapeHtml(record.customerName)}</b><span>${escapeHtml(record.dealTitle)}</span></div></td>
+    <td><div class="document-history-title"><b>${record.documentType === "PI" ? "PI" : "报价单"}</b><span>${escapeHtml(record.documentNumber)} · v${record.documentRevision}</span></div></td>
+    <td><div class="quote-history-product"><b>${escapeHtml(quoteHistoryProductSummary(record))}</b><span>${record.items.length} 项产品</span></div></td>
+    <td><strong>${escapeHtml(formatDocumentMoney(record.totalAmount, record.currency))}</strong></td>
+    <td>${escapeHtml(record.operatorName)}</td>
+    <td><div class="quote-history-change"><b>${escapeHtml(record.changes[0] || "报价明细已同步")}</b>${record.changes.length > 1 ? `<span>另有 ${record.changes.length - 1} 项变化</span>` : ""}</div></td>
+    <td><button class="btn" type="button" data-quote-history-open="${escapeHtml(record.id)}">详情</button></td>
+  </tr>`).join("") : `<tr><td colspan="8" class="empty-cell">没有符合条件的报价记录</td></tr>`;
+  qsa<HTMLButtonElement>("[data-quote-history-open]", rows).forEach((button) => button.addEventListener("click", () => {
+    const record = result.records.find((item) => item.id === button.dataset.quoteHistoryOpen);
+    if (record) openQuoteHistoryDetail(record);
+  }));
+}
+
+function renderQuoteProductAnalysis(analysis: QuoteHistoryResponse["productAnalysis"]) {
+  const summary = qs<HTMLElement>("#quoteHistoryProductSummary");
+  const overview = qs<HTMLElement>("#quoteHistoryProductOverview");
+  const rows = qs<HTMLElement>("#quoteHistoryProductRows");
+  const items = analysis?.rows || [];
+  if (summary) summary.innerHTML = `<b>${items.length}</b> 个产品 / 国家 / 币种组合 · ${analysis?.totalRecords || 0} 次报价<span>最低、最高、平均和最近单价均按币种独立统计</span>`;
+  if (overview) {
+    const overall = analysis?.overall || [];
+    const countryRanges = analysis?.countryRanges || [];
+    overview.innerHTML = `<div class="quote-analysis-overall"><span>当前筛选结果 · 整体报价范围</span>${overall.length ? overall.map((range) => `<div><b>${escapeHtml(formatDocumentMoney(range.minUnitPrice, range.currency))} - ${escapeHtml(formatDocumentMoney(range.maxUnitPrice, range.currency))}</b><small>${escapeHtml(range.currency)} · ${range.quoteCount} 次报价 · 覆盖 ${range.countryCount} 个国家 · 平均 ${escapeHtml(formatDocumentMoney(range.averageUnitPrice, range.currency))}</small></div>`).join("") : `<strong>暂无整体报价范围</strong>`}</div><div class="quote-analysis-countries"><span>不同国家报价范围</span>${countryRanges.length ? countryRanges.map((range) => `<div><b>${escapeHtml(range.country || "未填写国家")}</b><strong>${escapeHtml(formatDocumentMoney(range.minUnitPrice, range.currency))} - ${escapeHtml(formatDocumentMoney(range.maxUnitPrice, range.currency))}</strong><small>${escapeHtml(range.currency)} · ${range.quoteCount} 次 · 平均 ${escapeHtml(formatDocumentMoney(range.averageUnitPrice, range.currency))}</small></div>`).join("") : `<strong>暂无国家报价范围</strong>`}</div>`;
+  }
+  if (!rows) return;
+  rows.innerHTML = items.length ? items.map((row, index) => `<tr>
+    <td><div class="quote-history-product"><b>${escapeHtml([row.product, row.model].filter(Boolean).join(" / "))}</b><span>${row.quoteCount} 次历史报价</span></div></td>
+    <td>${escapeHtml(row.country)}</td>
+    <td>${escapeHtml(row.currency)}</td>
+    <td>${row.quoteCount}</td>
+    <td><strong>${escapeHtml(formatDocumentMoney(row.minUnitPrice, row.currency))}</strong></td>
+    <td><strong>${escapeHtml(formatDocumentMoney(row.maxUnitPrice, row.currency))}</strong></td>
+    <td>${escapeHtml(formatDocumentMoney(row.averageUnitPrice, row.currency))}</td>
+    <td><div class="quote-history-product"><b>${escapeHtml(formatDocumentMoney(row.latestUnitPrice, row.currency))}</b><span>${escapeHtml(row.latestQuotedAt ? formatDateTime(row.latestQuotedAt) : "-")}</span></div></td>
+    <td><button class="btn" type="button" data-quote-product-analysis-open="${index}">明细</button></td>
+  </tr>`).join("") : `<tr><td colspan="9" class="empty-cell">请输入产品名或型号，再查询单款产品的历史报价范围</td></tr>`;
+  qsa<HTMLButtonElement>("[data-quote-product-analysis-open]", rows).forEach((button) => button.addEventListener("click", () => {
+    const row = items[Number(button.dataset.quoteProductAnalysisOpen)];
+    if (row) openQuoteProductAnalysisDetail(row);
+  }));
+}
+
+function resetQuoteHistoryFilters() {
+  ["quoteHistoryKeyword", "quoteHistoryProduct", "quoteHistoryFrom", "quoteHistoryTo", "quoteHistoryCustomer", "quoteHistoryDeal", "quoteHistoryCountry"].forEach((id) => { const input = qs<HTMLInputElement>(`#${id}`); if (input) input.value = ""; });
+  ["quoteHistoryDocumentType", "quoteHistoryCurrency"].forEach((id) => { const select = qs<HTMLSelectElement>(`#${id}`); if (select) select.value = ""; });
+  state.quoteHistoryFocusId = "";
+  state.quoteHistoryPage = 1;
+  void loadQuoteHistory();
+}
+
+function openQuoteHistoryForDeal(dealId: string) {
+  closeDealDrawer();
+  activateNavView("documents");
+  populateQuoteHistoryFilters();
+  const deal = qs<HTMLInputElement>("#quoteHistoryDeal");
+  const selectedDeal = quoteHistoryDeals().find((item) => item.id === dealId);
+  if (deal) deal.value = selectedDeal ? quoteHistoryDealLabel(selectedDeal) : "";
+  setQuoteHistoryMode("records", false);
+  state.quoteHistoryPage = 1;
+  state.quoteHistoryFocusId = "";
+  setDocumentWorkspaceMode("quote-history");
+}
+
 function fillDocumentEditor(document: TradeDocument) {
   setDocumentType(document.type);
   renderDocumentWorkflow(document);
@@ -15845,11 +17127,12 @@ function fillDocumentEditor(document: TradeDocument) {
     docIssueDateInput: document.issueDate,
     docTemplateInput: document.templateStyle,
     docLanguageInput: document.language || "EN",
-    docThemeInput: document.templateStyle || "indigo",
+    docThemeInput: document.templateStyle || "rose",
     docBuyerInput: document.buyer,
     docBuyerContactInput: document.buyerContact,
     docBuyerAddressInput: document.buyerAddress,
     docSellerInput: document.seller,
+    docBrandMarkTextInput: document.brandMarkText || "",
     docSellerContactInput: document.sellerContact || "",
     docSellerPhoneInput: document.sellerPhone || "",
     docSellerEmailInput: document.sellerEmail || "",
@@ -15866,18 +17149,82 @@ function fillDocumentEditor(document: TradeDocument) {
     docBankInput: document.bankInfo,
     docNotesInput: document.notes
   };
+  const shippingCost = document.items.find((item) => item.lineType === "shipping_cost")?.unitPrice || 0;
+  values.docShippingCostInput = shippingCost ? String(shippingCost) : "";
   Object.entries(values).forEach(([id, value]) => {
     const input = qs<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`#${id}`);
     if (input) input.value = value || "";
   });
   renderDocumentItems(document.items);
+  syncShippingCostLabel();
   renderDocThemeSwatches(document.templateStyle);
   renderDocumentPreview(collectDocumentDraft());
+}
+
+function applySellerProfileToEditor(profile: DocumentLetterhead, reason: string) {
+  const values: Record<string, string> = {
+    docSellerInput: profile.companyName,
+    docSellerAddressInput: profile.address,
+    docSellerContactInput: profile.contact || "",
+    docSellerPhoneInput: profile.phone,
+    docSellerEmailInput: profile.email,
+    docSellerWebsiteInput: profile.website,
+    docSellerTaxNoInput: profile.taxNo || "",
+    docBankInput: profile.bankInfo,
+    docStampIdInput: profile.stampId || "",
+    docSignatureIdInput: profile.signatureId || ""
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const input = qs<HTMLInputElement | HTMLTextAreaElement>(`#${id}`);
+    if (input) input.value = value;
+  });
+  const select = qs<HTMLSelectElement>("#docSellerProfileInput");
+  if (select) select.value = profile.id;
+  const hint = qs<HTMLElement>("#docSellerMatchHint");
+  if (hint) hint.textContent = reason;
+  renderDocumentPreview(collectDocumentDraft());
+}
+
+function applyFallbackSellerToEditor(reason = "使用团队兜底卖方资料") {
+  const profile = state.documentDefaultProfile;
+  const values: Record<string, string> = {
+    docSellerInput: profile?.seller || "",
+    docBrandMarkTextInput: profile?.brandMarkText || "",
+    docSellerAddressInput: profile?.sellerAddress || "",
+    docSellerContactInput: profile?.sellerContact || "",
+    docSellerPhoneInput: profile?.sellerPhone || "",
+    docSellerEmailInput: profile?.sellerEmail || "",
+    docSellerWebsiteInput: profile?.sellerWebsite || "",
+    docSellerTaxNoInput: profile?.sellerTaxNo || "",
+    docBankInput: profile?.bankInfo || "",
+    docStampIdInput: profile?.stampId || "",
+    docSignatureIdInput: profile?.signatureId || ""
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const input = qs<HTMLInputElement | HTMLTextAreaElement>(`#${id}`);
+    if (input) input.value = value;
+  });
+  const select = qs<HTMLSelectElement>("#docSellerProfileInput");
+  if (select) select.value = "";
+  const hint = qs<HTMLElement>("#docSellerMatchHint");
+  if (hint) hint.textContent = reason;
+  renderDocumentPreview(collectDocumentDraft());
+}
+
+function applyMatchedSellerToEditor(customer?: Customer, deal?: Deal, type = currentDocumentType()) {
+  const currency = qs<HTMLSelectElement>("#docCurrencyInput")?.value || deal?.currency || state.documentDefaultProfile?.currency || "USD";
+  const profile = matchedSellerProfile(customer, currency, type);
+  if (!profile) {
+    applyFallbackSellerToEditor("未命中卖方公司规则，已使用兜底卖方资料");
+    return;
+  }
+  applySellerProfileToEditor(profile, `已自动匹配 · ${sellerProfileMatchReason(profile, customer, currency, type)}`);
 }
 
 function renderDocumentWorkflow(document: TradeDocument) {
   const customerSelect = qs<HTMLSelectElement>("#docCustomerInput");
   const dealSelect = qs<HTMLSelectElement>("#docDealInput");
+  const sellerSelect = qs<HTMLSelectElement>("#docSellerProfileInput");
   if (customerSelect) {
     customerSelect.innerHTML = `<option value="">未关联客户</option>${state.customers.map((customer) => `<option value="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}${customer.country ? ` · ${escapeHtml(customer.country)}` : ""}</option>`).join("")}`;
     customerSelect.value = document.customerId || "";
@@ -15887,6 +17234,23 @@ function renderDocumentWorkflow(document: TradeDocument) {
     dealSelect.innerHTML = `<option value="">未关联商机</option>${visibleDeals.map((deal) => `<option value="${escapeHtml(deal.id)}">${escapeHtml(deal.title)} · ${escapeHtml(deal.stage)}</option>`).join("")}`;
     dealSelect.value = document.dealId || "";
   }
+  if (sellerSelect) {
+    const selected = state.documentAssets.letterheads.find((item) => item.id === document.letterheadId);
+    sellerSelect.innerHTML = `<option value="">使用兜底卖方资料</option>${selected && !selected.enabled ? `<option value="${escapeHtml(selected.id)}">${escapeHtml(selected.name)} · 已停用历史档案</option>` : ""}${state.documentAssets.letterheads.filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} · ${escapeHtml(item.companyName)}</option>`).join("")}`;
+    sellerSelect.value = document.letterheadId || "";
+    sellerSelect.onchange = () => {
+      const profile = state.documentAssets.letterheads.find((item) => item.id === sellerSelect.value && item.enabled);
+      if (profile) applySellerProfileToEditor(profile, "已人工选择卖方公司");
+      else applyFallbackSellerToEditor();
+    };
+  }
+  const stampInput = qs<HTMLInputElement>("#docStampIdInput");
+  const signatureInput = qs<HTMLInputElement>("#docSignatureIdInput");
+  if (stampInput) stampInput.value = document.stampId || "";
+  if (signatureInput) signatureInput.value = document.signatureId || "";
+  const selectedProfile = state.documentAssets.letterheads.find((item) => item.id === document.letterheadId);
+  const matchHint = qs<HTMLElement>("#docSellerMatchHint");
+  if (matchHint) matchHint.textContent = selectedProfile ? `当前卖方 · ${selectedProfile.name}` : "使用团队兜底卖方资料";
   const status = qs<HTMLElement>("#docStatusBadge");
   if (status) status.textContent = `${documentStatusText(document.status)} · v${document.revision || 1}`;
   const locked = document.status === "approved" || document.status === "exported";
@@ -15912,9 +17276,12 @@ function renderDocumentWorkflow(document: TradeDocument) {
   }
 }
 
-function applyDocumentCustomerDefaults(customerId: string) {
+function applyDocumentCustomerDefaults(customerId: string, deal?: Deal) {
   const customer = state.customers.find((item) => item.id === customerId);
-  if (!customer) return;
+  if (!customer) {
+    applyMatchedSellerToEditor(undefined, deal);
+    return;
+  }
   const values: Record<string, string> = {
     docBuyerInput: customerDocumentName(customer),
     docBuyerAddressInput: customer.billingAddress?.trim() || "",
@@ -15927,6 +17294,7 @@ function applyDocumentCustomerDefaults(customerId: string) {
     const input = qs<HTMLInputElement | HTMLSelectElement>(`#${id}`);
     if (input) input.value = value;
   });
+  applyMatchedSellerToEditor(customer, deal);
   renderDocumentPreview(collectDocumentDraft());
 }
 
@@ -16052,6 +17420,7 @@ function currentDocumentType(): "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "Q
 function renderDocumentItems(items: TradeDocumentItem[]) {
   const box = qs<HTMLElement>("#documentItemsEditor");
   if (!box) return;
+  items = items.filter((item) => item.lineType !== "shipping_cost");
   const productOptions = (selectedId = "") => `<option value="">手工填写</option>${state.products.map((product) => `<option value="${escapeHtml(product.id)}" ${product.id === selectedId ? "selected" : ""}>${escapeHtml(product.nameEn || product.nameZh)}${product.model ? ` · ${escapeHtml(product.model)}` : ""}</option>`).join("")}`;
   box.innerHTML = items.map((item, index) => {
     const imageUrl = controlledDocumentImageUrl(item.imageUrl);
@@ -16114,6 +17483,7 @@ function collectDocumentItems(): TradeDocumentItem[] {
     const numberField = (name: string) => Number(row.querySelector<HTMLInputElement>(`[data-doc-field="${name}"]`)?.value || 0);
     return {
       id: row.dataset.docItem || `item_${index}`,
+      lineType: "product" as const,
       productId: row.dataset.productId || "",
       imageUrl: row.dataset.imageUrl || "",
       product: field("product"),
@@ -16131,8 +17501,44 @@ function collectDocumentItems(): TradeDocumentItem[] {
   });
 }
 
+function shippingCostLabel(language = qs<HTMLSelectElement>("#docLanguageInput")?.value || "EN") {
+  return ({
+    EN: "Shipping Cost",
+    ES: "Coste de envío",
+    RU: "Стоимость доставки",
+    AR: "تكلفة الشحن",
+    ZH: "运费"
+  } as Record<string, string>)[language] || "Shipping Cost";
+}
+
+function syncShippingCostLabel() {
+  const label = qs<HTMLElement>("#docShippingCostLabel");
+  if (label) label.textContent = shippingCostLabel();
+}
+
+function documentItemDisplayName(document: TradeDocument, item: TradeDocumentItem) {
+  return item.lineType === "shipping_cost" ? shippingCostLabel(document.language) : item.product;
+}
+
 function collectDocumentDraft(): TradeDocument {
   const existing = state.tradeDocuments.find((document) => document.id === state.selectedDocumentId);
+  const items = collectDocumentItems();
+  const shippingCost = Number(qs<HTMLInputElement>("#docShippingCostInput")?.value || 0);
+  if (shippingCost > 0) {
+    items.push({
+      id: "shipping_cost",
+      lineType: "shipping_cost",
+      product: shippingCostLabel(),
+      model: "",
+      hsCode: "",
+      quantity: 1,
+      unit: "LOT",
+      unitPrice: shippingCost,
+      originCountry: "",
+      weightKg: 0,
+      packageCount: 0
+    });
+  }
   return {
     id: existing?.id || state.selectedDocumentId || "__new__",
     customerId: qs<HTMLSelectElement>("#docCustomerInput")?.value || existing?.customerId || "",
@@ -16148,6 +17554,7 @@ function collectDocumentDraft(): TradeDocument {
     buyerAddress: qs<HTMLInputElement>("#docBuyerAddressInput")?.value.trim() || "",
     buyerContact: qs<HTMLInputElement>("#docBuyerContactInput")?.value.trim() || "",
     seller: qs<HTMLInputElement>("#docSellerInput")?.value.trim() || "",
+    brandMarkText: qs<HTMLInputElement>("#docBrandMarkTextInput")?.value.trim() || "",
     sellerAddress: qs<HTMLInputElement>("#docSellerAddressInput")?.value.trim() || "",
     sellerContact: qs<HTMLInputElement>("#docSellerContactInput")?.value.trim() || "",
     sellerPhone: qs<HTMLInputElement>("#docSellerPhoneInput")?.value.trim() || "",
@@ -16163,26 +17570,119 @@ function collectDocumentDraft(): TradeDocument {
     validityDate: qs<HTMLInputElement>("#docValidityInput")?.value || "",
     bankInfo: qs<HTMLTextAreaElement>("#docBankInput")?.value.trim() || "",
     notes: qs<HTMLTextAreaElement>("#docNotesInput")?.value.trim() || "",
-    templateStyle: (qs<HTMLSelectElement>("#docThemeInput")?.value as TradeDocument["templateStyle"]) || (qs<HTMLSelectElement>("#docTemplateInput")?.value as TradeDocument["templateStyle"]) || "indigo",
+    templateStyle: (qs<HTMLSelectElement>("#docThemeInput")?.value as TradeDocument["templateStyle"]) || (qs<HTMLSelectElement>("#docTemplateInput")?.value as TradeDocument["templateStyle"]) || "rose",
     language: (qs<HTMLSelectElement>("#docLanguageInput")?.value as TradeDocument["language"]) || "EN",
     status: existing?.status || "draft",
     audits: existing?.audits || [],
     sendRecords: existing?.sendRecords || [],
-    letterheadId: existing?.letterheadId || "",
-    stampId: existing?.stampId || "",
-    signatureId: existing?.signatureId || "",
+    letterheadId: qs<HTMLSelectElement>("#docSellerProfileInput")?.value ?? existing?.letterheadId ?? "",
+    stampId: qs<HTMLInputElement>("#docStampIdInput")?.value ?? existing?.stampId ?? "",
+    signatureId: qs<HTMLInputElement>("#docSignatureIdInput")?.value ?? existing?.signatureId ?? "",
     includeProductImages: existing?.includeProductImages || false,
     letterheadSnapshot: existing?.letterheadSnapshot,
     stampSnapshot: existing?.stampSnapshot,
     signatureSnapshot: existing?.signatureSnapshot,
     updatedAt: new Date().toISOString(),
-    items: collectDocumentItems()
+    items
   };
 }
 
+function documentEditableSnapshot(document: TradeDocument) {
+  return {
+    customerId: document.customerId || "",
+    dealId: document.dealId || "",
+    type: document.type,
+    title: document.title || "",
+    number: document.number || "",
+    issueDate: document.issueDate || "",
+    buyer: document.buyer || "",
+    buyerAddress: document.buyerAddress || "",
+    buyerContact: document.buyerContact || "",
+    seller: document.seller || "",
+    brandMarkText: document.brandMarkText || "",
+    sellerAddress: document.sellerAddress || "",
+    sellerContact: document.sellerContact || "",
+    sellerPhone: document.sellerPhone || "",
+    sellerEmail: document.sellerEmail || "",
+    sellerWebsite: document.sellerWebsite || "",
+    sellerTaxNo: document.sellerTaxNo || "",
+    currency: document.currency || "",
+    incoterm: document.incoterm || "",
+    paymentTerm: document.paymentTerm || "",
+    shippingMethod: document.shippingMethod || "",
+    portLoading: document.portLoading || "",
+    portDischarge: document.portDischarge || "",
+    validityDate: document.validityDate || "",
+    bankInfo: document.bankInfo || "",
+    notes: document.notes || "",
+    language: document.language || "EN",
+    templateStyle: document.templateStyle || "rose",
+    letterheadId: document.letterheadId || "",
+    stampId: document.stampId || "",
+    signatureId: document.signatureId || "",
+    includeProductImages: Boolean(document.includeProductImages),
+    items: (document.items || []).map((item) => ({
+      id: item.id || "",
+      lineType: item.lineType || "product",
+      productId: item.productId || "",
+      imageUrl: item.imageUrl || "",
+      product: item.product || "",
+      model: item.model || "",
+      material: item.material || "",
+      finish: item.finish || "",
+      hsCode: item.hsCode || "",
+      quantity: Number(item.quantity) || 0,
+      unit: item.unit || "",
+      unitPrice: Number(item.unitPrice) || 0,
+      originCountry: item.originCountry || "",
+      weightKg: Number(item.weightKg) || 0,
+      packageCount: Number(item.packageCount) || 0
+    }))
+  };
+}
+
+function documentDraftHasChanges(draft: TradeDocument, source: TradeDocument) {
+  return JSON.stringify(documentEditableSnapshot(draft)) !== JSON.stringify(documentEditableSnapshot(source));
+}
+
+async function saveLockedDocumentDraftAsRevision(source: TradeDocument, draft: TradeDocument) {
+  if (draft.customerId !== source.customerId || draft.dealId !== source.dealId) {
+    throw new Error("已审批或已导出的单据不能更换客户或商机，请先恢复原关联后再导出");
+  }
+  const revisionResult = await api<{ document: TradeDocument }>(`/api/trade-documents/${source.id}/revision`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+  const revision = revisionResult.document;
+  const saved = await api<{
+    document: TradeDocument;
+    dealSync?: { deal: Deal; history: QuoteHistoryRecord; changes: string[]; changed: boolean } | null;
+  }>(`/api/trade-documents/${revision.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      ...draft,
+      customerId: revision.customerId,
+      dealId: revision.dealId,
+      revision: revision.revision,
+      number: revision.number,
+      title: draft.title === source.title ? revision.title : draft.title,
+      status: "ready"
+    })
+  });
+  state.tradeDocuments = [saved.document, ...state.tradeDocuments.filter((document) => document.id !== saved.document.id)];
+  state.selectedDocumentId = saved.document.id;
+  if (saved.dealSync?.deal) {
+    state.deals = state.deals.map((deal) => deal.id === saved.dealSync!.deal.id ? saved.dealSync!.deal : deal);
+    await refreshDealsData(false);
+    toast(`新版本已保存，商机已同步 ${saved.dealSync.deal.items?.length || 0} 项产品及 ${formatDocumentMoney(saved.dealSync.deal.amount, saved.dealSync.deal.currency)}`);
+  }
+  renderTradeDocuments(state.tradeDocuments);
+  return saved.document;
+}
+
 const DOC_I18N: Record<string, Record<string, string>> = {
-  EN: { seller:"Seller", buyer:"Buyer", incoterm:"Incoterm", payment:"Payment", shipment:"Shipment", validity:"Validity", portLoading:"Port of Loading", portDischarge:"Port of Discharge", docType:"Document Type", status:"Status", description:"Description", model:"Model", hsCode:"HS Code", qty:"Qty", unitPrice:"Unit Price", amount:"Amount", origin:"Origin", weight:"Weight", pkgs:"Pkgs", totalAmount:"Total Amount", bankNotes:"Bank / Notes", authorized:"AUTHORIZED", no:"No.", date:"Date", currency:"Currency", netWeight:"Net Weight", grossWeight:"Gross Weight", totalPackages:"Total Packages", totalWeight:"Total Weight", countryOfOrigin:"Country of Origin", signedBy:"Signed By", dateOfIssue:"Date of Issue", vessel:"Vessel", blNo:"B/L No.", container:"Container", eta:"ETA", etd:"ETD", marks:"Marks & Numbers", descriptionOfGoods:"Description of Goods", quantity:"Quantity", unit:"Unit", packageType:"Package Type", terms:"Terms & Conditions", signatures:"Signatures", sellerSign:"For and on behalf of Seller", buyerSign:"For and on behalf of Buyer", thisIsToCertify:"This is to certify that the goods mentioned in this invoice originated in", issuedUnder:"Issued under", referenceNo:"Reference No.", subject:"Subject", dearSirs:"Dear Sirs,", weArePleased:"We are pleased to inform you that the following shipment has been dispatched:", regards:"Best Regards", packingListDesc:"Packing List", contractDesc:"Sales Contract", quotationDesc:"Quotation", quoteValidUntil:"Quote Valid Until", quotedBy:"Quoted By", acceptedBy:"Accepted By", quoteTerms:"Quotation Terms", priceSubjectToChange:"Prices are subject to final confirmation. This quotation expires after the validity date.", revisionLabel:"Rev.", quoteNumber:"Quote No.", cooDesc:"Certificate of Origin", shippingDesc:"Shipping Advice", proformaDesc:"Proforma Invoice", commercialDesc:"Commercial Invoice", customsTitle:"Customs Clearance Documents", customsSub:"Customs Declaration Package", exportDate:"Export Date", customsDecl:"Customs Declaration", declElements:"Declaration Elements", invoice:"Invoice", packingListShort:"Packing List", contractDoc:"Contract", authorization:"Power of Attorney", fillingGuide:"Filing Guide", shipperInfo:"Shipper Information", consigneeInfo:"Consignee Information", companyName:"Company Name", companyAddress:"Company Address", contactInfo:"Contact", transportInfo:"Transport & Logistics", totalGrossWeight:"Total Gross Weight", packageCount:"Package Count", tradeTerms:"Trade Terms", goodsList:"Goods Detail List", itemsUnit:"items", goodsName:"Goods Name", paymentTradeTerms:"Payment & Trade Terms", paymentCondition:"Payment Terms", customsNotice:"Please verify HS codes, brand/model, weight and other customs declaration elements" },
-  ES: { seller:"Vendedor", buyer:"Comprador", incoterm:"Incoterm", payment:"Pago", shipment:"Envío", validity:"Validez", portLoading:"Puerto de Carga", portDischarge:"Puerto de Descarga", docType:"Tipo de Documento", status:"Estado", description:"Descripción", model:"Modelo", hsCode:"Código HS", qty:"Cant.", unitPrice:"Precio Unit.", amount:"Importe", origin:"Origen", weight:"Peso", pkgs:"Bultos", totalAmount:"Total", bankNotes:"Banco / Notas", authorized:"AUTORIZADO", no:"Nº", date:"Fecha", currency:"Moneda", netWeight:"Peso Neto", grossWeight:"Peso Bruto", totalPackages:"Total Bultos", totalWeight:"Peso Total", countryOfOrigin:"País de Origen", signedBy:"Firmado por", dateOfIssue:"Fecha de Emisión", vessel:"Buque", blNo:"Nº B/L", container:"Contenedor", eta:"ETA", etd:"ETD", marks:"Marcas y Números", descriptionOfGoods:"Descripción de Mercancías", quantity:"Cantidad", unit:"Unidad", packageType:"Tipo de Embalaje", terms:"Términos y Condiciones", signatures:"Firmas", sellerSign:"En nombre del Vendedor", buyerSign:"En nombre del Comprador", thisIsToCertify:"Por la presente se certifica que las mercancías mencionadas en esta factura son originarias de", issuedUnder:"Emitido bajo", referenceNo:"Nº de Referencia", subject:"Asunto", dearSirs:"Estimados Señores,", weArePleased:"Nos complace informarle que el siguiente envío ha sido despachado:", regards:"Saludos Cordiales", packingListDesc:"Lista de Empaque", contractDesc:"Contrato de Venta", quotationDesc:"Cotización", quoteValidUntil:"Oferta válida hasta", quotedBy:"Cotizado por", acceptedBy:"Aceptado por", quoteTerms:"Términos de la Cotización", priceSubjectToChange:"Los precios están sujetos a confirmación final. Esta cotización expira después de la fecha de validez.", revisionLabel:"Rev.", quoteNumber:"Nº de Cotización", cooDesc:"Certificado de Origen", shippingDesc:"Aviso de Embarque", proformaDesc:"Factura Proforma", commercialDesc:"Factura Comercial", customsTitle:"Documentos de Despacho Aduanero", customsSub:"Paquete de Declaración Aduanera", exportDate:"Fecha de Exportación", customsDecl:"Declaración Aduanera", declElements:"Elementos de Declaración", invoice:"Factura", packingListShort:"Lista de Empaque", contractDoc:"Contrato", authorization:"Carta Poder", fillingGuide:"Guía de Declaración", shipperInfo:"Información del Exportador", consigneeInfo:"Información del Consignatario", companyName:"Nombre de la Empresa", companyAddress:"Dirección de la Empresa", contactInfo:"Contacto", transportInfo:"Transporte y Logística", totalGrossWeight:"Peso Bruto Total", packageCount:"Número de Bultos", tradeTerms:"Términos Comerciales", goodsList:"Lista Detallada de Mercancías", itemsUnit:"artículos", goodsName:"Nombre del Producto", paymentTradeTerms:"Pago y Términos Comerciales", paymentCondition:"Condiciones de Pago", customsNotice:"Verifique códigos HS, marca/modelo, peso y otros elementos de declaración aduanera" },
+  EN: { seller:"Seller", buyer:"Buyer", incoterm:"Incoterm", payment:"Payment", shipment:"Shipment", validity:"Validity", portLoading:"Port of Loading", portDischarge:"Port of Discharge", docType:"Document Type", status:"Status", description:"Description", model:"Model", hsCode:"HS Code", qty:"Qty", unitPrice:"Unit Price", amount:"Amount", origin:"Origin", weight:"Weight", pkgs:"Pkgs", shippingCost:"Shipping Cost", totalAmount:"Total Amount", bankNotes:"Bank / Notes", authorized:"AUTHORIZED", no:"No.", date:"Date", currency:"Currency", netWeight:"Net Weight", grossWeight:"Gross Weight", totalPackages:"Total Packages", totalWeight:"Total Weight", countryOfOrigin:"Country of Origin", signedBy:"Signed By", dateOfIssue:"Date of Issue", vessel:"Vessel", blNo:"B/L No.", container:"Container", eta:"ETA", etd:"ETD", marks:"Marks & Numbers", descriptionOfGoods:"Description of Goods", quantity:"Quantity", unit:"Unit", packageType:"Package Type", terms:"Terms & Conditions", signatures:"Signatures", sellerSign:"For and on behalf of Seller", buyerSign:"For and on behalf of Buyer", thisIsToCertify:"This is to certify that the goods mentioned in this invoice originated in", issuedUnder:"Issued under", referenceNo:"Reference No.", subject:"Subject", dearSirs:"Dear Sirs,", weArePleased:"We are pleased to inform you that the following shipment has been dispatched:", regards:"Best Regards", packingListDesc:"Packing List", contractDesc:"Sales Contract", quotationDesc:"Quotation", quoteValidUntil:"Quote Valid Until", quotedBy:"Quoted By", acceptedBy:"Accepted By", quoteTerms:"Quotation Terms", priceSubjectToChange:"Prices are subject to final confirmation. This quotation expires after the validity date.", revisionLabel:"Rev.", quoteNumber:"Quote No.", cooDesc:"Certificate of Origin", shippingDesc:"Shipping Advice", proformaDesc:"Proforma Invoice", commercialDesc:"Commercial Invoice", customsTitle:"Customs Clearance Documents", customsSub:"Customs Declaration Package", exportDate:"Export Date", customsDecl:"Customs Declaration", declElements:"Declaration Elements", invoice:"Invoice", packingListShort:"Packing List", contractDoc:"Contract", authorization:"Power of Attorney", fillingGuide:"Filing Guide", shipperInfo:"Shipper Information", consigneeInfo:"Consignee Information", companyName:"Company Name", companyAddress:"Company Address", contactInfo:"Contact", transportInfo:"Transport & Logistics", totalGrossWeight:"Total Gross Weight", packageCount:"Package Count", tradeTerms:"Trade Terms", goodsList:"Goods Detail List", itemsUnit:"items", goodsName:"Goods Name", paymentTradeTerms:"Payment & Trade Terms", paymentCondition:"Payment Terms", customsNotice:"Please verify HS codes, brand/model, weight and other customs declaration elements" },
+  ES: { seller:"Vendedor", buyer:"Comprador", incoterm:"Incoterm", payment:"Pago", shipment:"Envío", validity:"Validez", portLoading:"Puerto de Carga", portDischarge:"Puerto de Descarga", docType:"Tipo de Documento", status:"Estado", description:"Descripción", model:"Modelo", hsCode:"Código HS", qty:"Cant.", unitPrice:"Precio Unit.", amount:"Importe", origin:"Origen", weight:"Peso", pkgs:"Bultos", shippingCost:"Coste de envío", totalAmount:"Total", bankNotes:"Banco / Notas", authorized:"AUTORIZADO", no:"Nº", date:"Fecha", currency:"Moneda", netWeight:"Peso Neto", grossWeight:"Peso Bruto", totalPackages:"Total Bultos", totalWeight:"Peso Total", countryOfOrigin:"País de Origen", signedBy:"Firmado por", dateOfIssue:"Fecha de Emisión", vessel:"Buque", blNo:"Nº B/L", container:"Contenedor", eta:"ETA", etd:"ETD", marks:"Marcas y Números", descriptionOfGoods:"Descripción de Mercancías", quantity:"Cantidad", unit:"Unidad", packageType:"Tipo de Embalaje", terms:"Términos y Condiciones", signatures:"Firmas", sellerSign:"En nombre del Vendedor", buyerSign:"En nombre del Comprador", thisIsToCertify:"Por la presente se certifica que las mercancías mencionadas en esta factura son originarias de", issuedUnder:"Emitido bajo", referenceNo:"Nº de Referencia", subject:"Asunto", dearSirs:"Estimados Señores,", weArePleased:"Nos complace informarle que el siguiente envío ha sido despachado:", regards:"Saludos Cordiales", packingListDesc:"Lista de Empaque", contractDesc:"Contrato de Venta", quotationDesc:"Cotización", quoteValidUntil:"Oferta válida hasta", quotedBy:"Cotizado por", acceptedBy:"Aceptado por", quoteTerms:"Términos de la Cotización", priceSubjectToChange:"Los precios están sujetos a confirmación final. Esta cotización expira después de la fecha de validez.", revisionLabel:"Rev.", quoteNumber:"Nº de Cotización", cooDesc:"Certificado de Origen", shippingDesc:"Aviso de Embarque", proformaDesc:"Factura Proforma", commercialDesc:"Factura Comercial", customsTitle:"Documentos de Despacho Aduanero", customsSub:"Paquete de Declaración Aduanera", exportDate:"Fecha de Exportación", customsDecl:"Declaración Aduanera", declElements:"Elementos de Declaración", invoice:"Factura", packingListShort:"Lista de Empaque", contractDoc:"Contrato", authorization:"Carta Poder", fillingGuide:"Guía de Declaración", shipperInfo:"Información del Exportador", consigneeInfo:"Información del Consignatario", companyName:"Nombre de la Empresa", companyAddress:"Dirección de la Empresa", contactInfo:"Contacto", transportInfo:"Transporte y Logística", totalGrossWeight:"Peso Total Bruto", packageCount:"Número de Bultos", tradeTerms:"Términos Comerciales", goodsList:"Lista Detallada de Mercancías", itemsUnit:"artículos", goodsName:"Nombre del Producto", paymentTradeTerms:"Pago y Términos Comerciales", paymentCondition:"Condiciones de Pago", customsNotice:"Verifique códigos HS, marca/modelo, peso y otros elementos de declaración aduanera" },
   RU: { seller:"Продавец", buyer:"Покупатель", incoterm:"Инкотермс", payment:"Оплата", shipment:"Отгрузка", validity:"Срок действия", portLoading:"Порт погрузки", portDischarge:"Порт выгрузки", docType:"Тип документа", status:"Статус", description:"Описание", model:"Модель", hsCode:"Код ТН ВЭД", qty:"Кол-во", unitPrice:"Цена за ед.", amount:"Сумма", origin:"Происхождение", weight:"Вес", pkgs:"Мест", totalAmount:"Итого", bankNotes:"Банк / Примечания", authorized:"АВТОРИЗОВАНО", no:"№", date:"Дата", currency:"Валюта", netWeight:"Чистый вес", grossWeight:"Брутто вес", totalPackages:"Всего мест", totalWeight:"Общий вес", countryOfOrigin:"Страна происхождения", signedBy:"Подписано", dateOfIssue:"Дата выдачи", vessel:"Судно", blNo:"№ коносамента", container:"Контейнер", eta:"ETA", etd:"ETD", marks:"Марки и номера", descriptionOfGoods:"Описание товаров", quantity:"Количество", unit:"Единица", packageType:"Тип упаковки", terms:"Условия", signatures:"Подписи", sellerSign:"От имени Продавца", buyerSign:"От имени Покупателя", thisIsToCertify:"Настоящим удостоверяется, что товары, указанные в этом счете, происхождением из", issuedUnder:"Выдано в соответствии с", referenceNo:"Референс №", subject:"Тема", dearSirs:"Уважаемые господа,", weArePleased:"С удовольствием сообщаем вам, что следующая партия товара была отгружена:", regards:"С уважением", packingListDesc:"Упаковочный лист", contractDesc:"Договор купли-продажи", quotationDesc:"Коммерческое предложение", quoteValidUntil:"Предложение действует до", quotedBy:"Подготовил", acceptedBy:"Принято", quoteTerms:"Условия предложения", priceSubjectToChange:"Цены подлежат окончательному подтверждению. Предложение утрачивает силу после истечения срока действия.", revisionLabel:"Ред.", quoteNumber:"№ предложения", cooDesc:"Сертификат происхождения", shippingDesc:"Извещение об отгрузке", proformaDesc:"Проформа-счет", commercialDesc:"Коммерческий счет", customsTitle:"Таможенные документы", customsSub:"Таможенный пакет декларации", exportDate:"Дата экспорта", customsDecl:"Таможенная декларация", declElements:"Элементы декларации", invoice:"Счет-фактура", packingListShort:"Упаковочный лист", contractDoc:"Договор", authorization:"Доверенность", fillingGuide:"Руководство по заполнению", shipperInfo:"Информация об отправителе", consigneeInfo:"Информация о получателе", companyName:"Название компании", companyAddress:"Адрес компании", contactInfo:"Контакт", transportInfo:"Транспорт и логистика", totalGrossWeight:"Общий брутто вес", packageCount:"Количество мест", tradeTerms:"Торговые термины", goodsList:"Подробный перечень товаров", itemsUnit:"позиций", goodsName:"Наименование товара", paymentTradeTerms:"Оплата и торговые условия", paymentCondition:"Условия оплаты", customsNotice:"Проверьте коды ТН ВЭД, марку/модель, вес и другие элементы таможенной декларации" },
   AR: { seller:"البائع", buyer:"المشتري", incoterm:"إنكوترمز", payment:"الدفع", shipment:"الشحن", validity:"الصلاحية", portLoading:"ميناء التحميل", portDischarge:"ميناء التفريغ", docType:"نوع المستند", status:"الحالة", description:"الوصف", model:"الموديل", hsCode:"رمز HS", qty:"الكمية", unitPrice:"سعر الوحدة", amount:"المبلغ", origin:"المنشأ", weight:"الوزن", pkgs:"العبوات", totalAmount:"المجموع", bankNotes:"البنك / الملاحظات", authorized:"معتمد", no:"رقم", date:"التاريخ", currency:"العملة", netWeight:"الوزن الصافي", grossWeight:"الوزن الإجمالي", totalPackages:"إجمالي العبوات", totalWeight:"الوزن الكلي", countryOfOrigin:"بلد المنشأ", signedBy:"موقّع من", dateOfIssue:"تاريخ الإصدار", vessel:"السفينة", blNo:"رقم بوليصة الشحن", container:"الحاوية", eta:"ETA", etd:"ETD", marks:"العلامات والأرقام", descriptionOfGoods:"وصف البضائع", quantity:"الكمية", unit:"الوحدة", packageType:"نوع التعبئة", terms:"الشروط والأحكام", signatures:"التوقيعات", sellerSign:"نيابة عن البائع", buyerSign:"نيابة عن المشتري", thisIsToCertify:"نشهد بأن البضائع المذكورة في هذه الفاتورة منشأها", issuedUnder:"صدر بموجب", referenceNo:"رقم المرجع", subject:"الموضوع", dearSirs:"السادة المحترمون،", weArePleased:"يسعدنا إعلامكم بأن الشحنة التالية قد تم إرسالها:", regards:"مع خالص التحيات", packingListDesc:"قائمة التعبئة", contractDesc:"عقد البيع", quotationDesc:"عرض سعر", quoteValidUntil:"العرض ساري حتى", quotedBy:"مُعد من قبل", acceptedBy:"مقبول من قبل", quoteTerms:"شروط العرض", priceSubjectToChange:"الأسعار قابلة للتأكيد النهائي. ينتهي هذا العرض بعد تاريخ الصلاحية.", revisionLabel:"إصدار", quoteNumber:"رقم العرض", cooDesc:"شهادة المنشأ", shippingDesc:"إشعار الشحن", proformaDesc:"فاتورة مبدئية", commercialDesc:"فاتورة تجارية", customsTitle:"وثائق التخليص الجمركي", customsSub:"حزمة الإقرار الجمركي", exportDate:"تاريخ التصدير", customsDecl:"الإقرار الجمركي", declElements:"عناصر الإقرار", invoice:"فاتورة", packingListShort:"قائمة التعبئة", contractDoc:"عقد", authorization:"وكالة", fillingGuide:"دليل التعبئة", shipperInfo:"معلومات المُصدّر", consigneeInfo:"معلومات المُستلم", companyName:"اسم الشركة", companyAddress:"عنوان الشركة", contactInfo:"جهة الاتصال", transportInfo:"النقل والخدمات اللوجستية", totalGrossWeight:"إجمالي الوزن الإجمالي", packageCount:"عدد العبوات", tradeTerms:"الشروط التجارية", goodsList:"قائمة تفصيلية للبضائع", itemsUnit:"أصناف", goodsName:"اسم المنتج", paymentTradeTerms:"الدفع والشروط التجارية", paymentCondition:"شروط الدفع", customsNotice:"يرجى التحقق من رموز HS والعلامة/الموديل والوزن وعناصر الإقرار الجمركي الأخرى" },
   ZH: { seller:"卖方", buyer:"买方", incoterm:"贸易条款", payment:"付款条款", shipment:"运输方式", validity:"有效期", portLoading:"装运港", portDischarge:"目的港", docType:"单据类型", status:"状态", description:"品名", model:"型号", hsCode:"HS编码", qty:"数量", unitPrice:"单价", amount:"金额", origin:"原产国", weight:"重量", pkgs:"包装", totalAmount:"合计金额", bankNotes:"银行信息/备注", authorized:"授权签字", no:"编号", date:"日期", currency:"币种", netWeight:"净重", grossWeight:"毛重", totalPackages:"总包装数", totalWeight:"总重量", countryOfOrigin:"原产国", signedBy:"签字人", dateOfIssue:"签发日期", vessel:"船名", blNo:"提单号", container:"集装箱号", eta:"预计到港", etd:"预计开船", marks:"唛头", descriptionOfGoods:"货物描述", quantity:"数量", unit:"单位", packageType:"包装类型", terms:"条款与条件", signatures:"签字", sellerSign:"卖方代表签字", buyerSign:"买方代表签字", thisIsToCertify:"兹证明本发票所列货物原产于", issuedUnder:"签发依据", referenceNo:"参考号", subject:"事由", dearSirs:"敬启者：", weArePleased:"兹通知贵方，以下货物已发运：", regards:"此致敬礼", packingListDesc:"装箱单", contractDesc:"销售合同", quotationDesc:"报价单", quoteValidUntil:"报价有效期至", quotedBy:"报价方签字", acceptedBy:"客户确认签字", quoteTerms:"报价条款", priceSubjectToChange:"价格以最终确认为准，报价有效期后自动失效。", revisionLabel:"版本", quoteNumber:"报价编号", cooDesc:"原产地证书", shippingDesc:"装运通知", proformaDesc:"形式发票", commercialDesc:"商业发票", customsTitle:"报关资料", customsSub:"Customs Clearance Documents", exportDate:"出口日期", customsDecl:"报关单", declElements:"申报要素", invoice:"发票", packingListShort:"箱单", contractDoc:"合同", authorization:"委托书", fillingGuide:"填制规范", shipperInfo:"发货人信息", consigneeInfo:"收货人信息", companyName:"公司名称", companyAddress:"公司地址", contactInfo:"联系方式", transportInfo:"运输与物流信息", totalGrossWeight:"总毛重", packageCount:"包装件数", tradeTerms:"贸易术语", goodsList:"货物明细清单", itemsUnit:"项商品", goodsName:"货物名称", paymentTradeTerms:"支付与贸易条款", paymentCondition:"付款条件", customsNotice:"请核对 HS 编码、品牌型号、重量等海关申报要素" }
@@ -16221,7 +17721,7 @@ function renderDocumentPreview(document: TradeDocument) {
 
   const lang = document.language || "EN";
   const isRTL = lang === "AR";
-  const theme = DOC_THEMES[document.templateStyle] || DOC_THEMES.indigo;
+  const theme = DOC_THEMES[document.templateStyle] || DOC_THEMES.rose;
   const total = documentTotal(document);
   const totalWeight = document.items.reduce((s, i) => s + (i.weightKg || 0), 0);
   const totalPkgs = document.items.reduce((s, i) => s + (i.packageCount || 0), 0);
@@ -16290,7 +17790,7 @@ function renderDocumentPreview(document: TradeDocument) {
         <tbody>${document.items.map((item, index) => {
           let row = `<tr style="border-bottom:1px solid #e5e7eb;">`;
           row += `<td style="padding:8px;text-align:center;">${index + 1}</td>`;
-          row += `<td style="padding:8px;">${escapeHtml(item.product)}</td>`;
+          row += `<td style="padding:8px;">${escapeHtml(documentItemDisplayName(document, item))}</td>`;
           row += `<td style="padding:8px;">${escapeHtml(item.model)}</td>`;
           if (showMaterial) row += `<td style="padding:8px;">${escapeHtml(item.material || "")}</td>`;
           if (showFinish) row += `<td style="padding:8px;">${escapeHtml(item.finish || "")}</td>`;
@@ -16344,10 +17844,12 @@ function renderDocumentPreview(document: TradeDocument) {
       </div>`;
   }
 
+  const brandMarkText = [...(document.brandMarkText || "").trim()].slice(0, 8).join("").toUpperCase() || [...(document.seller || "GJ").trim()].slice(0, 2).join("").toUpperCase() || "GJ";
+  const brandMarkClass = [...brandMarkText].length > 4 ? " is-long" : [...brandMarkText].length > 2 ? " is-medium" : "";
   preview.innerHTML = `
     <div class="doc-print-head">
       <div class="doc-letterhead">
-        <div class="doc-logo-mark" style="background:${theme.primary};">${escapeHtml((document.seller || "GJ").slice(0, 2).toUpperCase())}</div>
+        <div class="doc-logo-mark${brandMarkClass}" style="background:${theme.primary};">${escapeHtml(brandMarkText)}</div>
         <div>
           <b>${escapeHtml(document.seller)}</b>
           <small>${escapeHtml(document.sellerAddress)}</small>
@@ -16397,7 +17899,7 @@ function renderCustomsDocumentPreview(document: TradeDocument, preview: HTMLElem
   const totalPackages = document.items.reduce((sum, item) => sum + (item.packageCount || 0), 0);
   const lang = document.language || "EN";
   const isRTL = lang === "AR";
-  const theme = DOC_THEMES[document.templateStyle] || DOC_THEMES.indigo;
+  const theme = DOC_THEMES[document.templateStyle] || DOC_THEMES.rose;
   const L = (k: string) => docLabel(document, k);
   const showMaterial = document.items.some((item) => Boolean(item.material?.trim()));
   const showFinish = document.items.some((item) => Boolean(item.finish?.trim()));
@@ -16594,7 +18096,7 @@ function renderCustomsDocumentPreview(document: TradeDocument, preview: HTMLElem
         ${document.items.map((item, index) => `
           <div class="table-row">
             <div class="td td-num">${index + 1}</div>
-            <div class="td td-product"><strong>${escapeHtml(item.product)}</strong></div>
+            <div class="td td-product"><strong>${escapeHtml(documentItemDisplayName(document, item))}</strong></div>
             <div class="td">${escapeHtml(item.model)}</div>
             ${showMaterial ? `<div class="td">${escapeHtml(item.material || "")}</div>` : ""}
             ${showFinish ? `<div class="td">${escapeHtml(item.finish || "")}</div>` : ""}
@@ -16677,13 +18179,13 @@ function renderDocThemeSwatches(activeTheme?: string) {
     { id: "rose", color: "#e11d48" }, { id: "slate", color: "#475569" },
     { id: "amber", color: "#d97706" }
   ];
-  const current = activeTheme || qs<HTMLSelectElement>("#docThemeInput")?.value || "indigo";
+  const current = activeTheme || qs<HTMLSelectElement>("#docThemeInput")?.value || "rose";
   wrap.innerHTML = themes.map((t) =>
     `<button type="button" class="doc-swatch-btn${t.id === current ? " active" : ""}" data-theme-swatch="${t.id}" title="${t.id}" style="background:${t.color};color:${t.color};"></button>`
   ).join("");
   qsa<HTMLButtonElement>("[data-theme-swatch]", wrap).forEach((btn) => {
     btn.addEventListener("click", () => {
-      const themeId = btn.dataset.themeSwatch || "indigo";
+      const themeId = btn.dataset.themeSwatch || "rose";
       const th = qs<HTMLSelectElement>("#docThemeInput");
       const tpl = qs<HTMLSelectElement>("#docTemplateInput");
       if (th) th.value = themeId;
@@ -16714,6 +18216,7 @@ function applyDataSource(source: string) {
       Object.entries(vals).forEach(([id, v]) => { const el = qs<HTMLInputElement | HTMLSelectElement>(`#${id}`); if (el) el.value = v; });
     }
     if (deal.currency) { const c = qs<HTMLSelectElement>("#docCurrencyInput"); if (c) c.value = deal.currency; }
+    applyMatchedSellerToEditor(customer, deal);
     // 从商机关联的产品填充行项目
     const dealProducts = (state as any).dealProducts?.filter((dp: any) => dp.dealId === deal.id) || [];
     if (dealProducts.length) {
@@ -16761,9 +18264,12 @@ async function saveTradeDocument() {
     return null;
   }
   const existing = state.tradeDocuments.find((document) => document.id === state.selectedDocumentId);
-  let result: { document: TradeDocument };
+  let result: {
+    document: TradeDocument;
+    dealSync?: { deal: Deal; history: QuoteHistoryRecord; changes: string[]; changed: boolean } | null;
+  };
   try {
-    result = await api<{ document: TradeDocument }>(existing ? `/api/trade-documents/${existing.id}` : "/api/trade-documents", {
+    result = await api<typeof result>(existing ? `/api/trade-documents/${existing.id}` : "/api/trade-documents", {
       method: existing ? "PATCH" : "POST",
       body: JSON.stringify({ ...draft, status: "ready" })
     });
@@ -16776,36 +18282,68 @@ async function saveTradeDocument() {
     : [result.document, ...state.tradeDocuments];
   state.selectedDocumentId = result.document.id;
   renderTradeDocuments(state.tradeDocuments);
-  toast("单据配置已保存到数据库");
+  if (result.dealSync?.deal) {
+    state.deals = state.deals.map((deal) => deal.id === result.dealSync!.deal.id ? result.dealSync!.deal : deal);
+    if (!state.deals.some((deal) => deal.id === result.dealSync!.deal.id)) state.deals.unshift(result.dealSync.deal);
+    await refreshDealsData(false);
+    toast(result.dealSync.changed
+      ? `单据已保存，商机已同步 ${result.dealSync.deal.items?.length || 0} 项产品及 ${formatDocumentMoney(result.dealSync.deal.amount, result.dealSync.deal.currency)}`
+      : "单据已保存，报价内容未变化，无需重复记录");
+  } else {
+    toast("单据配置已保存到数据库");
+  }
+  if (advancedExcelEditReturnTemplateId) {
+    const templateId = advancedExcelEditReturnTemplateId;
+    advancedExcelEditReturnTemplateId = "";
+    window.setTimeout(() => {
+      const previewButton = document.createElement("button");
+      previewButton.textContent = "预览";
+      void previewAdvancedExcel(result.document, templateId, previewButton);
+    }, 0);
+  }
   return result.document;
 }
 
 async function exportTradeDocumentPdf() {
   const current = activeTradeDocument();
-  const saved = current.id !== "__new__" && (current.status === "approved" || current.status === "exported")
-    ? current
-    : await saveTradeDocument();
-  if (!saved) return;
-  const preview = qs<HTMLElement>("#documentPreview");
-  if (!preview) {
-    toast("未找到单据预览，无法导出", "error");
-    return;
-  }
-  const fileName = `${saved.number || "document"}-${saved.type}.pdf`;
-  if (saved.status === "approved" || saved.status === "exported") {
-    try {
-      const result = await api<{ document: TradeDocument; job: ImportExportJob; fileName: string }>(`/api/trade-documents/${saved.id}/export`, { method: "POST" });
-      state.tradeDocuments = state.tradeDocuments.map((document) => document.id === result.document.id ? result.document : document);
-      state.jobs.unshift(result.job);
-      renderTradeDocuments(state.tradeDocuments);
-      renderJobs(state.jobs);
-    } catch {
-      // 后端标记失败不影响客户端导出
+  const draft = collectDocumentDraft();
+  let saved: TradeDocument | null = null;
+  let createdRevision = false;
+  try {
+    if (current.id !== "__new__" && (current.status === "approved" || current.status === "exported")) {
+      saved = documentDraftHasChanges(draft, current)
+        ? await saveLockedDocumentDraftAsRevision(current, draft)
+        : current;
+      createdRevision = saved.id !== current.id;
+    } else {
+      saved = await saveTradeDocument();
     }
-  } else {
-    toast("单据尚未审批，已直接导出当前预览 PDF");
+    if (!saved) return;
+    const preview = qs<HTMLElement>("#documentPreview");
+    if (!preview) {
+      toast("未找到单据预览，无法导出", "error");
+      return;
+    }
+    const fileName = `${saved.number || "document"}-${saved.type}.pdf`;
+    if (saved.status === "approved" || saved.status === "exported") {
+      try {
+        const result = await api<{ document: TradeDocument; job: ImportExportJob; fileName: string }>(`/api/trade-documents/${saved.id}/export`, { method: "POST" });
+        state.tradeDocuments = state.tradeDocuments.map((document) => document.id === result.document.id ? result.document : document);
+        state.jobs.unshift(result.job);
+        renderTradeDocuments(state.tradeDocuments);
+        renderJobs(state.jobs);
+      } catch (error) {
+        toast(`正式导出记录失败，继续下载当前 PDF：${error instanceof Error ? error.message : "请求失败"}`, "error");
+      }
+    } else if (createdRevision) {
+      toast("已另存为新版本，已导出当前修改内容；如需正式导出请提交审批");
+    } else {
+      toast("单据尚未审批，已直接导出当前预览 PDF");
+    }
+    await downloadDocumentPdf(qs<HTMLElement>("#documentPreview") || preview, fileName);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "单据 PDF 导出失败", "error");
   }
-  await downloadDocumentPdf(preview, fileName);
 }
 
 function printDocumentPreview() {
@@ -16830,6 +18368,7 @@ function printDocumentPreview() {
 
 // 直接把单据预览渲染成彩色 PDF 并下载，绕开浏览器打印对话框（避免背景色丢失）
 async function downloadDocumentPdf(preview: HTMLElement, fileName: string) {
+  let captureHost: HTMLDivElement | null = null;
   try {
     toast("正在生成 PDF…");
     const { toPng } = await import("html-to-image");
@@ -16837,7 +18376,42 @@ async function downloadDocumentPdf(preview: HTMLElement, fileName: string) {
     // html-to-image 使用浏览器原生渲染（SVG foreignObject），完整支持 color-mix / oklch /
     // color() 等现代 CSS 颜色函数。html2canvas 1.4.1 解析不了这些颜色会直接抛
     // "Attempting to parse an unsupported color function" 并降级到无背景的打印预览（黑屏）。
-    const dataUrl = await toPng(preview, {
+    // Capture an isolated A4-width copy. The live preview can be narrower
+    // than A4 inside the three-column studio; capturing it directly lets its
+    // auto-centering margin shift the image and clips the right-hand columns.
+    // html-to-image also defaults to clientHeight, so the copy must expose its
+    // full scrollHeight before it is converted to an image.
+    const captureWidth = 794;
+    captureHost = document.createElement("div");
+    captureHost.setAttribute("aria-hidden", "true");
+    Object.assign(captureHost.style, {
+      position: "fixed",
+      left: "-100000px",
+      top: "0",
+      width: `${captureWidth}px`,
+      overflow: "visible",
+      pointerEvents: "none",
+      opacity: "0",
+      background: "#ffffff",
+      zIndex: "-1",
+    });
+    const capture = preview.cloneNode(true) as HTMLElement;
+    capture.removeAttribute("id");
+    Object.assign(capture.style, {
+      width: `${captureWidth}px`,
+      maxWidth: "none",
+      height: "auto",
+      margin: "0",
+      overflow: "visible",
+      boxSizing: "border-box",
+    });
+    captureHost.appendChild(capture);
+    document.body.appendChild(captureHost);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const captureHeight = Math.max(capture.scrollHeight, Math.ceil(capture.getBoundingClientRect().height), capture.clientHeight);
+    const dataUrl = await toPng(capture, {
+      width: captureWidth,
+      height: captureHeight,
       pixelRatio: 2,
       backgroundColor: "#ffffff",
       cacheBust: true,
@@ -16869,6 +18443,8 @@ async function downloadDocumentPdf(preview: HTMLElement, fileName: string) {
     toast(err instanceof Error ? `PDF 生成失败：${err.message}` : "PDF 生成失败", "error");
     // 降级：仍走浏览器打印
     printDocumentPreview();
+  } finally {
+    captureHost?.remove();
   }
 }
 
@@ -19973,6 +21549,7 @@ function renderAiConfig(config: AiModelConfig | null) {
   const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
   const gptConnectionTitle = qs<HTMLElement>("#gptConnectionTitle");
   const gptConnectionText = qs<HTMLElement>("#gptConnectionText");
+  const gptWebSearchStatus = qs<HTMLElement>("#gptWebSearchStatus");
   const gptState = qs<HTMLElement>("#gptConfigState");
   const gptSub = qs<HTMLElement>("#gptConfigSub");
   const gptModelState = qs<HTMLElement>("#gptModelState");
@@ -19994,6 +21571,10 @@ function renderAiConfig(config: AiModelConfig | null) {
   const ready = Boolean(config?.enabled && config?.hasApiKey);
   const tested = config?.lastTestStatus === "passed";
   const failed = config?.lastTestStatus === "failed";
+  const webSearchStatus = config?.webSearchStatus || "untested";
+  const webSearchReady = webSearchStatus === "passed";
+  const webSearchUnsupported = webSearchStatus === "unsupported";
+  const webSearchFailed = webSearchStatus === "failed";
   const useFlags = {
     leadFinder: config?.useLeadFinder ?? true,
     websiteParse: false,
@@ -20017,7 +21598,7 @@ function renderAiConfig(config: AiModelConfig | null) {
       return `
         <button class="ai-instance-row ${active ? "active" : ""}" type="button" data-ai-config-id="${escapeHtml(item.id)}">
           <span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(itemPreset.label)} · ${escapeHtml(item.model)} · ${itemUseCount} 个用途</small></span>
-          <em>${badge(item.enabled ? "启用" : "停用", item.enabled ? "green" : "gray")}${badge(item.hasApiKey ? "有Key" : "缺Key", item.hasApiKey ? "green" : "amber")}</em>
+          <em>${badge(item.enabled ? "启用" : "停用", item.enabled ? "green" : "gray")}${badge(item.hasApiKey ? "有Key" : "缺Key", item.hasApiKey ? "green" : "amber")}${item.useLeadFinder ? badge(item.webSearchStatus === "passed" ? "官网联网已验证" : item.webSearchStatus === "unsupported" ? "需官网搜索 API" : "官网联网待测", item.webSearchStatus === "passed" ? "green" : item.webSearchStatus === "failed" ? "red" : "amber") : ""}</em>
         </button>
       `;
     }).join("");
@@ -20085,11 +21666,46 @@ function renderAiConfig(config: AiModelConfig | null) {
     }
   });
   if (gptConnectionBadge && !aiTestingActive) {
-    gptConnectionBadge.className = `badge ${tested ? "green" : failed ? "red" : ready ? "amber" : ""}`;
-    gptConnectionBadge.textContent = tested ? "连接通过" : failed ? "连接失败" : ready ? "待测试" : "未启用";
+    gptConnectionBadge.className = `badge ${tested && (!config?.useLeadFinder || webSearchReady) ? "green" : failed || webSearchFailed ? "red" : ready ? "amber" : ""}`;
+    gptConnectionBadge.textContent = tested && (!config?.useLeadFinder || webSearchReady)
+      ? "连接与联网通过"
+      : webSearchUnsupported
+        ? tested ? "普通 AI 通过" : "模型不支持联网"
+        : webSearchFailed
+          ? "联网测试失败"
+          : failed
+            ? "连接失败"
+            : ready
+              ? "待测试联网能力"
+              : "未启用";
   }
-  if (gptConnectionTitle && !aiTestingActive) gptConnectionTitle.textContent = tested ? "AI 连接测试通过" : failed ? "AI 连接测试失败" : ready ? "配置已保存" : config?.enabled ? "缺少 API Key" : "AI 未启用";
+  if (gptConnectionTitle && !aiTestingActive) gptConnectionTitle.textContent = tested && (!config?.useLeadFinder || webSearchReady)
+    ? "AI 与官网联网测试通过"
+    : webSearchUnsupported
+      ? tested ? "普通 AI 通过，官网需搜索 API" : "当前模型不能确认官网"
+      : webSearchFailed
+        ? "普通 AI 可用，但官网联网未通过"
+        : failed
+          ? "AI 连接测试失败"
+          : ready
+            ? "等待官网联网测试"
+            : config?.enabled
+              ? "缺少 API Key"
+              : "AI 未启用";
   if (gptConnectionText && !aiTestingActive) gptConnectionText.textContent = config?.lastTestMessage || (ready ? `当前模型：${config?.model} · ${useCount} 个业务模块` : "");
+  if (gptWebSearchStatus) {
+    const citationCount = Number(config?.webSearchCitationCount || 0);
+    gptWebSearchStatus.className = `ai-web-search-status ${webSearchReady ? "is-ready" : webSearchFailed ? "is-blocked" : "is-pending"}`;
+    gptWebSearchStatus.textContent = webSearchReady
+      ? `官网发现：Web Search 已验证${citationCount ? ` · 最近 ${citationCount} 条引用` : ""}`
+      : webSearchUnsupported
+        ? "官网发现：当前模型不支持原生 Web Search；配置 Brave、Serper、SerpApi 或 Google Places 后可继续自动搜客"
+        : webSearchFailed
+          ? "官网发现：Web Search 失败，不会采信模型猜测的网址"
+          : config?.useLeadFinder
+            ? "官网发现：请先测试 Web Search，自动搜客才会启动"
+            : "官网发现：未启用自动获客，暂不要求 Web Search";
+  }
   if (gptState) gptState.textContent = ready ? "已启用" : config?.enabled ? "待补Key" : "未启用";
   if (gptSub) gptSub.textContent = tested ? "最近测试通过" : ready ? "可测试连接和调用" : "等待 API Key";
   if (gptModelState) gptModelState.textContent = config?.model || defaultModel;
@@ -20334,15 +21950,17 @@ async function testAiConfig(button?: HTMLButtonElement) {
       renderLeadFinder(state.websiteOpportunities);
       syncLeadFinderStartState();
     }
-    const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
-    const gptConnectionTitle = qs<HTMLElement>("#gptConnectionTitle");
-    const gptConnectionText = qs<HTMLElement>("#gptConnectionText");
-    if (gptConnectionBadge) {
-      gptConnectionBadge.className = `badge ${result.ok ? "green" : "red"}`;
-      gptConnectionBadge.textContent = result.ok ? "连接通过" : "连接失败";
+    if (!result.config) {
+      const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
+      const gptConnectionTitle = qs<HTMLElement>("#gptConnectionTitle");
+      const gptConnectionText = qs<HTMLElement>("#gptConnectionText");
+      if (gptConnectionBadge) {
+        gptConnectionBadge.className = `badge ${result.ok ? "green" : "red"}`;
+        gptConnectionBadge.textContent = result.ok ? "连接通过" : "连接失败";
+      }
+      if (gptConnectionTitle) gptConnectionTitle.textContent = result.ok ? "AI 连接测试通过" : "AI 连接测试失败";
+      if (gptConnectionText) gptConnectionText.textContent = result.message;
     }
-    if (gptConnectionTitle) gptConnectionTitle.textContent = result.ok ? "AI 连接测试通过" : "AI 连接测试失败";
-    if (gptConnectionText) gptConnectionText.textContent = result.message;
     toast(result.message, result.ok ? "ok" : "error");
   } catch (err) {
     const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
@@ -22591,7 +24209,7 @@ function renderWebsiteOpportunities(opportunities: WebsiteOpportunity[]) {
   if (status && opportunities.length) {
     const synced = opportunities.filter((item) => item.status === "synced").length;
     const aiCount = opportunities.filter((item) => item.parseMode === "ai").length;
-    status.innerHTML = `<b>${opportunities.length}</b><span>已登记链接</span>${badge(`${synced} 条已同步`, synced ? "green" : "")}${badge(aiCount ? `${aiCount} 条AI归纳` : "零网页访问", aiCount ? "green" : "")}`;
+    status.innerHTML = `<b>${opportunities.length}</b><span>已登记链接</span>${badge(`${synced} 条已同步`, synced ? "green" : "")}${badge(aiCount ? `${aiCount} 条AI归纳` : "公开资料待补全", aiCount ? "green" : "")}`;
   }
   if (!tbody) return;
   tbody.innerHTML = opportunities.length ? opportunities.map((item) => `
@@ -22681,11 +24299,11 @@ function contactEmail(value: string) {
 const PROSPECT_PAGE_SIZE = 10;
 
 const PROSPECT_STATUS_META: Record<WebsiteOpportunity["status"], { label: string; tone: string; action: string }> = {
-  preview: { label: "待核验", tone: "amber", action: "核验联系人与联系方式" },
+  preview: { label: "待处理", tone: "amber", action: "查找公开联系人与联系方式" },
   contactable: { label: "可联系", tone: "green", action: "发送开发信或加入线索" },
   contacted: { label: "已联系", tone: "green", action: "等待回复，必要时加入线索跟进" },
   synced: { label: "已入线索", tone: "green", action: "在线索中心继续跟进" },
-  excluded: { label: "已排除", tone: "gray", action: "确认原因，必要时恢复核验" }
+  excluded: { label: "已排除", tone: "gray", action: "确认原因，必要时恢复处理" }
 };
 
 const PROSPECT_CHANNEL_LABELS: Record<ProspectOutreachChannel, string> = {
@@ -22967,6 +24585,7 @@ function selectedProspect() {
 }
 
 let prospectTechnicalAuditOpenId = "";
+let prospectOutreachGateOpenId = "";
 
 function closeProspectMobileDetail() {
   prospectMobileDetailOpen = false;
@@ -23225,6 +24844,7 @@ function renderProspectQualificationPanel(item: WebsiteOpportunity) {
 
 function focusProspectQualification(item: WebsiteOpportunity, step?: ProspectQualificationViewApi["nextStep"]) {
   state.selectedProspectId = item.id;
+  prospectOutreachGateOpenId = item.id;
   if (step === "resolve_identity") prospectTechnicalAuditOpenId = item.id;
   renderProspectList();
   window.requestAnimationFrame(() => {
@@ -23389,7 +25009,7 @@ function openProspectChannelQualification(item: WebsiteOpportunity) {
       <div class="form-field full"><label>联系方式</label><input id="prospectChannelValue" value="${escapeHtml(email || item.contactInfo)}"></div>
       <div class="form-field full"><label>公开来源 URL</label><input id="prospectChannelSource" value="${escapeHtml(item.website)}"></div>
       <div class="form-field"><label>有效至</label><input id="prospectChannelExpires" type="date" value="${daysFromNow(30)}"></div>
-      <label class="form-check full"><input id="prospectChannelConfirmed" type="checkbox">我已在该官方来源逐字核对联系方式，确认不是搜索摘要或 AI 生成内容</label>
+      <label class="form-check full"><input id="prospectChannelConfirmed" type="checkbox">我已打开证据链接，确认该联系方式仍在官网公开展示，可以用于本次业务触达</label>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="prospectChannelSubmit">保存渠道核验</button>`);
   qs<HTMLButtonElement>("#prospectChannelSubmit")?.addEventListener("click", (event) => {
@@ -23535,7 +25155,7 @@ function identityBootstrapProviderHint(provider?: ProspectIdentityBootstrapProvi
         : `${provider.name} 需要先配置 API Key；任务不会在未配置时创建。`
       : `${provider.name} 当前不可执行，请先到数据源中心检查连接。`;
   }
-  return `${provider.name} 已可执行。${provider.setupNote}系统只调用正式 API，不访问或抓取企业官网。`;
+  return `${provider.name} is ready. ${provider.setupNote} This source uses official APIs only and does not review company websites.`;
 }
 
 function renderProspectIdentityBootstrapPanel(item: WebsiteOpportunity) {
@@ -23588,7 +25208,7 @@ function renderProspectIdentityBootstrapPanel(item: WebsiteOpportunity) {
   return `
     <section class="prospect-identity-panel">
       ${taskHeader}
-      <p class="prospect-probe-summary">官网链接和低频官网验证都不能建立正式企业身份。系统只接受 GLEIF、Companies House、SEC 或法国企业登记返回的强注册标识。</p>
+      <p class="prospect-probe-summary">官网链接和官网公开资料核验都不能建立正式企业身份。系统只接受 GLEIF、Companies House、SEC 或法国企业登记返回的强注册标识。</p>
       ${taskDetail}
       ${canStart ? `<div class="prospect-identity-form">
         <label><span>权威来源</span><select id="prospectIdentityProvider">${options || `<option value="">正在读取数据源</option>`}</select></label>
@@ -23771,7 +25391,7 @@ async function startProspectIdentityBootstrap(
     return;
   }
   button.disabled = true;
-  button.textContent = "正在创建任务";
+  button.textContent = "Creating task";
   try {
     const result = await api<{
       taskStatus: "running" | "ended";
@@ -23791,7 +25411,7 @@ async function startProspectIdentityBootstrap(
     if (view) view.attempts = item.identityBootstrapAttempts;
     closeModal();
     renderProspectDetail(item);
-    if (result.taskStatus === "ended") toast("身份核验已结束，可在详情查看结果");
+    if (result.taskStatus === "ended") toast("Identity review completed. See the detail panel for results.");
     else pollProspectIdentityBootstrap(item, result.attempt.id);
   } catch (error) {
     toast(error instanceof Error ? error.message : "企业身份核验启动失败", "error");
@@ -23815,26 +25435,28 @@ function bindProspectIdentityBootstrapActions(root: ParentNode, item: WebsiteOpp
 }
 
 const WEBSITE_PROBE_STAGE_LABELS: Record<WebsiteProbeStage, string> = {
-  queued: "排队",
-  dns: "DNS 安全检查",
-  robots: "robots 规则",
-  head: "首页预检",
-  body: "正文样本",
-  contact_page: "联系页",
-  evidence: "最小证据",
-  completed: "结束",
-  failed: "结束"
+  queued: "Queued",
+  dns: "DNS check",
+  robots: "Access policy check",
+  head: "Homepage pre-check",
+  body: "Public content review",
+  contact_page: "Contact page review",
+  ai_extract: "AI-assisted extraction",
+  evidence: "Evidence review",
+  completed: "Completed",
+  failed: "Ended"
 };
 
 const WEBSITE_PROBE_OUTCOME_LABELS: Record<WebsiteProbeAttempt["outcome"], string> = {
-  pending: "等待结果",
-  evidence_found: "取得官网公开证据",
-  no_evidence: "未取得公开邮箱或组织证据",
-  robots_denied: "站点策略禁止访问",
-  unreachable: "官网暂时不可达",
-  policy_blocked: "安全策略阻止访问",
-  rate_limited: "站点触发限流",
-  circuit_open: "同域连续失败已熔断"
+  pending: "Pending",
+  evidence_found: "Public evidence identified",
+  no_evidence: "No reliable public contact or organization evidence",
+  robots_denied: "Site access policy declined",
+  unreachable: "Official site temporarily unavailable",
+  policy_blocked: "Security policy blocked the request",
+  rate_limited: "Site request limit reached",
+  circuit_open: "Temporary same-domain pause",
+  interrupted: "Review interrupted"
 };
 
 let activeWebsiteProbeStream: EventSource | null = null;
@@ -23874,20 +25496,20 @@ function renderWebsiteDiscoverySourceGuide() {
   return `
     <div class="prospect-website-source-guide">
       <div class="prospect-website-source-guide-head">
-        <div><b>可用的官网发现来源</b><span>免费兜底覆盖有限，配置搜索接口后会自动按顺序补查。</span></div>
-        ${configurable ? `<button class="btn" type="button" data-website-source-config="${escapeHtml(configurable.id)}">配置数据源</button>` : ""}
+        <div><b>Available official-site sources</b><span>Coverage from free sources is limited. Configured search sources will be checked in sequence.</span></div>
+        ${configurable ? `<button class="btn" type="button" data-website-source-config="${escapeHtml(configurable.id)}">Configure source</button>` : ""}
       </div>
       <div class="prospect-website-source-list">
         ${providers.map((provider) => {
           const ready = provider.ready && provider.enabled;
           const isAiSearch = provider.id === "ai_search";
           const stateText = isAiSearch
-            ? ready ? "模型已配置" : "待配置模型"
+            ? ready ? "Web Search verified" : provider.hasApiKey ? "Web Search not tested" : "Model not configured"
             : provider.requiresKey
-            ? ready ? "已连接" : "待配置"
-            : "内置免费";
+            ? ready ? "Connected" : "Not configured"
+            : "Built-in free source";
           const note = isAiSearch
-            ? `${provider.costNote} 官网补全要求模型接口支持 Responses Web Search。`
+            ? `${provider.costNote} Official-site discovery requires a model interface with Responses Web Search.`
             : provider.costNote;
           return `<div><b>${escapeHtml(provider.name)}</b><span>${escapeHtml(note)}</span><em class="${ready ? "is-ready" : ""}">${stateText}</em></div>`;
         }).join("")}
@@ -23900,34 +25522,34 @@ function renderWebsiteDiscoveryPanel(item: WebsiteOpportunity) {
   if (!attempt) {
     return `
       <section class="prospect-probe-panel">
-        <div class="prospect-probe-head"><div><b>官网发现链路</b><small>来源官网 · 搜索 API · 域名校验</small></div>${badge("等待处理", "gray")}</div>
-        <p class="prospect-probe-summary">候选完成清洗后，系统会先确认官网，再进入国外官网联系方式验证。</p>
+        <div class="prospect-probe-head"><div><b>Official-site discovery</b><small>Source website · Search API · Domain validation</small></div>${badge("Pending", "gray")}</div>
+        <p class="prospect-probe-summary">After candidate review, the system confirms the official site before reviewing public contact channels for eligible international sites.</p>
       </section>`;
   }
   const successful = attempt.outcome === "source_provided" || attempt.outcome === "discovered";
   const outcomeLabel = attempt.outcome === "source_provided"
-    ? "来源自带"
+        ? "Source provided"
     : attempt.outcome === "discovered"
-      ? "搜索确认"
+      ? "Search confirmed"
       : attempt.outcome === "not_found"
-        ? "未确认"
+        ? "Not confirmed"
         : attempt.outcome === "provider_unavailable"
-          ? "缺少搜索源"
-          : "搜索失败";
+          ? "Search source unavailable"
+          : "Search failed";
   const candidates = attempt.candidates.length
     ? `<div class="prospect-probe-detail"><b>候选域名</b><span>${attempt.candidates.map((candidate) => `${escapeHtml(candidate.website)}（${candidate.score} 分）`).join("；")}</span></div>`
     : "";
   return `
     <section class="prospect-probe-panel">
-      <div class="prospect-probe-head"><div><b>官网发现链路</b><small>${escapeHtml(attempt.providerId || "原始数据源")} · 名称与域名校验</small></div>${badge(outcomeLabel, successful ? "green" : "amber")}</div>
+      <div class="prospect-probe-head"><div><b>Official-site discovery</b><small>${escapeHtml(attempt.providerId || "Original source")} · Name and domain validation</small></div>${badge(outcomeLabel, successful ? "green" : "amber")}</div>
       <div class="prospect-probe-result ${successful ? "has-evidence" : "is-neutral"}">
-        <b>${escapeHtml(attempt.selectedWebsite || "未取得可信官网")}</b>
+        <b>${escapeHtml(attempt.selectedWebsite || "No trusted official site identified")}</b>
         <span>${escapeHtml(attempt.reason)}</span>
       </div>
       ${candidates}
       ${successful ? "" : renderWebsiteDiscoverySourceGuide()}
       <div class="prospect-probe-timeline">
-        ${attempt.events.map((entry) => `<div class="prospect-probe-event ${escapeHtml(entry.status)}"><span></span><div><b>${escapeHtml(entry.stage)}</b><small>${escapeHtml(entry.message)}</small></div><time>${formatTime(entry.createdAt)}</time></div>`).join("")}
+        ${attempt.events.map((entry) => `<div class="prospect-probe-event ${escapeHtml(entry.status)}"><span></span><div><b>${escapeHtml(entry.stage)}</b><small>${escapeHtml(leadFinderDisplayText(entry.message))}</small></div><time>${formatTime(entry.createdAt)}</time></div>`).join("")}
       </div>
     </section>`;
 }
@@ -23947,16 +25569,16 @@ function websiteProbePolicyBlockReason(item: WebsiteOpportunity) {
   ]);
   if (blockedCountries.has(country)) {
     return country
-      ? "按安全策略，中国、港澳台网站不执行自动读取"
-      : "国家信息不明确，安全策略不会自动访问官网";
+      ? "Under the access policy, sites in China, Hong Kong, Macao, and Taiwan are not reviewed automatically"
+      : "The country is unclear, so the access policy will not review the site automatically";
   }
   try {
     const hostname = new URL(item.website).hostname.toLocaleLowerCase("en-US");
     if (/\.(?:cn|中国|hk|mo|tw)$/iu.test(hostname)) {
-      return "该官网域名属于中国或港澳台范围，系统不会自动访问";
+      return "This domain is within China, Hong Kong, Macao, or Taiwan; it will not be reviewed automatically";
     }
   } catch {
-    return "官网地址无效，无法进入安全验证队列";
+    return "The website address is invalid and cannot enter the secure review queue";
   }
   return "";
 }
@@ -23989,56 +25611,74 @@ function websiteContactDisplay(item: WebsiteOpportunity) {
   if (value) {
     return {
       value,
-      detail: item.contact?.trim() || "官网公开联系方式，触达前请人工确认",
+      detail: item.contact?.trim() || "Public contact detail from the official site; confirm it before outreach",
       tone: "ready"
     };
   }
   if (!item.website?.trim()) {
     const discovery = latestWebsiteDiscovery(item);
     return {
-      value: "官网待补",
-      detail: discovery?.reason || "官网发现阶段尚未完成",
+      value: "Official site pending",
+      detail: discovery?.reason || "Official-site discovery is not complete",
       tone: discovery?.status === "failed" ? "blocked" : "empty"
     };
   }
   if (!/^https:\/\//iu.test(item.website)) {
-    return { value: "官网地址待维护", detail: "自动验证仅接受 HTTPS 官网", tone: "empty" };
+    return { value: "Website address needs review", detail: "Automated review accepts HTTPS websites only", tone: "empty" };
   }
   const policyBlockReason = websiteProbePolicyBlockReason(item);
   if (policyBlockReason) {
-    return { value: "不自动访问", detail: policyBlockReason, tone: "blocked" };
+    return { value: "Automatic review unavailable", detail: policyBlockReason, tone: "blocked" };
   }
   const attempt = latestWebsiteProbe(item);
   if (!attempt) {
-    return { value: "等待后台补全", detail: "后台会按低频队列自动验证", tone: "pending" };
+    return { value: "Pending background review", detail: "The task will run through the controlled queue", tone: "pending" };
   }
   if (attempt.status === "queued") {
-    return { value: "等待后台补全", detail: "官网验证任务已排队", tone: "pending" };
+    return { value: "Pending background review", detail: "The website review task is queued", tone: "pending" };
   }
   if (attempt.status === "running") {
     const stage = attempt.events.at(-1)?.stage;
     return {
-      value: "官网补全中",
-      detail: stage ? `当前阶段：${WEBSITE_PROBE_STAGE_LABELS[stage]}` : "正在受控读取官网公开信息",
+      value: "Official-site review in progress",
+      detail: stage ? `Current stage: ${WEBSITE_PROBE_STAGE_LABELS[stage]}` : "Reviewing public company information under controlled access rules",
       tone: "running"
     };
   }
-  if (["unreachable", "rate_limited", "circuit_open"].includes(attempt.outcome)) {
+  if (attempt.outcome === "interrupted") {
     return {
-      value: "官网暂不可达",
+      value: "Official-site review interrupted",
+      detail: attempt.failureMessage || "The background service restarted or the task made no progress. You can start it again.",
+      tone: "blocked"
+    };
+  }
+  if (["unreachable", "rate_limited", "circuit_open"].includes(attempt.outcome)) {
+    const failureLabels: Record<string, string> = {
+      HTTP_404: "Website address is no longer valid",
+      DNS_NOT_FOUND: "Website domain could not be resolved",
+      NETWORK_TIMEOUT: "Website response timed out",
+      TLS_CERTIFICATE_INVALID: "Website certificate issue",
+      CONNECTION_REFUSED: "Website declined the HTTPS connection",
+      HTTP_401: "Website declined the request",
+      HTTP_403: "Website declined the request",
+      HTTP_406: "Website declined the request",
+      DOMAIN_CIRCUIT_OPEN: "Website review is temporarily paused"
+    };
+    return {
+      value: failureLabels[attempt.failureCode] || "Official site temporarily unavailable",
       detail: attempt.failureMessage || WEBSITE_PROBE_OUTCOME_LABELS[attempt.outcome],
       tone: "blocked"
     };
   }
   if (attempt.outcome === "robots_denied") {
-    return { value: "站点不允许自动验证", detail: "可人工打开官网核对", tone: "blocked" };
+    return { value: "Site policy declined the request", detail: "Open the official site manually to verify", tone: "blocked" };
   }
   if (attempt.outcome === "policy_blocked") {
-    return { value: "访问策略未通过", detail: attempt.failureMessage || "需人工核对官网", tone: "blocked" };
+    return { value: "Access policy not satisfied", detail: attempt.failureMessage || "Manual website verification is required", tone: "blocked" };
   }
   return {
-    value: "官网未公开联系方式",
-    detail: "已完成验证，可从右侧报告查看过程",
+    value: "No public contact details identified",
+    detail: "Review completed. See the report on the right for the process.",
     tone: "empty"
   };
 }
@@ -24049,7 +25689,7 @@ function websiteContactPersonDisplay(item: WebsiteOpportunity) {
     && !/^(?:待维护|待确认|未知|-|—)$/u.test(recommended.contactName)) {
     return {
       value: recommended.contactName,
-      detail: recommended.contactTitle || `${recommended.sourceLabel}公开联系人`,
+      detail: recommended.contactTitle || `${recommended.sourceLabel} public contact`,
       tone: "ready"
     };
   }
@@ -24071,22 +25711,22 @@ function websiteContactPersonDisplay(item: WebsiteOpportunity) {
     && extractedExplicitLooksLikeName) {
     return {
       value: explicit,
-      detail: extracted?.title || "联系人职务待补",
+      detail: extracted?.title || "Contact title not identified",
       tone: "ready"
     };
   }
   if (extracted) {
     return {
       value: extracted.name,
-      detail: extracted.title || "官网公开联系人，待人工确认",
+      detail: extracted.title || "Public contact from the official site; manual confirmation recommended",
       tone: "ready"
     };
   }
   const attempt = latestWebsiteProbe(item);
   if (attempt?.status === "queued" || attempt?.status === "running") {
-    return { value: "联系人补全中", detail: "正在核对国外官网公开信息", tone: "pending" };
+    return { value: "Contact review in progress", detail: "Reviewing public information from an eligible international site", tone: "pending" };
   }
-  return { value: "联系人待补", detail: "公开来源未提供联系人姓名", tone: "empty" };
+  return { value: "Contact name pending", detail: "No contact name was provided by the public sources", tone: "empty" };
 }
 
 function prospectLookupDiagnosis(item: WebsiteOpportunity) {
@@ -24102,58 +25742,66 @@ function prospectLookupDiagnosis(item: WebsiteOpportunity) {
   const suggestions: string[] = [];
   if (!item.website?.trim()) {
     const discovery = latestWebsiteDiscovery(item);
-    reasons.push(discovery?.reason || "候选来源没有提供企业官网，官网发现阶段尚未完成。");
+    reasons.push(discovery?.reason || "The candidate source did not provide an official site, and official-site discovery is not complete.");
     suggestions.push(discovery?.outcome === "provider_unavailable"
-      ? "系统会先尝试 OpenAI 原生联网和免费 Wikidata；仍未找到时可配置 Brave Search、Serper、SerpApi 或 Google Places。"
-      : "可查看官网发现链路中的候选域名和可信评分，或人工补充官网。");
+      ? "The system will first try OpenAI Web Search and free Wikidata. You can configure Brave Search, Serper, SerpApi, or Google Places if needed."
+      : "Review the candidate domains and confidence scores in Official-site discovery, or add the official site manually.");
   } else if (!/^https:\/\//iu.test(item.website)) {
-    reasons.push("当前网址不是 HTTPS 官网，不符合自动验证的安全要求。");
-    suggestions.push("人工确认官网地址并改为正确的 HTTPS 链接后重试。");
+    reasons.push("The current address is not an HTTPS official site and does not meet the secure review requirements.");
+    suggestions.push("Confirm the address manually, replace it with the correct HTTPS link, and try again.");
   } else if (websiteProbePolicyBlockReason(item)) {
     reasons.push(websiteProbePolicyBlockReason(item));
-    suggestions.push("仅可由业务员人工打开官网核对，系统不会绕过国家与域名限制。");
+    suggestions.push("Open the official site manually. The system will not bypass country or domain restrictions.");
   } else if (!attempt) {
-    reasons.push("候选已经进入后台补全范围，但尚未产生官网核验记录。");
-    suggestions.push("可等待后台队列，或在报告下方手动启动一次官网验证。");
+    reasons.push("The candidate is eligible for background completion, but no website review record exists yet.");
+    suggestions.push("Wait for the background queue, or start one website review from the report below.");
   } else if (attempt.status === "queued") {
-    reasons.push("官网验证任务已排队，当前还没有开始访问官网。");
-    suggestions.push("无需重复提交；任务执行后结果会自动更新。");
+    reasons.push("The website review task is queued and has not started yet.");
+    suggestions.push("No resubmission is needed. Results will update when the task runs.");
   } else if (attempt.status === "running") {
     const stage = attempt.events.at(-1)?.stage;
     reasons.push(stage
-      ? `官网仍在验证，当前进行到“${WEBSITE_PROBE_STAGE_LABELS[stage]}”。`
-      : "官网仍在受控低频验证中，当前不是最终结果。");
-    suggestions.push("等待当前任务结束，页面会自动刷新联系人和联系方式。");
+      ? `Official-site review is in progress at “${WEBSITE_PROBE_STAGE_LABELS[stage]}”.`
+      : "Official-site review is in progress under controlled access rules; this is not the final result.");
+    suggestions.push("Wait for the task to finish. The page will update the contact details automatically.");
   } else {
     reasons.push(WEBSITE_PROBE_OUTCOME_LABELS[attempt.outcome]);
     if (attempt.failureMessage) reasons.push(attempt.failureMessage);
-    if (["unreachable", "rate_limited", "circuit_open"].includes(attempt.outcome)) {
-      suggestions.push("网站可能临时不可用，可稍后重新验证一次。");
+    if (attempt.outcome === "interrupted") {
+      suggestions.push("This task did not establish site availability. You can start the review again.");
+    } else if (attempt.failureCode === "HTTP_404" || attempt.failureCode === "DNS_NOT_FOUND") {
+      suggestions.push("Confirm the official site address. The system will try the same-domain homepage before treating the site as unavailable.");
+    } else if (attempt.failureCode === "TLS_CERTIFICATE_INVALID") {
+      suggestions.push("The website certificate has a security issue. The system will not bypass certificate validation; verify manually or wait for the site to be fixed.");
+    } else if (["HTTP_401", "HTTP_403", "HTTP_406"].includes(attempt.failureCode)) {
+      suggestions.push("The site declined the request. Open the official site manually; the system will not imitate a login or bypass site restrictions.");
+    } else if (["unreachable", "rate_limited", "circuit_open"].includes(attempt.outcome)) {
+      suggestions.push("The site may be responding slowly or limiting requests. Try the review again later.");
     } else if (["robots_denied", "policy_blocked"].includes(attempt.outcome)) {
-      suggestions.push("系统不会绕过网站规则，请由业务员人工打开官网核对。");
+      suggestions.push("The system will not bypass website rules. Ask the account owner to verify the official site manually.");
     } else {
-      suggestions.push("可人工查看官网联系页，或从原始公开来源补充业务联系人。");
+      suggestions.push("Review the official contact page manually, or add a business contact from the original public source.");
     }
   }
   if (!personReady && channelReady) {
-    reasons.push("已找到公司级联系渠道，但公开页面没有可可靠识别的联系人姓名和职务。");
-    suggestions.push("可先使用公司级渠道触达，并在首封邮件中确认具体对接人。");
+    reasons.push("A company-level channel was found, but no reliable contact name or title was identified on the public pages.");
+    suggestions.push("Use the company-level channel first and confirm the right contact in the first message.");
   } else if (personReady && !channelReady) {
-    reasons.push("已识别联系人姓名，但公开页面没有与其对应的可用邮箱、电话或 WhatsApp。");
-    suggestions.push("请勿猜测邮箱，可通过官网表单或公司总机确认联系渠道。");
+    reasons.push("A contact name was identified, but no matching email, phone number, or WhatsApp channel was found on the public pages.");
+    suggestions.push("Do not guess an email address. Confirm the channel through the official contact form or company switchboard.");
   }
   return {
     pending,
     title: pending
-      ? "联系方式仍在查询，不是最终结果"
+      ? "Contact review is still in progress"
       : !personReady && !channelReady
-        ? "本次未找到联系人和联系方式"
+        ? "No contact or contact channel was identified"
         : !personReady
-          ? "未找到可确认的联系人姓名"
-          : "未找到可用联系方式",
+          ? "No verifiable contact name was identified"
+          : "No usable contact channel was identified",
     summary: pending
-      ? "系统会在后台任务结束后自动更新，无需停留等待。"
-      : "这不代表企业不存在，只表示当前授权来源和受控官网范围内没有取得足够信息。",
+      ? "The background task will update this automatically when it finishes; you do not need to wait here."
+      : "This does not mean the company is inactive. It means the available authorized sources and controlled site review did not provide enough evidence.",
     reasons: [...new Set(reasons)],
     suggestions: [...new Set(suggestions)],
     attempt
@@ -24168,14 +25816,14 @@ function renderProspectLookupDiagnosis(item: WebsiteOpportunity) {
     <section class="lead-lookup-diagnosis ${diagnosis.pending ? "is-pending" : ""}" id="leadFinderLookupDiagnosis" tabindex="-1">
       <div class="lead-lookup-diagnosis-head">
         <div><b>${escapeHtml(diagnosis.title)}</b><span>${escapeHtml(diagnosis.summary)}</span></div>
-        ${badge(diagnosis.pending ? "查询中" : "未找到", diagnosis.pending ? "blue" : "amber")}
+        ${badge(diagnosis.pending ? "In progress" : "Not identified", diagnosis.pending ? "blue" : "amber")}
       </div>
-      <div><b>原因</b><ul>${diagnosis.reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div>
-      <div><b>下一步</b><ul>${diagnosis.suggestions.map((suggestion) => `<li>${escapeHtml(suggestion)}</li>`).join("")}</ul></div>
+      <div><b>Reason</b><ul>${diagnosis.reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div>
+      <div><b>Next step</b><ul>${diagnosis.suggestions.map((suggestion) => `<li>${escapeHtml(suggestion)}</li>`).join("")}</ul></div>
       <div class="lead-lookup-diagnosis-facts">
-        <span>来源：${escapeHtml(item.sourceLabel || item.source || "人工登记")}</span>
-        <span>官网验证：${escapeHtml(diagnosis.attempt ? WEBSITE_PROBE_OUTCOME_LABELS[diagnosis.attempt.outcome] : "尚未执行")}</span>
-        <span>最后阶段：${escapeHtml(latestEvent ? WEBSITE_PROBE_STAGE_LABELS[latestEvent.stage] : "无记录")}</span>
+        <span>Source: ${escapeHtml(item.sourceLabel || item.source || "Manual entry")}</span>
+        <span>Website review: ${escapeHtml(diagnosis.attempt ? WEBSITE_PROBE_OUTCOME_LABELS[diagnosis.attempt.outcome] : "Not started")}</span>
+        <span>Latest stage: ${escapeHtml(latestEvent ? WEBSITE_PROBE_STAGE_LABELS[latestEvent.stage] : "No record")}</span>
       </div>
     </section>`;
 }
@@ -24200,9 +25848,9 @@ function renderWebsiteProbePanel(
   if (!attempt) {
     return `
       <section class="prospect-probe-panel">
-        <div class="prospect-probe-head"><div><b>国外官网低频验证</b><small>仅国外网站 · 首页 + 单个同域联系页</small></div>${badge("尚未执行", "gray")}</div>
-        <p class="prospect-probe-summary">仅允许国外候选的非中国、港澳台官网；只读取 robots.txt、官网首页和一个同域联系页，不继续跟踪链接、不下载文件、不保存网页原文。</p>
-        ${canStart ? `<button class="btn" type="button" id="${buttonId}">验证官网并查找公开联系方式</button>` : ""}
+        <div class="prospect-probe-head"><div><b>Official-site review</b><small>Eligible international sites · Homepage + one same-domain contact page</small></div>${badge("Not started", "gray")}</div>
+        <p class="prospect-probe-summary">Only eligible international sites are reviewed under controlled access rules. AI organizes public contact details that actually appear on the reviewed pages; it does not guess data, download files, or retain source text.</p>
+        ${canStart ? `<button class="btn" type="button" id="${buttonId}">Review site for public contacts</button>` : ""}
       </section>`;
   }
   const terminal = attempt.status === "completed" || attempt.status === "failed";
@@ -24210,26 +25858,26 @@ function renderWebsiteProbePanel(
   return `
     <section class="prospect-probe-panel">
       <div class="prospect-probe-head">
-        <div><b>官网低频验证</b><small>${escapeHtml(attempt.domain)} · ${escapeHtml(attempt.policyVersion)}</small></div>
-        ${badge(terminal ? "已结束" : attempt.status === "running" ? "验证中" : "排队中", terminal ? "gray" : "amber")}
+        <div><b>Official-site review</b><small>${escapeHtml(attempt.domain)} · ${escapeHtml(attempt.policyVersion)}</small></div>
+        ${badge(terminal ? "Ended" : attempt.status === "running" ? "In progress" : "Queued", terminal ? "gray" : "amber")}
       </div>
       <div class="prospect-probe-result ${attempt.outcome === "evidence_found" ? "has-evidence" : "is-neutral"}">
         <b>${escapeHtml(WEBSITE_PROBE_OUTCOME_LABELS[attempt.outcome])}</b>
-        <span>${terminal ? "详细结果不会改变企业或 ICP 硬门禁；官网证据只能用于补充交叉验证。" : "正在按阶段执行，结果会实时追加。"}</span>
+        <span>${terminal ? "The result does not change company or ICP gates; site evidence is used only for supporting cross-checks." : "Stages are running and results will be appended in real time."}</span>
       </div>
       ${evidence ? `<dl class="prospect-probe-evidence">
-        <div><dt>组织名称</dt><dd>${escapeHtml(evidence.legalName || evidence.organizationName || "未发现")}</dd></div>
-        <div><dt>国家 / 语言</dt><dd>${escapeHtml([evidence.addressCountry, evidence.language].filter(Boolean).join(" · ") || "未发现")}</dd></div>
-        <div><dt>业务类别</dt><dd>${escapeHtml(evidence.businessCategory || "未发现")}</dd></div>
-        <div><dt>公开业务邮箱</dt><dd>${escapeHtml(evidence.publicContactEmail || "未发现")}</dd></div>
-        <div><dt>页面标题</dt><dd>${escapeHtml(evidence.pageTitle || "未发现")}</dd></div>
+        <div><dt>Organization</dt><dd>${escapeHtml(evidence.legalName || evidence.organizationName || "Not identified")}</dd></div>
+        <div><dt>Country / language</dt><dd>${escapeHtml([evidence.addressCountry, evidence.language].filter(Boolean).join(" · ") || "Not identified")}</dd></div>
+        <div><dt>Business category</dt><dd>${escapeHtml(evidence.businessCategory || "Not identified")}</dd></div>
+        <div><dt>Public business email</dt><dd>${escapeHtml(evidence.publicContactEmail || "Not identified")}</dd></div>
+        <div><dt>Page title</dt><dd>${escapeHtml(evidence.pageTitle || "Not identified")}</dd></div>
       </dl>` : ""}
       <div class="prospect-probe-timeline">
-        ${attempt.events.map((event) => `<div class="prospect-probe-event ${event.status}"><span></span><div><b>${escapeHtml(WEBSITE_PROBE_STAGE_LABELS[event.stage])}</b><small>${escapeHtml(event.message)}</small></div><time>${formatTime(event.createdAt)}</time></div>`).join("")}
+        ${attempt.events.map((event) => `<div class="prospect-probe-event ${event.status}"><span></span><div><b>${escapeHtml(WEBSITE_PROBE_STAGE_LABELS[event.stage])}</b><small>${escapeHtml(leadFinderDisplayText(event.message))}</small></div><time>${formatTime(event.createdAt)}</time></div>`).join("")}
       </div>
-      ${attempt.failureMessage ? `<div class="prospect-probe-detail"><b>详细结果</b><span>${escapeHtml(attempt.failureMessage)}</span></div>` : ""}
-      <div class="prospect-probe-foot"><span>robots：${escapeHtml(attempt.robotsDecision)}</span><span>响应：${attempt.httpStatus || "-"}</span><span>正文：${attempt.responseBytes} B</span><span>跳转：${attempt.redirected ? "1 次" : "无"}</span></div>
-      ${canStart && terminal ? `<button class="btn" type="button" id="${buttonId}">重新验证官网联系方式</button>` : ""}
+      ${attempt.failureMessage ? `<div class="prospect-probe-detail"><b>Detailed result</b><span>${escapeHtml(leadFinderDisplayText(attempt.failureMessage))}</span></div>` : ""}
+      <div class="prospect-probe-foot"><span>Access policy: ${escapeHtml(attempt.robotsDecision)}</span><span>Response: ${attempt.httpStatus || "-"}</span><span>Content: ${attempt.responseBytes} B</span><span>Redirects: ${attempt.redirected ? "1" : "None"}</span></div>
+      ${canStart && terminal ? `<button class="btn" type="button" id="${buttonId}">Review site again</button>` : ""}
     </section>`;
 }
 
@@ -24238,10 +25886,13 @@ function renderExtractedContactsPanel(item: WebsiteOpportunity) {
   const attempt = latestContactEnrichment(item);
   const running = attempt?.status === "queued" || attempt?.status === "running";
   const attemptStartedAt = new Date(attempt?.startedAt || attempt?.createdAt || 0).getTime();
+  const attemptDeadlineAt = new Date(attempt?.deadlineAt || 0).getTime();
   const recoverable = Boolean(
     running
     && Number.isFinite(attemptStartedAt)
-    && Date.now() - attemptStartedAt > 60_000
+    && Date.now() > (Number.isFinite(attemptDeadlineAt) && attemptDeadlineAt > 0
+      ? attemptDeadlineAt + 5_000
+      : attemptStartedAt + 4 * 60_000)
     && !(item.websiteProbeAttempts || []).some((probe) =>
       new Date(probe.createdAt).getTime() >= attemptStartedAt
       && (probe.status === "queued" || probe.status === "running")
@@ -24263,81 +25914,86 @@ function renderExtractedContactsPanel(item: WebsiteOpportunity) {
     channelType: legacyChannel.type,
     channelValue: legacyChannel.value,
     sourceId: legacyContact.source,
-    sourceLabel: legacyContact.sourceLabel || (legacyContact.source === "website_probe" ? "境外企业官网" : legacyContact.source),
+    sourceLabel: legacyContact.sourceLabel || (legacyContact.source === "website_probe" ? "Foreign company website" : legacyContact.source),
     confidence: legacyContact.confidence ?? (legacyContact.source === "website_probe" ? 82 : 65),
     verificationStatus: legacyContact.verificationStatus || (legacyContact.source === "website_probe" ? "source_confirmed" : "unverified"),
     reason: legacyContact.source === "website_probe"
-      ? "来自企业官网公开页面"
-      : "来自既有公开来源记录"
+      ? "Public official-site page"
+      : "Existing public-source record"
   } : null);
   const statusText = running
-    ? "多方查询中"
+    ? "Multi-source review in progress"
     : recommendation
-      ? "已找到"
+      ? "Contact found"
       : attempt
-        ? "已查完"
-        : "待查询";
+        ? "Review complete"
+        : "Not started";
   const statusTone = running ? "blue" : recommendation ? "green" : "gray";
   const verificationLabel = (status: string) => status === "verified"
-    ? "已核验"
+    ? "Verified"
     : status === "source_confirmed"
-      ? "来源确认"
+      ? "Source confirmed"
       : status === "syntax_valid"
-        ? "格式有效"
-        : "待人工确认";
+        ? "Format valid"
+        : "Manual confirmation pending";
   const sourceState = (source: NonNullable<WebsiteOpportunity["contactEnrichmentAttempts"]>[number]["sources"][number]) => {
-    if (source.status === "queued" || source.status === "running") return { text: "查询中", cls: "is-running" };
-    if (source.outcome === "contact_found") return { text: `找到 ${source.contactCount}`, cls: "is-found" };
-    if (source.outcome === "not_configured") return { text: "未配置", cls: "is-muted" };
-    if (source.status === "blocked") return { text: "策略阻止", cls: "is-blocked" };
-    if (source.status === "failed") return { text: "查询失败", cls: "is-blocked" };
-    return { text: "未找到", cls: "is-muted" };
+    if (source.status === "queued" || source.status === "running") return { text: "In progress", cls: "is-running" };
+    if (source.outcome === "contact_found") return { text: `Found ${source.contactCount}`, cls: "is-found" };
+    if (source.outcome === "not_needed") return { text: "Not needed", cls: "is-muted" };
+    if (source.outcome === "not_configured") return { text: "Not configured", cls: "is-muted" };
+    if (source.outcome === "timed_out") return { text: "Timed out", cls: "is-blocked" };
+    if (source.status === "blocked") return { text: "Policy blocked", cls: "is-blocked" };
+    if (source.status === "failed") return { text: "Review failed", cls: "is-blocked" };
+    return { text: "Not identified", cls: "is-muted" };
   };
   const channelLine = (c: { emails: string[]; phones: string[]; whatsapp: string[] }) => {
     const parts: string[] = [];
-    if (c.emails.length) parts.push(`<span class="pe-tag">邮箱 ${escapeHtml(c.emails.join(", "))}</span>`);
-    if (c.phones.length) parts.push(`<span class="pe-tag">电话 ${escapeHtml(c.phones.join(", "))}</span>`);
+    if (c.emails.length) parts.push(`<span class="pe-tag">Email ${escapeHtml(c.emails.join(", "))}</span>`);
+    if (c.phones.length) parts.push(`<span class="pe-tag">Phone ${escapeHtml(c.phones.join(", "))}</span>`);
     if (c.whatsapp.length) parts.push(`<span class="pe-tag">WhatsApp ${escapeHtml(c.whatsapp.join(", "))}</span>`);
-    return parts.join(" ") || `<span class="pe-tag">无渠道</span>`;
+    return parts.join(" ") || `<span class="pe-tag">No channel</span>`;
   };
   return `
     <section class="prospect-contact-hub">
       <div class="prospect-contact-hub-head">
-        <div><b>联系人获取</b><small>公开来源 · 联系人接口 · 境外企业官网</small></div>
+        <div><b>Contact enrichment</b><small>Public sources · Contact providers · Eligible international official sites</small></div>
         ${badge(statusText, statusTone)}
       </div>
       ${recommendation ? `
         <div class="prospect-contact-recommendation">
-          <div><span>推荐联系</span><b>${escapeHtml(recommendation.channelValue)}</b><small>${escapeHtml([recommendation.contactName, recommendation.contactTitle].filter(Boolean).join(" · ") || "公司公开渠道")}</small></div>
+          <div><span>Recommended contact</span><b>${escapeHtml(recommendation.channelValue)}</b><small>${escapeHtml([recommendation.contactName, recommendation.contactTitle].filter(Boolean).join(" · ") || "Public company channel")}</small></div>
           <div class="prospect-contact-trust"><strong>${Math.round(recommendation.confidence)}%</strong><span>${escapeHtml(verificationLabel(recommendation.verificationStatus))}</span></div>
           <p>${escapeHtml(recommendation.sourceLabel)} · ${escapeHtml(recommendation.reason)}</p>
         </div>`
-        : `<div class="prospect-contact-empty"><b>${running ? "正在多方查找联系方式" : "当前来源尚未取得可用联系方式"}</b><span>${escapeHtml(attempt?.summary || "开始后会在后台查询，无需停留等待。")}</span></div>`}
+        : `<div class="prospect-contact-empty"><b>${running ? "Reviewing multiple sources" : "No usable contact channel identified from the available sources"}</b><span>${escapeHtml(attempt?.summary || "Start the review and continue working; results will update in the background.")}</span></div>`}
       ${attempt?.sources.length ? `<div class="prospect-contact-sources">
         ${attempt.sources.map((source) => {
           const state = sourceState(source);
           const retryAt = source.retryAfterAt ? new Date(source.retryAfterAt) : null;
           const retryHint = retryAt && !Number.isNaN(retryAt.getTime())
-            ? ` · ${retryAt.toLocaleString("zh-CN", { hour12: false })} 后可重试`
-            : source.retryable ? " · 可稍后重试" : "";
-          return `<div><span class="prospect-contact-source-mark ${state.cls}"></span><p><b>${escapeHtml(source.sourceLabel)}</b><small>${escapeHtml(source.message + retryHint)}</small></p><em class="${state.cls}">${escapeHtml(state.text)}</em></div>`;
+            ? ` · Retry after ${retryAt.toLocaleString("en-US", { hour12: false })}`
+            : source.retryable ? " · Retry later" : "";
+          const taskHint = source.taskId ? ` · Task ${source.taskId}` : "";
+          const evidenceLinks = (source.evidenceUrls || []).slice(0, 3).map((url, index) => `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Evidence ${index + 1}</a>`).join("");
+          return `<div><span class="prospect-contact-source-mark ${state.cls}"></span><p><b>${escapeHtml(leadFinderDisplayText(source.sourceLabel))}</b><small>${escapeHtml(leadFinderDisplayText(source.message) + retryHint + taskHint)}</small>${source.suggestion ? `<small class="prospect-contact-source-advice">Next step: ${escapeHtml(leadFinderDisplayText(source.suggestion))}</small>` : ""}${evidenceLinks ? `<span class="prospect-contact-source-links">${evidenceLinks}</span>` : ""}</p><em class="${state.cls}">${escapeHtml(state.text)}</em></div>`;
         }).join("")}
       </div>` : ""}
       <div class="prospect-contact-actions">
-        ${item.ownerId === state.user?.id ? `<button class="btn" type="button" id="prospectContactEnrichmentButton" ${running && !recoverable ? "disabled" : ""}>${recoverable ? "恢复查询" : running ? "查询进行中" : attempt ? "继续查找联系人" : "开始查找联系人"}</button>` : ""}
-        <span>AI 仅用于发现候选官网，不生成邮箱或电话</span>
+        ${item.ownerId === state.user?.id ? `<button class="btn prospect-contact-enrichment-button" type="button" id="prospectContactEnrichmentButton" ${running && !recoverable ? "disabled" : ""}>${running && !recoverable ? "查询中" : "深入查询"}</button>` : ""}
+        <span>No qualification review is required first; AI organizes public contact details from the reviewed pages and does not guess channels.</span>
       </div>
-      ${contacts.length ? `<details class="prospect-contact-evidence"><summary>查看 ${contacts.length} 条来源证据</summary>
+      ${contacts.length ? `<details class="prospect-contact-evidence"><summary>View ${contacts.length} source record(s)</summary>
         <div class="prospect-extracted-list">
           ${contacts.map((c) => `
             <div class="prospect-extracted-row ${c.kind === "person" ? "is-person" : "is-company"}">
               <div class="prospect-extracted-head">
-                <b>${escapeHtml(c.name || (c.kind === "person" ? "联系人" : "公司公开联系"))}</b>
-                <span class="prospect-extracted-kind">${escapeHtml(c.sourceLabel || (c.source === "website_probe" ? "境外企业官网" : c.source))} · ${escapeHtml(verificationLabel(c.verificationStatus || (c.source === "website_probe" ? "source_confirmed" : "unverified")))}</span>
+                <b>${escapeHtml(c.name || (c.kind === "person" ? "Contact" : "Public company channel"))}</b>
+                <span class="prospect-extracted-kind">${escapeHtml(c.sourceLabel || (c.source === "website_probe" ? "Foreign company website" : c.source))} · ${escapeHtml(verificationLabel(c.verificationStatus || (c.source === "website_probe" ? "source_confirmed" : "unverified")))}</span>
               </div>
               ${c.title ? `<div class="prospect-extracted-title">${escapeHtml(c.title)}</div>` : ""}
               <div class="prospect-extracted-channels">${channelLine(c)}</div>
-              <div class="prospect-extracted-meta"><span>可信度 ${Math.round(c.confidence ?? (c.source === "website_probe" ? 82 : 65))}%</span><span>${(c.corroboratedSources || []).length > 1 ? `${c.corroboratedSources!.length} 个来源交叉确认` : "单一来源"}</span>${c.evidenceUrl ? `<a class="prospect-extracted-src" href="${escapeHtml(c.evidenceUrl)}" target="_blank" rel="noopener">查看证据</a>` : ""}</div>
+              ${c.evidenceExcerpt ? `<blockquote class="prospect-contact-evidence-quote">${escapeHtml(c.evidenceExcerpt)}</blockquote>` : ""}
+              <div class="prospect-extracted-meta"><span>Confidence ${Math.round(c.confidence ?? (c.source === "website_probe" ? 82 : 65))}%</span><span>${(c.corroboratedSources || []).length > 1 ? `${c.corroboratedSources!.length} sources cross-checked` : "Single source"}</span>${c.evidenceUrl ? `<a class="prospect-extracted-src" href="${escapeHtml(c.evidenceUrl)}" target="_blank" rel="noopener">View evidence</a>` : ""}</div>
             </div>`).join("")}
         </div>
       </details>` : ""}
@@ -24347,7 +26003,7 @@ function renderExtractedContactsPanel(item: WebsiteOpportunity) {
 async function startContactEnrichment(item: WebsiteOpportunity, button?: HTMLButtonElement) {
   if (button) {
     button.disabled = true;
-    button.textContent = "正在启动";
+    button.textContent = "查询中";
   }
   try {
     const result = await api<{
@@ -24365,14 +26021,55 @@ async function startContactEnrichment(item: WebsiteOpportunity, button?: HTMLBut
       renderLeadFinderDetail(item);
     }
     scheduleWebsiteProbeRefresh();
-    toast(result.replayed ? "联系人查询已经在进行" : "已开始多来源联系人查询");
+    toast(result.replayed ? "Contact review is already in progress" : "Multi-source contact review started");
   } catch (error) {
-    toast(error instanceof Error ? error.message : "联系人查询启动失败", "error");
+    toast(error instanceof Error ? error.message : "Could not start contact review", "error");
     if (button) {
       button.disabled = false;
-      button.textContent = "继续查找联系人";
+      button.textContent = "深入查询";
     }
   }
+}
+
+async function enrichSelectedProspectContacts(button?: HTMLButtonElement) {
+  const candidates = state.websiteOpportunities.filter((item) =>
+    state.selectedProspectIds.includes(item.id)
+    && item.ownerId === state.user?.id
+    && item.status !== "excluded"
+  );
+  if (!candidates.length) {
+    toast("Select at least one candidate for contact review", "error");
+    return;
+  }
+  const originalText = button?.textContent || "Review selected contacts";
+  if (button) button.disabled = true;
+  let started = 0;
+  let failed = 0;
+  for (const [index, item] of candidates.entries()) {
+    if (button) button.textContent = `Starting ${index + 1}/${candidates.length}`;
+    try {
+      const result = await api<{
+        opportunity: WebsiteOpportunity;
+      }>(`/api/prospect-list/${encodeURIComponent(item.id)}/contact-enrichment`, {
+        method: "POST",
+        body: JSON.stringify({ force: true })
+      });
+      Object.assign(item, result.opportunity);
+      started += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  renderProspectList();
+  renderLeadFinder(state.websiteOpportunities);
+  scheduleWebsiteProbeRefresh();
+  if (button) {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+  toast(failed
+    ? `${started} started; ${failed} could not start`
+    : `${started} contact review(s) started; results will update automatically`, failed ? "error" : "success");
 }
 
 async function refreshWebsiteProbe(
@@ -24434,7 +26131,7 @@ function streamWebsiteProbe(item: WebsiteOpportunity, attemptId: string) {
 async function startWebsiteProbe(item: WebsiteOpportunity, button?: HTMLButtonElement) {
   if (button) {
     button.disabled = true;
-    button.textContent = "正在排队";
+    button.textContent = "Queuing";
   }
   try {
     const result = await api<{
@@ -24450,15 +26147,15 @@ async function startWebsiteProbe(item: WebsiteOpportunity, button?: HTMLButtonEl
     renderLeadFinder(state.websiteOpportunities);
     const terminal = result.attempt.status === "completed" || result.attempt.status === "failed";
     if (terminal) {
-      toast("官网验证已结束，可在详情查看结果");
+      toast("Official-site review completed. See the detail panel for results.");
     } else {
       streamWebsiteProbe(item, result.attempt.id);
     }
   } catch (error) {
-    toast(error instanceof Error ? error.message : "官网验证启动失败", "error");
+    toast(error instanceof Error ? error.message : "Could not start official-site review", "error");
     if (button) {
       button.disabled = false;
-      button.textContent = "验证官网并查找公开邮箱";
+      button.textContent = "Review site for public contacts";
     }
   }
 }
@@ -24495,16 +26192,6 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
   const dnc = qualification?.blockers.includes("PROSPECT_DO_NOT_CONTACT");
   const readonly = item.status === "synced" ? "disabled" : "";
   const procurementContext = state.procurementContexts[item.id];
-  const contactPerson = websiteContactPersonDisplay(item);
-  const contactDisplay = websiteContactDisplay(item);
-  const companyReview = item.verificationReport?.level && item.verificationReport.level !== "L0"
-    ? item.verificationReport.levelLabel
-    : item.website
-      ? "公司与官网待确认"
-      : "公司官网待补";
-  const fitReview = item.scorecard?.icpMatch.status === "verified"
-    ? `匹配 ${item.scorecard.icpMatch.score} 分`
-    : item.business || "业务方向待确认";
   box.innerHTML = `
     <div class="prospect-detail-hero">
       ${badge(status.label, status.tone)} ${badge(`行动优先 ${score}`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} ${badge(duplicate.text, duplicate.tone)}
@@ -24512,14 +26199,7 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
       <p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(item.business || "业务待维护")} · ${escapeHtml(websiteDomain(item.website || ""))}</p>
       <p>加入搜客清单：${escapeHtml(formatProspectJoinedAt(item.shortlistedAt || item.createdAt))}</p>
     </div>
-    <section class="prospect-business-review">
-      <div class="prospect-business-review-head"><div><b>业务核验</b><small>公司、联系人、跟进价值</small></div>${badge(qualification?.vqaQualified ? "可转线索" : "待资格审核", qualification?.vqaQualified ? "green" : "amber")}</div>
-      <div class="prospect-business-review-grid">
-        <div><span>公司信息</span><b>${escapeHtml(companyReview)}</b><small>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website) || "官网待补")}</small></div>
-        <div><span>联系人</span><b>${escapeHtml(contactPerson.value)}</b><small title="${escapeHtml(contactDisplay.detail)}">${escapeHtml(contactDisplay.value)}</small></div>
-        <div><span>是否值得跟进</span><b>${escapeHtml(fitReview)}</b><small>行动优先 ${score} 分</small></div>
-      </div>
-    </section>
+    ${renderExtractedContactsPanel(item)}
     <div class="prospect-field-grid">
       <div class="form-field"><label>公司</label><input id="prospectEditCompany" value="${escapeHtml(item.company)}" ${readonly}></div>
       <div class="form-field"><label>官网</label><input id="prospectEditWebsite" value="${escapeHtml(item.website)}" ${readonly}></div>
@@ -24533,11 +26213,13 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
       <div class="prospect-field"><span>最近触达</span><b>${item.lastTouchpointAt ? `${formatTime(item.lastTouchpointAt)} · ${escapeHtml(PROSPECT_CHANNEL_LABELS[item.lastTouchpointChannel || "email"])}` : "尚未记录"}</b></div>
       <div class="prospect-field"><span>最近回复</span><b>${item.lastReplyClassification ? escapeHtml(PROSPECT_REPLY_LABELS[item.lastReplyClassification]) : "尚未记录"}</b></div>
       <div class="prospect-field"><span>下次跟进</span><b>${escapeHtml(item.nextFollowAt || "待安排")}</b></div>
-      <div class="form-field" style="grid-column:1/-1"><label>核验说明</label><textarea id="prospectEditDescription" ${readonly}>${escapeHtml(item.description || "")}</textarea></div>
+      <div class="form-field" style="grid-column:1/-1"><label>候选备注</label><textarea id="prospectEditDescription" ${readonly}>${escapeHtml(item.description || "")}</textarea></div>
       ${item.excludedReason ? `<div class="prospect-field" style="grid-column:1/-1"><span>排除原因</span><b>${escapeHtml(item.excludedReason)}</b></div>` : ""}
     </div>
-    ${renderProspectQualificationPanel(item)}
-    ${renderExtractedContactsPanel(item)}
+    <details class="prospect-outreach-gate" ${prospectOutreachGateOpenId === item.id ? "open" : ""}>
+      <summary><span>转线索 / 发送前检查</span><small>${qualification?.vqaQualified ? "已完成，可以继续" : "需要转线索或联系客户时再处理"}</small>${badge(qualification?.vqaQualified ? "已完成" : "暂不影响查联系人", qualification?.vqaQualified ? "green" : "gray")}</summary>
+      <div class="prospect-outreach-gate-body">${renderProspectQualificationPanel(item)}</div>
+    </details>
     <details class="prospect-technical-audit" ${prospectTechnicalAuditOpenId === item.id ? "open" : ""}>
       <summary><span>技术核验记录</span><small>企业身份、资格门禁、官网证据</small></summary>
       <div class="prospect-technical-audit-body">
@@ -24551,7 +26233,7 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
     <div class="prospect-action-row">
       ${item.status !== "synced" ? `<button class="btn" id="prospectSaveButton">保存候选资料</button>` : ""}
       ${item.status === "excluded" && !dnc ? `<button class="btn" id="prospectRestoreButton">恢复待核验</button>` : ""}
-      ${qualification?.vqaQualified && item.status !== "synced" ? `<button class="btn primary" id="prospectDetailSyncButton">保留并转为线索</button>` : ""}
+      ${item.status !== "synced" ? `<button class="btn primary" id="prospectDetailSyncButton">转为线索</button>` : ""}
       ${item.status === "synced" && item.leadId ? `<button class="btn primary" id="prospectViewLeadButton">查看线索</button>` : ""}
       ${canWriteOutreach && canContact ? `<button class="btn" id="prospectTouchpointButton">补录历史触达</button><button class="btn" id="prospectReplyButton">记录回复</button>` : ""}
       ${item.lastTouchpointAt ? `<button class="btn" id="prospectTouchpointHistoryButton">查看记录</button>` : ""}
@@ -24568,6 +26250,9 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
   qs<HTMLButtonElement>("#prospectTouchpointHistoryButton", box)?.addEventListener("click", () => void openProspectTouchpointHistory(item));
   qs<HTMLDetailsElement>(".prospect-technical-audit", box)?.addEventListener("toggle", (event) => {
     prospectTechnicalAuditOpenId = (event.currentTarget as HTMLDetailsElement).open ? item.id : "";
+  });
+  qs<HTMLDetailsElement>(".prospect-outreach-gate", box)?.addEventListener("toggle", (event) => {
+    prospectOutreachGateOpenId = (event.currentTarget as HTMLDetailsElement).open ? item.id : "";
   });
   bindProspectIdentityBootstrapActions(box, item);
   bindProspectQualificationActions(box, item);
@@ -24599,7 +26284,7 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
     mailTo.readOnly = Boolean(approvedEmail);
     mailTo.placeholder = approvedEmail
       ? "已锁定人工批准邮箱"
-      : "通过客户资格审核后自动锁定批准邮箱";
+      : "完成发送前检查后自动带入已确认邮箱";
   }
   renderProspectMailPreview();
 }
@@ -24708,6 +26393,9 @@ function renderProspectList() {
     rows.innerHTML = pageRows.length ? pageRows.map((item) => {
       const score = leadFinderScore(item);
       const status = prospectStatusMeta(item);
+      const contactDisplay = websiteContactDisplay(item);
+      const contactAttempt = latestContactEnrichment(item);
+      const contactRunning = contactAttempt?.status === "queued" || contactAttempt?.status === "running";
       return `
         <article class="prospect-item ${item.id === state.selectedProspectId ? "active" : ""}" data-prospect-id="${escapeHtml(item.id)}">
           <input type="checkbox" data-prospect-select="${escapeHtml(item.id)}" ${state.selectedProspectIds.includes(item.id) ? "checked" : ""} aria-label="选择 ${escapeHtml(item.company)}">
@@ -24716,6 +26404,11 @@ function renderProspectList() {
             <p>${escapeHtml(item.business || "业务待维护")}</p>
             <small>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website || ""))}</small>
             <div class="prospect-meta-row">${badge(status.label, status.tone)}${item.lastDevelopmentEmailAt ? badge("已发开发信", "green") : ""}</div>
+            <div class="prospect-contact-quick-row">
+              ${contactDisplay.tone === "ready"
+                ? `<span class="prospect-contact-ready">已找到 · ${escapeHtml(contactDisplay.value)}</span>`
+                : `<button class="prospect-contact-quick" type="button" data-prospect-contact="${escapeHtml(item.id)}" ${contactRunning ? "disabled" : ""}>${contactRunning ? "查询中" : "查联系方式"}</button>`}
+            </div>
             <span class="prospect-next-action">下一步：${escapeHtml(status.action)}</span>
             <div class="prospect-joined-at"><span>加入搜客清单</span><time datetime="${escapeHtml(item.shortlistedAt || item.createdAt)}" title="${escapeHtml(formatProspectJoinedAt(item.shortlistedAt || item.createdAt))}">${escapeHtml(formatProspectJoinedAt(item.shortlistedAt || item.createdAt))}</time></div>
           </div>
@@ -24746,6 +26439,16 @@ function renderProspectList() {
       button.addEventListener("click", select);
       button.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") select();
+      });
+    });
+    qsa<HTMLButtonElement>("[data-prospect-contact]", rows).forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const item = state.websiteOpportunities.find((row) => row.id === button.dataset.prospectContact);
+        if (item) {
+          state.selectedProspectId = item.id;
+          void startContactEnrichment(item, button);
+        }
       });
     });
   }
@@ -25479,9 +27182,53 @@ function setLeadFinderMode(mode: "standard" | "super") {
   syncLeadFinderStartState();
 }
 
+const OFFICIAL_WEBSITE_SEARCH_PROVIDER_IDS = new Set(["brave", "serper", "serpapi", "google_places"]);
+
+function leadFinderAiReadiness() {
+  const config = state.aiConfig;
+  if (!config?.enabled || !config.hasApiKey || !config.useLeadFinder) {
+    return {
+      ready: false,
+      message: "请先在「AI 配置」中保存 API Key、启用模型并勾选自动获客"
+    };
+  }
+  if (config.webSearchStatus === "passed") {
+    return {
+      ready: true,
+      message: "OpenAI Web Search 已验证，官网将从联网引用中确认"
+    };
+  }
+  const externalSearchReady = state.leadProviders.some((provider) =>
+    OFFICIAL_WEBSITE_SEARCH_PROVIDER_IDS.has(provider.id)
+    && provider.ready
+    && provider.enabled
+  );
+  if (config.webSearchStatus === "unsupported" && config.lastTestStatus === "passed") {
+    return externalSearchReady
+      ? {
+          ready: true,
+          message: "普通 AI 负责生成候选，官网由已配置的搜索 API 补查"
+        }
+      : {
+          ready: false,
+          message: "当前模型可以生成企业候选，但不能联网确认官网。请在数据源中心配置 Brave、Serper、SerpApi 或 Google Places"
+        };
+  }
+  if (config.webSearchStatus === "failed") {
+    return {
+      ready: false,
+      message: "普通 AI 调用可用，但 Web Search 测试失败。请检查 Base URL、模型权限后重新测试，或更换 OpenAI 配置"
+    };
+  }
+  return {
+    ready: false,
+    message: "请先在「AI 配置」中点击测试连接；普通 AI 调用成功不代表可以联网确认官网"
+  };
+}
+
 // 搜客按钮始终可点击：未配置 AI 模型且未贴链接时，点击后由 runLeadFinder 提示先配置 AI 模型
 function syncLeadFinderStartState() {
-  const aiReady = Boolean(state.aiConfig?.enabled && state.aiConfig?.hasApiKey && state.aiConfig?.useLeadFinder);
+  const aiReady = leadFinderAiReadiness().ready;
   const urlInput = qs<HTMLTextAreaElement>("#leadFinderUrlInput");
   const urlCount = (urlInput?.value || "").split(/\n|,|，/).map((item) => item.trim()).filter(Boolean).length;
   const needsAi = !aiReady && urlCount === 0;
@@ -25489,7 +27236,7 @@ function syncLeadFinderStartState() {
     const button = qs<HTMLButtonElement>(sel);
     if (!button) return;
     button.disabled = false;
-    button.title = needsAi ? "未配置 AI 模型：点击后将提示先配置 AI 模型（含 API Key 且勾选自动获客）再启动搜客" : "";
+    button.title = needsAi ? "自动搜客需要已测试通过的 OpenAI Web Search：请在 AI 配置中点击测试连接" : "";
     button.classList.remove("is-blocked");
   });
   const hint = qs<HTMLElement>("#leadFinderAiRequiredHint");
@@ -25540,12 +27287,14 @@ async function runLeadAiParse(): Promise<boolean> {
         body: JSON.stringify({ goal })
       });
       leadAiParsed = result;
+      leadAiParseLastError = "";
       fillLeadAiPreview(result);
       toast("AI 已解析为标准搜索词", "success");
       return true;
     } catch (err) {
       clearLeadAiPreview(true);
       const detail = err instanceof Error ? err.message : "模型未返回可用结果";
+      leadAiParseLastError = detail;
       toast(`${detail.startsWith("AI 解析失败") ? detail : `AI 解析失败：${detail}`}，未生成解析结果`, "error");
       return false;
     } finally {
@@ -25696,8 +27445,17 @@ function leadFinderWaitElapsed(value?: string) {
 function leadFinderSourceWaitText(source: LeadFinderSourceStat, job: LeadFinderJob) {
   const status = source.status || "queued";
   const candidateCount = Math.max(source.candidateCount || 0, job.resultIds?.length || 0);
-  const waited = leadFinderWaitElapsed(source.updatedAt || source.createdAt || job.createdAt);
+  const waitStartedAt = source.updatedAt || source.createdAt || job.createdAt;
+  const waited = leadFinderWaitElapsed(waitStartedAt);
+  const waitedMs = Date.now() - new Date(waitStartedAt || "").getTime();
   const waitSuffix = waited ? ` · 已等待 ${waited}` : "";
+  if (["queued", "running", "retry_scheduled", "pause_requested"].includes(status)
+    && Number.isFinite(waitedMs)
+    && waitedMs >= 130_000) {
+    return source.id === "ai_search"
+      ? `响应超时：AI 模型超过 2 分钟没有新返回，后台应结束本次调用。调整建议：检查 API Key、额度、Base URL 与模型联网能力，并减少单次结果数量${waitSuffix}`
+      : `响应超时：数据源超过 2 分钟没有新返回，后台应结束本次调用。调整建议：检查数据源连接、限流状态，或减少同时启用的来源${waitSuffix}`;
+  }
   if (status === "retry_scheduled") {
     return source.id === "ai_search"
       ? `模型服务限流或临时失败，等待自动重试${waitSuffix}`
@@ -26187,6 +27945,18 @@ function syncProspectRadar(job: LeadFinderJob) {
   prospectRadarController.update(model);
 }
 
+function scrollLeadFinderLiveToLatest() {
+  const thread = qs<HTMLElement>("#leadFinderLiveOverview .lead-live-thread");
+  const button = qs<HTMLButtonElement>("#leadFinderLiveOverview [data-lead-live-follow]");
+  if (!thread) return;
+  const previousBehavior = thread.style.scrollBehavior;
+  thread.style.scrollBehavior = "auto";
+  thread.dataset.follow = "true";
+  thread.scrollTop = thread.scrollHeight;
+  if (button) button.hidden = true;
+  requestAnimationFrame(() => { thread.style.scrollBehavior = previousBehavior; });
+}
+
 function renderLeadFinderLiveOverview() {
   const box = qs<HTMLElement>("#leadFinderLiveOverview");
   if (!box) return;
@@ -26249,8 +28019,15 @@ function renderLeadFinderLiveOverview() {
     : undefined;
   const latestDeepEvidence = deepMining?.evidence[deepMining.evidence.length - 1];
   const previousThread = qs<HTMLElement>(".lead-live-thread", box);
-  const wasFollowing = !previousThread
-    || previousThread.scrollHeight - previousThread.scrollTop - previousThread.clientHeight < 72;
+  const previousConsole = qs<HTMLElement>(".lead-live-console", box);
+  const sameJob = previousConsole?.dataset.leadLiveJobId === job.id;
+  const previousScrollTop = sameJob ? previousThread?.scrollTop || 0 : 0;
+  const wasFollowing = !sameJob
+    || previousThread?.dataset.follow !== "false"
+    || Boolean(previousThread && previousThread.scrollHeight - previousThread.scrollTop - previousThread.clientHeight < 72);
+  const previousLastEventKey = sameJob ? previousThread?.dataset.lastEventKey || "" : "";
+  const lastEventKey = logs[logs.length - 1]?.key || "";
+  const hasNewEvent = Boolean(lastEventKey && lastEventKey !== previousLastEventKey);
   box.innerHTML = `
     <div class="lead-live-console" data-lead-live-job-id="${escapeHtml(job.id)}">
       <div class="lead-live-console-head">
@@ -26267,7 +28044,7 @@ function renderLeadFinderLiveOverview() {
           ${job.backendRunId && ["queued", "paused"].includes(job.backendRunStatus || "") ? `<button class="btn danger" type="button" data-lead-live-action="cancel">取消</button>` : ""}
         </div>
       </div>
-      <div class="lead-live-thread" role="log" aria-live="polite" aria-relevant="additions text">
+      <div class="lead-live-thread" role="log" tabindex="0" aria-label="任务执行动态" aria-live="polite" aria-relevant="additions text" data-follow="${wasFollowing ? "true" : "false"}" data-last-event-key="${escapeHtml(lastEventKey)}">
         <article class="lead-live-message is-request">
           <div class="lead-live-avatar" aria-hidden="true">你</div>
           <div class="lead-live-bubble">
@@ -26307,7 +28084,7 @@ function renderLeadFinderLiveOverview() {
         <div class="lead-live-event-stream" aria-label="搜索过程">
           ${hiddenLogCount ? `<p class="lead-live-history-note">较早的 ${hiddenLogCount} 条事实记录已收纳在执行详情</p>` : ""}
           ${logs.length ? logs.map((log, index) => `
-            <article class="lead-live-message is-event ${log.tone} ${index === logs.length - 1 ? "is-latest" : ""}" data-lead-event-key="${escapeHtml(log.key)}">
+            <article class="lead-live-message is-event ${log.tone} ${hasNewEvent && index === logs.length - 1 ? "is-latest" : ""}" data-lead-event-key="${escapeHtml(log.key)}">
               <div class="lead-live-avatar" aria-hidden="true">${escapeHtml((log.source || "搜").slice(0, 1))}</div>
               <div class="lead-live-bubble">
                 <div class="lead-live-message-meta"><b>${escapeHtml(log.source)}</b><time>${escapeHtml(leadTaskDetailTime(log.at))}</time></div>
@@ -26340,10 +28117,70 @@ function renderLeadFinderLiveOverview() {
               </div>
             </div>
           </article>` : ""}
+        ${terminal ? "" : `
+          <div class="lead-live-stream-tail" role="status">
+            <i aria-hidden="true"></i>
+            <span><b>任务进行中</b><small>${escapeHtml(stage.name)} · 新事件将在这里继续追加</small></span>
+          </div>`}
       </div>
+      <button class="lead-live-jump-latest" type="button" data-lead-live-follow ${wasFollowing ? "hidden" : ""}>回到最新</button>
     </div>`;
   const thread = qs<HTMLElement>(".lead-live-thread", box);
-  if (thread && wasFollowing) requestAnimationFrame(() => { thread.scrollTop = thread.scrollHeight; });
+  const jumpLatest = qs<HTMLButtonElement>("[data-lead-live-follow]", box);
+  if (thread) {
+    let programmaticScroll = false;
+    const atBottom = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight < 72;
+    const followLatest = () => {
+      programmaticScroll = true;
+      const previousBehavior = thread.style.scrollBehavior;
+      thread.style.scrollBehavior = "auto";
+      thread.dataset.follow = "true";
+      thread.scrollTop = thread.scrollHeight;
+      if (jumpLatest) jumpLatest.hidden = true;
+      requestAnimationFrame(() => { thread.style.scrollBehavior = previousBehavior; });
+      window.setTimeout(() => { programmaticScroll = false; }, 80);
+    };
+    if (wasFollowing) {
+      followLatest();
+      requestAnimationFrame(() => followLatest());
+    } else {
+      thread.scrollTop = Math.min(previousScrollTop, Math.max(0, thread.scrollHeight - thread.clientHeight));
+    }
+    thread.addEventListener("scroll", () => {
+      if (programmaticScroll) return;
+      if (jumpLatest) jumpLatest.hidden = thread.dataset.follow !== "false";
+    }, { passive: true });
+    thread.addEventListener("wheel", (event) => {
+      if (event.deltaY >= 0 && atBottom()) return;
+      thread.dataset.follow = "false";
+      if (jumpLatest) jumpLatest.hidden = false;
+    }, { passive: true });
+    thread.addEventListener("touchmove", () => {
+      thread.dataset.follow = "false";
+      if (jumpLatest) jumpLatest.hidden = false;
+    }, { passive: true });
+    thread.addEventListener("keydown", (event) => {
+      if (["ArrowUp", "PageUp", "Home"].includes(event.key)) {
+        event.preventDefault();
+        const top = event.key === "Home"
+          ? 0
+          : Math.max(0, thread.scrollTop - (event.key === "PageUp" ? thread.clientHeight * 0.8 : 48));
+        const previousBehavior = thread.style.scrollBehavior;
+        thread.style.scrollBehavior = "auto";
+        thread.scrollTop = top;
+        thread.style.scrollBehavior = previousBehavior;
+        thread.dataset.follow = "false";
+        if (jumpLatest) jumpLatest.hidden = false;
+      } else if (event.key === "End") {
+        event.preventDefault();
+        followLatest();
+      }
+    });
+    jumpLatest?.addEventListener("click", (event) => {
+      event.preventDefault();
+      followLatest();
+    });
+  }
   qs<HTMLButtonElement>("[data-lead-live-radar]", box)?.addEventListener("click", () => void openProspectRadar(job));
   qs<HTMLButtonElement>("[data-lead-live-open]", box)?.addEventListener("click", () => openLeadTaskDetail(job));
   qsa<HTMLButtonElement>("[data-lead-live-candidate]", box).forEach((button) => {
@@ -26366,6 +28203,28 @@ function leadFinderCleaningOutcomeLabel(outcome: ProspectRunCleaningReport["reco
   return "待处理";
 }
 
+function leadFinderRemovedTotal(report?: ProspectRunCleaningReport | null) {
+  const data = report?.summary;
+  if (!data) return 0;
+  return data.providerInvalidCount
+    + data.providerDuplicateCount
+    + data.rejectedCount
+    + data.suppressedCount
+    + data.mergedCount;
+}
+
+function leadFinderRemovalSummary(report?: ProspectRunCleaningReport | null) {
+  const data = report?.summary;
+  if (!data) return "";
+  return [
+    data.providerInvalidCount ? `字段无效 ${data.providerInvalidCount} 条` : "",
+    data.providerDuplicateCount ? `来源内重复 ${data.providerDuplicateCount} 条` : "",
+    data.rejectedCount ? `数据无效 ${data.rejectedCount} 条` : "",
+    data.suppressedCount ? `历史或规则排除 ${data.suppressedCount} 条` : "",
+    data.mergedCount ? `身份归并 ${data.mergedCount} 条` : ""
+  ].filter(Boolean).join("；");
+}
+
 function renderLeadFinderCleaningLedger() {
   const job = primaryLeadFinderLiveJob();
   const report = job?.cleaningReport;
@@ -26378,8 +28237,9 @@ function renderLeadFinderCleaningLedger() {
   const filtered = leadFinderCleaningFilter === "all"
     ? removedRecords
     : removedRecords.filter((record) => record.outcome === leadFinderCleaningFilter);
-  count.textContent = String(removedRecords.length);
-  scope.textContent = job ? `${isLeadFinderJobTerminal(job) ? "最近任务" : (job.superSearchMissionId ? "当前超级搜索轮次" : "当前任务")} · ${removedRecords.length} 条逐条记录` : "等待任务数据";
+  const removedTotal = leadFinderRemovedTotal(report);
+  count.textContent = String(removedTotal);
+  scope.textContent = job ? `${isLeadFinderJobTerminal(job) ? "最近任务" : (job.superSearchMissionId ? "当前超级搜索轮次" : "当前任务")} · ${removedTotal} 条已分流` : "等待任务数据";
   qsa<HTMLButtonElement>("[data-lead-cleaning-filter]").forEach((button) => {
     const active = button.dataset.leadCleaningFilter === leadFinderCleaningFilter;
     button.classList.toggle("active", active);
@@ -26394,7 +28254,36 @@ function renderLeadFinderCleaningLedger() {
     <div><span>规则排除</span><b>${data.suppressedCount}</b></div>
     <div><span>数据无效</span><b>${data.rejectedCount}</b></div>
   ` : `<div class="empty-cell">等待清洗统计</div>`;
-  rows.innerHTML = filtered.length ? filtered.map((record) => {
+  const sourceAggregates = (report?.sources || []).flatMap((source) => [
+    ...(source.invalidCount > 0 ? [{
+      providerCode: source.providerCode,
+      count: source.invalidCount,
+      title: "来源字段不完整",
+      reason: "来源记录缺少企业名称、国家或可识别的主体信息，未进入候选清洗管线。",
+      code: "PROVIDER_INVALID_RECORD",
+      tone: "rejected"
+    }] : []),
+    ...(source.duplicateCount > 0 ? [{
+      providerCode: source.providerCode,
+      count: source.duplicateCount,
+      title: "来源内重复",
+      reason: "同一数据源本批返回了重复主体，系统按来源记录标识或企业身份去重，仅保留一条继续处理。",
+      code: "PROVIDER_DUPLICATE_RECORD",
+      tone: "merged"
+    }] : [])
+  ]);
+  const visibleAggregates = leadFinderCleaningFilter === "all" ? sourceAggregates : [];
+  const aggregateHtml = visibleAggregates.map((record) => {
+    const provider = state.leadProviders.find((item) => item.id === record.providerCode);
+    return `
+      <article class="lead-cleaning-row is-source-summary">
+        <div class="lead-cleaning-source"><b>${escapeHtml(provider?.name || record.providerCode || "未知来源")}</b><span>${escapeHtml(record.providerCode || "未标记来源")}</span></div>
+        <div class="lead-cleaning-record"><b>${escapeHtml(record.title)}</b><span>来源预处理阶段按数量汇总</span></div>
+        <span class="lead-cleaning-outcome is-${record.tone}">${escapeHtml(record.title)} × ${record.count}</span>
+        <div class="lead-cleaning-reason"><b>${escapeHtml(record.reason)}</b><span>${record.code} · 此阶段未保存无效或重复记录的公司名称</span></div>
+      </article>`;
+  }).join("");
+  const detailHtml = filtered.map((record) => {
     const provider = state.leadProviders.find((item) => item.id === record.providerCode);
     const recordTitle = record.sourceCompany || record.candidateName || "未识别企业";
     const sourceFacts = [record.sourceCountry, record.sourceDomain].filter(Boolean).join(" / ") || "未提供国家或官网域名";
@@ -26407,7 +28296,10 @@ function renderLeadFinderCleaningLedger() {
         <div class="lead-cleaning-reason"><b>${escapeHtml(record.reason || "未提供清洗原因")}</b><span>${escapeHtml(record.reasonCode || "未标记原因码")}</span>${record.candidateId ? `<button class="lead-cleaning-candidate" type="button" data-lead-cleaning-candidate="${escapeHtml(record.candidateId)}">查看关联候选 ${escapeHtml(record.candidateName || "")}</button>` : ""}</div>
         <time class="lead-cleaning-time" datetime="${escapeHtml(record.processedAt)}">${escapeHtml(leadTaskDetailDateTime(record.processedAt))}</time>
       </article>`;
-  }).join("") : `<div class="empty-cell">${job ? "当前筛选下暂无清洗去除记录" : "暂无任务清洗记录"}</div>`;
+  }).join("");
+  rows.innerHTML = aggregateHtml || detailHtml
+    ? `${aggregateHtml}${detailHtml}`
+    : `<div class="empty-cell">${job ? "当前筛选下暂无清洗去除记录" : "暂无任务清洗记录"}</div>`;
   qsa<HTMLButtonElement>("[data-lead-cleaning-candidate]", rows).forEach((button) => {
     button.addEventListener("click", () => {
       const candidateId = button.dataset.leadCleaningCandidate || "";
@@ -26423,12 +28315,28 @@ function renderLeadFinderResultView() {
   const cleaningView = qs<HTMLElement>("#leadFinderCleaningView");
   const bulkbar = qs<HTMLElement>("#leadFinderBulkbar");
   const scope = qs<HTMLElement>("#leadFinderResultScope");
+  const reconciliation = qs<HTMLElement>("#leadFinderResultReconciliation");
   if (!candidateView || !cleaningView) return;
   const cleaning = leadFinderResultView === "cleaning";
   candidateView.hidden = cleaning;
   cleaningView.hidden = !cleaning;
   if (bulkbar) bulkbar.hidden = cleaning;
   const currentJob = currentLeadFinderResultJob();
+  const report = currentJob?.cleaningReport;
+  const removedTotal = leadFinderRemovedTotal(report);
+  if (reconciliation) {
+    const data = report?.summary;
+    reconciliation.hidden = !data || removedTotal < 1;
+    reconciliation.innerHTML = data && removedTotal > 0 ? `
+      <div><b>来源返回 ${data.providerRawCount} 条，${data.candidateCount} 条进入候选池，${removedTotal} 条已分流</b><span>${escapeHtml(leadFinderRemovalSummary(report))}</span></div>
+      <button type="button" data-lead-open-cleaning>查看处理原因</button>
+    ` : "";
+    qs<HTMLButtonElement>("[data-lead-open-cleaning]", reconciliation)?.addEventListener("click", () => {
+      leadFinderResultView = "cleaning";
+      leadFinderCleaningFilter = "all";
+      renderLeadFinderResultView();
+    });
+  }
   if (scope) scope.textContent = cleaning
     ? "逐条追溯当前任务的管线处置"
     : currentJob
@@ -26708,12 +28616,21 @@ function renderLeadTaskStream(job: LeadFinderJob) {
   if (stream.dataset.signature === signature) return;
   const wasFollowing = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 72;
   const previousCount = Number(stream.dataset.logCount || 0);
-  stream.innerHTML = logs.map(leadTaskStreamLogHtml).join("");
+  const existingKeys = qsa<HTMLElement>("[data-task-log-key]", stream).map((item) => item.dataset.taskLogKey || "");
+  const canAppend = existingKeys.length > 0
+    && existingKeys.length <= logs.length
+    && existingKeys.every((key, index) => logs[index]?.key === key);
+  if (canAppend) {
+    logs.slice(existingKeys.length).forEach((log) => stream.insertAdjacentHTML("beforeend", leadTaskStreamLogHtml(log)));
+  } else {
+    stream.innerHTML = logs.map(leadTaskStreamLogHtml).join("");
+  }
   stream.dataset.signature = signature;
   stream.dataset.logCount = String(logs.length);
   const newEventsButton = qs<HTMLButtonElement>("#leadTaskNewEvents");
   if (wasFollowing || !previousCount) {
-    requestAnimationFrame(() => { stream.scrollTop = stream.scrollHeight; });
+    stream.scrollTop = stream.scrollHeight;
+    requestAnimationFrame(() => stream.scrollTo({ top: stream.scrollHeight, behavior: previousCount ? "smooth" : "auto" }));
     if (newEventsButton) newEventsButton.hidden = true;
   } else if (newEventsButton && logs.length > previousCount) {
     newEventsButton.textContent = `${logs.length - previousCount} 条新动态`;
@@ -26758,7 +28675,7 @@ function renderLeadTaskSources(job: LeadFinderJob) {
         <div class="task-run-source-result">
           <span class="task-run-source-status">${escapeHtml(source.statusLabel || "等待执行")}</span>
           <span class="task-run-source-count">${escapeHtml(resultText)}</span>
-          ${waitText ? `<span class="task-run-source-wait ${source.id === "ai_search" ? "is-ai" : ""}">${escapeHtml(waitText)}</span>` : ""}
+          ${waitText ? `<span class="task-run-source-wait ${/响应超时/u.test(waitText) ? "is-timeout" : source.id === "ai_search" ? "is-ai" : ""}">${escapeHtml(waitText)}</span>` : ""}
           ${source.failure ? `<button type="button" data-lead-source-failure="${escapeHtml(source.id)}">查看失败报文</button>` : ""}
         </div>
         <time class="task-run-source-time">${escapeHtml(leadTaskDetailTime(source.updatedAt || source.createdAt))}</time>
@@ -26798,7 +28715,15 @@ function openLeadTaskFailureReport(job: LeadFinderJob, sourceId: string) {
   if (!source?.failure || !dialog || !title || !summary || !body) return;
   title.textContent = `${source.name} · 失败报文`;
   summary.textContent = `${source.failure.stage} · ${source.failure.errorCode}`;
-  body.textContent = JSON.stringify({
+  const failureText = `${source.failure.errorCode} ${source.failure.errorMessage}`;
+  const advice = /429|quota|rate|额度|限流/iu.test(failureText)
+    ? "检查接口额度和限流时间，稍后重试，并减少单次返回数量。"
+    : /401|403|auth|key|认证|密钥/iu.test(failureText)
+      ? "检查 API Key、账号权限、Base URL 和模型名称，然后在数据源中心重新测试连接。"
+      : /timeout|timed|超时|network|fetch|连接/iu.test(failureText)
+        ? "检查网络与上游服务状态；减少同时启用的数据源，确认后台 Worker 正常运行后重试。"
+        : "根据错误码检查对应数据源配置；不要反复提交相同任务，可先调整一个搜索条件后重试。";
+  body.textContent = `失败原因\n${source.failure.errorMessage || source.error || "来源执行失败"}\n\n调整建议\n${advice}\n\n技术记录\n${JSON.stringify({
     taskId: job.backendRunId || job.id,
     provider: source.id,
     status: source.status,
@@ -26807,7 +28732,7 @@ function openLeadTaskFailureReport(job: LeadFinderJob, sourceId: string) {
     checkpoint: source.checkpoint,
     attempts: source.attempts || [],
     requests: source.requests || []
-  }, null, 2);
+  }, null, 2)}`;
   if (!dialog.open) dialog.showModal();
 }
 
@@ -27627,6 +29552,24 @@ function createLeadFinderJob(status: LeadFinderJob["status"] = "running") {
   return job;
 }
 
+function recordLeadFinderLaunchFailure(phase: string, error: unknown) {
+  const reason = error instanceof Error ? error.message : "请检查网络、AI 配置和数据源状态后重试";
+  const job = createLeadFinderJob("failed");
+  job.title = `搜客启动失败 · ${currentLeadFinderTitle()}`;
+  job.subtitle = "任务未获得后台执行确认，请按失败原因调整后重试";
+  job.elapsedText = "已结束";
+  job.progress = 100;
+  job.steps = ["解析搜索目标", "校验来源与权限", "提交后台任务", "根据原因重试"];
+  job.expanded = true;
+  job.detailLines = [
+    ...buildLeadFinderJobDetails(),
+    `失败阶段：${phase}`,
+    `失败原因：${reason}`,
+    "调整建议：先处理上面的失败原因，再重新点击新建搜客任务；本条记录不会伪装成已启动。"
+  ];
+  renderLeadFinderJobs();
+}
+
 function updateLeadFinderJob(
   jobId: string,
   resultIds: string[],
@@ -27998,7 +29941,7 @@ function leadTaskLiveEventLog(event: ProspectLiveEventApiRecord): LeadTaskStream
     key: `feed:${event.id}`,
     at: event.occurredAt,
     source,
-    title: event.message,
+    title: leadFinderDisplayText(event.message),
     detail: event.failureCode
       ? `${event.failureCode}${event.retryable ? " · 系统允许重试" : " · 不自动重试"}`
       : event.stage === "deep_mining"
@@ -28783,9 +30726,9 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
       const meta = verificationCheckMeta(entry.status);
       return `
         <div class="lead-report-check">
-          <div><b>${escapeHtml(entry.label)}</b>${badge(meta.label, meta.tone)}</div>
-          <p>${escapeHtml(entry.summary)}</p>
-          <small>${escapeHtml(entry.source || "待补充来源")} · ${escapeHtml(entry.checkedAt ? formatTime(entry.checkedAt) : "时间待确认")}</small>
+          <div><b>${escapeHtml(leadFinderDisplayText(entry.label))}</b>${badge(meta.label, meta.tone)}</div>
+          <p>${escapeHtml(leadFinderDisplayText(entry.summary))}</p>
+          <small>${escapeHtml(leadFinderDisplayText(entry.source || "待补充来源"))} · ${escapeHtml(entry.checkedAt ? formatTime(entry.checkedAt) : "时间待确认")}</small>
         </div>
       `;
     }).join("")
@@ -28809,7 +30752,7 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
     : `
       <div class="lead-evidence-row">
         <div><b>${escapeHtml(item.sourceLabel || item.source || "链接登记")}</b><small>当前候选暂无结构化 Provider 证据</small></div>
-        <p>${websiteProbe ? "系统已按受控低频策略验证官网；执行过程与结果见下方官网验证日志。" : "系统尚未验证企业网页。请等待后台补全或由业务员人工核对企业主体、业务范围和联系方式。"}</p>
+        <p>${websiteProbe ? "系统已完成官网公开资料核验；执行过程与结果见下方核验记录。" : "官网公开资料尚待补全。请等待后台处理或由业务员人工核对企业主体、业务范围和联系方式。"}</p>
         ${item.website ? `<a href="${escapeHtml(normalizeWebsiteLink(item.website))}" target="_blank" rel="noreferrer">人工打开参考链接</a>` : ""}
       </div>
     `;
@@ -28828,9 +30771,9 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
         ${badge(report?.level || "L0", verificationLevelTone(report?.level))}
         <div><b>${escapeHtml(report?.levelLabel || "报告待生成")}</b><small>${escapeHtml(report?.generatedAt ? `生成于 ${formatTime(report.generatedAt)}` : "刷新后生成")}</small></div>
       </div>
-      ${badge(controlledWebsiteAccess ? "受控官网验证" : "尚未访问官网", controlledWebsiteAccess ? "amber" : "green")}
+      ${badge(controlledWebsiteAccess ? "官网资料已核验" : "官网资料待补全", controlledWebsiteAccess ? "amber" : "green")}
       <p>${escapeHtml(report?.conclusion || "当前仅展示候选资料，企业真实性和联系方式需要人工确认。")}</p>
-      <div class="lead-report-policy"><b>安全边界</b><span>${controlledWebsiteAccess ? "仅对国外 HTTPS 官网执行受控低频验证：读取 robots.txt、首页和最多一个同域联系页，不下载文件、不保存网页原文。" : "官网尚未进入受控验证；当前仅保存为人工核对链接。"}</span></div>
+      <div class="lead-report-policy"><b>资料范围</b><span>${controlledWebsiteAccess ? "仅核验境外 HTTPS 官网中的公开企业资料与业务联系方式，不处理受限内容，也不保存原始页面内容。" : "当前仅完成官网链接登记，公开资料尚待补全。"}</span></div>
     </section>
     ${renderProspectScorecard(item)}
     ${renderExtractedContactsPanel(item)}
@@ -28966,7 +30909,9 @@ function leadCategoryText(provider: Pick<LeadProviderStatus, "category" | "capab
 function leadSourceBlockedMessage(blocked: BlockedLeadSource[]) {
   const labels = blocked.map((item) => state.leadProviders.find((provider) => provider.id === item.id)?.name || item.id);
   if (blocked.some((item) => item.id === "ai_search" && item.reason === "not_ready")) {
-    return "AI 搜索尚未配置，请先在 AI 模型配置中启用模型并勾选“自动获客”";
+    const aiProvider = state.leadProviders.find((provider) => provider.id === "ai_search");
+    return aiProvider?.lastTestMessage
+      || "AI 搜索需要测试通过 OpenAI Web Search；其它模型请配置官网搜索 API";
   }
   if (blocked.some((item) => item.reason === "missing")) {
     return `数据源状态已变化，请重新选择：${labels.join("、")}`;
@@ -28994,7 +30939,15 @@ function renderLeadSourceChips() {
     const isAi = provider.tier === "ai";
     const cls = `${executable ? (selected ? "ready active" : "ready") : provider.ready ? "disabled" : "needkey"}${isAi ? " ai" : ""}`;
     const stateText = isAi
-      ? (!provider.ready ? provider.hasApiKey ? "未启用自动获客" : "未配置" : provider.enabled ? "已启用" : "已停用")
+      ? (!provider.ready
+          ? provider.hasApiKey
+            ? state.aiConfig?.webSearchStatus === "unsupported"
+              ? "模型不支持联网"
+              : state.aiConfig?.webSearchStatus === "failed"
+                ? "联网测试失败"
+                : "Web Search 待测试"
+            : "未配置"
+          : provider.enabled ? "官网联网已验证" : "已停用")
       : !provider.ready ? "未配置" : !provider.enabled ? "已停用" : provider.requiresKey ? "已连接" : "内置";
     return `<button type="button" class="lead-source-chip ${cls}" data-lead-provider="${escapeHtml(provider.id)}"><span class="dot"></span><span class="ls-chip-name">${escapeHtml(provider.name)}</span><small>${stateText}</small></button>`;
   };
@@ -29710,18 +31663,35 @@ async function launchProspectRunFromLeadFinder(
 
 async function runLeadFinder(button?: HTMLButtonElement) {
   const originalText = button?.textContent || "生成并运行任务";
+  let launchStage = "启动前校验";
+  const setStartStage = (stage: string) => {
+    launchStage = stage;
+    if (button) {
+      button.disabled = true;
+      button.classList.add("is-running");
+      button.setAttribute("aria-busy", "true");
+      button.textContent = stage;
+    }
+  };
+  const restoreStartButton = () => {
+    if (!button) return;
+    button.disabled = false;
+    button.classList.remove("is-running");
+    button.removeAttribute("aria-busy");
+    button.textContent = originalText;
+  };
   const input = qs<HTMLTextAreaElement>("#leadFinderUrlInput");
   const urls = (input?.value || "").split(/\n|,|，/).map((item) => item.trim()).filter(Boolean).slice(0, Number(qs<HTMLSelectElement>("#leadLimit")?.value || 20));
-  const aiReady = Boolean(state.aiConfig?.enabled && state.aiConfig?.hasApiKey && state.aiConfig?.useLeadFinder);
   renderLeadFinderSearchLinks();
+  if (!urls.length) await loadLeadProviders();
+  const aiReadiness = leadFinderAiReadiness();
   // AI 模型为必选项：未配置不允许启动搜客，避免用户使用未授权/免费模型反复搜索
-  if (!urls.length && !aiReady) {
-    toast("请先在「AI 配置」中配置并启用 AI 模型（含 API Key 且勾选自动获客）后再启动搜索", "error");
+  if (!urls.length && !aiReadiness.ready) {
+    toast(aiReadiness.message, "error");
     return;
   }
   let sources: string[] = [];
   if (!urls.length) {
-    await loadLeadProviders();
     const resolution = resolveLeadSearchSources(
       state.leadProviders,
       state.selectedLeadSources,
@@ -29789,11 +31759,31 @@ async function runLeadFinder(button?: HTMLButtonElement) {
   const limit = Number(qs<HTMLSelectElement>("#leadLimit")?.value || 12);
   const scheduleEnabled = leadFinderMode === "standard" && Boolean(qs<HTMLInputElement>("#leadFinderScheduleInput")?.checked);
 
+  // 先完成自然语言解析，再进入费用确认和后台启动，避免用户看到“解析成功”后
+  // 仍不知道是否已经进入启动流程。失焦自动解析与这里的启动解析会复用同一个请求。
+  if (!urls.length && leadBriefMode === "nl") {
+    const goal = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim();
+    if (!goal) {
+      toast("请先输入自然语言搜索目标", "error");
+      return;
+    }
+    if (!leadAiParsed) {
+      setStartStage("正在解析搜索目标");
+      const parsed = await runLeadAiParse();
+      if (!parsed) {
+        recordLeadFinderLaunchFailure("AI 解析", leadAiParseLastError || "AI 未返回可执行的标准搜索条件");
+        restoreStartButton();
+        return;
+      }
+    }
+  }
+
   // 计费源成本护栏：付费 API 与 AI 搜索都会产生费用，搜索前确认
   if (!urls.length) {
     const billed = sources.map((id) => state.leadProviders.find((p) => p.id === id)).filter((p): p is LeadProviderStatus => Boolean(p && (p.tier === "paid" || p.tier === "ai")));
     if (leadFinderMode === "super" && billed.length && Number(qs<HTMLInputElement>("#leadSuperCost")?.value || 0) <= 0) {
       toast("超级搜索选择了计费或 AI 来源，请先设置费用上限", "error");
+      restoreStartButton();
       return;
     }
     if (billed.length) {
@@ -29808,29 +31798,29 @@ async function runLeadFinder(button?: HTMLButtonElement) {
         consequences: ["第三方 API 或 AI 模型可能产生实际费用", "具体费用以对应服务商账单为准", "任务创建后可在运行记录中查看调用情况"],
         confirmLabel: "确认并开始",
         tone: "warning"
-      })) return;
+      })) {
+        restoreStartButton();
+        return;
+      }
     }
     if (scheduleEnabled
       && billed.length
       && !qs<HTMLInputElement>("#leadFinderRecurringCostInput")?.checked) {
       toast("定期任务包含计费或 AI 数据源，请单独勾选持续费用确认", "error");
+      restoreStartButton();
       return;
     }
   }
 
   let job: LeadFinderJob | null = null;
-  if (button) {
-    button.disabled = true;
-    button.classList.add("is-running");
-    button.textContent = urls.length ? "正在登记链接" : "正在创建任务";
-  }
+  setStartStage(urls.length ? "正在登记链接" : "正在创建任务");
   try {
     if (!urls.length) {
       // 自然语言模式：若尚未解析，启动前自动解析（描述完直接点搜索也能用，无需手动点「AI 解析」）
       if (leadBriefMode === "nl") {
         const goal = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim();
         if (goal && !leadAiParsed) {
-          if (button) button.textContent = "正在解析搜索目标";
+          setStartStage("正在解析搜索目标");
           const parsed = await runLeadAiParse();
           if (!parsed) return;
         }
@@ -29839,9 +31829,9 @@ async function runLeadFinder(button?: HTMLButtonElement) {
         sources,
         limit,
         leadFinderMode,
-        (stage) => { if (button) button.textContent = stage; }
+        (stage) => setStartStage(stage)
       );
-      if (button) button.textContent = "搜索已进入队列";
+      setStartStage("搜索已进入队列");
       const backendJob = prospectRunJob(result);
       if (result.launchTimings) {
         const timing = result.launchTimings;
@@ -29901,16 +31891,14 @@ async function runLeadFinder(button?: HTMLButtonElement) {
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
-    toast(`已登记 ${result.opportunities.length} 个官网链接，未访问企业网页`);
+    toast(`已登记 ${result.opportunities.length} 个官网链接，公开资料待补全`);
   } catch (error) {
     if (job) updateLeadFinderJob(job.id, [], "failed");
-    toast(`搜客任务失败：${error instanceof Error ? error.message : "请检查网络后重试"}`, "error");
+    const reason = error instanceof Error ? error.message : "请检查网络、AI 配置和数据源状态后重试";
+    if (!job) recordLeadFinderLaunchFailure(launchStage, error);
+    toast(`搜客任务失败：未启动（${launchStage}）：${reason}`, "error");
   } finally {
-    if (button) {
-      button.disabled = false;
-      button.classList.remove("is-running");
-      button.textContent = originalText;
-    }
+    restoreStartButton();
   }
 }
 
@@ -30058,7 +32046,7 @@ async function registerWebsiteReferences(button?: HTMLButtonElement) {
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
-    toast(`已登记 ${result.opportunities.length} 个官网链接，未访问企业网页`);
+    toast(`已登记 ${result.opportunities.length} 个官网链接，公开资料待补全`);
   } catch (error) {
     toast(`链接登记失败：${error instanceof Error ? error.message : "请检查网址格式后重试"}`, "error");
   } finally {
@@ -31765,6 +33753,7 @@ function openDailyReportReplyModal(report: DailyReport, comment: DailyReportComm
 function internalMessageActionLabel(message: InternalMessage) {
   if (message.relatedType === "daily_report" && message.relatedId) return "查看日报";
   if (message.relatedType === "email_return" && message.relatedId) return "查看邮件回流";
+  if (message.relatedType === "quote_history" && message.relatedId) return "查看报价变化";
   if (message.relatedType === "integration_approval") return "处理审批";
   if (message.relatedType === "integration_call") return "查看运行记录";
   if (message.relatedType === "integration_connection") return "查看连接";
@@ -31808,6 +33797,13 @@ function navigateFromInternalMessage(message: InternalMessage) {
   if (message.relatedType === "email_return" && message.relatedId) {
     activateNavView("email-return-flow");
     void openEmailReturnDetail(message.relatedId);
+    return;
+  }
+  if (message.relatedType === "quote_history" && message.relatedId) {
+    state.quoteHistoryFocusId = message.relatedId;
+    state.quoteHistoryPage = 1;
+    activateNavView("documents");
+    setDocumentWorkspaceMode("quote-history");
     return;
   }
   if (["integration_approval", "integration_call", "integration_connection", "integration_event", "integration_connector"].includes(message.relatedType)) {
@@ -31992,6 +33988,7 @@ function installEvents() {
   });
   qs<HTMLButtonElement>("#profileEntryButton")?.addEventListener("click", () => activateNavView("profile", () => renderProfile()));
   qs<HTMLButtonElement>("#profileSaveButton")?.addEventListener("click", (event) => void saveProfileEmailBinding(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#profileChangePasswordButton")?.addEventListener("click", (event) => void changeProfilePassword(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#profileClearImapButton")?.addEventListener("click", (event) => void clearProfileImapPassword(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#profileTestImapButton")?.addEventListener("click", (event) => void testProfileImap(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#profileDomainAuthButton")?.addEventListener("click", (event) => void checkProfileEmailDomain(event.currentTarget as HTMLButtonElement));
@@ -32324,6 +34321,8 @@ function installEvents() {
   qs<HTMLButtonElement>("#agentKnowledgeStatus")?.addEventListener("click", () => void openAgentKnowledgeCenter());
   qs<HTMLButtonElement>("#agentTriggerStatus")?.addEventListener("click", () => void openAgentTriggerManager());
   qs<HTMLButtonElement>("#agentGovernanceStatus")?.addEventListener("click", () => void openAgentGovernance());
+  qs<HTMLButtonElement>("#salesDistillationButton")?.addEventListener("click", (event) => void createSalesDistillationFromUi(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#salesDistillationRefreshButton")?.addEventListener("click", () => void loadSalesDistillationWorkspace());
   qs<HTMLButtonElement>("#agentNewPlanButton")?.addEventListener("click", () => {
     setFieldValue("#agentGoalInput", "");
     startNewAgentConversation();
@@ -32427,7 +34426,10 @@ function installEvents() {
   applyBriefMode();
   qs<HTMLButtonElement>("#leadAiParseButton")?.addEventListener("click", () => void runLeadAiParse());
   qs<HTMLButtonElement>("#leadAiClearButton")?.addEventListener("click", () => clearLeadAiPreview());
-  qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.addEventListener("input", () => { if (leadAiParsed) clearLeadAiPreview(true); });
+  qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.addEventListener("input", () => {
+    leadAiParseLastError = "";
+    if (leadAiParsed) clearLeadAiPreview(true);
+  });
   // 自然语言框失焦时自动解析（描述完离开焦点即解析，预览自动出现，无需手动点「AI 解析」）
   qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.addEventListener("blur", () => {
     if (leadBriefMode === "nl" && !leadAiParsed) void runLeadAiParse();
@@ -32619,6 +34621,11 @@ function installEvents() {
   });
   qs<HTMLElement>("#leadFinderLiveOverview")?.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
+    if (target.closest("[data-lead-live-follow]")) {
+      event.preventDefault();
+      scrollLeadFinderLiveToLatest();
+      return;
+    }
     if (target.closest("[data-lead-empty-start]")) {
       event.preventDefault();
       void runLeadFinder(target.closest("[data-lead-empty-start]") as HTMLButtonElement);
@@ -32723,6 +34730,7 @@ function installEvents() {
   qs<HTMLButtonElement>("#prospectPreviewMailButton")?.addEventListener("click", renderProspectMailPreview);
   qs<HTMLButtonElement>("#prospectSendMailButton")?.addEventListener("click", (event) => void sendProspectDevelopmentEmail(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectSyncButton")?.addEventListener("click", (event) => void syncSelectedProspects(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectEnrichContactsButton")?.addEventListener("click", (event) => void enrichSelectedProspectContacts(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectExcludeButton")?.addEventListener("click", (event) => requestProspectExclusion(state.selectedProspectIds, event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectAssignButton")?.addEventListener("click", (event) => void updateProspectBatch("assign", state.selectedProspectIds, event.currentTarget as HTMLButtonElement));
   qs<HTMLInputElement>("#prospectSelectPage")?.addEventListener("change", (event) => {
@@ -32810,12 +34818,18 @@ function installEvents() {
   });
   qs<HTMLButtonElement>("#newDocumentButton")?.addEventListener("click", openNewDocument);
   qs<HTMLButtonElement>("#documentImportButton")?.addEventListener("click", openTradeDocumentImport);
+  qs<HTMLButtonElement>("#documentOcrButton")?.addEventListener("click", openTradeDocumentOcr);
   qs<HTMLButtonElement>("#documentDefaultsViewButton")?.addEventListener("click", () => setDocumentWorkspaceMode("defaults"));
   qs<HTMLButtonElement>("#documentDefaultsBackButton")?.addEventListener("click", () => setDocumentWorkspaceMode("studio"));
   qs<HTMLButtonElement>("#documentDefaultsSaveButton")?.addEventListener("click", () => void saveDocumentDefaults());
   qs<HTMLButtonElement>("#documentDefaultsManageAssets")?.addEventListener("click", () => openDocumentAssetManager(state.documentAssets));
+  qs<HTMLButtonElement>("#documentSellerProfilesManage")?.addEventListener("click", () => openDocumentAssetManager(state.documentAssets));
   qs<HTMLButtonElement>("#documentHistoryViewButton")?.addEventListener("click", () => setDocumentWorkspaceMode("history"));
   qs<HTMLButtonElement>("#documentHistoryBackButton")?.addEventListener("click", () => setDocumentWorkspaceMode("studio"));
+  qs<HTMLButtonElement>("#quoteHistoryViewButton")?.addEventListener("click", () => { state.quoteHistoryFocusId = ""; setQuoteHistoryMode("records", false); setDocumentWorkspaceMode("quote-history"); });
+  qs<HTMLButtonElement>("#quoteHistoryBackButton")?.addEventListener("click", () => setDocumentWorkspaceMode("studio"));
+  qs<HTMLButtonElement>("#quoteHistoryRecordsModeButton")?.addEventListener("click", () => setQuoteHistoryMode("records"));
+  qs<HTMLButtonElement>("#quoteHistoryProductModeButton")?.addEventListener("click", () => setQuoteHistoryMode("product"));
   qs<HTMLButtonElement>("#documentConvertButton")?.addEventListener("click", openDocumentConversion);
   qs<HTMLButtonElement>("#selectDocumentProductsButton")?.addEventListener("click", openProductPicker);
   qs<HTMLButtonElement>("#documentHistorySearchButton")?.addEventListener("click", () => { state.documentHistoryPage = 1; void loadDocumentHistory(); });
@@ -32823,7 +34837,13 @@ function installEvents() {
   qs<HTMLButtonElement>("#documentHistoryPrevButton")?.addEventListener("click", () => { state.documentHistoryPage = Math.max(1, state.documentHistoryPage - 1); void loadDocumentHistory(); });
   qs<HTMLButtonElement>("#documentHistoryNextButton")?.addEventListener("click", () => { state.documentHistoryPage = Math.min(state.documentHistoryPageCount, state.documentHistoryPage + 1); void loadDocumentHistory(); });
   qs<HTMLInputElement>("#documentHistoryKeyword")?.addEventListener("keydown", (event) => { if (event.key === "Enter") { state.documentHistoryPage = 1; void loadDocumentHistory(); } });
+  qs<HTMLButtonElement>("#quoteHistorySearchButton")?.addEventListener("click", () => { state.quoteHistoryFocusId = ""; state.quoteHistoryPage = 1; void loadQuoteHistory(); });
+  qs<HTMLButtonElement>("#quoteHistoryResetButton")?.addEventListener("click", resetQuoteHistoryFilters);
+  qs<HTMLButtonElement>("#quoteHistoryPrevButton")?.addEventListener("click", () => { state.quoteHistoryPage = Math.max(1, state.quoteHistoryPage - 1); void loadQuoteHistory(); });
+  qs<HTMLButtonElement>("#quoteHistoryNextButton")?.addEventListener("click", () => { state.quoteHistoryPage = Math.min(state.quoteHistoryPageCount, state.quoteHistoryPage + 1); void loadQuoteHistory(); });
+  qsa<HTMLInputElement>("#quoteHistoryKeyword, #quoteHistoryProduct, #quoteHistoryCustomer, #quoteHistoryDeal, #quoteHistoryCountry").forEach((input) => input.addEventListener("keydown", (event) => { if (event.key === "Enter") { state.quoteHistoryFocusId = ""; state.quoteHistoryPage = 1; void loadQuoteHistory(); } }));
   qs<HTMLButtonElement>("#saveDocumentButton")?.addEventListener("click", () => void saveTradeDocument());
+  qs<HTMLButtonElement>("#advancedExcelButton")?.addEventListener("click", () => void openAdvancedExcelPanel());
   qs<HTMLButtonElement>("#exportDocumentPdfButton")?.addEventListener("click", () => void exportTradeDocumentPdf());
 
   const planetBtn = qs<HTMLButtonElement>("#planetViewButton");
@@ -32899,9 +34919,14 @@ function installEvents() {
     if (!deal) return;
     const customerSelect = qs<HTMLSelectElement>("#docCustomerInput");
     if (customerSelect) customerSelect.value = deal.customerId || "";
-    applyDocumentCustomerDefaults(deal.customerId || "");
     const currency = qs<HTMLSelectElement>("#docCurrencyInput");
     if (currency && deal.currency) currency.value = deal.currency;
+    applyDocumentCustomerDefaults(deal.customerId || "", deal);
+  });
+  qs<HTMLSelectElement>("#docCurrencyInput")?.addEventListener("change", () => {
+    const customer = state.customers.find((item) => item.id === qs<HTMLSelectElement>("#docCustomerInput")?.value);
+    const deal = state.deals.find((item) => item.id === qs<HTMLSelectElement>("#docDealInput")?.value);
+    applyMatchedSellerToEditor(customer, deal);
   });
   qs<HTMLButtonElement>("#addDocumentItemButton")?.addEventListener("click", addDocumentItem);
   qs<HTMLButtonElement>("#refreshDocumentPreviewButton")?.addEventListener("click", () => renderDocumentPreview(collectDocumentDraft()));
@@ -32909,6 +34934,9 @@ function installEvents() {
     button.addEventListener("click", () => {
       const newType = (button.dataset.docType || "PI") as "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING";
       setDocumentType(newType);
+      const customer = state.customers.find((item) => item.id === qs<HTMLSelectElement>("#docCustomerInput")?.value);
+      const deal = state.deals.find((item) => item.id === qs<HTMLSelectElement>("#docDealInput")?.value);
+      applyMatchedSellerToEditor(customer, deal, newType);
       const title = qs<HTMLInputElement>("#docTitleInput");
       const number = qs<HTMLInputElement>("#docNumberInput");
       if (title && (!title.value || title.value.includes("新建"))) {
@@ -32920,7 +34948,10 @@ function installEvents() {
     });
   });
   // 语言切换 - 实时更新预览
-  qs<HTMLSelectElement>("#docLanguageInput")?.addEventListener("change", () => renderDocumentPreview(collectDocumentDraft()));
+  qs<HTMLSelectElement>("#docLanguageInput")?.addEventListener("change", () => {
+    syncShippingCostLabel();
+    renderDocumentPreview(collectDocumentDraft());
+  });
   // 主题切换 - 同步 templateInput 并更新预览
   qs<HTMLSelectElement>("#docThemeInput")?.addEventListener("change", (event) => {
     const val = (event.currentTarget as HTMLSelectElement).value;
@@ -33038,6 +35069,11 @@ function installEvents() {
   qs<HTMLButtonElement>("#memoDeleteButton")?.addEventListener("click", () => void deleteSelectedMemo());
   const systemSettingsSaveButton = qs<HTMLButtonElement>("#systemSettingsSaveButton");
   systemSettingsSaveButton?.addEventListener("click", () => void saveTeamSystemSettings(systemSettingsSaveButton));
+  qs<HTMLButtonElement>("#tradeDocumentOcrSaveButton")?.addEventListener("click", (event) => void saveTradeDocumentOcrProvider(event.currentTarget as HTMLButtonElement));
+  qs<HTMLSelectElement>("#tradeDocumentOcrProvider")?.addEventListener("change", () => {
+    tradeDocumentOcrProvider = { ...tradeDocumentOcrProvider, provider: (qs<HTMLSelectElement>("#tradeDocumentOcrProvider")?.value || "none") as TradeDocumentOcrProviderConfig["provider"] };
+    renderTeamSystemSettings();
+  });
 }
 
 function rememberWorkspaceTab(view: string) {
@@ -33058,9 +35094,15 @@ function closeWorkspaceTab(view: string) {
 function renderOpenWorkspaceTabs(activeView: string) {
   const wrap = qs<HTMLElement>("#topOpenTabs");
   if (!wrap) return;
+  if (isPlatformOperator()) {
+    openWorkspaceTabs = ["platform-operations"];
+    workspaceTabHistory = ["platform-operations"];
+    wrap.innerHTML = "";
+    return;
+  }
   openWorkspaceTabs = openWorkspaceTabs.filter((view) => canAccessWorkspaceView(view));
   workspaceTabHistory = workspaceTabHistory.filter((view) => canAccessWorkspaceView(view));
-  if (!openWorkspaceTabs.includes("dashboard")) openWorkspaceTabs.unshift("dashboard");
+  if (canAccessWorkspaceView("dashboard") && !openWorkspaceTabs.includes("dashboard")) openWorkspaceTabs.unshift("dashboard");
   wrap.innerHTML = openWorkspaceTabs.map((view) => {
     const label = viewLabels[view] || view;
     const active = view === activeView ? " active" : "";
@@ -33119,7 +35161,7 @@ function getStoredTheme(): string {
   try { return localStorage.getItem(THEME_STORAGE_KEY) || ""; } catch { return ""; }
 }
 function getInitialTheme(): string {
-  return state.user?.theme || getStoredTheme() || "ocean";
+  return state.user?.theme || getStoredTheme() || "rose";
 }
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
@@ -33195,7 +35237,7 @@ function applyTheme(theme: string): void {
     root.style.setProperty("--nav", c.nav);
     root.style.setProperty("--brand-ring", c.ring);
   } else {
-    root.dataset.theme = theme || "ocean";
+    root.dataset.theme = theme || "rose";
   }
 }
 
@@ -33267,9 +35309,9 @@ function renderThemeView(): void {
   };
   const resetBtn = qs<HTMLButtonElement>("#themeReset");
   if (resetBtn) resetBtn.onclick = () => {
-    themeCurrentSelection = "ocean";
-    applyTheme("ocean");
-    qsa(".th-preset", wrap).forEach((n) => n.classList.toggle("is-active", (n as HTMLElement).dataset.themePick === "ocean"));
+    themeCurrentSelection = "rose";
+    applyTheme("rose");
+    qsa(".th-preset", wrap).forEach((n) => n.classList.toggle("is-active", (n as HTMLElement).dataset.themePick === "rose"));
     setThemeStatus("已恢复默认主题，点「保存主题」生效", "preview");
   };
 }
@@ -34437,8 +36479,9 @@ function activateNavView(view: string, after?: () => void) {
   if (view === "access-control") view = "member-management";
   if (!qs<HTMLElement>(`#${CSS.escape(view)}`)) view = "dashboard";
   if (!canAccessWorkspaceView(view)) {
-    toast("当前账号无权访问系统设置", "error");
-    view = "dashboard";
+    const platformOperator = isPlatformOperator();
+    toast(platformOperator ? "业务模块请登录其他账号" : "当前账号无权访问系统设置", "error");
+    view = platformOperator ? "platform-operations" : "dashboard";
     after = undefined;
   }
   const activeView = qs<HTMLElement>(".view.active")?.id;
@@ -34509,6 +36552,9 @@ function activateNavView(view: string, after?: () => void) {
   if (view === "customer-pool") {
     renderCustomerPool();
     void reloadCustomerScopes().catch((error) => toast(error instanceof Error ? error.message : "客户公池加载失败", "error"));
+  }
+  if (view === "sales-distillation") {
+    void loadSalesDistillationWorkspace();
   }
   if (view === "products") {
     renderProducts();
@@ -34643,6 +36689,9 @@ function resolveTopbarSearchView(rawValue: string) {
     ["连接器", "integration-center"],
     ["mcp", "integration-center"],
     ["integration", "integration-center"],
+    ["销售能力训练", "sales-distillation"],
+    ["销售训练", "sales-distillation"],
+    ["业务员蒸馏", "sales-distillation"],
     ["ai", "ai-config"],
     ["gpt", "ai-config"],
     ["模型", "ai-config"],

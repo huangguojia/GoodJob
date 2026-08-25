@@ -44,7 +44,62 @@ free -h
 df -h
 ```
 
-## 3. 推荐方式：服务器只拉取一次私人 SVN
+## 3. 推荐方式：ACR 固定版本镜像部署
+
+正式服务器建议使用 `registry` 模式。服务器不编译源码，只拉取已经在本机验证并推送到
+阿里云 ACR 的 `linux/amd64` 固定版本镜像。个人业务数据库、上传文件和生产密钥仍然
+只保存在服务器数据卷或 `shared` 目录，不进入镜像。
+
+本机第一次发布镜像前，先登录 ACR（密码只在终端输入，不写入项目文件）：
+
+```bash
+docker login crpi-f1g4pi9vyexdaer5.cn-hongkong.personal.cr.aliyuncs.com
+```
+
+在私人版源码目录执行，例如发布 `1.5.8`：
+
+```bash
+cd /path/to/GoodJob_private
+./publish-images.sh 1.5.8
+```
+
+该命令会重新生成生产构建产物，然后依次推送三个镜像：
+
+```text
+backend:1.5.8
+communication:1.5.8
+gateway:1.5.8
+```
+
+构建目标固定为 `linux/amd64`，适配你的 Alibaba Cloud Linux `x86_64` 服务器。
+
+服务器首次部署时，配置文件使用 `GOODJOB_IMAGE_MODE=registry` 和三个 ACR 地址。登录
+ACR 后执行：
+
+```bash
+./update-registry.sh 1.5.8
+```
+
+脚本会备份数据库、拉取固定版本镜像、执行幂等迁移、启动服务并进行健康检查。不要只
+使用 `latest`，这样无法准确判断当前版本和回滚目标。
+
+以后发布新版本，例如 `1.5.9`：
+
+```text
+本机：./publish-images.sh 1.5.9
+服务器：./update-registry.sh 1.5.9
+```
+
+回滚时：
+
+```bash
+./rollback.sh
+```
+
+回滚只切换应用镜像，不反向执行数据库迁移；数据库结构变化必须依靠升级前自动备份
+恢复评估。
+
+## 4. 备用方式：服务器只拉取一次私人 SVN
 
 你不需要每次重新上传压缩包。服务器安装 Docker、Subversion 后，第一次执行：
 
@@ -73,7 +128,7 @@ cd /opt/goodjobcrm-src
 
 如果服务器只允许使用安装包，也可以使用下面的压缩包方式。
 
-## 4. 上传与校验部署包
+## 5. 上传与校验部署包
 
 在本机上传压缩包和 `.sha256` 文件到服务器 `/root`。服务器执行：
 
@@ -86,7 +141,7 @@ cd GoodJob-CRM-Docker-*
 
 校验必须显示 `OK`。不要把旧宝塔部署包和 Docker 部署包混用。
 
-## 5. 首次配置
+## 6. 首次配置
 
 ```bash
 ./configure.sh
@@ -102,7 +157,7 @@ cd GoodJob-CRM-Docker-*
 目录权限为 `700`，文件权限为 `600`。`configure.sh` 检测到已有配置时会拒绝
 覆盖。不要把该目录、`deploy.env` 或终端中的密码发送给别人。
 
-## 6. 安装前预检
+## 7. 安装前预检
 
 ```bash
 ./preflight.sh
@@ -118,7 +173,7 @@ cd GoodJob-CRM-Docker-*
 
 预检不会拉取镜像、创建容器、重启服务或修改 Nginx。
 
-## 7. 构建并启动
+## 8. 构建并启动
 
 ```bash
 ./install.sh
@@ -141,7 +196,7 @@ cd GoodJob-CRM-Docker-*
 
 不要使用 `docker compose down -v`，其中 `-v` 会删除 GoodJob 数据卷。
 
-## 8. 接入宝塔网站
+## 9. 接入宝塔网站
 
 先在服务器验证：
 
@@ -172,7 +227,7 @@ curl -I http://127.0.0.1:4188/
 
 `nginx -t` 失败时不要 reload，先恢复该网站配置备份。
 
-## 9. HTTPS
+## 10. HTTPS
 
 未启用 SSL 时，首次配置选择 `N`。宝塔签发证书后修改：
 
@@ -197,7 +252,7 @@ SESSION_COOKIE_SECURE=true
 不要在 HTTPS 未生效前提前设置 `SESSION_COOKIE_SECURE=true`，否则浏览器无法保留
 登录 Cookie。
 
-## 10. 日常管理
+## 11. 日常管理
 
 ```bash
 ./manage.sh status
@@ -215,7 +270,7 @@ SESSION_COOKIE_SECURE=true
 
 该操作不会停止数据库和其他项目容器。
 
-## 11. 备份、升级与回滚
+## 12. 备份、升级与回滚
 
 手动备份：
 
@@ -254,7 +309,7 @@ GOODJOB_APP_ROOT=/opt/goodjobcrm ./install.sh
 恢复脚本会先校验备份摘要并自动备份当前统一 MySQL，然后只覆盖 GoodJob Compose
 内的统一 MySQL，并补跑 CRM 与 Communication 两套结构迁移。它不会操作其他项目。
 
-## 12. 安装后验收
+## 13. 安装后验收
 
 ```bash
 ./manage.sh status

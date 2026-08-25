@@ -5,6 +5,10 @@ import process from "node:process";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 const allowedSchemaPath = "backend/schema.mysql.sql";
+const allowedBootstrapArtifacts = new Set([
+  "deploy/baota/database/bootstrap.sql.gz",
+  "deploy/baota/database/bootstrap.sql.gz.sha256"
+]);
 const forbiddenPath = /(?:^|\/)(?:\.env(?:\..+)?\.local|backups?|personal-data|\.wwebjs_auth|uploads|dist-packages)(?:\/|$)|\.(?:dump|db|sqlite|sql|sql\.gz)$/iu;
 
 let status = "";
@@ -21,7 +25,10 @@ try {
 const unsafe = status.split(/\r?\n/u).filter(Boolean).filter((line) => {
   const state = line[0];
   const path = line.slice(8).trim();
-  return !["D", "I"].includes(state) && path !== allowedSchemaPath && forbiddenPath.test(path);
+  return !["D", "I"].includes(state)
+    && path !== allowedSchemaPath
+    && !allowedBootstrapArtifacts.has(path)
+    && forbiddenPath.test(path);
 });
 if (unsafe.length) {
   console.error(`发现禁止提交的数据库或环境文件：\n${unsafe.join("\n")}`);

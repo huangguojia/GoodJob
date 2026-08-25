@@ -271,7 +271,10 @@ define("POST /api/ai-background-research", objectSchema(["entityType", "entityId
 define("POST /api/development-email/draft", objectSchema(["entityType", "entityId"], { entityType: oneOf("lead", "customer"), entityId: string({ minLength: 1, maxLength: 120 }), tone: oneOf("professional", "concise", "warm"), scenario: oneOf("first_touch", "daily_contact", "holiday_greeting", "new_product", "custom_goal"), goal: string({ maxLength: 1000 }), requireAi: boolean() }), "按场景加载基础模板或由用户明确要求 AI 生成开发信草稿，不发送。");
 define("POST /api/development-email/send", objectSchema(["entityType", "entityId", "to", "subject", "body"], { entityType: oneOf("lead", "customer"), entityId: string({ minLength: 1, maxLength: 120 }), to: string({ format: "email" }), subject: string({ minLength: 1, maxLength: 160 }), body: string({ minLength: 10, maxLength: 6000 }), nextFollowAt: string({ maxLength: 100 }) }), "真实发送开发信；收件人、主题、正文必须冻结并确认。");
 
-defineMany(["POST /api/agent/outreach-sequences/{id}/{action}", "POST /api/agent/customer-maintenance/{id}/{action}"], emptySchema, "执行 Agent 业务对象的状态动作；路径 action 必须来自接口目录允许值。");
+define("POST /api/agent/sales-training", objectSchema(["sourceUserId"], { sourceUserId: string({ minLength: 1, maxLength: 100 }), periodDays: integer({ minimum: 7, maximum: 365 }) }), "创建业务员训练任务；只能选择服务端允许的团队成员。");
+define("PATCH /api/agent/sales-training/{id}/samples/{sampleId}", objectSchema([], { label: oneOf("positive", "negative", "neutral"), included: boolean(), managerNote: string({ maxLength: 500 }) }), "人工标注训练样本，作为后续训练证据。");
+define("POST /api/agent/sales-distillation", objectSchema(["sourceUserId"], { sourceUserId: string({ minLength: 1, maxLength: 100 }), periodDays: integer({ minimum: 7, maximum: 365 }) }), "创建业务打法蒸馏任务。");
+defineMany(["POST /api/agent/outreach-sequences/{id}/{action}", "POST /api/agent/customer-maintenance/{id}/{action}", "POST /api/agent/sales-training/{id}/{action}", "POST /api/agent/sales-distillation/{id}/publish", "POST /api/agent/sales-distillation/{id}/activate", "POST /api/agent/sales-distillation/activations/{id}/pause"], emptySchema, "执行 Agent 业务对象的状态动作；路径 action 必须来自接口目录允许值。");
 define("POST /api/agent/memories", objectSchema(["type", "scope", "title", "content"], memoryFields), "创建待审核业务记忆；团队、公司或客户范围仍受当前角色和对象权限限制。");
 define("PATCH /api/agent/memories/{id}", objectSchema([], { title: memoryFields.title, content: memoryFields.content, expiresAt: memoryFields.expiresAt }), "修改当前账号有权管理的业务记忆。");
 defineMany(["DELETE /api/agent/memories/{id}", "POST /api/agent/memories/{id}/activate", "POST /api/agent/memories/{id}/archive"], emptySchema, "管理业务记忆状态；删除需要明确确认。");
@@ -302,8 +305,8 @@ const prospectContactFields: Record<string, JsonSchema> = {
 };
 define("POST /api/prospect-list/{id}/send-development-email", objectSchema(["to", "subject", "body"], { to: string({ format: "email" }), subject: string({ minLength: 1, maxLength: 160 }), body: string({ minLength: 10, maxLength: 3000 }), requestId: string({ minLength: 1, maxLength: 120 }) }), "真实向已核验可联系候选发送开发信；冻结收件人、主题、正文和幂等 requestId 后确认。");
 define("POST /api/prospect-list/{id}/touchpoints", objectSchema(["recordMode", "channel", "requestId"], { ...prospectContactFields, recordMode: oneOf("historical") }), "只补录已经发生的候选客户历史触达事实；不发送、不推进状态、不创建待办。");
-define("POST /api/prospect-list/{id}/website-probe", emptySchema, "对已持久化候选的规范官网执行默认关闭的受控低频验证；不接受任意 URL，不提取个人联系方式。");
-defineMany(["GET /api/prospect-list/website-probe/capability", "GET /api/prospect-list/{id}/website-probe/{attemptId}"], emptySchema, "读取官网低频验证能力或持久化任务详情；可回填官网首页同域公开业务邮箱，不可达结果不改变企业或 ICP 评分。");
+define("POST /api/prospect-list/{id}/website-probe", emptySchema, "对已持久化候选的规范官网执行公开资料核验；不接受任意 URL，不处理个人联系方式。");
+defineMany(["GET /api/prospect-list/website-probe/capability", "GET /api/prospect-list/{id}/website-probe/{attemptId}"], emptySchema, "读取官网公开资料核验能力或持久化任务详情；可回填官网公开业务邮箱，未取得结果时不改变企业或 ICP 评分。");
 define("POST /api/prospect-list/{id}/identity-bootstrap", objectSchema([
   "providerId", "registrationNumber", "requestId"
 ], {
@@ -411,6 +414,8 @@ define("POST /api/document-assets/upload", objectSchema(["image", "mime", "kind"
 define("POST /api/trade-documents", objectSchema(["title", "number", "issueDate", "seller", "items"], documentFields), "创建 PI/CI 单据；客户、商机、商品和贸易条款必须来自真实业务数据。");
 define("POST /api/trade-documents/{id}/convert", objectSchema(["targetType"], { targetType: oneOf("PI", "CI", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING") }), "从当前可见单据生成其它类型的独立草稿；源单据不会被覆盖，响应 document.id 是完成证据。");
 define("PATCH /api/trade-documents/{id}", objectSchema(["title", "number", "issueDate", "seller", "items"], documentFields), "完整更新未审批单据；已审批或导出单据必须创建新版本。");
+define("PATCH /api/trade-documents/{id}/excel-options", objectSchema([], { letterheadId: string({ maxLength: 64 }), stampId: string({ maxLength: 64 }), signatureId: string({ maxLength: 64 }), includeProductImages: boolean() }), "修改未审批单据的 Excel 抬头、印章、签名和商品图片选项。");
+defineMany(["POST /api/trade-documents/{id}/export-xlsx", "POST /api/trade-documents/{id}/preview-xlsx"], objectSchema(["templateId"], { templateId: string({ minLength: 1, maxLength: 120 }) }), "使用用户选定的有效模板预览或导出高级 Excel；服务端复核单据归属、模板类型和审批设置。");
 defineMany(["POST /api/trade-documents/{id}/revision", "POST /api/trade-documents/{id}/export"], emptySchema, "创建单据新版本或导出已审批单据。");
 defineMany(["POST /api/trade-documents/{id}/submit-approval", "POST /api/trade-documents/{id}/approve"], objectSchema([], { note: string() }), "提交或批准贸易单据，可记录审批说明。");
 define("POST /api/trade-documents/{id}/reject", objectSchema(["note"], { note: string({ minLength: 1 }) }), "驳回单据必须填写原因。");
@@ -626,7 +631,7 @@ defineMany([
   "POST /api/prospect-runs/{id}/import-pending",
   "POST /api/prospect-super-search/{id}/import-pending"
 ], hitIdsSchema, "只处理用户明确选择的待清洗原始命中；hitIds 必须属于当前账号可见的已结束任务，继续执行字段校验、身份归一和覆盖分流，不自动生成正式线索。");
-define("POST /api/tools/website-scrape/preview", objectSchema(["urls"], { urls: array(string({ minLength: 3 }), { minItems: 1, maxItems: 12 }), useAi: boolean() }), "登记官网链接并生成候选预览；当前实现不会抓取企业网页。");
+define("POST /api/tools/website-scrape/preview", objectSchema(["urls"], { urls: array(string({ minLength: 3 }), { minItems: 1, maxItems: 12 }), useAi: boolean() }), "登记官网链接并生成候选预览；公开资料将在后续核验流程中补全。");
 define("POST /api/tools/website-scrape/sync-opportunities", objectSchema(["requestId", "opportunities"], { requestId: string({ minLength: 8, maxLength: 120 }), opportunities: array(objectSchema(["id", "company", "website"], { id: string({ minLength: 1 }), company: string({ minLength: 1 }), business: string(), country: string(), website: string({ minLength: 3 }), contact: string(), contactInfo: string(), description: string(), source: string({ maxLength: 40 }), sourceLabel: string({ maxLength: 80 }) }), { minItems: 1, maxItems: 100 }) }), "把已完成核验并标记为可联系的候选同步为线索；requestId 冻结整批幂等语义，每个候选 ID 必须属于当前账号，预览候选不能绕过核验门禁。");
 defineMany(["POST /api/prospect-strategy-suggestions/{id}/accept", "POST /api/prospect-strategy-suggestions/{id}/reject"], objectSchema([], { note: string({ maxLength: 500 }) }), "接受或拒绝本人获客策略建议。");
 define("POST /api/prospect-strategies/{id}/schedules", objectSchema(["frequency"], { frequency: oneOf("daily", "weekly", "monthly"), timezone: string({ minLength: 1, maxLength: 100 }), recurringCostApproved: boolean() }), "为已批准策略建立定时获客计划；重复外部成本必须明确授权。");
@@ -652,7 +657,7 @@ function refreshViewForPath(path: string) {
     ["/api/customers", "customers"], ["/api/leads", "leads"], ["/api/deals", "pipeline"], ["/api/todos", "todos"],
     ["/api/plan-", "plan"], ["/api/whatsapp", "whatsapp"], ["/api/reminders", "reminders"], ["/api/memos", "memos"],
     ["/api/development-email", "development-email"], ["/api/trade-documents", "documents"], ["/api/prospect", "lead-finder"],
-    ["/api/lead-finder", "lead-finder"], ["/api/reports", "reports"]
+    ["/api/lead-finder", "lead-finder"], ["/api/agent/sales-", "sales-distillation"], ["/api/reports", "reports"]
   ];
   return rules.find(([prefix]) => path.startsWith(prefix))?.[1] || "";
 }
@@ -666,6 +671,7 @@ function completionFor(method: string, path: string): AgentCompletionEvidence {
     "/api/daily-reports/{id}/comments": ["comment.id"], "/api/internal-messages": ["message.id"], "/api/internal-messages/system": ["message.id"],
     "/api/commission/products": ["product.id"], "/api/commission/products/{id}/rules": ["rule.id"], "/api/commission/sales-records": ["record.id"],
     "/api/exam-questions": ["question.id"], "/api/exams": ["exam.id"], "/api/reminders": ["reminder.id"], "/api/trade-documents": ["document.id"],
+    "/api/agent/sales-training": ["run.id"], "/api/agent/sales-distillation": ["distillation.id"],
     "/api/agent/memories": ["memory.id"], "/api/agent/knowledge/documents": ["document.id"], "/api/agent/triggers": ["rule.id"],
     "/api/lead-finder/launch": ["run.id"],
     "/api/prospect-strategies/{id}/schedules": ["schedule.id"],

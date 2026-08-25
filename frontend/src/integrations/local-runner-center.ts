@@ -226,7 +226,7 @@ export function mountLocalRunnerCenter(root: HTMLElement, dependencies: Dependen
   const openPairing = () => {
     dependencies.openModal("配对本地 Runner", `<div class="form-grid local-runner-pair-form">
       <label>设备名称<input id="localRunnerPairName" maxlength="160" value="我的开发电脑" autocomplete="off"></label>
-      <p class="hint">配对码十分钟内有效且只能使用一次。Runner 由本机主动连接 CRM，不需要开放本机端口。</p>
+      <p class="hint">配对码在页面显示的时间前有效且只能使用一次。Runner 由本机主动连接 CRM，不需要开放本机端口。</p>
     </div>`, `<button class="btn" data-modal-close type="button">取消</button><button class="btn primary" id="localRunnerPairCreate" type="button">生成配对码</button>`);
     document.querySelector<HTMLButtonElement>("#localRunnerPairCreate")?.addEventListener("click", async (event) => {
       const button = event.currentTarget as HTMLButtonElement;

@@ -86,7 +86,8 @@ const required = [
   "problem-solution-highlight",
   "problem-solution-field",
   "closeOnBackdrop: false",
-  "保留并转为线索",
+  "prospectEnrichContactsButton",
+  "No qualification review is required first",
   "leadSourceCenterButton",
   "leadSourceChips",
   "openLeadSourceCenter",
@@ -97,6 +98,7 @@ const required = [
   "leadFinderLookupDiagnosis",
   "查看原因详情",
   "本次未找到候选的原因",
+  "advanced-excel-types",
   "is-current",
   "stageCurrency",
   "来源证据",
@@ -115,6 +117,17 @@ const required = [
   "消息通知",
   "navigateFromInternalMessage",
   "查看日报",
+  "quoteHistoryViewButton",
+  "quoteHistoryWorkspace",
+  "quoteHistoryProduct",
+  "quoteHistoryCountry",
+  "quoteHistoryProductModeButton",
+  "quoteHistoryProductRows",
+  "quoteHistoryProductOverview",
+  "productAnalysis",
+  "openQuoteHistoryForDeal",
+  "查看报价变化",
+  "/api/quote-history",
   "agentPendingGoal",
   "agentPendingProgress",
   "/api/agent/plan/stream",
@@ -177,6 +190,11 @@ const required = [
 
 assert.match(apiLayer, /"email-return-flow": "开发信回流"/u, "开发信回流工作区标签必须使用中文名称");
 assert.match(apiLayer, /deckTicker\.innerHTML = logs\.length \? seq \+ seq : seq/u, "空回流状态不得重复渲染滚动提示");
+assert.match(apiLayer, /const captureHeight = Math\.max\(capture\.scrollHeight/u, "PDF 导出必须捕获完整预览高度");
+assert.match(apiLayer, /const captureWidth = 794[\s\S]*captureHost = document\.createElement\("div"\)/u, "PDF 导出必须使用独立的 A4 宽度画布");
+assert.match(apiLayer, /height: captureHeight/u, "PDF 导出必须把完整预览高度传给截图引擎");
+assert.match(apiLayer, /capture\.style[\s\S]*maxWidth: "none"[\s\S]*margin: "0"/u, "PDF 导出画布不得继承屏幕预览的居中偏移");
+assert.match(prototype, /\.print-only-document\.doc-paper \{[\s\S]*max-height: none !important;[\s\S]*overflow: visible !important;/u, "打印降级不能裁切多页单据");
 
 for (const token of required) {
   if (!prototype.includes(token) && !apiLayer.includes(token)) throw new Error(`missing ${token}`);
@@ -192,7 +210,12 @@ const systemNavigation = prototype.slice(
 assert.equal(systemNavigation.includes('data-view="member-management"'), false, "权限模块不得继续混在系统配置导航中");
 assert.match(prototype, /aria-label="权限管理"[\s\S]*data-view="member-management"[\s\S]*data-view="permission-audit"/, "权限页面必须集中在独立权限管理分组");
 assert.match(apiLayer, /isAccessControlView\(view\) && !isSystemAdministrator\(user\)/, "权限页面必须额外校验管理员或超级管理员身份");
-assert.match(apiLayer, /isAccessControlView\(view\) && user\.role === "super_admin"[\s\S]*platform\.tenant\.metadata\.read/, "超级管理员必须能以平台只读权限进入权限管理");
+assert.match(apiLayer, /function isPlatformOperator[\s\S]*user\.role === "super_admin"/, "超级管理员必须被识别为平台运维身份");
+assert.match(apiLayer, /if \(isPlatformOperator\(user\)\) \{[\s\S]*return view === "platform-operations"/, "平台运维账号只能进入运维中心");
+assert.match(apiLayer, /view = platformOperator \? "platform-operations" : "dashboard"/, "平台运维账号非法跳转时必须返回运维中心");
+assert.match(prototype, /运维专用账号[\s\S]*业务模块，请登录其他账号/, "运维中心必须明确提示业务模块使用其他账号");
+assert.match(apiLayer, /if \(isPlatformOperator\(\)\) \{[\s\S]*openWorkspaceTabs = \["platform-operations"\][\s\S]*wrap\.innerHTML = ""/, "超级管理员顶部不得残留工作台标签");
+assert.match(prototype, /body\.platform-mode #topOpenTabs,[\s\S]*body\.platform-mode \.top-status,[\s\S]*body\.platform-mode #notificationBellButton/, "运维模式必须隐藏业务工作台状态栏");
 assert.match(apiLayer, /node\.hidden = !isSystemAdministrator\(user\)/, "权限管理导航只按管理员身份显示");
 assert.match(apiLayer, /class="ac-workbench ac-role-layout"[\s\S]*class="ac-role-list"[\s\S]*class="ac-permission-table"/, "角色管理必须使用角色目录与当前角色权限双栏结构");
 assert.match(apiLayer, /class="ac-role-checks" id="iamMemberRoleIds"[\s\S]*type="checkbox"/, "成员授权必须使用清晰的角色复选项，不能退回原生多选框");
@@ -208,9 +231,14 @@ assert.match(systemSettingsView, /<h1>系统设置<\/h1>/, "系统设置页面�
 assert.doesNotMatch(systemSettingsView, /账号列表|新增账号|权限模板|角色权限/, "人员与权限配置不得在系统设置中重复出现");
 assert.match(systemSettingsView, /公司资料[\s\S]*单据设置[\s\S]*系统更新/, "系统设置必须保留公司资料、单据设置与系统更新");
 assert.equal(apiLayer.includes("leadFinderDetailMarkButton"), false, "自动获客不应保留标记可联系的授权语义");
-assert.match(apiLayer, /function prospectLookupDiagnosis[\s\S]*这不代表企业不存在/, "联系人缺失必须提供业务可理解的原因说明");
+assert.match(apiLayer, /function prospectLookupDiagnosis[\s\S]*This does not mean the company is inactive/, "联系人缺失必须提供业务可理解的原因说明");
 assert.match(apiLayer, /data-lead-lookup-reason/, "联系人和联系方式未找到状态必须可以点击查看原因");
 assert.match(apiLayer, /function leadFinderNoResultReasons[\s\S]*清洗规则/, "整次搜索无结果时必须汇总来源和清洗原因");
+assert.match(
+  apiLayer,
+  /async function openAdvancedExcelPanel\(\)[\s\S]*const editorType = currentDocumentType\(\)[\s\S]*if \(current\.type !== editorType\)[\s\S]*await saveTradeDocument\(\)[\s\S]*type === current\.type \? "is-current"/,
+  "高级 Excel 必须先同步当前编辑器单据类型，并高亮当前类型模板"
+);
 const standardRunStatusContract = apiLayer.slice(
   apiLayer.indexOf("function prospectRunStatusLabel"),
   apiLayer.indexOf("function prospectRunActivityLabel")
@@ -338,6 +366,12 @@ assert.match(prototype, /\.prospect-radar-capture-list[\s\S]*mask-image: linear-
 assert.match(prospectRadar, /prefers-reduced-motion: reduce/, "演示模式必须支持低动态偏好");
 assert.match(prospectRadar, /destroy\(\)[\s\S]*resizeObserver\.disconnect\(\)[\s\S]*globe\._destructor\(\)/, "关闭演示必须完整释放 WebGL 和尺寸监听器");
 assert.match(apiLayer, /\["merged", "suppressed", "rejected"\]\.includes\(record\.outcome\)/, "清洗去除视图只能显示真实的归并、抑制与拒绝记录");
+assert.match(apiLayer, /function leadFinderRemovedTotal[\s\S]*providerInvalidCount[\s\S]*providerDuplicateCount[\s\S]*rejectedCount[\s\S]*suppressedCount[\s\S]*mergedCount/, "清洗去除总数必须覆盖来源预处理与候选管线的全部分流结果");
+assert.match(apiLayer, /data-lead-open-cleaning[\s\S]*leadFinderResultView = "cleaning"/, "候选结果必须提供可直达处理原因的入口");
+assert.match(apiLayer, /PROVIDER_INVALID_RECORD[\s\S]*PROVIDER_DUPLICATE_RECORD[\s\S]*未保存无效或重复记录的公司名称/, "来源预处理原因必须如实按数量汇总，不能伪造公司名称");
+assert.match(apiLayer, /source\.outcome === "timed_out"[\s\S]*Timed out/, "联系人来源超时必须在搜客清单明确显示");
+assert.match(apiLayer, /Next step: \$\{escapeHtml\(source\.suggestion\)\}/, "联系人来源失败或未配置时必须展示调整建议");
+assert.match(apiLayer, /waitedMs >= 130_000[\s\S]*响应超时[\s\S]*调整建议/, "自动搜索长时间无返回时必须展示超时原因和调整建议");
 assert.match(prototype, /data-view="settings" data-scope="manager"/, "业务员导航中必须隐藏系统设置");
 assert.match(prototype, /id="settings" data-scope="manager"/, "业务员视图中必须隐藏系统设置页面");
 assert.match(prototype, /data-view="database-maintenance" data-scope="admin"/, "数据库维护导航必须只向管理员显示");
@@ -347,12 +381,12 @@ assert.match(apiLayer, /"database-maintenance": "database\.maintain"/, "数据�
 assert.match(apiLayer, /"member-management": "member\.read"/, "成员管理页面必须绑定成员查看能力");
 assert.match(apiLayer, /"role-management": "role\.read"/, "角色管理页面必须绑定角色查看能力");
 assert.match(apiLayer, /连接中断，正在重连/, "数据库任务断流必须进入重连状态而非误报失败");
-assert.match(apiLayer, /if \(!canAccessWorkspaceView\(view\)\) \{[\s\S]*view = "dashboard";/, "页面切换必须阻止业务员进入系统设置");
+assert.match(apiLayer, /if \(!canAccessWorkspaceView\(view\)\) \{[\s\S]*view = platformOperator \? "platform-operations" : "dashboard";/, "页面切换必须阻止越权访问，并按账号身份回到正确首页");
 assert.match(apiLayer, /workspaceView: "gj_workspace_view"/, "工作区必须记录当前活动模块，避免刷新后退回主页");
 assert.match(apiLayer, /sessionStorage\.setItem\(workspaceViewStorageKey\(\), view\)/, "导航切换必须按当前账号记住活动模块");
 assert.match(apiLayer, /restoreSession\(\)[\s\S]*activateNavView\(state\.iamCapabilities\?\.source === "platform" \? "platform-operations" : rememberedWorkspaceView\(user\)\)/, "会话恢复后必须按身份回到刷新前的模块");
 assert.match(apiLayer, /selectedDailyReportId = message\.relatedId;[\s\S]*activateNavView\("daily-reports"\)/);
-assert.match(apiLayer, /if \(view === "ai-agent"\) \{[\s\S]*renderAgent\(state\.agentRun\);[\s\S]*void loadAgentRuns\(\);[\s\S]*\}/, "进入 Agent 页面必须刷新运行记录与后台任务状态");
+assert.match(apiLayer, /if \(view === "ai-agent"\) \{[\s\S]*renderAgent\(state\.agentRun\);[\s\S]*void loadAgentRuns\(\);[\s\S]*\}/, "进入 Agent 页面必须刷新蒸馏打法与后台任务状态");
 assert.match(apiLayer, /void loadAgentKnowledge\(false\)/, "进入 Agent 页面必须加载系统知识状态");
 assert.match(prototype, /\.agent-chat-bubble,[\s\S]*\.agent-chat-answer > p[\s\S]*user-select: text;/, "Agent 对话正文必须允许选择复制");
 assert.match(apiLayer, /copyableText \|\| window\.getSelection\(\)\?\.toString\(\)\.trim\(\)/, "选择 Agent 对话文字时不得触发整轮重新渲染");
@@ -523,5 +557,23 @@ assert.doesNotMatch(apiLayer, /正在生成开发信/, "开发信进入时不得
 assert.match(apiLayer, /scenario: developmentEmailScenario,[\s\S]*goal: developmentEmailGoal,[\s\S]*requireAi/, "开发信 AI 请求必须携带场景、自然语言目标和明确生成开关");
 assert.match(apiLayer, /developmentEmailScenario === "custom_goal" && !developmentEmailGoal/, "自然语言目标场景调用 AI 前必须校验目标");
 assert.match(apiLayer, /activateNavView\("development-email", \(\) => void generateDevelopmentEmailDraftPage\(\)\)/, "进入开发信页面只能加载基础模板");
+assert.match(apiLayer, /return state\.user\?\.theme \|\| getStoredTheme\(\) \|\| "rose";/, "系统无已保存主题时必须默认使用玫红");
+assert.match(apiLayer, /templateStyle: profile\?\.templateStyle \|\| "rose" as const/, "新建单据必须默认使用团队玫红主题");
+assert.match(prototype, /id="documentDefaultTemplateStyle"><option value="rose">Rose<\/option>/, "单据默认配置必须优先显示玫红主题");
+assert.match(prototype, /id="documentSellerProfilesList"/, "单据默认配置必须展示全部卖方公司档案");
+assert.match(prototype, /id="documentSellerProfilesManage"/, "管理员必须能从默认配置进入卖方公司管理");
+assert.match(prototype, /id="docSellerProfileInput"/, "单据编辑器必须允许人工切换卖方公司");
+assert.match(prototype, /id="docBrandMarkTextInput"[^>]*maxlength="8"/, "单据编辑器必须允许单据级配置左上色块文字");
+assert.match(prototype, /id="documentDefaultBrandMarkText"[^>]*maxlength="8"/, "团队单据默认配置必须支持色块文字");
+assert.match(prototype, /id="docShippingCostInput"[^>]*type="number"/, "单据编辑器必须提供可选的运费输入");
+assert.match(apiLayer, /lineType: "shipping_cost"/, "填写运费后必须生成独立的 shipping_cost 明细");
+assert.match(apiLayer, /items = items\.filter\(\(item\) => item\.lineType !== "shipping_cost"\)/, "运费明细不能重复出现在产品编辑行中");
+assert.match(apiLayer, /function matchedSellerProfile[\s\S]*sellerProfileMatchScore/, "新建单据必须通过统一规则自动匹配卖方公司");
+assert.match(apiLayer, /function renderSellerProfilesInDefaults/, "默认配置必须渲染卖方公司及其匹配规则");
+assert.match(apiLayer, /letterheadId: qs<HTMLSelectElement>\("#docSellerProfileInput"\)/, "单据保存必须持久化人工选择的卖方公司");
+assert.match(apiLayer, /applyDocumentCustomerDefaults[\s\S]*applyMatchedSellerToEditor/, "客户或商机变化后必须重新匹配卖方公司");
+assert.match(apiLayer, /function applyFallbackSellerToEditor/, "人工切回或规则未命中时必须真正恢复兜底卖方资料");
+assert.match(apiLayer, /brandMarkText: documentDefaultValue\("documentDefaultBrandMarkText"\)/, "团队色块文字必须通过默认配置 API 持久化");
+assert.match(apiLayer, /brandMarkText: qs<HTMLInputElement>\("#docBrandMarkTextInput"\)/, "单据级色块文字必须随单据保存");
 
 console.log(JSON.stringify({ ok: true, checked: required.length }, null, 2));

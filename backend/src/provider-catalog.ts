@@ -242,8 +242,8 @@ export function createDefaultProviderCatalog(): ProviderCatalogItem[] {
     licensePolicy: {
       tier: "ai",
       requiresKey: false,
-      keyHint: "使用「AI 模型配置」中已启用并勾选自动获客的模型，无需在此另填 Key。",
-      costNote: "调用已配置的 AI 模型生成候选公司，结果需人工核实。"
+      keyHint: "使用「AI 模型配置」中已启用、勾选自动获客且通过 Web Search 测试的 OpenAI 模型。",
+      costNote: "强制通过 Web Search 生成候选并取得官网引用；无引用的网址不会作为官网保存。"
     },
     defaultRatePolicy: {},
     retentionPolicy: { mode: "provider_terms" },
