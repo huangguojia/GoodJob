@@ -118,14 +118,13 @@ function redirectTarget(
   policy: ProviderNetworkPolicy,
   hasSensitiveRequest: boolean
 ) {
-  const unresolvedNext = new URL(location, current);
+  const next = validateTarget(new URL(location, current).toString(), policy, true);
   const currentHost = normalizeNetworkHostname(current.hostname);
-  const nextHost = normalizeNetworkHostname(unresolvedNext.hostname);
+  const nextHost = normalizeNetworkHostname(next.hostname);
   const redirectHosts = (policy.redirectHosts || []).map(normalizeNetworkHostname);
   if (nextHost !== currentHost && !redirectHosts.includes(nextHost)) {
-    throw policyError(`数据源跳转到新域名 ${nextHost}，需人工确认后更新官网地址`);
+    throw policyError("数据源跨主机重定向未获批准");
   }
-  const next = validateTarget(unresolvedNext.toString(), policy, true);
   if (nextHost !== currentHost && hasSensitiveRequest) {
     throw policyError("携带凭据的数据源请求禁止跨主机重定向");
   }

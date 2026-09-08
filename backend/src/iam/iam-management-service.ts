@@ -168,7 +168,7 @@ async function queryOverview(pool: Queryable, tenantId: string) {
       FROM tenant_memberships tm JOIN users u ON u.id = tm.user_id WHERE tm.tenant_id = ? ORDER BY tm.status, u.name`, [tenantId]),
     pool.query(`SELECT id, parent_id, name, code, unit_type AS type, status, path FROM organization_units WHERE tenant_id = ? ORDER BY path, sort_order, name`, [tenantId]),
     pool.query(`SELECT id, name, code, description, source, status, is_protected, version_no FROM roles WHERE tenant_id = ? ORDER BY is_protected DESC, name`, [tenantId]),
-    pool.query(`SELECT code, module_name AS module, name, risk_level AS riskLevel, scope_modes_json FROM permissions WHERE status = 'active' ORDER BY module_name, code`),
+    pool.query(`SELECT code, module_name AS module, name, risk_level AS riskLevel, scope_modes_json, introduced_version AS introducedVersion FROM permissions WHERE status = 'active' ORDER BY module_name, code`),
     pool.query(`SELECT role_id, permission_code, scope_mode FROM role_permission_bindings WHERE tenant_id = ?`, [tenantId]),
     pool.query(`SELECT membership_id, org_unit_id, relation_type FROM organization_memberships
       WHERE tenant_id = ? AND (valid_from IS NULL OR valid_from <= NOW(3))
@@ -220,11 +220,15 @@ async function queryOverview(pool: Queryable, tenantId: string) {
   }
   const permissions = rows<any>(permissionRows).map((permission) => {
     const grants: Record<string, string> = {};
+    const protectedScopes: Record<string, string> = {};
     for (const role of roles) {
       const roleBindings = bindings.filter((binding) => binding.role_id === role.id && binding.permission_code === permission.code);
       grants[role.id] = roleBindings.sort((a, b) => (scopeRank[b.scope_mode] || 0) - (scopeRank[a.scope_mode] || 0))[0]?.scope_mode || "none";
+      const template = role.is_protected ? protectedRoleTemplate(String(role.code)) : null;
+      const baseline = template ? legacyPermissionScope(template, permission.code) : null;
+      if (baseline) protectedScopes[role.id] = baseline;
     }
-    return { code: permission.code, module: permission.module, name: permission.name, riskLevel: permission.riskLevel, scopeModes: jsonArray(permission.scope_modes_json), grants };
+    return { code: permission.code, module: permission.module, name: permission.name, riskLevel: permission.riskLevel, scopeModes: jsonArray(permission.scope_modes_json), introducedVersion: permission.introducedVersion || "", grants, protectedScopes };
   });
   const tenant = one<any>(tenantRows);
   return {

@@ -1,0 +1,287 @@
+services:
+  mysql:
+    image: mysql:8.4.6
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --innodb-buffer-pool-size=384M
+      - --max-connections=100
+    secrets:
+      - mysql_password
+      - mysql_root_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - private
+    expose:
+      - "3306"
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$(cat /run/secrets/mysql_root_password) mysqladmin ping -h 127.0.0.1 -u root --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+    mem_limit: ${MYSQL_MEMORY_LIMIT:-640m}
+    cpus: ${MYSQL_CPU_LIMIT:-1.0}
+    security_opt:
+      - no-new-privileges:true
+
+  postgres:
+    image: postgres:16.9-alpine
+    profiles: ["legacy-migration"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DATABASE:-goodjobcrm_whatsapp_prod}
+      POSTGRES_USER: ${POSTGRES_USER:-goodjobcrm_whatsapp_app}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      TZ: Asia/Shanghai
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - max_connections=60
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - private
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-384m}
+    cpus: ${POSTGRES_CPU_LIMIT:-0.75}
+    security_opt:
+      - no-new-privileges:true
+
+  backend-migrate:
+    image: goodjobcrm-backend:${GOODJOB_RELEASE_ID}
+    build:
+      context: ../..
+      dockerfile: deploy/docker-compose/Dockerfile.backend
+    restart: "no"
+    environment: &backend_environment
+      NODE_ENV: production
+      CRM_STORE: mysql
+      APP_DATABASE_PROFILE: production
+      CRM_SEED_DEVELOPMENT_DATA: "false"
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: ${MYSQL_DATABASE}
+      DB_USER: ${MYSQL_USER}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL}
+      INITIAL_ADMIN_NAME: ${INITIAL_ADMIN_NAME:-Super Admin}
+      BACKEND_HOST: 0.0.0.0
+      CONTAINER_NETWORK_BIND: "true"
+      TRUST_PROXY_HOPS: "1"
+      PORT: "4188"
+      LIBREOFFICE_BIN: /usr/bin/soffice
+      WHATSAPP_PLUGIN_INTERNAL_URL: http://communication:3100
+      WHATSAPP_PLUGIN_PORT: "3100"
+      CORS_ORIGINS: ${PUBLIC_ORIGIN}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE}
+      ENABLE_API_DOCS: ${ENABLE_API_DOCS:-true}
+      INBOUND_MAIL_ENABLED: "true"
+      INBOUND_MAIL_POLL_MS: "120000"
+      INBOUND_MAIL_LOOKBACK_DAYS: "7"
+      INBOUND_MAIL_MAX_MESSAGES_PER_POLL: "100"
+      INBOUND_MAIL_MAX_SOURCE_BYTES: "2097152"
+      EMAIL_TRACKING_BASE_URL: ${EMAIL_TRACKING_BASE_URL:-}
+      EMAIL_MESSAGE_ID_DOMAIN: ${DOMAIN}
+      OUTBOUND_EMAIL_DAILY_LIMIT: "50"
+      OUTBOUND_EMAIL_DOMAIN_WINDOW_MINUTES: "10"
+      OUTBOUND_EMAIL_DOMAIN_WINDOW_LIMIT: "5"
+      OUTBOUND_EMAIL_BOUNCE_WINDOW_DAYS: "7"
+      OUTBOUND_EMAIL_BOUNCE_MIN_SAMPLE: "20"
+      OUTBOUND_EMAIL_MAX_BOUNCE_PERCENT: "10"
+      OUTBOUND_EMAIL_APPEND_OPTOUT: "true"
+      OUTBOUND_EMAIL_REQUIRE_DNS_AUTH: "false"
+      EMAIL_DKIM_SELECTORS: ""
+      AGENT_KNOWLEDGE_DIR: /app/agent-knowledge
+      AGENT_SKILLS_DIR: /app/agent-skills
+      GOODJOB_UPLOADS_DIR: /app/uploads
+      MYSQL_LOCAL_BACKUP_ENABLED: "false"
+      GOODJOB_RELEASE_ID: ${GOODJOB_RELEASE_ID}
+    secrets: &backend_secrets
+      - mysql_password
+      - initial_admin_password
+      - crm_runtime_env
+    networks:
+      - private
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: ["node", "backend/dist/migrate-mysql.js"]
+    profiles:
+      - tools
+    mem_limit: 512m
+    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
+
+  communication-migrate:
+    image: goodjobcrm-communication:${GOODJOB_RELEASE_ID}
+    build:
+      context: ../..
+      dockerfile: deploy/docker-compose/Dockerfile.communication
+    restart: "no"
+    environment: &communication_environment
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "3100"
+      WEB_ORIGIN: ${PUBLIC_ORIGIN}
+      DATABASE_CLIENT: mysql
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: ${MYSQL_DATABASE}
+      DB_USER: ${MYSQL_USER}
+      LEGACY_POSTGRES_HOST: postgres
+      LEGACY_POSTGRES_PORT: "5432"
+      LEGACY_POSTGRES_DB: ${POSTGRES_DATABASE:-goodjobcrm_whatsapp_prod}
+      LEGACY_POSTGRES_USER: ${POSTGRES_USER:-goodjobcrm_whatsapp_app}
+      MEDIA_STORAGE_PATH: /data/media
+      SEED_DEMO: "false"
+      ALLOW_DEMO_PROVIDER: "false"
+      WHATSAPP_OFFICIAL_ONLY: "true"
+      AUTO_MIGRATE: "false"
+      ALLOW_PRIVATE_AI_ENDPOINTS: "false"
+    secrets: &communication_secrets
+      - mysql_password
+      - postgres_password
+      - communication_session_key
+      - crm_runtime_env
+    networks:
+      - private
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: ["node", "dist-server/server/scripts/migrate.js"]
+    profiles:
+      - tools
+    mem_limit: 384m
+    cpus: 0.75
+    security_opt:
+      - no-new-privileges:true
+
+  backend:
+    image: goodjobcrm-backend:${GOODJOB_RELEASE_ID}
+    restart: unless-stopped
+    environment: *backend_environment
+    secrets: *backend_secrets
+    networks:
+      - private
+    volumes:
+      - uploads_data:/app/uploads
+    expose:
+      - "4188"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      communication:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4188/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    mem_limit: ${BACKEND_MEMORY_LIMIT:-640m}
+    cpus: ${BACKEND_CPU_LIMIT:-1.5}
+    security_opt:
+      - no-new-privileges:true
+
+  communication:
+    image: goodjobcrm-communication:${GOODJOB_RELEASE_ID}
+    restart: unless-stopped
+    environment: *communication_environment
+    secrets:
+      - mysql_password
+      - communication_session_key
+      - crm_runtime_env
+    volumes:
+      - communication_media:/data/media
+    networks:
+      - private
+    expose:
+      - "3100"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3100/api/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    mem_limit: ${COMMUNICATION_MEMORY_LIMIT:-384m}
+    cpus: ${COMMUNICATION_CPU_LIMIT:-1.0}
+    security_opt:
+      - no-new-privileges:true
+
+  gateway:
+    image: goodjobcrm-gateway:${GOODJOB_RELEASE_ID}
+    build:
+      context: ../..
+      dockerfile: deploy/docker-compose/Dockerfile.gateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${GOODJOB_HTTP_PORT:-4188}:8080"
+    networks:
+      - private
+    depends_on:
+      backend:
+        condition: service_healthy
+      communication:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/container-health"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 10s
+    mem_limit: 96m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  mysql_password:
+    file: ${GOODJOB_SHARED_DIR}/secrets/mysql_password
+  mysql_root_password:
+    file: ${GOODJOB_SHARED_DIR}/secrets/mysql_root_password
+  postgres_password:
+    file: ${GOODJOB_SHARED_DIR}/secrets/postgres_password
+  initial_admin_password:
+    file: ${GOODJOB_SHARED_DIR}/secrets/initial_admin_password
+  communication_session_key:
+    file: ${GOODJOB_SHARED_DIR}/secrets/communication_session_key
+  crm_runtime_env:
+    file: ${GOODJOB_SHARED_DIR}/secrets/crm_runtime_env
+
+volumes:
+  mysql_data:
+    name: goodjobcrm_mysql_data
+  postgres_data:
+    name: goodjobcrm_postgres_data
+  communication_media:
+    name: goodjobcrm_communication_media
+  uploads_data:
+    name: goodjobcrm_uploads_data
+
+networks:
+  private:
+    name: goodjobcrm_private
+    driver: bridge
