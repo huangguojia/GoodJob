@@ -112,6 +112,57 @@ export function mergeProspectContactEvidence(
   return [...merged.values()];
 }
 
+function websiteProbeProgress(attempt: NonNullable<WebsiteOpportunity["websiteProbeAttempts"]>[number]) {
+  const terminalRank = ["completed", "failed"].includes(attempt.status) ? 1 : 0;
+  const lastEventAt = attempt.events.at(-1)?.createdAt || attempt.completedAt || attempt.startedAt || attempt.createdAt;
+  return [attempt.events.length, terminalRank, Date.parse(lastEventAt) || 0] as const;
+}
+
+function newerWebsiteProbeAttempt(
+  left: NonNullable<WebsiteOpportunity["websiteProbeAttempts"]>[number],
+  right: NonNullable<WebsiteOpportunity["websiteProbeAttempts"]>[number]
+) {
+  const leftProgress = websiteProbeProgress(left);
+  const rightProgress = websiteProbeProgress(right);
+  for (let index = 0; index < leftProgress.length; index += 1) {
+    if (leftProgress[index] !== rightProgress[index]) {
+      return leftProgress[index]! > rightProgress[index]! ? left : right;
+    }
+  }
+  return right;
+}
+
+export function mergeWebsiteProbeCandidateProgress(
+  latest: WebsiteOpportunity,
+  incoming: WebsiteOpportunity
+) {
+  const attempts = new Map(
+    (latest.websiteProbeAttempts || []).map((attempt) => [attempt.id, attempt])
+  );
+  for (const incomingAttempt of incoming.websiteProbeAttempts || []) {
+    const current = attempts.get(incomingAttempt.id);
+    attempts.set(
+      incomingAttempt.id,
+      structuredClone(current
+        ? newerWebsiteProbeAttempt(current, incomingAttempt)
+        : incomingAttempt)
+    );
+  }
+  latest.websiteProbeAttempts = [...attempts.values()].sort((left, right) =>
+    right.createdAt.localeCompare(left.createdAt)
+  );
+  latest.extractedContacts = mergeProspectContactEvidence(
+    latest.extractedContacts || [],
+    incoming.extractedContacts || []
+  );
+  if (!latest.contactInfo && incoming.contactInfo) latest.contactInfo = incoming.contactInfo;
+  if ((!latest.contact?.trim() || /^(?:待维护|待确认|未知|-|—)$/u.test(latest.contact.trim()))
+    && incoming.contact?.trim()) {
+    latest.contact = incoming.contact;
+  }
+  return latest;
+}
+
 function evidenceUrl(evidence: ProviderEvidenceSnapshot[] | undefined) {
   return evidence?.find((item) => item.sourceUrl)?.sourceUrl
     || evidence?.find((item) => item.officialWebsite)?.officialWebsite
@@ -220,8 +271,29 @@ export function createContactEnrichmentAttempt(input: {
   runId: string;
   providerSources: Array<{ id: string; label: string; configured: boolean }>;
   includeWebsite: boolean;
+  webSearch?: { configured: boolean; label?: string; message?: string; suggestion?: string };
+  runner?: { configured: boolean; label?: string; message?: string; suggestion?: string };
+  deadlineMs?: number;
 }) {
   const now = new Date().toISOString();
+  const optionalSource = (
+    sourceId: string,
+    sourceLabel: string,
+    sourceKind: "web_search" | "local_runner",
+    plan?: { configured: boolean; label?: string; message?: string; suggestion?: string }
+  ): ProspectContactEnrichmentSourceResult | null => plan ? {
+    id: `ces_${randomUUID()}`,
+    sourceId,
+    sourceLabel: plan.label || sourceLabel,
+    sourceKind,
+    status: plan.configured ? "queued" : "skipped",
+    outcome: plan.configured ? "pending" : "not_configured",
+    contactCount: 0,
+    message: plan.message || (plan.configured ? "等待后台执行" : "当前来源未配置"),
+    suggestion: plan.suggestion,
+    startedAt: "",
+    completedAt: plan.configured ? "" : now
+  } : null;
   const sourceContacts = sourceRecordContactEvidence(input.candidate);
   input.candidate.extractedContacts = mergeProspectContactEvidence(
     input.candidate.extractedContacts || [],
@@ -247,9 +319,12 @@ export function createContactEnrichmentAttempt(input: {
     outcome: source.configured ? "pending" as const : "not_configured" as const,
     contactCount: 0,
     message: source.configured ? "等待联系人接口返回" : "未配置此联系人来源",
+    suggestion: source.configured ? "" : "请由管理员在集成中心配置并测试该联系人接口；未配置不会阻塞其他来源。",
     startedAt: "",
     completedAt: source.configured ? "" : now
   }))];
+  const webSearch = optionalSource("native_web_search", "AI 联网搜索", "web_search", input.webSearch);
+  if (webSearch) sources.push(webSearch);
   if (input.includeWebsite) {
     sources.push({
       id: `ces_${randomUUID()}`,
@@ -259,11 +334,17 @@ export function createContactEnrichmentAttempt(input: {
       status: "queued",
       outcome: "pending",
       contactCount: 0,
-      message: "等待境外官网受控低频验证",
+      message: "等待境外官网公开资料核验",
+      suggestion: input.candidate.website
+        ? "官网资料核验失败时请检查网址是否正确；系统不会处理登录、验证码或其他受限内容。"
+        : "候选尚无可信官网，将先尝试联网发现官网；仍未确认时需要补充官网或配置搜索来源。",
       startedAt: "",
       completedAt: ""
     });
   }
+  const runner = optionalSource("codex_runner", "Codex Runner 深度补漏", "local_runner", input.runner);
+  if (runner) sources.push(runner);
+  const deadlineMs = Math.max(60_000, Math.min(10 * 60_000, input.deadlineMs || 3 * 60_000));
   const attempt: ProspectContactEnrichmentAttempt = {
     id: `cea_${randomUUID()}`,
     runId: input.runId,
@@ -275,6 +356,8 @@ export function createContactEnrichmentAttempt(input: {
     recommendedContact: null,
     contactCount: input.candidate.extractedContacts.length,
     summary: "多来源联系人查找已排队",
+    deadlineAt: new Date(Date.parse(now) + deadlineMs).toISOString(),
+    lastProgressAt: now,
     createdAt: now,
     startedAt: "",
     completedAt: ""
@@ -297,6 +380,7 @@ export function refreshContactEnrichmentAttempt(
   candidate: WebsiteOpportunity,
   attempt: ProspectContactEnrichmentAttempt
 ) {
+  attempt.lastProgressAt = new Date().toISOString();
   const contacts = candidate.extractedContacts || [];
   const recommendation = recommendProspectContact(contacts);
   attempt.contactCount = contacts.filter((contact) =>
@@ -334,4 +418,37 @@ export function refreshContactEnrichmentAttempt(
     ? `已汇总 ${attempt.contactCount} 条去重联系方式`
     : "已完成查询，当前授权来源未返回可用联系方式";
   return attempt;
+}
+
+export function expireContactEnrichmentAttempt(
+  candidate: WebsiteOpportunity,
+  attempt: ProspectContactEnrichmentAttempt,
+  at = new Date()
+) {
+  if (!attempt.deadlineAt || Date.parse(attempt.deadlineAt) > at.getTime()) return false;
+  const pending = attempt.sources.filter((source) =>
+    source.status === "queued" || source.status === "running"
+  );
+  if (!pending.length) return false;
+  const completedAt = at.toISOString();
+  for (const source of pending) {
+    source.status = "failed";
+    source.outcome = "timed_out";
+    source.completedAt = completedAt;
+    source.errorCode = "CONTACT_SOURCE_TIMEOUT";
+    source.retryable = true;
+    source.message = `${source.sourceLabel}超过任务截止时间仍未返回，系统已停止等待`;
+    source.suggestion ||= source.sourceKind === "local_runner"
+      ? "请检查本地 Runner 是否在线、Codex CLI 是否可用；恢复后可点击继续查询。"
+      : source.sourceKind === "web_search"
+        ? "请检查模型 API Key、额度、Base URL 和 Web Search 支持，或减少同时查询的客户数量。"
+        : "请检查官网或数据源连接状态，稍后重试；批量任务可适当减少数量。";
+  }
+  refreshContactEnrichmentAttempt(candidate, attempt);
+  attempt.completedAt = completedAt;
+  attempt.status = attempt.recommendedContact ? "partial" : "failed";
+  attempt.summary = attempt.recommendedContact
+    ? `已取得 ${attempt.contactCount} 条联系方式，但 ${pending.length} 个来源超时`
+    : `${pending.length} 个来源长时间无返回，查询已结束`;
+  return true;
 }

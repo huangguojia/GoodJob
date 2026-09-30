@@ -1,0 +1,13 @@
+{
+  "id": "maintenance",
+  "name": "客户自动维护",
+  "version": "1.0.0",
+  "category": "crm",
+  "description": "按守护策略巡检掉队客户，按超级销售打法给出下一步动作；机器只建站内待办，发信一律走批次冻结确认。",
+  "status": "active",
+  "priority": 75,
+  "triggers": ["客户维护", "自动维护", "掉队客户", "客户召回", "守护策略", "维护巡检", "唤醒客户"],
+  "keywords": ["维护", "巡检", "掉队", "召回", "守护", "未跟进", "健康度", "打法", "待办"],
+  "modules": ["maintenance-center", "todo"],
+  "toolRefs": ["maintenance.preview", "maintenance.create_watch", "maintenance.get_progress", "maintenance.control", "crm.create_todo", "ui.navigate", "api.catalog", "api.read", "api.write"]
+}

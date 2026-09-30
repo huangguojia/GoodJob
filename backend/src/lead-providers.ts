@@ -5,6 +5,7 @@ import {
   type LeadProvider,
   type NormalizedProviderQuery,
   type ProviderAdapterPage,
+  type ProviderRuntimeTools,
   type ProviderUsage,
   type RawLead
 } from "./provider-contract.js";
@@ -160,6 +161,14 @@ function webResultToLead(
   };
 }
 
+function textValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function numberValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function usage(display = "", requestCount: number | null = 1): Partial<ProviderUsage> {
   return {
     requestCount,
@@ -198,6 +207,140 @@ function providerPage(
 // ---------------------------------------------------------------------------
 // Web 搜索源：仅使用搜索 API 返回的索引标题、摘要和链接，不访问企业网页。
 // ---------------------------------------------------------------------------
+
+interface AnySearchResponse {
+  code?: number;
+  message?: string;
+  request_id?: string;
+  data?: {
+    results?: Array<Record<string, unknown>>;
+    metadata?: {
+      total_results?: number;
+      search_time_ms?: number;
+    };
+  };
+  results?: Array<Record<string, unknown>>;
+}
+
+function anySearchHeaders(apiKey: string) {
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    "content-type": "application/json",
+    "X-Anysearch-Client": "goodjobcrm"
+  };
+  if (apiKey.trim()) headers.Authorization = `Bearer ${apiKey.trim()}`;
+  return headers;
+}
+
+function anySearchResults(data: AnySearchResponse) {
+  return Array.isArray(data.data?.results)
+    ? data.data.results
+    : Array.isArray(data.results)
+      ? data.results
+      : [];
+}
+
+function anySearchResultToLead(item: Record<string, unknown>, query: NormalizedProviderQuery): RawLead | null {
+  const title = textValue(item.title) || textValue(item.name);
+  const link = textValue(item.url) || textValue(item.link) || textValue(item.href);
+  const snippet = textValue(item.snippet) || textValue(item.description) || textValue(item.content);
+  const lead = webResultToLead(title, link, snippet, query);
+  if (!lead) return null;
+  const requestId = textValue(item.id) || textValue(item.cache_id) || textValue(item.position);
+  const score = numberValue(item.score);
+  return {
+    ...lead,
+    providerRecordId: requestId || undefined,
+    confidence: score !== null ? Math.min(78, Math.max(50, Math.round(score * 100))) : 66,
+    evidenceSummary: (snippet || title || "AnySearch 搜索结果").slice(0, 500)
+  };
+}
+
+const anysearch = defineProvider({
+  id: "anysearch",
+  name: "AnySearch",
+  tier: "byok_free",
+  category: "web",
+  requiresKey: false,
+  optionalKey: true,
+  capabilities: ["web"],
+  docsUrl: "https://www.anysearch.com/docs",
+  keyHint: "可不填，系统会使用匿名低频额度；填写 AnySearch API Key 后使用你的账号额度。",
+  defaultBaseUrl: "https://api.anysearch.com",
+  costNote: "Web 搜索来源；支持匿名低频调用，也可自带 Key 提升稳定性。",
+  networkPolicy: {
+    allowedHosts: ["api.anysearch.com"],
+    allowedPathPrefixes: ["/v1/search"],
+    allowedMethods: ["POST"],
+    timeoutMs: 20_000,
+    maxResponseBytes: 1024 * 1024
+  },
+  async search({ query }, cred, tools) {
+    const base = (cred.baseUrl || this.defaultBaseUrl || "https://api.anysearch.com").replace(/\/+$/, "");
+    const response = await tools.http.fetch(`${base}/v1/search`, {
+      method: "POST",
+      headers: anySearchHeaders(cred.apiKey),
+      body: JSON.stringify({
+        query: webQueryText(query),
+        max_results: Math.min(query.limit, 20),
+        content_types: ["web"]
+      })
+    });
+    if (!response.ok) throw providerHttpStatusError(response, "AnySearch");
+    const data = (await response.json()) as AnySearchResponse;
+    if (typeof data.code === "number" && data.code !== 0) {
+      throw new ProviderContractError({
+        code: data.code === 401 || data.code === 403 ? "PROVIDER_AUTH_FAILED" : "PROVIDER_UNAVAILABLE",
+        retryable: data.code === 429 || data.code >= 500,
+        retryAfterAt: null,
+        publicMessage: data.message || "AnySearch 返回异常，请稍后重试或配置 API Key",
+        httpStatus: data.code,
+        phase: "search"
+      });
+    }
+    const results = anySearchResults(data);
+    const leads = results
+      .map((item) => anySearchResultToLead(item, query))
+      .filter((item): item is RawLead => Boolean(item));
+    const total = data.data?.metadata?.total_results ?? results.length;
+    const duration = data.data?.metadata?.search_time_ms;
+    return providerPage(leads, {
+      rawCount: total,
+      display: duration ? `AnySearch ${duration}ms` : "AnySearch",
+      invalidCount: Math.max(0, results.length - leads.length)
+    });
+  },
+  async health(cred, tools) {
+    const base = (cred.baseUrl || this.defaultBaseUrl || "https://api.anysearch.com").replace(/\/+$/, "");
+    const response = await tools.http.fetch(`${base}/v1/search`, {
+      method: "POST",
+      headers: anySearchHeaders(cred.apiKey),
+      body: JSON.stringify({
+        query: "industrial product supplier",
+        max_results: 1,
+        content_types: ["web"]
+      })
+    });
+    if (!response.ok) throw providerHttpStatusError(response, "AnySearch");
+    const data = (await response.json()) as AnySearchResponse;
+    if (typeof data.code === "number" && data.code !== 0) {
+      throw new ProviderContractError({
+        code: data.code === 401 || data.code === 403 ? "PROVIDER_AUTH_FAILED" : "PROVIDER_UNAVAILABLE",
+        retryable: data.code === 429 || data.code >= 500,
+        retryAfterAt: null,
+        publicMessage: data.message || "AnySearch 连接异常",
+        httpStatus: data.code,
+        phase: "health"
+      });
+    }
+    const count = anySearchResults(data).length;
+    return {
+      ok: true,
+      message: cred.apiKey ? "AnySearch 连接通过，已使用 API Key" : "AnySearch 连接通过，当前使用匿名低频额度",
+      usage: usage(`样例结果 ${count} 条`)
+    };
+  }
+});
 
 const serper = defineProvider({
   id: "serper",
@@ -779,7 +922,7 @@ const apollo = defineProvider({
   tier: "paid",
   category: "company",
   requiresKey: true,
-  capabilities: ["company", "email"],
+  capabilities: ["company", "email", "enrich"],
   docsUrl: "https://docs.apollo.io/",
   keyHint: "在 Apollo 后台 Settings → Integrations → API 获取 Key。",
   defaultBaseUrl: "https://api.apollo.io",
@@ -806,7 +949,7 @@ const apollo = defineProvider({
     if (!response.ok) throw providerHttpStatusError(response, "Apollo");
     const data = (await response.json()) as { organizations?: ApolloOrg[]; accounts?: ApolloOrg[] };
     const orgs = [...(data.organizations || []), ...(data.accounts || [])];
-    const leads = orgs.slice(0, query.limit).map((org): RawLead => ({
+    const companyLeads = orgs.slice(0, query.limit).map((org): RawLead => ({
       company: org.name || "Company",
       officialWebsite: org.website_url || (org.primary_domain ? `https://${org.primary_domain}` : ""),
       country: org.country || firstToken(query.countries) || "未知",
@@ -821,7 +964,53 @@ const apollo = defineProvider({
       evidenceSummary: (org.short_description || `${org.name || "该公司"} Apollo 组织资料`).slice(0, 500),
       matchedFields: ["company", "officialWebsite", "country", "business", "contactInfo"]
     }));
-    return providerPage(leads, { rawCount: orgs.length });
+    // 人员化：同一个 Key 再查一次决策人（老板 / 采购），产出带真实姓名的联系候选。
+    // 人员搜索失败不能拖垮公司候选，因此单独捕获并降级为 warning。
+    let personLeads: RawLead[] = [];
+    const warnings: string[] = [];
+    try {
+      const people = await apolloSearchPeople(tools, base, cred.apiKey, {
+        titles: DECISION_MAKER_TITLE_KEYWORDS,
+        locations,
+        organizationKeyword: keyword,
+        limit: Math.min(query.limit, 10)
+      });
+      personLeads = apolloPersonLeads(people, query);
+      if (!personLeads.length) warnings.push("Apollo 人员搜索未返回决策人（可能额度不足或该地区无人员覆盖）");
+    } catch (error) {
+      warnings.push(`Apollo 人员搜索降级：${error instanceof Error ? error.message : String(error)}`.slice(0, 300));
+    }
+    return providerPage([...personLeads, ...companyLeads], {
+      rawCount: orgs.length + personLeads.length,
+      warnings
+    });
+  },
+  async enrich({ domain }, cred, tools) {
+    const base = (cred.baseUrl || this.defaultBaseUrl || "https://api.apollo.io").replace(/\/+$/, "");
+    // 按域名锁定公司，再按决策人职位筛选——拿到的是"这家公司的老板/采购"，而不是通用邮箱。
+    const people = await apolloSearchPeople(tools, base, cred.apiKey, {
+      titles: DECISION_MAKER_TITLE_KEYWORDS,
+      locations: [],
+      organizationDomains: [domain],
+      limit: 10
+    });
+    const ranked = apolloRankPeople(people);
+    const person = ranked[0];
+    if (!person) return null;
+    const email = person.email || "";
+    const name = person.name || contactName(person.first_name, person.last_name);
+    if (!name && !email) return null;
+    const tier = decisionMakerTier(person.title || "");
+    return {
+      contact: name || undefined,
+      contactInfo: email || undefined,
+      officialWebsite: `https://${domain}`,
+      sourceUrl: "",
+      providerRecordId: person.id || email || `${domain}:${name}`,
+      evidenceSummary: apolloPeopleEvidence(domain, ranked),
+      matchedFields: ["officialWebsite", "contact", "contactInfo"],
+      confidence: Math.min(100, (email ? 84 : 66) + (tier >= 2 ? 6 : 0))
+    };
   },
   async health(cred, tools) {
     const base = (cred.baseUrl || this.defaultBaseUrl || "https://api.apollo.io").replace(/\/+$/, "");
@@ -844,13 +1033,120 @@ interface ApolloOrg {
   primary_phone?: { number?: string };
 }
 
+interface ApolloPerson {
+  id?: string;
+  name?: string;
+  first_name?: string;
+  last_name?: string;
+  title?: string;
+  email?: string;
+  country?: string;
+  organization_name?: string;
+  organization?: {
+    name?: string;
+    primary_domain?: string;
+    website_url?: string;
+    country?: string;
+    industry?: string;
+  };
+}
+
+async function apolloSearchPeople(
+  tools: ProviderRuntimeTools,
+  base: string,
+  apiKey: string,
+  input: {
+    titles: string[];
+    locations: string[];
+    organizationKeyword?: string;
+    organizationDomains?: string[];
+    limit: number;
+  }
+): Promise<ApolloPerson[]> {
+  const response = await tools.http.fetch(`${base}/api/v1/mixed_people/search`, {
+    method: "POST",
+    headers: { "x-api-key": apiKey, "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({
+      person_titles: input.titles,
+      person_locations: input.locations.length ? input.locations : undefined,
+      q_organization_name: input.organizationKeyword || undefined,
+      q_organization_domains: input.organizationDomains?.length
+        ? input.organizationDomains.join(",")
+        : undefined,
+      page: 1,
+      per_page: Math.max(1, Math.min(input.limit, 25))
+    })
+  });
+  if (!response.ok) throw providerHttpStatusError(response, "Apollo");
+  const data = (await response.json()) as { people?: ApolloPerson[]; contacts?: ApolloPerson[] };
+  return [...(data.people || []), ...(data.contacts || [])];
+}
+
+/** 决策人优先：职位分级降序 → 有邮箱优先 → 姓名降序（稳定可复现）。 */
+function apolloRankPeople(people: ApolloPerson[]) {
+  return people
+    .filter((item) => Boolean(item.name || item.email || item.first_name))
+    .sort((left, right) =>
+      decisionMakerTier(right.title || "") - decisionMakerTier(left.title || "")
+      || Number(Boolean(right.email)) - Number(Boolean(left.email))
+      || String(right.name || "").localeCompare(String(left.name || ""))
+    );
+}
+
+function apolloPersonLeads(people: ApolloPerson[], query: NormalizedProviderQuery): RawLead[] {
+  return apolloRankPeople(people).slice(0, Math.min(query.limit, 10)).map((person): RawLead => {
+    const name = person.name || contactName(person.first_name, person.last_name);
+    const org = person.organization;
+    const domain = org?.primary_domain || "";
+    const email = person.email || "";
+    return {
+      company: org?.name || person.organization_name || name || "Unknown",
+      officialWebsite: org?.website_url || (domain ? `https://${domain}` : ""),
+      country: person.country || org?.country || firstToken(query.countries) || "未知",
+      business: org?.industry || query.productKeywords.join(", ") || query.industries.join(", ") || "待核实业务",
+      contact: name || "待维护",
+      contactInfo: email,
+      description: `${name || "该人员"}${person.title ? `（${person.title}）` : ""} · Apollo 决策人资料。`.slice(0, 240),
+      confidence: email ? 82 : 68,
+      providerRecordId: person.id || email || `${domain}:${name}`,
+      sourceUrl: "",
+      recordType: "contact_evidence",
+      evidenceSummary: apolloPersonEvidence(person).slice(0, 500),
+      matchedFields: email
+        ? ["company", "officialWebsite", "country", "business", "contact", "contactInfo"]
+        : ["company", "officialWebsite", "country", "business", "contact"]
+    };
+  });
+}
+
+function apolloPersonEvidence(person: ApolloPerson) {
+  return [
+    `Apollo 决策人：${person.name || contactName(person.first_name, person.last_name) || "未署名"}`,
+    person.title ? `职位 ${person.title}` : "",
+    person.email ? `邮箱 ${person.email}` : "",
+    person.organization?.name ? `公司 ${person.organization.name}` : ""
+  ].filter(Boolean).join("丨");
+}
+
+function apolloPeopleEvidence(domain: string, ranked: ApolloPerson[]) {
+  const describe = (person: ApolloPerson) => [
+    person.name || contactName(person.first_name, person.last_name) || "未署名",
+    person.title ? `（${person.title}）` : "",
+    person.email ? ` ${person.email}` : ""
+  ].join("");
+  return truncateText([
+    `Apollo 返回域名 ${domain} 的 ${ranked.length} 个决策人候选`,
+    ranked.slice(0, 5).map(describe).join("；")
+  ].filter(Boolean).join("丨"), 1000);
+}
+
 const peopledatalabs = defineProvider({
   id: "pdl",
   name: "People Data Labs",
   tier: "paid",
   category: "company",
   requiresKey: true,
-  capabilities: ["company", "enrich"],
+  capabilities: ["company", "email", "enrich"],
   docsUrl: "https://docs.peopledatalabs.com/",
   keyHint: "在 PDL 控制台获取 API Key。",
   defaultBaseUrl: "https://api.peopledatalabs.com/v5",
@@ -877,8 +1173,9 @@ const peopledatalabs = defineProvider({
       body: JSON.stringify(body)
     });
     if (!response.ok) throw providerHttpStatusError(response, "PDL");
-    const data = (await response.json()) as { data?: Array<{ id?: string; display_name?: string; name?: string; website?: string; location?: { country?: string }; industry?: string; summary?: string }> };
-    const leads = (data.data || []).map((item): RawLead => ({
+    const data = (await response.json()) as { data?: PdlCompany[] };
+    const companies = data.data || [];
+    const companyLeads = companies.map((item): RawLead => ({
       company: item.display_name || item.name || "Company",
       officialWebsite: item.website ? `https://${item.website.replace(/^https?:\/\//, "")}` : "",
       country: item.location?.country || firstToken(query.countries) || "未知",
@@ -893,7 +1190,50 @@ const peopledatalabs = defineProvider({
       evidenceSummary: (item.summary || `${item.display_name || item.name || "该公司"} PDL 公司资料`).slice(0, 500),
       matchedFields: ["company", "officialWebsite", "country", "business"]
     }));
-    return providerPage(leads, { rawCount: data.data?.length || 0 });
+    // 人员化：按 job_title_levels 拉决策人（owner/cxo/vp/director），产出带真实姓名的联系候选。
+    // 人员搜索失败降级为 warning，不影响公司候选。
+    let personLeads: RawLead[] = [];
+    const warnings: string[] = [];
+    try {
+      const people = await pdlSearchPeople(tools, base, cred.apiKey, {
+        levels: PDL_DECISION_LEVELS,
+        country,
+        limit: Math.min(query.limit, 10)
+      });
+      personLeads = pdlPersonLeads(people, query);
+      if (!personLeads.length) warnings.push("PDL 人员搜索未返回决策人（可能额度不足或该地区无人员覆盖）");
+    } catch (error) {
+      warnings.push(`PDL 人员搜索降级：${error instanceof Error ? error.message : String(error)}`.slice(0, 300));
+    }
+    return providerPage([...personLeads, ...companyLeads], {
+      rawCount: companies.length + personLeads.length,
+      warnings
+    });
+  },
+  async enrich({ domain }, cred, tools) {
+    const base = (cred.baseUrl || this.defaultBaseUrl || "https://api.peopledatalabs.com/v5").replace(/\/+$/, "");
+    // 按公司域名锁定，再按决策人级别筛选，拿"这家公司的老板/采购"。
+    const people = await pdlSearchPeople(tools, base, cred.apiKey, {
+      levels: PDL_DECISION_LEVELS,
+      website: domain,
+      limit: 10
+    });
+    const ranked = pdlRankPeople(people);
+    const person = ranked[0];
+    if (!person) return null;
+    const { name, email } = pdlPersonContact(person);
+    if (!name && !email) return null;
+    const tier = decisionMakerTier(person.job_title || "");
+    return {
+      contact: name || undefined,
+      contactInfo: email || undefined,
+      officialWebsite: `https://${domain}`,
+      sourceUrl: "",
+      providerRecordId: person.id || email || `${domain}:${name}`,
+      evidenceSummary: pdlPeopleEvidence(domain, ranked),
+      matchedFields: ["officialWebsite", "contact", "contactInfo"],
+      confidence: Math.min(100, (email ? 80 : 64) + (tier >= 2 ? 6 : 0))
+    };
   },
   async health(cred, tools) {
     const base = (cred.baseUrl || this.defaultBaseUrl || "https://api.peopledatalabs.com/v5").replace(/\/+$/, "");
@@ -906,6 +1246,126 @@ const peopledatalabs = defineProvider({
     return { ok: true, message: "People Data Labs 连接通过" };
   }
 });
+
+interface PdlCompany {
+  id?: string;
+  display_name?: string;
+  name?: string;
+  website?: string;
+  location?: { country?: string };
+  industry?: string;
+  summary?: string;
+}
+
+interface PdlPerson {
+  id?: string;
+  full_name?: string;
+  first_name?: string;
+  last_name?: string;
+  job_title?: string;
+  job_title_levels?: string[];
+  job_company_name?: string;
+  job_company_website?: string;
+  job_company_industry?: string;
+  work_email?: string;
+  emails?: Array<{ address?: string }>;
+  location_country?: string;
+}
+
+/** PDL 人员检索允许的决策人级别（API 只接受固定枚举）。 */
+const PDL_DECISION_LEVELS = ["owner", "cxo", "vp", "director"];
+
+async function pdlSearchPeople(
+  tools: ProviderRuntimeTools,
+  base: string,
+  apiKey: string,
+  input: { levels: string[]; country?: string; website?: string; limit: number }
+): Promise<PdlPerson[]> {
+  const must: Array<Record<string, unknown>> = [
+    { terms: { job_title_levels: input.levels } }
+  ];
+  if (input.website) {
+    must.push({ term: { job_company_website: input.website.toLowerCase() } });
+  }
+  if (input.country) {
+    must.push({ match: { location_country: input.country.toLowerCase() } });
+  }
+  const response = await tools.http.fetch(`${base}/person/search`, {
+    method: "POST",
+    headers: { "X-Api-Key": apiKey, "content-type": "application/json" },
+    body: JSON.stringify({
+      query: { bool: { must } },
+      size: Math.max(1, Math.min(input.limit, 25))
+    })
+  });
+  if (!response.ok) throw providerHttpStatusError(response, "People Data Labs");
+  const data = (await response.json()) as { data?: PdlPerson[] };
+  return data.data || [];
+}
+
+function pdlPersonContact(person: PdlPerson) {
+  const email = person.work_email || person.emails?.find((item) => item.address)?.address || "";
+  const name = person.full_name || contactName(person.first_name, person.last_name);
+  return { name, email };
+}
+
+/** 决策人优先：职位分级降序 → 有邮箱优先 → 姓名降序（稳定可复现）。 */
+function pdlRankPeople(people: PdlPerson[]) {
+  return people
+    .filter((item) => Boolean(item.full_name || item.work_email || item.emails?.length))
+    .sort((left, right) => {
+      const leftContact = pdlPersonContact(left);
+      const rightContact = pdlPersonContact(right);
+      return decisionMakerTier(right.job_title || "") - decisionMakerTier(left.job_title || "")
+        || Number(Boolean(rightContact.email)) - Number(Boolean(leftContact.email))
+        || String(rightContact.name || "").localeCompare(String(leftContact.name || ""));
+    });
+}
+
+function pdlPersonLeads(people: PdlPerson[], query: NormalizedProviderQuery): RawLead[] {
+  return pdlRankPeople(people).slice(0, Math.min(query.limit, 10)).map((person): RawLead => {
+    const { name, email } = pdlPersonContact(person);
+    const domain = (person.job_company_website || "").replace(/^https?:\/\//, "");
+    return {
+      company: person.job_company_name || name || "Unknown",
+      officialWebsite: domain ? `https://${domain}` : "",
+      country: person.location_country || firstToken(query.countries) || "未知",
+      business: person.job_company_industry || query.productKeywords.join(", ") || query.industries.join(", ") || "待核实业务",
+      contact: name || "待维护",
+      contactInfo: email,
+      description: `${name || "该人员"}${person.job_title ? `（${person.job_title}）` : ""} · PDL 决策人资料。`.slice(0, 240),
+      confidence: email ? 80 : 66,
+      providerRecordId: person.id || email || `${domain}:${name}`,
+      sourceUrl: "",
+      recordType: "contact_evidence",
+      evidenceSummary: pdlPersonEvidence(person).slice(0, 500),
+      matchedFields: email
+        ? ["company", "officialWebsite", "country", "business", "contact", "contactInfo"]
+        : ["company", "officialWebsite", "country", "business", "contact"]
+    };
+  });
+}
+
+function pdlPersonEvidence(person: PdlPerson) {
+  const { name, email } = pdlPersonContact(person);
+  return [
+    `PDL 决策人：${name || "未署名"}`,
+    person.job_title ? `职位 ${person.job_title}` : "",
+    email ? `邮箱 ${email}` : "",
+    person.job_company_name ? `公司 ${person.job_company_name}` : ""
+  ].filter(Boolean).join("丨");
+}
+
+function pdlPeopleEvidence(domain: string, ranked: PdlPerson[]) {
+  const describe = (person: PdlPerson) => {
+    const { name, email } = pdlPersonContact(person);
+    return [name || "未署名", person.job_title ? `（${person.job_title}）` : "", email ? ` ${email}` : ""].join("");
+  };
+  return truncateText([
+    `PDL 返回域名 ${domain} 的 ${ranked.length} 个决策人候选`,
+    ranked.slice(0, 5).map(describe).join("；")
+  ].filter(Boolean).join("丨"), 1000);
+}
 
 // ---------------------------------------------------------------------------
 // 邮箱源：作用于已发现的域名，补全联系人/邮箱
@@ -932,25 +1392,27 @@ const hunter = defineProvider({
     const base = (cred.baseUrl || this.defaultBaseUrl || "https://api.hunter.io/v2").replace(/\/+$/, "");
     const company = firstToken(query.productKeywords) || firstToken(query.industries);
     if (!company) return providerPage([], { requestCount: 0 });
-    const response = await tools.http.fetch(`${base}/domain-search?company=${encodeURIComponent(company)}&limit=${Math.min(query.limit, 10)}&api_key=${encodeURIComponent(cred.apiKey)}`);
+    const response = await tools.http.fetch(`${base}/domain-search?company=${encodeURIComponent(company)}&limit=10&api_key=${encodeURIComponent(cred.apiKey)}`);
     if (!response.ok) throw providerHttpStatusError(response, "Hunter");
     const data = (await response.json()) as HunterDomainResponse;
     const d = data.data;
     if (!d || !d.domain) return providerPage([]);
-    const email = d.emails?.[0];
+    const ranked = hunterRankEmails(d.emails || []);
+    const email = ranked[0];
+    // 决策人（老板/采购）优先，而不是盲取 emails[0]（那往往只是 info@ 通用邮箱）。
     return providerPage([{
         company: d.organization || companyFromDomain(d.domain),
         officialWebsite: `https://${d.domain}`,
         country: d.country || firstToken(query.countries) || "未知",
         business: query.productKeywords.join(", ") || query.industries.join(", ") || "待核实业务",
-        contact: email ? `${email.first_name || ""} ${email.last_name || ""}`.trim() || "待维护" : "待维护",
+        contact: contactName(email?.first_name, email?.last_name) || "待维护",
         contactInfo: email?.value || "",
         description: `Hunter 域名邮箱发现：${d.domain}，找到 ${d.emails?.length || 0} 个公开邮箱。`,
-        confidence: email ? 74 : 58,
-        providerRecordId: email?.value ? `${d.domain}:${email.value.toLocaleLowerCase()}` : d.domain,
+        confidence: email ? Math.max(60, email.confidence || 74) : 58,
+        providerRecordId: email?.value ? `${d.domain}:${email.value.toLocaleLowerCase("en-US")}` : d.domain,
         sourceUrl: "",
         recordType: email ? "contact_evidence" : "company_candidate",
-        evidenceSummary: `Hunter 域名记录，公开邮箱数量 ${d.emails?.length || 0}`,
+        evidenceSummary: hunterEvidenceSummary(d.domain, ranked),
         matchedFields: email
           ? ["company", "officialWebsite", "country", "contact", "contactInfo"]
           : ["company", "officialWebsite", "country"]
@@ -970,41 +1432,71 @@ const hunter = defineProvider({
   },
   async enrich({ domain }, cred, tools) {
     const base = (cred.baseUrl || "https://api.hunter.io/v2").replace(/\/+$/, "");
-    const response = await tools.http.fetch(`${base}/domain-search?domain=${encodeURIComponent(domain)}&limit=1&api_key=${encodeURIComponent(cred.apiKey)}`);
+    // limit 从 1 提到 10：只有拿到完整邮箱列表才可能挑出决策人。
+    const response = await tools.http.fetch(`${base}/domain-search?domain=${encodeURIComponent(domain)}&limit=10&api_key=${encodeURIComponent(cred.apiKey)}`);
     if (!response.ok) throw providerHttpStatusError(response, "Hunter");
     const data = (await response.json()) as HunterDomainResponse;
-    const email = data.data?.emails?.[0];
+    const ranked = hunterRankEmails(data.data?.emails || []);
+    const email = ranked[0];
     if (!email?.value) return null;
     const verification = email.verification?.status || "";
+    const tier = decisionMakerTier(email.position || "");
     return {
-      contact: `${email.first_name || ""} ${email.last_name || ""}`.trim() || undefined,
+      contact: contactName(email.first_name, email.last_name) || undefined,
       contactInfo: email.value,
       officialWebsite: `https://${domain}`,
-      sourceUrl: `${base}/domain-search?domain=${encodeURIComponent(domain)}&limit=1`,
-      providerRecordId: `${domain}:${email.value.toLocaleLowerCase()}`,
-      evidenceSummary: [
-        `Hunter API 返回域名 ${domain} 的公开邮箱`,
-        verification ? `验证状态 ${verification}` : ""
-      ].filter(Boolean).join("；"),
+      sourceUrl: `${base}/domain-search?domain=${encodeURIComponent(domain)}&limit=10`,
+      providerRecordId: `${domain}:${email.value.toLocaleLowerCase("en-US")}`,
+      evidenceSummary: hunterEvidenceSummary(domain, ranked),
       matchedFields: ["officialWebsite", "contact", "contactInfo"],
-      confidence: typeof email.confidence === "number" ? email.confidence : undefined
+      // 决策人职位额外加分，让上层更容易把它当作"可用联系人"而不是通用邮箱。
+      confidence: Math.min(100, (typeof email.confidence === "number" ? email.confidence : 70) + (tier >= 2 ? 8 : 0)),
+      ...(verification ? {} : {})
     };
   }
 });
+
+interface HunterEmail {
+  value?: string;
+  first_name?: string;
+  last_name?: string;
+  position?: string;
+  confidence?: number;
+  verification?: { status?: string };
+}
+
+/** 决策人优先：职位分级降序 → Hunter 置信度降序 → 邮箱字典序（保证结果稳定可复现）。 */
+function hunterRankEmails(emails: HunterEmail[]) {
+  return [...emails]
+    .filter((item) => Boolean(item.value))
+    .sort((left, right) =>
+      decisionMakerTier(right.position || "") - decisionMakerTier(left.position || "")
+      || (right.confidence || 0) - (left.confidence || 0)
+      || String(left.value).localeCompare(String(right.value))
+    );
+}
+
+function hunterEvidenceSummary(domain: string, ranked: HunterEmail[]) {
+  const decisionMakers = ranked.filter((item) => decisionMakerTier(item.position || "") >= 2).slice(0, 4);
+  const others = ranked.filter((item) => decisionMakerTier(item.position || "") < 2).slice(0, 4);
+  const describe = (item: HunterEmail) => [
+    contactName(item.first_name, item.last_name) || "未署名",
+    item.position ? `（${item.position}）` : "",
+    ` ${item.value}`
+  ].join("");
+  return truncateText([
+    `Hunter 返回域名 ${domain} 的 ${ranked.length} 个公开邮箱`,
+    decisionMakers.length ? `决策人优先：${decisionMakers.map(describe).join("；")}` : "未识别出决策人职位，已按置信度排序",
+    others.length ? `其他：${others.map(describe).join("；")}` : ""
+  ].filter(Boolean).join("丨"), 1000);
+}
 
 interface HunterDomainResponse {
   data?: {
     domain?: string;
     organization?: string;
     country?: string;
-    emails?: Array<{
-      value?: string;
-      first_name?: string;
-      last_name?: string;
-      position?: string;
-      confidence?: number;
-      verification?: { status?: string };
-    }>;
+    emails?: HunterEmail[];
   };
 }
 
@@ -1023,6 +1515,7 @@ function countryToGl(country: string) {
 }
 
 export const LEAD_PROVIDERS: LeadProvider[] = [
+  anysearch,
   serper,
   brave,
   serpapi,
@@ -1044,6 +1537,9 @@ export const LEAD_PROVIDERS: LeadProvider[] = [
 ];
 
 export const DEFAULT_LEAD_SEARCH_PROVIDER_IDS = [
+  // anysearch 是唯一免 Key 的网页搜索源（requiresKey:false + optionalKey:true + 匿名低频额度），
+  // 加进默认链等于零成本改善发现层——在此之前它因为 recommended=false 从未被自动选中。
+  "anysearch",
   "gleif",
   "wikidata",
   "eu_ted",
@@ -1056,6 +1552,44 @@ const DEFAULT_LEAD_SEARCH_PROVIDER_ID_SET = new Set<string>(
   DEFAULT_LEAD_SEARCH_PROVIDER_IDS
 );
 
+/** 决策人职位分级：3 = 老板/一把手，2 = 采购/供应链，1 = 其他管理岗，0 = 非决策或非采购向。 */
+const DECISION_MAKER_TIERS: Array<{ tier: number; pattern: RegExp }> = [
+  { tier: 3, pattern: /(owner|proprietor|founder|co-?founder|ceo|chief executive|managing director|president|partner|principal|总经理|董事长|老板)/iu },
+  { tier: 3, pattern: /\b(general manager|gm)\b/iu },
+  { tier: 2, pattern: /(purchas\w*|procure\w*|buyer|buying|sourcing|supply chain|import(?:s|ing)?|采购|供应链|进口)/iu },
+  { tier: 2, pattern: /\b(head of|director of)\b/iu },
+  { tier: 1, pattern: /\b(director|manager|lead|head)\b/iu }
+];
+
+/** 纯销售/行政向的职位对"找老板或采购"没有价值，降级为 0。 */
+const NON_DECISION_POSITION_PATTERN = /\b(sales|marketing|account(?:ing)?|support|customer service|hr|human resources|recruit\w*|admin\w*|intern|assistant)\b/iu;
+
+export function decisionMakerTier(position: string) {
+  const text = String(position || "").trim();
+  if (!text) return 0;
+  let tier = 0;
+  for (const item of DECISION_MAKER_TIERS) {
+    if (item.pattern.test(text)) { tier = item.tier; break; }
+  }
+  if (tier <= 1 && NON_DECISION_POSITION_PATTERN.test(text)) return 0;
+  return tier;
+}
+
+/** 传给 Apollo / PDL 的决策人职位关键词。 */
+export const DECISION_MAKER_TITLE_KEYWORDS = [
+  "owner", "founder", "ceo", "managing director", "general manager", "president",
+  "purchasing manager", "procurement manager", "head of purchasing", "buyer", "sourcing manager",
+  "supply chain manager", "import manager", "director"
+];
+
+function contactName(first?: string, last?: string) {
+  return `${first || ""} ${last || ""}`.trim();
+}
+
+function truncateText(value: string, max: number) {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
 export function getProvider(id: string): LeadProvider | undefined {
   return LEAD_PROVIDERS.find((item) => item.id === id);
 }
@@ -1067,12 +1601,52 @@ export function providerMeta(provider: LeadProvider) {
     tier: provider.tier,
     category: provider.category,
     requiresKey: provider.requiresKey,
+    optionalKey: provider.optionalKey || false,
     capabilities: provider.capabilities,
     docsUrl: provider.docsUrl,
     keyHint: provider.keyHint,
     defaultBaseUrl: provider.defaultBaseUrl || "",
     costNote: provider.costNote,
     accessMode: provider.accessMode,
-    recommended: DEFAULT_LEAD_SEARCH_PROVIDER_ID_SET.has(provider.id)
+    recommended: DEFAULT_LEAD_SEARCH_PROVIDER_ID_SET.has(provider.id),
+    // 能补出邮箱/联系人的源：只要用户配了凭据（enabled && ready），就允许自动进入搜索链。
+    // 这替代了原来"一刀切排除 tier=paid"的做法——那会把 Apollo/PDL/Hunter 这类真正带联系方式的源永久挡在门外。
+    contactCapable: provider.capabilities.includes("email"),
+    // 是否可作为"企业搜索"源参与发现阶段。必须与 provider-runtime 的
+    // assertProviderOperationPolicy 判定保持一致（web/company/ai 三者之一）。
+    // Hunter 这类只有 email/enrich 的源是纯补全源，不能进搜索链，否则运行时直接报错。
+    searchCapable: provider.capabilities.some((item) => ["web", "company", "ai"].includes(item))
   };
+}
+
+/**
+ * 自动搜索链的选取规则（纯函数，便于测试）：
+ *   免费推荐源（recommended）或联系方式源（contactCapable）
+ *   && 能作为企业搜索源（searchCapable，对齐运行时策略）
+ *   && 已启用 && 凭据就绪 && 可自动执行 && 不是 AI 搜索本身。
+ * 关键安全性：enabled/ready 已经蕴含"用户显式保存并激活了凭据"，
+ * 所以未配置 Key 的付费源永远进不来；配置了 Key 的付费源才被纳入。
+ * 纯补全源（Hunter，searchCapable=false）不进搜索链，只留在补全通道。
+ */
+export function defaultSearchProviderIdsFor(
+  statuses: Array<{
+    id: string;
+    recommended?: boolean;
+    contactCapable?: boolean;
+    searchCapable?: boolean;
+    enabled: boolean;
+    ready: boolean;
+    accessMode: string;
+  }>
+): string[] {
+  return statuses
+    .filter((item) =>
+      (item.recommended || item.contactCapable)
+      && item.searchCapable !== false
+      && item.enabled
+      && item.ready
+      && item.accessMode === "api"
+      && item.id !== "ai_search"
+    )
+    .map((item) => item.id);
 }

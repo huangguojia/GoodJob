@@ -1,0 +1,43 @@
+{
+  "id": "development-email",
+  "name": "开发信撰写",
+  "version": "1.0.0",
+  "category": "outreach",
+  "description": "先做背调、再定客户所处开发阶段与收件人角色，最后成稿的一封「有依据」的英文开发信；无 AI 时用按阶段分档的固定模板兜底。",
+  "status": "active",
+  "priority": 90,
+  "triggers": [
+    "写开发信",
+    "写一封开发信",
+    "帮我写开发信",
+    "生成开发信",
+    "起草开发信",
+    "重新写开发信",
+    "开发信怎么写",
+    "按阶段写开发信"
+  ],
+  "keywords": [
+    "开发信",
+    "背调",
+    "开发阶段",
+    "收件人",
+    "决策人",
+    "英文邮件",
+    "草稿",
+    "cold email",
+    "personalization",
+    "OEM"
+  ],
+  "modules": ["development-email", "background-research", "outreach-journey", "prospect"],
+  "toolRefs": [
+    "outreach.draft_development_email",
+    "outreach.send_development_email",
+    "ui.open_development_email",
+    "api.read",
+    "api.external"
+  ],
+  "sourceType": "builtin",
+  "acquisitionMethod": "系统内置",
+  "author": "GoodJob",
+  "license": "内部使用"
+}

@@ -553,13 +553,22 @@ try {
       externalId: `self-test-lead-${Date.now()}`,
       sourceUrl: "https://partner.example/leads/self-test",
       intent: "高",
-      estimatedAmount: 32000,
-      nextFollowAt: "2026-07-12 10:00",
-      remark: "用于验证线索详情、触达、跟进记录和垃圾箱"
+     estimatedAmount: 32000,
+     nextFollowAt: "2026-07-12 10:00",
+      inquiryContent: "客户原始询盘：请提供产品目录、报价和交期。",
+     remark: "用于验证线索详情、触达、跟进记录和垃圾箱"
     })
   });
-  if (!leadCreate.response.ok || leadCreate.json.lead?.company !== "自动化线索工作区 GmbH") throw new Error("lead workspace create failed");
-  const testLeadId = leadCreate.json.lead.id;
+ if (!leadCreate.response.ok || leadCreate.json.lead?.company !== "自动化线索工作区 GmbH") throw new Error("lead workspace create failed");
+ const testLeadId = leadCreate.json.lead.id;
+  const leadInbox = await request("/api/internal-messages?box=inbox", { headers: { authorization: `Bearer ${salesToken}` } });
+  const leadNotification = (leadInbox.json.messages || []).find((message: { relatedType: string; relatedId: string }) => message.relatedType === "lead" && message.relatedId === testLeadId);
+  if (!leadNotification) throw new Error("new lead must create an internal notification");
+  const markAllRead = await request("/api/internal-messages/read-all", {
+    method: "POST",
+    headers: { authorization: `Bearer ${salesToken}` }
+  });
+  if (!markAllRead.response.ok || markAllRead.json.unreadCount !== 0) throw new Error("internal messages mark-all-read failed");
 
   const socialTouch = await request(`/api/leads/${testLeadId}/social-touch`, {
     method: "POST",
@@ -695,8 +704,19 @@ try {
   const customerOnlyLead = await request("/api/leads", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ company: `仅客户入库-${Date.now()}`, source: "手动录入" })
+    body: JSON.stringify({ company: `仅客户入库-${Date.now()}`, source: "手动录入", inquiryContent: "客户原始询盘：请提供产品目录和报价。" })
   });
+  if (customerOnlyLead.json.lead?.inquiryContent !== "客户原始询盘：请提供产品目录和报价。") {
+    throw new Error("lead inquiry content was not returned after creation");
+  }
+  const customerOnlyLeadEdited = await request(`/api/leads/${customerOnlyLead.json.lead.id}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${salesToken}` },
+    body: JSON.stringify({ inquiryContent: "客户补充询盘：还需要 MOQ 和交期。" })
+  });
+  if (customerOnlyLeadEdited.json.lead?.inquiryContent !== "客户补充询盘：还需要 MOQ 和交期。") {
+    throw new Error("lead inquiry content was not persisted after editing");
+  }
   const customerOnlyConversion = await request(`/api/leads/${customerOnlyLead.json.lead.id}/convert`, {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
@@ -830,18 +850,7 @@ try {
     throw new Error("duplicate batch candidate ids must fail with zero side effects");
   }
 
-  const websiteSyncBeforeVerify = await request("/api/tools/website-scrape/sync-opportunities", {
-    method: "POST",
-    headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({
-      requestId: "website-sync-before-verification",
-      opportunities: [{ ...previewOpportunity, company: "自动化官网商机", business: "LED 工程灯" }]
-    })
-  });
-  if (websiteSyncBeforeVerify.response.status !== 409
-    || websiteSyncBeforeVerify.json.errorCode !== "CANDIDATE_FORMAL_IDENTITY_MISSING") {
-    throw new Error("unverified website opportunity must not sync");
-  }
+  // 资格审核链已移除：转线索不再要求企业身份归一，未核验候选也可以直接转线索。
 
   const websiteVerificationEdit = await request(`/api/prospect-list/${previewOpportunity.id}/details`, {
     method: "PATCH",
@@ -867,13 +876,12 @@ try {
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({
       to: "prospect@example.com",
-      subject: "Wrong approved channel",
-      body: "This message must be rejected before dispatch."
+      subject: "Recipient outside legacy approved channel",
+      body: "Qualification gates were removed, so this recipient is accepted."
     })
   });
-  if (websiteWrongRecipientMail.response.status !== 400
-    || websiteWrongRecipientMail.json.errorCode !== "PROSPECT_OUTREACH_CHANNEL_MISMATCH") {
-    throw new Error("prospect list must reject a recipient outside the approved channel");
+  if (!websiteWrongRecipientMail.response.ok) {
+    throw new Error("prospect email must send without qualification gates");
   }
 
   const markWebsiteContactable = await request("/api/prospect-list/batch", {
@@ -881,9 +889,8 @@ try {
     headers: { authorization: `Bearer ${salesToken}` },
     body: JSON.stringify({ ids: [previewOpportunity.id], action: "mark-contactable" })
   });
-  if (markWebsiteContactable.response.status !== 409
-    || markWebsiteContactable.json.errorCode !== "PROSPECT_QUALIFICATION_REQUIRED") {
-    throw new Error("legacy mark-contactable action must remain disabled");
+  if (!markWebsiteContactable.response.ok) {
+    throw new Error("mark-contactable action must work without qualification gates");
   }
 
   const websiteContactMail = await request(`/api/prospect-list/${previewOpportunity.id}/send-development-email`, {
@@ -907,8 +914,17 @@ try {
       opportunities: [{ ...websitePreview.json.opportunities[0], company: "自动化官网商机", business: "LED 工程灯" }]
     })
   });
-  if (!websiteSync.response.ok || websiteSync.json.created?.[0]?.lead?.company !== "自动化官网商机" || websiteSync.json.created?.[0]?.opportunity?.leadId !== websiteSync.json.created?.[0]?.lead?.id) {
-    throw new Error("website opportunity sync failed");
+ if (!websiteSync.response.ok || websiteSync.json.created?.[0]?.lead?.company !== "自动化官网商机" || websiteSync.json.created?.[0]?.opportunity?.leadId !== websiteSync.json.created?.[0]?.lead?.id) {
+   throw new Error("website opportunity sync failed");
+ }
+  const websiteLeadId = websiteSync.json.created?.[0]?.lead?.id;
+  const websiteInbox = await request("/api/internal-messages?box=inbox", { headers: { authorization: `Bearer ${salesToken}` } });
+  if (!websiteLeadId || !(websiteInbox.json.messages || []).some((message: { relatedType: string; relatedId: string }) => message.relatedType === "lead" && message.relatedId === websiteLeadId)) {
+    throw new Error("website lead sync must create an internal notification");
+  }
+  const adminWebsiteInbox = await request("/api/internal-messages?box=inbox", { headers: { authorization: `Bearer ${adminToken}` } });
+  if (!websiteLeadId || !(adminWebsiteInbox.json.messages || []).some((message: { relatedType: string; relatedId: string }) => message.relatedType === "lead" && message.relatedId === websiteLeadId)) {
+    throw new Error("website lead sync must notify the team administrator");
   }
   const pendingImportPreview = await request("/api/tools/website-scrape/preview", {
     method: "POST",
@@ -928,9 +944,9 @@ try {
       allowPending: true
     })
   });
-  if (pendingImportSync.response.status !== 409
-    || pendingImportSync.json.errorCode !== "CANDIDATE_FORMAL_IDENTITY_MISSING") {
-    throw new Error("pending opportunity must not bypass verification gate");
+  if (pendingImportSync.response.status !== 200
+    || !pendingImportSync.json.created?.[0]?.lead?.id) {
+    throw new Error("pending opportunity must sync without qualification gates");
   }
   const excludeSyncedWebsite = await request("/api/prospect-list/batch", {
     method: "PATCH",
@@ -972,15 +988,15 @@ try {
       opportunities: [{ ...websitePreview.json.opportunities[0], company: "自动化官网商机", business: "LED 工程灯" }]
     })
   });
-  if (websiteSyncDifferentRequest.response.status !== 409
-    || websiteSyncDifferentRequest.json.errorCode !== "PROSPECT_LEAD_CONVERSION_ALREADY_COMPLETED"
+  if (websiteSyncDifferentRequest.response.status !== 200
+    || !websiteSyncDifferentRequest.json.created?.[0]?.duplicate
     || JSON.stringify(websiteReplayCountsBefore) !== JSON.stringify({
       leads: getStore().leads.length,
       sourceEvents: getStore().leadSourceEvents.length,
       activities: getStore().leadActivities.length,
       coverageEvents: getStore().prospectCoverageEvents.length
     })) {
-    throw new Error("converted candidate must reject a different batch request with zero side effects");
+    throw new Error("converted candidate must replay without side effects on a different batch request");
   }
   const forgedSourceSync = await request("/api/tools/website-scrape/sync-opportunities", {
     method: "POST",
@@ -2553,7 +2569,7 @@ try {
   const reminder = await request("/api/reminders", {
     method: "POST",
     headers: { authorization: `Bearer ${salesToken}` },
-    body: JSON.stringify({ title: "手工提醒规则", ruleType: "inactive_customer", targetStage: "已报价", days: 0, dueAt: "按触发日期生成", channel: "站内", priority: "high" })
+    body: JSON.stringify({ title: "手工提醒规则", ruleType: "inactive_customer", targetStage: "已报价", days: 0, dueAt: "按触发日期生成", channel: "站内", priority: "high", generateTodo: true })
   });
   if (!reminder.response.ok || reminder.json.reminder.title !== "手工提醒规则" || reminder.json.reminder.status !== "enabled" || reminder.json.reminder.targetOwnerId !== "u_sales_shirley") throw new Error("reminder create failed");
   const reminderPreview = await request(`/api/reminders/${reminder.json.reminder.id}/preview`, {

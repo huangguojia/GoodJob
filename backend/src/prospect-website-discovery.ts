@@ -155,6 +155,8 @@ export async function discoverProspectWebsite(input: {
   const query = `"${candidate.company}" official website ${candidate.country}`.trim();
   const attempt = attemptBase(candidate, runId, query);
   candidate.websiteDiscoveryAttempts.unshift(attempt);
+  // 防膨胀：发现尝试仅保留最近 5 条，与 website-probe 的 attempts 上限一致。
+  candidate.websiteDiscoveryAttempts = candidate.websiteDiscoveryAttempts.slice(0, 5);
   if (websiteOrigin(candidate.website)) {
     attempt.outcome = "source_provided";
     attempt.selectedWebsite = websiteOrigin(candidate.website);

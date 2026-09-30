@@ -18,6 +18,7 @@ assert.equal(overview.members.length, 3);
 assert.equal(overview.metrics?.activeMemberCount, 2);
 assert.equal(overview.roles.find((role) => role.code === "sales")?.memberCount, 1);
 assert.equal(overview.permissions.find((permission) => permission.code === "lead.read")?.grants.legacy_sales, "self");
+assert.equal(overview.permissions.find((permission) => permission.code === "lead.read")?.introducedVersion, "iam-foundation-v1");
 assert.equal(overview.members.some((member) => member.id === "admin_b"), false);
 
 assert.throws(

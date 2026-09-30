@@ -1,5 +1,10 @@
 import { createAiHttpClient } from "./ai-http-security.js";
 import {
+  aiWebSearchPolicy,
+  isOpenAiModelConfig,
+  webSearchFailureSuggestion
+} from "./ai-web-search-policy.js";
+import {
   ProviderContractError,
   providerHttpStatusError,
   type LeadQuery,
@@ -70,6 +75,18 @@ function aiResponseInvalid(message: string) {
   });
 }
 
+// provider-http-client 在 AbortSignal 触发/超时时只会抛 "Provider request aborted"
+// / "Provider request timeout"，对用户毫无信息量。这里转成可行动的超时提示。
+export function withFriendlyAiTimeout(error: unknown, timeoutMs: number): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === "Provider request aborted" || message === "Provider request timeout") {
+    return new Error(
+      `AI 模型响应超时（${Math.round(timeoutMs / 1000)} 秒内未返回结果）。请重试一次、缩短输入描述，或在「AI 模型配置」更换响应更快的模型`
+    );
+  }
+  return error;
+}
+
 export async function callAiModel(
   config: AiModelConfig,
   prompt: string,
@@ -87,9 +104,10 @@ export async function callAiModel(
     || ((url: string, init?: RequestInit) =>
       secureClient!.fetch(url, init));
   const controller = new AbortController();
+  const effectiveTimeoutMs = Math.max(1_000, Math.min(AI_MODEL_TIMEOUT_MS, timeoutMs));
   const timeout = setTimeout(
     () => controller.abort(),
-    Math.max(1_000, Math.min(AI_MODEL_TIMEOUT_MS, timeoutMs))
+    effectiveTimeoutMs
   );
   try {
     if (protocol === "anthropic") {
@@ -257,6 +275,8 @@ export async function callAiModel(
       throw aiResponseInvalid(`AI 模型在一次修复重试后仍未返回可用内容（finish_reason=${finishReason}，message_fields=${fields}${refusal ? `，refusal=${refusal.slice(0, 120)}` : ""}）；运行时将改用确定性证据和基础执行继续处理`);
     }
     return content;
+  } catch (error) {
+    throw withFriendlyAiTimeout(error, effectiveTimeoutMs);
   } finally {
     clearTimeout(timeout);
   }
@@ -298,7 +318,8 @@ export async function callAiModelWithWebSearch(
   const secureClient = fetcher ? null : createAiHttpClient(endpointBase);
   const request = fetcher || ((url: string, init?: RequestInit) => secureClient!.fetch(url, init));
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.max(1_000, Math.min(AI_MODEL_TIMEOUT_MS, timeoutMs)));
+  const webSearchTimeoutMs = Math.max(1_000, Math.min(AI_MODEL_TIMEOUT_MS, timeoutMs));
+  const timeout = setTimeout(() => controller.abort(), webSearchTimeoutMs);
   try {
     const response = await request(endpoint, {
       method: "POST",
@@ -375,6 +396,8 @@ export async function callAiModelWithWebSearch(
     const usedSearch = output.some((item) => item.type === "web_search_call");
     if (!content) throw aiResponseInvalid("联网模型没有返回可用内容");
     return { content, citations, queries, usedSearch };
+  } catch (error) {
+    throw withFriendlyAiTimeout(error, webSearchTimeoutMs);
   } finally {
     clearTimeout(timeout);
   }
@@ -490,13 +513,70 @@ export async function aiGenerateLeads(
     `获客目标：${query.goal || "未指定"}`,
     `排除：${query.excludeKeywords || "无"}`
   ].join("\n");
-  const content = await callAiModel(
-    config,
-    prompt,
-    4_000,
-    fetcher,
-    timeoutMs
-  );
+  const requiresWebSearch = isOpenAiModelConfig(config);
+  let content = "";
+  let citedWebsites: string[] = [];
+  if (requiresWebSearch) {
+    const policy = aiWebSearchPolicy(config);
+    if (!policy.ready) {
+      throw new ProviderContractError({
+        code: policy.reasonCode,
+        retryable: false,
+        retryAfterAt: null,
+        publicMessage: `${policy.message}${webSearchFailureSuggestion(policy)}`,
+        httpStatus: null,
+        phase: "search"
+      });
+    }
+    const webInstruction = [
+      prompt,
+      "必须先使用 Web Search，再生成候选公司。",
+      "officialWebsite 只能填写搜索引用中出现的企业官网 URL；没有对应引用就留空。",
+      "不要把目录、社交平台、新闻、百科或经销商页面当作企业官网。"
+    ].join("\n");
+    let webResult = await callAiModelWithWebSearch(
+      config,
+      webInstruction,
+      4_000,
+      fetcher,
+      timeoutMs
+    );
+    if (!webResult.usedSearch || !webResult.citations.length) {
+      // 中转站/上游偶发返回不带 url_citation 注解的响应（间歇性劣化）。
+      // 单次失败就判死会浪费整次搜客运行，这里带强化指令重试一次。
+      webResult = await callAiModelWithWebSearch(
+        config,
+        [
+          webInstruction,
+          "上一次响应没有携带 Web Search 的 url_citation 引用注解，系统无法采信任何官网。",
+          "请务必先调用 Web Search 工具，再基于本次搜索返回的来源生成候选公司；最终输出中的每个网址都必须能在本次搜索结果的 url_citation 注解中找到。"
+        ].join("\n"),
+        4_000,
+        fetcher,
+        timeoutMs
+      );
+    }
+    if (!webResult.usedSearch || !webResult.citations.length) {
+      throw new ProviderContractError({
+        code: "AI_WEB_SEARCH_NO_CITATION",
+        retryable: false,
+        retryAfterAt: null,
+        publicMessage: "OpenAI 模型两次均未返回 Web Search 引用，无法确认官网；请重试一次，或在「AI 模型配置」点击“测试连接”检查 Responses API Web Search 权限，或更换响应稳定的模型/中转站。",
+        httpStatus: null,
+        phase: "search"
+      });
+    }
+    content = webResult.content;
+    citedWebsites = webResult.citations.map((item) => item.url);
+  } else {
+    content = await callAiModel(
+      config,
+      prompt,
+      4_000,
+      fetcher,
+      timeoutMs
+    );
+  }
   let parsed: { companies?: unknown };
   try {
     parsed = extractJsonObject(content) as { companies?: unknown };
@@ -513,7 +593,26 @@ export async function aiGenerateLeads(
       const firstCountry =
         query.countries.split(/,|，/)[0]?.trim() || "未知";
       const detail = String(item.description || "").trim();
-      const officialWebsite = String(item.website || "").trim();
+      const proposedWebsite = String(item.website || item.officialWebsite || "").trim();
+      let officialWebsite = "";
+      if (proposedWebsite && citedWebsites.length) {
+        try {
+          const proposed = new URL(proposedWebsite);
+          const match = citedWebsites.find((cited) => {
+            try {
+              return new URL(cited).origin === proposed.origin;
+            } catch {
+              return false;
+            }
+          });
+          officialWebsite = match || "";
+        } catch {
+          officialWebsite = "";
+        }
+      }
+      const unverifiedWebsiteNote = proposedWebsite && !officialWebsite
+        ? `AI 提供候选官网（未被 Web Search 引用确认）：${proposedWebsite}`
+        : "";
       return {
         company: String(item.company || "").trim(),
         officialWebsite,
@@ -526,14 +625,19 @@ export async function aiGenerateLeads(
         ).trim(),
         contact: "待维护",
         contactInfo: "",
-        description: detail
-          ? `${detail}（AI 生成，待核实）`
-          : "AI 生成候选，待核实。",
+        description: [
+          detail ? `${detail}（AI 生成，待核实）` : "AI 生成候选，待核实。",
+          unverifiedWebsiteNote
+        ].filter(Boolean).join("；"),
         confidence: 58,
         sourceUrl: "",
         recordType: "assisted_suggestion",
-        evidenceSummary:
-          `${detail || "AI 生成候选"}；尚未完成外部事实核验。`,
+        evidenceSummary: [
+          detail || "AI 生成候选",
+          officialWebsite
+            ? "官网来自 Web Search 引用，并仍需名称与域名评分确认"
+            : "尚未完成官网引用核验"
+        ].join("；"),
         matchedFields: [
           "company",
           ...(officialWebsite ? ["officialWebsite"] : []),

@@ -32,12 +32,14 @@ const permissionDefinitions: Array<{
   module: string;
   name: string;
   riskLevel: IamRiskLevel;
+  introducedVersion: string;
   grants: Record<Exclude<Role, "super_admin">, AccessScopePreview>;
 }> = IAM_PERMISSION_CATALOG.map((permission) => ({
   code: permission.code,
   module: permission.module,
   name: permission.name,
   riskLevel: permission.riskLevel,
+  introducedVersion: IAM_FOUNDATION_SCHEMA_VERSION,
   grants: {
     sales: legacyPermissionScope("sales", permission.code) || "none",
     manager: legacyPermissionScope("manager", permission.code) || "none",
@@ -150,6 +152,7 @@ export function buildAccessControlOverview(input: {
       module: permission.module,
       name: permission.name,
       riskLevel: permission.riskLevel,
+      introducedVersion: permission.introducedVersion,
       grants: Object.fromEntries(roles.map((role) => [role.id, permission.grants[role.code]]))
     })),
     members

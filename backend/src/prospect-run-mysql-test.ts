@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import mysql from "mysql2/promise";
 import type { RowDataPacket } from "mysql2/promise";
@@ -10,7 +10,8 @@ import {
   prospectCampaignEtag,
   transitionProspectCampaign
 } from "./prospect-campaigns.js";
-import { createMysqlStore } from "./mysql-store.js";
+import { encryptAgentJobPayload } from "./agent-job-security.js";
+import { createMysqlStore, migrateMysqlSchema } from "./mysql-store.js";
 import {
   createProspectRun,
   ProspectRunRequestError,
@@ -45,6 +46,20 @@ const fullSnapshot = {
   exclusionRules: ["Consumer-only retailer"],
   sourceProviderIds: ["gleif"]
 };
+
+function bridgeBindingHash(input: {
+  teamId: string;
+  ownerId: string;
+  runId: string;
+  shardId: string | null;
+  jobId: string;
+  jobType: string;
+  parentJobId: string;
+  bridgeVersion: "v1";
+  executionSnapshotHash: string;
+}) {
+  return createHash("sha256").update(JSON.stringify(input)).digest("hex");
+}
 
 async function main() {
   const adminConnectionUrl = process.env.MYSQL_TEST_ADMIN_URL;
@@ -989,6 +1004,108 @@ async function main() {
       `DELETE FROM \`${databaseName}\`.agent_jobs WHERE id = ?`,
       [orphanJobId]
     );
+
+    stage = "legacy snapshot dependency migration";
+    const legacySnapshotHash = "1".repeat(64);
+    await admin.query(
+      `UPDATE \`${databaseName}\`.prospect_search_runs
+       SET execution_snapshot_hash = ? WHERE id = ?`,
+      [legacySnapshotHash, runId]
+    );
+    for (const binding of finalStore.prospectRunQueueParentBindings.filter(
+      (item) => item.runId === runId
+    )) {
+      const context = {
+        id: binding.jobId,
+        teamId: binding.teamId,
+        ownerId: binding.ownerId,
+        jobType: binding.jobType
+      };
+      await admin.query(
+        `UPDATE \`${databaseName}\`.agent_jobs
+         SET input_json_encrypted = ? WHERE id = ?`,
+        [
+          encryptAgentJobPayload(context, "input", {
+            runId,
+            executionSnapshotHash: legacySnapshotHash,
+            bridgeVersion: "v1"
+          }),
+          binding.jobId
+        ]
+      );
+      await admin.query(
+        `UPDATE \`${databaseName}\`.prospect_run_queue_parent_bindings
+         SET execution_snapshot_hash = ?, binding_hash = ? WHERE id = ?`,
+        [
+          legacySnapshotHash,
+          bridgeBindingHash({
+            teamId: binding.teamId,
+            ownerId: binding.ownerId,
+            runId,
+            shardId: null,
+            jobId: binding.jobId,
+            jobType: binding.jobType,
+            parentJobId: "",
+            bridgeVersion: "v1",
+            executionSnapshotHash: legacySnapshotHash
+          }),
+          binding.id
+        ]
+      );
+    }
+    for (const binding of finalStore.prospectRunQueueChildBindings.filter(
+      (item) => item.runId === runId
+    )) {
+      const shard = finalStore.prospectRunShards.find(
+        (item) => item.id === binding.shardId
+      )!;
+      const context = {
+        id: binding.jobId,
+        teamId: binding.teamId,
+        ownerId: binding.ownerId,
+        jobType: binding.jobType
+      };
+      await admin.query(
+        `UPDATE \`${databaseName}\`.agent_jobs
+         SET input_json_encrypted = ? WHERE id = ?`,
+        [
+          encryptAgentJobPayload(context, "input", {
+            runId,
+            shardId: binding.shardId,
+            providerCode: shard.providerCode,
+            executionSnapshotHash: legacySnapshotHash,
+            bridgeVersion: "v1"
+          }),
+          binding.jobId
+        ]
+      );
+      await admin.query(
+        `UPDATE \`${databaseName}\`.prospect_run_queue_child_bindings
+         SET execution_snapshot_hash = ?, binding_hash = ? WHERE id = ?`,
+        [
+          legacySnapshotHash,
+          bridgeBindingHash({
+            teamId: binding.teamId,
+            ownerId: binding.ownerId,
+            runId,
+            shardId: binding.shardId,
+            jobId: binding.jobId,
+            jobType: binding.jobType,
+            parentJobId: binding.parentJobId,
+            bridgeVersion: "v1",
+            executionSnapshotHash: legacySnapshotHash
+          }),
+          binding.id
+        ]
+      );
+    }
+    const migration = await migrateMysqlSchema({
+      databaseUrl: testUrl.toString(),
+      releaseId: "prospect-run-snapshot-integrity-test"
+    });
+    assert.equal(migration.repairedProspectRunSnapshotHashes, 1);
+    assert.equal(migration.repairedProspectRunQueueBindings, 2);
+    assert.equal(migration.repairedProspectRunQueueJobs, 2);
 
     stage = "final valid cold restart";
     const verifiedStore = await createMysqlStore();

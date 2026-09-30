@@ -24,6 +24,7 @@ import {
 } from "./prospect-strategies.js";
 import { validateProspectSearchQueryPlan } from "./prospect-search-planner.js";
 import { prospectCandidateQualificationCounts } from "./prospect-scorecard.js";
+import { canonicalJsonStringify } from "./canonical-json.js";
 import { canSeeOwner, hasIamScope, isPlatformIdentity } from "./auth.js";
 import type { CrmStore, PersistedStoreMutation } from "./store.js";
 import type {
@@ -170,7 +171,7 @@ function configuredSecret(
 
 function stableHash(value: unknown) {
   return createHash("sha256")
-    .update(JSON.stringify(value))
+    .update(canonicalJsonStringify(value))
     .digest("hex");
 }
 

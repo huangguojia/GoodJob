@@ -175,14 +175,8 @@ function assertManagedCandidateEligible(
   target: CrmOutreachEntity,
   channel: ProspectOutreachChannel,
   recipient: string,
-  at: string
+  _at: string
 ): CrmOutreachEligibility {
-  if (!candidate.tenantProspectId || !candidate.organizationId) {
-    fail(
-      "PROSPECT_OUTREACH_NOT_RESOLVED",
-      "搜客对象尚未完成企业身份归一，不能发起外联"
-    );
-  }
   if (candidate.ownerId !== target.entity.ownerId
     || candidate.teamId !== target.entity.teamId) {
     fail(
@@ -190,67 +184,40 @@ function assertManagedCandidateEligible(
       "搜客血缘与当前 CRM 对象归属不一致"
     );
   }
-  const prospect = store.tenantProspects.find((item) =>
-    item.id === candidate.tenantProspectId
-    && item.teamId === candidate.teamId
-    && item.organizationId === candidate.organizationId
-  );
-  if (!prospect) {
-    fail(
-      "PROSPECT_OUTREACH_NOT_RESOLVED",
-      "搜客对象的正式企业身份不存在或已失效"
-    );
-  }
-  if (prospect.status === "do_not_contact") {
+  // 2026-09-13 按需求移除客户资格审核链：不再要求企业身份归一、VQA 资格审核、
+  // 人工可联系批准与通道一致性。仅保留用户显式设置的禁联 / 排除 / 抑制保护。
+  const prospect = candidate.tenantProspectId
+    ? store.tenantProspects.find((item) =>
+        item.id === candidate.tenantProspectId
+        && item.teamId === candidate.teamId
+        && item.organizationId === candidate.organizationId)
+    : undefined;
+  if (prospect?.status === "do_not_contact") {
     fail(
       "PROSPECT_OUTREACH_DO_NOT_CONTACT",
       "该企业已进入永久禁止联系名单"
     );
   }
-  if ((target.entityType === "candidate" && prospect.status !== "active")
-    || (target.entityType !== "candidate"
-      && !["active", "converted"].includes(prospect.status))
-    || prospect.exclusionMode !== "none"
-    || prospect.queueState === "suppressed"
-    || candidate.status === "excluded"
-    || candidate.outreachState === "suppressed") {
+  if (candidate.status === "synced") {
+    fail(
+      "PROSPECT_OUTREACH_NOT_ACTIVE",
+      "候选已转为线索，请通过线索或客户发起外联"
+    );
+  }
+  if (candidate.status === "excluded"
+    || candidate.outreachState === "suppressed"
+    || (prospect
+      && (prospect.exclusionMode !== "none"
+        || prospect.queueState === "suppressed"))) {
     fail(
       "PROSPECT_OUTREACH_NOT_ACTIVE",
       "搜客对象当前处于排除、抑制或不可联系状态"
     );
   }
-  const scorecard = buildProspectScorecard(store, candidate, at);
-  if (!scorecard.vqa.qualified) {
-    fail(
-      "PROSPECT_OUTREACH_NOT_VQA",
-      `搜客对象未通过当前 VQA：${scorecard.vqa.reasonCodes.join(", ")}`
-    );
-  }
-  const approved = currentApprovedProspectDecision(store, candidate, at);
-  if (!approved) {
-    fail(
-      "PROSPECT_OUTREACH_NOT_APPROVED",
-      "当前没有有效的人工可联系批准记录"
-    );
-  }
-  if (approved.channel.channelType !== formalChannelType(channel)) {
-    fail(
-      "PROSPECT_OUTREACH_CHANNEL_UNSUPPORTED",
-      "实际外联通道与当前人工批准通道不一致"
-    );
-  }
-  if (normalizeRecipient(channel, recipient)
-    !== normalizeRecipient(channel, approved.channel.value)) {
-    fail(
-      "PROSPECT_OUTREACH_CHANNEL_MISMATCH",
-      "实际收件目标必须与人工批准通道值完全一致",
-      400
-    );
-  }
   return {
     mode: "prospect_managed",
     channel,
-    recipient: approved.channel.value,
+    recipient,
     candidate
   };
 }
@@ -333,16 +300,111 @@ export function assertProspectEmailOutreachEligible(
     recipient,
     at
   });
-  const prospect = store.tenantProspects.find((item) =>
-    item.id === candidate.tenantProspectId
-    && item.teamId === candidate.teamId
-  )!;
-  const approved = currentApprovedProspectDecision(store, candidate, at)!;
+  // 资格审核链移除后，正式身份与人工批准记录可能不存在，返回可空值。
+  const prospect = candidate.tenantProspectId
+    ? store.tenantProspects.find((item) =>
+        item.id === candidate.tenantProspectId
+        && item.teamId === candidate.teamId) ?? null
+    : null;
+  const approved = currentApprovedProspectDecision(store, candidate, at);
   return {
     prospect,
     scorecard: buildProspectScorecard(store, candidate, at),
-    decision: approved.decision,
-    channel: approved.channel,
+    decision: approved?.decision ?? null,
+    channel: approved?.channel ?? null,
     recipient: result.recipient
   };
+}
+
+export type ProspectEmailOutreachState = "ready" | "missing_email" | "blocked";
+
+export interface ProspectEmailOutreachEligibility {
+  ready: boolean;
+  state: ProspectEmailOutreachState;
+  /** 展示用短标签：可发信 / 缺邮箱 / 已抑制 */
+  label: string;
+  code: string;
+  message: string;
+  recipient: string;
+}
+
+const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu;
+const EMAIL_STATE_LABELS: Record<ProspectEmailOutreachState, string> = {
+  ready: "可发信",
+  missing_email: "缺邮箱",
+  blocked: "已抑制"
+};
+
+function firstEmail(...values: Array<string | undefined>) {
+  for (const value of values) {
+    const match = String(value || "").match(EMAIL_PATTERN);
+    if (match) return match[0].trim();
+  }
+  return "";
+}
+
+/**
+ * 候选名单的"发信资格灯"。
+ *
+ * 复用 assertProspectEmailOutreachEligible 的同一套判定分支，但把「抛错」改成三态返回值
+ * （可发信 / 缺邮箱 / 已抑制），并附带原始错误码与原因，供列表批量渲染 —— 不产生任何副作用，
+ * 也绝不因为某个候选不可发信而让整个清单接口失败。
+ *
+ * @param recipientOverride 当调用方已知目标邮箱（如用户手动填入）时传入；
+ *   缺省时按「人工批准通道值 → 最近一次发信 → contactInfo → contact → 官网抽取邮箱」依次取第一个。
+ */
+export function evaluateProspectEmailOutreachEligibility(
+  store: CrmStore,
+  candidate: WebsiteOpportunity,
+  at = new Date().toISOString(),
+  recipientOverride = ""
+): ProspectEmailOutreachEligibility {
+  const approved = currentApprovedProspectDecision(store, candidate, at);
+  const approvedEmail = approved && approved.channel.channelType === formalChannelType("email")
+    ? approved.channel.value
+    : "";
+  const extracted = (candidate.extractedContacts || [])
+    .map((item) => (item.emails || []).join(" "))
+    .join(" ");
+  const recipient = firstEmail(
+    recipientOverride,
+    approvedEmail,
+    candidate.lastDevelopmentEmailTo,
+    candidate.contactInfo,
+    candidate.contact,
+    extracted
+  );
+  if (!recipient) {
+    return {
+      ready: false,
+      state: "missing_email",
+      label: EMAIL_STATE_LABELS.missing_email,
+      code: "PROSPECT_OUTREACH_RECIPIENT_MISSING",
+      message: "该候选还没有可用邮箱，先补全联系方式",
+      recipient: ""
+    };
+  }
+  try {
+    const result = assertProspectEmailOutreachEligible(store, candidate, recipient, at);
+    return {
+      ready: true,
+      state: "ready",
+      label: EMAIL_STATE_LABELS.ready,
+      code: "READY",
+      message: "可直接发信",
+      recipient: result.recipient
+    };
+  } catch (error) {
+    if (error instanceof ProspectOutreachEligibilityError) {
+      return {
+        ready: false,
+        state: "blocked",
+        label: EMAIL_STATE_LABELS.blocked,
+        code: error.code,
+        message: error.message,
+        recipient: ""
+      };
+    }
+    throw error;
+  }
 }

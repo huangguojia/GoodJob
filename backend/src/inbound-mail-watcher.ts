@@ -386,6 +386,11 @@ export class InboundMailWatcher {
       })?.id || "";
     }
     if (log.entityType === "lead" && log.entityId) {
+      const lead = this.store.leads.find((item) => item.id === log.entityId);
+      if (lead && !bounce) {
+        // 回复闭环标记：线索列表绿色邮箱图标 + stopOnReply 都依赖该字段
+        lead.lastEmailReplyAt = occurredAt;
+      }
       this.store.leadActivities.unshift({
         id: `la_imap_${inboundMessageId.slice(0, 24)}_${Date.now()}`,
         leadId: log.entityId,

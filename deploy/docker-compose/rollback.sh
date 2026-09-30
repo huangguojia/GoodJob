@@ -11,8 +11,15 @@ current="$(cat "$STATE_DIR/current-release" 2>/dev/null || true)"
 
 export GOODJOB_RELEASE_ID="$previous"
 for image in backend communication gateway; do
-  docker image inspect "goodjobcrm-$image:$previous" >/dev/null 2>&1 \
-    || die "上一版本镜像不存在：goodjobcrm-$image:$previous"
+  image_ref="$(image_repository "$image"):$previous"
+  if ! docker image inspect "$image_ref" >/dev/null 2>&1; then
+    if [[ "$(image_mode)" == "registry" ]]; then
+      log "拉取回滚镜像：$image_ref"
+      compose pull "$image"
+    else
+      die "上一版本镜像不存在：$image_ref"
+    fi
+  fi
 done
 
 warn "本操作只回滚应用镜像，不反向执行数据库迁移"

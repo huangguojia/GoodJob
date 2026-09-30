@@ -137,7 +137,26 @@ try {
   store.documentLetterheads.push({
     id: "letterhead_defaults_europe", teamId: "europe", name: "Europe HQ", companyName: "Configured Export Limited",
     address: "88 Harbour Road, Hong Kong", phone: "+852 2000 1000", email: "docs@example.test", website: "https://example.test",
-    bankInfo: "CONFIGURED BANK", logoUrl: "", isDefault: true, enabled: true, updatedBy: "u_admin", updatedAt: now
+    bankInfo: "CONFIGURED BANK", contact: "Kevin Huang", taxNo: "HK-TAX-8899", logoUrl: "",
+    matchCountries: [], matchCurrencies: [], matchDocumentTypes: [], matchPriority: 0,
+    stampId: "stamp_defaults_europe", signatureId: "signature_defaults_europe",
+    isDefault: true, enabled: true, updatedBy: "u_admin", updatedAt: now
+  });
+  store.documentLetterheads.push({
+    id: "letterhead_defaults_sweden", teamId: "europe", name: "Sweden Sales Company", companyName: "GoodJob Sweden Trading AB",
+    address: "10 Exportgatan, Gothenburg, Sweden", phone: "+46 31 555 010", email: "sweden@example.test", website: "https://se.example.test",
+    bankInfo: "SWEDEN BANK", contact: "Anna Lind", taxNo: "SE-556677", logoUrl: "",
+    matchCountries: ["瑞典"], matchCurrencies: ["USD"], matchDocumentTypes: ["PI"], matchPriority: 80,
+    stampId: "stamp_defaults_europe", signatureId: "signature_defaults_europe",
+    isDefault: false, enabled: true, updatedBy: "u_admin", updatedAt: now
+  });
+  store.documentLetterheads.push({
+    id: "letterhead_defaults_imported", teamId: "europe", name: "Imported Seller Company", companyName: "Imported Seller Limited",
+    address: "9 Source Street, Vancouver, Canada", phone: "+1 604 555 0100", email: "export@imported-seller.example", website: "https://imported-seller.example",
+    bankInfo: "IMPORTED SELLER BANK", contact: "Morgan Lee", taxNo: "CA-IMPORT-001", logoUrl: "",
+    matchCountries: ["加拿大"], matchCurrencies: ["CAD"], matchDocumentTypes: ["CI"], matchPriority: 50,
+    stampId: "", signatureId: "",
+    isDefault: false, enabled: true, updatedBy: "u_admin", updatedAt: now
   });
   store.documentStamps.push({
     id: "stamp_defaults_europe", teamId: "europe", name: "Export Stamp", imageUrl: "/uploads/defaults-stamp.png",
@@ -149,9 +168,16 @@ try {
   });
   store.documentLetterheads.push({
     id: "letterhead_defaults_other", teamId: otherAdmin.teamId, name: "Other Team", companyName: "Other Team Limited",
-    address: "Private", phone: "", email: "", website: "", bankInfo: "", logoUrl: "", isDefault: true, enabled: true,
+    address: "Private", phone: "", email: "", website: "", bankInfo: "", contact: "", taxNo: "", logoUrl: "",
+    matchCountries: [], matchCurrencies: [], matchDocumentTypes: [], matchPriority: 0, stampId: "", signatureId: "",
+    isDefault: true, enabled: true,
     updatedBy: otherAdmin.id, updatedAt: now
   });
+
+  const initialDefaultsResponse = await request("/api/document-defaults", admin);
+  assert.equal(initialDefaultsResponse.status, 200);
+  const initialDefaults = await initialDefaultsResponse.json();
+  assert.equal(initialDefaults.profile.templateStyle, "rose", "new teams must default documents to the rose theme");
 
   const forbiddenWrite = await request("/api/document-defaults", sales, {
     method: "PUT",
@@ -161,6 +187,7 @@ try {
 
   const profileInput = {
     seller: "Configured Export Limited",
+    brandMarkText: "GX",
     sellerAddress: "88 Harbour Road, Hong Kong",
     sellerContact: "Kevin Huang",
     sellerPhone: "+852 2000 1000",
@@ -187,6 +214,7 @@ try {
   const savedProfile = (await saved.json()).profile;
   assert.equal(savedProfile.teamId, "europe");
   assert.equal(savedProfile.updatedBy, "u_admin");
+  assert.equal(savedProfile.brandMarkText, "GX", "team default brand mark text must persist");
 
   const salesRead = await request("/api/document-defaults", sales);
   assert.equal(salesRead.status, 200, "salesperson must be able to read defaults used by new documents");
@@ -199,6 +227,7 @@ try {
   const otherDefaults = await otherRead.json();
   assert.equal(otherDefaults.profile.teamId, otherAdmin.teamId);
   assert.notEqual(otherDefaults.profile.seller, profileInput.seller, "another team must not read this team's saved profile");
+  assert.notEqual(otherDefaults.profile.brandMarkText, profileInput.brandMarkText, "another team must not read this team's brand mark text");
   const otherAssetsResponse = await request("/api/document-assets", otherTeam);
   const otherAssets = await otherAssetsResponse.json();
   assert.ok(otherAssets.letterheads.every((asset: { teamId: string }) => asset.teamId === otherAdmin.teamId));
@@ -218,6 +247,7 @@ try {
   assert.equal(manualResponse.status, 200, "manual document creation must succeed with team defaults");
   const manualDocument = (await manualResponse.json()).document as TradeDocument;
   assert.equal(manualDocument.seller, profileInput.seller);
+  assert.equal(manualDocument.brandMarkText, profileInput.brandMarkText, "new documents must inherit the team brand mark text");
   assert.equal(manualDocument.sellerAddress, profileInput.sellerAddress);
   assert.equal(manualDocument.sellerContact, profileInput.sellerContact);
   assert.equal(manualDocument.sellerPhone, profileInput.sellerPhone);
@@ -246,6 +276,54 @@ try {
   assert.equal(dealDocument.incoterm, "CIF Destination Port", "customer incoterm must override team incoterm");
   assert.equal(dealDocument.paymentTerm, "50% T/T deposit, 50% before shipment");
   assert.equal(dealDocument.seller, profileInput.seller, "missing seller data must still use team defaults");
+  assert.equal(dealDocument.brandMarkText, profileInput.brandMarkText, "deal-created documents must inherit the team brand mark text");
+
+  const overrideResponse = await request("/api/trade-documents", sales, {
+    method: "POST",
+    body: JSON.stringify(documentBody({ brandMarkText: "SALE", number: "PI-BRAND-OVERRIDE" }))
+  });
+  assert.equal(overrideResponse.status, 200, "a document-specific brand mark override must be accepted");
+  const overrideDocument = (await overrideResponse.json()).document as TradeDocument;
+  assert.equal(overrideDocument.brandMarkText, "SALE", "document-specific brand mark must override the team default");
+
+  const shippingResponse = await request("/api/trade-documents", sales, {
+    method: "POST",
+    body: JSON.stringify(documentBody({
+      number: "PI-SHIPPING-COST",
+      items: [...(documentBody().items as unknown[]), {
+        lineType: "shipping_cost",
+        product: "Shipping Cost",
+        model: "",
+        hsCode: "",
+        quantity: 1,
+        unit: "LOT",
+        unitPrice: 88.5,
+        originCountry: "",
+        weightKg: 0,
+        packageCount: 0
+      }]
+    }))
+  });
+  assert.equal(shippingResponse.status, 200, "shipping cost must be accepted as a document line item");
+  const shippingDocument = (await shippingResponse.json()).document as TradeDocument;
+  assert.equal(shippingDocument.items.at(-1)?.lineType, "shipping_cost");
+  assert.equal(shippingDocument.items.at(-1)?.unitPrice, 88.5);
+
+  const matchedDealResponse = await request("/api/trade-documents", sales, {
+    method: "POST",
+    body: JSON.stringify(documentBody({ dealId: "d1", title: "Sweden matched document", number: "PI-SWEDEN-MATCH" }))
+  });
+  assert.equal(matchedDealResponse.status, 200, "country-specific seller matching must create the document");
+  const matchedDealDocument = (await matchedDealResponse.json()).document as TradeDocument;
+  assert.equal(matchedDealDocument.customerId, "c1");
+  assert.equal(matchedDealDocument.seller, "GoodJob Sweden Trading AB", "Sweden + USD + PI must select the Sweden seller company");
+  assert.equal(matchedDealDocument.letterheadId, "letterhead_defaults_sweden");
+  assert.equal(matchedDealDocument.sellerContact, "Anna Lind");
+  assert.equal(matchedDealDocument.sellerTaxNo, "SE-556677");
+  assert.equal(matchedDealDocument.bankInfo, "SWEDEN BANK");
+  assert.equal(matchedDealDocument.stampId, "stamp_defaults_europe");
+  assert.equal(matchedDealDocument.signatureId, "signature_defaults_europe");
+  assert.equal(matchedDealDocument.letterheadSnapshot?.companyName, "GoodJob Sweden Trading AB");
 
   const analysis = importAnalysis("u_sales_shirley", "europe");
   store.tradeDocumentImportAnalyses.unshift(analysis);
@@ -259,10 +337,13 @@ try {
   assert.equal(importedDocument.buyer, "Imported Buyer LLC", "recognized buyer must not be overwritten");
   assert.equal(importedDocument.currency, "USD", "recognized currency must not be overwritten");
   assert.equal(importedDocument.portDischarge, "Seattle", "recognized discharge port must not be overwritten");
-  assert.equal(importedDocument.sellerAddress, profileInput.sellerAddress, "blank imported seller address must use team defaults");
+  assert.equal(importedDocument.letterheadId, "letterhead_defaults_imported", "recognized seller name must match its seller company profile");
+  assert.equal(importedDocument.sellerAddress, "9 Source Street, Vancouver, Canada", "blank imported seller address must use the matched seller profile");
+  assert.equal(importedDocument.sellerContact, "Morgan Lee");
+  assert.equal(importedDocument.sellerTaxNo, "CA-IMPORT-001");
   assert.equal(importedDocument.incoterm, "EXW", "parser placeholder without evidence must yield to team defaults");
   assert.equal(importedDocument.shippingMethod, "Air freight");
-  assert.equal(importedDocument.bankInfo, "CONFIGURED BANK");
+  assert.equal(importedDocument.bankInfo, "IMPORTED SELLER BANK");
 
   const profileV2 = { ...profileInput, seller: "Configured Export V2 Limited", signatureId: "signature_defaults_europe" };
   const updatedProfile = await request("/api/document-defaults", admin, { method: "PUT", body: JSON.stringify(profileV2) });
@@ -289,6 +370,9 @@ try {
     settingsPermission: true,
     teamIsolation: true,
     manualDefaults: true,
+    multiSellerRuleMatch: true,
+    unmatchedRuleFallback: true,
+    importedSellerNameMatch: true,
     dealAndCustomerPriority: true,
     importSourcePriority: true,
     blankFieldFallback: true,

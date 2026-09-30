@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="250" viewBox="0 0 1024 250">
+  <defs>
+    <linearGradient id="accent" x1="20" y1="20" x2="180" y2="220" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ef3f86"/>
+      <stop offset="1" stop-color="#8e4de8"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="250" fill="none"/>
+  <rect x="20" y="35" width="180" height="180" rx="42" fill="#241b3b"/>
+  <path d="M52 91a62 62 0 1 1 18 83" fill="none" stroke="url(#accent)" stroke-width="12" stroke-linecap="round"/>
+  <path d="m82 127 24 24 49-56" fill="none" stroke="#fff" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="235" y="128" fill="#241b3b" font-family="Arial, sans-serif" font-size="86" font-weight="700">GoodJob</text>
+  <text x="240" y="171" fill="#a43cbd" font-family="Arial, sans-serif" font-size="30" font-weight="600" letter-spacing="1">CRM  ·  BUSINESS OPERATIONS</text>
+</svg>

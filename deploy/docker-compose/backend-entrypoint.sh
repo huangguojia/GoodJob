@@ -13,6 +13,9 @@ set +a
 
 export DB_APP_PASSWORD="$(read_secret /run/secrets/mysql_password)"
 export INITIAL_ADMIN_PASSWORD="$(read_secret /run/secrets/initial_admin_password)"
+if [ -f /run/secrets/admin_credentials ]; then
+  export GOODJOB_ADMIN_CREDENTIALS_FILE=/run/secrets/admin_credentials
+fi
 export DATABASE_URL="$(node -e '
   const url = new URL("mysql://placeholder/");
   url.username = process.env.DB_USER;

@@ -49,7 +49,9 @@ let prospectRadarActiveJobId = "";
 let prospectRadarLoading = false;
 let integrationCenterController: IntegrationCenterController | null = null;
 let examTimerHandle: number | null = null;
+let advancedExcelEditReturnTemplateId = "";
 const DASHBOARD_LIVE_REFRESH_MS = 10_000;
+const EXCHANGE_RATE_REFRESH_MS = 15 * 60 * 1000;
 
 interface User {
   id: string;
@@ -82,6 +84,19 @@ interface User {
   lastDevelopmentEmailTo?: string;
   lastDevelopmentEmailSubject?: string;
   theme?: string;
+}
+
+interface ExchangeRateItem {
+  pair: string;
+  value: number;
+  decimals: number;
+}
+
+interface TodayExchangeRates {
+  date: string;
+  rates: ExchangeRateItem[];
+  source: string;
+  fetchedAt: string;
 }
 
 type AccessControlPage = "members" | "organization" | "roles" | "ui" | "authorization" | "audit";
@@ -319,6 +334,8 @@ interface Customer {
   country: string;
   contact: string;
   whatsapp?: string;
+  wechat?: string;
+  otherNotes?: string;
   stage: string;
   amount: number;
   health: number;
@@ -398,15 +415,107 @@ interface BackgroundResearch {
   score: number;
   verdict: string;
   summary: string;
-  facts: Array<{ label: string; value: string }>;
+  facts: Array<{ label: string; value: string; group?: string; sourceUrl?: string; sourceTitle?: string }>;
   opportunities: string[];
+  talkTracks?: string[];
   risks: Array<{ level: "high" | "medium" | "low"; title: string; detail: string }>;
   contacts: Array<{ channel: string; value: string }>;
   sources: Array<{ title: string; url: string; observedAt: string; detail?: string; authority?: string }>;
   sourceChecks?: Array<{ providerId: string; providerName: string; status: "matched" | "empty" | "failed" | "skipped"; matchCount: number; message: string }>;
   nextAction: string;
   engine: string;
+  scoreReason?: string;
+  crmOnly?: boolean;
   completedAt: string;
+}
+
+interface SalesDistillationMetrics {
+  customerCount: number;
+  leadCount: number;
+  activeDealCount: number;
+  wonDealCount: number;
+  wonAmount: number;
+  followupCount: number;
+  completedTodoCount: number;
+  reportCount: number;
+}
+
+interface SalesDistillation {
+  id: string;
+  sourceUserId: string;
+  sourceUserName: string;
+  teamId: string;
+  periodDays: number;
+  metrics: SalesDistillationMetrics;
+  patterns: string[];
+  playbook: Array<{ stage: string; action: string; evidence: string }>;
+  coachingActions: string[];
+  modelLabel: string;
+  status: "draft" | "published";
+  createdBy: string;
+  createdAt: string;
+  publishedBy?: string;
+  publishedAt?: string;
+  trainingRunId?: string;
+  version?: number;
+  maturity?: SalesTrainingMaturity;
+  evaluationScore?: number;
+  sampleCount?: number;
+}
+
+type SalesTrainingStatus = "queued" | "collecting" | "cleaning" | "labeling" | "training" | "evaluating" | "awaiting_review" | "published" | "paused" | "failed" | "cancelled";
+type SalesTrainingMaturity = "observation" | "trial" | "production" | "stable";
+type SalesTrainingSampleLabel = "positive" | "negative" | "neutral";
+interface SalesTrainingRun {
+  id: string;
+  sourceUserId: string;
+  sourceUserName: string;
+  teamId: string;
+  createdBy: string;
+  parentRunId: string;
+  version: number;
+  periodDays: number;
+  status: SalesTrainingStatus;
+  resumeStatus: SalesTrainingStatus;
+  progress: number;
+  currentAction: string;
+  maturity: SalesTrainingMaturity;
+  metrics: SalesDistillationMetrics;
+  sampleStats: { source: number; valid: number; rejected: number; positive: number; negative: number; neutral: number; holdout: number };
+  samples: Array<{ id: string; entityType: "customer" | "lead" | "deal"; entityId: string; title: string; market: string; stage: string; outcome: string; label: SalesTrainingSampleLabel; included: boolean; activityCount: number; todoCount: number; evidenceIds: string[]; summary: string; managerNote: string }>;
+  rounds: Array<{ id: string; index: number; name: string; status: "pending" | "running" | "completed" | "failed"; summary: string; startedAt: string; completedAt: string }>;
+  events: Array<{ id: string; stage: SalesTrainingStatus; message: string; createdAt: string }>;
+  patterns: string[];
+  playbook: Array<{ stage: string; action: string; evidence: string }>;
+  coachingActions: string[];
+  evaluation: { coverage: number; balance: number; traceability: number; strategy: number; safety: number; overall: number; passed: boolean; blockers: string[] };
+  modelLabel: string;
+  candidateDistillationId: string;
+  error: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string;
+  publishedAt: string;
+}
+
+interface SalesPlaybookActivation {
+  id: string;
+  distillationId: string;
+  ownerId: string;
+  teamId: string;
+  status: "active" | "paused";
+  applicationCount: number;
+  taskCount: number;
+  lastUsedAt: string;
+  activatedAt: string;
+  updatedAt: string;
+}
+
+interface SalesDistillationSource {
+  id: string;
+  name: string;
+  role: Role;
+  teamId: string;
 }
 
 interface CompanyProfile {
@@ -426,6 +535,15 @@ interface TeamSystemSettings {
   requireDocumentExcelApproval: boolean;
   updatedBy: string;
   updatedAt: string;
+}
+
+interface TradeDocumentOcrProviderConfig {
+  provider: "none" | "baidu" | "siliconflow";
+  enabled: boolean;
+  hasApiKey: boolean;
+  hasSecretKey: boolean;
+  model: string;
+  baseUrl: string;
 }
 
 interface DevelopmentEmailDraft {
@@ -452,6 +570,38 @@ interface DevelopmentEmailReadiness {
   aiGenerated: boolean;
   aiConfigName: string;
   aiError: string;
+}
+
+/** 开发信技能：这封信当前阶段的写作策略（后端推导，不落库） */
+interface DevelopmentEmailStageInfo {
+  key: string;
+  label: string;
+  objective: string;
+  angle: string;
+  cta: string;
+  maxWords: number;
+  nextStepLabel: string;
+  canSend: boolean;
+  blockReason: string;
+}
+
+/** 开发信技能：这封信的依据（背调 / 收件人角色 / 缺什么） */
+interface DevelopmentEmailBriefInfo {
+  role: { key: string; label: string; authority: string; emphasis: string };
+  evidence: string[];
+  missing: string[];
+  angles: Array<{ keyword: string; angle: string }>;
+  researchUsed: boolean;
+  researchId: string;
+  researchScore: number | null;
+  researchCreatedAt: string;
+  researchEngine: string;
+  researchVerdict: string;
+}
+
+interface DevelopmentEmailQuality {
+  ok: boolean;
+  issues: string[];
 }
 
 interface CustomerActivity {
@@ -557,6 +707,12 @@ interface Reminder {
   ruleType?: string;
   targetStage?: string;
   days?: number;
+  timeUnit?: "minute" | "day" | "hour" | "week";
+  targetCustomerIds?: string[];
+  /** 是否在待办中心生成待办（表单里的「生成待办中心任务」勾选项）。不勾 = 只匹配统计，不产生待办。 */
+  generateTodo?: boolean;
+  /** 最近一次运行「为什么没生成」的原因聚合（后端 lastSkipReasons），用于在卡片上直接说明跳过原因。 */
+  lastSkipReasons?: Array<{ reason: "generate-disabled" | "active-todo" | "cooldown"; count: number; customers?: string[] }>;
   priority?: "high" | "medium" | "normal";
   enabled?: boolean;
   generatedCount?: number;
@@ -581,6 +737,7 @@ interface ImportExportJob {
 
 interface TradeDocumentItem {
   id: string;
+  lineType?: "product" | "shipping_cost";
   productId?: string;
   imageUrl?: string;
   product: string;
@@ -650,11 +807,33 @@ interface TradeDocumentImportAnalysis {
   calculatedTotal: number;
   declaredTotal?: number;
   totalDifference?: number;
+  recognitionSource?: "import" | "ocr";
+  recognitionTemplate?: {
+    templateId: string;
+    familyId: string;
+    name: string;
+    version: number;
+    matchScore: number;
+    matchedAt: string;
+  };
   createdDocumentId?: string;
   confirmedBy?: string;
   confirmedAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+interface TradeDocumentRecognitionTemplate {
+  id: string;
+  familyId: string;
+  version: number;
+  name: string;
+  documentType: TradeDocument["type"];
+  sourceKind: "import" | "ocr";
+  status: "active" | "archived";
+  createdBy: string;
+  createdAt: string;
+  archivedAt?: string;
 }
 
 interface CustomsDocument {
@@ -739,6 +918,7 @@ interface TradeDocument {
   buyerAddress: string;
   buyerContact: string;
   seller: string;
+  brandMarkText?: string;
   sellerAddress: string;
   sellerContact?: string;
   sellerPhone?: string;
@@ -755,7 +935,7 @@ interface TradeDocument {
   bankInfo: string;
   notes: string;
   language: "EN" | "ES" | "RU" | "AR" | "ZH";
-  templateStyle: "executive" | "classic" | "compact" | "indigo" | "emerald" | "rose" | "slate" | "amber";
+  templateStyle: "executive" | "classic" | "compact" | "indigo" | "emerald" | "rose" | "slate" | "amber" | "longtec";
   status: "draft" | "ready" | "pending_approval" | "approved" | "rejected" | "exported";
   approvalNote?: string;
   approvedAt?: string;
@@ -783,6 +963,8 @@ interface DocumentLetterheadSnapshot {
   email: string;
   website: string;
   bankInfo: string;
+  contact: string;
+  taxNo: string;
   logoUrl: string;
   logoPlacement?: DocumentAssetPlacement;
 }
@@ -811,6 +993,12 @@ interface DocumentSignatureSnapshot {
 interface DocumentLetterhead extends DocumentLetterheadSnapshot {
   id: string;
   teamId: string;
+  matchCountries: string[];
+  matchCurrencies: string[];
+  matchDocumentTypes: TradeDocument["type"][];
+  matchPriority: number;
+  stampId: string;
+  signatureId: string;
   isDefault: boolean;
   enabled: boolean;
   updatedBy: string;
@@ -838,6 +1026,7 @@ interface DocumentSignature extends DocumentSignatureSnapshot {
 interface DocumentDefaultProfile {
   teamId: string;
   seller: string;
+  brandMarkText: string;
   sellerAddress: string;
   sellerContact: string;
   sellerPhone: string;
@@ -875,6 +1064,89 @@ interface TradeDocumentHistoryResponse {
   page: number;
   pageSize: number;
   pageCount: number;
+}
+
+interface QuoteHistoryItem {
+  productId: string;
+  product: string;
+  model: string;
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+  lineTotal: number;
+}
+
+interface QuoteHistoryRecord {
+  id: string;
+  dealId: string;
+  customerId: string;
+  documentId: string;
+  documentType: "PI" | "QUOTATION";
+  documentNumber: string;
+  documentRevision: number;
+  issueDate: string;
+  customerName: string;
+  dealTitle: string;
+  dealStage: string;
+  currency: string;
+  totalAmount: number;
+  items: QuoteHistoryItem[];
+  changes: string[];
+  operatorId: string;
+  operatorName: string;
+  quotedAt: string;
+  exportedAt?: string;
+}
+
+interface QuoteHistoryResponse {
+  records: QuoteHistoryRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  summary: {
+    recordCount: number;
+    customerCount: number;
+    dealCount: number;
+    productCount: number;
+    totals: Record<string, number>;
+  };
+  productAnalysis?: {
+    rows: QuoteProductAnalysisRow[];
+    overall: QuoteProductRangeRow[];
+    countryRanges: QuoteProductRangeRow[];
+    detailRecords: QuoteHistoryRecord[];
+    totalRecords: number;
+  };
+}
+
+interface QuoteProductRangeRow {
+  country: string;
+  currency: string;
+  quoteCount: number;
+  countryCount: number;
+  minUnitPrice: number;
+  maxUnitPrice: number;
+  averageUnitPrice: number;
+  latestUnitPrice: number;
+  latestQuotedAt: string;
+}
+
+interface QuoteProductAnalysisRow {
+  productId: string;
+  product: string;
+  model: string;
+  country: string;
+  currency: string;
+  quoteCount: number;
+  minUnitPrice: number;
+  maxUnitPrice: number;
+  averageUnitPrice: number;
+  latestUnitPrice: number;
+  latestQuotedAt: string;
+  latestCustomerName: string;
+  latestDocumentNumber: string;
+  recordIds: string[];
 }
 
 type CommissionRuleType = "rate" | "fixed" | "tier" | "gross_profit" | "none";
@@ -1192,7 +1464,7 @@ interface InternalMessage {
   type: "system" | "manual";
   subject: string;
   content: string;
-  relatedType: "daily_report" | "message" | "email_return" | "integration_approval" | "integration_call" | "integration_connection" | "integration_event" | "integration_connector" | "";
+  relatedType: "daily_report" | "message" | "lead" | "email_return" | "quote_history" | "integration_approval" | "integration_call" | "integration_connection" | "integration_event" | "integration_connector" | "";
   relatedId: string;
   readAt: string;
   createdAt: string;
@@ -1341,7 +1613,7 @@ interface ProspectStrategySuggestion {
   createdAt: string;
 }
 
-type WebsiteProbeStage = "queued" | "dns" | "robots" | "head" | "body" | "contact_page" | "evidence" | "completed" | "failed";
+type WebsiteProbeStage = "queued" | "dns" | "robots" | "head" | "body" | "contact_page" | "ai_extract" | "evidence" | "completed" | "failed";
 
 interface WebsiteProbeEvent {
   id: string;
@@ -1362,7 +1634,7 @@ interface WebsiteProbeAttempt {
   accessMode: "controlled_probe";
   policyVersion: "website-probe-policy-v1" | "website-probe-policy-v2" | "website-probe-policy-v3" | "website-probe-policy-v4-foreign-only";
   status: "queued" | "running" | "completed" | "failed";
-  outcome: "pending" | "evidence_found" | "no_evidence" | "robots_denied" | "unreachable" | "policy_blocked" | "rate_limited" | "circuit_open";
+  outcome: "pending" | "evidence_found" | "no_evidence" | "robots_denied" | "unreachable" | "policy_blocked" | "rate_limited" | "circuit_open" | "interrupted";
   robotsDecision: "pending" | "allowed" | "denied" | "unavailable";
   httpStatus: number;
   responseBytes: number;
@@ -1508,6 +1780,24 @@ interface WebsiteOpportunity {
     fieldAuthority?: Record<string, "official" | "corroborated" | "discovery" | "assisted">;
     retentionPolicyRef: string;
   }>;
+  searchReport?: {
+    summary: string;
+    sourceAuthenticity: "official_confirmed" | "multi_source_supported" | "single_source_supported" | "weak" | "unknown";
+    verifiedFields: string[];
+    checkedSources: Array<{
+      url: string;
+      title: string;
+      authenticity: "official" | "registry" | "reputable_directory" | "search_result" | "weak";
+      verifiedFields: string[];
+      finding: string;
+    }>;
+    contactFinding: {
+      status: "source_confirmed" | "missing" | "conflicting" | "unverified";
+      value: string;
+      sourceUrl: string;
+    };
+    nextAction: string;
+  };
   verificationReport?: {
     level: "L0" | "L1" | "L2" | "L3" | "L4" | "L5";
     levelLabel: string;
@@ -1579,11 +1869,12 @@ interface WebsiteOpportunity {
     whatsapp: string[];
     source: string;
     sourceLabel?: string;
-    sourceKind?: "source_record" | "contact_provider" | "official_website" | "manual";
+    sourceKind?: "source_record" | "contact_provider" | "web_search" | "official_website" | "local_runner" | "manual";
     confidence?: number;
     verificationStatus?: "verified" | "source_confirmed" | "syntax_valid" | "unverified";
     observedAt?: string;
     reasonCodes?: string[];
+    evidenceExcerpt?: string;
     corroboratedSources?: Array<{ sourceId: string; sourceLabel: string; evidenceUrl: string }>;
     evidenceUrl: string;
   }>;
@@ -1595,14 +1886,17 @@ interface WebsiteOpportunity {
       id: string;
       sourceId: string;
       sourceLabel: string;
-      sourceKind: "source_record" | "contact_provider" | "official_website" | "manual";
+      sourceKind: "source_record" | "contact_provider" | "web_search" | "official_website" | "local_runner" | "manual";
       status: "queued" | "running" | "completed" | "failed" | "blocked" | "skipped";
-      outcome: "pending" | "contact_found" | "no_contact" | "not_configured" | "policy_blocked" | "provider_failed";
+      outcome: "pending" | "contact_found" | "no_contact" | "not_needed" | "not_configured" | "policy_blocked" | "timed_out" | "provider_failed";
       contactCount: number;
       message: string;
       errorCode?: string;
       retryable?: boolean;
       retryAfterAt?: string | null;
+      suggestion?: string;
+      taskId?: string;
+      evidenceUrls?: string[];
       startedAt: string;
       completedAt: string;
     }>;
@@ -1619,10 +1913,21 @@ interface WebsiteOpportunity {
     };
     contactCount: number;
     summary: string;
+    deadlineAt?: string;
+    lastProgressAt?: string;
     createdAt: string;
     startedAt: string;
     completedAt: string;
   }>;
+  /** 发信资格灯：可发信 / 缺邮箱 / 已抑制（附原始原因码）。由 /api/tools/website-opportunities 下发。 */
+  emailEligibility?: {
+    ready: boolean;
+    state: "ready" | "missing_email" | "blocked";
+    label: string;
+    code: string;
+    message: string;
+    recipient: string;
+  };
   selected?: boolean;
   ownerId?: string;
   teamId?: string;
@@ -1720,6 +2025,7 @@ interface LeadProviderStatus {
   tier: "free" | "byok_free" | "paid" | "ai";
   category: "web" | "company" | "email" | "ai";
   requiresKey: boolean;
+  optionalKey?: boolean;
   capabilities: string[];
   docsUrl: string;
   keyHint: string;
@@ -1776,6 +2082,11 @@ interface LeadFinderJob {
   liveEvents?: ProspectLiveEventApiRecord[];
   acceptance?: ProspectAcceptanceApi;
   deepMining?: ProspectDeepMiningApi;
+  lfindTaskId?: string;
+  lfindEvents?: LfindTaskEvent[];
+  lfindSynced?: boolean;
+  lfindSkipped?: Array<{ company: string; reason: string }>;
+  lfindFailures?: Array<{ stage: string; reason: string; suggestion: string }>;
 }
 
 interface ProspectPendingCandidatePreview {
@@ -1898,11 +2209,49 @@ interface LeadFinderIncrementalStats {
   rawCount: number;
   returnedCount: number;
   deduplicatedCount: number;
+  existingFilteredCount?: number;
   newCount: number;
   evidenceUpdatedCount: number;
   multiSourceMergedCount: number;
   unchangedCount: number;
   excludedCount: number;
+}
+
+interface LfindTaskEvent {
+  id: number;
+  eventType: "status" | "progress" | "output" | "warning" | "error";
+  message: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+interface LfindTask {
+  id: string;
+  status: "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
+  errorMessage: string;
+  resultText: string;
+  createdAt: string;
+  startedAt: string;
+  finishedAt: string;
+}
+
+interface LfindTaskResponse {
+  task: LfindTask;
+  events?: LfindTaskEvent[];
+  synced?: boolean;
+  opportunities?: WebsiteOpportunity[];
+  incrementalStats?: LeadFinderIncrementalStats | null;
+  skipped?: Array<{ company: string; reason: string }>;
+  lfind?: {
+    summary?: {
+      target?: string;
+      rawFound?: number;
+      accepted?: number;
+      skipped?: number;
+      noResultReason?: string;
+    };
+    failures?: Array<{ stage: string; reason: string; suggestion: string }>;
+  } | null;
 }
 
 interface LeadTaskStreamLog {
@@ -1913,6 +2262,8 @@ interface LeadTaskStreamLog {
   detail: string;
   result: string;
   tone: string;
+  live?: boolean;
+  phases?: string[];
 }
 
 interface ProspectLiveEventApiRecord {
@@ -2306,6 +2657,10 @@ interface AiModelConfig {
   lastTestAt?: string;
   lastTestStatus?: "untested" | "passed" | "failed";
   lastTestMessage?: string;
+  webSearchStatus?: "untested" | "passed" | "failed" | "unsupported";
+  webSearchTestAt?: string;
+  webSearchTestMessage?: string;
+  webSearchCitationCount?: number;
   updatedAt: string;
 }
 
@@ -2476,6 +2831,26 @@ interface Competitor {
   updatedAt: string;
 }
 
+type PeerRelation = "互补" | "竞争" | "互相推荐";
+
+interface Peer {
+  id: string;
+  company: string;
+  country: string;
+  industry: string;
+  relations: PeerRelation[];
+  contact: string;
+  phone: string;
+  email: string;
+  wechat: string;
+  website: string;
+  remark: string;
+  source: string;
+  ownerId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface CaseStudy {
   id: string;
   title: string;
@@ -2587,6 +2962,9 @@ interface Lead {
   nextFollowAt: string;
   lastActivityAt: string;
   remark: string;
+  inquiryContent?: string;
+  /** 客户最近一次邮件回复时间（IMAP 监听自动写入；有值显示绿色邮箱图标） */
+  lastEmailReplyAt?: string;
   convertedCustomerId: string;
   convertedDealId?: string;
   createdAt: string;
@@ -2742,7 +3120,7 @@ interface AgentKnowledgeDocument {
   toolRefs: string[];
   successCriteria: string[];
   failureCases: string[];
-  sourceType: "system_file" | "manual" | "agent_feedback";
+  sourceType: "system_file" | "manual" | "agent_feedback" | "distillation";
   sourceId: string;
   status: AgentKnowledgeStatus;
   trustLevel: "system" | "reviewed" | "candidate";
@@ -2763,6 +3141,7 @@ interface AgentKnowledgeOverview {
   managedCount: number;
   publishedCount: number;
   reviewCount: number;
+  distillationCount: number;
   modules: string[];
   loadedAt: string;
   directory: string;
@@ -2893,6 +3272,43 @@ interface CustomerMaintenanceFinding {
   reasonCodes: string[];
   reason: string;
   priority: "high" | "medium" | "normal";
+  triggerKey?: string;
+  playbookActivationId?: string;
+  playbookName?: string;
+  playbookAction?: string;
+}
+
+interface CustomerMaintenanceTodoRef {
+  id: string;
+  title: string;
+  customerId: string;
+  dealId: string;
+  priority: "high" | "medium" | "normal";
+  done: boolean;
+  dueAt: string;
+  related: string;
+  createdAt: string;
+  triggerKey: string;
+}
+
+interface CustomerMaintenanceFindingsView {
+  watchId: string;
+  name: string;
+  status: "active" | "paused" | "cancelled" | "error";
+  lastRunAt: string;
+  lastMatchedCount: number;
+  lastCreatedCount: number;
+  lastSkippedCount: number;
+  totalCreatedCount: number;
+  findings: CustomerMaintenanceFinding[];
+  todos: CustomerMaintenanceTodoRef[];
+}
+
+interface CustomerMaintenancePreview {
+  matchedCount: number;
+  creatableCount: number;
+  findings: CustomerMaintenanceFinding[];
+  rules: CustomerMaintenanceWatch["rules"];
 }
 
 interface CustomerMaintenanceWatch {
@@ -3083,6 +3499,9 @@ interface AppState {
   leadIntentFilter: string;
   leadSourceFilter: string;
   leadFollowFilter: string;
+  /** 只看有客户回复的线索（绿色邮箱图标来源） */
+  leadReplyFilter: "all" | "replied";
+  selectedLeadIds: string[];
   leadSearch: string;
   leadPage: number;
   whatsappThreads: WhatsAppThread[];
@@ -3117,6 +3536,12 @@ interface AppState {
   documentHistoryPage: number;
   documentHistoryPageCount: number;
   documentHistoryTotal: number;
+  quoteHistoryPage: number;
+  quoteHistoryPageCount: number;
+  quoteHistoryTotal: number;
+  quoteHistoryMode: "records" | "product";
+  quoteProductAnalysis: QuoteHistoryResponse["productAnalysis"];
+  quoteHistoryFocusId: string;
   wecomMessages: WecomMessage[];
   dailyReports: DailyReport[];
   dailyReportOwners: CollaborationUser[];
@@ -3156,7 +3581,17 @@ interface AppState {
   agentCheckpointRunId: string;
   outreachSequences: OutreachSequence[];
   customerMaintenanceWatches: CustomerMaintenanceWatch[];
+  maintenancePreview: CustomerMaintenancePreview | null;
+  maintenanceFindings: Record<string, CustomerMaintenanceFindingsView>;
+  maintenanceActiveWatchId: string;
+  maintenanceLoading: boolean;
+  outreachBatches: OutreachBatchView[];
   agentLoading: boolean;
+  salesDistillations: SalesDistillation[];
+  salesPlaybookActivations: SalesPlaybookActivation[];
+  salesDistillationSources: SalesDistillationSource[];
+  salesDistillationLoading: boolean;
+  salesTrainingRuns: SalesTrainingRun[];
   aiConfig: AiModelConfig | null;
   aiConfigs: AiModelConfig[];
   selectedAiConfigId: string | null;
@@ -3180,6 +3615,12 @@ interface AppState {
   planTaskView: "today" | "week" | "templates";
   planTaskStatusFilter: "open" | "done" | "cancelled" | "all";
   competitors: Competitor[];
+  peers: Peer[];
+  peerSearch: string;
+  peerRelationFilter: "all" | PeerRelation | "未标注";
+  peerSort: "newest" | "oldest" | "company";
+  peerPage: number;
+  selectedPeerId: string | null;
   caseStudies: CaseStudy[];
   commissionProducts: CommissionProduct[];
   commissionRules: CommissionRule[];
@@ -3200,7 +3641,7 @@ interface AppState {
   reportNote: string;
   dashboardPeriod: DashboardPeriod;
   morningView: boolean;
-  todoFilter: "all" | "today" | "overdue" | "mine" | "customer" | "history";
+  todoFilter: "all" | "today" | "overdue" | "mine" | "customer" | "history" | "maintenance";
   openTodoMenuId: string | null;
   draggingTodoId: string | null;
   selectedCustomerId: string | null;
@@ -3268,6 +3709,8 @@ const state: AppState = {
   leadIntentFilter: "all",
   leadSourceFilter: "all",
   leadFollowFilter: "all",
+  leadReplyFilter: "all",
+  selectedLeadIds: [],
   leadSearch: "",
   leadPage: 1,
   whatsappThreads: [],
@@ -3302,6 +3745,12 @@ const state: AppState = {
   documentHistoryPage: 1,
   documentHistoryPageCount: 1,
   documentHistoryTotal: 0,
+  quoteHistoryPage: 1,
+  quoteHistoryPageCount: 1,
+  quoteHistoryTotal: 0,
+  quoteHistoryMode: "records",
+  quoteProductAnalysis: undefined,
+  quoteHistoryFocusId: "",
   wecomMessages: [],
   dailyReports: [],
   dailyReportOwners: [],
@@ -3341,7 +3790,17 @@ const state: AppState = {
   agentCheckpointRunId: "",
   outreachSequences: [],
   customerMaintenanceWatches: [],
+  maintenancePreview: null,
+  maintenanceFindings: {},
+  maintenanceActiveWatchId: "",
+  maintenanceLoading: false,
+  outreachBatches: [],
   agentLoading: false,
+  salesDistillations: [],
+  salesPlaybookActivations: [],
+  salesDistillationSources: [],
+  salesDistillationLoading: false,
+  salesTrainingRuns: [],
   aiConfig: null,
   aiConfigs: [],
   selectedAiConfigId: null,
@@ -3365,6 +3824,12 @@ const state: AppState = {
   planTaskView: "today",
   planTaskStatusFilter: "open",
   competitors: [],
+  peers: [],
+  peerSearch: "",
+  peerRelationFilter: "all",
+  peerSort: "newest",
+  peerPage: 1,
+  selectedPeerId: null,
   caseStudies: [],
   commissionProducts: [],
   commissionRules: [],
@@ -3449,6 +3914,7 @@ let leadProvidersInFlight: Promise<void> | null = null;
 const prospectQualificationLoading = new Set<string>();
 let leadFinderRunsLoading = false;
 let leadFinderRunPollTimer = 0;
+let lfindTaskPollTimer = 0;
 let leadFinderStreamAbort: AbortController | null = null;
 let leadFinderStreamRunId = "";
 let leadFinderStreamConnected = false;
@@ -3472,6 +3938,7 @@ interface LeadAiParsed {
   exclusions: string[];
 }
 let leadAiParsed: LeadAiParsed | null = null;
+let leadAiParseLastError = "";
 let leadAiParseInFlight: Promise<boolean> | null = null;
 let leadSuperPreviewTimer = 0;
 let activeLeadFinderJobId: string | null = null;
@@ -3490,6 +3957,10 @@ let developmentEmailSubject: { entityType: BackgroundResearchEntity; entityId: s
 let developmentEmailDraft: DevelopmentEmailDraft | null = null;
 let developmentEmailReadiness: DevelopmentEmailReadiness | null = null;
 let developmentEmailCompanyProfile: CompanyProfile | null = null;
+/** 开发信技能：本封的阶段策略、依据与质量自检（后端返回，仅展示） */
+let developmentEmailStageInfo: DevelopmentEmailStageInfo | null = null;
+let developmentEmailBriefInfo: DevelopmentEmailBriefInfo | null = null;
+let developmentEmailQuality: DevelopmentEmailQuality | null = null;
 let developmentEmailLoading = false;
 let developmentEmailSending = false;
 let developmentEmailRequestId = "";
@@ -3501,6 +3972,7 @@ const developmentEmailScenarioDrafts = new Map<DevelopmentEmailScenario, Pick<De
 let developmentEmailNextFollowAt = "";
 let companyProfileCanManage = false;
 let teamSystemSettings: TeamSystemSettings = { teamId: "", requireDocumentExcelApproval: false, updatedBy: "", updatedAt: "" };
+let tradeDocumentOcrProvider: TradeDocumentOcrProviderConfig = { provider: "none", enabled: false, hasApiKey: false, hasSecretKey: false, model: "", baseUrl: "" };
 let teamSystemSettingsCanManage = false;
 let whatsappRefreshTimer = 0;
 let agentRunPollTimer = 0;
@@ -3519,6 +3991,8 @@ let agentSkillQuery = "";
 let agentSkillCategoryFilter = "all";
 let agentSkillStatusFilter = "all";
 let agentSkillSourceFilter = "all";
+let selectedSalesTrainingRunId = "";
+let salesTrainingPollTimer = 0;
 let whatsappRefreshing = false;
 let openWorkspaceTabs = ["dashboard"];
 let workspaceTabHistory = ["dashboard"];
@@ -3554,17 +4028,22 @@ let ocrBatchRunning = false;
 
 const viewLabels: Record<string, string> = {
   dashboard: "工作台",
+  todo: "待办中心",
   "lead-finder": "自动获客",
   "lead-task-detail": "任务执行详情",
   "prospect-list": "搜客清单",
   "ai-agent": "AI Agent",
   "integration-center": "集成中心",
+  exchange: "对接中心",
   "approval-center": "审批中心",
   "approval-workflows": "审批设置",
+  "sales-distillation": "销售训练",
   leads: "线索",
   customers: "客户",
   "customer-pool": "客户公池",
   whatsapp: "即刻沟通",
+  "outreach-journey": "发信明细",
+  "outreach-customer-journey": "开发信过程",
   "customer-detail": "客户全景",
   "ai-research": "AI背调",
   "development-email": "开发信",
@@ -3584,6 +4063,7 @@ const viewLabels: Record<string, string> = {
   inbox: "消息通知",
   tools: "小工具",
   competitors: "竞争公司",
+  peers: "同行管理",
   cases: "成功案例",
   problems: "问题清单",
   memos: "备忘录",
@@ -3592,6 +4072,9 @@ const viewLabels: Record<string, string> = {
   "ai-config": "AI配置",
   "business-card": "名片识别",
   "agent-skills": "Agent Skills",
+  "maintenance-center": "自动维护中心",
+  "outreach-batches": "自动发信",
+  "sales-skill-center": "销售技能中心",
   "member-management": "成员管理",
   "organization-structure": "组织架构",
   "role-management": "角色管理",
@@ -3639,8 +4122,6 @@ const storage = {
   dashboardCache: "gj_dashboard_cache",
   workspaceView: "gj_workspace_view"
 };
-
-const DEMO_ACCOUNT_PASSWORD = "goodjob123";
 
 function newAgentConversationId() {
   return `agc_${crypto.randomUUID()}`;
@@ -3700,6 +4181,19 @@ function currentDateTimeText() {
   const date = new Date();
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function currentLocalDateIso() {
+  const date = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function renderDashboardCurrentDate() {
+  const date = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const node = qs<HTMLElement>("#dashboardCurrentDate");
+  if (node) node.textContent = `${date.getFullYear()}.${pad(date.getMonth() + 1)}.${pad(date.getDate())}`;
 }
 
 function todayStart() {
@@ -3779,6 +4273,20 @@ function escapeHtml(value: string | number | undefined) {
     const map: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
     return map[char];
   });
+}
+
+function leadFinderDisplayText(value: string | undefined) {
+  return String(value || "")
+    .replace(/爬取境外官网/gu, "核验境外官网公开资料")
+    .replace(/(?:受控)?低频(?:官网)?验证/gu, "官网公开资料核验")
+    .replace(/官网(?:爬取|抓取|探针)/gu, "官网公开资料核验")
+    .replace(/爬虫|爬取|抓取|抓官网/gu, "公开资料核验")
+    .replace(/robots\.txt/giu, "网站公开访问规则")
+    .replace(/探针/gu, "资料核验")
+    .replace(/低频/gu, "")
+    .replace(/\b(?:web\s*)?crawlers?\b/giu, "public information service")
+    .replace(/\b(?:web\s*)?scrap(?:e|es|ed|ing)\b/giu, "review public information")
+    .replace(/\bspiders?\b/giu, "public information service");
 }
 
 function agentRiskLabel(risk: AgentRisk) {
@@ -4144,7 +4652,7 @@ function agentMemoryScopeLabel(scope: AgentMemory["scope"]) {
 }
 
 function agentMemorySourceLabel(source: AgentMemory["sourceType"]) {
-  return ({ crm: "CRM 事实", manual: "手动维护", agent: "Agent 建议", playbook: "团队打法" } as Record<AgentMemory["sourceType"], string>)[source];
+  return ({ crm: "CRM 事实", manual: "手动维护", agent: "Agent 建议", playbook: "蒸馏打法" } as Record<AgentMemory["sourceType"], string>)[source];
 }
 
 function renderAgentMemoryStatus() {
@@ -4289,7 +4797,7 @@ function renderAgentKnowledgeStatus() {
   const button = qs<HTMLButtonElement>("#agentKnowledgeStatus");
   const overview = state.agentKnowledgeOverview;
   if (!button || !overview) return;
-  button.innerHTML = `<span>学习中心</span><b>${overview.systemCount + overview.publishedCount} 条有效知识</b><small>${overview.reviewCount ? `${overview.reviewCount} 条待审核` : `${overview.modules.length} 个业务模块`}</small>`;
+  button.innerHTML = `<span>学习中心</span><b>${overview.systemCount + overview.publishedCount + overview.distillationCount} 条有效知识</b><small>${overview.reviewCount ? `${overview.reviewCount} 条待审核` : `${overview.modules.length} 个业务模块`}</small>`;
 }
 
 async function loadAgentKnowledge(showError = true) {
@@ -4683,8 +5191,8 @@ function agentKnowledgeCenterBody() {
     .filter((item) => agentKnowledgeModule === "all" || item.module === agentKnowledgeModule)
     .filter((item) => !agentKnowledgeQuery || `${item.title} ${item.summary} ${item.content} ${item.keywords.join(" ")}`.toLowerCase().includes(agentKnowledgeQuery.toLowerCase()));
   const rows = filtered.map((item) => {
-    const source = item.sourceType === "system_file" ? "系统版本" : item.sourceType === "agent_feedback" ? "执行经验" : "团队维护";
-    const action = item.sourceType === "system_file"
+    const source = item.sourceType === "system_file" ? "系统版本" : item.sourceType === "distillation" ? "蒸馏打法" : item.sourceType === "agent_feedback" ? "执行经验" : "团队维护";
+    const action = item.sourceType === "system_file" || item.sourceType === "distillation"
       ? ""
       : item.status === "draft"
         ? `<button class="btn" data-agent-knowledge-action="submit" data-agent-knowledge-id="${escapeHtml(item.id)}">提交审核</button>`
@@ -4701,7 +5209,7 @@ function agentKnowledgeCenterBody() {
       <div><span>系统知识</span><b>${overview.systemCount}</b></div>
       <div><span>团队发布</span><b>${overview.publishedCount}</b></div>
       <div><span>待审核</span><b>${overview.reviewCount}</b></div>
-      <div><span>知识总量</span><b>${overview.systemCount + overview.managedCount}</b></div>
+      <div><span>蒸馏打法</span><b>${overview.distillationCount}</b></div>
     </div>
     <div class="agent-knowledge-toolbar">
       <input id="agentKnowledgeQuery" value="${escapeHtml(agentKnowledgeQuery)}" placeholder="搜索知识、流程或失败案例">
@@ -5253,6 +5761,16 @@ function renderAgent(run = state.agentRun) {
       ? `<span class="badge green">模型已启用</span><span>${escapeHtml(modelConfig.name || modelConfig.model || "当前模型")}</span>`
       : `<span class="badge amber">基础执行</span><span>常用任务可用</span>`;
   }
+  const playbookStatus = qs<HTMLButtonElement>("#agentPlaybookStatus");
+  if (playbookStatus) {
+    const activation = state.salesPlaybookActivations.find((item) => item.status === "active");
+    const distillation = activation ? state.salesDistillations.find((item) => item.id === activation.distillationId) : undefined;
+    playbookStatus.classList.toggle("active", Boolean(activation && distillation));
+    playbookStatus.innerHTML = activation && distillation
+      ? `<span>当前销售能力</span><b>${escapeHtml(distillation.sourceUserName)}${distillation.version ? ` · V${distillation.version}` : ""}</b><small>${distillation.maturity ? salesTrainingMaturityLabel(distillation.maturity) : "历史能力"} · 应用 ${activation.applicationCount} 次 · 待办 ${activation.taskCount} 个</small>`
+      : `<span>当前销售能力</span><b>尚未应用</b><small></small>`;
+    playbookStatus.onclick = () => activateNavView("sales-distillation", () => void loadSalesDistillationWorkspace());
+  }
   const expired = Boolean(run && new Date(run.expiresAt).getTime() <= Date.now());
   const runStatus = qs<HTMLElement>("#agentRunStatus");
   if (runStatus) {
@@ -5381,18 +5899,3050 @@ function renderAgent(run = state.agentRun) {
   syncAgentRunPolling(run);
 }
 
+function salesDistillationMetricLabel(key: keyof SalesDistillationMetrics) {
+  return ({
+    customerCount: "客户",
+    leadCount: "有效线索",
+    activeDealCount: "活跃商机",
+    wonDealCount: "成交商机",
+    wonAmount: "成交金额",
+    followupCount: "跟进记录",
+    completedTodoCount: "完成待办",
+    reportCount: "日报"
+  } as Record<keyof SalesDistillationMetrics, string>)[key];
+}
+
+function salesTrainingStatusLabel(status: SalesTrainingStatus) {
+  return ({ queued: "等待训练", collecting: "采集样本", cleaning: "清洗证据", labeling: "结果标注", training: "策略训练", evaluating: "离线评测", awaiting_review: "等待审核", published: "已发布", paused: "已暂停", failed: "训练失败", cancelled: "已取消" } as Record<SalesTrainingStatus, string>)[status];
+}
+
+function salesTrainingMaturityLabel(maturity: SalesTrainingMaturity) {
+  return ({ observation: "观察级", trial: "试用级", production: "生产级", stable: "稳定级" } as Record<SalesTrainingMaturity, string>)[maturity];
+}
+
+function renderSalesTrainingWorkspace() {
+  const queue = qs<HTMLElement>("#salesTrainingQueue");
+  const count = qs<HTMLElement>("#salesTrainingQueueCount");
+  const detail = qs<HTMLElement>("#salesTrainingDetail");
+  const quality = qs<HTMLElement>("#salesTrainingQuality");
+  if (!queue || !detail || !quality) return;
+  if (count) count.textContent = String(state.salesTrainingRuns.length);
+  if (!selectedSalesTrainingRunId || !state.salesTrainingRuns.some((item) => item.id === selectedSalesTrainingRunId)) selectedSalesTrainingRunId = state.salesTrainingRuns[0]?.id || "";
+  queue.innerHTML = state.salesTrainingRuns.length
+    ? state.salesTrainingRuns.map((item) => {
+        const tone = ["queued", "collecting", "cleaning", "labeling", "training", "evaluating"].includes(item.status) ? "running" : item.status === "awaiting_review" ? "review" : item.status === "published" ? "published" : "";
+        return `<button class="sales-training-queue-item ${tone}${item.id === selectedSalesTrainingRunId ? " active" : ""}" type="button" data-sales-training-run="${escapeHtml(item.id)}"><div><b>${escapeHtml(item.sourceUserName)} · V${item.version}</b><i></i></div><small>${escapeHtml(salesTrainingStatusLabel(item.status))} · ${item.progress}%</small></button>`;
+      }).join("")
+    : `<div class="sales-training-empty">暂无训练任务</div>`;
+  qsa<HTMLButtonElement>("[data-sales-training-run]", queue).forEach((button) => button.addEventListener("click", () => { selectedSalesTrainingRunId = button.dataset.salesTrainingRun || ""; renderSalesTrainingWorkspace(); }));
+  const run = state.salesTrainingRuns.find((item) => item.id === selectedSalesTrainingRunId);
+  if (!run) {
+    detail.innerHTML = `<div class="sales-training-welcome"><span>AI</span><div><h2>暂无训练任务</h2></div></div>`;
+    quality.innerHTML = `<div class="sales-training-quality-empty">暂无训练质量</div>`;
+    return;
+  }
+  const active = ["queued", "collecting", "cleaning", "labeling", "training", "evaluating"].includes(run.status);
+  const canReviewSamples = ["awaiting_review", "paused", "failed"].includes(run.status);
+  const stageNames = ["样本采集", "证据清洗", "结果标注", "策略训练", "离线评测"];
+  const stageCards = stageNames.map((name, index) => {
+    const round = run.rounds.find((item) => item.index === index + 1);
+    const status = round?.status || "pending";
+    return `<div class="sales-training-stage ${status}"><b>${escapeHtml(name)}</b><small>${escapeHtml(round?.summary || (status === "running" ? "正在运行" : "等待开始"))}</small></div>`;
+  }).join("");
+  const controls = active
+    ? `<button class="btn" type="button" data-sales-training-control="pause">暂停</button><button class="btn" type="button" data-sales-training-control="cancel">取消</button>`
+    : ["paused", "failed"].includes(run.status)
+      ? `<button class="btn primary" type="button" data-sales-training-control="resume">继续训练</button><button class="btn" type="button" data-sales-training-control="cancel">取消</button>`
+      : "";
+  detail.innerHTML = `<div class="sales-training-run-head"><div><h2>${escapeHtml(run.sourceUserName)} 销售能力训练</h2><p>第 ${run.version} 版 · 近 ${run.periodDays} 天 · ${escapeHtml(run.modelLabel)}</p></div><div class="head-actions">${controls}</div></div>
+    <div class="sales-training-progress"><div><span>${escapeHtml(run.currentAction || salesTrainingStatusLabel(run.status))}</span><strong>${run.progress}%</strong></div><span><i style="width:${Math.max(0, Math.min(100, run.progress))}%"></i></span></div>
+    <div class="sales-training-stages">${stageCards}</div>
+    <div class="sales-training-section-title"><h3>训练动态</h3><span>${run.events.length} 条</span></div>
+    <div class="sales-training-events">${[...run.events].reverse().slice(0, 30).map((item) => `<div class="sales-training-event"><b>${escapeHtml(salesTrainingStatusLabel(item.stage))}</b><span>${escapeHtml(item.message)}</span><time>${new Date(item.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div>`).join("")}</div>
+    <div class="sales-training-section-title"><h3>训练样本</h3><span>有效 ${run.sampleStats.valid} · 淘汰 ${run.sampleStats.rejected}</span></div>
+    <div class="sales-training-samples">${run.samples.length ? run.samples.slice(0, 12).map((sample) => `<div class="sales-training-sample"><input type="checkbox" data-sales-training-sample-include="${escapeHtml(sample.id)}" ${sample.included ? "checked" : ""} ${canReviewSamples ? "" : "disabled"}><div><b>${escapeHtml(sample.title)}</b><small>${escapeHtml(sample.summary)}</small></div><select data-sales-training-sample-label="${escapeHtml(sample.id)}" ${canReviewSamples ? "" : "disabled"}><option value="positive" ${sample.label === "positive" ? "selected" : ""}>正向</option><option value="negative" ${sample.label === "negative" ? "selected" : ""}>负向</option><option value="neutral" ${sample.label === "neutral" ? "selected" : ""}>中性</option></select></div>`).join("") : `<div class="sales-training-empty">暂无训练样本</div>`}</div>`;
+  qsa<HTMLButtonElement>("[data-sales-training-control]", detail).forEach((button) => button.addEventListener("click", () => void controlSalesTrainingFromUi(button.dataset.salesTrainingControl as "pause" | "resume" | "cancel")));
+  qsa<HTMLInputElement>("[data-sales-training-sample-include]", detail).forEach((input) => input.addEventListener("change", () => void updateSalesTrainingSampleFromUi(input.dataset.salesTrainingSampleInclude || "", { included: input.checked })));
+  qsa<HTMLSelectElement>("[data-sales-training-sample-label]", detail).forEach((select) => select.addEventListener("change", () => void updateSalesTrainingSampleFromUi(select.dataset.salesTrainingSampleLabel || "", { label: select.value as SalesTrainingSampleLabel })));
+  const evaluationRows = [["覆盖度", run.evaluation.coverage], ["样本平衡", run.evaluation.balance], ["证据追溯", run.evaluation.traceability], ["策略完整", run.evaluation.strategy], ["安全性", run.evaluation.safety]] as Array<[string, number]>;
+  const canPublish = Boolean(hasIamCapability("training.manage") && run.status === "awaiting_review" && run.evaluation.passed);
+  quality.innerHTML = `<div class="sales-quality-head"><span>训练成熟度</span><b>${escapeHtml(salesTrainingMaturityLabel(run.maturity))}</b></div>
+    <div class="sales-quality-grid"><div class="sales-quality-metric"><span>有效样本</span><b>${run.sampleStats.valid}</b></div><div class="sales-quality-metric"><span>淘汰样本</span><b>${run.sampleStats.rejected}</b></div><div class="sales-quality-metric"><span>正向 / 负向</span><b>${run.sampleStats.positive} / ${run.sampleStats.negative}</b></div><div class="sales-quality-metric"><span>留出评测</span><b>${run.sampleStats.holdout}</b></div></div>
+    <div class="sales-training-section-title"><h3>离线评测</h3><span>${run.evaluation.overall} 分</span></div>${evaluationRows.map(([label, value]) => `<div class="sales-evaluation-row"><span>${label}</span><b>${value}</b></div>`).join("")}
+    ${run.evaluation.blockers.map((item) => `<div class="sales-training-blocker">${escapeHtml(item)}</div>`).join("")}
+    ${canPublish ? `<button class="btn primary" type="button" id="salesTrainingPublishButton">审核并发布能力</button>` : ""}
+    ${["awaiting_review", "published", "failed", "cancelled"].includes(run.status) ? `<button class="btn" type="button" id="salesTrainingRetrainButton">创建下一训练版本</button>` : ""}`;
+  qs<HTMLButtonElement>("#salesTrainingPublishButton", quality)?.addEventListener("click", () => void publishSalesTrainingFromUi());
+  qs<HTMLButtonElement>("#salesTrainingRetrainButton", quality)?.addEventListener("click", () => void retrainSalesTrainingFromUi());
+}
+
+function renderSalesDistillation() {
+  const sourceSelect = qs<HTMLSelectElement>("#salesDistillationSource");
+  const periodSelect = qs<HTMLSelectElement>("#salesDistillationPeriod");
+  const list = qs<HTMLElement>("#salesDistillationCards");
+  if (!sourceSelect || !periodSelect || !list) return;
+  const selectedSource = sourceSelect.value || state.user?.id || "";
+  sourceSelect.innerHTML = state.salesDistillationSources.map((source) => `<option value="${escapeHtml(source.id)}">${escapeHtml(source.name)} · ${escapeHtml(roleLabel[source.role])}</option>`).join("");
+  sourceSelect.value = state.salesDistillationSources.some((source) => source.id === selectedSource) ? selectedSource : state.salesDistillationSources[0]?.id || "";
+  renderSalesTrainingWorkspace();
+  const canPublish = hasIamCapability("training.manage");
+  const published = state.salesDistillations.filter((item) => item.status === "published");
+  if (!published.length) {
+    list.innerHTML = `<div class="sales-distillation-empty"><div class="sales-distillation-empty-icon">◎</div><h3>暂无已发布能力</h3></div>`;
+    return;
+  }
+  list.innerHTML = published.map((item) => {
+    const metrics = Object.entries(item.metrics) as Array<[keyof SalesDistillationMetrics, number]>;
+    const activation = state.salesPlaybookActivations.find((entry) => entry.distillationId === item.id);
+    const active = activation?.status === "active";
+    const statusText = item.version ? `能力 V${item.version}` : "历史打法";
+    const publishButton = canPublish && item.status !== "published" ? `<button class="btn primary" type="button" data-sales-distillation-publish="${escapeHtml(item.id)}">发布团队打法</button>` : "";
+    const applyButton = item.status === "published"
+      ? active
+        ? `<button class="btn" type="button" data-sales-playbook-pause="${escapeHtml(activation.id)}">停用当前打法</button>`
+        : `<button class="btn primary" type="button" data-sales-playbook-activate="${escapeHtml(item.id)}">应用到我的 Agent</button>`
+      : "";
+    const usage = activation
+      ? `<span class="sales-playbook-usage ${active ? "active" : ""}"><b>${active ? "正在应用" : "已停用"}</b><small>应用 ${activation.applicationCount} 次 · 生成待办 ${activation.taskCount} 个${activation.lastUsedAt ? ` · 最近 ${escapeHtml(formatDateTime(activation.lastUsedAt))}` : ""}</small></span>`
+      : `<span></span>`;
+    return `<article class="sales-distillation-card">
+      <header class="sales-card-head"><div class="sales-person"><span class="sales-person-avatar">${escapeHtml(item.sourceUserName.slice(0, 1))}</span><div><h3>${escapeHtml(item.sourceUserName)}</h3><p>${escapeHtml(roleLabel[state.salesDistillationSources.find((source) => source.id === item.sourceUserId)?.role || "sales"])} · ${escapeHtml(item.maturity ? salesTrainingMaturityLabel(item.maturity) : "历史能力")} · ${item.sampleCount || 0} 个样本</p></div></div><div class="sales-card-meta"><span class="badge ${active ? "blue" : "green"}">${active ? "当前能力" : statusText}</span><small>评测 ${item.evaluationScore || "-"} · ${escapeHtml(item.modelLabel)} · ${new Date(item.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</small></div></header>
+      <div class="sales-metric-grid">${metrics.map(([key, value]) => `<div class="sales-metric"><span>${salesDistillationMetricLabel(key)}</span><b>${key === "wonAmount" ? amount(Number(value)) : Number(value).toLocaleString("zh-CN")}</b></div>`).join("")}</div>
+      <div class="sales-card-columns"><section><div class="sales-section-title"><span>01</span><h4>优势模式</h4></div><ul>${item.patterns.map((pattern) => `<li>${escapeHtml(pattern)}</li>`).join("")}</ul></section><section><div class="sales-section-title"><span>02</span><h4>可复制打法</h4></div><div class="sales-playbook">${item.playbook.map((step) => `<div class="sales-playbook-row"><b>${escapeHtml(step.stage)}</b><p>${escapeHtml(step.action)}</p><small>依据：${escapeHtml(step.evidence)}</small></div>`).join("")}</div></section><section><div class="sales-section-title"><span>03</span><h4>下一步训练</h4></div><ol>${item.coachingActions.map((action) => `<li>${escapeHtml(action)}</li>`).join("")}</ol></section></div>
+      <footer class="sales-card-foot">${usage}<div class="head-actions">${publishButton}${applyButton}</div></footer>
+    </article>`;
+  }).join("");
+  qsa<HTMLButtonElement>("[data-sales-distillation-publish]", list).forEach((button) => button.addEventListener("click", () => void publishSalesDistillationFromUi(button.dataset.salesDistillationPublish || "", button)));
+  qsa<HTMLButtonElement>("[data-sales-playbook-activate]", list).forEach((button) => button.addEventListener("click", () => void activateSalesPlaybookFromUi(button.dataset.salesPlaybookActivate || "", button)));
+  qsa<HTMLButtonElement>("[data-sales-playbook-pause]", list).forEach((button) => button.addEventListener("click", () => void pauseSalesPlaybookFromUi(button.dataset.salesPlaybookPause || "", button)));
+}
+
+async function loadSalesDistillationWorkspace() {
+  try {
+    const [sources, distillations, training] = await Promise.all([
+      api<{ sources: SalesDistillationSource[] }>("/api/agent/sales-distillation/sources"),
+      api<{ distillations: SalesDistillation[]; activations: SalesPlaybookActivation[] }>("/api/agent/sales-distillation"),
+      api<{ runs: SalesTrainingRun[] }>("/api/agent/sales-training")
+    ]);
+    state.salesDistillationSources = sources.sources || [];
+    state.salesDistillations = distillations.distillations || [];
+    state.salesPlaybookActivations = distillations.activations || [];
+    state.salesTrainingRuns = training.runs || [];
+    renderSalesDistillation();
+    syncSalesTrainingPolling();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "销售训练中心加载失败", "error");
+  }
+}
+
+function syncSalesTrainingPolling() {
+  const active = state.salesTrainingRuns.some((item) => ["queued", "collecting", "cleaning", "labeling", "training", "evaluating"].includes(item.status));
+  if (!active) {
+    if (salesTrainingPollTimer) window.clearInterval(salesTrainingPollTimer);
+    salesTrainingPollTimer = 0;
+    return;
+  }
+  if (!salesTrainingPollTimer) salesTrainingPollTimer = window.setInterval(() => {
+    if (qs<HTMLElement>("#sales-distillation")?.classList.contains("active")) void loadSalesDistillationWorkspace();
+  }, 1_500);
+}
+
+async function createSalesDistillationFromUi(button: HTMLButtonElement) {
+  const sourceUserId = qs<HTMLSelectElement>("#salesDistillationSource")?.value || state.user?.id || "";
+  const periodDays = Number(qs<HTMLSelectElement>("#salesDistillationPeriod")?.value || 90);
+  if (!sourceUserId) {
+    toast("当前账号没有可训练的业务员数据", "error");
+    return;
+  }
+  state.salesDistillationLoading = true;
+  button.disabled = true;
+  button.textContent = "正在创建";
+  try {
+    const result = await api<{ run: SalesTrainingRun }>("/api/agent/sales-training", { method: "POST", body: JSON.stringify({ sourceUserId, periodDays }) });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    selectedSalesTrainingRunId = result.run.id;
+    renderSalesDistillation();
+    syncSalesTrainingPolling();
+    toast(`${result.run.sourceUserName} 的训练任务已启动`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "创建训练任务失败", "error");
+  } finally {
+    state.salesDistillationLoading = false;
+    button.disabled = false;
+    button.textContent = "开始训练";
+  }
+}
+
+async function controlSalesTrainingFromUi(action: "pause" | "resume" | "cancel") {
+  if (!selectedSalesTrainingRunId) return;
+  try {
+    const result = await api<{ run: SalesTrainingRun }>(`/api/agent/sales-training/${encodeURIComponent(selectedSalesTrainingRunId)}/${action}`, { method: "POST" });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    renderSalesDistillation();
+    syncSalesTrainingPolling();
+    toast(action === "pause" ? "训练已暂停" : action === "resume" ? "训练已继续" : "训练已取消");
+  } catch (error) { toast(error instanceof Error ? error.message : "训练控制失败", "error"); }
+}
+
+async function updateSalesTrainingSampleFromUi(sampleId: string, body: { label?: SalesTrainingSampleLabel; included?: boolean }) {
+  if (!selectedSalesTrainingRunId || !sampleId) return;
+  try {
+    const result = await api<{ run: SalesTrainingRun }>(`/api/agent/sales-training/${encodeURIComponent(selectedSalesTrainingRunId)}/samples/${encodeURIComponent(sampleId)}`, { method: "PATCH", body: JSON.stringify(body) });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    renderSalesDistillation();
+  } catch (error) { toast(error instanceof Error ? error.message : "样本复核失败", "error"); }
+}
+
+async function publishSalesTrainingFromUi() {
+  if (!selectedSalesTrainingRunId) return;
+  try {
+    const result = await api<{ run: SalesTrainingRun; distillation: SalesDistillation }>(`/api/agent/sales-training/${encodeURIComponent(selectedSalesTrainingRunId)}/publish`, { method: "POST" });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    state.salesDistillations = [result.distillation, ...state.salesDistillations.filter((item) => item.id !== result.distillation.id)];
+    renderSalesDistillation();
+    toast(`${result.run.sourceUserName} 的第 ${result.run.version} 版能力已发布`);
+  } catch (error) { toast(error instanceof Error ? error.message : "能力发布失败", "error"); }
+}
+
+async function retrainSalesTrainingFromUi() {
+  if (!selectedSalesTrainingRunId) return;
+  try {
+    const result = await api<{ run: SalesTrainingRun }>(`/api/agent/sales-training/${encodeURIComponent(selectedSalesTrainingRunId)}/retrain`, { method: "POST" });
+    state.salesTrainingRuns = [result.run, ...state.salesTrainingRuns.filter((item) => item.id !== result.run.id)];
+    selectedSalesTrainingRunId = result.run.id;
+    renderSalesDistillation();
+    syncSalesTrainingPolling();
+    toast(`第 ${result.run.version} 版训练已启动`);
+  } catch (error) { toast(error instanceof Error ? error.message : "创建再训练版本失败", "error"); }
+}
+
+async function publishSalesDistillationFromUi(id: string, button: HTMLButtonElement) {
+  if (!id) return;
+  button.disabled = true;
+  try {
+    const result = await api<{ distillation: SalesDistillation }>(`/api/agent/sales-distillation/${encodeURIComponent(id)}/publish`, { method: "POST" });
+    state.salesDistillations = state.salesDistillations.map((item) => item.id === id ? result.distillation : item);
+    renderSalesDistillation();
+    toast("已发布为团队可复用打法");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "发布失败", "error");
+    button.disabled = false;
+  }
+}
+
+async function activateSalesPlaybookFromUi(id: string, button: HTMLButtonElement) {
+  if (!id) return;
+  button.disabled = true;
+  try {
+    const result = await api<{ activation: SalesPlaybookActivation; activations: SalesPlaybookActivation[] }>(`/api/agent/sales-distillation/${encodeURIComponent(id)}/activate`, { method: "POST" });
+    state.salesPlaybookActivations = result.activations || [result.activation];
+    renderSalesDistillation();
+    renderAgent(state.agentRun);
+    toast("已应用到你的 Agent 和客户守护");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "应用打法失败", "error");
+    button.disabled = false;
+  }
+}
+
+async function pauseSalesPlaybookFromUi(id: string, button: HTMLButtonElement) {
+  if (!id) return;
+  button.disabled = true;
+  try {
+    const result = await api<{ activation: SalesPlaybookActivation; activations: SalesPlaybookActivation[] }>(`/api/agent/sales-distillation/activations/${encodeURIComponent(id)}/pause`, { method: "POST" });
+    state.salesPlaybookActivations = result.activations || [result.activation];
+    renderSalesDistillation();
+    renderAgent(state.agentRun);
+    toast("当前蒸馏打法已停用");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "停用打法失败", "error");
+    button.disabled = false;
+  }
+}
+
+// ————————————————————————————————————————————————————————————————
+// 自动维护中心（独立视图）
+// 后端引擎 customer-maintenance.ts 早已在跑，这里只补「看得见 + 可控制」。
+// 三条原则：自动 ≠ 放权（只建站内待办）、可解释（原因 + 跳过数）、幂等可叫停。
+// ————————————————————————————————————————————————————————————————
+
+const maintenanceReasonLabels: Record<string, string> = {
+  low_health: "健康度低于阈值",
+  overdue_followup: "客户跟进已逾期",
+  inactive_customer: "超期未跟进",
+  missing_next_action: "商机缺少下一动作",
+  next_action_due: "商机下一动作已到期"
+};
+
+const maintenancePriorityText: Record<string, string> = { high: "高", medium: "中", normal: "低" };
+
+interface MaintenanceMatrixRow {
+  id: string;
+  label: string;
+  grades: Array<"A" | "B" | "C" | "D">;
+  intervalHours: number;
+  inactivityDays: number;
+  healthBelow: number;
+  maxTodosPerRun: number;
+  intensity: string;
+  automation: string;
+}
+
+type MaintenancePresetKey = "aggressive" | "balanced" | "conservative";
+
+/**
+ * 等级矩阵不 1:1 映射成一个 watch —— 后端 rules.grades 的语义是「哪些等级纳入扫描」，
+ * 不支持「每个等级不同阈值」。所以界面呈现为矩阵，底层生成 A / B / C+D 三个守护策略。
+ */
+const maintenanceMatrixPresets: Record<MaintenancePresetKey, { label: string; note: string; rows: MaintenanceMatrixRow[] }> = {
+  aggressive: {
+    label: "激进",
+    note: "全等级密集跟进。适合人手充足、需要快速激活存量客户的阶段。",
+    rows: [
+      { id: "a", label: "A 级", grades: ["A"], intervalHours: 6, inactivityDays: 2, healthBelow: 75, maxTodosPerRun: 10, intensity: "高", automation: "建待办 + 生成发信草稿" },
+      { id: "b", label: "B 级", grades: ["B"], intervalHours: 12, inactivityDays: 4, healthBelow: 65, maxTodosPerRun: 10, intensity: "中", automation: "建待办 + 生成发信草稿" },
+      { id: "cd", label: "C / D 级", grades: ["C", "D"], intervalHours: 24, inactivityDays: 10, healthBelow: 50, maxTodosPerRun: 5, intensity: "低", automation: "仅建待办" }
+    ]
+  },
+  balanced: {
+    label: "均衡",
+    note: "推荐。A 级 12 小时盯一次，B 级每天一次，C/D 两天一次。历史数据较多时建议先只启用 A、B 两行观察命中质量。",
+    rows: [
+      { id: "a", label: "A 级", grades: ["A"], intervalHours: 12, inactivityDays: 3, healthBelow: 70, maxTodosPerRun: 8, intensity: "高", automation: "建待办 + 生成发信草稿" },
+      { id: "b", label: "B 级", grades: ["B"], intervalHours: 24, inactivityDays: 7, healthBelow: 60, maxTodosPerRun: 8, intensity: "中", automation: "建待办 + 生成发信草稿" },
+      { id: "cd", label: "C / D 级", grades: ["C", "D"], intervalHours: 48, inactivityDays: 14, healthBelow: 50, maxTodosPerRun: 5, intensity: "低", automation: "仅建待办" }
+    ]
+  },
+  conservative: {
+    label: "保守",
+    note: "只守 A / B 两档，C / D 交给月度复核，避免打扰低价值客户。",
+    rows: [
+      { id: "a", label: "A 级", grades: ["A"], intervalHours: 24, inactivityDays: 5, healthBelow: 70, maxTodosPerRun: 5, intensity: "中", automation: "建待办 + 生成发信草稿" },
+      { id: "b", label: "B 级", grades: ["B"], intervalHours: 72, inactivityDays: 14, healthBelow: 55, maxTodosPerRun: 5, intensity: "低", automation: "仅建待办" }
+    ]
+  }
+};
+
+let maintenanceMatrixPreset: MaintenancePresetKey = "balanced";
+let maintenanceMatrixDraft: MaintenanceMatrixRow[] = [];
+
+function currentMaintenanceMatrixRows() {
+  if (!maintenanceMatrixDraft.length) {
+    maintenanceMatrixDraft = maintenanceMatrixPresets[maintenanceMatrixPreset].rows.map((row) => ({ ...row }));
+  }
+  return maintenanceMatrixDraft;
+}
+
+function readMaintenanceMatrixInputs() {
+  if (!maintenanceMatrixDraft.length) return;
+  const fields = ["inactivityDays", "healthBelow", "intervalHours", "maxTodosPerRun"] as const;
+  for (const row of maintenanceMatrixDraft) {
+    for (const field of fields) {
+      const input = qs<HTMLInputElement>(`#maintenanceMatrixBody [data-matrix-row="${row.id}"][data-matrix-field="${field}"]`);
+      if (!input) continue;
+      const value = Number(input.value);
+      if (Number.isFinite(value)) row[field] = Math.round(value);
+    }
+  }
+}
+
+function renderMaintenanceMatrix() {
+  const body = qs<HTMLElement>("#maintenanceMatrixBody");
+  const presets = qs<HTMLElement>("#maintenanceMatrixPresets");
+  const note = qs<HTMLElement>("#maintenanceMatrixNote");
+  if (presets) {
+    presets.innerHTML = (Object.keys(maintenanceMatrixPresets) as MaintenancePresetKey[]).map((key) =>
+      `<button class="mt-preset ${key === maintenanceMatrixPreset ? "active" : ""}" type="button" data-maintenance-preset="${key}">${escapeHtml(maintenanceMatrixPresets[key].label)}${key === "balanced" ? "（推荐）" : ""}</button>`
+    ).join("");
+  }
+  if (note) note.textContent = maintenanceMatrixPresets[maintenanceMatrixPreset].note;
+  if (body) {
+    body.innerHTML = currentMaintenanceMatrixRows().map((row) => `<tr>
+      <td><span class="mt-grade">${escapeHtml(row.label)}</span></td>
+      <td><input type="number" min="1" max="90" value="${row.inactivityDays}" data-matrix-row="${row.id}" data-matrix-field="inactivityDays"></td>
+      <td><input type="number" min="0" max="100" value="${row.healthBelow}" data-matrix-row="${row.id}" data-matrix-field="healthBelow"></td>
+      <td><input type="number" min="1" max="168" value="${row.intervalHours}" data-matrix-row="${row.id}" data-matrix-field="intervalHours"></td>
+      <td><input type="number" min="1" max="50" value="${row.maxTodosPerRun}" data-matrix-row="${row.id}" data-matrix-field="maxTodosPerRun"></td>
+      <td>${escapeHtml(row.intensity)}</td>
+      <td>${escapeHtml(row.automation)}</td>
+    </tr>`).join("");
+  }
+  qsa<HTMLButtonElement>("#maintenanceMatrixPresets [data-maintenance-preset]").forEach((button) => {
+    button.addEventListener("click", () => {
+      readMaintenanceMatrixInputs();
+      maintenanceMatrixPreset = (button.dataset.maintenancePreset || "balanced") as MaintenancePresetKey;
+      maintenanceMatrixDraft = maintenanceMatrixPresets[maintenanceMatrixPreset].rows.map((row) => ({ ...row }));
+      renderMaintenanceMatrix();
+    });
+  });
+}
+
+function renderMaintenanceWatchList() {
+  const host = qs<HTMLElement>("#maintenanceWatchList");
+  if (!host) return;
+  const watches = state.customerMaintenanceWatches;
+  if (!watches.length) {
+    host.innerHTML = `<div class="mt-empty">还没有守护策略。可以先点右上角「预检命中」看看当前条件会命中多少客户，再用下方的等级矩阵一键创建。</div>`;
+    return;
+  }
+  host.innerHTML = watches.map((watch) => {
+    const statusText = watch.status === "active" ? "运行中" : watch.status === "paused" ? "已暂停" : watch.status === "error" ? "受阻" : "已取消";
+    const condition = `每 ${watch.rules.intervalHours} 小时 · ${watch.rules.inactivityDays} 天未跟进 · 健康度 < ${watch.rules.healthBelow} · 覆盖 ${watch.rules.grades.join("/") || "全部等级"}`;
+    const found = state.maintenanceFindings[watch.id];
+    const actions = watch.status === "cancelled"
+      ? `<button class="btn" data-maintenance-action="run" data-watch="${escapeHtml(watch.id)}" type="button">立即巡检</button><button class="btn" data-maintenance-action="findings" data-watch="${escapeHtml(watch.id)}" type="button">查看命中</button>`
+      : `${watch.status === "active"
+          ? `<button class="btn" data-maintenance-action="pause" data-watch="${escapeHtml(watch.id)}" type="button">暂停</button>`
+          : `<button class="btn" data-maintenance-action="resume" data-watch="${escapeHtml(watch.id)}" type="button">继续</button>`}
+         <button class="btn" data-maintenance-action="run" data-watch="${escapeHtml(watch.id)}" type="button">立即巡检</button>
+         <button class="btn" data-maintenance-action="findings" data-watch="${escapeHtml(watch.id)}" type="button">查看命中</button>
+         <button class="btn" data-maintenance-action="cancel" data-watch="${escapeHtml(watch.id)}" type="button">取消</button>`;
+    return `<article class="mt-watch">
+      <div class="mt-watch-head">
+        <div>
+          <h3><span class="mt-dot ${watch.status}"></span>${escapeHtml(watch.name)}</h3>
+          <p>${escapeHtml(condition)} · ${statusText}${watch.status === "active" && watch.nextRunAt ? ` · 下次巡检 ${escapeHtml(formatDateTime(watch.nextRunAt))}` : ""}</p>
+          ${watch.lastError ? `<p style="color:#d64545">上次失败：${escapeHtml(watch.lastError)}</p>` : ""}
+        </div>
+        <div class="mt-watch-actions">${actions}</div>
+      </div>
+      <div class="mt-watch-stats">
+        <span class="mt-stat">上次命中 <b>${watch.lastMatchedCount}</b></span>
+        <span class="mt-stat">建待办 <b>${watch.lastCreatedCount}</b></span>
+        <span class="mt-stat">跳过 <b>${watch.lastSkippedCount}</b></span>
+        <span class="mt-stat">累计建待办 <b>${watch.totalCreatedCount}</b></span>
+        ${found ? `<span class="mt-stat">队列中 <b>${found.todos.filter((item) => !item.done).length}</b></span>` : ""}
+        <span class="mt-stat">上次巡检 ${watch.lastRunAt ? escapeHtml(formatDateTime(watch.lastRunAt)) : "尚未执行"}</span>
+      </div>
+      <p style="margin:9px 0 0;color:#728099;font-size:10px">「跳过」= 该状况已经建过待办，指纹未变就不再重复打扰（幂等去重），不是系统漏掉了。</p>
+    </article>`;
+  }).join("");
+  qsa<HTMLButtonElement>("#maintenanceWatchList [data-maintenance-action]").forEach((button) => {
+    button.addEventListener("click", () => void maintenanceActionFromUi(button.dataset.watch || "", button.dataset.maintenanceAction || "", button));
+  });
+}
+
+function renderMaintenanceFindings() {
+  const host = qs<HTMLElement>("#maintenanceFindings");
+  if (!host) return;
+  const view = state.maintenanceActiveWatchId ? state.maintenanceFindings[state.maintenanceActiveWatchId] : undefined;
+  if (!view) {
+    host.innerHTML = `<div class="mt-empty">选择一个守护策略并点「查看命中」，或者先执行一次「立即巡检」。</div>`;
+    return;
+  }
+  if (!view.findings.length) {
+    host.innerHTML = `<div class="mt-empty">「${escapeHtml(view.name)}」最近一次巡检没有命中任何客户。</div>`;
+    return;
+  }
+  host.innerHTML = `<table>
+    <thead><tr><th>优先级</th><th>客户</th><th>命中原因</th><th>建议动作</th><th>状态</th></tr></thead>
+    <tbody>${view.findings.map((finding) => {
+      const todo = view.todos.find((item) => item.triggerKey && item.triggerKey === finding.triggerKey);
+      const action = finding.playbookAction
+        ? `<span class="mt-action">${escapeHtml(finding.playbookName ? `${finding.playbookName} 的打法：` : "")}${escapeHtml(finding.playbookAction)}</span>`
+        : `<span class="mt-action none">未匹配到打法 · 仅记录</span>`;
+      return `<tr>
+        <td><i class="mt-pri ${escapeHtml(finding.priority)}"></i>${escapeHtml(maintenancePriorityText[finding.priority] || finding.priority)}</td>
+        <td>${escapeHtml(finding.customerName)}</td>
+        <td class="mt-reason">${escapeHtml(finding.reason)}<br><small>${escapeHtml(finding.reasonCodes.map((code) => maintenanceReasonLabels[code] || code).join(" · "))}</small></td>
+        <td>${action}</td>
+        <td>${todo ? (todo.done ? "待办已完成" : "已建待办") : "已跳过"}</td>
+      </tr>`;
+    }).join("")}</tbody></table>`;
+}
+
+function renderMaintenanceOutput() {
+  const host = qs<HTMLElement>("#maintenanceOutput");
+  if (!host) return;
+  const todos = Object.values(state.maintenanceFindings)
+    .flatMap((view) => view.todos)
+    .sort((left, right) => (right.createdAt || "").localeCompare(left.createdAt || ""))
+    .slice(0, 50);
+  if (!todos.length) {
+    host.innerHTML = `<div class="mt-empty">暂无自动维护待办。执行一次「立即巡检」后，这里会列出机器为你准备的跟进事项。</div>`;
+    return;
+  }
+  host.innerHTML = todos.map((todo) => `<div class="mt-output-row ${todo.done ? "done" : ""}">
+    <span class="mt-badge">自动维护</span>
+    <div class="mt-output-main"><b>${escapeHtml(todo.title)}</b><small>${escapeHtml(todo.related || "")}${todo.dueAt ? ` · 计划 ${escapeHtml(todo.dueAt)}` : ""}</small></div>
+    <span>${todo.done ? "已完成" : escapeHtml(maintenancePriorityText[todo.priority] || "")}</span>
+  </div>`).join("");
+}
+
+function renderMaintenanceCenter() {
+  readMaintenanceMatrixInputs();
+  const summary = qs<HTMLElement>("#maintenanceSummary");
+  if (summary) {
+    const watches = state.customerMaintenanceWatches;
+    const cards: Array<[string, string]> = [
+      ["运行中的守护策略", String(watches.filter((item) => item.status === "active").length)],
+      ["上次巡检命中", String(watches.reduce((sum, item) => sum + (item.lastMatchedCount || 0), 0))],
+      ["上次创建待办", String(watches.reduce((sum, item) => sum + (item.lastCreatedCount || 0), 0))],
+      ["上次幂等跳过", String(watches.reduce((sum, item) => sum + (item.lastSkippedCount || 0), 0))]
+    ];
+    summary.innerHTML = cards.map(([label, value]) => `<div><span>${label}</span><b>${value}</b></div>`).join("");
+  }
+  renderMaintenanceWatchList();
+  renderMaintenanceFindings();
+  renderMaintenanceMatrix();
+  renderMaintenanceOutput();
+}
+
+async function loadMaintenanceCenter() {
+  const host = qs<HTMLElement>("#maintenanceWatchList");
+  if (host) host.innerHTML = `<div class="mt-empty">正在读取守护策略…</div>`;
+  try {
+    const result = await api<{ watches: CustomerMaintenanceWatch[] }>("/api/agent/customer-maintenance?limit=100");
+    state.customerMaintenanceWatches = result.watches || [];
+    const views = await Promise.all(state.customerMaintenanceWatches.map(async (watch) => {
+      try {
+        return await api<CustomerMaintenanceFindingsView>(`/api/agent/customer-maintenance/${encodeURIComponent(watch.id)}/findings?limit=50`);
+      } catch {
+        return null;
+      }
+    }));
+    state.maintenanceFindings = {};
+    views.forEach((view) => { if (view) state.maintenanceFindings[view.watchId] = view; });
+    const preferred = state.customerMaintenanceWatches.find((item) => (item.lastFindings || []).length)
+      || state.customerMaintenanceWatches[0];
+    if (!state.maintenanceActiveWatchId || !state.customerMaintenanceWatches.some((item) => item.id === state.maintenanceActiveWatchId)) {
+      state.maintenanceActiveWatchId = preferred?.id || "";
+    }
+    renderMaintenanceCenter();
+  } catch (error) {
+    renderMaintenanceCenter();
+    toast(error instanceof Error ? error.message : "自动维护中心加载失败", "error");
+  }
+}
+
+async function maintenanceActionFromUi(watchId: string, action: string, button: HTMLButtonElement) {
+  if (!watchId || !action || button.disabled) return;
+  if (action === "findings") {
+    state.maintenanceActiveWatchId = watchId;
+    renderMaintenanceFindings();
+    return;
+  }
+  const idleLabel = action === "pause" ? "暂停" : action === "resume" ? "继续" : action === "cancel" ? "取消" : "立即巡检";
+  try {
+    if (action === "run") {
+      setButtonPending(button, true, idleLabel, "巡检中…");
+      const result = await api<{ watch: CustomerMaintenanceWatch; findings: CustomerMaintenanceFinding[]; created: unknown[]; skippedCount: number }>(
+        `/api/agent/customer-maintenance/${encodeURIComponent(watchId)}/run`,
+        { method: "POST" }
+      );
+      state.maintenanceActiveWatchId = watchId;
+      toast(`巡检完成：命中 ${result.findings.length} 项，创建 ${result.created.length} 个待办，跳过 ${result.skippedCount} 项`);
+      await loadMaintenanceCenter();
+      await refreshDashboardOnly();
+      renderTodos(state.todos);
+      updateTodoChips(state.todos);
+      return;
+    }
+    if (action === "pause" || action === "resume" || action === "cancel") {
+      if (action === "cancel" && !window.confirm("取消后该守护策略不再巡检，已经产生的待办会保留。确认取消？")) return;
+      setButtonPending(button, true, idleLabel, "处理中…");
+      await api<{ watch: CustomerMaintenanceWatch }>(
+        `/api/agent/customer-maintenance/${encodeURIComponent(watchId)}/${action}`,
+        { method: "POST" }
+      );
+      toast(action === "pause" ? "守护策略已暂停" : action === "resume" ? "守护策略已继续" : "守护策略已取消");
+      await loadMaintenanceCenter();
+      return;
+    }
+  } catch (error) {
+    setButtonPending(button, false, idleLabel, idleLabel);
+    toast(error instanceof Error ? error.message : "操作失败", "error");
+  }
+}
+
+async function previewMaintenanceFromUi(button: HTMLButtonElement) {
+  readMaintenanceMatrixInputs();
+  const host = qs<HTMLElement>("#maintenancePreviewResult");
+  const rules = { ...currentMaintenanceMatrixRows()[0] };
+  const payload = {
+    intervalHours: rules.intervalHours,
+    inactivityDays: rules.inactivityDays,
+    healthBelow: rules.healthBelow,
+    grades: ["A", "B", "C", "D"] as Array<"A" | "B" | "C" | "D">,
+    maxTodosPerRun: 10
+  };
+  setButtonPending(button, true, "预检命中", "预检中…");
+  try {
+    const result = await api<CustomerMaintenancePreview>("/api/agent/customer-maintenance/preview", {
+      method: "POST",
+      body: JSON.stringify({ rules: payload })
+    });
+    state.maintenancePreview = result;
+    if (host) {
+      host.hidden = false;
+      host.innerHTML = `<h3>预检结果（不写入任何数据）</h3>
+        <p>按「A 级」那一行的阈值（${payload.intervalHours} 小时巡检 / ${payload.inactivityDays} 天未跟进 / 健康度 &lt; ${payload.healthBelow}，全等级）扫描：命中 <b>${result.matchedCount}</b> 个客户，单次最多会创建 <b>${result.creatableCount}</b> 个待办。</p>
+        ${result.findings.length ? `<ul>${result.findings.map((item) => `<li>${escapeHtml(item.customerName)} · ${escapeHtml(item.reason)}${item.playbookAction ? ` · 打法：${escapeHtml(item.playbookAction)}` : ""}</li>`).join("")}</ul>` : `<p>当前条件没有命中客户。</p>`}`;
+    }
+    toast(`预检完成：命中 ${result.matchedCount} 个客户`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "预检失败", "error");
+  } finally {
+    setButtonPending(button, false, "预检命中", "预检命中");
+  }
+}
+
+async function applyMaintenanceMatrixFromUi(button: HTMLButtonElement) {
+  readMaintenanceMatrixInputs();
+  const rows = currentMaintenanceMatrixRows();
+  if (!rows.length) {
+    toast("当前矩阵没有可创建的行", "error");
+    return;
+  }
+  setButtonPending(button, true, "按矩阵创建守护策略", "创建中…");
+  let created = 0;
+  const skipped: string[] = [];
+  try {
+    for (const row of rows) {
+      const existing = state.customerMaintenanceWatches.find((watch) =>
+        watch.status !== "cancelled"
+        && watch.rules.grades.length === row.grades.length
+        && row.grades.every((grade) => watch.rules.grades.includes(grade))
+      );
+      if (existing) {
+        skipped.push(`${row.label}（已存在「${existing.name}」）`);
+        continue;
+      }
+      const result = await api<{ watch: CustomerMaintenanceWatch }>("/api/agent/customer-maintenance", {
+        method: "POST",
+        body: JSON.stringify({
+          name: `${maintenanceMatrixPresets[maintenanceMatrixPreset].label} · ${row.label}客户守护`,
+          rules: {
+            intervalHours: row.intervalHours,
+            inactivityDays: row.inactivityDays,
+            healthBelow: row.healthBelow,
+            includeOverdueReminder: true,
+            includeMissingNextAction: true,
+            grades: row.grades,
+            maxTodosPerRun: row.maxTodosPerRun
+          }
+        })
+      });
+      state.customerMaintenanceWatches = [result.watch, ...state.customerMaintenanceWatches];
+      created += 1;
+    }
+    toast(created
+      ? `已创建 ${created} 个守护策略${skipped.length ? `；跳过 ${skipped.length} 个：${skipped.join("、")}` : ""}`
+      : `没有新建策略：${skipped.join("、") || "无需创建"}`);
+    await loadMaintenanceCenter();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "创建守护策略失败", "error");
+  } finally {
+    setButtonPending(button, false, "按矩阵创建守护策略", "按矩阵创建守护策略");
+  }
+}
+
+function bindMaintenanceCenterEvents() {
+  qs<HTMLButtonElement>("#maintenanceRefreshButton")?.addEventListener("click", () => void loadMaintenanceCenter());
+  qs<HTMLButtonElement>("#maintenancePreviewButton")?.addEventListener("click", (event) => {
+    void previewMaintenanceFromUi(event.currentTarget as HTMLButtonElement);
+  });
+  qs<HTMLButtonElement>("#maintenanceApplyMatrixButton")?.addEventListener("click", (event) => {
+    void applyMaintenanceMatrixFromUi(event.currentTarget as HTMLButtonElement);
+  });
+  qs<HTMLButtonElement>("#maintenanceOpenTodoButton")?.addEventListener("click", () => {
+    state.todoFilter = "maintenance";
+    activateNavView("todo", () => {
+      renderTodos(state.todos);
+      updateTodoChips(state.todos);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// W4 · 发信批次：批次列表 + 预览/冻结放行
+// ---------------------------------------------------------------------------
+
+interface OutreachBatchStepView {
+  index: number;
+  subject: string;
+  body: string;
+  status: string;
+  scheduledAt: string;
+  sentAt: string;
+  error: string;
+}
+
+interface OutreachBatchItemView {
+  id: string;
+  candidateId: string;
+  /** targetType=lead 的批次里记录对应线索 id */
+  leadId?: string;
+  /** 方案手动名单模式的来源类型（缺省 = candidate） */
+  entityType?: "candidate" | "lead" | "customer";
+  company: string;
+  recipient: string;
+  status: "ready" | "skipped" | "removed" | "sending" | "sent" | "failed" | "stopped";
+  skipReason: string;
+  steps: OutreachBatchStepView[];
+  sentAt: string;
+  convertedLeadId: string;
+}
+
+interface OutreachBatchView {
+  id: string;
+  status: string;
+  targetType?: "candidate" | "lead";
+  policy: { dailyLimit: number; stepIntervalHours: number; sendWindowStartHour: number; sendWindowEndHour: number; stopOnReply: boolean };
+  items: OutreachBatchItemView[];
+  counts: { total: number; frozen: number; skipped: number };
+  frozenHash: string;
+  approvedAt: string;
+  pauseReason: string;
+  nextSendAt: string;
+  createdAt: string;
+}
+
+const OUTREACH_BATCH_STATUS_META: Record<string, { label: string; tone: string }> = {
+  draft: { label: "待确认", tone: "amber" },
+  approved: { label: "定期投递中", tone: "green" },
+  paused: { label: "已暂停", tone: "amber" },
+  completed: { label: "已完成", tone: "green" },
+  cancelled: { label: "已取消", tone: "gray" }
+};
+
+// ---------------------------------------------------------------------------
+// 自动发送方案（后台任务）
+// ---------------------------------------------------------------------------
+
+interface OutreachPlanStepLite { index: number; status: string; sentAt: string }
+interface OutreachPlanItemLite {
+  id: string; candidateId: string; company: string; recipient: string;
+  status: string; skipReason: string; sentAt: string; convertedLeadId: string;
+  entityType?: "candidate" | "lead" | "customer";
+  stepStatuses: OutreachPlanStepLite[];
+}
+interface OutreachPlanProgress {
+  total: number; sent: number; sentSteps: number; failed: number; stopped: number;
+  skipped: number; inProgress: number; converted: number; pendingSteps: number; targetCap: number;
+}
+interface OutreachPlanView {
+  id: string;
+  name: string;
+  status: "running" | "paused" | "stopped" | "completed";
+  target: {
+    countries: string[]; keyword: string; maxTargets: number;
+    mode?: "rules" | "manual";
+    entries?: Array<{ entityType: "candidate" | "lead" | "customer"; entityId: string }>;
+  };
+  steps?: Array<{ subject: string; body: string }>;
+  policy: { dailyLimit: number; stepIntervalHours: number; sendWindowStartHour: number; sendWindowEndHour: number; stopOnReply: boolean; rotateMailboxEvery?: number };
+  pauseReason: string;
+  nextRunAt: string;
+  lastRunAt: string;
+  lastMessage: string;
+  createdAt: string;
+  updatedAt: string;
+  progress: OutreachPlanProgress;
+  recentItems: OutreachPlanItemLite[];
+}
+
+const OUTREACH_PLAN_STATUS_META: Record<string, { label: string; tone: string }> = {
+  running: { label: "运行中", tone: "green" },
+  paused: { label: "已暂停", tone: "amber" },
+  stopped: { label: "已停止", tone: "gray" },
+  completed: { label: "已完成", tone: "green" }
+};
+
+let outreachPlans: OutreachPlanView[] = [];
+let outreachPlanPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+function stopOutreachPlanPolling() {
+  if (outreachPlanPollTimer) {
+    clearTimeout(outreachPlanPollTimer);
+    outreachPlanPollTimer = null;
+  }
+}
+
+function scheduleOutreachPlanPolling() {
+  stopOutreachPlanPolling();
+  const hasActive = outreachPlans.some((plan) => plan.status === "running" || plan.status === "paused");
+  const isActiveView = document.querySelector("#outreach-batches.active") !== null
+    || document.querySelector('.nav-item[data-view="outreach-batches"].active') !== null;
+  if (hasActive && isActiveView) {
+    outreachPlanPollTimer = setTimeout(() => void loadOutreachPlans(), 15_000);
+  }
+}
+
+async function loadOutreachPlans() {
+  try {
+    const result = await api<{ plans: OutreachPlanView[] }>("/api/outreach-plans?limit=50");
+    outreachPlans = result.plans || [];
+    renderOutreachPlans();
+  } catch {
+    // 方案加载失败不阻塞批次区域
+  } finally {
+    scheduleOutreachPlanPolling();
+  }
+}
+
+/** 数字滚动记忆：同一个 key 首次出现时从 0 滚上来，之后只在数值变化时滚动并闪一下。
+    渲染用的是 innerHTML 重建，所以动画靠「记住上一次的值」驱动，而不是靠 DOM 复用。 */
+const outreachNumberMemory = new Map<string, number>();
+
+/** 生成一个会被 animateOutreachNumbers() 接管的数字节点（key 必须在整页唯一且稳定）。
+    tag 默认 b（沿用卡片里原有的加粗），摘要这类纯文本容器传 span 以免改变排版。 */
+function outreachNumberHtml(key: string, value: number, tag = "b"): string {
+  return `<${tag} data-ob-num="${escapeHtml(key)}" data-ob-val="${value}">${value}</${tag}>`;
+}
+
+/** 驱动 root 内所有 [data-ob-num]：滚动到新值；数值有变化时额外闪一下（绿色渐隐） */
+function animateOutreachNumbers(root: HTMLElement | null) {
+  if (!root) return;
+  const reduce = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+  qsa<HTMLElement>("[data-ob-num]", root).forEach((node) => {
+    const key = node.dataset.obNum || "";
+    const target = Number(node.dataset.obVal || "0");
+    const previous = outreachNumberMemory.get(key);
+    outreachNumberMemory.set(key, target);
+    if (reduce || previous === target) return;
+    const from = previous === undefined ? 0 : previous;
+    const duration = previous === undefined ? 620 : 420;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const ratio = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - ratio, 3);
+      if (ratio < 1) {
+        node.textContent = String(Math.round(from + (target - from) * eased));
+        requestAnimationFrame(tick);
+        return;
+      }
+      node.textContent = String(target);
+      if (previous === undefined) return;
+      node.classList.remove("is-flash");
+      void node.offsetWidth; // 强制重排，保证同一个 class 能再次触发动画
+      node.classList.add("is-flash");
+    };
+    node.textContent = String(from);
+    requestAnimationFrame(tick);
+  });
+}
+
+function outreachPlanProgressTrack(progress: OutreachPlanProgress): string {
+  const cap = Math.max(progress.targetCap, progress.total, 1);
+  let segmentIndex = 0;
+  const seg = (count: number, cls: string) => {
+    if (count <= 0) return "";
+    const index = segmentIndex++;
+    return `<i class="${cls}" style="width:${((count / cap) * 100).toFixed(1)}%;--ob-seg:${index}"></i>`;
+  };
+  return `<div class="ob-plan-track" title="已发 ${progress.sentSteps} 封 / 待发 ${progress.pendingSteps} 封 / 完成 ${progress.sent} 人 / 失败 ${progress.failed} / 跳过 ${progress.skipped} / 目标上限 ${progress.targetCap}">
+    ${seg(progress.sent, "bar-sent")}${seg(progress.inProgress, "bar-progress")}${seg(progress.failed, "bar-failed")}${seg(progress.skipped, "bar-skipped")}
+  </div>`;
+}
+
+/** 发信通道状态条：只在通道未配置完整（会导致真发失败）时出现；配置正常时不占位置、不提示 */
+function renderOutreachSendChannelNote() {
+  const node = qs<HTMLElement>("#outreachSendChannelNote");
+  if (!node) return;
+  const user = state.user;
+  const from = user?.outboundEmail || user?.smtpUser || "";
+  const host = user?.smtpHost || "";
+  const ready = Boolean(from && host && user?.smtpUser && user?.hasSmtpPassword);
+  if (ready) {
+    node.hidden = true;
+    node.className = "ob-channel-note";
+    node.innerHTML = "";
+    return;
+  }
+  node.hidden = false;
+  node.className = "ob-channel-note is-missing";
+  node.innerHTML = `<b>发信通道未配置完整：</b>请到「个人设置 → 邮件发信」补全发件邮箱、SMTP 服务器与授权码；否则方案取到人后会在发送这一步失败（失败原因会写在方案卡片的运行状态里）。`;
+}
+
+function renderOutreachPlans() {
+  const listBox = qs<HTMLElement>("#outreachPlanList");
+  if (!listBox) return;
+  bindOutreachPlanCreateButton();
+  renderOutreachSendChannelNote();
+  if (!outreachPlans.length) {
+    listBox.innerHTML = `<div class="empty-cell ob-plan-empty">
+      <b>还没有自动发送方案</b>
+      <button class="btn primary" type="button" data-plan-create>新建自动发送方案</button>
+    </div>`;
+    qsa<HTMLButtonElement>("[data-plan-create]", listBox).forEach((button) =>
+      button.addEventListener("click", () => openOutreachPlanModal()));
+    return;
+  }
+  listBox.innerHTML = outreachPlans.map((plan, index) => {
+    const meta = OUTREACH_PLAN_STATUS_META[plan.status] || { label: plan.status, tone: "gray" };
+    const progress = plan.progress;
+    const scope = plan.target.mode === "manual"
+      ? `手动名单 ${plan.target.entries?.length || 0} 人${plan.steps?.length ? ` · 自定义内容 ${plan.steps.length} 步` : ""}`
+      : [
+        progress.targetCap ? `目标上限 ${progress.targetCap} 人` : "",
+        plan.target.countries.length ? `国家：${plan.target.countries.join("、")}` : "国家不限",
+        plan.target.keyword ? `关键词「${plan.target.keyword}」` : ""
+      ].filter(Boolean).join(" · ");
+    const rhythm = `每天最多 ${plan.policy.dailyLimit} 封 · 每日 ${plan.policy.sendWindowStartHour}:00–${plan.policy.sendWindowEndHour}:00 · 同一客户间隔 ${plan.policy.stepIntervalHours}h${plan.policy.stopOnReply ? " · 回复即停" : ""}${plan.policy.rotateMailboxEvery ? ` · 每 ${plan.policy.rotateMailboxEvery} 封轮换发件邮箱` : ""}`;
+    const counts = `已发 ${outreachNumberHtml(`plan:${plan.id}:sentSteps`, progress.sentSteps)} 封 · 待发 ${outreachNumberHtml(`plan:${plan.id}:pending`, progress.pendingSteps)} 封 · 失败 ${outreachNumberHtml(`plan:${plan.id}:failed`, progress.failed)} · 跳过 ${outreachNumberHtml(`plan:${plan.id}:skipped`, progress.skipped)}${progress.sent ? ` · 完成 ${outreachNumberHtml(`plan:${plan.id}:sent`, progress.sent)} 人` : ""}${progress.converted ? ` · 已回流线索 ${outreachNumberHtml(`plan:${plan.id}:converted`, progress.converted)}` : ""}`;
+    const nextRun = plan.status === "running" && plan.nextRunAt
+      ? `<span class="ob-next-send">下一封 ${escapeHtml(formatDateTime(plan.nextRunAt))}</span>` : "";
+    const actions = [`<button class="btn tiny" data-plan-detail="${escapeHtml(plan.id)}">详情</button>`];
+    if (plan.status === "running") actions.push(`<button class="btn tiny" data-plan-control="${escapeHtml(plan.id)}" data-plan-action="pause">暂停</button>`);
+    if (plan.status === "paused") actions.push(`<button class="btn tiny primary" data-plan-control="${escapeHtml(plan.id)}" data-plan-action="resume">继续</button>`);
+    if (plan.status === "running" || plan.status === "paused") actions.push(`<button class="btn tiny danger subtle" data-plan-control="${escapeHtml(plan.id)}" data-plan-action="stop">停止</button>`);
+    if (plan.status === "stopped" || plan.status === "completed") actions.push(`<button class="btn tiny danger subtle" data-plan-delete="${escapeHtml(plan.id)}">删除</button>`);
+    return `<div class="ob-plan-card is-${plan.status}" data-plan-id="${escapeHtml(plan.id)}" style="--ob-i:${index}">
+      <div class="ob-plan-head">${badge(meta.label, meta.tone)}<b>${escapeHtml(plan.name)}</b>${nextRun}</div>
+      <div class="ob-plan-meta"><span>${scope}</span><span>${rhythm}</span></div>
+      ${outreachPlanProgressTrack(progress)}
+      <div class="ob-plan-meta"><span>${counts}</span></div>
+      <div class="ob-plan-status">${escapeHtml(plan.pauseReason || plan.lastMessage || "—")}</div>
+      <footer style="display:flex;gap:6px;flex-wrap:wrap">${actions.join("")}</footer>
+    </div>`;
+  }).join("");
+
+  bindOutreachPlanCreateButton();
+  animateOutreachNumbers(listBox);
+  // 整张卡片可点进详情（卡片自带 cursor:pointer），按钮区域除外
+  listBox.onclick = (event) => {
+    const target = event.target as HTMLElement | null;
+    if (!target || target.closest("button")) return;
+    const card = target.closest<HTMLElement>("[data-plan-id]");
+    if (card?.dataset.planId) void openOutreachPlanDetail(card.dataset.planId);
+  };
+  qsa<HTMLButtonElement>("[data-plan-detail]", listBox).forEach((button) => button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    void openOutreachPlanDetail(button.dataset.planDetail || "");
+  }));
+  qsa<HTMLButtonElement>("[data-plan-control]", listBox).forEach((button) => button.addEventListener("click", () => {
+    const plan = outreachPlans.find((item) => item.id === button.dataset.planControl);
+    if (plan) void controlOutreachPlan(plan, (button.dataset.planAction || "") as "pause" | "resume" | "stop");
+  }));
+  qsa<HTMLButtonElement>("[data-plan-delete]", listBox).forEach((button) => button.addEventListener("click", () => {
+    const plan = outreachPlans.find((item) => item.id === button.dataset.planDelete);
+    if (plan) void deleteOutreachPlan(plan);
+  }));
+}
+
+/** 新建自动发送方案按钮绑定：用 onclick 赋值保证幂等（渲染多次不会叠加监听器）。
+    必须在视图激活时调用一次——早期版本只在「方案列表非空」的渲染分支里绑定，
+    导致新用户（零方案）点「新建自动发送方案」完全没有反应。 */
+function bindOutreachPlanCreateButton() {
+  const button = qs<HTMLButtonElement>("#outreachPlanCreateButton");
+  if (button) button.onclick = () => openOutreachPlanModal();
+}
+
+/** 新建自动发送方案弹窗：目标（条件筛选 / 手动勾选名单）+ 发送节奏 + 自定义每步内容 + 命中预览 */
+function openOutreachPlanModal() {
+  const sourceLabels = { candidate: "搜客候选", lead: "线索", customer: "客户" } as const;
+  type PlanSourceKey = keyof typeof sourceLabels;
+  const picker = {
+    mode: "rules" as "rules" | "manual",
+    source: "candidate" as PlanSourceKey,
+    rows: [] as Array<{ id: string; company: string; email: string }>,
+    loaded: new Set<PlanSourceKey>(),
+    loading: false,
+    selected: new Map<string, { entityType: PlanSourceKey; entityId: string; company: string; email: string }>(),
+    steps: [{ subject: "", body: "" }] as Array<{ subject: string; body: string }>
+  };
+  const body = `
+    <div class="form-grid">
+      <div class="form-field full"><label>方案名称 *</label><input id="obPlanName" placeholder="例如：泰国台秤客户开发"></div>
+      <div class="form-field full"><label>目标来源</label>
+        <div class="ob-plan-mode-grid" role="radiogroup" aria-label="目标来源">
+          <label class="ob-plan-mode-card"><input type="radio" name="obPlanMode" value="rules" checked><span><b>按条件筛选候选池</b><small>按国家、关键词从搜客候选自动取人</small></span></label>
+          <label class="ob-plan-mode-card"><input type="radio" name="obPlanMode" value="manual"><span><b>手动勾选名单</b><small>从候选、线索、客户里逐个勾选</small></span></label>
+        </div>
+      </div>
+      <div id="obPlanRulesFields" class="form-field full" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+        <div class="form-field" style="margin:0"><label>国家筛选（逗号分隔，留空=不限）</label><input id="obPlanCountries" placeholder="泰国, 马来西亚"></div>
+        <div class="form-field" style="margin:0"><label>关键词（公司/业务包含）</label><input id="obPlanKeyword" placeholder="scale / weighing"></div>
+        <div class="form-field" style="margin:0"><label>目标人数上限（1–500）</label><input id="obPlanMaxTargets" type="number" min="1" max="500" value="50"></div>
+      </div>
+      <div id="obPlanManualFields" class="form-field full" hidden>
+        <div style="display:flex;gap:6px;margin-bottom:8px" class="ob-plan-source-tabs">
+          ${(["candidate", "lead", "customer"] as PlanSourceKey[]).map((key) => `<button type="button" class="btn tiny${key === "candidate" ? " active" : ""}" data-plan-source="${key}">${sourceLabels[key]}</button>`).join("")}
+        </div>
+        <input id="obPlanSearch" placeholder="搜索公司名 / 邮箱…" style="margin-bottom:8px">
+        <div id="obPlanPickList" class="ob-plan-pick-list"></div>
+        <div id="obPlanPickedSummary" style="margin-top:8px"></div>
+      </div>
+      <div class="form-field"><label>每天最多发送（1–200 封）</label><input id="obPlanDailyLimit" type="number" min="1" max="200" value="20"></div>
+      <div class="form-field"><label>同一客户两封信间隔（小时）</label><input id="obPlanStepInterval" type="number" min="1" max="720" value="72"></div>
+      <div class="form-field"><label>发送时段开始（0–23 点）</label><input id="obPlanWindowStart" type="number" min="0" max="23" value="9"></div>
+      <div class="form-field"><label>发送时段结束（1–24 点）</label><input id="obPlanWindowEnd" type="number" min="1" max="24" value="18"></div>
+      <label class="form-field full" style="display:flex;gap:8px;align-items:center"><input id="obPlanStopOnReply" type="checkbox" checked>客户回复后自动停发该客户剩余邮件（推荐）</label>
+      <div class="form-field"><label>每 N 封换下一个发件邮箱（0 = 不轮换）</label><input id="obPlanRotateEvery" type="number" min="0" max="1000" value="0"></div>
+      <div class="form-field"><label>发件邮箱池</label><b id="obPlanRotateHint" style="font-size:12px;align-self:center;font-weight:500">读取中…</b></div>
+      <label class="form-field full" style="display:flex;gap:8px;align-items:center"><input id="obPlanCustomSteps" type="checkbox">自定义每步邮件内容（不勾选 = 使用系统默认开发信模板）</label>
+      <div class="form-field full" id="obPlanStepsEditor" hidden></div>
+      <div class="form-field full" id="obPlanPreviewBox"></div>
+    </div>`;
+  const foot = `<button class="btn" data-modal-close>取消</button><button class="btn" id="obPlanPreviewButton">预览命中</button><button class="btn primary" id="obPlanCreateButton2">启动方案</button>`;
+  openModal("新建自动发送方案", body, foot, { closeOnBackdrop: false });
+  qs<HTMLElement>("#appModal .modal")?.classList.add("outreach-plan-create-modal");
+  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  // 发件邮箱池状态：有几箱就提示能轮换，没有就说明去哪登记
+  void api<{ mailboxes: Array<{ id: string; email: string; enabled: boolean }> }>("/api/sender-mailboxes")
+    .then((result) => {
+      const hint = qs<HTMLElement>("#obPlanRotateHint");
+      if (!hint) return;
+      const total = result.mailboxes?.length || 0;
+      const enabled = (result.mailboxes || []).filter((row) => row.enabled).length;
+      if (!total) {
+        hint.textContent = "未登记 · 到「个人设置 → 发件邮箱池」添加后可按量轮换";
+        hint.style.color = "var(--text-tertiary,#8a94a6)";
+      } else {
+        hint.textContent = enabled > 1 ? `已登记 ${total} 个（启用 ${enabled} 个）· 可轮换` : `已登记 ${total} 个 · 轮换需至少启用 2 个`;
+        hint.style.color = enabled > 1 ? "var(--ink,#17233d)" : "var(--text-tertiary,#8a94a6)";
+      }
+    })
+    .catch(() => {
+      const hint = qs<HTMLElement>("#obPlanRotateHint");
+      if (hint) hint.textContent = "状态读取失败";
+    });
+  // ---- 模式切换：条件筛选 / 手动名单 ----
+  const syncMode = () => {
+    const rulesBox = qs<HTMLElement>("#obPlanRulesFields");
+    const manualBox = qs<HTMLElement>("#obPlanManualFields");
+    // 规则区有内联 display:grid，会压住 hidden 属性——必须直接切 display
+    if (rulesBox) rulesBox.style.display = picker.mode === "rules" ? "grid" : "none";
+    // .form-field 的 display:grid 同样会压住 manualBox 的 hidden 属性（截图实测弹窗里漏显示），display 一起切
+    if (manualBox) {
+      manualBox.hidden = picker.mode !== "manual";
+      manualBox.style.display = picker.mode === "manual" ? "grid" : "none";
+      // 切进手动名单时自动加载当前页签，避免列表空着等用户再点一次页签
+      if (picker.mode === "manual") void loadPickRows();
+    }
+  };
+  qsa<HTMLInputElement>('input[name="obPlanMode"]').forEach((radio) => {
+    radio.addEventListener("change", () => {
+      picker.mode = radio.value as "rules" | "manual";
+      syncMode();
+    });
+  });
+  // ---- 手动名单：来源页签 / 搜索 / 勾选列表 / 已选摘要 ----
+  const renderPickedSummary = () => {
+    const box = qs<HTMLElement>("#obPlanPickedSummary");
+    if (!box) return;
+    const all = [...picker.selected.values()];
+    if (!all.length) {
+      box.innerHTML = `<small style="color:var(--text-tertiary,#8a94a6)">还没勾选目标。按勾选顺序投递。</small>`;
+      return;
+    }
+    const missing = all.filter((row) => !row.email).length;
+    const chips = all.map((row) => `<span class="ob-plan-pick-chip">${escapeHtml(row.company)}<button type="button" data-pick-remove="${row.entityType}:${escapeHtml(row.entityId)}" title="移除">×</button></span>`).join("");
+    box.innerHTML = `<small style="color:var(--text-tertiary,#8a94a6)">已选 <b style="color:var(--ink,#17233d)">${all.length}</b> 人${missing ? `（${missing} 人缺邮箱，发送时会被跳过）` : ""}</small><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${chips}</div>`;
+    qsa<HTMLButtonElement>("[data-pick-remove]", box).forEach((button) => {
+      button.addEventListener("click", () => {
+        picker.selected.delete(button.dataset.pickRemove || "");
+        renderPickedSummary();
+        renderPickList();
+      });
+    });
+  };
+  const renderPickList = () => {
+    const list = qs<HTMLElement>("#obPlanPickList");
+    if (!list) return;
+    if (picker.loading) {
+      list.innerHTML = `<div class="ob-plan-pick-empty">加载中…</div>`;
+      return;
+    }
+    const search = (qs<HTMLInputElement>("#obPlanSearch")?.value || "").trim().toLowerCase();
+    const rows = picker.rows.filter((row) => !search || `${row.company} ${row.email}`.toLowerCase().includes(search));
+    if (!rows.length) {
+      list.innerHTML = `<div class="ob-plan-pick-empty">${search ? "没有匹配的结果" : "这里还没有数据"}</div>`;
+      return;
+    }
+    list.innerHTML = rows.slice(0, 200).map((row) => {
+      const checked = picker.selected.has(`${picker.source}:${row.id}`);
+      return `<label class="ob-plan-pick-row" title="${escapeHtml(row.company)}">
+        <input type="checkbox" data-pick-source="${picker.source}" data-pick-id="${escapeHtml(row.id)}" data-pick-company="${escapeHtml(row.company)}" data-pick-email="${escapeHtml(row.email)}" ${checked ? "checked" : ""}>
+        <span class="ob-plan-pick-name">${escapeHtml(row.company)}</span>
+        <small>${row.email ? escapeHtml(row.email) : '<i class="ob-plan-pick-noemail">缺邮箱 · 会被跳过</i>'}</small>
+      </label>`;
+    }).join("") + (rows.length > 200 ? `<div class="ob-plan-pick-empty">仅显示前 200 条，请用搜索缩小范围</div>` : "");
+    qsa<HTMLInputElement>("input[data-pick-id]", list).forEach((input) => {
+      input.addEventListener("change", () => {
+        const key = `${input.dataset.pickSource}:${input.dataset.pickId}`;
+        if (input.checked) {
+          picker.selected.set(key, {
+            entityType: (input.dataset.pickSource || "candidate") as PlanSourceKey,
+            entityId: input.dataset.pickId || "",
+            company: input.dataset.pickCompany || "",
+            email: input.dataset.pickEmail || ""
+          });
+        } else {
+          picker.selected.delete(key);
+        }
+        renderPickedSummary();
+      });
+    });
+  };
+  const loadPickRows = async () => {
+    if (picker.loaded.has(picker.source)) {
+      renderPickList();
+      return;
+    }
+    picker.loading = true;
+    renderPickList();
+    try {
+      if (picker.source === "candidate") {
+        const result = await api<{ opportunities: Array<{ id: string; company: string; contactInfo?: string }> }>("/api/tools/website-opportunities");
+        picker.rows = (result.opportunities || []).map((row) => ({ id: row.id, company: row.company, email: (row.contactInfo || "").trim() }));
+      } else if (picker.source === "lead") {
+        const result = await api<{ leads: Array<{ id: string; company: string; email?: string }> }>("/api/leads");
+        picker.rows = (result.leads || []).map((row) => ({ id: row.id, company: row.company, email: (row.email || "").trim() }));
+      } else {
+        const result = await api<{ customers: Array<{ id: string; company: string; email?: string }> }>("/api/customers");
+        picker.rows = (result.customers || []).map((row) => ({ id: row.id, company: row.company, email: (row.email || "").trim() }));
+      }
+      picker.loaded.add(picker.source);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "名单加载失败", "error");
+    }
+    picker.loading = false;
+    renderPickList();
+  };
+  qsa<HTMLButtonElement>("[data-plan-source]").forEach((button) => {
+    button.addEventListener("click", () => {
+      picker.source = (button.dataset.planSource || "candidate") as PlanSourceKey;
+      qsa<HTMLButtonElement>("[data-plan-source]").forEach((row) => row.classList.toggle("active", row === button));
+      void loadPickRows();
+    });
+  });
+  qs<HTMLInputElement>("#obPlanSearch")?.addEventListener("input", renderPickList);
+  // ---- 自定义每步内容编辑器 ----
+  const readStepsFromDom = () => {
+    picker.steps = picker.steps.map((step, index) => ({
+      subject: qs<HTMLInputElement>(`[data-step-subject="${index}"]`)?.value ?? step.subject,
+      body: qs<HTMLTextAreaElement>(`[data-step-body="${index}"]`)?.value ?? step.body
+    }));
+  };
+  const renderStepsEditor = () => {
+    const box = qs<HTMLElement>("#obPlanStepsEditor");
+    if (!box) return;
+    box.innerHTML = picker.steps.map((step, index) => `
+      <div class="ob-plan-step-card">
+        <div class="ob-plan-step-head">
+          <span class="ob-plan-step-tag">第 ${index + 1} 封</span>
+          <small>占位符：{{company}} 公司名 · {{contact}} 联系人 · {{country}} 国家</small>
+          ${picker.steps.length > 1 ? `<button type="button" class="btn tiny danger subtle" data-step-remove="${index}" style="margin-left:auto">删除本步</button>` : ""}
+        </div>
+        <input data-step-subject="${index}" placeholder="邮件主题" value="${escapeHtml(step.subject)}" style="margin-bottom:6px">
+        <textarea data-step-body="${index}" rows="6" placeholder="邮件正文（纯文本）">${escapeHtml(step.body)}</textarea>
+      </div>`).join("") + (picker.steps.length < 10 ? `<button type="button" class="btn tiny" data-step-add>＋ 添加一步（按发送间隔排期）</button>` : "");
+    qsa<HTMLButtonElement>("[data-step-add]", box).forEach((button) => {
+      button.addEventListener("click", () => {
+        readStepsFromDom();
+        picker.steps.push({ subject: "", body: "" });
+        renderStepsEditor();
+      });
+    });
+    qsa<HTMLButtonElement>("[data-step-remove]", box).forEach((button) => {
+      button.addEventListener("click", () => {
+        readStepsFromDom();
+        picker.steps.splice(Number(button.dataset.stepRemove), 1);
+        renderStepsEditor();
+      });
+    });
+  };
+  qs<HTMLInputElement>("#obPlanCustomSteps")?.addEventListener("change", (event) => {
+    const checked = (event.currentTarget as HTMLInputElement).checked;
+    const box = qs<HTMLElement>("#obPlanStepsEditor");
+    if (box) box.hidden = !checked;
+    if (checked) renderStepsEditor();
+  });
+  qs<HTMLButtonElement>("#obPlanPreviewButton")?.addEventListener("click", async () => {
+    const box = qs<HTMLElement>("#obPlanPreviewBox");
+    if (!box) return;
+    if (picker.mode === "manual") {
+      const all = [...picker.selected.values()];
+      const missing = all.filter((row) => !row.email).length;
+      box.innerHTML = all.length
+        ? `<small style="color:var(--text-tertiary,#8a94a6)">已选 <b style="color:var(--ink,#17233d)">${all.length}</b> 人${missing ? `，其中 ${missing} 人缺邮箱会被跳过，实际发送 ${all.length - missing} 人` : ""}。按勾选顺序投递。</small>`
+        : `<small style="color:#b45309">请先在名单里勾选目标</small>`;
+      return;
+    }
+    box.innerHTML = `<small style="color:var(--text-tertiary,#8a94a6)">正在统计候选池命中…</small>`;
+    try {
+      const countries = (qs<HTMLInputElement>("#obPlanCountries")?.value || "").split(/[,，]/).map((row) => row.trim()).filter(Boolean);
+      const keyword = qs<HTMLInputElement>("#obPlanKeyword")?.value.trim() || "";
+      const result = await api<{ matched: number; sample: Array<{ company: string; country: string; hasEmail: boolean }> }>(
+        "/api/outreach-plans/preview",
+        { method: "POST", body: JSON.stringify({ countries, keyword }) }
+      );
+      const sample = result.sample.map((item) => `${escapeHtml(item.company)}（${escapeHtml(item.country || "未知")}）${item.hasEmail ? "" : " ·缺邮箱"}`).join("、");
+      box.innerHTML = `<small style="color:var(--text-tertiary,#8a94a6)">候选池命中 <b style="color:var(--ink,#17233d)">${result.matched}</b> 人。样例：${sample || "无"}。</small>`;
+    } catch (error) {
+      box.innerHTML = `<small style="color:#b03a3a">预览失败：${escapeHtml(error instanceof Error ? error.message : "未知错误")}</small>`;
+    }
+  });
+  qs<HTMLButtonElement>("#obPlanCreateButton2")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const name = qs<HTMLInputElement>("#obPlanName")?.value.trim() || "";
+    if (!name) {
+      toast("请填写方案名称", "error");
+      return;
+    }
+    if (picker.mode === "manual" && !picker.selected.size) {
+      toast("手动名单模式至少勾选一个目标", "error");
+      return;
+    }
+    let customSteps: Array<{ subject: string; body: string }> | undefined;
+    if (qs<HTMLInputElement>("#obPlanCustomSteps")?.checked) {
+      readStepsFromDom();
+      customSteps = picker.steps.map((step) => ({ subject: step.subject.trim(), body: step.body.trim() }));
+      if (customSteps.some((step) => !step.subject || !step.body)) {
+        toast("自定义内容里每一步的主题和正文都要填写（不用的步骤请删除）", "error");
+        return;
+      }
+    }
+    const target = picker.mode === "manual"
+      ? { mode: "manual", entries: [...picker.selected.values()].map((row) => ({ entityType: row.entityType, entityId: row.entityId })) }
+      : {
+        mode: "rules",
+        countries: (qs<HTMLInputElement>("#obPlanCountries")?.value || "").split(/[,，]/).map((row) => row.trim()).filter(Boolean),
+        keyword: qs<HTMLInputElement>("#obPlanKeyword")?.value.trim() || "",
+        maxTargets: Number(qs<HTMLInputElement>("#obPlanMaxTargets")?.value || 50)
+      };
+    const payload = {
+      name,
+      target,
+      ...(customSteps ? { steps: customSteps } : {}),
+      policy: {
+        dailyLimit: Number(qs<HTMLInputElement>("#obPlanDailyLimit")?.value || 20),
+        sendWindowStartHour: Number(qs<HTMLInputElement>("#obPlanWindowStart")?.value || 9),
+        sendWindowEndHour: Number(qs<HTMLInputElement>("#obPlanWindowEnd")?.value || 18),
+        stepIntervalHours: Number(qs<HTMLInputElement>("#obPlanStepInterval")?.value || 72),
+        stopOnReply: qs<HTMLInputElement>("#obPlanStopOnReply")?.checked ?? true,
+        rotateMailboxEvery: Math.max(0, Number(qs<HTMLInputElement>("#obPlanRotateEvery")?.value || 0))
+      }
+    };
+    button.disabled = true;
+    try {
+      await api("/api/outreach-plans", { method: "POST", body: JSON.stringify(payload) });
+      closeModal();
+      toast(`方案「${name}」已启动，后台将按节奏自动发送`, "success");
+      await loadOutreachPlans();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "创建失败", "error");
+      button.disabled = false;
+    }
+  });
+}
+
+async function controlOutreachPlan(plan: OutreachPlanView, action: "pause" | "resume" | "stop") {
+  const labels: Record<string, string> = { pause: "暂停", resume: "继续", stop: "停止" };
+  const consequences: Record<string, string[]> = {
+    pause: ["后台线程将停止取人发信，已排期的邮件冻结", "随时可以「继续」恢复运行"],
+    resume: ["方案恢复运行，在发送时段内继续按节奏取人投递"],
+    stop: ["方案永久停止，未发送的邮件步骤全部跳过", "停止后不可恢复，只能删除"]
+  };
+  const ok = await confirmAction({
+    title: `${labels[action]}方案「${plan.name}」`,
+    message: action === "stop"
+      ? `确定停止该方案吗？当前进度：已发 ${plan.progress.sent} / 目标 ${plan.progress.targetCap}。`
+      : `确定${labels[action]}该方案吗？`,
+    consequences: consequences[action] || [],
+    confirmLabel: labels[action],
+    tone: action === "stop" ? "danger" : "normal"
+  });
+  if (!ok) return;
+  try {
+    await api(`/api/outreach-plans/${encodeURIComponent(plan.id)}/control`, { method: "POST", body: JSON.stringify({ action }) });
+    toast(`方案已${labels[action]}`, "success");
+    await loadOutreachPlans();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "操作失败", "error");
+  }
+}
+
+async function deleteOutreachPlan(plan: OutreachPlanView) {
+  const ok = await confirmAction({
+    title: "删除方案",
+    message: `确定删除方案「${plan.name}」吗？`,
+    consequences: ["方案配置与目标明细会永久删除", "已发送的邮件与已转的线索不受影响"],
+    confirmLabel: "删除",
+    tone: "danger"
+  });
+  if (!ok) return;
+  try {
+    await api(`/api/outreach-plans/${encodeURIComponent(plan.id)}`, { method: "DELETE" });
+    toast("方案已删除", "success");
+    await loadOutreachPlans();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "删除失败", "error");
+  }
+}
+
+/** 方案详情：每个目标的发送进度 + 回流状态（线索 ID） */
+async function openOutreachPlanDetail(planId: string) {
+  try {
+    const result = await api<{ plan: OutreachPlanView & { items: Array<OutreachBatchItemView> }; progress: OutreachPlanProgress }>(
+      `/api/outreach-plans/${encodeURIComponent(planId)}`
+    );
+    const plan = result.plan;
+    const progress = result.progress;
+    const meta = OUTREACH_PLAN_STATUS_META[plan.status] || { label: plan.status, tone: "gray" };
+    const itemsHtml = (plan.items || []).length ? plan.items.map((item, index) => {
+      const skipped = item.status === "skipped" || item.status === "removed";
+      const statusLabel = item.status === "sent" ? "已完成" : item.status === "failed" ? "失败" : item.status === "stopped" ? "已停止" : item.status === "skipped" ? "已跳过" : item.status === "sending" ? "发送中" : "进行中";
+      const tone = item.status === "sent" ? "green" : item.status === "failed" ? "red" : skipped ? "gray" : "amber";
+      const planJourneyId = item.leadId || item.candidateId || "";
+      const planJourneyType: OutreachJourneyEntityType = item.entityType === "lead" || (!item.entityType && item.leadId) ? "lead"
+        : item.entityType === "customer" ? "customer" : "prospect_candidate";
+      const journeyButton = planJourneyId
+        ? `<button class="btn" data-plan-item-journey="${escapeHtml(planJourneyId)}" data-plan-item-journey-type="${planJourneyType}" data-plan-item-company="${escapeHtml(item.company)}">查看过程</button>`
+        : "";
+      const companyHint = [item.company, item.leadId, item.candidateId].filter(Boolean).join(" · ");
+      // 跳过项本来就没有收件人，别给它挂「未取到邮箱」——那会让人误以为"差个邮箱就能发"
+      const head = (withRecipient: boolean) => `<div class="opd-target-head">
+          <div class="opd-target-id"><b title="${escapeHtml(companyHint)}">${escapeHtml(outreachItemCompanyLabel(item))}</b>${withRecipient ? `<small>${escapeHtml(item.recipient || "未取到邮箱")}</small>` : ""}</div>
+          ${badge(statusLabel, tone)}
+        </div>`;
+      // 跳过 / 已移除：没有发送时间轴，只保留「为什么跳过」一行
+      if (skipped) {
+        return `<article class="opd-target is-${item.status}" style="--opd-i:${index}">
+          ${head(false)}
+          <div class="opd-target-foot"><span class="opd-note" title="${escapeHtml(item.skipReason || "")}">${escapeHtml(outreachSkipReasonLabel(item.skipReason || "已跳过"))}</span>${journeyButton}</div>
+        </article>`;
+      }
+      // 页脚结论：已发完 / 哪一封失败 / 下一封什么时候发
+      const pendingStep = item.steps.find((step) => step.status === "pending");
+      const failedStep = item.steps.find((step) => step.status === "failed");
+      const summary = item.status === "sent" ? "序列已发完"
+        : failedStep ? `第 ${failedStep.index + 1} 封发送失败：${failedStep.error || "未知原因"}`
+        : pendingStep && pendingStep.scheduledAt ? `下一封 ${formatDateTime(pendingStep.scheduledAt)}`
+        : "";
+      const steps = item.steps.map((step) => {
+        const cls = step.status === "sent" ? "is-done" : step.status === "failed" ? "is-fail" : "is-next";
+        const tag = step.status === "sent" ? "已发" : step.status === "failed" ? "失败" : step.status === "sending" ? "发送中" : step.status === "skipped" ? "已跳过" : "待发";
+        const when = step.status === "sent" ? formatDateTime(step.sentAt)
+          : step.status === "failed" ? (step.error || "发送失败")
+          : step.status === "sending" ? "正在投递…"
+          : step.status === "skipped" ? "已跳过"
+          : formatDateTime(step.scheduledAt);
+        return `<li class="opd-step ${cls}">
+          <span class="opd-rail"><i class="opd-dot"></i><i class="opd-link"></i></span>
+          <b>第 ${step.index + 1} 封 · ${tag}</b>
+          <small title="${escapeHtml(when)}">${escapeHtml(when)}</small>
+        </li>`;
+      }).join("");
+      const footBits = [item.convertedLeadId ? badge("已回流线索", "green") : "", summary ? `<span class="opd-note">${escapeHtml(summary)}</span>` : "", journeyButton].filter(Boolean).join("");
+      return `<article class="opd-target" style="--opd-i:${index}">
+        ${head(true)}
+        <ol class="opd-steps">${steps}</ol>
+        ${footBits ? `<div class="opd-target-foot">${footBits}</div>` : ""}
+      </article>`;
+    }).join("") : `<div class="opd-empty">还没有目标入场。</div>`;
+    const barCap = Math.max(progress.targetCap, progress.total, 1);
+    const seg = (count: number, cls: string) => count > 0
+      ? `<i class="${cls}" style="width:${((count / barCap) * 100).toFixed(1)}%"></i>`
+      : "";
+    const detail = `<section class="opd-overview">
+        <div class="opd-overview-head">${badge(meta.label, meta.tone)}<em>${escapeHtml(plan.pauseReason || plan.lastMessage || "运行正常")}</em></div>
+        <div class="opd-metrics">
+          <div class="opd-metric is-blue"><b>${progress.total}<span class="of"> / ${progress.targetCap}</span></b><small>已入场 / 目标上限</small></div>
+          <div class="opd-metric${progress.sent > 0 ? " is-green" : ""}"><b>${progress.sent}</b><small>已发完序列</small></div>
+          <div class="opd-metric${progress.converted > 0 ? " is-green" : ""}"><b>${progress.converted}</b><small>已回流线索</small></div>
+          <div class="opd-metric${progress.failed > 0 ? " is-red" : ""}"><b>${progress.failed}</b><small>失败</small></div>
+          <div class="opd-metric${progress.skipped > 0 ? " is-amber" : ""}"><b>${progress.skipped}</b><small>跳过</small></div>
+        </div>
+        <div class="opd-bar" title="已发 ${progress.sentSteps} 封 · 待发 ${progress.pendingSteps} 封 · 完成 ${progress.sent} 人 · 失败 ${progress.failed} · 跳过 ${progress.skipped}">${seg(progress.sent, "sent")}${seg(progress.inProgress, "progress")}${seg(progress.failed, "failed")}${seg(progress.skipped, "skipped")}</div>
+      </section>
+      <div class="opd-targets">${itemsHtml}</div>`;
+    openModal(`方案详情 · ${plan.name}`, detail, `<button class="btn" data-modal-close>关闭</button>`);
+    qs<HTMLElement>("#appModal .modal")?.classList.add("outreach-plan-detail-modal");
+    qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+    qsa<HTMLButtonElement>("[data-plan-item-journey]").forEach((button) => {
+      button.addEventListener("click", () => {
+        closeModal();
+        void openOutreachCustomerJourney(
+          (button.dataset.planItemJourneyType || "prospect_candidate") as OutreachJourneyEntityType,
+          button.dataset.planItemJourney || "",
+          button.dataset.planItemCompany || "",
+          "outreach-batches"
+        );
+      });
+    });
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "方案详情加载失败", "error");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 发信明细 + 客户开发信过程档案
+//
+// 「发信明细」把批次 / 方案 / 单发的收件人按客户聚合成一行（阶段 + 进度 + 回复 + 背调），
+// 「开发信过程档案」是单个客户的完整留档：发送历史、回复、背调、按阶段发下一封。
+// 两者都是整页视图（与「客户全景」同一形态），不是弹窗。
+// ---------------------------------------------------------------------------
+
+type OutreachJourneyEntityType = "customer" | "lead" | "prospect_candidate";
+
+interface OutreachJourneyStageSnapshot {
+  key: string;
+  label: string;
+  tone: string;
+  description: string;
+  nextStepLabel: string;
+  canSend: boolean;
+  blockReason: string;
+  outboundCount: number;
+  lastSentAt: string;
+  lastReplyAt: string;
+  lastReplyClassification: string;
+  lastReplyLabel: string;
+}
+
+interface OutreachJourneyEmailView {
+  messageId: string;
+  index: number;
+  subject: string;
+  bodyPreview: string;
+  body: string;
+  recipient: string;
+  sentAt: string;
+  sourceLabel: string;
+  batchName: string;
+  dispatchStatus: string;
+  dispatchError: string;
+  openCount: number;
+  clickCount: number;
+  repliedAt: string;
+  bouncedAt: string;
+}
+
+interface OutreachJourneyReplyView {
+  id: string;
+  occurredAt: string;
+  eventType: string;
+  classification: string;
+  classificationLabel: string;
+  subject: string;
+  content: string;
+  contactValue: string;
+}
+
+interface OutreachJourneyTimelineEntry {
+  kind: string;
+  at: string;
+  title: string;
+  detail: string;
+  tone: string;
+}
+
+interface OutreachJourneyResearchSummary {
+  id: string;
+  score: number;
+  verdict: string;
+  summary: string;
+  engine: string;
+  crmOnly: boolean;
+  createdAt: string;
+  createdByName: string;
+}
+
+/** 一封已发信与背调的配对（后端按"写信时刻最近一次背调"推导，并验证角度是否写进信里） */
+interface OutreachJourneyResearchLinkView {
+  emailIndex: number;
+  messageId: string;
+  subject: string;
+  sentAt: string;
+  linked: boolean;
+  researchId: string;
+  researchScore: number | null;
+  researchVerdict: string;
+  researchEngine: string;
+  researchCreatedAt: string;
+  researchAgeDays: number | null;
+  angles: Array<{ keyword: string; angle: string; used: boolean }>;
+  factsCount: number;
+  verified: boolean;
+}
+
+interface OutreachJourneyEntityView {
+  entityType: OutreachJourneyEntityType;
+  entityId: string;
+  company: string;
+  contact: string;
+  email: string;
+  country: string;
+  website: string;
+  ownerName: string;
+  customerId: string;
+  leadId: string;
+  candidateId: string;
+  convertedToLead: boolean;
+  convertedToCustomer: boolean;
+  suppressed: boolean;
+  suppressedReason: string;
+  nextFollowAt: string;
+}
+
+interface OutreachJourneyView {
+  entity: OutreachJourneyEntityView;
+  stage: OutreachJourneyStageSnapshot;
+  emails: OutreachJourneyEmailView[];
+  replies: OutreachJourneyReplyView[];
+  timeline: OutreachJourneyTimelineEntry[];
+  research: { latest: OutreachJourneyResearchSummary | null; history: OutreachJourneyResearchSummary[]; links: OutreachJourneyResearchLinkView[]; coverage: { total: number; linked: number; verified: number } };
+  batches: Array<{ id: string; label: string }>;
+  stats: {
+    outboundCount: number; replyCount: number; openCount: number; clickCount: number;
+    bounceCount: number; firstSentAt: string; lastSentAt: string; lastEventAt: string;
+  };
+}
+
+interface OutreachJourneyListItem {
+  entityType: OutreachJourneyEntityType;
+  entityId: string;
+  company: string;
+  contact: string;
+  email: string;
+  country: string;
+  ownerName: string;
+  stageKey: string;
+  stageLabel: string;
+  stageTone: string;
+  outboundCount: number;
+  lastSentAt: string;
+  lastSubject: string;
+  replyCount: number;
+  lastReplyAt: string;
+  lastReplyLabel: string;
+  bounceCount: number;
+  openCount: number;
+  converted: boolean;
+  convertedTo: string;
+  nextFollowAt: string;
+  researchScore: number | null;
+  researchAt: string;
+}
+
+interface OutreachJourneyOverview {
+  items: OutreachJourneyListItem[];
+  summary: { total: number; byStage: Record<string, number>; replied: number; converted: number; bounced: number };
+}
+
+const OUTREACH_JOURNEY_STAGE_FALLBACK: Record<string, { label: string; tone: string }> = {
+  not_contacted: { label: "未接触", tone: "gray" },
+  first_touch_sent: { label: "已发首触", tone: "amber" },
+  following_up: { label: "跟进中", tone: "amber" },
+  replied_interested: { label: "已回复·可推进", tone: "green" },
+  replied_negative: { label: "已回复·明确拒绝", tone: "red" },
+  bounced: { label: "联系方式退信", tone: "red" },
+  converted: { label: "已转线索 / 客户", tone: "blue" }
+};
+
+const OUTREACH_JOURNEY_STAGE_FILTERS: Array<{ key: string; label: string }> = [
+  { key: "all", label: "全部阶段" },
+  { key: "not_contacted", label: "未接触" },
+  { key: "first_touch_sent", label: "已发首触" },
+  { key: "following_up", label: "跟进中" },
+  { key: "replied_interested", label: "已回复·可推进" },
+  { key: "replied_negative", label: "已回复·明确拒绝" },
+  { key: "bounced", label: "联系方式退信" },
+  { key: "converted", label: "已转线索 / 客户" }
+];
+
+let outreachJourneyOverview: OutreachJourneyOverview | null = null;
+let outreachJourneyScope: "self" | "team" = "self";
+let outreachJourneyStageFilter = "all";
+let outreachJourneySearch = "";
+let outreachJourneySubject: { entityType: OutreachJourneyEntityType; entityId: string; company: string; backView: string } | null = null;
+let outreachJourneyDetail: OutreachJourneyView | null = null;
+let outreachJourneyDetailLoading = false;
+let outreachJourneyDetailError = "";
+
+/** badge() 的 gray 对应无 tone 类（.badge.gray 不存在） */
+function outreachBadgeTone(tone: string) {
+  return tone === "gray" ? "" : tone;
+}
+
+function outreachStageMetaOf(key: string) {
+  return OUTREACH_JOURNEY_STAGE_FALLBACK[key] || { label: key, tone: "gray" };
+}
+
+function outreachJourneyKey(item: { entityType: string; entityId: string }) {
+  return `${item.entityType}:${item.entityId}`;
+}
+
+/** 发信明细页工具条绑定：用 onclick / oninput 赋值保证幂等（多次进视图不会叠加监听器） */
+function bindOutreachJourneyToolbar() {
+  const scope = qs<HTMLSelectElement>("#ojScopeFilter");
+  if (scope) scope.onchange = () => {
+    outreachJourneyScope = scope.value === "team" ? "team" : "self";
+    void loadOutreachJourneyOverview();
+  };
+  const search = qs<HTMLInputElement>("#ojSearch");
+  if (search) search.oninput = () => {
+    outreachJourneySearch = search.value;
+    renderOutreachJourneyPage();
+  };
+  const stageSelect = qs<HTMLSelectElement>("#ojStageFilter");
+  if (stageSelect) stageSelect.onchange = () => {
+    outreachJourneyStageFilter = stageSelect.value || "all";
+    renderOutreachJourneyPage();
+  };
+  const reset = qs<HTMLButtonElement>("#ojResetButton");
+  if (reset) reset.onclick = () => {
+    outreachJourneySearch = "";
+    outreachJourneyStageFilter = "all";
+    if (search) search.value = "";
+    renderOutreachJourneyPage();
+  };
+  const refresh = qs<HTMLButtonElement>("#ojRefreshButton");
+  if (refresh) refresh.onclick = () => void loadOutreachJourneyOverview();
+}
+
+async function loadOutreachJourneyOverview() {
+  const body = qs<HTMLElement>("#ojTableBody");
+  if (body) body.innerHTML = `<tr><td colspan="7" style="padding:22px;text-align:center;color:var(--muted)">正在汇总发信明细…</td></tr>`;
+  try {
+    const result = await api<OutreachJourneyOverview>(`/api/outreach-journey/overview?scope=${encodeURIComponent(outreachJourneyScope)}`);
+    outreachJourneyOverview = result;
+    renderOutreachJourneyPage();
+  } catch (error) {
+    if (body) body.innerHTML = `<tr><td colspan="7" style="padding:22px;text-align:center;color:#b03a3a">${escapeHtml(error instanceof Error ? error.message : "发信明细加载失败")}</td></tr>`;
+  }
+}
+
+function outreachJourneyFilteredItems() {
+  const items = outreachJourneyOverview?.items || [];
+  const keyword = outreachJourneySearch.trim().toLowerCase();
+  return items.filter((item) => {
+    if (outreachJourneyStageFilter !== "all" && item.stageKey !== outreachJourneyStageFilter) return false;
+    if (!keyword) return true;
+    return [item.company, item.contact, item.email, item.lastSubject, item.country]
+      .some((field) => (field || "").toLowerCase().includes(keyword));
+  });
+}
+
+function outreachJourneyProgressDots(item: OutreachJourneyListItem) {
+  const total = Math.max(item.outboundCount, 1);
+  const dots = Array.from({ length: Math.min(Math.max(item.outboundCount, 1), 3) }, (_unused, index) => `<i class="oj-dot on" style="--oj-dot:${index}"></i>`).join("");
+  const replied = item.replyCount > 0 ? `<i class="oj-dot reply"></i>` : "";
+  return `<span class="oj-progress" title="共发出 ${item.outboundCount} 封">${dots}${replied}<small>${item.outboundCount} 封</small></span>`;
+}
+
+function outreachJourneyReplyCell(item: OutreachJourneyListItem) {
+  if (item.stageKey === "bounced" || item.bounceCount) return badge("退信", "red");
+  if (!item.lastReplyAt) return `<span style="color:var(--muted)">尚未回复</span>`;
+  const meta = item.stageKey === "replied_negative" ? { label: item.lastReplyLabel || "已回复", tone: "red" } : { label: item.lastReplyLabel || "已回复", tone: "green" };
+  return `${badge(meta.label, meta.tone)}<div style="margin-top:3px;color:var(--muted);font-size:10px">${escapeHtml(formatDateTime(item.lastReplyAt))}</div>`;
+}
+
+function outreachJourneyResearchCell(item: OutreachJourneyListItem) {
+  if (item.researchScore === null || item.researchScore === undefined) return `<span style="color:var(--muted)">未背调</span>`;
+  const tone = item.researchScore >= 78 ? "green" : item.researchScore >= 60 ? "amber" : "red";
+  return `${badge(`评分 ${item.researchScore}`, tone)}<div style="margin-top:3px;color:var(--muted);font-size:10px">${escapeHtml(formatDateTime(item.researchAt))}</div>`;
+}
+
+function renderOutreachJourneyPage() {
+  const summaryBox = qs<HTMLElement>("#ojSummary");
+  const body = qs<HTMLElement>("#ojTableBody");
+  const mobile = qs<HTMLElement>("#ojMobileList");
+  const stageSelect = qs<HTMLSelectElement>("#ojStageFilter");
+  if (!summaryBox || !body || !mobile) return;
+  const overview = outreachJourneyOverview;
+  if (stageSelect && stageSelect.options.length !== OUTREACH_JOURNEY_STAGE_FILTERS.length) {
+    stageSelect.innerHTML = OUTREACH_JOURNEY_STAGE_FILTERS
+      .map((option) => `<option value="${escapeHtml(option.key)}">${escapeHtml(option.label)}</option>`).join("");
+  }
+  if (stageSelect) stageSelect.value = outreachJourneyStageFilter;
+  const scopeSelect = qs<HTMLSelectElement>("#ojScopeFilter");
+  if (scopeSelect) scopeSelect.value = outreachJourneyScope;
+
+  if (!overview) {
+    summaryBox.innerHTML = "";
+    body.innerHTML = `<tr><td colspan="7" style="padding:22px;text-align:center;color:var(--muted)">正在汇总发信明细…</td></tr>`;
+    mobile.innerHTML = "";
+    return;
+  }
+
+  const byStage = overview.summary.byStage || {};
+  const cards: Array<[string, string, number, string]> = [
+    ["all", "全部有发信记录", overview.summary.total, "已进入开发信流程的客户"],
+    ["first_touch_sent", "已发首触", byStage.first_touch_sent || 0, "等回复"],
+    ["following_up", "跟进中", byStage.following_up || 0, "已发 2 封以上"],
+    ["replied_interested", "已回复·可推进", byStage.replied_interested || 0, "可以转商机"],
+    ["bounced", "退信", overview.summary.bounced || 0, "地址需要修"],
+    ["converted", "已转线索/客户", overview.summary.converted || 0, "已回流业务库"]
+  ];
+  summaryBox.innerHTML = cards.map(([key, label, value, note], index) =>
+    `<button type="button" data-oj-stage="${escapeHtml(key)}" style="--oj-i:${index}" class="${outreachJourneyStageFilter === key ? "is-active" : ""}"><span>${escapeHtml(label)}</span>${outreachNumberHtml(`oj:${key}`, value)}<small>${escapeHtml(note)}</small></button>`
+  ).join("");
+  animateOutreachNumbers(summaryBox);
+
+  const items = outreachJourneyFilteredItems();
+  if (!items.length) {
+    const emptyHtml = `<div class="oj-empty">
+      <b>${overview.summary.total ? "当前筛选条件下没有匹配的客户" : "还没有任何发信记录"}</b>
+      <span>${overview.summary.total
+        ? "换一个阶段或清空搜索词试试。"
+        : "先去「发信批次」建一个自动发送方案，或到「搜客清单 / 线索」勾选客户生成发信批次；发出的每一封都会在这里按客户归档。"}</span>
+      <button class="btn primary" type="button" data-oj-goto-batches>去发信批次 →</button>
+    </div>`;
+    body.innerHTML = `<tr><td colspan="7" style="padding:0">${emptyHtml}</td></tr>`;
+    mobile.innerHTML = emptyHtml;
+  } else {
+    body.innerHTML = items.map((item, index) => {
+      const tone = outreachBadgeTone(item.stageTone);
+      return `<tr class="oj-row" style="--oj-i:${index}" data-oj-open="${escapeHtml(outreachJourneyKey(item))}" data-oj-company="${escapeHtml(item.company)}">
+        <td><div class="oj-company"><b>${escapeHtml(item.company)}</b><span>${escapeHtml([item.contact, item.email].filter(Boolean).join(" · ") || "联系人与邮箱待补充")}</span></div></td>
+        <td>${badge(item.stageLabel, tone)}</td>
+        <td>${outreachJourneyProgressDots(item)}</td>
+        <td><div class="oj-company"><span>${escapeHtml(item.lastSentAt ? formatDateTime(item.lastSentAt) : "—")}</span><b style="font-size:11px;font-weight:500">${escapeHtml(item.lastSubject || "—")}</b></div></td>
+        <td>${outreachJourneyReplyCell(item)}</td>
+        <td>${outreachJourneyResearchCell(item)}</td>
+        <td style="text-align:right"><button class="btn tiny" type="button" data-oj-open="${escapeHtml(outreachJourneyKey(item))}" data-oj-company="${escapeHtml(item.company)}">查看过程</button></td>
+      </tr>`;
+    }).join("");
+    mobile.innerHTML = items.map((item, index) => {
+      const tone = outreachBadgeTone(item.stageTone);
+      return `<div class="oj-card" style="--oj-i:${index}" data-oj-open="${escapeHtml(outreachJourneyKey(item))}" data-oj-company="${escapeHtml(item.company)}">
+        <div class="oj-card-head"><b>${escapeHtml(item.company)}</b>${badge(item.stageLabel, tone)}</div>
+        <div class="oj-card-meta"><span>${escapeHtml(item.contact || "联系人待补充")}</span><span>${escapeHtml(item.email || "邮箱待补充")}</span><span>${item.outboundCount} 封</span>${item.lastReplyAt ? `<span>已回复</span>` : ""}</div>
+        <div class="oj-card-meta"><span>最近：${escapeHtml(item.lastSentAt ? formatDateTime(item.lastSentAt) : "—")}</span></div>
+      </div>`;
+    }).join("");
+  }
+
+  qsa<HTMLButtonElement>("[data-oj-stage]", summaryBox).forEach((button) => {
+    button.addEventListener("click", () => {
+      outreachJourneyStageFilter = button.dataset.ojStage || "all";
+      renderOutreachJourneyPage();
+    });
+  });
+  qsa<HTMLElement>("[data-oj-open]", body).forEach((node) => node.addEventListener("click", () => {
+    const [entityType, ...rest] = (node.dataset.ojOpen || "").split(":");
+    if (!entityType || !rest.length) return;
+    void openOutreachCustomerJourney(entityType as OutreachJourneyEntityType, rest.join(":"), node.dataset.ojCompany || "", "outreach-journey");
+  }));
+  qsa<HTMLElement>("[data-oj-open]", mobile).forEach((node) => node.addEventListener("click", () => {
+    const [entityType, ...rest] = (node.dataset.ojOpen || "").split(":");
+    if (!entityType || !rest.length) return;
+    void openOutreachCustomerJourney(entityType as OutreachJourneyEntityType, rest.join(":"), node.dataset.ojCompany || "", "outreach-journey");
+  }));
+  qsa<HTMLButtonElement>("[data-oj-goto-batches]", basicScope()).forEach((button) =>
+    button.addEventListener("click", () => activateNavView("outreach-batches")));
+}
+
+function basicScope() {
+  const active = qs<HTMLElement>("#outreach-journey");
+  return active || document;
+}
+
+/** 进入单个客户的开发信过程档案（整页） */
+async function openOutreachCustomerJourney(
+  entityType: OutreachJourneyEntityType,
+  entityId: string,
+  company: string,
+  backView: string
+) {
+  outreachJourneySubject = { entityType, entityId, company, backView };
+  outreachJourneyDetail = null;
+  outreachJourneyDetailError = "";
+  outreachJourneyDetailLoading = true;
+  activateNavView("outreach-customer-journey", () => renderOutreachCustomerJourneyPage());
+  try {
+    const view = await api<OutreachJourneyView>(
+      `/api/outreach-journey?entityType=${encodeURIComponent(entityType)}&entityId=${encodeURIComponent(entityId)}`
+    );
+    outreachJourneyDetail = view;
+  } catch (error) {
+    outreachJourneyDetailError = error instanceof Error ? error.message : "开发信过程加载失败";
+  } finally {
+    outreachJourneyDetailLoading = false;
+    if (qs<HTMLElement>("#outreach-customer-journey")?.classList.contains("active")) renderOutreachCustomerJourneyPage();
+  }
+}
+
+function outreachJourneyBack() {
+  const backView = outreachJourneySubject?.backView || "outreach-journey";
+  if (backView === "customer-detail") {
+    activateNavView("customer-detail", () => renderCustomerDetailPage());
+    return;
+  }
+  if (backView === "customer-drawer") {
+    activateNavView("customers");
+    return;
+  }
+  activateNavView(backView);
+}
+
+/** 时间线条目：index 由 map 自动传入，用来做错峰进场（--oj-i） */
+function outreachJourneyEventBlock(entry: OutreachJourneyTimelineEntry, index = 0) {
+  const tone = outreachBadgeTone(entry.tone);
+  return `<div class="ojc-event${tone ? ` is-${tone}` : ""}" style="--oj-i:${index}">
+    <i></i>
+    <div>
+      <div class="ojc-event-head"><b>${escapeHtml(entry.title)}</b><time>${escapeHtml(entry.at ? formatDateTime(entry.at) : "")}</time></div>
+      ${entry.detail ? `<p>${escapeHtml(entry.detail)}</p>` : ""}
+    </div>
+  </div>`;
+}
+
+function renderOutreachCustomerJourneyPage() {
+  const box = qs<HTMLElement>("#outreachCustomerJourneyPage");
+  const subject = outreachJourneySubject;
+  if (!box || !subject) return;
+  const backButton = `<button class="customer-page-back" type="button" data-ojc-back title="返回" aria-label="返回"><svg viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button>`;
+
+  if (outreachJourneyDetailLoading && !outreachJourneyDetail) {
+    box.innerHTML = `<header class="ojc-head"><div class="ojc-identity">${backButton}<div><h1>${escapeHtml(subject.company || "开发信过程")}</h1><p>正在读取这家客户的完整开发信档案…</p></div></div></header>
+      <div class="ojc-empty">汇总发送历史、回复记录与背调结果，请稍候。</div>`;
+    qs<HTMLButtonElement>("[data-ojc-back]", box)?.addEventListener("click", outreachJourneyBack);
+    return;
+  }
+  if (outreachJourneyDetailError || !outreachJourneyDetail) {
+    box.innerHTML = `<header class="ojc-head"><div class="ojc-identity">${backButton}<div><h1>${escapeHtml(subject.company || "开发信过程")}</h1><p>读取失败</p></div></div></header>
+      <div class="ojc-empty">${escapeHtml(outreachJourneyDetailError || "没有找到这家客户的开发信记录。")}<br><br><button class="btn" type="button" data-ojc-back2>返回</button></div>`;
+    qs<HTMLButtonElement>("[data-ojc-back]", box)?.addEventListener("click", outreachJourneyBack);
+    qs<HTMLButtonElement>("[data-ojc-back2]", box)?.addEventListener("click", outreachJourneyBack);
+    return;
+  }
+
+  const view = outreachJourneyDetail;
+  const entity = view.entity;
+  const stage = view.stage;
+  const tone = outreachBadgeTone(stage.tone);
+  const stats = view.stats;
+  const emailsHtml = view.emails.length ? view.emails.slice().reverse().map((email) => `
+    <article class="ojc-email">
+      <div class="ojc-email-head">
+        <b>第 ${email.index} 封 · ${escapeHtml(email.subject || "（无主题）")}</b>
+        <small>${escapeHtml(formatDateTime(email.sentAt))} · ${escapeHtml(email.recipient || "未记录收件人")} · ${escapeHtml(email.sourceLabel || "手动发送")}${email.batchName ? ` · ${escapeHtml(email.batchName)}` : ""}</small>
+      </div>
+      <div class="ojc-email-head" style="margin-top:6px">
+        <span>${badge(email.dispatchStatus === "sent" ? "已投递" : email.dispatchStatus === "pending" ? "投递中" : "结果待确认", email.dispatchStatus === "sent" ? "green" : email.dispatchStatus === "pending" ? "amber" : "red")}
+        ${email.openCount ? badge(`打开 ${email.openCount}`, "blue") : ""}
+        ${email.clickCount ? badge(`点击 ${email.clickCount}`, "blue") : ""}
+        ${email.repliedAt ? badge("已回复", "green") : ""}
+        ${email.bouncedAt ? badge("已退信", "red") : ""}</span>
+      </div>
+      ${email.dispatchError ? `<p style="color:#b03a3a">${escapeHtml(email.dispatchError)}</p>` : ""}
+      ${email.body ? `<details><summary>查看这封信的完整正文</summary><pre>${escapeHtml(email.body)}</pre></details>` : `<p>${escapeHtml(email.bodyPreview || "（未留存正文）")}</p>`}
+    </article>`).join("") : `<div class="ojc-empty">还没有发过信。点右上角「按当前阶段发送」发出第一封。</div>`;
+
+  const repliesHtml = view.replies.length ? view.replies.slice().reverse().map((reply) => {
+    const isBounce = reply.eventType === "bounce" || reply.classification === "bounced";
+    const isNegative = reply.classification === "rejected" || reply.classification === "unsubscribed";
+    return `<article class="ojc-email">
+      <div class="ojc-email-head">
+        <b>${escapeHtml(isBounce ? "退信" : reply.classificationLabel || "客户回复")}</b>
+        <small>${escapeHtml(formatDateTime(reply.occurredAt))} · ${escapeHtml(reply.contactValue || "—")}</small>
+      </div>
+      <p>${escapeHtml(reply.content || reply.subject || "（无正文）")}</p>
+      ${badge(isBounce ? "地址无效" : isNegative ? "已停止发送" : "可继续推进", isBounce || isNegative ? "red" : "green")}
+    </article>`;
+  }).join("") : `<div class="ojc-empty">还没有收到回复。回复 / 退信会由回信监听自动归档到这里。</div>`;
+
+  const researchHtml = view.research.latest ? `
+    <div class="ojc-research">
+      ${view.research.history.map((record, index) => `
+        <article class="ojc-research-card${index === 0 ? " is-latest" : ""}">
+          <div class="ojc-research-head">
+            <b>${index === 0 ? "最近一次背调" : `历史背调 #${view.research.history.length - index}`} · 评分 ${record.score}</b>
+            <small>${escapeHtml(formatDateTime(record.createdAt))}${record.createdByName ? ` · ${escapeHtml(record.createdByName)}` : ""}</small>
+          </div>
+          <p><b>${escapeHtml(record.verdict || "未给结论")}</b></p>
+          <p>${escapeHtml(record.summary || record.engine || "（无摘要）")}</p>
+        </article>`).join("")}
+    </div>` : `<div class="ojc-empty">这家客户还没有背调记录。点右上角「AI 背调」跑一次，结果会自动留档在这里，之后可以对比每次变化。</div>`;
+
+  const batchesHtml = view.batches.length
+    ? `<div class="ojc-section-body" style="display:grid;gap:6px">${view.batches.map((batch) => `<div style="font-size:11px;color:var(--muted)">${escapeHtml(batch.label)}</div>`).join("")}</div>`
+    : `<div class="ojc-empty">还没有归属的发信批次或方案。</div>`;
+
+  // 背调 × 开发信关联：每封信按"写信时刻最近一次背调"配对，绿色角度 = 真的写进了信里
+  const researchById = new Map(view.research.history.map((record) => [record.id, record]));
+  const linkCards = view.research.links.slice().reverse().map((link, index) => {
+    const record = link.researchId ? researchById.get(link.researchId) : null;
+    const staleNote = link.linked && (link.researchAgeDays || 0) > 60
+      ? `<span class="ojc-link-stale">背调已偏旧 ${link.researchAgeDays} 天，建议重跑</span>` : "";
+    const researchSide = link.linked
+      ? `<div class="ojc-link-basis">
+          ${badge(`依据背调 · 评分 ${link.researchScore ?? "—"}`, "blue")}
+          ${link.verified ? badge("角度已写进信里", "green") : badge("角度未引用", "gray")}
+          <small>${escapeHtml(formatDateTime(link.researchCreatedAt))}${link.researchEngine ? ` · ${escapeHtml(link.researchEngine)}` : ""}${link.factsCount ? ` · ${link.factsCount} 条事实` : ""}</small>
+          ${staleNote}
+        </div>
+        ${link.angles.length ? `<div class="ojc-link-angles">${link.angles.map((angle) => `<span class="ojc-link-angle${angle.used ? " is-used" : ""}" title="${escapeHtml(angle.angle)}">${angle.used ? "✓ " : ""}${escapeHtml(angle.keyword)}</span>`).join("")}</div>` : ""}
+        ${record?.summary ? `<details class="ojc-link-detail"><summary>当次背调结论</summary><p>${escapeHtml(link.researchVerdict || "未给结论")} — ${escapeHtml(record.summary)}</p></details>` : ""}`
+      : `<div class="ojc-link-basis"><span class="ojc-link-none">写信时还没有背调留档</span></div>`;
+    return `
+      <article class="ojc-link-card${link.verified ? " is-verified" : link.linked ? "" : " is-unlinked"}" style="--oj-i:${index}">
+        <div class="ojc-link-mail">
+          <b>第 ${link.emailIndex} 封 · ${escapeHtml(link.subject || "（无主题）")}</b>
+          <small>${escapeHtml(formatDateTime(link.sentAt))}</small>
+        </div>
+        ${researchSide}
+      </article>`;
+  }).join("");
+  const coverage = view.research.coverage;
+  const linkSectionHtml = !view.emails.length
+    ? ""
+    : `<section class="ojc-section ojc-link-section">
+        <div class="ojc-section-head"><div><h2>背调 × 开发信关联</h2><small>每封信依据的是写信时刻最近的一次背调；带 ✓ 的角度表示真的写进了那封信里</small></div><b style="font-size:12px;color:var(--muted)">${coverage.linked}/${coverage.total} 封有背调依据 · ${coverage.verified} 封已引用角度</b></div>
+        <div class="ojc-section-body"><div class="ojc-link-list">${linkCards || `<div class="ojc-empty">还没有可关联的发送记录。</div>`}</div></div>
+      </section>`;
+
+  // AI 背调的请求契约只接受 customer / lead；纯搜客候选没有可背调的主体，按钮置灰而不是点了报错。
+  const researchTargetId = entity.customerId || entity.leadId || "";
+
+  box.innerHTML = `
+    <header class="ojc-head">
+      <div class="ojc-identity">
+        ${backButton}
+        <div>
+          <h1>${escapeHtml(entity.company || subject.company || "开发信过程")} ${badge(stage.label, tone)}</h1>
+          <p>${escapeHtml([entity.country, entity.contact, entity.email].filter(Boolean).join(" · ") || "资料待补充")} · 负责人 ${escapeHtml(entity.ownerName || "未分配")}</p>
+        </div>
+      </div>
+      <div class="head-actions">
+        ${entity.customerId ? `<button class="btn" type="button" data-ojc-open-customer>打开客户资料</button>` : entity.leadId ? `<button class="btn" type="button" data-ojc-open-lead>打开线索</button>` : `<button class="btn" type="button" data-ojc-open-candidate>打开搜客候选</button>`}
+        ${researchTargetId
+          ? `<button class="btn ai-entry-button" type="button" data-ojc-research>${researchButtonIcon()}AI 背调</button>`
+          : `<button class="btn ai-entry-button" type="button" disabled title="AI 背调只支持客户与线索；搜客候选需先转为线索">${researchButtonIcon()}AI 背调</button>`}
+        <button class="btn ${stage.canSend ? "primary" : ""}" type="button" data-ojc-send ${stage.canSend ? "" : "disabled"} title="${escapeHtml(stage.blockReason || stage.nextStepLabel)}">${escapeHtml(stage.canSend ? `按阶段发送：${stage.nextStepLabel.replace(/^发送/u, "")}` : "当前阶段不可发送")}</button>
+      </div>
+    </header>
+
+    <section class="ojc-stage${tone ? ` is-${tone}` : ""}">
+      <div>${badge(stage.label, tone)}</div>
+      <div class="ojc-stage-main">
+        <h2>当前阶段判定：${escapeHtml(stage.description)}</h2>
+        <p>下一步建议：<em>${escapeHtml(stage.nextStepLabel)}</em></p>
+        <p>${entity.convertedToCustomer ? "这家客户已回流到客户档案，正式跟进请走客户流程。" : entity.convertedToLead ? "这家客户已回流为正式线索，正式跟进请走线索流程。" : `判定依据：共发出 ${stats.outboundCount} 封${stats.replyCount ? `、收到 ${stats.replyCount} 次回复` : "、暂无回复"}。`}</p>
+      </div>
+      <div class="ojc-stage-side">
+        <b>${stats.outboundCount} 封</b>
+        <small>${stats.lastSentAt ? `最近发送 ${escapeHtml(formatDateTime(stats.lastSentAt))}` : "还没有发送记录"}</small>
+        ${entity.nextFollowAt ? `<small>下次跟进 ${escapeHtml(entity.nextFollowAt)}</small>` : ""}
+      </div>
+    </section>
+    ${stage.canSend ? "" : `<div class="ojc-block-note">${escapeHtml(stage.blockReason)}</div>`}
+
+    <section class="ojc-stats">
+      <div style="--oj-i:0"><span>已发送</span><b>${stats.outboundCount}</b><small>封开发信</small></div>
+      <div style="--oj-i:1"><span>客户回复</span><b>${stats.replyCount}</b><small>次</small></div>
+      <div style="--oj-i:2"><span>邮件被打开</span><b>${stats.openCount}</b><small>次（含重复打开）</small></div>
+      <div style="--oj-i:3"><span>链接被点击</span><b>${stats.clickCount}</b><small>次</small></div>
+      <div style="--oj-i:4"><span>退信</span><b>${stats.bounceCount}</b><small>次</small></div>
+      <div style="--oj-i:5"><span>首次触达</span><b>${stats.firstSentAt ? escapeHtml(formatDateTime(stats.firstSentAt).slice(0, 10)) : "—"}</b><small>${stats.firstSentAt ? "开始接触的日期" : "尚未接触"}</small></div>
+    </section>
+
+    ${linkSectionHtml}
+
+    <div class="ojc-grid">
+      <div>
+        <section class="ojc-section">
+          <div class="ojc-section-head"><div><h2>发送历史</h2><small>这家客户收到过的每一封开发信，按时间倒序，可展开看完整正文</small></div><b style="font-size:12px;color:var(--muted)">${view.emails.length} 封</b></div>
+          <div class="ojc-section-body">${emailsHtml}</div>
+        </section>
+        <section class="ojc-section">
+          <div class="ojc-section-head"><div><h2>过程时间线</h2><small>发送、打开、点击、回复、退信、背调、回流合并成一条可留档的轨迹</small></div></div>
+          <div class="ojc-section-body"><div class="ojc-timeline">${view.timeline.length ? view.timeline.map(outreachJourneyEventBlock).join("") : `<div class="ojc-empty">还没有过程记录。</div>`}</div></div>
+        </section>
+      </div>
+      <div>
+        <section class="ojc-section">
+          <div class="ojc-section-head"><div><h2>回复情况</h2><small>客户回信与退信会自动归档到这里</small></div><b style="font-size:12px;color:var(--muted)">${view.replies.length} 条</b></div>
+          <div class="ojc-section-body">${repliesHtml}</div>
+        </section>
+        <section class="ojc-section">
+          <div class="ojc-section-head"><div><h2>自动背调结果</h2><small>每次背调都会留档，方便对比客户变化</small></div>${view.research.latest ? badge(`共 ${view.research.history.length} 次`, "blue") : ""}</div>
+          <div class="ojc-section-body">${researchHtml}</div>
+        </section>
+        <section class="ojc-section">
+          <div class="ojc-section-head"><div><h2>归属批次 / 方案</h2><small>这些信是从哪几个发信任务发出去的</small></div></div>
+          ${batchesHtml}
+        </section>
+      </div>
+    </div>`;
+
+  qs<HTMLButtonElement>("[data-ojc-back]", box)?.addEventListener("click", outreachJourneyBack);
+  qs<HTMLButtonElement>("[data-ojc-send]", box)?.addEventListener("click", () => void openOutreachStageSendModal());
+  qs<HTMLButtonElement>("[data-ojc-research]", box)?.addEventListener("click", () => {
+    const targetType = entity.customerId ? "customer" : "lead";
+    const targetId = researchTargetId;
+    if (!targetId) {
+      toast("搜客候选还不支持直接背调，请先把它转为线索", "error");
+      return;
+    }
+    void openBackgroundResearch(targetType as "customer" | "lead", targetId, entity.company, "outreach-customer-journey");
+  });
+  qs<HTMLButtonElement>("[data-ojc-open-customer]", box)?.addEventListener("click", () => {
+    const customer = state.customers.find((item) => item.id === entity.customerId);
+    if (!customer) {
+      toast("客户资料尚未加载，请到客户列表查看", "error");
+      return;
+    }
+    activateNavView("customer-detail", () => renderCustomerDetailPage(customer));
+  });
+  qs<HTMLButtonElement>("[data-ojc-open-lead]", box)?.addEventListener("click", () => activateNavView("leads"));
+  qs<HTMLButtonElement>("[data-ojc-open-candidate]", box)?.addEventListener("click", () => activateNavView("prospect-list"));
+}
+
+/** 按阶段生成下一封草稿 → 人工确认 → 真实投递 */
+async function openOutreachStageSendModal() {
+  const subject = outreachJourneySubject;
+  if (!subject) return;
+  const body = `<p class="modal-hint">正在按客户当前阶段生成草稿…</p>`;
+  openModal("按阶段发送开发信", body, `<button class="btn" data-modal-close>取消</button>`, { closeOnBackdrop: false });
+  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  let draft: { stageKey: string; stepIndex: number; subject: string; body: string; tips: string[] } | null = null;
+  let stageSnapshot: OutreachJourneyStageSnapshot | null = null;
+  let recipient = "";
+  try {
+    const result = await api<{
+      draft: { stageKey: string; stepIndex: number; subject: string; body: string; tips: string[] };
+      stage: OutreachJourneyStageSnapshot;
+      entity: OutreachJourneyEntityView;
+      recipient: string;
+      sourceLabel: string;
+    }>(`/api/outreach-journey/draft?entityType=${encodeURIComponent(subject.entityType)}&entityId=${encodeURIComponent(subject.entityId)}`);
+    draft = result.draft;
+    stageSnapshot = result.stage;
+    recipient = result.recipient || result.entity.email || "";
+  } catch (error) {
+    closeModal();
+    toast(error instanceof Error ? error.message : "草稿生成失败", "error");
+    return;
+  }
+  const stageLabel = stageSnapshot?.label || "";
+  const bodyHtml = `
+    <div style="display:grid;gap:10px">
+      <div style="padding:10px 12px;border:1px solid var(--line);border-left:3px solid var(--brand);border-radius:8px;background:var(--surface-2);font-size:12px;line-height:1.75">
+        <b>当前阶段：${escapeHtml(stageLabel)}</b> · 这是第 <b>${draft.stepIndex}</b> 封
+        <div style="color:var(--muted);margin-top:4px">${escapeHtml(stageSnapshot?.description || "")}</div>
+      </div>
+      <div class="form-grid">
+        <div class="form-field full"><label>收件人 *</label><input id="ojSendTo" value="${escapeHtml(recipient)}" placeholder="name@company.com"></div>
+        <div class="form-field full"><label>主题 *</label><input id="ojSendSubject" value="${escapeHtml(draft.subject)}"></div>
+        <div class="form-field full"><label>正文 *</label><textarea id="ojSendBody" rows="12" style="font-family:var(--font-mono,monospace);font-size:12px">${escapeHtml(draft.body)}</textarea></div>
+      </div>
+      ${draft.tips.length ? `<ul style="margin:0;padding-left:18px;color:var(--muted);font-size:11px;line-height:1.8">${draft.tips.map((tip) => `<li>${escapeHtml(tip)}</li>`).join("")}</ul>` : ""}
+      <div style="font-size:11px;color:var(--muted);line-height:1.75">发出后这封信会立即登记到「发送历史」并计入这家客户的阶段判定；正文里 <code>{{sender}}</code> 会替换成你的发件署名。</div>
+    </div>`;
+  const footHtml = `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="ojSendConfirmButton">确认发送</button>`;
+  openModal(`按阶段发送 · ${subject.company || "开发信"}`, bodyHtml, footHtml, { closeOnBackdrop: false });
+  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  qs<HTMLButtonElement>("#ojSendConfirmButton")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    if (button.disabled) return;
+    const to = qs<HTMLInputElement>("#ojSendTo")?.value.trim() || "";
+    const mailSubject = qs<HTMLInputElement>("#ojSendSubject")?.value.trim() || "";
+    const mailBody = qs<HTMLTextAreaElement>("#ojSendBody")?.value.trim() || "";
+    if (!to || !mailSubject || !mailBody) {
+      toast("收件人、主题、正文都不能为空", "error");
+      return;
+    }
+    const ok = await confirmAction({
+      title: "确认发送这封开发信",
+      message: `确认后会立即通过你的 SMTP 账号真实投递到 ${to}，不是模拟发送。`,
+      consequences: [
+        "这封信会写入客户的开发信档案并计入阶段判定",
+        "内容即刻冻结，已发出的邮件不可撤回",
+        "仍受每日发信上限、同域名频率与退信率熔断保护"
+      ],
+      confirmLabel: "真实发送",
+      tone: "danger"
+    });
+    if (!ok) return;
+    setButtonPending(button, true, "确认发送", "发送中…");
+    try {
+      await api("/api/outreach-journey/send", {
+        method: "POST",
+        body: JSON.stringify({
+          entityType: subject.entityType,
+          entityId: subject.entityId,
+          requestId: prospectRequestId("journey-send"),
+          to,
+          subject: mailSubject,
+          body: mailBody
+        })
+      });
+      closeModal();
+      toast("已发送，档案已更新", "success");
+      if (outreachJourneySubject) await openOutreachCustomerJourney(subject.entityType, subject.entityId, subject.company, subject.backView);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "发送失败", "error");
+      setButtonPending(button, false, "确认发送", "确认发送");
+    }
+  });
+}
+
+async function loadOutreachBatches() {
+  try {
+    const result = await api<{ batches: OutreachBatchView[] }>("/api/prospect-outreach-batches?limit=50");
+    state.outreachBatches = result.batches || [];
+    // 已消失的批次不该继续占着折叠状态，否则下次同名 id 复用时会被误判成收起
+    for (const id of [...outreachBatchCollapsed]) {
+      if (!state.outreachBatches.some((item) => item.id === id)) outreachBatchCollapsed.delete(id);
+    }
+    renderOutreachBatches();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "发信批次加载失败", "error");
+  }
+}
+
+/** 批次内各步骤的发送进度统计 */
+function outreachBatchProgress(batch: OutreachBatchView) {
+  let sent = 0, failed = 0, pending = 0;
+  for (const item of batch.items) {
+    for (const step of item.steps) {
+      if (step.status === "sent") sent++;
+      else if (step.status === "failed") failed++;
+      else if (step.status === "pending") pending++;
+    }
+  }
+  return { sent, failed, pending };
+}
+
+/** 批次下一封计划发送时间：最早一条待发步骤的 scheduledAt */
+function outreachBatchNextSendAt(batch: OutreachBatchView): string {
+  let best = "";
+  for (const item of batch.items) {
+    for (const step of item.steps) {
+      if (step.status !== "pending" || !step.scheduledAt) continue;
+      if (!best || step.scheduledAt < best) best = step.scheduledAt;
+    }
+  }
+  return best;
+}
+
+/** 间隔小时转人话：72 → "3 天"，48 → "2 天"，5 → "5 小时" */
+function outreachIntervalLabel(hours: number): string {
+  if (hours >= 24 && hours % 24 === 0) return `${hours / 24} 天`;
+  return `${hours} 小时`;
+}
+
+/** 批次项的公司名：后端在「找不到线索/候选」时会把内部 ID 塞进 company 字段，别拿 ID 当公司名给人看 */
+function outreachItemCompanyLabel(item: { company?: string; leadId?: string; candidateId?: string }): string {
+  const raw = (item.company || "").trim();
+  const looksLikeId = Boolean(raw) && (raw === (item.leadId || "") || raw === (item.candidateId || "")
+    || /^(lead_|cand_|prospect_candidate_|website_opportunit)/.test(raw));
+  return raw && !looksLikeId ? raw : "客户名不可用";
+}
+
+/** 老批次里存的是旧文案——"不存在或无权访问"把「真删了」和「不是你的」混成一句，读出来时改成能读懂的 */
+const OUTREACH_SKIP_REASON_LABELS: Record<string, string> = {
+  "线索不存在或无权访问": "线索已删除，或不属于你（无法用它发信）",
+  "候选不存在或无权访问": "候选已删除，或不属于你（无法用它发信）"
+};
+
+function outreachSkipReasonLabel(reason: string): string {
+  const raw = (reason || "").trim();
+  return OUTREACH_SKIP_REASON_LABELS[raw] || raw;
+}
+
+/** 这些跳过原因"修也修不好"：线索/候选没了或不属于你 → 点「恢复」必然再失败，界面只该给「移出」 */
+const OUTREACH_TERMINAL_SKIP_REASONS = new Set([
+  "线索不存在或无权访问",
+  "候选不存在或无权访问",
+  "线索已被删除",
+  "候选已被删除",
+  "该线索属于其他业务员，你无权用它发信",
+  "该候选属于其他业务员，你无权用它发信"
+]);
+
+function outreachSkipIsTerminal(reason: string): boolean {
+  return OUTREACH_TERMINAL_SKIP_REASONS.has((reason || "").trim());
+}
+
+/** 折叠状态：默认全部展开（手动批次直接铺成两级列表），点一级行才收起。
+    放进模块级 Set 而不是 state——它是纯视图偏好，不该跟着数据一起持久化。 */
+const outreachBatchCollapsed = new Set<string>();
+
+/** 批次级操作按钮（放一级行右侧，收起了也能操作） */
+function outreachBatchActionButtons(batch: OutreachBatchView): string {
+  const buttons: string[] = [];
+  if (batch.status === "draft") {
+    // 一封可发的都没有时，「确认开始发送」点了也没有任何效果——直接禁用并说明原因，别让按钮骗人
+    buttons.push(batch.counts.frozen > 0
+      ? `<button class="btn tiny primary" data-batch-approve="${batch.id}">确认开始发送</button>`
+      : `<button class="btn tiny primary" data-batch-approve="${batch.id}" disabled title="这批没有可发送的客户：目标已被删除、不属于你或没取到邮箱。先补齐线索邮箱，或把发不出去的目标移除。">确认开始发送</button>`);
+  }
+  if (batch.status === "approved") buttons.push(`<button class="btn tiny" data-batch-control="${batch.id}" data-batch-action="pause">暂停</button>`);
+  if (batch.status === "paused") buttons.push(`<button class="btn tiny primary" data-batch-control="${batch.id}" data-batch-action="resume">继续</button>`);
+  if (!["completed", "cancelled"].includes(batch.status)) buttons.push(`<button class="btn tiny" data-batch-control="${batch.id}" data-batch-action="cancel">取消批次</button>`);
+  return `<div class="head-actions">${buttons.join("")}</div>`;
+}
+
+/** 二级列表：批次里勾选的一个客户一行（名称/邮箱 → 每封的状态药丸 → 状态与操作） */
+function outreachBatchCustomerRow(item: OutreachBatchItemView, index: number, batch: OutreachBatchView): string {
+  const skipped = item.status === "skipped" || item.status === "removed";
+  const companyHint = [item.company, item.leadId, item.candidateId].filter(Boolean).join(" · ");
+  const refId = item.leadId || item.candidateId || "";
+  if (skipped) {
+    // 跳过项没发过信：说清"是谁"（拿不到公司名时给目标编号，别让内部 ID 冒充公司名），原因就是这一行的内容
+    const terminal = outreachSkipIsTerminal(item.skipReason || "");
+    // 「恢复」对"线索没了 / 不是你的"必然再次复核失败，这种只给「移出」，不给注定失败的按钮
+    const actions = batch.status !== "draft" ? ""
+      : item.status === "removed" ? `<button class="btn" data-item-restore="${item.id}">恢复</button>`
+      : terminal ? `<button class="btn" data-item-remove="${item.id}">移出批次</button>`
+      : `<button class="btn" data-item-restore="${item.id}">恢复</button><button class="btn" data-item-remove="${item.id}">移出批次</button>`;
+    return `<div class="ob-cust is-${item.status}" style="--ob-j:${index}">
+      <div class="ob-cust-main">
+        <div class="ob-cust-name"><b title="${escapeHtml(companyHint)}">${escapeHtml(outreachItemCompanyLabel(item))}</b></div>
+        ${refId ? `<small class="ob-cust-mail">目标编号 ${escapeHtml(refId)}</small>` : ""}
+        <div class="ob-cust-steps"><span class="ob-pill">${escapeHtml(outreachSkipReasonLabel(item.skipReason || "—"))}</span></div>
+      </div>
+      <div class="ob-cust-side is-row">${badge(item.status === "removed" ? "已移除" : "已跳过", "gray")}${actions}</div>
+    </div>`;
+  }
+  const steps = item.steps.map((step) => {
+    const cls = step.status === "sent" ? "is-done" : step.status === "failed" ? "is-fail" : step.status === "skipped" ? "" : "is-next";
+    const label = step.status === "sent" ? "已发" : step.status === "failed" ? "失败" : step.status === "skipped" ? "已跳过" : "待发";
+    const when = step.status === "sent" && step.sentAt
+      ? formatDateTime(step.sentAt)
+      : step.status === "pending" && step.scheduledAt
+        ? formatDateTime(step.scheduledAt)
+        : "";
+    return `<span class="ob-pill${cls ? ` ${cls}` : ""}" title="${escapeHtml(step.error || (when ? `${label} · ${when}` : label))}"><i></i>第 ${step.index + 1} 封 · ${label}${when ? ` ${escapeHtml(when)}` : ""}</span>`;
+  }).join("");
+  const statusMeta = item.status === "sent" ? { label: "全部已发", tone: "green" }
+    : item.status === "failed" ? { label: "发送失败", tone: "red" }
+    : item.status === "stopped" ? { label: "已停止（客户已回复）", tone: "gray" }
+    : item.status === "sending" ? { label: "发送中", tone: "amber" }
+    : { label: "按计划进行中", tone: "amber" };
+  const journeyId = item.leadId || item.candidateId || "";
+  const editButtons = batch.status === "draft" && item.status === "ready"
+    ? `<button class="btn" data-item-edit="${item.id}">编辑信件</button><button class="btn" data-item-remove="${item.id}">移出批次</button>`
+    : "";
+  const subjectPreview = item.steps[0]
+    ? `<span class="ob-note" title="${escapeHtml(item.steps[0].subject)}">首封主题：${escapeHtml(item.steps[0].subject)}</span>`
+    : `<span class="ob-note"></span>`;
+  return `<div class="ob-cust" style="--ob-j:${index}">
+    <div class="ob-cust-main">
+      <div class="ob-cust-name"><b>${escapeHtml(outreachItemCompanyLabel(item))}</b>${item.convertedLeadId ? badge("已转线索", "green") : ""}</div>
+      <small class="ob-cust-mail">${escapeHtml(item.recipient || "收件人待定")}</small>
+      <div class="ob-cust-steps">${steps}</div>
+    </div>
+    <div class="ob-cust-side">${badge(statusMeta.label, statusMeta.tone)}</div>
+    <div class="ob-cust-foot">
+      ${subjectPreview}
+      ${journeyId ? `<button class="btn" data-item-journey="${escapeHtml(journeyId)}" data-item-journey-type="${item.leadId ? "lead" : "prospect_candidate"}" data-item-company="${escapeHtml(outreachItemCompanyLabel(item))}">开发信过程</button>` : ""}
+      ${editButtons}
+    </div>
+  </div>`;
+}
+
+/** 一级行：批次摘要 + 批次级操作；展开时把二级客户列表挂在下面 */
+function renderOutreachBatchCard(batch: OutreachBatchView, index: number): string {
+  const meta = OUTREACH_BATCH_STATUS_META[batch.status] || { label: batch.status, tone: "gray" };
+  const progress = outreachBatchProgress(batch);
+  const nextAt = batch.status === "approved" ? outreachBatchNextSendAt(batch) : "";
+  const converted = batch.items.filter((item) => item.convertedLeadId).length;
+  const batchKey = `batch:${batch.id}`;
+  const open = !outreachBatchCollapsed.has(batch.id);
+  const stat = batch.status === "draft"
+    ? `${batch.counts.frozen > 0
+      ? `可发送 ${outreachNumberHtml(`${batchKey}:frozen`, batch.counts.frozen)} 封`
+      : `<b class="ob-zero">可发送 0 封</b>`}${batch.counts.skipped ? ` · 跳过 ${outreachNumberHtml(`${batchKey}:skipped`, batch.counts.skipped)} 位` : ""}`
+    : `共 ${outreachNumberHtml(`${batchKey}:frozen`, batch.counts.frozen)} 封 · 已发 ${outreachNumberHtml(`${batchKey}:sent`, progress.sent)}${progress.failed ? ` · 失败 ${outreachNumberHtml(`${batchKey}:failed`, progress.failed)}` : ""}${progress.pending ? ` · 待发 ${outreachNumberHtml(`${batchKey}:pending`, progress.pending)}` : ""}`;
+  const caret = `<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M4 2.4 8 6l-4 3.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+  const rhythm = [
+    `每天最多 ${batch.policy.dailyLimit} 封`,
+    `同人间隔 ${outreachIntervalLabel(batch.policy.stepIntervalHours)}`,
+    `${batch.policy.sendWindowStartHour}:00–${batch.policy.sendWindowEndHour}:00 发送`,
+    batch.policy.stopOnReply ? "回复即停" : "回复后仍继续",
+    batch.frozenHash ? `内容指纹 ${batch.frozenHash.slice(0, 10)}…` : ""
+  ].filter(Boolean);
+  const body = open
+    ? `<div class="ob-batch-body">
+      <div class="ob-batch-rhythm">${rhythm.map((text) => `<span class="ob-chip">${escapeHtml(text)}</span>`).join("")}</div>
+      <div class="ob-cust-list">${batch.items.map((item, itemIndex) => outreachBatchCustomerRow(item, itemIndex, batch)).join("")}</div>
+    </div>`
+    : "";
+  return `<article class="ob-batch${open ? " is-open" : ""}" data-batch-id="${batch.id}" style="--ob-i:${index}">
+    <div class="ob-batch-head" role="button" tabindex="0" aria-expanded="${open ? "true" : "false"}" data-batch-head="${batch.id}">
+      <span class="ob-batch-caret">${caret}</span>
+      <span class="ob-batch-seq">${index + 1}</span>
+      ${badge(meta.label, meta.tone)}
+      <span class="ob-batch-title"><b>${batch.targetType === "lead" ? "线索" : "搜客候选"}批次</b><small>${escapeHtml(formatDateTime(batch.createdAt))}</small></span>
+      <span class="ob-batch-stat">${stat}${nextAt ? `<span class="ob-next-send">下一封 ${escapeHtml(formatDateTime(nextAt))}</span>` : ""}${converted ? badge(`已转线索 ${converted}`, "green") : ""}</span>
+      ${outreachBatchActionButtons(batch)}
+    </div>
+    ${body}
+  </article>`;
+}
+
+function renderOutreachBatches() {
+  const listBox = qs<HTMLElement>("#outreachBatchList");
+  if (!listBox) return;
+  const manualCount = qs<HTMLElement>("#outreachManualBatchCount");
+  if (manualCount) manualCount.textContent = state.outreachBatches.length ? `共 ${state.outreachBatches.length} 个批次` : "";
+  if (!state.outreachBatches.length) {
+    listBox.innerHTML = `<div class="ob-empty">
+      <p>还没有发送批次。</p>
+      <button class="btn primary" id="obEmptyGotoProspectButton" type="button">去搜客清单勾选 →</button>
+    </div>`;
+  } else {
+    listBox.innerHTML = state.outreachBatches.map((batch, index) => renderOutreachBatchCard(batch, index)).join("");
+  }
+  animateOutreachNumbers(listBox);
+
+  const batchIdOf = (node: HTMLElement | null) => node?.closest<HTMLElement>("[data-batch-id]")?.dataset.batchId || "";
+  // 一级行：点空白处展开/收起；行内的按钮不参与折叠
+  qsa<HTMLElement>("[data-batch-head]", listBox).forEach((head) => {
+    const toggle = (event: Event) => {
+      if ((event.target as HTMLElement | null)?.closest("button")) return;
+      const id = head.dataset.batchHead || "";
+      if (!id) return;
+      if (outreachBatchCollapsed.has(id)) outreachBatchCollapsed.delete(id);
+      else outreachBatchCollapsed.add(id);
+      renderOutreachBatches();
+    };
+    head.addEventListener("click", toggle);
+    head.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      toggle(event);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-batch-approve]", listBox).forEach((button) => button.addEventListener("click", async (event) => {
+    const target = event.currentTarget as HTMLButtonElement;
+    if (target.disabled) return;
+    await confirmStartOutreachBatch(batchIdOf(target), target);
+  }));
+  qsa<HTMLButtonElement>("[data-batch-control]", listBox).forEach((button) => button.addEventListener("click", (event) => {
+    const target = event.currentTarget as HTMLButtonElement;
+    void controlOutreachBatch(batchIdOf(target), (target.dataset.batchAction || "cancel") as "pause" | "resume" | "cancel", target);
+  }));
+  // 二级行：编辑 / 移出 / 恢复 / 开发信过程
+  qsa<HTMLButtonElement>("[data-item-edit]", listBox).forEach((button) => button.addEventListener("click", (event) => {
+    const target = event.currentTarget as HTMLButtonElement;
+    openOutreachItemEditor(batchIdOf(target), target.dataset.itemEdit || "");
+  }));
+  qsa<HTMLButtonElement>("[data-item-remove]", listBox).forEach((button) => button.addEventListener("click", (event) => {
+    const target = event.currentTarget as HTMLButtonElement;
+    void updateOutreachBatchItem(batchIdOf(target), "remove", target.dataset.itemRemove || "");
+  }));
+  qsa<HTMLButtonElement>("[data-item-restore]", listBox).forEach((button) => button.addEventListener("click", (event) => {
+    const target = event.currentTarget as HTMLButtonElement;
+    void updateOutreachBatchItem(batchIdOf(target), "restore", target.dataset.itemRestore || "");
+  }));
+  qsa<HTMLButtonElement>("[data-item-journey]", listBox).forEach((button) => button.addEventListener("click", (event) => {
+    const target = event.currentTarget as HTMLButtonElement;
+    void openOutreachCustomerJourney(
+      (target.dataset.itemJourneyType || "prospect_candidate") as OutreachJourneyEntityType,
+      target.dataset.itemJourney || "",
+      target.dataset.itemCompany || "",
+      "outreach-batches"
+    );
+  }));
+  qs<HTMLButtonElement>("#obEmptyGotoProspectButton", listBox)?.addEventListener("click", () => activateNavView("lead-finder"));
+}
+
+/** 确认开始发送：把"冻结放行"的后果用人话讲清楚，再执行 */
+async function confirmStartOutreachBatch(batchId: string, button?: HTMLButtonElement) {
+  const batch = state.outreachBatches.find((item) => item.id === batchId);
+  if (!batch) return;
+  const ok = await confirmAction({
+    title: "确认开始发送",
+    message: "确认后这批开发信会按下方节奏自动投递，期间不需要再人工操作。",
+    consequences: [
+      `共 ${batch.counts.frozen} 封开发信进入自动发送队列`,
+      "所有信件内容即刻锁定，之后不能再修改",
+      `每天最多发 ${batch.policy.dailyLimit} 封，只在 ${batch.policy.sendWindowStartHour}:00–${batch.policy.sendWindowEndHour}:00 发送`,
+      batch.policy.stopOnReply ? "客户一回复，自动停发给他的其余信件" : "注意：客户回复后不会自动停发，建议谨慎"
+    ],
+    confirmLabel: "开始发送",
+    tone: "normal"
+  });
+  if (ok) await controlOutreachBatch(batchId, "approve", button);
+}
+
+async function controlOutreachBatch(batchId: string, action: "approve" | "pause" | "resume" | "cancel", button?: HTMLButtonElement) {
+  if (!batchId) return;
+  if (button) button.disabled = true;
+  try {
+    const result = await api<{ batch: OutreachBatchView }>(`/api/prospect-outreach-batches/${encodeURIComponent(batchId)}${action === "approve" ? "/approve" : `/${action}`}`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    const index = state.outreachBatches.findIndex((item) => item.id === batchId);
+    if (index >= 0) state.outreachBatches[index] = result.batch;
+    toast(action === "approve" ? `已开始发送，共 ${result.batch.counts.frozen} 封进入自动投递队列` : action === "pause" ? "批次已暂停，可随时继续" : action === "resume" ? "批次已恢复发送" : "批次已取消");
+    renderOutreachBatches();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "操作失败", "error");
+    if (button) button.disabled = false;
+  }
+}
+
+async function updateOutreachBatchItem(batchId: string, action: "remove" | "restore" | "edit", itemId: string, payload?: { stepIndex: number; subject: string; body: string }) {
+  if (!batchId || !itemId) return;
+  try {
+    const result = await api<{ batch: OutreachBatchView }>(`/api/prospect-outreach-batches/${encodeURIComponent(batchId)}/items/${encodeURIComponent(itemId)}`, {
+      method: "POST",
+      body: JSON.stringify(payload ? { action, ...payload } : { action })
+    });
+    const index = state.outreachBatches.findIndex((item) => item.id === batchId);
+    if (index >= 0) state.outreachBatches[index] = result.batch;
+    renderOutreachBatches();
+    if (action === "edit") toast("邮件内容已更新", "success");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "操作失败", "error");
+  }
+}
+
+/** 冻结前逐封编辑批次邮件（弹窗内编辑所有待发步骤的主题与正文） */
+function openOutreachItemEditor(batchId: string, itemId: string) {
+  const batch = state.outreachBatches.find((item) => item.id === batchId);
+  const item = batch?.items.find((row) => row.id === itemId);
+  if (!batch || !item) return;
+  const pendingSteps = item.steps.filter((step) => step.status === "pending");
+  if (!pendingSteps.length) {
+    toast("该候选没有可编辑的待发步骤", "error");
+    return;
+  }
+  const body = pendingSteps.map((step) => `
+    <div class="form-grid" style="margin-bottom:14px">
+      <label style="grid-column:1/-1">步骤 ${step.index + 1} 主题<textarea id="obEditSubject_${step.index}" rows="2" style="margin-top:4px">${escapeHtml(step.subject)}</textarea></label>
+      <label style="grid-column:1/-1">步骤 ${step.index + 1} 正文<textarea id="obEditBody_${step.index}" rows="8" style="margin-top:4px;font-family:var(--font-mono,monospace);font-size:12px">${escapeHtml(step.body)}</textarea></label>
+    </div>`).join("");
+  const foot = `<button class="btn" data-modal-cancel>取消</button><button class="btn primary" id="obEditSaveButton">保存全部步骤</button>`;
+  openModal(`编辑开发信 · ${outreachItemCompanyLabel(item)}`, body, foot);
+  qs<HTMLButtonElement>("#obEditSaveButton")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    button.disabled = true;
+    try {
+      for (const step of pendingSteps) {
+        const subject = qs<HTMLTextAreaElement>(`#obEditSubject_${step.index}`)?.value.trim() || "";
+        const bodyText = qs<HTMLTextAreaElement>(`#obEditBody_${step.index}`)?.value.trim() || "";
+        await updateOutreachBatchItem(batchId, "edit", itemId, { stepIndex: step.index, subject, body: bodyText });
+      }
+      closeModal();
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+/** 发送策略弹窗（候选/线索共用）：校验通过后回调创建 */
+const OUTREACH_POLICY_PRESETS: Array<{ key: string; label: string; note: string; policy: OutreachPolicyInput }> = [
+  { key: "steady", label: "稳健", note: "新客户首选：每天 20 封 · 3 天一跟进 · 工作时段发送", policy: { dailyLimit: 20, stepIntervalHours: 72, sendWindowStartHour: 9, sendWindowEndHour: 18, stopOnReply: true } },
+  { key: "active", label: "进取", note: "量大时用：每天 50 封 · 2 天一跟进 · 更长发送时段", policy: { dailyLimit: 50, stepIntervalHours: 48, sendWindowStartHour: 8, sendWindowEndHour: 20, stopOnReply: true } }
+];
+
+function openOutreachBatchPolicyModal(count: number, targetLabel: string, onCreate: (policy: OutreachPolicyInput) => Promise<void>) {
+  const body = `
+    <p style="margin:0 0 10px;color:var(--text-secondary,#5f6b7a);font-size:12px">将创建 ${count} 个${targetLabel}的发信批次。先选一个节奏，再按需微调数字；确认发送后这些设置不可再改：</p>
+    <div style="display:grid;gap:8px;margin-bottom:12px" id="obPolicyPresetRow">
+      ${OUTREACH_POLICY_PRESETS.map((preset) => `
+        <label style="display:flex;gap:8px;align-items:flex-start;padding:9px 11px;border:1px solid #dbe4f0;border-radius:8px;cursor:pointer">
+          <input type="radio" name="obPolicyPreset" value="${preset.key}" ${preset.key === "steady" ? "checked" : ""} style="margin-top:2px">
+          <span><b style="font-size:12px;color:#17233d">${preset.label}</b><small style="display:block;margin-top:2px;color:#728099;font-size:10px">${preset.note}</small></span>
+        </label>`).join("")}
+    </div>
+    <div class="form-grid">
+      <label>每天最多发多少封<input id="obPolicyDailyLimit" type="number" min="1" max="200" value="20"><small style="color:#8a96a7;font-size:10px">超出的自动顺延到下一天，防止被对方邮箱判为垃圾邮件</small></label>
+      <label>跟进信间隔多久<input id="obPolicyStepInterval" type="number" min="1" max="720" value="72"><small style="color:#8a96a7;font-size:10px">单位小时：72 = 3 天后再发第 2 封</small></label>
+      <label>发送时段从几点<input id="obPolicyWindowStart" type="number" min="0" max="23" value="9"><small style="color:#8a96a7;font-size:10px">时段外只排队、不发送，避免深夜打扰</small></label>
+      <label>发送时段到几点<input id="obPolicyWindowEnd" type="number" min="1" max="24" value="18"><small style="color:#8a96a7;font-size:10px">0–24 之间的整点</small></label>
+      <label style="grid-column:1/-1;display:flex;gap:8px;align-items:center"><input id="obPolicyStopOnReply" type="checkbox" checked>客户回复后自动停止发给他其余的信（推荐）</label>
+    </div>`;
+  const foot = `<button class="btn" data-modal-cancel>取消</button><button class="btn primary" id="obPolicyCreateButton">创建批次</button>`;
+  openModal(`发送节奏 · ${count} 个${targetLabel}`, body, foot);
+  // 数字微调框需要专属样式（否则吃浏览器原生样式，又大又黑），挂作用域类
+  qs<HTMLElement>("#appModal .modal")?.classList.add("outreach-policy-modal");
+  const applyPreset = (key: string) => {
+    const preset = OUTREACH_POLICY_PRESETS.find((item) => item.key === key);
+    if (!preset) return;
+    qs<HTMLInputElement>("#obPolicyDailyLimit")!.value = String(preset.policy.dailyLimit);
+    qs<HTMLInputElement>("#obPolicyStepInterval")!.value = String(preset.policy.stepIntervalHours);
+    qs<HTMLInputElement>("#obPolicyWindowStart")!.value = String(preset.policy.sendWindowStartHour);
+    qs<HTMLInputElement>("#obPolicyWindowEnd")!.value = String(preset.policy.sendWindowEndHour);
+    qs<HTMLInputElement>("#obPolicyStopOnReply")!.checked = preset.policy.stopOnReply;
+  };
+  qs<HTMLElement>("#obPolicyPresetRow")?.addEventListener("change", (event) => {
+    const target = event.target as HTMLInputElement;
+    if (target.name === "obPolicyPreset" && target.value) applyPreset(target.value);
+  });
+  qs<HTMLButtonElement>("#obPolicyCreateButton")?.addEventListener("click", async (event) => {
+    const createButton = event.currentTarget as HTMLButtonElement;
+    const dailyLimit = Number(qs<HTMLInputElement>("#obPolicyDailyLimit")?.value);
+    const stepIntervalHours = Number(qs<HTMLInputElement>("#obPolicyStepInterval")?.value);
+    const sendWindowStartHour = Number(qs<HTMLInputElement>("#obPolicyWindowStart")?.value);
+    const sendWindowEndHour = Number(qs<HTMLInputElement>("#obPolicyWindowEnd")?.value);
+    const stopOnReply = qs<HTMLInputElement>("#obPolicyStopOnReply")?.checked ?? true;
+    if (!Number.isInteger(dailyLimit) || dailyLimit < 1 || dailyLimit > 200) {
+      toast("「每天最多发多少封」请填 1–200 的整数", "error");
+      return;
+    }
+    if (!Number.isInteger(stepIntervalHours) || stepIntervalHours < 1 || stepIntervalHours > 720) {
+      toast("「跟进信间隔多久」请填 1–720 的整数小时", "error");
+      return;
+    }
+    if (!Number.isInteger(sendWindowStartHour) || sendWindowStartHour < 0 || sendWindowStartHour > 23 || !Number.isInteger(sendWindowEndHour) || sendWindowEndHour < 1 || sendWindowEndHour > 24 || sendWindowStartHour >= sendWindowEndHour) {
+      toast("发送时段需为 0–24 之间的整点，且开始早于结束", "error");
+      return;
+    }
+    createButton.disabled = true;
+    try {
+      await onCreate({ dailyLimit, stepIntervalHours, sendWindowStartHour, sendWindowEndHour, stopOnReply });
+    } finally {
+      createButton.disabled = false;
+    }
+  });
+}
+
+type OutreachPolicyInput = {
+  dailyLimit: number;
+  stepIntervalHours: number;
+  sendWindowStartHour: number;
+  sendWindowEndHour: number;
+  stopOnReply: boolean;
+};
+
+/** 线索批量发信：勾选线索 → 策略弹窗 → targetType=lead 批次 */
+function createLeadOutreachBatchFromSelection() {
+  const ids = [...state.selectedLeadIds];
+  if (!ids.length) {
+    toast("请先勾选要发信的线索（表格第一列勾选框）", "error");
+    return;
+  }
+  const missingEmail = state.leads.filter((lead) => ids.includes(lead.id) && !(lead.email || "").trim()).length;
+  if (missingEmail === ids.length) {
+    toast("勾选的线索都没有邮箱，先补全联系方式", "error");
+    return;
+  }
+  if (missingEmail > 0) toast(`${missingEmail} 条线索没有邮箱，将进入跳过清单`, "error");
+  void openOutreachBatchPolicyModal(ids.length, "线索", async (policy) => {
+    const result = await api<{ batch: OutreachBatchView }>("/api/prospect-outreach-batches", {
+      method: "POST",
+      body: JSON.stringify({ targetType: "lead", leadIds: ids, policy })
+    });
+    state.outreachBatches.unshift(result.batch);
+    state.selectedLeadIds = [];
+    closeModal();
+    toast(`线索批次已创建：${result.batch.counts.frozen} 封待发送${result.batch.counts.skipped ? `，${result.batch.counts.skipped} 位无邮箱/不合格的会被自动跳过` : ""}。回批次页核对后点「确认开始发送」`);
+    activateNavView("outreach-batches", () => renderOutreachBatches());
+  });
+}
+
+/** 从搜客清单勾选创建批次：先弹发送策略设置，确认后创建 */
+function createOutreachBatchFromSelection(button?: HTMLButtonElement) {
+  const ids = [...state.selectedProspectIds];
+  if (!ids.length) {
+    toast("请先在搜客清单勾选要发信的候选", "error");
+    return;
+  }
+  void openOutreachBatchPolicyModal(ids.length, "候选", async (policy) => {
+    const result = await api<{ batch: OutreachBatchView }>("/api/prospect-outreach-batches", {
+      method: "POST",
+      body: JSON.stringify({ targetType: "candidate", candidateIds: ids, policy })
+    });
+    state.outreachBatches.unshift(result.batch);
+    closeModal();
+    toast(`批次已创建：${result.batch.counts.frozen} 封待发送${result.batch.counts.skipped ? `，${result.batch.counts.skipped} 位无邮箱/不合格的会被自动跳过` : ""}。核对好信件内容后点「确认开始发送」`);
+    activateNavView("outreach-batches", () => renderOutreachBatches());
+  });
+}
+
+function bindOutreachBatchesEvents() {
+  const button = qs<HTMLButtonElement>("#outreachBatchRefreshButton");
+  if (!button) return;
+  // 用 onclick 赋值保证幂等（重复绑定不会叠加监听器）；旋转图标至少转 450ms，避免"闪一下就没"
+  button.onclick = async () => {
+    if (button.classList.contains("is-busy")) return;
+    button.classList.add("is-busy");
+    try {
+      await Promise.all([loadOutreachBatches(), loadOutreachPlans()]);
+    } finally {
+      window.setTimeout(() => button.classList.remove("is-busy"), 450);
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 对接中心：对接方管理 + 报文收发 + 报文日志
+// ---------------------------------------------------------------------------
+
+interface ExchangeEndpointView {
+  id: string;
+  name: string;
+  direction: "outbound" | "inbound" | "both";
+  baseUrl: string;
+  authType: "none" | "bearer" | "header";
+  authName: string;
+  authSecret: string;
+  inboundKey: string;
+  extraHeadersJson: string;
+  description: string;
+  onReceive: "log" | "create_lead";
+  enabled: boolean;
+  createdAt: string;
+}
+
+interface ExchangeMessageView {
+  id: string;
+  endpointId: string;
+  endpointName: string;
+  direction: "outbound" | "inbound";
+  topic: string;
+  method: string;
+  url: string;
+  status: "ok" | "failed" | "received";
+  httpStatus: number | null;
+  durationMs: number | null;
+  errorMessage: string;
+  leadId: string;
+  createdAt: string;
+}
+
+let exchangeEndpoints: ExchangeEndpointView[] = [];
+let exchangeMessages: ExchangeMessageView[] = [];
+let exchangeOnlyFailed = false;
+
+const EXCHANGE_DIRECTION_LABEL: Record<string, string> = { outbound: "推送", inbound: "接收", both: "双向" };
+
+function prettyJsonText(text: string): string {
+  if (!text) return "（空）";
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+function copyExchangeText(text: string, label: string) {
+  void navigator.clipboard?.writeText(text).then(
+    () => toast(`${label}已复制`, "success"),
+    () => toast("复制失败，请手动选择复制", "error")
+  );
+}
+
+async function loadExchangeData() {
+  try {
+    const params = new URLSearchParams({ limit: "200" });
+    const endpointFilter = qs<HTMLSelectElement>("#exchangeEndpointFilter")?.value || "";
+    if (endpointFilter) params.set("endpointId", endpointFilter);
+    const directionFilter = qs<HTMLSelectElement>("#exchangeDirectionFilter")?.value || "";
+    if (directionFilter) params.set("direction", directionFilter);
+    if (exchangeOnlyFailed) params.set("onlyFailed", "1");
+    const [endpointResult, messageResult] = await Promise.all([
+      api<{ endpoints: ExchangeEndpointView[] }>("/api/exchange/endpoints"),
+      api<{ messages: ExchangeMessageView[] }>(`/api/exchange/messages?${params.toString()}`)
+    ]);
+    exchangeEndpoints = endpointResult.endpoints || [];
+    exchangeMessages = messageResult.messages || [];
+    renderExchange();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "对接中心数据加载失败", "error");
+  }
+}
+
+function renderExchange() {
+  const endpointBox = qs<HTMLElement>("#exchangeEndpointList");
+  const tbody = qs<HTMLElement>("#exchangeMessagesBody");
+  if (!endpointBox || !tbody) return;
+
+  const totalCell = qs<HTMLElement>("#exchangeEndpointCount");
+  if (totalCell) totalCell.textContent = String(exchangeEndpoints.length);
+  const today = new Date().toDateString();
+  const todayCount = exchangeMessages.filter((item) => new Date(item.createdAt).toDateString() === today).length;
+  const todayCell = qs<HTMLElement>("#exchangeTodayCount");
+  if (todayCell) todayCell.textContent = String(todayCount);
+  const failedCell = qs<HTMLElement>("#exchangeFailedCount");
+  if (failedCell) failedCell.textContent = String(exchangeMessages.filter((item) => item.status === "failed").length);
+  const last = exchangeMessages[0];
+  const lastCell = qs<HTMLElement>("#exchangeLastActive");
+  const lastSource = qs<HTMLElement>("#exchangeLastActiveSource");
+  if (lastCell && lastSource) {
+    if (last) {
+      lastCell.textContent = formatDateTime(last.createdAt);
+      lastSource.textContent = `${last.direction === "outbound" ? "发往" : "来自"} ${last.endpointName || "未知对接方"}`;
+    } else {
+      lastCell.textContent = "—";
+      lastSource.textContent = "暂无收发";
+    }
+  }
+
+  endpointBox.innerHTML = exchangeEndpoints.length ? exchangeEndpoints.map((endpoint) => {
+    const canSend = endpoint.direction !== "inbound" && Boolean(endpoint.baseUrl);
+    const showInbound = endpoint.direction !== "outbound";
+    return `<div class="exchange-endpoint-card ${endpoint.enabled ? "" : "disabled"}">
+      <header><b>${escapeHtml(endpoint.name)}</b><span>${badge(EXCHANGE_DIRECTION_LABEL[endpoint.direction] || endpoint.direction, endpoint.direction === "inbound" ? "green" : "blue")}${endpoint.enabled ? "" : badge("已停用", "gray")}</span></header>
+      ${endpoint.baseUrl ? `<div class="exchange-endpoint-url">推送地址：${escapeHtml(endpoint.baseUrl)}</div>` : `<div class="exchange-endpoint-url">未配置推送地址</div>`}
+      ${showInbound ? `<div class="exchange-inbound-url"><span>接收地址：${escapeHtml(`${location.origin}/api/exchange/in/${endpoint.inboundKey}`)}</span><button class="btn" type="button" data-exchange-copy-inbound="${escapeHtml(endpoint.inboundKey)}">复制</button></div>` : ""}
+      ${showInbound ? `<div class="exchange-endpoint-desc">${endpoint.onReceive === "create_lead" ? badge("接收后自动建线索", "green") : badge("接收仅记录报文", "gray")}</div>` : ""}
+      ${endpoint.description ? `<div class="exchange-endpoint-desc">${escapeHtml(endpoint.description)}</div>` : ""}
+      <footer>
+        ${canSend ? `<button class="btn primary" type="button" data-exchange-send="${escapeHtml(endpoint.id)}">发送报文</button>` : ""}
+        <button class="btn" type="button" data-exchange-edit="${escapeHtml(endpoint.id)}">编辑</button>
+        <button class="btn danger subtle" type="button" data-exchange-delete="${escapeHtml(endpoint.id)}">删除</button>
+      </footer>
+    </div>`;
+  }).join("") : `<div class="exchange-empty" style="grid-column:1/-1">还没有对接方。点右上角「新建对接」登记第一个外部系统：<br>填对方系统的接收地址，就能推送报文；登记后系统会生成一个接收地址，对方也能把报文推进来。</div>`;
+
+  const endpointFilter = qs<HTMLSelectElement>("#exchangeEndpointFilter");
+  if (endpointFilter) {
+    const current = endpointFilter.value;
+    endpointFilter.innerHTML = `<option value="">全部对接方</option>${exchangeEndpoints.map((endpoint) => `<option value="${escapeHtml(endpoint.id)}">${escapeHtml(endpoint.name)}</option>`).join("")}`;
+    if ([...endpointFilter.options].some((option) => option.value === current)) endpointFilter.value = current;
+  }
+
+  tbody.innerHTML = exchangeMessages.length ? exchangeMessages.map((item) => {
+    const directionLabel = item.direction === "outbound" ? `<span class="exchange-dir-badge outbound">↑ 发出</span>` : `<span class="exchange-dir-badge inbound">↓ 接收</span>`;
+    const statusBadge = item.status === "ok" ? badge("成功", "green") : item.status === "failed" ? badge("失败", "red") : badge("已接收", "green");
+    const leadBadge = item.leadId ? badge("已建线索", "green") : "";
+    return `<tr data-exchange-message="${escapeHtml(item.id)}" style="cursor:pointer">
+      <td>${escapeHtml(formatDateTime(item.createdAt))}</td>
+      <td>${directionLabel}</td>
+      <td>${escapeHtml(item.endpointName || "—")}</td>
+      <td>${escapeHtml(item.topic || "—")}</td>
+      <td>${statusBadge}${leadBadge ? ` ${leadBadge}` : ""}</td>
+      <td>${item.httpStatus ?? "—"}</td>
+      <td>${item.durationMs != null ? `${item.durationMs}ms` : "—"}</td>
+      <td><button class="btn tiny" type="button" data-exchange-detail="${escapeHtml(item.id)}">详情</button></td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="8" class="empty-cell">暂无报文。配置对接方后点「发送报文」，或把接收地址交给对方系统，收发都会记录在这里。</td></tr>`;
+
+  qsa<HTMLButtonElement>("[data-exchange-send]", endpointBox).forEach((button) => button.addEventListener("click", () => {
+    const endpoint = exchangeEndpoints.find((item) => item.id === button.dataset.exchangeSend);
+    if (endpoint) openExchangeSendModal(endpoint);
+  }));
+  qsa<HTMLButtonElement>("[data-exchange-edit]", endpointBox).forEach((button) => button.addEventListener("click", () => {
+    const endpoint = exchangeEndpoints.find((item) => item.id === button.dataset.exchangeEdit);
+    if (endpoint) openExchangeEndpointModal(endpoint);
+  }));
+  qsa<HTMLButtonElement>("[data-exchange-delete]", endpointBox).forEach((button) => button.addEventListener("click", () => {
+    const endpoint = exchangeEndpoints.find((item) => item.id === button.dataset.exchangeDelete);
+    if (endpoint) void deleteExchangeEndpoint(endpoint);
+  }));
+  qsa<HTMLButtonElement>("[data-exchange-copy-inbound]", endpointBox).forEach((button) => button.addEventListener("click", () => {
+    copyExchangeText(`${location.origin}/api/exchange/in/${button.dataset.exchangeCopyInbound}`, "接收地址");
+  }));
+  qsa<HTMLButtonElement>("[data-exchange-detail]", tbody).forEach((button) => button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    void openExchangeMessageDetail(button.dataset.exchangeDetail || "");
+  }));
+  qsa<HTMLTableRowElement>("[data-exchange-message]", tbody).forEach((row) => row.addEventListener("click", () => {
+    void openExchangeMessageDetail(row.dataset.exchangeMessage || "");
+  }));
+}
+
+function openExchangeEndpointModal(endpoint?: ExchangeEndpointView) {
+  const editing = Boolean(endpoint);
+  const body = `
+    <p class="modal-hint">对接方 = 一个外部系统的收发配置。「推送」= 我方主动发报文给对方；「接收」= 对方按系统生成的接收地址推送进来；可双向。</p>
+    <div class="form-grid">
+      <div class="form-field"><label>名称 *</label><input id="exchangeNameInput" value="${escapeHtml(endpoint?.name || "")}" placeholder="例如：金蝶云 ERP"></div>
+      <div class="form-field"><label>方向</label><select id="exchangeDirectionInput">
+        <option value="outbound" ${endpoint?.direction === "outbound" ? "selected" : ""}>推送（我方 → 对方）</option>
+        <option value="inbound" ${endpoint?.direction === "inbound" ? "selected" : ""}>接收（对方 → 我方）</option>
+        <option value="both" ${endpoint?.direction === "both" ? "selected" : ""}>双向</option>
+      </select></div>
+      <div class="form-field full"><label>推送地址（对方的接收 URL）</label><input id="exchangeBaseUrlInput" value="${escapeHtml(endpoint?.baseUrl || "")}" placeholder="https://api.example.com/webhook/goodjob"></div>
+      <div class="form-field"><label>鉴权方式</label><select id="exchangeAuthTypeInput">
+        <option value="none" ${endpoint?.authType === "none" ? "selected" : ""}>无</option>
+        <option value="bearer" ${endpoint?.authType === "bearer" ? "selected" : ""}>Bearer Token</option>
+        <option value="header" ${endpoint?.authType === "header" ? "selected" : ""}>自定义请求头</option>
+      </select></div>
+      <div class="form-field"><label>自定义头名称（鉴权方式=自定义请求头时填）</label><input id="exchangeAuthNameInput" value="${escapeHtml(endpoint?.authName || "")}" placeholder="例如 X-Api-Key"></div>
+      <div class="form-field full"><label>鉴权密钥 / Token</label><input id="exchangeAuthSecretInput" type="password" value="${escapeHtml(endpoint?.authSecret || "")}" placeholder="对方系统分配的密钥"></div>
+      <div class="form-field full"><label>附加请求头（JSON，可选）</label><input id="exchangeExtraHeadersInput" value="${escapeHtml(endpoint?.extraHeadersJson === "{}" ? "" : endpoint?.extraHeadersJson || "")}" placeholder='{"X-Tenant":"goodjob"}'></div>
+      <div class="form-field full"><label>描述</label><input id="exchangeDescriptionInput" value="${escapeHtml(endpoint?.description || "")}" placeholder="对接内容、负责人、注意事项等"></div>
+      <div class="form-field full"><label>接收处理（仅接收/双向方向生效）</label><select id="exchangeOnReceiveInput">
+        <option value="log" ${(endpoint?.onReceive || "log") === "log" ? "selected" : ""}>仅记录报文（默认）</option>
+        <option value="create_lead" ${endpoint?.onReceive === "create_lead" ? "selected" : ""}>自动创建线索（报文含公司名即建线索，重复自动关联）</option>
+      </select><small style="color:var(--text-tertiary,#8a94a6);font-size:11px;display:block;margin-top:4px">开启后，对方推来的报文会解析公司/联系人/邮箱等字段直接进入「线索」，并保留原始报文血缘。</small></div>
+      <label class="form-field full" style="display:flex;gap:8px;align-items:center"><input id="exchangeEnabledInput" type="checkbox" ${!endpoint || endpoint.enabled ? "checked" : ""}>启用该对接方</label>
+    </div>`;
+  const foot = `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="exchangeSaveEndpointButton">${editing ? "保存修改" : "创建对接方"}</button>`;
+  openModal(editing ? `编辑对接方 · ${endpoint!.name}` : "新建对接方", body, foot, { closeOnBackdrop: false });
+  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  qs<HTMLButtonElement>("#exchangeSaveEndpointButton")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const name = qs<HTMLInputElement>("#exchangeNameInput")?.value.trim() || "";
+    if (!name) {
+      toast("请填写名称", "error");
+      return;
+    }
+    let extraHeadersJson = "{}";
+    const extraRaw = qs<HTMLInputElement>("#exchangeExtraHeadersInput")?.value.trim() || "";
+    if (extraRaw) {
+      try {
+        extraHeadersJson = JSON.stringify(JSON.parse(extraRaw));
+      } catch {
+        toast("附加请求头不是合法 JSON，例如 {\"X-Tenant\":\"goodjob\"}", "error");
+        return;
+      }
+    }
+    const payload = {
+      name,
+      direction: qs<HTMLSelectElement>("#exchangeDirectionInput")?.value || "outbound",
+      baseUrl: qs<HTMLInputElement>("#exchangeBaseUrlInput")?.value.trim() || "",
+      authType: qs<HTMLSelectElement>("#exchangeAuthTypeInput")?.value || "none",
+      authName: qs<HTMLInputElement>("#exchangeAuthNameInput")?.value.trim() || "",
+      authSecret: qs<HTMLInputElement>("#exchangeAuthSecretInput")?.value || "",
+      extraHeadersJson,
+      description: qs<HTMLInputElement>("#exchangeDescriptionInput")?.value.trim() || "",
+      onReceive: qs<HTMLSelectElement>("#exchangeOnReceiveInput")?.value === "create_lead" && (qs<HTMLSelectElement>("#exchangeDirectionInput")?.value || "outbound") !== "outbound" ? "create_lead" : "log",
+      enabled: qs<HTMLInputElement>("#exchangeEnabledInput")?.checked ?? true
+    };
+    button.disabled = true;
+    try {
+      if (editing) {
+        await api(`/api/exchange/endpoints/${encodeURIComponent(endpoint!.id)}`, { method: "PATCH", body: JSON.stringify(payload) });
+        toast("对接方已保存", "success");
+      } else {
+        await api("/api/exchange/endpoints", { method: "POST", body: JSON.stringify(payload) });
+        toast("对接方已创建", "success");
+      }
+      closeModal();
+      await loadExchangeData();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "保存失败", "error");
+      button.disabled = false;
+    }
+  });
+}
+
+async function deleteExchangeEndpoint(endpoint: ExchangeEndpointView) {
+  const ok = await confirmAction({
+    title: "删除对接方",
+    message: `确定删除对接方「${endpoint.name}」吗？`,
+    consequences: ["该对接方的配置与接收地址会立即失效", "已产生的报文日志会保留，但无法再按该对接方筛选"],
+    confirmLabel: "删除",
+    tone: "danger"
+  });
+  if (!ok) return;
+  try {
+    await api(`/api/exchange/endpoints/${encodeURIComponent(endpoint.id)}`, { method: "DELETE" });
+    toast("对接方已删除", "success");
+    await loadExchangeData();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "删除失败", "error");
+  }
+}
+
+function openExchangeSendModal(endpoint: ExchangeEndpointView) {
+  const body = `
+    <p class="modal-hint">向「${escapeHtml(endpoint.name)}」推送一条报文。报文体为 JSON，发送后可在报文日志查看对方返回的完整响应。</p>
+    <div class="form-grid">
+      <div class="form-field"><label>主题（topic，用于日志归类）</label><input id="exchangeSendTopic" value="test" placeholder="例如 order.created"></div>
+      <div class="form-field"><label>HTTP 方法</label><select id="exchangeSendMethod"><option>POST</option><option>PUT</option><option>PATCH</option></select></div>
+      <div class="form-field full"><label>报文体（JSON）</label><textarea id="exchangeSendBody" rows="10" style="font-family:var(--font-mono,monospace);font-size:12px">${escapeHtml('{\n  "event": "customer.created",\n  "name": "示例客户",\n  "country": "德国"\n}')}</textarea></div>
+    </div>`;
+  const foot = `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="exchangeSendSubmitButton">发送报文</button>`;
+  openModal(`发送报文 · ${endpoint.name}`, body, foot, { closeOnBackdrop: false });
+  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  qs<HTMLButtonElement>("#exchangeSendSubmitButton")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    let payload: unknown;
+    const raw = qs<HTMLTextAreaElement>("#exchangeSendBody")?.value.trim() || "";
+    if (raw) {
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        toast("报文体不是合法 JSON", "error");
+        return;
+      }
+    }
+    button.disabled = true;
+    try {
+      const result = await api<{ message: ExchangeMessageView & { responseBody: string; errorMessage: string } }>(
+        `/api/exchange/endpoints/${encodeURIComponent(endpoint.id)}/send`,
+        { method: "POST", body: JSON.stringify({ topic: qs<HTMLInputElement>("#exchangeSendTopic")?.value.trim() || "message", method: qs<HTMLSelectElement>("#exchangeSendMethod")?.value || "POST", payload }) }
+      );
+      closeModal();
+      const ok = result.message.status === "ok";
+      toast(ok ? `报文已送达（HTTP ${result.message.httpStatus}，${result.message.durationMs}ms）` : `发送失败：${result.message.errorMessage || `HTTP ${result.message.httpStatus}`}`, ok ? "success" : "error");
+      const detail = `<div class="exchange-msg-detail">
+        <div><div class="exchange-detail-head"><b>对方响应（HTTP ${result.message.httpStatus ?? "—"}）</b></div><pre>${escapeHtml(prettyJsonText(result.message.responseBody))}</pre></div>
+      </div>`;
+      openModal(ok ? "发送成功" : "发送失败", detail, `<button class="btn" data-modal-close>关闭</button><button class="btn primary" id="exchangeAfterSendLog">查看报文日志</button>`);
+      qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+      qs<HTMLButtonElement>("#exchangeAfterSendLog")?.addEventListener("click", () => {
+        closeModal();
+        void loadExchangeData();
+      });
+      await loadExchangeData();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "发送失败", "error");
+      button.disabled = false;
+    }
+  });
+}
+
+async function openExchangeMessageDetail(messageId: string) {
+  try {
+    const result = await api<{ message: ExchangeMessageView & { requestHeadersJson: string; requestBody: string; responseHeadersJson: string; responseBody: string; url: string } }>(
+      `/api/exchange/messages/${encodeURIComponent(messageId)}`
+    );
+    const message = result.message;
+    const detail = `<div class="exchange-msg-detail">
+      <div><div class="exchange-detail-head"><b>基本信息</b></div>
+        <pre>${escapeHtml(`方向：${message.direction === "outbound" ? "发出 → 对方" : "对方 → 接收"}\n对接方：${message.endpointName || "—"}\n主题：${message.topic || "—"}\n${message.method} ${message.url}\n状态：${message.status === "ok" ? "成功" : message.status === "failed" ? "失败" : "已接收"} · HTTP ${message.httpStatus ?? "—"} · ${message.durationMs != null ? `${message.durationMs}ms` : "—"}${message.leadId ? `\n建线索：${message.leadId}${message.status === "received" ? "（收到的报文已自动进入线索）" : ""}` : ""}${message.errorMessage ? `\n错误：${message.errorMessage}` : ""}`)}</pre></div>
+      <div><div class="exchange-detail-head"><b>请求头</b><button class="btn" type="button" data-exchange-copy="${escapeHtml(message.id)}" data-copy-part="request-headers">复制</button></div><pre>${escapeHtml(prettyJsonText(message.requestHeadersJson))}</pre></div>
+      <div><div class="exchange-detail-head"><b>请求体（我方报文）</b><button class="btn" type="button" data-exchange-copy="${escapeHtml(message.id)}" data-copy-part="request-body">复制</button></div><pre>${escapeHtml(prettyJsonText(message.requestBody))}</pre></div>
+      <div><div class="exchange-detail-head"><b>响应头</b></div><pre>${escapeHtml(prettyJsonText(message.responseHeadersJson))}</pre></div>
+      <div><div class="exchange-detail-head"><b>响应体（对方报文）</b><button class="btn" type="button" data-exchange-copy="${escapeHtml(message.id)}" data-copy-part="response-body">复制</button></div><pre>${escapeHtml(prettyJsonText(message.responseBody))}</pre></div>
+    </div>`;
+    openModal(`报文详情 · ${message.topic || message.id}`, detail, `<button class="btn primary" data-modal-close>关闭</button>`);
+    qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+    qsa<HTMLButtonElement>("[data-exchange-copy]").forEach((button) => button.addEventListener("click", async () => {
+      const fresh = await api<{ message: ExchangeMessageView & { requestHeadersJson: string; requestBody: string; responseBody: string } }>(
+        `/api/exchange/messages/${encodeURIComponent(messageId)}`
+      );
+      const part = button.dataset.copyPart;
+      const text = part === "request-headers" ? prettyJsonText(fresh.message.requestHeadersJson)
+        : part === "request-body" ? prettyJsonText(fresh.message.requestBody)
+        : prettyJsonText(fresh.message.responseBody);
+      copyExchangeText(text, "报文内容");
+    }));
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "报文详情加载失败", "error");
+  }
+}
+
+function bindExchangeEvents() {
+  qs<HTMLButtonElement>("#exchangeCreateButton")?.addEventListener("click", () => openExchangeEndpointModal());
+  qs<HTMLButtonElement>("#exchangeRefreshButton")?.addEventListener("click", () => void loadExchangeData());
+  qs<HTMLSelectElement>("#exchangeEndpointFilter")?.addEventListener("change", () => void loadExchangeData());
+  qs<HTMLSelectElement>("#exchangeDirectionFilter")?.addEventListener("change", () => void loadExchangeData());
+  qs<HTMLButtonElement>("#exchangeFailedToggle")?.addEventListener("click", (event) => {
+    exchangeOnlyFailed = !exchangeOnlyFailed;
+    (event.currentTarget as HTMLButtonElement).classList.toggle("primary", exchangeOnlyFailed);
+    void loadExchangeData();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// W5 · 销售技能中心：内置技能 + 超级销售归拢视图
+// ---------------------------------------------------------------------------
+
+type SalesSkillCenterTab = "skills" | "sales";
+let salesSkillCenterTab: SalesSkillCenterTab = "skills";
+
+/** 解析 SKILL.md 的「执行流程 / 完成标准 / 失败恢复」三段 */
+function skillInstructionsSections(instructions: string) {
+  const wanted = ["执行流程", "完成标准", "失败恢复"];
+  const sections: Array<{ title: string; items: string[] }> = [];
+  for (const title of wanted) {
+    const match = instructions.match(new RegExp(`##\\s*${title}[\\s\\S]*?(?=\\n##\\s|$)`, "u"));
+    if (!match) continue;
+    const items = match[0]
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => /^\d+[.、)]|^[-*•]/u.test(line))
+      .map((line) => line.replace(/^\d+[.、)]\s*|^[-*•]\s*/u, ""))
+      .filter(Boolean);
+    sections.push({ title, items });
+  }
+  return sections;
+}
+
+function renderSalesSkillCenter() {
+  const skillsButton = qs<HTMLButtonElement>("#sscTabSkillsButton");
+  const salesButton = qs<HTMLButtonElement>("#sscTabSalesButton");
+  const skillsPane = qs<HTMLElement>("#sscSkillsPane");
+  const salesPane = qs<HTMLElement>("#sscSalesPane");
+  if (!skillsButton || !salesButton || !skillsPane || !salesPane) return;
+  skillsButton.classList.toggle("primary", salesSkillCenterTab === "skills");
+  salesButton.classList.toggle("primary", salesSkillCenterTab === "sales");
+  skillsPane.hidden = salesSkillCenterTab !== "skills";
+  salesPane.hidden = salesSkillCenterTab !== "sales";
+  if (salesSkillCenterTab === "skills") renderSalesSkillCenterSkills();
+  else renderSalesSkillCenterSales();
+}
+
+function renderSalesSkillCenterSkills() {
+  const box = qs<HTMLElement>("#sscSkillCards");
+  if (!box) return;
+  const systemSkills = state.agentSkills.filter((skill) => skill.resourceKind !== "download");
+  if (!systemSkills.length) {
+    box.innerHTML = `<div class="empty-cell">技能目录为空，请点击刷新。</div>`;
+    return;
+  }
+  box.innerHTML = systemSkills.map((skill) => {
+    const sections = skillInstructionsSections(skill.instructions || "");
+    return `<article class="ssc-card">
+      <div class="ssc-card-head"><h3>${escapeHtml(skill.name)}</h3><small>V${escapeHtml(skill.version)} · ${escapeHtml(skill.category)}</small></div>
+      <div>${badge(skill.status === "active" ? "启用" : skill.status, skill.status === "active" ? "green" : "gray")} <small>${(skill.toolRefs || []).length} 个依赖工具</small></div>
+      <p>${escapeHtml(skill.description)}</p>
+      <div class="ssc-tags">${(skill.triggers || []).slice(0, 5).map((trigger) => `<span class="ssc-tag">「${escapeHtml(trigger)}」</span>`).join("")}</div>
+      ${sections.length ? `<details><summary>查看执行指引</summary>${sections.map((section) => `<section><h4>${escapeHtml(section.title)}</h4><ol>${section.items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol></section>`).join("")}</details>` : ""}
+    </article>`;
+  }).join("");
+}
+
+function renderSalesSkillCenterSales() {
+  const metricsBox = qs<HTMLElement>("#sscSalesMetrics");
+  const box = qs<HTMLElement>("#sscSalesCards");
+  if (!metricsBox || !box) return;
+  const published = state.salesDistillations.filter((item) => item.status === "published");
+  const totalApplications = state.salesPlaybookActivations.reduce((sum, item) => sum + (item.applicationCount || 0), 0);
+  const totalTasks = state.salesPlaybookActivations.reduce((sum, item) => sum + (item.taskCount || 0), 0);
+  const activeCount = state.salesPlaybookActivations.filter((item) => item.status === "active").length;
+  metricsBox.innerHTML = `
+    <div><span>已发布打法</span><b>${published.length}</b></div>
+    <div><span>打法应用次数</span><b>${totalApplications}</b></div>
+    <div><span>生成待办数</span><b>${totalTasks}</b></div>`;
+  if (!published.length) {
+    box.innerHTML = `<div class="empty-cell">暂无已发布打法。到「超级销售」页选择标杆销售做蒸馏与发布。</div>`;
+    return;
+  }
+  const canPublish = hasIamCapability("training.manage");
+  box.innerHTML = published.map((item) => {
+    const activation = state.salesPlaybookActivations.find((entry) => entry.distillationId === item.id);
+    const active = activation?.status === "active";
+    const applyButton = active
+      ? `<button class="btn" type="button" data-ssc-playbook-pause="${escapeHtml(activation!.id)}">停用当前打法</button>`
+      : `<button class="btn primary" type="button" data-ssc-playbook-activate="${escapeHtml(item.id)}">应用到我的 Agent</button>`;
+    return `<article class="ssc-card">
+      <div class="ssc-card-head"><h3>${escapeHtml(item.sourceUserName)}</h3><small>${escapeHtml(item.maturity ? salesTrainingMaturityLabel(item.maturity) : "历史能力")} · ${item.sampleCount || 0} 样本 · 评测 ${item.evaluationScore || "-"}</small></div>
+      <div class="ssc-sales-metrics" style="margin:0;border:none;background:none;grid-template-columns:repeat(3,minmax(0,1fr));">
+        <div style="border:1px solid #e4eaf3;border-radius:8px;padding:8px 10px;"><span>应用次数</span><b style="font-size:14px;">${activation?.applicationCount || 0}</b></div>
+        <div style="border:1px solid #e4eaf3;border-radius:8px;padding:8px 10px;"><span>生成待办</span><b style="font-size:14px;">${activation?.taskCount || 0}</b></div>
+        <div style="border:1px solid #e4eaf3;border-radius:8px;padding:8px 10px;"><span>状态</span><b style="font-size:14px;">${active ? "应用中" : "未激活"}</b></div>
+      </div>
+      <div>${item.playbook.map((step) => `<div class="ssc-playbook-row"><b>${escapeHtml(step.stage)}</b><p>${escapeHtml(step.action)}</p></div>`).join("")}</div>
+      <div class="head-actions">${canPublish && item.status !== "published" ? `<button class="btn" type="button" data-ssc-publish="${escapeHtml(item.id)}">发布</button>` : ""}${applyButton}</div>
+    </article>`;
+  }).join("");
+  qsa<HTMLButtonElement>("[data-ssc-playbook-activate]", box).forEach((button) => button.addEventListener("click", () => void activateSalesPlaybookFromUi(button.dataset.sscPlaybookActivate || "", button)));
+  qsa<HTMLButtonElement>("[data-ssc-playbook-pause]", box).forEach((button) => button.addEventListener("click", () => void pauseSalesPlaybookFromUi(button.dataset.sscPlaybookPause || "", button)));
+  qsa<HTMLButtonElement>("[data-ssc-publish]", box).forEach((button) => button.addEventListener("click", () => void publishSalesDistillationFromUi(button.dataset.sscPublish || "", button)));
+}
+
+async function loadSalesSkillCenter() {
+  salesSkillCenterTab = "skills";
+  try {
+    if (!state.agentSkills.length) await loadAgentSkills(false);
+  } catch { /* 技能加载失败不阻塞 */ }
+  void loadSalesDistillationWorkspace().catch(() => undefined);
+  renderSalesSkillCenter();
+}
+
+function bindSalesSkillCenterEvents() {
+  qs<HTMLButtonElement>("#sscTabSkillsButton")?.addEventListener("click", () => { salesSkillCenterTab = "skills"; renderSalesSkillCenter(); });
+  qs<HTMLButtonElement>("#sscTabSalesButton")?.addEventListener("click", () => { salesSkillCenterTab = "sales"; renderSalesSkillCenter(); });
+  qs<HTMLButtonElement>("#sscRefreshButton")?.addEventListener("click", () => {
+    state.agentSkills = [];
+    void loadSalesSkillCenter();
+  });
+}
 
 async function loadAgentRuns() {
   try {
     const conversationId = ensureAgentConversationId();
-    const [result, sequenceResult, maintenanceResult] = await Promise.all([
+    const [result, sequenceResult, maintenanceResult, playbookResult] = await Promise.all([
       api<{ runs: AgentRun[] }>(`/api/agent/runs?limit=50&conversationId=${encodeURIComponent(conversationId)}`),
       api<{ sequences: OutreachSequence[] }>("/api/agent/outreach-sequences?limit=20"),
-      api<{ watches: CustomerMaintenanceWatch[] }>("/api/agent/customer-maintenance?limit=20")
+      api<{ watches: CustomerMaintenanceWatch[] }>("/api/agent/customer-maintenance?limit=20"),
+      api<{ distillations: SalesDistillation[]; activations: SalesPlaybookActivation[] }>("/api/agent/sales-distillation")
     ]);
     state.agentRuns = result.runs;
     state.outreachSequences = sequenceResult.sequences;
     state.customerMaintenanceWatches = maintenanceResult.watches;
+    state.salesDistillations = playbookResult.distillations || [];
+    state.salesPlaybookActivations = playbookResult.activations || [];
     state.agentRun = result.runs[0] || null;
     state.agentMissionCheckpoints = [];
     state.agentCheckpointRunId = "";
@@ -5439,14 +8989,17 @@ async function loadAgentRun(runId: string) {
 async function refreshAgentRun(runId: string, quiet: boolean) {
   if (!runId || (!quiet && state.agentLoading)) return;
   try {
-    const [result, sequenceResult, maintenanceResult] = await Promise.all([
+    const [result, sequenceResult, maintenanceResult, playbookResult] = await Promise.all([
       api<{ run: AgentRun }>(`/api/agent/runs/${encodeURIComponent(runId)}`),
       api<{ sequences: OutreachSequence[] }>("/api/agent/outreach-sequences?limit=20"),
-      api<{ watches: CustomerMaintenanceWatch[] }>("/api/agent/customer-maintenance?limit=20")
+      api<{ watches: CustomerMaintenanceWatch[] }>("/api/agent/customer-maintenance?limit=20"),
+      api<{ distillations: SalesDistillation[]; activations: SalesPlaybookActivation[] }>("/api/agent/sales-distillation")
     ]);
     state.agentRun = result.run;
     state.outreachSequences = sequenceResult.sequences;
     state.customerMaintenanceWatches = maintenanceResult.watches;
+    state.salesDistillations = playbookResult.distillations || [];
+    state.salesPlaybookActivations = playbookResult.activations || [];
     state.agentRuns = [result.run, ...state.agentRuns.filter((item) => item.id !== result.run.id)];
     renderAgent(result.run);
     void loadAgentCheckpoints(result.run.id);
@@ -5722,7 +9275,7 @@ function openModal(title: string, body: string, foot: string, options: ModalOpti
   document.body.style.overflow = "hidden";
   modalRoot.setAttribute("role", "dialog");
   modalRoot.removeAttribute("aria-describedby");
-  qs<HTMLElement>("#appModal .modal")?.classList.remove("customs-workspace-modal", "agent-memory-modal", "agent-knowledge-modal", "confirm-modal", "trade-document-import-modal", "document-asset-editor-modal", "deal-editor-modal", "ac-guide-modal");
+  qs<HTMLElement>("#appModal .modal")?.classList.remove("customs-workspace-modal", "agent-memory-modal", "agent-knowledge-modal", "confirm-modal", "advanced-excel-modal", "excel-preview-modal", "trade-document-import-modal", "document-asset-editor-modal", "deal-editor-modal", "ac-guide-modal", "outreach-policy-modal", "outreach-plan-detail-modal", "outreach-plan-create-modal", "sender-mailbox-modal");
   qs("#modalTitle")!.textContent = title;
   qs<HTMLElement>("#modalDescription")!.textContent = title.includes("删除") || title.includes("停用") ? "此操作可能影响现有业务数据" : "填写信息后保存，随时可以关闭此窗口";
   qs("#modalBody")!.innerHTML = body;
@@ -5966,7 +9519,12 @@ const viewPermissionRequirements: Record<string, string> = {
   "prospect-list": "prospect.read",
   "ai-agent": "agent.use",
   "agent-skills": "agent.use",
+  "sales-skill-center": "agent.use",
+  "maintenance-center": "customer.read",
+  "outreach-batches": "prospect.read",
+  "outreach-journey": "prospect.read",
   "integration-center": "integration.read",
+  exchange: "integration.read",
   leads: "lead.read",
   customers: "customer.read",
   "customer-pool": "customer.pool.claim",
@@ -5984,6 +9542,7 @@ const viewPermissionRequirements: Record<string, string> = {
   knowledge: "training.read",
   exam: "training.read",
   "question-bank": "training.manage",
+  "sales-distillation": "training.read",
   products: "product.read",
   shipments: "shipment.read",
   "member-management": "member.read",
@@ -6001,16 +9560,15 @@ function hasIamCapability(permissionCode: string) {
   return Boolean(state.iamCapabilities?.permissions[permissionCode]?.length);
 }
 
+function isPlatformOperator(user = state.user) {
+  return Boolean(user && (user.role === "super_admin" || state.iamCapabilities?.source === "platform" || user.iamSource === "platform"));
+}
+
 function canAccessWorkspaceView(view: string, user = state.user) {
   if (!user) return false;
-  if (state.iamCapabilities?.source === "platform") {
-    if (isAccessControlView(view) && user.role === "super_admin") {
-      return view === "permission-audit"
-        ? hasIamCapability("platform.audit.read") && hasIamCapability("platform.tenant.metadata.read")
-        : hasIamCapability("platform.tenant.metadata.read");
-    }
-    return (view === "platform-operations" && hasIamCapability("platform.dashboard.read"))
-      || (view === "integration-center" && hasIamCapability("platform.integration.connector.review"));
+  if (isPlatformOperator(user)) {
+    return view === "platform-operations"
+      && (!state.iamCapabilities || hasIamCapability("platform.dashboard.read"));
   }
   if (isAccessControlView(view) && !isSystemAdministrator(user)) return false;
   const requiredPermission = viewPermissionRequirements[view];
@@ -6021,7 +9579,7 @@ function canAccessWorkspaceView(view: string, user = state.user) {
 }
 
 function syncWorkspaceAccess(user = state.user) {
-  document.body.classList.toggle("platform-mode", state.iamCapabilities?.source === "platform");
+  document.body.classList.toggle("platform-mode", isPlatformOperator(user));
   qsa<HTMLElement>("[data-admin-only]").forEach((node) => {
     node.hidden = !isSystemAdministrator(user);
   });
@@ -6043,7 +9601,7 @@ function syncWorkspaceAccess(user = state.user) {
   openWorkspaceTabs = openWorkspaceTabs.filter((view) => !restrictedViews.has(view));
   workspaceTabHistory = workspaceTabHistory.filter((view) => !restrictedViews.has(view));
   const activeRestrictedView = [...restrictedViews].find((view) => qs<HTMLElement>(`#${CSS.escape(view)}`)?.classList.contains("active"));
-  if (activeRestrictedView) activateNavView("dashboard");
+  if (activeRestrictedView) activateNavView(isPlatformOperator(user) ? "platform-operations" : "dashboard");
 }
 
 function syncTrainingManagementUi(user = state.user) {
@@ -6158,6 +9716,223 @@ function renderProfile(user = state.user) {
   updateProfileSmtpHints(user);
   renderEmailConfigurationReminders();
   void loadCompanyProfile();
+  void loadSenderMailboxes();
+  void loadEmailTrackingConfig();
+}
+
+// ---------------------------------------------------------------------------
+// 发件邮箱池：登记多个 SMTP 发件邮箱，自动发信方案按「每 N 封」轮换使用
+// ---------------------------------------------------------------------------
+
+interface SenderMailboxView {
+  id: string;
+  label: string;
+  email: string;
+  fromName: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecure: boolean;
+  smtpUser: string;
+  imapHost: string;
+  imapPort: number;
+  imapUser: string;
+  enabled: boolean;
+  hasSmtpPassword: boolean;
+  hasImapPassword: boolean;
+}
+
+// ── 已读追踪配置（个人设置 → 已读追踪）─────────────────────────────
+interface EmailTrackingConfigView {
+  enabled: boolean;
+  baseUrl: string;
+  source: string;
+  messageIdDomain: string;
+  secretConfigured: boolean;
+}
+
+async function loadEmailTrackingConfig() {
+  const box = qs<HTMLElement>("#trackingConfigStatus");
+  if (!box) return;
+  try {
+    const { config } = await api<{ config: EmailTrackingConfigView }>("/api/email-tracking/config");
+    const input = qs<HTMLInputElement>("#trackingBaseUrlInput");
+    if (input && document.activeElement !== input) input.value = config.baseUrl;
+    box.innerHTML = config.enabled
+      ? `<span class="badge green">已开启</span> <small>信号回传域名 <b>${escapeHtml(config.messageIdDomain)}</b> · 来源 ${config.source === "app_settings" ? "本页配置" : "环境变量"}</small>`
+      : `<span class="badge gray">未开启</span> <small>发出的开发信不含追踪像素，无法得知客户是否打开</small>`;
+  } catch (error) {
+    box.innerHTML = `<span class="badge amber">读取失败</span> <small>${escapeHtml(error instanceof Error ? error.message : "未知错误")}</small>`;
+  }
+}
+
+async function saveEmailTrackingConfig(button?: HTMLButtonElement | null) {
+  const input = qs<HTMLInputElement>("#trackingBaseUrlInput");
+  if (!input) return;
+  const baseUrl = input.value.trim();
+  if (baseUrl && !/^https?:\/\//i.test(baseUrl)) {
+    toast("地址必须以 http:// 或 https:// 开头", "error");
+    return;
+  }
+  setButtonPending(button ?? null, true, "保存", "保存中");
+  try {
+    const { config } = await api<{ config: EmailTrackingConfigView }>("/api/email-tracking/config", { method: "PUT", body: JSON.stringify({ baseUrl }) });
+    toast(config.enabled ? "已读追踪已开启：之后发出的开发信会带回打开/点击信号" : "已读追踪已关闭：信件按纯文本发送");
+    await loadEmailTrackingConfig();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "保存已读追踪配置失败", "error");
+  } finally {
+    setButtonPending(button ?? null, false, "保存", "保存中");
+  }
+}
+
+let senderMailboxes: SenderMailboxView[] = [];
+
+async function loadSenderMailboxes() {
+  const list = qs<HTMLElement>("#mailboxPoolList");
+  if (!list) return;
+  try {
+    const result = await api<{ mailboxes: SenderMailboxView[] }>("/api/sender-mailboxes");
+    senderMailboxes = result.mailboxes || [];
+  } catch (error) {
+    senderMailboxes = [];
+    list.innerHTML = `<div class="empty-cell">读取失败：${escapeHtml(error instanceof Error ? error.message : "未知错误")}</div>`;
+    return;
+  }
+  renderSenderMailboxList();
+}
+
+function renderSenderMailboxList() {
+  const list = qs<HTMLElement>("#mailboxPoolList");
+  if (!list) return;
+  if (!senderMailboxes.length) {
+    list.innerHTML = `<div class="mailbox-pool-empty">还没有登记发件邮箱。主发件邮箱始终可用；登记 2 个以上并启用后，方案即可按「每 N 封」轮换发送。</div>`;
+    return;
+  }
+  list.innerHTML = senderMailboxes.map((mailbox, index) => {
+    const status = !mailbox.enabled ? `<span class="badge gray">已停用</span>`
+      : mailbox.hasSmtpPassword ? `<span class="badge green">可用</span>`
+      : `<span class="badge amber">缺授权码</span>`;
+    const primary = mailbox.email === (state.user?.outboundEmail || "") ? `<span class="badge" style="background:#eef4fc;border-color:#d5e3f6;color:#1f5fa8">同主邮箱</span>` : "";
+    return `<div class="mailbox-pool-row${mailbox.enabled ? "" : " is-off"}" style="--mb-i:${index}">
+      <div class="mailbox-pool-main">
+        <b>${escapeHtml(mailbox.label || mailbox.email)}${primary}</b>
+        <small>${escapeHtml(mailbox.email)} · ${escapeHtml(mailbox.smtpHost)}:${mailbox.smtpPort} ${mailbox.smtpSecure ? "SSL" : "STARTTLS"}${mailbox.fromName ? ` · 发件人 ${escapeHtml(mailbox.fromName)}` : ""}</small>
+      </div>
+      <div class="mailbox-pool-side">${status}</div>
+      <div class="mailbox-pool-actions">
+        <button class="btn tiny" data-mailbox-test="${escapeHtml(mailbox.id)}" ${mailbox.hasSmtpPassword ? "" : "disabled title=\"缺授权码，先编辑补全\""}>测试</button>
+        <button class="btn tiny" data-mailbox-edit="${escapeHtml(mailbox.id)}">编辑</button>
+        <button class="btn tiny danger subtle" data-mailbox-remove="${escapeHtml(mailbox.id)}">删除</button>
+      </div>
+    </div>`;
+  }).join("");
+  qsa<HTMLButtonElement>("[data-mailbox-test]", list).forEach((button) => button.addEventListener("click", () => void testSenderMailbox(button.dataset.mailboxTest || "", button)));
+  qsa<HTMLButtonElement>("[data-mailbox-edit]", list).forEach((button) => button.addEventListener("click", () => {
+    const mailbox = senderMailboxes.find((row) => row.id === button.dataset.mailboxEdit);
+    if (mailbox) openSenderMailboxModal(mailbox);
+  }));
+  qsa<HTMLButtonElement>("[data-mailbox-remove]", list).forEach((button) => button.addEventListener("click", () => void removeSenderMailbox(button.dataset.mailboxRemove || "")));
+}
+
+function openSenderMailboxModal(mailbox?: SenderMailboxView) {
+  const title = mailbox ? "编辑发件邮箱" : "登记发件邮箱";
+  const body = `
+    <div class="form-grid">
+      <div class="form-field"><label>备注名称</label><input id="smbLabel" placeholder="例如 腾讯企业邮 2 号" value="${escapeHtml(mailbox?.label || "")}"></div>
+      <div class="form-field"><label>发件邮箱 *</label><input id="smbEmail" placeholder="sales2@your-company.com" value="${escapeHtml(mailbox?.email || "")}"></div>
+      <div class="form-field"><label>发件人显示名</label><input id="smbFromName" placeholder="留空 = 沿用账号发件人名称" value="${escapeHtml(mailbox?.fromName || "")}"></div>
+      <div class="form-field"><label>SMTP服务器 *</label><input id="smbSmtpHost" placeholder="smtp.exmail.qq.com" value="${escapeHtml(mailbox?.smtpHost || "")}"></div>
+      <div class="form-field"><label>SMTP端口</label><input id="smbSmtpPort" type="number" min="1" max="65535" value="${mailbox?.smtpPort || 465}"></div>
+      <div class="form-field"><label>加密方式</label><select id="smbSmtpSecure"><option value="true"${mailbox?.smtpSecure === false ? "" : " selected"}>SSL/TLS（465）</option><option value="false"${mailbox?.smtpSecure === false ? " selected" : ""}>STARTTLS/普通（587）</option></select></div>
+      <div class="form-field"><label>SMTP账号 *</label><input id="smbSmtpUser" placeholder="通常与发件邮箱一致" value="${escapeHtml(mailbox?.smtpUser || "")}"></div>
+      <div class="form-field"><label>SMTP授权码 ${mailbox ? "（留空 = 保留原授权码）" : "*"}</label><input id="smbSmtpPassword" type="password" placeholder="${mailbox ? "输入后覆盖保存" : "授权码/客户端专用密码"}"></div>
+      <div class="form-field"><label>IMAP服务器（可选）</label><input id="smbImapHost" placeholder="留空 = 按 SMTP 主机推导" value="${escapeHtml(mailbox?.imapHost || "")}"></div>
+      <div class="form-field"><label>IMAP账号（可选）</label><input id="smbImapUser" placeholder="留空 = 同 SMTP 账号" value="${escapeHtml(mailbox?.imapUser || "")}"></div>
+      <div class="form-field"><label>IMAP授权码（可选）</label><input id="smbImapPassword" type="password" placeholder="留空 = 同 SMTP 授权码"></div>
+      <label class="form-field" style="display:flex;gap:8px;align-items:center"><input id="smbEnabled" type="checkbox"${!mailbox || mailbox.enabled ? " checked" : ""}>启用（参与轮换）</label>
+    </div>`;
+  const foot = `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="smbSaveButton">${mailbox ? "保存修改" : "登记"}</button>`;
+  openModal(title, body, foot, { closeOnBackdrop: false });
+  qs<HTMLElement>("#appModal .modal")?.classList.add("sender-mailbox-modal");
+  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  qs<HTMLButtonElement>("#smbSaveButton")?.addEventListener("click", (event) => void saveSenderMailboxModal(event.currentTarget as HTMLButtonElement, mailbox?.id));
+}
+
+async function saveSenderMailboxModal(button?: HTMLButtonElement, id?: string) {
+  const payload = {
+    label: qs<HTMLInputElement>("#smbLabel")?.value.trim() || "",
+    email: qs<HTMLInputElement>("#smbEmail")?.value.trim() || "",
+    fromName: qs<HTMLInputElement>("#smbFromName")?.value.trim() || "",
+    smtpHost: qs<HTMLInputElement>("#smbSmtpHost")?.value.trim() || "",
+    smtpPort: Number(qs<HTMLInputElement>("#smbSmtpPort")?.value || 465),
+    smtpSecure: qs<HTMLSelectElement>("#smbSmtpSecure")?.value !== "false",
+    smtpUser: qs<HTMLInputElement>("#smbSmtpUser")?.value.trim() || "",
+    smtpPassword: qs<HTMLInputElement>("#smbSmtpPassword")?.value || "",
+    imapHost: qs<HTMLInputElement>("#smbImapHost")?.value.trim() || "",
+    imapUser: qs<HTMLInputElement>("#smbImapUser")?.value.trim() || "",
+    imapPassword: qs<HTMLInputElement>("#smbImapPassword")?.value || "",
+    enabled: qs<HTMLInputElement>("#smbEnabled")?.checked ?? true
+  };
+  if (!payload.email || !payload.smtpHost || !payload.smtpUser || (!id && !payload.smtpPassword)) {
+    toast("带 * 的字段都要填写（编辑时授权码可留空保留）", "error");
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = id ? "保存中" : "登记中";
+  }
+  try {
+    await api(id ? `/api/sender-mailboxes/${encodeURIComponent(id)}` : "/api/sender-mailboxes", {
+      method: id ? "PUT" : "POST",
+      body: JSON.stringify(payload)
+    });
+    closeModal();
+    toast(id ? "发件邮箱已更新" : "发件邮箱已登记", "success");
+    await loadSenderMailboxes();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "保存失败", "error");
+    if (button) {
+      button.disabled = false;
+      button.textContent = id ? "保存修改" : "登记";
+    }
+  }
+}
+
+async function testSenderMailbox(id: string, button?: HTMLButtonElement) {
+  if (button) {
+    button.disabled = true;
+    button.textContent = "发送中";
+  }
+  try {
+    const result = await api<{ to: string; simulated?: boolean }>(`/api/sender-mailboxes/${encodeURIComponent(id)}/test`, { method: "POST", body: "{}" });
+    toast(result.simulated ? "测试邮件已生成（测试环境未外发）" : `测试邮件已发送到 ${result.to}，请查收`, "success");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "测试失败", "error");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "测试";
+    }
+  }
+}
+
+async function removeSenderMailbox(id: string) {
+  const mailbox = senderMailboxes.find((row) => row.id === id);
+  const ok = await confirmAction({
+    title: `删除发件邮箱「${mailbox?.label || mailbox?.email || id}」`,
+    message: "删除后轮换序列里不再使用这个邮箱，正在运行的方案会自动跳过它。",
+    consequences: ["该邮箱从发件邮箱池移除", "已发出的邮件与台账记录不受影响"],
+    confirmLabel: "删除",
+    tone: "danger"
+  });
+  if (!ok) return;
+  try {
+    await api(`/api/sender-mailboxes/${encodeURIComponent(id)}`, { method: "DELETE" });
+    toast("发件邮箱已删除", "success");
+    await loadSenderMailboxes();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "删除失败", "error");
+  }
 }
 
 function collectDevelopmentEmailDraft() {
@@ -6248,6 +10023,42 @@ async function saveProfileEmailBinding(button?: HTMLButtonElement, clearSmtpPass
       button.disabled = false;
       button.textContent = idleText;
     }
+  }
+}
+
+async function changeProfilePassword(button?: HTMLButtonElement) {
+  const currentPassword = qs<HTMLInputElement>("#profileCurrentPassword")?.value || "";
+  const newPassword = qs<HTMLInputElement>("#profileNewPassword")?.value || "";
+  const confirmPassword = qs<HTMLInputElement>("#profileConfirmPassword")?.value || "";
+  if (!currentPassword) {
+    toast("请输入当前密码", "error");
+    return;
+  }
+  if (newPassword.length < 8 || newPassword.length > 128) {
+    toast("新密码长度需要为 8 至 128 位", "error");
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    toast("两次输入的新密码不一致", "error");
+    return;
+  }
+  if (button) setButtonPending(button, true, "修改登录密码", "保存中");
+  try {
+    await api<{ requiresRelogin: boolean; message: string }>("/api/profile/password", {
+      method: "PATCH",
+      body: JSON.stringify({ currentPassword, newPassword, confirmPassword })
+    });
+    ["#profileCurrentPassword", "#profileNewPassword", "#profileConfirmPassword"].forEach((selector) => setFieldValue(selector, ""));
+    setFieldValue("#loginPassword", "");
+    localStorage.removeItem(storage.user);
+    state.user = null;
+    state.iamCapabilities = null;
+    document.body.classList.remove("is-authenticated");
+    toast("密码已修改，请使用新密码重新登录", "success");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "密码修改失败", "error");
+  } finally {
+    if (button) setButtonPending(button, false, "修改登录密码", "保存中");
   }
 }
 
@@ -7013,7 +10824,7 @@ async function refreshAll(user: User) {
     return;
   }
   renderDashboardCache(user);
-  const [summary, customers, publicCustomers, leadsResp, leadTrashResp, todos, deals, reminders, jobs, tradeDocs, documentDefaults, documentAssets, wecom, knowledge, exams, ocr, websiteOps, prospectAssignees, aiConfig, problems, memos, deletedMemos, planTasks, planTemplates, competitors, caseStudies, commissionProducts, commissionRecords, commissionCalculations] = await Promise.all([
+  const [summary, customers, publicCustomers, leadsResp, leadTrashResp, todos, deals, reminders, jobs, tradeDocs, documentDefaults, documentAssets, wecom, knowledge, exams, ocr, websiteOps, prospectAssignees, aiConfig, problems, memos, deletedMemos, planTasks, planTemplates, competitors, peers, caseStudies, commissionProducts, commissionRecords, commissionCalculations] = await Promise.all([
     api<DashboardSummary>("/api/dashboard/summary"),
     api<{ customers: Customer[]; mineCount: number; publicCount: number }>("/api/customers"),
     api<{ customers: Customer[]; mineCount: number; publicCount: number }>("/api/customers?scope=public"),
@@ -7039,6 +10850,7 @@ async function refreshAll(user: User) {
     api<{ tasks: PlanTask[] }>("/api/plan-tasks"),
     api<{ templates: PlanTemplate[] }>("/api/plan-templates"),
     api<{ competitors: Competitor[] }>("/api/competitors"),
+    api<{ peers: Peer[] }>("/api/peers"),
     api<{ caseStudies: CaseStudy[] }>("/api/case-studies"),
     api<{ products: CommissionProduct[]; rules: CommissionRule[]; canManage: boolean; canSelectOwner: boolean; owners: CommissionOwner[] }>("/api/commission/products"),
     api<{ records: MonthlySalesRecord[]; owners?: CommissionOwner[]; canSelectOwner?: boolean; selectedOwnerId?: string }>(`/api/commission/sales-records?month=${encodeURIComponent(state.commissionMonth)}&ownerId=${encodeURIComponent(state.selectedCommissionOwnerId || "")}`),
@@ -7081,6 +10893,7 @@ async function refreshAll(user: User) {
   state.planTasks = planTasks.tasks;
   state.planTemplates = planTemplates.templates;
   state.competitors = competitors.competitors;
+  state.peers = peers.peers;
   state.caseStudies = caseStudies.caseStudies;
   state.commissionProducts = commissionProducts.products;
   state.commissionRules = commissionProducts.rules;
@@ -7162,7 +10975,7 @@ async function loadLeadProviders(force = false) {
       state.leadProviders = result.providers || [];
       leadProvidersLoadedAt = Date.now();
       if (!state.leadSourceSelectionTouched) {
-        // 默认只启用推荐的非免费来源；免费来源保留为手动选择，避免默认结果质量不可控。
+        // 默认启用已配置 API 与可用 AI；内置免费源保留为手动选择，避免默认结果质量不可控。
         state.selectedLeadSources = state.leadProviders.filter(isLeadSourceAutoSelected).map((item) => item.id);
       }
       renderLeadSourceChips();
@@ -7220,6 +11033,55 @@ function renderDashboardCache(user: User) {
   renderTopbarStats();
 }
 
+let exchangeRatesInFlight: Promise<void> | null = null;
+let exchangeRatesLoadedAt = 0;
+
+function exchangeRateDateLabel(date: string) {
+  const today = currentLocalDateIso();
+  return date === today ? "今日参考汇率" : `最新交易日 ${date}`;
+}
+
+function renderExchangeTickerContent(content: string) {
+  const track = qs<HTMLElement>("#dashboardExchangeTicker");
+  if (!track) return;
+  track.innerHTML = `<div class="dashboard-ticker-segment">${content}</div><div class="dashboard-ticker-segment" aria-hidden="true">${content}</div>`;
+}
+
+function renderExchangeTickerStatus(label: string, message: string) {
+  renderExchangeTickerContent(`<span class="dashboard-ticker-label">${escapeHtml(label)}</span><b>///</b><span class="dashboard-rate-empty">${escapeHtml(message)}</span>`);
+}
+
+function renderExchangeTicker(rates: TodayExchangeRates) {
+  const label = exchangeRateDateLabel(rates.date);
+  const items = rates.rates
+    .filter((rate) => Number.isFinite(rate.value) && rate.value > 0)
+    .map((rate) => `<span class="dashboard-rate"><span class="dashboard-rate-key">${escapeHtml(rate.pair)}</span><strong class="dashboard-rate-value">${rate.value.toFixed(rate.decimals)}</strong></span>`)
+    .join(`<b>///</b>`);
+  renderExchangeTickerContent(`<span class="dashboard-ticker-label">${escapeHtml(label)}</span><b>///</b>${items || `<span class="dashboard-rate-empty">暂无报价</span>`}<b>///</b><span class="dashboard-rate-meta" title="数据源：${escapeHtml(rates.source)}；公开参考汇率仅提供最近一个交易日">公开参考源 · 仅提供最近一个交易日</span>`);
+}
+
+async function refreshExchangeTicker(force = false) {
+  if (!state.user || !qs<HTMLElement>("#dashboardExchangeTicker")) return;
+  if (!force && Date.now() - exchangeRatesLoadedAt < EXCHANGE_RATE_REFRESH_MS) return;
+  if (exchangeRatesInFlight) return exchangeRatesInFlight;
+  if (!exchangeRatesLoadedAt) renderExchangeTickerStatus("汇率数据", "正在读取");
+  exchangeRatesInFlight = (async () => {
+    try {
+      const rates = await api<TodayExchangeRates>("/api/exchange-rates/today");
+      renderExchangeTicker(rates);
+    } catch {
+      renderExchangeTickerStatus("汇率数据", "今日参考汇率暂不可用");
+    } finally {
+      exchangeRatesLoadedAt = Date.now();
+    }
+  })();
+  try {
+    await exchangeRatesInFlight;
+  } finally {
+    exchangeRatesInFlight = null;
+  }
+}
+
 async function refreshDashboardOnly() {
   const user = state.user;
   if (!user) return;
@@ -7237,6 +11099,7 @@ async function refreshDashboardOnly() {
     writeDashboardCache(user, summary, todos.todos, customers.customers);
     renderDashboard(summary, todos.todos, customers.customers);
     renderTopbarStats();
+    void refreshExchangeTicker();
   })();
   try {
     await dashboardRefreshPromise;
@@ -7582,11 +11445,11 @@ function renderLeadFunnel(summary: DashboardSummary) {
     return;
   }
   const colors: Record<string, string> = {
-    entered: "#3157d5",
-    pending: "#d58a12",
-    valid: "#168f86",
-    customer: "#2f8f67",
-    deal: "#237451"
+    entered: "#70e1dc",
+    pending: "#f0a84f",
+    valid: "#dfe104",
+    customer: "#9adf73",
+    deal: "#ff6b8a"
   };
   funnel.innerHTML = `
     <div class="lead-funnel-chart-wrap">
@@ -7596,7 +11459,7 @@ function renderLeadFunnel(summary: DashboardSummary) {
     <div class="lead-funnel-stage-list" aria-label="线索漏斗阶段">
       ${data.stages.map((stage, index) => `
         <button type="button" class="lead-funnel-stage-row" data-lead-funnel-key="${escapeHtml(stage.key)}" aria-label="${escapeHtml(stage.label)} ${stage.count} 条，占进入系统 ${stage.conversionRate}%">
-          <span class="lead-funnel-stage-dot" style="--stage-color:${colors[stage.key] || "#3157d5"}" aria-hidden="true"></span>
+          <span class="lead-funnel-stage-dot" style="--stage-color:${colors[stage.key] || "#70e1dc"}" aria-hidden="true"></span>
           <span>${escapeHtml(stage.label)}</span>
           <small>${index === 0 ? "总量" : `${stage.conversionRate}%`}</small>
         </button>
@@ -7634,7 +11497,7 @@ function renderLeadFunnel(summary: DashboardSummary) {
       tooltip: {
         trigger: "item",
         confine: true,
-        backgroundColor: "#172033",
+          backgroundColor: "#17171a",
         borderWidth: 0,
         padding: [8, 10],
         textStyle: { color: "#ffffff", fontSize: 12 },
@@ -7666,24 +11529,20 @@ function renderLeadFunnel(summary: DashboardSummary) {
         connectNulls: true,
         lineStyle: {
           width: 2,
-          color: "#8197c8",
+          color: "#dfe104",
           cap: "round",
-          shadowBlur: 3,
-          shadowColor: "rgba(64, 88, 145, .11)"
+          shadowBlur: 0,
+          shadowColor: "transparent"
         },
         areaStyle: {
-          opacity: 1,
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: "rgba(81, 106, 170, .075)" },
-            { offset: 0.72, color: "rgba(81, 106, 170, .018)" },
-            { offset: 1, color: "rgba(49, 87, 213, 0)" }
-          ])
+          opacity: 0,
+          color: "transparent"
         },
         label: {
           show: true,
           position: "top",
           distance: 7,
-          color: "#172033",
+          color: "#fafafa",
           fontSize: 13,
           fontWeight: 700,
           formatter: (params: { value: number }) => String(params.value)
@@ -7693,9 +11552,9 @@ function renderLeadFunnel(summary: DashboardSummary) {
           focus: "self",
           itemStyle: {
             borderWidth: 3,
-            borderColor: "#ffffff",
-            shadowBlur: 12,
-            shadowColor: "rgba(23, 32, 51, .22)"
+            borderColor: "#dfe104",
+            shadowBlur: 0,
+            shadowColor: "transparent"
           }
         },
         data: data.stages.map((stage) => ({
@@ -7705,11 +11564,11 @@ function renderLeadFunnel(summary: DashboardSummary) {
           label: stage.label,
           conversionRate: stage.conversionRate,
           itemStyle: {
-            color: colors[stage.key] || "#3157d5",
+            color: colors[stage.key] || "#70e1dc",
             borderWidth: 2,
-            borderColor: "#ffffff",
-            shadowBlur: stage.key === "pending" ? 8 : 4,
-            shadowColor: `${colors[stage.key] || "#3157d5"}55`
+            borderColor: "#09090b",
+            shadowBlur: 0,
+            shadowColor: "transparent"
           }
         }))
       }]
@@ -7853,11 +11712,11 @@ function renderTodoInsights(summary: DashboardSummary) {
   if (scoreCards[1]) scoreCards[1].textContent = String(summary.todoInsights.overdue);
   if (scoreCards[2]) scoreCards[2].textContent = `${summary.todoInsights.completionRate}%`;
   if (scoreCards[3]) scoreCards[3].textContent = money(summary.todoInsights.impactAmount);
-  const table = qs<HTMLElement>("#dashboard .todo-insights .mini-table tbody");
+  const table = qs<HTMLElement>("#todo .todo-insights .mini-table tbody");
   if (table) {
     table.innerHTML = summary.todoInsights.typeRows.length ? summary.todoInsights.typeRows.map((row) => `<tr><td>${escapeHtml(row.label)}</td><td>${row.count}</td><td>${badge(row.risk, row.risk === "高" ? "red" : row.risk === "中" ? "amber" : "")}</td></tr>`).join("") : `<tr><td>暂无待办</td><td>0</td><td>${badge("安全", "green")}</td></tr>`;
   }
-  const calendar = qs<HTMLElement>("#dashboard .todo-calendar");
+  const calendar = qs<HTMLElement>("#todo .todo-calendar");
   if (calendar) {
     calendar.innerHTML = summary.todoInsights.weekLoad.map((item) => `<div class="todo-day ${item.count >= 4 ? "hot" : item.count <= 1 ? "ok" : ""}">${escapeHtml(item.day)}<br>${item.count}</div>`).join("");
   }
@@ -7897,7 +11756,7 @@ async function batchProcessPriorityTasks(button?: HTMLButtonElement) {
 }
 
 function renderTodos(todos: Todo[]) {
-  const list = qs<HTMLElement>("#dashboard .todo-list");
+  const list = qs<HTMLElement>("#todo .todo-list");
   if (!list) return;
   renderTopbarStats();
   const currentTodos = activeTodos(todos);
@@ -7909,6 +11768,9 @@ function renderTodos(todos: Todo[]) {
   } else {
     list.innerHTML = visibleTodos.map((todo) => {
     const tone = todo.priority === "high" ? "red" : todo.priority === "medium" ? "amber" : "green";
+    const sourceBadge = isAutoMaintenanceTodo(todo)
+      ? `<span class="todo-source-badge" title="由自动维护中心生成，可在「自动维护」筛选中单独查看">自动维护</span>`
+      : "";
     const optionalMeta = [formatTodoTime(todo.dueAt), todo.related].filter(Boolean).map((item) => `<span>${escapeHtml(item)}</span>`).join("");
     const isRunning = todo.status === "in_progress" && !todo.done;
     const pinBadge = todo.pinState === "top" ? badge("置顶", "aqua") : todo.pinState === "bottom" ? badge("沉底", "gray") : "";
@@ -7924,8 +11786,8 @@ function renderTodos(todos: Todo[]) {
     const runIcon = isRunning ? `<svg viewBox="0 0 24 24"><path d="M7 7h10v10H7z"/></svg>` : `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
     const menuOpen = state.openTodoMenuId === todo.id;
     return `<article class="todo-row ${todo.priority === "high" ? "urgent" : ""} ${isRunning ? "in-progress" : ""} ${todo.done ? "done" : ""} ${state.draggingTodoId === todo.id ? "dragging" : ""}" data-todo-id="${escapeHtml(todo.id)}">
-      <i class="todo-check" title="${todo.done ? "撤回未完成" : "完成待办"}"></i>
-      <div class="todo-main"><h3>${escapeHtml(todo.title)}</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--${tone === "red" ? "rose" : tone})"></i><span>${escapeHtml(priorityText(todo.priority))}</span>${optionalMeta}${pinBadge}${statusBadge}</div></div>
+      <i class="todo-check" title="${todo.done ? "撤回未完成" : todo.reminderRuleId ? "记录跟进结果并完成" : "完成待办"}"></i>
+      <div class="todo-main"><h3>${escapeHtml(todo.title)}</h3><div class="todo-meta"><i class="priority-dot" style="--color:var(--${tone === "red" ? "rose" : tone})"></i><span>${escapeHtml(priorityText(todo.priority))}</span>${sourceBadge}${optionalMeta}${pinBadge}${statusBadge}</div></div>
       <div class="todo-side"><div class="todo-actions"><div class="assignee-stack"><span class="mini-avatar">我</span></div>${isHistoryView ? todo.cancelledAt ? "" : `<button class="btn" data-todo-restore>回到今日</button>` : todo.done ? "" : `<button class="todo-run ${isRunning ? "active" : ""}" title="${isRunning ? "停止执行" : "开始执行"}" aria-label="${isRunning ? "停止执行" : "开始执行"}">${runIcon}</button>`}<button class="todo-more ${menuOpen ? "active" : ""}" title="更多操作" aria-label="更多操作"><span></span><span></span><span></span></button>${menuOpen ? `<div class="todo-menu">${isHistoryView ? "" : `<button data-todo-action="edit">编辑</button><button data-todo-action="top">置顶</button><button data-todo-action="bottom">沉底</button>`}<button class="danger" data-todo-action="delete">删除</button></div>` : ""}</div><div class="subtask-bar ${isRunning ? "running" : ""}"><i style="--p:${todo.done ? "100%" : isRunning ? "74%" : "55%"}"></i></div></div>
     </article>`;
     }).join("");
@@ -7973,22 +11835,11 @@ function renderTodos(todos: Todo[]) {
     });
   });
   qsa<HTMLElement>(".todo-row .todo-check", list).forEach((node) => {
-    node.addEventListener("click", async (event) => {
+    node.addEventListener("click", (event) => {
       event.stopPropagation();
       const row = node.closest<HTMLElement>(".todo-row");
       if (!row?.dataset.todoId) return;
-      const todo = state.todos.find((item) => item.id === row.dataset.todoId);
-      if (!todo) return;
-      const nextDone = !todo.done;
-      const result = await api<{ todo: Todo }>(`/api/todos/${todo.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ done: nextDone })
-      });
-      Object.assign(todo, result.todo);
-      renderTodos(state.todos);
-      updateTodoChips(state.todos);
-      void refreshDashboardOnly();
-      toast(todo.done ? "待办已完成" : "已撤回未完成");
+      void toggleTodoDone(row.dataset.todoId);
     });
   });
   bindTodoDrag(list, visibleTodos, isHistoryView);
@@ -8001,6 +11852,40 @@ function renderTodos(todos: Todo[]) {
   if (scoreCards[2]) scoreCards[2].textContent = `${Math.round((done / Math.max(total, 1)) * 100)}%`;
   if (scoreCards[3]) scoreCards[3].textContent = money(visibleTodos.reduce((sum, todo) => sum + (todo.impactAmount || 0), 0));
   renderTodoHistory(archivedTodos);
+}
+
+/**
+ * 待办中心左侧圆圈的统一入口：完成 / 撤回。
+ * 提醒规则生成的待办在完成前必须先记录本次跟进处理结果（后端强制校验），
+ * 直接 PATCH done=true 会被驳回，所以这里先弹出「记录跟进结果」弹窗；
+ * 其余待办直接切换完成状态。
+ */
+async function toggleTodoDone(id: string) {
+  const todo = state.todos.find((item) => item.id === id);
+  if (!todo) return;
+  if (!todo.done && todo.reminderRuleId) {
+    openReminderTaskResult(id);
+    return;
+  }
+  await setTodoDone(id, !todo.done);
+}
+
+async function setTodoDone(id: string, done: boolean) {
+  const todo = state.todos.find((item) => item.id === id);
+  if (!todo) return;
+  try {
+    const result = await api<{ todo: Todo }>(`/api/todos/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ done })
+    });
+    Object.assign(todo, result.todo);
+    renderTodos(state.todos);
+    updateTodoChips(state.todos);
+    void refreshDashboardOnly();
+    toast(done ? "待办已完成" : "已撤回未完成");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "操作失败，请稍后重试", "error");
+  }
 }
 
 function visibleTodoIds(todos: Todo[]) {
@@ -8041,7 +11926,7 @@ function bindTodoDrag(list: HTMLElement, visibleTodos: Todo[], isHistoryView: bo
   };
   const markDropTarget = (clientX: number, clientY: number) => {
     const targetRow = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>(".todo-row");
-    if (!targetRow || targetRow.dataset.todoId === dragId || targetRow.closest("#dashboard .todo-list") !== list) return;
+    if (!targetRow || targetRow.dataset.todoId === dragId || targetRow.closest("#todo .todo-list") !== list) return;
     lastDropId = targetRow.dataset.todoId || "";
     qsa<HTMLElement>(".todo-row.drop-target", list).forEach((item) => item.classList.remove("drop-target"));
     targetRow.classList.add("drop-target");
@@ -8064,7 +11949,7 @@ function bindTodoDrag(list: HTMLElement, visibleTodos: Todo[], isHistoryView: bo
     removeDocumentDragEvents();
     const dropRow = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>(".todo-row");
     const dragged = visibleTodos.find((todo) => todo.id === dragId);
-    const targetId = dropRow?.dataset.todoId && dropRow.closest("#dashboard .todo-list") === list ? dropRow.dataset.todoId : lastDropId;
+    const targetId = dropRow?.dataset.todoId && dropRow.closest("#todo .todo-list") === list ? dropRow.dataset.todoId : lastDropId;
     const target = visibleTodos.find((todo) => todo.id === targetId);
     const draggedId = dragId;
     dragId = "";
@@ -8140,9 +12025,9 @@ async function toggleTodoExecution(id: string) {
 }
 
 function renderTodoHistory(todos: Todo[]) {
-  const list = qs<HTMLElement>("#dashboard .todo-history-list");
-  const count = qs<HTMLElement>("#dashboard #todo-history-count");
-  const amountNode = qs<HTMLElement>("#dashboard #todo-history-amount");
+  const list = qs<HTMLElement>("#todo .todo-history-list");
+  const count = qs<HTMLElement>("#todo #todo-history-count");
+  const amountNode = qs<HTMLElement>("#todo #todo-history-amount");
   if (count) count.textContent = `${todos.length} 条`;
   if (amountNode) amountNode.textContent = money(todos.reduce((sum, todo) => sum + (todo.impactAmount || 0), 0));
   if (!list) return;
@@ -8231,33 +12116,43 @@ async function restoreTodoFromHistory(id: string) {
     toast("待办不存在", "error");
     return;
   }
-  const result = await api<{ todo: Todo }>(`/api/todos/${id}/restore`, { method: "POST" });
-  Object.assign(todo, result.todo);
-  renderTodos(state.todos);
-  updateTodoChips(state.todos);
-  void refreshDashboardOnly();
-  toast("已恢复到今日清单");
+  try {
+    const result = await api<{ todo: Todo }>(`/api/todos/${id}/restore`, { method: "POST" });
+    Object.assign(todo, result.todo);
+    renderTodos(state.todos);
+    updateTodoChips(state.todos);
+    void refreshDashboardOnly();
+    toast("已恢复到今日清单");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "恢复失败，请稍后重试", "error");
+  }
 }
 
 function filterTodos(todos: Todo[]) {
   if (state.todoFilter === "overdue") return todos.filter((todo) => todo.priority === "high" && !todo.done);
   if (state.todoFilter === "customer") return todos.filter((todo) => todo.type === "customer");
+  if (state.todoFilter === "maintenance") return todos.filter((todo) => isAutoMaintenanceTodo(todo));
   return todos;
 }
 
+function isAutoMaintenanceTodo(todo: Todo) {
+  return Boolean(todo.reminderRuleId?.startsWith("maintenance_watch:"));
+}
+
 function updateTodoChips(todos: Todo[]) {
-  const chips = qsa<HTMLElement>("#dashboard .todo-chip");
+  const chips = qsa<HTMLElement>("#todo .todo-chip");
   const currentTodos = activeTodos(todos);
   const values = [
     `今天 ${currentTodos.filter((todo) => !todo.done).length}`,
     `逾期 ${currentTodos.filter((todo) => todo.priority === "high" && !todo.done).length}`,
     `我负责 ${currentTodos.length}`,
     "客户跟进",
-    `历史清单 ${historyTodos(todos).length}`
+    `历史清单 ${historyTodos(todos).length}`,
+    `自动维护 ${currentTodos.filter((todo) => isAutoMaintenanceTodo(todo) && !todo.done).length}`
   ];
   chips.forEach((chip, index) => {
     chip.textContent = values[index] || chip.textContent || "";
-    const filters: AppState["todoFilter"][] = ["today", "overdue", "mine", "customer", "history"];
+    const filters: AppState["todoFilter"][] = ["today", "overdue", "mine", "customer", "history", "maintenance"];
     chip.dataset.todoFilter = filters[index] || "all";
     chip.classList.toggle("active", state.todoFilter === chip.dataset.todoFilter || (state.todoFilter === "all" && index === 0));
   });
@@ -8338,6 +12233,8 @@ function resetLeadFilters() {
   setFieldValue("#leadIntentFilter", "all");
   setFieldValue("#leadSourceFilter", "all");
   setFieldValue("#leadFollowFilter", "all");
+  state.leadReplyFilter = "all";
+  qs<HTMLButtonElement>("#leadReplyFilterButton")?.classList.remove("primary");
   renderLeads();
 }
 
@@ -8818,9 +12715,10 @@ function renderLeads() {
     const matchIntent = state.leadIntentFilter === "all" || lead.intent === state.leadIntentFilter;
     const matchSource = state.leadSourceFilter === "all" || leadSourceLabel(lead) === state.leadSourceFilter;
     const matchFollow = state.leadFollowFilter === "all" || leadFollowState(lead) === state.leadFollowFilter;
-    const haystack = [lead.company, lead.contact, lead.country, lead.email, lead.phone, lead.source, lead.sourceChannel, lead.externalId]
+    const matchReply = state.leadReplyFilter === "all" || Boolean(lead.lastEmailReplyAt);
+    const haystack = [lead.company, lead.contact, lead.country, lead.email, lead.phone, lead.source, lead.sourceChannel, lead.externalId, lead.inquiryContent]
       .filter(Boolean).join(" ").toLowerCase();
-    return matchStage && matchIntent && matchSource && matchFollow && (!q || haystack.includes(q));
+    return matchStage && matchIntent && matchSource && matchFollow && matchReply && (!q || haystack.includes(q));
   });
   const totalPages = Math.max(1, Math.ceil(filtered.length / LEAD_PAGE_SIZE));
   state.leadPage = Math.min(state.leadPage, totalPages);
@@ -8839,22 +12737,26 @@ function renderLeads() {
     });
   }
 
+  const replyFlag = (lead: { lastEmailReplyAt?: string }) => lead.lastEmailReplyAt
+    ? `<span class="lead-reply-flag" title="客户已回复：${escapeHtml(new Date(lead.lastEmailReplyAt).toLocaleString("zh-CN"))}">✉</span>`
+    : "";
   tbody.innerHTML = pageRows.length ? pageRows.map((lead) => `<tr data-lead-id="${lead.id}" class="${lead.id === state.selectedLeadId ? "selected" : ""}">
-    <td><div class="company">${countryFlag(lead.country)}<div><button class="lead-name" data-open-lead="${lead.id}">${escapeHtml(lead.company)}</button><span>${escapeHtml(lead.contact || "联系人待补充")} · ${escapeHtml(lead.country || "国家待补充")}</span></div></div></td>
+    <td><div class="company"><input type="checkbox" class="lead-row-check" data-lead-check="${lead.id}" ${state.selectedLeadIds.includes(lead.id) ? "checked" : ""} title="勾选加入发信批次">${countryFlag(lead.country)}<div><button class="lead-name" data-open-lead="${lead.id}">${escapeHtml(lead.company)}</button>${replyFlag(lead)}<span>${escapeHtml(lead.contact || "联系人待补充")} · ${escapeHtml(lead.country || "国家待补充")}${lead.email ? ` · ${escapeHtml(lead.email)}` : ""}</span></div></div></td>
     <td><div class="lead-decision-cell">${badge("意向" + lead.intent, lead.intent === "高" ? "red" : lead.intent === "中" ? "amber" : "gray")}${badge(lead.stage, leadStageTone(lead.stage))}</div></td>
     <td><div class="lead-follow-cell"><b>${escapeHtml(lead.nextFollowAt || "未安排")}</b><span>${leadFollowState(lead) === "overdue" ? "已逾期" : leadFollowState(lead) === "unset" ? "待安排" : "已计划"}</span></div></td>
     <td><div class="lead-source-cell"><b>${escapeHtml(leadSourceLabel(lead))}</b><span>${escapeHtml(lead.sourceCampaign || lead.externalId || "无活动编号")}</span></div></td>
+    <td><div class="lead-created-cell"><b>${escapeHtml(formatLeadDate(lead.createdAt))}</b></div></td>
     <td>${badge(state.leadView === "trash" ? "垃圾箱" : (LEAD_STATUS_LABEL[lead.status] || lead.status), state.leadView === "trash" ? "red" : (LEAD_STATUS_TONE[lead.status] || ""))}</td>
     <td><div class="lead-row-actions">${state.leadView === "trash"
       ? `<button class="btn tiny" type="button" data-lead-row-action="restore" data-lead-row-id="${lead.id}">恢复</button>${lead.convertedCustomerId ? "" : `<button class="btn tiny danger" type="button" data-lead-row-action="permanent" data-lead-row-id="${lead.id}">永久删除</button>`}`
       : `<button class="btn tiny danger subtle" type="button" data-lead-row-action="trash" data-lead-row-id="${lead.id}">删除</button>`}</div></td>
-  </tr>`).join("") : `<tr><td colspan="6" class="empty-cell">${state.leadView === "trash" ? "垃圾箱中没有符合条件的线索" : "暂无符合条件的线索"}</td></tr>`;
+  </tr>`).join("") : `<tr><td colspan="7" class="empty-cell">${state.leadView === "trash" ? "垃圾箱中没有符合条件的线索" : "暂无符合条件的线索"}</td></tr>`;
 
   cards.innerHTML = pageRows.length ? pageRows.map((lead) => `
     <article class="lead-mobile-card ${lead.id === state.selectedLeadId ? "selected" : ""}" data-lead-id="${lead.id}">
-      <span class="lead-mobile-top"><button class="lead-name" data-open-lead="${lead.id}">${escapeHtml(lead.company)}</button>${badge("意向" + lead.intent, lead.intent === "高" ? "red" : lead.intent === "中" ? "amber" : "gray")}</span>
-      <span>${escapeHtml(lead.contact || "联系人待补充")} · ${escapeHtml(lead.country || "国家待补充")}</span>
-      <span class="lead-mobile-meta"><i>${escapeHtml(lead.stage)}</i><i>${escapeHtml(leadSourceLabel(lead))}</i><i>${escapeHtml(lead.nextFollowAt || "待安排跟进")}</i></span>
+      <span class="lead-mobile-top"><button class="lead-name" data-open-lead="${lead.id}">${escapeHtml(lead.company)}</button>${replyFlag(lead)}${badge("意向" + lead.intent, lead.intent === "高" ? "red" : lead.intent === "中" ? "amber" : "gray")}</span>
+      <span>${escapeHtml(lead.contact || "联系人待补充")} · ${escapeHtml(lead.country || "国家待补充")}${lead.email ? ` · ${escapeHtml(lead.email)}` : ""}</span>
+      <span class="lead-mobile-meta"><i>${escapeHtml(lead.stage)}</i><i>${escapeHtml(leadSourceLabel(lead))}</i><i>${escapeHtml(lead.nextFollowAt || "待安排跟进")}</i><i>${escapeHtml(formatLeadDate(lead.createdAt))}</i></span>
       <span class="lead-mobile-actions">${state.leadView === "trash"
         ? `<button class="btn tiny" type="button" data-lead-row-action="restore" data-lead-row-id="${lead.id}">恢复</button>${lead.convertedCustomerId ? "" : `<button class="btn tiny danger" type="button" data-lead-row-action="permanent" data-lead-row-id="${lead.id}">永久删除</button>`}`
         : `<button class="btn tiny danger subtle" type="button" data-lead-row-action="trash" data-lead-row-id="${lead.id}">删除</button>`}</span>
@@ -8871,6 +12773,14 @@ function renderLeads() {
     if (action === "trash") openLeadTrashModal(lead);
     if (action === "restore") void restoreLead(lead.id);
     if (action === "permanent") openLeadPermanentModal(lead);
+  }));
+  qsa<HTMLInputElement>(".lead-row-check", qs("#leads")!).forEach((box) => box.addEventListener("change", () => {
+    const id = box.dataset.leadCheck || "";
+    if (!id) return;
+    if (box.checked && !state.selectedLeadIds.includes(id)) state.selectedLeadIds.push(id);
+    if (!box.checked) state.selectedLeadIds = state.selectedLeadIds.filter((item) => item !== id);
+    const createButton = qs<HTMLButtonElement>("#leadCreateOutreachBatchButton");
+    if (createButton) createButton.textContent = state.selectedLeadIds.length ? `✉ 生成发信批次（${state.selectedLeadIds.length}）` : "✉ 生成发信批次";
   }));
 
   const pagination = qs<HTMLElement>("#leadPagination");
@@ -8994,6 +12904,7 @@ function renderLeadDrawer(
     `}
     ${sourceProspect ? renderProcurementContextPanel(procurement, sourceProspect) : ""}
     <section class="lead-detail-section"><h3>联系与需求</h3><div class="info-grid">${fields.map(([label, value]) => `<div class="info"><span>${label}</span><b>${escapeHtml(value)}</b></div>`).join("")}</div></section>
+    <section class="lead-detail-section lead-inquiry-section"><div class="lead-section-head"><h3>询盘内容</h3><span>保存客户发来的原始需求，和内部备注分开管理</span></div><textarea id="leadInquiryContentInput" rows="7" placeholder="粘贴客户发来的询盘、邮件或平台留言">${escapeHtml(lead.inquiryContent || "")}</textarea><div class="lead-section-actions"><button class="btn" id="leadInquiryContentSaveButton">保存询盘内容</button></div></section>
     <section class="lead-detail-section">
       <h3>来源证据</h3>
       <div class="info-grid">${sourceFields.map(([label, value]) => `<div class="info"><span>${label}</span><b>${escapeHtml(value)}</b></div>`).join("")}</div>
@@ -9016,6 +12927,7 @@ function renderLeadDrawer(
   });
   qs<HTMLButtonElement>("#leadConvertButton", drawer)?.addEventListener("click", () => void openLeadConversion(lead.id));
   qs<HTMLButtonElement>("#leadNoteButton", drawer)?.addEventListener("click", () => void addLeadActivity(lead.id));
+  qs<HTMLButtonElement>("#leadInquiryContentSaveButton", drawer)?.addEventListener("click", () => void saveLeadInquiryContent(lead.id));
   qs<HTMLButtonElement>("#leadTrashButton", drawer)?.addEventListener("click", () => openLeadTrashModal(lead));
   qs<HTMLButtonElement>("#leadRestoreButton", drawer)?.addEventListener("click", () => void restoreLead(lead.id));
   qs<HTMLButtonElement>("#leadPermanentButton", drawer)?.addEventListener("click", () => openLeadPermanentModal(lead));
@@ -9126,6 +13038,18 @@ async function addLeadActivity(id: string) {
     toast("跟进已记录");
   } catch (error) {
     toast(error instanceof Error ? error.message : "记录失败", "error");
+  }
+}
+
+async function saveLeadInquiryContent(id: string) {
+  const content = qs<HTMLTextAreaElement>("#leadInquiryContentInput")?.value || "";
+  try {
+    await api(`/api/leads/${id}`, { method: "PATCH", body: JSON.stringify({ inquiryContent: content }) });
+    await reloadLeads();
+    await openLead(id);
+    toast("询盘内容已保存");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "询盘内容保存失败", "error");
   }
 }
 
@@ -9339,7 +13263,8 @@ async function createLead(form: HTMLFormElement) {
     intent: String(data.get("intent") || "中"),
     estimatedAmount: Number(data.get("estimatedAmount") || 0),
     nextFollowAt: String(data.get("nextFollowAt") || ""),
-    remark: String(data.get("remark") || "")
+    remark: String(data.get("remark") || ""),
+    inquiryContent: String(data.get("inquiryContent") || "")
   };
   try {
     await api<{ lead: Lead }>("/api/leads", { method: "POST", body: JSON.stringify(payload) });
@@ -9915,7 +13840,8 @@ function customerContactDetails(customer: Customer) {
   const email = customer.email || source.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
   const phone = customer.phone || source.match(/(?:\+?\d[\d\s()\-]{6,}\d)/)?.[0]?.trim() || "";
   const whatsapp = normalizeWhatsAppPhone(customer.whatsapp || customer.whatsappPhone || "");
-  return { email, phone, whatsapp };
+  const wechat = customer.wechat || "";
+  return { email, phone, whatsapp, wechat };
 }
 
 interface WhatsAppPluginAccount {
@@ -10103,7 +14029,7 @@ function renderBackgroundResearch() {
   const box = qs<HTMLElement>("#aiResearchPage");
   const subject = backgroundResearchSubject;
   if (!box || !subject) return;
-  const stages = ["主体识别", "联网检索", "风险核验", "结论生成"];
+  const stages = ["主体识别", "业务挖掘", "贸易信号", "风险核验", "综合结论"];
   if (backgroundResearchLoading) {
     box.innerHTML = `
       <header class="research-header">
@@ -10129,23 +14055,37 @@ function renderBackgroundResearch() {
   } else {
     const report = backgroundResearchResult;
     const scoreTone = report.score >= 78 ? "strong" : report.score >= 60 ? "steady" : "caution";
+    const factSourceLink = (fact: BackgroundResearch["facts"][number]) => {
+      if (!fact.sourceUrl || !/^https?:\/\//i.test(fact.sourceUrl)) return "";
+      return `<a class="research-fact-source" href="${escapeHtml(fact.sourceUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(fact.sourceTitle || fact.sourceUrl)}">来源 ↗</a>`;
+    };
+    const angleChecks = (report.sourceChecks || []).filter((item) => item.providerId.startsWith("angle:"));
     box.innerHTML = `
       <header class="research-header">
         <div class="research-identity">
           <button class="customer-page-back" type="button" data-research-back title="返回" aria-label="返回"><svg viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button>
           <div><h1>${escapeHtml(report.company)}</h1><span>${report.entityType === "lead" ? "线索背调" : "客户背调"} · ${escapeHtml(formatDateTime(report.completedAt))}</span></div>
         </div>
-        <button class="btn research-run-button" type="button" data-research-run>${researchButtonIcon()}重新背调</button>
+        <div class="inline-actions">
+          <button class="btn" type="button" data-research-copy>复制报告</button>
+          <button class="btn research-run-button" type="button" data-research-run>${researchButtonIcon()}重新背调</button>
+        </div>
       </header>
 
       <section class="research-verdict ${scoreTone}">
         <div class="research-score" style="--score:${report.score * 3.6}deg"><div><b>${report.score}</b><span>可信度</span></div></div>
-        <div class="research-verdict-copy"><span>综合判断</span><h2>${escapeHtml(report.verdict)}</h2><p>${escapeHtml(report.summary)}</p></div>
+        <div class="research-verdict-copy"><span>综合判断</span><h2>${escapeHtml(report.verdict)}</h2><p>${escapeHtml(report.summary)}</p>${report.scoreReason ? `<small class="research-score-reason">评分依据：${escapeHtml(report.scoreReason)}</small>` : ""}</div>
         <div class="research-next"><span>下一步</span><b>${escapeHtml(report.nextAction)}</b></div>
       </section>
 
+      ${report.crmOnly ? `<section class="research-note warning">本轮未获取到公开网络证据（未配置可用模型、目标地区合规限制或检索失败），以下结论仅基于 CRM 内部资料，建议先补全 AI 模型配置后重新背调。</section>` : ""}
+
       <div class="research-layout">
         <main class="research-main">
+          <section class="research-block">
+            <h2>首聊切入点</h2>
+            <div class="research-opportunities">${report.talkTracks?.length ? report.talkTracks.map((item, index) => `<article><i>${String(index + 1).padStart(2, "0")}</i><b>${escapeHtml(item)}</b></article>`).join("") : `<div class="research-empty">暂无首聊切入点（联网证据不足时不会生成）</div>`}</div>
+          </section>
           <section class="research-block">
             <h2>业务机会</h2>
             <div class="research-opportunities">${report.opportunities.length ? report.opportunities.map((item, index) => `<article><i>${String(index + 1).padStart(2, "0")}</i><b>${escapeHtml(item)}</b></article>`).join("") : `<div class="research-empty">暂无明确机会</div>`}</div>
@@ -10159,7 +14099,7 @@ function renderBackgroundResearch() {
         <aside class="research-side">
           <section class="research-block">
             <h2>公司事实</h2>
-            <dl class="research-facts">${report.facts.map((fact) => `<div><dt>${escapeHtml(fact.label)}</dt><dd>${escapeHtml(fact.value)}</dd></div>`).join("")}</dl>
+            <dl class="research-facts">${report.facts.map((fact) => `<div><dt>${escapeHtml(fact.label)}${fact.group ? ` <small class="research-fact-group">${escapeHtml(fact.group)}</small>` : ""}</dt><dd>${escapeHtml(fact.value)} ${factSourceLink(fact)}</dd></div>`).join("")}</dl>
           </section>
           <section class="research-block">
             <h2>关键联系人</h2>
@@ -10170,18 +14110,46 @@ function renderBackgroundResearch() {
             <div class="research-sources">${report.sources.length ? report.sources.map((source) => {
               const validUrl = /^https?:\/\//i.test(source.url);
               const title = escapeHtml(source.title || source.url || "来源记录");
+              const tag = source.detail ? `<small>${escapeHtml(source.detail)}</small>` : "";
               return validUrl
-                ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer"><b>${title}</b><span>${escapeHtml(source.observedAt ? formatDateTime(source.observedAt) : "")}</span></a>`
-                : `<div><b>${title}</b><span>${escapeHtml(source.observedAt ? formatDateTime(source.observedAt) : "")}</span></div>`;
+                ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer"><b>${title}</b>${tag}<span>${escapeHtml(source.observedAt ? formatDateTime(source.observedAt) : "")}</span></a>`
+                : `<div><b>${title}</b>${tag}<span>${escapeHtml(source.observedAt ? formatDateTime(source.observedAt) : "")}</span></div>`;
             }).join("") : `<div class="research-empty">暂无公开来源</div>`}</div>
           </section>
-          ${report.sourceChecks?.length ? `<section class="research-block"><h2>联网检索</h2><dl class="research-facts">${report.sourceChecks.map((item) => `<div><dt>${escapeHtml(item.providerName)}</dt><dd>${escapeHtml(item.status === "matched" ? `命中 ${item.matchCount} 条` : item.message)}</dd></div>`).join("")}</dl></section>` : ""}
-          <div class="research-engine"><span>分析引擎</span><b>${escapeHtml(report.engine)}${report.sourceChecks?.length ? ` · 联网 ${report.sourceChecks.filter((item) => item.status === "matched").length}/${report.sourceChecks.filter((item) => item.status !== "skipped").length}` : ""}</b></div>
+          ${angleChecks.length ? `<section class="research-block"><h2>联网检索 · 四路角度</h2><dl class="research-facts">${angleChecks.map((item) => `<div><dt>${escapeHtml(item.providerName)}</dt><dd><span class="research-angle-status ${item.status}">${item.status === "matched" ? "命中" : item.status === "empty" ? "有来源" : item.status === "skipped" ? "跳过" : "失败"}</span> ${escapeHtml(item.message)}</dd></div>`).join("")}</dl></section>` : ""}
+          <div class="research-engine"><span>分析引擎</span><b>${escapeHtml(report.engine)}</b></div>
         </aside>
       </div>`;
   }
   qsa<HTMLButtonElement>("[data-research-back]", box).forEach((button) => button.addEventListener("click", backgroundResearchBack));
   qsa<HTMLButtonElement>("[data-research-run]", box).forEach((button) => button.addEventListener("click", () => void runBackgroundResearch()));
+  qs<HTMLButtonElement>("[data-research-copy]", box)?.addEventListener("click", () => {
+    const report = backgroundResearchResult;
+    if (!report) return;
+    const lines = [
+      `${report.company} · AI 背调报告（${formatDateTime(report.completedAt)}）`,
+      `可信度 ${report.score} · ${report.verdict}`,
+      "",
+      `【综合判断】${report.summary}`,
+      report.scoreReason ? `评分依据：${report.scoreReason}` : "",
+      "",
+      `【公司事实】`,
+      ...report.facts.map((fact) => `- ${fact.label}：${fact.value}${fact.sourceUrl ? `（来源：${fact.sourceUrl}）` : ""}`),
+      "",
+      `【首聊切入点】`,
+      ...(report.talkTracks || []).map((item) => `- ${item}`),
+      "",
+      `【业务机会】`,
+      ...report.opportunities.map((item) => `- ${item}`),
+      "",
+      `【风险】`,
+      ...report.risks.map((risk) => `- [${risk.level}] ${risk.title}：${risk.detail}`),
+      "",
+      `【下一步】${report.nextAction}`,
+      `【引擎】${report.engine}`
+    ].filter((line) => line !== "").join("\n");
+    void navigator.clipboard?.writeText(lines).then(() => toast("背调报告已复制到剪贴板")).catch(() => toast("复制失败，请手动选择文本", "error"));
+  });
 }
 
 async function runBackgroundResearch() {
@@ -10192,11 +14160,11 @@ async function runBackgroundResearch() {
   backgroundResearchStage = 0;
   if (backgroundResearchStageTimer) window.clearInterval(backgroundResearchStageTimer);
   backgroundResearchStageTimer = window.setInterval(() => {
-    if (backgroundResearchStage < 3) {
+    if (backgroundResearchStage < 4) {
       backgroundResearchStage += 1;
       renderBackgroundResearch();
     }
-  }, 620);
+  }, 2600);
   renderBackgroundResearch();
   try {
     const result = await api<{ research: BackgroundResearch }>("/api/ai-background-research", {
@@ -10295,6 +14263,9 @@ function renderDevelopmentEmailPage() {
   const draft = developmentEmailDraft;
   const readiness = developmentEmailReadiness;
   const profile = developmentEmailCompanyProfile;
+  const stageInfo = developmentEmailStageInfo;
+  const briefInfo = developmentEmailBriefInfo;
+  const qualityInfo = developmentEmailQuality;
   const sendReady = readiness.personalReady && readiness.companyReady && Boolean(draft.to && draft.subject && draft.body.trim().length >= 10);
   box.innerHTML = `
     <header class="mail-studio-header">
@@ -10324,6 +14295,24 @@ function renderDevelopmentEmailPage() {
           </div>
           <label class="mail-goal-field"><span>写作目标${developmentEmailScenario === "custom_goal" ? "（必填）" : "（可选）"}</span><textarea id="developmentEmailGoal" maxlength="1000" placeholder="例如：邀请客户在本周安排 15 分钟视频会议，并突出交期稳定">${escapeHtml(developmentEmailGoal)}</textarea></label>
         </section>
+        ${stageInfo || briefInfo ? `
+        <section class="mail-brief" aria-label="开发信依据">
+          <div class="mail-brief-head">
+            <span>开发信依据</span>
+            ${stageInfo ? badge(`当前阶段 · ${stageInfo.label}`, stageInfo.canSend ? "amber" : "red") : ""}
+          </div>
+          ${stageInfo ? `<p class="mail-brief-objective">${escapeHtml(stageInfo.objective)}</p>` : ""}
+          ${stageInfo && stageInfo.objective ? `<p class="mail-brief-note">切入角度：${escapeHtml(stageInfo.angle)}</p>` : ""}
+          ${briefInfo ? `<p class="mail-brief-note">对谁说：<b>${escapeHtml(briefInfo.role.label)}</b> — ${escapeHtml(briefInfo.role.authority)}</p>` : ""}
+          ${briefInfo && briefInfo.researchUsed
+            ? `<p class="mail-brief-note">已引用背调：${escapeHtml(briefInfo.researchEngine || "本系统背调")}${typeof briefInfo.researchScore === "number" ? ` · 评分 ${briefInfo.researchScore}` : ""}${briefInfo.researchCreatedAt ? ` · ${escapeHtml(formatDateTime(briefInfo.researchCreatedAt))}` : ""}${briefInfo.researchVerdict ? ` · ${escapeHtml(briefInfo.researchVerdict)}` : ""}</p>`
+            : `<p class="mail-brief-note is-warn">尚未引用背调结果，建议先跑一次 AI 背调再写信</p>`}
+          ${briefInfo && briefInfo.evidence.length ? `<p class="mail-brief-note">依据来源：${escapeHtml(briefInfo.evidence.join("、"))}</p>` : ""}
+          ${briefInfo && briefInfo.missing.length ? `<p class="mail-brief-note is-warn">待补齐：${escapeHtml(briefInfo.missing.join("、"))}</p>` : ""}
+          ${qualityInfo && qualityInfo.issues.length
+            ? `<ul class="mail-brief-issues">${qualityInfo.issues.map((issue) => `<li>${escapeHtml(issue)}</li>`).join("")}</ul>`
+            : qualityInfo ? `<p class="mail-brief-note is-ok">发送前自检：通过</p>` : ""}
+        </section>` : ""}
         <label class="mail-subject-field"><span>主题</span><input id="developmentEmailSubject" value="${escapeHtml(draft.subject)}"></label>
         <label class="mail-body-field"><span>正文</span><textarea id="developmentEmailBody">${escapeHtml(draft.body)}</textarea></label>
         <footer><span id="developmentEmailCount">${draft.body.length} 字符</span><b>${escapeHtml(draft.engine)}</b></footer>
@@ -10393,6 +14382,9 @@ async function generateDevelopmentEmailDraftPage(requireAi = false) {
       draft: DevelopmentEmailDraft;
       readiness: DevelopmentEmailReadiness;
       companyProfile: CompanyProfile;
+      stage: DevelopmentEmailStageInfo | null;
+      brief: DevelopmentEmailBriefInfo | null;
+      quality: DevelopmentEmailQuality | null;
     }>("/api/development-email/draft", {
       method: "POST",
       body: JSON.stringify({
@@ -10401,9 +14393,15 @@ async function generateDevelopmentEmailDraftPage(requireAi = false) {
         tone: developmentEmailTone,
         scenario: developmentEmailScenario,
         goal: developmentEmailGoal,
-        requireAi
+        requireAi,
+        // 开发信技能：默认引用这家客户的背调结论，并按当前开发阶段写作；有 AI 就用 AI。
+        useResearch: true,
+        useAi: true
       })
     });
+    developmentEmailStageInfo = result.stage || null;
+    developmentEmailBriefInfo = result.brief || null;
+    developmentEmailQuality = result.quality || null;
     developmentEmailDraft = result.draft;
     developmentEmailScenarioDrafts.set(developmentEmailScenario, {
       subject: result.draft.subject,
@@ -10553,14 +14551,52 @@ function renderTeamSystemSettings() {
     status.className = `badge ${teamSystemSettings.requireDocumentExcelApproval ? "amber" : "green"}`;
     status.textContent = teamSystemSettings.requireDocumentExcelApproval ? "已开启" : "默认关闭";
   }
+  const provider = qs<HTMLSelectElement>("#tradeDocumentOcrProvider");
+  const apiKey = qs<HTMLInputElement>("#tradeDocumentOcrApiKey");
+  const secretKey = qs<HTMLInputElement>("#tradeDocumentOcrSecretKey");
+  const model = qs<HTMLInputElement>("#tradeDocumentOcrModel");
+  const enabled = qs<HTMLInputElement>("#tradeDocumentOcrEnabled");
+  const providerStatus = qs<HTMLElement>("#tradeDocumentOcrProviderStatus");
+  if (provider) provider.value = tradeDocumentOcrProvider.provider;
+  if (apiKey) apiKey.placeholder = tradeDocumentOcrProvider.hasApiKey ? "已配置，留空保持不变" : "填写已申请的 API Key";
+  if (secretKey) { secretKey.placeholder = tradeDocumentOcrProvider.hasSecretKey ? "已配置，留空保持不变" : "百度 OCR Secret Key"; secretKey.closest("label")?.toggleAttribute("hidden", tradeDocumentOcrProvider.provider !== "baidu"); }
+  if (model) { model.value = tradeDocumentOcrProvider.model || "Qwen/Qwen2.5-VL-32B-Instruct"; model.closest("label")?.toggleAttribute("hidden", tradeDocumentOcrProvider.provider !== "siliconflow"); }
+  if (enabled) enabled.checked = tradeDocumentOcrProvider.enabled;
+  if (providerStatus) {
+    providerStatus.className = `badge ${tradeDocumentOcrProvider.enabled ? "green" : "amber"}`;
+    providerStatus.textContent = tradeDocumentOcrProvider.enabled ? `已启用：${tradeDocumentOcrProvider.provider === "baidu" ? "百度 OCR" : "硅基流动视觉"}` : "未启用，使用 AI 视觉模型";
+  }
 }
 
 async function loadTeamSystemSettings() {
-  const result = await api<{ settings: TeamSystemSettings; canManage: boolean }>("/api/system-settings");
+  const result = await api<{ settings: TeamSystemSettings; ocr: TradeDocumentOcrProviderConfig; canManage: boolean }>("/api/system-settings");
   teamSystemSettings = result.settings;
+  tradeDocumentOcrProvider = result.ocr;
   teamSystemSettingsCanManage = result.canManage;
   renderTeamSystemSettings();
   return result.settings;
+}
+
+async function saveTradeDocumentOcrProvider(button?: HTMLButtonElement) {
+  if (!teamSystemSettingsCanManage) return;
+  const provider = qs<HTMLSelectElement>("#tradeDocumentOcrProvider")?.value || "none";
+  const enabled = Boolean(qs<HTMLInputElement>("#tradeDocumentOcrEnabled")?.checked);
+  const apiKey = qs<HTMLInputElement>("#tradeDocumentOcrApiKey")?.value || "";
+  const secretKey = qs<HTMLInputElement>("#tradeDocumentOcrSecretKey")?.value || "";
+  const model = qs<HTMLInputElement>("#tradeDocumentOcrModel")?.value.trim() || "";
+  try {
+    if (button) setButtonPending(button, true, "保存 OCR 配置", "保存中");
+    const result = await api<{ ocr: TradeDocumentOcrProviderConfig }>("/api/system-settings/ocr", { method: "PUT", body: JSON.stringify({ provider, enabled, apiKey, secretKey, model }) });
+    tradeDocumentOcrProvider = result.ocr;
+    if (qs<HTMLInputElement>("#tradeDocumentOcrApiKey")) qs<HTMLInputElement>("#tradeDocumentOcrApiKey")!.value = "";
+    if (qs<HTMLInputElement>("#tradeDocumentOcrSecretKey")) qs<HTMLInputElement>("#tradeDocumentOcrSecretKey")!.value = "";
+    renderTeamSystemSettings();
+    toast(tradeDocumentOcrProvider.enabled ? "外部 OCR 已启用，识别时优先使用" : "外部 OCR 已关闭，将使用原 AI 视觉模型", "success");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "OCR 配置保存失败", "error");
+  } finally {
+    if (button) setButtonPending(button, false, "保存 OCR 配置", "保存中");
+  }
 }
 
 async function saveTeamSystemSettings(button?: HTMLButtonElement) {
@@ -10608,6 +14644,19 @@ function launchCustomerContact(customer: Customer, channel: "email" | "phone" | 
     void openWhatsAppForContact({ phone: contacts.whatsapp, displayName: customer.contact || customer.company });
     return;
   }
+  if (channel === "wechat") {
+    if (!contacts.wechat) {
+      toast("请先补充客户微信号，再发起微信联系");
+      openCustomerModal(customer);
+      return;
+    }
+    void navigator.clipboard?.writeText(contacts.wechat).then(() => {
+      toast(`微信号 ${contacts.wechat} 已复制，去微信添加或搜索即可`);
+    }).catch(() => {
+      toast(`微信号：${contacts.wechat}（复制失败，请手动记录）`);
+    });
+    return;
+  }
   toast("企业微信联系适配器已预留，通讯接口接入后可直接发起联系");
 }
 
@@ -10636,7 +14685,7 @@ function renderCustomerDetailPage(customer?: Customer) {
           <p>${escapeHtml(current.country)} · ${escapeHtml(current.contact)} · 负责人 ${escapeHtml(current.ownerName || "未分配")}</p>
         </div>
       </div>
-      <div class="customer-page-actions"><button class="btn" type="button" data-customer-page-whatsapp>WhatsApp</button><button class="btn primary ai-entry-button" type="button" data-customer-page-research>${researchButtonIcon()}AI 背调</button><button class="btn" type="button" data-customer-page-email>写开发信</button><button class="btn" type="button" data-customer-page-edit>编辑客户</button><button class="btn" type="button" data-customer-page-follow>新增跟进</button><button class="btn" type="button" data-customer-page-release>放入公池</button></div>
+      <div class="customer-page-actions"><button class="btn" type="button" data-customer-page-whatsapp>WhatsApp</button><button class="btn primary ai-entry-button" type="button" data-customer-page-research>${researchButtonIcon()}AI 背调</button><button class="btn" type="button" data-customer-page-email>写开发信</button><button class="btn" type="button" data-customer-page-journey>开发信过程</button><button class="btn" type="button" data-customer-page-edit>编辑客户</button><button class="btn" type="button" data-customer-page-follow>新增跟进</button><button class="btn" type="button" data-customer-page-release>放入公池</button></div>
     </header>
 
     <section class="customer-page-summary" aria-label="客户摘要">
@@ -10661,6 +14710,7 @@ function renderCustomerDetailPage(customer?: Customer) {
           <div class="customer-profile-field"><span>账单地址</span><b>${escapeHtml(current.billingAddress || "待维护")}</b></div>
           <div class="customer-profile-field"><span>贸易 / 付款条款</span><b>${escapeHtml(current.defaultIncoterm || "待维护")} · ${escapeHtml(current.defaultPaymentTerm || "待维护")}</b></div>
           <div class="customer-profile-field"><span>默认目的港</span><b>${escapeHtml(current.defaultPortDischarge || "待维护")}</b></div>
+          <div class="customer-profile-field full"><span>其它说明</span><b>${escapeHtml(current.otherNotes || "待维护")}</b></div>
         </div>
       </section>
 
@@ -10671,13 +14721,14 @@ function renderCustomerDetailPage(customer?: Customer) {
           <div class="customer-contact-row"><span>邮箱</span><b>${escapeHtml(contacts.email || "未维护")}</b><small>${contacts.email ? "可直接发邮件" : "待补充"}</small></div>
           <div class="customer-contact-row"><span>电话</span><b>${escapeHtml(contacts.phone || "未维护")}</b><small>${contacts.phone ? "可直接拨号" : "待补充"}</small></div>
           <div class="customer-contact-row"><span>WhatsApp</span><b>${escapeHtml(contacts.whatsapp || "未维护")}</b><small>${contacts.whatsapp ? "可直接沟通" : "待补充"}</small></div>
+          <div class="customer-contact-row"><span>微信</span><b>${escapeHtml(contacts.wechat || "未维护")}</b><small>${contacts.wechat ? "点击下方按钮复制" : "待补充"}</small></div>
           <div class="customer-contact-row"><span>其它渠道</span><b>${escapeHtml(current.contactRemark || "未维护")}</b><small>${current.contactRemark ? "已登记备注" : "可补充 LinkedIn / 微信等"}</small></div>
         </div>
         <div class="customer-contact-actions">
           <button class="customer-contact-action ${contacts.email ? "is-ready" : ""}" type="button" data-customer-contact="email">${customerContactIcon("email")}<span>邮件${contacts.email ? "" : " · 待维护"}</span></button>
           <button class="customer-contact-action ${contacts.phone ? "is-ready" : ""}" type="button" data-customer-contact="phone">${customerContactIcon("phone")}<span>电话${contacts.phone ? "" : " · 待维护"}</span></button>
           <button class="customer-contact-action ${contacts.whatsapp ? "is-ready" : ""}" type="button" data-customer-contact="whatsapp">${customerContactIcon("whatsapp")}<span>WhatsApp · ${contacts.whatsapp ? "直接沟通" : "未维护"}</span></button>
-          <button class="customer-contact-action" type="button" data-customer-contact="wechat">${customerContactIcon("wechat")}<span>企业微信 · 待接入</span></button>
+          <button class="customer-contact-action ${contacts.wechat ? "is-ready" : ""}" type="button" data-customer-contact="wechat">${customerContactIcon("wechat")}<span>微信 · ${contacts.wechat ? "点击复制" : "未维护"}</span></button>
         </div>
       </section>
 
@@ -10695,6 +14746,11 @@ function renderCustomerDetailPage(customer?: Customer) {
       <section class="customer-page-section full customer-communication-section" id="customerCommunicationInsights">
         <div class="customer-page-section-head"><div><h2>WhatsApp 客户洞察</h2><p>实时会话、客户特点、风险与下一动作</p></div><span class="communication-sync-status"><i></i>正在同步</span></div>
         <div class="communication-insight-loading"><span class="loading-dot"></span><b>正在读取即刻沟通客户画像</b><small>只读同步，不会发送任何消息</small></div>
+      </section>
+
+      <section class="customer-page-section full" id="customerDevEmailHistory">
+        <div class="customer-page-section-head"><div><h2>开发信历史</h2><p>发出去的每一封开发信与客户的反馈记录</p></div><button class="btn" type="button" data-cust-email-journey>查看完整过程</button></div>
+        <div class="communication-insight-loading"><span class="loading-dot"></span><b>正在读取开发信历史</b><small>发送、打开、回复与退信记录都会归档在这里</small></div>
       </section>
 
       <section class="customer-page-section full">
@@ -10716,12 +14772,91 @@ function renderCustomerDetailPage(customer?: Customer) {
   qs<HTMLButtonElement>("[data-customer-page-release]", box)?.addEventListener("click", () => openCustomerReleaseModal(current));
   qs<HTMLButtonElement>("[data-customer-page-research]", box)?.addEventListener("click", () => openBackgroundResearch("customer", current.id, current.company, "customer-detail"));
   qs<HTMLButtonElement>("[data-customer-page-email]", box)?.addEventListener("click", () => openDevelopmentEmail("customer", current.id, current.company, "customer-detail"));
+  qs<HTMLButtonElement>("[data-customer-page-journey]", box)?.addEventListener("click", () =>
+    void openOutreachCustomerJourney("customer", current.id, current.company, "customer-detail"));
   qsa<HTMLButtonElement>("[data-customer-page-follow]", box).forEach((button) => button.addEventListener("click", () => addFollowRecord(current)));
   qs<HTMLButtonElement>("[data-customer-page-pipeline]", box)?.addEventListener("click", () => activateNavView("pipeline"));
+  qsa<HTMLButtonElement>("[data-cust-email-journey]", box).forEach((button) => button.addEventListener("click", () =>
+    void openOutreachCustomerJourney("customer", current.id, current.company, "customer-detail")));
   qsa<HTMLButtonElement>("[data-customer-contact]", box).forEach((button) => {
     button.addEventListener("click", () => launchCustomerContact(current, button.dataset.customerContact as "email" | "phone" | "whatsapp" | "wechat"));
   });
   void loadCustomerCommunicationInsights(current);
+  void loadCustomerDevEmailHistory(current);
+}
+
+/** 客户详情页内嵌「开发信历史」：复用 outreach-journey 档案接口，按客户聚合已发邮件 */
+async function loadCustomerDevEmailHistory(customer: Customer) {
+  const box = qs<HTMLElement>("#customerDevEmailHistory");
+  if (!box || state.selectedCustomerId !== customer.id) return;
+  try {
+    const view = await api<OutreachJourneyView>(
+      `/api/outreach-journey?entityType=customer&entityId=${encodeURIComponent(customer.id)}`
+    );
+    if (state.selectedCustomerId !== customer.id || !box.isConnected) return;
+    renderCustomerDevEmailHistory(box, customer, view);
+  } catch (error) {
+    if (state.selectedCustomerId !== customer.id || !box.isConnected) return;
+    const message = error instanceof Error ? error.message : "开发信历史加载失败";
+    box.innerHTML = `
+      <div class="customer-page-section-head"><div><h2>开发信历史</h2><p>发出去的每一封开发信与客户的反馈记录</p></div><button class="btn" type="button" data-cust-email-journey>查看完整过程</button></div>
+      <div class="communication-insight-empty compact"><b>暂无法读取开发信历史</b><span>${escapeHtml(message)}</span></div>`;
+    qs<HTMLButtonElement>("[data-cust-email-journey]", box)?.addEventListener("click", () =>
+      void openOutreachCustomerJourney("customer", customer.id, customer.company, "customer-detail"));
+  }
+}
+
+function renderCustomerDevEmailHistory(box: HTMLElement, customer: Customer, view: OutreachJourneyView) {
+  const stats = view.stats;
+  const stage = view.stage;
+  const tone = outreachBadgeTone(stage.tone);
+  const emails = view.emails.slice().reverse();
+  const emailsHtml = emails.map((email) => {
+    const flags = [
+      email.dispatchStatus === "sent" ? badge("已投递", "green") : email.dispatchStatus === "pending" ? badge("投递中", "amber") : badge("结果待确认", "red"),
+      email.openCount ? badge(`打开 ${email.openCount}`, "blue") : "",
+      email.clickCount ? badge(`点击 ${email.clickCount}`, "blue") : "",
+      email.repliedAt ? badge("已回复", "green") : "",
+      email.bouncedAt ? badge("已退信", "red") : ""
+    ].filter(Boolean).join("");
+    return `<article class="cust-email-row">
+      <time>${escapeHtml(formatDateTime(email.sentAt))}</time>
+      <div class="cust-email-main">
+        <b>第 ${email.index} 封 · ${escapeHtml(email.subject || "（无主题）")}</b>
+        <small>收件人 ${escapeHtml(email.recipient || "未记录")} · ${escapeHtml(email.sourceLabel || "手动发送")}${email.batchName ? ` · 批次 ${escapeHtml(email.batchName)}` : ""}</small>
+        ${email.dispatchError ? `<small style="color:#b33d35">投递异常：${escapeHtml(email.dispatchError)}</small>` : ""}
+        ${email.body ? `<details><summary>查看完整正文</summary><pre>${escapeHtml(email.body)}</pre></details>` : email.bodyPreview ? `<small>${escapeHtml(email.bodyPreview)}</small>` : ""}
+      </div>
+      <div class="cust-email-flags">${flags}</div>
+    </article>`;
+  }).join("");
+  const replies = view.replies.slice().reverse();
+  const repliesHtml = replies.length ? `<div class="cust-email-replies">${replies.map((reply) => {
+    const isBounce = reply.eventType === "bounce" || reply.classification === "bounced";
+    const isNegative = reply.classification === "rejected" || reply.classification === "unsubscribed";
+    return `<div class="cust-email-reply${isBounce || isNegative ? " is-bad" : ""}">
+      <b>${escapeHtml(isBounce ? "退信" : reply.classificationLabel || "客户回复")} · ${escapeHtml(formatDateTime(reply.occurredAt))}</b>
+      <p>${escapeHtml(reply.content || reply.subject || "（无正文）")}</p>
+    </div>`;
+  }).join("")}</div>` : "";
+  const bodyHtml = emails.length
+    ? emailsHtml + repliesHtml
+    : `<div class="communication-insight-empty compact"><b>还没有给这家客户发过开发信</b><span>发出第一封后，发送、打开、回复与退信记录都会自动归档在这里。</span><button class="btn primary" type="button" data-cust-email-write>写开发信</button></div>`;
+  box.innerHTML = `
+    <div class="customer-page-section-head"><div><h2>开发信历史</h2><p>${escapeHtml(stats.outboundCount ? `已发 ${stats.outboundCount} 封 · 最近 ${stats.lastSentAt ? formatDateTime(stats.lastSentAt) : "—"}` : "发出去的每一封开发信与客户的反馈记录")}</p></div><button class="btn" type="button" data-cust-email-journey>查看完整过程</button></div>
+    <div class="cust-email-summary">
+      <span><small>已发送</small><b>${stats.outboundCount} 封</b></span>
+      <span><small>回复</small><b class="${stats.replyCount ? "is-good" : ""}">${stats.replyCount} 条</b></span>
+      <span><small>打开</small><b>${stats.openCount} 次</b></span>
+      <span><small>点击</small><b>${stats.clickCount} 次</b></span>
+      <span><small>退信</small><b class="${stats.bounceCount ? "is-bad" : ""}">${stats.bounceCount} 封</b></span>
+      <span class="cust-email-stage">${badge(stage.label, tone)}<small>${escapeHtml(stage.nextStepLabel || stage.description || "")}</small></span>
+    </div>
+    ${bodyHtml}`;
+  qs<HTMLButtonElement>("[data-cust-email-journey]", box)?.addEventListener("click", () =>
+    void openOutreachCustomerJourney("customer", customer.id, customer.company, "customer-detail"));
+  qs<HTMLButtonElement>("[data-cust-email-write]", box)?.addEventListener("click", () =>
+    openDevelopmentEmail("customer", customer.id, customer.company, "customer-detail"));
 }
 
 function communicationLevelLabel(value: "high" | "medium" | "low") {
@@ -11171,10 +15306,11 @@ function renderCustomerDrawer(customer?: Customer) {
       <div class="info"><span>在手商机额</span><b>${money(pipelineAmount)}</b></div>
       <div class="info"><span>下一提醒</span><b>${escapeHtml(customer.nextReminder)}</b></div>
       <div class="info"><span>WhatsApp</span><b>${escapeHtml(customerContactDetails(customer).whatsapp || "待维护")}</b></div>
+      <div class="info"><span>微信</span><b>${escapeHtml(customer.wechat || "待维护")}</b></div>
       <div class="info"><span>其它渠道</span><b>${escapeHtml(customer.contactRemark || "待维护")}</b></div>
-      <div class="info"><span>企业微信</span><b>待接入</b></div>
+      <div class="info"><span>其它说明</span><b>${escapeHtml(customer.otherNotes || "待维护")}</b></div>
     </div>
-    <div class="inline-actions"><button class="btn" data-customer-whatsapp-drawer>WhatsApp</button><button class="btn primary ai-entry-button" data-customer-research>${researchButtonIcon()}AI 背调</button><button class="btn" data-customer-email>写开发信</button><button class="btn" data-customer-meeting><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><path d="M12 19v3"/></svg>录制会议</button><button class="btn" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button><button class="btn" data-customer-release-drawer>放入公池</button></div>
+    <div class="inline-actions"><button class="btn" data-customer-whatsapp-drawer>WhatsApp</button><button class="btn primary ai-entry-button" data-customer-research>${researchButtonIcon()}AI 背调</button><button class="btn" data-customer-email>写开发信</button><button class="btn" data-customer-journey-drawer>开发信过程</button><button class="btn" data-customer-meeting><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><path d="M12 19v3"/></svg>录制会议</button><button class="btn" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button><button class="btn" data-customer-release-drawer>放入公池</button></div>
     ${renderCustomerMeetingBrief(customer)}
     ${renderCustomerIntelligence(customer)}
     <section class="customer-communication-drawer" id="customerCommunicationDrawerInsights">
@@ -11223,6 +15359,8 @@ function renderCustomerDrawer(customer?: Customer) {
     void createCustomerMeetingTodo(customer, button.dataset.customerMeetingTodo || "", button);
   });
   qs<HTMLButtonElement>("[data-add-follow]", drawer)?.addEventListener("click", () => addFollowRecord(customer));
+  qs<HTMLButtonElement>("[data-customer-journey-drawer]", drawer)?.addEventListener("click", () =>
+    void openOutreachCustomerJourney("customer", customer.id, customer.company, "customer-drawer"));
   qsa<HTMLButtonElement>("[data-edit-customer-drawer]", drawer).forEach((button) => {
     button.addEventListener("click", () => openCustomerModal(customer));
   });
@@ -11682,6 +15820,7 @@ function renderPipeline(deals: Deal[]) {
           <button class="btn primary deal-primary-action" data-move-deal>${dealPrimaryAction(deal.stage)}</button>
           <div class="deal-secondary-actions">
             <button type="button" class="btn" data-record-deal>记录进展</button>
+            ${deal.stage === "已联系" ? `<button type="button" class="btn" data-generate-deal-quotation>生成报价单</button>` : ""}
             ${["已报价", "样品", "谈判"].includes(deal.stage) ? `<button type="button" class="btn" data-print-deal-document>生成 PI</button>` : ""}
             ${["已报价", "样品", "谈判", "成交"].includes(deal.stage) ? `<button type="button" class="btn" data-generate-customs>生成报关资料</button>` : ""}
             <button type="button" class="btn danger" data-lost-deal>标记丢单</button>
@@ -11706,6 +15845,9 @@ function renderPipeline(deals: Deal[]) {
   });
   qsa<HTMLButtonElement>("[data-print-deal-document]", strip).forEach((button) => {
     button.addEventListener("click", () => void printDealDocument(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
+  });
+  qsa<HTMLButtonElement>("[data-generate-deal-quotation]", strip).forEach((button) => {
+    button.addEventListener("click", () => void printDealDocument(button.closest<HTMLElement>(".deal")?.dataset.dealId || "", "QUOTATION"));
   });
   qsa<HTMLButtonElement>("[data-generate-customs]", strip).forEach((button) => {
     button.addEventListener("click", () => void generateCustomsDocument(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
@@ -11762,8 +15904,66 @@ function controlledDocumentImageUrl(value: string | undefined) {
   return /^\/uploads\/[A-Za-z0-9._-]+\.(?:png|jpe?g)$/i.test(imageUrl) ? imageUrl : "";
 }
 
-function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
-  const type: "PI" | "CI" = deal.stage === "成交" ? "CI" : "PI";
+function sellerProfileMatchScore(profile: DocumentLetterhead, customer: Customer | undefined, currency: string, type: TradeDocument["type"]) {
+  if (!profile.enabled) return -1;
+  const normalize = (value: string) => value.trim().toLocaleLowerCase();
+  const country = normalize(customer?.country || "");
+  const countries = (profile.matchCountries || []).map(normalize).filter(Boolean);
+  const currencies = (profile.matchCurrencies || []).map((value) => value.trim().toUpperCase()).filter(Boolean);
+  const documentTypes = profile.matchDocumentTypes || [];
+  if (countries.length && !countries.includes(country)) return -1;
+  if (currencies.length && !currencies.includes(currency.trim().toUpperCase())) return -1;
+  if (documentTypes.length && !documentTypes.includes(type)) return -1;
+  return (countries.length ? 1000 : 0)
+    + (currencies.length ? 200 : 0)
+    + (documentTypes.length ? 50 : 0)
+    + Math.max(0, Math.min(100, profile.matchPriority || 0))
+    + (profile.isDefault ? 1 : 0);
+}
+
+function matchedSellerProfile(customer: Customer | undefined, currency: string, type: TradeDocument["type"], explicitId = "", sellerName = "") {
+  const available = state.documentAssets.letterheads.filter((item) => item.enabled);
+  if (explicitId) return available.find((item) => item.id === explicitId);
+  const normalizedSeller = sellerName.trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  if (normalizedSeller) {
+    const namedProfile = available.find((item) => item.companyName.trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "") === normalizedSeller);
+    if (namedProfile) return namedProfile;
+  }
+  return available
+    .map((item) => ({ item, score: sellerProfileMatchScore(item, customer, currency, type) }))
+    .filter((entry) => entry.score >= 0)
+    .sort((left, right) => right.score - left.score || right.item.updatedAt.localeCompare(left.item.updatedAt))[0]?.item;
+}
+
+function sellerProfileDocumentDefaults(profile: DocumentLetterhead | undefined): Partial<TradeDocument> {
+  if (!profile) return {};
+  return {
+    seller: profile.companyName,
+    sellerAddress: profile.address,
+    sellerContact: profile.contact || "",
+    sellerPhone: profile.phone,
+    sellerEmail: profile.email,
+    sellerWebsite: profile.website,
+    sellerTaxNo: profile.taxNo || "",
+    bankInfo: profile.bankInfo,
+    letterheadId: profile.id,
+    stampId: profile.stampId || "",
+    signatureId: profile.signatureId || ""
+  };
+}
+
+function sellerProfileMatchReason(profile: DocumentLetterhead, customer: Customer | undefined, currency: string, type: TradeDocument["type"]) {
+  const reasons = [
+    profile.matchCountries?.length && customer?.country ? `国家 ${customer.country}` : "",
+    profile.matchCurrencies?.length ? `币种 ${currency}` : "",
+    profile.matchDocumentTypes?.length ? `单据 ${documentTypeLabel(type)}` : "",
+    profile.isDefault ? "默认公司" : ""
+  ].filter(Boolean);
+  return reasons.join(" · ") || "通用匹配";
+}
+
+function tradeDocumentFromDeal(deal: Deal, customer: Customer, requestedType?: TradeDocument["type"]): TradeDocument {
+  const type: TradeDocument["type"] = requestedType || (deal.stage === "成交" ? "CI" : "PI");
   const date = todayDateInput();
   const product = dealProductsText(deal) || deal.title;
   const documentItems = dealItemsOf(deal).map((dealItem, index) => {
@@ -11786,8 +15986,10 @@ function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
     };
   });
   const defaults = defaultTradeDocument(type);
+  const sellerProfile = matchedSellerProfile(customer, deal.currency || defaults.currency, type);
   return {
     ...defaults,
+    ...sellerProfileDocumentDefaults(sellerProfile),
     id: "__new__",
     customerId: customer.id,
     dealId: deal.id,
@@ -11812,7 +16014,7 @@ function tradeDocumentFromDeal(deal: Deal, customer: Customer): TradeDocument {
   };
 }
 
-async function printDealDocument(id: string) {
+async function printDealDocument(id: string, requestedType?: TradeDocument["type"]) {
   const deal = state.deals.find((item) => item.id === id);
   if (!deal) return;
   const customer = state.customers.find((item) => item.id === deal.customerId);
@@ -11820,12 +16022,13 @@ async function printDealDocument(id: string) {
     toast("请先给商机关联客户，再一键打印", "error");
     return;
   }
-  const draft = tradeDocumentFromDeal(deal, customer);
+  const draft = tradeDocumentFromDeal(deal, customer, requestedType);
   state.selectedDocumentId = "__new__";
   activateNavView("documents");
   fillDocumentEditor(draft);
   qsa<HTMLElement>(".doc-list-card").forEach((card) => card.classList.remove("active"));
-  toast("已按客户与商机资料生成 PI 草稿，请补齐卖方和结算资料后保存");
+  const label = requestedType === "QUOTATION" ? "报价单" : draft.type;
+  toast(`已按客户与商机资料生成${label}草稿，请补齐卖方和结算资料后保存`);
 }
 
 async function generateCustomsDocument(id: string) {
@@ -12442,9 +16645,17 @@ async function exportCustomsDocument(customsDoc: CustomsDocument) {
 
 function openDealStageModal(id: string) {
   const deal = state.deals.find((item) => item.id === id);
-  if (!deal) return;
+  if (!deal) {
+    toast("商机数据已变化，请刷新后重试", "error");
+    return;
+  }
   const stages = ["询盘", "已联系", "已报价", "样品", "谈判", "成交"] as const;
-  const nextStage = stages[Math.min(stages.indexOf(deal.stage as typeof stages[number]) + 1, stages.length - 1)];
+  const currentStageIndex = stages.indexOf(deal.stage as typeof stages[number]);
+  if (currentStageIndex < 0) {
+    toast(`「${deal.stage}」不能继续推进，请使用丢单复盘或归档`, "error");
+    return;
+  }
+  const nextStage = stages[Math.min(currentStageIndex + 1, stages.length - 1)];
   const resultLabel: Record<string, string> = {
     "已联系": "本次联系结果",
     "已报价": "报价依据或发送结果",
@@ -12499,19 +16710,30 @@ async function moveDeal(id: string, nextStage: string) {
     toast("请填写客户确认成交的依据", "error");
     return;
   }
-  const result = await api<{ deal: Deal; customer?: Customer }>(`/api/deals/${id}/stage`, {
-    method: "PATCH",
-    body: JSON.stringify({ stage: nextStage, result: resultText, nextAction, nextActionAt, expectedCloseAt, wonReason })
-  });
+  const button = qs<HTMLButtonElement>("#confirmDealStageButton");
+  if (button?.disabled) return;
+  const idleLabel = `确认进入${nextStage}`;
+  setButtonPending(button, true, idleLabel, "推进中…");
+  let result: { deal: Deal; customer?: Customer };
+  try {
+    result = await api<{ deal: Deal; customer?: Customer }>(`/api/deals/${id}/stage`, {
+      method: "PATCH",
+      body: JSON.stringify({ stage: nextStage, result: resultText, nextAction, nextActionAt, expectedCloseAt, wonReason })
+    });
+  } catch (error) {
+    setButtonPending(button, false, idleLabel, idleLabel);
+    toast(error instanceof Error ? error.message : "商机推进失败，请重试", "error");
+    return;
+  }
   if (result.customer) {
     const customerIndex = state.customers.findIndex((customer) => customer.id === result.customer!.id);
     if (customerIndex >= 0) state.customers[customerIndex] = result.customer;
   }
   closeModal();
+  toast(`商机已推进到：${nextStage}`);
   await refreshDealsData();
   void refreshDashboardOnly();
   void loadProspectFeedback(true, true);
-  toast(`商机已推进到：${nextStage}`);
 }
 
 async function archiveDeal(id: string) {
@@ -12523,6 +16745,39 @@ async function archiveDeal(id: string) {
   await refreshDealsData();
   void refreshDashboardOnly();
   toast("成交商机已归档");
+}
+
+async function deleteDeal(id: string, button: HTMLButtonElement | null = null) {
+  const deal = state.deals.find((item) => item.id === id);
+  if (!deal) {
+    toast("商机已不存在，请刷新后重试", "error");
+    return;
+  }
+  if (button?.disabled) return;
+  const confirmed = await confirmAction({
+    title: "删除商机",
+    message: `确定要删除商机「${deal.title}」吗？此操作不可恢复。`,
+    consequences: [
+      "商机的全部阶段与跟进时间线将一并删除",
+      "关联该商机的待办会同时清除",
+      "如已生成 PI/CI/报关资料等单据，需先处理单据后才能删除",
+      "删除后无法恢复，客户资料不受影响"
+    ],
+    confirmLabel: "确认删除",
+    tone: "danger"
+  });
+  if (!confirmed) return;
+  setButtonPending(button, true, "删除商机", "删除中…");
+  try {
+    const result = await api<{ removed: { events: number; todos: number; quoteHistory: number } }>(`/api/deals/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (state.selectedDealId === id) closeDealDrawer();
+    toast(`商机已删除${result.removed.todos ? `，同时清除了 ${result.removed.todos} 条相关待办` : ""}`);
+    await refreshDealsData();
+    void refreshDashboardOnly();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "删除失败，请稍后重试", "error");
+    setButtonPending(button, false, "删除商机", "删除商机");
+  }
 }
 
 function markDealLost(id: string) {
@@ -12546,16 +16801,26 @@ async function submitDealLost(id: string) {
     toast("请填写具体丢单原因", "error");
     return;
   }
-  const result = await api<{ deal: Deal }>(`/api/deals/${id}/lost`, {
-    method: "POST",
-    body: JSON.stringify({ category, reason, revisitAt })
-  });
+  const button = qs<HTMLButtonElement>("#confirmDealLostButton");
+  if (button?.disabled) return;
+  setButtonPending(button, true, "确认丢单", "提交中…");
+  let result: { deal: Deal };
+  try {
+    result = await api<{ deal: Deal }>(`/api/deals/${id}/lost`, {
+      method: "POST",
+      body: JSON.stringify({ category, reason, revisitAt })
+    });
+  } catch (error) {
+    setButtonPending(button, false, "确认丢单", "确认丢单");
+    toast(error instanceof Error ? error.message : "丢单提交失败，请重试", "error");
+    return;
+  }
   Object.assign(state.deals.find((item) => item.id === id) || {}, result.deal);
   closeModal();
+  toast("商机已标记丢单，可在关闭区复盘");
   await refreshDealsData();
   void refreshDashboardOnly();
   void loadProspectFeedback(true, true);
-  toast("商机已标记丢单，可在关闭区复盘");
 }
 
 function formatDateTime(value?: string) {
@@ -12676,9 +16941,12 @@ function renderDealDrawer(id: string) {
     <div id="dealWinGauge"><div style="padding:12px;text-align:center;color:var(--muted);font-size:12px;">AI 赢率分析中...</div></div>
     <div class="deal-detail-actions">
       ${closed ? "" : `<button class="btn primary" id="drawerAdvanceDealButton">${dealPrimaryAction(deal.stage)}</button><button class="btn" id="drawerRecordDealButton">记录进展</button><button class="btn" id="drawerEditDealButton">编辑</button>`}
+      <button class="btn" id="drawerQuoteHistoryButton">报价历史</button>
+      ${deal.stage === "已联系" ? `<button class="btn" id="drawerGenerateQuotationButton">生成报价单</button>` : ""}
       ${["已报价", "样品", "谈判", "成交"].includes(deal.stage) ? `<button class="btn" id="drawerPrintDealButton">${deal.stage === "成交" ? "生成 CI" : "生成 PI"}</button>` : ""}
       ${["已报价", "样品", "谈判", "成交"].includes(deal.stage) ? `<button class="btn" id="drawerGenerateCustomsButton">生成报关资料</button>` : ""}
       ${deal.stage === "成交" && !deal.archivedAt ? `<button class="btn" id="drawerArchiveDealButton">归档成交</button>` : ""}
+      <button class="btn danger" id="drawerDeleteDealButton">删除商机</button>
     </div>
     <div class="section-head" style="margin-top:16px"><div><h3>商机时间线</h3><span class="subline">阶段、报价、样品、谈判、回款与关闭记录</span></div></div>
     <div class="deal-timeline">${events.length ? events.map((event) => `
@@ -12692,9 +16960,12 @@ function renderDealDrawer(id: string) {
   qs("#drawerAdvanceDealButton", drawer)?.addEventListener("click", () => openDealStageModal(deal.id));
   qs("#drawerRecordDealButton", drawer)?.addEventListener("click", () => openDealEventModal(deal.id));
   qs("#drawerEditDealButton", drawer)?.addEventListener("click", () => openDealModal(deal));
+  qs("#drawerQuoteHistoryButton", drawer)?.addEventListener("click", () => openQuoteHistoryForDeal(deal.id));
+  qs("#drawerGenerateQuotationButton", drawer)?.addEventListener("click", () => void printDealDocument(deal.id, "QUOTATION"));
   qs("#drawerPrintDealButton", drawer)?.addEventListener("click", () => void printDealDocument(deal.id));
   qs("#drawerGenerateCustomsButton", drawer)?.addEventListener("click", () => void generateCustomsDocument(deal.id));
   qs("#drawerArchiveDealButton", drawer)?.addEventListener("click", () => void archiveDeal(deal.id));
+  qs("#drawerDeleteDealButton", drawer)?.addEventListener("click", (event) => void deleteDeal(deal.id, event.currentTarget as HTMLButtonElement));
   void loadDealWinProbability(deal.id);
 }
 
@@ -12757,7 +17028,10 @@ async function loadDealWinProbability(dealId: string) {
 
 function openDealEventModal(id: string) {
   const deal = state.deals.find((item) => item.id === id);
-  if (!deal) return;
+  if (!deal) {
+    toast("商机数据已变化，请刷新后重试", "error");
+    return;
+  }
   const defaultType = deal.stage === "已报价" ? "quote" : deal.stage === "样品" ? "sample" : deal.stage === "谈判" ? "negotiation" : "follow_up";
   openModal("记录商机进展", `
     <div class="form-grid">
@@ -12785,13 +17059,22 @@ async function saveDealEvent(id: string) {
     toast("请填写本次进展、下一动作和日期", "error");
     return;
   }
-  await api(`/api/deals/${id}/events`, {
-    method: "POST",
-    body: JSON.stringify({ type, content, nextAction, nextActionAt })
-  });
+  const button = qs<HTMLButtonElement>("#saveDealEventButton");
+  if (button?.disabled) return;
+  setButtonPending(button, true, "保存进展", "保存中…");
+  try {
+    await api(`/api/deals/${id}/events`, {
+      method: "POST",
+      body: JSON.stringify({ type, content, nextAction, nextActionAt })
+    });
+  } catch (error) {
+    setButtonPending(button, false, "保存进展", "保存进展");
+    toast(error instanceof Error ? error.message : "进展保存失败，请重试", "error");
+    return;
+  }
   closeModal();
-  await refreshDealsData();
   toast("商机进展已记录");
+  await refreshDealsData();
 }
 
 function openDealModal(
@@ -13864,6 +18147,44 @@ async function exportCommission() {
   toast(`已导出 ${result.exportJob.rows} 行提成对账数据`);
 }
 
+/**
+ * 规则卡片第二行的文案：**这一次运行到底为什么没生成待办**。
+ * 数据来自后端 `lastSkipReasons`（每次运行重算并落库），不是写死的模板 ——
+ * 只有真跑过一轮才知道是"客户已有未完成待办"还是"刚完成、还在重新计时"。
+ */
+function reminderRunNote(reminder: Reminder, liveTodos: number): { text: string; tone: "muted" | "amber" } {
+  const generates = reminder.generateTodo !== false;
+  const unit = `${reminder.days ?? 3} ${reminderTimeUnitText(reminder.timeUnit)}`;
+  if (!reminder.lastRunAt) {
+    if (!generates) return { tone: "amber", text: "未勾选「生成待办中心任务」：只记录命中统计，不产生待办" };
+    return liveTodos
+      ? { tone: "amber", text: `当前已存在 ${liveTodos} 条未完成待办 → 本次不会重复生成，完成后按 ${unit} 重新计时` }
+      : { tone: "muted", text: "尚未运行；命中且该客户没有未完成待办时会生成待办" };
+  }
+  const whom = (customers?: string[]) => {
+    const names = (customers || []).slice(0, 2).join("、");
+    if (!names) return "";
+    return (customers || []).length > 2 ? `（${names} 等）` : `（${names}）`;
+  };
+  const parts = (reminder.lastSkipReasons || [])
+    .filter((bucket) => bucket.count > 0)
+    .map((bucket) => {
+      if (bucket.reason === "generate-disabled") return `${bucket.count} 条命中未生成：规则未勾选「生成待办中心任务」，只统计`;
+      if (bucket.reason === "active-todo") return `${bucket.count} 条命中跳过${whom(bucket.customers)}：该客户已有未完成待办，完成后按 ${unit} 重新计时`;
+      if (bucket.reason === "cooldown") return `${bucket.count} 条命中跳过${whom(bucket.customers)}：待办刚完成，还在按 ${unit} 重新计时`;
+      return `${bucket.count} 条命中跳过`;
+    });
+  const created = reminder.lastCreatedCount || 0;
+  if (created) parts.unshift(`已生成 ${created} 条待办`);
+  if (!parts.length) {
+    const matched = reminder.lastMatchedCount || 0;
+    return matched
+      ? { tone: "muted", text: `命中 ${matched} 条，本次无需新建（已有待办覆盖）` }
+      : { tone: "muted", text: "本次没有命中记录" };
+  }
+  return { tone: created && (reminder.lastSkippedCount || 0) === 0 ? "muted" : "amber", text: parts.join("；") };
+}
+
 function renderReminders(reminders: Reminder[]) {
   const list = qs<HTMLElement>("#reminders .task-list");
   renderTopbarStats();
@@ -13893,8 +18214,12 @@ function renderReminders(reminders: Reminder[]) {
     const enabled = reminder.enabled !== false;
     const accent = enabled ? reminder.priority === "high" ? "rose" : "brand" : "gray";
     const runSummary = reminder.lastRunAt
-      ? `最近手工运行 ${escapeHtml(formatDateTime(reminder.lastRunAt))}｜匹配 ${reminder.lastMatchedCount || 0}｜新建 ${reminder.lastCreatedCount || 0}｜跳过 ${reminder.lastSkippedCount || 0}｜失败 ${reminder.lastFailedCount || 0}`
-      : "尚未手工运行";
+      ? `最近运行 ${escapeHtml(formatDateTime(reminder.lastRunAt))}｜匹配 ${reminder.lastMatchedCount || 0}｜新建 ${reminder.lastCreatedCount || 0}｜跳过 ${reminder.lastSkippedCount || 0}｜失败 ${reminder.lastFailedCount || 0}`
+      : "尚未运行";
+    // 第二行回答「这一次为什么没生成」：优先显示后端上一次运行的真实跳过原因（含客户名）。
+    const generates = reminder.generateTodo !== false;
+    const liveTodos = liveReminderTodoCount(reminder.id);
+    const runNote = reminderRunNote(reminder, liveTodos);
     return `<article class="task reminder-rule-card" data-reminder-id="${escapeHtml(reminder.id)}" style="--accent: var(--${accent})">
       <i class="task-line"></i>
       <div>
@@ -13902,11 +18227,13 @@ function renderReminders(reminders: Reminder[]) {
         <div class="reminder-rule-meta">
           ${badge(reminderRuleTypeText(reminder.ruleType), "")}
           ${badge(reminder.targetStage || "不限阶段", "")}
-          ${badge(`${reminder.days ?? 3} 天`, "")}
+          ${badge(`${reminder.days ?? 3} ${reminderTimeUnitText(reminder.timeUnit)}`, "")}
+          ${badge(reminder.targetCustomerIds?.length ? `关联客户 ${reminder.targetCustomerIds.length} 家` : "全部客户", "")}
           ${badge(reminder.priority === "high" ? "高优先级" : reminder.priority === "medium" ? "中优先级" : "普通", priorityTone)}
-          ${badge("站内任务", "gray")}
+          ${badge(generates ? "生成待办" : "仅统计", generates ? "" : "gray")}
         </div>
         <div class="reminder-run-summary">${runSummary}${reminder.lastError ? `｜${escapeHtml(reminder.lastError)}` : ""}</div>
+        <div class="reminder-run-summary" style="color:${runNote.tone === "amber" ? "var(--amber)" : "var(--muted)"}">${escapeHtml(runNote.text)}</div>
       </div>
       <div class="reminder-rule-actions">
         <button class="btn" data-run-reminder ${enabled ? "" : "disabled"}>手工运行</button>
@@ -14000,18 +18327,32 @@ function renderReminderTasks(list: HTMLElement) {
 function openReminderTaskResult(id: string) {
   const todo = state.todos.find((item) => item.id === id);
   if (!todo) return;
+  const rule = state.reminders.find((item) => item.id === todo.reminderRuleId);
+  const ruleLabel = isAutoMaintenanceTodo(todo) ? "自动维护巡检" : rule?.title || "提醒规则";
   openModal("记录跟进结果", `
     <div class="form-grid">
+      <div class="form-field full" style="grid-column:1/-1;margin:0;padding:9px 10px;border:1px solid #dbe8e5;border-radius:6px;background:#f4faf8;color:#5c6f6b;font-size:11px;line-height:1.6">这条待办由「${escapeHtml(ruleLabel)}」生成，完成前需要记录本次跟进结果：用于回访留痕，并作为下一次提醒的重新计时起点。</div>
       <div class="form-field full"><label>处理结果</label><select id="reminderResultType"><option>已联系客户，等待回复</option><option>客户已回复</option><option>已更新报价或方案</option><option>已记录样品反馈</option><option>无需继续跟进</option></select></div>
       <div class="form-field full"><label>补充说明</label><textarea id="reminderResultNote" rows="3" placeholder="例如：客户周五前确认采购数量"></textarea></div>
     </div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveReminderResult">保存并完成</button>`);
   qs("#saveReminderResult")?.addEventListener("click", async () => {
-    const result = `${qs<HTMLSelectElement>("#reminderResultType")?.value || "已处理"}${qs<HTMLTextAreaElement>("#reminderResultNote")?.value.trim() ? `：${qs<HTMLTextAreaElement>("#reminderResultNote")?.value.trim()}` : ""}`;
-    const response = await api<{ todo: Todo }>(`/api/todos/${id}`, { method: "PATCH", body: JSON.stringify({ done: true, completionResult: result }) });
-    state.todos = state.todos.map((item) => item.id === id ? response.todo : item);
-    renderReminders(state.reminders);
-    closeModal();
-    toast("跟进结果已记录");
+    const button = qs<HTMLButtonElement>("#saveReminderResult");
+    const note = qs<HTMLTextAreaElement>("#reminderResultNote")?.value.trim() || "";
+    const result = `${qs<HTMLSelectElement>("#reminderResultType")?.value || "已处理"}${note ? `：${note}` : ""}`.slice(0, 255);
+    if (button) button.disabled = true;
+    try {
+      const response = await api<{ todo: Todo }>(`/api/todos/${id}`, { method: "PATCH", body: JSON.stringify({ done: true, completionResult: result }) });
+      state.todos = state.todos.map((item) => item.id === id ? response.todo : item);
+      renderReminders(state.reminders);
+      renderTodos(state.todos);
+      updateTodoChips(state.todos);
+      void refreshDashboardOnly();
+      closeModal();
+      toast("跟进结果已记录，待办已完成");
+    } catch (error) {
+      if (button) button.disabled = false;
+      toast(error instanceof Error ? error.message : "保存失败，请稍后重试", "error");
+    }
   });
 }
 
@@ -14410,8 +18751,309 @@ function renderCompetitorDetail(competitor?: Competitor) {
   if (button) button.textContent = competitor.threatLevel === "high" ? "降为中威胁" : "设为高威胁";
 }
 
-function renderCaseStudies(caseStudies: CaseStudy[]) {
-  const sorted = [...caseStudies].sort((a, b) => Number(b.status === "published") - Number(a.status === "published") || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+const PEER_PAGE_SIZE = 20;
+const PEER_RELATION_TONE: Record<PeerRelation, string> = { "互补": "green", "竞争": "red", "互相推荐": "blue" };
+
+/** 联系方式列：邮箱/电话可直接点，官网跳新标签，显示精简域名 */
+function peerContactCell(peer: Peer) {
+  const parts: string[] = [];
+  if (peer.email) parts.push(`<a href="mailto:${escapeHtml(peer.email)}" title="发邮件">${escapeHtml(peer.email)}</a>`);
+  if (peer.phone) parts.push(`<a href="tel:${escapeHtml(peer.phone.replace(/\s+/g, ""))}" title="打电话">${escapeHtml(peer.phone)}</a>`);
+  if (peer.wechat) parts.push(`<span title="微信 / WhatsApp">${escapeHtml(peer.wechat)}</span>`);
+  if (peer.website) {
+    const url = /^https?:\/\//i.test(peer.website) ? peer.website : `https://${peer.website.replace(/^\/+/, "")}`;
+    const host = url.replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
+    parts.push(`<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="打开官网">${escapeHtml(host)}</a>`);
+  }
+  return parts.length ? parts.join(`<span class="peer-contact-sep">·</span>`) : "—";
+}
+
+function renderPeers() {
+  const tbody = qs<HTMLElement>("#peersTableBody");
+  if (!tbody) return;
+  const q = state.peerSearch.trim().toLowerCase();
+  const filtered = state.peers.filter((peer) => {
+    const matchRelation = state.peerRelationFilter === "all"
+      || (state.peerRelationFilter === "未标注" ? peer.relations.length === 0 : peer.relations.includes(state.peerRelationFilter));
+    const haystack = [peer.company, peer.country, peer.industry, peer.contact, peer.phone, peer.email, peer.wechat, peer.website, peer.remark]
+      .filter(Boolean).join(" ").toLowerCase();
+    return matchRelation && (!q || haystack.includes(q));
+  });
+  const sorted = [...filtered].sort((a, b) => {
+    if (state.peerSort === "company") return a.company.localeCompare(b.company, "zh-Hans-CN");
+    const da = new Date(a.createdAt).getTime() || 0;
+    const db = new Date(b.createdAt).getTime() || 0;
+    return state.peerSort === "oldest" ? da - db : db - da;
+  });
+  const totalPages = Math.max(1, Math.ceil(sorted.length / PEER_PAGE_SIZE));
+  state.peerPage = Math.min(state.peerPage, totalPages);
+  const pageRows = sorted.slice((state.peerPage - 1) * PEER_PAGE_SIZE, state.peerPage * PEER_PAGE_SIZE);
+  const relationBadges = (peer: Peer) => peer.relations.length
+    ? peer.relations.map((relation) => badge(relation, PEER_RELATION_TONE[relation] || "gray")).join(" ")
+    : `<span class="badge gray" title="在编辑里勾选互补 / 竞争 / 互相推荐">未标注</span>`;
+  tbody.innerHTML = pageRows.length ? pageRows.map((peer) => `<tr data-peer-id="${escapeHtml(peer.id)}" class="${peer.id === state.selectedPeerId ? "selected" : ""}">
+    <td><div class="company"><div><button class="lead-name" data-open-peer="${escapeHtml(peer.id)}" title="查看 / 编辑这家同行">${escapeHtml(peer.company)}</button><span>${escapeHtml(peer.contact || "联系人待补充")} · ${escapeHtml(peer.country || "国家待补充")}</span></div></div></td>
+    <td><div class="peer-relation-cell">${relationBadges(peer)}</div></td>
+    <td><div class="peer-industry-cell" title="${escapeHtml(peer.industry)}">${escapeHtml(peer.industry ? (peer.industry.length > 60 ? `${peer.industry.slice(0, 60)}…` : peer.industry) : "待补充行业介绍")}</div></td>
+    <td><div class="peer-contact-cell">${peerContactCell(peer)}</div></td>
+    <td><div class="lead-created-cell"><b>${escapeHtml(formatLeadDate(peer.createdAt))}</b></div></td>
+    <td><div class="lead-row-actions">
+      <button class="btn tiny" type="button" data-peer-action="edit" data-peer-row-id="${escapeHtml(peer.id)}">编辑</button>
+      <button class="btn tiny danger subtle" type="button" data-peer-action="delete" data-peer-row-id="${escapeHtml(peer.id)}">删除</button>
+    </div></td>
+  </tr>`).join("") : (state.peers.length
+    ? `<tr><td colspan="6" class="empty-cell">没有符合筛选条件的同行。换个关键词，或把关系筛选切回「全部关系」。</td></tr>`
+    : `<tr><td colspan="6" class="empty-cell">暂无同行，点右上角「新增同行」开始维护关系网络</td></tr>`);
+
+  qsa<HTMLButtonElement>("[data-open-peer]", tbody).forEach((button) => button.addEventListener("click", () => {
+    const peer = state.peers.find((item) => item.id === button.dataset.openPeer);
+    if (peer) openPeerModal(peer);
+  }));
+  qsa<HTMLButtonElement>("[data-peer-action]", tbody).forEach((button) => button.addEventListener("click", () => {
+    const peer = state.peers.find((item) => item.id === button.dataset.peerRowId);
+    if (!peer) return;
+    if (button.dataset.peerAction === "edit") openPeerModal(peer);
+    if (button.dataset.peerAction === "delete") void deletePeer(peer);
+  }));
+
+  qs("#peerTotalCount")!.textContent = String(state.peers.length);
+  qs("#peerComplementCount")!.textContent = String(state.peers.filter((item) => item.relations.includes("互补")).length);
+  qs("#peerRivalCount")!.textContent = String(state.peers.filter((item) => item.relations.includes("竞争")).length);
+  qs("#peerReferralCount")!.textContent = String(state.peers.filter((item) => item.relations.includes("互相推荐")).length);
+
+  const pagination = qs<HTMLElement>("#peerPagination");
+  if (pagination) {
+    pagination.innerHTML = `<span>共 ${filtered.length} 条 · 第 ${state.peerPage}/${totalPages} 页</span><div><button class="btn tiny" id="peerPrevPage" ${state.peerPage <= 1 ? "disabled" : ""}>上一页</button><button class="btn tiny" id="peerNextPage" ${state.peerPage >= totalPages ? "disabled" : ""}>下一页</button></div>`;
+    qs<HTMLButtonElement>("#peerPrevPage", pagination)?.addEventListener("click", () => { state.peerPage -= 1; renderPeers(); });
+    qs<HTMLButtonElement>("#peerNextPage", pagination)?.addEventListener("click", () => { state.peerPage += 1; renderPeers(); });
+  }
+}
+
+function openPeerModal(peer?: Peer) {
+  const editing = Boolean(peer);
+  const relations = peer?.relations || [];
+  const relationCheckbox = (relation: PeerRelation) => `<label class="peer-relation-option"><input type="checkbox" name="peerRelation" value="${relation}" ${relations.includes(relation) ? "checked" : ""}>${badge(relation, PEER_RELATION_TONE[relation])}</label>`;
+  openModal(editing ? "编辑同行" : "新增同行", `
+    <p class="modal-hint">同行 = 同行业的外贸公司。关系可多选：互补（产品/市场互补）、竞争（同赛道）、互相推荐（转介绍伙伴）。</p>
+    <div class="form-grid">
+      <div class="form-field"><label>公司名 *</label><input id="peerCompanyInput" value="${escapeHtml(peer?.company || "")}" placeholder="例如：Acme Instruments GmbH"></div>
+      <div class="form-field"><label>国家 / 地区</label><input id="peerCountryInput" value="${escapeHtml(peer?.country || "")}" placeholder="例如：德国"></div>
+      <div class="form-field full"><label>关系（可多选）</label><div class="peer-relation-row">${(["互补", "竞争", "互相推荐"] as PeerRelation[]).map(relationCheckbox).join("")}</div></div>
+      <div class="form-field full"><label>行业介绍</label><textarea id="peerIndustryInput" rows="3" maxlength="4000" placeholder="主营业务、产品线、规模、市场覆盖等">${escapeHtml(peer?.industry || "")}</textarea></div>
+      <div class="form-field"><label>联系人</label><input id="peerContactInput" value="${escapeHtml(peer?.contact || "")}"></div>
+      <div class="form-field"><label>电话</label><input id="peerPhoneInput" value="${escapeHtml(peer?.phone || "")}"></div>
+      <div class="form-field"><label>邮箱</label><input id="peerEmailInput" type="email" value="${escapeHtml(peer?.email || "")}"></div>
+      <div class="form-field"><label>微信 / WhatsApp</label><input id="peerWechatInput" value="${escapeHtml(peer?.wechat || "")}"></div>
+      <div class="form-field full"><label>官网</label><input id="peerWebsiteInput" value="${escapeHtml(peer?.website || "")}" placeholder="例如 https://example.com"></div>
+      <div class="form-field"><label>来源</label><input id="peerSourceInput" value="${escapeHtml(peer?.source || (editing ? "" : "手动新增"))}" placeholder="展会、LinkedIn、转介绍等"></div>
+      <div class="form-field full"><label>备注</label><textarea id="peerRemarkInput" rows="2" maxlength="2000" placeholder="合作历史、注意事项等">${escapeHtml(peer?.remark || "")}</textarea></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="savePeerButton" data-editing-id="${escapeHtml(peer?.id || "")}">${editing ? "保存修改" : "保存同行"}</button>`, { closeOnBackdrop: false });
+  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  qs("#savePeerButton")?.addEventListener("click", () => void savePeer());
+  qs<HTMLInputElement>("#peerCompanyInput")?.focus();
+}
+
+async function savePeer() {
+  const company = qs<HTMLInputElement>("#peerCompanyInput")?.value.trim() || "";
+  if (!company) {
+    toast("请填写公司名", "error");
+    return;
+  }
+  const saveButton = qs<HTMLButtonElement>("#savePeerButton");
+  const editingId = saveButton?.dataset.editingId || "";
+  const relations = qsa<HTMLInputElement>('input[name="peerRelation"]:checked').map((node) => node.value as PeerRelation);
+  const payload = {
+    company,
+    country: qs<HTMLInputElement>("#peerCountryInput")?.value.trim() || "",
+    industry: qs<HTMLTextAreaElement>("#peerIndustryInput")?.value.trim() || "",
+    relations,
+    contact: qs<HTMLInputElement>("#peerContactInput")?.value.trim() || "",
+    phone: qs<HTMLInputElement>("#peerPhoneInput")?.value.trim() || "",
+    email: qs<HTMLInputElement>("#peerEmailInput")?.value.trim() || "",
+    wechat: qs<HTMLInputElement>("#peerWechatInput")?.value.trim() || "",
+    website: qs<HTMLInputElement>("#peerWebsiteInput")?.value.trim() || "",
+    source: qs<HTMLInputElement>("#peerSourceInput")?.value.trim() || (editingId ? "" : "手动新增"),
+    remark: qs<HTMLTextAreaElement>("#peerRemarkInput")?.value.trim() || ""
+  };
+  try {
+    if (editingId) {
+      const result = await api<{ peer: Peer }>(`/api/peers/${editingId}`, { method: "PATCH", body: JSON.stringify(payload) });
+      state.peers = state.peers.map((item) => item.id === result.peer.id ? result.peer : item);
+      toast("同行已保存");
+    } else {
+      const result = await api<{ peer: Peer }>("/api/peers", { method: "POST", body: JSON.stringify(payload) });
+      state.peers.unshift(result.peer);
+      toast("同行已新增");
+    }
+    closeModal();
+    renderPeers();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "保存失败", "error");
+  }
+}
+
+/** 同行批量导入：列名 → 字段映射（表头识别用，键全部小写去空格） */
+const PEER_IMPORT_ALIAS: Record<string, string> = {
+  "公司": "company", "公司名": "company", "company": "company",
+  "国家": "country", "国家/地区": "country", "地区": "country", "country": "country",
+  "关系": "relations", "关系标注": "relations", "relations": "relations",
+  "联系人": "contact", "contact": "contact",
+  "电话": "phone", "手机": "phone", "phone": "phone",
+  "邮箱": "email", "email": "email",
+  "微信": "wechat", "wechat": "wechat", "whatsapp": "wechat",
+  "官网": "website", "网站": "website", "网址": "website", "website": "website",
+  "来源": "source", "source": "source",
+  "备注": "remark", "remark": "remark", "note": "remark"
+};
+const PEER_IMPORT_ORDER = ["company", "country", "relations", "contact", "phone", "email", "wechat", "website", "source", "remark"] as const;
+
+/** 解析粘贴的 CSV/TSV 文本：支持带引号转义的字段；首行若含列名则按表头映射，否则按固定列序 */
+function parsePeerImportText(text: string): { rows: Array<Record<string, string>>; errors: string[] } {
+  const errors: string[] = [];
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) return { rows: [], errors: ["没有可导入的内容"] };
+  const delim = lines[0]!.includes("\t") ? "\t" : ",";
+  const splitLine = (line: string): string[] => {
+    const out: string[] = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]!;
+      if (ch === "\"") {
+        if (inQuotes && line[i + 1] === "\"") { cur += "\""; i++; }
+        else inQuotes = !inQuotes;
+      } else if (ch === delim && !inQuotes) {
+        out.push(cur);
+        cur = "";
+      } else cur += ch;
+    }
+    out.push(cur);
+    return out.map((cell) => cell.trim());
+  };
+  const firstCells = splitLine(lines[0]!);
+  const hasHeader = firstCells.some((cell) => PEER_IMPORT_ALIAS[cell.toLowerCase().replace(/\s+/g, "")]);
+  const colIndex: Partial<Record<string, number>> = {};
+  let dataLines = lines;
+  if (hasHeader) {
+    firstCells.forEach((cell, index) => {
+      const key = PEER_IMPORT_ALIAS[cell.toLowerCase().replace(/\s+/g, "")];
+      if (key && colIndex[key] === undefined) colIndex[key] = index;
+    });
+    dataLines = lines.slice(1);
+    if (colIndex.company === undefined) errors.push("表头里没找到「公司名」列，无法识别哪列是公司名");
+  } else {
+    PEER_IMPORT_ORDER.forEach((key, index) => { colIndex[key] = index; });
+  }
+  const rows: Array<Record<string, string>> = [];
+  dataLines.forEach((line, idx) => {
+    const cells = splitLine(line);
+    const row: Record<string, string> = {};
+    for (const key of PEER_IMPORT_ORDER) {
+      const i = colIndex[key];
+      row[key] = i === undefined ? "" : (cells[i] || "");
+    }
+    if (!row.company) {
+      errors.push(`第 ${idx + (hasHeader ? 2 : 1)} 行缺少公司名，已跳过`);
+      return;
+    }
+    rows.push(row);
+  });
+  return { rows, errors };
+}
+
+/** 关系文本 → 枚举数组，未识别的词忽略 */
+function peerRelationsFromText(text: string): PeerRelation[] {
+  return text.split(/[，,、/|;；]/).map((part) => part.trim())
+    .filter((part): part is PeerRelation => (["互补", "竞争", "互相推荐"] as string[]).includes(part));
+}
+
+function openPeerImportModal() {
+  const example = "公司名,国家,关系,联系人,邮箱,官网\nAcme Trading GmbH,德国,互补,Anna,anna@acme.de,https://acme.de\nNorth Scale Ltd,英国,竞争;互相推荐,John,john@northscale.co.uk,";
+  const body = `
+    <p class="modal-hint">支持粘贴 CSV / Excel 复制内容（Tab 分隔）或选文件。首行如果写了列名（公司名/国家/关系/联系人/电话/邮箱/微信/官网/来源/备注）会自动识别；没写列名则按这个顺序读。<b>公司名必填</b>，其余可留空。</p>
+    <div class="form-field"><label>选择文件（.csv / .txt，可选）</label><input id="peerImportFile" type="file" accept=".csv,.txt,.tsv"></div>
+    <div class="form-field"><label>或直接粘贴内容</label><textarea id="peerImportText" rows="10" style="font-family:var(--font-mono,monospace);font-size:12px" placeholder="${escapeHtml(example)}"></textarea></div>
+    <label style="display:flex;gap:8px;align-items:center;font-size:12px"><input id="peerImportSkipDuplicates" type="checkbox" checked>跳过与现有同行重复的记录（公司名+国家相同）</label>
+    <details style="margin-top:8px"><summary style="cursor:pointer;color:#1570ef;font-size:11px">查看格式示例</summary><pre style="margin:8px 0 0;padding:10px;background:#f6f8fb;border:1px solid #e4eaf3;border-radius:8px;font-size:11px;white-space:pre-wrap">${escapeHtml(example)}</pre></details>`;
+  const foot = `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="peerImportSubmitButton">开始导入</button>`;
+  openModal("批量导入同行", body, foot, { closeOnBackdrop: false });
+  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  qs<HTMLInputElement>("#peerImportFile")?.addEventListener("change", async (event) => {
+    const file = (event.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const textarea = qs<HTMLTextAreaElement>("#peerImportText");
+    if (textarea) textarea.value = text;
+  });
+  qs<HTMLButtonElement>("#peerImportSubmitButton")?.addEventListener("click", (event) => void submitPeerImport(event.currentTarget as HTMLButtonElement));
+}
+
+async function submitPeerImport(button: HTMLButtonElement) {
+  const textarea = qs<HTMLTextAreaElement>("#peerImportText");
+  const parsed = parsePeerImportText(textarea?.value || "");
+  if (!parsed.rows.length) {
+    toast(parsed.errors[0] || "没有可导入的行", "error");
+    return;
+  }
+  const skipDuplicates = qs<HTMLInputElement>("#peerImportSkipDuplicates")?.checked ?? true;
+  const payload = parsed.rows.map((row) => ({
+    company: row.company,
+    country: row.country || "",
+    relations: peerRelationsFromText(row.relations),
+    contact: row.contact || "",
+    phone: row.phone || "",
+    email: row.email || "",
+    wechat: row.wechat || "",
+    website: row.website || "",
+    source: row.source || "批量导入",
+    remark: row.remark || ""
+  }));
+  button.disabled = true;
+  try {
+    const result = await api<{ created: number; skipped: Array<{ company: string; reason: string }>; peers: Peer[] }>("/api/peers/import", {
+      method: "POST",
+      body: JSON.stringify({ peers: payload, skipDuplicates })
+    });
+    state.peers = result.peers;
+    state.peerPage = 1;
+    renderPeers();
+    closeModal();
+    toast(`导入完成：成功 ${result.created} 条${result.skipped.length ? `，跳过 ${result.skipped.length} 条重复记录` : ""}`, result.created ? "success" : "error");
+    if (result.skipped.length) {
+      const list = result.skipped.slice(0, 30).map((item) => `<li>${escapeHtml(item.company)} — ${escapeHtml(item.reason)}</li>`).join("");
+      const more = result.skipped.length > 30 ? `<li>…另有 ${result.skipped.length - 30} 条</li>` : "";
+      openModal("已跳过的记录", `<ul style="margin:0;padding-left:18px;font-size:12px;line-height:1.9;color:#475467">${list}${more}</ul>`, `<button class="btn primary" data-modal-close>知道了</button>`);
+      qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+    }
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "导入失败", "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function deletePeer(peer: Peer) {
+  const ok = await confirmAction({
+    title: "删除同行",
+    message: `确定删除同行「${peer.company}」吗？`,
+    consequences: ["该同行的关系标注、行业介绍、联系方式等资料会一并删除", "删除后不可恢复"],
+    confirmLabel: "删除",
+    tone: "danger"
+  });
+  if (!ok) return;
+  try {
+    const result = await api<{ deleted: string; peers: Peer[] }>(`/api/peers/${peer.id}`, { method: "DELETE" });
+    state.peers = result.peers;
+    if (state.selectedPeerId === peer.id) state.selectedPeerId = null;
+    toast("同行已删除");
+    renderPeers();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "删除失败", "error");
+  }
+}
+
+function renderCaseStudies(caseStudies: CaseStudy[]) {  const sorted = [...caseStudies].sort((a, b) => Number(b.status === "published") - Number(a.status === "published") || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   const list = qs<HTMLElement>("#cases .case-list");
   if (list) {
     list.innerHTML = sorted.length ? sorted.map((item) => `<article class="case-card ${state.selectedCaseId === item.id ? "selected" : ""}" data-case-id="${escapeHtml(item.id)}">
@@ -14499,30 +19141,123 @@ function setMemoSaveState(text: string, retry = false) {
   }
 }
 
+function reminderTimeUnitText(timeUnit?: string) {
+  return timeUnit === "minute" ? "分钟" : timeUnit === "hour" ? "小时" : timeUnit === "week" ? "周" : "天";
+}
+
+/** 当前正在编辑/新建的规则（表单提示要按规则 id 找它名下的「活的」待办）。 */
+let editingReminder: Reminder | undefined;
+
+function reminderGenerateTodoChecked() {
+  return Boolean(qs<HTMLInputElement>("#reminderGenerateTodoInput")?.checked);
+}
+
+/** 规则名下「活的」待办数（未完成、未归档、未取消）—— 与后端 shouldSkipReminderMatch 口径一致。 */
+function liveReminderTodoCount(ruleId?: string) {
+  if (!ruleId) return 0;
+  return state.todos.filter((todo) => todo.reminderRuleId === ruleId && !todo.done && !todo.historyAt && !todo.cancelledAt).length;
+}
+
+/**
+ * 表单里那条随勾选/阈值实时变化的说明：讲清这次会不会生成待办、以及生成的判定规则，
+ * 免得「待办悄悄挡住后续提醒」这种事要靠翻代码才知道。
+ */
+function updateReminderGenerateHint() {
+  const node = qs<HTMLElement>("#reminderGenerateHint");
+  if (!node) return;
+  const days = qs<HTMLInputElement>("#reminderDaysInput")?.value || "3";
+  const unit = reminderTimeUnitText(qs<HTMLSelectElement>("#reminderTimeUnitInput")?.value);
+  const span = `${days} ${unit}`;
+  const live = liveReminderTodoCount(editingReminder?.id);
+  const tone = !reminderGenerateTodoChecked() ? "off" : live ? "warn" : "on";
+  const strongColor = tone === "off" ? "var(--text)" : tone === "on" ? "var(--brand-strong)" : "var(--amber)";
+  const strong = (text: string) => `<b style="font-weight:600;color:${strongColor}">${text}</b>`;
+  node.dataset.tone = tone;
+  node.style.cssText = `display:block;padding:9px 11px;border:1px solid transparent;border-radius:6px;font-size:12px;line-height:1.65;${{
+    off: "background:var(--surface-2);border-color:var(--line-soft);color:var(--muted)",
+    on: "background:var(--brand-tint);color:var(--brand-strong)",
+    warn: "background:var(--amber-tint);color:var(--amber)"
+  }[tone]}`;
+  node.innerHTML = tone === "off"
+    ? `${strong("不会生成待办：")}规则仍会按周期自动匹配、更新「命中 N 条」的统计，但不会在待办中心产生任何任务，也就不占用你的待办队列。`
+    : tone === "warn"
+      ? `${strong(`当前已存在 ${live} 条未完成待办，本轮不会生成新的提醒和待办。`)}把这 ${live} 条处理完（标记完成）后，再过 ${escapeHtml(span)} 会自动重新生成一条。`
+      : `${strong("命中后会生成待办：")}出现在左侧导航的「待办中心」与「提醒」模块里；该客户若已有未完成待办则跳过、不重复催办，待办完成后按 ${escapeHtml(span)} 重新计时再提醒。`;
+}
+
 function openReminderModal(reminder?: Reminder) {
   const type = reminder?.ruleType || "quote_no_reply";
   const stage = reminder?.targetStage || "已报价";
   const days = reminder?.days ?? 3;
+  const unit = reminder?.timeUnit || "day";
+  // 「生成待办中心任务」：新建规则默认不勾选（只匹配统计、不打扰）；编辑历史规则沿用其存值。
+  const generateTodoChecked = reminder ? reminder.generateTodo !== false : false;
+  editingReminder = reminder;
+  const selectedCustomerIds = new Set(reminder?.targetCustomerIds || []);
+  const customerOptions = state.customers
+    .slice()
+    .sort((left, right) => left.company.localeCompare(right.company, "zh-CN"));
   openModal(reminder ? "编辑提醒规则" : "设置提醒规则", `
     <div class="form-grid">
       <div class="form-field full"><label>规则模板</label><select id="reminderRuleTypeInput"><option value="quote_no_reply" ${type === "quote_no_reply" ? "selected" : ""}>已报价阶段停滞</option><option value="sample_feedback" ${type === "sample_feedback" ? "selected" : ""}>进入样品阶段后待确认</option><option value="inactive_customer" ${type === "inactive_customer" ? "selected" : ""}>长期未产生客户活动</option><option value="high_value_revisit" ${type === "high_value_revisit" ? "selected" : ""}>高价值客户复访</option><option value="custom_due" ${type === "custom_due" ? "selected" : ""}>商机下一动作到期</option></select></div>
       <div class="form-field full"><label>提醒名称</label><input id="reminderTitleInput" data-auto-title="${reminder ? "false" : "true"}" value="${escapeHtml(reminder?.title || "报价阶段停滞提醒")}"></div>
       <div class="form-field"><label>适用阶段</label><select id="reminderStageInput">${["已报价", "样品", "谈判", "询盘", "已联系", "成交", "丢单"].map((item) => `<option ${item === stage ? "selected" : ""}>${item}</option>`).join("")}</select></div>
-      <div class="form-field"><label>触发天数</label><input id="reminderDaysInput" type="number" min="0" max="90" value="${days}"></div>
+      <div class="form-field"><label>触发间隔</label><div style="display:flex;gap:6px"><input id="reminderDaysInput" type="number" min="0" max="365" value="${days}" style="flex:1;min-width:0"><select id="reminderTimeUnitInput" style="width:82px;flex:0 0 auto"><option value="minute" ${unit === "minute" ? "selected" : ""}>分钟</option><option value="day" ${unit === "day" ? "selected" : ""}>天</option><option value="hour" ${unit === "hour" ? "selected" : ""}>小时</option><option value="week" ${unit === "week" ? "selected" : ""}>周</option></select></div></div>
       <div class="form-field"><label>任务时间说明</label><input id="reminderDueInput" value="${escapeHtml(reminder?.dueAt || "按触发日期生成")}"></div>
-      <div class="form-field"><label>生成方式</label><input value="站内任务" disabled></div>
+      <label class="form-field full" style="display:flex;gap:8px;align-items:center;cursor:pointer"><input id="reminderGenerateTodoInput" type="checkbox" ${generateTodoChecked ? "checked" : ""}><span>生成待办中心任务 <em style="font-style:normal;font-weight:normal;color:#8a94a6">（默认不勾选）</em></span></label>
+      <div class="form-field full"><div class="reminder-generate-hint" id="reminderGenerateHint"></div></div>
       <div class="form-field"><label>优先级</label><select id="reminderPriorityInput"><option value="high">高优先级</option><option value="medium" selected>中优先级</option><option value="normal">普通</option></select></div>
       <label class="form-field"><span>规则状态</span><select id="reminderEnabledInput"><option value="true">启用</option><option value="false">停用</option></select></label>
       <div class="form-field full"><label>规则说明</label><input id="reminderRuleInput" value="${escapeHtml(reminder?.rule || "进入已报价阶段 3 天未更新时生成站内任务")}"></div>
+      <div class="form-field full">
+        <label>关联客户 <span style="color:#8a94a6;font-weight:normal">（不勾选 = 对全部客户生效）</span></label>
+        <input id="reminderCustomerSearch" placeholder="搜索客户名筛选列表" style="margin-bottom:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span id="reminderCustomerCount" style="font-size:11px;color:#5c6b80">已选 0 家</span>
+          <span><button class="btn" type="button" id="reminderCustomerSelectAll" style="min-height:26px;padding:2px 10px;font-size:11px">全选</button> <button class="btn" type="button" id="reminderCustomerClear" style="min-height:26px;padding:2px 10px;font-size:11px">清空</button></span>
+        </div>
+        <div id="reminderCustomerList" style="max-height:190px;overflow-y:auto;border:1px solid #dde4ee;border-radius:8px;padding:6px">
+          ${customerOptions.length ? customerOptions.map((customer) => `<label style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" data-reminder-customer-row data-company="${escapeHtml(customer.company.toLowerCase())}"><input type="checkbox" data-reminder-customer value="${escapeHtml(customer.id)}" ${selectedCustomerIds.has(customer.id) ? "checked" : ""}><span style="font-size:12px">${escapeHtml(customer.company)}<small style="color:#8a94a6"> · ${escapeHtml(customer.country || "地区未知")}</small></span></label>`).join("") : `<div style="padding:12px;text-align:center;color:#8a94a6;font-size:11px">暂无客户</div>`}
+        </div>
+      </div>
     </div>
-  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveReminderButton">${reminder ? "保存修改" : "保存规则"}</button>`);
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveReminderButton">${reminder ? "保存修改" : "保存规则"}</button>`, { closeOnBackdrop: false });
   const priority = qs<HTMLSelectElement>("#reminderPriorityInput");
   if (priority) priority.value = reminder?.priority || "medium";
   const enabled = qs<HTMLSelectElement>("#reminderEnabledInput");
   if (enabled) enabled.value = reminder?.enabled === false ? "false" : "true";
-  bindReminderRulePreset();
-  if (reminder) reminderRuleDraft(false);
+  bindReminderRulePreset(!reminder);
+  bindReminderCustomerPicker();
+  updateReminderGenerateHint();
   qs("#saveReminderButton")?.addEventListener("click", () => void saveReminder(reminder?.id));
+}
+
+function bindReminderCustomerPicker() {
+  const list = qs<HTMLElement>("#reminderCustomerList");
+  if (!list) return;
+  const countLabel = qs<HTMLElement>("#reminderCustomerCount");
+  const updateCount = () => {
+    const checked = qsa<HTMLInputElement>("[data-reminder-customer]:checked", list).length;
+    if (countLabel) countLabel.textContent = `已选 ${checked} 家`;
+  };
+  qsa<HTMLInputElement>("[data-reminder-customer]", list).forEach((box) => box.addEventListener("change", updateCount));
+  qs<HTMLInputElement>("#reminderCustomerSearch")?.addEventListener("input", (event) => {
+    const keyword = (event.currentTarget as HTMLInputElement).value.trim().toLowerCase();
+    qsa<HTMLElement>("[data-reminder-customer-row]", list).forEach((row) => {
+      row.style.display = !keyword || row.dataset.company?.includes(keyword) ? "" : "none";
+    });
+  });
+  qs("#reminderCustomerSelectAll")?.addEventListener("click", () => {
+    qsa<HTMLInputElement>("[data-reminder-customer]", list).forEach((box) => {
+      if (box.closest<HTMLElement>("[data-reminder-customer-row]")?.style.display !== "none") box.checked = true;
+    });
+    updateCount();
+  });
+  qs("#reminderCustomerClear")?.addEventListener("click", () => {
+    qsa<HTMLInputElement>("[data-reminder-customer]", list).forEach((box) => { box.checked = false; });
+    updateCount();
+  });
+  updateCount();
 }
 
 function reminderRulePreset(type: string) {
@@ -14558,19 +19293,34 @@ function reminderRuleDraft(applyPreset = false) {
   const ruleInput = qs<HTMLInputElement>("#reminderRuleInput");
   const stage = qs<HTMLSelectElement>("#reminderStageInput")?.value || "已报价";
   const days = qs<HTMLInputElement>("#reminderDaysInput")?.value || "3";
-  if (ruleInput) ruleInput.value = `${stage}阶段 ${days} 天未更新时生成站内任务`;
+  const unit = reminderTimeUnitText(qs<HTMLSelectElement>("#reminderTimeUnitInput")?.value);
+  if (ruleInput) {
+    ruleInput.value = reminderGenerateTodoChecked()
+      ? `${stage}阶段 ${days} ${unit}未更新时生成站内任务`
+      : `${stage}阶段 ${days} ${unit}未更新时提醒（仅统计，不生成待办）`;
+  }
+  updateReminderGenerateHint();
 }
 
-function bindReminderRulePreset() {
+/**
+ * 绑定「规则模板」联动。
+ * ⚠️ `isNewRule = false`（编辑已有规则）时**只绑事件、绝不套模板预设**：
+ * 否则一打开编辑弹窗，触发间隔就会被预设覆盖（如「长期未产生客户活动」预设 14），
+ * 用户直接点保存就把库里的 1 分钟阈值静默改成了 14。模板预设只对「新建规则」生效，
+ * 或在用户主动切换规则模板（select change）时生效。
+ */
+function bindReminderRulePreset(isNewRule = true) {
   qs<HTMLInputElement>("#reminderTitleInput")?.addEventListener("input", (event) => {
     (event.currentTarget as HTMLInputElement).dataset.autoTitle = "false";
   });
   qs<HTMLElement>("#reminderRuleTypeInput")?.addEventListener("change", () => reminderRuleDraft(true));
-  ["#reminderStageInput", "#reminderDaysInput"].forEach((selector) => {
+  ["#reminderStageInput", "#reminderDaysInput", "#reminderTimeUnitInput"].forEach((selector) => {
     qs<HTMLElement>(selector)?.addEventListener("change", () => reminderRuleDraft());
     qs<HTMLElement>(selector)?.addEventListener("input", () => reminderRuleDraft());
   });
-  reminderRuleDraft(true);
+  qs<HTMLElement>("#reminderGenerateTodoInput")?.addEventListener("change", () => reminderRuleDraft());
+  if (isNewRule) reminderRuleDraft(true);
+  else updateReminderGenerateHint();
 }
 
 async function saveReminder(id?: string) {
@@ -14589,6 +19339,9 @@ async function saveReminder(id?: string) {
       ruleType: qs<HTMLSelectElement>("#reminderRuleTypeInput")?.value || "quote_no_reply",
       targetStage: qs<HTMLSelectElement>("#reminderStageInput")?.value || "已报价",
       days: Number(qs<HTMLInputElement>("#reminderDaysInput")?.value || 3),
+      timeUnit: (qs<HTMLSelectElement>("#reminderTimeUnitInput")?.value || "day") as "minute" | "day" | "hour" | "week",
+      targetCustomerIds: qsa<HTMLInputElement>("#reminderCustomerList [data-reminder-customer]:checked").map((box) => box.value),
+      generateTodo: reminderGenerateTodoChecked(),
       priority: qs<HTMLSelectElement>("#reminderPriorityInput")?.value || "medium",
       enabled: qs<HTMLSelectElement>("#reminderEnabledInput")?.value !== "false"
     })
@@ -14607,12 +19360,17 @@ async function runReminderRule(id: string, button?: HTMLButtonElement) {
   try {
     const preview = await api<{ matchedCount: number; creatableCount: number; skippedCount: number; preview: Array<{ customer: string; deal: string }> }>(`/api/reminders/${id}/preview`);
     const sample = preview.preview.map((item) => `${item.customer}${item.deal ? ` / ${item.deal}` : ""}`).join("、") || "无";
+    const generates = state.reminders.find((item) => item.id === id)?.generateTodo !== false;
     if (!await confirmAction({
       title: "手工运行提醒规则",
-      message: `预计命中 ${preview.matchedCount} 条记录，可新建 ${preview.creatableCount} 条提醒。`,
+      message: generates
+        ? `预计命中 ${preview.matchedCount} 条记录，可新建 ${preview.creatableCount} 条提醒。`
+        : `预计命中 ${preview.matchedCount} 条记录；该规则未勾选「生成待办中心任务」，本次只刷新命中统计，不会产生待办。`,
       detail: sample,
       detailLabel: "命中示例",
-      consequences: [`将跳过 ${preview.skippedCount} 条重复或不符合条件的记录`, "新提醒会立即加入当前账号的待办队列"],
+      consequences: generates
+        ? [`将跳过 ${preview.skippedCount} 条重复或不符合条件的记录`, "新提醒会立即加入当前账号的待办队列"]
+        : [`将跳过 ${preview.skippedCount} 条（未开启生成待办）`, "不会新增任何待办；需要生成请先编辑规则勾选「生成待办中心任务」"],
       confirmLabel: "运行规则",
       tone: "normal"
     })) return;
@@ -15087,6 +19845,7 @@ function defaultTradeDocument(type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" 
     SHIPPING: "新建装运通知 Shipping Advice"
   };
   const profile = state.documentDefaultProfile;
+  const sellerProfile = matchedSellerProfile(undefined, profile?.currency || "USD", type);
   const validityDate = profile?.validityDays ? new Date(Date.now() + profile.validityDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) : "";
   const baseDoc = {
     id: "__new__",
@@ -15098,13 +19857,14 @@ function defaultTradeDocument(type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" 
     buyer: "",
     buyerAddress: "",
     buyerContact: "",
-    seller: profile?.seller || "",
-    sellerAddress: profile?.sellerAddress || "",
-    sellerContact: profile?.sellerContact || "",
-    sellerPhone: profile?.sellerPhone || "",
-    sellerEmail: profile?.sellerEmail || "",
-    sellerWebsite: profile?.sellerWebsite || "",
-    sellerTaxNo: profile?.sellerTaxNo || "",
+    seller: sellerProfile?.companyName || profile?.seller || "",
+    brandMarkText: profile?.brandMarkText || "",
+    sellerAddress: sellerProfile?.address || profile?.sellerAddress || "",
+    sellerContact: sellerProfile?.contact || profile?.sellerContact || "",
+    sellerPhone: sellerProfile?.phone || profile?.sellerPhone || "",
+    sellerEmail: sellerProfile?.email || profile?.sellerEmail || "",
+    sellerWebsite: sellerProfile?.website || profile?.sellerWebsite || "",
+    sellerTaxNo: sellerProfile?.taxNo || profile?.sellerTaxNo || "",
     currency: profile?.currency || "USD",
     incoterm: profile?.incoterm || "FOB",
     paymentTerm: profile?.paymentTerm || "",
@@ -15112,16 +19872,16 @@ function defaultTradeDocument(type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" 
     portLoading: profile?.portLoading || "",
     portDischarge: "",
     validityDate,
-    bankInfo: profile?.bankInfo || "",
+    bankInfo: sellerProfile?.bankInfo || profile?.bankInfo || "",
     notes: profile?.notes || "",
     language: profile?.language || "EN" as const,
-    templateStyle: profile?.templateStyle || "indigo" as const,
+    templateStyle: profile?.templateStyle || "rose" as const,
     status: "draft" as const,
     audits: [] as TradeDocumentAudit[],
     sendRecords: [] as TradeDocumentSendRecord[],
-    letterheadId: profile?.letterheadId || "",
-    stampId: profile?.stampId || "",
-    signatureId: profile?.signatureId || "",
+    letterheadId: sellerProfile?.id || profile?.letterheadId || "",
+    stampId: sellerProfile?.stampId || profile?.stampId || "",
+    signatureId: sellerProfile?.signatureId || profile?.signatureId || "",
     includeProductImages: profile?.includeProductImages || false,
     updatedAt: new Date().toISOString(),
     items: [
@@ -15172,6 +19932,26 @@ function documentTypeLabel(type: string) {
   return ({ PI: "形式发票", CI: "商业发票", CUSTOMS: "报关资料", PL: "装箱单", CONTRACT: "销售合同", QUOTATION: "报价单", COO: "原产地证", SHIPPING: "装运通知" } as Record<string, string>)[type] || type;
 }
 
+interface AdvancedDocumentTemplate {
+  id: string;
+  name: string;
+  category: "sales" | "shipping" | "procurement";
+  description: string;
+  fileName: string;
+  recommendedTypes: TradeDocument["type"][];
+  maxItems: number;
+  dynamicItems?: boolean;
+  compatibility: "full" | "partial";
+  warnings: string[];
+  assetCapabilities: Array<"letterhead" | "productImages" | "stamp" | "signature">;
+}
+
+const advancedDocumentCategoryLabels: Record<AdvancedDocumentTemplate["category"], string> = {
+  sales: "销售单据",
+  shipping: "物流单据",
+  procurement: "采购协同"
+};
+
 async function uploadDocumentImage(file: File, kind: "letterhead-logo" | "stamp" | "signature" | "product") {
   if (!["image/png", "image/jpeg"].includes(file.type)) throw new Error("只支持 PNG 或 JPEG 图片");
   if (file.size > 2 * 1024 * 1024) throw new Error("图片不能超过 2 MB");
@@ -15206,7 +19986,7 @@ function documentAssetPlacementFields(prefix: string, title: string, placement?:
     ["left-bottom", "左下"], ["center-bottom", "下中"], ["right-bottom", "右下"]
   ];
   return `<div class="document-asset-placement" data-placement-root="${prefix}">
-    <div class="document-asset-placement-head"><div><b>${escapeHtml(title)}位置与大小</b><small>默认跟随单据模板安全区域</small></div><button type="button" class="btn" data-placement-reset="${prefix}">恢复模板默认</button></div>
+    <div class="document-asset-placement-head"><div><b>${escapeHtml(title)}位置与大小</b><small>默认跟随 Excel 模板安全区域</small></div><button type="button" class="btn" data-placement-reset="${prefix}">恢复模板默认</button></div>
     <div class="document-asset-placement-body">
       <div class="document-asset-placement-preview" data-placement-preview="${prefix}"><span>模板放置区</span>${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="" data-placement-preview-image="${prefix}">` : `<i>未上传图片</i>`}</div>
       <div class="document-asset-placement-controls">
@@ -15300,25 +20080,42 @@ function bindDocumentAssetPlacement(prefix: string, fileInputSelector: string) {
   update();
 }
 
+function sellerProfileRuleText(profile: DocumentLetterhead) {
+  const parts = [
+    profile.matchCountries?.length ? `国家：${profile.matchCountries.join("、")}` : "",
+    profile.matchCurrencies?.length ? `币种：${profile.matchCurrencies.join("、")}` : "",
+    profile.matchDocumentTypes?.length ? `单据：${profile.matchDocumentTypes.map(documentTypeLabel).join("、")}` : ""
+  ].filter(Boolean);
+  return parts.join(" · ") || "通用规则";
+}
+
+function sellerRuleList(value: string, upperCase = false) {
+  return [...new Set(value.split(/[,，;；\n]/u).map((item) => upperCase ? item.trim().toUpperCase() : item.trim()).filter(Boolean))];
+}
+
 function documentAssetList(assets: DocumentAssetsResponse) {
   return `<div class="document-asset-columns">
-    <section><div class="section-title"><h3>抬头</h3><button class="btn" type="button" id="documentAssetAddLetterhead">新增抬头</button></div><div class="document-asset-list">${assets.letterheads.length ? assets.letterheads.map((item) => `<article><div>${item.logoUrl ? `<img src="${escapeHtml(item.logoUrl)}" alt="">` : `<span class="document-asset-placeholder">抬头</span>`}<p><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.companyName)}${item.isDefault ? " · 默认" : ""}${item.enabled ? "" : " · 已停用"}</small></p></div><button class="btn" data-edit-letterhead="${escapeHtml(item.id)}">编辑</button></article>`).join("") : `<p class="empty-cell">尚未维护抬头</p>`}</div></section>
+    <section><div class="section-title"><h3>卖方公司</h3><button class="btn" type="button" id="documentAssetAddLetterhead">新增卖方公司</button></div><div class="document-asset-list">${assets.letterheads.length ? assets.letterheads.map((item) => `<article><div>${item.logoUrl ? `<img src="${escapeHtml(item.logoUrl)}" alt="">` : `<span class="document-asset-placeholder">卖方</span>`}<p><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.companyName)}${item.isDefault ? " · 默认" : ""}${item.enabled ? "" : " · 已停用"}</small><small>${escapeHtml(sellerProfileRuleText(item))}</small></p></div><button class="btn" data-edit-letterhead="${escapeHtml(item.id)}">编辑</button></article>`).join("") : `<p class="empty-cell">尚未维护卖方公司</p>`}</div></section>
     <section><div class="section-title"><h3>印章</h3><button class="btn" type="button" id="documentAssetAddStamp">新增印章</button></div><div class="document-asset-list">${assets.stamps.length ? assets.stamps.map((item) => `<article><div><img src="${escapeHtml(item.imageUrl)}" alt=""><p><b>${escapeHtml(item.name)}</b><small>${item.isDefault ? "默认印章" : "可选印章"}${item.enabled ? "" : " · 已停用"}</small></p></div><button class="btn" data-edit-stamp="${escapeHtml(item.id)}">编辑</button></article>`).join("") : `<p class="empty-cell">尚未维护印章</p>`}</div></section>
     <section><div class="section-title"><h3>签名</h3><button class="btn" type="button" id="documentAssetAddSignature">新增签名</button></div><div class="document-asset-list">${assets.signatures.length ? assets.signatures.map((item) => `<article><div><img src="${escapeHtml(item.imageUrl)}" alt=""><p><b>${escapeHtml(item.name)}</b><small>${escapeHtml([item.signerName, item.signerTitle].filter(Boolean).join(" · "))}${item.isDefault ? " · 默认" : ""}${item.enabled ? "" : " · 已停用"}</small></p></div><button class="btn" data-edit-signature="${escapeHtml(item.id)}">编辑</button></article>`).join("") : `<p class="empty-cell">尚未维护签名</p>`}</div></section>
   </div>`;
 }
 
 function openDocumentAssetManager(assets: DocumentAssetsResponse) {
-  openModal("单据品牌资产", documentAssetList(assets), `<button class="btn" data-modal-close>关闭</button>`);
+  openModal("卖方公司与单据资产", documentAssetList(assets), `<button class="btn" data-modal-close>关闭</button>`);
   const refresh = async () => {
     const next = await api<DocumentAssetsResponse>("/api/document-assets");
     state.documentAssets = next;
+    renderSellerProfilesInDefaults(next);
     openDocumentAssetManager(next);
   };
   const openLetterhead = (asset?: DocumentLetterhead) => {
-    openModal(asset ? "编辑抬头" : "新增抬头", `<div class="form-grid document-asset-form">
-      <div class="form-field"><label>抬头名称</label><input id="assetLetterheadName" value="${escapeHtml(asset?.name || "")}" placeholder="如：香港公司抬头"></div>
+    const documentTypes: TradeDocument["type"][] = ["PI", "CI", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING", "CUSTOMS"];
+    openModal(asset ? "编辑卖方公司" : "新增卖方公司", `<div class="form-grid document-asset-form">
+      <div class="form-field"><label>档案名称</label><input id="assetLetterheadName" value="${escapeHtml(asset?.name || "")}" placeholder="如：香港签约主体"></div>
       <div class="form-field"><label>公司英文全称</label><input id="assetLetterheadCompany" value="${escapeHtml(asset?.companyName || "")}"></div>
+      <div class="form-field"><label>卖方联系人</label><input id="assetLetterheadContact" value="${escapeHtml(asset?.contact || "")}"></div>
+      <div class="form-field"><label>税号 / 注册号</label><input id="assetLetterheadTaxNo" value="${escapeHtml(asset?.taxNo || "")}"></div>
       <div class="form-field full"><label>英文地址</label><textarea id="assetLetterheadAddress">${escapeHtml(asset?.address || "")}</textarea></div>
       <div class="form-field"><label>电话</label><input id="assetLetterheadPhone" value="${escapeHtml(asset?.phone || "")}"></div>
       <div class="form-field"><label>邮箱</label><input id="assetLetterheadEmail" value="${escapeHtml(asset?.email || "")}"></div>
@@ -15326,23 +20123,28 @@ function openDocumentAssetManager(assets: DocumentAssetsResponse) {
       <div class="form-field"><label>Logo</label><input id="assetLetterheadLogo" type="file" accept="image/png,image/jpeg"><input id="assetLetterheadLogoUrl" type="hidden" value="${escapeHtml(asset?.logoUrl || "")}"></div>
       <div class="form-field full">${documentAssetPlacementFields("assetLetterhead", "Logo ", asset?.logoPlacement, asset?.logoUrl)}</div>
       <div class="form-field full"><label>银行资料</label><textarea id="assetLetterheadBank">${escapeHtml(asset?.bankInfo || "")}</textarea></div>
-      <label class="check-row"><input id="assetLetterheadDefault" type="checkbox" ${asset?.isDefault ? "checked" : ""}>设为默认抬头</label>
+      <div class="form-field full seller-match-rules"><label><span>适用客户国家</span><input id="assetLetterheadCountries" value="${escapeHtml((asset?.matchCountries || []).join(", "))}" placeholder="美国, 德国；留空表示不限"></label><label><span>适用币种</span><input id="assetLetterheadCurrencies" value="${escapeHtml((asset?.matchCurrencies || []).join(", "))}" placeholder="USD, EUR；留空表示不限"></label><label><span>匹配优先级</span><input id="assetLetterheadPriority" type="number" min="0" max="100" value="${asset?.matchPriority || 0}"></label></div>
+      <div class="form-field full"><label>适用单据类型</label><div class="seller-document-types">${documentTypes.map((type) => `<label><input type="checkbox" data-seller-document-type="${type}" ${(asset?.matchDocumentTypes || []).includes(type) ? "checked" : ""}>${escapeHtml(documentTypeLabel(type))}</label>`).join("")}</div><small>全部不选表示适用于所有单据</small></div>
+      <div class="form-field"><label>该公司默认印章</label><select id="assetLetterheadStamp"><option value="">不指定</option>${assets.stamps.filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === asset?.stampId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div>
+      <div class="form-field"><label>该公司默认签名</label><select id="assetLetterheadSignature"><option value="">不指定</option>${assets.signatures.filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === asset?.signatureId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div>
+      <label class="check-row"><input id="assetLetterheadDefault" type="checkbox" ${asset?.isDefault ? "checked" : ""}>设为默认卖方公司</label>
       <label class="check-row"><input id="assetLetterheadEnabled" type="checkbox" ${asset?.enabled === false ? "" : "checked"}>启用</label>
-    </div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDocumentLetterhead">保存抬头</button>`);
+    </div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDocumentLetterhead">保存卖方公司</button>`);
     qs<HTMLElement>("#appModal .modal")?.classList.add("document-asset-editor-modal");
     qs<HTMLButtonElement>("#saveDocumentLetterhead")?.addEventListener("click", async (event) => {
       const button = event.currentTarget as HTMLButtonElement;
-      setButtonPending(button, true, "保存抬头", "保存中");
+      setButtonPending(button, true, "保存卖方公司", "保存中");
       try {
         const file = qs<HTMLInputElement>("#assetLetterheadLogo")?.files?.[0];
         const logoUrl = file ? (await uploadDocumentImage(file, "letterhead-logo")).imageUrl : qs<HTMLInputElement>("#assetLetterheadLogoUrl")?.value || "";
         await api("/api/document-assets/letterheads", { method: "POST", body: JSON.stringify({
           id: asset?.id, name: qs<HTMLInputElement>("#assetLetterheadName")?.value.trim(), companyName: qs<HTMLInputElement>("#assetLetterheadCompany")?.value.trim(),
-          address: qs<HTMLTextAreaElement>("#assetLetterheadAddress")?.value.trim(), phone: qs<HTMLInputElement>("#assetLetterheadPhone")?.value.trim(), email: qs<HTMLInputElement>("#assetLetterheadEmail")?.value.trim(), website: qs<HTMLInputElement>("#assetLetterheadWebsite")?.value.trim(), bankInfo: qs<HTMLTextAreaElement>("#assetLetterheadBank")?.value.trim(), logoUrl, logoPlacement: readDocumentAssetPlacement("assetLetterhead"),
+          address: qs<HTMLTextAreaElement>("#assetLetterheadAddress")?.value.trim(), contact: qs<HTMLInputElement>("#assetLetterheadContact")?.value.trim(), taxNo: qs<HTMLInputElement>("#assetLetterheadTaxNo")?.value.trim(), phone: qs<HTMLInputElement>("#assetLetterheadPhone")?.value.trim(), email: qs<HTMLInputElement>("#assetLetterheadEmail")?.value.trim(), website: qs<HTMLInputElement>("#assetLetterheadWebsite")?.value.trim(), bankInfo: qs<HTMLTextAreaElement>("#assetLetterheadBank")?.value.trim(), logoUrl, logoPlacement: readDocumentAssetPlacement("assetLetterhead"),
+          matchCountries: sellerRuleList(qs<HTMLInputElement>("#assetLetterheadCountries")?.value || ""), matchCurrencies: sellerRuleList(qs<HTMLInputElement>("#assetLetterheadCurrencies")?.value || "", true), matchDocumentTypes: qsa<HTMLInputElement>("[data-seller-document-type]:checked").map((input) => input.dataset.sellerDocumentType).filter((type): type is TradeDocument["type"] => Boolean(type)), matchPriority: Number(qs<HTMLInputElement>("#assetLetterheadPriority")?.value || 0), stampId: qs<HTMLSelectElement>("#assetLetterheadStamp")?.value || "", signatureId: qs<HTMLSelectElement>("#assetLetterheadSignature")?.value || "",
           isDefault: Boolean(qs<HTMLInputElement>("#assetLetterheadDefault")?.checked), enabled: Boolean(qs<HTMLInputElement>("#assetLetterheadEnabled")?.checked)
         }) });
         await refresh();
-      } catch (error) { toast(error instanceof Error ? error.message : "抬头保存失败", "error"); setButtonPending(button, false, "保存抬头", "保存中"); }
+      } catch (error) { toast(error instanceof Error ? error.message : "卖方公司保存失败", "error"); setButtonPending(button, false, "保存卖方公司", "保存中"); }
     });
     bindDocumentAssetPlacement("assetLetterhead", "#assetLetterheadLogo");
   };
@@ -15382,6 +20184,167 @@ function openDocumentAssetManager(assets: DocumentAssetsResponse) {
   qsa<HTMLButtonElement>("[data-edit-signature]").forEach((button) => button.addEventListener("click", () => openSignature(assets.signatures.find((item) => item.id === button.dataset.editSignature))));
 }
 
+async function openAdvancedExcelPanel() {
+  let current = activeTradeDocument();
+  if (!current.id || current.id === "__new__") {
+    toast("请先保存当前单据，再使用高级 Excel", "error");
+    return;
+  }
+  const editorType = currentDocumentType();
+  if (current.type !== editorType) {
+    const saved = await saveTradeDocument();
+    if (!saved) return;
+    current = saved;
+  }
+  let templates: AdvancedDocumentTemplate[] = [];
+  let assets: DocumentAssetsResponse = { letterheads: [], stamps: [], signatures: [], canManage: false };
+  try {
+    const [templateResult, settings, assetResult] = await Promise.all([
+      api<{ templates: AdvancedDocumentTemplate[] }>("/api/trade-document-templates"),
+      loadTeamSystemSettings(),
+      api<DocumentAssetsResponse>("/api/document-assets")
+    ]);
+    templates = templateResult.templates || [];
+    teamSystemSettings = settings;
+    assets = assetResult;
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "模板列表加载失败", "error");
+    return;
+  }
+  const available = templates.filter((template) => template.recommendedTypes.includes(current.type));
+  const selectedLetterheadId = current.letterheadId || assets.letterheads.find((item) => item.enabled && item.isDefault)?.id || "";
+  const cards = templates.map((template) => {
+    const supported = template.recommendedTypes.includes(current.type);
+    const overCapacity = !template.dynamicItems && current.items.length > template.maxItems;
+    const disabled = !supported || overCapacity;
+    const reasons = !supported ? `适用于：${template.recommendedTypes.map(documentTypeLabel).join("、")}` : overCapacity ? `当前 ${current.items.length} 项，超过模板上限 ${template.maxItems} 项` : "可用于当前单据";
+    const capabilities = [
+      template.assetCapabilities.includes("letterhead") ? "抬头" : "",
+      template.assetCapabilities.includes("productImages") ? "产品图" : "",
+      template.assetCapabilities.includes("stamp") ? "盖章" : ""
+      ,template.assetCapabilities.includes("signature") ? "签名" : ""
+    ].filter(Boolean).join(" · ");
+    return `<article class="advanced-excel-card${supported ? " is-supported" : ""}">
+      <div class="advanced-excel-card-head"><span class="advanced-excel-category">${escapeHtml(advancedDocumentCategoryLabels[template.category])}</span><span class="advanced-excel-capacity">${template.dynamicItems ? "明细自动扩展" : `最多 ${template.maxItems} 项`}</span></div>
+      <h3>${escapeHtml(template.name)}</h3><p>${escapeHtml(template.description)}</p>
+      <div class="advanced-excel-types">${template.recommendedTypes.map((type) => `<span class="${type === current.type ? "is-current" : ""}">${escapeHtml(documentTypeLabel(type))}${type === current.type ? " · 当前" : ""}</span>`).join("")}</div>
+      <div class="advanced-excel-capabilities">${escapeHtml(capabilities || "仅数据填充")}</div>
+      <div class="advanced-excel-warning">${escapeHtml(template.warnings[0] || "保留原模板版式")}</div>
+      <div class="advanced-excel-actions">
+        <button class="btn" type="button" data-advanced-excel-preview="${escapeHtml(template.id)}" ${disabled ? "disabled" : ""}>预览</button>
+        <button class="btn${disabled ? "" : " primary"}" type="button" data-advanced-excel-template="${escapeHtml(template.id)}" ${disabled ? "disabled" : ""}>${disabled ? escapeHtml(reasons) : "导出 Excel"}</button>
+      </div>
+    </article>`;
+  }).join("");
+  openModal("高级 Excel 模式", `<div class="advanced-excel-panel">
+    <div class="advanced-excel-intro"><div><b>${escapeHtml(current.title)}</b><span>${escapeHtml(current.number)} · ${escapeHtml(documentTypeLabel(current.type))}</span></div><strong>${current.items.length} 项明细</strong></div>
+    <section class="advanced-excel-config">
+      <label><span>本次抬头</span><select id="advancedExcelLetterhead"><option value="">使用单据当前卖方资料</option>${assets.letterheads.filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === selectedLetterheadId ? "selected" : ""}>${escapeHtml(item.name)} · ${escapeHtml(item.companyName)}</option>`).join("")}</select></label>
+      <label><span>盖章</span><select id="advancedExcelStamp"><option value="">不盖章</option>${assets.stamps.filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === current.stampId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
+      <label><span>签名</span><select id="advancedExcelSignature"><option value="">不签名</option>${assets.signatures.filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === current.signatureId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
+      <label class="advanced-excel-image-toggle"><input id="advancedExcelProductImages" type="checkbox" ${current.includeProductImages ? "checked" : ""}><span><b>输出产品示例图</b><small>仅嵌入已上传到本系统的产品图</small></span></label>
+      ${assets.canManage ? `<button class="btn" type="button" id="advancedExcelManageAssets">管理品牌资产</button>` : ""}
+    </section>
+    <p class="advanced-excel-note">直接套用 Excel 模板，保留原有工作表、合并单元格、边框、打印区域和公式。印章默认不输出；预览与正式导出使用同一份已保存配置。${teamSystemSettings.requireDocumentExcelApproval ? "预览无需审批；当前团队的正式导出需审批通过。" : "当前团队未启用正式导出审批，保存后即可预览和导出。"}</p>
+    <div class="advanced-excel-grid">${cards || `<div class="empty-cell">暂无可用模板</div>`}</div>
+  </div>`, `<button class="btn" data-modal-close>关闭</button>`);
+  qs<HTMLElement>("#appModal .modal")?.classList.add("advanced-excel-modal");
+  const prepare = async () => {
+    const result = await api<{ document: TradeDocument }>(`/api/trade-documents/${encodeURIComponent(current.id)}/excel-options`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        letterheadId: qs<HTMLSelectElement>("#advancedExcelLetterhead")?.value || "",
+        stampId: qs<HTMLSelectElement>("#advancedExcelStamp")?.value || "",
+        signatureId: qs<HTMLSelectElement>("#advancedExcelSignature")?.value || "",
+        includeProductImages: Boolean(qs<HTMLInputElement>("#advancedExcelProductImages")?.checked)
+      })
+    });
+    updateActiveDocument(result.document);
+    return result.document;
+  };
+  qsa<HTMLButtonElement>("[data-advanced-excel-preview]").forEach((button) => button.addEventListener("click", async () => {
+    try { await previewAdvancedExcel(await prepare(), button.dataset.advancedExcelPreview || "", button); }
+    catch (error) { toast(error instanceof Error ? error.message : "Excel 配置保存失败", "error"); }
+  }));
+  qsa<HTMLButtonElement>("[data-advanced-excel-template]").forEach((button) => button.addEventListener("click", async () => {
+    try { await downloadAdvancedExcel(await prepare(), button.dataset.advancedExcelTemplate || "", button); }
+    catch (error) { toast(error instanceof Error ? error.message : "Excel 配置保存失败", "error"); }
+  }));
+  qs<HTMLButtonElement>("#advancedExcelManageAssets")?.addEventListener("click", () => openDocumentAssetManager(assets));
+  if (!available.length) toast("当前单据类型暂无匹配模板，请查看支持类型", "info");
+}
+
+async function previewAdvancedExcel(tradeDocument: TradeDocument, templateId: string, button: HTMLButtonElement) {
+  if (!templateId) return;
+  setButtonPending(button, true, "预览", "生成中");
+  try {
+    const response = await fetch(`/api/trade-documents/${encodeURIComponent(tradeDocument.id)}/preview-xlsx`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", ...(cookieValue("gj_csrf") ? { "x-csrf-token": cookieValue("gj_csrf") } : {}) },
+      body: JSON.stringify({ templateId })
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ message: "Excel 预览失败" }));
+      throw new Error(body.message || "Excel 预览失败");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    openModal("Excel 单据预览", `<div class="excel-preview-shell"><div class="excel-preview-meta"><div><b>${escapeHtml(tradeDocument.title)}</b><span>${escapeHtml(tradeDocument.number)} · ${escapeHtml(documentTypeLabel(tradeDocument.type))}</span></div><span>预览由最终 Excel 生成，修改后将重新生成</span></div><iframe class="excel-preview-frame" src="${escapeHtml(url)}" title="${escapeHtml(tradeDocument.number)} Excel 预览"></iframe></div>`, `<button class="btn" type="button" id="excelPreviewEditDocument">修改单据数据</button><button class="btn" type="button" id="excelPreviewRefresh">重新生成预览</button><button class="btn primary" type="button" id="excelPreviewDownload">导出 Excel</button><button class="btn" data-modal-close>关闭预览</button>`);
+    qs<HTMLElement>("#appModal .modal")?.classList.add("excel-preview-modal");
+    modalDismissHandler = () => URL.revokeObjectURL(url);
+    qs<HTMLButtonElement>("#excelPreviewEditDocument")?.addEventListener("click", () => {
+      advancedExcelEditReturnTemplateId = templateId;
+      closeModal();
+      state.selectedDocumentId = tradeDocument.id;
+      renderTradeDocuments(state.tradeDocuments);
+      qs<HTMLElement>("#documentStudioWorkspace")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      window.setTimeout(() => qs<HTMLInputElement>("#docTitleInput")?.focus(), 200);
+      toast("修改后点击“保存配置”，系统会自动重新生成 Excel 预览", "info");
+    });
+    qs<HTMLButtonElement>("#excelPreviewRefresh")?.addEventListener("click", (event) => {
+      void previewAdvancedExcel(activeTradeDocument(), templateId, event.currentTarget as HTMLButtonElement);
+    });
+    qs<HTMLButtonElement>("#excelPreviewDownload")?.addEventListener("click", (event) => {
+      void downloadAdvancedExcel(activeTradeDocument(), templateId, event.currentTarget as HTMLButtonElement);
+    });
+  } catch (error) {
+    setButtonPending(button, false, "预览", "生成中");
+    toast(error instanceof Error ? error.message : "Excel 预览失败", "error");
+  }
+}
+
+async function downloadAdvancedExcel(tradeDocument: TradeDocument, templateId: string, button: HTMLButtonElement) {
+  if (!templateId) return;
+  setButtonPending(button, true, "导出 Excel", "生成中");
+  try {
+    const response = await fetch(`/api/trade-documents/${encodeURIComponent(tradeDocument.id)}/export-xlsx`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", ...(cookieValue("gj_csrf") ? { "x-csrf-token": cookieValue("gj_csrf") } : {}) },
+      body: JSON.stringify({ templateId })
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ message: "Excel 导出失败" }));
+      throw new Error(body.message || "Excel 导出失败");
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("content-disposition") || "";
+    const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const fileName = encoded ? decodeURIComponent(encoded) : `${tradeDocument.number}.xlsx`;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    link.click();
+    URL.revokeObjectURL(url);
+    closeModal();
+    toast("高级 Excel 已下载", "success");
+  } catch (error) {
+    setButtonPending(button, false, "导出 Excel", "生成中");
+    toast(error instanceof Error ? error.message : "高级 Excel 导出失败", "error");
+  }
+}
 
 function documentConversionTargets(type: TradeDocument["type"]) {
   const map: Record<TradeDocument["type"], TradeDocument["type"][]> = {
@@ -15454,6 +20417,40 @@ function renderTradeDocumentImportItem(item: TradeDocumentItem, index: number) {
   </div>`;
 }
 
+async function renderTradeDocumentRecognitionTemplateLibrary() {
+  const target = qs<HTMLElement>("#tradeRecognitionTemplateLibrary");
+  if (!target) return;
+  target.hidden = false;
+  target.innerHTML = `<span class="trade-recognition-template-loading">正在读取本团队模板...</span>`;
+  try {
+    const result = await api<{ templates: TradeDocumentRecognitionTemplate[] }>("/api/trade-document-recognition-templates?includeArchived=true");
+    const active = result.templates.filter((item) => item.status === "active");
+    const archived = result.templates.filter((item) => item.status === "archived");
+    const row = (item: TradeDocumentRecognitionTemplate) => `<div class="trade-recognition-template-row">
+      <div><b>${escapeHtml(item.name)} <small>V${item.version}</small></b><span>${documentTypeLabel(item.documentType)} · ${item.sourceKind === "ocr" ? "图片 OCR" : "文件导入"} · ${item.status === "active" ? "当前启用" : "历史归档"}</span></div>
+      <button class="btn" type="button" data-recognition-template-action="${item.status === "active" ? "archive" : "restore"}" data-recognition-template-id="${escapeHtml(item.id)}">${item.status === "active" ? "归档" : "恢复为新版本"}</button>
+    </div>`;
+    target.innerHTML = `<div class="trade-recognition-template-library-head"><div><b>识别模板库</b><span>识别时只读取启用版本，归档版本仅供审计和恢复。</span></div><button type="button" title="收起模板库" data-close-recognition-library>×</button></div>
+      <div class="trade-recognition-template-group"><h4>启用中 <span>${active.length}</span></h4>${active.length ? active.map(row).join("") : "<p>暂无启用模板，当前识别继续使用通用规则。</p>"}</div>
+      <details class="trade-recognition-template-group"><summary>历史归档 <span>${archived.length}</span></summary>${archived.length ? archived.map(row).join("") : "<p>暂无归档版本。</p>"}</details>`;
+    qs<HTMLButtonElement>("[data-close-recognition-library]", target)?.addEventListener("click", () => { target.hidden = true; });
+    qsa<HTMLButtonElement>("[data-recognition-template-action]", target).forEach((button) => button.addEventListener("click", async () => {
+      const action = button.dataset.recognitionTemplateAction || "archive";
+      setButtonPending(button, true, action === "archive" ? "归档" : "恢复为新版本", "处理中");
+      try {
+        await api(`/api/trade-document-recognition-templates/${encodeURIComponent(button.dataset.recognitionTemplateId || "")}/${action}`, { method: "POST" });
+        toast(action === "archive" ? "模板已归档，后续识别不再匹配该版本" : "已恢复为新的启用版本", "success");
+        await renderTradeDocumentRecognitionTemplateLibrary();
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "模板操作失败", "error");
+        setButtonPending(button, false, action === "archive" ? "归档" : "恢复为新版本", "处理中");
+      }
+    }));
+  } catch (error) {
+    target.innerHTML = `<span class="trade-recognition-template-loading is-error">${escapeHtml(error instanceof Error ? error.message : "模板库读取失败")}</span>`;
+  }
+}
+
 function renderTradeDocumentImportReview(analysis: TradeDocumentImportAnalysis) {
   const draft = analysis.extractedDocument;
   const evidence = analysis.fieldEvidence || [];
@@ -15469,11 +20466,15 @@ function renderTradeDocumentImportReview(analysis: TradeDocumentImportAnalysis) 
   const customerOptions = `<option value="">暂不关联客户</option>${state.customers.map((customer) => `<option value="${escapeHtml(customer.id)}" ${customer.id === draft.customerId ? "selected" : ""}>${escapeHtml(customerDocumentName(customer))}</option>`).join("")}`;
   const availableDeals = state.deals.filter((deal) => !draft.customerId || deal.customerId === draft.customerId);
   const dealOptions = `<option value="">暂不关联商机</option>${availableDeals.map((deal) => `<option value="${escapeHtml(deal.id)}" ${deal.id === draft.dealId ? "selected" : ""}>${escapeHtml(deal.title)} · ${escapeHtml(deal.stage)}</option>`).join("")}`;
+  const recognitionLabel = analysis.recognitionTemplate ? `${analysis.recognitionTemplate.name} V${analysis.recognitionTemplate.version}` : "通用识别";
+  const suggestedTemplateName = `${draft.seller || draft.buyer || analysis.sourceFileName.replace(/\.[^.]+$/u, "")} ${documentTypeLabel(draft.type)}`.trim().slice(0, 120);
   openModal("导入分析 · 审核后生成单据", `<div class="trade-document-import-shell">
     <div class="trade-document-import-summary"><div><b>${escapeHtml(analysis.sourceFileName)}</b><span>识别类型：${escapeHtml(draft.type)} · ${documentTypeLabel(draft.type)} · ${(analysis.sourceSize / 1024).toFixed(1)} KB</span></div><div class="trade-document-import-score"><span>识别可信度 ${tradeDocumentImportPercent(analysis.confidence)}</span><i style="--score:${tradeDocumentImportPercent(analysis.confidence)}"></i></div><span class="doc-status-badge">${analysis.status === "confirmed" ? "已生成" : "待审核"}</span></div>
     <div class="trade-document-import-layout">
       <aside class="trade-document-import-source"><div><h3>原文件与风险</h3><p>左侧只展示本团队受控存储的原文摘要；右侧修改的是待生成草稿。</p></div><div class="trade-document-import-warnings">${warningHtml}</div><div class="trade-document-import-evidence"><h3 style="margin-bottom:6px;">识别证据</h3>${evidenceHtml}<details style="margin-top:10px;"><summary style="cursor:pointer;color:var(--muted);font-size:10px;">查看原文摘要</summary><pre style="max-height:180px;overflow:auto;white-space:pre-wrap;color:var(--muted);font:10px/1.5 ui-monospace,monospace;">${escapeHtml(analysis.sourcePreview.join("\n"))}</pre></details></div></aside>
       <section class="trade-document-import-review"><div class="trade-document-import-review-head"><div><h3>确认导入内容</h3><p style="margin:4px 0 0;color:var(--muted);font-size:10px;">修改后确认，将创建一份草稿单据；不会自动审批或覆盖原单据。</p></div><button class="btn" id="tradeImportOpenSourceButton" type="button">打开原文件</button></div>
+        <div class="trade-recognition-template-bar"><div><span>本次规则</span><b id="tradeRecognitionTemplateState">${escapeHtml(recognitionLabel)}</b><small>${analysis.recognitionTemplate ? `匹配度 ${tradeDocumentImportPercent(analysis.recognitionTemplate.matchScore)}，历史单据不会重新识别` : "未命中模板，继续使用现有通用识别"}</small></div><label><span>模板名称</span><input id="tradeRecognitionTemplateName" value="${escapeHtml(analysis.recognitionTemplate?.name || suggestedTemplateName)}" maxlength="120"></label><button class="btn" type="button" id="tradeRecognitionTemplateSave">${analysis.recognitionTemplate ? "更新模板" : "保存为模板"}</button><button class="btn" type="button" id="tradeRecognitionTemplateLibraryButton">模板库</button></div>
+        <div class="trade-recognition-template-library" id="tradeRecognitionTemplateLibrary" hidden></div>
         <div class="trade-document-import-form"><label class="wide"><span>关联客户</span><select id="tradeImportCustomer">${customerOptions}</select></label><label class="wide"><span>关联商机</span><select id="tradeImportDeal">${dealOptions}</select></label><label><span>单据类型</span><select id="tradeImportType">${typeOptions}</select></label>${field("tradeImportTitle", "单据标题", draft.title, "text", "wide")}${field("tradeImportNumber", "单据编号", draft.number)}${field("tradeImportIssueDate", "签发日期", draft.issueDate, "date")}${field("tradeImportBuyer", "买方公司", draft.buyer)}${field("tradeImportBuyerContact", "买方联系人", draft.buyerContact)}${field("tradeImportSeller", "卖方公司", draft.seller)}${field("tradeImportCurrency", "币种", draft.currency)}${field("tradeImportIncoterm", "贸易条款", draft.incoterm)}${field("tradeImportShipping", "运输方式", draft.shippingMethod)}${field("tradeImportPortLoading", "装运港", draft.portLoading)}${field("tradeImportPortDischarge", "目的港", draft.portDischarge)}${field("tradeImportValidity", "有效期", draft.validityDate, "date")}${textarea("tradeImportBuyerAddress", "买方地址", draft.buyerAddress, "wide")}${textarea("tradeImportSellerAddress", "卖方地址", draft.sellerAddress, "wide")}${textarea("tradeImportPayment", "付款条款", draft.paymentTerm, "wide")}${textarea("tradeImportBank", "银行信息", draft.bankInfo, "wide")}${textarea("tradeImportNotes", "备注", draft.notes, "full")}</div>
         <div class="trade-document-import-items-head"><h3>商品明细</h3><button class="btn" type="button" id="tradeImportAddItem">增加明细</button></div><div class="trade-document-import-items" id="tradeImportItems">${draft.items.map(renderTradeDocumentImportItem).join("")}</div><div class="trade-document-import-total"><span>明细计算合计</span><b id="tradeImportTotal">${formatDocumentMoney(draft.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0), draft.currency)}</b>${analysis.declaredTotal === undefined ? "" : `<span>原单合计 ${formatDocumentMoney(analysis.declaredTotal, draft.currency)}</span>`}</div>
       </section>
@@ -15502,11 +20503,34 @@ function renderTradeDocumentImportReview(analysis: TradeDocumentImportAnalysis) 
     qs<HTMLButtonElement>("[data-trade-import-remove]", row as HTMLElement)?.addEventListener("click", (event) => { (event.currentTarget as HTMLButtonElement).closest<HTMLElement>("[data-trade-import-item]")?.remove(); total(); });
   });
   qs<HTMLButtonElement>("#tradeImportOpenSourceButton")?.addEventListener("click", () => window.open(`/api/trade-document-imports/${encodeURIComponent(analysis.id)}/source`, "_blank", "noopener,noreferrer"));
+  qs<HTMLButtonElement>("#tradeRecognitionTemplateLibraryButton")?.addEventListener("click", () => { void renderTradeDocumentRecognitionTemplateLibrary(); });
+  qs<HTMLButtonElement>("#tradeRecognitionTemplateSave")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const name = qs<HTMLInputElement>("#tradeRecognitionTemplateName")?.value.trim() || "";
+    if (!name) { toast("请填写模板名称", "error"); qs<HTMLInputElement>("#tradeRecognitionTemplateName")?.focus(); return; }
+    setButtonPending(button, true, analysis.recognitionTemplate ? "更新模板" : "保存为模板", "保存中");
+    try {
+      const result = await api<{ template: TradeDocumentRecognitionTemplate }>(`/api/trade-document-imports/${encodeURIComponent(analysis.id)}/recognition-template`, {
+        method: "POST",
+        body: JSON.stringify({ name, familyId: analysis.recognitionTemplate?.familyId, document: importDocumentDraftFromReview(analysis) })
+      });
+      analysis.recognitionTemplate = { templateId: result.template.id, familyId: result.template.familyId, name: result.template.name, version: result.template.version, matchScore: 1, matchedAt: new Date().toISOString() };
+      const stateLabel = qs<HTMLElement>("#tradeRecognitionTemplateState");
+      if (stateLabel) stateLabel.textContent = `${result.template.name} V${result.template.version}`;
+      button.textContent = "更新模板";
+      button.disabled = false;
+      toast(`识别模板已保存为 V${result.template.version}，旧版本已自动归档`, "success");
+      if (!qs<HTMLElement>("#tradeRecognitionTemplateLibrary")?.hidden) await renderTradeDocumentRecognitionTemplateLibrary();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "识别模板保存失败", "error");
+      setButtonPending(button, false, analysis.recognitionTemplate ? "更新模板" : "保存为模板", "保存中");
+    }
+  });
   qs<HTMLButtonElement>("#tradeImportConfirmButton")?.addEventListener("click", async (event) => {
     const button = event.currentTarget as HTMLButtonElement;
     const next = importDocumentDraftFromReview(analysis);
     const requiredFields: Array<[string, string, string]> = [
-      ["tradeImportTitle", "单据标题", next.title], ["tradeImportNumber", "单据编号", next.number],
+      ["tradeImportTitle", "单据标题", next.title], ["tradeImportNumber", "单据编号", next.number], ["tradeImportIssueDate", "签发日期", next.issueDate],
       ["tradeImportSeller", "卖方公司", next.seller]
     ];
     qsa<HTMLElement>("#tradeImportTitle, #tradeImportNumber, #tradeImportIssueDate, #tradeImportSeller, [data-import-field='product']").forEach((field) => field.style.borderColor = "");
@@ -15574,6 +20598,71 @@ function openTradeDocumentImport() {
       } catch (error) { toast(error instanceof Error ? error.message : "分析删除失败", "error"); }
     }));
   }).catch(() => { const box = qs<HTMLElement>("#tradeDocumentRecentImports"); if (box) box.innerHTML = `<span style="color:var(--muted);font-size:10px;">最近分析暂时无法读取</span>`; });
+}
+
+async function tradeDocumentOcrDataUrl(file: File) {
+  const supported = ["image/png", "image/jpeg", "image/webp"];
+  if (!supported.includes(file.type)) throw new Error("请选择 PNG、JPG/JPEG 或 WEBP 图片");
+  const raw = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.readAsDataURL(file);
+  });
+  if (raw.length <= 2_700_000) return { dataUrl: raw, mime: file.type };
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => reject(new Error("图片无法解码，请换用常见格式的原图"));
+    element.src = raw;
+  });
+  const maxSide = 2_200;
+  const scale = Math.min(1, maxSide / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+  canvas.height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("当前浏览器无法处理图片，请更换浏览器后重试");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const compressed = canvas.toDataURL("image/jpeg", 0.82);
+  if (compressed.length > 2_900_000) throw new Error("图片压缩后仍过大，请裁剪到单据主体后重试");
+  return { dataUrl: compressed, mime: "image/jpeg" };
+}
+
+function openTradeDocumentOcr() {
+  const providerHint = tradeDocumentOcrProvider.enabled
+    ? (tradeDocumentOcrProvider.provider === "baidu" ? "已配置百度 OCR 优先识别，结构不足时自动由 AI 复核" : "已配置硅基流动视觉模型优先识别")
+    : "当前使用已启用的 AI 视觉模型";
+  openModal("OCR识别单据", `<div class="trade-document-ocr-upload"><div style="padding:24px 20px;border:1px dashed #b8d2cc;border-radius:10px;background:#f7fbfa;text-align:center;"><div style="display:grid;place-items:center;width:44px;height:44px;margin:0 auto 10px;border-radius:12px;color:#0f766e;background:#e4f5ef;font-size:20px;">◎</div><h3 style="margin:0;color:var(--ink);font-size:16px;">上传单据照片</h3><p style="margin:8px auto 15px;max-width:440px;color:var(--muted);font-size:11px;line-height:1.7;">适用于清晰、正向的 PI、报价单、商业发票、装箱单等图片。识别结果只生成待审核草稿，不会直接覆盖或提交正式单据。</p><input id="tradeDocumentOcrFile" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"><div id="tradeDocumentOcrMeta" style="min-height:18px;margin-top:10px;color:var(--muted);font-size:10px;"></div></div><div style="display:grid;gap:7px;margin-top:14px;padding:11px 12px;border:1px solid #e2ece9;border-radius:8px;background:#fbfdfc;"><b style="font-size:11px;color:var(--ink);">识别链路</b><span style="font-size:10px;color:var(--muted);line-height:1.6;">图片质量检查 → OCR/视觉识别 → 字段置信度与风险提示 → 人工审核 → 生成单据草稿</span><span style="font-size:10px;color:#8b641f;line-height:1.6;">${providerHint}；图片中的模糊、遮挡、反光和手写内容可能需要人工修正。</span></div><button class="btn" type="button" id="tradeDocumentOcrConfigButton" style="margin-top:12px;">配置 OCR 来源</button></div>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="tradeDocumentOcrStartButton" disabled>开始识别</button>`, { closeOnBackdrop: false });
+  const input = qs<HTMLInputElement>("#tradeDocumentOcrFile");
+  const start = qs<HTMLButtonElement>("#tradeDocumentOcrStartButton");
+  const meta = qs<HTMLElement>("#tradeDocumentOcrMeta");
+  input?.addEventListener("change", () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    if (!/^image\/(?:png|jpeg|webp)$/u.test(file.type)) { toast("请选择 PNG、JPG/JPEG 或 WEBP 图片", "error"); input.value = ""; return; }
+    if (meta) meta.textContent = `${file.name} · ${(file.size / 1024).toFixed(1)} KB（过大图片会在浏览器内压缩）`;
+    if (start) start.disabled = false;
+  });
+  qs<HTMLButtonElement>("#tradeDocumentOcrConfigButton")?.addEventListener("click", () => { closeModal(); activateNavView("ai-config"); });
+  start?.addEventListener("click", async () => {
+    const file = input?.files?.[0];
+    if (!file) return;
+    setButtonPending(start, true, "开始识别", "正在识别");
+    if (meta) meta.textContent = "正在检查图片并提交视觉模型，请保持页面打开…";
+    try {
+      const prepared = await tradeDocumentOcrDataUrl(file);
+      const result = await api<{ analysis: TradeDocumentImportAnalysis; duplicate: boolean }>("/api/trade-document-imports/analyze-ocr", { method: "POST", body: JSON.stringify({ image: prepared.dataUrl, mime: prepared.mime, fileName: file.name }) });
+      closeModal();
+      renderTradeDocumentImportReview(result.analysis);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "单据图片识别失败", "error");
+      if (meta) meta.textContent = "识别未完成，请根据提示调整图片或 AI 配置后重试。";
+      setButtonPending(start, false, "开始识别", "正在识别");
+    }
+  });
 }
 
 function openDocumentConversion() {
@@ -15658,16 +20747,22 @@ function renderDocumentProductChoices(products: Product[], selected: Set<string>
   return products.length ? products.map((product) => `<label class="document-product-choice"><input type="checkbox" value="${escapeHtml(product.id)}" ${selected.has(product.id) ? "checked" : ""}><span><b>${escapeHtml(product.nameEn || product.nameZh)}</b><small>${escapeHtml([product.nameZh, product.model, product.hsCode, `${product.price || 0} ${product.currency || "USD"}`].filter(Boolean).join(" · "))}</small></span></label>`).join("") : `<p class="empty-cell">没有匹配产品</p>`;
 }
 
-function setDocumentWorkspaceMode(mode: "studio" | "history" | "defaults") {
+function setDocumentWorkspaceMode(mode: "studio" | "history" | "quote-history" | "defaults") {
   const studio = qs<HTMLElement>("#documentStudioWorkspace");
   const history = qs<HTMLElement>("#documentHistoryWorkspace");
+  const quoteHistory = qs<HTMLElement>("#quoteHistoryWorkspace");
   const defaults = qs<HTMLElement>("#documentDefaultsWorkspace");
   if (studio) studio.hidden = mode !== "studio";
   if (history) history.hidden = mode !== "history";
+  if (quoteHistory) quoteHistory.hidden = mode !== "quote-history";
   if (defaults) defaults.hidden = mode !== "defaults";
   if (mode === "history") {
     populateDocumentHistoryFilters();
     void loadDocumentHistory();
+  }
+  if (mode === "quote-history") {
+    populateQuoteHistoryFilters();
+    void loadQuoteHistory();
   }
   if (mode === "defaults") void loadDocumentDefaultsWorkspace();
 }
@@ -15681,6 +20776,7 @@ function collectDocumentDefaultProfile(): DocumentDefaultProfile {
   return {
     teamId: current?.teamId || "",
     seller: documentDefaultValue("documentDefaultSeller"),
+    brandMarkText: documentDefaultValue("documentDefaultBrandMarkText"),
     sellerAddress: documentDefaultValue("documentDefaultSellerAddress"),
     sellerContact: documentDefaultValue("documentDefaultSellerContact"),
     sellerPhone: documentDefaultValue("documentDefaultSellerPhone"),
@@ -15696,7 +20792,7 @@ function collectDocumentDefaultProfile(): DocumentDefaultProfile {
     validityDays: Number(documentDefaultValue("documentDefaultValidityDays") || 0),
     notes: documentDefaultValue("documentDefaultNotes"),
     language: (documentDefaultValue("documentDefaultLanguage") || "EN") as TradeDocument["language"],
-    templateStyle: (documentDefaultValue("documentDefaultTemplateStyle") || "indigo") as TradeDocument["templateStyle"],
+    templateStyle: (documentDefaultValue("documentDefaultTemplateStyle") || "rose") as TradeDocument["templateStyle"],
     letterheadId: documentDefaultValue("documentDefaultLetterhead"),
     stampId: documentDefaultValue("documentDefaultStamp"),
     signatureId: documentDefaultValue("documentDefaultSignature"),
@@ -15713,12 +20809,30 @@ function renderDocumentDefaultsPreview(profile = collectDocumentDefaultProfile()
   const stamp = state.documentAssets.stamps.find((item) => item.id === profile.stampId);
   const signature = state.documentAssets.signatures.find((item) => item.id === profile.signatureId);
   const contact = [profile.sellerContact, profile.sellerPhone, profile.sellerEmail].filter(Boolean).join(" · ");
-  box.innerHTML = `<div class="document-default-preview-sheet"><header><div>${letterhead?.logoUrl ? `<img src="${escapeHtml(letterhead.logoUrl)}" alt="" style="width:74px;height:30px;object-fit:contain;object-position:left center;">` : ""}<b>${escapeHtml(profile.seller || letterhead?.companyName || "未配置公司名称")}</b><span>${escapeHtml(profile.sellerAddress || letterhead?.address || "公司地址将在此显示")}</span></div><small>${escapeHtml(profile.language)} · ${escapeHtml(profile.templateStyle)}</small></header><p>${escapeHtml(contact || "联系人、电话、邮箱")}${profile.sellerWebsite ? `<br>${escapeHtml(profile.sellerWebsite)}` : ""}${profile.sellerTaxNo ? `<br>Tax No. ${escapeHtml(profile.sellerTaxNo)}` : ""}</p><dl><div><dt>Currency</dt><dd>${escapeHtml(profile.currency)}</dd></div><div><dt>Incoterm</dt><dd>${escapeHtml(profile.incoterm)}</dd></div><div><dt>Shipping</dt><dd>${escapeHtml(profile.shippingMethod)}</dd></div><div><dt>Port</dt><dd>${escapeHtml(profile.portLoading || "-")}</dd></div></dl><p>${escapeHtml(profile.paymentTerm || "付款条款未配置")}</p><div class="document-default-preview-assets">${stamp ? `<img src="${escapeHtml(stamp.imageUrl)}" alt="印章">` : ""}${signature ? `<img data-signature src="${escapeHtml(signature.imageUrl)}" alt="签名">` : ""}${!stamp && !signature ? `<small>当前未选择印章与签名</small>` : ""}</div></div>`;
+  const fallbackMark = [...(profile.seller || letterhead?.companyName || "GJ").trim()].slice(0, 2).join("").toUpperCase() || "GJ";
+  const mark = [...(profile.brandMarkText || "").trim()].slice(0, 8).join("").toUpperCase() || fallbackMark;
+  box.innerHTML = `<div class="document-default-preview-sheet"><header><div class="document-default-preview-brand"><span class="document-default-preview-mark">${escapeHtml(mark)}</span><div>${letterhead?.logoUrl ? `<img src="${escapeHtml(letterhead.logoUrl)}" alt="" style="width:74px;height:30px;object-fit:contain;object-position:left center;">` : ""}<b>${escapeHtml(profile.seller || letterhead?.companyName || "未配置公司名称")}</b><span>${escapeHtml(profile.sellerAddress || letterhead?.address || "公司地址将在此显示")}</span></div></div><small>${escapeHtml(profile.language)} · ${escapeHtml(profile.templateStyle)}</small></header><p>${escapeHtml(contact || "联系人、电话、邮箱")}${profile.sellerWebsite ? `<br>${escapeHtml(profile.sellerWebsite)}` : ""}${profile.sellerTaxNo ? `<br>Tax No. ${escapeHtml(profile.sellerTaxNo)}` : ""}</p><dl><div><dt>Currency</dt><dd>${escapeHtml(profile.currency)}</dd></div><div><dt>Incoterm</dt><dd>${escapeHtml(profile.incoterm)}</dd></div><div><dt>Shipping</dt><dd>${escapeHtml(profile.shippingMethod)}</dd></div><div><dt>Port</dt><dd>${escapeHtml(profile.portLoading || "-")}</dd></div></dl><p>${escapeHtml(profile.paymentTerm || "付款条款未配置")}</p><div class="document-default-preview-assets">${stamp ? `<img src="${escapeHtml(stamp.imageUrl)}" alt="印章">` : ""}${signature ? `<img data-signature src="${escapeHtml(signature.imageUrl)}" alt="签名">` : ""}${!stamp && !signature ? `<small>当前未选择印章与签名</small>` : ""}</div></div>`;
+}
+
+function renderSellerProfilesInDefaults(assets = state.documentAssets) {
+  const box = qs<HTMLElement>("#documentSellerProfilesList");
+  if (!box) return;
+  const profiles = [...assets.letterheads].sort((left, right) => Number(right.isDefault) - Number(left.isDefault) || Number(right.enabled) - Number(left.enabled) || (right.matchPriority || 0) - (left.matchPriority || 0));
+  box.innerHTML = profiles.length ? profiles.map((profile) => {
+    const stamp = assets.stamps.find((item) => item.id === profile.stampId);
+    const signature = assets.signatures.find((item) => item.id === profile.signatureId);
+    const assetsText = [stamp ? `印章：${stamp.name}` : "", signature ? `签名：${signature.name}` : ""].filter(Boolean).join(" · ");
+    return `<article class="document-seller-profile-card${profile.enabled ? "" : " is-disabled"}">
+      <header><div><b>${escapeHtml(profile.name)}</b><small>${escapeHtml(profile.companyName)}</small></div>${profile.isDefault ? `<em>默认公司</em>` : profile.enabled ? `<em>已启用</em>` : `<em>已停用</em>`}</header>
+      <small>${escapeHtml(sellerProfileRuleText(profile))}</small>
+      <small>${escapeHtml(assetsText || "使用团队默认印章与签名")} · 优先级 ${profile.matchPriority || 0}</small>
+    </article>`;
+  }).join("") : `<p class="empty-cell">尚未配置卖方公司。新建单据将使用下方兜底资料。</p>`;
 }
 
 function fillDocumentDefaultsWorkspace(profile: DocumentDefaultProfile, assets: DocumentAssetsResponse) {
   const values: Record<string, string> = {
-    documentDefaultSeller: profile.seller, documentDefaultSellerAddress: profile.sellerAddress, documentDefaultSellerContact: profile.sellerContact,
+    documentDefaultSeller: profile.seller, documentDefaultBrandMarkText: profile.brandMarkText || "", documentDefaultSellerAddress: profile.sellerAddress, documentDefaultSellerContact: profile.sellerContact,
     documentDefaultSellerPhone: profile.sellerPhone, documentDefaultSellerEmail: profile.sellerEmail, documentDefaultSellerWebsite: profile.sellerWebsite,
     documentDefaultSellerTaxNo: profile.sellerTaxNo, documentDefaultBankInfo: profile.bankInfo, documentDefaultCurrency: profile.currency,
     documentDefaultIncoterm: profile.incoterm, documentDefaultPaymentTerm: profile.paymentTerm, documentDefaultShippingMethod: profile.shippingMethod,
@@ -15735,7 +20849,9 @@ function fillDocumentDefaultsWorkspace(profile: DocumentDefaultProfile, assets: 
   qsa<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("#documentDefaultsWorkspace input, #documentDefaultsWorkspace select, #documentDefaultsWorkspace textarea").forEach((field) => { field.disabled = !editable; });
   const save = qs<HTMLButtonElement>("#documentDefaultsSaveButton"); if (save) save.hidden = !editable;
   const manage = qs<HTMLButtonElement>("#documentDefaultsManageAssets"); if (manage) manage.hidden = !editable;
+  const manageSellers = qs<HTMLButtonElement>("#documentSellerProfilesManage"); if (manageSellers) manageSellers.hidden = !editable;
   qsa<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("#documentDefaultsWorkspace input, #documentDefaultsWorkspace select, #documentDefaultsWorkspace textarea").forEach((field) => { field.oninput = () => renderDocumentDefaultsPreview(); field.onchange = () => renderDocumentDefaultsPreview(); });
+  renderSellerProfilesInDefaults(assets);
   renderDocumentDefaultsPreview(profile);
 }
 
@@ -15841,6 +20957,244 @@ function resetDocumentHistoryFilters() {
   void loadDocumentHistory();
 }
 
+function populateQuoteHistoryFilters() {
+  const customerOptions = qs<HTMLDataListElement>("#quoteHistoryCustomerOptions");
+  const dealOptions = qs<HTMLDataListElement>("#quoteHistoryDealOptions");
+  const countryOptions = qs<HTMLDataListElement>("#quoteHistoryCountryOptions");
+  if (customerOptions) customerOptions.innerHTML = state.customers.map((item) => `<option value="${escapeHtml(quoteHistoryCustomerLabel(item))}">${escapeHtml(item.company)}</option>`).join("");
+  if (dealOptions) dealOptions.innerHTML = quoteHistoryDeals().map((item) => `<option value="${escapeHtml(quoteHistoryDealLabel(item))}">${escapeHtml(item.title)}</option>`).join("");
+  if (countryOptions) {
+    const countries = [...new Set(state.customers.map((item) => item.country.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right));
+    countryOptions.innerHTML = countries.map((item) => `<option value="${escapeHtml(item)}"></option>`).join("");
+  }
+}
+
+function quoteHistoryDeals() {
+  return [...state.deals, ...state.closedDeals].filter((item, index, list) => list.findIndex((entry) => entry.id === item.id) === index);
+}
+
+function quoteHistoryCustomerLabel(customer: Customer) {
+  return [customer.company, customer.country].filter(Boolean).join(" · ");
+}
+
+function quoteHistoryDealLabel(deal: Deal) {
+  const customer = state.customers.find((item) => item.id === deal.customerId);
+  return [deal.title, customer?.company].filter(Boolean).join(" · ");
+}
+
+function quoteHistoryParams() {
+  const params = new URLSearchParams({ page: String(state.quoteHistoryPage), pageSize: "20", mode: state.quoteHistoryMode });
+  const customerText = qs<HTMLInputElement>("#quoteHistoryCustomer")?.value.trim() || "";
+  const dealText = qs<HTMLInputElement>("#quoteHistoryDeal")?.value.trim() || "";
+  const customer = state.customers.find((item) => quoteHistoryCustomerLabel(item) === customerText || item.company === customerText);
+  const deal = quoteHistoryDeals().find((item) => quoteHistoryDealLabel(item) === dealText || item.title === dealText);
+  const fields: Array<[string, string]> = [
+    ["q", qs<HTMLInputElement>("#quoteHistoryKeyword")?.value.trim() || ""],
+    ["customerId", customer?.id || ""],
+    ["customerSearch", customer ? "" : customerText],
+    ["dealId", deal?.id || ""],
+    ["dealSearch", deal ? "" : dealText],
+    ["country", qs<HTMLInputElement>("#quoteHistoryCountry")?.value.trim() || ""],
+    ["product", qs<HTMLInputElement>("#quoteHistoryProduct")?.value.trim() || ""],
+    ["documentType", qs<HTMLSelectElement>("#quoteHistoryDocumentType")?.value || ""],
+    ["currency", qs<HTMLSelectElement>("#quoteHistoryCurrency")?.value || ""],
+    ["from", qs<HTMLInputElement>("#quoteHistoryFrom")?.value || ""],
+    ["to", qs<HTMLInputElement>("#quoteHistoryTo")?.value || ""],
+    ["recordId", state.quoteHistoryFocusId]
+  ];
+  fields.forEach(([key, value]) => { if (value) params.set(key, value); });
+  return params;
+}
+
+function setQuoteHistoryMode(mode: "records" | "product", reload = true) {
+  state.quoteHistoryMode = mode;
+  const recordsButton = qs<HTMLButtonElement>("#quoteHistoryRecordsModeButton");
+  const productButton = qs<HTMLButtonElement>("#quoteHistoryProductModeButton");
+  if (recordsButton) {
+    recordsButton.classList.toggle("active", mode === "records");
+    recordsButton.setAttribute("aria-selected", String(mode === "records"));
+  }
+  if (productButton) {
+    productButton.classList.toggle("active", mode === "product");
+    productButton.setAttribute("aria-selected", String(mode === "product"));
+  }
+  const label = qs<HTMLElement>("#quoteHistoryProductLabel");
+  if (label) label.textContent = mode === "product" ? "单款产品 / 型号" : "产品 / 型号";
+  const input = qs<HTMLInputElement>("#quoteHistoryProduct");
+  if (input) input.placeholder = mode === "product" ? "输入产品名或型号，查看报价范围" : "产品或型号";
+  if (reload) {
+    state.quoteHistoryPage = 1;
+    void loadQuoteHistory();
+  }
+}
+
+function quoteHistoryProductSummary(record: QuoteHistoryRecord) {
+  const names = record.items.slice(0, 2).map((item) => [item.product, item.model].filter(Boolean).join(" / "));
+  return `${names.join("、")}${record.items.length > 2 ? ` 等 ${record.items.length} 项` : ""}`;
+}
+
+function openQuoteHistoryDetail(record: QuoteHistoryRecord) {
+  openModal("报价变化详情", `
+    <div class="quote-history-detail-head">
+      <div><span>${record.documentType === "PI" ? "PI" : "报价单"} · ${escapeHtml(record.documentNumber)} · v${record.documentRevision}</span><h2>${escapeHtml(record.customerName)}</h2><p>${escapeHtml(record.dealTitle)} · ${escapeHtml(formatDateTime(record.quotedAt))} · ${escapeHtml(record.operatorName)}</p></div>
+      <strong>${escapeHtml(formatDocumentMoney(record.totalAmount, record.currency))}</strong>
+    </div>
+    <div class="quote-history-change-list">${record.changes.map((change) => `<div><i></i><span>${escapeHtml(change)}</span></div>`).join("")}</div>
+    <div class="table-wrap quote-history-detail-table"><table><thead><tr><th>产品</th><th>型号</th><th>数量</th><th>单价</th><th>小计</th></tr></thead><tbody>${record.items.map((item) => `<tr><td>${escapeHtml(item.product)}</td><td>${escapeHtml(item.model || "-")}</td><td>${item.quantity} ${escapeHtml(item.unit)}</td><td>${escapeHtml(formatDocumentMoney(item.unitPrice, record.currency))}</td><td><b>${escapeHtml(formatDocumentMoney(item.lineTotal, record.currency))}</b></td></tr>`).join("")}</tbody></table></div>
+    <div class="quote-history-detail-foot"><span>${record.exportedAt ? `已于 ${escapeHtml(formatDateTime(record.exportedAt))} 正式导出` : "尚未正式导出"}</span><span>成交后仍永久保留此报价快照</span></div>
+  `, `<button class="btn" id="quoteHistoryOpenDocument">打开原单据</button><button class="btn primary" data-modal-close>关闭</button>`);
+  qs<HTMLButtonElement>("#quoteHistoryOpenDocument")?.addEventListener("click", () => {
+    closeModal();
+    const existing = state.tradeDocuments.find((item) => item.id === record.documentId);
+    if (existing) {
+      state.selectedDocumentId = existing.id;
+      setDocumentWorkspaceMode("studio");
+      renderTradeDocuments(state.tradeDocuments);
+      return;
+    }
+    toast("原单据不在最近列表，可在历史单据中按编号查询");
+    const keyword = qs<HTMLInputElement>("#documentHistoryKeyword");
+    if (keyword) keyword.value = record.documentNumber;
+    setDocumentWorkspaceMode("history");
+  });
+}
+
+function openQuoteProductAnalysisDetail(row: QuoteProductAnalysisRow) {
+  const records = (state.quoteProductAnalysis?.detailRecords || []).filter((record) => row.recordIds.includes(record.id));
+  const itemMatches = (item: QuoteHistoryItem) => row.productId
+    ? item.productId === row.productId
+    : item.product.trim().toLowerCase() === row.product.trim().toLowerCase() && item.model.trim().toLowerCase() === row.model.trim().toLowerCase();
+  openModal("单款产品报价明细", `
+    <div class="quote-history-detail-head">
+      <div><span>产品分析 · ${escapeHtml(row.country)} · ${escapeHtml(row.currency)}</span><h2>${escapeHtml([row.product, row.model].filter(Boolean).join(" / "))}</h2><p>共 ${row.quoteCount} 次报价 · 最近客户 ${escapeHtml(row.latestCustomerName || "未填写")}</p></div>
+      <strong>${escapeHtml(formatDocumentMoney(row.minUnitPrice, row.currency))} - ${escapeHtml(formatDocumentMoney(row.maxUnitPrice, row.currency))}</strong>
+    </div>
+    <div class="quote-history-change-list"><div><i></i><span>平均单价：${escapeHtml(formatDocumentMoney(row.averageUnitPrice, row.currency))} · 最近单价：${escapeHtml(formatDocumentMoney(row.latestUnitPrice, row.currency))}</span></div><div><i></i><span>报价范围按 ${escapeHtml(row.country)} / ${escapeHtml(row.currency)} 单独统计，未混合不同国家或币种。</span></div></div>
+    <div class="table-wrap quote-history-detail-table"><table><thead><tr><th>报价时间</th><th>客户 / 商机</th><th>单据</th><th>数量</th><th>单价</th><th>小计</th><th></th></tr></thead><tbody>${records.length ? records.map((record) => {
+      const item = record.items.find(itemMatches);
+      if (!item) return "";
+      return `<tr><td>${escapeHtml(formatDateTime(record.quotedAt))}</td><td><div class="document-history-title"><b>${escapeHtml(record.customerName)}</b><span>${escapeHtml(record.dealTitle)}</span></div></td><td>${escapeHtml(record.documentNumber)}</td><td>${item.quantity} ${escapeHtml(item.unit)}</td><td>${escapeHtml(formatDocumentMoney(item.unitPrice, record.currency))}</td><td>${escapeHtml(formatDocumentMoney(item.lineTotal, record.currency))}</td><td><button class="btn" type="button" data-product-analysis-record="${escapeHtml(record.id)}">查看</button></td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="empty-cell">暂无可展开的报价明细</td></tr>`}</tbody></table></div>
+    <div class="quote-history-detail-foot"><span>最近报价：${escapeHtml(row.latestQuotedAt ? formatDateTime(row.latestQuotedAt) : "-")}</span><span>单据号：${escapeHtml(row.latestDocumentNumber || "-")}</span></div>
+  `, `<button class="btn primary" data-modal-close>关闭</button>`);
+  qsa<HTMLButtonElement>("[data-product-analysis-record]").forEach((button) => button.addEventListener("click", () => {
+    const record = records.find((item) => item.id === button.dataset.productAnalysisRecord);
+    if (!record) return;
+    closeModal();
+    openQuoteHistoryDetail(record);
+  }));
+}
+
+async function loadQuoteHistory() {
+  const rows = qs<HTMLElement>("#quoteHistoryRows");
+  const productRows = qs<HTMLElement>("#quoteHistoryProductRows");
+  if (rows) rows.innerHTML = `<tr><td colspan="8" class="empty-cell">正在查询报价历史</td></tr>`;
+  if (productRows) productRows.innerHTML = `<tr><td colspan="9" class="empty-cell">正在分析单款产品报价</td></tr>`;
+  try {
+    const result = await api<QuoteHistoryResponse>(`/api/quote-history?${quoteHistoryParams().toString()}`);
+    state.quoteHistoryPage = result.page;
+    state.quoteHistoryPageCount = result.pageCount;
+    state.quoteHistoryTotal = result.total;
+    state.quoteProductAnalysis = result.productAnalysis;
+    renderQuoteHistory(result);
+    if (state.quoteHistoryFocusId && result.records[0]) {
+      const record = result.records[0];
+      state.quoteHistoryFocusId = "";
+      openQuoteHistoryDetail(record);
+    }
+  } catch (error) {
+    const message = escapeHtml(error instanceof Error ? error.message : "报价历史加载失败");
+    if (rows) rows.innerHTML = `<tr><td colspan="8" class="empty-cell">${message}</td></tr>`;
+    if (productRows) productRows.innerHTML = `<tr><td colspan="9" class="empty-cell">${message}</td></tr>`;
+  }
+}
+
+function renderQuoteHistory(result: QuoteHistoryResponse) {
+  const recordsPanel = qs<HTMLElement>("#quoteHistoryRecordsPanel");
+  const productPanel = qs<HTMLElement>("#quoteHistoryProductPanel");
+  if (recordsPanel) recordsPanel.hidden = state.quoteHistoryMode !== "records";
+  if (productPanel) productPanel.hidden = state.quoteHistoryMode !== "product";
+  if (state.quoteHistoryMode === "product") {
+    renderQuoteProductAnalysis(result.productAnalysis);
+    return;
+  }
+  const rows = qs<HTMLElement>("#quoteHistoryRows");
+  const summary = qs<HTMLElement>("#quoteHistorySummary");
+  const page = qs<HTMLElement>("#quoteHistoryPageText");
+  const prev = qs<HTMLButtonElement>("#quoteHistoryPrevButton");
+  const next = qs<HTMLButtonElement>("#quoteHistoryNextButton");
+  const totals = Object.entries(result.summary.totals).map(([currency, amount]) => formatDocumentMoney(amount, currency)).join(" · ");
+  if (summary) summary.innerHTML = `<b>${result.summary.recordCount}</b> 次报价 · ${result.summary.customerCount} 个客户 · ${result.summary.dealCount} 个商机 · ${result.summary.productCount} 个产品${totals ? `<span>历史报价累计（含版本）${escapeHtml(totals)}</span>` : ""}`;
+  if (page) page.textContent = `第 ${state.quoteHistoryPage} / ${state.quoteHistoryPageCount} 页`;
+  if (prev) prev.disabled = state.quoteHistoryPage <= 1;
+  if (next) next.disabled = state.quoteHistoryPage >= state.quoteHistoryPageCount;
+  if (!rows) return;
+  rows.innerHTML = result.records.length ? result.records.map((record) => `<tr>
+    <td><div class="document-history-title"><b>${escapeHtml(formatDateTime(record.quotedAt))}</b><span>${record.exportedAt ? "已正式导出" : "已保存"}</span></div></td>
+    <td><div class="document-history-title"><b>${escapeHtml(record.customerName)}</b><span>${escapeHtml(record.dealTitle)}</span></div></td>
+    <td><div class="document-history-title"><b>${record.documentType === "PI" ? "PI" : "报价单"}</b><span>${escapeHtml(record.documentNumber)} · v${record.documentRevision}</span></div></td>
+    <td><div class="quote-history-product"><b>${escapeHtml(quoteHistoryProductSummary(record))}</b><span>${record.items.length} 项产品</span></div></td>
+    <td><strong>${escapeHtml(formatDocumentMoney(record.totalAmount, record.currency))}</strong></td>
+    <td>${escapeHtml(record.operatorName)}</td>
+    <td><div class="quote-history-change"><b>${escapeHtml(record.changes[0] || "报价明细已同步")}</b>${record.changes.length > 1 ? `<span>另有 ${record.changes.length - 1} 项变化</span>` : ""}</div></td>
+    <td><button class="btn" type="button" data-quote-history-open="${escapeHtml(record.id)}">详情</button></td>
+  </tr>`).join("") : `<tr><td colspan="8" class="empty-cell">没有符合条件的报价记录</td></tr>`;
+  qsa<HTMLButtonElement>("[data-quote-history-open]", rows).forEach((button) => button.addEventListener("click", () => {
+    const record = result.records.find((item) => item.id === button.dataset.quoteHistoryOpen);
+    if (record) openQuoteHistoryDetail(record);
+  }));
+}
+
+function renderQuoteProductAnalysis(analysis: QuoteHistoryResponse["productAnalysis"]) {
+  const summary = qs<HTMLElement>("#quoteHistoryProductSummary");
+  const overview = qs<HTMLElement>("#quoteHistoryProductOverview");
+  const rows = qs<HTMLElement>("#quoteHistoryProductRows");
+  const items = analysis?.rows || [];
+  if (summary) summary.innerHTML = `<b>${items.length}</b> 个产品 / 国家 / 币种组合 · ${analysis?.totalRecords || 0} 次报价<span>最低、最高、平均和最近单价均按币种独立统计</span>`;
+  if (overview) {
+    const overall = analysis?.overall || [];
+    const countryRanges = analysis?.countryRanges || [];
+    overview.innerHTML = `<div class="quote-analysis-overall"><span>当前筛选结果 · 整体报价范围</span>${overall.length ? overall.map((range) => `<div><b>${escapeHtml(formatDocumentMoney(range.minUnitPrice, range.currency))} - ${escapeHtml(formatDocumentMoney(range.maxUnitPrice, range.currency))}</b><small>${escapeHtml(range.currency)} · ${range.quoteCount} 次报价 · 覆盖 ${range.countryCount} 个国家 · 平均 ${escapeHtml(formatDocumentMoney(range.averageUnitPrice, range.currency))}</small></div>`).join("") : `<strong>暂无整体报价范围</strong>`}</div><div class="quote-analysis-countries"><span>不同国家报价范围</span>${countryRanges.length ? countryRanges.map((range) => `<div><b>${escapeHtml(range.country || "未填写国家")}</b><strong>${escapeHtml(formatDocumentMoney(range.minUnitPrice, range.currency))} - ${escapeHtml(formatDocumentMoney(range.maxUnitPrice, range.currency))}</strong><small>${escapeHtml(range.currency)} · ${range.quoteCount} 次 · 平均 ${escapeHtml(formatDocumentMoney(range.averageUnitPrice, range.currency))}</small></div>`).join("") : `<strong>暂无国家报价范围</strong>`}</div>`;
+  }
+  if (!rows) return;
+  rows.innerHTML = items.length ? items.map((row, index) => `<tr>
+    <td><div class="quote-history-product"><b>${escapeHtml([row.product, row.model].filter(Boolean).join(" / "))}</b><span>${row.quoteCount} 次历史报价</span></div></td>
+    <td>${escapeHtml(row.country)}</td>
+    <td>${escapeHtml(row.currency)}</td>
+    <td>${row.quoteCount}</td>
+    <td><strong>${escapeHtml(formatDocumentMoney(row.minUnitPrice, row.currency))}</strong></td>
+    <td><strong>${escapeHtml(formatDocumentMoney(row.maxUnitPrice, row.currency))}</strong></td>
+    <td>${escapeHtml(formatDocumentMoney(row.averageUnitPrice, row.currency))}</td>
+    <td><div class="quote-history-product"><b>${escapeHtml(formatDocumentMoney(row.latestUnitPrice, row.currency))}</b><span>${escapeHtml(row.latestQuotedAt ? formatDateTime(row.latestQuotedAt) : "-")}</span></div></td>
+    <td><button class="btn" type="button" data-quote-product-analysis-open="${index}">明细</button></td>
+  </tr>`).join("") : `<tr><td colspan="9" class="empty-cell">请输入产品名或型号，再查询单款产品的历史报价范围</td></tr>`;
+  qsa<HTMLButtonElement>("[data-quote-product-analysis-open]", rows).forEach((button) => button.addEventListener("click", () => {
+    const row = items[Number(button.dataset.quoteProductAnalysisOpen)];
+    if (row) openQuoteProductAnalysisDetail(row);
+  }));
+}
+
+function resetQuoteHistoryFilters() {
+  ["quoteHistoryKeyword", "quoteHistoryProduct", "quoteHistoryFrom", "quoteHistoryTo", "quoteHistoryCustomer", "quoteHistoryDeal", "quoteHistoryCountry"].forEach((id) => { const input = qs<HTMLInputElement>(`#${id}`); if (input) input.value = ""; });
+  ["quoteHistoryDocumentType", "quoteHistoryCurrency"].forEach((id) => { const select = qs<HTMLSelectElement>(`#${id}`); if (select) select.value = ""; });
+  state.quoteHistoryFocusId = "";
+  state.quoteHistoryPage = 1;
+  void loadQuoteHistory();
+}
+
+function openQuoteHistoryForDeal(dealId: string) {
+  closeDealDrawer();
+  activateNavView("documents");
+  populateQuoteHistoryFilters();
+  const deal = qs<HTMLInputElement>("#quoteHistoryDeal");
+  const selectedDeal = quoteHistoryDeals().find((item) => item.id === dealId);
+  if (deal) deal.value = selectedDeal ? quoteHistoryDealLabel(selectedDeal) : "";
+  setQuoteHistoryMode("records", false);
+  state.quoteHistoryPage = 1;
+  state.quoteHistoryFocusId = "";
+  setDocumentWorkspaceMode("quote-history");
+}
+
 function fillDocumentEditor(document: TradeDocument) {
   setDocumentType(document.type);
   renderDocumentWorkflow(document);
@@ -15850,11 +21204,12 @@ function fillDocumentEditor(document: TradeDocument) {
     docIssueDateInput: document.issueDate,
     docTemplateInput: document.templateStyle,
     docLanguageInput: document.language || "EN",
-    docThemeInput: document.templateStyle || "indigo",
+    docThemeInput: document.templateStyle === "longtec" ? "rose" : (document.templateStyle || "rose"),
     docBuyerInput: document.buyer,
     docBuyerContactInput: document.buyerContact,
     docBuyerAddressInput: document.buyerAddress,
     docSellerInput: document.seller,
+    docBrandMarkTextInput: document.brandMarkText || "",
     docSellerContactInput: document.sellerContact || "",
     docSellerPhoneInput: document.sellerPhone || "",
     docSellerEmailInput: document.sellerEmail || "",
@@ -15871,18 +21226,82 @@ function fillDocumentEditor(document: TradeDocument) {
     docBankInput: document.bankInfo,
     docNotesInput: document.notes
   };
+  const shippingCost = document.items.find((item) => item.lineType === "shipping_cost")?.unitPrice || 0;
+  values.docShippingCostInput = shippingCost ? String(shippingCost) : "";
   Object.entries(values).forEach(([id, value]) => {
     const input = qs<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`#${id}`);
     if (input) input.value = value || "";
   });
   renderDocumentItems(document.items);
+  syncShippingCostLabel();
   renderDocThemeSwatches(document.templateStyle);
   renderDocumentPreview(collectDocumentDraft());
+}
+
+function applySellerProfileToEditor(profile: DocumentLetterhead, reason: string) {
+  const values: Record<string, string> = {
+    docSellerInput: profile.companyName,
+    docSellerAddressInput: profile.address,
+    docSellerContactInput: profile.contact || "",
+    docSellerPhoneInput: profile.phone,
+    docSellerEmailInput: profile.email,
+    docSellerWebsiteInput: profile.website,
+    docSellerTaxNoInput: profile.taxNo || "",
+    docBankInput: profile.bankInfo,
+    docStampIdInput: profile.stampId || "",
+    docSignatureIdInput: profile.signatureId || ""
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const input = qs<HTMLInputElement | HTMLTextAreaElement>(`#${id}`);
+    if (input) input.value = value;
+  });
+  const select = qs<HTMLSelectElement>("#docSellerProfileInput");
+  if (select) select.value = profile.id;
+  const hint = qs<HTMLElement>("#docSellerMatchHint");
+  if (hint) hint.textContent = reason;
+  renderDocumentPreview(collectDocumentDraft());
+}
+
+function applyFallbackSellerToEditor(reason = "使用团队兜底卖方资料") {
+  const profile = state.documentDefaultProfile;
+  const values: Record<string, string> = {
+    docSellerInput: profile?.seller || "",
+    docBrandMarkTextInput: profile?.brandMarkText || "",
+    docSellerAddressInput: profile?.sellerAddress || "",
+    docSellerContactInput: profile?.sellerContact || "",
+    docSellerPhoneInput: profile?.sellerPhone || "",
+    docSellerEmailInput: profile?.sellerEmail || "",
+    docSellerWebsiteInput: profile?.sellerWebsite || "",
+    docSellerTaxNoInput: profile?.sellerTaxNo || "",
+    docBankInput: profile?.bankInfo || "",
+    docStampIdInput: profile?.stampId || "",
+    docSignatureIdInput: profile?.signatureId || ""
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const input = qs<HTMLInputElement | HTMLTextAreaElement>(`#${id}`);
+    if (input) input.value = value;
+  });
+  const select = qs<HTMLSelectElement>("#docSellerProfileInput");
+  if (select) select.value = "";
+  const hint = qs<HTMLElement>("#docSellerMatchHint");
+  if (hint) hint.textContent = reason;
+  renderDocumentPreview(collectDocumentDraft());
+}
+
+function applyMatchedSellerToEditor(customer?: Customer, deal?: Deal, type = currentDocumentType()) {
+  const currency = qs<HTMLSelectElement>("#docCurrencyInput")?.value || deal?.currency || state.documentDefaultProfile?.currency || "USD";
+  const profile = matchedSellerProfile(customer, currency, type);
+  if (!profile) {
+    applyFallbackSellerToEditor("未命中卖方公司规则，已使用兜底卖方资料");
+    return;
+  }
+  applySellerProfileToEditor(profile, `已自动匹配 · ${sellerProfileMatchReason(profile, customer, currency, type)}`);
 }
 
 function renderDocumentWorkflow(document: TradeDocument) {
   const customerSelect = qs<HTMLSelectElement>("#docCustomerInput");
   const dealSelect = qs<HTMLSelectElement>("#docDealInput");
+  const sellerSelect = qs<HTMLSelectElement>("#docSellerProfileInput");
   if (customerSelect) {
     customerSelect.innerHTML = `<option value="">未关联客户</option>${state.customers.map((customer) => `<option value="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}${customer.country ? ` · ${escapeHtml(customer.country)}` : ""}</option>`).join("")}`;
     customerSelect.value = document.customerId || "";
@@ -15892,6 +21311,23 @@ function renderDocumentWorkflow(document: TradeDocument) {
     dealSelect.innerHTML = `<option value="">未关联商机</option>${visibleDeals.map((deal) => `<option value="${escapeHtml(deal.id)}">${escapeHtml(deal.title)} · ${escapeHtml(deal.stage)}</option>`).join("")}`;
     dealSelect.value = document.dealId || "";
   }
+  if (sellerSelect) {
+    const selected = state.documentAssets.letterheads.find((item) => item.id === document.letterheadId);
+    sellerSelect.innerHTML = `<option value="">使用兜底卖方资料</option>${selected && !selected.enabled ? `<option value="${escapeHtml(selected.id)}">${escapeHtml(selected.name)} · 已停用历史档案</option>` : ""}${state.documentAssets.letterheads.filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} · ${escapeHtml(item.companyName)}</option>`).join("")}`;
+    sellerSelect.value = document.letterheadId || "";
+    sellerSelect.onchange = () => {
+      const profile = state.documentAssets.letterheads.find((item) => item.id === sellerSelect.value && item.enabled);
+      if (profile) applySellerProfileToEditor(profile, "已人工选择卖方公司");
+      else applyFallbackSellerToEditor();
+    };
+  }
+  const stampInput = qs<HTMLInputElement>("#docStampIdInput");
+  const signatureInput = qs<HTMLInputElement>("#docSignatureIdInput");
+  if (stampInput) stampInput.value = document.stampId || "";
+  if (signatureInput) signatureInput.value = document.signatureId || "";
+  const selectedProfile = state.documentAssets.letterheads.find((item) => item.id === document.letterheadId);
+  const matchHint = qs<HTMLElement>("#docSellerMatchHint");
+  if (matchHint) matchHint.textContent = selectedProfile ? `当前卖方 · ${selectedProfile.name}` : "使用团队兜底卖方资料";
   const status = qs<HTMLElement>("#docStatusBadge");
   if (status) status.textContent = `${documentStatusText(document.status)} · v${document.revision || 1}`;
   const locked = document.status === "approved" || document.status === "exported";
@@ -15917,9 +21353,12 @@ function renderDocumentWorkflow(document: TradeDocument) {
   }
 }
 
-function applyDocumentCustomerDefaults(customerId: string) {
+function applyDocumentCustomerDefaults(customerId: string, deal?: Deal) {
   const customer = state.customers.find((item) => item.id === customerId);
-  if (!customer) return;
+  if (!customer) {
+    applyMatchedSellerToEditor(undefined, deal);
+    return;
+  }
   const values: Record<string, string> = {
     docBuyerInput: customerDocumentName(customer),
     docBuyerAddressInput: customer.billingAddress?.trim() || "",
@@ -15932,6 +21371,7 @@ function applyDocumentCustomerDefaults(customerId: string) {
     const input = qs<HTMLInputElement | HTMLSelectElement>(`#${id}`);
     if (input) input.value = value;
   });
+  applyMatchedSellerToEditor(customer, deal);
   renderDocumentPreview(collectDocumentDraft());
 }
 
@@ -16057,6 +21497,7 @@ function currentDocumentType(): "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "Q
 function renderDocumentItems(items: TradeDocumentItem[]) {
   const box = qs<HTMLElement>("#documentItemsEditor");
   if (!box) return;
+  items = items.filter((item) => item.lineType !== "shipping_cost");
   const productOptions = (selectedId = "") => `<option value="">手工填写</option>${state.products.map((product) => `<option value="${escapeHtml(product.id)}" ${product.id === selectedId ? "selected" : ""}>${escapeHtml(product.nameEn || product.nameZh)}${product.model ? ` · ${escapeHtml(product.model)}` : ""}</option>`).join("")}`;
   box.innerHTML = items.map((item, index) => {
     const imageUrl = controlledDocumentImageUrl(item.imageUrl);
@@ -16119,6 +21560,7 @@ function collectDocumentItems(): TradeDocumentItem[] {
     const numberField = (name: string) => Number(row.querySelector<HTMLInputElement>(`[data-doc-field="${name}"]`)?.value || 0);
     return {
       id: row.dataset.docItem || `item_${index}`,
+      lineType: "product" as const,
       productId: row.dataset.productId || "",
       imageUrl: row.dataset.imageUrl || "",
       product: field("product"),
@@ -16136,8 +21578,44 @@ function collectDocumentItems(): TradeDocumentItem[] {
   });
 }
 
+function shippingCostLabel(language = qs<HTMLSelectElement>("#docLanguageInput")?.value || "EN") {
+  return ({
+    EN: "Shipping Cost",
+    ES: "Coste de envío",
+    RU: "Стоимость доставки",
+    AR: "تكلفة الشحن",
+    ZH: "运费"
+  } as Record<string, string>)[language] || "Shipping Cost";
+}
+
+function syncShippingCostLabel() {
+  const label = qs<HTMLElement>("#docShippingCostLabel");
+  if (label) label.textContent = shippingCostLabel();
+}
+
+function documentItemDisplayName(document: TradeDocument, item: TradeDocumentItem) {
+  return item.lineType === "shipping_cost" ? shippingCostLabel(document.language) : item.product;
+}
+
 function collectDocumentDraft(): TradeDocument {
   const existing = state.tradeDocuments.find((document) => document.id === state.selectedDocumentId);
+  const items = collectDocumentItems();
+  const shippingCost = Number(qs<HTMLInputElement>("#docShippingCostInput")?.value || 0);
+  if (shippingCost > 0) {
+    items.push({
+      id: "shipping_cost",
+      lineType: "shipping_cost",
+      product: shippingCostLabel(),
+      model: "",
+      hsCode: "",
+      quantity: 1,
+      unit: "LOT",
+      unitPrice: shippingCost,
+      originCountry: "",
+      weightKg: 0,
+      packageCount: 0
+    });
+  }
   return {
     id: existing?.id || state.selectedDocumentId || "__new__",
     customerId: qs<HTMLSelectElement>("#docCustomerInput")?.value || existing?.customerId || "",
@@ -16153,6 +21631,7 @@ function collectDocumentDraft(): TradeDocument {
     buyerAddress: qs<HTMLInputElement>("#docBuyerAddressInput")?.value.trim() || "",
     buyerContact: qs<HTMLInputElement>("#docBuyerContactInput")?.value.trim() || "",
     seller: qs<HTMLInputElement>("#docSellerInput")?.value.trim() || "",
+    brandMarkText: qs<HTMLInputElement>("#docBrandMarkTextInput")?.value.trim() || "",
     sellerAddress: qs<HTMLInputElement>("#docSellerAddressInput")?.value.trim() || "",
     sellerContact: qs<HTMLInputElement>("#docSellerContactInput")?.value.trim() || "",
     sellerPhone: qs<HTMLInputElement>("#docSellerPhoneInput")?.value.trim() || "",
@@ -16168,26 +21647,119 @@ function collectDocumentDraft(): TradeDocument {
     validityDate: qs<HTMLInputElement>("#docValidityInput")?.value || "",
     bankInfo: qs<HTMLTextAreaElement>("#docBankInput")?.value.trim() || "",
     notes: qs<HTMLTextAreaElement>("#docNotesInput")?.value.trim() || "",
-    templateStyle: (qs<HTMLSelectElement>("#docThemeInput")?.value as TradeDocument["templateStyle"]) || (qs<HTMLSelectElement>("#docTemplateInput")?.value as TradeDocument["templateStyle"]) || "indigo",
+    templateStyle: (qs<HTMLSelectElement>("#docTemplateInput")?.value as TradeDocument["templateStyle"]) || (qs<HTMLSelectElement>("#docThemeInput")?.value as TradeDocument["templateStyle"]) || "rose",
     language: (qs<HTMLSelectElement>("#docLanguageInput")?.value as TradeDocument["language"]) || "EN",
     status: existing?.status || "draft",
     audits: existing?.audits || [],
     sendRecords: existing?.sendRecords || [],
-    letterheadId: existing?.letterheadId || "",
-    stampId: existing?.stampId || "",
-    signatureId: existing?.signatureId || "",
+    letterheadId: qs<HTMLSelectElement>("#docSellerProfileInput")?.value ?? existing?.letterheadId ?? "",
+    stampId: qs<HTMLInputElement>("#docStampIdInput")?.value ?? existing?.stampId ?? "",
+    signatureId: qs<HTMLInputElement>("#docSignatureIdInput")?.value ?? existing?.signatureId ?? "",
     includeProductImages: existing?.includeProductImages || false,
     letterheadSnapshot: existing?.letterheadSnapshot,
     stampSnapshot: existing?.stampSnapshot,
     signatureSnapshot: existing?.signatureSnapshot,
     updatedAt: new Date().toISOString(),
-    items: collectDocumentItems()
+    items
   };
 }
 
+function documentEditableSnapshot(document: TradeDocument) {
+  return {
+    customerId: document.customerId || "",
+    dealId: document.dealId || "",
+    type: document.type,
+    title: document.title || "",
+    number: document.number || "",
+    issueDate: document.issueDate || "",
+    buyer: document.buyer || "",
+    buyerAddress: document.buyerAddress || "",
+    buyerContact: document.buyerContact || "",
+    seller: document.seller || "",
+    brandMarkText: document.brandMarkText || "",
+    sellerAddress: document.sellerAddress || "",
+    sellerContact: document.sellerContact || "",
+    sellerPhone: document.sellerPhone || "",
+    sellerEmail: document.sellerEmail || "",
+    sellerWebsite: document.sellerWebsite || "",
+    sellerTaxNo: document.sellerTaxNo || "",
+    currency: document.currency || "",
+    incoterm: document.incoterm || "",
+    paymentTerm: document.paymentTerm || "",
+    shippingMethod: document.shippingMethod || "",
+    portLoading: document.portLoading || "",
+    portDischarge: document.portDischarge || "",
+    validityDate: document.validityDate || "",
+    bankInfo: document.bankInfo || "",
+    notes: document.notes || "",
+    language: document.language || "EN",
+    templateStyle: document.templateStyle || "rose",
+    letterheadId: document.letterheadId || "",
+    stampId: document.stampId || "",
+    signatureId: document.signatureId || "",
+    includeProductImages: Boolean(document.includeProductImages),
+    items: (document.items || []).map((item) => ({
+      id: item.id || "",
+      lineType: item.lineType || "product",
+      productId: item.productId || "",
+      imageUrl: item.imageUrl || "",
+      product: item.product || "",
+      model: item.model || "",
+      material: item.material || "",
+      finish: item.finish || "",
+      hsCode: item.hsCode || "",
+      quantity: Number(item.quantity) || 0,
+      unit: item.unit || "",
+      unitPrice: Number(item.unitPrice) || 0,
+      originCountry: item.originCountry || "",
+      weightKg: Number(item.weightKg) || 0,
+      packageCount: Number(item.packageCount) || 0
+    }))
+  };
+}
+
+function documentDraftHasChanges(draft: TradeDocument, source: TradeDocument) {
+  return JSON.stringify(documentEditableSnapshot(draft)) !== JSON.stringify(documentEditableSnapshot(source));
+}
+
+async function saveLockedDocumentDraftAsRevision(source: TradeDocument, draft: TradeDocument) {
+  if (draft.customerId !== source.customerId || draft.dealId !== source.dealId) {
+    throw new Error("已审批或已导出的单据不能更换客户或商机，请先恢复原关联后再导出");
+  }
+  const revisionResult = await api<{ document: TradeDocument }>(`/api/trade-documents/${source.id}/revision`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+  const revision = revisionResult.document;
+  const saved = await api<{
+    document: TradeDocument;
+    dealSync?: { deal: Deal; history: QuoteHistoryRecord; changes: string[]; changed: boolean } | null;
+  }>(`/api/trade-documents/${revision.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      ...draft,
+      customerId: revision.customerId,
+      dealId: revision.dealId,
+      revision: revision.revision,
+      number: revision.number,
+      title: draft.title === source.title ? revision.title : draft.title,
+      status: "ready"
+    })
+  });
+  state.tradeDocuments = [saved.document, ...state.tradeDocuments.filter((document) => document.id !== saved.document.id)];
+  state.selectedDocumentId = saved.document.id;
+  if (saved.dealSync?.deal) {
+    state.deals = state.deals.map((deal) => deal.id === saved.dealSync!.deal.id ? saved.dealSync!.deal : deal);
+    await refreshDealsData(false);
+    toast(`新版本已保存，商机已同步 ${saved.dealSync.deal.items?.length || 0} 项产品及 ${formatDocumentMoney(saved.dealSync.deal.amount, saved.dealSync.deal.currency)}`);
+  }
+  renderTradeDocuments(state.tradeDocuments);
+  return saved.document;
+}
+
 const DOC_I18N: Record<string, Record<string, string>> = {
-  EN: { seller:"Seller", buyer:"Buyer", incoterm:"Incoterm", payment:"Payment", shipment:"Shipment", validity:"Validity", portLoading:"Port of Loading", portDischarge:"Port of Discharge", docType:"Document Type", status:"Status", description:"Description", model:"Model", hsCode:"HS Code", qty:"Qty", unitPrice:"Unit Price", amount:"Amount", origin:"Origin", weight:"Weight", pkgs:"Pkgs", totalAmount:"Total Amount", bankNotes:"Bank / Notes", authorized:"AUTHORIZED", no:"No.", date:"Date", currency:"Currency", netWeight:"Net Weight", grossWeight:"Gross Weight", totalPackages:"Total Packages", totalWeight:"Total Weight", countryOfOrigin:"Country of Origin", signedBy:"Signed By", dateOfIssue:"Date of Issue", vessel:"Vessel", blNo:"B/L No.", container:"Container", eta:"ETA", etd:"ETD", marks:"Marks & Numbers", descriptionOfGoods:"Description of Goods", quantity:"Quantity", unit:"Unit", packageType:"Package Type", terms:"Terms & Conditions", signatures:"Signatures", sellerSign:"For and on behalf of Seller", buyerSign:"For and on behalf of Buyer", thisIsToCertify:"This is to certify that the goods mentioned in this invoice originated in", issuedUnder:"Issued under", referenceNo:"Reference No.", subject:"Subject", dearSirs:"Dear Sirs,", weArePleased:"We are pleased to inform you that the following shipment has been dispatched:", regards:"Best Regards", packingListDesc:"Packing List", contractDesc:"Sales Contract", quotationDesc:"Quotation", quoteValidUntil:"Quote Valid Until", quotedBy:"Quoted By", acceptedBy:"Accepted By", quoteTerms:"Quotation Terms", priceSubjectToChange:"Prices are subject to final confirmation. This quotation expires after the validity date.", revisionLabel:"Rev.", quoteNumber:"Quote No.", cooDesc:"Certificate of Origin", shippingDesc:"Shipping Advice", proformaDesc:"Proforma Invoice", commercialDesc:"Commercial Invoice", customsTitle:"Customs Clearance Documents", customsSub:"Customs Declaration Package", exportDate:"Export Date", customsDecl:"Customs Declaration", declElements:"Declaration Elements", invoice:"Invoice", packingListShort:"Packing List", contractDoc:"Contract", authorization:"Power of Attorney", fillingGuide:"Filing Guide", shipperInfo:"Shipper Information", consigneeInfo:"Consignee Information", companyName:"Company Name", companyAddress:"Company Address", contactInfo:"Contact", transportInfo:"Transport & Logistics", totalGrossWeight:"Total Gross Weight", packageCount:"Package Count", tradeTerms:"Trade Terms", goodsList:"Goods Detail List", itemsUnit:"items", goodsName:"Goods Name", paymentTradeTerms:"Payment & Trade Terms", paymentCondition:"Payment Terms", customsNotice:"Please verify HS codes, brand/model, weight and other customs declaration elements" },
-  ES: { seller:"Vendedor", buyer:"Comprador", incoterm:"Incoterm", payment:"Pago", shipment:"Envío", validity:"Validez", portLoading:"Puerto de Carga", portDischarge:"Puerto de Descarga", docType:"Tipo de Documento", status:"Estado", description:"Descripción", model:"Modelo", hsCode:"Código HS", qty:"Cant.", unitPrice:"Precio Unit.", amount:"Importe", origin:"Origen", weight:"Peso", pkgs:"Bultos", totalAmount:"Total", bankNotes:"Banco / Notas", authorized:"AUTORIZADO", no:"Nº", date:"Fecha", currency:"Moneda", netWeight:"Peso Neto", grossWeight:"Peso Bruto", totalPackages:"Total Bultos", totalWeight:"Peso Total", countryOfOrigin:"País de Origen", signedBy:"Firmado por", dateOfIssue:"Fecha de Emisión", vessel:"Buque", blNo:"Nº B/L", container:"Contenedor", eta:"ETA", etd:"ETD", marks:"Marcas y Números", descriptionOfGoods:"Descripción de Mercancías", quantity:"Cantidad", unit:"Unidad", packageType:"Tipo de Embalaje", terms:"Términos y Condiciones", signatures:"Firmas", sellerSign:"En nombre del Vendedor", buyerSign:"En nombre del Comprador", thisIsToCertify:"Por la presente se certifica que las mercancías mencionadas en esta factura son originarias de", issuedUnder:"Emitido bajo", referenceNo:"Nº de Referencia", subject:"Asunto", dearSirs:"Estimados Señores,", weArePleased:"Nos complace informarle que el siguiente envío ha sido despachado:", regards:"Saludos Cordiales", packingListDesc:"Lista de Empaque", contractDesc:"Contrato de Venta", quotationDesc:"Cotización", quoteValidUntil:"Oferta válida hasta", quotedBy:"Cotizado por", acceptedBy:"Aceptado por", quoteTerms:"Términos de la Cotización", priceSubjectToChange:"Los precios están sujetos a confirmación final. Esta cotización expira después de la fecha de validez.", revisionLabel:"Rev.", quoteNumber:"Nº de Cotización", cooDesc:"Certificado de Origen", shippingDesc:"Aviso de Embarque", proformaDesc:"Factura Proforma", commercialDesc:"Factura Comercial", customsTitle:"Documentos de Despacho Aduanero", customsSub:"Paquete de Declaración Aduanera", exportDate:"Fecha de Exportación", customsDecl:"Declaración Aduanera", declElements:"Elementos de Declaración", invoice:"Factura", packingListShort:"Lista de Empaque", contractDoc:"Contrato", authorization:"Carta Poder", fillingGuide:"Guía de Declaración", shipperInfo:"Información del Exportador", consigneeInfo:"Información del Consignatario", companyName:"Nombre de la Empresa", companyAddress:"Dirección de la Empresa", contactInfo:"Contacto", transportInfo:"Transporte y Logística", totalGrossWeight:"Peso Bruto Total", packageCount:"Número de Bultos", tradeTerms:"Términos Comerciales", goodsList:"Lista Detallada de Mercancías", itemsUnit:"artículos", goodsName:"Nombre del Producto", paymentTradeTerms:"Pago y Términos Comerciales", paymentCondition:"Condiciones de Pago", customsNotice:"Verifique códigos HS, marca/modelo, peso y otros elementos de declaración aduanera" },
+  EN: { seller:"Seller", buyer:"Buyer", incoterm:"Incoterm", payment:"Payment", shipment:"Shipment", validity:"Validity", portLoading:"Port of Loading", portDischarge:"Port of Discharge", docType:"Document Type", status:"Status", description:"Description", model:"Model", hsCode:"HS Code", qty:"Qty", unitPrice:"Unit Price", amount:"Amount", origin:"Origin", weight:"Weight", pkgs:"Pkgs", shippingCost:"Shipping Cost", totalAmount:"Total Amount", bankNotes:"Bank / Notes", authorized:"AUTHORIZED", no:"No.", date:"Date", currency:"Currency", netWeight:"Net Weight", grossWeight:"Gross Weight", totalPackages:"Total Packages", totalWeight:"Total Weight", countryOfOrigin:"Country of Origin", signedBy:"Signed By", dateOfIssue:"Date of Issue", vessel:"Vessel", blNo:"B/L No.", container:"Container", eta:"ETA", etd:"ETD", marks:"Marks & Numbers", descriptionOfGoods:"Description of Goods", quantity:"Quantity", unit:"Unit", packageType:"Package Type", terms:"Terms & Conditions", signatures:"Signatures", sellerSign:"For and on behalf of Seller", buyerSign:"For and on behalf of Buyer", thisIsToCertify:"This is to certify that the goods mentioned in this invoice originated in", issuedUnder:"Issued under", referenceNo:"Reference No.", subject:"Subject", dearSirs:"Dear Sirs,", weArePleased:"We are pleased to inform you that the following shipment has been dispatched:", regards:"Best Regards", packingListDesc:"Packing List", contractDesc:"Sales Contract", quotationDesc:"Quotation", quoteValidUntil:"Quote Valid Until", quotedBy:"Quoted By", acceptedBy:"Accepted By", quoteTerms:"Quotation Terms", priceSubjectToChange:"Prices are subject to final confirmation. This quotation expires after the validity date.", revisionLabel:"Rev.", quoteNumber:"Quote No.", cooDesc:"Certificate of Origin", shippingDesc:"Shipping Advice", proformaDesc:"Proforma Invoice", commercialDesc:"Commercial Invoice", customsTitle:"Customs Clearance Documents", customsSub:"Customs Declaration Package", exportDate:"Export Date", customsDecl:"Customs Declaration", declElements:"Declaration Elements", invoice:"Invoice", packingListShort:"Packing List", contractDoc:"Contract", authorization:"Power of Attorney", fillingGuide:"Filing Guide", shipperInfo:"Shipper Information", consigneeInfo:"Consignee Information", companyName:"Company Name", companyAddress:"Company Address", contactInfo:"Contact", transportInfo:"Transport & Logistics", totalGrossWeight:"Total Gross Weight", packageCount:"Package Count", tradeTerms:"Trade Terms", goodsList:"Goods Detail List", itemsUnit:"items", goodsName:"Goods Name", paymentTradeTerms:"Payment & Trade Terms", paymentCondition:"Payment Terms", customsNotice:"Please verify HS codes, brand/model, weight and other customs declaration elements" },
+  ES: { seller:"Vendedor", buyer:"Comprador", incoterm:"Incoterm", payment:"Pago", shipment:"Envío", validity:"Validez", portLoading:"Puerto de Carga", portDischarge:"Puerto de Descarga", docType:"Tipo de Documento", status:"Estado", description:"Descripción", model:"Modelo", hsCode:"Código HS", qty:"Cant.", unitPrice:"Precio Unit.", amount:"Importe", origin:"Origen", weight:"Peso", pkgs:"Bultos", shippingCost:"Coste de envío", totalAmount:"Total", bankNotes:"Banco / Notas", authorized:"AUTORIZADO", no:"Nº", date:"Fecha", currency:"Moneda", netWeight:"Peso Neto", grossWeight:"Peso Bruto", totalPackages:"Total Bultos", totalWeight:"Peso Total", countryOfOrigin:"País de Origen", signedBy:"Firmado por", dateOfIssue:"Fecha de Emisión", vessel:"Buque", blNo:"Nº B/L", container:"Contenedor", eta:"ETA", etd:"ETD", marks:"Marcas y Números", descriptionOfGoods:"Descripción de Mercancías", quantity:"Cantidad", unit:"Unidad", packageType:"Tipo de Embalaje", terms:"Términos y Condiciones", signatures:"Firmas", sellerSign:"En nombre del Vendedor", buyerSign:"En nombre del Comprador", thisIsToCertify:"Por la presente se certifica que las mercancías mencionadas en esta factura son originarias de", issuedUnder:"Emitido bajo", referenceNo:"Nº de Referencia", subject:"Asunto", dearSirs:"Estimados Señores,", weArePleased:"Nos complace informarle que el siguiente envío ha sido despachado:", regards:"Saludos Cordiales", packingListDesc:"Lista de Empaque", contractDesc:"Contrato de Venta", quotationDesc:"Cotización", quoteValidUntil:"Oferta válida hasta", quotedBy:"Cotizado por", acceptedBy:"Aceptado por", quoteTerms:"Términos de la Cotización", priceSubjectToChange:"Los precios están sujetos a confirmación final. Esta cotización expira después de la fecha de validez.", revisionLabel:"Rev.", quoteNumber:"Nº de Cotización", cooDesc:"Certificado de Origen", shippingDesc:"Aviso de Embarque", proformaDesc:"Factura Proforma", commercialDesc:"Factura Comercial", customsTitle:"Documentos de Despacho Aduanero", customsSub:"Paquete de Declaración Aduanera", exportDate:"Fecha de Exportación", customsDecl:"Declaración Aduanera", declElements:"Elementos de Declaración", invoice:"Factura", packingListShort:"Lista de Empaque", contractDoc:"Contrato", authorization:"Carta Poder", fillingGuide:"Guía de Declaración", shipperInfo:"Información del Exportador", consigneeInfo:"Información del Consignatario", companyName:"Nombre de la Empresa", companyAddress:"Dirección de la Empresa", contactInfo:"Contacto", transportInfo:"Transporte y Logística", totalGrossWeight:"Peso Total Bruto", packageCount:"Número de Bultos", tradeTerms:"Términos Comerciales", goodsList:"Lista Detallada de Mercancías", itemsUnit:"artículos", goodsName:"Nombre del Producto", paymentTradeTerms:"Pago y Términos Comerciales", paymentCondition:"Condiciones de Pago", customsNotice:"Verifique códigos HS, marca/modelo, peso y otros elementos de declaración aduanera" },
   RU: { seller:"Продавец", buyer:"Покупатель", incoterm:"Инкотермс", payment:"Оплата", shipment:"Отгрузка", validity:"Срок действия", portLoading:"Порт погрузки", portDischarge:"Порт выгрузки", docType:"Тип документа", status:"Статус", description:"Описание", model:"Модель", hsCode:"Код ТН ВЭД", qty:"Кол-во", unitPrice:"Цена за ед.", amount:"Сумма", origin:"Происхождение", weight:"Вес", pkgs:"Мест", totalAmount:"Итого", bankNotes:"Банк / Примечания", authorized:"АВТОРИЗОВАНО", no:"№", date:"Дата", currency:"Валюта", netWeight:"Чистый вес", grossWeight:"Брутто вес", totalPackages:"Всего мест", totalWeight:"Общий вес", countryOfOrigin:"Страна происхождения", signedBy:"Подписано", dateOfIssue:"Дата выдачи", vessel:"Судно", blNo:"№ коносамента", container:"Контейнер", eta:"ETA", etd:"ETD", marks:"Марки и номера", descriptionOfGoods:"Описание товаров", quantity:"Количество", unit:"Единица", packageType:"Тип упаковки", terms:"Условия", signatures:"Подписи", sellerSign:"От имени Продавца", buyerSign:"От имени Покупателя", thisIsToCertify:"Настоящим удостоверяется, что товары, указанные в этом счете, происхождением из", issuedUnder:"Выдано в соответствии с", referenceNo:"Референс №", subject:"Тема", dearSirs:"Уважаемые господа,", weArePleased:"С удовольствием сообщаем вам, что следующая партия товара была отгружена:", regards:"С уважением", packingListDesc:"Упаковочный лист", contractDesc:"Договор купли-продажи", quotationDesc:"Коммерческое предложение", quoteValidUntil:"Предложение действует до", quotedBy:"Подготовил", acceptedBy:"Принято", quoteTerms:"Условия предложения", priceSubjectToChange:"Цены подлежат окончательному подтверждению. Предложение утрачивает силу после истечения срока действия.", revisionLabel:"Ред.", quoteNumber:"№ предложения", cooDesc:"Сертификат происхождения", shippingDesc:"Извещение об отгрузке", proformaDesc:"Проформа-счет", commercialDesc:"Коммерческий счет", customsTitle:"Таможенные документы", customsSub:"Таможенный пакет декларации", exportDate:"Дата экспорта", customsDecl:"Таможенная декларация", declElements:"Элементы декларации", invoice:"Счет-фактура", packingListShort:"Упаковочный лист", contractDoc:"Договор", authorization:"Доверенность", fillingGuide:"Руководство по заполнению", shipperInfo:"Информация об отправителе", consigneeInfo:"Информация о получателе", companyName:"Название компании", companyAddress:"Адрес компании", contactInfo:"Контакт", transportInfo:"Транспорт и логистика", totalGrossWeight:"Общий брутто вес", packageCount:"Количество мест", tradeTerms:"Торговые термины", goodsList:"Подробный перечень товаров", itemsUnit:"позиций", goodsName:"Наименование товара", paymentTradeTerms:"Оплата и торговые условия", paymentCondition:"Условия оплаты", customsNotice:"Проверьте коды ТН ВЭД, марку/модель, вес и другие элементы таможенной декларации" },
   AR: { seller:"البائع", buyer:"المشتري", incoterm:"إنكوترمز", payment:"الدفع", shipment:"الشحن", validity:"الصلاحية", portLoading:"ميناء التحميل", portDischarge:"ميناء التفريغ", docType:"نوع المستند", status:"الحالة", description:"الوصف", model:"الموديل", hsCode:"رمز HS", qty:"الكمية", unitPrice:"سعر الوحدة", amount:"المبلغ", origin:"المنشأ", weight:"الوزن", pkgs:"العبوات", totalAmount:"المجموع", bankNotes:"البنك / الملاحظات", authorized:"معتمد", no:"رقم", date:"التاريخ", currency:"العملة", netWeight:"الوزن الصافي", grossWeight:"الوزن الإجمالي", totalPackages:"إجمالي العبوات", totalWeight:"الوزن الكلي", countryOfOrigin:"بلد المنشأ", signedBy:"موقّع من", dateOfIssue:"تاريخ الإصدار", vessel:"السفينة", blNo:"رقم بوليصة الشحن", container:"الحاوية", eta:"ETA", etd:"ETD", marks:"العلامات والأرقام", descriptionOfGoods:"وصف البضائع", quantity:"الكمية", unit:"الوحدة", packageType:"نوع التعبئة", terms:"الشروط والأحكام", signatures:"التوقيعات", sellerSign:"نيابة عن البائع", buyerSign:"نيابة عن المشتري", thisIsToCertify:"نشهد بأن البضائع المذكورة في هذه الفاتورة منشأها", issuedUnder:"صدر بموجب", referenceNo:"رقم المرجع", subject:"الموضوع", dearSirs:"السادة المحترمون،", weArePleased:"يسعدنا إعلامكم بأن الشحنة التالية قد تم إرسالها:", regards:"مع خالص التحيات", packingListDesc:"قائمة التعبئة", contractDesc:"عقد البيع", quotationDesc:"عرض سعر", quoteValidUntil:"العرض ساري حتى", quotedBy:"مُعد من قبل", acceptedBy:"مقبول من قبل", quoteTerms:"شروط العرض", priceSubjectToChange:"الأسعار قابلة للتأكيد النهائي. ينتهي هذا العرض بعد تاريخ الصلاحية.", revisionLabel:"إصدار", quoteNumber:"رقم العرض", cooDesc:"شهادة المنشأ", shippingDesc:"إشعار الشحن", proformaDesc:"فاتورة مبدئية", commercialDesc:"فاتورة تجارية", customsTitle:"وثائق التخليص الجمركي", customsSub:"حزمة الإقرار الجمركي", exportDate:"تاريخ التصدير", customsDecl:"الإقرار الجمركي", declElements:"عناصر الإقرار", invoice:"فاتورة", packingListShort:"قائمة التعبئة", contractDoc:"عقد", authorization:"وكالة", fillingGuide:"دليل التعبئة", shipperInfo:"معلومات المُصدّر", consigneeInfo:"معلومات المُستلم", companyName:"اسم الشركة", companyAddress:"عنوان الشركة", contactInfo:"جهة الاتصال", transportInfo:"النقل والخدمات اللوجستية", totalGrossWeight:"إجمالي الوزن الإجمالي", packageCount:"عدد العبوات", tradeTerms:"الشروط التجارية", goodsList:"قائمة تفصيلية للبضائع", itemsUnit:"أصناف", goodsName:"اسم المنتج", paymentTradeTerms:"الدفع والشروط التجارية", paymentCondition:"شروط الدفع", customsNotice:"يرجى التحقق من رموز HS والعلامة/الموديل والوزن وعناصر الإقرار الجمركي الأخرى" },
   ZH: { seller:"卖方", buyer:"买方", incoterm:"贸易条款", payment:"付款条款", shipment:"运输方式", validity:"有效期", portLoading:"装运港", portDischarge:"目的港", docType:"单据类型", status:"状态", description:"品名", model:"型号", hsCode:"HS编码", qty:"数量", unitPrice:"单价", amount:"金额", origin:"原产国", weight:"重量", pkgs:"包装", totalAmount:"合计金额", bankNotes:"银行信息/备注", authorized:"授权签字", no:"编号", date:"日期", currency:"币种", netWeight:"净重", grossWeight:"毛重", totalPackages:"总包装数", totalWeight:"总重量", countryOfOrigin:"原产国", signedBy:"签字人", dateOfIssue:"签发日期", vessel:"船名", blNo:"提单号", container:"集装箱号", eta:"预计到港", etd:"预计开船", marks:"唛头", descriptionOfGoods:"货物描述", quantity:"数量", unit:"单位", packageType:"包装类型", terms:"条款与条件", signatures:"签字", sellerSign:"卖方代表签字", buyerSign:"买方代表签字", thisIsToCertify:"兹证明本发票所列货物原产于", issuedUnder:"签发依据", referenceNo:"参考号", subject:"事由", dearSirs:"敬启者：", weArePleased:"兹通知贵方，以下货物已发运：", regards:"此致敬礼", packingListDesc:"装箱单", contractDesc:"销售合同", quotationDesc:"报价单", quoteValidUntil:"报价有效期至", quotedBy:"报价方签字", acceptedBy:"客户确认签字", quoteTerms:"报价条款", priceSubjectToChange:"价格以最终确认为准，报价有效期后自动失效。", revisionLabel:"版本", quoteNumber:"报价编号", cooDesc:"原产地证书", shippingDesc:"装运通知", proformaDesc:"形式发票", commercialDesc:"商业发票", customsTitle:"报关资料", customsSub:"Customs Clearance Documents", exportDate:"出口日期", customsDecl:"报关单", declElements:"申报要素", invoice:"发票", packingListShort:"箱单", contractDoc:"合同", authorization:"委托书", fillingGuide:"填制规范", shipperInfo:"发货人信息", consigneeInfo:"收货人信息", companyName:"公司名称", companyAddress:"公司地址", contactInfo:"联系方式", transportInfo:"运输与物流信息", totalGrossWeight:"总毛重", packageCount:"包装件数", tradeTerms:"贸易术语", goodsList:"货物明细清单", itemsUnit:"项商品", goodsName:"货物名称", paymentTradeTerms:"支付与贸易条款", paymentCondition:"付款条件", customsNotice:"请核对 HS 编码、品牌型号、重量等海关申报要素" }
@@ -16201,7 +21773,8 @@ const DOC_THEMES: Record<string, { primary: string; light: string; text: string 
   amber: { primary: "#d97706", light: "#fffbeb", text: "#1e293b" },
   executive: { primary: "#1e293b", light: "#f1f5f9", text: "#1e293b" },
   classic: { primary: "#374151", light: "#f9fafb", text: "#1e293b" },
-  compact: { primary: "#6b7280", light: "#f3f4f6", text: "#1e293b" }
+  compact: { primary: "#6b7280", light: "#f3f4f6", text: "#1e293b" },
+  longtec: { primary: "#111111", light: "#d9fbfb", text: "#111111" }
 };
 
 function docLabel(document: TradeDocument, key: string): string {
@@ -16224,9 +21797,14 @@ function renderDocumentPreview(document: TradeDocument) {
     return;
   }
 
+  if (document.type === "PI" && document.templateStyle === "longtec") {
+    renderLongtecPiPreview(document, preview);
+    return;
+  }
+
   const lang = document.language || "EN";
   const isRTL = lang === "AR";
-  const theme = DOC_THEMES[document.templateStyle] || DOC_THEMES.indigo;
+  const theme = DOC_THEMES[document.templateStyle] || DOC_THEMES.rose;
   const total = documentTotal(document);
   const totalWeight = document.items.reduce((s, i) => s + (i.weightKg || 0), 0);
   const totalPkgs = document.items.reduce((s, i) => s + (i.packageCount || 0), 0);
@@ -16295,7 +21873,7 @@ function renderDocumentPreview(document: TradeDocument) {
         <tbody>${document.items.map((item, index) => {
           let row = `<tr style="border-bottom:1px solid #e5e7eb;">`;
           row += `<td style="padding:8px;text-align:center;">${index + 1}</td>`;
-          row += `<td style="padding:8px;">${escapeHtml(item.product)}</td>`;
+          row += `<td style="padding:8px;">${escapeHtml(documentItemDisplayName(document, item))}</td>`;
           row += `<td style="padding:8px;">${escapeHtml(item.model)}</td>`;
           if (showMaterial) row += `<td style="padding:8px;">${escapeHtml(item.material || "")}</td>`;
           if (showFinish) row += `<td style="padding:8px;">${escapeHtml(item.finish || "")}</td>`;
@@ -16349,10 +21927,12 @@ function renderDocumentPreview(document: TradeDocument) {
       </div>`;
   }
 
+  const brandMarkText = [...(document.brandMarkText || "").trim()].slice(0, 8).join("").toUpperCase() || [...(document.seller || "GJ").trim()].slice(0, 2).join("").toUpperCase() || "GJ";
+  const brandMarkClass = [...brandMarkText].length > 4 ? " is-long" : [...brandMarkText].length > 2 ? " is-medium" : "";
   preview.innerHTML = `
     <div class="doc-print-head">
       <div class="doc-letterhead">
-        <div class="doc-logo-mark" style="background:${theme.primary};">${escapeHtml((document.seller || "GJ").slice(0, 2).toUpperCase())}</div>
+        <div class="doc-logo-mark${brandMarkClass}" style="background:${theme.primary};">${escapeHtml(brandMarkText)}</div>
         <div>
           <b>${escapeHtml(document.seller)}</b>
           <small>${escapeHtml(document.sellerAddress)}</small>
@@ -16396,13 +21976,92 @@ function renderDocumentPreview(document: TradeDocument) {
   if (meta) meta.textContent = `${document.type} · ${document.number} · ${showPrices ? formatDocumentMoney(total, document.currency) : (totalWeight + " kg")}`;
 }
 
+function formatLongtecDate(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || "");
+  if (!match) return value || "—";
+  const months = ["Jan.", "Feb.", "Mar.", "Apr.", "May", "Jun.", "Jul.", "Aug.", "Sep.", "Oct.", "Nov.", "Dec."];
+  return `${Number(match[3])}, ${months[Number(match[2]) - 1] || match[2]} ${match[1]}`;
+}
+
+function formatLongtecMoney(value: number, currency = "USD") {
+  const fractionDigits = Number.isInteger(value) ? 0 : 2;
+  return `${currency} ${value.toLocaleString("en-US", { minimumFractionDigits: fractionDigits, maximumFractionDigits: 2 })}`;
+}
+
+function renderLongtecPiPreview(document: TradeDocument, preview: HTMLElement) {
+  const total = documentTotal(document);
+  const productItems = document.items.filter((item) => item.lineType !== "shipping_cost");
+  const shippingItems = document.items.filter((item) => item.lineType === "shipping_cost");
+  const subtotal = productItems.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
+  const lang = document.language || "EN";
+  const isRTL = lang === "AR";
+  const labels: Record<string, Record<string, string>> = {
+    EN: { buyer: "Buyer", seller: "Seller", date: "Date", no: "NO", item: "Item", description: "Description", unitPrice: "Unit Price", quantity: "Quantity", amount: "Amount", totalPayment: "Total payment", priceTerms: "Price terms", delivery: "Delivery / Shipment", paymentTerms: "Payment Terms", validity: "Validity", remark: "Remark", subTotal: "Sub-Total", vat: "Total VAT", totalOrder: "Total Order", signedBy: "Signed by", bankDetails: "Bank details" },
+    ES: { buyer: "Comprador", seller: "Vendedor", date: "Fecha", no: "Nº", item: "Artículo", description: "Descripción", unitPrice: "Precio unitario", quantity: "Cantidad", amount: "Importe", totalPayment: "Pago total", priceTerms: "Términos de precio", delivery: "Entrega / Envío", paymentTerms: "Condiciones de pago", validity: "Validez", remark: "Observación", subTotal: "Subtotal", vat: "IVA total", totalOrder: "Pedido total", signedBy: "Firmado por", bankDetails: "Datos bancarios" },
+    RU: { buyer: "Покупатель", seller: "Продавец", date: "Дата", no: "№", item: "Позиция", description: "Описание", unitPrice: "Цена за ед.", quantity: "Количество", amount: "Сумма", totalPayment: "Итого к оплате", priceTerms: "Условия цены", delivery: "Доставка / Отгрузка", paymentTerms: "Условия оплаты", validity: "Срок действия", remark: "Примечание", subTotal: "Подытог", vat: "Общий НДС", totalOrder: "Итого заказа", signedBy: "Подписано", bankDetails: "Банковские реквизиты" },
+    AR: { buyer: "المشتري", seller: "البائع", date: "التاريخ", no: "الرقم", item: "البند", description: "الوصف", unitPrice: "سعر الوحدة", quantity: "الكمية", amount: "المبلغ", totalPayment: "إجمالي الدفع", priceTerms: "شروط السعر", delivery: "التسليم / الشحن", paymentTerms: "شروط الدفع", validity: "الصلاحية", remark: "ملاحظة", subTotal: "المجموع الفرعي", vat: "إجمالي الضريبة", totalOrder: "إجمالي الطلب", signedBy: "موقّع من", bankDetails: "تفاصيل البنك" },
+    ZH: { buyer: "买方", seller: "卖方", date: "日期", no: "编号", item: "项目", description: "描述", unitPrice: "单价", quantity: "数量", amount: "金额", totalPayment: "总付款", priceTerms: "价格条款", delivery: "交付 / 运输", paymentTerms: "付款条款", validity: "有效期", remark: "备注", subTotal: "小计", vat: "增值税合计", totalOrder: "订单总额", signedBy: "签字人", bankDetails: "银行信息" }
+  };
+  const label = (key: string, fallback = key) => labels[lang]?.[key] || labels.EN[key] || fallback;
+  const themeId = qs<HTMLSelectElement>("#docThemeInput")?.value || "rose";
+  const theme = DOC_THEMES[themeId] || DOC_THEMES.rose;
+  const accent = themeId === "longtec" ? "#111111" : theme.primary;
+  const title = docTypeTitle(document).toUpperCase();
+  const sellerContact = [document.sellerContact, document.sellerPhone, document.sellerEmail, document.sellerWebsite].filter(Boolean).join(" · ");
+  const delivery = [document.shippingMethod, document.portLoading && `${label("portLoading", "From")}: ${document.portLoading}`, document.portDischarge && `${label("portDischarge", "To")}: ${document.portDischarge}`].filter(Boolean).join(" · ");
+  const itemRows = productItems.map((item) => {
+    const description = [item.model, item.material, item.finish, item.hsCode && `HS ${item.hsCode}`].filter(Boolean).join(" · ") || "—";
+    return `<tr><td>${escapeHtml(item.product || "—")}</td><td>${escapeHtml(description)}</td><td class="money">${formatLongtecMoney(Number(item.unitPrice || 0), document.currency)}</td><td class="quantity">${escapeHtml(String(item.quantity || 0))} ${escapeHtml(item.unit || "")}</td><td class="money">${formatLongtecMoney(Number(item.quantity || 0) * Number(item.unitPrice || 0), document.currency)}</td></tr>`;
+  }).join("");
+  const shippingRows = shippingItems.map((item) => `<tr><td colspan="4" class="longtec-summary-label">${escapeHtml(documentItemDisplayName(document, item) || label("shippingCost", "Shipping Cost"))}</td><td class="money">${formatLongtecMoney(Number(item.quantity || 0) * Number(item.unitPrice || 0), document.currency)}</td></tr>`).join("");
+  const terms = [
+    [label("priceTerms"), document.incoterm],
+    [label("delivery"), delivery],
+    [label("paymentTerms"), document.paymentTerm],
+    [label("validity"), document.validityDate]
+  ].filter(([, value]) => value);
+  const termsHtml = terms.map(([name, value]) => `<p><span>${escapeHtml(name)}:</span> ${escapeHtml(value || "")}</p>`).join("");
+  const bankLines = document.bankInfo || "—";
+
+  preview.className = "doc-paper longtec-pi";
+  preview.style.setProperty("--doc-primary", accent);
+  preview.style.setProperty("--doc-light", theme.light);
+  preview.style.setProperty("--doc-text", "#111111");
+  preview.style.setProperty("--longtec-accent", accent);
+  preview.style.setProperty("--longtec-light", theme.light);
+  preview.dir = isRTL ? "rtl" : "ltr";
+  preview.innerHTML = `
+    <header class="longtec-pi-header">
+      <div class="longtec-pi-company">${escapeHtml(document.seller || "—")}</div>
+      <div class="longtec-pi-rule"></div>
+      <h2>${escapeHtml(title)}</h2>
+      <div class="longtec-pi-meta"><p><b>${escapeHtml(label("date"))}:</b> ${escapeHtml(formatLongtecDate(document.issueDate))}</p><p><b>${escapeHtml(label("no"))}:</b> ${escapeHtml(document.number)}</p></div>
+    </header>
+    <section class="longtec-pi-parties">
+      <div><h3>${escapeHtml(label("buyer"))}:</h3><b>${escapeHtml(document.buyer || "—")}</b><p>${escapeHtml(document.buyerAddress || "")}</p><p>${escapeHtml(document.buyerContact || "")}</p></div>
+      <div><h3>${escapeHtml(label("seller"))}:</h3><b>${escapeHtml(document.seller || "—")}</b><p>${escapeHtml(document.sellerAddress || "")}</p><p>${escapeHtml(sellerContact)}</p></div>
+    </section>
+    <table class="longtec-pi-table">
+      <thead><tr><th>${escapeHtml(label("item"))}</th><th>${escapeHtml(label("description"))}</th><th>${escapeHtml(label("unitPrice"))}</th><th>${escapeHtml(label("quantity"))}</th><th>${escapeHtml(label("amount"))}</th></tr></thead>
+      <tbody>${itemRows || `<tr><td colspan="5">—</td></tr>`}${shippingRows}<tr><td colspan="4" class="longtec-summary-label">${escapeHtml(label("totalPayment"))}</td><td class="money">${formatLongtecMoney(total, document.currency)}</td></tr></tbody>
+    </table>
+    <section class="longtec-pi-lower">
+      <div class="longtec-pi-terms">${termsHtml}<p><span>${escapeHtml(label("remark"))}:</span> ${escapeHtml(document.notes || "—")}</p></div>
+      <div class="longtec-pi-totals"><p><b>${escapeHtml(label("subTotal"))}:</b> ${formatLongtecMoney(subtotal + shippingItems.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0), document.currency)}</p><p><b>${escapeHtml(label("vat"))}:</b> ${formatLongtecMoney(0, document.currency)}</p><p><b>${escapeHtml(label("totalOrder"))}:</b> ${formatLongtecMoney(total, document.currency)}</p><div class="longtec-pi-sign"><b>${escapeHtml(label("signedBy"))}</b><span>${escapeHtml(document.sellerContact || document.seller || "—")}</span></div></div>
+    </section>
+    <section class="longtec-pi-bank"><h3>${escapeHtml(label("bankDetails"))}:</h3><p>${escapeHtml(bankLines)}</p></section>
+  `;
+  const meta = qs<HTMLElement>("#docPreviewMeta");
+  if (meta) meta.textContent = `PI · ${document.number} · ${formatLongtecMoney(total, document.currency)}`;
+}
+
 function renderCustomsDocumentPreview(document: TradeDocument, preview: HTMLElement) {
   const total = documentTotal(document);
   const totalWeight = document.items.reduce((sum, item) => sum + (item.weightKg || 0), 0);
   const totalPackages = document.items.reduce((sum, item) => sum + (item.packageCount || 0), 0);
   const lang = document.language || "EN";
   const isRTL = lang === "AR";
-  const theme = DOC_THEMES[document.templateStyle] || DOC_THEMES.indigo;
+  const theme = DOC_THEMES[document.templateStyle] || DOC_THEMES.rose;
   const L = (k: string) => docLabel(document, k);
   const showMaterial = document.items.some((item) => Boolean(item.material?.trim()));
   const showFinish = document.items.some((item) => Boolean(item.finish?.trim()));
@@ -16599,7 +22258,7 @@ function renderCustomsDocumentPreview(document: TradeDocument, preview: HTMLElem
         ${document.items.map((item, index) => `
           <div class="table-row">
             <div class="td td-num">${index + 1}</div>
-            <div class="td td-product"><strong>${escapeHtml(item.product)}</strong></div>
+            <div class="td td-product"><strong>${escapeHtml(documentItemDisplayName(document, item))}</strong></div>
             <div class="td">${escapeHtml(item.model)}</div>
             ${showMaterial ? `<div class="td">${escapeHtml(item.material || "")}</div>` : ""}
             ${showFinish ? `<div class="td">${escapeHtml(item.finish || "")}</div>` : ""}
@@ -16682,17 +22341,17 @@ function renderDocThemeSwatches(activeTheme?: string) {
     { id: "rose", color: "#e11d48" }, { id: "slate", color: "#475569" },
     { id: "amber", color: "#d97706" }
   ];
-  const current = activeTheme || qs<HTMLSelectElement>("#docThemeInput")?.value || "indigo";
+  const current = activeTheme || qs<HTMLSelectElement>("#docThemeInput")?.value || "rose";
   wrap.innerHTML = themes.map((t) =>
     `<button type="button" class="doc-swatch-btn${t.id === current ? " active" : ""}" data-theme-swatch="${t.id}" title="${t.id}" style="background:${t.color};color:${t.color};"></button>`
   ).join("");
   qsa<HTMLButtonElement>("[data-theme-swatch]", wrap).forEach((btn) => {
     btn.addEventListener("click", () => {
-      const themeId = btn.dataset.themeSwatch || "indigo";
+      const themeId = btn.dataset.themeSwatch || "rose";
       const th = qs<HTMLSelectElement>("#docThemeInput");
       const tpl = qs<HTMLSelectElement>("#docTemplateInput");
       if (th) th.value = themeId;
-      if (tpl) tpl.value = themeId;
+      if (tpl && tpl.value !== "longtec") tpl.value = themeId;
       renderDocThemeSwatches(themeId);
       renderDocumentPreview(collectDocumentDraft());
     });
@@ -16719,6 +22378,7 @@ function applyDataSource(source: string) {
       Object.entries(vals).forEach(([id, v]) => { const el = qs<HTMLInputElement | HTMLSelectElement>(`#${id}`); if (el) el.value = v; });
     }
     if (deal.currency) { const c = qs<HTMLSelectElement>("#docCurrencyInput"); if (c) c.value = deal.currency; }
+    applyMatchedSellerToEditor(customer, deal);
     // 从商机关联的产品填充行项目
     const dealProducts = (state as any).dealProducts?.filter((dp: any) => dp.dealId === deal.id) || [];
     if (dealProducts.length) {
@@ -16766,9 +22426,12 @@ async function saveTradeDocument() {
     return null;
   }
   const existing = state.tradeDocuments.find((document) => document.id === state.selectedDocumentId);
-  let result: { document: TradeDocument };
+  let result: {
+    document: TradeDocument;
+    dealSync?: { deal: Deal; history: QuoteHistoryRecord; changes: string[]; changed: boolean } | null;
+  };
   try {
-    result = await api<{ document: TradeDocument }>(existing ? `/api/trade-documents/${existing.id}` : "/api/trade-documents", {
+    result = await api<typeof result>(existing ? `/api/trade-documents/${existing.id}` : "/api/trade-documents", {
       method: existing ? "PATCH" : "POST",
       body: JSON.stringify({ ...draft, status: "ready" })
     });
@@ -16781,36 +22444,89 @@ async function saveTradeDocument() {
     : [result.document, ...state.tradeDocuments];
   state.selectedDocumentId = result.document.id;
   renderTradeDocuments(state.tradeDocuments);
-  toast("单据配置已保存到数据库");
+  if (result.dealSync?.deal) {
+    state.deals = state.deals.map((deal) => deal.id === result.dealSync!.deal.id ? result.dealSync!.deal : deal);
+    if (!state.deals.some((deal) => deal.id === result.dealSync!.deal.id)) state.deals.unshift(result.dealSync.deal);
+    await refreshDealsData(false);
+    toast(result.dealSync.changed
+      ? `单据已保存，商机已同步 ${result.dealSync.deal.items?.length || 0} 项产品及 ${formatDocumentMoney(result.dealSync.deal.amount, result.dealSync.deal.currency)}`
+      : "单据已保存，报价内容未变化，无需重复记录");
+  } else {
+    toast("单据配置已保存到数据库");
+  }
+  if (advancedExcelEditReturnTemplateId) {
+    const templateId = advancedExcelEditReturnTemplateId;
+    advancedExcelEditReturnTemplateId = "";
+    window.setTimeout(() => {
+      const previewButton = document.createElement("button");
+      previewButton.textContent = "预览";
+      void previewAdvancedExcel(result.document, templateId, previewButton);
+    }, 0);
+  }
   return result.document;
 }
 
+function showPdfExportLoading(): HTMLElement {
+  qs<HTMLElement>("#pdfExportLoading")?.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "pdfExportLoading";
+  overlay.className = "pdf-export-overlay";
+  overlay.setAttribute("role", "status");
+  overlay.setAttribute("aria-label", "正在导出 PDF");
+  overlay.innerHTML = `<div class="pdf-export-box"><div class="pdf-export-spinner"></div><div class="pdf-export-text">正在导出 PDF…<small>正在渲染单据画面并生成文件，请稍候</small></div></div>`;
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
 async function exportTradeDocumentPdf() {
+  const loading = showPdfExportLoading();
+  try {
+    await exportTradeDocumentPdfInner();
+  } finally {
+    loading.remove();
+  }
+}
+
+async function exportTradeDocumentPdfInner() {
   const current = activeTradeDocument();
-  const saved = current.id !== "__new__" && (current.status === "approved" || current.status === "exported")
-    ? current
-    : await saveTradeDocument();
-  if (!saved) return;
-  const preview = qs<HTMLElement>("#documentPreview");
-  if (!preview) {
-    toast("未找到单据预览，无法导出", "error");
-    return;
-  }
-  const fileName = `${saved.number || "document"}-${saved.type}.pdf`;
-  if (saved.status === "approved" || saved.status === "exported") {
-    try {
-      const result = await api<{ document: TradeDocument; job: ImportExportJob; fileName: string }>(`/api/trade-documents/${saved.id}/export`, { method: "POST" });
-      state.tradeDocuments = state.tradeDocuments.map((document) => document.id === result.document.id ? result.document : document);
-      state.jobs.unshift(result.job);
-      renderTradeDocuments(state.tradeDocuments);
-      renderJobs(state.jobs);
-    } catch {
-      // 后端标记失败不影响客户端导出
+  const draft = collectDocumentDraft();
+  let saved: TradeDocument | null = null;
+  let createdRevision = false;
+  try {
+    if (current.id !== "__new__" && (current.status === "approved" || current.status === "exported")) {
+      saved = documentDraftHasChanges(draft, current)
+        ? await saveLockedDocumentDraftAsRevision(current, draft)
+        : current;
+      createdRevision = saved.id !== current.id;
+    } else {
+      saved = await saveTradeDocument();
     }
-  } else {
-    toast("单据尚未审批，已直接导出当前预览 PDF");
+    if (!saved) return;
+    const preview = qs<HTMLElement>("#documentPreview");
+    if (!preview) {
+      toast("未找到单据预览，无法导出", "error");
+      return;
+    }
+    const fileName = `${saved.number || "document"}-${saved.type}.pdf`;
+    if (saved.status === "approved" || saved.status === "exported") {
+      try {
+        const result = await api<{ document: TradeDocument; job: ImportExportJob; fileName: string }>(`/api/trade-documents/${saved.id}/export`, { method: "POST" });
+        state.tradeDocuments = state.tradeDocuments.map((document) => document.id === result.document.id ? result.document : document);
+        state.jobs.unshift(result.job);
+        renderTradeDocuments(state.tradeDocuments);
+        renderJobs(state.jobs);
+      } catch (error) {
+        toast(`正式导出记录失败，继续下载当前 PDF：${error instanceof Error ? error.message : "请求失败"}`, "error");
+      }
+    } else if (createdRevision) {
+      toast("已另存为新版本，已导出当前修改内容；如需正式导出请提交审批");
+    } else {
+      toast("单据尚未审批，已直接导出当前预览 PDF");
+    }
+    await downloadDocumentPdf(qs<HTMLElement>("#documentPreview") || preview, fileName);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "单据 PDF 导出失败", "error");
   }
-  await downloadDocumentPdf(preview, fileName);
 }
 
 function printDocumentPreview() {
@@ -16835,14 +22551,49 @@ function printDocumentPreview() {
 
 // 直接把单据预览渲染成彩色 PDF 并下载，绕开浏览器打印对话框（避免背景色丢失）
 async function downloadDocumentPdf(preview: HTMLElement, fileName: string) {
+  let captureHost: HTMLDivElement | null = null;
   try {
-    toast("正在生成 PDF…");
     const { toPng } = await import("html-to-image");
     const { jsPDF } = await import("jspdf");
     // html-to-image 使用浏览器原生渲染（SVG foreignObject），完整支持 color-mix / oklch /
     // color() 等现代 CSS 颜色函数。html2canvas 1.4.1 解析不了这些颜色会直接抛
     // "Attempting to parse an unsupported color function" 并降级到无背景的打印预览（黑屏）。
-    const dataUrl = await toPng(preview, {
+    // Capture an isolated A4-width copy. The live preview can be narrower
+    // than A4 inside the three-column studio; capturing it directly lets its
+    // auto-centering margin shift the image and clips the right-hand columns.
+    // html-to-image also defaults to clientHeight, so the copy must expose its
+    // full scrollHeight before it is converted to an image.
+    const captureWidth = 794;
+    captureHost = document.createElement("div");
+    captureHost.setAttribute("aria-hidden", "true");
+    Object.assign(captureHost.style, {
+      position: "fixed",
+      left: "-100000px",
+      top: "0",
+      width: `${captureWidth}px`,
+      overflow: "visible",
+      pointerEvents: "none",
+      opacity: "0",
+      background: "#ffffff",
+      zIndex: "-1",
+    });
+    const capture = preview.cloneNode(true) as HTMLElement;
+    capture.removeAttribute("id");
+    Object.assign(capture.style, {
+      width: `${captureWidth}px`,
+      maxWidth: "none",
+      height: "auto",
+      margin: "0",
+      overflow: "visible",
+      boxSizing: "border-box",
+    });
+    captureHost.appendChild(capture);
+    document.body.appendChild(captureHost);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const captureHeight = Math.max(capture.scrollHeight, Math.ceil(capture.getBoundingClientRect().height), capture.clientHeight);
+    const dataUrl = await toPng(capture, {
+      width: captureWidth,
+      height: captureHeight,
       pixelRatio: 2,
       backgroundColor: "#ffffff",
       cacheBust: true,
@@ -16874,6 +22625,8 @@ async function downloadDocumentPdf(preview: HTMLElement, fileName: string) {
     toast(err instanceof Error ? `PDF 生成失败：${err.message}` : "PDF 生成失败", "error");
     // 降级：仍走浏览器打印
     printDocumentPreview();
+  } finally {
+    captureHost?.remove();
   }
 }
 
@@ -18942,17 +24695,105 @@ interface AccessControlUiModule {
 }
 
 const accessControlUiModules: AccessControlUiModule[] = [
-  { id: "workspace", group: "基础工作", name: "经营工作台", summary: "首页经营概览、待办状态和快捷入口。", views: ["dashboard"], permissionCodes: ["workspace.dashboard.read", "workspace.dashboard.manage"], edition: "基础界面" },
-  { id: "customer-growth", group: "客户增长", name: "线索与客户", summary: "线索、未成交客户、已成交客户和客户公池。", views: ["leads", "customers", "customer-pool"], permissionCodes: ["lead.read", "lead.create", "lead.update", "lead.assign", "customer.read", "customer.create", "customer.update", "customer.pool.claim"], edition: "销售界面" },
-  { id: "prospect", group: "客户增长", name: "自动搜客", summary: "搜客任务、候选清洗、官网与联系方式补全。", views: ["lead-finder", "prospect-list"], permissionCodes: ["prospect.read", "prospect.execute"], edition: "增长界面" },
-  { id: "deal-document", group: "成交交付", name: "商机与单据", summary: "商机推进、报价单、PI、CI 和报价历史。", views: ["pipeline", "documents"], permissionCodes: ["deal.read", "deal.create", "deal.update", "deal.quote.create", "document.read", "document.manage"], edition: "业务界面" },
-  { id: "shipment", group: "成交交付", name: "发货与全球航线", summary: "发货跟踪、运输节点和全球航线地图。", views: ["shipments", "global-map"], permissionCodes: ["shipment.read", "shipment.manage"], edition: "交付界面" },
-  { id: "collaboration", group: "协作提醒", name: "跟进与站内协作", summary: "跟进提醒、日报、消息通知和客户通信。", views: ["reminders", "daily-reports", "inbox", "whatsapp", "email-return-flow"], permissionCodes: ["reminder.read", "reminder.manage", "daily_report.read", "daily_report.create", "message.read", "message.send", "communication.read", "communication.send"], edition: "协作界面" },
-  { id: "reporting", group: "经营资料", name: "经营资料库", summary: "产品、报表、排行、问题清单、案例和备忘录。", views: ["products", "reports", "leaderboard", "problems", "cases", "memos"], permissionCodes: ["product.read", "product.manage", "report.read", "report.export"], edition: "经营界面" },
-  { id: "agent-integration", group: "自动化", name: "AI 与集成中心", summary: "Agent、Agent Skills、集成中心和本地 Runner。", views: ["ai-agent", "agent-skills", "integration-center"], permissionCodes: ["agent.use", "agent.manage", "integration.read", "integration.connect", "integration.execute", "integration.manage"], edition: "自动化界面" },
-  { id: "training", group: "培训知识", name: "资料与考试", summary: "资料维护、在线考试、题库和销售训练。", views: ["knowledge", "exam", "question-bank", "sales-distillation"], permissionCodes: ["training.read", "training.manage"], edition: "知识界面" },
-  { id: "approval", group: "流程控制", name: "审批中心", summary: "审批任务、流程画布和审批业务流转。", views: ["approval-center", "approval-workflows"], permissionCodes: ["approval.read", "approval.task.act", "approval.workflow.manage"], edition: "流程界面" },
-  { id: "system", group: "系统治理", name: "组织权限与系统配置", summary: "成员、组织、角色、授权、审计和系统设置。", views: ["member-management", "organization-structure", "role-management", "ui-access", "member-authorization", "permission-audit", "settings", "database-maintenance"], permissionCodes: ["member.read", "member.manage", "org.read", "org.manage", "role.read", "role.manage", "permission.assign", "audit.read", "system.settings.manage", "database.maintain"], edition: "管理界面" }
+  {
+    id: "workspace",
+    group: "基础工作",
+    name: "经营工作台",
+    summary: "首页经营概览、待办状态和快捷入口。",
+    views: ["dashboard"],
+    permissionCodes: ["workspace.dashboard.read", "workspace.dashboard.manage"],
+    edition: "基础界面"
+  },
+  {
+    id: "customer-growth",
+    group: "客户增长",
+    name: "线索与客户",
+    summary: "线索、未成交客户、已成交客户和客户公池。",
+    views: ["leads", "customers", "customer-pool"],
+    permissionCodes: ["lead.read", "lead.create", "lead.update", "lead.assign", "customer.read", "customer.create", "customer.update", "customer.pool.claim"],
+    edition: "销售界面"
+  },
+  {
+    id: "prospect",
+    group: "客户增长",
+    name: "自动搜客",
+    summary: "搜客任务、候选清洗、官网与联系方式补全。",
+    views: ["lead-finder", "prospect-list"],
+    permissionCodes: ["prospect.read", "prospect.execute"],
+    edition: "增长界面"
+  },
+  {
+    id: "deal-document",
+    group: "成交交付",
+    name: "商机与单据",
+    summary: "商机推进、报价单、PI、CI 和报价历史。",
+    views: ["pipeline", "documents"],
+    permissionCodes: ["deal.read", "deal.create", "deal.update", "deal.quote.create", "document.read", "document.manage"],
+    edition: "业务界面"
+  },
+  {
+    id: "shipment",
+    group: "成交交付",
+    name: "发货与全球航线",
+    summary: "发货跟踪、运输节点和全球航线地图。",
+    views: ["shipments", "global-map"],
+    permissionCodes: ["shipment.read", "shipment.manage"],
+    edition: "交付界面"
+  },
+  {
+    id: "collaboration",
+    group: "协作提醒",
+    name: "跟进与站内协作",
+    summary: "跟进提醒、日报、消息通知和客户通信。",
+    views: ["reminders", "daily-reports", "inbox", "whatsapp", "email-return-flow"],
+    permissionCodes: ["reminder.read", "reminder.manage", "daily_report.read", "daily_report.create", "message.read", "message.send", "communication.read", "communication.send"],
+    edition: "协作界面"
+  },
+  {
+    id: "reporting",
+    group: "经营资料",
+    name: "经营资料库",
+    summary: "产品、报表、排行、问题清单、案例和备忘录。",
+    views: ["products", "reports", "leaderboard", "problems", "cases", "memos"],
+    permissionCodes: ["product.read", "product.manage", "report.read", "report.export"],
+    edition: "经营界面"
+  },
+  {
+    id: "agent-integration",
+    group: "自动化",
+    name: "AI 与集成中心",
+    summary: "Agent、Agent Skills、集成中心和本地 Runner。",
+    views: ["ai-agent", "agent-skills", "integration-center"],
+    permissionCodes: ["agent.use", "agent.manage", "integration.read", "integration.connect", "integration.execute", "integration.manage"],
+    edition: "自动化界面"
+  },
+  {
+    id: "training",
+    group: "培训知识",
+    name: "资料与考试",
+    summary: "资料维护、在线考试、题库和销售训练。",
+    views: ["knowledge", "exam", "question-bank", "sales-distillation"],
+    permissionCodes: ["training.read", "training.manage"],
+    edition: "知识界面"
+  },
+  {
+    id: "approval",
+    group: "流程控制",
+    name: "审批中心",
+    summary: "审批任务、流程画布和审批业务流转。",
+    views: ["approval-center", "approval-workflows"],
+    permissionCodes: ["approval.read", "approval.task.act", "approval.workflow.manage"],
+    edition: "流程界面"
+  },
+  {
+    id: "system",
+    group: "系统治理",
+    name: "组织权限与系统配置",
+    summary: "成员、组织、角色、授权、审计和系统设置。",
+    views: ["member-management", "organization-structure", "role-management", "ui-access", "member-authorization", "permission-audit", "settings", "database-maintenance"],
+    permissionCodes: ["member.read", "member.manage", "org.read", "org.manage", "role.read", "role.manage", "permission.assign", "audit.read", "system.settings.manage", "database.maintain"],
+    edition: "管理界面"
+  }
 ];
 
 function accessControlModulePermissions(overview: AccessControlOverview, module: AccessControlUiModule) {
@@ -18970,15 +24811,29 @@ function accessControlSuggestedScope(role: AccessControlOverview["roles"][number
   return scopes[0] || "self";
 }
 
-function accessControlModuleState(overview: AccessControlOverview, role: AccessControlOverview["roles"][number], module: AccessControlUiModule) {
+function accessControlModuleState(
+  overview: AccessControlOverview,
+  role: AccessControlOverview["roles"][number],
+  module: AccessControlUiModule
+) {
   const permissions = accessControlModulePermissions(overview, module);
   const granted = permissions.filter((permission) => (permission.grants[role.id] || "none") !== "none");
   const missing = module.permissionCodes.length - permissions.length;
   const readPermissions = permissions.filter((permission) => /\.(read|use)$/u.test(permission.code));
   const visible = readPermissions.some((permission) => (permission.grants[role.id] || "none") !== "none")
     || permissions.some((permission) => viewPermissionRequirements[module.views[0] || ""] === permission.code && (permission.grants[role.id] || "none") !== "none");
-  const protectedBaseline = role.is_protected ? permissions.filter((permission) => Boolean(permission.protectedScopes?.[role.id])) : [];
-  return { permissions, grantedCount: granted.length, missing, visible, protectedBaseline, closeLocked: protectedBaseline.length > 0, status: granted.length === 0 ? "closed" : granted.length === permissions.length && missing === 0 ? "open" : "partial" };
+  const protectedBaseline = role.is_protected
+    ? permissions.filter((permission) => Boolean(permission.protectedScopes?.[role.id]))
+    : [];
+  return {
+    permissions,
+    grantedCount: granted.length,
+    missing,
+    visible,
+    protectedBaseline,
+    closeLocked: protectedBaseline.length > 0,
+    status: granted.length === 0 ? "closed" : granted.length === permissions.length && missing === 0 ? "open" : "partial"
+  };
 }
 
 function accessControlPermissionVersion(permissions: AccessControlOverview["permissions"]) {
@@ -19172,7 +25027,10 @@ function renderAccessControlUiAccess(overview: AccessControlOverview) {
       const closeReason = closeLocked
         ? `系统预设角色必须保留基础权限：${protectedBaselineNames}${(stateInfo?.protectedBaseline.length || 0) > 2 ? "等" : ""}。复制角色后可自由调整。`
         : stateInfo?.status === "closed" ? "该模块当前未开通" : "关闭后将撤销该模块包含的授权，菜单会隐藏。";
-      const permissionList = permissions.slice(0, 5).map((permission) => `<li><span>${escapeHtml(permission.name)}</span>${accessControlScopeBadge(selected ? permission.grants[selected.id] || "none" : "none")}</li>`).join("");
+      const permissionList = permissions.slice(0, 5).map((permission) => {
+        const scope = selected ? permission.grants[selected.id] || "none" : "none";
+        return `<li><span>${escapeHtml(permission.name)}</span>${accessControlScopeBadge(scope)}</li>`;
+      }).join("");
       const more = permissions.length > 5 ? `<li><span>还有 ${permissions.length - 5} 项权限</span><em>发布时一并处理</em></li>` : "";
       const missing = stateInfo?.missing ? `<div class="ac-ui-warning">有 ${stateInfo.missing} 项界面权限暂未进入权限目录，升级后会显示为可配置项。</div>` : "";
       return `<article class="ac-ui-card is-${statusTone}" data-ac-ui-card="${escapeHtml(module.id)}">
@@ -19198,7 +25056,10 @@ function renderAccessControlUiAccess(overview: AccessControlOverview) {
       ${overview.roles.map((role) => `<button class="ac-role-item ${role.code} ${role.id === selected?.id ? "active" : ""}" type="button" data-ac-role="${escapeHtml(role.id)}"><span class="ac-role-symbol">${escapeHtml(role.name.slice(0, 1))}</span><span class="ac-role-copy"><b>${escapeHtml(role.name)}</b><small>${role.memberCount} 名成员 · ${role.permissionCount} 项权限 · ${role.is_protected ? "系统预设" : "可自定义"}</small></span><span class="ac-count">${role.moduleCount}</span></button>`).join("")}
     </div></aside>
     <section class="ac-pane">
-      <div class="ac-ui-brief"><div><h2>${escapeHtml(selected?.name || "角色界面")}</h2><p>菜单显示取决于查看权限；“部分开通”表示菜单可见但操作权限未全部配置。${selected?.is_protected ? "系统预设角色的基础权限不能取消；需要完全自定义时，请先复制角色。" : "当前是自定义角色，可以按岗位开通或关闭模块。"}</p></div><div class="ac-ui-legend"><span><i class="active"></i>已开通</span><span><i class="warning"></i>部分开通</span><span><i></i>未开通</span></div></div>
+      <div class="ac-ui-brief">
+        <div><h2>${escapeHtml(selected?.name || "角色界面")}</h2><p>菜单显示取决于查看权限；“部分开通”表示菜单可见但操作权限未全部配置。${selected?.is_protected ? "系统预设角色的基础权限不能取消；需要完全自定义时，请先复制角色。" : "当前是自定义角色，可以按岗位开通或关闭模块。"}</p></div>
+        <div class="ac-ui-legend"><span><i class="active"></i>已开通</span><span><i class="warning"></i>部分开通</span><span><i></i>未开通</span></div>
+      </div>
       <div class="ac-ui-scroll">${modules}</div>
     </section>
   </div>`;
@@ -19314,7 +25175,12 @@ function openAccessControlGuide() {
   if (description) description.textContent = "管理员配置组织、角色和成员授权的操作指引";
 }
 
-function mutateAccessControlModule(overview: AccessControlOverview, roleId: string, moduleId: string, action: "enable" | "disable") {
+function mutateAccessControlModule(
+  overview: AccessControlOverview,
+  roleId: string,
+  moduleId: string,
+  action: "enable" | "disable"
+) {
   const role = overview.roles.find((item) => item.id === roleId);
   const module = accessControlUiModules.find((item) => item.id === moduleId);
   if (!role || !module) return;
@@ -19334,7 +25200,10 @@ function mutateAccessControlModule(overview: AccessControlOverview, roleId: stri
     return current === "none" ? [] : [{ permissionCode: permission.code, scopeMode: current }];
   });
   const reason = action === "enable" ? `开通界面模块：${module.name}` : `关闭界面模块：${module.name}`;
-  void mutateAccessControl(() => api(`/api/v1/roles/${encodeURIComponent(role.id)}/permissions`, { method: "PUT", body: JSON.stringify({ ...accessControlTenantBody(overview), bindings, reason }) }), action === "enable" ? "界面模块已开通" : "界面模块已关闭");
+  void mutateAccessControl(() => api(`/api/v1/roles/${encodeURIComponent(role.id)}/permissions`, {
+    method: "PUT",
+    body: JSON.stringify({ ...accessControlTenantBody(overview), bindings, reason })
+  }), action === "enable" ? "界面模块已开通" : "界面模块已关闭");
 }
 
 function openAccessControlModuleDetail(overview: AccessControlOverview, roleId: string, moduleId: string) {
@@ -20124,6 +25993,7 @@ function renderAiConfig(config: AiModelConfig | null) {
   const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
   const gptConnectionTitle = qs<HTMLElement>("#gptConnectionTitle");
   const gptConnectionText = qs<HTMLElement>("#gptConnectionText");
+  const gptWebSearchStatus = qs<HTMLElement>("#gptWebSearchStatus");
   const gptState = qs<HTMLElement>("#gptConfigState");
   const gptSub = qs<HTMLElement>("#gptConfigSub");
   const gptModelState = qs<HTMLElement>("#gptModelState");
@@ -20145,6 +26015,10 @@ function renderAiConfig(config: AiModelConfig | null) {
   const ready = Boolean(config?.enabled && config?.hasApiKey);
   const tested = config?.lastTestStatus === "passed";
   const failed = config?.lastTestStatus === "failed";
+  const webSearchStatus = config?.webSearchStatus || "untested";
+  const webSearchReady = webSearchStatus === "passed";
+  const webSearchUnsupported = webSearchStatus === "unsupported";
+  const webSearchFailed = webSearchStatus === "failed";
   const useFlags = {
     leadFinder: config?.useLeadFinder ?? true,
     websiteParse: false,
@@ -20168,7 +26042,7 @@ function renderAiConfig(config: AiModelConfig | null) {
       return `
         <button class="ai-instance-row ${active ? "active" : ""}" type="button" data-ai-config-id="${escapeHtml(item.id)}">
           <span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(itemPreset.label)} · ${escapeHtml(item.model)} · ${itemUseCount} 个用途</small></span>
-          <em>${badge(item.enabled ? "启用" : "停用", item.enabled ? "green" : "gray")}${badge(item.hasApiKey ? "有Key" : "缺Key", item.hasApiKey ? "green" : "amber")}</em>
+          <em>${badge(item.enabled ? "启用" : "停用", item.enabled ? "green" : "gray")}${badge(item.hasApiKey ? "有Key" : "缺Key", item.hasApiKey ? "green" : "amber")}${item.useLeadFinder ? badge(item.webSearchStatus === "passed" ? "官网联网已验证" : item.webSearchStatus === "unsupported" ? "需官网搜索 API" : "官网联网待测", item.webSearchStatus === "passed" ? "green" : item.webSearchStatus === "failed" ? "red" : "amber") : ""}</em>
         </button>
       `;
     }).join("");
@@ -20236,11 +26110,46 @@ function renderAiConfig(config: AiModelConfig | null) {
     }
   });
   if (gptConnectionBadge && !aiTestingActive) {
-    gptConnectionBadge.className = `badge ${tested ? "green" : failed ? "red" : ready ? "amber" : ""}`;
-    gptConnectionBadge.textContent = tested ? "连接通过" : failed ? "连接失败" : ready ? "待测试" : "未启用";
+    gptConnectionBadge.className = `badge ${tested && (!config?.useLeadFinder || webSearchReady) ? "green" : failed || webSearchFailed ? "red" : ready ? "amber" : ""}`;
+    gptConnectionBadge.textContent = tested && (!config?.useLeadFinder || webSearchReady)
+      ? "连接与联网通过"
+      : webSearchUnsupported
+        ? tested ? "普通 AI 通过" : "模型不支持联网"
+        : webSearchFailed
+          ? "联网测试失败"
+          : failed
+            ? "连接失败"
+            : ready
+              ? "待测试联网能力"
+              : "未启用";
   }
-  if (gptConnectionTitle && !aiTestingActive) gptConnectionTitle.textContent = tested ? "AI 连接测试通过" : failed ? "AI 连接测试失败" : ready ? "配置已保存" : config?.enabled ? "缺少 API Key" : "AI 未启用";
+  if (gptConnectionTitle && !aiTestingActive) gptConnectionTitle.textContent = tested && (!config?.useLeadFinder || webSearchReady)
+    ? "AI 与官网联网测试通过"
+    : webSearchUnsupported
+      ? tested ? "普通 AI 通过，官网需搜索 API" : "当前模型不能确认官网"
+      : webSearchFailed
+        ? "普通 AI 可用，但官网联网未通过"
+        : failed
+          ? "AI 连接测试失败"
+          : ready
+            ? "等待官网联网测试"
+            : config?.enabled
+              ? "缺少 API Key"
+              : "AI 未启用";
   if (gptConnectionText && !aiTestingActive) gptConnectionText.textContent = config?.lastTestMessage || (ready ? `当前模型：${config?.model} · ${useCount} 个业务模块` : "");
+  if (gptWebSearchStatus) {
+    const citationCount = Number(config?.webSearchCitationCount || 0);
+    gptWebSearchStatus.className = `ai-web-search-status ${webSearchReady ? "is-ready" : webSearchFailed ? "is-blocked" : "is-pending"}`;
+    gptWebSearchStatus.textContent = webSearchReady
+      ? `官网发现：Web Search 已验证${citationCount ? ` · 最近 ${citationCount} 条引用` : ""}`
+      : webSearchUnsupported
+        ? "官网发现：当前模型不支持原生 Web Search；配置 Brave、Serper、SerpApi 或 Google Places 后可继续自动搜客"
+        : webSearchFailed
+          ? "官网发现：Web Search 失败，不会采信模型猜测的网址"
+          : config?.useLeadFinder
+            ? "官网发现：请先测试 Web Search，自动搜客才会启动"
+            : "官网发现：未启用自动获客，暂不要求 Web Search";
+  }
   if (gptState) gptState.textContent = ready ? "已启用" : config?.enabled ? "待补Key" : "未启用";
   if (gptSub) gptSub.textContent = tested ? "最近测试通过" : ready ? "可测试连接和调用" : "等待 API Key";
   if (gptModelState) gptModelState.textContent = config?.model || defaultModel;
@@ -20485,15 +26394,17 @@ async function testAiConfig(button?: HTMLButtonElement) {
       renderLeadFinder(state.websiteOpportunities);
       syncLeadFinderStartState();
     }
-    const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
-    const gptConnectionTitle = qs<HTMLElement>("#gptConnectionTitle");
-    const gptConnectionText = qs<HTMLElement>("#gptConnectionText");
-    if (gptConnectionBadge) {
-      gptConnectionBadge.className = `badge ${result.ok ? "green" : "red"}`;
-      gptConnectionBadge.textContent = result.ok ? "连接通过" : "连接失败";
+    if (!result.config) {
+      const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
+      const gptConnectionTitle = qs<HTMLElement>("#gptConnectionTitle");
+      const gptConnectionText = qs<HTMLElement>("#gptConnectionText");
+      if (gptConnectionBadge) {
+        gptConnectionBadge.className = `badge ${result.ok ? "green" : "red"}`;
+        gptConnectionBadge.textContent = result.ok ? "连接通过" : "连接失败";
+      }
+      if (gptConnectionTitle) gptConnectionTitle.textContent = result.ok ? "AI 连接测试通过" : "AI 连接测试失败";
+      if (gptConnectionText) gptConnectionText.textContent = result.message;
     }
-    if (gptConnectionTitle) gptConnectionTitle.textContent = result.ok ? "AI 连接测试通过" : "AI 连接测试失败";
-    if (gptConnectionText) gptConnectionText.textContent = result.message;
     toast(result.message, result.ok ? "ok" : "error");
   } catch (err) {
     const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
@@ -21574,6 +27485,7 @@ function renderGlobalMap(): void {
       <div class="gm-tip-row"><span>目的国</span><em>${escapeHtml(country)}</em></div>
       ${s.destinationPort ? `<div class="gm-tip-row"><span>目的港</span><em>${escapeHtml(s.destinationPort)}</em></div>` : ""}
       ${s.destinationAddress ? `<div class="gm-tip-row"><span>收货地址</span><em>${escapeHtml(s.destinationAddress)}</em></div>` : ""}
+      ${s.trackingEvents?.length ? `<div class="gm-tip-row"><span>最新位置</span><em>${escapeHtml([...s.trackingEvents].sort((a, b) => (a.time < b.time ? 1 : -1))[0]?.location || "承运商未提供")}</em></div>` : ""}
       <div class="gm-tip-row"><span>状态</span><em>${escapeHtml(SHIPMENT_STATUS_LABEL[s.status] || s.status)}</em></div>
       <div class="gm-tip-row"><span>承运</span><em>${escapeHtml(courier)}</em></div>
       <div class="gm-tip-row"><span>来源</span><em>${escapeHtml(s.routeSourceLabel)}</em></div>`;
@@ -21835,13 +27747,14 @@ let shipmentStatusFilterValue = "";
 const SHIP_STEPS: ShipmentStatus[] = ["draft", "shipped", "in_transit", "delivered"];
 
 // ---- 发货旅程图标系统（状态 / 快递 / 操作）----
-type ShipIconName = "draft" | "shipped" | "in_transit" | "delivered" | "exception" | "truck" | "edit" | "track" | "trash" | "copy" | "arrow" | "refresh";
+type ShipIconName = "draft" | "shipped" | "in_transit" | "delivered" | "exception" | "warning" | "truck" | "edit" | "track" | "trash" | "copy" | "arrow" | "refresh";
 const SH_ICONS: Record<ShipIconName, string> = {
   draft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>',
   shipped: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>',
   in_transit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1z"/><path d="M16 8h4l3 3v5h-7z"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="18.5" r="2"/></svg>',
   delivered: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg>',
   exception: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
+  warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.6 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
   truck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1z"/><path d="M16 8h4l3 3v5h-7z"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="18.5" r="2"/></svg>',
   edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
   track: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
@@ -22125,11 +28038,13 @@ function renderShipments() {
 
 function shipmentRowHtml(s: Shipment): string {
   const courier = COURIER_MAP[s.courier];
-  const canTrack = !!s.trackingCode && !!courier;
+  // 17TRACK can auto-detect the carrier from the tracking number.
+  const canTrack = !!s.trackingCode?.trim();
   const dealText = [s.dealTitle, s.customerName].filter(Boolean).join(" · ") || "—";
   const stepper = stepperNodesHtml(s);
   const eta = s.estimatedArrival ? shipmentCountdown(s.estimatedArrival) : "—";
   const itemCount = (s.items || []).length;
+  const latestEvent = [...(s.trackingEvents || [])].sort((a, b) => (a.time < b.time ? 1 : -1))[0];
   return `
   <article class="sh-row" data-shipment-id="${escapeHtml(s.id)}">
     <label class="sh-check"><input type="checkbox" data-select-shipment ${state.selectedShipmentIds.includes(s.id) ? "checked" : ""} aria-label="选择 ${escapeHtml(s.shipmentNo || "发货单")}"><span></span></label>
@@ -22144,12 +28059,14 @@ function shipmentRowHtml(s: Shipment): string {
         ${courier ? courierBadge(s.courier) : ""}
         ${s.trackingCode ? `<span class="sh-track">${escapeHtml(s.trackingCode)}</span>` : `<span class="sh-dim">未填运单号</span>`}
         ${itemCount ? `<span class="sh-items">${shIcon("copy")}<span>${itemCount} 项货物</span></span>` : ""}
+        ${latestEvent?.location ? `<span class="sh-location">${shIcon("track")}<span>最新位置 ${escapeHtml(latestEvent.location)}</span></span>` : ""}
+        ${s.syncError ? `<span class="sh-sync-error" title="${escapeHtml(s.syncError)}">${shIcon("warning")}<span>${escapeHtml(s.syncError)}</span></span>` : ""}
         <span class="sh-eta">${shIcon("arrow")}<span>预计到达 ${eta}</span></span>
       </div>
     </div>
     <div class="sh-row-actions">
       <button class="sh-btn" data-shipment-edit="${escapeHtml(s.id)}" type="button">${shIcon("edit")}<span>编辑</span></button>
-      <button class="sh-btn ghost ${canTrack ? "sh-track-btn" : ""}" data-shipment-track="${escapeHtml(s.id)}" type="button" ${canTrack ? "" : "disabled title=\"需先填写运单号与快递公司\""}>${shIcon("track")}<span>同步</span></button>
+      <button class="sh-btn ghost ${canTrack ? "sh-track-btn" : ""}" data-shipment-track="${escapeHtml(s.id)}" type="button" ${canTrack ? "" : "disabled title=\"需先填写运单号\""}>${shIcon("track")}<span>真实查询</span></button>
       <button class="sh-btn ghost" data-shipment-delete="${escapeHtml(s.id)}" type="button">${shIcon("trash")}<span>删除</span></button>
     </div>
   </article>`;
@@ -22176,7 +28093,7 @@ function advanceButtonsHtml(s: Shipment): string {
 }
 
 function statusSourceBadge(s: Shipment): string {
-  if (s.statusSource === "carrier") return `<span class="sh-src-badge sh-src-carrier">官网同步</span>`;
+  if (s.statusSource === "carrier") return `<span class="sh-src-badge sh-src-carrier">承运商数据</span>`;
   if (s.status === "draft") return `<span class="sh-src-badge">手动录入</span>`;
   return `<span class="sh-src-badge">手动状态</span>`;
 }
@@ -22184,8 +28101,8 @@ function statusSourceBadge(s: Shipment): string {
 function trackingTimelineHtml(s: Shipment): string {
   const events = s.trackingEvents || [];
   if (!events.length) {
-    const hint = s.trackingCode ? "，点「同步物流」拉取最新动态" : "，请先录入运单号";
-    return `<div class="sh-drawer-sec"><h4>物流轨迹</h4><p class="pc-desc sh-dim">暂无官网轨迹${hint}。</p></div>`;
+    const hint = s.trackingCode ? "，点击「查询真实轨迹」获取承运商数据" : "，请先录入运单号";
+    return `<div class="sh-drawer-sec"><h4>物流轨迹</h4><p class="pc-desc sh-dim">暂无承运商轨迹${hint}。</p></div>`;
   }
   const items = [...events]
     .sort((a, b) => (a.time < b.time ? 1 : -1))
@@ -22198,7 +28115,7 @@ function trackingTimelineHtml(s: Shipment): string {
         </div>
       </li>`).join("");
   const last = formatSyncTime(s.lastSyncedAt);
-  return `<div class="sh-drawer-sec"><h4>物流轨迹 <span class="sh-tl-src">· 官网同步 ${last}</span></h4><ul class="sh-timeline">${items}</ul></div>`;
+  return `<div class="sh-drawer-sec"><h4>物流轨迹 <span class="sh-tl-src">· 承运商数据 ${last}</span></h4><ul class="sh-timeline">${items}</ul></div>`;
 }
 
 function openShipmentDrawer(s: Shipment) {
@@ -22207,7 +28124,8 @@ function openShipmentDrawer(s: Shipment) {
   const scrim = qs<HTMLElement>("#shipmentScrim");
   if (!drawer || !inner) return;
   const courier = COURIER_MAP[s.courier];
-  const canTrack = !!s.trackingCode && !!courier;
+  const canTrack = !!s.trackingCode?.trim();
+  const latestEvent = [...(s.trackingEvents || [])].sort((a, b) => (a.time < b.time ? 1 : -1))[0];
   const stepper = stepperNodesHtml(s);
   const items = (s.items || []).map((it) => `<tr><td>${escapeHtml(it.productName || "—")}</td><td>${escapeHtml(it.model || "—")}</td><td>${escapeHtml(it.hsCode || "—")}</td><td>${it.quantity || 0} ${escapeHtml(it.unit || "")}</td><td>${it.netWeight || 0}/${it.grossWeight || 0}kg</td></tr>`).join("") || `<tr><td colspan="5" class="sh-dim">无货物明细</td></tr>`;
   inner.innerHTML = `
@@ -22233,6 +28151,8 @@ function openShipmentDrawer(s: Shipment) {
         <div><dt>预计到达</dt><dd>${formatShipmentDate(s.estimatedArrival)}</dd></div>
       </dl>
       ${s.destinationAddress ? `<div class="sh-drawer-sec"><h4>收货地址</h4><p class="pc-desc">${escapeHtml(s.destinationAddress)}</p></div>` : ""}
+      ${latestEvent?.location ? `<div class="sh-drawer-sec sh-current-location"><h4>最新扫描位置</h4><p class="pc-desc"><b>${escapeHtml(latestEvent.location)}</b><br><span>${escapeHtml(latestEvent.description)}</span><small>数据时间：${formatSyncTime(latestEvent.time)}</small></p></div>` : ""}
+      ${s.syncError ? `<div class="sh-drawer-sec sh-sync-error-panel"><h4>最近一次查询未完成</h4><p class="pc-desc">${escapeHtml(s.syncError)}</p></div>` : ""}
       ${s.trackingImageUrl ? `<div class="sh-drawer-sec"><h4>运单图片</h4><img class="sh-track-img" src="${s.trackingImageUrl.startsWith("http") ? s.trackingImageUrl : location.origin + s.trackingImageUrl}" alt="运单号图片"></div>` : ""}
       <div class="sh-drawer-sec"><h4>货物明细</h4>
         <table class="sh-items-table"><thead><tr><th>品名</th><th>型号</th><th>HS</th><th>数量</th><th>净重/毛重</th></tr></thead><tbody>${items}</tbody></table>
@@ -22244,7 +28164,7 @@ function openShipmentDrawer(s: Shipment) {
       <div class="sh-advance">${advanceButtonsHtml(s)}</div>
       <span class="sh-foot-spacer"></span>
       ${courier && s.trackingCode ? `<button class="btn" id="shipmentDrawerSite" type="button">${shIcon("track")}<span>官网查询</span></button>` : ""}
-      ${s.trackingCode ? `<button class="btn btn-primary" id="shipmentDrawerTrack" type="button">${shIcon("refresh")}<span>同步物流</span></button>` : `<button class="btn btn-primary" id="shipmentDrawerTrack" type="button" disabled title="需先填写运单号">${shIcon("refresh")}<span>同步物流</span></button>`}
+      ${s.trackingCode?.trim() ? `<button class="btn btn-primary" id="shipmentDrawerTrack" type="button">${shIcon("refresh")}<span>查询真实轨迹</span></button>` : `<button class="btn btn-primary" id="shipmentDrawerTrack" type="button" disabled title="需先填写运单号">${shIcon("refresh")}<span>查询真实轨迹</span></button>`}
       <button class="btn" id="shipmentDrawerLoad" type="button" title="将本单货物清单载入装箱计算">${shIcon("shipped")}<span>计算装柜</span></button>
       <button class="btn" id="shipmentDrawerEdit" type="button">${shIcon("edit")}<span>编辑</span></button>
     </footer>`;
@@ -22552,14 +28472,10 @@ function openCarrierSite(shipment: Shipment) {
   toast(`已复制运单号并打开${courier.label}官网查询页`, "ok");
 }
 
-/** 单条同步：以承运商官网轨迹为准，回写状态与轨迹节点 */
+/** 单条真实查询：以承运商 API 返回的轨迹为准，回写状态与轨迹节点 */
 async function syncShipmentNow(shipment: Shipment) {
-  if (!shipment.trackingCode) {
+  if (!shipment.trackingCode?.trim()) {
     toast("该单未录入运单号，无法同步官网", "error");
-    return;
-  }
-  if (shipment.status === "draft") {
-    toast("草稿状态无需同步，交运并录入运单号后即可同步", "info");
     return;
   }
   try {
@@ -22573,10 +28489,10 @@ async function syncShipmentNow(shipment: Shipment) {
     if (cur && qs<HTMLElement>("#shipmentDrawer")?.classList.contains("is-open")) openShipmentDrawer(cur);
     if (result.synced) {
       const ev = (cur?.trackingEvents || []).length;
-      toast(`已同步官网轨迹：${SHIPMENT_STATUS_LABEL[cur?.status || "draft"]}（${ev} 个轨迹节点）`, "ok");
+      toast(`已获取承运商真实轨迹：${SHIPMENT_STATUS_LABEL[cur?.status || "draft"]}（${ev} 个轨迹节点）`, "ok");
       void recordLog({
         level: "success", category: "shipment", action: "sync_tracking",
-        message: `发货单「${cur?.shipmentNo || cur?.dealTitle}」已按承运商官网同步，状态「${SHIPMENT_STATUS_LABEL[cur?.status || "draft"]}」`,
+        message: `发货单「${cur?.shipmentNo || cur?.dealTitle}」已获取承运商真实轨迹，状态「${SHIPMENT_STATUS_LABEL[cur?.status || "draft"]}」`,
         meta: { id: cur?.id, status: cur?.status }
       });
     } else {
@@ -22599,7 +28515,7 @@ async function syncAllShipments() {
     if (active === "shipments") renderShipments();
     if (active === "global-map") renderGlobalMap();
     if (result.updated > 0) {
-      toast(`已同步 ${result.updated} 张在途发货单的官网轨迹`, "ok");
+      toast(`已获取 ${result.updated} 张发货单的承运商真实轨迹`, "ok");
     }
   } catch (err) {
     // 同步失败不应阻断页面；静默
@@ -22742,7 +28658,7 @@ function renderWebsiteOpportunities(opportunities: WebsiteOpportunity[]) {
   if (status && opportunities.length) {
     const synced = opportunities.filter((item) => item.status === "synced").length;
     const aiCount = opportunities.filter((item) => item.parseMode === "ai").length;
-    status.innerHTML = `<b>${opportunities.length}</b><span>已登记链接</span>${badge(`${synced} 条已同步`, synced ? "green" : "")}${badge(aiCount ? `${aiCount} 条AI归纳` : "零网页访问", aiCount ? "green" : "")}`;
+    status.innerHTML = `<b>${opportunities.length}</b><span>已登记链接</span>${badge(`${synced} 条已同步`, synced ? "green" : "")}${badge(aiCount ? `${aiCount} 条AI归纳` : "公开资料待补全", aiCount ? "green" : "")}`;
   }
   if (!tbody) return;
   tbody.innerHTML = opportunities.length ? opportunities.map((item) => `
@@ -22755,7 +28671,7 @@ function renderWebsiteOpportunities(opportunities: WebsiteOpportunity[]) {
       <td><input value="${escapeHtml(item.contact)}" data-website-field="contact"></td>
       <td><input value="${escapeHtml(item.contactInfo)}" data-website-field="contactInfo"></td>
       <td><textarea data-website-field="description">${escapeHtml(item.description)}</textarea></td>
-      <td>${badge(item.status === "synced" ? "已入线索" : "待资格审查", item.status === "synced" ? "green" : "amber")}${badge(modeText(item.parseMode), modeTone(item.parseMode))}</td>
+      <td>${badge(item.status === "synced" ? "已入线索" : "待处理", item.status === "synced" ? "green" : "amber")}${badge(modeText(item.parseMode), modeTone(item.parseMode))}</td>
     </tr>
   `).join("") : `<tr><td colspan="9" class="empty-cell">暂无待核验企业</td></tr>`;
 }
@@ -22832,11 +28748,11 @@ function contactEmail(value: string) {
 const PROSPECT_PAGE_SIZE = 10;
 
 const PROSPECT_STATUS_META: Record<WebsiteOpportunity["status"], { label: string; tone: string; action: string }> = {
-  preview: { label: "待核验", tone: "amber", action: "核验联系人与联系方式" },
+  preview: { label: "待处理", tone: "amber", action: "查找公开联系人与联系方式" },
   contactable: { label: "可联系", tone: "green", action: "发送开发信或加入线索" },
   contacted: { label: "已联系", tone: "green", action: "等待回复，必要时加入线索跟进" },
   synced: { label: "已入线索", tone: "green", action: "在线索中心继续跟进" },
-  excluded: { label: "已排除", tone: "gray", action: "确认原因，必要时恢复核验" }
+  excluded: { label: "已排除", tone: "gray", action: "确认原因，必要时恢复处理" }
 };
 
 const PROSPECT_CHANNEL_LABELS: Record<ProspectOutreachChannel, string> = {
@@ -23118,6 +29034,7 @@ function selectedProspect() {
 }
 
 let prospectTechnicalAuditOpenId = "";
+let prospectOutreachGateOpenId = "";
 
 function closeProspectMobileDetail() {
   prospectMobileDetailOpen = false;
@@ -23140,27 +29057,12 @@ function renderProspectMailPreview() {
   ].join("\n");
 }
 
-function generateProspectMailDraft() {
-  const item = selectedProspect();
-  if (!item) {
-    toast("请先选择一条搜客线索", "error");
-    return;
-  }
+function localProspectMailTemplate(item: WebsiteOpportunity) {
   const sender = state.user?.emailSenderName || state.user?.name || "GoodJob Sales";
   const signature = state.user?.emailSignature?.trim() || `Best regards,\n${sender}\nGoodJob Sales Team`;
-  const mailTo = qs<HTMLInputElement>("#prospectMailTo");
-  const subject = qs<HTMLInputElement>("#prospectMailSubject");
-  const body = qs<HTMLTextAreaElement>("#prospectMailBody");
-  const approvedEmail = state.prospectQualifications[item.id]
-    ?.approvedChannel?.channelType === "email"
-    ? state.prospectQualifications[item.id]!.approvedChannel!.value
-    : "";
-  if (mailTo && !mailTo.value.trim()) {
-    mailTo.value = approvedEmail;
-  }
-  if (subject && !subject.value.trim()) subject.value = `${item.business || "Product"} supplier support for ${item.company}`;
-  if (body) {
-    body.value = [
+  return {
+    subject: `${item.business || "Product"} supplier support for ${item.company}`,
+    body: [
       `Dear ${item.company} team,`,
       "",
       `I noticed your company is active in ${item.business || "international sourcing and distribution"}${item.country ? ` in ${item.country}` : ""}.`,
@@ -23169,9 +29071,56 @@ function generateProspectMailDraft() {
       "May I know which product categories you are currently sourcing, and whether you have any upcoming project requirements?",
       "",
       signature
-    ].join("\n");
+    ].join("\n")
+  };
+}
+
+/**
+ * W3 · 候选开发信草稿生成：统一走 /api/development-email/draft（entityType=prospect），
+ * AI 不可用时后端自动回落基础模板；接口异常时再退回本地模板，保证按钮永远有产出。
+ */
+async function generateProspectMailDraft(button?: HTMLButtonElement) {
+  const item = selectedProspect();
+  if (!item) {
+    toast("请先选择一条搜客线索", "error");
+    return;
   }
+  const mailTo = qs<HTMLInputElement>("#prospectMailTo");
+  const subject = qs<HTMLInputElement>("#prospectMailSubject");
+  const body = qs<HTMLTextAreaElement>("#prospectMailBody");
+  const approvedEmail = state.prospectQualifications[item.id]
+    ?.approvedChannel?.channelType === "email"
+    ? state.prospectQualifications[item.id]!.approvedChannel!.value
+    : (item.emailEligibility?.recipient || "");
+  if (mailTo && !mailTo.value.trim()) mailTo.value = approvedEmail;
+  let draft = localProspectMailTemplate(item);
+  let engineNote = "本地模板";
+  if (button) button.disabled = true;
+  try {
+    const result = await api<{
+      draft: { subject: string; body: string };
+      readiness: { aiGenerated: boolean; aiError: string };
+    }>("/api/development-email/draft", {
+      method: "POST",
+      body: JSON.stringify({
+        entityType: "prospect",
+        entityId: item.id,
+        scenario: "first_touch"
+      })
+    });
+    if (result.draft?.subject && result.draft?.body) {
+      draft = { subject: result.draft.subject, body: result.draft.body };
+      engineNote = result.readiness?.aiGenerated ? "AI 生成" : "基础模板";
+    }
+  } catch {
+    engineNote = "本地模板（服务不可用）";
+  } finally {
+    if (button) button.disabled = false;
+  }
+  if (subject) subject.value = draft.subject;
+  if (body) body.value = draft.body;
   renderProspectMailPreview();
+  toast(`开发信草稿已生成（${engineNote}）`);
 }
 
 const PROSPECT_QUALIFICATION_REASON_LABELS: Record<string, string> = {
@@ -23376,6 +29325,7 @@ function renderProspectQualificationPanel(item: WebsiteOpportunity) {
 
 function focusProspectQualification(item: WebsiteOpportunity, step?: ProspectQualificationViewApi["nextStep"]) {
   state.selectedProspectId = item.id;
+  prospectOutreachGateOpenId = item.id;
   if (step === "resolve_identity") prospectTechnicalAuditOpenId = item.id;
   renderProspectList();
   window.requestAnimationFrame(() => {
@@ -23540,7 +29490,7 @@ function openProspectChannelQualification(item: WebsiteOpportunity) {
       <div class="form-field full"><label>联系方式</label><input id="prospectChannelValue" value="${escapeHtml(email || item.contactInfo)}"></div>
       <div class="form-field full"><label>公开来源 URL</label><input id="prospectChannelSource" value="${escapeHtml(item.website)}"></div>
       <div class="form-field"><label>有效至</label><input id="prospectChannelExpires" type="date" value="${daysFromNow(30)}"></div>
-      <label class="form-check full"><input id="prospectChannelConfirmed" type="checkbox">我已在该官方来源逐字核对联系方式，确认不是搜索摘要或 AI 生成内容</label>
+      <label class="form-check full"><input id="prospectChannelConfirmed" type="checkbox">我已打开证据链接，确认该联系方式仍在官网公开展示，可以用于本次业务触达</label>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="prospectChannelSubmit">保存渠道核验</button>`);
   qs<HTMLButtonElement>("#prospectChannelSubmit")?.addEventListener("click", (event) => {
@@ -23686,7 +29636,7 @@ function identityBootstrapProviderHint(provider?: ProspectIdentityBootstrapProvi
         : `${provider.name} 需要先配置 API Key；任务不会在未配置时创建。`
       : `${provider.name} 当前不可执行，请先到数据源中心检查连接。`;
   }
-  return `${provider.name} 已可执行。${provider.setupNote}系统只调用正式 API，不访问或抓取企业官网。`;
+  return `${provider.name} is ready. ${provider.setupNote} This source uses official APIs only and does not review company websites.`;
 }
 
 function renderProspectIdentityBootstrapPanel(item: WebsiteOpportunity) {
@@ -23721,7 +29671,7 @@ function renderProspectIdentityBootstrapPanel(item: WebsiteOpportunity) {
       <summary>查看任务详情</summary>
       <div class="prospect-identity-result ${attempt.outcome === "linked" ? "is-linked" : attempt.outcome === "pending" ? "" : "is-failed"}">
         <b>${escapeHtml(PROSPECT_IDENTITY_OUTCOME_LABELS[attempt.outcome])}</b>
-        <span>${escapeHtml(attempt.errorMessage || (attempt.outcome === "linked" ? "候选已进入正式企业与团队覆盖链，下一步仍需完成四步资格审查。" : progress?.currentAction || "任务阶段会持续刷新。"))}</span>
+        <span>${escapeHtml(attempt.errorMessage || (attempt.outcome === "linked" ? "候选已进入正式企业与团队覆盖链。" : progress?.currentAction || "任务阶段会持续刷新。"))}</span>
       </div>
       ${progress ? `<div class="prospect-identity-metrics"><span>进度 <b>${progress.progress}%</b></span><span>来源 <b>${progress.settledSources}/${progress.sourceCount}</b></span><span>候选 <b>${progress.candidateCount}</b></span><span>清洗 <b>${progress.filteredCount}</b></span></div>` : ""}
       ${candidates.length ? `<div class="prospect-identity-candidates">${candidates.map((candidate) => `<div><b>${escapeHtml(candidate.company || "公司名待确认")}</b><span>${escapeHtml([candidate.country, candidate.source, candidate.verificationLevel].filter(Boolean).join(" · "))}</span></div>`).join("")}</div>` : attempt.taskStatus === "running" ? `<p class="prospect-probe-summary">正在等待权威来源返回并完成候选清洗。</p>` : ""}
@@ -23739,7 +29689,7 @@ function renderProspectIdentityBootstrapPanel(item: WebsiteOpportunity) {
   return `
     <section class="prospect-identity-panel">
       ${taskHeader}
-      <p class="prospect-probe-summary">官网链接和低频官网验证都不能建立正式企业身份。系统只接受 GLEIF、Companies House、SEC 或法国企业登记返回的强注册标识。</p>
+      <p class="prospect-probe-summary">官网链接和官网公开资料核验都不能建立正式企业身份。系统只接受 GLEIF、Companies House、SEC 或法国企业登记返回的强注册标识。</p>
       ${taskDetail}
       ${canStart ? `<div class="prospect-identity-form">
         <label><span>权威来源</span><select id="prospectIdentityProvider">${options || `<option value="">正在读取数据源</option>`}</select></label>
@@ -23922,7 +29872,7 @@ async function startProspectIdentityBootstrap(
     return;
   }
   button.disabled = true;
-  button.textContent = "正在创建任务";
+  button.textContent = "Creating task";
   try {
     const result = await api<{
       taskStatus: "running" | "ended";
@@ -23942,7 +29892,7 @@ async function startProspectIdentityBootstrap(
     if (view) view.attempts = item.identityBootstrapAttempts;
     closeModal();
     renderProspectDetail(item);
-    if (result.taskStatus === "ended") toast("身份核验已结束，可在详情查看结果");
+    if (result.taskStatus === "ended") toast("Identity review completed. See the detail panel for results.");
     else pollProspectIdentityBootstrap(item, result.attempt.id);
   } catch (error) {
     toast(error instanceof Error ? error.message : "企业身份核验启动失败", "error");
@@ -23966,26 +29916,28 @@ function bindProspectIdentityBootstrapActions(root: ParentNode, item: WebsiteOpp
 }
 
 const WEBSITE_PROBE_STAGE_LABELS: Record<WebsiteProbeStage, string> = {
-  queued: "排队",
-  dns: "DNS 安全检查",
-  robots: "robots 规则",
-  head: "首页预检",
-  body: "正文样本",
-  contact_page: "联系页",
-  evidence: "最小证据",
-  completed: "结束",
-  failed: "结束"
+  queued: "Queued",
+  dns: "DNS check",
+  robots: "Access policy check",
+  head: "Homepage pre-check",
+  body: "Public content review",
+  contact_page: "Contact page review",
+  ai_extract: "AI-assisted extraction",
+  evidence: "Evidence review",
+  completed: "Completed",
+  failed: "Ended"
 };
 
 const WEBSITE_PROBE_OUTCOME_LABELS: Record<WebsiteProbeAttempt["outcome"], string> = {
-  pending: "等待结果",
-  evidence_found: "取得官网公开证据",
-  no_evidence: "未取得公开邮箱或组织证据",
-  robots_denied: "站点策略禁止访问",
-  unreachable: "官网暂时不可达",
-  policy_blocked: "安全策略阻止访问",
-  rate_limited: "站点触发限流",
-  circuit_open: "同域连续失败已熔断"
+  pending: "Pending",
+  evidence_found: "Public evidence identified",
+  no_evidence: "No reliable public contact or organization evidence",
+  robots_denied: "Site access policy declined",
+  unreachable: "Official site temporarily unavailable",
+  policy_blocked: "Security policy blocked the request",
+  rate_limited: "Site request limit reached",
+  circuit_open: "Temporary same-domain pause",
+  interrupted: "Review interrupted"
 };
 
 let activeWebsiteProbeStream: EventSource | null = null;
@@ -24007,6 +29959,7 @@ function latestContactEnrichment(item: WebsiteOpportunity) {
 
 const WEBSITE_DISCOVERY_PROVIDER_IDS = new Set([
   "ai_search",
+  "anysearch",
   "wikidata",
   "brave",
   "serper",
@@ -24025,20 +29978,20 @@ function renderWebsiteDiscoverySourceGuide() {
   return `
     <div class="prospect-website-source-guide">
       <div class="prospect-website-source-guide-head">
-        <div><b>可用的官网发现来源</b><span>免费兜底覆盖有限，配置搜索接口后会自动按顺序补查。</span></div>
-        ${configurable ? `<button class="btn" type="button" data-website-source-config="${escapeHtml(configurable.id)}">配置数据源</button>` : ""}
+        <div><b>Available official-site sources</b><span>Coverage from free sources is limited. Configured search sources will be checked in sequence.</span></div>
+        ${configurable ? `<button class="btn" type="button" data-website-source-config="${escapeHtml(configurable.id)}">Configure source</button>` : ""}
       </div>
       <div class="prospect-website-source-list">
         ${providers.map((provider) => {
           const ready = provider.ready && provider.enabled;
           const isAiSearch = provider.id === "ai_search";
           const stateText = isAiSearch
-            ? ready ? "模型已配置" : "待配置模型"
+            ? ready ? "Web Search verified" : provider.hasApiKey ? "Web Search not tested" : "Model not configured"
             : provider.requiresKey
-            ? ready ? "已连接" : "待配置"
-            : "内置免费";
+            ? ready ? "Connected" : "Not configured"
+            : "Built-in free source";
           const note = isAiSearch
-            ? `${provider.costNote} 官网补全要求模型接口支持 Responses Web Search。`
+            ? `${provider.costNote} Official-site discovery requires a model interface with Responses Web Search.`
             : provider.costNote;
           return `<div><b>${escapeHtml(provider.name)}</b><span>${escapeHtml(note)}</span><em class="${ready ? "is-ready" : ""}">${stateText}</em></div>`;
         }).join("")}
@@ -24051,34 +30004,34 @@ function renderWebsiteDiscoveryPanel(item: WebsiteOpportunity) {
   if (!attempt) {
     return `
       <section class="prospect-probe-panel">
-        <div class="prospect-probe-head"><div><b>官网发现链路</b><small>来源官网 · 搜索 API · 域名校验</small></div>${badge("等待处理", "gray")}</div>
-        <p class="prospect-probe-summary">候选完成清洗后，系统会先确认官网，再进入国外官网联系方式验证。</p>
+        <div class="prospect-probe-head"><div><b>Official-site discovery</b><small>Source website · Search API · Domain validation</small></div>${badge("Pending", "gray")}</div>
+        <p class="prospect-probe-summary">After candidate review, the system confirms the official site before reviewing public contact channels for eligible international sites.</p>
       </section>`;
   }
   const successful = attempt.outcome === "source_provided" || attempt.outcome === "discovered";
   const outcomeLabel = attempt.outcome === "source_provided"
-    ? "来源自带"
+        ? "Source provided"
     : attempt.outcome === "discovered"
-      ? "搜索确认"
+      ? "Search confirmed"
       : attempt.outcome === "not_found"
-        ? "未确认"
+        ? "Not confirmed"
         : attempt.outcome === "provider_unavailable"
-          ? "缺少搜索源"
-          : "搜索失败";
+          ? "Search source unavailable"
+          : "Search failed";
   const candidates = attempt.candidates.length
     ? `<div class="prospect-probe-detail"><b>候选域名</b><span>${attempt.candidates.map((candidate) => `${escapeHtml(candidate.website)}（${candidate.score} 分）`).join("；")}</span></div>`
     : "";
   return `
     <section class="prospect-probe-panel">
-      <div class="prospect-probe-head"><div><b>官网发现链路</b><small>${escapeHtml(attempt.providerId || "原始数据源")} · 名称与域名校验</small></div>${badge(outcomeLabel, successful ? "green" : "amber")}</div>
+      <div class="prospect-probe-head"><div><b>Official-site discovery</b><small>${escapeHtml(attempt.providerId || "Original source")} · Name and domain validation</small></div>${badge(outcomeLabel, successful ? "green" : "amber")}</div>
       <div class="prospect-probe-result ${successful ? "has-evidence" : "is-neutral"}">
-        <b>${escapeHtml(attempt.selectedWebsite || "未取得可信官网")}</b>
+        <b>${escapeHtml(attempt.selectedWebsite || "No trusted official site identified")}</b>
         <span>${escapeHtml(attempt.reason)}</span>
       </div>
       ${candidates}
       ${successful ? "" : renderWebsiteDiscoverySourceGuide()}
       <div class="prospect-probe-timeline">
-        ${attempt.events.map((entry) => `<div class="prospect-probe-event ${escapeHtml(entry.status)}"><span></span><div><b>${escapeHtml(entry.stage)}</b><small>${escapeHtml(entry.message)}</small></div><time>${formatTime(entry.createdAt)}</time></div>`).join("")}
+        ${attempt.events.map((entry) => `<div class="prospect-probe-event ${escapeHtml(entry.status)}"><span></span><div><b>${escapeHtml(entry.stage)}</b><small>${escapeHtml(leadFinderDisplayText(entry.message))}</small></div><time>${formatTime(entry.createdAt)}</time></div>`).join("")}
       </div>
     </section>`;
 }
@@ -24098,16 +30051,16 @@ function websiteProbePolicyBlockReason(item: WebsiteOpportunity) {
   ]);
   if (blockedCountries.has(country)) {
     return country
-      ? "按安全策略，中国、港澳台网站不执行自动读取"
-      : "国家信息不明确，安全策略不会自动访问官网";
+      ? "Under the access policy, sites in China, Hong Kong, Macao, and Taiwan are not reviewed automatically"
+      : "The country is unclear, so the access policy will not review the site automatically";
   }
   try {
     const hostname = new URL(item.website).hostname.toLocaleLowerCase("en-US");
     if (/\.(?:cn|中国|hk|mo|tw)$/iu.test(hostname)) {
-      return "该官网域名属于中国或港澳台范围，系统不会自动访问";
+      return "This domain is within China, Hong Kong, Macao, or Taiwan; it will not be reviewed automatically";
     }
   } catch {
-    return "官网地址无效，无法进入安全验证队列";
+    return "The website address is invalid and cannot enter the secure review queue";
   }
   return "";
 }
@@ -24140,56 +30093,74 @@ function websiteContactDisplay(item: WebsiteOpportunity) {
   if (value) {
     return {
       value,
-      detail: item.contact?.trim() || "官网公开联系方式，触达前请人工确认",
+      detail: item.contact?.trim() || "Public contact detail from the official site; confirm it before outreach",
       tone: "ready"
     };
   }
   if (!item.website?.trim()) {
     const discovery = latestWebsiteDiscovery(item);
     return {
-      value: "官网待补",
-      detail: discovery?.reason || "官网发现阶段尚未完成",
+      value: "Official site pending",
+      detail: discovery?.reason || "Official-site discovery is not complete",
       tone: discovery?.status === "failed" ? "blocked" : "empty"
     };
   }
   if (!/^https:\/\//iu.test(item.website)) {
-    return { value: "官网地址待维护", detail: "自动验证仅接受 HTTPS 官网", tone: "empty" };
+    return { value: "Website address needs review", detail: "Automated review accepts HTTPS websites only", tone: "empty" };
   }
   const policyBlockReason = websiteProbePolicyBlockReason(item);
   if (policyBlockReason) {
-    return { value: "不自动访问", detail: policyBlockReason, tone: "blocked" };
+    return { value: "Automatic review unavailable", detail: policyBlockReason, tone: "blocked" };
   }
   const attempt = latestWebsiteProbe(item);
   if (!attempt) {
-    return { value: "等待后台补全", detail: "后台会按低频队列自动验证", tone: "pending" };
+    return { value: "Pending background review", detail: "The task will run through the controlled queue", tone: "pending" };
   }
   if (attempt.status === "queued") {
-    return { value: "等待后台补全", detail: "官网验证任务已排队", tone: "pending" };
+    return { value: "Pending background review", detail: "The website review task is queued", tone: "pending" };
   }
   if (attempt.status === "running") {
     const stage = attempt.events.at(-1)?.stage;
     return {
-      value: "官网补全中",
-      detail: stage ? `当前阶段：${WEBSITE_PROBE_STAGE_LABELS[stage]}` : "正在受控读取官网公开信息",
+      value: "Official-site review in progress",
+      detail: stage ? `Current stage: ${WEBSITE_PROBE_STAGE_LABELS[stage]}` : "Reviewing public company information under controlled access rules",
       tone: "running"
     };
   }
-  if (["unreachable", "rate_limited", "circuit_open"].includes(attempt.outcome)) {
+  if (attempt.outcome === "interrupted") {
     return {
-      value: "官网暂不可达",
+      value: "Official-site review interrupted",
+      detail: attempt.failureMessage || "The background service restarted or the task made no progress. You can start it again.",
+      tone: "blocked"
+    };
+  }
+  if (["unreachable", "rate_limited", "circuit_open"].includes(attempt.outcome)) {
+    const failureLabels: Record<string, string> = {
+      HTTP_404: "Website address is no longer valid",
+      DNS_NOT_FOUND: "Website domain could not be resolved",
+      NETWORK_TIMEOUT: "Website response timed out",
+      TLS_CERTIFICATE_INVALID: "Website certificate issue",
+      CONNECTION_REFUSED: "Website declined the HTTPS connection",
+      HTTP_401: "Website declined the request",
+      HTTP_403: "Website declined the request",
+      HTTP_406: "Website declined the request",
+      DOMAIN_CIRCUIT_OPEN: "Website review is temporarily paused"
+    };
+    return {
+      value: failureLabels[attempt.failureCode] || "Official site temporarily unavailable",
       detail: attempt.failureMessage || WEBSITE_PROBE_OUTCOME_LABELS[attempt.outcome],
       tone: "blocked"
     };
   }
   if (attempt.outcome === "robots_denied") {
-    return { value: "站点不允许自动验证", detail: "可人工打开官网核对", tone: "blocked" };
+    return { value: "Site policy declined the request", detail: "Open the official site manually to verify", tone: "blocked" };
   }
   if (attempt.outcome === "policy_blocked") {
-    return { value: "访问策略未通过", detail: attempt.failureMessage || "需人工核对官网", tone: "blocked" };
+    return { value: "Access policy not satisfied", detail: attempt.failureMessage || "Manual website verification is required", tone: "blocked" };
   }
   return {
-    value: "官网未公开联系方式",
-    detail: "已完成验证，可从右侧报告查看过程",
+    value: "No public contact details identified",
+    detail: "Review completed. See the report on the right for the process.",
     tone: "empty"
   };
 }
@@ -24200,7 +30171,7 @@ function websiteContactPersonDisplay(item: WebsiteOpportunity) {
     && !/^(?:待维护|待确认|未知|-|—)$/u.test(recommended.contactName)) {
     return {
       value: recommended.contactName,
-      detail: recommended.contactTitle || `${recommended.sourceLabel}公开联系人`,
+      detail: recommended.contactTitle || `${recommended.sourceLabel} public contact`,
       tone: "ready"
     };
   }
@@ -24222,22 +30193,22 @@ function websiteContactPersonDisplay(item: WebsiteOpportunity) {
     && extractedExplicitLooksLikeName) {
     return {
       value: explicit,
-      detail: extracted?.title || "联系人职务待补",
+      detail: extracted?.title || "Contact title not identified",
       tone: "ready"
     };
   }
   if (extracted) {
     return {
       value: extracted.name,
-      detail: extracted.title || "官网公开联系人，待人工确认",
+      detail: extracted.title || "Public contact from the official site; manual confirmation recommended",
       tone: "ready"
     };
   }
   const attempt = latestWebsiteProbe(item);
   if (attempt?.status === "queued" || attempt?.status === "running") {
-    return { value: "联系人补全中", detail: "正在核对国外官网公开信息", tone: "pending" };
+    return { value: "Contact review in progress", detail: "Reviewing public information from an eligible international site", tone: "pending" };
   }
-  return { value: "联系人待补", detail: "公开来源未提供联系人姓名", tone: "empty" };
+  return { value: "Contact name pending", detail: "No contact name was provided by the public sources", tone: "empty" };
 }
 
 function prospectLookupDiagnosis(item: WebsiteOpportunity) {
@@ -24253,58 +30224,66 @@ function prospectLookupDiagnosis(item: WebsiteOpportunity) {
   const suggestions: string[] = [];
   if (!item.website?.trim()) {
     const discovery = latestWebsiteDiscovery(item);
-    reasons.push(discovery?.reason || "候选来源没有提供企业官网，官网发现阶段尚未完成。");
+    reasons.push(discovery?.reason || "The candidate source did not provide an official site, and official-site discovery is not complete.");
     suggestions.push(discovery?.outcome === "provider_unavailable"
-      ? "系统会先尝试 OpenAI 原生联网和免费 Wikidata；仍未找到时可配置 Brave Search、Serper、SerpApi 或 Google Places。"
-      : "可查看官网发现链路中的候选域名和可信评分，或人工补充官网。");
+      ? "The system will first try OpenAI Web Search and free Wikidata. You can configure Brave Search, Serper, SerpApi, or Google Places if needed."
+      : "Review the candidate domains and confidence scores in Official-site discovery, or add the official site manually.");
   } else if (!/^https:\/\//iu.test(item.website)) {
-    reasons.push("当前网址不是 HTTPS 官网，不符合自动验证的安全要求。");
-    suggestions.push("人工确认官网地址并改为正确的 HTTPS 链接后重试。");
+    reasons.push("The current address is not an HTTPS official site and does not meet the secure review requirements.");
+    suggestions.push("Confirm the address manually, replace it with the correct HTTPS link, and try again.");
   } else if (websiteProbePolicyBlockReason(item)) {
     reasons.push(websiteProbePolicyBlockReason(item));
-    suggestions.push("仅可由业务员人工打开官网核对，系统不会绕过国家与域名限制。");
+    suggestions.push("Open the official site manually. The system will not bypass country or domain restrictions.");
   } else if (!attempt) {
-    reasons.push("候选已经进入后台补全范围，但尚未产生官网核验记录。");
-    suggestions.push("可等待后台队列，或在报告下方手动启动一次官网验证。");
+    reasons.push("The candidate is eligible for background completion, but no website review record exists yet.");
+    suggestions.push("Wait for the background queue, or start one website review from the report below.");
   } else if (attempt.status === "queued") {
-    reasons.push("官网验证任务已排队，当前还没有开始访问官网。");
-    suggestions.push("无需重复提交；任务执行后结果会自动更新。");
+    reasons.push("The website review task is queued and has not started yet.");
+    suggestions.push("No resubmission is needed. Results will update when the task runs.");
   } else if (attempt.status === "running") {
     const stage = attempt.events.at(-1)?.stage;
     reasons.push(stage
-      ? `官网仍在验证，当前进行到“${WEBSITE_PROBE_STAGE_LABELS[stage]}”。`
-      : "官网仍在受控低频验证中，当前不是最终结果。");
-    suggestions.push("等待当前任务结束，页面会自动刷新联系人和联系方式。");
+      ? `Official-site review is in progress at “${WEBSITE_PROBE_STAGE_LABELS[stage]}”.`
+      : "Official-site review is in progress under controlled access rules; this is not the final result.");
+    suggestions.push("Wait for the task to finish. The page will update the contact details automatically.");
   } else {
     reasons.push(WEBSITE_PROBE_OUTCOME_LABELS[attempt.outcome]);
     if (attempt.failureMessage) reasons.push(attempt.failureMessage);
-    if (["unreachable", "rate_limited", "circuit_open"].includes(attempt.outcome)) {
-      suggestions.push("网站可能临时不可用，可稍后重新验证一次。");
+    if (attempt.outcome === "interrupted") {
+      suggestions.push("This task did not establish site availability. You can start the review again.");
+    } else if (attempt.failureCode === "HTTP_404" || attempt.failureCode === "DNS_NOT_FOUND") {
+      suggestions.push("Confirm the official site address. The system will try the same-domain homepage before treating the site as unavailable.");
+    } else if (attempt.failureCode === "TLS_CERTIFICATE_INVALID") {
+      suggestions.push("The website certificate has a security issue. The system will not bypass certificate validation; verify manually or wait for the site to be fixed.");
+    } else if (["HTTP_401", "HTTP_403", "HTTP_406"].includes(attempt.failureCode)) {
+      suggestions.push("The site declined the request. Open the official site manually; the system will not imitate a login or bypass site restrictions.");
+    } else if (["unreachable", "rate_limited", "circuit_open"].includes(attempt.outcome)) {
+      suggestions.push("The site may be responding slowly or limiting requests. Try the review again later.");
     } else if (["robots_denied", "policy_blocked"].includes(attempt.outcome)) {
-      suggestions.push("系统不会绕过网站规则，请由业务员人工打开官网核对。");
+      suggestions.push("The system will not bypass website rules. Ask the account owner to verify the official site manually.");
     } else {
-      suggestions.push("可人工查看官网联系页，或从原始公开来源补充业务联系人。");
+      suggestions.push("Review the official contact page manually, or add a business contact from the original public source.");
     }
   }
   if (!personReady && channelReady) {
-    reasons.push("已找到公司级联系渠道，但公开页面没有可可靠识别的联系人姓名和职务。");
-    suggestions.push("可先使用公司级渠道触达，并在首封邮件中确认具体对接人。");
+    reasons.push("A company-level channel was found, but no reliable contact name or title was identified on the public pages.");
+    suggestions.push("Use the company-level channel first and confirm the right contact in the first message.");
   } else if (personReady && !channelReady) {
-    reasons.push("已识别联系人姓名，但公开页面没有与其对应的可用邮箱、电话或 WhatsApp。");
-    suggestions.push("请勿猜测邮箱，可通过官网表单或公司总机确认联系渠道。");
+    reasons.push("A contact name was identified, but no matching email, phone number, or WhatsApp channel was found on the public pages.");
+    suggestions.push("Do not guess an email address. Confirm the channel through the official contact form or company switchboard.");
   }
   return {
     pending,
     title: pending
-      ? "联系方式仍在查询，不是最终结果"
+      ? "Contact review is still in progress"
       : !personReady && !channelReady
-        ? "本次未找到联系人和联系方式"
+        ? "No contact or contact channel was identified"
         : !personReady
-          ? "未找到可确认的联系人姓名"
-          : "未找到可用联系方式",
+          ? "No verifiable contact name was identified"
+          : "No usable contact channel was identified",
     summary: pending
-      ? "系统会在后台任务结束后自动更新，无需停留等待。"
-      : "这不代表企业不存在，只表示当前授权来源和受控官网范围内没有取得足够信息。",
+      ? "The background task will update this automatically when it finishes; you do not need to wait here."
+      : "This does not mean the company is inactive. It means the available authorized sources and controlled site review did not provide enough evidence.",
     reasons: [...new Set(reasons)],
     suggestions: [...new Set(suggestions)],
     attempt
@@ -24319,14 +30298,14 @@ function renderProspectLookupDiagnosis(item: WebsiteOpportunity) {
     <section class="lead-lookup-diagnosis ${diagnosis.pending ? "is-pending" : ""}" id="leadFinderLookupDiagnosis" tabindex="-1">
       <div class="lead-lookup-diagnosis-head">
         <div><b>${escapeHtml(diagnosis.title)}</b><span>${escapeHtml(diagnosis.summary)}</span></div>
-        ${badge(diagnosis.pending ? "查询中" : "未找到", diagnosis.pending ? "blue" : "amber")}
+        ${badge(diagnosis.pending ? "In progress" : "Not identified", diagnosis.pending ? "blue" : "amber")}
       </div>
-      <div><b>原因</b><ul>${diagnosis.reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div>
-      <div><b>下一步</b><ul>${diagnosis.suggestions.map((suggestion) => `<li>${escapeHtml(suggestion)}</li>`).join("")}</ul></div>
+      <div><b>Reason</b><ul>${diagnosis.reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div>
+      <div><b>Next step</b><ul>${diagnosis.suggestions.map((suggestion) => `<li>${escapeHtml(suggestion)}</li>`).join("")}</ul></div>
       <div class="lead-lookup-diagnosis-facts">
-        <span>来源：${escapeHtml(item.sourceLabel || item.source || "人工登记")}</span>
-        <span>官网验证：${escapeHtml(diagnosis.attempt ? WEBSITE_PROBE_OUTCOME_LABELS[diagnosis.attempt.outcome] : "尚未执行")}</span>
-        <span>最后阶段：${escapeHtml(latestEvent ? WEBSITE_PROBE_STAGE_LABELS[latestEvent.stage] : "无记录")}</span>
+        <span>Source: ${escapeHtml(item.sourceLabel || item.source || "Manual entry")}</span>
+        <span>Website review: ${escapeHtml(diagnosis.attempt ? WEBSITE_PROBE_OUTCOME_LABELS[diagnosis.attempt.outcome] : "Not started")}</span>
+        <span>Latest stage: ${escapeHtml(latestEvent ? WEBSITE_PROBE_STAGE_LABELS[latestEvent.stage] : "No record")}</span>
       </div>
     </section>`;
 }
@@ -24351,9 +30330,9 @@ function renderWebsiteProbePanel(
   if (!attempt) {
     return `
       <section class="prospect-probe-panel">
-        <div class="prospect-probe-head"><div><b>国外官网低频验证</b><small>仅国外网站 · 首页 + 单个同域联系页</small></div>${badge("尚未执行", "gray")}</div>
-        <p class="prospect-probe-summary">仅允许国外候选的非中国、港澳台官网；只读取 robots.txt、官网首页和一个同域联系页，不继续跟踪链接、不下载文件、不保存网页原文。</p>
-        ${canStart ? `<button class="btn" type="button" id="${buttonId}">验证官网并查找公开联系方式</button>` : ""}
+        <div class="prospect-probe-head"><div><b>Official-site review</b><small>Eligible international sites · Homepage + one same-domain contact page</small></div>${badge("Not started", "gray")}</div>
+        <p class="prospect-probe-summary">Only eligible international sites are reviewed under controlled access rules. AI organizes public contact details that actually appear on the reviewed pages; it does not guess data, download files, or retain source text.</p>
+        ${canStart ? `<button class="btn" type="button" id="${buttonId}">Review site for public contacts</button>` : ""}
       </section>`;
   }
   const terminal = attempt.status === "completed" || attempt.status === "failed";
@@ -24361,26 +30340,26 @@ function renderWebsiteProbePanel(
   return `
     <section class="prospect-probe-panel">
       <div class="prospect-probe-head">
-        <div><b>官网低频验证</b><small>${escapeHtml(attempt.domain)} · ${escapeHtml(attempt.policyVersion)}</small></div>
-        ${badge(terminal ? "已结束" : attempt.status === "running" ? "验证中" : "排队中", terminal ? "gray" : "amber")}
+        <div><b>Official-site review</b><small>${escapeHtml(attempt.domain)} · ${escapeHtml(attempt.policyVersion)}</small></div>
+        ${badge(terminal ? "Ended" : attempt.status === "running" ? "In progress" : "Queued", terminal ? "gray" : "amber")}
       </div>
       <div class="prospect-probe-result ${attempt.outcome === "evidence_found" ? "has-evidence" : "is-neutral"}">
         <b>${escapeHtml(WEBSITE_PROBE_OUTCOME_LABELS[attempt.outcome])}</b>
-        <span>${terminal ? "详细结果不会改变企业或 ICP 硬门禁；官网证据只能用于补充交叉验证。" : "正在按阶段执行，结果会实时追加。"}</span>
+        <span>${terminal ? "The result does not change company or ICP gates; site evidence is used only for supporting cross-checks." : "Stages are running and results will be appended in real time."}</span>
       </div>
       ${evidence ? `<dl class="prospect-probe-evidence">
-        <div><dt>组织名称</dt><dd>${escapeHtml(evidence.legalName || evidence.organizationName || "未发现")}</dd></div>
-        <div><dt>国家 / 语言</dt><dd>${escapeHtml([evidence.addressCountry, evidence.language].filter(Boolean).join(" · ") || "未发现")}</dd></div>
-        <div><dt>业务类别</dt><dd>${escapeHtml(evidence.businessCategory || "未发现")}</dd></div>
-        <div><dt>公开业务邮箱</dt><dd>${escapeHtml(evidence.publicContactEmail || "未发现")}</dd></div>
-        <div><dt>页面标题</dt><dd>${escapeHtml(evidence.pageTitle || "未发现")}</dd></div>
+        <div><dt>Organization</dt><dd>${escapeHtml(evidence.legalName || evidence.organizationName || "Not identified")}</dd></div>
+        <div><dt>Country / language</dt><dd>${escapeHtml([evidence.addressCountry, evidence.language].filter(Boolean).join(" · ") || "Not identified")}</dd></div>
+        <div><dt>Business category</dt><dd>${escapeHtml(evidence.businessCategory || "Not identified")}</dd></div>
+        <div><dt>Public business email</dt><dd>${escapeHtml(evidence.publicContactEmail || "Not identified")}</dd></div>
+        <div><dt>Page title</dt><dd>${escapeHtml(evidence.pageTitle || "Not identified")}</dd></div>
       </dl>` : ""}
       <div class="prospect-probe-timeline">
-        ${attempt.events.map((event) => `<div class="prospect-probe-event ${event.status}"><span></span><div><b>${escapeHtml(WEBSITE_PROBE_STAGE_LABELS[event.stage])}</b><small>${escapeHtml(event.message)}</small></div><time>${formatTime(event.createdAt)}</time></div>`).join("")}
+        ${attempt.events.map((event) => `<div class="prospect-probe-event ${event.status}"><span></span><div><b>${escapeHtml(WEBSITE_PROBE_STAGE_LABELS[event.stage])}</b><small>${escapeHtml(leadFinderDisplayText(event.message))}</small></div><time>${formatTime(event.createdAt)}</time></div>`).join("")}
       </div>
-      ${attempt.failureMessage ? `<div class="prospect-probe-detail"><b>详细结果</b><span>${escapeHtml(attempt.failureMessage)}</span></div>` : ""}
-      <div class="prospect-probe-foot"><span>robots：${escapeHtml(attempt.robotsDecision)}</span><span>响应：${attempt.httpStatus || "-"}</span><span>正文：${attempt.responseBytes} B</span><span>跳转：${attempt.redirected ? "1 次" : "无"}</span></div>
-      ${canStart && terminal ? `<button class="btn" type="button" id="${buttonId}">重新验证官网联系方式</button>` : ""}
+      ${attempt.failureMessage ? `<div class="prospect-probe-detail"><b>Detailed result</b><span>${escapeHtml(leadFinderDisplayText(attempt.failureMessage))}</span></div>` : ""}
+      <div class="prospect-probe-foot"><span>Access policy: ${escapeHtml(attempt.robotsDecision)}</span><span>Response: ${attempt.httpStatus || "-"}</span><span>Content: ${attempt.responseBytes} B</span><span>Redirects: ${attempt.redirected ? "1" : "None"}</span></div>
+      ${canStart && terminal ? `<button class="btn" type="button" id="${buttonId}">Review site again</button>` : ""}
     </section>`;
 }
 
@@ -24389,10 +30368,13 @@ function renderExtractedContactsPanel(item: WebsiteOpportunity) {
   const attempt = latestContactEnrichment(item);
   const running = attempt?.status === "queued" || attempt?.status === "running";
   const attemptStartedAt = new Date(attempt?.startedAt || attempt?.createdAt || 0).getTime();
+  const attemptDeadlineAt = new Date(attempt?.deadlineAt || 0).getTime();
   const recoverable = Boolean(
     running
     && Number.isFinite(attemptStartedAt)
-    && Date.now() - attemptStartedAt > 60_000
+    && Date.now() > (Number.isFinite(attemptDeadlineAt) && attemptDeadlineAt > 0
+      ? attemptDeadlineAt + 5_000
+      : attemptStartedAt + 4 * 60_000)
     && !(item.websiteProbeAttempts || []).some((probe) =>
       new Date(probe.createdAt).getTime() >= attemptStartedAt
       && (probe.status === "queued" || probe.status === "running")
@@ -24414,81 +30396,86 @@ function renderExtractedContactsPanel(item: WebsiteOpportunity) {
     channelType: legacyChannel.type,
     channelValue: legacyChannel.value,
     sourceId: legacyContact.source,
-    sourceLabel: legacyContact.sourceLabel || (legacyContact.source === "website_probe" ? "境外企业官网" : legacyContact.source),
+    sourceLabel: legacyContact.sourceLabel || (legacyContact.source === "website_probe" ? "Foreign company website" : legacyContact.source),
     confidence: legacyContact.confidence ?? (legacyContact.source === "website_probe" ? 82 : 65),
     verificationStatus: legacyContact.verificationStatus || (legacyContact.source === "website_probe" ? "source_confirmed" : "unverified"),
     reason: legacyContact.source === "website_probe"
-      ? "来自企业官网公开页面"
-      : "来自既有公开来源记录"
+      ? "Public official-site page"
+      : "Existing public-source record"
   } : null);
   const statusText = running
-    ? "多方查询中"
+    ? "Multi-source review in progress"
     : recommendation
-      ? "已找到"
+      ? "Contact found"
       : attempt
-        ? "已查完"
-        : "待查询";
+        ? "Review complete"
+        : "Not started";
   const statusTone = running ? "blue" : recommendation ? "green" : "gray";
   const verificationLabel = (status: string) => status === "verified"
-    ? "已核验"
+    ? "Verified"
     : status === "source_confirmed"
-      ? "来源确认"
+      ? "Source confirmed"
       : status === "syntax_valid"
-        ? "格式有效"
-        : "待人工确认";
+        ? "Format valid"
+        : "Manual confirmation pending";
   const sourceState = (source: NonNullable<WebsiteOpportunity["contactEnrichmentAttempts"]>[number]["sources"][number]) => {
-    if (source.status === "queued" || source.status === "running") return { text: "查询中", cls: "is-running" };
-    if (source.outcome === "contact_found") return { text: `找到 ${source.contactCount}`, cls: "is-found" };
-    if (source.outcome === "not_configured") return { text: "未配置", cls: "is-muted" };
-    if (source.status === "blocked") return { text: "策略阻止", cls: "is-blocked" };
-    if (source.status === "failed") return { text: "查询失败", cls: "is-blocked" };
-    return { text: "未找到", cls: "is-muted" };
+    if (source.status === "queued" || source.status === "running") return { text: "In progress", cls: "is-running" };
+    if (source.outcome === "contact_found") return { text: `Found ${source.contactCount}`, cls: "is-found" };
+    if (source.outcome === "not_needed") return { text: "Not needed", cls: "is-muted" };
+    if (source.outcome === "not_configured") return { text: "Not configured", cls: "is-muted" };
+    if (source.outcome === "timed_out") return { text: "Timed out", cls: "is-blocked" };
+    if (source.status === "blocked") return { text: "Policy blocked", cls: "is-blocked" };
+    if (source.status === "failed") return { text: "Review failed", cls: "is-blocked" };
+    return { text: "Not identified", cls: "is-muted" };
   };
   const channelLine = (c: { emails: string[]; phones: string[]; whatsapp: string[] }) => {
     const parts: string[] = [];
-    if (c.emails.length) parts.push(`<span class="pe-tag">邮箱 ${escapeHtml(c.emails.join(", "))}</span>`);
-    if (c.phones.length) parts.push(`<span class="pe-tag">电话 ${escapeHtml(c.phones.join(", "))}</span>`);
+    if (c.emails.length) parts.push(`<span class="pe-tag">Email ${escapeHtml(c.emails.join(", "))}</span>`);
+    if (c.phones.length) parts.push(`<span class="pe-tag">Phone ${escapeHtml(c.phones.join(", "))}</span>`);
     if (c.whatsapp.length) parts.push(`<span class="pe-tag">WhatsApp ${escapeHtml(c.whatsapp.join(", "))}</span>`);
-    return parts.join(" ") || `<span class="pe-tag">无渠道</span>`;
+    return parts.join(" ") || `<span class="pe-tag">No channel</span>`;
   };
   return `
     <section class="prospect-contact-hub">
       <div class="prospect-contact-hub-head">
-        <div><b>联系人获取</b><small>公开来源 · 联系人接口 · 境外企业官网</small></div>
+        <div><b>Contact enrichment</b><small>Public sources · Contact providers · Eligible international official sites</small></div>
         ${badge(statusText, statusTone)}
       </div>
       ${recommendation ? `
         <div class="prospect-contact-recommendation">
-          <div><span>推荐联系</span><b>${escapeHtml(recommendation.channelValue)}</b><small>${escapeHtml([recommendation.contactName, recommendation.contactTitle].filter(Boolean).join(" · ") || "公司公开渠道")}</small></div>
+          <div><span>Recommended contact</span><b>${escapeHtml(recommendation.channelValue)}</b><small>${escapeHtml([recommendation.contactName, recommendation.contactTitle].filter(Boolean).join(" · ") || "Public company channel")}</small></div>
           <div class="prospect-contact-trust"><strong>${Math.round(recommendation.confidence)}%</strong><span>${escapeHtml(verificationLabel(recommendation.verificationStatus))}</span></div>
           <p>${escapeHtml(recommendation.sourceLabel)} · ${escapeHtml(recommendation.reason)}</p>
         </div>`
-        : `<div class="prospect-contact-empty"><b>${running ? "正在多方查找联系方式" : "当前来源尚未取得可用联系方式"}</b><span>${escapeHtml(attempt?.summary || "开始后会在后台查询，无需停留等待。")}</span></div>`}
+        : `<div class="prospect-contact-empty"><b>${running ? "Reviewing multiple sources" : "No usable contact channel identified from the available sources"}</b><span>${escapeHtml(attempt?.summary || "Start the review and continue working; results will update in the background.")}</span></div>`}
       ${attempt?.sources.length ? `<div class="prospect-contact-sources">
         ${attempt.sources.map((source) => {
           const state = sourceState(source);
           const retryAt = source.retryAfterAt ? new Date(source.retryAfterAt) : null;
           const retryHint = retryAt && !Number.isNaN(retryAt.getTime())
-            ? ` · ${retryAt.toLocaleString("zh-CN", { hour12: false })} 后可重试`
-            : source.retryable ? " · 可稍后重试" : "";
-          return `<div><span class="prospect-contact-source-mark ${state.cls}"></span><p><b>${escapeHtml(source.sourceLabel)}</b><small>${escapeHtml(source.message + retryHint)}</small></p><em class="${state.cls}">${escapeHtml(state.text)}</em></div>`;
+            ? ` · Retry after ${retryAt.toLocaleString("en-US", { hour12: false })}`
+            : source.retryable ? " · Retry later" : "";
+          const taskHint = source.taskId ? ` · Task ${source.taskId}` : "";
+          const evidenceLinks = (source.evidenceUrls || []).slice(0, 3).map((url, index) => `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Evidence ${index + 1}</a>`).join("");
+          return `<div><span class="prospect-contact-source-mark ${state.cls}"></span><p><b>${escapeHtml(leadFinderDisplayText(source.sourceLabel))}</b><small>${escapeHtml(leadFinderDisplayText(source.message) + retryHint + taskHint)}</small>${source.suggestion ? `<small class="prospect-contact-source-advice">Next step: ${escapeHtml(source.suggestion)}</small>` : ""}${evidenceLinks ? `<span class="prospect-contact-source-links">${evidenceLinks}</span>` : ""}</p><em class="${state.cls}">${escapeHtml(state.text)}</em></div>`;
         }).join("")}
       </div>` : ""}
       <div class="prospect-contact-actions">
-        ${item.ownerId === state.user?.id ? `<button class="btn" type="button" id="prospectContactEnrichmentButton" ${running && !recoverable ? "disabled" : ""}>${recoverable ? "恢复查询" : running ? "查询进行中" : attempt ? "继续查找联系人" : "开始查找联系人"}</button>` : ""}
-        <span>AI 仅用于发现候选官网，不生成邮箱或电话</span>
+        ${item.ownerId === state.user?.id ? `<button class="btn prospect-contact-enrichment-button" type="button" id="prospectContactEnrichmentButton" ${running && !recoverable ? "disabled" : ""}>${running && !recoverable ? "查询中" : "深入查询"}</button>` : ""}
+        <span>No qualification review is required first; AI organizes public contact details from the reviewed pages and does not guess channels.</span>
       </div>
-      ${contacts.length ? `<details class="prospect-contact-evidence"><summary>查看 ${contacts.length} 条来源证据</summary>
+      ${contacts.length ? `<details class="prospect-contact-evidence"><summary>View ${contacts.length} source record(s)</summary>
         <div class="prospect-extracted-list">
           ${contacts.map((c) => `
             <div class="prospect-extracted-row ${c.kind === "person" ? "is-person" : "is-company"}">
               <div class="prospect-extracted-head">
-                <b>${escapeHtml(c.name || (c.kind === "person" ? "联系人" : "公司公开联系"))}</b>
-                <span class="prospect-extracted-kind">${escapeHtml(c.sourceLabel || (c.source === "website_probe" ? "境外企业官网" : c.source))} · ${escapeHtml(verificationLabel(c.verificationStatus || (c.source === "website_probe" ? "source_confirmed" : "unverified")))}</span>
+                <b>${escapeHtml(c.name || (c.kind === "person" ? "Contact" : "Public company channel"))}</b>
+                <span class="prospect-extracted-kind">${escapeHtml(c.sourceLabel || (c.source === "website_probe" ? "Foreign company website" : c.source))} · ${escapeHtml(verificationLabel(c.verificationStatus || (c.source === "website_probe" ? "source_confirmed" : "unverified")))}</span>
               </div>
               ${c.title ? `<div class="prospect-extracted-title">${escapeHtml(c.title)}</div>` : ""}
               <div class="prospect-extracted-channels">${channelLine(c)}</div>
-              <div class="prospect-extracted-meta"><span>可信度 ${Math.round(c.confidence ?? (c.source === "website_probe" ? 82 : 65))}%</span><span>${(c.corroboratedSources || []).length > 1 ? `${c.corroboratedSources!.length} 个来源交叉确认` : "单一来源"}</span>${c.evidenceUrl ? `<a class="prospect-extracted-src" href="${escapeHtml(c.evidenceUrl)}" target="_blank" rel="noopener">查看证据</a>` : ""}</div>
+              ${c.evidenceExcerpt ? `<blockquote class="prospect-contact-evidence-quote">${escapeHtml(c.evidenceExcerpt)}</blockquote>` : ""}
+              <div class="prospect-extracted-meta"><span>Confidence ${Math.round(c.confidence ?? (c.source === "website_probe" ? 82 : 65))}%</span><span>${(c.corroboratedSources || []).length > 1 ? `${c.corroboratedSources!.length} sources cross-checked` : "Single source"}</span>${c.evidenceUrl ? `<a class="prospect-extracted-src" href="${escapeHtml(c.evidenceUrl)}" target="_blank" rel="noopener">View evidence</a>` : ""}</div>
             </div>`).join("")}
         </div>
       </details>` : ""}
@@ -24498,7 +30485,7 @@ function renderExtractedContactsPanel(item: WebsiteOpportunity) {
 async function startContactEnrichment(item: WebsiteOpportunity, button?: HTMLButtonElement) {
   if (button) {
     button.disabled = true;
-    button.textContent = "正在启动";
+    button.textContent = "查询中";
   }
   try {
     const result = await api<{
@@ -24516,14 +30503,55 @@ async function startContactEnrichment(item: WebsiteOpportunity, button?: HTMLBut
       renderLeadFinderDetail(item);
     }
     scheduleWebsiteProbeRefresh();
-    toast(result.replayed ? "联系人查询已经在进行" : "已开始多来源联系人查询");
+    toast(result.replayed ? "Contact review is already in progress" : "Multi-source contact review started");
   } catch (error) {
-    toast(error instanceof Error ? error.message : "联系人查询启动失败", "error");
+    toast(error instanceof Error ? error.message : "Could not start contact review", "error");
     if (button) {
       button.disabled = false;
-      button.textContent = "继续查找联系人";
+      button.textContent = "深入查询";
     }
   }
+}
+
+async function enrichSelectedProspectContacts(button?: HTMLButtonElement) {
+  const candidates = state.websiteOpportunities.filter((item) =>
+    state.selectedProspectIds.includes(item.id)
+    && item.ownerId === state.user?.id
+    && item.status !== "excluded"
+  );
+  if (!candidates.length) {
+    toast("Select at least one candidate for contact review", "error");
+    return;
+  }
+  const originalText = button?.textContent || "Review selected contacts";
+  if (button) button.disabled = true;
+  let started = 0;
+  let failed = 0;
+  for (const [index, item] of candidates.entries()) {
+    if (button) button.textContent = `Starting ${index + 1}/${candidates.length}`;
+    try {
+      const result = await api<{
+        opportunity: WebsiteOpportunity;
+      }>(`/api/prospect-list/${encodeURIComponent(item.id)}/contact-enrichment`, {
+        method: "POST",
+        body: JSON.stringify({ force: true })
+      });
+      Object.assign(item, result.opportunity);
+      started += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  renderProspectList();
+  renderLeadFinder(state.websiteOpportunities);
+  scheduleWebsiteProbeRefresh();
+  if (button) {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+  toast(failed
+    ? `${started} started; ${failed} could not start`
+    : `${started} contact review(s) started; results will update automatically`, failed ? "error" : "success");
 }
 
 async function refreshWebsiteProbe(
@@ -24585,7 +30613,7 @@ function streamWebsiteProbe(item: WebsiteOpportunity, attemptId: string) {
 async function startWebsiteProbe(item: WebsiteOpportunity, button?: HTMLButtonElement) {
   if (button) {
     button.disabled = true;
-    button.textContent = "正在排队";
+    button.textContent = "Queuing";
   }
   try {
     const result = await api<{
@@ -24601,15 +30629,15 @@ async function startWebsiteProbe(item: WebsiteOpportunity, button?: HTMLButtonEl
     renderLeadFinder(state.websiteOpportunities);
     const terminal = result.attempt.status === "completed" || result.attempt.status === "failed";
     if (terminal) {
-      toast("官网验证已结束，可在详情查看结果");
+      toast("Official-site review completed. See the detail panel for results.");
     } else {
       streamWebsiteProbe(item, result.attempt.id);
     }
   } catch (error) {
-    toast(error instanceof Error ? error.message : "官网验证启动失败", "error");
+    toast(error instanceof Error ? error.message : "Could not start official-site review", "error");
     if (button) {
       button.disabled = false;
-      button.textContent = "验证官网并查找公开邮箱";
+      button.textContent = "Review site for public contacts";
     }
   }
 }
@@ -24638,39 +30666,20 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
   const status = prospectStatusMeta(item);
   const qualification = state.prospectQualifications[item.id];
   const owner = state.prospectAssignees.find((assignee) => assignee.id === item.ownerId);
-  const canContact = Boolean(
-    qualification?.vqaQualified
-    && qualification.approvedChannel
-  );
+  // 资格审核链已移除：触达补录/回复记录不再依赖资格审核结果。
+  const canContact = true;
   const canWriteOutreach = item.ownerId === state.user?.id;
   const dnc = qualification?.blockers.includes("PROSPECT_DO_NOT_CONTACT");
   const readonly = item.status === "synced" ? "disabled" : "";
   const procurementContext = state.procurementContexts[item.id];
-  const contactPerson = websiteContactPersonDisplay(item);
-  const contactDisplay = websiteContactDisplay(item);
-  const companyReview = item.verificationReport?.level && item.verificationReport.level !== "L0"
-    ? item.verificationReport.levelLabel
-    : item.website
-      ? "公司与官网待确认"
-      : "公司官网待补";
-  const fitReview = item.scorecard?.icpMatch.status === "verified"
-    ? `匹配 ${item.scorecard.icpMatch.score} 分`
-    : item.business || "业务方向待确认";
   box.innerHTML = `
     <div class="prospect-detail-hero">
-      ${badge(status.label, status.tone)} ${badge(`行动优先 ${score}`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} ${badge(duplicate.text, duplicate.tone)}
+      ${badge(status.label, status.tone)} ${badge(`行动优先 ${score}`, score >= 76 ? "green" : score >= 60 ? "amber" : "gray")} ${badge(duplicate.text, duplicate.tone)} ${prospectEmailEligibilityBadge(item)}
       <h2>${escapeHtml(item.company)}</h2>
       <p>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(item.business || "业务待维护")} · ${escapeHtml(websiteDomain(item.website || ""))}</p>
       <p>加入搜客清单：${escapeHtml(formatProspectJoinedAt(item.shortlistedAt || item.createdAt))}</p>
     </div>
-    <section class="prospect-business-review">
-      <div class="prospect-business-review-head"><div><b>业务核验</b><small>公司、联系人、跟进价值</small></div>${badge(qualification?.vqaQualified ? "可转线索" : "待资格审核", qualification?.vqaQualified ? "green" : "amber")}</div>
-      <div class="prospect-business-review-grid">
-        <div><span>公司信息</span><b>${escapeHtml(companyReview)}</b><small>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website) || "官网待补")}</small></div>
-        <div><span>联系人</span><b>${escapeHtml(contactPerson.value)}</b><small title="${escapeHtml(contactDisplay.detail)}">${escapeHtml(contactDisplay.value)}</small></div>
-        <div><span>是否值得跟进</span><b>${escapeHtml(fitReview)}</b><small>行动优先 ${score} 分</small></div>
-      </div>
-    </section>
+    ${renderExtractedContactsPanel(item)}
     <div class="prospect-field-grid">
       <div class="form-field"><label>公司</label><input id="prospectEditCompany" value="${escapeHtml(item.company)}" ${readonly}></div>
       <div class="form-field"><label>官网</label><input id="prospectEditWebsite" value="${escapeHtml(item.website)}" ${readonly}></div>
@@ -24684,17 +30693,21 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
       <div class="prospect-field"><span>最近触达</span><b>${item.lastTouchpointAt ? `${formatTime(item.lastTouchpointAt)} · ${escapeHtml(PROSPECT_CHANNEL_LABELS[item.lastTouchpointChannel || "email"])}` : "尚未记录"}</b></div>
       <div class="prospect-field"><span>最近回复</span><b>${item.lastReplyClassification ? escapeHtml(PROSPECT_REPLY_LABELS[item.lastReplyClassification]) : "尚未记录"}</b></div>
       <div class="prospect-field"><span>下次跟进</span><b>${escapeHtml(item.nextFollowAt || "待安排")}</b></div>
-      <div class="form-field" style="grid-column:1/-1"><label>核验说明</label><textarea id="prospectEditDescription" ${readonly}>${escapeHtml(item.description || "")}</textarea></div>
+      <div class="form-field" style="grid-column:1/-1"><label>候选备注</label><textarea id="prospectEditDescription" ${readonly}>${escapeHtml(item.description || "")}</textarea></div>
       ${item.excludedReason ? `<div class="prospect-field" style="grid-column:1/-1"><span>排除原因</span><b>${escapeHtml(item.excludedReason)}</b></div>` : ""}
     </div>
-    ${renderProspectQualificationPanel(item)}
-    ${renderExtractedContactsPanel(item)}
     <details class="prospect-technical-audit" ${prospectTechnicalAuditOpenId === item.id ? "open" : ""}>
-      <summary><span>技术核验记录</span><small>企业身份、资格门禁、官网证据</small></summary>
+      <summary><span>技术核验记录</span><small>企业身份、官网证据</small></summary>
       <div class="prospect-technical-audit-body">
         ${renderProspectScorecard(item)}
-        ${renderProspectIdentityBootstrapPanel(item)}
         ${renderWebsiteProbePanel(item)}
+      </div>
+    </details>
+    <details class="prospect-ai-research">
+      <summary><span>AI 背调</span><small>联网证据 + 本库资料；只作参考，写回需逐字段确认</small></summary>
+      <div id="prospectResearchResult" class="prospect-research-body">尚未执行背调。点击下方按钮，系统会结合本库资料与合规联网检索生成证据卡。</div>
+      <div class="prospect-action-row">
+        ${canWriteOutreach ? `<button class="btn primary" id="prospectBackgroundResearchButton">一键背调</button>` : ""}
       </div>
     </details>
     <div class="inline-alert"><b>下一步</b><span>${escapeHtml(status.action)}</span></div>
@@ -24702,7 +30715,7 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
     <div class="prospect-action-row">
       ${item.status !== "synced" ? `<button class="btn" id="prospectSaveButton">保存候选资料</button>` : ""}
       ${item.status === "excluded" && !dnc ? `<button class="btn" id="prospectRestoreButton">恢复待核验</button>` : ""}
-      ${qualification?.vqaQualified && item.status !== "synced" ? `<button class="btn primary" id="prospectDetailSyncButton">保留并转为线索</button>` : ""}
+      ${item.status !== "synced" ? `<button class="btn primary" id="prospectDetailSyncButton">转为线索</button>` : ""}
       ${item.status === "synced" && item.leadId ? `<button class="btn primary" id="prospectViewLeadButton">查看线索</button>` : ""}
       ${canWriteOutreach && canContact ? `<button class="btn" id="prospectTouchpointButton">补录历史触达</button><button class="btn" id="prospectReplyButton">记录回复</button>` : ""}
       ${item.lastTouchpointAt ? `<button class="btn" id="prospectTouchpointHistoryButton">查看记录</button>` : ""}
@@ -24721,14 +30734,11 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
     prospectTechnicalAuditOpenId = (event.currentTarget as HTMLDetailsElement).open ? item.id : "";
   });
   bindProspectIdentityBootstrapActions(box, item);
-  bindProspectQualificationActions(box, item);
   qs<HTMLButtonElement>("#prospectContactEnrichmentButton", box)?.addEventListener("click", (event) => void startContactEnrichment(item, event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectBackgroundResearchButton", box)?.addEventListener("click", (event) => void runProspectBackgroundResearch(item, event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectWebsiteProbeButton", box)?.addEventListener("click", (event) => void startWebsiteProbe(item, event.currentTarget as HTMLButtonElement));
   bindProcurementContextActions(box, item, procurementContext);
   if (!procurementContext) void loadProspectProcurementContext(item);
-  if (!qualification && !prospectQualificationLoading.has(item.id)) {
-    void loadProspectQualification(item);
-  }
   if (!prospectIdentityBootstrapViews.has(item.id)
     && !prospectIdentityBootstrapLoading.has(item.id)) {
     void loadProspectIdentityBootstrap(item);
@@ -24741,18 +30751,184 @@ function renderProspectDetail(item?: WebsiteOpportunity | null) {
     mailWorkspace.open = Boolean(item.lastDevelopmentEmailAt);
     mailWorkspace.dataset.prospectId = item.id;
   }
-  const approvedEmail = qualification?.approvedChannel?.channelType === "email"
-    ? qualification.approvedChannel.value
-    : "";
+  // 资格审核链已移除：收件邮箱不再锁定人工批准邮箱，按候选资料自动带入。
+  const suggestedEmail = (item.contactInfo || "")
+    .match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu)?.[0] || "";
   const mailTo = qs<HTMLInputElement>("#prospectMailTo");
   if (mailTo) {
-    if (approvedEmail) mailTo.value = approvedEmail;
-    mailTo.readOnly = Boolean(approvedEmail);
-    mailTo.placeholder = approvedEmail
-      ? "已锁定人工批准邮箱"
-      : "通过客户资格审核后自动锁定批准邮箱";
+    if (suggestedEmail && !mailTo.value) mailTo.value = suggestedEmail;
+    mailTo.readOnly = false;
+    mailTo.placeholder = "收件邮箱";
   }
   renderProspectMailPreview();
+}
+
+interface ProspectBackgroundResearchView {
+  research: {
+    id: string;
+    company: string;
+    country: string;
+    score: number;
+    verdict: string;
+    summary: string;
+    facts: Array<{ label: string; value: string }>;
+    contacts: Array<{ channel: string; value: string }>;
+    opportunities: string[];
+    risks: Array<{ level: "high" | "medium" | "low"; title: string; detail: string }>;
+    sources: Array<{ title: string; url: string; observedAt: string; detail?: string; authority?: string }>;
+    sourceChecks: Array<{ providerName?: string; status: string; message: string }>;
+    nextAction: string;
+    engine: string;
+    completedAt: string;
+  };
+}
+
+const PROSPECT_RESEARCH_FACT_FIELD_MAP: Array<{ label: RegExp; field: "company" | "website" | "business" | "country" }> = [
+  { label: /^主体$/u, field: "company" },
+  { label: /^官网\s*\/\s*域名$/u, field: "website" },
+  { label: /^业务$/u, field: "business" },
+  { label: /^国家\s*\/\s*地区$/u, field: "country" }
+];
+
+function prospectResearchConfidence(authority?: string) {
+  switch (authority) {
+    case "controlled_website": return "高（受控官网）";
+    case "native_web_search": return "中（联网检索引用）";
+    default: return "参考";
+  }
+}
+
+/**
+ * W3 · 候选一键背调：调用 /api/ai-background-research（entityType=prospect），
+ * 以证据卡呈现，落实「不自动覆盖候选资料」——写回必须逐字段勾选确认。
+ */
+async function runProspectBackgroundResearch(item: WebsiteOpportunity, button: HTMLButtonElement) {
+  const box = qs<HTMLElement>("#prospectResearchResult");
+  button.disabled = true;
+  if (box) box.innerHTML = `<div class="empty-cell">背调执行中：正在汇集本库资料与合规联网证据…</div>`;
+  try {
+    const result = await api<ProspectBackgroundResearchView>("/api/ai-background-research", {
+      method: "POST",
+      body: JSON.stringify({ entityType: "prospect", entityId: item.id })
+    });
+    const research = result.research;
+    const writeBackFields = research.facts
+      .map((fact) => {
+        const mapped = PROSPECT_RESEARCH_FACT_FIELD_MAP.find((rule) => rule.label.test(fact.label));
+        if (!mapped) return null;
+        const current = (item[mapped.field] || "").trim();
+        const value = fact.value.trim();
+        if (!value || value === "待核实" || value === current) return null;
+        return { field: mapped.field, label: fact.label, value, current };
+      })
+      .filter((row): row is { field: "company" | "website" | "business" | "country"; label: string; value: string; current: string } => Boolean(row));
+    const riskTone = { high: "red", medium: "amber", low: "gray" } as const;
+    if (box) {
+      box.innerHTML = `
+        <div class="prospect-research-card">
+          <div class="prospect-research-head">
+            ${badge(`背调评分 ${research.score}`, research.score >= 78 ? "green" : research.score >= 60 ? "amber" : "red")}
+            ${badge(escapeHtml(research.verdict), research.score >= 60 ? "green" : "amber")}
+            <small>引擎：${escapeHtml(research.engine)} · ${escapeHtml(formatDateTime(research.completedAt))}</small>
+          </div>
+          <p class="prospect-research-summary">${escapeHtml(research.summary)}</p>
+          <dl class="prospect-research-facts">
+            ${research.facts.map((fact) => `<div><dt>${escapeHtml(fact.label)}</dt><dd>${escapeHtml(fact.value)}</dd></div>`).join("")}
+          </dl>
+          ${research.contacts.length ? `<p class="prospect-research-line"><b>联系方式</b>${research.contacts.map((contact) => `${escapeHtml(contact.channel)}：${escapeHtml(contact.value)}`).join(" · ")}</p>` : ""}
+          ${research.opportunities.length ? `<p class="prospect-research-line"><b>机会点</b>${research.opportunities.map((row) => escapeHtml(row)).join("；")}</p>` : ""}
+          ${research.risks.map((risk) => `<p class="prospect-research-line">${badge(risk.title, riskTone[risk.level])}<span>${escapeHtml(risk.detail)}</span></p>`).join("")}
+          <p class="prospect-research-line"><b>下一步</b>${escapeHtml(research.nextAction)}</p>
+          <details class="prospect-research-sources">
+            <summary>证据来源（${research.sources.length}）与检查记录（${research.sourceChecks.length}）</summary>
+            <ul>
+              ${research.sources.map((source) => `<li>
+                <span>[${escapeHtml(prospectResearchConfidence(source.authority))}]</span>
+                ${/^https?:\/\//i.test(source.url) ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(source.title || source.url)}</a>` : `<b>${escapeHtml(source.title)}</b>`}
+                <small>${source.observedAt ? escapeHtml(formatDateTime(source.observedAt)) : ""}${source.detail ? ` · ${escapeHtml(source.detail)}` : ""}</small>
+              </li>`).join("") || "<li>无外部来源</li>"}
+              ${research.sourceChecks.map((check) => `<li><span>[${escapeHtml(check.providerName || "检查")} · ${escapeHtml(check.status)}]</span><small>${escapeHtml(check.message)}</small></li>`).join("")}
+            </ul>
+          </details>
+          <div class="prospect-action-row">
+            ${writeBackFields.length ? `<div class="prospect-research-writeback">
+              ${writeBackFields.map((row, index) => `<label class="prospect-research-field"><input type="checkbox" data-research-field="${row.field}" data-research-value="${escapeHtml(row.value)}" ${index === 0 ? "checked" : ""}> ${escapeHtml(row.label)}：${escapeHtml(row.current || "（空）")} → <b>${escapeHtml(row.value)}</b></label>`).join("")}
+            </div>` : `<small class="prospect-research-note">本次背调没有与候选字段冲突的可写回信息。</small>`}
+            ${writeBackFields.length ? `<button class="btn" id="prospectResearchWritebackButton">采信并写回</button>` : ""}
+            <button class="btn" id="prospectResearchDismissButton">仅参考</button>
+          </div>
+        </div>`;
+      qs<HTMLButtonElement>("#prospectResearchDismissButton", box)?.addEventListener("click", () => {
+        box.innerHTML = `<div class="empty-cell">已按「仅参考」关闭本次背调结果，未修改任何候选资料。</div>`;
+        toast("背调结果仅作参考，未写回任何字段");
+      });
+      qs<HTMLButtonElement>("#prospectResearchWritebackButton", box)?.addEventListener("click", (event) =>
+        void applyProspectResearchWriteback(item, writeBackFields, event.currentTarget as HTMLButtonElement));
+    }
+    toast(research.sources.length ? `背调完成：${research.sources.length} 条来源证据` : "背调完成：暂无外部来源，结果仅基于本库资料");
+  } catch (error) {
+    if (box) box.innerHTML = `<div class="empty-cell">${escapeHtml(error instanceof Error ? error.message : "背调失败，请稍后重试")}</div>`;
+    toast(error instanceof Error ? error.message : "背调失败", "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function applyProspectResearchWriteback(
+  item: WebsiteOpportunity,
+  fields: Array<{ field: "company" | "website" | "business" | "country"; label: string; value: string; current: string }>,
+  button: HTMLButtonElement
+) {
+  const checked = qsa<HTMLInputElement>("#prospectResearchResult input[data-research-field]")
+    .filter((input) => input.checked);
+  if (!checked.length) {
+    toast("请至少勾选一个要写回的字段", "error");
+    return;
+  }
+  const patch: Record<string, string> = {};
+  checked.forEach((input) => {
+    const field = input.dataset.researchField || "";
+    const value = input.dataset.researchValue || "";
+    if (field && value) patch[field] = value;
+  });
+  if (!patch.company || !patch.website) {
+    if (!patch.company && !item.company) {
+      toast("公司名不能为空，无法写回", "error");
+      return;
+    }
+    if (!patch.website && !item.website) {
+      toast("官网不能为空，无法写回", "error");
+      return;
+    }
+    if (!patch.company) patch.company = item.company;
+    if (!patch.website) patch.website = item.website;
+  }
+  button.disabled = true;
+  try {
+    const result = await api<{ opportunity: WebsiteOpportunity; qualificationInvalidated: boolean }>(
+      `/api/prospect-list/${encodeURIComponent(item.id)}/details`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          ...patch,
+          business: patch.business ?? item.business,
+          country: patch.country ?? item.country,
+          contact: item.contact,
+          contactInfo: item.contactInfo,
+          description: item.description,
+          requestId: prospectRequestId("research-writeback")
+        })
+      }
+    );
+    Object.assign(item, result.opportunity);
+    renderProspectList();
+    renderProspectDetail();
+    toast(`已采信写回 ${Object.keys(patch).length} 个字段${result.qualificationInvalidated ? "；受影响资格步骤已失效，请重新核验" : ""}`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "写回失败", "error");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function saveProspectVerification(item: WebsiteOpportunity, button?: HTMLButtonElement) {
@@ -24795,6 +30971,19 @@ async function saveProspectVerification(item: WebsiteOpportunity, button?: HTMLB
   } finally {
     if (button) button.disabled = false;
   }
+}
+
+/**
+ * W2 · 发信资格灯：把后端下发的 emailEligibility 渲染成三态徽标。
+ * 绿=可发信、黄=缺邮箱、红=已抑制；title 带原始原因码与说明，便于排查。
+ * 判定完全在后端（复用 assertProspectEmailOutreachEligible 的同一套分支），前端只负责呈现。
+ */
+function prospectEmailEligibilityBadge(item: WebsiteOpportunity) {
+  const eligibility = item.emailEligibility;
+  if (!eligibility) return "";
+  const tone = eligibility.ready ? "green" : eligibility.state === "missing_email" ? "amber" : "red";
+  const title = `[${eligibility.code}] ${eligibility.message}`;
+  return `<span class="prospect-eligibility" title="${escapeHtml(title)}">${badge(eligibility.label, tone)}</span>`;
 }
 
 function renderProspectList() {
@@ -24859,6 +31048,9 @@ function renderProspectList() {
     rows.innerHTML = pageRows.length ? pageRows.map((item) => {
       const score = leadFinderScore(item);
       const status = prospectStatusMeta(item);
+      const contactDisplay = websiteContactDisplay(item);
+      const contactAttempt = latestContactEnrichment(item);
+      const contactRunning = contactAttempt?.status === "queued" || contactAttempt?.status === "running";
       return `
         <article class="prospect-item ${item.id === state.selectedProspectId ? "active" : ""}" data-prospect-id="${escapeHtml(item.id)}">
           <input type="checkbox" data-prospect-select="${escapeHtml(item.id)}" ${state.selectedProspectIds.includes(item.id) ? "checked" : ""} aria-label="选择 ${escapeHtml(item.company)}">
@@ -24866,7 +31058,12 @@ function renderProspectList() {
             <div class="prospect-item-top"><h3>${escapeHtml(item.company)}</h3><span class="prospect-score">${score}</span></div>
             <p>${escapeHtml(item.business || "业务待维护")}</p>
             <small>${escapeHtml(item.country || "国家待确认")} · ${escapeHtml(websiteDomain(item.website || ""))}</small>
-            <div class="prospect-meta-row">${badge(status.label, status.tone)}${item.lastDevelopmentEmailAt ? badge("已发开发信", "green") : ""}</div>
+            <div class="prospect-meta-row">${badge(status.label, status.tone)}${prospectEmailEligibilityBadge(item)}${item.lastDevelopmentEmailAt ? badge("已发开发信", "green") : ""}</div>
+            <div class="prospect-contact-quick-row">
+              ${contactDisplay.tone === "ready"
+                ? `<span class="prospect-contact-ready">已找到 · ${escapeHtml(contactDisplay.value)}</span>`
+                : `<button class="prospect-contact-quick" type="button" data-prospect-contact="${escapeHtml(item.id)}" ${contactRunning ? "disabled" : ""}>${contactRunning ? "查询中" : "查联系方式"}</button>`}
+            </div>
             <span class="prospect-next-action">下一步：${escapeHtml(status.action)}</span>
             <div class="prospect-joined-at"><span>加入搜客清单</span><time datetime="${escapeHtml(item.shortlistedAt || item.createdAt)}" title="${escapeHtml(formatProspectJoinedAt(item.shortlistedAt || item.createdAt))}">${escapeHtml(formatProspectJoinedAt(item.shortlistedAt || item.createdAt))}</time></div>
           </div>
@@ -24899,6 +31096,16 @@ function renderProspectList() {
         if (event.key === "Enter" || event.key === " ") select();
       });
     });
+    qsa<HTMLButtonElement>("[data-prospect-contact]", rows).forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const item = state.websiteOpportunities.find((row) => row.id === button.dataset.prospectContact);
+        if (item) {
+          state.selectedProspectId = item.id;
+          void startContactEnrichment(item, button);
+        }
+      });
+    });
   }
   renderProspectDetail(selectedProspect());
 }
@@ -24928,19 +31135,7 @@ async function syncProspects(ids: string[], button?: HTMLButtonElement) {
   const selectedCandidates = state.websiteOpportunities.filter((item) =>
     ids.includes(item.id)
   );
-  await Promise.all(selectedCandidates.map((item) =>
-    loadProspectQualification(item, true)
-  ));
-  const notVqa = selectedCandidates.filter((item) =>
-    !state.prospectQualifications[item.id]?.vqaQualified
-  );
-  if (notVqa.length) {
-    const first = notVqa[0];
-    const view = state.prospectQualifications[first.id];
-    focusProspectQualification(first, view?.nextStep);
-    toast(`有 ${notVqa.length} 条候选未完成客户资格审核，已打开第一条待办`, "error");
-    return;
-  }
+  // 资格审核链已移除：转线索不再要求资格审核通过。
   const invalid = state.websiteOpportunities.filter((item) => ids.includes(item.id) && !["preview", "contactable", "contacted"].includes(item.status));
   if (invalid.length) {
     toast("已排除或已入线索的候选不能重复同步", "error");
@@ -25280,14 +31475,7 @@ async function sendProspectDevelopmentEmail(button?: HTMLButtonElement) {
     toast("请先选择一条搜客线索", "error");
     return;
   }
-  const qualification = state.prospectQualifications[item.id]
-    || await loadProspectQualification(item, false);
-  if (!qualification?.vqaQualified
-    || qualification.approvedChannel?.channelType !== "email") {
-    focusProspectQualification(item, qualification?.nextStep);
-    toast("已为你打开当前缺失的客户资格审核步骤，完成并批准邮件通道后即可发送", "error");
-    return;
-  }
+  // 资格审核链已移除：有发件邮箱即可发送。
   if (!state.user?.outboundEmail) {
     toast("请先在个人主页绑定发件邮箱", "error");
     return;
@@ -25297,11 +31485,6 @@ async function sendProspectDevelopmentEmail(button?: HTMLButtonElement) {
   const body = qs<HTMLTextAreaElement>("#prospectMailBody")?.value.trim() || "";
   if (!to || !subject || body.length < 10) {
     toast("请补齐收件邮箱、主题和正文", "error");
-    return;
-  }
-  if (to.toLocaleLowerCase("en-US")
-    !== qualification.approvedChannel.value.toLocaleLowerCase("en-US")) {
-    toast("收件邮箱必须与客户资格审核批准的邮箱一致", "error");
     return;
   }
   if (button) {
@@ -25354,7 +31537,7 @@ function currentLeadFinderSources() {
     .filter(Boolean);
 }
 
-const superWebProviderPriority = ["serper", "brave", "serpapi"];
+const superWebProviderPriority = ["anysearch", "serper", "brave", "serpapi"];
 
 function superWebProviders(executableOnly = false) {
   return state.leadProviders
@@ -25630,21 +31813,69 @@ function setLeadFinderMode(mode: "standard" | "super") {
   syncLeadFinderStartState();
 }
 
+const OFFICIAL_WEBSITE_SEARCH_PROVIDER_IDS = new Set(["anysearch", "brave", "serper", "serpapi", "google_places"]);
+
+function leadFinderAiReadiness() {
+  const config = state.aiConfig;
+  if (!config?.enabled || !config.hasApiKey || !config.useLeadFinder) {
+    return {
+      ready: false,
+      message: "请先在「AI 配置」中保存 API Key、启用模型并勾选自动获客"
+    };
+  }
+  if (config.webSearchStatus === "passed") {
+    return {
+      ready: true,
+      message: "OpenAI Web Search 已验证，官网将从联网引用中确认"
+    };
+  }
+  const externalSearchReady = state.leadProviders.some((provider) =>
+    OFFICIAL_WEBSITE_SEARCH_PROVIDER_IDS.has(provider.id)
+    && provider.ready
+    && provider.enabled
+  );
+  if (config.webSearchStatus === "unsupported" && config.lastTestStatus === "passed") {
+    return externalSearchReady
+      ? {
+          ready: true,
+          message: "普通 AI 负责生成候选，官网由已配置的搜索 API 补查"
+        }
+      : {
+          ready: false,
+          message: "当前模型可以生成企业候选，但不能联网确认官网。请在数据源中心配置 Brave、Serper、SerpApi 或 Google Places"
+        };
+  }
+  if (config.webSearchStatus === "failed") {
+    return {
+      ready: false,
+      message: "普通 AI 调用可用，但 Web Search 测试失败。请检查 Base URL、模型权限后重新测试，或更换 OpenAI 配置"
+    };
+  }
+  return {
+    ready: false,
+    message: "请先在「AI 配置」中点击测试连接；普通 AI 调用成功不代表可以联网确认官网"
+  };
+}
+
 // 搜客按钮始终可点击：未配置 AI 模型且未贴链接时，点击后由 runLeadFinder 提示先配置 AI 模型
 function syncLeadFinderStartState() {
-  const aiReady = Boolean(state.aiConfig?.enabled && state.aiConfig?.hasApiKey && state.aiConfig?.useLeadFinder);
+  const aiReady = leadFinderAiReadiness().ready;
+  const hasExecutableApiSource = state.leadProviders.some((provider) =>
+    provider.id !== "ai_search"
+    && isLeadSourceExecutable(provider)
+  );
   const urlInput = qs<HTMLTextAreaElement>("#leadFinderUrlInput");
   const urlCount = (urlInput?.value || "").split(/\n|,|，/).map((item) => item.trim()).filter(Boolean).length;
-  const needsAi = !aiReady && urlCount === 0;
+  const needsSource = !aiReady && !hasExecutableApiSource && urlCount === 0;
   ["#leadFinderStartButton", "#leadFinderStartButtonInline", "[data-lead-empty-start]"].forEach((sel) => {
     const button = qs<HTMLButtonElement>(sel);
     if (!button) return;
     button.disabled = false;
-    button.title = needsAi ? "未配置 AI 模型：点击后将提示先配置 AI 模型（含 API Key 且勾选自动获客）再启动搜客" : "";
+    button.title = needsSource ? "自动搜客需要至少一个可执行来源：可配置搜索 API，或启用 AI 搜索" : "";
     button.classList.remove("is-blocked");
   });
   const hint = qs<HTMLElement>("#leadFinderAiRequiredHint");
-  if (hint) hint.hidden = !needsAi;
+  if (hint) hint.hidden = !needsSource;
 }
 
 // 自然语言 / 结构化表单 互斥：仅生效的那一组参与搜索
@@ -25691,12 +31922,14 @@ async function runLeadAiParse(): Promise<boolean> {
         body: JSON.stringify({ goal })
       });
       leadAiParsed = result;
+      leadAiParseLastError = "";
       fillLeadAiPreview(result);
       toast("AI 已解析为标准搜索词", "success");
       return true;
     } catch (err) {
       clearLeadAiPreview(true);
       const detail = err instanceof Error ? err.message : "模型未返回可用结果";
+      leadAiParseLastError = detail;
       toast(`${detail.startsWith("AI 解析失败") ? detail : `AI 解析失败：${detail}`}，未生成解析结果`, "error");
       return false;
     } finally {
@@ -25847,8 +32080,17 @@ function leadFinderWaitElapsed(value?: string) {
 function leadFinderSourceWaitText(source: LeadFinderSourceStat, job: LeadFinderJob) {
   const status = source.status || "queued";
   const candidateCount = Math.max(source.candidateCount || 0, job.resultIds?.length || 0);
-  const waited = leadFinderWaitElapsed(source.updatedAt || source.createdAt || job.createdAt);
+  const waitStartedAt = source.updatedAt || source.createdAt || job.createdAt;
+  const waited = leadFinderWaitElapsed(waitStartedAt);
+  const waitedMs = Date.now() - new Date(waitStartedAt || "").getTime();
   const waitSuffix = waited ? ` · 已等待 ${waited}` : "";
+  if (["queued", "running", "retry_scheduled", "pause_requested"].includes(status)
+    && Number.isFinite(waitedMs)
+    && waitedMs >= 130_000) {
+    return source.id === "ai_search"
+      ? `响应超时：AI 模型超过 2 分钟没有新返回，后台应结束本次调用。调整建议：检查 API Key、额度、Base URL 与模型联网能力，并减少单次结果数量${waitSuffix}`
+      : `响应超时：数据源超过 2 分钟没有新返回，后台应结束本次调用。调整建议：检查数据源连接、限流状态，或减少同时启用的来源${waitSuffix}`;
+  }
   if (status === "retry_scheduled") {
     return source.id === "ai_search"
       ? `模型服务限流或临时失败，等待自动重试${waitSuffix}`
@@ -26338,6 +32580,18 @@ function syncProspectRadar(job: LeadFinderJob) {
   prospectRadarController.update(model);
 }
 
+function scrollLeadFinderLiveToLatest() {
+  const thread = qs<HTMLElement>("#leadFinderLiveOverview .lead-live-thread");
+  const button = qs<HTMLButtonElement>("#leadFinderLiveOverview [data-lead-live-follow]");
+  if (!thread) return;
+  const previousBehavior = thread.style.scrollBehavior;
+  thread.style.scrollBehavior = "auto";
+  thread.dataset.follow = "true";
+  thread.scrollTop = thread.scrollHeight;
+  if (button) button.hidden = true;
+  requestAnimationFrame(() => { thread.style.scrollBehavior = previousBehavior; });
+}
+
 function renderLeadFinderLiveOverview() {
   const box = qs<HTMLElement>("#leadFinderLiveOverview");
   if (!box) return;
@@ -26390,8 +32644,7 @@ function renderLeadFinderLiveOverview() {
     .map((line) => line === "客户类型：*" ? "客户类型：全部客户类型" : line);
   const discoveries = (job.resultIds || [])
     .map((id) => state.websiteOpportunities.find((item) => item.id === id))
-    .filter(Boolean)
-    .slice(-3) as WebsiteOpportunity[];
+    .filter(Boolean) as WebsiteOpportunity[];
   const deepMining = job.deepMining;
   const activeDeepTask = deepMining?.tasks.find((item) => item.id === deepMining.activeTaskId)
     || [...(deepMining?.tasks || [])].reverse().find((item) => ["searching", "verifying", "completed"].includes(item.status));
@@ -26400,8 +32653,15 @@ function renderLeadFinderLiveOverview() {
     : undefined;
   const latestDeepEvidence = deepMining?.evidence[deepMining.evidence.length - 1];
   const previousThread = qs<HTMLElement>(".lead-live-thread", box);
-  const wasFollowing = !previousThread
-    || previousThread.scrollHeight - previousThread.scrollTop - previousThread.clientHeight < 72;
+  const previousConsole = qs<HTMLElement>(".lead-live-console", box);
+  const sameJob = previousConsole?.dataset.leadLiveJobId === job.id;
+  const previousScrollTop = sameJob ? previousThread?.scrollTop || 0 : 0;
+  const wasFollowing = !sameJob
+    || previousThread?.dataset.follow !== "false"
+    || Boolean(previousThread && previousThread.scrollHeight - previousThread.scrollTop - previousThread.clientHeight < 72);
+  const previousLastEventKey = sameJob ? previousThread?.dataset.lastEventKey || "" : "";
+  const lastEventKey = logs[logs.length - 1]?.key || "";
+  const hasNewEvent = Boolean(lastEventKey && lastEventKey !== previousLastEventKey);
   box.innerHTML = `
     <div class="lead-live-console" data-lead-live-job-id="${escapeHtml(job.id)}">
       <div class="lead-live-console-head">
@@ -26418,7 +32678,7 @@ function renderLeadFinderLiveOverview() {
           ${job.backendRunId && ["queued", "paused"].includes(job.backendRunStatus || "") ? `<button class="btn danger" type="button" data-lead-live-action="cancel">取消</button>` : ""}
         </div>
       </div>
-      <div class="lead-live-thread" role="log" aria-live="polite" aria-relevant="additions text">
+      <div class="lead-live-thread" role="log" tabindex="0" aria-label="任务执行动态" aria-live="polite" aria-relevant="additions text" data-follow="${wasFollowing ? "true" : "false"}" data-last-event-key="${escapeHtml(lastEventKey)}">
         <article class="lead-live-message is-request">
           <div class="lead-live-avatar" aria-hidden="true">你</div>
           <div class="lead-live-bubble">
@@ -26458,7 +32718,7 @@ function renderLeadFinderLiveOverview() {
         <div class="lead-live-event-stream" aria-label="搜索过程">
           ${hiddenLogCount ? `<p class="lead-live-history-note">较早的 ${hiddenLogCount} 条事实记录已收纳在执行详情</p>` : ""}
           ${logs.length ? logs.map((log, index) => `
-            <article class="lead-live-message is-event ${log.tone} ${index === logs.length - 1 ? "is-latest" : ""}" data-lead-event-key="${escapeHtml(log.key)}">
+            <article class="lead-live-message is-event ${log.tone} ${hasNewEvent && index === logs.length - 1 ? "is-latest" : ""}" data-lead-event-key="${escapeHtml(log.key)}">
               <div class="lead-live-avatar" aria-hidden="true">${escapeHtml((log.source || "搜").slice(0, 1))}</div>
               <div class="lead-live-bubble">
                 <div class="lead-live-message-meta"><b>${escapeHtml(log.source)}</b><time>${escapeHtml(leadTaskDetailTime(log.at))}</time></div>
@@ -26480,7 +32740,7 @@ function renderLeadFinderLiveOverview() {
           <article class="lead-live-message is-discovery">
             <div class="lead-live-avatar" aria-hidden="true">客</div>
             <div class="lead-live-bubble">
-              <div class="lead-live-message-meta"><b>新候选已进入池</b><span>${discoveries.length} 条最新结果</span></div>
+              <div class="lead-live-message-meta"><b>新候选已进入池</b><span>${discoveries.length} 条查得结果（全部展示）</span></div>
               <div class="lead-live-discoveries">
                 ${discoveries.map((item) => `
                   <button type="button" data-lead-live-candidate="${escapeHtml(item.id)}">
@@ -26491,10 +32751,66 @@ function renderLeadFinderLiveOverview() {
               </div>
             </div>
           </article>` : ""}
+        ${terminal ? "" : `
+          <div class="lead-live-stream-tail" role="status">
+            <i aria-hidden="true"></i>
+            <span><b>任务进行中</b><small>${escapeHtml(stage.name)} · 新事件将在这里继续追加</small></span>
+          </div>`}
       </div>
+      <button class="lead-live-jump-latest" type="button" data-lead-live-follow ${wasFollowing ? "hidden" : ""}>回到最新</button>
     </div>`;
   const thread = qs<HTMLElement>(".lead-live-thread", box);
-  if (thread && wasFollowing) requestAnimationFrame(() => { thread.scrollTop = thread.scrollHeight; });
+  const jumpLatest = qs<HTMLButtonElement>("[data-lead-live-follow]", box);
+  if (thread) {
+    let programmaticScroll = false;
+    const atBottom = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight < 72;
+    const followLatest = () => {
+      programmaticScroll = true;
+      const previousBehavior = thread.style.scrollBehavior;
+      thread.style.scrollBehavior = "auto";
+      thread.dataset.follow = "true";
+      thread.scrollTop = thread.scrollHeight;
+      if (jumpLatest) jumpLatest.hidden = true;
+      requestAnimationFrame(() => { thread.style.scrollBehavior = previousBehavior; });
+      window.setTimeout(() => { programmaticScroll = false; }, 80);
+    };
+    if (wasFollowing) {
+      followLatest();
+      requestAnimationFrame(() => followLatest());
+    } else {
+      thread.scrollTop = Math.min(previousScrollTop, Math.max(0, thread.scrollHeight - thread.clientHeight));
+    }
+    // 滚动位置是跟随状态的唯一事实源：贴底=持续跟随（流式打印）；向上翻=暂停；回到贴底=自动恢复。
+    // 不用 wheel/touchmove 判定——触控板惯性、页面滚动手势、横向触摸滑动都会误置 follow=false，
+    // 且该状态会跨重渲染持久化，导致视图永久卡在顶部。
+    thread.addEventListener("scroll", () => {
+      if (programmaticScroll) return;
+      const following = atBottom();
+      thread.dataset.follow = following ? "true" : "false";
+      if (jumpLatest) jumpLatest.hidden = following;
+    }, { passive: true });
+    thread.addEventListener("keydown", (event) => {
+      if (["ArrowUp", "PageUp", "Home"].includes(event.key)) {
+        event.preventDefault();
+        const top = event.key === "Home"
+          ? 0
+          : Math.max(0, thread.scrollTop - (event.key === "PageUp" ? thread.clientHeight * 0.8 : 48));
+        const previousBehavior = thread.style.scrollBehavior;
+        thread.style.scrollBehavior = "auto";
+        thread.scrollTop = top;
+        thread.style.scrollBehavior = previousBehavior;
+        thread.dataset.follow = "false";
+        if (jumpLatest) jumpLatest.hidden = false;
+      } else if (event.key === "End") {
+        event.preventDefault();
+        followLatest();
+      }
+    });
+    jumpLatest?.addEventListener("click", (event) => {
+      event.preventDefault();
+      followLatest();
+    });
+  }
   qs<HTMLButtonElement>("[data-lead-live-radar]", box)?.addEventListener("click", () => void openProspectRadar(job));
   qs<HTMLButtonElement>("[data-lead-live-open]", box)?.addEventListener("click", () => openLeadTaskDetail(job));
   qsa<HTMLButtonElement>("[data-lead-live-candidate]", box).forEach((button) => {
@@ -26517,6 +32833,28 @@ function leadFinderCleaningOutcomeLabel(outcome: ProspectRunCleaningReport["reco
   return "待处理";
 }
 
+function leadFinderRemovedTotal(report?: ProspectRunCleaningReport | null) {
+  const data = report?.summary;
+  if (!data) return 0;
+  return data.providerInvalidCount
+    + data.providerDuplicateCount
+    + data.rejectedCount
+    + data.suppressedCount
+    + data.mergedCount;
+}
+
+function leadFinderRemovalSummary(report?: ProspectRunCleaningReport | null) {
+  const data = report?.summary;
+  if (!data) return "";
+  return [
+    data.providerInvalidCount ? `字段无效 ${data.providerInvalidCount} 条` : "",
+    data.providerDuplicateCount ? `来源内重复 ${data.providerDuplicateCount} 条` : "",
+    data.rejectedCount ? `数据无效 ${data.rejectedCount} 条` : "",
+    data.suppressedCount ? `历史或规则排除 ${data.suppressedCount} 条` : "",
+    data.mergedCount ? `身份归并 ${data.mergedCount} 条` : ""
+  ].filter(Boolean).join("；");
+}
+
 function renderLeadFinderCleaningLedger() {
   const job = primaryLeadFinderLiveJob();
   const report = job?.cleaningReport;
@@ -26529,8 +32867,9 @@ function renderLeadFinderCleaningLedger() {
   const filtered = leadFinderCleaningFilter === "all"
     ? removedRecords
     : removedRecords.filter((record) => record.outcome === leadFinderCleaningFilter);
-  count.textContent = String(removedRecords.length);
-  scope.textContent = job ? `${isLeadFinderJobTerminal(job) ? "最近任务" : (job.superSearchMissionId ? "当前超级搜索轮次" : "当前任务")} · ${removedRecords.length} 条逐条记录` : "等待任务数据";
+  const removedTotal = leadFinderRemovedTotal(report);
+  count.textContent = String(removedTotal);
+  scope.textContent = job ? `${isLeadFinderJobTerminal(job) ? "最近任务" : (job.superSearchMissionId ? "当前超级搜索轮次" : "当前任务")} · ${removedTotal} 条已分流` : "等待任务数据";
   qsa<HTMLButtonElement>("[data-lead-cleaning-filter]").forEach((button) => {
     const active = button.dataset.leadCleaningFilter === leadFinderCleaningFilter;
     button.classList.toggle("active", active);
@@ -26545,7 +32884,36 @@ function renderLeadFinderCleaningLedger() {
     <div><span>规则排除</span><b>${data.suppressedCount}</b></div>
     <div><span>数据无效</span><b>${data.rejectedCount}</b></div>
   ` : `<div class="empty-cell">等待清洗统计</div>`;
-  rows.innerHTML = filtered.length ? filtered.map((record) => {
+  const sourceAggregates = (report?.sources || []).flatMap((source) => [
+    ...(source.invalidCount > 0 ? [{
+      providerCode: source.providerCode,
+      count: source.invalidCount,
+      title: "来源字段不完整",
+      reason: "来源记录缺少企业名称、国家或可识别的主体信息，未进入候选清洗管线。",
+      code: "PROVIDER_INVALID_RECORD",
+      tone: "rejected"
+    }] : []),
+    ...(source.duplicateCount > 0 ? [{
+      providerCode: source.providerCode,
+      count: source.duplicateCount,
+      title: "来源内重复",
+      reason: "同一数据源本批返回了重复主体，系统按来源记录标识或企业身份去重，仅保留一条继续处理。",
+      code: "PROVIDER_DUPLICATE_RECORD",
+      tone: "merged"
+    }] : [])
+  ]);
+  const visibleAggregates = leadFinderCleaningFilter === "all" ? sourceAggregates : [];
+  const aggregateHtml = visibleAggregates.map((record) => {
+    const provider = state.leadProviders.find((item) => item.id === record.providerCode);
+    return `
+      <article class="lead-cleaning-row is-source-summary">
+        <div class="lead-cleaning-source"><b>${escapeHtml(provider?.name || record.providerCode || "未知来源")}</b><span>${escapeHtml(record.providerCode || "未标记来源")}</span></div>
+        <div class="lead-cleaning-record"><b>${escapeHtml(record.title)}</b><span>来源预处理阶段按数量汇总</span></div>
+        <span class="lead-cleaning-outcome is-${record.tone}">${escapeHtml(record.title)} × ${record.count}</span>
+        <div class="lead-cleaning-reason"><b>${escapeHtml(record.reason)}</b><span>${record.code} · 此阶段未保存无效或重复记录的公司名称</span></div>
+      </article>`;
+  }).join("");
+  const detailHtml = filtered.map((record) => {
     const provider = state.leadProviders.find((item) => item.id === record.providerCode);
     const recordTitle = record.sourceCompany || record.candidateName || "未识别企业";
     const sourceFacts = [record.sourceCountry, record.sourceDomain].filter(Boolean).join(" / ") || "未提供国家或官网域名";
@@ -26558,7 +32926,10 @@ function renderLeadFinderCleaningLedger() {
         <div class="lead-cleaning-reason"><b>${escapeHtml(record.reason || "未提供清洗原因")}</b><span>${escapeHtml(record.reasonCode || "未标记原因码")}</span>${record.candidateId ? `<button class="lead-cleaning-candidate" type="button" data-lead-cleaning-candidate="${escapeHtml(record.candidateId)}">查看关联候选 ${escapeHtml(record.candidateName || "")}</button>` : ""}</div>
         <time class="lead-cleaning-time" datetime="${escapeHtml(record.processedAt)}">${escapeHtml(leadTaskDetailDateTime(record.processedAt))}</time>
       </article>`;
-  }).join("") : `<div class="empty-cell">${job ? "当前筛选下暂无清洗去除记录" : "暂无任务清洗记录"}</div>`;
+  }).join("");
+  rows.innerHTML = aggregateHtml || detailHtml
+    ? `${aggregateHtml}${detailHtml}`
+    : `<div class="empty-cell">${job ? "当前筛选下暂无清洗去除记录" : "暂无任务清洗记录"}</div>`;
   qsa<HTMLButtonElement>("[data-lead-cleaning-candidate]", rows).forEach((button) => {
     button.addEventListener("click", () => {
       const candidateId = button.dataset.leadCleaningCandidate || "";
@@ -26574,12 +32945,28 @@ function renderLeadFinderResultView() {
   const cleaningView = qs<HTMLElement>("#leadFinderCleaningView");
   const bulkbar = qs<HTMLElement>("#leadFinderBulkbar");
   const scope = qs<HTMLElement>("#leadFinderResultScope");
+  const reconciliation = qs<HTMLElement>("#leadFinderResultReconciliation");
   if (!candidateView || !cleaningView) return;
   const cleaning = leadFinderResultView === "cleaning";
   candidateView.hidden = cleaning;
   cleaningView.hidden = !cleaning;
   if (bulkbar) bulkbar.hidden = cleaning;
   const currentJob = currentLeadFinderResultJob();
+  const report = currentJob?.cleaningReport;
+  const removedTotal = leadFinderRemovedTotal(report);
+  if (reconciliation) {
+    const data = report?.summary;
+    reconciliation.hidden = !data || removedTotal < 1;
+    reconciliation.innerHTML = data && removedTotal > 0 ? `
+      <div><b>来源返回 ${data.providerRawCount} 条，${data.candidateCount} 条进入候选池，${removedTotal} 条已分流</b><span>${escapeHtml(leadFinderRemovalSummary(report))}</span></div>
+      <button type="button" data-lead-open-cleaning>查看处理原因</button>
+    ` : "";
+    qs<HTMLButtonElement>("[data-lead-open-cleaning]", reconciliation)?.addEventListener("click", () => {
+      leadFinderResultView = "cleaning";
+      leadFinderCleaningFilter = "all";
+      renderLeadFinderResultView();
+    });
+  }
   if (scope) scope.textContent = cleaning
     ? "逐条追溯当前任务的管线处置"
     : currentJob
@@ -26632,6 +33019,7 @@ function renderLeadFinderJobDetails(job: LeadFinderJob) {
       <span>新证据 ${job.incrementalStats.evidenceUpdatedCount} 条</span>
       <span>历史未变化 ${job.incrementalStats.unchangedCount} 条</span>
       <span>同批去重 ${job.incrementalStats.deduplicatedCount} 条</span>
+      ${job.incrementalStats.existingFilteredCount ? `<span>已有客户/线索过滤 ${job.incrementalStats.existingFilteredCount} 条</span>` : ""}
       ${job.incrementalStats.multiSourceMergedCount ? `<span>多来源合并 ${job.incrementalStats.multiSourceMergedCount} 条</span>` : ""}
       ${job.incrementalStats.excludedCount ? `<span>已排除 ${job.incrementalStats.excludedCount} 条</span>` : ""}
     </div>
@@ -26702,7 +33090,7 @@ function leadTaskDetailDateTime(value?: string) {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
-function leadTaskDetailLogs(job: LeadFinderJob) {
+function leadTaskDetailLogs(job: LeadFinderJob): LeadTaskStreamLog[] {
   if (job.backendRunId) {
     if (job.liveEvents?.length) {
       return job.liveEvents.map(leadTaskLiveEventLog);
@@ -26829,14 +33217,64 @@ function leadTaskDetailLogs(job: LeadFinderJob) {
 }
 
 function leadTaskStreamLogHtml(log: LeadTaskStreamLog) {
+  const livePhases = log.live && log.phases?.length ? log.phases : null;
+  const tone = log.live ? (log.tone ? `${log.tone} is-live` : "is-live") : log.tone;
+  const detailHtml = livePhases
+    ? `<span class="task-run-log-live-text" data-live-phases="${escapeHtml(JSON.stringify(livePhases))}" data-live-detail="${escapeHtml(log.detail)}" data-live-index="0">${escapeHtml(livePhases[0] || log.detail)}</span>`
+    : `<span>${escapeHtml(log.detail)}</span>`;
   return `
-    <div class="task-run-log ${log.tone}" data-task-log-key="${escapeHtml(log.key)}">
+    <div class="task-run-log ${tone}" data-task-log-key="${escapeHtml(log.key)}">
       <time>${escapeHtml(leadTaskDetailTime(log.at))}</time>
       <span class="task-run-log-source" title="${escapeHtml(log.source)}">${escapeHtml(log.source)}</span>
-      <div class="task-run-log-copy"><b>${escapeHtml(log.title)}</b><span>${escapeHtml(log.detail)}</span></div>
+      <div class="task-run-log-copy"><b>${escapeHtml(log.title)}</b>${detailHtml}</div>
       <strong class="task-run-log-result">${escapeHtml(log.result)}</strong>
     </div>
   `;
+}
+
+let leadTaskLiveTickerTimer: ReturnType<typeof setInterval> | undefined;
+
+function stopLeadTaskLiveTicker() {
+  if (leadTaskLiveTickerTimer !== undefined) {
+    clearInterval(leadTaskLiveTickerTimer);
+    leadTaskLiveTickerTimer = undefined;
+  }
+}
+
+function leadTaskLiveTickerTick() {
+  const nodes = qsa<HTMLElement>("#leadTaskStream [data-live-phases]");
+  if (!nodes.length) {
+    stopLeadTaskLiveTicker();
+    return;
+  }
+  nodes.forEach((node) => {
+    let phases: string[] = [];
+    try {
+      phases = JSON.parse(node.dataset.livePhases || "[]") as string[];
+    } catch {
+      return;
+    }
+    if (phases.length < 2) return;
+    const next = (Number(node.dataset.liveIndex || "0") + 1) % phases.length;
+    node.dataset.liveIndex = String(next);
+    node.textContent = phases[next] || "";
+  });
+}
+
+function ensureLeadTaskLiveTicker() {
+  if (leadTaskLiveTickerTimer === undefined) {
+    leadTaskLiveTickerTimer = setInterval(leadTaskLiveTickerTick, 2600);
+  }
+}
+
+function demoteLeadTaskLiveLogNodes(stream: HTMLElement) {
+  qsa<HTMLElement>("[data-live-phases]", stream).forEach((node) => {
+    node.textContent = node.dataset.liveDetail || node.textContent;
+    node.classList.remove("task-run-log-live-text");
+    node.removeAttribute("data-live-phases");
+    node.removeAttribute("data-live-index");
+    node.removeAttribute("data-live-detail");
+  });
 }
 
 function syncLeadTaskStreamStateUi() {
@@ -26855,16 +33293,31 @@ function renderLeadTaskStream(job: LeadFinderJob) {
   stream.classList.remove("is-verbose");
   stream.dataset.streamMode = "facts";
   const logs = leadTaskDetailLogs(job);
-  const signature = logs.map((item) => item.key).join("|");
+  const live = leadTaskJobIsLive(job);
+  if (live && logs.length && logs[logs.length - 1].phases?.length) {
+    logs[logs.length - 1].live = true;
+  }
+  const signature = `${logs.map((item) => item.key).join("|")}#${live ? "live" : "done"}`;
   if (stream.dataset.signature === signature) return;
   const wasFollowing = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 72;
   const previousCount = Number(stream.dataset.logCount || 0);
-  stream.innerHTML = logs.map(leadTaskStreamLogHtml).join("");
+  const existingKeys = qsa<HTMLElement>("[data-task-log-key]", stream).map((item) => item.dataset.taskLogKey || "");
+  const canAppend = existingKeys.length > 0
+    && existingKeys.length <= logs.length
+    && existingKeys.every((key, index) => logs[index]?.key === key);
+  if (canAppend) {
+    demoteLeadTaskLiveLogNodes(stream);
+    logs.slice(existingKeys.length).forEach((log) => stream.insertAdjacentHTML("beforeend", leadTaskStreamLogHtml(log)));
+  } else {
+    stream.innerHTML = logs.map(leadTaskStreamLogHtml).join("");
+  }
   stream.dataset.signature = signature;
   stream.dataset.logCount = String(logs.length);
+  if (logs.some((log) => log.live)) ensureLeadTaskLiveTicker();
   const newEventsButton = qs<HTMLButtonElement>("#leadTaskNewEvents");
   if (wasFollowing || !previousCount) {
-    requestAnimationFrame(() => { stream.scrollTop = stream.scrollHeight; });
+    stream.scrollTop = stream.scrollHeight;
+    requestAnimationFrame(() => stream.scrollTo({ top: stream.scrollHeight, behavior: previousCount ? "smooth" : "auto" }));
     if (newEventsButton) newEventsButton.hidden = true;
   } else if (newEventsButton && logs.length > previousCount) {
     newEventsButton.textContent = `${logs.length - previousCount} 条新动态`;
@@ -26909,7 +33362,7 @@ function renderLeadTaskSources(job: LeadFinderJob) {
         <div class="task-run-source-result">
           <span class="task-run-source-status">${escapeHtml(source.statusLabel || "等待执行")}</span>
           <span class="task-run-source-count">${escapeHtml(resultText)}</span>
-          ${waitText ? `<span class="task-run-source-wait ${source.id === "ai_search" ? "is-ai" : ""}">${escapeHtml(waitText)}</span>` : ""}
+          ${waitText ? `<span class="task-run-source-wait ${/响应超时/u.test(waitText) ? "is-timeout" : source.id === "ai_search" ? "is-ai" : ""}">${escapeHtml(waitText)}</span>` : ""}
           ${source.failure ? `<button type="button" data-lead-source-failure="${escapeHtml(source.id)}">查看失败报文</button>` : ""}
         </div>
         <time class="task-run-source-time">${escapeHtml(leadTaskDetailTime(source.updatedAt || source.createdAt))}</time>
@@ -26949,7 +33402,15 @@ function openLeadTaskFailureReport(job: LeadFinderJob, sourceId: string) {
   if (!source?.failure || !dialog || !title || !summary || !body) return;
   title.textContent = `${source.name} · 失败报文`;
   summary.textContent = `${source.failure.stage} · ${source.failure.errorCode}`;
-  body.textContent = JSON.stringify({
+  const failureText = `${source.failure.errorCode} ${source.failure.errorMessage}`;
+  const advice = /429|quota|rate|额度|限流/iu.test(failureText)
+    ? "检查接口额度和限流时间，稍后重试，并减少单次返回数量。"
+    : /401|403|auth|key|认证|密钥/iu.test(failureText)
+      ? "检查 API Key、账号权限、Base URL 和模型名称，然后在数据源中心重新测试连接。"
+      : /timeout|timed|超时|network|fetch|连接/iu.test(failureText)
+        ? "检查网络与上游服务状态；减少同时启用的数据源，确认后台 Worker 正常运行后重试。"
+        : "根据错误码检查对应数据源配置；不要反复提交相同任务，可先调整一个搜索条件后重试。";
+  body.textContent = `失败原因\n${source.failure.errorMessage || source.error || "来源执行失败"}\n\n调整建议\n${advice}\n\n技术记录\n${JSON.stringify({
     taskId: job.backendRunId || job.id,
     provider: source.id,
     status: source.status,
@@ -26958,7 +33419,7 @@ function openLeadTaskFailureReport(job: LeadFinderJob, sourceId: string) {
     checkpoint: source.checkpoint,
     attempts: source.attempts || [],
     requests: source.requests || []
-  }, null, 2);
+  }, null, 2)}`;
   if (!dialog.open) dialog.showModal();
 }
 
@@ -27036,11 +33497,12 @@ function renderLeadTaskInsights(job: LeadFinderJob) {
   }
   const cleanRows: Array<[string, string, number | null]> = [
     ["域名或企业身份重复", "同批候选只保留一条主记录", stats?.deduplicatedCount ?? null],
+    ["已有客户或线索", "客户库/有效线索已存在的企业不再入搜客清单", stats?.existingFilteredCount ?? null],
     ["命中排除条件", "按排除词与业务规则停止入池", stats?.excludedCount ?? null],
     ["历史记录无新增证据", "避免重复进入人工核验队列", stats?.unchangedCount ?? null],
     ["多来源身份合并", "来源证据归并到同一企业", stats?.multiSourceMergedCount ?? null]
   ];
-  const cleanedTotal = stats ? stats.deduplicatedCount + stats.excludedCount + stats.unchangedCount : null;
+  const cleanedTotal = stats ? stats.deduplicatedCount + (stats.existingFilteredCount || 0) + stats.excludedCount + stats.unchangedCount : null;
   cleanSummary.textContent = cleanedTotal === null ? live ? "规则监测中" : "本轮已结束" : `已分流 ${cleanedTotal} 条`;
   cleaned.innerHTML = cleanRows.map(([title, detail, count]) => `
     <div class="task-run-insight-row"><div><b>${escapeHtml(title)}</b><span>${escapeHtml(detail)}</span></div><em>${count === null ? "监测中" : `${count} 条`}</em></div>
@@ -27519,6 +33981,10 @@ function renderLeadTaskDetail() {
   renderLeadTaskCleaningReport(job);
   renderLeadTaskCandidates(job);
   renderLeadTaskStrategy(job);
+  // 获客效果复盘与搜索入口已移入任务详情，打开/刷新详情时同步最新内容
+  renderProspectFeedback();
+  renderLeadFinderSearchLinks();
+  void loadProspectFeedback(true);
   qs<HTMLButtonElement>("#leadTaskDetailBack")!.onclick = () => activateNavView("lead-finder");
   qs<HTMLButtonElement>("#leadTaskNewEvents")!.onclick = () => {
     const stream = qs<HTMLElement>("#leadTaskStream");
@@ -27778,6 +34244,24 @@ function createLeadFinderJob(status: LeadFinderJob["status"] = "running") {
   return job;
 }
 
+function recordLeadFinderLaunchFailure(phase: string, error: unknown) {
+  const reason = error instanceof Error ? error.message : "请检查网络、AI 配置和数据源状态后重试";
+  const job = createLeadFinderJob("failed");
+  job.title = `搜客启动失败 · ${currentLeadFinderTitle()}`;
+  job.subtitle = "任务未获得后台执行确认，请按失败原因调整后重试";
+  job.elapsedText = "已结束";
+  job.progress = 100;
+  job.steps = ["解析搜索目标", "校验来源与权限", "提交后台任务", "根据原因重试"];
+  job.expanded = true;
+  job.detailLines = [
+    ...buildLeadFinderJobDetails(),
+    `失败阶段：${phase}`,
+    `失败原因：${reason}`,
+    "调整建议：先处理上面的失败原因，再重新点击新建搜客任务；本条记录不会伪装成已启动。"
+  ];
+  renderLeadFinderJobs();
+}
+
 function updateLeadFinderJob(
   jobId: string,
   resultIds: string[],
@@ -27814,6 +34298,14 @@ const prospectRunTerminalStatuses = new Set<ProspectRunApiStatus>([
   "succeeded_empty",
   "partial_success",
   "failed"
+]);
+
+const prospectRunActiveStatuses = new Set<ProspectRunApiStatus>([
+  "queued",
+  "running",
+  "pause_requested",
+  "paused",
+  "cancel_requested"
 ]);
 
 function prospectRunJobStatus(status: ProspectRunApiStatus): LeadFinderJob["status"] {
@@ -28102,6 +34594,66 @@ function applySuperSearchMission(job: LeadFinderJob, mission: ProspectSuperSearc
   return job;
 }
 
+function leadTaskLiveEventPhases(event: ProspectLiveEventApiRecord, providerName: string): string[] {
+  const sourceLabel = providerName || "数据源";
+  const pageLimit = Number(event.metrics.pageLimit || 0);
+  const pageSequence = Number(event.metrics.pageSequence || 0);
+  const accepted = Number(event.metrics.acceptedCount || 0);
+  const raw = Number(event.metrics.rawCount || 0);
+  const copy: Record<string, string[]> = {
+    "execution.claimed": [
+      `正在领取 ${sourceLabel} 执行任务`,
+      "正在加载数据源凭据与限额",
+      "正在建立检索连接"
+    ],
+    "attempt.claimed": [
+      `正在领取 ${sourceLabel} 执行任务`,
+      "正在准备检索参数"
+    ],
+    "execution.request_started": [
+      `已向 ${sourceLabel} 发出请求，等待返回`,
+      "正在等待数据源响应",
+      "正在保持执行租约心跳"
+    ],
+    "attempt.request_started": [
+      `已向 ${sourceLabel} 发出请求，等待返回`,
+      "正在等待数据源响应"
+    ],
+    "execution.page_accepted": [
+      `正在验收 ${sourceLabel} 返回的数据页`,
+      "正在解析原始条目并校验有效性",
+      "正在与候选池去重比对"
+    ],
+    "page.persisted": [
+      pageSequence ? `第 ${pageSequence} 页已保存：原始 ${raw} · 接受 ${accepted}` : `正在保存 ${sourceLabel} 数据页`,
+      accepted > 0 ? `已入库 ${accepted} 条有效条目，继续检索下一页` : "本页暂无有效条目，继续检索",
+      pageLimit ? `检索持续推进中（上限 ${pageLimit} 页）` : "正在检索下一页"
+    ],
+    "candidate.persisted": [
+      "候选已写入候选池",
+      "正在继续累积有效候选"
+    ],
+    "candidate.rejected": [
+      "候选未通过校验，已记录原因",
+      "正在继续处理后续条目"
+    ],
+    "cell.planned": [
+      "查询单元已规划完成，等待领取",
+      "正在排队等待数据源执行"
+    ],
+    "mission.ai_planning_started": [
+      "AI 正在生成查询矩阵",
+      "正在校验市场与语言覆盖缺口",
+      "正在生成查询单元"
+    ],
+    "run.started": [
+      "任务开始执行，正在分发数据源",
+      "正在并行推进各查询单元"
+    ]
+  };
+  return copy[event.type] || [];
+}
+
 function leadTaskLiveEventLog(event: ProspectLiveEventApiRecord): LeadTaskStreamLog {
   const providerId = typeof event.metrics.providerId === "string"
     ? event.metrics.providerId
@@ -28145,18 +34697,38 @@ function leadTaskLiveEventLog(event: ProspectLiveEventApiRecord): LeadTaskStream
   const gained = event.type === "candidate.persisted"
     || Number(event.metrics.acceptedCount || 0) > 0
     || Number(event.metrics.candidateCount || 0) > 0;
+  const shardDetail = (() => {
+    if (event.entityType !== "shard") return "";
+    const providerName = typeof event.metrics.providerId === "string" && event.metrics.providerId
+      ? state.leadProviders.find((item) => item.id === event.metrics.providerId)?.name || event.metrics.providerId
+      : "";
+    const parts = [
+      providerName ? `数据源 ${providerName}` : "",
+      Number(event.metrics.shardTotal || 0) > 0 ? `分片 ${Number(event.metrics.shardPosition || 0)}/${Number(event.metrics.shardTotal)}` : "",
+      Number(event.metrics.pageLimit || 0) > 0 ? `限 ${Number(event.metrics.pageLimit)} 页 / ${Number(event.metrics.resultLimit || 0)} 条` : ""
+    ].filter(Boolean);
+    return parts.length ? parts.join(" · ") : `分片 ${event.entityId}`;
+  })();
   return {
     key: `feed:${event.id}`,
     at: event.occurredAt,
     source,
-    title: event.message,
+    title: shardDetail
+      ? leadFinderDisplayText(event.message.split("：")[0])
+      : leadFinderDisplayText(event.message),
     detail: event.failureCode
       ? `${event.failureCode}${event.retryable ? " · 系统允许重试" : " · 不自动重试"}`
       : event.stage === "deep_mining"
         ? `候选级证据图谱 · ${event.entityId}`
-        : `${event.stage} · ${event.entityType} ${event.entityId}`,
+        : shardDetail || `${event.stage} · ${event.entityType} ${event.entityId}`,
     result,
-    tone: failed ? "is-failed" : gained ? "is-gain" : event.retryable ? "is-review" : ""
+    tone: failed ? "is-failed" : gained ? "is-gain" : event.retryable ? "is-review" : "",
+    phases: leadTaskLiveEventPhases(
+      event,
+      typeof event.metrics.providerId === "string" && event.metrics.providerId
+        ? state.leadProviders.find((item) => item.id === event.metrics.providerId)?.name || event.metrics.providerId
+        : ""
+    )
   };
 }
 
@@ -28812,6 +35384,98 @@ function verificationLevelTone(level?: NonNullable<WebsiteOpportunity["verificat
   return "gray";
 }
 
+function leadSearchReportMeta(item: WebsiteOpportunity) {
+  const report = item.searchReport;
+  const checkedCount = report?.checkedSources?.length || item.sourceEvidence?.length || 0;
+  const verifiedFields = report?.verifiedFields?.length
+    ? report.verifiedFields
+    : [...new Set((item.sourceEvidence || []).flatMap((source) => source.matchedFields || []))];
+  const contactStatus = report?.contactFinding?.status || (item.contactInfo ? "unverified" : "missing");
+  const contactReady = contactStatus === "source_confirmed";
+  const authenticity = report?.sourceAuthenticity || (checkedCount > 1 ? "multi_source_supported" : checkedCount ? "single_source_supported" : "unknown");
+  const authenticityLabel = authenticity === "official_confirmed"
+    ? "官网/权威来源"
+    : authenticity === "multi_source_supported"
+      ? "多来源支持"
+      : authenticity === "single_source_supported"
+        ? "单来源支持"
+        : authenticity === "weak"
+          ? "弱证据"
+          : "待补来源";
+  return {
+    checkedCount,
+    verifiedFields,
+    contactReady,
+    contactText: contactReady ? "联系方式有来源" : "缺联系方式来源",
+    authenticity,
+    authenticityLabel,
+    tone: contactReady ? (authenticity === "official_confirmed" || authenticity === "multi_source_supported" ? "green" : "amber") : "red",
+    summary: report?.summary || (checkedCount
+      ? `已核验 ${checkedCount} 个来源，${verifiedFields.length ? `确认 ${verifiedFields.join("、")}` : "字段待补"}`
+      : "暂无来源报告"),
+    nextAction: report?.nextAction || (contactReady ? "复核后可加入搜客清单" : "先补充公开联系方式")
+  };
+}
+
+function renderLeadSearchReportCell(item: WebsiteOpportunity) {
+  const meta = leadSearchReportMeta(item);
+  return `
+    <button class="lead-candidate-report is-${escapeHtml(meta.tone)}" type="button" data-lead-report-open="${escapeHtml(item.id)}" title="${escapeHtml(meta.summary)}">
+      <b>${escapeHtml(meta.authenticityLabel)}</b>
+      <span>${escapeHtml(`${meta.checkedCount} 源 · ${meta.contactText}`)}</span>
+      <small>${escapeHtml(meta.verifiedFields.slice(0, 3).join("、") || meta.nextAction)}</small>
+    </button>
+  `;
+}
+
+function renderLeadSearchReportPanel(item: WebsiteOpportunity) {
+  const report = item.searchReport;
+  const meta = leadSearchReportMeta(item);
+  const sources = report?.checkedSources?.length
+    ? report.checkedSources
+    : (item.sourceEvidence || []).map((source) => ({
+        url: source.sourceUrl || source.officialWebsite || "",
+        title: source.providerId || item.sourceLabel || "公开来源",
+        authenticity: "search_result" as const,
+        verifiedFields: source.matchedFields || [],
+        finding: source.evidenceSummary || "公开来源记录"
+      }));
+  const authenticityLabel = (value: string) =>
+    value === "official" ? "官网"
+      : value === "registry" ? "登记/权威库"
+        : value === "reputable_directory" ? "可信目录"
+          : value === "search_result" ? "搜索结果"
+            : "弱证据";
+  return `
+    <section class="lead-search-report" id="leadFinderSearchReport" tabindex="-1">
+      <div class="lead-evidence-head"><span>搜索报告</span><b>${escapeHtml(meta.authenticityLabel)}</b></div>
+      <div class="lead-search-report-summary is-${escapeHtml(meta.tone)}">
+        <b>${escapeHtml(meta.contactText)}</b>
+        <p>${escapeHtml(meta.summary)}</p>
+        <small>${escapeHtml(meta.nextAction)}</small>
+      </div>
+      <div class="lead-search-report-grid">
+        <div><span>数据源真实性</span><b>${escapeHtml(meta.authenticityLabel)}</b></div>
+        <div><span>已验证字段</span><b>${escapeHtml(meta.verifiedFields.join("、") || "待补充")}</b></div>
+        <div><span>联系方式来源</span><b>${escapeHtml(report?.contactFinding?.sourceUrl || "待补充")}</b></div>
+      </div>
+      <div class="lead-search-report-sources">
+        ${sources.length ? sources.map((source) => {
+          const url = normalizeWebsiteLink(source.url || "");
+          return `
+            <div class="lead-search-report-source">
+              <div><b>${escapeHtml(source.title || source.url || "公开来源")}</b>${badge(authenticityLabel(source.authenticity), source.authenticity === "weak" ? "gray" : "")}</div>
+              <p>${escapeHtml(source.finding || "公开来源记录")}</p>
+              <small>${escapeHtml(source.verifiedFields?.length ? `验证：${source.verifiedFields.join("、")}` : "验证字段待补")}</small>
+              ${url !== "#" ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">打开来源</a>` : ""}
+            </div>
+          `;
+        }).join("") : `<div class="lead-report-empty">暂无来源报告。请重新执行深入查询或等待联系方式补全。</div>`}
+      </div>
+    </section>
+  `;
+}
+
 const PROSPECT_SCORE_REASON_LABELS: Record<string, string> = {
   RESOLVED_ORGANIZATION_MISSING: "企业主体尚未完成唯一身份归一",
   ENTERPRISE_VERIFICATION_NOT_PASSED: "企业可信度门禁未通过",
@@ -28848,7 +35512,7 @@ function leadFinderScoreSummary(item: WebsiteOpportunity) {
   return `
     <div class="lead-score-summary">
       <div class="lead-score-values">${values.map(([short, label, value]) => `<span title="${escapeHtml(label)}">${short}<b>${value}</b></span>`).join("")}</div>
-      ${badge(scorecard.vqa.qualified ? "资格审核通过" : "待资格审核", scorecard.vqa.qualified ? "green" : "amber")}
+      ${badge(scorecard.vqa.qualified ? "搜索验证通过" : "待验证", scorecard.vqa.qualified ? "green" : "amber")}
       ${reasons.length ? `<small>${escapeHtml(reasons.join("；"))}</small>` : ""}
     </div>
   `;
@@ -28870,7 +35534,7 @@ function renderProspectScorecard(item: WebsiteOpportunity) {
     : "企业、ICP、有效渠道、合规与人工批准均已通过。";
   return `
     <section class="prospect-scorecard">
-      <div class="prospect-scorecard-head"><b>搜索验证评分</b>${badge(scorecard.vqa.qualified ? "资格审核已通过" : "资格审核未通过", scorecard.vqa.qualified ? "green" : "amber")}</div>
+      <div class="prospect-scorecard-head"><b>搜索验证评分</b>${badge(scorecard.vqa.qualified ? "验证通过" : "待验证", scorecard.vqa.qualified ? "green" : "amber")}</div>
       <div class="prospect-score-grid">${rows.map(([label, entry]) => `
         <div><span>${label}</span><b>${entry.score}</b><i style="--p:${entry.score}%"></i><small>${entry.status === "verified" ? "已验证" : entry.status === "blocked" ? "受阻" : entry.status === "partial" ? "待补证" : "未验证"}</small></div>
       `).join("")}</div>
@@ -28934,9 +35598,9 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
       const meta = verificationCheckMeta(entry.status);
       return `
         <div class="lead-report-check">
-          <div><b>${escapeHtml(entry.label)}</b>${badge(meta.label, meta.tone)}</div>
-          <p>${escapeHtml(entry.summary)}</p>
-          <small>${escapeHtml(entry.source || "待补充来源")} · ${escapeHtml(entry.checkedAt ? formatTime(entry.checkedAt) : "时间待确认")}</small>
+          <div><b>${escapeHtml(leadFinderDisplayText(entry.label))}</b>${badge(meta.label, meta.tone)}</div>
+          <p>${escapeHtml(leadFinderDisplayText(entry.summary))}</p>
+          <small>${escapeHtml(leadFinderDisplayText(entry.source || "待补充来源"))} · ${escapeHtml(entry.checkedAt ? formatTime(entry.checkedAt) : "时间待确认")}</small>
         </div>
       `;
     }).join("")
@@ -28960,7 +35624,7 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
     : `
       <div class="lead-evidence-row">
         <div><b>${escapeHtml(item.sourceLabel || item.source || "链接登记")}</b><small>当前候选暂无结构化 Provider 证据</small></div>
-        <p>${websiteProbe ? "系统已按受控低频策略验证官网；执行过程与结果见下方官网验证日志。" : "系统尚未验证企业网页。请等待后台补全或由业务员人工核对企业主体、业务范围和联系方式。"}</p>
+        <p>${websiteProbe ? "系统已完成官网公开资料核验；执行过程与结果见下方核验记录。" : "官网公开资料尚待补全。请等待后台处理或由业务员人工核对企业主体、业务范围和联系方式。"}</p>
         ${item.website ? `<a href="${escapeHtml(normalizeWebsiteLink(item.website))}" target="_blank" rel="noreferrer">人工打开参考链接</a>` : ""}
       </div>
     `;
@@ -28979,11 +35643,12 @@ function renderLeadFinderDetail(item?: WebsiteOpportunity) {
         ${badge(report?.level || "L0", verificationLevelTone(report?.level))}
         <div><b>${escapeHtml(report?.levelLabel || "报告待生成")}</b><small>${escapeHtml(report?.generatedAt ? `生成于 ${formatTime(report.generatedAt)}` : "刷新后生成")}</small></div>
       </div>
-      ${badge(controlledWebsiteAccess ? "受控官网验证" : "尚未访问官网", controlledWebsiteAccess ? "amber" : "green")}
+      ${badge(controlledWebsiteAccess ? "官网资料已核验" : "官网资料待补全", controlledWebsiteAccess ? "amber" : "green")}
       <p>${escapeHtml(report?.conclusion || "当前仅展示候选资料，企业真实性和联系方式需要人工确认。")}</p>
-      <div class="lead-report-policy"><b>安全边界</b><span>${controlledWebsiteAccess ? "仅对国外 HTTPS 官网执行受控低频验证：读取 robots.txt、首页和最多一个同域联系页，不下载文件、不保存网页原文。" : "官网尚未进入受控验证；当前仅保存为人工核对链接。"}</span></div>
+      <div class="lead-report-policy"><b>资料范围</b><span>${controlledWebsiteAccess ? "仅核验境外 HTTPS 官网中的公开企业资料与业务联系方式，不处理受限内容，也不保存原始页面内容。" : "当前仅完成官网链接登记，公开资料尚待补全。"}</span></div>
     </section>
     ${renderProspectScorecard(item)}
+    ${renderLeadSearchReportPanel(item)}
     ${renderExtractedContactsPanel(item)}
     <section class="lead-report-checks">
       <div class="lead-evidence-head"><span>校验检查</span><b>${report?.checks?.length || 0} 项</b></div>
@@ -29117,7 +35782,9 @@ function leadCategoryText(provider: Pick<LeadProviderStatus, "category" | "capab
 function leadSourceBlockedMessage(blocked: BlockedLeadSource[]) {
   const labels = blocked.map((item) => state.leadProviders.find((provider) => provider.id === item.id)?.name || item.id);
   if (blocked.some((item) => item.id === "ai_search" && item.reason === "not_ready")) {
-    return "AI 搜索尚未配置，请先在 AI 模型配置中启用模型并勾选“自动获客”";
+    const aiProvider = state.leadProviders.find((provider) => provider.id === "ai_search");
+    return aiProvider?.lastTestMessage
+      || "AI 搜索需要测试通过 OpenAI Web Search；其它模型请配置官网搜索 API";
   }
   if (blocked.some((item) => item.reason === "missing")) {
     return `数据源状态已变化，请重新选择：${labels.join("、")}`;
@@ -29145,7 +35812,15 @@ function renderLeadSourceChips() {
     const isAi = provider.tier === "ai";
     const cls = `${executable ? (selected ? "ready active" : "ready") : provider.ready ? "disabled" : "needkey"}${isAi ? " ai" : ""}`;
     const stateText = isAi
-      ? (!provider.ready ? provider.hasApiKey ? "未启用自动获客" : "未配置" : provider.enabled ? "已启用" : "已停用")
+      ? (!provider.ready
+          ? provider.hasApiKey
+            ? state.aiConfig?.webSearchStatus === "unsupported"
+              ? "模型不支持联网"
+              : state.aiConfig?.webSearchStatus === "failed"
+                ? "联网测试失败"
+                : "Web Search 待测试"
+            : "未配置"
+          : provider.enabled ? "官网联网已验证" : "已停用")
       : !provider.ready ? "未配置" : !provider.enabled ? "已停用" : provider.requiresKey ? "已连接" : "内置";
     return `<button type="button" class="lead-source-chip ${cls}" data-lead-provider="${escapeHtml(provider.id)}"><span class="dot"></span><span class="ls-chip-name">${escapeHtml(provider.name)}</span><small>${stateText}</small></button>`;
   };
@@ -29246,6 +35921,7 @@ function leadSourceCardsHtml(focusId?: string) {
     const statusCls = assisted ? "manual" : !provider.ready || !provider.enabled ? "warn" : provider.lastTestStatus === "failed" ? "fail" : "ok";
     const isAi = provider.id === "ai_search";
     const credentialLabel = leadSourceCredentialLabel(provider);
+    const configurableApiKey = provider.requiresKey || provider.optionalKey;
     const statusText = assisted
       ? `${leadSourceAccessText(provider)}，不参与自动搜索`
       : isAi
@@ -29256,10 +35932,12 @@ function leadSourceCardsHtml(focusId?: string) {
             : (provider.lastTestMessage || "已启用，可作为获客来源"))
       : !provider.ready
         ? `未配置 ${credentialLabel}`
-        : !provider.enabled
+      : !provider.enabled
           ? (provider.requiresKey ? `已保存 ${credentialLabel}，当前停用` : "该来源当前已停用")
-          : !provider.requiresKey
+          : !configurableApiKey
             ? "内置免费源，无需配置"
+            : provider.optionalKey && !provider.hasApiKey
+              ? "已启用，可选填写 API Key"
             : provider.ready
           ? (provider.lastTestStatus === "passed" ? "已连接并通过测试" : provider.lastTestStatus === "failed" ? `测试失败：${provider.lastTestMessage || `请检查 ${credentialLabel}`}` : `${credentialLabel} 已保存`)
           : `未配置 ${credentialLabel}`;
@@ -29271,9 +35949,9 @@ function leadSourceCardsHtml(focusId?: string) {
         <button class="btn primary" type="button" data-ls-import="${escapeHtml(provider.id)}">返回并导入链接</button>
       </div>` : isAi ? `
       <div class="ls-usage">${escapeHtml(provider.costNote)}</div>
-      <div class="ls-form-actions"><button class="btn" type="button" data-ls-ai-config>去 AI 模型配置</button></div>` : provider.requiresKey ? `
+      <div class="ls-form-actions"><button class="btn" type="button" data-ls-ai-config>去 AI 模型配置</button></div>` : configurableApiKey ? `
       <div class="ls-form">
-        <input type="${provider.id === "sec_edgar" ? "text" : "password"}" data-ls-key="${escapeHtml(provider.id)}" placeholder="${provider.hasApiKey ? `${credentialLabel} 已保存（留空不修改）` : `填写 ${credentialLabel}`}" autocomplete="off">
+        <input type="${provider.id === "sec_edgar" ? "text" : "password"}" data-ls-key="${escapeHtml(provider.id)}" placeholder="${provider.hasApiKey ? `${credentialLabel} 已保存（留空不修改）` : provider.optionalKey ? `可选填写 ${credentialLabel}` : `填写 ${credentialLabel}`}" autocomplete="off">
         <div class="ls-form-actions">
           <button class="btn primary" type="button" data-ls-save="${escapeHtml(provider.id)}">保存并启用</button>
           <button class="btn" type="button" data-ls-test="${escapeHtml(provider.id)}">测试连接</button>
@@ -29423,7 +36101,7 @@ async function testLeadSourceConfig(providerId: string, button?: HTMLButtonEleme
   if (button) { button.disabled = true; button.textContent = "测试中"; }
   try {
     // 若填了新 key，先静默保存再测试，保证“填上 key 就能测通”
-    if (provider?.requiresKey && key) {
+    if ((provider?.requiresKey || provider?.optionalKey) && key) {
       await api("/api/lead-finder/source-config", { method: "POST", body: JSON.stringify({ provider: providerId, apiKey: key, enabled: true }) });
     }
     const result = await api<{
@@ -29545,6 +36223,7 @@ function leadFinderMobileCard(item: WebsiteOpportunity) {
   const displayStatus = item.shortlistedAt
     ? { label: "已入搜客清单", tone: "green" }
     : status;
+  const reportMeta = leadSearchReportMeta(item);
   return `
     <article class="lead-mobile-card ${item.selected ? "is-checked" : ""}" data-lead-mobile-id="${escapeHtml(item.id)}" aria-selected="${item.selected ? "true" : "false"}">
       <div class="lead-mobile-card-head">
@@ -29556,6 +36235,7 @@ function leadFinderMobileCard(item: WebsiteOpportunity) {
         <div><span>联系人</span>${leadFinderLookupValue(item, contactPerson, "联系人")}</div>
         <div><span>联系方式</span>${leadFinderLookupValue(item, contactDisplay, "联系方式")}</div>
       </div>
+      <button class="lead-mobile-report is-${escapeHtml(reportMeta.tone)}" type="button" data-lead-report-open="${escapeHtml(item.id)}">${escapeHtml(reportMeta.authenticityLabel)} · ${escapeHtml(reportMeta.checkedCount)} 源 · ${escapeHtml(reportMeta.contactText)}</button>
       <div class="lead-mobile-meta">${leadSourceTag(item)}<span>${escapeHtml(displayStatus.label)}</span><span>${escapeHtml(duplicate.text)}</span></div>
     </article>
   `;
@@ -29657,7 +36337,7 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
           <div class="lead-candidate-profile"><b>${escapeHtml(item.country || "国家待确认")}</b><input class="lead-candidate-business-value" data-lead-field="business" value="${escapeHtml(item.business)}" title="${escapeHtml(item.business || "业务待维护")}" aria-label="业务方向" readonly tabindex="-1"></div>
           <input type="hidden" data-lead-field="country" value="${escapeHtml(item.country)}">
         </td>
-        <td class="lead-candidate-hidden-column"></td>
+        <td>${renderLeadSearchReportCell(item)}</td>
         <td><div class="lead-candidate-contact">${leadFinderLookupValue(item, contactPerson, "联系人")}<span>${escapeHtml(contactPerson.detail)}</span></div><input type="hidden" data-lead-field="contact" value="${escapeHtml(item.contact)}"></td>
         <td><div class="lead-candidate-contact">${leadFinderLookupValue(item, contactDisplay, "联系方式")}<span>${escapeHtml(contactDisplay.detail)}</span></div><input type="hidden" data-lead-field="contactInfo" value="${escapeHtml(item.contactInfo)}"></td>
         <td><div class="lead-candidate-score"><strong>${score}</strong><span>综合评分</span><small>${escapeHtml(verificationText)}</small></div></td>
@@ -29695,6 +36375,12 @@ function renderLeadFinder(opportunities = state.websiteOpportunities) {
     button.addEventListener("click", () => {
       const item = state.websiteOpportunities.find((row) => row.id === button.dataset.leadLookupReason);
       if (item) openLeadFinderLookupReason(item);
+    });
+  });
+  qsa<HTMLButtonElement>("[data-lead-report-open]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = state.websiteOpportunities.find((row) => row.id === button.dataset.leadReportOpen);
+      if (item) openLeadFinderVerificationDrawer(item);
     });
   });
   qsa<HTMLButtonElement>("[data-lead-empty-report]").forEach((button) => {
@@ -29859,20 +36545,257 @@ async function launchProspectRunFromLeadFinder(
   });
 }
 
-async function runLeadFinder(button?: HTMLButtonElement) {
-  const originalText = button?.textContent || "生成并运行任务";
-  const input = qs<HTMLTextAreaElement>("#leadFinderUrlInput");
-  const urls = (input?.value || "").split(/\n|,|，/).map((item) => item.trim()).filter(Boolean).slice(0, Number(qs<HTMLSelectElement>("#leadLimit")?.value || 20));
-  const aiReady = Boolean(state.aiConfig?.enabled && state.aiConfig?.hasApiKey && state.aiConfig?.useLeadFinder);
-  renderLeadFinderSearchLinks();
-  // AI 模型为必选项：未配置不允许启动搜客，避免用户使用未授权/免费模型反复搜索
-  if (!urls.length && !aiReady) {
-    toast("请先在「AI 配置」中配置并启用 AI 模型（含 API Key 且勾选自动获客）后再启动搜索", "error");
+function lfindTaskStatus(status: LfindTask["status"]): LeadFinderJob["status"] {
+  if (status === "succeeded") return "done";
+  if (status === "failed") return "failed";
+  if (status === "cancelled") return "cancelled";
+  return "running";
+}
+
+function buildLfindSearchBody() {
+  const products = leadFinderValues("#leadProductKeywords");
+  const countries = leadFinderValues("#leadCountries");
+  const industries = leadFinderValues("#leadIndustryInput");
+  const exclusions = leadFinderValues("#leadExcludeKeywords");
+  const customerType = qs<HTMLSelectElement>("#leadCustomerTypes")?.value.trim() || "*";
+  return {
+    goal: [
+      qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim() || "",
+      products.length ? `Products: ${products.join(", ")}` : "",
+      countries.length ? `Markets: ${countries.join(", ")}` : "",
+      industries.length ? `Industries: ${industries.join(", ")}` : "",
+      customerType === "*" ? "" : `Customer type: ${customerType}`,
+      exclusions.length ? `Exclusions: ${exclusions.join(", ")}` : ""
+    ].filter(Boolean).join("; "),
+    productKeywords: products.join(", "),
+    countries: countries.join(", "),
+    industry: industries.join(", "),
+    customerType,
+    excludeKeywords: exclusions.join(", "),
+    limit: Number(qs<HTMLSelectElement>("#leadLimit")?.value || 12)
+  };
+}
+
+async function prepareLfindSearchBody() {
+  if (leadBriefMode === "nl") {
+    const goal = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim();
+    if (!goal) throw new Error("请先输入自然语言搜索目标");
+    if (!leadAiParsed) {
+      const parsed = await runLeadAiParse();
+      if (!parsed) throw new Error(leadAiParseLastError || "AI 未返回可执行的标准搜索条件");
+    }
+    const resolved = resolveLeadAiSearchDraft({
+      name: qs<HTMLInputElement>("#leadAiName")?.value || "",
+      products: leadFinderValues("#leadAiProducts"),
+      markets: leadFinderValues("#leadAiMarkets"),
+      industries: leadFinderValues("#leadAiIndustries"),
+      exclusions: leadFinderValues("#leadAiExclusions"),
+      customerType: qs<HTMLSelectElement>("#leadAiCustomerType")?.value || "*"
+    });
+    const setVal = (sel: string, value: string) => {
+      const el = qs<HTMLInputElement>(sel);
+      if (el) el.value = value;
+    };
+    setVal("#leadProductKeywords", resolved.products.join(", "));
+    setVal("#leadCountries", resolved.markets.join(", "));
+    setVal("#leadIndustryInput", resolved.industries.join(", "));
+    setVal("#leadExcludeKeywords", resolved.exclusions.join(", "));
+    const ct = qs<HTMLSelectElement>("#leadCustomerTypes");
+    if (ct) ct.value = resolved.customerType;
+  }
+  const body = buildLfindSearchBody();
+  if (!body.productKeywords) throw new Error("请先填写产品关键词");
+  if (!body.countries && leadBriefMode !== "nl") throw new Error("请先填写目标国家或地区");
+  return body;
+}
+
+function updateLfindJobFromResponse(job: LeadFinderJob, response: LfindTaskResponse) {
+  const task = response.task;
+  const events = response.events || [];
+  const latest = [...events].reverse().find((event) => event.message)?.message || "";
+  const terminal = ["succeeded", "failed", "cancelled"].includes(task.status);
+  job.status = lfindTaskStatus(task.status);
+  job.lfindEvents = events;
+  job.lfindSkipped = response.skipped || job.lfindSkipped || [];
+  job.lfindFailures = response.lfind?.failures || job.lfindFailures || [];
+  job.lfindSynced = response.synced || job.lfindSynced;
+  job.elapsedText = terminal ? "已结束" : "执行中";
+  job.progress = terminal ? 100 : Math.min(92, Math.max(job.progress, 25 + events.length * 4));
+  job.progressLabel = terminal ? "完成度" : "本地进度";
+  job.progressValue = terminal ? "100%" : `${job.progress}%`;
+  job.resultIds = response.opportunities?.map((item) => item.id) || job.resultIds || [];
+  job.resultCount = job.resultIds.length;
+  job.incrementalStats = response.incrementalStats || job.incrementalStats;
+  const summary = response.lfind?.summary;
+  job.metricLabel = "入池 / 原始";
+  job.metricValue = response.incrementalStats
+    ? `${response.incrementalStats.returnedCount} / ${response.incrementalStats.rawCount}`
+    : `${job.resultCount} / ${summary?.rawFound ?? "..."}`;
+  job.steps = terminal
+    ? task.status === "succeeded"
+      ? ["公开来源查询", "候选核验", "同步候选", "等待补全"]
+      : ["公开来源查询", "执行失败", "查看原因", "调整后重试"]
+    : ["提交本地 Runner", "调用 Lfind Skill", "公开来源核验", "等待结果同步"];
+  const skippedLines = (response.skipped || []).slice(0, 5).map((item) =>
+    `过滤：${item.company} · ${item.reason}`
+  );
+  const failureLines = (response.lfind?.failures || []).slice(0, 4).map((item) =>
+    `失败：${item.stage} · ${item.reason}${item.suggestion ? ` · 建议：${item.suggestion}` : ""}`
+  );
+  job.detailLines = [
+    ...buildLeadFinderJobDetails(job.resultIds),
+    `Lfind 任务：${task.id}`,
+    latest ? `最新进度：${latest}` : "最新进度：等待本地 Runner 领取任务",
+    summary?.noResultReason ? `无结果原因：${summary.noResultReason}` : "",
+    ...skippedLines,
+    ...failureLines,
+    task.errorMessage ? `执行错误：${task.errorMessage}` : ""
+  ].filter(Boolean);
+}
+
+async function refreshLfindJob(job: LeadFinderJob) {
+  if (!job.lfindTaskId) return;
+  try {
+    const wasSynced = Boolean(job.lfindSynced);
+    const response = await api<LfindTaskResponse>(`/api/lead-finder/lfind-tasks/${encodeURIComponent(job.lfindTaskId)}`);
+    updateLfindJobFromResponse(job, response);
+    if (response.opportunities?.length) {
+      const existing = state.websiteOpportunities
+        .filter((item) => !response.opportunities!.some((next) => next.id === item.id))
+        .map((item) => ({ ...item, selected: false }));
+      state.websiteOpportunities = [
+        ...response.opportunities.map((item) => ({ ...item, selected: false })),
+        ...existing
+      ];
+      state.leadFinderPage = 1;
+      state.selectedLeadFinderId = response.opportunities[0]?.id || state.selectedLeadFinderId;
+      renderWebsiteOpportunities(state.websiteOpportunities);
+      renderProspectList();
+    }
+    renderLeadFinder(state.websiteOpportunities);
+    if (activeLeadFinderJobId === job.id && qs<HTMLElement>(".view.active")?.id === "lead-task-detail") {
+      renderLeadTaskDetail();
+    }
+    if (["done", "partial"].includes(job.status) && response.synced && !wasSynced) {
+      toast(`Lfind 已同步 ${response.opportunities?.length || 0} 条候选`);
+      job.lfindSynced = true;
+    }
+  } catch (error) {
+    job.status = "failed";
+    job.progress = 100;
+    job.elapsedText = "已结束";
+    job.detailLines = [
+      ...buildLeadFinderJobDetails(job.resultIds),
+      `Lfind 同步失败：${error instanceof Error ? error.message : "任务结果无法同步"}`,
+      "调整建议：在集成中心查看本地 Runner 任务记录，确认 Codex 最终回复是 goodjob-lfind-v1 JSON。"
+    ];
+    renderLeadFinder(state.websiteOpportunities);
+  }
+}
+
+function syncLfindTaskPolling() {
+  const active = leadFinderJobs.some((job) =>
+    job.lfindTaskId && job.status === "running"
+  );
+  if (!active) {
+    if (lfindTaskPollTimer) window.clearInterval(lfindTaskPollTimer);
+    lfindTaskPollTimer = 0;
     return;
   }
+  if (lfindTaskPollTimer) return;
+  lfindTaskPollTimer = window.setInterval(() => {
+    if (!state.user || document.hidden) return;
+    leadFinderJobs
+      .filter((job) => job.lfindTaskId && job.status === "running")
+      .forEach((job) => void refreshLfindJob(job));
+    syncLfindTaskPolling();
+  }, 3_000);
+}
+
+async function runLfindLeadSearch(button?: HTMLButtonElement) {
+  const originalText = button?.textContent || "Lfind 深入查询";
+  const setBusy = (text: string) => {
+    if (!button) return;
+    button.disabled = true;
+    button.classList.add("is-running");
+    button.setAttribute("aria-busy", "true");
+    button.textContent = text;
+  };
+  const restore = () => {
+    if (!button) return;
+    button.disabled = false;
+    button.classList.remove("is-running");
+    button.removeAttribute("aria-busy");
+    button.textContent = originalText;
+  };
+  try {
+    setBusy("准备 Lfind");
+    const body = await prepareLfindSearchBody();
+    const job: LeadFinderJob = {
+      id: `lfind_${Date.now()}`,
+      title: `Lfind 深入查询 · ${currentLeadFinderTitle()}`,
+      subtitle: currentLeadFinderSubtitle(),
+      status: "running",
+      resultCount: 0,
+      channelCount: 1,
+      elapsedText: "刚刚开始",
+      progress: 18,
+      steps: ["提交本地 Runner", "调用 Lfind Skill", "公开来源核验", "等待结果同步"],
+      createdAt: new Date().toISOString(),
+      expanded: true,
+      resultIds: [],
+      detailLines: [...buildLeadFinderJobDetails(), "Lfind 任务：正在创建"]
+    };
+    leadFinderJobs = [job, ...leadFinderJobs].slice(0, 6);
+    renderLeadFinder(state.websiteOpportunities);
+    setBusy("提交 Lfind");
+    const response = await api<{ task: LfindTask; message: string; suggestion: string }>("/api/lead-finder/lfind-tasks", {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+    job.lfindTaskId = response.task.id;
+    job.detailLines = [
+      ...buildLeadFinderJobDetails(),
+      `Lfind 任务：${response.task.id}`,
+      response.message,
+      response.suggestion
+    ];
+    toast("Lfind 深入查询已提交，本地 Runner 会异步执行");
+    renderLeadFinder(state.websiteOpportunities);
+    syncLfindTaskPolling();
+    void refreshLfindJob(job);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "Lfind 深入查询启动失败", "error");
+  } finally {
+    restore();
+  }
+}
+
+async function runLeadFinder(button?: HTMLButtonElement) {
+  const originalText = button?.textContent || "生成并运行任务";
+  let launchStage = "启动前校验";
+  const setStartStage = (stage: string) => {
+    launchStage = stage;
+    if (button) {
+      button.disabled = true;
+      button.classList.add("is-running");
+      button.setAttribute("aria-busy", "true");
+      button.textContent = stage;
+    }
+  };
+  const restoreStartButton = () => {
+    if (!button) return;
+    button.disabled = false;
+    button.classList.remove("is-running");
+    button.removeAttribute("aria-busy");
+    button.textContent = originalText;
+  };
+  const input = qs<HTMLTextAreaElement>("#leadFinderUrlInput");
+  const urls = (input?.value || "").split(/\n|,|，/).map((item) => item.trim()).filter(Boolean).slice(0, Number(qs<HTMLSelectElement>("#leadLimit")?.value || 20));
+  renderLeadFinderSearchLinks();
+  if (!urls.length) await loadLeadProviders();
   let sources: string[] = [];
   if (!urls.length) {
-    await loadLeadProviders();
     const resolution = resolveLeadSearchSources(
       state.leadProviders,
       state.selectedLeadSources,
@@ -29932,19 +36855,44 @@ async function runLeadFinder(button?: HTMLButtonElement) {
         renderSuperSearchPreview();
         toast("超级搜索当前没有可执行的数据源，请开启网页、地图或 AI 深度发现，或选择一个企业数据源", "error");
       } else {
-        toast("当前没有可执行的数据源，请先完成配置或启用来源", "error");
+        const aiReadiness = leadFinderAiReadiness();
+        toast(`当前没有可执行的数据源。你可以配置 AnySearch、Serper、Brave、SerpApi、Google Places，或启用 AI 搜索。${aiReadiness.ready ? "" : aiReadiness.message}`, "error");
       }
+      return;
+    }
+    if (sources.includes("ai_search") && !leadFinderAiReadiness().ready) {
+      toast(leadFinderAiReadiness().message, "error");
       return;
     }
   }
   const limit = Number(qs<HTMLSelectElement>("#leadLimit")?.value || 12);
   const scheduleEnabled = leadFinderMode === "standard" && Boolean(qs<HTMLInputElement>("#leadFinderScheduleInput")?.checked);
 
+  // 先完成自然语言解析，再进入费用确认和后台启动，避免用户看到“解析成功”后
+  // 仍不知道是否已经进入启动流程。失焦自动解析与这里的启动解析会复用同一个请求。
+  if (!urls.length && leadBriefMode === "nl") {
+    const goal = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim();
+    if (!goal) {
+      toast("请先输入自然语言搜索目标", "error");
+      return;
+    }
+    if (!leadAiParsed) {
+      setStartStage("正在解析搜索目标");
+      const parsed = await runLeadAiParse();
+      if (!parsed) {
+        recordLeadFinderLaunchFailure("AI 解析", leadAiParseLastError || "AI 未返回可执行的标准搜索条件");
+        restoreStartButton();
+        return;
+      }
+    }
+  }
+
   // 计费源成本护栏：付费 API 与 AI 搜索都会产生费用，搜索前确认
   if (!urls.length) {
     const billed = sources.map((id) => state.leadProviders.find((p) => p.id === id)).filter((p): p is LeadProviderStatus => Boolean(p && (p.tier === "paid" || p.tier === "ai")));
     if (leadFinderMode === "super" && billed.length && Number(qs<HTMLInputElement>("#leadSuperCost")?.value || 0) <= 0) {
       toast("超级搜索选择了计费或 AI 来源，请先设置费用上限", "error");
+      restoreStartButton();
       return;
     }
     if (billed.length) {
@@ -29959,29 +36907,63 @@ async function runLeadFinder(button?: HTMLButtonElement) {
         consequences: ["第三方 API 或 AI 模型可能产生实际费用", "具体费用以对应服务商账单为准", "任务创建后可在运行记录中查看调用情况"],
         confirmLabel: "确认并开始",
         tone: "warning"
-      })) return;
+      })) {
+        restoreStartButton();
+        return;
+      }
     }
     if (scheduleEnabled
       && billed.length
       && !qs<HTMLInputElement>("#leadFinderRecurringCostInput")?.checked) {
       toast("定期任务包含计费或 AI 数据源，请单独勾选持续费用确认", "error");
+      restoreStartButton();
       return;
     }
   }
 
-  let job: LeadFinderJob | null = null;
-  if (button) {
-    button.disabled = true;
-    button.classList.add("is-running");
-    button.textContent = urls.length ? "正在登记链接" : "正在创建任务";
+  // 已有搜索任务在进行中时，先与用户确认是否排队，而不是直接撞后端 409
+  if (!urls.length) {
+    setStartStage("正在检查进行中的任务");
+    let activeRuns: ProspectRunApiRecord[] = [];
+    try {
+      const list = await api<{ runs: ProspectRunApiRecord[] }>("/api/prospect-runs?limit=20");
+      activeRuns = list.runs.filter((run) => prospectRunActiveStatuses.has(run.status));
+    } catch {
+      // 检查失败不阻塞启动，后端兜底校验仍会拦截真正的冲突
+    }
+    if (activeRuns.length) {
+      const runningDetail = activeRuns.slice(0, 3).map((run) =>
+        `${run.executionSnapshot?.campaign.name || "搜客任务"} · ${prospectRunStatusLabel(run.status)}`
+      ).join("；") + (activeRuns.length > 3 ? ` 等 ${activeRuns.length} 个任务` : "");
+      const queued = await confirmAction({
+        title: "已有搜索任务进行中",
+        message: "当前已经有搜索任务在进行中，是否将本次搜索任务进行排队？",
+        detail: runningDetail,
+        detailLabel: "进行中的任务",
+        consequences: [
+          "新任务会立即创建并进入执行队列，等待系统调度执行",
+          "排队不会重复扣用已确认的计费来源，费用以实际执行为准",
+          "也可以先取消，等当前任务完成后再启动"
+        ],
+        confirmLabel: "排队执行",
+        tone: "warning"
+      });
+      if (!queued) {
+        restoreStartButton();
+        return;
+      }
+    }
   }
+
+  let job: LeadFinderJob | null = null;
+  setStartStage(urls.length ? "正在登记链接" : "正在创建任务");
   try {
     if (!urls.length) {
       // 自然语言模式：若尚未解析，启动前自动解析（描述完直接点搜索也能用，无需手动点「AI 解析」）
       if (leadBriefMode === "nl") {
         const goal = qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.value.trim();
         if (goal && !leadAiParsed) {
-          if (button) button.textContent = "正在解析搜索目标";
+          setStartStage("正在解析搜索目标");
           const parsed = await runLeadAiParse();
           if (!parsed) return;
         }
@@ -29990,9 +36972,9 @@ async function runLeadFinder(button?: HTMLButtonElement) {
         sources,
         limit,
         leadFinderMode,
-        (stage) => { if (button) button.textContent = stage; }
+        (stage) => setStartStage(stage)
       );
-      if (button) button.textContent = "搜索已进入队列";
+      setStartStage("搜索已进入队列");
       const backendJob = prospectRunJob(result);
       if (result.launchTimings) {
         const timing = result.launchTimings;
@@ -30052,16 +37034,18 @@ async function runLeadFinder(button?: HTMLButtonElement) {
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
-    toast(`已登记 ${result.opportunities.length} 个官网链接，未访问企业网页`);
+    toast(`已登记 ${result.opportunities.length} 个官网链接，公开资料待补全`);
   } catch (error) {
     if (job) updateLeadFinderJob(job.id, [], "failed");
-    toast(`搜客任务失败：${error instanceof Error ? error.message : "请检查网络后重试"}`, "error");
-  } finally {
-    if (button) {
-      button.disabled = false;
-      button.classList.remove("is-running");
-      button.textContent = originalText;
+    const reason = error instanceof Error ? error.message : "请检查网络、AI 配置和数据源状态后重试";
+    if (!job) recordLeadFinderLaunchFailure(launchStage, error);
+    if (reason.includes("相同搜索范围")) {
+      toast("当前已有相同搜索范围的搜索任务在进行中，本次未重复启动。可等待该任务完成，或调整搜索条件后再启动", "error");
+    } else {
+      toast(`搜客任务失败：未启动（${launchStage}）：${reason}`, "error");
     }
+  } finally {
+    restoreStartButton();
   }
 }
 
@@ -30209,7 +37193,7 @@ async function registerWebsiteReferences(button?: HTMLButtonElement) {
     renderWebsiteOpportunities(state.websiteOpportunities);
     renderLeadFinder(state.websiteOpportunities);
     renderProspectList();
-    toast(`已登记 ${result.opportunities.length} 个官网链接，未访问企业网页`);
+    toast(`已登记 ${result.opportunities.length} 个官网链接，公开资料待补全`);
   } catch (error) {
     toast(`链接登记失败：${error instanceof Error ? error.message : "请检查网址格式后重试"}`, "error");
   } finally {
@@ -30223,7 +37207,7 @@ async function registerWebsiteReferences(button?: HTMLButtonElement) {
 async function openWebsiteQualification(button?: HTMLButtonElement) {
   const opportunities = collectWebsiteRows();
   if (!opportunities.length) {
-    toast("请至少勾选一条待资格审查的官网候选", "error");
+    toast("请至少勾选一条官网候选", "error");
     return;
   }
   if (button) {
@@ -30259,7 +37243,7 @@ async function openWebsiteQualification(button?: HTMLButtonElement) {
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "前往资格审查";
+      button.textContent = "保存并打开候选";
     }
   }
 }
@@ -31041,10 +38025,12 @@ function openCustomerModal(customer?: Customer) {
       <div class="form-field full"><label>公司全名（单据 / 资料）</label><input id="customerCompanyFullNameInput" maxlength="200" value="${escapeHtml(customerDocumentName(customer || { company: "" } as Customer))}" placeholder="例如：Nordic Tools International Trading Co., Ltd."><small class="form-hint">报价、合同、发票、装箱单、报关资料优先使用此名称</small></div>
       <div class="form-field full"><label>客户来源</label><input id="customerSourceInput" list="customerSourceOptions" maxlength="120" value="${escapeHtml(customer?.source || (editing ? "" : "手动新增"))}" placeholder="例如 官网询盘、展会、转介绍、Alibaba、LinkedIn"><datalist id="customerSourceOptions"><option value="手动新增"></option><option value="官网询盘"></option><option value="展会"></option><option value="转介绍"></option><option value="Alibaba"></option><option value="LinkedIn"></option><option value="WhatsApp"></option><option value="批量导入"></option><option value="智能获客"></option></datalist></div>
       <div class="form-field full"><label>WhatsApp</label><input id="customerWhatsappInput" inputmode="tel" value="${escapeHtml(customer?.whatsapp || customer?.whatsappPhone || "")}" placeholder="例如 +49123456789（含国家码）"></div>
+      <div class="form-field"><label>微信</label><input id="customerWechatInput" maxlength="100" value="${escapeHtml(customer?.wechat || "")}" placeholder="微信号或绑定手机号"></div>
       <div class="form-field"><label>电话</label><input id="customerPhoneInput" inputmode="tel" value="${escapeHtml(customer?.phone || "")}" placeholder="公司电话或联系人电话"></div>
       <div class="form-field"><label>邮箱</label><input id="customerEmailInput" type="email" value="${escapeHtml(customer?.email || "")}" placeholder="例如 sales@example.com"></div>
       <div class="form-field full"><label>联系方式备注 / 其它渠道</label><textarea id="customerContactRemarkInput" rows="2" maxlength="500" placeholder="例如：LinkedIn / 微信 / Telegram / 展会名片；可分行记录多个渠道">${escapeHtml(customer?.contactRemark || "")}</textarea></div>
       <div class="form-field full"><label>官网</label><input id="customerWebsiteInput" value="${escapeHtml(customer?.website || "")}" placeholder="例如 https://example.com"></div>
+      <div class="form-field full"><label>其它说明</label><textarea id="customerOtherNotesInput" rows="3" maxlength="2000" placeholder="客户偏好、业务背景、注意事项等自由记录">${escapeHtml(customer?.otherNotes || "")}</textarea></div>
       <label class="form-field"><span>客户分级</span><select id="customerGradeInput"><option value="A" ${selectedGrade === "A" ? "selected" : ""}>A · 核心客户</option><option value="B" ${selectedGrade === "B" ? "selected" : ""}>B · 重点客户</option><option value="C" ${selectedGrade === "C" ? "selected" : ""}>C · 常规客户</option><option value="D" ${selectedGrade === "D" ? "selected" : ""}>D · 低优先级</option></select></label>
       <div class="form-field"><label>健康度（人工评分）</label><input id="customerHealthInput" type="number" min="0" max="100" value="${customer?.health ?? 72}"></div>
       <div class="form-field"><label>下一提醒</label><input id="customerReminderInput" value="${escapeHtml(customer?.nextReminder || "")}"></div>
@@ -31081,11 +38067,13 @@ async function saveCustomer() {
     contact: qs<HTMLInputElement>("#customerContactInput")?.value || "待维护",
     country: qs<HTMLInputElement>("#customerCountryInput")?.value || "未知",
     whatsapp,
+    wechat: qs<HTMLInputElement>("#customerWechatInput")?.value.trim() || "",
     source: qs<HTMLInputElement>("#customerSourceInput")?.value.trim() || (editingId ? "" : "手动新增"),
     phone: qs<HTMLInputElement>("#customerPhoneInput")?.value.trim() || "",
     email: qs<HTMLInputElement>("#customerEmailInput")?.value.trim() || "",
     contactRemark: qs<HTMLTextAreaElement>("#customerContactRemarkInput")?.value.trim() || "",
     website: qs<HTMLInputElement>("#customerWebsiteInput")?.value.trim() || "",
+    otherNotes: qs<HTMLTextAreaElement>("#customerOtherNotesInput")?.value.trim() || "",
     grade: (qs<HTMLSelectElement>("#customerGradeInput")?.value || "C") as "A" | "B" | "C" | "D",
     health: Math.max(0, Math.min(100, Number(qs<HTMLInputElement>("#customerHealthInput")?.value || 72))),
     nextReminder: qs<HTMLInputElement>("#customerReminderInput")?.value || "明天 10:00",
@@ -31096,10 +38084,11 @@ async function saveCustomer() {
     defaultIncoterm: qs<HTMLInputElement>("#customerIncotermInput")?.value.trim() || "",
     defaultPaymentTerm: qs<HTMLInputElement>("#customerPaymentTermInput")?.value.trim() || ""
   };
-  const result = await api<{ customer: Customer }>(editingId ? `/api/customers/${editingId}` : "/api/customers", {
-    method: editingId ? "PATCH" : "POST",
-    body: JSON.stringify(payload)
-  });
+  try {
+    const result = await api<{ customer: Customer }>(editingId ? `/api/customers/${editingId}` : "/api/customers", {
+      method: editingId ? "PATCH" : "POST",
+      body: JSON.stringify(payload)
+    });
   if (editingId) {
     state.customers = state.customers.map((customer) => customer.id === result.customer.id ? result.customer : customer);
   } else {
@@ -31118,6 +38107,9 @@ async function saveCustomer() {
   void refreshDashboardOnly();
   closeModal();
   toast(editingId ? "客户已保存" : "客户已新增");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "保存失败", "error");
+  }
 }
 
 async function bulkDeleteCustomers() {
@@ -31915,7 +38907,9 @@ function openDailyReportReplyModal(report: DailyReport, comment: DailyReportComm
 
 function internalMessageActionLabel(message: InternalMessage) {
   if (message.relatedType === "daily_report" && message.relatedId) return "查看日报";
+  if (message.relatedType === "lead" && message.relatedId) return "查看线索";
   if (message.relatedType === "email_return" && message.relatedId) return "查看邮件回流";
+  if (message.relatedType === "quote_history" && message.relatedId) return "查看报价变化";
   if (message.relatedType === "integration_approval") return "处理审批";
   if (message.relatedType === "integration_call") return "查看运行记录";
   if (message.relatedType === "integration_connection") return "查看连接";
@@ -31956,9 +38950,23 @@ function navigateFromInternalMessage(message: InternalMessage) {
     activateNavView("daily-reports");
     return;
   }
+  if (message.relatedType === "lead" && message.relatedId) {
+    activateNavView("leads");
+    void reloadLeads().then(() => openLead(message.relatedId)).catch((error) => {
+      toast(error instanceof Error ? error.message : "线索加载失败", "error");
+    });
+    return;
+  }
   if (message.relatedType === "email_return" && message.relatedId) {
     activateNavView("email-return-flow");
     void openEmailReturnDetail(message.relatedId);
+    return;
+  }
+  if (message.relatedType === "quote_history" && message.relatedId) {
+    state.quoteHistoryFocusId = message.relatedId;
+    state.quoteHistoryPage = 1;
+    activateNavView("documents");
+    setDocumentWorkspaceMode("quote-history");
     return;
   }
   if (["integration_approval", "integration_call", "integration_connection", "integration_event", "integration_connector"].includes(message.relatedType)) {
@@ -32028,6 +39036,36 @@ async function refreshInternalMessages(showToast = false) {
   }
 }
 
+async function refreshInternalMessageBadge() {
+  if (!state.user) return;
+  try {
+    const result = await api<{ unreadCount: number }>("/api/internal-messages/unread-count");
+    state.internalUnreadCount = Math.max(0, Number(result.unreadCount || 0));
+    updateInternalMessageBadge();
+  } catch {
+    // The full inbox refresh will surface an actionable error when the user opens messages.
+  }
+}
+
+async function markAllInternalMessagesRead() {
+  const button = qs<HTMLButtonElement>("#inboxMarkAllReadButton");
+  if (button) setButtonPending(button, true, "全部已读", "处理中");
+  try {
+    const result = await api<{ updatedCount: number; unreadCount: number }>("/api/internal-messages/read-all", { method: "POST" });
+    const readAt = new Date().toISOString();
+    state.internalMessages.forEach((message) => {
+      if (!message.readAt) message.readAt = readAt;
+    });
+    state.internalUnreadCount = result.unreadCount;
+    renderInbox();
+    toast(result.updatedCount ? `已标记 ${result.updatedCount} 条消息为已读` : "没有未读消息");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "批量标记已读失败", "error");
+  } finally {
+    if (button) setButtonPending(button, false, "全部已读", "处理中");
+  }
+}
+
 async function openInternalMessage(id: string) {
   const message = state.internalMessages.find((item) => item.id === id);
   if (!message) return;
@@ -32057,6 +39095,8 @@ function installIntegrationCenterInteractions() {
 
 function installEvents() {
   ensureUiLayer();
+  renderDashboardCurrentDate();
+  window.setInterval(renderDashboardCurrentDate, 60_000);
   installIntegrationCenterInteractions();
   setupApprovalEvents();
   qs<HTMLButtonElement>("#prospectRadarCloseButton")?.addEventListener("click", closeProspectRadar);
@@ -32069,12 +39109,21 @@ function installEvents() {
   qs<HTMLDialogElement>("#prospectRadarDialog")?.addEventListener("close", destroyProspectRadar);
   window.setInterval(refreshVisibleDashboard, DASHBOARD_LIVE_REFRESH_MS);
   window.setInterval(() => {
-    if (state.user && document.visibilityState === "visible") void refreshInternalMessages(false);
-  }, 30000);
+    if (state.user && document.visibilityState === "visible") void refreshExchangeTicker();
+  }, EXCHANGE_RATE_REFRESH_MS);
+ window.setInterval(() => {
+   if (state.user && document.visibilityState === "visible") void refreshInternalMessages(false);
+ }, 30000);
+  window.setInterval(() => {
+    if (state.user && document.visibilityState === "visible") void refreshInternalMessageBadge();
+  }, 5000);
   window.addEventListener("focus", refreshVisibleDashboard);
-  window.addEventListener("focus", () => {
-    if (state.user) void refreshInternalMessages(false);
-  });
+ window.addEventListener("focus", () => {
+    if (state.user) {
+      void refreshInternalMessages(false);
+      void refreshInternalMessageBadge();
+    }
+ });
   document.addEventListener("visibilitychange", refreshVisibleDashboard);
   document.addEventListener("visibilitychange", () => {
     const view = qs<HTMLElement>(".view.active")?.id || "";
@@ -32106,26 +39155,30 @@ function installEvents() {
     const password = qs<HTMLInputElement>("#loginPassword")?.value || "";
     void loginWithPassword(email, password).catch((error) => toast(error instanceof Error ? error.message : "登录失败", "error"));
   }, true);
-  qsa<HTMLButtonElement>("#loginDemoAccounts [data-demo-email]").forEach((button) => {
-    const fillDemoAccount = () => {
-      const email = button.dataset.demoEmail || "";
+  qsa<HTMLButtonElement>("[data-login-demo-email]").forEach((button) => {
+    button.addEventListener("click", () => {
       const emailInput = qs<HTMLInputElement>("#loginEmail");
       const passwordInput = qs<HTMLInputElement>("#loginPassword");
-      if (emailInput) emailInput.value = email;
-      if (passwordInput) passwordInput.value = DEMO_ACCOUNT_PASSWORD;
-      qsa<HTMLButtonElement>("#loginDemoAccounts [data-demo-email]")
-        .forEach((item) => item.classList.toggle("is-filled", item === button));
-      return email;
-    };
-    button.addEventListener("click", () => {
-      fillDemoAccount();
-    });
-    button.addEventListener("dblclick", () => {
-      const email = fillDemoAccount();
-      void loginWithPassword(email, DEMO_ACCOUNT_PASSWORD)
-        .catch((error) => toast(error instanceof Error ? error.message : "登录失败", "error"));
+      if (!emailInput || !passwordInput) return;
+      emailInput.value = button.dataset.loginDemoEmail || "";
+      passwordInput.value = button.dataset.loginDemoPassword || "";
+      qsa<HTMLButtonElement>("[data-login-demo-email]").forEach((item) => item.classList.toggle("is-filled", item === button));
+      emailInput.dispatchEvent(new Event("input", { bubbles: true }));
+      passwordInput.dispatchEvent(new Event("input", { bubbles: true }));
+      emailInput.focus();
+      toast("默认管理员登录信息已填入");
     });
   });
+  // 内置管理员账号（数据库内置，admin@goodjob.com / goodjob123）：登录页加载时自动填入，
+  // 仅在输入框为空时填充，不清空用户已输入的内容。
+  const loginEmailPrefill = qs<HTMLInputElement>("#loginEmail");
+  const loginPasswordPrefill = qs<HTMLInputElement>("#loginPassword");
+  const loginDemoPrefill = qsa<HTMLButtonElement>("[data-login-demo-email]")[0];
+  if (loginEmailPrefill && loginPasswordPrefill && loginDemoPrefill) {
+    if (!loginEmailPrefill.value.trim()) loginEmailPrefill.value = loginDemoPrefill.dataset.loginDemoEmail || "";
+    if (!loginPasswordPrefill.value) loginPasswordPrefill.value = loginDemoPrefill.dataset.loginDemoPassword || "";
+    loginDemoPrefill.classList.add("is-filled");
+  }
   qs<HTMLButtonElement>("#logoutButton")?.addEventListener("click", async () => {
     if (memoDirty && !await confirmAction({
       title: "退出并清除本机草稿",
@@ -32143,10 +39196,13 @@ function installEvents() {
   });
   qs<HTMLButtonElement>("#profileEntryButton")?.addEventListener("click", () => activateNavView("profile", () => renderProfile()));
   qs<HTMLButtonElement>("#profileSaveButton")?.addEventListener("click", (event) => void saveProfileEmailBinding(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#profileChangePasswordButton")?.addEventListener("click", (event) => void changeProfilePassword(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#profileClearImapButton")?.addEventListener("click", (event) => void clearProfileImapPassword(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#profileTestImapButton")?.addEventListener("click", (event) => void testProfileImap(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#profileDomainAuthButton")?.addEventListener("click", (event) => void checkProfileEmailDomain(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#companyProfileSaveButton")?.addEventListener("click", () => void saveCompanyProfile());
+  qs<HTMLButtonElement>("#mailboxPoolAddButton")?.addEventListener("click", () => openSenderMailboxModal());
+  qs<HTMLButtonElement>("#trackingSaveButton")?.addEventListener("click", (event) => void saveEmailTrackingConfig(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#mysqlImportPicker")?.addEventListener("click", () => qs<HTMLInputElement>("#mysqlImportFile")?.click());
   qs<HTMLInputElement>("#mysqlImportFile")?.addEventListener("change", (event) => {
     const file = (event.currentTarget as HTMLInputElement).files?.[0];
@@ -32238,18 +39294,36 @@ function installEvents() {
       if (state.summary) renderDashboard(state.summary, state.todos, state.customers);
     });
   });
-  qsa<HTMLButtonElement>("#dashboard .section-head .btn").forEach((button) => {
+  qsa<HTMLButtonElement>("#todo .section-head .btn").forEach((button) => {
     if (button.textContent?.includes("新增待办")) button.addEventListener("click", () => openTodoModal());
-    if (button.textContent?.includes("批量完成")) button.addEventListener("click", async () => {
-      const pending = filterTodos(activeTodos(state.todos)).filter((todo) => !todo.done).slice(0, 5);
-      await Promise.all(pending.map((todo) => api(`/api/todos/${todo.id}/complete`, { method: "POST" })));
-      pending.forEach((todo) => { todo.done = true; });
-      renderTodos(state.todos);
-      updateTodoChips(state.todos);
-      void refreshDashboardOnly();
-      toast(`已完成 ${pending.length} 条待办`);
+    if (button.textContent?.includes("批量完成")) button.addEventListener("click", async (event) => {
+      const target = event.currentTarget as HTMLButtonElement;
+      const pending = filterTodos(activeTodos(state.todos)).filter((todo) => !todo.done);
+      // 提醒规则生成的待办必须逐条记录跟进结果，批量完成只处理普通待办，避免整批被后端驳回。
+      const direct = pending.filter((todo) => !todo.reminderRuleId).slice(0, 5);
+      const skipped = pending.filter((todo) => todo.reminderRuleId).length;
+      if (!direct.length) {
+        toast(skipped ? `${skipped} 条待办由提醒规则生成，请点击左侧圆圈逐条记录跟进结果` : "当前没有可完成的待办", "error");
+        return;
+      }
+      target.disabled = true;
+      try {
+        for (const todo of direct) {
+          const response = await api<{ todo: Todo }>(`/api/todos/${todo.id}`, { method: "PATCH", body: JSON.stringify({ done: true }) });
+          Object.assign(todo, response.todo);
+        }
+        renderTodos(state.todos);
+        updateTodoChips(state.todos);
+        void refreshDashboardOnly();
+        toast(skipped ? `已完成 ${direct.length} 条；${skipped} 条提醒待办需逐条记录跟进结果` : `已完成 ${direct.length} 条待办`);
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "批量完成失败，请稍后重试", "error");
+      } finally {
+        target.disabled = false;
+      }
     });
   });
+  qsa<HTMLButtonElement>("[data-todo-open-dashboard]").forEach((button) => button.addEventListener("click", () => activateNavView("dashboard")));
   qs<HTMLButtonElement>("#planTaskNewButton")?.addEventListener("click", () => openPlanTaskModal());
   qs<HTMLButtonElement>("#planTaskNewButtonInline")?.addEventListener("click", () => openPlanTaskModal());
   qs<HTMLButtonElement>("#planTaskPushSelectedButton")?.addEventListener("click", (event) => void pushPlanTasksToTodos(state.selectedPlanTaskIds, event.currentTarget as HTMLButtonElement));
@@ -32417,6 +39491,19 @@ function installEvents() {
   });
   qs<HTMLButtonElement>("#dailyAutoFill")?.addEventListener("click", fillDailyReportFromDraft);
   qs<HTMLButtonElement>("#inboxRefreshButton")?.addEventListener("click", () => void refreshInternalMessages(true));
+  qs<HTMLButtonElement>("#inboxMarkAllReadButton")?.addEventListener("click", () => void markAllInternalMessagesRead());
+  qs<HTMLButtonElement>("#leadRefreshButton")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    setButtonPending(button, true, "刷新", "刷新中");
+    try {
+      await reloadLeads();
+      toast("线索已刷新");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "线索刷新失败", "error");
+    } finally {
+      setButtonPending(button, false, "刷新", "刷新中");
+    }
+  });
   qs<HTMLButtonElement>("#notificationBellButton")?.addEventListener("click", () => {
     activateNavView("inbox");
   });
@@ -32475,6 +39562,12 @@ function installEvents() {
   qs<HTMLButtonElement>("#agentKnowledgeStatus")?.addEventListener("click", () => void openAgentKnowledgeCenter());
   qs<HTMLButtonElement>("#agentTriggerStatus")?.addEventListener("click", () => void openAgentTriggerManager());
   qs<HTMLButtonElement>("#agentGovernanceStatus")?.addEventListener("click", () => void openAgentGovernance());
+  qs<HTMLButtonElement>("#salesDistillationButton")?.addEventListener("click", (event) => void createSalesDistillationFromUi(event.currentTarget as HTMLButtonElement));
+  bindMaintenanceCenterEvents();
+  bindOutreachBatchesEvents();
+  bindExchangeEvents();
+  bindSalesSkillCenterEvents();
+  qs<HTMLButtonElement>("#salesDistillationRefreshButton")?.addEventListener("click", () => void loadSalesDistillationWorkspace());
   qs<HTMLButtonElement>("#agentNewPlanButton")?.addEventListener("click", () => {
     setFieldValue("#agentGoalInput", "");
     startNewAgentConversation();
@@ -32522,6 +39615,23 @@ function installEvents() {
     state.leadPage = 1;
     renderLeads();
   });
+  qs<HTMLInputElement>("#peerSearchInput")?.addEventListener("input", (event) => {
+    state.peerSearch = (event.target as HTMLInputElement).value;
+    state.peerPage = 1;
+    renderPeers();
+  });
+  qs<HTMLSelectElement>("#peerRelationFilter")?.addEventListener("change", (event) => {
+    state.peerRelationFilter = ((event.target as HTMLSelectElement).value || "all") as typeof state.peerRelationFilter;
+    state.peerPage = 1;
+    renderPeers();
+  });
+  qs<HTMLSelectElement>("#peerSortSelect")?.addEventListener("change", (event) => {
+    state.peerSort = ((event.target as HTMLSelectElement).value || "newest") as typeof state.peerSort;
+    state.peerPage = 1;
+    renderPeers();
+  });
+  qs<HTMLButtonElement>("#peerCreateButton")?.addEventListener("click", () => openPeerModal());
+  qs<HTMLButtonElement>("#peerImportButton")?.addEventListener("click", () => openPeerImportModal());
   qs<HTMLInputElement>("#waThreadSearch")?.addEventListener("input", (event) => {
     state.waThreadSearch = (event.target as HTMLInputElement).value;
     renderWhatsAppThreads();
@@ -32559,6 +39669,13 @@ function installEvents() {
     renderLeads();
   });
   qs<HTMLButtonElement>("#leadFilterReset")?.addEventListener("click", resetLeadFilters);
+  qs<HTMLButtonElement>("#leadReplyFilterButton")?.addEventListener("click", (event) => {
+    state.leadReplyFilter = state.leadReplyFilter === "all" ? "replied" : "all";
+    (event.currentTarget as HTMLButtonElement).classList.toggle("primary", state.leadReplyFilter === "replied");
+    state.leadPage = 1;
+    renderLeads();
+  });
+  qs<HTMLButtonElement>("#leadCreateOutreachBatchButton")?.addEventListener("click", () => createLeadOutreachBatchFromSelection());
   qs("#leadDrawerBackdrop")?.addEventListener("click", closeLeadDrawer);
   ["#leadFinderGoalInput", "#leadProductKeywords", "#leadCountries", "#leadIndustryInput", "#leadCustomerTypes", "#leadExcludeKeywords"].forEach((selector) => {
     qs<HTMLElement>(selector)?.addEventListener("input", renderLeadFinderSearchLinks);
@@ -32578,7 +39695,10 @@ function installEvents() {
   applyBriefMode();
   qs<HTMLButtonElement>("#leadAiParseButton")?.addEventListener("click", () => void runLeadAiParse());
   qs<HTMLButtonElement>("#leadAiClearButton")?.addEventListener("click", () => clearLeadAiPreview());
-  qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.addEventListener("input", () => { if (leadAiParsed) clearLeadAiPreview(true); });
+  qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.addEventListener("input", () => {
+    leadAiParseLastError = "";
+    if (leadAiParsed) clearLeadAiPreview(true);
+  });
   // 自然语言框失焦时自动解析（描述完离开焦点即解析，预览自动出现，无需手动点「AI 解析」）
   qs<HTMLTextAreaElement>("#leadFinderGoalInput")?.addEventListener("blur", () => {
     if (leadBriefMode === "nl" && !leadAiParsed) void runLeadAiParse();
@@ -32619,6 +39739,8 @@ function installEvents() {
   qs<HTMLButtonElement>("#leadSourceManageInline")?.addEventListener("click", () => openLeadSourceCenter());
   qs<HTMLButtonElement>("#leadFinderStartButton")?.addEventListener("click", (event) => void runLeadFinder(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderStartButtonInline")?.addEventListener("click", (event) => void runLeadFinder(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#leadFinderLfindButton")?.addEventListener("click", (event) => void runLfindLeadSearch(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#leadFinderLfindInlineButton")?.addEventListener("click", (event) => void runLfindLeadSearch(event.currentTarget as HTMLButtonElement));
   // ===== 产品维护事件绑定 =====
   qs<HTMLButtonElement>("#productAddButton")?.addEventListener("click", () => openProductModal());
   qs<HTMLButtonElement>("#productEmptyAdd")?.addEventListener("click", () => openProductModal());
@@ -32770,6 +39892,11 @@ function installEvents() {
   });
   qs<HTMLElement>("#leadFinderLiveOverview")?.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
+    if (target.closest("[data-lead-live-follow]")) {
+      event.preventDefault();
+      scrollLeadFinderLiveToLatest();
+      return;
+    }
     if (target.closest("[data-lead-empty-start]")) {
       event.preventDefault();
       void runLeadFinder(target.closest("[data-lead-empty-start]") as HTMLButtonElement);
@@ -32870,10 +39997,12 @@ function installEvents() {
     renderLeadFinder(state.websiteOpportunities);
     toast("搜客清单已刷新");
   });
-  qs<HTMLButtonElement>("#prospectGenerateMailButton")?.addEventListener("click", generateProspectMailDraft);
+  qs<HTMLButtonElement>("#prospectGenerateMailButton")?.addEventListener("click", (event) => void generateProspectMailDraft(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectPreviewMailButton")?.addEventListener("click", renderProspectMailPreview);
   qs<HTMLButtonElement>("#prospectSendMailButton")?.addEventListener("click", (event) => void sendProspectDevelopmentEmail(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectSyncButton")?.addEventListener("click", (event) => void syncSelectedProspects(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectEnrichContactsButton")?.addEventListener("click", (event) => void enrichSelectedProspectContacts(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectBatchCreateButton")?.addEventListener("click", (event) => void createOutreachBatchFromSelection(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectExcludeButton")?.addEventListener("click", (event) => requestProspectExclusion(state.selectedProspectIds, event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectAssignButton")?.addEventListener("click", (event) => void updateProspectBatch("assign", state.selectedProspectIds, event.currentTarget as HTMLButtonElement));
   qs<HTMLInputElement>("#prospectSelectPage")?.addEventListener("change", (event) => {
@@ -32961,12 +40090,18 @@ function installEvents() {
   });
   qs<HTMLButtonElement>("#newDocumentButton")?.addEventListener("click", openNewDocument);
   qs<HTMLButtonElement>("#documentImportButton")?.addEventListener("click", openTradeDocumentImport);
+  qs<HTMLButtonElement>("#documentOcrButton")?.addEventListener("click", openTradeDocumentOcr);
   qs<HTMLButtonElement>("#documentDefaultsViewButton")?.addEventListener("click", () => setDocumentWorkspaceMode("defaults"));
   qs<HTMLButtonElement>("#documentDefaultsBackButton")?.addEventListener("click", () => setDocumentWorkspaceMode("studio"));
   qs<HTMLButtonElement>("#documentDefaultsSaveButton")?.addEventListener("click", () => void saveDocumentDefaults());
   qs<HTMLButtonElement>("#documentDefaultsManageAssets")?.addEventListener("click", () => openDocumentAssetManager(state.documentAssets));
+  qs<HTMLButtonElement>("#documentSellerProfilesManage")?.addEventListener("click", () => openDocumentAssetManager(state.documentAssets));
   qs<HTMLButtonElement>("#documentHistoryViewButton")?.addEventListener("click", () => setDocumentWorkspaceMode("history"));
   qs<HTMLButtonElement>("#documentHistoryBackButton")?.addEventListener("click", () => setDocumentWorkspaceMode("studio"));
+  qs<HTMLButtonElement>("#quoteHistoryViewButton")?.addEventListener("click", () => { state.quoteHistoryFocusId = ""; setQuoteHistoryMode("records", false); setDocumentWorkspaceMode("quote-history"); });
+  qs<HTMLButtonElement>("#quoteHistoryBackButton")?.addEventListener("click", () => setDocumentWorkspaceMode("studio"));
+  qs<HTMLButtonElement>("#quoteHistoryRecordsModeButton")?.addEventListener("click", () => setQuoteHistoryMode("records"));
+  qs<HTMLButtonElement>("#quoteHistoryProductModeButton")?.addEventListener("click", () => setQuoteHistoryMode("product"));
   qs<HTMLButtonElement>("#documentConvertButton")?.addEventListener("click", openDocumentConversion);
   qs<HTMLButtonElement>("#selectDocumentProductsButton")?.addEventListener("click", openProductPicker);
   qs<HTMLButtonElement>("#documentHistorySearchButton")?.addEventListener("click", () => { state.documentHistoryPage = 1; void loadDocumentHistory(); });
@@ -32974,7 +40109,13 @@ function installEvents() {
   qs<HTMLButtonElement>("#documentHistoryPrevButton")?.addEventListener("click", () => { state.documentHistoryPage = Math.max(1, state.documentHistoryPage - 1); void loadDocumentHistory(); });
   qs<HTMLButtonElement>("#documentHistoryNextButton")?.addEventListener("click", () => { state.documentHistoryPage = Math.min(state.documentHistoryPageCount, state.documentHistoryPage + 1); void loadDocumentHistory(); });
   qs<HTMLInputElement>("#documentHistoryKeyword")?.addEventListener("keydown", (event) => { if (event.key === "Enter") { state.documentHistoryPage = 1; void loadDocumentHistory(); } });
+  qs<HTMLButtonElement>("#quoteHistorySearchButton")?.addEventListener("click", () => { state.quoteHistoryFocusId = ""; state.quoteHistoryPage = 1; void loadQuoteHistory(); });
+  qs<HTMLButtonElement>("#quoteHistoryResetButton")?.addEventListener("click", resetQuoteHistoryFilters);
+  qs<HTMLButtonElement>("#quoteHistoryPrevButton")?.addEventListener("click", () => { state.quoteHistoryPage = Math.max(1, state.quoteHistoryPage - 1); void loadQuoteHistory(); });
+  qs<HTMLButtonElement>("#quoteHistoryNextButton")?.addEventListener("click", () => { state.quoteHistoryPage = Math.min(state.quoteHistoryPageCount, state.quoteHistoryPage + 1); void loadQuoteHistory(); });
+  qsa<HTMLInputElement>("#quoteHistoryKeyword, #quoteHistoryProduct, #quoteHistoryCustomer, #quoteHistoryDeal, #quoteHistoryCountry").forEach((input) => input.addEventListener("keydown", (event) => { if (event.key === "Enter") { state.quoteHistoryFocusId = ""; state.quoteHistoryPage = 1; void loadQuoteHistory(); } }));
   qs<HTMLButtonElement>("#saveDocumentButton")?.addEventListener("click", () => void saveTradeDocument());
+  qs<HTMLButtonElement>("#advancedExcelButton")?.addEventListener("click", () => void openAdvancedExcelPanel());
   qs<HTMLButtonElement>("#exportDocumentPdfButton")?.addEventListener("click", () => void exportTradeDocumentPdf());
 
   const planetBtn = qs<HTMLButtonElement>("#planetViewButton");
@@ -33050,9 +40191,14 @@ function installEvents() {
     if (!deal) return;
     const customerSelect = qs<HTMLSelectElement>("#docCustomerInput");
     if (customerSelect) customerSelect.value = deal.customerId || "";
-    applyDocumentCustomerDefaults(deal.customerId || "");
     const currency = qs<HTMLSelectElement>("#docCurrencyInput");
     if (currency && deal.currency) currency.value = deal.currency;
+    applyDocumentCustomerDefaults(deal.customerId || "", deal);
+  });
+  qs<HTMLSelectElement>("#docCurrencyInput")?.addEventListener("change", () => {
+    const customer = state.customers.find((item) => item.id === qs<HTMLSelectElement>("#docCustomerInput")?.value);
+    const deal = state.deals.find((item) => item.id === qs<HTMLSelectElement>("#docDealInput")?.value);
+    applyMatchedSellerToEditor(customer, deal);
   });
   qs<HTMLButtonElement>("#addDocumentItemButton")?.addEventListener("click", addDocumentItem);
   qs<HTMLButtonElement>("#refreshDocumentPreviewButton")?.addEventListener("click", () => renderDocumentPreview(collectDocumentDraft()));
@@ -33060,6 +40206,9 @@ function installEvents() {
     button.addEventListener("click", () => {
       const newType = (button.dataset.docType || "PI") as "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING";
       setDocumentType(newType);
+      const customer = state.customers.find((item) => item.id === qs<HTMLSelectElement>("#docCustomerInput")?.value);
+      const deal = state.deals.find((item) => item.id === qs<HTMLSelectElement>("#docDealInput")?.value);
+      applyMatchedSellerToEditor(customer, deal, newType);
       const title = qs<HTMLInputElement>("#docTitleInput");
       const number = qs<HTMLInputElement>("#docNumberInput");
       if (title && (!title.value || title.value.includes("新建"))) {
@@ -33071,20 +40220,23 @@ function installEvents() {
     });
   });
   // 语言切换 - 实时更新预览
-  qs<HTMLSelectElement>("#docLanguageInput")?.addEventListener("change", () => renderDocumentPreview(collectDocumentDraft()));
+  qs<HTMLSelectElement>("#docLanguageInput")?.addEventListener("change", () => {
+    syncShippingCostLabel();
+    renderDocumentPreview(collectDocumentDraft());
+  });
   // 主题切换 - 同步 templateInput 并更新预览
   qs<HTMLSelectElement>("#docThemeInput")?.addEventListener("change", (event) => {
     const val = (event.currentTarget as HTMLSelectElement).value;
     const tpl = qs<HTMLSelectElement>("#docTemplateInput");
-    if (tpl) tpl.value = val;
+    if (tpl && tpl.value !== "longtec") tpl.value = val;
     renderDocThemeSwatches(val);
     renderDocumentPreview(collectDocumentDraft());
   });
   qs<HTMLSelectElement>("#docTemplateInput")?.addEventListener("change", (event) => {
     const val = (event.currentTarget as HTMLSelectElement).value;
     const th = qs<HTMLSelectElement>("#docThemeInput");
-    if (th) th.value = val;
-    renderDocThemeSwatches(val);
+    if (th) th.value = val === "longtec" ? "rose" : val;
+    renderDocThemeSwatches(th?.value || val);
     renderDocumentPreview(collectDocumentDraft());
   });
   // 数据源填充
@@ -33189,6 +40341,11 @@ function installEvents() {
   qs<HTMLButtonElement>("#memoDeleteButton")?.addEventListener("click", () => void deleteSelectedMemo());
   const systemSettingsSaveButton = qs<HTMLButtonElement>("#systemSettingsSaveButton");
   systemSettingsSaveButton?.addEventListener("click", () => void saveTeamSystemSettings(systemSettingsSaveButton));
+  qs<HTMLButtonElement>("#tradeDocumentOcrSaveButton")?.addEventListener("click", (event) => void saveTradeDocumentOcrProvider(event.currentTarget as HTMLButtonElement));
+  qs<HTMLSelectElement>("#tradeDocumentOcrProvider")?.addEventListener("change", () => {
+    tradeDocumentOcrProvider = { ...tradeDocumentOcrProvider, provider: (qs<HTMLSelectElement>("#tradeDocumentOcrProvider")?.value || "none") as TradeDocumentOcrProviderConfig["provider"] };
+    renderTeamSystemSettings();
+  });
 }
 
 function rememberWorkspaceTab(view: string) {
@@ -33209,9 +40366,15 @@ function closeWorkspaceTab(view: string) {
 function renderOpenWorkspaceTabs(activeView: string) {
   const wrap = qs<HTMLElement>("#topOpenTabs");
   if (!wrap) return;
+  if (isPlatformOperator()) {
+    openWorkspaceTabs = ["platform-operations"];
+    workspaceTabHistory = ["platform-operations"];
+    wrap.innerHTML = "";
+    return;
+  }
   openWorkspaceTabs = openWorkspaceTabs.filter((view) => canAccessWorkspaceView(view));
   workspaceTabHistory = workspaceTabHistory.filter((view) => canAccessWorkspaceView(view));
-  if (!openWorkspaceTabs.includes("dashboard")) openWorkspaceTabs.unshift("dashboard");
+  if (canAccessWorkspaceView("dashboard") && !openWorkspaceTabs.includes("dashboard")) openWorkspaceTabs.unshift("dashboard");
   wrap.innerHTML = openWorkspaceTabs.map((view) => {
     const label = viewLabels[view] || view;
     const active = view === activeView ? " active" : "";
@@ -33254,6 +40417,7 @@ const THEME_PRESETS: { id: string; name: string; desc: string; colors: string[] 
   { id: "indigo",  name: "靛蓝 Indigo",  desc: "理性 · 商务沉稳", colors: ["#4f46e5", "#3730a3", "#eef0ff", "#151a35"] },
   { id: "amber",   name: "琥珀 Amber",   desc: "暖金 · 高级质感", colors: ["#b45309", "#8a3e0b", "#fbf1dd", "#271708"] },
   { id: "rose",    name: "玫红 Rose",    desc: "活力 · 现代醒目", colors: ["#be123c", "#9f1239", "#fdecee", "#2b0e17"] },
+  { id: "paper",   name: "晨白 Paper",   desc: "浅色侧栏 · 轻盈留白", colors: ["#6366f1", "#a5b4fc", "#eef0ff", "#fbfcfd"] },
   { id: "slate",   name: "石墨 Slate",   desc: "中性 · 极简专业", colors: ["#334155", "#1e293b", "#eef2f6", "#0f172a"] },
   { id: "emerald", name: "翠绿 Emerald", desc: "自然 · 生机清新", colors: ["#047857", "#065f46", "#e7f8f1", "#072a20"] },
   { id: "violet",  name: "紫罗兰 Violet", desc: "优雅 · 神秘高贵", colors: ["#7c3aed", "#6d28d9", "#f3eefe", "#1b1233"] },
@@ -33270,7 +40434,7 @@ function getStoredTheme(): string {
   try { return localStorage.getItem(THEME_STORAGE_KEY) || ""; } catch { return ""; }
 }
 function getInitialTheme(): string {
-  return state.user?.theme || getStoredTheme() || "ocean";
+  return state.user?.theme || getStoredTheme() || "rose";
 }
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
@@ -33346,7 +40510,7 @@ function applyTheme(theme: string): void {
     root.style.setProperty("--nav", c.nav);
     root.style.setProperty("--brand-ring", c.ring);
   } else {
-    root.dataset.theme = theme || "ocean";
+    root.dataset.theme = theme || "rose";
   }
 }
 
@@ -33418,9 +40582,9 @@ function renderThemeView(): void {
   };
   const resetBtn = qs<HTMLButtonElement>("#themeReset");
   if (resetBtn) resetBtn.onclick = () => {
-    themeCurrentSelection = "ocean";
-    applyTheme("ocean");
-    qsa(".th-preset", wrap).forEach((n) => n.classList.toggle("is-active", (n as HTMLElement).dataset.themePick === "ocean"));
+    themeCurrentSelection = "rose";
+    applyTheme("rose");
+    qsa(".th-preset", wrap).forEach((n) => n.classList.toggle("is-active", (n as HTMLElement).dataset.themePick === "rose"));
     setThemeStatus("已恢复默认主题，点「保存主题」生效", "preview");
   };
 }
@@ -34443,6 +41607,7 @@ async function renderEmailReturnFlow() {
       <div class="deck-actions">${syncBadge}${user?.inboundSyncEnabled ? `<button class="deck-btn" id="emailReturnSync">立即同步</button>` : ""}<button class="deck-btn" id="emailReturnRefresh">↻ 刷新</button></div>
     </header>
     <div class="deck-ticker"><div class="deck-run" id="deckTicker"></div></div>
+    <div id="emailReturnTrackBanner" style="padding:0 var(--pad-x,24px)"></div>
     <section class="deck-kpis" id="emailReturnStats"><div class="deck-loading"><i></i>加载中…</div></section>
     <div class="deck-toolbar">
       <select id="emailReturnFilter" aria-label="按业务对象筛选">
@@ -34456,6 +41621,18 @@ async function renderEmailReturnFlow() {
     <div class="deck-list" id="emailReturnList"><div class="deck-loading"><i></i>正在加载发送记录…</div></div>
   `;
   qs<HTMLButtonElement>("#emailReturnRefresh", box)?.addEventListener("click", () => void renderEmailReturnFlow());
+  // 已读追踪状态条：未启用时提醒，启用时显示域名（best-effort，接口失败不影响页面）
+  void api<{ config: { enabled: boolean; baseUrl: string; messageIdDomain: string } }>("/api/email-tracking/config").then(({ config }) => {
+    const anchor = qs<HTMLElement>("#emailReturnTrackBanner", box);
+    if (!anchor) return;
+    anchor.innerHTML = config.enabled
+      ? `<span class="rf-track is-on">👁 已读追踪已开启 · <b>${escapeHtml(config.messageIdDomain)}</b>（打开/点击信号会自动回流到下方台账）<a href="#" data-goto-tracking>配置</a></span>`
+      : `<span class="rf-track is-off">👁 已读追踪未启用——现在发出的邮件无法知道客户有没有看。到 <a href="#" data-goto-tracking>个人设置 → 已读追踪</a> 填一个公网地址即可开启</span>`;
+    anchor.querySelector<HTMLAnchorElement>("[data-goto-tracking]")?.addEventListener("click", (event) => {
+      event.preventDefault();
+      activateNavView("profile");
+    });
+  }).catch(() => { /* 状态条失败不打扰 */ });
   qs<HTMLButtonElement>("#emailReturnSync", box)?.addEventListener("click", async (event) => {
     const button = event.currentTarget as HTMLButtonElement;
     setButtonPending(button, true, "立即同步", "同步中");
@@ -34588,8 +41765,9 @@ function activateNavView(view: string, after?: () => void) {
   if (view === "access-control") view = "member-management";
   if (!qs<HTMLElement>(`#${CSS.escape(view)}`)) view = "dashboard";
   if (!canAccessWorkspaceView(view)) {
-    toast("当前账号无权访问系统设置", "error");
-    view = "dashboard";
+    const platformOperator = isPlatformOperator();
+    toast(platformOperator ? "业务模块请登录其他账号" : "当前账号无权访问系统设置", "error");
+    view = platformOperator ? "platform-operations" : "dashboard";
     after = undefined;
   }
   const activeView = qs<HTMLElement>(".view.active")?.id;
@@ -34631,6 +41809,9 @@ function activateNavView(view: string, after?: () => void) {
   if (view === "customers") {
     renderCustomers(state.customers);
   }
+  if (view === "peers") {
+    renderPeers();
+  }
   if (view === "reports") {
     void refreshExecutiveReport();
   }
@@ -34650,7 +41831,15 @@ function activateNavView(view: string, after?: () => void) {
   if (view === "integration-center") {
     void integrationCenterController?.refresh(false);
   }
+  if (view === "exchange") {
+    void loadExchangeData();
+  }
   if (view === "dashboard") requestDashboardRefresh();
+  if (view === "todo") {
+    if (state.summary) renderTodoInsights(state.summary);
+    renderTodos(state.todos);
+    updateTodoChips(state.todos);
+  }
   if (view === "lead-finder") {
     void loadIdentityConflicts(true);
     void loadLeadProviders();
@@ -34660,6 +41849,28 @@ function activateNavView(view: string, after?: () => void) {
   if (view === "customer-pool") {
     renderCustomerPool();
     void reloadCustomerScopes().catch((error) => toast(error instanceof Error ? error.message : "客户公池加载失败", "error"));
+  }
+  if (view === "sales-distillation") {
+    void loadSalesDistillationWorkspace();
+  }
+  if (view === "maintenance-center") {
+    void loadMaintenanceCenter();
+  }
+  if (view === "outreach-batches") {
+    bindOutreachPlanCreateButton();
+    void loadOutreachBatches();
+    void loadOutreachPlans();
+  }
+  if (view === "outreach-journey") {
+    bindOutreachJourneyToolbar();
+    renderOutreachJourneyPage();
+    if (!outreachJourneyOverview) void loadOutreachJourneyOverview();
+  }
+  if (view === "outreach-customer-journey") {
+    renderOutreachCustomerJourneyPage();
+  }
+  if (view === "sales-skill-center") {
+    void loadSalesSkillCenter();
   }
   if (view === "products") {
     renderProducts();
@@ -34777,8 +41988,8 @@ function resolveTopbarSearchView(rawValue: string) {
   if (!value) return null;
   const candidates: Array<[string, string]> = [
     ["工作台", "dashboard"],
-    ["待办", "dashboard"],
-    ["todo", "dashboard"],
+    ["待办", "todo"],
+    ["todo", "todo"],
     ["搜客清单", "prospect-list"],
     ["开发信", "prospect-list"],
     ["清单", "prospect-list"],
@@ -34790,10 +42001,15 @@ function resolveTopbarSearchView(rawValue: string) {
     ["ai agent", "ai-agent"],
     ["智能体", "ai-agent"],
     ["集成中心", "integration-center"],
+    ["对接", "exchange"],
+    ["报文", "exchange"],
     ["集成", "integration-center"],
     ["连接器", "integration-center"],
     ["mcp", "integration-center"],
     ["integration", "integration-center"],
+    ["销售能力训练", "sales-distillation"],
+    ["销售训练", "sales-distillation"],
+    ["业务员蒸馏", "sales-distillation"],
     ["ai", "ai-config"],
     ["gpt", "ai-config"],
     ["模型", "ai-config"],
@@ -34865,6 +42081,8 @@ function resolveTopbarSearchView(rawValue: string) {
     ["组织架构", "organization-structure"],
     ["权限管理", "role-management"],
     ["角色管理", "role-management"],
+    ["界面开通", "ui-access"],
+    ["模块开通", "ui-access"],
     ["成员授权", "member-authorization"],
     ["权限审计", "permission-audit"],
     ["organization", "organization-structure"],

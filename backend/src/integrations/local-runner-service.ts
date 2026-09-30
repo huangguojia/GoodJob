@@ -13,6 +13,12 @@ const sha256 = (value: string) => createHash("sha256").update(value).digest("hex
 const now = () => new Date().toISOString();
 const future = (milliseconds: number) => new Date(Date.now() + milliseconds).toISOString();
 
+function pairingTtlMilliseconds() {
+  const configured = Number(process.env.LOCAL_RUNNER_PAIRING_TTL_MINUTES || 10);
+  const minutes = Number.isFinite(configured) ? Math.min(7 * 24 * 60, Math.max(10, Math.floor(configured))) : 10;
+  return minutes * 60_000;
+}
+
 function serviceError(code: string, message: string, status = 400): never {
   throw Object.assign(new Error(message), { code, status });
 }
@@ -70,7 +76,7 @@ export class LocalRunnerService {
     const raw = randomBytes(6).toString("hex").toUpperCase();
     const code = `GJ-${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8)}`;
     const createdAt = now();
-    const expiresAt = future(10 * 60_000);
+    const expiresAt = future(pairingTtlMilliseconds());
     await this.repository.createPairing({
       id: `lrp_${randomUUID()}`, codeHash: sha256(code), teamId: actor.teamId,
       ownerId: actor.id, createdBy: actor.id, deviceName: deviceName.trim() || "我的电脑",

@@ -104,7 +104,7 @@ export async function writeProviderResponseCache(
   assertNeutralPublicPayload(payload);
   const fetchedAt = options.fetchedAt || new Date().toISOString();
   if (new Date(options.expiresAt).getTime() <= new Date(fetchedAt).getTime()) {
-    throw new Error("Provider 响应缓存过期时间必须晚于抓取时间");
+    throw new Error("Provider 响应缓存过期时间必须晚于获取时间");
   }
   const store = getStore();
   const existing = store.providerResponseCache.find((item) => sameKey(item, key));

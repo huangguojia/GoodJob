@@ -1464,6 +1464,7 @@ function conversionLeadFromRow(row: Record<string, unknown>): Lead {
     nextFollowAt: String(row.next_follow_at || ""),
     lastActivityAt: String(row.last_activity_at || ""),
     remark: String(row.remark || ""),
+    inquiryContent: String(row.inquiry_content || ""),
     convertedCustomerId: String(row.converted_customer_id || ""),
     convertedDealId: String(row.converted_deal_id || ""),
     sourceType: String(row.source_type || "outbound") as Lead["sourceType"],

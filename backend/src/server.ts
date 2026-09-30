@@ -3,14 +3,17 @@ import express, { type NextFunction, type Request, type Response } from "express
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import httpProxy from "http-proxy";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import nodemailer from "nodemailer";
 import QRCode from "qrcode";
 import { z } from "zod";
+import { exportAdvancedDocumentTemplate, listAdvancedDocumentTemplates } from "./advanced-document-templates.js";
+import { ExcelPreviewUnavailableError, excelBufferSha256, renderExcelBufferToPdf } from "./excel-preview.js";
 import { createTradeDocumentImportAnalysis, parseTradeDocumentImport, TRADE_DOCUMENT_IMPORT_MAX_BYTES, tradeDocumentImportSha256 } from "./trade-document-import.js";
+import { applyTradeDocumentRecognitionTemplate, buildTradeDocumentRecognitionTemplate, matchTradeDocumentRecognitionTemplate } from "./trade-document-recognition-template.js";
 import { once } from "node:events";
 import { resolveTxt } from "node:dns/promises";
 import { AUTH_COOKIE_NAME, CSRF_COOKIE_NAME, canManageAccount, canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, canSeeTeam, createCsrfToken, csrfCookieOptions, hasIamPermission, hasIamScope, hashPassword, isPlatformIdentity, publicUser, requireAuth, sessionCookieOptions, signMfaSetupToken, signToken, validateAuthSecurity, verifyMfaSetupToken, verifyPassword } from "./auth.js";
@@ -20,13 +23,24 @@ import {
   recognizeBusinessCard,
   type BusinessCardRecognition
 } from "./business-card-ocr.js";
+import { isTradeDocumentOcrMime, recognizeConfiguredTradeDocument, recognizeTradeDocument, type TradeDocumentOcrProvider, type TradeDocumentOcrProviderConfig } from "./trade-document-ocr.js";
 import { getTrackingProvider, isSyncable, buildTrackingUpdate } from "./tracking-provider.js";
 import {
   callAiModel,
   callAiModelWithWebSearch,
   extractJsonObject
 } from "./ai-model-runtime.js";
-import { createAiSearchProvider } from "./ai-search-provider.js";
+import {
+  aiLeadFinderReadiness,
+  aiWebSearchPolicy,
+  webSearchFailureSuggestion
+} from "./ai-web-search-policy.js";
+import {
+  extractWebsitePublicContactsWithAi,
+  type WebsiteContactAiExtractor
+} from "./website-contact-ai.js";
+import { createAiSearchProvider, aiSearchTimeoutMs } from "./ai-search-provider.js";
+import { aiWebsiteCitationsToProviderRecords } from "./prospect-ai-website-discovery.js";
 import { compileAgentGoalSpec } from "./agent-goal.js";
 import { resolveAgentMissionRoute } from "./agent-turn-decision.js";
 import { validateAgentJobSecurity } from "./agent-job-security.js";
@@ -95,18 +109,88 @@ import {
   type AgentOperationContract
 } from "./agent-api-contracts.js";
 import {
+  activateSalesPlaybook,
+  createSalesDistillation,
+  listDistillationSources,
+  listSalesDistillations,
+  listSalesPlaybookActivations,
+  pauseSalesPlaybook,
+  publishSalesDistillation
+} from "./sales-distillation.js";
+import {
+  SalesTrainingRunner,
+  controlSalesTrainingRun,
+  createSalesTrainingRun,
+  getSalesTrainingRun,
+  listSalesTrainingRuns,
+  publishSalesTrainingRun,
+  retrainSalesTrainingRun,
+  updateSalesTrainingSample
+} from "./sales-training.js";
+import {
   OutreachSequenceRunner,
   controlOutreachSequence,
   createOutreachSequence,
   listOutreachSequences
 } from "./outreach-sequences.js";
-import type { OutboundEmailLog, OutreachSequence, OutreachSequenceStepSnapshot } from "./types.js";
+import {
+  ProspectOutreachBatchRunner,
+  approveProspectOutreachBatch,
+  controlProspectOutreachBatch,
+  createProspectOutreachBatch,
+  deleteProspectOutreachBatch,
+  getProspectOutreachBatch,
+  listProspectOutreachBatches,
+  updateProspectOutreachBatchItem,
+  type ProspectOutreachBatchRuntime
+} from "./prospect-outreach-batch.js";
+import {
+  ProspectOutreachPlanRunner,
+  controlProspectOutreachPlan,
+  createProspectOutreachPlan,
+  deleteProspectOutreachPlan,
+  getProspectOutreachPlan,
+  listProspectOutreachPlans,
+  planCandidateMatches,
+  planProgress
+} from "./prospect-outreach-plan.js";
+import {
+  buildOutreachJourney,
+  buildOutreachJourneyDraft,
+  getBackgroundResearchRepository,
+  listOutreachJourneyOverview,
+  outreachSourceLabel,
+  resolveOutreachJourneyEntity,
+  type OutreachJourneyEntityType
+} from "./outreach-journey.js";
+import {
+  assembleDevelopmentEmailBrief,
+  buildDevelopmentEmailFallback,
+  buildDevelopmentEmailPrompt,
+  checkDevelopmentEmailDraft,
+  developmentEmailSignature,
+  developmentEmailStagePlan,
+  ensureDevelopmentEmailSignature
+} from "./development-email-skill.js";
+import { archiveMessageToSentFolder } from "./sent-folder-archive.js";
+import {
+  getSenderMailboxRepository,
+  pickSenderMailbox,
+  senderMailboxOverrides,
+  toSenderMailboxView
+} from "./sender-mailbox.js";
+import type { BackgroundResearchRecord } from "./outreach-journey.js";
+import type { OutboundEmailLog, OutreachSequence, OutreachSequenceStepSnapshot, PeerRelation, ProspectOutreachBatch } from "./types.js";
 import {
   CustomerMaintenanceRunner,
   controlCustomerMaintenanceWatch,
   createCustomerMaintenanceWatch,
+  createCustomerMaintenanceWatchDirect,
+  customerMaintenanceWatchFor,
+  listCustomerMaintenanceFindings,
   listCustomerMaintenanceWatches,
-  previewCustomerMaintenance
+  previewCustomerMaintenance,
+  runCustomerMaintenanceWatch
 } from "./customer-maintenance.js";
 import { createCredentialRef, decryptProviderConfiguration, encryptProviderConfiguration, validateProviderCredentialSecurity } from "./credential-security.js";
 import {
@@ -120,12 +204,14 @@ import {
 import { createMysqlStore } from "./mysql-store.js";
 import { validateIntegrationControlPlaneConfig } from "./integrations/integration-runtime-config.js";
 import { integrationHttpRouter } from "./integrations/integration-http-routes.js";
+import { getExchangeRepository } from "./exchange/exchange-repository.js";
 import { BullMqIntegrationQueueDispatcher } from "./integrations/integration-queue.js";
 import { syncSystemConnectorCatalog } from "./integrations/connector-catalog.js";
 import { IntegrationControlPlaneService } from "./integrations/integration-service.js";
 import {
   getIntegrationControlPlaneService,
   getIntegrationRepository,
+  getLocalRunnerService,
   setIntegrationControlPlaneService
 } from "./integrations/integration-runtime.js";
 import { decryptIntegrationValue, encryptIntegrationValue } from "./integrations/integration-credential-vault.js";
@@ -165,6 +251,7 @@ import { getStore, setStore, type CrmStore } from "./store.js";
 import {
   DEFAULT_LEAD_SEARCH_PROVIDER_IDS,
   LEAD_PROVIDERS,
+  defaultSearchProviderIdsFor,
   getProvider,
   providerMeta,
   type LeadProvider,
@@ -204,17 +291,22 @@ import {
 } from "./prospect-super-search.js";
 import { ProspectWorkerService } from "./prospect-worker-service.js";
 import {
+  contactChannelsFromText,
   contactEnrichmentSource,
   createContactEnrichmentAttempt,
+  expireContactEnrichmentAttempt,
   mergeProspectContactEvidence,
+  mergeWebsiteProbeCandidateProgress,
   providerContactEvidence,
   refreshContactEnrichmentAttempt
 } from "./prospect-contact-enrichment.js";
+import { discoverProspectWebsite } from "./prospect-website-discovery.js";
 import { loadLocalEnv } from "./runtime-env.js";
 import { createOpenApiDocument, registerSwagger } from "./swagger.js";
 import { agentApiRequestSchema, assertAgentApiToolRisk, classifyAgentApiRequest, deniedAgentApiReason, normalizeAgentApiPath, redactAgentApiData, routeTemplateMatches } from "./agent-api-policy.js";
 import { requestAgentInternalApi } from "./agent-internal-http.js";
 import { resolveBackendHost } from "./server-network.js";
+import { readWebsiteLeadIngressSettings, validateWebsiteLeadIngressSettings } from "./website-lead-ingress-settings.js";
 import {
   listTradeObservations,
   parseTradeObservationListQuery,
@@ -295,6 +387,7 @@ import {
 import {
   assertCrmOutreachEligible,
   assertProspectEmailOutreachEligible,
+  evaluateProspectEmailOutreachEligibility,
   ProspectOutreachEligibilityError
 } from "./prospect-outreach-eligibility.js";
 import {
@@ -308,15 +401,22 @@ import {
   TRANSPARENT_GIF,
   buildOutboundMessageId,
   buildTrackedEmailHtml,
+  emailTrackingSecret,
+  emailTrackingStatus,
   isEmailTrackingEnabled,
+  messageIdDomain,
   normalizeMessageIdValue,
+  setEmailTrackingRuntimeBaseUrl,
   validateEmailTrackingSecurity,
   verifyClickToken,
   verifyOpenToken
 } from "./email-tracking.js";
+import { EMAIL_TRACKING_BASE_URL_KEY, getAppSetting, setAppSetting } from "./app-settings.js";
+import { loadDeploySecrets } from "./deploy-config.js";
 import { InboundMailWatcher } from "./inbound-mail-watcher.js";
 import { recordCrmEmailTouchpoint } from "./email-touchpoints.js";
 import {
+  expireStaleWebsiteProbeAttempts,
   queueWebsiteProbe,
   websiteProbeAutoEnrichmentEligible,
   websiteProbeCapability,
@@ -422,9 +522,11 @@ import {
 } from "./prospect-verification.js";
 import { refreshProspectScorecard } from "./prospect-scorecard.js";
 import { normalizeDocumentAssetPlacement } from "./types.js";
-import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, CustomerIntelligenceFieldKey, Deal, DealEvent, DocumentLetterhead, DocumentSignature, DocumentStamp, Exam, ExamAssignment, ExamAttempt, ExamQuestion, Lead, LeadSourceEvent, LeadSourceType, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProspectTouchpoint, ProspectIdentityBootstrapAttempt, ProspectOutreachChannel, ProviderCatalogItem, ProviderConnection, ProviderEvidenceSnapshot, SalesRecordAudit, SessionUser, Todo, TradeDocument, TradeDocumentAudit, TradeDocumentImportAnalysis, TradeDocumentSendRecord, WecomCommandEndpoint, WecomCommandReceipt, WecomMemberBinding, WebsiteOpportunity } from "./types.js";
+import type { AiModelConfig, CommissionCalculation, CommissionItem, CommissionProduct, CommissionRule, Customer, CustomerIntelligenceFieldKey, Deal, DealEvent, DocumentLetterhead, DocumentSignature, DocumentStamp, Exam, ExamAssignment, ExamAttempt, ExamQuestion, ExtractedWebsiteContact, Lead, LeadSourceEvent, LeadSourceType, MonthlySalesRecord, OcrJob, PlanTask, PlanTemplate, ProspectTouchpoint, ProspectIdentityBootstrapAttempt, ProspectOutreachChannel, ProviderCatalogItem, ProviderConnection, ProviderEvidenceSnapshot, QuoteHistoryItem, QuoteHistoryRecord, SalesRecordAudit, SessionUser, Todo, TradeDocument, TradeDocumentAudit, TradeDocumentImportAnalysis, TradeDocumentSendRecord, WecomCommandEndpoint, Reminder, WecomCommandReceipt, WecomMemberBinding, WebsiteOpportunity } from "./types.js";
 import type { CompanyProfile, DocumentDefaultProfile, LogEntry, Product, Shipment, ShipmentItem, TeamSystemSettings } from "./types.js";
+import type { ReminderSkipReason, ReminderSkipReasonBucket } from "./types.js";
 import { recognizeTrackingCode } from "./shipment-ocr.js";
+import { getTodayExchangeRates } from "./exchange-rates.js";
 
 loadLocalEnv();
 
@@ -520,6 +622,9 @@ app.use(express.json({
     if (String(req.url || "").startsWith("/api/integrations/webhooks/")) {
       (req as typeof req & { integrationRawBody?: Buffer }).integrationRawBody = Buffer.from(buffer);
     }
+    if (String(req.url || "").split("?")[0] === "/api/website-leads") {
+      (req as typeof req & { websiteLeadRawBody?: Buffer }).websiteLeadRawBody = Buffer.from(buffer);
+    }
   }
 }));
 app.use(express.urlencoded({ extended: false, limit: "256kb" }));
@@ -541,6 +646,16 @@ const apiLimiter = rateLimit({
   message: { message: "请求过于频繁，请稍后再试" }
 });
 app.use("/api", apiLimiter);
+
+// Public website intake is authenticated separately from human CRM sessions.
+// The credential is a scoped machine secret, never a CRM user password.
+const websiteLeadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: process.env.NODE_ENV === "test" ? 10_000 : 120,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { message: "网站询盘请求过于频繁" }
+});
 app.use("/api/integrations", integrationHttpRouter);
 
 function iamBusinessPermission(req: Request) {
@@ -611,13 +726,13 @@ app.use(["/api/customers", "/api/leads", "/api/deals"], requireAuth, asyncRoute(
 }));
 
 app.use("/api/ai-background-research", requireAuth, asyncRoute(async (req, res, next) => {
-  const entityType = z.enum(["lead", "customer"]).safeParse(req.body?.entityType);
+  const entityType = z.enum(["lead", "customer", "prospect"]).safeParse(req.body?.entityType);
   if (!entityType.success) { next(); return; }
   await enforceIamTenantPermission(
     req,
     res,
     next,
-    entityType.data === "lead" ? "lead.read" : "customer.read"
+    entityType.data === "lead" ? "lead.read" : entityType.data === "customer" ? "customer.read" : "prospect.read"
   );
 }));
 
@@ -634,11 +749,12 @@ app.use("/api/dashboard", requireAuth, asyncRoute(async (req, res, next) => {
 app.use(["/api/problems", "/api/competitors", "/api/case-studies", "/api/memos", "/api/plan-tasks", "/api/plan-templates"], requireAuth, asyncRoute(async (req, res, next) => {
   await enforceIamTenantPermission(req, res, next, req.method === "GET" ? "workspace.dashboard.read" : "workspace.dashboard.manage");
 }));
-app.use(["/api/trade-documents", "/api/trade-document-imports", "/api/document-assets", "/api/document-defaults"], requireAuth, asyncRoute(async (req, res, next) => {
+app.use(["/api/trade-documents", "/api/trade-document-imports", "/api/trade-document-templates", "/api/trade-document-recognition-templates", "/api/document-assets", "/api/document-defaults", "/api/quote-history"], requireAuth, asyncRoute(async (req, res, next) => {
+  const previewOnly = req.method === "POST" && req.path.endsWith("/preview-xlsx");
   const managingAssets = req.originalUrl.startsWith("/api/document-assets") && req.method !== "GET";
   const managingDefaults = req.originalUrl.startsWith("/api/document-defaults") && req.method !== "GET";
   const uploadingProductImage = req.originalUrl.startsWith("/api/document-assets/upload") && req.body?.kind === "product";
-  await enforceIamTenantPermission(req, res, next, uploadingProductImage ? "product.manage" : managingAssets || managingDefaults ? "system.settings.manage" : req.method === "GET" ? "document.read" : "document.manage");
+  await enforceIamTenantPermission(req, res, next, uploadingProductImage ? "product.manage" : managingAssets || managingDefaults ? "system.settings.manage" : req.method === "GET" || previewOnly ? "document.read" : "document.manage");
 }));
 app.use(["/api/tools/products", "/api/tools/product-categories"], requireAuth, asyncRoute(async (req, res, next) => {
   await enforceIamTenantPermission(req, res, next, req.method === "GET" ? "product.read" : "product.manage");
@@ -650,7 +766,8 @@ app.use("/api/commission", requireAuth, asyncRoute(async (req, res, next) => {
   await enforceIamTenantPermission(req, res, next, req.method === "GET" ? "commission.read" : "commission.manage");
 }));
 app.use("/api/internal-messages", requireAuth, asyncRoute(async (req, res, next) => {
-  const permission = req.path === "/recipients" || req.method !== "GET" ? "message.send" : "message.read";
+  const isReadAction = req.method === "GET" || req.path === "/read-all" || req.path.endsWith("/read");
+  const permission = isReadAction ? "message.read" : "message.send";
   await enforceIamTenantPermission(req, res, next, permission);
 }));
 app.use("/api/accounts", requireAuth, asyncRoute(async (req, res, next) => {
@@ -688,6 +805,11 @@ app.use([
   await enforceIamTenantPermission(req, res, next, readOnly ? "communication.read" : "communication.send");
 }));
 app.use("/api/agent", requireAuth, asyncRoute(async (req, res, next) => {
+  if (req.path.includes("sales-training") || req.path.includes("sales-distillation")) {
+    const personalPlaybookAction = req.path.endsWith("/activate") || req.path.includes("/activations/");
+    await enforceIamTenantPermission(req, res, next, req.method === "GET" || personalPlaybookAction ? "training.read" : "training.manage");
+    return;
+  }
   const manage = req.method !== "GET" && (req.path.includes("knowledge") || req.path.includes("triggers") || req.path.includes("governance"));
   await enforceIamTenantPermission(req, res, next, manage ? "agent.manage" : "agent.use");
 }));
@@ -1420,11 +1542,17 @@ function createInternalNotification(input: {
   teamId: string;
   subject: string;
   content: string;
-  relatedType?: "daily_report" | "message" | "";
+  relatedType?: "daily_report" | "message" | "lead" | "quote_history" | "";
   relatedId?: string;
   threadId?: string;
+  idempotencyKey?: string;
 }) {
   if (input.senderId === input.recipientId) return null;
+  if (input.idempotencyKey && getStore().internalMessages.some((item) =>
+    item.recipientId === input.recipientId && item.idempotencyKey === input.idempotencyKey
+  )) {
+    return null;
+  }
   const now = new Date().toISOString();
   const message = {
     id: `msg_${randomUUID()}`,
@@ -1437,12 +1565,35 @@ function createInternalNotification(input: {
     content: input.content,
     relatedType: input.relatedType || "" as const,
     relatedId: input.relatedId || "",
+    idempotencyKey: input.idempotencyKey,
     readAt: "",
     createdAt: now,
     updatedAt: now
   };
   getStore().internalMessages.unshift(message);
   return message;
+}
+
+function notifyNewLead(lead: Pick<Lead, "id" | "company" | "contact" | "source" | "ownerId" | "teamId">) {
+  const store = getStore();
+  const recipients = store.users.filter((user) =>
+    user.status === "active"
+    && user.teamId === lead.teamId
+    && (user.id === lead.ownerId || user.role === "manager" || user.role === "admin")
+  );
+  const content = `${lead.company || "新线索"}${lead.contact ? ` · ${lead.contact}` : ""} 已进入线索管理${lead.source ? `，来源：${lead.source}` : ""}。`;
+  return recipients
+    .map((recipient) => createInternalNotification({
+      senderId: "system",
+      recipientId: recipient.id,
+      teamId: recipient.teamId,
+      subject: "新线索提醒",
+      content,
+      relatedType: "lead",
+      relatedId: lead.id,
+      idempotencyKey: `lead-notification:${lead.id}:${recipient.id}`
+    }))
+    .filter((message): message is NonNullable<typeof message> => Boolean(message));
 }
 
 function canManageTraining(user?: SessionUser) {
@@ -1729,7 +1880,8 @@ async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][numb
     subject: payload.subject
   });
   const { smtpPort, smtpSecure } = validateOutboundEmailConfiguration(user);
-  const transport = ["test", "e2e"].includes(process.env.NODE_ENV || "")
+  const streamTransport = ["test", "e2e"].includes(process.env.NODE_ENV || "");
+  const transport = streamTransport
     ? nodemailer.createTransport({ streamTransport: true, newline: "unix", buffer: true })
     : nodemailer.createTransport({
       host: user.smtpHost,
@@ -1745,7 +1897,7 @@ async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][numb
     ? payload.body
     : `${payload.body.trim()}\n\nIf you prefer not to receive further emails, reply with "unsubscribe".`;
   const tracked = buildTrackedEmailHtml(optOutBody, messageId);
-  const info = await transport.sendMail({
+  const mailOptions = {
     messageId,
     from: `"${user.emailSenderName || user.name}" <${user.outboundEmail}>`,
     replyTo: user.outboundEmail,
@@ -1756,8 +1908,43 @@ async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][numb
       "List-Unsubscribe": `<mailto:${user.outboundEmail}?subject=unsubscribe>`
     },
     ...(tracked ? { html: tracked.html } : {})
-  });
+  };
+  /**
+   * 自己编译原始 MIME 再投递，有两个原因：
+   * 1) 归档到「已发送」需要**完整原文**，而 SMTP 模式下发完就取不到了；
+   * 2) 保证「投出去的」与「留在已发送里的」是逐字节同一封。
+   * （用内存流 transport 编译：这是 nodemailer 的公开 API，不必去碰它的内部子路径。）
+   */
+  const raw = streamTransport
+    ? null
+    : await compileOutboundRawMessage(mailOptions);
+  const info = raw
+    ? await transport.sendMail({
+      envelope: { from: user.outboundEmail, to: payload.to },
+      raw
+    })
+    : await transport.sendMail(mailOptions);
+  /**
+   * 把副本写进发件账号的「已发送」。
+   * 腾讯企业邮等在网页端未勾选「保存已发送至服务器」时，SMTP 投递的邮件不会出现在
+   * 用户邮箱的「已发送」里（用户会以为信没发出去）。这里由 CRM 补上这一步。
+   * best-effort：失败只记一行日志，**绝不改变「信已发出」这个既成事实**。
+   */
+  if (raw) {
+    const archive = await archiveMessageToSentFolder(user, raw, { date: new Date() });
+    if (!archive.ok && !archive.skipped) {
+      console.warn(`[outbound-email] 归档到已发送失败（不影响本次发送）：${archive.error || "未知原因"}`);
+    }
+  }
   return { ...info, messageId: info?.messageId || messageId };
+}
+
+/** 用内存流 transport 把一封邮件编译成原始 MIME（不产生任何网络请求）。 */
+async function compileOutboundRawMessage(mailOptions: nodemailer.SendMailOptions) {
+  const compiler = nodemailer.createTransport({ streamTransport: true, newline: "unix", buffer: true });
+  const compiled = await compiler.sendMail(mailOptions);
+  if (!Buffer.isBuffer(compiled.message)) throw new Error("编译邮件原文失败");
+  return compiled.message;
 }
 
 function recordOutboundEmailLog(
@@ -2290,6 +2477,19 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
+app.get("/api/exchange-rates/today", requireAuth, asyncRoute(async (_req, res) => {
+  try {
+    const rates = await getTodayExchangeRates();
+    res.setHeader("Cache-Control", "private, max-age=300");
+    res.json(rates);
+  } catch (error) {
+    res.status(503).json({
+      code: "exchange_rates_unavailable",
+      message: "今日参考汇率暂不可用，请稍后重试"
+    });
+  }
+}));
+
 // ── 开发信打开/点击追踪（公开端点，收件人邮件客户端直接访问）────────────
 function resolveTrackedCandidate(
   store: ReturnType<typeof getStore>,
@@ -2462,7 +2662,42 @@ app.get("/api/outbound-emails", requireAuth, asyncRoute(async (req, res) => {
   if (entityType) logs = logs.filter((item) => item.entityType === entityType);
   logs.sort((a, b) => (b.sentAt || "").localeCompare(a.sentAt || ""));
   const page = logs.slice(0, limit).map((log) => enrichOutboundLogEntity(store, log));
-  res.json({ logs: page, total: logs.length });
+  res.json({ logs: page, total: logs.length, tracking: emailTrackingStatus() });
+}));
+
+// ── 已读追踪配置（设置页运行时可调，持久化在 app_settings）────────────
+function emailTrackingConfigView() {
+  const status = emailTrackingStatus();
+  return {
+    ...status,
+    messageIdDomain: messageIdDomain(),
+    secretConfigured: (() => {
+      try { emailTrackingSecret(); return true; } catch { return false; }
+    })()
+  };
+}
+
+app.get("/api/email-tracking/config", requireAuth, asyncRoute(async (_req, res) => {
+  res.json({ config: emailTrackingConfigView() });
+}));
+
+app.put("/api/email-tracking/config", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({ baseUrl: z.string().max(300).default("") });
+  const body = schema.parse(req.body || {});
+  const raw = body.baseUrl.trim().replace(/\/+$/, "");
+  if (raw) {
+    if (!/^https?:\/\//i.test(raw)) {
+      res.status(400).json({ message: "地址必须以 http:// 或 https:// 开头" });
+      return;
+    }
+    if (process.env.NODE_ENV === "production" && !raw.startsWith("https://")) {
+      res.status(400).json({ message: "生产环境必须使用 https:// 地址" });
+      return;
+    }
+  }
+  await setAppSetting(EMAIL_TRACKING_BASE_URL_KEY, raw);
+  setEmailTrackingRuntimeBaseUrl(raw);
+  res.json({ config: emailTrackingConfigView() });
 }));
 
 app.get("/api/outbound-emails/:messageId", requireAuth, asyncRoute(async (req, res) => {
@@ -2681,6 +2916,40 @@ app.get("/api/profile", requireAuth, (req, res) => {
   res.json({ user: accountUser(user) });
 });
 
+app.patch("/api/profile/password", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    currentPassword: z.string().min(1).max(128),
+    newPassword: z.string().min(8).max(128),
+    confirmPassword: z.string().min(8).max(128)
+  });
+  const body = schema.parse(req.body);
+  if (body.newPassword !== body.confirmPassword) {
+    res.status(400).json({ message: "两次输入的新密码不一致" });
+    return;
+  }
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.user!.id);
+  if (!user) {
+    res.status(404).json({ message: "账号不存在" });
+    return;
+  }
+  const currentPasswordCheck = await verifyPassword(user.password, body.currentPassword);
+  if (!currentPasswordCheck.valid) {
+    res.status(400).json({ message: "当前密码错误" });
+    return;
+  }
+  const samePasswordCheck = await verifyPassword(user.password, body.newPassword);
+  if (samePasswordCheck.valid) {
+    res.status(400).json({ message: "新密码不能与当前密码相同" });
+    return;
+  }
+  user.password = await hashPassword(body.newPassword);
+  user.authVersion = (user.authVersion || 1) + 1;
+  await store.persist();
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ requiresRelogin: true, message: "密码已修改，请重新登录" });
+}));
+
 app.patch("/api/profile/email-binding", requireAuth, asyncRoute(async (req, res) => {
   const schema = z.object({
     outboundEmail: z.string().max(180).default(""),
@@ -2734,7 +3003,7 @@ app.patch("/api/profile/email-binding", requireAuth, asyncRoute(async (req, res)
 }));
 
 app.patch("/api/profile/theme", requireAuth, asyncRoute(async (req, res) => {
-  const schema = z.object({ theme: z.string().max(48).default("ocean") });
+  const schema = z.object({ theme: z.string().max(48).default("rose") });
   const { theme } = schema.parse(req.body);
   const store = getStore();
   const user = store.users.find((item) => item.id === req.user!.id);
@@ -2772,6 +3041,110 @@ app.post("/api/profile/test-email", requireAuth, asyncRoute(async (_req, res) =>
     res.json({ ok: true, to: testTo, messageId: info.messageId, simulated: process.env.NODE_ENV === "test" });
   } catch (error) {
     res.status(400).json({ message: outboundEmailError(error, user) });
+  }
+}));
+
+// ---------------------------------------------------------------------------
+// 发件邮箱池：多 SMTP 发件邮箱登记，供自动发信方案按「每 N 封」轮换使用
+// ---------------------------------------------------------------------------
+
+function assertSenderMailboxPortMatch(port: number, secure: boolean) {
+  if (port === 587 && secure) {
+    throw Object.assign(new Error("SMTP配置不匹配：端口 587 通常应选择 STARTTLS/普通；如果要使用 SSL/TLS，请把端口改为 465。"), { statusCode: 400 });
+  }
+  if (port === 465 && !secure) {
+    throw Object.assign(new Error("SMTP配置不匹配：端口 465 通常应选择 SSL/TLS；如果要使用 STARTTLS/普通，请把端口改为 587。"), { statusCode: 400 });
+  }
+}
+
+const senderMailboxBaseSchema = {
+  label: z.string().trim().max(120).default(""),
+  email: z.string().trim().email("发件邮箱格式不正确"),
+  fromName: z.string().trim().max(120).default(""),
+  smtpHost: z.string().trim().min(1, "SMTP服务器不能为空").max(200),
+  smtpPort: z.coerce.number().int().min(1).max(65535).default(465),
+  smtpSecure: z.coerce.boolean().default(true),
+  smtpUser: z.string().trim().min(1, "SMTP账号不能为空").max(200),
+  imapHost: z.string().trim().max(200).default(""),
+  imapPort: z.coerce.number().int().min(1).max(65535).default(993),
+  imapUser: z.string().trim().max(200).default(""),
+  imapPassword: z.string().max(400).default(""),
+  enabled: z.coerce.boolean().default(true)
+};
+
+app.get("/api/sender-mailboxes", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getSenderMailboxRepository();
+  if (!repository) { res.status(503).json({ message: "发件邮箱池不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const mailboxes = await repository.list(user.id, user.teamId);
+  res.json({ mailboxes: mailboxes.map(toSenderMailboxView) });
+}));
+
+app.post("/api/sender-mailboxes", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getSenderMailboxRepository();
+  if (!repository) { res.status(503).json({ message: "发件邮箱池不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const schema = z.object({ ...senderMailboxBaseSchema, smtpPassword: z.string().min(1, "SMTP授权码不能为空").max(400) });
+  const input = schema.parse(req.body || {});
+  assertSenderMailboxPortMatch(input.smtpPort, input.smtpSecure);
+  const existing = await repository.list(user.id, user.teamId);
+  if (existing.length >= 10) {
+    res.status(409).json({ message: "发件邮箱池最多登记 10 个邮箱" });
+    return;
+  }
+  if (existing.some((row) => row.email.toLowerCase() === input.email.trim().toLowerCase())) {
+    res.status(409).json({ message: "该发件邮箱已在池里" });
+    return;
+  }
+  const mailbox = await repository.create(user.id, user.teamId, input);
+  res.json({ mailbox: toSenderMailboxView(mailbox) });
+}));
+
+app.put("/api/sender-mailboxes/:id", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getSenderMailboxRepository();
+  if (!repository) { res.status(503).json({ message: "发件邮箱池不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  // 密码可选：留空 = 保留原授权码
+  const schema = z.object({ ...senderMailboxBaseSchema, smtpPassword: z.string().max(400).optional() });
+  const input = schema.parse(req.body || {});
+  assertSenderMailboxPortMatch(input.smtpPort, input.smtpSecure);
+  const mailbox = await repository.update(user.id, user.teamId, req.params.id, input);
+  if (!mailbox) { res.status(404).json({ message: "发件邮箱不存在或无权访问" }); return; }
+  res.json({ mailbox: toSenderMailboxView(mailbox) });
+}));
+
+app.delete("/api/sender-mailboxes/:id", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getSenderMailboxRepository();
+  if (!repository) { res.status(503).json({ message: "发件邮箱池不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const removed = await repository.remove(user.id, user.teamId, req.params.id);
+  if (!removed) { res.status(404).json({ message: "发件邮箱不存在或无权访问" }); return; }
+  res.json({ ok: true });
+}));
+
+app.post("/api/sender-mailboxes/:id/test", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getSenderMailboxRepository();
+  if (!repository) { res.status(503).json({ message: "发件邮箱池不可用" }); return; }
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const mailbox = await repository.get(user.id, user.teamId, req.params.id);
+  if (!mailbox) { res.status(404).json({ message: "发件邮箱不存在或无权访问" }); return; }
+  const body = z.object({ to: z.string().email().optional().or(z.literal("")) }).parse(req.body || {});
+  const testTo = body.to?.trim() || mailbox.email;
+  try {
+    const info = await sendOutboundEmail({ ...user, ...senderMailboxOverrides(mailbox) }, {
+      to: testTo,
+      subject: "GoodJob CRM 发件邮箱池测试邮件",
+      body: `这是一封来自 GoodJob CRM 发件邮箱池的测试邮件。\n\n发件邮箱：${mailbox.email}\n账号：${user.email}\n时间：${new Date().toISOString()}`
+    });
+    res.json({ ok: true, to: testTo, messageId: info.messageId, simulated: process.env.NODE_ENV === "test" });
+  } catch (error) {
+    res.status(400).json({ message: outboundEmailError(error, { ...user, ...senderMailboxOverrides(mailbox) }) });
   }
 }));
 
@@ -3007,6 +3380,515 @@ app.post("/api/prospect-list/:id/send-development-email", requireAuth, asyncRout
     todo: outreach.todo,
     opportunity,
     user: accountUser(user)
+  });
+}));
+
+// ---------------------------------------------------------------------------
+// W4 · 发信批次：冻结放行 + 受控投递通道
+// ---------------------------------------------------------------------------
+
+/** 批次投递 runtime 用的候选单发：资格复核 → 投递 → 触点登记 → 候选字段更新 */
+async function sendProspectBatchEmail(
+  store: ReturnType<typeof getStore>,
+  owner: ReturnType<typeof getStore>["users"][number],
+  candidate: WebsiteOpportunity,
+  recipient: string,
+  subject: string,
+  body: string,
+  requestId: string
+) {
+  await store.reloadProspectQualificationTeam?.(owner.teamId);
+  const eligibility = assertProspectEmailOutreachEligible(store, candidate, recipient, new Date().toISOString());
+  const dispatch = await dispatchOutboundEmail(store, owner, {
+    requestId,
+    entityType: "prospect_candidate",
+    entityId: candidate.id,
+    to: eligibility.recipient,
+    subject,
+    body,
+    source: "prospect_batch_send"
+  });
+  const sentAt = dispatch.log.sentAt;
+  owner.lastDevelopmentEmailAt = sentAt;
+  owner.lastDevelopmentEmailTo = eligibility.recipient;
+  owner.lastDevelopmentEmailSubject = subject;
+  candidate.lastDevelopmentEmailAt = sentAt;
+  candidate.lastDevelopmentEmailTo = eligibility.recipient;
+  candidate.lastDevelopmentEmailSubject = subject;
+  await recordProspectTouchpoint(store, {
+    candidate,
+    actorId: owner.id,
+    channel: "email",
+    direction: "outbound",
+    contactValue: eligibility.recipient,
+    subject,
+    content: body,
+    requestId,
+    occurredAt: sentAt,
+    messageId: dispatch.log.messageId
+  });
+  await persistCandidateChanges(store, [candidate]);
+  return { recipient: eligibility.recipient, sentAt, messageId: dispatch.log.messageId };
+}
+
+/** 批次发送成功的候选自动转线索（资格审核链已移除，直接建线索并保留搜客血缘） */
+async function convertBatchCandidateToLead(
+  store: ReturnType<typeof getStore>,
+  owner: ReturnType<typeof getStore>["users"][number],
+  candidate: WebsiteOpportunity,
+  requestIdPrefix: string
+) {
+  if (candidate.status === "synced" && candidate.leadId) return candidate.leadId;
+  const convertedAt = new Date().toISOString();
+  const candidateEmail = (candidate.contactInfo || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu)?.[0]
+    || (candidate.extractedContacts || []).flatMap((item) => item.emails || [])[0]
+    || candidate.lastDevelopmentEmailTo
+    || "";
+  const conversion = createLeadFromSource({
+    ...owner,
+    authVersion: owner.authVersion ?? 1
+  } as SessionUser, {
+    company: candidate.company,
+    contact: candidate.contact,
+    country: candidate.country,
+    email: candidateEmail,
+    phone: "",
+    wechat: "",
+    source: "智能获客人工确认",
+    intent: "中",
+    stage: "新线索",
+    estimatedAmount: 0,
+    nextFollowAt: "",
+    remark: [candidate.business, candidate.description].filter(Boolean).join("；"),
+    inquiryContent: "",
+    sourceType: "outbound",
+    sourceChannel: PROSPECT_LEAD_SOURCE_CHANNEL,
+    sourceCampaign: (candidate.sourceLabel || "").slice(0, 120),
+    externalId: candidate.id,
+    sourceUrl: (candidate.website || "").slice(0, 500),
+    occurredAt: convertedAt,
+    rawPayload: {
+      candidateId: candidate.id,
+      tenantProspectId: candidate.tenantProspectId || "",
+      organizationId: candidate.organizationId || "",
+      convertedAt,
+      via: requestIdPrefix,
+      sourceEvidence: structuredClone(candidate.sourceEvidence || [])
+    }
+  });
+  Object.assign(candidate, {
+    status: "synced",
+    leadId: conversion.lead.id,
+    statusChangedAt: convertedAt,
+    excludedReason: ""
+  });
+  migrateProspectFollowUpTodos(store, candidate, conversion.lead.id);
+  await persistCandidateChanges(store, [candidate]);
+  return conversion.lead.id;
+}
+
+function batchOwnerFor(batch: ProspectOutreachBatch) {
+  const owner = getStore().users.find((item) => item.id === batch.ownerId && item.status === "active");
+  if (!owner) throw new Error("批次所属账号不存在或已停用");
+  return owner;
+}
+
+// ---------------------------------------------------------------------------
+// 自动发送方案（后台任务）：配置目标与频率，线程持续取人投递，可启停可观察
+// ---------------------------------------------------------------------------
+
+function prospectPlanSummary(plan: ReturnType<typeof getProspectOutreachPlan>) {
+  const { items, ...rest } = plan;
+  return {
+    ...rest,
+    progress: planProgress(plan),
+    recentItems: items.slice(-5).reverse().map((item) => ({
+      id: item.id,
+      candidateId: item.candidateId,
+      entityType: item.entityType || "candidate",
+      company: item.company,
+      recipient: item.recipient,
+      status: item.status,
+      skipReason: item.skipReason,
+      sentAt: item.sentAt,
+      convertedLeadId: item.convertedLeadId,
+      stepStatuses: item.steps.map((step) => ({ index: step.index, status: step.status, sentAt: step.sentAt }))
+    }))
+  };
+}
+
+app.get("/api/outreach-plans", requireAuth, asyncRoute(async (req, res) => {
+  const limit = Number(req.query.limit || 50);
+  res.json({ plans: listProspectOutreachPlans(getStore(), req.user!, limit).map(prospectPlanSummary) });
+}));
+
+app.post("/api/outreach-plans", requireAuth, asyncRoute(async (req, res) => {
+  if (!hasIamPermission(req.user!, "prospect.execute")) {
+    res.status(403).json({ message: "当前账号没有创建发送方案的权限", permissionCode: "prospect.execute" });
+    return;
+  }
+  try {
+    const plan = await createProspectOutreachPlan(getStore(), req.user!, (req.body || {}) as Record<string, unknown>);
+    res.json({ plan });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ message: error.issues[0]?.message || "方案参数不合法" });
+      return;
+    }
+    throw error;
+  }
+}));
+
+/** 创建前预览：当前筛选条件下候选池命中数与样例 */
+app.post("/api/outreach-plans/preview", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    countries: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
+    keyword: z.string().trim().max(120).default("")
+  });
+  const input = schema.parse(req.body || {});
+  const matched = planCandidateMatches(getStore(), req.user!, { countries: input.countries, keyword: input.keyword, maxTargets: 9999 });
+  res.json({
+    matched: matched.length,
+    sample: matched.slice(0, 5).map((candidate) => ({
+      id: candidate.id,
+      company: candidate.company,
+      country: candidate.country,
+      hasEmail: Boolean((candidate.contactInfo || "").match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/))
+    }))
+  });
+}));
+
+app.get("/api/outreach-plans/:id", requireAuth, asyncRoute(async (req, res) => {
+  const plan = getProspectOutreachPlan(getStore(), req.user!, req.params.id);
+  res.json({ plan, progress: planProgress(plan) });
+}));
+
+app.post("/api/outreach-plans/:id/control", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({ action: z.enum(["pause", "resume", "stop"]) });
+  const input = schema.parse(req.body || {});
+  try {
+    const plan = await controlProspectOutreachPlan(getStore(), req.user!, req.params.id, input.action);
+    res.json({ plan: prospectPlanSummary(plan) });
+  } catch (error) {
+    if (error && typeof error === "object" && "statusCode" in error) {
+      res.status((error as { statusCode: number }).statusCode).json({ message: (error as unknown as Error).message });
+      return;
+    }
+    throw error;
+  }
+}));
+
+app.delete("/api/outreach-plans/:id", requireAuth, asyncRoute(async (req, res) => {
+  try {
+    await deleteProspectOutreachPlan(getStore(), req.user!, req.params.id);
+    res.json({ deleted: req.params.id });
+  } catch (error) {
+    if (error && typeof error === "object" && "statusCode" in error) {
+      res.status((error as { statusCode: number }).statusCode).json({ message: (error as unknown as Error).message });
+      return;
+    }
+    throw error;
+  }
+}));
+
+
+app.post("/api/prospect-outreach-batches", requireAuth, asyncRoute(async (req, res) => {
+  if (!hasIamPermission(req.user!, "prospect.execute")) {
+    res.status(403).json({ message: "当前账号没有创建发信批次的权限", permissionCode: "prospect.execute" });
+    return;
+  }
+  try {
+    const batch = await createProspectOutreachBatch(getStore(), req.user!, (req.body || {}) as Record<string, unknown>);
+    res.json({ batch });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ message: error.issues[0]?.message || "批次参数不合法" });
+      return;
+    }
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-outreach-batches", requireAuth, asyncRoute(async (req, res) => {
+  const limit = Number(req.query.limit || 20);
+  res.json({ batches: listProspectOutreachBatches(getStore(), req.user!, limit) });
+}));
+
+app.post("/api/prospect-outreach-batches/:id/approve", requireAuth, asyncRoute(async (req, res) => {
+  try {
+    const batch = await approveProspectOutreachBatch(getStore(), req.user!, req.params.id);
+    res.json({ batch });
+  } catch (error) {
+    if (typeof (error as { statusCode?: number }).statusCode === "number") {
+      res.status((error as { statusCode: number }).statusCode).json({ message: (error as unknown as Error).message });
+      return;
+    }
+    if (error instanceof Error && /不存在或无权访问/.test(error.message)) {
+      res.status(404).json({ message: error.message });
+      return;
+    }
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-outreach-batches/:id/items/:itemId", requireAuth, asyncRoute(async (req, res) => {
+  const rawBody = (req.body || {}) as Record<string, unknown>;
+  const action = z.enum(["remove", "restore", "edit"]).parse(rawBody.action);
+  const payload = action === "edit"
+    ? z.object({
+      stepIndex: z.coerce.number().int().min(0).max(9),
+      subject: z.string().trim().min(1).max(160),
+      body: z.string().trim().min(10).max(6000)
+    }).parse({ stepIndex: rawBody.stepIndex, subject: rawBody.subject, body: rawBody.body })
+    : undefined;
+  try {
+    const result = await updateProspectOutreachBatchItem(getStore(), req.user!, req.params.id, req.params.itemId, action, payload);
+    res.json(result);
+  } catch (error) {
+    if (typeof (error as { statusCode?: number }).statusCode === "number") {
+      res.status((error as { statusCode: number }).statusCode).json({ message: (error as unknown as Error).message });
+      return;
+    }
+    if (error instanceof Error && (/不存在/.test(error.message))) {
+      res.status(404).json({ message: error.message });
+      return;
+    }
+    throw error;
+  }
+}));
+
+app.post("/api/prospect-outreach-batches/:id/:action", requireAuth, asyncRoute(async (req, res) => {
+  const action = z.enum(["pause", "resume", "cancel"]).parse(req.params.action);
+  try {
+    const batch = await controlProspectOutreachBatch(getStore(), req.user!, req.params.id, action);
+    res.json({ batch });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ message: "不支持的动作" });
+      return;
+    }
+    if (error instanceof Error && (/不存在或无权访问/.test(error.message) || /不能/.test(error.message))) {
+      res.status(409).json({ message: error.message });
+      return;
+    }
+    throw error;
+  }
+}));
+
+app.get("/api/prospect-outreach-batches/:id", requireAuth, asyncRoute(async (req, res) => {
+  try {
+    const batch = getProspectOutreachBatch(getStore(), req.user!, req.params.id);
+    res.json({ batch });
+  } catch (error) {
+    if (error instanceof Error && /不存在或无权访问/.test(error.message)) {
+      res.status(404).json({ message: error.message });
+      return;
+    }
+    throw error;
+  }
+}));
+
+app.delete("/api/prospect-outreach-batches/:id", requireAuth, asyncRoute(async (req, res) => {
+  try {
+    const batch = await deleteProspectOutreachBatch(getStore(), req.user!, req.params.id);
+    res.json({ deleted: batch.id });
+  } catch (error) {
+    if (error instanceof Error && /不存在或无权访问/.test(error.message)) {
+      res.status(404).json({ message: error.message });
+      return;
+    }
+    if (error instanceof Error && (error as { statusCode?: number }).statusCode === 409) {
+      res.status(409).json({ message: error.message });
+      return;
+    }
+    throw error;
+  }
+}));
+
+// ---------------------------------------------------------------------------
+// 开发信档案（客户维度）
+//
+// 「发信明细」= 跨批次 / 方案把每个收件人聚合成一行，标出客户当前所处的开发阶段；
+// 「开发信档案」= 单个客户的完整过程（发送历史 / 回复情况 / AI 背调 / 按阶段发下一封）。
+// 聚合只读；发信仍复用既有 dispatchOutboundEmail 通道，并要求前端先冻结载荷再人工确认。
+// ---------------------------------------------------------------------------
+
+const outreachJourneyEntityTypeSchema = z.enum(["customer", "lead", "prospect_candidate"]);
+
+/** 业务员只看自己名下；管理角色可切到「团队」视角 */
+function outreachJourneyScopeFor(user: SessionUser, scope: string) {
+  const canSeeTeam = user.role === "admin" || user.role === "super_admin" || user.role === "manager";
+  return scope === "team" && canSeeTeam
+    ? { ownerId: "", teamId: user.teamId }
+    : { ownerId: user.id, teamId: "" };
+}
+
+function outreachJourneyAccessible(user: SessionUser, ownerId: string) {
+  if (!ownerId) return true;
+  if (ownerId === user.id) return true;
+  return user.role === "admin" || user.role === "super_admin" || user.role === "manager";
+}
+
+app.get("/api/outreach-journey/overview", requireAuth, asyncRoute(async (req, res) => {
+  const scope = String(req.query.scope || "self");
+  const overview = await listOutreachJourneyOverview(getStore(), outreachJourneyScopeFor(req.user!, scope));
+  res.json(overview);
+}));
+
+app.get("/api/outreach-journey/draft", requireAuth, asyncRoute(async (req, res) => {
+  const entityType = outreachJourneyEntityTypeSchema.parse(String(req.query.entityType || ""));
+  const entityId = String(req.query.entityId || "");
+  const store = getStore();
+  const entity = resolveOutreachJourneyEntity(store, entityType, entityId);
+  if (!entity) {
+    res.status(404).json({ message: "对象不存在或无权访问" });
+    return;
+  }
+  if (!outreachJourneyAccessible(req.user!, entity.ownerId)) {
+    res.status(403).json({ message: "只能查看自己名下客户的开发信过程" });
+    return;
+  }
+  const view = await buildOutreachJourney(store, entityType, entityId);
+  if (!view) {
+    res.status(404).json({ message: "对象不存在或无权访问" });
+    return;
+  }
+  res.json({
+    draft: buildOutreachJourneyDraft(view.entity, view.stage, view.emails),
+    stage: view.stage,
+    entity: view.entity,
+    recipient: view.entity.email,
+    sourceLabel: outreachSourceLabel("journey_stage_send")
+  });
+}));
+
+app.get("/api/outreach-journey", requireAuth, asyncRoute(async (req, res) => {
+  const entityType = outreachJourneyEntityTypeSchema.parse(String(req.query.entityType || ""));
+  const entityId = String(req.query.entityId || "");
+  const store = getStore();
+  const entity = resolveOutreachJourneyEntity(store, entityType, entityId);
+  if (!entity) {
+    res.status(404).json({ message: "对象不存在或无权访问" });
+    return;
+  }
+  if (!outreachJourneyAccessible(req.user!, entity.ownerId)) {
+    res.status(403).json({ message: "只能查看自己名下客户的开发信过程" });
+    return;
+  }
+  const view = await buildOutreachJourney(store, entityType, entityId);
+  if (!view) {
+    res.status(404).json({ message: "对象不存在或无权访问" });
+    return;
+  }
+  res.json(view);
+}));
+
+const outreachJourneySendSchema = z.object({
+  entityType: outreachJourneyEntityTypeSchema,
+  entityId: z.string().trim().min(1).max(120),
+  requestId: z.string().trim().min(1).max(120),
+  to: z.string().trim().email().max(255),
+  subject: z.string().trim().min(1).max(300),
+  body: z.string().trim().min(1).max(20000)
+});
+
+app.post("/api/outreach-journey/send", requireAuth, asyncRoute(async (req, res) => {
+  const body = outreachJourneySendSchema.parse(req.body);
+  const store = getStore();
+  const user = req.user!;
+  const entity = resolveOutreachJourneyEntity(store, body.entityType, body.entityId);
+  if (!entity) {
+    res.status(404).json({ message: "对象不存在或无权访问" });
+    return;
+  }
+  if (!outreachJourneyAccessible(user, entity.ownerId)) {
+    res.status(403).json({ message: "只能给自己名下客户的发开发信" });
+    return;
+  }
+  const view = await buildOutreachJourney(store, body.entityType, body.entityId);
+  if (view && !view.stage.canSend) {
+    res.status(409).json({
+      message: view.stage.blockReason || `当前阶段「${view.stage.label}」不建议继续发送开发信`,
+      stage: view.stage.key
+    });
+    return;
+  }
+  const owner = store.users.find((item) => item.id === entity.ownerId && item.status === "active")
+    || store.users.find((item) => item.id === user.id && item.status === "active");
+  if (!owner) {
+    res.status(409).json({ message: "发件账号不可用：该客户负责人账号已停用，请先指派或启用账号" });
+    return;
+  }
+
+  if (body.entityType === "prospect_candidate") {
+    const candidate = store.websiteOpportunities.find((item) => item.id === body.entityId);
+    if (!candidate) {
+      res.status(404).json({ message: "搜客候选不存在" });
+      return;
+    }
+    const result = await sendProspectBatchEmail(store, owner, candidate, body.to, body.subject, body.body, body.requestId);
+    await store.persist().catch(() => undefined);
+    res.json({
+      sent: { ...result, simulated: ["test", "e2e"].includes(process.env.NODE_ENV || "") },
+      journey: await buildOutreachJourney(store, body.entityType, body.entityId)
+    });
+    return;
+  }
+
+  const logEntityType: OutboundEmailLog["entityType"] = body.entityType === "lead" ? "lead" : "customer";
+  const dispatch = await dispatchOutboundEmail(store, owner, {
+    requestId: body.requestId,
+    entityType: logEntityType,
+    entityId: body.entityId,
+    to: body.to,
+    subject: body.subject,
+    body: body.body,
+    source: "journey_stage_send"
+  });
+  const sentAt = dispatch.log.sentAt;
+  recordCrmEmailTouchpoint(store, dispatch.log, {
+    eventType: "send",
+    direction: "outbound",
+    occurredAt: sentAt,
+    subject: body.subject,
+    content: body.body,
+    contactValue: body.to,
+    requestId: `journey:${body.requestId}`
+  });
+  if (logEntityType === "lead") {
+    store.leadActivities.unshift({
+      id: `la_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      leadId: body.entityId,
+      type: "email",
+      content: `开发信档案 · 按阶段发送：${body.subject}`,
+      operatorId: owner.id,
+      nextFollowAt: "",
+      createdAt: sentAt
+    });
+  } else {
+    store.customerActivities.unshift({
+      id: `ca_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      customerId: body.entityId,
+      type: "email",
+      content: `开发信档案 · 按阶段发送：${body.subject}`,
+      operatorId: owner.id,
+      nextReminder: "",
+      createdAt: sentAt
+    });
+  }
+  owner.lastDevelopmentEmailAt = sentAt;
+  owner.lastDevelopmentEmailTo = body.to;
+  owner.lastDevelopmentEmailSubject = body.subject;
+  await store.persist().catch(() => undefined);
+  res.json({
+    sent: {
+      recipient: body.to,
+      sentAt,
+      messageId: dispatch.log.messageId,
+      replayed: dispatch.replayed,
+      simulated: ["test", "e2e"].includes(process.env.NODE_ENV || "")
+    },
+    journey: await buildOutreachJourney(store, body.entityType, body.entityId)
   });
 }));
 
@@ -3494,6 +4376,11 @@ app.get("/api/internal-messages/recipients", requireAuth, (req, res) => {
   res.json({ recipients });
 });
 
+app.get("/api/internal-messages/unread-count", requireAuth, (req, res) => {
+  const unreadCount = getStore().internalMessages.filter((item) => item.recipientId === req.user!.id && !item.readAt).length;
+  res.json({ unreadCount });
+});
+
 app.get("/api/internal-messages", requireAuth, (req, res) => {
   const box = z.enum(["inbox", "sent"]).catch("inbox").parse(req.query.box);
   const store = getStore();
@@ -3507,6 +4394,20 @@ app.get("/api/internal-messages", requireAuth, (req, res) => {
     unreadCount: store.internalMessages.filter((item) => item.recipientId === req.user!.id && !item.readAt).length
   });
 });
+
+app.post("/api/internal-messages/read-all", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const readAt = new Date().toISOString();
+  let updatedCount = 0;
+  store.internalMessages.forEach((message) => {
+    if (message.recipientId !== req.user!.id || message.readAt) return;
+    message.readAt = readAt;
+    message.updatedAt = readAt;
+    updatedCount += 1;
+  });
+  if (updatedCount) await store.persist();
+  res.json({ updatedCount, unreadCount: 0 });
+}));
 
 // Communication automation uses the signed CRM session to deliver a system
 // notification directly into the current user's inbox.
@@ -3624,13 +4525,14 @@ app.get("/api/access-control/overview", requireAuth, asyncRoute(async (req, res)
     }
     const query = z.object({
       teamId: z.string().trim().min(1).max(64).optional(),
-      page: z.enum(["members", "organization", "roles", "authorization", "audit"]).default("members")
+      page: z.enum(["members", "organization", "roles", "ui", "authorization", "audit"]).default("members")
     }).parse(req.query);
     const store = getStore();
     const requiredPermission: Record<typeof query.page, string> = {
       members: "member.read",
       organization: "org.read",
       roles: "role.read",
+      ui: "role.read",
       authorization: "permission.assign",
       audit: "audit.read"
     };
@@ -4434,6 +5336,8 @@ app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
     country: z.string().min(1).default("未知"),
     contact: z.string().min(1).default("待维护"),
     whatsapp: z.string().trim().regex(/^\+[1-9]\d{6,14}$/, "WhatsApp 号码须包含国家码").or(z.literal("")).optional().default(""),
+    wechat: z.string().trim().max(100).optional().default(""),
+    otherNotes: z.string().trim().max(2000).optional().default(""),
     stage: z.string().min(1).default("询盘"),
     amount: z.number().int().nonnegative().default(0),
     health: z.number().int().min(0).max(100).optional().default(72),
@@ -4453,6 +5357,17 @@ app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
   });
   const body = schema.parse(req.body);
   const store = getStore();
+  if (body.company.trim()) {
+    const duplicate = findDuplicateCustomer(store, req.user!.teamId, body.company, body.country);
+    if (duplicate) {
+      res.status(409).json({
+        message: `客户已存在：「${duplicate.company}」（${duplicate.country || "国家未知"}）已在客户列表中，不能重复添加`,
+        errorCode: "CUSTOMER_DUPLICATE",
+        existingId: duplicate.id
+      });
+      return;
+    }
+  }
   const companyFullName = body.companyFullName || body.billingName || body.company;
   const customer = {
     id: `c_${Date.now()}`,
@@ -4476,6 +5391,8 @@ app.patch("/api/customers/:id", requireAuth, asyncRoute(async (req, res) => {
     country: z.string().min(1).optional(),
     contact: z.string().min(1).optional(),
     whatsapp: z.string().trim().regex(/^\+[1-9]\d{6,14}$/, "WhatsApp 号码须包含国家码").or(z.literal("")).optional(),
+    wechat: z.string().trim().max(100).optional(),
+    otherNotes: z.string().trim().max(2000).optional(),
     stage: z.string().min(1).optional(),
     amount: z.number().int().nonnegative().optional(),
     health: z.number().int().min(0).max(100).optional(),
@@ -4616,6 +5533,31 @@ app.post("/api/customers/bulk-delete", requireAuth, asyncRoute(async (req, res) 
 // Leads (线索管理) — unified intake, follow-up and qualified conversion
 // ---------------------------------------------------------------------------
 const leadSourceTypes = ["outbound", "inbound", "offline", "referral", "import"] as const;
+
+/** 归一化「公司名 + 国家」重复判定键：去首尾空格、压平空白、统一小写 */
+function entityDuplicateKey(company: string, country: string) {
+  const normalize = (value: string) => value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("en-US");
+  return `${normalize(company)}|${normalize(country)}`;
+}
+
+function findDuplicateLead(store: ReturnType<typeof getStore>, teamId: string, company: string, country: string, excludeId = "") {
+  const key = entityDuplicateKey(company, country);
+  return store.leads.find((item) =>
+    item.id !== excludeId
+    && item.teamId === teamId
+    && entityDuplicateKey(item.company, item.country) === key
+  );
+}
+
+function findDuplicateCustomer(store: ReturnType<typeof getStore>, teamId: string, company: string, country: string, excludeId = "") {
+  const key = entityDuplicateKey(company, country);
+  return store.customers.find((item) =>
+    item.id !== excludeId
+    && item.teamId === teamId
+    && entityDuplicateKey(item.company, item.country) === key
+  );
+}
+
 const leadWritableSchema = z.object({
   company: z.string().min(1),
   contact: z.string().optional().default(""),
@@ -4629,6 +5571,7 @@ const leadWritableSchema = z.object({
   estimatedAmount: z.number().nonnegative().optional().default(0),
   nextFollowAt: z.string().optional().default(""),
   remark: z.string().optional().default(""),
+  inquiryContent: z.string().max(20_000).optional().default(""),
   sourceType: z.enum(leadSourceTypes).optional().default("outbound"),
   sourceChannel: z.string().max(80).optional().default("manual"),
   sourceCampaign: z.string().max(120).optional().default(""),
@@ -4678,6 +5621,7 @@ function createLeadFromSource(user: SessionUser, input: LeadIntake) {
     nextFollowAt: input.nextFollowAt,
     lastActivityAt: "刚刚",
     remark: input.remark,
+    inquiryContent: input.inquiryContent,
     convertedCustomerId: "",
     convertedDealId: "",
     createdAt: receivedAt
@@ -4707,7 +5651,71 @@ function createLeadFromSource(user: SessionUser, input: LeadIntake) {
     nextFollowAt: lead.nextFollowAt,
     createdAt: receivedAt
   });
+  notifyNewLead(lead);
   return { lead, sourceEvent, duplicate: false };
+}
+
+const WEBSITE_LEAD_SIGNATURE_WINDOW_SECONDS = 5 * 60;
+const WEBSITE_LEAD_REPLAY_CACHE_LIMIT = 5_000;
+const websiteLeadReplayCache = new Map<string, number>();
+
+type WebsiteLeadSignatureStatus = "ok" | "invalid" | "expired" | "replay" | "unconfigured";
+
+function websiteLeadSigningKeys() {
+  const settings = readWebsiteLeadIngressSettings();
+  if (!settings.enabled) return [];
+  return [settings.current, settings.previous].filter((item): item is NonNullable<typeof item> => Boolean(item));
+}
+
+function pruneWebsiteLeadReplayCache(nowSeconds: number) {
+  for (const [key, expiresAt] of websiteLeadReplayCache) {
+    if (expiresAt <= nowSeconds) websiteLeadReplayCache.delete(key);
+  }
+  while (websiteLeadReplayCache.size >= WEBSITE_LEAD_REPLAY_CACHE_LIMIT) {
+    const oldest = websiteLeadReplayCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    websiteLeadReplayCache.delete(oldest);
+  }
+}
+
+function websiteLeadSignatureStatus(req: Request): WebsiteLeadSignatureStatus {
+  const keys = websiteLeadSigningKeys();
+  if (!keys.length) return "unconfigured";
+  const keyId = String(req.headers["x-goodjob-key-id"] || "").trim();
+  const timestampText = String(req.headers["x-goodjob-timestamp"] || "").trim();
+  const nonce = String(req.headers["x-goodjob-nonce"] || "").trim();
+  const signatureHeader = String(req.headers["x-goodjob-signature"] || "").trim();
+  if (!/^[A-Za-z0-9_-]{2,80}$/u.test(keyId)
+    || !/^\d{10}$/u.test(timestampText)
+    || !/^[A-Za-z0-9_-]{20,64}$/u.test(nonce)
+    || !/^v1=[a-f0-9]{64}$/u.test(signatureHeader)) return "invalid";
+  const key = keys.find((item) => item.id === keyId);
+  if (!key) return "invalid";
+  const timestamp = Number(timestampText);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (!Number.isSafeInteger(timestamp) || Math.abs(nowSeconds - timestamp) > WEBSITE_LEAD_SIGNATURE_WINDOW_SECONDS) return "expired";
+  const rawBody = (req as Request & { websiteLeadRawBody?: Buffer }).websiteLeadRawBody;
+  if (!rawBody) return "invalid";
+  const bodyHash = createHash("sha256").update(rawBody).digest("hex");
+  const pathName = String(req.originalUrl || req.url).split("?")[0];
+  const canonical = ["v1", keyId, req.method.toUpperCase(), pathName, timestampText, nonce, bodyHash].join("\n");
+  const expected = createHmac("sha256", key.secret).update(canonical).digest();
+  const supplied = Buffer.from(signatureHeader.slice("v1=".length), "hex");
+  if (supplied.length !== expected.length || !timingSafeEqual(expected, supplied)) return "invalid";
+  pruneWebsiteLeadReplayCache(nowSeconds);
+  const replayKey = `${keyId}:${nonce}`;
+  if ((websiteLeadReplayCache.get(replayKey) || 0) > nowSeconds) return "replay";
+  websiteLeadReplayCache.set(replayKey, nowSeconds + WEBSITE_LEAD_SIGNATURE_WINDOW_SECONDS);
+  return "ok";
+}
+
+function websiteLeadOwner() {
+  const ownerId = readWebsiteLeadIngressSettings().ownerId;
+  if (!ownerId) return null;
+  const user = getStore().users.find((item) => item.id === ownerId && item.status === "active");
+  if (!user) return null;
+  const publicOwner = publicUser(user);
+  return hasIamPermission(publicOwner, "lead.create") ? publicOwner : null;
 }
 
 function normalizedMatchText(value: string) {
@@ -4811,7 +5819,15 @@ function customerWithPipeline(customer: Customer, viewer?: SessionUser) {
   return response;
 }
 
-type BackgroundResearchEntity = "lead" | "customer";
+type BackgroundResearchEntity = "lead" | "customer" | "prospect";
+
+const PROSPECT_STATUS_LABELS: Record<string, string> = {
+  preview: "待核验预览",
+  contactable: "可联系（已批准）",
+  contacted: "已触达",
+  synced: "已转线索/客户",
+  excluded: "已排除"
+};
 
 interface BackgroundResearchSource {
   title: string;
@@ -4829,10 +5845,229 @@ interface BackgroundResearchProviderCheck {
   message: string;
 }
 
-interface NativeBackgroundResearch {
-  parsed: Record<string, unknown> | null;
+interface BackgroundResearchFact {
+  label: string;
+  value: string;
+  group?: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
+}
+
+interface BackgroundResearchAngleResult {
+  angleId: string;
+  angleName: string;
+  facts: BackgroundResearchFact[];
+  notes: string;
   sources: BackgroundResearchSource[];
   check: BackgroundResearchProviderCheck;
+}
+
+const BACKGROUND_RESEARCH_ANGLES: Array<{ id: string; name: string; focus: string }> = [
+  {
+    id: "identity",
+    name: "主体识别",
+    focus: "企业官网、注册主体与成立时间、总部地点、员工规模、主营业务。可搜索 \"<company> <country> official website\"、\"<company> company profile\" 等。"
+  },
+  {
+    id: "business",
+    name: "业务与产品",
+    focus: "主要产品线与品牌、服务的行业与市场、B2B 平台与社媒足迹（阿里巴巴、Made-in-China、LinkedIn 公司页等）、经销与代理网络。"
+  },
+  {
+    id: "trade",
+    name: "贸易信号",
+    focus: "进出口活动与海关贸易数据记录、从中国或第三方采购的线索、参展记录（广交会/行业展）、海外仓或采购办公室。"
+  },
+  {
+    id: "risk",
+    name: "风险与信用",
+    focus: "诉讼与制裁合规名单、拖欠货款或贸易纠纷投诉、负面新闻、经营异常或破产信息。"
+  }
+];
+
+interface BackgroundResearchAngleContext {
+  entityType: string;
+  company: string;
+  country: string;
+  business: string;
+  products: string;
+  grade: string;
+  dealCount: number;
+  website: string;
+  knownContacts: string[];
+}
+
+function backgroundResearchAnglePrompt(angle: { id: string; name: string; focus: string }, context: BackgroundResearchAngleContext) {
+  return [
+    `联网调研目标企业（调研角度：${angle.name}）：${context.company}`,
+    `已知国家或地区：${context.country}`,
+    context.website ? `已知官网：${context.website}` : "",
+    `我方业务背景：${context.business}${context.products && context.products !== "待核实" ? `；主推产品：${context.products}` : ""}${context.grade ? `；客户分级：${context.grade}` : ""}${context.dealCount ? `；历史商机 ${context.dealCount} 个` : ""}`,
+    context.knownContacts.length ? `已掌握的联系方式（仅供消歧，勿重复调研）：${context.knownContacts.join("、")}` : "",
+    `本角度调研重点：${angle.focus}`,
+    "先判断搜索结果里的企业是否与目标企业为同一家（结合国家、业务背景判断）；同名但主体不符时不要采信其资料，并在 notes 里说明冲突。",
+    "禁止引用 .cn、.hk、.mo、.tw 及中国境内网站。",
+    "只返回一个 JSON 对象：{\"facts\":[{\"label\":\"\",\"value\":\"\",\"source\":\"\"}],\"notes\":\"\"}；facts 给 2~6 条，每条 value 控制在一句话以内且必须来自本次 Web Search 的引用，source 填该条事实对应引用的 URL；本角度确实查不到时返回空数组并在 notes 说明原因。"
+  ].filter(Boolean).join("\n");
+}
+
+async function runNativeBackgroundResearchAngle(
+  config: AiModelConfig,
+  angle: { id: string; name: string; focus: string },
+  context: BackgroundResearchAngleContext,
+  timeoutMs: number
+): Promise<BackgroundResearchAngleResult> {
+  const emptyCheck = (status: BackgroundResearchProviderCheck["status"], message: string): BackgroundResearchAngleResult => ({
+    angleId: angle.id,
+    angleName: angle.name,
+    facts: [],
+    notes: "",
+    sources: [],
+    check: { providerId: `angle:${angle.id}`, providerName: angle.name, status, matchCount: 0, message }
+  });
+  try {
+    const result = await callAiModelWithWebSearch(config, backgroundResearchAnglePrompt(angle, context), 10_000, undefined, timeoutMs);
+    const citations = result.citations.filter((item) => nativeResearchCitationAllowed(item.url));
+    if (!result.usedSearch || !citations.length) {
+      return emptyCheck("failed", result.usedSearch ? "执行了联网搜索但没有返回合规引用" : "该角度未触发联网搜索");
+    }
+    const parsed = extractJsonObject(result.content) as Record<string, unknown>;
+    const sourceByUrl = new Map(citations.map((item) => [item.url, item]));
+    const facts: BackgroundResearchFact[] = Array.isArray(parsed.facts)
+      ? (parsed.facts as unknown[]).flatMap((item) => {
+          if (!item || typeof item !== "object") return [];
+          const row = item as Record<string, unknown>;
+          if (typeof row.label !== "string" || typeof row.value !== "string") return [];
+          const value = researchText(row.value, "");
+          if (!value || value === "待核实") return [];
+          const sourceUrl = typeof row.source === "string" && sourceByUrl.has(row.source) ? row.source : "";
+          const citation = sourceUrl ? sourceByUrl.get(sourceUrl) : undefined;
+          return [{
+            label: row.label.slice(0, 60),
+            value: value.slice(0, 300),
+            group: angle.name,
+            sourceUrl: sourceUrl || undefined,
+            sourceTitle: citation ? citation.title || new URL(citation.url).hostname : undefined
+          }];
+        }).slice(0, 6)
+      : [];
+    const usedUrls = new Set(facts.map((fact) => fact.sourceUrl).filter(Boolean) as string[]);
+    const sources = citations.map((citation) => ({
+      title: citation.title || new URL(citation.url).hostname,
+      url: citation.url,
+      observedAt: new Date().toISOString(),
+      detail: `${angle.name}角度来源`,
+      authority: `angle:${angle.id}`
+    }));
+    return {
+      angleId: angle.id,
+      angleName: angle.name,
+      facts,
+      notes: typeof parsed.notes === "string" ? parsed.notes.trim().slice(0, 200) : "",
+      sources,
+      check: {
+        providerId: `angle:${angle.id}`,
+        providerName: angle.name,
+        status: facts.length ? "matched" : sources.length ? "empty" : "failed",
+        matchCount: facts.length,
+        message: facts.length ? `${angle.name}命中 ${facts.length} 条事实、${sources.length} 个来源` : sources.length ? "有来源但没有提炼出可用事实" : "该角度未触发联网搜索"
+      }
+    };
+  } catch (error) {
+    const failure = providerErrorFromUnknown(error, "search");
+    return emptyCheck("failed", failure.publicMessage);
+  }
+}
+
+async function runNativeBackgroundResearchAngles(
+  config: AiModelConfig | null,
+  context: BackgroundResearchAngleContext
+): Promise<{ angles: BackgroundResearchAngleResult[]; sources: BackgroundResearchSource[]; facts: BackgroundResearchFact[] }> {
+  const providerName = config?.name || "模型原生 Web Search";
+  if (!config?.enabled || !config.apiKey) {
+    return {
+      angles: BACKGROUND_RESEARCH_ANGLES.map((angle) => ({
+        angleId: angle.id,
+        angleName: angle.name,
+        facts: [],
+        notes: "",
+        sources: [],
+        check: {
+          providerId: `angle:${angle.id}`,
+          providerName: angle.name,
+          status: "skipped" as const,
+          matchCount: 0,
+          message: "未配置可用 AI 模型"
+        }
+      })),
+      sources: [],
+      facts: []
+    };
+  }
+  if (nativeResearchCountryBlocked(context.country)) {
+    const skipped = BACKGROUND_RESEARCH_ANGLES.map((angle) => ({
+      angleId: angle.id,
+      angleName: angle.name,
+      facts: [],
+      notes: "",
+      sources: [],
+      check: {
+        providerId: `angle:${angle.id}`,
+        providerName: angle.name,
+        status: "skipped" as const,
+        matchCount: 0,
+        message: "按合规策略，中国及相关地区不执行自动网页联网背调"
+      }
+    }));
+    return { angles: skipped, sources: [], facts: [] };
+  }
+  const timeoutMs = aiSearchTimeoutMs();
+  const angles = await Promise.all(
+    BACKGROUND_RESEARCH_ANGLES.map((angle) => runNativeBackgroundResearchAngle(config, angle, context, timeoutMs))
+  );
+  const seenUrls = new Set<string>();
+  const sources: BackgroundResearchSource[] = [];
+  for (const angle of angles) {
+    for (const source of angle.sources) {
+      if (seenUrls.has(source.url)) continue;
+      seenUrls.add(source.url);
+      sources.push(source);
+    }
+  }
+  const facts = angles.flatMap((angle) => angle.facts);
+  return { angles, sources: sources.slice(0, 20), facts };
+}
+
+async function synthesizeBackgroundResearch(
+  config: AiModelConfig,
+  context: BackgroundResearchAngleContext,
+  angles: BackgroundResearchAngleResult[],
+  sources: BackgroundResearchSource[],
+  crmFacts: Array<{ label: string; value: string }>
+): Promise<Record<string, unknown> | null> {
+  const prompt = [
+    "你是外贸企业尽调分析师。基于以下多角度联网调研结果与 CRM 内部资料，输出一份高信息密度的综合背调结论。",
+    "硬性要求：summary 3~5 句，必须综合多个来源写出这个公司具体是做什么的、规模与贸易活跃度，不得写空话；verdict 一句话；score 为 0~100 整数，依据证据数量、质量与风险给出并说明理由；opportunities 2~4 条，结合我方业务背景写具体的生意机会；talkTracks 2~4 条首聊切入点，必须落到对方的具体业务细节上，禁止'请问您需要什么'式客套；risks 按证据写，没有就给一条 low；nextAction 一条可执行动作。",
+    "所有判断只能基于提供的事实、来源与 CRM 资料，不得编造。",
+    "只返回一个 JSON 对象：{\"summary\":\"\",\"verdict\":\"\",\"score\":0,\"scoreReason\":\"\",\"opportunities\":[\"\"],\"talkTracks\":[\"\"],\"risks\":[{\"level\":\"high|medium|low\",\"title\":\"\",\"detail\":\"\"}],\"nextAction\":\"\"}",
+    JSON.stringify({
+      target: { company: context.company, country: context.country, website: context.website },
+      crmFacts,
+      angles: angles.map((angle) => ({
+        angle: angle.angleName,
+        status: angle.check.status,
+        facts: angle.facts.map((fact) => ({ label: fact.label, value: fact.value })),
+        notes: angle.notes
+      })),
+      sources: sources.map((source) => ({ title: source.title, url: source.url }))
+    })
+  ].join("\n");
+  try {
+    const parsed = extractJsonObject(await callAiModel(config, prompt, 16_000)) as Record<string, unknown>;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function backgroundResearchSources(
@@ -4858,7 +6093,7 @@ function backgroundResearchSources(
       observedAt: evidence.fetchedAt || candidate.createdAt
     }));
     (candidate.websiteProbeAttempts || []).filter((attempt) => attempt.evidence).slice(0, 1).forEach((attempt) => rows.push({
-      title: "官网低频验证",
+      title: "官网公开资料核验",
       url: attempt.evidence!.sourceUrl || attempt.sourceUrl,
       observedAt: attempt.evidence!.observedAt || attempt.completedAt,
       detail: [
@@ -4895,78 +6130,6 @@ function nativeResearchCitationAllowed(rawUrl: string) {
   }
 }
 
-async function lookupNativeBackgroundResearch(
-  config: AiModelConfig | null,
-  company: string,
-  country: string
-): Promise<NativeBackgroundResearch> {
-  const providerName = config?.name || "模型原生 Web Search";
-  if (!config?.enabled || !config.apiKey) {
-    return {
-      parsed: null,
-      sources: [],
-      check: { providerId: "native_web_search", providerName, status: "skipped", matchCount: 0, message: "未配置可用 AI 模型" }
-    };
-  }
-  if (nativeResearchCountryBlocked(country)) {
-    return {
-      parsed: null,
-      sources: [],
-      check: { providerId: "native_web_search", providerName, status: "skipped", matchCount: 0, message: "按合规策略，中国及相关地区不执行自动网页联网背调" }
-    };
-  }
-  const prompt = [
-    `请联网背调企业：${company}`,
-    `已知国家或地区：${country}`,
-    "搜索企业官网、权威企业介绍、公开新闻、监管或行业资料，确认主体、主营业务、规模线索、公开联系方式及风险。",
-    "禁止使用 .cn、.hk、.mo、.tw 及中国境内网站；同名主体无法确认时必须说明冲突，不得拼接不同公司的资料。",
-    "只返回一个 JSON 对象：{\"summary\":\"\",\"verdict\":\"\",\"facts\":[{\"label\":\"\",\"value\":\"\"}],\"contacts\":[{\"channel\":\"\",\"value\":\"\"}],\"opportunities\":[\"\"],\"risks\":[{\"level\":\"high|medium|low\",\"title\":\"\",\"detail\":\"\"}],\"nextAction\":\"\"}。",
-    "所有事实必须来自本次 Web Search 的引用；没有来源的字段写待核实。"
-  ].join("\n");
-  try {
-    const result = await callAiModelWithWebSearch(config, prompt, 10_000, undefined, 90_000);
-    const citations = result.citations.filter((item) => nativeResearchCitationAllowed(item.url));
-    if (!result.usedSearch || !citations.length) {
-      return {
-        parsed: null,
-        sources: [],
-        check: {
-          providerId: "native_web_search",
-          providerName,
-          status: "failed",
-          matchCount: 0,
-          message: result.usedSearch ? "模型执行了联网搜索，但没有返回合规引用" : "当前模型或代理未执行 Web Search 工具"
-        }
-      };
-    }
-    const parsed = extractJsonObject(result.content) as Record<string, unknown>;
-    return {
-      parsed,
-      sources: citations.slice(0, 10).map((citation) => ({
-        title: citation.title || new URL(citation.url).hostname,
-        url: citation.url,
-        observedAt: new Date().toISOString(),
-        detail: "模型原生 Web Search 引用",
-        authority: "native_web_search"
-      })),
-      check: {
-        providerId: "native_web_search",
-        providerName,
-        status: "matched",
-        matchCount: citations.length,
-        message: `模型联网搜索返回 ${citations.length} 个合规引用`
-      }
-    };
-  } catch (error) {
-    const failure = providerErrorFromUnknown(error, "search");
-    return {
-      parsed: null,
-      sources: [],
-      check: { providerId: "native_web_search", providerName, status: "failed", matchCount: 0, message: failure.publicMessage }
-    };
-  }
-}
-
 async function ensureBackgroundResearchWebsiteProbe(
   user: SessionUser,
   candidates: WebsiteOpportunity[]
@@ -4979,7 +6142,7 @@ async function ensureBackgroundResearchWebsiteProbe(
   if (latest?.evidence) {
     return {
       providerId: "controlled_website",
-      providerName: "官网低频验证",
+      providerName: "官网公开资料核验",
       status: "matched",
       matchCount: 1,
       message: "已复用官网公开信息验证结果"
@@ -4988,7 +6151,7 @@ async function ensureBackgroundResearchWebsiteProbe(
   if (latest && ["queued", "running"].includes(latest.status)) {
     return {
       providerId: "controlled_website",
-      providerName: "官网低频验证",
+      providerName: "官网公开资料核验",
       status: "skipped",
       matchCount: 0,
       message: "官网验证正在后台执行"
@@ -4998,18 +6161,18 @@ async function ensureBackgroundResearchWebsiteProbe(
   try {
     await queueWebsiteProbe(getStore(), candidate, user.id, async (current) => {
       await persistCandidateChanges(getStore(), [current], false);
-    });
+    }, { extractPublicContacts: websiteContactAiExtractor(user) });
     return {
       providerId: "controlled_website",
-      providerName: "官网低频验证",
+      providerName: "官网公开资料核验",
       status: "skipped",
       matchCount: 0,
-      message: "已进入受控低频验证队列，完成后重新背调即可复用结果"
+      message: "已进入官网公开资料核验队列，完成后重新背调即可复用结果"
     };
   } catch (error) {
     return {
       providerId: "controlled_website",
-      providerName: "官网低频验证",
+      providerName: "官网公开资料核验",
       status: error instanceof WebsiteProbeError && error.code === "WEBSITE_PROBE_COUNTRY_BLOCKED" ? "skipped" : "failed",
       matchCount: 0,
       message: error instanceof Error ? error.message : "官网验证未能启动"
@@ -5027,7 +6190,7 @@ function researchText(value: unknown, fallback = "待核实") {
 }
 
 const backgroundResearchRequestSchema = z.object({
-  entityType: z.enum(["lead", "customer"]),
+  entityType: z.enum(["lead", "customer", "prospect"]),
   entityId: z.string().trim().min(1).max(120)
 });
 
@@ -5040,37 +6203,65 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
   const customer = entityType === "customer"
     ? store.customers.find((item) => item.id === body.entityId && canSeeOwner(user, item.ownerId, item.teamId))
     : undefined;
-  if (!lead && !customer) return null;
+  const prospect = entityType === "prospect"
+    ? store.websiteOpportunities.find((item) => item.id === body.entityId && canSeeOwner(user, item.ownerId, item.teamId))
+    : undefined;
+  if (!lead && !customer && !prospect) return null;
 
-  const ownerId = lead?.ownerId || customer!.ownerId;
-  const teamId = lead?.teamId || customer!.teamId;
-  const linkedLeads = lead ? [lead] : store.leads.filter((item) => item.convertedCustomerId === customer!.id);
+  const ownerId = lead?.ownerId || customer?.ownerId || prospect!.ownerId;
+  const teamId = lead?.teamId || customer?.teamId || prospect!.teamId;
+  const linkedLeads = lead
+    ? [lead]
+    : prospect
+      ? (prospect.leadId ? store.leads.filter((item) => item.id === prospect.leadId) : [])
+      : store.leads.filter((item) => item.convertedCustomerId === customer!.id);
   const sourceEvents = store.leadSourceEvents.filter((event) =>
     linkedLeads.some((item) => item.id === event.leadId)
     && event.ownerId === ownerId
     && event.teamId === teamId
   );
-  const candidates = store.websiteOpportunities.filter((item) =>
-    item.ownerId === ownerId
-    && item.teamId === teamId
-    && (lead ? item.leadId === lead.id : item.customerId === customer!.id || linkedLeads.some((linked) => linked.id === item.leadId))
-  );
+  const candidates = prospect
+    ? [prospect]
+    : store.websiteOpportunities.filter((item) =>
+      item.ownerId === ownerId
+      && item.teamId === teamId
+      && (lead ? item.leadId === lead.id : item.customerId === customer!.id || linkedLeads.some((linked) => linked.id === item.leadId))
+    );
   const deals = customer ? store.deals.filter((deal) => deal.customerId === customer.id) : [];
   const activities = lead
     ? store.leadActivities.filter((item) => item.leadId === lead.id)
-    : store.customerActivities.filter((item) => item.customerId === customer!.id);
+    : customer
+      ? store.customerActivities.filter((item) => item.customerId === customer.id)
+      : store.prospectTouchpoints.filter((item) => item.prospectCandidateId === prospect!.id);
   const suggestions = customer
     ? store.customerIntelligenceSuggestions.filter((item) => item.customerId === customer.id && item.teamId === teamId && item.ownerId === ownerId)
     : [];
-  const company = lead?.company || customer!.company;
-  const country = researchText(lead?.country || customer!.country);
+  const company = lead?.company || customer?.company || prospect!.company;
+  const country = researchText(lead?.country || customer?.country || prospect?.country);
   const config = getAiConfig(user, "scoring");
-  const nativeResearch = await lookupNativeBackgroundResearch(config, company, country);
-  const nativeSearchSucceeded = Boolean(nativeResearch.parsed && nativeResearch.sources.length);
-  const sourceChecks = [nativeResearch.check];
+  const candidate = candidates[0];
+  const business = researchText(candidate?.business || lead?.remark || deals[0]?.product, "尚无明确业务资料");
+  const products = [
+    ...deals.map((deal) => deal.product).filter(Boolean),
+    researchText(prospect?.business, "")
+  ].filter(Boolean).slice(0, 5).join("、");
+  const researchContext: BackgroundResearchAngleContext = {
+    entityType,
+    company,
+    country,
+    business,
+    products,
+    grade: customer ? String(customer.grade || customerGradeFromHealth(customer.health)) : "",
+    dealCount: deals.length,
+    website: researchText(customer?.website || prospect?.website || candidate?.website, ""),
+    knownContacts: [lead?.email, lead?.phone, customer?.email, customer?.phone].filter(Boolean).map(String).slice(0, 4)
+  };
+  const anglesResult = await runNativeBackgroundResearchAngles(config, researchContext);
+  const nativeSearchSucceeded = anglesResult.sources.length > 0 || anglesResult.facts.length > 0;
+  const sourceChecks: BackgroundResearchProviderCheck[] = anglesResult.angles.map((angle) => angle.check);
   const websiteProbeCheck = await ensureBackgroundResearchWebsiteProbe(user, candidates);
   if (websiteProbeCheck) sourceChecks.push(websiteProbeCheck);
-  const externalSources = nativeResearch.sources;
+  const externalSources = anglesResult.sources;
   const sources = backgroundResearchSources(candidates, sourceEvents, [
     ...externalSources,
     ...suggestions.flatMap((item) =>
@@ -5086,19 +6277,20 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
         { channel: "邮箱", value: researchText(lead.email) },
         { channel: "电话", value: researchText(lead.phone) }
       ]
-    : [
-        { channel: "联系人", value: researchText(customer!.contact) },
-        { channel: "联系资料", value: researchText(customer!.documentContact) }
-      ];
-  const nativeContacts = Array.isArray(nativeResearch.parsed?.contacts)
-    ? nativeResearch.parsed.contacts.flatMap((item) => {
-        if (!item || typeof item !== "object") return [];
-        const row = item as Record<string, unknown>;
-        if (typeof row.channel !== "string" || typeof row.value !== "string") return [];
-        const value = researchText(row.value);
-        return value === "待核实" ? [] : [{ channel: row.channel.slice(0, 40), value: value.slice(0, 240) }];
-      }).slice(0, 5)
-    : [];
+    : customer
+      ? [
+          { channel: "联系人", value: researchText(customer.contact) },
+          { channel: "联系资料", value: researchText(customer.documentContact) }
+        ]
+      : [
+          { channel: "联系人", value: researchText(prospect!.contact) },
+          { channel: "公开联系方式", value: researchText(prospect!.contactInfo) },
+          { channel: "官网邮箱", value: researchText((prospect!.extractedContacts || []).flatMap((item) => item.emails || []).join(" ")) }
+        ];
+  const nativeContacts = anglesResult.facts
+    .filter((fact) => /邮箱|电话|联系|email|phone|whatsapp/iu.test(fact.label) || /@/.test(fact.value))
+    .map((fact) => ({ channel: fact.label.slice(0, 40), value: fact.value.slice(0, 240) }))
+    .slice(0, 5);
   const candidateContacts = candidates.flatMap((item) => [
     { channel: "公开联系人", value: researchText(item.contact) },
     { channel: "公开联系方式", value: researchText(item.contactInfo) }
@@ -5113,16 +6305,7 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
       return true;
     })
     .slice(0, 8);
-  const candidate = candidates[0];
-  const business = researchText(candidate?.business || lead?.remark || deals[0]?.product, "尚无明确业务资料");
-  const nativeFacts = Array.isArray(nativeResearch.parsed?.facts)
-    ? nativeResearch.parsed.facts.flatMap((item) => {
-        if (!item || typeof item !== "object") return [];
-        const row = item as Record<string, unknown>;
-        if (typeof row.label !== "string" || typeof row.value !== "string") return [];
-        return [{ label: row.label.slice(0, 60), value: researchText(row.value).slice(0, 500) }];
-      }).slice(0, 5)
-    : [];
+  const nativeFacts = anglesResult.facts;
   const facts = (lead
     ? [
         { label: "主体", value: company },
@@ -5132,14 +6315,23 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
         { label: "采购意向", value: researchText(lead.intent) },
         { label: "预估金额", value: lead.estimatedAmount > 0 ? `${lead.estimatedAmount.toLocaleString("en-US")} USD` : "待核实" }
       ]
-    : [
-        { label: "主体", value: company },
-        { label: "国家 / 地区", value: country },
-        { label: "业务", value: business },
-        { label: "客户分级", value: customer!.grade || customerGradeFromHealth(customer!.health) },
-        { label: "关联商机", value: `${deals.length} 个` },
-        { label: "成交记录", value: deals.some((deal) => deal.stage === "成交") ? "有" : "无" }
-      ]).concat(nativeFacts).slice(0, 12);
+    : customer
+      ? [
+          { label: "主体", value: company },
+          { label: "国家 / 地区", value: country },
+          { label: "业务", value: business },
+          { label: "客户分级", value: customer.grade || customerGradeFromHealth(customer.health) },
+          { label: "关联商机", value: `${deals.length} 个` },
+          { label: "成交记录", value: deals.some((deal) => deal.stage === "成交") ? "有" : "无" }
+        ]
+      : [
+          { label: "主体", value: company },
+          { label: "国家 / 地区", value: country },
+          { label: "业务", value: business },
+          { label: "官网 / 域名", value: researchText(prospect!.website) },
+          { label: "资格状态", value: PROSPECT_STATUS_LABELS[prospect!.status] || prospect!.status },
+          { label: "匹配度", value: prospect!.confidence && prospect!.confidence > 0 ? `${prospect!.confidence}%` : "待核实" }
+        ]).concat(nativeFacts).slice(0, 18) as BackgroundResearchFact[];
   const risks = [] as Array<ReturnType<typeof backgroundResearchRisk>>;
   if (!sources.some((item) => /^https?:\/\//i.test(item.url))) {
     risks.push(backgroundResearchRisk("high", "企业身份", "缺少可访问的公开来源"));
@@ -5151,7 +6343,8 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
   if (customer && customer.health < 60) risks.push(backgroundResearchRisk("medium", "客户健康度", `当前人工评分 ${customer.health}`));
   if (!risks.length) risks.push(backgroundResearchRisk("low", "当前风险", "现有资料未发现明显冲突"));
 
-  const score = Math.max(35, Math.min(94,
+  const crmOnly = !nativeSearchSucceeded;
+  let score = Math.max(35, Math.min(94,
     35
     + Math.min(24, sources.length * 6)
     + Math.min(15, usefulContacts.length * 5)
@@ -5164,15 +6357,20 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
     customer && deals.length ? `围绕现有 ${deals[0]!.product || "商机"} 继续确认采购节奏` : `确认 ${business} 的具体采购需求`,
     usefulContacts.length ? `通过${usefulContacts[0]!.channel}建立首次有效沟通` : "补齐采购联系人与直接联系方式"
   ];
+  let talkTracks: string[] = [];
+  let scoreReason = "";
   let nextAction = risks[0]?.level === "high" ? "先完成企业主体与官网核验" : "安排一次需求确认并记录采购时间表";
-  const onlineEvidenceCount = nativeResearch.sources.length;
-  const fallbackEngine = onlineEvidenceCount ? "CRM + 联网公开证据" : "CRM 证据分析";
+  const onlineEvidenceCount = anglesResult.sources.length;
+  const fallbackEngine = onlineEvidenceCount ? "CRM + 联网公开证据" : "CRM 证据分析（未联网）";
   let engine = fallbackEngine;
 
   const applyResearchResult = (parsed: Record<string, unknown>) => {
-    if (typeof parsed.summary === "string" && parsed.summary.trim()) summary = parsed.summary.trim().slice(0, 600);
+    if (typeof parsed.summary === "string" && parsed.summary.trim()) summary = parsed.summary.trim().slice(0, 900);
     if (typeof parsed.verdict === "string" && parsed.verdict.trim()) verdict = parsed.verdict.trim().slice(0, 80);
     if (Array.isArray(parsed.opportunities)) opportunities = parsed.opportunities.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 4);
+    if (Array.isArray(parsed.talkTracks)) talkTracks = parsed.talkTracks.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 4);
+    if (typeof parsed.scoreReason === "string" && parsed.scoreReason.trim()) scoreReason = parsed.scoreReason.trim().slice(0, 300);
+    if (typeof parsed.score === "number" && Number.isFinite(parsed.score)) score = Math.max(30, Math.min(97, Math.round(parsed.score)));
     if (typeof parsed.nextAction === "string" && parsed.nextAction.trim()) nextAction = parsed.nextAction.trim().slice(0, 300);
     if (Array.isArray(parsed.risks)) {
       const aiRisks = parsed.risks.flatMap((item) => {
@@ -5186,9 +6384,21 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
     }
   };
 
-  if (nativeSearchSucceeded && nativeResearch.parsed) {
-    applyResearchResult(nativeResearch.parsed);
-    engine = `${config?.name || config?.model || "AI 模型"} · 原生联网`;
+  if (nativeSearchSucceeded && config?.enabled && config.apiKey) {
+    const synthesized = await synthesizeBackgroundResearch(
+      config,
+      researchContext,
+      anglesResult.angles,
+      anglesResult.sources,
+      facts.filter((fact) => !fact.group).map((fact) => ({ label: fact.label, value: fact.value }))
+    );
+    if (synthesized) {
+      applyResearchResult(synthesized);
+      const matchedAngles = anglesResult.angles.filter((angle) => angle.check.status === "matched").length;
+      engine = `${config.name || config.model} · 四路联网深挖（${matchedAngles}/${anglesResult.angles.length} 角度命中）`;
+    } else {
+      engine = fallbackEngine;
+    }
   } else if (config?.enabled && config.apiKey) {
     const prompt = [
       "根据以下 CRM 事实与来源证据生成企业背调结论。只使用提供的数据，不得补充或猜测外部事实。",
@@ -5210,7 +6420,9 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
       level: onlineEvidenceCount ? "success" : "warning",
       category: "system",
       action: "ai_background_research",
-      message: `${company} 联网背调完成：${onlineEvidenceCount} 条同主体证据`,
+      message: crmOnly
+        ? `${company} 背调完成：未获取到公开网络证据，仅基于 CRM 资料分析`
+        : `${company} 联网背调完成：${onlineEvidenceCount} 条同主体证据（四路角度）`,
       actorId: user.id,
       actorName: user.name,
       meta: {
@@ -5245,18 +6457,61 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
       sourceChecks,
       nextAction,
       engine,
+      talkTracks,
+      scoreReason,
+      crmOnly,
       completedAt: new Date().toISOString()
     }
   };
+}
+
+/**
+ * 背调留档：每次背调都写一条 background_research_records。
+ * 开发信档案页据此展示「这家客户历次背调」，也作为「留档」要求的落点。
+ * 写库失败不影响背调结果返回（背调本身是只读分析）。
+ */
+async function persistBackgroundResearchRecord(user: SessionUser, research: unknown) {
+  const repository = getBackgroundResearchRepository();
+  if (!repository) return;
+  const data = (research || {}) as Record<string, unknown>;
+  const entityId = String(data.entityId || "");
+  const entityType = String(data.entityType || "");
+  if (!entityId || !entityType) return;
+  try {
+    await repository.save({
+      teamId: user.teamId,
+      ownerId: user.id,
+      entityType,
+      entityId,
+      company: String(data.company || ""),
+      country: String(data.country || ""),
+      score: Number(data.score || 0),
+      verdict: String(data.verdict || ""),
+      summary: String(data.summary || ""),
+      engine: String(data.engine || ""),
+      crmOnly: Boolean(data.crmOnly),
+      payloadJson: JSON.stringify(data),
+      createdBy: user.id
+    });
+  } catch (error) {
+    console.error("background research record persist failed:", error);
+  }
 }
 
 app.post("/api/ai-background-research", requireAuth, asyncRoute(async (req, res) => {
   const body = backgroundResearchRequestSchema.parse(req.body);
   const result = await buildBackgroundResearch(req.user!, body);
   if (!result) {
-    res.status(404).json({ message: body.entityType === "lead" ? "线索不存在或无权访问" : "客户不存在或无权访问" });
+    res.status(404).json({
+      message: body.entityType === "lead"
+        ? "线索不存在或无权访问"
+        : body.entityType === "customer"
+          ? "客户不存在或无权访问"
+          : "搜客候选不存在或无权访问"
+    });
     return;
   }
+  await persistBackgroundResearchRecord(req.user!, result.research);
   res.json(result);
 }));
 
@@ -5275,8 +6530,24 @@ function blankCompanyProfile(teamId: string): CompanyProfile {
 }
 
 function companyProfileForTeam(teamId: string) {
-  return getStore().companyProfiles.find((item) => item.teamId === teamId)
-    || blankCompanyProfile(teamId);
+  const explicit = getStore().companyProfiles.find((item) => item.teamId === teamId);
+  const base = explicit || blankCompanyProfile(teamId);
+  // 公司资料为空时，用本团队「默认抬头」补齐发件身份。
+  // 原因：业务员通常已经维护过单证抬头，却不会再去填一份重复的公司资料
+  // → 开发信里只能自称 "our company"、官网/地址全缺（实测困扰，信的说服力大打折扣）。
+  // 严格只补空缺字段，绝不覆盖已填写的公司资料。
+  const letterhead = (getStore().documentLetterheads || [])
+    .filter((item) => item.teamId === teamId && item.enabled !== false && Boolean(item.companyName))
+    .sort((left, right) => Number(Boolean(right.isDefault)) - Number(Boolean(left.isDefault)))[0];
+  if (!letterhead) return base;
+  return {
+    ...base,
+    companyName: base.companyName || letterhead.companyName,
+    website: base.website || letterhead.website || "",
+    address: base.address || letterhead.address || "",
+    phone: base.phone || letterhead.phone || "",
+    email: base.email || letterhead.email || ""
+  };
 }
 
 function canManageCompanyProfile(user: SessionUser) {
@@ -5288,6 +6559,7 @@ function defaultTeamSystemSettings(teamId: string): TeamSystemSettings {
     teamId,
     requireDocumentExcelApproval: false,
     productCategories: [],
+    ocrProviderConfigEncrypted: "",
     updatedBy: "",
     updatedAt: ""
   };
@@ -5300,9 +6572,49 @@ function teamSystemSettingsForTeam(teamId: string) {
   return settings;
 }
 
+function ocrProviderCredentialContext(teamId: string) {
+  return { id: `ocr_team_${teamId}`, providerId: "trade-document-ocr", ownerId: teamId, teamId };
+}
+
+function defaultTradeDocumentOcrProvider(): TradeDocumentOcrProviderConfig {
+  return { provider: "none", enabled: false, apiKey: "", secretKey: "", model: "", baseUrl: "" };
+}
+
+function tradeDocumentOcrProviderForTeam(teamId: string) {
+  const settings = teamSystemSettingsForTeam(teamId);
+  if (!settings.ocrProviderConfigEncrypted) return defaultTradeDocumentOcrProvider();
+  try {
+    const decrypted = decryptProviderConfiguration(ocrProviderCredentialContext(teamId), settings.ocrProviderConfigEncrypted);
+    const value = JSON.parse(decrypted.apiKey) as Partial<TradeDocumentOcrProviderConfig>;
+    const provider = value.provider === "baidu" || value.provider === "siliconflow" ? value.provider : "none";
+    return {
+      provider,
+      enabled: Boolean(value.enabled) && provider !== "none",
+      apiKey: typeof value.apiKey === "string" ? value.apiKey : "",
+      secretKey: typeof value.secretKey === "string" ? value.secretKey : "",
+      model: typeof value.model === "string" ? value.model : "",
+      baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : ""
+    } satisfies TradeDocumentOcrProviderConfig;
+  } catch {
+    return defaultTradeDocumentOcrProvider();
+  }
+}
+
+function publicTradeDocumentOcrProvider(config: TradeDocumentOcrProviderConfig) {
+  return {
+    provider: config.provider,
+    enabled: config.enabled,
+    hasApiKey: Boolean(config.apiKey),
+    hasSecretKey: Boolean(config.secretKey),
+    model: config.model,
+    baseUrl: config.baseUrl
+  };
+}
+
 app.get("/api/system-settings", requireAuth, (req, res) => {
   res.json({
     settings: teamSystemSettingsForTeam(req.user!.teamId),
+    ocr: publicTradeDocumentOcrProvider(tradeDocumentOcrProviderForTeam(req.user!.teamId)),
     canManage: hasIamPermission(req.user!, "system.settings.manage")
   });
 });
@@ -5319,6 +6631,7 @@ app.put("/api/system-settings", requireAuth, asyncRoute(async (req, res) => {
     teamId: req.user!.teamId,
     requireDocumentExcelApproval: body.requireDocumentExcelApproval,
     productCategories: current?.productCategories || [],
+    ocrProviderConfigEncrypted: current?.ocrProviderConfigEncrypted || "",
     updatedBy: req.user!.id,
     updatedAt: new Date().toISOString()
   };
@@ -5326,6 +6639,49 @@ app.put("/api/system-settings", requireAuth, asyncRoute(async (req, res) => {
   else store.teamSystemSettings.push(settings);
   await store.persist();
   res.json({ settings, canManage: true });
+}));
+
+app.put("/api/system-settings/ocr", requireAuth, asyncRoute(async (req, res) => {
+  if (!hasIamPermission(req.user!, "system.settings.manage")) {
+    res.status(403).json({ message: "当前账号没有系统设置权限" });
+    return;
+  }
+  const body = z.object({
+    provider: z.enum(["none", "baidu", "siliconflow"]).default("none"),
+    enabled: z.boolean().default(false),
+    apiKey: z.string().max(400).optional().default(""),
+    secretKey: z.string().max(400).optional().default(""),
+    model: z.string().max(160).optional().default(""),
+    baseUrl: z.string().max(255).optional().default("")
+  }).parse(req.body);
+  const current = tradeDocumentOcrProviderForTeam(req.user!.teamId);
+  const apiKey = body.apiKey && !body.apiKey.includes("****") ? body.apiKey : current.apiKey;
+  const secretKey = body.secretKey && !body.secretKey.includes("****") ? body.secretKey : current.secretKey;
+  const model = body.model || (body.provider === "siliconflow" ? "Qwen/Qwen2.5-VL-32B-Instruct" : "");
+  if (body.enabled && body.provider === "baidu" && (!apiKey || !secretKey)) {
+    res.status(400).json({ message: "启用百度 OCR 前，需要同时填写 API Key 和 Secret Key" });
+    return;
+  }
+  if (body.enabled && body.provider === "siliconflow" && !apiKey) {
+    res.status(400).json({ message: "启用硅基流动 OCR 前，需要填写 API Key" });
+    return;
+  }
+  const next: TradeDocumentOcrProviderConfig = {
+    provider: body.provider as TradeDocumentOcrProvider,
+    enabled: body.enabled && body.provider !== "none",
+    apiKey,
+    secretKey,
+    model,
+    baseUrl: body.provider === "siliconflow" ? "https://api.siliconflow.cn/v1" : ""
+  };
+  const store = getStore();
+  const settings = teamSystemSettingsForTeam(req.user!.teamId);
+  settings.ocrProviderConfigEncrypted = encryptProviderConfiguration(ocrProviderCredentialContext(req.user!.teamId), { apiKey: JSON.stringify(next), baseUrl: "" });
+  settings.updatedBy = req.user!.id;
+  settings.updatedAt = new Date().toISOString();
+  if (!store.teamSystemSettings.some((item) => item.teamId === settings.teamId)) store.teamSystemSettings.push(settings);
+  await store.persist();
+  res.json({ ocr: publicTradeDocumentOcrProvider(next), canManage: true });
 }));
 
 app.get("/api/company-profile", requireAuth, (req, res) => {
@@ -5371,6 +6727,7 @@ function developmentEmailEntity(user: SessionUser, entityType: BackgroundResearc
       entityType,
       lead,
       customer: undefined,
+      prospect: undefined,
       company: lead.company,
       companyFullName: lead.company,
       contactName: lead.contact || "there",
@@ -5379,14 +6736,38 @@ function developmentEmailEntity(user: SessionUser, entityType: BackgroundResearc
       context: lead.remark || `${lead.intent || ""} intent · ${lead.source || "CRM lead"}`
     };
   }
+  if (entityType === "prospect") {
+    const candidate = store.websiteOpportunities.find((item) => item.id === entityId && canSeeOwner(user, item.ownerId, item.teamId));
+    if (!candidate) return null;
+    const extractedEmails = (candidate.extractedContacts || []).flatMap((item) => item.emails || []).join(" ");
+    const email = `${candidate.contactInfo} ${candidate.contact} ${extractedEmails}`
+      .match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
+    return {
+      entityType,
+      lead: undefined,
+      customer: undefined,
+      prospect: candidate,
+      company: candidate.company,
+      companyFullName: candidate.company,
+      contactName: candidate.contact || "there",
+      email,
+      country: candidate.country || "",
+      context: candidate.business || candidate.description.slice(0, 200) || "product sourcing prospect"
+    };
+  }
   const customer = store.customers.find((item) => item.id === entityId && canSeeOwner(user, item.ownerId, item.teamId));
   if (!customer) return null;
-  const email = `${customer.documentContact || ""} ${customer.contact || ""}`.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
+  // 客户记录有独立的 email 列，且实测 17/17 有邮箱的客户其 contact 文本里并不含邮箱。
+  // 只从文本正则抓 → 这些客户在开发信工作区会全部显示"缺收件邮箱"、发不出去（踩过）。
+  const contactTextEmail = `${customer.documentContact || ""} ${customer.contact || ""}`.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "";
+  const emailColumn = (customer.email || "").trim();
+  const email = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(emailColumn) ? emailColumn : contactTextEmail;
   const deals = store.deals.filter((deal) => deal.customerId === customer.id);
   return {
     entityType,
     lead: undefined,
     customer,
+    prospect: undefined,
     company: customer.company,
     contactName: customer.contact || "there",
     email,
@@ -5478,14 +6859,95 @@ function developmentEmailBaseTemplate(input: {
   }
 }
 
+/** 开发信入口用 lead / customer / prospect，journey 内部用 lead / customer / prospect_candidate */
+function developmentEmailJourneyEntityType(entityType: "lead" | "customer" | "prospect"): OutreachJourneyEntityType {
+  return entityType === "prospect" ? "prospect_candidate" : entityType;
+}
+
+/**
+ * 取这家客户最近一次背调留档；没有仓库或查询失败时返回 null，绝不阻断写信流程。
+ * ⚠️ entityType 必须用开发信口径（lead / customer / prospect）——背调留档是按请求口径存的，
+ * 而 journey 内部用的是 prospect_candidate，两者不能混（混了会静默查不到背调）。
+ */
+async function latestBackgroundResearch(
+  user: SessionUser,
+  entityType: "lead" | "customer" | "prospect",
+  entityId: string
+): Promise<BackgroundResearchRecord | null> {
+  const repository = getBackgroundResearchRepository();
+  if (!repository) return null;
+  try {
+    const records = await repository.list(user.teamId, entityType, entityId, 1);
+    return records[0] || null;
+  } catch (error) {
+    console.error("background research read failed:", error);
+    return null;
+  }
+}
+
+/** 把背调留档还原成开发信蓝图需要的结构化输入（事实 / 机会 / 话术线索 / 风险） */
+function developmentEmailResearchInput(record: BackgroundResearchRecord | null) {
+  if (!record) return null;
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = JSON.parse(record.payloadJson || "{}") as Record<string, unknown>;
+  } catch {
+    payload = {};
+  }
+  const strList = (value: unknown, limit: number) =>
+    Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, limit)
+      : [];
+  const facts = Array.isArray(payload.facts)
+    ? payload.facts.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const raw = item as Record<string, unknown>;
+      const label = typeof raw.label === "string" ? raw.label : "";
+      const value = typeof raw.value === "string" ? raw.value : "";
+      return label || value ? [{ label, value }] : [];
+    }).slice(0, 18)
+    : [];
+  const risks = Array.isArray(payload.risks)
+    ? payload.risks.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const raw = item as Record<string, unknown>;
+      return [{
+        level: typeof raw.level === "string" ? raw.level : "",
+        title: typeof raw.title === "string" ? raw.title : "",
+        detail: typeof raw.detail === "string" ? raw.detail : ""
+      }];
+    }).slice(0, 4)
+    : [];
+  return {
+    verdict: record.verdict,
+    summary: record.summary,
+    score: record.score,
+    engine: record.engine,
+    nextAction: typeof payload.nextAction === "string" ? payload.nextAction : "",
+    facts,
+    opportunities: strList(payload.opportunities, 4),
+    talkTracks: strList(payload.talkTracks, 4),
+    risks
+  };
+}
+
 app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res) => {
   const body = z.object({
-    entityType: z.enum(["lead", "customer"]),
+    entityType: z.enum(["lead", "customer", "prospect"]),
     entityId: z.string().trim().min(1).max(120),
     tone: z.enum(["professional", "concise", "warm"]).default("professional"),
     scenario: z.enum(["first_touch", "daily_contact", "holiday_greeting", "new_product", "custom_goal"]).default("first_touch"),
     goal: z.string().trim().max(1000).default(""),
-    requireAi: z.boolean().default(false)
+    requireAi: z.boolean().default(false),
+    /** 不传则自动按这家客户的当前开发阶段推导 */
+    stage: z.enum([
+      "not_contacted", "first_touch_sent", "following_up",
+      "replied_interested", "replied_negative", "bounced", "converted"
+    ]).optional(),
+    /** 是否引用这家客户的背调结论（默认引用） */
+    useResearch: z.boolean().default(true),
+    /** 是否允许调用 AI（默认允许；额度按用户要求不设限） */
+    useAi: z.boolean().default(true)
   }).parse(req.body);
   const store = getStore();
   const user = store.users.find((item) => item.id === req.user!.id);
@@ -5503,48 +6965,101 @@ app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res
     return;
   }
   const senderName = user.emailSenderName || user.name;
-  const senderCompany = companyProfile.companyName || "[Company name]";
-  const productSummary = companyProfile.productSummary || "[Products and services]";
-  const websiteLine = companyProfile.website ? `\nWebsite: ${companyProfile.website}` : "";
   const signature = user.emailSignature?.trim() || `Best regards,\n${senderName}`;
-  const outreachContext = developmentEmailEnglishContext(entity.context);
-  const outreachMarket = developmentEmailMarket(entity.country);
-  const baseTemplate = developmentEmailBaseTemplate({
-    scenario: body.scenario,
-    recipientCompany: entity.company,
-    recipientName: entity.contactName,
-    senderName,
-    senderCompany,
-    productSummary,
-    outreachContext,
-    outreachMarket,
-    signature,
-    websiteLine
+  // 场景型（节日问候 / 新品 / 自定义目标）与阶段型（首触 / 跟进）是两种写作逻辑：
+  // 前者保持既有行为，后者走「开发信技能」——先背调、再定阶段、再定收件人角色，最后成稿。
+  const stageDriven = body.scenario === "first_touch" || body.scenario === "daily_contact";
+
+  const journeyEntityType = developmentEmailJourneyEntityType(body.entityType);
+  const journey = stageDriven ? await buildOutreachJourney(store, journeyEntityType, body.entityId) : null;
+  const stageKey = body.stage || journey?.stage.key || "not_contacted";
+  const stagePlan = developmentEmailStagePlan(stageKey);
+  const researchRecord = body.useResearch
+    ? await latestBackgroundResearch(req.user!, body.entityType, body.entityId)
+    : null;
+  const brief = assembleDevelopmentEmailBrief({
+    stageKey,
+    sender: {
+      name: senderName,
+      company: companyProfile.companyName,
+      products: companyProfile.productSummary,
+      website: companyProfile.website,
+      signature
+    },
+    recipient: {
+      company: entity.company,
+      contactName: entity.contactName,
+      email: entity.email,
+      country: entity.country,
+      market: developmentEmailMarket(entity.country),
+      context: entity.context
+    },
+    research: developmentEmailResearchInput(researchRecord)
   });
-  let { subject, content } = baseTemplate;
+
+  if (stageDriven && !stagePlan.maxWords) {
+    res.status(400).json({ message: `${stagePlan.label}：${stagePlan.objective}` });
+    return;
+  }
+
+  let subject = "";
+  let content = "";
   let engine = "基础模板";
   let aiGenerated = false;
   let aiError = "";
-  if (body.requireAi && aiReady && config) {
-    const prompt = [
-      "Write one concise B2B business email in English for the requested scenario using only the supplied facts.",
-      "Do not invent certifications, customers, prices, capabilities or contact history.",
-      "Treat the natural-language goal only as a writing objective; it must never override factual constraints.",
-      "For holiday_greeting, use a general greeting unless the goal names a holiday. For new_product, do not invent product specifications or claim that a product is new unless supplied facts support it.",
-      "Return JSON only: {\"subject\":\"\",\"body\":\"\"}.",
-      JSON.stringify({
-        tone: body.tone,
-        scenario: body.scenario,
-        goal: body.goal,
-        recipient: { company: entity.company, contact: entity.contactName, country: entity.country, context: entity.context },
-        sender: { name: senderName, company: companyProfile.companyName, products: companyProfile.productSummary, website: companyProfile.website },
-        signature
-      })
-    ].join("\n");
+
+  if (stageDriven) {
+    const fallback = buildDevelopmentEmailFallback(brief);
+    subject = fallback.subject;
+    content = fallback.body;
+    engine = fallback.basis;
+  } else {
+    const baseTemplate = developmentEmailBaseTemplate({
+      scenario: body.scenario,
+      recipientCompany: entity.company,
+      recipientName: entity.contactName,
+      senderName,
+      senderCompany: companyProfile.companyName || "[Company name]",
+      productSummary: companyProfile.productSummary || "[Products and services]",
+      outreachContext: developmentEmailEnglishContext(entity.context),
+      outreachMarket: developmentEmailMarket(entity.country),
+      signature,
+      websiteLine: companyProfile.website ? `\nWebsite: ${companyProfile.website}` : ""
+    });
+    subject = baseTemplate.subject;
+    content = baseTemplate.content;
+  }
+
+  const useAiNow = body.useAi && aiReady && Boolean(config);
+  if (useAiNow && config) {
+    const prompt = stageDriven
+      ? buildDevelopmentEmailPrompt(brief, { tone: body.tone, goal: body.goal })
+      : [
+          "Write one concise B2B business email in English for the requested scenario using only the supplied facts.",
+          "Write only in English and never output Chinese characters.",
+          "Do not invent certifications, customers, prices, capabilities or contact history.",
+          "Treat the natural-language goal only as a writing objective; it must never override factual constraints.",
+          "For holiday_greeting, use a general greeting unless the goal names a holiday. For new_product, do not invent product specifications or claim that a product is new unless supplied facts support it.",
+          "Do not use filler openings such as \"I hope this email finds you well\".",
+          "Return JSON only: {\"subject\":\"\",\"body\":\"\"}.",
+          JSON.stringify({
+            tone: body.tone,
+            scenario: body.scenario,
+            goal: body.goal,
+            recipient: { company: entity.company, contact: entity.contactName, country: entity.country, context: entity.context },
+            sender: { name: senderName, company: companyProfile.companyName, products: companyProfile.productSummary, website: companyProfile.website },
+            signature
+          })
+        ].join("\n");
     try {
-      const parsed = extractJsonObject(await callAiModel(config, prompt, 10000)) as Record<string, unknown>;
+      const parsed = extractJsonObject(await callAiModel(config, prompt, 12000)) as Record<string, unknown>;
       if (typeof parsed.subject === "string" && parsed.subject.trim()) subject = parsed.subject.trim().slice(0, 160);
-      if (typeof parsed.body === "string" && parsed.body.trim()) content = parsed.body.trim().slice(0, 6000);
+      if (typeof parsed.body === "string" && parsed.body.trim()) {
+        // 模型会整段省略落款（实测发生过），而落款属于"按我的身份写信"的一部分 → 硬兜底补上。
+        // 先按 5600 截断再补签名，避免补完超出 send 接口的 6000 上限。
+        const signText = stageDriven ? developmentEmailSignature(brief) : signature;
+        content = ensureDevelopmentEmailSignature(parsed.body.trim().slice(0, 5600), signText).slice(0, 6000);
+      }
       engine = config.name || config.model;
       aiGenerated = true;
     } catch (error) {
@@ -5555,6 +7070,9 @@ app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res
       }
     }
   }
+
+  const quality = checkDevelopmentEmailDraft({ subject, body: content }, brief);
+
   res.json({
     draft: {
       entityType: body.entityType,
@@ -5568,6 +7086,30 @@ app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res
       senderName,
       engine
     },
+    stage: stageDriven ? {
+      key: stagePlan.key,
+      label: stagePlan.label,
+      objective: stagePlan.objective,
+      angle: stagePlan.angle,
+      cta: stagePlan.cta,
+      maxWords: stagePlan.maxWords,
+      nextStepLabel: journey?.stage.nextStepLabel || "",
+      canSend: journey ? journey.stage.canSend : true,
+      blockReason: journey?.stage.blockReason || ""
+    } : null,
+    brief: stageDriven ? {
+      role: { key: brief.role.key, label: brief.role.label, authority: brief.role.authority, emphasis: brief.role.emphasis },
+      evidence: brief.evidence,
+      missing: brief.missing,
+      angles: brief.angles,
+      researchUsed: Boolean(researchRecord),
+      researchId: researchRecord?.id || "",
+      researchScore: researchRecord?.score ?? null,
+      researchCreatedAt: researchRecord?.createdAt || "",
+      researchEngine: researchRecord?.engine || "",
+      researchVerdict: researchRecord?.verdict || ""
+    } : null,
+    quality,
     readiness: {
       ...readiness,
       aiReady,
@@ -5581,7 +7123,7 @@ app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res
 
 app.post("/api/development-email/send", requireAuth, asyncRoute(async (req, res) => {
   const body = z.object({
-    entityType: z.enum(["lead", "customer"]),
+    entityType: z.enum(["lead", "customer", "prospect"]),
     entityId: z.string().trim().min(1).max(120),
     to: z.string().trim().email(),
     subject: z.string().trim().min(1).max(160),
@@ -5604,14 +7146,16 @@ app.post("/api/development-email/send", requireAuth, asyncRoute(async (req, res)
   let outreachEligibility;
   try {
     await store.reloadProspectQualificationTeam?.(req.user!.teamId);
-    outreachEligibility = assertCrmOutreachEligible(store, {
-      target: entity.lead
-        ? { entityType: "lead", entity: entity.lead }
-        : { entityType: "customer", entity: entity.customer! },
-      actorId: req.user!.id,
-      channel: "email",
-      recipient: body.to
-    });
+    outreachEligibility = entity.prospect
+      ? assertProspectEmailOutreachEligible(store, entity.prospect, body.to, new Date().toISOString())
+      : assertCrmOutreachEligible(store, {
+          target: entity.lead
+            ? { entityType: "lead", entity: entity.lead }
+            : { entityType: "customer", entity: entity.customer! },
+          actorId: req.user!.id,
+          channel: "email",
+          recipient: body.to
+        });
   } catch (error) {
     if (sendProspectQualificationError(res, error)) return;
     throw error;
@@ -5621,7 +7165,7 @@ app.post("/api/development-email/send", requireAuth, asyncRoute(async (req, res)
   try {
     dispatch = await dispatchOutboundEmail(store, user, {
       requestId,
-      entityType: body.entityType,
+      entityType: body.entityType === "prospect" ? "prospect_candidate" : body.entityType,
       entityId: body.entityId,
       to: outreachEligibility.recipient,
       subject: body.subject,
@@ -5905,12 +7449,60 @@ app.get("/api/leads/:id", requireAuth, (req, res) => {
   });
 });
 
+/**
+ * Server-to-server website intake. This endpoint deliberately exposes only
+ * lead creation and returns a minimal receipt. It does not accept cookies,
+ * user passwords, owner IDs, or arbitrary CRM operations.
+ */
+app.post("/api/website-leads", websiteLeadLimiter, asyncRoute(async (req, res) => {
+  const signatureStatus = websiteLeadSignatureStatus(req);
+  if (signatureStatus === "unconfigured") {
+    res.status(503).json({ message: "网站询盘接收尚未配置签名密钥" });
+    return;
+  }
+  if (signatureStatus === "replay") {
+    res.status(409).json({ message: "重复的网站询盘请求" });
+    return;
+  }
+  if (signatureStatus !== "ok") {
+    res.status(401).json({ message: "网站询盘签名无效或已过期" });
+    return;
+  }
+  const owner = websiteLeadOwner();
+  if (!owner) {
+    res.status(503).json({ message: "网站询盘接收尚未配置负责人" });
+    return;
+  }
+  const body = leadWritableSchema.parse(req.body);
+  const result = createLeadFromSource(owner, {
+    ...body,
+    sourceType: "inbound",
+    sourceChannel: "website",
+    source: body.source || "官网询盘"
+  });
+  await getStore().persist();
+  res.status(result.duplicate ? 200 : 201).json({
+    received: true,
+    duplicate: result.duplicate,
+    leadId: result.lead.id
+  });
+}));
+
 app.post("/api/leads", requireAuth, asyncRoute(async (req, res) => {
   const body = leadWritableSchema.parse(req.body);
   const store = getStore();
-  const { lead, sourceEvent, duplicate } = createLeadFromSource(req.user!, body);
+  const duplicate = findDuplicateLead(store, req.user!.teamId, body.company, body.country);
+  if (duplicate) {
+    res.status(409).json({
+      message: `线索已存在：「${duplicate.company}」（${duplicate.country || "国家未知"}）已在线索列表中，不能重复添加`,
+      errorCode: "LEAD_DUPLICATE",
+      existingId: duplicate.id
+    });
+    return;
+  }
+  const { lead, sourceEvent, duplicate: sourceDuplicate } = createLeadFromSource(req.user!, body);
   await store.persist();
-  res.json({ lead, sourceEvent, duplicate });
+  res.json({ lead, sourceEvent, duplicate: sourceDuplicate });
 }));
 
 app.post("/api/leads/ingest", requireAuth, asyncRoute(async (req, res) => {
@@ -7361,6 +8953,147 @@ function createDealEvent(input: Omit<DealEvent, "id" | "createdAt"> & { createdA
   return event;
 }
 
+function quoteHistoryItems(document: TradeDocument): QuoteHistoryItem[] {
+  return document.items.map((item) => ({
+    productId: item.productId || "",
+    product: item.product.trim(),
+    model: item.model?.trim() || "",
+    quantity: Number(item.quantity || 0),
+    unit: item.unit?.trim() || "PCS",
+    unitPrice: Math.round(Number(item.unitPrice || 0) * 100) / 100,
+    lineTotal: Math.round(Number(item.quantity || 0) * Number(item.unitPrice || 0) * 100) / 100
+  }));
+}
+
+function quoteItemKey(item: { productId?: string; product: string; model?: string }) {
+  const normalize = (value: string) => value.trim().toLocaleLowerCase().replace(/[\s_-]+/gu, " ");
+  return item.productId || `${normalize(item.product)}|${normalize(item.model || "")}`;
+}
+
+function quotePricingFingerprint(document: TradeDocument, items = quoteHistoryItems(document)) {
+  return createHash("sha256").update(JSON.stringify({
+    type: document.type,
+    currency: document.currency.toUpperCase(),
+    items: items.map((item) => ({ productId: item.productId, product: item.product, model: item.model, quantity: item.quantity, unit: item.unit, unitPrice: item.unitPrice }))
+  })).digest("hex");
+}
+
+function quotePricingChanges(previous: QuoteHistoryRecord | undefined, document: TradeDocument, currentItems: QuoteHistoryItem[]) {
+  if (!previous) return [`首次记录报价，共 ${currentItems.length} 项，合计 ${document.currency} ${currentItems.reduce((sum, item) => sum + item.lineTotal, 0).toFixed(2)}`];
+  const changes: string[] = [];
+  if (previous.currency !== document.currency) changes.push(`币种：${previous.currency} → ${document.currency}`);
+  const previousItems = new Map(previous.items.map((item) => [quoteItemKey(item), item]));
+  const currentMap = new Map(currentItems.map((item) => [quoteItemKey(item), item]));
+  currentItems.forEach((item) => {
+    const old = previousItems.get(quoteItemKey(item));
+    const label = [item.product, item.model].filter(Boolean).join(" / ");
+    if (!old) changes.push(`新增 ${label}：${item.quantity} ${item.unit} × ${document.currency} ${item.unitPrice.toFixed(2)}`);
+    else {
+      if (old.quantity !== item.quantity) changes.push(`${label} 数量：${old.quantity} → ${item.quantity} ${item.unit}`);
+      if (old.unitPrice !== item.unitPrice || previous.currency !== document.currency) changes.push(`${label} 单价：${previous.currency} ${old.unitPrice.toFixed(2)} → ${document.currency} ${item.unitPrice.toFixed(2)}`);
+    }
+  });
+  previous.items.forEach((item) => {
+    if (!currentMap.has(quoteItemKey(item))) changes.push(`移除 ${[item.product, item.model].filter(Boolean).join(" / ")}`);
+  });
+  const total = currentItems.reduce((sum, item) => sum + item.lineTotal, 0);
+  if (previous.totalAmount !== total || previous.currency !== document.currency) {
+    changes.push(`报价合计：${previous.currency} ${previous.totalAmount.toFixed(2)} → ${document.currency} ${total.toFixed(2)}`);
+  }
+  return changes;
+}
+
+function syncDealPricingFromDocument(document: TradeDocument, user: SessionUser) {
+  if (!document.dealId || !["PI", "QUOTATION"].includes(document.type)) return null;
+  const store = getStore();
+  const deal = store.deals.find((item) => item.id === document.dealId && item.teamId === document.teamId);
+  if (!deal) return null;
+  const customer = store.customers.find((item) => item.id === deal.customerId && item.teamId === deal.teamId);
+  const items = quoteHistoryItems(document);
+  const fingerprint = quotePricingFingerprint(document, items);
+  const previous = store.quoteHistory
+    .filter((item) => item.dealId === deal.id)
+    .sort((left, right) => right.quotedAt.localeCompare(left.quotedAt))[0];
+  const existingRecord = store.quoteHistory.find((item) => item.documentId === document.id && item.fingerprint === fingerprint);
+  const changes = quotePricingChanges(previous, document, items);
+  const beforeFingerprint = createHash("sha256").update(JSON.stringify({
+    currency: deal.currency,
+    items: (deal.items || []).map((item) => ({ productId: item.productId || "", product: item.product, model: item.model || "", quantity: item.quantity, unitPrice: item.unitPrice }))
+  })).digest("hex");
+  const nextDealItems = items.map((item, index) => {
+    const current = (deal.items || []).find((entry) => quoteItemKey(entry) === quoteItemKey(item));
+    return { id: current?.id || `deal_item_quote_${Date.now()}_${index + 1}`, productId: item.productId, product: item.product, model: item.model, quantity: item.quantity, unitPrice: item.unitPrice };
+  });
+  deal.items = nextDealItems;
+  deal.product = dealProductSummary(nextDealItems);
+  deal.quantity = nextDealItems.reduce((sum, item) => sum + item.quantity, 0);
+  deal.unitPrice = nextDealItems.length === 1 ? nextDealItems[0].unitPrice : 0;
+  deal.amount = Math.round(items.reduce((sum, item) => sum + item.lineTotal, 0) * 100) / 100;
+  deal.currency = document.currency.toUpperCase();
+  if (deal.stage !== "成交") deal.amountType = "quoted";
+  const afterFingerprint = createHash("sha256").update(JSON.stringify({
+    currency: deal.currency,
+    items: nextDealItems.map((item) => ({ productId: item.productId || "", product: item.product, model: item.model || "", quantity: item.quantity, unitPrice: item.unitPrice }))
+  })).digest("hex");
+  const dealChanged = beforeFingerprint !== afterFingerprint;
+  let history = existingRecord;
+  if (!history) {
+    const now = new Date().toISOString();
+    history = {
+      id: `qh_${randomUUID()}`,
+      dealId: deal.id,
+      customerId: deal.customerId,
+      documentId: document.id,
+      documentType: document.type as "PI" | "QUOTATION",
+      documentNumber: document.number,
+      documentRevision: document.revision || 1,
+      issueDate: document.issueDate,
+      customerName: customer?.companyFullName || customer?.billingName || customer?.company || document.buyer,
+      dealTitle: deal.title,
+      dealStage: deal.stage,
+      currency: deal.currency,
+      totalAmount: deal.amount,
+      items,
+      changes,
+      fingerprint,
+      operatorId: user.id,
+      operatorName: user.name,
+      ownerId: deal.ownerId,
+      teamId: deal.teamId,
+      quotedAt: now
+    };
+    store.quoteHistory.unshift(history);
+  }
+  if (dealChanged || !existingRecord) {
+    const eventChanges = changes.length ? changes.slice(0, 8).join("；") : `报价明细同步为 ${deal.currency} ${deal.amount.toFixed(2)}`;
+    createDealEvent({
+      dealId: deal.id,
+      type: "quote",
+      content: `${document.type === "PI" ? "PI" : "报价单"} ${document.number} 同步商机：${eventChanges}`,
+      operatorId: user.id,
+      fromStage: deal.stage,
+      toStage: deal.stage,
+      nextAction: deal.nextAction,
+      nextActionAt: deal.nextActionAt,
+      relatedDocumentId: document.id
+    });
+    appendDocumentAudit(document, "dealPricingSync", previous ? `${previous.currency} ${previous.totalAmount.toFixed(2)}` : "", `${deal.currency} ${deal.amount.toFixed(2)}；${changes.join("；")}`, user);
+  }
+  if (!existingRecord && deal.ownerId !== user.id) {
+    createInternalNotification({
+      senderId: user.id,
+      recipientId: deal.ownerId,
+      teamId: deal.teamId,
+      subject: `商机报价已更新：${deal.title}`,
+      content: `${user.name} 通过 ${document.type} ${document.number} 更新了 ${items.length} 项产品，当前报价 ${deal.currency} ${deal.amount.toFixed(2)}。${changes.slice(0, 3).join("；")}`,
+      relatedType: "quote_history",
+      relatedId: history.id,
+      threadId: `quote_${deal.id}`
+    });
+  }
+  return { deal, history, changes, changed: dealChanged || !existingRecord };
+}
+
 function dealEventTypeForStage(stage: Deal["stage"]): DealEvent["type"] {
   if (stage === "已报价") return "quote";
   if (stage === "样品") return "sample";
@@ -7659,6 +9392,34 @@ app.post("/api/deals/:id/archive", requireAuth, asyncRoute(async (req, res) => {
   });
   await store.persist();
   res.json({ deal });
+}));
+
+app.delete("/api/deals/:id", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const deal = store.deals.find((item) => item.id === req.params.id);
+  if (!deal || !canSeeOwner(req.user!, deal.ownerId, deal.teamId)) {
+    res.status(404).json({ message: "商机不存在" });
+    return;
+  }
+  const linkedDocuments = store.tradeDocuments.filter((document) => document.dealId === deal.id);
+  if (linkedDocuments.length) {
+    res.status(400).json({
+      message: `该商机关联了 ${linkedDocuments.length} 份单据（${linkedDocuments.map((document) => `${document.type} ${document.number}`).slice(0, 3).join("、")}${linkedDocuments.length > 3 ? " 等" : ""}），请先处理关联单据再删除商机`
+    });
+    return;
+  }
+  const removedEvents = store.dealEvents.filter((event) => event.dealId === deal.id).length;
+  const removedTodos = store.todos.filter((todo) => todo.dealId === deal.id).length;
+  const removedQuotes = store.quoteHistory.filter((record) => record.dealId === deal.id).length;
+  store.deals = store.deals.filter((item) => item.id !== deal.id);
+  store.dealEvents = store.dealEvents.filter((event) => event.dealId !== deal.id);
+  store.quoteHistory = store.quoteHistory.filter((record) => record.dealId !== deal.id);
+  store.todos = store.todos.filter((todo) => todo.dealId !== deal.id);
+  await store.persist();
+  res.json({
+    ok: true,
+    removed: { events: removedEvents, todos: removedTodos, quoteHistory: removedQuotes }
+  });
 }));
 
 app.post("/api/deals/:id/lost", requireAuth, asyncRoute(async (req, res) => {
@@ -9139,8 +10900,508 @@ app.patch("/api/competitors/:id/threat", requireAuth, asyncRoute(async (req, res
   res.json({ competitor });
 }));
 
-app.get("/api/case-studies", requireAuth, (req, res) => {
-  const { caseStudies } = getStore();
+// ---------------------------------------------------------------------------
+// Peers (同行管理) — 互补 / 竞争 / 互相推荐
+// ---------------------------------------------------------------------------
+const peerRelationsSchema = z.array(z.enum(["互补", "竞争", "互相推荐"])).max(3).default([]);
+
+app.get("/api/peers", requireAuth, (req, res) => {
+  const { peers } = getStore();
+  const scoped = peers.filter((item) => canSeeOwner(req.user!, item.ownerId, item.teamId));
+  res.json({ peers: scoped });
+});
+
+app.post("/api/peers", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    company: z.string().trim().min(1).max(200),
+    country: z.string().trim().max(80).default(""),
+    industry: z.string().max(4000).default(""),
+    relations: peerRelationsSchema,
+    contact: z.string().trim().max(120).default(""),
+    phone: z.string().trim().max(80).default(""),
+    email: z.string().trim().max(160).default(""),
+    wechat: z.string().trim().max(80).default(""),
+    website: z.string().trim().max(255).default(""),
+    remark: z.string().max(2000).default(""),
+    source: z.string().trim().max(120).default("手动新增")
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const duplicate = store.peers.find((item) =>
+    item.teamId === req.user!.teamId
+    && entityDuplicateKey(item.company, item.country) === entityDuplicateKey(body.company, body.country)
+  );
+  if (duplicate) {
+    res.status(409).json({
+      message: `同行已存在：「${duplicate.company}」（${duplicate.country || "国家未知"}）已在同行列表中，不能重复添加`,
+      errorCode: "PEER_DUPLICATE",
+      existingId: duplicate.id
+    });
+    return;
+  }
+  const now = new Date().toISOString();
+  const peer = {
+    id: `peer_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    ownerId: req.user!.id,
+    teamId: req.user!.teamId,
+    createdAt: now,
+    updatedAt: now,
+    ...body,
+    relations: [...new Set(body.relations)] as PeerRelation[]
+  };
+  store.peers.unshift(peer);
+  await store.persist();
+  res.json({ peer });
+}));
+
+app.post("/api/peers/import", requireAuth, asyncRoute(async (req, res) => {
+  const rowSchema = z.object({
+    company: z.string().trim().min(1).max(200),
+    country: z.string().trim().max(80).default(""),
+    industry: z.string().max(4000).default(""),
+    relations: z.array(z.enum(["互补", "竞争", "互相推荐"])).max(3).default([]),
+    contact: z.string().trim().max(120).default(""),
+    phone: z.string().trim().max(80).default(""),
+    email: z.string().trim().max(160).default(""),
+    wechat: z.string().trim().max(80).default(""),
+    website: z.string().trim().max(255).default(""),
+    remark: z.string().max(2000).default(""),
+    source: z.string().trim().max(120).default("批量导入")
+  });
+  const body = z.object({
+    peers: z.array(rowSchema).min(1).max(500),
+    skipDuplicates: z.boolean().default(true)
+  }).parse(req.body);
+  const store = getStore();
+  const seenInBatch = new Set<string>();
+  const created: unknown[] = [];
+  const skipped: Array<{ company: string; reason: string }> = [];
+  for (const row of body.peers) {
+    const key = entityDuplicateKey(row.company, row.country);
+    const duplicate = store.peers.find((item) =>
+      item.teamId === req.user!.teamId
+      && entityDuplicateKey(item.company, item.country) === key
+    ) || (seenInBatch.has(key) ? { company: row.company } : null);
+    if (duplicate) {
+      if (body.skipDuplicates) {
+        skipped.push({ company: row.company, reason: "与已有同行重复（公司名+国家相同）" });
+        continue;
+      }
+      res.status(409).json({
+        message: `导入中止：「${row.company}」与已有同行重复（公司名+国家相同），已创建 ${created.length} 条`,
+        errorCode: "PEER_DUPLICATE",
+        created: created.length,
+        skipped
+      });
+      return;
+    }
+    seenInBatch.add(key);
+    const now = new Date().toISOString();
+    const peer = {
+      id: `peer_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      ownerId: req.user!.id,
+      teamId: req.user!.teamId,
+      createdAt: now,
+      updatedAt: now,
+      ...row,
+      relations: [...new Set(row.relations)] as PeerRelation[]
+    };
+    store.peers.unshift(peer);
+    created.push(peer);
+  }
+  if (created.length) await store.persist();
+  res.json({
+    created: created.length,
+    skipped,
+    peers: store.peers.filter((item) => canSeeOwner(req.user!, item.ownerId, item.teamId))
+  });
+}));
+
+app.patch("/api/peers/:id", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    company: z.string().trim().min(1).max(200).optional(),
+    country: z.string().trim().max(80).optional(),
+    industry: z.string().max(4000).optional(),
+    relations: peerRelationsSchema.optional(),
+    contact: z.string().trim().max(120).optional(),
+    phone: z.string().trim().max(80).optional(),
+    email: z.string().trim().max(160).optional(),
+    wechat: z.string().trim().max(80).optional(),
+    website: z.string().trim().max(255).optional(),
+    remark: z.string().max(2000).optional(),
+    source: z.string().trim().max(120).optional()
+  });
+  const body = schema.parse(req.body);
+  const store = getStore();
+  const peer = store.peers.find((item) => item.id === req.params.id);
+  if (!peer || !canSeeOwner(req.user!, peer.ownerId, peer.teamId)) {
+    res.status(404).json({ message: "同行不存在或无权访问" });
+    return;
+  }
+  if (peer.ownerId !== req.user!.id) {
+    res.status(403).json({ message: "只有归属人可以修改同行资料" });
+    return;
+  }
+  if (body.company !== undefined || body.country !== undefined) {
+    const nextCompany = body.company ?? peer.company;
+    const nextCountry = body.country ?? peer.country;
+    const duplicate = store.peers.find((item) =>
+      item.id !== peer.id
+      && item.teamId === req.user!.teamId
+      && entityDuplicateKey(item.company, item.country) === entityDuplicateKey(nextCompany, nextCountry)
+    );
+    if (duplicate) {
+      res.status(409).json({
+        message: `同行已存在：「${duplicate.company}」（${duplicate.country || "国家未知"}）不能与现有同行重名`,
+        errorCode: "PEER_DUPLICATE",
+        existingId: duplicate.id
+      });
+      return;
+    }
+  }
+  Object.assign(peer, body, body.relations ? { relations: [...new Set(body.relations)] as PeerRelation[] } : {}, {
+    updatedAt: new Date().toISOString()
+  });
+  await store.persist();
+  res.json({ peer });
+}));
+
+app.delete("/api/peers/:id", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const peer = store.peers.find((item) => item.id === req.params.id);
+  if (!peer || !canSeeOwner(req.user!, peer.ownerId, peer.teamId)) {
+    res.status(404).json({ message: "同行不存在或无权访问" });
+    return;
+  }
+  if (peer.ownerId !== req.user!.id) {
+    res.status(403).json({ message: "只有归属人可以删除同行" });
+    return;
+  }
+  store.peers = store.peers.filter((item) => item.id !== peer.id);
+  await store.persist();
+  res.json({ deleted: peer.id, peers: store.peers.filter((item) => canSeeOwner(req.user!, item.ownerId, item.teamId)) });
+}));
+
+// ---------------------------------------------------------------------------
+// 系统对接模块：对接方管理 + 报文收发 + 报文日志
+// ---------------------------------------------------------------------------
+const exchangeInboundLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: process.env.NODE_ENV === "test" ? 10_000 : 120,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { message: "对接接收请求过于频繁" }
+});
+
+function exchangeRepositoryOr500(res: express.Response) {
+  const repository = getExchangeRepository();
+  if (!repository) {
+    res.status(503).json({ message: "对接模块未启用（当前存储不支持）" });
+    return null;
+  }
+  return repository;
+}
+
+function exchangeEndpointPayload(body: unknown) {
+  const schema = z.object({
+    name: z.string().trim().min(1).max(120),
+    direction: z.enum(["outbound", "inbound", "both"]).default("outbound"),
+    baseUrl: z.string().trim().max(500).default(""),
+    authType: z.enum(["none", "bearer", "header"]).default("none"),
+    authName: z.string().trim().max(120).default(""),
+    authSecret: z.string().max(500).default(""),
+    extraHeaders: z.record(z.string().max(500)).default({}),
+    description: z.string().trim().max(500).default(""),
+    onReceive: z.enum(["log", "create_lead"]).default("log"),
+    enabled: z.boolean().default(true)
+  });
+  const parsed = schema.parse(body);
+  let extraHeadersJson = "{}";
+  if (Object.keys(parsed.extraHeaders).length) {
+    try {
+      extraHeadersJson = JSON.stringify(parsed.extraHeaders);
+    } catch {
+      extraHeadersJson = "{}";
+    }
+  }
+  return { ...parsed, extraHeadersJson };
+}
+
+app.get("/api/exchange/endpoints", requireAuth, asyncRoute(async (req, res) => {
+  const repository = exchangeRepositoryOr500(res);
+  if (!repository) return;
+  res.json({ endpoints: await repository.listEndpoints(req.user!.teamId) });
+}));
+
+app.post("/api/exchange/endpoints", requireAuth, asyncRoute(async (req, res) => {
+  const repository = exchangeRepositoryOr500(res);
+  if (!repository) return;
+  const input = exchangeEndpointPayload(req.body);
+  const endpoint = await repository.createEndpoint({
+    teamId: req.user!.teamId,
+    ownerId: req.user!.id,
+    name: input.name,
+    direction: input.direction,
+    baseUrl: input.baseUrl,
+    authType: input.authType,
+    authName: input.authName,
+    authSecret: input.authSecret,
+    extraHeadersJson: input.extraHeadersJson,
+    description: input.description,
+    onReceive: input.onReceive,
+    enabled: input.enabled
+  });
+  res.json({ endpoint });
+}));
+
+app.patch("/api/exchange/endpoints/:id", requireAuth, asyncRoute(async (req, res) => {
+  const repository = exchangeRepositoryOr500(res);
+  if (!repository) return;
+  const input = exchangeEndpointPayload(req.body);
+  const endpoint = await repository.updateEndpoint(req.params.id, req.user!.teamId, input);
+  if (!endpoint) {
+    res.status(404).json({ message: "对接方不存在或无权访问" });
+    return;
+  }
+  res.json({ endpoint });
+}));
+
+app.delete("/api/exchange/endpoints/:id", requireAuth, asyncRoute(async (req, res) => {
+  const repository = exchangeRepositoryOr500(res);
+  if (!repository) return;
+  const deleted = await repository.deleteEndpoint(req.params.id, req.user!.teamId);
+  if (!deleted) {
+    res.status(404).json({ message: "对接方不存在或无权访问" });
+    return;
+  }
+  res.json({ deleted: req.params.id });
+}));
+
+/** 向对接方推送报文：真实发起 HTTP 请求，并把完整报文（请求/响应）落日志 */
+app.post("/api/exchange/endpoints/:id/send", requireAuth, asyncRoute(async (req, res) => {
+  const repository = exchangeRepositoryOr500(res);
+  if (!repository) return;
+  const schema = z.object({
+    topic: z.string().trim().max(120).default("message"),
+    method: z.enum(["POST", "PUT", "PATCH"]).default("POST"),
+    payload: z.unknown()
+  });
+  const input = schema.parse(req.body);
+  const endpoint = await repository.getEndpoint(req.params.id, req.user!.teamId);
+  if (!endpoint) {
+    res.status(404).json({ message: "对接方不存在或无权访问" });
+    return;
+  }
+  if (!endpoint.enabled) {
+    res.status(400).json({ message: "对接方已停用，请先启用后再发送" });
+    return;
+  }
+  if (!endpoint.baseUrl) {
+    res.status(400).json({ message: "该对接方未配置基础 URL，无法推送报文" });
+    return;
+  }
+  let extraHeaders: Record<string, string> = {};
+  try {
+    extraHeaders = JSON.parse(endpoint.extraHeadersJson || "{}") as Record<string, string>;
+  } catch {
+    extraHeaders = {};
+  }
+  const authHeaders: Record<string, string> = endpoint.authType === "bearer"
+    ? { Authorization: `Bearer ${endpoint.authSecret}` }
+    : endpoint.authType === "header" && endpoint.authName
+      ? { [endpoint.authName]: endpoint.authSecret }
+      : {};
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "User-Agent": "GoodJobCRM-Exchange/1.0",
+    ...extraHeaders,
+    ...authHeaders
+  };
+  const bodyText = JSON.stringify(input.payload ?? null);
+  const started = Date.now();
+  let status: "ok" | "failed" = "ok";
+  let httpStatus: number | null = null;
+  let responseHeaders = "{}";
+  let responseBody = "";
+  let errorMessage = "";
+  try {
+    const response = await fetch(endpoint.baseUrl, {
+      method: input.method,
+      headers,
+      body: bodyText,
+      signal: AbortSignal.timeout(30_000)
+    });
+    httpStatus = response.status;
+    responseHeaders = JSON.stringify(Object.fromEntries(response.headers.entries()));
+    responseBody = (await response.text()).slice(0, 200_000);
+    if (!response.ok) status = "failed";
+  } catch (error) {
+    status = "failed";
+    errorMessage = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  }
+  const message = await repository.insertMessage({
+    teamId: req.user!.teamId,
+    endpointId: endpoint.id,
+    endpointName: endpoint.name,
+    direction: "outbound",
+    topic: input.topic,
+    method: input.method,
+    url: endpoint.baseUrl,
+    requestHeadersJson: JSON.stringify(headers),
+    requestBody: bodyText,
+    status,
+    httpStatus,
+    responseHeadersJson: responseHeaders,
+    responseBody,
+    durationMs: Date.now() - started,
+    errorMessage,
+    leadId: ""
+  });
+  res.json({ message });
+}));
+
+/**
+ * 对接入站报文 → 线索字段解析。容忍常见包装层（data/lead/payload/body）
+ * 与中英文字段别名；公司名是唯一硬性要求，取不到则返回 null（仅记日志不建线索）。
+ */
+function exchangeInboundLeadFields(raw: unknown): LeadIntake | null {
+  let payload = raw;
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const record = payload as Record<string, unknown>;
+    for (const wrapper of ["data", "lead", "payload", "body"]) {
+      const inner = record[wrapper];
+      if (inner && typeof inner === "object" && !Array.isArray(inner) && Object.keys(inner as object).length) {
+        payload = inner;
+        break;
+      }
+    }
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const record = payload as Record<string, unknown>;
+  const pick = (...keys: string[]): string => {
+    for (const key of keys) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+      if (typeof value === "number" && Number.isFinite(value)) return String(value);
+    }
+    return "";
+  };
+  const company = pick("company", "companyName", "company_name", "customer", "customerName", "客户公司", "公司", "公司名称");
+  if (!company) return null;
+  const intentRaw = pick("intent", "intentLevel", "意图", "意向").toLowerCase();
+  const intent = intentRaw === "high" || intentRaw === "高" ? "高"
+    : intentRaw === "low" || intentRaw === "低" ? "低" : "中";
+  return {
+    company: company.slice(0, 200),
+    contact: pick("contact", "contactName", "contactPerson", "contact_person", "联系人", "联系人姓名").slice(0, 120),
+    country: pick("country", "countryName", "country_region", "国家", "地区").slice(0, 120),
+    email: pick("email", "emailAddress", "email_address", "邮箱", "电子邮件").slice(0, 200),
+    phone: pick("phone", "phoneNo", "telephone", "mobile", "tel", "whatsapp", "电话", "手机").slice(0, 60),
+    wechat: pick("wechat", "weChat", "微信").slice(0, 60),
+    source: "对接接收",
+    intent,
+    stage: "新线索",
+    estimatedAmount: 0,
+    nextFollowAt: "",
+    remark: pick("remark", "notes", "note", "备注").slice(0, 2000),
+    inquiryContent: pick("inquiry", "inquiryContent", "message", "content", "demand", "requirement", "询盘内容", "需求", "需求描述", "留言").slice(0, 20000),
+    sourceType: "inbound",
+    sourceChannel: "exchange",
+    sourceCampaign: "",
+    externalId: pick("externalId", "external_id", "leadId", "id").slice(0, 180),
+    sourceUrl: pick("sourceUrl", "source_url", "url", "link").slice(0, 500)
+  };
+}
+
+/** 对接方推送报文给我方：公开接收端点，按 inbound_key 识别对接方，完整留痕 */
+app.post("/api/exchange/in/:inboundKey", exchangeInboundLimiter, asyncRoute(async (req, res) => {
+  const repository = exchangeRepositoryOr500(res);
+  if (!repository) return;
+  const endpoint = await repository.getEndpointByInboundKey(req.params.inboundKey);
+  if (!endpoint) {
+    res.status(404).json({ message: "对接接收地址无效" });
+    return;
+  }
+  const topic = String(req.headers["x-exchange-topic"] || req.query.topic || "inbound").slice(0, 120);
+  const requestBody = typeof req.body === "string" ? req.body.slice(0, 200_000) : JSON.stringify(req.body ?? null);
+
+  // 线索接收闭环：对接方开启"自动建线索"后，解析报文并幂等建线索（含血缘事件）
+  let leadId = "";
+  let leadDuplicate = false;
+  let leadNote = "";
+  if (endpoint.onReceive === "create_lead") {
+    const mapped = exchangeInboundLeadFields(req.body);
+    if (!mapped) {
+      leadNote = "报文中未识别到公司名（company 字段），已记录报文但未自动建线索";
+    } else {
+      const store = getStore();
+      const duplicateLead = findDuplicateLead(store, endpoint.teamId, mapped.company, mapped.country);
+      if (duplicateLead) {
+        leadId = duplicateLead.id;
+        leadDuplicate = true;
+        leadNote = `线索已存在，本次报文已关联到现有线索 ${duplicateLead.id}`;
+      } else {
+        const owner = { id: endpoint.ownerId, teamId: endpoint.teamId } as SessionUser;
+        const result = createLeadFromSource(owner, {
+          ...mapped,
+          source: `对接:${endpoint.name}`,
+          occurredAt: new Date().toISOString(),
+          rawPayload: req.body
+        });
+        leadId = result.lead.id;
+        leadNote = `已自动创建线索 ${leadId}`;
+        await store.persist();
+      }
+    }
+  }
+
+  const responsePayload = { ok: true, messageId: "", leadId, duplicate: leadDuplicate, note: leadNote };
+  const message = await repository.insertMessage({
+    teamId: endpoint.teamId,
+    endpointId: endpoint.id,
+    endpointName: endpoint.name,
+    direction: "inbound",
+    topic,
+    method: req.method,
+    url: req.originalUrl.split("?")[0] || "/api/exchange/in",
+    requestHeadersJson: JSON.stringify(Object.fromEntries(Object.entries(req.headers as Record<string, string>).slice(0, 40))),
+    requestBody,
+    status: "received",
+    httpStatus: 200,
+    responseHeadersJson: "{}",
+    responseBody: JSON.stringify(responsePayload),
+    durationMs: null,
+    errorMessage: "",
+    leadId
+  });
+  res.json({ ...responsePayload, messageId: message.id });
+}));
+
+app.get("/api/exchange/messages", requireAuth, asyncRoute(async (req, res) => {
+  const repository = exchangeRepositoryOr500(res);
+  if (!repository) return;
+  const limit = Number(req.query.limit) || 100;
+  const messages = await repository.listMessages(req.user!.teamId, {
+    endpointId: String(req.query.endpointId || "") || undefined,
+    direction: ["outbound", "inbound"].includes(String(req.query.direction)) ? String(req.query.direction) : undefined,
+    onlyFailed: req.query.onlyFailed === "1" || req.query.onlyFailed === "true",
+    limit
+  });
+  res.json({ messages });
+}));
+
+app.get("/api/exchange/messages/:id", requireAuth, asyncRoute(async (req, res) => {
+  const repository = exchangeRepositoryOr500(res);
+  if (!repository) return;
+  const message = await repository.getMessage(req.params.id, req.user!.teamId);
+  if (!message) {
+    res.status(404).json({ message: "报文记录不存在或无权访问" });
+    return;
+  }
+  res.json({ message });
+}));
+
+app.get("/api/case-studies", requireAuth, (req, res) => {  const { caseStudies } = getStore();
   const scoped = caseStudies.filter((item) => canSeeOwner(req.user!, item.ownerId, item.teamId));
   res.json({ caseStudies: scoped });
 });
@@ -9894,7 +12155,11 @@ app.post("/api/reminders", requireAuth, asyncRoute(async (req, res) => {
     channel: z.literal("站内").default("站内"),
     ruleType: z.enum(["quote_no_reply", "sample_feedback", "inactive_customer", "high_value_revisit", "custom_due"]).default("quote_no_reply"),
     targetStage: z.string().default("已报价"),
-    days: z.number().int().min(0).max(90).default(3),
+    days: z.number().int().min(0).max(365).default(3),
+    timeUnit: z.enum(["minute", "day", "hour", "week"]).default("day"),
+    targetCustomerIds: z.array(z.string().min(1)).max(500).optional().default([]),
+    // 「生成待办中心任务」勾选项：契约默认 false（不生成），界面上是默认不勾选。
+    generateTodo: z.boolean().default(false),
     priority: z.enum(["high", "medium", "normal"]).default("medium"),
     enabled: z.boolean().default(true),
     targetOwnerId: z.string().optional()
@@ -9916,6 +12181,9 @@ app.post("/api/reminders", requireAuth, asyncRoute(async (req, res) => {
     ruleType: body.ruleType,
     targetStage: body.targetStage,
     days: body.days,
+    timeUnit: body.timeUnit,
+    targetCustomerIds: body.targetCustomerIds,
+    generateTodo: body.generateTodo,
     priority: body.priority,
     enabled: body.enabled,
     generatedCount,
@@ -9936,7 +12204,10 @@ app.patch("/api/reminders/:id", requireAuth, asyncRoute(async (req, res) => {
     dueAt: z.string().min(1).optional(),
     ruleType: z.enum(["quote_no_reply", "sample_feedback", "inactive_customer", "high_value_revisit", "custom_due"]).optional(),
     targetStage: z.string().optional(),
-    days: z.number().int().min(0).max(90).optional(),
+    days: z.number().int().min(0).max(365).optional(),
+    timeUnit: z.enum(["minute", "day", "hour", "week"]).optional(),
+    targetCustomerIds: z.array(z.string().min(1)).max(500).optional(),
+    generateTodo: z.boolean().optional(),
     priority: z.enum(["high", "medium", "normal"]).optional(),
     enabled: z.boolean().optional(),
     targetOwnerId: z.string().optional()
@@ -9971,9 +12242,8 @@ app.get("/api/reminders/:id/preview", requireAuth, (req, res) => {
     return;
   }
   const matched = matchReminderRule(reminder.targetOwnerId || reminder.ownerId, reminder);
-  const existingKeys = new Set(store.todos.filter((todo) => todo.reminderRuleId === reminder.id).map((todo) => todo.triggerKey));
   const preview = matched.slice(0, 5).map((item) => ({ customerId: item.customer.id, customer: item.customer.company, dealId: item.deal?.id || "", deal: item.deal?.title || "", dueAt: item.dueAt }));
-  const skippedCount = matched.filter((item) => existingKeys.has(`${reminder.id}:${item.triggerKey}`)).length;
+  const skippedCount = matched.filter((item) => shouldSkipReminderMatch(reminder, `${reminder.id}:${item.triggerKey}`)).length;
   res.json({ matchedCount: matched.length, creatableCount: matched.length - skippedCount, skippedCount, preview });
 });
 
@@ -9992,57 +12262,15 @@ app.post("/api/reminders/:id/run", requireAuth, asyncRoute(async (req, res) => {
     res.status(400).json({ message: "提醒规则已停用" });
     return;
   }
-  const matched = matchReminderRule(reminder.targetOwnerId || reminder.ownerId, reminder);
-  const created: Todo[] = [];
-  let skippedCount = 0;
-  let failedCount = 0;
-  let lastError = "";
-  for (const match of matched) {
-    const triggerKey = `${reminder.id}:${match.triggerKey}`;
-    const exists = store.todos.some((todo) => todo.triggerKey === triggerKey);
-    if (exists) {
-      skippedCount += 1;
-      continue;
-    }
-    const customer = match.customer;
-    if (!customer.ownerId) {
-      failedCount += 1;
-      lastError = `${customer.company} 未分配负责人`;
-      continue;
-    }
-    created.push({
-      id: `t_reminder_${reminder.id}_${customer.id}_${Date.now()}`,
-      title: `${reminder.title}：${customer.company}`,
-      type: "customer",
-      priority: reminder.priority || "medium",
-      status: "pending",
-      pinState: "",
-      sortOrder: nextTodoSortOrder(store.todos, req.user!.id),
-      dueAt: match.dueAt,
-      ownerId: customer.ownerId,
-      teamId: customer.teamId,
-      related: customer.company,
-      done: false,
-      impactAmount: customer.amount,
-      createdAt: new Date().toISOString(),
-      customerId: customer.id,
-      dealId: match.deal?.id,
-      reminderRuleId: reminder.id,
-      triggerKey
-    });
-  }
-  store.todos.unshift(...created);
-  reminder.generatedCount = matched.length;
-  reminder.lastRunBy = req.user!.id;
-  reminder.lastRunAt = new Date().toISOString();
-  reminder.lastMatchedCount = matched.length;
-  reminder.lastCreatedCount = created.length;
-  reminder.lastSkippedCount = skippedCount;
-  reminder.lastFailedCount = failedCount;
-  reminder.lastError = lastError;
-  reminder.status = "enabled";
-  await store.persist();
-  res.json({ reminder, createdCount: created.length, matchedCount: matched.length, skippedCount, failedCount, todos: created });
+  const result = await runReminderRuleNow(reminder, req.user!.id, { persistWhenNoChanges: true });
+  res.json({
+    reminder: result.reminder,
+    createdCount: result.createdCount,
+    matchedCount: result.matchedCount,
+    skippedCount: result.skippedCount,
+    failedCount: result.failedCount,
+    todos: result.todos
+  });
 }));
 
 app.post("/api/reminders/:id/toggle", requireAuth, asyncRoute(async (req, res) => {
@@ -10229,6 +12457,7 @@ app.post("/api/import-export/customers/export", requireAuth, asyncRoute(async (_
 
 const documentItemSchema = z.object({
   id: z.string().max(64).optional().default(""),
+  lineType: z.enum(["product", "shipping_cost"]).optional().default("product"),
   productId: z.string().max(64).optional().default(""),
   imageUrl: z.string().trim().max(512).optional().default("").refine((value) => !value || /^\/uploads\/[A-Za-z0-9._-]+\.(?:png|jpe?g)$/iu.test(value), "商品图片必须来自本系统"),
   product: z.string().min(1).max(500),
@@ -10258,6 +12487,7 @@ const documentBodySchema = z.object({
   buyerAddress: z.string().max(4_000).optional().default(""),
   buyerContact: z.string().max(200).optional().default(""),
   seller: z.string().max(200).optional().default(""),
+  brandMarkText: z.string().trim().max(8).optional(),
   sellerAddress: z.string().max(4_000).optional().default(""),
   sellerContact: z.string().max(200).optional().default(""),
   sellerPhone: z.string().max(120).optional().default(""),
@@ -10274,7 +12504,7 @@ const documentBodySchema = z.object({
   bankInfo: z.string().max(8_000).optional().default(""),
   notes: z.string().max(8_000).optional().default(""),
   language: z.enum(["EN", "ES", "RU", "AR", "ZH"]).optional().default("EN"),
-  templateStyle: z.enum(["executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber"]).default("indigo"),
+  templateStyle: z.enum(["executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber", "longtec"]).default("rose"),
   status: z.enum(["draft", "ready", "pending_approval", "approved", "rejected", "exported"]).optional().default("draft"),
   approvalNote: z.string().max(2_000).optional().default(""),
   approvedAt: z.string().max(100).optional(),
@@ -10297,6 +12527,8 @@ function documentLetterheadSnapshot(asset: DocumentLetterhead) {
     email: asset.email,
     website: asset.website,
     bankInfo: asset.bankInfo,
+    contact: asset.contact || "",
+    taxNo: asset.taxNo || "",
     logoUrl: documentAssetUrlForLocalFile(asset.logoUrl),
     logoPlacement: normalizeDocumentAssetPlacement(asset.logoPlacement)
   };
@@ -10322,7 +12554,7 @@ function applyDocumentAssetSelection(document: TradeDocument, user: SessionUser,
       document.letterheadSnapshot = previous.letterheadSnapshot;
     } else {
       const asset = store.documentLetterheads.find((item) => item.id === document.letterheadId && item.teamId === user.teamId && item.enabled);
-      if (!asset) throw new Error("所选抬头不存在、已停用或不属于当前团队");
+      if (!asset) throw new Error("所选卖方公司不存在、已停用或不属于当前团队");
       document.letterheadSnapshot = documentLetterheadSnapshot(asset);
     }
   } else {
@@ -10364,6 +12596,7 @@ function normalizeDocument(body: z.infer<typeof documentBodySchema>, user: Sessi
     : (body.status === "ready" ? "ready" : "draft");
   return applyDocumentAssetSelection({
     ...body,
+    brandMarkText: body.brandMarkText ?? existing?.brandMarkText ?? "",
     id: existing?.id || `td_${Date.now()}`,
     customerId: body.customerId || existing?.customerId || "",
     dealId: body.dealId || existing?.dealId || "",
@@ -10412,11 +12645,55 @@ function documentBusinessDefaults(customer?: Customer, deal?: Deal) {
   };
 }
 
+function sellerProfileMatchScore(
+  profile: DocumentLetterhead,
+  customer: Customer | undefined,
+  currency: string,
+  documentType: TradeDocument["type"]
+) {
+  if (!profile.enabled) return -1;
+  const normalize = (value: string) => value.trim().toLocaleLowerCase();
+  const country = normalize(customer?.country || "");
+  const countries = (profile.matchCountries || []).map(normalize).filter(Boolean);
+  const currencies = (profile.matchCurrencies || []).map((value) => value.trim().toUpperCase()).filter(Boolean);
+  const types = profile.matchDocumentTypes || [];
+  if (countries.length && !countries.includes(country)) return -1;
+  if (currencies.length && !currencies.includes(currency.trim().toUpperCase())) return -1;
+  if (types.length && !types.includes(documentType)) return -1;
+  return (countries.length ? 1000 : 0)
+    + (currencies.length ? 200 : 0)
+    + (types.length ? 50 : 0)
+    + Math.max(0, Math.min(100, profile.matchPriority || 0))
+    + (profile.isDefault ? 1 : 0);
+}
+
+function matchedSellerProfile(
+  user: SessionUser,
+  customer: Customer | undefined,
+  currency: string,
+  documentType: TradeDocument["type"],
+  explicitId = "",
+  sellerName = ""
+) {
+  const available = getStore().documentLetterheads.filter((item) => item.teamId === user.teamId && item.enabled);
+  if (explicitId) return available.find((item) => item.id === explicitId);
+  const normalizedSeller = sellerName.trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  if (normalizedSeller) {
+    const namedProfile = available.find((item) => item.companyName.trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "") === normalizedSeller);
+    if (namedProfile) return namedProfile;
+  }
+  return available
+    .map((item) => ({ item, score: sellerProfileMatchScore(item, customer, currency, documentType) }))
+    .filter((entry) => entry.score >= 0)
+    .sort((left, right) => right.score - left.score || right.item.updatedAt.localeCompare(left.item.updatedAt))[0]?.item;
+}
+
 function defaultDocumentProfile(teamId: string): DocumentDefaultProfile {
   const now = new Date().toISOString();
   return {
     teamId,
     seller: "",
+    brandMarkText: "",
     sellerAddress: "",
     sellerContact: "",
     sellerPhone: "",
@@ -10432,7 +12709,7 @@ function defaultDocumentProfile(teamId: string): DocumentDefaultProfile {
     validityDays: 0,
     notes: "",
     language: "EN",
-    templateStyle: "indigo",
+    templateStyle: "rose",
     letterheadId: "",
     stampId: "",
     signatureId: "",
@@ -10445,7 +12722,7 @@ function defaultDocumentProfile(teamId: string): DocumentDefaultProfile {
 function documentDefaultProfileForTeam(teamId: string) {
   const store = getStore();
   const saved = store.documentDefaultProfiles.find((item) => item.teamId === teamId);
-  if (saved) return saved;
+  if (saved) return { ...saved, brandMarkText: saved.brandMarkText || "" };
   const company = store.companyProfiles.find((item) => item.teamId === teamId);
   const letterhead = store.documentLetterheads.find((item) => item.teamId === teamId && item.enabled && item.isDefault)
     || store.documentLetterheads.find((item) => item.teamId === teamId && item.enabled);
@@ -10456,13 +12733,15 @@ function documentDefaultProfileForTeam(teamId: string) {
     ...profile,
     seller: letterhead?.companyName || company?.companyName || "",
     sellerAddress: letterhead?.address || company?.address || "",
+    sellerContact: letterhead?.contact || "",
     sellerPhone: letterhead?.phone || company?.phone || "",
     sellerEmail: letterhead?.email || company?.email || "",
     sellerWebsite: letterhead?.website || company?.website || "",
+    sellerTaxNo: letterhead?.taxNo || "",
     bankInfo: letterhead?.bankInfo || "",
     letterheadId: letterhead?.id || "",
-    stampId: stamp?.id || "",
-    signatureId: signature?.id || ""
+    stampId: letterhead?.stampId || stamp?.id || "",
+    signatureId: letterhead?.signatureId || signature?.id || ""
   };
 }
 
@@ -10487,6 +12766,8 @@ function applyDocumentCreationDefaults(
 ) {
   const profile = documentDefaultProfileForTeam(user.teamId);
   const customerDefaults = documentBusinessDefaults(customer, deal);
+  const resolvedCurrency = String(body.currency || deal?.currency || profile.currency || "USD").toUpperCase();
+  const sellerProfile = matchedSellerProfile(user, customer, resolvedCurrency, body.type, body.letterheadId || "", body.seller || "");
   const sourceOwns = (field: string, value: unknown) => nonEmpty(value) && (!sourceFields || sourceFields.has(field));
   const choose = (field: string, sourceValue: unknown, customerValue: unknown, profileValue: unknown, systemValue = "") => {
     if (sourceOwns(field, sourceValue)) return sourceValue;
@@ -10500,13 +12781,14 @@ function applyDocumentCreationDefaults(
     buyer: choose("buyer", body.buyer, customerDefaults.buyer, "") as string,
     buyerAddress: choose("buyerAddress", body.buyerAddress, customerDefaults.buyerAddress, "") as string,
     buyerContact: choose("buyerContact", body.buyerContact, customerDefaults.buyerContact, "") as string,
-    seller: choose("seller", body.seller, "", profile.seller) as string,
-    sellerAddress: choose("sellerAddress", body.sellerAddress, "", profile.sellerAddress) as string,
-    sellerContact: choose("sellerContact", body.sellerContact, "", profile.sellerContact) as string,
-    sellerPhone: choose("sellerPhone", body.sellerPhone, "", profile.sellerPhone) as string,
-    sellerEmail: choose("sellerEmail", body.sellerEmail, "", profile.sellerEmail) as string,
-    sellerWebsite: choose("sellerWebsite", body.sellerWebsite, "", profile.sellerWebsite) as string,
-    sellerTaxNo: choose("sellerTaxNo", body.sellerTaxNo, "", profile.sellerTaxNo) as string,
+    seller: choose("seller", body.seller, "", sellerProfile?.companyName || profile.seller) as string,
+    brandMarkText: choose("brandMarkText", body.brandMarkText, "", profile.brandMarkText || "") as string,
+    sellerAddress: choose("sellerAddress", body.sellerAddress, "", sellerProfile?.address || profile.sellerAddress) as string,
+    sellerContact: choose("sellerContact", body.sellerContact, "", sellerProfile?.contact || profile.sellerContact) as string,
+    sellerPhone: choose("sellerPhone", body.sellerPhone, "", sellerProfile?.phone || profile.sellerPhone) as string,
+    sellerEmail: choose("sellerEmail", body.sellerEmail, "", sellerProfile?.email || profile.sellerEmail) as string,
+    sellerWebsite: choose("sellerWebsite", body.sellerWebsite, "", sellerProfile?.website || profile.sellerWebsite) as string,
+    sellerTaxNo: choose("sellerTaxNo", body.sellerTaxNo, "", sellerProfile?.taxNo || profile.sellerTaxNo) as string,
     currency: choose("currency", body.currency, customerDefaults.currency, profile.currency, "USD") as string,
     incoterm: choose("incoterm", body.incoterm, customerDefaults.incoterm, profile.incoterm, "FOB") as string,
     paymentTerm: choose("paymentTerm", body.paymentTerm, customerDefaults.paymentTerm, profile.paymentTerm) as string,
@@ -10514,17 +12796,71 @@ function applyDocumentCreationDefaults(
     portLoading: choose("portLoading", body.portLoading, "", profile.portLoading) as string,
     portDischarge: choose("portDischarge", body.portDischarge, customerDefaults.portDischarge, "") as string,
     validityDate: choose("validityDate", body.validityDate, "", validityDateFromDays(issueDate, profile.validityDays)) as string,
-    bankInfo: choose("bankInfo", body.bankInfo, "", profile.bankInfo) as string,
+    bankInfo: choose("bankInfo", body.bankInfo, "", sellerProfile?.bankInfo || profile.bankInfo) as string,
     notes: choose("notes", body.notes, "", profile.notes) as string,
     language: choose("language", body.language, "", profile.language, "EN") as TradeDocument["language"],
-    templateStyle: choose("templateStyle", body.templateStyle, "", profile.templateStyle, "indigo") as TradeDocument["templateStyle"],
-    letterheadId: choose("letterheadId", body.letterheadId, "", profile.letterheadId) as string,
-    stampId: choose("stampId", body.stampId, "", profile.stampId) as string,
-    signatureId: choose("signatureId", body.signatureId, "", profile.signatureId) as string,
+    templateStyle: choose("templateStyle", body.templateStyle, "", profile.templateStyle, "rose") as TradeDocument["templateStyle"],
+    letterheadId: choose("letterheadId", body.letterheadId, "", sellerProfile?.id || profile.letterheadId) as string,
+    stampId: choose("stampId", body.stampId, "", sellerProfile?.stampId || profile.stampId) as string,
+    signatureId: choose("signatureId", body.signatureId, "", sellerProfile?.signatureId || profile.signatureId) as string,
     includeProductImages: sourceOwns("includeProductImages", body.includeProductImages) ? body.includeProductImages : profile.includeProductImages
   };
 }
 
+function documentTypeLabelForApi(type: TradeDocument["type"]) {
+  return ({
+    PI: "形式发票", CI: "商业发票", CUSTOMS: "报关资料", PL: "装箱单",
+    CONTRACT: "合同", QUOTATION: "报价单", COO: "原产地证", SHIPPING: "装运通知"
+  } as Record<TradeDocument["type"], string>)[type] || type;
+}
+
+async function readLocalAdvancedDocumentImage(value: string) {
+  const imageUrl = documentAssetUrlForLocalFile(value);
+  if (!imageUrl) return undefined;
+  const filePath = path.join(uploadsDir, path.basename(imageUrl));
+  const data = await readFile(filePath).catch(() => null);
+  if (!data) return undefined;
+  const png = data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const jpeg = data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
+  if (!png && !jpeg) return undefined;
+  return { data: new Uint8Array(data), extension: png ? "png" as const : "jpg" as const };
+}
+
+async function advancedDocumentAssets(document: TradeDocument, user: SessionUser) {
+  const store = getStore();
+  const productImages: Record<string, Awaited<ReturnType<typeof readLocalAdvancedDocumentImage>>> = {};
+  if (document.includeProductImages) {
+    for (const [index, item] of document.items.entries()) {
+      const imageKey = item.id || item.productId || `item-${index + 1}`;
+      if (productImages[imageKey]) continue;
+      let imageUrl = documentAssetUrlForLocalFile(item.imageUrl || "");
+      if (!imageUrl && item.productId) {
+        const product = store.products.find((candidate) => candidate.id === item.productId && candidate.teamId === document.teamId && canSeeOwner(user, candidate.ownerId, candidate.teamId));
+        imageUrl = documentAssetUrlForLocalFile(product?.imageUrl || "");
+      }
+      if (!imageUrl) {
+        const normalized = (value: string) => value.trim().toLowerCase().replace(/[\s_-]+/gu, " ");
+        const itemNames = [normalized(item.model || ""), normalized(item.product || "")].filter((value) => value.length >= 3);
+        const product = store.products.find((candidate) => candidate.teamId === document.teamId
+          && canSeeOwner(user, candidate.ownerId, candidate.teamId)
+          && Boolean(documentAssetUrlForLocalFile(candidate.imageUrl || ""))
+          && [candidate.model, candidate.nameEn, candidate.nameZh].some((value) => itemNames.includes(normalized(value || ""))));
+        imageUrl = documentAssetUrlForLocalFile(product?.imageUrl || "");
+      }
+      if (!imageUrl) continue;
+      productImages[imageKey] = await readLocalAdvancedDocumentImage(imageUrl);
+    }
+  }
+  const compactProductImages = Object.fromEntries(Object.entries(productImages).filter((entry): entry is [string, NonNullable<typeof entry[1]>] => Boolean(entry[1])));
+  return {
+    logo: document.letterheadSnapshot?.logoUrl ? await readLocalAdvancedDocumentImage(document.letterheadSnapshot.logoUrl) : undefined,
+    logoPlacement: normalizeDocumentAssetPlacement(document.letterheadSnapshot?.logoPlacement),
+    stamp: document.stampSnapshot?.imageUrl ? await readLocalAdvancedDocumentImage(document.stampSnapshot.imageUrl) : undefined,
+    stampPlacement: normalizeDocumentAssetPlacement(document.stampSnapshot?.placement),
+    signature: document.signatureSnapshot?.imageUrl ? await readLocalAdvancedDocumentImage(document.signatureSnapshot.imageUrl) : undefined,
+    productImages: compactProductImages
+  };
+}
 
 async function persistImportedItemImages(
   parsed: Awaited<ReturnType<typeof parseTradeDocumentImport>>,
@@ -10626,6 +12962,20 @@ async function restoreLegacyImportedDocumentImages(user: SessionUser) {
   return recovery;
 }
 
+function documentForAdvancedExcel(document: TradeDocument) {
+  if (!document.letterheadSnapshot) return document;
+  return {
+    ...document,
+    seller: document.letterheadSnapshot.companyName,
+    sellerAddress: document.letterheadSnapshot.address,
+    sellerContact: document.letterheadSnapshot.contact,
+    sellerPhone: document.letterheadSnapshot.phone,
+    sellerEmail: document.letterheadSnapshot.email,
+    sellerWebsite: document.letterheadSnapshot.website,
+    sellerTaxNo: document.letterheadSnapshot.taxNo,
+    bankInfo: document.letterheadSnapshot.bankInfo
+  };
+}
 
 function publicTradeDocumentImportAnalysis(analysis: TradeDocumentImportAnalysis) {
   const { sourceStorageKey: _sourceStorageKey, ...publicAnalysis } = analysis;
@@ -10634,6 +12984,22 @@ function publicTradeDocumentImportAnalysis(analysis: TradeDocumentImportAnalysis
 
 function visibleTradeDocumentImportAnalysis(id: string, user: SessionUser) {
   return getStore().tradeDocumentImportAnalyses.find((item) => item.id === id && canSeeOwner(user, item.ownerId, item.teamId));
+}
+
+function applyActiveTradeDocumentRecognitionTemplate(
+  parsed: Awaited<ReturnType<typeof parseTradeDocumentImport>>,
+  user: SessionUser,
+  sourceKind: "import" | "ocr"
+) {
+  const match = matchTradeDocumentRecognitionTemplate({
+    templates: getStore().tradeDocumentRecognitionTemplates,
+    teamId: user.teamId,
+    sourceKind,
+    parsed
+  });
+  if (!match) return { parsed, recognitionTemplate: undefined };
+  const applied = applyTradeDocumentRecognitionTemplate(parsed, match.template, match.score);
+  return { parsed: applied.parsed, recognitionTemplate: applied.snapshot };
 }
 
 app.get("/api/trade-document-imports", requireAuth, (req, res) => {
@@ -10653,6 +13019,114 @@ app.get("/api/trade-document-imports/:id", requireAuth, (req, res) => {
   }
   res.json({ analysis: publicTradeDocumentImportAnalysis(analysis) });
 });
+
+app.get("/api/trade-document-recognition-templates", requireAuth, (req, res) => {
+  const includeArchived = req.query.includeArchived === "true";
+  const templates = getStore().tradeDocumentRecognitionTemplates
+    .filter((item) => item.teamId === req.user!.teamId && (includeArchived || item.status === "active"))
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  res.json({ templates });
+});
+
+const recognitionTemplateBodySchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  familyId: z.string().trim().max(64).optional(),
+  document: documentBodySchema
+});
+
+app.post("/api/trade-document-imports/:id/recognition-template", requireAuth, asyncRoute(async (req, res) => {
+  const analysis = visibleTradeDocumentImportAnalysis(req.params.id, req.user!);
+  if (!analysis) {
+    res.status(404).json({ message: "导入分析不存在或无权访问" });
+    return;
+  }
+  const body = recognitionTemplateBodySchema.parse(req.body);
+  const store = getStore();
+  const sourceKind = analysis.sourceMime.startsWith("image/") ? "ocr" : analysis.recognitionSource || "import";
+  const normalizedName = body.name.trim().toLowerCase();
+  const requestedFamily = body.familyId
+    ? store.tradeDocumentRecognitionTemplates.find((item) => item.id === body.familyId || item.familyId === body.familyId)
+    : store.tradeDocumentRecognitionTemplates.find((item) => item.teamId === req.user!.teamId
+      && item.documentType === body.document.type
+      && item.sourceKind === sourceKind
+      && item.name.trim().toLowerCase() === normalizedName);
+  if (requestedFamily && requestedFamily.teamId !== req.user!.teamId) {
+    res.status(404).json({ message: "识别模板不存在或无权访问" });
+    return;
+  }
+  const familyId = requestedFamily?.familyId || `tdrtf_${randomUUID()}`;
+  const familyVersions = store.tradeDocumentRecognitionTemplates.filter((item) => item.teamId === req.user!.teamId && item.familyId === familyId);
+  const activeFamilyCount = new Set(store.tradeDocumentRecognitionTemplates
+    .filter((item) => item.teamId === req.user!.teamId && item.status === "active" && item.documentType === body.document.type && item.sourceKind === sourceKind)
+    .map((item) => item.familyId)).size;
+  if (!familyVersions.length && activeFamilyCount >= 30) {
+    res.status(409).json({ message: "当前类型已有 30 个启用模板，请先归档不再使用的模板" });
+    return;
+  }
+  const now = new Date().toISOString();
+  const template = buildTradeDocumentRecognitionTemplate({
+    analysis,
+    corrected: body.document,
+    id: `tdrt_${randomUUID()}`,
+    familyId,
+    version: Math.max(0, ...familyVersions.map((item) => item.version)) + 1,
+    name: body.name,
+    sourceKind,
+    userId: req.user!.id,
+    teamId: req.user!.teamId,
+    now
+  });
+  if (template.fingerprint.anchors.length < 2) {
+    res.status(422).json({ message: "当前原文可学习的稳定标签不足，请保留至少两个清晰字段标签或商品表头后重试" });
+    return;
+  }
+  familyVersions.filter((item) => item.status === "active").forEach((item) => {
+    item.status = "archived";
+    item.archivedAt = now;
+  });
+  store.tradeDocumentRecognitionTemplates.unshift(template);
+  analysis.recognitionTemplate = { templateId: template.id, familyId, name: template.name, version: template.version, matchScore: 1, matchedAt: now };
+  analysis.updatedAt = now;
+  await store.persist();
+  res.status(201).json({ template, archivedVersions: familyVersions.filter((item) => item.status === "archived").map((item) => item.id) });
+}));
+
+function editableRecognitionTemplate(id: string, user: SessionUser) {
+  const template = getStore().tradeDocumentRecognitionTemplates.find((item) => item.id === id && item.teamId === user.teamId);
+  if (!template) return null;
+  if (template.createdBy !== user.id && !hasIamPermission(user, "system.settings.manage")) return null;
+  return template;
+}
+
+app.post("/api/trade-document-recognition-templates/:id/archive", requireAuth, asyncRoute(async (req, res) => {
+  const template = editableRecognitionTemplate(req.params.id, req.user!);
+  if (!template) {
+    res.status(404).json({ message: "识别模板不存在、无权管理或已被隔离" });
+    return;
+  }
+  if (template.status === "active") {
+    template.status = "archived";
+    template.archivedAt = new Date().toISOString();
+    await getStore().persist();
+  }
+  res.json({ template });
+}));
+
+app.post("/api/trade-document-recognition-templates/:id/restore", requireAuth, asyncRoute(async (req, res) => {
+  const source = editableRecognitionTemplate(req.params.id, req.user!);
+  if (!source) {
+    res.status(404).json({ message: "识别模板不存在、无权管理或已被隔离" });
+    return;
+  }
+  const store = getStore();
+  const family = store.tradeDocumentRecognitionTemplates.filter((item) => item.teamId === req.user!.teamId && item.familyId === source.familyId);
+  const now = new Date().toISOString();
+  family.filter((item) => item.status === "active").forEach((item) => { item.status = "archived"; item.archivedAt = now; });
+  const restored = { ...structuredClone(source), id: `tdrt_${randomUUID()}`, version: Math.max(...family.map((item) => item.version)) + 1, status: "active" as const, createdBy: req.user!.id, createdAt: now, archivedAt: undefined };
+  store.tradeDocumentRecognitionTemplates.unshift(restored);
+  await store.persist();
+  res.status(201).json({ template: restored });
+}));
 
 app.get("/api/trade-document-imports/:id/source", requireAuth, asyncRoute(async (req, res) => {
   const analysis = visibleTradeDocumentImportAnalysis(req.params.id, req.user!);
@@ -10714,6 +13188,8 @@ app.post("/api/trade-document-imports/analyze", requireAuth, express.raw({ type:
     res.status(422).json({ message: error instanceof Error ? error.message : "单据解析失败" });
     return;
   }
+  const recognized = applyActiveTradeDocumentRecognitionTemplate(parsed, req.user!, "import");
+  parsed = recognized.parsed;
   const sha256 = tradeDocumentImportSha256(buffer);
   const duplicate = getStore().tradeDocumentImportAnalyses.find((item) => item.teamId === req.user!.teamId && item.sourceSha256 === sha256);
   if (duplicate) {
@@ -10732,6 +13208,8 @@ app.post("/api/trade-document-imports/analyze", requireAuth, express.raw({ type:
       duplicate.calculatedTotal = parsed.calculatedTotal;
       duplicate.declaredTotal = parsed.declaredTotal;
       duplicate.totalDifference = parsed.declaredTotal === undefined ? undefined : parsed.declaredTotal - parsed.calculatedTotal;
+      duplicate.recognitionSource = "import";
+      duplicate.recognitionTemplate = recognized.recognitionTemplate;
       duplicate.updatedAt = new Date().toISOString();
       await getStore().persist();
     }
@@ -10753,10 +13231,102 @@ app.post("/api/trade-document-imports/analyze", requireAuth, express.raw({ type:
     sourceSize: buffer.length,
     ownerId: req.user!.id,
     teamId: req.user!.teamId,
-    parsed
+    parsed,
+    recognitionSource: "import",
+    recognitionTemplate: recognized.recognitionTemplate
   });
   getStore().tradeDocumentImportAnalyses.unshift(analysis);
   await getStore().persist();
+  res.status(201).json({ analysis: publicTradeDocumentImportAnalysis(analysis), duplicate: false });
+}));
+
+app.post("/api/trade-document-imports/analyze-ocr", requireAuth, asyncRoute(async (req, res) => {
+  const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
+  const dataUrl = typeof body.image === "string" ? body.image.trim() : "";
+  const requestedMime = typeof body.mime === "string" ? body.mime.trim().toLowerCase() : "";
+  const fileName = path.basename(typeof body.fileName === "string" ? body.fileName : "单据图片").replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, 255) || "单据图片";
+  const dataMatch = dataUrl.match(/^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\s]+)$/u);
+  const mime = dataMatch?.[1] || requestedMime;
+  const base64 = dataMatch?.[2]?.replace(/\s+/gu, "") || "";
+  if (!dataMatch || !isTradeDocumentOcrMime(mime) || !base64 || base64.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(base64)) {
+    res.status(400).json({ message: "请上传 PNG、JPG/JPEG 或 WEBP 格式的单据图片" });
+    return;
+  }
+  const buffer = Buffer.from(base64, "base64");
+  if (!buffer.length) {
+    res.status(400).json({ message: "图片内容为空，请重新选择文件" });
+    return;
+  }
+  if (buffer.length > TRADE_DOCUMENT_IMPORT_MAX_BYTES) {
+    res.status(413).json({ message: "单据图片不能超过 8 MB，请压缩图片后重试" });
+    return;
+  }
+  const validSignature = (mime === "image/png" && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
+    || (mime === "image/jpeg" && buffer.subarray(0, 2).equals(Buffer.from([255, 216])))
+    || (mime === "image/webp" && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP");
+  if (!validSignature) {
+    res.status(400).json({ message: "图片内容与声明格式不一致，请重新导出或选择原始图片" });
+    return;
+  }
+  const config = getAiConfig(req.user!);
+  const ocrProvider = tradeDocumentOcrProviderForTeam(req.user!.teamId);
+  let parsed: Awaited<ReturnType<typeof recognizeTradeDocument>>;
+  try {
+    parsed = await recognizeConfiguredTradeDocument({ dataUrl, mime, fileName, provider: ocrProvider, aiConfig: config });
+  } catch (error) {
+    res.status(422).json({ message: error instanceof Error ? error.message : "单据图片识别失败", suggestion: "请确认模型支持视觉输入、图片清晰且配置可用" });
+    return;
+  }
+  const recognized = applyActiveTradeDocumentRecognitionTemplate(parsed, req.user!, "ocr");
+  parsed = recognized.parsed;
+  const sha256 = tradeDocumentImportSha256(buffer);
+  const store = getStore();
+  const duplicate = store.tradeDocumentImportAnalyses.find((item) => item.teamId === req.user!.teamId && item.sourceSha256 === sha256);
+  if (duplicate) {
+    if (!canSeeOwner(req.user!, duplicate.ownerId, duplicate.teamId)) {
+      res.status(409).json({ message: "该图片已由团队其他成员导入，请联系有权限的负责人" });
+      return;
+    }
+    if (duplicate.status === "confirmed" && duplicate.createdDocumentId) {
+      res.json({ analysis: publicTradeDocumentImportAnalysis(duplicate), duplicate: true });
+      return;
+    }
+    duplicate.detectedType = parsed.draft.type;
+    duplicate.confidence = parsed.confidence;
+    duplicate.extractedDocument = parsed.draft;
+    duplicate.fieldEvidence = parsed.evidence;
+    duplicate.warnings = parsed.warnings;
+    duplicate.sourcePreview = parsed.preview;
+    duplicate.calculatedTotal = parsed.calculatedTotal;
+    duplicate.declaredTotal = parsed.declaredTotal;
+    duplicate.totalDifference = parsed.declaredTotal === undefined ? undefined : parsed.declaredTotal - parsed.calculatedTotal;
+    duplicate.recognitionSource = "ocr";
+    duplicate.recognitionTemplate = recognized.recognitionTemplate;
+    duplicate.updatedAt = new Date().toISOString();
+    await store.persist();
+    res.json({ analysis: publicTradeDocumentImportAnalysis(duplicate), duplicate: true });
+    return;
+  }
+  const id = `tdia_ocr_${randomUUID()}`;
+  const extension = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
+  const storageKey = `${id}.${extension}`;
+  await mkdir(tradeDocumentImportsDir, { recursive: true });
+  await writeFile(path.join(tradeDocumentImportsDir, storageKey), buffer, { flag: "wx" });
+  const analysis = createTradeDocumentImportAnalysis({
+    id,
+    fileName,
+    mime,
+    storageKey,
+    sha256,
+    sourceSize: buffer.length,
+    ownerId: req.user!.id,
+    teamId: req.user!.teamId,
+    parsed,
+    recognitionSource: "ocr",
+    recognitionTemplate: recognized.recognitionTemplate
+  });
+  store.tradeDocumentImportAnalyses.unshift(analysis);
+  await store.persist();
   res.status(201).json({ analysis: publicTradeDocumentImportAnalysis(analysis), duplicate: false });
 }));
 
@@ -10873,8 +13443,9 @@ app.post("/api/trade-document-imports/:id/confirm", requireAuth, asyncRoute(asyn
       relatedDocumentId: document.id
     });
   }
+  const dealSync = syncDealPricingFromDocument(document, req.user!);
   await store.persist();
-  res.status(201).json({ analysis: publicTradeDocumentImportAnalysis(analysis), document, duplicate: false });
+  res.status(201).json({ analysis: publicTradeDocumentImportAnalysis(analysis), document, dealSync, duplicate: false });
 }));
 
 app.get("/api/trade-documents", requireAuth, asyncRoute(async (req, res) => {
@@ -10887,6 +13458,9 @@ app.get("/api/trade-documents", requireAuth, asyncRoute(async (req, res) => {
   res.json({ documents });
 }));
 
+app.get("/api/trade-document-templates", requireAuth, (req, res) => {
+  res.json({ templates: listAdvancedDocumentTemplates() });
+});
 
 const documentLetterheadSchema = z.object({
   id: z.string().trim().max(64).optional(),
@@ -10897,6 +13471,8 @@ const documentLetterheadSchema = z.object({
   email: z.string().trim().max(180).default(""),
   website: z.string().trim().max(500).default(""),
   bankInfo: z.string().trim().max(8_000).default(""),
+  contact: z.string().trim().max(200).default(""),
+  taxNo: z.string().trim().max(160).default(""),
   logoUrl: z.string().trim().max(512).default(""),
   logoPlacement: z.object({
     horizontal: z.enum(["template", "left", "center", "right"]).default("template"),
@@ -10905,6 +13481,12 @@ const documentLetterheadSchema = z.object({
     offsetY: z.coerce.number().int().min(-200).max(200).default(0),
     scale: z.coerce.number().int().min(50).max(150).default(100)
   }).optional(),
+  matchCountries: z.array(z.string().trim().min(1).max(120)).max(50).default([]),
+  matchCurrencies: z.array(z.string().trim().regex(/^[A-Z]{3}$/)).max(20).default([]),
+  matchDocumentTypes: z.array(z.enum(["PI", "CI", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING"])).max(8).default([]),
+  matchPriority: z.coerce.number().int().min(0).max(100).default(0),
+  stampId: z.string().trim().max(64).default(""),
+  signatureId: z.string().trim().max(64).default(""),
   isDefault: z.boolean().default(false),
   enabled: z.boolean().default(true)
 });
@@ -10936,6 +13518,7 @@ const documentSignatureSchema = z.object({
 
 const documentDefaultProfileSchema = z.object({
   seller: z.string().trim().max(240).default(""),
+  brandMarkText: z.string().trim().max(8).default(""),
   sellerAddress: z.string().trim().max(4_000).default(""),
   sellerContact: z.string().trim().max(200).default(""),
   sellerPhone: z.string().trim().max(120).default(""),
@@ -10951,7 +13534,7 @@ const documentDefaultProfileSchema = z.object({
   validityDays: z.coerce.number().int().min(0).max(365).default(0),
   notes: z.string().trim().max(8_000).default(""),
   language: z.enum(["EN", "ES", "RU", "AR", "ZH"]).default("EN"),
-  templateStyle: z.enum(["executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber"]).default("indigo"),
+  templateStyle: z.enum(["executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber", "longtec"]).default("rose"),
   letterheadId: z.string().trim().max(64).default(""),
   stampId: z.string().trim().max(64).default(""),
   signatureId: z.string().trim().max(64).default(""),
@@ -10986,7 +13569,7 @@ app.put("/api/document-defaults", requireAuth, asyncRoute(async (req, res) => {
   if (!assetAvailable(store.documentLetterheads, body.letterheadId)
     || !assetAvailable(store.documentStamps, body.stampId)
     || !assetAvailable(store.documentSignatures, body.signatureId)) {
-    res.status(400).json({ message: "默认抬头、印章或签名不存在、已停用或不属于当前团队" });
+    res.status(400).json({ message: "默认卖方公司、印章或签名不存在、已停用或不属于当前团队" });
     return;
   }
   const profile: DocumentDefaultProfile = {
@@ -11007,12 +13590,17 @@ app.post("/api/document-assets/letterheads", requireAuth, asyncRoute(async (req,
   const store = getStore();
   const existing = body.id ? store.documentLetterheads.find((item) => item.id === body.id && item.teamId === req.user!.teamId) : undefined;
   if (body.id && !existing) {
-    res.status(404).json({ message: "抬头不存在或不属于当前团队" });
+    res.status(404).json({ message: "卖方公司不存在或不属于当前团队" });
     return;
   }
   const logoUrl = body.logoUrl ? documentAssetUrlForLocalFile(body.logoUrl) : "";
   if (body.logoUrl && !logoUrl) {
-    res.status(400).json({ message: "抬头 Logo 必须先上传到本系统" });
+    res.status(400).json({ message: "卖方公司 Logo 必须先上传到本系统" });
+    return;
+  }
+  const linkedAssetAvailable = (items: Array<{ id: string; teamId: string; enabled: boolean }>, id: string) => !id || items.some((item) => item.id === id && item.teamId === req.user!.teamId && item.enabled);
+  if (!linkedAssetAvailable(store.documentStamps, body.stampId) || !linkedAssetAvailable(store.documentSignatures, body.signatureId)) {
+    res.status(400).json({ message: "卖方公司的默认印章或签名不存在、已停用或不属于当前团队" });
     return;
   }
   if (body.isDefault) store.documentLetterheads.filter((item) => item.teamId === req.user!.teamId).forEach((item) => { item.isDefault = false; });
@@ -11035,7 +13623,7 @@ app.delete("/api/document-assets/letterheads/:id", requireAuth, asyncRoute(async
   const store = getStore();
   const index = store.documentLetterheads.findIndex((item) => item.id === req.params.id && item.teamId === req.user!.teamId);
   if (index < 0) {
-    res.status(404).json({ message: "抬头不存在或不属于当前团队" });
+    res.status(404).json({ message: "卖方公司不存在或不属于当前团队" });
     return;
   }
   if (store.tradeDocuments.some((item) => item.teamId === req.user!.teamId && item.letterheadId === req.params.id)) {
@@ -11176,6 +13764,170 @@ app.get("/api/trade-documents/history", requireAuth, asyncRoute(async (req, res)
   res.json({ documents: visible.slice((safePage - 1) * pageSize, safePage * pageSize), total, page: safePage, pageSize, pageCount });
 }));
 
+app.get("/api/quote-history", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const mode = String(req.query.mode || "records").trim() === "product" ? "product" : "records";
+  const query = String(req.query.q || "").trim().toLowerCase();
+  const customerId = String(req.query.customerId || "").trim();
+  const customerSearch = String(req.query.customerSearch || "").trim().toLowerCase();
+  const dealId = String(req.query.dealId || "").trim();
+  const dealSearch = String(req.query.dealSearch || "").trim().toLowerCase();
+  const product = String(req.query.product || "").trim().toLowerCase();
+  const country = String(req.query.country || "").trim().toLowerCase();
+  const documentType = String(req.query.documentType || "").trim();
+  const currency = String(req.query.currency || "").trim().toUpperCase();
+  const from = String(req.query.from || "").trim();
+  const to = String(req.query.to || "").trim();
+  const recordId = String(req.query.recordId || "").trim();
+  const page = Math.max(1, Number.parseInt(String(req.query.page || "1"), 10) || 1);
+  const pageSize = Math.min(50, Math.max(10, Number.parseInt(String(req.query.pageSize || "20"), 10) || 20));
+  const visible = store.quoteHistory
+    .filter((record) => canSeeOwner(req.user!, record.ownerId, record.teamId))
+    .filter((record) => !recordId || record.id === recordId)
+    .filter((record) => !customerId || record.customerId === customerId)
+    .filter((record) => !customerSearch || record.customerName.toLowerCase().includes(customerSearch))
+    .filter((record) => !country || (store.customers.find((customer) => customer.id === record.customerId)?.country || "").trim().toLowerCase().includes(country))
+    .filter((record) => !dealId || record.dealId === dealId)
+    .filter((record) => !dealSearch || dealSearch.split(/\s*[·|/]\s*/u).filter(Boolean).every((term) => [record.dealTitle, record.customerName].join(" ").toLowerCase().includes(term)))
+    .filter((record) => !documentType || record.documentType === documentType)
+    .filter((record) => !currency || record.currency === currency)
+    .filter((record) => !from || record.quotedAt.slice(0, 10) >= from)
+    .filter((record) => !to || record.quotedAt.slice(0, 10) <= to)
+    .filter((record) => !product || record.items.some((item) =>
+      [item.product, item.model, item.productId].join(" ").toLowerCase().includes(product)))
+    .filter((record) => {
+      if (!query) return true;
+      return [record.customerName, record.dealTitle, record.documentNumber, record.operatorName,
+        ...record.items.flatMap((item) => [item.product, item.model])]
+        .join(" ").toLowerCase().includes(query);
+    })
+    .sort((left, right) => right.quotedAt.localeCompare(left.quotedAt));
+  const total = visible.length;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const totals = visible.reduce<Record<string, number>>((summary, record) => {
+    summary[record.currency] = Math.round(((summary[record.currency] || 0) + record.totalAmount) * 100) / 100;
+    return summary;
+  }, {});
+  const productAnalysis = mode === "product" ? (() => {
+    type ProductQuoteGroup = {
+      productId: string;
+      product: string;
+      model: string;
+      country: string;
+      currency: string;
+      prices: number[];
+      recordIds: Set<string>;
+      latest?: { quotedAt: string; unitPrice: number; customerName: string; documentNumber: string };
+    };
+    type PriceRangeGroup = {
+      country?: string;
+      currency: string;
+      prices: number[];
+      recordIds: Set<string>;
+      countries: Set<string>;
+      latest?: { quotedAt: string; unitPrice: number };
+    };
+    const groups = new Map<string, ProductQuoteGroup>();
+    const overallGroups = new Map<string, PriceRangeGroup>();
+    const countryGroups = new Map<string, PriceRangeGroup>();
+    visible.forEach((record) => {
+      const country = store.customers.find((customer) => customer.id === record.customerId)?.country?.trim() || "未填写国家";
+      record.items.forEach((item) => {
+        const itemText = [item.product, item.model, item.productId].join(" ").toLowerCase();
+        if (product && !itemText.includes(product)) return;
+        const key = `${quoteItemKey(item)}|${country}|${record.currency}`;
+        const group = groups.get(key) || {
+          productId: item.productId,
+          product: item.product,
+          model: item.model,
+          country,
+          currency: record.currency,
+          prices: [],
+          recordIds: new Set<string>()
+        };
+        group.prices.push(item.unitPrice);
+        group.recordIds.add(record.id);
+        if (!group.latest || record.quotedAt > group.latest.quotedAt) {
+          group.latest = { quotedAt: record.quotedAt, unitPrice: item.unitPrice, customerName: record.customerName, documentNumber: record.documentNumber };
+        }
+        groups.set(key, group);
+        const updateRange = (map: Map<string, PriceRangeGroup>, rangeKey: string, range: PriceRangeGroup) => {
+          range.prices.push(item.unitPrice);
+          range.recordIds.add(record.id);
+          range.countries.add(country);
+          if (!range.latest || record.quotedAt > range.latest.quotedAt) range.latest = { quotedAt: record.quotedAt, unitPrice: item.unitPrice };
+          map.set(rangeKey, range);
+        };
+        updateRange(overallGroups, record.currency, overallGroups.get(record.currency) || { currency: record.currency, prices: [], recordIds: new Set<string>(), countries: new Set<string>() });
+        const countryKey = `${country}|${record.currency}`;
+        updateRange(countryGroups, countryKey, countryGroups.get(countryKey) || { country, currency: record.currency, prices: [], recordIds: new Set<string>(), countries: new Set<string>() });
+      });
+    });
+    const rangeRows = (source: Map<string, PriceRangeGroup>) => [...source.values()].map((group) => ({
+      country: group.country || "",
+      currency: group.currency,
+      quoteCount: group.recordIds.size,
+      countryCount: group.countries.size,
+      minUnitPrice: Math.min(...group.prices),
+      maxUnitPrice: Math.max(...group.prices),
+      averageUnitPrice: Math.round((group.prices.reduce((sum, price) => sum + price, 0) / group.prices.length) * 100) / 100,
+      latestUnitPrice: group.latest?.unitPrice || 0,
+      latestQuotedAt: group.latest?.quotedAt || ""
+    })).sort((left, right) => `${left.country}${left.currency}`.localeCompare(`${right.country}${right.currency}`));
+    const rows = [...groups.values()].map((group) => {
+      const minUnitPrice = Math.min(...group.prices);
+      const maxUnitPrice = Math.max(...group.prices);
+      const averageUnitPrice = Math.round((group.prices.reduce((sum, price) => sum + price, 0) / group.prices.length) * 100) / 100;
+      return {
+        productId: group.productId,
+        product: group.product,
+        model: group.model,
+        country: group.country,
+        currency: group.currency,
+        quoteCount: group.recordIds.size,
+        minUnitPrice,
+        maxUnitPrice,
+        averageUnitPrice,
+        latestUnitPrice: group.latest?.unitPrice || 0,
+        latestQuotedAt: group.latest?.quotedAt || "",
+        latestCustomerName: group.latest?.customerName || "",
+        latestDocumentNumber: group.latest?.documentNumber || "",
+        recordIds: [...group.recordIds]
+      };
+    }).sort((left, right) => `${left.product}${left.model}${left.country}${left.currency}`.localeCompare(`${right.product}${right.model}${right.country}${right.currency}`));
+    const detailRecords = visible.filter((record) => record.items.some((item) => {
+      const itemText = [item.product, item.model, item.productId].join(" ").toLowerCase();
+      return !product || itemText.includes(product);
+    })).slice(0, 200);
+    return { rows, overall: rangeRows(overallGroups), countryRanges: rangeRows(countryGroups), detailRecords, totalRecords: visible.length };
+  })() : undefined;
+  res.json({
+    records: visible.slice((safePage - 1) * pageSize, safePage * pageSize),
+    total,
+    page: safePage,
+    pageSize,
+    pageCount,
+    summary: {
+      recordCount: total,
+      customerCount: new Set(visible.map((record) => record.customerId)).size,
+      dealCount: new Set(visible.map((record) => record.dealId)).size,
+      productCount: new Set(visible.flatMap((record) => record.items.map((item) => quoteItemKey(item)))).size,
+      totals
+    },
+    productAnalysis
+  });
+}));
+
+app.get("/api/quote-history/:id", requireAuth, asyncRoute(async (req, res) => {
+  const record = getStore().quoteHistory.find((item) => item.id === req.params.id && canSeeOwner(req.user!, item.ownerId, item.teamId));
+  if (!record) {
+    res.status(404).json({ message: "报价记录不存在或无权访问" });
+    return;
+  }
+  res.json({ record });
+}));
+
 app.post("/api/trade-documents", requireAuth, asyncRoute(async (req, res) => {
   const body = documentBodySchema.parse(req.body);
   const store = getStore();
@@ -11217,8 +13969,9 @@ app.post("/api/trade-documents", requireAuth, asyncRoute(async (req, res) => {
       relatedDocumentId: document.id
     });
   }
+  const dealSync = syncDealPricingFromDocument(document, req.user!);
   await store.persist();
-  res.json({ document });
+  res.json({ document, dealSync });
 }));
 
 app.patch("/api/trade-documents/:id", requireAuth, asyncRoute(async (req, res) => {
@@ -11251,8 +14004,9 @@ app.patch("/api/trade-documents/:id", requireAuth, asyncRoute(async (req, res) =
   ] as const;
   auditFields.forEach((field) => appendDocumentAudit(document, field, existing[field], document[field], req.user!));
   store.tradeDocuments[index] = document;
+  const dealSync = syncDealPricingFromDocument(document, req.user!);
   await store.persist();
-  res.json({ document });
+  res.json({ document, dealSync });
 }));
 
 app.post("/api/trade-documents/:id/revision", requireAuth, asyncRoute(async (req, res) => {
@@ -11330,6 +14084,47 @@ app.post("/api/trade-documents/:id/convert", requireAuth, asyncRoute(async (req,
   res.json({ document });
 }));
 
+app.patch("/api/trade-documents/:id/excel-options", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    letterheadId: z.string().trim().max(64).optional().default(""),
+    stampId: z.string().trim().max(64).optional().default(""),
+    signatureId: z.string().trim().max(64).optional().default(""),
+    includeProductImages: z.boolean().optional().default(false)
+  }).parse(req.body);
+  const store = getStore();
+  const document = store.tradeDocuments.find((item) => item.id === req.params.id);
+  if (!document || !canSeeOwner(req.user!, document.ownerId, document.teamId)) {
+    res.status(404).json({ message: "单据不存在" });
+    return;
+  }
+  const changed = (document.letterheadId || "") !== body.letterheadId
+    || (document.stampId || "") !== body.stampId
+    || (document.signatureId || "") !== body.signatureId
+    || Boolean(document.includeProductImages) !== body.includeProductImages;
+  if (changed && ["approved", "exported"].includes(document.status)) {
+    res.status(409).json({ message: "已审批或已导出的单据不能更换抬头、印章、签名或图片设置，请先另存新版本" });
+    return;
+  }
+  const oldSelection = `${document.letterheadId || ""}|${document.stampId || ""}|${document.signatureId || ""}|${Boolean(document.includeProductImages)}`;
+  const candidate: TradeDocument = {
+    ...document,
+    letterheadId: body.letterheadId || undefined,
+    stampId: body.stampId || undefined,
+    signatureId: body.signatureId || undefined,
+    includeProductImages: body.includeProductImages
+  };
+  try {
+    applyDocumentAssetSelection(candidate, req.user!, document);
+  } catch (error) {
+    res.status(400).json({ message: error instanceof Error ? error.message : "Excel 选项无效" });
+    return;
+  }
+  Object.assign(document, candidate);
+  document.updatedAt = new Date().toISOString();
+  appendDocumentAudit(document, "excelOptions", oldSelection, `${document.letterheadId || ""}|${document.stampId || ""}|${document.signatureId || ""}|${Boolean(document.includeProductImages)}`, req.user!);
+  await store.persist();
+  res.json({ document });
+}));
 
 app.post("/api/trade-documents/:id/submit-approval", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
@@ -11455,6 +14250,10 @@ app.post("/api/trade-documents/:id/export", requireAuth, asyncRoute(async (req, 
   document.status = "exported";
   document.updatedAt = new Date().toISOString();
   appendDocumentAudit(document, "status", oldStatus, document.status, req.user!);
+  const exportedAt = new Date().toISOString();
+  const fingerprint = quotePricingFingerprint(document);
+  const quoteRecord = store.quoteHistory.find((item) => item.documentId === document.id && item.fingerprint === fingerprint);
+  if (quoteRecord) quoteRecord.exportedAt = exportedAt;
   const job = {
     id: `io_document_export_${Date.now()}`,
     name: `${document.type} 单据 PDF 导出：${document.number}`,
@@ -11469,6 +14268,92 @@ app.post("/api/trade-documents/:id/export", requireAuth, asyncRoute(async (req, 
   res.json({ document, job, fileName: `${document.number}-${document.type}.pdf` });
 }));
 
+app.post("/api/trade-documents/:id/export-xlsx", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const document = store.tradeDocuments.find((item) => item.id === req.params.id);
+  if (!document || !canSeeOwner(req.user!, document.ownerId, document.teamId)) {
+    res.status(404).json({ message: "单据不存在" });
+    return;
+  }
+  const settings = teamSystemSettingsForTeam(document.teamId);
+  if (settings.requireDocumentExcelApproval && !["approved", "exported"].includes(document.status)) {
+    res.status(409).json({ message: "当前团队已开启正式 Excel 导出审批，请先完成审批" });
+    return;
+  }
+  const templateId = String(req.body?.templateId || "").trim();
+  const template = listAdvancedDocumentTemplates().find((item) => item.id === templateId);
+  if (!template) {
+    res.status(400).json({ message: "请选择有效的 Excel 模板" });
+    return;
+  }
+  if (!template.recommendedTypes.includes(document.type)) {
+    res.status(400).json({ message: `${template.name} 不支持当前 ${documentTypeLabelForApi(document.type)} 单据` });
+    return;
+  }
+  try {
+    const result = await exportAdvancedDocumentTemplate(templateId, documentForAdvancedExcel(document), await advancedDocumentAssets(document, req.user!));
+    const oldStatus = document.status;
+    document.status = "exported";
+    document.updatedAt = new Date().toISOString();
+    appendDocumentAudit(document, "status", oldStatus, document.status, req.user!);
+    const exportedAt = new Date().toISOString();
+    const fingerprint = quotePricingFingerprint(document);
+    const quoteRecord = store.quoteHistory.find((item) => item.documentId === document.id && item.fingerprint === fingerprint);
+    if (quoteRecord) quoteRecord.exportedAt = exportedAt;
+    const job = {
+      id: `io_document_xlsx_${Date.now()}`,
+      name: `${document.type} 单据 Excel 导出：${document.number}`,
+      type: "export" as const,
+      rows: document.items.length,
+      status: "done" as const,
+      operatorId: req.user!.id,
+      createdAt: currentMinuteText()
+    };
+    store.importExportJobs.unshift(job);
+    await store.persist();
+    const fileName = `${document.number}-${result.template.fileName}`.replace(/[\\/:*?"<>|]/g, "-");
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-GoodJob-Excel-SHA256", excelBufferSha256(result.buffer));
+    res.send(result.buffer);
+  } catch (error) {
+    res.status(400).json({ message: error instanceof Error ? error.message : "高级 Excel 导出失败" });
+  }
+}));
+
+app.post("/api/trade-documents/:id/preview-xlsx", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const document = store.tradeDocuments.find((item) => item.id === req.params.id);
+  if (!document || !canSeeOwner(req.user!, document.ownerId, document.teamId)) {
+    res.status(404).json({ message: "单据不存在" });
+    return;
+  }
+  const templateId = String(req.body?.templateId || "").trim();
+  const template = listAdvancedDocumentTemplates().find((item) => item.id === templateId);
+  if (!template) {
+    res.status(400).json({ message: "请选择有效的 Excel 模板" });
+    return;
+  }
+  if (!template.recommendedTypes.includes(document.type)) {
+    res.status(400).json({ message: `${template.name} 不支持当前 ${documentTypeLabelForApi(document.type)} 单据` });
+    return;
+  }
+  try {
+    const result = await exportAdvancedDocumentTemplate(templateId, documentForAdvancedExcel(document), await advancedDocumentAssets(document, req.user!));
+    const pdf = await renderExcelBufferToPdf(result.buffer);
+    const previewName = `${document.number}-${result.template.fileName.replace(/\.xlsx$/i, "")}-preview.pdf`.replace(/[\\/:*?"<>|]/g, "-");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(previewName)}"; filename*=UTF-8''${encodeURIComponent(previewName)}`);
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-GoodJob-Excel-SHA256", excelBufferSha256(result.buffer));
+    res.send(pdf);
+  } catch (error) {
+    res.status(error instanceof ExcelPreviewUnavailableError ? 503 : 400).json({
+      message: error instanceof Error ? error.message : "Excel 预览失败"
+    });
+  }
+}));
 
 // 报关资料生成API
 app.post("/api/deals/:dealId/generate-customs", requireAuth, asyncRoute(async (req, res) => {
@@ -11821,6 +14706,7 @@ app.post("/api/tools/ocr/jobs/:id/sync-lead", requireAuth, asyncRoute(async (req
     estimatedAmount: 0,
     nextFollowAt: "",
     remark: job.fields.title ? `名片职位：${job.fields.title}` : "OCR 名片识别",
+    inquiryContent: "",
     rawPayload: job.fields
   });
   job.status = "synced";
@@ -11934,15 +14820,27 @@ app.post("/api/organization-relations", requireAuth, asyncRoute(async (req, res)
 app.get("/api/tools/website-opportunities", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
   await store.reloadProspectCandidates?.();
+  const expiredCandidates = store.websiteOpportunities.filter((item) => {
+    if (!canSeeOwner(req.user!, item.ownerId, item.teamId)) return false;
+    const attempt = item.contactEnrichmentAttempts?.[0];
+    return attempt ? expireContactEnrichmentAttempt(item, attempt) : false;
+  });
+  if (expiredCandidates.length) {
+    await persistCandidateChanges(store, expiredCandidates, false);
+  }
   const scoped = store.websiteOpportunities
     .filter((item) =>
       canSeeOwner(req.user!, item.ownerId, item.teamId)
     )
     .map((item) => {
       const scored = refreshProspectScorecard(store, { ...item });
+      const verified = ensureProspectVerificationReport(scored);
       return {
-      ...scored,
-      verificationReport: ensureProspectVerificationReport(scored).verificationReport,
+      ...verified,
+      verificationReport: verified.verificationReport,
+      searchReport: prospectSearchReport(verified),
+      // 发信资格灯：可发信 / 缺邮箱 / 已抑制（附原因），供清单行直接渲染，不抛错。
+      emailEligibility: evaluateProspectEmailOutreachEligibility(store, verified),
       organizationId: scored.organizationId
         ? canonicalOrganizationId(
             store,
@@ -11998,6 +14896,7 @@ async function finishProspectQualificationRequest(
   candidate: WebsiteOpportunity,
   qualification: ReturnType<typeof prospectQualificationView>
 ) {
+  candidate.searchReport = prospectSearchReport(candidate);
   await persistCandidateChanges(store, [candidate], false);
   return { qualification, opportunity: candidate };
 }
@@ -12032,6 +14931,10 @@ app.get("/api/prospect-list/:id/contact-enrichment", requireAuth, asyncRoute(asy
   if (!candidate) {
     res.status(404).json({ message: "搜客候选不存在或无权访问" });
     return;
+  }
+  const latestAttempt = candidate.contactEnrichmentAttempts?.[0];
+  if (latestAttempt && expireContactEnrichmentAttempt(candidate, latestAttempt)) {
+    await persistCandidateChanges(store, [candidate], false);
   }
   res.setHeader("Cache-Control", "no-store");
   res.json({
@@ -12495,7 +15398,8 @@ app.post("/api/prospect-list/:id/website-probe", requireAuth, asyncRoute(async (
       req.user!.id,
       async (current) => {
         await persistCandidateChanges(store, [current], false);
-      }
+      },
+      { extractPublicContacts: websiteContactAiExtractor(req.user!) }
     );
     res.setHeader("Cache-Control", "no-store");
     res.status(result.replayed ? 200 : 202).json({
@@ -12816,6 +15720,7 @@ app.patch("/api/prospect-list/:id/details", requireAuth, asyncRoute(async (req, 
   }
   Object.assign(opportunity, nextDetails, { statusChangedAt: changedAt });
   withProspectVerificationReport(opportunity);
+  opportunity.searchReport = prospectSearchReport(opportunity);
   await persistCandidateChanges(store, [opportunity], false);
   res.json({
     opportunity,
@@ -12839,13 +15744,6 @@ app.patch("/api/prospect-list/batch", requireAuth, asyncRoute(async (req, res) =
   });
   const body = schema.parse(req.body);
   const store = getStore();
-  if (body.action === "mark-contactable") {
-    res.status(409).json({
-      message: "“标记可联系”已停用，请完成企业、ICP、渠道和可联系门禁四步资格审查",
-      errorCode: "PROSPECT_QUALIFICATION_REQUIRED"
-    });
-    return;
-  }
   const ids = [...new Set(body.ids)];
   const opportunities = ids
     .map((id) => store.websiteOpportunities.find((item) => item.id === id && canSeeOwner(req.user!, item.ownerId, item.teamId)))
@@ -12865,8 +15763,8 @@ app.patch("/api/prospect-list/batch", requireAuth, asyncRoute(async (req, res) =
     res.status(400).json({ message: "目标业务员不存在、不在当前团队或账号已停用" });
     return;
   }
-  if (opportunities.some((item) => item.status === "synced") && ["exclude", "assign"].includes(body.action)) {
-    res.status(400).json({ message: "已入线索的数据不能排除或重新分配，请在线索中心处理" });
+  if (opportunities.some((item) => item.status === "synced") && ["exclude", "assign", "mark-contactable"].includes(body.action)) {
+    res.status(400).json({ message: "已入线索的数据不能排除、重新分配或重复标记，请在线索中心处理" });
     return;
   }
   if (body.action === "restore" && opportunities.some((item) => item.status !== "excluded")) {
@@ -12899,6 +15797,8 @@ app.patch("/api/prospect-list/batch", requireAuth, asyncRoute(async (req, res) =
         item.shortlistedAt ||= changedAt;
         item.shortlistedBy ||= req.user!.id;
         item.shortlistSourceRunId ||= body.sourceRunId;
+      } else if (body.action === "mark-contactable") {
+        item.status = "contactable";
       } else if (body.action === "exclude") {
         if (!coverageResult) item.status = "excluded";
         item.excludedReason = body.reason.trim() || "人工核验后排除";
@@ -12919,6 +15819,21 @@ app.patch("/api/prospect-list/batch", requireAuth, asyncRoute(async (req, res) =
     throw error;
   }
   await persistCandidateChanges(store, opportunities, false);
+  if (body.action === "shortlist") {
+    for (const item of opportunities.filter((candidate) => candidate.ownerId === req.user!.id)) {
+      const activeAttempt = item.contactEnrichmentAttempts?.some((attempt) =>
+        attempt.status === "queued" || attempt.status === "running"
+      );
+      if (!activeAttempt) {
+        void scheduleContactEnrichment(
+          req.user!,
+          item.id,
+          `contact_auto_shortlist_${randomUUID()}`,
+          false
+        );
+      }
+    }
+  }
   res.json({ opportunities });
 }));
 
@@ -12953,7 +15868,8 @@ function agentSessionUser(actor: { id: string } & Partial<SessionUser>) {
 
 async function buildAgentDevelopmentEmail(actor: { id: string }, input: Record<string, unknown>) {
   const { stored, session } = agentSessionUser(actor);
-  const entityType = agentInputText(input, "entityType") === "lead" ? "lead" : "customer";
+  const entityTypeInput = agentInputText(input, "entityType");
+  const entityType = entityTypeInput === "lead" ? "lead" : entityTypeInput === "prospect" ? "prospect" : "customer";
   const entityId = agentInputText(input, "entityId");
   const entity = developmentEmailEntity(session, entityType, entityId);
   if (!entity) throw new Error("开发信对象不存在或当前账号无权访问");
@@ -13075,13 +15991,14 @@ async function startAgentProspectSearch(
   const providerStatuses = allProviderStatuses(session);
   const requestedProviderIds = agentInputList(input, "providerIds")
     .map((item) => item.toLocaleLowerCase("en-US"));
-  const recommendedFreeProviders = providerStatuses
-    .filter((item) => item.recommended && item.enabled && item.ready && item.accessMode === "api" && item.tier !== "paid" && item.id !== "ai_search")
-    .map((item) => item.id);
+  // 默认搜索链：免费推荐源 + 已配置凭据的"联系方式源"（Apollo / PDL / Hunter 等）。
+  // 取代旧的"一刀切排除 tier=paid"——那会把所有真正能拿到邮箱的源永久挡在门外。
+  // 安全性由 enabled/ready 保证：未配置 Key 的付费源 ready=false，天然进不来。
+  const autoProviders = defaultSearchProviderIdsFor(providerStatuses);
   const providerIds = requestedProviderIds.length
     ? requestedProviderIds
-    : (recommendedFreeProviders.length ? recommendedFreeProviders : providerStatuses
-      .filter((item) => item.enabled && item.ready && item.accessMode === "api" && item.tier !== "paid" && item.id !== "ai_search")
+    : (autoProviders.length ? autoProviders : providerStatuses
+      .filter((item) => item.enabled && item.ready && item.accessMode === "api" && item.id !== "ai_search")
       .map((item) => item.id).slice(0, 6));
   const unavailableProviders = providerIds.filter((providerId) => {
     const status = providerStatuses.find((item) => item.id === providerId);
@@ -13395,6 +16312,10 @@ async function convertAgentProspectToLead(
     linkProcurementContextToLead(store, item, result.lead.id);
   });
   if (linkedCandidates.length) await persistCandidateChanges(store, linkedCandidates, true);
+  if (result.created && !result.replayed) {
+    notifyNewLead(result.lead);
+    await store.persist();
+  }
   return {
     message: `${candidate.company} 已${result.created ? "新建" : "关联"}线索`,
     converted: true,
@@ -13932,11 +16853,12 @@ const agentExecutionRuntime: AgentExecutionRuntime = {
   },
   async runBackgroundResearch(actor, input) {
     const { session } = agentSessionUser(actor);
-    const entityType = agentInputText(input, "entityType") === "lead" ? "lead" : "customer";
+    const entityTypeInput = agentInputText(input, "entityType");
+    const entityType = entityTypeInput === "lead" ? "lead" : entityTypeInput === "prospect" ? "prospect" : "customer";
     const entityId = agentInputText(input, "entityId");
-    if (!entityId) throw new Error("AI 背调需要明确客户或线索编号");
+    if (!entityId) throw new Error("AI 背调需要明确客户、线索或候选编号");
     const payload = await buildBackgroundResearch(session, { entityType, entityId });
-    if (!payload) throw new Error(entityType === "lead" ? "线索不存在或当前账号无权访问" : "客户不存在或当前账号无权访问");
+    if (!payload) throw new Error(entityType === "lead" ? "线索不存在或当前账号无权访问" : entityType === "prospect" ? "搜客候选不存在或当前账号无权访问" : "客户不存在或当前账号无权访问");
     const research = payload.research as unknown as Record<string, unknown>;
     return {
       research,
@@ -13989,6 +16911,7 @@ let activeAgentBackgroundRunner: AgentBackgroundRunner | null = null;
 let activeOutreachSequenceRunner: OutreachSequenceRunner | null = null;
 let activeCustomerMaintenanceRunner: CustomerMaintenanceRunner | null = null;
 let activeAgentTriggerRunner: AgentTriggerRunner | null = null;
+let activeSalesTrainingRunner: SalesTrainingRunner | null = null;
 let activeInboundMailWatcher: InboundMailWatcher | null = null;
 
 app.get("/api/agent/catalog", requireAuth, (_req, res) => {
@@ -14012,6 +16935,55 @@ app.get("/api/agent/customer-maintenance", requireAuth, (req, res) => {
   res.json({ watches: listCustomerMaintenanceWatches(getStore(), req.user!, limit) });
 });
 
+// —— 自动维护中心（界面直连）———————————————————————————————
+// 设计文档 W1：后端引擎早已在跑，这里只补"看得见 + 可控制"所需的入口。
+// 创建不走 Agent 审批流（站内动作），发信等外部动作仍由发信批次冻结确认。
+// 注意：`/preview` 与 `/:id/run` 必须注册在 `/:id/:action` 之前，否则会被它抢先匹配。
+
+app.post("/api/agent/customer-maintenance/preview", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ rules: z.record(z.unknown()).optional() }).parse(req.body || {});
+  res.json(previewCustomerMaintenance(getStore(), req.user!, (body.rules || {}) as Record<string, unknown>));
+}));
+
+app.post("/api/agent/customer-maintenance", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    name: z.string().trim().min(1).max(120).optional(),
+    rules: z.record(z.unknown()).optional()
+  }).parse(req.body || {});
+  const watch = await createCustomerMaintenanceWatchDirect(getStore(), req.user!, {
+    name: body.name || "客户自动维护",
+    rules: body.rules || {}
+  });
+  void activeCustomerMaintenanceRunner?.synchronize();
+  res.status(201).json({ watch });
+}));
+
+app.post("/api/agent/customer-maintenance/:id/run", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const watch = customerMaintenanceWatchFor(store, req.user!, req.params.id);
+  if (!watch) {
+    res.status(404).json({ message: "客户守护策略不存在或无权访问" });
+    return;
+  }
+  const result = await runCustomerMaintenanceWatch(store, watch);
+  res.json({
+    watch: result.watch,
+    findings: result.findings,
+    created: result.created,
+    skippedCount: result.skippedCount
+  });
+}));
+
+app.get("/api/agent/customer-maintenance/:id/findings", requireAuth, asyncRoute(async (req, res) => {
+  const limit = z.coerce.number().int().min(1).max(200).catch(50).parse(req.query.limit);
+  const store = getStore();
+  if (!customerMaintenanceWatchFor(store, req.user!, req.params.id)) {
+    res.status(404).json({ message: "客户守护策略不存在或无权访问" });
+    return;
+  }
+  res.json(listCustomerMaintenanceFindings(store, req.user!, req.params.id, limit));
+}));
+
 app.post("/api/agent/customer-maintenance/:id/:action", requireAuth, asyncRoute(async (req, res) => {
   const action = z.enum(["pause", "resume", "cancel"]).parse(req.params.action);
   const watch = await controlCustomerMaintenanceWatch(getStore(), req.user!, req.params.id, action);
@@ -14019,6 +16991,90 @@ app.post("/api/agent/customer-maintenance/:id/:action", requireAuth, asyncRoute(
   res.json({ watch });
 }));
 
+app.get("/api/agent/sales-distillation/sources", requireAuth, (req, res) => {
+  res.json({ sources: listDistillationSources(getStore(), req.user!) });
+});
+
+app.get("/api/agent/sales-training", requireAuth, (req, res) => {
+  res.json({ runs: listSalesTrainingRuns(getStore(), req.user!) });
+});
+
+app.get("/api/agent/sales-training/:id", requireAuth, (req, res) => {
+  res.json({ run: getSalesTrainingRun(getStore(), req.user!, req.params.id) });
+});
+
+app.post("/api/agent/sales-training", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ sourceUserId: z.string().min(1).max(100), periodDays: z.coerce.number().int().min(7).max(365).optional().default(90) }).parse(req.body || {});
+  const run = await createSalesTrainingRun(getStore(), req.user!, body.sourceUserId, body.periodDays);
+  void activeSalesTrainingRunner?.synchronize();
+  res.status(201).json({ run });
+}));
+
+app.post("/api/agent/sales-training/:id/:action", requireAuth, asyncRoute(async (req, res, next) => {
+  const parsed = z.enum(["pause", "resume", "cancel", "retrain", "publish"]).safeParse(req.params.action);
+  if (!parsed.success) return next();
+  try {
+    if (parsed.data === "retrain") {
+      const run = await retrainSalesTrainingRun(getStore(), req.user!, req.params.id);
+      void activeSalesTrainingRunner?.synchronize();
+      res.status(201).json({ run });
+      return;
+    }
+    if (parsed.data === "publish") {
+      const result = await publishSalesTrainingRun(getStore(), req.user!, req.params.id);
+      res.json(result);
+      return;
+    }
+    const run = await controlSalesTrainingRun(getStore(), req.user!, req.params.id, parsed.data);
+    if (parsed.data === "resume") void activeSalesTrainingRunner?.synchronize();
+    res.json({ run });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "销售训练操作失败";
+    res.status(/无权|主管|管理员/u.test(message) ? 403 : 400).json({ message });
+  }
+}));
+
+app.patch("/api/agent/sales-training/:id/samples/:sampleId", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ label: z.enum(["positive", "negative", "neutral"]).optional(), included: z.boolean().optional(), managerNote: z.string().max(500).optional() }).parse(req.body || {});
+  const run = await updateSalesTrainingSample(getStore(), req.user!, req.params.id, req.params.sampleId, body);
+  res.json({ run });
+}));
+
+app.get("/api/agent/sales-distillation", requireAuth, (req, res) => {
+  res.json({
+    distillations: listSalesDistillations(getStore(), req.user!),
+    activations: listSalesPlaybookActivations(getStore(), req.user!)
+  });
+});
+
+app.post("/api/agent/sales-distillation", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    sourceUserId: z.string().min(1).max(100),
+    periodDays: z.coerce.number().int().min(7).max(365).optional().default(90)
+  }).parse(req.body || {});
+  const distillation = await createSalesDistillation(getStore(), req.user!, body.sourceUserId, body.periodDays);
+  res.status(201).json({ distillation });
+}));
+
+app.post("/api/agent/sales-distillation/:id/publish", requireAuth, asyncRoute(async (req, res) => {
+  try {
+    const distillation = await publishSalesDistillation(getStore(), req.user!, req.params.id);
+    res.json({ distillation });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "发布蒸馏打法失败";
+    res.status(/无权|需要主管|不存在/u.test(message) ? 403 : 400).json({ message });
+  }
+}));
+
+app.post("/api/agent/sales-distillation/:id/activate", requireAuth, asyncRoute(async (req, res) => {
+  const activation = await activateSalesPlaybook(getStore(), req.user!, req.params.id);
+  res.json({ activation, activations: listSalesPlaybookActivations(getStore(), req.user!) });
+}));
+
+app.post("/api/agent/sales-distillation/activations/:id/pause", requireAuth, asyncRoute(async (req, res) => {
+  const activation = await pauseSalesPlaybook(getStore(), req.user!, req.params.id);
+  res.json({ activation, activations: listSalesPlaybookActivations(getStore(), req.user!) });
+}));
 
 const agentPlanRequestSchema = z.object({
   goal: z.string().trim().min(2).max(2_000),
@@ -14585,6 +17641,17 @@ app.post("/api/tools/ai-config", requireAuth, asyncRoute(async (req, res) => {
     lastTestAt: existing?.lastTestAt,
     lastTestStatus: existing?.lastTestStatus || "untested",
     lastTestMessage: existing?.lastTestMessage || "",
+    webSearchStatus: existing
+      && existing.provider === body.provider
+      && existing.protocol === body.protocol
+      && existing.baseUrl === baseUrl
+      && existing.model === body.model
+      && existing.apiKey === apiKey
+      ? existing.webSearchStatus || "untested"
+      : "untested",
+    webSearchTestAt: existing?.webSearchTestAt,
+    webSearchTestMessage: existing?.webSearchTestMessage || "",
+    webSearchCitationCount: existing?.webSearchCitationCount || 0,
     ownerId: req.user!.id,
     teamId: req.user!.teamId,
     updatedAt: new Date().toISOString()
@@ -14955,7 +18022,7 @@ app.post("/api/tools/shipments/:id/sync", requireAuth, asyncRoute(async (req, re
     res.status(404).json({ message: "发货单不存在或无权访问" });
     return;
   }
-  // 草稿/无运单号：本地状态即可，无需同步
+  // 无运单号无法查询；只要已有运单号，草稿也允许用户手动触发真实查询。
   if (!isSyncable(shipment.status, shipment.trackingCode)) {
     res.json({
       shipment,
@@ -14976,11 +18043,28 @@ app.post("/api/tools/shipments/:id/sync", requireAuth, asyncRoute(async (req, re
     return;
   }
   const provider = getTrackingProvider(shipment.courier);
-  const snapshot = await provider.query({
-    courier: shipment.courier,
-    trackingCode: shipment.trackingCode,
-    shippedAt: shipment.shippedAt
-  });
+  let snapshot;
+  try {
+    snapshot = await provider.query({
+      courier: shipment.courier,
+      trackingCode: shipment.trackingCode.trim(),
+      shippedAt: shipment.shippedAt,
+      destination: shipment.destinationAddress || shipment.destinationCountry || ""
+    });
+  } catch (err) {
+    // 查询失败也落库，便于前端看到 Token、网络或运单异常的具体原因。
+    const reason = err instanceof Error ? err.message : "承运商查询失败";
+    shipment.syncError = reason.slice(0, 500);
+    shipment.updatedAt = new Date().toISOString();
+    await store.persistShipments().catch((persistError) => console.error("shipment sync error persist failed:", persistError));
+    res.json({
+      shipment,
+      shipments: store.shipments.filter((item) => item.ownerId === req.user!.id),
+      synced: false,
+      reason
+    });
+    return;
+  }
   const update = buildTrackingUpdate(shipment, snapshot);
   Object.assign(shipment, update);
   shipment.updatedAt = new Date().toISOString();
@@ -15004,7 +18088,7 @@ app.post("/api/tools/shipments/sync-all", requireAuth, asyncRoute(async (req, re
       const provider = getTrackingProvider(shipment.courier);
       const snapshot = await provider.query({
         courier: shipment.courier,
-        trackingCode: shipment.trackingCode,
+        trackingCode: shipment.trackingCode.trim(),
         shippedAt: shipment.shippedAt
       });
       const update = buildTrackingUpdate(shipment, snapshot);
@@ -15153,9 +18237,14 @@ app.post("/api/tools/ai-config/test", requireAuth, asyncRoute(async (req, res) =
     return;
   }
   const result = await testAiConfig(config);
-  config.lastTestAt = new Date().toISOString();
+  const testedAt = new Date().toISOString();
+  config.lastTestAt = testedAt;
   config.lastTestStatus = result.ok ? "passed" : "failed";
   config.lastTestMessage = result.message;
+  config.webSearchStatus = result.webSearchStatus;
+  config.webSearchTestAt = testedAt;
+  config.webSearchTestMessage = result.webSearchMessage;
+  config.webSearchCitationCount = result.webSearchCitationCount;
   config.updatedAt = new Date().toISOString();
   await getStore().persist();
   res.json({ ok: result.ok, message: result.message, config: publicAiConfig(config), configs: getAiConfigs(req.user!).map(publicAiConfig) });
@@ -15345,11 +18434,156 @@ function getProviderConnection(user: SessionUser, providerId: string): ProviderC
   );
 }
 
+const contactResearchResultSchema = z.object({
+  contacts: z.array(z.object({
+    name: z.string().trim().max(160).optional().default(""),
+    title: z.string().trim().max(160).optional().default(""),
+    channel: z.string().trim().max(40).optional().default(""),
+    value: z.string().trim().max(320),
+    sourceUrl: z.string().trim().url().max(1200),
+    sourceQuote: z.string().trim().max(1200)
+  }).passthrough()).max(20).default([]),
+  noResultReason: z.string().trim().max(1000).optional().default("")
+}).passthrough();
+
+function normalizedResearchUrl(value: string) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    return url.toString().replace(/\/$/u, "");
+  } catch {
+    return "";
+  }
+}
+
+function contactValueInEvidence(value: string, quote: string) {
+  if (value.includes("@")) return quote.toLocaleLowerCase("en-US").includes(value.toLocaleLowerCase("en-US"));
+  const valueDigits = value.replace(/\D/gu, "");
+  const quoteDigits = quote.replace(/\D/gu, "");
+  return valueDigits.length >= 7 && quoteDigits.includes(valueDigits);
+}
+
+function researchContactEvidence(input: {
+  company: string;
+  payload: unknown;
+  sourceId: string;
+  sourceLabel: string;
+  sourceKind: "web_search" | "local_runner";
+  allowedUrls?: string[];
+}) {
+  const parsed = contactResearchResultSchema.parse(input.payload);
+  const allowedUrls = input.allowedUrls?.map(normalizedResearchUrl).filter(Boolean);
+  const contacts: ExtractedWebsiteContact[] = [];
+  for (const item of parsed.contacts) {
+    const sourceUrl = normalizedResearchUrl(item.sourceUrl);
+    if (!sourceUrl || !nativeResearchCitationAllowed(sourceUrl)) continue;
+    if (allowedUrls?.length && !allowedUrls.includes(sourceUrl)) continue;
+    if (!contactValueInEvidence(item.value, item.sourceQuote)) continue;
+    const channels = contactChannelsFromText(item.value);
+    const whatsapp = /whatsapp/iu.test(item.channel) ? channels.phones : [];
+    const phones = whatsapp.length ? [] : channels.phones;
+    if (!channels.emails.length && !phones.length && !whatsapp.length) continue;
+    contacts.push({
+      kind: item.name ? "person" : "company",
+      name: item.name || input.company,
+      title: item.title || (item.name ? "公开联系人" : "公司公开联系"),
+      emails: channels.emails,
+      phones,
+      whatsapp,
+      source: input.sourceId,
+      sourceLabel: input.sourceLabel,
+      sourceKind: input.sourceKind,
+      confidence: input.sourceKind === "web_search" ? 72 : 64,
+      verificationStatus: "syntax_valid",
+      observedAt: new Date().toISOString(),
+      reasonCodes: [input.sourceKind === "web_search"
+        ? "CONTACT_NATIVE_WEB_SEARCH_CITED"
+        : "CONTACT_RUNNER_RESEARCH_CITED"],
+      evidenceExcerpt: item.sourceQuote,
+      corroboratedSources: [{
+        sourceId: input.sourceId,
+        sourceLabel: input.sourceLabel,
+        evidenceUrl: sourceUrl
+      }],
+      evidenceUrl: sourceUrl
+    });
+  }
+  return { contacts, noResultReason: parsed.noResultReason };
+}
+
+function contactResearchPrompt(candidate: WebsiteOpportunity) {
+  return [
+    `Research public business contact details for: ${candidate.company}`,
+    `Country or region: ${candidate.country || "unknown"}`,
+    `Known official website: ${candidate.website || "not confirmed"}`,
+    `Business: ${candidate.business || "unknown"}`,
+    "Use public web search and cite the exact HTTPS page where every email, telephone or WhatsApp number appears.",
+    "Only research companies outside China, Hong Kong, Macau and Taiwan. Do not use .cn, .hk, .mo or .tw websites.",
+    "Do not log in, bypass CAPTCHA, automatically collect content from social networks, download files or invent likely email patterns.",
+    "Prefer the official company website, official business directory API results and regulator or chamber pages.",
+    "Return only one JSON object with this shape:",
+    '{"contacts":[{"name":"","title":"","channel":"email|phone|whatsapp","value":"","sourceUrl":"https://...","sourceQuote":"exact text containing the contact value"}],"noResultReason":""}',
+    "If no contact value has an exact source quote and URL, return an empty contacts array and explain why."
+  ].join("\n");
+}
+
+function contactSearchAdjustment(errorCode = "", message = "") {
+  const value = `${errorCode} ${message}`;
+  if (/401|403|auth|key|认证|密钥/iu.test(value)) return "请在 AI 配置中检查 API Key、账号权限和 Base URL 后重新测试连接。";
+  if (/429|quota|rate|额度|限流/iu.test(value)) return "请检查模型额度或稍后重试；批量查询时建议减少单次客户数量。";
+  if (/timeout|timed|超时|network|fetch|连接/iu.test(value)) return "请检查网络和模型服务状态，适当降低批量数量后重试。";
+  if (/web search|工具|tool/iu.test(value)) return "当前模型可能不支持 Web Search，请改用支持 Responses API 联网工具的 OpenAI 模型。";
+  return "请检查 AI 模型配置和联网能力；失败不会阻塞官网及 Runner 继续补漏。";
+}
+
+async function contactRunnerPlan(user: SessionUser) {
+  const service = getLocalRunnerService();
+  if (!service) return {
+    configured: false,
+    message: "当前数据库运行模式未启用本地 Runner 服务",
+    suggestion: "部署 MySQL 版集成服务后，在集成中心配对 Good Job Runner。",
+    service: null,
+    runner: null
+  };
+  try {
+    const runners = await service.runners(user);
+    const runner = runners.find((item) =>
+      item.online
+      && item.capabilities.includes("codex")
+      && item.capabilities.includes("browser")
+      && item.workspaces.length
+    ) || null;
+    return runner ? {
+      configured: true,
+      message: `等待 ${runner.displayName} 执行深度补漏`,
+      suggestion: "",
+      service,
+      runner
+    } : {
+      configured: false,
+      message: "没有同时具备 Codex 与独立浏览器能力的在线 Runner",
+      suggestion: "请在集成中心启动并配对 Good Job Runner，确认 Codex CLI 和独立浏览器均显示在线。",
+      service,
+      runner: null
+    };
+  } catch (error) {
+    return {
+      configured: false,
+      message: error instanceof Error ? `Runner 状态读取失败：${error.message}` : "Runner 状态读取失败",
+      suggestion: "请检查集成中心和 Runner 服务连接。",
+      service,
+      runner: null
+    };
+  }
+}
+
 const activeContactEnrichmentRuns = new Map<string, Promise<void>>();
 
 function contactEnrichmentProviders(user: SessionUser) {
+  // 只要"能补出邮箱"（capabilities 含 email）且实现了 enrich，就进入补全通道；
+  // 不再硬卡 category === "email"——Apollo / PDL 的 category 是 company，但同样能补联系人。
   return LEAD_PROVIDERS.filter((provider) =>
-    provider.category === "email" && Boolean(provider.enrich)
+    provider.capabilities.includes("email") && Boolean(provider.enrich)
   ).flatMap((provider) => {
     const catalog = providerCatalogByCode(provider.id);
     if (!catalog || catalog.status !== "active" || catalog.accessMode !== "api") return [];
@@ -15383,12 +18617,16 @@ function websiteContactSourceProgress(
   if (probe.status === "queued" || probe.status === "running") {
     source.status = probe.status;
     source.outcome = "pending";
-    source.message = probe.events.at(-1)?.message || "境外官网正在受控低频验证";
+    source.message = probe.events.at(-1)?.message || "正在核验境外官网公开资料";
   } else {
     source.completedAt = probe.completedAt || new Date().toISOString();
     if (["policy_blocked", "robots_denied"].includes(probe.outcome)) {
       source.status = "blocked";
       source.outcome = "policy_blocked";
+    } else if (probe.outcome === "interrupted") {
+      source.status = "failed";
+      source.outcome = "timed_out";
+      source.suggestion = "后台任务已中断，可点击继续查找联系人重新执行；这不代表官网不可访问。";
     } else if (["unreachable", "rate_limited", "circuit_open"].includes(probe.outcome)) {
       source.status = "failed";
       source.outcome = "provider_failed";
@@ -15403,6 +18641,280 @@ function websiteContactSourceProgress(
         : "官网验证结束，未取得可用联系方式");
   }
   refreshContactEnrichmentAttempt(candidate, attempt);
+}
+
+function contactAttemptContext(candidateId: string, attemptId: string) {
+  const store = getStore();
+  const candidate = store.websiteOpportunities.find((item) => item.id === candidateId);
+  const attempt = candidate?.contactEnrichmentAttempts?.find((item) => item.id === attemptId);
+  return candidate && attempt ? { store, candidate, attempt } : null;
+}
+
+async function persistContactAttempt(candidate: WebsiteOpportunity, attempt: NonNullable<WebsiteOpportunity["contactEnrichmentAttempts"]>[number]) {
+  refreshContactEnrichmentAttempt(candidate, attempt);
+  await persistCandidateChanges(getStore(), [candidate], false);
+}
+
+async function executeNativeContactResearch(
+  user: SessionUser,
+  candidateId: string,
+  attemptId: string,
+  config: AiModelConfig
+) {
+  let context = contactAttemptContext(candidateId, attemptId);
+  let source = context && contactEnrichmentSource(context.attempt, "native_web_search");
+  if (!context || !source || source.status === "skipped") return;
+  const startedAt = new Date().toISOString();
+  source.status = "running";
+  source.startedAt = startedAt;
+  source.message = "正在通过模型原生 Web Search 查询公开联系方式和引用页面";
+  await persistContactAttempt(context.candidate, context.attempt);
+  try {
+    const current = contactAttemptContext(candidateId, attemptId);
+    if (!current) return;
+    const result = await callAiModelWithWebSearch(
+      config,
+      contactResearchPrompt(current.candidate),
+      10_000,
+      undefined,
+      50_000
+    );
+    context = contactAttemptContext(candidateId, attemptId);
+    source = context && contactEnrichmentSource(context.attempt, "native_web_search");
+    if (!context || !source) return;
+    source.completedAt = new Date().toISOString();
+    source.evidenceUrls = result.citations
+      .map((item) => item.url)
+      .filter(nativeResearchCitationAllowed)
+      .slice(0, 10);
+    if (!result.usedSearch) {
+      source.status = "failed";
+      source.outcome = "provider_failed";
+      source.errorCode = "WEB_SEARCH_TOOL_NOT_USED";
+      source.message = "模型返回了文本，但没有执行 Web Search 工具，结果未采信";
+      source.suggestion = "请改用支持 OpenAI Responses API Web Search 的模型，并在 AI 配置中重新测试。";
+    } else if (!source.evidenceUrls.length) {
+      source.status = "completed";
+      source.outcome = "no_contact";
+      source.message = "联网搜索已完成，但没有返回符合境外策略的 HTTPS 引用";
+      source.suggestion = "请确认公司名称、国家和官网是否准确，或启用 Runner 深度补漏。";
+    } else {
+      const parsed = researchContactEvidence({
+        company: context.candidate.company,
+        payload: extractJsonObject(result.content),
+        sourceId: "native_web_search",
+        sourceLabel: config.name || "AI 联网搜索",
+        sourceKind: "web_search",
+        allowedUrls: source.evidenceUrls
+      });
+      context.candidate.extractedContacts = mergeProspectContactEvidence(
+        context.candidate.extractedContacts || [],
+        parsed.contacts
+      );
+      const preferred = parsed.contacts[0];
+      if (preferred && !context.candidate.contactInfo) {
+        context.candidate.contactInfo = preferred.emails[0] || preferred.whatsapp[0] || preferred.phones[0] || "";
+      }
+      if (preferred?.kind === "person" && (!context.candidate.contact || context.candidate.contact === "待维护")) {
+        context.candidate.contact = preferred.name;
+      }
+      source.status = "completed";
+      source.outcome = parsed.contacts.length ? "contact_found" : "no_contact";
+      source.contactCount = parsed.contacts.length;
+      source.message = parsed.contacts.length
+        ? `联网搜索取得 ${parsed.contacts.length} 条带引用的联系方式`
+        : parsed.noResultReason || "联网搜索有引用，但没有联系方式同时具备原文和来源网址";
+      source.suggestion = parsed.contacts.length
+        ? ""
+        : "请核对公司名称和国家；系统将继续验证官网，并在可用时交给 Runner 深度补漏。";
+    }
+    await persistContactAttempt(context.candidate, context.attempt);
+  } catch (error) {
+    context = contactAttemptContext(candidateId, attemptId);
+    source = context && contactEnrichmentSource(context.attempt, "native_web_search");
+    if (!context || !source) return;
+    const failure = providerErrorFromUnknown(error, "search");
+    source.status = "failed";
+    source.outcome = /timeout|abort/iu.test(`${failure.code} ${failure.publicMessage}`) ? "timed_out" : "provider_failed";
+    source.completedAt = new Date().toISOString();
+    source.errorCode = failure.code;
+    source.retryable = failure.retryable;
+    source.retryAfterAt = failure.retryAfterAt;
+    source.message = failure.publicMessage;
+    source.suggestion = contactSearchAdjustment(failure.code, failure.publicMessage);
+    await persistContactAttempt(context.candidate, context.attempt);
+  }
+}
+
+async function ensureContactResearchWebsite(
+  user: SessionUser,
+  candidateId: string,
+  attemptId: string,
+  config: AiModelConfig | null
+) {
+  let context = contactAttemptContext(candidateId, attemptId);
+  if (!context || /^https:\/\//iu.test(context.candidate.website || "")) return;
+  const source = contactEnrichmentSource(context.attempt, "website_probe");
+  if (source) {
+    source.status = "running";
+    source.startedAt ||= new Date().toISOString();
+    source.message = config
+      ? "候选缺少可信官网，正在通过联网搜索确认官网"
+      : "候选缺少可信官网，且没有配置可用的联网搜索模型";
+    await persistContactAttempt(context.candidate, context.attempt);
+  }
+  context = contactAttemptContext(candidateId, attemptId);
+  if (!context) return;
+  await discoverProspectWebsite({
+    candidate: context.candidate,
+    runId: `${context.attempt.runId}:contact-website`,
+    search: config ? async ({ candidate, runId }) => {
+      try {
+        const result = await callAiModelWithWebSearch(config, [
+          `Find the official website for ${candidate.company}.`,
+          `Country or region: ${candidate.country || "unknown"}.`,
+          "Cite only the company's own official HTTPS website. Do not cite directories, social networks or marketplaces.",
+          "Do not use China, Hong Kong, Macau or Taiwan websites. If uncertain, return no website."
+        ].join("\n"), 4_000, undefined, 40_000);
+        return {
+          providerId: "openai_web_search",
+          records: result.usedSearch
+            ? aiWebsiteCitationsToProviderRecords(candidate, result.citations.filter((item) => nativeResearchCitationAllowed(item.url)))
+            : [],
+          ...(!result.usedSearch ? {
+            errorCode: "WEBSITE_WEB_SEARCH_TOOL_NOT_USED",
+            errorMessage: "模型未执行 Web Search 工具"
+          } : {})
+        };
+      } catch (error) {
+        const failure = providerErrorFromUnknown(error, "search");
+        return { providerId: "openai_web_search", records: [], errorCode: failure.code, errorMessage: failure.publicMessage };
+      }
+    } : undefined,
+    persist: async (candidate) => persistCandidateChanges(getStore(), [candidate], false)
+  });
+}
+
+async function executeRunnerContactResearch(
+  user: SessionUser,
+  candidateId: string,
+  attemptId: string,
+  plan: Awaited<ReturnType<typeof contactRunnerPlan>>
+) {
+  let context = contactAttemptContext(candidateId, attemptId);
+  let source = context && contactEnrichmentSource(context.attempt, "codex_runner");
+  if (!context || !source || !plan.configured || !plan.service || !plan.runner) return;
+  refreshContactEnrichmentAttempt(context.candidate, context.attempt);
+  if (context.attempt.recommendedContact) {
+    source.status = "skipped";
+    source.outcome = "not_needed";
+    source.completedAt = new Date().toISOString();
+    source.message = "前序来源已取得可用联系方式，无需启动 Runner";
+    source.suggestion = "";
+    await persistContactAttempt(context.candidate, context.attempt);
+    return;
+  }
+  source.status = "running";
+  source.startedAt = new Date().toISOString();
+  source.message = `正在由 ${plan.runner.displayName} 调用 Codex CLI 深度查询`;
+  await persistContactAttempt(context.candidate, context.attempt);
+  try {
+    context = contactAttemptContext(candidateId, attemptId);
+    if (!context) return;
+    const task = await plan.service.createTask(user, {
+      runnerId: plan.runner.id,
+      prompt: contactResearchPrompt(context.candidate),
+      workspace: plan.runner.workspaces[0],
+      executionMode: "read_only",
+      timeoutSeconds: 75
+    });
+    context = contactAttemptContext(candidateId, attemptId);
+    source = context && contactEnrichmentSource(context.attempt, "codex_runner");
+    if (!context || !source) return;
+    source.taskId = task.id;
+    source.message = `Runner 任务 ${task.id} 已排队，等待 Codex CLI 返回带来源的联系方式`;
+    await persistContactAttempt(context.candidate, context.attempt);
+    const deadline = Math.min(
+      Date.now() + 80_000,
+      Date.parse(context.attempt.deadlineAt || new Date(Date.now() + 80_000).toISOString())
+    );
+    let completed: Awaited<ReturnType<typeof plan.service.task>> | null = null;
+    while (Date.now() < deadline) {
+      const current = await plan.service.task(user, task.id);
+      if (["succeeded", "failed", "cancelled"].includes(current.task.status)) {
+        completed = current;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
+    if (!completed) {
+      await plan.service.cancel(user, task.id).catch(() => undefined);
+      context = contactAttemptContext(candidateId, attemptId);
+      source = context && contactEnrichmentSource(context.attempt, "codex_runner");
+      if (!context || !source) return;
+      source.status = "failed";
+      source.outcome = "timed_out";
+      source.completedAt = new Date().toISOString();
+      source.errorCode = "CODEX_RUNNER_TIMEOUT";
+      source.retryable = true;
+      source.message = "Codex Runner 超过 80 秒仍未返回，系统已停止等待";
+      source.suggestion = "请在集成中心检查 Runner 执行记录、Codex 登录状态和浏览器连接，恢复后再继续查询。";
+      await persistContactAttempt(context.candidate, context.attempt);
+      return;
+    }
+    context = contactAttemptContext(candidateId, attemptId);
+    source = context && contactEnrichmentSource(context.attempt, "codex_runner");
+    if (!context || !source) return;
+    source.completedAt = new Date().toISOString();
+    if (completed.task.status !== "succeeded") {
+      source.status = "failed";
+      source.outcome = "provider_failed";
+      source.errorCode = completed.task.status === "cancelled" ? "CODEX_RUNNER_CANCELLED" : "CODEX_RUNNER_FAILED";
+      source.message = completed.task.errorMessage || `Runner 任务${completed.task.status === "cancelled" ? "已取消" : "执行失败"}`;
+      source.suggestion = "请在集成中心查看任务过程；检查 Codex CLI、网络和独立浏览器后重试。";
+    } else {
+      const parsed = researchContactEvidence({
+        company: context.candidate.company,
+        payload: extractJsonObject(completed.task.resultText),
+        sourceId: "codex_runner",
+        sourceLabel: `Codex Runner · ${plan.runner.displayName}`,
+        sourceKind: "local_runner"
+      });
+      context.candidate.extractedContacts = mergeProspectContactEvidence(
+        context.candidate.extractedContacts || [],
+        parsed.contacts
+      );
+      const preferred = parsed.contacts[0];
+      if (preferred && !context.candidate.contactInfo) {
+        context.candidate.contactInfo = preferred.emails[0] || preferred.whatsapp[0] || preferred.phones[0] || "";
+      }
+      if (preferred?.kind === "person" && (!context.candidate.contact || context.candidate.contact === "待维护")) {
+        context.candidate.contact = preferred.name;
+      }
+      source.status = "completed";
+      source.outcome = parsed.contacts.length ? "contact_found" : "no_contact";
+      source.contactCount = parsed.contacts.length;
+      source.evidenceUrls = [...new Set(parsed.contacts.map((item) => item.evidenceUrl))];
+      source.message = parsed.contacts.length
+        ? `Codex Runner 取得 ${parsed.contacts.length} 条带原文证据的联系方式`
+        : parsed.noResultReason || "Runner 已完成检索，但没有找到同时具备原文和来源网址的联系方式";
+      source.suggestion = parsed.contacts.length
+        ? ""
+        : "请核对企业名称、国家和官网；也可以配置联系人 API 后重新查询。";
+    }
+    await persistContactAttempt(context.candidate, context.attempt);
+  } catch (error) {
+    context = contactAttemptContext(candidateId, attemptId);
+    source = context && contactEnrichmentSource(context.attempt, "codex_runner");
+    if (!context || !source) return;
+    source.status = "failed";
+    source.outcome = "provider_failed";
+    source.completedAt = new Date().toISOString();
+    source.errorCode = "CODEX_RUNNER_RESULT_INVALID";
+    source.message = error instanceof Error ? error.message : "Runner 返回结果无法解析";
+    source.suggestion = "请在集成中心检查 Runner 最终回复是否为规定 JSON，并确认每条联系方式都包含来源网址和原文。";
+    await persistContactAttempt(context.candidate, context.attempt);
+  }
 }
 
 async function executeContactEnrichment(
@@ -15421,6 +18933,15 @@ async function executeContactEnrichment(
   const current = candidate.contactEnrichmentAttempts?.[0];
   if (!force && current && ["queued", "running"].includes(current.status)) return;
   const providers = contactEnrichmentProviders(user);
+  const webSearchConfig = getAiConfig(user, "leadFinder");
+  const webSearchPolicy = webSearchConfig ? aiWebSearchPolicy(webSearchConfig) : null;
+  const webSearchReady = Boolean(
+    webSearchConfig?.enabled
+    && webSearchConfig.apiKey
+    && webSearchConfig.useLeadFinder
+    && webSearchPolicy?.ready
+  );
+  const countryBlocked = nativeResearchCountryBlocked(candidate.country || "");
   const attempt = createContactEnrichmentAttempt({
     candidate,
     runId,
@@ -15429,8 +18950,45 @@ async function executeContactEnrichment(
       label: item.provider.name,
       configured: item.configured
     })),
-    includeWebsite: true
+    includeWebsite: true,
+    webSearch: {
+      configured: webSearchReady && !countryBlocked,
+      label: webSearchConfig?.name || "AI 联网搜索",
+      message: countryBlocked
+        ? "按合规策略，中国及相关地区不执行自动联网联系人查询"
+        : webSearchReady
+          ? "等待模型原生 Web Search 查询公开联系方式"
+          : webSearchPolicy?.message || "未配置支持 Web Search 的 OpenAI 模型",
+      suggestion: countryBlocked
+        ? "中国及相关地区请使用已授权的正式数据接口或人工录入。"
+        : webSearchReady
+          ? ""
+          : webSearchPolicy
+            ? webSearchFailureSuggestion(webSearchPolicy)
+            : "请在 AI 配置中保存并测试支持 Responses API Web Search 的 OpenAI 模型。"
+    },
+    runner: {
+      configured: !countryBlocked,
+      label: "Codex Runner 深度补漏",
+      message: countryBlocked ? "按合规策略不执行 Runner 联网研究" : "正在检查在线 Runner 与 Codex CLI 能力",
+      suggestion: countryBlocked
+        ? "中国及相关地区不使用自动网页研究，请改用正式授权接口。"
+        : "若未检测到在线设备，系统会给出明确配置入口且不会阻塞其他来源。"
+    },
+    deadlineMs: 3 * 60_000
   });
+  if (countryBlocked) {
+    for (const sourceId of ["native_web_search", "website_probe", "codex_runner"]) {
+      const source = contactEnrichmentSource(attempt, sourceId);
+      if (!source) continue;
+      source.status = "blocked";
+      source.outcome = "policy_blocked";
+      source.completedAt = new Date().toISOString();
+      source.errorCode = "CONTACT_RESEARCH_REGION_BLOCKED";
+      source.message = "按合规策略，中国及相关地区不执行自动网页联系人研究";
+      source.suggestion = "请使用已授权的正式联系人接口或人工录入，并保留数据来源。";
+    }
+  }
   attempt.status = "running";
   attempt.startedAt = new Date().toISOString();
   for (const source of attempt.sources) {
@@ -15440,6 +18998,25 @@ async function executeContactEnrichment(
     }
   }
   await persistCandidateChanges(store, [candidate], false);
+
+  const runnerPlan = await contactRunnerPlan(user);
+  const runnerContext = contactAttemptContext(candidateId, attempt.id);
+  const runnerSource = runnerContext
+    ? contactEnrichmentSource(runnerContext.attempt, "codex_runner")
+    : null;
+  if (runnerContext && runnerSource && !countryBlocked) {
+    runnerSource.sourceLabel = runnerPlan.runner
+      ? `Codex Runner · ${runnerPlan.runner.displayName}`
+      : "Codex Runner 深度补漏";
+    runnerSource.message = runnerPlan.message;
+    runnerSource.suggestion = runnerPlan.suggestion;
+    if (!runnerPlan.configured) {
+      runnerSource.status = "skipped";
+      runnerSource.outcome = "not_configured";
+      runnerSource.completedAt = new Date().toISOString();
+    }
+    await persistContactAttempt(runnerContext.candidate, runnerContext.attempt);
+  }
 
   const configuredProviders = providers.filter((item) => item.configured);
   const providerResults = await Promise.all(configuredProviders.map(async (item, index) => {
@@ -15480,11 +19057,14 @@ async function executeContactEnrichment(
     source.completedAt = new Date().toISOString();
     if (result.error) {
       source.status = "failed";
-      source.outcome = "provider_failed";
+      source.outcome = /timeout|abort/iu.test(`${result.error.code} ${result.error.publicMessage}`)
+        ? "timed_out"
+        : "provider_failed";
       source.message = result.error.publicMessage;
       source.errorCode = result.error.code;
       source.retryable = result.error.retryable;
       source.retryAfterAt = result.error.retryAfterAt;
+      source.suggestion = contactSearchAdjustment(result.error.code, result.error.publicMessage);
       continue;
     }
     const enriched = result.enriched;
@@ -15520,9 +19100,24 @@ async function executeContactEnrichment(
     source.message = contacts.length
       ? `联系人接口取得 ${contacts.length} 条结果`
       : "联系人接口未返回可用联系方式";
+    source.suggestion = contacts.length
+      ? ""
+      : "请检查候选官网域名是否准确，或在集成中心增加其他联系人接口。";
   }
   refreshContactEnrichmentAttempt(latestCandidate, latestAttempt);
   await persistCandidateChanges(store, [latestCandidate], false);
+
+  if (webSearchReady && webSearchConfig && !countryBlocked) {
+    await executeNativeContactResearch(user, candidateId, attempt.id, webSearchConfig);
+  }
+  if (!countryBlocked) {
+    await ensureContactResearchWebsite(
+      user,
+      candidateId,
+      attempt.id,
+      webSearchReady ? webSearchConfig : null
+    );
+  }
 
   // MySQL 持久化会用权威快照替换内存对象；进入官网队列前必须重新取当前引用。
   const websiteCandidate = store.websiteOpportunities.find((item) =>
@@ -15535,9 +19130,28 @@ async function executeContactEnrichment(
     ? contactEnrichmentSource(websiteAttempt, "website_probe")
     : undefined;
   if (!websiteCandidate || !websiteAttempt || !websiteSource) return;
+  if (countryBlocked) {
+    refreshContactEnrichmentAttempt(websiteCandidate, websiteAttempt);
+    await persistCandidateChanges(store, [websiteCandidate], false);
+    return;
+  }
+  if (!/^https:\/\//iu.test(websiteCandidate.website || "")) {
+    const discovery = websiteCandidate.websiteDiscoveryAttempts?.[0];
+    websiteSource.status = "blocked";
+    websiteSource.outcome = "policy_blocked";
+    websiteSource.completedAt = new Date().toISOString();
+    websiteSource.errorCode = discovery?.reasonCode || "CONTACT_WEBSITE_MISSING";
+    websiteSource.message = discovery?.reason || "没有可信官网，无法继续核验公开联系方式";
+    websiteSource.suggestion = webSearchReady
+      ? "请核对企业名称和国家；当前官网候选未通过名称与域名校验。"
+      : "请配置支持 Web Search 的模型或正式搜索 API，也可以人工补充可信官网后继续查询。";
+    await persistContactAttempt(websiteCandidate, websiteAttempt);
+    await executeRunnerContactResearch(user, candidateId, attempt.id, runnerPlan);
+    return;
+  }
   websiteSource.status = "running";
   websiteSource.startedAt = new Date().toISOString();
-  websiteSource.message = "正在进入境外官网受控验证队列";
+  websiteSource.message = "正在进入境外官网公开资料核验队列";
   refreshContactEnrichmentAttempt(websiteCandidate, websiteAttempt);
   await persistCandidateChanges(store, [websiteCandidate], false);
   const queuedCandidate = store.websiteOpportunities.find((item) =>
@@ -15550,9 +19164,15 @@ async function executeContactEnrichment(
       queuedCandidate,
       user.id,
       async (changedCandidate) => {
-        websiteContactSourceProgress(changedCandidate, websiteAttempt.id);
-        await persistCandidateChanges(store, [changedCandidate], false);
-      }
+        const latestCandidate = store.websiteOpportunities.find((item) =>
+          item.id === candidateId && item.teamId === user.teamId && item.ownerId === user.id
+        );
+        if (!latestCandidate) return;
+        mergeWebsiteProbeCandidateProgress(latestCandidate, changedCandidate);
+        websiteContactSourceProgress(latestCandidate, websiteAttempt.id);
+        await persistCandidateChanges(store, [latestCandidate], false);
+      },
+      { extractPublicContacts: websiteContactAiExtractor(user) }
     );
     if (["completed", "failed"].includes(queued.attempt.status)) {
       const completedCandidate = store.websiteOpportunities.find((item) =>
@@ -15582,9 +19202,28 @@ async function executeContactEnrichment(
     failedSource.message = error instanceof Error
       ? error.message
       : "境外官网验证未能启动";
+    failedSource.errorCode = error instanceof WebsiteProbeError
+      ? error.code
+      : "CONTACT_WEBSITE_PROBE_FAILED";
+    failedSource.suggestion = error instanceof WebsiteProbeError
+      ? "请检查官网是否属于境外 HTTPS 站点并允许公开资料核验；系统不会处理受限内容。"
+      : "请检查网络、官网地址和后台验证服务后重试。";
     refreshContactEnrichmentAttempt(failedCandidate, failedAttempt);
     await persistCandidateChanges(store, [failedCandidate], false);
   }
+
+  for (let index = 0; index < 10; index += 1) {
+    const currentContext = contactAttemptContext(candidateId, attempt.id);
+    const currentWebsiteSource = currentContext
+      ? contactEnrichmentSource(currentContext.attempt, "website_probe")
+      : null;
+    if (!currentContext
+      || currentContext.attempt.recommendedContact
+      || !currentWebsiteSource
+      || !["queued", "running"].includes(currentWebsiteSource.status)) break;
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+  }
+  await executeRunnerContactResearch(user, candidateId, attempt.id, runnerPlan);
 }
 
 function scheduleContactEnrichment(
@@ -15763,6 +19402,157 @@ function normalizeProviderCountry(country: string) {
   return providerCountryAliases[normalized] || normalized;
 }
 
+function normalizeCrmCompanyName(value: string) {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase("en-US")
+    .replace(/&/gu, " and ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .split(/\s+/gu)
+    .filter(Boolean)
+    .filter((token) => ![
+      "co", "company", "corp", "corporation", "inc", "incorporated",
+      "ltd", "limited", "llc", "gmbh", "ag", "bv", "srl", "sa",
+      "spa", "pte", "plc", "kg", "oy", "ab", "sas", "sarl"
+    ].includes(token))
+    .join(" ")
+    .trim();
+}
+
+function emailsFromText(value: string) {
+  return [...new Set((value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu) || [])
+    .map((item) => item.toLocaleLowerCase("en-US")))];
+}
+
+function crmCandidateEmails(candidate: Pick<WebsiteOpportunity, "contactInfo" | "contact" | "description">) {
+  return new Set(emailsFromText([
+    candidate.contactInfo,
+    candidate.contact,
+    candidate.description
+  ].filter(Boolean).join(" ")));
+}
+
+function crmWebsiteDomains(values: string[]) {
+  return new Set(values
+    .map((value) => websiteDomainKey(value))
+    .filter((value) => value && value.includes(".")));
+}
+
+function sameKnownCompany(
+  candidateName: string,
+  candidateCountry: string,
+  existingName: string,
+  existingCountry: string
+) {
+  const leftName = normalizeCrmCompanyName(candidateName);
+  const rightName = normalizeCrmCompanyName(existingName);
+  if (!leftName || !rightName || leftName !== rightName) return false;
+  const leftCountry = normalizeProviderCountry(candidateCountry);
+  const rightCountry = normalizeProviderCountry(existingCountry);
+  if (leftCountry && rightCountry) return leftCountry === rightCountry;
+  return leftName.length >= 8;
+}
+
+function existingCrmCustomerMatch(
+  candidate: WebsiteOpportunity,
+  customer: Customer
+) {
+  if (candidate.teamId !== customer.teamId) return "";
+  const candidateDomains = crmWebsiteDomains([
+    candidate.website,
+    ...(candidate.sourceEvidence || []).flatMap((item) => [
+      item.officialWebsite,
+      item.sourceUrl
+    ])
+  ]);
+  const customerDomains = crmWebsiteDomains([
+    customer.website || ""
+  ]);
+  if ([...candidateDomains].some((domain) => customerDomains.has(domain))) {
+    return "官网域名已在客户库";
+  }
+  const candidateEmails = crmCandidateEmails(candidate);
+  const customerEmails = new Set(emailsFromText([
+    customer.email || "",
+    customer.contactRemark || "",
+    customer.documentContact || ""
+  ].join(" ")));
+  if ([...candidateEmails].some((email) => customerEmails.has(email))) {
+    return "联系邮箱已在客户库";
+  }
+  const customerNames = [
+    customer.company,
+    customer.companyFullName || "",
+    customer.billingName || ""
+  ].filter(Boolean);
+  if (customerNames.some((name) =>
+    sameKnownCompany(candidate.company, candidate.country, name, customer.country)
+  )) {
+    return "公司名称与国家已在客户库";
+  }
+  return "";
+}
+
+function existingCrmLeadMatch(
+  candidate: WebsiteOpportunity,
+  lead: Lead
+) {
+  if (candidate.teamId !== lead.teamId || lead.deletedAt || lead.status === "invalid") return "";
+  const candidateDomains = crmWebsiteDomains([
+    candidate.website,
+    ...(candidate.sourceEvidence || []).flatMap((item) => [
+      item.officialWebsite,
+      item.sourceUrl
+    ])
+  ]);
+  const leadDomains = crmWebsiteDomains([lead.sourceUrl || ""]);
+  if ([...candidateDomains].some((domain) => leadDomains.has(domain))) {
+    return "官网域名已在线索库";
+  }
+  const candidateEmails = crmCandidateEmails(candidate);
+  const leadEmails = new Set(emailsFromText([
+    lead.email,
+    lead.remark,
+    lead.inquiryContent || ""
+  ].join(" ")));
+  if ([...candidateEmails].some((email) => leadEmails.has(email))) {
+    return "联系邮箱已在线索库";
+  }
+  if (sameKnownCompany(candidate.company, candidate.country, lead.company, lead.country)) {
+    return "公司名称与国家已在线索库";
+  }
+  return "";
+}
+
+function filterExistingCrmOpportunities(
+  opportunities: WebsiteOpportunity[],
+  store: ReturnType<typeof getStore>,
+  teamId: string
+) {
+  const filtered: WebsiteOpportunity[] = [];
+  const skipped: Array<{ company: string; reason: string }> = [];
+  const customers = store.customers.filter((item) => item.teamId === teamId);
+  const leads = store.leads.filter((item) => item.teamId === teamId);
+  for (const opportunity of opportunities) {
+    const customerReason = customers
+      .map((customer) => existingCrmCustomerMatch(opportunity, customer))
+      .find(Boolean);
+    if (customerReason) {
+      skipped.push({ company: opportunity.company, reason: customerReason });
+      continue;
+    }
+    const leadReason = leads
+      .map((lead) => existingCrmLeadMatch(opportunity, lead))
+      .find(Boolean);
+    if (leadReason) {
+      skipped.push({ company: opportunity.company, reason: leadReason });
+      continue;
+    }
+    filtered.push(opportunity);
+  }
+  return { opportunities: filtered, skipped };
+}
+
 function isSameProviderOpportunity(existing: WebsiteOpportunity, incoming: WebsiteOpportunity) {
   if (existing.ownerId !== incoming.ownerId || existing.teamId !== incoming.teamId) return false;
   const incomingRecordKeys = providerEvidenceRecordKeys(incoming.sourceEvidence);
@@ -15830,6 +19620,7 @@ interface LeadFinderIncrementalStats {
   rawCount: number;
   returnedCount: number;
   deduplicatedCount: number;
+  existingFilteredCount: number;
   newCount: number;
   evidenceUpdatedCount: number;
   multiSourceMergedCount: number;
@@ -15867,10 +19658,13 @@ function providerOpportunityDetailsChanged(
 
 function persistProviderOpportunities(
   opportunities: WebsiteOpportunity[],
-  inputStats: Pick<LeadFinderIncrementalStats, "rawCount" | "deduplicatedCount">
+  inputStats: Pick<LeadFinderIncrementalStats, "rawCount" | "deduplicatedCount"> & {
+    existingFilteredCount?: number;
+  }
 ) {
   const store = getStore();
   const incrementalStats: LeadFinderIncrementalStats = {
+    existingFilteredCount: 0,
     ...inputStats,
     returnedCount: opportunities.length,
     newCount: 0,
@@ -15943,6 +19737,10 @@ function persistProviderOpportunities(
     if (manualState) {
       existing.sourceEvidence = sourceEvidence;
       existing.confidence = confidence;
+      existing.searchReport = item.searchReport || prospectSearchReport({
+        ...existing,
+        sourceEvidence
+      });
       if (reportNeedsRefresh) withProspectVerificationReport(existing);
       return existing;
     }
@@ -16049,6 +19847,7 @@ function catalogProviderMeta(provider: LeadProvider) {
       ? licensePolicy.tier
       : provider.tier,
     requiresKey: providerRequiresKey(provider, catalog),
+    optionalKey: Boolean(provider.optionalKey || licensePolicy.optionalKey),
     keyHint: typeof licensePolicy.keyHint === "string" ? licensePolicy.keyHint : provider.keyHint,
     costNote: typeof licensePolicy.costNote === "string" ? licensePolicy.costNote : provider.costNote
   };
@@ -16089,7 +19888,14 @@ function aiSearchStatus(user: SessionUser) {
     item.enabled && Boolean(item.apiKey)
   );
   const config = getAiConfig(user, "leadFinder");
-  const ready = Boolean(config?.enabled && config?.apiKey && config?.useLeadFinder);
+  const externalWebsiteProviders = LEAD_PROVIDERS
+    .filter((provider) => ["brave", "serper", "serpapi", "google_places"].includes(provider.id))
+    .map((provider) => providerStatusFor(user, provider))
+    .filter((status) => status.ready && status.enabled);
+  const readiness = config
+    ? aiLeadFinderReadiness(config, externalWebsiteProviders.length > 0)
+    : null;
+  const ready = Boolean(readiness?.ready);
   const catalog = providerCatalogByCode("ai_search");
   const enabled = ready && catalog?.status === "active";
   const licensePolicy = catalog?.licensePolicy || {};
@@ -16113,13 +19919,12 @@ function aiSearchStatus(user: SessionUser) {
     hasApiKey: Boolean(configured),
     ready,
     enabled,
-    lastTestStatus: ready ? "passed" : "untested",
-    lastTestMessage: ready
-      ? `当前模型：${config?.model || "已配置"}`
-      : configured
+    lastTestStatus: ready ? "passed" : config?.lastTestStatus || "untested",
+    lastTestMessage: readiness?.message
+      || (configured
         ? `模型已配置：${configured.model || configured.name}，请启用“自动获客”用途`
-        : "请先在「AI 模型配置」保存并启用模型",
-    lastTestAt: config?.lastTestAt || "",
+        : "请先在「AI 模型配置」保存并启用模型"),
+    lastTestAt: config?.webSearchTestAt || config?.lastTestAt || "",
     usage: ""
   };
 }
@@ -16169,7 +19974,7 @@ app.post("/api/lead-finder/parse-goal", requireAuth, asyncRoute(async (req, res)
   ].join("\n");
   let parsed: Record<string, unknown>;
   try {
-    const content = await callAiModel(config, prompt, 4000, undefined, 45_000);
+    const content = await callAiModel(config, prompt, 4000, undefined, 110_000);
     parsed = extractJsonObject(content) as Record<string, unknown>;
   } catch (err) {
     res.status(502).json({ message: "AI 解析失败：" + (err instanceof Error ? err.message : "模型返回无法解析") });
@@ -16414,6 +20219,10 @@ app.post("/api/prospects/:id/convert-to-lead", requireAuth, asyncRoute(async (re
     });
     if (linkedCandidates.length) {
       await persistCandidateChanges(store, linkedCandidates, true);
+    }
+    if (result.created && !result.replayed) {
+      notifyNewLead(result.lead);
+      await store.persist();
     }
     res.setHeader("Cache-Control", "no-store");
     res.setHeader(
@@ -17754,6 +21563,532 @@ const leadSearchSchema = z.object({
   limit: z.number().min(1).max(30).default(12)
 });
 
+const lfindSourceSchema = z.object({
+  url: z.string().trim().max(1200).default(""),
+  title: z.string().trim().max(300).default(""),
+  evidence: z.string().trim().max(1600).default(""),
+  fields: z.array(z.string().trim().max(60)).max(20).default([])
+}).passthrough();
+
+const lfindSearchReportSourceSchema = z.object({
+  url: z.string().trim().max(1200).default(""),
+  title: z.string().trim().max(300).default(""),
+  authenticity: z.enum(["official", "registry", "reputable_directory", "search_result", "weak"]).default("weak"),
+  verifiedFields: z.array(z.string().trim().max(60)).max(20).default([]),
+  finding: z.string().trim().max(1200).default("")
+}).passthrough();
+
+const lfindSearchReportSchema = z.object({
+  summary: z.string().trim().max(1600).default(""),
+  sourceAuthenticity: z.enum(["official_confirmed", "multi_source_supported", "single_source_supported", "weak", "unknown"]).default("unknown"),
+  verifiedFields: z.array(z.string().trim().max(60)).max(30).default([]),
+  checkedSources: z.array(lfindSearchReportSourceSchema).max(20).default([]),
+  contactFinding: z.object({
+    status: z.enum(["source_confirmed", "missing", "conflicting", "unverified"]).default("unverified"),
+    value: z.string().trim().max(320).default(""),
+    sourceUrl: z.string().trim().max(1200).default("")
+  }).passthrough().default({}),
+  nextAction: z.string().trim().max(1000).default("")
+}).passthrough();
+
+const lfindResultSchema = z.object({
+  version: z.literal("goodjob-lfind-v1").default("goodjob-lfind-v1"),
+  summary: z.object({
+    target: z.string().trim().max(500).default(""),
+    markets: z.array(z.string().trim().max(100)).max(30).default([]),
+    products: z.array(z.string().trim().max(120)).max(30).default([]),
+    customerType: z.string().trim().max(160).default(""),
+    rawFound: z.number().int().min(0).default(0),
+    accepted: z.number().int().min(0).default(0),
+    skipped: z.number().int().min(0).default(0),
+    noResultReason: z.string().trim().max(1000).default("")
+  }).passthrough().default({}),
+  opportunities: z.array(z.object({
+    company: z.string().trim().min(1).max(240),
+    business: z.string().trim().max(800).default("待维护"),
+    country: z.string().trim().max(120).default("未知"),
+    website: z.string().trim().max(1200).default(""),
+    contact: z.string().trim().max(160).default(""),
+    contactInfo: z.string().trim().max(320).default(""),
+    description: z.string().trim().max(3000).default(""),
+    confidence: z.number().min(0).max(100).default(55),
+    qualification: z.enum(["worth_following", "review_needed", "low_fit"]).default("review_needed"),
+    uncertainPoints: z.array(z.string().trim().max(400)).max(12).default([]),
+    searchReport: lfindSearchReportSchema.optional(),
+    sources: z.array(lfindSourceSchema).max(20).default([])
+  }).passthrough()).max(100).default([]),
+  skipped: z.array(z.object({
+    company: z.string().trim().max(240).default(""),
+    reason: z.string().trim().max(80).default("other"),
+    detail: z.string().trim().max(1000).default(""),
+    sourceUrl: z.string().trim().max(1200).default("")
+  }).passthrough()).max(200).default([]),
+  failures: z.array(z.object({
+    stage: z.string().trim().max(80).default("verification"),
+    reason: z.string().trim().max(1000).default(""),
+    suggestion: z.string().trim().max(1000).default("")
+  }).passthrough()).max(50).default([])
+}).passthrough();
+
+type LfindResult = z.infer<typeof lfindResultSchema>;
+
+function lfindHash(value: unknown) {
+  return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
+}
+
+function lfindPrompt(input: z.infer<typeof leadSearchSchema>, user: SessionUser) {
+  const store = getStore();
+  const customers = store.customers
+    .filter((item) => item.teamId === user.teamId)
+    .slice(0, 300)
+    .map((item) => ({
+      company: item.company,
+      country: item.billingAddress || item.defaultPortDischarge || "",
+      website: item.website || "",
+      email: item.email || ""
+    }));
+  const leads = store.leads
+    .filter((item) => item.teamId === user.teamId)
+    .slice(0, 300)
+    .map((item) => ({
+      company: item.company,
+      country: item.country || "",
+      sourceUrl: item.sourceUrl || "",
+      email: item.email || ""
+    }));
+  return [
+    "Use $lfind.",
+    "Run a GoodJob Lfind public-source overseas B2B prospect discovery task.",
+    "Return only the final JSON object following goodjob-lfind-v1. No markdown fences, no explanations after JSON.",
+    "",
+    "Execution discipline (important):",
+    "- This environment has no built-in web search. Use the goodjob_browser controlled browser (Playwright tools) for ALL public web lookups; it is the only search channel.",
+    "- If a search engine blocks you (reCAPTCHA, consent wall, 429), do NOT investigate or repair the browser. Immediately switch to a different engine or query (e.g. Bing, DuckDuckGo, Google with different wording) and continue.",
+    "- Spend at most 2 minutes total on browser troubleshooting of any kind. Guard the total budget: finish within 25 minutes and start writing the final JSON by minute 22 at the latest.",
+    "- If time runs short, return fewer candidates (even zero) with a valid JSON object and explain in summary/failures. An empty opportunities array with valid schema is a successful outcome; a timeout with no output is not.",
+    "",
+    "GoodJob search request:",
+    JSON.stringify({
+      goal: input.goal,
+      productKeywords: input.productKeywords,
+      countries: input.countries,
+      industry: input.industry,
+      customerType: input.customerType,
+      excludeKeywords: input.excludeKeywords,
+      limit: Math.min(input.limit, 20)
+    }, null, 2),
+    "",
+    "Already known CRM records. Skip duplicates by official domain, exact public email, or same company plus country:",
+    JSON.stringify({ customers, leads }, null, 2),
+    "",
+    "Quality requirements:",
+    "- Keep only overseas companies with credible public source evidence.",
+    "- Do not invent official domains or contacts.",
+    "- Accepted candidates must include a source-backed email, phone, or WhatsApp value in contactInfo.",
+    "- Contact values must appear in cited public source evidence. If no source-backed contact is found, move the company to skipped with reason no_contact and list the checked sources.",
+    "- Every accepted candidate must include searchReport with source authenticity, checked source URLs, verified fields, contact source status, and next action.",
+    "- For every skipped or failed item, explain the concrete reason.",
+    "- If available sources are not enough, return empty opportunities and fill failures with adjustment advice."
+  ].join("\n");
+}
+
+async function lfindRunnerPlan(user: SessionUser) {
+  const service = getLocalRunnerService();
+  if (!service) return {
+    configured: false,
+    message: "当前数据库运行模式未启用本地 Runner 服务",
+    suggestion: "请使用 MySQL 版服务，并在集成中心完成 GoodJob Runner 配对。",
+    service: null,
+    runner: null
+  };
+  try {
+    const runners = await service.runners(user);
+    const runner = runners.find((item) =>
+      item.online
+      && item.capabilities.includes("codex")
+      && item.workspaces.length
+    ) || null;
+    return runner ? {
+      configured: true,
+      message: `已选择 ${runner.displayName} 执行 Lfind 深入查询`,
+      suggestion: "",
+      service,
+      runner
+    } : {
+      configured: false,
+      message: "没有可用的在线 Codex Runner",
+      suggestion: "请在集成中心启动并配对 GoodJob Runner，确认 Codex CLI 显示在线，并授权一个工作目录。",
+      service,
+      runner: null
+    };
+  } catch (error) {
+    return {
+      configured: false,
+      message: error instanceof Error ? `Runner 状态读取失败：${error.message}` : "Runner 状态读取失败",
+      suggestion: "请检查集成中心、本地 Runner 进程和网络连接。",
+      service,
+      runner: null
+    };
+  }
+}
+
+function lfindEvidenceSnapshot(
+  taskId: string,
+  opportunity: LfindResult["opportunities"][number],
+  source: LfindResult["opportunities"][number]["sources"][number],
+  index: number
+): ProviderEvidenceSnapshot {
+  const payloadHash = lfindHash({
+    company: opportunity.company,
+    country: opportunity.country,
+    website: opportunity.website,
+    url: source.url,
+    evidence: source.evidence
+  });
+  const matchedFields = [...new Set(source.fields.length ? source.fields : [
+    "identity",
+    ...(opportunity.website ? ["website"] : []),
+    "business",
+    ...(opportunity.contactInfo ? ["contact"] : [])
+  ])];
+  return {
+    providerId: "lfind",
+    providerRecordId: `lfind:${lfindHash({
+      company: opportunity.company,
+      country: opportunity.country,
+      website: opportunity.website
+    }).slice(0, 32)}:${index}`,
+    officialWebsite: normalizeWebsite(opportunity.website || ""),
+    sourceUrl: normalizeWebsite(source.url || opportunity.website || ""),
+    recordType: "public_source_research",
+    fetchedAt: new Date().toISOString(),
+    payloadHash,
+    evidenceSummary: source.evidence || source.title || "Lfind public source evidence",
+    matchedFields,
+    adapterVersion: "lfind-skill-v1",
+    catalogPolicyVersion: "goodjob-lfind-v1",
+    sourceLevel: "assisted",
+    fieldAuthority: Object.fromEntries(matchedFields.map((field) => [
+      field,
+      field === "contact" ? "corroborated" : "assisted"
+    ])),
+    retentionPolicyRef: "public_source_reference"
+  };
+}
+
+function lfindContactEvidence(
+  opportunity: LfindResult["opportunities"][number],
+  sourceLabel: string
+): ExtractedWebsiteContact[] {
+  if (!opportunity.contactInfo || !opportunity.sources.some((source) =>
+    source.fields.includes("contact") || source.evidence.toLocaleLowerCase("en-US").includes(opportunity.contactInfo.toLocaleLowerCase("en-US"))
+  )) return [];
+  const channels = contactChannelsFromText(opportunity.contactInfo);
+  if (!channels.emails.length && !channels.phones.length) return [];
+  const contactSource = opportunity.sources.find((source) =>
+    source.fields.includes("contact")
+    || source.evidence.toLocaleLowerCase("en-US").includes(opportunity.contactInfo.toLocaleLowerCase("en-US"))
+  );
+  if (!contactSource?.url) return [];
+  return [{
+    kind: opportunity.contact ? "person" : "company",
+    name: opportunity.contact || opportunity.company,
+    title: opportunity.contact ? "公开联系人" : "公司公开联系",
+    emails: channels.emails,
+    phones: channels.phones,
+    whatsapp: [],
+    source: "lfind",
+    sourceLabel,
+    sourceKind: "local_runner",
+    confidence: Math.max(50, Math.min(80, opportunity.confidence)),
+    verificationStatus: "source_confirmed",
+    observedAt: new Date().toISOString(),
+    reasonCodes: ["LFIND_PUBLIC_SOURCE_CONTACT"],
+    evidenceExcerpt: contactSource.evidence,
+    corroboratedSources: [{
+      sourceId: "lfind",
+      sourceLabel,
+      evidenceUrl: normalizeWebsite(contactSource.url)
+    }],
+    evidenceUrl: normalizeWebsite(contactSource.url)
+  }];
+}
+
+function lfindOpportunityHasSourceBackedContact(
+  opportunity: LfindResult["opportunities"][number],
+  sourceLabel: string
+) {
+  return lfindContactEvidence(opportunity, sourceLabel).length > 0;
+}
+
+function lfindSearchReportFromResultOpportunity(
+  opportunity: LfindResult["opportunities"][number],
+  sourceLabel: string
+): NonNullable<WebsiteOpportunity["searchReport"]> {
+  const supplied = opportunity.searchReport;
+  const contactEvidence = lfindContactEvidence(opportunity, sourceLabel);
+  const verifiedFields = [...new Set([
+    ...(supplied?.verifiedFields || []),
+    ...opportunity.sources.flatMap((source) => source.fields || []),
+    ...(opportunity.website ? ["website"] : []),
+    ...(contactEvidence.length ? ["contact"] : [])
+  ].filter(Boolean))];
+  const checkedSources = (supplied?.checkedSources?.length
+    ? supplied.checkedSources
+    : opportunity.sources.map((source) => ({
+        url: source.url,
+        title: source.title,
+        authenticity: (source.url && normalizeWebsite(source.url) === normalizeWebsite(opportunity.website || ""))
+          ? "official" as const
+          : "search_result" as const,
+        verifiedFields: source.fields || [],
+        finding: source.evidence || source.title || "公开来源记录"
+      }))
+  ).map((source) => ({
+    url: normalizeWebsite(source.url || ""),
+    title: source.title || source.url || "公开来源",
+    authenticity: source.authenticity || "weak",
+    verifiedFields: [...new Set(source.verifiedFields?.length ? source.verifiedFields : verifiedFields)],
+    finding: source.finding || "公开来源记录"
+  }));
+  const officialSource = checkedSources.some((source) => source.authenticity === "official");
+  const sourceAuthenticity = supplied?.sourceAuthenticity && supplied.sourceAuthenticity !== "unknown"
+    ? supplied.sourceAuthenticity
+    : officialSource
+      ? "official_confirmed"
+      : checkedSources.length >= 2
+        ? "multi_source_supported"
+        : checkedSources.length === 1
+          ? "single_source_supported"
+          : "unknown";
+  const contactSource = contactEvidence[0]?.corroboratedSources?.[0]?.evidenceUrl || "";
+  const summary = supplied?.summary || [
+    checkedSources.length ? `已核验 ${checkedSources.length} 个公开来源` : "暂无可核验来源",
+    verifiedFields.length ? `确认字段：${verifiedFields.join("、")}` : "",
+    contactEvidence.length ? "联系方式有公开来源支撑" : "未取得可用联系方式"
+  ].filter(Boolean).join("；");
+  return {
+    summary,
+    sourceAuthenticity,
+    verifiedFields,
+    checkedSources,
+    contactFinding: {
+      status: contactEvidence.length ? "source_confirmed" : supplied?.contactFinding?.status || "missing",
+      value: contactEvidence.length ? opportunity.contactInfo : supplied?.contactFinding?.value || "",
+      sourceUrl: contactSource || supplied?.contactFinding?.sourceUrl || ""
+    },
+    nextAction: supplied?.nextAction || (contactEvidence.length
+      ? "可打开来源链接复核后加入搜客清单"
+      : "需补充公开联系方式来源后再跟进")
+  };
+}
+
+function prospectSearchReport(
+  opportunity: WebsiteOpportunity
+): NonNullable<WebsiteOpportunity["searchReport"]> {
+  if (opportunity.searchReport) return opportunity.searchReport;
+  const evidence = opportunity.sourceEvidence || [];
+  const contactSources = (opportunity.extractedContacts || [])
+    .flatMap((contact) => contact.corroboratedSources || [])
+    .map((source) => source.evidenceUrl)
+    .filter(Boolean);
+  const verifiedFields = [...new Set(evidence.flatMap((item) => item.matchedFields || []))];
+  const checkedSources = evidence.slice(0, 20).map((item) => ({
+    url: normalizeWebsite(item.sourceUrl || item.officialWebsite || ""),
+    title: item.providerId || opportunity.sourceLabel || "公开来源",
+    authenticity: item.sourceLevel === "official"
+      ? "official" as const
+      : item.sourceLevel === "corroborated"
+        ? "reputable_directory" as const
+        : "search_result" as const,
+    verifiedFields: item.matchedFields || [],
+    finding: item.evidenceSummary || "公开来源记录"
+  }));
+  const sourceAuthenticity = checkedSources.some((source) => source.authenticity === "official")
+    ? "official_confirmed"
+    : checkedSources.length >= 2
+      ? "multi_source_supported"
+      : checkedSources.length === 1
+        ? "single_source_supported"
+        : "unknown";
+  const hasContact = Boolean(opportunity.contactInfo?.trim() && contactSources.length);
+  return {
+    summary: [
+      checkedSources.length ? `已核验 ${checkedSources.length} 个来源` : "来源待补全",
+      verifiedFields.length ? `字段：${verifiedFields.join("、")}` : "",
+      hasContact ? "联系方式有来源" : "联系方式待补"
+    ].filter(Boolean).join("；"),
+    sourceAuthenticity,
+    verifiedFields,
+    checkedSources,
+    contactFinding: {
+      status: hasContact ? "source_confirmed" : "missing",
+      value: hasContact ? opportunity.contactInfo : "",
+      sourceUrl: contactSources[0] || ""
+    },
+    nextAction: hasContact ? "复核来源后可加入搜客清单" : "优先补充公开联系方式"
+  };
+}
+
+function lfindOpportunitiesFromResult(
+  parsed: LfindResult,
+  taskId: string,
+  user: SessionUser,
+  sourceLabel: string
+) {
+  return parsed.opportunities.flatMap((item, index): WebsiteOpportunity[] => {
+    if (!item.sources.length) return [];
+    const website = normalizeWebsite(item.website || "");
+    const sourceEvidence = item.sources.map((source, sourceIndex) =>
+      lfindEvidenceSnapshot(taskId, item, source, sourceIndex)
+    );
+    const uncertain = item.uncertainPoints.length
+      ? ` 待复核：${item.uncertainPoints.join("；")}`
+      : "";
+    return [withProspectVerificationReport({
+      id: `lf_lfind_${lfindHash({ taskId, company: item.company, index }).slice(0, 24)}`,
+      company: item.company,
+      business: item.business || "待维护",
+      country: item.country || "未知",
+      website,
+      contact: item.contact || "待维护",
+      contactInfo: item.contactInfo || "",
+      description: item.description || `Lfind 深入查询候选。${uncertain}`.trim(),
+      ownerId: user.id,
+      teamId: user.teamId,
+      status: "preview",
+      createdAt: new Date().toISOString(),
+      parseMode: "ai",
+      source: "lfind",
+      sourceLabel,
+      sourceEvidence,
+      extractedContacts: lfindContactEvidence(item, sourceLabel),
+      searchReport: lfindSearchReportFromResultOpportunity(item, sourceLabel),
+      confidence: item.confidence
+    })];
+  });
+}
+
+async function syncLfindTaskResult(user: SessionUser, taskId: string) {
+  const plan = await lfindRunnerPlan(user);
+  if (!plan.service) {
+    throw Object.assign(new Error(plan.message), {
+      status: 503,
+      code: "LFIND_RUNNER_UNAVAILABLE",
+      suggestion: plan.suggestion
+    });
+  }
+  const detail = await plan.service.task(user, taskId);
+  if (detail.task.status !== "succeeded") {
+    return {
+      task: detail.task,
+      events: detail.events,
+      synced: false,
+      opportunities: [] as WebsiteOpportunity[],
+      incrementalStats: null,
+      skipped: [] as Array<{ company: string; reason: string }>,
+      lfind: null as LfindResult | null
+    };
+  }
+  const parsed = lfindResultSchema.parse(extractJsonObject(detail.task.resultText));
+  const sourceLabel = `Lfind Skill · ${detail.task.id.slice(-8)}`;
+  const contactReadyOpportunities = parsed.opportunities.filter((item) =>
+    lfindOpportunityHasSourceBackedContact(item, sourceLabel)
+  );
+  const contactSkipped = parsed.opportunities
+    .filter((item) => !lfindOpportunityHasSourceBackedContact(item, sourceLabel))
+    .map((item) => ({
+      company: item.company || "未命名候选",
+      reason: "no_contact",
+      detail: `未找到来源支持的公开邮箱、电话或 WhatsApp；已核验来源：${item.sources.map((source) => source.url || source.title).filter(Boolean).join("；") || "无可用来源"}`,
+      sourceUrl: item.sources[0]?.url || item.website || ""
+    }));
+  const normalizedLfind = {
+    ...parsed,
+    opportunities: contactReadyOpportunities,
+    skipped: [...parsed.skipped, ...contactSkipped],
+    summary: {
+      ...parsed.summary,
+      accepted: contactReadyOpportunities.length,
+      skipped: (parsed.summary.skipped || parsed.skipped.length) + contactSkipped.length,
+      noResultReason: contactReadyOpportunities.length
+        ? parsed.summary.noResultReason
+        : parsed.summary.noResultReason || "没有找到带公开联系方式来源的可跟进候选"
+    }
+  };
+  const rawOpportunities = lfindOpportunitiesFromResult(normalizedLfind, detail.task.id, user, sourceLabel);
+  const store = getStore();
+  const existingFilter = filterExistingCrmOpportunities(rawOpportunities, store, user.teamId);
+  await store.reloadProspectCandidates?.();
+  const persistence = persistProviderOpportunities(existingFilter.opportunities, {
+    rawCount: parsed.summary.rawFound || parsed.opportunities.length,
+    deduplicatedCount: Math.max(0, parsed.summary.rawFound - parsed.opportunities.length),
+    existingFilteredCount: existingFilter.skipped.length
+  });
+  await persistCandidateChanges(store, persistence.opportunities, true);
+  const runId = `lfind_${taskId}`;
+  for (const candidateId of persistence.opportunities.slice(0, 8).map((item) => item.id)) {
+    void scheduleContactEnrichment(user, candidateId, runId);
+  }
+  return {
+    task: detail.task,
+    events: detail.events,
+    synced: true,
+    opportunities: persistence.opportunities,
+    incrementalStats: persistence.incrementalStats,
+    skipped: [
+      ...existingFilter.skipped,
+      ...parsed.skipped.map((item) => ({
+        company: item.company || "未命名候选",
+        reason: item.detail || item.reason
+      })),
+      ...contactSkipped.map((item) => ({
+        company: item.company,
+        reason: item.detail || item.reason
+      }))
+    ],
+    lfind: normalizedLfind
+  };
+}
+
+app.post("/api/lead-finder/lfind-tasks", requireAuth, asyncRoute(async (req, res) => {
+  const body = leadSearchSchema.parse(req.body);
+  const plan = await lfindRunnerPlan(req.user!);
+  if (!plan.configured || !plan.service || !plan.runner) {
+    res.status(409).json({
+      message: plan.message,
+      errorCode: "LFIND_RUNNER_NOT_CONFIGURED",
+      suggestion: plan.suggestion
+    });
+    return;
+  }
+  const task = await plan.service.createTask(req.user!, {
+    runnerId: plan.runner.id,
+    prompt: lfindPrompt(body, req.user!),
+    workspace: plan.runner.workspaces[0],
+    executionMode: "read_only",
+    timeoutSeconds: 1800
+  });
+  res.status(201).json({
+    task,
+    message: "Lfind 深入查询已进入本地 Runner 队列",
+    suggestion: "页面会自动刷新任务进度；若长时间无返回，请在集成中心查看 Runner 执行记录。"
+  });
+}));
+
+app.get("/api/lead-finder/lfind-tasks/:id", requireAuth, asyncRoute(async (req, res) => {
+  try {
+    res.json(await syncLfindTaskResult(req.user!, req.params.id));
+  } catch (error) {
+    const value = error as { status?: number; code?: string; suggestion?: string; message?: string };
+    res.status(value.status || 422).json({
+      message: value.message || "Lfind 任务结果无法同步",
+      errorCode: value.code || "LFIND_RESULT_INVALID",
+      suggestion: value.suggestion || "请在集成中心查看任务最终回复，确认返回的是 goodjob-lfind-v1 JSON。"
+    });
+  }
+}));
+
 app.post("/api/lead-finder/search", requireAuth, asyncRoute(async (req, res) => {
   const body = leadSearchSchema.parse(req.body);
   const store = getStore();
@@ -17940,7 +22275,7 @@ app.post("/api/lead-finder/search", requireAuth, asyncRoute(async (req, res) => 
         retryable: false,
         retryAfterAt: null
       });
-    } else if (aiSearchConfig?.enabled && aiSearchConfig.apiKey && aiSearchConfig.useLeadFinder) {
+    } else if (aiSearchConfig?.enabled && aiSearchConfig.apiKey && aiSearchConfig.useLeadFinder && aiSearchStatus(user).ready) {
       try {
         const provider = createAiSearchProvider(aiSearchConfig);
         const result = await executeProviderSearch({
@@ -17998,18 +22333,26 @@ app.post("/api/lead-finder/search", requireAuth, asyncRoute(async (req, res) => 
         });
       }
     } else {
-      recordProviderPreflightFailure(user, runId, "ai_search", "PROVIDER_CONNECTION_INVALID", "search_preflight");
+      const providerStatus = aiSearchStatus(user);
+      const policy = aiSearchConfig ? aiWebSearchPolicy(aiSearchConfig) : null;
+      const errorCode: ProviderErrorCode = !aiSearchConfig || !aiSearchConfig.apiKey || !aiSearchConfig.enabled || !aiSearchConfig.useLeadFinder
+        ? "PROVIDER_CONNECTION_INVALID"
+        : policy?.reasonCode || "AI_WEB_SEARCH_NOT_TESTED";
+      const errorMessage = !aiSearchConfig || !aiSearchConfig.apiKey || !aiSearchConfig.enabled || !aiSearchConfig.useLeadFinder
+        ? "请先启用可用于自动获客的 AI 模型"
+        : providerStatus.lastTestMessage || `${policy?.message || "官网联网能力尚未验证"} ${policy ? webSearchFailureSuggestion(policy) : ""}`.trim();
+      recordProviderPreflightFailure(user, runId, "ai_search", errorCode, "search_preflight");
       sourceStats.push({
         id: "ai_search",
         name: catalog.name || "AI 搜索",
         count: 0,
         status: "failed",
-        error: "请先启用可用于自动获客的 AI 模型",
-        errorCode: "PROVIDER_CONNECTION_INVALID",
+        error: errorMessage,
+        errorCode,
         retryable: false,
         retryAfterAt: null
       });
-      skipped.push("AI 搜索（未启用模型）");
+      skipped.push(`AI 搜索（${errorMessage}）`);
     }
   }
 
@@ -18075,11 +22418,22 @@ app.post("/api/lead-finder/search", requireAuth, asyncRoute(async (req, res) => 
       confidence: lead.confidence
     })
   );
+  const existingFilter = filterExistingCrmOpportunities(
+    opportunities,
+    store,
+    user.teamId
+  );
+  if (existingFilter.skipped.length) {
+    skipped.push(...existingFilter.skipped.slice(0, 12).map((item) =>
+      `${item.company}（${item.reason}）`
+    ));
+  }
 
   await store.reloadProspectCandidates?.();
-  const persistence = persistProviderOpportunities(opportunities, {
+  const persistence = persistProviderOpportunities(existingFilter.opportunities, {
     rawCount: collected.length,
-    deduplicatedCount: Math.max(0, collected.length - deduped.length)
+    deduplicatedCount: Math.max(0, collected.length - deduped.length),
+    existingFilteredCount: existingFilter.skipped.length
   });
   await persistCandidateChanges(
     store,
@@ -18130,7 +22484,7 @@ app.post("/api/tools/website-scrape/preview", requireAuth, asyncRoute(async (req
   const body = schema.parse(req.body);
   if (body.useAi) {
     res.status(400).json({
-      message: "官网链接登记不支持 AI 网页解析；系统只保存链接，不访问企业网页"
+      message: "官网链接登记仅保存链接；公开资料将在后续核验流程中补全"
     });
     return;
   }
@@ -18200,14 +22554,8 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
     opportunity: WebsiteOpportunity;
     duplicate: boolean;
   };
-  const sources: Array<{
-    source: typeof body.opportunities[number];
-    stored: WebsiteOpportunity;
-    approval: NonNullable<ReturnType<
-      typeof currentApprovedProspectDecision
-    >>;
-  }> = [];
   const resultByCandidateId = new Map<string, SyncResult>();
+  const convertedAt = new Date().toISOString();
   for (const source of body.opportunities) {
     const stored = store.websiteOpportunities.find((item) =>
       item.id === source.id
@@ -18222,96 +22570,99 @@ app.post("/api/tools/website-scrape/sync-opportunities", requireAuth, asyncRoute
       return;
     }
     refreshProspectScorecard(store, stored);
-    if (!stored.tenantProspectId || !stored.organizationId) {
-      res.status(409).json({
-        message: `${stored.company} 尚未完成正式企业身份归一`,
-        errorCode: "CANDIDATE_FORMAL_IDENTITY_MISSING"
-      });
-      return;
-    }
-    if (!stored.scorecard?.vqa.qualified) {
-      res.status(409).json({
-        message: `${stored.company} 未通过客户资格审核：${
-          stored.scorecard?.vqa.reasonCodes.join(", ") || "资格不完整"
-        }`,
-        errorCode: "PROSPECT_LEAD_CONVERSION_NOT_VQA"
-      });
-      return;
-    }
-    const approval = currentApprovedProspectDecision(store, stored);
-    if (!approval) {
-      res.status(409).json({
-        message: `${stored.company} 没有当前有效的人工可联系批准记录`,
-        errorCode: "PROSPECT_LEAD_CONVERSION_NOT_APPROVED"
-      });
-      return;
-    }
-    sources.push({ source, stored, approval });
-  }
-  const conversionRequestId = body.requestId;
-  sources.sort((left, right) => {
-    const leftConverted = left.stored.status === "synced"
-      || Boolean(left.stored.leadId);
-    const rightConverted = right.stored.status === "synced"
-      || Boolean(right.stored.leadId);
-    return Number(rightConverted) - Number(leftConverted);
-  });
-  try {
-    for (const item of sources) {
-      const result = await store.convertProspectToLead({
-        operationCode: "convert_prospect_to_lead_v1",
-        decisionId: item.approval.decision.id,
-        mode: "create_new",
-        existingLeadId: "",
-        company: item.stored.company,
-        contact: item.stored.contact,
-        country: item.stored.country,
-        intent: "中",
-        estimatedAmount: 0,
-        nextFollowAt: "",
-        remark: [item.stored.business, item.stored.description]
-          .filter(Boolean).join("；"),
-        teamId: req.user!.teamId,
-        ownerId: req.user!.id,
-        prospectId: item.stored.tenantProspectId!,
-        sourceEvidence: structuredClone(item.stored.sourceEvidence || []),
-        idempotencyKey:
-          `website-opportunity:${conversionRequestId}:${item.stored.id}`,
-        convertedAt: new Date().toISOString()
-      });
-      Object.assign(item.stored, {
-        status: "synced",
-        leadId: result.lead.id,
-        statusChangedAt: result.sourceEvent.occurredAt,
-        excludedReason: ""
-      });
-      migrateProspectFollowUpTodos(
-        store,
-        item.stored,
-        result.lead.id
+    if (stored.status === "synced" && stored.leadId) {
+      const existingLead = store.leads.find((item) =>
+        item.id === stored.leadId
+        && item.ownerId === req.user!.id
+        && item.teamId === req.user!.teamId
       );
-      linkProcurementContextToLead(
-        store,
-        item.stored,
-        result.lead.id
-      );
-      resultByCandidateId.set(item.stored.id, {
-        lead: result.lead,
-        sourceEvent: result.sourceEvent,
-        opportunity: item.stored,
-        duplicate: result.replayed || !result.created
-      });
+      const existingEvent = existingLead
+        ? store.leadSourceEvents.find((item) =>
+            item.leadId === existingLead.id
+            && item.channel === PROSPECT_LEAD_SOURCE_CHANNEL)
+        : undefined;
+      if (existingLead && existingEvent) {
+        resultByCandidateId.set(stored.id, {
+          lead: existingLead,
+          sourceEvent: existingEvent,
+          opportunity: stored,
+          duplicate: true
+        });
+        continue;
+      }
     }
-  } catch (error) {
-    if (sendProspectLeadConversionError(res, error)) return;
-    throw error;
+    // 资格审核链已按需求移除（2026-09-13）：不再要求企业身份归一、VQA 资格审核
+    // 与人工可联系批准 —— 候选直接转为线索，血缘通过 leadSourceEvent 保留。
+    const candidateEmail = (stored.contactInfo || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu)?.[0]
+      || (stored.extractedContacts || []).flatMap((item) => item.emails || [])[0]
+      || "";
+    const conversion = createLeadFromSource(req.user!, {
+      company: stored.company,
+      contact: stored.contact,
+      country: stored.country,
+      email: candidateEmail,
+      phone: "",
+      wechat: "",
+      source: "智能获客人工确认",
+      intent: "中",
+      stage: "新线索",
+      estimatedAmount: 0,
+      nextFollowAt: "",
+      remark: [stored.business, stored.description]
+        .filter(Boolean).join("；"),
+      inquiryContent: "",
+      sourceType: "outbound",
+      sourceChannel: PROSPECT_LEAD_SOURCE_CHANNEL,
+      sourceCampaign: (stored.sourceLabel || "").slice(0, 120),
+      externalId: stored.id,
+      sourceUrl: (stored.website || "").slice(0, 500),
+      occurredAt: convertedAt,
+      rawPayload: {
+        candidateId: stored.id,
+        tenantProspectId: stored.tenantProspectId || "",
+        organizationId: stored.organizationId || "",
+        convertedAt,
+        sourceEvidence: structuredClone(stored.sourceEvidence || [])
+      }
+    });
+    Object.assign(stored, {
+      status: "synced",
+      leadId: conversion.lead.id,
+      statusChangedAt: convertedAt,
+      excludedReason: ""
+    });
+    migrateProspectFollowUpTodos(
+      store,
+      stored,
+      conversion.lead.id
+    );
+    linkProcurementContextToLead(
+      store,
+      stored,
+      conversion.lead.id
+    );
+    resultByCandidateId.set(stored.id, {
+      lead: conversion.lead,
+      sourceEvent: conversion.sourceEvent,
+      opportunity: stored,
+      duplicate: conversion.duplicate
+    });
   }
-  if (sources.length) {
+  const touchedOpportunities = [...resultByCandidateId.values()]
+    .map((item) => item.opportunity);
+  if (touchedOpportunities.length) {
     await persistCandidateChanges(
       store,
-      sources.map((item) => item.stored),
+      touchedOpportunities,
       true
     );
+  }
+  const newlyCreatedLeads = [...resultByCandidateId.values()]
+    .filter((item) => !item.duplicate)
+    .map((item) => item.lead);
+  if (newlyCreatedLeads.length) {
+    newlyCreatedLeads.forEach((lead) => notifyNewLead(lead));
+    await store.persist();
   }
   const created = body.opportunities.map((item) =>
     resultByCandidateId.get(item.id)
@@ -18831,14 +23182,19 @@ function reminderRuleTitle(ruleType = "quote_no_reply") {
   return map[ruleType] || "自定义跟进提醒";
 }
 
-function reminderRuleText(rule: { ruleType?: string; targetStage?: string; days?: number; channel?: string; priority?: string }) {
+function reminderTimeUnitText(timeUnit?: string) {
+  return timeUnit === "minute" ? "分钟" : timeUnit === "hour" ? "小时" : timeUnit === "week" ? "周" : "天";
+}
+
+function reminderRuleText(rule: { ruleType?: string; targetStage?: string; days?: number; timeUnit?: string; channel?: string; priority?: string }) {
   const days = rule.days ?? 3;
+  const unit = reminderTimeUnitText(rule.timeUnit);
   const stage = rule.targetStage || "已报价";
-  if (rule.ruleType === "sample_feedback") return `进入样品阶段 ${days} 天未更新时生成站内任务`;
-  if (rule.ruleType === "inactive_customer") return `距离最后一次客户活动超过 ${days} 天时生成站内任务`;
-  if (rule.ruleType === "high_value_revisit") return `高价值或低健康度客户超过 ${days} 天未活动时生成站内任务`;
+  if (rule.ruleType === "sample_feedback") return `进入样品阶段 ${days} ${unit}未更新时生成站内任务`;
+  if (rule.ruleType === "inactive_customer") return `距离最后一次客户活动超过 ${days} ${unit}时生成站内任务`;
+  if (rule.ruleType === "high_value_revisit") return `高价值或低健康度客户超过 ${days} ${unit}未活动时生成站内任务`;
   if (rule.ruleType === "custom_due") return `${stage}阶段商机下一动作到期后生成站内任务`;
-  return `进入${stage}阶段 ${days} 天未更新时生成站内任务`;
+  return `进入${stage}阶段 ${days} ${unit}未更新时生成站内任务`;
 }
 
 function resolveReminderTargetOwner(user: SessionUser, requestedOwnerId?: string) {
@@ -18850,14 +23206,22 @@ function resolveReminderTargetOwner(user: SessionUser, requestedOwnerId?: string
   return target.id;
 }
 
-function matchReminderRule(targetOwnerId: string, rule: { ruleType?: string; targetStage?: string; days?: number; priority?: string }) {
+/** 提醒规则阈值 → 毫秒（单一来源，判定与去重冷却共用）。 */
+function reminderRuleDurationMs(rule: { days?: number; timeUnit?: string }) {
+  const unitMs = rule.timeUnit === "minute" ? 60_000 : rule.timeUnit === "hour" ? 3_600_000 : rule.timeUnit === "week" ? 604_800_000 : 86_400_000;
+  return (rule.days ?? 3) * unitMs;
+}
+
+function matchReminderRule(targetOwnerId: string, rule: { ruleType?: string; targetStage?: string; days?: number; timeUnit?: string; targetCustomerIds?: string[]; priority?: string }) {
   const store = getStore();
-  const scopedCustomers = store.customers.filter((customer) => customer.ownerId === targetOwnerId);
+  const targetIdSet = rule.targetCustomerIds && rule.targetCustomerIds.length ? new Set(rule.targetCustomerIds) : null;
+  const scopedCustomers = store.customers.filter((customer) => customer.ownerId === targetOwnerId && (!targetIdSet || targetIdSet.has(customer.id)));
   const customerMap = new Map(scopedCustomers.map((customer) => [customer.id, customer]));
   const scopedDeals = store.deals.filter((deal) => deal.ownerId === targetOwnerId && customerMap.has(deal.customerId) && !deal.archivedAt);
   const stage = rule.targetStage || "已报价";
   const ruleType = rule.ruleType || "quote_no_reply";
-  const days = rule.days ?? 3;
+  const durationMs = reminderRuleDurationMs(rule);
+  const unitKey = `${rule.days ?? 3}${rule.timeUnit || "day"}`;
   const now = new Date();
   const result: Array<{ customer: Customer; deal?: Deal; dueAt: string; triggerKey: string }> = [];
   const addDealMatches = (deals: Deal[], dateValue: (deal: Deal) => string) => {
@@ -18866,9 +23230,9 @@ function matchReminderRule(targetOwnerId: string, rule: { ruleType?: string; tar
       const baseText = dateValue(deal);
       const base = new Date(baseText);
       if (!customer || !baseText || Number.isNaN(base.getTime())) return;
-      const due = new Date(base.getTime() + days * 86400000);
+      const due = new Date(base.getTime() + durationMs);
       if (due > now) return;
-      result.push({ customer, deal, dueAt: localMinuteText(due), triggerKey: `${deal.id}:${baseText}:${days}` });
+      result.push({ customer, deal, dueAt: localMinuteText(due), triggerKey: `${deal.id}:${baseText}:${unitKey}` });
     });
   };
   if (ruleType === "sample_feedback") {
@@ -18889,12 +23253,192 @@ function matchReminderRule(targetOwnerId: string, rule: { ruleType?: string; tar
       .filter((activity) => activity.customerId === customer.id)
       .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
     const baseText = activities[0]?.createdAt;
-    if (!baseText) return;
-    const due = new Date(new Date(baseText).getTime() + days * 86400000);
+    if (!baseText) {
+      // 从未跟进过的客户（没有任何活动记录）：视为已逾期，立即生成提醒；固定触发标识避免每次运行重复生成
+      result.push({ customer, dueAt: currentMinuteText(), triggerKey: `${customer.id}:never:${unitKey}` });
+      return;
+    }
+    const due = new Date(new Date(baseText).getTime() + durationMs);
     if (Number.isNaN(due.getTime()) || due > now) return;
-    result.push({ customer, dueAt: localMinuteText(due), triggerKey: `${customer.id}:${baseText}:${days}` });
+    result.push({ customer, dueAt: localMinuteText(due), triggerKey: `${customer.id}:${baseText}:${unitKey}` });
   });
   return result;
+}
+
+type ReminderRuleRunOptions = {
+  /**
+   * 手工运行（用户点「手工运行」）需要把 lastRunAt 一并落库，所以即使没新建也要持久化；
+   * 定时调度每分钟都跑，空转时持久化等于每分钟做一次全表重写，所以默认不写。
+   */
+  persistWhenNoChanges?: boolean;
+};
+
+type ReminderRuleRunResult = {
+  reminder: Reminder;
+  matchedCount: number;
+  createdCount: number;
+  skippedCount: number;
+  failedCount: number;
+  todos: Todo[];
+};
+
+/**
+ * 判断某条匹配结果是否应当跳过（即不建待办）。
+ *
+ * 判定口径（2026-09-24 起，取代原来的"同键存在就跳过"）：
+ *   ⓪ 规则未勾选「生成待办中心任务」（`generateTodo === false`）→ 跳过；规则只做匹配统计；
+ *   ① 同键待办里存在「活的」（未完成、未归档、未取消）→ 跳过，避免重复催办；
+ *   ② 同键待办全部已完结 → 从最后一次完结时刻起**重新计时**，距该时刻还没到规则阈值 → 仍跳过；
+ *   ③ 已过阈值 → 不跳过（会重新建一条）。
+ *
+ * 语义：把「完成待办」视为"本次已处理"，之后按阈值节奏再次提醒，
+ * 而不是像旧逻辑那样一旦建过就永远不再提醒（即使客户一直没有新活动）。
+ */
+function reminderSkipReason(reminder: Reminder, triggerKey: string, now = Date.now()): ReminderSkipReason | "" {
+  // ⓪ 未勾选「生成待办中心任务」→ 一律不建待办（规则仍跑，只更新命中/跳过统计）。
+  //    放在最前面，让手工运行接口与 preview 预检接口对同一件事给出同一答案。
+  if (reminder.generateTodo === false) return "generate-disabled";
+  const store = getStore();
+  const sameKey = store.todos.filter((todo) => todo.triggerKey === triggerKey);
+  if (!sameKey.length) return "";
+  const active = sameKey.find((todo) => !todo.done && !todo.historyAt && !todo.cancelledAt);
+  if (active) return "active-todo";
+  const lastClosedAt = sameKey.reduce((latest, todo) => {
+    const raw = todo.completedAt || todo.historyAt || todo.createdAt;
+    const ts = raw ? new Date(raw).getTime() : 0;
+    return Number.isFinite(ts) && ts > latest ? ts : latest;
+  }, 0);
+  if (!lastClosedAt) return "";
+  return now - lastClosedAt < reminderRuleDurationMs(reminder) ? "cooldown" : "";
+}
+
+/**
+ * 是否应当跳过这条匹配（即不建待办）—— `reminderSkipReason()` 的布尔封装。
+ * 只在需要"数量"而不关心原因的地方用（如 preview 预检）。
+ */
+function shouldSkipReminderMatch(reminder: Reminder, triggerKey: string, now = Date.now()) {
+  return reminderSkipReason(reminder, triggerKey, now) !== "";
+}
+
+/**
+ * 执行一次提醒规则：匹配 → 去重 → 建站内待办。
+ * 手工运行接口与定时调度共用这一份逻辑，保证「自动」与「手动」行为完全一致。
+ * 去重键仍是 `${reminder.id}:${match.triggerKey}`，是否跳过由 shouldSkipReminderMatch() 决定：
+ * 同一客户同一次活动在待办「活着」期间只建一条，待办完结后按阈值重新计时再提醒。
+ */
+async function runReminderRuleNow(
+  reminder: Reminder,
+  actorId: string,
+  options: ReminderRuleRunOptions = {}
+): Promise<ReminderRuleRunResult> {
+  const store = getStore();
+  const matched = matchReminderRule(reminder.targetOwnerId || reminder.ownerId, reminder);
+  const created: Todo[] = [];
+  const skipBuckets = new Map<ReminderSkipReason, ReminderSkipReasonBucket>();
+  let skippedCount = 0;
+  let failedCount = 0;
+  let lastError = "";
+  for (const match of matched) {
+    const triggerKey = `${reminder.id}:${match.triggerKey}`;
+    const skipReason = reminderSkipReason(reminder, triggerKey);
+    if (skipReason) {
+      // 记下「为什么没生成」，界面直接显示原因，而不是只给一个"跳过 1"的数字。
+      skippedCount += 1;
+      const bucket = skipBuckets.get(skipReason) || { reason: skipReason, count: 0, customers: [] as string[] };
+      bucket.count += 1;
+      const company = match.customer.company;
+      if (company && bucket.customers!.length < 3 && !bucket.customers!.includes(company)) bucket.customers!.push(company);
+      skipBuckets.set(skipReason, bucket);
+      continue;
+    }
+    const customer = match.customer;
+    if (!customer.ownerId) {
+      failedCount += 1;
+      lastError = `${customer.company} 未分配负责人`;
+      continue;
+    }
+    created.push({
+      id: `t_rem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      title: `${reminder.title}：${customer.company}`,
+      type: "customer",
+      priority: reminder.priority || "medium",
+      status: "pending",
+      pinState: "",
+      sortOrder: nextTodoSortOrder(store.todos, customer.ownerId),
+      dueAt: match.dueAt,
+      ownerId: customer.ownerId,
+      teamId: customer.teamId,
+      related: customer.company,
+      done: false,
+      impactAmount: customer.amount,
+      createdAt: new Date().toISOString(),
+      customerId: customer.id,
+      dealId: match.deal?.id,
+      reminderRuleId: reminder.id,
+      triggerKey
+    });
+  }
+  if (created.length) store.todos.unshift(...created);
+  reminder.generatedCount = matched.length;
+  reminder.lastRunBy = actorId;
+  reminder.lastRunAt = new Date().toISOString();
+  reminder.lastMatchedCount = matched.length;
+  reminder.lastCreatedCount = created.length;
+  reminder.lastSkippedCount = skippedCount;
+  reminder.lastFailedCount = failedCount;
+  reminder.lastError = lastError;
+  reminder.lastSkipReasons = [...skipBuckets.values()];
+  reminder.status = "enabled";
+  if (created.length || options.persistWhenNoChanges) await store.persist();
+  return { reminder, matchedCount: matched.length, createdCount: created.length, skippedCount, failedCount, todos: created };
+}
+
+const REMINDER_RULE_MIN_POLL_MS = 5_000;
+let reminderRuleSchedulerTimer: NodeJS.Timeout | null = null;
+let reminderRuleSchedulerBusy = false;
+
+function enabledReminderRules() {
+  return getStore().reminders.filter((item) => item.enabled !== false && item.status === "enabled");
+}
+
+async function tickReminderRules(reason: string) {
+  if (reminderRuleSchedulerBusy) return;
+  reminderRuleSchedulerBusy = true;
+  try {
+    for (const rule of enabledReminderRules()) {
+      try {
+        const result = await runReminderRuleNow(rule, rule.targetOwnerId || rule.ownerId, { persistWhenNoChanges: false });
+        if (result.createdCount) {
+          console.log(`GoodJob CRM reminder rule「${rule.title}」created ${result.createdCount} todo(s) [${reason}] matched=${result.matchedCount} skipped=${result.skippedCount} failed=${result.failedCount}`);
+        }
+      } catch (error) {
+        console.error(`GoodJob CRM reminder rule「${rule.title}」failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  } finally {
+    reminderRuleSchedulerBusy = false;
+  }
+}
+
+/**
+ * 提醒规则调度器：按固定间隔扫描所有已启用规则并自动建待办。
+ * 关闭方式：REMINDER_RULE_SCHEDULER=false；间隔：REMINDER_RULE_POLL_MS（默认 30s，下限 5s）。
+ */
+function startReminderRuleScheduler() {
+  if (process.env.REMINDER_RULE_SCHEDULER === "false") {
+    console.log("GoodJob CRM reminder rule scheduler disabled (REMINDER_RULE_SCHEDULER=false)");
+    return;
+  }
+  const pollMs = Math.max(REMINDER_RULE_MIN_POLL_MS, Number(process.env.REMINDER_RULE_POLL_MS || 30_000) || 30_000);
+  reminderRuleSchedulerTimer = setInterval(() => void tickReminderRules("scheduled"), pollMs);
+  console.log(`GoodJob CRM reminder rule scheduler enabled (poll ${pollMs}ms, ${enabledReminderRules().length} enabled rule(s))`);
+  void tickReminderRules("startup");
+}
+
+async function stopReminderRuleScheduler() {
+  if (reminderRuleSchedulerTimer) clearInterval(reminderRuleSchedulerTimer);
+  reminderRuleSchedulerTimer = null;
+  while (reminderRuleSchedulerBusy) await new Promise((resolve) => setTimeout(resolve, 25));
 }
 
 function todoTypeLabel(type: string) {
@@ -18949,6 +23493,12 @@ function getAiConfig(user: SessionUser, useCase?: AiUseCase) {
     || null;
 }
 
+function websiteContactAiExtractor(user: SessionUser): WebsiteContactAiExtractor | undefined {
+  const config = getAiConfig(user, "websiteParse");
+  if (!config?.enabled || !config.apiKey || !config.baseUrl || !config.model) return undefined;
+  return (input) => extractWebsitePublicContactsWithAi(config, input);
+}
+
 function publicAiConfig(config: AiModelConfig) {
   return {
     id: config.id,
@@ -18969,6 +23519,10 @@ function publicAiConfig(config: AiModelConfig) {
     lastTestAt: config.lastTestAt || "",
     lastTestStatus: config.lastTestStatus || "untested",
     lastTestMessage: config.lastTestMessage || "",
+    webSearchStatus: config.webSearchStatus || "untested",
+    webSearchTestAt: config.webSearchTestAt || "",
+    webSearchTestMessage: config.webSearchTestMessage || "",
+    webSearchCitationCount: config.webSearchCitationCount || 0,
     ownerId: config.ownerId,
     teamId: config.teamId,
     updatedAt: config.updatedAt
@@ -18976,18 +23530,86 @@ function publicAiConfig(config: AiModelConfig) {
 }
 
 async function testAiConfig(config: AiModelConfig) {
+  let ordinaryMessage = "";
   try {
     const content = await callAiModel(config, "只返回 JSON：{\"ok\":true}", 1200);
     const ok = /ok|true/i.test(content);
-    return {
-      ok,
-      message: ok ? `${providerLabel(config.provider)} 连接测试通过` : "模型已响应，但返回内容不符合测试格式"
-    };
+    ordinaryMessage = ok
+      ? `${providerLabel(config.provider)} 普通 AI 调用通过`
+      : "模型已响应，但返回内容不符合测试格式";
+    if (!ok) {
+      return {
+        ok: false,
+        message: ordinaryMessage,
+        webSearchStatus: "failed" as const,
+        webSearchMessage: "普通 AI 调用未通过，尚未执行 Web Search 测试。",
+        webSearchCitationCount: 0
+      };
+    }
   } catch (error) {
     const failure = providerErrorFromUnknown(error, "search");
     return {
       ok: false,
-      message: `AI 连接失败：${failure.publicMessage}`
+      message: `AI 连接失败：${failure.publicMessage}`,
+      webSearchStatus: "failed" as const,
+      webSearchMessage: "普通 AI 调用失败，尚未执行 Web Search 测试。",
+      webSearchCitationCount: 0
+    };
+  }
+  if (!config.useLeadFinder) {
+    return {
+      ok: true,
+      message: `${ordinaryMessage}；当前未启用自动获客，未要求 Web Search。`,
+      webSearchStatus: "untested" as const,
+      webSearchMessage: "当前配置未勾选自动获客，因此未执行官网联网测试。",
+      webSearchCitationCount: 0
+    };
+  }
+  const policy = aiWebSearchPolicy(config);
+  if (!policy.supported) {
+    return {
+      ok: true,
+      message: `${ordinaryMessage}；当前模型不支持 OpenAI Web Search。自动搜客时请配置 Brave、Serper、SerpApi 或 Google Places，官网将由搜索 API 补查，模型猜测的网址不会保存。`,
+      webSearchStatus: "unsupported" as const,
+      webSearchMessage: "当前模型不支持原生 Web Search；配置官网搜索 API 后仍可用于生成企业候选。",
+      webSearchCitationCount: 0
+    };
+  }
+  try {
+    const webResult = await callAiModelWithWebSearch(
+      config,
+      "搜索 OpenAI 官方网站，并只返回一句简短确认；必须实际执行 Web Search 并返回引用。",
+      1_200,
+      undefined,
+      45_000
+    );
+    if (!webResult.usedSearch || !webResult.citations.length) {
+      const message = "普通 AI 调用通过，但模型没有返回 Web Search 引用，无法用于确认官网。请检查 Responses API Web Search 权限或更换配置。";
+      return {
+        ok: false,
+        message,
+        webSearchStatus: "failed" as const,
+        webSearchMessage: message,
+        webSearchCitationCount: webResult.citations.length
+      };
+    }
+    const message = `${ordinaryMessage}；Web Search 已启用，返回 ${webResult.citations.length} 条引用，可用于官网发现。`;
+    return {
+      ok: true,
+      message,
+      webSearchStatus: "passed" as const,
+      webSearchMessage: message,
+      webSearchCitationCount: webResult.citations.length
+    };
+  } catch (error) {
+    const failure = providerErrorFromUnknown(error, "search");
+    const message = `${ordinaryMessage}，但 Web Search 测试失败：${failure.publicMessage}。自动搜客不会采信模型猜测的官网。`;
+    return {
+      ok: false,
+      message,
+      webSearchStatus: "failed" as const,
+      webSearchMessage: message,
+      webSearchCitationCount: 0
     };
   }
 }
@@ -19033,7 +23655,7 @@ function parseWebsiteOpportunity(
     website,
     contact: "待人工核实",
     contactInfo: "",
-    description: "仅登记链接，系统未访问网页。",
+    description: "仅登记官网链接，公开资料尚待补全。",
     ownerId: user.id,
     teamId: user.teamId,
     status: "preview",
@@ -19296,6 +23918,10 @@ app.patch("/api/reports/executive/note", requireAuth, asyncRoute(async (req, res
 
 registerSwagger(app);
 
+function validateWebsiteLeadIngressSecurity() {
+  validateWebsiteLeadIngressSettings(process.env.NODE_ENV === "production");
+}
+
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (error instanceof MysqlDataImportError) {
     res.status(error.status).json({ message: error.message });
@@ -19325,6 +23951,11 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 async function startServer() {
+  // 部署密钥文件：deploy-secrets.json 里填好的值在此补进 env（已设置的环境变量优先）
+  const deploySecrets = loadDeploySecrets();
+  if (deploySecrets.appliedKeys.length) {
+    console.log(`GoodJob CRM deploy-secrets applied from ${deploySecrets.path}: ${deploySecrets.appliedKeys.join(", ")}`);
+  }
   const mysqlRequested = process.env.CRM_STORE === "mysql"
     || (process.env.CRM_STORE !== "memory" && Boolean(process.env.DATABASE_URL || process.env.MYSQL_URL));
   let host = "127.0.0.1";
@@ -19333,7 +23964,10 @@ async function startServer() {
   let integrationOAuthSuccessRedirectUrl = "";
   try {
     validateAuthSecurity();
+    validateWebsiteLeadIngressSecurity();
     validateProviderCredentialSecurity();
+    // 追踪公网地址支持「设置页运行时配置」优先于 env（app_settings 持久化）
+    setEmailTrackingRuntimeBaseUrl(await getAppSetting(EMAIL_TRACKING_BASE_URL_KEY));
     validateEmailTrackingSecurity();
     validateAgentJobSecurity();
     validateTradeObservationCursorSecurity();
@@ -19388,6 +24022,15 @@ async function startServer() {
     }
   }
   const store = getStore();
+  const interruptedWebsiteCandidates = store.websiteOpportunities.filter((candidate) =>
+    expireStaleWebsiteProbeAttempts(candidate)
+  );
+  if (interruptedWebsiteCandidates.length) {
+    const ids = interruptedWebsiteCandidates.map((candidate) => candidate.id);
+    if (store.persistProspectCandidates) await store.persistProspectCandidates(ids);
+    else await store.persist();
+    console.log(`GoodJob CRM recovered ${ids.length} interrupted website probe tasks`);
+  }
   const agentBackgroundRunner = new AgentBackgroundRunner(
     store,
     agentExecutionRuntime,
@@ -19523,6 +24166,146 @@ async function startServer() {
     process.exit(1);
     return;
   }
+  /**
+   * 发件邮箱轮换：policy.rotateMailboxEvery > 0 时，按「本批次/方案已发出的封数」
+   * 分组轮流使用发件邮箱池里的邮箱（每 N 封换下一个）。池子为空/未启用时回落主发件邮箱。
+   * 派发失败或读取池子出错都不阻断发送——回落主邮箱并发警告日志。
+   */
+  async function senderUserForBatch(
+    owner: ReturnType<typeof getStore>["users"][number],
+    batch: ProspectOutreachBatch
+  ) {
+    const every = Math.max(0, Math.floor(Number(batch.policy?.rotateMailboxEvery || 0)));
+    if (!every) return owner;
+    try {
+      const repository = getSenderMailboxRepository();
+      if (!repository) return owner;
+      const mailboxes = await repository.list(owner.id, owner.teamId);
+      const sentSteps = batch.items.reduce((sum, item) =>
+        sum + item.steps.filter((step) => step.status === "sent").length, 0);
+      const mailbox = pickSenderMailbox(mailboxes, sentSteps, every);
+      if (!mailbox) return owner;
+      return { ...owner, ...senderMailboxOverrides(mailbox) };
+    } catch (error) {
+      console.warn(`[outbound-email] 发件邮箱轮换失败，回落主发件邮箱：${error instanceof Error ? error.message : String(error)}`);
+      return owner;
+    }
+  }
+
+  const prospectOutreachBatchRuntime: ProspectOutreachBatchRuntime = {
+    async send(batch, item, step, executionId) {
+      const baseOwner = batchOwnerFor(batch);
+      const owner = await senderUserForBatch(baseOwner, batch);
+      // 条目级来源：方案手动名单可为 candidate/lead/customer；批次仍走 targetType
+      const entityKind = item.entityType || (batch.targetType === "lead" ? "lead" : "candidate");
+      if (entityKind === "lead") {
+        const lead = store.leads.find((row) => row.id === (item.leadId || item.candidateId));
+        if (!lead || lead.deletedAt) throw new Error("线索不存在或已被删除");
+        if ((lead.email || "").trim() !== item.recipient && !item.recipient) throw new Error("线索邮箱缺失");
+        const dispatch = await dispatchOutboundEmail(store, owner, {
+          requestId: executionId,
+          entityType: "lead",
+          entityId: lead.id,
+          to: item.recipient,
+          subject: step.subject,
+          body: step.body,
+          source: "lead_batch_send"
+        });
+        recordCrmEmailTouchpoint(store, dispatch.log, {
+          eventType: "send",
+          direction: "outbound",
+          occurredAt: dispatch.log.sentAt,
+          subject: step.subject,
+          content: step.body,
+          contactValue: item.recipient,
+          requestId: `batch:${executionId}`
+        });
+        store.leadActivities.unshift({
+          id: `la_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          leadId: lead.id,
+          type: "email",
+          content: `发信批次发送：${step.subject}`,
+          operatorId: owner.id,
+          nextFollowAt: "",
+          createdAt: dispatch.log.sentAt
+        });
+        return { recipient: dispatch.log.to || item.recipient, sentAt: dispatch.log.sentAt, messageId: dispatch.log.messageId };
+      }
+      if (entityKind === "customer") {
+        const customer = store.customers.find((row) => row.id === item.candidateId);
+        if (!customer) throw new Error("客户不存在或已被删除");
+        const dispatch = await dispatchOutboundEmail(store, owner, {
+          requestId: executionId,
+          entityType: "customer",
+          entityId: customer.id,
+          to: item.recipient,
+          subject: step.subject,
+          body: step.body,
+          source: "development_email_send"
+        });
+        recordCrmEmailTouchpoint(store, dispatch.log, {
+          eventType: "send",
+          direction: "outbound",
+          occurredAt: dispatch.log.sentAt,
+          subject: step.subject,
+          content: step.body,
+          contactValue: item.recipient,
+          requestId: `batch:${executionId}`
+        });
+        store.customerActivities.unshift({
+          id: `ca_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          customerId: customer.id,
+          type: "email",
+          content: `自动发信方案发送：${step.subject}`,
+          operatorId: owner.id,
+          nextReminder: "",
+          createdAt: dispatch.log.sentAt
+        });
+        return { recipient: dispatch.log.to || item.recipient, sentAt: dispatch.log.sentAt, messageId: dispatch.log.messageId };
+      }
+      const candidate = store.websiteOpportunities.find((row) => row.id === item.candidateId);
+      if (!candidate) throw new Error("候选不存在或已被删除");
+      return sendProspectBatchEmail(store, owner, candidate, item.recipient, step.subject, step.body, executionId);
+    },
+    async convertToLead(batch, item) {
+      // 名单里的线索/客户不需要回流：线索已是线索，客户已在 CRM 内
+      if (batch.targetType === "lead" || item.entityType === "lead") return item.entityType === "lead" ? item.candidateId : "";
+      if (item.entityType === "customer") return "";
+      const owner = batchOwnerFor(batch);
+      const candidate = store.websiteOpportunities.find((row) => row.id === item.candidateId);
+      if (!candidate) throw new Error("候选不存在或已被删除");
+      return convertBatchCandidateToLead(store, owner, candidate, `prospect-batch:${batch.id}`);
+    },
+    async sentCountToday(batch) {
+      const dayStart = new Date();
+      dayStart.setHours(0, 0, 0, 0);
+      return store.outboundEmailLogs.filter((log) =>
+        log.ownerId === batch.ownerId
+        && (log.sentAt || "") >= dayStart.toISOString()
+        && ["prospect_batch_send", "prospect_send", "development_email_send", "agent_send", "lead_batch_send", "lead_send"].includes(log.source || "")
+      ).length;
+    },
+    async bouncedCountForBatch(batch) {
+      // 条目级统计：方案手动名单可能混有 candidate/lead/customer，各自按台账的 entityType 归集
+      let bounced = 0;
+      for (const item of batch.items) {
+        const kind = item.entityType || (batch.targetType === "lead" ? "lead" : "candidate");
+        const logEntityType = kind === "customer" ? "customer" : kind === "lead" ? "lead" : "prospect_candidate";
+        const entityId = kind === "lead" ? (item.leadId || item.candidateId) : item.candidateId;
+        bounced += store.outboundEmailLogs.filter((log) =>
+          log.entityType === logEntityType
+          && log.entityId === entityId
+          && Boolean(log.bouncedAt)
+        ).length;
+      }
+      return bounced;
+    }
+  };
+  const prospectOutreachBatchRunner = new ProspectOutreachBatchRunner(store, prospectOutreachBatchRuntime, Number(process.env.PROSPECT_OUTREACH_BATCH_POLL_MS || 10_000));
+  prospectOutreachBatchRunner.start();
+  // 自动发送方案后台线程：复用同一套发送 runtime，按方案配置持续取人投递
+  const prospectOutreachPlanRunner = new ProspectOutreachPlanRunner(store, prospectOutreachBatchRuntime, Number(process.env.PROSPECT_OUTREACH_PLAN_POLL_MS || 15_000));
+  prospectOutreachPlanRunner.start();
   const agentTriggerRunner = new AgentTriggerRunner(
     store,
     (actor, goal, context) => createAgentPlan(store, actor, goal, context),
@@ -19547,7 +24330,28 @@ async function startServer() {
     process.exit(1);
     return;
   }
-
+  const salesTrainingRunner = new SalesTrainingRunner(store, Number(process.env.SALES_TRAINING_POLL_MS || 1_200));
+  try {
+    await salesTrainingRunner.start();
+    activeSalesTrainingRunner = salesTrainingRunner;
+  } catch (error) {
+    activeAgentTriggerRunner = null;
+    await agentTriggerRunner.stop();
+    activeCustomerMaintenanceRunner = null;
+    await customerMaintenanceRunner.stop();
+    activeOutreachSequenceRunner = null;
+    await outreachSequenceRunner.stop();
+    superSearchRunner.stop();
+    await prospectScheduler?.stop();
+    activeProspectWorkerService = null;
+    await prospectWorkerService?.stop();
+    activeAgentBackgroundRunner = null;
+    await agentBackgroundRunner.stop();
+    await store.close?.();
+    console.error(`GoodJob CRM sales training runner startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+    return;
+  }
   // ── 开发信回流感知：IMAP 轮询监听回信/退信（按开关启用）────────────
   if (process.env.INBOUND_MAIL_ENABLED === "true") {
     const inboundMailWatcher = new InboundMailWatcher(store, {
@@ -19607,6 +24411,7 @@ async function startServer() {
     communicationProxy.ws(request, socket, head);
   });
   scheduleMidnightTodoArchive();
+  startReminderRuleScheduler();
 
   let shuttingDown = false;
   const shutdown = async (signal: NodeJS.Signals) => {
@@ -19616,6 +24421,9 @@ async function startServer() {
     try {
       activeInboundMailWatcher?.stop();
       activeInboundMailWatcher = null;
+      await stopReminderRuleScheduler();
+      activeSalesTrainingRunner = null;
+      salesTrainingRunner.stop();
       activeAgentTriggerRunner = null;
       await agentTriggerRunner.stop();
       activeCustomerMaintenanceRunner = null;

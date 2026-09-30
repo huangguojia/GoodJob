@@ -24,6 +24,13 @@ import {
   recordProviderHttpResult,
   withProviderRequestLogging
 } from "./provider-request-logging.js";
+import {
+  DEFAULT_LEAD_SEARCH_PROVIDER_IDS,
+  decisionMakerTier,
+  defaultSearchProviderIdsFor,
+  getProvider,
+  providerMeta
+} from "./lead-providers.js";
 import type { ProviderCatalogItem, ProviderConnection, ProviderRequestLog } from "./types.js";
 
 const query = {
@@ -121,6 +128,36 @@ function connection(
     createdAt: now,
     updatedAt: now,
     ...overrides
+  };
+}
+
+/**
+ * 为真实适配器（Apollo / PDL / Hunter）构造"已配置凭据"的连接。
+ * 刻意不带自定义 baseUrl —— 走适配器默认域名，才能命中各自的白名单策略。
+ */
+function adapterConnection(provider: LeadProvider, apiKey = "test-key"): ProviderConnection {
+  const identity = {
+    id: `connection_${provider.id}`,
+    providerId: provider.id,
+    ownerId: "owner_a",
+    teamId: "team_a"
+  };
+  return {
+    ...identity,
+    scope: "personal" as const,
+    credentialRef: `credential_${provider.id}`,
+    configurationEncrypted: encryptProviderConfiguration(identity, { apiKey, baseUrl: "" }),
+    status: "active" as const,
+    quotaPolicy: {},
+    budgetPolicy: {},
+    lastHealthAt: "",
+    lastHealthStatus: "untested" as const,
+    lastErrorCode: "",
+    lastHealthMessage: "",
+    usage: "",
+    createdBy: identity.ownerId,
+    createdAt: "2026-07-13T00:00:00.000Z",
+    updatedAt: "2026-07-13T00:00:00.000Z"
   };
 }
 
@@ -610,5 +647,212 @@ assert.equal(logs.length, 1);
 const serializedLogs = JSON.stringify(logs);
 assert.equal(serializedLogs.includes(secret), false);
 assert.equal(serializedLogs.includes(email), false);
+
+// ---------------------------------------------------------------------------
+// W2 · 搜客联系方式获取：决策人分级 / 默认搜索链资格 / 人员化搜索
+// ---------------------------------------------------------------------------
+
+assert.equal(decisionMakerTier("CEO"), 3);
+assert.equal(decisionMakerTier("Managing Director"), 3);
+assert.equal(decisionMakerTier("Purchasing Manager"), 2);
+assert.equal(decisionMakerTier("Head of Procurement"), 2);
+assert.equal(decisionMakerTier("Operations Director"), 1);
+// 纯销售/行政岗对"找老板或采购"没有价值，必须归零
+assert.equal(decisionMakerTier("Sales Manager"), 0);
+assert.equal(decisionMakerTier("Marketing Assistant"), 0);
+assert.equal(decisionMakerTier(""), 0);
+
+// anysearch 是唯一免 Key 网页源，必须默认在链里（此前因为 recommended=false 从未被选中）
+assert.equal(DEFAULT_LEAD_SEARCH_PROVIDER_IDS.includes("anysearch"), true);
+
+for (const id of ["hunter", "apollo", "pdl"]) {
+  const member = getProvider(id)!;
+  assert.equal(providerMeta(member).contactCapable, true, `${id} 应标记为可补联系方式`);
+  assert.equal(typeof member.enrich, "function", `${id} 应实现 enrich()`);
+}
+// Hunter 是纯补全源（只有 email/enrich），不能进企业搜索链，否则运行时直接报错
+assert.equal(providerMeta(getProvider("hunter")!).searchCapable, false);
+assert.equal(providerMeta(getProvider("apollo")!).searchCapable, true);
+assert.equal(providerMeta(getProvider("pdl")!).searchCapable, true);
+
+// 默认链资格：免费推荐源 + 已配置凭据的联系方式源；未配置/未启用/手动源/纯补全源一律排除
+const providerStatuses = [
+  { id: "anysearch", recommended: true, contactCapable: false, searchCapable: true, enabled: true, ready: true, accessMode: "api" },
+  { id: "hunter", recommended: false, contactCapable: true, searchCapable: false, enabled: true, ready: true, accessMode: "api" },
+  { id: "apollo", recommended: false, contactCapable: true, searchCapable: true, enabled: true, ready: true, accessMode: "api" },
+  { id: "pdl", recommended: false, contactCapable: true, searchCapable: true, enabled: true, ready: false, accessMode: "api" },
+  { id: "ai_search", recommended: false, contactCapable: true, searchCapable: true, enabled: true, ready: true, accessMode: "api" },
+  { id: "manual_source", recommended: true, contactCapable: false, searchCapable: true, enabled: true, ready: true, accessMode: "manual" }
+];
+assert.deepEqual(defaultSearchProviderIdsFor(providerStatuses), ["anysearch", "apollo"]);
+
+// Hunter：多邮箱按决策人优先排序，而不是盲取 emails[0]（那往往只是 info@ 通用邮箱）
+const hunterProvider = getProvider("hunter")!;
+setProviderHttpTestTransport(async (url) =>
+  url.includes("/v2/domain-search")
+    ? new Response(JSON.stringify({
+      data: {
+        domain: "acme.example",
+        organization: "Acme GmbH",
+        country: "Germany",
+        emails: [
+          { value: "info@acme.example", position: "sales", confidence: 96 },
+          { value: "purchase@acme.example", first_name: "Pia", last_name: "Kaufmann", position: "Purchasing Manager", confidence: 70 },
+          { value: "ceo@acme.example", first_name: "Cara", last_name: "Chef", position: "CEO", confidence: 52 }
+        ]
+      }
+    }), { status: 200, headers: { "content-type": "application/json" } })
+    : new Response("", { status: 404 })
+);
+try {
+  const hunterEnrich = await executeProviderEnrich({
+    provider: hunterProvider,
+    catalog: catalog(hunterProvider),
+    context: { ...context(hunterProvider.id), operation: "enrich" },
+    connection: adapterConnection(hunterProvider),
+    credential: { apiKey: "test-key" },
+    domain: "acme.example",
+    onLogs() {}
+  });
+  // CEO（tier 3）应压过 confidence 更高的 info@ sales（tier 0）
+  assert.equal(hunterEnrich?.contact, "Cara Chef");
+  assert.equal(hunterEnrich?.contactInfo, "ceo@acme.example");
+  assert.equal(hunterEnrich?.evidence.recordType, "contact_evidence");
+  assert.match(hunterEnrich?.evidence.evidenceSummary || "", /决策人优先/);
+} finally {
+  setProviderHttpTestTransport(null);
+}
+
+// Apollo：公司搜索 + 人员搜索合并，带真实姓名的决策人排在公司候选之前
+const apolloProvider = getProvider("apollo")!;
+setProviderHttpTestTransport(async (url) => {
+  if (url.includes("mixed_companies/search")) {
+    return new Response(JSON.stringify({
+      organizations: [{ id: "org1", name: "Acme GmbH", primary_domain: "acme.example", country: "Germany", industry: "automation" }]
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }
+  if (url.includes("mixed_people/search")) {
+    return new Response(JSON.stringify({
+      people: [
+        { id: "p1", name: "Sam Sales", title: "Sales Manager", email: "sam@acme.example", organization: { name: "Acme GmbH", primary_domain: "acme.example" } },
+        { id: "p2", name: "Paula Buyer", title: "Head of Purchasing", email: "paula@acme.example", organization: { name: "Acme GmbH", primary_domain: "acme.example" } }
+      ]
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }
+  return new Response("", { status: 404 });
+});
+try {
+  const apolloPage = await executeProviderSearch({
+    provider: apolloProvider,
+    catalog: catalog(apolloProvider),
+    context: context(apolloProvider.id),
+    connection: adapterConnection(apolloProvider),
+    credential: { apiKey: "test-key" },
+    query,
+    onLogs() {}
+  });
+  assert.ok(apolloPage.records.length >= 2, "Apollo 应同时返回人员与公司候选");
+  assert.equal(apolloPage.records[0]?.recordType, "contact_evidence");
+  assert.equal(apolloPage.records[0]?.contact, "Paula Buyer");
+  assert.equal(apolloPage.records[0]?.contactInfo, "paula@acme.example");
+  assert.equal(apolloPage.records.some((item) => item.contact === "Sam Sales"), true);
+  assert.equal(apolloPage.records.some((item) => item.recordType === "company_candidate"), true);
+} finally {
+  setProviderHttpTestTransport(null);
+}
+
+// Apollo enrich：按域名锁定公司后返回决策人邮箱
+setProviderHttpTestTransport(async (url) =>
+  url.includes("mixed_people/search")
+    ? new Response(JSON.stringify({
+      people: [{ id: "p2", name: "Paula Buyer", title: "Purchasing Manager", email: "paula@acme.example" }]
+    }), { status: 200, headers: { "content-type": "application/json" } })
+    : new Response("", { status: 404 })
+);
+try {
+  const apolloEnrich = await executeProviderEnrich({
+    provider: apolloProvider,
+    catalog: catalog(apolloProvider),
+    context: { ...context(apolloProvider.id), operation: "enrich" },
+    connection: adapterConnection(apolloProvider),
+    credential: { apiKey: "test-key" },
+    domain: "acme.example",
+    onLogs() {}
+  });
+  assert.equal(apolloEnrich?.contact, "Paula Buyer");
+  assert.equal(apolloEnrich?.contactInfo, "paula@acme.example");
+  assert.equal(apolloEnrich?.evidence.recordType, "contact_evidence");
+} finally {
+  setProviderHttpTestTransport(null);
+}
+
+// PDL：person/search 按 job_title_levels 产出决策人；无人员时降级为公司候选 + warning
+const pdlProvider = getProvider("pdl")!;
+setProviderHttpTestTransport(async (url) => {
+  if (url.includes("/v5/company/search")) {
+    return new Response(JSON.stringify({
+      data: [{ id: "pdl_org", display_name: "Acme GmbH", website: "acme.example", industry: "automation" }]
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }
+  if (url.includes("/v5/person/search")) {
+    return new Response(JSON.stringify({
+      data: [{
+        id: "pdl_person",
+        full_name: "Uwe Einkauf",
+        job_title: "Procurement Director",
+        job_company_name: "Acme GmbH",
+        job_company_website: "acme.example",
+        work_email: "uwe@acme.example",
+        location_country: "germany"
+      }]
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }
+  return new Response("", { status: 404 });
+});
+try {
+  const pdlPage = await executeProviderSearch({
+    provider: pdlProvider,
+    catalog: catalog(pdlProvider),
+    context: context(pdlProvider.id),
+    connection: adapterConnection(pdlProvider),
+    credential: { apiKey: "test-key" },
+    query,
+    onLogs() {}
+  });
+  assert.equal(pdlPage.records[0]?.recordType, "contact_evidence");
+  assert.equal(pdlPage.records[0]?.contact, "Uwe Einkauf");
+  assert.equal(pdlPage.records[0]?.contactInfo, "uwe@acme.example");
+  assert.equal(pdlPage.records.some((item) => item.recordType === "company_candidate"), true);
+} finally {
+  setProviderHttpTestTransport(null);
+}
+
+// 人员搜索失败不能拖垮公司候选：降级为公司候选 + warning
+setProviderHttpTestTransport(async (url) =>
+  url.includes("/v5/company/search")
+    ? new Response(JSON.stringify({
+      data: [{ id: "pdl_org", display_name: "Acme GmbH", website: "acme.example", industry: "automation" }]
+    }), { status: 200, headers: { "content-type": "application/json" } })
+    : new Response(JSON.stringify({ error: { message: "quota exceeded" } }), {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": "30" }
+    })
+);
+try {
+  const degradedPage = await executeProviderSearch({
+    provider: pdlProvider,
+    catalog: catalog(pdlProvider),
+    context: context(pdlProvider.id),
+    connection: adapterConnection(pdlProvider),
+    credential: { apiKey: "test-key" },
+    query,
+    onLogs() {}
+  });
+  assert.equal(degradedPage.records.length, 1);
+  assert.equal(degradedPage.records[0]?.recordType, "company_candidate");
+  assert.equal(degradedPage.warnings.some((item) => item.includes("PDL 人员搜索降级")), true);
+} finally {
+  setProviderHttpTestTransport(null);
+}
 
 console.log("Provider runtime contract tests passed");

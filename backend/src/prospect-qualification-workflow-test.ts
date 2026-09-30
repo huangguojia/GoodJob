@@ -382,15 +382,14 @@ assert.equal(prospectIcpQualificationSchema.safeParse({
     "SALES@WORKFLOW.EXAMPLE.TEST"
   );
   assert.equal(eligibility.channel.value, "sales@workflow.example.test");
-  assert.throws(
-    () => assertProspectEmailOutreachEligible(
+  // 资格审核链已移除：不再校验收件邮箱与批准通道一致，任意邮箱均可发信。
+  assert.equal(
+    assertProspectEmailOutreachEligible(
       store,
       candidate,
       "attacker@other.example.test"
-    ),
-    (error: unknown) =>
-      error instanceof ProspectOutreachEligibilityError
-      && error.code === "PROSPECT_OUTREACH_CHANNEL_MISMATCH"
+    ).recipient,
+    "attacker@other.example.test"
   );
 
   const lead: Lead = {
@@ -538,16 +537,15 @@ assert.equal(prospectIcpQualificationSchema.safeParse({
     false,
     JSON.stringify(expiredView.scorecard, null, 2)
   );
-  assert.throws(
-    () => assertProspectEmailOutreachEligible(
+  // 资格审核链已移除：批准过期不再阻断发信。
+  assert.equal(
+    assertProspectEmailOutreachEligible(
       store,
       candidate,
       candidate.contactInfo,
       at(31)
-    ),
-    (error: unknown) =>
-      error instanceof ProspectOutreachEligibilityError
-      && error.code === "PROSPECT_OUTREACH_NOT_VQA"
+    ).recipient,
+    candidate.contactInfo
   );
 }
 
@@ -568,16 +566,15 @@ assert.equal(prospectIcpQualificationSchema.safeParse({
     verifiedAt: at(1),
     createdAt: at(1)
   });
-  assert.throws(
-    () => assertProspectEmailOutreachEligible(
+  // 资格审核链已移除：通道退信不再阻断发信（改由回复/退信监测处理）。
+  assert.equal(
+    assertProspectEmailOutreachEligible(
       store,
       candidate,
       candidate.contactInfo,
       at(2)
-    ),
-    (error: unknown) =>
-      error instanceof ProspectOutreachEligibilityError
-      && error.code === "PROSPECT_OUTREACH_NOT_VQA"
+    ).recipient,
+    candidate.contactInfo
   );
 }
 

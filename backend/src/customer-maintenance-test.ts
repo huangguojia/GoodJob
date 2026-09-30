@@ -3,6 +3,9 @@ import {
   CustomerMaintenanceRunner,
   controlCustomerMaintenanceWatch,
   createCustomerMaintenanceWatch,
+  createCustomerMaintenanceWatchDirect,
+  customerMaintenanceWatchFor,
+  listCustomerMaintenanceFindings,
   listCustomerMaintenanceWatches,
   previewCustomerMaintenance,
   runCustomerMaintenanceWatch
@@ -71,8 +74,33 @@ async function main() {
   assert.ok(dueWatch.lastRunAt);
   assert.ok(new Date(dueWatch.nextRunAt).getTime() > Date.now());
 
-  const plan = await createAgentPlan(store, owner, "启用客户守护，每天自动维护客户");
-  assert.ok(plan.steps.some((item) => item.tool === "maintenance.preview" && item.status === "ready"));
+  // —— 自动维护中心（界面直连通道）—————————————————————————
+  const eventCountBeforeDirect = store.agentRunEvents.length;
+  const directWatch = await createCustomerMaintenanceWatchDirect(store, owner, {
+    name: "A 级客户守护",
+    rules: { ...rules, grades: ["A"], intervalHours: 12, inactivityDays: 3, healthBelow: 70 }
+  });
+  assert.ok(directWatch.id.startsWith("cmw_"));
+  assert.equal(directWatch.status, "active");
+  assert.equal(directWatch.missionRunId, "");
+  assert.equal(directWatch.ownerId, owner.id);
+  // 直建通道不写 Agent 任务事件（因为不挂 missionRun）
+  assert.equal(store.agentRunEvents.length, eventCountBeforeDirect);
+  assert.ok(listCustomerMaintenanceWatches(store, owner).some((item) => item.id === directWatch.id));
+  assert.equal(customerMaintenanceWatchFor(store, other, directWatch.id), undefined);
+  assert.equal(customerMaintenanceWatchFor(store, owner, directWatch.id)?.id, directWatch.id);
+
+  const directRun = await runCustomerMaintenanceWatch(store, directWatch, new Date("2026-07-20T08:00:00.000Z"));
+  const findingsView = listCustomerMaintenanceFindings(store, owner, directWatch.id);
+  assert.equal(findingsView.watchId, directWatch.id);
+  assert.equal(findingsView.lastMatchedCount, directRun.findings.length);
+  assert.equal(findingsView.lastCreatedCount, directRun.created.length);
+  assert.equal(findingsView.todos.length, directRun.created.length);
+  assert.ok(findingsView.todos.every((item) => item.triggerKey.startsWith(`maintenance:${directWatch.id}:`)));
+  assert.ok(findingsView.findings.every((item) => item.reasonCodes.length >= 1 && item.reason));
+  assert.throws(() => listCustomerMaintenanceFindings(store, other, directWatch.id), /不存在/u);
+
+  const plan = await createAgentPlan(store, owner, "启用客户守护，每天自动维护客户");  assert.ok(plan.steps.some((item) => item.tool === "maintenance.preview" && item.status === "ready"));
   assert.ok(plan.steps.some((item) => item.tool === "maintenance.create_watch" && item.status === "ready" && item.approvedAt));
 
   const controlMission = await createAgentPlan(store, owner, "检查当前商机管道");
@@ -92,7 +120,9 @@ async function main() {
     persistentRunner: true,
     approvalRequired: true,
     controls: true,
-    missionControlCascades: true
+    missionControlCascades: true,
+    directCreation: true,
+    findingsTraceable: true
   }, null, 2));
 }
 

@@ -20,8 +20,16 @@ const adminNames = [
   "优贸团队管理员", "通达团队管理员", "汇川团队管理员", "宏景团队管理员", "凌云团队管理员",
   "致远团队管理员", "开拓团队管理员", "融通团队管理员", "盈海团队管理员", "创赢团队管理员",
   "经纬团队管理员", "寰宇团队管理员", "卓航团队管理员", "海纳团队管理员", "远见团队管理员",
-  "同舟团队管理员", "凯程团队管理员", "万里团队管理员", "扬帆团队管理员", "峰航团队管理员"
+  "同舟团队管理员", "凯程团队管理员", "万里团队管理员", "扬帆团队管理员", "峰航团队管理员",
+  "星河团队管理员", "致胜团队管理员", "弘业团队管理员", "远略团队管理员", "新锐团队管理员",
+  "智汇团队管理员", "领创团队管理员", "卓信团队管理员", "海拓团队管理员", "万成团队管理员"
 ];
+
+const ADMIN_COUNT = 50;
+
+if (adminNames.length !== ADMIN_COUNT) {
+  throw new Error(`管理员名称配置错误：需要 ${ADMIN_COUNT} 个，当前为 ${adminNames.length} 个`);
+}
 
 function argumentValue(name: string) {
   const prefix = `--${name}=`;
@@ -32,7 +40,7 @@ function argumentValue(name: string) {
 }
 
 function credentialFilePath() {
-  return path.resolve(argumentValue("file") || process.env.BETA_ADMIN_CREDENTIALS_FILE || "./beta-admin-credentials.txt");
+  return path.resolve(argumentValue("file") || process.env.GOODJOB_ADMIN_CREDENTIALS_FILE || process.env.BETA_ADMIN_CREDENTIALS_FILE || "./admin-credentials.tsv");
 }
 
 function generatePassword() {
@@ -70,12 +78,12 @@ function parseCredentials(content: string): BetaCredential[] {
     const [sequence, name, email, teamId, password] = line.split("\t");
     return { sequence: Number(sequence), name, email, teamId, password };
   });
-  if (credentials.length !== 40
+  if (credentials.length !== ADMIN_COUNT
     || credentials.some((item) => !item.sequence || !item.name || !item.email || !item.teamId || item.password.length < 16)
-    || new Set(credentials.map((item) => item.email)).size !== 40
-    || new Set(credentials.map((item) => item.teamId)).size !== 40
-    || new Set(credentials.map((item) => item.password)).size !== 40) {
-    throw new Error("公测管理员凭据文件格式错误，必须包含 40 组唯一且完整的账号");
+    || new Set(credentials.map((item) => item.email)).size !== ADMIN_COUNT
+    || new Set(credentials.map((item) => item.teamId)).size !== ADMIN_COUNT
+    || new Set(credentials.map((item) => item.password)).size !== ADMIN_COUNT) {
+    throw new Error(`管理员凭据文件格式错误，必须包含 ${ADMIN_COUNT} 组唯一且完整的账号`);
   }
   return credentials;
 }
@@ -145,10 +153,10 @@ async function provision(credentials: BetaCredential[], removePrimaryAdmin: bool
          AND team_id REGEXP '^beta-[0-9]{3}$'`
     );
     const betaSummary = betaRows[0] || {};
-    if (Number(betaSummary.account_count || 0) !== 40
-      || Number(betaSummary.team_count || 0) !== 40
-      || Number(betaSummary.active_count || 0) !== 40) {
-      throw new Error("40 个公测团队管理员核验失败，已取消删除旧管理员");
+    if (Number(betaSummary.account_count || 0) !== ADMIN_COUNT
+      || Number(betaSummary.team_count || 0) !== ADMIN_COUNT
+      || Number(betaSummary.active_count || 0) !== ADMIN_COUNT) {
+      throw new Error(`${ADMIN_COUNT} 个团队管理员核验失败，已取消删除旧管理员`);
     }
     let removedPrimaryAdmin = 0;
     if (removePrimaryAdmin) {
@@ -172,7 +180,7 @@ const filePath = credentialFilePath();
 const credentials = await loadOrCreateCredentials(filePath);
 const removePrimaryAdmin = process.env.REMOVE_PRIMARY_ADMIN === "true";
 if (process.argv.includes("--generate-only")) {
-  console.log(`已生成并校验 40 组公测管理员凭据：${filePath}`);
+  console.log(`已生成并校验 ${ADMIN_COUNT} 组管理员凭据：${filePath}`);
 } else {
   const result = await provision(credentials, removePrimaryAdmin);
   console.log(`公测管理员预置完成：新增 ${result.created}，已存在 ${result.skipped}，删除旧管理员 ${result.removedPrimaryAdmin}，凭据文件 ${filePath}`);

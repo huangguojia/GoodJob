@@ -529,6 +529,7 @@ Swagger 文档默认启用，但必须先使用管理员或超级管理员账号
 
 - `frontend/index.html`：Vite 应用页面骨架，业务数据由后端接口加载。
 - `README.md`：产品、功能辩论、架构与页面说明。
+- `WEBSITE_LEAD_INGRESS.md`：官网到 CRM 的 HMAC 签名、重放保护与无中断密钥轮换方案。
 
 ## 10. 开源许可证
 

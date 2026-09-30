@@ -95,7 +95,8 @@ export function publicUser(user: ReturnType<typeof getStore>["users"][number]): 
     inboundUidValidity: user.inboundUidValidity || "",
     lastDevelopmentEmailAt: user.lastDevelopmentEmailAt || "",
     lastDevelopmentEmailTo: user.lastDevelopmentEmailTo || "",
-    lastDevelopmentEmailSubject: user.lastDevelopmentEmailSubject || ""
+    lastDevelopmentEmailSubject: user.lastDevelopmentEmailSubject || "",
+    theme: user.theme || ""
   };
 }
 

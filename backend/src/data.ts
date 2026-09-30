@@ -374,9 +374,9 @@ export const dealEvents: DealEvent[] = [
 ];
 
 export const reminders: Reminder[] = [
-  { id: "r1", title: "报价阶段停滞提醒", rule: "进入已报价阶段 3 天未更新时生成站内任务", dueAt: "今天 09:45", ownerId: "u_sales_shirley", targetOwnerId: "u_sales_shirley", teamId: "europe", channel: "站内", status: "enabled", enabled: true, ruleType: "quote_no_reply", targetStage: "已报价", days: 3, priority: "high" },
-  { id: "r2", title: "样品阶段待确认", rule: "进入样品阶段 3 天未更新时生成站内任务", dueAt: "今天 16:00", ownerId: "u_sales_shirley", targetOwnerId: "u_sales_shirley", teamId: "europe", channel: "站内", status: "enabled", enabled: true, ruleType: "sample_feedback", targetStage: "样品", days: 3, priority: "medium" },
-  { id: "r3", title: "高价值客户复访", rule: "高价值客户 14 天未产生有效活动时生成站内任务", dueAt: "本周五", ownerId: "u_manager_alex", targetOwnerId: "u_manager_alex", teamId: "europe", channel: "站内", status: "disabled", enabled: false, ruleType: "high_value_revisit", days: 14, priority: "medium" }
+  { id: "r1", title: "报价阶段停滞提醒", rule: "进入已报价阶段 3 天未更新时生成站内任务", dueAt: "今天 09:45", ownerId: "u_sales_shirley", targetOwnerId: "u_sales_shirley", teamId: "europe", channel: "站内", status: "enabled", enabled: true, ruleType: "quote_no_reply", targetStage: "已报价", days: 3, generateTodo: true, priority: "high" },
+  { id: "r2", title: "样品阶段待确认", rule: "进入样品阶段 3 天未更新时生成站内任务", dueAt: "今天 16:00", ownerId: "u_sales_shirley", targetOwnerId: "u_sales_shirley", teamId: "europe", channel: "站内", status: "enabled", enabled: true, ruleType: "sample_feedback", targetStage: "样品", days: 3, generateTodo: true, priority: "medium" },
+  { id: "r3", title: "高价值客户复访", rule: "高价值客户 14 天未产生有效活动时生成站内任务", dueAt: "本周五", ownerId: "u_manager_alex", targetOwnerId: "u_manager_alex", teamId: "europe", channel: "站内", status: "disabled", enabled: false, ruleType: "high_value_revisit", days: 14, generateTodo: true, priority: "medium" }
 ];
 
 export const importExportJobs: ImportExportJob[] = [

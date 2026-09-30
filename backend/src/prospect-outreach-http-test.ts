@@ -44,6 +44,7 @@ let whatsappBinding: WhatsAppBinding | null = null;
 let originalCompanyProfile: CompanyProfile | null = null;
 let insertedCompanyProfile = false;
 let historicalTouchpointId = "";
+let ownerMailOriginal: Record<string, unknown> | null = null;
 
 try {
   const login = await request("/api/auth/login", {
@@ -99,10 +100,28 @@ try {
   };
   store.websiteOpportunities.push(candidate);
 
+  // 资格审核链已移除：发信只依赖发件配置。测试里给 owner 配置 SMTP（NODE_ENV=test
+  // 下 nodemailer 使用 streamTransport，不会真实外发）。
+  ownerMailOriginal = {
+    outboundEmail: owner.outboundEmail,
+    smtpHost: owner.smtpHost,
+    smtpUser: owner.smtpUser,
+    smtpPassword: owner.smtpPassword,
+    smtpPort: owner.smtpPort,
+    smtpSecure: owner.smtpSecure
+  };
+  Object.assign(owner, {
+    outboundEmail: owner.outboundEmail || "sales@goodjob.example.test",
+    smtpHost: owner.smtpHost || "smtp.goodjob.example.test",
+    smtpUser: owner.smtpUser || "sales@goodjob.example.test",
+    smtpPassword: owner.smtpPassword || "test-password",
+    smtpPort: owner.smtpPort ?? 465,
+    smtpSecure: owner.smtpSecure ?? true
+  });
+
   setOutboundEmailDispatchObserverForTest(() => {
     dispatchCount += 1;
   });
-  const candidateBefore = structuredClone(candidate);
   const userBefore = {
     lastDevelopmentEmailAt: owner.lastDevelopmentEmailAt,
     lastDevelopmentEmailTo: owner.lastDevelopmentEmailTo,
@@ -111,31 +130,30 @@ try {
   const touchpointCountBefore = store.prospectTouchpoints.length;
   const todoCountBefore = store.todos.length;
 
-  const blocked = await request(
+  const allowedSend = await request(
     `/api/prospect-list/${encodeURIComponent(candidate.id)}/send-development-email`,
     {
       method: "POST",
       headers: { authorization: `Bearer ${token}` },
       body: JSON.stringify({
         to: candidate.contactInfo,
-        subject: "This message must be blocked",
-        body: "This development email must not reach the SMTP dispatch boundary.",
-        requestId: "blocked-outreach-http-request"
+        subject: "Outreach without qualification gates",
+        body: "Qualification gates were removed, so this candidate email is accepted.",
+        requestId: "allowed-outreach-http-request"
       })
     }
   );
 
-  assert.equal(blocked.response.status, 409);
-  assert.equal(blocked.json.errorCode, "PROSPECT_OUTREACH_NOT_RESOLVED");
-  assert.equal(dispatchCount, 0, "blocked request must make zero SMTP dispatches");
-  assert.equal(store.prospectTouchpoints.length, touchpointCountBefore);
-  assert.equal(store.todos.length, todoCountBefore);
-  assert.deepEqual(candidate, candidateBefore);
-  assert.deepEqual({
+  assert.equal(allowedSend.response.ok, true, JSON.stringify(allowedSend.json));
+  assert.equal(dispatchCount, 1, "allowed request must dispatch exactly once");
+  assert.equal(store.prospectTouchpoints.length, touchpointCountBefore + 1);
+  assert.equal(candidate.lastDevelopmentEmailTo, candidate.contactInfo);
+  assert.notDeepEqual({
     lastDevelopmentEmailAt: owner.lastDevelopmentEmailAt,
     lastDevelopmentEmailTo: owner.lastDevelopmentEmailTo,
     lastDevelopmentEmailSubject: owner.lastDevelopmentEmailSubject
   }, userBefore);
+  void todoCountBefore;
 
   const historicalCandidateBefore = structuredClone(candidate);
   const historicalTodoCount = store.todos.length;
@@ -278,23 +296,18 @@ try {
 
   const sideEffectsBefore = {
     dispatchCount,
-    leadActivities: store.leadActivities.length,
-    customerActivities: store.customerActivities.length,
-    touchpoints: store.prospectTouchpoints.length,
-    todos: store.todos.length,
-    whatsappMessages: store.whatsappMessages.length,
-    candidate: structuredClone(candidate),
-    lead: structuredClone(lead),
-    customer: structuredClone(customer)
+    whatsappMessages: store.whatsappMessages.length
   };
-  const blockedRequests = [
+  // 资格审核链已移除：带搜客血缘的线索 / 客户发信不再要求正式身份与人工批准。
+  const allowedRequests = [
     request(`/api/leads/${encodeURIComponent(lead.id)}/send-email`, {
       method: "POST",
       headers: { authorization: `Bearer ${token}` },
       body: JSON.stringify({
         to: lead.email,
-        subject: "Blocked lead email",
-        body: "This managed lead email must be blocked before SMTP dispatch."
+        subject: "Managed lead email allowed",
+        body: "Managed lineage emails no longer require formal identity records.",
+        requestId: "managed-lead-send-http"
       })
     }),
     request("/api/development-email/send", {
@@ -304,8 +317,8 @@ try {
         entityType: "lead",
         entityId: lead.id,
         to: lead.email,
-        subject: "Blocked generic lead email",
-        body: "This managed lead email must be blocked before SMTP dispatch.",
+        subject: "Generic lead email allowed",
+        body: "Generic lead sends no longer require formal identity records.",
         nextFollowAt: ""
       })
     }),
@@ -316,37 +329,25 @@ try {
         entityType: "customer",
         entityId: customer.id,
         to: candidate.contactInfo,
-        subject: "Blocked generic customer email",
-        body: "This managed customer email must be blocked before SMTP dispatch.",
+        subject: "Generic customer email allowed",
+        body: "Generic customer sends no longer require formal identity records.",
         nextFollowAt: ""
-      })
-    }),
-    request(`/api/whatsapp/customers/${encodeURIComponent(customer.id)}/messages`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}` },
-      body: JSON.stringify({
-        direction: "outbound",
-        content: "This managed customer message must be blocked before transport."
       })
     })
   ];
-  for (const blockedRequest of await Promise.all(blockedRequests)) {
-    assert.equal(blockedRequest.response.status, 409, JSON.stringify(blockedRequest.json));
-    assert.equal(blockedRequest.json.errorCode, "PROSPECT_OUTREACH_NOT_RESOLVED");
+  for (const allowedRequest of await Promise.all(allowedRequests)) {
+    assert.equal(allowedRequest.response.ok, true, JSON.stringify(allowedRequest.json));
   }
-  assert.equal(dispatchCount, sideEffectsBefore.dispatchCount);
-  assert.equal(store.leadActivities.length, sideEffectsBefore.leadActivities);
-  assert.equal(store.customerActivities.length, sideEffectsBefore.customerActivities);
-  assert.equal(store.prospectTouchpoints.length, sideEffectsBefore.touchpoints);
-  assert.equal(store.todos.length, sideEffectsBefore.todos);
+  assert.equal(dispatchCount, sideEffectsBefore.dispatchCount + 3);
   assert.equal(store.whatsappMessages.length, sideEffectsBefore.whatsappMessages);
-  assert.deepEqual(candidate, sideEffectsBefore.candidate);
-  assert.deepEqual(lead, sideEffectsBefore.lead);
-  assert.deepEqual(customer, sideEffectsBefore.customer);
 
   console.log("Prospect outreach HTTP gate tests passed");
 } finally {
   setOutboundEmailDispatchObserverForTest(null);
+  if (ownerMailOriginal) {
+    const ownerNow = store.users.find((item) => item.email === "shirley@goodjob.com");
+    if (ownerNow) Object.assign(ownerNow, ownerMailOriginal);
+  }
   if (candidate) {
     const index = store.websiteOpportunities.findIndex((item) =>
       item.id === candidate!.id

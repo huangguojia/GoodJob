@@ -8,10 +8,12 @@ import type { AiModelConfig } from "./types.js";
 export const AI_SEARCH_ADAPTER_VERSION = "ai-search-control-v1";
 
 export function aiSearchTimeoutMs() {
-  const configured = Number(process.env.AI_SEARCH_TIMEOUT_MS || 75_000);
+  // 实测中转站 gpt-5.5 一次 Web Search 调用可达 50~90s，75s 默认值经常掐断正常响应；
+  // 2026-09-19 又出现连续 3 次 110s 整被掐（历史成功样本最长 52s），默认再放宽到 150s。
+  const configured = Number(process.env.AI_SEARCH_TIMEOUT_MS || 150_000);
   return Number.isFinite(configured)
-    ? Math.max(20_000, Math.min(90_000, configured))
-    : 75_000;
+    ? Math.max(20_000, Math.min(180_000, configured))
+    : 150_000;
 }
 
 export function createAiSearchProvider(config: AiModelConfig) {
