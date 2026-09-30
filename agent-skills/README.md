@@ -12,6 +12,7 @@
 - `system-overview`：系统能力、业务对象、权限边界和通用完成标准，始终注入。
 - `customer-lifecycle`：线索、客户、跟进、待办和商机闭环。
 - `prospecting`：自动获客、清洗、复核和导入闭环。
+- `development-email`：**先背调、再按开发阶段与收件人角色撰写**一封有依据的开发信；无 AI 时用按阶段分档的固定模板兜底。
 - `outreach`：开发信、Communication 和后续触达闭环。
 - `trade-documents`：从客户与商机制作、审批、导出和下载 PI/CI 的闭环。
 

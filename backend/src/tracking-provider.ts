@@ -8,9 +8,7 @@ import type { ShipmentStatus } from "./types.js";
  * - 发货单在「草稿 / 已发货(交运)」阶段由我方(CRM)本地掌控，statusSource = "local"。
  * - 一旦交运并录入运单号，单据进入承运商生命周期，状态必须以来源方(官网/Open API/聚合平台)为准，
  *   statusSource = "carrier"。CRM 不应再用手填状态覆盖在途状态。
- * - 真实生产环境这里应接入承运商 Open API 或 快递100 / AfterShip / 17TRACK 等聚合平台；
- *   原型阶段用 MockCarrierGateway 确定性地模拟官网轨迹语义，接口形态与真实 API 一致，
- *   上线只需把 getTrackingProvider 指向真实 provider 即可，业务层无感。
+ * - 生产环境使用 17TRACK API；只有测试环境才使用确定性的 MockCarrierGateway。
  */
 
 export interface TrackingEvent {
@@ -119,16 +117,124 @@ class MockCarrierGateway implements TrackingProvider {
   }
 }
 
-const PROVIDERS: TrackingProvider[] = [new MockCarrierGateway()];
+class SeventeenTrackGateway implements TrackingProvider {
+  name = "17track";
 
-export function getTrackingProvider(courier: string): TrackingProvider {
-  return PROVIDERS.find((p) => p.supports(courier)) || PROVIDERS[0];
+  supports(): boolean {
+    return Boolean(process.env.TRACKING_17TRACK_TOKEN?.trim());
+  }
+
+  private async request(path: string, payload: unknown) {
+    const token = process.env.TRACKING_17TRACK_TOKEN?.trim();
+    if (!token) {
+      throw new Error("未配置真实物流查询 Token，请在服务器配置 TRACKING_17TRACK_TOKEN");
+    }
+    const response = await fetch(`https://api.17track.net/track/v2.1/${path}`, {
+      method: "POST",
+      headers: { "17token": token, "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(20_000)
+    });
+    const raw = await response.text();
+    let data: any;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new Error(`17TRACK 返回无效响应（HTTP ${response.status}）`);
+    }
+    if (!response.ok || data?.code !== 0) {
+      const message = typeof data?.data === "string" ? data.data : `HTTP ${response.status}`;
+      throw new Error(`17TRACK 查询失败：${message}`);
+    }
+    return data;
+  }
+
+  private eventFromRaw(raw: any, fallbackCode: string): TrackingEvent | null {
+    const time = raw?.time_iso || raw?.time || raw?.timestamp;
+    const description = String(raw?.description || raw?.event || raw?.status_name || "").trim();
+    const location = String(raw?.location || raw?.city || raw?.address || "").trim();
+    if (!time || (!description && !location)) return null;
+    const parsed = new Date(time);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return {
+      id: randomUUID(),
+      time: parsed.toISOString(),
+      status: this.statusFromRaw(raw),
+      location: location || "承运商未提供扫描位置",
+      description: description || `运单 ${fallbackCode} 有新的扫描记录`
+    };
+  }
+
+  private statusFromRaw(raw: any): ShipmentStatus {
+    const value = String(raw?.status || raw?.status_name || raw?.stage || "").toLowerCase();
+    if (/deliver|签收|妥投/u.test(value)) return "delivered";
+    if (/exception|expired|undeliver|返|退回|异常|失败/u.test(value)) return "exception";
+    if (/transit|pickup|outfordelivery|运输|派送|清关|揽收/u.test(value)) return "in_transit";
+    return "shipped";
+  }
+
+  private eventsFromTrackInfo(trackInfo: any, trackingCode: string): TrackingEvent[] {
+    const rawEvents = [
+      trackInfo?.latest_event,
+      ...(Array.isArray(trackInfo?.tracking?.providers)
+        ? trackInfo.tracking.providers.flatMap((provider: any) => provider?.events || [])
+        : []),
+      ...(Array.isArray(trackInfo?.tracking?.events) ? trackInfo.tracking.events : [])
+    ];
+    const seen = new Set<string>();
+    return rawEvents
+      .map((item) => this.eventFromRaw(item, trackingCode))
+      .filter((item): item is TrackingEvent => Boolean(item))
+      .filter((item) => {
+        const key = `${item.time}|${item.location}|${item.description}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => a.time.localeCompare(b.time));
+  }
+
+  async query(input: TrackingQueryInput): Promise<TrackingSnapshot> {
+    const syncedAt = new Date().toISOString();
+    const payload = [{ number: input.trackingCode.trim() }];
+    // 17TRACK requires registration before the first detail query. A duplicate
+    // registration is harmless and keeps the button reliable for new numbers.
+    await this.request("register", payload).catch((error) => {
+      if (!/exist|重复|已注册|already/iu.test(error instanceof Error ? error.message : "")) throw error;
+    });
+    const result = await this.request("gettrackinfo", payload);
+    const accepted = Array.isArray(result?.data?.accepted) ? result.data.accepted : [];
+    const rejected = Array.isArray(result?.data?.rejected) ? result.data.rejected : [];
+    const item = accepted.find((entry: any) => entry?.number === input.trackingCode.trim()) || accepted[0];
+    if (!item) {
+      const reason = rejected[0]?.error?.message || rejected[0]?.error?.detail || "承运商暂未返回轨迹";
+      throw new Error(`17TRACK 未返回该运单轨迹：${reason}`);
+    }
+    const events = this.eventsFromTrackInfo(item.track_info || item, input.trackingCode);
+    const latest = events.at(-1);
+    const status = this.statusFromRaw(item.track_info?.latest_status || item.track_info || item);
+    return {
+      status: latest?.status || status,
+      events,
+      source: "carrier",
+      provider: "17track",
+      syncedAt
+    };
+  }
 }
 
-/** 判断某发货单是否需要/可以被同步：在途状态且有运单号 */
+const REAL_PROVIDER = new SeventeenTrackGateway();
+const MOCK_PROVIDER = new MockCarrierGateway();
+
+export function getTrackingProvider(courier: string): TrackingProvider {
+  if (process.env.TRACKING_PROVIDER === "mock" || process.env.NODE_ENV === "test") return MOCK_PROVIDER;
+  return REAL_PROVIDER;
+}
+
+/** 有运单号即可查询；已签收单不再被外部结果回退。 */
 export function isSyncable(status: ShipmentStatus, trackingCode?: string): boolean {
-  if (!trackingCode) return false;
-  return status === "shipped" || status === "in_transit" || status === "exception";
+  if (!trackingCode?.trim()) return false;
+  return status !== "delivered";
 }
 
 /** 根据官网快照计算要写回发货单的字段 */

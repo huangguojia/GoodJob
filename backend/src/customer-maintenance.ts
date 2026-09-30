@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AgentActor } from "./ai-agent.js";
 import type { CrmStore } from "./store.js";
 import type { CustomerMaintenanceFinding, CustomerMaintenanceWatch, Todo } from "./types.js";
+import { recordSalesPlaybookUsage, salesPlaybookActionForStageAndGrade } from "./sales-distillation.js";
 
 const rulesSchema = z.object({
   intervalHours: z.coerce.number().int().min(1).max(24 * 7).default(24),
@@ -103,6 +104,7 @@ export function scanCustomerMaintenance(store: CrmStore, watch: CustomerMaintena
       nextAction: deal?.nextAction || "",
       nextActionAt: deal?.nextActionAt || ""
     })).digest("hex").slice(0, 32);
+    const playbook = salesPlaybookActionForStageAndGrade(store, { id: watch.ownerId, teamId: watch.teamId, role: owner?.role || "sales" }, deal?.stage || customer.stage, customer.grade as "A" | "B" | "C" | "D" | "" | undefined);
     findings.push({
       customerId: customer.id,
       customerName: customer.company,
@@ -110,7 +112,10 @@ export function scanCustomerMaintenance(store: CrmStore, watch: CustomerMaintena
       reasonCodes,
       reason: reasons.join("；"),
       priority: reasonCodes.includes("overdue_followup") || customer.health < 40 ? "high" : "medium",
-      triggerKey: `maintenance:${watch.id}:${fingerprint}`
+      triggerKey: `maintenance:${watch.id}:${fingerprint}`,
+      playbookActivationId: playbook?.activation.id,
+      playbookName: playbook?.distillation.sourceUserName,
+      playbookAction: playbook?.item.action
     });
   }
   return findings.sort((left, right) => {
@@ -175,6 +180,88 @@ export async function createCustomerMaintenanceWatch(
   return watch;
 }
 
+/**
+ * 界面直建通道：不经过 Agent 审批流。
+ * 与 createCustomerMaintenanceWatch 同构，但 missionRunId / approvalStepId 允许为空，
+ * 因此不会向 agentRunEvents 追加任务事件（appendMissionEvent 在无 missionRunId 时直接返回）。
+ */
+export async function createCustomerMaintenanceWatchDirect(
+  store: CrmStore,
+  user: AgentActor,
+  rawInput: Record<string, unknown>
+) {
+  const input = watchInputSchema.parse(rawInput);
+  const now = new Date().toISOString();
+  const watch: CustomerMaintenanceWatch = {
+    id: `cmw_${randomUUID()}`,
+    missionRunId: "",
+    approvalStepId: `direct_${randomUUID()}`,
+    ownerId: user.id,
+    teamId: user.teamId,
+    name: input.name,
+    status: "active",
+    rules: input.rules,
+    nextRunAt: now,
+    lastRunAt: "",
+    lastMatchedCount: 0,
+    lastCreatedCount: 0,
+    lastSkippedCount: 0,
+    totalCreatedCount: 0,
+    lastFindings: [],
+    lastError: "",
+    approvedBy: user.id,
+    approvedAt: now,
+    createdAt: now,
+    updatedAt: now
+  };
+  store.customerMaintenanceWatches.unshift(watch);
+  await store.persist();
+  return watch;
+}
+
+export function customerMaintenanceWatchFor(store: CrmStore, user: AgentActor, id: string) {
+  return store.customerMaintenanceWatches.find((item) => item.id === id && canAccess(item, user));
+}
+
+/** 命中明细：最近一次巡检的 findings + 该策略实际产出的待办（用于追溯"机器建了什么"）。 */
+export function listCustomerMaintenanceFindings(store: CrmStore, user: AgentActor, watchId: string, limit = 50) {
+  const watch = customerMaintenanceWatchFor(store, user, watchId);
+  if (!watch) throw new Error("客户守护策略不存在");
+  const bounded = Math.max(1, Math.min(200, limit));
+  const todos = store.todos
+    .filter((item) =>
+      item.reminderRuleId === `maintenance_watch:${watch.id}`
+      && item.ownerId === watch.ownerId
+      && item.teamId === watch.teamId
+    )
+    .sort((left, right) => (right.createdAt || "").localeCompare(left.createdAt || ""))
+    .slice(0, bounded)
+    .map((item) => ({
+      id: item.id,
+      title: item.title,
+      customerId: item.customerId || "",
+      dealId: item.dealId || "",
+      priority: item.priority,
+      done: item.done,
+      dueAt: item.dueAt,
+      related: item.related,
+      createdAt: item.createdAt || "",
+      triggerKey: item.triggerKey || ""
+    }));
+  return {
+    watchId: watch.id,
+    name: watch.name,
+    status: watch.status,
+    lastRunAt: watch.lastRunAt,
+    lastMatchedCount: watch.lastMatchedCount,
+    lastCreatedCount: watch.lastCreatedCount,
+    lastSkippedCount: watch.lastSkippedCount,
+    totalCreatedCount: watch.totalCreatedCount,
+    findings: watch.lastFindings.slice(0, bounded),
+    todos
+  };
+}
+
 export function listCustomerMaintenanceWatches(store: CrmStore, user: AgentActor, limit = 20) {
   return store.customerMaintenanceWatches
     .filter((item) => canAccess(item, user))
@@ -234,7 +321,7 @@ export async function runCustomerMaintenanceWatch(store: CrmStore, watch: Custom
       dueAt: localMinuteText(now),
       ownerId: watch.ownerId,
       teamId: watch.teamId,
-      related: `${customer.company} · ${finding.reason}`,
+      related: `${customer.company} · ${finding.reason}${finding.playbookAction ? ` · 打法：${finding.playbookAction}` : ""}`,
       done: false,
       impactAmount: customer.amount,
       createdAt: now.toISOString(),
@@ -243,6 +330,7 @@ export async function runCustomerMaintenanceWatch(store: CrmStore, watch: Custom
       reminderRuleId: `maintenance_watch:${watch.id}`,
       triggerKey: finding.triggerKey
     });
+    if (finding.playbookActivationId) recordSalesPlaybookUsage(store, finding.playbookActivationId, true);
   }
   store.todos.unshift(...created);
   watch.lastRunAt = now.toISOString();

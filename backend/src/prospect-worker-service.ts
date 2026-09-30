@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { createAiSearchProvider } from "./ai-search-provider.js";
 import { callAiModelWithWebSearch } from "./ai-model-runtime.js";
+import { aiLeadFinderReadiness, aiWebSearchPolicy } from "./ai-web-search-policy.js";
 import { getProvider } from "./lead-providers.js";
 import { aiWebsiteCitationsToProviderRecords } from "./prospect-ai-website-discovery.js";
 import { BullMqProspectQueueBackend } from "./prospect-bullmq-backend.js";
@@ -64,6 +65,14 @@ export class ProspectWorkerService {
       options.queueRequired
       ?? process.env.PROSPECT_QUEUE_REQUIRED === "true";
     const nativeWebSearchCooldowns = new Map<string, number>();
+    const externalWebsiteSearchReady = (teamId: string, ownerId: string) =>
+      this.store.providerConnections.some((item) =>
+        item.teamId === teamId
+        && item.ownerId === ownerId
+        && item.scope === "personal"
+        && item.status === "active"
+        && ["brave", "serper", "serpapi", "google_places"].includes(item.providerId)
+      );
     this.worker = new ProspectWorker({
       store: this.store,
       dispatcher: new ProspectProviderDispatcher({
@@ -77,6 +86,10 @@ export class ProspectWorkerService {
               && item.enabled
               && item.useLeadFinder
               && Boolean(item.apiKey)
+              && aiLeadFinderReadiness(
+                item,
+                externalWebsiteSearchReady(request.teamId, request.ownerId)
+              ).ready
             )
             .sort((left, right) =>
               new Date(right.updatedAt).getTime()
@@ -114,11 +127,27 @@ export class ProspectWorkerService {
             && item.useLeadFinder
             && item.protocol === "openai-compatible"
             && Boolean(item.apiKey)
+            && aiWebSearchPolicy(item).ready
           )
           .sort((left, right) =>
             new Date(right.updatedAt).getTime()
             - new Date(left.updatedAt).getTime()
           )[0];
+        const configuredAi = this.store.aiModelConfigs
+          .filter((item) =>
+            item.teamId === candidate.teamId
+            && item.ownerId === candidate.ownerId
+            && item.enabled
+            && item.useLeadFinder
+            && Boolean(item.apiKey)
+          )
+          .sort((left, right) =>
+            new Date(right.updatedAt).getTime()
+            - new Date(left.updatedAt).getTime()
+          )[0];
+        const aiWebSearchBlockReason = configuredAi && !aiWebSearchPolicy(configuredAi).ready
+          ? aiWebSearchPolicy(configuredAi).message
+          : "";
         if (aiConfig
           && (nativeWebSearchCooldowns.get(aiConfig.id) || 0) <= Date.now()) {
           try {
@@ -265,7 +294,9 @@ export class ProspectWorkerService {
           providerId: "wikidata",
           records: [],
           errorCode: "WEBSITE_SEARCH_PROVIDER_UNAVAILABLE",
-          errorMessage: "OpenAI 联网与免费 Wikidata 均未取得官网；可配置 Brave Search、Serper、SerpApi 或 Google Places 扩大覆盖"
+          errorMessage: aiWebSearchBlockReason
+            ? `${aiWebSearchBlockReason} 可配置 Brave Search、Serper、SerpApi 或 Google Places 继续补查。`
+            : "OpenAI 联网与免费 Wikidata 均未取得官网；可配置 Brave Search、Serper、SerpApi 或 Google Places 扩大覆盖"
         };
       },
       onStateChanged: () => this.coordinator?.synchronize()

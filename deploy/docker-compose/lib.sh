@@ -45,6 +45,39 @@ release_id() {
   fi
 }
 
+image_mode() {
+  printf '%s\n' "${GOODJOB_IMAGE_MODE:-local}"
+}
+
+image_repository() {
+  case "$1" in
+    backend) printf '%s\n' "${GOODJOB_BACKEND_IMAGE:-goodjobcrm-backend}" ;;
+    communication) printf '%s\n' "${GOODJOB_COMMUNICATION_IMAGE:-goodjobcrm-communication}" ;;
+    gateway) printf '%s\n' "${GOODJOB_GATEWAY_IMAGE:-goodjobcrm-gateway}" ;;
+    *) die "未知 GoodJob 镜像服务：$1" ;;
+  esac
+}
+
+validate_image_mode() {
+  case "$(image_mode)" in
+    local)
+      ;;
+    registry)
+      local service repository
+      for service in backend communication gateway; do
+        repository="$(image_repository "$service")"
+        [[ "$repository" != *[[:space:]]* && "$repository" != *:* && "$repository" != *@* ]] \
+          || die "registry 模式的 $service 镜像仓库地址不能包含空格、标签或 digest：$repository"
+        [[ "$repository" == */* ]] \
+          || die "registry 模式的 $service 必须使用完整镜像仓库地址：$repository"
+      done
+      ;;
+    *)
+      die "GOODJOB_IMAGE_MODE 只能是 local 或 registry，当前为：$(image_mode)"
+      ;;
+  esac
+}
+
 secret_value() {
   local file="$SECRETS_DIR/$1"
   [[ -s "$file" ]] || die "Secret 不存在或为空：$file"

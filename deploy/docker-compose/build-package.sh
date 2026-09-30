@@ -51,10 +51,12 @@ rsync -a "$PROJECT_ROOT/deploy/docker-compose/" "$STAGING_DIR/deploy/docker-comp
 cp "$PROJECT_ROOT/LICENSE" "$PROJECT_ROOT/NOTICE" "$PROJECT_ROOT/README.md" "$STAGING_DIR/"
 printf '%s\n' "$RELEASE_ID" > "$STAGING_DIR/RELEASE-ID"
 
-for script in configure.sh preflight.sh install.sh backup.sh restore.sh manage.sh rollback.sh update-docker.sh; do
+for script in configure.sh preflight.sh install.sh backup.sh restore.sh manage.sh rollback.sh update-docker.sh update-registry.sh; do
   cp "$STAGING_DIR/deploy/docker-compose/root-command.sh" "$STAGING_DIR/$script"
   chmod 0755 "$STAGING_DIR/$script"
 done
+cp "$STAGING_DIR/deploy/docker-compose/publish-images.sh" "$STAGING_DIR/publish-images.sh"
+chmod 0755 "$STAGING_DIR/publish-images.sh"
 cp "$STAGING_DIR/deploy/docker-compose/install-docker-ubuntu.sh" "$STAGING_DIR/install-docker-ubuntu.sh"
 chmod 0755 "$STAGING_DIR/install-docker-ubuntu.sh"
 cp "$STAGING_DIR/deploy/docker-compose/DOCKER-BAOTA-INSTALL.md" "$STAGING_DIR/DOCKER-BAOTA-INSTALL.md"

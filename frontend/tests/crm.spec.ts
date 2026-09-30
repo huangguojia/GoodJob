@@ -25,7 +25,7 @@ async function loginAsAdmin(page: import("@playwright/test").Page) {
 }
 
 async function openView(page: import("@playwright/test").Page, view: string) {
-  const button = page.locator(`.nav button[data-view="${view}"]`);
+  const button = page.locator(`.nav button[data-view="${view}"]`).first();
   if (!(await button.isVisible())) {
     const section = button.locator("xpath=ancestor::details[1]");
     if (await section.count()) {
@@ -1285,6 +1285,53 @@ test.describe("GoodJob CRM prototype pages", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   });
 
+  test("contacted deal can generate a quotation draft", async ({ page }) => {
+    const dealTitle = `报价单入口-${runId}`;
+    const nextActionAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const created = await apiFromPage<{ deal: { id: string } }>(page, "/api/deals", {
+      method: "POST",
+      body: {
+        customerId: "c1",
+        title: dealTitle,
+        product: "Quotation LED Light",
+        quantity: 12,
+        unitPrice: 88,
+        items: [{ product: "Quotation LED Light", model: "Q-88", quantity: 12, unitPrice: 88 }],
+        currency: "USD",
+        nextAction: "确认报价要求",
+        nextActionAt,
+        expectedCloseAt: ""
+      }
+    });
+    await apiFromPage(page, `/api/deals/${created.deal.id}/stage`, {
+      method: "PATCH",
+      body: {
+        stage: "已联系",
+        result: "客户已确认产品、数量和报价要求",
+        nextAction: "发送正式报价单",
+        nextActionAt,
+        expectedCloseAt: ""
+      }
+    });
+    await page.reload();
+    await expect(page.locator("body")).toHaveClass(/is-authenticated/);
+    await openView(page, "pipeline");
+
+    const card = page.locator("#pipeline .deal", { hasText: dealTitle }).first();
+    await expect(card).toContainText("已联系");
+    await expect(card.getByRole("button", { name: "生成报价单" })).toBeVisible();
+    await card.getByText(dealTitle, { exact: true }).click();
+    await expect(page.locator("#drawerGenerateQuotationButton")).toBeVisible();
+    await page.locator("#closeDealDrawerButton").click();
+
+    await card.getByRole("button", { name: "生成报价单" }).click();
+    await expect(page.locator("#documents")).toHaveClass(/active/);
+    await expect(page.locator("#documentTypeTabs button[data-doc-type='QUOTATION']")).toHaveClass(/active/);
+    await expect(page.locator("#docBuyerInput")).toHaveValue("Nordic Tools AB");
+    await expect(page.locator("#documentPreview")).toContainText("Quotation LED Light");
+    await expect(page.locator(".toast").last()).toContainText("生成报价单草稿");
+  });
+
   test("pipeline can create and move a deal", async ({ page }) => {
     test.setTimeout(60_000);
     const dealTitle = `自动化商机-${runId}`;
@@ -1295,7 +1342,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     });
     await openView(page, "customers");
     await page.locator("#customers tbody tr", { hasText: "Nordic Tools AB" }).first().getByRole("button", { name: "编辑" }).click();
-    await page.locator("#customerBillingNameInput").fill(`Nordic Print Buyer ${runId}`);
+    await page.locator("#customerCompanyFullNameInput").fill(`Nordic Print Buyer ${runId}`);
     await page.locator("#customerBillingAddressInput").fill("Automation Street 18, Stockholm, Sweden");
     await page.locator("#customerDocumentContactInput").fill("Emma / pi-print@example.com");
     await page.locator("#customerPortDischargeInput").fill("Stockholm");
@@ -1312,10 +1359,10 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#dealCustomerOptions")).toContainText("Nordic Tools AB");
     await page.locator("#dealCustomerOptions [data-deal-customer-id]").first().click();
     await expect(page.locator("#dealCustomerInput")).toHaveValue("Nordic Tools AB");
-    await page.locator("#dealProductInput").fill("自动化 LED 工程灯");
-    await page.locator("#dealQuantityInput").fill("14");
-    await page.locator("#dealUnitPriceInput").fill("2000");
-    await expect(page.locator("#dealAmountInput")).toHaveValue("28000");
+    await page.locator("#dealItemsList .deal-item-row").first().locator("[data-deal-item-product]").fill("自动化 LED 工程灯");
+    await page.locator("#dealItemsList .deal-item-row").first().locator("[data-deal-item-quantity]").fill("14");
+    await page.locator("#dealItemsList .deal-item-row").first().locator("[data-deal-item-price]").fill("2000");
+    await expect(page.locator("#dealAmountDisplay")).toHaveText("28,000.00");
     await page.locator("#saveDealButton").click();
 
     await expect(page.locator("#pipeline .pipeline-strip")).toContainText(dealTitle);
@@ -1329,11 +1376,11 @@ test.describe("GoodJob CRM prototype pages", () => {
     await dealCard().getByText(dealTitle, { exact: true }).click();
     await expect(page.locator("#dealDrawer")).toHaveClass(/open/);
     await page.locator("#drawerEditDealButton").click();
-    await page.locator("#dealProductInput").fill("自动化 LED 工程灯");
-    await page.locator("#dealQuantityInput").fill("16");
-    await page.locator("#dealUnitPriceInput").fill("1800");
+    await page.locator("#dealItemsList .deal-item-row").first().locator("[data-deal-item-product]").fill("自动化 LED 工程灯");
+    await page.locator("#dealItemsList .deal-item-row").first().locator("[data-deal-item-quantity]").fill("16");
+    await page.locator("#dealItemsList .deal-item-row").first().locator("[data-deal-item-price]").fill("1800");
     await page.locator("#dealNextActionInput").fill("确认修订报价");
-    await expect(page.locator("#dealAmountInput")).toHaveValue("28800");
+    await expect(page.locator("#dealAmountDisplay")).toHaveText("28,800.00");
     await page.locator("#saveDealButton").click();
     await expect(page.locator(".toast").last()).toContainText("商机已更新");
     await expect(dealCard()).toContainText("自动化 LED 工程灯");
@@ -1356,12 +1403,21 @@ test.describe("GoodJob CRM prototype pages", () => {
     };
 
     await advanceDeal();
+    await expect(dealCard()).toContainText("已联系");
+    await expect(dealCard().getByRole("button", { name: "生成报价单" })).toBeVisible();
+    await dealCard().getByRole("button", { name: "生成报价单" }).click();
+    await expect(page.locator("#documents")).toHaveClass(/active/);
+    await expect(page.locator("#documentPreview")).toContainText("QUOTATION");
+    await expect(page.locator("#documentPreview")).toContainText(`Nordic Print Buyer ${runId}`);
+    await expect(page.locator("#documentPreview")).toContainText("自动化 LED 工程灯");
+    await expect(page.locator(".toast").last()).toContainText("生成报价单草稿");
+    await openView(page, "pipeline");
     await advanceDeal();
     await expect(dealCard()).toContainText("已报价");
     await expect(dealCard().getByRole("button", { name: "生成 PI" })).toBeVisible();
     await dealCard().getByRole("button", { name: "生成 PI" }).click();
     await expect(page.locator("#documents")).toHaveClass(/active/);
-    await expect(page.locator("#documentPreview")).toContainText("PROFORMA INVOICE");
+    await expect(page.locator("#documentPreview")).toContainText("Proforma Invoice");
     await expect(page.locator("#documentPreview")).toContainText(`Nordic Print Buyer ${runId}`);
     await expect(page.locator("#documentPreview")).toContainText("自动化 LED 工程灯");
     await expect(page.locator("#docSellerInput")).toHaveValue("");
@@ -1379,7 +1435,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#dealDrawer")).toContainText("PI");
     await page.locator("#drawerPrintDealButton").click();
     await expect(page.locator("#documents")).toHaveClass(/active/);
-    await expect(page.locator("#documentPreview")).toContainText("COMMERCIAL INVOICE");
+    await expect(page.locator("#documentPreview")).toContainText("Commercial Invoice");
     await expect(page.locator("#documentPreview")).toContainText(`Nordic Print Buyer ${runId}`);
     await openView(page, "pipeline");
     await page.locator("#pipelineClosedPanel").evaluate((node: HTMLDetailsElement) => { node.open = true; });
@@ -1389,7 +1445,7 @@ test.describe("GoodJob CRM prototype pages", () => {
 
     await page.locator("#pipeline .page-head .btn.primary").click();
     await page.locator("#dealTitleInput").fill(blockedDeal);
-    await page.locator("#dealProductInput").fill("待确认产品");
+    await page.locator("#dealItemsList .deal-item-row").first().locator("[data-deal-item-product]").fill("待确认产品");
     await expect(page.locator("#dealCustomerInput")).toHaveValue("");
     await page.locator("#saveDealButton").click();
     await expect(page.locator(".toast").last()).toContainText("选择关联客户");
@@ -1400,9 +1456,9 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#dealTitleInput").fill(lostDeal);
     await page.locator("#dealCustomerInput").fill("Atlas");
     await page.locator("#dealCustomerOptions [data-deal-customer-id]").first().click();
-    await page.locator("#dealProductInput").fill("丢单测试产品");
-    await page.locator("#dealQuantityInput").fill("9");
-    await page.locator("#dealUnitPriceInput").fill("1000");
+    await page.locator("#dealItemsList .deal-item-row").first().locator("[data-deal-item-product]").fill("丢单测试产品");
+    await page.locator("#dealItemsList .deal-item-row").first().locator("[data-deal-item-quantity]").fill("9");
+    await page.locator("#dealItemsList .deal-item-row").first().locator("[data-deal-item-price]").fill("1000");
     await page.locator("#saveDealButton").click();
     await expect(page.locator("#pipeline .pipeline-strip")).toContainText(lostDeal);
     const lostCard = page.locator("#pipeline .deal", { hasText: lostDeal }).first();
@@ -1759,10 +1815,10 @@ test.describe("GoodJob CRM prototype pages", () => {
     });
     await openView(page, "documents");
     await expect(page.locator("#documents .doc-studio")).toBeVisible();
-    await expect(page.locator("#documentPreview")).toContainText(/PROFORMA INVOICE|COMMERCIAL INVOICE/);
-
-    await page.locator("#newDocumentButton").click();
     await page.locator("#documentTypeTabs button[data-doc-type='CI']").click();
+    await page.locator("#newDocumentButton").click();
+    await expect(page.locator("#documentPreview")).toContainText(/Proforma Invoice|Commercial Invoice/);
+
     await page.locator("#docTitleInput").fill(docTitle);
     await page.locator("#docBuyerInput").fill(`发票客户-${runId}`);
     await page.locator("#docSellerInput").fill("Automation Export Test Co., Ltd.");
@@ -1778,7 +1834,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#documentItemsEditor .doc-item-grid").nth(1).locator("[data-doc-field='quantity']").fill("8");
     await page.locator("#documentItemsEditor .doc-item-grid").nth(1).locator("[data-doc-field='unitPrice']").fill("48");
 
-    await expect(page.locator("#documentPreview")).toContainText("COMMERCIAL INVOICE");
+    await expect(page.locator("#documentPreview")).toContainText("Commercial Invoice");
     await expect(page.locator("#documentPreview")).toContainText("Automation Export Test Co., Ltd.");
     await expect(page.locator("#documentPreview")).toContainText("LED High Bay Light");
     await expect(page.locator("#documentPreview")).toContainText("HS Code");
@@ -1794,6 +1850,7 @@ test.describe("GoodJob CRM prototype pages", () => {
 
     await page.once("dialog", (dialog) => dialog.accept("确认客户、付款条款和交期"));
     await page.locator("#documentSubmitApprovalButton").click();
+    await page.locator("#confirmDocumentApprovalSubmitButton").click();
     await expect(page.locator("#docStatusBadge")).toContainText("待审批");
     await page.locator("#documentApproveButton").click();
     await expect(page.locator("#docStatusBadge")).toContainText("已审批");
@@ -1803,13 +1860,21 @@ test.describe("GoodJob CRM prototype pages", () => {
     await page.locator("#documentSendRecipientInput").fill(`buyer-${runId}@example.com`);
     await page.locator("#confirmDocumentSendButton").click();
     await expect(page.locator(".toast").last()).toContainText("发送记录已保存");
-    await page.locator("#documentNewRevisionButton").click();
-    await expect(page.locator("#docStatusBadge")).toContainText("草稿");
-    await expect(page.locator("#documentList")).toContainText(`${docTitle} v2`);
 
+    const approvedNumber = await page.locator("#docNumberInput").inputValue();
+    const changedBuyer = `修改后的买方-${runId}`;
+    await page.locator("#docBuyerInput").fill(changedBuyer);
+
+    const pdfDownloadPromise = page.waitForEvent("download");
     await page.locator("#exportDocumentPdfButton").click();
-    await expect(page.locator(".toast").last()).toContainText("已打印单据草稿");
-    await expect(page.locator("body")).toHaveAttribute("data-print-called", "true");
+    await expect(page.locator("#docBuyerInput")).toHaveValue(changedBuyer);
+    await expect(page.locator("#documentPreview")).toContainText(changedBuyer);
+    await expect(page.locator("#docStatusBadge")).toContainText("已配置 · v2");
+    await expect(page.locator("#documentList")).toContainText(`${docTitle} v2`);
+    const documentVersions = await apiFromPage<{ documents: Array<{ number: string; status: string; buyer: string }> }>(page, "/api/trade-documents");
+    expect(documentVersions.documents.some((document) => document.number === approvedNumber && document.status === "approved" && document.buyer !== changedBuyer)).toBe(true);
+    const pdfDownload = await pdfDownloadPromise;
+    expect(pdfDownload.suggestedFilename()).toContain("-CI.pdf");
   });
 
   test("document workflow remains usable on mobile", async ({ page }) => {
@@ -1825,6 +1890,72 @@ test.describe("GoodJob CRM prototype pages", () => {
     }));
     expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewport + 1);
     expect(layout.workflowWidth).toBeLessThanOrEqual(layout.viewport - 24);
+  });
+
+  test("PI can switch to the Longtec template without changing document data", async ({ page }) => {
+    await openView(page, "documents");
+    await page.locator("#documentTypeTabs button[data-doc-type='PI']").click();
+    await page.locator("#newDocumentButton").click();
+    await page.locator("#docTitleInput").fill("Longtec PI template test");
+    await page.locator("#docNumberInput").fill("PI-LONGTEC-001");
+    await page.locator("#docBuyerInput").fill("Cal Tech Automation Pvt Ltd");
+    await page.locator("#docBuyerAddressInput").fill("#115, Koskolawatta Pitumpe, Padukka, Sri Lanka");
+    await page.locator("#docBuyerContactInput").fill("+94761564916");
+    await page.locator("#docSellerInput").fill("HONG KONG NEW LONGTEC CO., LIMITED");
+    await page.locator("#docSellerAddressInput").fill("RM917B, BLK A, 9/F., NEW MANDARIN PLAZA, HONG KONG");
+    await page.locator("#docIncotermInput").selectOption("DAP");
+    await page.locator("#docPaymentInput").fill("100% T/T in advance");
+    await page.locator("#docNotesInput").fill("Buyer needs to assume poundage of bank.");
+    const item = page.locator("#documentItemsEditor .doc-item-grid").first();
+    await item.locator("[data-doc-field='product']").fill("UNI800");
+    await item.locator("[data-doc-field='model']").fill("(2016) -BNB");
+    await item.locator("[data-doc-field='quantity']").fill("1");
+    await item.locator("[data-doc-field='unitPrice']").fill("270");
+    await page.locator("#docShippingCostInput").fill("60");
+
+    const before = await page.evaluate(() => ({
+      buyer: (document.querySelector<HTMLInputElement>("#docBuyerInput"))?.value,
+      seller: (document.querySelector<HTMLInputElement>("#docSellerInput"))?.value,
+      product: (document.querySelector<HTMLInputElement>("[data-doc-field='product']"))?.value,
+      model: (document.querySelector<HTMLInputElement>("[data-doc-field='model']"))?.value,
+      quantity: (document.querySelector<HTMLInputElement>("[data-doc-field='quantity']"))?.value,
+      unitPrice: (document.querySelector<HTMLInputElement>("[data-doc-field='unitPrice']"))?.value,
+      shippingCost: (document.querySelector<HTMLInputElement>("#docShippingCostInput"))?.value
+    }));
+
+    await page.locator("#docTemplateInput").selectOption("longtec");
+    await expect(page.locator("#documentPreview")).toHaveClass(/longtec-pi/);
+    await expect(page.locator("#documentPreview")).toContainText("PROFORMA INVOICE");
+    await expect(page.locator("#documentPreview")).toContainText("Cal Tech Automation Pvt Ltd");
+    await expect(page.locator("#documentPreview")).toContainText("UNI800");
+    await expect(page.locator("#documentPreview")).toContainText("USD 330");
+
+    await page.locator("#docThemeInput").selectOption("emerald");
+    await expect(page.locator("#docTemplateInput")).toHaveValue("longtec");
+    const accentColor = await page.locator("#documentPreview").evaluate((node) => getComputedStyle(node).getPropertyValue("--longtec-accent").trim());
+    expect(accentColor).toBe("#059669");
+    await expect(page.locator(".longtec-pi-table th").first()).toHaveCSS("background-color", "rgb(236, 253, 245)");
+
+    await page.locator("#docLanguageInput").selectOption("ZH");
+    await expect(page.locator("#documentPreview")).toContainText("买方");
+    await expect(page.locator("#documentPreview")).toContainText("单价");
+    await expect(page.locator("#documentPreview")).toContainText("总付款");
+    await page.locator("#docLanguageInput").selectOption("EN");
+
+    await page.locator("#docTemplateInput").selectOption("classic");
+    await expect(page.locator("#documentPreview")).toHaveClass(/classic/);
+    await page.locator("#docTemplateInput").selectOption("longtec");
+    const after = await page.evaluate(() => ({
+      buyer: (document.querySelector<HTMLInputElement>("#docBuyerInput"))?.value,
+      seller: (document.querySelector<HTMLInputElement>("#docSellerInput"))?.value,
+      product: (document.querySelector<HTMLInputElement>("[data-doc-field='product']"))?.value,
+      model: (document.querySelector<HTMLInputElement>("[data-doc-field='model']"))?.value,
+      quantity: (document.querySelector<HTMLInputElement>("[data-doc-field='quantity']"))?.value,
+      unitPrice: (document.querySelector<HTMLInputElement>("[data-doc-field='unitPrice']"))?.value,
+      shippingCost: (document.querySelector<HTMLInputElement>("#docShippingCostInput"))?.value
+    }));
+    expect(after).toEqual(before);
+    await expect(page.locator("#documentPreview")).toContainText("Total payment");
   });
 
   test("knowledge and exam pages keep their dense content and key actions", async ({ page }) => {
@@ -3415,7 +3546,7 @@ test.describe("GoodJob CRM prototype pages", () => {
       responseBytes: 0,
       redirected: false,
       evidence: null,
-      events: [event(1, "queued", "官网低频验证已排队")],
+      events: [event(1, "queued", "Website review has been queued")],
       failureCode: "",
       failureMessage: "",
       startedAt: "",
@@ -3423,12 +3554,12 @@ test.describe("GoodJob CRM prototype pages", () => {
       createdAt: now
     };
     const streamedEvents = [
-      event(2, "dns", "DNS 公网检查通过"),
-      event(3, "robots", "robots.txt 允许访问官网首页"),
-      event(4, "head", "首页状态和内容类型检查通过"),
-      event(5, "body", "首页正文样本读取完成，原文不会保存"),
-      event(6, "evidence", "已提取官网公开业务邮箱或组织级弱证据"),
-      event(7, "completed", "官网验证已结束：公开业务邮箱已回填，组织证据仍需交叉验证")
+      event(2, "dns", "Public DNS check passed"),
+      event(3, "robots", "The access policy allows homepage review"),
+      event(4, "head", "Homepage status and content type check passed"),
+      event(5, "body", "The homepage content sample was reviewed. Source text was not retained."),
+      event(6, "evidence", "Public contact details or organization evidence was identified"),
+      event(7, "completed", "Website review completed")
     ];
     const completedAttempt = {
       ...queuedAttempt,

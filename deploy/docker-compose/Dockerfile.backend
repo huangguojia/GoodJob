@@ -14,7 +14,8 @@ COPY backend/package.json backend/package.json
 COPY frontend/package.json frontend/package.json
 COPY integration-sdk/package.json integration-sdk/package.json
 COPY integration-worker/package.json integration-worker/package.json
-RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+RUN npm pkg delete --workspace @goodjob/integration-connector-sdk scripts.prepare \
+    && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
     && npm cache clean --force
 
 COPY backend/dist backend/dist

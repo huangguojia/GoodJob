@@ -5,6 +5,11 @@ export interface LeadSourceAvailability {
   accessMode: "api" | "bulk_file" | "website_controlled" | "manual_assisted" | "disabled";
   recommended?: boolean;
   tier?: "free" | "byok_free" | "paid" | "ai";
+  category?: "web" | "company" | "email" | "ai" | string;
+  capabilities?: string[];
+  hasApiKey?: boolean;
+  requiresKey?: boolean;
+  optionalKey?: boolean;
 }
 
 export type LeadSourceBlockReason = "missing" | "not_ready" | "disabled" | "not_executable";
@@ -25,13 +30,26 @@ export function isLeadSourceExecutable(provider: LeadSourceAvailability | undefi
 }
 
 export function isLeadSourceAutoSelected(provider: LeadSourceAvailability | undefined) {
-  // 免费来源保留给用户主动选择，避免默认搜索质量和稳定性不可控。
+  if (!provider || !isLeadSourceExecutable(provider)) return false;
+  if (provider.id === "ai_search") return true;
+  const configuredApiSource = Boolean(
+    provider.hasApiKey
+      && provider.tier !== "free"
+      && provider.category !== "email"
+      && (
+        provider.category === "web"
+        || provider.category === "company"
+        || provider.capabilities?.some((item) =>
+          ["web", "maps", "company", "procurement", "business_signal"].includes(item)
+        )
+      )
+  );
+  if (configuredApiSource) return true;
+  // 内置免费源保留给用户主动选择，避免默认结果质量和稳定性不可控。
   return Boolean(
-    provider
-      && (provider.id === "ai_search" || provider.recommended)
+    provider.recommended
       && provider.tier !== "free"
       && provider.tier !== "byok_free"
-      && isLeadSourceExecutable(provider)
   );
 }
 

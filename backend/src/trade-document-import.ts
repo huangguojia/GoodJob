@@ -8,7 +8,9 @@ import type {
   TradeDocumentImportAnalysis,
   TradeDocumentImportDraft,
   TradeDocumentImportEvidence,
-  TradeDocumentItem
+  TradeDocumentItem,
+  TradeDocumentRecognitionSource,
+  TradeDocumentRecognitionTemplateSnapshot
 } from "./types.js";
 
 export const TRADE_DOCUMENT_IMPORT_MAX_BYTES = 8 * 1024 * 1024;
@@ -331,7 +333,7 @@ function parseRows(rows: unknown[][], fileName: string): ParsedTradeDocumentSour
     bankInfo: extracted.bankInfo || "",
     notes: extracted.notes || "",
     language: /[\u4e00-\u9fff]/u.test(flattened) ? "ZH" : "EN",
-    templateStyle: "indigo",
+    templateStyle: "rose",
     items
   };
   const warnings: string[] = [];
@@ -592,6 +594,15 @@ export async function parseTradeDocumentImport(fileName: string, declaredMime: s
   return parsed;
 }
 
+export function parseTradeDocumentText(text: string, fileName: string) {
+  const rows = text
+    .split(/\r?\n/gu)
+    .map((line) => line.split(/\s{2,}|\t|\|/gu).map((cell) => cell.trim()).filter(Boolean))
+    .filter((row) => row.length > 0);
+  if (!rows.length) throw new Error("OCR 服务没有返回可识别文字");
+  return parseRows(rows, fileName);
+}
+
 export function createTradeDocumentImportAnalysis(input: {
   id: string;
   fileName: string;
@@ -602,6 +613,8 @@ export function createTradeDocumentImportAnalysis(input: {
   ownerId: string;
   teamId: string;
   parsed: ParsedTradeDocumentSource;
+  recognitionSource?: TradeDocumentRecognitionSource;
+  recognitionTemplate?: TradeDocumentRecognitionTemplateSnapshot;
 }): TradeDocumentImportAnalysis {
   const now = new Date().toISOString();
   return {
@@ -621,6 +634,8 @@ export function createTradeDocumentImportAnalysis(input: {
     calculatedTotal: input.parsed.calculatedTotal,
     declaredTotal: input.parsed.declaredTotal,
     totalDifference: input.parsed.declaredTotal === undefined ? undefined : input.parsed.declaredTotal - input.parsed.calculatedTotal,
+    recognitionSource: input.recognitionSource || "import",
+    recognitionTemplate: input.recognitionTemplate,
     ownerId: input.ownerId,
     teamId: input.teamId,
     createdAt: now,

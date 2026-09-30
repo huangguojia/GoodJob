@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
 load_env
+validate_image_mode
 require_command docker
 require_command curl
 require_command ss
@@ -30,7 +31,13 @@ compose_major="$(docker compose version --short 2>/dev/null | sed -E 's/^v?([0-9
 
 log "检查磁盘与内存"
 available_kb="$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)"
-(( available_kb >= 2097152 )) || die "可用内存不足 2 GiB，暂不建议启动 GoodJob"
+if (( available_kb < 2097152 )); then
+  if [[ "${GOODJOB_ALLOW_LOW_MEMORY:-false}" == "true" ]]; then
+    warn "可用内存不足 2 GiB，已按低内存测试模式继续；请持续观察 Swap 和 OOM 状态"
+  else
+    die "可用内存不足 2 GiB，暂不建议启动 GoodJob；测试环境可显式设置 GOODJOB_ALLOW_LOW_MEMORY=true"
+  fi
+fi
 available_disk_kb="$(df -Pk "$APP_ROOT" 2>/dev/null | awk 'NR==2 {print $4}')"
 if [[ -z "$available_disk_kb" ]]; then
   available_disk_kb="$(df -Pk /opt | awk 'NR==2 {print $4}')"

@@ -873,14 +873,14 @@ async function startRound(
           }
         );
         if (attachDeepMiningWebsiteProbe(mission.deepMining, deepTask, queued.attempt.id)) {
-          appendEvent(store, mission, "deep_probe_queued", `已低频排队验证“${focusCandidate!.company}”官网`, {
+          appendEvent(store, mission, "deep_probe_queued", `已安排“${focusCandidate!.company}”官网公开资料核验`, {
             candidateId: focusCandidate!.id,
             attemptId: queued.attempt.id,
             replayed: queued.replayed
           });
         }
       } catch (error) {
-        appendEvent(store, mission, "deep_probe_completed", `“${focusCandidate!.company}”官网未进入探针，不影响关系搜索继续`, {
+        appendEvent(store, mission, "deep_probe_completed", `“${focusCandidate!.company}”本次官网资料核验未启动，不影响关系搜索继续`, {
           candidateId: focusCandidate!.id,
           failed: true,
           reason: error instanceof Error ? error.message.slice(0, 300) : "官网验证不可用"
@@ -1307,7 +1307,7 @@ export class ProspectSuperSearchRunner {
         await resumePendingDeepMiningProbes(this.store, mission);
         const verifiedTasks = settleDeepMiningVerification(this.store, mission);
         for (const task of verifiedTasks) {
-          appendEvent(this.store, mission, "deep_probe_completed", "候选官网低频验证已结束，评分与证据已刷新", {
+          appendEvent(this.store, mission, "deep_probe_completed", "候选官网公开资料核验已完成，评分与证据已刷新", {
             candidateId: task.candidateId,
             taskId: task.id
           });

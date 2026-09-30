@@ -27,11 +27,33 @@ export function emailTrackingSecret() {
   return DEV_TRACKING_SECRET;
 }
 
+/** 运行时覆盖（app_settings 持久化，服务器启动时加载），优先于 env */
+let runtimeBaseUrl = "";
+
+export function setEmailTrackingRuntimeBaseUrl(value: string) {
+  const raw = (value || "").trim();
+  runtimeBaseUrl = /^https?:\/\//i.test(raw) ? raw.replace(/\/+$/, "") : "";
+}
+
+export function getEmailTrackingRuntimeBaseUrl() {
+  return runtimeBaseUrl;
+}
+
 export function emailTrackingBaseUrl() {
-  const raw = process.env.EMAIL_TRACKING_BASE_URL?.trim() || "";
+  const raw = runtimeBaseUrl || process.env.EMAIL_TRACKING_BASE_URL?.trim() || "";
   if (!raw) return "";
   if (!/^https?:\/\//i.test(raw)) return "";
   return raw.replace(/\/+$/, "");
+}
+
+/** 供设置页展示：追踪状态与配置来源 */
+export function emailTrackingStatus() {
+  const base = emailTrackingBaseUrl();
+  return {
+    enabled: Boolean(base),
+    baseUrl: base,
+    source: runtimeBaseUrl ? "app_settings" : process.env.EMAIL_TRACKING_BASE_URL?.trim() ? "env" : "none"
+  };
 }
 
 export function isEmailTrackingEnabled() {

@@ -194,24 +194,47 @@ export function projectProspectLiveEvents(
     item.teamId === run.teamId && item.runId === run.id
       && item.eventType !== "lease_heartbeat"
   )) {
+    const isRunLevel = event.eventType === "run_completed";
+    const runShards = store.prospectRunShards.filter((item) =>
+      item.teamId === run.teamId && item.runId === run.id
+    );
+    // 事件里的 shardId 可能指向已被更换/清理的旧分片：精确匹配失败且该 run 仅有一个分片时按唯一分片归属（展示用途）。
+    const shard = isRunLevel
+      ? undefined
+      : runShards.find((item) => item.id === event.shardId)
+        || (runShards.length === 1 ? runShards[0] : undefined);
+    const shardPosition = shard ? runShards.findIndex((item) => item.id === shard.id) + 1 : 0;
+    const providerLabel = shard?.providerCode || "";
+    const shardLabel = shard ? `分片 ${shardPosition}/${runShards.length}` : "";
+    const limitsLabel = shard ? `限 ${shard.pageLimit} 页 / ${shard.resultLimit} 条` : "";
+    const executionDetail = [providerLabel, shardLabel, limitsLabel].filter(Boolean).join(" · ");
     events.push({
       id: `execution:${event.id}`,
       runId: run.id,
       occurredAt: event.createdAt,
       type: `execution.${event.eventType}`,
       stage: executionStage(event.eventType),
-      entityType: event.eventType === "run_completed" ? "run" : "shard",
-      entityId: event.eventType === "run_completed" ? run.id : event.shardId,
+      entityType: isRunLevel ? "run" : "shard",
+      entityId: isRunLevel ? run.id : event.shardId,
       status: event.eventType,
       progress,
       metrics: {
         kernelEpoch: event.kernelEpoch,
         runEpoch: event.runEpoch,
-        fenceToken: event.fenceToken
+        fenceToken: event.fenceToken,
+        providerId: providerLabel,
+        shardPosition: shardPosition || null,
+        shardTotal: runShards.length || null,
+        pageLimit: shard?.pageLimit ?? null,
+        resultLimit: shard?.resultLimit ?? null,
+        accessMode: shard?.accessMode || ""
       },
       failureCode: "",
       retryable: event.eventType === "retry_scheduled",
-      message: executionMessage(event.eventType)
+      message: [
+        executionMessage(event.eventType),
+        executionDetail ? `：${executionDetail}` : ""
+      ].join("")
     });
   }
 

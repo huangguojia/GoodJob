@@ -234,7 +234,7 @@ implements ProspectExecutionProviderDispatcher {
           retryable: false,
           retryAfterAt: null,
           publicMessage: request.providerCode === "ai_search"
-            ? "当前账号没有可用于自动获客的 AI 模型：请保存 API Key、启用该配置，并勾选“自动获客”"
+            ? "当前账号没有可执行的 AI 搜客配置：请保存 API Key、启用并勾选自动获客；OpenAI 模型还需通过 Web Search 测试，其它模型需配置官网搜索 API"
             : `数据源 ${request.providerCode} 未安装可执行适配器`,
           httpStatus: null,
           phase: "search"

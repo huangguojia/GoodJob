@@ -418,6 +418,7 @@ function conversionLead(
     nextFollowAt: input.nextFollowAt,
     lastActivityAt: "刚刚",
     remark: input.remark,
+    inquiryContent: "",
     convertedCustomerId: "",
     convertedDealId: "",
     sourceType: "outbound",

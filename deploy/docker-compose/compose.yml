@@ -68,7 +68,7 @@ services:
       - no-new-privileges:true
 
   backend-migrate:
-    image: goodjobcrm-backend:${GOODJOB_RELEASE_ID}
+    image: ${GOODJOB_BACKEND_IMAGE:-goodjobcrm-backend}:${GOODJOB_RELEASE_ID}
     build:
       context: ../..
       dockerfile: deploy/docker-compose/Dockerfile.backend
@@ -100,6 +100,7 @@ services:
       INBOUND_MAIL_MAX_MESSAGES_PER_POLL: "100"
       INBOUND_MAIL_MAX_SOURCE_BYTES: "2097152"
       EMAIL_TRACKING_BASE_URL: ${EMAIL_TRACKING_BASE_URL:-}
+      TRACKING_PROVIDER: ${TRACKING_PROVIDER:-17track}
       EMAIL_MESSAGE_ID_DOMAIN: ${DOMAIN}
       OUTBOUND_EMAIL_DAILY_LIMIT: "50"
       OUTBOUND_EMAIL_DOMAIN_WINDOW_MINUTES: "10"
@@ -118,6 +119,7 @@ services:
     secrets: &backend_secrets
       - mysql_password
       - initial_admin_password
+      - admin_credentials
       - crm_runtime_env
     networks:
       - private
@@ -133,7 +135,7 @@ services:
       - no-new-privileges:true
 
   communication-migrate:
-    image: goodjobcrm-communication:${GOODJOB_RELEASE_ID}
+    image: ${GOODJOB_COMMUNICATION_IMAGE:-goodjobcrm-communication}:${GOODJOB_RELEASE_ID}
     build:
       context: ../..
       dockerfile: deploy/docker-compose/Dockerfile.communication
@@ -177,7 +179,7 @@ services:
       - no-new-privileges:true
 
   backend:
-    image: goodjobcrm-backend:${GOODJOB_RELEASE_ID}
+    image: ${GOODJOB_BACKEND_IMAGE:-goodjobcrm-backend}:${GOODJOB_RELEASE_ID}
     restart: unless-stopped
     environment: *backend_environment
     secrets: *backend_secrets
@@ -204,7 +206,7 @@ services:
       - no-new-privileges:true
 
   communication:
-    image: goodjobcrm-communication:${GOODJOB_RELEASE_ID}
+    image: ${GOODJOB_COMMUNICATION_IMAGE:-goodjobcrm-communication}:${GOODJOB_RELEASE_ID}
     restart: unless-stopped
     environment: *communication_environment
     secrets:
@@ -232,7 +234,7 @@ services:
       - no-new-privileges:true
 
   gateway:
-    image: goodjobcrm-gateway:${GOODJOB_RELEASE_ID}
+    image: ${GOODJOB_GATEWAY_IMAGE:-goodjobcrm-gateway}:${GOODJOB_RELEASE_ID}
     build:
       context: ../..
       dockerfile: deploy/docker-compose/Dockerfile.gateway
@@ -266,6 +268,8 @@ secrets:
     file: ${GOODJOB_SHARED_DIR}/secrets/postgres_password
   initial_admin_password:
     file: ${GOODJOB_SHARED_DIR}/secrets/initial_admin_password
+  admin_credentials:
+    file: ${GOODJOB_SHARED_DIR}/secrets/admin_credentials.tsv
   communication_session_key:
     file: ${GOODJOB_SHARED_DIR}/secrets/communication_session_key
   crm_runtime_env:
