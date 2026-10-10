@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import XLSX from "xlsx-js-style";
 import { app } from "./server.js";
@@ -9,7 +10,11 @@ import { getStore } from "./store.js";
 import { parseTradeDocumentImport } from "./trade-document-import.js";
 import type { TradeDocumentImportAnalysis, User } from "./types.js";
 
-process.env.LIBREOFFICE_BIN ||= "/Users/sendohakria/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override/soffice";
+// 本机 LibreOffice 兜底：只按 HOME 推导，不写死用户名（本机路径推导结果与旧硬编码完全一致）
+process.env.LIBREOFFICE_BIN ||= path.join(
+  os.homedir(),
+  ".cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override/soffice"
+);
 
 const server = app.listen(0);
 const address = server.address();
