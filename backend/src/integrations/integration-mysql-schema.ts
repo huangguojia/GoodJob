@@ -404,6 +404,7 @@ const schemaStatements = [
     platform_name VARCHAR(80) NOT NULL DEFAULT '',
     runner_version VARCHAR(40) NOT NULL DEFAULT '',
     codex_version VARCHAR(80) NOT NULL DEFAULT '',
+    workbuddy_version VARCHAR(80) NOT NULL DEFAULT '',
     capabilities_json JSON NOT NULL,
     workspaces_json JSON NOT NULL,
     last_seen_at DATETIME(3) NULL,
@@ -485,6 +486,7 @@ export async function ensureIntegrationSchema(pool: SchemaExecutor): Promise<voi
   await ensureColumn(pool, "integration_events", "processing_lease_id", "VARCHAR(64) NOT NULL DEFAULT ''");
   await ensureColumn(pool, "integration_events", "processing_lease_expires_at", "DATETIME(3) NULL");
   await ensureIndex(pool, "integration_events", "idx_integration_event_lease", "KEY `idx_integration_event_lease` (`event_status`, `processing_lease_expires_at`)");
+  await ensureColumn(pool, "integration_local_runners", "workbuddy_version", "VARCHAR(80) NOT NULL DEFAULT ''");
 }
 
 async function ensureColumn(pool: SchemaExecutor, table: string, column: string, definition: string) {

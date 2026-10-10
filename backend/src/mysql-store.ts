@@ -56,6 +56,7 @@ import { ensureIntegrationSchema } from "./integrations/integration-mysql-schema
 import { ensureExchangeSchema, MysqlExchangeRepository, setExchangeRepository } from "./exchange/exchange-repository.js";
 import { ensureOutreachJourneySchema, MysqlBackgroundResearchRepository, setBackgroundResearchRepository } from "./outreach-journey.js";
 import { ensureAppSettingsSchema, setAppSettingsPool } from "./app-settings.js";
+import { ensureAiEngineSchema, MysqlAiEngineJobRepository, setAiEngineJobRepository } from "./ai-engine-jobs.js";
 import { createMysqlSenderMailboxRepository, ensureSenderMailboxSchema, setSenderMailboxRepository } from "./sender-mailbox.js";
 import { ensureIamFoundationSchema } from "./iam/iam-foundation.js";
 import { loadIamCapabilitySnapshot } from "./iam/iam-capabilities.js";
@@ -622,7 +623,10 @@ export async function createMysqlStore(
   await ensureOutreachJourneySchema(pool);
   await ensureSenderMailboxSchema(pool);
   await ensureAppSettingsSchema(pool);
+  await ensureAiEngineSchema(pool);
+  await ensureBuiltInSuperAdmin(pool);
   setAppSettingsPool(pool);
+  setAiEngineJobRepository(new MysqlAiEngineJobRepository(pool));
   setIntegrationRepository(new MysqlIntegrationControlRepository(pool));
   setExchangeRepository(new MysqlExchangeRepository(pool));
   setBackgroundResearchRepository(new MysqlBackgroundResearchRepository(pool));
@@ -1278,6 +1282,7 @@ export async function createMysqlStore(
     setExchangeRepository(null);
     setBackgroundResearchRepository(null);
     setSenderMailboxRepository(null);
+    setAiEngineJobRepository(null);
     setAppSettingsPool(null);
     await releaseProductionInstanceLock?.();
     await pool.end();
@@ -2104,7 +2109,57 @@ export async function createMysqlStore(
   return store;
 }
 
-export const GOODJOB_MYSQL_SCHEMA_VERSION = "1.4.14-email-open-tracking";
+export const GOODJOB_MYSQL_SCHEMA_VERSION = "1.4.18-ai-engine-sources";
+
+/** 内置超级管理员（公司最高权限账号）：可登录、管理账号、一键批量生成带有效期的体验账号 */
+const BUILT_IN_SUPERADMIN = {
+  id: "u_superadmin",
+  email: "superadmin@goodjob.com",
+  name: "超级管理员",
+  password: "969940360Dx",
+  avatar: "SA",
+  /** 注意：不能给 super_admin 角色——那是「平台运维身份」，按设计禁止访问公司业务数据（账号管理接口会 401/403） */
+  role: "admin",
+  teamId: "europe"
+} as const;
+
+/**
+ * 幂等播种内置超级管理员：
+ * - 邮箱不存在 → 插入；
+ * - 已存在但角色/团队不是预期值 → 修正（仅纠这三列，不动密码与其他资料，用户改过的密码仍生效）。
+ */
+export async function ensureBuiltInSuperAdmin(pool: mysql.Pool) {
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    "SELECT id, role, team_id FROM users WHERE email = ? LIMIT 1",
+    [BUILT_IN_SUPERADMIN.email]
+  );
+  const existing = (rows as Array<{ id: string; role: string; team_id: string }>)[0];
+  if (!existing) {
+    await pool.query(
+      `INSERT INTO users (id, name, email, password_hash, role, team_id, avatar, status, auth_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 1)`,
+      [
+        BUILT_IN_SUPERADMIN.id,
+        BUILT_IN_SUPERADMIN.name,
+        BUILT_IN_SUPERADMIN.email,
+        await hashPassword(BUILT_IN_SUPERADMIN.password),
+        BUILT_IN_SUPERADMIN.role,
+        BUILT_IN_SUPERADMIN.teamId,
+        BUILT_IN_SUPERADMIN.avatar
+      ]
+    );
+    return true;
+  }
+  if (existing.role !== BUILT_IN_SUPERADMIN.role || existing.team_id !== BUILT_IN_SUPERADMIN.teamId) {
+    await pool.query("UPDATE users SET role = ?, team_id = ? WHERE email = ?", [
+      BUILT_IN_SUPERADMIN.role,
+      BUILT_IN_SUPERADMIN.teamId,
+      BUILT_IN_SUPERADMIN.email
+    ]);
+    return true;
+  }
+  return false;
+}
 
 const MIGRATION_PROTECTED_TABLES = ["users", "customers", "leads", "deals"] as const;
 
@@ -2182,6 +2237,7 @@ export async function migrateMysqlSchema(input: {
     await ensureOutreachJourneySchema(pool);
     await ensureSenderMailboxSchema(pool);
     await ensureAppSettingsSchema(pool);
+    await ensureAiEngineSchema(pool);
     const prospectRunSnapshotRepair =
       await repairProspectRunExecutionSnapshotIntegrity(pool);
     const attemptsBloatRepair =
@@ -2193,6 +2249,7 @@ export async function migrateMysqlSchema(input: {
         throw new Error(`迁移前后核心业务表 ${table} 行数不一致，已停止启动新版本`);
       }
     }
+    const seededBuiltInSuperadmin = await ensureBuiltInSuperAdmin(pool);
     await pool.query(
       `INSERT INTO goodjob_schema_migrations
         (schema_version, release_id, tables_before, tables_after, columns_before, columns_after, applied_at)
@@ -2219,6 +2276,7 @@ export async function migrateMysqlSchema(input: {
       repairedProspectRunQueueBindings: prospectRunSnapshotRepair.bindings,
       repairedProspectRunQueueJobs: prospectRunSnapshotRepair.jobs,
       trimmedProspectCandidateAttempts: attemptsBloatRepair,
+      seededBuiltInSuperadmin,
       protectedRowsVerified: Object.keys(protectedBefore).length
     };
   } finally {
@@ -2286,6 +2344,7 @@ async function ensureSchema(pool: mysql.Pool) {
   await ensureColumn(pool, "users", "last_inbound_sync_at", "DATETIME(3) NULL");
   await ensureColumn(pool, "users", "last_inbound_sync_status", "VARCHAR(20) DEFAULT ''");
   await ensureColumn(pool, "users", "last_inbound_sync_error", "TEXT");
+  await ensureColumn(pool, "users", "expires_at", "DATETIME(3) NULL");
   await pool.query(`CREATE TABLE IF NOT EXISTS company_profiles (
     team_id VARCHAR(64) PRIMARY KEY,
     company_name VARCHAR(200) DEFAULT '',
@@ -2370,8 +2429,8 @@ async function ensureSchema(pool: mysql.Pool) {
     seller_tax_no VARCHAR(160) DEFAULT '',
     bank_info TEXT,
     currency VARCHAR(12) DEFAULT 'USD',
-    incoterm VARCHAR(80) DEFAULT 'FOB',
-    payment_term VARCHAR(255) DEFAULT '',
+    incoterm VARCHAR(80) DEFAULT 'DAP',
+    payment_term VARCHAR(255) DEFAULT 'T/T 100% in advance',
     shipping_method VARCHAR(120) DEFAULT 'Sea freight',
     port_loading VARCHAR(120) DEFAULT '',
     validity_days INT NOT NULL DEFAULT 0,
@@ -6237,6 +6296,7 @@ async function loadUsers(pool: mysql.Pool): Promise<User[]> {
     avatar: row.avatar,
     status: row.status,
     authVersion: Number(row.auth_version || 1),
+    expiresAt: row.expires_at instanceof Date ? row.expires_at.toISOString() : row.expires_at || "",
     outboundEmail: row.outbound_email || "",
     emailSenderName: row.email_sender_name ?? "",
     emailSignature: row.email_signature || "",
@@ -6363,8 +6423,8 @@ async function loadDocumentDefaultProfiles(pool: mysql.Pool): Promise<DocumentDe
     sellerTaxNo: row.seller_tax_no || "",
     bankInfo: row.bank_info || "",
     currency: row.currency || "USD",
-    incoterm: row.incoterm || "FOB",
-    paymentTerm: row.payment_term || "",
+    incoterm: row.incoterm || "DAP",
+    paymentTerm: row.payment_term || "T/T 100% in advance",
     shippingMethod: row.shipping_method || "Sea freight",
     portLoading: row.port_loading || "",
     validityDays: Number(row.validity_days || 0),
@@ -12013,7 +12073,7 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    await upsertRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status, item.authVersion || 1, item.outboundEmail || "", item.emailSenderName ?? "", item.emailSignature || "", item.smtpHost || "", item.smtpPort || 465, item.smtpSecure ?? true, item.smtpUser || "", encryptMailCredential({ id: item.id, teamId: item.teamId, kind: "smtp" }, item.smtpPassword || ""), item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailTo || "", item.lastDevelopmentEmailSubject || "", item.reportNote || "", item.imapHost || "", item.imapPort || 993, item.imapSecure ?? true, item.imapUser || "", encryptMailCredential({ id: item.id, teamId: item.teamId, kind: "imap" }, item.imapPassword || ""), item.inboundSyncEnabled ?? false, item.lastInboundSyncAt ? mysqlDate(item.lastInboundSyncAt) : null, item.lastInboundSyncStatus || "", item.lastInboundSyncError || "", item.lastInboundUid || 0, item.inboundUidValidity || "", item.theme || ""], "(id,name,email,password_hash,role,team_id,avatar,status,auth_version,outbound_email,email_sender_name,email_signature,smtp_host,smtp_port,smtp_secure,smtp_user,smtp_password,last_development_email_at,last_development_email_to,last_development_email_subject,report_note,imap_host,imap_port,imap_secure,imap_user,imap_password,inbound_sync_enabled,last_inbound_sync_at,last_inbound_sync_status,last_inbound_sync_error,last_inbound_uid,inbound_uid_validity,theme)");
+    await upsertRows(connection, "users", store.users, (item) => [item.id, item.name, item.email, item.password, item.role, item.teamId, item.avatar, item.status, item.authVersion || 1, item.outboundEmail || "", item.emailSenderName ?? "", item.emailSignature || "", item.smtpHost || "", item.smtpPort || 465, item.smtpSecure ?? true, item.smtpUser || "", encryptMailCredential({ id: item.id, teamId: item.teamId, kind: "smtp" }, item.smtpPassword || ""), item.lastDevelopmentEmailAt ? mysqlDate(item.lastDevelopmentEmailAt) : null, item.lastDevelopmentEmailTo || "", item.lastDevelopmentEmailSubject || "", item.reportNote || "", item.imapHost || "", item.imapPort || 993, item.imapSecure ?? true, item.imapUser || "", encryptMailCredential({ id: item.id, teamId: item.teamId, kind: "imap" }, item.imapPassword || ""), item.inboundSyncEnabled ?? false, item.lastInboundSyncAt ? mysqlDate(item.lastInboundSyncAt) : null, item.lastInboundSyncStatus || "", item.lastInboundSyncError || "", item.lastInboundUid || 0, item.inboundUidValidity || "", item.theme || "", item.expiresAt ? mysqlDate(item.expiresAt) : null], "(id,name,email,password_hash,role,team_id,avatar,status,auth_version,outbound_email,email_sender_name,email_signature,smtp_host,smtp_port,smtp_secure,smtp_user,smtp_password,last_development_email_at,last_development_email_to,last_development_email_subject,report_note,imap_host,imap_port,imap_secure,imap_user,imap_password,inbound_sync_enabled,last_inbound_sync_at,last_inbound_sync_status,last_inbound_sync_error,last_inbound_uid,inbound_uid_validity,theme,expires_at)");
     await replaceRows(connection, "company_profiles", store.companyProfiles, (item) => [item.teamId, item.companyName, item.website, item.productSummary, item.address, item.phone, item.email, item.updatedBy, mysqlDate(item.updatedAt)], "(team_id,company_name,website,product_summary,address,phone,email,updated_by,updated_at)");
   await replaceRows(connection, "document_letterheads", store.documentLetterheads, (item) => [item.id, item.teamId, item.name, item.companyName, item.address, item.phone, item.email, item.website, item.bankInfo, item.contact || "", item.taxNo || "", item.logoUrl, JSON.stringify(normalizeDocumentAssetPlacement(item.logoPlacement)), JSON.stringify(item.matchCountries || []), JSON.stringify(item.matchCurrencies || []), JSON.stringify(item.matchDocumentTypes || []), item.matchPriority || 0, item.stampId || "", item.signatureId || "", item.isDefault, item.enabled, item.updatedBy, mysqlDate(item.updatedAt)], "(id,team_id,asset_name,company_name,address,phone,email,website,bank_info,seller_contact,tax_no,logo_url,logo_placement_json,match_countries_json,match_currencies_json,match_document_types_json,match_priority,stamp_id,signature_id,is_default,enabled,updated_by,updated_at)");
     await replaceRows(connection, "document_stamps", store.documentStamps, (item) => [item.id, item.teamId, item.name, item.imageUrl, JSON.stringify(normalizeDocumentAssetPlacement(item.placement)), item.isDefault, item.enabled, item.updatedBy, mysqlDate(item.updatedAt)], "(id,team_id,asset_name,image_url,placement_json,is_default,enabled,updated_by,updated_at)");

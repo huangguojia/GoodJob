@@ -438,6 +438,8 @@ export interface User {
   avatar: string;
   status: "active" | "disabled";
   authVersion?: number;
+  /** 账号有效期截止时间（ISO 字符串；空 = 永久有效）。过期后登录与既有会话都会被拒。 */
+  expiresAt?: string;
   outboundEmail?: string;
   emailSenderName?: string;
   emailSignature?: string;
@@ -1234,6 +1236,20 @@ export interface OutboundEmailLog {
 export type ProspectOutreachBatchStatus =
   | "draft" | "approved" | "paused" | "completed" | "cancelled";
 
+/**
+ * 客户开发阶段（canonical 定义放这里，避免 types → outreach-journey 的类型循环；
+ * outreach-journey.ts 的 `OutreachJourneyStageKey` 是它的别名）。
+ * 每个取值的含义见 outreach-journey.ts 的 STAGE_META。
+ */
+export type OutreachStageKey =
+  | "not_contacted"
+  | "first_touch_sent"
+  | "following_up"
+  | "replied_interested"
+  | "replied_negative"
+  | "bounced"
+  | "converted";
+
 export interface ProspectOutreachBatchPolicy {
   /** 每个自然日、每个发件账号的最大发送数 */
   dailyLimit: number;
@@ -1246,6 +1262,11 @@ export interface ProspectOutreachBatchPolicy {
   stopOnReply: boolean;
   /** 每 N 封切换到「发件邮箱池」里的下一个邮箱（0/缺省 = 不轮换，只用主发件邮箱） */
   rotateMailboxEvery?: number;
+  /**
+   * 目标还没有背调留档时，是否允许后台补跑一次背调、再据此重写正文。
+   * 缺省 true（=「先背调、再写」自动补）。关掉则只用阶段蓝图兜底成稿。
+   */
+  autoResearch?: boolean;
 }
 
 /** 发件邮箱池：一个账号可登记多个 SMTP 发件邮箱，方案按数量轮换使用（密码加密落库） */
@@ -1283,6 +1304,9 @@ export interface ProspectOutreachBatchStep {
   scheduledAt: string;
   sentAt: string;
   error: string;
+  /** 发这一封时收件人所处的开发阶段（= 该用哪份阶段蓝图）；历史数据没有此字段 */
+  stageKey?: OutreachStageKey;
+  stageLabel?: string;
 }
 
 export interface ProspectOutreachBatchItem {
@@ -1300,6 +1324,36 @@ export interface ProspectOutreachBatchItem {
   steps: ProspectOutreachBatchStep[];
   sentAt: string;
   convertedLeadId: string;
+  /**
+   * ── 阶段感知发信（2026-10-06）──
+   * 下面这些字段都落在 items_json / policy_json 里，属于 JSON 载荷扩展，
+   * **不需要数据库迁移**；缺省时按「未推导阶段」处理，向后兼容历史批次。
+   */
+  /** 这条目标「此刻处在哪个开发阶段」——决定本次序列从哪一封接着发 */
+  stageKey?: OutreachStageKey;
+  stageLabel?: string;
+  /** derived=由触达记录自动推导；manual=业务员在界面上临时改过 */
+  stageSource?: "derived" | "manual";
+  /** 本条依据的背调留档（id + 评分），界面上用来展示「凭什么是这封信」 */
+  researchId?: string;
+  researchScore?: number;
+  /**
+   * 正文补写进度：
+   *   pending = 后台还要补背调 / 用引擎重写，此时**不允许发送**（避免把半成品发出去）
+   *   ready   = 已是最终形态（模板或引擎产物）
+   *   failed  = 补写失败，但正文可用（阶段模板版），照常可发
+   */
+  letterStatus?: "pending" | "ready" | "failed";
+  /** 置为 pending 的时间；发送端据此做兜底（补写长时间没完成就不能永远卡住整批） */
+  letterPendingAt?: string;
+  /** 后台补写尝试次数；超过上限就保留现有正文、标记 failed，不再反复重试 */
+  letterAttempts?: number;
+  /** 正文出具方：固定模板 / AI 模型名 / 本机 CLI 名 */
+  letterEngine?: string;
+  /** 一句话依据（如「依据：背调（…）、3 个可引用的应用角度」） */
+  letterBasis?: string;
+  /** 补写失败或降级的原因 */
+  letterNote?: string;
 }
 
 export type ProspectOutreachBatchTargetType = "candidate" | "lead";

@@ -8,6 +8,7 @@ import {
   planProgress
 } from "./prospect-outreach-plan.js";
 import { memoryStore, type CrmStore } from "./store.js";
+import type { OutreachWritingRuntime } from "./prospect-outreach-batch.js";
 import type { ProspectOutreachBatchItem, ProspectOutreachPlan, WebsiteOpportunity } from "./types.js";
 
 function isolatedStore() {
@@ -224,6 +225,86 @@ async function main() {
   assert.equal(customerItem?.recipient, "tan@manual.co", "客户条目收件人取客户邮箱");
   assert.ok(fakeManual.sent.includes("lead_manual_1:0") && fakeManual.sent.includes("lead_manual_1:1"), "线索条目应走 lead 通道发送");
   assert.ok(fakeManual.sent.includes("cust_manual_1:0"), "客户条目应发送");
+
+  // ==========================================================================
+  // 阶段感知成稿（2026-10-06）
+  //
+  // 方案以前和批次一样：无论客户处于什么阶段，全体都从「首触」发第 1 封。
+  // 这一段钉住新口径：每个目标按**自己的**阶段入场，已该阻断的直接落 skipped 占位。
+  // ==========================================================================
+  const stageFollow = makeCandidate(store, { company: "StageFollow Co" });
+  const stageRejected = makeCandidate(store, { company: "StageRejected Co" });
+  const stageFresh = makeCandidate(store, { company: "StageFresh Co" });
+  const stagePlan = await createProspectOutreachPlan(store, actor, {
+    name: "阶段感知方案",
+    target: { countries: ["泰国"], keyword: "Stage", maxTargets: 10 },
+    policy: { dailyLimit: 50, stepIntervalHours: 1, sendWindowStartHour: 0, sendWindowEndHour: 24, stopOnReply: true }
+  });
+  const stageByEntity: Record<string, string> = {
+    [stageFollow.id]: "following_up",
+    [stageRejected.id]: "replied_negative",
+    [stageFresh.id]: "not_contacted"
+  };
+  const stageWriting: OutreachWritingRuntime = {
+    sender: () => ({ name: "Kevin Lau", company: "Hong Kong New Longtec", products: "scales and load cells", website: "", signature: "" }),
+    async resolve(_actor, target) {
+      return {
+        stageKey: (stageByEntity[target.entityId] || "not_contacted") as never,
+        stageSource: "derived" as const,
+        research: null,
+        researchId: "",
+        researchScore: 0,
+        needsResearch: false,
+        engineWrites: false,
+        enrichmentEnabled: true,
+        maxSteps: 3
+      };
+    }
+  };
+  const fakeStage = fakeRuntime();
+  const stageRunner = new ProspectOutreachPlanRunner(store, fakeStage.runtime, 60_000, stageWriting);
+  for (let i = 0; i < 4; i += 1) await stageRunner.synchronize();
+  const stagedPlan = getProspectOutreachPlan(store, actor, stagePlan.id);
+  const followItem = stagedPlan.items.find((item) => item.candidateId === stageFollow.id)!;
+  const rejectedItem = stagedPlan.items.find((item) => item.candidateId === stageRejected.id)!;
+  const freshItem = stagedPlan.items.find((item) => item.candidateId === stageFresh.id)!;
+
+  assert.equal(followItem.steps.length, 1, "跟进中的目标只应排 1 封（不能重发首触）");
+  assert.equal(followItem.steps[0]!.stageKey, "following_up");
+  assert.equal(followItem.steps[0]!.stageLabel, "跟进中");
+  assert.equal(followItem.stageKey, "following_up");
+  assert.equal(followItem.stageSource, "derived");
+
+  assert.equal(freshItem.steps.length, 3, "未接触的目标应排完整 3 封");
+  assert.deepEqual(freshItem.steps.map((step) => step.stageKey), ["not_contacted", "first_touch_sent", "following_up"]);
+  assert.equal(freshItem.steps[0]!.stageLabel, "未接触");
+
+  assert.equal(rejectedItem.status, "skipped", "已拒绝的目标必须落 skipped 占位，不能进投递");
+  assert.match(rejectedItem.skipReason, /拒绝|退订/u);
+  assert.equal(rejectedItem.steps.length, 0);
+
+  assert.equal(fakeStage.sent.filter((key) => key.startsWith(`${stageFollow.id}:`)).length, 1, "跟进目标只应发 1 封");
+  assert.equal(fakeStage.sent.filter((key) => key.startsWith(`${stageRejected.id}:`)).length, 0, "已拒绝的目标一封都不该发");
+  assert.ok(stagedPlan.lastMessage.length > 0);
+
+  // 正文补写进度按批次/方案同一口径汇总
+  const stagedProgress = planProgress(stagedPlan);
+  assert.ok(stagedProgress.letters, "方案进度里应带正文补写口径");
+  assert.equal(stagedProgress.letters!.total, stagedPlan.items.filter((item) => item.status === "ready" || item.status === "sending").length);
+
+  // 没有注入写信运行时 → 退回历史固定 3 步模板（老行为不回退）
+  const legacyCand = makeCandidate(store, { company: "LegacyTemplate Co" });
+  const legacyPlan = await createProspectOutreachPlan(store, actor, {
+    name: "无运行时方案",
+    target: { countries: ["泰国"], keyword: "LegacyTemplate", maxTargets: 5 },
+    policy: { dailyLimit: 50, stepIntervalHours: 1, sendWindowStartHour: 0, sendWindowEndHour: 24, stopOnReply: true }
+  });
+  const fakeLegacy = fakeRuntime();
+  const legacyRunner = new ProspectOutreachPlanRunner(store, fakeLegacy.runtime, 60_000);
+  for (let i = 0; i < 3; i += 1) await legacyRunner.synchronize();
+  const legacyItem = getProspectOutreachPlan(store, actor, legacyPlan.id).items.find((item) => item.candidateId === legacyCand.id)!;
+  assert.equal(legacyItem.steps.length, 3, "没有运行时仍应是 3 步模板");
+  assert.equal(legacyItem.steps[0]!.stageKey, undefined, "模板步骤不带阶段标签");
 
   console.log("prospect-outreach-plan-test: all passed");
 }

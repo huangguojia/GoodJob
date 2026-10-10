@@ -46,6 +46,7 @@ const externalPatterns = [
   /^\/api\/whatsapp\/customers\/[^/]+\/messages$/u,
   /^\/api\/trade-documents\/[^/]+\/send$/u,
   /^\/api\/ai-background-research$/u,
+  /^\/api\/ai-engine\/acquire$/u,
   /^\/api\/customers\/[^/]+\/meeting-notes$/u,
   /^\/api\/lead-finder\/parse-goal$/u,
   /^\/api\/lead-finder\/launch$/u,

@@ -7,11 +7,14 @@ export interface RunnerConfig {
   createdAt: string;
 }
 
+export type RunnerAdapter = "codex" | "workbuddy";
+
 export interface RunnerIdentity {
   hostname: string;
   platform: string;
   runnerVersion: string;
   codexVersion: string;
+  workbuddyVersion: string;
   capabilities: string[];
   workspaces: string[];
 }
@@ -19,7 +22,7 @@ export interface RunnerIdentity {
 export interface ClaimedTask {
   id: string;
   runnerId: string;
-  adapter: "codex";
+  adapter: RunnerAdapter;
   prompt: string;
   workspace: string;
   executionMode: "read_only" | "workspace_write";

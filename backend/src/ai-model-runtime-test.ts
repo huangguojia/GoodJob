@@ -47,6 +47,24 @@ assert.deepEqual(
   extractJsonObject('```json\n{"done":false}\n```'),
   { done: false }
 );
+// 模型手误容错（只在原样解析失败后启用修复）：全角标点 / 字符串里的裸换行 / 尾随逗号
+assert.deepEqual(
+  extractJsonObject('｛"done"：true，｝'),
+  { done: true }
+);
+assert.deepEqual(
+  extractJsonObject('{"note":"第一行\n第二行"}'),
+  { note: "第一行\n第二行" }
+);
+assert.deepEqual(
+  extractJsonObject('{"steps":[1,2,],}'),
+  { steps: [1, 2] }
+);
+// 修复层不能误伤正常内容：字符串内部的中文引号要原样保留
+assert.deepEqual(
+  extractJsonObject('{"summary":"客户说“下周回复”"}'),
+  { summary: "客户说“下周回复”" }
+);
 
 function config(overrides: Partial<AiModelConfig> = {}): AiModelConfig {
   return {

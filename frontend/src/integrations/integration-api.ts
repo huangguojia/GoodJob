@@ -12,6 +12,7 @@ export interface LocalRunner {
   platform: string;
   runnerVersion: string;
   codexVersion: string;
+  workbuddyVersion: string;
   capabilities: string[];
   workspaces: string[];
   lastSeenAt: string;
@@ -21,13 +22,15 @@ export interface LocalRunner {
   revokedAt: string;
 }
 
+export type LocalRunnerAdapter = "codex" | "workbuddy";
+
 export interface LocalRunnerTask {
   id: string;
   runnerId: string;
   teamId: string;
   ownerId: string;
   createdBy: string;
-  adapter: "codex";
+  adapter: LocalRunnerAdapter;
   prompt: string;
   workspace: string;
   executionMode: "read_only" | "workspace_write";
@@ -331,7 +334,7 @@ export function createIntegrationClient(request: IntegrationRequest) {
     }),
     localRunnerTasks: (runnerId = "") => data<LocalRunnerTask[]>(`/api/integrations/local-runner-tasks${runnerId ? `?runnerId=${encodeURIComponent(runnerId)}` : ""}`),
     localRunnerTask: (id: string) => data<{ task: LocalRunnerTask; events: LocalRunnerTaskEvent[] }>(`/api/integrations/local-runner-tasks/${encodeURIComponent(id)}`),
-    createLocalRunnerTask: (input: { runnerId: string; prompt: string; workspace: string; executionMode: "read_only" | "workspace_write"; timeoutSeconds: number }) =>
+    createLocalRunnerTask: (input: { runnerId: string; adapter?: LocalRunnerAdapter; prompt: string; workspace: string; executionMode: "read_only" | "workspace_write"; timeoutSeconds: number }) =>
       data<LocalRunnerTask>("/api/integrations/local-runner-tasks", { method: "POST", body: JSON.stringify(input) }),
     cancelLocalRunnerTask: (id: string) => data<LocalRunnerTask>(`/api/integrations/local-runner-tasks/${encodeURIComponent(id)}/cancel`, {
       method: "POST", body: "{}"
