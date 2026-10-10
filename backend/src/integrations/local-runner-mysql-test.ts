@@ -26,23 +26,26 @@ try {
   const pairing = await service.createPairing(ownerA, "My Mac");
   await assert.rejects(() => service.pair({
     code: "GJ-WRONG-CODE-00", displayName: "Wrong", hostname: "wrong", platform: "test",
-    runnerVersion: "test", codexVersion: "codex-test", capabilities: ["codex"], workspaces: ["/tmp"]
+    runnerVersion: "test", codexVersion: "codex-test", workbuddyVersion: "", capabilities: ["codex"], workspaces: ["/tmp"]
   }), /配对码无效/u);
   const paired = await service.pair({
     code: pairing.pairingCode, displayName: "My Mac", hostname: "mac-test", platform: "darwin",
-    runnerVersion: "0.1.0", codexVersion: "codex-cli test", capabilities: ["codex"], workspaces: ["/tmp"]
+    runnerVersion: "0.1.0", codexVersion: "codex-cli test", workbuddyVersion: "codebuddy 2.156.0",
+    capabilities: ["codex", "workbuddy"], workspaces: ["/tmp"]
   });
   const storedRunner = await repository.getRunner(paired.runner.id);
   assert.ok(storedRunner);
   assert.notEqual(storedRunner?.tokenHash, paired.token);
+  assert.equal(storedRunner?.workbuddyVersion, "codebuddy 2.156.0", "pair must persist workbuddy version");
+  assert.equal(paired.runner.workbuddyVersion, "codebuddy 2.156.0", "pair response must expose workbuddy version");
   assert.equal((await service.authenticate(paired.token)).id, paired.runner.id);
   assert.equal((await service.runners(ownerB)).length, 0, "other tenant must not see runner");
   await service.heartbeat(storedRunner!, {
-    capabilities: ["codex", "browser", "unknown"],
+    capabilities: ["codex", "browser", "workbuddy", "unknown"],
     workspaces: ["/tmp", "/etc"]
   });
   const heartbeatRunner = await repository.getRunner(paired.runner.id);
-  assert.deepEqual(heartbeatRunner?.capabilities, ["codex", "browser"], "heartbeat must refresh known capabilities");
+  assert.deepEqual(heartbeatRunner?.capabilities, ["codex", "browser", "workbuddy"], "heartbeat must refresh known capabilities");
   assert.deepEqual(heartbeatRunner?.workspaces, ["/tmp"], "heartbeat must not expand workspace allowlist");
 
   await assert.rejects(() => service.createTask(ownerB, {
@@ -91,6 +94,34 @@ try {
     runnerId: paired.runner.id, prompt: "cancel me", workspace: "/tmp", executionMode: "workspace_write", timeoutSeconds: 60
   });
   assert.equal((await service.cancel(ownerA, cancelled.id)).status, "cancelled");
+
+  // —— WorkBuddy 适配器与 24 小时超时 ——
+  const workbuddyTask = await service.createTask(ownerA, {
+    runnerId: paired.runner.id, prompt: "WorkBuddy 任务", workspace: "/tmp",
+    executionMode: "read_only", timeoutSeconds: 86_400, adapter: "workbuddy"
+  });
+  assert.equal(workbuddyTask.adapter, "workbuddy", "task must keep requested adapter");
+  assert.equal(workbuddyTask.timeoutSeconds, 86_400, "task must accept a 24 hour timeout");
+  const reloadedWorkbuddy = await service.task(ownerA, workbuddyTask.id);
+  assert.equal(reloadedWorkbuddy.task.adapter, "workbuddy", "adapter must round-trip through MySQL");
+  assert.ok(reloadedWorkbuddy.events.some((event) => event.message.includes("WorkBuddy CLI")), "queue event must name the WorkBuddy adapter");
+  assert.equal((await service.cancel(ownerA, workbuddyTask.id)).status, "cancelled");
+
+  const overCapTask = await service.createTask(ownerA, {
+    runnerId: paired.runner.id, prompt: "clamp timeout", workspace: "/tmp",
+    executionMode: "read_only", timeoutSeconds: 86_400 * 3, adapter: "codex"
+  });
+  assert.equal(overCapTask.timeoutSeconds, 86_400, "timeout must be capped at 24 hours");
+  await service.cancel(ownerA, overCapTask.id);
+
+  await service.heartbeat(storedRunner!, { capabilities: ["codex"] });
+  await assert.rejects(() => service.createTask(ownerA, {
+    runnerId: paired.runner.id, prompt: "no workbuddy", workspace: "/tmp",
+    executionMode: "read_only", timeoutSeconds: 60, adapter: "workbuddy"
+  }), /未检测到 WorkBuddy CLI/u);
+  await service.heartbeat(storedRunner!, { capabilities: ["codex", "workbuddy"] });
+  assert.equal((await repository.getRunner(paired.runner.id))?.capabilities.includes("workbuddy"), true, "workbuddy capability must be restorable");
+
   await service.revoke(ownerA, paired.runner.id);
   await assert.rejects(() => service.authenticate(paired.token), /已撤销/u);
 
@@ -106,7 +137,10 @@ try {
     orderedEventBatching: true,
     heartbeatAndCompletion: true,
     queuedCancellation: true,
-    revocation: true
+    revocation: true,
+    workbuddyAdapterRoundTrip: true,
+    adapterCapabilityGate: true,
+    twentyFourHourTimeoutCap: true
   }, null, 2));
 } finally {
   await pool.execute("DELETE FROM integration_local_runner_task_events WHERE team_id IN (?,?)", [teamA, teamB]);

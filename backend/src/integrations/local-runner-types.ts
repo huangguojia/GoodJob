@@ -1,6 +1,7 @@
 export type LocalRunnerStatus = "active" | "revoked";
 export type LocalRunnerTaskStatus = "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
 export type LocalRunnerExecutionMode = "read_only" | "workspace_write";
+export type LocalRunnerAdapter = "codex" | "workbuddy";
 
 export interface LocalRunnerPairing {
   id: string;
@@ -27,6 +28,7 @@ export interface LocalRunner {
   platform: string;
   runnerVersion: string;
   codexVersion: string;
+  workbuddyVersion: string;
   capabilities: string[];
   workspaces: string[];
   lastSeenAt: string;
@@ -42,7 +44,7 @@ export interface LocalRunnerTask {
   teamId: string;
   ownerId: string;
   createdBy: string;
-  adapter: "codex";
+  adapter: LocalRunnerAdapter;
   prompt: string;
   workspace: string;
   executionMode: LocalRunnerExecutionMode;
@@ -60,6 +62,21 @@ export interface LocalRunnerTask {
   queuedAt: string;
   startedAt: string;
   finishedAt: string;
+  updatedAt: string;
+}
+
+/**
+ * 轻量任务摘要：健康检查 / 排队诊断用（不带 prompt_text 与 result_text）。
+ */
+export interface LocalRunnerTaskBrief {
+  id: string;
+  adapter: LocalRunnerAdapter;
+  status: string;
+  errorMessage: string;
+  /** 提示词前 120 字，仅用于在 UI 上说明「Runner 正在跑什么」，不用于展示任务正文 */
+  promptHead: string;
+  createdAt: string;
+  startedAt: string;
   updatedAt: string;
 }
 

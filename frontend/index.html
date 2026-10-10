@@ -1,5 +1,7 @@
 <!doctype html>
-<html lang="zh-CN">
+<!-- data-theme="paper"：首屏（含登录界面）默认晨白，避免登录后才换肤造成的闪烁。
+     登录后由 applyTheme(getInitialTheme()) 按账号主题覆盖。 -->
+<html lang="zh-CN" data-theme="paper">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -165,6 +167,7 @@
     .th-preset-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .th-preset-meta b { font-size: 14px; font-weight: 600; }
     .th-preset-meta small { font-size: 11px; color: var(--pc-muted); }
+    .th-preset-badge { margin-left: 6px; padding: 1px 6px; border-radius: 999px; font-size: 10px; font-weight: 600; font-style: normal; color: var(--brand-strong); background: var(--brand-tint); }
     .th-custom { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
     .th-custom-pick { display: flex; align-items: center; gap: 10px; }
     #themeCustomColor { width: 54px; height: 40px; padding: 0; border: 1px solid var(--line); border-radius: 10px; background: none; cursor: pointer; }
@@ -1863,6 +1866,17 @@
     .badge.aqua { color: var(--aqua); background: var(--surface-3); border-color: var(--surface-3); }
     .badge.gray { color: var(--muted); background: var(--surface-3); border-color: var(--line); }
 
+    /* 「背调中」进行时徽章：琥珀底 + 呼吸圆点，用于候选/搜客/任务详情等所有相关列表行 */
+    .research-running-badge { display: inline-flex; align-items: center; gap: 5px; }
+    .research-running-badge i {
+      width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none;
+      animation: research-running-pulse 1.15s ease-in-out infinite;
+    }
+    @keyframes research-running-pulse {
+      0%, 100% { opacity: .25; transform: scale(.75); }
+      50% { opacity: 1; transform: scale(1.1); }
+    }
+
     .dashboard-grid {
       display: grid;
       grid-template-columns: minmax(0, 1.4fr) minmax(360px, .9fr);
@@ -2954,6 +2968,13 @@
     .document-seller-profile-card b { color: var(--ink); font-size: 12px; }
     .document-seller-profile-card small { color: var(--muted); font-size: 10px; line-height: 1.5; }
     .document-seller-profile-card em { color: var(--brand); font-size: 9px; font-style: normal; font-weight: 700; }
+    .document-seller-bank { display: grid; gap: 4px; margin-top: 2px; }
+    .document-seller-bank > span { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; }
+    .document-seller-bank > span small { color: var(--muted); font-size: 9px; font-weight: 400; }
+    .document-seller-bank em.is-set { color: var(--brand); }
+    .document-seller-bank em.is-empty { color: var(--muted); }
+    .document-seller-bank textarea { width: 100%; min-height: 52px; padding: 7px 8px; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--surface); color: var(--ink); font-family: inherit; font-size: 11px; line-height: 1.5; resize: vertical; }
+    .document-seller-bank-actions { display: flex; justify-content: flex-end; }
     #docSellerMatchHint { color: var(--brand); font-size: 9px; line-height: 1.4; }
     .seller-match-rules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
     .seller-document-types { display: flex; flex-wrap: wrap; gap: 7px 12px; }
@@ -3141,16 +3162,45 @@
     .excel-preview-meta b { color: var(--ink); font-size: 12px; }
     .excel-preview-meta span { color: var(--muted); font-size: 10px; }
     .excel-preview-frame { width: 100%; height: 100%; min-height: 500px; border: 0; background: #fff; }
-    .document-asset-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-    .document-asset-columns > section { min-width: 0; }
-    .document-asset-list { display: grid; gap: 8px; }
-    .document-asset-list article { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border: 1px solid var(--line-soft); border-radius: 8px; }
-    .document-asset-list article > div { display: flex; align-items: center; gap: 10px; min-width: 0; }
-    .document-asset-list img, .document-asset-placeholder { width: 58px; height: 42px; object-fit: contain; border: 1px solid var(--line-soft); border-radius: 5px; background: #f7f9f9; }
-    .document-asset-placeholder { display: grid; place-items: center; color: var(--muted); font-size: 9px; }
-    .document-asset-list p { display: grid; gap: 3px; margin: 0; min-width: 0; }
-    .document-asset-list b, .document-asset-list small { overflow-wrap: anywhere; }
-    .document-asset-list small { color: var(--muted); font-size: 10px; }
+    /* ── 卖方公司与单据资产 · 管理面板 ───────────────────────────── */
+    .modal.document-asset-manager-modal {
+      width: min(1120px, calc(100vw - 48px));
+      max-height: min(860px, calc(100dvh - 48px));
+    }
+    .document-asset-manager-modal .modal-body {
+      display: block;
+      padding: 0;
+      overflow: auto;
+      background: linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%);
+    }
+    .da-board { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 16px; align-items: start; }
+    .da-panel { display: grid; gap: 12px; align-content: start; min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-xs); }
+    .da-panel-head { display: flex; align-items: center; gap: 9px; padding-bottom: 11px; border-bottom: 1px solid var(--line-soft); min-width: 0; }
+    .da-panel-mark { width: 30px; height: 30px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 9px; color: var(--brand); background: var(--brand-tint); font-size: 14px; font-weight: 700; }
+    .da-panel-head h3 { flex: 0 1 auto; margin: 0; overflow: hidden; color: var(--ink); font-size: var(--fs-md); font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+    .da-panel-count { min-width: 20px; height: 20px; padding: 0 6px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 999px; color: var(--muted); background: var(--surface-3); font-size: 11px; font-weight: 650; }
+    .da-add { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; min-height: 30px; padding: 4px 12px; flex: 0 0 auto; border: 1px solid var(--brand); border-radius: 999px; color: var(--brand); background: var(--brand-tint); font: inherit; font-size: 11px; font-weight: 650; white-space: nowrap; cursor: pointer; transition: color .16s ease, background-color .16s ease, box-shadow .16s ease; }
+    .da-add:hover { color: #fff; background: var(--brand); box-shadow: 0 6px 16px var(--brand-ring); }
+    .da-list { display: grid; gap: 10px; align-content: start; min-width: 0; }
+    .da-card { display: grid; grid-template-columns: 50px minmax(0, 1fr) auto; gap: 11px; align-items: center; padding: 10px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--surface); transition: border-color .16s ease, box-shadow .16s ease; }
+    .da-card:hover { border-color: var(--brand-ring); box-shadow: var(--shadow-soft); }
+    .da-thumb { width: 50px; height: 42px; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--surface-2); }
+    .da-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
+    .da-thumb span { color: var(--muted); font-size: 10px; font-weight: 600; }
+    .da-info { display: grid; gap: 3px; min-width: 0; }
+    .da-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .da-title b { overflow: hidden; color: var(--ink); font-size: var(--fs-sm); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+    .da-sub, .da-rule { margin: 0; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .da-rule { font-size: 10px; }
+    .da-chip { padding: 1px 7px; flex: 0 0 auto; border-radius: 999px; font-size: 10px; font-weight: 650; line-height: 16px; }
+    .da-chip.is-default { color: var(--brand); background: var(--brand-tint); }
+    .da-chip.is-off { color: var(--muted); background: var(--surface-3); }
+    .da-edit { min-height: 30px; padding: 4px 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface); font: inherit; font-size: 11px; font-weight: 650; cursor: pointer; transition: color .16s ease, border-color .16s ease, background-color .16s ease; }
+    .da-card:hover .da-edit { border-color: var(--brand); color: var(--brand); background: var(--brand-tint); }
+    .da-empty { display: grid; place-items: center; align-content: center; gap: 7px; min-height: 148px; padding: 22px 16px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); text-align: center; }
+    .da-empty i { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; color: var(--brand); background: var(--brand-tint); font-size: 16px; font-style: normal; font-weight: 700; }
+    .da-empty b { color: var(--text); font-size: var(--fs-sm); font-weight: 600; }
+    .da-empty small { font-size: 11px; line-height: 1.5; }
     .modal.document-asset-editor-modal { width: min(820px, calc(100vw - 32px)); max-height: min(900px, calc(100dvh - 24px)); }
     .document-asset-editor-modal .modal-body { overflow-x: hidden; overflow-y: auto; }
     .document-asset-placement { display: grid; gap: 10px; padding: 12px; border: 1px solid rgba(15,118,110,.16); border-radius: 8px; background: #f8fbfb; }
@@ -3176,7 +3226,8 @@
     .document-placement-numbers input { width: 100%; min-height: 31px; }
     .document-placement-scale input { width: 100%; accent-color: var(--brand); }
     @media (max-width: 900px) { .advanced-excel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .advanced-excel-config { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-    @media (max-width: 680px) { .modal.advanced-excel-modal { width: 100%; max-height: calc(100dvh - 24px); } .advanced-excel-modal .modal-body { padding: 14px; overflow: auto; } .advanced-excel-grid, .advanced-excel-config, .document-asset-columns { grid-template-columns: 1fr; max-height: none; overflow: visible; padding: 0; } .advanced-excel-config { padding: 10px; } .advanced-excel-intro, .excel-preview-meta { align-items: flex-start; flex-direction: column; } .modal.excel-preview-modal { width: 100%; height: calc(100dvh - 16px); } .excel-preview-frame { min-height: 420px; } .document-asset-placement-body { grid-template-columns: 1fr; } }
+    @media (max-width: 1080px) { .da-board { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 680px) { .modal.advanced-excel-modal { width: 100%; max-height: calc(100dvh - 24px); } .advanced-excel-modal .modal-body { padding: 14px; overflow: auto; } .advanced-excel-grid, .advanced-excel-config, .da-board { grid-template-columns: 1fr; max-height: none; overflow: visible; padding: 0; } .modal.document-asset-manager-modal { width: 100%; max-height: calc(100dvh - 16px); } .da-board { padding: 12px; } .advanced-excel-config { padding: 10px; } .advanced-excel-intro, .excel-preview-meta { align-items: flex-start; flex-direction: column; } .modal.excel-preview-modal { width: 100%; height: calc(100dvh - 16px); } .excel-preview-frame { min-height: 420px; } .document-asset-placement-body { grid-template-columns: 1fr; } }
 
     .doc-editor {
       padding: 14px;
@@ -3618,13 +3669,13 @@
     .longtec-pi-company { font-size: 28px; line-height: 1.15; font-weight: 400; text-transform: uppercase; }
     .longtec-pi-rule { height: 2px; margin: 20px 0 9px; background: var(--longtec-accent, #111); }
     .longtec-pi-header h2 { margin: 0; font-size: 27px; line-height: 1.2; letter-spacing: 2px; }
-    .longtec-pi-meta { display: grid; justify-items: end; gap: 13px; margin: 36px 0 16px; font-family: Georgia, "Times New Roman", serif; font-size: 17px; }
+    .longtec-pi-meta { display: grid; justify-items: end; gap: 13px; margin: 36px 0 16px; font-size: 17px; }
     .longtec-pi-meta p { margin: 0; }
     .longtec-pi-parties { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; margin: 0 7px 20px; }
     .longtec-pi-parties > div { min-height: 176px; padding: 15px 18px; border: 1px solid var(--longtec-accent, #111); }
-    .longtec-pi-parties h3 { margin: 0 0 8px; font-family: Georgia, "Times New Roman", serif; font-size: 22px; font-weight: 400; }
-    .longtec-pi-parties b { display: block; margin-bottom: 22px; font-family: Georgia, "Times New Roman", serif; font-size: 16px; font-weight: 400; line-height: 1.35; }
-    .longtec-pi-parties p { margin: 0 0 18px; font-family: Georgia, "Times New Roman", serif; font-size: 14px; line-height: 1.55; white-space: pre-line; }
+    .longtec-pi-parties h3 { margin: 0 0 8px; font-size: 22px; font-weight: 400; }
+    .longtec-pi-parties b { display: block; margin-bottom: 22px; font-size: 16px; font-weight: 400; line-height: 1.35; }
+    .longtec-pi-parties p { margin: 0 0 18px; font-size: 14px; line-height: 1.55; white-space: pre-line; }
     .longtec-pi-table { width: 100%; table-layout: fixed; margin: 0 0 26px !important; border-collapse: collapse; color: #111; font-size: 13px; }
     .longtec-pi-table th, .longtec-pi-table td { border: 1px solid var(--longtec-accent, #111) !important; padding: 9px 10px !important; vertical-align: middle; line-height: 1.35; }
     .longtec-pi-table th { color: var(--longtec-accent, #111) !important; background: var(--longtec-light, #c9f8f8) !important; text-align: center; font-size: 13px; }
@@ -3647,7 +3698,7 @@
     .longtec-pi-sign span { min-width: 105px; border-bottom: 1px solid #111; padding: 0 4px 8px; font-family: "Segoe Print", "Bradley Hand", cursive; font-size: 23px; text-align: center; }
     .longtec-pi-bank { margin-top: 34px; padding: 33px 10px 0; border-top: 1px solid var(--longtec-accent, #111); }
     .longtec-pi-bank h3 { margin: 0 0 22px; font-size: 17px; }
-    .longtec-pi-bank p { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: 14px; line-height: 1.45; white-space: pre-line; }
+    .longtec-pi-bank p { margin: 0; font-size: 14px; line-height: 1.45; white-space: pre-line; }
     @media (max-width: 600px) {
       .doc-paper.longtec-pi { padding: 28px 20px 36px; }
       .longtec-pi-company { font-size: 20px; }
@@ -11316,6 +11367,52 @@
     .mail-studio-loading i { width: 34px; height: 34px; border: 3px solid #e1e6ef; border-top-color: #0f766e; border-radius: 50%; animation: mail-spin .8s linear infinite; }
     @keyframes mail-spin { to { transform: rotate(360deg); } }
 
+    /* ── CLI 等待动画与动态轮播提醒（获客 / 背调 / 写信共用）────────────────── */
+    .cli-wait {
+      display: flex; align-items: center; gap: 14px;
+      padding: 14px 18px; margin: 12px 0;
+      border: 1px solid #d8e3f5; border-radius: 12px;
+      background: linear-gradient(120deg, #f2f7ff, #f7fbff 55%, #f4f9f6);
+      animation: cliWaitIn .4s ease;
+    }
+    @keyframes cliWaitIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .cli-wait-orbit { position: relative; width: 34px; height: 34px; flex: none; }
+    .cli-wait-orbit i {
+      position: absolute; inset: 0; border-radius: 50%;
+      border: 2.5px solid transparent; border-top-color: #2456d6;
+      animation: cliOrbit 1.15s linear infinite;
+    }
+    .cli-wait-orbit i:nth-child(2) { animation-delay: .17s; opacity: .55; }
+    .cli-wait-orbit i:nth-child(3) { animation-delay: .34s; opacity: .28; }
+    @keyframes cliOrbit { to { transform: rotate(360deg); } }
+    .cli-wait-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+    .cli-wait-msg { font-size: 14px; font-weight: 600; color: #24344d; animation: cliMsgIn .45s ease; }
+    @keyframes cliMsgIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    .cli-wait-text small { font-size: 12px; color: #68798f; }
+    .cli-wait-found { font-size: 13px; font-weight: 700; color: #0f8a4d; animation: cliMsgIn .45s ease; }
+    .cli-wait-found[hidden] { display: none; }
+    .cli-wait-text .cli-wait-elapsed { font-style: normal; font-weight: 700; color: #2456d6; font-variant-numeric: tabular-nums; }
+    .research-running .cli-wait { margin: 14px 0 0; }
+    .modal .cli-wait { margin: 14px 0 0; }
+
+    /* 生成失败态：必须能从「写作来源」就地换引擎重试，不能一直转圈 */
+    .mail-studio-error {
+      min-height: 420px;
+      display: grid;
+      align-content: center;
+      justify-items: center;
+      gap: 14px;
+      padding: 40px 28px;
+      border: 1px solid #f0d3d3;
+      border-radius: 8px;
+      background: var(--surface);
+      text-align: center;
+    }
+    .mail-studio-error > b { font-size: 15px; color: #8a2b2b; }
+    .mail-studio-error-reason { max-width: 620px; margin: 0; font-size: 13px; line-height: 1.7; color: #5a6478; word-break: break-word; }
+    .mail-studio-error .mail-source-row { margin: 2px 0 0; width: min(460px, 100%); text-align: left; }
+    .mail-studio-error .inline-actions { margin: 0; }
+
     .mail-studio-layout {
       display: grid;
       grid-template-columns: 240px minmax(420px, 1fr) 280px;
@@ -11366,6 +11463,21 @@
     .mail-goal-field > span { padding-top: 8px; }
     .mail-goal-field textarea { width: 100%; min-height: 56px; padding: 8px 10px; resize: vertical; border: 1px solid #d8e0eb; border-radius: 6px; outline: 0; color: #2b374b; background: var(--surface); font: 11px/1.55 inherit; letter-spacing: 0; }
     .mail-goal-field textarea:focus { border-color: #5ba99f; box-shadow: 0 0 0 3px rgba(15, 118, 110, .09); }
+    /* 写作来源 / 背调来源选择器：同一套观感，放在场景行下方 */
+    .mail-source-row,
+    .research-source-row { display: grid; grid-template-columns: 68px minmax(0, 1fr); align-items: center; gap: 10px; }
+    .mail-source-row small,
+    .research-source-row small { grid-column: 2; color: #8593a6; font-size: 10.5px; line-height: 1.5; }
+    .mail-source-row > span,
+    .research-source-row > span { color: #68758a; font-size: 10px; font-weight: 700; }
+    .engine-source-select { min-height: 30px; padding: 0 8px; border: 1px solid #d8e0eb; border-radius: 6px; background: var(--surface); color: #33405a; font-size: 11px; font-weight: 700; outline: 0; }
+    .engine-source-select:focus { border-color: #5ba99f; box-shadow: 0 0 0 3px rgba(15, 118, 110, .09); }
+    .engine-source-select:disabled { opacity: .6; }
+    .research-source-row { grid-template-columns: auto minmax(0, 1fr); }
+    .research-source-row > small { grid-column: 2; }
+    .mail-source-row { grid-template-columns: 68px auto; }
+    .mail-source-row small { grid-column: 2; }
+    .research-progress-note { margin: 14px 0 0; color: #7b8798; font-size: 11px; text-align: center; }
     .mail-studio-editor label { display: grid; }
     .mail-studio-editor label > span { padding: 11px 15px 0; color: #7d899b; font-size: 10px; }
     .mail-subject-field { border-bottom: 1px solid #e8edf3; }
@@ -15890,7 +16002,8 @@
       min-width: 0;
       padding: clamp(28px, 4.4vw, 72px) clamp(28px, 5.6vw, 96px);
       overflow: hidden;
-      background: #5147d9;
+      /* 登录页左栏跟随系统主题；默认晨白 → 靛蓝 #4f46e5 */
+      background: var(--brand-strong);
     }
 
     .login-visual::before {
@@ -15901,7 +16014,7 @@
       right: -18%;
       bottom: -54%;
       border-radius: 50%;
-      background: #665ce2;
+      background: var(--brand);
       pointer-events: none;
     }
 
@@ -15946,7 +16059,7 @@
 
     .login-brand-mark::before {
       inset: 8px;
-      border: 2px solid #5147d9;
+      border: 2px solid var(--brand);
       border-top-color: #ff836b;
     }
 
@@ -15955,7 +16068,7 @@
       height: 8px;
       top: 15px;
       left: 15px;
-      background: #5147d9;
+      background: var(--brand);
     }
 
     .login-brand strong {
@@ -16084,7 +16197,7 @@
       inset: 9px;
       border-radius: 50%;
       border: 2px solid #ddd9ff;
-      border-left-color: #5147d9;
+      border-left-color: var(--brand);
       border-bottom-color: #ff836b;
     }
 
@@ -16340,127 +16453,6 @@
       color: #6b778c;
     }
 
-    .login-demo {
-      margin: -4px 0 18px;
-      padding: 11px 12px 12px;
-      border: 1px solid #dfe7f2;
-      border-radius: 10px;
-      background: linear-gradient(135deg, #f8fbff, #fff);
-    }
-
-    .login-demo-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 9px;
-    }
-
-    .login-demo-title {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      color: #37344f;
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: .02em;
-    }
-
-    .login-demo-title::before {
-      content: "";
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #1a9e63;
-      box-shadow: 0 0 0 3px rgba(26, 158, 99, .14);
-    }
-
-    .login-demo-pass {
-      color: #6b778c;
-      font-size: 10px;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .login-demo-pass code {
-      padding: 1px 5px;
-      border: 1px solid #dfe7f2;
-      border-radius: 4px;
-      background: #fff;
-      color: #0f766e;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 10px;
-      font-weight: 600;
-    }
-
-    .login-demo-list {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-
-    .login-demo-item {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 5px 9px;
-      border: 1px solid #e2e7f0;
-      border-radius: 999px;
-      background: #fff;
-      color: #526178;
-      font-size: 11px;
-      font-family: inherit;
-      line-height: 1.2;
-      cursor: pointer;
-      transition: border-color .18s cubic-bezier(.22, 1, .36, 1),
-                  color .18s cubic-bezier(.22, 1, .36, 1),
-                  background .18s cubic-bezier(.22, 1, .36, 1),
-                  transform .18s cubic-bezier(.22, 1, .36, 1),
-                  box-shadow .18s cubic-bezier(.22, 1, .36, 1);
-    }
-
-    .login-demo-item b {
-      color: #37344f;
-      font-size: 11px;
-      font-weight: 600;
-    }
-
-    .login-demo-item i {
-      color: #9aa4b5;
-      font-size: 10px;
-      font-style: normal;
-    }
-
-    .login-demo-item:hover {
-      border-color: #b9c9ef;
-      background: #f4f7ff;
-      transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgba(20, 30, 55, .07);
-    }
-
-    .login-demo-item:hover b { color: #0f766e; }
-
-    .login-demo-item:active { transform: translateY(0); }
-
-    .login-demo-item:focus-visible {
-      outline: none;
-      border-color: #0f766e;
-      box-shadow: 0 0 0 3px rgba(15, 118, 110, .16);
-    }
-
-    .login-demo-item.is-filled {
-      border-color: #0f766e;
-      background: #eaf0ff;
-    }
-
-    .login-demo-item.is-filled b { color: #0b5d57; }
-
-    .login-demo-tip {
-      margin-top: 8px;
-      color: #9aa4b5;
-      font-size: 10px;
-      line-height: 1.4;
-    }
-
     .login-field {
       display: grid;
       gap: 8px;
@@ -16484,7 +16476,7 @@
       background: var(--surface);
       font-size: 14px;
       outline: 0;
-      caret-color: #5147d9;
+      caret-color: var(--brand);
       transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
     }
 
@@ -16500,9 +16492,9 @@
 
     .login-field input:focus,
     .login-field select:focus {
-      border-color: #5147d9;
+      border-color: var(--brand);
       background: var(--surface);
-      box-shadow: 0 0 0 4px rgba(81, 71, 217, .12);
+      box-shadow: 0 0 0 4px var(--brand-ring);
     }
 
     #loginButton {
@@ -16511,14 +16503,14 @@
       margin-top: 5px;
       position: relative;
       overflow: hidden;
-      border-color: #5147d9;
+      border-color: var(--brand);
       border-radius: 12px;
       color: #fff;
-      background: #5147d9;
+      background: var(--brand);
       font-size: 14px;
       font-weight: 750;
       white-space: nowrap;
-      box-shadow: 0 12px 28px rgba(81, 71, 217, .25);
+      box-shadow: 0 12px 28px var(--brand-ring);
       transition: transform .2s cubic-bezier(.16, 1, .3, 1), box-shadow .2s ease, background .2s ease;
     }
 
@@ -16527,9 +16519,9 @@
     }
 
     #loginButton:hover {
-      background: #4439c5;
+      background: var(--brand-strong);
       transform: translateY(-1px);
-      box-shadow: 0 16px 32px rgba(81, 71, 217, .3);
+      box-shadow: 0 16px 32px var(--brand-ring);
     }
 
     #loginButton:active {
@@ -17473,6 +17465,135 @@
     }
 
     .modal.deal-editor-modal { width: min(920px, calc(100vw - 32px)); }
+
+    /* 新增客户：字段多，弹窗加宽；顶部资料识别区占整行 */
+    .modal.customer-editor-modal { width: min(960px, calc(100vw - 32px)); }
+    .modal.customer-editor-modal .modal-body { padding: 16px 18px; gap: 12px; }
+
+    .customer-intake {
+      display: grid;
+      gap: 10px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface-2);
+    }
+    .customer-intake-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .customer-intake-head b { display: block; color: var(--ink); font-size: 13px; }
+    .customer-intake-head small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+
+    /* 本机 CLI 状态条：连不上 CLI / 上次失败 / 正在排队，都在这里说清楚 */
+    .customer-intake-health {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 9px 11px;
+      border: 1px solid var(--line-soft);
+      border-radius: 10px;
+      background: var(--surface);
+    }
+    .customer-intake-health-dot {
+      flex: none;
+      width: 8px;
+      height: 8px;
+      margin-top: 5px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+    .customer-intake-health-body { display: grid; gap: 3px; min-width: 0; flex: 1; }
+    .customer-intake-health-body strong { color: var(--ink); font-size: 12px; font-weight: 650; }
+    .customer-intake-health-body small { color: var(--muted); font-size: 11px; line-height: 1.55; }
+    .customer-intake-health-body code {
+      display: block;
+      padding: 6px 8px;
+      border: 1px dashed var(--line);
+      border-radius: 7px;
+      background: var(--surface-2);
+      color: var(--ink);
+      font-size: 11px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .customer-intake-health > .btn { flex: none; padding: 3px 10px; font-size: 11px; }
+    .customer-intake-health.is-ok { border-color: #cfe6d4; background: var(--green-tint); }
+    .customer-intake-health.is-ok .customer-intake-health-dot { background: var(--green); }
+    .customer-intake-health.is-warn { border-color: #f0e0bd; background: var(--amber-tint); }
+    .customer-intake-health.is-warn .customer-intake-health-dot { background: var(--amber); }
+    .customer-intake-health.is-error { border-color: #f0c8c8; background: var(--rose-tint); }
+    .customer-intake-health.is-error .customer-intake-health-dot { background: var(--rose); }
+    .customer-intake-health.is-checking .customer-intake-health-dot { animation: customerIntakePulse 1.1s ease-in-out infinite; }
+    @keyframes customerIntakePulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+    .customer-intake-drop {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      background: var(--surface);
+      cursor: pointer;
+      transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
+    }
+    .customer-intake-drop:hover,
+    .customer-intake-drop.is-dragging {
+      border-color: var(--brand);
+      background: var(--brand-tint);
+      box-shadow: inset 0 0 0 1px var(--brand-ring);
+    }
+    .customer-intake-drop-icon {
+      display: grid;
+      place-items: center;
+      flex: none;
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background: var(--brand-tint);
+      color: var(--brand);
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .customer-intake-drop-copy { display: grid; gap: 3px; min-width: 0; }
+    .customer-intake-drop-copy strong { color: var(--ink); font-size: 13px; }
+    .customer-intake-drop-copy small { color: var(--muted); font-size: 11px; }
+    .customer-intake-list { display: grid; gap: 6px; }
+    .customer-intake-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 4px 10px;
+      padding: 7px 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: var(--surface);
+      font-size: 12px;
+    }
+    .customer-intake-item-name { min-width: 0; overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
+    .customer-intake-item-message { flex: none; color: var(--muted); font-size: 11px; }
+    /* Office 文档的转换结果：另起一行，别把文件名挤掉 */
+    .customer-intake-item-convert { flex: 1 0 100%; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .customer-intake-item-convert.is-warn { color: var(--amber, #b45309); }
+    .customer-intake-item.is-running { border-color: var(--brand-ring); }
+    .customer-intake-item.is-running .customer-intake-item-message { color: var(--brand); }
+    .customer-intake-item.is-uploading { border-color: var(--line); }
+    .customer-intake-item.is-uploading .customer-intake-item-message { color: var(--muted); }
+    .customer-intake-item.is-uploaded .customer-intake-item-message { color: var(--muted); }
+    .customer-intake-item.is-done .customer-intake-item-message { color: var(--green); }
+    .customer-intake-item.is-error { border-color: #f0c8c8; background: var(--rose-tint); }
+    .customer-intake-item.is-error .customer-intake-item-message { color: var(--rose); }
+    .customer-intake-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .customer-intake-status { margin-left: auto; color: var(--muted); font-size: 11px; }
+    .modal.customer-editor-modal input.is-intake-filled,
+    .modal.customer-editor-modal textarea.is-intake-filled {
+      border-color: var(--brand);
+      background: var(--brand-tint);
+      transition: background .6s ease, border-color .6s ease;
+    }
+    @media (max-width: 720px) {
+      .customer-intake-foot { align-items: stretch; }
+      .customer-intake-status { margin-left: 0; width: 100%; }
+    }
     .deal-items-field { gap: 10px; }
     .deal-items-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .deal-items-heading label { color: var(--ink); }
@@ -19441,7 +19562,7 @@
 
     .task-run-candidate-row {
       display: grid;
-      grid-template-columns: 28px minmax(190px, 1.2fr) minmax(150px, .8fr) minmax(180px, 1fr) 86px 110px;
+      grid-template-columns: 28px minmax(180px, 1.2fr) minmax(140px, .8fr) minmax(170px, 1fr) 72px 96px 56px;
       gap: 12px;
       align-items: center;
       min-height: 58px;
@@ -19457,6 +19578,7 @@
     .task-run-candidate-score { color: #176d4c; font-size: 13px; font-weight: 900; text-align: right; }
     .task-run-candidate-state { justify-self: end; padding: 4px 7px; border-radius: 5px; color: #176d4c; background: #eaf7f0; font-size: 9px; font-style: normal; font-weight: 800; white-space: nowrap; }
     .task-run-candidate-state.is-disabled { color: #6f7c90; background: #edf1f5; }
+    .lead-task-research-btn { justify-self: end; padding: 4px 10px; font-size: 10px; font-weight: 800; border-radius: 6px; }
 
     .task-run-sources,
     .task-run-strategy { margin-bottom: 12px; overflow: hidden; border: 1px solid #dce4ef; border-radius: 8px; background: var(--surface); }
@@ -19817,8 +19939,12 @@
       .mail-studio-context { grid-template-columns: 1fr; }
       .mail-studio-editor { min-height: 580px; }
       .mail-scenario-row,
+      .mail-source-row,
+      .research-source-row,
       .mail-goal-field { grid-template-columns: 1fr; gap: 7px; }
       .mail-goal-field > span { padding-top: 0; }
+      .mail-source-row small,
+      .research-source-row small { grid-column: auto; }
       .mail-body-field textarea { min-height: 470px; font-size: 12px; }
       .mail-studio-checks { grid-column: auto; grid-template-columns: 1fr; }
       .company-profile-form { grid-template-columns: 1fr; }
@@ -22428,6 +22554,15 @@
           #lead-finder .lead-candidate-state > b.is-green { color: var(--td-success-color); }
           #lead-finder .lead-candidate-state > b.is-amber { color: var(--td-warning-color); }
           #lead-finder .lead-candidate-state > b.is-red { color: var(--td-error-color); }
+          #lead-finder .lead-row-research-btn {
+            display: inline-block;
+            margin-top: 5px;
+            padding: 3px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            border-radius: 5px;
+            white-space: nowrap;
+          }
 
           #lead-finder .lead-candidate-score {
             display: grid;
@@ -24975,6 +25110,41 @@ body.platform-mode .workspace-tabs { display:none !important; }
     #dashboard.dashboard-v2 .lead-funnel-panel { grid-column: span 4; }
     #dashboard.dashboard-v2 .dashboard-task-panel { grid-column: span 7; }
     #dashboard.dashboard-v2 .dashboard-pipeline-panel { grid-column: span 5; }
+    #dashboard.dashboard-v2 .tender-daily-panel { margin-bottom: 14px; border-top: 3px solid var(--kinetic-accent); }
+    #dashboard.dashboard-v2 .tender-daily-sub { margin: 10px 0 0; color: var(--kinetic-dim); font-size: 12.5px; }
+    #dashboard.dashboard-v2 .tender-daily-note { margin: 10px 0 0; color: var(--kinetic-dim); font-size: 12.5px; }
+    #dashboard.dashboard-v2 .tender-daily-error { display: flex; flex-direction: column; gap: 7px; align-items: flex-start; padding: 16px 0; }
+    #dashboard.dashboard-v2 .tender-daily-error b { color: var(--kinetic-ink); font-size: 15px; }
+    #dashboard.dashboard-v2 .tender-daily-error span { color: #d98484; font-size: 13px; line-height: 1.55; }
+    #dashboard.dashboard-v2 .tender-daily-empty { display: flex; flex-direction: column; gap: 7px; padding: 16px 0; }
+    #dashboard.dashboard-v2 .tender-daily-empty b { color: var(--kinetic-ink); font-size: 15px; }
+    #dashboard.dashboard-v2 .tender-daily-empty span { color: var(--kinetic-dim); font-size: 13px; line-height: 1.6; }
+    #dashboard.dashboard-v2 .tender-daily-empty small { color: var(--kinetic-muted); font-size: 12px; }
+    #dashboard.dashboard-v2 .tender-daily-summary { margin: 14px 0 4px; color: #d0d0d5; font-size: 13px; line-height: 1.6; }
+    #dashboard.dashboard-v2 .tender-daily-actions { display: flex; align-items: center; gap: 12px; margin: 10px 0 14px; padding: 10px 12px; border: 1px solid var(--kinetic-line); background: rgba(112,225,220,.05); }
+    #dashboard.dashboard-v2 .tender-daily-actions .btn { flex: none; }
+    #dashboard.dashboard-v2 .tender-daily-actions small { color: var(--kinetic-muted); font-size: 11.5px; line-height: 1.5; }
+    #dashboard.dashboard-v2 .tender-item-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 9px; }
+    #dashboard.dashboard-v2 .tender-item-foot .tender-item-source { margin-top: 0; }
+    #dashboard.dashboard-v2 .tender-item-lead-btn { flex: none; padding: 4px 10px; border: 1px solid #6ea8a4; color: #9fe3dc; background: transparent; font-size: 11.5px; cursor: pointer; transition: background .15s, color .15s; }
+    #dashboard.dashboard-v2 .tender-item-lead-btn:hover:not(:disabled) { background: rgba(112,225,220,.12); color: #c8f5ef; }
+    #dashboard.dashboard-v2 .tender-item-lead-btn:disabled { border-color: #4b4b52; color: var(--kinetic-muted); cursor: default; }
+    #dashboard.dashboard-v2 .tender-daily-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+    #dashboard.dashboard-v2 .tender-daily-item { padding: 13px 15px; border: 1px solid var(--kinetic-line); background: rgba(255,255,255,.02); }
+    #dashboard.dashboard-v2 .tender-daily-item:hover { border-color: #686870; }
+    #dashboard.dashboard-v2 .tender-item-head { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; }
+    #dashboard.dashboard-v2 .tender-item-head a { color: var(--kinetic-ink); text-decoration: none; }
+    #dashboard.dashboard-v2 .tender-item-head a:hover b { color: var(--kinetic-accent); }
+    #dashboard.dashboard-v2 .tender-item-head b { color: var(--kinetic-ink); font-size: 13.5px; line-height: 1.5; }
+    #dashboard.dashboard-v2 .tender-item-side { flex: none; display: flex; gap: 5px; }
+    #dashboard.dashboard-v2 .tender-item-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 9px; color: var(--kinetic-dim); font-size: 11.5px; }
+    #dashboard.dashboard-v2 .tender-item-meta b { color: #d6d6dc; font-weight: 600; }
+    #dashboard.dashboard-v2 .tender-item-match { margin: 9px 0 0; color: #c7c7ce; font-size: 12.5px; line-height: 1.55; }
+    #dashboard.dashboard-v2 .tender-item-action { margin: 8px 0 0; color: #cfe8dd; font-size: 12.5px; }
+    #dashboard.dashboard-v2 .tender-item-action b { margin-right: 7px; color: var(--kinetic-accent); font: 700 10px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-transform: uppercase; }
+    #dashboard.dashboard-v2 .tender-item-source { display: block; margin-top: 9px; color: var(--kinetic-muted); font-size: 11px; word-break: break-all; }
+    #dashboard.dashboard-v2 .tender-daily-notes { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--kinetic-line); }
+    #dashboard.dashboard-v2 .tender-daily-notes span { color: var(--kinetic-muted); font-size: 11.5px; }
     #dashboard.dashboard-v2 .panel,
     #dashboard.dashboard-v2 .focus-panel,
     #dashboard.dashboard-v2 .lead-funnel-panel,
@@ -25144,18 +25314,6 @@ body.platform-mode .workspace-tabs { display:none !important; }
       <p>登录 GoodJob，继续推进你的客户增长。</p>
       <div class="login-field"><label>账号</label><input id="loginEmail" placeholder="请输入登录邮箱" autocomplete="username"></div>
       <div class="login-field"><label>密码</label><input id="loginPassword" type="password" placeholder="请输入密码" autocomplete="current-password"></div>
-      <section class="login-demo" aria-label="默认管理员账号">
-        <div class="login-demo-head">
-          <span class="login-demo-title">默认管理员</span>
-          <span class="login-demo-pass">密码 <code>goodjob123</code></span>
-        </div>
-        <div class="login-demo-list">
-          <button class="login-demo-item" type="button" data-login-demo-email="admin@goodjob.com" data-login-demo-password="goodjob123">
-            <b>admin@goodjob.com</b><i>管理员</i>
-          </button>
-        </div>
-        <div class="login-demo-tip">登录信息已自动填入，点击账号可重新填入</div>
-      </section>
       <button class="btn primary" id="loginButton">Enter GoodJob</button>
       <div class="login-product-version" id="loginProductVersion" aria-label="产品版本">GoodJob CRM · 正在读取版本</div>
     </div>
@@ -25340,7 +25498,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
           <header class="th-page-head">
             <p class="th-eyebrow">Appearance · 外观</p>
             <h1 class="th-h1">主题换肤</h1>
-            <p class="th-sub">为整个系统挑选或自定义品牌主题色，所有界面（含产品维护、发货跟踪）实时联动。保存后随账号生效，登录即应用。</p>
+            <p class="th-sub">为整个系统挑选或自定义品牌主题色，所有界面（含产品维护、发货跟踪）实时联动。保存后随账号生效，登录即应用。系统默认主题为「晨白 Paper」。</p>
           </header>
 
           <section class="th-section">
@@ -25443,6 +25601,18 @@ body.platform-mode .workspace-tabs { display:none !important; }
               <div class="lead-funnel" id="dashboardLeadFunnel" aria-live="polite"></div>
             </section>
           </div>
+
+          <section class="panel section tender-daily-panel" id="tenderDailyPanel">
+            <div class="section-head">
+              <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8L12 2Z"/><path d="M5 21h14"/></svg></span><div><span class="panel-index">05 / MARKET INTEL</span><h2>海外竞标日报</h2></div></div>
+              <div class="head-actions">
+                <span class="badge amber" id="tenderDailyStatus">待查询</span>
+                <button class="btn" id="tenderDailyRefreshButton">重新查询</button>
+              </div>
+            </div>
+            <p class="tender-daily-sub" id="tenderDailySummary">连接本机 CLI，检索与主营产品相关的海外公开招标 / 采购公告，每天自动更新一次。</p>
+            <div id="tenderDailyBody" class="tender-daily-body"><div class="todo-history-empty">竞标日报加载中</div></div>
+          </section>
 
           <div class="dashboard-grid">
             <div class="panel section dashboard-task-panel">
@@ -25585,7 +25755,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
         <div class="view" id="lead-finder">
           <div class="page-head prospect-page-head">
             <div><h1>自动获客</h1><p>搜客、验证与清洗实时协作</p></div>
-            <div class="head-actions"><button class="btn" id="leadFinderLfindButton" data-permission="prospect.execute" type="button">Lfind 深入查询</button><button class="btn primary" id="leadFinderStartButton" data-permission="prospect.execute">新建搜客任务</button></div>
+            <div class="head-actions"><button class="btn" id="leadFinderCliAcquireButton" data-permission="prospect.execute" type="button">CLI 获客</button><button class="btn" id="leadFinderLfindButton" data-permission="prospect.execute" type="button">Lfind 深入查询</button><button class="btn primary" id="leadFinderStartButton" data-permission="prospect.execute">新建搜客任务</button></div>
           </div>
 
           <div class="lead-workbench">
@@ -26007,6 +26177,9 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 </div>
                 <div class="prospect-mail-preview" id="prospectMailPreview">暂无开发信</div>
                 <div class="prospect-action-row">
+                  <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:#4a5a70">撰写方式
+                    <select id="prospectMailSourceSelect" class="engine-source-select" title="选择这封开发信由谁撰写"></select>
+                  </label>
                   <button class="btn" id="prospectGenerateMailButton">生成正文</button>
                   <button class="btn" id="prospectPreviewMailButton">刷新预览</button>
                   <button class="btn primary" id="prospectSendMailButton" data-permission="communication.send">发送开发信</button>
@@ -26100,7 +26273,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 </button>
                 <button class="tool-card integration-launch-card" type="button" data-integration-launch-tab="local-runner" style="--tc:#7561d8">
                   <span class="tool-card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 3 3-3 3M13 16h4"/><rect x="3" y="4" width="18" height="16" rx="2"/></svg></span>
-                  <span class="tool-card-body"><span class="tool-card-title">本地 Runner</span><span class="tool-card-desc">调用本机 Codex CLI，查看任务过程与结果</span></span>
+                  <span class="tool-card-body"><span class="tool-card-title">本地 Runner</span><span class="tool-card-desc">调用本机 Codex / WorkBuddy CLI，查看任务过程与结果</span></span>
                   <span class="tool-card-badge">CLI</span><span class="tool-card-go" aria-hidden="true">&#8594;</span>
                 </button>
                 <button class="tool-card integration-launch-card" type="button" data-integration-launch-tab="mail-calendar" style="--tc:#3578b8">
@@ -26255,7 +26428,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
 
             <section class="integration-tab-panel" data-integration-panel="local-runner" hidden>
               <div class="local-runner-head">
-                <div><h2>GoodJob Runner</h2><p>让网页安全调用本机 Codex CLI，任务过程与结果自动回到 CRM。</p></div>
+                <div><h2>GoodJob Runner</h2><p>让网页安全调用本机 Codex CLI 或 WorkBuddy CLI，任务过程与结果自动回到 CRM。</p></div>
                 <button class="btn primary" id="localRunnerPairButton" type="button" data-permission="integration.connect">配对设备</button>
               </div>
               <div class="local-runner-summary" aria-label="Runner 状态概览">
@@ -26277,14 +26450,15 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 </aside>
                 <main class="local-runner-main">
                   <section class="local-runner-composer">
-                    <header><div><h3>发送 Codex 任务</h3><p id="localRunnerComposerIdentity">等待配对设备</p></div><span class="local-runner-adapter">CODEX CLI</span></header>
+                    <header><div><h3>发送本机 CLI 任务</h3><p id="localRunnerComposerIdentity">等待配对设备</p></div><span class="local-runner-adapter" data-local-runner-adapter-badge>CODEX</span></header>
+                    <div class="local-runner-adapter-group" data-runner-adapter-group role="group" aria-label="选择执行任务的 CLI"></div>
                     <label class="local-runner-prompt-field" for="localRunnerPrompt"><span>任务内容</span><textarea id="localRunnerPrompt" rows="5" maxlength="20000" placeholder="例如：阅读当前项目，定位客户分页丢失的原因并给出修复方案。"></textarea></label>
                     <div class="local-runner-controls">
                       <label><span>工作目录</span><select id="localRunnerWorkspace"><option value="">没有已授权目录</option></select></label>
-                      <label><span>最长执行</span><select id="localRunnerTimeout"><option value="300">5 分钟</option><option value="600" selected>10 分钟</option><option value="1200">20 分钟</option><option value="1800">30 分钟</option></select></label>
+                      <label><span>最长执行</span><select id="localRunnerTimeout"><option value="300">5 分钟</option><option value="600" selected>10 分钟</option><option value="1800">30 分钟</option><option value="3600">1 小时</option><option value="21600">6 小时</option><option value="43200">12 小时</option><option value="86400">24 小时</option></select></label>
                     </div>
                     <footer>
-                      <div class="local-runner-mode" role="group" aria-label="Codex 执行权限">
+                      <div class="local-runner-mode" role="group" aria-label="CLI 执行权限">
                         <button class="active" type="button" data-runner-mode="read_only" aria-pressed="true"><b>只读分析</b><small>不能修改文件</small></button>
                         <button type="button" data-runner-mode="workspace_write" aria-pressed="false"><b>可修改工作区</b><small>仅限授权目录</small></button>
                       </div>
@@ -26292,7 +26466,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
                     </footer>
                   </section>
                   <section class="local-runner-task-detail" id="localRunnerTaskDetail">
-                    <div class="local-runner-empty detail"><b>选择一条任务查看结果</b><span>运行进度、Codex 回复和错误原因会集中显示在这里。</span></div>
+                    <div class="local-runner-empty detail"><b>选择一条任务查看结果</b><span>运行进度、CLI 回复和错误原因会集中显示在这里。</span></div>
                   </section>
                 </main>
               </div>
@@ -26614,6 +26788,13 @@ body.platform-mode .workspace-tabs { display:none !important; }
             #integration-center .local-runner-composer { border: 1px solid var(--integration-line); border-radius: 8px; background: rgba(255,255,255,.9); box-shadow: 0 5px 18px rgba(20,36,33,.04); }
             #integration-center .local-runner-composer > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 15px; border-bottom: 1px solid #e8eeec; }
             #integration-center .local-runner-adapter { padding: 4px 6px; border: 1px solid #cbdad6; border-radius: 4px; color: #52645f; background: #f4f8f7; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 8px; }
+            #integration-center .local-runner-adapter-group { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; padding: 13px 15px 0; }
+            #integration-center .local-runner-adapter-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 8px 10px; border: 1px solid #dce5e2; border-radius: 7px; color: #697873; background: #fbfcfc; cursor: pointer; text-align: left; }
+            #integration-center .local-runner-adapter-option:disabled { opacity: .48; cursor: not-allowed; }
+            #integration-center .local-runner-adapter-option.active { border-color: #b9d2ca; color: #1c6250; background: #eaf4f1; box-shadow: inset 0 0 0 1px rgba(22,129,95,.05); }
+            #integration-center .local-runner-adapter-option b { min-width: 0; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+            #integration-center .local-runner-adapter-option small { flex: none; color: #899691; font-size: 9px; }
+            #integration-center .local-runner-adapter-option.active small { color: #3f7a68; }
             #integration-center .local-runner-prompt-field { display: grid; gap: 7px; padding: 14px 15px 10px; color: #4b5d58; font-size: 9px; font-weight: 650; }
             #integration-center .local-runner-prompt-field textarea { width: 100%; min-height: 104px; resize: vertical; border: 1px solid #d6e1de; border-radius: 6px; outline: 0; padding: 10px 11px; color: var(--integration-ink); background: #fbfcfc; font: inherit; font-size: 11px; font-weight: 400; line-height: 1.6; }
             #integration-center .local-runner-prompt-field textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); }
@@ -26732,6 +26913,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
               #integration-center .local-runner-task-section { max-height: 280px; }
               #integration-center .local-runner-main { padding: 13px 0; }
               #integration-center .local-runner-controls { grid-template-columns: 1fr; }
+              #integration-center .local-runner-adapter-group { grid-template-columns: 1fr; }
               #integration-center .local-runner-composer > footer { align-items: stretch; flex-direction: column; }
               #integration-center .local-runner-mode { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
               #integration-center .local-runner-mode button { min-width: 0; }
@@ -27247,6 +27429,12 @@ body.platform-mode .workspace-tabs { display:none !important; }
             #outreach-batches .ob-cust-foot .ob-note { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--ob-muted); }
             #outreach-batches .ob-cust.is-skipped, #outreach-batches .ob-cust.is-removed { background:#fafbfc; border-style:dashed; }
             #outreach-batches .ob-cust.is-skipped .ob-cust-name b, #outreach-batches .ob-cust.is-removed .ob-cust-name b { color:#7b8798; }
+            /* 成稿依据 + 阶段就地覆盖：只在有内容时出现，默认是安静的一行小字 */
+            #outreach-batches .ob-cust-basis { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; margin-top:1px; }
+            #outreach-batches .ob-cust-basis .ob-note { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10.5px; color:var(--ob-muted); }
+            #outreach-batches .ob-stage-select { display:inline-flex; align-items:center; gap:5px; color:var(--ob-muted); font-size:10.5px; }
+            #outreach-batches .ob-stage-select select { padding:1px 5px; border:1px solid var(--ob-line); border-radius:6px; background:#fff; color:#3b5578; font-size:10.5px; font-family:inherit; }
+            #outreach-batches .ob-stage-select select:hover { border-color:#9db4d8; }
             #outreach-batches .ob-plan-list { display:grid; gap:10px; padding:14px 16px; }
             #outreach-batches .ob-plan-card { border:1px solid var(--ob-line); border-radius:9px; padding:12px 14px; display:grid; gap:8px; cursor:pointer; }
             #outreach-batches .ob-plan-card:hover { border-color:#9db4d8; }
@@ -27431,6 +27619,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
             /* 目标编号：拿不到公司名时用它说明"这是内部标识"，等宽字体一眼就和公司名区分开 */
             .opd-target-id small.opd-ref { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:10px; letter-spacing:.01em; }
             .opd-target-head .badge { flex:0 0 auto; }
+            .opd-target-tags { flex:0 0 auto; display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:5px; }
 
             /* 三步时间轴：点 + 连线，而不是「第 1 封已发 …第 2 封计划 …」连成一串 */
             .opd-steps { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); margin:0; padding:0; list-style:none; }
@@ -28956,7 +29145,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
               </div>
               <div class="doc-style-bar">
                 <label><span>语言</span><select id="docLanguageInput"><option value="EN">English</option><option value="ES">Español</option><option value="RU">Русский</option><option value="AR">العربية</option><option value="ZH">中文</option></select></label>
-                <label><span>主题</span><select id="docThemeInput"><option value="rose">Rose</option><option value="indigo">Indigo</option><option value="emerald">Emerald</option><option value="slate">Slate</option><option value="amber">Amber</option><option value="executive">Executive</option><option value="classic">Classic</option><option value="compact">Compact</option><option value="longtec">Longtec PI · 长陆版</option></select></label>
+                <label><span>主题</span><select id="docThemeInput"><option value="rose">Rose</option><option value="indigo">Indigo</option><option value="emerald">Emerald</option><option value="slate">Slate</option><option value="amber">Amber</option><option value="executive">Executive</option><option value="classic">Classic</option><option value="compact">Compact</option><option value="longtec">定制A款</option></select></label>
                 <div id="docThemeSwatches" style="display:flex;gap:6px;"></div>
               </div>
               <details class="doc-history-panel">
@@ -28967,7 +29156,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 <label><span>单据标题</span><input id="docTitleInput"></label>
                 <label><span>单据编号</span><input id="docNumberInput"></label>
                 <label><span>签发日期</span><input id="docIssueDateInput" type="date"></label>
-                <label><span>模板风格</span><select id="docTemplateInput"><option value="rose">Rose 玫红</option><option value="indigo">Indigo 深靛蓝</option><option value="emerald">Emerald 翡翠绿</option><option value="slate">Slate 石板灰</option><option value="amber">Amber 琥珀金</option><option value="executive">Executive 高级汇报风</option><option value="classic">Classic 经典贸易风</option><option value="compact">Compact 紧凑清关风</option><option value="longtec">Longtec PI · 长陆版</option></select></label>
+                <label><span>模板风格</span><select id="docTemplateInput"><option value="rose">Rose 玫红</option><option value="indigo">Indigo 深靛蓝</option><option value="emerald">Emerald 翡翠绿</option><option value="slate">Slate 石板灰</option><option value="amber">Amber 琥珀金</option><option value="executive">Executive 高级汇报风</option><option value="classic">Classic 经典贸易风</option><option value="compact">Compact 紧凑清关风</option><option value="longtec">定制A款</option></select></label>
                 <label><span>买方公司</span><input id="docBuyerInput"></label>
                 <label><span>买方联系人</span><input id="docBuyerContactInput"></label>
                 <label class="wide"><span>买方地址</span><input id="docBuyerAddressInput"></label>
@@ -28983,8 +29172,8 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 <label><span>卖方邮箱</span><input id="docSellerEmailInput" type="email"></label>
                 <label><span>卖方网址</span><input id="docSellerWebsiteInput"></label>
                 <label class="wide"><span>税号 / 注册号</span><input id="docSellerTaxNoInput"></label>
-                <label><span>贸易条款</span><select id="docIncotermInput"><option>FOB</option><option>EXW</option><option>CIF</option><option>DAP</option><option>FCA</option></select></label>
-                <label><span>运输方式</span><select id="docShippingInput"><option>Sea freight</option><option>Air freight</option><option>Express</option><option>Rail freight</option></select></label>
+                <label><span>贸易条款</span><select id="docIncotermInput"><option>FOB</option><option>EXW</option><option>CIF</option><option selected>DAP</option><option>FCA</option></select></label>
+                <label><span>运输方式</span><select id="docShippingInput"><option>Sea freight</option><option>Air freight</option><option>Express</option><option>Rail freight</option><option>国内快递</option></select></label>
                 <label><span>装运港</span><input id="docPortLoadingInput"></label>
                 <label><span>目的港</span><input id="docPortDischargeInput"></label>
                 <label><span>有效期</span><input id="docValidityInput" type="date"></label>
@@ -29018,10 +29207,10 @@ body.platform-mode .workspace-tabs { display:none !important; }
                   <label class="wide"><span>税号 / 注册号</span><input id="documentDefaultSellerTaxNo"></label><label class="wide"><span>银行信息</span><textarea id="documentDefaultBankInfo" rows="4"></textarea></label>
                 </div></section>
                 <section><div class="document-defaults-section-head"><div><b>贸易与结算</b><span>客户或导入资料未提供时使用</span></div></div><div class="document-defaults-grid compact">
-                  <label><span>币种</span><select id="documentDefaultCurrency"><option>USD</option><option>EUR</option><option>CNY</option><option>GBP</option></select></label><label><span>贸易条款</span><select id="documentDefaultIncoterm"><option>FOB</option><option>EXW</option><option>CIF</option><option>DAP</option><option>FCA</option></select></label>
-                  <label><span>运输方式</span><select id="documentDefaultShippingMethod"><option>Sea freight</option><option>Air freight</option><option>Express</option><option>Rail freight</option></select></label><label><span>装运港</span><input id="documentDefaultPortLoading"></label>
+                  <label><span>币种</span><select id="documentDefaultCurrency"><option>USD</option><option>EUR</option><option>CNY</option><option>GBP</option></select></label><label><span>贸易条款</span><select id="documentDefaultIncoterm"><option>FOB</option><option>EXW</option><option>CIF</option><option selected>DAP</option><option>FCA</option></select></label>
+                  <label><span>运输方式</span><select id="documentDefaultShippingMethod"><option>Sea freight</option><option>Air freight</option><option>Express</option><option>Rail freight</option><option>国内快递</option></select></label><label><span>装运港</span><input id="documentDefaultPortLoading"></label>
                   <label class="wide"><span>付款条款</span><input id="documentDefaultPaymentTerm"></label><label><span>默认有效天数</span><input id="documentDefaultValidityDays" type="number" min="0" max="365"></label>
-                  <label><span>语言</span><select id="documentDefaultLanguage"><option value="EN">English</option><option value="ES">Español</option><option value="RU">Русский</option><option value="AR">العربية</option><option value="ZH">中文</option></select></label><label><span>页面主题</span><select id="documentDefaultTemplateStyle"><option value="rose">Rose</option><option value="indigo">Indigo</option><option value="emerald">Emerald</option><option value="slate">Slate</option><option value="amber">Amber</option><option value="executive">Executive</option><option value="classic">Classic</option><option value="compact">Compact</option><option value="longtec">Longtec PI · 长陆版</option></select></label>
+                  <label><span>语言</span><select id="documentDefaultLanguage"><option value="EN">English</option><option value="ES">Español</option><option value="RU">Русский</option><option value="AR">العربية</option><option value="ZH">中文</option></select></label><label><span>页面主题</span><select id="documentDefaultTemplateStyle"><option value="rose">Rose</option><option value="indigo">Indigo</option><option value="emerald">Emerald</option><option value="slate">Slate</option><option value="amber">Amber</option><option value="executive">Executive</option><option value="classic">Classic</option><option value="compact">Compact</option><option value="longtec">定制A款</option></select></label>
                   <label class="full"><span>默认备注</span><textarea id="documentDefaultNotes" rows="3"></textarea></label>
                 </div></section>
               </main>
@@ -30017,6 +30206,17 @@ body.platform-mode .workspace-tabs { display:none !important; }
             </div>
           </section>
 
+          <section class="panel section" id="trialAccountsPanel" style="margin-top:24px;" hidden>
+            <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg></span><div><h2>体验账号</h2><p class="section-subtitle">一键生成带有效期的试用账号并导出发给客户；到期后账号自动禁止登录、已有登录立即失效。</p></div></div><div class="head-actions"><button class="btn" id="trialRefreshButton">刷新</button><button class="btn" id="trialExportButton">导出 CSV</button><button class="btn primary" id="trialGenerateButton">批量生成</button></div></div>
+            <div style="overflow-x:auto;">
+              <table class="items-table">
+                <thead><tr><th>账号</th><th>角色 / 团队</th><th>有效期</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody id="trialAccountsBody"><tr><td colspan="5" style="color:#8490a1;font-size:11px;">加载中…</td></tr></tbody>
+              </table>
+            </div>
+            <p class="system-setting-help">有账号管理权限的管理员可批量生成；列表展示所有设置了有效期的账号（含尚未到期和已过期）。生成时的账号密码只显示一次，请当场导出保存。</p>
+          </section>
+
           <div class="settings-grid">
             <div class="panel section">
               <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h5"/></svg></span><div><h2>单据设置</h2></div></div></div>
@@ -30035,6 +30235,21 @@ body.platform-mode .workspace-tabs { display:none !important; }
               <label class="wide"><span>硅基流动模型（仅硅基流动）</span><input id="tradeDocumentOcrModel" placeholder="Qwen/Qwen2.5-VL-32B-Instruct"></label>
             </div>
             <p class="system-setting-help">百度 OCR 负责低成本文字识别，识别结构不足时会自动交给 AI 视觉模型复核；硅基流动直接作为视觉识别模型。API Key 只写入服务器加密凭据，不会返回明文。</p>
+          </section>
+
+          <section class="panel section" id="aiEngineSettingsSection">
+            <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/><circle cx="12" cy="12" r="4"/></svg></span><div><h2>AI 执行来源</h2><p class="section-subtitle">背调与开发信可以由谁来做：CRM 本地分析、AI API，或本机已配对的 WorkBuddy / Codex CLI。这里设的是默认值，操作时还可以临时切换。</p></div></div><div class="head-actions"><span class="badge amber" id="aiEngineCliStatus">未就绪</span><button class="btn primary" id="aiEngineSaveButton">保存 AI 来源</button></div></div>
+            <div class="company-profile-form" style="margin-top:14px;">
+              <label><span>默认背调来源</span><select id="aiEngineResearchSource"><option value="crm">CRM 本地分析</option><option value="ai">AI API</option><option value="cli">本机 CLI</option></select></label>
+              <label><span>默认开发信来源</span><select id="aiEngineEmailSource"><option value="template">规则模板</option><option value="ai">AI API</option><option value="cli">本机 CLI</option></select></label>
+              <label><span>CLI 适配器</span><select id="aiEngineCliAdapter"><option value="workbuddy">WorkBuddy CLI</option><option value="codex">Codex CLI</option></select></label>
+              <label><span>CLI 模型</span><select id="aiEngineCliModel" title="系统默认 deepseek-v4.1-flash；选「跟随 CLI 默认」则改由 CLI 当前登录账号决定（会随切账号变化）"></select></label>
+              <label><span>思考档位</span><select id="aiEngineCliEffort" title="留空 = 跟随 CLI 默认"></select></label>
+              <label><span>CLI 超时（分钟）</span><input id="aiEngineCliTimeout" type="number" min="1" max="1440" step="1" value="15"></label>
+              <label class="wide"><span>CLI 工作目录（留空自动用 Runner 的首个授权目录）</span><input id="aiEngineCliWorkspace" placeholder="/Users/you/Desktop/GoodJob_private"></label>
+              <label class="wide"><span>指定 Runner（留空自动选择在线机器）</span><select id="aiEngineRunner"><option value="">自动选择在线的 Runner</option></select></label>
+            </div>
+            <p class="system-setting-help"><b>模型决定 CLI 有多聪明。</b>本机 CLI 没配过模型时默认使用 fast-model（最快档，但思考最少，做背调、写开发信这类需要判断力的任务会显得「变傻」）。建议这类任务选 deep-model 或具体强模型；资料识别等纯抽取任务保持「跟随 CLI 默认」即可。<br>CLI 通道是「读为主」的执行：任务以只读模式在本机运行，超时上限 24 小时（1440 分钟）。机器没配对或离线时，把来源切回 AI API 或 CRM 本地分析即可继续工作，不影响已有数据。</p>
           </section>
 
           <!-- 系统更新区域 -->
@@ -30672,6 +30887,18 @@ body.platform-mode .workspace-tabs { display:none !important; }
 
     renderTopbarForView("dashboard");
   </script>
+  <style id="lead-finder-widescreen">
+    /* ===== 搜客页宽屏适配（27 寸 / 2560 级）=====
+       原状：#lead-finder 全局 max-width:1440px 居中，宽屏两侧各留 ~400px 死区。
+       策略：≥1720px 分级放宽容器上限；工作台保持上下堆叠
+       （搜索简报 → 执行区 → 最近任务），各面板自动适配宽度。 */
+    @media (min-width: 1720px) and (max-width: 1919px) {
+      #lead-finder { max-width: 1780px; }
+    }
+    @media (min-width: 1920px) {
+      #lead-finder { max-width: 2120px; }
+    }
+  </style>
   <script type="module" src="/src/prototype-api.ts"></script>
 </body>
 </html>

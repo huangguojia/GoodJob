@@ -4,6 +4,7 @@ import type { SessionUser } from "../types.js";
 import type { LocalRunnerRepository, LocalRunnerVisibility } from "./local-runner-repository.js";
 import type {
   LocalRunner,
+  LocalRunnerAdapter,
   LocalRunnerExecutionMode,
   LocalRunnerTask,
   LocalRunnerTaskEvent
@@ -33,9 +34,13 @@ function normalizedWorkspaces(input: string[]) {
   return [...new Set(input.map((item) => item.trim()).filter((item) => /^(?:\/|[A-Za-z]:[\\/]|\\\\)/u.test(item) && item.length <= 1000))].slice(0, 20);
 }
 
+/** 本地 Runner 支持的能力：codex（含独立浏览器）、workbuddy（WorkBuddy CLI） */
 const knownCapabilities = (input: string[]) => [
-  ...new Set(input.filter((item) => item === "codex" || item === "browser"))
+  ...new Set(input.filter((item) => item === "codex" || item === "browser" || item === "workbuddy"))
 ];
+
+/** 任务适配器 → 展示名 */
+const adapterLabel = (adapter: LocalRunnerAdapter) => adapter === "workbuddy" ? "WorkBuddy CLI" : "Codex CLI";
 
 function publicRunner(runner: LocalRunner) {
   const online = runner.status === "active" && Boolean(runner.lastSeenAt)
@@ -44,6 +49,7 @@ function publicRunner(runner: LocalRunner) {
     id: runner.id, teamId: runner.teamId, ownerId: runner.ownerId, displayName: runner.displayName,
     status: runner.status, online, hostname: runner.hostname, platform: runner.platform,
     runnerVersion: runner.runnerVersion, codexVersion: runner.codexVersion,
+    workbuddyVersion: runner.workbuddyVersion,
     capabilities: runner.capabilities, workspaces: runner.workspaces, lastSeenAt: runner.lastSeenAt,
     lastError: runner.lastError, createdAt: runner.createdAt, updatedAt: runner.updatedAt,
     revokedAt: runner.revokedAt
@@ -87,7 +93,7 @@ export class LocalRunnerService {
 
   async pair(input: {
     code: string; displayName: string; hostname: string; platform: string; runnerVersion: string;
-    codexVersion: string; capabilities: string[]; workspaces: string[];
+    codexVersion: string; workbuddyVersion: string; capabilities: string[]; workspaces: string[];
   }) {
     const runnerId = `lrr_${randomUUID()}`;
     const secret = randomBytes(32).toString("base64url");
@@ -98,6 +104,7 @@ export class LocalRunnerService {
       status: "active", tokenHash: sha256(token), tokenFingerprint: sha256(token).slice(0, 12),
       hostname: input.hostname.slice(0, 200), platform: input.platform.slice(0, 80),
       runnerVersion: input.runnerVersion.slice(0, 40), codexVersion: input.codexVersion.slice(0, 80),
+      workbuddyVersion: input.workbuddyVersion.slice(0, 80),
       capabilities: knownCapabilities(input.capabilities),
       workspaces: normalizedWorkspaces(input.workspaces), lastSeenAt: createdAt, lastError: "",
       createdAt, updatedAt: createdAt, revokedAt: ""
@@ -130,7 +137,7 @@ export class LocalRunnerService {
   }
 
   async heartbeat(runner: LocalRunner, input: {
-    hostname?: string; platform?: string; runnerVersion?: string; codexVersion?: string;
+    hostname?: string; platform?: string; runnerVersion?: string; codexVersion?: string; workbuddyVersion?: string;
     capabilities?: string[]; workspaces?: string[]; lastError?: string; taskId?: string; leaseToken?: string;
   }) {
     const reportedWorkspaces = input.workspaces ? normalizedWorkspaces(input.workspaces) : undefined;
@@ -139,6 +146,7 @@ export class LocalRunnerService {
     await this.repository.touchRunner(runner.id, {
       hostname: input.hostname?.slice(0, 200), platform: input.platform?.slice(0, 80),
       runnerVersion: input.runnerVersion?.slice(0, 40), codexVersion: input.codexVersion?.slice(0, 80),
+      workbuddyVersion: input.workbuddyVersion?.slice(0, 80),
       capabilities: reportedCapabilities,
       workspaces: reducedWorkspaces?.length ? reducedWorkspaces : undefined,
       lastError: input.lastError?.slice(0, 1000)
@@ -148,7 +156,8 @@ export class LocalRunnerService {
   }
 
   async createTask(actor: SessionUser, input: {
-    runnerId: string; prompt: string; workspace: string; executionMode: LocalRunnerExecutionMode; timeoutSeconds: number;
+    runnerId: string; prompt: string; workspace: string; executionMode: LocalRunnerExecutionMode;
+    timeoutSeconds: number; adapter?: LocalRunnerAdapter;
   }) {
     const runner = await this.repository.getRunner(input.runnerId);
     if (!runner || runner.status !== "active" || !this.canAccess(actor, runner.ownerId, runner.teamId)) {
@@ -157,12 +166,19 @@ export class LocalRunnerService {
     if (!runner.workspaces.includes(input.workspace)) {
       serviceError("LOCAL_RUNNER_WORKSPACE_DENIED", "该工作目录未在本机 Runner 授权范围内", 403);
     }
-    if (!runner.capabilities.includes("codex")) serviceError("LOCAL_RUNNER_CODEX_UNAVAILABLE", "该 Runner 未检测到 Codex CLI", 409);
+    const adapter: LocalRunnerAdapter = input.adapter === "workbuddy" ? "workbuddy" : "codex";
+    if (!runner.capabilities.includes(adapter)) {
+      serviceError(
+        adapter === "workbuddy" ? "LOCAL_RUNNER_WORKBUDDY_UNAVAILABLE" : "LOCAL_RUNNER_CODEX_UNAVAILABLE",
+        adapter === "workbuddy" ? "该 Runner 未检测到 WorkBuddy CLI" : "该 Runner 未检测到 Codex CLI",
+        409
+      );
+    }
     const createdAt = now();
     const task: LocalRunnerTask = {
       id: `lrt_${randomUUID()}`, runnerId: runner.id, teamId: runner.teamId, ownerId: runner.ownerId,
-      createdBy: actor.id, adapter: "codex", prompt: input.prompt.trim(), workspace: input.workspace,
-      executionMode: input.executionMode, timeoutSeconds: Math.max(30, Math.min(1800, input.timeoutSeconds)),
+      createdBy: actor.id, adapter, prompt: input.prompt.trim(), workspace: input.workspace,
+      executionMode: input.executionMode, timeoutSeconds: Math.max(30, Math.min(86_400, input.timeoutSeconds)),
       status: "queued", attemptCount: 0, leaseHash: "", leaseExpiresAt: "", cancelRequestedAt: "",
       resultText: "", errorMessage: "", outputTruncated: false, codexThreadId: "",
       createdAt, queuedAt: createdAt, startedAt: "", finishedAt: "", updatedAt: createdAt
@@ -171,7 +187,7 @@ export class LocalRunnerService {
     await this.repository.createTask(task);
     await this.repository.appendEvent({
       taskId: task.id, runnerId: task.runnerId, teamId: task.teamId, ownerId: task.ownerId,
-      eventType: "status", message: "任务已进入本地执行队列", payload: {}, createdAt
+      eventType: "status", message: `任务已进入本地执行队列（${adapterLabel(adapter)}）`, payload: { adapter }, createdAt
     });
     return publicTask(task);
   }
@@ -186,6 +202,25 @@ export class LocalRunnerService {
     const task = await this.repository.getTask(id);
     if (!task || !this.canAccess(actor, task.ownerId, task.teamId)) serviceError("LOCAL_RUNNER_TASK_NOT_FOUND", "任务不存在或无权访问", 404);
     return { task: publicTask(task), events: await this.repository.listTaskEvents(id, 300) };
+  }
+
+  /**
+   * 轻量任务摘要：给「本机 CLI 健康检查 / 排队诊断」用。
+   * 不返回 prompt_text / result_text，避免健康检查把几十 KB 的正文拉回浏览器。
+   */
+  async taskBriefs(actor: SessionUser, runnerId: string, limit = 8) {
+    const runner = await this.repository.getRunner(runnerId);
+    if (!runner || runner.status !== "active") serviceError("LOCAL_RUNNER_NOT_FOUND", "Runner 不存在或已停用", 404);
+    if (!this.canAccess(actor, runner.ownerId, runner.teamId)) serviceError("LOCAL_RUNNER_NOT_FOUND", "Runner 不存在或无权访问", 404);
+    await this.repository.recoverStaleTasks(runnerId);
+    return this.repository.listTaskBriefs(runnerId, limit);
+  }
+
+  /** 该 Runner 当前是否有任务在跑（Runner 同时只执行一个任务，排队时长基本由它决定） */
+  async activeTaskCount(actor: SessionUser, runnerId: string) {
+    const runner = await this.repository.getRunner(runnerId);
+    if (!runner || runner.status !== "active" || !this.canAccess(actor, runner.ownerId, runner.teamId)) return 0;
+    return this.repository.countActiveTasks(runnerId);
   }
 
   async cancel(actor: SessionUser, id: string) {
@@ -254,7 +289,7 @@ export class LocalRunnerService {
     await this.repository.appendEvent({
       taskId, runnerId: runner.id, teamId: task.teamId, ownerId: task.ownerId,
       eventType: status === "succeeded" ? "status" : status === "cancelled" ? "warning" : "error",
-      message: status === "succeeded" ? "Codex CLI 已完成任务" : status === "cancelled" ? "任务已停止" : "Codex CLI 执行失败",
+      message: status === "succeeded" ? `${adapterLabel(task.adapter)} 已完成任务` : status === "cancelled" ? "任务已停止" : `${adapterLabel(task.adapter)} 执行失败`,
       payload: { status }, createdAt: now()
     });
     return { ok: true, status };

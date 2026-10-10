@@ -6,6 +6,7 @@ import type {
   Customer,
   Lead,
   OutboundEmailLog,
+  OutreachStageKey,
   ProspectReplyClassification,
   ProspectTouchpoint,
   WebsiteOpportunity
@@ -26,14 +27,8 @@ import type {
 
 export type OutreachJourneyEntityType = "customer" | "lead" | "prospect_candidate";
 
-export type OutreachJourneyStageKey =
-  | "not_contacted"
-  | "first_touch_sent"
-  | "following_up"
-  | "replied_interested"
-  | "replied_negative"
-  | "bounced"
-  | "converted";
+/** 阶段键的 canonical 定义在 types.ts（`OutreachStageKey`）；这里保留原名以免大范围改调用方。 */
+export type OutreachJourneyStageKey = OutreachStageKey;
 
 export interface OutreachJourneyStageMeta {
   key: OutreachJourneyStageKey;

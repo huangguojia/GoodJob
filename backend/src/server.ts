@@ -3,8 +3,8 @@ import express, { type NextFunction, type Request, type Response } from "express
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import httpProxy from "http-proxy";
-import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import nodemailer from "nodemailer";
@@ -16,7 +16,7 @@ import { createTradeDocumentImportAnalysis, parseTradeDocumentImport, TRADE_DOCU
 import { applyTradeDocumentRecognitionTemplate, buildTradeDocumentRecognitionTemplate, matchTradeDocumentRecognitionTemplate } from "./trade-document-recognition-template.js";
 import { once } from "node:events";
 import { resolveTxt } from "node:dns/promises";
-import { AUTH_COOKIE_NAME, CSRF_COOKIE_NAME, canManageAccount, canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, canSeeTeam, createCsrfToken, csrfCookieOptions, hasIamPermission, hasIamScope, hashPassword, isPlatformIdentity, publicUser, requireAuth, sessionCookieOptions, signMfaSetupToken, signToken, validateAuthSecurity, verifyMfaSetupToken, verifyPassword } from "./auth.js";
+import { AUTH_COOKIE_NAME, CSRF_COOKIE_NAME, canManageAccount, canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, canSeeTeam, createCsrfToken, csrfCookieOptions, hasIamPermission, hasIamScope, hashPassword, isPlatformIdentity, publicUser, requireAuth, sessionCookieOptions, signMfaSetupToken, signToken, userExpired, validateAuthSecurity, verifyMfaSetupToken, verifyPassword } from "./auth.js";
 import { AccessControlOverviewError, buildAccessControlOverview } from "./access-control-overview.js";
 import { assertAiBaseUrlAllowed } from "./ai-http-security.js";
 import {
@@ -30,6 +30,12 @@ import {
   callAiModelWithWebSearch,
   extractJsonObject
 } from "./ai-model-runtime.js";
+import { parseCustomerIntakeResult } from "./customer-intake-parse.js";
+import {
+  OFFICE_BINARY_EXTENSIONS,
+  officeDocumentToText,
+  officeExtensionHint
+} from "./office-document-text.js";
 import {
   aiLeadFinderReadiness,
   aiWebSearchPolicy,
@@ -136,12 +142,17 @@ import {
 import {
   ProspectOutreachBatchRunner,
   approveProspectOutreachBatch,
+  batchLetterProgress,
   controlProspectOutreachBatch,
   createProspectOutreachBatch,
   deleteProspectOutreachBatch,
   getProspectOutreachBatch,
   listProspectOutreachBatches,
+  toBatchSteps,
   updateProspectOutreachBatchItem,
+  writingTargetForItem,
+  type OutreachWritingRuntime,
+  type OutreachWritingTarget,
   type ProspectOutreachBatchRuntime
 } from "./prospect-outreach-batch.js";
 import {
@@ -168,10 +179,65 @@ import {
   buildDevelopmentEmailFallback,
   buildDevelopmentEmailPrompt,
   checkDevelopmentEmailDraft,
+  developmentEmailMarketName,
   developmentEmailSignature,
   developmentEmailStagePlan,
-  ensureDevelopmentEmailSignature
+  ensureDevelopmentEmailSignature,
+  type DevelopmentEmailBrief
 } from "./development-email-skill.js";
+import {
+  buildStageAwareSequence,
+  OUTREACH_SEQUENCE_DEFAULT_STEPS,
+  type OutreachWritingRecipient,
+  type OutreachWritingResearch,
+  type OutreachWritingSender
+} from "./outreach-email-sequencer.js";
+import {
+  AI_ENGINE_ADAPTERS,
+  AI_ENGINE_CLI_EFFORTS,
+  AI_ENGINE_CLI_MODELS,
+  aiEngineAdapterLabel,
+  clampAiEngineTimeout,
+  defaultTeamAiEngineSettings,
+  EMAIL_ENGINE_SOURCES,
+  readTeamAiEngineSettings,
+  RESEARCH_ENGINE_SOURCES,
+  resolveEngineSource,
+  sanitizeTeamAiEngineSettings,
+  writeTeamAiEngineSettings,
+  type TeamAiEngineSettings
+} from "./ai-engine-settings.js";
+import {
+  applyResearchEnginePatch,
+  buildAcquisitionCliPrompt,
+  buildEmailCliPrompt,
+  buildResearchCliPrompt,
+  buildTenderDailyCliPrompt,
+  collectReportedTenderLines,
+  extractAcquisitionFindings,
+  extractEngineJson,
+  normalizeAcquisitionCompanies,
+  normalizeEmailPatch,
+  normalizeTenderReport,
+  type EngineAcquisitionCompany,
+  type TenderDailyReport
+} from "./ai-engine-prompts.js";
+import { getAiEngineJobRepository, type AiEngineJob } from "./ai-engine-jobs.js";
+import {
+  EngineUnavailableError,
+  classifyEngineCliIssue,
+  cliTaskDone,
+  engineInlineWaitMilliseconds,
+  engineRunnerOfflineIssue,
+  engineRunnerQueueState,
+  enqueueEngineCliTask,
+  listEngineRunners,
+  pickEngineRunner,
+  readEngineCliTask,
+  waitForEngineCliTask,
+  type EngineCliIssue,
+  type EngineCliTaskSnapshot
+} from "./ai-engine-service.js";
 import { archiveMessageToSentFolder } from "./sent-folder-archive.js";
 import {
   getSenderMailboxRepository,
@@ -180,7 +246,7 @@ import {
   toSenderMailboxView
 } from "./sender-mailbox.js";
 import type { BackgroundResearchRecord } from "./outreach-journey.js";
-import type { OutboundEmailLog, OutreachSequence, OutreachSequenceStepSnapshot, PeerRelation, ProspectOutreachBatch } from "./types.js";
+import type { OutboundEmailLog, OutreachSequence, OutreachSequenceStepSnapshot, OutreachStageKey, PeerRelation, ProspectOutreachBatch, ProspectOutreachBatchItem, ProspectOutreachBatchPolicy } from "./types.js";
 import {
   CustomerMaintenanceRunner,
   controlCustomerMaintenanceWatch,
@@ -1491,7 +1557,23 @@ function setProspectCampaignEtag(
 }
 
 function accountUser(user: ReturnType<typeof getStore>["users"][number]) {
-  return { ...publicUser(user), status: user.status };
+  const expired = userExpired(user);
+  const raw = (user.expiresAt || "").trim();
+  const ts = raw ? Date.parse(raw) : NaN;
+  const daysLeft = Number.isFinite(ts) ? Math.ceil((ts - Date.now()) / 86_400_000) : null;
+  return { ...publicUser(user), status: user.status, expiresAt: raw, expired, daysLeft };
+}
+
+/** 把「天数 / ISO 时间 / 空值」统一折算成账号到期时间（ISO；空 = 永久） */
+function resolveAccountExpiry(expiresInDays?: number, expiresAt?: string) {
+  if (typeof expiresInDays === "number" && Number.isFinite(expiresInDays)) {
+    return new Date(Date.now() + expiresInDays * 86_400_000).toISOString();
+  }
+  const raw = (expiresAt || "").trim();
+  if (!raw) return "";
+  const ts = Date.parse(raw);
+  if (!Number.isFinite(ts)) throw Object.assign(new Error("有效期格式无效"), { status: 400 });
+  return new Date(ts).toISOString();
 }
 
 function collaborationUser(userId: string) {
@@ -2850,8 +2932,14 @@ app.post("/api/auth/login", loginLimiter, asyncRoute(async (req, res) => {
     user.authVersion = user.authVersion || 1;
     await store.persist();
   }
+  if (userExpired(user)) {
+    res.status(403).json({ message: "账号已过有效期，请联系管理员续期" });
+    return;
+  }
   const sessionUser = publicUser(user);
-  if (user.role === "super_admin" && store.platformMfa) {
+  // 运维 MFA（扫码/6 位码）默认关闭：只有显式设置 PLATFORM_MFA_ENFORCED=true 才启用。
+  // 平台运维双重验证代码保留，需要时配置环境变量即可恢复强制。
+  if (process.env.PLATFORM_MFA_ENFORCED === "true" && user.role === "super_admin" && store.platformMfa) {
     const mfa = await store.platformMfa.status(sessionUser);
     if (mfa.required && !mfa.configured) {
       res.status(202).json({ mfaRequired: true, mfaSetupRequired: true, setupToken: signMfaSetupToken(sessionUser) });
@@ -3493,6 +3581,15 @@ function batchOwnerFor(batch: ProspectOutreachBatch) {
   return owner;
 }
 
+/**
+ * 批次响应统一带上「正文补写进度」。
+ * 界面上的「还有 N 条在补背调/重写」必须与后端同一口径 —— 两边各算一份迟早会漂移，
+ * 而这条数字直接决定用户要不要现在点「确认发送」。
+ */
+function prospectBatchSummary(batch: ProspectOutreachBatch) {
+  return { ...batch, letterProgress: batchLetterProgress(batch) };
+}
+
 // ---------------------------------------------------------------------------
 // 自动发送方案（后台任务）：配置目标与频率，线程持续取人投递，可启停可观察
 // ---------------------------------------------------------------------------
@@ -3512,7 +3609,23 @@ function prospectPlanSummary(plan: ReturnType<typeof getProspectOutreachPlan>) {
       skipReason: item.skipReason,
       sentAt: item.sentAt,
       convertedLeadId: item.convertedLeadId,
-      stepStatuses: item.steps.map((step) => ({ index: step.index, status: step.status, sentAt: step.sentAt }))
+      // 阶段 + 成稿依据：前端据此显示「这条为什么是这封信」
+      stageKey: item.stageKey,
+      stageLabel: item.stageLabel,
+      stageSource: item.stageSource,
+      researchId: item.researchId,
+      researchScore: item.researchScore,
+      letterStatus: item.letterStatus,
+      letterEngine: item.letterEngine,
+      letterBasis: item.letterBasis,
+      letterNote: item.letterNote,
+      stepStatuses: item.steps.map((step) => ({
+        index: step.index,
+        status: step.status,
+        sentAt: step.sentAt,
+        stageKey: step.stageKey,
+        stageLabel: step.stageLabel
+      }))
     }))
   };
 }
@@ -3598,8 +3711,14 @@ app.post("/api/prospect-outreach-batches", requireAuth, asyncRoute(async (req, r
     return;
   }
   try {
-    const batch = await createProspectOutreachBatch(getStore(), req.user!, (req.body || {}) as Record<string, unknown>);
-    res.json({ batch });
+    // 传写信运行时：每个目标按**自己**的开发阶段 + 最近背调成稿，而不是全体共用一套固定模板
+    const batch = await createProspectOutreachBatch(
+      getStore(),
+      req.user!,
+      (req.body || {}) as Record<string, unknown>,
+      createOutreachWritingRuntime(req.user!)
+    );
+    res.json({ batch: prospectBatchSummary(batch) });
   } catch (error) {
     if (error instanceof z.ZodError) {
       res.status(400).json({ message: error.issues[0]?.message || "批次参数不合法" });
@@ -3611,13 +3730,13 @@ app.post("/api/prospect-outreach-batches", requireAuth, asyncRoute(async (req, r
 
 app.get("/api/prospect-outreach-batches", requireAuth, asyncRoute(async (req, res) => {
   const limit = Number(req.query.limit || 20);
-  res.json({ batches: listProspectOutreachBatches(getStore(), req.user!, limit) });
+  res.json({ batches: listProspectOutreachBatches(getStore(), req.user!, limit).map(prospectBatchSummary) });
 }));
 
 app.post("/api/prospect-outreach-batches/:id/approve", requireAuth, asyncRoute(async (req, res) => {
   try {
     const batch = await approveProspectOutreachBatch(getStore(), req.user!, req.params.id);
-    res.json({ batch });
+    res.json({ batch: prospectBatchSummary(batch) });
   } catch (error) {
     if (typeof (error as { statusCode?: number }).statusCode === "number") {
       res.status((error as { statusCode: number }).statusCode).json({ message: (error as unknown as Error).message });
@@ -3633,17 +3752,30 @@ app.post("/api/prospect-outreach-batches/:id/approve", requireAuth, asyncRoute(a
 
 app.post("/api/prospect-outreach-batches/:id/items/:itemId", requireAuth, asyncRoute(async (req, res) => {
   const rawBody = (req.body || {}) as Record<string, unknown>;
-  const action = z.enum(["remove", "restore", "edit"]).parse(rawBody.action);
+  const action = z.enum(["remove", "restore", "edit", "stage"]).parse(rawBody.action);
   const payload = action === "edit"
     ? z.object({
       stepIndex: z.coerce.number().int().min(0).max(9),
       subject: z.string().trim().min(1).max(160),
       body: z.string().trim().min(10).max(6000)
     }).parse({ stepIndex: rawBody.stepIndex, subject: rawBody.subject, body: rawBody.body })
-    : undefined;
+    : action === "stage"
+      // stageKey 允许为空串 = 撤销人工覆盖、回到系统推导
+      ? z.object({ stageKey: z.string().trim().max(40) })
+        .parse({ stageKey: rawBody.stageKey ?? "" })
+      : undefined;
   try {
-    const result = await updateProspectOutreachBatchItem(getStore(), req.user!, req.params.id, req.params.itemId, action, payload);
-    res.json(result);
+    // stage 动作要按新阶段重排这一条的信，所以同样需要写信运行时
+    const result = await updateProspectOutreachBatchItem(
+      getStore(),
+      req.user!,
+      req.params.id,
+      req.params.itemId,
+      action,
+      payload,
+      createOutreachWritingRuntime(req.user!)
+    );
+    res.json({ batch: prospectBatchSummary(result.batch), item: result.item });
   } catch (error) {
     if (typeof (error as { statusCode?: number }).statusCode === "number") {
       res.status((error as { statusCode: number }).statusCode).json({ message: (error as unknown as Error).message });
@@ -3661,7 +3793,7 @@ app.post("/api/prospect-outreach-batches/:id/:action", requireAuth, asyncRoute(a
   const action = z.enum(["pause", "resume", "cancel"]).parse(req.params.action);
   try {
     const batch = await controlProspectOutreachBatch(getStore(), req.user!, req.params.id, action);
-    res.json({ batch });
+    res.json({ batch: prospectBatchSummary(batch) });
   } catch (error) {
     if (error instanceof z.ZodError) {
       res.status(400).json({ message: "不支持的动作" });
@@ -3678,7 +3810,7 @@ app.post("/api/prospect-outreach-batches/:id/:action", requireAuth, asyncRoute(a
 app.get("/api/prospect-outreach-batches/:id", requireAuth, asyncRoute(async (req, res) => {
   try {
     const batch = getProspectOutreachBatch(getStore(), req.user!, req.params.id);
-    res.json({ batch });
+    res.json({ batch: prospectBatchSummary(batch) });
   } catch (error) {
     if (error instanceof Error && /不存在或无权访问/.test(error.message)) {
       res.status(404).json({ message: error.message });
@@ -5134,7 +5266,10 @@ app.post("/api/accounts", requireAuth, asyncRoute(async (req, res) => {
     email: z.string().email(),
     password: z.string().min(8).max(128),
     role: z.enum(["sales", "manager", "admin", "super_admin"]).default("sales"),
-    teamId: z.string().min(1).optional()
+    teamId: z.string().min(1).optional(),
+    /** 账号有效期天数（1-3650）；不传 = 永久。也可直接传 expiresAt（ISO 时间）。 */
+    expiresInDays: z.number().int().min(1).max(3650).optional(),
+    expiresAt: z.string().min(10).max(40).optional()
   });
   const body = schema.parse(req.body);
   if (!canManageRole(req.user!, body.role)) {
@@ -5163,11 +5298,70 @@ app.post("/api/accounts", requireAuth, asyncRoute(async (req, res) => {
     role: body.role,
     teamId,
     avatar: body.name.slice(0, 2).toUpperCase(),
-    status: "active" as const
+    status: "active" as const,
+    expiresAt: resolveAccountExpiry(body.expiresInDays, body.expiresAt)
   };
   store.users.unshift(user);
   await store.persist();
   res.json({ account: accountUser(user) });
+}));
+
+/** 批量生成带有效期的体验账号：明文密码只在本响应出现一次，库中只存哈希 */
+app.post("/api/accounts/generate", requireAuth, asyncRoute(async (req, res) => {
+  if (!canManageAccounts(req.user)) {
+    res.status(403).json({ message: "只有管理员可以批量生成体验账号" });
+    return;
+  }
+  const schema = z.object({
+    count: z.number().int().min(1).max(200).default(10),
+    expiresInDays: z.number().int().min(1).max(3650).default(3),
+    namePrefix: z.string().min(1).max(30).default("体验账号"),
+    emailPrefix: z.string().min(1).max(30).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/).default("trial"),
+    emailDomain: z.string().min(3).max(100).regex(/^[A-Za-z0-9.-]+$/).default("goodjob.com"),
+    teamId: z.string().min(1).max(64).optional()
+  });
+  const body = schema.parse(req.body ?? {});
+  const teamId = (body.teamId || req.user!.teamId || "").trim();
+  if (!teamId || teamId === "all") {
+    res.status(400).json({ message: "请填写体验账号所属团队编号（不能是 all）" });
+    return;
+  }
+  const store = getStore();
+  const existingEmails = new Set(store.users.map((user) => user.email.toLowerCase()));
+  const taken = new Set<string>();
+  const passwordChars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  const randomString = (length: number, chars: string) => {
+    const bytes = randomBytes(length);
+    let out = "";
+    for (let i = 0; i < length; i += 1) out += chars[bytes[i] % chars.length];
+    return out;
+  };
+  const expiresAt = resolveAccountExpiry(body.expiresInDays, "");
+  const created: Array<{ id: string; name: string; email: string; password: string; expiresAt: string }> = [];
+  for (let index = 0; index < body.count; index += 1) {
+    let email = "";
+    do {
+      email = `${body.emailPrefix}.${randomString(6, "abcdefghjkmnpqrstuvwxyz23456789")}@${body.emailDomain}`.toLowerCase();
+    } while (existingEmails.has(email) || taken.has(email));
+    taken.add(email);
+    const name = `${body.namePrefix}${String(index + 1).padStart(2, "0")}`;
+    const password = randomString(12, passwordChars);
+    const user = {
+      id: `u_${Date.now()}_${index}`,
+      name,
+      email,
+      password: await hashPassword(password),
+      role: "sales" as const,
+      teamId,
+      avatar: name.slice(0, 2).toUpperCase(),
+      status: "active" as const,
+      expiresAt
+    };
+    store.users.unshift(user);
+    created.push({ id: user.id, name, email, password, expiresAt });
+  }
+  await store.persist();
+  res.json({ generated: created.length, expiresInDays: body.expiresInDays, teamId, expiresAt, accounts: created });
 }));
 
 app.patch("/api/accounts/:id/password", requireAuth, asyncRoute(async (req, res) => {
@@ -5189,6 +5383,39 @@ app.patch("/api/accounts/:id/password", requireAuth, asyncRoute(async (req, res)
   }
   user.password = await hashPassword(body.password);
   user.authVersion = (user.authVersion || 1) + 1;
+  await store.persist();
+  res.json({ account: accountUser(user) });
+}));
+
+/** 设置 / 续期 / 清除账号有效期：expiresAt 传 ISO 时间或天数 expiresInDays；传 null 或省略 = 恢复永久 */
+app.patch("/api/accounts/:id/expiry", requireAuth, asyncRoute(async (req, res) => {
+  if (!canManageAccounts(req.user)) {
+    res.status(403).json({ message: "无账号管理权限" });
+    return;
+  }
+  const schema = z.object({
+    expiresAt: z.string().min(10).max(40).nullable().optional(),
+    expiresInDays: z.number().int().min(1).max(3650).nullable().optional()
+  });
+  const body = schema.parse(req.body || {});
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.params.id);
+  if (!user) {
+    res.status(404).json({ message: "账号不存在" });
+    return;
+  }
+  if (!canManageAccount(req.user!, publicUser(user))) {
+    res.status(404).json({ message: "账号不存在" });
+    return;
+  }
+  const clearing = body.expiresAt === null || body.expiresInDays === null
+    || (body.expiresAt === undefined && body.expiresInDays === undefined);
+  user.expiresAt = clearing
+    ? ""
+    : resolveAccountExpiry(
+      body.expiresInDays === null ? undefined : body.expiresInDays,
+      body.expiresAt === null ? undefined : body.expiresAt
+    );
   await store.persist();
   res.json({ account: accountUser(user) });
 }));
@@ -5383,6 +5610,605 @@ app.post("/api/customers", requireAuth, asyncRoute(async (req, res) => {
   store.customers.unshift(customer);
   await store.persist();
   res.json({ customer: customerWithPipeline(customer, req.user!) });
+}));
+
+// ---------------------------------------------------------------------------
+// 新增客户 · 客户资料文件识别（本机 CLI）
+//
+// 用户上传名片 / 合同 / 询盘邮件 / 表格等资料，交给本机 Runner 上的 CLI 读取文件，
+// 抽取客户字段回填「新增客户」表单。这里只做「识别 + 回填」：
+//   - 不自动保存客户：最终仍由用户在弹窗里核对后点「保存客户」；
+//   - 提示词里明确禁止编造联系方式，识别不到必须留空；
+//   - 文件落在 Runner 已授权的工作目录内，CLI 以只读方式读取。
+// （本地文件只有本机 CLI 能读，因此这条链路固定走 CLI，不跟随团队引擎来源设置。）
+// ---------------------------------------------------------------------------
+const CUSTOMER_INTAKE_MAX_BYTES = 12 * 1024 * 1024;
+const CUSTOMER_INTAKE_EXTENSIONS = new Set([
+  "pdf", "png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff",
+  "txt", "md", "csv", "json", "eml", "html", "htm", "doc", "docx", "xls", "xlsx"
+]);
+
+/** 回填字段白名单与长度上限见 customer-intake-parse.ts（与解析归因放在一起，便于单测） */
+
+const CUSTOMER_INTAKE_FIELD_HINTS: Array<[string, string]> = [
+  ["company", "客户简称：公司名去掉 Co., Ltd. / GmbH / 有限公司 等后缀的短名（必填，识别不到填空字符串）"],
+  ["companyFullName", "公司全名（报价、合同、单据优先使用的名称，保留原文写法）"],
+  ["contact", "联系人姓名"],
+  ["country", "国家或地区（用中文，例如 德国 / 越南 / 美国）"],
+  ["phone", "电话（含国家区号）"],
+  ["email", "邮箱"],
+  ["whatsapp", "WhatsApp 号码（必须含国家码且以 + 开头，如 +4915112345678；不确定国家码就留空）"],
+  ["wechat", "微信（微信号或绑定手机号）"],
+  ["website", "官网地址"],
+  ["source", "客户来源线索（例如展会名片、官网询盘、转介绍），无法判断填空字符串"],
+  ["billingAddress", "账单地址（公司地址、城市、国家）"],
+  ["contactRemark", "其它联系方式 / 渠道备注"],
+  ["otherNotes", "其它说明：客户偏好、业务背景、注意事项，不超过 200 字"],
+  ["defaultPortDischarge", "默认目的港"],
+  ["defaultIncoterm", "默认贸易条款（FOB / CIF / DAP 等）"],
+  ["defaultPaymentTerm", "默认付款条款"]
+];
+
+/** 识别暂存目录：优先放进 Runner 授权的工作目录，CLI 才能可靠读到文件 */
+async function resolveCustomerIntakeDir(workspace: string) {
+  const candidates = [
+    workspace ? path.resolve(workspace, "uploads", "customer-intake") : "",
+    path.join(uploadsDir, "customer-intake")
+  ];
+  for (const dir of candidates) {
+    if (!dir) continue;
+    try {
+      await mkdir(dir, { recursive: true });
+      return dir;
+    } catch {
+      continue;
+    }
+  }
+  throw Object.assign(new Error("无法创建客户资料暂存目录"), { status: 500 });
+}
+
+/**
+ * CLI 快速模式标记（Runner 侧解析，见 goodjob-runner/src/workbuddy-adapter.ts）。
+ *
+ * 为什么要它：本机 CLI 是「编码 Agent」，默认参数下会为了理解字段含义去探索整个工作目录。
+ * 2026-10-10 实测同一条提示词：默认参数 178 秒 / 53 次工具调用（还用了 Agent、WebFetch、Write），
+ * 加上 effort=low + max-turns=6 + 禁用探索类工具后 **7.8–19.6 秒 / 1–3 次工具调用**，
+ * 回填字段质量完全一致（9-10 项）。识别任务是纯文本抽取，绝不需要探索仓库。
+ */
+const CUSTOMER_INTAKE_CLI_DISALLOWED_TOOLS = [
+  "Write", "Edit", "NotebookEdit", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "TodoWrite"
+];
+
+function customerIntakeCliProfileLine() {
+  return `[[gj-cli-options ${JSON.stringify({
+    effort: "low",
+    maxTurns: 6,
+    disallowedTools: CUSTOMER_INTAKE_CLI_DISALLOWED_TOOLS
+  })}]]`;
+}
+
+function customerIntakePrompt(
+  files: Array<{ name: string; readPath: string; converted?: boolean }>,
+  options: { speedProfile?: boolean } = {}
+) {
+  const list = files
+    .map((file) => `- ${file.readPath}（原始文件名：${file.name}${file.converted ? "，已由 CRM 从 Office 文档转为纯文本" : ""}）`)
+    .join("\n");
+  const fields = CUSTOMER_INTAKE_FIELD_HINTS.map(([key, hint]) => `    "${key}": "${hint}"`).join(",\n");
+  return [
+    ...(options.speedProfile ? [customerIntakeCliProfileLine()] : []),
+    "你是外贸 CRM 的客户资料录入助手。这是一次**纯文本抽取**任务，不是代码任务。",
+    "",
+    `请用 Read 工具读取下面这${files.length > 1 ? "些" : "个"}由用户上传到本机的文件（只读，不要修改、重命名或删除任何文件）：`,
+    list,
+    "",
+    "严格约束（必须遵守）：",
+    "- 只允许使用 Read 工具；禁止探索工作目录或仓库（不要 Glob / Grep / Bash / Agent / WebFetch / WebSearch），不要写任何文件。",
+    "- 最多调用 2 次工具。读完文件后立刻按下面的 JSON 结构输出答案，不要再做任何探索。",
+    "- 文件内容不足时字段留空并写进 warnings，不要通过其它途径补全。",
+    "",
+    "任务：把文件里真实出现的「客户（公司）」信息提取出来，供 CRM 的「新增客户」表单自动回填。",
+    "",
+    "硬性要求：",
+    "1. 只使用文件里真实出现的信息。识别不到的字段一律填空字符串，绝不猜测、绝不编造邮箱 / 电话 / WhatsApp / 地址。",
+    "2. 同一字段在多个文件里冲突时，采用信息最完整的那条，并在 warnings 里说明冲突。",
+    "3. whatsapp 必须含国家码且以 + 开头；文件里只有本地号码又无法确定国家码时留空。",
+    "4. 图片或扫描件请直接识别图像内容；某个文件打不开或解析不了，就写进 warnings 后继续处理其它文件，不要中断。",
+    "",
+    "输出纪律（最重要，违反即整次识别作废）：",
+    "1. 你的整个回复必须**以 { 开头、以 } 结尾**，中间**只有这一个 JSON 对象**。",
+    "2. 禁止任何解释、开场白、结语，禁止 markdown 代码块（不要写 ``` ），禁止在 JSON 前后加任何字符。",
+    "3. **即使一个字段都没有抽到，也必须原样输出下面这个完整结构**：字段留空字符串、confidence 填 0、warnings 写清原因。绝对不允许只回一句说明文字或只回「无法识别」。",
+    "4. JSON 语法符号一律使用英文半角：{ } [ ] : , 以及英文双引号 \" \"；不要写全角符号（：，｛｝），不要写成 Python 字典或 JS 对象。",
+    "5. 字符串值内部**不要出现英文双引号**（需要引用原文时用「」），**不要出现换行**；一句话写完，需要分隔就用中文分号。",
+    "6. 读不出来 / 打不开 / 是二进制格式的文件，把「文件名 + 具体原因」写进 warnings，其余字段照常留空，不要因此改变输出格式或中断。",
+    "",
+    "输出 JSON 结构：",
+    "{",
+    '  "fields": {',
+    fields,
+    "  },",
+    '  "confidence": 0 到 1 之间的数字，表示整体识别置信度,',
+    '  "warnings": ["需要人工核对的地方，最多 5 条"],',
+    '  "summary": "一句话说明这批文件是什么资料、识别到了什么，不超过 80 字"',
+    "}"
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// 识别链路：暂存 → 单任务批量识别 → 排队/故障如实上报
+//
+// 速度与体验（2026-10-10 本机实测，见自动化体检记录）：
+//   1) CLI 自身执行只要 8-20 秒——前提是提示词带了工具纪律与快速模式标记；
+//      默认参数下它会把自己当编码 Agent 去探索整个工作目录，实测 178 秒 / 53 次工具调用。
+//   2) 真正的长等待来自「Runner 同时只执行一个任务」：实测有任务在队列里等了 107 秒，
+//      而 CLI 真正跑只用了 21 秒。所以排队状态必须如实告诉用户，不能让人干等。
+//   3) 多个文件合并成**一个** CLI 任务：原先一个文件一个任务，3 个文件要串行 3 次 CLI。
+// ---------------------------------------------------------------------------
+const CUSTOMER_INTAKE_MAX_FILES = 3;
+/** 暂存文件存活上限：用户选了文件却一直没点识别时，半小时后自动清理 */
+const CUSTOMER_INTAKE_STAGE_TTL_MS = 30 * 60 * 1000;
+
+interface CustomerIntakeStagedFile {
+  id: string;
+  storagePath: string;
+  /**
+   * Office 文档（xls / xlsx / docx）转出来的纯文本路径。
+   * CLI 的 Read 读不了二进制，所以交给它的其实一直是这个文本文件；
+   * 没有这一项（图片、PDF、txt 等）时才直接读原件。
+   */
+  textPath?: string;
+  name: string;
+  mime: string;
+  size: number;
+  teamId: string;
+  ownerId: string;
+  createdAt: number;
+  /** 转换成功时的一句话说明（「已由 CRM 从 Excel 转为文本」） */
+  convertNote?: string;
+  /** 转换失败时的可执行建议（怎么改文件格式再传） */
+  convertError?: string;
+}
+
+const customerIntakeStaged = new Map<string, CustomerIntakeStagedFile>();
+/** 任务号 → 该任务用到的文件（仅 id + 原名，任务结束后文件立即删除，这里只留展示用的名字） */
+const customerIntakeTaskFiles = new Map<string, Array<{ id: string; name: string }>>();
+
+/** 客户资料属于敏感数据：原件与转换出的文本都要删干净 */
+async function removeCustomerIntakeStagedFile(file: CustomerIntakeStagedFile) {
+  await rm(file.storagePath, { force: true }).catch(() => undefined);
+  if (file.textPath) await rm(file.textPath, { force: true }).catch(() => undefined);
+}
+
+async function purgeCustomerIntakeStaging(nowMs = Date.now()) {
+  for (const [id, file] of Array.from(customerIntakeStaged.entries())) {
+    if (nowMs - file.createdAt < CUSTOMER_INTAKE_STAGE_TTL_MS) continue;
+    customerIntakeStaged.delete(id);
+    await removeCustomerIntakeStagedFile(file);
+  }
+}
+
+/** 暂存文件名：ci_<uuid>.<扩展名>（原件与转换出的 .txt 都是这个形状） */
+const CUSTOMER_INTAKE_STAGED_NAME = /^ci_[0-9a-f-]{8,}\.[a-z0-9]{1,8}$/u;
+/** 孤儿扫描节流：同一个目录 5 分钟内不重复扫 */
+const CUSTOMER_INTAKE_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const customerIntakeSweptAt = new Map<string, number>();
+
+/**
+ * 清掉磁盘上的**孤儿**暂存文件。
+ *
+ * 暂存表是内存 Map，后端一重启就空了——磁盘上那些 ci_* 文件从此再也不会被 TTL 清掉，
+ * 而它们装的是名片、合同、形式发票这类敏感资料，不该无声无息躺在磁盘上（本机实测就
+ * 攒下过 5 个这样的残留）。这里扫描目录，只要文件不在当前暂存表里、又超过存活上限，就删。
+ */
+async function sweepCustomerIntakeOrphans(dir: string) {
+  const now = Date.now();
+  const last = customerIntakeSweptAt.get(dir) || 0;
+  if (now - last < CUSTOMER_INTAKE_SWEEP_INTERVAL_MS) return;
+  customerIntakeSweptAt.set(dir, now);
+  let names: string[] = [];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return;
+  }
+  const live = new Set<string>();
+  for (const file of customerIntakeStaged.values()) {
+    live.add(path.resolve(file.storagePath));
+    if (file.textPath) live.add(path.resolve(file.textPath));
+  }
+  for (const name of names) {
+    if (!CUSTOMER_INTAKE_STAGED_NAME.test(name)) continue;
+    const target = path.resolve(dir, name);
+    if (live.has(target)) continue;
+    try {
+      const info = await stat(target);
+      if (now - info.mtimeMs < CUSTOMER_INTAKE_STAGE_TTL_MS) continue;
+    } catch {
+      continue;
+    }
+    await rm(target, { force: true }).catch(() => undefined);
+  }
+}
+
+/** 任务终态后立刻删掉客户资料原件：名片/合同属于敏感数据，不能长期躺在磁盘上 */
+async function releaseCustomerIntakeFiles(ids: string[]) {
+  for (const id of ids) {
+    const file = customerIntakeStaged.get(id);
+    if (!file) continue;
+    customerIntakeStaged.delete(id);
+    await removeCustomerIntakeStagedFile(file);
+  }
+}
+
+function rememberCustomerIntakeTaskFiles(taskId: string, files: Array<{ id: string; name: string }>) {
+  customerIntakeTaskFiles.set(taskId, files);
+  while (customerIntakeTaskFiles.size > 200) {
+    const oldest = customerIntakeTaskFiles.keys().next().value;
+    if (oldest === undefined || oldest === taskId) break;
+    customerIntakeTaskFiles.delete(oldest);
+  }
+}
+
+async function finalizeCustomerIntakeTask(taskId: string) {
+  const files = customerIntakeTaskFiles.get(taskId) || [];
+  await releaseCustomerIntakeFiles(files.map((file) => file.id));
+}
+
+function elapsedSecondsSince(iso: string) {
+  if (!iso) return 0;
+  const at = Date.parse(iso);
+  return Number.isFinite(at) ? Math.max(0, Math.round((Date.now() - at) / 1000)) : 0;
+}
+
+/** 从任务事件流里挑一句「现在在干什么」，让前端能显示实时步骤而不是干等 */
+function engineTaskProgressText(snapshot: EngineCliTaskSnapshot) {
+  const relevant = snapshot.events.filter((event) => ["status", "progress", "warning"].includes(event.eventType) && event.message.trim());
+  const last = relevant[relevant.length - 1];
+  return last ? last.message.replace(/\s+/gu, " ").trim().slice(0, 160) : "";
+}
+
+interface CustomerIntakeQueuePayload {
+  queuedSeconds: number;
+  runningSeconds: number;
+  runnerOnline: boolean;
+  busy: boolean;
+}
+
+function customerIntakeQueuePayload(
+  snapshot: EngineCliTaskSnapshot,
+  state: { runnerOnline: boolean; busy: boolean } | null
+): CustomerIntakeQueuePayload {
+  return {
+    queuedSeconds: snapshot.status === "queued" ? elapsedSecondsSince(snapshot.queuedAt) : 0,
+    runningSeconds: snapshot.status === "running" ? elapsedSecondsSince(snapshot.startedAt) : 0,
+    runnerOnline: state ? state.runnerOnline : true,
+    busy: Boolean(state?.busy)
+  };
+}
+
+function customerIntakeResult(input: {
+  pending: boolean;
+  status: string;
+  taskId: string;
+  engine: string;
+  fileNames: string[];
+  resultText: string;
+  errorMessage: string;
+  outputTruncated: boolean;
+  progress?: string;
+  queue?: CustomerIntakeQueuePayload;
+}) {
+  // 归因分四种：解析出字段 / 解析成功但零字段 / 真解析不出 JSON / 什么都没返回。
+  // 2026-10-10 实测事故：CLI 因为读不了二进制 .xls 而回了一个**合法**的空字段 JSON，
+  // 旧逻辑只看「有没有字段」，于是报「返回内容不是可解析的 JSON」——结论与真实原因完全相反。
+  // 结果能解析出字段就是可用结果，哪怕任务状态是 failed：
+  //   CLI 已经完整输出了 JSON，却在收尾的 result 事件上报了一次上游错误（错误原文是个 MySQL
+  //   死锁串），旧逻辑会把到手的结果整份丢掉、只在界面上留下「失败」。识别结果是要人核对后
+  //   才落库的，这里宁可带着警告把字段填上去。
+  const parsed = parseCustomerIntakeResult({
+    resultText: input.resultText,
+    status: input.status,
+    outputTruncated: input.outputTruncated
+  });
+  const fields = parsed.fields;
+  let warnings = parsed.warnings;
+  const usable = parsed.usable;
+  const salvaged = usable && input.status !== "succeeded";
+  if (salvaged) {
+    warnings = [
+      `本机 CLI 在收尾时报了错（${(input.errorMessage || "未知原因").slice(0, 120)}），但识别结果已经完整拿到，请核对后使用`,
+      ...warnings
+    ];
+  }
+  const terminal = ["succeeded", "failed", "cancelled"].includes(input.status);
+  let diagnosis: EngineCliIssue | null = null;
+  if (usable) {
+    diagnosis = null;
+  } else if (input.status === "failed") {
+    diagnosis = classifyEngineCliIssue(input.errorMessage || "本机 CLI 任务失败");
+  } else if (input.status === "cancelled") {
+    diagnosis = {
+      code: "cli_failed",
+      title: "识别任务被中断",
+      detail: "本机 CLI 任务没有跑完（被取消，或 Runner 在执行过程中重启）。",
+      command: "确认本机 Runner 在运行后重新识别"
+    };
+  } else if (!terminal && input.queue && !input.queue.runnerOnline && input.queue.queuedSeconds >= 15) {
+    diagnosis = engineRunnerOfflineIssue(
+      `任务已排队 ${input.queue.queuedSeconds} 秒，但 Runner 的心跳已经断了：Runner 可能被关闭或重启了。`
+    );
+  }
+  return {
+    pending: input.pending,
+    status: input.status,
+    terminal,
+    outcome: parsed.outcome,
+    usable,
+    salvaged,
+    taskId: input.taskId,
+    engine: input.engine,
+    /** 兼容旧调用方：单文件时就是那个文件名 */
+    fileName: input.fileNames[0] || "",
+    fileNames: input.fileNames,
+    fields,
+    warnings,
+    summary: parsed.summary,
+    confidence: parsed.confidence,
+    parseError: parsed.parseError,
+    /** 解析成功但一个字段都没抽到时的如实说明（多半是文件本身读不出内容） */
+    emptyReason: parsed.emptyReason,
+    /** 原始返回片段，供「识别不到」时自查 */
+    rawPreview: parsed.rawPreview,
+    errorMessage: input.errorMessage,
+    outputTruncated: input.outputTruncated,
+    progress: input.progress || "",
+    queue: input.queue || null,
+    diagnosis
+  };
+}
+
+/** 上传客户资料到本机暂存区（识别前的第一步；这一步就会暴露「Runner 没在跑」） */
+app.post("/api/customers/intake/files", requireAuth, express.raw({ type: "application/octet-stream", limit: CUSTOMER_INTAKE_MAX_BYTES }), asyncRoute(async (req, res) => {
+  const encodedFileName = String(req.headers["x-file-name"] || "").trim();
+  let fileName = "";
+  try {
+    fileName = decodeURIComponent(encodedFileName);
+  } catch {
+    res.status(400).json({ message: "文件名编码无效" });
+    return;
+  }
+  fileName = path.basename(fileName).replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, 255);
+  if (!fileName) {
+    res.status(400).json({ message: "请选择要识别的客户资料文件" });
+    return;
+  }
+  const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  if (!buffer.length) {
+    res.status(400).json({ message: "文件内容为空，请重新选择" });
+    return;
+  }
+  const extension = fileName.toLowerCase().match(/\.([a-z0-9]{1,8})$/u)?.[1] || "";
+  if (!CUSTOMER_INTAKE_EXTENSIONS.has(extension)) {
+    res.status(415).json({ message: `暂不支持 ${extension ? `.${extension}` : "该"} 文件；请上传 PDF、图片、Word / Excel、CSV 或文本资料` });
+    return;
+  }
+  await purgeCustomerIntakeStaging();
+  const mine = Array.from(customerIntakeStaged.values()).filter((file) => file.ownerId === req.user!.id);
+  if (mine.length >= CUSTOMER_INTAKE_MAX_FILES) {
+    res.status(400).json({ message: `一次最多识别 ${CUSTOMER_INTAKE_MAX_FILES} 个文件，请先识别或清空已选文件` });
+    return;
+  }
+  const settings = await readTeamAiEngineSettings(req.user!.teamId);
+  let choice;
+  try {
+    choice = await pickEngineRunner(req.user!, settings);
+  } catch (error) {
+    if (!(error instanceof EngineUnavailableError)) throw error;
+    res.status(error.status).json({ message: error.message, diagnosis: engineRunnerOfflineIssue(error.message, error.code) });
+    return;
+  }
+  const intakeDir = await resolveCustomerIntakeDir(choice.workspace);
+  // 顺手清掉上次进程留下的残留资料（暂存表在内存里，重启后就成孤儿了）
+  await sweepCustomerIntakeOrphans(intakeDir);
+  const id = `cif_${randomUUID()}`;
+  const storagePath = path.join(intakeDir, `ci_${randomUUID()}.${extension}`);
+  await writeFile(storagePath, buffer, { flag: "wx" });
+  // 二进制 Office 文档先转成纯文本：CLI 的 Read 对 .xls/.xlsx/.docx 只能拿到乱码，
+  // 读到乱码必然回一个空字段的 JSON（2026-10-10 实测事故的根源），所以在这里就补上。
+  // 转换失败**不阻断上传**：有些 .xls 其实是 HTML/XML 伪装的，CLI 直接读原件反而能读出来，
+  // 所以仍把原件交给它，只在文件条目上说明「没能自动转换」。
+  let textPath: string | undefined;
+  let convertNote = "";
+  let convertError = "";
+  if (OFFICE_BINARY_EXTENSIONS.has(extension)) {
+    const extracted = await officeDocumentToText(storagePath, extension);
+    let written = "";
+    if (extracted) {
+      const candidate = path.join(intakeDir, `ci_${randomUUID()}.txt`);
+      try {
+        await writeFile(candidate, extracted.text, { flag: "wx" });
+        written = candidate;
+      } catch {
+        written = "";
+      }
+    }
+    if (written) {
+      textPath = written;
+      convertNote = extracted?.note || "已由 CRM 转为纯文本";
+    } else {
+      convertError = officeExtensionHint(extension);
+    }
+  }
+  customerIntakeStaged.set(id, {
+    id, storagePath, textPath: textPath || undefined, name: fileName,
+    mime: String(req.headers["x-file-type"] || "application/octet-stream").trim().toLowerCase().slice(0, 120),
+    size: buffer.length, teamId: req.user!.teamId, ownerId: req.user!.id, createdAt: Date.now(),
+    convertNote: convertNote || undefined, convertError: convertError || undefined
+  });
+  res.status(201).json({
+    fileId: id,
+    name: fileName,
+    size: buffer.length,
+    converted: Boolean(textPath),
+    convertNote,
+    convertError,
+    engine: `${aiEngineAdapterLabel(choice.adapter)}${choice.cliVersion ? ` ${choice.cliVersion}` : ""}`
+  });
+}));
+
+/** 把已暂存的 1-3 个文件合并成**一个** CLI 任务识别 */
+app.post("/api/customers/intake/analyze", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    fileIds: z.array(z.string().trim().min(4).max(80)).min(1).max(CUSTOMER_INTAKE_MAX_FILES)
+  }).strict().parse(req.body || {});
+  const staged = body.fileIds.map((id) => customerIntakeStaged.get(id));
+  const invalid = staged.some((file) => !file || file.ownerId !== req.user!.id || file.teamId !== req.user!.teamId);
+  if (invalid) {
+    res.status(409).json({ message: "文件已过期（超过 30 分钟或已识别过），请重新选择文件" });
+    return;
+  }
+  const files = staged as CustomerIntakeStagedFile[];
+  const settings = await readTeamAiEngineSettings(req.user!.teamId);
+  let choice;
+  try {
+    choice = await pickEngineRunner(req.user!, settings);
+  } catch (error) {
+    if (!(error instanceof EngineUnavailableError)) throw error;
+    res.status(error.status).json({ message: error.message, diagnosis: engineRunnerOfflineIssue(error.message, error.code) });
+    return;
+  }
+  const enqueued = await enqueueEngineCliTask(
+    req.user!,
+    choice,
+    customerIntakePrompt(
+      files.map((file) => ({
+        name: file.name,
+        readPath: file.textPath || file.storagePath,
+        converted: Boolean(file.textPath)
+      })),
+      { speedProfile: choice.adapter === "workbuddy" }
+    ),
+    clampAiEngineTimeout(settings.cliTimeoutSeconds),
+    // 用户选的模型 / 档位优先于识别任务的默认 low：设置里写了就按设置来。
+    // maxTurns 与 disallowedTools 由提示词自带，不受影响（那是「别探索仓库」的硬约束）。
+    { model: settings.cliModel, effort: settings.cliEffort }
+  );
+  rememberCustomerIntakeTaskFiles(enqueued.taskId, files.map((file) => ({ id: file.id, name: file.name })));
+  const snapshot = await waitForEngineCliTask(req.user!, enqueued.taskId, 0);
+  const status = snapshot?.status || "queued";
+  const terminal = Boolean(snapshot) && cliTaskDone(status);
+  const queueState = snapshot && !terminal ? await engineRunnerQueueState(req.user!, snapshot) : null;
+  const payload = customerIntakeResult({
+    pending: !terminal,
+    status,
+    taskId: enqueued.taskId,
+    engine: enqueued.engine,
+    fileNames: files.map((file) => file.name),
+    resultText: snapshot?.resultText || "",
+    errorMessage: snapshot?.errorMessage || "",
+    outputTruncated: Boolean(snapshot?.outputTruncated),
+    progress: snapshot ? engineTaskProgressText(snapshot) : "",
+    queue: snapshot ? customerIntakeQueuePayload(snapshot, queueState) : undefined
+  });
+  if (terminal) await finalizeCustomerIntakeTask(enqueued.taskId);
+  res.status(terminal ? 200 : 202).json(payload);
+}));
+
+app.get("/api/customers/intake/analyze/:taskId", requireAuth, asyncRoute(async (req, res) => {
+  const taskId = String(req.params.taskId || "").trim();
+  if (!/^lrt_[A-Za-z0-9_-]{4,80}$/u.test(taskId)) {
+    res.status(400).json({ message: "识别任务号格式无效" });
+    return;
+  }
+  const snapshot = await readEngineCliTask(req.user!, taskId);
+  if (!snapshot) {
+    res.status(404).json({ message: "识别任务不存在或已过期，请重新上传文件" });
+    return;
+  }
+  const terminal = cliTaskDone(snapshot.status);
+  const fileNames = (customerIntakeTaskFiles.get(taskId) || []).map((file) => file.name);
+  // 排队超过 5 秒就带上排队实况：Runner 同时只跑一个任务，「排在别人后面」是慢的主因
+  const queueState = !terminal && snapshot.status === "queued" && elapsedSecondsSince(snapshot.queuedAt) >= 5
+    ? await engineRunnerQueueState(req.user!, snapshot)
+    : null;
+  const payload = customerIntakeResult({
+    pending: !terminal,
+    status: snapshot.status,
+    taskId,
+    engine: "",
+    fileNames,
+    resultText: snapshot.resultText || "",
+    errorMessage: snapshot.errorMessage || "",
+    outputTruncated: Boolean(snapshot.outputTruncated),
+    progress: engineTaskProgressText(snapshot),
+    queue: customerIntakeQueuePayload(snapshot, queueState)
+  });
+  if (terminal) await finalizeCustomerIntakeTask(taskId);
+  res.json(payload);
+}));
+
+/**
+ * 本机 CLI 健康检查：弹窗一打开就调它。
+ * 目标是「在用户白等之前」把 CLI 连不上的原因讲清楚——Runner 没跑 / CLI 没登录 / 上次任务网络失败。
+ */
+app.get("/api/customers/intake/health", requireAuth, asyncRoute(async (req, res) => {
+  const settings = await readTeamAiEngineSettings(req.user!.teamId);
+  const checkedAt = new Date().toISOString();
+  let choice;
+  try {
+    choice = await pickEngineRunner(req.user!, settings);
+  } catch (error) {
+    const issue = error instanceof EngineUnavailableError
+      ? engineRunnerOfflineIssue(error.message, error.code)
+      : { code: "cli_failed" as const, title: "无法使用本机 CLI", detail: error instanceof Error ? error.message : "", command: "" };
+    res.json({ ready: false, checkedAt, engine: "", adapter: "", runner: null, busy: null, lastFailure: null, issue });
+    return;
+  }
+  const service = getLocalRunnerService();
+  const briefs = service ? await service.taskBriefs(req.user!, choice.runnerId, 8) : [];
+  const active = briefs.find((task) => task.status === "running" || task.status === "cancelling") || null;
+  const queued = briefs.find((task) => task.status === "queued") || null;
+  // 只报告「最近一次跑完的任务失败」：CLI 恢复后（下一次成功）这条提示会自动消失，
+  // 免得拿几天前的一次偶发失败一直吓唬用户。
+  const lastTerminal = briefs.find((task) => ["succeeded", "failed", "cancelled"].includes(task.status)) || null;
+  const failed = lastTerminal && lastTerminal.status === "failed"
+    && Date.now() - Date.parse(lastTerminal.createdAt) < 24 * 60 * 60 * 1000
+    ? lastTerminal
+    : null;
+  const busyTask = active || queued;
+  res.json({
+    ready: true,
+    checkedAt,
+    engine: `${aiEngineAdapterLabel(choice.adapter)}${choice.cliVersion ? ` ${choice.cliVersion}` : ""}`,
+    adapter: choice.adapter,
+    runner: {
+      id: choice.runnerId,
+      displayName: choice.displayName,
+      workspace: choice.workspace,
+      cliVersion: choice.cliVersion,
+      // 这台机器上报的最近一次 CLI 故障说明（账号切换 / CLI 重启 / 符号链接悬空）。
+      // 界面用它解释"CLI 就绪但为什么这台机器少了某项能力"，不做任何自动修复。
+      cliIssue: choice.cliIssue
+    },
+    busy: busyTask
+      ? {
+        taskId: busyTask.id,
+        status: busyTask.status,
+        label: busyTask.promptHead.replace(/^\[\[gj-cli-options[^\]]*\]\]\s*/u, "").slice(0, 60),
+        elapsedSeconds: elapsedSecondsSince(busyTask.status === "queued" ? busyTask.createdAt : busyTask.startedAt || busyTask.createdAt)
+      }
+      : null,
+    lastFailure: failed
+      ? {
+        taskId: failed.id,
+        at: failed.createdAt,
+        adapter: failed.adapter,
+        ...classifyEngineCliIssue(failed.errorMessage)
+      }
+      : null,
+    issue: null
+  });
 }));
 
 app.patch("/api/customers/:id", requireAuth, asyncRoute(async (req, res) => {
@@ -6191,10 +7017,46 @@ function researchText(value: unknown, fallback = "待核实") {
 
 const backgroundResearchRequestSchema = z.object({
   entityType: z.enum(["lead", "customer", "prospect"]),
-  entityId: z.string().trim().min(1).max(120)
+  entityId: z.string().trim().min(1).max(120),
+  /** 本次背调由谁执行；省略则用团队「默认背调来源」 */
+  source: z.enum(["crm", "ai", "cli"]).optional(),
+  /** 走 CLI 时指定 Runner；省略则自动挑一台在线的 */
+  runnerId: z.string().trim().max(80).optional()
 });
 
-async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof backgroundResearchRequestSchema>) {
+/** 背调结论的完整载荷；CLI 通道会在骨架之上回填引擎产出的字段 */
+interface BackgroundResearchPayload {
+  id: string;
+  entityType: BackgroundResearchEntity;
+  entityId: string;
+  company: string;
+  country: string;
+  score: number;
+  verdict: string;
+  summary: string;
+  facts: BackgroundResearchFact[];
+  opportunities: string[];
+  risks: Array<{ level: "high" | "medium" | "low"; title: string; detail: string }>;
+  contacts: Array<{ channel: string; value: string }>;
+  sources: BackgroundResearchSource[];
+  sourceChecks: BackgroundResearchProviderCheck[];
+  nextAction: string;
+  engine: string;
+  talkTracks: string[];
+  scoreReason: string;
+  crmOnly: boolean;
+  completedAt: string;
+}
+
+type BackgroundResearchOutcome =
+  | { kind: "research"; research: BackgroundResearchPayload }
+  | { kind: "cli"; skeleton: BackgroundResearchPayload; prompt: string }
+  | null;
+
+async function buildBackgroundResearch(
+  user: SessionUser,
+  body: z.infer<typeof backgroundResearchRequestSchema>
+): Promise<BackgroundResearchOutcome> {
   const store = getStore();
   const entityType = body.entityType as BackgroundResearchEntity;
   const lead = entityType === "lead"
@@ -6256,10 +7118,18 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
     website: researchText(customer?.website || prospect?.website || candidate?.website, ""),
     knownContacts: [lead?.email, lead?.phone, customer?.email, customer?.phone].filter(Boolean).map(String).slice(0, 4)
   };
-  const anglesResult = await runNativeBackgroundResearchAngles(config, researchContext);
+  const engineSettings = await readTeamAiEngineSettings(user.teamId);
+  const researchSource = resolveEngineSource(body.source, engineSettings.researchSource, RESEARCH_ENGINE_SOURCES);
+  // CLI 路径不在请求内做四路联网预检索与官网探针（2026-10-07 实测预检索 45s+，
+  // 把「10 秒返回 202」的异步化形同虚设）：research skill 本来就要求 CLI 自己联网
+  // 核查公开来源，CRM 只冻结 CRM 事实与硬约束进提示词，避免双重检索。
+  const cliPresearch = researchSource === "cli";
+  const anglesResult = cliPresearch
+    ? { angles: [], sources: [] as BackgroundResearchSource[], facts: [] as BackgroundResearchFact[] }
+    : await runNativeBackgroundResearchAngles(config, researchContext);
   const nativeSearchSucceeded = anglesResult.sources.length > 0 || anglesResult.facts.length > 0;
   const sourceChecks: BackgroundResearchProviderCheck[] = anglesResult.angles.map((angle) => angle.check);
-  const websiteProbeCheck = await ensureBackgroundResearchWebsiteProbe(user, candidates);
+  const websiteProbeCheck = cliPresearch ? null : await ensureBackgroundResearchWebsiteProbe(user, candidates);
   if (websiteProbeCheck) sourceChecks.push(websiteProbeCheck);
   const externalSources = anglesResult.sources;
   const sources = backgroundResearchSources(candidates, sourceEvents, [
@@ -6343,7 +7213,9 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
   if (customer && customer.health < 60) risks.push(backgroundResearchRisk("medium", "客户健康度", `当前人工评分 ${customer.health}`));
   if (!risks.length) risks.push(backgroundResearchRisk("low", "当前风险", "现有资料未发现明显冲突"));
 
-  const crmOnly = !nativeSearchSucceeded;
+  // CLI 路径的结论由引擎回填（applyResearchEnginePatch 拿到来源会把 crmOnly 翻回 false），
+  // 这里不把「跳过预检索」当成「没有公开网络证据」，避免前端误亮降级警告。
+  const crmOnly = researchSource === "cli" ? false : !nativeSearchSucceeded;
   let score = Math.max(35, Math.min(94,
     35
     + Math.min(24, sources.length * 6)
@@ -6384,7 +7256,7 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
     }
   };
 
-  if (nativeSearchSucceeded && config?.enabled && config.apiKey) {
+  if (researchSource === "ai" && nativeSearchSucceeded && config?.enabled && config.apiKey) {
     const synthesized = await synthesizeBackgroundResearch(
       config,
       researchContext,
@@ -6399,7 +7271,7 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
     } else {
       engine = fallbackEngine;
     }
-  } else if (config?.enabled && config.apiKey) {
+  } else if (researchSource === "ai" && config?.enabled && config.apiKey) {
     const prompt = [
       "根据以下 CRM 事实与来源证据生成企业背调结论。只使用提供的数据，不得补充或猜测外部事实。",
       "只返回 JSON：{\"summary\":\"\",\"verdict\":\"\",\"opportunities\":[\"\"],\"risks\":[{\"level\":\"high|medium|low\",\"title\":\"\",\"detail\":\"\"}],\"nextAction\":\"\"}",
@@ -6412,6 +7284,9 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
     } catch {
       engine = fallbackEngine;
     }
+  } else if (researchSource === "crm") {
+    // 只用 CRM 自己的资料与规则，不调用任何模型：证照/来源核验慢或没额度时的保底通道
+    engine = onlineEvidenceCount ? "CRM 本地证据 + 联网公开来源" : "CRM 本地证据分析（未联网、未调用模型）";
   }
 
   if (sourceChecks.length) {
@@ -6439,31 +7314,57 @@ async function buildBackgroundResearch(user: SessionUser, body: z.infer<typeof b
     await store.persist().catch((error) => console.error("background research audit persist failed:", error));
   }
 
-  return {
-    research: {
-      id: `abr_${entityType}_${body.entityId}_${Date.now()}`,
-      entityType,
-      entityId: body.entityId,
-      company,
-      country,
-      score,
-      verdict,
-      summary,
-      facts,
-      opportunities,
-      risks,
-      contacts: usefulContacts,
-      sources,
-      sourceChecks,
-      nextAction,
-      engine,
-      talkTracks,
-      scoreReason,
-      crmOnly,
-      completedAt: new Date().toISOString()
-    }
+  const skeleton: BackgroundResearchPayload = {
+    id: `abr_${entityType}_${body.entityId}_${Date.now()}`,
+    entityType,
+    entityId: body.entityId,
+    company,
+    country,
+    score,
+    verdict,
+    summary,
+    facts,
+    opportunities,
+    risks,
+    contacts: usefulContacts,
+    sources,
+    sourceChecks,
+    nextAction,
+    engine,
+    talkTracks,
+    scoreReason,
+    crmOnly,
+    completedAt: new Date().toISOString()
   };
+
+  if (researchSource === "cli") {
+    // 交给本机 CLI：CRM 这里只负责把事实与硬约束冻结成提示词，结论由引擎回填
+    return {
+      kind: "cli",
+      skeleton,
+      prompt: buildResearchCliPrompt({
+        entityType,
+        company,
+        country,
+        business,
+        grade: researchContext.grade,
+        website: researchContext.website,
+        facts: facts.filter((fact) => !fact.group).map((fact) => ({ label: fact.label, value: fact.value })),
+        contacts: usefulContacts,
+        sources: externalSources
+          .filter((item) => /^https?:\/\//iu.test(item.url))
+          .map((item) => ({ title: item.title, url: item.url })),
+        context: [
+          ...activities.slice(0, 4).map((item) => `${String((item as { type?: unknown }).type || "互动")}：${String(item.content || "").slice(0, 120)}`),
+          ...deals.slice(0, 3).map((deal) => `商机：${deal.product || "未填写产品"} / ${deal.stage || "未填写阶段"}`)
+        ]
+      })
+    };
+  }
+
+  return { kind: "research", research: skeleton };
 }
+
 
 /**
  * 背调留档：每次背调都写一条 background_research_records。
@@ -6498,10 +7399,654 @@ async function persistBackgroundResearchRecord(user: SessionUser, research: unkn
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// AI 执行引擎：把「背调 / 开发信」派给本机 CLI，并把结果收回 CRM
+// ─────────────────────────────────────────────────────────────
+
+function publicEngineJob(job: AiEngineJob) {
+  return {
+    id: job.id,
+    kind: job.kind,
+    entityType: job.entityType,
+    entityId: job.entityId,
+    source: job.source,
+    adapter: job.adapter,
+    adapterLabel: job.adapter ? aiEngineAdapterLabel(job.adapter) : "",
+    runnerId: job.runnerId,
+    cliTaskId: job.cliTaskId,
+    status: job.status,
+    engine: job.engine,
+    errorMessage: job.errorMessage,
+    createdAt: job.createdAt,
+    finishedAt: job.finishedAt
+  };
+}
+
+/**
+ * 引擎作业的可见性。
+ *
+ * 这里刻意**不直接**用 canSeeOwner()：canSeeOwner 对已接入 IAM 的账号要求先由中间件
+ * 解析 iamDataScope，否则只看 iamPermissions 就直接返回 false（auth.ts: `if (user.iamPermissions) return false;`）。
+ * 引擎作业是「随用随建」的留档——创建它的业务员必须能回读自己的作业，
+ * 所以规则是：本人作业永远可见 → 跨团队不可见 → 有 IAM 数据范围时按范围判 → 否则同团队管理员可见。
+ */
+function engineJobVisible(user: SessionUser, job: AiEngineJob) {
+  if (job.ownerId && job.ownerId === user.id) return true;
+  if (job.teamId && job.teamId !== user.teamId) return false;
+  if (user.iamDataScope) return canSeeOwner(user, job.ownerId, job.teamId);
+  if (isPlatformIdentity(user)) return false;
+  return user.role === "admin" || user.role === "super_admin" || user.role === "manager";
+}
+
+function engineJobRepositoryOrNull() {
+  return getAiEngineJobRepository();
+}
+
+type EngineCliOutcome =
+  | { pending: false; payload: Record<string, unknown> }
+  | { pending: true; engineJob: ReturnType<typeof publicEngineJob>; cliTaskId: string; runnerName: string; engine: string };
+
+/**
+ * 派一次 CLI 引擎任务。
+ * 先建作业留档，再入队 CLI 任务，然后在同一个 HTTP 请求内等一小段时间：
+ *   - 等到了：直接回结果（本机 CLI 实测 20-60 秒，多数情况能等到）
+ *   - 没等到：回 202 + 作业号，前端轮询 /api/ai-engine/jobs/:id
+ */
+async function runEngineCliJob(user: SessionUser, input: {
+  kind: "research" | "email" | "search" | "tender";
+  entityType: string;
+  entityId: string;
+  request: Record<string, unknown>;
+  prompt: string;
+  runnerId?: string;
+  /**
+   * 请求内的等待窗口；缺省用 engineInlineWaitMilliseconds()（HTTP 请求场景，75 秒）。
+   * 后台补写工序会传更大的值——它不在 HTTP 请求里，等久一点比"没等到就降级"更划算。
+   */
+  waitMs?: number;
+}): Promise<EngineCliOutcome> {
+  const repository = engineJobRepositoryOrNull();
+  if (!repository) {
+    throw new EngineUnavailableError("AI_ENGINE_REPOSITORY_UNAVAILABLE", "背调/开发信走 CLI 需要 MySQL 持久化档位", 503);
+  }
+  const settings = await readTeamAiEngineSettings(user.teamId);
+  const choice = await pickEngineRunner(user, { ...settings, runnerId: input.runnerId?.trim() || settings.runnerId });
+  const jobId = await repository.create({
+    id: "",
+    teamId: user.teamId,
+    ownerId: user.id,
+    createdBy: user.id,
+    kind: input.kind,
+    entityType: input.entityType,
+    entityId: input.entityId,
+    source: "cli",
+    adapter: choice.adapter,
+    runnerId: choice.runnerId,
+    cliTaskId: "",
+    status: "running",
+    engine: choice.cliVersion ? `${aiEngineAdapterLabel(choice.adapter)} ${choice.cliVersion}` : aiEngineAdapterLabel(choice.adapter),
+    requestJson: JSON.stringify(input.request),
+    resultJson: "",
+    errorMessage: ""
+  });
+  const enqueued = await enqueueEngineCliTask(user, choice, input.prompt, clampAiEngineTimeout(settings.cliTimeoutSeconds), {
+    model: settings.cliModel,
+    effort: settings.cliEffort
+  });
+  await repository.setCliTask(jobId, enqueued.runnerId, enqueued.taskId, enqueued.engine);
+  const job = await repository.get(jobId);
+  if (!job) throw new EngineUnavailableError("AI_ENGINE_JOB_MISSING", "引擎作业创建失败", 500);
+
+  const snapshot = await waitForEngineCliTask(user, enqueued.taskId, input.waitMs ?? engineInlineWaitMilliseconds(), 2_000,
+    // 获客作业：请求内等待窗口也做增量入池——搜到一家就同步一家，不等任务结束。
+    // 终态快照不同步（收尾函数会全量同步），避免两条路径竞争。
+    (tick) => {
+      if (input.kind === "search" && tick && !["succeeded", "failed", "cancelled"].includes(tick.status)) {
+        void syncAcquisitionFindingsFromEvents(job, [...tick.events.map((event) => event.message), tick.resultText || ""])
+          .catch(() => undefined);
+      }
+    });
+  if (snapshot && snapshot.status !== "queued" && snapshot.status !== "claimed" && snapshot.status !== "running") {
+    const payload = await finalizeEngineCliJob(user, job, snapshot);
+    if (payload) return { pending: false, payload };
+  }
+  return {
+    pending: true,
+    engineJob: publicEngineJob(job),
+    cliTaskId: enqueued.taskId,
+    runnerName: enqueued.runnerName,
+    engine: enqueued.engine
+  };
+}
+
+/**
+ * 降级收尾：CLI 正常跑完，但结果抠不出结构化 JSON。
+ *
+ * 以前这里一律判 failed（"本机 CLI 没有返回可解析的 JSON 结果，请查看集成中心的执行日志"），
+ * 实际后果是：**CLI 已经产出的东西被整单作废**，用户除了"失败"什么都看不到。
+ * 而真实原因通常只是输出被截断、原文写成了 Markdown 表格、或任务在收尾阶段被打断——
+ * 这些情况下 `resultText` 里其实有可读内容，不该丢。
+ *
+ * 现在按 kind 分别处理（思路与 engine-output.ts 的 L4「诚实降级」一致）：
+ *   - search：@@FOUND@@ 流式增量与最终 JSON 是**两条独立通道**。先把流式里已出现的公司收干净，
+ *     再如实报入池数量——否则会出现「候选清单里明明有公司，界面却说任务失败」这种自相矛盾；
+ *   - research：背调骨架本身就是 CRM 侧已核实的证据，引擎补丁读不到不代表这次背调没有价值；
+ *   - tender：给一版带归因说明的空报告（宁空勿假），而不是让整天的日报显示不出来；
+ *   - email：模板兜底的那份草稿仍然可用，标明「需人工润色」即可。
+ */
+async function finalizeEngineCliJobWithoutJson(
+  user: SessionUser,
+  job: AiEngineJob,
+  snapshot: {
+    resultText: string;
+    outputTruncated?: boolean;
+    events?: Array<{ eventType: string; message: string }>;
+  }
+): Promise<Record<string, unknown> | null> {
+  const repository = engineJobRepositoryOrNull();
+  if (!repository) return null;
+  const finishedAt = new Date().toISOString();
+  const context = (() => {
+    try {
+      return JSON.parse(job.requestJson || "{}") as Record<string, unknown>;
+    } catch {
+      return {} as Record<string, unknown>;
+    }
+  })();
+  // 原文摘要：即使结构读不出来，也要让用户能看到 CLI 到底说了什么
+  const rawPreview = String(snapshot.resultText || "").replace(/\s+/gu, " ").trim().slice(0, 600);
+  const cause = snapshot.outputTruncated
+    ? "CLI 输出太长被截断，没能拿到完整 JSON"
+    : rawPreview
+      ? "CLI 返回的内容不是结构化 JSON（可能是 Markdown 表格或说明文字）"
+      : "CLI 结束时没有返回任何内容";
+
+  if (job.kind === "search") {
+    const query = (context.query || {}) as Record<string, unknown>;
+    await syncAcquisitionFindingsFromEvents(job, [
+      ...(snapshot.events || []).map((event) => event.message),
+      snapshot.resultText || ""
+    ]);
+    const since = String(job.createdAt || "");
+    const rescued = getStore().websiteOpportunities.filter((item) =>
+      item.ownerId === job.ownerId
+      && item.source === "cli_acquisition"
+      && (!since || item.createdAt >= since)
+    ).length;
+    const message = rescued > 0
+      ? `${cause}；但执行过程中的流式输出里已有 ${rescued} 家企业入池，可在候选清单查看`
+      : `${cause}，本次没有可用的获客结果，建议重新查询`;
+    const succeeded = rescued > 0;
+    const payload = {
+      acquisition: { rawCount: rescued, created: rescued, evidenceUpdated: 0, unchanged: 0, excluded: 0, query },
+      engineJob: publicEngineJob({ ...job, status: succeeded ? "succeeded" : "failed", finishedAt, errorMessage: succeeded ? "" : message }),
+      degraded: true,
+      rawPreview,
+      message,
+      pending: false
+    };
+    await repository.finish(job.id, succeeded ? "succeeded" : "failed", succeeded ? JSON.stringify(payload) : "", succeeded ? "" : message);
+    return payload;
+  }
+
+  if (job.kind === "research") {
+    const skeleton = context.skeleton as BackgroundResearchPayload | undefined;
+    if (skeleton) {
+      const research: BackgroundResearchPayload = {
+        ...skeleton,
+        engine: job.engine || skeleton.engine,
+        completedAt: finishedAt,
+        summary: skeleton.summary || `本机 CLI 未返回可解析的结论（${cause}），以下为 CRM 侧已核实的证据。`
+      };
+      await persistBackgroundResearchRecord(user, research);
+      const payload = {
+        research,
+        applied: [],
+        degraded: true,
+        rawPreview,
+        message: `背调已按 CRM 侧证据落档；${cause}`,
+        engineJob: publicEngineJob({ ...job, status: "succeeded", finishedAt, errorMessage: "" }),
+        pending: false
+      };
+      await repository.finish(job.id, "succeeded", JSON.stringify(payload), "");
+      return payload;
+    }
+  }
+
+  if (job.kind === "tender") {
+    const report: TenderDailyReport = normalizeTenderReport(null, {
+      engine: job.engine || "本机 CLI",
+      completedAt: finishedAt,
+      reportDate: typeof context.reportDate === "string" ? context.reportDate : finishedAt.slice(0, 10)
+    });
+    report.notes = [`${cause}${rawPreview ? `；返回内容摘要：${rawPreview.slice(0, 200)}` : ""}`];
+    const payload = {
+      report,
+      degraded: true,
+      rawPreview,
+      message: cause,
+      engineJob: publicEngineJob({ ...job, status: "succeeded", finishedAt, errorMessage: "" }),
+      pending: false
+    };
+    await repository.finish(job.id, "succeeded", JSON.stringify(payload), "");
+    return payload;
+  }
+
+  // 开发信：模板兜底的那份草稿仍然可用，用户要的是「有信可改」而不是「任务失败」
+  const template = (context.response || {}) as Record<string, unknown>;
+  const draft = { ...((template.draft || {}) as Record<string, unknown>) };
+  const fallbackBody = String(draft.body || "");
+  const brief = context.brief as DevelopmentEmailBrief | undefined;
+  const message = `${cause}，已改用基础模板草稿，请人工润色后发送`;
+  if (!fallbackBody) {
+    await repository.finish(job.id, "failed", "", message);
+    return {
+      pending: false,
+      failed: true,
+      engineJob: publicEngineJob({ ...job, status: "failed", finishedAt, errorMessage: message }),
+      message,
+      rawPreview
+    };
+  }
+  const finalSubject = String(draft.subject || "").slice(0, 160);
+  const finalBody = ensureDevelopmentEmailSignature(fallbackBody.slice(0, 5600), String(context.signatureText || "")).slice(0, 6000);
+  const payload: Record<string, unknown> = {
+    ...template,
+    draft: { ...draft, subject: finalSubject, body: finalBody },
+    quality: brief ? checkDevelopmentEmailDraft({ subject: finalSubject, body: finalBody }, brief) : null,
+    degraded: true,
+    rawPreview,
+    message,
+    engineJob: publicEngineJob({ ...job, status: "succeeded", finishedAt, errorMessage: "" }),
+    pending: false
+  };
+  await repository.finish(job.id, "succeeded", JSON.stringify(payload), "");
+  return payload;
+}
+
+/**
+ * 收尾：把 CLI 的文本结果解析成 CRM 结构，落档，并生成与直接调用完全一致的响应体。
+ * 同一作业只会成功收尾一次（成功后 status 变为 succeeded，轮询接口直接返回留档结果）。
+ */
+async function finalizeEngineCliJob(
+  user: SessionUser,
+  job: AiEngineJob,
+  snapshot: {
+    status: string;
+    resultText: string;
+    errorMessage: string;
+    outputTruncated?: boolean;
+    events?: Array<{ eventType: string; message: string }>;
+  }
+): Promise<Record<string, unknown> | null> {
+  const repository = engineJobRepositoryOrNull();
+  if (!repository) return null;
+  const context = (() => {
+    try {
+      return JSON.parse(job.requestJson || "{}") as Record<string, unknown>;
+    } catch {
+      return {} as Record<string, unknown>;
+    }
+  })();
+
+  if (snapshot.status !== "succeeded") {
+    const reason = snapshot.status === "cancelled"
+      ? "本机 CLI 任务已被取消"
+      : snapshot.errorMessage || "本机 CLI 执行失败";
+    await repository.finish(job.id, "failed", "", reason);
+    return {
+      pending: false,
+      failed: true,
+      engineJob: publicEngineJob({ ...job, status: "failed", errorMessage: reason, finishedAt: new Date().toISOString() }),
+      message: reason
+    };
+  }
+
+  const parsed = extractEngineJson(snapshot.resultText);
+  if (!parsed) {
+    // 抠不出 JSON ≠ 挖不到东西。见 finalizeEngineCliJobWithoutJson 的说明。
+    return finalizeEngineCliJobWithoutJson(user, job, snapshot);
+  }
+
+  const finishedAt = new Date().toISOString();
+  const doneJob = { ...job, status: "succeeded" as const, finishedAt };
+  if (job.kind === "search") {
+    // 获客作业收尾：把 CLI 找到的公司直接同步进候选清单（website_opportunities）。
+    // 无论用户还在不在页面上，这一步都必须发生——补收工序也会走这里。
+    const query = (context.query || {}) as Record<string, unknown>;
+    const companies = normalizeAcquisitionCompanies(parsed);
+    const acquisition = await syncAcquisitionCandidates(user, query, companies);
+    const payload = { acquisition: { ...acquisition, query }, engineJob: publicEngineJob(doneJob), pending: false };
+    await repository.finish(job.id, "succeeded", JSON.stringify(payload), "");
+    return payload;
+  }
+  if (job.kind === "research") {
+    const skeleton = context.skeleton as BackgroundResearchPayload | undefined;
+    if (!skeleton) {
+      const reason = "引擎作业缺少背调骨架，无法回填结果";
+      await repository.finish(job.id, "failed", "", reason);
+      return { pending: false, failed: true, engineJob: publicEngineJob({ ...job, status: "failed", errorMessage: reason, finishedAt }), message: reason };
+    }
+    const { research, applied } = applyResearchEnginePatch(skeleton, parsed);
+    research.engine = job.engine || research.engine;
+    research.completedAt = finishedAt;
+    await persistBackgroundResearchRecord(user, research);
+    const payload = { research, engineJob: publicEngineJob(doneJob), applied, pending: false };
+    await repository.finish(job.id, "succeeded", JSON.stringify(payload), "");
+    return payload;
+  }
+  if (job.kind === "tender") {
+    // 海外竞标日报收尾：规范化 CLI 的 JSON 结果并落档（ai_engine_jobs 即留档，
+    // 不另建表）；空清单是合法结果——「宁空勿假」契约，前端会渲染空态。
+    const report: TenderDailyReport = normalizeTenderReport(parsed, {
+      engine: job.engine || "本机 CLI",
+      completedAt: finishedAt,
+      reportDate: typeof context.reportDate === "string" ? context.reportDate : finishedAt.slice(0, 10)
+    });
+    const payload = { report, engineJob: publicEngineJob(doneJob), pending: false };
+    await repository.finish(job.id, "succeeded", JSON.stringify(payload), "");
+    return payload;
+  }
+
+  const template = (context.response || {}) as Record<string, unknown>;
+  const brief = context.brief as DevelopmentEmailBrief | undefined;
+  const patch = normalizeEmailPatch(parsed);
+  const draft = { ...((template.draft || {}) as Record<string, unknown>) };
+  const fallbackBody = String(draft.body || "");
+  if (!patch.body && !fallbackBody) {
+    const reason = "引擎返回的开发信缺少正文，已丢弃";
+    await repository.finish(job.id, "failed", "", reason);
+    return { pending: false, failed: true, engineJob: publicEngineJob({ ...job, status: "failed", errorMessage: reason, finishedAt }), message: reason };
+  }
+  // 模型 / CLI 整段省略落款是实测发生过的，落款属于「按我的身份写信」的一部分 → 硬兜底补上
+  const signatureText = String(context.signatureText || "");
+  const finalSubject = (patch.subject || String(draft.subject || "")).slice(0, 160);
+  const finalBody = ensureDevelopmentEmailSignature((patch.body || fallbackBody).slice(0, 5600), signatureText).slice(0, 6000);
+  const finalDraft = { ...draft, subject: finalSubject, body: finalBody, engine: job.engine || String(draft.engine || "") };
+  const payload: Record<string, unknown> = {
+    ...template,
+    draft: finalDraft,
+    quality: brief ? checkDevelopmentEmailDraft({ subject: finalSubject, body: finalBody }, brief) : null,
+    engineJob: publicEngineJob(doneJob),
+    pending: false
+  };
+  const readiness = payload.readiness as Record<string, unknown> | undefined;
+  if (readiness && typeof readiness === "object") {
+    readiness.aiGenerated = true;
+    readiness.aiConfigName = job.engine || (job.adapter ? aiEngineAdapterLabel(job.adapter) : "本机 CLI");
+    readiness.aiError = "";
+  }
+  await repository.finish(job.id, "succeeded", JSON.stringify(payload), "");
+  return payload;
+}
+
+let aiEngineRecoveryTimer: NodeJS.Timeout | null = null;
+let aiEngineRecoveryBusy = false;
+
+/**
+ * 收尾「没人认领」的 CLI 引擎作业。
+ *
+ * 背景：走 CLI 时前端会一直轮询 /api/ai-engine/jobs/:id 直到出结果。但用户完全可能
+ * 关掉页面/断网——这时作业会永远停在 running，result_json 空着，留档链就断了。
+ * 所以这里做一次兜底：把已经跑完（或失败）但没人收尾的作业补记进档案。
+ *
+ * 只处理「建了超过 2 分钟」的作业：刚建的作业还在请求内的等待窗口里，不抢。
+ */
+async function recoverEngineCliJobs(reason: string) {
+  const repository = engineJobRepositoryOrNull();
+  if (!repository || aiEngineRecoveryBusy) return;
+  aiEngineRecoveryBusy = true;
+  try {
+    const running = await repository.listRunning(50);
+    let recovered = 0;
+    for (const job of running) {
+      const age = Date.now() - new Date(job.createdAt).getTime();
+      if (!Number.isFinite(age) || age < 120_000) continue;
+      const owner = getStore().users.find((item) => item.id === job.ownerId);
+      if (!owner) {
+        await repository.finish(job.id, "failed", "", "作业归属账号已不存在，无法收尾");
+        recovered += 1;
+        continue;
+      }
+      // 用「作业归属人」的身份读任务，避免越权；读不到（任务被清理）就留给人工核查。
+      const snapshot = await readEngineCliTask(publicUser(owner), job.cliTaskId);
+      // 关页面也不丢实时性：清扫器顺路把事件流里的 @@FOUND@@ 发现补同步进候选清单
+      if (job.kind === "search" && snapshot) {
+        void syncAcquisitionFindingsFromEvents(job, [
+          ...snapshot.events.map((event) => event.message),
+          snapshot.resultText || ""
+        ]).catch(() => undefined);
+      }
+      if (!snapshot || !cliTaskDone(snapshot.status)) continue;
+      await finalizeEngineCliJob(publicUser(owner), job, snapshot);
+      recovered += 1;
+    }
+    if (recovered) console.log(`GoodJob CRM recovered ${recovered} unfinished AI engine job(s) (${reason})`);
+  } catch (error) {
+    console.error("AI engine job recovery failed", error);
+  } finally {
+    aiEngineRecoveryBusy = false;
+  }
+}
+
+function startAiEngineRecoveryScheduler() {
+  if (process.env.AI_ENGINE_RECOVERY === "false") {
+    console.log("GoodJob CRM AI engine job recovery disabled (AI_ENGINE_RECOVERY=false)");
+    return;
+  }
+  const pollMs = Math.max(60_000, Number(process.env.AI_ENGINE_RECOVERY_POLL_MS || 300_000) || 300_000);
+  aiEngineRecoveryTimer = setInterval(() => void recoverEngineCliJobs("scheduled"), pollMs);
+  void recoverEngineCliJobs("startup");
+}
+
+function stopAiEngineRecoveryScheduler() {
+  if (aiEngineRecoveryTimer) clearInterval(aiEngineRecoveryTimer);
+  aiEngineRecoveryTimer = null;
+}
+
+// ── CLI 获客（引擎 kind=search）─────────────────────────────────────────────
+//
+// 获客走「本机 CLI + 获客技能」的口径：提示词里内嵌 prospecting skill 的硬约束
+// （只用公开来源、先核实再产出、禁止编造），CLI 返回公司清单后，CRM 直接把结果
+// 同步进候选清单（website_opportunities），与数据源搜索结果共用同一套
+// 去重/合并/验证报告逻辑（persistProviderOpportunities）。
+// 作业留档在 ai_engine_jobs（kind=search），result_json 存「找到几家、新增几条、
+// 合并几条」，随时候可查；用户中途关页面也不会丢——补收工序同样走 finalize 收尾同步。
+
+/** CLI 引擎任务（获客/背调/写信）在 HTTP 请求内的等待窗口 */
+function engineRequestWaitMs() {
+  // CLI 任务动辄 1-5 分钟：内联等待只用来「给任务创建 + 前几秒执行留时间」，
+  // 到点一律返回 202+jobId 交给前端轮询。以前默认等 75~180 秒——HTTP 请求挂死、
+  // 界面像同步阻塞，等待动画要等响应回来才出现（2026-10-07 用户复盘：获客先改，
+  // 背调/写信入口同日跟进）。需要旧行为可用环境变量调回（ACQUIRE 为兼容旧名保留）。
+  const configured = Number(process.env.AI_ENGINE_REQUEST_WAIT_MS || process.env.AI_ENGINE_ACQUIRE_WAIT_MS || 10_000);
+  if (!Number.isFinite(configured)) return 10_000;
+  return Math.max(5_000, Math.min(600_000, Math.floor(configured)));
+}
+
+function acquisitionEvidenceSnapshot(
+  record: EngineAcquisitionCompany,
+  ownerId: string,
+  observedAt: string
+): ProviderEvidenceSnapshot {
+  const payload = JSON.stringify({ ...record, ownerId });
+  return {
+    providerId: "cli_acquisition",
+    providerRecordId: createHash("sha256").update(`${record.company}|${record.website || ""}`).digest("hex").slice(0, 32),
+    officialWebsite: record.website,
+    sourceUrl: record.sourceUrl || record.website,
+    recordType: "company",
+    fetchedAt: observedAt,
+    payloadHash: createHash("sha256").update(payload).digest("hex"),
+    evidenceSummary: record.description || record.business || record.company,
+    matchedFields: ["company"],
+    adapterVersion: "cli-acquisition-v1",
+    catalogPolicyVersion: "1",
+    sourceLevel: "public_web",
+    retentionPolicyRef: "default"
+  };
+}
+
+/** 把 CLI 找到的公司同步进候选清单；返回写进作业留档的汇总 */
+async function syncAcquisitionCandidates(
+  owner: SessionUser,
+  query: Record<string, unknown>,
+  companies: EngineAcquisitionCompany[]
+) {
+  const store = getStore();
+  const observedAt = new Date().toISOString();
+  const opportunities: WebsiteOpportunity[] = companies.map((record) => ({
+    id: `web_cli_${randomUUID()}`,
+    company: record.company,
+    business: record.business || "待维护",
+    country: record.country || "未知",
+    website: record.website,
+    contact: "待维护",
+    contactInfo: "",
+    description: record.description || "本机 CLI 获客候选，待业务员核实。",
+    ownerId: owner.id,
+    teamId: owner.teamId,
+    status: "preview" as const,
+    createdAt: observedAt,
+    parseMode: "rule" as const,
+    source: "cli_acquisition",
+    sourceLabel: "本机 CLI 获客",
+    sourceEvidence: [acquisitionEvidenceSnapshot(record, owner.id, observedAt)],
+    confidence: record.confidence ?? undefined
+  }));
+  const { opportunities: touched, incrementalStats } = persistProviderOpportunities(opportunities, {
+    rawCount: companies.length,
+    deduplicatedCount: 0
+  });
+  // 候选清单接口每次读取都会 reloadProspectCandidates() 把内存打回 MySQL 状态，
+  // 全量 persist 又要几分钟才轮到——内存态新插入会被 reload 抹掉（2026-10-06 实锤）。
+  // 所以这里必须走 persistProspectCandidates 定向立即写库，保证增量结果「搜到即落库」。
+  await persistCandidateChanges(store, touched, false);
+  return {
+    rawCount: companies.length,
+    created: incrementalStats.newCount,
+    evidenceUpdated: incrementalStats.evidenceUpdatedCount,
+    unchanged: incrementalStats.unchangedCount,
+    excluded: incrementalStats.excludedCount,
+    query
+  };
+}
+
+// ── 获客作业增量入池：CLI 每核实一家就输出一行 @@FOUND@@ {...} ─────────────────
+// 提示词（buildAcquisitionCliPrompt）要求 CLI 边搜边打标记行；这里从任务事件流
+// （assistant 文本，Runner 实时推给 CRM 存档）里逐行抠出来、去重后立刻入池，
+// 不再等整个任务结束。搜到多少返回多少，用户在候选清单里实时可见。
+/** 每个作业已同步过的发现签名（company|website），避免轮询重复触发；进程重启后丢失也只是多跑一次幂等同步 */
+const acquisitionFindingsSeen = new Map<string, Set<string>>();
+
+function acquisitionFindingKey(record: EngineAcquisitionCompany) {
+  return `${record.company.trim().toLowerCase()}|${record.website.trim().toLowerCase()}`;
+}
+
+/** 把作业事件流里还没同步过的发现同步进候选清单；返回该作业累计已同步数（供前端实时展示） */
+async function syncAcquisitionFindingsFromEvents(job: AiEngineJob, texts: string[]): Promise<number> {
+  if (job.kind !== "search") return 0;
+  const findings = extractAcquisitionFindings(texts.join("\n"));
+  let seen = acquisitionFindingsSeen.get(job.id);
+  if (!seen) {
+    seen = new Set();
+    acquisitionFindingsSeen.set(job.id, seen);
+  }
+  const fresh = findings.filter((record) => {
+    const key = acquisitionFindingKey(record);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (fresh.length) {
+    // 候选归属必须是作业创建人（管理员代查时也不能算到管理员头上）
+    const owner = getStore().users.find((item) => item.id === job.ownerId);
+    if (owner) {
+      const context = (() => {
+        try {
+          return JSON.parse(job.requestJson || "{}") as Record<string, unknown>;
+        } catch {
+          return {} as Record<string, unknown>;
+        }
+      })();
+      await syncAcquisitionCandidates(publicUser(owner), (context.query || {}) as Record<string, unknown>, fresh);
+    }
+  }
+  return seen.size;
+}
+
+const aiAcquisitionRequestSchema = z.object({
+  goal: z.string().trim().max(500).optional().default(""),
+  productKeywords: z.string().trim().max(300).optional().default(""),
+  countries: z.string().trim().max(200).optional().default(""),
+  industry: z.string().trim().max(200).optional().default(""),
+  customerType: z.string().trim().max(200).optional().default(""),
+  excludeKeywords: z.string().trim().max(200).optional().default(""),
+  limit: z.coerce.number().int().min(1).max(30).optional().default(8),
+  runnerId: z.string().trim().max(80).optional().default("")
+});
+
+app.post("/api/ai-engine/acquire", requireAuth, asyncRoute(async (req, res) => {
+  const body = aiAcquisitionRequestSchema.parse(req.body);
+  if (!body.goal && !body.productKeywords && !body.industry) {
+    res.status(400).json({ message: "请至少填写获客目标、产品关键词或行业之一" });
+    return;
+  }
+  const result = await runEngineCliJob(req.user!, {
+    kind: "search",
+    entityType: "prospect-acquisition",
+    entityId: `acq_${Date.now()}`,
+    request: { query: { ...body } },
+    prompt: buildAcquisitionCliPrompt({
+      goal: body.goal,
+      productKeywords: body.productKeywords,
+      countries: body.countries,
+      industry: body.industry,
+      customerType: body.customerType,
+      excludeKeywords: body.excludeKeywords,
+      limit: body.limit
+    }),
+    runnerId: body.runnerId || undefined,
+    waitMs: engineRequestWaitMs()
+  });
+  if (result.pending) {
+    res.status(202).json({ acquisition: null, ...result });
+    return;
+  }
+  res.json(result.payload);
+}));
+
+// ---------------------------------------------------------------------------
+// CLI 获客任务历史：引擎作业本就按 kind=search + entityType=prospect-acquisition
+// 留档在 ai_engine_jobs（request_json 存派单参数、result_json 存入池统计），
+// 这里把它翻出来给搜客任务队列重建历史卡——任务卡不再「刷新即蒸发」，
+// 历史以数据库为准，可见性沿用 engineJobVisible（本人 / 数据范围内 / 管理层）。
+// ---------------------------------------------------------------------------
+app.get("/api/ai-engine/acquire-history", requireAuth, asyncRoute(async (req, res) => {
+  const repository = engineJobRepositoryOrNull();
+  if (!repository) {
+    res.status(503).json({ message: "AI 引擎作业需要 MySQL 持久化档位" });
+    return;
+  }
+  const parseStored = (raw: string | null): Record<string, unknown> => {
+    try { return raw ? (JSON.parse(raw) as Record<string, unknown>) : {}; } catch { return {}; }
+  };
+  const jobs = (await repository.listTeamByKind(req.user!.teamId, "search", 80))
+    .filter((job) => job.entityType === "prospect-acquisition" && engineJobVisible(req.user!, job))
+    .slice(0, 12);
+  res.json({
+    jobs: jobs.map((job) => ({
+      engineJob: publicEngineJob(job),
+      request: (parseStored(job.requestJson).query || {}) as Record<string, unknown>,
+      acquisition: (parseStored(job.resultJson).acquisition || null) as Record<string, unknown> | null
+    }))
+  });
+}));
+
 app.post("/api/ai-background-research", requireAuth, asyncRoute(async (req, res) => {
   const body = backgroundResearchRequestSchema.parse(req.body);
-  const result = await buildBackgroundResearch(req.user!, body);
-  if (!result) {
+  const outcome = await buildBackgroundResearch(req.user!, body);
+  if (!outcome) {
     res.status(404).json({
       message: body.entityType === "lead"
         ? "线索不存在或无权访问"
@@ -6511,8 +8056,254 @@ app.post("/api/ai-background-research", requireAuth, asyncRoute(async (req, res)
     });
     return;
   }
-  await persistBackgroundResearchRecord(req.user!, result.research);
-  res.json(result);
+  if (outcome.kind === "research") {
+    await persistBackgroundResearchRecord(req.user!, outcome.research);
+    res.json({ research: outcome.research, engineJob: null });
+    return;
+  }
+  const result = await runEngineCliJob(req.user!, {
+    kind: "research",
+    entityType: body.entityType,
+    entityId: body.entityId,
+    request: { skeleton: outcome.skeleton },
+    prompt: outcome.prompt,
+    runnerId: body.runnerId,
+    // 与获客口径一致：请求内只等 10 秒（任务创建 + 前几秒执行），到点 202 交前端轮询，
+    // 等待动画点按钮即亮，不再让 HTTP 请求挂住背调页面 75 秒。
+    waitMs: engineRequestWaitMs()
+  });
+  if (result.pending) {
+    res.status(202).json({ research: null, ...result });
+    return;
+  }
+  if (result.payload.failed) {
+    res.status(400).json({ research: null, ...result.payload });
+    return;
+  }
+  res.json(result.payload);
+}));
+
+// ---------------------------------------------------------------------------
+// 海外竞标日报（工作主页 · CLI 通道）
+//
+// 「每天查询」的实现方式：服务器不做定时器，而是前端每次打开工作主页时调
+// POST /api/tender-daily/run（不带 force）。幂等规则：
+//   今天已有成功的日报 → 直接复用留档结果，不再打扰 CLI；
+//   今天已有跑着的作业 → 返回同一份作业，绝不重复派发；
+//   今天还没有       → 组提示词（公司资料里的主营产品 = 相关性锚点）派一次 CLI。
+// 这样机器开着的第一个工作时段就会自动产出当天日报，也随时可以手动重查。
+// ---------------------------------------------------------------------------
+
+function tenderDailyDate() {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+/**
+ * 竞标日报的相关性锚点：公司资料里的主营产品为空时，从团队自己的业务数据里
+ * 推导高频产品词（搜客候选的业务方向 + 成交记录的产品）。推不出来就留空，
+ * 让日报按「全球招标、通用工业品」口径跑，并在 notes 里说明局限。
+ */
+function teamProductKeywordFallback(teamId: string) {
+  const store = getStore();
+  const counts = new Map<string, number>();
+  const bump = (value: unknown) => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    for (const token of text.split(/[，,、;；/|·]+/u).map((item) => item.trim()).filter((item) => item.length >= 2 && item.length <= 60)) {
+      counts.set(token, (counts.get(token) || 0) + 1);
+    }
+  };
+  store.websiteOpportunities.filter((item) => item.teamId === teamId).forEach((item) => bump(item.business));
+  store.deals.filter((item) => item.teamId === teamId).forEach((item) => bump(item.product));
+  return [...counts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 10).map(([token]) => token).join("、");
+}
+
+function tenderReportFromJob(job: AiEngineJob): TenderDailyReport | null {
+  if (job.status !== "succeeded" || !job.resultJson) return null;
+  try {
+    const parsed = JSON.parse(job.resultJson) as { report?: TenderDailyReport };
+    return parsed.report || null;
+  } catch {
+    return null;
+  }
+}
+
+app.get("/api/tender-daily/latest", requireAuth, asyncRoute(async (req, res) => {
+  const repository = engineJobRepositoryOrNull();
+  if (!repository) {
+    res.status(503).json({ message: "竞标日报需要 MySQL 持久化档位" });
+    return;
+  }
+  const jobs = await repository.listTeamByKind(req.user!.teamId, "tender", 1);
+  const job = jobs[0] || null;
+  if (!job) {
+    res.json({ report: null, engineJob: null, pending: false });
+    return;
+  }
+  res.json({ report: tenderReportFromJob(job), engineJob: publicEngineJob(job), pending: job.status === "running" });
+}));
+
+app.post("/api/tender-daily/run", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    /** true = 无视当天缓存强制重查 */
+    force: z.boolean().optional(),
+    /** 本次重点关注的地区（可选，默认全球） */
+    regions: z.string().trim().max(300).optional(),
+    /** 本次附加的检索提示（可选） */
+    note: z.string().trim().max(500).optional()
+  }).strict().parse(req.body || {});
+  const repository = engineJobRepositoryOrNull();
+  if (!repository) {
+    res.status(503).json({ message: "竞标日报需要 MySQL 持久化档位" });
+    return;
+  }
+  const today = tenderDailyDate();
+  if (!body.force) {
+    const jobs = await repository.listTeamByKind(req.user!.teamId, "tender", 5);
+    const running = jobs.find((job) => job.status === "running" && job.createdAt.slice(0, 10) === today);
+    if (running) {
+      res.status(202).json({ report: null, engineJob: publicEngineJob(running), pending: true, reused: true });
+      return;
+    }
+    const doneToday = jobs.find((job) => job.status === "succeeded" && (job.finishedAt || job.createdAt).slice(0, 10) === today);
+    if (doneToday) {
+      res.json({ report: tenderReportFromJob(doneToday), engineJob: publicEngineJob(doneToday), pending: false, reused: true });
+      return;
+    }
+  }
+  const profile = companyProfileForTeam(req.user!.teamId);
+  const productKeywords = profile.productSummary.trim() || teamProductKeywordFallback(req.user!.teamId);
+  // 跨期去重：把近 7 天已报过的条目指纹交给 CLI。日报检索窗口是 14 天且每天自动跑，
+  // 不给历史清单它就会照着同一批公告天天重报一遍——同一份日报连续三天长得一样，
+  // 等于把「今日新增情报」退化成了「本月存量清单」。
+  const recentJobs = await repository.listTeamByKind(req.user!.teamId, "tender", 8);
+  const previouslyReported = collectReportedTenderLines(
+    recentJobs.map((job) => tenderReportFromJob(job)),
+    { excludeDate: today, days: 7 }
+  );
+  const prompt = buildTenderDailyCliPrompt({
+    reportDate: today,
+    companyName: profile.companyName,
+    productSummary: productKeywords,
+    regions: body.regions || "",
+    focusNote: body.note || "",
+    previouslyReported
+  });
+  const result = await runEngineCliJob(req.user!, {
+    kind: "tender",
+    entityType: "tender",
+    entityId: `daily-${today}`,
+    request: {
+      reportDate: today,
+      productSummary: productKeywords,
+      productSummarySource: profile.productSummary.trim() ? "company_profile" : "team_data_fallback",
+      regions: body.regions || "",
+      note: body.note || "",
+      previouslyReportedCount: previouslyReported.length
+    },
+    prompt,
+    // 与背调/开发信同口径：请求内只等一小段，到点 202 交前端轮询
+    waitMs: engineRequestWaitMs()
+  });
+  if (result.pending) {
+    res.status(202).json(result);
+    return;
+  }
+  const payload = result.payload as { failed?: boolean; message?: string };
+  if (payload.failed) {
+    res.status(400).json({ report: null, pending: false, failed: true, message: payload.message || "竞标日报查询失败" });
+    return;
+  }
+  res.json({ ...payload, pending: false });
+}));
+
+app.get("/api/ai-engine/settings", requireAuth, asyncRoute(async (req, res) => {
+  const settings = await readTeamAiEngineSettings(req.user!.teamId);
+  const runners = await listEngineRunners(req.user!);
+  res.json({
+    settings,
+    canManage: hasIamPermission(req.user!, "system.settings.manage"),
+    runners,
+    researchSources: RESEARCH_ENGINE_SOURCES,
+    emailSources: EMAIL_ENGINE_SOURCES,
+    adapters: AI_ENGINE_ADAPTERS,
+    // 模型清单由后端给：三处白名单（本文件 / CLI --help / Runner）以后升级 CLI 时只改后端这一份
+    cliModels: AI_ENGINE_CLI_MODELS,
+    cliEfforts: AI_ENGINE_CLI_EFFORTS,
+    cliReady: runners.some((runner) => runner.online && runner.capabilities.includes(settings.cliAdapter))
+  });
+}));
+
+app.put("/api/ai-engine/settings", requireAuth, asyncRoute(async (req, res) => {
+  if (!hasIamPermission(req.user!, "system.settings.manage")) {
+    res.status(403).json({ message: "当前账号没有系统设置权限" });
+    return;
+  }
+  const body = z.object({
+    researchSource: z.enum(["crm", "ai", "cli"]).optional(),
+    emailSource: z.enum(["template", "ai", "cli"]).optional(),
+    cliAdapter: z.enum(["workbuddy", "codex"]).optional(),
+    // 空串 = 跟随 CLI 默认；非白名单值由 sanitizeTeamAiEngineSettings 回落到旧值
+    cliModel: z.string().trim().max(60).optional(),
+    cliEffort: z.string().trim().max(20).optional(),
+    cliWorkspace: z.string().trim().max(1000).optional(),
+    cliTimeoutSeconds: z.number().int().min(60).max(86_400).optional(),
+    runnerId: z.string().trim().max(80).optional()
+  }).strict().parse(req.body);
+  const current = await readTeamAiEngineSettings(req.user!.teamId);
+  const saved = await writeTeamAiEngineSettings(sanitizeTeamAiEngineSettings(req.user!.teamId, {
+    ...current,
+    ...body,
+    updatedBy: req.user!.id,
+    updatedAt: new Date().toISOString()
+  }, current));
+  res.json({ settings: saved, canManage: true });
+}));
+
+/**
+ * 轮询引擎作业。
+ * 前端在收到 202（CLI 还在跑）后调这里；这里最多等 20 秒再回，减少空转请求。
+ * 作业一旦收尾，结果会留档在 resultJson 里，重复调用只会返回同一份结果。
+ */
+app.get("/api/ai-engine/jobs/:id", requireAuth, asyncRoute(async (req, res) => {
+  const repository = engineJobRepositoryOrNull();
+  if (!repository) {
+    res.status(503).json({ message: "AI 引擎作业需要 MySQL 持久化档位" });
+    return;
+  }
+  const job = await repository.get(req.params.id);
+  if (!job || !engineJobVisible(req.user!, job)) {
+    res.status(404).json({ message: "引擎作业不存在或无权访问" });
+    return;
+  }
+  if (job.status !== "running") {
+    res.json({
+      engineJob: publicEngineJob(job),
+      pending: false,
+      payload: job.resultJson ? JSON.parse(job.resultJson) as Record<string, unknown> : null
+    });
+    return;
+  }
+  if (!job.cliTaskId) {
+    await repository.finish(job.id, "failed", "", "引擎作业没有关联到本机任务");
+    res.status(409).json({ message: "引擎作业没有关联到本机任务", engineJob: publicEngineJob({ ...job, status: "failed" }) });
+    return;
+  }
+  const snapshot = await waitForEngineCliTask(req.user!, job.cliTaskId, 20_000);
+  if (!snapshot || !["succeeded", "failed", "cancelled"].includes(snapshot.status)) {
+    // 获客作业：轮询顺路做增量入池——CLI 边搜边打 @@FOUND@@ 标记，前端实时显示已找到几家
+    const acquiredCount = await syncAcquisitionFindingsFromEvents(job, [
+      ...(snapshot?.events || []).map((event) => event.message),
+      snapshot?.resultText || ""
+    ]);
+    res.json({ engineJob: publicEngineJob(job), pending: true, payload: null, acquiredCount });
+    return;
+  }
+  const payload = await finalizeEngineCliJob(req.user!, job, snapshot);
+  const refreshed = await repository.get(job.id);
+  res.json({ engineJob: publicEngineJob(refreshed || job), pending: false, payload });
 }));
 
 function blankCompanyProfile(teamId: string): CompanyProfile {
@@ -6805,12 +8596,9 @@ function developmentEmailEnglishContext(value: string) {
     : "your sourcing and product development needs";
 }
 
+/** 市场名口径统一在开发信技能里（批量/方案成稿器共用同一份），这里只做转发，别再各写一份。 */
 function developmentEmailMarket(value: string) {
-  const markets: Record<string, string> = {
-    中国: "China", 德国: "Germany", 瑞典: "Sweden", 美国: "the United States",
-    日本: "Japan", 阿联酋: "the UAE", 法国: "France", 英国: "the United Kingdom"
-  };
-  return markets[value] || (value && !/[\u3400-\u9fff]/u.test(value) ? value : "your market");
+  return developmentEmailMarketName(value);
 }
 
 type DevelopmentEmailScenario = "first_touch" | "daily_contact" | "holiday_greeting" | "new_product" | "custom_goal";
@@ -6931,6 +8719,397 @@ function developmentEmailResearchInput(record: BackgroundResearchRecord | null) 
   };
 }
 
+// ─────────────────────────────────────────────────────────────
+// 阶段感知写信：批次 / 自动方案的「按背调 + 按阶段自动写开发信」
+//
+// 分工（这是「CRM 是稳定框架」的落点）：
+//   · 创建批次/方案时只做**只读**查询（阶段 + 已有背调），保证 HTTP 请求不被拖慢；
+//   · 重活（补跑背调、交给 AI/CLI 重写正文）全部交给后台补写工序，逐条限流推进；
+//   · 补写没完成前，发送端会跳过这些目标，不会把半成品发出去（并有超时兜底）。
+// ─────────────────────────────────────────────────────────────
+
+/** 批次的收件对象叫 candidate，背调留档的口径叫 prospect；混了会静默查不到背调 */
+function outreachResearchEntityType(entityType: "candidate" | "lead" | "customer"): "lead" | "customer" | "prospect" {
+  return entityType === "candidate" ? "prospect" : entityType;
+}
+
+/** 我方写信身份（公司资料 + 业务员签名）：单封工坊与批量补写共用同一份口径 */
+function outreachWritingSenderFor(user: SessionUser): OutreachWritingSender {
+  const profile = companyProfileForTeam(user.teamId);
+  const name = user.emailSenderName || user.name || "";
+  return {
+    name,
+    company: profile.companyName,
+    products: profile.productSummary,
+    website: profile.website,
+    signature: user.emailSignature?.trim() || `Best regards,\n${name || "Sales team"}`
+  };
+}
+
+function outreachLetterEnrichmentEnabled() {
+  return process.env.OUTREACH_LETTER_ENRICH !== "false";
+}
+
+/**
+ * 后台工序在引擎上最多等多久。
+ * 它不在 HTTP 请求里，所以等久一点（默认 2 分钟）比「没等到就降级成模板」更划算。
+ */
+function outreachLetterEngineWaitMs() {
+  const configured = Number(process.env.OUTREACH_LETTER_ENGINE_WAIT_MS || 120_000);
+  if (!Number.isFinite(configured)) return 120_000;
+  return Math.max(10_000, Math.min(600_000, Math.floor(configured)));
+}
+
+/** 每个待补写目标最多试几次；超过就保留现有正文并标记 failed，不再反复重试 */
+const OUTREACH_LETTER_MAX_ATTEMPTS = 3;
+
+/**
+ * 用指定来源写「一封」开发信。
+ * 复用单封工坊同一条链路（同一份提示词、同一份蓝图、同一套引擎作业留档），
+ * 所以批量写出来的信与手工写的信在口径上完全一致。
+ * 返回 null 表示这个来源此刻不可用；调用方保留阶段模板版正文继续（不阻断发送）。
+ */
+async function writeOutreachLetter(options: {
+  owner: SessionUser;
+  source: "ai" | "cli";
+  stageKey: OutreachStageKey;
+  sender: OutreachWritingSender;
+  recipient: OutreachWritingRecipient;
+  research: OutreachWritingResearch;
+  entityType: "lead" | "customer" | "prospect";
+  entityId: string;
+}): Promise<{ subject: string; body: string; engine: string } | null> {
+  const brief = assembleDevelopmentEmailBrief({
+    stageKey: options.stageKey,
+    sender: options.sender,
+    recipient: {
+      company: options.recipient.company,
+      contactName: options.recipient.contactName,
+      email: options.recipient.email,
+      country: options.recipient.country,
+      market: options.recipient.market || "",
+      context: options.recipient.context
+    },
+    research: options.research || null
+  });
+  const signatureText = developmentEmailSignature(brief);
+  const fallback = buildDevelopmentEmailFallback(brief);
+
+  if (options.source === "cli") {
+    const result = await runEngineCliJob(options.owner, {
+      kind: "email",
+      entityType: options.entityType,
+      entityId: options.entityId,
+      request: {
+        response: {
+          draft: {
+            entityType: options.entityType,
+            entityId: options.entityId,
+            recipientCompany: options.recipient.company,
+            recipientName: options.recipient.contactName,
+            to: options.recipient.email,
+            subject: fallback.subject,
+            body: fallback.body,
+            from: options.owner.outboundEmail || "",
+            senderName: options.sender.name,
+            engine: fallback.basis
+          }
+        },
+        brief,
+        signatureText
+      },
+      prompt: buildEmailCliPrompt(buildDevelopmentEmailPrompt(brief)),
+      waitMs: outreachLetterEngineWaitMs()
+    });
+    if (result.pending) return null;
+    const draft = (result.payload as { draft?: { subject?: string; body?: string; engine?: string } }).draft;
+    if (!draft?.body) return null;
+    return {
+      subject: (draft.subject || fallback.subject).slice(0, 160),
+      body: draft.body.slice(0, 6000),
+      engine: draft.engine || "本机 CLI"
+    };
+  }
+
+  const config = getAiConfig(options.owner, "emailDraft");
+  if (!config?.enabled || !config.apiKey) return null;
+  try {
+    const parsed = extractJsonObject(await callAiModel(config, buildDevelopmentEmailPrompt(brief), 12000)) as Record<string, unknown>;
+    const body = typeof parsed.body === "string" ? parsed.body.trim() : "";
+    if (!body) return null;
+    return {
+      subject: (typeof parsed.subject === "string" && parsed.subject.trim() ? parsed.subject.trim() : fallback.subject).slice(0, 160),
+      // 与单封工坊同一套落款兜底：模型整段省略签名是实测发生过的
+      body: ensureDevelopmentEmailSignature(body.slice(0, 5600), signatureText).slice(0, 6000),
+      engine: config.name || config.model || "AI API"
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 缺背调时补跑一次并留档。
+ * 走同一个背调管线（含团队「默认背调来源」），所以补跑结果与用户手动点一次完全一致。
+ * 返回 null = 这次没拿到（引擎还在跑 / 失败），由调用方下次再试。
+ */
+async function ensureOutreachResearch(owner: SessionUser, target: OutreachWritingTarget): Promise<BackgroundResearchRecord | null> {
+  const entityType = outreachResearchEntityType(target.entityType);
+  const existing = await latestBackgroundResearch(owner, entityType, target.entityId);
+  if (existing) return existing;
+  const outcome = await buildBackgroundResearch(owner, { entityType, entityId: target.entityId });
+  if (!outcome) return null;
+  if (outcome.kind === "research") {
+    await persistBackgroundResearchRecord(owner, outcome.research);
+    return latestBackgroundResearch(owner, entityType, target.entityId);
+  }
+  const result = await runEngineCliJob(owner, {
+    kind: "research",
+    entityType,
+    entityId: target.entityId,
+    request: { skeleton: outcome.skeleton },
+    prompt: outcome.prompt,
+    waitMs: outreachLetterEngineWaitMs()
+  });
+  if (result.pending) return null;
+  // finalizeEngineCliJob 的 research 分支内部已经落档
+  return latestBackgroundResearch(owner, entityType, target.entityId);
+}
+
+/**
+ * 写信运行时：批次 / 自动方案模块通过它拿到「阶段 / 背调 / 我方身份」。
+ * 这里刻意只做只读查询——创建批次是个 HTTP 请求，一个 50 人的批次在这里同步跑
+ * 50 次背调会把请求挂死。重活交给下面的后台补写工序。
+ */
+function createOutreachWritingRuntime(actor: { id: string; teamId: string }): OutreachWritingRuntime {
+  const store = getStore();
+  const owner = store.users.find((item) => item.id === actor.id);
+  const session = owner ? publicUser(owner) : null;
+  const profile = companyProfileForTeam(actor.teamId);
+  const sender: OutreachWritingSender = session
+    ? outreachWritingSenderFor(session)
+    : { name: "", company: profile.companyName, products: profile.productSummary, website: profile.website, signature: "" };
+  /** 团队默认开发信来源只读一次，避免一条目标一次设置查询 */
+  let emailSource: string | null = null;
+
+  return {
+    sender: () => sender,
+    async resolve(_actor, target) {
+      const journeyType: OutreachJourneyEntityType = target.entityType === "candidate" ? "prospect_candidate" : target.entityType;
+      const journey = session
+        ? await buildOutreachJourney(store, journeyType, target.entityId).catch(() => undefined)
+        : undefined;
+      const record = session
+        ? await latestBackgroundResearch(session, outreachResearchEntityType(target.entityType), target.entityId)
+        : null;
+      if (emailSource === null) {
+        emailSource = await readTeamAiEngineSettings(actor.teamId).then((settings) => settings.emailSource).catch(() => "template");
+      }
+      return {
+        stageKey: journey?.stage.key || "not_contacted",
+        stageSource: "derived" as const,
+        research: developmentEmailResearchInput(record),
+        researchId: record?.id || "",
+        researchScore: record?.score || 0,
+        needsResearch: !record,
+        engineWrites: emailSource === "ai" || emailSource === "cli",
+        enrichmentEnabled: outreachLetterEnrichmentEnabled(),
+        maxSteps: OUTREACH_SEQUENCE_DEFAULT_STEPS
+      };
+    }
+  };
+}
+
+/** 后台补写工序处理的对象：草稿批次或运行中的自动方案（结构上只要这几项） */
+interface OutreachLetterHost {
+  ownerId: string;
+  teamId: string;
+  policy: ProspectOutreachBatchPolicy;
+  items: ProspectOutreachBatchItem[];
+  label: string;
+}
+
+let outreachLetterEnrichBusy = false;
+
+/**
+ * 后台补写工序。
+ *
+ * 逐条把「阶段感知但还没引用背调 / 还没用引擎写」的目标补成最终形态：
+ *   ① 缺背调 → 按团队默认背调来源补跑一次并留档（用户 2026-10-06 选的口径）
+ *   ② 用拿到的背调重写整条序列（阶段口径不变，只把依据补上）
+ *   ③ 团队默认开发信来源是 AI / CLI 时，逐封交给引擎写
+ * 任何一步失败都只降级、不阻断：正文保留阶段模板版，发送端照常可以发。
+ */
+async function enrichOutreachDraftLetters(reason: string) {
+  if (!outreachLetterEnrichmentEnabled() || outreachLetterEnrichBusy) return;
+  outreachLetterEnrichBusy = true;
+  try {
+    const store = getStore();
+    const maxPerPass = Math.max(1, Math.min(20, Number(process.env.OUTREACH_LETTER_ENRICH_MAX || 2) || 2));
+    const hosts: OutreachLetterHost[] = [
+      // 只有草稿批次能改正文：放行后就冻结了（frozenPayload 已是最终内容）
+      ...store.prospectOutreachBatches
+        .filter((batch) => batch.status === "draft")
+        .map((batch) => ({ ownerId: batch.ownerId, teamId: batch.teamId, policy: batch.policy, items: batch.items, label: "发信批次" })),
+      // 自动方案：运行中/暂停中还有未投递的步骤，仍可以补写
+      ...store.prospectOutreachPlans
+        .filter((plan) => plan.status === "running" || plan.status === "paused")
+        .map((plan) => ({ ownerId: plan.ownerId, teamId: plan.teamId, policy: plan.policy, items: plan.items, label: "自动方案" }))
+    ];
+
+    let processed = 0;
+    for (const host of hosts) {
+      if (processed >= maxPerPass) break;
+      const pending = host.items.filter((item) => item.status === "ready" && item.letterStatus === "pending");
+      if (!pending.length) continue;
+
+      const owner = store.users.find((item) => item.id === host.ownerId);
+      if (!owner) {
+        pending.forEach((item) => {
+          item.letterStatus = "failed";
+          item.letterNote = "归属账号已不存在，无法补写正文，保留现有阶段模板版";
+        });
+        await store.persist();
+        continue;
+      }
+      const session = publicUser(owner);
+      const emailSource = await readTeamAiEngineSettings(host.teamId)
+        .then((settings) => (settings.emailSource === "ai" || settings.emailSource === "cli" ? settings.emailSource : ""))
+        .catch(() => "");
+
+      for (const item of pending) {
+        if (processed >= maxPerPass) break;
+        const target = writingTargetForItem(store, item);
+        if (!target) {
+          item.letterStatus = "failed";
+          item.letterNote = "目标已不存在或已被删除，保留现有阶段模板版";
+          continue;
+        }
+        const attempts = (item.letterAttempts || 0) + 1;
+        item.letterAttempts = attempts;
+
+        // ① 背调：缺就补跑一次（同一个背调管线），这次没拿到就下次再试
+        let record: BackgroundResearchRecord | null = item.researchId
+          ? await latestBackgroundResearch(session, outreachResearchEntityType(target.entityType), target.entityId)
+          : null;
+        if (!record && host.policy.autoResearch !== false) {
+          record = await ensureOutreachResearch(session, target);
+          if (!record) {
+            if (attempts >= OUTREACH_LETTER_MAX_ATTEMPTS) {
+              item.letterStatus = "failed";
+              item.letterNote = `补跑背调失败（已试 ${attempts} 次），先用阶段蓝图成稿继续发送。`;
+            } else {
+              item.letterNote = `正在补跑背调（第 ${attempts} 次）…`;
+            }
+            processed += 1;
+            continue;
+          }
+        }
+
+        const research = developmentEmailResearchInput(record);
+        const sender = outreachWritingSenderFor(session);
+        const recipient: OutreachWritingRecipient = {
+          company: target.company,
+          contactName: target.contactName,
+          email: item.recipient || target.email,
+          country: target.country,
+          context: target.context
+        };
+
+        // ② 用拿到的背调重写整条序列
+        const sequence = buildStageAwareSequence({
+          stageKey: item.stageKey,
+          maxSteps: item.steps.length || OUTREACH_SEQUENCE_DEFAULT_STEPS,
+          stepIntervalHours: host.policy.stepIntervalHours || 72,
+          sender,
+          recipient,
+          research,
+          coldOnly: true
+        });
+        if (sequence.blockedReason) {
+          item.steps = [];
+          item.letterStatus = "failed";
+          item.letterNote = sequence.blockedReason;
+          processed += 1;
+          continue;
+        }
+        const rebuilt = toBatchSteps({ steps: sequence.steps, meta: {}, blockedReason: "" }, Date.now(), true);
+        // 已投递/在投递的步骤不能被覆盖（自动方案会在入场后立刻发第 1 封）
+        item.steps = rebuilt.map((step, index) => {
+          const previous = item.steps[index];
+          return previous && previous.status !== "pending" ? previous : step;
+        });
+
+        // ③ 引擎重写：团队默认开发信来源是 AI / CLI 时逐封交给引擎
+        let engineWrote = 0;
+        let engineFailed = 0;
+        if (emailSource === "ai" || emailSource === "cli") {
+          for (let index = 0; index < item.steps.length; index += 1) {
+            const step = item.steps[index]!;
+            if (step.status !== "pending") continue;
+            const written = await writeOutreachLetter({
+              owner: session,
+              source: emailSource,
+              stageKey: sequence.steps[index]?.stageKey || item.stageKey || "not_contacted",
+              sender,
+              recipient,
+              research,
+              entityType: outreachResearchEntityType(target.entityType),
+              entityId: target.entityId
+            });
+            if (written) {
+              step.subject = written.subject;
+              step.body = written.body;
+              engineWrote += 1;
+            } else {
+              engineFailed += 1;
+            }
+          }
+        }
+
+        item.researchId = record?.id || item.researchId || "";
+        item.researchScore = record?.score ?? item.researchScore ?? 0;
+        item.letterBasis = sequence.steps[0]?.basis || item.letterBasis || "";
+        item.letterStatus = engineFailed && !engineWrote ? "failed" : "ready";
+        item.letterPendingAt = "";
+        item.letterEngine = engineWrote
+          ? (emailSource === "cli" ? "本机 CLI" : "AI API")
+          : "固定模板（阶段蓝图 + 背调）";
+        item.letterNote = !record
+          ? "本公司暂无背调留档，按阶段蓝图成稿。"
+          : engineFailed
+            ? `其中 ${engineFailed} 封引擎没写成，已保留阶段模板版。`
+            : "";
+        processed += 1;
+      }
+      await store.persist();
+      console.log(`GoodJob CRM enriched outreach letters for ${host.label} (${reason})`);
+    }
+    if (processed) console.log(`GoodJob CRM enriched ${processed} outreach letter target(s) (${reason})`);
+  } catch (error) {
+    console.error("outreach letter enrichment failed", error);
+  } finally {
+    outreachLetterEnrichBusy = false;
+  }
+}
+
+let outreachLetterEnrichTimer: NodeJS.Timeout | null = null;
+
+function startOutreachLetterEnrichmentScheduler() {
+  if (!outreachLetterEnrichmentEnabled()) {
+    console.log("GoodJob CRM outreach letter enrichment disabled (OUTREACH_LETTER_ENRICH=false)");
+    return;
+  }
+  const pollMs = Math.max(10_000, Number(process.env.OUTREACH_LETTER_ENRICH_POLL_MS || 30_000) || 30_000);
+  outreachLetterEnrichTimer = setInterval(() => void enrichOutreachDraftLetters("scheduled"), pollMs);
+  void enrichOutreachDraftLetters("startup");
+}
+
+function stopOutreachLetterEnrichmentScheduler() {
+  if (outreachLetterEnrichTimer) clearInterval(outreachLetterEnrichTimer);
+  outreachLetterEnrichTimer = null;
+}
+
 app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res) => {
   const body = z.object({
     entityType: z.enum(["lead", "customer", "prospect"]),
@@ -6947,7 +9126,11 @@ app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res
     /** 是否引用这家客户的背调结论（默认引用） */
     useResearch: z.boolean().default(true),
     /** 是否允许调用 AI（默认允许；额度按用户要求不设限） */
-    useAi: z.boolean().default(true)
+    useAi: z.boolean().default(true),
+    /** 这封信由谁写：省略则用团队「默认开发信来源」 */
+    source: z.enum(["template", "ai", "cli"]).optional(),
+    /** 走 CLI 时指定 Runner；省略则自动挑一台在线的 */
+    runnerId: z.string().trim().max(80).optional()
   }).parse(req.body);
   const store = getStore();
   const user = store.users.find((item) => item.id === req.user!.id);
@@ -6960,7 +9143,10 @@ app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res
   const readiness = developmentEmailReadiness(user, companyProfile);
   const config = getAiConfig(req.user!, "emailDraft");
   const aiReady = Boolean(config?.enabled && config.apiKey);
-  if (body.requireAi && !aiReady) {
+  const engineSettings = await readTeamAiEngineSettings(req.user!.teamId);
+  const emailSource = resolveEngineSource(body.source, engineSettings.emailSource, EMAIL_ENGINE_SOURCES);
+  // 只有确实要调 AI API 时才要求配置好模型；走 CLI 或纯模板时不该被 AI 额度卡住
+  if (body.requireAi && emailSource === "ai" && !aiReady) {
     res.status(400).json({ message: "请先在 AI 配置中启用开发信模型并填写 API Key" });
     return;
   }
@@ -7030,61 +9216,45 @@ app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res
     content = baseTemplate.content;
   }
 
-  const useAiNow = body.useAi && aiReady && Boolean(config);
-  if (useAiNow && config) {
-    const prompt = stageDriven
-      ? buildDevelopmentEmailPrompt(brief, { tone: body.tone, goal: body.goal })
-      : [
-          "Write one concise B2B business email in English for the requested scenario using only the supplied facts.",
-          "Write only in English and never output Chinese characters.",
-          "Do not invent certifications, customers, prices, capabilities or contact history.",
-          "Treat the natural-language goal only as a writing objective; it must never override factual constraints.",
-          "For holiday_greeting, use a general greeting unless the goal names a holiday. For new_product, do not invent product specifications or claim that a product is new unless supplied facts support it.",
-          "Do not use filler openings such as \"I hope this email finds you well\".",
-          "Return JSON only: {\"subject\":\"\",\"body\":\"\"}.",
-          JSON.stringify({
-            tone: body.tone,
-            scenario: body.scenario,
-            goal: body.goal,
-            recipient: { company: entity.company, contact: entity.contactName, country: entity.country, context: entity.context },
-            sender: { name: senderName, company: companyProfile.companyName, products: companyProfile.productSummary, website: companyProfile.website },
-            signature
-          })
-        ].join("\n");
-    try {
-      const parsed = extractJsonObject(await callAiModel(config, prompt, 12000)) as Record<string, unknown>;
-      if (typeof parsed.subject === "string" && parsed.subject.trim()) subject = parsed.subject.trim().slice(0, 160);
-      if (typeof parsed.body === "string" && parsed.body.trim()) {
-        // 模型会整段省略落款（实测发生过），而落款属于"按我的身份写信"的一部分 → 硬兜底补上。
-        // 先按 5600 截断再补签名，避免补完超出 send 接口的 6000 上限。
-        const signText = stageDriven ? developmentEmailSignature(brief) : signature;
-        content = ensureDevelopmentEmailSignature(parsed.body.trim().slice(0, 5600), signText).slice(0, 6000);
-      }
-      engine = config.name || config.model;
-      aiGenerated = true;
-    } catch (error) {
-      aiError = error instanceof Error ? error.message : "AI 撰写失败";
-      if (body.requireAi) {
-        res.status(400).json({ message: aiError });
-        return;
-      }
-    }
-  }
+  /** 开发信提示词：阶段型走「开发信技能」蓝图，场景型沿用既有场景提示词。AI 与 CLI 共用同一份。 */
+  const developmentEmailWritingPrompt = () => stageDriven
+    ? buildDevelopmentEmailPrompt(brief, { tone: body.tone, goal: body.goal })
+    : [
+        "Write one concise B2B business email in English for the requested scenario using only the supplied facts.",
+        "Write only in English and never output Chinese characters.",
+        "Do not invent certifications, customers, prices, capabilities or contact history.",
+        "Treat the natural-language goal only as a writing objective; it must never override factual constraints.",
+        "For holiday_greeting, use a general greeting unless the goal names a holiday. For new_product, do not invent product specifications or claim that a product is new unless supplied facts support it.",
+        "Do not use filler openings such as \"I hope this email finds you well\".",
+        "Return JSON only: {\"subject\":\"\",\"body\":\"\"}.",
+        JSON.stringify({
+          tone: body.tone,
+          scenario: body.scenario,
+          goal: body.goal,
+          recipient: { company: entity.company, contact: entity.contactName, country: entity.country, context: entity.context },
+          sender: { name: senderName, company: companyProfile.companyName, products: companyProfile.productSummary, website: companyProfile.website },
+          signature
+        })
+      ].join("\n");
 
-  const quality = checkDevelopmentEmailDraft({ subject, body: content }, brief);
-
-  res.json({
+  /**
+   * 统一构造响应体：无论谁写的（规则模板 / AI API / 本机 CLI），
+   * 出去的结构完全一致——前端与留档都不需要知道引擎差异。
+   */
+  const developmentEmailResponse = (finalSubject: string, finalBody: string, finalEngine: string, state: {
+    aiGenerated: boolean; aiConfigName: string; aiError: string;
+  }) => ({
     draft: {
       entityType: body.entityType,
       entityId: body.entityId,
       recipientCompany: entity.company,
       recipientName: entity.contactName,
       to: entity.email,
-      subject,
-      body: content,
+      subject: finalSubject,
+      body: finalBody,
       from: user.outboundEmail || "",
       senderName,
-      engine
+      engine: finalEngine
     },
     stage: stageDriven ? {
       key: stagePlan.key,
@@ -7109,16 +9279,73 @@ app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res
       researchEngine: researchRecord?.engine || "",
       researchVerdict: researchRecord?.verdict || ""
     } : null,
-    quality,
+    quality: checkDevelopmentEmailDraft({ subject: finalSubject, body: finalBody }, brief),
     readiness: {
       ...readiness,
       aiReady,
-      aiGenerated,
-      aiConfigName: config?.name || config?.model || "",
-      aiError
+      aiGenerated: state.aiGenerated,
+      aiConfigName: state.aiConfigName,
+      aiError: state.aiError
     },
     companyProfile
   });
+
+  if (emailSource === "cli") {
+    // 交给本机 CLI 写：CRM 只冻结「阶段 + 身份 + 收件人 + 背调证据」这份蓝图
+    const result = await runEngineCliJob(req.user!, {
+      kind: "email",
+      entityType: body.entityType,
+      entityId: body.entityId,
+      request: {
+        response: developmentEmailResponse(subject, content, engine, { aiGenerated: false, aiConfigName: "", aiError: "" }),
+        brief,
+        signatureText: stageDriven ? developmentEmailSignature(brief) : signature
+      },
+      prompt: buildEmailCliPrompt(developmentEmailWritingPrompt()),
+      runnerId: body.runnerId,
+      // 与获客/背调口径一致：请求内只等 10 秒就 202，写信页面靠轮询取回草稿
+      waitMs: engineRequestWaitMs()
+    });
+    if (result.pending) {
+      res.status(202).json({ draft: null, ...result });
+      return;
+    }
+    if (result.payload.failed) {
+      res.status(400).json(result.payload);
+      return;
+    }
+    res.json(result.payload);
+    return;
+  }
+
+  const useAiNow = emailSource === "ai" && body.useAi && aiReady && Boolean(config);
+  if (useAiNow && config) {
+    const prompt = developmentEmailWritingPrompt();
+    try {
+      const parsed = extractJsonObject(await callAiModel(config, prompt, 12000)) as Record<string, unknown>;
+      if (typeof parsed.subject === "string" && parsed.subject.trim()) subject = parsed.subject.trim().slice(0, 160);
+      if (typeof parsed.body === "string" && parsed.body.trim()) {
+        // 模型会整段省略落款（实测发生过），而落款属于"按我的身份写信"的一部分 → 硬兜底补上。
+        // 先按 5600 截断再补签名，避免补完超出 send 接口的 6000 上限。
+        const signText = stageDriven ? developmentEmailSignature(brief) : signature;
+        content = ensureDevelopmentEmailSignature(parsed.body.trim().slice(0, 5600), signText).slice(0, 6000);
+      }
+      engine = config.name || config.model;
+      aiGenerated = true;
+    } catch (error) {
+      aiError = error instanceof Error ? error.message : "AI 撰写失败";
+      if (body.requireAi) {
+        res.status(400).json({ message: aiError });
+        return;
+      }
+    }
+  }
+
+  res.json(developmentEmailResponse(subject, content, engine, {
+    aiGenerated,
+    aiConfigName: config?.name || config?.model || "",
+    aiError
+  }));
 }));
 
 app.post("/api/development-email/send", requireAuth, asyncRoute(async (req, res) => {
@@ -12702,8 +14929,8 @@ function defaultDocumentProfile(teamId: string): DocumentDefaultProfile {
     sellerTaxNo: "",
     bankInfo: "",
     currency: "USD",
-    incoterm: "FOB",
-    paymentTerm: "",
+    incoterm: "DAP",
+    paymentTerm: "T/T 100% in advance",
     shippingMethod: "Sea freight",
     portLoading: "",
     validityDays: 0,
@@ -12790,8 +15017,8 @@ function applyDocumentCreationDefaults(
     sellerWebsite: choose("sellerWebsite", body.sellerWebsite, "", sellerProfile?.website || profile.sellerWebsite) as string,
     sellerTaxNo: choose("sellerTaxNo", body.sellerTaxNo, "", sellerProfile?.taxNo || profile.sellerTaxNo) as string,
     currency: choose("currency", body.currency, customerDefaults.currency, profile.currency, "USD") as string,
-    incoterm: choose("incoterm", body.incoterm, customerDefaults.incoterm, profile.incoterm, "FOB") as string,
-    paymentTerm: choose("paymentTerm", body.paymentTerm, customerDefaults.paymentTerm, profile.paymentTerm) as string,
+    incoterm: choose("incoterm", body.incoterm, customerDefaults.incoterm, profile.incoterm, "DAP") as string,
+    paymentTerm: choose("paymentTerm", body.paymentTerm, customerDefaults.paymentTerm, profile.paymentTerm, "T/T 100% in advance") as string,
     shippingMethod: choose("shippingMethod", body.shippingMethod, "", profile.shippingMethod, "Sea freight") as string,
     portLoading: choose("portLoading", body.portLoading, "", profile.portLoading) as string,
     portDischarge: choose("portDischarge", body.portDischarge, customerDefaults.portDischarge, "") as string,
@@ -13527,8 +15754,8 @@ const documentDefaultProfileSchema = z.object({
   sellerTaxNo: z.string().trim().max(160).default(""),
   bankInfo: z.string().trim().max(8_000).default(""),
   currency: z.string().trim().max(12).default("USD"),
-  incoterm: z.string().trim().max(80).default("FOB"),
-  paymentTerm: z.string().trim().max(255).default(""),
+  incoterm: z.string().trim().max(80).default("DAP"),
+  paymentTerm: z.string().trim().max(255).default("T/T 100% in advance"),
   shippingMethod: z.string().trim().max(120).default("Sea freight"),
   portLoading: z.string().trim().max(120).default(""),
   validityDays: z.coerce.number().int().min(0).max(365).default(0),
@@ -14828,6 +17055,17 @@ app.get("/api/tools/website-opportunities", requireAuth, asyncRoute(async (req, 
   if (expiredCandidates.length) {
     await persistCandidateChanges(store, expiredCandidates, false);
   }
+  // 正在执行中的 CLI 背调实体集合：所有列表（候选/搜客清单/任务详情）据此亮「背调中」动画
+  const engineJobsRepo = engineJobRepositoryOrNull();
+  let runningResearchIds: string[] = [];
+  if (engineJobsRepo) {
+    try {
+      runningResearchIds = await engineJobsRepo.listRunningEntityIds(req.user!.teamId, "research");
+    } catch {
+      runningResearchIds = [];
+    }
+  }
+  const runningResearchSet = new Set(runningResearchIds);
   const scoped = store.websiteOpportunities
     .filter((item) =>
       canSeeOwner(req.user!, item.ownerId, item.teamId)
@@ -14837,6 +17075,7 @@ app.get("/api/tools/website-opportunities", requireAuth, asyncRoute(async (req, 
       const verified = ensureProspectVerificationReport(scored);
       return {
       ...verified,
+      researchRunning: runningResearchSet.has(item.id),
       verificationReport: verified.verificationReport,
       searchReport: prospectSearchReport(verified),
       // 发信资格灯：可发信 / 缺邮箱 / 已抑制（附原因），供清单行直接渲染，不抛错。
@@ -14922,6 +17161,43 @@ app.get("/api/prospect-list/website-probe/capability", requireAuth, (_req, res) 
   res.setHeader("Cache-Control", "no-store");
   res.json(websiteProbeCapability());
 });
+
+/**
+ * 候选最近一次背调记录：详情面板 / 校验抽屉打开时回填「AI 背调」区块。
+ * 背调本身只写 background_research_records 留档；没有这个读口，结果只能在
+ * 当次执行的页面里看到，重开详情就"消失"（2026-10-07 用户反馈）。
+ */
+app.get("/api/prospect-list/:id/background-research", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const candidate = store.websiteOpportunities.find((item) =>
+    item.id === req.params.id && canSeeOwner(req.user!, item.ownerId, item.teamId)
+  );
+  if (!candidate) {
+    res.status(404).json({ message: "搜客候选不存在或无权访问" });
+    return;
+  }
+  const repository = getBackgroundResearchRepository();
+  const records = repository
+    ? await repository.list(req.user!.teamId, "prospect", candidate.id, 1).catch(() => [])
+    : [];
+  const record = records[0] || null;
+  let research: unknown = null;
+  if (record) {
+    try {
+      const payload = JSON.parse(record.payloadJson || "null") as Record<string, unknown> | null;
+      // 留档 payload 就是 research 内层对象（persistBackgroundResearchRecord 直存 research）
+      research = (payload?.research as unknown) ?? payload;
+    } catch {
+      research = null;
+    }
+  }
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    research,
+    completedAt: record?.createdAt || null,
+    engine: record?.engine || ""
+  });
+}));
 
 app.get("/api/prospect-list/:id/contact-enrichment", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
@@ -16857,8 +19133,10 @@ const agentExecutionRuntime: AgentExecutionRuntime = {
     const entityType = entityTypeInput === "lead" ? "lead" : entityTypeInput === "prospect" ? "prospect" : "customer";
     const entityId = agentInputText(input, "entityId");
     if (!entityId) throw new Error("AI 背调需要明确客户、线索或候选编号");
-    const payload = await buildBackgroundResearch(session, { entityType, entityId });
+    // Agent 通道必须同步返回：固定走 AI/CRM 通道，不在这里派本机 CLI 任务
+    const payload = await buildBackgroundResearch(session, { entityType, entityId, source: "ai" });
     if (!payload) throw new Error(entityType === "lead" ? "线索不存在或当前账号无权访问" : entityType === "prospect" ? "搜客候选不存在或当前账号无权访问" : "客户不存在或当前账号无权访问");
+    if (payload.kind === "cli") throw new Error("背调来源被设置为本机 CLI，Agent 通道无法同步执行；请在背调页选择来源");
     const research = payload.research as unknown as Record<string, unknown>;
     return {
       research,
@@ -19402,7 +21680,7 @@ function normalizeProviderCountry(country: string) {
   return providerCountryAliases[normalized] || normalized;
 }
 
-function normalizeCrmCompanyName(value: string) {
+export function normalizeCrmCompanyName(value: string) {
   return value
     .normalize("NFKC")
     .toLocaleLowerCase("en-US")
@@ -19413,7 +21691,8 @@ function normalizeCrmCompanyName(value: string) {
     .filter((token) => ![
       "co", "company", "corp", "corporation", "inc", "incorporated",
       "ltd", "limited", "llc", "gmbh", "ag", "bv", "srl", "sa",
-      "spa", "pte", "plc", "kg", "oy", "ab", "sas", "sarl"
+      "spa", "pte", "plc", "kg", "oy", "ab", "sas", "sarl",
+      "tnhh", "sdn", "bhd", "jsc", "kk", "kabushiki", "kaisha", "pvt", "pty"
     ].includes(token))
     .join(" ")
     .trim();
@@ -19553,21 +21832,39 @@ function filterExistingCrmOpportunities(
   return { opportunities: filtered, skipped };
 }
 
-function isSameProviderOpportunity(existing: WebsiteOpportunity, incoming: WebsiteOpportunity) {
+export function isSameProviderOpportunity(existing: WebsiteOpportunity, incoming: WebsiteOpportunity) {
   if (existing.ownerId !== incoming.ownerId || existing.teamId !== incoming.teamId) return false;
+  const existingRecordKeys = providerEvidenceRecordKeys(existing.sourceEvidence);
   const incomingRecordKeys = providerEvidenceRecordKeys(incoming.sourceEvidence);
   if (incomingRecordKeys.size > 0
-    && [...providerEvidenceRecordKeys(existing.sourceEvidence)].some((key) => incomingRecordKeys.has(key))) {
+    && [...existingRecordKeys].some((key) => incomingRecordKeys.has(key))) {
     return true;
   }
   const existingDomain = websiteDomainKey(existing.website);
   const incomingDomain = websiteDomainKey(incoming.website);
   const existingCountry = normalizeProviderCountry(existing.country);
   const incomingCountry = normalizeProviderCountry(incoming.country);
-  return Boolean(
+  if (Boolean(
     existingDomain
     && incomingDomain
     && existingDomain === incomingDomain
+    && existingCountry
+    && incomingCountry
+    && existingCountry === incomingCountry
+  )) {
+    return true;
+  }
+  // 第三优先级：归一化公司名 + 国家一致（同一实体换了域名/多渠道报告的场景，
+  // 如同一家泰国公司先后报出 kansaipaint.co.th 与 kansai.co.th）。
+  // 仅当**双方都没有独立来源记录键**时生效：免费法人源（GLEIF/Wikidata 等）同名
+  // 但携带各自 providerRecordId 的记录是独立证据，必须保留（见 self-test 契约）。
+  // 名字键过短（<4 字符）不参与，避免误并「3M」之类的短名牌。
+  if (existingRecordKeys.size > 0 || incomingRecordKeys.size > 0) return false;
+  const existingNameKey = normalizeCrmCompanyName(existing.company || "");
+  const incomingNameKey = normalizeCrmCompanyName(incoming.company || "");
+  return Boolean(
+    existingNameKey.length >= 4
+    && existingNameKey === incomingNameKey
     && existingCountry
     && incomingCountry
     && existingCountry === incomingCountry
@@ -23927,6 +26224,12 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     res.status(error.status).json({ message: error.message });
     return;
   }
+  // 本机 CLI 不可用是「可恢复的执行环境问题」，不是服务器故障：
+  // 必须把原因和 code 原样回给前端，否则用户只看到「服务器处理请求失败」，不知道该去起 Runner 还是换来源。
+  if (error instanceof EngineUnavailableError) {
+    res.status(error.status).json({ message: error.message, code: error.code, engineUnavailable: true });
+    return;
+  }
   if (error instanceof z.ZodError) {
     res.status(400).json({ message: "参数格式错误", issues: error.issues });
     return;
@@ -24303,8 +26606,26 @@ async function startServer() {
   };
   const prospectOutreachBatchRunner = new ProspectOutreachBatchRunner(store, prospectOutreachBatchRuntime, Number(process.env.PROSPECT_OUTREACH_BATCH_POLL_MS || 10_000));
   prospectOutreachBatchRunner.start();
-  // 自动发送方案后台线程：复用同一套发送 runtime，按方案配置持续取人投递
-  const prospectOutreachPlanRunner = new ProspectOutreachPlanRunner(store, prospectOutreachBatchRuntime, Number(process.env.PROSPECT_OUTREACH_PLAN_POLL_MS || 15_000));
+  // 自动发送方案后台线程：复用同一套发送 runtime，按方案配置持续取人投递。
+  // 第四个参数是「阶段感知成稿」运行时——方案入场时按目标自己的阶段 + 背调写信。
+  // 方案可以属于任何业务员，所以运行时按 owner 缓存（同一 owner 复用同一份身份与来源缓存）。
+  const planWritingRuntimes = new Map<string, OutreachWritingRuntime>();
+  const writingRuntimeForOwner = (actor: { id: string; teamId: string }) => {
+    const cached = planWritingRuntimes.get(actor.id);
+    if (cached) return cached;
+    const created = createOutreachWritingRuntime(actor);
+    planWritingRuntimes.set(actor.id, created);
+    return created;
+  };
+  const prospectOutreachPlanRunner = new ProspectOutreachPlanRunner(
+    store,
+    prospectOutreachBatchRuntime,
+    Number(process.env.PROSPECT_OUTREACH_PLAN_POLL_MS || 15_000),
+    {
+      sender: (actor) => writingRuntimeForOwner(actor).sender(actor),
+      resolve: (actor, target) => writingRuntimeForOwner(actor).resolve(actor, target)
+    }
+  );
   prospectOutreachPlanRunner.start();
   const agentTriggerRunner = new AgentTriggerRunner(
     store,
@@ -24412,6 +26733,9 @@ async function startServer() {
   });
   scheduleMidnightTodoArchive();
   startReminderRuleScheduler();
+  startAiEngineRecoveryScheduler();
+  // 批量/方案的「按背调 + 按阶段」正文补写工序（缺背调补跑 → 引擎重写）
+  startOutreachLetterEnrichmentScheduler();
 
   let shuttingDown = false;
   const shutdown = async (signal: NodeJS.Signals) => {
@@ -24422,6 +26746,8 @@ async function startServer() {
       activeInboundMailWatcher?.stop();
       activeInboundMailWatcher = null;
       await stopReminderRuleScheduler();
+      stopAiEngineRecoveryScheduler();
+      stopOutreachLetterEnrichmentScheduler();
       activeSalesTrainingRunner = null;
       salesTrainingRunner.stop();
       activeAgentTriggerRunner = null;

@@ -213,6 +213,20 @@ function capitalize(value: string) {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
 }
 
+/**
+ * 国家 → 英文市场说法。
+ * 刻意放在本模块而不是 server.ts：批量发信 / 自动方案的成稿器也要用同一份口径，
+ * 两边各维护一份必然会漂移（写信的两条链路已经在别处吃过口径不一致的亏）。
+ */
+export function developmentEmailMarketName(value: string) {
+  const markets: Record<string, string> = {
+    中国: "China", 德国: "Germany", 瑞典: "Sweden", 美国: "the United States",
+    日本: "Japan", 阿联酋: "the UAE", 法国: "France", 英国: "the United Kingdom"
+  };
+  const key = (value || "").trim();
+  return markets[key] || (key && !containsCjk(key) ? key : "your market");
+}
+
 // ─────────────────────────────────────────────────────────────
 // 4. 收件人角色与决策权：决定这封信对谁说话
 // ─────────────────────────────────────────────────────────────

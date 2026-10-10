@@ -2,9 +2,14 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { evaluateProspectEmailOutreachEligibility } from "./prospect-outreach-eligibility.js";
 import {
+  composeItem,
+  itemLetterReadyToSend,
+  letterProgressForItems,
   nextWindowStart,
-  prospectBatchStepTemplates,
   shouldStopItemOnReply,
+  toBatchSteps,
+  type OutreachWritingRuntime,
+  type OutreachWritingTarget,
   type ProspectOutreachBatchRuntime
 } from "./prospect-outreach-batch.js";
 import type { CrmStore } from "./store.js";
@@ -32,7 +37,9 @@ const PLAN_DEFAULT_POLICY = {
   sendWindowStartHour: 9,
   sendWindowEndHour: 18,
   stopOnReply: true,
-  rotateMailboxEvery: 0
+  rotateMailboxEvery: 0,
+  // 与批次同口径：缺背调的目标由后台补跑一次背调再重写正文
+  autoResearch: true
 };
 
 const planEntrySchema = z.object({
@@ -56,7 +63,9 @@ const planCreateSchema = z.object({
     sendWindowEndHour: z.coerce.number().int().min(1).max(24).default(PLAN_DEFAULT_POLICY.sendWindowEndHour),
     stopOnReply: z.coerce.boolean().default(PLAN_DEFAULT_POLICY.stopOnReply),
     // 每 N 封切换发件邮箱池里的下一个邮箱；0 = 不轮换（只用主发件邮箱）
-    rotateMailboxEvery: z.coerce.number().int().min(0).max(1000).default(0)
+    rotateMailboxEvery: z.coerce.number().int().min(0).max(1000).default(0),
+    // 目标还没有背调留档时，允许后台补跑一次再据此重写正文
+    autoResearch: z.coerce.boolean().default(true)
   }).refine((value) => value.sendWindowStartHour < value.sendWindowEndHour, {
     message: "发送窗口起点必须早于终点"
   }).default(PLAN_DEFAULT_POLICY),
@@ -125,7 +134,9 @@ export function planProgress(plan: ProspectOutreachPlan) {
     inProgress: items.filter((item) => item.status === "ready" || item.status === "sending").length,
     converted: items.filter((item) => item.convertedLeadId).length,
     pendingSteps,
-    targetCap: plan.target.maxTargets
+    targetCap: plan.target.maxTargets,
+    // 正文补写进度：让界面能提示「还有 N 条在补背调/重写」，与批次口径一致
+    letters: letterProgressForItems(items)
   };
 }
 
@@ -285,7 +296,9 @@ export class ProspectOutreachPlanRunner {
   constructor(
     private readonly store: CrmStore,
     private readonly runtime: ProspectOutreachBatchRuntime,
-    private readonly pollMs = 15_000
+    private readonly pollMs = 15_000,
+    /** 阶段感知成稿运行时（server.ts 注入）；缺省退回历史固定 3 步模板 */
+    private readonly writing?: OutreachWritingRuntime
   ) {}
 
   start() {
@@ -417,17 +430,36 @@ export class ProspectOutreachPlanRunner {
       await this.store.persist();
       return;
     }
-    const templates = prospectBatchStepTemplates(candidate, plan.policy);
-    const steps = templates.map((template, index) => ({
-      index,
-      delayHours: template.delayHours,
-      subject: template.subject,
-      body: template.body,
-      status: "pending" as const,
-      scheduledAt: new Date(index === 0 ? now.getTime() : now.getTime() + template.delayHours * 3_600_000).toISOString(),
-      sentAt: "",
-      error: ""
-    }));
+    // 按这个候选**自己**的阶段 + 最近背调成稿：已经发过首触的不会再被当成新客户重发第一封
+    const composed = await composeItem(this.writing, actor, plan.policy, {
+      entityType: "candidate",
+      entityId: candidate.id,
+      company: candidate.company,
+      contactName: candidate.contact || "",
+      email: eligibility.recipient,
+      country: candidate.country || "",
+      context: candidate.business || (candidate.description || "").slice(0, 200)
+    });
+    if (composed.blockedReason) {
+      // 阶段判定为不该发（已回复/已转/已拒绝/已退信）→ 落跳过占位，避免每个 tick 反复取到同一个人
+      plan.items.push({
+        id: `pop_item_${randomUUID()}`,
+        candidateId: candidate.id,
+        company: candidate.company,
+        recipient: "",
+        status: "skipped",
+        skipReason: composed.blockedReason,
+        steps: [],
+        sentAt: "",
+        convertedLeadId: "",
+        ...composed.meta
+      });
+      plan.lastMessage = `跳过 ${candidate.company}（${composed.blockedReason}），继续取下一个目标`;
+      plan.updatedAt = nowIso;
+      await this.store.persist();
+      return;
+    }
+    const steps = toBatchSteps(composed, now.getTime(), true);
     const item: ProspectOutreachBatchItem = {
       id: `pop_item_${randomUUID()}`,
       candidateId: candidate.id,
@@ -437,12 +469,20 @@ export class ProspectOutreachPlanRunner {
       skipReason: "",
       steps,
       sentAt: "",
-      convertedLeadId: ""
+      convertedLeadId: "",
+      ...composed.meta
     };
     plan.items.push(item);
     plan.updatedAt = nowIso;
     await this.store.persist();
-    await this.sendStep(plan, item, steps[0]);
+    // 正文还在后台补写时先不发，等补好；itemLetterReadyToSend 内含超时兜底
+    if (itemLetterReadyToSend(item)) {
+      await this.sendStep(plan, item, steps[0]);
+    } else {
+      plan.lastMessage = `${candidate.company} 已入场，正文待后台按背调补写后再发第 1 封`;
+      plan.updatedAt = new Date().toISOString();
+      await this.store.persist();
+    }
   }
 
   /**
@@ -505,25 +545,34 @@ export class ProspectOutreachPlanRunner {
       await placeholder(resolved.company, "缺收件邮箱：请先补全该目标的邮箱再发信");
       return;
     }
-    // 自定义内容 → 占位符渲染；否则用系统默认序列模板（候选词形参兼容线索/客户字段）
     const shim = { company: resolved.company, business: resolved.business, country: resolved.country, contact: resolved.contact, contactInfo: resolved.email };
-    const templates = plan.steps?.length
-      ? plan.steps.map((step, index) => ({
-        delayHours: index === 0 ? 0 : plan.policy.stepIntervalHours,
-        subject: renderPlanStepContent(step.subject, shim),
-        body: renderPlanStepContent(step.body, shim)
-      }))
-      : prospectBatchStepTemplates(shim, plan.policy);
-    const steps = templates.map((template, index) => ({
-      index,
-      delayHours: template.delayHours,
-      subject: template.subject,
-      body: template.body,
-      status: "pending" as const,
-      scheduledAt: new Date(index === 0 ? Date.now() : Date.now() + template.delayHours * 3_600_000).toISOString(),
-      sentAt: "",
-      error: ""
-    }));
+    // 先按「目标当前阶段 + 最近背调」求出阶段与依据；用户显式填了每步内容时，内容以用户为准。
+    const composed = await composeItem(this.writing, actor, plan.policy, {
+      entityType: entry.entityType,
+      entityId: entry.entityId,
+      company: resolved.company,
+      contactName: resolved.contact || "",
+      email: recipient,
+      country: resolved.country || "",
+      context: resolved.business || ""
+    });
+    if (composed.blockedReason) {
+      await placeholder(resolved.company, composed.blockedReason);
+      return;
+    }
+    // 用户自己写的每步内容优先（只做 {{company}}/{{contact}}/{{country}} 占位渲染）；
+    // 没写才用阶段蓝图自动成稿。两条路径都保留阶段元数据，界面上能看出这是谁的信。
+    const steps = plan.steps?.length
+      ? toBatchSteps({
+        ...composed,
+        steps: plan.steps.map((step, index) => ({
+          delayHours: index === 0 ? 0 : plan.policy.stepIntervalHours,
+          subject: renderPlanStepContent(step.subject, shim),
+          body: renderPlanStepContent(step.body, shim)
+        })),
+        meta: { ...composed.meta, letterStatus: "ready", letterPendingAt: "", letterEngine: "自定义内容" }
+      }, Date.now(), true)
+      : toBatchSteps(composed, Date.now(), true);
     const item: ProspectOutreachBatchItem = {
       id: `pop_item_${randomUUID()}`,
       candidateId: entry.entityId,
@@ -535,17 +584,27 @@ export class ProspectOutreachPlanRunner {
       skipReason: "",
       steps,
       sentAt: "",
-      convertedLeadId: ""
+      convertedLeadId: "",
+      ...(plan.steps?.length ? { ...composed.meta, letterStatus: "ready" as const, letterPendingAt: "", letterEngine: "自定义内容" } : composed.meta)
     };
     plan.items.push(item);
     plan.updatedAt = nowIso;
     await this.store.persist();
-    await this.sendStep(plan, item, steps[0]);
+    // 正文待后台补写时先不发（itemLetterReadyToSend 内含超时兜底）
+    if (itemLetterReadyToSend(item)) {
+      await this.sendStep(plan, item, steps[0]);
+    } else {
+      plan.lastMessage = `${resolved.company} 已入场，正文待后台按背调补写后再发第 1 封`;
+      plan.updatedAt = new Date().toISOString();
+      await this.store.persist();
+    }
   }
 
   private pickNextPending(plan: ProspectOutreachPlan, now: Date) {
     for (const item of plan.items) {
       if (item.status !== "ready") continue;
+      // 正文待后台补写时先不发（内含超时兜底，见 itemLetterReadyToSend）
+      if (!itemLetterReadyToSend(item)) continue;
       const step = item.steps.find((row) => row.status === "pending");
       if (!step) continue;
       if (step.scheduledAt && step.scheduledAt > now.toISOString()) continue;

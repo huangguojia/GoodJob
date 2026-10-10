@@ -36,6 +36,14 @@ function jwtSecret() {
   return EPHEMERAL_DEVELOPMENT_SECRET;
 }
 
+/** 账号是否已过有效期（expiresAt 为空 = 永久有效） */
+export function userExpired(user: { expiresAt?: string }) {
+  const raw = (user.expiresAt || "").trim();
+  if (!raw) return false;
+  const ts = Date.parse(raw);
+  return Number.isFinite(ts) && ts <= Date.now();
+}
+
 export function validateAuthSecurity() {
   jwtSecret();
   if (process.env.NODE_ENV === "production" && (process.env.PLATFORM_MFA_ENCRYPTION_KEY?.trim().length || 0) < 32) {
@@ -178,6 +186,10 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     res.status(401).json({ message: "登录状态已失效，请重新登录" });
     return;
   }
+  if (userExpired(user)) {
+    res.status(401).json({ message: "账号已过有效期，请联系管理员续期" });
+    return;
+  }
   const resolvedDataScope = req.user?.id === user.id ? req.user.iamDataScope : undefined;
   req.user = publicUser(user);
   req.user.iamDataScope = resolvedDataScope;
@@ -193,7 +205,8 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       req.user.iamRoleNames = snapshot.roleNames;
       req.user.iamSource = snapshot.source;
     }
-    if (req.user.iamSource === "platform" && getStore().platformMfa) {
+    // 运维 MFA（扫码/6 位码）默认关闭：只有显式设置 PLATFORM_MFA_ENFORCED=true 才要求平台身份完成 MFA。
+    if (req.user.iamSource === "platform" && getStore().platformMfa && process.env.PLATFORM_MFA_ENFORCED === "true") {
       const mfa = await getStore().platformMfa!.status(req.user);
       if (mfa.required && claims.mfa !== true) {
         res.status(401).json({ message: "平台运维会话需要完成 MFA 验证" });

@@ -455,13 +455,82 @@ export async function readAiJson<T>(
   return data as T;
 }
 
-export function extractJsonObject(content: string) {
-  const source = content
-    .trim()
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```$/i, "")
-    .trim();
+/**
+ * 保守修复模型输出的 JSON 语法（只在 `JSON.parse` 失败后使用）：
+ *
+ * 1. 字符串**外部**的全角标点还原成半角（`｛｝［］：，""`）——中文提示词下模型很容易
+ *    把冒号、逗号打成全角，这是实测中最常见的失败原因；
+ * 2. 字符串**内部**的裸换行 / 制表符等控制字符按 JSON 规范转义——模型把一段多行文本
+ *    原样塞进值时必然触发，JSON.parse 会直接拒绝；
+ * 3. 丢弃尾随逗号（`{"a":1,}`）。
+ *
+ * 只做这些确定性修复：不猜内容、不给缺失的引号补引号、不尝试「大致理解」。
+ */
+export function repairJsonText(text: string) {
+  const outsideReplacements: Record<string, string> = {
+    "｛": "{", "｝": "}", "［": "[", "］": "]", "：": ":", "，": ",",
+    "“": '"', "”": '"', "＂": '"', "‘": "'", "’": "'"
+  };
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (escaped) {
+        out += character;
+        escaped = false;
+        continue;
+      }
+      if (character === "\\") {
+        out += character;
+        escaped = true;
+        continue;
+      }
+      if (character === '"') {
+        out += character;
+        inString = false;
+        continue;
+      }
+      if (character === "\n") {
+        out += "\\n";
+        continue;
+      }
+      if (character === "\r") {
+        out += "\\r";
+        continue;
+      }
+      if (character === "\t") {
+        out += "\\t";
+        continue;
+      }
+      const code = text.charCodeAt(index);
+      if (code < 0x20 || code === 0x7f) {
+        out += " ";
+        continue;
+      }
+      out += character;
+      continue;
+    }
+    if (character === '"') {
+      out += character;
+      inString = true;
+      continue;
+    }
+    // 先把全角标点还原成半角，再判断是不是尾随逗号——否则「，｝」这种全角写法会漏掉
+    const mapped = outsideReplacements[character] ?? character;
+    if (mapped === ",") {
+      let next = index + 1;
+      while (next < text.length && /\s/u.test(text[next])) next += 1;
+      const nextCharacter = outsideReplacements[text[next]] ?? text[next];
+      if (nextCharacter === "}" || nextCharacter === "]") continue;
+    }
+    out += mapped;
+  }
+  return out;
+}
+
+function scanJsonObject(source: string) {
   for (let start = source.indexOf("{"); start >= 0; start = source.indexOf("{", start + 1)) {
     let depth = 0;
     let inString = false;
@@ -487,6 +556,22 @@ export function extractJsonObject(content: string) {
       }
     }
   }
+  return null;
+}
+
+export function extractJsonObject(content: string) {
+  const source = content
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+  const direct = scanJsonObject(source);
+  if (direct) return direct;
+  // 原样解析不出来时，再试一次「修复标点 / 转义裸换行 / 去尾随逗号」的版本。
+  // 这一步必须作用在**整段文本**上：模型把首字符写成全角 ｛ 时，连起点都定位不到。
+  const repaired = scanJsonObject(repairJsonText(source));
+  if (repaired) return repaired;
   throw new Error("AI JSON missing or invalid");
 }
 

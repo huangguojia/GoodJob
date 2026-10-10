@@ -31,7 +31,7 @@ export interface BrowserService {
   stop(): Promise<void>;
 }
 
-type BrowserServiceOverrides = Partial<Omit<BrowserServiceConfiguration, "url" | "cdpUrl">>;
+export type BrowserServiceOverrides = Partial<Omit<BrowserServiceConfiguration, "url" | "cdpUrl">>;
 
 function portFromEnvironment(raw: string | undefined, fallback: number, variableName: string) {
   const port = Number(raw || fallback);
@@ -268,4 +268,24 @@ export async function startBrowserService(
       await stopChild(browserChild);
     }
   };
+}
+
+/**
+ * 「尽力启动」独立浏览器。
+ *
+ * 为什么需要它：独立浏览器只是 Codex 的**可选**工具宿主——WorkBuddy CLI 任务完全不需要它，
+ * 非浏览器的 Codex 任务也不需要（适配器在 browserMcpUrl 为空时会自动降级成纯文本任务）。
+ * 而它起不来的场景非常常见：同一台机器上已经有一台常驻 Runner 占着 8931，
+ * 或者 Chrome 起不来。旧写法让异常直接冒泡 → 整个 Runner 进程退出，
+ * 但 CRM 侧那条心跳在十几秒内还显示"在线" → 任务被派给一台其实已经死掉的机器，永远排队没人领。
+ * 所以这里把失败收成返回值，让 Runner 无论浏览器是否可用都保持存活。
+ */
+export async function tryStartBrowserService(
+  overrides: BrowserServiceOverrides = {}
+): Promise<{ service: BrowserService | null; error: string }> {
+  try {
+    return { service: await startBrowserService(overrides), error: "" };
+  } catch (error) {
+    return { service: null, error: error instanceof Error ? error.message : "独立浏览器启动失败" };
+  }
 }

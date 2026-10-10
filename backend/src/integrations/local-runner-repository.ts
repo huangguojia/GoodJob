@@ -1,9 +1,11 @@
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import type {
   LocalRunner,
+  LocalRunnerAdapter,
   LocalRunnerPairing,
   LocalRunnerStatus,
   LocalRunnerTask,
+  LocalRunnerTaskBrief,
   LocalRunnerTaskEvent,
   LocalRunnerTaskStatus
 } from "./local-runner-types.js";
@@ -34,11 +36,13 @@ export interface LocalRunnerRepository {
   consumePairing(input: ConsumePairingInput): Promise<LocalRunnerPairing | null>;
   getRunner(id: string): Promise<LocalRunner | null>;
   listRunners(visibility: LocalRunnerVisibility): Promise<LocalRunner[]>;
-  touchRunner(id: string, input: Partial<Pick<LocalRunner, "hostname" | "platform" | "runnerVersion" | "codexVersion" | "capabilities" | "workspaces" | "lastError">>): Promise<boolean>;
+  touchRunner(id: string, input: Partial<Pick<LocalRunner, "hostname" | "platform" | "runnerVersion" | "codexVersion" | "workbuddyVersion" | "capabilities" | "workspaces" | "lastError">>): Promise<boolean>;
   revokeRunner(id: string): Promise<boolean>;
   createTask(task: LocalRunnerTask): Promise<void>;
   getTask(id: string): Promise<LocalRunnerTask | null>;
   listTasks(visibility: LocalRunnerVisibility, runnerId?: string, limit?: number): Promise<LocalRunnerTask[]>;
+  listTaskBriefs(runnerId: string, limit?: number): Promise<LocalRunnerTaskBrief[]>;
+  countActiveTasks(runnerId: string): Promise<number>;
   claimTask(runnerId: string, leaseHash: string, leaseExpiresAt: string): Promise<LocalRunnerTask | null>;
   heartbeatTask(taskId: string, runnerId: string, leaseHash: string, leaseExpiresAt: string): Promise<{ ok: boolean; cancelRequested: boolean }>;
   completeTask(input: CompleteLocalRunnerTaskInput): Promise<boolean>;
@@ -57,12 +61,12 @@ interface PairingRow extends RowDataPacket {
 interface RunnerRow extends RowDataPacket {
   id: string; team_id: string; owner_id: string; display_name: string; runner_status: LocalRunnerStatus;
   token_hash: string; token_fingerprint: string; hostname: string; platform_name: string;
-  runner_version: string; codex_version: string; capabilities_json: unknown; workspaces_json: unknown;
+  runner_version: string; codex_version: string; workbuddy_version: string; capabilities_json: unknown; workspaces_json: unknown;
   last_seen_at: Date | null; last_error: string; created_at: Date; updated_at: Date; revoked_at: Date | null;
 }
 
 interface TaskRow extends RowDataPacket {
-  id: string; runner_id: string; team_id: string; owner_id: string; created_by: string; adapter: "codex";
+  id: string; runner_id: string; team_id: string; owner_id: string; created_by: string; adapter: LocalRunnerAdapter;
   prompt_text: string; workspace_path: string; execution_mode: LocalRunnerTask["executionMode"];
   timeout_seconds: number; task_status: LocalRunnerTaskStatus; attempt_count: number; lease_hash: string;
   lease_expires_at: Date | null; cancel_requested_at: Date | null; result_text: string | null;
@@ -103,7 +107,8 @@ function mapRunner(row: RunnerRow): LocalRunner {
     id: row.id, teamId: row.team_id, ownerId: row.owner_id, displayName: row.display_name,
     status: row.runner_status, tokenHash: row.token_hash, tokenFingerprint: row.token_fingerprint,
     hostname: row.hostname, platform: row.platform_name, runnerVersion: row.runner_version,
-    codexVersion: row.codex_version, capabilities: jsonArray(row.capabilities_json),
+    codexVersion: row.codex_version, workbuddyVersion: row.workbuddy_version || "",
+    capabilities: jsonArray(row.capabilities_json),
     workspaces: jsonArray(row.workspaces_json), lastSeenAt: iso(row.last_seen_at),
     lastError: row.last_error, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
     revokedAt: iso(row.revoked_at)
@@ -113,7 +118,8 @@ function mapRunner(row: RunnerRow): LocalRunner {
 function mapTask(row: TaskRow): LocalRunnerTask {
   return {
     id: row.id, runnerId: row.runner_id, teamId: row.team_id, ownerId: row.owner_id,
-    createdBy: row.created_by, adapter: row.adapter, prompt: row.prompt_text,
+    createdBy: row.created_by, adapter: row.adapter === "workbuddy" ? "workbuddy" : "codex",
+    prompt: row.prompt_text,
     workspace: row.workspace_path, executionMode: row.execution_mode,
     timeoutSeconds: Number(row.timeout_seconds), status: row.task_status,
     attemptCount: Number(row.attempt_count), leaseHash: row.lease_hash,
@@ -181,12 +187,13 @@ export class MysqlLocalRunnerRepository implements LocalRunnerRepository {
       await connection.execute(
         `INSERT INTO integration_local_runners
          (id,team_id,owner_id,display_name,runner_status,token_hash,token_fingerprint,hostname,
-          platform_name,runner_version,codex_version,capabilities_json,workspaces_json,last_seen_at,
+          platform_name,runner_version,codex_version,workbuddy_version,capabilities_json,workspaces_json,last_seen_at,
           last_error,created_at,updated_at,revoked_at)
-         VALUES (?,?,?,?,'active',?,?,?,?,?,?,?,?,NOW(3),'',?,?,NULL)`,
+         VALUES (?,?,?,?,'active',?,?,?,?,?,?,?,?,?,NOW(3),'',?,?,NULL)`,
         [runner.id, pairing.team_id, pairing.owner_id, runner.displayName, runner.tokenHash,
           runner.tokenFingerprint, runner.hostname, runner.platform, runner.runnerVersion,
-          runner.codexVersion, JSON.stringify(runner.capabilities), JSON.stringify(runner.workspaces),
+          runner.codexVersion, runner.workbuddyVersion,
+          JSON.stringify(runner.capabilities), JSON.stringify(runner.workspaces),
           mysqlDate(runner.createdAt), mysqlDate(runner.updatedAt)]
       );
       await connection.execute(
@@ -210,15 +217,17 @@ export class MysqlLocalRunnerRepository implements LocalRunnerRepository {
     return rows.map(mapRunner);
   }
 
-  async touchRunner(id: string, input: Partial<Pick<LocalRunner, "hostname" | "platform" | "runnerVersion" | "codexVersion" | "capabilities" | "workspaces" | "lastError">>) {
+  async touchRunner(id: string, input: Partial<Pick<LocalRunner, "hostname" | "platform" | "runnerVersion" | "codexVersion" | "workbuddyVersion" | "capabilities" | "workspaces" | "lastError">>) {
     const [result] = await this.pool.execute<ResultSetHeader>(
       `UPDATE integration_local_runners SET hostname=COALESCE(?,hostname),platform_name=COALESCE(?,platform_name),
        runner_version=COALESCE(?,runner_version),codex_version=COALESCE(?,codex_version),
+       workbuddy_version=COALESCE(?,workbuddy_version),
        capabilities_json=COALESCE(?,capabilities_json),workspaces_json=COALESCE(?,workspaces_json),
        last_error=COALESCE(?,last_error),last_seen_at=NOW(3),updated_at=NOW(3)
        WHERE id=? AND runner_status='active'`,
       [input.hostname ?? null, input.platform ?? null, input.runnerVersion ?? null,
-        input.codexVersion ?? null, input.capabilities ? JSON.stringify(input.capabilities) : null,
+        input.codexVersion ?? null, input.workbuddyVersion ?? null,
+        input.capabilities ? JSON.stringify(input.capabilities) : null,
         input.workspaces ? JSON.stringify(input.workspaces) : null, input.lastError ?? null, id]
     );
     return result.affectedRows === 1;
@@ -264,6 +273,40 @@ export class MysqlLocalRunnerRepository implements LocalRunnerRepository {
       [...scoped.params, ...(runnerId ? [runnerId] : []), Math.max(1, Math.min(200, limit))]
     );
     return rows.map(mapTask);
+  }
+
+  /**
+   * 轻量任务摘要（健康检查用）：刻意不 SELECT *，避免把每行几十 KB 的 prompt_text /
+   * result_text 全量拉回来——健康检查只要「谁在跑、谁刚失败」。
+   */
+  async listTaskBriefs(runnerId: string, limit = 8): Promise<LocalRunnerTaskBrief[]> {
+    const [rows] = await this.pool.query<Array<RowDataPacket & {
+      id: string; adapter: string; task_status: string; error_message: string; prompt_head: string;
+      created_at: Date | string; started_at: Date | string | null; updated_at: Date | string;
+    }>>(
+      `SELECT id,adapter,task_status,error_message,LEFT(prompt_text,120) AS prompt_head,
+              created_at,started_at,updated_at
+       FROM integration_local_runner_tasks WHERE runner_id=? ORDER BY created_at DESC LIMIT ?`,
+      [runnerId, Math.max(1, Math.min(50, limit))]
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      adapter: (row.adapter === "workbuddy" ? "workbuddy" : "codex") as LocalRunnerAdapter,
+      status: row.task_status,
+      errorMessage: row.error_message || "",
+      promptHead: row.prompt_head || "",
+      createdAt: iso(row.created_at),
+      startedAt: iso(row.started_at),
+      updatedAt: iso(row.updated_at)
+    }));
+  }
+
+  async countActiveTasks(runnerId: string) {
+    const [rows] = await this.pool.query<Array<RowDataPacket & { count: number }>>(
+      "SELECT COUNT(*) AS count FROM integration_local_runner_tasks WHERE runner_id=? AND task_status IN ('running','cancelling')",
+      [runnerId]
+    );
+    return Number(rows[0]?.count || 0);
   }
 
   async recoverStaleTasks(runnerId = "") {
