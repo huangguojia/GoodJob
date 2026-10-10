@@ -80,12 +80,12 @@ df -h
 
 ## 3. 上传安装包
 
-本机执行上传，不能在服务器终端执行本机的 `/Users/...` 路径：
+本机执行上传（在存放安装包的目录下执行），不能在服务器终端执行本机路径：
 
 ```bash
 scp \
-  "/Users/sendohakria/Desktop/GoodJob_private/dist-packages/GoodJob-CRM-Registry-1.7.2.tar.gz" \
-  "/Users/sendohakria/Desktop/GoodJob_private/dist-packages/GoodJob-CRM-Registry-1.7.2.tar.gz.sha256" \
+  "dist-packages/GoodJob-CRM-Registry-1.7.2.tar.gz" \
+  "dist-packages/GoodJob-CRM-Registry-1.7.2.tar.gz.sha256" \
   root@服务器公网IP:/root/
 ```
 
