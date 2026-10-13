@@ -58,6 +58,7 @@ import { ensureOutreachJourneySchema, MysqlBackgroundResearchRepository, setBack
 import { ensureAppSettingsSchema, setAppSettingsPool } from "./app-settings.js";
 import { ensureAiEngineSchema, MysqlAiEngineJobRepository, setAiEngineJobRepository } from "./ai-engine-jobs.js";
 import { createMysqlSenderMailboxRepository, ensureSenderMailboxSchema, setSenderMailboxRepository } from "./sender-mailbox.js";
+import { createMysqlResourceHubRepository, ensureResourceHubSchema, setResourceHubRepository } from "./resource-hub.js";
 import { ensureIamFoundationSchema } from "./iam/iam-foundation.js";
 import { loadIamCapabilitySnapshot } from "./iam/iam-capabilities.js";
 import { createIamManagementService } from "./iam/iam-management-service.js";
@@ -622,6 +623,7 @@ export async function createMysqlStore(
   await ensureExchangeSchema(pool);
   await ensureOutreachJourneySchema(pool);
   await ensureSenderMailboxSchema(pool);
+  await ensureResourceHubSchema(pool);
   await ensureAppSettingsSchema(pool);
   await ensureAiEngineSchema(pool);
   await ensureBuiltInSuperAdmin(pool);
@@ -631,6 +633,7 @@ export async function createMysqlStore(
   setExchangeRepository(new MysqlExchangeRepository(pool));
   setBackgroundResearchRepository(new MysqlBackgroundResearchRepository(pool));
   setSenderMailboxRepository(createMysqlSenderMailboxRepository(pool));
+  setResourceHubRepository(createMysqlResourceHubRepository(pool));
   setLocalRunnerService(new LocalRunnerService(new MysqlLocalRunnerRepository(pool)));
 
   let store!: CrmStore;
@@ -1282,6 +1285,7 @@ export async function createMysqlStore(
     setExchangeRepository(null);
     setBackgroundResearchRepository(null);
     setSenderMailboxRepository(null);
+    setResourceHubRepository(null);
     setAiEngineJobRepository(null);
     setAppSettingsPool(null);
     await releaseProductionInstanceLock?.();
@@ -2109,7 +2113,7 @@ export async function createMysqlStore(
   return store;
 }
 
-export const GOODJOB_MYSQL_SCHEMA_VERSION = "1.4.18-ai-engine-sources";
+export const GOODJOB_MYSQL_SCHEMA_VERSION = "1.4.19-resource-hub";
 
 /** 内置超级管理员（公司最高权限账号）：可登录、管理账号、一键批量生成带有效期的体验账号 */
 const BUILT_IN_SUPERADMIN = {
@@ -2236,6 +2240,7 @@ export async function migrateMysqlSchema(input: {
     await ensureExchangeSchema(pool);
     await ensureOutreachJourneySchema(pool);
     await ensureSenderMailboxSchema(pool);
+    await ensureResourceHubSchema(pool);
     await ensureAppSettingsSchema(pool);
     await ensureAiEngineSchema(pool);
     const prospectRunSnapshotRepair =

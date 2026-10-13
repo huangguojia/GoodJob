@@ -1,0 +1,62 @@
+{
+  "manifest_version": 3,
+  "name": "GoodJob WhatsApp 助手（翻译 · 归档 · 自动回复）",
+  "version": "0.7.3",
+  "description": "在网页版 WhatsApp 里翻译客户来信、把对话抓成本地归档用于训练、并按你的历史话术生成回复；接上 CRM 后由本机模型结合客户往来与知识库推理出稿，右侧整列同时列出推荐回复（含理由与来源）与可发的资料。绝不替你发送。",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://web.whatsapp.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "optional_host_permissions": ["https://*/*"],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://web.whatsapp.com/*",
+        "http://127.0.0.1/*",
+        "http://localhost/*"
+      ],
+      "js": ["src/content.js"],
+      "css": ["src/gj-theme.css", "src/content.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://web.whatsapp.com/*",
+        "http://127.0.0.1/*",
+        "http://localhost/*"
+      ],
+      "js": ["src/agent.js"],
+      "css": ["src/gj-theme.css", "src/agent.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/*.js", "src/*.css"],
+      "matches": ["https://web.whatsapp.com/*", "http://127.0.0.1/*", "http://localhost/*"]
+    }
+  ],
+  "options_page": "src/options.html",
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "GoodJob WhatsApp 助手",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  }
+}

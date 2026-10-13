@@ -137,5 +137,29 @@ export const communicationTables: CommunicationTable[] = [
     primaryKey: ["id"],
     columns: ["id", "action", "target_type", "target_id", "result", "details_json", "created_at"],
     temporalColumns: ["created_at"]
+  },
+  {
+    name: "training_profiles",
+    primaryKey: ["id"],
+    columns: ["id", "owner_user_id", "account_id", "name", "status", "engine", "model", "sample_count", "exchange_count", "conversation_count", "message_count", "languages_json", "tone", "summary", "guidelines_json", "signature_phrases_json", "guardrails_json", "examples_json", "source_from", "source_to", "error", "trained_at", "created_at", "updated_at"],
+    temporalColumns: ["source_from", "source_to", "trained_at", "created_at", "updated_at"]
+  },
+  {
+    name: "training_library_entries",
+    primaryKey: ["id"],
+    columns: ["id", "owner_user_id", "account_id", "kind", "question", "answer", "tags_json", "languages_json", "priority", "enabled", "source", "fingerprint", "hit_count", "created_at", "updated_at"],
+    temporalColumns: ["created_at", "updated_at"]
+  },
+  {
+    name: "auto_chat_settings",
+    primaryKey: ["id"],
+    columns: ["id", "owner_user_id", "account_id", "enabled", "mode", "engine", "profile_id", "provider_id", "cli_model", "cli_effort", "language", "tone", "daily_limit", "min_interval_minutes", "active_hours_start", "active_hours_end", "timezone", "escalate_keywords_json", "guardrails_json", "confidence_threshold", "last_run_at", "updated_at"],
+    temporalColumns: ["last_run_at", "updated_at"]
+  },
+  {
+    name: "auto_chat_drafts",
+    primaryKey: ["id"],
+    columns: ["id", "owner_user_id", "account_id", "conversation_id", "inbound_message_id", "inbound_body", "body", "edited", "status", "mode", "confidence", "reason", "engine", "model", "profile_id", "message_id", "error", "run_date", "created_at", "sent_at", "updated_at"],
+    temporalColumns: ["created_at", "sent_at", "updated_at"]
   }
 ];

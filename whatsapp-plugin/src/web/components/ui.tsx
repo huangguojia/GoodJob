@@ -139,3 +139,46 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
     </div>
   );
 }
+
+/**
+ * 客户号码 → WhatsApp **网页版**直链。
+ *
+ * 刻意锁定 `web.whatsapp.com`，而不用 `wa.me` / `api.whatsapp.com`：
+ * 后两者是 universal 链接，会「设备上装了 WhatsApp 就唤起客户端」，
+ * 于是落到桌面 App —— 那是另一个关联设备，不是使用者已扫码登录的浏览器会话。
+ * 本产品面向桌面 CRM，使用者的登录态就在浏览器里，所以直奔网页版。
+ *
+ * 号码只保留数字（网页版同样不接受 `+`、空格、横线）；
+ * 位数不足 6 位视为无效，返回空串以便调用方退化渲染成纯文本。
+ *
+ * 代价：手机浏览器打开它只会看到「请在电脑上使用 WhatsApp Web」的提示。
+ * 这是有意的取舍 —— 宁可明确提示，也不要误跳到客户端。
+ */
+export function whatsAppWebHref(phone: string | null | undefined): string {
+  const digits = String(phone ?? "").replace(/\D/gu, "");
+  return digits.length >= 6 ? `https://web.whatsapp.com/send?phone=${digits}` : "";
+}
+
+/**
+ * 把客户号码渲染成「在浏览器里的 WhatsApp 网页版打开」的链接。
+ *
+ * 点击只是把一个 URL 交给浏览器新标签，不自己发起任何网络请求、
+ * 也不碰插件通道（既不走 Baileys 也不走 Meta API），因此不受
+ * officialOnly / 账号连接状态约束，也不存在因它触发的封号风险。
+ * 浏览器未登录网页版时，会停在官方二维码页等待扫码 —— 这是期望行为。
+ */
+export function WhatsAppNumberLink({ phone, className }: { phone: string; className?: string }) {
+  const href = whatsAppWebHref(phone);
+  if (!href) return <span className={className}>{phone}</span>;
+  return (
+    <a
+      className={className ? `wa-web-link ${className}` : "wa-web-link"}
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      title="在 WhatsApp 网页版打开"
+    >
+      {phone}
+    </a>
+  );
+}

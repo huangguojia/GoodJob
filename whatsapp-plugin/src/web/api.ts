@@ -17,6 +17,44 @@ import type {
   TranslationPreference
 } from "@shared/types";
 import type { AutomationDelivery, AutomationRun, AutomationRunResult, AutomationSettings } from "@shared/types";
+import type { AutoChatDraft, AutoChatDraftStatus, AutoChatRunSummary, AutoChatSettings, CliEngineStatus, TrainingExportFormat, TrainingProfile } from "@shared/types";
+import type {
+  TrainingLibraryEntry,
+  TrainingLibraryImportResult,
+  TrainingLibraryKind,
+  TrainingLibraryMatchResult
+} from "@shared/types";
+
+/** 训练库条目的入参：问答对必须有 question，其余三类只要求 answer。 */
+export interface TrainingLibraryInput {
+  accountId?: string | null;
+  kind: TrainingLibraryKind;
+  question?: string;
+  answer: string;
+  tags?: string[];
+  languages?: string[];
+  priority?: number;
+  enabled?: boolean;
+}
+
+export interface TrainingExportClientResult {
+  format: TrainingExportFormat;
+  fileName: string;
+  conversationCount: number;
+  messageCount: number;
+  exchangeCount: number;
+  characters: number;
+  skippedConversations: number;
+  sample: Array<{ conversationId: string; contactName: string; at: string; role: "customer" | "agent"; body: string }>;
+  content: string;
+}
+
+export interface TrainingScope {
+  accountId?: string;
+  conversationIds?: string[];
+  from?: string;
+  to?: string;
+}
 
 export type IntegrationStrategy = "free_first" | "official_first" | "hybrid";
 
@@ -28,6 +66,8 @@ export interface IntegrationPreference {
 
 export interface RuntimeCapabilities {
   demoProviderEnabled: boolean;
+  /** officialOnly 运行时 baileys 通道被禁用；界面据此做条件化提示，而非无条件常驻。 */
+  officialOnly: boolean;
   providers: {
     demo: boolean;
     baileys: boolean;
@@ -342,6 +382,61 @@ class ApiClient {
     this.request<CrmSandboxContact>(`/v1/contacts/${contactId}/crm-create`, { method: "POST" });
   simulateInbound = (input: { accountId: string; displayName: string; phone: string; body: string }) =>
     this.request<ChatMessage>("/v1/demo/inbound", { method: "POST", body: JSON.stringify(input) });
+
+  trainingProfiles = () => this.request<TrainingProfile[]>("/v1/training/profiles");
+  trainingProfile = (id: string) => this.request<TrainingProfile>(`/v1/training/profiles/${id}`);
+  exportTrainingData = (input: TrainingScope & { format: TrainingExportFormat }) =>
+    this.request<TrainingExportClientResult>("/v1/training/export", { method: "POST", body: JSON.stringify(input) });
+  trainProfile = (input: TrainingScope & { name: string; useAi?: boolean; providerId?: string }) =>
+    this.request<TrainingProfile>("/v1/training/profiles", { method: "POST", body: JSON.stringify(input) });
+  deleteTrainingProfile = (id: string) => this.request<void>(`/v1/training/profiles/${id}`, { method: "DELETE" });
+
+  /** 训练库（自动回复的专用语料库）。 */
+  trainingLibrary = (options: { kinds?: TrainingLibraryKind[]; enabledOnly?: boolean } = {}) => {
+    const query = new URLSearchParams();
+    if (options.kinds?.length) query.set("kind", options.kinds.join(","));
+    if (options.enabledOnly) query.set("enabled", "true");
+    const suffix = query.toString();
+    return this.request<TrainingLibraryEntry[]>(`/v1/training/library${suffix ? `?${suffix}` : ""}`);
+  };
+  saveTrainingLibraryEntry = (input: TrainingLibraryInput) =>
+    this.request<TrainingLibraryEntry>("/v1/training/library", { method: "POST", body: JSON.stringify(input) });
+  updateTrainingLibraryEntry = (id: string, input: TrainingLibraryInput) =>
+    this.request<TrainingLibraryEntry>(`/v1/training/library/${id}`, { method: "PATCH", body: JSON.stringify(input) });
+  deleteTrainingLibraryEntry = (id: string) => this.request<void>(`/v1/training/library/${id}`, { method: "DELETE" });
+  /** 幂等导入：同一条问答已经存在时只累加 skipped，不会重复入库。 */
+  importTrainingLibrary = (profileId: string) =>
+    this.request<TrainingLibraryImportResult>("/v1/training/library/import", { method: "POST", body: JSON.stringify({ profileId }) });
+  /** 命中预览：不真发消息，先看「客户这句话会用到库里哪几条」。 */
+  matchTrainingLibrary = (input: { body: string; accountId?: string }) =>
+    this.request<TrainingLibraryMatchResult>("/v1/training/library/match", { method: "POST", body: JSON.stringify(input) });
+  /** Markdown 导出走 text 响应，不能用 JSON 请求器。 */
+  exportTrainingLibraryMarkdown = async (): Promise<string> => {
+    const response = await fetch("/api/v1/training/library/export.md", { credentials: "include" });
+    if (!response.ok) throw new Error(`导出训练库失败 (${response.status})`);
+    return response.text();
+  };
+
+  autoChatSettings = (accountId?: string) =>
+    this.request<AutoChatSettings>(`/v1/auto-chat/settings${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`);
+  updateAutoChatSettings = (input: Partial<AutoChatSettings> & { enabled: boolean; mode: AutoChatSettings["mode"] }) =>
+    this.request<AutoChatSettings>("/v1/auto-chat/settings", { method: "PUT", body: JSON.stringify(input) });
+  runAutoChat = (input: { accountId?: string } = {}) =>
+    this.request<AutoChatRunSummary>("/v1/auto-chat/run", { method: "POST", body: JSON.stringify(input) });
+  autoChatDrafts = (options: { statuses?: AutoChatDraftStatus[]; limit?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (options.statuses?.length) query.set("status", options.statuses.join(","));
+    if (options.limit) query.set("limit", String(options.limit));
+    const suffix = query.toString();
+    return this.request<AutoChatDraft[]>(`/v1/auto-chat/drafts${suffix ? `?${suffix}` : ""}`);
+  };
+  sendAutoChatDraft = (id: string, body?: string) =>
+    this.request<AutoChatDraft>(`/v1/auto-chat/drafts/${id}/send`, { method: "POST", body: JSON.stringify(body ? { body } : {}) });
+  dismissAutoChatDraft = (id: string) =>
+    this.request<AutoChatDraft>(`/v1/auto-chat/drafts/${id}/dismiss`, { method: "POST" });
+  /** 本机 WorkBuddy CLI 引擎的能力状态；refresh 会强制重探，跳过 5 分钟缓存。 */
+  autoChatEngine = (refresh = false) =>
+    this.request<CliEngineStatus>(`/v1/auto-chat/engine${refresh ? "?refresh=true" : ""}`);
 }
 
 export const api = new ApiClient();

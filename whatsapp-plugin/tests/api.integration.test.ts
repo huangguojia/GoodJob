@@ -6,6 +6,7 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ChannelAccount, ChatMessage, Contact, Conversation, TranslationPreference } from "../src/shared/types";
 import { createAppRuntime, type AppRuntime } from "../src/server/app";
+import { inMemoryDatabasePaths } from "./helpers/test-database";
 import { createDatabase } from "../src/server/db/database";
 import { migrate } from "../src/server/db/migrate";
 import { Repository } from "../src/server/db/repository";
@@ -22,7 +23,7 @@ describe("WhatsApp CRM Plugin API", () => {
       port: 0,
       webOrigin: "http://localhost:5173",
       databaseClient: "pglite",
-      pglitePath: path.join(directory, "pgdata"),
+      ...inMemoryDatabasePaths(directory),
       sessionMasterKey: randomBytes(32).toString("base64"),
       seedDemo: true,
       allowPrivateAiEndpoints: false

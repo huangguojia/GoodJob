@@ -1,0 +1,605 @@
+/* 注入到 WhatsApp 页面的翻译界面样式。
+ *
+ * 只作用于我们注入的节点：类名带 gj- 前缀，容器用 #gj-* id，绝不覆盖 WhatsApp 自己的
+ * 任何样式。颜色、圆角、阴影、缓动全部引 src/gj-theme.css 的 --gj-* 令牌 —— 那份文件
+ * 同时供 popup / options 使用，保证「扩展页面」和「页面内浮层」是同一套视觉。
+ */
+
+/* 行定位两层（老类名 / 改版后的 data-id 行）都要让译文换行到气泡下方，
+ * 而不是被塞成同一行的第二个 flex item。改版后行元素只有 data-id 没有类名，
+ * 所以这里必须有一条不依赖 message-in/out 的规则。 */
+div.message-in.gj-has-translation,
+div.message-out.gj-has-translation,
+div[data-id].gj-has-translation {
+  flex-wrap: wrap !important;
+}
+
+/* --------------------------------------------------------------------------
+ * 气泡下方的译文块（两层结构，0.7.0）
+ *   外层 .gj-translation：只当「独占一行的载体」（flex-basis 100% 才能换行到气泡下方），
+ *     本身不带任何视觉 —— 占一整行的是这个透明载体。
+ *   内层 .gj-translation-card：所有视觉都在它身上，width: fit-content ——
+ *     译文宽度贴合内容，和客户消息的气泡宽度一个观感，不再横贯整行。
+ * ------------------------------------------------------------------------ */
+.gj-translation {
+  box-sizing: border-box;
+  display: flex;
+  flex: 0 0 100%;
+  margin: 4px 8px;
+}
+
+.gj-translation-card {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 7px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--gj-brand) 22%, transparent);
+  border-left: 3px solid var(--gj-brand);
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-brand-soft);
+  color: var(--gj-ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.gj-translation[data-gj-state="pending"] .gj-translation-card {
+  border-color: var(--gj-border);
+  border-left-color: var(--gj-border-strong);
+  background: var(--gj-surface-subtle);
+  color: var(--gj-muted);
+}
+
+.gj-translation[data-gj-state="failed"] .gj-translation-card {
+  border-color: color-mix(in srgb, var(--gj-red) 28%, transparent);
+  border-left-color: var(--gj-red);
+  background: var(--gj-red-soft);
+  color: var(--gj-red);
+}
+
+/* 语言标签：沿用参照里状态胶囊的写法（全圆角 + 700 字重），不再是一个方角小色块 */
+.gj-translation-label {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--gj-brand);
+  color: var(--gj-on-brand);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.gj-translation[data-gj-state="pending"] .gj-translation-label {
+  background: var(--gj-border-strong);
+  color: var(--gj-ink);
+}
+
+.gj-translation[data-gj-state="failed"] .gj-translation-label {
+  background: var(--gj-red);
+  /* 暗色档 --gj-red 偏亮，红底上必须配深字（见 --gj-on-danger 的注释） */
+  color: var(--gj-on-danger);
+}
+
+.gj-translation-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/*
+ * 机译初稿标记：整块换成琥珀色系，与「AI 译文」的紫区分开。
+ * 不加红色 —— 红色的语义在这里是"出错了"，而机译只是"还没到终稿"。
+ */
+.gj-translation[data-gj-tier="mt"] .gj-translation-card {
+  border-color: color-mix(in srgb, var(--gj-amber) 26%, transparent);
+  border-left-color: var(--gj-amber);
+  background: var(--gj-amber-soft);
+}
+
+.gj-translation[data-gj-tier="mt"] .gj-translation-label {
+  background: var(--gj-amber);
+  color: var(--gj-on-brand);
+}
+
+/* 「AI 精修中…」—— 只在机译已经显示、AI 还在路上时出现，精修到了就整块移除 */
+.gj-translation-refining {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gj-amber) 16%, transparent);
+  color: var(--gj-amber);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  animation: gj-refining-pulse 1.4s var(--gj-ease-out) infinite;
+}
+
+@keyframes gj-refining-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gj-translation-refining { animation: none; }
+}
+
+/* 重试：跟着所在状态块的颜色走，不去抢品牌色 —— 它只在失败态出现 */
+.gj-translation-retry {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.gj-translation-retry:hover {
+  opacity: 0.75;
+}
+
+/* --------------------------------------------------------------------------
+ * 输入框旁的草稿翻译按钮
+ * --------------------------------------------------------------------------
+ * 刻意**不做成 GJ 标识**：标识留给「归档 · 学习 · 自动回复」那个入口（见 agent.css），
+ * 因为那才是产品自己的面板。这个按钮是一次性的动作，用品牌实心方块 + 「译」字，
+ * 与标识同尺寸、同圆角、同阴影，属于同一族但一眼能分清"哪个是标、哪个是键"。
+ */
+#gj-compose-button {
+  position: fixed;
+  z-index: 2147483000;
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 11px;
+  background: var(--gj-brand);
+  box-shadow: var(--gj-shadow-sm);
+  color: var(--gj-on-brand);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 34px;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    background-color 0.16s var(--gj-ease-out),
+    box-shadow 0.16s var(--gj-ease-out),
+    transform 0.16s var(--gj-ease-out);
+}
+
+#gj-compose-button:hover {
+  background: var(--gj-brand-hover);
+  box-shadow: var(--gj-shadow);
+  transform: translateY(-1px);
+}
+
+#gj-compose-button:focus-visible {
+  outline: 2px solid var(--gj-brand);
+  outline-offset: 2px;
+}
+
+/*
+ * 译文浮框：贴右侧、垂直居中。
+ * 刻意不跟着输入框底部走 —— 长对话里 footer 一高，浮框就会被顶到屏幕中间压住消息。
+ */
+#gj-compose-panel {
+  position: fixed;
+  top: 50%;
+  right: 18px;
+  transform: translateY(-50%);
+  z-index: 2147483000;
+  box-sizing: border-box;
+  width: min(340px, 34vw);
+  max-width: calc(100vw - 36px);
+  max-height: 62vh;
+  overflow: auto;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--gj-border);
+  border-radius: var(--gj-radius-lg);
+  background: var(--gj-surface);
+  box-shadow: var(--gj-shadow);
+  color: var(--gj-ink);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  animation: gj-panel-in 0.18s var(--gj-ease-out) both;
+}
+
+@keyframes gj-panel-in {
+  from {
+    opacity: 0;
+    transform: translate(8px, -50%);
+  }
+  to {
+    opacity: 1;
+    transform: translate(0, -50%);
+  }
+}
+
+.gj-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 9px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--gj-border);
+  color: var(--gj-muted);
+  font-size: 11.5px;
+}
+
+.gj-panel-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--gj-ink);
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * 机译初稿：标题换成琥珀色。
+ * 为什么值得单独上色 —— 草稿是要发给客户的，而机译质量确实糙（实测把 `unidades`
+ * 译成"单位"）。用户扫一眼颜色就能知道"这份还没被 AI 精修过"，不必去读那行小字。
+ * 用 --gj-amber 而不是红：红是"出错了"，这里只是"还没到终稿"，不是错误。
+ */
+#gj-compose-panel[data-gj-tier="mt"] .gj-panel-title {
+  color: var(--gj-amber);
+}
+
+.gj-panel-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--gj-radius-sm);
+  background: transparent;
+  color: var(--gj-muted);
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 0.16s var(--gj-ease-out),
+    border-color 0.16s var(--gj-ease-out),
+    color 0.16s var(--gj-ease-out);
+}
+
+.gj-panel-close:hover {
+  border-color: var(--gj-border);
+  background: var(--gj-surface-subtle);
+  color: var(--gj-ink);
+}
+
+.gj-panel-body {
+  margin: 0;
+  color: var(--gj-ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 译文内容 + 右上角复制图标：图标钉在内容区右上角，译文再长也贴着内容走 */
+.gj-panel-bodywrap {
+  position: relative;
+  padding-right: 26px;
+}
+
+.gj-panel-copy {
+  position: absolute;
+  top: -2px;
+  right: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--gj-border-strong);
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-surface);
+  color: var(--gj-muted);
+  cursor: pointer;
+  transition:
+    background-color 0.16s var(--gj-ease-out),
+    border-color 0.16s var(--gj-ease-out),
+    color 0.16s var(--gj-ease-out);
+}
+
+.gj-panel-copy:hover:not(:disabled) {
+  border-color: var(--gj-brand);
+  background: var(--gj-brand-soft);
+  color: var(--gj-brand);
+}
+
+.gj-panel-copy:focus-visible {
+  outline: 2px solid var(--gj-brand);
+  outline-offset: 2px;
+}
+
+.gj-panel-copy:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#gj-compose-panel[data-gj-state="pending"] .gj-panel-body {
+  color: var(--gj-muted);
+}
+
+#gj-compose-panel[data-gj-state="failed"] .gj-panel-body {
+  color: var(--gj-red);
+}
+
+/* 替换成功：整框描一圈品牌环，和 CRM 里「已选中」的表达一致 */
+#gj-compose-panel[data-gj-state="replaced"] {
+  border-color: var(--gj-brand);
+  box-shadow:
+    0 0 0 3px var(--gj-brand-ring),
+    var(--gj-shadow);
+}
+
+.gj-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.gj-panel-replace,
+.gj-panel-send {
+  flex: 1 1 auto;
+  min-height: 33px;
+  padding: 6px 12px;
+  border-radius: var(--gj-radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 0.16s var(--gj-ease-out),
+    border-color 0.16s var(--gj-ease-out),
+    color 0.16s var(--gj-ease-out);
+}
+
+.gj-panel-replace {
+  border: 1px solid var(--gj-border-strong);
+  background: var(--gj-surface);
+  color: var(--gj-ink);
+}
+
+.gj-panel-replace:hover:not(:disabled) {
+  border-color: var(--gj-border-hover);
+  background: var(--gj-surface-subtle);
+}
+
+.gj-panel-send {
+  border: 1px solid var(--gj-brand);
+  background: var(--gj-brand);
+  color: var(--gj-on-brand);
+}
+
+.gj-panel-send:hover:not(:disabled) {
+  border-color: var(--gj-brand-hover);
+  background: var(--gj-brand-hover);
+}
+
+.gj-panel-replace:focus-visible,
+.gj-panel-send:focus-visible {
+  outline: 2px solid var(--gj-brand);
+  outline-offset: 2px;
+}
+
+.gj-panel-replace:disabled,
+.gj-panel-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gj-panel-hint {
+  flex: 1 0 100%;
+  color: var(--gj-green);
+  font-size: 11px;
+}
+
+/* 空提示不占高度，否则按钮下面永远多出一条空白 */
+.gj-panel-hint:empty {
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+ * 「扩展重载了，刷新一下」提示条
+ *
+ * 扩展重新加载 / 更新后，已经打开的页面里那份脚本会变成"孤儿"：翻译再也回不来了，
+ * 可页面看上去一切正常（悬浮球还在）—— 这是用户最没得猜的一种故障。
+ * 这条横幅是唯一一次能把话说清楚的机会。
+ * ------------------------------------------------------------------------ */
+.gj-stale {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 9px 10px 9px 14px;
+  border: 1px solid var(--gj-border-strong);
+  border-radius: var(--gj-radius-lg);
+  background: var(--gj-surface);
+  color: var(--gj-ink);
+  box-shadow: var(--gj-shadow);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  transform: translateX(-50%);
+  animation: gj-stale-in 0.22s var(--gj-ease-out);
+}
+
+@keyframes gj-stale-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+}
+
+.gj-stale-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gj-amber);
+}
+
+.gj-stale-text {
+  font-weight: 600;
+}
+
+.gj-stale-hint {
+  color: var(--gj-muted);
+}
+
+.gj-stale-btn {
+  flex: none;
+  margin-left: auto;
+  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-brand);
+  color: var(--gj-on-brand);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.gj-stale-btn:hover {
+  background: var(--gj-brand-hover);
+}
+
+.gj-stale-btn:focus-visible {
+  outline: 2px solid var(--gj-brand);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #gj-compose-panel {
+    animation: none;
+  }
+
+  .gj-stale {
+    animation: none;
+  }
+
+  #gj-compose-button {
+    transition: none;
+  }
+
+  #gj-compose-button:hover {
+    transform: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * 改版哨兵横幅：来信翻译找不到消息气泡时，把话挑明而不是静默装死
+ * ------------------------------------------------------------------------ */
+#gj-diag-banner {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 2147482990;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(480px, calc(100vw - 32px));
+  padding: 10px 12px 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--gj-amber) 45%, transparent);
+  border-left: 3px solid var(--gj-amber);
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-surface, #fff);
+  box-shadow: var(--gj-shadow);
+  color: var(--gj-ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.5;
+  animation: gj-diag-in 160ms ease-out;
+}
+
+#gj-diag-banner .gj-diag-text {
+  flex: 1 1 auto;
+}
+
+#gj-diag-banner .gj-diag-btn {
+  flex: none;
+  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-brand);
+  color: var(--gj-on-brand);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#gj-diag-banner .gj-diag-btn:hover {
+  background: var(--gj-brand-hover);
+}
+
+#gj-diag-banner .gj-diag-btn:disabled {
+  cursor: default;
+  background: var(--gj-brand-soft);
+  color: var(--gj-ink);
+}
+
+#gj-diag-banner .gj-diag-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--gj-radius-sm);
+  background: transparent;
+  color: var(--gj-muted, var(--gj-ink));
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#gj-diag-banner .gj-diag-close:hover {
+  background: var(--gj-brand-soft);
+}
+
+@keyframes gj-diag-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #gj-diag-banner {
+    animation: none;
+  }
+}

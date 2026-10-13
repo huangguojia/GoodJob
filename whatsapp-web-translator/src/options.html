@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>GoodJob WhatsApp 自动翻译 · 设置</title>
+    <link rel="stylesheet" href="gj-theme.css" />
+    <style>
+      body {
+        margin: 0;
+        padding: 28px 22px 48px;
+        background: var(--gj-canvas);
+        color: var(--gj-ink);
+        font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+
+      .page {
+        max-width: 720px;
+        margin: 0 auto;
+      }
+
+      /* ---------- 页头：GJ 标识 + 产品名 ---------- */
+      .page-head {
+        display: flex;
+        align-items: center;
+        margin-bottom: 18px;
+      }
+
+      .sub {
+        max-width: 640px;
+        margin: 0 0 18px;
+        color: var(--gj-muted);
+        font-size: 12.5px;
+        line-height: 1.7;
+      }
+
+      /* ---------- 卡片 ---------- */
+      .card {
+        margin: 0 0 16px;
+        padding: 16px 18px 18px;
+        border: 1px solid var(--gj-border);
+        border-radius: var(--gj-radius-lg);
+        background: var(--gj-surface);
+      }
+
+      .card > h2 {
+        margin: 0 0 2px;
+        color: var(--gj-ink);
+        font-size: 13.5px;
+        font-weight: 700;
+      }
+
+      .card > .card-note {
+        margin: 0 0 14px;
+        color: var(--gj-muted);
+        font-size: 11.5px;
+      }
+
+      /* ---------- 行 ---------- */
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .row:last-child {
+        margin-bottom: 0;
+      }
+
+      .row > label {
+        flex: 0 0 132px;
+        color: var(--gj-ink);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      /* 长文本（关键词 / 护栏）改纵向排：标签压在输入框上方，宽度才够读全文 */
+      .row.stacked {
+        display: block;
+      }
+
+      .row.stacked > label {
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      input[type="text"],
+      input[type="number"],
+      input[type="password"],
+      select,
+      textarea {
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: 38px;
+        padding: 8px 10px;
+        border: 1px solid var(--gj-border-strong);
+        border-radius: var(--gj-radius-sm);
+        background: var(--gj-surface);
+        color: var(--gj-ink);
+        font: inherit;
+        font-size: 13px;
+        transition:
+          border-color 0.16s var(--gj-ease-out),
+          box-shadow 0.16s var(--gj-ease-out);
+      }
+
+      .row.stacked > input,
+      .row.stacked > textarea,
+      .row.stacked > .period {
+        width: 100%;
+      }
+
+      textarea {
+        display: block;
+        resize: vertical;
+        font-family: inherit;
+        line-height: 1.6;
+      }
+
+      input::placeholder,
+      textarea::placeholder {
+        color: var(--gj-faint);
+      }
+
+      select {
+        appearance: none;
+        -webkit-appearance: none;
+        padding-right: 30px;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 8l3-3.5' fill='none' stroke='%237b8496' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 9px center;
+        background-size: 12px 12px;
+      }
+
+      input:focus,
+      select:focus,
+      textarea:focus {
+        border-color: var(--gj-brand);
+        box-shadow: 0 0 0 3px var(--gj-brand-ring);
+        outline: none;
+      }
+
+      .period {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1 1 auto;
+        color: var(--gj-muted);
+        font-size: 12.5px;
+      }
+
+      .period input {
+        flex: 0 0 84px;
+      }
+
+      /* ---------- CRM 连接 ---------- */
+
+      /* 会话状态是一枚"灯"：颜色本身就带语义，别让用户去读句子才知道通没通 */
+      .crm-state {
+        flex: 1 1 auto;
+        color: var(--gj-muted);
+        font-size: 13px;
+      }
+
+      .crm-state[data-state="ok"] {
+        color: var(--gj-green);
+      }
+
+      .crm-state[data-state="warn"] {
+        color: var(--gj-amber);
+      }
+
+      .crm-state[data-state="err"] {
+        color: var(--gj-red);
+      }
+
+      .crm-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        /* 144px = 标签列 132px + 间距 12px，与输入框、与下面的提示行同一条竖线 */
+        margin: 2px 0 0 144px;
+      }
+
+      /* 窄窗口下按钮不要被挤出卡片 */
+      @media (max-width: 560px) {
+        .crm-actions {
+          margin-left: 0;
+        }
+      }
+
+      /* 按钮下面那条状态文字要顶格：它说的是"刚刚点了按钮之后发生了什么"，
+         缩进 144px 会让人以为它属于上面某一行的输入框。 */
+      .crm-actions + .hint {
+        margin-top: 10px;
+        margin-left: 0;
+      }
+
+      .crm-actions + .hint.ok {
+        color: var(--gj-green);
+      }
+
+      .crm-actions + .hint.warn {
+        color: var(--gj-amber);
+      }
+
+      .crm-actions + .hint.err {
+        color: var(--gj-red);
+      }
+
+      /* 没有内容时连占位带外边距一起收掉，否则卡片底部会凭空多出一截 */
+      #crmStatus:empty {
+        display: none;
+      }
+
+      /* ---------- 资料推荐效果（只读小报表） ---------- */
+
+      .crm-stats {
+        margin: 12px 0 0;
+        padding: 12px 14px;
+        border: 1px solid var(--gj-border, rgba(0, 0, 0, 0.12));
+        border-radius: 10px;
+      }
+
+      .crm-stats-title {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--gj-muted);
+      }
+
+      .crm-stats-totals {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 18px;
+        font-size: 13px;
+      }
+
+      .crm-stats-totals b {
+        font-variant-numeric: tabular-nums;
+      }
+
+      .crm-stats-items {
+        margin: 8px 0 0;
+        padding: 0;
+        list-style: none;
+        font-size: 12px;
+      }
+
+      .crm-stats-items li {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 3px 0;
+        border-top: 1px dashed var(--gj-border, rgba(0, 0, 0, 0.08));
+      }
+
+      .crm-stats-items li span:first-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .crm-stats-items .num {
+        flex: none;
+        font-variant-numeric: tabular-nums;
+        color: var(--gj-muted);
+      }
+
+      .crm-stats .crm-stats-error {
+        margin: 0;
+        color: var(--gj-amber);
+        font-size: 12px;
+      }
+
+      /* ---------- 开关 ---------- */
+      .switch {
+        appearance: none;
+        -webkit-appearance: none;
+        position: relative;
+        flex: none;
+        width: 38px;
+        height: 22px;
+        margin: 0 0 0 auto;
+        border: 0;
+        border-radius: 999px;
+        background: var(--gj-track);
+        cursor: pointer;
+        transition: background-color 0.16s var(--gj-ease-out);
+      }
+
+      .switch::after {
+        content: "";
+        position: absolute;
+        left: 2px;
+        top: 2px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+        transition: transform 0.16s var(--gj-ease-out);
+      }
+
+      .switch:checked {
+        background: var(--gj-brand);
+      }
+
+      .switch:checked::after {
+        transform: translateX(16px);
+      }
+
+      .switch:focus-visible {
+        outline: 2px solid var(--gj-brand);
+        outline-offset: 2px;
+      }
+
+      /* ---------- 提示 ---------- */
+      .hint {
+        margin: -6px 0 12px 144px;
+        color: var(--gj-faint);
+        font-size: 11.5px;
+        line-height: 1.6;
+      }
+
+      .row.stacked + .hint {
+        margin-left: 0;
+      }
+
+      code {
+        padding: 1px 5px;
+        border-radius: 4px;
+        background: var(--gj-surface-subtle);
+        color: var(--gj-ink);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+      }
+
+      /* ---------- 可用模型清单：点一下填进「模型」框 ---------- */
+      /*
+        ⚠️ 这一块是踩坑补上的：模型名原本只能手输，而不同中转站能用的模型差得极远
+        （实测某站只有 9 个、且不含任何 gpt-4o-*）。填了个不存在的名字 → 每次请求秒回 404，
+        用户看到的现象是「翻译完全没反应」。有了清单就能点选，这类错误从根上消失。
+      */
+      .model-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: -4px 0 12px 144px;
+      }
+
+      .model-list button {
+        min-height: 28px;
+        padding: 4px 10px;
+        font-size: 12px;
+        font-weight: 500;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      .model-list button[aria-pressed="true"] {
+        border-color: var(--gj-brand);
+        color: var(--gj-brand);
+      }
+
+      /* 说明文字独占一行：它是 flex 容器里的 item，不撑满宽度就会被压在标签右边换行 */
+      .model-list .hint {
+        flex: 1 0 100%;
+        margin: 2px 0 0;
+      }
+
+      /* ---------- 动作区 ---------- */
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 18px;
+      }
+
+      button {
+        min-height: 36px;
+        padding: 8px 14px;
+        border: 1px solid var(--gj-border-strong);
+        border-radius: var(--gj-radius-sm);
+        background: var(--gj-surface);
+        color: var(--gj-ink);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition:
+          background-color 0.16s var(--gj-ease-out),
+          border-color 0.16s var(--gj-ease-out),
+          color 0.16s var(--gj-ease-out);
+      }
+
+      button:hover:not(:disabled) {
+        border-color: var(--gj-border-hover);
+        background: var(--gj-surface-subtle);
+      }
+
+      button.primary {
+        border-color: var(--gj-brand);
+        background: var(--gj-brand);
+        color: var(--gj-on-brand);
+      }
+
+      button.primary:hover:not(:disabled) {
+        border-color: var(--gj-brand-hover);
+        background: var(--gj-brand-hover);
+      }
+
+      button:focus-visible {
+        outline: 2px solid var(--gj-brand);
+        outline-offset: 2px;
+      }
+
+      #status {
+        color: var(--gj-muted);
+        font-size: 12.5px;
+      }
+
+      #status.ok {
+        color: var(--gj-green);
+      }
+
+      #status.err {
+        color: var(--gj-red);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .switch,
+        .switch::after,
+        input,
+        select,
+        textarea,
+        button {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="page-head">
+        <div class="gj-wordmark">
+          <span class="gj-mark" style="--gj-mark-size: 38px" aria-hidden="true"><span>G</span><span>J</span></span>
+          <div>
+            <strong>GoodJob WhatsApp 助手</strong>
+            <span>网页版 WhatsApp · 翻译 / 归档 / 自动回复</span>
+          </div>
+        </div>
+      </header>
+
+      <p class="sub">
+        在网页版 WhatsApp 里做四件事：把客户来信自动译成中文、把对话抓成本地归档用来训练、按你自己的历史话术生成回复、
+        接上 CRM 后还能用客户往来与知识库由本机模型推理出稿。
+        <strong>默认是草稿模式</strong>：回复只填进输入框，由你确认后再发；改成「全自动发送」它才会自己发。
+        计算都在本机完成，不接触 WhatsApp 的通信协议，也不把聊天记录传到第三方 ——
+        只有你主动点「用 CRM 生成回复」时，才会把当前会话发给本机插件。
+      </p>
+
+      <section class="card">
+        <h2>翻译行为</h2>
+        <p class="card-note">决定「什么时候翻」和「翻成什么」。</p>
+        <div class="row">
+          <label for="enabled">自动翻译客户来信</label>
+          <input id="enabled" class="switch" type="checkbox" />
+        </div>
+        <div class="row">
+          <label for="targetLang">译为</label>
+          <select id="targetLang"></select>
+        </div>
+        <div class="row">
+          <label for="composeTranslate">草稿翻译按钮</label>
+          <input id="composeTranslate" class="switch" type="checkbox" />
+        </div>
+        <div class="row">
+          <label for="composeAuto">草稿自动翻译</label>
+          <input id="composeAuto" class="switch" type="checkbox" />
+        </div>
+        <div class="row">
+          <label for="autoSendAfterReplace">替换后自动发送</label>
+          <input id="autoSendAfterReplace" class="switch" type="checkbox" />
+        </div>
+        <div class="row">
+          <label for="engineMode">翻译引擎</label>
+          <select id="engineMode">
+            <option value="hybrid">混合（机译打底 + AI 精修）</option>
+            <option value="mt">只用机译（最快 · 免费）</option>
+            <option value="ai">只用 AI（最准 · 慢）</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="replyLang">我的回复语言</label>
+          <select id="replyLang"></select>
+        </div>
+        <p class="hint">
+          在你的输入框里打中文，停一下就会自动译成「我的回复语言」，结果显示在右侧浮框里：右上角图标复制，「替换到输入框」或「替换并发送」。
+          「替换后自动发送」开着时，浮框里有「替换并发送」按钮：把译文写进输入框并直接发出去（不用再按回车）；
+          只有写入被编辑器确认过才会自动发，否则照旧只替换。关掉它浮框里就只剩「替换到输入框」。
+          自动这一步只对中文草稿生效（免得把你写的英文又译回中文）；想翻英文草稿仍可点右下角的「译」。
+          「翻译引擎」也能在 WhatsApp 页面的 GJ 面板里就地切换，不用打开这页。
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>自动回复（归档 · 训练 · 生成）</h2>
+        <p class="card-note">回复一律来自你自己的历史话术，模型只做检索，不凭空编。</p>
+        <div class="row">
+          <label for="autoMode">模式</label>
+          <select id="autoMode">
+            <option value="off">关闭</option>
+            <option value="draft">草稿 — 生成后填进输入框，我确认再发</option>
+            <option value="auto">全自动发送 — 达到置信度就自己发</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="autoDailyLimit">每日发送上限</label>
+          <input id="autoDailyLimit" type="number" min="0" max="500" />
+        </div>
+        <div class="row">
+          <label for="autoInterval">最小间隔（分钟）</label>
+          <input id="autoInterval" type="number" min="0" max="1440" />
+        </div>
+        <div class="row">
+          <label for="autoHoursStart">活跃时段</label>
+          <span class="period">
+            <input id="autoHoursStart" type="number" min="0" max="23" />
+            <span>–</span>
+            <input id="autoHoursEnd" type="number" min="0" max="23" />
+            <span>点</span>
+          </span>
+        </div>
+        <div class="row">
+          <label for="autoThreshold">置信度门槛</label>
+          <input id="autoThreshold" type="number" min="0" max="1" step="0.01" />
+        </div>
+        <div class="row stacked">
+          <label for="autoEscalate">转人工关键词</label>
+          <textarea id="autoEscalate" rows="3" placeholder="每行一个；留空用出厂默认"></textarea>
+        </div>
+        <p class="hint">客户消息里出现这些词（投诉、退款、律师…）时不自动回复，直接交给人工。</p>
+        <div class="row stacked">
+          <label for="autoGuardrails">护栏</label>
+          <textarea id="autoGuardrails" rows="3" placeholder="每行一条；留空用出厂默认"></textarea>
+        </div>
+        <p class="hint">
+          护栏里提到价格/折扣/交期/库存时，回复里只要出现金额就会被拦下不发。留空则使用出厂护栏，
+          原文在 <code>src/trainer.js</code> 的 <code>DEFAULT_GUARDRAILS</code>。
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>快速底座（先出初译，不等 AI）</h2>
+        <p class="card-note">
+          第一眼要看到的那句话交给轻量机器翻译，AI 在后台照旧跑、回来原地替换。
+        </p>
+        <div class="row">
+          <label for="fastBase">底座</label>
+          <select id="fastBase"></select>
+        </div>
+        <div class="row">
+          <label for="fastBaseEmail">邮箱（可选）</label>
+          <input id="fastBaseEmail" type="text" placeholder="留空 = 匿名额度（较小）" />
+        </div>
+        <p id="fastBaseNote" class="hint"></p>
+        <p class="hint">
+          <strong>为什么必须有它：</strong>翻译走的那条 AI 线路实测<strong>没有快模型</strong> ——
+          同一句外贸问句，最快的 <code>gpt-5.6-sol</code> 出首字也要 10.3 秒，最慢的 <code>gpt-5.5</code> 要 66.4 秒；
+          而且每个请求都被上游塞了 3600~4400 的隐藏前缀（原文加提示词本身不到 100 token）。
+          <strong>掐超时和换模型都治不了这个病</strong>，只能把"第一眼"这一层挪到别处去。
+          底座实测 <strong>0.8~3.4 秒</strong>（英/西/德/法六条外贸问句，6/6 成功）。
+        </p>
+        <p class="hint">
+          <strong>机译只当初稿：</strong>界面上会把它标成「机译」并挂一行「AI 精修中…」，
+          精修回来自动换成「译」。速度按底座算，质量仍以 AI 为准。
+        </p>
+        <p class="hint">
+          ⚠️ 打开底座意味着<strong>客户消息正文会发给第三方机器翻译服务</strong>。
+          Google 接口在本机网络下不可达（实测 12 秒超时），MyMemory 是实测能通的那个。
+          如果你不希望消息出到第三方，把底座改成「关闭」，翻译就退回只用 AI 的原行为。
+        </p>
+        <div class="crm-actions">
+          <button id="probeFastBase" type="button">测一次底座</button>
+        </div>
+        <p id="fastBaseOut" class="hint"></p>
+      </section>
+
+      <section class="card">
+        <h2>翻译模型（OpenAI 兼容）</h2>
+        <p class="card-note">只用来翻译；归档与自动回复不经过它。</p>
+        <div class="row">
+          <label for="apiBase">API 地址</label>
+          <input id="apiBase" type="text" placeholder="https://api.example.com/v1" />
+        </div>
+        <div class="row">
+          <label for="apiKey">API Key</label>
+          <input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" />
+        </div>
+        <p class="hint">
+          Key 只保存在本机浏览器里（<code>chrome.storage.local</code>），不会上传到任何地方，扩展只拿它去调你自己填的这个接口。
+          默认值已经和 CRM 里配好的模型对齐，把 Key 粘进去即可。
+        </p>
+        <div class="row">
+          <label for="model">模型</label>
+          <input id="model" type="text" placeholder="点右边「拉取清单」，从清单里挑一个" />
+          <button id="listModels" type="button">拉取清单</button>
+        </div>
+        <div id="modelList" class="model-list" hidden></div>
+        <div class="row">
+          <label for="reasoningEffort">推理强度</label>
+          <select id="reasoningEffort">
+            <option value="">不传（兼容性最好）</option>
+            <option value="minimal">minimal（最快）</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </div>
+        <p class="hint">
+          <strong>模型名别手输 —— 先点上面「拉取清单」。</strong>
+          不同中转站能用的模型差得极远（实测某站一共只有 9 个、且不含任何 <code>gpt-4o-*</code>）。
+          手输一个这条线路上不存在的名字，每次请求都会秒回 <code>404 model_not_found</code>，
+          而界面上只显示「接口路径或模型名不对」—— 你看到的现象就是「翻译完全没反应」。
+        </p>
+        <p class="hint">
+          <strong>翻译慢，绝大多数时候是模型选错了，不是网络问题。</strong>
+          推理型模型（gpt-5.x / o 系列这类）在回译文前会先做一轮「内部推理」，翻译这种轻任务
+          常被这轮推理吃掉十几秒。三个提速手段按效果排序：
+          ① <strong>从清单里挑实测最快的那个</strong>（用下面的「对比测速」把几个候选各测一遍）；
+          ② 把上面的「推理强度」调成 <code>minimal</code>（前提是你的接口认这个参数，不认会自动降级）；
+          ③ <strong>但别指望靠调参把这条线路压到几秒</strong> —— 实测最快也要 10.3 秒，
+          最慢 66.4 秒，而且同一个模型两次跑最多差 3 倍。
+          要做到「第一眼就懂」，靠的是<strong>上面那张「快速底座」卡</strong>，不是这三招。
+        </p>
+        <div class="crm-actions">
+          <button id="bench" type="button">对比测速</button>
+        </div>
+        <p id="benchOut" class="hint"></p>
+      </section>
+
+      <section class="card">
+        <h2>CRM 连接（历史 · 推理 · 文档搜索）</h2>
+        <p class="card-note">
+          把这页上的对话交给 CRM 那条真回复链：插件按你的权限读客户往来记录与知识库命中，再由本机 CLI 加载回复技能出稿。
+          与上面的翻译模型无关 —— 翻译走接口，智能回复走这条链路。
+        </p>
+        <div class="row">
+          <label for="crmBaseUrl">CRM 地址</label>
+          <input id="crmBaseUrl" type="text" placeholder="http://127.0.0.1:4188" />
+        </div>
+        <div class="row">
+          <label for="pluginBaseUrl">插件地址</label>
+          <input id="pluginBaseUrl" type="text" placeholder="http://127.0.0.1:3100" />
+        </div>
+        <div class="row">
+          <label for="crmEmail">CRM 账号</label>
+          <input id="crmEmail" type="text" placeholder="登录 CRM 的邮箱" autocomplete="username" />
+        </div>
+        <div class="row">
+          <label for="crmPassword">密码</label>
+          <input id="crmPassword" type="password" placeholder="只在点「登录」时用一次，不留存" autocomplete="current-password" />
+        </div>
+        <div class="row">
+          <label>连接状态</label>
+          <span id="crmState" class="crm-state" data-state="unknown">未检测</span>
+        </div>
+        <div class="crm-actions">
+          <button id="crmLogin" class="primary" type="button">登录 CRM</button>
+          <button id="crmRefresh" type="button">测试连通</button>
+          <button id="crmLogout" type="button">退出登录</button>
+        </div>
+        <p id="crmStatus" class="hint"></p>
+        <div id="crmStats" class="crm-stats" hidden>
+          <p class="crm-stats-title">资料推荐效果（最近 30 天）</p>
+          <div id="crmStatsTotals" class="crm-stats-totals"></div>
+          <ul id="crmStatsItems" class="crm-stats-items"></ul>
+        </div>
+        <p class="hint">
+          密码一个字节都不存；令牌单独放在 <code>chrome.storage.local</code> 的 <code>gj_crm_session</code> 里，
+          过期前 5 分钟就会提示你重新登录。两个地址默认指向本机（CRM 4188 / 插件 3100），改了远端才需要额外授权。
+        </p>
+      </section>
+
+      <div class="actions">
+        <button id="save" class="primary" type="button">保存</button>
+        <button id="test" type="button">测试连接</button>
+        <button id="clear" type="button">清空翻译缓存</button>
+        <span id="status"></span>
+      </div>
+    </div>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

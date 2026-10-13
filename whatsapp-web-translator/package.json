@@ -1,0 +1,11 @@
+{
+  "name": "goodjob-whatsapp-web-translator",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "网页版 WhatsApp 自动翻译扩展（Chrome MV3）。package.json 只为让 Node 能跑 tests/ 下的 ESM 用例，扩展本身不依赖它。",
+  "scripts": {
+    "test": "node tests/provider.test.mjs",
+    "test:e2e": "node tests/e2e-extension.mjs"
+  }
+}

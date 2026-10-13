@@ -4,6 +4,7 @@ import {
   loadConfig,
   parseBaileysProxyUrl,
   parseBoolean,
+  parseMetaProxyUrl,
   parsePort,
   parseWebOrigin
 } from "../src/server/config";
@@ -54,6 +55,17 @@ describe("server configuration", () => {
     expect(parseBaileysProxyUrl("https://proxy.example.test/connect")).toBe("https://proxy.example.test/connect");
     expect(() => parseBaileysProxyUrl("socks5://127.0.0.1:1080")).toThrow(/http or https/u);
     expect(() => parseBaileysProxyUrl("not a url")).toThrow(/valid HTTP\(S\) URL/u);
+  });
+
+  it("accepts only optional HTTP(S) Meta Graph proxy URLs", () => {
+    expect(parseMetaProxyUrl(undefined)).toBeUndefined();
+    expect(parseMetaProxyUrl("  ")).toBeUndefined();
+    expect(parseMetaProxyUrl("http://127.0.0.1:29290")).toBe("http://127.0.0.1:29290/");
+    expect(parseMetaProxyUrl("https://proxy.example.test/connect")).toBe("https://proxy.example.test/connect");
+    expect(() => parseMetaProxyUrl("socks5://127.0.0.1:1080")).toThrow(/http or https/u);
+    expect(() => parseMetaProxyUrl("not a url")).toThrow(/valid HTTP\(S\) URL/u);
+    expect(loadConfig({ META_PROXY_URL: "http://127.0.0.1:29290" }).metaProxyUrl).toBe("http://127.0.0.1:29290/");
+    expect(loadConfig({}).metaProxyUrl).toBeUndefined();
   });
 
   it("allows non-production runtimes to opt into the official-only boundary", () => {

@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Mock WhatsApp Web · 扩展自检页</title>
+    <style>
+      /* 尽量贴近 WhatsApp Web 的真实结构与布局：左侧会话列表 + 右侧消息区；
+         消息行是 flex 容器，气泡在行内。这样能验证「译文换行到气泡下方」是否真的成立。 */
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #d1d7db;
+        font: 14.2px/1.5 -apple-system, "PingFang SC", sans-serif;
+        color: #111b21;
+      }
+      .two {
+        display: flex;
+        height: 100vh;
+      }
+      #pane-side {
+        flex: none;
+        width: 30%;
+        max-width: 380px;
+        min-width: 220px;
+        background: #fff;
+        border-right: 1px solid #e2e5e9;
+        overflow-y: auto;
+      }
+      .chat-row {
+        padding: 10px 14px;
+        border-bottom: 1px solid #f0f2f5;
+        cursor: pointer;
+      }
+      .chat-row[aria-selected="true"] {
+        background: #f0f2f5;
+      }
+      .chat-row .who {
+        font-size: 14px;
+      }
+      .chat-row .last {
+        color: #667781;
+        font-size: 12px;
+      }
+      #main {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        min-width: 0;
+        background: #efeae2;
+      }
+      #main > header {
+        flex: none;
+        padding: 10px 16px;
+        background: #f0f2f5;
+        border-bottom: 1px solid #e2e5e9;
+        font-size: 13px;
+        color: #54656f;
+      }
+      #main > header .title {
+        color: #111b21;
+        font-size: 14.5px;
+      }
+      [data-testid="conversation-panel-messages"] {
+        flex: 1 1 auto;
+        overflow-y: auto;
+        padding: 14px 6%;
+      }
+      .message-in,
+      .message-out {
+        display: flex;
+        align-items: flex-end;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+      .message-in.block-row {
+        display: block;
+      }
+      .message-out {
+        justify-content: flex-end;
+      }
+      .bubble {
+        max-width: 62%;
+        padding: 7px 9px 6px;
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .message-out .bubble {
+        background: #d9fdd3;
+      }
+      .meta {
+        margin-top: 2px;
+        color: #667781;
+        font-size: 11px;
+        text-align: right;
+      }
+      #main > footer {
+        display: flex;
+        flex: none;
+        gap: 8px;
+        padding: 10px 16px 14px;
+        background: #f0f2f5;
+      }
+      #main > footer .composer {
+        flex: 1 1 auto;
+        min-height: 40px;
+        padding: 9px 12px;
+        border-radius: 8px;
+        background: #fff;
+        outline: none;
+      }
+      #main > footer .composer:empty::before {
+        content: "输入消息…（自检页：在这里打中文，然后点右下角「译」）";
+        color: #8696a0;
+      }
+      #main > footer [data-testid="send"] {
+        flex: none;
+        padding: 0 16px;
+        border: 0;
+        border-radius: 8px;
+        background: #1d9e75;
+        color: #fff;
+        font: inherit;
+        cursor: pointer;
+      }
+      .case-note {
+        margin: 0 0 4px;
+        color: #8696a0;
+        font-size: 11px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="two">
+        <div id="pane-side" role="list">
+          <div class="chat-row" role="listitem" data-id="346001@c.us" data-chat="a" aria-selected="true">
+            <div class="who"><span title="Miguel Santos">Miguel Santos</span></div>
+            <div class="last">Hola, nos interesan 500 unidades…</div>
+          </div>
+          <div class="chat-row" role="listitem" data-id="492222333@c.us" data-chat="b" aria-selected="false">
+            <div class="who"><span title="Ana Torres">Ana Torres</span></div>
+            <div class="last">¿Podrían confirmar el plazo de entrega…</div>
+          </div>
+        </div>
+
+        <div id="main">
+          <header>
+            <div class="title" data-testid="conversation-info-header-chat-title" title="Miguel Santos">Miguel Santos</div>
+            <div>Mock 会话 · 每行末尾注明这条在测什么</div>
+          </header>
+
+          <div data-testid="conversation-panel-messages">
+            <p class="case-note">① 西语来信 → 应自动出译文（flex 行）</p>
+            <div class="message-in" data-id="false_346001@c.us_AAA1">
+              <div class="bubble">
+                <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[12:03, 07/10/2026] Miguel Santos: "
+                  ><span>Hola, nos interesan 500 unidades. ¿Podrían compartir el precio FOB?</span></span
+                >
+                <div class="meta">12:03</div>
+              </div>
+            </div>
+
+            <p class="case-note">② 与①完全相同 → 应命中缓存，仍然只出一条译文</p>
+            <div class="message-in" data-id="false_346001@c.us_AAA2">
+              <div class="bubble">
+                <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[12:04, 07/10/2026] Miguel Santos: "
+                  ><span>Hola, nos interesan 500 unidades. ¿Podrían compartir el precio FOB?</span></span
+                >
+                <div class="meta">12:04</div>
+              </div>
+            </div>
+
+            <p class="case-note">③ 英语来信（block 行，验证非 flex 容器也不会崩）</p>
+            <div class="message-in block-row" data-id="false_861380@c.us_BBB1">
+              <div class="bubble">
+                <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[12:05, 07/10/2026] Wang Lei: "
+                  ><span>Could you confirm the lead time for the custom packaging?</span></span
+                >
+                <div class="meta">12:05</div>
+              </div>
+            </div>
+
+            <p class="case-note">④ 中文来信 → 应被跳过（不出译文节点）</p>
+            <div class="message-in" data-id="false_861380@c.us_BBB2">
+              <div class="bubble">
+                <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[12:06, 07/10/2026] Wang Lei: "><span>你好，请确认一下交期，谢谢。</span></span>
+                <div class="meta">12:06</div>
+              </div>
+            </div>
+
+            <p class="case-note">⑤ 纯数字 → 应被跳过</p>
+            <div class="message-in" data-id="false_861380@c.us_BBB3">
+              <div class="bubble">
+                <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[12:07, 07/10/2026] Wang Lei: "><span>500</span></span>
+                <div class="meta">12:07</div>
+              </div>
+            </div>
+
+            <p class="case-note">⑥ 只有链接 → 应被跳过</p>
+            <div class="message-in" data-id="false_861380@c.us_BBB4">
+              <div class="bubble">
+                <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[12:08, 07/10/2026] Wang Lei: "
+                  ><span>https://example.com/catalog/2026.pdf</span></span
+                >
+                <div class="meta">12:08</div>
+              </div>
+            </div>
+
+            <p class="case-note">⑦ 只有表情 → 应被跳过</p>
+            <div class="message-in" data-id="false_861380@c.us_BBB5">
+              <div class="bubble">
+                <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[12:09, 07/10/2026] Wang Lei: "><span>👍🎉</span></span>
+                <div class="meta">12:09</div>
+              </div>
+            </div>
+
+            <p class="case-note">⑧ 我发出去的消息 → 不应被翻译</p>
+            <div class="message-out" data-id="true_861380@c.us_CCC1">
+              <div class="bubble">
+                <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[12:10, 07/10/2026] 我方: "
+                  ><span>Thanks, I will check and revert shortly.</span></span
+                >
+                <div class="meta">12:10</div>
+              </div>
+            </div>
+
+            <p class="case-note">⑨ 含 FAIL401 → 应显示失败态 + 重试按钮</p>
+            <div class="message-in" data-id="false_491511@c.us_DDD1">
+              <div class="bubble">
+                <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[12:11, 07/10/2026] Karsten Meyer: "
+                  ><span>FAIL401 Could you share the packing list?</span></span
+                >
+                <div class="meta">12:11</div>
+              </div>
+            </div>
+
+            <p class="case-note">⑩ 多段消息（两行 selectable-text）→ 应整体翻译</p>
+            <div class="message-in" data-id="false_491511@c.us_DDD2">
+              <div class="bubble">
+                <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[12:12, 07/10/2026] Karsten Meyer: "><span>Buenos días.</span></span>
+                <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[12:12, 07/10/2026] Karsten Meyer: "
+                  ><span>Adjunto el pedido; confirmamos la cantidad mañana.</span></span
+                >
+                <div class="meta">12:12</div>
+              </div>
+            </div>
+          </div>
+
+          <footer>
+            <div class="composer" contenteditable="true" data-lexical-editor="true"></div>
+            <button data-testid="send" type="button" aria-label="Send">发送</button>
+          </footer>
+        </div>
+      </div>
+    </div>
+
+    <!--
+      会话 B：归档 / 训练 / 自动回复的自检素材。
+      刻意做成「一问一答」交替，且来回都带 data-pre-plain-text（真实 WhatsApp 就是把这个
+      属性写在 .copyable-text 上），这样归档能拿到真实时间戳，训练能抽到问答对。
+      最后一条是客户来信、我方还没回 —— 自动回复就该在这一条上产出草稿。
+    -->
+    <template id="panel-b">
+      <div class="message-in" data-id="false_492222333@c.us_EEE1">
+        <div class="bubble">
+          <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[09:10, 08/10/2026] Ana Torres: "
+            ><span>Hola, ¿podrían confirmar el plazo de entrega del modelo SQC-300?</span></span
+          >
+          <div class="meta">09:10</div>
+        </div>
+      </div>
+      <div class="message-out" data-id="true_492222333@c.us_EEE2">
+        <div class="bubble">
+          <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[09:20, 08/10/2026] 我方: "
+            ><span>Good morning Ana. Lead time for the SQC-300 is 45 days after deposit. Shall I reserve production capacity for you?</span></span
+          >
+          <div class="meta">09:20</div>
+        </div>
+      </div>
+      <div class="message-in" data-id="false_492222333@c.us_EEE3">
+        <div class="bubble">
+          <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[09:25, 08/10/2026] Ana Torres: "
+            ><span>Perfecto. ¿Y el MOQ de la versión de acero inoxidable?</span></span
+          >
+          <div class="meta">09:25</div>
+        </div>
+      </div>
+      <!--
+        EEE4 刻意做成**跨行**回复（新版 WhatsApp 的换行是 .selectable-text 内部的 <br>，
+        innerText 会带 \n）。归档必须原样保住这个换行，否则客户看到的"1) 2)"在归档里会糊成一坨。
+      -->
+      <div class="message-out" data-id="true_492222333@c.us_EEE4">
+        <div class="bubble">
+          <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[09:31, 08/10/2026] 我方: "
+            ><span>MOQ for the stainless version is 10 pcs.<br />Would you like me to prepare a PI for 10 pcs?</span></span
+          >
+          <div class="meta">09:31</div>
+        </div>
+      </div>
+      <div class="message-in" data-id="false_492222333@c.us_EEE5">
+        <div class="bubble">
+          <span class="selectable-text copyable-text" dir="ltr" data-pre-plain-text="[09:40, 08/10/2026] Ana Torres: "
+            ><span>¿Podrían confirmar el plazo de entrega del modelo SQC-300?</span></span
+          >
+          <div class="meta">09:40</div>
+        </div>
+      </div>
+    </template>
+
+    <script>
+      /* 会话切换：把消息面板的 innerHTML 在两个 fixture 之间换。
+         刻意**不用**两个并存的容器 —— 那样 archive/翻译的容器查询会撞车。 */
+      (function () {
+        const pane = document.querySelector('[data-testid="conversation-panel-messages"]');
+        const title = document.querySelector('[data-testid="conversation-info-header-chat-title"]');
+        const composer = document.querySelector("#main footer .composer");
+        const sendButton = document.querySelector('#main footer [data-testid="send"]');
+        const rows = Array.from(document.querySelectorAll("#pane-side .chat-row"));
+
+        const fixtures = {
+          a: { id: "346001@c.us", name: "Miguel Santos", html: pane.innerHTML },
+          b: { id: "492222333@c.us", name: "Ana Torres", html: document.getElementById("panel-b").innerHTML }
+        };
+
+        const state = { key: "a", outSeq: 0 };
+        window.__gjMock = {
+          get current() {
+            return state.key;
+          },
+          get sentCount() {
+            return pane.querySelectorAll("div.message-out").length;
+          }
+        };
+
+        function render(key) {
+          state.key = key;
+          pane.innerHTML = fixtures[key].html;
+          title.textContent = fixtures[key].name;
+          title.setAttribute("title", fixtures[key].name);
+          for (const row of rows) row.setAttribute("aria-selected", String(row.dataset.chat === key));
+          if (composer) composer.textContent = "";
+        }
+        window.__gjMock.switchTo = render;
+
+        for (const row of rows) {
+          row.addEventListener("click", () => render(row.dataset.chat));
+        }
+
+        // 发送：把输入框内容变成一条我方消息追加进去，然后清空。
+        function send() {
+          const text = (composer?.innerText || composer?.textContent || "").trim();
+          if (!text) return false;
+          const fixture = fixtures[state.key];
+          const wrap = document.createElement("div");
+          wrap.className = "message-out";
+          wrap.setAttribute("data-id", `true_${fixture.id}_OUT${++state.outSeq}`);
+          const bubble = document.createElement("div");
+          bubble.className = "bubble";
+          const copyable = document.createElement("span");
+          copyable.className = "selectable-text copyable-text";
+          copyable.setAttribute("data-pre-plain-text", `[10:00, 11/10/2026] 我方: `);
+          copyable.textContent = text;
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = "10:00";
+          bubble.append(copyable, meta);
+          wrap.appendChild(bubble);
+          pane.appendChild(wrap);
+          // 顽固编辑器开着时，清空会触发它的回渲染观察者（把旧草稿填回来）——
+          // 真机没有这回事：消息发出去输入框就是空的。消费掉这一次回渲染。
+          if (strict.on) strict.skipRevert = true;
+          composer.textContent = "";
+          return true;
+        }
+        window.__gjMock.send = send;
+        sendButton?.addEventListener("click", send);
+
+        /* ---------- 改版模式（?gjrenamed=1）：验「哨兵必须把停摆说出口」 ----------
+           模拟**两层都死**的最坏改版：行类名换掉（message-in/out → bubble-in/out）、
+           msg-container 这个 testid 也换掉。内容、结构、面板都原样 —— 唯独 content.js
+           认不得行。这正是"来信翻译静默停摆"的现场：界面干净、一句报错都没有。
+           断言是：两轮扫描内，页面左下角必须亮出改版横幅、诊断能复制。
+           （注意：只换类名在 0.6.6 之后就不够了 —— 行定位有 msg-container 兜底层，
+           会把只换类名的场景直接救活；要验横幅必须把两层一起打死。） */
+        const renamed = new URLSearchParams(location.search).has("gjrenamed");
+        if (renamed) {
+          const renameAll = () => {
+            for (const row of document.querySelectorAll("div.message-in, div.message-out")) {
+              const side = row.classList.contains("message-in") ? "in" : "out";
+              row.classList.remove("message-in", "message-out");
+              row.classList.add(side === "in" ? "bubble-in" : "bubble-out");
+              row.dataset.gjRenamedSide = side;
+            }
+            for (const bubble of document.querySelectorAll('[data-testid="msg-container"]')) {
+              bubble.setAttribute("data-testid", "msg-container-renamed");
+            }
+          };
+          const originalRender = render;
+          render = function (key) {
+            originalRender(key);
+            renameAll();
+          };
+          renameAll();
+        }
+
+        /* ---------- 新版 DOM 模式（?gjnewdom=1）：验「改版兜底层真能接住」 ----------
+           复刻真机改版（0.6.6 哨兵诊断单实锤 + 0.6.8 按容器层补全）：行类名整批消失、
+           气泡本体变成 [data-testid="msg-container"]、**面板 testid 也摘掉**（这样
+           messagesContainer 只能靠气泡反推 —— 否则会落到输入框 .copyable-area，
+           行扫描永远 0），方向只能靠行元素的 data-id 首段。
+           断言是：来信照常出译文、我方消息不被翻 —— 兜底层接住了，横幅不该亮。 */
+        const newdom = new URLSearchParams(location.search).has("gjnewdom");
+        if (newdom) {
+          const transformAll = () => {
+            for (const row of document.querySelectorAll("div.message-in, div.message-out")) {
+              row.classList.remove("message-in", "message-out");
+              row.setAttribute("data-testid", "msg-container");
+            }
+            document
+              .querySelector('[data-testid="conversation-panel-messages"]')
+              ?.removeAttribute("data-testid");
+          };
+          const originalRender = render;
+          render = function (key) {
+            originalRender(key);
+            transformAll();
+          };
+          transformAll();
+        }
+
+        /* ---------- 几何判向模式（?gjgeomdom=1）：验「终极兜底不靠任何结构标记」 ----------
+           比 gjnewdom 更狠一步：类名、data-id、面板 testid **全部**摘掉 —— 结构上
+           只剩「气泡靠左/靠右」这一个事实。方向判定必须落到几何层（来信靠左、
+           我方靠右是聊天产品的语义布局，改版改不掉）。
+           断言是：来信照常出译文、我方不被翻 —— 全部结构线索都断了也能活。 */
+        const geomdom = new URLSearchParams(location.search).has("gjgeomdom");
+        if (geomdom) {
+          const transformAll = () => {
+            for (const row of document.querySelectorAll("div.message-in, div.message-out")) {
+              if (!row.dataset.gjGeomSide) {
+                // 记录真实方向当测试基准（真页面没有这个标记；mock 拿它对答案用）
+                row.dataset.gjGeomSide = row.classList.contains("message-in") ? "in" : "out";
+              }
+              const isOut = row.classList.contains("message-out");
+              row.classList.remove("message-in", "message-out");
+              row.removeAttribute("data-id");
+              row.setAttribute("data-testid", "msg-container");
+              // 真实改版是「类名改名」不是「删规则」——布局照旧活着，只是选择器认不出。
+              // 所以摘类名时把布局关键属性转成内联样式保留：flex 容器 + 对齐方向。
+              // 否则气泡会掉回文档流左侧，模拟的就不是改版而是「布局也炸了」。
+              row.style.display = "flex";
+              row.style.alignItems = "flex-end";
+              if (isOut) row.style.justifyContent = "flex-end";
+            }
+            document
+              .querySelector('[data-testid="conversation-panel-messages"]')
+              ?.removeAttribute("data-testid");
+          };
+          const originalRender = render;
+          render = function (key) {
+            originalRender(key);
+            transformAll();
+          };
+          transformAll();
+        }
+
+        /* ---------- 顽固编辑器（Lexical 仿制）：验「替换到输入框」是不是**真的**写进去了 ----------
+           真机上 WhatsApp 的输入框是 Lexical：它按**自己的内部状态**决定认不认这次改动，
+           于是浏览器原生插入（execCommand）可能被它吞掉或回滚，而 execCommand 仍然返回 true。
+           旧实现正是信了这个返回值 —— 界面显示「已替换到输入框」、输入框里一个字没变。
+           这里把那个行为仿出来：
+             · 只认「粘贴」这一条路（读 clipboardData 写进自己的段落结构，与 Lexical 同构）；
+             · 别的任何 DOM 改动（原生插入、直接写 textContent）都被它撤回去；
+             · acceptPaste=false 时连粘贴也不认 —— 用来验「写不进去时界面必须说实话」。 */
+        const strict = { on: false, acceptPaste: true, text: "", mutating: false, skipRevert: false };
+        const flatten = (value) => String(value ?? "").replace(/\s+/gu, "");
+
+        function strictRender() {
+          strict.mutating = true;
+          composer.textContent = "";
+          const paragraph = document.createElement("p");
+          const span = document.createElement("span");
+          span.setAttribute("data-lexical-text", "true");
+          span.textContent = strict.text;
+          paragraph.appendChild(span);
+          composer.appendChild(paragraph);
+          // 用宏任务解锁：MutationObserver 的回调是微任务，会在这之前全部跑完
+          setTimeout(() => {
+            strict.mutating = false;
+          }, 0);
+        }
+
+        composer.addEventListener("paste", (event) => {
+          if (!strict.on) return;
+          event.preventDefault();
+          if (!strict.acceptPaste) return;
+          const incoming = event.clipboardData ? event.clipboardData.getData("text/plain") : "";
+          if (!incoming) return;
+          strict.text = incoming;
+          strictRender();
+        });
+
+        new MutationObserver(() => {
+          if (!strict.on || strict.mutating) return;
+          // send() 刚清空输入框：这一次"内容变了"是消息发出去，不是要回滚的改动
+          if (strict.skipRevert) {
+            strict.skipRevert = false;
+            return;
+          }
+          if (flatten(composer.innerText || composer.textContent) !== flatten(strict.text)) strictRender();
+        }).observe(composer, { childList: true, subtree: true, characterData: true });
+
+        window.__gjMock.strictEditor = {
+          enable(options = {}) {
+            strict.on = true;
+            strict.acceptPaste = options.acceptPaste !== false;
+            strict.text = String(options.text ?? "");
+            strictRender();
+          },
+          disable() {
+            strict.on = false;
+            strict.text = "";
+            composer.textContent = "";
+          },
+          get dom() {
+            return composer.innerText || composer.textContent || "";
+          }
+        };
+      })();
+    </script>
+  </body>
+</html>

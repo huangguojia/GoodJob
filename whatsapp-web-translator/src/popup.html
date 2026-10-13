@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>GoodJob WhatsApp 助手</title>
+    <link rel="stylesheet" href="gj-theme.css" />
+    <style>
+      body {
+        width: 320px;
+        margin: 0;
+        padding: 0 14px 14px;
+        background: var(--gj-canvas);
+        color: var(--gj-ink);
+        font: 13px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+
+      /* ---------- 页头：GJ 标识 + 产品名 ---------- */
+      .p-head {
+        display: flex;
+        align-items: center;
+        margin: 0 -14px 12px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--gj-border);
+        background: var(--gj-surface);
+      }
+
+      /* ---------- 卡片 ---------- */
+      .p-card {
+        margin-bottom: 12px;
+        padding: 12px 13px 13px;
+        border: 1px solid var(--gj-border);
+        border-radius: var(--gj-radius);
+        background: var(--gj-surface);
+      }
+
+      .p-card > h2 {
+        margin: 0 0 10px;
+        color: var(--gj-muted);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .p-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 9px;
+      }
+
+      .p-row:last-child {
+        margin-bottom: 0;
+      }
+
+      .p-row > .p-label {
+        flex: none;
+        color: var(--gj-muted);
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      /* ---------- 开关 ---------- */
+      .p-switch {
+        appearance: none;
+        -webkit-appearance: none;
+        position: relative;
+        flex: none;
+        width: 38px;
+        height: 22px;
+        margin: 0;
+        border: 0;
+        border-radius: 999px;
+        background: var(--gj-track);
+        cursor: pointer;
+        transition: background-color 0.16s var(--gj-ease-out);
+      }
+
+      .p-switch::after {
+        content: "";
+        position: absolute;
+        left: 2px;
+        top: 2px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+        transition: transform 0.16s var(--gj-ease-out);
+      }
+
+      .p-switch:checked {
+        background: var(--gj-brand);
+      }
+
+      .p-switch:checked::after {
+        transform: translateX(16px);
+      }
+
+      .p-switch:focus-visible {
+        outline: 2px solid var(--gj-brand);
+        outline-offset: 2px;
+      }
+
+      /* ---------- 下拉：统一高度、统一自绘箭头 ---------- */
+      select {
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: 34px;
+        padding: 6px 30px 6px 10px;
+        border: 1px solid var(--gj-border-strong);
+        border-radius: var(--gj-radius-sm);
+        appearance: none;
+        -webkit-appearance: none;
+        background-color: var(--gj-surface);
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 8l3-3.5' fill='none' stroke='%237b8496' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 9px center;
+        background-size: 12px 12px;
+        color: var(--gj-ink);
+        font: inherit;
+        font-size: 12.5px;
+        transition:
+          border-color 0.16s var(--gj-ease-out),
+          box-shadow 0.16s var(--gj-ease-out);
+      }
+
+      select:focus {
+        border-color: var(--gj-brand);
+        box-shadow: 0 0 0 3px var(--gj-brand-ring);
+        outline: none;
+      }
+
+      select:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* ---------- 状态条 ---------- */
+      .status {
+        margin: 0 0 10px;
+        padding: 8px 10px;
+        border: 1px solid var(--gj-border);
+        border-radius: var(--gj-radius-sm);
+        background: var(--gj-surface-subtle);
+        color: var(--gj-muted);
+        font-size: 11.5px;
+        white-space: pre-line;
+        overflow-wrap: anywhere;
+      }
+
+      .status:last-child {
+        margin-bottom: 0;
+      }
+
+      /* 语义色由令牌派生，深浅色两档都成立（不写死参照里的浅底十六进制） */
+      .status.ok {
+        border-color: color-mix(in srgb, var(--gj-green) 34%, var(--gj-border));
+        background: var(--gj-green-soft);
+        color: color-mix(in srgb, var(--gj-green) 82%, var(--gj-ink));
+      }
+
+      .status.warn {
+        border-color: color-mix(in srgb, var(--gj-amber) 34%, var(--gj-border));
+        background: var(--gj-amber-soft);
+        color: color-mix(in srgb, var(--gj-amber) 82%, var(--gj-ink));
+      }
+
+      .status.err {
+        border-color: color-mix(in srgb, var(--gj-red) 34%, var(--gj-border));
+        background: var(--gj-red-soft);
+        color: color-mix(in srgb, var(--gj-red) 82%, var(--gj-ink));
+      }
+
+      /* ---------- 按钮 ---------- */
+      .p-actions {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .p-actions:last-child {
+        margin-bottom: 0;
+      }
+
+      .p-actions > button {
+        flex: 1 1 auto;
+      }
+
+      button {
+        min-height: 34px;
+        padding: 6px 12px;
+        border: 1px solid var(--gj-border-strong);
+        border-radius: var(--gj-radius-sm);
+        background: var(--gj-surface);
+        color: var(--gj-ink);
+        font: inherit;
+        font-size: 12.5px;
+        font-weight: 600;
+        cursor: pointer;
+        transition:
+          background-color 0.16s var(--gj-ease-out),
+          border-color 0.16s var(--gj-ease-out),
+          color 0.16s var(--gj-ease-out);
+      }
+
+      button:hover:not(:disabled) {
+        border-color: var(--gj-border-hover);
+        background: var(--gj-surface-subtle);
+      }
+
+      button.primary {
+        border-color: var(--gj-brand);
+        background: var(--gj-brand);
+        color: var(--gj-on-brand);
+      }
+
+      button.primary:hover:not(:disabled) {
+        border-color: var(--gj-brand-hover);
+        background: var(--gj-brand-hover);
+      }
+
+      button.danger {
+        border-color: var(--gj-red);
+        background: var(--gj-red);
+        color: var(--gj-on-danger);
+      }
+
+      button.danger:hover:not(:disabled) {
+        border-color: var(--gj-danger-hover);
+        background: var(--gj-danger-hover);
+      }
+
+      button:focus-visible {
+        outline: 2px solid var(--gj-brand);
+        outline-offset: 2px;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .p-switch,
+        .p-switch::after,
+        select,
+        button {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="p-head">
+      <div class="gj-wordmark">
+        <span class="gj-mark" style="--gj-mark-size: 30px" aria-hidden="true"><span>G</span><span>J</span></span>
+        <div>
+          <strong>GoodJob WhatsApp 助手</strong>
+          <span>翻译 · 归档 · 自动回复</span>
+        </div>
+      </div>
+    </header>
+
+    <section class="p-card">
+      <h2>翻译</h2>
+      <div class="p-row">
+        <span class="p-label">自动翻译客户来信</span>
+        <input id="enabled" class="p-switch" type="checkbox" />
+      </div>
+      <div class="p-row">
+        <span class="p-label">译为</span>
+        <select id="targetLang"></select>
+      </div>
+      <div class="p-row">
+        <span class="p-label">草稿自动译外文</span>
+        <input id="composeAuto" class="p-switch" type="checkbox" />
+      </div>
+      <p id="trMeta" class="status">正在检查这一页…</p>
+    </section>
+
+    <section class="p-card" id="agentBox">
+      <h2>归档 · 学习</h2>
+      <p id="agentMeta" class="status">正在读取当前会话…</p>
+      <div class="p-row">
+        <span class="p-label">导出格式</span>
+        <select id="format">
+          <option value="jsonl">JSONL（与 CRM 插件同口径）</option>
+          <option value="txt">WhatsApp TXT（可直接导入 CRM）</option>
+          <option value="md">Markdown（人读）</option>
+        </select>
+      </div>
+      <div class="p-actions">
+        <button id="archiveCurrent" class="primary" type="button">归档并学习（当前会话）</button>
+      </div>
+      <div class="p-actions">
+        <button id="archiveAll" type="button">归档并学习（全部会话）</button>
+      </div>
+      <div class="p-actions">
+        <button id="learn" type="button">重学一次</button>
+        <button id="exportKit" type="button">导出训练包</button>
+      </div>
+      <div class="p-actions">
+        <button id="reset" class="danger" type="button">清空语料</button>
+      </div>
+    </section>
+
+    <section class="p-card" id="autoBox">
+      <h2>自动回复</h2>
+      <div class="p-row">
+        <span class="p-label">模式</span>
+        <select id="autoMode">
+          <option value="off">关闭</option>
+          <option value="draft">草稿（推荐）</option>
+          <option value="auto">全自动发送</option>
+        </select>
+      </div>
+      <div class="p-actions">
+        <button id="replyNow" type="button">立即回复最后一条</button>
+      </div>
+    </section>
+
+    <section class="p-card" id="crmBox">
+      <h2>CRM 智能回复</h2>
+      <p id="crmMeta" class="status">正在读取 CRM 状态…</p>
+      <div class="p-actions">
+        <button id="crmReply" type="button">用 CRM 生成回复</button>
+      </div>
+    </section>
+
+    <p id="status" class="status">加载中…</p>
+    <div class="p-actions">
+      <button id="rescan" type="button">重新翻译本会话</button>
+      <button id="options" type="button">设置</button>
+    </div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

@@ -410,6 +410,28 @@ define("PATCH /api/agent/skill-resources/{id}", objectSchema([], skillResourceFi
 define("PATCH /api/agent/skill-resources/{id}/status", objectSchema(["status"], { status: oneOf("draft", "published", "archived") }), "发布、撤回或归档当前团队 Skill 资源；服务端复核管理权限。");
 define("POST /api/agent/skill-resources/{id}/access", emptySchema, "获取已发布 Skill 的下载地址并记录访问；真实链接只在该接口鉴权后返回。");
 define("DELETE /api/agent/skill-resources/{id}", emptySchema, "删除当前团队 Skill 资源记录，不删除外部网盘文件；需要明确确认。");
+define("POST /api/agent/resources/recommend", objectSchema(["conversation"], {
+  conversation: array(objectSchema(["role", "text"], { role: oneOf("customer", "agent"), text: string({ minLength: 1, maxLength: 2000 }) }), { minItems: 1, maxItems: 20 }),
+  customerId: string({ maxLength: 64 }),
+  conversationKey: string({ maxLength: 120 }),
+  limit: integer({ minimum: 1, maximum: 20 }),
+  sourceTypes: array(oneOf("file", "skill", "knowledge", "product"), { maxItems: 4 }),
+  signal: oneOf("inbound", "compose", "manual"),
+  useVector: boolean(),
+  queryVector: array(number(), { maxItems: 2048 })
+}), "按当前对话内容在当前账号可见范围内推荐资料；只读检索，不返回真实外链（真实地址只能经 reveal 接口获取）。");
+define("POST /api/agent/resources/{sourceType}/{id}/reveal", objectSchema([], {
+  reason: string({ maxLength: 300 }),
+  conversationKey: string({ maxLength: 120 })
+}), "获取一份可见资源的真实访问地址或正文并记录一次访问；无权与不存在一律返回 404，不给出可探测的差异。");
+define("POST /api/agent/resources/feedback", objectSchema(["items"], {
+  items: array(objectSchema(["resourceId", "sourceType", "action"], {
+    resourceId: string({ minLength: 1, maxLength: 90 }),
+    sourceType: oneOf("file", "skill", "knowledge", "product"),
+    action: oneOf("accepted", "dismissed", "sent")
+  }), { minItems: 1, maxItems: 20 }),
+  conversationKey: string({ maxLength: 120 })
+}), "记录业务员对推荐资料的采纳/忽略/已发送，只作为排序先验；不可见的资源 id 会被静默丢弃。");
 define("POST /api/agent/tuning/inspect", objectSchema(["goal"], {
   goal: string({ minLength: 2, maxLength: 2000 }),
   context: objectSchema([], {

@@ -1,0 +1,848 @@
+/* 归档 / 自动回复模块的样式。只作用于 .gj-agent-* 与我们注入的回复提示节点，
+   绝不覆盖 WhatsApp 自己的样式（类名带 gj- 前缀，避开它的 hash 类名）。
+   颜色与几何一律引 src/gj-theme.css 的 --gj-* 令牌。 */
+
+/* --------------------------------------------------------------------------
+ * 悬浮入口 —— 这一颗就是 GJ 标识本身（几何见 gj-theme.css）
+ * ------------------------------------------------------------------------ */
+#gj-agent-button {
+  --gj-mark-size: 36px;
+
+  position: fixed;
+  z-index: 2147483000;
+  padding: 0;
+  cursor: pointer;
+  /* 悬浮入口要比静态标识更"立"一点：标识自己的浅底压在聊天页上偏淡，
+     这里把描边往品牌色上收一档、阴影换成浮层级的，才发现得了它是个按钮。 */
+  border-color: color-mix(in srgb, var(--gj-brand) 24%, var(--gj-border));
+  box-shadow: var(--gj-shadow);
+}
+
+#gj-agent-button:hover {
+  transform: rotate(-3deg) scale(1.06);
+  box-shadow: var(--gj-shadow);
+}
+
+#gj-agent-button:hover::after {
+  width: calc(var(--gj-mark-size) * 0.357);
+}
+
+#gj-agent-button:hover > span:first-child {
+  transform: translateX(calc(var(--gj-mark-size) * -0.024));
+}
+
+#gj-agent-button:hover > span:last-child {
+  transform: translate(calc(var(--gj-mark-size) * 0.048), calc(var(--gj-mark-size) * 0.071));
+}
+
+#gj-agent-button:focus-visible {
+  outline: 2px solid var(--gj-brand);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+ * 右侧整列
+ *
+ * 三件事决定了这一块的写法，全是踩出来的：
+ * 1. **推窄而非遮挡**：`agent.js` 给 `#app` 加 `margin-right`，这里只负责自己贴右边。
+ *    绝不给 body 加 padding —— WhatsApp 的滚动容器在 `#app` 里，动 body 会让底部输入框跑出屏幕。
+ * 2. **高度必须钉死 top/bottom**：原来那个浮层只写了 bottom，最大高 56vh；
+ *    整列一旦漏了 top，`bottom: 0` 就只按内容高度算，视觉上会变成"半截浮窗"。
+ * 3. **三档布局**：`html[data-gj-col="rail|push|overlay"]`，由 `resolveLayout()` 决定。
+ * ------------------------------------------------------------------------ */
+#gj-agent-panel {
+  position: fixed;
+  z-index: 2147483000;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: var(--gj-col-w, 380px);
+  max-width: 100vw;
+  padding: 12px 0 0;
+  border: 0;
+  border-left: 1px solid var(--gj-border);
+  background: var(--gj-surface);
+  box-shadow: -8px 0 24px rgba(15, 23, 42, 0.06);
+  color: var(--gj-ink);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  animation: gj-agent-panel-in 0.18s var(--gj-ease-out) both;
+}
+
+@keyframes gj-agent-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* 折叠成一条竖条：只剩标记与竖排文案，没有任何可点区域。 */
+#gj-agent-panel[data-gj-collapsed="1"] {
+  padding: 10px 0;
+  align-items: center;
+}
+
+.gj-agent-rail {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 0;
+}
+
+.gj-agent-rail-text {
+  color: var(--gj-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  writing-mode: vertical-rl;
+  user-select: none;
+}
+
+/* 左边缘的拖拽条。给它一条可见的细线 + 更大的命中区（8px），不然很难拖中。 */
+.gj-agent-resize {
+  position: absolute;
+  top: 0;
+  left: -4px;
+  bottom: 0;
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.gj-agent-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: transparent;
+  transition: background-color 0.16s var(--gj-ease-out);
+}
+
+.gj-agent-resize:hover::after,
+#gj-agent-panel.is-dragging .gj-agent-resize::after {
+  background: var(--gj-brand);
+}
+
+#gj-agent-panel.is-dragging {
+  user-select: none;
+}
+
+.gj-agent-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 14px 14px;
+  overscroll-behavior: contain;
+}
+
+.gj-agent-col-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gj-agent-col-status {
+  padding: 9px 10px;
+  border: 1px solid var(--gj-border);
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-surface-subtle);
+}
+
+.gj-agent-col-status-title {
+  margin: 0;
+  color: var(--gj-ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.gj-agent-col-status-hint {
+  margin: 3px 0 0;
+  color: var(--gj-muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+/* 六态各自的一点点区分：只用左边框上色，不改底色，避免整列花掉。 */
+html[data-gj-col-state="scanning"] .gj-agent-col-status,
+html[data-gj-col-state="idle"] .gj-agent-col-status {
+  border-left: 3px solid var(--gj-border-strong);
+}
+
+html[data-gj-col-state="ready"] .gj-agent-col-status {
+  border-left: 3px solid var(--gj-brand);
+}
+
+html[data-gj-col-state="partial"] .gj-agent-col-status {
+  border-left: 3px solid var(--gj-amber, var(--gj-border-strong));
+}
+
+html[data-gj-col-state="blocked"] .gj-agent-col-status,
+html[data-gj-col-state="error"] .gj-agent-col-status {
+  border-left: 3px solid var(--gj-red);
+}
+
+/* 骨架屏而不是转圈：转圈会让人以为卡住了。 */
+.gj-agent-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gj-agent-skeleton-row {
+  height: 44px;
+  border-radius: var(--gj-radius-sm);
+  background: linear-gradient(90deg, var(--gj-surface-subtle) 0%, var(--gj-border) 50%, var(--gj-surface-subtle) 100%);
+  background-size: 200% 100%;
+  animation: gj-agent-skeleton 1.2s linear infinite;
+}
+
+@keyframes gj-agent-skeleton {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.gj-agent-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gj-agent-block-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 0;
+  color: var(--gj-ink);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.gj-agent-block-tag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--gj-brand-soft, var(--gj-surface-subtle));
+  color: var(--gj-brand);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.gj-agent-empty {
+  margin: 0;
+  padding: 10px;
+  border: 1px dashed var(--gj-border-strong);
+  border-radius: var(--gj-radius-sm);
+  color: var(--gj-muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.gj-agent-curator {
+  margin: 0;
+  color: var(--gj-muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+/* 资料卡：类型徽章 + 标题 → 摘要 → 为什么推荐 → 动作。 */
+.gj-agent-res {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--gj-border);
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-surface-subtle);
+}
+
+.gj-agent-res-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.gj-agent-res-type {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-brand);
+  color: var(--gj-on-brand, #fff);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.gj-agent-res-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--gj-ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.gj-agent-res-summary,
+.gj-agent-res-score {
+  margin: 0;
+  color: var(--gj-muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * 「要你自己动手」的那块：知识条目的正文、或剪贴板被挡时那份地址。
+ * 只在用户点过之后才存在。用虚线边框和卡片本体区分开 —— 它是"临时摊开的东西"，
+ * 不是这份资料的常规信息。
+ */
+.gj-agent-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 9px;
+  border: 1px dashed var(--gj-border);
+  border-radius: 8px;
+  background: var(--gj-surface-subtle);
+}
+
+.gj-agent-manual-hint {
+  margin: 0;
+  color: var(--gj-muted);
+  font-size: 11.5px;
+}
+
+.gj-agent-manual-body {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  color: var(--gj-ink);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.gj-agent-manual-url {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--gj-border);
+  border-radius: 6px;
+  background: var(--gj-surface);
+  color: var(--gj-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.gj-agent-manual-url:focus {
+  outline: 2px solid var(--gj-brand);
+  outline-offset: 1px;
+}
+
+.gj-agent-res-why {
+  margin: 0;
+  color: var(--gj-ink);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.gj-agent-res-why-tag {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 5px;
+  border: 1px solid var(--gj-border-strong);
+  border-radius: var(--gj-radius-sm);
+  color: var(--gj-muted);
+  font-size: 10px;
+}
+
+/* 有 AI 复排理由和只有算法排序，视觉上要能一眼分开。 */
+.gj-agent-res-why[data-gj-why-kind="ai"] .gj-agent-res-why-tag {
+  border-color: var(--gj-brand);
+  color: var(--gj-brand);
+}
+
+.gj-agent-res-line {
+  margin: 0;
+  padding: 6px 8px;
+  border-left: 2px solid var(--gj-brand);
+  background: var(--gj-surface);
+  color: var(--gj-ink);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+/* 来源徽章一排。 */
+.gj-agent-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.gj-agent-badge {
+  padding: 1px 7px;
+  border: 1px solid var(--gj-border-strong);
+  border-radius: 999px;
+  color: var(--gj-muted);
+  font-size: 10.5px;
+}
+
+.gj-agent-badge.is-muted {
+  border-style: dashed;
+  color: var(--gj-faint);
+}
+
+.gj-agent-warnline {
+  margin: 0;
+  padding: 7px 9px;
+  border-left: 3px solid var(--gj-amber, var(--gj-border-strong));
+  background: var(--gj-surface-subtle);
+  color: var(--gj-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+/* 「归档 · 训练 · 本地自动回复」收进折叠区，不再和推荐内容抢注意力。 */
+.gj-agent-more {
+  margin-top: 4px;
+  border: 1px solid var(--gj-border);
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-surface-subtle);
+}
+
+.gj-agent-more > summary {
+  padding: 8px 10px;
+  color: var(--gj-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.gj-agent-more-body {
+  padding: 4px 10px 10px;
+}
+
+/* 窄屏：不推窄，改成覆盖式抽屉 + 半透明遮罩，免得把聊天区挤到不可用。 */
+html[data-gj-col="overlay"] #gj-agent-panel {
+  box-shadow: -16px 0 40px rgba(15, 23, 42, 0.24);
+}
+
+html[data-gj-col="overlay"] #gj-agent-panel::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  right: var(--gj-col-w, 380px);
+  bottom: 0;
+  left: 0;
+  background: rgba(15, 23, 42, 0.18);
+}
+
+.gj-agent-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 14px 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--gj-border);
+  color: var(--gj-muted);
+  font-size: 11.5px;
+}
+
+#gj-agent-panel[data-gj-collapsed="1"] .gj-agent-head {
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+#gj-agent-panel[data-gj-collapsed="1"] .gj-agent-title,
+#gj-agent-panel[data-gj-collapsed="1"] .gj-agent-sub {
+  display: none;
+}
+
+.gj-agent-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--gj-ink);
+  font-size: 12.5px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gj-agent-sub {
+  flex: none;
+  color: var(--gj-faint);
+  font-size: 10.5px;
+}
+
+.gj-agent-collapse,
+.gj-agent-close {
+  flex: none !important;
+  width: 22px !important;
+  height: 22px !important;
+  padding: 0 !important;
+  border: 1px solid transparent !important;
+  border-radius: var(--gj-radius-sm);
+  background: transparent !important;
+  color: var(--gj-muted) !important;
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 0.16s var(--gj-ease-out),
+    border-color 0.16s var(--gj-ease-out),
+    color 0.16s var(--gj-ease-out);
+}
+
+.gj-agent-collapse:hover,
+.gj-agent-close:hover {
+  border-color: var(--gj-border) !important;
+  background: var(--gj-surface-subtle) !important;
+  color: var(--gj-ink) !important;
+}
+
+.gj-agent-meta {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--gj-border);
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-surface-subtle);
+  color: var(--gj-muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.gj-agent-meta strong {
+  color: var(--gj-ink);
+  font-weight: 600;
+}
+
+.gj-agent-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+
+.gj-agent-label {
+  flex: none;
+  color: var(--gj-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.gj-agent-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 9px;
+  border: 1px solid var(--gj-border-strong);
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-surface);
+  color: var(--gj-ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  transition:
+    border-color 0.16s var(--gj-ease-out),
+    box-shadow 0.16s var(--gj-ease-out);
+}
+
+.gj-agent-select:focus {
+  border-color: var(--gj-brand);
+  box-shadow: 0 0 0 3px var(--gj-brand-ring);
+  outline: none;
+}
+
+.gj-agent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.gj-agent-btn {
+  flex: 1 1 46%;
+  min-height: 33px;
+  padding: 6px 12px;
+  border: 1px solid var(--gj-border-strong);
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-surface);
+  color: var(--gj-ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 0.16s var(--gj-ease-out),
+    border-color 0.16s var(--gj-ease-out),
+    color 0.16s var(--gj-ease-out);
+}
+
+.gj-agent-btn:hover {
+  border-color: var(--gj-border-hover);
+  background: var(--gj-surface-subtle);
+}
+
+/* 按下即表态（铁律：任何动作必须有前端响应）：点击瞬间 button() 会挂上 is-busy，
+ * 在状态渲染接管之前让用户先看到"这一下吃进去了"。 */
+.gj-agent-btn.is-busy {
+  cursor: progress;
+  opacity: 0.62;
+}
+
+.gj-agent-btn.is-primary {
+  border-color: var(--gj-brand);
+  background: var(--gj-brand);
+  color: var(--gj-on-brand);
+}
+
+.gj-agent-btn.is-primary:hover {
+  border-color: var(--gj-brand-hover);
+  background: var(--gj-brand-hover);
+}
+
+.gj-agent-btn:focus-visible {
+  outline: 2px solid var(--gj-brand);
+  outline-offset: 2px;
+}
+
+.gj-agent-stats {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--gj-border);
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-surface-subtle);
+}
+
+.gj-agent-stats p {
+  margin: 0 0 4px;
+  color: var(--gj-muted);
+  font-size: 11.5px;
+}
+
+.gj-agent-stats p:last-child {
+  margin-bottom: 0;
+}
+
+.gj-agent-note {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--gj-brand) 22%, transparent);
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-brand-soft);
+  color: var(--gj-brand-text);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+/* --------------------------------------------------------------------------
+ * CRM 通道：与本地那条路径视觉上要能分开 —— 用户得一眼看出这次用的是哪一条。
+ * 依据那一行是重点：没有它，「智能回复」和瞎编在用户眼里没有区别。
+ * ------------------------------------------------------------------------ */
+
+.gj-agent-divider {
+  height: 1px;
+  margin: 12px 0;
+  background: var(--gj-border);
+}
+
+.gj-agent-crm-title {
+  margin: 0 0 4px;
+  color: var(--gj-ink);
+  font-size: 12px;
+  font-weight: 720;
+  letter-spacing: 0.01em;
+}
+
+.gj-agent-reply {
+  margin-top: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--gj-border);
+  border-left: 3px solid var(--gj-border-strong);
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-surface);
+}
+
+.gj-agent-reply[data-gj-state="ok"] {
+  border-left-color: var(--gj-brand);
+}
+
+.gj-agent-reply[data-gj-state="blocked"] {
+  border-left-color: var(--gj-red);
+}
+
+.gj-agent-reply[data-gj-state="skip"] {
+  border-left-color: var(--gj-muted);
+}
+
+.gj-agent-reply-head {
+  margin: 0 0 6px;
+  color: var(--gj-muted);
+  font-size: 10.5px;
+  font-weight: 720;
+  letter-spacing: 0.03em;
+}
+
+.gj-agent-reply-body {
+  margin: 0 0 6px;
+  color: var(--gj-ink);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.gj-agent-evidence {
+  margin: 0 0 4px;
+  color: var(--gj-faint);
+  font-size: 10.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.gj-agent-evidence:last-child {
+  margin-bottom: 0;
+}
+
+.gj-agent-error {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--gj-red);
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-red-soft);
+  color: var(--gj-red);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+/* --------------------------------------------------------------------------
+ * 回复提示：挂在消息行下方，让「为什么回 / 为什么不回」当场可见。
+ * 状态色沿用参照里草稿卡的语义映射：待处理=品牌色 / 已发出=绿 / 跳过=中性 / 失败=红。
+ * 注意：这个节点里**不能**塞 GJ 标识 —— e2e 会读它的 textContent 断言决策内容。
+ * ------------------------------------------------------------------------ */
+div.message-in.gj-has-reply-note,
+div[data-id].gj-has-reply-note {
+  flex-wrap: wrap !important;
+}
+
+.gj-reply-note {
+  box-sizing: border-box;
+  display: flex;
+  /* 必须允许换行：下面的 hint 是 flex: 1 0 100%，nowrap 下它会把正文挤成一条竖线 */
+  flex-wrap: wrap;
+  flex: 0 0 100%;
+  align-items: flex-start;
+  gap: 7px;
+  width: 100%;
+  margin: 4px 8px;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--gj-brand) 22%, transparent);
+  border-left: 3px solid var(--gj-brand);
+  border-radius: var(--gj-radius-sm);
+  background: var(--gj-brand-soft);
+  color: var(--gj-ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.gj-reply-note[data-gj-state="skip"] {
+  border-color: var(--gj-border);
+  border-left-color: var(--gj-border-strong);
+  background: var(--gj-surface-subtle);
+  color: var(--gj-muted);
+}
+
+.gj-reply-note[data-gj-state="auto"] {
+  border-color: color-mix(in srgb, var(--gj-green) 28%, transparent);
+  border-left-color: var(--gj-green);
+  background: var(--gj-green-soft);
+  color: var(--gj-ink);
+}
+
+.gj-reply-note-badge {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--gj-brand);
+  color: var(--gj-on-brand);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.gj-reply-note[data-gj-state="skip"] .gj-reply-note-badge {
+  background: var(--gj-border-strong);
+  color: var(--gj-ink);
+}
+
+.gj-reply-note[data-gj-state="auto"] .gj-reply-note-badge {
+  background: var(--gj-green);
+  color: var(--gj-on-green);
+}
+
+.gj-reply-note-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.gj-reply-note-hint {
+  /* 单独占一行：状态短句跟在正文后面会把正文挤成窄条（"已填入输入框，确认后发送" 有 12 个字） */
+  flex: 1 0 100%;
+  color: var(--gj-faint);
+  font-size: 10.5px;
+}
+
+.gj-reply-note-hint:empty {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #gj-agent-panel {
+    animation: none;
+  }
+
+  #gj-agent-button:hover {
+    transform: none;
+  }
+
+  #gj-agent-button:hover::after {
+    width: calc(var(--gj-mark-size) * 0.19);
+  }
+
+  #gj-agent-button:hover > span:first-child {
+    transform: translateX(calc(var(--gj-mark-size) * 0.048));
+  }
+
+  #gj-agent-button:hover > span:last-child {
+    transform: translate(calc(var(--gj-mark-size) * -0.024), calc(var(--gj-mark-size) * 0.071));
+  }
+}

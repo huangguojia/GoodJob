@@ -432,6 +432,121 @@ const migrations: Migration[] = [
       UPDATE automation_deliveries SET updated_at=created_at WHERE updated_at IS NULL;
       CREATE INDEX IF NOT EXISTS automation_deliveries_status_idx ON automation_deliveries(owner_user_id,status,next_retry_at);
     `
+  },
+  {
+    version: 13,
+    name: "training_and_auto_chat",
+    sql: `
+      CREATE TABLE IF NOT EXISTS training_profiles (
+        id text PRIMARY KEY,
+        owner_user_id text NOT NULL,
+        account_id text REFERENCES channel_accounts(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        status text NOT NULL DEFAULT 'ready',
+        engine text NOT NULL DEFAULT 'rules',
+        model text,
+        sample_count integer NOT NULL DEFAULT 0,
+        exchange_count integer NOT NULL DEFAULT 0,
+        conversation_count integer NOT NULL DEFAULT 0,
+        message_count integer NOT NULL DEFAULT 0,
+        languages_json text NOT NULL DEFAULT '[]',
+        tone text NOT NULL DEFAULT '',
+        summary text NOT NULL DEFAULT '',
+        guidelines_json text NOT NULL DEFAULT '[]',
+        signature_phrases_json text NOT NULL DEFAULT '[]',
+        guardrails_json text NOT NULL DEFAULT '[]',
+        examples_json text NOT NULL DEFAULT '[]',
+        source_from timestamptz,
+        source_to timestamptz,
+        error text,
+        trained_at timestamptz NOT NULL,
+        created_at timestamptz NOT NULL,
+        updated_at timestamptz NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS training_profiles_owner_idx ON training_profiles(owner_user_id, trained_at DESC);
+      CREATE TABLE IF NOT EXISTS auto_chat_settings (
+        id text PRIMARY KEY,
+        owner_user_id text NOT NULL,
+        account_id text NOT NULL DEFAULT '',
+        enabled integer NOT NULL DEFAULT 0,
+        mode text NOT NULL DEFAULT 'off',
+        profile_id text,
+        provider_id text,
+        language text NOT NULL DEFAULT 'auto',
+        tone text NOT NULL DEFAULT '',
+        daily_limit integer NOT NULL DEFAULT 40,
+        min_interval_minutes integer NOT NULL DEFAULT 5,
+        active_hours_start integer NOT NULL DEFAULT 8,
+        active_hours_end integer NOT NULL DEFAULT 22,
+        timezone text NOT NULL DEFAULT 'Asia/Shanghai',
+        escalate_keywords_json text NOT NULL DEFAULT '[]',
+        guardrails_json text NOT NULL DEFAULT '[]',
+        confidence_threshold real NOT NULL DEFAULT 0.6,
+        last_run_at timestamptz,
+        updated_at timestamptz NOT NULL,
+        UNIQUE(owner_user_id, account_id)
+      );
+      CREATE TABLE IF NOT EXISTS auto_chat_drafts (
+        id text PRIMARY KEY,
+        owner_user_id text NOT NULL,
+        account_id text NOT NULL,
+        conversation_id text NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        inbound_message_id text,
+        inbound_body text NOT NULL DEFAULT '',
+        body text NOT NULL DEFAULT '',
+        edited integer NOT NULL DEFAULT 0,
+        status text NOT NULL DEFAULT 'pending',
+        mode text NOT NULL DEFAULT 'draft',
+        confidence real NOT NULL DEFAULT 0,
+        reason text NOT NULL DEFAULT '',
+        engine text NOT NULL DEFAULT 'rules',
+        model text,
+        profile_id text,
+        message_id text,
+        error text,
+        run_date date NOT NULL,
+        created_at timestamptz NOT NULL,
+        sent_at timestamptz,
+        updated_at timestamptz NOT NULL,
+        UNIQUE(conversation_id, inbound_message_id)
+      );
+      CREATE INDEX IF NOT EXISTS auto_chat_drafts_owner_status_idx ON auto_chat_drafts(owner_user_id, status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS auto_chat_drafts_daily_idx ON auto_chat_drafts(owner_user_id, run_date, status);
+    `
+  },
+  {
+    version: 14,
+    name: "auto_chat_cli_engine",
+    sql: `
+      ALTER TABLE auto_chat_settings ADD COLUMN IF NOT EXISTS engine text NOT NULL DEFAULT 'auto';
+      ALTER TABLE auto_chat_settings ADD COLUMN IF NOT EXISTS cli_model text NOT NULL DEFAULT '';
+      ALTER TABLE auto_chat_settings ADD COLUMN IF NOT EXISTS cli_effort text NOT NULL DEFAULT '';
+    `
+  },
+  {
+    version: 15,
+    name: "training_library",
+    sql: `
+      CREATE TABLE IF NOT EXISTS training_library_entries (
+        id text PRIMARY KEY,
+        owner_user_id text NOT NULL,
+        account_id text REFERENCES channel_accounts(id) ON DELETE CASCADE,
+        kind text NOT NULL DEFAULT 'qa',
+        question text NOT NULL,
+        answer text NOT NULL,
+        tags_json text NOT NULL DEFAULT '[]',
+        languages_json text NOT NULL DEFAULT '[]',
+        priority integer NOT NULL DEFAULT 100,
+        enabled integer NOT NULL DEFAULT 1,
+        source text NOT NULL DEFAULT 'manual',
+        fingerprint text NOT NULL DEFAULT '',
+        hit_count integer NOT NULL DEFAULT 0,
+        created_at timestamptz NOT NULL,
+        updated_at timestamptz NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS training_library_owner_kind_idx ON training_library_entries(owner_user_id, kind, enabled);
+      CREATE INDEX IF NOT EXISTS training_library_fingerprint_idx ON training_library_entries(owner_user_id, fingerprint);
+    `
   }
 ];
 

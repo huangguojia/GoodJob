@@ -1,11 +1,10 @@
-import jwt from "jsonwebtoken";
 import type { AutomationRunResult, AutomationSettings } from "../../shared/types.js";
 import { Repository } from "../db/repository.js";
 import { ConversationIntelligenceService } from "./conversation-intelligence.js";
-
-function crmToken(secret: string, userId: string): string {
-  return jwt.sign({ ver: 1 }, secret, { subject: userId, issuer: "goodjob-crm", audience: "goodjob-crm-web", expiresIn: "10m", algorithm: "HS256" });
-}
+// 「替 owner 签一枚 CRM token」这件事全仓只有一份实现（crm-client.ts）。
+// 原先这里自带一份，与 crm-context.ts 各自签发时，issuer/audience/TTL 一漂移就是
+// 「一条通道能用、另一条 401」这种极难查的故障。
+import { crmIdentityToken, normalizePhone } from "./crm-client.js";
 
 function localDate(timezone: string, value: Date = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(value);
@@ -33,14 +32,10 @@ interface CrmTodo {
   done?: boolean;
 }
 
-function normalizePhone(value: string | null | undefined): string {
-  const digits = value?.replace(/\D/gu, "") ?? "";
-  return digits ? `+${digits}` : "";
-}
-
 export class AutomationRhythmService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private ownerTick: ((ownerUserId: string) => Promise<void>) | null = null;
   constructor(
     private readonly repository: Repository,
     private readonly intelligence: ConversationIntelligenceService,
@@ -48,6 +43,15 @@ export class AutomationRhythmService {
     private readonly crmJwtSecret?: string,
     private readonly clock: () => Date = () => new Date()
   ) {}
+
+  /**
+   * 注册「每个 owner 每分钟都要跑一次」的钩子（自动聊兜底扫描走这里）。
+   *
+   * 用注入而不是构造函数参数：这类钩子是可选的，晚绑定能避开它与自动聊服务之间的循环依赖。
+   */
+  setOwnerTick(handler: (ownerUserId: string) => Promise<void>): void {
+    this.ownerTick = handler;
+  }
 
   async start(): Promise<void> {
     if (this.timer) return;
@@ -84,7 +88,7 @@ export class AutomationRhythmService {
   async checkCrm(ownerUserId: string): Promise<{ ok: boolean; error: string | null }> {
     if (!this.crmJwtSecret) return { ok: false, error: "CRM 服务签名密钥尚未配置" };
     try {
-      const response = await fetch(`${this.crmBaseUrl}/api/customers`, { headers: { authorization: `Bearer ${crmToken(this.crmJwtSecret, ownerUserId)}` }, signal: AbortSignal.timeout(5_000) });
+      const response = await fetch(`${this.crmBaseUrl}/api/customers`, { headers: { authorization: `Bearer ${crmIdentityToken(this.crmJwtSecret, ownerUserId)}` }, signal: AbortSignal.timeout(5_000) });
       return response.ok ? { ok: true, error: null } : { ok: false, error: `CRM 返回 HTTP ${response.status}` };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "CRM 连接失败" };
@@ -101,6 +105,18 @@ export class AutomationRhythmService {
     try {
       const owners = new Set((await this.repository.listAccounts()).map((account) => account.ownerUserId).filter((id): id is string => Boolean(id)));
       for (const owner of owners) {
+        // 兜底钩子刻意排在 CRM 可达性检查之前：自动回复不依赖 CRM 是否在线。
+        if (this.ownerTick) {
+          try {
+            await this.ownerTick(owner);
+          } catch (error) {
+            console.error("[communication-automation]", {
+              event: "owner_tick_failed",
+              ownerUserId: owner,
+              error: error instanceof Error ? error.message : "unknown error"
+            });
+          }
+        }
         const crm = await this.checkCrm(owner);
         if (!crm.ok) continue;
         await this.reconcileCrmTodos(owner);
@@ -120,7 +136,7 @@ export class AutomationRhythmService {
     if (!this.crmJwtSecret) return;
     try {
       const response = await fetch(`${this.crmBaseUrl}/api/todos`, {
-        headers: { authorization: `Bearer ${crmToken(this.crmJwtSecret, ownerUserId)}` },
+        headers: { authorization: `Bearer ${crmIdentityToken(this.crmJwtSecret, ownerUserId)}` },
         signal: AbortSignal.timeout(10_000)
       });
       if (!response.ok) return;
@@ -229,7 +245,7 @@ export class AutomationRhythmService {
   private async crmCustomers(ownerUserId: string): Promise<{ ok: true; data: CrmCustomer[]; error: null } | { ok: false; data: []; error: string }> {
     if (!this.crmJwtSecret) return { ok: false, data: [], error: "CRM 服务签名密钥尚未配置" };
     try {
-      const response = await fetch(`${this.crmBaseUrl}/api/customers`, { headers: { authorization: `Bearer ${crmToken(this.crmJwtSecret, ownerUserId)}` }, signal: AbortSignal.timeout(10_000) });
+      const response = await fetch(`${this.crmBaseUrl}/api/customers`, { headers: { authorization: `Bearer ${crmIdentityToken(this.crmJwtSecret, ownerUserId)}` }, signal: AbortSignal.timeout(10_000) });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({})) as { message?: string; error?: string };
         return { ok: false, data: [], error: payload.message ?? payload.error ?? `HTTP ${response.status}` };
@@ -244,7 +260,7 @@ export class AutomationRhythmService {
   private async crmWrite(ownerUserId: string, path: string, body: Record<string, unknown>): Promise<{ ok: boolean; error: string | null; deduplicated: boolean; externalId: string | null }> {
     if (!this.crmJwtSecret) return { ok: false, error: "CRM 服务签名密钥尚未配置", deduplicated: false, externalId: null };
     try {
-      const response = await fetch(`${this.crmBaseUrl}${path}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${crmToken(this.crmJwtSecret, ownerUserId)}` }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) });
+      const response = await fetch(`${this.crmBaseUrl}${path}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${crmIdentityToken(this.crmJwtSecret, ownerUserId)}` }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) });
       if (response.ok) {
         const payload = await response.json().catch(() => ({})) as { deduplicated?: boolean; todo?: { id?: string }; message?: { id?: string } };
         return { ok: true, error: null, deduplicated: payload.deduplicated === true, externalId: payload.todo?.id ?? payload.message?.id ?? null };

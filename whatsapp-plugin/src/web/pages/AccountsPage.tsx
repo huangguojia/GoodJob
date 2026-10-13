@@ -199,10 +199,15 @@ export function AccountsPage({ selectedAccountId, onSelectAccount, onOpenWorkspa
         </div>
       </div>
 
-      <div className="notice warning-notice">
-        <ShieldAlert size={18} />
-        <div><strong>Baileys 是非官方通道</strong><span>适合本机验证和已接受风险的业务场景，无法承诺永久在线或零封号风险。</span></div>
-      </div>
+      {/* DESIGN.md：条件化的阶段提示才允许常驻。officialOnly 运行时根本创建不出 Baileys 账号，
+          这条风险警示只会变成噪音；非 officialOnly 时才展示（等 capabilities 明确返回再显示，
+          避免在 officialOnly 环境下先闪一下不该出现的警示）。 */}
+      {capabilitiesQuery.data?.officialOnly === false && (
+        <div className="notice warning-notice">
+          <ShieldAlert size={18} />
+          <div><strong>Baileys 是非官方通道</strong><span>适合本机验证和已接受风险的业务场景，无法承诺永久在线或零封号风险。</span></div>
+        </div>
+      )}
       <section className="media-retention-bar">
         <div className="media-retention-title"><HardDrive size={18} /><span><strong>附件保留</strong><small>仅控制 CRM 本地副本</small></span></div>
         <div className="media-retention-controls">

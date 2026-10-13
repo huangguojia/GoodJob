@@ -3,7 +3,7 @@ import { isE164PhoneNumber, type ChatMessage } from "../../shared/types.js";
 import { Repository } from "../db/repository.js";
 import { RealtimeHub } from "../realtime.js";
 import { TranslationService, detectLanguage } from "../services/translation.js";
-import type { ChannelProvider, SendMessageCommand } from "./types.js";
+import type { ChannelProvider, SendMediaCommand, SendMessageCommand } from "./types.js";
 
 export class DemoProvider implements ChannelProvider {
   private readonly connected = new Set<string>();
@@ -11,7 +11,9 @@ export class DemoProvider implements ChannelProvider {
   constructor(
     private readonly repository: Repository,
     private readonly realtime: RealtimeHub,
-    private readonly translation: TranslationService
+    private readonly translation: TranslationService,
+    /** 入站消息落库后的扩展点：自动聊在这里决定是否生成草稿。 */
+    private readonly onInbound?: (message: ChatMessage) => void
   ) {}
 
   async connect(accountId: string): Promise<void> {
@@ -35,6 +37,10 @@ export class DemoProvider implements ChannelProvider {
     if (!conversation || conversation.accountId !== command.accountId) {
       throw new Error("Account and conversation do not match");
     }
+    // 与 sendMedia / Baileys / Meta 三条通道保持同一幂等口径：同一 clientMessageId
+    // 重复提交只落一条。此处原先漏了这层查重，前端重试会插出第二条一样的消息。
+    const existing = await this.repository.findMessageByIdempotency(command.accountId, undefined, command.clientMessageId);
+    if (existing) return existing;
     const message = await this.repository.createMessage({
       accountId: command.accountId,
       conversationId: command.conversationId,
@@ -50,6 +56,37 @@ export class DemoProvider implements ChannelProvider {
     void this.translation.processIncoming(message).catch(() => {
       this.publishTranslationFailure(command.accountId);
     });
+    return message;
+  }
+
+  /**
+   * 本地体验通道的媒体发送：不产生任何外部请求，只按真实通道同样的形状落库，
+   * 让「文字 / 图片 / 文件」在没有 Meta 凭据时也能端到端跑通与验收。
+   */
+  async sendMedia(command: SendMediaCommand): Promise<ChatMessage> {
+    const account = await this.repository.getAccount(command.accountId);
+    const conversation = await this.repository.getConversation(command.conversationId);
+    if (!account || account.status !== "connected") throw new Error("Selected account is not connected");
+    if (!conversation || conversation.accountId !== command.accountId) {
+      throw new Error("Account and conversation do not match");
+    }
+    const existing = await this.repository.findMessageByIdempotency(command.accountId, undefined, command.clientMessageId);
+    if (existing) return existing;
+    const caption = command.caption.trim();
+    const message = await this.repository.createMessage({
+      accountId: command.accountId,
+      conversationId: command.conversationId,
+      providerMessageId: `demo-media-${randomUUID()}`,
+      clientMessageId: command.clientMessageId,
+      direction: "outbound",
+      messageType: command.kind,
+      body: caption || command.fileName,
+      status: "delivered",
+      sourceLanguage: caption ? detectLanguage(caption) : null,
+      media: { fileName: command.fileName, mimeType: command.mimeType, sizeBytes: command.buffer.byteLength }
+    });
+    this.realtime.publish("message.accepted", command.accountId, message);
+    this.realtime.publish("message.status.changed", command.accountId, message);
     return message;
   }
 
@@ -120,6 +157,7 @@ export class DemoProvider implements ChannelProvider {
     void this.translation.processIncoming(message).catch(() => {
       this.publishTranslationFailure(input.accountId);
     });
+    this.onInbound?.(message);
     return message;
   }
 

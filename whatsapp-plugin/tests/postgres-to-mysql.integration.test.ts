@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { AppConfig } from "../src/server/config";
+import { inMemoryDatabasePaths } from "./helpers/test-database";
 import { createDatabase, type Database } from "../src/server/db/database";
 import { migrate } from "../src/server/db/migrate";
 import { Repository } from "../src/server/db/repository";
@@ -29,7 +30,7 @@ describeMigration("PostgreSQL to MySQL Communication migration", () => {
       port: 0,
       webOrigin: "http://127.0.0.1",
       databaseClient: "pglite",
-      pglitePath: path.join(directory, "pgdata"),
+      ...inMemoryDatabasePaths(directory),
       sessionMasterKey: randomBytes(32).toString("base64"),
       seedDemo: false,
       allowPrivateAiEndpoints: false

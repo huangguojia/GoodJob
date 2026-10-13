@@ -3,13 +3,19 @@ import { isE164PhoneNumber, type ChatMessage, type ContactSyncResult, type Messa
 import type { AppConfig } from "../config.js";
 import { Repository } from "../db/repository.js";
 import { DomainError } from "../errors.js";
+import { outboundProxyInit } from "../outbound-proxy.js";
 import { RealtimeHub } from "../realtime.js";
 import { EncryptionService } from "../security/encryption.js";
 import { TranslationService, detectLanguage } from "../services/translation.js";
 import { ConversationIntelligenceService } from "../services/conversation-intelligence.js";
-import type { ChannelProvider, SendMessageCommand, SendTemplateMessageCommand } from "./types.js";
+import type { ChannelProvider, SendMediaCommand, SendMessageCommand, SendTemplateMessageCommand } from "./types.js";
 
 const META_SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** Meta 的媒体消息类型名与插件内部 kind 不完全一致（file → document）。 */
+function metaMediaType(kind: SendMediaCommand["kind"]): "image" | "video" | "document" {
+  return kind === "file" ? "document" : kind;
+}
 
 interface MetaWebhookValue {
   metadata?: { phone_number_id?: string };
@@ -115,7 +121,9 @@ export class MetaProvider implements ChannelProvider {
     private readonly realtime: RealtimeHub,
     private readonly translation: TranslationService,
     config: AppConfig,
-    private readonly intelligence?: ConversationIntelligenceService
+    private readonly intelligence?: ConversationIntelligenceService,
+    /** 入站消息落库后的扩展点：自动聊在这里决定是否生成草稿。 */
+    private readonly onInbound?: (message: ChatMessage) => void
   ) {
     this.graphBaseUrl = (config.metaGraphBaseUrl ?? "https://graph.facebook.com").replace(/\/+$/u, "");
   }
@@ -135,6 +143,7 @@ export class MetaProvider implements ChannelProvider {
       const url = this.graphUrl(credential.graphApiVersion, credential.phoneNumberId);
       url.searchParams.set("fields", "id,display_phone_number,verified_name,quality_rating");
       const response = await fetch(url, {
+        ...outboundProxyInit(url.toString()),
         headers: { authorization },
         signal: AbortSignal.timeout(15_000)
       });
@@ -158,6 +167,7 @@ export class MetaProvider implements ChannelProvider {
       wabaUrl.searchParams.set("fields", "id");
       wabaUrl.searchParams.set("limit", "100");
       const wabaResponse = await fetch(wabaUrl, {
+        ...outboundProxyInit(wabaUrl.toString()),
         headers: { authorization },
         signal: AbortSignal.timeout(15_000)
       });
@@ -279,6 +289,159 @@ export class MetaProvider implements ChannelProvider {
     );
   }
 
+  /**
+   * 官方通道发送图片 / 视频 / 文件。
+   *
+   * Meta Cloud API 不接受本地二进制直发，必须先 POST /{phone-number-id}/media 拿到 media id，
+   * 再用这个 id 发消息。两步都走同一套代理与错误语义，避免出现「媒体上传成功、消息没发出去」的孤儿。
+   */
+  async sendMedia(command: SendMediaCommand): Promise<ChatMessage> {
+    const pendingKey = `${command.accountId}:${command.clientMessageId}`;
+    const pending = this.pendingSends.get(pendingKey);
+    if (pending) return pending;
+    const send = this.sendMediaOnce(command);
+    this.pendingSends.set(pendingKey, send);
+    try {
+      return await send;
+    } finally {
+      if (this.pendingSends.get(pendingKey) === send) this.pendingSends.delete(pendingKey);
+    }
+  }
+
+  private async sendMediaOnce(command: SendMediaCommand): Promise<ChatMessage> {
+    const account = await this.repository.getAccount(command.accountId);
+    const conversation = await this.repository.getConversation(command.conversationId);
+    const credential = await this.repository.getMetaCredentialSecret(command.accountId);
+    if (!account || account.provider !== "meta" || account.status !== "connected" || !credential?.sendingEnabled) {
+      throw new DomainError("ACCOUNT_NOT_CONNECTED", 409, "Selected account is not connected");
+    }
+    if (!conversation || conversation.accountId !== command.accountId) {
+      throw new DomainError("ACCOUNT_CONVERSATION_MISMATCH", 409, "Account and conversation do not match");
+    }
+
+    const existing = await this.repository.findMessageByIdempotency(command.accountId, undefined, command.clientMessageId);
+    if (existing) return existing;
+
+    // 媒体消息属于自由格式消息：只在 24 小时客服窗口内可发，窗口外必须改用已审核模板。
+    const lastInboundAt = await this.repository.getLastInboundAt(conversation.id);
+    const lastInboundTime = lastInboundAt ? new Date(lastInboundAt).getTime() : Number.NaN;
+    if (!Number.isFinite(lastInboundTime) || Date.now() - lastInboundTime > META_SERVICE_WINDOW_MS) {
+      throw new DomainError(
+        "TEMPLATE_REQUIRED",
+        409,
+        "Outside the Meta 24-hour customer service window; an approved template is required"
+      );
+    }
+
+    if (!/^[1-9]\d{7,14}$/u.test(conversation.providerConversationId)) {
+      throw new DomainError("INVALID_META_RECIPIENT", 422, "Meta recipient must be a valid WhatsApp ID");
+    }
+
+    const storedBody = command.caption.trim() || command.fileName;
+    const message = await this.repository.createMessage({
+      accountId: command.accountId,
+      conversationId: conversation.id,
+      clientMessageId: command.clientMessageId,
+      direction: "outbound",
+      messageType: command.kind,
+      body: storedBody,
+      status: "sending",
+      sourceLanguage: command.caption.trim() ? detectLanguage(command.caption.trim()) : null,
+      media: { fileName: command.fileName, mimeType: command.mimeType, sizeBytes: command.buffer.byteLength }
+    });
+    this.realtime.publish("message.accepted", command.accountId, message);
+
+    const authorization = `Bearer ${this.encryption.decrypt(credential.accessTokenCipher)}`;
+    const mediaType = metaMediaType(command.kind);
+    let mediaId: string;
+    try {
+      mediaId = await this.uploadMedia(credential.graphApiVersion, credential.phoneNumberId, authorization, mediaType, command);
+    } catch (error) {
+      // 上传失败也必须收敛消息状态：否则这条消息会永远停在 sending，用户以为还在发。
+      // 4xx 是确定被拒（failed），5xx/超时是不确定（unknown）。
+      const deterministic = error instanceof DomainError && error.code === "META_MEDIA_REJECTED";
+      const marked = await this.repository.updateMessageStatus(message.id, deterministic ? "failed" : "unknown");
+      this.realtime.publish("message.status.changed", command.accountId, marked);
+      throw error;
+    }
+    try {
+      const mediaObject: Record<string, unknown> = { id: mediaId };
+      if (command.caption.trim()) mediaObject.caption = command.caption.trim();
+      if (mediaType === "document") mediaObject.filename = command.fileName;
+
+      const messagesUrl = this.graphUrl(credential.graphApiVersion, `${credential.phoneNumberId}/messages`);
+      const response = await fetch(messagesUrl, {
+        ...outboundProxyInit(messagesUrl.toString()),
+        method: "POST",
+        headers: { authorization, "content-type": "application/json" },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: conversation.providerConversationId,
+          type: mediaType,
+          [mediaType]: mediaObject
+        }),
+        signal: AbortSignal.timeout(30_000)
+      });
+      if (!response.ok) {
+        const status = response.status >= 400 && response.status < 500 && response.status !== 408 ? "failed" : "unknown";
+        const updated = await this.repository.updateMessageStatus(message.id, status);
+        this.realtime.publish("message.status.changed", command.accountId, updated);
+        throw new DomainError(
+          status === "failed" ? "META_SEND_REJECTED" : "META_SEND_UNCERTAIN",
+          status === "failed" ? 422 : 502,
+          `Meta Graph API media send failed (HTTP ${response.status})`
+        );
+      }
+      const payload = (await response.json()) as { messages?: Array<{ id?: string }> };
+      const providerMessageId = payload.messages?.[0]?.id;
+      if (!providerMessageId) {
+        const unknown = await this.repository.updateMessageStatus(message.id, "unknown");
+        this.realtime.publish("message.status.changed", command.accountId, unknown);
+        throw new DomainError("META_SEND_UNCERTAIN", 502, "Meta Graph API did not return a message ID");
+      }
+      const accepted = await this.repository.updateMessageStatus(message.id, "accepted", providerMessageId);
+      this.realtime.publish("message.status.changed", command.accountId, accepted);
+      return accepted;
+    } catch (error) {
+      if (error instanceof DomainError) throw error;
+      const unknown = await this.repository.updateMessageStatus(message.id, "unknown");
+      this.realtime.publish("message.status.changed", command.accountId, unknown);
+      throw new DomainError("META_SEND_UNCERTAIN", 502, "Meta Graph API media send result is unknown");
+    }
+  }
+
+  private async uploadMedia(
+    graphApiVersion: string,
+    phoneNumberId: string,
+    authorization: string,
+    mediaType: "image" | "video" | "document",
+    command: SendMediaCommand
+  ): Promise<string> {
+    const url = this.graphUrl(graphApiVersion, `${phoneNumberId}/media`);
+    const form = new FormData();
+    form.set("messaging_product", "whatsapp");
+    form.set("type", mediaType);
+    form.set("file", new Blob([command.buffer], { type: command.mimeType }), command.fileName);
+    const response = await fetch(url, {
+      ...outboundProxyInit(url.toString()),
+      method: "POST",
+      headers: { authorization },
+      body: form,
+      signal: AbortSignal.timeout(60_000)
+    });
+    if (!response.ok) {
+      throw new DomainError(
+        response.status >= 400 && response.status < 500 && response.status !== 408 ? "META_MEDIA_REJECTED" : "META_GRAPH_UNAVAILABLE",
+        response.status >= 400 && response.status < 500 && response.status !== 408 ? 422 : 502,
+        `Meta media upload failed (HTTP ${response.status})`
+      );
+    }
+    const payload = (await response.json()) as { id?: string };
+    if (!payload.id) throw new DomainError("META_MEDIA_REJECTED", 422, "Meta media upload did not return a media ID");
+    return payload.id;
+  }
+
   // 统一处理 Meta 文本和模板发送，确保凭据、幂等与不确定结果语义一致。
   private async sendPreparedMessage(
     command: Pick<SendMessageCommand, "accountId" | "conversationId" | "clientMessageId">,
@@ -327,7 +490,9 @@ export class MetaProvider implements ChannelProvider {
     this.realtime.publish("message.accepted", command.accountId, message);
 
     try {
-      const response = await fetch(this.graphUrl(credential.graphApiVersion, `${credential.phoneNumberId}/messages`), {
+      const messagesUrl = this.graphUrl(credential.graphApiVersion, `${credential.phoneNumberId}/messages`);
+      const response = await fetch(messagesUrl, {
+        ...outboundProxyInit(messagesUrl.toString()),
         method: "POST",
         headers: {
           authorization: `Bearer ${this.encryption.decrypt(credential.accessTokenCipher)}`,
@@ -552,6 +717,7 @@ export class MetaProvider implements ChannelProvider {
         this.publishTranslationFailure(accountId);
       });
       void this.intelligence?.analyzeConversation(conversation.id).catch(() => undefined);
+      this.onInbound?.(message);
     }
   }
 

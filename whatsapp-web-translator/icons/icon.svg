@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 42 42" width="42" height="42" role="img" aria-label="GoodJob">
+  <!--
+    GoodJob 扩展图标的矢量源。坐标直接用 CRM 侧栏 .brand-mark 的 42px 基准刻度，
+    所以这里的每个数字都能在上游 CSS 里找到对应：
+
+      <rect>          .brand-mark          宽高 42 / 圆角 13 / 描边 1px #e3e8f1 / 底 #eef0ff
+      <rect> 右下短条  .brand-mark::after   右 5 下 5 宽 8 高 3 圆角 2 #6366f1
+      <text>          .brand-mark span     字号 17 / 800 字重
+                      span:first-child     translateX(2px)   → 2/17em
+                      span:last-child      translate(-1px,3px) → -1/17em, 3/17em
+                      颜色                 #1d2534 / #6366f1
+
+    PNG 是这份矢量的等比渲染；16px 一枚按图标惯例简化为单个「G」+ 短条。
+  -->
+  <rect x="0.5" y="0.5" width="41" height="41" rx="13" fill="#eef0ff" stroke="#e3e8f1" />
+  <rect x="29" y="29" width="8" height="3" rx="2" fill="#6366f1" />
+  <text
+    x="21"
+    y="21"
+    fill="#1d2534"
+    font-family="Avenir Next, Avenir, Segoe UI, sans-serif"
+    font-size="17"
+    font-weight="800"
+    text-anchor="middle"
+    dominant-baseline="central"
+  >
+    <tspan dx="0.1176em">G</tspan><tspan fill="#6366f1" dx="-0.0588em" dy="0.1765em">J</tspan>
+  </text>
+</svg>

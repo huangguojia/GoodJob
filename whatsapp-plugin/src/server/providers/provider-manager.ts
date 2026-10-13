@@ -21,9 +21,19 @@ export class ProviderManager {
     await provider.connect(accountId);
   }
 
+  /**
+   * 断开 / 登出属于**清理**语义，刻意不受通道开关（officialOnly / demoProviderEnabled）约束。
+   *
+   * 原先这里复用 `forAccount(accountId, true)`，而那个 `true` 只放开了 Demo；Baileys 在
+   * officialOnly 运行时仍会被拦成 403。后果是：一个在环境切换前连上过的 Baileys 账号会永久
+   * 卡在 connected —— 既登不出来，也删不掉（`DELETE /accounts/:id` 对非 unconfigured/logged_out
+   * 的账号会先调 disconnect，403 抛出后 deleteAccount 根本执行不到），账号和被加密的会话一起
+   * 留在库里。停用一条通道只应阻止「用它发消息」，不该连本地会话都收不回来。
+   */
   async disconnect(accountId: string, logout = true): Promise<void> {
-    const provider = await this.forAccount(accountId, true);
-    await provider.disconnect(accountId, logout);
+    const account = await this.repository.getAccount(accountId);
+    if (!account) throw new DomainError("ACCOUNT_NOT_FOUND", 404, "Account not found");
+    await this.forProvider(account.provider).disconnect(accountId, logout);
   }
 
   async sendMessage(command: SendMessageCommand): Promise<ChatMessage> {
@@ -31,16 +41,15 @@ export class ProviderManager {
     return provider.sendMessage(command);
   }
 
+  /**
+   * 媒体发送按账号所属通道路由：
+   * - meta   → Graph 媒体上传 + 发送（需要 24 小时服务窗口）
+   * - baileys → 免费通道直传（officialOnly 运行时禁用）
+   * - demo   → 本地落库，仅用于本机验收
+   */
   async sendMedia(command: SendMediaCommand): Promise<ChatMessage> {
-    const account = await this.repository.getAccount(command.accountId);
-    if (!account) throw new DomainError("ACCOUNT_NOT_FOUND", 404, "Account not found");
-    if (account.provider !== "baileys") {
-      throw new DomainError("MEDIA_PROVIDER_UNSUPPORTED", 409, "媒体附件当前仅支持 Baileys 免费通道");
-    }
-    if (this.officialOnly) {
-      throw new DomainError("UNOFFICIAL_PROVIDER_DISABLED", 403, "Baileys is disabled in this runtime");
-    }
-    return this.baileys.sendMedia(command);
+    const provider = await this.forAccount(command.accountId);
+    return provider.sendMedia(command);
   }
 
   async revokeMessage(accountId: string, messageId: string): Promise<ChatMessage> {
@@ -84,10 +93,17 @@ export class ProviderManager {
     await this.baileys.shutdown();
   }
 
-  private async forAccount(accountId: string, allowDisabledDemo = false): Promise<ChannelProvider> {
+  /**
+   * 按账号所属通道路由到具体 provider，并在路由前做通道开关校验。
+   * 只用于**使用**通道的路径（连接 / 发消息 / 同步联系人 / 解析地址）；
+   * 清理路径见 `disconnect`。
+   */
+  private async forAccount(accountId: string): Promise<ChannelProvider> {
     const account = await this.repository.getAccount(accountId);
-    if (!account) throw new Error("Account not found");
-    if (account.provider === "demo" && !this.demoProviderEnabled && !allowDisabledDemo) {
+    // 与 ownedAccount() 保持同一错误码：裸 Error 会被顶层当 500 记成"服务端异常"，
+    // 而账号不存在是调用方可理解的 404。
+    if (!account) throw new DomainError("ACCOUNT_NOT_FOUND", 404, "Account not found");
+    if (account.provider === "demo" && !this.demoProviderEnabled) {
       throw new DomainError("DEMO_PROVIDER_DISABLED", 403, "Demo Provider is disabled in this environment");
     }
     if (account.provider === "baileys" && this.officialOnly) {

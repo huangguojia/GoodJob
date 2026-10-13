@@ -1,0 +1,276 @@
+/* ==========================================================================
+ * GoodJob 设计令牌 · 品牌标识（唯一来源）
+ * --------------------------------------------------------------------------
+ * 令牌不另发明，全部取自仓库里既有的 GoodJob 设计系统：
+ *   颜色 / 圆角 / 阴影 / 缓动 → whatsapp-plugin/src/web/styles.css 的 :root
+ *   GJ 标识的几何与配色        → frontend/index.html 的 .brand-mark（paper 主题）
+ *
+ * 为什么单独一个文件：同一套视觉要同时服务两个宿主 —— 注入 WhatsApp 页面的
+ * content script，以及扩展自己的 popup / options 页面。拆成两份必然漂移，所以
+ * 只留这一份，两边都引它。
+ *
+ * 命名统一带 --gj- / .gj- 前缀：本文件会被注入 WhatsApp 页面，前缀保证不碰
+ * WhatsApp 自己的 CSS 变量与 hash 类名。
+ * ========================================================================== */
+
+:root {
+  /* 中性色 —— 与 CRM 主站默认主题「晨白 Paper」同一套冷调中性 */
+  --gj-canvas: #f5f7fb;
+  --gj-surface: #ffffff;
+  --gj-surface-subtle: #f2f4f8;
+  --gj-ink: #1f2937;
+  --gj-muted: #667085;
+  --gj-faint: #7b8496;
+  --gj-border: #e1e6ee;
+  --gj-border-strong: #c9d2df;
+  --gj-border-hover: color-mix(in srgb, var(--gj-muted) 42%, var(--gj-border));
+
+  /* 品牌色 = CRM「晨白 Paper」的 --brand 系。
+     扩展此前一处用 #1d9e75（绿）、一处用 #4f46e5（靛），同一个产品两副面孔；
+     这里收成一处，跟随 CRM 的默认主题色。 */
+  --gj-brand: #6366f1;
+  --gj-brand-hover: #4f46e5;
+  --gj-brand-text: #4f46e5; /* 深色底上可读的品牌文字色 */
+  --gj-brand-soft: #eef0ff; /* 品牌浅底：选中态 / 提示块 */
+  --gj-brand-tint: #eef0ff; /* 标识浅底 */
+  --gj-brand-ring: rgba(99, 102, 241, 0.2);
+  --gj-on-brand: #ffffff; /* 铺在品牌色上的字 */
+
+  /* 语义色：只用于状态表达，不做装饰 */
+  --gj-green: #168044;
+  --gj-green-hover: #116d36;
+  --gj-green-soft: #e9f7ef;
+  /* 语义色实心底上写什么字：浅色档语义色都夠深，配白字；暗色档它们被提亮，必须配深字。 */
+  --gj-on-green: #ffffff;
+  --gj-blue: #3178c6;
+  --gj-blue-soft: #eaf2fb;
+  --gj-amber: #a66712;
+  --gj-amber-soft: #fff6e5;
+  --gj-red: #bd3d38;
+  --gj-red-soft: #fff0ef;
+  /* 红色是「危险动作」的实心填充色，浅色档配白字、暗色档 --gj-red 本身偏亮要配深字，
+     所以「危险底上写什么字」和「悬停往哪边压」都各自收成令牌，别在组件里手写。 */
+  --gj-on-danger: #ffffff;
+  --gj-danger-hover: color-mix(in srgb, var(--gj-red) 84%, var(--gj-ink));
+  /* 开关的「关」态轨道。参照只给了浅色的 #b8c0bc，这里由令牌派生，两档都成立。 */
+  --gj-track: color-mix(in srgb, var(--gj-muted) 42%, var(--gj-surface));
+
+  --gj-radius-sm: 6px;
+  --gj-radius: 8px;
+  --gj-radius-lg: 12px;
+  --gj-shadow-sm: 0 2px 6px rgba(23, 34, 48, 0.08);
+  --gj-shadow: 0 12px 34px rgba(31, 41, 55, 0.16);
+  --gj-shadow-modal: 0 18px 60px rgba(31, 41, 55, 0.18);
+  /* 右侧整列当前的宽度。运行时由 agent.js 用 `--gj-col-w` 改写（拖拽/折叠/窄屏切换），
+     这里给的是**默认值**，让 CSS 在脚本跑起来之前也是合法的。 */
+  --gj-col-w: 380px;
+  --gj-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* GJ 标识的配色（= CRM paper 主题下 .brand-mark 的取值） */
+  --gj-mark-bg: #eef0ff;
+  --gj-mark-ink: #1d2534;
+  --gj-mark-border: #e3e8f1;
+}
+
+/*
+ * 暗色档。参照的插件样式是「只做浅色」的 —— 它以 iframe 挂在浅色 CRM 里，没有暗色分支。
+ * 但本扩展的宿主是 WhatsApp 网页版，用户开暗色是常态：一块纯白浮框压在暗色聊天窗上
+ * 会比"没有暗色"更难看。所以这里**跟随宿主系统暗色**，配色全部由上面同一批令牌名派生，
+ * 不引入新的色相 —— 属于有意保留的偏离，已在 README 里登记。
+ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --gj-canvas: #0d1117;
+    --gj-surface: #111b21;
+    --gj-surface-subtle: #1b262c;
+    --gj-ink: #e9edef;
+    --gj-muted: #8696a0;
+    --gj-faint: #7b8794;
+    --gj-border: #22303a;
+    --gj-border-strong: #2a3942;
+
+    --gj-brand: #6366f1;
+    --gj-brand-hover: #7c83f5;
+    --gj-brand-text: #a5b4fc;
+    --gj-brand-soft: rgba(99, 102, 241, 0.18);
+    --gj-brand-tint: rgba(99, 102, 241, 0.16);
+    --gj-brand-ring: rgba(129, 140, 248, 0.28);
+
+    --gj-green: #4ac08a;
+    --gj-green-hover: #6ed3a4;
+    --gj-green-soft: rgba(22, 128, 68, 0.22);
+    --gj-on-green: #08221a;
+    --gj-blue: #6aa9e0;
+    --gj-blue-soft: rgba(49, 120, 198, 0.2);
+    --gj-amber: #e0a83c;
+    --gj-amber-soft: rgba(166, 103, 18, 0.22);
+    --gj-red: #e5786f;
+    --gj-red-soft: rgba(189, 61, 56, 0.22);
+    --gj-on-danger: #2a1210;
+    --gj-danger-hover: color-mix(in srgb, var(--gj-red) 84%, var(--gj-surface));
+
+    --gj-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32);
+    --gj-shadow: 0 14px 38px rgba(0, 0, 0, 0.5);
+    --gj-shadow-modal: 0 18px 60px rgba(0, 0, 0, 0.55);
+
+    --gj-mark-bg: rgba(99, 102, 241, 0.16);
+    --gj-mark-ink: #eceefc;
+    --gj-mark-border: rgba(129, 140, 248, 0.3);
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * GJ 标识
+ * --------------------------------------------------------------------------
+ * 方形浅底 + 深色「G」与品牌色「J」错位叠排 + 右下角一条品牌短条，与 CRM 侧栏
+ * 的品牌标完全同构。几何全部按参照的 42px 原尺寸**等比换算**，所以放到 22px
+ * 的浮框页头里也是同一个标，而不是"另一个小方块"。
+ *
+ *   --gj-mark-size   标识边长（默认 28px）
+ *   --gj-mark-radius 圆角（默认等比 0.31 倍边长）
+ * ------------------------------------------------------------------------ */
+.gj-mark {
+  --gj-mark-size: 28px;
+
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 两个字母必须**并排**：不加这两行的话，一旦外层有别的规则把 span 改成块级，
+     flex 就会把它们折成上下两行，标识立刻变成两个摞起来的方块。 */
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: var(--gj-mark-size);
+  height: var(--gj-mark-size);
+  overflow: hidden;
+  border: 1px solid var(--gj-mark-border);
+  border-radius: calc(var(--gj-mark-size) * 0.31);
+  color: var(--gj-mark-ink);
+  background: var(--gj-mark-bg);
+  box-shadow: var(--gj-shadow-sm);
+  transition:
+    transform 0.35s var(--gj-ease-out),
+    box-shadow 0.35s ease;
+}
+
+.gj-mark::after {
+  content: "";
+  position: absolute;
+  right: calc(var(--gj-mark-size) * 0.119);
+  bottom: calc(var(--gj-mark-size) * 0.119);
+  width: calc(var(--gj-mark-size) * 0.19);
+  height: max(2px, calc(var(--gj-mark-size) * 0.072));
+  border-radius: 2px;
+  background: var(--gj-brand);
+  transition: width 0.35s var(--gj-ease-out);
+}
+
+.gj-mark > span {
+  position: relative;
+  z-index: 1;
+  font-family: "Avenir Next", Avenir, "Segoe UI", -apple-system, "PingFang SC", sans-serif;
+  font-size: calc(var(--gj-mark-size) * 0.405);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  transition:
+    transform 0.35s var(--gj-ease-out),
+    color 0.25s ease;
+}
+
+.gj-mark > span:first-child {
+  transform: translateX(calc(var(--gj-mark-size) * 0.048));
+}
+
+.gj-mark > span:last-child {
+  color: var(--gj-brand);
+  transform: translate(calc(var(--gj-mark-size) * -0.024), calc(var(--gj-mark-size) * 0.071));
+}
+
+/* 可点的标识（浮球 / 品牌链接）悬停时沿用 CRM 侧栏的那套微动效：标体轻转、短条拉长、GJ 对开。 */
+.gj-mark-host:hover .gj-mark,
+.gj-mark-host:focus-visible .gj-mark {
+  transform: rotate(-3deg) scale(1.035);
+  box-shadow: var(--gj-shadow);
+}
+
+.gj-mark-host:hover .gj-mark::after,
+.gj-mark-host:focus-visible .gj-mark::after {
+  width: calc(var(--gj-mark-size) * 0.357);
+}
+
+.gj-mark-host:hover .gj-mark > span:first-child,
+.gj-mark-host:focus-visible .gj-mark > span:first-child {
+  transform: translateX(calc(var(--gj-mark-size) * -0.024));
+}
+
+.gj-mark-host:hover .gj-mark > span:last-child,
+.gj-mark-host:focus-visible .gj-mark > span:last-child {
+  transform: translate(calc(var(--gj-mark-size) * 0.048), calc(var(--gj-mark-size) * 0.071));
+}
+
+/* 品牌文字排（标 + 名称 + 副题），与 CRM 侧栏 .brand 同比例。
+   注意选择器必须写成 `.gj-wordmark > div …`：标识本身就是 .gj-wordmark 的**直接**子元素，
+   写成 `.gj-wordmark span` 会连标识里的 G / J 一起命中（display/font-size/color 全被改掉，
+   两个字母会掉成上下两行的方块 —— 已经踩过一次）。CRM 那边靠 `:last-child` 避开，这里靠直接子级。 */
+.gj-wordmark {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.gj-wordmark > div {
+  min-width: 0;
+}
+
+.gj-wordmark > div strong {
+  display: block;
+  color: var(--gj-ink);
+  font-size: 14px;
+  font-weight: 720;
+  line-height: 1.2;
+}
+
+.gj-wordmark > div span {
+  display: block;
+  margin-top: 3px;
+  color: var(--gj-faint);
+  font-size: 10.5px;
+  line-height: 1.2;
+}
+
+/*
+ * 减弱动效：只停掉过渡，**保留标识本身的静态错位**（那是标识的一部分，不是动效）。
+ * 悬停态回落到静态取值，等于悬停没有任何位移。
+ */
+@media (prefers-reduced-motion: reduce) {
+  .gj-mark,
+  .gj-mark::after,
+  .gj-mark > span {
+    transition: none;
+  }
+
+  .gj-mark-host:hover .gj-mark,
+  .gj-mark-host:focus-visible .gj-mark {
+    transform: none;
+    box-shadow: var(--gj-shadow-sm);
+  }
+
+  .gj-mark-host:hover .gj-mark::after,
+  .gj-mark-host:focus-visible .gj-mark::after {
+    width: calc(var(--gj-mark-size) * 0.19);
+  }
+
+  .gj-mark-host:hover .gj-mark > span:first-child,
+  .gj-mark-host:focus-visible .gj-mark > span:first-child {
+    transform: translateX(calc(var(--gj-mark-size) * 0.048));
+  }
+
+  .gj-mark-host:hover .gj-mark > span:last-child,
+  .gj-mark-host:focus-visible .gj-mark > span:last-child {
+    transform: translate(calc(var(--gj-mark-size) * -0.024), calc(var(--gj-mark-size) * 0.071));
+  }
+}

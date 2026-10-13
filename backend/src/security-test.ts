@@ -1035,6 +1035,17 @@ try {
   await expectStatus("untrusted origin", corsBlocked.response.status, 403);
   const corsLocalhostAllowed = await request("/api/health", { headers: { origin: "http://localhost:5188" } });
   await expectStatus("trusted localhost origin", corsLocalhostAllowed.response.status, 200);
+  // 本机浏览器扩展（Chrome MV3 service worker 的 fetch 固定带 chrome-extension://<32位id> Origin）
+  // 也算本机工具，与 localhost 同一档放行 —— 否则扩展侧「登录 CRM」会被 403「不允许的请求来源」卡死。
+  const corsExtensionAllowed = await request("/api/health", {
+    headers: { origin: "chrome-extension://mfcnngeoclhdaiglofafkjogdpgkelfg" }
+  });
+  await expectStatus("trusted chrome-extension origin", corsExtensionAllowed.response.status, 200);
+  // 形状不对的扩展来源仍然要拒：32 位 id 只可能是 a-p 的小写字母
+  const corsExtensionMalformed = await request("/api/health", {
+    headers: { origin: "chrome-extension://not-a-valid-extension-id!!" }
+  });
+  await expectStatus("malformed chrome-extension origin", corsExtensionMalformed.response.status, 403);
   results.corsBlocked = corsBlocked.response.status;
 
   console.log(JSON.stringify({ ok: true, ...results }, null, 2));
