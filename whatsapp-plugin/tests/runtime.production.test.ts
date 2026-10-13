@@ -5,6 +5,7 @@ import path from "node:path";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAppRuntime, type AppRuntime } from "../src/server/app";
+import { inMemoryDatabasePaths } from "./helpers/test-database";
 
 describe("production runtime boundaries", () => {
   let runtime: AppRuntime;
@@ -16,7 +17,7 @@ describe("production runtime boundaries", () => {
       port: 0,
       webOrigin: "http://localhost:5173",
       databaseClient: "pglite",
-      pglitePath: path.join(directory, "pgdata"),
+      ...inMemoryDatabasePaths(directory),
       sessionMasterKey: randomBytes(32).toString("base64"),
       seedDemo: false,
       enableDemoProvider: false,
@@ -64,7 +65,24 @@ describe("production runtime boundaries", () => {
     const residual = await runtime.repository.createAccount({ name: "Residual Baileys", provider: "baileys" });
     const connect = await request(runtime.app).post(`/api/v1/accounts/${residual.id}/connect`).expect(403);
     expect(connect.body).toMatchObject({ code: "UNOFFICIAL_PROVIDER_DISABLED" });
+
+    // 通道开关只约束「使用」，不约束「清理」。环境从允许非官方切到 officialOnly 之后，
+    // 历史上连上过的 Baileys 账号会残留成 connected；此时仍然必须能登出、能删除，
+    // 否则它会永久卡在 connected —— DELETE 路由对非 unconfigured/logged_out 的账号
+    // 会先尝试 disconnect，403 一抛出 deleteAccount 就永远执行不到。
+    await runtime.repository.updateAccountStatus(residual.id, "connected");
+    const logout = await request(runtime.app).post(`/api/v1/accounts/${residual.id}/logout`).expect(200);
+    expect(logout.body).toMatchObject({ status: "logged_out" });
+    await request(runtime.app).post(`/api/v1/accounts/${residual.id}/connect`).expect(403);
     await request(runtime.app).delete(`/api/v1/accounts/${residual.id}`).expect(204);
+  });
+
+  it("still allows cleaning up a residual Baileys account that is stuck connected", async () => {
+    const stuck = await runtime.repository.createAccount({ name: "Stuck Baileys", provider: "baileys" });
+    await runtime.repository.updateAccountStatus(stuck.id, "connected");
+
+    // 直接删除（不先登出）也必须成功：这是运维清理残留账号的唯一入口。
+    await request(runtime.app).delete(`/api/v1/accounts/${stuck.id}`).expect(204);
   });
 
   it("rejects Demo account creation and does not mount the Demo inbound route", async () => {

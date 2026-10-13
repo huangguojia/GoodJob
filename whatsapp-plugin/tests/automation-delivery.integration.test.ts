@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAppRuntime, type AppRuntime } from "../src/server/app";
+import { inMemoryDatabasePaths } from "./helpers/test-database";
 import { AutomationRhythmService } from "../src/server/services/automation-rhythm";
 import { ConversationIntelligenceService } from "../src/server/services/conversation-intelligence";
 
@@ -78,7 +79,7 @@ describe("automation CRM delivery", () => {
       port: 0,
       webOrigin: "http://localhost:5173",
       databaseClient: "pglite",
-      pglitePath: path.join(directory, "pgdata"),
+      ...inMemoryDatabasePaths(directory),
       sessionMasterKey: randomBytes(32).toString("base64"),
       seedDemo: false,
       allowPrivateAiEndpoints: false

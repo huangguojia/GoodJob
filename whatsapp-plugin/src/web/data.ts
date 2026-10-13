@@ -26,7 +26,12 @@ export const queryKeys = {
   crmCustomers: ["crm-customers"] as const,
   crmTodos: ["crm-todos"] as const,
   automation: ["automation"] as const,
-  automationRuns: ["automation-runs"] as const
+  automationRuns: ["automation-runs"] as const,
+  trainingProfiles: ["training-profiles"] as const,
+  trainingLibrary: ["training-library"] as const,
+  autoChatSettings: (accountId?: string) => ["auto-chat-settings", accountId ?? "all"] as const,
+  autoChatEngine: ["auto-chat-engine"] as const,
+  autoChatDrafts: (status?: string) => ["auto-chat-drafts", status ?? "all"] as const
 };
 
 export function useAccounts() {
@@ -69,6 +74,11 @@ export function useRealtimeInvalidation(onEvent?: (event: RealtimeEvent) => void
       }
       if (event.eventType === "translation.preference.changed") {
         void queryClient.invalidateQueries({ queryKey: queryKeys.preference });
+      }
+      if (event.eventType.startsWith("auto.chat.")) {
+        void queryClient.invalidateQueries({ queryKey: ["auto-chat-drafts"] });
+        void queryClient.invalidateQueries({ queryKey: ["messages"] });
+        void queryClient.invalidateQueries({ queryKey: ["conversations"] });
       }
       if (event.eventType.startsWith("integration.") || event.eventType.startsWith("meta.")) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.integrationPreference });

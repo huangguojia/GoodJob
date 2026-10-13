@@ -8,6 +8,7 @@ import {
   Network,
   SlidersHorizontal,
   ClipboardCheck,
+  GraduationCap,
   Smartphone,
   Wifi,
   TimerReset
@@ -23,8 +24,9 @@ import { RoutingPage } from "./pages/RoutingPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 import { AutomationPage } from "./pages/AutomationPage";
 import { CommercialReadinessPage } from "./pages/CommercialReadinessPage";
+import { TrainingPage } from "./pages/TrainingPage";
 
-type View = "accounts" | "workspace" | "contacts" | "routing" | "access" | "ai" | "diagnostics" | "automation" | "readiness";
+type View = "accounts" | "workspace" | "contacts" | "routing" | "access" | "ai" | "diagnostics" | "automation" | "training" | "readiness";
 
 const views: Array<{ id: View; label: string; icon: typeof Smartphone }> = [
   { id: "accounts", label: "账号与扫码", icon: Smartphone },
@@ -33,6 +35,7 @@ const views: Array<{ id: View; label: string; icon: typeof Smartphone }> = [
   { id: "routing", label: "线索路由", icon: Network },
   { id: "access", label: "接入设置", icon: SlidersHorizontal },
   { id: "ai", label: "AI 翻译", icon: Bot },
+  { id: "training", label: "训练与自动回复", icon: GraduationCap },
   { id: "diagnostics", label: "诊断", icon: Activity },
   { id: "automation", label: "自动化节奏", icon: TimerReset }
   ,{ id: "readiness", label: "商业上线", icon: ClipboardCheck }
@@ -150,6 +153,7 @@ export function App() {
         {view === "routing" && <RoutingPage />}
         {view === "access" && <AccessSettingsPage selectedAccountId={selectedAccountId} onManageAccounts={() => setView("accounts")} />}
         {view === "ai" && <AiSettingsPage />}
+        {view === "training" && <TrainingPage />}
         {view === "diagnostics" && <DiagnosticsPage lastEvent={lastEvent} />}
         {view === "automation" && <AutomationPage />}
         {view === "readiness" && <CommercialReadinessPage onNavigate={setView} />}

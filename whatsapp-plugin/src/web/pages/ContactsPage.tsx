@@ -17,7 +17,7 @@ import {
 import type { Contact } from "@shared/types";
 import { api } from "../api";
 import { queryKeys, useAccounts } from "../data";
-import { EmptyState, Modal, Spinner, StatusBadge, Toggle } from "../components/ui";
+import { EmptyState, Modal, Spinner, StatusBadge, Toggle, WhatsAppNumberLink } from "../components/ui";
 
 interface Props {
   selectedAccountId?: string;
@@ -185,7 +185,7 @@ export function ContactsPage({ selectedAccountId, onSelectAccount, onOpenConvers
             <tbody>{contacts.map((contact) => (
               <tr key={contact.id}>
                 <td><div className="identity-cell"><span className="avatar">{contact.displayName.slice(0, 2)}</span><span><strong>{contact.displayName}</strong><small className="mono clamp-id">{contact.providerContactId}</small></span></div></td>
-                <td><span className="mono">{contact.phone}</span></td>
+                <td><WhatsAppNumberLink phone={contact.phone} className="mono" /></td>
                 <td><div className="contact-origin"><span className={`provider-label provider-${contact.source}`}>{contact.source}</span><span className={`origin-label origin-${contact.origin}`}>{originLabels[contact.origin]}</span></div></td>
                 <td>{contact.lastSeenAt ? new Date(contact.lastSeenAt).toLocaleString("zh-CN") : "暂无"}</td>
                 <td>{contact.crmContactId ? <span className="linked-pill"><Check size={13} /> 已关联</span> : <span className="pending-pill">待建档</span>}</td>

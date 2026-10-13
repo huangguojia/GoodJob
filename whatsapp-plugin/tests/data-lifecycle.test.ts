@@ -1,7 +1,4 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtemp } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AppConfig } from "../src/server/config";
 import { applyDemoCleanup, planDemoCleanup } from "../src/server/db/demo-cleanup";
@@ -10,17 +7,23 @@ import { migrate } from "../src/server/db/migrate";
 import { Repository } from "../src/server/db/repository";
 import { seed, seedDemo } from "../src/server/db/seed";
 import { parseCleanupCliOptions, runCleanup } from "../src/server/scripts/cleanup-demo";
+import { IN_MEMORY_PGLITE } from "./helpers/test-database";
 
 const databases: Database[] = [];
 
+/**
+ * 这些用例只验迁移 / 事务 / 种子 / 演示数据清理的**运行时行为**，没有任何一条依赖
+ * 「数据落盘后重开还在」，所以统一用 PGlite 的内存文件系统。为什么必须这样、
+ * 以及落盘库在本机的具体故障，见 `helpers/test-database.ts`。
+ */
+
 async function testRuntime(): Promise<{ config: AppConfig; database: Database; repository: Repository }> {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "wa-crm-lifecycle-"));
   const config: AppConfig = {
     nodeEnv: "test",
     port: 0,
     webOrigin: "http://localhost:5173",
     databaseClient: "pglite",
-    pglitePath: path.join(directory, "pgdata"),
+    pglitePath: IN_MEMORY_PGLITE,
     sessionMasterKey: randomBytes(32).toString("base64"),
     seedDemo: false,
     allowPrivateAiEndpoints: false
@@ -34,13 +37,12 @@ async function testRuntime(): Promise<{ config: AppConfig; database: Database; r
 }
 
 async function unmigratedDatabase(): Promise<Database> {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "wa-crm-unmigrated-"));
   const database = await createDatabase({
     nodeEnv: "test",
     port: 0,
     webOrigin: "http://localhost:5173",
     databaseClient: "pglite",
-    pglitePath: path.join(directory, "pgdata"),
+    pglitePath: IN_MEMORY_PGLITE,
     sessionMasterKey: randomBytes(32).toString("base64"),
     seedDemo: false,
     allowPrivateAiEndpoints: false
@@ -70,8 +72,38 @@ describe("database lifecycle", () => {
       auto_translate: number;
       provider_id: string | null;
     }>("SELECT auto_translate,provider_id FROM translation_preferences WHERE id='default'");
+    const trainingTables = await database.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema='public' AND table_name IN ('training_profiles','auto_chat_settings','auto_chat_drafts','training_library_entries')
+       ORDER BY table_name`
+    );
+    // 引擎来源三列是迁移 14 加的：存量行默认 auto（= 按可用性挑通道），不是空串。
+    const engineColumns = await database.query<{ column_name: string; column_default: string }>(
+      `SELECT column_name, column_default FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='auto_chat_settings'
+         AND column_name IN ('engine','cli_model','cli_effort')
+       ORDER BY column_name`
+    );
+    // 训练库两列是迁移 15 加的：enabled 默认 1、priority 默认 100。
+    const libraryColumns = await database.query<{ column_name: string; column_default: string }>(
+      `SELECT column_name, column_default FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='training_library_entries'
+         AND column_name IN ('enabled','priority','kind','source')
+       ORDER BY column_name`
+    );
 
-    expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+    expect(trainingTables.rows.map((row) => row.table_name)).toEqual([
+      "auto_chat_drafts",
+      "auto_chat_settings",
+      "training_library_entries",
+      "training_profiles"
+    ]);
+    expect(engineColumns.rows.map((row) => row.column_name)).toEqual(["cli_effort", "cli_model", "engine"]);
+    expect(engineColumns.rows.find((row) => row.column_name === "engine")?.column_default).toContain("auto");
+    expect(libraryColumns.rows.map((row) => row.column_name)).toEqual(["enabled", "kind", "priority", "source"]);
+    expect(libraryColumns.rows.find((row) => row.column_name === "enabled")?.column_default).toContain("1");
+    expect(libraryColumns.rows.find((row) => row.column_name === "priority")?.column_default).toContain("100");
     expect(Number(accounts.rows[0].count)).toBe(0);
     expect(Number(mocks.rows[0].count)).toBe(0);
     expect(preference.rows[0]).toMatchObject({ auto_translate: 0, provider_id: null });

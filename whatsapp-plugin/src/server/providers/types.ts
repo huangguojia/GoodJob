@@ -31,6 +31,8 @@ export interface ChannelProvider {
   connect(accountId: string): Promise<void>;
   disconnect(accountId: string, logout: boolean): Promise<void>;
   sendMessage(command: SendMessageCommand): Promise<ChatMessage>;
+  /** 图片 / 视频 / 文件。官方通道走 Graph 媒体上传，免费通道走直传。 */
+  sendMedia(command: SendMediaCommand): Promise<ChatMessage>;
   syncContacts(accountId: string): Promise<ContactSyncResult>;
   resolveContactAddress(accountId: string, phone: string): Promise<string | null>;
   activeConnectionCount(): number;

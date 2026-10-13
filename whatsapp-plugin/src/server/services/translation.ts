@@ -7,6 +7,27 @@ import { DomainError } from "../errors.js";
 import { RealtimeHub } from "../realtime.js";
 import { EncryptionService } from "../security/encryption.js";
 
+/**
+ * 翻译用的系统提示词。
+ *
+ * **与扩展侧 `whatsapp-web-translator/src/provider.js` 的 `TRANSLATOR_SYSTEM_PROMPT`
+ * 逐字相同** —— `whatsapp-web-translator/tests/parity.test.mjs` 会把两份抠出来比对，
+ * 改一处必须同步另一处，否则 CRM 里的翻译和浏览器里的翻译会出两套译风。
+ *
+ * ⚠️ 每一句都是踩坑换来的，别删：
+ * - `Output the translation only … no original text` —— 少了它，部分模型会回
+ *   「Here is the translation: …」，而这句会**原样显示在界面上**。
+ * - `Do not think step by step` —— 翻译不需要推理。推理型模型（gpt-5.x / o 系列）
+ *   会把绝大部分时间花在内部推理上，这正是「翻译超时」的头号原因。
+ * - 保住数字/型号/换行 —— 外贸场景里错一个字就是事故。
+ */
+export const TRANSLATOR_SYSTEM_PROMPT = [
+  "You are a professional B2B trade translator. Translate the user's text into the target language.",
+  "Output the translation only: no preamble, no explanation, no notes, no quotes, no original text.",
+  "Do not think step by step, do not deliberate, do not restate the request. Translate directly.",
+  "Keep names, numbers, currencies, dates, model numbers, URLs and line breaks exactly as they are, and keep the original tone."
+].join("\n");
+
 const mockTranslations = new Map<string, string>([
   ["Hola, nos interesan 500 unidades. ¿Podrían compartir el precio FOB?", "您好，我们对 500 件产品感兴趣。可以提供 FOB 报价吗？"],
   ["Necesitamos muestras antes de confirmar el pedido.", "我们需要先收到样品，再确认订单。"],
@@ -154,7 +175,7 @@ export class TranslationService {
     const result = await this.openAiChat(baseUrl, apiKeyCipher, model, [
       {
         role: "system",
-        content: "You are a precise B2B trade translator. Preserve names, numbers, currencies, dates, model numbers, URLs, paragraphs and tone. Return only the translation."
+        content: TRANSLATOR_SYSTEM_PROMPT
       },
       {
         role: "user",

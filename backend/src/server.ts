@@ -91,6 +91,21 @@ import {
   updateAgentKnowledgeDraft
 } from "./agent-knowledge.js";
 import {
+  MAX_VECTOR_CANDIDATES as MAX_RESOURCE_VECTOR_CANDIDATES,
+  RESOURCE_HUB_EMBEDDING_MODEL,
+  RESOURCE_SOURCE_TYPES,
+  collectHubResources,
+  getResourceHubRepository,
+  resourceKey,
+  resourceTerms,
+  revealHubResource,
+  scoreHubResources,
+  emptyEventCounts,
+  type ResourceEventInput,
+  type ResourceEventStatsEntry,
+  type ResourceSourceType
+} from "./resource-hub.js";
+import {
   AgentTriggerRunner,
   createAgentTriggerRule,
   deleteAgentTriggerRule,
@@ -658,8 +673,13 @@ const allowedOrigins = new Set((process.env.CORS_ORIGINS || "")
   .map((origin) => origin.trim())
   .filter(Boolean));
 function originAllowed(origin?: string) {
-  return !origin || allowedOrigins.has(origin)
-    || (process.env.NODE_ENV !== "production" && /^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(origin));
+  if (!origin || allowedOrigins.has(origin)) return true;
+  if (process.env.NODE_ENV === "production") return false;
+  // 本机工具来源：网页页面走 http://127.0.0.1|localhost:<port>；
+  // 浏览器扩展（MV3 service worker 的 fetch 固定带 chrome-extension://<32位id>）同属本机工具，
+  // 不放行的话扩展侧「登录 CRM」会被 403「不允许的请求来源」卡死。id 只可能是 a-p 的小写字母。
+  return /^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(origin)
+    || /^chrome-extension:\/\/[a-p]{32}$/.test(origin);
 }
 app.use(helmet({
   contentSecurityPolicy: false,
@@ -19742,6 +19762,333 @@ app.post("/api/agent/knowledge/documents/:id/:action", requireAuth, asyncRoute(a
   const action = z.enum(["submit", "publish", "archive"]).parse(req.params.action);
   const document = await setAgentKnowledgeStatus(getStore(), req.user!, req.params.id, action);
   res.json({ document });
+}));
+
+// ---------------------------------------------------------------------------
+// 资源中心（Resource Hub）：四类资源的统一目录 / 推荐 / 取真实地址 / 采纳埋点。
+// 见 docs/RESOURCE-HUB-DESIGN.md。真实外链只有 reveal 一个出口。
+// ---------------------------------------------------------------------------
+
+const resourceSourceTypeSchema = z.enum([...RESOURCE_SOURCE_TYPES]);
+
+const resourceListQuerySchema = z.object({
+  q: z.string().trim().max(200).catch(""),
+  sourceType: z.enum([...RESOURCE_SOURCE_TYPES, "all"]).catch("all"),
+  category: z.string().trim().max(80).catch(""),
+  fileType: z.string().trim().max(30).catch(""),
+  limit: z.coerce.number().int().min(1).max(50).catch(20),
+  offset: z.coerce.number().int().min(0).max(2000).catch(0)
+});
+
+const resourceRecommendSchema = z.object({
+  conversation: z.array(z.object({
+    role: z.enum(["customer", "agent"]),
+    text: z.string().trim().min(1).max(2000)
+  })).min(1).max(20),
+  customerId: z.string().trim().max(64).optional().default(""),
+  conversationKey: z.string().trim().max(120).optional().default(""),
+  limit: z.number().int().min(1).max(20).optional().default(6),
+  sourceTypes: z.array(resourceSourceTypeSchema).max(4).optional(),
+  signal: z.enum(["inbound", "compose", "manual"]).optional().default("manual"),
+  /** 缺省 null = 跟随服务端配置；true/false 由调用方强制 */
+  useVector: z.boolean().nullable().optional().default(null),
+  /** 调用方自带的查询向量（CRM 不需要 embedding 凭据也能做精排） */
+  queryVector: z.array(z.number()).max(2048).optional()
+});
+
+const resourceRevealSchema = z.object({
+  reason: z.string().trim().max(300).optional().default(""),
+  conversationKey: z.string().trim().max(120).optional().default("")
+});
+
+const resourceFeedbackSchema = z.object({
+  items: z.array(z.object({
+    resourceId: z.string().trim().min(1).max(90),
+    sourceType: resourceSourceTypeSchema,
+    action: z.enum(["accepted", "dismissed", "sent"])
+  })).min(1).max(20),
+  conversationKey: z.string().trim().max(120).optional().default("")
+});
+
+/**
+ * 埋点是**旁路**：仓库不可用或写失败都不许影响主流程（与「背调留档写库失败不拖垮返回」同口径）。
+ */
+async function recordResourceHubEvents(items: ResourceEventInput[]): Promise<number> {
+  const repository = getResourceHubRepository();
+  if (!repository || !items.length) return 0;
+  try {
+    return await repository.recordEvents(items);
+  } catch {
+    return 0;
+  }
+}
+
+/** 本团队的「已发给客户」先验；读不到就返回空表，不影响检索。 */
+async function resourceHubSentCounts(teamId: string): Promise<Map<string, number>> {
+  const repository = getResourceHubRepository();
+  if (!repository) return new Map();
+  try {
+    return await repository.sentCounts(teamId);
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * 结构化信号：全部来自**真实往来数据**，不猜客户属性。
+ * ① 该客户历史报价单里的产品词  ② 当前会话里已经发过/取过的资料（靠 conversationKey）
+ */
+function resourceHubCustomerSignals(actor: SessionUser, customerId: string) {
+  const store = getStore();
+  const terms = new Set<string>();
+  if (customerId) {
+    const customer = store.customers.find((item) => item.id === customerId && item.teamId === actor.teamId);
+    if (customer && canSeeOwner(actor, customer.ownerId, customer.teamId)) {
+      const records = store.quoteHistory.filter((row) => row.customerId === customerId && row.teamId === actor.teamId);
+      for (const record of records) {
+        for (const item of record.items || []) {
+          for (const term of resourceTerms(`${item.product || ""} ${item.model || ""}`)) terms.add(term);
+        }
+        for (const term of resourceTerms(record.dealTitle || "")) terms.add(term);
+      }
+    }
+  }
+  return { customerProductTerms: terms };
+}
+
+app.get("/api/agent/resources", requireAuth, (req, res) => {
+  const query = resourceListQuerySchema.parse(req.query);
+  const actor = req.user!;
+  const started = Date.now();
+  const resources = collectHubResources(getStore(), actor, {
+    sourceTypes: query.sourceType === "all" ? undefined : [query.sourceType as ResourceSourceType],
+    category: query.category,
+    fileType: query.fileType
+  });
+  const ranked = scoreHubResources(resources, { query: query.q, limit: query.offset + query.limit + 1 });
+  const page = ranked.slice(query.offset, query.offset + query.limit);
+  res.json({
+    resources: page,
+    total: resources.length,
+    nextCursor: ranked.length > query.offset + query.limit
+      ? page[page.length - 1]
+        ? `${page[page.length - 1].updatedAt}|${page[page.length - 1].id}`
+        : null
+      : null,
+    retrievalMode: "weighted-lexical",
+    vectorEnabled: false,
+    tookMs: Date.now() - started
+  });
+});
+
+app.post("/api/agent/resources/recommend", requireAuth, asyncRoute(async (req, res) => {
+  const body = resourceRecommendSchema.parse(req.body || {});
+  const actor = req.user!;
+  const started = Date.now();
+  const warnings: string[] = [];
+
+  const resources = collectHubResources(getStore(), actor, { sourceTypes: body.sourceTypes });
+  // 客户的话是主信号，业务员自己的话作补充（业务员常在复述客户需求）
+  const customerText = body.conversation.filter((item) => item.role === "customer").map((item) => item.text);
+  const agentText = body.conversation.filter((item) => item.role === "agent").map((item) => item.text);
+  const query = [...customerText, ...agentText].join("\n");
+
+  const sentCounts = await resourceHubSentCounts(actor.teamId);
+  const signals = resourceHubCustomerSignals(actor, body.customerId);
+  let customerResourceKeys = new Set<string>();
+  const repository = getResourceHubRepository();
+  if (repository && body.conversationKey) {
+    try {
+      customerResourceKeys = await repository.customerResourceKeys(actor.teamId, body.conversationKey);
+    } catch {
+      warnings.push("会话历史信号未取到");
+    }
+  }
+
+  const baseOptions = {
+    query,
+    limit: MAX_RESOURCE_VECTOR_CANDIDATES,
+    sentCounts,
+    customerResourceKeys,
+    customerProductTerms: signals.customerProductTerms
+  };
+
+  // 第一遍：词法 + 结构化 + 语义。向量开启时这一遍同时充当预筛。
+  const prefiltered = scoreHubResources(resources, baseOptions);
+
+  let recommendations = prefiltered.slice(0, body.limit);
+  let vectorEnabled = false;
+
+  if (body.useVector !== false && body.queryVector?.length && repository) {
+    const bySource = new Map<ResourceSourceType, string[]>();
+    for (const row of prefiltered) {
+      const list = bySource.get(row.sourceType) || [];
+      list.push(row.id);
+      bySource.set(row.sourceType, list);
+    }
+    const vectors = new Map<string, Float32Array>();
+    for (const [sourceType, ids] of bySource) {
+      try {
+        const loaded = await repository.loadEmbeddings(RESOURCE_HUB_EMBEDDING_MODEL, sourceType, ids);
+        for (const [key, value] of loaded) vectors.set(key, value.vector);
+      } catch {
+        warnings.push(`向量读取失败（${sourceType}）`);
+      }
+    }
+    if (vectors.size) {
+      const queryVector = Float32Array.from(body.queryVector.slice(0, 2048));
+      recommendations = scoreHubResources(
+        resources.filter((row) => vectors.has(resourceKey(row.sourceType, row.id))),
+        { ...baseOptions, vectors, queryVector }
+      ).slice(0, body.limit);
+      vectorEnabled = true;
+    }
+  } else if (body.useVector === true && !body.queryVector?.length) {
+    warnings.push("未提供查询向量，本次退化为词法检索");
+  }
+
+  // 曝光埋点（旁路，失败不影响返回）
+  void recordResourceHubEvents(recommendations.map((row) => ({
+    ownerId: actor.id,
+    teamId: actor.teamId,
+    conversationKey: body.conversationKey,
+    resourceType: row.sourceType,
+    resourceId: row.id,
+    eventType: "exposed" as const,
+    score: row.score,
+    channel: body.signal
+  })));
+
+  const customerId = body.customerId;
+  const customer = customerId
+    ? getStore().customers.find((item) => item.id === customerId && item.teamId === actor.teamId)
+    : undefined;
+  const matched = Boolean(customer && canSeeOwner(actor, customer.ownerId, customer.teamId));
+
+  res.json({
+    recommendations,
+    retrieval: {
+      mode: vectorEnabled ? "hybrid-lexical-vector" : "weighted-lexical",
+      scanned: (body.sourceTypes?.length || RESOURCE_SOURCE_TYPES.length),
+      candidates: resources.length,
+      vectorEnabled,
+      tookMs: Date.now() - started
+    },
+    customer: matched ? { matched: true, id: customer!.id, company: customer!.company } : { matched: false, id: "", company: "" },
+    warnings
+  });
+}));
+
+app.post("/api/agent/resources/:sourceType/:id/reveal", requireAuth, asyncRoute(async (req, res) => {
+  const parsed = resourceSourceTypeSchema.safeParse(req.params.sourceType);
+  if (!parsed.success) {
+    res.status(404).json({ message: "资源不存在或无权访问" });
+    return;
+  }
+  const body = resourceRevealSchema.parse(req.body || {});
+  const actor = req.user!;
+  const store = getStore();
+  const outcome = revealHubResource(store, actor, parsed.data, req.params.id);
+  if (!outcome.ok) {
+    if (outcome.reason === "no_link") {
+      res.status(409).json({ message: "该资料尚未配置可访问的内容，请联系维护人补齐" });
+      return;
+    }
+    res.status(404).json({ message: "资源不存在或无权访问" });
+    return;
+  }
+  await store.persist();
+  const accessId = `rae_${randomUUID().replace(/-/gu, "").slice(0, 24)}`;
+  await recordResourceHubEvents([{
+    id: accessId,
+    ownerId: actor.id,
+    teamId: actor.teamId,
+    conversationKey: body.conversationKey,
+    resourceType: parsed.data,
+    resourceId: req.params.id,
+    eventType: "revealed",
+    channel: body.reason.slice(0, 30)
+  }]);
+  res.json({ resource: outcome.result.resource, access: outcome.result.access, accessId });
+}));
+
+app.post("/api/agent/resources/feedback", requireAuth, asyncRoute(async (req, res) => {
+  const body = resourceFeedbackSchema.parse(req.body || {});
+  const actor = req.user!;
+  // 只接受当前账号可见的资源 id；不可见的一律静默丢弃（不给出「存在但你没权」的探测面）
+  const visible = new Set(collectHubResources(getStore(), actor).map((row) => resourceKey(row.sourceType, row.id)));
+  const items = body.items.filter((item) => visible.has(resourceKey(item.sourceType, item.resourceId)));
+  const recorded = await recordResourceHubEvents(items.map((item) => ({
+    ownerId: actor.id,
+    teamId: actor.teamId,
+    conversationKey: body.conversationKey,
+    resourceType: item.sourceType,
+    resourceId: item.resourceId,
+    eventType: item.action
+  })));
+  res.json({ recorded, ignored: body.items.length - items.length });
+}));
+
+/**
+ * 推荐效果报表（docs/RESOURCE-FEEDBACK-REPORT-DESIGN.md）。
+ *
+ * 口径（写进注释就是为了让以后的人别各算各的）：
+ * - adoptionRate = accepted / max(1, revealed)、sendRate = sent / max(1, revealed)
+ *   —— 分母都是 revealed：**看到了才谈得上采纳/发送**；exposed 只说明被推荐过。
+ * - 全程 teamId 口径（与埋点写入同源），owner 维度不做隔离（同团队共享一份效果视图）。
+ */
+app.get("/api/agent/resources/stats", requireAuth, asyncRoute(async (req, res) => {
+  const actor = req.user!;
+  const days = Math.min(90, Math.max(1, z.coerce.number().int().catch(30).parse(req.query.days)));
+  const started = Date.now();
+  const warnings: string[] = [];
+  let stats = new Map<string, ResourceEventStatsEntry>();
+  try {
+    stats = await getResourceHubRepository().eventStats(actor.teamId, new Date(Date.now() - days * 86_400_000));
+  } catch {
+    // 统计是只读旁路：读不出就报"未取到"，绝不 500 把整个资源中心拖垮。
+    warnings.push("埋点统计未取到");
+  }
+
+  const titleOf = new Map(
+    collectHubResources(getStore(), actor).map((row) => [resourceKey(row.sourceType, row.id), row.title] as const)
+  );
+
+  const items = [...stats.values()]
+    .map((entry) => {
+      const denominator = Math.max(1, entry.revealed);
+      return {
+        sourceType: entry.resourceType,
+        resourceId: entry.resourceId,
+        title: titleOf.get(resourceKey(entry.resourceType, entry.resourceId)) ?? "（已移除）",
+        counts: { exposed: entry.exposed, revealed: entry.revealed, accepted: entry.accepted, dismissed: entry.dismissed, sent: entry.sent },
+        adoptionRate: Number((entry.accepted / denominator).toFixed(4)),
+        sendRate: Number((entry.sent / denominator).toFixed(4))
+      };
+    })
+    .sort((left, right) => right.adoptionRate - left.adoptionRate || right.counts.revealed - left.counts.revealed || left.resourceId.localeCompare(right.resourceId))
+    .slice(0, 50);
+
+  const totals = emptyEventCounts();
+  for (const entry of stats.values()) {
+    totals.exposed += entry.exposed;
+    totals.revealed += entry.revealed;
+    totals.accepted += entry.accepted;
+    totals.dismissed += entry.dismissed;
+    totals.sent += entry.sent;
+  }
+  const totalDenominator = Math.max(1, totals.revealed);
+  res.json({
+    days,
+    totals: {
+      ...totals,
+      adoptionRate: Number((totals.accepted / totalDenominator).toFixed(4)),
+      sendRate: Number((totals.sent / totalDenominator).toFixed(4))
+    },
+    items,
+    warnings,
+    tookMs: Date.now() - started
+  });
 }));
 
 app.get("/api/agent/triggers", requireAuth, (req, res) => {

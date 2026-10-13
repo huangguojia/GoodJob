@@ -14,6 +14,7 @@ import type {
   MetaAppConfig
 } from "../src/shared/types";
 import { createAppRuntime, type AppRuntime } from "../src/server/app";
+import { inMemoryDatabasePaths } from "./helpers/test-database";
 
 const appSecret = "meta-app-secret-for-tests";
 const verifyToken = "meta-verify-token-for-tests";
@@ -39,6 +40,10 @@ describe("Meta Cloud API integration", () => {
   let sendDelayMs = 0;
   let sendResponseStatus = 200;
   const sentBodies: Array<Record<string, unknown>> = [];
+  let mediaUploadCount = 0;
+  let mediaUploadStatus = 200;
+  let lastMediaId = "";
+  const uploadedMediaForms: string[] = [];
 
   const graphHandler = async (incoming: IncomingMessage, outgoing: ServerResponse): Promise<void> => {
     outgoing.setHeader("content-type", "application/json");
@@ -62,6 +67,19 @@ describe("Meta Cloud API integration", () => {
           quality_rating: "GREEN"
         })
       );
+      return;
+    }
+    if (incoming.method === "POST" && url.pathname === `/v99.0/${phoneNumberId}/media`) {
+      mediaUploadCount += 1;
+      // multipart/form-data 直接按 utf8 读出来足够核对字段名与文件名。
+      uploadedMediaForms.push(await readBody(incoming));
+      if (mediaUploadStatus !== 200) {
+        outgoing.statusCode = mediaUploadStatus;
+        outgoing.end(JSON.stringify({ error: { message: "Mock media failure" } }));
+        return;
+      }
+      lastMediaId = `media-${mediaUploadCount}`;
+      outgoing.end(JSON.stringify({ id: lastMediaId }));
       return;
     }
     if (incoming.method === "POST" && url.pathname === `/v99.0/${phoneNumberId}/messages`) {
@@ -131,7 +149,7 @@ describe("Meta Cloud API integration", () => {
       port: 0,
       webOrigin: "http://localhost:5173",
       databaseClient: "pglite",
-      pglitePath: path.join(directory, "pgdata"),
+      ...inMemoryDatabasePaths(directory),
       sessionMasterKey: randomBytes(32).toString("base64"),
       seedDemo: false,
       allowPrivateAiEndpoints: false,
@@ -466,6 +484,117 @@ describe("Meta Cloud API integration", () => {
       type: "text",
       text: { preview_url: false, body: "Here is the quotation." }
     });
+  });
+
+  it("uploads images and documents before sending them on the official channel", async () => {
+    const conversations = (
+      await request(runtime.app).get(`/api/v1/conversations?accountId=${metaAccount.id}`).expect(200)
+    ).body as Conversation[];
+    const conversation = conversations.find((item) => item.contactPhone === "+15550001111")!;
+
+    const imageId = randomUUID();
+    const image = await request(runtime.app)
+      .post(
+        `/api/v1/conversations/${conversation.id}/media?accountId=${metaAccount.id}&clientMessageId=${imageId}` +
+          "&kind=image&fileName=pricing-table.png&mimeType=image/png&caption=Here is the price list"
+      )
+      .set("content-type", "application/octet-stream")
+      .send(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01, 0x02]))
+      .expect(201);
+    expect(image.body).toMatchObject({
+      direction: "outbound",
+      messageType: "image",
+      status: "accepted",
+      body: "Here is the price list",
+      providerMessageId: expect.any(String)
+    });
+    // 第一步：媒体上传（multipart）拿到 media id；第二步：用它发 image 消息。
+    expect(uploadedMediaForms.at(-1)).toContain('name="messaging_product"');
+    expect(uploadedMediaForms.at(-1)).toContain('name="file"; filename="pricing-table.png"');
+    expect(sentBodies.at(-1)).toMatchObject({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: "15550001111",
+      type: "image",
+      image: { id: lastMediaId, caption: "Here is the price list" }
+    });
+
+    const fileId = randomUUID();
+    const file = await request(runtime.app)
+      .post(
+        `/api/v1/conversations/${conversation.id}/media?accountId=${metaAccount.id}&clientMessageId=${fileId}` +
+          "&kind=file&fileName=quotation.pdf&mimeType=application/pdf&caption=Please review"
+      )
+      .set("content-type", "application/octet-stream")
+      .send(Buffer.from("%PDF-1.7 official channel mock"))
+      .expect(201);
+    expect(file.body).toMatchObject({ messageType: "file", status: "accepted", body: "Please review" });
+    // 文件必须以 document 类型发送，并带上原始文件名。
+    expect(sentBodies.at(-1)).toMatchObject({
+      to: "15550001111",
+      type: "document",
+      document: { id: lastMediaId, caption: "Please review", filename: "quotation.pdf" }
+    });
+
+    const persisted = (
+      await request(runtime.app).get(`/api/v1/conversations/${conversation.id}/messages`).expect(200)
+    ).body as ChatMessage[];
+    expect(persisted.find((message) => message.clientMessageId === fileId)).toMatchObject({
+      messageType: "file",
+      clientMessageId: fileId
+    });
+  });
+
+  it("never uploads media outside the 24-hour window and converges a rejected upload", async () => {
+    const cold = await request(runtime.app)
+      .post("/api/v1/contacts")
+      .send({ accountId: metaAccount.id, displayName: "Cold Media Lead", phone: "+15550008888" })
+      .expect(201);
+    const beforeUploads = mediaUploadCount;
+    const blocked = await request(runtime.app)
+      .post(
+        `/api/v1/conversations/${cold.body.conversation.id}/media?accountId=${metaAccount.id}&clientMessageId=${randomUUID()}` +
+          "&kind=image&fileName=cold.png&mimeType=image/png"
+      )
+      .set("content-type", "application/octet-stream")
+      .send(Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+      .expect(409);
+    expect(blocked.body).toMatchObject({ code: "TEMPLATE_REQUIRED" });
+    // 窗口外必须直接拒绝，不能先上传再失败，否则会留下孤儿媒体。
+    expect(mediaUploadCount).toBe(beforeUploads);
+
+    const conversations = (
+      await request(runtime.app).get(`/api/v1/conversations?accountId=${metaAccount.id}`).expect(200)
+    ).body as Conversation[];
+    const conversation = conversations.find((item) => item.contactPhone === "+15550001111")!;
+    const rejectedId = randomUUID();
+    mediaUploadStatus = 422;
+    const rejected = await request(runtime.app)
+      .post(
+        `/api/v1/conversations/${conversation.id}/media?accountId=${metaAccount.id}&clientMessageId=${rejectedId}` +
+          "&kind=image&fileName=broken.png&mimeType=image/png"
+      )
+      .set("content-type", "application/octet-stream")
+      .send(Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+      .expect(422);
+    mediaUploadStatus = 200;
+    expect(rejected.body).toMatchObject({ code: "META_MEDIA_REJECTED" });
+    // 上传被拒后消息不能停在 sending。
+    expect((await runtime.repository.findMessageByIdempotency(metaAccount.id, undefined, rejectedId))?.status).toBe("failed");
+
+    const uncertainId = randomUUID();
+    mediaUploadStatus = 503;
+    const uncertain = await request(runtime.app)
+      .post(
+        `/api/v1/conversations/${conversation.id}/media?accountId=${metaAccount.id}&clientMessageId=${uncertainId}` +
+          "&kind=image&fileName=flaky.png&mimeType=image/png"
+      )
+      .set("content-type", "application/octet-stream")
+      .send(Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+      .expect(502);
+    mediaUploadStatus = 200;
+    expect(uncertain.body).toMatchObject({ code: "META_GRAPH_UNAVAILABLE" });
+    expect((await runtime.repository.findMessageByIdempotency(metaAccount.id, undefined, uncertainId))?.status).toBe("unknown");
   });
 
   it("keeps message status monotonic and reports the standard contact-sync boundary", async () => {

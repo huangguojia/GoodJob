@@ -6,13 +6,14 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import helmet from "helmet";
 import pino from "pino";
 import { z, ZodError } from "zod";
-import { E164_PHONE_PATTERN, isE164PhoneNumber, type CommercialReadinessCheck, type ContactOrigin, type CrmSandboxContact } from "../shared/types.js";
+import { E164_PHONE_PATTERN, isE164PhoneNumber, type ChatMessage, type CommercialReadinessCheck, type ContactOrigin, type CrmSandboxContact, type TrainingLibraryKind } from "../shared/types.js";
 import type { AppConfig } from "./config.js";
 import { createDatabase, type Database } from "./db/database.js";
 import { migrate } from "./db/migrate.js";
 import { Repository } from "./db/repository.js";
 import { seed, seedDemo as seedDemoData } from "./db/seed.js";
 import { DomainError } from "./errors.js";
+import { configureOutboundProxy } from "./outbound-proxy.js";
 import { BaileysProvider } from "./providers/baileys-provider.js";
 import { DemoProvider } from "./providers/demo-provider.js";
 import { MetaProvider } from "./providers/meta-provider.js";
@@ -24,6 +25,13 @@ import { MediaStorageService } from "./services/media-storage.js";
 import { ConversationIntelligenceService } from "./services/conversation-intelligence.js";
 import { requireCrmAuth } from "./crm-auth.js";
 import { AutomationRhythmService } from "./services/automation-rhythm.js";
+import { AutoChatService } from "./services/auto-chat-service.js";
+import { CliEngine } from "./services/cli-engine.js";
+import { CrmClient } from "./services/crm-client.js";
+import { ResourceHubClient } from "./services/crm-resources.js";
+import { ResourceRecommendService } from "./services/resource-recommend-service.js";
+import { TrainingService, trainingImportSchema } from "./services/training-service.js";
+import { TrainingLibraryService, trainingLibraryInputSchema, trainingLibraryKindSchema } from "./services/training-library-service.js";
 import { historyMessageId, parseWhatsAppHistory, previewWhatsAppHistory } from "./services/whatsapp-history-import.js";
 
 export interface AppRuntime {
@@ -33,6 +41,9 @@ export interface AppRuntime {
   repository: Repository;
   providers: ProviderManager;
   translation: TranslationService;
+  training: TrainingService;
+  trainingLibrary: TrainingLibraryService;
+  autoChat: AutoChatService;
   close(): Promise<void>;
 }
 
@@ -162,6 +173,152 @@ const metaConfigurationSchema = z.object({
 
 const secretMask = (value: string): string => `****${value.slice(-4)}`;
 
+// 训练档案 ID 形如 trn_<hash>，不是 UUID；账号/会话 ID 才是 UUID。
+const trainingScopeSchema = z.object({
+  accountId: z.string().uuid().optional(),
+  conversationIds: z.array(z.string().uuid()).max(200).optional(),
+  from: z.string().trim().max(40).optional(),
+  to: z.string().trim().max(40).optional()
+});
+
+const trainingExportSchema = trainingScopeSchema.extend({
+  format: z.enum(["jsonl", "json", "txt"]).default("jsonl")
+});
+
+const trainingRunSchema = trainingScopeSchema.extend({
+  name: z.string().trim().min(1).max(80),
+  useAi: z.boolean().default(false),
+  providerId: z.string().uuid().optional()
+});
+
+const autoChatDraftStatusSchema = z.enum(["pending", "sending", "sent", "dismissed", "failed", "skipped"]);
+
+const autoChatSettingsSchema = z.object({
+  enabled: z.boolean(),
+  mode: z.enum(["off", "draft", "auto"]),
+  engine: z.enum(["auto", "rules", "ai", "cli"]).optional(),
+  accountId: z.string().uuid().nullable().optional(),
+  profileId: z.string().trim().min(1).max(191).nullable().optional(),
+  providerId: z.string().uuid().nullable().optional(),
+  cliModel: z.string().trim().max(64).optional(),
+  cliEffort: z.string().trim().max(16).optional(),
+  language: z.string().trim().min(1).max(32).optional(),
+  tone: z.string().trim().max(64).optional(),
+  dailyLimit: z.number().int().min(0).max(1_000).optional(),
+  minIntervalMinutes: z.number().int().min(0).max(1_440).optional(),
+  activeHoursStart: z.number().int().min(0).max(23).optional(),
+  activeHoursEnd: z.number().int().min(0).max(23).optional(),
+  timezone: z.string().trim().min(1).max(64).optional(),
+  escalateKeywords: z.array(z.string().trim().min(1).max(40)).max(50).optional(),
+  guardrails: z.array(z.string().trim().min(1).max(300)).max(30).optional(),
+  confidenceThreshold: z.number().min(0).max(1).optional()
+});
+
+/**
+ * 现场生成（浏览器扩展用）的入参。
+ *
+ * 上限是刻意的：这是**未经鉴权的页面内容**（WhatsApp DOM 里读出来的），
+ * 给再大的口子就等于让扩展往 CLI 子进程里灌任意长度的文本。
+ * 20 条 × 2000 字符与服务端的 `MAX_INLINE_CONTEXT_MESSAGES` / `MAX_INLINE_MESSAGE_CHARS` 对齐。
+ */
+const composeSchema = z.object({
+  messages: z
+    .array(
+      z.object({
+        direction: z.enum(["inbound", "outbound"]),
+        body: z.string().max(4_000),
+        occurredAt: z.string().trim().max(40).optional().default("")
+      })
+    )
+    .min(1)
+    .max(40),
+  contact: z
+    .object({
+      // 号码允许空（扩展认不出号码时仍可以按名字认客户），但形状必须对。
+      phone: z.string().trim().max(32).optional().default(""),
+      name: z.string().trim().max(180).optional().default("")
+    })
+    .default({ phone: "", name: "" }),
+  accountId: z.string().uuid().nullable().optional(),
+  engine: z.enum(["auto", "rules", "ai", "cli"]).optional(),
+  model: z.string().trim().max(64).optional(),
+  effort: z.string().trim().max(16).optional(),
+  language: z.string().trim().max(32).optional(),
+  tone: z.string().trim().max(64).optional()
+});
+
+/**
+ * 资源检索 / 推荐（扩展右侧整列用）的入参。
+ *
+ * 与 `composeSchema` 同一套上限口径：这些也是**未经鉴权的页面内容**，
+ * 上限对不齐就等于让扩展往提示词里灌任意长度的文本。
+ */
+const resourceSourceTypeSchema = z.enum(["file", "skill", "knowledge", "product"]);
+
+const resourceSearchSchema = z.object({
+  /** 目录式检索关键词。给了 `messages` 时忽略。 */
+  q: z.string().trim().max(200).optional(),
+  messages: z
+    .array(
+      z.object({
+        direction: z.enum(["inbound", "outbound"]),
+        body: z.string().max(4_000),
+        occurredAt: z.string().trim().max(40).optional().default("")
+      })
+    )
+    .max(40)
+    .optional(),
+  customerId: z.string().trim().max(64).optional(),
+  conversationKey: z.string().trim().max(200).optional(),
+  limit: z.number().int().min(1).max(20).optional(),
+  sourceTypes: z.array(resourceSourceTypeSchema).max(4).optional()
+});
+
+/**
+ * `/auto-chat/suggest` 的入参。它同时驱动两件事（出回复 + 推资料），所以两边的口子都要收：
+ * 与 `composeSchema` 对齐的对话/联系人/引擎字段，加上资源检索那一组。
+ */
+const resourceSuggestSchema = resourceSearchSchema.omit({ q: true }).extend({
+  contact: z
+    .object({
+      phone: z.string().trim().max(32).optional().default(""),
+      name: z.string().trim().max(180).optional().default("")
+    })
+    .default({ phone: "", name: "" }),
+  accountId: z.string().uuid().nullable().optional(),
+  engine: z.enum(["auto", "rules", "ai", "cli"]).optional(),
+  language: z.string().trim().max(32).optional(),
+  tone: z.string().trim().max(64).optional(),
+  /** 默认 true：面板要的是「挑好的」。复排失败会自动降级，不会让整条接口失败。 */
+  withAi: z.boolean().optional(),
+  /** false = 只要资料，不出推荐回复（例如只想看文档、不想动输入框）。 */
+  withReply: z.boolean().optional(),
+  /** 同时喂给「出回复」与「资料复排」，让用户只面对一个模型开关。 */
+  model: z.string().trim().max(64).optional(),
+  effort: z.string().trim().max(16).optional()
+});
+
+const resourceRevealSchema = z.object({
+  sourceType: resourceSourceTypeSchema,
+  id: z.string().trim().min(1).max(120),
+  reason: z.string().trim().max(200).optional(),
+  conversationKey: z.string().trim().max(200).optional()
+});
+
+const resourceFeedbackSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        resourceId: z.string().trim().min(1).max(120),
+        sourceType: resourceSourceTypeSchema,
+        action: z.enum(["accepted", "dismissed", "sent"])
+      })
+    )
+    .min(1)
+    .max(20),
+  conversationKey: z.string().trim().max(200).optional()
+});
+
 const asyncRoute =
   (handler: (request: Request, response: Response) => Promise<void>) =>
   (request: Request, response: Response, next: NextFunction): void => {
@@ -211,6 +368,9 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     }
   }
 
+  // Meta Graph 与媒体 CDN 在受限网络下需要显式代理；未配置 META_PROXY_URL 时是空操作。
+  configureOutboundProxy(config.metaProxyUrl);
+
   const logger = pino({
     name: "whatsapp-crm-plugin",
     level: config.nodeEnv === "test" ? "silent" : "info",
@@ -246,10 +406,54 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   const translation = new TranslationService(repository, encryption, realtime, config);
   const intelligence = new ConversationIntelligenceService(repository, realtime, translation);
   const automation = new AutomationRhythmService(repository, intelligence, config.crmBaseUrl ?? "http://127.0.0.1:4188", config.crmJwtSecret);
-  const demo = new DemoProvider(repository, realtime, translation);
+  const training = new TrainingService(repository, translation);
+  // 训练库：自动回复的专门语料库（跨会话可复用的问答/口径/政策/禁用词）。
+  const trainingLibrary = new TrainingLibraryService(repository);
+  // 自动聊依赖 ProviderManager，而 ProviderManager 需要入站回调 → 用可重入的延迟绑定打破循环。
+  let autoChat: AutoChatService | undefined;
+  const onInbound = (message: ChatMessage): void => {
+    void autoChat?.handleInbound(message).catch((error) => {
+      logger.warn({ event: "auto_chat_inbound_failed", messageId: message.id, error: error instanceof Error ? error.message : "unknown error" }, "auto chat inbound handling failed");
+    });
+  };
+  const demo = new DemoProvider(repository, realtime, translation, onInbound);
   const baileys = new BaileysProvider(repository, encryption, realtime, translation, config);
-  const meta = new MetaProvider(repository, encryption, realtime, translation, config, intelligence);
+  const meta = new MetaProvider(repository, encryption, realtime, translation, config, intelligence, onInbound);
   const providers = new ProviderManager(repository, demo, baileys, meta, demoProviderEnabled, officialOnly);
+  // 本机 WorkBuddy CLI 引擎：自动回复的默认生成通道（与 CRM 的「默认走 CLI」一致）。
+  const cliEngine = new CliEngine({
+    binary: config.cliBinary,
+    timeoutSeconds: config.cliTimeoutSeconds,
+    workspacePath: config.cliWorkspacePath,
+    skillsDirs: config.cliSkillsDirs
+  });
+  // CRM 只读通道：把「这个客户的跟进/报价历史」与「知识检索命中」喂进回复提示词。
+  // 用 owner 自己的身份去读（`GET /api/customers` 只返回他名下的客户，号码字段也只对 owner 可见），
+  // 这就是「按手机号把 WhatsApp 会话关联到 CRM 客户」能成立的前提。
+  const crmClient = new CrmClient({
+    baseUrl: config.crmBaseUrl ?? "http://127.0.0.1:4188",
+    jwtSecret: config.crmJwtSecret,
+    timeoutMs: config.crmTimeoutMs
+  });
+  const autoChatService = new AutoChatService(repository, providers, realtime, translation, undefined, cliEngine, trainingLibrary, crmClient);
+  autoChat = autoChatService;
+  /**
+   * 资源中心通道。与 `crmClient` 共用同一份连接参数（同一个 CRM、同一个自签 token 口径），
+   * 但走的是 POST 接口（长对话载荷 + 有副作用的 reveal/feedback），所以是另一个客户端。
+   */
+  const resourceHubClient = new ResourceHubClient({
+    baseUrl: config.crmBaseUrl ?? "http://127.0.0.1:4188",
+    jwtSecret: config.crmJwtSecret,
+    timeoutMs: config.crmTimeoutMs
+  });
+  const resourceRecommend = new ResourceRecommendService(resourceHubClient, cliEngine);
+  // 自动回复不能只靠入站事件：进程重启、事件早于业务落库都会丢，所以再挂一层每分钟兜底扫描。
+  // 默认在测试环境关闭，否则定时器会在用例中途插入草稿，让断言变得不确定。
+  if (config.autoChatSweep ?? config.nodeEnv !== "test") {
+    automation.setOwnerTick(async (ownerUserId) => {
+      await autoChatService.sweepOwner(ownerUserId);
+    });
+  }
   const cleanupExpiredMedia = async (): Promise<void> => {
     const expired = await repository.listExpiredMessageMedia();
     for (const item of expired) {
@@ -633,10 +837,6 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     "/api/v1/accounts/:id",
     asyncRoute(async (request, response) => {
       const account = await ownedAccount(request, routeParam(request.params.id));
-      if (!account) {
-        response.status(404).json({ error: "Account not found" });
-        return;
-      }
       const routingReferences = await repository.countRoutingReferences(account.id);
       if (routingReferences > 0) {
         response.status(409).json({
@@ -816,6 +1016,245 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   app.get("/api/v1/automation/deliveries", asyncRoute(async (request, response) => {
     const limit = Number(request.query.limit ?? 30);
     response.json(await repository.listAutomationDeliveries(request.crmIdentity!.userId, Number.isFinite(limit) ? limit : 30));
+  }));
+  // ---------------------------------------------------------------- 训练 -----
+  app.get("/api/v1/training/profiles", asyncRoute(async (request, response) => {
+    response.json(await training.list(request.crmIdentity!.userId));
+  }));
+  app.get("/api/v1/training/profiles/:id", asyncRoute(async (request, response) => {
+    response.json(await training.get(routeParam(request.params.id), request.crmIdentity!.userId));
+  }));
+  app.post("/api/v1/training/export", asyncRoute(async (request, response) => {
+    const input = trainingExportSchema.parse(request.body ?? {});
+    response.json(await training.exportForClient(request.crmIdentity!.userId, input));
+  }));
+  app.post("/api/v1/training/profiles", asyncRoute(async (request, response) => {
+    const input = trainingRunSchema.parse(request.body);
+    const profile = await training.train(request.crmIdentity!.userId, input);
+    await repository.audit("training.profile.created", "training_profile", profile.id, "success", {
+      conversations: profile.conversationCount,
+      messages: profile.messageCount,
+      samples: profile.sampleCount,
+      engine: profile.engine
+    });
+    response.status(201).json(profile);
+  }));
+  app.delete("/api/v1/training/profiles/:id", asyncRoute(async (request, response) => {
+    const id = routeParam(request.params.id);
+    await training.remove(id, request.crmIdentity!.userId);
+    await repository.audit("training.profile.deleted", "training_profile", id, "success", {});
+    response.status(204).end();
+  }));
+  // 浏览器扩展「归档并学习 → 推送到 CRM」的入口（见 docs/TRAINING-UPLOAD-DESIGN.md）。
+  // upsert + 内容指纹幂等；入库（问答→qa、护栏→policy）复用 importFromProfile 的去重逻辑，
+  // 所以同一条语料推多少次，档案与训练库都只落一份。
+  app.post("/api/v1/training/profiles/import", asyncRoute(async (request, response) => {
+    const input = trainingImportSchema.parse(request.body ?? {});
+    const userId = request.crmIdentity!.userId;
+    const { profile, updated } = await training.importFromClient(userId, input);
+    if (updated) {
+      const library = await trainingLibrary.importFromProfile(userId, profile.id);
+      await repository.audit("training.profile.imported", "training_profile", profile.id, "success", {
+        samples: profile.sampleCount,
+        libraryCreated: library.created,
+        librarySkipped: library.skipped
+      });
+      response.status(201).json({ profile, library, updated });
+    } else {
+      response.status(200).json({ profile, library: null, updated: false });
+    }
+  }));
+  // ------------------------------------------------------------ 训练库 -----
+  // 自动回复的专门语料库：跨会话、跨账号可复用，是「客户这么问 → 我们这么答」的长期资产。
+  app.get("/api/v1/training/library", asyncRoute(async (request, response) => {
+    const kinds = String(request.query.kind ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => trainingLibraryKindSchema.safeParse(value).success) as TrainingLibraryKind[];
+    response.json(
+      await trainingLibrary.list(request.crmIdentity!.userId, {
+        kinds: kinds.length ? kinds : undefined,
+        enabledOnly: request.query.enabled === "true"
+      })
+    );
+  }));
+  app.post("/api/v1/training/library", asyncRoute(async (request, response) => {
+    const input = trainingLibraryInputSchema.parse(request.body);
+    const { entry, created } = await trainingLibrary.save(request.crmIdentity!.userId, input);
+    if (created) {
+      await repository.audit("training.library.created", "training_library_entry", entry.id, "success", {
+        kind: entry.kind
+      });
+    }
+    // 撞上已有条目时不报错：返回 200 + 既有条目，界面提示「已存在同一条」即可。
+    response.status(created ? 201 : 200).json(entry);
+  }));
+  app.patch("/api/v1/training/library/:id", asyncRoute(async (request, response) => {
+    const input = trainingLibraryInputSchema.parse(request.body);
+    const { entry } = await trainingLibrary.save(request.crmIdentity!.userId, input, routeParam(request.params.id));
+    await repository.audit("training.library.updated", "training_library_entry", entry.id, "success", {});
+    response.json(entry);
+  }));
+  app.delete("/api/v1/training/library/:id", asyncRoute(async (request, response) => {
+    const id = routeParam(request.params.id);
+    await trainingLibrary.remove(request.crmIdentity!.userId, id);
+    await repository.audit("training.library.deleted", "training_library_entry", id, "success", {});
+    response.status(204).end();
+  }));
+  // 把某份训练档案的问答样本与护栏一次性导进训练库（幂等：同一条只进一次）。
+  app.post("/api/v1/training/library/import", asyncRoute(async (request, response) => {
+    const input = z.object({ profileId: z.string().trim().min(1) }).parse(request.body);
+    const result = await trainingLibrary.importFromProfile(request.crmIdentity!.userId, input.profileId);
+    await repository.audit("training.library.imported", "training_profile", input.profileId, "success", result);
+    response.json(result);
+  }));
+  // 命中预览：不用真的发消息，就能看到「客户这句话会用到库里哪几条」——调库时最需要的反馈。
+  app.post("/api/v1/training/library/match", asyncRoute(async (request, response) => {
+    const input = z.object({ body: z.string().trim().min(1).max(10_000), accountId: z.string().trim().min(1).optional() }).parse(request.body);
+    response.json(await trainingLibrary.resolve(request.crmIdentity!.userId, input.body, input.accountId ?? null));
+  }));
+  // Markdown 导出：把训练库变成一份可交付的知识包（也可直接作为技能素材）。
+  app.get("/api/v1/training/library/export.md", asyncRoute(async (request, response) => {
+    const markdown = await trainingLibrary.exportMarkdown(request.crmIdentity!.userId);
+    response.type("text/markdown; charset=utf-8").send(markdown);
+  }));
+  // ------------------------------------------------------------ 自动聊 -----
+  app.get("/api/v1/auto-chat/settings", asyncRoute(async (request, response) => {
+    const accountId = typeof request.query.accountId === "string" && request.query.accountId ? request.query.accountId : undefined;
+    response.json(await autoChat.getSettings(request.crmIdentity!.userId, accountId));
+  }));
+  app.put("/api/v1/auto-chat/settings", asyncRoute(async (request, response) => {
+    const input = autoChatSettingsSchema.parse(request.body);
+    const settings = await autoChat.updateSettings(request.crmIdentity!.userId, input);
+    await repository.audit("auto_chat.settings.updated", "auto_chat", request.crmIdentity!.userId, "success", {
+      mode: settings.mode,
+      enabled: settings.enabled,
+      engine: settings.engine,
+      profileId: settings.profileId
+    });
+    response.json(settings);
+  }));
+  /**
+   * 本机 CLI 引擎的能力状态。`refresh=true` 强制重探——CLI 账号被切换、或二进制被升级替换后，
+   * 用户不该等五分钟缓存过期才能看到状态变化。
+   */
+  app.get("/api/v1/auto-chat/engine", asyncRoute(async (request, response) => {
+    const refresh = typeof request.query.refresh === "string" && ["1", "true"].includes(request.query.refresh);
+    response.json(await autoChat.cliStatus(refresh));
+  }));
+  /**
+   * 现场生成：拿一段**扩展从页面上读到的对话**换一条草稿。
+   *
+   * 与 `/auto-chat/run`（后台扫库里的未回复消息）是两条路：这里不落库、不认会话、也**不会自动发送** ——
+   * 用户正在聊的那个会话在插件里往往一条消息都没有，等它先被导入再回复是不现实的。
+   */
+  app.post(
+    "/api/v1/auto-chat/compose",
+    asyncRoute(async (request, response) => {
+      const input = composeSchema.parse(request.body ?? {});
+      if (input.accountId) await ownedAccount(request, input.accountId);
+      response.json(await autoChat.compose(request.crmIdentity!.userId, input));
+    })
+  );
+  app.post("/api/v1/auto-chat/run", asyncRoute(async (request, response) => {
+    const input = z.object({ accountId: z.string().uuid().optional() }).parse(request.body ?? {});
+    if (input.accountId) await ownedAccount(request, input.accountId);
+    response.json(await autoChat.runNow(request.crmIdentity!.userId, input));
+  }));
+  // ------------------------------------------------------- 资源中心（资料推荐）----
+  /**
+   * 资源检索（**快，不调模型**）。扩展右侧整列先拿它把内容铺出来；
+   * 没给 `messages` 时是目录式检索，给面板的「全部资料」用。
+   *
+   * 与 CRM 的 `POST /api/agent/resources/recommend` 一一对应，只是换了身份：
+   * 扩展不可能自己签 CRM 的 token，所以这一跳必须由插件代打。
+   */
+  app.post("/api/v1/resources/search", asyncRoute(async (request, response) => {
+    const input = resourceSearchSchema.parse(request.body ?? {});
+    response.json(await resourceRecommend.search(request.crmIdentity!.userId, input));
+  }));
+  /**
+   * 取真实地址 / 内联正文。**整个系统里唯一一次把外链交出去的地方。**
+   *
+   * 失败时返回 `{ok:false,reason}` 而不是 HTTP 错误：面板要能分清「暂时取不到，重试一下」
+   * 与「这份资料没有外链」，HTTP 4xx/5xx 把它压成一种表现，界面上就没法说清。
+   */
+  app.post("/api/v1/resources/reveal", asyncRoute(async (request, response) => {
+    const input = resourceRevealSchema.parse(request.body ?? {});
+    response.json(
+      await resourceRecommend.reveal(request.crmIdentity!.userId, input.sourceType, input.id, {
+        reason: input.reason,
+        conversationKey: input.conversationKey
+      })
+    );
+  }));
+  /**
+   * 采纳/忽略埋点。**永远回 202**：埋点是旁路，它失败不该让界面报错，
+   * 更不该拖住「复制链接」这个动作。
+   */
+  app.post("/api/v1/resources/feedback", asyncRoute(async (request, response) => {
+    const input = resourceFeedbackSchema.parse(request.body ?? {});
+    void resourceRecommend.feedback(request.crmIdentity!.userId, input.items, input.conversationKey ?? "");
+    response.status(202).json({ accepted: input.items.length });
+  }));
+  // 推荐效果报表（只读透传 CRM；见 docs/RESOURCE-FEEDBACK-REPORT-DESIGN.md）。
+  // 失败如实 502 带原因，不在插件侧伪造空报表。
+  app.get("/api/v1/resources/stats", asyncRoute(async (request, response) => {
+    const parsed = Number.parseInt(String(request.query.days ?? "30"), 10);
+    const days = Math.min(90, Math.max(1, Number.isFinite(parsed) ? parsed : 30));
+    response.json(await resourceRecommend.stats(request.crmIdentity!.userId, days));
+  }));
+  /**
+   * 回复 + 资料一次给全。扩展右侧整列只打这一个接口就能把两块内容都铺出来。
+   *
+   * 两件事**并行**做，因为它们互相不依赖：回复链（可能跑 60 秒 CLI）与资料检索（≤300ms + 可选复排）。
+   * 串起来做就是白等一分钟 —— 这个接口本来就是"慢"的那条路，不该再慢一倍。
+   *
+   * `withReply:false` 时只出资料：给「我只想看资料、不要打扰我的输入框」这种用法留的口子。
+   */
+  app.post("/api/v1/auto-chat/suggest", asyncRoute(async (request, response) => {
+    const input = resourceSuggestSchema.parse(request.body ?? {});
+    const userId = request.crmIdentity!.userId;
+    if (input.accountId) await ownedAccount(request, input.accountId);
+    const [reply, resources] = await Promise.all([
+      input.withReply === false
+        ? Promise.resolve(null)
+        : autoChat.compose(userId, {
+            messages: input.messages ?? [],
+            contact: input.contact,
+            accountId: input.accountId,
+            engine: input.engine,
+            model: input.model,
+            effort: input.effort,
+            language: input.language,
+            tone: input.tone
+          }),
+      resourceRecommend.suggest(userId, input)
+    ]);
+    // 资料是这条回复**实际会用到的**依据之一，所以补进来源徽章里 —— 让面板那一排徽章
+    // 与它下面列出的资料是同一件事，而不是两套各说各话的说法。
+    if (reply?.evidence && resources.resources.length) {
+      if (!reply.evidence.sources.includes("resource")) reply.evidence.sources.push("resource");
+    }
+    response.json({ reply, ...resources });
+  }));
+  app.get("/api/v1/auto-chat/drafts", asyncRoute(async (request, response) => {
+    const statuses = typeof request.query.status === "string"
+      ? request.query.status.split(",").map((value) => value.trim()).filter(Boolean)
+      : [];
+    const limit = Number(request.query.limit ?? 50);
+    response.json(await autoChat.listDrafts(request.crmIdentity!.userId, {
+      statuses: statuses.length ? autoChatDraftStatusSchema.array().parse(statuses) : undefined,
+      limit: Number.isFinite(limit) ? limit : 50
+    }));
+  }));
+  app.post("/api/v1/auto-chat/drafts/:id/send", asyncRoute(async (request, response) => {
+    const input = z.object({ body: z.string().trim().min(1).max(10_000).optional() }).parse(request.body ?? {});
+    const draft = await autoChat.sendDraft(request.crmIdentity!.userId, routeParam(request.params.id), input);
+    response.json(draft);
+  }));
+  app.post("/api/v1/auto-chat/drafts/:id/dismiss", asyncRoute(async (request, response) => {
+    response.json(await autoChat.dismissDraft(request.crmIdentity!.userId, routeParam(request.params.id)));
   }));
   app.post(
     "/api/v1/conversations/:id/intelligence/analyze",
@@ -1319,6 +1758,9 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     repository,
     providers,
     translation,
+    training,
+    trainingLibrary,
+    autoChat,
     close
   };
 }

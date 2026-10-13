@@ -3685,6 +3685,7 @@ interface AppState {
   peerRelationFilter: "all" | PeerRelation | "未标注";
   peerSort: "newest" | "oldest" | "company";
   peerPage: number;
+  peerPageSize: number;
   selectedPeerId: string | null;
   caseStudies: CaseStudy[];
   commissionProducts: CommissionProduct[];
@@ -3894,6 +3895,7 @@ const state: AppState = {
   peerRelationFilter: "all",
   peerSort: "newest",
   peerPage: 1,
+  peerPageSize: 20,
   selectedPeerId: null,
   caseStudies: [],
   commissionProducts: [],
@@ -4020,7 +4022,9 @@ let backgroundResearchStage = 0;
 let backgroundResearchStageTimer = 0;
 /** 走本机 CLI 时的进度提示（后端作业号 + 机器名），非 CLI 时为空 */
 let backgroundResearchProgressNote = "";
-let developmentEmailSubject: { entityType: BackgroundResearchEntity; entityId: string; company: string; backView: string } | null = null;
+let developmentEmailSubject: { entityType: BackgroundResearchEntity; entityId: string; company: string; backView: string; phone?: string } | null = null;
+/** 发送通道：邮件（默认，走绑定 SMTP）或 WhatsApp（打开网页版预填消息，用户确认后发出） */
+let developmentEmailChannel: "email" | "whatsapp" = "email";
 let developmentEmailDraft: DevelopmentEmailDraft | null = null;
 let developmentEmailReadiness: DevelopmentEmailReadiness | null = null;
 let developmentEmailCompanyProfile: CompanyProfile | null = null;
@@ -4534,7 +4538,7 @@ function applyAgentUiAction(step: AgentStep) {
     const entity = action.entityType === "customer"
       ? state.customers.find((item) => item.id === action.entityId)
       : state.leads.find((item) => item.id === action.entityId);
-    if (entity) openDevelopmentEmail(action.entityType, action.entityId, entity.company, "ai-agent");
+    if (entity) openDevelopmentEmail(action.entityType, action.entityId, entity.company, "ai-agent", action.entityType === "customer" ? customerContactDetails(entity as Customer).whatsapp : (entity as Lead).phone || "");
     return;
   }
   if (action.type === "open_communication" && action.customerId) {
@@ -11177,6 +11181,7 @@ async function refreshAll(user: User) {
   renderPlanTasks(planTasks.tasks);
   renderPlanTemplates(planTemplates.templates);
   renderCompetitors(competitors.competitors);
+  renderPeers();
   renderCaseStudies(caseStudies.caseStudies);
   renderCommission();
   await renderAccounts(user);
@@ -12781,9 +12786,30 @@ function waFormatTime(iso: string, compact = false) {
     : { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-function waMeLink(phone: string) {
+// 客户号码 → WhatsApp 网页版直链。
+// 刻意不用 wa.me / api.whatsapp.com —— 那两者是 universal 链接，设备上装了 WhatsApp
+// 桌面客户端就会被唤起 App，落到另一个关联设备，而不是使用者已扫码登录的浏览器会话。
+function whatsAppWebLink(phone: string, text = "") {
   const digits = (phone || "").replace(/[^0-9]/g, "");
-  return digits.length >= 6 ? `https://wa.me/${digits}` : "";
+  if (digits.length < 6) return "";
+  // text 参数让 WhatsApp 打开会话时直接预填消息草稿（官方 send?phone&text= 用法）
+  return text ? `https://web.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(text)}` : `https://web.whatsapp.com/send?phone=${digits}`;
+}
+
+// WhatsApp 入口统一可用性判定。判定源就是 openWhatsAppForContact() 用的那两个函数，
+// 所以「灰」精确等于「点了必然打不开」——不会出现按钮亮着、点下去才弹错的落差。
+function whatsAppEntryHref(phone: string) {
+  return whatsAppWebLink(normalizeWhatsAppPhone(phone));
+}
+
+function whatsAppEntryClass(phone: string, base = "btn") {
+  return `${base} wa-action ${whatsAppEntryHref(phone) ? "is-ready" : "is-empty"}`;
+}
+
+function whatsAppEntryAttrs(phone: string, emptyTip = "该客户未维护 WhatsApp 号码，补齐国家码手机号后即可直接打开") {
+  return whatsAppEntryHref(phone)
+    ? `title="在网页版 WhatsApp 打开该客户会话"`
+    : `disabled aria-disabled="true" title="${emptyTip}"`;
 }
 
 function waStatusLabel(status: string) {
@@ -12911,7 +12937,7 @@ function renderWhatsAppChat(customer: WhatsAppCustomerSummary, binding: WhatsApp
   const canCompose = canManage && Boolean(binding) && (!integrated || connected);
   const customerRecord = state.customers.find((item) => item.id === customer.id);
   const masterWhatsapp = customerRecord ? customerContactDetails(customerRecord).whatsapp : "";
-  const link = waMeLink(binding?.phoneNumber || masterWhatsapp);
+  const link = whatsAppWebLink(binding?.phoneNumber || masterWhatsapp);
   chat.innerHTML = `
     <div class="wa-chat-head">
       <button class="wa-icon-button wa-mobile-back" id="waMobileBackButton" type="button" title="返回会话" aria-label="返回会话"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
@@ -12960,7 +12986,7 @@ function renderWhatsAppInfo(customer: WhatsAppCustomerSummary, binding: WhatsApp
     { id: "twilio-api", label: "官方 API", available: Boolean(modes?.twilioApi.available) || mode === "twilio-api" },
     { id: "web-scan", label: "测试扫码", available: Boolean(modes?.webScan.available) || mode === "web-scan" }
   ];
-  const link = waMeLink(binding?.phoneNumber || details.whatsapp || "");
+  const link = whatsAppWebLink(binding?.phoneNumber || details.whatsapp || "");
   info.innerHTML = `
     <div class="wa-info-head">
       <div><h3>${escapeHtml(customer.company)}</h3><p class="wa-info-sub">${escapeHtml([customer.contact, customer.country].filter(Boolean).join(" · ") || "客户资料")}</p></div>
@@ -13395,7 +13421,7 @@ function renderLeadDrawer(
   drawer.innerHTML = `
     <div class="drawer-head">
       <div><h2>${escapeHtml(lead.company)}</h2><p>${escapeHtml(lead.country || "—")} · ${escapeHtml(lead.contact || "—")}</p></div>
-      <div class="lead-drawer-head-actions">${inTrash ? "" : `<button class="btn" id="leadWhatsAppButton">WhatsApp</button><button class="btn" id="leadDevelopmentEmailButton">写开发信</button><button class="btn primary ai-entry-button" id="leadAiResearchButton">${researchButtonIcon()}AI 背调</button>`}${badge(inTrash ? "垃圾箱" : (LEAD_STATUS_LABEL[lead.status] || lead.status), inTrash ? "red" : (LEAD_STATUS_TONE[lead.status] || ""))}<button class="btn icon-only" id="leadDrawerClose" title="关闭">×</button></div>
+      <div class="lead-drawer-head-actions">${inTrash ? "" : `<button class="${whatsAppEntryClass(lead.phone || "")}" id="leadWhatsAppButton" ${whatsAppEntryAttrs(lead.phone || "", "该线索未维护电话 / WhatsApp 号码，补齐后再联系")}>WhatsApp</button><button class="btn" id="leadDevelopmentEmailButton">写开发信</button><button class="btn primary ai-entry-button" id="leadAiResearchButton">${researchButtonIcon()}AI 背调</button>`}${badge(inTrash ? "垃圾箱" : (LEAD_STATUS_LABEL[lead.status] || lead.status), inTrash ? "red" : (LEAD_STATUS_TONE[lead.status] || ""))}<button class="btn icon-only" id="leadDrawerClose" title="关闭">×</button></div>
     </div>
     ${lead.remark ? `<p class="lead-remark">${escapeHtml(lead.remark)}</p>` : ""}
     ${inTrash ? `
@@ -13442,7 +13468,7 @@ function renderLeadDrawer(
   qs<HTMLButtonElement>("#leadWhatsAppButton", drawer)?.addEventListener("click", () => {
     void openWhatsAppForContact({ phone: lead.phone || "", displayName: lead.contact || lead.company });
   });
-  qs<HTMLButtonElement>("#leadDevelopmentEmailButton", drawer)?.addEventListener("click", () => openDevelopmentEmail("lead", lead.id, lead.company, "leads"));
+  qs<HTMLButtonElement>("#leadDevelopmentEmailButton", drawer)?.addEventListener("click", () => openDevelopmentEmail("lead", lead.id, lead.company, "leads", lead.phone || ""));
   qs<HTMLButtonElement>("#leadAiResearchButton", drawer)?.addEventListener("click", () => openBackgroundResearch("lead", lead.id, lead.company, "leads"));
   qs<HTMLSelectElement>("#leadStageSelect", drawer)?.addEventListener("change", (event) => {
     void changeLeadStage(lead.id, (event.target as HTMLSelectElement).value);
@@ -13959,6 +13985,7 @@ function renderCustomers(customers: Customer[]) {
     const reminder = customer.nextReminder.includes("逾期") ? badge(customer.nextReminder, "red") : escapeHtml(customer.nextReminder);
     const pipelineStage = customer.pipelineStage || "暂无活跃商机";
     const activeDealCount = customer.activeDealCount || 0;
+    const customerWhatsapp = customerContactDetails(customer).whatsapp;
     return `<tr class="${customer.id === state.selectedCustomerId ? "selected" : ""} ${checked ? "checked" : ""}">
     <td><input type="checkbox" data-select-customer ${checked ? "checked" : ""}></td>
     <td><div class="company">${countryFlag(customer.country)}<div><button type="button" class="customer-name ${activeDealCount > 0 ? "has-active-deal" : ""}" data-open-customer="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</button><span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")}</span></div></div></td>
@@ -13966,7 +13993,7 @@ function renderCustomers(customers: Customer[]) {
     <td><div class="customer-follow-cell"><b>${escapeHtml(customer.source || "未登记")}</b><span>获客渠道</span></div></td>
     <td><div class="customer-value-cell">${customerGradeHtml(customer)}${badge(customerWonLabel(customer), customer.hasWonDeal ? "green" : "gray")}</div></td>
     <td><div class="customer-follow-cell"><span>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</span><b>${reminder}</b></div></td>
-    <td><button class="btn" type="button" data-customer-whatsapp>WhatsApp</button></td>
+    <td><button class="${whatsAppEntryClass(customerWhatsapp)}" type="button" data-customer-whatsapp ${whatsAppEntryAttrs(customerWhatsapp)}>WhatsApp</button></td>
     <td><div class="customer-row-actions"><button class="btn" data-open-customer-page>全景</button><button class="btn" data-edit-customer>编辑</button><button class="btn" data-release-customer>放入公池</button></div></td>
   </tr>`;
   }).join("") : `<tr><td colspan="8" class="empty-cell">当前${customerOutcomeLabel()}筛选下暂无客户。</td></tr>`;
@@ -13976,7 +14003,7 @@ function renderCustomers(customers: Customer[]) {
       <span class="customer-mobile-top"><span class="customer-mobile-company">${countryFlag(customer.country)}<button type="button" class="customer-name ${(customer.activeDealCount || 0) > 0 ? "has-active-deal" : ""}" data-open-customer="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</button></span>${badge(customer.pipelineStage || "暂无商机", customer.pipelineStage === "谈判" || customer.pipelineStage === "成交" ? "green" : customer.pipelineStage === "已报价" ? "amber" : "gray")}</span>
       <span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")}</span>
       <span class="customer-mobile-meta"><i>来源 · ${escapeHtml(customer.source || "未登记")}</i><i>${customerGradeValue(customer)}级 · ${customerGradeLabel(customerGradeValue(customer))}</i><i>${customerWonLabel(customer)}</i><i>${customer.activeDealCount || 0} 个活跃商机</i><i>${escapeHtml(customer.nextReminder || "待安排")}</i><i>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</i></span>
-      <div class="customer-row-actions"><button class="btn" type="button" data-customer-mobile-whatsapp>WhatsApp</button><button class="btn" type="button" data-customer-mobile-pool>放入公池</button></div>
+      <div class="customer-row-actions"><button class="${whatsAppEntryClass(customerContactDetails(customer).whatsapp)}" type="button" data-customer-mobile-whatsapp ${whatsAppEntryAttrs(customerContactDetails(customer).whatsapp)}>WhatsApp</button><button class="btn" type="button" data-customer-mobile-pool>放入公池</button></div>
     </article>`).join("") : `<div class="empty-cell">当前${customerOutcomeLabel()}筛选下暂无客户。</div>`;
   qsa<HTMLElement>("tr", tbody).forEach((row, index) => {
     const customer = pageCustomers[index];
@@ -14080,7 +14107,7 @@ function renderCustomerPool() {
       <td>${customerGradeHtml(customer)}</td>
       <td><div class="customer-pool-company"><b>${escapeHtml(customer.previousOwnerName || "原负责人未记录")}</b><span>${escapeHtml(customer.releasedByName || "团队成员")} · ${escapeHtml(formatDateTime(customer.releasedAt || ""))}</span><span class="customer-pool-reason">${escapeHtml(customer.releaseReason || "未填写释放原因")}</span></div></td>
       <td>${badge(customerWonLabel(customer), customer.hasWonDeal ? "green" : "gray")}</td>
-      <td><div class="customer-pool-actions"><button class="btn" type="button" data-pool-whatsapp>WhatsApp</button><button class="btn customer-pool-claim" type="button" data-pool-claim>领取客户</button></div></td>
+      <td><div class="customer-pool-actions"><button class="${whatsAppEntryClass(customerContactDetails(customer).whatsapp)}" type="button" data-pool-whatsapp ${whatsAppEntryAttrs(customerContactDetails(customer).whatsapp)}>WhatsApp</button><button class="btn customer-pool-claim" type="button" data-pool-claim>领取客户</button></div></td>
     </tr>`).join("") : empty;
   mobile.innerHTML = customers.length ? customers.map((customer) => `
     <article class="customer-pool-card" data-pool-customer-id="${escapeHtml(customer.id)}">
@@ -14088,7 +14115,7 @@ function renderCustomerPool() {
       <div>${customerGradeHtml(customer)} ${badge(customerWonLabel(customer), customer.hasWonDeal ? "green" : "gray")}</div>
       <span>${escapeHtml(customer.previousOwnerName || "原负责人未记录")} · ${escapeHtml(formatDateTime(customer.releasedAt || ""))}</span>
       <div class="customer-pool-reason">${escapeHtml(customer.releaseReason || "未填写释放原因")}</div>
-      <div class="customer-pool-actions"><button class="btn" type="button" data-pool-whatsapp>WhatsApp</button><button class="btn customer-pool-claim" type="button" data-pool-claim>领取客户</button></div>
+      <div class="customer-pool-actions"><button class="${whatsAppEntryClass(customerContactDetails(customer).whatsapp)}" type="button" data-pool-whatsapp ${whatsAppEntryAttrs(customerContactDetails(customer).whatsapp)}>WhatsApp</button><button class="btn customer-pool-claim" type="button" data-pool-claim>领取客户</button></div>
     </article>`).join("") : `<div class="empty-cell">当前筛选下暂无公池客户。</div>`;
   qsa<HTMLElement>("[data-pool-customer-id]", qs("#customer-pool")!).forEach((row) => {
     const customer = state.publicCustomers.find((item) => item.id === row.dataset.poolCustomerId);
@@ -14366,12 +14393,6 @@ function customerContactDetails(customer: Customer) {
   return { email, phone, whatsapp, wechat };
 }
 
-interface WhatsAppPluginAccount {
-  id: string;
-  name: string;
-  status: string;
-}
-
 interface WhatsAppPluginConversation {
   id: string;
   accountId: string;
@@ -14412,6 +14433,40 @@ async function whatsappPluginRequest<T>(path: string, init: RequestInit = {}): P
     throw new Error(body.error || `WhatsApp 服务请求失败 (${response.status})`);
   }
   return response.json() as Promise<T>;
+}
+
+// 即刻沟通是 iframe，而 CSS 自定义属性不会穿过 iframe 边界：宿主换肤后必须把品牌令牌
+// 显式送进去，否则外层换了主题、iframe 里仍然停在插件自带的默认色，同屏两种主色。
+// 送的是宿主**算好的最终取值**（getComputedStyle 读的就是级联结果），所以 15 套预设
+// 与「自定义取色」（applyTheme 把令牌写成 <html> 的行内样式）走的是同一条路，
+// 不需要在插件里再维护一份预设表。
+// 与插件侧同名常量：whatsapp-plugin/src/web/theme.ts
+const WHATSAPP_THEME_MESSAGE = "goodjob:theme";
+
+function readHostThemeTokens(): Record<string, string> {
+  const computed = getComputedStyle(document.documentElement);
+  const pick = (name: string) => computed.getPropertyValue(name).trim();
+  return {
+    brand: pick("--brand"),
+    brandStrong: pick("--brand-strong"),
+    brandTint: pick("--brand-tint"),
+    brandRing: pick("--brand-ring")
+  };
+}
+
+function appendHostThemeParams(params: URLSearchParams): void {
+  for (const [key, value] of Object.entries(readHostThemeTokens())) {
+    if (value) params.set(key, value);
+  }
+}
+
+function syncWhatsAppFrameTheme(): void {
+  const frame = qs<HTMLIFrameElement>("#whatsapp .whatsapp-plugin-frame");
+  if (!frame?.contentWindow) return;
+  frame.contentWindow.postMessage(
+    { type: WHATSAPP_THEME_MESSAGE, tokens: readHostThemeTokens() },
+    window.location.origin
+  );
 }
 
 function setInstantCommunicationState(mode: "loading" | "error", title: string, message: string, retry: boolean) {
@@ -14472,6 +14527,7 @@ async function ensureInstantCommunicationLoaded(force = false) {
       throw new Error(payload.message || payload.error || `服务返回 ${response.status}`);
     }
     const launch = new URLSearchParams({ embedded: "1", launch: String(Date.now()) });
+    appendHostThemeParams(launch);
     frame.src = `/whatsapp-plugin/?${launch.toString()}`;
   } catch (error) {
     setInstantCommunicationState(
@@ -14485,46 +14541,32 @@ async function ensureInstantCommunicationLoaded(force = false) {
   }
 }
 
-function focusWhatsAppConversation(accountId: string, conversationId: string) {
-  const frame = qs<HTMLIFrameElement>("#whatsapp .whatsapp-plugin-frame");
-  if (frame) {
-    const query = new URLSearchParams({ embedded: "1", accountId, conversationId, launch: String(Date.now()) });
-    frame.src = `/whatsapp-plugin/?${query.toString()}`;
-  }
-  closeLeadDrawer();
-  closeCustomerDrawer();
-  activateNavView("whatsapp");
-}
-
+/**
+ * 打开与某个联系人（客户 / 线索）的 WhatsApp 对话。
+ *
+ * 走 web.whatsapp.com 直链，复用浏览器里**已扫码登录的网页版会话**：
+ * 不请求插件、不建 socket、不经过 Baileys 通道，因此不受「仅官方通道」开关约束，
+ * 也不存在非官方协议登录的封号风险。
+ *
+ * 为什么不用 wa.me：它是 universal 链接，装了 WhatsApp 桌面客户端的机器会被 App
+ * 接管，消息落到另一个「关联设备」，而不是使用者已扫码登录的浏览器会话。
+ * 与本文件 whatsAppWebLink() 及插件侧同名实现保持一致。
+ *
+ * 注：旧实现在这里查插件的 /v1/accounts + /v1/conversations 再切到「即刻沟通」的
+ * 插件会话，没有 connected 账号时只会提示「WhatsApp 账号当前离线」，点了打不开。
+ */
 async function openWhatsAppForContact(input: { phone: string; displayName: string }) {
   const phone = normalizeWhatsAppPhone(input.phone);
   if (!phone) {
-    toast("该客户没有 WhatsApp 号码", "error");
+    toast("该联系人没有 WhatsApp 号码", "error");
     return;
   }
-  try {
-    const [accounts, conversations] = await Promise.all([
-      whatsappPluginRequest<WhatsAppPluginAccount[]>("/v1/accounts"),
-      whatsappPluginRequest<WhatsAppPluginConversation[]>("/v1/conversations")
-    ]);
-    const existing = conversations.find((item) => normalizeWhatsAppPhone(item.contactPhone) === phone);
-    if (existing) {
-      focusWhatsAppConversation(existing.accountId, existing.id);
-      return;
-    }
-    const account = accounts.find((item) => item.status === "connected");
-    if (!account) {
-      toast("WhatsApp 账号当前离线，连接后才能新建会话", "error");
-      return;
-    }
-    const created = await whatsappPluginRequest<{ conversation: WhatsAppPluginConversation }>("/v1/contacts", {
-      method: "POST",
-      body: JSON.stringify({ accountId: account.id, displayName: input.displayName, phone, createCrmContact: false })
-    });
-    focusWhatsAppConversation(account.id, created.conversation.id);
-  } catch (error) {
-    toast(error instanceof Error ? error.message : "WhatsApp 会话打开失败", "error");
+  const url = whatsAppWebLink(phone);
+  if (!url) {
+    toast("WhatsApp 号码位数不足，无法打开", "error");
+    return;
   }
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function customerContactIcon(channel: "email" | "phone" | "whatsapp" | "wechat") {
@@ -14854,6 +14896,11 @@ function renderDevelopmentEmailPage() {
   const briefInfo = developmentEmailBriefInfo;
   const qualityInfo = developmentEmailQuality;
   const sendReady = readiness.personalReady && readiness.companyReady && Boolean(draft.to && draft.subject && draft.body.trim().length >= 10);
+  // WhatsApp 通道只看两件事：联系人有号码、正文写够了。邮件那套 SMTP/公司资料门禁与它无关。
+  const bodyReady = draft.body.trim().length >= 10;
+  const whatsappReady = Boolean(subject.phone) && bodyReady;
+  const sendEnabled = developmentEmailChannel === "whatsapp" ? whatsappReady : sendReady;
+  const sendButtonLabel = developmentEmailChannel === "whatsapp" ? (developmentEmailSending ? "打开中" : "发送 WhatsApp") : (developmentEmailSending ? "发送中" : "发送邮件");
   // 生成按钮按来源动态渲染：CLI 不依赖 AI 模型配置，不该被 aiReady 门禁挡住
   const mailSource = effectiveEmailSource();
   const generateButtonHtml = mailSource === "cli"
@@ -14862,7 +14909,7 @@ function renderDevelopmentEmailPage() {
   box.innerHTML = `
     <header class="mail-studio-header">
       <div class="research-identity"><button class="customer-page-back" type="button" data-mail-back title="返回" aria-label="返回"><svg viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button><div><h1>${escapeHtml(draft.recipientCompany)}</h1><span>开发信</span></div></div>
-      <div class="mail-studio-actions">${generateButtonHtml}<button class="btn primary" type="button" data-mail-send ${sendReady && !developmentEmailSending && !developmentEmailLoading ? "" : "disabled"}>${developmentEmailSending ? "发送中" : "发送邮件"}</button></div>
+      <div class="mail-studio-actions">${generateButtonHtml}<button class="btn primary" type="button" data-mail-send ${sendEnabled && !developmentEmailSending && !developmentEmailLoading ? "" : "disabled"}>${sendButtonLabel}</button></div>
     </header>
 
     <div class="mail-studio-layout">
@@ -14874,6 +14921,8 @@ function renderDevelopmentEmailPage() {
         </section>
         <section>
           <h2>发送设置</h2>
+          <label><span>发送通道</span><select id="developmentEmailChannel"><option value="email" ${developmentEmailChannel === "email" ? "selected" : ""}>邮件</option><option value="whatsapp" ${developmentEmailChannel === "whatsapp" ? "selected" : ""} ${subject.phone ? "" : "disabled title=\"该联系人未维护 WhatsApp 号码\""}>WhatsApp</option></select></label>
+          ${developmentEmailChannel === "whatsapp" ? `<label><span>WhatsApp 号码</span><input value="${escapeHtml(subject.phone)}" disabled></label>` : ""}
           <label><span>语气</span><select id="developmentEmailTone"><option value="professional" ${developmentEmailTone === "professional" ? "selected" : ""}>专业</option><option value="concise" ${developmentEmailTone === "concise" ? "selected" : ""}>简洁</option><option value="warm" ${developmentEmailTone === "warm" ? "selected" : ""}>友好</option></select></label>
           <label><span>下次跟进</span><input id="developmentEmailNext" value="${escapeHtml(developmentEmailNextFollowAt)}" placeholder="例如 3 天后"></label>
         </section>
@@ -14961,14 +15010,26 @@ function renderDevelopmentEmailPage() {
   qsa<HTMLButtonElement>("[data-mail-scenario]", box).forEach((button) => button.addEventListener("click", () => {
     void switchDevelopmentEmailScenario(button.dataset.mailScenario as DevelopmentEmailScenario);
   }));
-  qs<HTMLButtonElement>("[data-mail-send]", box)?.addEventListener("click", () => void sendDevelopmentEmailFromStudio());
+  qs<HTMLButtonElement>("[data-mail-send]", box)?.addEventListener("click", () => {
+    if (developmentEmailChannel === "whatsapp") void sendDevelopmentWhatsAppFromStudio();
+    else void sendDevelopmentEmailFromStudio();
+  });
+  qs<HTMLSelectElement>("#developmentEmailChannel", box)?.addEventListener("change", (event) => {
+    developmentEmailChannel = (event.currentTarget as HTMLSelectElement).value as typeof developmentEmailChannel;
+    renderDevelopmentEmailPage();
+  });
   qsa<HTMLInputElement | HTMLTextAreaElement>("#developmentEmailTo, #developmentEmailSubject, #developmentEmailBody", box).forEach((input) => input.addEventListener("input", () => {
     syncDevelopmentEmailDraft();
     developmentEmailRequestId = "";
     const count = qs<HTMLElement>("#developmentEmailCount", box);
     if (count) count.textContent = `${developmentEmailDraft?.body.length || 0} 字符`;
     const send = qs<HTMLButtonElement>("[data-mail-send]", box);
-    if (send && developmentEmailReadiness) send.disabled = !(developmentEmailReadiness.personalReady && developmentEmailReadiness.companyReady && Boolean(developmentEmailDraft?.to && developmentEmailDraft.subject && developmentEmailDraft.body.trim().length >= 10));
+    if (send && developmentEmailReadiness) {
+      const bodyOk = (developmentEmailDraft?.body.trim().length || 0) >= 10;
+      send.disabled = developmentEmailChannel === "whatsapp"
+        ? !(Boolean(developmentEmailSubject?.phone) && bodyOk)
+        : !(developmentEmailReadiness.personalReady && developmentEmailReadiness.companyReady && Boolean(developmentEmailDraft?.to && developmentEmailDraft.subject && bodyOk));
+    }
   }));
   qs<HTMLSelectElement>("#developmentEmailTone", box)?.addEventListener("change", (event) => { developmentEmailTone = (event.currentTarget as HTMLSelectElement).value as typeof developmentEmailTone; });
   qs<HTMLSelectElement>("#developmentEmailSource", box)?.addEventListener("change", (event) => {
@@ -15055,6 +15116,55 @@ async function generateDevelopmentEmailDraftPage(requireAi = false) {
   }
 }
 
+/**
+ * WhatsApp 通道发送：打开 web.whatsapp.com 会话并预填正文，真正的「发送」由用户在
+ * WhatsApp 里完成（本系统不代发）。发送动作本身无法被系统确认，所以只记一条
+ * WhatsApp 跟进活动（type=whatsapp），不去碰开发阶段推导用的外发触点，避免虚报阶段。
+ */
+async function sendDevelopmentWhatsAppFromStudio() {
+  const subject = developmentEmailSubject;
+  if (!subject || !developmentEmailDraft || developmentEmailSending) return;
+  syncDevelopmentEmailDraft();
+  const draft = developmentEmailDraft;
+  const body = draft.body.trim();
+  if (body.length < 10) {
+    toast("消息内容太短，写几句再发", "error");
+    return;
+  }
+  const phone = normalizeWhatsAppPhone(subject.phone || "");
+  const link = phone ? whatsAppWebLink(phone, body) : "";
+  if (!phone || !link) {
+    toast("该联系人没有可用的 WhatsApp 号码，请先补齐带国家码的手机号", "error");
+    return;
+  }
+  if (!await confirmAction({
+    title: "确认用 WhatsApp 发送",
+    message: "将打开 WhatsApp 网页版并预填消息，发送由你在 WhatsApp 里点击完成；系统会同步写一条跟进记录。",
+    detailLabel: "联系人 / 号码",
+    detail: `${draft.recipientName || subject.company} → ${phone}`,
+    consequences: [`公司：${subject.company}`, `消息开头：${body.slice(0, 60)}${body.length > 60 ? "…" : ""}`],
+    confirmLabel: "打开 WhatsApp",
+    tone: "normal"
+  })) return;
+  developmentEmailSending = true;
+  renderDevelopmentEmailPage();
+  try {
+    window.open(link, "_blank", "noopener,noreferrer");
+    const content = `[WhatsApp] ${body.slice(0, 500)}`;
+    if (subject.entityType === "lead") {
+      await api(`/api/leads/${subject.entityId}/activities`, { method: "POST", body: JSON.stringify({ type: "whatsapp", content }) });
+    } else {
+      await api(`/api/customers/${subject.entityId}/activities`, { method: "POST", body: JSON.stringify({ type: "whatsapp", content }) });
+    }
+    toast("已在 WhatsApp 预填消息，跟进记录已写入");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "跟进记录写入失败（WhatsApp 页面已打开）", "error");
+  } finally {
+    developmentEmailSending = false;
+    renderDevelopmentEmailPage();
+  }
+}
+
 async function sendDevelopmentEmailFromStudio() {
   const subject = developmentEmailSubject;
   if (!subject || !developmentEmailDraft || developmentEmailSending) return;
@@ -15098,8 +15208,9 @@ async function sendDevelopmentEmailFromStudio() {
   }
 }
 
-function openDevelopmentEmail(entityType: BackgroundResearchEntity, entityId: string, company: string, backView: string) {
-  developmentEmailSubject = { entityType, entityId, company, backView };
+function openDevelopmentEmail(entityType: BackgroundResearchEntity, entityId: string, company: string, backView: string, phone = "") {
+  developmentEmailSubject = { entityType, entityId, company, backView, phone: phone || "" };
+  developmentEmailChannel = "email";
   developmentEmailDraft = null;
   developmentEmailReadiness = null;
   developmentEmailTone = "professional";
@@ -15553,6 +15664,11 @@ function launchCustomerContact(customer: Customer, channel: "email" | "phone" | 
     return;
   }
   if (channel === "whatsapp") {
+    if (!whatsAppEntryHref(contacts.whatsapp)) {
+      toast("请先补充可用的 WhatsApp 号码（含国家码），再发起联系");
+      openCustomerModal(customer);
+      return;
+    }
     void openWhatsAppForContact({ phone: contacts.whatsapp, displayName: customer.contact || customer.company });
     return;
   }
@@ -15587,6 +15703,8 @@ function renderCustomerDetailPage(customer?: Customer) {
   const deals = customerRelatedDeals(current);
   const activities = current.activities || [];
   const contacts = customerContactDetails(current);
+  // 号码能拼出网页版直链才算「可联系」；只填了位数不够的号码同样按未维护处理。
+  const whatsappHref = whatsAppEntryHref(contacts.whatsapp);
   const activeDeals = deals.filter((deal) => !deal.archivedAt && !["成交", "丢单"].includes(deal.stage));
   box.innerHTML = `
     <header class="customer-page-header">
@@ -15597,7 +15715,7 @@ function renderCustomerDetailPage(customer?: Customer) {
           <p>${escapeHtml(current.country)} · ${escapeHtml(current.contact)} · 负责人 ${escapeHtml(current.ownerName || "未分配")}</p>
         </div>
       </div>
-      <div class="customer-page-actions"><button class="btn" type="button" data-customer-page-whatsapp>WhatsApp</button><button class="btn primary ai-entry-button" type="button" data-customer-page-research>${researchButtonIcon()}AI 背调</button><button class="btn" type="button" data-customer-page-email>写开发信</button><button class="btn" type="button" data-customer-page-journey>开发信过程</button><button class="btn" type="button" data-customer-page-edit>编辑客户</button><button class="btn" type="button" data-customer-page-follow>新增跟进</button><button class="btn" type="button" data-customer-page-release>放入公池</button></div>
+      <div class="customer-page-actions"><button class="${whatsAppEntryClass(contacts.whatsapp)}" type="button" data-customer-page-whatsapp ${whatsAppEntryAttrs(contacts.whatsapp)}>WhatsApp</button><button class="btn primary ai-entry-button" type="button" data-customer-page-research>${researchButtonIcon()}AI 背调</button><button class="btn" type="button" data-customer-page-email>写开发信</button><button class="btn" type="button" data-customer-page-journey>开发信过程</button><button class="btn" type="button" data-customer-page-edit>编辑客户</button><button class="btn" type="button" data-customer-page-follow>新增跟进</button><button class="btn" type="button" data-customer-page-release>放入公池</button></div>
     </header>
 
     <section class="customer-page-summary" aria-label="客户摘要">
@@ -15632,14 +15750,14 @@ function renderCustomerDetailPage(customer?: Customer) {
           <div class="customer-contact-row"><span>联系人</span><b>${escapeHtml(current.contact)}</b><small>主联系人</small></div>
           <div class="customer-contact-row"><span>邮箱</span><b>${escapeHtml(contacts.email || "未维护")}</b><small>${contacts.email ? "可直接发邮件" : "待补充"}</small></div>
           <div class="customer-contact-row"><span>电话</span><b>${escapeHtml(contacts.phone || "未维护")}</b><small>${contacts.phone ? "可直接拨号" : "待补充"}</small></div>
-          <div class="customer-contact-row"><span>WhatsApp</span><b>${escapeHtml(contacts.whatsapp || "未维护")}</b><small>${contacts.whatsapp ? "可直接沟通" : "待补充"}</small></div>
+          <div class="customer-contact-row"><span>WhatsApp</span><b>${contacts.whatsapp && whatsAppWebLink(contacts.whatsapp) ? `<a class="wa-web-link" href="${whatsAppWebLink(contacts.whatsapp)}" target="_blank" rel="noopener noreferrer">${escapeHtml(contacts.whatsapp)}</a>` : escapeHtml(contacts.whatsapp || "未维护")}</b><small>${contacts.whatsapp ? "点击直接打开 WhatsApp 网页版" : "待补充"}</small></div>
           <div class="customer-contact-row"><span>微信</span><b>${escapeHtml(contacts.wechat || "未维护")}</b><small>${contacts.wechat ? "点击下方按钮复制" : "待补充"}</small></div>
           <div class="customer-contact-row"><span>其它渠道</span><b>${escapeHtml(current.contactRemark || "未维护")}</b><small>${current.contactRemark ? "已登记备注" : "可补充 LinkedIn / 微信等"}</small></div>
         </div>
         <div class="customer-contact-actions">
           <button class="customer-contact-action ${contacts.email ? "is-ready" : ""}" type="button" data-customer-contact="email">${customerContactIcon("email")}<span>邮件${contacts.email ? "" : " · 待维护"}</span></button>
           <button class="customer-contact-action ${contacts.phone ? "is-ready" : ""}" type="button" data-customer-contact="phone">${customerContactIcon("phone")}<span>电话${contacts.phone ? "" : " · 待维护"}</span></button>
-          <button class="customer-contact-action ${contacts.whatsapp ? "is-ready" : ""}" type="button" data-customer-contact="whatsapp">${customerContactIcon("whatsapp")}<span>WhatsApp · ${contacts.whatsapp ? "直接沟通" : "未维护"}</span></button>
+          <button class="customer-contact-action ${whatsappHref ? "is-ready" : "is-empty"}" type="button" data-customer-contact="whatsapp" ${whatsAppEntryAttrs(contacts.whatsapp)}>${customerContactIcon("whatsapp")}<span>WhatsApp · ${whatsappHref ? "直接沟通" : "未维护"}</span></button>
           <button class="customer-contact-action ${contacts.wechat ? "is-ready" : ""}" type="button" data-customer-contact="wechat">${customerContactIcon("wechat")}<span>微信 · ${contacts.wechat ? "点击复制" : "未维护"}</span></button>
         </div>
       </section>
@@ -15683,7 +15801,7 @@ function renderCustomerDetailPage(customer?: Customer) {
   });
   qs<HTMLButtonElement>("[data-customer-page-release]", box)?.addEventListener("click", () => openCustomerReleaseModal(current));
   qs<HTMLButtonElement>("[data-customer-page-research]", box)?.addEventListener("click", () => openBackgroundResearch("customer", current.id, current.company, "customer-detail"));
-  qs<HTMLButtonElement>("[data-customer-page-email]", box)?.addEventListener("click", () => openDevelopmentEmail("customer", current.id, current.company, "customer-detail"));
+  qs<HTMLButtonElement>("[data-customer-page-email]", box)?.addEventListener("click", () => openDevelopmentEmail("customer", current.id, current.company, "customer-detail", customerContactDetails(current).whatsapp));
   qs<HTMLButtonElement>("[data-customer-page-journey]", box)?.addEventListener("click", () =>
     void openOutreachCustomerJourney("customer", current.id, current.company, "customer-detail"));
   qsa<HTMLButtonElement>("[data-customer-page-follow]", box).forEach((button) => button.addEventListener("click", () => addFollowRecord(current)));
@@ -16179,6 +16297,7 @@ async function createCustomerMeetingTodo(customer: Customer, activityId: string,
 function renderCustomerDrawer(customer?: Customer) {
   const drawer = qs<HTMLElement>("#customerDrawer");
   if (!drawer || !customer) return;
+  const contacts = customerContactDetails(customer);
   const billingName = customerDocumentName(customer);
   const billingAddress = customer.billingAddress || `${customer.country} / 地址待维护`;
   const documentContact = customer.documentContact || customer.contact;
@@ -16217,12 +16336,21 @@ function renderCustomerDrawer(customer?: Customer) {
       <div class="info"><span>活跃商机数</span><b>${activeDealCount}</b></div>
       <div class="info"><span>在手商机额</span><b>${money(pipelineAmount)}</b></div>
       <div class="info"><span>下一提醒</span><b>${escapeHtml(customer.nextReminder)}</b></div>
-      <div class="info"><span>WhatsApp</span><b>${escapeHtml(customerContactDetails(customer).whatsapp || "待维护")}</b></div>
-      <div class="info"><span>微信</span><b>${escapeHtml(customer.wechat || "待维护")}</b></div>
-      <div class="info"><span>其它渠道</span><b>${escapeHtml(customer.contactRemark || "待维护")}</b></div>
-      <div class="info"><span>其它说明</span><b>${escapeHtml(customer.otherNotes || "待维护")}</b></div>
     </div>
-    <div class="inline-actions"><button class="btn" data-customer-whatsapp-drawer>WhatsApp</button><button class="btn primary ai-entry-button" data-customer-research>${researchButtonIcon()}AI 背调</button><button class="btn" data-customer-email>写开发信</button><button class="btn" data-customer-journey-drawer>开发信过程</button><button class="btn" data-customer-meeting><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><path d="M12 19v3"/></svg>录制会议</button><button class="btn" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button><button class="btn" data-customer-release-drawer>放入公池</button></div>
+    <section class="customer-doc-info">
+      <div class="customer-deals-head"><h3>联系方式</h3><button class="btn" data-edit-customer-drawer>维护信息</button></div>
+      <div class="info-grid">
+        <div class="info"><span>主联系人</span><b>${escapeHtml(customer.contact || "待维护")}</b></div>
+        <div class="info"><span>邮箱</span><b>${escapeHtml(contacts.email || "未维护")}</b></div>
+        <div class="info"><span>电话</span><b>${escapeHtml(contacts.phone || "未维护")}</b></div>
+        <div class="info"><span>WhatsApp</span><b>${contacts.whatsapp && whatsAppWebLink(contacts.whatsapp) ? `<a class="wa-web-link" href="${whatsAppWebLink(contacts.whatsapp)}" target="_blank" rel="noopener noreferrer">${escapeHtml(contacts.whatsapp)}</a>` : escapeHtml(contacts.whatsapp || "未维护")}</b></div>
+        <div class="info"><span>微信</span><b>${escapeHtml(contacts.wechat || "未维护")}</b></div>
+        <div class="info"><span>官网</span><b>${escapeHtml(customer.website || "未维护")}</b></div>
+        <div class="info"><span>其它渠道</span><b>${escapeHtml(customer.contactRemark || "未维护")}</b></div>
+        <div class="info"><span>其它说明</span><b>${escapeHtml(customer.otherNotes || "未维护")}</b></div>
+      </div>
+    </section>
+    <div class="inline-actions"><button class="${whatsAppEntryClass(contacts.whatsapp)}" data-customer-whatsapp-drawer ${whatsAppEntryAttrs(contacts.whatsapp)}>WhatsApp</button><button class="btn primary ai-entry-button" data-customer-research>${researchButtonIcon()}AI 背调</button><button class="btn" data-customer-email>写开发信</button><button class="btn" data-customer-journey-drawer>开发信过程</button><button class="btn" data-customer-meeting><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><path d="M12 19v3"/></svg>录制会议</button><button class="btn" data-add-follow>新增跟进记录</button><button class="btn" data-edit-customer-drawer>编辑客户</button><button class="btn" data-customer-release-drawer>放入公池</button></div>
     ${renderCustomerMeetingBrief(customer)}
     ${renderCustomerIntelligence(customer)}
     <section class="customer-communication-drawer" id="customerCommunicationDrawerInsights">
@@ -16264,7 +16392,7 @@ function renderCustomerDrawer(customer?: Customer) {
   });
   qs<HTMLButtonElement>("[data-customer-release-drawer]", drawer)?.addEventListener("click", () => openCustomerReleaseModal(customer));
   qs<HTMLButtonElement>("[data-customer-research]", drawer)?.addEventListener("click", () => openBackgroundResearch("customer", customer.id, customer.company, "customers"));
-  qs<HTMLButtonElement>("[data-customer-email]", drawer)?.addEventListener("click", () => openDevelopmentEmail("customer", customer.id, customer.company, "customers"));
+  qs<HTMLButtonElement>("[data-customer-email]", drawer)?.addEventListener("click", () => openDevelopmentEmail("customer", customer.id, customer.company, "customers", customerContactDetails(customer).whatsapp));
   qs<HTMLButtonElement>("[data-customer-meeting]", drawer)?.addEventListener("click", () => openMeetingRecorder(customer));
   qs<HTMLButtonElement>("[data-customer-meeting-todo]", drawer)?.addEventListener("click", (event) => {
     const button = event.currentTarget as HTMLButtonElement;
@@ -16448,9 +16576,65 @@ function customerActivityLabel(type: string) {
   return labels[type] || "跟进";
 }
 
+/* 客户旅程节点详情浮层。
+ *
+ * 浮层刻意挂在 <body> 上而不是节点内部：.journey-track 是横向滚动容器
+ * （overflow-x: auto），浏览器会把它的 overflow-y 由 visible 强制计算成 auto，
+ * 于是向上溢出的浮层会被整块裁掉（实测浮层高 94px，只有底部 12px 可见）。
+ * 挂到 body + fixed 定位可以完全绕开这层裁切。 */
+let journeyTooltipEl: HTMLElement | null = null;
+let journeyTooltipGlobalsBound = false;
+
+function ensureJourneyTooltip() {
+  if (!journeyTooltipEl || !journeyTooltipEl.isConnected) {
+    journeyTooltipEl = document.createElement("div");
+    journeyTooltipEl.className = "journey-tooltip";
+    document.body.appendChild(journeyTooltipEl);
+  }
+  return journeyTooltipEl;
+}
+
+function hideJourneyTooltip() {
+  journeyTooltipEl?.classList.remove("visible");
+}
+
+function showJourneyTooltip(node: HTMLElement) {
+  const label = node.dataset.label || "";
+  const detail = node.dataset.detail || "";
+  const date = node.dataset.date || "";
+  if (!label && !detail) return;
+  const tooltip = ensureJourneyTooltip();
+  tooltip.innerHTML = `<b>${escapeHtml(label)}</b>${detail ? `<span>${escapeHtml(detail)}</span>` : ""}${date ? `<small>${escapeHtml(date)}</small>` : ""}`;
+
+  const anchor = (node.querySelector(".journey-dot") || node).getBoundingClientRect();
+  const half = tooltip.offsetWidth / 2;
+  const centerX = anchor.left + anchor.width / 2;
+  // 贴住视口左右边缘时把浮层收回来，否则会被视口裁掉。
+  tooltip.style.left = `${Math.round(Math.min(Math.max(centerX, half + 8), window.innerWidth - half - 8))}px`;
+  // 上方空间不足时翻到节点下方，避免浮层顶到视口外。
+  const above = anchor.top - 8;
+  if (above - tooltip.offsetHeight >= 4) {
+    tooltip.style.transform = "translate(-50%, -100%)";
+    tooltip.style.top = `${Math.round(above)}px`;
+  } else {
+    tooltip.style.transform = "translate(-50%, 0)";
+    tooltip.style.top = `${Math.round(anchor.bottom + 8)}px`;
+  }
+  tooltip.classList.add("visible");
+}
+
+function bindJourneyTooltipGlobals() {
+  if (journeyTooltipGlobalsBound) return;
+  journeyTooltipGlobalsBound = true;
+  // 滚动 / 缩放后浮层的 fixed 坐标会失效，直接收起，避免停在错位的地方。
+  window.addEventListener("scroll", hideJourneyTooltip, true);
+  window.addEventListener("resize", hideJourneyTooltip);
+}
+
 function renderCustomerJourney(customer: Customer) {
   const container = qs<HTMLElement>("#customerJourneyTimeline");
   if (!container) return;
+  bindJourneyTooltipGlobals();
   const activities = customer.activities || [];
   const deals = customerRelatedDeals(customer);
   const dealEvents = state.dealEvents.filter((e) => deals.some((d) => d.id === e.dealId)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -16485,6 +16669,7 @@ function renderCustomerJourney(customer: Customer) {
   nodes.sort((a, b) => a.date.localeCompare(b.date));
 
   if (nodes.length === 0) {
+    hideJourneyTooltip();
     container.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;">暂无旅程数据</div>`;
     return;
   }
@@ -16495,14 +16680,17 @@ function renderCustomerJourney(customer: Customer) {
     <div class="journey-track">
       <div class="journey-line"></div>
       ${displayNodes.map((node, index) => `
-        <div class="journey-node" style="--delay:${index * 0.12}s" data-detail="${escapeHtml(node.detail)}" data-date="${escapeHtml(formatDateTime(node.date))}">
+        <div class="journey-node" style="--delay:${index * 0.12}s" data-label="${escapeHtml(node.label)}" data-detail="${escapeHtml(node.detail)}" data-date="${escapeHtml(formatDateTime(node.date))}">
           <div class="journey-dot" style="--node-color:${node.color}">${node.icon}</div>
           <span class="journey-label">${escapeHtml(node.label)}</span>
           <span class="journey-date">${escapeHtml(node.date.slice(5, 10))}</span>
-          <div class="journey-tooltip"><b>${escapeHtml(node.label)}</b><span>${escapeHtml(node.detail)}</span><small>${escapeHtml(formatDateTime(node.date))}</small></div>
         </div>
       `).join("")}
     </div>`;
+  qsa<HTMLElement>(".journey-node", container).forEach((node) => {
+    node.addEventListener("mouseenter", () => showJourneyTooltip(node));
+    node.addEventListener("mouseleave", hideJourneyTooltip);
+  });
   requestAnimationFrame(() => {
     qsa<HTMLElement>(".journey-node", container).forEach((node) => node.classList.add("visible"));
   });
@@ -16634,6 +16822,7 @@ function openCustomerDrawer() {
 }
 
 function closeCustomerDrawer() {
+  hideJourneyTooltip();
   qs("#customerDrawer")?.classList.remove("open");
   qs("#customerDrawerBackdrop")?.classList.remove("active");
   document.body.classList.remove("customer-drawer-open");
@@ -19663,7 +19852,7 @@ function renderCompetitorDetail(competitor?: Competitor) {
   if (button) button.textContent = competitor.threatLevel === "high" ? "降为中威胁" : "设为高威胁";
 }
 
-const PEER_PAGE_SIZE = 20;
+const PEER_PAGE_SIZE_OPTIONS = [10, 20, 50];
 const PEER_RELATION_TONE: Record<PeerRelation, string> = { "互补": "green", "竞争": "red", "互相推荐": "blue" };
 
 /** 联系方式列：邮箱/电话可直接点，官网跳新标签，显示精简域名 */
@@ -19680,65 +19869,216 @@ function peerContactCell(peer: Peer) {
   return parts.length ? parts.join(`<span class="peer-contact-sep">·</span>`) : "—";
 }
 
-function renderPeers() {
-  const tbody = qs<HTMLElement>("#peersTableBody");
-  if (!tbody) return;
+/** 关系徽标串：一个关系都没标时给一句可操作的提示，而不是留一块空白 */
+function peerRelationBadges(peer: Peer): string {
+  return peer.relations.length
+    ? peer.relations.map((relation) => badge(relation, PEER_RELATION_TONE[relation] || "gray")).join(" ")
+    : `<span class="badge gray" title="在编辑里勾选互补 / 竞争 / 互相推荐">未标注</span>`;
+}
+
+/** 公司名主色：竞争优先（要盯防），其次互补（可联合报价），其余走品牌色 */
+function peerNameToneClass(peer: Peer): string {
+  if (peer.relations.includes("竞争")) return "is-rival";
+  if (peer.relations.includes("互补")) return "is-complement";
+  return "";
+}
+
+/** 与「未成交客户」同一套筛选口径：关键词命中任一字段 AND 关系标签命中 */
+function filteredPeers(): Peer[] {
   const q = state.peerSearch.trim().toLowerCase();
-  const filtered = state.peers.filter((peer) => {
+  return state.peers.filter((peer) => {
     const matchRelation = state.peerRelationFilter === "all"
       || (state.peerRelationFilter === "未标注" ? peer.relations.length === 0 : peer.relations.includes(state.peerRelationFilter));
-    const haystack = [peer.company, peer.country, peer.industry, peer.contact, peer.phone, peer.email, peer.wechat, peer.website, peer.remark]
+    const haystack = [peer.company, peer.country, peer.industry, peer.contact, peer.phone, peer.email, peer.wechat, peer.website, peer.remark, peer.source]
       .filter(Boolean).join(" ").toLowerCase();
     return matchRelation && (!q || haystack.includes(q));
   });
-  const sorted = [...filtered].sort((a, b) => {
+}
+
+function sortedPeers(peers: Peer[]): Peer[] {
+  return [...peers].sort((a, b) => {
     if (state.peerSort === "company") return a.company.localeCompare(b.company, "zh-Hans-CN");
     const da = new Date(a.createdAt).getTime() || 0;
     const db = new Date(b.createdAt).getTime() || 0;
     return state.peerSort === "oldest" ? da - db : db - da;
   });
-  const totalPages = Math.max(1, Math.ceil(sorted.length / PEER_PAGE_SIZE));
-  state.peerPage = Math.min(state.peerPage, totalPages);
-  const pageRows = sorted.slice((state.peerPage - 1) * PEER_PAGE_SIZE, state.peerPage * PEER_PAGE_SIZE);
-  const relationBadges = (peer: Peer) => peer.relations.length
-    ? peer.relations.map((relation) => badge(relation, PEER_RELATION_TONE[relation] || "gray")).join(" ")
-    : `<span class="badge gray" title="在编辑里勾选互补 / 竞争 / 互相推荐">未标注</span>`;
-  tbody.innerHTML = pageRows.length ? pageRows.map((peer) => `<tr data-peer-id="${escapeHtml(peer.id)}" class="${peer.id === state.selectedPeerId ? "selected" : ""}">
-    <td><div class="company"><div><button class="lead-name" data-open-peer="${escapeHtml(peer.id)}" title="查看 / 编辑这家同行">${escapeHtml(peer.company)}</button><span>${escapeHtml(peer.contact || "联系人待补充")} · ${escapeHtml(peer.country || "国家待补充")}</span></div></div></td>
-    <td><div class="peer-relation-cell">${relationBadges(peer)}</div></td>
-    <td><div class="peer-industry-cell" title="${escapeHtml(peer.industry)}">${escapeHtml(peer.industry ? (peer.industry.length > 60 ? `${peer.industry.slice(0, 60)}…` : peer.industry) : "待补充行业介绍")}</div></td>
-    <td><div class="peer-contact-cell">${peerContactCell(peer)}</div></td>
-    <td><div class="lead-created-cell"><b>${escapeHtml(formatLeadDate(peer.createdAt))}</b></div></td>
-    <td><div class="lead-row-actions">
-      <button class="btn tiny" type="button" data-peer-action="edit" data-peer-row-id="${escapeHtml(peer.id)}">编辑</button>
-      <button class="btn tiny danger subtle" type="button" data-peer-action="delete" data-peer-row-id="${escapeHtml(peer.id)}">删除</button>
-    </div></td>
-  </tr>`).join("") : (state.peers.length
-    ? `<tr><td colspan="6" class="empty-cell">没有符合筛选条件的同行。换个关键词，或把关系筛选切回「全部关系」。</td></tr>`
-    : `<tr><td colspan="6" class="empty-cell">暂无同行，点右上角「新增同行」开始维护关系网络</td></tr>`);
+}
 
-  qsa<HTMLButtonElement>("[data-open-peer]", tbody).forEach((button) => button.addEventListener("click", () => {
-    const peer = state.peers.find((item) => item.id === button.dataset.openPeer);
-    if (peer) openPeerModal(peer);
-  }));
-  qsa<HTMLButtonElement>("[data-peer-action]", tbody).forEach((button) => button.addEventListener("click", () => {
-    const peer = state.peers.find((item) => item.id === button.dataset.peerRowId);
-    if (!peer) return;
-    if (button.dataset.peerAction === "edit") openPeerModal(peer);
-    if (button.dataset.peerAction === "delete") void deletePeer(peer);
-  }));
+/** 分页切片：页码先夹到合法区间，避免筛选变窄后停在空白页 */
+function peerPageRows(peers: Peer[]) {
+  const pageCount = Math.max(1, Math.ceil(peers.length / state.peerPageSize));
+  state.peerPage = Math.min(Math.max(1, state.peerPage), pageCount);
+  const start = (state.peerPage - 1) * state.peerPageSize;
+  return { pageCount, start, rows: peers.slice(start, start + state.peerPageSize) };
+}
 
-  qs("#peerTotalCount")!.textContent = String(state.peers.length);
-  qs("#peerComplementCount")!.textContent = String(state.peers.filter((item) => item.relations.includes("互补")).length);
-  qs("#peerRivalCount")!.textContent = String(state.peers.filter((item) => item.relations.includes("竞争")).length);
-  qs("#peerReferralCount")!.textContent = String(state.peers.filter((item) => item.relations.includes("互相推荐")).length);
-
-  const pagination = qs<HTMLElement>("#peerPagination");
-  if (pagination) {
-    pagination.innerHTML = `<span>共 ${filtered.length} 条 · 第 ${state.peerPage}/${totalPages} 页</span><div><button class="btn tiny" id="peerPrevPage" ${state.peerPage <= 1 ? "disabled" : ""}>上一页</button><button class="btn tiny" id="peerNextPage" ${state.peerPage >= totalPages ? "disabled" : ""}>下一页</button></div>`;
-    qs<HTMLButtonElement>("#peerPrevPage", pagination)?.addEventListener("click", () => { state.peerPage -= 1; renderPeers(); });
-    qs<HTMLButtonElement>("#peerNextPage", pagination)?.addEventListener("click", () => { state.peerPage += 1; renderPeers(); });
+function renderPeerPagination(total: number, pageCount: number, start: number) {
+  const summary = qs<HTMLElement>("#peerPageSummary");
+  const number = qs<HTMLElement>("#peerPageNumber");
+  const prev = qs<HTMLButtonElement>("#peerPrevPage");
+  const next = qs<HTMLButtonElement>("#peerNextPage");
+  const size = qs<HTMLSelectElement>("#peerPageSize");
+  if (summary) {
+    summary.textContent = total
+      ? `共 ${total} 条，当前 ${start + 1}-${Math.min(start + state.peerPageSize, total)} 条`
+      : "共 0 条";
   }
+  if (number) number.textContent = `${state.peerPage} / ${pageCount}`;
+  if (prev) prev.disabled = state.peerPage <= 1;
+  if (next) next.disabled = state.peerPage >= pageCount;
+  if (size && PEER_PAGE_SIZE_OPTIONS.includes(state.peerPageSize)) size.value = String(state.peerPageSize);
+}
+
+function resetPeerFilters() {
+  state.peerSearch = "";
+  state.peerRelationFilter = "all";
+  state.peerSort = "newest";
+  state.peerPage = 1;
+  const search = qs<HTMLInputElement>("#peerSearchInput");
+  if (search) search.value = "";
+  const relation = qs<HTMLSelectElement>("#peerRelationFilter");
+  if (relation) relation.value = "all";
+  const sort = qs<HTMLSelectElement>("#peerSortSelect");
+  if (sort) sort.value = "newest";
+  renderPeers();
+}
+
+function renderPeers() {
+  const tbody = qs<HTMLElement>("#peersTableBody");
+  if (!tbody) return;
+  const visible = sortedPeers(filteredPeers());
+  const { pageCount, start, rows } = peerPageRows(visible);
+  renderPeerPagination(visible.length, pageCount, start);
+
+  const industryText = (peer: Peer, limit: number) => {
+    if (!peer.industry) return "";
+    return peer.industry.length > limit ? `${peer.industry.slice(0, limit)}…` : peer.industry;
+  };
+
+  tbody.innerHTML = rows.length ? rows.map((peer) => `<tr data-peer-id="${escapeHtml(peer.id)}" class="${peer.id === state.selectedPeerId ? "selected" : ""}">
+    <td><div class="company">${countryFlag(peer.country)}<div><button type="button" class="customer-name ${peerNameToneClass(peer)}" data-open-peer="${escapeHtml(peer.id)}" title="查看这家同行">${escapeHtml(peer.company)}</button><span>${escapeHtml(peer.contact || "联系人待补充")} · ${escapeHtml(peer.country || "国家待补充")}</span></div></div></td>
+    <td><div class="peer-relation-cell">${peerRelationBadges(peer)}</div></td>
+    <td><div class="peer-industry-cell" title="${escapeHtml(peer.industry || "")}">${escapeHtml(industryText(peer, 60) || "待补充行业介绍")}</div></td>
+    <td><div class="peer-contact-cell">${peerContactCell(peer)}</div></td>
+    <td><div class="customer-follow-cell"><b>${escapeHtml(peer.source || "未登记")}</b><span>来源渠道</span></div></td>
+    <td><div class="customer-follow-cell"><b>${escapeHtml(formatLeadDate(peer.createdAt))}</b><span>${peer.updatedAt ? `更新 ${escapeHtml(formatDateTime(peer.updatedAt))}` : "未更新"}</span></div></td>
+    <td><div class="customer-row-actions"><button class="btn" type="button" data-peer-action="edit" data-peer-row-id="${escapeHtml(peer.id)}">编辑</button><button class="btn danger" type="button" data-peer-action="delete" data-peer-row-id="${escapeHtml(peer.id)}">删除</button></div></td>
+  </tr>`).join("") : (state.peers.length
+    ? `<tr><td colspan="7" class="empty-cell">没有符合筛选条件的同行。<button class="btn tiny" id="peerEmptyReset" type="button">清空筛选</button></td></tr>`
+    : `<tr><td colspan="7" class="empty-cell">暂无同行，点右上角「新增同行」开始维护这张关系网络。</td></tr>`);
+
+  const mobile = qs<HTMLElement>("#peerMobileList");
+  if (mobile) {
+    mobile.innerHTML = rows.length ? rows.map((peer) => `
+    <article class="customer-mobile-card" data-peer-mobile-id="${escapeHtml(peer.id)}">
+      <span class="customer-mobile-top"><span class="customer-mobile-company">${countryFlag(peer.country)}<button type="button" class="customer-name ${peerNameToneClass(peer)}" data-open-peer="${escapeHtml(peer.id)}">${escapeHtml(peer.company)}</button></span><span class="peer-relation-cell">${peerRelationBadges(peer)}</span></span>
+      <span>${escapeHtml(peer.contact || "联系人待补充")} · ${escapeHtml(peer.country || "国家待补充")}</span>
+      <span class="peer-mobile-meta"><i>来源 · ${escapeHtml(peer.source || "未登记")}</i><i>添加 ${escapeHtml(formatLeadDate(peer.createdAt))}</i><i>${escapeHtml(industryText(peer, 40) || "行业待补充")}</i></span>
+      <div class="peer-contact-cell">${peerContactCell(peer)}</div>
+      <div class="customer-row-actions"><button class="btn" type="button" data-peer-action="edit" data-peer-row-id="${escapeHtml(peer.id)}">编辑</button><button class="btn danger" type="button" data-peer-action="delete" data-peer-row-id="${escapeHtml(peer.id)}">删除</button></div>
+    </article>`).join("") : `<div class="empty-cell">${state.peers.length ? "没有符合筛选条件的同行。" : "暂无同行。"}</div>`;
+  }
+
+  // —— 关系汇总：总数 + 互补 / 竞争 / 互相推荐三条关系各自的家人数 ——
+  const setCount = (id: string, value: number) => {
+    const node = qs<HTMLElement>(`#${id}`);
+    if (node) node.textContent = String(value);
+  };
+  setCount("peerTotalCount", state.peers.length);
+  setCount("peerComplementCount", state.peers.filter((item) => item.relations.includes("互补")).length);
+  setCount("peerRivalCount", state.peers.filter((item) => item.relations.includes("竞争")).length);
+  setCount("peerReferralCount", state.peers.filter((item) => item.relations.includes("互相推荐")).length);
+
+  // —— 事件：桌面表格行与移动卡片共用同一批 data-* 标记，一次绑完 ——
+  const scope = qs<HTMLElement>("#peers");
+  if (scope) {
+    qsa<HTMLButtonElement>("[data-open-peer]", scope).forEach((button) => button.addEventListener("click", () => {
+      const peer = state.peers.find((item) => item.id === button.dataset.openPeer);
+      if (!peer) return;
+      state.selectedPeerId = peer.id;
+      renderPeerDrawer(peer);
+      openPeerDrawer();
+      qsa<HTMLElement>("tr[data-peer-id]", tbody).forEach((row) => row.classList.toggle("selected", row.dataset.peerId === peer.id));
+    }));
+    qsa<HTMLButtonElement>("[data-peer-action]", scope).forEach((button) => button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const peer = state.peers.find((item) => item.id === button.dataset.peerRowId);
+      if (!peer) return;
+      if (button.dataset.peerAction === "edit") openPeerModal(peer);
+      if (button.dataset.peerAction === "delete") void deletePeer(peer);
+    }));
+  }
+  qs<HTMLButtonElement>("#peerEmptyReset")?.addEventListener("click", resetPeerFilters);
+
+  // 抽屉开着时同步刷新（编辑保存 / 删除后仍显示最新内容）
+  const selected = state.peers.find((item) => item.id === state.selectedPeerId);
+  if (selected && qs("#peerDrawer")?.classList.contains("open")) renderPeerDrawer(selected);
+}
+
+/** 同行详情抽屉：与「未成交客户」同一个右侧抽屉形态，只读展示 + 编辑 / 删除入口 */
+function renderPeerDrawer(peer?: Peer) {
+  const drawer = qs<HTMLElement>("#peerDrawer");
+  if (!drawer || !peer) return;
+  const websiteUrl = peer.website
+    ? (/^https?:\/\//i.test(peer.website) ? peer.website : `https://${peer.website.replace(/^\/+/, "")}`)
+    : "";
+  const websiteHost = websiteUrl.replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
+  const contactItems = [peer.contact, peer.email, peer.phone, peer.wechat, peer.website].filter(Boolean).length;
+  drawer.innerHTML = `
+    <div class="drawer-head">
+      <div>
+        <h2>${escapeHtml(peer.company)}</h2>
+        <p>${escapeHtml(peer.country || "国家待补充")} · ${escapeHtml(peer.contact || "联系人待补充")} · ${escapeHtml(peer.source || "来源未登记")}</p>
+        <div class="peer-drawer-relations">${peerRelationBadges(peer)}</div>
+      </div>
+      <div class="inline-actions"><button class="btn icon-only" id="peerDrawerClose" type="button" title="关闭" aria-label="关闭同行详情">×</button></div>
+    </div>
+    <div class="info-grid">
+      <div class="info"><span>关系标注</span><b>${peer.relations.length ? escapeHtml(peer.relations.join(" / ")) : "未标注"}</b></div>
+      <div class="info"><span>国家 / 地区</span><b>${escapeHtml(peer.country || "待补充")}</b></div>
+      <div class="info"><span>来源</span><b>${escapeHtml(peer.source || "未登记")}</b></div>
+      <div class="info"><span>添加时间</span><b>${escapeHtml(formatLeadDate(peer.createdAt))}</b></div>
+      <div class="info"><span>最近更新</span><b>${peer.updatedAt ? escapeHtml(formatDateTime(peer.updatedAt)) : "未更新"}</b></div>
+      <div class="info"><span>联系方式</span><b>${contactItems} 项</b></div>
+    </div>
+    <section class="peer-drawer-block">
+      <h3>联系方式</h3>
+      <div class="info-grid">
+        <div class="info"><span>主联系人</span><b>${escapeHtml(peer.contact || "未维护")}</b></div>
+        <div class="info"><span>邮箱</span><b>${peer.email ? `<a href="mailto:${escapeHtml(peer.email)}">${escapeHtml(peer.email)}</a>` : "未维护"}</b></div>
+        <div class="info"><span>电话</span><b>${peer.phone ? `<a href="tel:${escapeHtml(peer.phone.replace(/\s+/g, ""))}">${escapeHtml(peer.phone)}</a>` : "未维护"}</b></div>
+        <div class="info"><span>微信 / WhatsApp</span><b>${escapeHtml(peer.wechat || "未维护")}</b></div>
+        <div class="info"><span>官网</span><b>${websiteUrl ? `<a href="${escapeHtml(websiteUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(websiteHost)}</a>` : "未维护"}</b></div>
+      </div>
+    </section>
+    <section class="peer-drawer-block">
+      <h3>行业介绍</h3>
+      <p class="peer-drawer-text">${peer.industry ? escapeHtml(peer.industry) : "暂未维护这家同行的主营业务、产品线与市场覆盖。"}</p>
+    </section>
+    <section class="peer-drawer-block">
+      <h3>备注</h3>
+      <p class="peer-drawer-text">${peer.remark ? escapeHtml(peer.remark) : "暂未维护合作历史与注意事项。"}</p>
+    </section>
+    <div class="inline-actions peer-drawer-actions">
+      <button class="btn primary" type="button" data-peer-drawer-edit>编辑同行</button>
+      <button class="btn danger" type="button" data-peer-drawer-delete>删除同行</button>
+    </div>`;
+  qs("#peerDrawerClose", drawer)?.addEventListener("click", closePeerDrawer);
+  qsa<HTMLButtonElement>("[data-peer-drawer-edit]", drawer).forEach((button) => button.addEventListener("click", () => openPeerModal(peer)));
+  qs<HTMLButtonElement>("[data-peer-drawer-delete]", drawer)?.addEventListener("click", () => void deletePeer(peer));
+}
+
+function openPeerDrawer() {
+  qs("#peerDrawer")?.classList.add("open");
+  qs("#peerDrawerBackdrop")?.classList.add("active");
+  document.body.classList.add("customer-drawer-open");
+}
+
+function closePeerDrawer() {
+  qs("#peerDrawer")?.classList.remove("open");
+  qs("#peerDrawerBackdrop")?.classList.remove("active");
+  // 客户抽屉也复用同一个 body 类，别把它一起解锁了
+  if (!qs("#customerDrawer")?.classList.contains("open")) document.body.classList.remove("customer-drawer-open");
 }
 
 function openPeerModal(peer?: Peer) {
@@ -19958,6 +20298,7 @@ async function deletePeer(peer: Peer) {
     const result = await api<{ deleted: string; peers: Peer[] }>(`/api/peers/${peer.id}`, { method: "DELETE" });
     state.peers = result.peers;
     if (state.selectedPeerId === peer.id) state.selectedPeerId = null;
+    closePeerDrawer();
     toast("同行已删除");
     renderPeers();
   } catch (error) {
@@ -42253,6 +42594,24 @@ function installEvents() {
     state.peerPage = 1;
     renderPeers();
   });
+  // 分页控件现在是静态节点（不再由 renderPeers 重建），只在启动时绑一次
+  qs<HTMLButtonElement>("#peerPrevPage")?.addEventListener("click", () => {
+    if (state.peerPage <= 1) return;
+    state.peerPage -= 1;
+    renderPeers();
+  });
+  qs<HTMLButtonElement>("#peerNextPage")?.addEventListener("click", () => {
+    state.peerPage += 1;
+    renderPeers();
+  });
+  qs<HTMLSelectElement>("#peerPageSize")?.addEventListener("change", (event) => {
+    const size = Number((event.target as HTMLSelectElement).value);
+    state.peerPageSize = PEER_PAGE_SIZE_OPTIONS.includes(size) ? size : 20;
+    state.peerPage = 1;
+    renderPeers();
+  });
+  qs<HTMLButtonElement>("#peerFilterReset")?.addEventListener("click", resetPeerFilters);
+  qs<HTMLElement>("#peerDrawerBackdrop")?.addEventListener("click", closePeerDrawer);
   qs<HTMLButtonElement>("#peerCreateButton")?.addEventListener("click", () => openPeerModal());
   qs<HTMLButtonElement>("#peerImportButton")?.addEventListener("click", () => openPeerImportModal());
   qs<HTMLInputElement>("#waThreadSearch")?.addEventListener("input", (event) => {
@@ -43147,6 +43506,8 @@ function applyTheme(theme: string): void {
   } else {
     root.dataset.theme = theme || THEME_DEFAULT;
   }
+  // 换肤后同步已挂载的即刻沟通 iframe（未挂载时是空操作）。
+  syncWhatsAppFrameTheme();
 }
 
 async function saveTheme(theme: string): Promise<void> {
@@ -44415,6 +44776,7 @@ function activateNavView(view: string, after?: () => void) {
   if (activeView === "memos" && view !== "memos" && memoDirty) void saveCurrentMemoDraft();
   if (view !== "leads") closeLeadDrawer();
   if (view !== "customers") closeCustomerDrawer();
+  if (view !== "peers") closePeerDrawer();
   if (view !== "prospect-list" && prospectMobileDetailOpen) {
     prospectMobileDetailOpen = false;
     document.body.classList.remove("prospect-mobile-detail-open");

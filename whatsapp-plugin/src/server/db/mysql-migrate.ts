@@ -480,6 +480,131 @@ const migrations: MysqlMigration[] = [
       await ensureColumn(transaction, "automation_deliveries", "updated_at", "DATETIME(3) NULL");
       await transaction.exec("UPDATE automation_deliveries SET updated_at=created_at WHERE updated_at IS NULL");
     }
+  },
+  {
+    version: 13,
+    name: "training_and_auto_chat",
+    apply: async (transaction) => {
+      await transaction.exec(`CREATE TABLE IF NOT EXISTS training_profiles (
+        id VARCHAR(191) PRIMARY KEY,
+        owner_user_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NULL,
+        name VARCHAR(255) NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'ready',
+        engine VARCHAR(16) NOT NULL DEFAULT 'rules',
+        model VARCHAR(191) NULL,
+        sample_count INT NOT NULL DEFAULT 0,
+        exchange_count INT NOT NULL DEFAULT 0,
+        conversation_count INT NOT NULL DEFAULT 0,
+        message_count INT NOT NULL DEFAULT 0,
+        languages_json TEXT NOT NULL,
+        tone VARCHAR(255) NOT NULL DEFAULT '',
+        summary TEXT NOT NULL,
+        guidelines_json TEXT NOT NULL,
+        signature_phrases_json TEXT NOT NULL,
+        guardrails_json TEXT NOT NULL,
+        examples_json TEXT NOT NULL,
+        source_from DATETIME(3) NULL,
+        source_to DATETIME(3) NULL,
+        error TEXT NULL,
+        trained_at DATETIME(3) NOT NULL,
+        created_at DATETIME(3) NOT NULL,
+        updated_at DATETIME(3) NOT NULL,
+        KEY training_profiles_owner_idx (owner_user_id, trained_at),
+        CONSTRAINT communication_fk_training_account FOREIGN KEY (account_id) REFERENCES channel_accounts(id) ON DELETE CASCADE
+      ) ${tableOptions}`);
+      await transaction.exec(`CREATE TABLE IF NOT EXISTS auto_chat_settings (
+        id VARCHAR(191) PRIMARY KEY,
+        owner_user_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        enabled TINYINT NOT NULL DEFAULT 0,
+        mode VARCHAR(16) NOT NULL DEFAULT 'off',
+        profile_id VARCHAR(191) NULL,
+        provider_id VARCHAR(191) NULL,
+        language VARCHAR(32) NOT NULL DEFAULT 'auto',
+        tone VARCHAR(64) NOT NULL DEFAULT '',
+        daily_limit INT NOT NULL DEFAULT 40,
+        min_interval_minutes INT NOT NULL DEFAULT 5,
+        active_hours_start INT NOT NULL DEFAULT 8,
+        active_hours_end INT NOT NULL DEFAULT 22,
+        timezone VARCHAR(64) NOT NULL DEFAULT 'Asia/Shanghai',
+        escalate_keywords_json TEXT NOT NULL,
+        guardrails_json TEXT NOT NULL,
+        confidence_threshold DECIMAL(4,3) NOT NULL DEFAULT 0.600,
+        last_run_at DATETIME(3) NULL,
+        updated_at DATETIME(3) NOT NULL,
+        UNIQUE KEY auto_chat_settings_owner_account_unique (owner_user_id, account_id)
+      ) ${tableOptions}`);
+      await transaction.exec(`CREATE TABLE IF NOT EXISTS auto_chat_drafts (
+        id VARCHAR(191) PRIMARY KEY,
+        owner_user_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        conversation_id VARCHAR(191) NOT NULL,
+        inbound_message_id VARCHAR(191) NULL,
+        inbound_body TEXT NOT NULL,
+        body TEXT NOT NULL,
+        edited TINYINT NOT NULL DEFAULT 0,
+        status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        mode VARCHAR(16) NOT NULL DEFAULT 'draft',
+        confidence DECIMAL(4,3) NOT NULL DEFAULT 0,
+        reason VARCHAR(512) NOT NULL DEFAULT '',
+        engine VARCHAR(16) NOT NULL DEFAULT 'rules',
+        model VARCHAR(191) NULL,
+        profile_id VARCHAR(191) NULL,
+        message_id VARCHAR(191) NULL,
+        error TEXT NULL,
+        run_date DATE NOT NULL,
+        created_at DATETIME(3) NOT NULL,
+        sent_at DATETIME(3) NULL,
+        updated_at DATETIME(3) NOT NULL,
+        UNIQUE KEY auto_chat_drafts_inbound_unique (conversation_id, inbound_message_id),
+        KEY auto_chat_drafts_owner_status_idx (owner_user_id, status, created_at),
+        KEY auto_chat_drafts_daily_idx (owner_user_id, run_date, status),
+        CONSTRAINT communication_fk_auto_chat_draft_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+      ) ${tableOptions}`);
+    }
+  },
+  {
+    version: 14,
+    name: "auto_chat_cli_engine",
+    apply: async (transaction) => {
+      // 自动回复的生成引擎：auto（按可用性挑）/ rules / ai / cli。
+      // 存量行默认 auto —— 语义是「配了 AI Provider 就用它，否则本机 CLI 可用就用 CLI，都不行退到话术库」，
+      // 所以老配置升级后行为不会突然变差，也不会因为多了一个字段就停止回复。
+      await ensureColumn(transaction, "auto_chat_settings", "engine", "VARCHAR(16) NOT NULL DEFAULT 'auto'");
+      // CLI 模型 / 思考档位；空串 = 跟随 CLI 默认（由当前登录账号决定，跨账号不一致）。
+      await ensureColumn(transaction, "auto_chat_settings", "cli_model", "VARCHAR(64) NOT NULL DEFAULT ''");
+      await ensureColumn(transaction, "auto_chat_settings", "cli_effort", "VARCHAR(16) NOT NULL DEFAULT ''");
+    }
+  },
+  {
+    version: 15,
+    name: "training_library",
+    apply: async (transaction) => {
+      // 自动回复的专门语料库。与 training_profiles 的分工：
+      // profile 提供「语气/写作准则」这类风格，训练库提供「遇到这句话该怎么答」这类内容。
+      // 所以档案是按会话导出的快照，训练库是跨会话、跨账号可复用的长期资产。
+      await transaction.exec(`CREATE TABLE IF NOT EXISTS training_library_entries (
+        id VARCHAR(191) PRIMARY KEY,
+        owner_user_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NULL,
+        kind VARCHAR(16) NOT NULL DEFAULT 'qa',
+        question TEXT NOT NULL,
+        answer TEXT NOT NULL,
+        tags_json TEXT NOT NULL,
+        languages_json TEXT NOT NULL,
+        priority INT NOT NULL DEFAULT 100,
+        enabled TINYINT NOT NULL DEFAULT 1,
+        source VARCHAR(16) NOT NULL DEFAULT 'manual',
+        fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        hit_count INT NOT NULL DEFAULT 0,
+        created_at DATETIME(3) NOT NULL,
+        updated_at DATETIME(3) NOT NULL,
+        KEY training_library_owner_kind_idx (owner_user_id, kind, enabled),
+        KEY training_library_fingerprint_idx (owner_user_id, fingerprint),
+        CONSTRAINT communication_fk_training_library_account FOREIGN KEY (account_id) REFERENCES channel_accounts(id) ON DELETE CASCADE
+      ) ${tableOptions}`);
+    }
   }
 ];
 

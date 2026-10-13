@@ -37,7 +37,7 @@ import {
 import type { ChannelAccount, ChatMessage, Conversation, ConversationAnalysis, ConversationFollowUp } from "@shared/types";
 import { api, type ConversationIntelligenceSnapshot, type CrmCustomerSnapshot, type CrmTodoSnapshot } from "../api";
 import { queryKeys, useAccounts, useCapabilities } from "../data";
-import { EmptyState, Modal, Spinner, StatusBadge } from "../components/ui";
+import { EmptyState, Modal, Spinner, StatusBadge, WhatsAppNumberLink } from "../components/ui";
 
 interface Props {
   selectedAccountId?: string;
@@ -198,7 +198,7 @@ export function WorkspacePage({ selectedAccountId, requestedConversationId, onRe
             <header className="chat-header">
               <button className="icon-button mobile-back" title="返回会话列表" onClick={() => setMobileListOpen(true)}><ArrowLeft size={18} /></button>
               <span className="avatar">{selectedConversation.contactName.slice(0, 2)}</span>
-              <div className="chat-title"><strong>{selectedConversation.contactName}</strong><span>{selectedConversation.contactPhone}</span></div>
+              <div className="chat-title"><strong>{selectedConversation.contactName}</strong><WhatsAppNumberLink phone={selectedConversation.contactPhone} /></div>
               <div className="sending-identity"><span className={`status-dot status-${selectedAccount.status}`} /><div><small>发送账号</small><strong>{selectedAccount.name}</strong></div></div>
               <button
                 type="button"
@@ -367,7 +367,7 @@ function InspectorContent({
       </div>
       {conversation && account ? (
         <>
-          <div className="inspector-profile"><span className="avatar large">{conversation.contactName.slice(0, 2)}</span><h3>{conversation.contactName}</h3><span>{conversation.contactPhone}</span>{crmCustomer && <div className="profile-chips"><span>{crmCustomer.grade || "C"} 级客户</span><span>{crmCustomer.pipelineStage || crmCustomer.stage || "待识别阶段"}</span></div>}</div>
+          <div className="inspector-profile"><span className="avatar large">{conversation.contactName.slice(0, 2)}</span><h3>{conversation.contactName}</h3><WhatsAppNumberLink phone={conversation.contactPhone} />{crmCustomer && <div className="profile-chips"><span>{crmCustomer.grade || "C"} 级客户</span><span>{crmCustomer.pipelineStage || crmCustomer.stage || "待识别阶段"}</span></div>}</div>
           <div className="customer-command-card">
             <div><span>现在最重要</span><strong>{intelligence?.analysis?.nextAction || customerTodos[0]?.title || "先生成客户分析，确认下一步行动"}</strong></div>
             <span className={`urgency-pill ${intelligence?.analysis?.riskLevel === "high" ? "is-high" : ""}`}>{intelligence?.analysis?.riskLevel === "high" ? "高风险" : pendingFollowups.length ? `${pendingFollowups.length} 项待跟进` : "节奏正常"}</span>
@@ -579,7 +579,10 @@ function Composer({ account, conversation, providerEnabled, onSent }: { account:
     onSuccess: () => { setBody(""); setFile(null); setFileError(null); if (fileInputRef.current) fileInputRef.current.value = ""; onSent(); }
   });
   const canSend = providerEnabled && account.status === "connected";
-  const canAttach = canSend && account.provider === "baileys";
+  const canAttach = canSend;
+  const attachHint = account.provider === "meta"
+    ? "官方通道：只能给最近 24 小时内回过消息的客户发附件，超出窗口需改用已审核模板"
+    : "添加图片、视频或文件";
   const selectFile = (selected?: File) => {
     setFileError(null);
     if (!selected) { setFile(null); return; }
@@ -598,7 +601,7 @@ function Composer({ account, conversation, providerEnabled, onSent }: { account:
         {file && <div className="composer-attachment">{filePreviewUrl ? (file.type.startsWith("image/") ? <img className="composer-attachment-preview" src={filePreviewUrl} alt="" /> : <video className="composer-attachment-preview" src={filePreviewUrl} muted preload="metadata" />) : <span className="message-file-icon"><FileIcon size={18} /></span>}<span><strong title={file.name}>{file.name}</strong><small>{formatFileSize(file.size)} · {mediaRetentionQuery.data?.mode === "days" ? `本地保留 ${mediaRetentionQuery.data.days} 天` : "发送后清理本地副本"}</small></span><button type="button" title="移除附件" onClick={() => selectFile()}><X size={16} /></button></div>}
         <div className="composer-account"><span className={`status-dot status-${account.status}`} /><span>{account.name}</span></div>
         <input ref={fileInputRef} className="composer-file-input" type="file" accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.zip" onChange={(event) => selectFile(event.target.files?.[0])} />
-        <button type="button" className="attach-button" title={account.provider === "baileys" ? "添加图片、视频或文件" : "附件仅支持 Baileys 免费通道"} disabled={!canAttach} onClick={() => fileInputRef.current?.click()}><Paperclip size={18} /></button>
+        <button type="button" className="attach-button" title={attachHint} aria-label={attachHint} disabled={!canAttach} onClick={() => fileInputRef.current?.click()}><Paperclip size={18} /></button>
         <textarea value={body} onChange={(event) => setBody(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={!providerEnabled ? "当前环境已停用此 Provider" : account.status === "connected" ? "输入消息" : "账号离线，连接后才能发送"} disabled={!canSend} rows={1} />
         {account.provider === "meta" && <button type="button" className="template-button" title="发送已审核模板" disabled={!canSend} onClick={() => setShowTemplate(true)}><FileText size={17} /></button>}
         <button className="send-button" title="发送消息" disabled={(!body.trim() && !file) || send.isPending || !canSend || Boolean(file && !canAttach)}>{send.isPending ? <Spinner /> : <Send size={18} />}</button>

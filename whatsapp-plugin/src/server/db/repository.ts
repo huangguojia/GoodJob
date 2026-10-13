@@ -3,6 +3,11 @@ import { isE164PhoneNumber } from "../../shared/types.js";
 import type {
   AccountStatus,
   AiProviderProfile,
+  AutoChatDraft,
+  AutoChatDraftEngine,
+  AutoChatDraftStatus,
+  AutoChatMode,
+  AutoChatSettings,
   ChannelAccount,
   ChatMessage,
   Contact,
@@ -23,6 +28,8 @@ import type {
   ProviderKind,
   RoutingResolution,
   RoutingRule,
+  TrainingProfile,
+  TrainingLibraryEntry,
   Translation,
   TranslationPreference
 } from "../../shared/types.js";
@@ -202,6 +209,103 @@ interface ConversationAnalysisRow {
   error: string | null;
   generated_at: string;
   updated_at: string;
+}
+
+interface TrainingProfileRow {
+  id: string;
+  owner_user_id: string;
+  account_id: string | null;
+  account_name: string | null;
+  name: string;
+  status: TrainingProfile["status"];
+  engine: TrainingProfile["engine"];
+  model: string | null;
+  sample_count: number | string;
+  exchange_count: number | string;
+  conversation_count: number | string;
+  message_count: number | string;
+  languages_json: string;
+  tone: string;
+  summary: string;
+  guidelines_json: string;
+  signature_phrases_json: string;
+  guardrails_json: string;
+  examples_json: string;
+  source_from: string | null;
+  source_to: string | null;
+  error: string | null;
+  trained_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface TrainingLibraryRow {
+  id: string;
+  owner_user_id: string;
+  account_id: string | null;
+  account_name: string | null;
+  kind: TrainingLibraryEntry["kind"];
+  question: string;
+  answer: string;
+  tags_json: string;
+  languages_json: string;
+  priority: number | string;
+  enabled: number | string | boolean;
+  source: TrainingLibraryEntry["source"];
+  hit_count: number | string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AutoChatSettingsRow {
+  id: string;
+  owner_user_id: string;
+  account_id: string;
+  enabled: number | string | boolean;
+  mode: AutoChatSettings["mode"];
+  engine: string;
+  profile_id: string | null;
+  provider_id: string | null;
+  cli_model: string;
+  cli_effort: string;
+  language: string;
+  tone: string;
+  daily_limit: number | string;
+  min_interval_minutes: number | string;
+  active_hours_start: number | string;
+  active_hours_end: number | string;
+  timezone: string;
+  escalate_keywords_json: string;
+  guardrails_json: string;
+  confidence_threshold: number | string;
+  last_run_at: string | null;
+  updated_at: string;
+}
+
+interface AutoChatDraftRow {
+  id: string;
+  owner_user_id: string;
+  account_id: string;
+  conversation_id: string;
+  inbound_message_id: string | null;
+  inbound_body: string;
+  body: string;
+  edited: number | string | boolean;
+  status: AutoChatDraft["status"];
+  mode: AutoChatDraft["mode"];
+  confidence: number | string;
+  reason: string;
+  engine: AutoChatDraft["engine"];
+  model: string | null;
+  profile_id: string | null;
+  message_id: string | null;
+  error: string | null;
+  run_date: string;
+  created_at: string;
+  sent_at: string | null;
+  updated_at: string;
+  contact_name?: string | null;
+  contact_phone?: string | null;
 }
 
 interface ConversationFollowUpRow {
@@ -411,6 +515,126 @@ function mapConversationFollowUp(row: ConversationFollowUpRow): ConversationFoll
     status: row.status,
     evidenceMessageIds: parseJsonArray<string>(row.evidence_message_ids_json),
     createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapTrainingProfile(row: TrainingProfileRow): TrainingProfile {
+  return {
+    id: row.id,
+    ownerUserId: row.owner_user_id,
+    accountId: row.account_id,
+    accountName: row.account_name ?? null,
+    name: row.name,
+    status: row.status,
+    engine: row.engine,
+    model: row.model,
+    sampleCount: Number(row.sample_count),
+    exchangeCount: Number(row.exchange_count),
+    conversationCount: Number(row.conversation_count),
+    messageCount: Number(row.message_count),
+    languages: parseJsonArray<string>(row.languages_json),
+    tone: row.tone,
+    summary: row.summary,
+    guidelines: parseJsonArray<string>(row.guidelines_json),
+    signaturePhrases: parseJsonArray<string>(row.signature_phrases_json),
+    guardrails: parseJsonArray<string>(row.guardrails_json),
+    examples: parseJsonArray<TrainingProfile["examples"][number]>(row.examples_json),
+    sourceFrom: row.source_from,
+    sourceTo: row.source_to,
+    error: row.error,
+    trainedAt: row.trained_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+/** 引擎来源的兜底：库里的脏值一律当 auto，绝不因为一个坏字符串让自动回复整条链失效。 */
+function autoChatEngine(value: unknown): AutoChatSettings["engine"] {
+  const candidate = String(value ?? "").trim().toLowerCase();
+  return candidate === "rules" || candidate === "ai" || candidate === "cli" ? candidate : "auto";
+}
+
+/** 训练库条目类型的兜底：脏值一律当 qa（最常用的一类），不让一条坏数据卡住整库读取。 */
+function trainingLibraryKind(value: unknown): TrainingLibraryEntry["kind"] {
+  const candidate = String(value ?? "").trim().toLowerCase();
+  return candidate === "snippet" || candidate === "policy" || candidate === "forbidden" ? candidate : "qa";
+}
+
+function trainingLibrarySource(value: unknown): TrainingLibraryEntry["source"] {
+  const candidate = String(value ?? "").trim().toLowerCase();
+  return candidate === "profile" || candidate === "conversation" ? candidate : "manual";
+}
+
+function mapTrainingLibraryEntry(row: TrainingLibraryRow): TrainingLibraryEntry {
+  return {
+    id: row.id,
+    ownerUserId: row.owner_user_id,
+    accountId: row.account_id,
+    accountName: row.account_name ?? null,
+    kind: trainingLibraryKind(row.kind),
+    question: row.question,
+    answer: row.answer,
+    tags: parseJsonArray<string>(row.tags_json),
+    languages: parseJsonArray<string>(row.languages_json),
+    priority: Number(row.priority ?? 100),
+    enabled: toBoolean(row.enabled),
+    source: trainingLibrarySource(row.source),
+    hitCount: Number(row.hit_count ?? 0),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapAutoChatSettings(row: AutoChatSettingsRow): AutoChatSettings {
+  return {
+    id: row.id,
+    ownerUserId: row.owner_user_id,
+    accountId: row.account_id || null,
+    enabled: toBoolean(row.enabled),
+    mode: row.mode,
+    engine: autoChatEngine(row.engine),
+    profileId: row.profile_id,
+    providerId: row.provider_id,
+    cliModel: row.cli_model || "",
+    cliEffort: row.cli_effort || "",
+    language: row.language,
+    tone: row.tone,
+    dailyLimit: Number(row.daily_limit),
+    minIntervalMinutes: Number(row.min_interval_minutes),
+    activeHoursStart: Number(row.active_hours_start),
+    activeHoursEnd: Number(row.active_hours_end),
+    timezone: row.timezone,
+    escalateKeywords: parseJsonArray<string>(row.escalate_keywords_json),
+    guardrails: parseJsonArray<string>(row.guardrails_json),
+    confidenceThreshold: Number(row.confidence_threshold),
+    lastRunAt: row.last_run_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapAutoChatDraft(row: AutoChatDraftRow): AutoChatDraft {  return {
+    id: row.id,
+    ownerUserId: row.owner_user_id,
+    accountId: row.account_id,
+    conversationId: row.conversation_id,
+    contactName: row.contact_name ?? "",
+    contactPhone: row.contact_phone ?? "",
+    inboundMessageId: row.inbound_message_id,
+    inboundBody: row.inbound_body,
+    body: row.body,
+    edited: toBoolean(row.edited),
+    status: row.status,
+    mode: row.mode,
+    confidence: Number(row.confidence),
+    reason: row.reason,
+    engine: row.engine,
+    model: row.model,
+    profileId: row.profile_id,
+    messageId: row.message_id,
+    error: row.error,
+    createdAt: row.created_at,
+    sentAt: row.sent_at,
     updatedAt: row.updated_at
   };
 }
@@ -2014,6 +2238,511 @@ export class Repository {
       [id, input.phone, input.name, input.id, dbTime(now())]
     );
     return (await this.listCrmContacts()).find((item) => item.phone === input.phone)!;
+  }
+
+  // -------------------------------------------------------------------------
+  // 聊天记录训练
+  // -------------------------------------------------------------------------
+
+  async listTrainingProfiles(ownerUserId: string): Promise<TrainingProfile[]> {
+    const result = await this.database.query<TrainingProfileRow>(
+      `SELECT p.*, a.name AS account_name FROM training_profiles p
+       LEFT JOIN channel_accounts a ON a.id=p.account_id
+       WHERE p.owner_user_id=$1 ORDER BY p.trained_at DESC, p.created_at DESC`,
+      [ownerUserId]
+    );
+    return result.rows.map(mapTrainingProfile);
+  }
+
+  async getTrainingProfile(id: string, ownerUserId?: string): Promise<TrainingProfile | null> {
+    const result = await this.database.query<TrainingProfileRow>(
+      `SELECT p.*, a.name AS account_name FROM training_profiles p
+       LEFT JOIN channel_accounts a ON a.id=p.account_id
+       WHERE p.id=$1 AND ($2::text IS NULL OR p.owner_user_id=$2)`,
+      [id, ownerUserId ?? null]
+    );
+    return result.rows[0] ? mapTrainingProfile(result.rows[0]) : null;
+  }
+
+  async saveTrainingProfile(input: TrainingProfile): Promise<TrainingProfile> {
+    const timestamp = dbTime(now());
+    const values = [
+      input.id,
+      input.ownerUserId,
+      input.accountId,
+      input.name,
+      input.status,
+      input.engine,
+      input.model,
+      input.sampleCount,
+      input.exchangeCount,
+      input.conversationCount,
+      input.messageCount,
+      JSON.stringify(input.languages),
+      input.tone,
+      input.summary,
+      JSON.stringify(input.guidelines),
+      JSON.stringify(input.signaturePhrases),
+      JSON.stringify(input.guardrails),
+      JSON.stringify(input.examples),
+      input.sourceFrom ? dbTime(input.sourceFrom) : null,
+      input.sourceTo ? dbTime(input.sourceTo) : null,
+      input.error,
+      dbTime(input.trainedAt),
+      timestamp,
+      timestamp
+    ];
+    const columns = "(id,owner_user_id,account_id,name,status,engine,model,sample_count,exchange_count,conversation_count,message_count,languages_json,tone,summary,guidelines_json,signature_phrases_json,guardrails_json,examples_json,source_from,source_to,error,trained_at,created_at,updated_at)";
+    const placeholders = "($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)";
+    const updates = "account_id=$3,name=$4,status=$5,engine=$6,model=$7,sample_count=$8,exchange_count=$9,conversation_count=$10,message_count=$11,languages_json=$12,tone=$13,summary=$14,guidelines_json=$15,signature_phrases_json=$16,guardrails_json=$17,examples_json=$18,source_from=$19,source_to=$20,error=$21,trained_at=$22,updated_at=$24";
+    await this.database.query(
+      this.database.kind === "mysql"
+        ? `INSERT INTO training_profiles${columns} VALUES${placeholders} ON DUPLICATE KEY UPDATE ${updates}`
+        : `INSERT INTO training_profiles${columns} VALUES${placeholders} ON CONFLICT(id) DO UPDATE SET ${updates}`,
+      values
+    );
+    const saved = await this.getTrainingProfile(input.id);
+    if (!saved) throw new Error("Training profile was not persisted");
+    return saved;
+  }
+
+  async deleteTrainingProfile(id: string, ownerUserId?: string): Promise<boolean> {
+    const existing = await this.getTrainingProfile(id, ownerUserId);
+    if (!existing) return false;
+    await this.database.query(
+      "DELETE FROM training_profiles WHERE id=$1 AND ($2::text IS NULL OR owner_user_id=$2)",
+      [id, ownerUserId ?? null]
+    );
+    return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // 训练库（自动回复的专门语料库）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 列出训练库条目。
+   *
+   * 账号维度与自动聊设置同构：`account_id` 为空 = 全部账号通用。取用时把「通用 + 本账号」
+   * 合并即可，所以这里不做自动回落，只按条件过滤，给调用方自己决定范围。
+   */
+  async listTrainingLibraryEntries(
+    ownerUserId: string,
+    filter: { kinds?: string[]; enabledOnly?: boolean; accountId?: string | null } = {}
+  ): Promise<TrainingLibraryEntry[]> {
+    const values: unknown[] = [ownerUserId];
+    const conditions = ["p.owner_user_id=$1"];
+    const kinds = (filter.kinds ?? []).filter(Boolean);
+    if (kinds.length) {
+      // 与仓库其它地方保持一致：变长集合一律展开成多个 $n 塞进 IN(...)。
+      // **不能**写 `= ANY($n::text[])`——MySQL 侧只把 `$n::type` 编译成 `?`，数组语法过不去。
+      const placeholders = kinds.map((kind) => `$${values.push(kind)}`).join(",");
+      conditions.push(`p.kind IN (${placeholders})`);
+    }
+    if (filter.enabledOnly) conditions.push("p.enabled=1");
+    if (filter.accountId) {
+      conditions.push(`(p.account_id IS NULL OR p.account_id=$${values.push(filter.accountId)})`);
+    }
+    const result = await this.database.query<TrainingLibraryRow>(
+      `SELECT p.*, a.name AS account_name FROM training_library_entries p
+       LEFT JOIN channel_accounts a ON a.id=p.account_id
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY p.priority DESC, p.updated_at DESC`,
+      values
+    );
+    return result.rows.map(mapTrainingLibraryEntry);
+  }
+
+  async getTrainingLibraryEntry(id: string, ownerUserId?: string): Promise<TrainingLibraryEntry | null> {
+    const result = await this.database.query<TrainingLibraryRow>(
+      `SELECT p.*, a.name AS account_name FROM training_library_entries p
+       LEFT JOIN channel_accounts a ON a.id=p.account_id
+       WHERE p.id=$1 AND ($2::text IS NULL OR p.owner_user_id=$2)`,
+      [id, ownerUserId ?? null]
+    );
+    return result.rows[0] ? mapTrainingLibraryEntry(result.rows[0]) : null;
+  }
+
+  /** 按指纹找人话去重：同一条问答反复导入不该变成十几条。 */
+  async findTrainingLibraryByFingerprint(ownerUserId: string, fingerprint: string): Promise<TrainingLibraryEntry | null> {
+    const result = await this.database.query<TrainingLibraryRow>(
+      `SELECT p.*, a.name AS account_name FROM training_library_entries p
+       LEFT JOIN channel_accounts a ON a.id=p.account_id
+       WHERE p.owner_user_id=$1 AND p.fingerprint=$2 LIMIT 1`,
+      [ownerUserId, fingerprint]
+    );
+    return result.rows[0] ? mapTrainingLibraryEntry(result.rows[0]) : null;
+  }
+
+  async saveTrainingLibraryEntry(input: TrainingLibraryEntry & { fingerprint: string }): Promise<TrainingLibraryEntry> {
+    const timestamp = dbTime(now());
+    const values = [
+      input.id,
+      input.ownerUserId,
+      input.accountId,
+      input.kind,
+      input.question,
+      input.answer,
+      JSON.stringify(input.tags),
+      JSON.stringify(input.languages),
+      input.priority,
+      input.enabled ? 1 : 0,
+      input.source,
+      input.fingerprint,
+      input.hitCount,
+      timestamp,
+      timestamp
+    ];
+    const columns = "(id,owner_user_id,account_id,kind,question,answer,tags_json,languages_json,priority,enabled,source,fingerprint,hit_count,created_at,updated_at)";
+    const placeholders = "($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)";
+    const updates = "account_id=$3,kind=$4,question=$5,answer=$6,tags_json=$7,languages_json=$8,priority=$9,enabled=$10,source=$11,fingerprint=$12,hit_count=$13,updated_at=$15";
+    await this.database.query(
+      this.database.kind === "mysql"
+        ? `INSERT INTO training_library_entries${columns} VALUES${placeholders} ON DUPLICATE KEY UPDATE ${updates}`
+        : `INSERT INTO training_library_entries${columns} VALUES${placeholders} ON CONFLICT(id) DO UPDATE SET ${updates}`,
+      values
+    );
+    const saved = await this.getTrainingLibraryEntry(input.id);
+    if (!saved) throw new Error("Training library entry was not persisted");
+    return saved;
+  }
+
+  async deleteTrainingLibraryEntry(id: string, ownerUserId?: string): Promise<boolean> {
+    const existing = await this.getTrainingLibraryEntry(id, ownerUserId);
+    if (!existing) return false;
+    await this.database.query(
+      "DELETE FROM training_library_entries WHERE id=$1 AND ($2::text IS NULL OR owner_user_id=$2)",
+      [id, ownerUserId ?? null]
+    );
+    return true;
+  }
+
+  /** 命中计数：只在真正被用上时加，用于界面按「有没有被用过」排序和清理死条目。 */
+  async bumpTrainingLibraryHits(ids: string[]): Promise<void> {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (!unique.length) return;
+    const placeholders = unique.map((_, index) => `$${index + 1}`).join(",");
+    await this.database.query(
+      `UPDATE training_library_entries SET hit_count=hit_count+1 WHERE id IN (${placeholders})`,
+      unique
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // 自动聊
+  // -------------------------------------------------------------------------
+
+  /**
+   * 读取自动聊设置。
+   *
+   * 账号维度是**覆盖**而不是隔离：某个账号没有单独保存过设置时，回落到全局那一行
+   * （`account_id=''`）。入站消息的自动触发器只拿得到账号 id，若不做这层回落，
+   * 界面默认的「全部账号」配置就永远不会生效。
+   */
+  async getAutoChatSettings(ownerUserId: string, accountId?: string): Promise<AutoChatSettings> {
+    const read = async (scopedAccountId: string): Promise<AutoChatSettings | null> => {
+      const result = await this.database.query<AutoChatSettingsRow>(
+        "SELECT * FROM auto_chat_settings WHERE owner_user_id=$1 AND account_id=$2",
+        [ownerUserId, scopedAccountId]
+      );
+      return result.rows[0] ? mapAutoChatSettings(result.rows[0]) : null;
+    };
+    if (accountId) {
+      const scoped = await read(accountId);
+      if (scoped) return scoped;
+    }
+    const global = await read("");
+    if (global) return global;
+    await this.database.query(
+      this.database.kind === "mysql"
+        ? `INSERT IGNORE INTO auto_chat_settings(id,owner_user_id,account_id,enabled,mode,engine,cli_model,cli_effort,language,tone,daily_limit,min_interval_minutes,active_hours_start,active_hours_end,timezone,escalate_keywords_json,guardrails_json,confidence_threshold,updated_at)
+           VALUES($1,$2,'',0,'off','auto','','','auto','',40,5,8,22,'Asia/Shanghai','[]','[]',0.600,$3)`
+        : `INSERT INTO auto_chat_settings(id,owner_user_id,account_id,enabled,mode,engine,cli_model,cli_effort,language,tone,daily_limit,min_interval_minutes,active_hours_start,active_hours_end,timezone,escalate_keywords_json,guardrails_json,confidence_threshold,updated_at)
+           VALUES($1,$2,'',0,'off','auto','','','auto','',40,5,8,22,'Asia/Shanghai','[]','[]',0.600,$3)
+           ON CONFLICT(owner_user_id,account_id) DO NOTHING`,
+      [randomUUID(), ownerUserId, dbTime(now())]
+    );
+    const created = await read("");
+    if (!created) throw new Error("Auto chat settings were not persisted");
+    return created;
+  }
+
+  /** 删除训练档案前解除所有引用（全局行与账号行都要），避免留下悬空的外键式引用。 */
+  async clearAutoChatProfileReference(profileId: string): Promise<void> {
+    await this.database.query(
+      "UPDATE auto_chat_settings SET profile_id=NULL,updated_at=$2 WHERE profile_id=$1",
+      [profileId, dbTime(now())]
+    );
+  }
+
+  async saveAutoChatSettings(input: AutoChatSettings): Promise<AutoChatSettings> {
+    const scopedAccountId = input.accountId ?? "";
+    const timestamp = dbTime(now());
+    const values = [
+      input.id,
+      input.ownerUserId,
+      scopedAccountId,
+      input.enabled ? 1 : 0,
+      input.mode,
+      input.engine,
+      input.profileId,
+      input.providerId,
+      input.cliModel,
+      input.cliEffort,
+      input.language,
+      input.tone,
+      input.dailyLimit,
+      input.minIntervalMinutes,
+      input.activeHoursStart,
+      input.activeHoursEnd,
+      input.timezone,
+      JSON.stringify(input.escalateKeywords),
+      JSON.stringify(input.guardrails),
+      input.confidenceThreshold,
+      timestamp
+    ];
+    const updateClause = "enabled=$4,mode=$5,engine=$6,profile_id=$7,provider_id=$8,cli_model=$9,cli_effort=$10,language=$11,tone=$12,daily_limit=$13,min_interval_minutes=$14,active_hours_start=$15,active_hours_end=$16,timezone=$17,escalate_keywords_json=$18,guardrails_json=$19,confidence_threshold=$20,updated_at=$21";
+    await this.database.query(
+      this.database.kind === "mysql"
+        ? `INSERT INTO auto_chat_settings(id,owner_user_id,account_id,enabled,mode,engine,profile_id,provider_id,cli_model,cli_effort,language,tone,daily_limit,min_interval_minutes,active_hours_start,active_hours_end,timezone,escalate_keywords_json,guardrails_json,confidence_threshold,updated_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+           ON DUPLICATE KEY UPDATE ${updateClause}`
+        : `INSERT INTO auto_chat_settings(id,owner_user_id,account_id,enabled,mode,engine,profile_id,provider_id,cli_model,cli_effort,language,tone,daily_limit,min_interval_minutes,active_hours_start,active_hours_end,timezone,escalate_keywords_json,guardrails_json,confidence_threshold,updated_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+           ON CONFLICT(owner_user_id,account_id) DO UPDATE SET ${updateClause}`,
+      values
+    );
+    const saved = await this.database.query<AutoChatSettingsRow>(
+      "SELECT * FROM auto_chat_settings WHERE owner_user_id=$1 AND account_id=$2",
+      [input.ownerUserId, scopedAccountId]
+    );
+    if (!saved.rows[0]) throw new Error("Auto chat settings were not persisted");
+    return mapAutoChatSettings(saved.rows[0]);
+  }
+
+  /**
+   * 找出「客户最新一条消息尚未被回复」的会话。
+   * 自动聊只处理这类会话，避免在双方已来回多轮时插话。
+   */
+  async listAutoChatCandidates(ownerUserId: string, options: { accountId?: string; sinceIso: string; limit?: number }): Promise<Array<{
+    conversationId: string;
+    accountId: string;
+    accountName: string;
+    accountProvider: ProviderKind;
+    contactName: string;
+    contactPhone: string;
+    inboundMessageId: string;
+    inboundBody: string;
+    inboundAt: string;
+  }>> {
+    const result = await this.database.query<{
+      conversation_id: string;
+      account_id: string;
+      account_name: string;
+      account_provider: ProviderKind;
+      contact_name: string;
+      contact_phone: string;
+      inbound_message_id: string;
+      inbound_body: string;
+      inbound_at: string;
+    }>(
+      `SELECT v.id AS conversation_id, v.account_id, a.name AS account_name, a.provider AS account_provider,
+              c.display_name AS contact_name, c.phone AS contact_phone,
+              m.id AS inbound_message_id, m.body AS inbound_body, m.occurred_at AS inbound_at
+         FROM conversations v
+         JOIN channel_accounts a ON a.id=v.account_id
+         JOIN contacts c ON c.id=v.contact_id
+         JOIN messages m ON m.id=(
+           SELECT m2.id FROM messages m2 WHERE m2.conversation_id=v.id AND m2.direction='inbound'
+           ORDER BY m2.occurred_at DESC, m2.created_at DESC LIMIT 1
+         )
+        WHERE a.owner_user_id=$1
+          AND ($2::text IS NULL OR v.account_id=$2)
+          AND m.occurred_at>=$3
+          AND NOT EXISTS (
+            SELECT 1 FROM messages o WHERE o.conversation_id=v.id AND o.direction='outbound' AND o.occurred_at>m.occurred_at
+          )
+        ORDER BY m.occurred_at DESC
+        LIMIT $4`,
+      [ownerUserId, options.accountId ?? null, dbTime(options.sinceIso), options.limit ?? 25]
+    );
+    return result.rows.map((row) => ({
+      conversationId: row.conversation_id,
+      accountId: row.account_id,
+      accountName: row.account_name,
+      accountProvider: row.account_provider,
+      contactName: row.contact_name,
+      contactPhone: row.contact_phone,
+      inboundMessageId: row.inbound_message_id,
+      inboundBody: row.inbound_body,
+      inboundAt: row.inbound_at
+    }));
+  }
+
+  async listAutoChatDrafts(ownerUserId: string, options: { statuses?: AutoChatDraftStatus[]; limit?: number } = {}): Promise<AutoChatDraft[]> {
+    const statuses = options.statuses ?? [];
+    const limit = options.limit ?? 50;
+    const statusClause = statuses.length
+      ? `AND d.status IN (${statuses.map((_, index) => `$${index + 2}`).join(",")})`
+      : "";
+    const limitPlaceholder = `$${statuses.length + 2}`;
+    const result = await this.database.query<AutoChatDraftRow>(
+      `SELECT d.*, c.display_name AS contact_name, c.phone AS contact_phone
+         FROM auto_chat_drafts d
+         JOIN conversations v ON v.id=d.conversation_id
+         JOIN contacts c ON c.id=v.contact_id
+        WHERE d.owner_user_id=$1 ${statusClause}
+        ORDER BY d.created_at DESC LIMIT ${limitPlaceholder}`,
+      [ownerUserId, ...statuses, limit]
+    );
+    return result.rows.map(mapAutoChatDraft);
+  }
+
+  async getAutoChatDraft(id: string, ownerUserId?: string): Promise<AutoChatDraft | null> {
+    const result = await this.database.query<AutoChatDraftRow>(
+      `SELECT d.*, c.display_name AS contact_name, c.phone AS contact_phone
+         FROM auto_chat_drafts d
+         JOIN conversations v ON v.id=d.conversation_id
+         JOIN contacts c ON c.id=v.contact_id
+        WHERE d.id=$1 AND ($2::text IS NULL OR d.owner_user_id=$2)`,
+      [id, ownerUserId ?? null]
+    );
+    return result.rows[0] ? mapAutoChatDraft(result.rows[0]) : null;
+  }
+
+  async findAutoChatDraftByInbound(conversationId: string, inboundMessageId: string | null): Promise<AutoChatDraft | null> {
+    if (!inboundMessageId) return null;
+    const result = await this.database.query<AutoChatDraftRow>(
+      `SELECT d.*, c.display_name AS contact_name, c.phone AS contact_phone
+         FROM auto_chat_drafts d
+         JOIN conversations v ON v.id=d.conversation_id
+         JOIN contacts c ON c.id=v.contact_id
+        WHERE d.conversation_id=$1 AND d.inbound_message_id=$2`,
+      [conversationId, inboundMessageId]
+    );
+    return result.rows[0] ? mapAutoChatDraft(result.rows[0]) : null;
+  }
+
+  async createAutoChatDraft(input: {
+    ownerUserId: string;
+    accountId: string;
+    conversationId: string;
+    inboundMessageId: string | null;
+    inboundBody: string;
+    body: string;
+    status: AutoChatDraftStatus;
+    mode: AutoChatMode;
+    confidence: number;
+    reason: string;
+    engine: AutoChatDraftEngine;
+    model: string | null;
+    profileId: string | null;
+    runDate: string;
+    error?: string | null;
+  }): Promise<AutoChatDraft> {
+    const id = randomUUID();
+    const timestamp = dbTime(now());
+    const columns = "(id,owner_user_id,account_id,conversation_id,inbound_message_id,inbound_body,body,edited,status,mode,confidence,reason,engine,model,profile_id,message_id,error,run_date,created_at,sent_at,updated_at)";
+    const placeholders = "($1,$2,$3,$4,$5,$6,$7,0,$8,$9,$10,$11,$12,$13,$14,NULL,$15,$16,$17,NULL,$17)";
+    // 同一个入站消息只保留一条草稿：重复运行会覆盖上一轮的结论（例如「已跳过」变成新的「待确认」）。
+    const updates = "inbound_body=$6,body=$7,edited=0,status=$8,mode=$9,confidence=$10,reason=$11,engine=$12,model=$13,profile_id=$14,message_id=NULL,error=$15,run_date=$16,created_at=$17,sent_at=NULL,updated_at=$17";
+    await this.database.query(
+      this.database.kind === "mysql"
+        ? `INSERT INTO auto_chat_drafts${columns} VALUES${placeholders} ON DUPLICATE KEY UPDATE ${updates}`
+        : `INSERT INTO auto_chat_drafts${columns} VALUES${placeholders} ON CONFLICT(conversation_id,inbound_message_id) DO UPDATE SET ${updates}`,
+      [
+        id,
+        input.ownerUserId,
+        input.accountId,
+        input.conversationId,
+        input.inboundMessageId,
+        input.inboundBody,
+        input.body,
+        input.status,
+        input.mode,
+        input.confidence,
+        input.reason,
+        input.engine,
+        input.model,
+        input.profileId,
+        input.error ?? null,
+        input.runDate,
+        timestamp
+      ]
+    );
+    const saved = await this.findAutoChatDraftByInbound(input.conversationId, input.inboundMessageId);
+    if (!saved) throw new Error("Auto chat draft was not persisted");
+    return saved;
+  }
+
+  async updateAutoChatDraft(id: string, patch: Partial<Pick<AutoChatDraft, "body" | "edited" | "status" | "mode" | "confidence" | "reason" | "messageId" | "error" | "sentAt">>): Promise<AutoChatDraft | null> {
+    const current = await this.getAutoChatDraft(id);
+    if (!current) return null;
+    const next = {
+      body: patch.body ?? current.body,
+      edited: patch.edited ?? current.edited,
+      status: patch.status ?? current.status,
+      mode: patch.mode ?? current.mode,
+      confidence: patch.confidence ?? current.confidence,
+      reason: patch.reason ?? current.reason,
+      messageId: patch.messageId === undefined ? current.messageId : patch.messageId,
+      error: patch.error === undefined ? current.error : patch.error,
+      sentAt: patch.sentAt === undefined ? current.sentAt : patch.sentAt
+    };
+    await this.database.query(
+      `UPDATE auto_chat_drafts SET body=$2,edited=$3,status=$4,mode=$5,confidence=$6,reason=$7,message_id=$8,error=$9,sent_at=$10,updated_at=$11 WHERE id=$1`,
+      [
+        id,
+        next.body,
+        next.edited ? 1 : 0,
+        next.status,
+        next.mode,
+        next.confidence,
+        next.reason,
+        next.messageId,
+        next.error,
+        next.sentAt ? dbTime(next.sentAt) : null,
+        dbTime(now())
+      ]
+    );
+    return this.getAutoChatDraft(id);
+  }
+
+  async countAutoChatSendsSince(ownerUserId: string, sinceIso: string): Promise<number> {
+    const result = await this.database.query<{ total: number | string }>(
+      "SELECT COUNT(*) AS total FROM auto_chat_drafts WHERE owner_user_id=$1 AND status='sent' AND sent_at>=$2",
+      [ownerUserId, dbTime(sinceIso)]
+    );
+    return Number(result.rows[0]?.total ?? 0);
+  }
+
+  async getLastAutoChatSentAt(ownerUserId: string): Promise<string | null> {
+    const result = await this.database.query<{ sent_at: string | null }>(
+      "SELECT MAX(sent_at) AS sent_at FROM auto_chat_drafts WHERE owner_user_id=$1 AND status='sent'",
+      [ownerUserId]
+    );
+    return result.rows[0]?.sent_at ?? null;
+  }
+
+  async touchAutoChatSettings(ownerUserId: string, accountId?: string): Promise<void> {
+    await this.database.query(
+      "UPDATE auto_chat_settings SET last_run_at=$3,updated_at=$3 WHERE owner_user_id=$1 AND account_id=$2",
+      [ownerUserId, accountId ?? "", dbTime(now())]
+    );
+  }
+
+  /**
+   * 供定时兜底扫描使用：只取「已开启且不是 off」的设置行。
+   *
+   * 之所以要「按行」而不是「按 owner」读：账号维度是覆盖语义，某个账号单独开了自动聊、
+   * 全局行仍是关的，只读全局行会把这种情况漏掉。
+   */
+  async listEnabledAutoChatSettings(ownerUserId?: string): Promise<AutoChatSettings[]> {
+    const result = await this.database.query<AutoChatSettingsRow>(
+      "SELECT * FROM auto_chat_settings WHERE enabled=1 AND mode<>'off' AND ($1::text IS NULL OR owner_user_id=$1) ORDER BY owner_user_id, account_id",
+      [ownerUserId ?? null]
+    );
+    return result.rows.map(mapAutoChatSettings);
   }
 
   async audit(action: string, targetType: string, targetId: string, result: string, details: object = {}): Promise<void> {
